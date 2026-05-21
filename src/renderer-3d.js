@@ -27,7 +27,7 @@ import {
 import { EntityType, isLeaderType } from './entities.js';
 import { Renderer } from './renderer.js';
 import { getFactionTheme } from './theme.js';
-import { hexKey, hexDistance } from './hex.js';
+import { hexKey, hexDistance, getNeighbors } from './hex.js';
 import { nodeController, Phase } from './game.js';
 import { sightRangeForEntity } from './factions.js';
 
@@ -46,6 +46,12 @@ export const STANDEE_LEADER_HEIGHT_MUL = 1.3;
 // which itself sits just above the tile prism so picking prefers the standee.
 export const STANDEE_BASE_Y_OFFSET    = 0.18; // tile prism top is at 0.075; base sits clear of it
 
+// Building world-space offset within its tile — pushes the box+roof to the NE
+// quadrant so a standee on the same hex (drawn at tile centre) doesn't overlap
+// the silhouette. Constant chosen by eye against an STANDEE_BASE_DIAMETER=0.75
+// disc: a 0.35 offset clears the standee with a small visual gap.
+export const BUILDING_OFFSET = Object.freeze({ x: 0.35, z: -0.35 });
+
 
 // ─── Pure helpers (exported for tests; no Babylon dependency) ────────────────
 
@@ -58,6 +64,10 @@ export const FOCUS_ANIM_FRAMES = 18;
 
 /** Epsilon below which a focus shift is treated as a no-op (skip animation). */
 export const FOCUS_EPSILON = 1e-3;
+
+/** Camera radius selection-driven focus zooms IN to (never out past current).
+ *  Picked to frame ~3-tile diameter around the unit on a standard map. */
+export const SELECTION_FOCUS_RADIUS = 14;
 
 const SQRT3 = Math.sqrt(3);
 
@@ -266,6 +276,15 @@ export class Renderer3D {
     this._planArrowMatCache = new Map();
     // Cached material used to highlight a hex on attack flash.
     this._attackHexFlashMat = null;
+
+    // ── Plan ghost (walking previewer) ─────────────────────────────────────
+    // For each entity with at least one MOVE step in `planGhostSteps`, a
+    // translucent standee clone walks its path on a loop while planning. The
+    // plane/material pair is rebuilt only when the path signature changes;
+    // per-frame motion happens in `_onBeforeRender` so the animation runs
+    // independently of game-state redraws.
+    this._planGhostMeshes  = new Map();   // entityId → { plane, mat, path, signature }
+    this._planGhostSig     = '';          // joined per-entity signatures
   }
 
   // ─── Required interface (real implementations) ───────────────────────────
@@ -286,6 +305,7 @@ export class Renderer3D {
     this._syncEntityStandees();
     this._applySelectionAndFocus();
     this._syncPlanArrows();
+    this._syncPlanGhosts();
     // Phase 6: atmosphere updates — phase-driven lighting transitions, node
     // glow recolour, and fog veil. Standees are hidden in fogged hexes after
     // the standee sync above so newly-built standees are tagged correctly.
@@ -325,8 +345,35 @@ export class Renderer3D {
       // Reuse the 2D renderer's sprite-rect layout — single source of truth.
       const { rects } = Renderer._buildSpriteRects();
       this._spriteRects = rects;
+      // Standees built before this point have a textureless fallback material
+      // cached in `_portraitMaterials`. Upgrade them in place so already-built
+      // entities show their portrait once the tilemap finally arrives.
+      this._upgradePortraitMaterials();
     }
     if (this.onImagesLoaded) this.onImagesLoaded();
+  }
+
+  /** Walk `_portraitMaterials` and attach a freshly-built texture to any
+   *  material that was created before `_tilemapImg` was available. Idempotent
+   *  — materials that already have a diffuseTexture are skipped. */
+  _upgradePortraitMaterials() {
+    if (!this._scene || !this._babylon || !this._tilemapImg) return;
+    const BABYLON = this._babylon;
+    for (const [key, mat] of this._portraitMaterials) {
+      if (mat.diffuseTexture) continue;
+      const assetId = key === '__blank__' ? null : key;
+      const tex = this._portraitTextureFor(assetId);
+      if (!tex) continue;
+      mat.diffuseTexture = tex;
+      mat.opacityTexture = tex;
+      mat.useAlphaFromDiffuseTexture = true;
+      // Match the textured branch in _planeMaterialFor: drop the flat diffuse
+      // fill (the texture is the diffuse now), keep specular off, raise
+      // emissive so the portrait reads at any phase / light angle.
+      mat.diffuseColor  = new BABYLON.Color3(1, 1, 1);
+      mat.specularColor = new BABYLON.Color3(0, 0, 0);
+      mat.emissiveColor = new BABYLON.Color3(0.4, 0.4, 0.4);
+    }
   }
 
   /** Center and zoom the camera so the given hexes (with a margin) fill the
@@ -590,19 +637,24 @@ export class Renderer3D {
       trackProp(cone);
     }
 
-    // ── Road deck: brown disc raised slightly above the tile surface ──────
+    // ── Road deck: brown disc raised clear above the tile surface ─────────
+    // Tile prism top sits at y=0.075; deck bottom must clear it by enough to
+    // avoid z-fighting that made roads invisible. Deck height 0.05, centred at
+    // y=0.13 → bottom 0.105, top 0.155. Diameter trimmed in slightly so the
+    // road reads as a strip on top of the grass rather than covering it edge
+    // to edge (which made it indistinguishable from the tile beneath it).
     if (tile.type === TileType.ROAD) {
       const deck = BABYLON.MeshBuilder.CreateCylinder(
         `road_${tile.col}_${tile.row}`,
-        { tessellation: 6, height: 0.03, diameter: 1.4 },
+        { tessellation: 6, height: 0.05, diameter: 1.5 },
         scene,
       );
       deck.parent     = parent;
       deck.position.x = x;
       deck.position.z = z;
-      deck.position.y = 0.09;
+      deck.position.y = 0.13;
       deck.rotation.y = Math.PI / 6;
-      deck.material   = this._materialFor('#6b5a3e');
+      deck.material   = this._materialFor('#7a5f38');
       deck.isPickable = false;
       trackProp(deck);
     }
@@ -618,21 +670,25 @@ export class Renderer3D {
       plank.position.x = x;
       plank.position.z = z;
       plank.position.y = 0.18;
+      plank.rotation.y = bridgeRotationY(tile, this.state.tiles);
       plank.material   = this._materialFor('#8a6030');
       plank.isPickable = false;
       trackProp(plank);
     }
 
     // ── Building: simple low-poly box atop the tile, building-coloured ────
+    // Shifted toward the NE quadrant so a standee can sit on the SW half of
+    // the same hex without overlapping the building silhouette.
     if (tile.type === TileType.BUILDING && tile.building) {
+      const off = BUILDING_OFFSET;
       const box = BABYLON.MeshBuilder.CreateBox(
         `bldg_${tile.col}_${tile.row}`,
-        { width: 1.0, height: 0.7, depth: 1.0 },
+        { width: 0.55, height: 0.7, depth: 0.55 },
         scene,
       );
       box.parent     = parent;
-      box.position.x = x;
-      box.position.z = z;
+      box.position.x = x + off.x;
+      box.position.z = z + off.z;
       box.position.y = 0.43; // sit on top of the tile prism
       box.material   = this._materialFor(BUILDING_COLOR[tile.building] || '#8a7a5a');
       box.isPickable = false;
@@ -641,12 +697,12 @@ export class Renderer3D {
       // Tiny roof block to add silhouette variety.
       const roof = BABYLON.MeshBuilder.CreateBox(
         `roof_${tile.col}_${tile.row}`,
-        { width: 1.1, height: 0.15, depth: 1.1 },
+        { width: 0.62, height: 0.15, depth: 0.62 },
         scene,
       );
       roof.parent     = parent;
-      roof.position.x = x;
-      roof.position.z = z;
+      roof.position.x = x + off.x;
+      roof.position.z = z + off.z;
       roof.position.y = 0.85;
       roof.material   = this._materialFor('#2c2520');
       roof.isPickable = false;
@@ -739,10 +795,11 @@ export class Renderer3D {
       0, 0, c.width, c.height,
     );
     const BABYLON = this._babylon;
-    const tex = new BABYLON.Texture(
-      c.toDataURL(), this._scene, true, false,
-      BABYLON.Texture.TRILINEAR_SAMPLINGMODE,
-    );
+    // Babylon defaults: noMipmap=false, invertY=true (matches HTML image origin).
+    // We previously passed `true, false` here which disabled mipmaps AND flipped
+    // V — the V-flip rendered the back face of the plane, hiding the portrait
+    // behind the standee material when backFaceCulling kicked in. Use defaults.
+    const tex = new BABYLON.Texture(c.toDataURL(), this._scene);
     tex.hasAlpha = true;
     this._portraitTextures.set(assetId, tex);
     return tex;
@@ -921,7 +978,17 @@ export class Renderer3D {
           0,
           standee.base.position.z,
         );
-        this._focusCamera(newTarget, this._camera.radius);
+        // Selecting a unit should always feel like "the camera moved to it" —
+        // skip the no-op-shift early-out that `_focusCamera` applies for
+        // generic shifts, otherwise tiny target deltas (or the camera already
+        // sitting on the unit because of an earlier pan) leave the player
+        // wondering whether the click registered. Also zoom in toward the
+        // unit when the camera is currently parked far away.
+        const targetRadius = Math.min(
+          this._camera.radius,
+          Math.max(this._camera.lowerRadiusLimit ?? 4, SELECTION_FOCUS_RADIUS),
+        );
+        this._focusCamera(newTarget, targetRadius, { forceAnimate: true });
       }
     }
     this._lastSelectedEntityId = newId;
@@ -936,7 +1003,16 @@ export class Renderer3D {
     const camera  = this._camera;
     if (!BABYLON || !camera) return;
 
-    if (opts.instant || !shouldAnimateFocus(camera.target, camera.radius, newTarget, newRadius)) {
+    if (opts.instant) {
+      camera.target = newTarget;
+      camera.radius = newRadius;
+      return;
+    }
+    // `forceAnimate` overrides the small-shift early-out — callers that drive
+    // user-facing focus changes (e.g. unit selection) want the animation even
+    // when the delta is tiny, so the player gets a clear visual confirmation.
+    if (!opts.forceAnimate
+        && !shouldAnimateFocus(camera.target, camera.radius, newTarget, newRadius)) {
       camera.target = newTarget;
       camera.radius = newRadius;
       return;
@@ -1453,9 +1529,12 @@ export class Renderer3D {
    *  rebuild from scratch every draw() — the per-call cost is a handful of
    *  meshes (one per MOVE step) and avoids hand-tracking dirty plan state. */
   _syncPlanArrows() {
-    // Dispose previous frame's arrow geometry first.
+    // Dispose previous frame's plan marker geometry first. We rebuild every
+    // draw — the per-call cost is small (one disc + badge per MOVE step) and
+    // avoids hand-tracking which plan steps changed.
     for (const arrow of this._planArrowMeshes) {
-      arrow.line?.dispose();
+      arrow.disc?.dispose();
+      arrow.discMat?.dispose();
       arrow.badge?.dispose();
       arrow.badgeMat?.dispose();
       arrow.badgeTex?.dispose();
@@ -1468,25 +1547,36 @@ export class Renderer3D {
     const BABYLON = this._babylon;
     for (const step of steps) {
       if (!step.arrow) continue;
-      const { fromCol, fromRow, toCol, toRow, entityId } = step.arrow;
+      const { toCol, toRow, entityId } = step.arrow;
       // Owner colour: prefer the entity's per-player colour, fall back to
       // faction theme, then neutral white.
       const ent   = this.state?.entities?.find?.(e => e.id === entityId);
-      const ownerColor = this._ownerColorFor(ent ?? {});
-
-      const polyline = planArrowPolyline(fromCol, fromRow, toCol, toRow, 0.85);
-      const points = polyline.map(p => new BABYLON.Vector3(p.x, p.y, p.z));
-
-      const dashed = BABYLON.MeshBuilder.CreateDashedLines(
-        `planArrow_${entityId}_${step.stepNumber ?? 0}`,
-        { points, dashNb: 12, dashSize: 4, gapSize: 3 }, this._scene,
-      );
+      const ownerColor = entityBaseColor(ent ?? {});
       const [r, g, b] = cssHexToRgb01(ownerColor);
-      dashed.color = new BABYLON.Color3(r, g, b);
-      dashed.alpha = 0.85;
-      dashed.isPickable = false;
 
-      // Numbered badge at the arrow head — small billboarded plane.
+      // Flat owner-tinted disc lying on the destination hex top. Replaces the
+      // floating dashed line from Phase 5 — the user found ground markers per
+      // hex destination much easier to read than airborne arrows.
+      const disc = BABYLON.MeshBuilder.CreateDisc(
+        `planDisc_${entityId}_${step.stepNumber ?? 0}`,
+        { tessellation: 24, radius: 0.7 }, this._scene,
+      );
+      const { x: tx, z: tz } = hexToWorld(toCol, toRow);
+      disc.position.set(tx, PLAN_DISC_Y, tz);
+      // Disc faces +Z by default — rotate 90° around X so it lies flat on XZ.
+      disc.rotation.x = Math.PI / 2;
+      disc.isPickable = false;
+
+      const discMat = new BABYLON.StandardMaterial(
+        `planDiscMat_${entityId}_${step.stepNumber ?? 0}`, this._scene);
+      discMat.diffuseColor  = new BABYLON.Color3(r, g, b);
+      discMat.emissiveColor = new BABYLON.Color3(r * 0.5, g * 0.5, b * 0.5);
+      discMat.specularColor = new BABYLON.Color3(0, 0, 0);
+      discMat.alpha = PLAN_DISC_ALPHA;
+      discMat.backFaceCulling = false;
+      disc.material = discMat;
+
+      // Numbered badge above the disc — small billboarded plane.
       let badge = null, badgeMat = null, badgeTex = null;
       if (step.stepNumber != null && typeof document !== 'undefined') {
         badgeTex = new BABYLON.DynamicTexture(`badgeTex_${entityId}_${step.stepNumber}`,
@@ -1519,11 +1609,122 @@ export class Renderer3D {
         badge.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
         badge.isPickable    = false;
         badge.material      = badgeMat;
-        const { x: tx, z: tz } = hexToWorld(toCol, toRow);
-        badge.position.set(tx, 1.0, tz);
+        badge.position.set(tx, 0.6, tz);
       }
 
-      this._planArrowMeshes.push({ line: dashed, badge, badgeMat, badgeTex });
+      this._planArrowMeshes.push({ disc, discMat, badge, badgeMat, badgeTex });
+    }
+  }
+
+  // ─── Plan ghost (walking previewer) ──────────────────────────────────────
+  //
+  // Mirrors the 2D path's "ghost walks the plan" preview: a translucent clone
+  // of each moving unit's standee plane traces the planned path on a loop.
+  // The 2D path uses a shared "heartbeat" cycle across all units; here we use
+  // a simpler per-unit loop with a fixed per-step duration — both reads as
+  // "this unit is about to walk this path".
+  //
+  // Implementation notes:
+  //   • Path is sourced from `planGhostSteps` (computed in ui.js via
+  //     `computeGhostState`). MOVE arrows in step order → [origin, dest1, ...].
+  //   • Ghost meshes are rebuilt only when an entity's path *signature*
+  //     changes; per-frame motion is pumped from `_onBeforeRender` so the
+  //     animation runs independently of `draw()` calls.
+  //   • The ghost plane reuses the entity's existing portrait material
+  //     (no extra texture allocation) but is rendered at half alpha. We toggle
+  //     `mat.alpha` per-frame via a wrapped material clone — cheap, and keeps
+  //     the real standee at full opacity.
+
+  /** Refresh ghost meshes from current `planGhostSteps`. Dispose ghosts whose
+   *  path no longer exists; build new ghosts for new paths; leave unchanged
+   *  paths alone so the walking cycle doesn't snap back to origin every draw. */
+  _syncPlanGhosts() {
+    if (!this._scene || !this._babylon) return;
+
+    const paths = computePlanGhostPaths(this.planGhostSteps);
+
+    // Compute a combined signature so we can early-out when nothing changed.
+    const sig = [...paths.entries()]
+      .map(([id, p]) => `${id}:${p.map(s => `${s.col},${s.row}`).join('|')}`)
+      .sort()
+      .join(';');
+    if (sig === this._planGhostSig) return;
+    this._planGhostSig = sig;
+
+    // Dispose ghosts whose entity no longer has a path (or has changed path).
+    for (const [id, entry] of this._planGhostMeshes) {
+      const p = paths.get(id);
+      const newKey = p ? p.map(s => `${s.col},${s.row}`).join('|') : null;
+      if (newKey !== entry.signature) {
+        entry.plane.dispose();
+        entry.mat?.dispose();
+        this._planGhostMeshes.delete(id);
+      }
+    }
+
+    // Build ghosts for any entity that now has a path but no live ghost.
+    const BABYLON = this._babylon;
+    for (const [id, path] of paths) {
+      if (this._planGhostMeshes.has(id)) continue;
+      const standee = this._entityStandees.get(id);
+      if (!standee) continue; // no live standee to clone — skip
+      const ent = this.state?.entities?.find?.(e => e.id === id);
+      const assetId = this._assetIdFor(ent);
+      // Build a fresh material so we can tweak alpha independently of the
+      // real standee. We reuse the portrait texture from the cached material.
+      const baseMat = this._planeMaterialFor(assetId);
+      const mat = new BABYLON.StandardMaterial(`ghost_${id}`, this._scene);
+      if (baseMat.diffuseTexture) {
+        mat.diffuseTexture = baseMat.diffuseTexture;
+        mat.opacityTexture = baseMat.diffuseTexture;
+        mat.useAlphaFromDiffuseTexture = true;
+      } else {
+        mat.diffuseColor = baseMat.diffuseColor?.clone()
+          ?? new BABYLON.Color3(0.85, 0.85, 0.85);
+      }
+      mat.specularColor = new BABYLON.Color3(0, 0, 0);
+      mat.emissiveColor = new BABYLON.Color3(0.4, 0.4, 0.4);
+      mat.backFaceCulling = false;
+      mat.alpha = PLAN_GHOST_ALPHA;
+
+      const leader = standee.leader;
+      const wMul = leader ? STANDEE_LEADER_WIDTH_MUL  : 1;
+      const hMul = leader ? STANDEE_LEADER_HEIGHT_MUL : 1;
+      const plane = BABYLON.MeshBuilder.CreatePlane(
+        `planGhost_${id}`,
+        { width: STANDEE_BASE_WIDTH * wMul, height: STANDEE_BASE_HEIGHT * hMul },
+        this._scene,
+      );
+      plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_Y;
+      plane.material      = mat;
+      plane.isPickable    = false;
+
+      this._planGhostMeshes.set(id, {
+        plane, mat, path,
+        signature: path.map(s => `${s.col},${s.row}`).join('|'),
+        leader,
+      });
+    }
+  }
+
+  /** Per-frame: walk each ghost along its path on a loop. Cheap — runs once
+   *  per ghost (a handful) regardless of map size. */
+  _pumpPlanGhosts(nowMs) {
+    if (this._planGhostMeshes.size === 0) return;
+    for (const [, entry] of this._planGhostMeshes) {
+      const pose = planGhostPose(nowMs, entry.path.length);
+      const from = entry.path[pose.segment];
+      const to   = entry.path[Math.min(entry.path.length - 1, pose.segment + 1)];
+      const a = hexToWorld(from.col, from.row);
+      const b = hexToWorld(to.col,   to.row);
+      const lerp = (s, e) => s + (e - s) * pose.segT;
+      entry.plane.position.x = lerp(a.x, b.x);
+      entry.plane.position.z = lerp(a.z, b.z);
+      const hMul = entry.leader ? STANDEE_LEADER_HEIGHT_MUL : 1;
+      entry.plane.position.y = STANDEE_BASE_Y_OFFSET
+        + STANDEE_BASE_THICKNESS / 2
+        + (STANDEE_BASE_HEIGHT * hMul) / 2;
+      entry.mat.alpha = PLAN_GHOST_ALPHA * pose.alpha;
     }
   }
 
@@ -1617,6 +1818,8 @@ export class Renderer3D {
         this._setNodeGlowIntensity(ng, k);
       }
     }
+    // Plan ghost walking previewer.
+    this._pumpPlanGhosts(now);
   }
 
   /** Modulate a selected standee's halo. We use the base disc's emissive
@@ -1829,10 +2032,10 @@ export function entityBaseColor(entity) {
  *  white at day, cool blue at night); clear → scene.clearColor (sky/horizon
  *  tint that shows through gaps and behind transparent props). */
 export const PHASE_LIGHT_CONFIG = Object.freeze({
-  dawn:  { intensity: 0.90, color: { r: 1.00, g: 0.78, b: 0.55 }, clear: { r: 0.45, g: 0.30, b: 0.30 } },
-  day:   { intensity: 1.10, color: { r: 1.00, g: 1.00, b: 0.97 }, clear: { r: 0.55, g: 0.72, b: 0.85 } },
-  dusk:  { intensity: 0.85, color: { r: 1.00, g: 0.55, b: 0.40 }, clear: { r: 0.40, g: 0.25, b: 0.30 } },
-  night: { intensity: 0.55, color: { r: 0.55, g: 0.65, b: 0.95 }, clear: { r: 0.05, g: 0.08, b: 0.18 } },
+  dawn:  { intensity: 1.00, color: { r: 1.00, g: 0.82, b: 0.62 }, clear: { r: 0.55, g: 0.38, b: 0.36 } },
+  day:   { intensity: 1.20, color: { r: 1.00, g: 1.00, b: 0.97 }, clear: { r: 0.55, g: 0.72, b: 0.85 } },
+  dusk:  { intensity: 1.00, color: { r: 1.00, g: 0.62, b: 0.48 }, clear: { r: 0.50, g: 0.32, b: 0.36 } },
+  night: { intensity: 0.85, color: { r: 0.70, g: 0.78, b: 1.00 }, clear: { r: 0.12, g: 0.18, b: 0.32 } },
 });
 
 /** Look up a phase's lighting config. Falls back to DAY if the phase is
@@ -1993,6 +2196,75 @@ export const FLOAT_TEXT_MS = 700;
 /** HP-bar height (world units) above the standee's base disc. */
 export const HP_BAR_Y_ABOVE_BASE = 0.2;
 
+/** Plan-marker disc — flat owner-tinted circle laid on the destination hex
+ *  top. Y just clears the tile prism top (0.075) and the road deck (0.155)
+ *  so it reads against both terrain and crossings. */
+export const PLAN_DISC_Y     = 0.16;
+export const PLAN_DISC_ALPHA = 0.5;
+
+/** Plan ghost — translucent standee clone walking the planned path. */
+export const PLAN_GHOST_ALPHA          = 0.4;
+/** Duration (ms) of a single step of the walking ghost. */
+export const PLAN_GHOST_STEP_MS        = 600;
+/** Duration (ms) of the post-arrival fade before the ghost teleports back to
+ *  the path's origin and starts the next cycle. */
+export const PLAN_GHOST_FADE_MS        = 280;
+
+/**
+ * Group MOVE arrows from a `planGhostSteps` array into per-entity paths.
+ * Returns Map<entityId, [{col,row}, ...]> where each path starts at the move's
+ * origin and lists every subsequent destination in plan order. Entities with
+ * no MOVE actions don't appear in the map.
+ */
+export function computePlanGhostPaths(steps) {
+  const paths = new Map();
+  if (!Array.isArray(steps)) return paths;
+  for (const s of steps) {
+    if (!s?.arrow) continue;
+    const { entityId, fromCol, fromRow, toCol, toRow } = s.arrow;
+    let arr = paths.get(entityId);
+    if (!arr) {
+      arr = [{ col: fromCol, row: fromRow }];
+      paths.set(entityId, arr);
+    }
+    arr.push({ col: toCol, row: toRow });
+  }
+  return paths;
+}
+
+/**
+ * Lifecycle pose of a plan-ghost at clock `nowMs` for a path of `pathLen`
+ * vertices (origin + N destinations). Returns the segment index, the
+ * within-segment progress `segT ∈ [0,1]`, and the alpha modulation.
+ *
+ * Cycle layout (per ghost, looping):
+ *   • Walk: pathLen - 1 segments of PLAN_GHOST_STEP_MS each.
+ *   • Fade: PLAN_GHOST_FADE_MS of fading-then-snap-back.
+ *
+ * When pathLen ≤ 1 (no destinations), returns segment 0 / segT 0 / alpha 1 —
+ * a still ghost at the origin, which the caller renders harmlessly.
+ */
+export function planGhostPose(nowMs, pathLen) {
+  if (!Number.isFinite(pathLen) || pathLen <= 1) {
+    return { segment: 0, segT: 0, alpha: 1 };
+  }
+  const segCount = pathLen - 1;
+  const cycle = segCount * PLAN_GHOST_STEP_MS + PLAN_GHOST_FADE_MS;
+  const tInCycle = ((nowMs % cycle) + cycle) % cycle;
+  if (tInCycle < segCount * PLAN_GHOST_STEP_MS) {
+    const segment = Math.floor(tInCycle / PLAN_GHOST_STEP_MS);
+    const segT = (tInCycle - segment * PLAN_GHOST_STEP_MS) / PLAN_GHOST_STEP_MS;
+    return { segment, segT, alpha: 1 };
+  }
+  // Fade phase: hold at last destination, alpha lerps 1 → 0.
+  const fadeT = (tInCycle - segCount * PLAN_GHOST_STEP_MS) / PLAN_GHOST_FADE_MS;
+  return {
+    segment: segCount - 1,
+    segT: 1,
+    alpha: Math.max(0, 1 - fadeT),
+  };
+}
+
 /** HP-bar ratio thresholds — kept as constants so the test can assert them
  *  without re-deriving from the rendering function. */
 export const HP_RED_BELOW    = 0.33;
@@ -2035,6 +2307,64 @@ export function planArrowPolyline(fromCol, fromRow, toCol, toRow, height = 0.85)
 export function planArrowBadgePosition(toCol, toRow, height = 1.0) {
   const { x, z } = hexToWorld(toCol, toRow);
   return { x, y: height, z };
+}
+
+/**
+ * Rotation (radians, around world Y) for a bridge plank so its long axis
+ * crosses the river perpendicularly. Mirrors the 2D path's bridge-crossing
+ * heuristic in `_drawRoadLayer`: find the two water neighbours most opposed
+ * across the bridge hex, use the line between them as the river axis, and
+ * orient the plank's long side perpendicular to that axis.
+ *
+ *   • 0 water neighbours → returns 0 (no rotation; nothing to perpend to).
+ *   • 1 water neighbour  → uses the direction *to* that neighbour as the axis.
+ *   • 2+ water neighbours → picks the most-opposing pair (dot product closest
+ *     to -1) and uses the displacement between them as the axis.
+ *
+ * The plank's default geometry is `{ width: 1.7, depth: 0.7 }` — wide along X,
+ * narrow along Z. Babylon's left-handed Y-up rotation.y rotates the +X axis
+ * toward +Z (i.e. rotation.y = θ takes X → (cos θ, 0, sin θ)). We want the
+ * plank's +X to land on the perpendicular direction, so:
+ *
+ *     rotation.y = atan2(axisZ, axisX) + π/2
+ *
+ * `tilesByKey` is a Map<hexKey, Tile> — typically the state's `tiles` map.
+ * Exposed as a pure function so tests can lock down the math without Babylon.
+ */
+export function bridgeRotationY(tile, tilesByKey) {
+  if (!tile || !tilesByKey) return 0;
+  const here = hexToWorld(tile.col, tile.row);
+  const waterDirs = [];
+  for (const n of getNeighbors(tile.col, tile.row)) {
+    const nt = tilesByKey.get(hexKey(n.col, n.row));
+    if (!nt) continue;
+    if (nt.type !== TileType.RIVER && nt.type !== TileType.BRIDGE) continue;
+    const there = hexToWorld(n.col, n.row);
+    waterDirs.push({ dx: there.x - here.x, dz: there.z - here.z });
+  }
+  if (waterDirs.length === 0) return 0;
+
+  let axisX, axisZ;
+  if (waterDirs.length === 1) {
+    axisX = waterDirs[0].dx;
+    axisZ = waterDirs[0].dz;
+  } else {
+    // Pick the pair with the most-opposed unit vectors (lowest dot product).
+    let bestDot = Infinity;
+    let bestPair = [waterDirs[0], waterDirs[1]];
+    for (let i = 0; i < waterDirs.length; i++) {
+      for (let j = i + 1; j < waterDirs.length; j++) {
+        const a = waterDirs[i], b = waterDirs[j];
+        const la = Math.hypot(a.dx, a.dz) || 1;
+        const lb = Math.hypot(b.dx, b.dz) || 1;
+        const dot = (a.dx * b.dx + a.dz * b.dz) / (la * lb);
+        if (dot < bestDot) { bestDot = dot; bestPair = [a, b]; }
+      }
+    }
+    axisX = bestPair[1].dx - bestPair[0].dx;
+    axisZ = bestPair[1].dz - bestPair[0].dz;
+  }
+  return Math.atan2(axisZ, axisX) + Math.PI / 2;
 }
 
 /**
