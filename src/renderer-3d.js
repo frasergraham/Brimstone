@@ -119,6 +119,9 @@ export class Renderer3D {
   setZoom(_newZoom, _focalX, _focalY)                 { /* phase 2+ */ }
   resetView()                                         { /* phase 2+ */ }
   _clampPan()                                         { /* phase 2+ */ }
+  // Empty set = "nothing fog-visible"; callers fall back to other checks.
+  // Stubbed until 3D fog of war lands.
+  _buildFogVisibleHexes(_observerOwner)               { return new Set(); }
 
   addAttackAnim(_aCol, _aRow, _tCol, _tRow)                                 { /* phase 3+ */ }
   addLungeAnim(_id, _fCol, _fRow, _tCol, _tRow, _type, _owner, _title)       { /* phase 3+ */ }

@@ -3,8 +3,17 @@
 // Renderer3D must expose every method that the 2D Renderer exposes so
 // the toggle in main.js can swap implementations without main.js or
 // ui.js needing to branch on which one is active. This test pins that
-// contract: if a new method lands on Renderer (the source of truth)
-// without a matching stub on Renderer3D, this test fails.
+// contract two ways:
+//   1. Every public method on Renderer (the source of truth) must
+//      exist on Renderer3D.
+//   2. Every method actually invoked as `*.renderer.<name>(` from any
+//      file under src/ must exist on Renderer3D — including
+//      underscore-prefixed methods (e.g. _clampPan, _buildFogVisibleHexes)
+//      that callers reach into despite being "private" on the 2D class.
+//
+// (2) is the important one: it auto-discovers external call sites, so
+// any future drift — a new ui.js call into a Renderer internal — is
+// caught without anyone remembering to update this test.
 //
 // We deliberately only check methods (not properties). Property slots
 // on the 3D renderer are initialised inside the constructor — they're
@@ -17,13 +26,47 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { Renderer }   from '../src/renderer.js';
 import { Renderer3D } from '../src/renderer-3d.js';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const SRC_DIR   = path.resolve(__dirname, '..', 'src');
+
 function _methodNames(cls) {
   return Object.getOwnPropertyNames(cls.prototype)
     .filter(n => n !== 'constructor' && typeof cls.prototype[n] === 'function');
+}
+
+function _walkJsFiles(dir) {
+  const out = [];
+  for (const name of readdirSync(dir)) {
+    const full = path.join(dir, name);
+    const st = statSync(full);
+    if (st.isDirectory()) out.push(..._walkJsFiles(full));
+    else if (st.isFile() && full.endsWith('.js')) out.push(full);
+  }
+  return out;
+}
+
+// Find every method name `*.renderer.<name>(` invoked from any file under src/.
+// We allow any identifier preceding `.renderer.` so `this.renderer.foo()`,
+// `ui.renderer.foo()`, and bare `renderer.foo()` all match.
+function _externalRendererMethodCallSites() {
+  const callRe = /(?:\.|\b)renderer\.([A-Za-z_][A-Za-z0-9_]*)\s*\(/g;
+  const names = new Set();
+  for (const file of _walkJsFiles(SRC_DIR)) {
+    // Don't scan the renderers themselves — internal `this._foo()` calls aren't external.
+    const base = path.basename(file);
+    if (base === 'renderer.js' || base === 'renderer-3d.js') continue;
+    const src = readFileSync(file, 'utf8');
+    let m;
+    while ((m = callRe.exec(src)) !== null) names.add(m[1]);
+  }
+  return names;
 }
 
 describe('Renderer3D — interface conformance with 2D Renderer', () => {
@@ -36,6 +79,19 @@ describe('Renderer3D — interface conformance with 2D Renderer', () => {
       missing,
       [],
       `Renderer3D is missing ${missing.length} public method(s): ${missing.join(', ')}\n` +
+      `Add stubs in src/renderer-3d.js so callers can swap renderers.`,
+    );
+  });
+
+  test('every method invoked as *.renderer.X(...) in src/ is on Renderer3D', () => {
+    const called = _externalRendererMethodCallSites();
+    const r3d    = new Set(_methodNames(Renderer3D));
+
+    const missing = [...called].filter(name => !r3d.has(name)).sort();
+    assert.deepEqual(
+      missing,
+      [],
+      `Renderer3D is missing ${missing.length} method(s) called from src/: ${missing.join(', ')}\n` +
       `Add stubs in src/renderer-3d.js so callers can swap renderers.`,
     );
   });
