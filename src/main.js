@@ -8,15 +8,15 @@ import { Renderer3D }        from './renderer-3d.js';
 
 /**
  * Pick the renderer class based on the 'brimstone:renderer' localStorage
- * value. Defaults to the 2D canvas renderer; 3D is opt-in and behind a
- * setup-screen toggle. Returns the constructor (not an instance) so callers
- * can `new` it with the right (canvas, state) pair.
+ * value. Returns the constructor (not an instance) so callers can `new` it
+ * with the right (canvas, state) pair.
  */
 function _pickRenderer() {
+  // 3D is the default on feature/3d-renderer; users can opt back to 2D in Options.
   try {
-    if (localStorage.getItem('brimstone:renderer') === '3d') return Renderer3D;
+    if (localStorage.getItem('brimstone:renderer') === '2d') return Renderer;
   } catch { /* localStorage may be unavailable in some sandboxes */ }
-  return Renderer;
+  return Renderer3D;
 }
 import { UIController, UIMode } from './ui.js';
 import { WITCH_PERSONALITIES }   from './ai.js';
@@ -2211,10 +2211,10 @@ document.getElementById('reconnect-back').addEventListener('click', () => locati
   const select = document.getElementById('options-renderer-select');
   const hint   = document.getElementById('options-renderer-hint');
   if (select) {
-    const saved = localStorage.getItem(RENDERER_KEY) === '3d' ? '3d' : '2d';
+    const saved = localStorage.getItem(RENDERER_KEY) === '2d' ? '2d' : '3d';
     select.value = saved;
     select.addEventListener('change', () => {
-      const value = select.value === '3d' ? '3d' : '2d';
+      const value = select.value === '2d' ? '2d' : '3d';
       localStorage.setItem(RENDERER_KEY, value);
       if (hint) hint.style.display = '';
     });
