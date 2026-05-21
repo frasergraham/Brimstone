@@ -18,6 +18,7 @@
     "test:ui:verbose": "node --test --test-reporter=spec tests/ui/*.test.js",
     "test:all": "node --test tests/*.test.js tests/ui/*.test.js",
     "test:mp-net": "node scripts/headless-mp-net.js",
+    "render:3d-map": "node scripts/render-3d-map.js",
     "validate": "node scripts/validate.js",
     "release": "node scripts/release.js",
     "release:dry": "node scripts/release.js --dry-run",
