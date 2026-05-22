@@ -1045,6 +1045,10 @@ export class Renderer {
     this._panY = 0;
   }
 
+  // 3D-only operation; 2D camera has no rotation axes. Defined for interface
+  // parity with Renderer3D so ui.js can wire rotate buttons unconditionally.
+  rotateBy(_alphaDelta, _betaDelta) { /* no-op in 2D */ }
+
   _clampPan() {
     const wrapper = this.canvas.parentElement;
     const wrapW = wrapper?.clientWidth  ?? this.canvas.width;

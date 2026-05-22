@@ -78,6 +78,43 @@ export const SELECTION_FOCUS_RADIUS = 14;
 export const CAMERA_BETA_LOWER_DELTA = 0.25; // ~14° toward head-on
 export const CAMERA_BETA_UPPER_DELTA = 0.15; // ~8.6° toward bird's-eye
 
+/** Camera radius at zoomLevel === 1.0. The 2D renderer expresses zoom as a
+ *  unitless multiplier on hex size; the 3D camera works in ArcRotate `radius`.
+ *  We bridge the two by mapping zoom→radius reciprocally: setZoom(N) →
+ *  radius = DEFAULT_ZOOM_RADIUS / N (clamped to the camera's radius limits).
+ *  12 sits in the middle of [4, 80] and frames a standard map's centre at
+ *  a comfortable working distance. */
+export const DEFAULT_ZOOM_RADIUS = 12;
+
+/** Step size (radians) applied by the rotate-left/right HUD buttons. ≈14°
+ *  per click — enough to feel like a meaningful nudge without disorienting. */
+export const ROTATE_BUTTON_STEP = Math.PI / 12;
+
+/** Translate a 2D-style zoom multiplier into an ArcRotateCamera radius.
+ *  Reciprocal mapping (higher zoom = smaller radius = closer in); the result
+ *  is clamped to [lowerRadiusLimit, upperRadiusLimit]. Pure helper for tests. */
+export function zoomToRadius(zoom, lowerLimit = 4, upperLimit = 80, defaultRadius = DEFAULT_ZOOM_RADIUS) {
+  const z = Math.max(1e-3, zoom);
+  const r = defaultRadius / z;
+  return Math.max(lowerLimit, Math.min(upperLimit, r));
+}
+
+/** Inverse of zoomToRadius — used when external code asks for the current
+ *  zoom level and the 3D renderer needs to report it from its radius. */
+export function radiusToZoom(radius, defaultRadius = DEFAULT_ZOOM_RADIUS) {
+  const r = Math.max(1e-3, radius);
+  return defaultRadius / r;
+}
+
+/** Apply alpha/beta deltas with proper clamping. Alpha is unbounded (wraps
+ *  freely). Beta is clamped to [betaMin, betaMax] so the camera can't flip
+ *  past the locked isometric tilt range. Pure helper for tests. */
+export function clampRotation(currentAlpha, currentBeta, alphaDelta, betaDelta, betaMin, betaMax) {
+  const alpha = currentAlpha + alphaDelta;
+  const beta  = Math.max(betaMin, Math.min(betaMax, currentBeta + betaDelta));
+  return { alpha, beta };
+}
+
 const SQRT3 = Math.sqrt(3);
 
 /**
@@ -538,7 +575,39 @@ export class Renderer3D {
     return { x: projected.x, y: projected.y };
   }
 
-  setZoom(_newZoom, _focalX, _focalY)                 { /* managed by camera wheel/pinch */ }
+  /** Adjust camera distance to mirror the 2D renderer's zoom semantics.
+   *  Focal coordinates are accepted for interface parity with the 2D path
+   *  but ignored — the ArcRotateCamera keeps its current target. */
+  setZoom(newZoom, _focalX, _focalY) {
+    if (this.viewLocked) return;
+    const camera = this._camera;
+    if (!camera) {
+      // Init hasn't run yet; just stash the requested zoom so frameHexes /
+      // _initBabylon (which use zoomLevel) see the desired starting point.
+      this.zoomLevel = Math.max(0.1, newZoom);
+      return;
+    }
+    const lower = camera.lowerRadiusLimit ?? 4;
+    const upper = camera.upperRadiusLimit ?? 80;
+    const radius = zoomToRadius(newZoom, lower, upper);
+    this.zoomLevel = radiusToZoom(radius);
+    this._focusCamera(camera.target.clone(), radius, { forceAnimate: true });
+  }
+
+  /** Rotate the camera by absolute alpha/beta deltas (radians). Alpha rotates
+   *  freely; beta is clamped to the camera's tilt range. No-op until Babylon
+   *  has initialised. */
+  rotateBy(alphaDelta, betaDelta) {
+    if (this.viewLocked) return;
+    const camera = this._camera;
+    if (!camera) return;
+    const betaMin = camera.lowerBetaLimit ?? (this._lockedBeta - CAMERA_BETA_LOWER_DELTA);
+    const betaMax = camera.upperBetaLimit ?? (this._lockedBeta + CAMERA_BETA_UPPER_DELTA);
+    const { alpha, beta } = clampRotation(camera.alpha, camera.beta, alphaDelta, betaDelta, betaMin, betaMax);
+    camera.alpha = alpha;
+    camera.beta  = beta;
+  }
+
   /** Refit the whole map. Animates target+radius via `frameHexes`; deliberately
    *  does NOT reset the user's yaw (alpha) — rotation is user state. */
   resetView() {
@@ -724,6 +793,7 @@ export class Renderer3D {
     // methods on the camera's pointers input. Desktop mouse behaviour is
     // preserved (we sniff `point.pointerType` and only swap for touch).
     this._installMobileGestureSwap(camera, BABYLON);
+    this._installTrackpadRotateInput(camera);
 
     const light = new BABYLON.HemisphericLight('hemi', new BABYLON.Vector3(0, 1, 0.3), scene);
     light.intensity = 0.95;
@@ -822,6 +892,63 @@ export class Renderer3D {
         this.camera.inertialBetaOffset  -= dy / (this.angularSensibilityY || 1000);
       }
     };
+  }
+
+  /**
+   * Desktop trackpad two-finger swipes arrive as `wheel` events with non-zero
+   * deltaX (purely vertical mouse-wheel ticks have deltaX === 0). Babylon's
+   * default `ArcRotateCameraMouseWheelInput` only zooms on deltaY, which means
+   * horizontal two-finger swipes do nothing and vertical swipes zoom — neither
+   * matches a "drag the camera's view direction" feel.
+   *
+   * This handler intercepts wheel events in capture phase and routes them as:
+   *   • ctrlKey set (synthetic, Mac trackpad pinch)      → zoom (radius)
+   *   • shiftKey set                                     → rotate both axes
+   *   • non-zero deltaX (trackpad two-finger swipe)      → rotate both axes
+   *   • pure deltaY (mouse wheel or vertical scroll)     → fall through to Babylon's zoom
+   *
+   * Horizontal swipe → alpha (yaw); vertical swipe → beta (clamped). Both axes
+   * move at once on diagonal swipes, which is the requested "view direction"
+   * behaviour. We `preventDefault` on the cases we handle so Babylon's wheel
+   * input doesn't double-process the event.
+   */
+  _installTrackpadRotateInput(camera) {
+    if (!this.canvas || typeof this.canvas.addEventListener !== 'function') return;
+    // Sensitivity: 1px of deltaX rotates alpha by this many radians. ≈3° per
+    // 30px of trackpad travel — gentle enough not to whip the camera around.
+    const ALPHA_PER_PIXEL = 0.005;
+    const BETA_PER_PIXEL  = 0.005;
+    // Mac trackpad pinch synthesises wheel events with ctrlKey=true; treat
+    // those as zoom (radius adjust) and scale modestly.
+    const PINCH_RADIUS_PER_DELTA = 0.05;
+
+    this._onWheelRotate = (event) => {
+      if (this.viewLocked) return;
+      const cam = this._camera;
+      if (!cam) return;
+
+      const dx = event.deltaX || 0;
+      const dy = event.deltaY || 0;
+
+      if (event.ctrlKey) {
+        event.preventDefault();
+        const newRadius = Math.max(
+          cam.lowerRadiusLimit ?? 4,
+          Math.min(cam.upperRadiusLimit ?? 80, cam.radius + dy * PINCH_RADIUS_PER_DELTA),
+        );
+        cam.radius = newRadius;
+        this.zoomLevel = radiusToZoom(newRadius);
+        return;
+      }
+
+      const wantsRotate = event.shiftKey || dx !== 0;
+      if (!wantsRotate) return; // pure deltaY mouse wheel → let Babylon zoom
+
+      event.preventDefault();
+      this.rotateBy(dx * ALPHA_PER_PIXEL, dy * BETA_PER_PIXEL);
+    };
+
+    this.canvas.addEventListener('wheel', this._onWheelRotate, { passive: false, capture: true });
   }
 
   // ─── Map construction ────────────────────────────────────────────────────

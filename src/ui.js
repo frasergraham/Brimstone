@@ -203,6 +203,18 @@ export class UIController {
       this.renderer.setZoom(this.renderer.zoomLevel / zoomStep, cx, cy);
       this.onRedraw();
     }, sig);
+    // Rotate buttons — 3D only; 2D Renderer.rotateBy is a no-op stub.
+    // ROTATE_BUTTON_STEP (π/12 ≈ 15°) is duplicated here from renderer-3d.js
+    // so ui.js stays free of 3D-renderer-specific imports.
+    const rotateStep = Math.PI / 12;
+    this._el('rotate-left')?.addEventListener('click', () => {
+      this.renderer.rotateBy(-rotateStep, 0);
+      this.onRedraw();
+    }, sig);
+    this._el('rotate-right')?.addEventListener('click', () => {
+      this.renderer.rotateBy(rotateStep, 0);
+      this.onRedraw();
+    }, sig);
     this._lastFitTapTime = 0;
     this._el('zoom-fit')?.addEventListener('click', () => {
       const now = Date.now();
