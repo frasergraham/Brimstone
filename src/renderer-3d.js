@@ -2046,35 +2046,30 @@ export class Renderer3D {
    *  straight ribbon. Each extension lives in `_borderPropsByKey` under a
    *  synthetic `river-ext:col,row` key, alongside the surrounding forest
    *  props, so it follows the same visual-only lifecycle (no state.tiles
-   *  entry, no pan-clamp influence). Material is a darkened sibling of the
-   *  in-map river ribbon — the surrounding border-forest hexes render under
-   *  the fog tint, so the water flowing through them has to match or it
-   *  reads as a bright stripe across an otherwise out-of-play wilderness
-   *  frame. No-op when the map has no river, or when the forest band is
-   *  disabled. */
+   *  entry, no pan-clamp influence). Material uses the SAME diffuse/emissive
+   *  colours as the in-map river ribbon (`ribbonMaterialColors`) — the
+   *  surrounding border-forest hexes already darken naturally under the
+   *  ambient light of the out-of-play zone, so the extension reads correctly
+   *  without an extra fog tint and visually matches the river inside the
+   *  playable area. No-op when the map has no river, or when the forest
+   *  band is disabled. */
   _buildRiverExtensions(bandDepth) {
     const BABYLON = this._babylon;
     const scene   = this._scene;
     if (!BABYLON || !scene || !this.state?.tiles) return;
     if (!(bandDepth > 0)) return;
-    const riverMesh = this._riverNetworkMesh;
-    const riverMat  = riverMesh?.material;
-    if (!riverMat) return; // no river on this map
+    if (!this._riverNetworkMesh) return; // no river on this map
     const exits = riverExitPoints(this.state.tiles);
     if (exits.length === 0) return;
-    // Build a fogged twin of the river material once — same StandardMaterial
-    // recipe as `_buildRibbonMaterial`, but with diffuse/emissive multiplied
-    // by FOG_TILE_DARKEN so the extension matches the dark border-forest hexes.
-    const { diffuse, emissive } = fogRibbonMaterialColors(
-      TILE_COLOR[TileType.RIVER],
-      this._fogTileDarken,
-    );
-    const fogMat = new BABYLON.StandardMaterial(`river_extension_mat`, scene);
-    fogMat.diffuseColor    = new BABYLON.Color3(diffuse[0],  diffuse[1],  diffuse[2]);
-    fogMat.emissiveColor   = new BABYLON.Color3(emissive[0], emissive[1], emissive[2]);
-    fogMat.specularColor   = new BABYLON.Color3(0.04, 0.04, 0.04);
-    fogMat.backFaceCulling = false;
-    fogMat.disableLighting = false;
+    // Build a sibling of the in-map river material — same StandardMaterial
+    // recipe as `_buildRibbonMaterial`, same diffuse/emissive (no fog tint).
+    const { diffuse, emissive } = ribbonMaterialColors(TILE_COLOR[TileType.RIVER]);
+    const extMat = new BABYLON.StandardMaterial(`river_extension_mat`, scene);
+    extMat.diffuseColor    = new BABYLON.Color3(diffuse[0],  diffuse[1],  diffuse[2]);
+    extMat.emissiveColor   = new BABYLON.Color3(emissive[0], emissive[1], emissive[2]);
+    extMat.specularColor   = new BABYLON.Color3(0.04, 0.04, 0.04);
+    extMat.backFaceCulling = false;
+    extMat.disableLighting = false;
     // Extend one hex past the outermost band tile so the ribbon's far end
     // clearly carries past the band's silhouette instead of fading inside it.
     // Centre-to-centre spacing in any axial direction is SQRT3 world units.
@@ -2099,12 +2094,13 @@ export class Renderer3D {
       );
       ribbon.parent     = this._mapRoot;
       ribbon.isPickable = false;
-      ribbon.material   = fogMat;
+      ribbon.material   = extMat;
       // Match the playable-map river ribbons (`_buildNetworkMesh`) — the
       // extension is the same flat ground-hugging strip threading through the
       // border-forest band, so it should catch unit/tree shadows the same way.
       this._setShadowReceiver(ribbon);
-      ribbon.metadata   = { kind: 'river-extension', col: exit.tile.col, row: exit.tile.row, fogged: true };
+      ribbon.alphaIndex = RIVER_ALPHA_INDEX;
+      ribbon.metadata   = { kind: 'river-extension', col: exit.tile.col, row: exit.tile.row };
       const key = `river-ext:${exit.tile.col},${exit.tile.row}`;
       const list = this._borderPropsByKey.get(key) || [];
       list.push(ribbon);
@@ -2416,6 +2412,13 @@ export class Renderer3D {
       mat.emissiveColor = baseEmis.clone();
       merged.material        = mat;
       merged.hasVertexAlpha  = true;
+      // Force road > river in the transparency sort so the road ribbon paints
+      // OVER the water at every river / road crossing (bridge planks are
+      // disabled — `_renderBridges = false`). Within renderingGroupId 0,
+      // Babylon's transparent pass sorts by `alphaIndex` ascending before
+      // falling back to distance-to-camera, so this pins ordering even when
+      // the per-mesh distance sort would otherwise flip on a low camera angle.
+      merged.alphaIndex      = networkName === 'road' ? ROAD_ALPHA_INDEX : RIVER_ALPHA_INDEX;
       merged.name            = `${networkName}_${tkey}`;
       // Tag for fog darkening (not hiding). `_setTileFogged` consults this and
       // stashes the unfogged anchor colours on the metadata so they can be
@@ -5797,8 +5800,26 @@ export const RIVER_RIBBON_WIDTH = 0.85;
 export const ROAD_RIBBON_WIDTH  = 0.6;
 /** Y above tile prism top (0.075) and disc top (0.084) — ribbon hugs the terrain. */
 export const RIVER_RIBBON_Y     = 0.005;
-/** Road sits 1 mm above the river so over-bridge crossings layer cleanly. */
-export const ROAD_RIBBON_Y      = 0.008;
+/** Road sits clearly above the river so the road tube paints OVER the water at
+ *  river crossings — the bridge plank is disabled (`_renderBridges = false`),
+ *  so the road ribbon is the only thing carrying the visual at the crossing.
+ *  Previous 0.008 value left a 3 mm gap that was too small for Babylon's
+ *  alpha-blend depth sort to reliably resolve at typical camera tilts; with
+ *  the river ribbon at 0.005 and road at 0.025 the depth fight is no longer
+ *  close. Combined with `alphaIndex` (road > river) in `_buildNetworkMesh`,
+ *  this guarantees road > river ordering even when the per-mesh distance
+ *  sort flips on a particular camera angle. Still <0.05 so the road keeps
+ *  hugging the terrain rather than visibly levitating. */
+export const ROAD_RIBBON_Y      = 0.025;
+/** Babylon `mesh.alphaIndex` values for the river / road merged ribbon meshes.
+ *  Within renderingGroupId 0, Babylon's transparent pass sorts alpha-blended
+ *  meshes by `alphaIndex` ascending (lower draws first → behind). Setting
+ *  river < road forces the road to render AFTER the river at every river /
+ *  road crossing, regardless of the per-mesh distance sort. Paired with the
+ *  road's elevated Y (`ROAD_RIBBON_Y`) so the depth-buffer path agrees with
+ *  the alpha sort. */
+export const RIVER_ALPHA_INDEX = 100;
+export const ROAD_ALPHA_INDEX  = 200;
 /** Number of bezier samples per stroke. 10 is smooth enough at this radius
  *  without bloating the tube vertex count on Campaign-size maps. */
 // Bumped from 10 → 22 — at tight bezier bends the old segment count produced
@@ -5836,20 +5857,6 @@ export function ribbonMaterialColors(hexColor) {
   return {
     diffuse:  [dr, dg, db],
     emissive: [dr * s, dg * s, db * s],
-  };
-}
-
-/** Fogged variant of `ribbonMaterialColors` — multiplies both diffuse and
- *  emissive by `darken` (defaults to FOG_TILE_DARKEN). Used for the river
- *  extension ribbons that sit inside the border-forest band: the surrounding
- *  forest hexes render under the fog tint, so the water flowing through them
- *  must match or it reads as a bright stripe across the dark wilderness frame.
- *  Kept pure so the colour math can be unit-tested without Babylon. */
-export function fogRibbonMaterialColors(hexColor, darken = FOG_TILE_DARKEN) {
-  const { diffuse, emissive } = ribbonMaterialColors(hexColor);
-  return {
-    diffuse:  [diffuse[0]  * darken, diffuse[1]  * darken, diffuse[2]  * darken],
-    emissive: [emissive[0] * darken, emissive[1] * darken, emissive[2] * darken],
   };
 }
 
