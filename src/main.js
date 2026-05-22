@@ -1315,29 +1315,51 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       const _spd = ui?.speedMode ?? 'cinematic';
       const hopDelay = _spd === 'vfast' ? 160 : 320;
 
-      // Determine max hops across all moving entities
-      const maxHops = moveAnims.reduce((m, a) => Math.max(m, a.path.length), 0);
-
-      for (let hop = 0; hop < maxHops; hop++) {
-        // Start animations for all entities at this hop index
+      if (renderer?.is3D) {
+        // 3D: animate the entire path as ONE move per entity. The 3D
+        // renderer's addMoveAnim scales walkGroup.speedRatio by the
+        // step distance / single-hex distance, so a 2-hex road move
+        // plays the walk cycle 2× faster in the same MOVE_ANIM_MS
+        // window — feet plant correctly without the cone teleporting
+        // between hops. Avoids the cancel/restart-from-current pattern
+        // that made multi-hop moves "jump" in 3D.
         for (const { ev, preSnap, path } of moveAnims) {
-          if (hop >= path.length) continue;
-          const fromPos = hop === 0 ? preSnap : path[hop - 1];
-          const toPos   = path[hop];
+          const lastPos = path[path.length - 1];
           renderer.addMoveAnim(
             ev.action.entityId,
-            fromPos.col, fromPos.row,
-            toPos.col, toPos.row,
+            preSnap.col, preSnap.row,
+            lastPos.col, lastPos.row,
             preSnap.type, preSnap.owner,
             preSnap.title ?? null,
           );
-          // Patch display entity to current hop destination
           const ent = displayEntities.find(e => e.id === ev.action.entityId);
-          if (ent) { ent.col = toPos.col; ent.row = toPos.row; }
+          if (ent) { ent.col = lastPos.col; ent.row = lastPos.row; }
         }
         state.entities = displayEntities;
         redrawFn();
         if (!_autoplay && hopDelay > 0) await playbackDelay(hopDelay);
+      } else {
+        // 2D: hop-by-hop animation as before.
+        const maxHops = moveAnims.reduce((m, a) => Math.max(m, a.path.length), 0);
+        for (let hop = 0; hop < maxHops; hop++) {
+          for (const { ev, preSnap, path } of moveAnims) {
+            if (hop >= path.length) continue;
+            const fromPos = hop === 0 ? preSnap : path[hop - 1];
+            const toPos   = path[hop];
+            renderer.addMoveAnim(
+              ev.action.entityId,
+              fromPos.col, fromPos.row,
+              toPos.col, toPos.row,
+              preSnap.type, preSnap.owner,
+              preSnap.title ?? null,
+            );
+            const ent = displayEntities.find(e => e.id === ev.action.entityId);
+            if (ent) { ent.col = toPos.col; ent.row = toPos.row; }
+          }
+          state.entities = displayEntities;
+          redrawFn();
+          if (!_autoplay && hopDelay > 0) await playbackDelay(hopDelay);
+        }
       }
 
       // Bounce-back for partial moves: if the unit stopped short due to an
