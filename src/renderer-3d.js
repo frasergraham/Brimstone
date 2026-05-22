@@ -33,7 +33,7 @@ import { hexKey, hexDistance, getNeighbors } from './hex.js';
 import { nodeController, Phase } from './game.js';
 import { sightRangeForEntity, findFaction } from './factions.js';
 import { Side } from './sides.js';
-import { MAP_SIZES } from './map.js';
+import { MAP_SIZES, NODE_COLORS } from './map.js';
 
 // Babylon core + glTF loaders are served from the packaged `assets/vendor/`
 // directory rather than any CDN — the Electron / iOS bundles must run with zero
@@ -447,6 +447,39 @@ export function nodeLabelText(obj) {
 export function nodeOverlayColor(controller) {
   return getNodeGlowColor(controller);
 }
+
+/** Resolve a node's *identifying* colour — the per-node palette entry that
+ *  matches the 2D score-dot HUD, independent of who currently controls the
+ *  node. Accepts either a witchObjective (uses its baked-in `.color`) or a
+ *  numeric index (looks up `NODE_COLORS`). Falls back to the first palette
+ *  entry on bad input.
+ *
+ *  The score dots in the HUD (`src/ui-render.js`) read `obj.color`, which is
+ *  set at map-gen from `NODE_COLORS` in `src/map.js`. Painting the 3D label
+ *  text + outer identifier ring in the same colour lets a player tie "the
+ *  red dot in the HUD" to "the red-labelled node on the map" at a glance. */
+export function nodeIdentifyingColor(objOrIndex) {
+  if (objOrIndex && typeof objOrIndex === 'object'
+      && typeof objOrIndex.color === 'string' && objOrIndex.color.length > 0) {
+    return objOrIndex.color;
+  }
+  if (typeof objOrIndex === 'number' && Number.isFinite(objOrIndex)) {
+    const n = NODE_COLORS.length;
+    const i = ((Math.trunc(objOrIndex) % n) + n) % n;
+    return NODE_COLORS[i];
+  }
+  return NODE_COLORS[0];
+}
+
+/** Diameter (world units) of the static per-node identifier ring — the
+ *  outer hex outline painted in the node's identifying palette colour.
+ *  Sits just outside the controller-coloured ring (radius ≈ 0.96) so both
+ *  reads as a concentric pair without overlap. */
+export const NODE_IDENTIFIER_RING_RADIUS = 1.04;
+/** Tube radius of the identifier ring. Thinner than the controller ring
+ *  (0.06) so the controller signal stays dominant; the identifier just
+ *  adds a quiet outline of palette colour. */
+export const NODE_IDENTIFIER_RING_TUBE = 0.045;
 
 
 // ─── Pure helpers (exported for tests; no Babylon dependency) ────────────────
@@ -7189,15 +7222,10 @@ export class Renderer3D {
         mat.emissiveColor.b = b * 0.4;
       }
     }
-    // Labels: repaint the DynamicTexture only when the controller actually
-    // flips — DynamicTexture.update() is the expensive part, so guarding on
-    // `lastCtrl` keeps the per-frame cost to a tiny per-label string compare.
-    for (const lbl of this._nodeNameLabels) {
-      const ctrl = nodeController(lbl.obj, this.state.entities);
-      if (lbl.lastCtrl === ctrl) continue;
-      this._paintNodeLabel(lbl, ctrl);
-      lbl.lastCtrl = ctrl;
-    }
+    // Labels are painted once at build time in the node's identifying
+    // colour (palette-matched to the HUD score dots) — that colour never
+    // changes, so there is no per-frame repaint loop here. Fog visibility
+    // still flips through `_setTileFogged` via `_nodeLabelsByCenterHex`.
   }
 
   _buildNodeGlowMeshes() {
@@ -7246,6 +7274,47 @@ export class Renderer3D {
         if (props) props.push(disc);
         else this._tilePropsByKey.set(tkey, [disc]);
         if (this._fogActiveSet.has(tkey)) disc.isVisible = false;
+
+        // Outer identifier ring: a second, slightly larger hex outline
+        // painted in the node's identifying palette colour (matches the
+        // HUD score dots). Static for the life of the game — set once,
+        // frozen below with the rest of the static map geometry. Sits
+        // *outside* the controller ring so the controller signal stays
+        // dominant and the identifier reads as a quiet edge.
+        const idCss = nodeIdentifyingColor(obj);
+        const [ir, ig, ib] = cssHexToRgb01(idCss);
+        const idPath = [];
+        for (let i = 0; i <= 6; i++) {
+          const a = Math.PI / 6 + i * Math.PI / 3;
+          idPath.push(new BABYLON.Vector3(
+            NODE_IDENTIFIER_RING_RADIUS * Math.cos(a),
+            0.028,
+            NODE_IDENTIFIER_RING_RADIUS * Math.sin(a),
+          ));
+        }
+        const idRing = BABYLON.MeshBuilder.CreateTube(
+          `node_id_ring_${obj.label.replace(/\W+/g, '_')}_${h.col}_${h.row}`,
+          { path: idPath, radius: NODE_IDENTIFIER_RING_TUBE, tessellation: 6,
+            sideOrientation: BABYLON.Mesh.DOUBLESIDE },
+          this._scene,
+        );
+        idRing.parent = this._mapRoot;
+        idRing.position.x = x;
+        idRing.position.z = z;
+        idRing.isPickable = false;
+        const idMat = new BABYLON.StandardMaterial(
+          `nodeIdRingMat_${h.col}_${h.row}`, this._scene,
+        );
+        idMat.diffuseColor  = new BABYLON.Color3(ir * 0.4, ig * 0.4, ib * 0.4);
+        idMat.specularColor = new BABYLON.Color3(0, 0, 0);
+        idMat.emissiveColor = new BABYLON.Color3(ir, ig, ib);
+        idRing.material = idMat;
+
+        // Same fog-veil registration as the controller ring. By this point
+        // the per-tile list exists (we just registered the controller disc
+        // a few lines above) so a fresh lookup always returns the array.
+        this._tilePropsByKey.get(tkey).push(idRing);
+        if (this._fogActiveSet.has(tkey)) idRing.isVisible = false;
       }
     }
     // Build the matching 10%-alpha tint disc + one floating name label per
@@ -7370,13 +7439,12 @@ export class Renderer3D {
     const entry = {
       obj, plane, mat, tex,
       hexKey: tkey,
-      lastCtrl: null,
     };
-    // Paint once with the current controller so the label reads correctly
-    // before the first `_syncNodeGlowMeshes` repaint pass runs.
-    const initialCtrl = nodeController(obj, this.state?.entities ?? []);
-    this._paintNodeLabel(entry, initialCtrl);
-    entry.lastCtrl = initialCtrl;
+    // The label colour is the node's identifying palette colour, which is
+    // static for the life of the game — paint once at build time and never
+    // repaint. (Earlier rounds painted in the controller colour and so
+    // needed a per-controller-flip refresh; that's gone now.)
+    this._paintNodeLabel(entry);
     // Mirror the ring's initial fog state — start hidden if the centre hex
     // is already fogged at build time.
     if (this._fogActiveSet.has(tkey)) {
@@ -7385,11 +7453,10 @@ export class Renderer3D {
     return entry;
   }
 
-  /** Repaint a node-label DynamicTexture with the given controller's colour.
-   *  Pulled into its own method so the per-frame `_syncNodeGlowMeshes` pass
-   *  can call it on owner change, and the per-build initial paint reuses
-   *  the same drawing code. */
-  _paintNodeLabel(entry, controller) {
+  /** Paint a node-label DynamicTexture with the node's identifying palette
+   *  colour (matching the HUD score dots). Idempotent — safe to call again
+   *  if the texture is ever evicted. */
+  _paintNodeLabel(entry) {
     const tex = entry?.tex;
     if (!tex || typeof tex.getContext !== 'function') return;
     const ctx = tex.getContext();
@@ -7402,11 +7469,14 @@ export class Renderer3D {
     const cx = W / 2;
     const cy = H / 2;
     // Dark drop-shadow keeps the label legible against bright daytime sky
-    // / pale fog tiles. The controller-coloured fill sits on top.
+    // / pale fog tiles. The identifying-colour fill sits on top: the label
+    // text matches the HUD score-dot palette so the player can tie a HUD
+    // dot to a node on the map at a glance. Controller signal is carried
+    // by the underlying tint disc, not the label colour.
     ctx.fillStyle = 'rgba(0,0,0,0.85)';
     const text = nodeLabelText(entry.obj);
     ctx.fillText(text, cx + 2, cy + 2);
-    ctx.fillStyle = nodeOverlayColor(controller);
+    ctx.fillStyle = nodeIdentifyingColor(entry.obj);
     ctx.fillText(text, cx, cy);
     tex.update();
   }
