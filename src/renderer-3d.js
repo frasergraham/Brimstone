@@ -2338,26 +2338,23 @@ export class Renderer3D {
    *  height `h` minus rounded top corners, extruded by `thickness` along the
    *  +Z axis. Lives in the XY plane centred so the bottom edge sits at Y=0.
    *
-   *  The mesh is split into TWO SubMeshes so a MultiMaterial can render the
-   *  front face with the portrait texture and the back + side walls with a
-   *  flat dull-grey "tombstone rim" material. Without that split, the same
-   *  portrait UVs map onto the back + sides too, producing the operator-
-   *  reported "rendered twice" look at the silhouette edges.
-   *
-   *  Caller assigns a MultiMaterial whose subMaterials are [front, rim] —
-   *  see `_buildStandeeMesh` for the wire-up. */
+   *  Single-material mesh — the whole silhouette renders in one solid colour
+   *  (assigned by the caller — typically the faction colour). The unit's
+   *  portrait sits ON TOP as a separate sticker plane built in
+   *  `_buildStandeePortraitSticker`. Splitting the carrier from the icon lets
+   *  the front face stay flat-coloured behind a portrait with transparent
+   *  edges, so the tombstone reads as a coloured marker with the hero face
+   *  painted on rather than the icon doubled onto every face. */
   _buildTombstoneMesh(name, w, h, thickness) {
     const BABYLON = this._babylon;
-    const SEGMENTS = 16; // arc resolution for the rounded top
+    const SEGMENTS = 16;
     const r = w / 2;
-    // 2D silhouette in XY (z=0). Counter-clockwise viewed from +Z so the
-    // front face's normal points at +Z (camera-facing after billboard rotation).
     const outline = [];
     outline.push({ x: -r, y: 0 });
     outline.push({ x:  r, y: 0 });
     outline.push({ x:  r, y: h - r });
     for (let i = 1; i < SEGMENTS; i++) {
-      const a = Math.PI * (i / SEGMENTS); // 0 .. π
+      const a = Math.PI * (i / SEGMENTS);
       outline.push({ x: r * Math.cos(a), y: (h - r) + r * Math.sin(a) });
     }
     outline.push({ x: -r, y: h - r });
@@ -2368,37 +2365,23 @@ export class Renderer3D {
     const uvs = [];
     const indices = [];
 
-    // ── Front-face vertices (indices 0 .. N-1) ─────────────────────────
-    // UVs span the silhouette's bounding box so the portrait covers the
-    // whole shape.
+    // Front face vertices
     for (let i = 0; i < N; i++) {
       positions.push(outline[i].x, outline[i].y, +halfT);
-      uvs.push((outline[i].x + r) / w, outline[i].y / h);
+      uvs.push(0, 0);
     }
-    // Front face: fan from vertex 0. CCW viewed from +Z → normal +Z.
-    const frontIndexStart = indices.length;
     for (let i = 1; i < N - 1; i++) indices.push(0, i, i + 1);
-    const frontIndexCount = indices.length - frontIndexStart;
-
-    // ── Back-face vertices (indices N .. 2N-1) ─────────────────────────
-    // Separate vertex copies so its UVs / normals don't bleed into the side
-    // walls. UVs are arbitrary (back face uses the rim material — no texture).
+    // Back face vertices
     for (let i = 0; i < N; i++) {
       positions.push(outline[i].x, outline[i].y, -halfT);
       uvs.push(0, 0);
     }
-    const rimIndexStart = indices.length;
-    // Back face: reversed winding so normal points -Z.
     for (let i = 1; i < N - 1; i++) indices.push(N, N + i + 1, N + i);
-
-    // ── Side-wall vertices (4 fresh vertices per outline edge) ─────────
-    // Duplicating vertices per quad lets each wall carry its own normal
-    // (perpendicular to that edge) so lighting reads correctly at the sharp
-    // silhouette corners. Each side quad: front-i, front-j, back-j, back-i.
+    // Side walls — fresh vertices per quad so each side carries its own
+    // perpendicular normal and lighting reads correctly at the corners.
     for (let i = 0; i < N; i++) {
       const j = (i + 1) % N;
       const base = positions.length / 3;
-      // 4 vertices per quad: front-left, front-right, back-right, back-left
       positions.push(outline[i].x, outline[i].y, +halfT);
       positions.push(outline[j].x, outline[j].y, +halfT);
       positions.push(outline[j].x, outline[j].y, -halfT);
@@ -2407,7 +2390,6 @@ export class Renderer3D {
       indices.push(base, base + 3, base + 1);
       indices.push(base + 1, base + 3, base + 2);
     }
-    const rimIndexCount = indices.length - rimIndexStart;
 
     const mesh = new BABYLON.Mesh(name, this._scene);
     const vd = new BABYLON.VertexData();
@@ -2417,31 +2399,37 @@ export class Renderer3D {
     vd.normals   = [];
     BABYLON.VertexData.ComputeNormals(positions, indices, vd.normals);
     vd.applyToMesh(mesh);
-    // Replace the default single subMesh with two — front (material 0) and
-    // back+sides (material 1). SubMesh args:
-    //   (materialIndex, verticesStart, verticesCount, indexStart, indexCount, mesh)
-    const totalVerts = positions.length / 3;
-    mesh.subMeshes = [];
-    new BABYLON.SubMesh(0, 0, totalVerts, frontIndexStart, frontIndexCount, mesh);
-    new BABYLON.SubMesh(1, 0, totalVerts, rimIndexStart,   rimIndexCount,   mesh);
+    // Stash the silhouette bounds so the sticker builder can size itself to
+    // match the tombstone face (and shrink slightly so the carrier shows as
+    // a coloured frame around the portrait).
+    mesh.metadata = { _silhouetteWidth: w, _silhouetteHeight: h, _thickness: thickness };
     return mesh;
   }
 
-  /** Shared dull-grey material for the back + side walls of every standee's
-   *  tombstone mesh. Cached on the renderer instance so all standees share
-   *  the same material instance (no per-unit allocation). */
-  _tombstoneRimMaterial() {
-    if (this._tombstoneRimMat) return this._tombstoneRimMat;
+  /** Build the portrait "sticker" plane that sits flush against the tombstone's
+   *  front face. Parented to the tombstone so it follows the standee's
+   *  position and billboarded rotation automatically. Slightly smaller than
+   *  the silhouette so the carrier shows as a coloured frame around the
+   *  portrait. The plane uses the portrait texture's alpha (transparent
+   *  background) so the carrier colour shows through where the head isn't. */
+  _buildStandeePortraitSticker(name, tombstone, portraitMat) {
     const BABYLON = this._babylon;
-    const mat = new BABYLON.StandardMaterial('tombstoneRim', this._scene);
-    // Dull grey — picks up phase lighting subtly but never competes with the
-    // front-face portrait for attention.
-    mat.diffuseColor    = new BABYLON.Color3(0.30, 0.30, 0.32);
-    mat.specularColor   = new BABYLON.Color3(0, 0, 0);
-    mat.emissiveColor   = new BABYLON.Color3(0.05, 0.05, 0.06);
-    mat.backFaceCulling = true;
-    this._tombstoneRimMat = mat;
-    return mat;
+    const md = tombstone.metadata || {};
+    const w  = md._silhouetteWidth  ?? STANDEE_BASE_WIDTH;
+    const h  = md._silhouetteHeight ?? STANDEE_BASE_HEIGHT;
+    const t  = md._thickness        ?? 0.10;
+    // 92% of silhouette: leaves a thin coloured rim around the sticker.
+    const plane = BABYLON.MeshBuilder.CreatePlane(name,
+      { width: w * 0.92, height: h * 0.92 }, this._scene);
+    plane.parent     = tombstone;
+    plane.isPickable = false;
+    plane.material   = portraitMat;
+    // Sit just in front of the tombstone's front face so depth-fight is
+    // impossible. Tombstone bottom is at local Y=0; sticker centre lines up
+    // with the silhouette's vertical centre.
+    plane.position.set(0, h / 2, (t / 2) + 0.005);
+    plane.renderingGroupId = tombstone.renderingGroupId ?? 0;
+    return plane;
   }
 
   /** Build pine trees for a forest hex: one merged TRUNK mesh + one merged
@@ -2804,20 +2792,21 @@ export class Renderer3D {
       /* thickness */ 0.10,
     );
     plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_Y;
-    // MultiMaterial: subMesh 0 (front face) gets the portrait, subMesh 1
-    // (back + side walls) gets the dull-grey rim material. Without the split
-    // the portrait UVs map onto the back/sides too and the silhouette edges
-    // look like the icon is rendered twice.
-    const portraitMat = this._planeMaterialFor(this._assetIdFor(entity));
-    const rimMat      = this._tombstoneRimMaterial();
-    const mm = new BABYLON.MultiMaterial(`standee_mm_${entity.id}`, scene);
-    mm.subMaterials = [portraitMat, rimMat];
-    plane.material      = mm;
+    // Tombstone block renders in a solid faction colour — same material the
+    // base disc uses — so the silhouette reads as a coloured marker. The
+    // portrait is overlaid as a separate "sticker" plane on the front face,
+    // so its transparent edges let the faction colour show through (no more
+    // doubled-up icon on the back / side walls).
+    plane.material      = this._baseMaterialForOwner(this._ownerColorFor(entity));
     plane.metadata      = { kind: 'entity', entityId: entity.id, col: entity.col, row: entity.row };
     // Units render in group 1 so they always draw on top of roads / rivers /
     // any other ground-level translucent geometry that would otherwise clip
     // the standee silhouette. (Babylon default rendering group is 0.)
     plane.renderingGroupId = 1;
+    // Portrait sticker — a child plane parented to the tombstone, so it
+    // follows the standee's billboard rotation and position for free.
+    const portraitMat = this._planeMaterialFor(this._assetIdFor(entity));
+    this._buildStandeePortraitSticker(`unitSticker_${entity.id}`, plane, portraitMat);
     // The standee plane is the unit silhouette — register it so the sun
     // throws a unit-shaped shadow onto the terrain. transparencyShadow on
     // the ShadowGenerator honours the portrait's alpha channel.
