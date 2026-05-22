@@ -264,14 +264,14 @@ export function stripRootBoneTranslation(animGroup, rootName = 'mixamorig:Hips')
   return stripped;
 }
 
-// Sustain (ms) for the walking state when consecutive moves chain back-to-back.
-// Just enough to bridge the few-ms inter-step gap when one unit's moves chain
-// (so a multi-hex hop reads as one continuous walk cycle) without holding
-// walking across the longer pause between DIFFERENT units' move sequences
-// in turn-resolution playback (which should snap back to idle). Operator
-// reported the previous 400ms value kept the paladin walking through the
-// entire replay without ever showing idle between unit sequences.
-export const PALADIN_WALK_SUSTAIN_MS = 150;
+// Time (ms) after the last motion before the paladin returns to IDLE.
+// During this window the walking animation is PAUSED (frozen mid-stride)
+// rather than running idle — so a multi-hex chain reads as "walk → freeze
+// → walk → freeze → walk → idle" instead of "walk → idle → walk → idle →
+// walk → idle". 500ms covers normal inter-step gaps in a chain
+// (~tens of ms) but lets idle resume between different units' sequences
+// in turn-resolution playback (which typically have longer pauses).
+export const PALADIN_WALK_SUSTAIN_MS = 500;
 
 /** Predicate: does this entity belong to the day-side hero faction (and thus
  *  render as the paladin GLB when available)? Routes through `sideFactionOf`
@@ -2280,23 +2280,30 @@ export class Renderer3D {
   _maybeTogglePaladinAnimation() {
     const src = this._paladinSource;
     if (!src) return;
-    // Swap between idle and walking based on whether any hero paladin is
-    // mid-move. Both groups (idleGroup retargeted from idle.glb, walkGroup
-    // retargeted from walking.glb) drive paladin's skeleton; we play
-    // exactly one at a time and stop the other so the unused group
-    // doesn't fight for bone matrices.
-    let wantWalk = paladinAnimTargetWeight(
+    // Three states: 'walk' (motion active), 'paused' (mid-chain freeze
+    // — walking is paused at its current frame, idle does NOT run), and
+    // 'idle' (no motion for SUSTAIN_MS). 'paused' is the new state that
+    // lets a multi-hex move chain read as "walk → freeze → walk → freeze
+    // → walk → idle" instead of dipping back into idle pose between
+    // every hop.
+    const wantWalk = paladinAnimTargetWeight(
       this._activeMoveIds, this._activeLungeIds,
       this.state?.entities, unitUsesPaladinModel,
     ) === 0;
     const now = performance.now();
     if (wantWalk) this._paladinLastWalkTs = now;
-    else if (typeof this._paladinLastWalkTs === 'number'
+
+    let desired;
+    if (wantWalk) {
+      desired = 'walk';
+    } else if (typeof this._paladinLastWalkTs === 'number'
       && (now - this._paladinLastWalkTs) < PALADIN_WALK_SUSTAIN_MS) {
-      wantWalk = true;
+      desired = 'paused';
+    } else {
+      desired = 'idle';
     }
-    const desired = wantWalk ? 'walk' : 'idle';
     if (src.activeGroup === desired) return;
+
     const walk = src.walkGroup;
     const idle = src.idleGroup;
     if (desired === 'walk') {
@@ -2305,8 +2312,16 @@ export class Renderer3D {
         if (typeof walk.play === 'function') walk.play(true);
         else if (typeof walk.start === 'function') walk.start(true, 1.0);
       }
-    } else {
+    } else if (desired === 'paused') {
+      // Freeze walking mid-stride. Crucially we do NOT start idle —
+      // idle would immediately drive the bones away from walking's
+      // current frame. Walking stays paused at its last keyframe until
+      // the next motion event resumes it (walk.play() resumes from
+      // the paused frame) or the sustain window expires and we
+      // transition to 'idle' below.
       if (walk && typeof walk.pause === 'function') walk.pause();
+    } else { // 'idle'
+      if (walk && typeof walk.stop === 'function') walk.stop();
       if (idle) {
         if (typeof idle.play === 'function') idle.play(true);
         else if (typeof idle.start === 'function') idle.start(true, 1.0);
