@@ -147,6 +147,15 @@ export const WALKING_MODEL_FILE = 'walking.glb';
 // steps if there's a pause in the resolution loop.
 export const PALADIN_ANIM_BLEND_RATE = 5.0;
 
+// Sustain (ms) for the walking state when consecutive moves chain back-to-back.
+// The resolver fires each MOVE step as a fresh _activeMoveIds insert + remove
+// pair; between two consecutive moves the set briefly empties for a few frames
+// while the next step queues up. Without a sustain window the blend would
+// snap idle → walk → idle → walk … visibly between every step. 400ms covers
+// the typical inter-step gap at MOVE_ANIM_MS=600 + the next step's setup,
+// so a multi-hex move reads as one continuous walk cycle.
+export const PALADIN_WALK_SUSTAIN_MS = 400;
+
 /** Predicate: does this entity belong to the day-side hero faction (and thus
  *  render as the paladin GLB when available)? Routes through `sideFactionOf`
  *  so the faction registry is the single source of truth — no string-literal
@@ -1824,11 +1833,28 @@ export class Renderer3D {
       const dt = Math.max(0, Math.min(0.1, (now - last) / 1000));
       last = now;
       // Target: 0 (walking) if any hero entity is currently being animated
-      // through a move / lunge by the resolver; else 1 (idle).
-      const target = paladinAnimTargetWeight(
+      // through a move / lunge by the resolver, OR a plan-ghost is walking
+      // a previewed path through the planning UI; else 1 (idle). The
+      // shared-skeleton design means all paladins (live + ghost) animate
+      // in unison — fine for board-game tokens, far better than T-pose.
+      let target = paladinAnimTargetWeight(
         this._activeMoveIds, this._activeLungeIds,
         this.state?.entities, isHeroFactionEntity,
       );
+      if (target === 1 && this._planGhostMeshes && this._planGhostMeshes.size > 0) {
+        target = 0;
+      }
+      // Sustain the walking state across the tiny gap between consecutive
+      // moves so a multi-hex chain reads as one continuous walk cycle
+      // instead of snapping idle ↔ walk between steps. PALADIN_WALK_SUSTAIN_MS
+      // covers the typical inter-step gap; if a fresh move queues within
+      // that window, target flips back to 0 before the sustain expires.
+      const nowPerf = now;
+      if (target === 0) this._paladinLastWalkTs = nowPerf;
+      else if (typeof this._paladinLastWalkTs === 'number'
+        && (nowPerf - this._paladinLastWalkTs) < PALADIN_WALK_SUSTAIN_MS) {
+        target = 0;
+      }
       const cur = this._paladinAnimBlend ?? 1.0;
       const step = PALADIN_ANIM_BLEND_RATE * dt;
       let next = cur;
@@ -1997,6 +2023,11 @@ export class Renderer3D {
       // meshes enabled keeps picking + the existing animation rig intact.
       if (standee.plane)  standee.plane.visibility  = 0;
       if (standee.sphere) standee.sphere.visibility = 0;
+      // Replace the pawn shape on the shadow caster list with the paladin
+      // hierarchy so the floor shadow reads as the actual model silhouette.
+      if (standee.plane)  this._removeShadowCaster(standee.plane);
+      if (standee.sphere) this._removeShadowCaster(standee.sphere);
+      for (const m of clone.childMeshes || []) this._addShadowCaster(m);
       standee.paladinClone = clone;
       upgraded++;
     }
@@ -4387,6 +4418,12 @@ export class Renderer3D {
       if (clone) {
         cone.visibility   = 0;
         sphere.visibility = 0;
+        // Cone+sphere are invisible but still on the shadow caster list
+        // — strip them so the floor shadow reflects the paladin silhouette,
+        // not the pawn shape.
+        this._removeShadowCaster(cone);
+        this._removeShadowCaster(sphere);
+        for (const m of clone.childMeshes || []) this._addShadowCaster(m);
         standee.paladinClone = clone;
       }
     }
@@ -5927,8 +5964,16 @@ export class Renderer3D {
       const p = paths.get(id);
       const newKey = p ? p.map(s => `${s.col},${s.row}`).join('|') : null;
       if (newKey !== entry.signature) {
-        entry.plane.dispose();
-        entry.mat?.dispose();
+        // Paladin-shape ghost: tear down the clone + its translucent mats.
+        if (entry.ghostClone) {
+          this._disposePaladinClone({ paladinClone: entry.ghostClone });
+        }
+        for (const m of entry.ghostMats || []) {
+          if (m && typeof m.dispose === 'function') m.dispose();
+        }
+        entry.plane?.dispose?.();
+        entry.sphere?.dispose?.();
+        entry.mat?.dispose?.();
         this._planGhostMeshes.delete(id);
       }
     }
@@ -5969,10 +6014,43 @@ export class Renderer3D {
       cone.renderingGroupId   = 0;
       sphere.renderingGroupId = 0;
 
+      // For hero entities with the paladin GLB loaded, replace the cone+sphere
+      // ghost silhouette with a translucent paladin clone. Cone+sphere become
+      // invisible positioning anchors (cone still drives `entry.plane.position`
+      // via the path animation in `_pumpPlanGhosts`); the paladin clone parents
+      // to cone and inherits its world motion. Materials are cloned per-ghost
+      // so the translucency doesn't leak onto the live paladin.
+      let ghostClone = null;
+      let ghostMats = null;
+      if (this._paladinSource && isHeroFactionEntity(ent)) {
+        ghostClone = this._buildPaladinClone(ent, cone);
+        if (ghostClone) {
+          cone.visibility = 0;
+          sphere.visibility = 0;
+          ghostMats = [];
+          for (const child of ghostClone.childMeshes || []) {
+            if (!child) continue;
+            if (child.material && typeof child.material.clone === 'function') {
+              const ghostMat = child.material.clone(`ghostMat_${id}_${child.name}`);
+              ghostMat.alpha = PLAN_GHOST_ALPHA;
+              if ('useAlphaFromDiffuseTexture' in ghostMat) {
+                ghostMat.useAlphaFromDiffuseTexture = false;
+              }
+              ghostMat.backFaceCulling = false;
+              child.material = ghostMat;
+              ghostMats.push(ghostMat);
+            }
+          }
+          // Ghost doesn't cast shadow — it's a preview, not a real entity.
+          for (const m of ghostClone.childMeshes || []) this._removeShadowCaster(m);
+        }
+      }
+
       this._planGhostMeshes.set(id, {
-        plane: cone, mat, path,
+        plane: cone, mat, sphere, path,
         signature: path.map(s => `${s.col},${s.row}`).join('|'),
         leader,
+        ghostClone, ghostMats,
       });
     }
   }
@@ -6142,6 +6220,17 @@ export class Renderer3D {
   _addShadowCaster(mesh) {
     if (!mesh || !this._shadowGenerator) return;
     this._shadowGenerator.addShadowCaster(mesh);
+  }
+
+  /** Un-register a mesh from the sun ShadowGenerator. Used when a hero
+   *  standee gets its paladin clone retrofitted on top — the cone+sphere
+   *  go invisible but stay in scene as positioning anchors; we strip
+   *  them from the caster list so the floor shadow doesn't reflect both
+   *  shapes. No-op before _initBabylon or for null meshes. */
+  _removeShadowCaster(mesh) {
+    if (!mesh || !this._shadowGenerator
+      || typeof this._shadowGenerator.removeShadowCaster !== 'function') return;
+    this._shadowGenerator.removeShadowCaster(mesh);
   }
 
   /** Mark a mesh as a shadow receiver. Idempotent + null-safe. Thin wrapper
