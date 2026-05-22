@@ -1178,9 +1178,14 @@ export class Renderer3D {
     // river networks on top of the grass tiles. Built once at map-load and
     // never rebuilt (the map topology is immutable once a game has started).
     this._buildRoadRiverNetworks();
-    // Frame the playable area with darker hex prisms on every off-map
-    // neighbour position. Static like the road/river networks.
-    this._buildEdgeFrame();
+    // Frame the playable area with flat terrain-coloured wedges that fill
+    // the perimeter notches so the rendered map silhouette reads as a clean
+    // rectangle instead of the raw hex zig-zag. Static — built once at
+    // map-load (map topology is immutable). The original dark hex-prism
+    // edge frame (`_buildEdgeFrame`) is intentionally NOT called here any
+    // more; its outer outline was itself zig-zag, which is the very problem
+    // the wedges solve. Helpers and constants remain exported for tests.
+    this._buildMapBorderWedges();
     // Cache map bounds in world-space XZ for the pan clamp (consumed by
     // _onBeforeRender → clampPanTarget). One-shot — map topology is immutable
     // once the game starts.
@@ -1192,9 +1197,84 @@ export class Renderer3D {
     this._mapBuilt = true;
   }
 
+  /** Build flat wedge meshes that fill the perimeter notches of the playable
+   *  hex grid, turning the raw zig-zag silhouette into a clean rectangle.
+   *
+   *  Geometry comes from `borderWedgePolygons` — see the "Map border wedges"
+   *  banner at the bottom of the file for the clipping algorithm. Each
+   *  wedge is a flat convex polygon at `BORDER_WEDGE_Y` (just above the
+   *  terrain disc so it appears flush with the visible playing surface,
+   *  not as a separate floating layer). Vertex normals are pinned to +Y
+   *  so the hemispheric light's diffuse hits the top face (mirroring the
+   *  ribbon-normals contract pinned by `renderer-3d-ribbon-normals.test`).
+   *
+   *  Texture/colour: we mirror the adjacent in-map tile's solid
+   *  `tileColorFor()` colour. Sampling the per-tile terrain *texture* (e.g.
+   *  the grass_1..5 atlas variants) would require projecting the disc UVs
+   *  across an irregular wedge polygon — doable but produces visible seams
+   *  at the wedge-to-disc boundary. The flat-colour read trades a small
+   *  amount of detail for a clean, stable border. */
+  _buildMapBorderWedges() {
+    if (!this.state?.tiles || !this._scene || !this._babylon || !this._mapRoot) return;
+    const BABYLON = this._babylon;
+    const wedges = borderWedgePolygons(this.state.tiles);
+    for (const wedge of wedges) {
+      const mat = this._materialFor(tileColorFor(wedge.sourceTile));
+      const mesh = this._buildBorderWedgeMesh(wedge, mat);
+      if (mesh) {
+        mesh.parent     = this._mapRoot;
+        mesh.isPickable = false;
+        mesh.metadata   = { kind: 'map-border', col: wedge.col, row: wedge.row };
+      }
+    }
+  }
+
+  /** Construct a single flat wedge mesh from a clipped polygon. The polygon
+   *  is convex (intersection of a hex with an axis-aligned rectangle) so a
+   *  triangle fan from vertex 0 triangulates it cleanly. All vertices share
+   *  a +Y normal — the wedge is one-sided geometry meant to be seen from
+   *  above; the hemi light's `groundColor` (PR #325 / b756ebc) covers the
+   *  rare case of the camera tilting low enough to graze the underside. */
+  _buildBorderWedgeMesh(wedge, material) {
+    const BABYLON = this._babylon;
+    const verts = wedge.vertices;
+    const n = verts.length;
+    if (n < 3) return null;
+    const positions = new Float32Array(n * 3);
+    const normals   = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      positions[i * 3]     = verts[i].x;
+      positions[i * 3 + 1] = BORDER_WEDGE_Y;
+      positions[i * 3 + 2] = verts[i].z;
+      normals[i * 3]       = 0;
+      normals[i * 3 + 1]   = 1;
+      normals[i * 3 + 2]   = 0;
+    }
+    const indices = new Uint16Array((n - 2) * 3);
+    for (let i = 0; i < n - 2; i++) {
+      indices[i * 3]     = 0;
+      indices[i * 3 + 1] = i + 1;
+      indices[i * 3 + 2] = i + 2;
+    }
+    const mesh = new BABYLON.Mesh(`map_border_${wedge.col}_${wedge.row}`, this._scene);
+    const vd = new BABYLON.VertexData();
+    vd.positions = positions;
+    vd.indices   = indices;
+    vd.normals   = normals;
+    vd.applyToMesh(mesh, false);
+    mesh.material = material;
+    return mesh;
+  }
+
   /** Render a darker hex prism at every off-map neighbour position of a
    *  perimeter tile. The frame is purely cosmetic — no fog, no picking, no
-   *  metadata-driven gameplay (`isPickable = false`). */
+   *  metadata-driven gameplay (`isPickable = false`).
+   *
+   *  Superseded by `_buildMapBorderWedges()` and no longer called from
+   *  `_buildMap()`. Kept so the exported helpers/constants and tests under
+   *  `renderer-3d-edge-frame.test.js` continue to compile without churn —
+   *  and so we can re-enable the dark prism look behind a feature flag if
+   *  the wedge silhouette ever regresses. */
   _buildEdgeFrame() {
     if (!this.state?.tiles || !this._scene || !this._babylon || !this._mapRoot) return;
     const BABYLON = this._babylon;
@@ -3523,6 +3603,206 @@ export const EDGE_FRAME_COLOR = '#2a2820';
  *  between the frame and the playable terrain. */
 export const EDGE_FRAME_Y      = -0.05;
 export const EDGE_FRAME_HEIGHT = 0.10;
+
+// ─── Map border wedges (pure helpers exported for tests) ───────────────────
+//
+// The hex grid's raw silhouette zig-zags — every odd row pokes out half a hex
+// to one side, and the top/bottom of each row has triangular notches between
+// adjacent hexes. To make the rendered map read as a clean rectangle, we
+// generate flat wedge polygons that fill those perimeter notches and sit at
+// the same Y as the terrain top disc (so they appear flush with the visible
+// playing surface, not as a separate floating layer).
+//
+// Geometry: for each off-map position adjacent to a playable tile, take the
+// hexagon at that position, clip it against the bounding rectangle of the
+// playable map, and emit the resulting polygon. Most clips produce either a
+// 3-vertex sliver (a downward/upward triangle on the top or bottom edge), a
+// 4-vertex half-hex (on the left or right edge), or a 3-vertex corner quarter
+// at the corners where two clip edges meet. Off-map positions whose hex lies
+// entirely outside the rectangle clip away to nothing and are skipped.
+//
+// Colour: each wedge mirrors the `tileColorFor()` colour of the adjacent
+// playable tile (`borderWedgeSourceTile`), so the rectangular fringe extends
+// the playable terrain palette outward. We deliberately don't sample the
+// per-tile terrain *texture* — the wedge is a small irregular polygon and
+// trying to project the hex disc UVs across it produces visible seams; a
+// flat tile-colour read avoids that complexity at the cost of a slightly
+// less detailed border.
+
+/** Bounding rectangle (world XZ) of the playable map. Returns `null` for an
+ *  empty tilesMap. Bounds are computed from hex CENTRES then padded by half
+ *  a hex (SQRT3/2 horizontally, 1 vertically) so the rectangle covers the
+ *  outermost vertices of the corner hexes. */
+export function mapBoundingRect(tilesMap, radius = HEX_RADIUS_WORLD) {
+  if (!tilesMap || tilesMap.size === 0) return null;
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (const tile of tilesMap.values()) {
+    const { x, z } = hexToWorld(tile.col, tile.row, radius);
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (z < minZ) minZ = z;
+    if (z > maxZ) maxZ = z;
+  }
+  return {
+    minX: minX - radius * SQRT3 / 2,
+    maxX: maxX + radius * SQRT3 / 2,
+    minZ: minZ - radius,
+    maxZ: maxZ + radius,
+  };
+}
+
+/** 6 vertices (CCW from above) of the pointy-top hexagon at (col, row),
+ *  expressed in world XZ. Order is 30°, 90°, 150°, 210°, 270°, 330° — i.e.
+ *  upper-right → top → upper-left → lower-left → bottom → lower-right.
+ *  Picked so a fan triangulation from vertex 0 yields +Y face normals
+ *  under Babylon's left-handed default coordinate system (the lighting
+ *  contract pinned by the ribbon-normals tests). */
+export function hexPolygonVertices(col, row, radius = HEX_RADIUS_WORLD) {
+  const { x: cx, z: cz } = hexToWorld(col, row, radius);
+  const half = radius * SQRT3 / 2;
+  return [
+    { x: cx + half, z: cz - radius * 0.5 }, // 30°
+    { x: cx,        z: cz - radius        }, // 90°
+    { x: cx - half, z: cz - radius * 0.5 }, // 150°
+    { x: cx - half, z: cz + radius * 0.5 }, // 210°
+    { x: cx,        z: cz + radius        }, // 270°
+    { x: cx + half, z: cz + radius * 0.5 }, // 330°
+  ];
+}
+
+/** Epsilon used in Sutherland–Hodgman clipping. Vertices within this distance
+ *  of a clip edge are treated as on the edge (i.e. kept), and consecutive
+ *  output vertices closer than this are deduplicated. The constant is small
+ *  enough to be lossless for the unit-radius hex grid (smallest meaningful
+ *  feature ≈ 0.5 world units) and large enough to absorb floating-point
+ *  round-off from the boundary arithmetic. */
+const WEDGE_CLIP_EPS = 1e-9;
+
+/** Minimum polygon area for a clipped wedge to count as renderable.
+ *  Slightly above eps² so a sliver from a hex tangent to the clip rect
+ *  doesn't sneak through as a degenerate triangle. */
+const WEDGE_MIN_AREA = 1e-6;
+
+function _dedupePolygon(poly) {
+  const out = [];
+  for (const p of poly) {
+    const prev = out[out.length - 1];
+    if (prev && Math.abs(prev.x - p.x) < WEDGE_CLIP_EPS && Math.abs(prev.z - p.z) < WEDGE_CLIP_EPS) continue;
+    out.push(p);
+  }
+  if (out.length > 1) {
+    const first = out[0];
+    const last  = out[out.length - 1];
+    if (Math.abs(first.x - last.x) < WEDGE_CLIP_EPS && Math.abs(first.z - last.z) < WEDGE_CLIP_EPS) out.pop();
+  }
+  return out;
+}
+
+function _clipAgainstHalfPlane(polygon, keep, intersect) {
+  if (polygon.length === 0) return [];
+  const out = [];
+  for (let i = 0; i < polygon.length; i++) {
+    const curr = polygon[i];
+    const prev = polygon[(i - 1 + polygon.length) % polygon.length];
+    const currIn = keep(curr);
+    const prevIn = keep(prev);
+    if (currIn) {
+      if (!prevIn) out.push(intersect(prev, curr));
+      out.push(curr);
+    } else if (prevIn) {
+      out.push(intersect(prev, curr));
+    }
+  }
+  return _dedupePolygon(out);
+}
+
+/** Clip a convex polygon (CCW) against an axis-aligned rectangle using
+ *  Sutherland–Hodgman. Returns a (possibly empty) CCW polygon. */
+export function clipPolygonToRect(polygon, rect) {
+  let p = polygon;
+  p = _clipAgainstHalfPlane(p,
+    (v) => v.x >= rect.minX - WEDGE_CLIP_EPS,
+    (a, b) => {
+      const t = (rect.minX - a.x) / (b.x - a.x);
+      return { x: rect.minX, z: a.z + t * (b.z - a.z) };
+    });
+  p = _clipAgainstHalfPlane(p,
+    (v) => v.x <= rect.maxX + WEDGE_CLIP_EPS,
+    (a, b) => {
+      const t = (rect.maxX - a.x) / (b.x - a.x);
+      return { x: rect.maxX, z: a.z + t * (b.z - a.z) };
+    });
+  p = _clipAgainstHalfPlane(p,
+    (v) => v.z >= rect.minZ - WEDGE_CLIP_EPS,
+    (a, b) => {
+      const t = (rect.minZ - a.z) / (b.z - a.z);
+      return { x: a.x + t * (b.x - a.x), z: rect.minZ };
+    });
+  p = _clipAgainstHalfPlane(p,
+    (v) => v.z <= rect.maxZ + WEDGE_CLIP_EPS,
+    (a, b) => {
+      const t = (rect.maxZ - a.z) / (b.z - a.z);
+      return { x: a.x + t * (b.x - a.x), z: rect.maxZ };
+    });
+  return p;
+}
+
+/** Signed-area magnitude of a closed polygon, used to filter degenerate
+ *  wedges that clip to a zero-area sliver (e.g. an off-map hex tangent to
+ *  the rectangle's edge contributes two vertices on the clip line and
+ *  nothing else). */
+export function polygonArea(poly) {
+  let twice = 0;
+  const n = poly.length;
+  for (let i = 0; i < n; i++) {
+    const a = poly[i], b = poly[(i + 1) % n];
+    twice += a.x * b.z - b.x * a.z;
+  }
+  return Math.abs(twice) * 0.5;
+}
+
+/** For an off-map position, returns the first in-map neighbour discovered by
+ *  walking the odd-r neighbour deltas. The wedge at that position inherits
+ *  this tile's terrain colour. Deterministic (first direction wins) so two
+ *  callers always agree on which tile drives a given wedge. */
+export function borderWedgeSourceTile(col, row, tilesMap) {
+  if (!tilesMap) return null;
+  const dirs = row % 2 === 0 ? EDGE_NEIGHBOR_DIRS_EVEN : EDGE_NEIGHBOR_DIRS_ODD;
+  for (const [dc, dr] of dirs) {
+    const t = tilesMap.get(hexKey(col + dc, row + dr));
+    if (t) return t;
+  }
+  return null;
+}
+
+/** All renderable border wedges as `{ col, row, vertices, sourceTile }`. The
+ *  `vertices` array is the clipped polygon (3+ points, CCW); `sourceTile`
+ *  is the in-map tile whose terrain colour the wedge mirrors. */
+export function borderWedgePolygons(tilesMap, radius = HEX_RADIUS_WORLD) {
+  if (!tilesMap || tilesMap.size === 0) return [];
+  const rect = mapBoundingRect(tilesMap, radius);
+  if (!rect) return [];
+  const wedges = [];
+  for (const pos of edgeFramePositions(tilesMap)) {
+    const sourceTile = borderWedgeSourceTile(pos.col, pos.row, tilesMap);
+    if (!sourceTile) continue;
+    const hex = hexPolygonVertices(pos.col, pos.row, radius);
+    const clipped = clipPolygonToRect(hex, rect);
+    if (clipped.length < 3) continue;
+    if (polygonArea(clipped) < WEDGE_MIN_AREA) continue;
+    wedges.push({ col: pos.col, row: pos.row, vertices: clipped, sourceTile });
+  }
+  return wedges;
+}
+
+/** Y at which the wedge meshes sit. Mirrors the terrain disc so wedges read
+ *  as flush with the playable terrain top, not a separate layer.
+ *
+ *  The +ε bump (smaller than `TERRAIN_DISC_Y_OFFSET`'s own z-fight margin) is
+ *  load-bearing for edge cases where a wedge polygon and a terrain disc share
+ *  a vertex — without the bump the wedge can z-fight with adjacent discs at
+ *  shallow camera angles. */
+export const BORDER_WEDGE_Y = 0.085;
 
 // ─── Phase 3 pure helpers (exported for tests) ─────────────────────────────
 
