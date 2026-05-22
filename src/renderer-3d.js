@@ -4185,20 +4185,22 @@ export class Renderer3D {
 
   /** Per-frame: walk each ghost along its path on a loop. Cheap — runs once
    *  per ghost (a handful) regardless of map size. */
-  /** Recompute scene fog start/end from the current camera radius so the fog
-   *  band always begins just past the playable map's far edge regardless of
-   *  zoom. At max zoom-out the fog only just begins to creep into the
-   *  outermost playable tiles; at default zoom the playable area is clear
-   *  and only the border-forest ring fades; at max zoom-in the player is
-   *  close to a unit and nothing visible is fogged. */
+  /** Recompute scene fog start/end so the fog kicks in right at the playable
+   *  map's edge and is fully thick by the outer border edge. Uses camera-
+   *  distance geometry: a point at horizontal distance `d` from the camera's
+   *  target sits at √(r² + d²) from the camera (ArcRotateCamera math, β-
+   *  independent because the offset axis projects out of the camera-target
+   *  vector). Map size adapts via the cached `_mapPanBounds.depth/2` so
+   *  skirmish / standard / regional / campaign all read correctly. Border
+   *  edge is the playable half plus the band depth (`* 1.5` for pointy-top
+   *  vertical hex spacing × 6 hexes; matches `_buildMapBorderForest`). */
   _pumpSceneFog() {
     if (!this._scene || !this._camera) return;
     const r = this._camera.radius;
-    // 14 world units past the camera target = "near edge of the playable map
-    // is just past fog start" on a standard 13×13 map. End 16 units later
-    // gives a soft band that fully obscures by the outer border ring.
-    this._scene.fogStart = r + 14;
-    this._scene.fogEnd   = r + 30;
+    const playableHalf = (this._mapPanBounds?.depth ?? 19.5) / 2;
+    const borderHalf   = playableHalf + 6 * 1.5;
+    this._scene.fogStart = Math.sqrt(r * r + playableHalf * playableHalf);
+    this._scene.fogEnd   = Math.sqrt(r * r + borderHalf   * borderHalf);
   }
 
   _pumpPlanGhosts(nowMs) {
