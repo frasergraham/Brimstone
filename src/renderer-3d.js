@@ -34,15 +34,21 @@ import { sightRangeForEntity, findFaction } from './factions.js';
 import { Side } from './sides.js';
 import { MAP_SIZES } from './map.js';
 
-const BABYLON_CDN = 'https://cdn.jsdelivr.net/npm/@babylonjs/core@7.42.0/+esm';
-// The glTF loader plugin lives in a separate npm package (not @babylonjs/core).
-// We load it as a UMD bundle via <script> tag (not as an ESM import) because the
-// jsdelivr `+esm` wrapper bundles its OWN copy of @babylonjs/core — registering
-// the plugin on the internal copy, not the window-global BABYLON our renderer
-// uses. Two BABYLON instances → ImportMeshAsync never sees the .glb plugin →
-// SceneLoader falls back to the .babylon JSON loader and rejects with
-// "importMesh has failed JSON parse" on binary GLB files. The UMD bundle below
-// attaches to the same window.BABYLON the rest of the renderer uses.
+// Babylon CORE + LOADERS are both loaded as UMD <script> tags so they share a
+// single `window.BABYLON` instance. The previous implementation imported core
+// as ESM (`@babylonjs/core/+esm`) and loaded loaders as UMD; that produced two
+// distinct BABYLON namespaces — the ESM one the renderer used, and the UMD one
+// the loaders bundle attached to. Symptoms in that split state:
+//   • "Unable to find a plugin to load .glb files" — SceneLoader.RegisterPlugin
+//     ran against the UMD BABYLON, but ImportMeshAsync was called against the
+//     ESM BABYLON which never saw the registration.
+//   • "Cannot read properties of undefined (reading 'ANIMATIONLOOPMODE_CYCLE')"
+//     — the loaders bundle parses GLB animation tracks via
+//     `BABYLON.Animation.ANIMATIONLOOPMODE_CYCLE`; the UMD bundle expects the
+//     core namespace already populated on `window.BABYLON`, but the ESM-only
+//     path left `window.BABYLON.Animation` undefined.
+// Loading both via UMD removes the instance split entirely.
+const BABYLON_CORE_UMD    = 'https://cdn.babylonjs.com/babylon.js';
 const BABYLON_LOADERS_UMD = 'https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js';
 
 // ─── House GLB model (replaces the procedural box+roof building) ───────────
@@ -1064,6 +1070,74 @@ export class Renderer3D {
     if (this.onImagesLoaded) this.onImagesLoaded();
   }
 
+  /** Inject the Babylon CORE UMD bundle so `window.BABYLON` is populated with
+   *  the full namespace (Engine, Scene, Animation, SceneLoader, …) the rest of
+   *  the renderer reads from. Idempotent + concurrency-safe via a cached
+   *  promise. Throws if the script fails to load — without a working BABYLON
+   *  there's no fallback the renderer can offer. */
+  async _ensureBabylonCore() {
+    if (this._babylonCoreReady) return;
+    if (typeof document === 'undefined') {
+      throw new Error('[Renderer3D] Babylon core requires a browser DOM');
+    }
+    // Already on the page (host page injected it, or an earlier renderer
+    // instance did). Skip the script injection.
+    if (typeof window !== 'undefined' && window.BABYLON && window.BABYLON.Engine) {
+      this._babylonCoreReady = true;
+      return;
+    }
+
+    if (!this._babylonCorePromise) {
+      this._babylonCorePromise = new Promise((resolve, reject) => {
+        const existing = document.querySelector('script[data-babylon-core]');
+        if (existing) {
+          if (existing.dataset.loaded === 'true') return resolve();
+          existing.addEventListener('load',  () => resolve(), { once: true });
+          existing.addEventListener('error', () => reject(new Error('Babylon core script failed to load')), { once: true });
+          return;
+        }
+        const s = document.createElement('script');
+        s.src = BABYLON_CORE_UMD;
+        s.async = true;
+        s.dataset.babylonCore = 'true';
+        s.addEventListener('load',  () => { s.dataset.loaded = 'true'; resolve(); }, { once: true });
+        s.addEventListener('error', () => reject(new Error('Babylon core script failed to load')), { once: true });
+        document.head.appendChild(s);
+      });
+    }
+    await this._babylonCorePromise;
+    this._babylonCoreReady = true;
+  }
+
+  /** Ensure both BABYLON core AND the glTF loaders plugin are available on
+   *  `window.BABYLON`, then return that namespace. This is the single entry
+   *  point for getting a BABYLON usable in the renderer — combines core +
+   *  loaders into one call so the rest of the code doesn't need to think
+   *  about the load order. Loading core first is critical: the loaders
+   *  bundle reads `BABYLON.Animation.ANIMATIONLOOPMODE_CYCLE` (and similar
+   *  core symbols) when parsing GLB animation tracks; if core isn't on the
+   *  global yet the loaders script throws on registration.
+   *
+   *  Resolves to `window.BABYLON`. Throws if core fails to load OR if the
+   *  loaders script lands but the `.glb` plugin never registers (caller
+   *  should treat this as a fatal init error — `_initBabylon`'s `.catch`
+   *  surfaces it to the operator). */
+  async _ensureBabylonReady() {
+    await this._ensureBabylonCore();
+    // Point `this._babylon` at the window-global so the existing loaders
+    // helper (which reads `this._babylon.SceneLoader`) checks the same
+    // instance the loaders bundle attaches to. Set this BEFORE awaiting the
+    // loaders helper so an unhandled re-entry can't observe a null _babylon.
+    if (typeof window !== 'undefined' && window.BABYLON) {
+      this._babylon = window.BABYLON;
+    }
+    const ok = await this._ensureBabylonLoaders();
+    if (!ok) {
+      throw new Error('[Renderer3D] Babylon glTF loaders plugin failed to register on window.BABYLON');
+    }
+    return this._babylon;
+  }
+
   /** Inject the Babylon glTF loaders UMD bundle into the page so SceneLoader
    *  recognizes `.glb` / `.gltf` files. Idempotent and shared by every GLB
    *  consumer in the renderer (house, paladin, future props) — registration
@@ -1833,9 +1907,11 @@ export class Renderer3D {
   // ─── Babylon scene setup ─────────────────────────────────────────────────
 
   async _initBabylon() {
-    // Dynamic import keeps the module importable in node-test without Babylon.
-    const BABYLON = await import(/* @vite-ignore */ BABYLON_CDN);
-    this._babylon = BABYLON;
+    // Load core + loaders UMD bundles together so they share a single
+    // `window.BABYLON`. See the comment on BABYLON_CORE_UMD for why the
+    // previous ESM-core + UMD-loaders split broke .glb imports and any
+    // BABYLON.Animation reference inside the loader bundle.
+    const BABYLON = await this._ensureBabylonReady();
 
     const engine = new BABYLON.Engine(this.canvas, true, { preserveDrawingBuffer: true, stencil: true });
     const scene  = new BABYLON.Scene(engine);
