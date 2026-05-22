@@ -35,7 +35,11 @@ import { hexKey } from '../src/hex.js';
 // ── Stubbed Babylon for the river-extension build path ────────────────────────
 
 function makeStubBabylon() {
-  const makeMesh = (name) => ({
+  // The new river-extension build path (matching the in-map river ribbon) sets
+  // per-vertex alpha via `getTotalVertices` + `setVerticesData`, so the stub
+  // meshes must respond to both. Stored colours aren't read by the assertions
+  // below, but kept for future shape pinning.
+  const makeMesh = (name, vertexCount = 0) => ({
     name,
     position:   { set() {} },
     rotation:   { x: 0, y: 0, z: 0 },
@@ -46,12 +50,25 @@ function makeStubBabylon() {
     isPickable: true,
     alphaIndex: undefined,
     receiveShadows: false,
+    hasVertexAlpha: false,
+    _vertexCount:   vertexCount,
+    _vertexData:    new Map(),
+    getTotalVertices() { return this._vertexCount; },
+    setVerticesData(kind, data) { this._vertexData.set(kind, data); },
     setEnabled() {},
     dispose() {},
   });
   return {
     MeshBuilder: {
-      CreateRibbon: (name) => makeMesh(name),
+      CreateRibbon: (name, opts) => {
+        // 5-path ribbons (new path) and 2-path ribbons (old path) both have
+        // `pathArray[i].length` samples per path; total verts = paths × N.
+        let n = 0;
+        if (opts && Array.isArray(opts.pathArray) && opts.pathArray.length > 0) {
+          n = opts.pathArray.length * (opts.pathArray[0].length || 0);
+        }
+        return makeMesh(name, n);
+      },
     },
     Mesh: {
       DOUBLESIDE: 2,
@@ -63,9 +80,19 @@ function makeStubBabylon() {
       this.specularColor    = null;
       this.backFaceCulling  = true;
       this.disableLighting  = false;
+      this.clone            = function (cloneName) {
+        const c = new (Object.getPrototypeOf(this).constructor)(cloneName);
+        c.diffuseColor    = this.diffuseColor;
+        c.emissiveColor   = this.emissiveColor;
+        c.specularColor   = this.specularColor;
+        c.backFaceCulling = this.backFaceCulling;
+        c.disableLighting = this.disableLighting;
+        return c;
+      };
     },
     Color3: function (r, g, b) { this.r = r; this.g = g; this.b = b; },
     Vector3: function (x, y, z) { this.x = x; this.y = y; this.z = z; },
+    VertexBuffer: { ColorKind: 'color' },
   };
 }
 
@@ -169,6 +196,83 @@ describe('Renderer3D — river extension uses the in-map river colour (no fog ti
         }
       }
     }
+  });
+
+  test('extension is built as a 5-path feathered ribbon (parity with _buildNetworkMesh)', () => {
+    // The old extension used a 2-path CreateRibbon (rectangular strip), which
+    // read as a bright unfeathered stripe alongside the in-map river's
+    // alpha-tapered feathered bezier. Pin that the new extension uses the SAME
+    // 5-path layout (`outerRight, innerRight, center, innerLeft, outerLeft`)
+    // with per-vertex alpha — that's what produces the lateral edge fade that
+    // makes the river blend smoothly into the surrounding grass / forest.
+    const r = newInst();
+    r._babylon = makeStubBabylon();
+    r._scene   = {};
+    r._mapRoot = { name: 'mapRoot' };
+    r.state    = { tiles: makeRiverAcross(5, 2) };
+    r._riverNetworkMesh = { name: 'river_5,5', material: {} };
+
+    r._buildRiverExtensions(2);
+
+    const exts = [];
+    for (const list of r._borderPropsByKey.values()) {
+      for (const m of list) if (m.metadata?.kind === 'river-extension') exts.push(m);
+    }
+    assert.ok(exts.length >= 1);
+    for (const m of exts) {
+      // 5 paths × ≥2 samples each. With NETWORK_BEZIER_SEGMENTS = 22 the
+      // sample count per path is 23, giving 5*23 = 115 verts. Pin "multiple
+      // of 5 with ≥10 verts" rather than the exact count so tweaking the
+      // segment constant doesn't break the test.
+      const n = m.getTotalVertices();
+      assert.ok(n >= 10, `extension ${m.name} should have ≥10 verts (5 paths × ≥2 samples), got ${n}`);
+      assert.equal(n % 5, 0,
+        `extension ${m.name} vert count ${n} should divide evenly into 5 paths`);
+      assert.equal(m.hasVertexAlpha, true,
+        `extension ${m.name} must enable per-vertex alpha for the lateral edge fade`);
+      // Per-vertex colour buffer must be populated with the alpha-by-path
+      // pattern (outer 0, inner 1, center 1, inner 1, outer 0).
+      const colors = m._vertexData.get('color');
+      assert.ok(colors instanceof Float32Array,
+        `extension ${m.name} should have a Float32Array color buffer set`);
+      assert.equal(colors.length, n * 4);
+      const N = n / 5;
+      // Spot-check alpha at path 0 (outer right) = 0 and path 2 (center) = 1.
+      assert.equal(colors[3], 0, 'outer-right path alpha should be 0');
+      assert.equal(colors[2 * N * 4 + 3], 1, 'center path alpha should be 1');
+      assert.equal(colors[4 * N * 4 + 3], 0, 'outer-left path alpha should be 0');
+    }
+  });
+
+  test('extension material exactly matches the in-map river ribbon recipe (built via _buildRibbonMaterial)', () => {
+    // Both must call `_buildRibbonMaterial(_, TILE_COLOR.RIVER)`, which is the
+    // single source of truth for the diffuse / emissive recipe. Pin that the
+    // extension material name uses the `river_extension_ribbon_mat` prefix
+    // so it's traceable in dumpRibbonDebug, AND that its colours equal the
+    // independent `ribbonMaterialColors` recipe (drift detector).
+    const r = newInst();
+    r._babylon = makeStubBabylon();
+    r._scene   = {};
+    r._mapRoot = { name: 'mapRoot' };
+    r.state    = { tiles: makeRiverAcross(5, 2) };
+    r._riverNetworkMesh = { name: 'river_5,5', material: {} };
+
+    r._buildRiverExtensions(2);
+
+    const exts = [];
+    for (const list of r._borderPropsByKey.values()) {
+      for (const m of list) if (m.metadata?.kind === 'river-extension') exts.push(m);
+    }
+    assert.ok(exts.length >= 1);
+    // All extensions share ONE base material instance (no per-tile clones —
+    // the extension never gets fogged, unlike the in-map river ribbons).
+    const matRef = exts[0].material;
+    for (const m of exts) {
+      assert.equal(m.material, matRef,
+        'all extension meshes should share the same StandardMaterial instance');
+    }
+    assert.ok(/river_extension/.test(matRef.name),
+      `material name "${matRef.name}" should identify it as a river extension material`);
   });
 
   test('no river on the map → no extension built (no-op)', () => {

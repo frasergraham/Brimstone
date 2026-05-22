@@ -2082,17 +2082,20 @@ export class Renderer3D {
     this._buildRiverExtensions(bandDepth);
   }
 
-  /** Continue every river endpoint past the playable map edge with a flat
-   *  straight ribbon. Each extension lives in `_borderPropsByKey` under a
-   *  synthetic `river-ext:col,row` key, alongside the surrounding forest
-   *  props, so it follows the same visual-only lifecycle (no state.tiles
-   *  entry, no pan-clamp influence). Material uses the SAME diffuse/emissive
-   *  colours as the in-map river ribbon (`ribbonMaterialColors`) — the
-   *  surrounding border-forest hexes already darken naturally under the
-   *  ambient light of the out-of-play zone, so the extension reads correctly
-   *  without an extra fog tint and visually matches the river inside the
-   *  playable area. No-op when the map has no river, or when the forest
-   *  band is disabled. */
+  /** Continue every river endpoint past the playable map edge using the SAME
+   *  render path as the in-map river ribbon (`_buildNetworkMesh`): a 5-path
+   *  feathered ribbon with per-vertex alpha tapering at the lateral edges,
+   *  sharing the river ribbon material via `_buildRibbonMaterial`. The result
+   *  is indistinguishable from the in-map river — same dark-navy diffuse +
+   *  emissive, same alpha-feathered edges, same alphaIndex / shadow reception
+   *  — so the water reads as one continuous flow from playable to wilderness
+   *  instead of a bright rectangular strip butted onto a feathered bezier.
+   *
+   *  Each extension lives in `_borderPropsByKey` under a synthetic
+   *  `river-ext:col,row` key alongside the surrounding forest props, so it
+   *  follows the same visual-only lifecycle (no state.tiles entry, no
+   *  pan-clamp influence). No-op when the map has no river, or when the
+   *  forest band is disabled. */
   _buildRiverExtensions(bandDepth) {
     const BABYLON = this._babylon;
     const scene   = this._scene;
@@ -2101,30 +2104,44 @@ export class Renderer3D {
     if (!this._riverNetworkMesh) return; // no river on this map
     const exits = riverExitPoints(this.state.tiles);
     if (exits.length === 0) return;
-    // Build a sibling of the in-map river material — same StandardMaterial
-    // recipe as `_buildRibbonMaterial`, same diffuse/emissive (no fog tint).
-    const { diffuse, emissive } = ribbonMaterialColors(TILE_COLOR[TileType.RIVER]);
-    const extMat = new BABYLON.StandardMaterial(`river_extension_mat`, scene);
-    extMat.diffuseColor    = new BABYLON.Color3(diffuse[0],  diffuse[1],  diffuse[2]);
-    extMat.emissiveColor   = new BABYLON.Color3(emissive[0], emissive[1], emissive[2]);
-    extMat.specularColor   = new BABYLON.Color3(0.04, 0.04, 0.04);
-    extMat.backFaceCulling = false;
-    extMat.disableLighting = false;
+    // Sibling of the in-map river material — built via the SAME helper so any
+    // future tweak to the river ribbon's diffuse/emissive recipe automatically
+    // applies to the extension. One material shared across all extensions; no
+    // per-tile fog clones are needed because the extension never gets fogged
+    // (it sits outside the playable area). `hasVertexAlpha` is set per-mesh.
+    const extMat = this._buildRibbonMaterial('river_extension', TILE_COLOR[TileType.RIVER]);
     // Extend one hex past the outermost band tile so the ribbon's far end
     // clearly carries past the band's silhouette instead of fading inside it.
     // Centre-to-centre spacing in any axial direction is SQRT3 world units.
     const length = (bandDepth + 1) * SQRT3;
+    // Use the SAME segment count as the in-map bezier so the per-sample
+    // density of the feathered alpha gradient matches at the join.
+    const segments = NETWORK_BEZIER_SEGMENTS;
+    const OPAQUE_FRAC = 0.80;
     for (const exit of exits) {
-      const { left, right } = riverExtensionRibbon(exit, length, RIVER_RIBBON_WIDTH);
-      if (left.length < 2 || right.length < 2) continue;
-      const leftV3  = left.map(p  => new BABYLON.Vector3(p.x, RIVER_RIBBON_Y, p.z));
-      const rightV3 = right.map(p => new BABYLON.Vector3(p.x, RIVER_RIBBON_Y, p.z));
+      // Centreline samples along the outward tangent from `exit.point` (which
+      // is exactly where the in-map ribbon's bezier ends — see `riverExitPoints`).
+      const pts = new Array(segments + 1);
+      for (let i = 0; i <= segments; i++) {
+        const t = i / segments;
+        pts[i] = {
+          x: exit.point.x + exit.tangent.x * length * t,
+          z: exit.point.z + exit.tangent.z * length * t,
+        };
+      }
+      // Five-path ribbon with lateral alpha taper, matching the in-map river
+      // ribbon's recipe in `_buildNetworkMesh`. Path order is
+      // `[rightOuter, rightInner, center, leftInner, leftOuter]`; first triangle
+      // winding produces a +Y face normal so the hemispheric light hits the
+      // camera-visible top face (see the contract comment on `_buildNetworkMesh`).
+      const innerWidth = RIVER_RIBBON_WIDTH * OPAQUE_FRAC;
+      const { left: outerLeft,  right: outerRight  } = ribbonOffsetPaths(pts, RIVER_RIBBON_WIDTH);
+      const { left: innerLeft,  right: innerRight  } = ribbonOffsetPaths(pts, innerWidth);
+      const toV3 = (arr) => arr.map(p => new BABYLON.Vector3(p.x, RIVER_RIBBON_Y, p.z));
       const ribbon = BABYLON.MeshBuilder.CreateRibbon(
         `river_extension_${exit.tile.col}_${exit.tile.row}`,
         {
-          // Path order matches `_buildNetworkMesh` — see the contract comment
-          // there — so face normal points +Y for the hemispheric light.
-          pathArray: [rightV3, leftV3],
+          pathArray: [toV3(outerRight), toV3(innerRight), toV3(pts), toV3(innerLeft), toV3(outerLeft)],
           sideOrientation: BABYLON.Mesh.DOUBLESIDE,
           closeArray: false,
           closePath: false,
@@ -2135,12 +2152,26 @@ export class Renderer3D {
       ribbon.parent     = this._mapRoot;
       ribbon.isPickable = false;
       ribbon.material   = extMat;
-      // Match the playable-map river ribbons (`_buildNetworkMesh`) — the
-      // extension is the same flat ground-hugging strip threading through the
-      // border-forest band, so it should catch unit/tree shadows the same way.
+      // Per-vertex alpha keyed off path index (5 paths × N points).
+      const totalVerts = ribbon.getTotalVertices();
+      const N = pts.length;
+      const alphaByPath = [0.0, 1.0, 1.0, 1.0, 0.0];
+      const colors = new Float32Array(totalVerts * 4);
+      for (let v = 0; v < totalVerts; v++) {
+        const pathIdx = Math.min(alphaByPath.length - 1, Math.floor(v / N));
+        const a = alphaByPath[pathIdx];
+        colors[v * 4 + 0] = 1;
+        colors[v * 4 + 1] = 1;
+        colors[v * 4 + 2] = 1;
+        colors[v * 4 + 3] = a;
+      }
+      ribbon.setVerticesData(BABYLON.VertexBuffer.ColorKind, colors);
+      ribbon.hasVertexAlpha = true;
+      ribbon.alphaIndex     = RIVER_ALPHA_INDEX;
+      // Match the playable-map river ribbons — same flat ground-hugging strip,
+      // so it should catch unit/tree shadows identically.
       this._setShadowReceiver(ribbon);
-      ribbon.alphaIndex = RIVER_ALPHA_INDEX;
-      ribbon.metadata   = { kind: 'river-extension', col: exit.tile.col, row: exit.tile.row };
+      ribbon.metadata = { kind: 'river-extension', col: exit.tile.col, row: exit.tile.row };
       const key = `river-ext:${exit.tile.col},${exit.tile.row}`;
       const list = this._borderPropsByKey.get(key) || [];
       list.push(ribbon);
