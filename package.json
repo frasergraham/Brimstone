@@ -22,6 +22,7 @@
     "validate": "node scripts/validate.js",
     "release": "node scripts/release.js",
     "release:dry": "node scripts/release.js --dry-run",
+    "extract-trees": "node scripts/extract-tree-pack.js",
     "assets:dry": "node scripts/generate-assets.js --dry-run",
     "assets:test": "node scripts/generate-assets.js --test",
     "assets:gen": "node scripts/generate-assets.js",
@@ -49,6 +50,8 @@
     "cap:run:android": "node scripts/cap-copy-web.js && npx cap run android"
   },
   "devDependencies": {
+    "@gltf-transform/core": "^4.3.0",
+    "@gltf-transform/functions": "^4.3.0",
     "electron": "^33.0.0",
     "electron-builder": "^25.0.0",
     "sharp": "^0.33.5"

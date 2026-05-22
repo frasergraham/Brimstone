@@ -1,0 +1,3274 @@
+{
+  "version": 1,
+  "generatedAt": "2026-05-22T23:52:08.326Z",
+  "source": "tree_pack.glb",
+  "generated_by": "scripts/extract-tree-pack.js",
+  "groups": {
+    "rock": [
+      {
+        "file": "rock/rock-001.glb",
+        "source_name": "stone 23_0"
+      },
+      {
+        "file": "rock/rock-002.glb",
+        "source_name": "stone 11_1"
+      },
+      {
+        "file": "rock/rock-003.glb",
+        "source_name": "stone 1_2"
+      },
+      {
+        "file": "rock/rock-004.glb",
+        "source_name": "stone 2_3"
+      },
+      {
+        "file": "rock/rock-005.glb",
+        "source_name": "stone 4_4"
+      },
+      {
+        "file": "rock/rock-006.glb",
+        "source_name": "stone 5_5"
+      },
+      {
+        "file": "rock/rock-007.glb",
+        "source_name": "stone 6_6"
+      },
+      {
+        "file": "rock/rock-008.glb",
+        "source_name": "stone 7_7"
+      },
+      {
+        "file": "rock/rock-009.glb",
+        "source_name": "stone 8_8"
+      },
+      {
+        "file": "rock/rock-010.glb",
+        "source_name": "stone 9_9"
+      },
+      {
+        "file": "rock/rock-011.glb",
+        "source_name": "stone 10_10"
+      },
+      {
+        "file": "rock/rock-012.glb",
+        "source_name": "stone 12_11"
+      },
+      {
+        "file": "rock/rock-013.glb",
+        "source_name": "stone 13_12"
+      },
+      {
+        "file": "rock/rock-014.glb",
+        "source_name": "stone 14_13"
+      },
+      {
+        "file": "rock/rock-015.glb",
+        "source_name": "stone 15_14"
+      },
+      {
+        "file": "rock/rock-016.glb",
+        "source_name": "stone 16_15"
+      },
+      {
+        "file": "rock/rock-017.glb",
+        "source_name": "stone 17_16"
+      },
+      {
+        "file": "rock/rock-018.glb",
+        "source_name": "stone 18_17"
+      },
+      {
+        "file": "rock/rock-019.glb",
+        "source_name": "stone 19_18"
+      },
+      {
+        "file": "rock/rock-020.glb",
+        "source_name": "stone 20_19"
+      },
+      {
+        "file": "rock/rock-021.glb",
+        "source_name": "stone 21_20"
+      },
+      {
+        "file": "rock/rock-022.glb",
+        "source_name": "stone 22_21"
+      },
+      {
+        "file": "rock/rock-023.glb",
+        "source_name": "stone 3_22"
+      },
+      {
+        "file": "rock/rock-024.glb",
+        "source_name": "stone 24_23"
+      },
+      {
+        "file": "rock/rock-025.glb",
+        "source_name": "Rock 15_525"
+      },
+      {
+        "file": "rock/rock-026.glb",
+        "source_name": "Rock 12_526"
+      },
+      {
+        "file": "rock/rock-027.glb",
+        "source_name": "Rock 18_527"
+      },
+      {
+        "file": "rock/rock-028.glb",
+        "source_name": "Rock 11_528"
+      },
+      {
+        "file": "rock/rock-029.glb",
+        "source_name": "Rock 13_529"
+      },
+      {
+        "file": "rock/rock-030.glb",
+        "source_name": "Rock 16_530"
+      },
+      {
+        "file": "rock/rock-031.glb",
+        "source_name": "Rock 14_531"
+      },
+      {
+        "file": "rock/rock-032.glb",
+        "source_name": "Rock 17_532"
+      },
+      {
+        "file": "rock/rock-033.glb",
+        "source_name": "ROCk 9_533"
+      },
+      {
+        "file": "rock/rock-034.glb",
+        "source_name": "Rock 7_534"
+      },
+      {
+        "file": "rock/rock-035.glb",
+        "source_name": "Rock 5_536"
+      },
+      {
+        "file": "rock/rock-036.glb",
+        "source_name": "Rock 8_537"
+      },
+      {
+        "file": "rock/rock-037.glb",
+        "source_name": "Rock 10_538"
+      },
+      {
+        "file": "rock/rock-038.glb",
+        "source_name": "Rock 2_539"
+      },
+      {
+        "file": "rock/rock-039.glb",
+        "source_name": "Rock 6_540"
+      },
+      {
+        "file": "rock/rock-040.glb",
+        "source_name": "Rock 4_541"
+      },
+      {
+        "file": "rock/rock-041.glb",
+        "source_name": "Rock 1_542"
+      },
+      {
+        "file": "rock/rock-042.glb",
+        "source_name": "Stone 2_543"
+      },
+      {
+        "file": "rock/rock-043.glb",
+        "source_name": "Stone 3_544"
+      },
+      {
+        "file": "rock/rock-044.glb",
+        "source_name": "Stone 4_545"
+      },
+      {
+        "file": "rock/rock-045.glb",
+        "source_name": "Stone 5_546"
+      }
+    ],
+    "cloud": [
+      {
+        "file": "cloud/cloud-001.glb",
+        "source_name": "cloud 7_24"
+      },
+      {
+        "file": "cloud/cloud-002.glb",
+        "source_name": "cloud 8_25"
+      },
+      {
+        "file": "cloud/cloud-003.glb",
+        "source_name": "cloud 1_26"
+      },
+      {
+        "file": "cloud/cloud-004.glb",
+        "source_name": "cloud 2_27"
+      },
+      {
+        "file": "cloud/cloud-005.glb",
+        "source_name": "cloud 4_28"
+      },
+      {
+        "file": "cloud/cloud-006.glb",
+        "source_name": "cloud 6_29"
+      },
+      {
+        "file": "cloud/cloud-007.glb",
+        "source_name": "cloud 22_30"
+      },
+      {
+        "file": "cloud/cloud-008.glb",
+        "source_name": "cloud 20_31"
+      },
+      {
+        "file": "cloud/cloud-009.glb",
+        "source_name": "cloud 23_32"
+      },
+      {
+        "file": "cloud/cloud-010.glb",
+        "source_name": "cloud 21_33"
+      },
+      {
+        "file": "cloud/cloud-011.glb",
+        "source_name": "cloud 12_34"
+      },
+      {
+        "file": "cloud/cloud-012.glb",
+        "source_name": "cloud 11_35"
+      },
+      {
+        "file": "cloud/cloud-013.glb",
+        "source_name": "cloud 18_36"
+      },
+      {
+        "file": "cloud/cloud-014.glb",
+        "source_name": "cloud 15_37"
+      },
+      {
+        "file": "cloud/cloud-015.glb",
+        "source_name": "cloud 3_38"
+      },
+      {
+        "file": "cloud/cloud-016.glb",
+        "source_name": "cloud 5_39"
+      },
+      {
+        "file": "cloud/cloud-017.glb",
+        "source_name": "cloud 9_40"
+      },
+      {
+        "file": "cloud/cloud-018.glb",
+        "source_name": "cloud 10_41"
+      },
+      {
+        "file": "cloud/cloud-019.glb",
+        "source_name": "cloud 13_42"
+      },
+      {
+        "file": "cloud/cloud-020.glb",
+        "source_name": "cloud 14_43"
+      },
+      {
+        "file": "cloud/cloud-021.glb",
+        "source_name": "cloud 16_44"
+      },
+      {
+        "file": "cloud/cloud-022.glb",
+        "source_name": "cloud 17_45"
+      },
+      {
+        "file": "cloud/cloud-023.glb",
+        "source_name": "cloud 19_46"
+      },
+      {
+        "file": "cloud/cloud-024.glb",
+        "source_name": "cloud 24_47"
+      }
+    ],
+    "tree-summer-trunk": [
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-0-001.glb",
+        "source_name": "Trunk_50",
+        "species": "0",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-0-002.glb",
+        "source_name": "Trunk _59",
+        "species": "0",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-2-003.glb",
+        "source_name": "Trunk 2_109",
+        "species": "2",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-3-004.glb",
+        "source_name": "Trunk 3_110",
+        "species": "3",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-4-005.glb",
+        "source_name": "Trunk 4_111",
+        "species": "4",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-5-006.glb",
+        "source_name": "Trunk 5_112",
+        "species": "5",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-6-007.glb",
+        "source_name": "Trunk 6_113",
+        "species": "6",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-7-008.glb",
+        "source_name": "Trunk 7_115",
+        "species": "7",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-009.glb",
+        "source_name": "Circle.002_221",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-010.glb",
+        "source_name": "Circle.005_223",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-011.glb",
+        "source_name": "Circle.006_224",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-012.glb",
+        "source_name": "Circle.011_229",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-013.glb",
+        "source_name": "Circle.015_233",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-014.glb",
+        "source_name": "Cube.003_236",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-015.glb",
+        "source_name": "Cube.016_244",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-016.glb",
+        "source_name": "Cube.018_246",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-017.glb",
+        "source_name": "Cube.021_249",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-018.glb",
+        "source_name": "Icosphere.001_252",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-019.glb",
+        "source_name": "Icosphere.003_254",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-020.glb",
+        "source_name": "Plane.005_259",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-021.glb",
+        "source_name": "Plane.007_260",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-022.glb",
+        "source_name": "Plane.014_265",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-023.glb",
+        "source_name": "Plane.019_268",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-024.glb",
+        "source_name": "Plane.020_269",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-025.glb",
+        "source_name": "Plane.021_270",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-026.glb",
+        "source_name": "Plane.023_272",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-027.glb",
+        "source_name": "Plane.032_274",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-028.glb",
+        "source_name": "Sphere.001_275",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-1-029.glb",
+        "source_name": "TREE 1.001_280",
+        "species": "1",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-11-030.glb",
+        "source_name": "TREE 11.001_283",
+        "species": "11",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-12-031.glb",
+        "source_name": "TREE 12.001_285",
+        "species": "12",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-13-032.glb",
+        "source_name": "TREE 13.001_287",
+        "species": "13",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-15-033.glb",
+        "source_name": "TREE 15.003_290",
+        "species": "15",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-15-034.glb",
+        "source_name": "TREE 15.004_291",
+        "species": "15",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-3-035.glb",
+        "source_name": "TREE 3.001_294",
+        "species": "3",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-5-036.glb",
+        "source_name": "TREE 5.001_297",
+        "species": "5",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-6-037.glb",
+        "source_name": "TREE 6.001_299",
+        "species": "6",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-9-038.glb",
+        "source_name": "TREE 9.001_302",
+        "species": "9",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-039.glb",
+        "source_name": "Circle_303",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-040.glb",
+        "source_name": "Circle.003_304",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-041.glb",
+        "source_name": "Cube_305",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-042.glb",
+        "source_name": "Cube.005_306",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-043.glb",
+        "source_name": "Cube.007_307",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-044.glb",
+        "source_name": "Cube.008_308",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-045.glb",
+        "source_name": "Cube.009_309",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-046.glb",
+        "source_name": "Cube.015_310",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-047.glb",
+        "source_name": "Cube.022_311",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-048.glb",
+        "source_name": "Plane_312",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-049.glb",
+        "source_name": "Plane.008_313",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-050.glb",
+        "source_name": "Plane.013_314",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-051.glb",
+        "source_name": "Plane.015_315",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-052.glb",
+        "source_name": "Plane.016_316",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-10-053.glb",
+        "source_name": "TREE 10.001_317",
+        "species": "10",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-4-054.glb",
+        "source_name": "TREE 4.001_318",
+        "species": "4",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-7-055.glb",
+        "source_name": "TREE 7.001_319",
+        "species": "7",
+        "season": "summer",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-summer-trunk/tree-summer-trunk-misc-004-056.glb",
+        "source_name": "tree.004_320",
+        "species": "misc-004",
+        "season": "summer",
+        "part": "trunk"
+      }
+    ],
+    "tree-summer-complete": [
+      {
+        "file": "tree-summer-complete/tree-summer-complete-001.glb",
+        "source_name": "Tree _51",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-11-002.glb",
+        "source_name": "Tree 11_60",
+        "species": "11",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-35-003.glb",
+        "source_name": "Tree 35_61",
+        "species": "35",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-40-004.glb",
+        "source_name": "Tree 40_62",
+        "species": "40",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-36-005.glb",
+        "source_name": "Tree 36_63",
+        "species": "36",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-38-006.glb",
+        "source_name": "Tree 38_64",
+        "species": "38",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-46-007.glb",
+        "source_name": "Tree 46_65",
+        "species": "46",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-43-008.glb",
+        "source_name": "Tree 43_66",
+        "species": "43",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-49-009.glb",
+        "source_name": "Tree 49_67",
+        "species": "49",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-47-010.glb",
+        "source_name": "Tree 47_69",
+        "species": "47",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-33-011.glb",
+        "source_name": "Tree 33_70",
+        "species": "33",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-48-012.glb",
+        "source_name": "Tree 48_71",
+        "species": "48",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-37-013.glb",
+        "source_name": "Tree 37_72",
+        "species": "37",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-2-014.glb",
+        "source_name": "Tree 2_73",
+        "species": "2",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-28-015.glb",
+        "source_name": "Tree 28_74",
+        "species": "28",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-26-016.glb",
+        "source_name": "Tree 26_75",
+        "species": "26",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-32-017.glb",
+        "source_name": "Tree 32_76",
+        "species": "32",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-34-018.glb",
+        "source_name": "Tree 34_77",
+        "species": "34",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-41-019.glb",
+        "source_name": "Tree 41_78",
+        "species": "41",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-42-020.glb",
+        "source_name": "Tree 42_79",
+        "species": "42",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-29-021.glb",
+        "source_name": "Tree 29_80",
+        "species": "29",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-31-022.glb",
+        "source_name": "Tree 31_81",
+        "species": "31",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-44-023.glb",
+        "source_name": "Tree 44_82",
+        "species": "44",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-45-024.glb",
+        "source_name": "Tree 45_83",
+        "species": "45",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-30-025.glb",
+        "source_name": "Tree 30_84",
+        "species": "30",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-27-026.glb",
+        "source_name": "Tree 27_85",
+        "species": "27",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-1-027.glb",
+        "source_name": "Tree 1_86",
+        "species": "1",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-3-028.glb",
+        "source_name": "Tree 3_87",
+        "species": "3",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-4-029.glb",
+        "source_name": "Tree 4_88",
+        "species": "4",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-6-030.glb",
+        "source_name": "Tree 6_89",
+        "species": "6",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-7-031.glb",
+        "source_name": "Tree 7_90",
+        "species": "7",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-8-032.glb",
+        "source_name": "Tree 8_91",
+        "species": "8",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-9-033.glb",
+        "source_name": "Tree 9_92",
+        "species": "9",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-10-034.glb",
+        "source_name": "Tree 10_93",
+        "species": "10",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-12-035.glb",
+        "source_name": "Tree 12_94",
+        "species": "12",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-13-036.glb",
+        "source_name": "Tree 13_95",
+        "species": "13",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-14-037.glb",
+        "source_name": "Tree 14_96",
+        "species": "14",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-15-038.glb",
+        "source_name": "Tree 15_97",
+        "species": "15",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-16-039.glb",
+        "source_name": "Tree 16_98",
+        "species": "16",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-17-040.glb",
+        "source_name": "Tree 17_99",
+        "species": "17",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-18-041.glb",
+        "source_name": "Tree 18_100",
+        "species": "18",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-19-042.glb",
+        "source_name": "Tree 19_101",
+        "species": "19",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-20-043.glb",
+        "source_name": "Tree 20_102",
+        "species": "20",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-21-044.glb",
+        "source_name": "Tree 21_103",
+        "species": "21",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-22-045.glb",
+        "source_name": "Tree 22_104",
+        "species": "22",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-23-046.glb",
+        "source_name": "Tree 23_105",
+        "species": "23",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-24-047.glb",
+        "source_name": "Tree 24_106",
+        "species": "24",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-25-048.glb",
+        "source_name": "Tree 25_107",
+        "species": "25",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-50-049.glb",
+        "source_name": "Tree 50_108",
+        "species": "50",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-39-050.glb",
+        "source_name": "Tree 39_114",
+        "species": "39",
+        "season": "summer",
+        "part": "complete"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-1-051.glb",
+        "source_name": "Tree 1.001_292",
+        "species": "1",
+        "season": "summer",
+        "part": "complete"
+      }
+    ],
+    "grass": [
+      {
+        "file": "grass/grass-001.glb",
+        "source_name": "grass 1 _53"
+      },
+      {
+        "file": "grass/grass-002.glb",
+        "source_name": "grass 2_54"
+      },
+      {
+        "file": "grass/grass-003.glb",
+        "source_name": "grass 6_55"
+      },
+      {
+        "file": "grass/grass-004.glb",
+        "source_name": "grass 5_56"
+      },
+      {
+        "file": "grass/grass-005.glb",
+        "source_name": "grass 3_57"
+      },
+      {
+        "file": "grass/grass-006.glb",
+        "source_name": "grass 4_58"
+      }
+    ],
+    "tree-summer-leaves": [
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-5-001.glb",
+        "source_name": "Tree 5_68",
+        "species": "5",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-002.glb",
+        "source_name": "Circle.001_220",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-003.glb",
+        "source_name": "Circle.004_222",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-004.glb",
+        "source_name": "Circle.007_225",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-005.glb",
+        "source_name": "Circle.008_226",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-006.glb",
+        "source_name": "Circle.009_227",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-007.glb",
+        "source_name": "Circle.010_228",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-008.glb",
+        "source_name": "Circle.012_230",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-009.glb",
+        "source_name": "Circle.013_231",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-010.glb",
+        "source_name": "Circle.014_232",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-011.glb",
+        "source_name": "Cube.001_234",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-012.glb",
+        "source_name": "Cube.002_235",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-013.glb",
+        "source_name": "Cube.004_237",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-014.glb",
+        "source_name": "Cube.006_238",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-015.glb",
+        "source_name": "Cube.010_239",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-016.glb",
+        "source_name": "Cube.011_240",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-017.glb",
+        "source_name": "Cube.012_241",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-018.glb",
+        "source_name": "Cube.013_242",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-019.glb",
+        "source_name": "Cube.014_243",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-020.glb",
+        "source_name": "Cube.017_245",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-021.glb",
+        "source_name": "Cube.019_247",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-022.glb",
+        "source_name": "Cube.020_248",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-023.glb",
+        "source_name": "dobj_250",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-024.glb",
+        "source_name": "Icosphere_251",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-025.glb",
+        "source_name": "Icosphere.002_253",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-026.glb",
+        "source_name": "Icosphere.012_255",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-027.glb",
+        "source_name": "Plane.001_256",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-028.glb",
+        "source_name": "Plane.003_257",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-029.glb",
+        "source_name": "Plane.004_258",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-030.glb",
+        "source_name": "Plane.009_261",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-031.glb",
+        "source_name": "Plane.010_262",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-032.glb",
+        "source_name": "Plane.011_263",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-033.glb",
+        "source_name": "Plane.012_264",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-034.glb",
+        "source_name": "Plane.017_266",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-035.glb",
+        "source_name": "Plane.018_267",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-036.glb",
+        "source_name": "Plane.022_271",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-037.glb",
+        "source_name": "Plane.027_273",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-038.glb",
+        "source_name": "Sphere.004_276",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-039.glb",
+        "source_name": "tree_278",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-1-040.glb",
+        "source_name": "TREE 1_279",
+        "species": "1",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-10-041.glb",
+        "source_name": "TREE 10_281",
+        "species": "10",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-11-042.glb",
+        "source_name": "TREE 11_282",
+        "species": "11",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-12-043.glb",
+        "source_name": "TREE 12_284",
+        "species": "12",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-13-044.glb",
+        "source_name": "TREE 13_286",
+        "species": "13",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-15-045.glb",
+        "source_name": "TREE 15.001_288",
+        "species": "15",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-15-046.glb",
+        "source_name": "TREE 15.002_289",
+        "species": "15",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-3-047.glb",
+        "source_name": "TREE 3_293",
+        "species": "3",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-4-048.glb",
+        "source_name": "TREE 4_295",
+        "species": "4",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-5-049.glb",
+        "source_name": "TREE 5_296",
+        "species": "5",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-6-050.glb",
+        "source_name": "TREE 6_298",
+        "species": "6",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-7-051.glb",
+        "source_name": "TREE 7_300",
+        "species": "7",
+        "season": "summer",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-summer-leaves/tree-summer-leaves-9-052.glb",
+        "source_name": "TREE 9_301",
+        "species": "9",
+        "season": "summer",
+        "part": "leaves"
+      }
+    ],
+    "tree-winter-trunk": [
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-001.glb",
+        "source_name": "Circle.047_117",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-002.glb",
+        "source_name": "Circle.045_119",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-003.glb",
+        "source_name": "Circle.044_120",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-004.glb",
+        "source_name": "Circle.042_122",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-005.glb",
+        "source_name": "Circle.041_123",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-006.glb",
+        "source_name": "Circle.036_128",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-007.glb",
+        "source_name": "Circle.032_132",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-008.glb",
+        "source_name": "Cube.065_135",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-009.glb",
+        "source_name": "Cube.063_137",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-010.glb",
+        "source_name": "Cube.061_139",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-011.glb",
+        "source_name": "Cube.060_140",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-012.glb",
+        "source_name": "Cube.053_146",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-013.glb",
+        "source_name": "Cube.052_147",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-014.glb",
+        "source_name": "Cube.050_149",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-015.glb",
+        "source_name": "Cube.047_152",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-016.glb",
+        "source_name": "Cube.046_153",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-017.glb",
+        "source_name": "Icosphere.013_156",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-018.glb",
+        "source_name": "Icosphere.010_158",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-019.glb",
+        "source_name": "Plane.068_163",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-020.glb",
+        "source_name": "Plane.067_164",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-021.glb",
+        "source_name": "Plane.060_169",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-022.glb",
+        "source_name": "Plane.055_172",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-023.glb",
+        "source_name": "Plane.054_173",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-024.glb",
+        "source_name": "Plane.053_174",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-025.glb",
+        "source_name": "Plane.051_176",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-026.glb",
+        "source_name": "Plane.049_178",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-027.glb",
+        "source_name": "Sphere.006_179",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-1-028.glb",
+        "source_name": "TREE 1.004_184",
+        "species": "1",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-10-029.glb",
+        "source_name": "TREE 10.004_186",
+        "species": "10",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-11-030.glb",
+        "source_name": "TREE 11.004_188",
+        "species": "11",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-12-031.glb",
+        "source_name": "TREE 12.004_190",
+        "species": "12",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-13-032.glb",
+        "source_name": "TREE 13.004_192",
+        "species": "13",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-15-033.glb",
+        "source_name": "TREE 15.010_195",
+        "species": "15",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-15-034.glb",
+        "source_name": "TREE 15.009_196",
+        "species": "15",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-2-035.glb",
+        "source_name": "TREE 2.004_198",
+        "species": "2",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-3-036.glb",
+        "source_name": "TREE 3.004_200",
+        "species": "3",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-5-037.glb",
+        "source_name": "TREE 5.004_203",
+        "species": "5",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-6-038.glb",
+        "source_name": "TREE 6.004_205",
+        "species": "6",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-7-039.glb",
+        "source_name": "TREE 7.004_207",
+        "species": "7",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-9-040.glb",
+        "source_name": "TREE 9.004_209",
+        "species": "9",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-041.glb",
+        "source_name": "Cube.068_210",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-042.glb",
+        "source_name": "Cube.059_211",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-043.glb",
+        "source_name": "Plane.072_212",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-044.glb",
+        "source_name": "Plane.066_213",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-045.glb",
+        "source_name": "Plane.061_214",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-046.glb",
+        "source_name": "Plane.059_215",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-047.glb",
+        "source_name": "Plane.058_216",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-4-048.glb",
+        "source_name": "TREE 4.004_217",
+        "species": "4",
+        "season": "winter",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-winter-trunk/tree-winter-trunk-misc-007-049.glb",
+        "source_name": "tree.007_219",
+        "species": "misc-007",
+        "season": "winter",
+        "part": "trunk"
+      }
+    ],
+    "tree-winter-leaves": [
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-001.glb",
+        "source_name": "Circle.046_118",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-002.glb",
+        "source_name": "Circle.043_121",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-003.glb",
+        "source_name": "Circle.040_124",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-004.glb",
+        "source_name": "Circle.039_125",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-005.glb",
+        "source_name": "Circle.038_126",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-006.glb",
+        "source_name": "Circle.037_127",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-007.glb",
+        "source_name": "Circle.035_129",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-008.glb",
+        "source_name": "Circle.034_130",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-009.glb",
+        "source_name": "Circle.033_131",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-010.glb",
+        "source_name": "Cube.067_133",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-011.glb",
+        "source_name": "Cube.066_134",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-012.glb",
+        "source_name": "Cube.064_136",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-013.glb",
+        "source_name": "Cube.062_138",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-014.glb",
+        "source_name": "Cube.058_141",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-015.glb",
+        "source_name": "Cube.057_142",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-016.glb",
+        "source_name": "Cube.056_143",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-017.glb",
+        "source_name": "Cube.055_144",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-018.glb",
+        "source_name": "Cube.054_145",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-019.glb",
+        "source_name": "Cube.051_148",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-020.glb",
+        "source_name": "Cube.049_150",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-021.glb",
+        "source_name": "Cube.048_151",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-022.glb",
+        "source_name": "dobj.002_154",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-023.glb",
+        "source_name": "Icosphere.014_155",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-024.glb",
+        "source_name": "Icosphere.011_157",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-025.glb",
+        "source_name": "Icosphere.009_159",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-026.glb",
+        "source_name": "Plane.071_160",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-027.glb",
+        "source_name": "Plane.070_161",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-028.glb",
+        "source_name": "Plane.069_162",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-029.glb",
+        "source_name": "Plane.065_165",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-030.glb",
+        "source_name": "Plane.064_166",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-031.glb",
+        "source_name": "Plane.063_167",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-032.glb",
+        "source_name": "Plane.062_168",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-033.glb",
+        "source_name": "Plane.057_170",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-034.glb",
+        "source_name": "Plane.056_171",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-035.glb",
+        "source_name": "Plane.052_175",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-036.glb",
+        "source_name": "Plane.050_177",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-037.glb",
+        "source_name": "Sphere.005_180",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-misc-002-038.glb",
+        "source_name": "tree.002_182",
+        "species": "misc-002",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-1-039.glb",
+        "source_name": "TREE 1.005_183",
+        "species": "1",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-10-040.glb",
+        "source_name": "TREE 10.005_185",
+        "species": "10",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-11-041.glb",
+        "source_name": "TREE 11.005_187",
+        "species": "11",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-12-042.glb",
+        "source_name": "TREE 12.005_189",
+        "species": "12",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-13-043.glb",
+        "source_name": "TREE 13.005_191",
+        "species": "13",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-15-044.glb",
+        "source_name": "TREE 15.012_193",
+        "species": "15",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-15-045.glb",
+        "source_name": "TREE 15.011_194",
+        "species": "15",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-2-046.glb",
+        "source_name": "TREE 2.005_197",
+        "species": "2",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-3-047.glb",
+        "source_name": "TREE 3.005_199",
+        "species": "3",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-4-048.glb",
+        "source_name": "TREE 4.005_201",
+        "species": "4",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-5-049.glb",
+        "source_name": "TREE 5.005_202",
+        "species": "5",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-6-050.glb",
+        "source_name": "TREE 6.005_204",
+        "species": "6",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-7-051.glb",
+        "source_name": "TREE 7.005_206",
+        "species": "7",
+        "season": "winter",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-winter-leaves/tree-winter-leaves-9-052.glb",
+        "source_name": "TREE 9.005_208",
+        "species": "9",
+        "season": "winter",
+        "part": "leaves"
+      }
+    ],
+    "tree-autumn-trunk": [
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-001.glb",
+        "source_name": "Circle.031_321",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-002.glb",
+        "source_name": "Circle.029_323",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-003.glb",
+        "source_name": "Circle.026_325",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-004.glb",
+        "source_name": "Circle.025_326",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-005.glb",
+        "source_name": "Circle.020_331",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-006.glb",
+        "source_name": "Circle.016_335",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-007.glb",
+        "source_name": "Cube.042_338",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-008.glb",
+        "source_name": "Cube.029_346",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-009.glb",
+        "source_name": "Cube.027_348",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-010.glb",
+        "source_name": "Cube.024_351",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-011.glb",
+        "source_name": "Icosphere.007_354",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-012.glb",
+        "source_name": "Icosphere.005_356",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-013.glb",
+        "source_name": "Plane.044_361",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-014.glb",
+        "source_name": "Plane.043_362",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-015.glb",
+        "source_name": "Plane.036_367",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-016.glb",
+        "source_name": "Plane.030_370",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-017.glb",
+        "source_name": "Plane.029_371",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-018.glb",
+        "source_name": "Plane.028_372",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-019.glb",
+        "source_name": "Plane.025_374",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-020.glb",
+        "source_name": "Plane.006_376",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-021.glb",
+        "source_name": "Sphere.003_377",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-1-022.glb",
+        "source_name": "TREE 1.002_382",
+        "species": "1",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-11-023.glb",
+        "source_name": "TREE 11.002_385",
+        "species": "11",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-12-024.glb",
+        "source_name": "TREE 12.002_387",
+        "species": "12",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-13-025.glb",
+        "source_name": "TREE 13.002_389",
+        "species": "13",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-15-026.glb",
+        "source_name": "TREE 15.006_392",
+        "species": "15",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-15-027.glb",
+        "source_name": "TREE 15.005_393",
+        "species": "15",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-2-028.glb",
+        "source_name": "TREE 2.002_395",
+        "species": "2",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-3-029.glb",
+        "source_name": "TREE 3.002_397",
+        "species": "3",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-5-030.glb",
+        "source_name": "TREE 5.002_400",
+        "species": "5",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-6-031.glb",
+        "source_name": "TREE 6.002_402",
+        "species": "6",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-7-032.glb",
+        "source_name": "TREE 7.002_404",
+        "species": "7",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-9-033.glb",
+        "source_name": "TREE 9.002_406",
+        "species": "9",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-034.glb",
+        "source_name": "Circle.028_407",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-035.glb",
+        "source_name": "Cube.045_408",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-036.glb",
+        "source_name": "Cube.040_409",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-037.glb",
+        "source_name": "Cube.038_410",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-038.glb",
+        "source_name": "Cube.037_411",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-039.glb",
+        "source_name": "Cube.036_412",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-040.glb",
+        "source_name": "Cube.030_413",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-041.glb",
+        "source_name": "Cube.023_414",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-042.glb",
+        "source_name": "Plane.048_415",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-043.glb",
+        "source_name": "Plane.042_416",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-044.glb",
+        "source_name": "Plane.037_417",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-045.glb",
+        "source_name": "Plane.035_418",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-046.glb",
+        "source_name": "Plane.034_419",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-10-047.glb",
+        "source_name": "TREE 10.002_420",
+        "species": "10",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-4-048.glb",
+        "source_name": "TREE 4.002_421",
+        "species": "4",
+        "season": "autumn",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-autumn-trunk/tree-autumn-trunk-misc-005-049.glb",
+        "source_name": "tree.005_422",
+        "species": "misc-005",
+        "season": "autumn",
+        "part": "trunk"
+      }
+    ],
+    "tree-autumn-leaves": [
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-001.glb",
+        "source_name": "Circle.030_322",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-002.glb",
+        "source_name": "Circle.027_324",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-003.glb",
+        "source_name": "Circle.024_327",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-004.glb",
+        "source_name": "Circle.023_328",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-005.glb",
+        "source_name": "Circle.022_329",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-006.glb",
+        "source_name": "Circle.021_330",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-007.glb",
+        "source_name": "Circle.019_332",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-008.glb",
+        "source_name": "Circle.018_333",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-009.glb",
+        "source_name": "Circle.017_334",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-010.glb",
+        "source_name": "Cube.044_336",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-011.glb",
+        "source_name": "Cube.043_337",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-012.glb",
+        "source_name": "Cube.041_339",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-013.glb",
+        "source_name": "Cube.039_340",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-014.glb",
+        "source_name": "Cube.035_341",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-015.glb",
+        "source_name": "Cube.034_342",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-016.glb",
+        "source_name": "Cube.033_343",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-017.glb",
+        "source_name": "Cube.032_344",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-018.glb",
+        "source_name": "Cube.031_345",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-019.glb",
+        "source_name": "Cube.028_347",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-020.glb",
+        "source_name": "Cube.026_349",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-021.glb",
+        "source_name": "Cube.025_350",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-022.glb",
+        "source_name": "dobj.001_352",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-023.glb",
+        "source_name": "Icosphere.008_353",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-024.glb",
+        "source_name": "Icosphere.006_355",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-025.glb",
+        "source_name": "Icosphere.004_357",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-026.glb",
+        "source_name": "Plane.047_358",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-027.glb",
+        "source_name": "Plane.046_359",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-028.glb",
+        "source_name": "Plane.045_360",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-029.glb",
+        "source_name": "Plane.041_363",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-030.glb",
+        "source_name": "Plane.040_364",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-031.glb",
+        "source_name": "Plane.039_365",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-032.glb",
+        "source_name": "Plane.038_366",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-033.glb",
+        "source_name": "Plane.033_368",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-034.glb",
+        "source_name": "Plane.031_369",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-035.glb",
+        "source_name": "Plane.026_373",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-036.glb",
+        "source_name": "Plane.024_375",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-037.glb",
+        "source_name": "Sphere.002_378",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-misc-001-038.glb",
+        "source_name": "tree.001_380",
+        "species": "misc-001",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-1-039.glb",
+        "source_name": "TREE 1.003_381",
+        "species": "1",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-10-040.glb",
+        "source_name": "TREE 10.003_383",
+        "species": "10",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-11-041.glb",
+        "source_name": "TREE 11.003_384",
+        "species": "11",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-12-042.glb",
+        "source_name": "TREE 12.003_386",
+        "species": "12",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-13-043.glb",
+        "source_name": "TREE 13.003_388",
+        "species": "13",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-15-044.glb",
+        "source_name": "TREE 15.008_390",
+        "species": "15",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-15-045.glb",
+        "source_name": "TREE 15.007_391",
+        "species": "15",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-2-046.glb",
+        "source_name": "TREE 2.003_394",
+        "species": "2",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-3-047.glb",
+        "source_name": "TREE 3.003_396",
+        "species": "3",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-4-048.glb",
+        "source_name": "TREE 4.003_398",
+        "species": "4",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-5-049.glb",
+        "source_name": "TREE 5.003_399",
+        "species": "5",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-6-050.glb",
+        "source_name": "TREE 6.003_401",
+        "species": "6",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-7-051.glb",
+        "source_name": "TREE 7.003_403",
+        "species": "7",
+        "season": "autumn",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-autumn-leaves/tree-autumn-leaves-9-052.glb",
+        "source_name": "TREE 9.003_405",
+        "species": "9",
+        "season": "autumn",
+        "part": "leaves"
+      }
+    ],
+    "tree-dead-trunk": [
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-001.glb",
+        "source_name": "Circle.063_423",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-002.glb",
+        "source_name": "Circle.061_425",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-003.glb",
+        "source_name": "Circle.060_426",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-004.glb",
+        "source_name": "Circle.058_428",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-005.glb",
+        "source_name": "Circle.057_429",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-006.glb",
+        "source_name": "Circle.052_434",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-007.glb",
+        "source_name": "Circle.048_438",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-008.glb",
+        "source_name": "Cube.091_439",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-009.glb",
+        "source_name": "Cube.088_442",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-010.glb",
+        "source_name": "Cube.086_444",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-011.glb",
+        "source_name": "Cube.084_446",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-012.glb",
+        "source_name": "Cube.083_447",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-013.glb",
+        "source_name": "Cube.076_453",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-014.glb",
+        "source_name": "Cube.075_454",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-015.glb",
+        "source_name": "Cube.073_456",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-016.glb",
+        "source_name": "Cube.070_459",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-017.glb",
+        "source_name": "Cube.069_460",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-018.glb",
+        "source_name": "Icosphere.018_463",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-019.glb",
+        "source_name": "Icosphere.016_465",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-020.glb",
+        "source_name": "Plane.096_467",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-021.glb",
+        "source_name": "Plane.092_471",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-022.glb",
+        "source_name": "Plane.091_472",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-023.glb",
+        "source_name": "Plane.090_473",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-024.glb",
+        "source_name": "Plane.085_478",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-025.glb",
+        "source_name": "Plane.084_479",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-026.glb",
+        "source_name": "Plane.083_480",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-027.glb",
+        "source_name": "Plane.082_481",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-028.glb",
+        "source_name": "Plane.079_484",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-029.glb",
+        "source_name": "Plane.077_486",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-030.glb",
+        "source_name": "Plane.075_488",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-031.glb",
+        "source_name": "Plane.073_490",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-032.glb",
+        "source_name": "Sphere.008_491",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-1-033.glb",
+        "source_name": "TREE 1.006_496",
+        "species": "1",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-10-034.glb",
+        "source_name": "TREE 10.006_498",
+        "species": "10",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-11-035.glb",
+        "source_name": "TREE 11.006_500",
+        "species": "11",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-12-036.glb",
+        "source_name": "TREE 12.006_502",
+        "species": "12",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-13-037.glb",
+        "source_name": "TREE 13.006_504",
+        "species": "13",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-15-038.glb",
+        "source_name": "TREE 15.014_507",
+        "species": "15",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-15-039.glb",
+        "source_name": "TREE 15.013_508",
+        "species": "15",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-2-040.glb",
+        "source_name": "TREE 2.006_510",
+        "species": "2",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-3-041.glb",
+        "source_name": "TREE 3.006_512",
+        "species": "3",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-5-042.glb",
+        "source_name": "TREE 5.006_515",
+        "species": "5",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-6-043.glb",
+        "source_name": "TREE 6.006_517",
+        "species": "6",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-7-044.glb",
+        "source_name": "TREE 7.006_519",
+        "species": "7",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-9-045.glb",
+        "source_name": "TREE 9.006_521",
+        "species": "9",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-046.glb",
+        "source_name": "Cube.082_522",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-4-047.glb",
+        "source_name": "TREE 4.006_523",
+        "species": "4",
+        "season": "dead",
+        "part": "trunk"
+      },
+      {
+        "file": "tree-dead-trunk/tree-dead-trunk-misc-006-048.glb",
+        "source_name": "tree.006_524",
+        "species": "misc-006",
+        "season": "dead",
+        "part": "trunk"
+      }
+    ],
+    "tree-dead-leaves": [
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-001.glb",
+        "source_name": "Circle.062_424",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-002.glb",
+        "source_name": "Circle.059_427",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-003.glb",
+        "source_name": "Circle.056_430",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-004.glb",
+        "source_name": "Circle.055_431",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-005.glb",
+        "source_name": "Circle.054_432",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-006.glb",
+        "source_name": "Circle.053_433",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-007.glb",
+        "source_name": "Circle.051_435",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-008.glb",
+        "source_name": "Circle.050_436",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-009.glb",
+        "source_name": "Circle.049_437",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-010.glb",
+        "source_name": "Cube.090_440",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-011.glb",
+        "source_name": "Cube.089_441",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-012.glb",
+        "source_name": "Cube.087_443",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-013.glb",
+        "source_name": "Cube.085_445",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-014.glb",
+        "source_name": "Cube.081_448",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-015.glb",
+        "source_name": "Cube.080_449",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-016.glb",
+        "source_name": "Cube.079_450",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-017.glb",
+        "source_name": "Cube.078_451",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-018.glb",
+        "source_name": "Cube.077_452",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-019.glb",
+        "source_name": "Cube.074_455",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-020.glb",
+        "source_name": "Cube.072_457",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-021.glb",
+        "source_name": "Cube.071_458",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-022.glb",
+        "source_name": "dobj.003_461",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-023.glb",
+        "source_name": "Icosphere.019_462",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-024.glb",
+        "source_name": "Icosphere.017_464",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-025.glb",
+        "source_name": "Icosphere.015_466",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-026.glb",
+        "source_name": "Plane.095_468",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-027.glb",
+        "source_name": "Plane.094_469",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-028.glb",
+        "source_name": "Plane.093_470",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-029.glb",
+        "source_name": "Plane.089_474",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-030.glb",
+        "source_name": "Plane.088_475",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-031.glb",
+        "source_name": "Plane.087_476",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-032.glb",
+        "source_name": "Plane.086_477",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-033.glb",
+        "source_name": "Plane.081_482",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-034.glb",
+        "source_name": "Plane.080_483",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-035.glb",
+        "source_name": "Plane.076_487",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-036.glb",
+        "source_name": "Plane.074_489",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-037.glb",
+        "source_name": "Sphere.007_492",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-misc-003-038.glb",
+        "source_name": "tree.003_494",
+        "species": "misc-003",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-1-039.glb",
+        "source_name": "TREE 1.007_495",
+        "species": "1",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-10-040.glb",
+        "source_name": "TREE 10.007_497",
+        "species": "10",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-11-041.glb",
+        "source_name": "TREE 11.007_499",
+        "species": "11",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-12-042.glb",
+        "source_name": "TREE 12.007_501",
+        "species": "12",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-13-043.glb",
+        "source_name": "TREE 13.007_503",
+        "species": "13",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-15-044.glb",
+        "source_name": "TREE 15.016_505",
+        "species": "15",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-15-045.glb",
+        "source_name": "TREE 15.015_506",
+        "species": "15",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-2-046.glb",
+        "source_name": "TREE 2.007_509",
+        "species": "2",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-3-047.glb",
+        "source_name": "TREE 3.007_511",
+        "species": "3",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-4-048.glb",
+        "source_name": "TREE 4.007_513",
+        "species": "4",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-5-049.glb",
+        "source_name": "TREE 5.007_514",
+        "species": "5",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-6-050.glb",
+        "source_name": "TREE 6.007_516",
+        "species": "6",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-7-051.glb",
+        "source_name": "TREE 7.007_518",
+        "species": "7",
+        "season": "dead",
+        "part": "leaves"
+      },
+      {
+        "file": "tree-dead-leaves/tree-dead-leaves-9-052.glb",
+        "source_name": "TREE 9.007_520",
+        "species": "9",
+        "season": "dead",
+        "part": "leaves"
+      }
+    ]
+  }
+}
