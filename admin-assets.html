@@ -94,6 +94,21 @@
       </div>
 
       <div class="section">
+        <h3>Attach animation to base</h3>
+        <div class="row"><label>Base model</label>
+          <select id="base-model">
+            <option value="">— none (standalone view) —</option>
+            <option value="paladin-idle.glb">paladin-idle.glb</option>
+          </select>
+        </div>
+        <div style="margin-top:6px;font-size:11px;opacity:0.7;">
+          When a base is selected, clicking an animation-only file
+          (walking.glb / running.glb — no embedded mesh) loads the base
+          and retargets the animation onto it by bone name.
+        </div>
+      </div>
+
+      <div class="section">
         <h3>View</h3>
         <button id="reframe">Reframe camera</button>
         <div class="toggle-row">
@@ -300,30 +315,128 @@
       }
     }
 
+    function isAnimOnly(result) {
+      const meshes = result.meshes || [];
+      const hasGeometry = meshes.some(m => m.getTotalVertices && m.getTotalVertices() > 0);
+      const hasAnim = (result.animationGroups || []).length > 0;
+      return !hasGeometry && hasAnim;
+    }
+
+    function buildTargetNameMap(skeletons, meshes) {
+      // Build a name → TransformNode/Bone map from the base rig that the
+      // anim's keyframes will retarget against. Mirrors the renderer's
+      // retarget logic (paladin's skeleton bones + their _linkedTransformNode
+      // + raw bone names). Mixamo bone names line up between any two
+      // exports so look-up by name "just works".
+      const map = new Map();
+      const stripDup = (n) => n ? String(n).replace(/\.\d{3}$/, '') : n;
+      const add = (name, target) => {
+        if (!name || !target) return;
+        if (!map.has(name)) map.set(name, target);
+        const stripped = stripDup(name);
+        if (stripped !== name && !map.has(stripped)) map.set(stripped, target);
+      };
+      for (const m of meshes) {
+        if (m && m.name) add(m.name, m);
+      }
+      for (const s of skeletons) {
+        for (const bone of (s.bones || [])) {
+          if (!bone) continue;
+          const tn = bone._linkedTransformNode
+            || (typeof bone.getTransformNode === 'function' && bone.getTransformNode());
+          if (tn && tn.name) add(tn.name, tn);
+          if (bone.name) add(bone.name, tn || bone);
+        }
+      }
+      return map;
+    }
+
+    function retargetAnimGroupOntoBase(animGroup, baseMeshes, baseSkeletons) {
+      // Clone the imported animation group with a name-based target
+      // converter so the clone drives the base rig instead of the
+      // anim's own about-to-be-disposed skeleton stub.
+      const nameMap = buildTargetNameMap(baseSkeletons, baseMeshes);
+      let hit = 0, miss = 0;
+      const cloned = animGroup.clone(animGroup.name + '_retargeted', (oldTarget) => {
+        if (!oldTarget || !oldTarget.name) { miss++; return oldTarget; }
+        const m = nameMap.get(oldTarget.name)
+          || nameMap.get(oldTarget.name.replace(/\.\d{3}$/, ''));
+        if (m) { hit++; return m; }
+        miss++; return oldTarget;
+      });
+      console.info(`[asset-viewer] retarget ${animGroup.name}: ${hit} hit, ${miss} miss`);
+      return cloned;
+    }
+
     function loadModel(file) {
       errEl.textContent = '';
       clearCurrent();
       updateMetadata(file, null);
 
-      // Babylon's ImportMeshAsync signature: (meshNames, rootUrl, sceneFilename, scene).
-      // Passing '' for meshNames imports everything.
       return BABYLON.SceneLoader.ImportMeshAsync('', MODEL_DIR, file, scene)
         .then((result) => {
+          const baseFile = $('base-model').value;
+          // If the user selected a base AND this file is animation-only,
+          // load the base FIRST so we have a skeleton to retarget against.
+          if (baseFile && baseFile !== file && isAnimOnly(result)) {
+            // Stash the animation group(s) we want to layer on the base.
+            const animGroups = (result.animationGroups || []).slice();
+            for (const g of animGroups) { try { g.stop(); } catch (_) {} }
+            // The anim file's stub skeleton + transformNodes stay in the
+            // scene momentarily — they'll be cleaned by clearCurrent in
+            // the recursive loadModel call.
+            const stubMeshes = result.meshes || [];
+            const stubSkels  = result.skeletons || [];
+            const stubGroups = animGroups; // for disposal after retarget
+
+            // Recursively load the base, then retarget our anim groups
+            // onto its rig.
+            return BABYLON.SceneLoader.ImportMeshAsync('', MODEL_DIR, baseFile, scene)
+              .then((baseResult) => {
+                // Tear down the anim file's stub meshes/skeletons/groups —
+                // we only kept their keyframes (now cloned onto base).
+                for (const m of stubMeshes) { try { m.dispose(); } catch (_) {} }
+                for (const s of stubSkels)  { try { s.dispose(); } catch (_) {} }
+
+                currentMeshes      = baseResult.meshes || [];
+                currentSkeletons   = baseResult.skeletons || [];
+                // Skip any animation the base file embedded — we want the
+                // retargeted clip to be the only one driving the rig.
+                for (const g of (baseResult.animationGroups || [])) {
+                  try { g.stop(); g.dispose(); } catch (_) {}
+                }
+                // Retarget each anim group onto the base, then dispose
+                // the originals (their targets pointed at the stub
+                // skeleton which we just disposed).
+                currentAnimGroups = [];
+                for (const g of stubGroups) {
+                  const retargeted = retargetAnimGroupOntoBase(g, currentMeshes, currentSkeletons);
+                  currentAnimGroups.push(retargeted);
+                  try { g.dispose(); } catch (_) {}
+                }
+
+                for (const m of currentMeshes) {
+                  if (m.getTotalVertices && m.getTotalVertices() > 0) {
+                    shadows.addShadowCaster(m);
+                    m.receiveShadows = true;
+                  }
+                }
+                updateMetadata(file + ' on ' + baseFile, baseResult);
+                frameCamera();
+              });
+          }
+
+          // Standalone load (no base, or file has its own mesh).
           currentMeshes = result.meshes || [];
           currentSkeletons = result.skeletons || [];
           currentAnimGroups = result.animationGroups || [];
-
-          // Stop any auto-playing animations — the dropdown controls playback.
           for (const g of currentAnimGroups) { try { g.stop(); } catch (_) {} }
-
-          // Register shadow casters on every real mesh.
           for (const m of currentMeshes) {
             if (m.getTotalVertices && m.getTotalVertices() > 0) {
               shadows.addShadowCaster(m);
               m.receiveShadows = true;
             }
           }
-
           updateMetadata(file, result);
           frameCamera();
         })
@@ -336,6 +449,7 @@
     // ── Sidebar list ───────────────────────────────────────────────────────
     const listEl = $('model-list');
     let activeItem = null;
+    let activeFile = null;
     for (const m of MODELS) {
       const el = document.createElement('div');
       el.className = 'model-item';
@@ -344,10 +458,18 @@
         if (activeItem) activeItem.classList.remove('active');
         el.classList.add('active');
         activeItem = el;
+        activeFile = m.file;
         loadModel(m.file).catch(() => { el.classList.add('broken'); });
       });
       listEl.appendChild(el);
     }
+
+    // Re-trigger the current load when the user changes the base model —
+    // makes the "with base" / "standalone" toggle interactive without
+    // needing to re-click the sidebar entry.
+    $('base-model').addEventListener('change', () => {
+      if (activeFile) loadModel(activeFile);
+    });
 
     // ── Animation controls ────────────────────────────────────────────────
     function selectedGroup() {
