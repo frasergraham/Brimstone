@@ -23,6 +23,10 @@ import {
   pinchAngle,
   twistDelta,
   clampPanTarget,
+  gestureLockDecision,
+  PINCH_LOCK_THRESHOLD_PX,
+  TWIST_LOCK_THRESHOLD_RAD,
+  GESTURE_SAMPLING_WINDOW_MS,
 } from '../src/renderer-3d.js';
 import { Renderer }   from '../src/renderer.js';
 import { Renderer3D } from '../src/renderer-3d.js';
@@ -395,3 +399,110 @@ describe('Renderer3D — is3D flag + tiltBy method', () => {
     assert.doesNotThrow(() => inst.tiltBy(0.1));
   });
 });
+
+describe('gestureLockDecision — 2-finger pinch/twist intent-lock helper', () => {
+  const T = {
+    pinch:    PINCH_LOCK_THRESHOLD_PX,
+    twist:    TWIST_LOCK_THRESHOLD_RAD,
+    windowMs: GESTURE_SAMPLING_WINDOW_MS,
+  };
+
+  test('threshold constants are sane', () => {
+    assert.ok(PINCH_LOCK_THRESHOLD_PX > 0 && PINCH_LOCK_THRESHOLD_PX < 50,
+      'pinch threshold should be a few pixels');
+    assert.ok(TWIST_LOCK_THRESHOLD_RAD > 0 && TWIST_LOCK_THRESHOLD_RAD < Math.PI / 8,
+      'twist threshold should be a few degrees, not large');
+    assert.ok(GESTURE_SAMPLING_WINDOW_MS >= 50 && GESTURE_SAMPLING_WINDOW_MS <= 250,
+      'sampling window should be short — humans expect ~100ms responsiveness');
+  });
+
+  test('pinch crosses first → locks to zoom', () => {
+    // 12px of spread well past 6px threshold, 1° of twist well below 3°.
+    const d = gestureLockDecision(12, 1 * Math.PI / 180, 30, T);
+    assert.equal(d, 'zoom');
+  });
+
+  test('twist crosses first → locks to rotate', () => {
+    // 8° twist past 3° threshold, 2px spread under 6px.
+    const d = gestureLockDecision(2, 8 * Math.PI / 180, 30, T);
+    assert.equal(d, 'rotate');
+  });
+
+  test('both below threshold within window → keep sampling', () => {
+    const d = gestureLockDecision(3, 1 * Math.PI / 180, 40, T);
+    assert.equal(d, 'sampling');
+  });
+
+  test('window expired with one axis bigger → tie-break to larger relative motion', () => {
+    // Both sub-threshold. Pinch is at 5/6 = 0.83 of threshold; twist is at
+    // 1°/3° = 0.33. Pinch has larger relative motion → 'zoom'.
+    const d = gestureLockDecision(5, 1 * Math.PI / 180, 200, T);
+    assert.equal(d, 'zoom');
+  });
+
+  test('window expired with both axes essentially zero → none', () => {
+    const d = gestureLockDecision(0.2, 0.001, 500, T);
+    assert.equal(d, 'none');
+  });
+
+  test('simultaneous threshold crossing — larger relative motion wins (zoom)', () => {
+    // Pinch at 2× threshold (12px / 6px), twist at 1.1× threshold.
+    const d = gestureLockDecision(12, 1.1 * TWIST_LOCK_THRESHOLD_RAD, 50, T);
+    assert.equal(d, 'zoom');
+  });
+
+  test('simultaneous threshold crossing — larger relative motion wins (rotate)', () => {
+    // Pinch at 1.05× threshold, twist at 3× threshold.
+    const d = gestureLockDecision(1.05 * PINCH_LOCK_THRESHOLD_PX, 3 * TWIST_LOCK_THRESHOLD_RAD, 50, T);
+    assert.equal(d, 'rotate');
+  });
+
+  test('zero-distance pinch with crossing twist → locks to rotate', () => {
+    // Edge case: fingers stay equidistant but rotate around a centre.
+    const d = gestureLockDecision(0, 5 * Math.PI / 180, 30, T);
+    assert.equal(d, 'rotate');
+  });
+
+  test('negative deltas treated by magnitude (pinch in)', () => {
+    // Fingers pinched together: dDist is negative but still crosses.
+    const d = gestureLockDecision(-10, 0.5 * Math.PI / 180, 30, T);
+    assert.equal(d, 'zoom');
+  });
+
+  test('negative twist treated by magnitude', () => {
+    const d = gestureLockDecision(1, -5 * Math.PI / 180, 30, T);
+    assert.equal(d, 'rotate');
+  });
+
+  test('uses default thresholds when none passed', () => {
+    // Same scenario as "pinch crosses first" but without an explicit T.
+    const d = gestureLockDecision(12, 1 * Math.PI / 180, 30);
+    assert.equal(d, 'zoom');
+  });
+
+  test('caller can override thresholds (e.g. tighter pinch)', () => {
+    // With pinch threshold raised to 20px, a 12px spread no longer crosses.
+    const d = gestureLockDecision(12, 1 * Math.PI / 180, 30, { pinch: 20, twist: T.twist, windowMs: T.windowMs });
+    assert.equal(d, 'sampling');
+  });
+
+  test('relative twist near ±π wrap (caller responsibility): magnitude of normalised delta is used', () => {
+    // Caller passes a normalised twistDelta already; we just verify that a
+    // small wrapped magnitude (e.g. +179° → -179° = +2°) does NOT trigger
+    // a rotate lock by itself.
+    const wrapDelta = twistDelta((179 * Math.PI) / 180, (-179 * Math.PI) / 180); // ≈ +2°
+    const d = gestureLockDecision(1, wrapDelta, 30, T);
+    assert.equal(d, 'sampling',
+      'a 2° wrap-shortcut should NOT cross the 3° lock threshold');
+  });
+
+  test('window edge — at exactly the window boundary, still sampling if no cross', () => {
+    // At elapsed === windowMs, we have NOT expired yet (strict <).
+    const d = gestureLockDecision(3, 1 * Math.PI / 180, GESTURE_SAMPLING_WINDOW_MS, T);
+    // Window has expired (elapsed >= windowMs branch), so decision is
+    // tie-break or none. Both axes are at 0.5 / 0.33 → both above 10%
+    // negligible threshold → tie-break to zoom.
+    assert.equal(d, 'zoom');
+  });
+});
+

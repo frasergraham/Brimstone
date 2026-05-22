@@ -169,6 +169,73 @@ export function twistDelta(prevAngle, currAngle) {
   return d;
 }
 
+/** Two-finger gesture intent-lock thresholds. The operator's iPhone playtest
+ *  found simultaneous pinch+twist "wonky" — any tiny twist noise applied
+ *  while pinching would shake the camera, and vice versa. The fix is to
+ *  sample for a short window when the second finger lands, decide whether
+ *  the user wants pinch (zoom) or twist (rotate), and ignore the other axis
+ *  for the rest of the gesture (until a finger lifts). */
+export const PINCH_LOCK_THRESHOLD_PX  = 6;          // ~6 pixels of spread
+export const TWIST_LOCK_THRESHOLD_RAD = 3 * Math.PI / 180; // ≈0.052 rad / 3°
+export const GESTURE_SAMPLING_WINDOW_MS = 100;
+
+/** Decide which two-finger gesture intent the user has expressed.
+ *
+ *  Inputs are the absolute Δ-from-start of each axis (distance in pixels,
+ *  angle in radians), the elapsed ms since the second finger landed, and a
+ *  thresholds bag (overridable for tests; defaults match the constants
+ *  above).
+ *
+ *  Return values:
+ *    'zoom'      — pinch threshold crossed first → lock to radius
+ *    'rotate'    — twist threshold crossed first → lock to alpha
+ *    'sampling'  — neither threshold crossed yet AND the window has not
+ *                  expired; caller should wait for more motion
+ *    'none'      — sampling window expired with both axes still negligible
+ *                  (relative motion below ~10% of either threshold either
+ *                  side); the gesture is essentially idle, fall through
+ *
+ *  Tie-break rule: when both axes cross their threshold in the same frame
+ *  (or both are sub-threshold at window expiry but one is decisively
+ *  larger), the axis with greater *relative* motion (Δ / threshold) wins.
+ *  That keeps the choice scale-free — a 12px pinch vs a 6° twist is
+ *  unambiguously a zoom; a 6px pinch vs a 6° twist tips the same way it
+ *  would at twice the scale.
+ *
+ *  Pure helper — no DOM/Babylon — so it can be unit-tested directly.
+ */
+export function gestureLockDecision(deltaDist, deltaAngle, elapsedMs, thresholds = {}) {
+  const pinchT   = thresholds.pinch   ?? PINCH_LOCK_THRESHOLD_PX;
+  const twistT   = thresholds.twist   ?? TWIST_LOCK_THRESHOLD_RAD;
+  const windowMs = thresholds.windowMs ?? GESTURE_SAMPLING_WINDOW_MS;
+
+  const dDist  = Math.abs(deltaDist);
+  const dAngle = Math.abs(deltaAngle);
+  const rPinch = pinchT > 0 ? dDist  / pinchT : 0;
+  const rTwist = twistT > 0 ? dAngle / twistT : 0;
+
+  const pinchHit = rPinch >= 1;
+  const twistHit = rTwist >= 1;
+
+  if (pinchHit && twistHit) {
+    // Same-frame double crossing — use relative motion to tie-break.
+    return rPinch >= rTwist ? 'zoom' : 'rotate';
+  }
+  if (pinchHit) return 'zoom';
+  if (twistHit) return 'rotate';
+
+  // Neither crossed yet — keep sampling unless the window has run out.
+  if (elapsedMs < windowMs) return 'sampling';
+
+  // Window expired with no clean cross — pick the axis with the larger
+  // relative motion, but bail out to 'none' if both are essentially zero
+  // (under 10% of their threshold) so a still 2-finger touch doesn't lock
+  // into a random axis.
+  const NEGLIGIBLE = 0.1;
+  if (rPinch < NEGLIGIBLE && rTwist < NEGLIGIBLE) return 'none';
+  return rPinch >= rTwist ? 'zoom' : 'rotate';
+}
+
 /** Clamp a camera pan target so it can't roam beyond the map's XZ extents.
  *  Returns a new {x, y, z} object — does not mutate the input. `margin` is
  *  in world units, applied uniformly outside the map bounds (so the player
@@ -1001,8 +1068,17 @@ export class Renderer3D {
     this._customInputPointers = pointers;
     // Two-finger gesture state — primed on the second pointerdown, used and
     // reset on pointerup/cancel.
-    let lastPinchDist  = 0;
-    let lastPinchAngle = 0;
+    //
+    // gestureMode evolves: 'none' (no 2-finger gesture) → 'sampling' (second
+    // finger just landed, waiting to see if user pinches or twists) → 'zoom'
+    // or 'rotate' (locked for the rest of the gesture). See
+    // `gestureLockDecision` above for the lock criteria.
+    let lastPinchDist    = 0;
+    let lastPinchAngle   = 0;
+    let gestureMode      = 'none';
+    let gestureStartDist  = 0;
+    let gestureStartAngle = 0;
+    let gestureStartTime  = 0;
 
     // Sensitivity knobs — tuned to the operator's iPhone playtest. Pan uses
     // panningSensibility (Babylon convention: lower number = faster). Twist
@@ -1027,12 +1103,30 @@ export class Renderer3D {
       const [a, b] = entries;
       const newDist  = pinchDistance(a, b);
       const newAngle = pinchAngle(a, b);
-      if (lastPinchDist > 0) {
+
+      // Intent locking: while gestureMode is 'sampling' (set on the second
+      // pointerdown), evaluate the lock decision and possibly transition to
+      // 'zoom' or 'rotate'. Once locked, only that axis is applied for the
+      // rest of the gesture — pinching while rotating no longer wobbles
+      // zoom, and vice versa.
+      if (gestureMode === 'sampling') {
+        const deltaDist  = newDist  - gestureStartDist;
+        const deltaAngle = twistDelta(gestureStartAngle, newAngle);
+        const elapsed    = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - gestureStartTime;
+        const decision   = gestureLockDecision(deltaDist, deltaAngle, elapsed);
+        if (decision === 'zoom' || decision === 'rotate' || decision === 'none') {
+          gestureMode = decision;
+        }
+        // 'sampling' → stay sampling; deltas are deliberately not applied
+        // during the sampling window so a small noisy frame doesn't bleed
+        // into either axis before lock.
+      }
+
+      if (gestureMode === 'zoom' && lastPinchDist > 0) {
         const dDist = newDist - lastPinchDist;
         // Spread fingers (newDist > lastPinchDist) → zoom in → radius shrinks.
         camera.inertialRadiusOffset -= dDist * PINCH_RADIUS_PER_PX;
-      }
-      if (lastPinchAngle !== 0 || lastPinchDist > 0) {
+      } else if (gestureMode === 'rotate' && (lastPinchAngle !== 0 || lastPinchDist > 0)) {
         const dAngle = twistDelta(lastPinchAngle, newAngle);
         // Twist sign convention: clockwise finger rotation spins the camera
         // clockwise (alpha decreases) — matches "I'm rotating the board".
@@ -1062,16 +1156,24 @@ export class Renderer3D {
         button: e.button,
       });
       // Reset two-finger state when the second finger lands so the first
-      // frame's deltas don't snap-rotate the camera.
+      // frame's deltas don't snap-rotate the camera. Also enter the
+      // 'sampling' phase of intent-locking — applyTwoFingerGesture will
+      // decide whether the user means to pinch or twist within the first
+      // ~100ms of motion.
       if (pointers.size === 2) {
         const arr = [...pointers.values()];
         lastPinchDist  = pinchDistance(arr[0], arr[1]);
         lastPinchAngle = pinchAngle(arr[0], arr[1]);
+        gestureStartDist  = lastPinchDist;
+        gestureStartAngle = lastPinchAngle;
+        gestureStartTime  = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        gestureMode       = 'sampling';
       } else if (pointers.size > 2) {
         // 3+ pointers — ignore extras; the spec is explicit about no 3-finger
         // tilt. Wipe two-finger state so the recent extras don't drive twist.
         lastPinchDist  = 0;
         lastPinchAngle = 0;
+        gestureMode    = 'none';
       }
     };
 
@@ -1115,6 +1217,7 @@ export class Renderer3D {
       if (pointers.size < 2) {
         lastPinchDist  = 0;
         lastPinchAngle = 0;
+        gestureMode    = 'none';
       }
     };
 
