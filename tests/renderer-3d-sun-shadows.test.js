@@ -86,10 +86,11 @@ describe('Renderer3D — sunIntensityForPhase', () => {
       `dawn/dusk intensity ${dawn} should sit between night and day`);
   });
 
-  test('night is effectively off — close to zero so shadows fade out', () => {
+  test('night sun acts as moonlight — dimmer than day but bright enough to cast shadows', () => {
     const night = sunIntensityForPhase(Phase.NIGHT);
-    assert.ok(night >= 0, 'night intensity non-negative');
-    assert.ok(night < 0.2, `night intensity should fade to near-zero, got ${night}`);
+    const day   = sunIntensityForPhase(Phase.DAY);
+    assert.ok(night > 0, 'night intensity > 0 so cast shadows still project');
+    assert.ok(night < day, `night ${night} should be dimmer than day ${day}`);
   });
 
   test('day > dawn = dusk > night ordering', () => {

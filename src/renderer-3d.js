@@ -5530,14 +5530,15 @@ export const PHASE_LIGHT_CONFIG = Object.freeze({
   },
   night: {
     intensity: 1.16, color: { r: 0.68, g: 0.73, b: 0.86 }, clear: { r: 0.00, g: 0.05, b: 0.15 },
-    // Night ambient bumped considerably — the sun is effectively off
-    // (intensity 0.08), so the ambient + hemi terms carry the entire
-    // visibility floor for both lit and fogged tiles. Cool blue-violet
-    // ambient + the lifted hemi makes the moonlit map readable without
-    // forcing the operator to crank brightness.
+    // Night ambient + hemi carry general visibility; the directional
+    // light here acts as moonlight — kept at a modest intensity (was 0.08
+    // = effectively off, which meant zero cast shadows at night) so
+    // standees / buildings / trees still throw shadows onto the ground
+    // under a near-overhead moon. Cool blue-violet ambient preserves the
+    // moonlit mood.
     ambient: { r: 0.58, g: 0.66, b: 0.91 },
     fogTint: 0.36,
-    sun: { dir: { x:  0.00, y: -1.00, z: 0.10 }, intensity: 0.08 },
+    sun: { dir: { x:  0.00, y: -1.00, z: 0.10 }, intensity: 0.60 },
   },
 });
 

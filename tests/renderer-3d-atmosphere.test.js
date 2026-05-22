@@ -67,17 +67,16 @@ describe('Renderer3D — getPhaseLightConfig', () => {
     assert.ok(c.color.b < c.color.g, 'dusk blue lowest');
   });
 
-  test('night = cool blue, sun effectively off', () => {
+  test('night = cool blue, sun acts as moonlight (dimmer than day, still casts shadows)', () => {
     const c = getPhaseLightConfig(Phase.NIGHT);
-    assert.ok(c.sun.intensity < 0.2,
-      `night sun ${c.sun.intensity} should be near-zero so the moon/lanterns read`);
+    const day = getPhaseLightConfig(Phase.DAY);
+    assert.ok(c.sun.intensity > 0,
+      `night sun ${c.sun.intensity} must be > 0 so cast shadows still project`);
+    assert.ok(c.sun.intensity < day.sun.intensity,
+      `night sun ${c.sun.intensity} should be dimmer than day ${day.sun.intensity}`);
     // Cool tone: blue channel dominates red, green sits between.
     assert.ok(c.color.b > c.color.r, 'night blue > red');
     assert.ok(c.color.r < c.color.b, 'night red channel cooler than blue');
-    // Hemi can outpace day at night by design — the sun is off, so the
-    // ambient + hemi terms have to carry visibility for both lit and
-    // fogged tiles. The "night feel" is preserved via the cool colour
-    // tint + deep clear-colour sky.
   });
 
   test('unknown phase falls back to day config (defensive)', () => {
