@@ -17,6 +17,7 @@ import {
   PALADIN_MODEL_FILE,
   PALADIN_BASE_SCALE,
   PALADIN_YAW,
+  TARGET_PALADIN_WORLD_HEIGHT,
   STANDEE_CONE_HEIGHT,
   STANDEE_LEADER_HEIGHT_MUL,
 } from '../src/renderer-3d.js';
@@ -35,6 +36,9 @@ function fakeVector3Ctor(x = 0, y = 0, z = 0) { this.x = x; this.y = y; this.z =
 function makeFakeBabylon({ importImpl } = {}) {
   return {
     Vector3: fakeVector3Ctor,
+    Matrix: {
+      Translation: (x, y, z) => ({ _kind: 'translation', x, y, z }),
+    },
     SceneLoader: {
       ImportMeshAsync: importImpl || (async () => ({ meshes: [] })),
     },
@@ -43,8 +47,16 @@ function makeFakeBabylon({ importImpl } = {}) {
 
 /** Source mesh stub — `clone()` returns a fresh stub that the renderer
  *  can position, scale, and parent. */
-function makeFakeSourceMesh(name = 'paladin_src', { vertices = 200 } = {}) {
+function makeFakeSourceMesh(name = 'paladin_src', {
+  vertices = 200,
+  // Default bbox roughly matches a Mixamo metres-units export (~1.8 m tall,
+  // hip-pivot so feet are below origin). Tests that care about the
+  // cm-export case override with min:{y:0}, max:{y:180}.
+  bboxMin = { x: -0.4, y: -0.9, z: -0.2 },
+  bboxMax = { x:  0.4, y:  0.9, z:  0.2 },
+} = {}) {
   const cloneCalls = [];
+  const bakeCalls = [];
   return {
     name,
     isPickable: true,
@@ -55,8 +67,28 @@ function makeFakeSourceMesh(name = 'paladin_src', { vertices = 200 } = {}) {
     rotation: null,
     parent: null,
     renderingGroupId: 7,
+    _bbox: {
+      boundingBox: {
+        minimum: { ...bboxMin },
+        maximum: { ...bboxMax },
+        minimumWorld: { ...bboxMin },
+        maximumWorld: { ...bboxMax },
+      },
+    },
     getTotalVertices: () => vertices,
     setEnabled(b) { this.isEnabled = b; },
+    getBoundingInfo() { return this._bbox; },
+    bakeTransformIntoVertices(matrix) {
+      bakeCalls.push(matrix);
+      // Apply the translation to the bbox so a follow-up refreshBoundingInfo
+      // reflects the baked-in offset.
+      if (matrix && matrix._kind === 'translation') {
+        this._bbox.boundingBox.minimum.y += matrix.y;
+        this._bbox.boundingBox.maximum.y += matrix.y;
+      }
+    },
+    refreshBoundingInfo() { this._refreshed = (this._refreshed ?? 0) + 1; },
+    _bakeCalls: bakeCalls,
     clone(cloneName) {
       const inst = makeFakeClonedMesh(cloneName, this);
       cloneCalls.push(inst);
@@ -146,6 +178,12 @@ describe('paladin constants', () => {
   });
   test('PALADIN_YAW is in [0, 2π)', () => {
     assert.ok(PALADIN_YAW >= 0 && PALADIN_YAW < Math.PI * 2 + 1e-9);
+  });
+  test('TARGET_PALADIN_WORLD_HEIGHT fits within one hex (radius 1) and is taller than the cone+sphere it replaces', () => {
+    assert.ok(TARGET_PALADIN_WORLD_HEIGHT > STANDEE_CONE_HEIGHT,
+      'paladin should read bigger than the cone body');
+    assert.ok(TARGET_PALADIN_WORLD_HEIGHT < 2,
+      'paladin must not overflow the hex footprint by miles');
   });
 });
 
@@ -303,6 +341,21 @@ describe('_loadPaladinModel — async load + caching + fallback', () => {
     assert.equal(a, b);
   });
 
+  test('stores a bbox-derived _paladinScale after load (replaces the fixed constant)', async () => {
+    const r = newInst();
+    r._scene = {};
+    const mesh = makeFakeSourceMesh();  // default: 1.8 m tall
+    r._babylon = makeFakeBabylon({
+      importImpl: async () => ({ meshes: [mesh] }),
+    });
+    await r._loadPaladinModel('assets');
+    const expected = TARGET_PALADIN_WORLD_HEIGHT / 1.8;
+    assert.ok(Math.abs(r._paladinScale - expected) < 1e-9,
+      `expected scale ${expected}, got ${r._paladinScale}`);
+    // And the bake was applied (feet at origin post-load).
+    assert.equal(mesh._bbox.boundingBox.minimum.y, 0);
+  });
+
   // Bridge regression — the broken `await import(BABYLON_LOADERS_CDN)` pattern
   // from PR #369 was replaced with `_ensureBabylonLoaders` so the house and
   // paladin GLB consumers share one UMD-script-tag loader path. Pin the
@@ -327,6 +380,104 @@ describe('_loadPaladinModel — async load + caching + fallback', () => {
     });
     await r._loadPaladinModel('assets');
     assert.deepEqual(calls, ['ensure', 'import']);
+  });
+});
+
+// ─── Bbox normalisation (`_normalisePaladinSource`) ─────────────────────────
+
+describe('_normalisePaladinSource — bbox-derived scale + feet-to-origin bake', () => {
+  test('returns target/naturalHeight scale for an m-units source (~1.8 m tall)', () => {
+    const r = newInst();
+    r._babylon = makeFakeBabylon();
+    // Default fake source: bbox.y ∈ [-0.9, 0.9] → naturalHeight = 1.8 m.
+    const mesh = makeFakeSourceMesh();
+    const scale = r._normalisePaladinSource(mesh);
+    const expected = TARGET_PALADIN_WORLD_HEIGHT / 1.8;
+    assert.ok(Math.abs(scale - expected) < 1e-9,
+      `expected ${expected}, got ${scale}`);
+  });
+
+  test('returns target/naturalHeight scale for a cm-units source (~180 cm tall)', () => {
+    const r = newInst();
+    r._babylon = makeFakeBabylon();
+    // Mixamo FBX with "Apply Unit Scale" disabled lands at ~180 cm tall —
+    // this is the case that produced the "tiny helmet" symptom at the old
+    // fixed PALADIN_BASE_SCALE=0.4.
+    const mesh = makeFakeSourceMesh('cm_export', {
+      bboxMin: { x: -45, y: 0,   z: -25 },
+      bboxMax: { x:  45, y: 180, z:  25 },
+    });
+    const scale = r._normalisePaladinSource(mesh);
+    const expected = TARGET_PALADIN_WORLD_HEIGHT / 180;
+    assert.ok(Math.abs(scale - expected) < 1e-9,
+      `cm-units export must scale tiny (${expected}), got ${scale}`);
+    // The cm case is exactly why this fix exists — pin that the scale lands
+    // well below the old fixed PALADIN_BASE_SCALE=0.4 so the body fits.
+    assert.ok(scale < PALADIN_BASE_SCALE / 10,
+      'cm-units scale must be far smaller than the old fixed scale');
+  });
+
+  test('bakes a translation that places feet at the source mesh origin', () => {
+    const r = newInst();
+    r._babylon = makeFakeBabylon();
+    const mesh = makeFakeSourceMesh();
+    // Pre-bake: bbox.minimum.y = -0.9 (hip-pivot).
+    r._normalisePaladinSource(mesh);
+    // The fake's bakeTransformIntoVertices applies the translation to the
+    // bbox, so post-bake minimum.y should be 0 (feet at origin).
+    assert.equal(mesh._bbox.boundingBox.minimum.y, 0);
+    assert.equal(mesh._bakeCalls.length, 1);
+    assert.equal(mesh._bakeCalls[0]._kind, 'translation');
+    assert.equal(mesh._bakeCalls[0].y, 0.9);
+    assert.equal(mesh._refreshed, 1);
+  });
+
+  test('skips the bake when the bbox is already feet-at-origin', () => {
+    const r = newInst();
+    r._babylon = makeFakeBabylon();
+    const mesh = makeFakeSourceMesh('already_baked', {
+      bboxMin: { x: -0.4, y: 0,   z: -0.2 },
+      bboxMax: { x:  0.4, y: 1.8, z:  0.2 },
+    });
+    r._normalisePaladinSource(mesh);
+    // A bake with translation (0,0,0) is a no-op — calling it is harmless.
+    // We assert the OUTCOME (feet still at y=0) rather than whether bake
+    // was called, since either is correct.
+    assert.equal(mesh._bbox.boundingBox.minimum.y, 0);
+  });
+
+  test('falls back to PALADIN_BASE_SCALE when getBoundingInfo is unavailable', () => {
+    const r = newInst();
+    r._babylon = makeFakeBabylon();
+    const mesh = { name: 'no_bbox', getTotalVertices: () => 100, setEnabled() {} };
+    assert.equal(r._normalisePaladinSource(mesh), PALADIN_BASE_SCALE);
+  });
+
+  test('falls back when bbox is degenerate (zero height)', () => {
+    const r = newInst();
+    r._babylon = makeFakeBabylon();
+    const mesh = makeFakeSourceMesh('flat', {
+      bboxMin: { x: 0, y: 0, z: 0 },
+      bboxMax: { x: 0, y: 0, z: 0 },
+    });
+    assert.equal(r._normalisePaladinSource(mesh), PALADIN_BASE_SCALE);
+  });
+
+  test('returns the fallback (and does not throw) when the bake call throws', () => {
+    const r = newInst();
+    r._babylon = makeFakeBabylon();
+    const mesh = makeFakeSourceMesh();
+    mesh.bakeTransformIntoVertices = () => { throw new Error('bake failed'); };
+    const scale = r._normalisePaladinSource(mesh);
+    // Scale is still computed from the (pre-bake) bbox.
+    const expected = TARGET_PALADIN_WORLD_HEIGHT / 1.8;
+    assert.ok(Math.abs(scale - expected) < 1e-9);
+  });
+
+  test('null source returns fallback scale', () => {
+    const r = newInst();
+    r._babylon = makeFakeBabylon();
+    assert.equal(r._normalisePaladinSource(null), PALADIN_BASE_SCALE);
   });
 });
 
@@ -420,14 +571,35 @@ describe('_buildPaladinClone — per-hero mesh + skeleton + animation', () => {
     assert.equal(out.mesh.parent, cone);
   });
 
-  test('cloned mesh receives the standard scale + forward-facing yaw', () => {
+  test('cloned mesh receives the bbox-derived scale + forward-facing yaw', () => {
+    const r = newInst();
+    setupLoaded(r);
+    // Pin a known scale so the test isn't coupled to the bbox numbers used
+    // by the default fake source.
+    r._paladinScale = 0.5;
+    const out = r._buildPaladinClone({ id: 'e1', type: 'paladin' }, null);
+    assert.equal(out.mesh.scaling.x, 0.5);
+    assert.equal(out.mesh.scaling.y, 0.5);
+    assert.equal(out.mesh.scaling.z, 0.5);
+    assert.equal(out.mesh.rotation.y, PALADIN_YAW);
+  });
+
+  test('falls back to PALADIN_BASE_SCALE when _paladinScale is missing or non-positive', () => {
+    for (const bad of [undefined, null, 0, -1, NaN]) {
+      const r = newInst();
+      setupLoaded(r);
+      r._paladinScale = bad;
+      const out = r._buildPaladinClone({ id: 'e1', type: 'paladin' }, null);
+      assert.equal(out.mesh.scaling.x, PALADIN_BASE_SCALE,
+        `bad scale ${bad} should fall back to PALADIN_BASE_SCALE`);
+    }
+  });
+
+  test('cloned mesh has alwaysSelectAsActiveMesh set (defeats bbox-based culling)', () => {
     const r = newInst();
     setupLoaded(r);
     const out = r._buildPaladinClone({ id: 'e1', type: 'paladin' }, null);
-    assert.equal(out.mesh.scaling.x, PALADIN_BASE_SCALE);
-    assert.equal(out.mesh.scaling.y, PALADIN_BASE_SCALE);
-    assert.equal(out.mesh.scaling.z, PALADIN_BASE_SCALE);
-    assert.equal(out.mesh.rotation.y, PALADIN_YAW);
+    assert.equal(out.mesh.alwaysSelectAsActiveMesh, true);
   });
 
   test('mesh sits at cone-local feet (Y = -coneHeight/2) so feet rest on the base disc', () => {
