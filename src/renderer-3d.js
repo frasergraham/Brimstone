@@ -1785,9 +1785,11 @@ export class Renderer3D {
 
       // Flat hex polygon — identical recipe to _buildTileMesh's flat tile.
       const hex = this._buildFlatHexMesh(`border_tile_${pos.col}_${pos.row}`, parent, x, z);
-      // Border-forest hex tiles render with the fog-of-war tint so the ground
-      // beyond the playable map reads as out-of-sight wilderness, then scene
-      // fog (FOGMODE_LINEAR) fades them toward grey at distance.
+      // Border-forest hex tiles ALWAYS render with the fog-of-war tint —
+      // they sit outside the playable area, never observable by any player,
+      // so they consistently read as wilderness ground beyond sight. The
+      // trees on top stay in their normal (unfogged) colours so the
+      // wilderness silhouette doesn't go too dark to read against the sky.
       const syntheticTile = { type: TileType.FOREST, col: pos.col, row: pos.row };
       const borderMat = this._terrainMaterialFor(
         terrainSpriteIdFor(syntheticTile, pos.col, pos.row),
@@ -2724,8 +2726,11 @@ export class Renderer3D {
       const md = hex.metadata;
       if (!md) continue;
       const syntheticTile = { type: TileType.FOREST, col: md.col, row: md.row };
+      // Always use the fogged variant — border tiles are permanently
+      // out-of-sight wilderness (see `_buildMapBorderForest`).
       const mat = this._terrainMaterialFor(
         terrainSpriteIdFor(syntheticTile, md.col, md.row),
+        { fogged: true },
       );
       if (mat) hex.material = mat;
     }
@@ -5474,7 +5479,12 @@ export const PHASE_LIGHT_CONFIG = Object.freeze({
   },
   night: {
     intensity: 0.21, color: { r: 0.70, g: 0.78, b: 1.00 }, clear: { r: 0.12, g: 0.18, b: 0.32 },
-    ambient: { r: 0.20, g: 0.24, b: 0.40 },
+    // Night ambient bumped — sun is effectively off, hemi is dim, so the
+    // ambient term is the only thing carrying the floor on most surfaces
+    // (including fogged-of-war hexes whose own diffuse contribution is
+    // multiplied by FOG_TILE_DARKEN). Cool blue-violet keeps the moonlit
+    // mood while making both lit and fogged terrain readable.
+    ambient: { r: 0.42, g: 0.48, b: 0.66 },
     sun: { dir: { x:  0.0, y: -1.0, z: 0.1 }, intensity: 0.10 },
   },
 });
