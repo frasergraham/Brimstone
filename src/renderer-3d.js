@@ -1111,9 +1111,10 @@ export class Renderer3D {
     // above is what shows on either side of the path.
 
     // ── Bridge: wooden planks crossing the river hex ──────────────────────
-    // Plank Y raised so the plank bottom sits clear of the river tube's top
-    // (RIVER_TUBE_Y + RIVER_TUBE_RADIUS ≈ 0.235). bottom = pos.y − 0.06,
-    // so pos.y = 0.30 → bottom 0.24, above the river ribbon.
+    // Plank sits just above the road ribbon (ROAD_RIBBON_Y = 0.086) so it
+    // reads as a low deck spanning the water. plank height = 0.12 so bottom
+    // = pos.y − 0.06; pos.y = 0.16 → bottom 0.10, comfortably above the road
+    // and river ribbons without floating high off the terrain.
     if (tile.type === TileType.BRIDGE) {
       const plank = BABYLON.MeshBuilder.CreateBox(
         `bridge_${tile.col}_${tile.row}`,
@@ -1123,7 +1124,7 @@ export class Renderer3D {
       plank.parent     = parent;
       plank.position.x = x;
       plank.position.z = z;
-      plank.position.y = 0.30;
+      plank.position.y = 0.16;
       plank.rotation.y = bridgeRotationY(tile, this.state.tiles);
       plank.material   = this._materialFor('#8a6030');
       plank.isPickable = false;
@@ -1182,13 +1183,16 @@ export class Renderer3D {
 
   // ─── Item 2: bezier road + river networks ────────────────────────────────
   //
-  // Build two merged tube meshes — one for the river, one for the road —
+  // Build two merged ribbon meshes — one for the river, one for the road —
   // overlaying the grass-coloured tile cylinders. Geometry comes from the
   // pure helpers `buildRiverNetworkStrokes` / `buildRoadNetworkStrokes`,
   // which mirror the 2D renderer's per-tile bezier construction. Each tile
   // contributes one through-bezier (optionally plus straight spokes at
-  // junctions); the per-tile tubes are merged with Mesh.MergeMeshes so the
-  // GPU sees ONE draw call per network regardless of map size.
+  // junctions). Each bezier sample is widened perpendicular-in-XZ into a
+  // flat ribbon strip (CreateRibbon), so the network reads as a painted
+  // path on the terrain rather than a raised tube. Per-tile ribbons are
+  // merged with Mesh.MergeMeshes so the GPU sees ONE draw call per network
+  // regardless of map size.
   _buildRoadRiverNetworks() {
     const BABYLON = this._babylon;
     const scene   = this._scene;
@@ -1199,50 +1203,60 @@ export class Renderer3D {
 
     if (riverStrokes.length > 0) {
       this._riverNetworkMesh = this._buildNetworkMesh(
-        'river', riverStrokes, RIVER_TUBE_RADIUS, RIVER_TUBE_Y,
+        'river', riverStrokes, RIVER_RIBBON_WIDTH, RIVER_RIBBON_Y,
         TILE_COLOR[TileType.RIVER],
       );
     }
     if (roadStrokes.length > 0) {
       this._roadNetworkMesh = this._buildNetworkMesh(
-        'road', roadStrokes, ROAD_TUBE_RADIUS, ROAD_TUBE_Y,
+        'road', roadStrokes, ROAD_RIBBON_WIDTH, ROAD_RIBBON_Y,
         TILE_COLOR[TileType.ROAD],
       );
     }
   }
 
-  /** Build a single merged tube mesh for one network (river OR road).
-   *  Each stroke becomes one CreateTube call; MergeMeshes collapses them all
-   *  into one mesh sharing one material. Returns the merged mesh (or null
-   *  if MergeMeshes refused — which happens when the source list is empty). */
-  _buildNetworkMesh(networkName, segments, radius, yPos, cssColor) {
+  /** Build a single merged flat-ribbon mesh for one network (river OR road).
+   *  Each stroke becomes one CreateRibbon call from a pair of parallel paths
+   *  offset ±width/2 perpendicular to the local tangent in the XZ plane, at a
+   *  constant Y. MergeMeshes collapses them all into one mesh sharing one
+   *  material. Returns the merged mesh (or null if MergeMeshes refused —
+   *  which happens when the source list is empty). */
+  _buildNetworkMesh(networkName, segments, width, yPos, cssColor) {
     const BABYLON = this._babylon;
     const scene   = this._scene;
     if (!segments || segments.length === 0) return null;
-    const tubes = [];
+    const ribbons = [];
     for (let s = 0; s < segments.length; s++) {
       const { tile, strokes } = segments[s];
       for (let i = 0; i < strokes.length; i++) {
         const pts = strokes[i];
         if (!pts || pts.length < 2) continue;
-        const path = pts.map(p => new BABYLON.Vector3(p.x, yPos, p.z));
-        const tube = BABYLON.MeshBuilder.CreateTube(
+        const { left, right } = ribbonOffsetPaths(pts, width);
+        const leftV3  = left.map(p  => new BABYLON.Vector3(p.x, yPos, p.z));
+        const rightV3 = right.map(p => new BABYLON.Vector3(p.x, yPos, p.z));
+        const ribbon = BABYLON.MeshBuilder.CreateRibbon(
           `${networkName}_${tile.col}_${tile.row}_${i}`,
-          { path, radius, tessellation: 8, cap: BABYLON.Mesh.CAP_ALL, updatable: false },
+          {
+            pathArray: [leftV3, rightV3],
+            sideOrientation: BABYLON.Mesh.DOUBLESIDE,
+            closeArray: false,
+            closePath: false,
+            updatable: false,
+          },
           scene,
         );
-        tube.isPickable = false;
-        tubes.push(tube);
+        ribbon.isPickable = false;
+        ribbons.push(ribbon);
       }
     }
-    if (tubes.length === 0) return null;
-    // MergeMeshes(meshes, disposeSource=true, allow32BitsIndices=true,
-    //   meshSubclass=undefined, subdivideWithSubMeshes=false, multiMultiMaterials=false)
-    const merged = BABYLON.Mesh.MergeMeshes(tubes, true, true, undefined, false, false);
+    if (ribbons.length === 0) return null;
+    const merged = BABYLON.Mesh.MergeMeshes(ribbons, true, true, undefined, false, false);
     if (!merged) return null;
     merged.parent     = this._mapRoot;
     merged.isPickable = false;
-    merged.material   = this._materialFor(cssColor);
+    const mat = this._materialFor(cssColor);
+    mat.backFaceCulling = false; // belt-and-braces for any low/below camera angles
+    merged.material   = mat;
     merged.name       = `${networkName}Network`;
     return merged;
   }
@@ -3083,8 +3097,8 @@ export const TERRAIN_DISC_RADIUS_MUL = 1.0;
  *  fight against the prism top, making it invisible in-game even though the
  *  16 unit tests (which only exercise pure helpers, never the actual mesh)
  *  passed. A 0.009 lift comfortably wins the fight at any view distance,
- *  while still staying below the river bezier tube centre (0.085) so a
- *  road/river tile's grass-underlay disc doesn't pop in front of the tube. */
+ *  while still staying below the river ribbon (RIVER_RIBBON_Y = 0.085) so a
+ *  road/river tile's grass-underlay disc doesn't pop in front of the ribbon. */
 export const TERRAIN_DISC_Y_OFFSET = 0.084;
 
 /** Variant counts for each terrain type that has multiple sprite variants.
@@ -3361,28 +3375,84 @@ export function tileSlotWorldPositions(col, row, occupants, radius = HEX_RADIUS_
 //
 // Ports the 2D renderer's _drawRiverLayer / _drawRoadLayer logic to 3D.
 // For each river/road/bridge tile we build smooth quadratic-bezier strokes
-// between edge midpoints (control point = hex centre), then turn each stroke
-// into a thin tube mesh; finally MergeMeshes collapses all tubes per network
-// into ONE mesh per network so the GPU sees minimal draw calls.
+// between edge midpoints (control point = hex centre), then widen each stroke
+// into a flat ribbon strip (parallel-offset paths fed to MeshBuilder.CreateRibbon)
+// at a constant Y just above the terrain disc. Finally MergeMeshes collapses
+// all per-tile ribbons into ONE mesh per network so the GPU sees minimal
+// draw calls. Ribbons lie flat on the terrain — no vertical undulation —
+// retaining the curved bezier shape in the XZ plane.
 //
 // Tile underneath stays grass (see tileColorFor / terrainSpriteIdFor above).
 // Bridges are special: they appear in BOTH networks (a water bezier flows
 // through, a road bezier crosses); the bridge plank floats above both.
 
-/** River tube radius in world units (≈ 0.3 wide). */
-export const RIVER_TUBE_RADIUS = 0.15;
-/** Road tube radius in world units (≈ 0.2 wide). */
-export const ROAD_TUBE_RADIUS  = 0.10;
-/** Y above tile prism top (0.075) — river sits just above the terrain disc. */
-export const RIVER_TUBE_Y      = 0.085;
-/** Road sits a touch above the river so over-bridge crossings layer cleanly. */
-export const ROAD_TUBE_Y       = 0.095;
+/** River ribbon width in world units. Hex-width = SQRT3 ≈ 1.732, so this is
+ *  roughly half the hex width — broad enough to read as a river without
+ *  spilling outside the tile diamond. */
+export const RIVER_RIBBON_WIDTH = 0.85;
+/** Road ribbon width — narrower than the river (matches the 2D path's strokeWidth
+ *  ratio: rivers wider than roads). ~0.35 × hex-width. */
+export const ROAD_RIBBON_WIDTH  = 0.6;
+/** Y above tile prism top (0.075) and disc top (0.084) — ribbon hugs the terrain. */
+export const RIVER_RIBBON_Y     = 0.085;
+/** Road sits 1 mm above the river so over-bridge crossings layer cleanly. */
+export const ROAD_RIBBON_Y      = 0.086;
 /** Number of bezier samples per stroke. 10 is smooth enough at this radius
  *  without bloating the tube vertex count on Campaign-size maps. */
 export const NETWORK_BEZIER_SEGMENTS = 10;
 
 /** Apothem (centre-to-edge distance) for a unit-radius pointy-top hex. */
 const HEX_APOTHEM = SQRT3 / 2;
+
+/**
+ * Given a list of bezier sample points in the XZ plane and a target ribbon
+ * width, return two parallel offset paths of the same length, equidistant
+ * from each input point along the perpendicular to the local tangent.
+ *
+ * Pure — no Babylon dependency. The renderer supplies a constant Y when
+ * building Vector3s from the returned `{x, z}` records, so the resulting
+ * ribbon lies flat on the terrain.
+ *
+ * Tangent at point i:
+ *   • i = 0          → forward difference  (points[1] − points[0])
+ *   • i = n − 1      → backward difference (points[n-1] − points[n-2])
+ *   • otherwise      → central difference  (points[i+1] − points[i-1])
+ *
+ * Perpendicular (in XZ): rotate tangent 90° around the Y axis, i.e.
+ *   (tx, tz) ↦ (−tz, tx).
+ *
+ * Returns `{ left, right }` — each an array of `{ x, z }` records of the same
+ * length as `points`. Left = +perp side, right = −perp side; the labels are
+ * arbitrary, what matters is that the two paths are on opposite sides.
+ */
+export function ribbonOffsetPaths(points, width) {
+  if (!Array.isArray(points) || points.length < 2) {
+    return { left: [], right: [] };
+  }
+  const half = width / 2;
+  const n = points.length;
+  const left  = new Array(n);
+  const right = new Array(n);
+  for (let i = 0; i < n; i++) {
+    let tx, tz;
+    if (i === 0) {
+      tx = points[1].x - points[0].x;
+      tz = points[1].z - points[0].z;
+    } else if (i === n - 1) {
+      tx = points[n - 1].x - points[n - 2].x;
+      tz = points[n - 1].z - points[n - 2].z;
+    } else {
+      tx = points[i + 1].x - points[i - 1].x;
+      tz = points[i + 1].z - points[i - 1].z;
+    }
+    const len = Math.hypot(tx, tz) || 1;
+    tx /= len; tz /= len;
+    const px = -tz, pz = tx;
+    left[i]  = { x: points[i].x + px * half, z: points[i].z + pz * half };
+    right[i] = { x: points[i].x - px * half, z: points[i].z - pz * half };
+  }
+  return { left, right };
+}
 
 /** Sample a quadratic bezier (p0, control p1, p2) at N+1 evenly-spaced t in [0,1].
  *  Pure — used by the network builder and exposed for unit tests. */

@@ -13,28 +13,28 @@ import {
   networkStrokesForTile,
   buildRiverNetworkStrokes,
   buildRoadNetworkStrokes,
-  RIVER_TUBE_RADIUS,
-  ROAD_TUBE_RADIUS,
-  RIVER_TUBE_Y,
-  ROAD_TUBE_Y,
+  RIVER_RIBBON_WIDTH,
+  ROAD_RIBBON_WIDTH,
+  RIVER_RIBBON_Y,
+  ROAD_RIBBON_Y,
   NETWORK_BEZIER_SEGMENTS,
   hexToWorld,
 } from '../src/renderer-3d.js';
 
 describe('Item 2 — bezier visual constants', () => {
   test('river is wider than road (matches 2D path strokeWidth ratio)', () => {
-    assert.ok(RIVER_TUBE_RADIUS > ROAD_TUBE_RADIUS,
-      `river ${RIVER_TUBE_RADIUS} should exceed road ${ROAD_TUBE_RADIUS}`);
+    assert.ok(RIVER_RIBBON_WIDTH > ROAD_RIBBON_WIDTH,
+      `river ${RIVER_RIBBON_WIDTH} should exceed road ${ROAD_RIBBON_WIDTH}`);
   });
 
   test('road sits slightly above the river so over-bridge crossings layer cleanly', () => {
-    assert.ok(ROAD_TUBE_Y > RIVER_TUBE_Y,
-      `road Y ${ROAD_TUBE_Y} should exceed river Y ${RIVER_TUBE_Y}`);
+    assert.ok(ROAD_RIBBON_Y > RIVER_RIBBON_Y,
+      `road Y ${ROAD_RIBBON_Y} should exceed river Y ${RIVER_RIBBON_Y}`);
   });
 
-  test('both tubes sit above the tile prism top (y=0.075)', () => {
-    assert.ok(RIVER_TUBE_Y > 0.075);
-    assert.ok(ROAD_TUBE_Y  > 0.075);
+  test('both ribbons sit above the tile prism top (y=0.075) and disc (y=0.084)', () => {
+    assert.ok(RIVER_RIBBON_Y > 0.084);
+    assert.ok(ROAD_RIBBON_Y  > 0.084);
   });
 
   test('segment count is reasonable (smooth without ballooning the vertex budget)', () => {
