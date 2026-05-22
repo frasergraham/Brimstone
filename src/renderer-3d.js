@@ -1179,7 +1179,11 @@ export class Renderer3D {
     // playable map regardless of zoom. Fixed values would either fog the
     // playable area when zoomed out or never reach the border when zoomed in.
     scene.fogMode    = BABYLON.Scene.FOGMODE_LINEAR;
-    scene.fogColor   = new BABYLON.Color3(0.70, 0.74, 0.80);
+    // fogColor follows the phase clear colour each frame (see
+    // `_applyLightConfig`) so the wilderness band blends seamlessly into
+    // the sky. Initial value here just so the first frame before
+    // `_applyLightConfig` runs has something sensible.
+    scene.fogColor   = new BABYLON.Color3(0.55, 0.72, 0.85);
     scene.fogEnabled = true;
 
     // Directional sun light — casts shadows from standees / buildings / trees
@@ -4199,8 +4203,15 @@ export class Renderer3D {
     const r = this._camera.radius;
     const playableHalf = (this._mapPanBounds?.depth ?? 19.5) / 2;
     const borderHalf   = playableHalf + 6 * 1.5;
+    // FOG_END_MUL stretches the fog's far edge past the border so the ramp
+    // is gentle — border tiles read as "fading into the distance" rather
+    // than going fully solid. 1.0 = full opacity at the border edge (too
+    // harsh per operator); 1.5 = ~45% opacity at the border, fully solid
+    // a half-band further out. Tunable; matched to the muted-fog look the
+    // operator asked for.
+    const FOG_END_MUL = 1.5;
     this._scene.fogStart = Math.sqrt(r * r + playableHalf * playableHalf);
-    this._scene.fogEnd   = Math.sqrt(r * r + borderHalf   * borderHalf);
+    this._scene.fogEnd   = Math.sqrt(r * r + (borderHalf * FOG_END_MUL) * (borderHalf * FOG_END_MUL));
   }
 
   _pumpPlanGhosts(nowMs) {
@@ -4292,6 +4303,10 @@ export class Renderer3D {
     const gs = HEMI_GROUND_SCALE;
     this._light.groundColor = new BABYLON.Color3(cfg.color.r * gs, cfg.color.g * gs, cfg.color.b * gs);
     this._scene.clearColor = new BABYLON.Color4(cfg.clear.r, cfg.clear.g, cfg.clear.b, 1.0);
+    // Fog colour mirrors the sky clear colour — the wilderness band fades
+    // into the same tint that fills the backdrop, so there's no visible
+    // seam where the band ends and the sky begins.
+    this._scene.fogColor = new BABYLON.Color3(cfg.clear.r, cfg.clear.g, cfg.clear.b);
     // Phase-tinted ambient — boosts visibility on shadowed faces when the
     // sun is low/off (night/dawn/dusk) while staying neutral at noon.
     if (cfg.ambient) {
