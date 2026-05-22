@@ -4908,10 +4908,14 @@ export function floatingTextTransform(t, riseDistance = 1.2) {
 // ─── Movement highlight overlay (exported for tests) ────────────────────────
 
 /** Y position of the flat highlight ring above the tile prism top (+0.075).
- *  Sits below the plan-marker disc (PLAN_DISC_Y = 0.16) and the road deck top
- *  (~0.155), so highlights read as an outline ON the tile, not floating above
- *  road decks or stacking on top of plan markers when both are active. */
-export const HIGHLIGHT_DISC_Y      = 0.085;
+ *  Must sit ABOVE the road/river ribbons (ROAD_RIBBON_Y = 0.086,
+ *  RIVER_RIBBON_Y = 0.085) so the green movement outline reads over road
+ *  tiles instead of being occluded by them. Sits BELOW the plan-marker disc
+ *  (PLAN_DISC_Y = 0.16) and the plan-line tubes (PLAN_LINE_Y = 0.18) so the
+ *  outline still reads as ground-anchored, not floating above the planning
+ *  overlay. Previous value 0.085 tied with the river ribbon and lost to the
+ *  road ribbon at 0.086. */
+export const HIGHLIGHT_DISC_Y      = 0.12;
 /** Minimum alpha applied when the source rgba is too transparent to read in
  *  the lit 3D scene. Round 4: bumped 0.30 → 0.75 because the highlight changed
  *  from a tile-covering disc (which read fine at low alpha) to a thin outline
