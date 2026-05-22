@@ -24,6 +24,7 @@ import {
   TILE_COLOR,
   BUILDING_COLOR,
   BUILDING_LABEL,
+  BuildingType,
 } from './tiles.js';
 import { EntityType, isLeaderType } from './entities.js';
 import { Renderer } from './renderer.js';
@@ -54,6 +55,53 @@ const BABYLON_LOADERS_LOCAL = '/assets/vendor/babylonjs/babylonjs.loaders.min.js
 // existing procedural box+roof, so gameplay never blocks on a 404.
 export const HOUSE_MODEL_DIR  = 'models/';
 export const HOUSE_MODEL_FILE = 'house.glb';
+
+// Building-type → GLB asset map. Only listed types swap the procedural
+// box+roof for an imported model; everything else (INN, GRAVEYARD, etc.) keeps
+// the existing procedural rendering until a model is authored for it. Extend
+// by adding entries here; the conditional load + retrofit machinery already
+// keys off this table via `buildingUsesHouseModel()`.
+export const BUILDING_GLB_BY_TYPE = Object.freeze({
+  [BuildingType.HOUSE]: `${HOUSE_MODEL_DIR}${HOUSE_MODEL_FILE}`,
+});
+
+/** Predicate: does this tile's specific building type render as the shared
+ *  house GLB? Pure; exported for tests. Returns false for any building type
+ *  that isn't in `BUILDING_GLB_BY_TYPE` so non-HOUSE buildings keep their
+ *  procedural box+roof. */
+export function buildingUsesHouseModel(tile) {
+  if (!tile || tile.type !== TileType.BUILDING) return false;
+  return tile.building === BuildingType.HOUSE;
+}
+
+/** Bake a translation into the given source mesh so its bounding-box bottom
+ *  sits at local Y = 0. Common GLB exporters centre the mesh pivot inside the
+ *  bounding box, which sinks an instance placed at tile-top into the ground;
+ *  shifting the origin down to the floor makes instance placement intuitive
+ *  ("position.y = tileTopY puts the floor on the tile-top"). Safe on stubbed
+ *  meshes — missing bounding-info or bakeTransformIntoVertices APIs short-
+ *  circuit to a no-op so tests without a real Babylon don't blow up.
+ *
+ *  Exported for direct unit testing. */
+export function _bakeOriginToBottom(source, BABYLON) {
+  if (!source || !BABYLON) return;
+  if (typeof source.bakeTransformIntoVertices !== 'function') return;
+  if (typeof source.getBoundingInfo !== 'function') return;
+  const info = source.getBoundingInfo();
+  const bb   = info && info.boundingBox;
+  if (!bb) return;
+  // Prefer the world-space bottom (post-import the source has identity world
+  // matrix in practice; we double-check on `minimum` if `minimumWorld` is
+  // unavailable on the stub).
+  const minY = (bb.minimumWorld && typeof bb.minimumWorld.y === 'number')
+    ? bb.minimumWorld.y
+    : (bb.minimum && typeof bb.minimum.y === 'number' ? bb.minimum.y : 0);
+  if (Math.abs(minY) < 1e-4) return;
+  const yOffset = -minY;
+  if (!BABYLON.Matrix || typeof BABYLON.Matrix.Translation !== 'function') return;
+  source.bakeTransformIntoVertices(BABYLON.Matrix.Translation(0, yOffset, 0));
+  if (typeof source.refreshBoundingInfo === 'function') source.refreshBoundingInfo();
+}
 
 // Default world-space scale for the imported model. The GLB's intrinsic unit
 // system is unknown until the file lands; this value sits the model at
@@ -1281,6 +1329,14 @@ export class Renderer3D {
       }
       if (!source) return null;
 
+      // Pivot fix: GLB authoring tools commonly export with the mesh pivot at
+      // the centre of the bounding box, which means an instance placed at
+      // tile-top (y ≈ 0.08) renders with its bottom half sunk into the tile
+      // prism. Bake a one-shot translation into the source's vertex buffer so
+      // the model's minimum-Y sits at local 0 — every instance inherits the
+      // adjusted origin and sits *on* the ground rather than in it.
+      _bakeOriginToBottom(source, BABYLON);
+
       // Hide the source from the scene — instances render geometry on its
       // behalf, but the template itself is never drawn directly.
       if (typeof source.setEnabled === 'function') source.setEnabled(false);
@@ -1364,6 +1420,9 @@ export class Renderer3D {
     let upgraded = 0;
     for (const tile of this.state.tiles.values()) {
       if (tile.type !== TileType.BUILDING || !tile.building) continue;
+      // Only HOUSE-type buildings swap to the GLB; everything else keeps the
+      // procedural box+roof built by `_buildTileMesh`.
+      if (!buildingUsesHouseModel(tile)) continue;
       const tkey  = hexKey(tile.col, tile.row);
       const props = this._tilePropsByKey.get(tkey) || [];
       // Skip if this tile already holds a building-house instance.
@@ -2908,7 +2967,10 @@ export class Renderer3D {
     // after `_buildMap` completes, `_upgradeBuildingsToHouseModel` swaps the
     // procedural meshes here for instances.
     if (tile.type === TileType.BUILDING && tile.building) {
-      if (this._houseSourceMesh) {
+      // Only HOUSE-type buildings render as the imported GLB; every other
+      // building type (INN, GRAVEYARD, CHURCH, etc.) keeps the procedural
+      // box+roof until a model is authored for it. See BUILDING_GLB_BY_TYPE.
+      if (this._houseSourceMesh && buildingUsesHouseModel(tile)) {
         const inst = this._buildHouseInstance(tile, x, z, parent);
         if (inst) trackProp(inst);
       } else {
