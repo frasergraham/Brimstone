@@ -21,6 +21,7 @@ import {
   computeMapBounds,
   HEX_RADIUS_WORLD,
   gestureLockDecision,
+  gestureModeForTwoFingerStart,
   PINCH_LOCK_THRESHOLD_PX,
   TWIST_LOCK_THRESHOLD_RAD,
   GESTURE_SAMPLING_WINDOW_MS,
@@ -322,13 +323,15 @@ describe('panBoundsForPlayableExtent — tighter pan clamp than the legacy +2 ma
     assert.equal(panBoundsForPlayableExtent(undefined), null);
   });
 
-  test('default fudge expands the extent by exactly half a hex on every side', () => {
+  test('default fudge is now zero — target clamped strictly to the visual extent', () => {
+    // Tighter clamp (t-02db8dc6): the locked-tilt camera biases the visible
+    // ground centre away from the target, so any positive fudge let the
+    // border-forest band dominate the view at extreme pans.
     const b = panBoundsForPlayableExtent(extent);
-    const half = 0.5 * HEX_RADIUS_WORLD;
-    assert.ok(Math.abs(b.minX - (extent.minX - half)) < 1e-9);
-    assert.ok(Math.abs(b.maxX - (extent.maxX + half)) < 1e-9);
-    assert.ok(Math.abs(b.minZ - (extent.minZ - half)) < 1e-9);
-    assert.ok(Math.abs(b.maxZ - (extent.maxZ + half)) < 1e-9);
+    assert.equal(b.minX, extent.minX);
+    assert.equal(b.maxX, extent.maxX);
+    assert.equal(b.minZ, extent.minZ);
+    assert.equal(b.maxZ, extent.maxZ);
   });
 
   test('custom fudge scales the slack symmetrically', () => {
@@ -373,6 +376,28 @@ describe('panBoundsForPlayableExtent — tighter pan clamp than the legacy +2 ma
     const tight = panBoundsForPlayableExtent(extent);
     assert.ok(extent.centerX >= tight.minX && extent.centerX <= tight.maxX);
     assert.ok(extent.centerZ >= tight.minZ && extent.centerZ <= tight.maxZ);
+  });
+});
+
+describe('gestureModeForTwoFingerStart — touch always locks to zoom (no twist-rotate on mobile)', () => {
+  test('two touch pointers → immediate zoom lock (no sampling)', () => {
+    assert.equal(gestureModeForTwoFingerStart(['touch', 'touch']), 'zoom');
+  });
+
+  test('mixed touch + non-touch → still locks to zoom (any touch is enough)', () => {
+    assert.equal(gestureModeForTwoFingerStart(['touch', 'pen']), 'zoom');
+    assert.equal(gestureModeForTwoFingerStart(['mouse', 'touch']), 'zoom');
+  });
+
+  test('two non-touch pointers → falls through to sampling for the existing intent-lock', () => {
+    assert.equal(gestureModeForTwoFingerStart(['mouse', 'mouse']), 'sampling');
+    assert.equal(gestureModeForTwoFingerStart(['pen', 'pen']), 'sampling');
+  });
+
+  test('empty or non-array input → sampling (safe default)', () => {
+    assert.equal(gestureModeForTwoFingerStart([]), 'sampling');
+    assert.equal(gestureModeForTwoFingerStart(null), 'sampling');
+    assert.equal(gestureModeForTwoFingerStart(undefined), 'sampling');
   });
 });
 
