@@ -2020,14 +2020,14 @@ export class Renderer3D {
       for (let i = 0; i < strokes.length; i++) {
         const pts = strokes[i];
         if (!pts || pts.length < 2) continue;
-        // Five-path ribbon so the alpha fade only affects the outer ~5% of
+        // Five-path ribbon so the alpha fade only affects the outer 10% of
         // the ribbon width on each side. Paths laid out as:
         //   right edge (alpha 0) → right inner (alpha 1) → centre (alpha 1)
         //     → left inner (alpha 1) → left edge (alpha 0)
-        // Inner paths sit at 0.95 × half-width from the centreline, so the
-        // opaque region covers 90% of the ribbon and the outer 5% on each
-        // side tapers smoothly into the grass beneath.
-        const OPAQUE_FRAC   = 0.95;
+        // Inner paths sit at 0.80 × half-width from the centreline, so the
+        // opaque region covers the inner 80% of the ribbon and the outer 10%
+        // on each side fades smoothly into the grass beneath.
+        const OPAQUE_FRAC   = 0.80;
         const innerWidth    = width * OPAQUE_FRAC;
         const { left: outerLeft,  right: outerRight  } = ribbonOffsetPaths(pts, width);
         const { left: innerLeft,  right: innerRight  } = ribbonOffsetPaths(pts, innerWidth);
@@ -2072,22 +2072,37 @@ export class Renderer3D {
     if (ribbons.length === 0) return null;
     // Merge PER-TILE so each tile's ribbon section can be registered with the
     // fog veil and darkened in place (operator: "roads and rivers need to
-    // darken in fog of war"). Sharing one material across all per-tile meshes
-    // keeps draw-call overhead low. Returns one of the meshes as the
-    // "primary" handle for the network (for caller compatibility — used only
-    // by river-extension lookup).
-    const ribbonMat = this._buildRibbonMaterial(networkName, cssColor);
+    // darken in fog of war"). Each per-tile mesh gets its OWN material clone
+    // so `_setTileFogged` can multiply diffuseColor + emissiveColor by
+    // FOG_TILE_DARKEN without affecting the other tiles. Memory cost is
+    // bounded (~50 materials for a standard map) and avoids per-vertex
+    // color buffer rewrites on fog state change.
+    const baseMat  = this._buildRibbonMaterial(networkName, cssColor);
+    const baseDiff = baseMat.diffuseColor.clone();
+    const baseEmis = baseMat.emissiveColor.clone();
     let primary = null;
     for (const [tkey, list] of ribbonsByTileKey) {
       const merged = BABYLON.Mesh.MergeMeshes(list, true, true, undefined, false, false);
       if (!merged) continue;
       merged.parent          = this._mapRoot;
       merged.isPickable      = false;
-      merged.material        = ribbonMat;
+      // Per-tile material clone — only diffuse/emissive Color3s differ between
+      // clones, all other state copied from the shared base material.
+      const mat = baseMat.clone(`${networkName}_${tkey}_mat`);
+      mat.diffuseColor  = baseDiff.clone();
+      mat.emissiveColor = baseEmis.clone();
+      merged.material        = mat;
       merged.hasVertexAlpha  = true;
       merged.name            = `${networkName}_${tkey}`;
-      // Tag for fog darkening (not hiding). `_setTileFogged` consults this.
-      merged.metadata        = { respectsFog: 'darken', kind: networkName };
+      // Tag for fog darkening (not hiding). `_setTileFogged` consults this and
+      // stashes the unfogged anchor colours on the metadata so they can be
+      // restored when fog clears (avoids accumulating darken multipliers).
+      merged.metadata        = {
+        respectsFog: 'darken',
+        kind: networkName,
+        baseDiffuse:  { r: baseDiff.r, g: baseDiff.g, b: baseDiff.b },
+        baseEmissive: { r: baseEmis.r, g: baseEmis.g, b: baseEmis.b },
+      };
       this._setShadowReceiver(merged);
       // Register with the per-tile prop list so fog veil walks it.
       const props = this._tilePropsByKey.get(tkey);
@@ -4371,13 +4386,26 @@ export class Renderer3D {
       const policy = p.metadata?.respectsFog;
       if (policy === false) continue;
       if (policy === 'darken') {
-        // Per-mesh darkening so the road/river network reads as fogged on
-        // this hex specifically. Material is shared across tiles, so we apply
-        // a per-mesh `visibility` tint instead — Babylon's `Mesh.visibility`
-        // multiplies the final alpha, which on a translucent ribbon happens
-        // to read as darkening (the underlying ground shows through more).
-        // Pure white-balance darkening would require a per-tile material.
-        p.visibility = fogged ? 0.35 : 1.0;
+        // Per-tile material darkening: the ribbon stays at full opacity but
+        // its colour is multiplied by FOG_TILE_DARKEN so it matches the
+        // fogged ground beneath it. Anchor colours are stashed in metadata
+        // at build time so re-revealing a hex restores the exact unfogged
+        // tint (avoids accumulating darken multipliers across fog flickers).
+        const mat = p.material;
+        const bd  = p.metadata?.baseDiffuse;
+        const be  = p.metadata?.baseEmissive;
+        if (mat?.diffuseColor && bd) {
+          const k = fogged ? FOG_TILE_DARKEN : 1.0;
+          mat.diffuseColor.r  = bd.r * k;
+          mat.diffuseColor.g  = bd.g * k;
+          mat.diffuseColor.b  = bd.b * k;
+        }
+        if (mat?.emissiveColor && be) {
+          const k = fogged ? FOG_TILE_DARKEN : 1.0;
+          mat.emissiveColor.r = be.r * k;
+          mat.emissiveColor.g = be.g * k;
+          mat.emissiveColor.b = be.b * k;
+        }
         continue;
       }
       p.isVisible = !fogged;
