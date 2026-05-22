@@ -38,10 +38,13 @@ describe('Renderer3D — terrainSpriteIdFor', () => {
     assert.match(id, /^dirt_[1-5]$/);
   });
 
-  test('road / river / bridge tiles return null — solid-colour fallback', () => {
-    assert.equal(terrainSpriteIdFor({ type: TileType.ROAD   }, 0, 0), null);
-    assert.equal(terrainSpriteIdFor({ type: TileType.RIVER  }, 0, 0), null);
-    assert.equal(terrainSpriteIdFor({ type: TileType.BRIDGE }, 0, 0), null);
+  test('road / river / bridge tiles use a grass underlay sprite', () => {
+    // Item 2: ROAD/RIVER/BRIDGE tiles render with grass underneath; the
+    // bezier network tube provides the path visual on top. Top-disc texture
+    // therefore needs to be a grass variant so the underlay reads correctly.
+    assert.match(terrainSpriteIdFor({ type: TileType.ROAD   }, 0, 0), /^grass_[1-5]$/);
+    assert.match(terrainSpriteIdFor({ type: TileType.RIVER  }, 0, 0), /^grass_[1-5]$/);
+    assert.match(terrainSpriteIdFor({ type: TileType.BRIDGE }, 0, 0), /^grass_[1-5]$/);
   });
 
   test('unknown tile type returns null', () => {
@@ -115,16 +118,11 @@ describe('Renderer3D — material-cache key uniqueness', () => {
 
   test('null sprite-id is the renderer signal for "use solid colour fallback"', () => {
     // _terrainMaterialFor(null) returns null in the renderer; that is the
-    // explicit fallback gate. We pin that contract here via the pure helper:
-    // road/river/bridge must consistently return null so the renderer never
-    // tries to look up a material for them.
-    for (let c = 0; c < 5; c++) {
-      for (let r = 0; r < 5; r++) {
-        assert.equal(terrainSpriteIdFor({ type: TileType.ROAD   }, c, r), null);
-        assert.equal(terrainSpriteIdFor({ type: TileType.RIVER  }, c, r), null);
-        assert.equal(terrainSpriteIdFor({ type: TileType.BRIDGE }, c, r), null);
-      }
-    }
+    // explicit fallback gate. Item 2 made road/river/bridge return a grass
+    // sprite (so the underlay matches the surrounding terrain), so the only
+    // null cases left are tiles with unrecognised types — locked here.
+    assert.equal(terrainSpriteIdFor({ type: 'mystery' }, 0, 0), null);
+    assert.equal(terrainSpriteIdFor(null,                 0, 0), null);
   });
 });
 
