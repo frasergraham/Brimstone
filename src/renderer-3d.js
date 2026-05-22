@@ -2014,8 +2014,8 @@ export class Renderer3D {
   _syncPlanArrows() {
     // Dispose previous frame's plan marker geometry first. We rebuild every
     // draw — the per-call cost is small (one marker + badge per MOVE step,
-    // plus one dashed line per entity) and avoids hand-tracking which plan
-    // steps changed.
+    // plus one tube material + N dash tubes per entity) and avoids
+    // hand-tracking which plan steps changed.
     for (const arrow of this._planArrowMeshes) {
       arrow.disc?.dispose();
       arrow.discMat?.dispose();
@@ -2023,6 +2023,8 @@ export class Renderer3D {
       arrow.badgeMat?.dispose();
       arrow.badgeTex?.dispose();
       arrow.line?.dispose();
+      if (arrow.dashes) for (const m of arrow.dashes) m.dispose();
+      arrow.dashMat?.dispose();
     }
     this._planArrowMeshes = [];
 
@@ -2048,25 +2050,54 @@ export class Renderer3D {
       arr.push({ col: toCol, row: toRow });
     }
 
-    // Per-entity dashed line tracing the planned path.
+    // Per-entity dashed path tracing the planned waypoints. We render each
+    // dash as a short tube (radius PLAN_LINE_RADIUS) rather than a
+    // LinesMesh — native WebGL line width is driver-capped at ~1px, so a
+    // dashed-line approach reads as a hair regardless of any width
+    // setting. Tubes give us guaranteed visible thickness and let us lift
+    // the dashes above tile/marker geometry without z-fight.
     for (const [entityId, path] of pathsByEntity) {
       if (path.length < 2) continue;
       const ent = this.state?.entities?.find?.(e => e.id === entityId);
       const ownerColor = entityBaseColor(ent ?? {});
       const [r, g, b] = cssHexToRgb01(ownerColor);
-      const points = path.map(p => {
-        const { x, z } = hexToWorld(p.col, p.row);
-        return new BABYLON.Vector3(x, PLAN_LINE_Y, z);
-      });
-      const line = BABYLON.MeshBuilder.CreateDashedLines(
-        `planLine_${entityId}`,
-        { points, dashSize: 6, gapSize: 3, dashNb: Math.max(8, (path.length - 1) * 8) },
-        this._scene,
-      );
-      line.parent = this._mapRoot;
-      line.isPickable = false;
-      line.color = new BABYLON.Color3(r, g, b);
-      this._planArrowMeshes.push({ line });
+
+      const dashMat = new BABYLON.StandardMaterial(
+        `planLineMat_${entityId}`, this._scene);
+      dashMat.diffuseColor  = new BABYLON.Color3(r, g, b);
+      dashMat.emissiveColor = new BABYLON.Color3(r * 0.6, g * 0.6, b * 0.6);
+      dashMat.specularColor = new BABYLON.Color3(0, 0, 0);
+
+      const dashes = [];
+      for (let i = 0; i < path.length - 1; i++) {
+        const a = hexToWorld(path[i].col,     path[i].row);
+        const b = hexToWorld(path[i + 1].col, path[i + 1].row);
+        const segs = computeDashSegments(
+          { x: a.x, z: a.z }, { x: b.x, z: b.z },
+          PLAN_LINE_DASH_SIZE, PLAN_LINE_GAP_SIZE, PLAN_LINE_Y,
+        );
+        for (let s = 0; s < segs.length; s++) {
+          const { start, end } = segs[s];
+          const tube = BABYLON.MeshBuilder.CreateTube(
+            `planDash_${entityId}_${i}_${s}`,
+            {
+              path: [
+                new BABYLON.Vector3(start.x, start.y, start.z),
+                new BABYLON.Vector3(end.x,   end.y,   end.z),
+              ],
+              radius: PLAN_LINE_RADIUS,
+              tessellation: 8,
+              cap: BABYLON.Mesh.CAP_ALL,
+            },
+            this._scene,
+          );
+          tube.parent = this._mapRoot;
+          tube.isPickable = false;
+          tube.material = dashMat;
+          dashes.push(tube);
+        }
+      }
+      this._planArrowMeshes.push({ dashes, dashMat });
     }
 
     for (const step of steps) {
@@ -2861,9 +2892,22 @@ export const PLAN_MARKER_HEIGHT   = 0.02;
 export const PLAN_MARKER_Y        = 0.08;
 
 /** Dashed-line Y for the path-connector tracing the planned waypoints.
- *  Slightly above the marker puck top so the dashes read above the puck
- *  but below the badge. */
-export const PLAN_LINE_Y = 0.12;
+ *  Raised well above the marker puck top (0.09) and the highlight disc
+ *  layer (0.085) so the tube segments clear ground geometry without any
+ *  z-fight. Sits well below the floating badge (0.6) so it still reads
+ *  as ground-anchored, not floating. */
+export const PLAN_LINE_Y = 0.18;
+
+/** Tube radius for each dash segment. Tuned for "visibly chunky" without
+ *  overpowering the waypoint puck (0.36 diameter) — ~33% of the marker's
+ *  half-width. Native WebGL `LinesMesh` width is driver-capped at ~1px, so
+ *  we render dashes as 3D tubes to get reliable thickness across devices. */
+export const PLAN_LINE_RADIUS = 0.06;
+
+/** Dash + gap length in world units. One hex-step is ~sqrt(3) ≈ 1.73 wu,
+ *  so a 0.28 dash + 0.16 gap yields ~4 chunky dashes per hop. */
+export const PLAN_LINE_DASH_SIZE = 0.28;
+export const PLAN_LINE_GAP_SIZE  = 0.16;
 
 /** Plan ghost — translucent standee clone walking the planned path. */
 export const PLAN_GHOST_ALPHA          = 0.4;
@@ -2893,6 +2937,44 @@ export function computePlanGhostPaths(steps) {
     arr.push({ col: toCol, row: toRow });
   }
   return paths;
+}
+
+/**
+ * Slice a straight 2D segment (XZ plane, fixed Y) into dash-and-gap tube
+ * pieces. Returns an array of `{ start: {x,y,z}, end: {x,y,z} }` ready to
+ * feed to `MeshBuilder.CreateTube({ path: [start, end], radius })`. Used
+ * by the plan-arrow path connector to render thick, z-fight-free dashes
+ * (native `LinesMesh` width is driver-capped at ~1px).
+ *
+ * The dash pattern always *starts with a dash* at `p1` and ends either on
+ * a full dash (if the segment length aligns) or truncates the trailing
+ * dash if a stub > 25% of `dashSize` remains. Short stubs are dropped to
+ * avoid visually awkward fragments.
+ */
+export function computeDashSegments(p1, p2, dashSize, gapSize, y = 0) {
+  const segs = [];
+  if (!p1 || !p2 || !(dashSize > 0)) return segs;
+  const dx = p2.x - p1.x;
+  const dz = p2.z - p1.z;
+  const total = Math.hypot(dx, dz);
+  if (total === 0) return segs;
+  const gap = Math.max(0, gapSize);
+  const period = dashSize + gap;
+  const ux = dx / total;
+  const uz = dz / total;
+  const minStub = dashSize * 0.25;
+  let offset = 0;
+  while (offset < total) {
+    const startT = offset;
+    const endT = Math.min(offset + dashSize, total);
+    if (endT - startT < minStub) break;
+    segs.push({
+      start: { x: p1.x + ux * startT, y, z: p1.z + uz * startT },
+      end:   { x: p1.x + ux * endT,   y, z: p1.z + uz * endT },
+    });
+    offset += period;
+  }
+  return segs;
 }
 
 /**
