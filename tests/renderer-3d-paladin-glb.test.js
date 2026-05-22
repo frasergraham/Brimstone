@@ -352,10 +352,10 @@ describe('_loadPaladinModel — async load + caching + fallback', () => {
   test('de-dupes concurrent load attempts via _paladinLoadPromise', async () => {
     const r = newInst();
     r._scene = {};
-    let calls = 0;
+    let paladinCalls = 0;
     r._babylon = makeFakeBabylon({
-      importImpl: async () => {
-        calls++;
+      importImpl: async (_meshNames, _baseUrl, fileName) => {
+        if (fileName && fileName.includes('paladin')) paladinCalls++;
         return { meshes: [makeFakeSourceMesh()] };
       },
     });
@@ -363,7 +363,7 @@ describe('_loadPaladinModel — async load + caching + fallback', () => {
       r._loadPaladinModel('assets'),
       r._loadPaladinModel('assets'),
     ]);
-    assert.equal(calls, 1, 'second concurrent call must reuse the in-flight promise');
+    assert.equal(paladinCalls, 1, 'second concurrent call must reuse the in-flight promise');
     assert.equal(a, b);
   });
 
@@ -407,7 +407,10 @@ describe('_loadPaladinModel — async load + caching + fallback', () => {
       },
     });
     await r._loadPaladinModel('assets');
-    assert.deepEqual(calls, ['ensure', 'import']);
+    // Walking companion load fires async too; collapse any post-paladin
+    // 'ensure'/'import' calls — they're triggered by _loadWalkingAnimation.
+    const paladinPhase = calls.slice(0, 2);
+    assert.deepEqual(paladinPhase, ['ensure', 'import']);
   });
 });
 

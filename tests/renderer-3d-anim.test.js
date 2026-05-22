@@ -53,8 +53,12 @@ import {
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 describe('Renderer3D Phase 5 — anim duration constants', () => {
-  test('MOVE_ANIM_MS is around 250ms (linear single-hex slide)', () => {
-    assert.equal(MOVE_ANIM_MS, 250);
+  test('MOVE_ANIM_MS sits in the slow-enough-to-walk band [400, 900]', () => {
+    // Bumped from 250 → 600 in the 3D renderer to give the paladin's
+    // walking animation room to play. Band rather than a single pin so
+    // visual tuning can shift without test churn.
+    assert.ok(MOVE_ANIM_MS >= 400 && MOVE_ANIM_MS <= 900,
+      `expected MOVE_ANIM_MS in [400, 900], got ${MOVE_ANIM_MS}`);
   });
 
   test('LUNGE_ANIM_MS < MOVE_ANIM_MS (sharper, snappier feel)', () => {
@@ -513,10 +517,12 @@ describe('Renderer3D — paintUnitIconBadge', () => {
     assert.ok(UNIT_ICON_TEX_SIZE   > 0);
   });
 
-  // Pin the 2× billboard size (task t-c40bce81) so a future tweak can't
-  // silently shrink the badge back to its old 0.55 footprint.
-  test('UNIT_ICON_PLANE_SIZE is 2× the pre-bump baseline (0.55 → 1.10)', () => {
-    assert.equal(UNIT_ICON_PLANE_SIZE, 1.10);
+  // Pin the current billboard size. Bumped 2× from 0.55 to 1.10, then
+  // trimmed 20% to 0.88 after the badge felt too bulky over the paladin
+  // model. Locks against silent re-shrinking back to the old 0.55 era.
+  test('UNIT_ICON_PLANE_SIZE is in the post-trim band [0.7, 1.0]', () => {
+    assert.ok(UNIT_ICON_PLANE_SIZE > 0.7 && UNIT_ICON_PLANE_SIZE < 1.0,
+      `expected 0.7 < size < 1.0, got ${UNIT_ICON_PLANE_SIZE}`);
   });
 
   // Relationship invariant: the icon billboard's top edge must stay below

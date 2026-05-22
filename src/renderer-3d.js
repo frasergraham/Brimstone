@@ -134,6 +134,19 @@ export const TARGET_PALADIN_WORLD_HEIGHT = 0.92;
 // 180° so the paladin's front reads toward the camera rather than away.
 export const PALADIN_YAW        = Math.PI;
 
+// Walking animation companion GLB — Mixamo's "Walking" clip exported as a
+// standalone .glb (separate file from paladin.glb so the model + idle stays
+// portable). The renderer loads this after paladin.glb resolves, retargets
+// its AnimationGroup's targets to paladin's TransformNodes by name, then
+// disposes walking.glb's geometry — we only want its keyframes.
+export const WALKING_MODEL_FILE = 'walking.glb';
+
+// Crossfade rate between idle and walking, in 1/seconds. 5.0 = full transition
+// in 200ms. Slow enough to read as a deliberate state change, fast enough that
+// a unit moving through several hexes blends back to idle promptly between
+// steps if there's a pause in the resolution loop.
+export const PALADIN_ANIM_BLEND_RATE = 5.0;
+
 /** Predicate: does this entity belong to the day-side hero faction (and thus
  *  render as the paladin GLB when available)? Routes through `sideFactionOf`
  *  so the faction registry is the single source of truth — no string-literal
@@ -1561,6 +1574,7 @@ export class Renderer3D {
       // clone references that skeleton and skins identically. Idle plays in
       // sync across all paladins, which reads fine for a board-game token.
       if (idleGroup && typeof idleGroup.start === 'function') {
+        idleGroup.weight = 1.0;
         idleGroup.start(true, 1.0);
       }
 
@@ -1573,7 +1587,14 @@ export class Renderer3D {
       this._paladinScale      = scale;
       this._paladinFeetOffset = feetOffset;
 
-      this._paladinSource = { mesh: skinned, meshes, skeleton, idleGroup };
+      this._paladinSource = { mesh: skinned, meshes, skeleton, idleGroup, walkGroup: null };
+
+      // Fire-and-forget the walking companion GLB. Paladins start in idle
+      // immediately and pop into the walk cycle as soon as the load resolves;
+      // we don't want to block the retrofit pass on it.
+      this._loadWalkingAnimation(basePath).catch(err => {
+        console.warn('[Renderer3D] walking.glb load failed; paladins will idle only.', err);
+      });
 
       // If standees were built before the GLB landed (the common case —
       // _initBabylon kicks the load off async and `_syncEntityStandees`
@@ -1652,6 +1673,139 @@ export class Renderer3D {
    *  primary skinned child so per-unit idles play independently —
    *  InstancedMesh doesn't support per-instance bone matrices, hence the
    *  deeper clone path. */
+  /** Load `walking.glb`, extract its animation group, and retarget every
+   *  targetedAnimation onto the paladin source skeleton's linked
+   *  TransformNodes by name. Disposes walking's meshes + skeleton — we
+   *  only want its keyframes. The retargeted group + a blend tick are
+   *  stashed on `_paladinSource.walkGroup` so the standee-move observer
+   *  can cross-fade between idle ↔ walking based on whether any hero
+   *  paladin is currently being slid between hexes by the resolver. */
+  async _loadWalkingAnimation(basePath = 'assets') {
+    if (!this._babylon || !this._scene || !this._paladinSource) return null;
+    const BABYLON = this._babylon;
+    const src = this._paladinSource;
+    if (src.walkGroup) return src.walkGroup;
+    if (!BABYLON.SceneLoader || typeof BABYLON.SceneLoader.ImportMeshAsync !== 'function') {
+      return null;
+    }
+
+    let result;
+    try {
+      result = await BABYLON.SceneLoader.ImportMeshAsync(
+        null,
+        `${basePath}/${PALADIN_MODEL_DIR}`,
+        WALKING_MODEL_FILE,
+        this._scene,
+      );
+    } catch (err) {
+      console.warn('[Renderer3D] walking.glb import failed', err);
+      return null;
+    }
+
+    const walkGroup = (result.animationGroups || []).find(g => g) || null;
+    if (!walkGroup) {
+      console.warn('[Renderer3D] walking.glb contained no animation group');
+      this._disposeWalkingImport(result);
+      return null;
+    }
+
+    // Build a name → TransformNode map from the paladin source skeleton's
+    // linked nodes. Mixamo names ("mixamorig:Hips", etc) line up between
+    // paladin.glb and walking.glb, so look-up-by-name retargets cleanly.
+    const nameMap = new Map();
+    if (src.skeleton && Array.isArray(src.skeleton.bones)) {
+      for (const bone of src.skeleton.bones) {
+        const tn = bone && (bone._linkedTransformNode
+          || (typeof bone.getTransformNode === 'function' && bone.getTransformNode()));
+        if (tn && tn.name) nameMap.set(tn.name, tn);
+        // Some Babylon paths expose the linked node only via the bone itself.
+        if (bone && bone.name && !nameMap.has(bone.name)) nameMap.set(bone.name, bone);
+      }
+    }
+
+    let remapped = 0;
+    const tas = walkGroup.targetedAnimations || [];
+    for (const ta of tas) {
+      const old = ta && ta.target;
+      if (!old || !old.name) continue;
+      const match = nameMap.get(old.name);
+      if (match) {
+        ta.target = match;
+        remapped++;
+      }
+    }
+    if (remapped === 0) {
+      console.warn('[Renderer3D] walking.glb: no targets remapped — paladin will not walk.');
+    }
+
+    // Wire blending. Both groups loop at weight {idle:1, walk:0} initially;
+    // a per-frame tick nudges the weights toward (1,0) or (0,1) depending
+    // on whether any hero standee is currently mid-move. Crossfade rate
+    // is PALADIN_ANIM_BLEND_RATE (≈200ms full transition).
+    walkGroup.weight = 0.0;
+    if (typeof walkGroup.start === 'function') walkGroup.start(true, 1.0);
+
+    src.walkGroup = walkGroup;
+    this._paladinAnimBlend = 1.0; // 1 = full idle, 0 = full walk
+    this._paladinAnimObserver = this._installPaladinAnimBlendTick();
+
+    // Dispose walking.glb's geometry — we only kept its keyframes.
+    this._disposeWalkingImport(result);
+    return walkGroup;
+  }
+
+  /** Dispose every mesh + skeleton brought in by the walking.glb import.
+   *  The animation group is intentionally preserved (handed back to the
+   *  caller). Safe against partial / missing fields. */
+  _disposeWalkingImport(result) {
+    if (!result) return;
+    for (const m of result.meshes || []) {
+      if (m && typeof m.dispose === 'function') {
+        try { m.dispose(); } catch { /* ignore */ }
+      }
+    }
+    for (const s of result.skeletons || []) {
+      if (s && typeof s.dispose === 'function') {
+        try { s.dispose(); } catch { /* ignore */ }
+      }
+    }
+    for (const tn of result.transformNodes || []) {
+      if (tn && typeof tn.dispose === 'function') {
+        try { tn.dispose(); } catch { /* ignore */ }
+      }
+    }
+  }
+
+  /** Subscribe a per-frame tick that cross-fades between the paladin's
+   *  idle and walking animation groups. Target weight is 0 (full walking)
+   *  whenever any hero entity is mid-move or mid-lunge; otherwise 1
+   *  (full idle). Returns the Babylon observer handle for disposal. */
+  _installPaladinAnimBlendTick() {
+    if (!this._scene || !this._scene.onBeforeRenderObservable) return null;
+    let last = performance.now();
+    return this._scene.onBeforeRenderObservable.add(() => {
+      const src = this._paladinSource;
+      if (!src || !src.idleGroup || !src.walkGroup) return;
+      const now = performance.now();
+      const dt = Math.max(0, Math.min(0.1, (now - last) / 1000));
+      last = now;
+      // Target: 0 (walking) if any hero entity is currently being animated
+      // through a move / lunge by the resolver; else 1 (idle).
+      const target = paladinAnimTargetWeight(
+        this._activeMoveIds, this._activeLungeIds,
+        this.state?.entities, isHeroFactionEntity,
+      );
+      const cur = this._paladinAnimBlend ?? 1.0;
+      const step = PALADIN_ANIM_BLEND_RATE * dt;
+      let next = cur;
+      if (cur < target) next = Math.min(target, cur + step);
+      else if (cur > target) next = Math.max(target, cur - step);
+      this._paladinAnimBlend = next;
+      src.idleGroup.weight = next;
+      src.walkGroup.weight = 1 - next;
+    });
+  }
+
   _buildPaladinClone(entity, parent) {
     const src = this._paladinSource;
     if (!src || !this._babylon) return null;
@@ -7781,13 +7935,15 @@ export function diffStandees(existingIds, entities) {
 // Phase 5 pure helpers — exported for tests (no Babylon, no DOM)
 // ═══════════════════════════════════════════════════════════════════════════
 
-/** Duration (ms) of a single-hex slide. ~250ms — fast enough to keep pace
- *  with the resolution loop but slow enough to read direction. */
-export const MOVE_ANIM_MS = 250;
+/** Duration (ms) of a single-hex slide. Slowed from 250 → 600 in the 3D
+ *  renderer to give the paladin's walking animation room to breathe — at
+ *  250ms the model was teleporting between hexes before the walk cycle
+ *  could play visibly. */
+export const MOVE_ANIM_MS = 600;
 
-/** Duration (ms) of an attack-lunge slide to the midpoint. ~200ms — sharper
- *  than a move; sells the lunge as an aggressive, decisive action. */
-export const LUNGE_ANIM_MS = 200;
+/** Duration (ms) of an attack-lunge slide to the midpoint. Slowed from
+ *  200 → 480 alongside MOVE_ANIM_MS to keep relative pacing. */
+export const LUNGE_ANIM_MS = 480;
 
 /** Duration (ms) of a projectile arc. ~320ms — matches the 2D path's
  *  default `addProjectileAnim` duration. */
@@ -7808,7 +7964,7 @@ export const HP_BAR_Y_ABOVE_BASE = 0.2;
  *  the original 0.55 so the portrait + HP ring is legible even when the
  *  camera is fully zoomed out. The badge intentionally now dominates the
  *  silhouette of the token below it; that's the desired readout. */
-export const UNIT_ICON_PLANE_SIZE = 1.10;
+export const UNIT_ICON_PLANE_SIZE = 0.88;
 /** Gap above the cone+sphere stack to the icon plane CENTRE, in world
  *  units. With the paladin model now ~0.92 wu tall (15% taller than the
  *  cone+sphere stack it replaced), the icon needs to sit just above the
@@ -7823,9 +7979,9 @@ export const UNIT_ICON_TEX_SIZE   = 192;
  *  to read as a clean line at the icon edge without crowding the portrait.
  *  Halved from the old 0.14 per operator request for a thinner HP border. */
 export const UNIT_ICON_RING_THICKNESS_FRAC = 0.07;
-/** Plane material alpha — 0.8 keeps the icon legible but lets the model
- *  behind it show through when the camera angle clips them. */
-export const UNIT_ICON_PLANE_ALPHA = 0.8;
+/** Plane material alpha — fully opaque. Transparency was tried at 0.8 but
+ *  reads as washed-out on the bright icon textures. */
+export const UNIT_ICON_PLANE_ALPHA = 1.0;
 
 /** Plan-marker disc — flat owner-tinted circle laid on the destination hex
  *  top. Y just clears the tile prism top (0.075) and the road deck (0.155)
@@ -8314,6 +8470,34 @@ export function iconBillboardY(leader = false) {
  * disc anchor. Pure — exported so tests can pin the offset stays in step
  * with `iconBillboardY`.
  */
+/**
+ * Pure helper: given the sets of entity ids that are currently mid-move /
+ * mid-lunge by the resolver, plus the live entities array and a hero
+ * predicate, return the target blend weight for the paladin animation
+ * crossfade — 0 means "play walking", 1 means "play idle". The blend
+ * tick eases toward this target each frame.
+ *
+ * We only flip to walking when a HERO entity is moving — a witch or
+ * zombie sliding to a new hex shouldn't make every paladin in the scene
+ * walk in place. Exported for tests so the predicate stays out of
+ * Babylon's hot path.
+ */
+export function paladinAnimTargetWeight(activeMoveIds, activeLungeIds, entities, heroPredicate) {
+  const moves = activeMoveIds instanceof Set ? activeMoveIds : null;
+  const lunges = activeLungeIds instanceof Set ? activeLungeIds : null;
+  if ((!moves || moves.size === 0) && (!lunges || lunges.size === 0)) return 1;
+  if (!Array.isArray(entities) || typeof heroPredicate !== 'function') {
+    // No entity list available — fall back to "anyone moving = walk".
+    return 0;
+  }
+  for (const e of entities) {
+    if (!e || !e.id) continue;
+    if (!heroPredicate(e)) continue;
+    if ((moves && moves.has(e.id)) || (lunges && lunges.has(e.id))) return 0;
+  }
+  return 1;
+}
+
 export function iconBillboardYRelativeToCone(leader = false) {
   const hMul = leader ? STANDEE_LEADER_HEIGHT_MUL : 1;
   // Cone centre sits at  (STANDEE_BASE_THICKNESS / 2) + (coneHeight / 2)

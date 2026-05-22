@@ -6,6 +6,10 @@ data/
 .env
 assets/generated/
 .DS_Store
+
+# FBX source + FBX2glTF intermediate (we ship the .glb output only)
+assets/models/*.fbx
+assets/models/*.fbm/
 scripts/map-renders/
 scripts/renders/
 dist/

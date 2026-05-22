@@ -35,10 +35,10 @@ describe('admin-assets.html', () => {
       'must reference the local Babylon loaders UMD bundle so .glb is registered');
   });
 
-  test('references the three seed model files the brief calls out', () => {
+  test('references the seed model files the brief calls out', () => {
     assert.match(html, /house\.glb/);
     assert.match(html, /paladin\.glb/);
-    assert.match(html, /idle\.glb/);
+    assert.match(html, /walking\.glb/);
   });
 
   test('uses ArcRotateCamera with attachControl (default Babylon orbit/zoom)', () => {
