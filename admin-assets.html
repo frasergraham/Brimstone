@@ -93,20 +93,6 @@
         <div class="anim-list" id="anim-list"><span class="empty">no animations</span></div>
       </div>
 
-      <div class="section">
-        <h3>Attach animation to base</h3>
-        <div class="row"><label>Base model</label>
-          <select id="base-model">
-            <option value="">— none (standalone view) —</option>
-            <option value="paladin-idle.glb">paladin-idle.glb</option>
-          </select>
-        </div>
-        <div style="margin-top:6px;font-size:11px;opacity:0.7;">
-          When a base is selected, clicking an animation-only file
-          (walking.glb / running.glb — no embedded mesh) loads the base
-          and retargets the animation onto it by bone name.
-        </div>
-      </div>
 
       <div class="section">
         <h3>View</h3>
@@ -135,11 +121,21 @@
 
     // Hardcoded model list (the brief mentions dynamic discovery is a stretch).
     // Each entry: { file, label } — file is fetched from /assets/models/<file>.
+    // Sidebar: mesh-having models the user can preview. Each rigged
+    // model auto-retargets every entry of ANIMATION_FILES onto its
+    // skeleton at load so the animations dropdown lists them all for
+    // one-click playback.
     const MODELS = [
       { file: 'house.glb',         label: 'house.glb' },
-      { file: 'paladin-idle.glb',  label: 'paladin-idle.glb (mesh+idle)' },
-      { file: 'walking.glb',       label: 'walking.glb (anim only)' },
-      { file: 'running.glb',       label: 'running.glb (anim only)' },
+      { file: 'paladin-idle.glb',  label: 'paladin-idle.glb' },
+    ];
+
+    // Animation-only .glb files (Mixamo "without skin" exports — joint
+    // hierarchy + keyframes, no mesh). Retargeted by bone name onto
+    // whichever rigged mesh the user selects.
+    const ANIMATION_FILES = [
+      'walking.glb',
+      'running.glb',
     ];
 
     const MODEL_DIR = '/assets/models/';
@@ -368,82 +364,70 @@
       return cloned;
     }
 
-    function loadModel(file) {
+    // Load the mesh, then sequentially import every animation file and
+    // retarget its keyframes onto the mesh's skeleton. The dropdown
+    // ends up listing the mesh's embedded anims + every ANIMATION_FILES
+    // entry retargeted.
+    async function loadModel(file) {
       errEl.textContent = '';
       clearCurrent();
       updateMetadata(file, null);
 
-      return BABYLON.SceneLoader.ImportMeshAsync('', MODEL_DIR, file, scene)
-        .then((result) => {
-          const baseFile = $('base-model').value;
-          // If the user selected a base AND this file is animation-only,
-          // load the base FIRST so we have a skeleton to retarget against.
-          if (baseFile && baseFile !== file && isAnimOnly(result)) {
-            // Stash the animation group(s) we want to layer on the base.
-            const animGroups = (result.animationGroups || []).slice();
-            for (const g of animGroups) { try { g.stop(); } catch (_) {} }
-            // The anim file's stub skeleton + transformNodes stay in the
-            // scene momentarily — they'll be cleaned by clearCurrent in
-            // the recursive loadModel call.
-            const stubMeshes = result.meshes || [];
-            const stubSkels  = result.skeletons || [];
-            const stubGroups = animGroups; // for disposal after retarget
+      let result;
+      try {
+        result = await BABYLON.SceneLoader.ImportMeshAsync('', MODEL_DIR, file, scene);
+      } catch (err) {
+        errEl.textContent = `Failed to load ${file}: ${err && err.message ? err.message : err}`;
+        updateMetadata(file, null);
+        return;
+      }
 
-            // Recursively load the base, then retarget our anim groups
-            // onto its rig.
-            return BABYLON.SceneLoader.ImportMeshAsync('', MODEL_DIR, baseFile, scene)
-              .then((baseResult) => {
-                // Tear down the anim file's stub meshes/skeletons/groups —
-                // we only kept their keyframes (now cloned onto base).
-                for (const m of stubMeshes) { try { m.dispose(); } catch (_) {} }
-                for (const s of stubSkels)  { try { s.dispose(); } catch (_) {} }
+      currentMeshes = result.meshes || [];
+      currentSkeletons = result.skeletons || [];
+      currentAnimGroups = result.animationGroups || [];
+      for (const g of currentAnimGroups) { try { g.stop(); } catch (_) {} }
+      for (const m of currentMeshes) {
+        if (m.getTotalVertices && m.getTotalVertices() > 0) {
+          shadows.addShadowCaster(m);
+          m.receiveShadows = true;
+        }
+      }
 
-                currentMeshes      = baseResult.meshes || [];
-                currentSkeletons   = baseResult.skeletons || [];
-                // Skip any animation the base file embedded — we want the
-                // retargeted clip to be the only one driving the rig.
-                for (const g of (baseResult.animationGroups || [])) {
-                  try { g.stop(); g.dispose(); } catch (_) {}
-                }
-                // Retarget each anim group onto the base, then dispose
-                // the originals (their targets pointed at the stub
-                // skeleton which we just disposed).
-                currentAnimGroups = [];
-                for (const g of stubGroups) {
-                  const retargeted = retargetAnimGroupOntoBase(g, currentMeshes, currentSkeletons);
-                  currentAnimGroups.push(retargeted);
-                  try { g.dispose(); } catch (_) {}
-                }
-
-                for (const m of currentMeshes) {
-                  if (m.getTotalVertices && m.getTotalVertices() > 0) {
-                    shadows.addShadowCaster(m);
-                    m.receiveShadows = true;
-                  }
-                }
-                updateMetadata(file + ' on ' + baseFile, baseResult);
-                frameCamera();
-              });
-          }
-
-          // Standalone load (no base, or file has its own mesh).
-          currentMeshes = result.meshes || [];
-          currentSkeletons = result.skeletons || [];
-          currentAnimGroups = result.animationGroups || [];
-          for (const g of currentAnimGroups) { try { g.stop(); } catch (_) {} }
-          for (const m of currentMeshes) {
-            if (m.getTotalVertices && m.getTotalVertices() > 0) {
-              shadows.addShadowCaster(m);
-              m.receiveShadows = true;
+      // For rigged meshes, auto-load every animation file and retarget.
+      // We skip this on meshes with no skeleton (e.g. house.glb) since
+      // there's no rig to retarget against.
+      if (currentSkeletons.length > 0) {
+        for (const animFile of ANIMATION_FILES) {
+          try {
+            const animResult = await BABYLON.SceneLoader.ImportMeshAsync(
+              '', MODEL_DIR, animFile, scene,
+            );
+            const groups = (animResult.animationGroups || []).slice();
+            const stubMeshes = animResult.meshes || [];
+            const stubSkels  = animResult.skeletons || [];
+            for (const g of groups) {
+              try { g.stop(); } catch (_) {}
+              const retargeted = retargetAnimGroupOntoBase(g, currentMeshes, currentSkeletons);
+              if (retargeted) {
+                // Use the source filename (sans .glb) as the dropdown label
+                // so the entries read as "walking", "running", etc.
+                retargeted.name = animFile.replace(/\.glb$/i, '');
+                currentAnimGroups.push(retargeted);
+              }
+              try { g.dispose(); } catch (_) {}
             }
+            // Stub geometry stays in scene only as throwaway — we only kept
+            // the keyframes (now cloned onto our visible base).
+            for (const m of stubMeshes) { try { m.dispose(); } catch (_) {} }
+            for (const s of stubSkels)  { try { s.dispose(); } catch (_) {} }
+          } catch (err) {
+            console.warn(`[asset-viewer] skipping ${animFile}:`, err && err.message ? err.message : err);
           }
-          updateMetadata(file, result);
-          frameCamera();
-        })
-        .catch((err) => {
-          errEl.textContent = `Failed to load ${file}: ${err && err.message ? err.message : err}`;
-          updateMetadata(file, null);
-        });
+        }
+      }
+
+      updateMetadata(file, result);
+      frameCamera();
     }
 
     // ── Sidebar list ───────────────────────────────────────────────────────
@@ -464,12 +448,6 @@
       listEl.appendChild(el);
     }
 
-    // Re-trigger the current load when the user changes the base model —
-    // makes the "with base" / "standalone" toggle interactive without
-    // needing to re-click the sidebar entry.
-    $('base-model').addEventListener('change', () => {
-      if (activeFile) loadModel(activeFile);
-    });
 
     // ── Animation controls ────────────────────────────────────────────────
     function selectedGroup() {
