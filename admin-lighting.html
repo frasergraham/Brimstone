@@ -157,7 +157,9 @@
     let fogOn    = false;
     state.fogOfWar = 'none';
 
-    renderer.loadImages();
+    // Absolute path — the page lives at /admin/lighting, so the default
+    // relative `assets/tilemap.png` would resolve to /admin/assets/...
+    renderer.loadImages('/assets');
     renderer.draw();
 
     // After renderer's _initBabylon finished (async), grab references to the
@@ -298,7 +300,7 @@
       try { renderer._engine?.dispose(); } catch {}
       state = buildState();
       renderer = new Renderer3D(canvas, state);
-      renderer.loadImages();
+      renderer.loadImages('/assets');
       renderer.draw();
       waitForRenderer().then(() => {
         if (renderer._onBeforeRenderObs) {
