@@ -8,6 +8,9 @@
 
 import { describe, test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
 
 import {
   Renderer3D,
@@ -17,6 +20,8 @@ import {
   terrainSpriteIdFor,
 } from '../src/renderer-3d.js';
 import { TileType } from '../src/tiles.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 describe('Renderer3D — terrainSpriteIdFor', () => {
   test('grass tile picks a grass_N variant', () => {
@@ -250,4 +255,67 @@ describe('Renderer3D._terrainTextureFor — Babylon Texture constructor wiring',
         console.warn = orig;
       }
     });
+});
+
+describe('Renderer3D consumers — must call loadImages() to populate the atlas', () => {
+  // The atlas (`_tilemapImg` + `_spriteRects`) is populated lazily by
+  // `Renderer3D.loadImages()`. Callers that construct Renderer3D but skip
+  // loadImages() get a textureless renderer: `_buildTileTopDisc` returns
+  // null for every tile (no `_tilemapImg` → `_terrainMaterialFor` returns
+  // null → no disc is created at all), and `_upgradeTileTextures` never
+  // fires because the loadImages() handler is the only thing that calls it.
+  //
+  // The operator-visible symptom is "every hex shows as a bare coloured
+  // cylinder with no terrain sprite on top" — IDENTICAL to the bug that
+  // PR #329 (invertY=false → defaults) tried to fix. PR #329 corrected the
+  // texture constructor convention but the actual cause in the playtest
+  // path was this missing call: `tools/3d-preview.html` constructed
+  // Renderer3D and called `draw()` but never `loadImages()`, so the disc
+  // path was dead before the Babylon Texture constructor was ever reached.
+  //
+  // This contract test locks in that every Renderer3D consumer touching
+  // the live tilemap path must invoke loadImages(). Tests/scripts that
+  // exercise pure helpers (no Babylon, no real DOM) are explicitly excluded.
+
+  test('tools/3d-preview.html calls renderer.loadImages() in rebuildScene', () => {
+    const path = resolve(__dirname, '../tools/3d-preview.html');
+    const src = readFileSync(path, 'utf8');
+    assert.ok(
+      /renderer\.loadImages\s*\(/.test(src),
+      'tools/3d-preview.html must call renderer.loadImages() — otherwise ' +
+      '_tilemapImg stays null forever and tiles render as bare coloured ' +
+      'cylinders with no terrain sprite (the symptom #t-44c10cd9 chased)',
+    );
+  });
+
+  test('src/main.js calls renderer.loadImages() after constructing the renderer', () => {
+    // Sibling check — locks in the main game flow too, so a future refactor
+    // that moves the renderer construction can't silently drop the call.
+    const path = resolve(__dirname, '../src/main.js');
+    const src = readFileSync(path, 'utf8');
+    assert.ok(
+      /renderer\.loadImages\s*\(/.test(src),
+      'src/main.js must call renderer.loadImages() so the active game has a ' +
+      'populated tilemap atlas',
+    );
+  });
+
+  test('_buildTileTopDisc returns null when _tilemapImg is absent (contract that justifies the loadImages requirement)', () => {
+    // Pin the failure mode that makes the missing-loadImages bug invisible:
+    // _buildTileTopDisc silently returns null when the atlas isn't loaded,
+    // which means the renderer happily produces a map with no textured
+    // discs at all rather than throwing or warning. That silent fallback
+    // is what made it possible for a Renderer3D consumer (the preview
+    // tool) to ship without loadImages and look "fine" except for the
+    // missing terrain art.
+    const fakeCanvas = { parentElement: null, width: 800, height: 600, addEventListener() {} };
+    const inst = new Renderer3D(fakeCanvas, { tiles: new Map() });
+    // No _tilemapImg, no _spriteRects, no _babylon, no _scene — exactly the
+    // state a freshly-constructed Renderer3D is in before loadImages runs.
+    const tile = { type: TileType.GRASS, col: 0, row: 0 };
+    const disc = inst._buildTileTopDisc(tile, /* parent */ null);
+    assert.equal(disc, null,
+      '_buildTileTopDisc must return null without an atlas — the silent ' +
+      'fallback that makes the missing-loadImages bug user-visible');
+  });
 });
