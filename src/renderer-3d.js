@@ -1754,10 +1754,18 @@ export class Renderer3D {
         0, 0, c.width, c.height,
       );
       const BABYLON = this._babylon;
-      const tex = new BABYLON.Texture(
-        c.toDataURL(), this._scene, true, false,
-        BABYLON.Texture.TRILINEAR_SAMPLINGMODE,
-      );
+      // Babylon defaults: noMipmap=false, invertY=true. The initial PR shipped
+      // `true, false` (noMipmap + invertY=false) — the same anti-pattern the
+      // portrait code hit and reverted in 0a2f8007, whose comment notes the
+      // V-flip rendered the back face of the plane, hiding the textured face
+      // behind backFaceCulling. The disc here is the same situation: front
+      // face has normal +Y after rotation.x=-π/2; with invertY=false the
+      // texture is sampled as if mapped onto the back face, leaving the
+      // visible +Y face untextured (it shows the StandardMaterial's default
+      // white diffuse against a culled back — operator-visible symptom: every
+      // hex appears as the bare coloured cylinder with no terrain sprite on
+      // top). Use defaults — match `_portraitTextureFor`.
+      const tex = new BABYLON.Texture(c.toDataURL(), this._scene);
       this._terrainTextureCache.set(spriteId, tex);
       return tex;
     } catch (err) {

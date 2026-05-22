@@ -6,10 +6,11 @@
 // the sprite id used for its textured top, plus the constants the renderer's
 // material cache is keyed on.
 
-import { describe, test } from 'node:test';
+import { describe, test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  Renderer3D,
   TERRAIN_VARIANT_COUNTS,
   TERRAIN_DISC_RADIUS_MUL,
   TERRAIN_DISC_Y_OFFSET,
@@ -156,4 +157,97 @@ describe('Renderer3D — texture-disc geometry constants', () => {
     assert.equal(TERRAIN_VARIANT_COUNTS.river,  undefined);
     assert.equal(TERRAIN_VARIANT_COUNTS.bridge, undefined);
   });
+});
+
+// Stub the bits of Babylon and the DOM that _terrainTextureFor touches, so
+// we can call into the live method without a real WebGL context. Returns
+// `{ inst, textureCalls }` — `textureCalls` is the captured argument list of
+// every `new BABYLON.Texture(...)` invocation. Lets us pin the constructor
+// signature (the previous regression was a 5-arg form that flipped V via
+// `invertY=false`, which hid the disc behind backface culling).
+function buildRendererWithStubAtlas() {
+  const fakeCanvas = { parentElement: null, width: 800, height: 600, addEventListener() {} };
+  const inst = new Renderer3D(fakeCanvas, { tiles: new Map() });
+  const textureCalls = [];
+  const TRILINEAR = 3; // distinct sentinel — does not matter, just unique
+  inst._babylon = {
+    Texture: function (...args) {
+      textureCalls.push(args);
+      this._args = args;
+      this.dispose = () => {};
+    },
+  };
+  inst._babylon.Texture.TRILINEAR_SAMPLINGMODE = TRILINEAR;
+  inst._scene = { __scene: true };
+  inst._tilemapImg = { __img: true, naturalWidth: 1024, naturalHeight: 1024 };
+  inst._spriteRects = new Map([
+    ['grass_1', { x: 6, y: 36, size: 256 }],
+  ]);
+  return { inst, textureCalls };
+}
+
+describe('Renderer3D._terrainTextureFor — Babylon Texture constructor wiring', () => {
+  // Node has no DOM; stub the minimum surface area _terrainTextureFor needs.
+  // Install before every test in the suite, restore after — describe-block
+  // body runs at import time, so swapping globalThis.document inline would
+  // un-stub before the tests actually execute.
+  let origDocument;
+  before(() => {
+    origDocument = globalThis.document;
+    const fakeCtx = { drawImage() {} };
+    const fakeCanvas = { getContext: () => fakeCtx, toDataURL: () => 'data:image/png;base64,IGNORED' };
+    globalThis.document = { createElement: () => fakeCanvas };
+  });
+  after(() => {
+    if (origDocument === undefined) delete globalThis.document;
+    else globalThis.document = origDocument;
+  });
+
+    test('uses Babylon defaults — no invertY=false form (regression #312 / portrait fix 0a2f8007)', () => {
+      // The previous regression here was constructing the disc texture as
+      //   new BABYLON.Texture(dataUrl, scene, true, false, TRILINEAR);
+      // which passes `invertY=false`. The portrait code learned this hides the
+      // visible face behind backFaceCulling; the disc has the same geometry
+      // (front face normal +Y after `rotation.x=-π/2`) so the same bug applies.
+      // Lock the convention: pass URL + scene only, let Babylon's defaults
+      // (noMipmap=false, invertY=true) do the right thing.
+      const { inst, textureCalls } = buildRendererWithStubAtlas();
+      const tex = inst._terrainTextureFor('grass_1');
+      assert.ok(tex, 'expected a Texture instance for a valid sprite id');
+      assert.equal(textureCalls.length, 1);
+      const args = textureCalls[0];
+      // First arg is the data URL (string); second is the scene; nothing else.
+      // The disallowed shape passed `true, false, samplingMode` after scene.
+      assert.equal(typeof args[0], 'string', 'first arg is the data URL');
+      assert.equal(args[1], inst._scene, 'second arg is the scene');
+      assert.ok(args.length <= 2 || args[3] !== false,
+        `_terrainTextureFor must not call new BABYLON.Texture with invertY=false; got args.length=${args.length}, args[3]=${args[3]}`);
+    });
+
+    test('caches the texture per sprite id (second call returns the cached instance)', () => {
+      const { inst, textureCalls } = buildRendererWithStubAtlas();
+      const a = inst._terrainTextureFor('grass_1');
+      const b = inst._terrainTextureFor('grass_1');
+      assert.strictEqual(a, b);
+      assert.equal(textureCalls.length, 1, 'Texture constructor invoked once across two calls');
+    });
+
+    test('returns null when tilemap image is absent (atlas not yet loaded)', () => {
+      const { inst } = buildRendererWithStubAtlas();
+      inst._tilemapImg = null;
+      assert.equal(inst._terrainTextureFor('grass_1'), null);
+    });
+
+    test('returns null when the sprite id has no atlas rect (warns once, no throw)', () => {
+      const { inst } = buildRendererWithStubAtlas();
+      const orig = console.warn;
+      const warned = [];
+      console.warn = (...a) => warned.push(a);
+      try {
+        assert.equal(inst._terrainTextureFor('not_a_real_sprite'), null);
+        assert.ok(warned.length >= 1, 'expected a warning when the sprite id is missing');
+      } finally {
+        console.warn = orig;
+      }
+    });
 });
