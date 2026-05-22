@@ -1701,7 +1701,14 @@ export class Renderer3D {
       : 16 / 9;
     const fov = this._camera?.fov || 0.8;
     const cap = this._camera?.upperRadiusLimit ?? radiusForStandardFit(aspect, fov);
-    const bandDepth = Math.max(BORDER_BAND_DEPTH, forestBandDepthForView(cap, aspect, fov));
+    // Hard cap at 3 hexes deep regardless of camera distance — the band's job
+    // is to give the playable edge a sense of "world continues" within a small
+    // visual frame, not to fill the screen with hundreds of cones. Previously
+    // forestBandDepthForView could push this past 10 at zoomed-out views and
+    // tank fps. 3 reads as plenty of forest visually while keeping draw cost
+    // bounded. (See task 17.)
+    const bandDepth = Math.min(3, Math.max(BORDER_BAND_DEPTH,
+      forestBandDepthForView(cap, aspect, fov)));
     for (const pos of borderTilePositions(this.state.tiles, bandDepth)) {
       const { x, z } = hexToWorld(pos.col, pos.row);
 
@@ -1721,17 +1728,16 @@ export class Renderer3D {
       this._borderForestHexesByKey.set(hexKey(pos.col, pos.row), hex);
       const props = [hex];
 
-      // Pine trees — denser than in-map forest tiles.
+      // Pine trees — denser than in-map forest tiles, batched into 2 merged
+      // meshes per tile (trunks + leaves) to keep border-band draw cost
+      // bounded. Border forest is hidden by default — toggle with F.
       const trees = borderForestTreesForHex(pos.col, pos.row);
-      for (let i = 0; i < trees.length; i++) {
-        const t = trees[i];
-        const meshes = this._buildPineTreeMeshes(
-          `border_forest_${pos.col}_${pos.row}_${i}`, parent, x + t.x, z + t.z, t.scale,
-        );
-        for (const m of meshes) {
-          this._addShadowCaster(m);
-          props.push(m);
-        }
+      const meshes = this._buildPineTreeBatchedMeshes(
+        `border_forest_${pos.col}_${pos.row}`, parent, x, z, trees,
+      );
+      for (const m of meshes) {
+        this._addShadowCaster(m);
+        props.push(m);
       }
 
       this._borderPropsByKey.set(hexKey(pos.col, pos.row), props);
@@ -1820,16 +1826,13 @@ export class Renderer3D {
     // same cluster across runs. See forestTreesForHex / TILE_SLOTS.
     if (tile.type === TileType.FOREST) {
       const trees = forestTreesForHex(tile.col, tile.row);
-      for (let i = 0; i < trees.length; i++) {
-        const t = trees[i];
-        const meshes = this._buildPineTreeMeshes(
-          `forest_${tile.col}_${tile.row}_${i}`, parent, x + t.x, z + t.z, t.scale,
-        );
-        for (const m of meshes) {
-          this._addShadowCaster(m);
-          m.metadata = { respectsFog: false };
-          trackProp(m);
-        }
+      const meshes = this._buildPineTreeBatchedMeshes(
+        `forest_${tile.col}_${tile.row}`, parent, x, z, trees,
+      );
+      for (const m of meshes) {
+        this._addShadowCaster(m);
+        m.metadata = { respectsFog: false };
+        trackProp(m);
       }
     }
 
@@ -2272,56 +2275,136 @@ export class Renderer3D {
    *  box (with a small inset so the atlas-sprite gutter pixels are never
    *  sampled). Triangulated as a fan from the centre vertex out to six rim
    *  vertices at 30°, 90°, 150°, 210°, 270°, 330°. */
-  /** Build a pine-shaped tree at world (x, z): a short brown cylinder trunk
-   *  with three green cones stacked overlapping above. Returns an array of
-   *  meshes (trunk + 3 cones) so callers can register each as a shadow caster
-   *  and tag fog metadata. Scale is applied uniformly via mesh.scaling so the
-   *  silhouette stays consistent across hash-varied tree sizes.
-   *
-   *  Tree heights/diameters are tuned so a stack reads as a clean pine
-   *  silhouette: trunk h≈0.25 d≈0.18, cone1 h≈0.5 d≈0.7, cone2 h≈0.45 d≈0.55,
-   *  cone3 h≈0.4 d≈0.4. Cones overlap by ~0.18 so the silhouette is solid. */
-  _buildPineTreeMeshes(name, parent, x, z, scale = 1) {
+  /** Build a tombstone-shaped standee mesh: a rectangle of width `w` and
+   *  height `h` minus rounded top corners, extruded by `thickness` along the
+   *  +Z axis. Lives in the XY plane centred on (0, h/2, 0) so the bottom
+   *  edge sits at Y=0 (mirrors the historical plane silhouette). UVs on the
+   *  front face span [0..1] across the silhouette's bounding box so the
+   *  portrait texture maps over the whole shape; back face shares the same
+   *  UVs (texture appears mirrored from behind, fine at the locked 35° tilt). */
+  _buildTombstoneMesh(name, w, h, thickness) {
+    const BABYLON = this._babylon;
+    const SEGMENTS = 16; // arc resolution for the rounded top
+    const r = w / 2;
+    // 2D silhouette in XY (z=0). Counter-clockwise viewed from +Z so the
+    // front face's normal points at +Z (camera-facing after billboard rotation).
+    // Bottom-left → bottom-right → right side up to start of arc → semicircle
+    // top → left side back down.
+    const outline = [];
+    outline.push({ x: -r, y: 0 });
+    outline.push({ x:  r, y: 0 });
+    outline.push({ x:  r, y: h - r });
+    for (let i = 1; i < SEGMENTS; i++) {
+      const a = Math.PI * (i / SEGMENTS); // 0 .. π
+      outline.push({ x: r * Math.cos(a), y: (h - r) + r * Math.sin(a) });
+    }
+    outline.push({ x: -r, y: h - r });
+    // (loop closes back to start by index)
+
+    const N = outline.length;
+    const positions = [];
+    const uvs = [];
+    const indices = [];
+    const halfT = thickness / 2;
+
+    // Front face vertices (z = +halfT)
+    for (let i = 0; i < N; i++) {
+      positions.push(outline[i].x, outline[i].y, +halfT);
+      uvs.push((outline[i].x + r) / w, outline[i].y / h);
+    }
+    // Back face vertices (z = -halfT)
+    for (let i = 0; i < N; i++) {
+      positions.push(outline[i].x, outline[i].y, -halfT);
+      uvs.push((outline[i].x + r) / w, outline[i].y / h);
+    }
+    // Triangulate the outline as a fan from vertex 0 — outline is convex
+    // (rectangle + semicircle bulging out), so a fan covers the silhouette.
+    // Front face winding: CCW viewed from +Z → normal +Z (camera-facing).
+    for (let i = 1; i < N - 1; i++) indices.push(0, i, i + 1);
+    // Back face winding: reversed so its normal points -Z.
+    for (let i = 1; i < N - 1; i++) indices.push(N, N + i + 1, N + i);
+    // Side wall: quad per outline edge connecting front[i] / front[i+1] /
+    // back[i+1] / back[i]. Two triangles per quad.
+    for (let i = 0; i < N; i++) {
+      const j = (i + 1) % N;
+      const f0 = i, f1 = j;
+      const b0 = N + i, b1 = N + j;
+      indices.push(f0, b0, f1);
+      indices.push(f1, b0, b1);
+    }
+
+    const mesh = new BABYLON.Mesh(name, this._scene);
+    const vd = new BABYLON.VertexData();
+    vd.positions = positions;
+    vd.indices   = indices;
+    vd.uvs       = uvs;
+    vd.normals   = [];
+    BABYLON.VertexData.ComputeNormals(positions, indices, vd.normals);
+    vd.applyToMesh(mesh);
+    return mesh;
+  }
+
+  /** Build pine trees for a forest hex: one merged TRUNK mesh + one merged
+   *  LEAF mesh covering every tree at the given positions, parented at world
+   *  (cx, cz). Trees are translated by their `t.x/z` offsets and uniformly
+   *  scaled by `t.scale`. Returning 2 meshes per tile (instead of 4 per tree)
+   *  is the bulk of the task-9 fps fix — forest-heavy maps were emitting
+   *  hundreds of draw calls before this. */
+  _buildPineTreeBatchedMeshes(namePrefix, parent, cx, cz, trees) {
     const BABYLON = this._babylon;
     const scene   = this._scene;
+    if (!BABYLON || !scene || !trees || trees.length === 0) return [];
     const trunkMat = this._materialFor('#5a3a20');
     const leafMat  = this._materialFor('#234c1f');
-    const meshes = [];
-    const trunk = BABYLON.MeshBuilder.CreateCylinder(
-      `${name}_trunk`,
-      { diameterTop: 0.16, diameterBottom: 0.20, height: 0.30, tessellation: 6 },
-      scene,
-    );
-    trunk.parent = parent;
-    trunk.position.x = x;
-    trunk.position.z = z;
-    trunk.position.y = 0.15 * scale;
-    trunk.scaling.x = trunk.scaling.y = trunk.scaling.z = scale;
-    trunk.material = trunkMat;
-    trunk.isPickable = false;
-    meshes.push(trunk);
-    const cones = [
-      { y: 0.45, dBot: 0.78, dTop: 0.35, h: 0.45 },
-      { y: 0.72, dBot: 0.58, dTop: 0.20, h: 0.40 },
-      { y: 0.96, dBot: 0.38, dTop: 0.00, h: 0.35 },
-    ];
-    for (let c = 0; c < cones.length; c++) {
-      const cfg = cones[c];
-      const cone = BABYLON.MeshBuilder.CreateCylinder(
-        `${name}_leaf${c}`,
-        { diameterTop: cfg.dTop, diameterBottom: cfg.dBot, height: cfg.h, tessellation: 6 },
+    const trunks = [];
+    const leaves = [];
+    for (let i = 0; i < trees.length; i++) {
+      const t = trees[i];
+      const tx = cx + t.x;
+      const tz = cz + t.z;
+      const s  = t.scale;
+      const trunk = BABYLON.MeshBuilder.CreateCylinder(
+        `${namePrefix}_t${i}_trunk`,
+        { diameterTop: 0.16 * s, diameterBottom: 0.20 * s, height: 0.30 * s, tessellation: 6 },
         scene,
       );
-      cone.parent = parent;
-      cone.position.x = x;
-      cone.position.z = z;
-      cone.position.y = cfg.y * scale;
-      cone.scaling.x = cone.scaling.y = cone.scaling.z = scale;
-      cone.material = leafMat;
-      cone.isPickable = false;
-      meshes.push(cone);
+      trunk.position.set(tx, 0.15 * s, tz);
+      trunks.push(trunk);
+      const cones = [
+        { y: 0.45 * s, dBot: 0.78 * s, dTop: 0.35 * s, h: 0.45 * s },
+        { y: 0.72 * s, dBot: 0.58 * s, dTop: 0.20 * s, h: 0.40 * s },
+        { y: 0.96 * s, dBot: 0.38 * s, dTop: 0.00,     h: 0.35 * s },
+      ];
+      for (let c = 0; c < cones.length; c++) {
+        const cfg = cones[c];
+        const cone = BABYLON.MeshBuilder.CreateCylinder(
+          `${namePrefix}_t${i}_leaf${c}`,
+          { diameterTop: cfg.dTop, diameterBottom: cfg.dBot, height: cfg.h, tessellation: 6 },
+          scene,
+        );
+        cone.position.set(tx, cfg.y, tz);
+        leaves.push(cone);
+      }
     }
-    return meshes;
+    // MergeMeshes(meshes, disposeSource=true) returns one combined mesh.
+    const mergedTrunk = BABYLON.Mesh.MergeMeshes(trunks, true, true, undefined, false, false);
+    const mergedLeaf  = BABYLON.Mesh.MergeMeshes(leaves, true, true, undefined, false, false);
+    const out = [];
+    if (mergedTrunk) {
+      mergedTrunk.name       = `${namePrefix}_trunks`;
+      mergedTrunk.material   = trunkMat;
+      mergedTrunk.parent     = parent;
+      mergedTrunk.isPickable = false;
+      out.push(mergedTrunk);
+    }
+    if (mergedLeaf) {
+      mergedLeaf.name       = `${namePrefix}_leaves`;
+      mergedLeaf.material   = leafMat;
+      mergedLeaf.parent     = parent;
+      mergedLeaf.isPickable = false;
+      out.push(mergedLeaf);
+    }
+    return out;
   }
 
   _buildFlatHexMesh(name, parent, x, z) {
@@ -2604,10 +2687,16 @@ export class Renderer3D {
     const wMul    = leader ? STANDEE_LEADER_WIDTH_MUL  : 1;
     const hMul    = leader ? STANDEE_LEADER_HEIGHT_MUL : 1;
 
-    const plane = BABYLON.MeshBuilder.CreatePlane(
+    // Standee silhouette: a tombstone-shaped mesh (rectangle + rounded top)
+    // with a little thickness, replacing the previous flat billboarded plane.
+    // The portrait texture is mapped onto the front face via per-vertex UVs
+    // built in `_buildTombstoneMesh`. Bilateral symmetry around the Y axis so
+    // either side reads as the same silhouette under any camera angle.
+    const plane = this._buildTombstoneMesh(
       `unit_${entity.id}`,
-      { width: STANDEE_BASE_WIDTH * wMul, height: STANDEE_BASE_HEIGHT * hMul },
-      scene,
+      STANDEE_BASE_WIDTH  * wMul,
+      STANDEE_BASE_HEIGHT * hMul,
+      /* thickness */ 0.10,
     );
     plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_Y;
     plane.material      = this._planeMaterialFor(this._assetIdFor(entity));
@@ -2643,12 +2732,13 @@ export class Renderer3D {
     const x = typeof opts.x === 'number' ? opts.x : base.x;
     const z = typeof opts.z === 'number' ? opts.z : base.z;
     const hMul = standee.leader ? STANDEE_LEADER_HEIGHT_MUL : 1;
+    void hMul;
     standee.plane.position.x = x;
     standee.plane.position.z = z;
-    // Sprite vertical centre = base disc top + half plane height.
-    standee.plane.position.y = STANDEE_BASE_Y_OFFSET
-      + STANDEE_BASE_THICKNESS / 2
-      + (STANDEE_BASE_HEIGHT * hMul) / 2;
+    // Tombstone mesh bottom edge sits at its local Y=0 — anchor the bottom
+    // just above the base disc instead of centring the sprite (which is what
+    // the old flat plane needed).
+    standee.plane.position.y = STANDEE_BASE_Y_OFFSET + STANDEE_BASE_THICKNESS / 2;
     standee.base.position.x = x;
     standee.base.position.z = z;
     standee.base.position.y = STANDEE_BASE_Y_OFFSET;
@@ -3442,8 +3532,15 @@ export class Renderer3D {
   _createHpBar(standee, entity) {
     const BABYLON = this._babylon;
     if (typeof document === 'undefined') return null;
-    const tex = new BABYLON.DynamicTexture(`hpTex_${entity.id}`, { width: 128, height: 24 }, this._scene, false);
+    // Bump texture resolution 4× (128×24 → 512×96) and disable mipmaps; the
+    // old setup was filtering between mip levels as the camera zoomed/panned,
+    // producing the operator-reported shimmer (texels alternately oversampled
+    // and undersampled at intermediate zooms). With noMipmap=true and bilinear
+    // filtering the bar reads as a clean rectangle at any zoom.
+    const tex = new BABYLON.DynamicTexture(`hpTex_${entity.id}`,
+      { width: 512, height: 96 }, this._scene, /* generateMipMaps */ false);
     tex.hasAlpha = true;
+    tex.updateSamplingMode(BABYLON.Texture.BILINEAR_SAMPLINGMODE);
     const mat = new BABYLON.StandardMaterial(`hpMat_${entity.id}`, this._scene);
     mat.diffuseTexture = tex;
     mat.opacityTexture = tex;
@@ -3451,6 +3548,9 @@ export class Renderer3D {
     mat.specularColor = new BABYLON.Color3(0, 0, 0);
     mat.emissiveColor = new BABYLON.Color3(1, 1, 1);
     mat.backFaceCulling = false;
+    // disableLighting keeps the bar reading as flat UI rather than picking up
+    // the dawn/dusk colour tint from the hemispheric light.
+    mat.disableLighting = true;
 
     const plane = BABYLON.MeshBuilder.CreatePlane(`hp_${entity.id}`,
       { width: 0.6, height: 0.12 }, this._scene);
@@ -3470,22 +3570,44 @@ export class Renderer3D {
   _redrawHpBarTexture(entry, hp, maxHp) {
     const tex = entry.tex;
     const ctx = tex.getContext();
-    const W = 128, H = 24;
+    const W = 512, H = 96;
     const ratio = Math.max(0, Math.min(1, hp / Math.max(1, maxHp)));
     const colour = hpBarColor(hp, maxHp);
     ctx.clearRect(0, 0, W, H);
-    // Frame
-    ctx.fillStyle = 'rgba(0,0,0,0.85)';
-    ctx.fillRect(0, 0, W, H);
+    // Bold black outline — drawn first as a thick rounded rect, then the inner
+    // panel paints over the centre so the outline stays consistent thickness
+    // regardless of fill ratio.
+    const r = 14;
+    const drawRoundedRect = (x, y, w, h, rad) => {
+      ctx.beginPath();
+      ctx.moveTo(x + rad, y);
+      ctx.lineTo(x + w - rad, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + rad);
+      ctx.lineTo(x + w, y + h - rad);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - rad, y + h);
+      ctx.lineTo(x + rad, y + h);
+      ctx.quadraticCurveTo(x, y + h, x, y + h - rad);
+      ctx.lineTo(x, y + rad);
+      ctx.quadraticCurveTo(x, y, x + rad, y);
+      ctx.closePath();
+    };
+    // Outline layer
+    ctx.fillStyle = 'rgba(0,0,0,1)';
+    drawRoundedRect(0, 0, W, H, r);
+    ctx.fill();
+    // Inner panel (dark grey, full width — this is the "empty" track)
+    const pad = 10;
     ctx.fillStyle = 'rgba(40,40,40,1)';
-    ctx.fillRect(2, 2, W - 4, H - 4);
-    // Fill
+    drawRoundedRect(pad, pad, W - pad * 2, H - pad * 2, r - 4);
+    ctx.fill();
+    // Foreground fill (clipped to the inner panel via the same rounded path,
+    // then cut to the ratio width via a rectangle clip)
+    ctx.save();
+    drawRoundedRect(pad, pad, W - pad * 2, H - pad * 2, r - 4);
+    ctx.clip();
     ctx.fillStyle = colour;
-    ctx.fillRect(2, 2, Math.round((W - 4) * ratio), H - 4);
-    // Outline
-    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-    ctx.lineWidth   = 1;
-    ctx.strokeRect(0.5, 0.5, W - 1, H - 1);
+    ctx.fillRect(pad, pad, Math.round((W - pad * 2) * ratio), H - pad * 2);
+    ctx.restore();
     tex.update();
   }
 
