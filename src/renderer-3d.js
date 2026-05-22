@@ -5682,7 +5682,10 @@ export class Renderer3D {
     const BABYLON = this._babylon;
     const { x: fromX, z: fromZ } = hexToWorld(fromCol, fromRow);
     const { x: toX,   z: toZ   } = hexToWorld(toCol,   toRow);
-    const FRAMES_MOVE = 15; // ≈250ms at 60fps
+    // Cone slide time tied to MOVE_ANIM_MS so the walking-speed-match
+    // calc in _loadWalkingAnimation actually corresponds to real cone
+    // motion. 60fps × MOVE_ANIM_MS/1000 = frames for one slide.
+    const FRAMES_MOVE = Math.max(1, Math.round(MOVE_ANIM_MS * 60 / 1000));
 
     // Cancel any in-flight move on this entity so plan-step "A→B→C" hops
     // don't queue up and play simultaneously.
@@ -5695,6 +5698,23 @@ export class Renderer3D {
     // symmetric, so we only yaw the paladin clone (when present).
     if (standee.paladinClone?.mesh && (toX !== fromX || toZ !== fromZ)) {
       standee.paladinClone.mesh.rotation.y = Math.atan2(toX - fromX, toZ - fromZ);
+    }
+
+    // Scale the paladin walking animation's playback rate by the actual
+    // distance covered in this step relative to a single hex. Road moves
+    // cover 2 hexes per step in the same MOVE_ANIM_MS window, so the
+    // walking cycle needs to play 2× faster for the feet to plant.
+    const dx = toX - fromX;
+    const dz = toZ - fromZ;
+    const stepWU = Math.sqrt(dx * dx + dz * dz);
+    const hexStepWU = HEX_RADIUS_WORLD * Math.sqrt(3);
+    if (stepWU > 0 && hexStepWU > 0) {
+      const distMul = stepWU / hexStepWU;
+      const walkGroup = this._paladinSource?.walkGroup;
+      const baseRatio = this._walkingSource?.speedRatio ?? 1.0;
+      if (walkGroup && 'speedRatio' in walkGroup) {
+        walkGroup.speedRatio = baseRatio * distMul;
+      }
     }
 
     const animX = new BABYLON.Animation('mvX', 'position.x', 60,
