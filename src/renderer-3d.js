@@ -116,7 +116,9 @@ export const HOUSE_INSTANCE_BASE_SCALE = 0.55;
 // optional — if it's missing or fails to parse, hero standees fall back to the
 // existing cone+sphere body so gameplay never blocks on a 404.
 export const PALADIN_MODEL_DIR  = 'models/';
-export const PALADIN_MODEL_FILE = 'newpaladin.glb';
+// Back-compat constant; UNIT_RIG_BANK is the source-of-truth for which
+// .glb maps to which entity type.
+export const PALADIN_MODEL_FILE = 'paladin.glb';
 
 // Fallback world-space scale applied to each cloned paladin when the source
 // mesh's natural bounding box can't be measured (test stubs, malformed GLB).
@@ -134,12 +136,11 @@ export const TARGET_PALADIN_WORLD_HEIGHT = 0.92;
 // 180° so the paladin's front reads toward the camera rather than away.
 export const PALADIN_YAW        = Math.PI;
 
-// Walking animation companion GLB — Mixamo's "Walking" clip exported as a
-// standalone .glb (separate file from paladin.glb so the model + idle stays
-// portable). The renderer loads this after paladin.glb resolves, retargets
-// its AnimationGroup's targets to paladin's TransformNodes by name, then
-// disposes walking.glb's geometry — we only want its keyframes.
+// Walking + Idle animation companion GLB filenames. These exist for
+// back-compat with existing call sites; UNIT_RIG_BANK is the architectural
+// source of truth going forward (UNIT_RIG_BANK[type].animations.{idle,walking}).
 export const WALKING_MODEL_FILE = 'walking.glb';
+export const IDLE_MODEL_FILE    = 'idle.glb';
 
 // Crossfade rate between idle and walking, in 1/seconds. 5.0 = full transition
 // in 200ms. Slow enough to read as a deliberate state change, fast enough that
@@ -166,20 +167,47 @@ export function isHeroFactionEntity(entity) {
   return !!(f && f.side === Side.DAY);
 }
 
-/** Map of entity types that have a dedicated 3D model. Everything not in
- *  the map falls back to the generic unanimated cone+sphere pawn. Extend
- *  this as new GLBs land (e.g. zombies, witches, golems). */
-export const UNIT_MODEL_BY_TYPE = Object.freeze({
-  [EntityType.PALADIN]: 'paladin', // covers HERO alias since they share the value
+/** Renderer-side bank of available animation clips. Each entry names the
+ *  .glb file under `assets/models/` that holds a single AnimationGroup; the
+ *  loader retargets that group onto a unit's skeleton by bone name. Extend
+ *  this as new clips drop in. */
+export const ANIMATION_BANK = Object.freeze({
+  idle:    'idle.glb',
+  walking: 'walking.glb',
 });
 
-/** Should this entity render with the paladin GLB model? True only for the
- *  hero/paladin entity type — survivors, soldiers, witches, zombies, etc.
- *  all fall through to the generic pawn since we don't have models for them
- *  yet. */
+/** Renderer-side bank of available unit rigs. Each entry pairs a model
+ *  .glb (mesh + skeleton, no embedded animation) with the animation clips
+ *  from ANIMATION_BANK that apply to it. Future models slot in here
+ *  without touching the loader code — e.g. witch.glb + witch's own idle.
+ *  An entity whose type is NOT in this map falls back to the generic
+ *  unanimated cone+sphere pawn. */
+export const UNIT_RIG_BANK = Object.freeze({
+  [EntityType.PALADIN]: Object.freeze({
+    model: 'paladin.glb',
+    animations: Object.freeze({
+      idle:    ANIMATION_BANK.idle,
+      walking: ANIMATION_BANK.walking,
+    }),
+  }),
+  // Future:
+  // [EntityType.WITCH]:   { model: 'witch.glb',  animations: { idle: 'witch_idle.glb' } },
+  // [EntityType.ZOMBIE]:  { model: 'zombie.glb', animations: { idle: 'zombie_idle.glb', walking: 'zombie_shamble.glb' } },
+});
+
+/** Look up the rig config for an entity. Returns the entry from
+ *  UNIT_RIG_BANK if the entity's type has a rig defined; otherwise null
+ *  (caller falls back to cone+sphere pawn). Pure; exported for tests. */
+export function getUnitRigConfig(entity) {
+  if (!entity || !entity.type) return null;
+  return UNIT_RIG_BANK[entity.type] || null;
+}
+
+/** Should this entity render with a 3D model rig (vs. the generic pawn)?
+ *  Thin predicate over getUnitRigConfig — true iff the entity's type is
+ *  in UNIT_RIG_BANK. */
 export function unitUsesPaladinModel(entity) {
-  if (!entity || !entity.type) return false;
-  return UNIT_MODEL_BY_TYPE[entity.type] === 'paladin';
+  return getUnitRigConfig(entity) != null;
 }
 
 // ─── Standee constants (Phase 3) ────────────────────────────────────────────
@@ -1700,11 +1728,14 @@ export class Renderer3D {
         transformNodes,
       };
 
-      // Fire-and-forget the walking companion GLB. Paladins start in idle
-      // immediately and pop into the walk cycle as soon as the load resolves;
-      // we don't want to block the retrofit pass on it.
+      // Fire-and-forget the walking + idle companion GLBs. Paladins start at
+      // bind pose; as each clip resolves, the blend tick picks it up. We
+      // don't block the retrofit pass on these heavy (~4–8 MB) loads.
       this._loadWalkingAnimation(basePath).catch(err => {
         console.warn('[Renderer3D] walking.glb load failed; paladins will idle only.', err);
+      });
+      this._loadIdleAnimation(basePath).catch(err => {
+        console.warn('[Renderer3D] idle.glb load failed; paladins will stay at bind pose when not moving.', err);
       });
 
       // If standees were built before the GLB landed (the common case —
@@ -1859,13 +1890,70 @@ export class Renderer3D {
       this._walkingSource.playing = false;
     }
 
-    // With NewPaladin shipping its own walking clip, the live paladin
-    // doesn't need a retargeted copy of walking.glb's animation — its
-    // built-in group is paused/played directly via
-    // _maybeTogglePaladinAnimation. We keep walking.glb's meshes + skeleton
-    // alive as the GHOST source (walkGroupNative drives walking's own
-    // skeleton independently). Don't dispose those.
-    src.walkGroup = null;
+    // Clone walkGroupNative and retarget the CLONE onto paladin's
+    // TransformNodes (looked up by name — Mixamo bone names line up
+    // between the rigged paladin.glb and walking.glb exports). The
+    // original walkGroupNative keeps driving walking.glb's own skeleton
+    // for the ghost preview path; the clone is what _maybeTogglePaladin
+    // Animation pause/plays on the live paladin standees.
+    const nameMap = new Map();
+    const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
+    const addEntry = (name, target) => {
+      if (!name || !target) return;
+      if (!nameMap.has(name)) nameMap.set(name, target);
+      const stripped = stripDup(name);
+      if (stripped !== name && !nameMap.has(stripped)) nameMap.set(stripped, target);
+    };
+    for (const tn of src.transformNodes || []) {
+      if (tn && tn.name) addEntry(tn.name, tn);
+    }
+    if (src.skeleton && Array.isArray(src.skeleton.bones)) {
+      for (const bone of src.skeleton.bones) {
+        if (!bone) continue;
+        const tn = bone._linkedTransformNode
+          || (typeof bone.getTransformNode === 'function' && bone.getTransformNode());
+        if (tn && tn.name) addEntry(tn.name, tn);
+        if (bone.name) addEntry(bone.name, tn || bone);
+      }
+    }
+
+    let walkGroupForPaladin = null;
+    let remapped = 0;
+    let missed = 0;
+    const missingExamples = [];
+    if (typeof walkGroupNative.clone === 'function') {
+      walkGroupForPaladin = walkGroupNative.clone('paladinWalkRetargeted', (oldTarget) => {
+        if (!oldTarget || !oldTarget.name) { missed++; return oldTarget; }
+        const match = nameMap.get(oldTarget.name) || nameMap.get(stripDup(oldTarget.name));
+        if (match) { remapped++; return match; }
+        missed++;
+        if (missingExamples.length < 5) missingExamples.push(oldTarget.name);
+        return oldTarget;
+      });
+    }
+    console.info(
+      `[Renderer3D] walking → paladin retarget: ${remapped} hit, ${missed} miss`
+      + (missed > 0 ? ` (e.g. ${missingExamples.join(', ')})` : '')
+      + ` — nameMap size ${nameMap.size}`,
+    );
+
+    if (walkGroupForPaladin && remapped > 0) {
+      // Kick the animatables into existence then immediately pause, so
+      // _maybeTogglePaladinAnimation can use play()/pause() to resume from
+      // current frame instead of restarting from frame 0 each move.
+      if (typeof walkGroupForPaladin.start === 'function') {
+        walkGroupForPaladin.start(true, walkSpeedRatio);
+      }
+      if (typeof walkGroupForPaladin.pause === 'function') {
+        walkGroupForPaladin.pause();
+      }
+      src.walkGroup = walkGroupForPaladin;
+    } else {
+      // Retarget failed — fall back to whatever embedded animation the
+      // paladin GLB shipped with (or nothing if it has none).
+      console.warn('[Renderer3D] walking retarget produced 0 hits — main standees will not animate.');
+      src.walkGroup = null;
+    }
     src.activeGroup = 'idle';
     this._paladinAnimObserver = this._installPaladinAnimBlendTick();
     return walkGroupNative;
@@ -1874,6 +1962,92 @@ export class Renderer3D {
   /** Dispose every mesh + skeleton brought in by the walking.glb import.
    *  The animation group is intentionally preserved (handed back to the
    *  caller). Safe against partial / missing fields. */
+  /** Load idle.glb and retarget its AnimationGroup onto the paladin
+   *  source skeleton by name (same pattern as walking). The retargeted
+   *  group replaces `src.idleGroup` so the blend tick plays it when the
+   *  paladin is not mid-move. Imported geometry is disposed — we only
+   *  want the keyframes. */
+  async _loadIdleAnimation(basePath = 'assets') {
+    if (!this._babylon || !this._scene || !this._paladinSource) return null;
+    const BABYLON = this._babylon;
+    const src = this._paladinSource;
+    if (!BABYLON.SceneLoader || typeof BABYLON.SceneLoader.ImportMeshAsync !== 'function') {
+      return null;
+    }
+
+    let result;
+    try {
+      result = await BABYLON.SceneLoader.ImportMeshAsync(
+        null,
+        `${basePath}/${PALADIN_MODEL_DIR}`,
+        IDLE_MODEL_FILE,
+        this._scene,
+      );
+    } catch (err) {
+      console.warn('[Renderer3D] idle.glb import failed', err);
+      return null;
+    }
+
+    const idleNative = (result.animationGroups || []).find(g => g) || null;
+    if (!idleNative) {
+      console.warn('[Renderer3D] idle.glb contained no animation group');
+      this._disposeWalkingImport(result);
+      return null;
+    }
+
+    const nameMap = new Map();
+    const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
+    const addEntry = (name, target) => {
+      if (!name || !target) return;
+      if (!nameMap.has(name)) nameMap.set(name, target);
+      const stripped = stripDup(name);
+      if (stripped !== name && !nameMap.has(stripped)) nameMap.set(stripped, target);
+    };
+    for (const tn of src.transformNodes || []) {
+      if (tn && tn.name) addEntry(tn.name, tn);
+    }
+    if (src.skeleton && Array.isArray(src.skeleton.bones)) {
+      for (const bone of src.skeleton.bones) {
+        if (!bone) continue;
+        const tn = bone._linkedTransformNode
+          || (typeof bone.getTransformNode === 'function' && bone.getTransformNode());
+        if (tn && tn.name) addEntry(tn.name, tn);
+        if (bone.name) addEntry(bone.name, tn || bone);
+      }
+    }
+
+    let idleForPaladin = null;
+    let remapped = 0;
+    let missed = 0;
+    if (typeof idleNative.clone === 'function') {
+      idleForPaladin = idleNative.clone('paladinIdleRetargeted', (oldTarget) => {
+        if (!oldTarget || !oldTarget.name) { missed++; return oldTarget; }
+        const match = nameMap.get(oldTarget.name) || nameMap.get(stripDup(oldTarget.name));
+        if (match) { remapped++; return match; }
+        missed++;
+        return oldTarget;
+      });
+    }
+    console.info(`[Renderer3D] idle → paladin retarget: ${remapped} hit, ${missed} miss`);
+
+    if (idleForPaladin && remapped > 0) {
+      if (typeof idleForPaladin.start === 'function') {
+        idleForPaladin.start(true, 1.0);
+      }
+      src.idleGroup = idleForPaladin;
+      src._playing = true; // currently playing idle
+      src.activeGroup = 'idle';
+    } else {
+      console.warn('[Renderer3D] idle retarget produced 0 hits — paladin will sit at bind pose.');
+      try { idleForPaladin?.dispose?.(); } catch { /* ignore */ }
+    }
+
+    // Dispose idle.glb's imported mesh + skeleton — we only kept the
+    // animation keyframes (cloned + retargeted onto paladin's rig).
+    this._disposeWalkingImport(result);
+    return idleForPaladin;
+  }
+
   _disposeWalkingImport(result) {
     if (!result) return;
     for (const m of result.meshes || []) {
@@ -1902,25 +2076,40 @@ export class Renderer3D {
    *  on each motion event instead of snapping back to frame 0. */
   _maybeTogglePaladinAnimation() {
     const src = this._paladinSource;
-    if (!src || !src.idleGroup) return;
-    let wantPlay = paladinAnimTargetWeight(
+    if (!src) return;
+    // Swap between idle and walking based on whether any hero paladin is
+    // mid-move. Both groups (idleGroup retargeted from idle.glb, walkGroup
+    // retargeted from walking.glb) drive paladin's skeleton; we play
+    // exactly one at a time and stop the other so the unused group
+    // doesn't fight for bone matrices.
+    let wantWalk = paladinAnimTargetWeight(
       this._activeMoveIds, this._activeLungeIds,
       this.state?.entities, unitUsesPaladinModel,
     ) === 0;
     const now = performance.now();
-    if (wantPlay) this._paladinLastWalkTs = now;
+    if (wantWalk) this._paladinLastWalkTs = now;
     else if (typeof this._paladinLastWalkTs === 'number'
       && (now - this._paladinLastWalkTs) < PALADIN_WALK_SUSTAIN_MS) {
-      wantPlay = true;
+      wantWalk = true;
     }
-    if (wantPlay && !src._playing) {
-      if (typeof src.idleGroup.play === 'function') src.idleGroup.play(true);
-      else if (typeof src.idleGroup.start === 'function') src.idleGroup.start(true, 1.0);
-      src._playing = true;
-    } else if (!wantPlay && src._playing) {
-      if (typeof src.idleGroup.pause === 'function') src.idleGroup.pause();
-      src._playing = false;
+    const desired = wantWalk ? 'walk' : 'idle';
+    if (src.activeGroup === desired) return;
+    const walk = src.walkGroup;
+    const idle = src.idleGroup;
+    if (desired === 'walk') {
+      if (idle && typeof idle.stop === 'function') idle.stop();
+      if (walk) {
+        if (typeof walk.play === 'function') walk.play(true);
+        else if (typeof walk.start === 'function') walk.start(true, 1.0);
+      }
+    } else {
+      if (walk && typeof walk.pause === 'function') walk.pause();
+      if (idle) {
+        if (typeof idle.play === 'function') idle.play(true);
+        else if (typeof idle.start === 'function') idle.start(true, 1.0);
+      }
     }
+    src.activeGroup = desired;
   }
 
   /** Resume or pause the NATIVE walking AnimationGroup (the one playing
