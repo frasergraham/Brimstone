@@ -18,12 +18,15 @@ import {
   borderTilePositions,
   clampPanTarget,
   computeMapBounds,
+  forestBandDepthForView,
   HEX_RADIUS_WORLD,
   hexToWorld,
+  radiusForStandardFit,
   tilesExtent,
   TILE_SLOTS,
 } from '../src/renderer-3d.js';
 import { hexKey } from '../src/hex.js';
+import { MAP_SIZES } from '../src/map.js';
 
 function buildRectMap(cols, rows) {
   const m = new Map();
@@ -240,5 +243,99 @@ describe('Renderer3D — pan clamp regression: bounded to playable extent', () =
     assert.ok(clamped.z < farInBorder.z, `pan clamp failed: ${clamped.z} vs ${farInBorder.z}`);
     assert.equal(clamped.x, bounds.maxX);
     assert.equal(clamped.z, bounds.maxZ);
+  });
+
+  test('regional map: pan bounds reach actual playable corners (NOT clipped to standard)', () => {
+    // With the max-zoom cap in place the camera can't zoom out to see all of
+    // a regional 17×17 map, but pan limits must still bind to the *actual*
+    // playable extent so the player can scroll to every corner.
+    const reg = MAP_SIZES.regional;
+    const tiles = buildRectMap(reg.cols, reg.rows);
+    const all = [];
+    for (const t of tiles.values()) all.push({ col: t.col, row: t.row });
+    const bounds = computeMapBounds(all);
+
+    // Standard extent for reference — pan must NOT be clipped to this.
+    const stdAll = [];
+    const std = MAP_SIZES.standard;
+    for (let c = 0; c < std.cols; c++) for (let r = 0; r < std.rows; r++) {
+      stdAll.push({ col: c, row: r });
+    }
+    const stdBounds = computeMapBounds(stdAll);
+    assert.ok(bounds.maxX > stdBounds.maxX, 'regional should be wider than standard');
+    assert.ok(bounds.maxZ > stdBounds.maxZ, 'regional should be deeper than standard');
+
+    // The far-corner of the actual playable extent must clamp to itself
+    // (i.e. pan can reach this point), not to the smaller standard extent.
+    const corner = hexToWorld(reg.cols - 1, reg.rows - 1);
+    const clamped = clampPanTarget({ x: corner.x, y: 0, z: corner.z }, bounds, 0);
+    assert.ok(Math.abs(clamped.x - corner.x) < 1e-9,
+      `pan to regional far-corner X clipped: ${clamped.x} vs ${corner.x}`);
+    assert.ok(Math.abs(clamped.z - corner.z) < 1e-9,
+      `pan to regional far-corner Z clipped: ${clamped.z} vs ${corner.z}`);
+  });
+});
+
+describe('Renderer3D — forestBandDepthForView', () => {
+  test('returns 0 for non-positive or non-finite radius', () => {
+    assert.equal(forestBandDepthForView(0, 16 / 9), 0);
+    assert.equal(forestBandDepthForView(-5, 16 / 9), 0);
+    assert.equal(forestBandDepthForView(NaN, 16 / 9), 0);
+    assert.equal(forestBandDepthForView(Infinity, 16 / 9), 0);
+  });
+
+  test('grows monotonically with camera radius', () => {
+    const small = forestBandDepthForView(10, 16 / 9);
+    const big   = forestBandDepthForView(50, 16 / 9);
+    assert.ok(big > small);
+  });
+
+  test('wider aspect → more column-direction depth → larger band', () => {
+    const square    = forestBandDepthForView(30, 1, 0.8, 0);
+    const widescreen = forestBandDepthForView(30, 2, 0.8, 0);
+    assert.ok(widescreen >= square,
+      `widescreen band ${widescreen} should be >= square band ${square}`);
+  });
+
+  test('covers the half-visible width past the playable corner (with safety)', () => {
+    // At max zoom, when panned to a corner, the camera sees `radius * tan(fov/2)`
+    // past the corner along the depth axis (and that × aspect along width).
+    // The band must extend at least that many hex pitches past the playable
+    // rectangle in both directions.
+    const fov = 0.8;
+    const aspect = 16 / 9;
+    const radius = radiusForStandardFit(aspect, fov);
+    const safety = 3;
+    const depth = forestBandDepthForView(radius, aspect, fov, safety);
+
+    const halfViewZ = radius * Math.tan(fov / 2);
+    const halfViewX = halfViewZ * aspect;
+    const colPitch = HEX_RADIUS_WORLD * Math.sqrt(3);
+    const rowPitch = HEX_RADIUS_WORLD * 1.5;
+
+    // World-distance the band covers past the playable edge:
+    const bandWorldX = depth * colPitch;
+    const bandWorldZ = depth * rowPitch;
+    assert.ok(bandWorldX >= halfViewX,
+      `band X-reach ${bandWorldX} must cover half-view ${halfViewX}`);
+    assert.ok(bandWorldZ >= halfViewZ,
+      `band Z-reach ${bandWorldZ} must cover half-view ${halfViewZ}`);
+    // Safety margin is meaningful (not silently dropped).
+    assert.ok(depth - safety >= 0);
+  });
+
+  test('safety margin is additive', () => {
+    const a = forestBandDepthForView(30, 16 / 9, 0.8, 0);
+    const b = forestBandDepthForView(30, 16 / 9, 0.8, 3);
+    assert.equal(b - a, 3);
+  });
+
+  test('at the standard-fit cap, band is large enough for a typical 16/9 aspect', () => {
+    // Sanity: the chosen band depth should comfortably exceed the legacy
+    // BORDER_BAND_DEPTH (=2). 2 hexes is far too thin once max zoom is set
+    // to standard-fit — the original task is to extend the band.
+    const depth = forestBandDepthForView(radiusForStandardFit(16 / 9), 16 / 9);
+    assert.ok(depth > BORDER_BAND_DEPTH * 3,
+      `expected depth >> ${BORDER_BAND_DEPTH}, got ${depth}`);
   });
 });

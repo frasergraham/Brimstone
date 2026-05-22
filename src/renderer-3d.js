@@ -30,6 +30,7 @@ import { getFactionTheme } from './theme.js';
 import { hexKey, hexDistance, getNeighbors } from './hex.js';
 import { nodeController, Phase } from './game.js';
 import { sightRangeForEntity } from './factions.js';
+import { MAP_SIZES } from './map.js';
 
 const BABYLON_CDN = 'https://cdn.jsdelivr.net/npm/@babylonjs/core@7.42.0/+esm';
 
@@ -293,6 +294,58 @@ export function radiusForFit(fitWidth, fitDepth, aspect, fov = 0.8, margin = 1.0
   const rForDepth = (fitDepth / 2) / Math.tan(fov / 2);
   const rForWidth = (fitWidth / 2) / (Math.tan(fov / 2) * safeAspect);
   return Math.max(rForDepth, rForWidth) * margin;
+}
+
+/**
+ * Camera radius required to fit the standard 13×13 map at a given aspect /
+ * FOV / margin. Used as the camera's `upperRadiusLimit` so larger maps
+ * (regional, campaign, battle) can never zoom out further than a standard
+ * view — the player has to pan to see the rest of the map. Pure helper.
+ *
+ * `paddingHexes` mirrors the per-side hex padding `_frameFullMap` applies so
+ * the cap matches what a default-frame would show on a standard map exactly.
+ */
+export function radiusForStandardFit(aspect, fov = 0.8, margin = 1.05, paddingHexes = 1) {
+  const cfg = MAP_SIZES.standard;
+  const cols = cfg.cols;
+  const rows = cfg.rows;
+  const positions = [];
+  for (let c = 0; c < cols; c++) for (let r = 0; r < rows; r++) {
+    positions.push({ col: c, row: r });
+  }
+  const bounds = computeMapBounds(positions);
+  if (!bounds) return 0;
+  const padding = paddingHexes * HEX_RADIUS_WORLD * SQRT3;
+  const fitWidth = bounds.width + 2 * padding;
+  const fitDepth = bounds.depth + 2 * padding;
+  return radiusForFit(fitWidth, fitDepth, aspect, fov, margin);
+}
+
+/**
+ * Per-side depth (in hexes) the forest border band must cover so that, when
+ * the camera is panned all the way to a corner of the playable extent at
+ * maximum zoom-out (`upperRadiusLimit`), the visible frustum is still filled
+ * with forest past the playable rectangle.
+ *
+ * The visible half-extents at the locked isometric tilt are approximated as
+ * `radius * tan(fov/2)` in world units (depth axis) and that × aspect (width
+ * axis). We divide by the column/row hex pitch (SQRT3 and 1.5 world units
+ * respectively) and round up, then add a small safety margin so the player
+ * never sees the void at the corner.
+ *
+ * Returns the maximum of column- and row-direction requirements (uniform
+ * band depth — cleanest visually). Pure helper.
+ */
+export function forestBandDepthForView(radius, aspect, fov = 0.8, safetyHexes = 3) {
+  if (!Number.isFinite(radius) || radius <= 0) return 0;
+  const safeAspect = Math.max(1e-6, aspect);
+  const halfViewZ = radius * Math.tan(fov / 2);
+  const halfViewX = halfViewZ * safeAspect;
+  const colPitch = HEX_RADIUS_WORLD * SQRT3;
+  const rowPitch = HEX_RADIUS_WORLD * 1.5;
+  const colsNeeded = Math.ceil(halfViewX / colPitch);
+  const rowsNeeded = Math.ceil(halfViewZ / rowPitch);
+  return Math.max(colsNeeded, rowsNeeded) + Math.max(0, safetyHexes | 0);
 }
 
 /**
@@ -615,6 +668,9 @@ export class Renderer3D {
       if (this.canvas.height !== H) this.canvas.height = H;
     }
     if (this._engine) this._engine.resize();
+    // Aspect ratio may have changed — re-derive the max-zoom cap (and snap
+    // the current radius in if it now exceeds the new ceiling).
+    this._recomputeMaxZoomCap();
   }
 
   /** Load assets/tilemap.png so entity standees can crop portrait sprites out
@@ -950,10 +1006,13 @@ export class Renderer3D {
     camera.lowerBetaLimit  = CAMERA_BETA_LOCKED;
     camera.upperBetaLimit  = CAMERA_BETA_LOCKED;
 
-    // Zoom limits — close enough to see a single tile clearly, far enough to
-    // hold a Campaign-size map without flying outside the scene.
+    // Zoom limits — close enough to see a single tile clearly. Maximum
+    // zoom-out is capped to whatever fits a standard 13×13 map (see
+    // _recomputeMaxZoomCap). On larger maps (regional, campaign, battle) the
+    // player must pan to see the rest of the map rather than zooming out to
+    // see all of it — keeps unit silhouettes legible at all distances.
     camera.lowerRadiusLimit = 4;
-    camera.upperRadiusLimit = 80;
+    camera.upperRadiusLimit = 80; // provisional; replaced by _recomputeMaxZoomCap below
     camera.wheelDeltaPercentage = 0.02; // smoother wheel zoom (legacy default — wheel handled by custom input)
     camera.pinchDeltaPercentage = 0.005;
 
@@ -996,6 +1055,11 @@ export class Renderer3D {
 
     // Per-frame pump: drives phase-light interpolation and selection / node glow pulses.
     this._onBeforeRenderObs = scene.onBeforeRenderObservable.add(() => this._onBeforeRender());
+
+    // Cap max zoom to whatever fits a standard map at the current aspect.
+    // Must happen BEFORE _frameFullMap (whose `_radiusForFit` clamps to this
+    // limit) and BEFORE _buildMap (whose forest band depth is sized off it).
+    this._recomputeMaxZoomCap();
 
     // Build the map from current state and frame it (instant — no animation
     // on the very first frame, otherwise the camera "slides in" from the
@@ -1315,7 +1379,16 @@ export class Renderer3D {
     const baseColor = TILE_COLOR[TileType.FOREST] || TILE_COLOR[TileType.GRASS];
     const baseMat   = this._materialFor(baseColor);
     const treeMat   = this._materialFor('#234c1f');
-    for (const pos of borderTilePositions(this.state.tiles)) {
+    // Size the band so it still surrounds the visible frustum after the
+    // player pans to the playable corner at maximum zoom-out. Falls back to
+    // BORDER_BAND_DEPTH (2) if engine/camera aren't ready (e.g. headless test).
+    const aspect = this._engine
+      ? this._engine.getRenderWidth() / Math.max(1, this._engine.getRenderHeight())
+      : 16 / 9;
+    const fov = this._camera?.fov || 0.8;
+    const cap = this._camera?.upperRadiusLimit ?? radiusForStandardFit(aspect, fov);
+    const bandDepth = Math.max(BORDER_BAND_DEPTH, forestBandDepthForView(cap, aspect, fov));
+    for (const pos of borderTilePositions(this.state.tiles, bandDepth)) {
       const { x, z } = hexToWorld(pos.col, pos.row);
 
       // Base hex cylinder — identical recipe to _buildTileMesh's prism.
@@ -1838,6 +1911,24 @@ export class Renderer3D {
     const all = [];
     for (const tile of this.state.tiles.values()) all.push({ col: tile.col, row: tile.row });
     this.frameHexes(all, { paddingHexes: 1, instant: opts.instant === true });
+  }
+
+  /** Recompute the camera's `upperRadiusLimit` (max zoom-out) from the current
+   *  aspect/FOV via `radiusForStandardFit`. The cap is the radius that fits a
+   *  standard 13×13 map — larger maps must be panned. Called once during init
+   *  and again on resize (aspect changes). If the current camera radius is now
+   *  past the new cap (window shrank, fit is tighter), snap it back in.
+   *
+   *  No-op when the engine or camera hasn't initialised yet. */
+  _recomputeMaxZoomCap() {
+    if (!this._engine || !this._camera) return;
+    const aspect = this._engine.getRenderWidth() / Math.max(1, this._engine.getRenderHeight());
+    const fov = this._camera.fov || 0.8;
+    const cap = radiusForStandardFit(aspect, fov);
+    if (Number.isFinite(cap) && cap > 0) {
+      this._camera.upperRadiusLimit = cap;
+      if (this._camera.radius > cap) this._camera.radius = cap;
+    }
   }
 
   /** Wraps the pure `radiusForFit` helper with this camera's FOV/aspect and
