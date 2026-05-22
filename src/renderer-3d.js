@@ -763,6 +763,17 @@ export class Renderer3D {
     this._selectedBaseMaterial = null;
     // Last selectedEntityId we acted on, so we only retarget the camera on change.
     this._lastSelectedEntityId = null;
+    // ── Per-unit ground-level hex outlines ─────────────────────────────────
+    // Every alive unit gets a thin owner-tinted hex ring on its tile (the
+    // "thin" mesh, always visible). When that unit is selected we hide the
+    // thin ring and show a thicker glowing variant (the "thick" mesh).
+    // Map<entityId, { thin, thick, ownerKey }>. Driven by
+    // `_syncEntityHexOutlines` (called from draw()) and selection-toggled by
+    // `_applySelectionAndFocus`. Independent of `_syncEntityStandees` so it
+    // doesn't tangle with concurrent token / HP-bar work above the unit.
+    this._entityHexOutlines      = new Map();
+    this._thinOutlineMatCache    = new Map(); // ownerKey → StandardMaterial
+    this._thickOutlineMatCache   = new Map(); // ownerKey → StandardMaterial
     // Backing image + sprite rects for the tilemap (loaded by loadImages()).
     this._tilemapImg  = null;
     this._spriteRects = null;
@@ -829,6 +840,7 @@ export class Renderer3D {
     }
     if (!this._scene) return; // init in flight
     this._syncEntityStandees();
+    this._syncEntityHexOutlines();
     this._applySelectionAndFocus();
     this._syncMovementHighlights();
     this._syncPlanArrows();
@@ -1319,37 +1331,10 @@ export class Renderer3D {
     this._glowLayer = new BABYLON.GlowLayer('glow', scene, { mainTextureFixedSize: 512 });
     this._glowLayer.intensity = GLOW_LAYER_INTENSITY;
 
-    // Selected-hex outline — a thick golden hex ring drawn just above the
-    // tile top. Positioned each draw in `_syncSelectedHexOutline`; hidden
-    // when no unit is selected. Uses CreateTube around a closed hex loop so
-    // the ring has visible thickness at any zoom (LinesMesh aliases hard at
-    // high zoom-out).
-    {
-      const SQRT3 = Math.sqrt(3);
-      const ringR = HEX_RADIUS_WORLD * 0.96;
-      const path = [];
-      for (let i = 0; i <= 6; i++) {
-        const a = Math.PI / 6 + i * Math.PI / 3;
-        path.push(new BABYLON.Vector3(ringR * Math.cos(a), 0.02, ringR * Math.sin(a)));
-      }
-      const ring = BABYLON.MeshBuilder.CreateTube('selectedHexOutline', {
-        path,
-        radius: 0.05,
-        tessellation: 6,
-        sideOrientation: BABYLON.Mesh.DOUBLESIDE,
-      }, scene);
-      const ringMat = new BABYLON.StandardMaterial('selectedHexOutlineMat', scene);
-      ringMat.diffuseColor  = new BABYLON.Color3(1.0, 0.78, 0.20);
-      ringMat.emissiveColor = new BABYLON.Color3(0.85, 0.65, 0.10);
-      ringMat.specularColor = new BABYLON.Color3(0, 0, 0);
-      ring.material         = ringMat;
-      ring.isPickable       = false;
-      ring.isVisible        = false;
-      ring.renderingGroupId = 1; // sit above road/river ribbons
-      // Don't parent to mapRoot — that would inherit any future map yaw and
-      // the ring would tilt off the ground. Position is in world space.
-      this._selectedHexOutline = ring;
-    }
+    // Per-unit hex outlines are built lazily by `_syncEntityHexOutlines`
+    // (one thin + one thick mesh per alive entity). The old golden singleton
+    // hex outline that only showed on the selected unit has been generalised
+    // away — see `_syncEntityHexOutlines` + `_applySelectionAndFocus`.
 
     // Apply the starting phase's lighting immediately (no transition) so the
     // very first frame already reads dawn/day/dusk/night correctly.
@@ -1377,6 +1362,7 @@ export class Renderer3D {
     this._frameFullMap({ instant: true });
     // Initial standee population so the first frame already has units.
     this._syncEntityStandees();
+    this._syncEntityHexOutlines();
     this._applySelectionAndFocus();
     this._syncNodeGlowMeshes();
     this._applyFogVeil();
@@ -3192,6 +3178,136 @@ export class Renderer3D {
     }
   }
 
+  /** Diff alive entities against `_entityHexOutlines` and keep the per-unit
+   *  ground-level hex outlines in step. Every alive unit gets one thin
+   *  owner-tinted hex ring (always visible) plus a thicker glowing ring
+   *  (hidden until `_applySelectionAndFocus` shows it for the selected unit).
+   *
+   *  Intentionally independent of `_syncEntityStandees` — concurrent work on
+   *  the standee tower (HP rings, floating icons) should not collide with the
+   *  ground-level outline layer. Called from draw() right after the standee
+   *  sync so newly-built standees already have their outlines paired up.
+   *
+   *  Tombstones (entity.alive === false) get no outline; the dispose pass
+   *  below drops outlines for entities that have died this turn. */
+  _syncEntityHexOutlines() {
+    if (!this._scene || !this._babylon || !this.state?.entities) return;
+    const seen = new Set();
+    for (const e of this.state.entities) {
+      if (!e || !e.alive) continue;
+      if (typeof e.col !== 'number' || typeof e.row !== 'number') continue;
+      seen.add(e.id);
+      let outline = this._entityHexOutlines.get(e.id);
+      if (!outline) {
+        outline = this._buildEntityHexOutline(e);
+        this._entityHexOutlines.set(e.id, outline);
+        // Newly-built outline starts on the thin ring; only flip to thick if
+        // the unit is the current selection (rare — usually selection happens
+        // after the outline already exists).
+        if (this.selectedEntityId === e.id) {
+          outline.thin.isVisible  = false;
+          outline.thick.isVisible = true;
+          this._glowLayer?.addIncludedOnlyMesh?.(outline.thick);
+        }
+      } else {
+        // Recolour if the entity's owner colour changed (e.g. side-flip).
+        const ownerKey = unitHexOutlineColor(e);
+        if (outline.ownerKey !== ownerKey) {
+          outline.thin.material  = this._thinOutlineMaterialFor(ownerKey);
+          outline.thick.material = this._thickOutlineMaterialFor(ownerKey);
+          outline.ownerKey = ownerKey;
+        }
+      }
+      const { x, z } = hexToWorld(e.col, e.row);
+      outline.thin.position.x  = x;
+      outline.thin.position.z  = z;
+      outline.thick.position.x = x;
+      outline.thick.position.z = z;
+    }
+    // Dispose outlines for entities that no longer exist or just died.
+    for (const [id, outline] of this._entityHexOutlines) {
+      if (seen.has(id)) continue;
+      this._glowLayer?.removeIncludedOnlyMesh?.(outline.thick);
+      outline.thin.dispose();
+      outline.thick.dispose();
+      this._entityHexOutlines.delete(id);
+    }
+  }
+
+  /** Build the {thin, thick} hex ring pair for a single entity. Thin is
+   *  visible by default; thick is parked invisible and toggled on by
+   *  `_applySelectionAndFocus` when the unit is selected. */
+  _buildEntityHexOutline(entity) {
+    const BABYLON = this._babylon;
+    const scene   = this._scene;
+    const path    = unitHexOutlineRingPath().map(
+      p => new BABYLON.Vector3(p.x, p.y, p.z),
+    );
+    const ownerKey = unitHexOutlineColor(entity);
+
+    const thin = BABYLON.MeshBuilder.CreateTube(`unitOutlineThin_${entity.id}`, {
+      path,
+      radius:          UNIT_HEX_OUTLINE_THIN_TUBE,
+      tessellation:    6,
+      sideOrientation: BABYLON.Mesh.DOUBLESIDE,
+    }, scene);
+    thin.material         = this._thinOutlineMaterialFor(ownerKey);
+    thin.isPickable       = false;
+    thin.renderingGroupId = 1; // ride above road/river ribbons + node rings
+
+    const thick = BABYLON.MeshBuilder.CreateTube(`unitOutlineThick_${entity.id}`, {
+      path,
+      radius:          UNIT_HEX_OUTLINE_THICK_TUBE,
+      tessellation:    6,
+      sideOrientation: BABYLON.Mesh.DOUBLESIDE,
+    }, scene);
+    thick.material         = this._thickOutlineMaterialFor(ownerKey);
+    thick.isPickable       = false;
+    thick.renderingGroupId = 1;
+    thick.isVisible        = false; // _applySelectionAndFocus drives visibility
+
+    const { x, z } = hexToWorld(entity.col, entity.row);
+    thin.position.x  = x; thin.position.z  = z;
+    thick.position.x = x; thick.position.z = z;
+
+    return { thin, thick, ownerKey };
+  }
+
+  /** Lazy, owner-keyed material for the always-on thin hex outline. Low
+   *  emissive — the ring reads as a tinted line, not a self-lit halo. */
+  _thinOutlineMaterialFor(ownerKey) {
+    if (this._thinOutlineMatCache.has(ownerKey)) {
+      return this._thinOutlineMatCache.get(ownerKey);
+    }
+    const BABYLON = this._babylon;
+    const [r, g, b] = cssHexToRgb01(ownerKey);
+    const mat = new BABYLON.StandardMaterial(`unitOutlineThinMat_${ownerKey}`, this._scene);
+    mat.diffuseColor   = new BABYLON.Color3(r, g, b);
+    mat.specularColor  = new BABYLON.Color3(0, 0, 0);
+    const e = UNIT_HEX_OUTLINE_THIN_EMISSIVE_MUL;
+    mat.emissiveColor  = new BABYLON.Color3(r * e, g * e, b * e);
+    this._thinOutlineMatCache.set(ownerKey, mat);
+    return mat;
+  }
+
+  /** Lazy, owner-keyed material for the selected unit's thicker glow ring.
+   *  Emissive is capped at `UNIT_HEX_OUTLINE_GLOW_EMISSIVE_MUL × diffuse` so
+   *  the GlowLayer's bloom stays owner-tinted instead of clipping to white. */
+  _thickOutlineMaterialFor(ownerKey) {
+    if (this._thickOutlineMatCache.has(ownerKey)) {
+      return this._thickOutlineMatCache.get(ownerKey);
+    }
+    const BABYLON = this._babylon;
+    const [r, g, b] = cssHexToRgb01(ownerKey);
+    const mat = new BABYLON.StandardMaterial(`unitOutlineThickMat_${ownerKey}`, this._scene);
+    mat.diffuseColor   = new BABYLON.Color3(r, g, b);
+    mat.specularColor  = new BABYLON.Color3(0, 0, 0);
+    const e = UNIT_HEX_OUTLINE_GLOW_EMISSIVE_MUL;
+    mat.emissiveColor  = new BABYLON.Color3(r * e, g * e, b * e);
+    this._thickOutlineMatCache.set(ownerKey, mat);
+    return mat;
+  }
+
   /** Lazily create / update / dispose the "+N" badge plane above a hex.
    *  Reuses the dynamic-texture + billboard-plane pattern from plan-step
    *  badges (see `_syncPlanArrows`). Idempotent — only repaints the texture
@@ -3366,17 +3482,22 @@ export class Renderer3D {
       // set so its (now non-emissive) base no longer counts toward the layer.
       this._glowLayer?.removeIncludedOnlyMesh?.(prev.base);
     }
-    // Selected-hex outline: parked off-screen when nothing's selected, snapped
-    // to the new selection's tile centre when there is one.
-    if (this._selectedHexOutline) {
-      if (newId && this._entityStandees.has(newId)) {
-        const standee = this._entityStandees.get(newId);
-        this._selectedHexOutline.position.x = standee.base.position.x;
-        this._selectedHexOutline.position.z = standee.base.position.z;
-        this._selectedHexOutline.isVisible  = true;
-      } else {
-        this._selectedHexOutline.isVisible = false;
-      }
+    // Per-unit hex outline: swap the previously-selected unit back to its
+    // thin always-on ring, and the newly-selected unit up to the thick
+    // glowing ring. The thick mesh joins the GlowLayer's include-only set so
+    // only the selection blooms; thin rings stay out so they read as plain
+    // owner-tinted lines.
+    if (prevId && this._entityHexOutlines.has(prevId)) {
+      const prevOutline = this._entityHexOutlines.get(prevId);
+      prevOutline.thin.isVisible  = true;
+      prevOutline.thick.isVisible = false;
+      this._glowLayer?.removeIncludedOnlyMesh?.(prevOutline.thick);
+    }
+    if (newId && this._entityHexOutlines.has(newId)) {
+      const newOutline = this._entityHexOutlines.get(newId);
+      newOutline.thin.isVisible  = false;
+      newOutline.thick.isVisible = true;
+      this._glowLayer?.addIncludedOnlyMesh?.(newOutline.thick);
     }
     if (newId && this._entityStandees.has(newId)) {
       const standee = this._entityStandees.get(newId);
@@ -4732,6 +4853,15 @@ export class Renderer3D {
         if (standee.base.isEnabled?.()  !== visible) standee.base.setEnabled(visible);
         const hp = this._hpBars.get(id);
         if (hp && hp.plane.isVisible !== visible) hp.plane.isVisible = visible;
+        // Mirror onto the per-unit hex outlines so the ground ring vanishes
+        // with its unit. setEnabled (not isVisible) so it composes with the
+        // selection-driven isVisible toggle on thin / thick — fogged units
+        // hide both rings regardless of selection state.
+        const outline = this._entityHexOutlines.get(id);
+        if (outline) {
+          if (outline.thin.isEnabled?.()  !== visible) outline.thin.setEnabled(visible);
+          if (outline.thick.isEnabled?.() !== visible) outline.thick.setEnabled(visible);
+        }
       }
     } else {
       // No fog → make sure everything is visible (covers fog-toggling mid-game).
@@ -4740,6 +4870,11 @@ export class Renderer3D {
         if (!standee.base.isEnabled?.())  standee.base.setEnabled(true);
         const hp = this._hpBars.get(id);
         if (hp && !hp.plane.isVisible) hp.plane.isVisible = true;
+        const outline = this._entityHexOutlines.get(id);
+        if (outline) {
+          if (!outline.thin.isEnabled?.())  outline.thin.setEnabled(true);
+          if (!outline.thick.isEnabled?.()) outline.thick.setEnabled(true);
+        }
       }
     }
   }
@@ -4994,6 +5129,62 @@ export function entityBaseColor(entity) {
     if (theme?.primary) return theme.primary;
   }
   return '#888888';
+}
+
+// ─── Per-unit ground-level hex outline (pure helpers + tuning constants) ──
+//
+// Every alive unit gets a thin owner-tinted hex outline on its tile; the
+// selected unit's outline is swapped for a thicker glowing variant. The
+// constants below place the ring above the road/river ribbon apex and node
+// rings but below the movement-highlight disc, and bound the glow emissive
+// so the GlowLayer stays owner-tinted (bloom clips to white at higher mults).
+// See `_syncEntityHexOutlines` for the wiring.
+
+/** Y of the always-on per-unit hex outline ring. Above the road apex (≈0.09)
+ *  and well below `HIGHLIGHT_DISC_Y = 0.15`, so the perimeter outline keeps
+ *  reading when the unit is standing on a highlighted movement-range hex. */
+export const UNIT_HEX_OUTLINE_Y = 0.10;
+
+/** Hex polygon radius for the per-unit outline ring. Set inside
+ *  `HIGHLIGHT_OUTER_R = 0.95` so when both rings overlap (unit standing on
+ *  its own valid-move source hex) they read as concentric bands rather than
+ *  fighting for the same pixels. */
+export const UNIT_HEX_OUTLINE_RING_R = HEX_RADIUS_WORLD * 0.88;
+
+/** Tube radius of the always-on thin outline. */
+export const UNIT_HEX_OUTLINE_THIN_TUBE  = 0.025;
+/** Tube radius of the thicker outline shown on the selected unit. */
+export const UNIT_HEX_OUTLINE_THICK_TUBE = 0.06;
+
+/** Emissive cap (× diffuse) for the always-on thin outline material. Low
+ *  enough that the ring reads as a tinted line, not a self-lit halo. */
+export const UNIT_HEX_OUTLINE_THIN_EMISSIVE_MUL = 0.30;
+/** Emissive cap (× diffuse) for the selected unit's glow outline material.
+ *  Capped at 0.6 — the same convention `NODE_DISC_EMISSIVE_MUL` uses — so
+ *  the GlowLayer bloom stays owner-tinted instead of clipping to white. */
+export const UNIT_HEX_OUTLINE_GLOW_EMISSIVE_MUL = 0.6;
+
+/** Pure: closed hex ring of 7 points (last == first) at the given world Y,
+ *  centred on the origin. Caller positions the resulting mesh on the tile
+ *  centre via `position.x` / `position.z`. Pointy-top — same vertex angles
+ *  as `hexOutlinePaths`. */
+export function unitHexOutlineRingPath(
+  radius = UNIT_HEX_OUTLINE_RING_R,
+  y      = UNIT_HEX_OUTLINE_Y,
+) {
+  const path = [];
+  for (let i = 0; i <= 6; i++) {
+    const a = Math.PI / 6 + i * (Math.PI / 3);
+    path.push({ x: radius * Math.cos(a), y, z: radius * Math.sin(a) });
+  }
+  return path;
+}
+
+/** Resolve the owner colour for a unit's hex outline. Pure delegation to
+ *  `entityBaseColor` so the outline and standee token are guaranteed to use
+ *  the same tint — exported so tests can lock the linkage in place. */
+export function unitHexOutlineColor(entity) {
+  return entityBaseColor(entity);
 }
 
 /** Derive a darker / desaturated variant of a player colour for dead-unit
