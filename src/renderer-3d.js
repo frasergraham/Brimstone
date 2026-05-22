@@ -1710,21 +1710,31 @@ export class Renderer3D {
     // bounded. (See task 17.)
     const bandDepth = Math.min(3, Math.max(BORDER_BAND_DEPTH,
       forestBandDepthForView(cap, aspect, fov)));
+    // Precompute river-extension corridors so `_borderTreeBlockedByRiver`
+    // can reject tree positions that would land in the water extending past
+    // the playable edge. Each entry is the exit point, outward unit tangent,
+    // and the extension length (matches `_buildRiverExtensions`).
+    const extensionLength = (bandDepth + 1) * SQRT3;
+    const halfRiverWidth = RIVER_RIBBON_WIDTH / 2 + 0.20; // small buffer past the visible ribbon
+    this._riverExtensionCorridors = riverExitPoints(this.state.tiles).map(exit => ({
+      px: exit.point.x, pz: exit.point.z,
+      tx: exit.tangent.x, tz: exit.tangent.z,
+      length: extensionLength,
+      half:   halfRiverWidth,
+    }));
     for (const pos of borderTilePositions(this.state.tiles, bandDepth)) {
       const { x, z } = hexToWorld(pos.col, pos.row);
 
       // Flat hex polygon — identical recipe to _buildTileMesh's flat tile.
       const hex = this._buildFlatHexMesh(`border_tile_${pos.col}_${pos.row}`, parent, x, z);
-      // Border-forest band is rendered permanently fogged (operator request)
-      // — gives the playable map a hazy wilderness frame instead of
-      // brightly-lit trees competing with the playable area for attention.
-      // Uses the fogged textured variant when the atlas is loaded.
+      // Border-forest band should read as a visual extension of the playable
+      // map — same terrain material as in-map FOREST tiles (which now use
+      // the grass underlay; the trees on top carry the forest look).
       const syntheticTile = { type: TileType.FOREST, col: pos.col, row: pos.row };
       const borderMat = this._terrainMaterialFor(
         terrainSpriteIdFor(syntheticTile, pos.col, pos.row),
-        { fogged: true },
       );
-      hex.material   = borderMat || this._fogMaterialFor(baseColor);
+      hex.material   = borderMat || baseMat;
       hex.isPickable = false;
       hex.metadata   = { kind: 'map-border-forest', col: pos.col, row: pos.row };
       this._setShadowReceiver(hex);
@@ -1733,12 +1743,15 @@ export class Renderer3D {
 
       // Pine trees — denser than in-map forest tiles, batched into 2 merged
       // meshes per tile (trunks + leaves) to keep border-band draw cost
-      // bounded. Border forest is hidden by default — toggle with F. Trees
-      // use fogged colour variants to match the fogged ground hex.
-      const trees = borderForestTreesForHex(pos.col, pos.row);
+      // bounded. Same trunk/leaf colours as in-map FOREST trees so the band
+      // reads as a continuous extension of the map. Trees are skipped on
+      // border tiles whose centres land inside the river-extension footprint
+      // (operator: "trees in the outer forest should never be in the river").
+      const trees = borderForestTreesForHex(pos.col, pos.row).filter(t =>
+        !this._borderTreeBlockedByRiver(x + t.x, z + t.z),
+      );
       const meshes = this._buildPineTreeBatchedMeshes(
         `border_forest_${pos.col}_${pos.row}`, parent, x, z, trees,
-        { fogged: true },
       );
       for (const m of meshes) {
         this._addShadowCaster(m);
@@ -2438,6 +2451,23 @@ export class Renderer3D {
    *  scaled by `t.scale`. Returning 2 meshes per tile (instead of 4 per tree)
    *  is the bulk of the task-9 fps fix — forest-heavy maps were emitting
    *  hundreds of draw calls before this. */
+  /** True if the world-XZ point (tx, tz) lies inside any precomputed river-
+   *  extension corridor (built at the top of `_buildMapBorderForest`). Used
+   *  to skip border-forest trees that would visually stand in the water. */
+  _borderTreeBlockedByRiver(tx, tz) {
+    const list = this._riverExtensionCorridors;
+    if (!list || list.length === 0) return false;
+    for (const c of list) {
+      const dx = tx - c.px;
+      const dz = tz - c.pz;
+      const along = dx * c.tx + dz * c.tz;            // distance along the river axis
+      if (along < -0.30 || along > c.length) continue; // outside the extension's length
+      const perp = Math.abs(dx * (-c.tz) + dz * c.tx); // perpendicular distance
+      if (perp <= c.half) return true;
+    }
+    return false;
+  }
+
   _buildPineTreeBatchedMeshes(namePrefix, parent, cx, cz, trees, { fogged = false } = {}) {
     const BABYLON = this._babylon;
     const scene   = this._scene;
