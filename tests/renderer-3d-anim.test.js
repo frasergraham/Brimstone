@@ -35,6 +35,7 @@ import {
   UNIT_ICON_PLANE_SIZE,
   UNIT_ICON_TEX_SIZE,
   UNIT_ICON_RING_THICKNESS_FRAC,
+  ATTACK_BADGE_Y,
   interpolatePosition,
   planArrowPolyline,
   planArrowBadgePosition,
@@ -470,6 +471,24 @@ describe('Renderer3D — paintUnitIconBadge', () => {
   test('plane and texture sizing constants are positive', () => {
     assert.ok(UNIT_ICON_PLANE_SIZE > 0);
     assert.ok(UNIT_ICON_TEX_SIZE   > 0);
+  });
+
+  // Pin the 2× billboard size (task t-c40bce81) so a future tweak can't
+  // silently shrink the badge back to its old 0.55 footprint.
+  test('UNIT_ICON_PLANE_SIZE is 2× the pre-bump baseline (0.55 → 1.10)', () => {
+    assert.equal(UNIT_ICON_PLANE_SIZE, 1.10);
+  });
+
+  // Relationship invariant: the icon billboard's top edge must stay below
+  // ATTACK_BADGE_Y so the floating ×N readout reads above the entire unit
+  // stack. The leader form is the worst case (taller cone/sphere), so the
+  // check is anchored to iconBillboardY(true).
+  test('UNIT_ICON_PLANE_SIZE top edge (leader) stays below ATTACK_BADGE_Y', () => {
+    const iconTop = iconBillboardY(true) + UNIT_ICON_PLANE_SIZE / 2;
+    assert.ok(
+      iconTop < ATTACK_BADGE_Y,
+      `icon top ${iconTop} should be below ATTACK_BADGE_Y ${ATTACK_BADGE_Y}`,
+    );
   });
 });
 
