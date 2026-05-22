@@ -21,6 +21,8 @@ import {
   PINCH_LOCK_THRESHOLD_PX,
   TWIST_LOCK_THRESHOLD_RAD,
   GESTURE_SAMPLING_WINDOW_MS,
+  PINCH_RADIUS_PER_PX,
+  pinchDeltaToRadiusDelta,
 } from '../src/renderer-3d.js';
 import { Renderer }   from '../src/renderer.js';
 import { Renderer3D } from '../src/renderer-3d.js';
@@ -174,6 +176,30 @@ describe('CAMERA_BETA_LOCKED — tilt permanently pinned at 45°', () => {
   });
   test('CAMERA_BUTTON_REPEAT_MS is in a sensible range for hold-to-repeat', () => {
     assert.ok(CAMERA_BUTTON_REPEAT_MS >= 16 && CAMERA_BUTTON_REPEAT_MS <= 200);
+  });
+});
+
+describe('pinchDeltaToRadiusDelta — spread=in, pinch=out convention', () => {
+  test('positive pinch-delta (fingers spread) → negative radius-step (zoom in)', () => {
+    const step = pinchDeltaToRadiusDelta(10, 0.04);
+    assert.ok(step < 0, `expected negative radius step for spread, got ${step}`);
+    assert.equal(step, -0.4);
+  });
+  test('negative pinch-delta (fingers pinch) → positive radius-step (zoom out)', () => {
+    const step = pinchDeltaToRadiusDelta(-10, 0.04);
+    assert.ok(step > 0, `expected positive radius step for pinch, got ${step}`);
+    assert.equal(step, 0.4);
+  });
+  test('zero delta → zero step (no drift on idle hold)', () => {
+    assert.equal(Math.abs(pinchDeltaToRadiusDelta(0, 0.04)), 0);
+  });
+  test('defaults to module PINCH_RADIUS_PER_PX when perPx omitted', () => {
+    assert.equal(pinchDeltaToRadiusDelta(25), -25 * PINCH_RADIUS_PER_PX);
+    assert.equal(pinchDeltaToRadiusDelta(25), -1); // 25px = 1 radius unit (zoom in)
+  });
+  test('scales linearly with the sensitivity constant', () => {
+    assert.equal(pinchDeltaToRadiusDelta(10, 0.08), -0.8);
+    assert.equal(pinchDeltaToRadiusDelta(10, 0.02), -0.2);
   });
 });
 
