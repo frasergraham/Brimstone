@@ -1511,6 +1511,61 @@ export class Renderer3D {
 
       this._borderPropsByKey.set(hexKey(pos.col, pos.row), props);
     }
+    // After the band is in place, extend any river that exits the playable
+    // map outward in a straight line through the band so the water doesn't
+    // visually dead-end at the playable edge. Built last so `bandDepth` is in
+    // scope and the in-map river mesh's material is available for re-use.
+    this._buildRiverExtensions(bandDepth);
+  }
+
+  /** Continue every river endpoint past the playable map edge with a flat
+   *  straight ribbon, re-using the in-map river's material so colour matches
+   *  exactly. Each extension lives in `_borderPropsByKey` under a synthetic
+   *  `river-ext:col,row` key, alongside the surrounding forest props, so it
+   *  follows the same visual-only lifecycle (no state.tiles entry, no fog,
+   *  no pan-clamp influence). No-op when the map has no river, or when the
+   *  forest band is disabled. */
+  _buildRiverExtensions(bandDepth) {
+    const BABYLON = this._babylon;
+    const scene   = this._scene;
+    if (!BABYLON || !scene || !this.state?.tiles) return;
+    if (!(bandDepth > 0)) return;
+    const riverMesh = this._riverNetworkMesh;
+    const riverMat  = riverMesh?.material;
+    if (!riverMat) return; // no river on this map
+    const exits = riverExitPoints(this.state.tiles);
+    if (exits.length === 0) return;
+    // Extend one hex past the outermost band tile so the ribbon's far end
+    // clearly carries past the band's silhouette instead of fading inside it.
+    // Centre-to-centre spacing in any axial direction is SQRT3 world units.
+    const length = (bandDepth + 1) * SQRT3;
+    for (const exit of exits) {
+      const { left, right } = riverExtensionRibbon(exit, length, RIVER_RIBBON_WIDTH);
+      if (left.length < 2 || right.length < 2) continue;
+      const leftV3  = left.map(p  => new BABYLON.Vector3(p.x, RIVER_RIBBON_Y, p.z));
+      const rightV3 = right.map(p => new BABYLON.Vector3(p.x, RIVER_RIBBON_Y, p.z));
+      const ribbon = BABYLON.MeshBuilder.CreateRibbon(
+        `river_extension_${exit.tile.col}_${exit.tile.row}`,
+        {
+          // Path order matches `_buildNetworkMesh` — see the contract comment
+          // there — so face normal points +Y for the hemispheric light.
+          pathArray: [rightV3, leftV3],
+          sideOrientation: BABYLON.Mesh.DOUBLESIDE,
+          closeArray: false,
+          closePath: false,
+          updatable: false,
+        },
+        scene,
+      );
+      ribbon.parent     = this._mapRoot;
+      ribbon.isPickable = false;
+      ribbon.material   = riverMat;
+      ribbon.metadata   = { kind: 'river-extension', col: exit.tile.col, row: exit.tile.row };
+      const key = `river-ext:${exit.tile.col},${exit.tile.row}`;
+      const list = this._borderPropsByKey.get(key) || [];
+      list.push(ribbon);
+      this._borderPropsByKey.set(key, list);
+    }
   }
 
   _buildTileMesh(tile, parent) {
@@ -4258,6 +4313,100 @@ export function buildRoadNetworkStrokes(tiles, hexKeyFn = hexKey) {
     if (strokes.length > 0) out.push({ tile, strokes });
   }
   return out;
+}
+
+// ─── River extensions past the playable map edge ──────────────────────────
+//
+// The playable map is wrapped in a forest band (see `_buildMapBorderForest`)
+// so the edge reads as "world continues into wilderness" rather than a hard
+// cut-off. When a river crosses that edge, however, the ribbon stops at the
+// last playable tile and the band visually swallows the water — disrupting
+// the impression that the river flows on into the forest.
+//
+// To bridge the gap we identify each river "exit" — a RIVER/BRIDGE tile with
+// exactly one water neighbour, i.e. a natural endpoint of the river network
+// — and emit a straight-line ribbon continuing outward in the river's exit
+// tangent direction for the full depth of the surrounding forest band. The
+// extension is built as a Babylon ribbon mesh sharing the same material as
+// the in-map river network, so the colour and lighting match exactly. The
+// mesh lives in `_borderPropsByKey` alongside the band's forest props, so it
+// follows the same visual-only lifecycle (not in `state.tiles`, never
+// pathable, ignored by fog).
+
+/** Identify river endpoints that exit the playable map. A RIVER or BRIDGE
+ *  tile is an exit when it has exactly ONE water neighbour — the in-map
+ *  bezier on such a tile already extends slightly off-tile in the opposite
+ *  direction (see the 1-neighbour branch of `networkStrokesForTile`), so the
+ *  exit point sits where that bezier ends and the extension's tangent points
+ *  outward in the same direction.
+ *
+ *  Pure (no Babylon dependency). Returns an array of
+ *    `{ tile: {col, row}, point: {x, z}, tangent: {x, z} }`
+ *  records — `point` is the world-XZ position of the river ribbon's outward
+ *  endpoint and `tangent` is the unit vector continuing past the playable
+ *  map. Empty input or no-exit maps return `[]`. */
+export function riverExitPoints(
+  tiles,
+  hexKeyFn = hexKey,
+  getNeighborsFn = getNeighbors,
+  radius = HEX_RADIUS_WORLD,
+) {
+  if (!tiles || typeof tiles.values !== 'function') return [];
+  const isWater = t => t && (t.type === TileType.RIVER || t.type === TileType.BRIDGE);
+  const apo = HEX_APOTHEM * radius;
+  const out = [];
+  for (const tile of tiles.values()) {
+    if (!isWater(tile)) continue;
+    const nbrs = getNeighborsFn(tile.col, tile.row)
+      .filter(n => isWater(tiles.get(hexKeyFn(n.col, n.row))));
+    if (nbrs.length !== 1) continue;
+    const here  = hexToWorld(tile.col, tile.row, radius);
+    const there = hexToWorld(nbrs[0].col, nbrs[0].row, radius);
+    const dx = there.x - here.x;
+    const dz = there.z - here.z;
+    const d  = Math.hypot(dx, dz) || 1;
+    // Tangent points AWAY from the only water neighbour — i.e. outward.
+    const tangent = { x: -dx / d, z: -dz / d };
+    // The in-map river bezier on this tile begins at p0 = here + tangent*apo
+    // (see `networkStrokesForTile` 1-neighbour branch). That's the exact
+    // point the visible river ribbon reaches before stopping.
+    const point = { x: here.x + tangent.x * apo, z: here.z + tangent.z * apo };
+    out.push({ tile: { col: tile.col, row: tile.row }, point, tangent });
+  }
+  return out;
+}
+
+/** Build the offset-path pair (`{left, right}`) for a straight river ribbon
+ *  starting at `exit.point` and running for `length` world units along
+ *  `exit.tangent`. Width defaults to RIVER_RIBBON_WIDTH so the extension
+ *  matches the in-map ribbon's footprint exactly.
+ *
+ *  Pure helper — returns the same `{left, right}` shape as
+ *  `ribbonOffsetPaths`, ready to be fed into `MeshBuilder.CreateRibbon` by
+ *  the caller after wrapping each `{x, z}` in a `Vector3(x, RIVER_RIBBON_Y, z)`.
+ *
+ *  `segments` controls how many sample points along the line; even a low
+ *  value (4) is fine for a straight extension since `ribbonOffsetPaths`'s
+ *  per-sample perpendicular only depends on the tangent (constant here). */
+export function riverExtensionRibbon(
+  exit,
+  length,
+  width = RIVER_RIBBON_WIDTH,
+  segments = 4,
+) {
+  if (!exit || !exit.point || !exit.tangent || !(length > 0)) {
+    return { left: [], right: [] };
+  }
+  const seg = Math.max(1, segments | 0);
+  const points = new Array(seg + 1);
+  for (let i = 0; i <= seg; i++) {
+    const t = i / seg;
+    points[i] = {
+      x: exit.point.x + exit.tangent.x * length * t,
+      z: exit.point.z + exit.tangent.z * length * t,
+    };
+  }
+  return ribbonOffsetPaths(points, width);
 }
 
 // ─── Forest layout (deterministic per hex, exported for tests) ──────────────
