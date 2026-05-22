@@ -5115,6 +5115,16 @@ export class Renderer3D {
         if (standee.sphere && standee.sphere.material !== expected) {
           standee.sphere.material = expected;
         }
+      } else if (standee.plane?.metadata) {
+        // Animation is driving cone.position; we skip _positionStandee to
+        // avoid stomping the slide. But the metadata.col/row drives fog
+        // visibility checks in _applyFogVeil, so keep IT in sync with the
+        // entity's logical hex even during animation. Without this, a unit
+        // moving 2+ hexes (road / horse) past sight range would have its
+        // OLD hex tested against the post-move fog set, fail, and get
+        // setEnabled(false) → invisible for the round.
+        standee.plane.metadata.col = e.col;
+        standee.plane.metadata.row = e.row;
       }
       // HP indicator: drawn as a circular arc rim around the floating unit
       // icon billboard (see _syncEntityIconBillboards), not the rectangular
