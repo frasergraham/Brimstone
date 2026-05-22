@@ -5677,13 +5677,28 @@ export class Renderer3D {
    *  standee — the next draw() will snap the entity to its destination
    *  position anyway via `_positionStandee`, so resolution can't get stuck
    *  on a missing animation. */
-  addMoveAnim(entityId, fromCol, fromRow, toCol, toRow, _type, _owner, _title) {
+  addMoveAnim(entityId, fromCol, fromRow, toCol, toRow, _type, _owner, _title, path = null) {
     if (!this._scene || !this._babylon) return;
     const standee = this._entityStandees.get(entityId);
     if (!standee) return;
     const BABYLON = this._babylon;
-    const { x: fromX, z: fromZ } = hexToWorld(fromCol, fromRow);
-    const { x: toX,   z: toZ   } = hexToWorld(toCol,   toRow);
+    // If a multi-hex path is provided, build a polyline through every
+    // waypoint (origin → path[0] → path[1] → ... → path[last]). The cone
+    // visits each intermediate hex over the same MOVE_ANIM_MS window, so
+    // a road move actually follows the road instead of cutting straight.
+    // Without a path the call is a single segment from (fromCol,fromRow)
+    // to (toCol,toRow) — the legacy 1-hex hop signature.
+    const waypoints = [{ col: fromCol, row: fromRow }];
+    if (Array.isArray(path) && path.length > 0) {
+      for (const p of path) {
+        if (p && typeof p.col === 'number' && typeof p.row === 'number') waypoints.push(p);
+      }
+    } else {
+      waypoints.push({ col: toCol, row: toRow });
+    }
+    const worldPts = waypoints.map(p => hexToWorld(p.col, p.row));
+    const { x: fromX, z: fromZ } = worldPts[0];
+    const { x: toX,   z: toZ   } = worldPts[worldPts.length - 1];
     // Cone slide time tied to MOVE_ANIM_MS so the walking-speed-match
     // calc in _loadWalkingAnimation actually corresponds to real cone
     // motion. Scaled by the current playback speed multiplier so vfast
@@ -5706,16 +5721,21 @@ export class Renderer3D {
       standee.paladinClone.mesh.rotation.y = Math.atan2(toX - fromX, toZ - fromZ);
     }
 
-    // Scale the paladin walking animation's playback rate by the actual
-    // distance covered in this step relative to a single hex. Road moves
-    // cover 2 hexes per step in the same MOVE_ANIM_MS window, so the
-    // walking cycle needs to play 2× faster for the feet to plant.
-    const dx = toX - fromX;
-    const dz = toZ - fromZ;
-    const stepWU = Math.sqrt(dx * dx + dz * dz);
+    // Total polyline length in world units — for a 1-hex hop this is
+    // one hexStep, for a road move tracing 2 hexes it's two hexSteps
+    // (or whatever the actual XZ sum is for the path). The walking
+    // animation playback rate scales by this length / one-hex so the
+    // walk cycle covers the polyline at the cone's actual ground speed
+    // and feet stay planted across the whole move.
+    let totalLenWU = 0;
+    for (let i = 1; i < worldPts.length; i++) {
+      const dx = worldPts[i].x - worldPts[i - 1].x;
+      const dz = worldPts[i].z - worldPts[i - 1].z;
+      totalLenWU += Math.sqrt(dx * dx + dz * dz);
+    }
     const hexStepWU = HEX_RADIUS_WORLD * Math.sqrt(3);
-    if (stepWU > 0 && hexStepWU > 0) {
-      const distMul = stepWU / hexStepWU;
+    if (totalLenWU > 0 && hexStepWU > 0) {
+      const distMul = totalLenWU / hexStepWU;
       const walkGroup = this._paladinSource?.walkGroup;
       const baseRatio = this._walkingSource?.speedRatio ?? 1.0;
       if (walkGroup && 'speedRatio' in walkGroup) {
@@ -5726,12 +5746,28 @@ export class Renderer3D {
       }
     }
 
+    // Build the polyline keyframes. Each segment is allocated frames
+    // proportional to its length so the cone moves at a constant ground
+    // speed across the whole path (no slow-then-fast on uneven splits).
+    const keysX = [{ frame: 0, value: fromX }];
+    const keysZ = [{ frame: 0, value: fromZ }];
+    let accLen = 0;
+    for (let i = 1; i < worldPts.length; i++) {
+      const dx = worldPts[i].x - worldPts[i - 1].x;
+      const dz = worldPts[i].z - worldPts[i - 1].z;
+      accLen += Math.sqrt(dx * dx + dz * dz);
+      const f = totalLenWU > 0
+        ? Math.round(FRAMES_MOVE * (accLen / totalLenWU))
+        : FRAMES_MOVE;
+      keysX.push({ frame: f, value: worldPts[i].x });
+      keysZ.push({ frame: f, value: worldPts[i].z });
+    }
     const animX = new BABYLON.Animation('mvX', 'position.x', 60,
       BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
-    animX.setKeys([{ frame: 0, value: fromX }, { frame: FRAMES_MOVE, value: toX }]);
+    animX.setKeys(keysX);
     const animZ = new BABYLON.Animation('mvZ', 'position.z', 60,
       BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
-    animZ.setKeys([{ frame: 0, value: fromZ }, { frame: FRAMES_MOVE, value: toZ }]);
+    animZ.setKeys(keysZ);
 
     // Set start positions immediately so the very first frame is at "from".
     standee.plane.position.x = fromX; standee.plane.position.z = fromZ;

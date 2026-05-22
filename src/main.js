@@ -1316,13 +1316,16 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       const hopDelay = _spd === 'vfast' ? 160 : 320;
 
       if (renderer?.is3D) {
-        // 3D: animate the entire path as ONE move per entity. The 3D
-        // renderer's addMoveAnim scales walkGroup.speedRatio by the
-        // step distance / single-hex distance, so a 2-hex road move
-        // plays the walk cycle 2× faster in the same MOVE_ANIM_MS
-        // window — feet plant correctly without the cone teleporting
-        // between hops. Avoids the cancel/restart-from-current pattern
-        // that made multi-hop moves "jump" in 3D.
+        // 3D: animate the entire path as ONE move per entity, passing
+        // the full waypoint list as a 9th arg so the renderer builds a
+        // multi-keyframe polyline (origin → path[0] → … → path[last]).
+        // Frames are allocated proportionally to segment lengths so the
+        // cone moves at constant ground speed across the polyline —
+        // total move duration is MOVE_ANIM_MS regardless of segment
+        // count. A 2-hex road = 500ms per segment, a 3-hex horse run =
+        // 333ms per segment, etc. addMoveAnim scales walkGroup.speedRatio
+        // by totalLen / hexStep so the walk cycle's foot-plant stays
+        // accurate across every segment.
         for (const { ev, preSnap, path } of moveAnims) {
           const lastPos = path[path.length - 1];
           renderer.addMoveAnim(
@@ -1331,6 +1334,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             lastPos.col, lastPos.row,
             preSnap.type, preSnap.owner,
             preSnap.title ?? null,
+            path, // full waypoint list
           );
           const ent = displayEntities.find(e => e.id === ev.action.entityId);
           if (ent) { ent.col = lastPos.col; ent.row = lastPos.row; }
