@@ -6732,9 +6732,11 @@ export const HP_BAR_Y_ABOVE_BASE = 0.2;
  *  sits above the cone+sphere head. Plane size is square; the icon disc and
  *  ring are painted inside it with transparent corners.
  *
- *  Sized so the ring around the icon reads cleanly at typical zoom but the
- *  badge doesn't dominate the silhouette of the token below it. */
-export const UNIT_ICON_PLANE_SIZE = 0.55;
+ *  Sized so the ring around the icon reads cleanly at typical zoom — 2×
+ *  the original 0.55 so the portrait + HP ring is legible even when the
+ *  camera is fully zoomed out. The badge intentionally now dominates the
+ *  silhouette of the token below it; that's the desired readout. */
+export const UNIT_ICON_PLANE_SIZE = 1.10;
 /** Gap between the top of the sphere head and the bottom of the icon plane,
  *  in world units. Slightly larger than the old HP-bar gap so the (taller)
  *  circular badge has visual breathing room above the token. */
@@ -6814,10 +6816,12 @@ export const ATTACK_ARROW_HEAD_ANGLE = 0.4;
 export const ATTACK_ARROW_COLOR = '#dc3c3c';
 
 /** Floating ×N badge above the target hex. Sits above the move-badge
- *  layer (0.6), the unit body, and the floating unit-icon billboard
- *  (`iconBillboardY` peaks ≈1.35 for leaders) so the attack readout
- *  reads as clearly floating above the entire unit token stack. */
-export const ATTACK_BADGE_Y = 1.5;
+ *  layer (0.6), the unit body, and the floating unit-icon billboard.
+ *  With the 2× icon size bump, the leader badge's top edge now sits at
+ *  `iconBillboardY(true) + UNIT_ICON_PLANE_SIZE/2` ≈ 1.349 + 0.55 ≈ 1.9,
+ *  so this constant was raised from 1.5 → 2.1 to keep the ×N readout
+ *  clearly floating above the entire unit token stack. */
+export const ATTACK_BADGE_Y = 2.1;
 
 /** Pixel size of the badge billboard plane (world units). Slightly
  *  larger than the move badge (0.45) so the ×N glyph reads cleanly. */
