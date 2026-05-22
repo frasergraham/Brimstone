@@ -60,11 +60,6 @@ export const HOUSE_MODEL_FILE = 'house.glb';
 // `gltf-transform` resize pass — see PR body for the offline recipe.
 export const HOUSE_INSTANCE_BASE_SCALE = 0.55;
 
-// Pre-bridge fallback CDN — paladin loader still imports this directly (see
-// `_loadPaladinModel`); the bridge commit migrates it to `_ensureBabylonLoaders`
-// and this constant goes away.
-const BABYLON_LOADERS_CDN = 'https://cdn.jsdelivr.net/npm/@babylonjs/loaders@7.42.0/+esm';
-
 // ─── Paladin GLB model (replaces cone+sphere body for hero-side standees) ──
 // Path is relative to the assets base directory captured by `loadImages()` —
 // the loader fetches `<base>/models/paladin.glb`. The file is intentionally
@@ -1341,10 +1336,9 @@ export class Renderer3D {
    *  renderer silently falls back to the cone+sphere body so a missing file
    *  never blocks gameplay.
    *
-   *  Loading @babylonjs/loaders has the side-effect of registering the
-   *  .glb / .gltf plugins on BABYLON.SceneLoader. Without that import,
-   *  ImportMeshAsync rejects .glb files with "Unable to find a plugin for
-   *  file extension .glb". */
+   *  Loader registration is delegated to `_ensureBabylonLoaders` so the
+   *  house and paladin GLB consumers share a single UMD-script-tag path —
+   *  see #371 for why the ESM `+esm` wrapper can't be used. */
   async _loadPaladinModel(basePath = 'assets') {
     if (!this._babylon || !this._scene) return null;
     if (this._paladinSource) return this._paladinSource;
@@ -1352,18 +1346,12 @@ export class Renderer3D {
     const BABYLON = this._babylon;
 
     const promise = (async () => {
-      // Step 1: register glTF loader plugin (side-effect of importing the
-      // loaders package). Best-effort — if SceneLoader.ImportMeshAsync is
-      // already wired (tests stub it directly on the fake BABYLON), this
-      // import isn't required. Real-browser path: this populates the .glb /
-      // .gltf plugin entries on BABYLON.SceneLoader.
-      try {
-        await import(/* @vite-ignore */ BABYLON_LOADERS_CDN);
-      } catch (err) {
-        // Don't abort yet — SceneLoader may still be usable (tests + edge
-        // cases). The plugin-availability check below makes the final call.
-        console.warn('[Renderer3D] @babylonjs/loaders import failed.', err);
-      }
+      // Step 1: register glTF loader plugin via the UMD bundle. Best-effort —
+      // if SceneLoader.ImportMeshAsync is already wired (tests stub it
+      // directly on the fake BABYLON), the script tag isn't required. Real-
+      // browser path: this attaches to window.BABYLON and populates the
+      // .glb / .gltf plugin entries on BABYLON.SceneLoader.
+      await this._ensureBabylonLoaders();
 
       if (!BABYLON.SceneLoader || typeof BABYLON.SceneLoader.ImportMeshAsync !== 'function') {
         console.warn('[Renderer3D] BABYLON.SceneLoader.ImportMeshAsync unavailable; skipping paladin model.');

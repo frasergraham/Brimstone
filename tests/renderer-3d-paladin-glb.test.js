@@ -302,6 +302,32 @@ describe('_loadPaladinModel — async load + caching + fallback', () => {
     assert.equal(calls, 1, 'second concurrent call must reuse the in-flight promise');
     assert.equal(a, b);
   });
+
+  // Bridge regression — the broken `await import(BABYLON_LOADERS_CDN)` pattern
+  // from PR #369 was replaced with `_ensureBabylonLoaders` so the house and
+  // paladin GLB consumers share one UMD-script-tag loader path. Pin the
+  // ordering: helper resolves BEFORE ImportMeshAsync is called.
+  test('awaits _ensureBabylonLoaders BEFORE calling ImportMeshAsync', async () => {
+    const r = newInst();
+    r._scene = {};
+    const calls = [];
+    let helperResolved = false;
+    r._ensureBabylonLoaders = async () => {
+      calls.push('ensure');
+      await Promise.resolve();
+      helperResolved = true;
+      return true;
+    };
+    r._babylon = makeFakeBabylon({
+      importImpl: async () => {
+        calls.push('import');
+        assert.equal(helperResolved, true, 'helper must resolve before import is called');
+        return { meshes: [makeFakeSourceMesh()] };
+      },
+    });
+    await r._loadPaladinModel('assets');
+    assert.deepEqual(calls, ['ensure', 'import']);
+  });
 });
 
 // ─── Clone helper (`_buildPaladinClone`) ────────────────────────────────────
