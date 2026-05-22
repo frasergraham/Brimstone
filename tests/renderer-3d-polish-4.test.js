@@ -23,6 +23,8 @@ import {
   HIGHLIGHT_DISC_Y,
   HIGHLIGHT_DEFAULT_RGBA,
   HEX_RADIUS_WORLD,
+  ROAD_RIBBON_Y,
+  RIVER_RIBBON_Y,
   // item 5
   FOG_TILE_DARKEN,
   // item 9
@@ -120,6 +122,20 @@ describe('Renderer3D round-4 polish — hexOutlinePaths', () => {
   test('outline Y matches HIGHLIGHT_DISC_Y so the ring sits above the tile prism top', () => {
     const { outer } = hexOutlinePaths(0, 0);
     assert.equal(outer[0].y, HIGHLIGHT_DISC_Y);
+  });
+
+  test('highlight Y sits ABOVE road and river ribbons so the outline is not occluded by a road tile', () => {
+    assert.ok(HIGHLIGHT_DISC_Y > ROAD_RIBBON_Y,
+      `HIGHLIGHT_DISC_Y ${HIGHLIGHT_DISC_Y} must clear ROAD_RIBBON_Y ${ROAD_RIBBON_Y}`);
+    assert.ok(HIGHLIGHT_DISC_Y > RIVER_RIBBON_Y,
+      `HIGHLIGHT_DISC_Y ${HIGHLIGHT_DISC_Y} must clear RIVER_RIBBON_Y ${RIVER_RIBBON_Y}`);
+  });
+
+  test('highlight Y sits BELOW plan disc and plan-line layers so plan overlay still reads on top', () => {
+    assert.ok(HIGHLIGHT_DISC_Y < PLAN_DISC_Y,
+      `HIGHLIGHT_DISC_Y ${HIGHLIGHT_DISC_Y} must be below PLAN_DISC_Y ${PLAN_DISC_Y}`);
+    assert.ok(HIGHLIGHT_DISC_Y < PLAN_LINE_Y,
+      `HIGHLIGHT_DISC_Y ${HIGHLIGHT_DISC_Y} must be below PLAN_LINE_Y ${PLAN_LINE_Y}`);
   });
 });
 
