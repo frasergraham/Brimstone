@@ -11,14 +11,8 @@ import {
   ROTATE_BUTTON_STEP,
   zoomToRadius,
   radiusToZoom,
-  clampRotation,
-  CAMERA_BETA_LOWER_DELTA,
-  CAMERA_BETA_UPPER_DELTA,
-  CAMERA_BETA_MIN,
-  CAMERA_BETA_MAX,
-  TILT_BUTTON_STEP,
+  CAMERA_BETA_LOCKED,
   CAMERA_BUTTON_REPEAT_MS,
-  clampTilt,
   pinchDistance,
   pinchAngle,
   twistDelta,
@@ -66,42 +60,7 @@ describe('zoomToRadius — reciprocal zoom↔radius mapping', () => {
   });
 });
 
-describe('clampRotation — alpha unbounded, beta clamped', () => {
-  const lockedBeta = Math.PI / 3.5;
-  const betaMin = lockedBeta - CAMERA_BETA_LOWER_DELTA;
-  const betaMax = lockedBeta + CAMERA_BETA_UPPER_DELTA;
-
-  test('alpha is unbounded — large deltas pass through unchanged', () => {
-    const { alpha } = clampRotation(0, lockedBeta, 100, 0, betaMin, betaMax);
-    assert.equal(alpha, 100);
-  });
-
-  test('negative alpha delta wraps freely', () => {
-    const { alpha } = clampRotation(0, lockedBeta, -10, 0, betaMin, betaMax);
-    assert.equal(alpha, -10);
-  });
-
-  test('beta within range is preserved', () => {
-    const { beta } = clampRotation(0, lockedBeta, 0, 0.05, betaMin, betaMax);
-    assert.equal(beta, lockedBeta + 0.05);
-  });
-
-  test('beta below betaMin is clamped to betaMin', () => {
-    const { beta } = clampRotation(0, lockedBeta, 0, -10, betaMin, betaMax);
-    assert.equal(beta, betaMin);
-  });
-
-  test('beta above betaMax is clamped to betaMax', () => {
-    const { beta } = clampRotation(0, lockedBeta, 0, 10, betaMin, betaMax);
-    assert.equal(beta, betaMax);
-  });
-
-  test('both axes update in a single call', () => {
-    const { alpha, beta } = clampRotation(1, lockedBeta, 0.5, -0.1, betaMin, betaMax);
-    assert.equal(alpha, 1.5);
-    assert.equal(beta, lockedBeta - 0.1);
-  });
-
+describe('ROTATE_BUTTON_STEP — sanity', () => {
   test('ROTATE_BUTTON_STEP is a sensible nudge — between 5° and 30°', () => {
     const degrees = ROTATE_BUTTON_STEP * 180 / Math.PI;
     assert.ok(degrees > 5);
@@ -143,7 +102,7 @@ describe('Renderer3D.setZoom — pre-init behaviour and interface', () => {
   });
 });
 
-describe('Renderer3D.rotateBy — applies clamp via the helper', () => {
+describe('Renderer3D.rotateBy — yaw-only after tilt-lock', () => {
   test('rotateBy with no camera attached is a no-op', () => {
     const fakeCanvas = { parentElement: null, width: 800, height: 600, addEventListener() {} };
     const inst = new Renderer3D(fakeCanvas, {});
@@ -151,21 +110,20 @@ describe('Renderer3D.rotateBy — applies clamp via the helper', () => {
     inst.rotateBy(0.5, 0.1);
   });
 
-  test('rotateBy mutates a stand-in camera within beta clamp', () => {
+  test('rotateBy mutates only alpha — beta arg is ignored (tilt is locked)', () => {
     const fakeCanvas = { parentElement: null, width: 800, height: 600, addEventListener() {} };
     const inst = new Renderer3D(fakeCanvas, {});
-    const lockedBeta = inst._lockedBeta;
     const fakeCamera = {
-      alpha: 0, beta: lockedBeta,
-      lowerBetaLimit: lockedBeta - CAMERA_BETA_LOWER_DELTA,
-      upperBetaLimit: lockedBeta + CAMERA_BETA_UPPER_DELTA,
+      alpha: 0, beta: CAMERA_BETA_LOCKED,
+      lowerBetaLimit: CAMERA_BETA_LOCKED,
+      upperBetaLimit: CAMERA_BETA_LOCKED,
       lowerRadiusLimit: 4, upperRadiusLimit: 80, radius: 12,
       target: { x: 0, y: 0, z: 0 },
     };
     inst._camera = fakeCamera;
-    inst.rotateBy(1.0, 5.0); // huge beta delta should clamp
+    inst.rotateBy(1.0, 5.0); // huge beta delta should be ignored
     assert.equal(fakeCamera.alpha, 1.0);
-    assert.equal(fakeCamera.beta, lockedBeta + CAMERA_BETA_UPPER_DELTA);
+    assert.equal(fakeCamera.beta, CAMERA_BETA_LOCKED, 'beta must stay locked at π/4');
   });
 
   test('rotateBy respects viewLocked', () => {
@@ -173,8 +131,8 @@ describe('Renderer3D.rotateBy — applies clamp via the helper', () => {
     const inst = new Renderer3D(fakeCanvas, {});
     inst.viewLocked = true;
     const fakeCamera = {
-      alpha: 0, beta: inst._lockedBeta,
-      lowerBetaLimit: 0, upperBetaLimit: Math.PI,
+      alpha: 0, beta: CAMERA_BETA_LOCKED,
+      lowerBetaLimit: CAMERA_BETA_LOCKED, upperBetaLimit: CAMERA_BETA_LOCKED,
       lowerRadiusLimit: 4, upperRadiusLimit: 80, radius: 12,
       target: { x: 0, y: 0, z: 0 },
     };
@@ -206,48 +164,16 @@ describe('Renderer interface — rotateBy on both classes', () => {
 // Pure-helper tests for the math driving the custom Babylon camera input.
 // Babylon-free imports so they run in node-test without a browser context.
 
-describe('CAMERA_BETA_MIN / CAMERA_BETA_MAX — absolute tilt range', () => {
-  test('min sits at ≈0.2π (close to head-on, still angled)', () => {
-    assert.ok(Math.abs(CAMERA_BETA_MIN - 0.20 * Math.PI) < 1e-9);
+describe('CAMERA_BETA_LOCKED — tilt permanently pinned at 45°', () => {
+  test('CAMERA_BETA_LOCKED equals π/4 exactly', () => {
+    assert.equal(CAMERA_BETA_LOCKED, Math.PI / 4);
   });
-  test('max sits at ≈0.45π (close to bird\'s-eye without flat-flat)', () => {
-    assert.ok(Math.abs(CAMERA_BETA_MAX - 0.45 * Math.PI) < 1e-9);
-  });
-  test('range stays inside (0, π/2) — camera never flips under the map', () => {
-    assert.ok(CAMERA_BETA_MIN > 0);
-    assert.ok(CAMERA_BETA_MAX < Math.PI / 2);
-    assert.ok(CAMERA_BETA_MIN < CAMERA_BETA_MAX);
-  });
-  test('legacy delta constants are still exported (back-compat with older tests)', () => {
-    assert.equal(typeof CAMERA_BETA_LOWER_DELTA, 'number');
-    assert.equal(typeof CAMERA_BETA_UPPER_DELTA, 'number');
-  });
-  test('TILT_BUTTON_STEP is a sensible per-tick nudge (< 10°)', () => {
-    const deg = TILT_BUTTON_STEP * 180 / Math.PI;
-    assert.ok(deg > 0 && deg < 10, `TILT_BUTTON_STEP=${deg}° outside (0, 10°)`);
+  test('CAMERA_BETA_LOCKED stays inside (0, π/2) — camera never flips under the map', () => {
+    assert.ok(CAMERA_BETA_LOCKED > 0);
+    assert.ok(CAMERA_BETA_LOCKED < Math.PI / 2);
   });
   test('CAMERA_BUTTON_REPEAT_MS is in a sensible range for hold-to-repeat', () => {
     assert.ok(CAMERA_BUTTON_REPEAT_MS >= 16 && CAMERA_BUTTON_REPEAT_MS <= 200);
-  });
-});
-
-describe('clampTilt — one-axis beta clamp shared by buttons + custom input', () => {
-  test('within range: delta passes through', () => {
-    assert.equal(clampTilt(CAMERA_BETA_MIN + 0.1, 0.05), CAMERA_BETA_MIN + 0.15);
-  });
-  test('huge positive delta clamps to betaMax', () => {
-    assert.equal(clampTilt(CAMERA_BETA_MIN, 10), CAMERA_BETA_MAX);
-  });
-  test('huge negative delta clamps to betaMin', () => {
-    assert.equal(clampTilt(CAMERA_BETA_MAX, -10), CAMERA_BETA_MIN);
-  });
-  test('uses default CAMERA_BETA_MIN/MAX when no explicit bounds passed', () => {
-    assert.equal(clampTilt(CAMERA_BETA_MIN - 1, 0), CAMERA_BETA_MIN);
-    assert.equal(clampTilt(CAMERA_BETA_MAX + 1, 0), CAMERA_BETA_MAX);
-  });
-  test('accepts explicit clamp range (so the custom input can use the camera\'s configured limits)', () => {
-    assert.equal(clampTilt(0.5, 0.5, 0.0, 1.0), 1.0);
-    assert.equal(clampTilt(0.5, -0.5, 0.2, 0.8), 0.2);
   });
 });
 
@@ -348,7 +274,7 @@ describe('clampPanTarget — keeps camera.target within map XZ bounds', () => {
   });
 });
 
-describe('Renderer3D — is3D flag + tiltBy method', () => {
+describe('Renderer3D — is3D flag + tiltBy is a no-op (tilt locked)', () => {
   test('Renderer3D instances expose is3D = true (ui.js uses this to bypass 2D drag)', () => {
     const fakeCanvas = { parentElement: null, width: 800, height: 600, addEventListener() {} };
     const inst = new Renderer3D(fakeCanvas, {});
@@ -359,40 +285,32 @@ describe('Renderer3D — is3D flag + tiltBy method', () => {
     const inst = new Renderer(fakeCanvas, {});
     assert.equal(inst.is3D, false);
   });
-  test('Renderer3D.tiltBy without camera is a safe no-op', () => {
-    const fakeCanvas = { parentElement: null, width: 800, height: 600, addEventListener() {} };
-    const inst = new Renderer3D(fakeCanvas, {});
-    assert.doesNotThrow(() => inst.tiltBy(0.05));
-  });
-  test('Renderer3D.tiltBy mutates a stand-in camera and clamps to tilt range', () => {
+  test('Renderer3D.tiltBy is a no-op — does not mutate camera.beta', () => {
     const fakeCanvas = { parentElement: null, width: 800, height: 600, addEventListener() {} };
     const inst = new Renderer3D(fakeCanvas, {});
     const cam = {
-      alpha: 0, beta: CAMERA_BETA_MIN + 0.05,
-      lowerBetaLimit: CAMERA_BETA_MIN, upperBetaLimit: CAMERA_BETA_MAX,
+      alpha: 0, beta: CAMERA_BETA_LOCKED,
+      lowerBetaLimit: CAMERA_BETA_LOCKED, upperBetaLimit: CAMERA_BETA_LOCKED,
       lowerRadiusLimit: 4, upperRadiusLimit: 80, radius: 12,
       target: { x: 0, y: 0, z: 0 },
     };
     inst._camera = cam;
     inst.tiltBy(10);
-    assert.equal(cam.beta, CAMERA_BETA_MAX, 'huge positive delta should clamp to max');
+    assert.equal(cam.beta, CAMERA_BETA_LOCKED, 'huge delta must not move beta');
     inst.tiltBy(-100);
-    assert.equal(cam.beta, CAMERA_BETA_MIN, 'huge negative delta should clamp to min');
+    assert.equal(cam.beta, CAMERA_BETA_LOCKED, 'huge negative delta must not move beta');
+    inst.tiltBy(0.001);
+    assert.equal(cam.beta, CAMERA_BETA_LOCKED, 'tiny delta must not move beta');
   });
-  test('Renderer3D.tiltBy respects viewLocked', () => {
+  test('Renderer3D.tiltBy without camera is a safe no-op (does not throw)', () => {
     const fakeCanvas = { parentElement: null, width: 800, height: 600, addEventListener() {} };
     const inst = new Renderer3D(fakeCanvas, {});
-    inst.viewLocked = true;
-    const startBeta = CAMERA_BETA_MIN + 0.1;
-    const cam = {
-      alpha: 0, beta: startBeta,
-      lowerBetaLimit: CAMERA_BETA_MIN, upperBetaLimit: CAMERA_BETA_MAX,
-      lowerRadiusLimit: 4, upperRadiusLimit: 80, radius: 12,
-      target: { x: 0, y: 0, z: 0 },
-    };
-    inst._camera = cam;
-    inst.tiltBy(0.1);
-    assert.equal(cam.beta, startBeta);
+    assert.doesNotThrow(() => inst.tiltBy(0.05));
+  });
+  test('Renderer3D._lockedBeta equals CAMERA_BETA_LOCKED (initial camera tilt)', () => {
+    const fakeCanvas = { parentElement: null, width: 800, height: 600, addEventListener() {} };
+    const inst = new Renderer3D(fakeCanvas, {});
+    assert.equal(inst._lockedBeta, CAMERA_BETA_LOCKED);
   });
   test('2D Renderer.tiltBy is a parity no-op', () => {
     const inst = Object.create(Renderer.prototype);
@@ -505,4 +423,3 @@ describe('gestureLockDecision — 2-finger pinch/twist intent-lock helper', () =
     assert.equal(d, 'zoom');
   });
 });
-
