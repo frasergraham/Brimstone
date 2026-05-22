@@ -148,6 +148,32 @@ export const GESTURE_SAMPLING_WINDOW_MS = 100;
  *  corresponds to ~1 radius unit. */
 export const PINCH_RADIUS_PER_PX = 0.04;
 
+/** Pixel distance below which a pointerdown→pointerup is treated as a click
+ *  instead of a drag. Tuned to operator playtest — 6px is loose enough to
+ *  forgive a shaky finger or a noisy trackpad without classifying a real pan
+ *  drag as a click. Used by `wasClick` below + the custom pointer handlers
+ *  to gate `_lastGestureWasDrag`.
+ *
+ *  Why this exists: in 3D mode the custom pointer input calls
+ *  `e.preventDefault()` on `pointermove` (necessary so the browser doesn't
+ *  text-select / scroll during a pan). preventDefault on pointermove
+ *  suppresses the compat `mousemove` event, which is what ui.js's
+ *  `_didDragPan` guard listens to — so without this flag the synthetic
+ *  `click` on pointerup runs unconditionally and the empty-hex branch
+ *  deselects the user's unit. The renderer tracks the drag itself and ui.js
+ *  consults `_lastGestureWasDrag`. */
+export const CLICK_DRAG_THRESHOLD_PX = 6;
+
+/** Pure predicate: did the pointer travel little enough between down and up
+ *  to count as a click? Exported for unit-testing the drag-vs-click rule
+ *  without spinning up Babylon. */
+export function wasClick(downPos, upPos, threshold = CLICK_DRAG_THRESHOLD_PX) {
+  if (!downPos || !upPos) return false;
+  const dx = (upPos.x ?? 0) - (downPos.x ?? 0);
+  const dy = (upPos.y ?? 0) - (downPos.y ?? 0);
+  return Math.hypot(dx, dy) <= threshold;
+}
+
 /** Pure helper: convert a per-frame pinch-distance delta (px, positive when
  *  fingers spread apart) into the radius change to apply to the camera.
  *
@@ -1050,6 +1076,19 @@ export class Renderer3D {
     // Touch pinch/twist needs the previous frame's positions to compute deltas.
     const pointers = new Map();
     this._customInputPointers = pointers;
+
+    // Per-gesture drag tracking. `gestureDownPos` is the first pointer's
+    // pointerdown position; `gestureDragged` flips true as soon as any pointer
+    // moves further than CLICK_DRAG_THRESHOLD_PX from it, OR as soon as a
+    // second pointer joins (multi-touch is never a click). On every pointerup
+    // we publish the current value to `this._lastGestureWasDrag` so ui.js's
+    // canvas-click handler can suppress the empty-hex deselect when the
+    // synthetic `click` fires after a drag. See CLICK_DRAG_THRESHOLD_PX
+    // module-scope comment for *why* the renderer (not ui.js) owns this guard.
+    let gestureDownPos = null;
+    let gestureDragged = false;
+    this._lastGestureWasDrag = false;
+
     // Two-finger gesture state — primed on the second pointerdown, used and
     // reset on pointerup/cancel.
     //
@@ -1137,6 +1176,15 @@ export class Renderer3D {
       // We capture the pointer so move/up still fire if the user drags off-
       // canvas; this is important for the buttons row at the bottom edge.
       try { this.canvas.setPointerCapture?.(e.pointerId); } catch { /* ignore */ }
+      // Drag tracking: arm a fresh gesture when the first pointer lands; any
+      // additional pointer joining mid-gesture forces drag=true (multi-touch
+      // is never a click).
+      if (pointers.size === 0) {
+        gestureDownPos = { x: e.clientX, y: e.clientY };
+        gestureDragged = false;
+      } else {
+        gestureDragged = true;
+      }
       pointers.set(e.pointerId, {
         id: e.pointerId,
         x:  e.clientX,
@@ -1176,6 +1224,18 @@ export class Renderer3D {
       entry.x = e.clientX;
       entry.y = e.clientY;
 
+      // Once any pointer travels past the click threshold from the gesture's
+      // origin, classify the gesture as a drag. We measure from the first
+      // pointer's down position (gestureDownPos) so a wandering second finger
+      // still counts — single-finger pans, mouse pans, and pinch/twist all
+      // exceed the threshold quickly. `gestureDragged` stays sticky for the
+      // remainder of the gesture, even if the pointer moves back near origin.
+      if (!gestureDragged && gestureDownPos) {
+        if (!wasClick(gestureDownPos, { x: e.clientX, y: e.clientY })) {
+          gestureDragged = true;
+        }
+      }
+
       const active = [...pointers.values()];
       if (active.length === 1) {
         const p = active[0];
@@ -1209,6 +1269,19 @@ export class Renderer3D {
         lastPinchDist  = 0;
         lastPinchAngle = 0;
         gestureMode    = 'none';
+      }
+      // Publish drag verdict on every pointerup. The synthetic `click` event
+      // that follows pointerup will be inspected by ui.js's _onClick which
+      // reads `renderer._lastGestureWasDrag` to decide whether to run the
+      // hex-pick / select-or-deselect logic. We set it on every up (not just
+      // the last) because the click fires off the *terminating* pointerup of
+      // a primary-button gesture, and `gestureDragged` is already sticky.
+      this._lastGestureWasDrag = gestureDragged;
+      // Reset gesture state once the last pointer lifts so the next gesture
+      // starts clean.
+      if (pointers.size === 0) {
+        gestureDownPos = null;
+        gestureDragged = false;
       }
     };
 
