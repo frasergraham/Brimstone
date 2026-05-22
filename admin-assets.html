@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Brimstone — 3D Asset Debug Viewer</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; background: #0a0a0a; color: #d4cba0; font-family: system-ui, sans-serif; font-size: 13px; }
+    #wrap { display: grid; grid-template-columns: 220px 1fr 280px; height: 100vh; overflow: hidden; }
+
+    aside { background: #14110d; border-right: 1px solid #2c2620; overflow-y: auto; padding: 12px; }
+    aside h2 { font-size: 11px; color: #c4a04a; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 10px; }
+    .model-item {
+      display: block; padding: 8px 10px; margin: 4px 0; cursor: pointer;
+      background: #1a1610; border: 1px solid #2c2620; color: #d4cba0;
+      font-family: ui-monospace, Menlo, monospace; font-size: 12px;
+    }
+    .model-item:hover { background: #211c16; border-color: #443a2a; }
+    .model-item.active { background: #5a4a30; border-color: #c4a04a; color: #ffd680; }
+    .model-item.broken { color: #c46060; }
+
+    #stage { position: relative; background: #050505; overflow: hidden; }
+    #render-canvas { width: 100%; height: 100%; display: block; touch-action: none; outline: none; }
+    #overlay {
+      position: absolute; top: 10px; left: 10px; font-family: ui-monospace, Menlo, monospace;
+      font-size: 11px; color: #8a8060; background: rgba(0,0,0,0.5); padding: 4px 8px;
+      border: 1px solid #2c2620; pointer-events: none;
+    }
+    .nav-back { position: absolute; top: 10px; right: 10px; font-size: 12px; color: #a08858; }
+
+    #info { background: #14110d; border-left: 1px solid #2c2620; overflow-y: auto; padding: 12px; }
+    #info h2 { font-size: 11px; color: #c4a04a; letter-spacing: 1.5px; text-transform: uppercase; margin: 0 0 8px 0; }
+    .section { margin: 12px 0; padding: 10px 12px; border: 1px solid #2c2620; background: #1a1610; }
+    .section h3 { font-size: 11px; color: #c4a04a; letter-spacing: 1.2px; text-transform: uppercase; margin: 0 0 6px 0; }
+    .row { display: grid; grid-template-columns: 90px 1fr; gap: 8px; margin: 3px 0; font-size: 11px; }
+    .row label { color: #8a8060; }
+    .row .val { color: #d4cba0; font-family: ui-monospace, Menlo, monospace; font-variant-numeric: tabular-nums; }
+    select, button {
+      width: 100%; padding: 6px 8px; background: #211c16; color: #d4cba0;
+      border: 1px solid #443a2a; font-family: inherit; font-size: 12px; cursor: pointer;
+    }
+    button:hover, select:hover { background: #2a241c; }
+    button.primary { background: #5a4a30; color: #ffd680; border-color: #c4a04a; }
+    button.primary:hover { background: #6a5a3a; }
+    .button-row { display: flex; gap: 6px; margin-top: 6px; }
+    .button-row button { flex: 1; }
+    .anim-list { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: #a08858; margin-top: 6px; }
+    .anim-list div { padding: 2px 0; }
+    .toggle-row { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 11px; color: #a08858; }
+    #error { color: #c46060; font-size: 11px; margin: 8px 0; min-height: 16px; }
+    .empty { color: #6a6050; font-style: italic; font-size: 11px; }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <aside>
+      <h2>Models</h2>
+      <div id="model-list"></div>
+    </aside>
+
+    <div id="stage">
+      <canvas id="render-canvas" tabindex="0"></canvas>
+      <div id="overlay">drag = orbit · wheel = zoom · right-drag = pan</div>
+      <a class="nav-back" href="/admin">← Back to admin</a>
+    </div>
+
+    <div id="info">
+      <h2>Asset Inspector</h2>
+      <div id="error"></div>
+
+      <div class="section">
+        <h3>Metadata</h3>
+        <div class="row"><label>File</label><span class="val" id="meta-file">—</span></div>
+        <div class="row"><label>Submeshes</label><span class="val" id="meta-submesh">—</span></div>
+        <div class="row"><label>Vertices</label><span class="val" id="meta-verts">—</span></div>
+        <div class="row"><label>Bones</label><span class="val" id="meta-bones">—</span></div>
+        <div class="row"><label>BBox W·H·D</label><span class="val" id="meta-bbox">—</span></div>
+      </div>
+
+      <div class="section">
+        <h3>Animations</h3>
+        <select id="anim-select"><option value="">— none —</option></select>
+        <div class="button-row">
+          <button id="anim-play" class="primary">Play</button>
+          <button id="anim-pause">Pause</button>
+          <button id="anim-stop">Stop</button>
+        </div>
+        <div class="toggle-row">
+          <input type="checkbox" id="anim-loop" checked />
+          <label for="anim-loop">Loop</label>
+        </div>
+        <div class="anim-list" id="anim-list"><span class="empty">no animations</span></div>
+      </div>
+
+      <div class="section">
+        <h3>View</h3>
+        <button id="reframe">Reframe camera</button>
+        <div class="toggle-row">
+          <input type="checkbox" id="show-grid" checked />
+          <label for="show-grid">Show ground grid</label>
+        </div>
+        <div class="toggle-row">
+          <input type="checkbox" id="wireframe" />
+          <label for="wireframe">Wireframe</label>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Local UMD Babylon + glTF loaders (no CDN). These attach to window.BABYLON.
+       Loading order matters: core first, then loaders so the .glb plugin
+       registers on the same SceneLoader instance the page uses. -->
+  <script src="/assets/vendor/babylonjs/babylon.js"></script>
+  <script src="/assets/vendor/babylonjs/babylonjs.loaders.min.js"></script>
+
+  <script>
+  (function () {
+    'use strict';
+
+    // Hardcoded model list (the brief mentions dynamic discovery is a stretch).
+    // Each entry: { file, label } — file is fetched from /assets/models/<file>.
+    const MODELS = [
+      { file: 'house.glb',   label: 'house.glb' },
+      { file: 'paladin.glb', label: 'paladin.glb' },
+      { file: 'idle.glb',    label: 'idle.glb' },
+    ];
+
+    const MODEL_DIR = '/assets/models/';
+
+    const $ = (id) => document.getElementById(id);
+    const errEl = $('error');
+    const animSelect = $('anim-select');
+    const animListEl = $('anim-list');
+
+    if (typeof BABYLON === 'undefined') {
+      errEl.textContent = 'Babylon failed to load (check /assets/vendor/babylonjs/).';
+      return;
+    }
+
+    // ── Engine + scene boilerplate ─────────────────────────────────────────
+    const canvas = $('render-canvas');
+    const engine = new BABYLON.Engine(canvas, true, { preserveDrawingBuffer: true, stencil: true });
+    const scene  = new BABYLON.Scene(engine);
+    scene.clearColor = new BABYLON.Color4(0.04, 0.04, 0.05, 1);
+
+    const camera = new BABYLON.ArcRotateCamera(
+      'cam', -Math.PI / 2, Math.PI / 3, 3, BABYLON.Vector3.Zero(), scene,
+    );
+    camera.lowerRadiusLimit = 0.2;
+    camera.upperRadiusLimit = 100;
+    camera.wheelDeltaPercentage = 0.02;
+    camera.attachControl(canvas, true);
+
+    // Plain debug lighting — NOT the in-game PHASE_LIGHT_CONFIG. Want the
+    // asset to read clearly under neutral illumination, with one directional
+    // shadow caster so we can spot pivot/ground-sink issues.
+    const hemi = new BABYLON.HemisphericLight('hemi', new BABYLON.Vector3(0, 1, 0), scene);
+    hemi.intensity = 1.0;
+    hemi.diffuse = new BABYLON.Color3(1, 1, 1);
+
+    const sun = new BABYLON.DirectionalLight('sun', new BABYLON.Vector3(-0.4, -1, -0.3), scene);
+    sun.position = new BABYLON.Vector3(5, 10, 5);
+    sun.intensity = 0.8;
+
+    // Ground grid (10×10) — gives the operator a sense of asset scale and
+    // catches the "model floats above tile" vs "sinks into ground" classes
+    // of pivot bugs that motivated this tool.
+    const ground = BABYLON.MeshBuilder.CreateGround('ground', { width: 10, height: 10, subdivisions: 10 }, scene);
+    const gridMat = new BABYLON.StandardMaterial('groundMat', scene);
+    gridMat.diffuseColor  = new BABYLON.Color3(0.18, 0.16, 0.12);
+    gridMat.specularColor = new BABYLON.Color3(0, 0, 0);
+    gridMat.wireframe = true;
+    ground.material = gridMat;
+    ground.receiveShadows = true;
+
+    // Shadow generator on the sun so the asset casts onto the grid.
+    const shadows = new BABYLON.ShadowGenerator(1024, sun);
+    shadows.useBlurExponentialShadowMap = true;
+    shadows.blurKernel = 16;
+
+    // Axis gizmo at world origin — quick scale + orientation reference.
+    function makeAxes(size) {
+      const axisX = BABYLON.MeshBuilder.CreateLines('axisX', {
+        points: [BABYLON.Vector3.Zero(), new BABYLON.Vector3(size, 0, 0)],
+      }, scene);
+      axisX.color = new BABYLON.Color3(1, 0.3, 0.3);
+      const axisY = BABYLON.MeshBuilder.CreateLines('axisY', {
+        points: [BABYLON.Vector3.Zero(), new BABYLON.Vector3(0, size, 0)],
+      }, scene);
+      axisY.color = new BABYLON.Color3(0.3, 1, 0.3);
+      const axisZ = BABYLON.MeshBuilder.CreateLines('axisZ', {
+        points: [BABYLON.Vector3.Zero(), new BABYLON.Vector3(0, 0, size)],
+      }, scene);
+      axisZ.color = new BABYLON.Color3(0.3, 0.6, 1);
+      return [axisX, axisY, axisZ];
+    }
+    const axes = makeAxes(1);
+
+    engine.runRenderLoop(() => scene.render());
+    window.addEventListener('resize', () => engine.resize());
+
+    // ── Loaded model state ─────────────────────────────────────────────────
+    // Tracks meshes added by the current model so we can dispose them on
+    // load-next. We deliberately keep the ground + axes alive across loads.
+    let currentMeshes = [];
+    let currentSkeletons = [];
+    let currentAnimGroups = [];
+    let activeAnimGroup = null;
+
+    function clearCurrent() {
+      for (const g of currentAnimGroups) { try { g.stop(); g.dispose(); } catch (_) {} }
+      for (const s of currentSkeletons) { try { s.dispose(); } catch (_) {} }
+      for (const m of currentMeshes) { try { m.dispose(); } catch (_) {} }
+      currentAnimGroups = [];
+      currentSkeletons = [];
+      currentMeshes = [];
+      activeAnimGroup = null;
+    }
+
+    function computeHierarchyBBox(meshes) {
+      // Combine bounding boxes of every imported mesh in world space. Returns
+      // null when no mesh has geometry (e.g. a GLB that only contains nodes).
+      let min = null, max = null;
+      for (const m of meshes) {
+        if (!m.getBoundingInfo) continue;
+        const verts = m.getTotalVertices ? m.getTotalVertices() : 0;
+        if (!verts) continue;
+        m.computeWorldMatrix(true);
+        const bb = m.getBoundingInfo().boundingBox;
+        const mn = bb.minimumWorld, mx = bb.maximumWorld;
+        if (!min) { min = mn.clone(); max = mx.clone(); }
+        else {
+          min = BABYLON.Vector3.Minimize(min, mn);
+          max = BABYLON.Vector3.Maximize(max, mx);
+        }
+      }
+      if (!min) return null;
+      return { min, max, center: min.add(max).scale(0.5), size: max.subtract(min) };
+    }
+
+    function frameCamera() {
+      const bbox = computeHierarchyBBox(currentMeshes);
+      if (!bbox) {
+        camera.target = BABYLON.Vector3.Zero();
+        camera.radius = 3;
+        return;
+      }
+      // Frame radius = max bbox dimension × heuristic; clamp so tiny models
+      // don't put the camera inside the mesh.
+      const maxDim = Math.max(bbox.size.x, bbox.size.y, bbox.size.z);
+      camera.target = bbox.center.clone();
+      camera.radius = Math.max(0.6, maxDim * 2.2);
+      camera.lowerRadiusLimit = Math.max(0.1, maxDim * 0.2);
+      camera.upperRadiusLimit = Math.max(20, maxDim * 20);
+    }
+
+    function fmt(n) {
+      if (n == null || !isFinite(n)) return '—';
+      return (Math.round(n * 100) / 100).toFixed(2);
+    }
+
+    function updateMetadata(file, result) {
+      $('meta-file').textContent = file;
+      $('meta-submesh').textContent = String(currentMeshes.filter(m => m.getTotalVertices && m.getTotalVertices() > 0).length);
+      let totalVerts = 0;
+      for (const m of currentMeshes) {
+        if (m.getTotalVertices) totalVerts += m.getTotalVertices();
+      }
+      $('meta-verts').textContent = totalVerts.toLocaleString();
+      let totalBones = 0;
+      for (const s of currentSkeletons) {
+        totalBones += (s.bones && s.bones.length) || 0;
+      }
+      $('meta-bones').textContent = totalBones ? String(totalBones) : '0';
+      const bbox = computeHierarchyBBox(currentMeshes);
+      $('meta-bbox').textContent = bbox
+        ? `${fmt(bbox.size.x)} · ${fmt(bbox.size.y)} · ${fmt(bbox.size.z)}`
+        : '—';
+
+      // Animation dropdown + list.
+      animSelect.innerHTML = '<option value="">— none —</option>';
+      animListEl.innerHTML = '';
+      if (!currentAnimGroups.length) {
+        animListEl.innerHTML = '<span class="empty">no animations</span>';
+      } else {
+        for (let i = 0; i < currentAnimGroups.length; i++) {
+          const g = currentAnimGroups[i];
+          const opt = document.createElement('option');
+          opt.value = String(i);
+          opt.textContent = g.name || `anim-${i}`;
+          animSelect.appendChild(opt);
+
+          const dur = (g.to - g.from) / 60; // GLB anims default to 60fps
+          const row = document.createElement('div');
+          row.textContent = `${g.name || `anim-${i}`} — ${fmt(dur)}s (${g.targetedAnimations ? g.targetedAnimations.length : 0} tracks)`;
+          animListEl.appendChild(row);
+        }
+      }
+    }
+
+    function loadModel(file) {
+      errEl.textContent = '';
+      clearCurrent();
+      updateMetadata(file, null);
+
+      // Babylon's ImportMeshAsync signature: (meshNames, rootUrl, sceneFilename, scene).
+      // Passing '' for meshNames imports everything.
+      return BABYLON.SceneLoader.ImportMeshAsync('', MODEL_DIR, file, scene)
+        .then((result) => {
+          currentMeshes = result.meshes || [];
+          currentSkeletons = result.skeletons || [];
+          currentAnimGroups = result.animationGroups || [];
+
+          // Stop any auto-playing animations — the dropdown controls playback.
+          for (const g of currentAnimGroups) { try { g.stop(); } catch (_) {} }
+
+          // Register shadow casters on every real mesh.
+          for (const m of currentMeshes) {
+            if (m.getTotalVertices && m.getTotalVertices() > 0) {
+              shadows.addShadowCaster(m);
+              m.receiveShadows = true;
+            }
+          }
+
+          updateMetadata(file, result);
+          frameCamera();
+        })
+        .catch((err) => {
+          errEl.textContent = `Failed to load ${file}: ${err && err.message ? err.message : err}`;
+          updateMetadata(file, null);
+        });
+    }
+
+    // ── Sidebar list ───────────────────────────────────────────────────────
+    const listEl = $('model-list');
+    let activeItem = null;
+    for (const m of MODELS) {
+      const el = document.createElement('div');
+      el.className = 'model-item';
+      el.textContent = m.label;
+      el.addEventListener('click', () => {
+        if (activeItem) activeItem.classList.remove('active');
+        el.classList.add('active');
+        activeItem = el;
+        loadModel(m.file).catch(() => { el.classList.add('broken'); });
+      });
+      listEl.appendChild(el);
+    }
+
+    // ── Animation controls ────────────────────────────────────────────────
+    function selectedGroup() {
+      const idx = parseInt(animSelect.value, 10);
+      if (isNaN(idx) || idx < 0 || idx >= currentAnimGroups.length) return null;
+      return currentAnimGroups[idx];
+    }
+    $('anim-play').addEventListener('click', () => {
+      const g = selectedGroup();
+      if (!g) return;
+      if (activeAnimGroup && activeAnimGroup !== g) { try { activeAnimGroup.stop(); } catch (_) {} }
+      activeAnimGroup = g;
+      g.start($('anim-loop').checked, 1.0, g.from, g.to, false);
+    });
+    $('anim-pause').addEventListener('click', () => {
+      if (activeAnimGroup) { try { activeAnimGroup.pause(); } catch (_) {} }
+    });
+    $('anim-stop').addEventListener('click', () => {
+      if (activeAnimGroup) { try { activeAnimGroup.stop(); } catch (_) {} }
+      activeAnimGroup = null;
+    });
+
+    // ── View toggles ───────────────────────────────────────────────────────
+    $('reframe').addEventListener('click', frameCamera);
+    $('show-grid').addEventListener('change', (e) => {
+      ground.setEnabled(!!e.target.checked);
+      for (const a of axes) a.setEnabled(!!e.target.checked);
+    });
+    $('wireframe').addEventListener('change', (e) => {
+      const on = !!e.target.checked;
+      for (const m of currentMeshes) {
+        if (m.material) m.material.wireframe = on;
+      }
+    });
+
+    // ── Auto-load the first model so the page is useful immediately. ───────
+    if (MODELS.length) {
+      const first = listEl.firstChild;
+      if (first) first.click();
+    }
+  })();
+  </script>
+</body>
+</html>
