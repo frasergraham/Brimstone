@@ -134,12 +134,17 @@ describe('Renderer3D — texture-disc geometry constants', () => {
     assert.equal(TERRAIN_DISC_RADIUS_MUL, 1.0);
   });
 
-  test('disc Y offset sits just above the cylinder top to win the depth fight', () => {
+  test('disc Y offset sits comfortably above the cylinder top to win the depth fight', () => {
     // Cylinder has height 0.15 centred at y=0, so its top face is at y=0.075.
-    // The textured disc must sit above that — but only by a tiny margin so it
-    // doesn't read as floating. Anything between 0.0751 and ~0.08 is fine.
-    assert.ok(TERRAIN_DISC_Y_OFFSET > 0.075, `disc Y ${TERRAIN_DISC_Y_OFFSET} must be > cylinder top 0.075`);
-    assert.ok(TERRAIN_DISC_Y_OFFSET < 0.09,  `disc Y ${TERRAIN_DISC_Y_OFFSET} must be < road deck Y 0.09`);
+    // The original 0.076 offset (1 mm gap) lost the depth fight at typical
+    // ArcRotateCamera distances (radius 20–80) — Babylon's default near/far
+    // planes give depth precision in the ~1 mm range at radius 80, and the
+    // disc became invisible behind the prism top. Round-5 bumped this to a
+    // ~9 mm gap which survives at every supported zoom level while still
+    // staying under the river bezier tube centre (0.085) so road / river
+    // tile underlays don't pop in front of the tubes.
+    assert.ok(TERRAIN_DISC_Y_OFFSET > 0.080, `disc Y ${TERRAIN_DISC_Y_OFFSET} must clear the cylinder top by enough to survive z-fighting at far camera distances`);
+    assert.ok(TERRAIN_DISC_Y_OFFSET < 0.085, `disc Y ${TERRAIN_DISC_Y_OFFSET} must be < river tube Y 0.085`);
   });
 
   test('variant counts cover only multi-variant terrains', () => {
