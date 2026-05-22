@@ -1139,6 +1139,24 @@ export class Renderer3D {
 
     const light = new BABYLON.HemisphericLight('hemi', new BABYLON.Vector3(0, 1, 0.3), scene);
     light.intensity = 0.95;
+    // Scene-wide ambient term — mixes with each StandardMaterial's
+    // ambientColor (default white) so faces in deep shadow aren't pitch
+    // black. Operator wanted to soften the high contrast between sunlit
+    // and shadowed faces; a modest ambient floor knocks the cleanest
+    // edges off without flattening the sun's directional read.
+    scene.ambientColor = new BABYLON.Color3(0.25, 0.25, 0.28);
+
+    // Scene fog — fades distant geometry (mainly the border-forest band) into
+    // a muted grey so the playable area reads as the focal point. Linear mode
+    // with start/end tuned so playable hexes (typically 12-20 units from the
+    // camera at default zoom) stay clear of fog and only the wilderness
+    // beyond fades. The fog colour matches the scene clear colour so the
+    // band's far edge blends into the sky horizon instead of cutting hard.
+    scene.fogMode    = BABYLON.Scene.FOGMODE_LINEAR;
+    scene.fogStart   = 18;
+    scene.fogEnd     = 40;
+    scene.fogColor   = new BABYLON.Color3(0.70, 0.74, 0.80);
+    scene.fogEnabled = true;
 
     // Directional sun light — casts shadows from standees / buildings / trees
     // onto the terrain. Starts pointing straight down with day-tier intensity;
@@ -1708,7 +1726,10 @@ export class Renderer3D {
     // forestBandDepthForView could push this past 10 at zoomed-out views and
     // tank fps. 3 reads as plenty of forest visually while keeping draw cost
     // bounded. (See task 17.)
-    const bandDepth = Math.min(3, Math.max(BORDER_BAND_DEPTH,
+    // 6 hexes deep — gives the playable map a wider wilderness frame so the
+    // scene fog has room to fade the distant rows into grey before the
+    // playable area sees any fog.
+    const bandDepth = Math.min(6, Math.max(BORDER_BAND_DEPTH,
       forestBandDepthForView(cap, aspect, fov)));
     // Precompute river-extension corridors so `_borderTreeBlockedByRiver`
     // can reject tree positions that would land in the water extending past
@@ -1727,14 +1748,15 @@ export class Renderer3D {
 
       // Flat hex polygon — identical recipe to _buildTileMesh's flat tile.
       const hex = this._buildFlatHexMesh(`border_tile_${pos.col}_${pos.row}`, parent, x, z);
-      // Border-forest band should read as a visual extension of the playable
-      // map — same terrain material as in-map FOREST tiles (which now use
-      // the grass underlay; the trees on top carry the forest look).
+      // Border-forest hex tiles render with the fog-of-war tint so the ground
+      // beyond the playable map reads as out-of-sight wilderness, then scene
+      // fog (FOGMODE_LINEAR) fades them toward grey at distance.
       const syntheticTile = { type: TileType.FOREST, col: pos.col, row: pos.row };
       const borderMat = this._terrainMaterialFor(
         terrainSpriteIdFor(syntheticTile, pos.col, pos.row),
+        { fogged: true },
       );
-      hex.material   = borderMat || baseMat;
+      hex.material   = borderMat || this._fogMaterialFor(baseColor);
       hex.isPickable = false;
       hex.metadata   = { kind: 'map-border-forest', col: pos.col, row: pos.row };
       this._setShadowReceiver(hex);
@@ -2436,28 +2458,28 @@ export class Renderer3D {
     const w  = md._silhouetteWidth  ?? STANDEE_BASE_WIDTH;
     const h  = md._silhouetteHeight ?? STANDEE_BASE_HEIGHT;
     const t  = md._thickness        ?? 0.10;
-    const plane = BABYLON.MeshBuilder.CreatePlane(name,
-      { width: w * 0.92, height: h * 0.92, sideOrientation: BABYLON.Mesh.DOUBLESIDE },
-      this._scene);
-    plane.parent     = tombstone;
-    plane.isPickable = false;
-    plane.material   = portraitMat;
-    // Build TWO stickers — one on each face of the tombstone — so the
-    // portrait is visible from both sides regardless of camera yaw. (The
-    // tombstone billboards around Y, so the +Z face usually points at the
-    // camera, but a quick rotate-around can swap sides.)
-    plane.position.set(0, h / 2, (t / 2) + 0.02);
-    plane.renderingGroupId = tombstone.renderingGroupId ?? 0;
-    const planeBack = BABYLON.MeshBuilder.CreatePlane(`${name}_back`,
-      { width: w * 0.92, height: h * 0.92, sideOrientation: BABYLON.Mesh.DOUBLESIDE },
-      this._scene);
-    planeBack.parent     = tombstone;
-    planeBack.isPickable = false;
-    planeBack.material   = portraitMat;
-    planeBack.position.set(0, h / 2, -(t / 2) - 0.02);
-    planeBack.rotation.y = Math.PI; // mirror so the portrait isn't reversed on the back
-    planeBack.renderingGroupId = tombstone.renderingGroupId ?? 0;
-    return plane;
+    // Sticker sits at the TOP of the tombstone, centred on the rounded head.
+    // Size = the head circle (diameter ≈ w), positioned so its centre lines up
+    // with the centre of the semicircular top (local y = h - w/2). Two
+    // stickers (front + back face) so the portrait reads from any camera yaw
+    // even with the standee non-billboarded.
+    const stickerSize = w * 0.85;
+    const headCentreY = h - (w / 2);
+    const makeSticker = (suffix, zSign) => {
+      const p = BABYLON.MeshBuilder.CreatePlane(`${name}${suffix}`,
+        { width: stickerSize, height: stickerSize, sideOrientation: BABYLON.Mesh.DOUBLESIDE },
+        this._scene);
+      p.parent     = tombstone;
+      p.isPickable = false;
+      p.material   = portraitMat;
+      p.position.set(0, headCentreY, zSign * ((t / 2) + 0.02));
+      if (zSign < 0) p.rotation.y = Math.PI; // mirror so portrait isn't reversed
+      p.renderingGroupId = tombstone.renderingGroupId ?? 0;
+      return p;
+    };
+    const front = makeSticker('',      +1);
+    makeSticker('_back', -1);
+    return front;
   }
 
   /** Build pine trees for a forest hex: one merged TRUNK mesh + one merged
@@ -2781,8 +2803,12 @@ export class Renderer3D {
       mat.opacityTexture     = tex;
       mat.useAlphaFromDiffuseTexture = true;
       mat.specularColor = new BABYLON.Color3(0, 0, 0);
-      // Emissive so portraits read at any phase / light angle.
-      mat.emissiveColor = new BABYLON.Color3(0.4, 0.4, 0.4);
+      // Strong emissive so the portrait reads as bright/sticker-like against
+      // the (relatively dark) tombstone carrier at any phase / light angle.
+      mat.emissiveColor = new BABYLON.Color3(0.85, 0.85, 0.85);
+      // Portrait sticker stays solid through scene fog — wilderness fade
+      // shouldn't make hero faces fuzzy.
+      mat.fogEnabled    = false;
     } else {
       // Tilemap unavailable — use neutral pale fill so the plane still reads.
       mat.diffuseColor  = new BABYLON.Color3(0.85, 0.85, 0.85);
@@ -2840,7 +2866,11 @@ export class Renderer3D {
       STANDEE_BASE_HEIGHT * hMul,
       /* thickness */ 0.10,
     );
-    plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_Y;
+    // Standees stay stationary in the world — they DON'T billboard. With
+    // stickers on both faces of the tombstone, the portrait reads from any
+    // camera yaw, and the silhouette has a real 3D presence instead of
+    // spinning to face the viewer (operator: "standees shouldn't rotate
+    // with the camera").
     // Tombstone block renders in a solid faction colour — same material the
     // base disc uses — so the silhouette reads as a coloured marker. The
     // portrait is overlaid as a separate "sticker" plane on the front face,
@@ -4264,15 +4294,43 @@ export class Renderer3D {
       this._applyLightConfig(cur);
       if (u >= 1) this._phaseTransition = null;
     }
-    // Sun direction per round (overrides phase config sun dir). Sweeps across
-    // the day rather than snapping at phase boundaries — see
-    // `sunDirectionForRound` for the dawn→day1→day2→day3→dusk progression.
+    // Sun direction sweeps across the day — and now eases between rounds
+    // instead of snapping. When `state.round` advances we kick off a
+    // SUN_ROUND_TRANSITION_MS ease from the previous round's direction to
+    // the new one, so the operator sees the sun glide as turns resolve.
     if (this._sunLight && this.state) {
       const round = this.state.round ?? 1;
-      const dir = sunDirectionForRound(round, this.state.cycleConfig);
-      this._sunLight.direction.x = dir.x;
-      this._sunLight.direction.y = dir.y;
-      this._sunLight.direction.z = dir.z;
+      const target = sunDirectionForRound(round, this.state.cycleConfig);
+      if (this._lastSunRound !== round) {
+        // Anchor the from-direction at whatever the sun's pointing at right
+        // now (mid-transition or fully settled).
+        const cur = this._sunLight.direction;
+        this._sunTransition = {
+          from: { x: cur.x, y: cur.y, z: cur.z },
+          to:   { x: target.x, y: target.y, z: target.z },
+          startMs: now,
+          durMs:   SUN_ROUND_TRANSITION_MS,
+        };
+        this._lastSunRound = round;
+      }
+      const tr = this._sunTransition;
+      if (tr) {
+        const u = Math.min(1, Math.max(0, (now - tr.startMs) / tr.durMs));
+        const eased = easeInOutCubic(u);
+        const nx = tr.from.x + (tr.to.x - tr.from.x) * eased;
+        const ny = tr.from.y + (tr.to.y - tr.from.y) * eased;
+        const nz = tr.from.z + (tr.to.z - tr.from.z) * eased;
+        this._sunLight.direction.x = nx;
+        this._sunLight.direction.y = ny;
+        this._sunLight.direction.z = nz;
+        if (u >= 1) this._sunTransition = null;
+      } else {
+        // No transition in flight — snap to the current round's target so the
+        // very first frame after init shows the right sun position.
+        this._sunLight.direction.x = target.x;
+        this._sunLight.direction.y = target.y;
+        this._sunLight.direction.z = target.z;
+      }
     }
     // Selection halo pulse.
     if (this.selectedEntityId != null) {
@@ -4448,16 +4506,20 @@ export class Renderer3D {
       for (const [id, standee] of this._entityStandees) {
         const k = hexKey(standee.plane.metadata.col, standee.plane.metadata.row);
         const visible = shouldRenderEntityAt(target, k);
-        if (standee.plane.isVisible !== visible) standee.plane.isVisible = visible;
-        if (standee.base.isVisible  !== visible) standee.base.isVisible  = visible;
+        // Use setEnabled (not isVisible) so the standee's child portrait
+        // sticker meshes inherit visibility. isVisible only hides the mesh
+        // itself, not its parented children — switching to setEnabled
+        // propagates the fog-hide through the tombstone → sticker tree.
+        if (standee.plane.isEnabled?.() !== visible) standee.plane.setEnabled(visible);
+        if (standee.base.isEnabled?.()  !== visible) standee.base.setEnabled(visible);
         const hp = this._hpBars.get(id);
         if (hp && hp.plane.isVisible !== visible) hp.plane.isVisible = visible;
       }
     } else {
       // No fog → make sure everything is visible (covers fog-toggling mid-game).
       for (const [id, standee] of this._entityStandees) {
-        if (!standee.plane.isVisible) standee.plane.isVisible = true;
-        if (!standee.base.isVisible)  standee.base.isVisible  = true;
+        if (!standee.plane.isEnabled?.()) standee.plane.setEnabled(true);
+        if (!standee.base.isEnabled?.())  standee.base.setEnabled(true);
         const hp = this._hpBars.get(id);
         if (hp && !hp.plane.isVisible) hp.plane.isVisible = true;
       }
@@ -5376,6 +5438,13 @@ export const SUN_SHADOW_BIAS = 0.005;
 /** 0 = pitch-black shadow, 1 = no shadow. 0.4 gives a strong but not
  *  oppressive shadow — terrain underneath still reads. */
 export const SUN_SHADOW_DARKNESS = 0;
+
+/** Easing duration for the directional-sun direction change when state.round
+ *  advances. Keeps the sun gliding visibly across the sky as turns resolve
+ *  rather than snapping to the new angle. Held to the same general envelope
+ *  as PHASE_TRANSITION_MS so the hemi/clear lerp and the sun lerp feel like
+ *  one combined "time passes" motion. */
+export const SUN_ROUND_TRANSITION_MS = 2500;
 
 /** Look up a phase's lighting config. Falls back to DAY if the phase is
  *  unrecognised (defensive — keeps the renderer usable on weird save loads). */
