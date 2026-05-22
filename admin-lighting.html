@@ -89,6 +89,12 @@
       </div>
 
       <div class="section">
+        <h2>Fog of War tint</h2>
+        <div class="row"><label>Darken</label><input id="fog-tint" type="range" min="0" max="1" step="0.01" /><span class="val" id="fog-tint-v"></span></div>
+        <div class="helper">Multiplier applied to fogged tile colours (0 = fully black, 1 = no darkening). Re-applies live to every already-fogged tile when you slide.</div>
+      </div>
+
+      <div class="section">
         <h2>Map / View</h2>
         <button class="action" id="regen-map">New random map</button>
         <button class="action" id="reframe">Reframe</button>
@@ -130,6 +136,7 @@
         sun:     { intensity: cfg.sun.intensity, dir: { ...cfg.sun.dir } },
         ambient: { color: ambNorm, strength: ambStrength },
         clear:   { ...cfg.clear },
+        fogTint: typeof cfg.fogTint === 'number' ? cfg.fogTint : 0.20,
       };
     }
 
@@ -199,6 +206,12 @@
       renderer._scene.ambientColor = new BABYLON.Color3(ambR, ambG, ambB);
       renderer._scene.clearColor   = new BABYLON.Color4(cfg.clear.r, cfg.clear.g, cfg.clear.b, 1);
       renderer._scene.fogColor     = new BABYLON.Color3(cfg.clear.r, cfg.clear.g, cfg.clear.b);
+      // Fog-of-war tint — only re-apply when the value actually changed, so
+      // we don't trigger `_applyFogVeil` every single frame.
+      if (typeof renderer.setFogTint === 'function'
+          && Math.abs((renderer._fogTileDarken ?? 0) - cfg.fogTint) > 1e-4) {
+        renderer.setFogTint(cfg.fogTint);
+      }
     }
 
     // Per-frame override so the lighting values can't drift back to baked.
@@ -234,6 +247,8 @@
       $('ambient-str').value = cfg.ambient.strength;
       $('ambient-str-v').textContent = fmt(cfg.ambient.strength);
       $('clear-color').value = rgbToHex(cfg.clear);
+      $('fog-tint').value = cfg.fogTint;
+      $('fog-tint-v').textContent = fmt(cfg.fogTint);
     }
 
     function onPhaseSwitch(phase) {
@@ -281,6 +296,9 @@
     bindNumber('ambient-str', 'ambient-str-v',
       () => live[activePhase].ambient.strength,
       (v) => { live[activePhase].ambient.strength = v; });
+    bindNumber('fog-tint', 'fog-tint-v',
+      () => live[activePhase].fogTint,
+      (v) => { live[activePhase].fogTint = v; });
 
     $('hemi-color').addEventListener('input', (e) => {
       live[activePhase].hemi.color = hexToRgb(e.target.value);
@@ -333,6 +351,7 @@
                  `color: { r: ${fmt(cfg.hemi.color.r)}, g: ${fmt(cfg.hemi.color.g)}, b: ${fmt(cfg.hemi.color.b)} }, ` +
                  `clear: { r: ${fmt(cfg.clear.r)}, g: ${fmt(cfg.clear.g)}, b: ${fmt(cfg.clear.b)} },`);
         out.push(`    ambient: { r: ${fmt(ambR)}, g: ${fmt(ambG)}, b: ${fmt(ambB)} },`);
+        out.push(`    fogTint: ${fmt(cfg.fogTint)},`);
         out.push(`    sun: { dir: { x: ${fmt(cfg.sun.dir.x)}, y: ${fmt(cfg.sun.dir.y)}, z: ${fmt(cfg.sun.dir.z)} }, intensity: ${fmt(cfg.sun.intensity)} },`);
         out.push('  },');
       }

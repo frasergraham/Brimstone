@@ -644,6 +644,10 @@ export class Renderer3D {
     this._terrainTextureCache    = new Map();
     this._terrainMaterialCache   = new Map();
     this._terrainFogMaterialCache = new Map(); // darkened variants for fog-of-war
+    // Per-instance fog-tint multiplier — initialised from the FOG_TILE_DARKEN
+    // export but tunable at runtime via `setFogTint` (and per-phase via the
+    // optional `cfg.fogTint` field consumed by `_applyLightConfig`).
+    this._fogTileDarken = FOG_TILE_DARKEN;
     // Per-hex lookup for visual-only border-forest cylinders, so
     // `_upgradeTileTextures` can swap their material when the atlas arrives
     // after init (parallel to `_tileMeshByKey` for playable tiles).
@@ -967,6 +971,36 @@ export class Renderer3D {
    *  always zooms regardless of mode. */
   setCameraDragMode(mode) {
     this.cameraDragMode = (mode === 'rotate') ? 'rotate' : 'pan';
+  }
+
+  /** Update the fog-of-war tint multiplier at runtime. Walks both fog
+   *  material caches (terrain + colour) and the per-tile ribbon clones via
+   *  `_applyFogVeil`, so already-fogged tiles immediately read with the new
+   *  darken factor — no need to rebuild the map. Live-tunable by the admin
+   *  lighting page and per-phase via `PHASE_LIGHT_CONFIG.fogTint`. */
+  setFogTint(value) {
+    const v = Math.max(0, Math.min(1, Number(value) || 0));
+    this._fogTileDarken = v;
+    // Terrain fog materials: diffuseColor = (v, v, v) regardless of original.
+    for (const [, mat] of this._terrainFogMaterialCache) {
+      if (mat?.diffuseColor) {
+        mat.diffuseColor.r = v;
+        mat.diffuseColor.g = v;
+        mat.diffuseColor.b = v;
+      }
+    }
+    // Colour fog materials are keyed by base hex — recompute each one's
+    // diffuseColor from its anchor.
+    for (const [baseHex, mat] of this._fogMaterialCache) {
+      if (!mat?.diffuseColor) continue;
+      const [r, g, b] = cssHexToRgb01(baseHex);
+      mat.diffuseColor.r = r * v;
+      mat.diffuseColor.g = g * v;
+      mat.diffuseColor.b = b * v;
+    }
+    // Re-apply the fog veil so per-tile ribbon clones (whose darken happens
+    // in `_setTileFogged` using `this._fogTileDarken`) pick up the new value.
+    if (this._scene) this._applyFogVeil();
   }
 
   /** Stub for interface parity with the 2D Renderer's `tiltBy(_betaDelta)`
@@ -2382,7 +2416,7 @@ export class Renderer3D {
     mat.diffuseTexture = tex;
     mat.specularColor  = new BABYLON.Color3(0.04, 0.04, 0.04); // matte, picks up phase light
     if (fogged) {
-      const d = FOG_TILE_DARKEN;
+      const d = this._fogTileDarken;
       mat.diffuseColor = new BABYLON.Color3(d, d, d);
     }
     cache.set(spriteId, mat);
@@ -4317,6 +4351,12 @@ export class Renderer3D {
     if (cfg.ambient) {
       this._scene.ambientColor = new BABYLON.Color3(cfg.ambient.r, cfg.ambient.g, cfg.ambient.b);
     }
+    // Per-phase fog-of-war tint — `setFogTint` walks all cached fog
+    // materials and re-applies the fog veil so existing fogged tiles
+    // immediately match the new darken factor.
+    if (typeof cfg.fogTint === 'number') {
+      this.setFogTint(cfg.fogTint);
+    }
     // Directional sun: drives shadow casting strength + angle. NIGHT
     // intensity≈0 effectively turns the sun off so lanterns / hemi carry the
     // look. Direction is set via Vector3, but only when a sun config exists
@@ -4651,13 +4691,13 @@ export class Renderer3D {
         const bd  = p.metadata?.baseDiffuse;
         const be  = p.metadata?.baseEmissive;
         if (mat?.diffuseColor && bd) {
-          const k = fogged ? FOG_TILE_DARKEN : 1.0;
+          const k = fogged ? this._fogTileDarken : 1.0;
           mat.diffuseColor.r  = bd.r * k;
           mat.diffuseColor.g  = bd.g * k;
           mat.diffuseColor.b  = bd.b * k;
         }
         if (mat?.emissiveColor && be) {
-          const k = fogged ? FOG_TILE_DARKEN : 1.0;
+          const k = fogged ? this._fogTileDarken : 1.0;
           mat.emissiveColor.r = be.r * k;
           mat.emissiveColor.g = be.g * k;
           mat.emissiveColor.b = be.b * k;
@@ -4682,7 +4722,8 @@ export class Renderer3D {
     const BABYLON = this._babylon;
     const [r, g, b] = cssHexToRgb01(baseHex);
     const mat = new BABYLON.StandardMaterial(`fog_${baseHex}`, this._scene);
-    mat.diffuseColor  = new BABYLON.Color3(r * FOG_TILE_DARKEN, g * FOG_TILE_DARKEN, b * FOG_TILE_DARKEN);
+    const d = this._fogTileDarken;
+    mat.diffuseColor  = new BABYLON.Color3(r * d, g * d, b * d);
     mat.specularColor = new BABYLON.Color3(0, 0, 0);
     mat.emissiveColor = new BABYLON.Color3(0, 0, 0);
     this._fogMaterialCache.set(baseHex, mat);
@@ -5460,12 +5501,14 @@ export const PHASE_LIGHT_CONFIG = Object.freeze({
   dawn:  {
     intensity: 0.25, color: { r: 1.00, g: 0.82, b: 0.62 }, clear: { r: 0.55, g: 0.38, b: 0.36 },
     ambient: { r: 0.42, g: 0.35, b: 0.30 },
+    fogTint: 0.20,
     // Low sun close to the horizon — long shadows raked across the map east-to-west.
     sun: { dir: { x: -0.85, y: -0.40, z: 0.1 }, intensity: 1.2 },
   },
   day:   {
     intensity: 0.30, color: { r: 1.00, g: 1.00, b: 0.97 }, clear: { r: 0.55, g: 0.72, b: 0.85 },
     ambient: { r: 0.22, g: 0.22, b: 0.24 },
+    fogTint: 0.20,
     // Tilt the day sun off vertical so shadows actually project a visible
     // footprint. A near-vertical sun (e.g. 0,-1,0) projects a near-zero
     // offset and shadows disappear into the caster itself.
@@ -5474,6 +5517,7 @@ export const PHASE_LIGHT_CONFIG = Object.freeze({
   dusk:  {
     intensity: 0.25, color: { r: 1.00, g: 0.62, b: 0.48 }, clear: { r: 0.50, g: 0.32, b: 0.36 },
     ambient: { r: 0.45, g: 0.30, b: 0.28 },
+    fogTint: 0.20,
     // Low sun mirrored from dawn — long shadows raked west-to-east.
     sun: { dir: { x:  0.85, y: -0.40, z: 0.1 }, intensity: 1.2 },
   },
@@ -5485,6 +5529,7 @@ export const PHASE_LIGHT_CONFIG = Object.freeze({
     // multiplied by FOG_TILE_DARKEN). Cool blue-violet keeps the moonlit
     // mood while making both lit and fogged terrain readable.
     ambient: { r: 0.42, g: 0.48, b: 0.66 },
+    fogTint: 0.20,
     sun: { dir: { x:  0.0, y: -1.0, z: 0.1 }, intensity: 0.10 },
   },
 });
