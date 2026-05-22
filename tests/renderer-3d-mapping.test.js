@@ -125,13 +125,14 @@ describe('Renderer3D — tileColorFor', () => {
     }
   });
 
-  test('rivers, roads, and bridges keep their own type colour (not grass)', () => {
-    // Phase 2 diverges from the 2D renderer here on purpose — see tileColorFor
-    // doc comment. Lock this so a "match 2D" refactor doesn't silently regress
-    // the visual signal that these tiles need to be distinct in 3D.
-    assert.equal(tileColorFor({ type: TileType.RIVER  }), TILE_COLOR[TileType.RIVER]);
-    assert.equal(tileColorFor({ type: TileType.ROAD   }), TILE_COLOR[TileType.ROAD]);
-    assert.equal(tileColorFor({ type: TileType.BRIDGE }), TILE_COLOR[TileType.BRIDGE]);
+  test('rivers, roads, and bridges render as grass underneath the network overlay', () => {
+    // Item 2: the per-tile cylinder colour for ROAD / RIVER / BRIDGE is now
+    // GRASS — the visual path is supplied by the bezier network mesh built
+    // by Renderer3D._buildRoadRiverNetworks. Locks the new behaviour so a
+    // regression to the old "river is a blue tile" approach is caught.
+    assert.equal(tileColorFor({ type: TileType.RIVER  }), TILE_COLOR[TileType.GRASS]);
+    assert.equal(tileColorFor({ type: TileType.ROAD   }), TILE_COLOR[TileType.GRASS]);
+    assert.equal(tileColorFor({ type: TileType.BRIDGE }), TILE_COLOR[TileType.GRASS]);
   });
 
   test('buildings use BUILDING_COLOR (not the generic building tile colour)', () => {

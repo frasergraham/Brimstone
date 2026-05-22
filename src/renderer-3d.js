@@ -46,11 +46,11 @@ export const STANDEE_LEADER_HEIGHT_MUL = 1.3;
 // which itself sits just above the tile prism so picking prefers the standee.
 export const STANDEE_BASE_Y_OFFSET    = 0.18; // tile prism top is at 0.075; base sits clear of it
 
-// Building world-space offset within its tile — pushes the box+roof to the NE
-// quadrant so a standee on the same hex (drawn at tile centre) doesn't overlap
-// the silhouette. Constant chosen by eye against an STANDEE_BASE_DIAMETER=0.75
-// disc: a 0.35 offset clears the standee with a small visual gap.
-export const BUILDING_OFFSET = Object.freeze({ x: 0.35, z: -0.35 });
+// Building world-space offset within its tile — aliased to TILE_SLOTS[1] (the
+// "NE" outer slot) so building/tree/standee co-tenancy on the same hex shares
+// the unified slot layout. Frozen so callers can't mutate it accidentally.
+// Distance from centre comfortably clears the STANDEE_BASE_DIAMETER=0.75 disc.
+export const BUILDING_OFFSET = Object.freeze({ x: 0.42, z: -0.42 });
 
 
 // ─── Pure helpers (exported for tests; no Babylon dependency) ────────────────
@@ -180,6 +180,15 @@ export function tileColorFor(tile) {
   if (tile.type === TileType.BUILDING) {
     return BUILDING_COLOR[tile.building] || '#8a7a5a';
   }
+  // Road / river / bridge tiles now render with a grass base — the network
+  // pass draws smooth bezier tubes overlaying the grass, mirroring the 2D
+  // renderer's _drawRiverLayer / _drawRoadLayer (which also keep the grass
+  // background intact and lay the path on top).
+  if (tile.type === TileType.ROAD
+      || tile.type === TileType.RIVER
+      || tile.type === TileType.BRIDGE) {
+    return TILE_COLOR[TileType.GRASS];
+  }
   return TILE_COLOR[tile.type] || TILE_COLOR[TileType.GRASS];
 }
 
@@ -241,6 +250,15 @@ export class Renderer3D {
     // observer can't see.
     this._tileMeshByKey   = new Map();   // hexKey → base hex cylinder
     this._tilePropsByKey  = new Map();   // hexKey → Array<Mesh> (forest, road, bridge, bldg, roof)
+    // Item 2 — bezier road/river networks, ONE merged mesh per network.
+    this._riverNetworkMesh = null;       // merged tube mesh; null when not built
+    this._roadNetworkMesh  = null;
+    // Item 8 — static (build-time) per-tile occupant registry consumed by the
+    // per-draw standee re-slot pass.
+    this._staticOccupantsByKey = new Map(); // hexKey → [{id, kind: 'building'|'tree'}]
+    // Item 8 — overflow "+N" badges keyed by hexKey; created lazily when a
+    // tile has more standees than free slots, disposed when overflow drops to 0.
+    this._overflowBadges       = new Map(); // hexKey → { plane, mat, tex, lastN }
     this._fogMaterialCache = new Map();  // base hex color → darker StandardMaterial
     this._fogActiveSet     = new Set();  // hexKeys currently rendered as fogged
     // Power-node glow meshes: { obj, disc, col, row, glowColor } per node hex.
@@ -631,6 +649,10 @@ export class Renderer3D {
     for (const tile of this.state.tiles.values()) {
       this._buildTileMesh(tile, mapRoot);
     }
+    // Item 2: after every per-tile mesh exists, lay down the bezier road and
+    // river networks on top of the grass tiles. Built once at map-load and
+    // never rebuilt (the map topology is immutable once a game has started).
+    this._buildRoadRiverNetworks();
     this._mapBuilt = true;
   }
 
@@ -668,10 +690,10 @@ export class Renderer3D {
       trackProp(topDisc);
     }
 
-    // ── Forests: a small cluster of varied cones around the rim of the hex,
-    // leaving the centre clear so an entity standee placed on the tile is not
-    // hidden by tree props. Layout is deterministic per (col, row) so the same
-    // hex always shows the same cluster across runs. See forestTreesForHex.
+    // ── Forests: a small cluster of varied cones in the unified tile-slot
+    // positions, leaving the centre slot clear for an entity standee.
+    // Layout is deterministic per (col, row) so the same hex always shows the
+    // same cluster across runs. See forestTreesForHex / TILE_SLOTS.
     if (tile.type === TileType.FOREST) {
       const treeMat = this._materialFor('#234c1f'); // shared green material
       const trees = forestTreesForHex(tile.col, tile.row);
@@ -695,29 +717,15 @@ export class Renderer3D {
       }
     }
 
-    // ── Road deck: brown disc raised clear above the tile surface ─────────
-    // Tile prism top sits at y=0.075; deck bottom must clear it by enough to
-    // avoid z-fighting that made roads invisible. Deck height 0.05, centred at
-    // y=0.13 → bottom 0.105, top 0.155. Diameter trimmed in slightly so the
-    // road reads as a strip on top of the grass rather than covering it edge
-    // to edge (which made it indistinguishable from the tile beneath it).
-    if (tile.type === TileType.ROAD) {
-      const deck = BABYLON.MeshBuilder.CreateCylinder(
-        `road_${tile.col}_${tile.row}`,
-        { tessellation: 6, height: 0.05, diameter: 1.5 },
-        scene,
-      );
-      deck.parent     = parent;
-      deck.position.x = x;
-      deck.position.z = z;
-      deck.position.y = 0.13;
-      deck.rotation.y = Math.PI / 6;
-      deck.material   = this._materialFor('#7a5f38');
-      deck.isPickable = false;
-      trackProp(deck);
-    }
+    // Road/river ROAD/RIVER tiles get NO per-tile prop here — the bezier
+    // network mesh built in _buildRoadRiverNetworks() (after this loop)
+    // carries the visual. The grass-coloured cylinder + textured top disc
+    // above is what shows on either side of the path.
 
     // ── Bridge: wooden planks crossing the river hex ──────────────────────
+    // Plank Y raised so the plank bottom sits clear of the river tube's top
+    // (RIVER_TUBE_Y + RIVER_TUBE_RADIUS ≈ 0.235). bottom = pos.y − 0.06,
+    // so pos.y = 0.30 → bottom 0.24, above the river ribbon.
     if (tile.type === TileType.BRIDGE) {
       const plank = BABYLON.MeshBuilder.CreateBox(
         `bridge_${tile.col}_${tile.row}`,
@@ -727,7 +735,7 @@ export class Renderer3D {
       plank.parent     = parent;
       plank.position.x = x;
       plank.position.z = z;
-      plank.position.y = 0.18;
+      plank.position.y = 0.30;
       plank.rotation.y = bridgeRotationY(tile, this.state.tiles);
       plank.material   = this._materialFor('#8a6030');
       plank.isPickable = false;
@@ -735,18 +743,19 @@ export class Renderer3D {
     }
 
     // ── Building: simple low-poly box atop the tile, building-coloured ────
-    // Shifted toward the NE quadrant so a standee can sit on the SW half of
-    // the same hex without overlapping the building silhouette.
+    // Positioned via the unified tile-slot system: building lives in slot 1
+    // (BUILDING_SLOT_INDEX, the "NE" outer slot). A standee on the same hex
+    // takes the centre slot, so silhouettes don't overlap.
     if (tile.type === TileType.BUILDING && tile.building) {
-      const off = BUILDING_OFFSET;
+      const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
       const box = BABYLON.MeshBuilder.CreateBox(
         `bldg_${tile.col}_${tile.row}`,
         { width: 0.55, height: 0.7, depth: 0.55 },
         scene,
       );
       box.parent     = parent;
-      box.position.x = x + off.x;
-      box.position.z = z + off.z;
+      box.position.x = x + slot.x;
+      box.position.z = z + slot.z;
       box.position.y = 0.43; // sit on top of the tile prism
       box.material   = this._materialFor(BUILDING_COLOR[tile.building] || '#8a7a5a');
       box.isPickable = false;
@@ -759,8 +768,8 @@ export class Renderer3D {
         scene,
       );
       roof.parent     = parent;
-      roof.position.x = x + off.x;
-      roof.position.z = z + off.z;
+      roof.position.x = x + slot.x;
+      roof.position.z = z + slot.z;
       roof.position.y = 0.85;
       roof.material   = this._materialFor('#2c2520');
       roof.isPickable = false;
@@ -768,6 +777,86 @@ export class Renderer3D {
     }
 
     if (props.length > 0) this._tilePropsByKey.set(tkey, props);
+
+    // Register this tile's static occupants (building + forest trees) so the
+    // per-draw standee re-slot pass knows which slots are already consumed.
+    // Tile types are mutually exclusive — at most one of {building, trees}
+    // exists per tile, never both.
+    const staticOcc = [];
+    if (tile.type === TileType.BUILDING && tile.building) {
+      staticOcc.push({ id: 'building', kind: 'building' });
+    } else if (tile.type === TileType.FOREST) {
+      const trees = forestTreesForHex(tile.col, tile.row);
+      for (const t of trees) staticOcc.push({ id: t.id, kind: 'tree' });
+    }
+    if (staticOcc.length > 0) this._staticOccupantsByKey.set(tkey, staticOcc);
+  }
+
+  // ─── Item 2: bezier road + river networks ────────────────────────────────
+  //
+  // Build two merged tube meshes — one for the river, one for the road —
+  // overlaying the grass-coloured tile cylinders. Geometry comes from the
+  // pure helpers `buildRiverNetworkStrokes` / `buildRoadNetworkStrokes`,
+  // which mirror the 2D renderer's per-tile bezier construction. Each tile
+  // contributes one through-bezier (optionally plus straight spokes at
+  // junctions); the per-tile tubes are merged with Mesh.MergeMeshes so the
+  // GPU sees ONE draw call per network regardless of map size.
+  _buildRoadRiverNetworks() {
+    const BABYLON = this._babylon;
+    const scene   = this._scene;
+    if (!BABYLON || !scene || !this.state?.tiles) return;
+
+    const riverStrokes = buildRiverNetworkStrokes(this.state.tiles);
+    const roadStrokes  = buildRoadNetworkStrokes(this.state.tiles);
+
+    if (riverStrokes.length > 0) {
+      this._riverNetworkMesh = this._buildNetworkMesh(
+        'river', riverStrokes, RIVER_TUBE_RADIUS, RIVER_TUBE_Y,
+        TILE_COLOR[TileType.RIVER],
+      );
+    }
+    if (roadStrokes.length > 0) {
+      this._roadNetworkMesh = this._buildNetworkMesh(
+        'road', roadStrokes, ROAD_TUBE_RADIUS, ROAD_TUBE_Y,
+        TILE_COLOR[TileType.ROAD],
+      );
+    }
+  }
+
+  /** Build a single merged tube mesh for one network (river OR road).
+   *  Each stroke becomes one CreateTube call; MergeMeshes collapses them all
+   *  into one mesh sharing one material. Returns the merged mesh (or null
+   *  if MergeMeshes refused — which happens when the source list is empty). */
+  _buildNetworkMesh(networkName, segments, radius, yPos, cssColor) {
+    const BABYLON = this._babylon;
+    const scene   = this._scene;
+    if (!segments || segments.length === 0) return null;
+    const tubes = [];
+    for (let s = 0; s < segments.length; s++) {
+      const { tile, strokes } = segments[s];
+      for (let i = 0; i < strokes.length; i++) {
+        const pts = strokes[i];
+        if (!pts || pts.length < 2) continue;
+        const path = pts.map(p => new BABYLON.Vector3(p.x, yPos, p.z));
+        const tube = BABYLON.MeshBuilder.CreateTube(
+          `${networkName}_${tile.col}_${tile.row}_${i}`,
+          { path, radius, tessellation: 8, cap: BABYLON.Mesh.CAP_ALL, updatable: false },
+          scene,
+        );
+        tube.isPickable = false;
+        tubes.push(tube);
+      }
+    }
+    if (tubes.length === 0) return null;
+    // MergeMeshes(meshes, disposeSource=true, allow32BitsIndices=true,
+    //   meshSubclass=undefined, subdivideWithSubMeshes=false, multiMultiMaterials=false)
+    const merged = BABYLON.Mesh.MergeMeshes(tubes, true, true, undefined, false, false);
+    if (!merged) return null;
+    merged.parent     = this._mapRoot;
+    merged.isPickable = false;
+    merged.material   = this._materialFor(cssColor);
+    merged.name       = `${networkName}Network`;
+    return merged;
   }
 
   /** Cache a StandardMaterial per CSS hex colour so we hand a few materials
@@ -1082,9 +1171,13 @@ export class Renderer3D {
     return { plane, base, leader };
   }
 
-  /** Place an existing standee on its entity's tile. */
-  _positionStandee(standee, entity) {
-    const { x, z } = hexToWorld(entity.col, entity.row);
+  /** Place an existing standee on its entity's tile. By default centres on
+   *  the hex; `opts.x` / `opts.z` override with an explicit world position
+   *  (used by the tile-slot re-pass when a hex hosts more than one occupant). */
+  _positionStandee(standee, entity, opts = {}) {
+    const base = hexToWorld(entity.col, entity.row);
+    const x = typeof opts.x === 'number' ? opts.x : base.x;
+    const z = typeof opts.z === 'number' ? opts.z : base.z;
     const hMul = standee.leader ? STANDEE_LEADER_HEIGHT_MUL : 1;
     standee.plane.position.x = x;
     standee.plane.position.z = z;
@@ -1140,6 +1233,128 @@ export class Renderer3D {
         this._entityStandees.delete(id);
       }
     }
+    // Item 8: after the per-entity position step above, re-slot any hex that
+    // has more than one occupant. Cheap walk — typically only a handful of
+    // hexes have co-tenants. Also manages the +N overflow badge.
+    this._resyncTileSlotsForStandees();
+  }
+
+  /** Re-position standees on hexes with multiple occupants (building + standee,
+   *  forest + standee, or 2+ standees) so each occupant lives in its own slot.
+   *  Trees + buildings stay where _buildTileMesh placed them (their slot
+   *  assignment is stable); only standee positions change here. Also keeps
+   *  the +N overflow badge in sync per-hex. */
+  _resyncTileSlotsForStandees() {
+    if (!this._scene || !this._babylon || !this.state?.entities) return;
+
+    // Group live standees by hex. Skip entities whose standee is currently
+    // being driven by a move/lunge animation (their position is owned by the
+    // animation; let it land first, the next draw re-slots them).
+    const byHex = new Map(); // hexKey → [{id, kind:'standee', entity, ...}]
+    const hexCenter = new Map(); // hexKey → {col, row}
+    for (const e of this.state.entities) {
+      if (!e?.alive) continue;
+      if (typeof e.col !== 'number' || typeof e.row !== 'number') continue;
+      if (this._activeMoveIds.has(e.id) || this._activeLungeIds.has(e.id)) continue;
+      if (!this._entityStandees.has(e.id)) continue;
+      const k = hexKey(e.col, e.row);
+      if (!byHex.has(k)) { byHex.set(k, []); hexCenter.set(k, { col: e.col, row: e.row }); }
+      byHex.get(k).push({ id: `standee_${e.id}`, kind: 'standee', entity: e });
+    }
+
+    const seenHexes = new Set();
+    for (const [k, standeeOccs] of byHex) {
+      seenHexes.add(k);
+      const staticOcc = this._staticOccupantsByKey.get(k) ?? [];
+      // Single standee on an empty hex → nothing to re-slot, the standee
+      // already sits at hex centre from _positionStandee's default path.
+      if (standeeOccs.length === 1 && staticOcc.length === 0) {
+        this._syncOverflowBadge(k, 0);
+        continue;
+      }
+      const { col, row } = hexCenter.get(k);
+      const { positionByOccupantId, overflow } = tileSlotWorldPositions(
+        col, row, [...staticOcc, ...standeeOccs],
+      );
+      for (const occ of standeeOccs) {
+        const pos = positionByOccupantId.get(occ.id);
+        const standee = this._entityStandees.get(occ.entity.id);
+        if (!pos || !standee) continue;
+        this._positionStandee(standee, occ.entity, { x: pos.x, z: pos.z });
+      }
+      this._syncOverflowBadge(k, overflow, col, row);
+    }
+    // Clear badges on hexes that no longer host standees.
+    for (const k of [...this._overflowBadges.keys()]) {
+      if (!seenHexes.has(k)) this._syncOverflowBadge(k, 0);
+    }
+  }
+
+  /** Lazily create / update / dispose the "+N" badge plane above a hex.
+   *  Reuses the dynamic-texture + billboard-plane pattern from plan-step
+   *  badges (see `_syncPlanArrows`). Idempotent — only repaints the texture
+   *  when N changes, and disposes the mesh when N drops back to 0. */
+  _syncOverflowBadge(k, overflow, col, row) {
+    const BABYLON = this._babylon;
+    const scene   = this._scene;
+    const existing = this._overflowBadges.get(k);
+
+    if (overflow <= 0) {
+      if (existing) {
+        existing.plane?.dispose();
+        existing.mat?.dispose();
+        existing.tex?.dispose();
+        this._overflowBadges.delete(k);
+      }
+      return;
+    }
+    if (!BABYLON || !scene || typeof document === 'undefined') return;
+
+    if (existing && existing.lastN === overflow) return;
+
+    // Repaint texture (existing badge) or build a fresh one.
+    let badge = existing;
+    if (!badge) {
+      const tex = new BABYLON.DynamicTexture(
+        `overflowTex_${k}`, { width: 64, height: 64 }, scene, false,
+      );
+      tex.hasAlpha = true;
+      const mat = new BABYLON.StandardMaterial(`overflowMat_${k}`, scene);
+      mat.diffuseTexture = tex;
+      mat.opacityTexture = tex;
+      mat.useAlphaFromDiffuseTexture = true;
+      mat.specularColor = new BABYLON.Color3(0, 0, 0);
+      mat.emissiveColor = new BABYLON.Color3(1, 1, 1);
+      mat.backFaceCulling = false;
+      const plane = BABYLON.MeshBuilder.CreatePlane(
+        `overflow_${k}`, { width: 0.55, height: 0.55 }, scene,
+      );
+      plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+      plane.isPickable    = false;
+      plane.material      = mat;
+      // Park position above the hex centre. (col,row) is guaranteed when we
+      // arrive with overflow > 0 — calls from the "clear stale" loop pass
+      // overflow === 0 and exit above.
+      const { x, z } = hexToWorld(col, row);
+      plane.position.set(x, 1.4, z);
+      badge = { plane, mat, tex, lastN: 0 };
+      this._overflowBadges.set(k, badge);
+    }
+
+    const ctx = badge.tex.getContext();
+    ctx.clearRect(0, 0, 64, 64);
+    ctx.fillStyle = 'rgba(0,0,0,0.85)';
+    ctx.beginPath(); ctx.arc(32, 32, 26, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#ffd060';
+    ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(32, 32, 26, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 30px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`+${overflow}`, 32, 34);
+    badge.tex.update();
+    badge.lastN = overflow;
   }
 
   /** Restore a standee's owner base material (clearing the selection glow). */
@@ -2296,7 +2511,12 @@ export function terrainSpriteIdFor(tile, col, row) {
   let baseType;
   if (tile.type === TileType.BUILDING) baseType = TileType.DIRT;
   else if (tile.type === TileType.GRASS || tile.type === TileType.FOREST || tile.type === TileType.DIRT) baseType = tile.type;
-  else return null; // road, river, bridge, anything unknown → no top texture
+  // Road / river / bridge get a grass underlay sprite — the network pass
+  // overlays bezier tubes on top of the grass, so the grass texture is what
+  // shows on either side of the path.
+  else if (tile.type === TileType.ROAD || tile.type === TileType.RIVER || tile.type === TileType.BRIDGE) {
+    baseType = TileType.GRASS;
+  } else return null;
   const count = TERRAIN_VARIANT_COUNTS[baseType] ?? 0;
   if (count > 1) {
     const v = (((col * 7 + row * 13 + col * row) % count) + count) % count + 1;
@@ -2326,6 +2546,292 @@ export function entityBaseColor(entity) {
   return '#888888';
 }
 
+// ─── Tile slot system (exported for tests) ──────────────────────────────────
+//
+// Every hex has 7 fixed "slots" arranged as 1 centre + 6 around the rim.
+// Co-tenants on a hex (a building, the forest cluster, multiple standees) are
+// assigned to deterministic slots so silhouettes don't pile up at the centre
+// when more than one occupant lives on the same tile. Slots are described as
+// (x, z) offsets from the hex centre, in world units, on the XZ ground plane.
+//
+//   slot 0 — centre. Reserved for standees (the common case: one unit per hex).
+//   slot 1 — building anchor. Aligns with BUILDING_OFFSET for visual stability;
+//            a building always occupies this slot when present.
+//   slots 2–6 — outer ring at ~0.6 world units, used by trees and overflow
+//            standees in deterministic id order.
+//
+// Outer-slot distance sits within [FOREST_INNER_RADIUS, FOREST_OUTER_RADIUS]
+// so existing forest invariants (trees stay out of the centre) still hold.
+export const TILE_SLOTS = Object.freeze([
+  Object.freeze({ x:  0.00, z:  0.00 }), // 0 — centre
+  Object.freeze({ x:  0.42, z: -0.42 }), // 1 — NE (building anchor, BUILDING_OFFSET)
+  Object.freeze({ x: -0.42, z: -0.42 }), // 2 — NW
+  Object.freeze({ x: -0.60, z:  0.00 }), // 3 — W
+  Object.freeze({ x: -0.42, z:  0.42 }), // 4 — SW
+  Object.freeze({ x:  0.42, z:  0.42 }), // 5 — SE
+  Object.freeze({ x:  0.60, z:  0.00 }), // 6 — E
+]);
+
+/** Index of the centre slot (always preferred for the first standee). */
+export const CENTRE_SLOT_INDEX = 0;
+/** Index of the slot a building always occupies. */
+export const BUILDING_SLOT_INDEX = 1;
+
+/**
+ * Pure slot assignment for a hex's occupants.
+ *
+ * Each occupant must be `{ id, kind: 'building' | 'tree' | 'standee' }`.
+ * Returns `{ slotByOccupantId: Map<id, slotIndex>, overflow: number }` where
+ * `overflow` is the count of standees beyond the 7-slot capacity (those
+ * standees still appear in the map, all assigned to CENTRE_SLOT_INDEX, so the
+ * +N badge stacks above the centre).
+ *
+ * Priority:
+ *   • Buildings claim slot 1 (BUILDING_SLOT_INDEX). At most one building
+ *     per tile is the normal case; extras spill to centre defensively.
+ *   • Trees fill outer slots (1..6 minus the building slot) in id-sorted
+ *     order. They never take the centre — the centre is reserved for a
+ *     standee even on a fully-treed forest hex.
+ *   • Standees take the centre first, then any still-free outer slot, then
+ *     overflow stacks on the centre.
+ *
+ * Sort key is the string form of `id` so the function is stable across
+ * runs regardless of insertion order in the caller.
+ */
+export function assignTileSlotIndices(occupants) {
+  const out = new Map();
+  if (!Array.isArray(occupants) || occupants.length === 0) {
+    return { slotByOccupantId: out, overflow: 0 };
+  }
+  const buildings = [];
+  const trees     = [];
+  const standees  = [];
+  for (const occ of occupants) {
+    if (!occ || typeof occ !== 'object') continue;
+    if (occ.kind === 'building') buildings.push(occ);
+    else if (occ.kind === 'tree')  trees.push(occ);
+    else if (occ.kind === 'standee') standees.push(occ);
+  }
+  const byId = (a, b) => {
+    const ka = String(a.id), kb = String(b.id);
+    return ka < kb ? -1 : ka > kb ? 1 : 0;
+  };
+  buildings.sort(byId); trees.sort(byId); standees.sort(byId);
+
+  const used = new Set();
+  // Buildings → slot 1.
+  if (buildings.length > 0) {
+    out.set(buildings[0].id, BUILDING_SLOT_INDEX);
+    used.add(BUILDING_SLOT_INDEX);
+    for (let i = 1; i < buildings.length; i++) {
+      out.set(buildings[i].id, CENTRE_SLOT_INDEX);
+    }
+  }
+  // Trees → outer slots (skip centre, skip building slot).
+  const outerForTrees = [];
+  for (let i = 1; i < TILE_SLOTS.length; i++) {
+    if (!used.has(i)) outerForTrees.push(i);
+  }
+  for (let i = 0; i < trees.length && i < outerForTrees.length; i++) {
+    out.set(trees[i].id, outerForTrees[i]);
+    used.add(outerForTrees[i]);
+  }
+  // Standees → centre first, then any remaining free slot, then overflow at centre.
+  const standeeSlots = [];
+  if (!used.has(CENTRE_SLOT_INDEX)) standeeSlots.push(CENTRE_SLOT_INDEX);
+  for (let i = 1; i < TILE_SLOTS.length; i++) {
+    if (!used.has(i)) standeeSlots.push(i);
+  }
+  let overflow = 0;
+  for (let i = 0; i < standees.length; i++) {
+    if (i < standeeSlots.length) out.set(standees[i].id, standeeSlots[i]);
+    else { out.set(standees[i].id, CENTRE_SLOT_INDEX); overflow++; }
+  }
+  return { slotByOccupantId: out, overflow };
+}
+
+/**
+ * Convenience wrapper: same as `assignTileSlotIndices` but returns absolute
+ * world (x, z) positions for each occupant on the named hex. Used by the
+ * renderer to place building/tree props at build time and to re-slot standees
+ * every draw.
+ */
+export function tileSlotWorldPositions(col, row, occupants, radius = HEX_RADIUS_WORLD) {
+  const { slotByOccupantId, overflow } = assignTileSlotIndices(occupants);
+  const { x: cx, z: cz } = hexToWorld(col, row, radius);
+  const positionByOccupantId = new Map();
+  for (const [id, slotIdx] of slotByOccupantId) {
+    const slot = TILE_SLOTS[slotIdx] ?? TILE_SLOTS[CENTRE_SLOT_INDEX];
+    positionByOccupantId.set(id, { x: cx + slot.x, z: cz + slot.z });
+  }
+  return { positionByOccupantId, overflow };
+}
+
+// ─── Road / river bezier networks (exported for tests) ─────────────────────
+//
+// Ports the 2D renderer's _drawRiverLayer / _drawRoadLayer logic to 3D.
+// For each river/road/bridge tile we build smooth quadratic-bezier strokes
+// between edge midpoints (control point = hex centre), then turn each stroke
+// into a thin tube mesh; finally MergeMeshes collapses all tubes per network
+// into ONE mesh per network so the GPU sees minimal draw calls.
+//
+// Tile underneath stays grass (see tileColorFor / terrainSpriteIdFor above).
+// Bridges are special: they appear in BOTH networks (a water bezier flows
+// through, a road bezier crosses); the bridge plank floats above both.
+
+/** River tube radius in world units (≈ 0.3 wide). */
+export const RIVER_TUBE_RADIUS = 0.15;
+/** Road tube radius in world units (≈ 0.2 wide). */
+export const ROAD_TUBE_RADIUS  = 0.10;
+/** Y above tile prism top (0.075) — river sits just above the terrain disc. */
+export const RIVER_TUBE_Y      = 0.085;
+/** Road sits a touch above the river so over-bridge crossings layer cleanly. */
+export const ROAD_TUBE_Y       = 0.095;
+/** Number of bezier samples per stroke. 10 is smooth enough at this radius
+ *  without bloating the tube vertex count on Campaign-size maps. */
+export const NETWORK_BEZIER_SEGMENTS = 10;
+
+/** Apothem (centre-to-edge distance) for a unit-radius pointy-top hex. */
+const HEX_APOTHEM = SQRT3 / 2;
+
+/** Sample a quadratic bezier (p0, control p1, p2) at N+1 evenly-spaced t in [0,1].
+ *  Pure — used by the network builder and exposed for unit tests. */
+export function sampleQuadBezier(p0, p1, p2, segments = NETWORK_BEZIER_SEGMENTS) {
+  const out = [];
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    const u = 1 - t;
+    out.push({
+      x: u * u * p0.x + 2 * u * t * p1.x + t * t * p2.x,
+      z: u * u * p0.z + 2 * u * t * p1.z + t * t * p2.z,
+    });
+  }
+  return out;
+}
+
+/** Unit vector and edge midpoint from hex centre `here` toward neighbour `there`.
+ *  Returns `{ dx, dz, mx, mz }` — dx/dz normalised; mx/mz the point on the
+ *  shared hex edge halfway between centres. */
+export function _edgeTo(here, there, radius = HEX_RADIUS_WORLD) {
+  const dx = there.x - here.x;
+  const dz = there.z - here.z;
+  const d  = Math.hypot(dx, dz) || 1;
+  const apo = HEX_APOTHEM * radius;
+  return {
+    dx: dx / d, dz: dz / d,
+    mx: here.x + (dx / d) * apo,
+    mz: here.z + (dz / d) * apo,
+  };
+}
+
+/**
+ * Compute the bezier strokes for a single river OR road tile.
+ *
+ *   tile         — the source tile (uses tile.col, tile.row)
+ *   neighbours   — array of neighbour offset {col,row} objects that count as
+ *                  connected (RIVER+BRIDGE for river network; tile.roadDirs
+ *                  → ROAD/BRIDGE/BUILDING for road network).
+ *
+ * Returns an array of "strokes" — each stroke is an array of `{x, z}` sample
+ * points (≥ 2 entries) suitable for turning into a tube. May return [] for
+ * tiles that should not draw (e.g. an isolated river hex with 0 neighbours).
+ *
+ * Mirrors src/renderer.js's per-tile geometry:
+ *   • 1 neighbour  → through-bezier from the off-tile extension to the edge.
+ *   • 2 neighbours → smooth bezier through centre between the two edges.
+ *   • 3+ neighbours → through-bezier on the most-opposing pair, straight
+ *                     spokes from centre to the remaining edges.
+ */
+export function networkStrokesForTile(tile, neighbours, opts = {}) {
+  if (!tile || !Array.isArray(neighbours) || neighbours.length === 0) return [];
+  const radius = opts.radius ?? HEX_RADIUS_WORLD;
+  const segments = opts.segments ?? NETWORK_BEZIER_SEGMENTS;
+  const here = hexToWorld(tile.col, tile.row, radius);
+  const edges = neighbours.map(n => {
+    const there = hexToWorld(n.col, n.row, radius);
+    return _edgeTo(here, there, radius);
+  });
+  const strokes = [];
+
+  if (edges.length === 1) {
+    const e = edges[0];
+    // Extend off-tile in the opposite direction so endpoints fade past the
+    // hex border (matches the 2D path's behaviour at map-edge river tiles).
+    const apo = HEX_APOTHEM * radius;
+    const p0 = { x: here.x - e.dx * apo, z: here.z - e.dz * apo };
+    const p1 = here;
+    const p2 = { x: e.mx, z: e.mz };
+    strokes.push(sampleQuadBezier(p0, p1, p2, segments));
+    return strokes;
+  }
+
+  // Pick the most-opposing pair (lowest dot product of unit vectors).
+  let pA = 0, pB = 1, minDot = Infinity;
+  for (let i = 0; i < edges.length; i++) {
+    for (let j = i + 1; j < edges.length; j++) {
+      const dot = edges[i].dx * edges[j].dx + edges[i].dz * edges[j].dz;
+      if (dot < minDot) { minDot = dot; pA = i; pB = j; }
+    }
+  }
+  const p0 = { x: edges[pA].mx, z: edges[pA].mz };
+  const p1 = here;
+  const p2 = { x: edges[pB].mx, z: edges[pB].mz };
+  strokes.push(sampleQuadBezier(p0, p1, p2, segments));
+
+  // Spokes for any extra branches — straight lines from centre to edge.
+  for (let i = 0; i < edges.length; i++) {
+    if (i === pA || i === pB) continue;
+    strokes.push([{ x: here.x, z: here.z }, { x: edges[i].mx, z: edges[i].mz }]);
+  }
+  return strokes;
+}
+
+/**
+ * Walk the full map and build every river segment's bezier strokes.
+ * Returns an array of `{ tile, strokes }`. Pure — takes the tile map by
+ * reference and a hexKey helper so tests can stub them.
+ *
+ * River network tiles: RIVER and BRIDGE; neighbours: RIVER and BRIDGE.
+ */
+export function buildRiverNetworkStrokes(tiles, hexKeyFn = hexKey, getNeighborsFn = getNeighbors) {
+  if (!tiles || typeof tiles.values !== 'function') return [];
+  const isWater = t => t && (t.type === TileType.RIVER || t.type === TileType.BRIDGE);
+  const out = [];
+  for (const tile of tiles.values()) {
+    if (!isWater(tile)) continue;
+    const nbrs = getNeighborsFn(tile.col, tile.row)
+      .filter(n => isWater(tiles.get(hexKeyFn(n.col, n.row))));
+    if (nbrs.length === 0) continue;
+    const strokes = networkStrokesForTile(tile, nbrs);
+    if (strokes.length > 0) out.push({ tile, strokes });
+  }
+  return out;
+}
+
+/**
+ * Walk the full map and build every road segment's bezier strokes.
+ * Road network tiles: ROAD and BRIDGE. Neighbours come from
+ * `tile.roadDirs` (a Set of hexKeys recorded at generation time) — this is
+ * what the 2D renderer uses, so phantom-junction inference is avoided.
+ */
+export function buildRoadNetworkStrokes(tiles, hexKeyFn = hexKey) {
+  if (!tiles || typeof tiles.values !== 'function') return [];
+  const out = [];
+  for (const tile of tiles.values()) {
+    if (!tile || (tile.type !== TileType.ROAD && tile.type !== TileType.BRIDGE)) continue;
+    if (!tile.roadDirs || tile.roadDirs.size === 0) continue;
+    const nbrs = [];
+    for (const k of tile.roadDirs) {
+      const nt = tiles.get(k);
+      if (nt) nbrs.push({ col: nt.col, row: nt.row });
+    }
+    if (nbrs.length === 0) continue;
+    const strokes = networkStrokesForTile(tile, nbrs);
+    if (strokes.length > 0) out.push({ tile, strokes });
+  }
+  return out;
+}
+
 // ─── Forest layout (deterministic per hex, exported for tests) ──────────────
 
 /** Bounds for the forest tree ring around a hex centre. Trees never enter the
@@ -2353,22 +2859,33 @@ function _forestHash(col, row, salt) {
 }
 
 /** Deterministic forest layout for a hex. Returns an array of
- *  `{ x, z, scale }` offsets (relative to the hex centre) — N entries where
- *  N ∈ [FOREST_TREES_MIN, FOREST_TREES_MAX]. All trees sit in the ring
- *  [FOREST_INNER_RADIUS, FOREST_OUTER_RADIUS] so the centre is clear for a
- *  standee. Pure function: same (col, row) → same trees, every run. */
+ *  `{ id, x, z, scale, slotIdx }` entries — N entries where
+ *  N ∈ [FOREST_TREES_MIN, FOREST_TREES_MAX]. Positions come from the unified
+ *  tile-slot system (outer ring only — the centre is reserved for standees).
+ *  Per-tree scale stays varied via a hex-stable hash so the cluster reads as
+ *  organic rather than mechanically tiled. Pure: same (col, row) → same trees. */
 export function forestTreesForHex(col, row) {
   const span = FOREST_TREES_MAX - FOREST_TREES_MIN + 1;
   const n    = FOREST_TREES_MIN + Math.floor(_forestHash(col, row, 0) * span);
   // _forestHash returns < 1, so floor(<span) ∈ [0, span-1]; n ∈ [MIN, MAX].
-  const trees = [];
-  const ringWidth = FOREST_OUTER_RADIUS - FOREST_INNER_RADIUS;
   const scaleSpan = FOREST_SCALE_MAX - FOREST_SCALE_MIN;
+  // Rotate the slot order per-hex so neighbouring forest hexes don't all
+  // start at the same NE slot — keeps the visual variety the ring layout had.
+  const rotation = Math.floor(_forestHash(col, row, 99) * 6);
+  // Build deterministic occupant ids; assignTileSlotIndices sorts by id, so
+  // a rotation embedded in the id is what reorders the slot picks.
+  const occupants = [];
   for (let i = 0; i < n; i++) {
-    const angle = _forestHash(col, row, i * 3 + 1) * Math.PI * 2;
-    const dist  = FOREST_INNER_RADIUS + _forestHash(col, row, i * 3 + 2) * ringWidth;
-    const scale = FOREST_SCALE_MIN    + _forestHash(col, row, i * 3 + 3) * scaleSpan;
-    trees.push({ x: Math.cos(angle) * dist, z: Math.sin(angle) * dist, scale });
+    const order = ((i + rotation) % 6).toString().padStart(2, '0');
+    occupants.push({ id: `tree_${order}_${i}`, kind: 'tree', _idx: i });
+  }
+  const { slotByOccupantId } = assignTileSlotIndices(occupants);
+  const trees = [];
+  for (const occ of occupants) {
+    const slotIdx = slotByOccupantId.get(occ.id) ?? CENTRE_SLOT_INDEX;
+    const slot = TILE_SLOTS[slotIdx];
+    const scale = FOREST_SCALE_MIN + _forestHash(col, row, occ._idx * 3 + 3) * scaleSpan;
+    trees.push({ id: occ.id, x: slot.x, z: slot.z, scale, slotIdx });
   }
   return trees;
 }
