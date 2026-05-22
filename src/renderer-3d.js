@@ -2252,26 +2252,26 @@ export class Renderer3D {
    *  across every ghost — they all march in step at the same animation
    *  frame, which reads fine for a planning preview. */
   _buildWalkingGhostClone(entity, parent) {
-    // Walking GLB is now an animation-only file (no embedded mesh), so its
-    // _walkingSource.meshes is empty. Fall back to the paladin source's
-    // mesh + skeleton for the ghost geometry — shared skeleton means ghost
-    // animates same pose as live paladin, which is acceptable for a
-    // planning preview.
+    // Ghost uses PALADIN's mesh (since walking.glb is animation-only with
+    // no embedded mesh) bound to WALKING's separate skeleton. Walking's
+    // skeleton is driven by the native walkGroup; the live paladin's
+    // skeleton runs idle. Two skeletons → ghost animates walking
+    // independently of the live paladin's idle. Mixamo bone ordering
+    // matches between paladin-idle.glb and walking.glb so the skinning
+    // indices map cleanly across the skeleton swap.
     const walking = this._walkingSource;
     const paladin = this._paladinSource;
     if (!this._babylon || !paladin) return null;
     const BABYLON = this._babylon;
-    const meshSrc = (walking && Array.isArray(walking.meshes) && walking.meshes.length > 0)
-      ? walking
-      : paladin;
-    const skelSrc = meshSrc.skeleton ? meshSrc : paladin;
-    const srcMeshes = Array.isArray(meshSrc.meshes) && meshSrc.meshes.length > 0
-      ? meshSrc.meshes
-      : (meshSrc.mesh ? [meshSrc.mesh] : []);
+    // Mesh always from paladin (the only one with geometry).
+    const srcMeshes = Array.isArray(paladin.meshes) && paladin.meshes.length > 0
+      ? paladin.meshes
+      : (paladin.mesh ? [paladin.mesh] : []);
     if (srcMeshes.length === 0) return null;
-    // Patch src reference used below so the existing skeleton-binding code
-    // pulls from whichever source provided the mesh.
-    const src = { ...meshSrc, skeleton: skelSrc.skeleton };
+    // Prefer walking's skeleton so the ghost animates independently.
+    // Fall back to paladin's if walking didn't export one (defensive).
+    const ghostSkeleton = (walking && walking.skeleton) || paladin.skeleton;
+    const src = { meshes: srcMeshes, mesh: paladin.mesh, skeleton: ghostSkeleton };
     const id = entity?.id ?? 'unknown';
 
     let cloneRoot = null;
