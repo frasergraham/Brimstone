@@ -143,6 +143,17 @@
 
       // Match canvas backing buffer to its CSS size before the first draw.
       renderer.resize();
+      // Kick off the tilemap atlas load. Without this, `_tilemapImg` stays
+      // null forever, so `_buildTileTopDisc` returns null for every tile and
+      // no textured top-disc is ever attached — the map renders as plain
+      // coloured cylinders, exactly the symptom operators reported when
+      // playtesting via this preview tool. main.js's renderer setup calls
+      // loadImages() for the same reason; the preview tool is the only
+      // Renderer3D consumer that was missing the call. Async — Babylon's
+      // continuous render loop picks up the textured discs on the next
+      // frame after `_upgradeTileTextures()` retro-fits them when the atlas
+      // resolves. No await needed.
+      renderer.loadImages();
       renderer.draw();
       bootMsg.style.display = 'none';
       setStatus(`rendering · ${size} · seed ${seed}`);
