@@ -2551,17 +2551,32 @@ export class Renderer3D {
     const leafMat  = this._materialFor(leafCss);
     const trunks = [];
     const leaves = [];
+    // Deterministic per-tree hash for the rotation + scale jitter — derived
+    // from world (tx, tz) so the same hex always shows the same tree
+    // arrangement across sessions. Output ∈ [0, 1).
+    const jitter = (k) => {
+      const v = Math.sin(k * 12.9898) * 43758.5453;
+      return v - Math.floor(v);
+    };
     for (let i = 0; i < trees.length; i++) {
       const t = trees[i];
       const tx = cx + t.x;
       const tz = cz + t.z;
-      const s  = t.scale;
+      // Random Y rotation 0..2π and random scale 0.8..1.2 multiplier on top
+      // of the existing per-tree scale, so the bakedmerged mesh shows visible
+      // variety despite all trees coming from the same source geometry.
+      const rotKey   = jitter(tx * 37.31 + tz * 71.19 + i * 5.13);
+      const scaleKey = jitter(tx * 11.79 + tz * 23.41 + i * 9.07);
+      const yaw      = rotKey * Math.PI * 2;
+      const scaleMul = 0.8 + scaleKey * 0.4;
+      const s = t.scale * scaleMul;
       const trunk = BABYLON.MeshBuilder.CreateCylinder(
         `${namePrefix}_t${i}_trunk`,
         { diameterTop: 0.16 * s, diameterBottom: 0.20 * s, height: 0.30 * s, tessellation: 6 },
         scene,
       );
       trunk.position.set(tx, 0.15 * s, tz);
+      trunk.rotation.y = yaw;
       trunks.push(trunk);
       const cones = [
         { y: 0.45 * s, dBot: 0.78 * s, dTop: 0.35 * s, h: 0.45 * s },
@@ -2576,6 +2591,7 @@ export class Renderer3D {
           scene,
         );
         cone.position.set(tx, cfg.y, tz);
+        cone.rotation.y = yaw;
         leaves.push(cone);
       }
     }
