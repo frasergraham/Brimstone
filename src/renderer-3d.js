@@ -69,6 +69,15 @@ export const FOCUS_EPSILON = 1e-3;
  *  Picked to frame ~3-tile diameter around the unit on a standard map. */
 export const SELECTION_FOCUS_RADIUS = 14;
 
+/** Camera tilt (beta) range, expressed as deltas from the locked isometric
+ *  anchor (`_lockedBeta = π/3.5 ≈ 0.898 rad ≈ 51.4°`). Round 3 unlocked a
+ *  clamped tilt range so the player can dip toward head-on or rise toward a
+ *  bird's-eye view; the anchor remains "isometric" and the clamps stay safely
+ *  inside (0, π/2) so the camera never points straight down or sees through
+ *  the tile prisms horizontally. */
+export const CAMERA_BETA_LOWER_DELTA = 0.25; // ~14° toward head-on
+export const CAMERA_BETA_UPPER_DELTA = 0.15; // ~8.6° toward bird's-eye
+
 const SQRT3 = Math.sqrt(3);
 
 /**
@@ -290,6 +299,14 @@ export class Renderer3D {
     // Cached material used to highlight a hex on attack flash.
     this._attackHexFlashMat = null;
 
+    // ── Highlight overlay (movement / target hexes from ui.js) ─────────────
+    // The 2D path tints valid-move and target hexes via `highlightHexes`
+    // (set by ui.js _updateHighlights). We mirror that here by laying flat
+    // emissive discs on the tagged hexes, rebuilt each draw so the overlay
+    // tracks selection changes without dirty-tracking.
+    this._highlightMeshes      = [];                  // disposable hex overlay meshes
+    this._highlightMatCache    = new Map();           // rgba-string → cached StandardMaterial
+    this._highlightSig         = '';                  // change-detect signature
     // ── Plan ghost (walking previewer) ─────────────────────────────────────
     // For each entity with at least one MOVE step in `planGhostSteps`, a
     // translucent standee clone walks its path on a loop while planning. The
@@ -317,6 +334,7 @@ export class Renderer3D {
     if (!this._scene) return; // init in flight
     this._syncEntityStandees();
     this._applySelectionAndFocus();
+    this._syncMovementHighlights();
     this._syncPlanArrows();
     this._syncPlanGhosts();
     // Phase 6: atmosphere updates — phase-driven lighting transitions, node
@@ -528,12 +546,15 @@ export class Renderer3D {
     camera.attachControl(this.canvas, true);
 
     // Yaw (alpha) is unbounded — left-mouse drag rotates around the vertical
-    // axis. Tilt (beta) is hard-locked so the player can't flip the board.
-    // We rotate the *camera*, not `mapRoot`, so world-space stays stable for
-    // picking + `hexToCanvasPos` projection (see the note on hexToCanvasPos).
+    // axis. Tilt (beta) is clamped around the isometric anchor so the player
+    // can dip closer to head-on or rise to a more bird's-eye view, but can't
+    // flip the board to look up from below or stare straight down. We rotate
+    // the *camera*, not `mapRoot`, so world-space stays stable for picking +
+    // `hexToCanvasPos` projection (see the note on hexToCanvasPos).
     camera.lowerAlphaLimit = null;
     camera.upperAlphaLimit = null;
-    camera.lowerBetaLimit  = camera.upperBetaLimit  = this._lockedBeta;
+    camera.lowerBetaLimit  = this._lockedBeta - CAMERA_BETA_LOWER_DELTA;
+    camera.upperBetaLimit  = this._lockedBeta + CAMERA_BETA_UPPER_DELTA;
 
     // Zoom limits — close enough to see a single tile clearly, far enough to
     // hold a Campaign-size map without flying outside the scene.
@@ -1695,6 +1716,68 @@ export class Renderer3D {
     this._hpBars.delete(entityId);
   }
 
+  // ─── Highlight overlay (movement / target hexes) ─────────────────────────
+  //
+  // ui.js sets `this.highlightHexes = [{col,row,color},...]` whenever a unit
+  // is selected (or the user is targeting an action). The 2D renderer reads
+  // the same field and tints those hexes. Here we lay a thin flat hex disc
+  // on each highlighted tile, materialised with the rgba colour ui.js chose.
+  //
+  // Rebuild policy: signature-diff each draw. Highlights rarely change frame
+  // to frame (only on selection / targeting events), so the cost is near-zero
+  // when nothing moved and a handful of disposals + creations when it did.
+
+  /** Mirror `highlightHexes` into a set of flat emissive hex discs. Disposes
+   *  previous overlay geometry when the signature changes; idempotent when it
+   *  hasn't. Skipped silently if Babylon hasn't loaded yet. */
+  _syncMovementHighlights() {
+    if (!this._scene || !this._babylon) return;
+    const sig = movementHighlightSignature(this.highlightHexes);
+    if (sig === this._highlightSig) return;
+    this._highlightSig = sig;
+
+    for (const mesh of this._highlightMeshes) mesh.dispose();
+    this._highlightMeshes = [];
+
+    const list = Array.isArray(this.highlightHexes) ? this.highlightHexes : [];
+    if (list.length === 0) return;
+
+    const BABYLON = this._babylon;
+    for (const h of list) {
+      if (typeof h?.col !== 'number' || typeof h?.row !== 'number') continue;
+      const { x, z } = hexToWorld(h.col, h.row);
+      const disc = BABYLON.MeshBuilder.CreateCylinder(
+        `highlight_${h.col}_${h.row}`,
+        { tessellation: 6, height: 0.02, diameter: 1.85 * HEX_RADIUS_WORLD },
+        this._scene,
+      );
+      disc.parent     = this._mapRoot;
+      disc.position.x = x;
+      disc.position.z = z;
+      disc.position.y = HIGHLIGHT_DISC_Y;
+      disc.rotation.y = Math.PI / 6; // match tile prism vertex alignment
+      disc.material   = this._highlightMaterialFor(h.color || HIGHLIGHT_DEFAULT_RGBA);
+      disc.isPickable = false;
+      this._highlightMeshes.push(disc);
+    }
+  }
+
+  _highlightMaterialFor(rgbaCss) {
+    if (this._highlightMatCache.has(rgbaCss)) return this._highlightMatCache.get(rgbaCss);
+    const BABYLON = this._babylon;
+    const [r, g, b, a] = parseRgba01(rgbaCss);
+    const mat = new BABYLON.StandardMaterial(`highlightMat_${rgbaCss}`, this._scene);
+    mat.diffuseColor  = new BABYLON.Color3(r, g, b);
+    // Emissive at half the diffuse so highlights read on both day and night
+    // phases without saturating the glow layer.
+    mat.emissiveColor = new BABYLON.Color3(r * 0.5, g * 0.5, b * 0.5);
+    mat.specularColor = new BABYLON.Color3(0, 0, 0);
+    mat.alpha = Math.max(HIGHLIGHT_MIN_ALPHA, a);
+    mat.backFaceCulling = false;
+    this._highlightMatCache.set(rgbaCss, mat);
+    return mat;
+  }
+
   // ─── Plan ghost arrows ───────────────────────────────────────────────────
 
   /** Rebuild the plan-ghost arrow overlay from `this.planGhostSteps`. We
@@ -2067,6 +2150,16 @@ export class Renderer3D {
           col: h.col, row: h.row,
           glowColor: { r: 1, g: 1, b: 1 },
         });
+
+        // Track in the per-hex prop list so `_applyFogVeil` hides the disc on
+        // fogged tiles alongside the rest of the tile's silhouette. A node
+        // disc that stayed lit through fog gave the controller away even when
+        // every other prop on the hex was hidden.
+        const tkey = hexKey(h.col, h.row);
+        const props = this._tilePropsByKey.get(tkey);
+        if (props) props.push(disc);
+        else this._tilePropsByKey.set(tkey, [disc]);
+        if (this._fogActiveSet.has(tkey)) disc.isVisible = false;
       }
     }
   }
@@ -2099,19 +2192,26 @@ export class Renderer3D {
       }
     }
 
-    // Hide standees on fogged hexes; reveal them when visible again.
+    // Hide standees on fogged hexes; reveal them when visible again. HP bars
+    // are parented to the standee base but Babylon's `isVisible` does not
+    // propagate to children, so we mirror visibility onto the HP bar mesh
+    // explicitly — otherwise a hidden standee leaves a floating HP bar.
     if (target) {
-      for (const [, standee] of this._entityStandees) {
+      for (const [id, standee] of this._entityStandees) {
         const k = hexKey(standee.plane.metadata.col, standee.plane.metadata.row);
-        const visible = target.has(k);
+        const visible = shouldRenderEntityAt(target, k);
         if (standee.plane.isVisible !== visible) standee.plane.isVisible = visible;
         if (standee.base.isVisible  !== visible) standee.base.isVisible  = visible;
+        const hp = this._hpBars.get(id);
+        if (hp && hp.plane.isVisible !== visible) hp.plane.isVisible = visible;
       }
     } else {
       // No fog → make sure everything is visible (covers fog-toggling mid-game).
-      for (const [, standee] of this._entityStandees) {
+      for (const [id, standee] of this._entityStandees) {
         if (!standee.plane.isVisible) standee.plane.isVisible = true;
         if (!standee.base.isVisible)  standee.base.isVisible  = true;
+        const hp = this._hpBars.get(id);
+        if (hp && !hp.plane.isVisible) hp.plane.isVisible = true;
       }
     }
   }
@@ -2315,10 +2415,12 @@ export const PHASE_TRANSITION_MS = 3000;
 /** GlowLayer intensity (applied to selection halo + node-glow discs). */
 export const GLOW_LAYER_INTENSITY = 0.7;
 
-/** Selection halo pulse. Configurable so designers can tune the breathing. */
+/** Selection halo pulse. Configurable so designers can tune the breathing.
+ *  Round 3: dialled MIN/MAX down ~50% — earlier values produced a halo bright
+ *  enough to swallow the standee silhouette at zoomed-out distances. */
 export const SELECTION_PULSE_PERIOD_MS = 1500;
-export const SELECTION_PULSE_MIN       = 0.40;
-export const SELECTION_PULSE_MAX       = 0.95;
+export const SELECTION_PULSE_MIN       = 0.18;
+export const SELECTION_PULSE_MAX       = 0.45;
 /** Base cyan emissive that the selection pulse modulates each frame. */
 export const SELECTION_EMISSIVE_BASE = Object.freeze({ r: 0.25, g: 0.85, b: 0.95 });
 
@@ -2402,6 +2504,17 @@ export function buildFogVisibleSet(state, observerOwner) {
     }
   }
   return visible;
+}
+
+/**
+ * Pure visibility predicate for entity-attached props (HP bars, halos) given
+ * a fog-visible-set and the entity's hex key. Wrapped as a helper so the
+ * HP-bar-follows-fog rule can be unit-tested without instantiating Babylon.
+ * `target` may be null (no fog active) — in which case everything is visible.
+ */
+export function shouldRenderEntityAt(target, hexK) {
+  if (!target) return true;
+  return target.has(hexK);
 }
 
 /**
@@ -2654,6 +2767,66 @@ export function floatingTextTransform(t, riseDistance = 1.2) {
   // Alpha holds at 1 for the first half, then lerps 1→0 across the second.
   const alpha = clamped < 0.5 ? 1 : Math.max(0, 1 - (clamped - 0.5) * 2);
   return { y, alpha };
+}
+
+// ─── Movement highlight overlay (exported for tests) ────────────────────────
+
+/** Y position of the flat highlight disc above the tile prism top (+0.075).
+ *  Sits below the plan-marker disc (PLAN_DISC_Y = 0.16) and the road deck top
+ *  (~0.155), so highlights read as a tint ON the tile, not floating above
+ *  road decks or stacking on top of plan markers when both are active. */
+export const HIGHLIGHT_DISC_Y      = 0.085;
+/** Minimum alpha applied when the source rgba is too transparent to read in
+ *  the lit 3D scene. ui.js currently uses alphas as low as 0.14 for ally hexes;
+ *  the 2D renderer reads those fine but they wash out under hemispheric light. */
+export const HIGHLIGHT_MIN_ALPHA   = 0.30;
+/** Fallback rgba when an entry lacks `color` — neutral green (movement). */
+export const HIGHLIGHT_DEFAULT_RGBA = 'rgba(60,220,80,0.40)';
+
+/**
+ * Compute a stable signature for a `highlightHexes` array so the renderer can
+ * skip rebuilding the overlay when nothing changed. Order-sensitive: ui.js
+ * always rebuilds the list deterministically per selection, so two equal
+ * selections produce identical signatures.
+ */
+export function movementHighlightSignature(list) {
+  if (!Array.isArray(list) || list.length === 0) return '';
+  let out = '';
+  for (const h of list) {
+    if (!h || typeof h.col !== 'number' || typeof h.row !== 'number') continue;
+    out += `${h.col},${h.row},${h.color || ''}|`;
+  }
+  return out;
+}
+
+/**
+ * Parse a CSS rgba string ("rgba(r,g,b,a)" or "rgb(r,g,b)") to [r,g,b,a] in
+ * 0..1. Returns a sensible default tuple for unparseable inputs so callers
+ * never end up with NaN material colours.
+ */
+export function parseRgba01(css) {
+  if (typeof css !== 'string') return [0.4, 0.85, 0.4, 0.35];
+  const m = /rgba?\s*\(\s*([0-9.]+)\s*,\s*([0-9.]+)\s*,\s*([0-9.]+)(?:\s*,\s*([0-9.]+))?\s*\)/i.exec(css);
+  if (!m) return [0.4, 0.85, 0.4, 0.35];
+  const r = clamp01(parseFloat(m[1]) / 255);
+  const g = clamp01(parseFloat(m[2]) / 255);
+  const b = clamp01(parseFloat(m[3]) / 255);
+  const a = m[4] != null ? clamp01(parseFloat(m[4])) : 1;
+  return [r, g, b, a];
+}
+
+function clamp01(n) {
+  if (!Number.isFinite(n)) return 0;
+  return n < 0 ? 0 : n > 1 ? 1 : n;
+}
+
+/**
+ * World-space position of a movement-highlight disc for a given hex. Used by
+ * tests to assert the overlay lands on the expected tile centre.
+ */
+export function movementHighlightPosition(col, row) {
+  const { x, z } = hexToWorld(col, row);
+  return { x, y: HIGHLIGHT_DISC_Y, z };
 }
 
 /**
