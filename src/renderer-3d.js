@@ -4226,9 +4226,13 @@ export const SELECTION_EMISSIVE_BASE = Object.freeze({ r: 0.25, g: 0.85, b: 0.95
 export const NODE_PULSE_PERIOD_MS = 3000;
 export const NODE_PULSE_MIN       = 0.45;
 export const NODE_PULSE_MAX       = 0.95;
-/** The disc now carries the full node-glow read (the shaft was dropped), so
- *  emissive intensity is pinned at 1.0 instead of attenuated. */
-export const NODE_DISC_EMISSIVE_MUL = 1.0;
+/** Multiplier applied to the per-frame node-disc emissive (`glowColor * pulseK
+ *  * NODE_DISC_EMISSIVE_MUL`). Held at 0.4 so the GlowLayer's bloom carries the
+ *  controller colour without saturating: at 1.0 the brightest channels of
+ *  hero (#ffb800 → 1.0), neutral (#e8e8e8 → 0.91), and contested (#ff6a00 → 1.0)
+ *  clipped through the bloom and washed every node to white. 0.4 keeps the peak
+ *  channel ≤ ~0.38 (after pulse k ≤ 0.95) so the bloom stays tinted. */
+export const NODE_DISC_EMISSIVE_MUL = 0.4;
 /** Disc footprint in world units. Slightly larger than the historical 1.7 so
  *  the saturated colour fills more of the tile's visible top. */
 export const NODE_DISC_DIAMETER = 1.9;

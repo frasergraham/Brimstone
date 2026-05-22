@@ -106,8 +106,12 @@ describe('Renderer3D — forestTreesForHex layout', () => {
 });
 
 describe('Renderer3D — node disc constants (saturated, shaft-free)', () => {
-  test('disc carries full intensity now that the shaft is gone', () => {
-    assert.equal(NODE_DISC_EMISSIVE_MUL, 1.0);
+  test('disc emissive multiplier is attenuated so GlowLayer bloom stays tinted', () => {
+    // At 1.0 the bright controller hexes (#ffb800, #e8e8e8, #ff6a00) clipped
+    // through the GlowLayer's bloom and washed every node to white. Held in
+    // [0.2, 0.6] so peak emissive (k ≤ 0.95) stays well below clipping.
+    assert.ok(NODE_DISC_EMISSIVE_MUL >= 0.2 && NODE_DISC_EMISSIVE_MUL <= 0.6,
+      `expected attenuated multiplier in [0.2, 0.6], got ${NODE_DISC_EMISSIVE_MUL}`);
   });
 
   test('disc is larger than the historical 1.7 so colour fills the tile', () => {

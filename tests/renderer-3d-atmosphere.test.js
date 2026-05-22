@@ -26,6 +26,7 @@ import {
   NODE_PULSE_PERIOD_MS,
   NODE_PULSE_MIN,
   NODE_PULSE_MAX,
+  NODE_DISC_EMISSIVE_MUL,
   FOG_TILE_DARKEN,
   easeInOutCubic,
   lerpLightConfig,
@@ -114,6 +115,51 @@ describe('Renderer3D — getNodeGlowColor', () => {
     assert.equal(getNodeGlowColor('martian'),  NODE_GLOW_COLORS.neutral);
     assert.equal(getNodeGlowColor(undefined),  NODE_GLOW_COLORS.neutral);
     assert.equal(getNodeGlowColor(null),       NODE_GLOW_COLORS.neutral);
+  });
+});
+
+// ── Node disc emissive attenuation (bloom no longer washes to white) ────────
+//
+// Repro of the bug fixed by t-f8974623: at the old multiplier (1.0), bright
+// controller colours like neutral (#e8e8e8 → channels ≈ 0.91) and hero
+// (#ffb800 → R=1.0, G=0.72) hit ≥0.9 emissive at peak pulse — the GlowLayer
+// bloomed those to clipping and every node read as white. The attenuated
+// multiplier keeps the peak channel comfortably below clipping so the bloom
+// retains its controller tint.
+
+describe('Renderer3D — node disc emissive stays sub-clipping at peak pulse', () => {
+  // Mirrors the formula inside `_setNodeGlowIntensity`: emissive = glowColor *
+  // pulseK * NODE_DISC_EMISSIVE_MUL. We assert the worst-case peak across the
+  // four controller colours and the documented pulse maximum.
+  const peakEmissive = (cssHex) => {
+    const r = parseInt(cssHex.slice(1, 3), 16) / 255;
+    const g = parseInt(cssHex.slice(3, 5), 16) / 255;
+    const b = parseInt(cssHex.slice(5, 7), 16) / 255;
+    const maxChannel = Math.max(r, g, b);
+    return maxChannel * NODE_PULSE_MAX * NODE_DISC_EMISSIVE_MUL;
+  };
+
+  test('every controller colour stays below the bloom-clipping threshold', () => {
+    // 0.6 = empirical safe ceiling — above this the GlowLayer (intensity 0.5)
+    // starts pushing the brightest channel into white-out at zoomed-out
+    // distances. Was ~0.95 before the fix.
+    const CLIP = 0.6;
+    for (const [key, css] of Object.entries(NODE_GLOW_COLORS)) {
+      const peak = peakEmissive(css);
+      assert.ok(peak < CLIP,
+        `${key} (${css}) peak emissive ${peak.toFixed(3)} ≥ ${CLIP} — bloom will wash to white`);
+    }
+  });
+
+  test('peak emissive is still bright enough to read as a glow (≥ 0.15)', () => {
+    // Sanity-check the other direction: the dimmest controller colour at peak
+    // pulse should still register as a clearly emissive disc, not a dead one.
+    const FLOOR = 0.15;
+    for (const [key, css] of Object.entries(NODE_GLOW_COLORS)) {
+      const peak = peakEmissive(css);
+      assert.ok(peak >= FLOOR,
+        `${key} (${css}) peak emissive ${peak.toFixed(3)} < ${FLOOR} — too dim to read`);
+    }
   });
 });
 
