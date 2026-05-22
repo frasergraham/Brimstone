@@ -263,6 +263,52 @@ describe('buildRoadNetworkStrokes', () => {
     assert.equal(buildRoadNetworkStrokes(tiles).length, 0);
   });
 
+  test('BUILDING tiles with roadDirs participate in the road network (contiguous through villages)', () => {
+    // A village-spoke configuration: ROAD → BUILDING → ROAD. The building
+    // sits on the MST, so its roadDirs are populated at gen time. The 3D
+    // ribbon must pass through it so the road reads as contiguous.
+    const tiles = new Map();
+    tiles.set(hexKey(0, 0),
+      { col: 0, row: 0, type: TileType.ROAD,     roadDirs: new Set([hexKey(1, 0)]) });
+    tiles.set(hexKey(1, 0),
+      { col: 1, row: 0, type: TileType.BUILDING, building: 'INN',
+        roadDirs: new Set([hexKey(0, 0), hexKey(2, 0)]) });
+    tiles.set(hexKey(2, 0),
+      { col: 2, row: 0, type: TileType.ROAD,     roadDirs: new Set([hexKey(1, 0)]) });
+
+    const segs = buildRoadNetworkStrokes(tiles);
+    assert.equal(segs.length, 3, 'all three tiles (road–building–road) should emit strokes');
+
+    const building = segs.find(s => s.tile.type === TileType.BUILDING);
+    assert.ok(building, 'building tile with roadDirs must emit a road segment');
+    // Two roadDirs neighbours → one through-bezier across the tile centre.
+    assert.equal(building.strokes.length, 1, 'transit building emits one through-bezier');
+    assert.ok(building.strokes[0].length > 2, 'through-bezier is a multi-sample curve');
+  });
+
+  test('BUILDING tile with one roadDir (spoke endpoint) emits a stub into the building', () => {
+    const tiles = new Map();
+    tiles.set(hexKey(0, 0),
+      { col: 0, row: 0, type: TileType.ROAD,     roadDirs: new Set([hexKey(1, 0)]) });
+    tiles.set(hexKey(1, 0),
+      { col: 1, row: 0, type: TileType.BUILDING, building: 'INN',
+        roadDirs: new Set([hexKey(0, 0)]) });
+
+    const segs = buildRoadNetworkStrokes(tiles);
+    const building = segs.find(s => s.tile.type === TileType.BUILDING);
+    assert.ok(building, 'spoke-endpoint building still emits a road segment');
+    assert.equal(building.strokes.length, 1);
+    assert.equal(building.strokes[0].length, 2, 'spoke endpoint is a 2-point stub');
+  });
+
+  test('BUILDING tile without roadDirs (off the network) emits no strokes', () => {
+    const tiles = new Map();
+    tiles.set(hexKey(0, 0),
+      { col: 0, row: 0, type: TileType.BUILDING, building: 'INN', roadDirs: new Set() });
+    assert.equal(buildRoadNetworkStrokes(tiles).length, 0,
+      'unconnected building must not draw road ribbon');
+  });
+
   test('BRIDGE tiles with roadDirs participate in the road network', () => {
     const tiles = new Map();
     tiles.set(hexKey(0, 0),
