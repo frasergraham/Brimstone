@@ -147,7 +147,7 @@ describe('Renderer3D — radiusForStandardFit (max-zoom cap)', () => {
     return out;
   }
 
-  test('returns the radius that would frame a standard 13×13 map', () => {
+  test('returns the depth-fit radius that frames a standard 13×13 map vertically', () => {
     const aspect = 16 / 9;
     const fov = 0.8;
     const margin = 1.05;
@@ -156,16 +156,13 @@ describe('Renderer3D — radiusForStandardFit (max-zoom cap)', () => {
     const cfg = MAP_SIZES.standard;
     const bounds = computeMapBounds(rectPositions(cfg.cols, cfg.rows));
     const padding = paddingHexes * HEX_RADIUS_WORLD * Math.sqrt(3);
-    const expected = radiusForFit(
-      bounds.width + 2 * padding,
-      bounds.depth + 2 * padding,
-      aspect,
-      fov,
-      margin,
-    );
+    // Depth-only fit: aspect is irrelevant because the map's vertical
+    // (Z) extent must fill the screen height regardless of how wide the
+    // viewport is.
+    const expectedDepth = (bounds.depth + 2 * padding) / 2 / Math.tan(fov / 2) * margin;
 
     const got = radiusForStandardFit(aspect, fov, margin, paddingHexes);
-    assert.ok(Math.abs(got - expected) < 1e-9, `${got} vs ${expected}`);
+    assert.ok(Math.abs(got - expectedDepth) < 1e-9, `${got} vs ${expectedDepth}`);
   });
 
   test('positive for typical aspects', () => {
@@ -175,12 +172,16 @@ describe('Renderer3D — radiusForStandardFit (max-zoom cap)', () => {
     }
   });
 
-  test('narrower aspect → larger radius (need to pull back further to fit width)', () => {
-    const wide = radiusForStandardFit(2);
-    const square = radiusForStandardFit(1);
+  test('depth-only fit is aspect-independent — operator never sees past top/bottom edge', () => {
+    // Max-zoom-out now fits DEPTH only (operator: "fit playable map area to
+    // the screen vertically. The goal is to avoid ever seeing off the edge
+    // of the map"). All aspects → same radius; horizontal overflow is by
+    // design and the camera pan clamp prevents seeing past the side edges.
+    const wide     = radiusForStandardFit(2);
+    const square   = radiusForStandardFit(1);
     const portrait = radiusForStandardFit(0.5);
-    assert.ok(square > wide);
-    assert.ok(portrait > square);
+    assert.ok(Math.abs(square - wide)     < 1e-6, 'aspect 1 vs 2 should match (depth-only fit)');
+    assert.ok(Math.abs(portrait - square) < 1e-6, 'aspect 0.5 vs 1 should match (depth-only fit)');
   });
 
   test('clamps the framing radius of a campaign-size map (regression: cap kicks in)', () => {

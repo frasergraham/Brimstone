@@ -387,6 +387,20 @@ export function radiusForFit(fitWidth, fitDepth, aspect, fov = 0.8, margin = 1.0
 }
 
 /**
+ * Variant of `radiusForFit` that only fits the DEPTH (screen-vertical world
+ * axis). The width may overflow horizontally — by design — so the playable
+ * map fills the screen vertically and the operator never sees sky / off-map
+ * background past the top or bottom edge. Used for the max-zoom-out cap and
+ * the fit-map button so the playable area always covers the viewport.
+ *
+ * `fitWidth` is ignored; kept in the signature so callers can swap helpers
+ * without dropping the argument.
+ */
+export function radiusForFitDepth(_fitWidth, fitDepth, _aspect, fov = 0.8, margin = 1.05) {
+  return (fitDepth / 2) / Math.tan(fov / 2) * margin;
+}
+
+/**
  * Camera radius required to fit the standard 13×13 map at a given aspect /
  * FOV / margin. Used as the camera's `upperRadiusLimit` so larger maps
  * (regional, campaign, battle) can never zoom out further than a standard
@@ -408,7 +422,10 @@ export function radiusForStandardFit(aspect, fov = 0.8, margin = 1.05, paddingHe
   const padding = paddingHexes * HEX_RADIUS_WORLD * SQRT3;
   const fitWidth = bounds.width + 2 * padding;
   const fitDepth = bounds.depth + 2 * padding;
-  return radiusForFit(fitWidth, fitDepth, aspect, fov, margin);
+  // Fit DEPTH only — playable map always covers the screen vertically at the
+  // max-zoom-out cap so the operator never sees background past the top/
+  // bottom edge. Width may overflow horizontally; pan covers that.
+  return radiusForFitDepth(fitWidth, fitDepth, aspect, fov, margin);
 }
 
 /**
@@ -2733,14 +2750,17 @@ export class Renderer3D {
     }
   }
 
-  /** Wraps the pure `radiusForFit` helper with this camera's FOV/aspect and
-   *  clamps to the camera's radius limits. */
-  _radiusForFit(fitWidth, fitDepth) {
+  /** Wraps `radiusForFitDepth` with this camera's FOV/aspect and clamps to the
+   *  camera's radius limits. Depth-only fit so the playable map fills the
+   *  screen vertically at the fit-button radius — wider maps overflow
+   *  horizontally on purpose so the operator never sees past the top/bottom
+   *  edge. Both single-hex and full-map callers share this helper. */
+  _radiusForFit(_fitWidth, fitDepth) {
     const aspect = this._engine
       ? this._engine.getRenderWidth() / Math.max(1, this._engine.getRenderHeight())
       : 16 / 9;
     const fov = this._camera.fov || 0.8;
-    const radius = radiusForFit(fitWidth, fitDepth, aspect, fov);
+    const radius = radiusForFitDepth(_fitWidth, fitDepth, aspect, fov);
     return Math.max(
       this._camera.lowerRadiusLimit ?? 1,
       Math.min(this._camera.upperRadiusLimit ?? 200, radius),
