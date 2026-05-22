@@ -2060,15 +2060,22 @@ export class Renderer3D {
     // takes the centre slot, so silhouettes don't overlap.
     if (tile.type === TileType.BUILDING && tile.building) {
       const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
+      // Per-tile dimension jitter so buildings show silhouette variety
+      // instead of an army of identical boxes. See `buildingDimensionsForHex`.
+      const dims = buildingDimensionsForHex(tile.col, tile.row);
+      // Box sits on top of the tile prism with its base at Y = TILE_PRISM_TOP
+      // (historically 0.08, the "0.43 - 0.7/2" anchor before jitter). Y the
+      // box centre to (TILE_PRISM_TOP + height/2) so the floor stays planted.
+      const tileTopY = 0.43 - 0.7 / 2;
       const box = BABYLON.MeshBuilder.CreateBox(
         `bldg_${tile.col}_${tile.row}`,
-        { width: 0.55, height: 0.7, depth: 0.55 },
+        { width: dims.box.width, height: dims.box.height, depth: dims.box.depth },
         scene,
       );
       box.parent     = parent;
       box.position.x = x + slot.x;
       box.position.z = z + slot.z;
-      box.position.y = 0.43; // sit on top of the tile prism
+      box.position.y = tileTopY + dims.box.height / 2;
       box.material   = this._materialFor(BUILDING_COLOR[tile.building] || '#8a7a5a');
       box.isPickable = false;
       this._addShadowCaster(box);
@@ -2077,16 +2084,16 @@ export class Renderer3D {
       box.metadata   = { respectsFog: false };
       trackProp(box);
 
-      // Tiny roof block to add silhouette variety.
+      // Tiny roof block to add silhouette variety. Sits flush on top of the box.
       const roof = BABYLON.MeshBuilder.CreateBox(
         `roof_${tile.col}_${tile.row}`,
-        { width: 0.62, height: 0.15, depth: 0.62 },
+        { width: dims.roof.width, height: dims.roof.height, depth: dims.roof.depth },
         scene,
       );
       roof.parent     = parent;
       roof.position.x = x + slot.x;
       roof.position.z = z + slot.z;
-      roof.position.y = 0.85;
+      roof.position.y = tileTopY + dims.box.height + dims.roof.height / 2;
       roof.material   = this._materialFor('#2c2520');
       roof.isPickable = false;
       this._addShadowCaster(roof);
@@ -2630,19 +2637,34 @@ export class Renderer3D {
     return false;
   }
 
+  /** Build merged trunk + leaf meshes for one hex's forest cluster.
+   *
+   *  Trees come from `forestTreesForHex` / `borderForestTreesForHex` and
+   *  carry a `species` ('pine' | 'oak' | 'spruce') and a `shadeIdx` (which
+   *  picks the leaf-colour shade from the species palette). Three silhouettes
+   *  are emitted:
+   *
+   *    pine   — tapered 3-tier cone stack (original spruce-y conifer look).
+   *    oak    — tall narrow trunk topped with a sphere-shaped foliage crown.
+   *    spruce — slim 4-tier cone stack, taller and narrower than pine.
+   *
+   *  Trunks share one material (they're all the same brown). Leaves get one
+   *  merged mesh per distinct (species, shadeIdx) colour bucket — bounded at
+   *  TREE_SPECIES.length × TREE_LEAF_SHADES_PER_SPECIES = 9 worst-case, but
+   *  ≤ 5 in practice since a hex carries at most 5 trees. */
   _buildPineTreeBatchedMeshes(namePrefix, parent, cx, cz, trees, { fogged = false } = {}) {
     const BABYLON = this._babylon;
     const scene   = this._scene;
     if (!BABYLON || !scene || !trees || trees.length === 0) return [];
-    // Fogged variants of trunk/leaf colour pre-multiplied by FOG_TILE_DARKEN
-    // so the border-forest band reads as "hazy distant wilderness" instead
-    // of brightly-lit trees that compete with the playable map.
+    // Trunks all share one colour. Fogged variants pre-multiplied by
+    // FOG_TILE_DARKEN so the border-forest band reads as "hazy distant
+    // wilderness" instead of brightly-lit trees competing with the map.
     const trunkCss = fogged ? '#241710' : '#5a3a20';
-    const leafCss  = fogged ? '#0e1f0c' : '#234c1f';
     const trunkMat = this._materialFor(trunkCss);
-    const leafMat  = this._materialFor(leafCss);
     const trunks = [];
-    const leaves = [];
+    // Leaves bucketed by colour key so the per-tile draw call count stays
+    // bounded: one merged leaf mesh per (species, shadeIdx) pair.
+    const leavesByColor = new Map(); // colorCss → mesh[]
     // Deterministic per-tree hash for the rotation + scale jitter — derived
     // from world (tx, tz) so the same hex always shows the same tree
     // arrangement across sessions. Output ∈ [0, 1).
@@ -2655,41 +2677,93 @@ export class Renderer3D {
       const tx = cx + t.x;
       const tz = cz + t.z;
       // Random Y rotation 0..2π and random scale 0.8..1.2 multiplier on top
-      // of the existing per-tree scale, so the bakedmerged mesh shows visible
+      // of the existing per-tree scale, so the merged mesh shows visible
       // variety despite all trees coming from the same source geometry.
       const rotKey   = jitter(tx * 37.31 + tz * 71.19 + i * 5.13);
       const scaleKey = jitter(tx * 11.79 + tz * 23.41 + i * 9.07);
       const yaw      = rotKey * Math.PI * 2;
       const scaleMul = 0.8 + scaleKey * 0.4;
       const s = t.scale * scaleMul;
+      const species  = t.species  || 'pine';
+      const shadeIdx = t.shadeIdx ?? 0;
+      const leafCss  = treeLeafColorFor(species, shadeIdx, { fogged });
+
+      // Trunk silhouette varies by species so the oak's tall trunk reads
+      // distinctly from the pine's stubby base.
+      let trunkOpts;
+      if (species === 'oak') {
+        trunkOpts = { diameterTop: 0.14 * s, diameterBottom: 0.18 * s, height: 0.55 * s, tessellation: 6 };
+      } else if (species === 'spruce') {
+        trunkOpts = { diameterTop: 0.12 * s, diameterBottom: 0.15 * s, height: 0.25 * s, tessellation: 6 };
+      } else {
+        trunkOpts = { diameterTop: 0.16 * s, diameterBottom: 0.20 * s, height: 0.30 * s, tessellation: 6 };
+      }
       const trunk = BABYLON.MeshBuilder.CreateCylinder(
-        `${namePrefix}_t${i}_trunk`,
-        { diameterTop: 0.16 * s, diameterBottom: 0.20 * s, height: 0.30 * s, tessellation: 6 },
-        scene,
+        `${namePrefix}_t${i}_trunk`, trunkOpts, scene,
       );
-      trunk.position.set(tx, 0.15 * s, tz);
+      // Place trunk so its base sits on the ground (Y = 0).
+      trunk.position.set(tx, trunkOpts.height / 2, tz);
       trunk.rotation.y = yaw;
       trunks.push(trunk);
-      const cones = [
-        { y: 0.45 * s, dBot: 0.78 * s, dTop: 0.35 * s, h: 0.45 * s },
-        { y: 0.72 * s, dBot: 0.58 * s, dTop: 0.20 * s, h: 0.40 * s },
-        { y: 0.96 * s, dBot: 0.38 * s, dTop: 0.00,     h: 0.35 * s },
-      ];
-      for (let c = 0; c < cones.length; c++) {
-        const cfg = cones[c];
-        const cone = BABYLON.MeshBuilder.CreateCylinder(
-          `${namePrefix}_t${i}_leaf${c}`,
-          { diameterTop: cfg.dTop, diameterBottom: cfg.dBot, height: cfg.h, tessellation: 6 },
+
+      // Leaf geometry varies by species.
+      const leafMeshes = [];
+      if (species === 'oak') {
+        // Sphere-shaped foliage crown atop the long trunk.
+        const crown = BABYLON.MeshBuilder.CreateSphere(
+          `${namePrefix}_t${i}_oak`,
+          { diameter: 0.85 * s, segments: 5 },
           scene,
         );
-        cone.position.set(tx, cfg.y, tz);
-        cone.rotation.y = yaw;
-        leaves.push(cone);
+        const trunkHeight = trunkOpts.height;
+        crown.position.set(tx, trunkHeight + 0.35 * s, tz);
+        crown.rotation.y = yaw;
+        leafMeshes.push(crown);
+      } else if (species === 'spruce') {
+        // Slim 4-tier cone stack — narrower and taller than pine.
+        const cones = [
+          { y: 0.38 * s, dBot: 0.52 * s, dTop: 0.32 * s, h: 0.42 * s },
+          { y: 0.66 * s, dBot: 0.42 * s, dTop: 0.22 * s, h: 0.40 * s },
+          { y: 0.93 * s, dBot: 0.30 * s, dTop: 0.14 * s, h: 0.38 * s },
+          { y: 1.18 * s, dBot: 0.18 * s, dTop: 0.00,     h: 0.32 * s },
+        ];
+        for (let c = 0; c < cones.length; c++) {
+          const cfg = cones[c];
+          const cone = BABYLON.MeshBuilder.CreateCylinder(
+            `${namePrefix}_t${i}_spr${c}`,
+            { diameterTop: cfg.dTop, diameterBottom: cfg.dBot, height: cfg.h, tessellation: 6 },
+            scene,
+          );
+          cone.position.set(tx, cfg.y, tz);
+          cone.rotation.y = yaw;
+          leafMeshes.push(cone);
+        }
+      } else {
+        // Pine — original 3-tier cone stack.
+        const cones = [
+          { y: 0.45 * s, dBot: 0.78 * s, dTop: 0.35 * s, h: 0.45 * s },
+          { y: 0.72 * s, dBot: 0.58 * s, dTop: 0.20 * s, h: 0.40 * s },
+          { y: 0.96 * s, dBot: 0.38 * s, dTop: 0.00,     h: 0.35 * s },
+        ];
+        for (let c = 0; c < cones.length; c++) {
+          const cfg = cones[c];
+          const cone = BABYLON.MeshBuilder.CreateCylinder(
+            `${namePrefix}_t${i}_leaf${c}`,
+            { diameterTop: cfg.dTop, diameterBottom: cfg.dBot, height: cfg.h, tessellation: 6 },
+            scene,
+          );
+          cone.position.set(tx, cfg.y, tz);
+          cone.rotation.y = yaw;
+          leafMeshes.push(cone);
+        }
       }
+
+      let bucket = leavesByColor.get(leafCss);
+      if (!bucket) { bucket = []; leavesByColor.set(leafCss, bucket); }
+      for (const m of leafMeshes) bucket.push(m);
     }
     // MergeMeshes(meshes, disposeSource=true) returns one combined mesh.
     const mergedTrunk = BABYLON.Mesh.MergeMeshes(trunks, true, true, undefined, false, false);
-    const mergedLeaf  = BABYLON.Mesh.MergeMeshes(leaves, true, true, undefined, false, false);
     const out = [];
     if (mergedTrunk) {
       mergedTrunk.name       = `${namePrefix}_trunks`;
@@ -2698,12 +2772,16 @@ export class Renderer3D {
       mergedTrunk.isPickable = false;
       out.push(mergedTrunk);
     }
-    if (mergedLeaf) {
-      mergedLeaf.name       = `${namePrefix}_leaves`;
-      mergedLeaf.material   = leafMat;
-      mergedLeaf.parent     = parent;
-      mergedLeaf.isPickable = false;
-      out.push(mergedLeaf);
+    let bucketIdx = 0;
+    for (const [color, bucket] of leavesByColor) {
+      const merged = BABYLON.Mesh.MergeMeshes(bucket, true, true, undefined, false, false);
+      if (!merged) { bucketIdx++; continue; }
+      merged.name       = `${namePrefix}_leaves_${bucketIdx}`;
+      merged.material   = this._materialFor(color);
+      merged.parent     = parent;
+      merged.isPickable = false;
+      out.push(merged);
+      bucketIdx++;
     }
     return out;
   }
@@ -4941,7 +5019,11 @@ export function borderForestTreesForHex(col, row) {
     const slotIdx = (i + rotation) % TILE_SLOTS.length;
     const slot = TILE_SLOTS[slotIdx];
     const scale = FOREST_SCALE_MIN + _forestHash(col, row, i * 3 + 3) * scaleSpan;
-    trees.push({ id: `border_tree_${i}`, x: slot.x, z: slot.z, scale, slotIdx });
+    trees.push({
+      id: `border_tree_${i}`, x: slot.x, z: slot.z, scale, slotIdx,
+      species:  treeSpeciesForHex(col, row, i),
+      shadeIdx: treeLeafShadeIndex(col, row, i),
+    });
   }
   return trees;
 }
@@ -5517,11 +5599,12 @@ function _forestHash(col, row, salt) {
 }
 
 /** Deterministic forest layout for a hex. Returns an array of
- *  `{ id, x, z, scale, slotIdx }` entries — N entries where
+ *  `{ id, x, z, scale, slotIdx, species, shadeIdx }` entries — N entries where
  *  N ∈ [FOREST_TREES_MIN, FOREST_TREES_MAX]. Positions come from the unified
  *  tile-slot system (outer ring only — the centre is reserved for standees).
- *  Per-tree scale stays varied via a hex-stable hash so the cluster reads as
- *  organic rather than mechanically tiled. Pure: same (col, row) → same trees. */
+ *  Per-tree scale, species, and leaf-shade index are all hex-stable so the
+ *  same forest hex always paints the same cluster across sessions. Pure:
+ *  same (col, row) → same trees. */
 export function forestTreesForHex(col, row) {
   const span = FOREST_TREES_MAX - FOREST_TREES_MIN + 1;
   const n    = FOREST_TREES_MIN + Math.floor(_forestHash(col, row, 0) * span);
@@ -5543,9 +5626,113 @@ export function forestTreesForHex(col, row) {
     const slotIdx = slotByOccupantId.get(occ.id) ?? CENTRE_SLOT_INDEX;
     const slot = TILE_SLOTS[slotIdx];
     const scale = FOREST_SCALE_MIN + _forestHash(col, row, occ._idx * 3 + 3) * scaleSpan;
-    trees.push({ id: occ.id, x: slot.x, z: slot.z, scale, slotIdx });
+    trees.push({
+      id: occ.id, x: slot.x, z: slot.z, scale, slotIdx,
+      species:  treeSpeciesForHex(col, row, occ._idx),
+      shadeIdx: treeLeafShadeIndex(col, row, occ._idx),
+    });
   }
   return trees;
+}
+
+// ─── Tree species + leaf-shade variety (pure helpers, exported) ─────────────
+//
+// Three species — pine (current 3-cone silhouette), oak (trunk + sphere
+// foliage), spruce (slim, taller 4-tier cone). Per-tree species and a small
+// leaf-shade index are both hash-seeded by (col, row, treeIndex) so the same
+// forest hex always paints the same cluster.
+//
+// Leaf-shade index picks one of TREE_LEAF_SHADES_PER_SPECIES entries from the
+// species palette. Discretising into a handful of buckets (rather than full
+// continuous HSL jitter) keeps the per-tile leaf mesh count bounded: the
+// renderer groups leaves by colour and merges each group into one mesh, so
+// {3 species × 3 shades} caps leaf draw calls per tile at 9 worst-case —
+// in practice ≤ 5 since a hex carries at most 5 trees.
+
+/** Tree species, in stable order. Hash-seeded selection lands one of these
+ *  per tree via `treeSpeciesForHex`. */
+export const TREE_SPECIES = Object.freeze(['pine', 'oak', 'spruce']);
+
+/** Number of leaf-colour shades per species. */
+export const TREE_LEAF_SHADES_PER_SPECIES = 3;
+
+/** Leaf-colour palette per species (bright / lit / "in-map forest" variant). */
+export const TREE_LEAF_PALETTE = Object.freeze({
+  pine:   Object.freeze(['#234c1f', '#2c5a22', '#1c4319']),
+  oak:    Object.freeze(['#3d6b28', '#4a7a30', '#355f24']),
+  spruce: Object.freeze(['#1b3b2a', '#234a32', '#163528']),
+});
+
+/** Leaf-colour palette per species, pre-multiplied by the border-forest fog
+ *  tint. Matches the historical `#0e1f0c` (the old uniform fogged leaf colour)
+ *  in average tone but spreads across three shades per species. */
+export const TREE_LEAF_PALETTE_FOG = Object.freeze({
+  pine:   Object.freeze(['#0e1f0c', '#11240e', '#0c1a0a']),
+  oak:    Object.freeze(['#162a10', '#1a3214', '#13240d']),
+  spruce: Object.freeze(['#0c1a12', '#0f2017', '#091410']),
+});
+
+/** Deterministic species pick for one tree on (col, row). */
+export function treeSpeciesForHex(col, row, treeIndex) {
+  const h = _forestHash(col, row, treeIndex * 7 + 101);
+  return TREE_SPECIES[Math.floor(h * TREE_SPECIES.length)];
+}
+
+/** Deterministic shade index ∈ [0, TREE_LEAF_SHADES_PER_SPECIES). */
+export function treeLeafShadeIndex(col, row, treeIndex) {
+  return Math.floor(
+    _forestHash(col, row, treeIndex * 11 + 137) * TREE_LEAF_SHADES_PER_SPECIES,
+  );
+}
+
+/** Look up the actual leaf colour string for one tree, given its species and
+ *  shade index. `fogged: true` returns the border-forest variant. */
+export function treeLeafColorFor(species, shadeIdx, { fogged = false } = {}) {
+  const palette = fogged ? TREE_LEAF_PALETTE_FOG : TREE_LEAF_PALETTE;
+  const shades  = palette[species] || palette.pine;
+  return shades[shadeIdx % shades.length];
+}
+
+// ─── Building dimension variation (pure helper, exported) ───────────────────
+//
+// Buildings used to all share a fixed (0.55 × 0.7 × 0.55) box + matching roof.
+// To add silhouette variety we apply a small hash-seeded ±BUILDING_DIM_JITTER
+// jitter on each axis independently. Bounded so silhouettes still read as
+// buildings (no 3× tall stalks or razor-thin slivers). Roof scales with the
+// box footprint so the eave overhang stays proportional; roof height is held
+// constant so the lid still reads as a lid.
+
+/** ±jitter applied to each box dimension. ±15% keeps the silhouettes varied
+ *  but recognisable as buildings — well under the building-vs-tree-vs-rock
+ *  silhouette ambiguity threshold. */
+export const BUILDING_DIM_JITTER = 0.15;
+
+/** Base box dimensions before jitter (matches the historical fixed values). */
+export const BUILDING_BASE_DIM = Object.freeze({ width: 0.55, height: 0.70, depth: 0.55 });
+
+/** Base roof dimensions before footprint scaling. Roof width / depth scale
+ *  with the box; roof height is constant so the lid silhouette stays crisp. */
+export const BUILDING_ROOF_DIM = Object.freeze({ width: 0.62, height: 0.15, depth: 0.62 });
+
+/** Deterministic dimensions for the building on (col, row). Returns
+ *  `{ box: {width, height, depth}, roof: {width, height, depth} }`. */
+export function buildingDimensionsForHex(col, row) {
+  const jw = (_forestHash(col, row, 211) - 0.5) * 2 * BUILDING_DIM_JITTER;
+  const jd = (_forestHash(col, row, 223) - 0.5) * 2 * BUILDING_DIM_JITTER;
+  const jh = (_forestHash(col, row, 227) - 0.5) * 2 * BUILDING_DIM_JITTER;
+  const box = {
+    width:  BUILDING_BASE_DIM.width  * (1 + jw),
+    height: BUILDING_BASE_DIM.height * (1 + jh),
+    depth:  BUILDING_BASE_DIM.depth  * (1 + jd),
+  };
+  // Roof overhangs the box by the historical ratio (0.62 / 0.55 ≈ 1.127).
+  const overhang = BUILDING_ROOF_DIM.width / BUILDING_BASE_DIM.width;
+  const roof = {
+    width:  box.width * overhang,
+    height: BUILDING_ROOF_DIM.height,
+    depth:  box.depth * overhang,
+  };
+  return { box, roof };
 }
 
 // ─── Phase 6 constants (exported for tests) ─────────────────────────────────
