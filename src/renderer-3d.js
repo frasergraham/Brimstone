@@ -5528,6 +5528,20 @@ export class Renderer3D {
     if (newId && this._entityStandees.has(newId)) {
       const standee = this._entityStandees.get(newId);
       const BABYLON = this._babylon;
+      // Turn the selected unit's animated model to face the camera so the
+      // player sees the front of the rig rather than its side or back.
+      // Only models with a paladinClone — generic cone+sphere pawns are
+      // rotationally symmetric. The standee→camera direction is purely a
+      // function of camera.alpha/beta (target shifts during focus don't
+      // change the offset vector's direction), so setting rotation.y from
+      // the current camera vector survives the focus animation.
+      if (standee.paladinClone?.mesh && this._camera) {
+        const dx = this._camera.position.x - this._camera.target.x;
+        const dz = this._camera.position.z - this._camera.target.z;
+        if (dx !== 0 || dz !== 0) {
+          standee.paladinClone.mesh.rotation.y = Math.atan2(dx, dz);
+        }
+      }
       if (BABYLON && this._camera) {
         const newTarget = new BABYLON.Vector3(
           standee.plane.position.x,
