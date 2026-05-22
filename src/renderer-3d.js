@@ -1013,7 +1013,35 @@ export class Renderer3D {
     // river networks on top of the grass tiles. Built once at map-load and
     // never rebuilt (the map topology is immutable once a game has started).
     this._buildRoadRiverNetworks();
+    // Frame the playable area with darker hex prisms on every off-map
+    // neighbour position. Static like the road/river networks.
+    this._buildEdgeFrame();
     this._mapBuilt = true;
+  }
+
+  /** Render a darker hex prism at every off-map neighbour position of a
+   *  perimeter tile. The frame is purely cosmetic — no fog, no picking, no
+   *  metadata-driven gameplay (`isPickable = false`). */
+  _buildEdgeFrame() {
+    if (!this.state?.tiles || !this._scene || !this._babylon || !this._mapRoot) return;
+    const BABYLON = this._babylon;
+    const mat = this._materialFor(EDGE_FRAME_COLOR);
+    for (const pos of edgeFramePositions(this.state.tiles)) {
+      const { x, z } = hexToWorld(pos.col, pos.row);
+      const prism = BABYLON.MeshBuilder.CreateCylinder(
+        `edge_${pos.col}_${pos.row}`,
+        { tessellation: 6, height: EDGE_FRAME_HEIGHT, diameter: 2 * HEX_RADIUS_WORLD },
+        this._scene,
+      );
+      prism.parent     = this._mapRoot;
+      prism.position.x = x;
+      prism.position.z = z;
+      prism.position.y = EDGE_FRAME_Y;
+      prism.rotation.y = Math.PI / 6;
+      prism.material   = mat;
+      prism.isPickable = false;
+      prism.metadata   = { kind: 'edge-frame', col: pos.col, row: pos.row };
+    }
   }
 
   _buildTileMesh(tile, parent) {
@@ -3049,10 +3077,15 @@ export class Renderer3D {
 export const TERRAIN_DISC_RADIUS_MUL = 1.0;
 
 /** Y offset for the textured disc above the cylinder top. Cylinder top sits
- *  at +0.075 (height = 0.15, centred at y=0); a 0.001 lift is enough to win
- *  the depth fight against the cylinder's coloured top face without reading
- *  as a visible gap. */
-export const TERRAIN_DISC_Y_OFFSET = 0.076;
+ *  at +0.075 (height = 0.15, centred at y=0). The original 0.076 (1 mm gap)
+ *  proved too tight — at typical camera distances (radius 20–80) the depth
+ *  buffer precision falls into ~1e-3 territory and the disc lost the depth
+ *  fight against the prism top, making it invisible in-game even though the
+ *  16 unit tests (which only exercise pure helpers, never the actual mesh)
+ *  passed. A 0.009 lift comfortably wins the fight at any view distance,
+ *  while still staying below the river bezier tube centre (0.085) so a
+ *  road/river tile's grass-underlay disc doesn't pop in front of the tube. */
+export const TERRAIN_DISC_Y_OFFSET = 0.084;
 
 /** Variant counts for each terrain type that has multiple sprite variants.
  *  Mirrors the layout in `Renderer._buildSpriteRects()` — keep in step if the
@@ -3096,6 +3129,91 @@ export function terrainSpriteIdFor(tile, col, row) {
   }
   return baseType;
 }
+
+// ─── Map edge frame (pure helpers exported for tests) ─────────────────────
+//
+// To avoid the map ending in an abrupt cliff of hexes, every position that
+// would be a neighbour of a perimeter tile but is itself off-map gets a
+// darker, slightly-lowered "edge frame" prism. This gives the map a
+// board-game-token border without inventing fake gameplay tiles.
+//
+// Detection: a tile is on the perimeter iff one or more of its 6 neighbour
+// positions is not in `state.tiles`. The frame ring is the de-duplicated
+// union of every such missing-neighbour position.
+//
+// Why not half-hexes: the brief offers both. Full-hex prisms (option a from
+// the brief) are simpler — no custom geometry, just a reused cylinder with a
+// darker material — and at the chosen Y/colour they read identically to a
+// half-hex band when seen from the isometric camera. We'd revisit half-hex
+// geometry only if perf became a concern, which won't happen at the current
+// perimeter cardinality (~50 prisms on a Campaign-size map).
+
+/** Neighbour direction deltas for odd-r offset coords. Duplicated from
+ *  src/hex.js so `missingNeighborDirs` can return the index 0–5, which
+ *  `getNeighbors` discards when it filters negative-coord neighbours. */
+const EDGE_NEIGHBOR_DIRS_EVEN = [[-1,0],[-1,-1],[0,-1],[1,0],[0,1],[-1,1]];
+const EDGE_NEIGHBOR_DIRS_ODD  = [[-1,0],[0,-1],[1,-1],[1,0],[1,1],[0,1]];
+
+/** Indices 0–5 of the directions where the given tile lacks an in-map
+ *  neighbour. Used to figure out where edge-frame prisms should sit. */
+export function missingNeighborDirs(tile, tilesMap) {
+  if (!tile || !tilesMap) return [];
+  const dirs = tile.row % 2 === 0 ? EDGE_NEIGHBOR_DIRS_EVEN : EDGE_NEIGHBOR_DIRS_ODD;
+  const out = [];
+  for (let i = 0; i < 6; i++) {
+    const [dc, dr] = dirs[i];
+    if (!tilesMap.has(hexKey(tile.col + dc, tile.row + dr))) out.push(i);
+  }
+  return out;
+}
+
+/** Tiles on the perimeter of the playable map — entries return the missing
+ *  neighbour direction indices (0–5) alongside the tile coords for callers
+ *  that want to render directionally (e.g. half-hex meshes). */
+export function perimeterTiles(tilesMap) {
+  const result = [];
+  if (!tilesMap) return result;
+  for (const tile of tilesMap.values()) {
+    const missing = missingNeighborDirs(tile, tilesMap);
+    if (missing.length > 0) {
+      result.push({ col: tile.col, row: tile.row, missing });
+    }
+  }
+  return result;
+}
+
+/** De-duplicated set of off-map positions that should host an edge-frame
+ *  prism — every "would-be neighbour" of any perimeter tile. */
+export function edgeFramePositions(tilesMap) {
+  const seen = new Set();
+  const result = [];
+  if (!tilesMap) return result;
+  for (const tile of tilesMap.values()) {
+    const dirs = tile.row % 2 === 0 ? EDGE_NEIGHBOR_DIRS_EVEN : EDGE_NEIGHBOR_DIRS_ODD;
+    for (let i = 0; i < 6; i++) {
+      const [dc, dr] = dirs[i];
+      const ncol = tile.col + dc, nrow = tile.row + dr;
+      const k = hexKey(ncol, nrow);
+      if (tilesMap.has(k) || seen.has(k)) continue;
+      seen.add(k);
+      result.push({ col: ncol, row: nrow });
+    }
+  }
+  return result;
+}
+
+/** Stone-grey colour for the edge frame ring. Sits a couple of stops darker
+ *  than DIRT and reads as "outside the playable area" rather than "another
+ *  terrain type". Kept in one place so the renderer + tests agree on it. */
+export const EDGE_FRAME_COLOR = '#2a2820';
+
+/** Y position for an edge-frame prism. Sits below the playable cylinders so
+ *  the frame visually subordinates to real tiles. Cylinder top of a frame
+ *  prism with height 0.10 centred at y=-0.05 lands at y=0.0 — flush with
+ *  the *bottom* of the playable cylinders, leaving a 0.075 visible step
+ *  between the frame and the playable terrain. */
+export const EDGE_FRAME_Y      = -0.05;
+export const EDGE_FRAME_HEIGHT = 0.10;
 
 // ─── Phase 3 pure helpers (exported for tests) ─────────────────────────────
 
