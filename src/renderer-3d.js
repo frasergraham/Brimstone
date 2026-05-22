@@ -916,6 +916,11 @@ export class Renderer3D {
       // cached in `_portraitMaterials`. Upgrade them in place so already-built
       // entities show their portrait once the tilemap finally arrives.
       this._upgradePortraitMaterials();
+      // Same race for floating unit-icon badges: any that were painted before
+      // the tilemap loaded show only the neutral fallback disc. Re-run the
+      // billboard diff now so the badge textures are repainted with the real
+      // portrait sprite before the next draw cycle.
+      this._syncEntityIconBillboards();
     }
     if (this.onImagesLoaded) this.onImagesLoaded();
   }
@@ -4043,15 +4048,24 @@ export class Renderer3D {
       if (!entry) entry = this._createUnitIconBadge(standee, e);
       if (!entry) continue;
       const assetId = this._assetIdFor(e);
+      // Recompute portrait availability each tick so badges painted before
+      // the tilemap finished loading get a real portrait the moment the
+      // asset arrives (otherwise the unchanged-tuple early-exit would skip
+      // them — that's the gray-circle bug fixed here).
+      const portraitSource = resolveUnitIconPortrait(
+        this._tilemapImg, this._spriteRects, assetId,
+      );
       if (entry.lastHp === e.hp
           && entry.lastMax === e.maxHp
-          && entry.lastAssetId === assetId) {
+          && entry.lastAssetId === assetId
+          && entry.lastHadPortrait === portraitSource.hasPortrait) {
         continue;
       }
-      this._repaintUnitIconBadge(entry, e, assetId);
-      entry.lastHp       = e.hp;
-      entry.lastMax      = e.maxHp;
-      entry.lastAssetId  = assetId;
+      this._repaintUnitIconBadge(entry, e, portraitSource);
+      entry.lastHp           = e.hp;
+      entry.lastMax          = e.maxHp;
+      entry.lastAssetId      = assetId;
+      entry.lastHadPortrait  = portraitSource.hasPortrait;
     }
     // Dispose badges for entities that no longer exist or just died.
     for (const id of [...this._unitIconBadges.keys()]) {
@@ -4074,14 +4088,10 @@ export class Renderer3D {
     const mat = new BABYLON.StandardMaterial(`unitIconMat_${entity.id}`, scene);
     mat.diffuseTexture = tex;
     mat.opacityTexture = tex;
-    mat.useAlphaFromDiffuseTexture = true;
-    mat.specularColor  = new BABYLON.Color3(0, 0, 0);
-    // Pure UI sticker — read flat (no light shading) at full brightness, and
-    // capped well under 1 to keep clear of GlowLayer bloom-clip to white.
-    mat.emissiveColor  = new BABYLON.Color3(0.55, 0.55, 0.55);
-    mat.disableLighting = true;
-    mat.backFaceCulling = false;
-    mat.fogEnabled      = false;
+    // Flat UI sticker — see `applyFlatUnitIconMaterial`. Crucially keeps the
+    // badge at identical brightness across every phase and outside the
+    // GlowLayer's bloom, which is reserved for selection halo + node discs.
+    applyFlatUnitIconMaterial(BABYLON, mat);
 
     const plane = BABYLON.MeshBuilder.CreatePlane(
       `unitIcon_${entity.id}`,
@@ -4092,28 +4102,33 @@ export class Renderer3D {
     plane.isPickable    = false;
     plane.material      = mat;
     plane.parent        = standee.base;
-    plane.renderingGroupId = 1; // above terrain / road / fog overlay
+    // Render above scene geometry (terrain/standee body/highlights in group
+    // 0 + 1). UI badge must never be occluded by another mesh.
+    plane.renderingGroupId = 2;
     plane.position.set(0, iconBillboardY(standee.leader), 0);
 
     const entry = {
       plane, mat, tex,
       lastHp: -1, lastMax: -1, lastAssetId: '__pending__',
+      // Track whether the last paint actually drew the portrait sprite. The
+      // race we're guarding against: badge created before `loadImages()`
+      // resolves → first paint goes out with `hasPortrait=false` (gray
+      // fallback disc). When the tilemap arrives later, the (hp, max,
+      // assetId) tuple is unchanged so the diff would otherwise skip the
+      // repaint and the badge would stay gray forever.
+      lastHadPortrait: false,
       leader: standee.leader,
     };
     this._unitIconBadges.set(entity.id, entry);
     return entry;
   }
 
-  _repaintUnitIconBadge(entry, entity, assetId) {
+  _repaintUnitIconBadge(entry, entity, portraitSource) {
     const ctx = entry.tex.getContext();
-    const portraitImg  = this._tilemapImg ?? null;
-    const portraitRect = (assetId && this._spriteRects)
-      ? (this._spriteRects.get(assetId) ?? null)
-      : null;
     paintUnitIconBadge(ctx, {
       size: UNIT_ICON_TEX_SIZE,
-      portraitImg: portraitImg && portraitRect ? portraitImg : null,
-      portraitRect,
+      portraitImg:  portraitSource.hasPortrait ? portraitSource.img  : null,
+      portraitRect: portraitSource.hasPortrait ? portraitSource.rect : null,
       hp: entity.hp,
       maxHp: entity.maxHp,
     });
@@ -6961,6 +6976,46 @@ export function iconBillboardY(leader = false) {
     + (STANDEE_CONE_HEIGHT   * hMul)
     + (STANDEE_SPHERE_DIAMETER * wMul)
     + UNIT_ICON_Y_GAP;
+}
+
+/**
+ * Resolve the portrait image + source rect for a unit-icon badge from the
+ * shared tilemap. Returns `{ img, rect, hasPortrait }` where `hasPortrait`
+ * is true only when both pieces are available — the painter falls back
+ * cleanly to a neutral disc when it's false.
+ *
+ * Pure: callers pass in `_tilemapImg` and `_spriteRects` explicitly so the
+ * helper has no Babylon / DOM dependency, which lets the diff in
+ * `_syncEntityIconBillboards` recheck portrait availability each tick
+ * without retouching `tex.update()` when nothing changed.
+ */
+export function resolveUnitIconPortrait(tilemapImg, spriteRects, assetId) {
+  if (!tilemapImg || !spriteRects || !assetId) {
+    return { img: null, rect: null, hasPortrait: false };
+  }
+  const rect = spriteRects.get(assetId) ?? null;
+  if (!rect) return { img: null, rect: null, hasPortrait: false };
+  return { img: tilemapImg, rect, hasPortrait: true };
+}
+
+/**
+ * Configure a Babylon material as a flat unit-icon UI sticker: lighting
+ * disabled, fog disabled, alpha sourced from the diffuse texture, and
+ * emissive cranked to full white so the badge reads at identical
+ * brightness across every phase (dawn / day / dusk / night).
+ *
+ * Factored out so tests can verify the contract without spinning up
+ * Babylon, and so `_createUnitIconBadge` can stay focused on geometry.
+ */
+export function applyFlatUnitIconMaterial(BABYLON, mat) {
+  mat.useAlphaFromDiffuseTexture = true;
+  mat.specularColor   = new BABYLON.Color3(0, 0, 0);
+  mat.diffuseColor    = new BABYLON.Color3(1, 1, 1);
+  mat.emissiveColor   = new BABYLON.Color3(1, 1, 1);
+  mat.disableLighting = true;
+  mat.backFaceCulling = false;
+  mat.fogEnabled      = false;
+  mat.alpha           = 1;
 }
 
 /**

@@ -42,6 +42,8 @@ import {
   hpRingFraction,
   iconBillboardY,
   paintUnitIconBadge,
+  resolveUnitIconPortrait,
+  applyFlatUnitIconMaterial,
   floatingTextTransform,
   projectileColor01,
 } from '../src/renderer-3d.js';
@@ -468,5 +470,117 @@ describe('Renderer3D — paintUnitIconBadge', () => {
   test('plane and texture sizing constants are positive', () => {
     assert.ok(UNIT_ICON_PLANE_SIZE > 0);
     assert.ok(UNIT_ICON_TEX_SIZE   > 0);
+  });
+});
+
+// ─── resolveUnitIconPortrait (portrait-source lookup) ───────────────────────
+//
+// Pinned because this is the helper that fixed the gray-circle bug: badges
+// painted before `loadImages()` resolved would otherwise keep returning
+// `{hasPortrait:false}` for every entity. The diff in
+// `_syncEntityIconBillboards` reads `hasPortrait` so it knows to repaint
+// once the tilemap finally arrives.
+
+describe('Renderer3D — resolveUnitIconPortrait', () => {
+  const RECT = { x: 0, y: 0, size: 256 };
+  const img  = { naturalWidth: 1024 };
+
+  test('returns hasPortrait=false when the tilemap is missing', () => {
+    const rects = new Map([['paladin', RECT]]);
+    const out = resolveUnitIconPortrait(null, rects, 'paladin');
+    assert.equal(out.hasPortrait, false);
+    assert.equal(out.img,  null);
+    assert.equal(out.rect, null);
+  });
+
+  test('returns hasPortrait=false when the sprite rect table is missing', () => {
+    const out = resolveUnitIconPortrait(img, null, 'paladin');
+    assert.equal(out.hasPortrait, false);
+  });
+
+  test('returns hasPortrait=false when assetId is null/empty', () => {
+    const rects = new Map([['paladin', RECT]]);
+    assert.equal(resolveUnitIconPortrait(img, rects, null).hasPortrait,      false);
+    assert.equal(resolveUnitIconPortrait(img, rects, undefined).hasPortrait, false);
+    assert.equal(resolveUnitIconPortrait(img, rects, '').hasPortrait,        false);
+  });
+
+  test('returns hasPortrait=false when assetId is unknown to the atlas', () => {
+    const rects = new Map([['paladin', RECT]]);
+    const out = resolveUnitIconPortrait(img, rects, 'unknown_unit');
+    assert.equal(out.hasPortrait, false);
+    assert.equal(out.rect, null);
+  });
+
+  test('returns hasPortrait=true with img+rect when all inputs are present', () => {
+    const rects = new Map([['paladin', RECT]]);
+    const out = resolveUnitIconPortrait(img, rects, 'paladin');
+    assert.equal(out.hasPortrait, true);
+    assert.strictEqual(out.img,  img);
+    assert.strictEqual(out.rect, RECT);
+  });
+});
+
+// ─── applyFlatUnitIconMaterial (flat-UI material contract) ──────────────────
+//
+// The badge is a UI element, not a scene object — its appearance must NOT
+// shift with phase / sun direction / fog. This test locks the property set
+// that achieves that: lighting disabled, fog disabled, alpha from diffuse,
+// full-white emissive. If any of these regresses, the badge will visibly
+// dim at dusk/night or fade in distant fog.
+
+describe('Renderer3D — applyFlatUnitIconMaterial', () => {
+  function makeStubBabylon() {
+    return { Color3: class { constructor(r, g, b) { this.r = r; this.g = g; this.b = b; } } };
+  }
+  function makeMat() { return {}; }
+
+  test('disables lighting so the badge stays flat across all phases', () => {
+    const mat = makeMat();
+    applyFlatUnitIconMaterial(makeStubBabylon(), mat);
+    assert.equal(mat.disableLighting, true);
+  });
+
+  test('disables fog so distant units stay readable', () => {
+    const mat = makeMat();
+    applyFlatUnitIconMaterial(makeStubBabylon(), mat);
+    assert.equal(mat.fogEnabled, false);
+  });
+
+  test('emissive is full white (1,1,1) so dawn/day/dusk/night look identical', () => {
+    const mat = makeMat();
+    applyFlatUnitIconMaterial(makeStubBabylon(), mat);
+    assert.equal(mat.emissiveColor.r, 1);
+    assert.equal(mat.emissiveColor.g, 1);
+    assert.equal(mat.emissiveColor.b, 1);
+  });
+
+  test('specular is zeroed so the sticker doesn\'t catch highlights', () => {
+    const mat = makeMat();
+    applyFlatUnitIconMaterial(makeStubBabylon(), mat);
+    assert.equal(mat.specularColor.r, 0);
+    assert.equal(mat.specularColor.g, 0);
+    assert.equal(mat.specularColor.b, 0);
+  });
+
+  test('diffuse colour is white so the texture is not tinted', () => {
+    const mat = makeMat();
+    applyFlatUnitIconMaterial(makeStubBabylon(), mat);
+    assert.equal(mat.diffuseColor.r, 1);
+    assert.equal(mat.diffuseColor.g, 1);
+    assert.equal(mat.diffuseColor.b, 1);
+  });
+
+  test('alpha sourced from diffuse texture (portrait alpha mask)', () => {
+    const mat = makeMat();
+    applyFlatUnitIconMaterial(makeStubBabylon(), mat);
+    assert.equal(mat.useAlphaFromDiffuseTexture, true);
+  });
+
+  test('alpha = 1 (fully opaque) and back-face culling disabled (billboard)', () => {
+    const mat = makeMat();
+    applyFlatUnitIconMaterial(makeStubBabylon(), mat);
+    assert.equal(mat.alpha, 1);
+    assert.equal(mat.backFaceCulling, false);
   });
 });
