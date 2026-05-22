@@ -719,6 +719,12 @@ export class Renderer3D {
     // gameplay-coupled passes (fog veil, slot reassignment) never pick these
     // up — they live in a parallel namespace that just renders.
     this._borderPropsByKey = new Map(); // hexKey → Array<Mesh>
+    // Cross-tile merged tree meshes for the border-forest band. One trunk
+    // mesh + one mesh per leaf-colour bucket (≤10 total) instead of 2–4 per
+    // tile (≈240–900 meshes at max zoom-out). Lives in its own registry so
+    // `_syncBorderForestVisibility` can toggle these alongside the per-tile
+    // hex cylinders. Built by `_buildBorderForestTreesBatched`.
+    this._borderForestBatchMeshes = []; // Mesh[]
     // Item 2 — bezier road/river networks, ONE merged mesh per network.
     this._riverNetworkMesh = null;       // merged tube mesh; null when not built
     this._roadNetworkMesh  = null;
@@ -1439,6 +1445,7 @@ export class Renderer3D {
     const hide = this._borderForestHidden;
     for (const [, hex] of this._borderForestHexesByKey) hex.setEnabled(!hide);
     for (const [, props] of this._borderPropsByKey) for (const m of props) m.setEnabled?.(!hide);
+    for (const m of this._borderForestBatchMeshes) m.setEnabled?.(!hide);
   }
 
   /** Toggle the visual-only border-forest band (the wilderness ring around the
@@ -1945,6 +1952,11 @@ export class Renderer3D {
       length: extensionLength,
       half:   halfRiverWidth,
     }));
+    // Collect tree clusters for every border tile and merge them in one pass
+    // across the whole band — see `_buildBorderForestTreesBatched`. The result
+    // is ≤10 merged meshes regardless of `bandDepth`, instead of 2–4 per tile
+    // (≈240–900 meshes at max zoom-out).
+    const treeJobs = [];
     for (const pos of borderTilePositions(this.state.tiles, bandDepth)) {
       const { x, z } = hexToWorld(pos.col, pos.row);
 
@@ -1965,7 +1977,7 @@ export class Renderer3D {
       hex.metadata   = { kind: 'map-border-forest', col: pos.col, row: pos.row };
       this._setShadowReceiver(hex);
       this._borderForestHexesByKey.set(hexKey(pos.col, pos.row), hex);
-      const props = [hex];
+      this._borderPropsByKey.set(hexKey(pos.col, pos.row), [hex]);
 
       // Pine trees use the SAME layout as in-map FOREST tiles so the band
       // reads as a continuous extension of the map (operator: "the forest
@@ -1976,16 +1988,16 @@ export class Renderer3D {
       const trees = forestTreesForHex(pos.col, pos.row).filter(t =>
         !this._borderTreeBlockedByRiver(x + t.x, z + t.z),
       );
-      const meshes = this._buildPineTreeBatchedMeshes(
-        `border_forest_${pos.col}_${pos.row}`, parent, x, z, trees,
-      );
-      for (const m of meshes) {
-        this._addShadowCaster(m);
-        props.push(m);
+      if (trees.length > 0) {
+        treeJobs.push({
+          namePrefix: `border_forest_${pos.col}_${pos.row}`,
+          cx: x, cz: z, trees,
+        });
       }
-
-      this._borderPropsByKey.set(hexKey(pos.col, pos.row), props);
     }
+    const mergedTreeMeshes = this._buildBorderForestTreesBatched(parent, treeJobs);
+    for (const m of mergedTreeMeshes) this._addShadowCaster(m);
+    this._borderForestBatchMeshes = mergedTreeMeshes;
     // After the band is in place, extend any river that exits the playable
     // map outward in a straight line through the band so the water doesn't
     // visually dead-end at the playable edge. Built last so `bandDepth` is in
@@ -2673,15 +2685,35 @@ export class Renderer3D {
     const BABYLON = this._babylon;
     const scene   = this._scene;
     if (!BABYLON || !scene || !trees || trees.length === 0) return [];
-    // Trunks all share one colour. Fogged variants pre-multiplied by
-    // FOG_TILE_DARKEN so the border-forest band reads as "hazy distant
-    // wilderness" instead of brightly-lit trees competing with the map.
+    const { trunks, leavesByColor } = this._buildTreeClusterMeshes(
+      namePrefix, cx, cz, trees, { fogged },
+    );
     const trunkCss = fogged ? '#241710' : '#5a3a20';
     const trunkMat = this._materialFor(trunkCss);
+    return this._mergeTreeBuckets(trunks, leavesByColor, parent, namePrefix, trunkMat);
+  }
+
+  /** Build a tree cluster as raw (unmerged) trunk + leaf meshes at world
+   *  (cx, cz). Returns the geometry ready for the caller to merge at whatever
+   *  scope makes sense — per-tile for interior forest tiles (see
+   *  `_buildPineTreeBatchedMeshes`), or once across an entire band for the
+   *  map-border forest (see `_buildBorderForestTreesBatched`). Extracting the
+   *  inner geometry build out of `_buildPineTreeBatchedMeshes` is what lets
+   *  the border-forest collapse from ~240–900 draw calls to ~10 — the merge
+   *  level moves up, the per-tree geometry stays identical.
+   *
+   *  Trunks share one colour and are returned as a flat array. Leaves are
+   *  bucketed by their leaf-colour CSS key so each (species, shadeIdx) pair
+   *  can be merged into a single mesh — bounded at TREE_SPECIES.length ×
+   *  TREE_LEAF_SHADES_PER_SPECIES = 9 colour keys (per fog variant). */
+  _buildTreeClusterMeshes(namePrefix, cx, cz, trees, { fogged = false } = {}) {
+    const BABYLON = this._babylon;
+    const scene   = this._scene;
     const trunks = [];
-    // Leaves bucketed by colour key so the per-tile draw call count stays
-    // bounded: one merged leaf mesh per (species, shadeIdx) pair.
-    const leavesByColor = new Map(); // colorCss → mesh[]
+    const leavesByColor = new Map();
+    if (!BABYLON || !scene || !trees || trees.length === 0) {
+      return { trunks, leavesByColor };
+    }
     // Deterministic per-tree hash for the rotation + scale jitter — derived
     // from world (tx, tz) so the same hex always shows the same tree
     // arrangement across sessions. Output ∈ [0, 1).
@@ -2779,15 +2811,30 @@ export class Renderer3D {
       if (!bucket) { bucket = []; leavesByColor.set(leafCss, bucket); }
       for (const m of leafMeshes) bucket.push(m);
     }
-    // MergeMeshes(meshes, disposeSource=true) returns one combined mesh.
-    const mergedTrunk = BABYLON.Mesh.MergeMeshes(trunks, true, true, undefined, false, false);
+    return { trunks, leavesByColor };
+  }
+
+  /** Merge accumulated trunk + leaf meshes into one trunk mesh + one mesh per
+   *  leaf-colour bucket, parented under `parent`. Shared between the per-tile
+   *  interior forest merge and the band-wide border forest merge — both
+   *  collapse the same underlying geometry, the difference is what scope of
+   *  trees feeds the input arrays. Returns the merged meshes in emission order
+   *  ([trunk, ...leafBuckets]) so callers can register them with the shadow
+   *  generator in one pass. */
+  _mergeTreeBuckets(trunks, leavesByColor, parent, namePrefix, trunkMat) {
+    const BABYLON = this._babylon;
     const out = [];
-    if (mergedTrunk) {
-      mergedTrunk.name       = `${namePrefix}_trunks`;
-      mergedTrunk.material   = trunkMat;
-      mergedTrunk.parent     = parent;
-      mergedTrunk.isPickable = false;
-      out.push(mergedTrunk);
+    if (!BABYLON) return out;
+    // MergeMeshes(meshes, disposeSource=true) returns one combined mesh.
+    if (trunks.length > 0) {
+      const mergedTrunk = BABYLON.Mesh.MergeMeshes(trunks, true, true, undefined, false, false);
+      if (mergedTrunk) {
+        mergedTrunk.name       = `${namePrefix}_trunks`;
+        mergedTrunk.material   = trunkMat;
+        mergedTrunk.parent     = parent;
+        mergedTrunk.isPickable = false;
+        out.push(mergedTrunk);
+      }
     }
     let bucketIdx = 0;
     for (const [color, bucket] of leavesByColor) {
@@ -2801,6 +2848,44 @@ export class Renderer3D {
       bucketIdx++;
     }
     return out;
+  }
+
+  /** Cross-tile merge for the visual-only border-forest band. Instead of
+   *  merging per-tile (the interior-forest path), accumulate every border
+   *  tile's tree cluster geometry first and merge ONCE across the whole band.
+   *  Result is ~10 meshes total (1 trunk + ≤9 leaf buckets) regardless of how
+   *  many border tiles or how deep the band is — the entire band collapses to
+   *  a near-constant number of draw calls.
+   *
+   *  Border-forest tiles are never fogged individually (the band is permanent
+   *  out-of-sight wilderness — see `_buildMapBorderForest`), so there's no
+   *  per-tile visibility toggle that would force per-tile granularity. Trees
+   *  carry their per-tree position jitter and rotation baked into local
+   *  vertices before merge, so the cross-tile merge preserves the same visual
+   *  layout as per-tile merging would.
+   *
+   *  `treeJobs` is `[{ namePrefix, cx, cz, trees }, ...]` — one entry per
+   *  border tile that has any trees. */
+  _buildBorderForestTreesBatched(parent, treeJobs, { fogged = false } = {}) {
+    const BABYLON = this._babylon;
+    const scene   = this._scene;
+    if (!BABYLON || !scene || !treeJobs || treeJobs.length === 0) return [];
+    const allTrunks = [];
+    const allLeavesByColor = new Map();
+    for (const job of treeJobs) {
+      const { trunks, leavesByColor } = this._buildTreeClusterMeshes(
+        job.namePrefix, job.cx, job.cz, job.trees, { fogged },
+      );
+      for (const t of trunks) allTrunks.push(t);
+      for (const [color, list] of leavesByColor) {
+        let bucket = allLeavesByColor.get(color);
+        if (!bucket) { bucket = []; allLeavesByColor.set(color, bucket); }
+        for (const m of list) bucket.push(m);
+      }
+    }
+    const trunkCss = fogged ? '#241710' : '#5a3a20';
+    const trunkMat = this._materialFor(trunkCss);
+    return this._mergeTreeBuckets(allTrunks, allLeavesByColor, parent, 'border_forest', trunkMat);
   }
 
   _buildFlatHexMesh(name, parent, x, z) {
