@@ -325,22 +325,43 @@ export function gestureLockDecision(deltaDist, deltaAngle, elapsedMs, thresholds
   return rPinch >= rTwist ? 'zoom' : 'rotate';
 }
 
+/** Decide the initial two-finger gesture mode given the pointer types that
+ *  just made up the gesture.
+ *
+ *  On touch (mobile), two fingers ALWAYS mean zoom — the twist-rotate branch
+ *  is removed entirely because in practice it triggers accidentally while
+ *  pinching to zoom. The caller still has rotate available via the on-screen
+ *  rotate buttons and (on desktop) shift+wheel / right-drag.
+ *
+ *  On non-touch input (desktop two-finger trackpad gesture mapped to pointer
+ *  events, hybrid devices, etc.) we keep the existing 'sampling' flow so the
+ *  intent-lock heuristic can pick zoom vs rotate from early motion.
+ *
+ *  Pure helper — no DOM/Babylon — so it can be unit-tested directly. */
+export function gestureModeForTwoFingerStart(pointerTypes) {
+  if (Array.isArray(pointerTypes) && pointerTypes.some(t => t === 'touch')) {
+    return 'zoom';
+  }
+  return 'sampling';
+}
+
 /** Compute pan-clamp bounds for the camera target from the playable map's
- *  visual extent. The clamp keeps the target inside the playable bbox plus a
- *  small fudge, so even at max zoom-out + max pan the playable map remains
- *  the visible subject (rather than sliding off into the border-forest band).
+ *  visual extent. The clamp keeps the target inside the playable bbox, so
+ *  the playable map is always the visible subject (rather than sliding off
+ *  into the border-forest band).
  *
  *  `extent` is the output of `computeMapBounds(state.tiles)` — already padded
  *  by half a hex on each side so the bbox covers full rendered tile area,
- *  not just tile centres. `fudgeHex` is the extra slack (in hex radii) the
- *  target may roam past that visual edge; the default of 0.5 lets the
- *  operator frame the very-edge tiles a touch loose without ever letting
- *  the playable map's centroid leave the camera frustum.
+ *  not just tile centres. `fudgeHex` is extra slack (in hex radii) past that
+ *  visual edge; default is 0 so the target is bound strictly to the visual
+ *  extent. Earlier values (2 world units, then 0.5 hex) still let the
+ *  playable area slide far enough off-frame at the locked 45° tilt that the
+ *  border forest dominated the view — the camera's tilt biases the visible
+ *  ground centre away from the target, so any positive fudge compounded with
+ *  that offset.
  *
- *  Previously the clamp used a flat 2-world-unit margin, which at shallow
- *  tilt + max zoom-out allowed the playable area to slide entirely out of
- *  frame. Pure helper — Babylon-free, so it's unit-testable. */
-export function panBoundsForPlayableExtent(extent, fudgeHex = 0.5) {
+ *  Pure helper — Babylon-free, so it's unit-testable. */
+export function panBoundsForPlayableExtent(extent, fudgeHex = 0) {
   if (!extent) return null;
   const fudge = fudgeHex * HEX_RADIUS_WORLD;
   return {
@@ -1289,8 +1310,9 @@ export class Renderer3D {
     // pointer/wheel inputs with `_installCustomCameraInput` below. Babylon's
     // defaults bake in 1-finger-rotate, which tested poorly on mobile — the
     // operator's iPhone playtest of #321 called it "wonky". The custom input
-    // maps 1-pointer → pan, 2-pointer → simultaneous pinch + twist (the new
-    // mobile gesture spec), and right-mouse-drag → rotate alpha on desktop.
+    // maps 1-pointer → pan, 2-pointer → pinch-zoom only on touch (the twist-
+    // rotate branch is dropped on mobile; intent-lock survives for desktop
+    // pointer input), and right-mouse-drag → rotate alpha on desktop.
 
     // Yaw (alpha) is unbounded — right-mouse / button-driven rotation spins
     // the camera around the vertical axis. Tilt (beta) is permanently
@@ -1544,8 +1566,10 @@ export class Renderer3D {
    *
    *   Mobile / touch:
    *     • 1 finger drag        → pan (writes inertialPanningX/Y)
-   *     • 2 finger pinch+twist → simultaneous radius + alpha update
-   *     • NO 1-finger rotate, NO 3-finger tilt (tilt is locked at π/4)
+   *     • 2 finger pinch       → zoom only (rotate via on-screen buttons)
+   *     • NO 1-finger rotate, NO 2-finger twist, NO 3-finger tilt
+   *       (twist-rotate dropped — too easy to trigger accidentally while
+   *       pinch-zooming; tilt is locked at π/4)
    *
    *   Desktop / mouse:
    *     • Wheel                → zoom (radius)
@@ -1697,7 +1721,9 @@ export class Renderer3D {
         gestureStartDist  = lastPinchDist;
         gestureStartAngle = lastPinchAngle;
         gestureStartTime  = typeof performance !== 'undefined' ? performance.now() : Date.now();
-        gestureMode       = 'sampling';
+        // Touch → lock to zoom immediately (no twist-rotate path on mobile).
+        // Non-touch input falls through the normal sampling-then-lock flow.
+        gestureMode = gestureModeForTwoFingerStart([arr[0].type, arr[1].type]);
       } else if (pointers.size > 2) {
         // 3+ pointers — ignore extras; the spec is explicit about no 3-finger
         // tilt. Wipe two-finger state so the recent extras don't drive twist.
