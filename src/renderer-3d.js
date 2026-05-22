@@ -656,6 +656,12 @@ export class Renderer3D {
     // part of the intended visual. Toggle off live with the `F` hotkey
     // if it's tanking fps on a slow GPU.
     this._borderForestHidden = false;
+    // Bridge plank meshes are disabled — the road tube already crosses the
+    // river hex correctly, and the arched plank read as a toy more than a
+    // bridge. The mesh builder, rotation helper, and tilesExtent helper are
+    // left in place so this can be flipped back on cheaply if we want to
+    // iterate on the look later. Flip to true to restore the old plank.
+    this._renderBridges = false;
     // One-shot warning gate per failed sprite id, so a missing or broken
     // sprite doesn't spam the console once per redraw.
     this._textureWarnedFor     = new Set();
@@ -1863,12 +1869,15 @@ export class Renderer3D {
   }
 
   /** Continue every river endpoint past the playable map edge with a flat
-   *  straight ribbon, re-using the in-map river's material so colour matches
-   *  exactly. Each extension lives in `_borderPropsByKey` under a synthetic
-   *  `river-ext:col,row` key, alongside the surrounding forest props, so it
-   *  follows the same visual-only lifecycle (no state.tiles entry, no fog,
-   *  no pan-clamp influence). No-op when the map has no river, or when the
-   *  forest band is disabled. */
+   *  straight ribbon. Each extension lives in `_borderPropsByKey` under a
+   *  synthetic `river-ext:col,row` key, alongside the surrounding forest
+   *  props, so it follows the same visual-only lifecycle (no state.tiles
+   *  entry, no pan-clamp influence). Material is a darkened sibling of the
+   *  in-map river ribbon — the surrounding border-forest hexes render under
+   *  the fog tint, so the water flowing through them has to match or it
+   *  reads as a bright stripe across an otherwise out-of-play wilderness
+   *  frame. No-op when the map has no river, or when the forest band is
+   *  disabled. */
   _buildRiverExtensions(bandDepth) {
     const BABYLON = this._babylon;
     const scene   = this._scene;
@@ -1879,6 +1888,19 @@ export class Renderer3D {
     if (!riverMat) return; // no river on this map
     const exits = riverExitPoints(this.state.tiles);
     if (exits.length === 0) return;
+    // Build a fogged twin of the river material once — same StandardMaterial
+    // recipe as `_buildRibbonMaterial`, but with diffuse/emissive multiplied
+    // by FOG_TILE_DARKEN so the extension matches the dark border-forest hexes.
+    const { diffuse, emissive } = fogRibbonMaterialColors(
+      TILE_COLOR[TileType.RIVER],
+      this._fogTileDarken,
+    );
+    const fogMat = new BABYLON.StandardMaterial(`river_extension_mat`, scene);
+    fogMat.diffuseColor    = new BABYLON.Color3(diffuse[0],  diffuse[1],  diffuse[2]);
+    fogMat.emissiveColor   = new BABYLON.Color3(emissive[0], emissive[1], emissive[2]);
+    fogMat.specularColor   = new BABYLON.Color3(0.04, 0.04, 0.04);
+    fogMat.backFaceCulling = false;
+    fogMat.disableLighting = false;
     // Extend one hex past the outermost band tile so the ribbon's far end
     // clearly carries past the band's silhouette instead of fading inside it.
     // Centre-to-centre spacing in any axial direction is SQRT3 world units.
@@ -1903,8 +1925,8 @@ export class Renderer3D {
       );
       ribbon.parent     = this._mapRoot;
       ribbon.isPickable = false;
-      ribbon.material   = riverMat;
-      ribbon.metadata   = { kind: 'river-extension', col: exit.tile.col, row: exit.tile.row };
+      ribbon.material   = fogMat;
+      ribbon.metadata   = { kind: 'river-extension', col: exit.tile.col, row: exit.tile.row, fogged: true };
       const key = `river-ext:${exit.tile.col},${exit.tile.row}`;
       const list = this._borderPropsByKey.get(key) || [];
       list.push(ribbon);
@@ -1960,7 +1982,7 @@ export class Renderer3D {
     // and lands on the road at either end. Width / endpoint height tuned to
     // line up visually with the road ribbon (ROAD_RIBBON_WIDTH = 0.6, sitting
     // at Y = ROAD_RIBBON_Y ≈ 0.008).
-    if (tile.type === TileType.BRIDGE) {
+    if (this._renderBridges && tile.type === TileType.BRIDGE) {
       const yaw       = bridgeRotationY(tile, this.state.tiles);
       const span      = 1.8;                     // bridge length along the road
       const thickness = 0.10;                    // slab thickness
@@ -5101,6 +5123,20 @@ export function ribbonMaterialColors(hexColor) {
   return {
     diffuse:  [dr, dg, db],
     emissive: [dr * s, dg * s, db * s],
+  };
+}
+
+/** Fogged variant of `ribbonMaterialColors` — multiplies both diffuse and
+ *  emissive by `darken` (defaults to FOG_TILE_DARKEN). Used for the river
+ *  extension ribbons that sit inside the border-forest band: the surrounding
+ *  forest hexes render under the fog tint, so the water flowing through them
+ *  must match or it reads as a bright stripe across the dark wilderness frame.
+ *  Kept pure so the colour math can be unit-tested without Babylon. */
+export function fogRibbonMaterialColors(hexColor, darken = FOG_TILE_DARKEN) {
+  const { diffuse, emissive } = ribbonMaterialColors(hexColor);
+  return {
+    diffuse:  [diffuse[0]  * darken, diffuse[1]  * darken, diffuse[2]  * darken],
+    emissive: [emissive[0] * darken, emissive[1] * darken, emissive[2] * darken],
   };
 }
 
