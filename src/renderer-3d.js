@@ -2343,9 +2343,16 @@ export class Renderer3D {
       || (this._activeLungeIds && this._activeLungeIds.size > 0);
     const shouldPlay = !!(ghostsActive || movesActive);
     if (shouldPlay && !ws.playing) {
-      if (typeof ws.walkGroup.restart === 'function') ws.walkGroup.restart();
-      else if (typeof ws.walkGroup.play === 'function') ws.walkGroup.play(true);
-      else if (typeof ws.walkGroup.start === 'function') ws.walkGroup.start(true, ws.speedRatio ?? 1.0);
+      // Always stop()+start() with an explicit speedRatio so we don't
+      // accidentally drop back to Babylon's default speedRatio=1.0 on
+      // resume. restart() and play() preserve speedRatio in newer
+      // Babylon versions but not all, and a wrong speedRatio is what
+      // caused the ghost's feet to slide (animation cycle racing the
+      // cone slide because it was running at 1× natural instead of
+      // the computed match-rate).
+      const speed = ws.speedRatio ?? 1.0;
+      if (typeof ws.walkGroup.stop === 'function') ws.walkGroup.stop();
+      if (typeof ws.walkGroup.start === 'function') ws.walkGroup.start(true, speed);
       ws.playing = true;
     } else if (!shouldPlay && ws.playing) {
       if (typeof ws.walkGroup.pause === 'function') ws.walkGroup.pause();
