@@ -231,6 +231,57 @@ export const BUILDING_LABEL_HEIGHT = 0.4;
 export const BUILDING_LABEL_TEX_W = 256;
 export const BUILDING_LABEL_TEX_H = 64;
 
+// ─── Power-node tint overlay + name label ───────────────────────────────────
+// A faint faction-tinted hex sits over every power-node tile (just above the
+// terrain disc, below highlight / plan layers), and a single billboarded name
+// label floats above the cluster's centre hex. Both retint when the
+// controller flips (hero / witch / neutral / contested) and hide under fog
+// alongside the existing node ring discs.
+//
+// Layered Y ordering (kept consistent with the renderer's other ground decals):
+//   terrain disc 0.084  →  node tint 0.095  →  road/river ribbons 0.085-0.088
+//   →  highlight 0.12   →  plan disc 0.16-0.18
+
+/** Y offset (world units) for the translucent per-hex tint disc. Sits just
+ *  above the terrain disc (0.084) so it doesn't z-fight, but stays below the
+ *  highlight band (0.12) and the plan ghost layer. */
+export const NODE_TINT_Y = 0.095;
+/** Diameter (world units) of the translucent tint disc. Matches the existing
+ *  NODE_DISC_DIAMETER so it covers the same tile footprint as the node ring. */
+export const NODE_TINT_DIAMETER = 1.9;
+/** Material alpha for the tint disc — 10% per the operator brief: enough to
+ *  read as a faint faction wash, light enough that the underlying terrain
+ *  texture and ring tube still dominate. */
+export const NODE_TINT_ALPHA = 0.1;
+
+/** Y offset (world units) for the floating power-node name label. Slightly
+ *  below building labels (1.55) so the two overlays don't collide on a tile
+ *  that happens to be both a node hex and a building. */
+export const NODE_LABEL_Y = 1.4;
+/** Plane size (world units) of the floating name label. Wider than the
+ *  building label since node names (e.g. "The Crooked Pine") can be long. */
+export const NODE_LABEL_WIDTH  = 2.4;
+export const NODE_LABEL_HEIGHT = 0.55;
+/** DynamicTexture canvas dimensions (px) for the node label. */
+export const NODE_LABEL_TEX_W = 384;
+export const NODE_LABEL_TEX_H = 96;
+
+/** Resolve the display text for a power-node label. Returns the objective's
+ *  human-readable label, or a sensible fallback if missing. Pure helper for
+ *  tests. */
+export function nodeLabelText(obj) {
+  if (!obj) return '';
+  if (typeof obj.label === 'string' && obj.label.length > 0) return obj.label;
+  return 'Power Node';
+}
+
+/** Resolve the tint / label colour for a controller. Thin alias over
+ *  `getNodeGlowColor` so the two overlays share one source of truth — if the
+ *  glow palette is retuned, the tint and label retint with it. */
+export function nodeOverlayColor(controller) {
+  return getNodeGlowColor(controller);
+}
+
 
 // ─── Pure helpers (exported for tests; no Babylon dependency) ────────────────
 
@@ -967,6 +1018,18 @@ export class Renderer3D {
     // Power-node glow meshes: { obj, disc, col, row, glowColor } per node hex.
     this._nodeGlowMeshes   = [];
     this._nodeGlowBuilt    = false;
+    // Power-node tint discs: one translucent faction-tinted hex per node hex.
+    // Recoloured each draw alongside the glow ring; hidden via the per-tile
+    // fog veil (registered into `_tilePropsByKey`). Built lazily alongside
+    // the node ring tubes in `_buildNodeGlowMeshes`.
+    this._nodeTintMeshes   = [];           // [{ obj, mesh, mat, col, row }]
+    // Power-node floating name labels: one billboarded plane per node, anchored
+    // above the cluster's centre hex. Keyed by centre-hex key so the per-tile
+    // fog veil can hide them in `_setTileFogged` without freezing the world
+    // matrix (billboarding requires per-frame matrix sync — registering in
+    // `_tilePropsByKey` would freeze the plane and lock its rotation).
+    this._nodeNameLabels   = [];           // [{ obj, plane, mat, tex, hexKey, lastCtrl }]
+    this._nodeLabelsByCenterHex = new Map(); // hexKey → label entry (above)
     // Phase-driven lighting state. Pumped by _onBeforeRender each frame; draw()
     // notices state.phase changes and starts a new 3-second eased transition.
     this._lightState = null;            // populated on first draw after init
@@ -6389,6 +6452,34 @@ export class Renderer3D {
         mat.diffuseColor.b = b * 0.4;
       }
     }
+    // Tint discs: same controller-driven recolour, kept on its own loop so the
+    // tint can carry a different brightness mix from the ring (the ring is
+    // emissive-dominant for bloom, the tint is diffuse-dominant for a faint
+    // wash).
+    for (const nt of this._nodeTintMeshes) {
+      const ctrl = nodeController(nt.obj, this.state.entities);
+      const [r, g, b] = cssHexToRgb01(nodeOverlayColor(ctrl));
+      const mat = nt.mat;
+      if (mat?.diffuseColor) {
+        mat.diffuseColor.r = r;
+        mat.diffuseColor.g = g;
+        mat.diffuseColor.b = b;
+      }
+      if (mat?.emissiveColor) {
+        mat.emissiveColor.r = r * 0.4;
+        mat.emissiveColor.g = g * 0.4;
+        mat.emissiveColor.b = b * 0.4;
+      }
+    }
+    // Labels: repaint the DynamicTexture only when the controller actually
+    // flips — DynamicTexture.update() is the expensive part, so guarding on
+    // `lastCtrl` keeps the per-frame cost to a tiny per-label string compare.
+    for (const lbl of this._nodeNameLabels) {
+      const ctrl = nodeController(lbl.obj, this.state.entities);
+      if (lbl.lastCtrl === ctrl) continue;
+      this._paintNodeLabel(lbl, ctrl);
+      lbl.lastCtrl = ctrl;
+    }
   }
 
   _buildNodeGlowMeshes() {
@@ -6439,10 +6530,167 @@ export class Renderer3D {
         if (this._fogActiveSet.has(tkey)) disc.isVisible = false;
       }
     }
+    // Build the matching 10%-alpha tint disc + one floating name label per
+    // node. Done in the same pass so the freeze sweep below sees both.
+    this._buildNodeTintAndLabels();
     // Node rings are static for the rest of the game — fold them into the
     // freeze pass. _freezeStaticMeshes is idempotent; the previously-frozen
     // tile/prop meshes from `_buildMap` are skipped on this second call.
     this._freezeStaticMeshes();
+  }
+
+  /** Build the translucent per-hex tint disc and one floating name label per
+   *  power node. Called from `_buildNodeGlowMeshes` after the ring tubes are
+   *  in place. Tint discs share the per-tile fog registry with the ring tubes;
+   *  labels live in their own map so the freeze pass skips them (billboard
+   *  rotation requires a per-frame world-matrix update — a frozen plane would
+   *  point the wrong way). */
+  _buildNodeTintAndLabels() {
+    const BABYLON = this._babylon;
+    if (!BABYLON || !this._scene) return;
+    const SQRT3 = Math.sqrt(3);
+    const tintR = (NODE_TINT_DIAMETER / 2) || HEX_RADIUS_WORLD;
+    for (const obj of this.state.witchObjectives) {
+      // Per-hex tint disc: flat hex prism sitting just above the terrain disc.
+      // We build a CreateCylinder with tessellation 6 so the tint snaps to
+      // the hex edges; that matches how the existing terrain disc reads.
+      for (const h of obj.hexes) {
+        const { x, z } = hexToWorld(h.col, h.row);
+        const disc = BABYLON.MeshBuilder.CreateCylinder(
+          `node_tint_${obj.label.replace(/\W+/g, '_')}_${h.col}_${h.row}`,
+          { diameter: NODE_TINT_DIAMETER, height: 0.001, tessellation: 6 },
+          this._scene,
+        );
+        disc.parent = this._mapRoot;
+        disc.position.x = x;
+        disc.position.y = NODE_TINT_Y;
+        disc.position.z = z;
+        // Match the existing terrain disc's pointy-top orientation so the
+        // tint hex aligns flush over the tile rather than rotating off-axis.
+        disc.rotation.y = Math.PI / 6;
+        disc.isPickable = false;
+        const mat = new BABYLON.StandardMaterial(
+          `nodeTintMat_${h.col}_${h.row}`,
+          this._scene,
+        );
+        mat.specularColor = new BABYLON.Color3(0, 0, 0);
+        mat.diffuseColor  = new BABYLON.Color3(0.9, 0.9, 0.9);
+        mat.emissiveColor = new BABYLON.Color3(0.3, 0.3, 0.3);
+        mat.alpha = NODE_TINT_ALPHA;
+        mat.backFaceCulling = false;
+        disc.material = mat;
+
+        this._nodeTintMeshes.push({
+          obj, mesh: disc, mat,
+          col: h.col, row: h.row,
+        });
+
+        // Register on the per-tile fog list so `_setTileFogged` hides the
+        // tint alongside the ring tube. Same defensive pattern as the ring:
+        // create the list if missing.
+        const tkey = hexKey(h.col, h.row);
+        const props = this._tilePropsByKey.get(tkey);
+        if (props) props.push(disc);
+        else this._tilePropsByKey.set(tkey, [disc]);
+        if (this._fogActiveSet.has(tkey)) disc.isVisible = false;
+      }
+
+      // Floating name label — one per node, anchored above the centre hex
+      // (obj.hexes[0] per `_pickNodeCluster`). The label is the operator's
+      // primary "this is Power Node X, controlled by Y" read, so it's a
+      // single mesh rather than one per hex.
+      const center = obj.hexes[0];
+      if (!center) continue;
+      const label = this._buildNodeNameLabel(obj, center);
+      if (label) {
+        this._nodeNameLabels.push(label);
+        this._nodeLabelsByCenterHex.set(hexKey(center.col, center.row), label);
+      }
+    }
+  }
+
+  /** Build one floating-name-label entry for a power node. Returns the entry
+   *  or null when no DOM is available (headless / node-test). The
+   *  DynamicTexture is painted on first build via `_paintNodeLabel`. */
+  _buildNodeNameLabel(obj, center) {
+    const BABYLON = this._babylon;
+    const scene = this._scene;
+    if (!BABYLON || !scene || typeof document === 'undefined') return null;
+    const tkey = hexKey(center.col, center.row);
+    const tex = new BABYLON.DynamicTexture(
+      `nodeLabelTex_${tkey}`,
+      { width: NODE_LABEL_TEX_W, height: NODE_LABEL_TEX_H },
+      scene,
+      false,
+    );
+    tex.hasAlpha = true;
+
+    const mat = new BABYLON.StandardMaterial(`nodeLabelMat_${tkey}`, scene);
+    mat.diffuseTexture = tex;
+    mat.opacityTexture = tex;
+    mat.useAlphaFromDiffuseTexture = true;
+    mat.specularColor  = new BABYLON.Color3(0, 0, 0);
+    mat.emissiveColor  = new BABYLON.Color3(1, 1, 1);
+    mat.backFaceCulling = false;
+    mat.alpha = 1;
+
+    const plane = BABYLON.MeshBuilder.CreatePlane(
+      `nodeLabel_${tkey}`,
+      { width: NODE_LABEL_WIDTH, height: NODE_LABEL_HEIGHT },
+      scene,
+    );
+    plane.parent = this._mapRoot;
+    plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+    plane.isPickable = false;
+    plane.material = mat;
+    // Anchor over the centre hex (the cluster's "head"), not the centroid —
+    // the centre is where the ring discs of the three-hex cluster radiate
+    // from, so a label above it reads as belonging to the whole node.
+    const { x, z } = hexToWorld(center.col, center.row);
+    plane.position.set(x, NODE_LABEL_Y, z);
+
+    const entry = {
+      obj, plane, mat, tex,
+      hexKey: tkey,
+      lastCtrl: null,
+    };
+    // Paint once with the current controller so the label reads correctly
+    // before the first `_syncNodeGlowMeshes` repaint pass runs.
+    const initialCtrl = nodeController(obj, this.state?.entities ?? []);
+    this._paintNodeLabel(entry, initialCtrl);
+    entry.lastCtrl = initialCtrl;
+    // Mirror the ring's initial fog state — start hidden if the centre hex
+    // is already fogged at build time.
+    if (this._fogActiveSet.has(tkey)) {
+      plane.isVisible = false;
+    }
+    return entry;
+  }
+
+  /** Repaint a node-label DynamicTexture with the given controller's colour.
+   *  Pulled into its own method so the per-frame `_syncNodeGlowMeshes` pass
+   *  can call it on owner change, and the per-build initial paint reuses
+   *  the same drawing code. */
+  _paintNodeLabel(entry, controller) {
+    const tex = entry?.tex;
+    if (!tex || typeof tex.getContext !== 'function') return;
+    const ctx = tex.getContext();
+    const W = NODE_LABEL_TEX_W;
+    const H = NODE_LABEL_TEX_H;
+    ctx.clearRect(0, 0, W, H);
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font         = 'bold 44px Georgia, serif';
+    const cx = W / 2;
+    const cy = H / 2;
+    // Dark drop-shadow keeps the label legible against bright daytime sky
+    // / pale fog tiles. The controller-coloured fill sits on top.
+    ctx.fillStyle = 'rgba(0,0,0,0.85)';
+    const text = nodeLabelText(entry.obj);
+    ctx.fillText(text, cx + 2, cy + 2);
+    ctx.fillStyle = nodeOverlayColor(controller);
+    ctx.fillText(text, cx, cy);
+    tex.update();
   }
 
   /** Apply the fog-of-war veil: swap fogged-tile materials to a darker variant
@@ -6562,6 +6810,13 @@ export class Renderer3D {
     const labelEntry = this._buildingLabelsByKey?.get(hexK);
     if (labelEntry?.mat) {
       labelEntry.mat.alpha = fogged ? 0.45 : 1.0;
+    }
+    // Power-node name labels: anchored to the cluster centre hex only, so
+    // visibility tracks that one hex's fog state. Hide fully on fog (unlike
+    // building labels) — node ownership IS the tactical secret being hidden.
+    const nodeLabelEntry = this._nodeLabelsByCenterHex?.get(hexK);
+    if (nodeLabelEntry?.plane) {
+      nodeLabelEntry.plane.isVisible = !fogged;
     }
     if (fogged) this._fogActiveSet.add(hexK);
     else this._fogActiveSet.delete(hexK);
