@@ -144,11 +144,19 @@ describe('ribbonMaterialColors — diffuse + emissive split', () => {
     }
   });
 
-  test('emissive scale is small but non-zero (modest lift, not full glow)', () => {
+  test('emissive scale is non-zero and stays under self-glow territory', () => {
+    // After flipping the ribbon path order so the natural face normal points
+    // +Y, the hemispheric light hits the visible face directly — but the road
+    // and river TILE_COLORs are dark enough that they still benefit from a
+    // sizeable emissive floor (especially under night's cool-blue tint which
+    // crushes the brown road's red channel). PR #323's 0.15 was too low; this
+    // PR bumps it. Keep it under 1.0 so we don't read as a self-lit prop.
     assert.ok(RIBBON_EMISSIVE_SCALE > 0,
       `emissive scale must be positive — was ${RIBBON_EMISSIVE_SCALE}`);
-    assert.ok(RIBBON_EMISSIVE_SCALE < 0.5,
-      `emissive scale must stay subtle — was ${RIBBON_EMISSIVE_SCALE}`);
+    assert.ok(RIBBON_EMISSIVE_SCALE < 1.0,
+      `emissive scale must stay under 1.0 (no self-glow) — was ${RIBBON_EMISSIVE_SCALE}`);
+    assert.ok(RIBBON_EMISSIVE_SCALE >= 0.30,
+      `emissive scale must comfortably exceed PR #323's 0.15 to fix the "still dark" symptom — was ${RIBBON_EMISSIVE_SCALE}`);
   });
 
   test('all diffuse channels are non-zero for road and river tile colours', () => {

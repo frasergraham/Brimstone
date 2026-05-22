@@ -959,6 +959,16 @@ export class Renderer3D {
 
     engine.runRenderLoop(() => scene.render());
     engine.resize();
+
+    // Diagnostic handle: lets the operator run `__brimstone3dDebug.ribbons()`
+    // from the browser console to inspect the runtime material/light state of
+    // the road and river ribbons. No-op when `window` is undefined (tests).
+    if (typeof window !== 'undefined') {
+      window.__brimstone3dDebug = {
+        ribbons: () => this.dumpRibbonDebug(),
+        renderer: this,
+      };
+    }
   }
 
   /**
@@ -1383,7 +1393,20 @@ export class Renderer3D {
    *  offset ±width/2 perpendicular to the local tangent in the XZ plane, at a
    *  constant Y. MergeMeshes collapses them all into one mesh sharing one
    *  material. Returns the merged mesh (or null if MergeMeshes refused —
-   *  which happens when the source list is empty). */
+   *  which happens when the source list is empty).
+   *
+   *  Path order is `[rightV3, leftV3]`, NOT `[leftV3, rightV3]`. This is
+   *  load-bearing: CreateRibbon's first-triangle winding is
+   *  `(pathArray[0][i], pathArray[1][i], pathArray[0][i+1])`, and for a path
+   *  travelling along +X (tangent +X, perpendicular +Z), that triangle's
+   *  normal works out to +Y only when path 0 is on the −Z side (right) and
+   *  path 1 is on the +Z side (left). Reverse the order and the normal flips
+   *  to −Y, leaving the +Y hemispheric light hitting the underside while
+   *  camera-visible top face renders near-black. PR #322's original ordering
+   *  fell into that pit; PR #323 papered over the symptom with an emissive
+   *  bump that was still far too small for the dark river/road base colours.
+   *  See `ribbonFaceNormal()` below for the math, and the
+   *  `renderer-3d-ribbon-normals.test.js` suite that pins this contract. */
   _buildNetworkMesh(networkName, segments, width, yPos, cssColor) {
     const BABYLON = this._babylon;
     const scene   = this._scene;
@@ -1400,7 +1423,7 @@ export class Renderer3D {
         const ribbon = BABYLON.MeshBuilder.CreateRibbon(
           `${networkName}_${tile.col}_${tile.row}_${i}`,
           {
-            pathArray: [leftV3, rightV3],
+            pathArray: [rightV3, leftV3],
             sideOrientation: BABYLON.Mesh.DOUBLESIDE,
             closeArray: false,
             closePath: false,
@@ -1424,13 +1447,20 @@ export class Renderer3D {
 
   /** Dedicated StandardMaterial for the ribbon networks. Unlike the cached
    *  `_materialFor()` (used by tile cylinders), this one carries an
-   *  `emissiveColor` so the strip stays readable under the scene's mostly-
-   *  ambient lighting. CreateRibbon's path-pair winding produces face normals
-   *  pointing −Y (away from the +Y hemispheric light), so the lit face is the
-   *  underside; a small emissive (`RIBBON_EMISSIVE_SCALE` × diffuse) gives the
-   *  top face its colour back without making the network glow. Kept out of the
-   *  shared cache so adding emissive to ribbons doesn't bleed onto road/river
-   *  tile cylinders. */
+   *  `emissiveColor` so the strip stays readable regardless of phase tinting.
+   *
+   *  Path order in `_buildNetworkMesh` is now `[right, left]` so face normals
+   *  point +Y (the camera-visible side), and the +Y hemispheric light hits the
+   *  top face directly. That alone would be enough for grass-coloured ribbons,
+   *  but the road/river TILE_COLORs are genuinely dark — `#1a3d5c` (river,
+   *  ≈ 10/60/92 in 0–255) reads at roughly RGB(0.10, 0.24, 0.36) under full
+   *  white light, and night phase recolours the hemi to a cool blue that
+   *  starves the brown road's red channel further. The emissive layer
+   *  (`RIBBON_EMISSIVE_SCALE × diffuse`) is bumped from PR #323's 0.15 to a
+   *  larger value so the strip stays legible against the brighter terrain
+   *  even when phase lighting cools off, without making it self-glow like a
+   *  power-node disc. Kept out of the shared cache so this emissive doesn't
+   *  bleed onto road/river tile cylinders or building boxes. */
   _buildRibbonMaterial(networkName, hexColor) {
     const BABYLON = this._babylon;
     const { diffuse, emissive } = ribbonMaterialColors(hexColor);
@@ -1439,7 +1469,62 @@ export class Renderer3D {
     mat.emissiveColor   = new BABYLON.Color3(emissive[0], emissive[1], emissive[2]);
     mat.specularColor   = new BABYLON.Color3(0.04, 0.04, 0.04); // matte
     mat.backFaceCulling = false; // belt-and-braces for low/below camera angles
+    // disableLighting=false is the default — explicit here so a future refactor
+    // that mass-disables lighting can't silently make the road/river look like
+    // pure emissive (which at 0.45× a dark base colour reads as near-black —
+    // exactly the "ribbon is still black" symptom PR #323 chased).
+    mat.disableLighting = false;
     return mat;
+  }
+
+  /** Diagnostic: dump the runtime material state of the road and river
+   *  ribbon meshes. Intended for the operator/QA to call from the browser
+   *  console when the network reads wrong, so we can confirm at a glance
+   *  whether the right material is on the right mesh. Exposed via the
+   *  `window.__brimstone3dDebug` handle in `_initBabylon`. */
+  dumpRibbonDebug() {
+    const summarise = (mesh) => {
+      if (!mesh) return { mesh: null };
+      const mat = mesh.material;
+      const summariseColor = (c) => c ? { r: +c.r.toFixed(3), g: +c.g.toFixed(3), b: +c.b.toFixed(3) } : null;
+      return {
+        meshName: mesh.name,
+        isEnabled: mesh.isEnabled?.() ?? true,
+        isVisible: mesh.isVisible !== false,
+        position: { x: +mesh.position.x.toFixed(3), y: +mesh.position.y.toFixed(3), z: +mesh.position.z.toFixed(3) },
+        material: mat ? {
+          name: mat.name,
+          klass: mat.getClassName ? mat.getClassName() : (mat.constructor?.name ?? '?'),
+          diffuse:  summariseColor(mat.diffuseColor),
+          emissive: summariseColor(mat.emissiveColor),
+          ambient:  summariseColor(mat.ambientColor),
+          specular: summariseColor(mat.specularColor),
+          backFaceCulling: mat.backFaceCulling,
+          disableLighting: mat.disableLighting,
+          alpha: mat.alpha,
+          sideOrientation: mat.sideOrientation,
+        } : null,
+        hasVertexColors: !!mesh.getVerticesData?.('color'),
+        normalsSample: mesh.getVerticesData?.('normal')?.slice?.(0, 6) ?? null,
+      };
+    };
+    const light = this._light;
+    const summariseColor = (c) => c ? { r: +c.r.toFixed(3), g: +c.g.toFixed(3), b: +c.b.toFixed(3) } : null;
+    const dump = {
+      river: summarise(this._riverNetworkMesh),
+      road:  summarise(this._roadNetworkMesh),
+      light: light ? {
+        klass: light.getClassName ? light.getClassName() : '?',
+        intensity: light.intensity,
+        direction: light.direction ? { x: +light.direction.x.toFixed(3), y: +light.direction.y.toFixed(3), z: +light.direction.z.toFixed(3) } : null,
+        diffuse: summariseColor(light.diffuse),
+        groundColor: summariseColor(light.groundColor),
+        specular: summariseColor(light.specular),
+      } : null,
+    };
+    // eslint-disable-next-line no-console
+    console.log('[brimstone3d] ribbon debug', dump);
+    return dump;
   }
 
   /** Cache a StandardMaterial per CSS hex colour so we hand a few materials
@@ -2911,13 +2996,26 @@ export class Renderer3D {
     };
   }
 
-  /** Slam the light + clear colour to a target config with no animation. */
+  /** Slam the light + clear colour to a target config with no animation.
+   *
+   *  `groundColor` (the under-side colour of the hemispheric light, defaults
+   *  to pitch black) gets a non-zero value here so any face whose normal
+   *  points away from the light still receives some ambient illumination
+   *  rather than rendering as a black silhouette. The ribbon top face is now
+   *  correctly +Y-facing (this PR vs PR #323), but a low/tilted camera can
+   *  still see the underside, and the ribbon-Y is so close to the terrain
+   *  disc (0.085 vs 0.084) that the underside getting any colour at all
+   *  improves how the strip reads from the side. Scaled `HEMI_GROUND_SCALE ×
+   *  diffuse` so it tints with phase but never matches it (which would erase
+   *  the lit/unlit contrast entirely). */
   _applyLightConfig(cfg) {
     const BABYLON = this._babylon;
     if (!BABYLON || !this._light || !this._scene) return;
     this._light.intensity = cfg.intensity;
     this._light.diffuse   = new BABYLON.Color3(cfg.color.r, cfg.color.g, cfg.color.b);
     this._light.specular  = new BABYLON.Color3(cfg.color.r * 0.3, cfg.color.g * 0.3, cfg.color.b * 0.3);
+    const gs = HEMI_GROUND_SCALE;
+    this._light.groundColor = new BABYLON.Color3(cfg.color.r * gs, cfg.color.g * gs, cfg.color.b * gs);
     this._scene.clearColor = new BABYLON.Color4(cfg.clear.r, cfg.clear.g, cfg.clear.b, 1.0);
     // Mirror into _lightState so transition snapshots see the new anchor.
     this._lightState.intensity = cfg.intensity;
@@ -3598,14 +3696,17 @@ export const ROAD_RIBBON_Y      = 0.086;
  *  without bloating the tube vertex count on Campaign-size maps. */
 export const NETWORK_BEZIER_SEGMENTS = 10;
 
-/** Fraction of the ribbon's diffuse colour copied into `emissiveColor`. The
- *  network ribbons get their face normals pointing −Y from CreateRibbon's
- *  path-pair winding (the +Y hemispheric light lands on the underside), so a
- *  modest emissive keeps the top face readable without making the road/river
- *  glow. 0.15 was chosen to match the look of the prior tube geometry, which
- *  caught the hemispheric light's wraparound term thanks to its rounded
- *  cross-section. */
-export const RIBBON_EMISSIVE_SCALE = 0.15;
+/** Fraction of the ribbon's diffuse colour copied into `emissiveColor`. After
+ *  flipping the ribbon's face normals to point +Y (see `_buildNetworkMesh`),
+ *  the lit term carries the full diffuse colour from the hemispheric light —
+ *  but the road and river TILE_COLORs are themselves dark (`#6b5a3e` ≈ 0.42,
+ *  `#1a3d5c` ≈ 0.10–0.36), and phase tinting can crush channels further at
+ *  night/dusk. A 0.45 emissive lift floors the strip's apparent brightness so
+ *  it stays legible against the grass and dirt terrain regardless of phase,
+ *  without spilling into the GlowLayer or reading as self-glowing. PR #323's
+ *  0.15 was sized for tube geometry that already caught wraparound from the
+ *  hemi light's rounded cross-section; flat ribbons need more help. */
+export const RIBBON_EMISSIVE_SCALE = 0.45;
 
 /** Pure helper: split a CSS hex colour into `{ diffuse, emissive }` Color3
  *  tuples for a ribbon material. `emissive = diffuse × RIBBON_EMISSIVE_SCALE`.
@@ -3670,6 +3771,27 @@ export function ribbonOffsetPaths(points, width) {
     right[i] = { x: points[i].x - px * half, z: points[i].z - pz * half };
   }
   return { left, right };
+}
+
+/** Pure helper: face normal (unit vector) of the first triangle CreateRibbon
+ *  emits for a `pathArray = [path0, path1]` ribbon. Babylon builds each rung
+ *  of the strip as the triangle `(path0[i], path1[i], path0[i+1])`, so the
+ *  normal is `(path1[0] − path0[0]) × (path0[1] − path0[0])` (right-handed
+ *  cross), normalised. Inputs are `{ x, y, z }` records.
+ *
+ *  Exposed so the ribbon-orientation contract — "for our flat top-down strips,
+ *  this normal must point +Y so the hemispheric light hits the visible face" —
+ *  can be unit-tested without spinning up a Babylon scene. The renderer feeds
+ *  `[rightV3, leftV3]` into CreateRibbon precisely so this function returns
+ *  `(_, +1, _)` for a forward-going stroke. */
+export function ribbonFaceNormal(p0a, p1a, p0b) {
+  const ex = p1a.x - p0a.x, ey = (p1a.y ?? 0) - (p0a.y ?? 0), ez = p1a.z - p0a.z;
+  const fx = p0b.x - p0a.x, fy = (p0b.y ?? 0) - (p0a.y ?? 0), fz = p0b.z - p0a.z;
+  const nx = ey * fz - ez * fy;
+  const ny = ez * fx - ex * fz;
+  const nz = ex * fy - ey * fx;
+  const len = Math.hypot(nx, ny, nz) || 1;
+  return { x: nx / len, y: ny / len, z: nz / len };
 }
 
 /** Sample a quadratic bezier (p0, control p1, p2) at N+1 evenly-spaced t in [0,1].
@@ -3897,6 +4019,16 @@ export const PHASE_LIGHT_CONFIG = Object.freeze({
 export function getPhaseLightConfig(phase) {
   return PHASE_LIGHT_CONFIG[phase] ?? PHASE_LIGHT_CONFIG.day;
 }
+
+/** Multiplier on `cfg.color` used to derive `HemisphericLight.groundColor` in
+ *  `_applyLightConfig`. The hemi light's groundColor defaults to (0,0,0),
+ *  which leaves any face whose normal points away from the light rendering
+ *  as a pure black silhouette — most painfully visible on the road/river
+ *  ribbons before this PR's normal flip, and still useful afterwards for
+ *  low-tilt camera angles that show the ribbon underside. Capped well below
+ *  1 so the lit/unlit hemispheric contrast that gives the terrain its 3D
+ *  feel doesn't get washed out. */
+export const HEMI_GROUND_SCALE = 0.30;
 
 /** Power Node glow palette by controller. Playtest feedback: previous values
  *  read as washed out in the lit 3D scene, so each is bumped toward full
