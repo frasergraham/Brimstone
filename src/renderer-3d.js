@@ -536,6 +536,36 @@ export function shouldAnimateFocus(curTarget, curRadius, newTarget, newRadius, e
   return (dx * dx + dy * dy + dz * dz) > epsilon * epsilon;
 }
 
+/** Set `receiveShadows = true` on every (non-null) mesh in the iterable.
+ *
+ *  Babylon's `ShadowGenerator` casts onto any scene mesh whose `receiveShadows`
+ *  flag is true; without it the shadow pass simply doesn't touch the mesh and
+ *  the surface renders as if no caster were present. We pin the flag on every
+ *  flat ground-hugging surface that wants the sun's silhouettes — road
+ *  ribbons, river ribbons, river-extension ribbons through the border-forest
+ *  band, and bridge planks — so unit shadows fall through correctly instead
+ *  of vanishing as the standee crosses onto the path.
+ *
+ *  Null-safe (skips missing meshes — meshes go missing when MergeMeshes
+ *  refuses a degenerate list). Returns the count of meshes touched, mostly
+ *  for tests + diagnostics. Setting the flag is idempotent on Babylon's side
+ *  so the helper is safe to call more than once.
+ *
+ *  Apply at mesh construction time, BEFORE `_freezeStaticMeshes()` runs.
+ *  `receiveShadows` is a property on the mesh, not the world matrix, so the
+ *  freeze pass doesn't disturb it — but ordering it before keeps the build
+ *  graph readable. */
+export function applyShadowReceiving(meshes) {
+  if (!meshes) return 0;
+  let n = 0;
+  for (const mesh of meshes) {
+    if (!mesh) continue;
+    mesh.receiveShadows = true;
+    n++;
+  }
+  return n;
+}
+
 /** Parse `#rrggbb` → [r,g,b] in 0..1; returns magenta on parse failure (loud). */
 const _RGB_CACHE = new Map();
 export function cssHexToRgb01(hex) {
@@ -2070,6 +2100,10 @@ export class Renderer3D {
       ribbon.parent     = this._mapRoot;
       ribbon.isPickable = false;
       ribbon.material   = fogMat;
+      // Match the playable-map river ribbons (`_buildNetworkMesh`) — the
+      // extension is the same flat ground-hugging strip threading through the
+      // border-forest band, so it should catch unit/tree shadows the same way.
+      this._setShadowReceiver(ribbon);
       ribbon.metadata   = { kind: 'river-extension', col: exit.tile.col, row: exit.tile.row, fogged: true };
       const key = `river-ext:${exit.tile.col},${exit.tile.row}`;
       const list = this._borderPropsByKey.get(key) || [];
@@ -2165,6 +2199,10 @@ export class Renderer3D {
       plank.material   = this._materialFor('#8a6030');
       plank.isPickable = false;
       this._addShadowCaster(plank);
+      // Bridge planks are raised flat platforms — unit standees walking across
+      // them should drop shadows onto the deck, not have those shadows fall
+      // through to the river surface below.
+      this._setShadowReceiver(plank);
       trackProp(plank);
     }
 
@@ -4982,10 +5020,11 @@ export class Renderer3D {
     this._shadowGenerator.addShadowCaster(mesh);
   }
 
-  /** Mark a mesh as a shadow receiver. Idempotent + null-safe. */
+  /** Mark a mesh as a shadow receiver. Idempotent + null-safe. Thin wrapper
+   *  around the pure `applyShadowReceiving` helper so the instance-method
+   *  callsites read cleanly while sharing one source of truth. */
   _setShadowReceiver(mesh) {
-    if (!mesh) return;
-    mesh.receiveShadows = true;
+    applyShadowReceiving([mesh]);
   }
 
   /** Per-frame pump: advance the phase-light transition (if any) and update
