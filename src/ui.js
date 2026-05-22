@@ -1416,6 +1416,14 @@ export class UIController {
 
   _onClick(e) {
     if (this._didDragPan) { this._didDragPan = false; return; }
+    // In 3D mode the custom pointer input calls preventDefault on pointermove,
+    // which suppresses compat `mousemove` and so the `_didDragPan` flag above
+    // is never set during a 3D drag. The renderer tracks the drag itself and
+    // publishes the verdict on every pointerup — consume + clear it here.
+    if (this.renderer?.is3D && this.renderer._lastGestureWasDrag) {
+      this.renderer._lastGestureWasDrag = false;
+      return;
+    }
     if (this.tutorialClickBlocked) return;
     if (this.state.gameOver) return;
 
