@@ -1823,16 +1823,21 @@ export class Renderer3D {
       walkGroup: walkGroupNative,
       transformNodes: Array.isArray(result.transformNodes) ? result.transformNodes.slice() : [],
     };
-    // Tune the walking playback so one stride roughly matches MOVE_ANIM_MS.
-    // Mixamo's Walking clip natural duration is ~0.83 s (24 frames @ 30 fps).
-    // At MOVE_ANIM_MS=600 the model crosses one hex in 0.6 s; speedRatio
-    // 0.83/0.6 ≈ 1.4 makes a full stride coincide with one hex hop so the
-    // foot placement reads as a real walk rather than a moonwalk.
-    const walkSpeedRatio = 1.4;
+    // Walking playback at 2× natural — operator wanted a brisker cycle
+    // than the default Mixamo Walking (which reads as slow at our scale).
+    // Native walkGroup starts PAUSED; the per-frame tick resumes it
+    // whenever a ghost is animating (planning preview) or any hero is
+    // mid-move (resolution playback), and pauses it again when nothing
+    // is moving so the rig holds its current pose instead of moonwalking.
+    const walkSpeedRatio = 2.0;
+    this._walkingSource.speedRatio = walkSpeedRatio;
     if (typeof walkGroupNative.start === 'function') {
       walkGroupNative.start(true, walkSpeedRatio);
     }
-    this._walkingSource.speedRatio = walkSpeedRatio;
+    if (typeof walkGroupNative.pause === 'function') {
+      walkGroupNative.pause();
+      this._walkingSource.playing = false;
+    }
 
     // Build the name → target map from the IDLE group's targetedAnimations.
     // Idle works — its targets are by definition the correct TransformNodes
@@ -1966,6 +1971,29 @@ export class Renderer3D {
     }
   }
 
+  /** Resume or pause the NATIVE walking AnimationGroup (the one playing
+   *  on walking.glb's own skeleton, used by ghost clones). It should play
+   *  whenever a plan-ghost is up or a hero standee is mid-move; otherwise
+   *  pause so the rig holds its current pose instead of cycling
+   *  invisibly in the background. */
+  _maybeToggleNativeWalking() {
+    const ws = this._walkingSource;
+    if (!ws || !ws.walkGroup) return;
+    const ghostsActive = this._planGhostMeshes && this._planGhostMeshes.size > 0;
+    const movesActive = (this._activeMoveIds && this._activeMoveIds.size > 0)
+      || (this._activeLungeIds && this._activeLungeIds.size > 0);
+    const shouldPlay = !!(ghostsActive || movesActive);
+    if (shouldPlay && !ws.playing) {
+      if (typeof ws.walkGroup.restart === 'function') ws.walkGroup.restart();
+      else if (typeof ws.walkGroup.play === 'function') ws.walkGroup.play(true);
+      else if (typeof ws.walkGroup.start === 'function') ws.walkGroup.start(true, ws.speedRatio ?? 1.0);
+      ws.playing = true;
+    } else if (!shouldPlay && ws.playing) {
+      if (typeof ws.walkGroup.pause === 'function') ws.walkGroup.pause();
+      ws.playing = false;
+    }
+  }
+
   /** Subscribe a per-frame tick that swaps the paladin's idle and walking
    *  animation groups. Decision: play walking whenever any hero entity is
    *  mid-move/lunge OR a plan-ghost is animating; otherwise idle. The
@@ -1976,6 +2004,10 @@ export class Renderer3D {
   _installPaladinAnimBlendTick() {
     if (!this._scene || !this._scene.onBeforeRenderObservable) return null;
     return this._scene.onBeforeRenderObservable.add(() => {
+      // Native walking group (used by ghosts) — pause when no ghost is up
+      // and nobody is mid-move. Resume otherwise. This keeps the rig from
+      // moonwalking in place when nothing on screen needs it.
+      this._maybeToggleNativeWalking();
       const src = this._paladinSource;
       if (!src || !src.idleGroup || !src.walkGroup) return;
       // Main standees only enter walking during ACTUAL resolution motion
@@ -5277,7 +5309,7 @@ export class Renderer3D {
     // sideways/backwards. Witch/zombie cone tokens are rotationally
     // symmetric, so we only yaw the paladin clone (when present).
     if (standee.paladinClone?.mesh && (toX !== fromX || toZ !== fromZ)) {
-      standee.paladinClone.mesh.rotation.y = Math.atan2(toX - fromX, toZ - fromZ) + PALADIN_YAW;
+      standee.paladinClone.mesh.rotation.y = Math.atan2(toX - fromX, toZ - fromZ);
     }
 
     const animX = new BABYLON.Animation('mvX', 'position.x', 60,
@@ -5320,7 +5352,7 @@ export class Renderer3D {
 
     // Face the lunge direction (same model-yaw logic as MOVE).
     if (standee.paladinClone?.mesh && (toX !== fromX || toZ !== fromZ)) {
-      standee.paladinClone.mesh.rotation.y = Math.atan2(toX - fromX, toZ - fromZ) + PALADIN_YAW;
+      standee.paladinClone.mesh.rotation.y = Math.atan2(toX - fromX, toZ - fromZ);
     }
 
     standee.plane.position.x = fromX; standee.plane.position.z = fromZ;
@@ -6251,15 +6283,27 @@ export class Renderer3D {
           cone.visibility = 0;
           sphere.visibility = 0;
           ghostMats = [];
+          // Babylon glTF loader produces PBRMaterials; mat.alpha alone
+          // doesn't always trigger alpha blending — need transparencyMode
+          // set explicitly. Also drive mesh.visibility as a belt-and-braces
+          // alpha multiplier so any material type ends up at PLAN_GHOST_ALPHA.
+          const ALPHABLEND = BABYLON.Material?.MATERIAL_ALPHABLEND ?? 2;
           for (const child of ghostClone.childMeshes || []) {
             if (!child) continue;
+            child.visibility = PLAN_GHOST_ALPHA;
             if (child.material && typeof child.material.clone === 'function') {
               const ghostMat = child.material.clone(`ghostMat_${id}_${child.name}`);
               ghostMat.alpha = PLAN_GHOST_ALPHA;
+              ghostMat.transparencyMode = ALPHABLEND;
               if ('useAlphaFromDiffuseTexture' in ghostMat) {
                 ghostMat.useAlphaFromDiffuseTexture = false;
               }
               ghostMat.backFaceCulling = false;
+              // PBRMaterial cache invalidation — ensure the next frame
+              // re-evaluates needAlphaBlending() with the new alpha + mode.
+              if (typeof ghostMat.markAsDirty === 'function') {
+                ghostMat.markAsDirty(BABYLON.Material?.AttributesDirtyFlag ?? 1);
+              }
               child.material = ghostMat;
               ghostMats.push(ghostMat);
             }
@@ -6329,7 +6373,7 @@ export class Renderer3D {
         const dx = b.x - a.x;
         const dz = b.z - a.z;
         if (dx !== 0 || dz !== 0) {
-          entry.ghostClone.mesh.rotation.y = Math.atan2(dx, dz) + PALADIN_YAW;
+          entry.ghostClone.mesh.rotation.y = Math.atan2(dx, dz);
         }
       }
     }
