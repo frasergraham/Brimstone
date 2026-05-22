@@ -1741,13 +1741,13 @@ export class Renderer3D {
       this._borderForestHexesByKey.set(hexKey(pos.col, pos.row), hex);
       const props = [hex];
 
-      // Pine trees — denser than in-map forest tiles, batched into 2 merged
-      // meshes per tile (trunks + leaves) to keep border-band draw cost
-      // bounded. Same trunk/leaf colours as in-map FOREST trees so the band
-      // reads as a continuous extension of the map. Trees are skipped on
-      // border tiles whose centres land inside the river-extension footprint
-      // (operator: "trees in the outer forest should never be in the river").
-      const trees = borderForestTreesForHex(pos.col, pos.row).filter(t =>
+      // Pine trees use the SAME layout as in-map FOREST tiles so the band
+      // reads as a continuous extension of the map (operator: "the forest
+      // outside the playable area to look and feel like an extension of the
+      // map"). Same tree count (3-5 per tile, was 5-7 for border), same
+      // trunk/leaf colours. Trees are skipped where they'd land inside the
+      // river-extension footprint.
+      const trees = forestTreesForHex(pos.col, pos.row).filter(t =>
         !this._borderTreeBlockedByRiver(x + t.x, z + t.z),
       );
       const meshes = this._buildPineTreeBatchedMeshes(
@@ -2424,24 +2424,39 @@ export class Renderer3D {
    *  position and billboarded rotation automatically. Slightly smaller than
    *  the silhouette so the carrier shows as a coloured frame around the
    *  portrait. The plane uses the portrait texture's alpha (transparent
-   *  background) so the carrier colour shows through where the head isn't. */
+   *  background) so the carrier colour shows through where the head isn't.
+   *
+   *  DOUBLESIDE so the sticker is visible regardless of which face of the
+   *  plane ends up facing the camera (Babylon CreatePlane's default normal
+   *  direction is left-handed and combined with billboardMode_Y inheritance
+   *  it's not obvious which side wins — DOUBLESIDE bypasses the question). */
   _buildStandeePortraitSticker(name, tombstone, portraitMat) {
     const BABYLON = this._babylon;
     const md = tombstone.metadata || {};
     const w  = md._silhouetteWidth  ?? STANDEE_BASE_WIDTH;
     const h  = md._silhouetteHeight ?? STANDEE_BASE_HEIGHT;
     const t  = md._thickness        ?? 0.10;
-    // 92% of silhouette: leaves a thin coloured rim around the sticker.
     const plane = BABYLON.MeshBuilder.CreatePlane(name,
-      { width: w * 0.92, height: h * 0.92 }, this._scene);
+      { width: w * 0.92, height: h * 0.92, sideOrientation: BABYLON.Mesh.DOUBLESIDE },
+      this._scene);
     plane.parent     = tombstone;
     plane.isPickable = false;
     plane.material   = portraitMat;
-    // Sit just in front of the tombstone's front face so depth-fight is
-    // impossible. Tombstone bottom is at local Y=0; sticker centre lines up
-    // with the silhouette's vertical centre.
-    plane.position.set(0, h / 2, (t / 2) + 0.005);
+    // Build TWO stickers — one on each face of the tombstone — so the
+    // portrait is visible from both sides regardless of camera yaw. (The
+    // tombstone billboards around Y, so the +Z face usually points at the
+    // camera, but a quick rotate-around can swap sides.)
+    plane.position.set(0, h / 2, (t / 2) + 0.02);
     plane.renderingGroupId = tombstone.renderingGroupId ?? 0;
+    const planeBack = BABYLON.MeshBuilder.CreatePlane(`${name}_back`,
+      { width: w * 0.92, height: h * 0.92, sideOrientation: BABYLON.Mesh.DOUBLESIDE },
+      this._scene);
+    planeBack.parent     = tombstone;
+    planeBack.isPickable = false;
+    planeBack.material   = portraitMat;
+    planeBack.position.set(0, h / 2, -(t / 2) - 0.02);
+    planeBack.rotation.y = Math.PI; // mirror so the portrait isn't reversed on the back
+    planeBack.renderingGroupId = tombstone.renderingGroupId ?? 0;
     return plane;
   }
 
@@ -2786,6 +2801,10 @@ export class Renderer3D {
     const mat = new BABYLON.StandardMaterial(`base_${ownerKey}`, this._scene);
     mat.diffuseColor  = new BABYLON.Color3(r, g, b);
     mat.specularColor = new BABYLON.Color3(0.04, 0.04, 0.04);
+    // Both sides render — the standee tombstone uses this material on a
+    // custom-vertex mesh whose winding might have either-handed normals;
+    // showing both sides bypasses the question.
+    mat.backFaceCulling = false;
     this._baseMaterialCache.set(ownerKey, mat);
     return mat;
   }
