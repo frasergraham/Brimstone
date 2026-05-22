@@ -3145,13 +3145,17 @@ export function _edgeTo(here, there, radius = HEX_RADIUS_WORLD) {
  *   neighbours   — array of neighbour offset {col,row} objects that count as
  *                  connected (RIVER+BRIDGE for river network; tile.roadDirs
  *                  → ROAD/BRIDGE/BUILDING for road network).
+ *   opts.kind    — 'river' (default) or 'road'. Controls 1-neighbour behaviour:
+ *                  rivers extend off-tile (water flows off the map edge),
+ *                  roads draw a centre→edge stub (dead-end at a building).
  *
  * Returns an array of "strokes" — each stroke is an array of `{x, z}` sample
  * points (≥ 2 entries) suitable for turning into a tube. May return [] for
  * tiles that should not draw (e.g. an isolated river hex with 0 neighbours).
  *
  * Mirrors src/renderer.js's per-tile geometry:
- *   • 1 neighbour  → through-bezier from the off-tile extension to the edge.
+ *   • 1 neighbour  → river: through-bezier from the off-tile extension to the
+ *                    edge. Road: straight stub from centre to edge midpoint.
  *   • 2 neighbours → smooth bezier through centre between the two edges.
  *   • 3+ neighbours → through-bezier on the most-opposing pair, straight
  *                     spokes from centre to the remaining edges.
@@ -3160,6 +3164,7 @@ export function networkStrokesForTile(tile, neighbours, opts = {}) {
   if (!tile || !Array.isArray(neighbours) || neighbours.length === 0) return [];
   const radius = opts.radius ?? HEX_RADIUS_WORLD;
   const segments = opts.segments ?? NETWORK_BEZIER_SEGMENTS;
+  const kind = opts.kind ?? 'river';
   const here = hexToWorld(tile.col, tile.row, radius);
   const edges = neighbours.map(n => {
     const there = hexToWorld(n.col, n.row, radius);
@@ -3169,8 +3174,14 @@ export function networkStrokesForTile(tile, neighbours, opts = {}) {
 
   if (edges.length === 1) {
     const e = edges[0];
-    // Extend off-tile in the opposite direction so endpoints fade past the
-    // hex border (matches the 2D path's behaviour at map-edge river tiles).
+    if (kind === 'road') {
+      // Dead-end stub: straight line from centre to the edge midpoint facing
+      // the lone neighbour (matches the 2D path at building entrances).
+      strokes.push([{ x: here.x, z: here.z }, { x: e.mx, z: e.mz }]);
+      return strokes;
+    }
+    // River: extend off-tile in the opposite direction so endpoints fade past
+    // the hex border (matches the 2D path's behaviour at map-edge river tiles).
     const apo = HEX_APOTHEM * radius;
     const p0 = { x: here.x - e.dx * apo, z: here.z - e.dz * apo };
     const p1 = here;
@@ -3240,7 +3251,7 @@ export function buildRoadNetworkStrokes(tiles, hexKeyFn = hexKey) {
       if (nt) nbrs.push({ col: nt.col, row: nt.row });
     }
     if (nbrs.length === 0) continue;
-    const strokes = networkStrokesForTile(tile, nbrs);
+    const strokes = networkStrokesForTile(tile, nbrs, { kind: 'road' });
     if (strokes.length > 0) out.push({ tile, strokes });
   }
   return out;

@@ -72,10 +72,42 @@ describe('networkStrokesForTile — per-tile geometry', () => {
     assert.deepEqual(strokes, []);
   });
 
-  test('single-neighbour tile emits one through-bezier extending off-tile', () => {
+  test('single-neighbour river tile emits one through-bezier extending off-tile', () => {
     const strokes = networkStrokesForTile({ col: 0, row: 0 }, [{ col: 1, row: 0 }]);
     assert.equal(strokes.length, 1);
     assert.ok(strokes[0].length >= 3, 'expected ≥3 samples for a curve');
+    // First sample sits OUTSIDE the source hex (off-tile extension).
+    const apo = Math.sqrt(3) / 2;
+    const first = strokes[0][0];
+    const centre = hexToWorld(0, 0);
+    assert.ok(first.x < centre.x - apo + 1e-9,
+      `river 1-neighbour endpoint x ${first.x} should extend past left edge ${centre.x - apo}`);
+  });
+
+  test('single-neighbour river tile defaults to river behaviour when no kind given', () => {
+    const a = networkStrokesForTile({ col: 0, row: 0 }, [{ col: 1, row: 0 }]);
+    const b = networkStrokesForTile({ col: 0, row: 0 }, [{ col: 1, row: 0 }], { kind: 'river' });
+    assert.equal(a[0].length, b[0].length);
+  });
+
+  test('single-neighbour road tile emits a straight stub from centre to edge midpoint', () => {
+    const strokes = networkStrokesForTile(
+      { col: 0, row: 0 },
+      [{ col: 1, row: 0 }],
+      { kind: 'road' },
+    );
+    assert.equal(strokes.length, 1);
+    const pts = strokes[0];
+    assert.equal(pts.length, 2, 'road dead-end is a 2-point straight line');
+    const centre = hexToWorld(0, 0);
+    const apo = Math.sqrt(3) / 2;
+    // Starts at tile centre.
+    assert.ok(Math.abs(pts[0].x - centre.x) < 1e-9);
+    assert.ok(Math.abs(pts[0].z - centre.z) < 1e-9);
+    // Ends at the edge midpoint facing the neighbour (east of centre, NOT past).
+    assert.ok(Math.abs(pts[1].x - (centre.x + apo)) < 1e-9,
+      `road 1-neighbour endpoint x ${pts[1].x} should sit on east edge ${centre.x + apo}`);
+    assert.ok(Math.abs(pts[1].z - centre.z) < 1e-9);
   });
 
   test('two-neighbour tile emits one smooth through-bezier between edges', () => {
@@ -197,6 +229,25 @@ describe('buildRoadNetworkStrokes', () => {
   test('emits one segment per ROAD tile with a recorded roadDir', () => {
     const segs = buildRoadNetworkStrokes(makeTiles());
     assert.equal(segs.length, 3);
+  });
+
+  test('dead-end road tiles emit straight stubs (no off-tile extension)', () => {
+    const segs = buildRoadNetworkStrokes(makeTiles());
+    // (0,1) and (2,1) each have a single road neighbour → straight stubs.
+    const endpoints = segs.filter(s => s.tile.col === 0 || s.tile.col === 2);
+    assert.equal(endpoints.length, 2);
+    for (const s of endpoints) {
+      assert.equal(s.strokes.length, 1);
+      assert.equal(s.strokes[0].length, 2,
+        'road dead-end should be a 2-point stub, not a multi-sample bezier');
+      // Endpoint sits on the tile edge facing its neighbour, not past it.
+      const centre = hexToWorld(s.tile.col, s.tile.row);
+      const apo = Math.sqrt(3) / 2;
+      const tip = s.strokes[0][1];
+      const dx = tip.x - centre.x;
+      assert.ok(Math.abs(Math.abs(dx) - apo) < 1e-9,
+        `stub tip offset ${Math.abs(dx)} should equal apothem ${apo}`);
+    }
   });
 
   test('tiles without roadDirs are skipped (no phantom junctions)', () => {
