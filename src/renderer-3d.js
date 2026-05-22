@@ -36,16 +36,31 @@ import { MAP_SIZES } from './map.js';
 const BABYLON_CDN = 'https://cdn.jsdelivr.net/npm/@babylonjs/core@7.42.0/+esm';
 
 // ─── Standee constants (Phase 3) ────────────────────────────────────────────
-// Width / height of an ordinary unit's billboard plane and the disc beneath it.
-// Leader entities scale these up to read as "important" from far out.
+// Units are now rendered as traditional board-game tokens — a coloured cone
+// "body" with a spherical "head" on top, both tinted in the owning player's
+// colour. The previous tombstone-shaped silhouette + portrait sticker was
+// retired so the icon billboard (a separate task) can carry the unit identity.
+//
+// STANDEE_BASE_WIDTH/HEIGHT are retained as the legacy "silhouette bounding
+// box" (still consumed by the plan-ghost positioning helper); the cone/sphere
+// constants below describe the actual body geometry. Leader entities scale all
+// three (base disc, cone, sphere) up to read as "important" from far out.
 export const STANDEE_BASE_WIDTH       = 0.7;
 export const STANDEE_BASE_HEIGHT      = 1.0;
 export const STANDEE_BASE_DIAMETER    = 0.75;
 export const STANDEE_BASE_THICKNESS   = 0.06;
 export const STANDEE_LEADER_WIDTH_MUL  = 1.2;
 export const STANDEE_LEADER_HEIGHT_MUL = 1.3;
-// Y-offset for the plane so the bottom of the sprite rests on the base disc,
-// which itself sits just above the tile prism so picking prefers the standee.
+// Cone body dimensions (centred on Y axis; bottom rim wider than top to read
+// as a traditional "meeple" / board-game pawn). Bottom rim sits flush on the
+// top face of the base disc — no extra Y offset beyond the disc's thickness.
+export const STANDEE_CONE_HEIGHT          = 0.55;
+export const STANDEE_CONE_DIAMETER_BOTTOM = 0.55;
+export const STANDEE_CONE_DIAMETER_TOP    = 0.18;
+// Sphere "head" diameter — sits centred on the cone's flat top.
+export const STANDEE_SPHERE_DIAMETER      = 0.32;
+// Y-offset for the base disc centre so it sits clear of the tile prism top
+// (which is at y=0.075). The cone/sphere are positioned relative to this disc.
 export const STANDEE_BASE_Y_OFFSET    = 0.18; // tile prism top is at 0.075; base sits clear of it
 
 // Building world-space offset within its tile — aliased to TILE_SLOTS[1] (the
@@ -2442,117 +2457,39 @@ export class Renderer3D {
    *  box (with a small inset so the atlas-sprite gutter pixels are never
    *  sampled). Triangulated as a fan from the centre vertex out to six rim
    *  vertices at 30°, 90°, 150°, 210°, 270°, 330°. */
-  /** Build a tombstone-shaped standee mesh: a rectangle of width `w` and
-   *  height `h` minus rounded top corners, extruded by `thickness` along the
-   *  +Z axis. Lives in the XY plane centred so the bottom edge sits at Y=0.
+  /** Build a board-game-style token body: a cone (tapered cylinder) with a
+   *  spherical head on top. Both meshes share the same player-colour material
+   *  and the sphere is parented to the cone so the pair moves as a unit. The
+   *  cone is the picking target (carries the entity metadata); the sphere is
+   *  marked non-pickable and inherits visibility through Babylon's parent
+   *  chain, so fog-of-war's `setEnabled(false)` on the cone hides both.
    *
-   *  Single-material mesh — the whole silhouette renders in one solid colour
-   *  (assigned by the caller — typically the faction colour). The unit's
-   *  portrait sits ON TOP as a separate sticker plane built in
-   *  `_buildStandeePortraitSticker`. Splitting the carrier from the icon lets
-   *  the front face stay flat-coloured behind a portrait with transparent
-   *  edges, so the tombstone reads as a coloured marker with the hero face
-   *  painted on rather than the icon doubled onto every face. */
-  _buildTombstoneMesh(name, w, h, thickness) {
+   *  Local origin sits at the cone's centre — bottom rim at -h/2, sphere
+   *  centre at +h/2 + sphereDiameter/2. The caller positions the cone's world
+   *  Y so the bottom rim rests on the base disc. */
+  _buildTokenBody(name, opts) {
     const BABYLON = this._babylon;
-    const SEGMENTS = 16;
-    const r = w / 2;
-    const outline = [];
-    outline.push({ x: -r, y: 0 });
-    outline.push({ x:  r, y: 0 });
-    outline.push({ x:  r, y: h - r });
-    for (let i = 1; i < SEGMENTS; i++) {
-      const a = Math.PI * (i / SEGMENTS);
-      outline.push({ x: r * Math.cos(a), y: (h - r) + r * Math.sin(a) });
-    }
-    outline.push({ x: -r, y: h - r });
-    const N = outline.length;
-    const halfT = thickness / 2;
-
-    const positions = [];
-    const uvs = [];
-    const indices = [];
-
-    // Front face vertices
-    for (let i = 0; i < N; i++) {
-      positions.push(outline[i].x, outline[i].y, +halfT);
-      uvs.push(0, 0);
-    }
-    for (let i = 1; i < N - 1; i++) indices.push(0, i, i + 1);
-    // Back face vertices
-    for (let i = 0; i < N; i++) {
-      positions.push(outline[i].x, outline[i].y, -halfT);
-      uvs.push(0, 0);
-    }
-    for (let i = 1; i < N - 1; i++) indices.push(N, N + i + 1, N + i);
-    // Side walls — fresh vertices per quad so each side carries its own
-    // perpendicular normal and lighting reads correctly at the corners.
-    for (let i = 0; i < N; i++) {
-      const j = (i + 1) % N;
-      const base = positions.length / 3;
-      positions.push(outline[i].x, outline[i].y, +halfT);
-      positions.push(outline[j].x, outline[j].y, +halfT);
-      positions.push(outline[j].x, outline[j].y, -halfT);
-      positions.push(outline[i].x, outline[i].y, -halfT);
-      uvs.push(0, 0, 0, 0, 0, 0, 0, 0);
-      indices.push(base, base + 3, base + 1);
-      indices.push(base + 1, base + 3, base + 2);
-    }
-
-    const mesh = new BABYLON.Mesh(name, this._scene);
-    const vd = new BABYLON.VertexData();
-    vd.positions = positions;
-    vd.indices   = indices;
-    vd.uvs       = uvs;
-    vd.normals   = [];
-    BABYLON.VertexData.ComputeNormals(positions, indices, vd.normals);
-    vd.applyToMesh(mesh);
-    // Stash the silhouette bounds so the sticker builder can size itself to
-    // match the tombstone face (and shrink slightly so the carrier shows as
-    // a coloured frame around the portrait).
-    mesh.metadata = { _silhouetteWidth: w, _silhouetteHeight: h, _thickness: thickness };
-    return mesh;
-  }
-
-  /** Build the portrait "sticker" plane that sits flush against the tombstone's
-   *  front face. Parented to the tombstone so it follows the standee's
-   *  position and billboarded rotation automatically. Slightly smaller than
-   *  the silhouette so the carrier shows as a coloured frame around the
-   *  portrait. The plane uses the portrait texture's alpha (transparent
-   *  background) so the carrier colour shows through where the head isn't.
-   *
-   *  DOUBLESIDE so the sticker is visible regardless of which face of the
-   *  plane ends up facing the camera (Babylon CreatePlane's default normal
-   *  direction is left-handed and combined with billboardMode_Y inheritance
-   *  it's not obvious which side wins — DOUBLESIDE bypasses the question). */
-  _buildStandeePortraitSticker(name, tombstone, portraitMat) {
-    const BABYLON = this._babylon;
-    const md = tombstone.metadata || {};
-    const w  = md._silhouetteWidth  ?? STANDEE_BASE_WIDTH;
-    const h  = md._silhouetteHeight ?? STANDEE_BASE_HEIGHT;
-    const t  = md._thickness        ?? 0.10;
-    // Sticker sits at the TOP of the tombstone, centred on the rounded head.
-    // Size = the head circle (diameter ≈ w), positioned so its centre lines up
-    // with the centre of the semicircular top (local y = h - w/2). Two
-    // stickers (front + back face) so the portrait reads from any camera yaw
-    // even with the standee non-billboarded.
-    const stickerSize = w * 0.85;
-    const headCentreY = h - (w / 2);
-    const makeSticker = (suffix, zSign) => {
-      const p = BABYLON.MeshBuilder.CreatePlane(`${name}${suffix}`,
-        { width: stickerSize, height: stickerSize, sideOrientation: BABYLON.Mesh.DOUBLESIDE },
-        this._scene);
-      p.parent     = tombstone;
-      p.isPickable = false;
-      p.material   = portraitMat;
-      p.position.set(0, headCentreY, zSign * ((t / 2) + 0.02));
-      if (zSign < 0) p.rotation.y = Math.PI; // mirror so portrait isn't reversed
-      p.renderingGroupId = tombstone.renderingGroupId ?? 0;
-      return p;
-    };
-    const front = makeSticker('',      +1);
-    makeSticker('_back', -1);
-    return front;
+    const scene   = this._scene;
+    const {
+      coneHeight, coneDiameterBottom, coneDiameterTop, sphereDiameter,
+    } = opts;
+    const cone = BABYLON.MeshBuilder.CreateCylinder(name, {
+      tessellation: 24,
+      height:        coneHeight,
+      diameterBottom: coneDiameterBottom,
+      diameterTop:    coneDiameterTop,
+    }, scene);
+    const sphere = BABYLON.MeshBuilder.CreateSphere(`${name}_head`, {
+      segments: 12,
+      diameter: sphereDiameter,
+    }, scene);
+    sphere.parent = cone;
+    sphere.isPickable = false;
+    // Sphere centre rests just above the cone's flat top (tiny overlap so the
+    // junction doesn't show a hairline crack at oblique angles).
+    sphere.position.set(0, (coneHeight / 2) + (sphereDiameter / 2) - 0.01, 0);
+    cone.metadata = { _coneHeight: coneHeight, _sphereDiameter: sphereDiameter };
+    return { cone, sphere };
   }
 
   /** Build pine trees for a forest hex: one merged TRUNK mesh + one merged
@@ -2942,49 +2879,41 @@ export class Renderer3D {
     return mat;
   }
 
-  /** Build the {plane, base} mesh pair for a single entity. */
+  /** Build the {plane, base, sphere, leader} mesh group for a single entity.
+   *
+   *  Unit body is a player-colour cone with a spherical head — a classic
+   *  board-game token. The cone is exposed as `plane` to preserve the field
+   *  name used by every animation / focus / picking site (lunge, move, plan
+   *  ghost, selection halo, fog-of-war visibility). The sphere is parented to
+   *  the cone, so animating the cone moves the head along with it for free. */
   _buildStandeeMesh(entity) {
     const BABYLON = this._babylon;
     const scene   = this._scene;
     const leader  = isLeaderType(entity.type);
-    const wMul    = leader ? STANDEE_LEADER_WIDTH_MUL  : 1;
     const hMul    = leader ? STANDEE_LEADER_HEIGHT_MUL : 1;
+    const wMul    = leader ? STANDEE_LEADER_WIDTH_MUL  : 1;
 
-    // Standee silhouette: a tombstone-shaped mesh (rectangle + rounded top)
-    // with a little thickness, replacing the previous flat billboarded plane.
-    // The portrait texture is mapped onto the front face via per-vertex UVs
-    // built in `_buildTombstoneMesh`. Bilateral symmetry around the Y axis so
-    // either side reads as the same silhouette under any camera angle.
-    const plane = this._buildTombstoneMesh(
-      `unit_${entity.id}`,
-      STANDEE_BASE_WIDTH  * wMul,
-      STANDEE_BASE_HEIGHT * hMul,
-      /* thickness */ 0.10,
-    );
-    // Standees stay stationary in the world — they DON'T billboard. With
-    // stickers on both faces of the tombstone, the portrait reads from any
-    // camera yaw, and the silhouette has a real 3D presence instead of
-    // spinning to face the viewer (operator: "standees shouldn't rotate
-    // with the camera").
-    // Tombstone block renders in a solid faction colour — same material the
-    // base disc uses — so the silhouette reads as a coloured marker. The
-    // portrait is overlaid as a separate "sticker" plane on the front face,
-    // so its transparent edges let the faction colour show through (no more
-    // doubled-up icon on the back / side walls).
-    plane.material      = this._baseMaterialForOwner(this._ownerColorFor(entity));
-    plane.metadata      = { kind: 'entity', entityId: entity.id, col: entity.col, row: entity.row };
-    // Units render in group 1 so they always draw on top of roads / rivers /
-    // any other ground-level translucent geometry that would otherwise clip
-    // the standee silhouette. (Babylon default rendering group is 0.)
-    plane.renderingGroupId = 1;
-    // Portrait sticker — a child plane parented to the tombstone, so it
-    // follows the standee's billboard rotation and position for free.
-    const portraitMat = this._planeMaterialFor(this._assetIdFor(entity));
-    this._buildStandeePortraitSticker(`unitSticker_${entity.id}`, plane, portraitMat);
-    // The standee plane is the unit silhouette — register it so the sun
-    // throws a unit-shaped shadow onto the terrain. transparencyShadow on
-    // the ShadowGenerator honours the portrait's alpha channel.
-    this._addShadowCaster(plane);
+    const ownerColor = this._ownerColorFor(entity);
+    const bodyMat = this._baseMaterialForOwner(ownerColor);
+
+    const { cone, sphere } = this._buildTokenBody(`unit_${entity.id}`, {
+      coneHeight:         STANDEE_CONE_HEIGHT          * hMul,
+      coneDiameterBottom: STANDEE_CONE_DIAMETER_BOTTOM * wMul,
+      coneDiameterTop:    STANDEE_CONE_DIAMETER_TOP    * wMul,
+      sphereDiameter:     STANDEE_SPHERE_DIAMETER      * wMul,
+    });
+    cone.material   = bodyMat;
+    sphere.material = bodyMat;
+    // Picking target: the cone (the bigger of the two volumes). Metadata mirrors
+    // what the tombstone-era plane carried so canvasToHex still resolves clicks.
+    cone.metadata = { kind: 'entity', entityId: entity.id, col: entity.col, row: entity.row };
+    // Render in group 1 so tokens always draw on top of ground-level translucent
+    // geometry (roads / rivers / fog overlay).
+    cone.renderingGroupId   = 1;
+    sphere.renderingGroupId = 1;
+    // Sun throws a token-shaped shadow onto the terrain. Both meshes cast.
+    this._addShadowCaster(cone);
+    this._addShadowCaster(sphere);
 
     const base = BABYLON.MeshBuilder.CreateCylinder(
       `unitbase_${entity.id}`,
@@ -2995,14 +2924,15 @@ export class Renderer3D {
       },
       scene,
     );
-    base.material = this._baseMaterialForOwner(this._ownerColorFor(entity));
-    // Don't pick on the base — let the camera-facing plane be the click target
-    // for a more predictable hit area.
+    base.material = bodyMat;
+    // Don't pick on the base — the cone is the click target for a more
+    // predictable hit area.
     base.isPickable = false;
-    base.renderingGroupId = 1; // same as the standee plane — always above terrain
+    base.renderingGroupId = 1; // same as the cone — always above terrain
 
-    this._positionStandee({ plane, base, leader }, entity);
-    return { plane, base, leader };
+    const standee = { plane: cone, base, sphere, leader };
+    this._positionStandee(standee, entity);
+    return standee;
   }
 
   /** Place an existing standee on its entity's tile. By default centres on
@@ -3013,13 +2943,14 @@ export class Renderer3D {
     const x = typeof opts.x === 'number' ? opts.x : base.x;
     const z = typeof opts.z === 'number' ? opts.z : base.z;
     const hMul = standee.leader ? STANDEE_LEADER_HEIGHT_MUL : 1;
-    void hMul;
     standee.plane.position.x = x;
     standee.plane.position.z = z;
-    // Tombstone mesh bottom edge sits at its local Y=0 — anchor the bottom
-    // just above the base disc instead of centring the sprite (which is what
-    // the old flat plane needed).
-    standee.plane.position.y = STANDEE_BASE_Y_OFFSET + STANDEE_BASE_THICKNESS / 2;
+    // Cone is centred on its local Y axis — lift it so its bottom rim sits on
+    // top of the base disc (the cone bottom = base disc top + ε).
+    const coneHeight = STANDEE_CONE_HEIGHT * hMul;
+    standee.plane.position.y = STANDEE_BASE_Y_OFFSET
+      + STANDEE_BASE_THICKNESS / 2
+      + coneHeight / 2;
     standee.base.position.x = x;
     standee.base.position.z = z;
     standee.base.position.y = STANDEE_BASE_Y_OFFSET;
@@ -3053,6 +2984,12 @@ export class Renderer3D {
         if (standee.base.material !== this._getSelectedBaseMaterial()
             && standee.base.material !== expected) {
           standee.base.material = expected;
+        }
+        // Cone + sphere share the owner colour with the base disc. Keep them in
+        // sync so a side-flip recolours the whole token, not just the floor.
+        if (standee.plane.material !== expected)  standee.plane.material  = expected;
+        if (standee.sphere && standee.sphere.material !== expected) {
+          standee.sphere.material = expected;
         }
       }
       // Phase 5: keep the HP bar in step with the entity. Cheap when the ratio
@@ -3764,7 +3701,12 @@ export class Renderer3D {
     mat.backFaceCulling = false;
     plane.material = mat;
 
-    const startY = STANDEE_BASE_HEIGHT * STANDEE_LEADER_HEIGHT_MUL + 0.4;
+    // Spawn above the tallest possible token (leader-sized cone + sphere).
+    const startY = STANDEE_BASE_Y_OFFSET
+      + STANDEE_BASE_THICKNESS
+      + STANDEE_CONE_HEIGHT * STANDEE_LEADER_HEIGHT_MUL
+      + STANDEE_SPHERE_DIAMETER * STANDEE_LEADER_WIDTH_MUL
+      + 0.4;
     const endY   = startY + 1.2;
     plane.position.set(x, startY, z);
     plane.visibility = 1;
@@ -3841,8 +3783,14 @@ export class Renderer3D {
     plane.parent        = standee.base;
     plane.renderingGroupId = 1; // always above ground-level translucent meshes
     // Local position relative to the base disc (which sits at STANDEE_BASE_Y_OFFSET).
+    // Bar floats above the sphere head: half the disc thickness up to the disc
+    // top, then the full cone height, then the sphere head, plus a small gap.
     const hMul = standee.leader ? STANDEE_LEADER_HEIGHT_MUL : 1;
-    plane.position.set(0, STANDEE_BASE_HEIGHT * hMul + 0.2, 0);
+    const barY = (STANDEE_BASE_THICKNESS / 2)
+      + (STANDEE_CONE_HEIGHT * hMul)
+      + (STANDEE_SPHERE_DIAMETER * (standee.leader ? STANDEE_LEADER_WIDTH_MUL : 1))
+      + 0.18;
+    plane.position.set(0, barY, 0);
 
     const entry = { plane, mat, tex, lastHp: -1, lastMax: -1 };
     this._hpBars.set(entity.id, entry);
@@ -4188,38 +4136,35 @@ export class Renderer3D {
       const standee = this._entityStandees.get(id);
       if (!standee) continue; // no live standee to clone — skip
       const ent = this.state?.entities?.find?.(e => e.id === id);
-      const assetId = this._assetIdFor(ent);
-      // Build a fresh material so we can tweak alpha independently of the
-      // real standee. We reuse the portrait texture from the cached material.
-      const baseMat = this._planeMaterialFor(assetId);
+      // Fresh translucent material in the entity's owner colour so the ghost
+      // reads as a faint preview of the same token. Alpha is animated in
+      // `_pumpPlanGhosts`.
+      const ownerColor = this._ownerColorFor(ent ?? {});
+      const [r, g, b] = cssHexToRgb01(ownerColor);
       const mat = new BABYLON.StandardMaterial(`ghost_${id}`, this._scene);
-      if (baseMat.diffuseTexture) {
-        mat.diffuseTexture = baseMat.diffuseTexture;
-        mat.opacityTexture = baseMat.diffuseTexture;
-        mat.useAlphaFromDiffuseTexture = true;
-      } else {
-        mat.diffuseColor = baseMat.diffuseColor?.clone()
-          ?? new BABYLON.Color3(0.85, 0.85, 0.85);
-      }
+      mat.diffuseColor  = new BABYLON.Color3(r, g, b);
       mat.specularColor = new BABYLON.Color3(0, 0, 0);
-      mat.emissiveColor = new BABYLON.Color3(0.4, 0.4, 0.4);
+      mat.emissiveColor = new BABYLON.Color3(r * 0.4, g * 0.4, b * 0.4);
       mat.backFaceCulling = false;
       mat.alpha = PLAN_GHOST_ALPHA;
 
       const leader = standee.leader;
       const wMul = leader ? STANDEE_LEADER_WIDTH_MUL  : 1;
       const hMul = leader ? STANDEE_LEADER_HEIGHT_MUL : 1;
-      const plane = BABYLON.MeshBuilder.CreatePlane(
-        `planGhost_${id}`,
-        { width: STANDEE_BASE_WIDTH * wMul, height: STANDEE_BASE_HEIGHT * hMul },
-        this._scene,
-      );
-      plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_Y;
-      plane.material      = mat;
-      plane.isPickable    = false;
+      const { cone, sphere } = this._buildTokenBody(`planGhost_${id}`, {
+        coneHeight:         STANDEE_CONE_HEIGHT          * hMul,
+        coneDiameterBottom: STANDEE_CONE_DIAMETER_BOTTOM * wMul,
+        coneDiameterTop:    STANDEE_CONE_DIAMETER_TOP    * wMul,
+        sphereDiameter:     STANDEE_SPHERE_DIAMETER      * wMul,
+      });
+      cone.material   = mat;
+      sphere.material = mat;
+      cone.isPickable = false;
+      cone.renderingGroupId   = 1;
+      sphere.renderingGroupId = 1;
 
       this._planGhostMeshes.set(id, {
-        plane, mat, path,
+        plane: cone, mat, path,
         signature: path.map(s => `${s.col},${s.row}`).join('|'),
         leader,
       });
@@ -4265,9 +4210,11 @@ export class Renderer3D {
       entry.plane.position.x = lerp(a.x, b.x);
       entry.plane.position.z = lerp(a.z, b.z);
       const hMul = entry.leader ? STANDEE_LEADER_HEIGHT_MUL : 1;
+      // Same vertical anchor as a real cone token: bottom rim of the cone
+      // rests on top of where the base disc would sit.
       entry.plane.position.y = STANDEE_BASE_Y_OFFSET
         + STANDEE_BASE_THICKNESS / 2
-        + (STANDEE_BASE_HEIGHT * hMul) / 2;
+        + (STANDEE_CONE_HEIGHT * hMul) / 2;
       entry.mat.alpha = PLAN_GHOST_ALPHA * pose.alpha;
     }
   }
@@ -4910,6 +4857,21 @@ export function entityBaseColor(entity) {
     if (theme?.primary) return theme.primary;
   }
   return '#888888';
+}
+
+/** Derive a darker / desaturated variant of a player colour for dead-unit
+ *  tombstone tokens. Pulls each channel toward a neutral grey and dims the
+ *  whole result so the dead token reads as "muted version of the living one".
+ *  Pure colour math — no Babylon dependency, exported for tests. */
+export function tombstoneTokenColor(hex) {
+  const [r, g, b] = cssHexToRgb01(hex);
+  // 55% blend toward middle grey (0.45), then 65% brightness scale.
+  const desat = 0.55;
+  const dim   = 0.65;
+  const mix = (c) => (c * (1 - desat) + 0.45 * desat) * dim;
+  const out = (c) => Math.max(0, Math.min(255, Math.round(mix(c) * 255)));
+  const toHex = (n) => n.toString(16).padStart(2, '0');
+  return `#${toHex(out(r))}${toHex(out(g))}${toHex(out(b))}`;
 }
 
 // ─── Tile slot system (exported for tests) ──────────────────────────────────
