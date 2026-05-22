@@ -179,7 +179,12 @@ export function isHeroFactionEntity(entity) {
 export const STANDEE_BASE_WIDTH       = 0.7;
 export const STANDEE_BASE_HEIGHT      = 1.0;
 export const STANDEE_BASE_DIAMETER    = 0.75;
-export const STANDEE_BASE_THICKNESS   = 0.06;
+// Was 0.06 when each standee carried a ground disc as its anchor. The disc
+// has been retired but the formula `cone.position.y = STANDEE_BASE_Y_OFFSET
+// + STANDEE_BASE_THICKNESS / 2 + coneHeight / 2` is wired across many call
+// sites; setting thickness to 0 collapses the leftover legacy term to nothing
+// without churning every formula. The y math just reads `OFFSET + coneH/2`.
+export const STANDEE_BASE_THICKNESS   = 0;
 export const STANDEE_LEADER_WIDTH_MUL  = 1.2;
 export const STANDEE_LEADER_HEIGHT_MUL = 1.3;
 // Cone body dimensions (centred on Y axis; bottom rim wider than top to read
@@ -192,7 +197,11 @@ export const STANDEE_CONE_DIAMETER_TOP    = 0.18;
 export const STANDEE_SPHERE_DIAMETER      = 0.32;
 // Y-offset for the base disc centre so it sits clear of the tile prism top
 // (which is at y=0.075). The cone/sphere are positioned relative to this disc.
-export const STANDEE_BASE_Y_OFFSET    = 0.18; // tile prism top is at 0.075; base sits clear of it
+// Was 0.18 when the ground disc sat 0.105 clear of the tile prism top (0.075).
+// With the disc retired and TERRAIN_DISC_Y_OFFSET at 0.084, lowering this to
+// 0.084 puts the cone's bottom rim exactly on the tile top so the paladin GLB
+// model's feet land on the ground rather than floating ~13 cm above it.
+export const STANDEE_BASE_Y_OFFSET    = 0.084;
 
 // Building world-space offset within its tile — aliased to TILE_SLOTS[1] (the
 // "NE" outer slot) so building/tree/standee co-tenancy on the same hex shares
@@ -1730,12 +1739,13 @@ export class Renderer3D {
       return null;
     }
 
-    // Build a comprehensive name → target map from the paladin import:
-    // every TransformNode (the canonical glTF animation target), plus
-    // skeleton bones and their _linkedTransformNodes as fallbacks. Babylon
-    // sometimes namespaces duplicate imports with a `.001` suffix — strip
-    // that to match cross-file. The richer the map, the fewer targets fall
-    // through to walking-glb's about-to-be-disposed TNs.
+    // Build the name → target map from the IDLE group's targetedAnimations.
+    // Idle works — its targets are by definition the correct TransformNodes
+    // that drive the paladin's skeleton. Adding the import's TNs + bones
+    // expands coverage for any walking-anim target that idle didn't touch
+    // (idle animates a subset of bones). Strip Babylon's `.NNN` dedup
+    // suffixes on lookup so walking's "mixamorig:Hips.001" matches paladin's
+    // "mixamorig:Hips".
     const nameMap = new Map();
     const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
     const addEntry = (name, target) => {
@@ -1744,9 +1754,15 @@ export class Renderer3D {
       const stripped = stripDup(name);
       if (stripped !== name && !nameMap.has(stripped)) nameMap.set(stripped, target);
     };
+    // Idle's targets first — these are proven-correct.
+    for (const ta of src.idleGroup?.targetedAnimations || []) {
+      if (ta?.target?.name) addEntry(ta.target.name, ta.target);
+    }
+    // Then paladin's full TN hierarchy from the import.
     for (const tn of src.transformNodes || []) {
       if (tn && tn.name) addEntry(tn.name, tn);
     }
+    // Plus skeleton bones + their linked TNs as a final fallback.
     if (src.skeleton && Array.isArray(src.skeleton.bones)) {
       for (const bone of src.skeleton.bones) {
         if (!bone) continue;
@@ -1765,21 +1781,32 @@ export class Renderer3D {
       const old = ta && ta.target;
       if (!old || !old.name) continue;
       const match = nameMap.get(old.name) || nameMap.get(stripDup(old.name));
-      if (match) {
+      if (match && match !== old) {
         ta.target = match;
+        remapped++;
+      } else if (match === old) {
+        // Already pointing at the right target (rare — only if walking
+        // somehow got the SAME TN reference, e.g. via shared parent).
         remapped++;
       } else {
         missed++;
-        if (missingExamples.length < 3) missingExamples.push(old.name);
+        if (missingExamples.length < 5) missingExamples.push(old.name);
       }
     }
     console.info(
       `[Renderer3D] walking.glb retarget: ${remapped} hit, ${missed} miss`
-      + (missed > 0 ? ` (e.g. ${missingExamples.join(', ')})` : ''),
+      + (missed > 0 ? ` (e.g. ${missingExamples.join(', ')})` : '')
+      + ` — nameMap size ${nameMap.size}`,
     );
     if (remapped === 0) {
-      console.warn('[Renderer3D] walking.glb: 0 targets remapped — paladin will not walk.');
+      console.warn('[Renderer3D] walking.glb: 0 targets remapped — disabling walk blend (would T-pose).');
+      // Tear down the partial state so the blend tick never flips to walking.
+      try { walkGroup.dispose?.(); } catch { /* ignore */ }
+      this._disposeWalkingImport(result);
+      return null;
     }
+    // Stash on the source so the blend tick can guard against partial loads.
+    src.walkRemappedCount = remapped;
 
     // Wire blending. Both groups loop at weight {idle:1, walk:0} initially;
     // a per-frame tick nudges the weights toward (1,0) or (0,1) depending
