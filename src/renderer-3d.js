@@ -30,7 +30,8 @@ import { Renderer } from './renderer.js';
 import { getFactionTheme } from './theme.js';
 import { hexKey, hexDistance, getNeighbors } from './hex.js';
 import { nodeController, Phase } from './game.js';
-import { sightRangeForEntity } from './factions.js';
+import { sightRangeForEntity, findFaction } from './factions.js';
+import { Side } from './sides.js';
 import { MAP_SIZES } from './map.js';
 
 const BABYLON_CDN = 'https://cdn.jsdelivr.net/npm/@babylonjs/core@7.42.0/+esm';
@@ -58,6 +59,37 @@ export const HOUSE_MODEL_FILE = 'house.glb';
 // Operator can retune by adjusting this constant or running a one-off
 // `gltf-transform` resize pass — see PR body for the offline recipe.
 export const HOUSE_INSTANCE_BASE_SCALE = 0.55;
+
+// Pre-bridge fallback CDN — paladin loader still imports this directly (see
+// `_loadPaladinModel`); the bridge commit migrates it to `_ensureBabylonLoaders`
+// and this constant goes away.
+const BABYLON_LOADERS_CDN = 'https://cdn.jsdelivr.net/npm/@babylonjs/loaders@7.42.0/+esm';
+
+// ─── Paladin GLB model (replaces cone+sphere body for hero-side standees) ──
+// Path is relative to the assets base directory captured by `loadImages()` —
+// the loader fetches `<base>/models/paladin.glb`. The file is intentionally
+// optional — if it's missing or fails to parse, hero standees fall back to the
+// existing cone+sphere body so gameplay never blocks on a 404.
+export const PALADIN_MODEL_DIR  = 'models/';
+export const PALADIN_MODEL_FILE = 'paladin.glb';
+
+// World-space scale applied to each cloned paladin. The Mixamo source mesh is
+// ~1.7 m tall in its intrinsic units; ~0.4 lands the silhouette close to the
+// cone+sphere it replaces. Tunable in one place.
+export const PALADIN_BASE_SCALE = 0.4;
+// Forward-facing yaw applied to clones (radians). Rotates the imported mesh
+// 180° so the paladin's front reads toward the camera rather than away.
+export const PALADIN_YAW        = Math.PI;
+
+/** Predicate: does this entity belong to the day-side hero faction (and thus
+ *  render as the paladin GLB when available)? Routes through `sideFactionOf`
+ *  so the faction registry is the single source of truth — no string-literal
+ *  side checks in the renderer. Pure; exported for tests. */
+export function isHeroFactionEntity(entity) {
+  if (!entity) return false;
+  const f = findFaction(entity.owner);
+  return !!(f && f.side === Side.DAY);
+}
 
 // ─── Standee constants (Phase 3) ────────────────────────────────────────────
 // Units are now rendered as traditional board-game tokens — a coloured cone
@@ -751,6 +783,15 @@ export class Renderer3D {
     this._houseSourceMesh = null;
     this._houseLoadPromise = null; // de-dupes concurrent load attempts
     this._assetsBasePath   = null; // captured by loadImages()
+    // ── Paladin GLB model state (see `_loadPaladinModel`) ─────────────────
+    // _paladinSource: { mesh, skeleton, idleGroup } — the imported source
+    // skinned mesh, its skeleton, and the idle AnimationGroup. Each hero
+    // standee gets a fresh clone of all three so animations advance
+    // independently per-unit. Null until the GLB load resolves; null forever
+    // if the file is missing or fails to parse — hero standees keep the
+    // cone+sphere fallback in that case.
+    this._paladinSource     = null;
+    this._paladinLoadPromise = null; // de-dupes concurrent load attempts
     this._engine        = null;
     this._scene         = null;
     this._camera        = null;
@@ -1292,6 +1333,222 @@ export class Renderer3D {
     return upgraded;
   }
 
+  /** Lazy-load `<basePath>/models/paladin.glb` and stash it as
+   *  `_paladinSource = { mesh, skeleton, idleGroup }`. Each hero standee
+   *  later clones all three so per-unit idle animations play independently.
+   *  The GLB is intentionally optional: if the loader plugin import, the
+   *  ImportMeshAsync call, or the skeleton-resolution step fails, the
+   *  renderer silently falls back to the cone+sphere body so a missing file
+   *  never blocks gameplay.
+   *
+   *  Loading @babylonjs/loaders has the side-effect of registering the
+   *  .glb / .gltf plugins on BABYLON.SceneLoader. Without that import,
+   *  ImportMeshAsync rejects .glb files with "Unable to find a plugin for
+   *  file extension .glb". */
+  async _loadPaladinModel(basePath = 'assets') {
+    if (!this._babylon || !this._scene) return null;
+    if (this._paladinSource) return this._paladinSource;
+    if (this._paladinLoadPromise) return this._paladinLoadPromise;
+    const BABYLON = this._babylon;
+
+    const promise = (async () => {
+      // Step 1: register glTF loader plugin (side-effect of importing the
+      // loaders package). Best-effort — if SceneLoader.ImportMeshAsync is
+      // already wired (tests stub it directly on the fake BABYLON), this
+      // import isn't required. Real-browser path: this populates the .glb /
+      // .gltf plugin entries on BABYLON.SceneLoader.
+      try {
+        await import(/* @vite-ignore */ BABYLON_LOADERS_CDN);
+      } catch (err) {
+        // Don't abort yet — SceneLoader may still be usable (tests + edge
+        // cases). The plugin-availability check below makes the final call.
+        console.warn('[Renderer3D] @babylonjs/loaders import failed.', err);
+      }
+
+      if (!BABYLON.SceneLoader || typeof BABYLON.SceneLoader.ImportMeshAsync !== 'function') {
+        console.warn('[Renderer3D] BABYLON.SceneLoader.ImportMeshAsync unavailable; skipping paladin model.');
+        return null;
+      }
+
+      // Step 2: import the GLB. `null` for meshNames pulls everything in.
+      let result;
+      try {
+        result = await BABYLON.SceneLoader.ImportMeshAsync(
+          null,
+          `${basePath}/${PALADIN_MODEL_DIR}`,
+          PALADIN_MODEL_FILE,
+          this._scene,
+        );
+      } catch (err) {
+        console.warn('[Renderer3D] paladin.glb load failed; using cone+sphere bodies.', err);
+        return null;
+      }
+
+      // Step 3: identify the skinned mesh (the one carrying geometry; glTF
+      //         imports often return a `__root__` TransformNode plus N child
+      //         meshes — we only want the ones with vertex data).
+      const meshes = (result.meshes || []).filter(m =>
+        m && typeof m.getTotalVertices === 'function' && m.getTotalVertices() > 0,
+      );
+      if (meshes.length === 0) {
+        console.warn('[Renderer3D] paladin.glb contained no geometry; using cone+sphere bodies.');
+        return null;
+      }
+      // Prefer the mesh that has a skeleton attached (Mixamo's `Beta_Surface`
+      // / `Beta_Joints` sub-meshes). Fall back to the first geometry mesh.
+      const skinned  = meshes.find(m => m.skeleton) || meshes[0];
+      const skeleton = skinned.skeleton
+        || (Array.isArray(result.skeletons) ? result.skeletons[0] : null)
+        || null;
+
+      // Idle animation group — Mixamo exports usually label this either by
+      // the source clip name ("mixamo.com") or with an explicit "Idle"
+      // string. Match either; fall back to the first group available.
+      const groups   = result.animationGroups || [];
+      const idleGroup = groups.find(g => g && /idle|mixamo/i.test(g.name || ''))
+        || groups[0] || null;
+
+      // Hide the source meshes — clones render geometry on their behalf, but
+      // the templates themselves are never drawn directly. Otherwise an
+      // un-positioned paladin would render at world origin every frame.
+      for (const m of meshes) {
+        if (typeof m.setEnabled === 'function') m.setEnabled(false);
+        m.isPickable = false;
+      }
+      // Stop the source's idleGroup — we'll start a per-clone copy instead.
+      // Otherwise Babylon advances bones on the hidden source skeleton too,
+      // which is wasted CPU.
+      if (idleGroup && typeof idleGroup.stop === 'function') idleGroup.stop();
+
+      this._paladinSource = { mesh: skinned, skeleton, idleGroup };
+
+      // If standees were built before the GLB landed (the common case —
+      // _initBabylon kicks the load off async and `_syncEntityStandees`
+      // runs synchronously right after), retrofit each hero standee with
+      // a paladin clone.
+      this._upgradeHeroStandeesToPaladin();
+      return this._paladinSource;
+    })();
+
+    this._paladinLoadPromise = promise;
+    return promise;
+  }
+
+  /** Clone the loaded paladin source for one hero standee. Returns
+   *  `{ mesh, skeleton, animationGroup }` (any field may be null if the
+   *  source lacked it) or null if the source isn't loaded yet. Each clone
+   *  carries its own skinned mesh + skeleton + animation group so per-unit
+   *  idle animations play independently — InstancedMesh doesn't support
+   *  per-instance bone matrices, hence the deeper clone path. */
+  _buildPaladinClone(entity, parent) {
+    const src = this._paladinSource;
+    if (!src || !src.mesh || !this._babylon) return null;
+    if (typeof src.mesh.clone !== 'function') return null;
+    const BABYLON = this._babylon;
+    const id = entity?.id ?? 'unknown';
+
+    const clonedMesh = src.mesh.clone(`paladin_${id}`);
+    if (!clonedMesh) return null;
+    // Source was disabled in `_loadPaladinModel`; the clone defaults to
+    // enabled, but be explicit in case future Babylon versions inherit.
+    if (typeof clonedMesh.setEnabled === 'function') clonedMesh.setEnabled(true);
+    clonedMesh.isPickable = false;
+    if (typeof clonedMesh.renderingGroupId !== 'undefined') clonedMesh.renderingGroupId = 0;
+
+    let clonedSkel = null;
+    if (src.skeleton && typeof src.skeleton.clone === 'function') {
+      clonedSkel = src.skeleton.clone(`paladinSkel_${id}`, `paladinSkel_${id}`);
+      if (clonedSkel) clonedMesh.skeleton = clonedSkel;
+    }
+
+    let clonedGroup = null;
+    if (src.idleGroup && clonedSkel && typeof src.idleGroup.clone === 'function') {
+      // The targetConverter remaps each animation target (a bone in the
+      // source skeleton) to the corresponding bone in the cloned skeleton
+      // by name. Without it the cloned group would still drive the source
+      // skeleton, and every paladin would share one set of bone matrices.
+      const converter = (oldTarget) => {
+        if (!oldTarget || !oldTarget.name || !Array.isArray(clonedSkel.bones)) return oldTarget;
+        const found = clonedSkel.bones.find(b => b && b.name === oldTarget.name);
+        return found || oldTarget;
+      };
+      clonedGroup = src.idleGroup.clone(`paladinAnim_${id}`, converter);
+      if (clonedGroup && typeof clonedGroup.start === 'function') {
+        // (loop=true, speedRatio=1) — standard board-game idle loop.
+        clonedGroup.start(true, 1.0);
+      }
+    }
+
+    if (parent && 'parent' in clonedMesh) clonedMesh.parent = parent;
+    // Scale + rotate the mesh so the silhouette matches the cone+sphere it
+    // replaces. Position is owned by the parent transform (the cone) — the
+    // mesh sits at parent-local origin so the cone's per-tile movement
+    // moves the paladin along with it.
+    if (BABYLON.Vector3) {
+      clonedMesh.scaling = new BABYLON.Vector3(
+        PALADIN_BASE_SCALE, PALADIN_BASE_SCALE, PALADIN_BASE_SCALE,
+      );
+      clonedMesh.rotation = new BABYLON.Vector3(0, PALADIN_YAW, 0);
+      // Y-offset: drop the mesh so its feet rest on the base disc rather
+      // than floating at the cone's centre. The cone's local origin is its
+      // centre; the cone bottom rim is at -coneHeight/2 in cone-local space.
+      const leader = isLeaderType(entity?.type);
+      const hMul = leader ? STANDEE_LEADER_HEIGHT_MUL : 1;
+      const feetY = -(STANDEE_CONE_HEIGHT * hMul) / 2;
+      clonedMesh.position = new BABYLON.Vector3(0, feetY, 0);
+    }
+
+    return { mesh: clonedMesh, skeleton: clonedSkel, animationGroup: clonedGroup };
+  }
+
+  /** Dispose every part of a previously-built paladin clone — animation
+   *  group first (so the per-frame bone update stops), skeleton second
+   *  (frees bone matrix buffers), mesh last (cascades materials). Safe to
+   *  call when no clone is attached. */
+  _disposePaladinClone(standee) {
+    if (!standee || !standee.paladinClone) return;
+    const c = standee.paladinClone;
+    if (c.animationGroup && typeof c.animationGroup.dispose === 'function') {
+      c.animationGroup.dispose();
+    }
+    if (c.skeleton && typeof c.skeleton.dispose === 'function') {
+      c.skeleton.dispose();
+    }
+    if (c.mesh && typeof c.mesh.dispose === 'function') {
+      c.mesh.dispose();
+    }
+    standee.paladinClone = null;
+  }
+
+  /** Retrofit existing hero standees with a paladin clone after the GLB
+   *  load resolves asynchronously. Idempotent: standees that already carry
+   *  a clone are skipped. Returns the number of standees upgraded. */
+  _upgradeHeroStandeesToPaladin() {
+    if (!this._paladinSource || !this._entityStandees || !this.state?.entities) return 0;
+    // Index entities by id so we can look up the owner field without a
+    // O(n) scan per standee. Cheap — entity counts top out at a few dozen.
+    const byId = new Map();
+    for (const e of this.state.entities) {
+      if (e && e.id) byId.set(e.id, e);
+    }
+    let upgraded = 0;
+    for (const [id, standee] of this._entityStandees) {
+      if (!standee || standee.paladinClone) continue;
+      const ent = byId.get(id);
+      if (!isHeroFactionEntity(ent)) continue;
+      const clone = this._buildPaladinClone(ent, standee.plane);
+      if (!clone) continue;
+      // Hide the cone+sphere body so the paladin reads on its own.
+      // .visibility is a 0..1 alpha multiplier in Babylon — leaving the
+      // meshes enabled keeps picking + the existing animation rig intact.
+      if (standee.plane)  standee.plane.visibility  = 0;
+      if (standee.sphere) standee.sphere.visibility = 0;
+      standee.paladinClone = clone;
+      upgraded++;
+    }
+    return upgraded;
+  }
+
   /** Walk `_portraitMaterials` and attach a freshly-built texture to any
    *  material that was created before `_tilemapImg` was available. Idempotent
    *  — materials that already have a diffuseTexture are skipped. */
@@ -1754,6 +2011,14 @@ export class Renderer3D {
     // retrofits each building tile with an instance of the loaded source.
     // Fire-and-forget — errors are caught inside `_loadHouseModel`.
     this._loadHouseModel(this._assetsBasePath || 'assets');
+
+    // Kick off the paladin GLB load asynchronously. Fire-and-forget —
+    // `_buildMap` + `_syncEntityStandees` run synchronously right after and
+    // hero standees render with the cone+sphere fallback. Once the GLB
+    // resolves (heavy ~7 MB file), `_upgradeHeroStandeesToPaladin` retrofits
+    // every hero standee with a paladin clone. Errors are caught inside
+    // `_loadPaladinModel`.
+    this._loadPaladinModel(this._assetsBasePath || 'assets');
 
     // Build the map from current state and frame it (instant — no animation
     // on the very first frame, otherwise the camera "slides in" from the
@@ -3647,7 +3912,22 @@ export class Renderer3D {
     this._addShadowCaster(cone);
     this._addShadowCaster(sphere);
 
-    const standee = { plane: cone, sphere, leader };
+    const standee = { plane: cone, sphere, leader, paladinClone: null };
+
+    // Hero-side standees swap the cone+sphere body for a clone of the
+    // paladin GLB model once it's loaded. The cone+sphere stay in-scene as
+    // anchor + picking target (their `.visibility` is dropped to 0 so they
+    // don't render). If the source isn't loaded yet, `_loadPaladinModel`
+    // resolves later and retrofits via `_upgradeHeroStandeesToPaladin`.
+    if (this._paladinSource && isHeroFactionEntity(entity)) {
+      const clone = this._buildPaladinClone(entity, cone);
+      if (clone) {
+        cone.visibility   = 0;
+        sphere.visibility = 0;
+        standee.paladinClone = clone;
+      }
+    }
+
     this._positionStandee(standee, entity);
     return standee;
   }
@@ -3711,6 +3991,12 @@ export class Renderer3D {
     // pass — it cleans up its meshes from the same seen-set logic.
     for (const [id, standee] of this._entityStandees) {
       if (!seen.has(id)) {
+        // Paladin clones (skeleton + animation group) must be torn down
+        // explicitly — they don't cascade off the cone's dispose() call
+        // because the animation group lives in scene.animationGroups, not
+        // mesh.children. Dispose them first so the per-frame bone update
+        // stops before the cone is gone.
+        this._disposePaladinClone(standee);
         standee.plane.dispose();
         this._entityStandees.delete(id);
       }
