@@ -348,6 +348,28 @@ export function radiusForStandardFit(aspect, fov = 0.8, margin = 1.05, paddingHe
 }
 
 /**
+ * Camera radius required so a square of `minVisibleHexes × minVisibleHexes`
+ * fits inside the frustum — used as the camera's `lowerRadiusLimit` (max
+ * zoom-in). Pulling in closer than this makes the camera dive into individual
+ * meshes and breaks picking/clipping; backing off until N hexes are visible
+ * gives a comfortable close-up where the player can still read tile context.
+ *
+ * `margin` defaults to 1.0 (tight): the helper returns the minimum radius
+ * that still shows N hexes across, with no extra slack. Pure helper.
+ */
+export function radiusForCloseFit(minVisibleHexes, aspect, fov = 0.8, margin = 1.0) {
+  const n = Math.max(1, minVisibleHexes);
+  const fitWidth = n * HEX_RADIUS_WORLD * SQRT3;
+  const fitDepth = n * HEX_RADIUS_WORLD * 1.5;
+  return radiusForFit(fitWidth, fitDepth, aspect, fov, margin);
+}
+
+/** Minimum hex span we want visible at max zoom-in. 5 reads as a comfortable
+ *  close-up: the focused tile plus its full ring of neighbours, with a touch
+ *  of context past them. Closer than that and we start clipping into meshes. */
+export const MIN_VISIBLE_HEXES = 5;
+
+/**
  * Per-side depth (in hexes) the forest border band must cover so that, when
  * the camera is panned all the way to a corner of the playable extent at
  * maximum zoom-out (`upperRadiusLimit`), the visible frustum is still filled
@@ -1032,13 +1054,13 @@ export class Renderer3D {
     camera.lowerBetaLimit  = CAMERA_BETA_LOCKED;
     camera.upperBetaLimit  = CAMERA_BETA_LOCKED;
 
-    // Zoom limits — close enough to see a single tile clearly. Maximum
-    // zoom-out is capped to whatever fits a standard 13×13 map (see
-    // _recomputeMaxZoomCap). On larger maps (regional, campaign, battle) the
-    // player must pan to see the rest of the map rather than zooming out to
-    // see all of it — keeps unit silhouettes legible at all distances.
+    // Zoom limits — both are provisional and get replaced by
+    // _recomputeMaxZoomCap once the engine reports its actual aspect. The cap
+    // is radiusForStandardFit (so larger maps must be panned to view in full)
+    // and the floor is radiusForCloseFit(MIN_VISIBLE_HEXES) (so the camera
+    // can't dive inside meshes at max zoom-in).
     camera.lowerRadiusLimit = 4;
-    camera.upperRadiusLimit = 80; // provisional; replaced by _recomputeMaxZoomCap below
+    camera.upperRadiusLimit = 80;
     camera.wheelDeltaPercentage = 0.02; // smoother wheel zoom (legacy default — wheel handled by custom input)
     camera.pinchDeltaPercentage = 0.005;
 
@@ -1986,21 +2008,35 @@ export class Renderer3D {
     this.frameHexes(all, { paddingHexes: 1, instant: opts.instant === true });
   }
 
-  /** Recompute the camera's `upperRadiusLimit` (max zoom-out) from the current
-   *  aspect/FOV via `radiusForStandardFit`. The cap is the radius that fits a
-   *  standard 13×13 map — larger maps must be panned. Called once during init
-   *  and again on resize (aspect changes). If the current camera radius is now
-   *  past the new cap (window shrank, fit is tighter), snap it back in.
+  /** Recompute the camera's zoom limits from the current aspect/FOV.
+   *
+   *  `upperRadiusLimit` (max zoom-out) → `radiusForStandardFit`: the radius
+   *  that fits a standard 13×13 map. Larger maps must be panned.
+   *
+   *  `lowerRadiusLimit` (max zoom-in) → `radiusForCloseFit(MIN_VISIBLE_HEXES)`:
+   *  the radius at which ~5 hexes are still visible around the camera target.
+   *  Closer than that, the camera enters meshes and picking/clipping break.
+   *
+   *  Called once during init and again on resize. If the current camera radius
+   *  now falls outside the new range, snap it back into bounds.
    *
    *  No-op when the engine or camera hasn't initialised yet. */
   _recomputeMaxZoomCap() {
     if (!this._engine || !this._camera) return;
     const aspect = this._engine.getRenderWidth() / Math.max(1, this._engine.getRenderHeight());
     const fov = this._camera.fov || 0.8;
-    const cap = radiusForStandardFit(aspect, fov);
-    if (Number.isFinite(cap) && cap > 0) {
-      this._camera.upperRadiusLimit = cap;
-      if (this._camera.radius > cap) this._camera.radius = cap;
+    const upper = radiusForStandardFit(aspect, fov);
+    const lower = radiusForCloseFit(MIN_VISIBLE_HEXES, aspect, fov);
+    if (Number.isFinite(upper) && upper > 0) {
+      // Guarantee lower < upper even on pathological aspects (shouldn't be
+      // possible — standard-fit always exceeds 5-hex-fit — but cheap to defend).
+      const safeLower = Number.isFinite(lower) && lower > 0
+        ? Math.min(lower, upper * 0.99)
+        : this._camera.lowerRadiusLimit;
+      this._camera.lowerRadiusLimit = safeLower;
+      this._camera.upperRadiusLimit = upper;
+      if (this._camera.radius > upper) this._camera.radius = upper;
+      if (this._camera.radius < safeLower) this._camera.radius = safeLower;
     }
   }
 

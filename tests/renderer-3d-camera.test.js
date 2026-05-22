@@ -14,10 +14,12 @@ import {
   HEX_RADIUS_WORLD,
   FOCUS_ANIM_FRAMES,
   FOCUS_EPSILON,
+  MIN_VISIBLE_HEXES,
   hexToWorld,
   computeMapBounds,
   radiusForFit,
   radiusForStandardFit,
+  radiusForCloseFit,
   shouldAnimateFocus,
 } from '../src/renderer-3d.js';
 import { MAP_SIZES } from '../src/map.js';
@@ -202,6 +204,17 @@ describe('Renderer3D — radiusForStandardFit (max-zoom cap)', () => {
     assert.equal(clamped, cap);
   });
 
+  test('lower close-fit < upper standard-fit (zoom limits never invert)', () => {
+    // For every aspect we care about, radiusForCloseFit(MIN_VISIBLE_HEXES)
+    // must be strictly less than radiusForStandardFit — otherwise the
+    // ArcRotateCamera would have lower >= upper and zoom would be locked.
+    for (const aspect of [3, 16 / 9, 4 / 3, 1, 0.75, 0.5, 0.4]) {
+      const lower = radiusForCloseFit(MIN_VISIBLE_HEXES, aspect);
+      const upper = radiusForStandardFit(aspect);
+      assert.ok(lower < upper, `aspect=${aspect}: lower=${lower} must be < upper=${upper}`);
+    }
+  });
+
   test('does NOT clamp the framing radius of a skirmish-size map (smaller fits inside cap)', () => {
     // For skirmish 9×9 the unclamped fit radius is smaller than the cap, so
     // it should pass through untouched — small maps still frame to actual extent.
@@ -217,5 +230,49 @@ describe('Renderer3D — radiusForStandardFit (max-zoom cap)', () => {
     const cap = radiusForStandardFit(aspect);
     assert.ok(fullR < cap, `skirmish-fit radius ${fullR} must be below standard cap ${cap}`);
     assert.equal(Math.min(fullR, cap), fullR);
+  });
+});
+
+describe('Renderer3D — radiusForCloseFit (max-zoom-in floor)', () => {
+  test('matches radiusForFit for an N×N hex bounding box (margin=1.0)', () => {
+    const aspect = 16 / 9;
+    const fov = 0.8;
+    const n = 5;
+    const fitWidth = n * HEX_RADIUS_WORLD * Math.sqrt(3);
+    const fitDepth = n * HEX_RADIUS_WORLD * 1.5;
+    const expected = radiusForFit(fitWidth, fitDepth, aspect, fov, 1.0);
+    const got = radiusForCloseFit(n, aspect, fov, 1.0);
+    assert.ok(Math.abs(got - expected) < 1e-9, `${got} vs ${expected}`);
+  });
+
+  test('positive and finite for typical aspects', () => {
+    for (const aspect of [16 / 9, 4 / 3, 1, 0.75, 0.5]) {
+      const r = radiusForCloseFit(MIN_VISIBLE_HEXES, aspect);
+      assert.ok(Number.isFinite(r) && r > 0, `aspect=${aspect} → ${r}`);
+    }
+  });
+
+  test('more hexes → larger close-fit radius (monotonic in N)', () => {
+    const aspect = 16 / 9;
+    const r3 = radiusForCloseFit(3, aspect);
+    const r5 = radiusForCloseFit(5, aspect);
+    const r8 = radiusForCloseFit(8, aspect);
+    assert.ok(r3 < r5);
+    assert.ok(r5 < r8);
+  });
+
+  test('clamps minVisibleHexes to >= 1 (no zero or negative radius)', () => {
+    const r0 = radiusForCloseFit(0, 16 / 9);
+    const rNeg = radiusForCloseFit(-3, 16 / 9);
+    const r1 = radiusForCloseFit(1, 16 / 9);
+    assert.ok(r0 > 0 && Number.isFinite(r0));
+    assert.ok(rNeg > 0 && Number.isFinite(rNeg));
+    assert.equal(r0, r1);
+    assert.equal(rNeg, r1);
+  });
+
+  test('MIN_VISIBLE_HEXES is a sensible close-up (5 — focused hex + ring of 6 neighbours fit comfortably)', () => {
+    assert.ok(Number.isInteger(MIN_VISIBLE_HEXES));
+    assert.ok(MIN_VISIBLE_HEXES >= 4 && MIN_VISIBLE_HEXES <= 8);
   });
 });
