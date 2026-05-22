@@ -19,11 +19,15 @@ import {
   clampPanTarget,
   computeMapBounds,
   forestBandDepthForView,
+  forestTreesForHex,
   HEX_RADIUS_WORLD,
   hexToWorld,
   radiusForStandardFit,
+  Renderer3D,
   tilesExtent,
   TILE_SLOTS,
+  TREE_LEAF_SHADES_PER_SPECIES,
+  TREE_SPECIES,
 } from '../src/renderer-3d.js';
 import { hexKey } from '../src/hex.js';
 import { MAP_SIZES } from '../src/map.js';
@@ -337,5 +341,209 @@ describe('Renderer3D — forestBandDepthForView', () => {
     const depth = forestBandDepthForView(radiusForStandardFit(16 / 9), 16 / 9);
     assert.ok(depth > BORDER_BAND_DEPTH * 3,
       `expected depth >> ${BORDER_BAND_DEPTH}, got ${depth}`);
+  });
+});
+
+// ── Cross-tile merge for the border-forest band ─────────────────────────────
+//
+// Pins the perf-critical invariant from `_buildBorderForestTreesBatched`:
+// regardless of how many border tiles the band carries, the trees collapse to
+// one merged trunk mesh + one merged mesh per leaf-colour bucket (≤9, since
+// trees are bucketed by species × shade and both palettes are 3-deep). That's
+// ~10 meshes total — independent of `bandDepth`, where the per-tile path
+// would otherwise emit 2–4 meshes per tile (240–900 at max zoom-out).
+
+/** Plain-object Babylon stub that exercises the merge path without touching
+ *  WebGL. CreateCylinder/CreateSphere return throwaway mesh objects; MergeMeshes
+ *  consumes the array and returns a single fresh mesh object. Materials are
+ *  stub StandardMaterial instances tagged with their constructor name. */
+function makeStubBabylon() {
+  const makeMesh = (name) => ({
+    name,
+    position:   { set() {} },
+    rotation:   { x: 0, y: 0, z: 0 },
+    scaling:    { x: 1, y: 1, z: 1 },
+    parent:     null,
+    material:   null,
+    metadata:   undefined,
+    isPickable: true,
+    setEnabled() {},
+    dispose() {},
+  });
+  return {
+    MeshBuilder: {
+      CreateCylinder: (name) => makeMesh(name),
+      CreateSphere:   (name) => makeMesh(name),
+    },
+    Mesh: {
+      MergeMeshes: (meshes) => {
+        if (!meshes || meshes.length === 0) return null;
+        return makeMesh('merged');
+      },
+    },
+    StandardMaterial: function (name) { this.name = name; },
+    Color3: function (r, g, b) { this.r = r; this.g = g; this.b = b; },
+  };
+}
+
+function buildRectTiles(cols, rows) {
+  const m = new Map();
+  for (let c = 0; c < cols; c++) for (let r = 0; r < rows; r++) {
+    m.set(hexKey(c, r), { col: c, row: r });
+  }
+  return m;
+}
+
+function buildTreeJobsForBand(tiles, bandDepth) {
+  const treeJobs = [];
+  for (const pos of borderTilePositions(tiles, bandDepth)) {
+    const { x, z } = hexToWorld(pos.col, pos.row);
+    const trees = forestTreesForHex(pos.col, pos.row);
+    if (trees.length > 0) {
+      treeJobs.push({
+        namePrefix: `border_forest_${pos.col}_${pos.row}`,
+        cx: x, cz: z, trees,
+      });
+    }
+  }
+  return treeJobs;
+}
+
+describe('Renderer3D — _buildBorderForestTreesBatched (cross-tile merge)', () => {
+  test('worst-case bucket count is bounded by species × shade buckets + 1 trunk', () => {
+    // Theoretical ceiling: TREE_SPECIES.length × TREE_LEAF_SHADES_PER_SPECIES
+    // leaf colour buckets, plus one trunk bucket. Anything beyond this would
+    // mean the helper is bucketing on something other than (species, shade).
+    const cap = TREE_SPECIES.length * TREE_LEAF_SHADES_PER_SPECIES + 1;
+    assert.equal(cap, 10);
+  });
+
+  test('standard 13×13, bandDepth=2: emits ≤10 meshes across 120 border tiles', () => {
+    const tiles = buildRectTiles(13, 13);
+    const treeJobs = buildTreeJobsForBand(tiles, 2);
+    // 120 = (13+4)² − 13² border tiles; sanity check.
+    assert.equal(borderTilePositions(tiles, 2).length, 120);
+
+    const r = new Renderer3D(null, null);
+    r._babylon = makeStubBabylon();
+    r._scene   = {};
+    const parent = { name: 'mapRoot' };
+    const meshes = r._buildBorderForestTreesBatched(parent, treeJobs);
+
+    assert.ok(meshes.length <= 10,
+      `expected ≤10 merged meshes, got ${meshes.length}`);
+    assert.ok(meshes.length >= 1,
+      `expected ≥1 merged mesh (band is non-empty), got ${meshes.length}`);
+    // First mesh is the trunk bundle.
+    assert.equal(meshes[0].name, 'border_forest_trunks');
+    // Remaining are leaf buckets, named with the shared 'border_forest' prefix.
+    for (let i = 1; i < meshes.length; i++) {
+      assert.match(meshes[i].name, /^border_forest_leaves_\d+$/);
+    }
+  });
+
+  test('standard 13×13, bandDepth=6: still ≤10 meshes across 456 border tiles', () => {
+    // The whole point of the cross-tile merge: the merged-mesh count is O(1)
+    // in bandDepth. At bandDepth=6 the per-tile path would emit ~1200 meshes
+    // for the band; the batched path stays at ≤10.
+    const tiles = buildRectTiles(13, 13);
+    const treeJobs = buildTreeJobsForBand(tiles, 6);
+    assert.equal(borderTilePositions(tiles, 6).length, 456);
+
+    const r = new Renderer3D(null, null);
+    r._babylon = makeStubBabylon();
+    r._scene   = {};
+    const parent = { name: 'mapRoot' };
+    const meshes = r._buildBorderForestTreesBatched(parent, treeJobs);
+
+    assert.ok(meshes.length <= 10,
+      `expected ≤10 merged meshes, got ${meshes.length}`);
+  });
+
+  test('mesh count is invariant to band depth (within ±0)', () => {
+    // The whole reason we lifted the merge: the count must not grow with the
+    // tile count. Specifically, the depth=6 count must equal the depth=2
+    // count, since both bands span every (species, shade) combination given
+    // enough tiles to sample from.
+    const tiles = buildRectTiles(13, 13);
+    const stub  = makeStubBabylon();
+
+    const r1 = new Renderer3D(null, null);
+    r1._babylon = stub; r1._scene = {};
+    const m1 = r1._buildBorderForestTreesBatched({}, buildTreeJobsForBand(tiles, 2));
+
+    const r2 = new Renderer3D(null, null);
+    r2._babylon = stub; r2._scene = {};
+    const m2 = r2._buildBorderForestTreesBatched({}, buildTreeJobsForBand(tiles, 6));
+
+    assert.equal(m1.length, m2.length,
+      `band depth must not change merged-mesh count (d=2: ${m1.length}, d=6: ${m2.length})`);
+  });
+
+  test('empty treeJobs returns []', () => {
+    const r = new Renderer3D(null, null);
+    r._babylon = makeStubBabylon();
+    r._scene   = {};
+    assert.deepEqual(r._buildBorderForestTreesBatched({}, []), []);
+  });
+
+  test('no Babylon → no-op (pre-init resilience)', () => {
+    const r = new Renderer3D(null, null);
+    r._babylon = null;
+    r._scene   = null;
+    assert.deepEqual(r._buildBorderForestTreesBatched({}, [{ namePrefix: 'x', cx: 0, cz: 0, trees: [] }]), []);
+  });
+
+  test('every merged mesh is parented under the supplied parent', () => {
+    const tiles = buildRectTiles(13, 13);
+    const treeJobs = buildTreeJobsForBand(tiles, 2);
+    const r = new Renderer3D(null, null);
+    r._babylon = makeStubBabylon();
+    r._scene   = {};
+    const parent = { name: 'mapRoot' };
+    const meshes = r._buildBorderForestTreesBatched(parent, treeJobs);
+    for (const m of meshes) {
+      assert.equal(m.parent, parent, `mesh ${m.name} not parented to mapRoot`);
+      assert.equal(m.isPickable, false,
+        `border-forest mesh ${m.name} must be unpickable (visual only)`);
+    }
+  });
+});
+
+describe('Renderer3D — border-forest batch meshes registry', () => {
+  test('constructor initialises _borderForestBatchMeshes to []', () => {
+    const r = new Renderer3D(null, null);
+    assert.ok(Array.isArray(r._borderForestBatchMeshes));
+    assert.equal(r._borderForestBatchMeshes.length, 0);
+  });
+
+  test('_syncBorderForestVisibility toggles batch meshes alongside per-tile hexes', () => {
+    const r = new Renderer3D(null, null);
+    const calls = [];
+    const stub = (label) => ({
+      setEnabled(v) { calls.push([label, v]); },
+    });
+    r._borderForestHexesByKey.set('0,0', stub('hex'));
+    r._borderPropsByKey.set('0,0', [stub('hexProp')]);
+    r._borderForestBatchMeshes = [stub('mergedTrunk'), stub('mergedLeaves')];
+
+    r._borderForestHidden = true;
+    r._syncBorderForestVisibility();
+    assert.deepEqual(calls, [
+      ['hex',          false],
+      ['hexProp',      false],
+      ['mergedTrunk',  false],
+      ['mergedLeaves', false],
+    ]);
+
+    calls.length = 0;
+    r._borderForestHidden = false;
+    r._syncBorderForestVisibility();
+    assert.deepEqual(calls, [
+      ['hex',          true],
+      ['hexProp',      true],
+      ['mergedTrunk',  true],
+      ['mergedLeaves', true],
+    ]);
   });
 });
