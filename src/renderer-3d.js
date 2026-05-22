@@ -129,7 +129,7 @@ export const PALADIN_BASE_SCALE = 0.4;
 // the source bounding box at load time and scale to hit this target. Picked
 // so the paladin reads slightly taller than the ~0.55-tall cone+sphere it
 // replaces but still fits within one hex's footprint.
-export const TARGET_PALADIN_WORLD_HEIGHT = 0.8;
+export const TARGET_PALADIN_WORLD_HEIGHT = 0.92;
 // Forward-facing yaw applied to clones (radians). Rotates the imported mesh
 // 180° so the paladin's front reads toward the camera rather than away.
 export const PALADIN_YAW        = Math.PI;
@@ -5234,35 +5234,11 @@ export class Renderer3D {
     plane.renderingGroupId = 2;
     plane.position.set(0, iconBillboardYRelativeToCone(standee.leader), 0);
     // 80% alpha — lets the paladin model behind show through when camera
-    // angles bring them close on screen.
+    // angles bring them close on screen. Plane scale stays at the natural
+    // world-space size (UNIT_ICON_PLANE_SIZE) — anchored above the model's
+    // head, billboarded to face camera, but scales with the model so it
+    // feels attached rather than a screen-space overlay.
     mat.alpha = UNIT_ICON_PLANE_ALPHA;
-    // Screen-space-constant size: scale the plane each frame proportional
-    // to the camera's distance to its world position so the icon's pixel
-    // size stays roughly constant as the player zooms in / out. Without
-    // this the badge shrinks to a dot at fully-zoomed-out radii.
-    const camera = scene.activeCamera;
-    if (camera && scene.onBeforeRenderObservable
-        && typeof scene.onBeforeRenderObservable.add === 'function') {
-      const observer = scene.onBeforeRenderObservable.add(() => {
-        if (plane.isDisposed && plane.isDisposed()) return;
-        const cam = scene.activeCamera;
-        if (!cam) return;
-        // ArcRotateCamera exposes radius directly; perspective cameras have
-        // position — fall back to distance to plane's world position.
-        let dist = cam.radius;
-        if (typeof dist !== 'number') {
-          const wp = plane.getAbsolutePosition?.();
-          dist = wp && cam.position
-            ? BABYLON.Vector3.Distance(cam.position, wp)
-            : UNIT_ICON_REFERENCE_RADIUS;
-        }
-        const s = iconScreenScale(dist, UNIT_ICON_REFERENCE_RADIUS);
-        plane.scaling.x = s;
-        plane.scaling.y = s;
-        plane.scaling.z = s;
-      });
-      plane._iconScaleObserver = observer;
-    }
 
     const entry = {
       plane, mat, tex,
@@ -5295,11 +5271,6 @@ export class Renderer3D {
   _disposeUnitIconBadge(entityId) {
     const entry = this._unitIconBadges.get(entityId);
     if (!entry) return;
-    // Detach the per-frame screen-space scale observer before disposing.
-    const obs = entry.plane?._iconScaleObserver;
-    if (obs && this._scene?.onBeforeRenderObservable?.remove) {
-      this._scene.onBeforeRenderObservable.remove(obs);
-    }
     entry.plane.dispose();
     entry.mat.dispose();
     entry.tex.dispose();
@@ -7838,10 +7809,12 @@ export const HP_BAR_Y_ABOVE_BASE = 0.2;
  *  camera is fully zoomed out. The badge intentionally now dominates the
  *  silhouette of the token below it; that's the desired readout. */
 export const UNIT_ICON_PLANE_SIZE = 1.10;
-/** Gap above the cone+sphere stack to the bottom of the icon plane, in world
- *  units. Sized so the icon floats clearly above the paladin GLB model
- *  (~0.8 world units tall) rather than overlapping its torso/head. */
-export const UNIT_ICON_Y_GAP      = 0.85;
+/** Gap above the cone+sphere stack to the icon plane CENTRE, in world
+ *  units. With the paladin model now ~0.92 wu tall (15% taller than the
+ *  cone+sphere stack it replaced), the icon needs to sit just above the
+ *  model's head — close enough to feel anchored to it without occluding.
+ *  Tuned so the plane bottom edge clears the model top by a small margin. */
+export const UNIT_ICON_Y_GAP      = 0.70;
 /** DynamicTexture pixel size for the icon+ring composite. 192² keeps the
  *  portrait crisp at any zoom and the arc rim smooth without burning extra
  *  GPU memory per entity. */
@@ -7853,11 +7826,6 @@ export const UNIT_ICON_RING_THICKNESS_FRAC = 0.07;
 /** Plane material alpha — 0.8 keeps the icon legible but lets the model
  *  behind it show through when the camera angle clips them. */
 export const UNIT_ICON_PLANE_ALPHA = 0.8;
-/** Camera radius at which the icon plane is its natural world size. Beyond
- *  this distance the per-frame screen-space scaling kicks in to keep the
- *  icon roughly the same pixel size at any zoom. Tuned around the default
- *  zoom radius (~12 world units). */
-export const UNIT_ICON_REFERENCE_RADIUS = 12;
 
 /** Plan-marker disc — flat owner-tinted circle laid on the destination hex
  *  top. Y just clears the tile prism top (0.075) and the road deck (0.155)
@@ -8346,24 +8314,6 @@ export function iconBillboardY(leader = false) {
  * disc anchor. Pure — exported so tests can pin the offset stays in step
  * with `iconBillboardY`.
  */
-/**
- * Compute the per-frame uniform scale for the unit-icon billboard so it
- * stays roughly the same pixel size on screen across camera zoom levels.
- * The scaling is linear in `distance / referenceDistance`: at the reference
- * distance the plane is its natural world size; further away it's scaled
- * up; closer it's scaled down. Bounded by a small min (so the icon doesn't
- * vanish at extreme close-up) and a generous max (so it doesn't bloom into
- * the screen at extreme zoom-out).
- *
- * Pure — exported so tests can pin the scaling without spinning up Babylon.
- */
-export function iconScreenScale(distance, referenceDistance) {
-  if (!(referenceDistance > 0)) return 1;
-  const d = typeof distance === 'number' && distance > 0 ? distance : referenceDistance;
-  const s = d / referenceDistance;
-  return Math.max(0.35, Math.min(3.0, s));
-}
-
 export function iconBillboardYRelativeToCone(leader = false) {
   const hMul = leader ? STANDEE_LEADER_HEIGHT_MUL : 1;
   // Cone centre sits at  (STANDEE_BASE_THICKNESS / 2) + (coneHeight / 2)
