@@ -15,8 +15,7 @@ import {
   HIGHLIGHT_DISC_Y,
   HIGHLIGHT_MIN_ALPHA,
   HIGHLIGHT_DEFAULT_RGBA,
-  CAMERA_BETA_LOWER_DELTA,
-  CAMERA_BETA_UPPER_DELTA,
+  CAMERA_BETA_LOCKED,
   SELECTION_PULSE_MIN,
   SELECTION_PULSE_MAX,
   PLAN_DISC_Y,
@@ -155,32 +154,21 @@ describe('Renderer3D round-3 polish — highlight constants', () => {
   });
 });
 
-// ── Camera tilt clamp (item 6) ─────────────────────────────────────────────
+// ── Camera tilt lock (item 6) ──────────────────────────────────────────────
+// Round 3 allowed a clamped tilt range; superseded by the tilt-lock task,
+// which pins beta at π/4 (CAMERA_BETA_LOCKED). The check below replaces the
+// former "deltas non-zero / clamped range" assertions — tilt is now a single
+// fixed value.
 
-describe('Renderer3D round-3 polish — camera beta range', () => {
-  // _lockedBeta = π/3.5 ≈ 0.898 rad ≈ 51.4°. Deltas must keep the clamped
-  // range strictly inside (0, π/2) — outside that band the camera either
-  // points straight down at the floor (β=0) or sees through tile prisms (β≈π/2).
-  const ANCHOR = Math.PI / 3.5;
-  const lower = ANCHOR - CAMERA_BETA_LOWER_DELTA;
-  const upper = ANCHOR + CAMERA_BETA_UPPER_DELTA;
-
-  test('both deltas are non-zero (otherwise tilt is effectively locked again)', () => {
-    assert.ok(CAMERA_BETA_LOWER_DELTA > 0, 'lower delta must be positive');
-    assert.ok(CAMERA_BETA_UPPER_DELTA > 0, 'upper delta must be positive');
+describe('Renderer3D — camera beta locked at π/4', () => {
+  test('CAMERA_BETA_LOCKED sits strictly inside (0, π/2)', () => {
+    assert.ok(CAMERA_BETA_LOCKED > 0.05,
+      `${CAMERA_BETA_LOCKED} too close to zero — camera would point at the floor`);
+    assert.ok(CAMERA_BETA_LOCKED < Math.PI / 2 - 0.05,
+      `${CAMERA_BETA_LOCKED} too close to π/2 — camera would see through tile sides`);
   });
-
-  test('clamped range stays inside (0, π/2) — never straight-down, never horizontal', () => {
-    assert.ok(lower > 0.05,
-      `lower limit ${lower} too close to zero — camera would point at the floor`);
-    assert.ok(upper < Math.PI / 2 - 0.05,
-      `upper limit ${upper} too close to π/2 — camera would see through tile sides`);
-  });
-
-  test('lower < upper (valid clamp), with the anchor inside the range', () => {
-    assert.ok(lower < upper, 'lower limit must be strictly below the upper limit');
-    assert.ok(ANCHOR > lower && ANCHOR < upper,
-      'anchor must sit inside the clamped range so the default tilt is reachable');
+  test('CAMERA_BETA_LOCKED is exactly π/4 (45° — the operator-chosen lock)', () => {
+    assert.equal(CAMERA_BETA_LOCKED, Math.PI / 4);
   });
 });
 

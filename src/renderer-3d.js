@@ -69,35 +69,15 @@ export const FOCUS_EPSILON = 1e-3;
  *  Picked to frame ~3-tile diameter around the unit on a standard map. */
 export const SELECTION_FOCUS_RADIUS = 14;
 
-/** Camera tilt (beta) range, expressed as deltas from the locked isometric
- *  anchor (`_lockedBeta = π/3.5 ≈ 0.898 rad ≈ 51.4°`). Round 3 unlocked a
- *  clamped tilt range so the player can dip toward head-on or rise toward a
- *  bird's-eye view; the anchor remains "isometric" and the clamps stay safely
- *  inside (0, π/2) so the camera never points straight down or sees through
- *  the tile prisms horizontally.
- *
- *  NOTE: superseded for the camera-controls overhaul by the absolute
- *  CAMERA_BETA_MIN/MAX pair below. The deltas are still exported because
- *  the existing camera-controls tests reference them; the camera itself
- *  is clamped against the absolute pair via `clampTilt`. */
-export const CAMERA_BETA_LOWER_DELTA = 0.25; // ~14° toward head-on
-export const CAMERA_BETA_UPPER_DELTA = 0.15; // ~8.6° toward bird's-eye
+/** Camera tilt (beta) is permanently locked at π/4 (45°). Earlier rounds
+ *  allowed a clamped tilt range with Tilt-up/Tilt-down buttons and a
+ *  right-drag dy → beta branch; both were removed (operator decision —
+ *  tilt-lock task) so the board always reads as a fixed isometric. The
+ *  camera's lowerBetaLimit and upperBetaLimit are both pinned to π/4 in
+ *  _initBabylon, so any stray beta mutation is immediately re-clamped. */
+export const CAMERA_BETA_LOCKED = Math.PI / 4;
 
-/** Absolute tilt (beta) clamp range used by the custom camera input + the
- *  Tilt-up / Tilt-down buttons. 0.2π ≈ 36° (closer to head-on, still angled
- *  enough that tile prisms read three-dimensionally) and 0.45π ≈ 81° (close
- *  to bird's-eye without going dead-flat — flat-top hexes start to look like
- *  flat hexagons rather than 3D blocks at exactly 90°). Both stay safely
- *  inside (0, π/2) so the camera never flips under the map. */
-export const CAMERA_BETA_MIN = 0.20 * Math.PI;
-export const CAMERA_BETA_MAX = 0.45 * Math.PI;
-
-/** Tilt step (radians) applied per Tilt-up / Tilt-down button press. Pressed
- *  buttons hold-to-repeat at TILT_REPEAT_MS, so this is per-tick, not the
- *  total travel from one click. ≈3° per tick → comfortable ramp without
- *  feeling laggy. */
-export const TILT_BUTTON_STEP = Math.PI / 60;
-/** Repeat cadence for hold-to-repeat tilt + rotate buttons (ms). */
+/** Repeat cadence for hold-to-repeat rotate buttons (ms). */
 export const CAMERA_BUTTON_REPEAT_MS = 50;
 
 /** Camera radius at zoomLevel === 1.0. The 2D renderer expresses zoom as a
@@ -126,21 +106,6 @@ export function zoomToRadius(zoom, lowerLimit = 4, upperLimit = 80, defaultRadiu
 export function radiusToZoom(radius, defaultRadius = DEFAULT_ZOOM_RADIUS) {
   const r = Math.max(1e-3, radius);
   return defaultRadius / r;
-}
-
-/** Apply alpha/beta deltas with proper clamping. Alpha is unbounded (wraps
- *  freely). Beta is clamped to [betaMin, betaMax] so the camera can't flip
- *  past the locked isometric tilt range. Pure helper for tests. */
-export function clampRotation(currentAlpha, currentBeta, alphaDelta, betaDelta, betaMin, betaMax) {
-  const alpha = currentAlpha + alphaDelta;
-  const beta  = Math.max(betaMin, Math.min(betaMax, currentBeta + betaDelta));
-  return { alpha, beta };
-}
-
-/** One-axis tilt clamp. Same maths as clampRotation's beta branch, broken out
- *  so the buttons + the custom input share the exact clamp helper. */
-export function clampTilt(currentBeta, betaDelta, betaMin = CAMERA_BETA_MIN, betaMax = CAMERA_BETA_MAX) {
-  return Math.max(betaMin, Math.min(betaMax, currentBeta + betaDelta));
 }
 
 /** Distance between two pointer positions. Pure helper used by the two-finger
@@ -544,10 +509,11 @@ export class Renderer3D {
     this._tilemapImg  = null;
     this._spriteRects = null;
 
-    // Locked camera angles (Phase 2). Yaw rotation lands in Phase 4; tilt
-    // is permanently the locked-isometric view.
+    // Locked camera angles. Alpha (yaw) is the user's initial heading — the
+    // right-drag / two-finger twist / rotate buttons spin freely from there.
+    // Beta (tilt) is permanently π/4 (45°) — see CAMERA_BETA_LOCKED.
     this._lockedAlpha = -Math.PI / 4;
-    this._lockedBeta  =  Math.PI / 3.5;
+    this._lockedBeta  = CAMERA_BETA_LOCKED;
 
     // ── Phase 5: animations, plan arrows, HP bars ──────────────────────────
     // In-flight Babylon animations expressed as Promises that resolve when
@@ -778,33 +744,25 @@ export class Renderer3D {
     this._focusCamera(camera.target.clone(), radius, { forceAnimate: true });
   }
 
-  /** Rotate the camera by absolute alpha/beta deltas (radians). Alpha rotates
-   *  freely; beta is clamped to the camera's tilt range. No-op until Babylon
+  /** Rotate the camera by an alpha (yaw) delta. The signature accepts a
+   *  second `_betaDelta` arg for interface parity with the 2D Renderer's
+   *  no-op `rotateBy(alpha, beta)`, but tilt is permanently locked at
+   *  CAMERA_BETA_LOCKED so the beta arg is ignored. No-op until Babylon
    *  has initialised. */
-  rotateBy(alphaDelta, betaDelta) {
+  rotateBy(alphaDelta, _betaDelta) {
     if (this.viewLocked) return;
     const camera = this._camera;
     if (!camera) return;
-    const betaMin = camera.lowerBetaLimit ?? CAMERA_BETA_MIN;
-    const betaMax = camera.upperBetaLimit ?? CAMERA_BETA_MAX;
-    const { alpha, beta } = clampRotation(camera.alpha, camera.beta, alphaDelta, betaDelta, betaMin, betaMax);
-    camera.alpha = alpha;
-    camera.beta  = beta;
+    camera.alpha = camera.alpha + alphaDelta;
   }
 
-  /** Tilt the camera by a beta delta, clamped to the absolute tilt range.
-   *  Driven by the Tilt-up / Tilt-down buttons (which hold-to-repeat at
-   *  CAMERA_BUTTON_REPEAT_MS). Negative delta = tilt up (toward bird's-eye);
-   *  positive delta = tilt down (toward head-on). No-op until Babylon has
-   *  initialised. */
-  tiltBy(betaDelta) {
-    if (this.viewLocked) return;
-    const camera = this._camera;
-    if (!camera) return;
-    const betaMin = camera.lowerBetaLimit ?? CAMERA_BETA_MIN;
-    const betaMax = camera.upperBetaLimit ?? CAMERA_BETA_MAX;
-    camera.beta = clampTilt(camera.beta, betaDelta, betaMin, betaMax);
-  }
+  /** Stub for interface parity with the 2D Renderer's `tiltBy(_betaDelta)`
+   *  no-op. Tilt is permanently locked at CAMERA_BETA_LOCKED (π/4); the
+   *  camera's lowerBetaLimit/upperBetaLimit are both pinned to that value
+   *  in _initBabylon, so any stray beta mutation would be re-clamped
+   *  immediately anyway. Kept callable so external code (e.g. ui.js, tests)
+   *  that still invokes tiltBy doesn't crash. */
+  tiltBy(_betaDelta) { /* no-op — tilt locked at CAMERA_BETA_LOCKED */ }
 
   /** Refit the whole map. Animates target+radius via `frameHexes`; deliberately
    *  does NOT reset the user's yaw (alpha) — rotation is user state. */
@@ -961,15 +919,18 @@ export class Renderer3D {
     // mobile gesture spec), and right-mouse-drag → rotate alpha on desktop.
 
     // Yaw (alpha) is unbounded — right-mouse / button-driven rotation spins
-    // the camera around the vertical axis. Tilt (beta) is clamped to the
-    // absolute CAMERA_BETA_MIN/MAX range so the camera can't flip under the
-    // map or stare dead-flat. We rotate the *camera*, not `mapRoot`, so
-    // world-space stays stable for picking + `hexToCanvasPos` projection
-    // (see the note on hexToCanvasPos).
+    // the camera around the vertical axis. Tilt (beta) is permanently
+    // locked at CAMERA_BETA_LOCKED (π/4); both beta limits are pinned to
+    // the same value so anything that mutates camera.beta — Babylon's own
+    // inertia accumulators, a stray plugin, future code — is re-clamped
+    // back to π/4 on the next render tick. We rotate the *camera*, not
+    // `mapRoot`, so world-space stays stable for picking + `hexToCanvasPos`
+    // projection (see the note on hexToCanvasPos).
     camera.lowerAlphaLimit = null;
     camera.upperAlphaLimit = null;
-    camera.lowerBetaLimit  = CAMERA_BETA_MIN;
-    camera.upperBetaLimit  = CAMERA_BETA_MAX;
+    camera.beta            = CAMERA_BETA_LOCKED;
+    camera.lowerBetaLimit  = CAMERA_BETA_LOCKED;
+    camera.upperBetaLimit  = CAMERA_BETA_LOCKED;
 
     // Zoom limits — close enough to see a single tile clearly, far enough to
     // hold a Campaign-size map without flying outside the scene.
@@ -1052,12 +1013,12 @@ export class Renderer3D {
    *   Mobile / touch:
    *     • 1 finger drag        → pan (writes inertialPanningX/Y)
    *     • 2 finger pinch+twist → simultaneous radius + alpha update
-   *     • NO 1-finger rotate, NO 3-finger tilt — buttons cover tilt on mobile
+   *     • NO 1-finger rotate, NO 3-finger tilt (tilt is locked at π/4)
    *
    *   Desktop / mouse:
    *     • Wheel                → zoom (radius)
    *     • Left-drag            → pan (parity with mobile 1-finger)
-   *     • Right-drag           → rotate alpha (and tilt beta on vertical)
+   *     • Right-drag           → rotate alpha (yaw only — tilt is locked at π/4)
    *
    * Wires straight to the camera's inertial accumulators so Babylon's
    * panningSensibility / inertia / radius limits all still apply. Pan extent
@@ -1091,7 +1052,6 @@ export class Renderer3D {
     // converts a "fingers spread by X px" gesture into a radius delta.
     const PINCH_RADIUS_PER_PX  = 0.04;  // 25px spread = 1 radius unit
     const ALPHA_PER_PIXEL      = 0.006; // right-drag rotate yaw
-    const BETA_PER_PIXEL       = 0.006; // right-drag tilt
     const WHEEL_RADIUS_PER_DEL = 0.05;  // mouse wheel zoom
 
     const isTouchPoint = (p) => p && p.type === 'touch';
@@ -1141,10 +1101,13 @@ export class Renderer3D {
       lastPinchAngle = newAngle;
     };
 
-    const applyRightDragRotate = (entry, dx, dy) => {
+    const applyRightDragRotate = (entry, dx, _dy) => {
       if (this.viewLocked) return;
+      // Yaw-only: tilt is locked at π/4, so we deliberately ignore vertical
+      // drag motion. Operator decision (tilt-lock task) — having dy → beta
+      // here let users drag the camera out of the locked tilt before the
+      // beta limits caught up.
       camera.inertialAlphaOffset += dx * ALPHA_PER_PIXEL;
-      camera.inertialBetaOffset  += dy * BETA_PER_PIXEL;
     };
 
     this._onCustomPointerDown = (e) => {
