@@ -118,7 +118,7 @@ export const HOUSE_INSTANCE_BASE_SCALE = 0.55;
 export const PALADIN_MODEL_DIR  = 'models/';
 // Back-compat constant; UNIT_RIG_BANK is the source-of-truth for which
 // .glb maps to which entity type.
-export const PALADIN_MODEL_FILE = 'newpaladin.glb';
+export const PALADIN_MODEL_FILE = 'paladin.glb';
 
 // Fallback world-space scale applied to each cloned paladin when the source
 // mesh's natural bounding box can't be measured (test stubs, malformed GLB).
@@ -184,12 +184,7 @@ export const ANIMATION_BANK = Object.freeze({
  *  unanimated cone+sphere pawn. */
 export const UNIT_RIG_BANK = Object.freeze({
   [EntityType.PALADIN]: Object.freeze({
-    // `newpaladin.glb` is the mesh + Mixamo skeleton with a standing bind
-    // pose. The (now-unused) `paladin.glb` is the same mesh with the
-    // skeleton's REST pose set to a horizontal T-pose, which read as
-    // "lying flat" when no animation was driving the bones. Animations
-    // below are retargeted onto this rig's skeleton at load.
-    model: 'newpaladin.glb',
+    model: 'paladin.glb',
     animations: Object.freeze({
       idle:    ANIMATION_BANK.idle,
       walking: ANIMATION_BANK.walking,
