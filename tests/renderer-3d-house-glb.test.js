@@ -20,6 +20,9 @@ import {
   HOUSE_INSTANCE_BASE_SCALE,
   TILE_SLOTS,
   BUILDING_SLOT_INDEX,
+  BUILDING_GLB_BY_TYPE,
+  buildingUsesHouseModel,
+  _bakeOriginToBottom,
 } from '../src/renderer-3d.js';
 
 import { TileType, BuildingType } from '../src/tiles.js';
@@ -362,7 +365,7 @@ describe('_upgradeBuildingsToHouseModel — retrofit after async load', () => {
     const tiles = new Map();
     for (const { col, row } of buildingHexes) {
       tiles.set(`${col},${row}`, {
-        col, row, type: TileType.BUILDING, building: BuildingType.INN,
+        col, row, type: TileType.BUILDING, building: BuildingType.HOUSE,
       });
     }
     return { tiles };
@@ -431,7 +434,7 @@ describe('_upgradeBuildingsToHouseModel — retrofit after async load', () => {
     r._mapRoot  = { name: 'mapRoot' };
     // State has only one BUILDING tile + one bystander tree tile in props.
     const tiles = new Map();
-    tiles.set('1,1', { col: 1, row: 1, type: TileType.BUILDING, building: BuildingType.INN });
+    tiles.set('1,1', { col: 1, row: 1, type: TileType.BUILDING, building: BuildingType.HOUSE });
     tiles.set('5,5', { col: 5, row: 5, type: TileType.FOREST });
     r.state = { tiles };
     r._houseSourceMesh = makeFakeMesh('house_source');
@@ -483,7 +486,7 @@ describe('integration: house source available during _buildTileMesh', () => {
       { col: 0, row: 0 }, { col: 1, row: 0 }, { col: 0, row: 1 }, { col: 3, row: 5 },
     ];
     for (const { col, row } of buildings) {
-      tiles.set(`${col},${row}`, { col, row, type: TileType.BUILDING, building: BuildingType.INN });
+      tiles.set(`${col},${row}`, { col, row, type: TileType.BUILDING, building: BuildingType.HOUSE });
       r._tilePropsByKey.set(`${col},${row}`, [
         { name: `bldg_${col}_${row}`, dispose() {} },
         { name: `roof_${col}_${row}`, dispose() {} },
@@ -499,5 +502,207 @@ describe('integration: house source available during _buildTileMesh', () => {
       const insts = props.filter(p => p?.metadata?.kind === 'building-house');
       assert.equal(insts.length, 1, `tile (${col},${row}) should have 1 house instance`);
     }
+  });
+});
+
+describe('BUILDING_GLB_BY_TYPE — only HOUSE has an asset entry', () => {
+  test('contains a HOUSE → assets/models/house.glb mapping', () => {
+    assert.equal(BUILDING_GLB_BY_TYPE[BuildingType.HOUSE], `${HOUSE_MODEL_DIR}${HOUSE_MODEL_FILE}`);
+  });
+
+  test('does NOT list INN / GRAVEYARD / CHURCH / other building types', () => {
+    const nonHouseTypes = Object.values(BuildingType).filter(t => t !== BuildingType.HOUSE);
+    for (const t of nonHouseTypes) {
+      assert.equal(BUILDING_GLB_BY_TYPE[t], undefined,
+        `building type "${t}" must not yet map to a GLB`);
+    }
+  });
+
+  test('is frozen so accidental writes during render don\'t mutate the table', () => {
+    assert.ok(Object.isFrozen(BUILDING_GLB_BY_TYPE));
+  });
+});
+
+describe('buildingUsesHouseModel — gating predicate', () => {
+  test('true only for BUILDING tiles whose building === HOUSE', () => {
+    assert.equal(
+      buildingUsesHouseModel({ type: TileType.BUILDING, building: BuildingType.HOUSE }),
+      true,
+    );
+  });
+
+  test('false for every non-HOUSE building type', () => {
+    for (const t of Object.values(BuildingType)) {
+      if (t === BuildingType.HOUSE) continue;
+      assert.equal(
+        buildingUsesHouseModel({ type: TileType.BUILDING, building: t }),
+        false,
+        `building "${t}" must NOT use the house GLB`,
+      );
+    }
+  });
+
+  test('false for non-BUILDING tile types even if building field is set', () => {
+    assert.equal(
+      buildingUsesHouseModel({ type: TileType.FOREST, building: BuildingType.HOUSE }),
+      false,
+    );
+    assert.equal(
+      buildingUsesHouseModel({ type: TileType.GRASS, building: BuildingType.HOUSE }),
+      false,
+    );
+  });
+
+  test('false for null / undefined input', () => {
+    assert.equal(buildingUsesHouseModel(null), false);
+    assert.equal(buildingUsesHouseModel(undefined), false);
+  });
+});
+
+describe('_upgradeBuildingsToHouseModel — HOUSE-only scope', () => {
+  test('non-HOUSE building tiles keep their procedural box+roof', () => {
+    const r = newInst();
+    r._babylon = makeFakeBabylon();
+    r._mapBuilt = true;
+    r._mapRoot  = { name: 'mapRoot' };
+    const tiles = new Map();
+    // Cover every non-HOUSE building type to guard against future regressions.
+    const nonHouseTypes = Object.values(BuildingType).filter(t => t !== BuildingType.HOUSE);
+    let col = 0;
+    for (const t of nonHouseTypes) {
+      tiles.set(`${col},0`, { col, row: 0, type: TileType.BUILDING, building: t });
+      r._tilePropsByKey.set(`${col},0`, [
+        { name: `bldg_${col}_0`, dispose() { this._disposed = true; } },
+        { name: `roof_${col}_0`, dispose() { this._disposed = true; } },
+      ]);
+      col++;
+    }
+    r.state = { tiles };
+    r._houseSourceMesh = makeFakeMesh('house_source');
+
+    const upgraded = r._upgradeBuildingsToHouseModel();
+    assert.equal(upgraded, 0, 'no non-HOUSE building should upgrade');
+    // Procedural meshes must still be present (not disposed).
+    for (let c = 0; c < nonHouseTypes.length; c++) {
+      const props = r._tilePropsByKey.get(`${c},0`);
+      assert.equal(props.length, 2, `tile (${c},0) keeps both procedural meshes`);
+      assert.notEqual(props[0]._disposed, true);
+      assert.notEqual(props[1]._disposed, true);
+      assert.equal(props.some(p => p?.metadata?.kind === 'building-house'), false);
+    }
+  });
+
+  test('mixed map: HOUSE tiles upgrade, non-HOUSE tiles untouched', () => {
+    const r = newInst();
+    r._babylon = makeFakeBabylon();
+    r._mapBuilt = true;
+    r._mapRoot  = { name: 'mapRoot' };
+    const tiles = new Map();
+    tiles.set('0,0', { col: 0, row: 0, type: TileType.BUILDING, building: BuildingType.HOUSE });
+    tiles.set('1,0', { col: 1, row: 0, type: TileType.BUILDING, building: BuildingType.INN });
+    tiles.set('2,0', { col: 2, row: 0, type: TileType.BUILDING, building: BuildingType.GRAVEYARD });
+    for (const k of ['0,0', '1,0', '2,0']) {
+      const [c, rr] = k.split(',').map(Number);
+      r._tilePropsByKey.set(k, [
+        { name: `bldg_${c}_${rr}`, dispose() { this._disposed = true; } },
+        { name: `roof_${c}_${rr}`, dispose() { this._disposed = true; } },
+      ]);
+    }
+    r.state = { tiles };
+    r._houseSourceMesh = makeFakeMesh('house_source');
+
+    const upgraded = r._upgradeBuildingsToHouseModel();
+    assert.equal(upgraded, 1, 'exactly the HOUSE tile upgrades');
+    // HOUSE tile: procedural meshes disposed, instance added.
+    const houseProps = r._tilePropsByKey.get('0,0');
+    assert.ok(houseProps.some(p => p?.metadata?.kind === 'building-house'));
+    // INN / GRAVEYARD tiles: still hold their procedural meshes, no instance.
+    for (const k of ['1,0', '2,0']) {
+      const props = r._tilePropsByKey.get(k);
+      assert.equal(props.length, 2, `tile ${k} keeps procedural meshes`);
+      assert.equal(props.some(p => p?.metadata?.kind === 'building-house'), false);
+    }
+  });
+});
+
+describe('_bakeOriginToBottom — pivot fix', () => {
+  function makeFakeBabylonWithMatrix() {
+    const b = makeFakeBabylon();
+    b.Matrix = {
+      Translation: (x, y, z) => ({ kind: 'translation', x, y, z }),
+    };
+    return b;
+  }
+
+  function makeMeshWithBoundingBox(minY) {
+    const calls = [];
+    return {
+      _baked: null,
+      _refreshed: false,
+      getBoundingInfo() {
+        return { boundingBox: { minimumWorld: { x: -1, y: minY, z: -1 } } };
+      },
+      bakeTransformIntoVertices(m) { calls.push(m); this._baked = m; },
+      refreshBoundingInfo() { this._refreshed = true; },
+      _bakeCalls: calls,
+    };
+  }
+
+  test('shifts the mesh up so its bottom sits at local Y ≈ 0', () => {
+    const BABYLON = makeFakeBabylonWithMatrix();
+    const mesh = makeMeshWithBoundingBox(-0.8);
+    _bakeOriginToBottom(mesh, BABYLON);
+    assert.equal(mesh._bakeCalls.length, 1, 'bakeTransformIntoVertices called once');
+    const m = mesh._bakeCalls[0];
+    assert.equal(m.kind, 'translation');
+    assert.equal(m.x, 0);
+    assert.equal(m.z, 0);
+    // minY was -0.8 → yOffset = +0.8 (lifts the mesh so its floor lands at 0).
+    assert.ok(Math.abs(m.y - 0.8) < 1e-9, `y offset was ${m.y}, expected 0.8`);
+    assert.equal(mesh._refreshed, true, 'bounding info must be refreshed post-bake');
+  });
+
+  test('no-op when bounding-box bottom is already at zero (within epsilon)', () => {
+    const BABYLON = makeFakeBabylonWithMatrix();
+    const mesh = makeMeshWithBoundingBox(0);
+    _bakeOriginToBottom(mesh, BABYLON);
+    assert.equal(mesh._bakeCalls.length, 0, 'no bake when minY ≈ 0');
+  });
+
+  test('safe on stubbed meshes lacking getBoundingInfo', () => {
+    const BABYLON = makeFakeBabylonWithMatrix();
+    const mesh = { bakeTransformIntoVertices() { throw new Error('should not be called'); } };
+    assert.doesNotThrow(() => _bakeOriginToBottom(mesh, BABYLON));
+  });
+
+  test('safe on stubbed meshes lacking bakeTransformIntoVertices', () => {
+    const BABYLON = makeFakeBabylonWithMatrix();
+    const mesh = { getBoundingInfo: () => ({ boundingBox: { minimumWorld: { y: -1 } } }) };
+    assert.doesNotThrow(() => _bakeOriginToBottom(mesh, BABYLON));
+  });
+
+  test('runs as part of _loadHouseModel so instances inherit the corrected origin', async () => {
+    const r = newInst();
+    r._scene = {};
+    const baked = [];
+    const imported = {
+      name: 'imported_house',
+      isPickable: true,
+      isEnabled: true,
+      renderingGroupId: 7,
+      getTotalVertices: () => 100,
+      getTotalIndices:  () => 60,
+      setEnabled(b) { this.isEnabled = b; },
+      getBoundingInfo() { return { boundingBox: { minimumWorld: { y: -0.5 } } }; },
+      bakeTransformIntoVertices(m) { baked.push(m); },
+      refreshBoundingInfo() {},
+    };
+    r._babylon = {
+      ...makeFakeBabylon({ importImpl: async () => ({ meshes: [imported] }) }),
+      Matrix: { Translation: (x, y, z) => ({ kind: 'translation', x, y, z }) },
+    };
+    await r._loadHouseModel('assets');
+    assert.equal(baked.length, 1, 'pivot bake must run inside _loadHouseModel');
+    assert.ok(Math.abs(baked[0].y - 0.5) < 1e-9);
   });
 });
