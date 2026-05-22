@@ -1715,14 +1715,16 @@ export class Renderer3D {
 
       // Flat hex polygon — identical recipe to _buildTileMesh's flat tile.
       const hex = this._buildFlatHexMesh(`border_tile_${pos.col}_${pos.row}`, parent, x, z);
-      // Textured forest material when the atlas is loaded, else fall back to
-      // the flat green base material — `_upgradeTileTextures` will swap the
-      // textured material in retroactively if the atlas arrives after init.
+      // Border-forest band is rendered permanently fogged (operator request)
+      // — gives the playable map a hazy wilderness frame instead of
+      // brightly-lit trees competing with the playable area for attention.
+      // Uses the fogged textured variant when the atlas is loaded.
       const syntheticTile = { type: TileType.FOREST, col: pos.col, row: pos.row };
       const borderMat = this._terrainMaterialFor(
         terrainSpriteIdFor(syntheticTile, pos.col, pos.row),
+        { fogged: true },
       );
-      hex.material   = borderMat || baseMat;
+      hex.material   = borderMat || this._fogMaterialFor(baseColor);
       hex.isPickable = false;
       hex.metadata   = { kind: 'map-border-forest', col: pos.col, row: pos.row };
       this._setShadowReceiver(hex);
@@ -1731,10 +1733,12 @@ export class Renderer3D {
 
       // Pine trees — denser than in-map forest tiles, batched into 2 merged
       // meshes per tile (trunks + leaves) to keep border-band draw cost
-      // bounded. Border forest is hidden by default — toggle with F.
+      // bounded. Border forest is hidden by default — toggle with F. Trees
+      // use fogged colour variants to match the fogged ground hex.
       const trees = borderForestTreesForHex(pos.col, pos.row);
       const meshes = this._buildPineTreeBatchedMeshes(
         `border_forest_${pos.col}_${pos.row}`, parent, x, z, trees,
+        { fogged: true },
       );
       for (const m of meshes) {
         this._addShadowCaster(m);
@@ -2332,19 +2336,22 @@ export class Renderer3D {
    *  vertices at 30°, 90°, 150°, 210°, 270°, 330°. */
   /** Build a tombstone-shaped standee mesh: a rectangle of width `w` and
    *  height `h` minus rounded top corners, extruded by `thickness` along the
-   *  +Z axis. Lives in the XY plane centred on (0, h/2, 0) so the bottom
-   *  edge sits at Y=0 (mirrors the historical plane silhouette). UVs on the
-   *  front face span [0..1] across the silhouette's bounding box so the
-   *  portrait texture maps over the whole shape; back face shares the same
-   *  UVs (texture appears mirrored from behind, fine at the locked 35° tilt). */
+   *  +Z axis. Lives in the XY plane centred so the bottom edge sits at Y=0.
+   *
+   *  The mesh is split into TWO SubMeshes so a MultiMaterial can render the
+   *  front face with the portrait texture and the back + side walls with a
+   *  flat dull-grey "tombstone rim" material. Without that split, the same
+   *  portrait UVs map onto the back + sides too, producing the operator-
+   *  reported "rendered twice" look at the silhouette edges.
+   *
+   *  Caller assigns a MultiMaterial whose subMaterials are [front, rim] —
+   *  see `_buildStandeeMesh` for the wire-up. */
   _buildTombstoneMesh(name, w, h, thickness) {
     const BABYLON = this._babylon;
     const SEGMENTS = 16; // arc resolution for the rounded top
     const r = w / 2;
     // 2D silhouette in XY (z=0). Counter-clockwise viewed from +Z so the
     // front face's normal points at +Z (camera-facing after billboard rotation).
-    // Bottom-left → bottom-right → right side up to start of arc → semicircle
-    // top → left side back down.
     const outline = [];
     outline.push({ x: -r, y: 0 });
     outline.push({ x:  r, y: 0 });
@@ -2354,39 +2361,53 @@ export class Renderer3D {
       outline.push({ x: r * Math.cos(a), y: (h - r) + r * Math.sin(a) });
     }
     outline.push({ x: -r, y: h - r });
-    // (loop closes back to start by index)
-
     const N = outline.length;
+    const halfT = thickness / 2;
+
     const positions = [];
     const uvs = [];
     const indices = [];
-    const halfT = thickness / 2;
 
-    // Front face vertices (z = +halfT)
+    // ── Front-face vertices (indices 0 .. N-1) ─────────────────────────
+    // UVs span the silhouette's bounding box so the portrait covers the
+    // whole shape.
     for (let i = 0; i < N; i++) {
       positions.push(outline[i].x, outline[i].y, +halfT);
       uvs.push((outline[i].x + r) / w, outline[i].y / h);
     }
-    // Back face vertices (z = -halfT)
+    // Front face: fan from vertex 0. CCW viewed from +Z → normal +Z.
+    const frontIndexStart = indices.length;
+    for (let i = 1; i < N - 1; i++) indices.push(0, i, i + 1);
+    const frontIndexCount = indices.length - frontIndexStart;
+
+    // ── Back-face vertices (indices N .. 2N-1) ─────────────────────────
+    // Separate vertex copies so its UVs / normals don't bleed into the side
+    // walls. UVs are arbitrary (back face uses the rim material — no texture).
     for (let i = 0; i < N; i++) {
       positions.push(outline[i].x, outline[i].y, -halfT);
-      uvs.push((outline[i].x + r) / w, outline[i].y / h);
+      uvs.push(0, 0);
     }
-    // Triangulate the outline as a fan from vertex 0 — outline is convex
-    // (rectangle + semicircle bulging out), so a fan covers the silhouette.
-    // Front face winding: CCW viewed from +Z → normal +Z (camera-facing).
-    for (let i = 1; i < N - 1; i++) indices.push(0, i, i + 1);
-    // Back face winding: reversed so its normal points -Z.
+    const rimIndexStart = indices.length;
+    // Back face: reversed winding so normal points -Z.
     for (let i = 1; i < N - 1; i++) indices.push(N, N + i + 1, N + i);
-    // Side wall: quad per outline edge connecting front[i] / front[i+1] /
-    // back[i+1] / back[i]. Two triangles per quad.
+
+    // ── Side-wall vertices (4 fresh vertices per outline edge) ─────────
+    // Duplicating vertices per quad lets each wall carry its own normal
+    // (perpendicular to that edge) so lighting reads correctly at the sharp
+    // silhouette corners. Each side quad: front-i, front-j, back-j, back-i.
     for (let i = 0; i < N; i++) {
       const j = (i + 1) % N;
-      const f0 = i, f1 = j;
-      const b0 = N + i, b1 = N + j;
-      indices.push(f0, b0, f1);
-      indices.push(f1, b0, b1);
+      const base = positions.length / 3;
+      // 4 vertices per quad: front-left, front-right, back-right, back-left
+      positions.push(outline[i].x, outline[i].y, +halfT);
+      positions.push(outline[j].x, outline[j].y, +halfT);
+      positions.push(outline[j].x, outline[j].y, -halfT);
+      positions.push(outline[i].x, outline[i].y, -halfT);
+      uvs.push(0, 0, 0, 0, 0, 0, 0, 0);
+      indices.push(base, base + 3, base + 1);
+      indices.push(base + 1, base + 3, base + 2);
     }
+    const rimIndexCount = indices.length - rimIndexStart;
 
     const mesh = new BABYLON.Mesh(name, this._scene);
     const vd = new BABYLON.VertexData();
@@ -2396,7 +2417,31 @@ export class Renderer3D {
     vd.normals   = [];
     BABYLON.VertexData.ComputeNormals(positions, indices, vd.normals);
     vd.applyToMesh(mesh);
+    // Replace the default single subMesh with two — front (material 0) and
+    // back+sides (material 1). SubMesh args:
+    //   (materialIndex, verticesStart, verticesCount, indexStart, indexCount, mesh)
+    const totalVerts = positions.length / 3;
+    mesh.subMeshes = [];
+    new BABYLON.SubMesh(0, 0, totalVerts, frontIndexStart, frontIndexCount, mesh);
+    new BABYLON.SubMesh(1, 0, totalVerts, rimIndexStart,   rimIndexCount,   mesh);
     return mesh;
+  }
+
+  /** Shared dull-grey material for the back + side walls of every standee's
+   *  tombstone mesh. Cached on the renderer instance so all standees share
+   *  the same material instance (no per-unit allocation). */
+  _tombstoneRimMaterial() {
+    if (this._tombstoneRimMat) return this._tombstoneRimMat;
+    const BABYLON = this._babylon;
+    const mat = new BABYLON.StandardMaterial('tombstoneRim', this._scene);
+    // Dull grey — picks up phase lighting subtly but never competes with the
+    // front-face portrait for attention.
+    mat.diffuseColor    = new BABYLON.Color3(0.30, 0.30, 0.32);
+    mat.specularColor   = new BABYLON.Color3(0, 0, 0);
+    mat.emissiveColor   = new BABYLON.Color3(0.05, 0.05, 0.06);
+    mat.backFaceCulling = true;
+    this._tombstoneRimMat = mat;
+    return mat;
   }
 
   /** Build pine trees for a forest hex: one merged TRUNK mesh + one merged
@@ -2405,12 +2450,17 @@ export class Renderer3D {
    *  scaled by `t.scale`. Returning 2 meshes per tile (instead of 4 per tree)
    *  is the bulk of the task-9 fps fix — forest-heavy maps were emitting
    *  hundreds of draw calls before this. */
-  _buildPineTreeBatchedMeshes(namePrefix, parent, cx, cz, trees) {
+  _buildPineTreeBatchedMeshes(namePrefix, parent, cx, cz, trees, { fogged = false } = {}) {
     const BABYLON = this._babylon;
     const scene   = this._scene;
     if (!BABYLON || !scene || !trees || trees.length === 0) return [];
-    const trunkMat = this._materialFor('#5a3a20');
-    const leafMat  = this._materialFor('#234c1f');
+    // Fogged variants of trunk/leaf colour pre-multiplied by FOG_TILE_DARKEN
+    // so the border-forest band reads as "hazy distant wilderness" instead
+    // of brightly-lit trees that compete with the playable map.
+    const trunkCss = fogged ? '#241710' : '#5a3a20';
+    const leafCss  = fogged ? '#0e1f0c' : '#234c1f';
+    const trunkMat = this._materialFor(trunkCss);
+    const leafMat  = this._materialFor(leafCss);
     const trunks = [];
     const leaves = [];
     for (let i = 0; i < trees.length; i++) {
@@ -2754,7 +2804,15 @@ export class Renderer3D {
       /* thickness */ 0.10,
     );
     plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_Y;
-    plane.material      = this._planeMaterialFor(this._assetIdFor(entity));
+    // MultiMaterial: subMesh 0 (front face) gets the portrait, subMesh 1
+    // (back + side walls) gets the dull-grey rim material. Without the split
+    // the portrait UVs map onto the back/sides too and the silhouette edges
+    // look like the icon is rendered twice.
+    const portraitMat = this._planeMaterialFor(this._assetIdFor(entity));
+    const rimMat      = this._tombstoneRimMaterial();
+    const mm = new BABYLON.MultiMaterial(`standee_mm_${entity.id}`, scene);
+    mm.subMaterials = [portraitMat, rimMat];
+    plane.material      = mm;
     plane.metadata      = { kind: 'entity', entityId: entity.id, col: entity.col, row: entity.row };
     // Units render in group 1 so they always draw on top of roads / rivers /
     // any other ground-level translucent geometry that would otherwise clip
@@ -4789,13 +4847,21 @@ export const RIBBON_EMISSIVE_SCALE = 0.45;
 
 /** Pure helper: split a CSS hex colour into `{ diffuse, emissive }` Color3
  *  tuples for a ribbon material. `emissive = diffuse × RIBBON_EMISSIVE_SCALE`.
+ *  Diffuse is brightened by `RIBBON_DIFFUSE_BOOST` first — the 2D-shared
+ *  TILE_COLORs are dark (#1a3d5c river, #6b5a3e road) and the new daytime
+ *  lighting wash makes them read as near-black under the bright sun.
  *  Kept pure so the colour math can be unit-tested without Babylon. */
+export const RIBBON_DIFFUSE_BOOST = 1.85;
 export function ribbonMaterialColors(hexColor) {
   const [r, g, b] = cssHexToRgb01(hexColor);
+  const k = RIBBON_DIFFUSE_BOOST;
+  const dr = Math.min(1, r * k);
+  const dg = Math.min(1, g * k);
+  const db = Math.min(1, b * k);
   const s = RIBBON_EMISSIVE_SCALE;
   return {
-    diffuse:  [r, g, b],
-    emissive: [r * s, g * s, b * s],
+    diffuse:  [dr, dg, db],
+    emissive: [dr * s, dg * s, db * s],
   };
 }
 
