@@ -3957,14 +3957,14 @@ export class Renderer3D {
   _highlightMaterialFor(rgbaCss) {
     if (this._highlightMatCache.has(rgbaCss)) return this._highlightMatCache.get(rgbaCss);
     const BABYLON = this._babylon;
-    const [r, g, b, a] = parseRgba01(rgbaCss);
+    const [dr, dg, db] = deepenHighlight01(parseRgba01(rgbaCss));
     const mat = new BABYLON.StandardMaterial(`highlightMat_${rgbaCss}`, this._scene);
-    mat.diffuseColor  = new BABYLON.Color3(r, g, b);
-    // Emissive at half the diffuse so highlights read on both day and night
-    // phases without saturating the glow layer.
-    mat.emissiveColor = new BABYLON.Color3(r * 0.5, g * 0.5, b * 0.5);
+    mat.diffuseColor  = new BABYLON.Color3(dr, dg, db);
+    // Emissive at half the deepened diffuse — keeps the ring legible across
+    // dawn/day/dusk/night phases without blowing into the glow layer.
+    mat.emissiveColor = new BABYLON.Color3(dr * 0.5, dg * 0.5, db * 0.5);
     mat.specularColor = new BABYLON.Color3(0, 0, 0);
-    mat.alpha = Math.max(HIGHLIGHT_MIN_ALPHA, a);
+    mat.alpha = HIGHLIGHT_OVERLAY_ALPHA;
     mat.backFaceCulling = false;
     this._highlightMatCache.set(rgbaCss, mat);
     return mat;
@@ -6193,20 +6193,35 @@ export function floatingTextTransform(t, riseDistance = 1.2) {
 // ─── Movement highlight overlay (exported for tests) ────────────────────────
 
 /** Y position of the flat highlight ring above the tile prism top (+0.075).
- *  Must sit ABOVE the road/river ribbons (ROAD_RIBBON_Y = 0.086,
- *  RIVER_RIBBON_Y = 0.085) so the green movement outline reads over road
- *  tiles instead of being occluded by them. Sits BELOW the plan-marker disc
- *  (PLAN_DISC_Y = 0.16) and the plan-line tubes (PLAN_LINE_Y = 0.18) so the
- *  outline still reads as ground-anchored, not floating above the planning
- *  overlay. Previous value 0.085 tied with the river ribbon and lost to the
- *  road ribbon at 0.086. */
-export const HIGHLIGHT_DISC_Y      = 0.12;
-/** Minimum alpha applied when the source rgba is too transparent to read in
- *  the lit 3D scene. Round 4: bumped 0.30 → 0.75 because the highlight changed
- *  from a tile-covering disc (which read fine at low alpha) to a thin outline
- *  ring (which disappears at low alpha). ui.js still uses values as low as
- *  0.14 for ally hexes — we clamp up to keep the outline legible. */
-export const HIGHLIGHT_MIN_ALPHA   = 0.75;
+ *  Must sit clearly above the tallest road-network geometry so the outline
+ *  reads from any tilt under the locked isometric camera. Effective Y caps in
+ *  the road/river network and node rings (RIVER_RIBBON_Y = 0.005, ROAD_RIBBON_Y
+ *  = 0.008, node-ring tube apex ≈ 0.09) sit well below this layer, leaving a
+ *  comfortable depth margin instead of the ~0.03 separation 0.12 used to give.
+ *  Sits BELOW PLAN_DISC_Y (0.16) and PLAN_LINE_Y (0.18) so the plan overlay
+ *  still draws on top. The strict ordering — ribbons < highlight < plan disc
+ *  < plan line — is locked by tests in `renderer-3d-polish-4.test.js` and the
+ *  new `renderer-3d-highlight-overlay.test.js` suite. */
+export const HIGHLIGHT_DISC_Y      = 0.15;
+/** Applied alpha on the highlight ring material. The overlay reads as a
+ *  translucent ring over the tile rather than a solid floor sticker — operator
+ *  wants 0.6–0.7 so the underlying terrain stays visible. We OVERRIDE the
+ *  source rgba alpha (which can be as low as 0.14 in ui.js for ally hexes, or
+ *  as high as 0.85 for the default movement target) with this constant so the
+ *  ring's translucency is consistent regardless of the caller's colour string. */
+export const HIGHLIGHT_OVERLAY_ALPHA = 0.65;
+/** @deprecated retained for tests that import the old name — same value as
+ *  HIGHLIGHT_OVERLAY_ALPHA, semantics changed from "clamp floor" to
+ *  "applied alpha". */
+export const HIGHLIGHT_MIN_ALPHA   = HIGHLIGHT_OVERLAY_ALPHA;
+/** RGB darkening factor applied to highlight colours before the material is
+ *  built. Operator wants deeper, more saturated green/red overlays rather than
+ *  the pastel wash the previous round produced. 0.72 ≈ 28% darker, which moves
+ *  the default movement-green from (60,220,80) ≈ pastel mint to (~43,~158,~58)
+ *  ≈ deep forest-green, and the default attack-red from (220,60,60) ≈ coral to
+ *  (~158,~43,~43) ≈ blood-red. Applied to RGB only — alpha is overridden by
+ *  HIGHLIGHT_OVERLAY_ALPHA. */
+export const HIGHLIGHT_DEEPEN_FACTOR = 0.72;
 /** Fallback rgba when an entry lacks `color` — neutral green (movement). */
 export const HIGHLIGHT_DEFAULT_RGBA = 'rgba(60,220,80,0.85)';
 /** Outer/inner hex polygon radii (world units) for the outline ring. The gap
@@ -6282,6 +6297,22 @@ export function parseRgba01(css) {
 function clamp01(n) {
   if (!Number.isFinite(n)) return 0;
   return n < 0 ? 0 : n > 1 ? 1 : n;
+}
+
+/**
+ * Deepen a parsed [r,g,b,a] tuple by scaling RGB toward black by
+ * HIGHLIGHT_DEEPEN_FACTOR. Alpha is passed through unchanged — alpha is
+ * overridden at the material layer by HIGHLIGHT_OVERLAY_ALPHA. Pure so the
+ * colour math can be tested without a Babylon scene.
+ */
+export function deepenHighlight01(rgba01) {
+  if (!Array.isArray(rgba01) || rgba01.length < 3) return [0, 0, 0, 1];
+  const k = HIGHLIGHT_DEEPEN_FACTOR;
+  const r = clamp01(rgba01[0] * k);
+  const g = clamp01(rgba01[1] * k);
+  const b = clamp01(rgba01[2] * k);
+  const a = rgba01.length > 3 ? clamp01(rgba01[3]) : 1;
+  return [r, g, b, a];
 }
 
 /**
