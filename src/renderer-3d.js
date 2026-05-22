@@ -310,6 +310,32 @@ export function gestureLockDecision(deltaDist, deltaAngle, elapsedMs, thresholds
   return rPinch >= rTwist ? 'zoom' : 'rotate';
 }
 
+/** Compute pan-clamp bounds for the camera target from the playable map's
+ *  visual extent. The clamp keeps the target inside the playable bbox plus a
+ *  small fudge, so even at max zoom-out + max pan the playable map remains
+ *  the visible subject (rather than sliding off into the border-forest band).
+ *
+ *  `extent` is the output of `computeMapBounds(state.tiles)` — already padded
+ *  by half a hex on each side so the bbox covers full rendered tile area,
+ *  not just tile centres. `fudgeHex` is the extra slack (in hex radii) the
+ *  target may roam past that visual edge; the default of 0.5 lets the
+ *  operator frame the very-edge tiles a touch loose without ever letting
+ *  the playable map's centroid leave the camera frustum.
+ *
+ *  Previously the clamp used a flat 2-world-unit margin, which at shallow
+ *  tilt + max zoom-out allowed the playable area to slide entirely out of
+ *  frame. Pure helper — Babylon-free, so it's unit-testable. */
+export function panBoundsForPlayableExtent(extent, fudgeHex = 0.5) {
+  if (!extent) return null;
+  const fudge = fudgeHex * HEX_RADIUS_WORLD;
+  return {
+    minX: extent.minX - fudge,
+    maxX: extent.maxX + fudge,
+    minZ: extent.minZ - fudge,
+    maxZ: extent.maxZ + fudge,
+  };
+}
+
 /** Clamp a camera pan target so it can't roam beyond the map's XZ extents.
  *  Returns a new {x, y, z} object — does not mutate the input. `margin` is
  *  in world units, applied uniformly outside the map bounds (so the player
@@ -1755,6 +1781,10 @@ export class Renderer3D {
       allHexes.push({ col: tile.col, row: tile.row });
     }
     this._mapPanBounds = computeMapBounds(allHexes);
+    // Tighter pan-clamp bounds — keep the playable map clearly the subject
+    // at every zoom/tilt, instead of letting it slide out into the border
+    // forest band. See `panBoundsForPlayableExtent` for the rationale.
+    this._panClampBounds = panBoundsForPlayableExtent(this._mapPanBounds);
     this._mapBuilt = true;
   }
 
@@ -4404,12 +4434,15 @@ export class Renderer3D {
   _onBeforeRender() {
     const now = this._nowMs();
     // Pan extent clamp — runs every frame so inertial overshoot past the map
-    // edge is corrected by the next render. Margin = 2 hex-radii so the player
-    // can frame the very edge tiles with a tiny bit of breathing room without
-    // being able to pan into the void.
-    if (this._camera && this._mapPanBounds) {
+    // edge is corrected by the next render. Bounds come from
+    // `panBoundsForPlayableExtent`, which keeps the camera target inside the
+    // playable bbox plus a half-hex fudge so even at max zoom-out + max pan
+    // the playable map stays clearly the visible subject.
+    if (this._camera && (this._panClampBounds || this._mapPanBounds)) {
       const t = this._camera.target;
-      const clamped = clampPanTarget(t, this._mapPanBounds, 2);
+      const bounds = this._panClampBounds
+        || panBoundsForPlayableExtent(this._mapPanBounds);
+      const clamped = clampPanTarget(t, bounds, 0);
       // Mutate in place — Babylon's ArcRotateCamera tracks `target` by ref.
       if (t.x !== clamped.x || t.z !== clamped.z) {
         t.x = clamped.x;

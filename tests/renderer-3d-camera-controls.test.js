@@ -17,6 +17,9 @@ import {
   pinchAngle,
   twistDelta,
   clampPanTarget,
+  panBoundsForPlayableExtent,
+  computeMapBounds,
+  HEX_RADIUS_WORLD,
   gestureLockDecision,
   PINCH_LOCK_THRESHOLD_PX,
   TWIST_LOCK_THRESHOLD_RAD,
@@ -302,6 +305,74 @@ describe('clampPanTarget — keeps camera.target within map XZ bounds', () => {
   test('null bounds → target returned as-is (graceful fallback before _buildMap)', () => {
     const t = { x: 5, y: 0, z: 5 };
     assert.equal(clampPanTarget(t, null), t);
+  });
+});
+
+describe('panBoundsForPlayableExtent — tighter pan clamp than the legacy +2 margin', () => {
+  // Build a realistic standard-sized playable extent so the assertions reflect
+  // the actual game map, not a toy bbox.
+  const playable = [];
+  for (let c = 0; c < 13; c++) for (let r = 0; r < 13; r++) {
+    playable.push({ col: c, row: r });
+  }
+  const extent = computeMapBounds(playable);
+
+  test('null/undefined extent returns null', () => {
+    assert.equal(panBoundsForPlayableExtent(null), null);
+    assert.equal(panBoundsForPlayableExtent(undefined), null);
+  });
+
+  test('default fudge expands the extent by exactly half a hex on every side', () => {
+    const b = panBoundsForPlayableExtent(extent);
+    const half = 0.5 * HEX_RADIUS_WORLD;
+    assert.ok(Math.abs(b.minX - (extent.minX - half)) < 1e-9);
+    assert.ok(Math.abs(b.maxX - (extent.maxX + half)) < 1e-9);
+    assert.ok(Math.abs(b.minZ - (extent.minZ - half)) < 1e-9);
+    assert.ok(Math.abs(b.maxZ - (extent.maxZ + half)) < 1e-9);
+  });
+
+  test('custom fudge scales the slack symmetrically', () => {
+    const b = panBoundsForPlayableExtent(extent, 1.5);
+    const slack = 1.5 * HEX_RADIUS_WORLD;
+    assert.ok(Math.abs((b.maxX - extent.maxX) - slack) < 1e-9);
+    assert.ok(Math.abs((extent.minZ - b.minZ) - slack) < 1e-9);
+  });
+
+  test('fudge of 0 clamps target to the visual extent exactly', () => {
+    const b = panBoundsForPlayableExtent(extent, 0);
+    assert.equal(b.minX, extent.minX);
+    assert.equal(b.maxX, extent.maxX);
+    assert.equal(b.minZ, extent.minZ);
+    assert.equal(b.maxZ, extent.maxZ);
+  });
+
+  test('tighter than the legacy +2 margin (so playable map can\'t slide out)', () => {
+    const tight = panBoundsForPlayableExtent(extent);
+    // Pre-change behavior: clampPanTarget(t, extent, 2) → target could roam
+    // 2 world units past the visual edge. The new clamp must allow strictly
+    // less slack on every side.
+    assert.ok(tight.maxX - extent.maxX < 2);
+    assert.ok(tight.maxZ - extent.maxZ < 2);
+    assert.ok(extent.minX - tight.minX < 2);
+    assert.ok(extent.minZ - tight.minZ < 2);
+  });
+
+  test('combined with clampPanTarget, an over-pan is bounded inside the new envelope', () => {
+    const tight = panBoundsForPlayableExtent(extent);
+    const far = clampPanTarget({ x: 9999, y: 0, z: 9999 }, tight);
+    // The clamped target sits within the new (tighter) envelope.
+    assert.ok(far.x <= tight.maxX + 1e-9);
+    assert.ok(far.z <= tight.maxZ + 1e-9);
+    // And it does NOT extend past the playable extent by more than the fudge.
+    const half = 0.5 * HEX_RADIUS_WORLD;
+    assert.ok(far.x - extent.maxX <= half + 1e-9);
+    assert.ok(far.z - extent.maxZ <= half + 1e-9);
+  });
+
+  test('playable centroid stays inside the clamp envelope (sanity)', () => {
+    const tight = panBoundsForPlayableExtent(extent);
+    assert.ok(extent.centerX >= tight.minX && extent.centerX <= tight.maxX);
+    assert.ok(extent.centerZ >= tight.minZ && extent.centerZ <= tight.maxZ);
   });
 });
 
