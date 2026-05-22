@@ -1215,9 +1215,10 @@ export class Renderer3D {
       ringMat.diffuseColor  = new BABYLON.Color3(1.0, 0.78, 0.20);
       ringMat.emissiveColor = new BABYLON.Color3(0.85, 0.65, 0.10);
       ringMat.specularColor = new BABYLON.Color3(0, 0, 0);
-      ring.material   = ringMat;
-      ring.isPickable = false;
-      ring.isVisible  = false;
+      ring.material         = ringMat;
+      ring.isPickable       = false;
+      ring.isVisible        = false;
+      ring.renderingGroupId = 1; // sit above road/river ribbons
       // Don't parent to mapRoot — that would inherit any future map yaw and
       // the ring would tilt off the ground. Position is in world space.
       this._selectedHexOutline = ring;
@@ -1842,29 +1843,44 @@ export class Renderer3D {
     // above is what shows on either side of the path.
 
     // ── Bridge: arched wooden plank crossing the river hex ──────────────
-    // An arc traced from start → midspan → end so the bridge reads as a
-    // little hump over the water rather than a flat slab. The shape is built
-    // along +X by CreateTube along a curved path, then rotated into the
-    // river's direction via bridgeRotationY.
+    // Build a flat slab (rectangle cross-section) extruded along an arched
+    // path. Reads as a plank-thick bridge that rises smoothly over the water
+    // and lands on the road at either end. Width / endpoint height tuned to
+    // line up visually with the road ribbon (ROAD_RIBBON_WIDTH = 0.6, sitting
+    // at Y = ROAD_RIBBON_Y ≈ 0.008).
     if (tile.type === TileType.BRIDGE) {
-      const yaw  = bridgeRotationY(tile, this.state.tiles);
-      const span = 1.6;           // length of the bridge along the road direction
-      const peak = 0.42;          // height of arch midspan above ground
-      const seat = 0.06;          // height where the bridge meets the road
-      const samples = 10;
+      const yaw       = bridgeRotationY(tile, this.state.tiles);
+      const span      = 1.8;                     // bridge length along the road
+      const thickness = 0.10;                    // slab thickness
+      const width     = ROAD_RIBBON_WIDTH * 1.15; // ~5% shoulder past the road
+      const seat      = ROAD_RIBBON_Y + thickness / 2; // bottom flush with road
+      const peak      = 0.42;                    // midspan height (top of slab)
+      const samples   = 14;
+      // Arched path in world space, oriented by yaw.
       const path = [];
       for (let i = 0; i <= samples; i++) {
-        const t = i / samples;
-        const local = (t - 0.5) * span;        // -span/2 .. +span/2 along +X
-        const arc   = seat + (peak - seat) * Math.sin(Math.PI * t);
-        // Rotate from local +X into the river-crossing direction.
+        const u    = i / samples;
+        const local = (u - 0.5) * span;          // -span/2 .. +span/2 along +X
+        const arc   = seat + (peak - seat) * Math.sin(Math.PI * u);
         const wx = x + Math.cos(yaw) * local;
         const wz = z + Math.sin(yaw) * local;
         path.push(new BABYLON.Vector3(wx, arc, wz));
       }
-      const plank = BABYLON.MeshBuilder.CreateTube(
+      // Rectangular cross-section (in the XY plane — Babylon ExtrudeShape
+      // sweeps this profile along `path`, automatically orienting at each
+      // step so the slab follows the arc without manual rotation).
+      const halfW = width / 2;
+      const halfT = thickness / 2;
+      const shape = [
+        new BABYLON.Vector3(-halfW, -halfT, 0),
+        new BABYLON.Vector3( halfW, -halfT, 0),
+        new BABYLON.Vector3( halfW,  halfT, 0),
+        new BABYLON.Vector3(-halfW,  halfT, 0),
+        new BABYLON.Vector3(-halfW, -halfT, 0), // close
+      ];
+      const plank = BABYLON.MeshBuilder.ExtrudeShape(
         `bridge_${tile.col}_${tile.row}`,
-        { path, radius: 0.28, tessellation: 6, cap: BABYLON.Mesh.CAP_ALL },
+        { shape, path, cap: BABYLON.Mesh.CAP_ALL, sideOrientation: BABYLON.Mesh.DOUBLESIDE },
         scene,
       );
       plank.parent     = parent;
@@ -1992,25 +2008,39 @@ export class Renderer3D {
     const BABYLON = this._babylon;
     const scene   = this._scene;
     if (!segments || segments.length === 0) return null;
+    // Per-tile ribbons accumulator so each tile's section can be registered
+    // with the fog veil — fogged tiles darken the ribbon material in place
+    // rather than hiding it. Built outside any individual tile's prop array
+    // because the network spans many tiles and is built after `_buildTileMesh`.
+    const ribbonsByTileKey = new Map();      // tkey → mesh[]
     const ribbons = [];
     for (let s = 0; s < segments.length; s++) {
       const { tile, strokes } = segments[s];
+      const tkey = hexKey(tile.col, tile.row);
       for (let i = 0; i < strokes.length; i++) {
         const pts = strokes[i];
         if (!pts || pts.length < 2) continue;
-        // Three-path ribbon: right edge, centerline, left edge. Adding the
-        // centerline gives us an interior row of vertices we can paint with
-        // full alpha while fading the side rows toward transparent — produces
-        // a soft-edged road/river that blends into the surrounding grass
-        // rather than hard-cutting at the ribbon edge.
-        const { left, right } = ribbonOffsetPaths(pts, width);
-        const leftV3   = left .map(p => new BABYLON.Vector3(p.x, yPos, p.z));
-        const centerV3 = pts  .map(p => new BABYLON.Vector3(p.x, yPos, p.z));
-        const rightV3  = right.map(p => new BABYLON.Vector3(p.x, yPos, p.z));
+        // Five-path ribbon so the alpha fade only affects the outer ~5% of
+        // the ribbon width on each side. Paths laid out as:
+        //   right edge (alpha 0) → right inner (alpha 1) → centre (alpha 1)
+        //     → left inner (alpha 1) → left edge (alpha 0)
+        // Inner paths sit at 0.95 × half-width from the centreline, so the
+        // opaque region covers 90% of the ribbon and the outer 5% on each
+        // side tapers smoothly into the grass beneath.
+        const OPAQUE_FRAC   = 0.95;
+        const innerWidth    = width * OPAQUE_FRAC;
+        const { left: outerLeft,  right: outerRight  } = ribbonOffsetPaths(pts, width);
+        const { left: innerLeft,  right: innerRight  } = ribbonOffsetPaths(pts, innerWidth);
+        const toV3 = (arr) => arr.map(p => new BABYLON.Vector3(p.x, yPos, p.z));
+        const rightOuterV3 = toV3(outerRight);
+        const rightInnerV3 = toV3(innerRight);
+        const centerV3     = toV3(pts);
+        const leftInnerV3  = toV3(innerLeft);
+        const leftOuterV3  = toV3(outerLeft);
         const ribbon = BABYLON.MeshBuilder.CreateRibbon(
           `${networkName}_${tile.col}_${tile.row}_${i}`,
           {
-            pathArray: [rightV3, centerV3, leftV3],
+            pathArray: [rightOuterV3, rightInnerV3, centerV3, leftInnerV3, leftOuterV3],
             sideOrientation: BABYLON.Mesh.DOUBLESIDE,
             closeArray: false,
             closePath: false,
@@ -2019,17 +2049,14 @@ export class Renderer3D {
           scene,
         );
         ribbon.isPickable = false;
-        // Per-vertex alpha: 0.0 on right edge, 1.0 on center, 0.0 on left.
-        // Babylon's Mesh uses VertexBuffer.ColorKind for vertex colors (RGBA).
+        // Per-vertex alpha keyed off path index (5 paths, N points each).
         const totalVerts = ribbon.getTotalVertices();
         const N = pts.length;
+        const alphaByPath = [0.0, 1.0, 1.0, 1.0, 0.0];
         const colors = new Float32Array(totalVerts * 4);
         for (let v = 0; v < totalVerts; v++) {
-          // Path layout in the buffer is right (N) then center (N) then left (N).
-          let a;
-          if      (v < N)         a = 0.0;       // right edge
-          else if (v < 2 * N)     a = 1.0;       // center
-          else                    a = 0.0;       // left edge
+          const pathIdx = Math.min(alphaByPath.length - 1, Math.floor(v / N));
+          const a = alphaByPath[pathIdx];
           colors[v * 4 + 0] = 1;
           colors[v * 4 + 1] = 1;
           colors[v * 4 + 2] = 1;
@@ -2037,25 +2064,38 @@ export class Renderer3D {
         }
         ribbon.setVerticesData(BABYLON.VertexBuffer.ColorKind, colors);
         ribbons.push(ribbon);
+        const list = ribbonsByTileKey.get(tkey) || [];
+        list.push(ribbon);
+        ribbonsByTileKey.set(tkey, list);
       }
     }
     if (ribbons.length === 0) return null;
-    // MergeMeshes args: (meshes, disposeSource, allow32bitIndices, meshSubclass,
-    //                    subdivideWithSubMeshes, multiMultiMaterials)
-    // Babylon's Mesh.MergeMeshes preserves vertex colors when present on every
-    // source mesh — needed here so the per-vertex alpha fade survives merging.
-    const merged = BABYLON.Mesh.MergeMeshes(ribbons, true, true, undefined, false, false);
-    if (!merged) return null;
-    merged.parent     = this._mapRoot;
-    merged.isPickable = false;
-    merged.material   = this._buildRibbonMaterial(networkName, cssColor);
-    merged.hasVertexAlpha = true;
-    merged.name       = `${networkName}Network`;
-    // Road and river ribbons are flat terrain-level surfaces, so they should
-    // catch shadows from anything that stands on or near them (standees on
-    // road, bridge plank over river, building boxes).
-    this._setShadowReceiver(merged);
-    return merged;
+    // Merge PER-TILE so each tile's ribbon section can be registered with the
+    // fog veil and darkened in place (operator: "roads and rivers need to
+    // darken in fog of war"). Sharing one material across all per-tile meshes
+    // keeps draw-call overhead low. Returns one of the meshes as the
+    // "primary" handle for the network (for caller compatibility — used only
+    // by river-extension lookup).
+    const ribbonMat = this._buildRibbonMaterial(networkName, cssColor);
+    let primary = null;
+    for (const [tkey, list] of ribbonsByTileKey) {
+      const merged = BABYLON.Mesh.MergeMeshes(list, true, true, undefined, false, false);
+      if (!merged) continue;
+      merged.parent          = this._mapRoot;
+      merged.isPickable      = false;
+      merged.material        = ribbonMat;
+      merged.hasVertexAlpha  = true;
+      merged.name            = `${networkName}_${tkey}`;
+      // Tag for fog darkening (not hiding). `_setTileFogged` consults this.
+      merged.metadata        = { respectsFog: 'darken', kind: networkName };
+      this._setShadowReceiver(merged);
+      // Register with the per-tile prop list so fog veil walks it.
+      const props = this._tilePropsByKey.get(tkey);
+      if (props) props.push(merged);
+      else this._tilePropsByKey.set(tkey, [merged]);
+      if (!primary) primary = merged;
+    }
+    return primary;
   }
 
   /** Dedicated StandardMaterial for the ribbon networks. Unlike the cached
@@ -2701,6 +2741,10 @@ export class Renderer3D {
     plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_Y;
     plane.material      = this._planeMaterialFor(this._assetIdFor(entity));
     plane.metadata      = { kind: 'entity', entityId: entity.id, col: entity.col, row: entity.row };
+    // Units render in group 1 so they always draw on top of roads / rivers /
+    // any other ground-level translucent geometry that would otherwise clip
+    // the standee silhouette. (Babylon default rendering group is 0.)
+    plane.renderingGroupId = 1;
     // The standee plane is the unit silhouette — register it so the sun
     // throws a unit-shaped shadow onto the terrain. transparencyShadow on
     // the ShadowGenerator honours the portrait's alpha channel.
@@ -2719,6 +2763,7 @@ export class Renderer3D {
     // Don't pick on the base — let the camera-facing plane be the click target
     // for a more predictable hit area.
     base.isPickable = false;
+    base.renderingGroupId = 1; // same as the standee plane — always above terrain
 
     this._positionStandee({ plane, base, leader }, entity);
     return { plane, base, leader };
@@ -3558,6 +3603,7 @@ export class Renderer3D {
     plane.isPickable    = false;
     plane.material      = mat;
     plane.parent        = standee.base;
+    plane.renderingGroupId = 1; // always above ground-level translucent meshes
     // Local position relative to the base disc (which sits at STANDEE_BASE_Y_OFFSET).
     const hMul = standee.leader ? STANDEE_LEADER_HEIGHT_MUL : 1;
     plane.position.set(0, STANDEE_BASE_HEIGHT * hMul + 0.2, 0);
@@ -4318,12 +4364,30 @@ export class Renderer3D {
       : (fogged ? this._fogMaterialFor(md.baseColor) : this._materialFor(md.baseColor));
     const props = this._tilePropsByKey.get(hexK);
     if (props) for (const p of props) {
-      // Terrain features (forest cones, building boxes/roofs) opt out via
-      // `metadata.respectsFog === false` and stay visible through fog — they're
-      // permanent geometry, not tactical info. Tagged at build time in
-      // `_buildTileMesh`. Standees, HP bars, node discs still hide.
-      if (p.metadata?.respectsFog === false) continue;
+      // Three fog policies per-prop, set via `metadata.respectsFog`:
+      //   • undefined / true → hide on fog (standees, HP bars, node discs)
+      //   • false             → permanent geometry, ignore fog (trees, buildings)
+      //   • 'darken'          → stay visible but tint dimmer (roads, rivers)
+      const policy = p.metadata?.respectsFog;
+      if (policy === false) continue;
+      if (policy === 'darken') {
+        // Per-mesh darkening so the road/river network reads as fogged on
+        // this hex specifically. Material is shared across tiles, so we apply
+        // a per-mesh `visibility` tint instead — Babylon's `Mesh.visibility`
+        // multiplies the final alpha, which on a translucent ribbon happens
+        // to read as darkening (the underlying ground shows through more).
+        // Pure white-balance darkening would require a per-tile material.
+        p.visibility = fogged ? 0.35 : 1.0;
+        continue;
+      }
       p.isVisible = !fogged;
+    }
+    // Building labels are tracked separately — dim (not hide) under fog so the
+    // operator can still read "this hex has an Inn" even when the interior is
+    // unrevealed. Tilemap-driven texture so the tint goes via material alpha.
+    const labelEntry = this._buildingLabelsByKey?.get(hexK);
+    if (labelEntry?.mat) {
+      labelEntry.mat.alpha = fogged ? 0.45 : 1.0;
     }
     if (fogged) this._fogActiveSet.add(hexK);
     else this._fogActiveSet.delete(hexK);
