@@ -268,10 +268,12 @@ export function stripRootBoneTranslation(animGroup, rootName = 'mixamorig:Hips')
 // During this window the walking animation is PAUSED (frozen mid-stride)
 // rather than running idle — so a multi-hex chain reads as "walk → freeze
 // → walk → freeze → walk → idle" instead of "walk → idle → walk → idle →
-// walk → idle". 500ms covers normal inter-step gaps in a chain
-// (~tens of ms) but lets idle resume between different units' sequences
-// in turn-resolution playback (which typically have longer pauses).
-export const PALADIN_WALK_SUSTAIN_MS = 500;
+// walk → idle". 700ms comfortably covers inter-step gaps at the current
+// MOVE_ANIM_MS=1000 pace (each hop is 1s of motion plus a small queue
+// gap, so 700ms of post-motion sustain bridges back-to-back hops) while
+// still letting idle resume between different units' sequences in
+// resolution playback (which typically have longer pauses).
+export const PALADIN_WALK_SUSTAIN_MS = 700;
 
 /** Predicate: does this entity belong to the day-side hero faction (and thus
  *  render as the paladin GLB when available)? Routes through `sideFactionOf`
@@ -8912,15 +8914,17 @@ export function diffStandees(existingIds, entities) {
 // Phase 5 pure helpers — exported for tests (no Babylon, no DOM)
 // ═══════════════════════════════════════════════════════════════════════════
 
-/** Duration (ms) of a single-hex slide. Slowed from 250 → 600 in the 3D
- *  renderer to give the paladin's walking animation room to breathe — at
- *  250ms the model was teleporting between hexes before the walk cycle
- *  could play visibly. */
-export const MOVE_ANIM_MS = 600;
+/** Duration (ms) of a single-hex slide. 1000ms gives a deliberate,
+ *  readable per-step pacing in 3D mode that lets the walking animation
+ *  cycle land cleanly between hexes. FRAMES_MOVE in addMoveAnim derives
+ *  from this constant so the cone slide and the cycle's speed-match
+ *  stay in lockstep. */
+export const MOVE_ANIM_MS = 1000;
 
-/** Duration (ms) of an attack-lunge slide to the midpoint. Slowed from
- *  200 → 480 alongside MOVE_ANIM_MS to keep relative pacing. */
-export const LUNGE_ANIM_MS = 480;
+/** Duration (ms) of an attack-lunge slide to the midpoint. Scaled
+ *  alongside MOVE_ANIM_MS to keep the lunge feeling snappy relative
+ *  to a normal move (~80% of one). */
+export const LUNGE_ANIM_MS = 800;
 
 /** Duration (ms) of a projectile arc. ~320ms — matches the 2D path's
  *  default `addProjectileAnim` duration. */
