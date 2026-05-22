@@ -118,7 +118,11 @@ export const HOUSE_INSTANCE_BASE_SCALE = 0.55;
 export const PALADIN_MODEL_DIR  = 'models/';
 // Back-compat constant; UNIT_RIG_BANK is the source-of-truth for which
 // .glb maps to which entity type.
-export const PALADIN_MODEL_FILE = 'paladin.glb';
+// idle.glb is the paladin's source rig — mesh + skeleton + idle animation
+// all in one Mixamo export. The embedded idle clip is auto-detected as
+// idleGroup at load time; no separate retarget needed. Walking is still
+// loaded as a separate animation-only file (when present) and retargeted.
+export const PALADIN_MODEL_FILE = 'idle.glb';
 
 // Fallback world-space scale applied to each cloned paladin when the source
 // mesh's natural bounding box can't be measured (test stubs, malformed GLB).
@@ -184,9 +188,11 @@ export const ANIMATION_BANK = Object.freeze({
  *  unanimated cone+sphere pawn. */
 export const UNIT_RIG_BANK = Object.freeze({
   [EntityType.PALADIN]: Object.freeze({
-    model: 'paladin.glb',
+    // Model file ships with the idle clip embedded — auto-detected as
+    // the rig's idle by _loadPaladinModel. Walking is loaded separately
+    // and retargeted onto this skeleton.
+    model: 'idle.glb',
     animations: Object.freeze({
-      idle:    ANIMATION_BANK.idle,
       walking: ANIMATION_BANK.walking,
     }),
   }),
@@ -1728,15 +1734,21 @@ export class Renderer3D {
         transformNodes,
       };
 
-      // Fire-and-forget the walking + idle companion GLBs. Paladins start at
-      // bind pose; as each clip resolves, the blend tick picks it up. We
-      // don't block the retrofit pass on these heavy (~4–8 MB) loads.
+      // Fire-and-forget the companion animation GLBs. Paladins start at
+      // bind pose (or with the model's embedded idle if it has one); as
+      // each clip resolves, the blend tick picks it up.
       this._loadWalkingAnimation(basePath).catch(err => {
         console.warn('[Renderer3D] walking.glb load failed; paladins will idle only.', err);
       });
-      this._loadIdleAnimation(basePath).catch(err => {
-        console.warn('[Renderer3D] idle.glb load failed; paladins will stay at bind pose when not moving.', err);
-      });
+      // Only load a separate idle if the paladin model file isn't already
+      // idle.glb — when the model IS idle.glb its embedded animation was
+      // already picked up as src.idleGroup above, and loading it again
+      // would import duplicate meshes into the scene.
+      if (PALADIN_MODEL_FILE !== IDLE_MODEL_FILE) {
+        this._loadIdleAnimation(basePath).catch(err => {
+          console.warn('[Renderer3D] idle.glb load failed; paladins will stay at bind pose when not moving.', err);
+        });
+      }
 
       // If standees were built before the GLB landed (the common case —
       // _initBabylon kicks the load off async and `_syncEntityStandees`
