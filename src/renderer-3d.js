@@ -1478,9 +1478,12 @@ export class Renderer3D {
         camera.inertialRadiusOffset -= radiusDelta;
       } else if (gestureMode === 'rotate' && (lastPinchAngle !== 0 || lastPinchDist > 0)) {
         const dAngle = twistDelta(lastPinchAngle, newAngle);
-        // Twist sign convention: clockwise finger rotation spins the camera
-        // clockwise (alpha decreases) — matches "I'm rotating the board".
-        camera.inertialAlphaOffset -= dAngle;
+        // Twist sign convention: twisting fingers one way should rotate the
+        // VIEW the same way (operator: phone touch rotate was inverted). Was
+        // -= (camera follows finger direction, but mapRoot/scene appears to
+        // counter-rotate — felt inverted under playtest); += matches the
+        // intuitive "I'm spinning the map under my fingers" reading.
+        camera.inertialAlphaOffset += dAngle;
       }
       lastPinchDist  = newDist;
       lastPinchAngle = newAngle;
