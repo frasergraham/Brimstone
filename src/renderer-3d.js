@@ -34,16 +34,18 @@ import { sightRangeForEntity, findFaction } from './factions.js';
 import { Side } from './sides.js';
 import { MAP_SIZES } from './map.js';
 
-const BABYLON_CDN = 'https://cdn.jsdelivr.net/npm/@babylonjs/core@7.42.0/+esm';
-// The glTF loader plugin lives in a separate npm package (not @babylonjs/core).
-// We load it as a UMD bundle via <script> tag (not as an ESM import) because the
-// jsdelivr `+esm` wrapper bundles its OWN copy of @babylonjs/core — registering
-// the plugin on the internal copy, not the window-global BABYLON our renderer
-// uses. Two BABYLON instances → ImportMeshAsync never sees the .glb plugin →
-// SceneLoader falls back to the .babylon JSON loader and rejects with
-// "importMesh has failed JSON parse" on binary GLB files. The UMD bundle below
-// attaches to the same window.BABYLON the rest of the renderer uses.
-const BABYLON_LOADERS_UMD = 'https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js';
+// Babylon core + glTF loaders are served from the packaged `assets/vendor/`
+// directory rather than any CDN — the Electron / iOS bundles must run with zero
+// runtime network dependencies. Both files are UMD bundles that attach to
+// `window.BABYLON`; loading them as <script> tags (rather than ESM imports)
+// keeps a single BABYLON instance, which is what the glTF plugin needs in
+// order to register on the same SceneLoader the renderer uses. (The previous
+// ESM-import of @babylonjs/core via the jsdelivr `+esm` wrapper bundled its
+// own internal copy of core, so the plugin registered on the wrong BABYLON
+// and SceneLoader rejected GLB files with "Unable to find a plugin to load
+// .glb".)
+const BABYLON_CORE_LOCAL    = '/assets/vendor/babylonjs/babylon.js';
+const BABYLON_LOADERS_LOCAL = '/assets/vendor/babylonjs/babylonjs.loaders.min.js';
 
 // ─── House GLB model (replaces the procedural box+roof building) ───────────
 // Path is relative to the assets base directory (`assets/` in production), so
@@ -1064,6 +1066,70 @@ export class Renderer3D {
     if (this.onImagesLoaded) this.onImagesLoaded();
   }
 
+  /** Inject the Babylon core UMD bundle into the page so `window.BABYLON` is
+   *  populated. Idempotent and concurrency-safe — mirrors `_ensureBabylonLoaders`.
+   *
+   *  Returns the BABYLON global on success, null on failure (no DOM, script
+   *  errored, or bundle loaded but didn't populate window.BABYLON).
+   *
+   *  Why a <script> tag instead of `await import(...)`: the previous ESM
+   *  import of @babylonjs/core via the jsdelivr `+esm` wrapper produced a
+   *  BABYLON instance distinct from the one the loaders UMD bundle attaches
+   *  to, so the glTF plugin never registered on the renderer's SceneLoader.
+   *  The UMD bundle solves that by putting the SAME BABYLON on `window`. */
+  async _ensureBabylonCore() {
+    if (typeof window !== 'undefined' && window.BABYLON) return window.BABYLON;
+    if (typeof document === 'undefined') return null;
+
+    if (!this._babylonCorePromise) {
+      this._babylonCorePromise = new Promise((resolve) => {
+        const existing = document.querySelector('script[data-babylon-core]');
+        if (existing) {
+          if (existing.dataset.loaded === 'true') {
+            return resolve(typeof window !== 'undefined' ? window.BABYLON : null);
+          }
+          existing.addEventListener('load', () => {
+            resolve(typeof window !== 'undefined' ? window.BABYLON : null);
+          }, { once: true });
+          existing.addEventListener('error', () => resolve(null), { once: true });
+          return;
+        }
+        const s = document.createElement('script');
+        s.src = BABYLON_CORE_LOCAL;
+        s.async = true;
+        s.dataset.babylonCore = 'true';
+        s.addEventListener('load', () => {
+          s.dataset.loaded = 'true';
+          resolve(typeof window !== 'undefined' ? window.BABYLON : null);
+        }, { once: true });
+        s.addEventListener('error', () => resolve(null), { once: true });
+        document.head.appendChild(s);
+      });
+    }
+
+    const BABYLON = await this._babylonCorePromise;
+    if (!BABYLON) {
+      console.warn('[Renderer3D] Babylon core script failed to load; 3D renderer unavailable.');
+      return null;
+    }
+    return BABYLON;
+  }
+
+  /** Compose `_ensureBabylonCore` + `_ensureBabylonLoaders` so the rest of the
+   *  renderer has a single entry point for "make BABYLON available." Core MUST
+   *  resolve before loaders run — the loaders bundle augments BABYLON.SceneLoader
+   *  on the global created by core. Returns the BABYLON global, or null if core
+   *  failed to load (in which case 3D rendering is impossible). A loaders
+   *  failure is non-fatal: core works and GLB consumers silently fall back to
+   *  their procedural geometry. */
+  async _ensureBabylonReady() {
+    const BABYLON = await this._ensureBabylonCore();
+    if (!BABYLON) return null;
+    this._babylon = BABYLON;
+    await this._ensureBabylonLoaders();
+    return BABYLON;
+  }
+
   /** Inject the Babylon glTF loaders UMD bundle into the page so SceneLoader
    *  recognizes `.glb` / `.gltf` files. Idempotent and shared by every GLB
    *  consumer in the renderer (house, paladin, future props) — registration
@@ -1079,7 +1145,8 @@ export class Renderer3D {
    *  Why a `<script>` tag instead of `await import(...+esm)`: the jsdelivr
    *  `+esm` ESM wrapper bundles its own copy of @babylonjs/core, registering
    *  the plugin on the wrong BABYLON instance. The UMD bundle attaches to
-   *  the same window.BABYLON the rest of the renderer uses. */
+   *  the same window.BABYLON the rest of the renderer uses. Asset is served
+   *  from the packaged `assets/vendor/` path — no CDN runtime dependency. */
   async _ensureBabylonLoaders() {
     if (this._babylonLoadersReady) return true;
     // No DOM (headless tests / node-test runner): there's no <script> tag to
@@ -1110,7 +1177,7 @@ export class Renderer3D {
           return;
         }
         const s = document.createElement('script');
-        s.src = BABYLON_LOADERS_UMD;
+        s.src = BABYLON_LOADERS_LOCAL;
         s.async = true;
         s.dataset.babylonLoaders = 'true';
         s.addEventListener('load', () => { s.dataset.loaded = 'true'; resolve(true); }, { once: true });
@@ -1833,8 +1900,14 @@ export class Renderer3D {
   // ─── Babylon scene setup ─────────────────────────────────────────────────
 
   async _initBabylon() {
-    // Dynamic import keeps the module importable in node-test without Babylon.
-    const BABYLON = await import(/* @vite-ignore */ BABYLON_CDN);
+    // Babylon core + loaders ship as UMD bundles under `assets/vendor/` and
+    // attach to `window.BABYLON`. Loading both via <script> tags keeps a
+    // single BABYLON instance so the glTF plugin registers on the same
+    // SceneLoader the renderer uses. The module stays importable in
+    // node-test (no DOM) because the helper short-circuits to null and the
+    // draw loop only invokes `_initBabylon` after a real canvas is attached.
+    const BABYLON = await this._ensureBabylonReady();
+    if (!BABYLON) return;
     this._babylon = BABYLON;
 
     const engine = new BABYLON.Engine(this.canvas, true, { preserveDrawingBuffer: true, stencil: true });
@@ -2089,28 +2162,22 @@ export class Renderer3D {
     }
     if (!this._inspectorLoaded) {
       try {
-        // The Inspector ships as a UMD bundle that hooks into a global
-        // `window.BABYLON`. We import core as ESM (frozen namespace), so we
-        // can't assign that directly — the bundle mutates the global (adds
-        // DebugLayer etc.) and assignments to a frozen namespace throw
-        // "Attempted to assign to readonly property". Mirror the namespace
-        // into a plain writable object first; class prototypes are shared by
-        // reference so `scene.debugLayer` still wires up correctly.
-        if (!window.BABYLON) {
-          const shim = {};
-          for (const k of Object.keys(this._babylon)) shim[k] = this._babylon[k];
-          window.BABYLON = shim;
-        }
+        // The Inspector ships as a UMD bundle that hooks into `window.BABYLON`
+        // (the same global core + loaders populate from `assets/vendor/`).
+        // Loaded from a local vendor path so the packaged Electron / iOS app
+        // has zero runtime CDN dependencies — the file is optional, so when
+        // it's not present locally the inspector hotkey is effectively a
+        // no-op and the warn below makes that explicit to the operator.
         await new Promise((resolve, reject) => {
           const s = document.createElement('script');
-          s.src = 'https://cdn.babylonjs.com/inspector/babylon.inspector.bundle.js';
+          s.src = '/assets/vendor/babylonjs/babylon.inspector.bundle.js';
           s.onload = resolve;
           s.onerror = () => reject(new Error('script load failed'));
           document.head.appendChild(s);
         });
         this._inspectorLoaded = true;
       } catch (err) {
-        console.warn('[Renderer3D] failed to load Babylon Inspector:', err);
+        console.warn('[Renderer3D] failed to load Babylon Inspector (drop babylon.inspector.bundle.js into assets/vendor/babylonjs/ to enable):', err);
         return;
       }
     }

@@ -99,7 +99,9 @@ describe('_ensureBabylonLoaders — script injection', () => {
     // Script must be injected immediately (synchronously, before the await).
     assert.equal(scripts.length, 1);
     const s = scripts[0];
-    assert.match(s.src, /babylonjs\.loaders\.min\.js$/);
+    // Pin: loaders bundle MUST come from the local `assets/vendor/` path so
+    // the packaged Electron / iOS build has zero runtime CDN dependencies.
+    assert.equal(s.src, '/assets/vendor/babylonjs/babylonjs.loaders.min.js');
     assert.equal(s.async, true);
     assert.equal(s.dataset.babylonLoaders, 'true');
 
