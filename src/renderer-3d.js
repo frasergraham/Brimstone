@@ -1993,12 +1993,29 @@ export class Renderer3D {
       if (typeof m.setEnabled === 'function') m.setEnabled(false);
       m.isPickable = false;
     }
+    // If walking.glb shipped without a Skeleton (animation-only files
+    // typically don't, since fbx2gltf emits a glTF skin only when a mesh
+    // references the joints), synthesize one by cloning paladin's
+    // skeleton and re-linking each cloned bone's _linkedTransformNode to
+    // walking's matching TransformNode by name. The ghost mesh bound to
+    // this synthesized skeleton then skins from walking's animated TNs
+    // (which the native walkGroup drives), fully independent of paladin's
+    // idle skeleton.
+    const walkingTNs = Array.isArray(result.transformNodes) ? result.transformNodes.slice() : [];
+    let ghostSkeleton = walkingSkeleton;
+    if (!ghostSkeleton && this._paladinSource?.skeleton
+      && typeof this._paladinSource.skeleton.clone === 'function'
+      && walkingTNs.length > 0) {
+      ghostSkeleton = this._buildGhostSkeletonFromWalkingTNs(
+        this._paladinSource.skeleton, walkingTNs,
+      );
+    }
     this._walkingSource = {
       mesh: walkingPrimary,
       meshes: walkingMeshes,
-      skeleton: walkingSkeleton,
+      skeleton: ghostSkeleton,
       walkGroup: walkGroupNative,
-      transformNodes: Array.isArray(result.transformNodes) ? result.transformNodes.slice() : [],
+      transformNodes: walkingTNs,
     };
     // Compute the source clip's stride length and natural cycle duration
     // BEFORE stripping root motion — once stripped, the keyframes are
@@ -2192,6 +2209,46 @@ export class Renderer3D {
     // animation keyframes (cloned + retargeted onto paladin's rig).
     this._disposeWalkingImport(result);
     return idleForPaladin;
+  }
+
+  /** Clone the paladin source skeleton and re-link each cloned bone's
+   *  _linkedTransformNode to the walking import's matching TransformNode
+   *  by name. The resulting skeleton has paladin's bind matrices + bone
+   *  hierarchy, but bone matrices read from walking's animated TNs every
+   *  frame — so a mesh bound to this skeleton skins walking's pose,
+   *  independent of paladin's own idle skeleton. Returns null if the
+   *  clone fails. */
+  _buildGhostSkeletonFromWalkingTNs(paladinSkeleton, walkingTNs) {
+    try {
+      const ghostSkel = paladinSkeleton.clone('ghostWalkingSkeleton', 'ghostWalkingSkeleton');
+      if (!ghostSkel || !Array.isArray(ghostSkel.bones)) return null;
+      const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
+      const tnMap = new Map();
+      for (const tn of walkingTNs) {
+        if (!tn || !tn.name) continue;
+        if (!tnMap.has(tn.name)) tnMap.set(tn.name, tn);
+        const s = stripDup(tn.name);
+        if (s !== tn.name && !tnMap.has(s)) tnMap.set(s, tn);
+      }
+      let relinked = 0;
+      for (const bone of ghostSkel.bones) {
+        if (!bone || !bone.name) continue;
+        const tn = tnMap.get(bone.name) || tnMap.get(stripDup(bone.name));
+        if (tn) {
+          // _linkedTransformNode is a private Babylon field; both setters
+          // (linkTransformNode and direct assignment) work. Use the public
+          // method when available so any internal bookkeeping fires.
+          if (typeof bone.linkTransformNode === 'function') bone.linkTransformNode(tn);
+          else bone._linkedTransformNode = tn;
+          relinked++;
+        }
+      }
+      console.info(`[Renderer3D] ghost skeleton: ${relinked}/${ghostSkel.bones.length} bones relinked to walking TNs`);
+      return ghostSkel;
+    } catch (err) {
+      console.warn('[Renderer3D] ghost skeleton synthesis failed', err);
+      return null;
+    }
   }
 
   _disposeWalkingImport(result) {
