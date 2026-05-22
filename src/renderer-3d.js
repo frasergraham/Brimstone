@@ -34,6 +34,27 @@ import { sightRangeForEntity } from './factions.js';
 import { MAP_SIZES } from './map.js';
 
 const BABYLON_CDN = 'https://cdn.jsdelivr.net/npm/@babylonjs/core@7.42.0/+esm';
+// The glTF loader plugin lives in a separate npm package (not @babylonjs/core).
+// Importing this module registers the .glb / .gltf plugins on
+// BABYLON.SceneLoader as a side-effect — without it, ImportMeshAsync rejects
+// .glb files with "Unable to find a plugin". Loaded lazily from `_loadHouseModel`
+// so the renderer doesn't pay for the loader bundle on maps that never need it.
+const BABYLON_LOADERS_CDN = 'https://cdn.jsdelivr.net/npm/@babylonjs/loaders@7.42.0/+esm';
+
+// ─── House GLB model (replaces the procedural box+roof building) ───────────
+// Path is relative to the assets base directory (`assets/` in production), so
+// the loader fetches `<base>/models/house.glb`. The file is intentionally
+// optional — if it's missing or fails to parse the renderer falls back to the
+// existing procedural box+roof, so gameplay never blocks on a 404.
+export const HOUSE_MODEL_DIR  = 'models/';
+export const HOUSE_MODEL_FILE = 'house.glb';
+
+// Default world-space scale for the imported model. The GLB's intrinsic unit
+// system is unknown until the file lands; this value sits the model at
+// roughly the same footprint as the procedural BUILDING_BASE_DIM (≈0.55 wide).
+// Operator can retune by adjusting this constant or running a one-off
+// `gltf-transform` resize pass — see PR body for the offline recipe.
+export const HOUSE_INSTANCE_BASE_SCALE = 0.55;
 
 // ─── Standee constants (Phase 3) ────────────────────────────────────────────
 // Units are now rendered as traditional board-game tokens — a coloured cone
@@ -698,6 +719,14 @@ export class Renderer3D {
 
     // ── Babylon state — populated by _initBabylon() on first draw ───────────
     this._babylon       = null; // module namespace once loaded
+    // ── House GLB model state (see `_loadHouseModel`) ─────────────────────
+    // _houseSourceMesh is the (merged) imported BABYLON.Mesh used as the
+    // template for `mesh.createInstance(...)`. Null until the GLB load
+    // resolves; null forever if the file is missing or fails to parse —
+    // building tiles fall back to the procedural box+roof in that case.
+    this._houseSourceMesh = null;
+    this._houseLoadPromise = null; // de-dupes concurrent load attempts
+    this._assetsBasePath   = null; // captured by loadImages()
     this._engine        = null;
     this._scene         = null;
     this._camera        = null;
@@ -966,7 +995,210 @@ export class Renderer3D {
       // portrait sprite before the next draw cycle.
       this._syncEntityIconBillboards();
     }
+    // Remember the basePath so `_loadHouseModel` (kicked off from
+    // `_initBabylon` once the scene exists) can fetch the GLB from the same
+    // root the tilemap came from.
+    this._assetsBasePath = basePath;
     if (this.onImagesLoaded) this.onImagesLoaded();
+  }
+
+  /** Lazy-load `<basePath>/models/house.glb` and stash it as `_houseSourceMesh`.
+   *  Subsequent building tiles (and any already-built tiles, via the retrofit
+   *  pass) render `mesh.createInstance(...)` of this source so all houses on
+   *  the map share one vertex buffer / material. The GLB is intentionally
+   *  optional: if the loader plugin import, the ImportMeshAsync call, or the
+   *  merge step fails, the renderer silently falls back to the procedural
+   *  box+roof so a missing file never blocks gameplay.
+   *
+   *  Loading the @babylonjs/loaders package has the side-effect of registering
+   *  the .glb / .gltf plugins on BABYLON.SceneLoader. Without that import,
+   *  ImportMeshAsync rejects .glb files with "Unable to find a plugin for file
+   *  extension .glb". */
+  async _loadHouseModel(basePath = 'assets') {
+    if (!this._babylon || !this._scene) return null;
+    if (this._houseSourceMesh) return this._houseSourceMesh;
+    if (this._houseLoadPromise) return this._houseLoadPromise;
+    const BABYLON = this._babylon;
+
+    const promise = (async () => {
+      // Step 1: register glTF loader plugin (side-effect of importing the
+      // loaders package). Best-effort — if SceneLoader.ImportMeshAsync is
+      // already wired (tests stub it directly on the fake BABYLON), we don't
+      // need the loaders import at all. Real-browser path: this populates
+      // the .glb / .gltf plugin entries on BABYLON.SceneLoader.
+      try {
+        await import(/* @vite-ignore */ BABYLON_LOADERS_CDN);
+      } catch (err) {
+        // Don't abort yet — SceneLoader may still be usable (tests + edge
+        // cases). The plugin-availability check below makes the final call.
+        console.warn('[Renderer3D] @babylonjs/loaders import failed.', err);
+      }
+
+      if (!BABYLON.SceneLoader || typeof BABYLON.SceneLoader.ImportMeshAsync !== 'function') {
+        console.warn('[Renderer3D] BABYLON.SceneLoader.ImportMeshAsync unavailable; skipping house model.');
+        return null;
+      }
+
+      // Step 2: import the GLB. `null` for meshNames pulls everything in.
+      let result;
+      try {
+        result = await BABYLON.SceneLoader.ImportMeshAsync(
+          null,
+          `${basePath}/${HOUSE_MODEL_DIR}`,
+          HOUSE_MODEL_FILE,
+          this._scene,
+        );
+      } catch (err) {
+        console.warn('[Renderer3D] house.glb load failed; using procedural buildings.', err);
+        return null;
+      }
+
+      // Step 3: filter to meshes carrying real geometry. glTF imports often
+      //         return a `__root__` TransformNode plus N sub-meshes — we only
+      //         want the ones with vertex data.
+      const realMeshes = (result.meshes || []).filter(m =>
+        m && typeof m.getTotalVertices === 'function' && m.getTotalVertices() > 0,
+      );
+      if (realMeshes.length === 0) {
+        console.warn('[Renderer3D] house.glb contained no geometry; using procedural buildings.');
+        return null;
+      }
+
+      // Step 4: collapse to ONE source mesh so instances share a single
+      //         vertex buffer + material. `multiMultiMaterials=true` keeps the
+      //         per-submesh materials (textures) intact across the merge so
+      //         the imported visual still renders correctly.
+      let source = realMeshes[0];
+      if (realMeshes.length > 1 && typeof BABYLON.Mesh?.MergeMeshes === 'function') {
+        try {
+          const merged = BABYLON.Mesh.MergeMeshes(
+            realMeshes,
+            /* disposeSource */     true,
+            /* allow32BitsIndices */ true,
+            /* meshSubclass */       undefined,
+            /* subdivideWithSubMeshes */ false,
+            /* multiMultiMaterials */ true,
+          );
+          if (merged) source = merged;
+        } catch (err) {
+          console.warn('[Renderer3D] house.glb merge failed; falling back to first sub-mesh.', err);
+          source = realMeshes[0];
+        }
+      }
+      if (!source) return null;
+
+      // Hide the source from the scene — instances render geometry on its
+      // behalf, but the template itself is never drawn directly.
+      if (typeof source.setEnabled === 'function') source.setEnabled(false);
+      source.isPickable = false;
+      // World-geometry render group so depth-tests against units/buildings
+      // behave the same way as the existing terrain props (see PR #361).
+      if (typeof source.renderingGroupId !== 'undefined') source.renderingGroupId = 0;
+
+      // Diagnostic: log tri count so the operator can see whether geometry or
+      // textures dominate the file size before reaching for gltf-transform.
+      const triCount = typeof source.getTotalIndices === 'function'
+        ? Math.floor((source.getTotalIndices() || 0) / 3) : null;
+      console.log(
+        `[Renderer3D] house.glb loaded (${realMeshes.length} sub-mesh${realMeshes.length === 1 ? '' : 'es'}`
+        + (triCount != null ? `, ${triCount} tris` : '')
+        + `).`,
+      );
+
+      this._houseSourceMesh = source;
+
+      // If the map's already been built (the common case — GLB load is slow,
+      // _buildMap runs synchronously right after Babylon init), retrofit
+      // existing procedural buildings with instances of the new source.
+      if (this._mapBuilt) this._upgradeBuildingsToHouseModel();
+      return source;
+    })();
+
+    this._houseLoadPromise = promise;
+    return promise;
+  }
+
+  /** Create one BABYLON.InstancedMesh from `_houseSourceMesh` for the given
+   *  building tile, position it at the tile's NE building slot, and apply the
+   *  hash-seeded scale + yaw jitter so neighbouring houses don't look stamped
+   *  out of a single mould. Returns the instance, or null if the source mesh
+   *  isn't loaded yet (caller's responsibility to fall back to procedural). */
+  _buildHouseInstance(tile, x, z, parent) {
+    if (!this._houseSourceMesh || !this._babylon) return null;
+    const BABYLON = this._babylon;
+    const source  = this._houseSourceMesh;
+    if (typeof source.createInstance !== 'function') return null;
+    const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
+    // Tile-top anchor — matches the procedural building's base Y (0.43 - 0.7/2).
+    const tileTopY = 0.43 - 0.7 / 2;
+
+    const inst = source.createInstance(`bldgInst_${tile.col}_${tile.row}`);
+    if (parent && 'parent' in inst) inst.parent = parent;
+    if (inst.position && typeof inst.position === 'object') {
+      inst.position.x = x + slot.x;
+      inst.position.y = tileTopY;
+      inst.position.z = z + slot.z;
+    }
+    const sc = houseInstanceScalingForHex(tile.col, tile.row);
+    if (BABYLON.Vector3) {
+      inst.scaling = new BABYLON.Vector3(
+        HOUSE_INSTANCE_BASE_SCALE * sc.x,
+        HOUSE_INSTANCE_BASE_SCALE * sc.y,
+        HOUSE_INSTANCE_BASE_SCALE * sc.z,
+      );
+      inst.rotation = new BABYLON.Vector3(0, houseYawForHex(tile.col, tile.row), 0);
+    }
+    inst.isPickable = false;
+    // Buildings stay visible under fog of war — permanent terrain, not
+    // tactical info. Mirrors the procedural box+roof metadata.
+    inst.metadata = { respectsFog: false, kind: 'building-house', col: tile.col, row: tile.row };
+    this._addShadowCaster(inst);
+    // World-geometry render group, same as the procedural box+roof + tile
+    // cylinders — keeps the depth buffer consistent for unit/building overlap.
+    if (typeof inst.renderingGroupId !== 'undefined') inst.renderingGroupId = 0;
+    return inst;
+  }
+
+  /** Sweep `_tilePropsByKey` for every BUILDING tile, dispose the procedural
+   *  box + roof meshes (`bldg_…` / `roof_…`), and replace them with a house
+   *  instance. Called after `_loadHouseModel` resolves on an already-built
+   *  map. Idempotent: tiles that already hold a house instance are skipped.
+   *  Re-runs `_freezeStaticMeshes` so the freshly created instances are picked
+   *  up by the per-frame world-matrix lock pass. */
+  _upgradeBuildingsToHouseModel() {
+    if (!this._mapBuilt || !this._houseSourceMesh || !this.state?.tiles) return 0;
+    let upgraded = 0;
+    for (const tile of this.state.tiles.values()) {
+      if (tile.type !== TileType.BUILDING || !tile.building) continue;
+      const tkey  = hexKey(tile.col, tile.row);
+      const props = this._tilePropsByKey.get(tkey) || [];
+      // Skip if this tile already holds a building-house instance.
+      if (props.some(m => m?.metadata?.kind === 'building-house')) continue;
+
+      const remaining = [];
+      for (const m of props) {
+        const name = m?.name || '';
+        if (name.startsWith('bldg_') || name.startsWith('roof_')) {
+          if (typeof m.dispose === 'function') m.dispose();
+          continue;
+        }
+        remaining.push(m);
+      }
+      const { x, z } = hexToWorld(tile.col, tile.row);
+      const inst = this._buildHouseInstance(tile, x, z, this._mapRoot);
+      if (inst) {
+        remaining.push(inst);
+        upgraded++;
+      }
+      if (remaining.length > 0) this._tilePropsByKey.set(tkey, remaining);
+      else this._tilePropsByKey.delete(tkey);
+    }
+    // Freeze pass picks up the new instances. The procedural meshes were
+    // already frozen on initial build; disposing unfreezes nothing the GPU
+    // still cares about, but the new instances need their world matrices
+    // locked too.
+    if (upgraded > 0) this._freezeStaticMeshes();
+    return upgraded;
   }
 
   /** Walk `_portraitMaterials` and attach a freshly-built texture to any
@@ -1422,6 +1654,14 @@ export class Renderer3D {
     // Must happen BEFORE _frameFullMap (whose `_radiusForFit` clamps to this
     // limit) and BEFORE _buildMap (whose forest band depth is sized off it).
     this._recomputeMaxZoomCap();
+
+    // Kick off the house GLB load asynchronously. We deliberately don't
+    // await it here — `_buildMap` below is synchronous and the model is
+    // heavy (~7 MB). Building tiles render with the procedural box+roof
+    // fallback; when the GLB resolves, `_upgradeBuildingsToHouseModel`
+    // retrofits each building tile with an instance of the loaded source.
+    // Fire-and-forget — errors are caught inside `_loadHouseModel`.
+    this._loadHouseModel(this._assetsBasePath || 'assets');
 
     // Build the map from current state and frame it (instant — no animation
     // on the very first frame, otherwise the camera "slides in" from the
@@ -2206,51 +2446,59 @@ export class Renderer3D {
       trackProp(plank);
     }
 
-    // ── Building: simple low-poly box atop the tile, building-coloured ────
-    // Positioned via the unified tile-slot system: building lives in slot 1
-    // (BUILDING_SLOT_INDEX, the "NE" outer slot). A standee on the same hex
-    // takes the centre slot, so silhouettes don't overlap.
+    // ── Building: either a glTF house instance (if `_loadHouseModel` has
+    // resolved by now) or the procedural box + roof fallback. Both paths
+    // anchor the building at the NE outer slot (BUILDING_SLOT_INDEX); a
+    // standee on the same hex takes the centre slot so silhouettes don't
+    // overlap. The GLB load runs async from `_initBabylon` — when it resolves
+    // after `_buildMap` completes, `_upgradeBuildingsToHouseModel` swaps the
+    // procedural meshes here for instances.
     if (tile.type === TileType.BUILDING && tile.building) {
-      const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
-      // Per-tile dimension jitter so buildings show silhouette variety
-      // instead of an army of identical boxes. See `buildingDimensionsForHex`.
-      const dims = buildingDimensionsForHex(tile.col, tile.row);
-      // Box sits on top of the tile prism with its base at Y = TILE_PRISM_TOP
-      // (historically 0.08, the "0.43 - 0.7/2" anchor before jitter). Y the
-      // box centre to (TILE_PRISM_TOP + height/2) so the floor stays planted.
-      const tileTopY = 0.43 - 0.7 / 2;
-      const box = BABYLON.MeshBuilder.CreateBox(
-        `bldg_${tile.col}_${tile.row}`,
-        { width: dims.box.width, height: dims.box.height, depth: dims.box.depth },
-        scene,
-      );
-      box.parent     = parent;
-      box.position.x = x + slot.x;
-      box.position.z = z + slot.z;
-      box.position.y = tileTopY + dims.box.height / 2;
-      box.material   = this._materialFor(BUILDING_COLOR[tile.building] || '#8a7a5a');
-      box.isPickable = false;
-      this._addShadowCaster(box);
-      // Buildings stay visible under fog of war — permanent terrain, not
-      // tactical info. See `_setTileFogged`.
-      box.metadata   = { respectsFog: false };
-      trackProp(box);
+      if (this._houseSourceMesh) {
+        const inst = this._buildHouseInstance(tile, x, z, parent);
+        if (inst) trackProp(inst);
+      } else {
+        const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
+        // Per-tile dimension jitter so buildings show silhouette variety
+        // instead of an army of identical boxes. See `buildingDimensionsForHex`.
+        const dims = buildingDimensionsForHex(tile.col, tile.row);
+        // Box sits on top of the tile prism with its base at Y = TILE_PRISM_TOP
+        // (historically 0.08, the "0.43 - 0.7/2" anchor before jitter). Y the
+        // box centre to (TILE_PRISM_TOP + height/2) so the floor stays planted.
+        const tileTopY = 0.43 - 0.7 / 2;
+        const box = BABYLON.MeshBuilder.CreateBox(
+          `bldg_${tile.col}_${tile.row}`,
+          { width: dims.box.width, height: dims.box.height, depth: dims.box.depth },
+          scene,
+        );
+        box.parent     = parent;
+        box.position.x = x + slot.x;
+        box.position.z = z + slot.z;
+        box.position.y = tileTopY + dims.box.height / 2;
+        box.material   = this._materialFor(BUILDING_COLOR[tile.building] || '#8a7a5a');
+        box.isPickable = false;
+        this._addShadowCaster(box);
+        // Buildings stay visible under fog of war — permanent terrain, not
+        // tactical info. See `_setTileFogged`.
+        box.metadata   = { respectsFog: false };
+        trackProp(box);
 
-      // Tiny roof block to add silhouette variety. Sits flush on top of the box.
-      const roof = BABYLON.MeshBuilder.CreateBox(
-        `roof_${tile.col}_${tile.row}`,
-        { width: dims.roof.width, height: dims.roof.height, depth: dims.roof.depth },
-        scene,
-      );
-      roof.parent     = parent;
-      roof.position.x = x + slot.x;
-      roof.position.z = z + slot.z;
-      roof.position.y = tileTopY + dims.box.height + dims.roof.height / 2;
-      roof.material   = this._materialFor('#2c2520');
-      roof.isPickable = false;
-      this._addShadowCaster(roof);
-      roof.metadata   = { respectsFog: false };
-      trackProp(roof);
+        // Tiny roof block to add silhouette variety. Sits flush on top of the box.
+        const roof = BABYLON.MeshBuilder.CreateBox(
+          `roof_${tile.col}_${tile.row}`,
+          { width: dims.roof.width, height: dims.roof.height, depth: dims.roof.depth },
+          scene,
+        );
+        roof.parent     = parent;
+        roof.position.x = x + slot.x;
+        roof.position.z = z + slot.z;
+        roof.position.y = tileTopY + dims.box.height + dims.roof.height / 2;
+        roof.material   = this._materialFor('#2c2520');
+        roof.isPickable = false;
+        this._addShadowCaster(roof);
+        roof.metadata   = { respectsFog: false };
+        trackProp(roof);
+      }
 
       // Hover label — floating billboarded plane above the roof, painted with
       // the building's display name. Alpha is driven each frame by
@@ -6318,6 +6566,26 @@ export const BUILDING_BASE_DIM = Object.freeze({ width: 0.55, height: 0.70, dept
 /** Base roof dimensions before footprint scaling. Roof width / depth scale
  *  with the box; roof height is constant so the lid silhouette stays crisp. */
 export const BUILDING_ROOF_DIM = Object.freeze({ width: 0.62, height: 0.15, depth: 0.62 });
+
+/** Deterministic yaw (radians, [0, 2π)) for the house instance on (col, row).
+ *  Spins each building around its vertical axis so identical models read as a
+ *  village rather than a regimented row. Uses a fresh hash seed so yaw doesn't
+ *  correlate with the existing dimension jitter. */
+export function houseYawForHex(col, row) {
+  return _forestHash(col, row, 251) * Math.PI * 2;
+}
+
+/** Per-hex anisotropic scaling factors for the house instance, derived from
+ *  the existing `buildingDimensionsForHex` so the procedural-vs-instance paths
+ *  share one source of jitter. Each axis ratio = jittered-box-axis / base. */
+export function houseInstanceScalingForHex(col, row) {
+  const dims = buildingDimensionsForHex(col, row);
+  return {
+    x: dims.box.width  / BUILDING_BASE_DIM.width,
+    y: dims.box.height / BUILDING_BASE_DIM.height,
+    z: dims.box.depth  / BUILDING_BASE_DIM.depth,
+  };
+}
 
 /** Deterministic dimensions for the building on (col, row). Returns
  *  `{ box: {width, height, depth}, roof: {width, height, depth} }`. */
