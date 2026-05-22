@@ -113,8 +113,8 @@ function newInst() {
   return new Renderer3D(fakeCanvas, {});
 }
 
-describe('Renderer3D — river extension uses the in-map river colour (no fog tint)', () => {
-  test('extension material diffuse + emissive equal ribbonMaterialColors(TILE_COLOR.RIVER)', () => {
+describe('Renderer3D — river extension is fog-tinted to match the wilderness border', () => {
+  test('extension diffuse + emissive equal in-map river × FOG_TILE_DARKEN', () => {
     const r = newInst();
     r._babylon = makeStubBabylon();
     r._scene   = {};
@@ -134,18 +134,22 @@ describe('Renderer3D — river extension uses the in-map river colour (no fog ti
     }
     assert.ok(exts.length >= 1, 'expected at least one river-extension mesh');
 
+    // The extension now multiplies the in-map ribbon colours by the
+    // renderer's _fogTileDarken so it reads as wilderness-beyond-sight.
+    // Mirrors the border-forest hex tiles it weaves through.
     const expected = ribbonMaterialColors(TILE_COLOR[TileType.RIVER]);
+    const k = r._fogTileDarken;
     for (const m of exts) {
       const d = m.material.diffuseColor;
       const e = m.material.emissiveColor;
-      assert.ok(Math.abs(d.r - expected.diffuse[0]) < 1e-9,
-        `extension ${m.name} diffuse.r ${d.r} should equal in-map river ${expected.diffuse[0]}`);
-      assert.ok(Math.abs(d.g - expected.diffuse[1]) < 1e-9);
-      assert.ok(Math.abs(d.b - expected.diffuse[2]) < 1e-9);
-      assert.ok(Math.abs(e.r - expected.emissive[0]) < 1e-9,
-        `extension ${m.name} emissive.r ${e.r} should equal in-map river ${expected.emissive[0]}`);
-      assert.ok(Math.abs(e.g - expected.emissive[1]) < 1e-9);
-      assert.ok(Math.abs(e.b - expected.emissive[2]) < 1e-9);
+      assert.ok(Math.abs(d.r - expected.diffuse[0] * k) < 1e-9,
+        `extension ${m.name} diffuse.r ${d.r} should equal in-map × ${k} = ${expected.diffuse[0] * k}`);
+      assert.ok(Math.abs(d.g - expected.diffuse[1] * k) < 1e-9);
+      assert.ok(Math.abs(d.b - expected.diffuse[2] * k) < 1e-9);
+      assert.ok(Math.abs(e.r - expected.emissive[0] * k) < 1e-9,
+        `extension ${m.name} emissive.r ${e.r} should equal in-map × ${k} = ${expected.emissive[0] * k}`);
+      assert.ok(Math.abs(e.g - expected.emissive[1] * k) < 1e-9);
+      assert.ok(Math.abs(e.b - expected.emissive[2] * k) < 1e-9);
     }
   });
 
