@@ -70,10 +70,18 @@ export const HOUSE_INSTANCE_BASE_SCALE = 0.55;
 export const PALADIN_MODEL_DIR  = 'models/';
 export const PALADIN_MODEL_FILE = 'paladin.glb';
 
-// World-space scale applied to each cloned paladin. The Mixamo source mesh is
-// ~1.7 m tall in its intrinsic units; ~0.4 lands the silhouette close to the
-// cone+sphere it replaces. Tunable in one place.
+// Fallback world-space scale applied to each cloned paladin when the source
+// mesh's natural bounding box can't be measured (test stubs, malformed GLB).
+// In real-browser use the load step computes a bbox-derived scale instead so
+// the model lands at TARGET_PALADIN_WORLD_HEIGHT regardless of whether the
+// source FBX was exported in metres or centimetres. Tunable in one place.
 export const PALADIN_BASE_SCALE = 0.4;
+// Target world-space height for the visible paladin model. The Mixamo source
+// can land anywhere from ~1.8 (m-units) to ~180 (cm-units) tall — we measure
+// the source bounding box at load time and scale to hit this target. Picked
+// so the paladin reads slightly taller than the ~0.55-tall cone+sphere it
+// replaces but still fits within one hex's footprint.
+export const TARGET_PALADIN_WORLD_HEIGHT = 0.8;
 // Forward-facing yaw applied to clones (radians). Rotates the imported mesh
 // 180° so the paladin's front reads toward the camera rather than away.
 export const PALADIN_YAW        = Math.PI;
@@ -789,6 +797,11 @@ export class Renderer3D {
     // cone+sphere fallback in that case.
     this._paladinSource     = null;
     this._paladinLoadPromise = null; // de-dupes concurrent load attempts
+    // Uniform scale applied to cloned paladin meshes. Computed once at load
+    // time from the source mesh's natural bbox height so the visible model
+    // lands at TARGET_PALADIN_WORLD_HEIGHT regardless of FBX export units
+    // (m vs cm). Falls back to PALADIN_BASE_SCALE if bbox is unavailable.
+    this._paladinScale      = PALADIN_BASE_SCALE;
     this._engine        = null;
     this._scene         = null;
     this._camera        = null;
@@ -1475,6 +1488,15 @@ export class Renderer3D {
       // which is wasted CPU.
       if (idleGroup && typeof idleGroup.stop === 'function') idleGroup.stop();
 
+      // Bake the feet-to-origin offset into the source vertices and compute a
+      // bbox-derived scale so the visible model height lands at
+      // TARGET_PALADIN_WORLD_HEIGHT regardless of FBX export units (Mixamo
+      // can ship either metres or centimetres). Without this, a cm-units
+      // export at PALADIN_BASE_SCALE=0.4 renders ~72 world-units tall and the
+      // body extends far above the camera frustum — only the helmet is
+      // visible at the unit position.
+      this._paladinScale = this._normalisePaladinSource(skinned);
+
       this._paladinSource = { mesh: skinned, skeleton, idleGroup };
 
       // If standees were built before the GLB landed (the common case —
@@ -1487,6 +1509,48 @@ export class Renderer3D {
 
     this._paladinLoadPromise = promise;
     return promise;
+  }
+
+  /** Measure the source mesh's natural bounding box, bake a feet-to-origin
+   *  translation into its vertices (so the model's local y=0 sits at the
+   *  feet rather than the Mixamo hip-pivot), and return the uniform scale
+   *  needed to hit TARGET_PALADIN_WORLD_HEIGHT.
+   *
+   *  Returns PALADIN_BASE_SCALE as a safe fallback when the bbox isn't
+   *  available (test stubs that don't implement getBoundingInfo, or a
+   *  degenerate mesh with zero height). */
+  _normalisePaladinSource(source) {
+    if (!source) return PALADIN_BASE_SCALE;
+    const BABYLON = this._babylon;
+    if (typeof source.getBoundingInfo !== 'function') return PALADIN_BASE_SCALE;
+    let info;
+    try { info = source.getBoundingInfo(); } catch { return PALADIN_BASE_SCALE; }
+    const bb = info && info.boundingBox;
+    if (!bb) return PALADIN_BASE_SCALE;
+    // Prefer the local-space minimum/maximum so we measure the mesh's own
+    // bbox, not whatever transform it currently carries (which the clones
+    // will override anyway).
+    const min = bb.minimum || bb.minimumWorld;
+    const max = bb.maximum || bb.maximumWorld;
+    if (!min || !max) return PALADIN_BASE_SCALE;
+    const naturalHeight = (max.y ?? 0) - (min.y ?? 0);
+    if (!(naturalHeight > 0)) return PALADIN_BASE_SCALE;
+
+    // Bake -min.y as a translation so the feet land at the mesh's local
+    // origin. After this, the clone's `position.y` directly controls where
+    // the feet sit in cone-local space.
+    if (BABYLON && BABYLON.Matrix && typeof BABYLON.Matrix.Translation === 'function'
+      && typeof source.bakeTransformIntoVertices === 'function') {
+      try {
+        source.bakeTransformIntoVertices(BABYLON.Matrix.Translation(0, -(min.y ?? 0), 0));
+        if (typeof source.refreshBoundingInfo === 'function') source.refreshBoundingInfo();
+      } catch {
+        // Bake failed — return the computed scale anyway; clones will still
+        // be the right size, just offset by the source's hip-pivot.
+      }
+    }
+
+    return TARGET_PALADIN_WORLD_HEIGHT / naturalHeight;
   }
 
   /** Clone the loaded paladin source for one hero standee. Returns
@@ -1539,19 +1603,28 @@ export class Renderer3D {
     // replaces. Position is owned by the parent transform (the cone) — the
     // mesh sits at parent-local origin so the cone's per-tile movement
     // moves the paladin along with it.
+    const scale = (typeof this._paladinScale === 'number' && this._paladinScale > 0)
+      ? this._paladinScale : PALADIN_BASE_SCALE;
     if (BABYLON.Vector3) {
-      clonedMesh.scaling = new BABYLON.Vector3(
-        PALADIN_BASE_SCALE, PALADIN_BASE_SCALE, PALADIN_BASE_SCALE,
-      );
+      clonedMesh.scaling = new BABYLON.Vector3(scale, scale, scale);
       clonedMesh.rotation = new BABYLON.Vector3(0, PALADIN_YAW, 0);
       // Y-offset: drop the mesh so its feet rest on the base disc rather
       // than floating at the cone's centre. The cone's local origin is its
       // centre; the cone bottom rim is at -coneHeight/2 in cone-local space.
+      // The source mesh's feet were baked to local y=0 in
+      // `_normalisePaladinSource`, so setting position.y to the cone bottom
+      // lands the feet exactly on the cone's lower rim.
       const leader = isLeaderType(entity?.type);
       const hMul = leader ? STANDEE_LEADER_HEIGHT_MUL : 1;
       const feetY = -(STANDEE_CONE_HEIGHT * hMul) / 2;
       clonedMesh.position = new BABYLON.Vector3(0, feetY, 0);
     }
+    // Babylon culls meshes by their natural bbox even after skinning can move
+    // verts outside it — belt-and-braces against the eInheritRrs / Mixamo
+    // bone-scale quirk where some body bones come through with a different
+    // scale than the skeleton root and the visible body can extend outside
+    // the cached bbox. Cheap on a few-dozen-unit budget.
+    clonedMesh.alwaysSelectAsActiveMesh = true;
 
     return { mesh: clonedMesh, skeleton: clonedSkel, animationGroup: clonedGroup };
   }
