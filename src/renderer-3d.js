@@ -706,6 +706,10 @@ export class Renderer3D {
     this._materialCache = new Map(); // hex string → BABYLON.StandardMaterial
     this._tileMeshes    = [];   // for picking + future incremental rebuild
     this._mapBuilt      = false;
+    // Per-map deterministic season tag — picked in `_buildMap` from a hash of
+    // the tile layout (or `state.mapSeed` if exposed later). Drives seasonal
+    // tree palettes + geometry. Null until the map is built.
+    this._season        = null;
     this._babylonInit   = null; // pending init promise (de-dupes draw() calls)
 
     // Tile top-face textures (see "Tile top-face textures" banner below).
@@ -1832,6 +1836,16 @@ export class Renderer3D {
     const mapRoot = new BABYLON.TransformNode('mapRoot', scene);
     this._mapRoot = mapRoot;
 
+    // Pick the per-map season BEFORE building any tile meshes — `_buildTileMesh`
+    // and `_buildMapBorderForest` both consult `this._season` to choose tree
+    // palettes / geometry. Deterministic per map: same tile layout → same
+    // season across reloads. Prefer `state.mapSeed` if the game state exposes
+    // it (currently it doesn't); otherwise hash the tile layout.
+    const seedSource = (typeof this.state?.mapSeed === 'number')
+      ? this.state.mapSeed
+      : hashTileLayout(this.state.tiles);
+    this._season = pickSeason(seedSource);
+
     // Reusable shared geometry — clone for each instance, all parented to mapRoot.
     // (We do not yet use Babylon InstancedMesh; one mesh per tile keeps picking
     // trivially correct and Phase 2 maps are well under 1000 tiles.)
@@ -2022,7 +2036,7 @@ export class Renderer3D {
       // map"). Same tree count (3-5 per tile, was 5-7 for border), same
       // trunk/leaf colours. Trees are skipped where they'd land inside the
       // river-extension footprint.
-      const trees = forestTreesForHex(pos.col, pos.row).filter(t =>
+      const trees = forestTreesForHex(pos.col, pos.row, this._season).filter(t =>
         !this._borderTreeBlockedByRiver(x + t.x, z + t.z),
       );
       if (trees.length > 0) {
@@ -2032,7 +2046,7 @@ export class Renderer3D {
         });
       }
     }
-    const mergedTreeMeshes = this._buildBorderForestTreesBatched(parent, treeJobs);
+    const mergedTreeMeshes = this._buildBorderForestTreesBatched(parent, treeJobs, { season: this._season });
     for (const m of mergedTreeMeshes) this._addShadowCaster(m);
     this._borderForestBatchMeshes = mergedTreeMeshes;
     // After the band is in place, extend any river that exits the playable
@@ -2138,9 +2152,10 @@ export class Renderer3D {
     // Layout is deterministic per (col, row) so the same hex always shows the
     // same cluster across runs. See forestTreesForHex / TILE_SLOTS.
     if (tile.type === TileType.FOREST) {
-      const trees = forestTreesForHex(tile.col, tile.row);
+      const trees = forestTreesForHex(tile.col, tile.row, this._season);
       const meshes = this._buildPineTreeBatchedMeshes(
         `forest_${tile.col}_${tile.row}`, parent, x, z, trees,
+        { season: this._season },
       );
       for (const m of meshes) {
         this._addShadowCaster(m);
@@ -2268,7 +2283,7 @@ export class Renderer3D {
     if (tile.type === TileType.BUILDING && tile.building) {
       staticOcc.push({ id: 'building', kind: 'building' });
     } else if (tile.type === TileType.FOREST) {
-      const trees = forestTreesForHex(tile.col, tile.row);
+      const trees = forestTreesForHex(tile.col, tile.row, this._season);
       for (const t of trees) staticOcc.push({ id: t.id, kind: 'tree' });
     }
     if (staticOcc.length > 0) this._staticOccupantsByKey.set(tkey, staticOcc);
@@ -2726,12 +2741,12 @@ export class Renderer3D {
    *  merged mesh per distinct (species, shadeIdx) colour bucket — bounded at
    *  TREE_SPECIES.length × TREE_LEAF_SHADES_PER_SPECIES = 9 worst-case, but
    *  ≤ 5 in practice since a hex carries at most 5 trees. */
-  _buildPineTreeBatchedMeshes(namePrefix, parent, cx, cz, trees, { fogged = false } = {}) {
+  _buildPineTreeBatchedMeshes(namePrefix, parent, cx, cz, trees, { fogged = false, season = null } = {}) {
     const BABYLON = this._babylon;
     const scene   = this._scene;
     if (!BABYLON || !scene || !trees || trees.length === 0) return [];
     const { trunks, leavesByColor } = this._buildTreeClusterMeshes(
-      namePrefix, cx, cz, trees, { fogged },
+      namePrefix, cx, cz, trees, { fogged, season },
     );
     const trunkCss = fogged ? '#241710' : '#5a3a20';
     const trunkMat = this._materialFor(trunkCss);
@@ -2751,7 +2766,7 @@ export class Renderer3D {
    *  bucketed by their leaf-colour CSS key so each (species, shadeIdx) pair
    *  can be merged into a single mesh — bounded at TREE_SPECIES.length ×
    *  TREE_LEAF_SHADES_PER_SPECIES = 9 colour keys (per fog variant). */
-  _buildTreeClusterMeshes(namePrefix, cx, cz, trees, { fogged = false } = {}) {
+  _buildTreeClusterMeshes(namePrefix, cx, cz, trees, { fogged = false, season = null } = {}) {
     const BABYLON = this._babylon;
     const scene   = this._scene;
     const trunks = [];
@@ -2759,6 +2774,7 @@ export class Renderer3D {
     if (!BABYLON || !scene || !trees || trees.length === 0) {
       return { trunks, leavesByColor };
     }
+    const isWinter = season === 'winter';
     // Deterministic per-tree hash for the rotation + scale jitter — derived
     // from world (tx, tz) so the same hex always shows the same tree
     // arrangement across sessions. Output ∈ [0, 1).
@@ -2780,7 +2796,7 @@ export class Renderer3D {
       const s = t.scale * scaleMul;
       const species  = t.species  || 'pine';
       const shadeIdx = t.shadeIdx ?? 0;
-      const leafCss  = treeLeafColorFor(species, shadeIdx, { fogged });
+      const leafCss  = treeLeafColorFor(species, shadeIdx, { fogged, season });
 
       // Trunk silhouette varies by species so the oak's tall trunk reads
       // distinctly from the pine's stubby base.
@@ -2803,16 +2819,20 @@ export class Renderer3D {
       // Leaf geometry varies by species.
       const leafMeshes = [];
       if (species === 'oak') {
-        // Sphere-shaped foliage crown atop the long trunk.
-        const crown = BABYLON.MeshBuilder.CreateSphere(
-          `${namePrefix}_t${i}_oak`,
-          { diameter: 0.85 * s, segments: 5 },
-          scene,
-        );
-        const trunkHeight = trunkOpts.height;
-        crown.position.set(tx, trunkHeight + 0.35 * s, tz);
-        crown.rotation.y = yaw;
-        leafMeshes.push(crown);
+        // Winter deciduous oaks are bare twiggy silhouettes — drop the sphere
+        // crown so only the trunk renders. The trunk stays as before so the
+        // tree still reads as something.
+        if (!isWinter) {
+          const crown = BABYLON.MeshBuilder.CreateSphere(
+            `${namePrefix}_t${i}_oak`,
+            { diameter: 0.85 * s, segments: 5 },
+            scene,
+          );
+          const trunkHeight = trunkOpts.height;
+          crown.position.set(tx, trunkHeight + 0.35 * s, tz);
+          crown.rotation.y = yaw;
+          leafMeshes.push(crown);
+        }
       } else if (species === 'spruce') {
         // Slim 4-tier cone stack — narrower and taller than pine.
         const cones = [
@@ -2852,9 +2872,11 @@ export class Renderer3D {
         }
       }
 
-      let bucket = leavesByColor.get(leafCss);
-      if (!bucket) { bucket = []; leavesByColor.set(leafCss, bucket); }
-      for (const m of leafMeshes) bucket.push(m);
+      if (leafMeshes.length > 0) {
+        let bucket = leavesByColor.get(leafCss);
+        if (!bucket) { bucket = []; leavesByColor.set(leafCss, bucket); }
+        for (const m of leafMeshes) bucket.push(m);
+      }
     }
     return { trunks, leavesByColor };
   }
@@ -2911,7 +2933,7 @@ export class Renderer3D {
    *
    *  `treeJobs` is `[{ namePrefix, cx, cz, trees }, ...]` — one entry per
    *  border tile that has any trees. */
-  _buildBorderForestTreesBatched(parent, treeJobs, { fogged = false } = {}) {
+  _buildBorderForestTreesBatched(parent, treeJobs, { fogged = false, season = null } = {}) {
     const BABYLON = this._babylon;
     const scene   = this._scene;
     if (!BABYLON || !scene || !treeJobs || treeJobs.length === 0) return [];
@@ -2919,7 +2941,7 @@ export class Renderer3D {
     const allLeavesByColor = new Map();
     for (const job of treeJobs) {
       const { trunks, leavesByColor } = this._buildTreeClusterMeshes(
-        job.namePrefix, job.cx, job.cz, job.trees, { fogged },
+        job.namePrefix, job.cx, job.cz, job.trees, { fogged, season },
       );
       for (const t of trunks) allTrunks.push(t);
       for (const [color, list] of leavesByColor) {
@@ -5536,7 +5558,7 @@ export function borderTilePositions(tilesMap, bandDepth = BORDER_BAND_DEPTH) {
  *  `forestTreesForHex` but with a bumped count range (BORDER_FOREST_TREES_*).
  *  Uses up to all 7 TILE_SLOTS so a denser hex fully covers the disc. Pure:
  *  same (col, row) → same trees. */
-export function borderForestTreesForHex(col, row) {
+export function borderForestTreesForHex(col, row, season = null) {
   const span = BORDER_FOREST_TREES_MAX - BORDER_FOREST_TREES_MIN + 1;
   const n    = BORDER_FOREST_TREES_MIN + Math.floor(_forestHash(col, row, 0) * span);
   const scaleSpan = FOREST_SCALE_MAX - FOREST_SCALE_MIN;
@@ -5548,7 +5570,7 @@ export function borderForestTreesForHex(col, row) {
     const scale = FOREST_SCALE_MIN + _forestHash(col, row, i * 3 + 3) * scaleSpan;
     trees.push({
       id: `border_tree_${i}`, x: slot.x, z: slot.z, scale, slotIdx,
-      species:  treeSpeciesForHex(col, row, i),
+      species:  treeSpeciesForHex(col, row, i, season),
       shadeIdx: treeLeafShadeIndex(col, row, i),
     });
   }
@@ -6210,7 +6232,7 @@ function _forestHash(col, row, salt) {
  *  Per-tree scale, species, and leaf-shade index are all hex-stable so the
  *  same forest hex always paints the same cluster across sessions. Pure:
  *  same (col, row) → same trees. */
-export function forestTreesForHex(col, row) {
+export function forestTreesForHex(col, row, season = null) {
   const span = FOREST_TREES_MAX - FOREST_TREES_MIN + 1;
   const n    = FOREST_TREES_MIN + Math.floor(_forestHash(col, row, 0) * span);
   // _forestHash returns < 1, so floor(<span) ∈ [0, span-1]; n ∈ [MIN, MAX].
@@ -6233,7 +6255,7 @@ export function forestTreesForHex(col, row) {
     const scale = FOREST_SCALE_MIN + _forestHash(col, row, occ._idx * 3 + 3) * scaleSpan;
     trees.push({
       id: occ.id, x: slot.x, z: slot.z, scale, slotIdx,
-      species:  treeSpeciesForHex(col, row, occ._idx),
+      species:  treeSpeciesForHex(col, row, occ._idx, season),
       shadeIdx: treeLeafShadeIndex(col, row, occ._idx),
     });
   }
@@ -6261,7 +6283,29 @@ export const TREE_SPECIES = Object.freeze(['pine', 'oak', 'spruce']);
 /** Number of leaf-colour shades per species. */
 export const TREE_LEAF_SHADES_PER_SPECIES = 3;
 
-/** Leaf-colour palette per species (bright / lit / "in-map forest" variant). */
+/** Season identifiers, picked deterministically per map. */
+export const SEASONS = Object.freeze(['summer', 'fall', 'spring', 'winter']);
+
+/** Species probabilities per season. Pines + spruces dominate; oak is a rare
+ *  accent. Winter pushes oak even lower (most deciduous trees are bare). */
+export const SEASON_SPECIES_PROBABILITIES = Object.freeze({
+  summer: Object.freeze({ pine: 0.50, spruce: 0.43, oak: 0.07 }),
+  fall:   Object.freeze({ pine: 0.50, spruce: 0.43, oak: 0.07 }),
+  spring: Object.freeze({ pine: 0.50, spruce: 0.43, oak: 0.07 }),
+  winter: Object.freeze({ pine: 0.55, spruce: 0.43, oak: 0.02 }),
+});
+
+/** Default species probabilities — pine + spruce dominate, oak is a minor
+ *  accent (~5-10%). Used when no season is supplied. */
+export const DEFAULT_SPECIES_PROBABILITIES = SEASON_SPECIES_PROBABILITIES.summer;
+
+/** Return the species probability table for a season (falls back to summer). */
+export function seasonalSpeciesProbabilities(season) {
+  return SEASON_SPECIES_PROBABILITIES[season] || DEFAULT_SPECIES_PROBABILITIES;
+}
+
+/** Leaf-colour palette per species (bright / lit / "in-map forest" variant).
+ *  Summer-default. Seasonal variants live in SEASONAL_LEAF_PALETTES. */
 export const TREE_LEAF_PALETTE = Object.freeze({
   pine:   Object.freeze(['#234c1f', '#2c5a22', '#1c4319']),
   oak:    Object.freeze(['#3d6b28', '#4a7a30', '#355f24']),
@@ -6270,17 +6314,80 @@ export const TREE_LEAF_PALETTE = Object.freeze({
 
 /** Leaf-colour palette per species, pre-multiplied by the border-forest fog
  *  tint. Matches the historical `#0e1f0c` (the old uniform fogged leaf colour)
- *  in average tone but spreads across three shades per species. */
+ *  in average tone but spreads across three shades per species. Summer-default. */
 export const TREE_LEAF_PALETTE_FOG = Object.freeze({
   pine:   Object.freeze(['#0e1f0c', '#11240e', '#0c1a0a']),
   oak:    Object.freeze(['#162a10', '#1a3214', '#13240d']),
   spruce: Object.freeze(['#0c1a12', '#0f2017', '#091410']),
 });
 
-/** Deterministic species pick for one tree on (col, row). */
-export function treeSpeciesForHex(col, row, treeIndex) {
+/** Per-season leaf-colour palettes. Each season provides the same shape as
+ *  TREE_LEAF_PALETTE: 3 species × TREE_LEAF_SHADES_PER_SPECIES shades. That
+ *  caps the merged leaf-mesh count at 9 colour buckets per band regardless
+ *  of season — the cross-tile merge invariant (≤10 meshes) still holds. */
+export const SEASONAL_LEAF_PALETTES = Object.freeze({
+  summer: TREE_LEAF_PALETTE,
+  // Conifers stay deep green; oaks turn warm orange / red / amber.
+  fall: Object.freeze({
+    pine:   Object.freeze(['#274a1c', '#305820', '#1d3c15']),
+    oak:    Object.freeze(['#c45a16', '#d68b1a', '#a83a0d']),
+    spruce: Object.freeze(['#1c3826', '#22422d', '#152a1d']),
+  }),
+  // Fresh light greens with occasional oak blossom (one shade is a pale
+  // pink/white so ~1/3 of oaks blossom).
+  spring: Object.freeze({
+    pine:   Object.freeze(['#3d7e2a', '#4c8c33', '#357024']),
+    oak:    Object.freeze(['#9bd16a', '#f5d6df', '#f0e6e8']),
+    spruce: Object.freeze(['#2d6446', '#356f4e', '#235639']),
+  }),
+  // Cool dark conifers with a desaturated snowy-tint shade for variety; bare
+  // oaks (the crown is dropped in winter — see _buildTreeClusterMeshes — so
+  // these oak entries are effectively unused but kept for shape parity).
+  winter: Object.freeze({
+    pine:   Object.freeze(['#1a2a18', '#c8d4d2', '#152418']),
+    oak:    Object.freeze(['#5e472a', '#6d5230', '#4a3722']),
+    spruce: Object.freeze(['#13251c', '#cdd8d5', '#0d1c14']),
+  }),
+});
+
+/** Fogged-band variants of the seasonal palettes. Each season has a matching
+ *  darkened palette so the border-forest band's atmospheric tint still applies. */
+export const SEASONAL_LEAF_PALETTES_FOG = Object.freeze({
+  summer: TREE_LEAF_PALETTE_FOG,
+  fall: Object.freeze({
+    pine:   Object.freeze(['#10210e', '#142a10', '#0c1a09']),
+    oak:    Object.freeze(['#5a290a', '#6c3f0c', '#4a1d06']),
+    spruce: Object.freeze(['#0e1c13', '#10211a', '#091410']),
+  }),
+  spring: Object.freeze({
+    pine:   Object.freeze(['#1a3812', '#1f4015', '#15300f']),
+    oak:    Object.freeze(['#3f5a25', '#5a4b50', '#564a4c']),
+    spruce: Object.freeze(['#172e1f', '#1c3624', '#10221a']),
+  }),
+  winter: Object.freeze({
+    pine:   Object.freeze(['#0c130b', '#3a423f', '#0a110b']),
+    oak:    Object.freeze(['#231a10', '#2a1f12', '#1c150d']),
+    spruce: Object.freeze(['#091310', '#3d4441', '#070e0a']),
+  }),
+});
+
+/** Look up the leaf-colour palette for a season (with optional fog tint). */
+export function seasonalLeafPalette(season, { fogged = false } = {}) {
+  const map = fogged ? SEASONAL_LEAF_PALETTES_FOG : SEASONAL_LEAF_PALETTES;
+  return map[season] || map.summer;
+}
+
+/** Deterministic species pick for one tree on (col, row). When `season` is
+ *  passed, uses that season's probability table; otherwise uses the default
+ *  (summer-like — pine + spruce dominate, oak ~7%). */
+export function treeSpeciesForHex(col, row, treeIndex, season = null) {
   const h = _forestHash(col, row, treeIndex * 7 + 101);
-  return TREE_SPECIES[Math.floor(h * TREE_SPECIES.length)];
+  const p = season ? seasonalSpeciesProbabilities(season) : DEFAULT_SPECIES_PROBABILITIES;
+  // Cumulative roll in stable order so the same hash always picks the same
+  // species for the same probability table.
+  if (h < p.pine) return 'pine';
+  if (h < p.pine + p.spruce) return 'spruce';
+  return 'oak';
 }
 
 /** Deterministic shade index ∈ [0, TREE_LEAF_SHADES_PER_SPECIES). */
@@ -6291,11 +6398,44 @@ export function treeLeafShadeIndex(col, row, treeIndex) {
 }
 
 /** Look up the actual leaf colour string for one tree, given its species and
- *  shade index. `fogged: true` returns the border-forest variant. */
-export function treeLeafColorFor(species, shadeIdx, { fogged = false } = {}) {
-  const palette = fogged ? TREE_LEAF_PALETTE_FOG : TREE_LEAF_PALETTE;
+ *  shade index. `fogged: true` returns the border-forest variant. `season` —
+ *  when supplied — picks the seasonal palette; otherwise the summer-default
+ *  TREE_LEAF_PALETTE is used. */
+export function treeLeafColorFor(species, shadeIdx, { fogged = false, season = null } = {}) {
+  const palette = season
+    ? seasonalLeafPalette(season, { fogged })
+    : (fogged ? TREE_LEAF_PALETTE_FOG : TREE_LEAF_PALETTE);
   const shades  = palette[species] || palette.pine;
   return shades[shadeIdx % shades.length];
+}
+
+/** Deterministic 32-bit hash of a tiles map (Map<hexKey, tile>). Used to
+ *  derive the per-map season seed when the game state doesn't expose a
+ *  `mapSeed` explicitly. Iterates keys in sorted order so two structurally
+ *  identical maps always hash equal. Returns an unsigned 32-bit integer. */
+export function hashTileLayout(tiles) {
+  if (!tiles || typeof tiles.keys !== 'function') return 0;
+  const keys = [...tiles.keys()].sort();
+  if (keys.length === 0) return 0;
+  // FNV-1a 32-bit over the concatenated sorted keys.
+  let h = 2166136261 >>> 0;
+  for (const key of keys) {
+    const s = String(key);
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 16777619) >>> 0;
+    }
+    // Separator so "1,2" + "3" doesn't collide with "1" + "2,3".
+    h ^= 0x7c;
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h >>> 0;
+}
+
+/** Deterministic season pick from a non-negative integer seed hash. */
+export function pickSeason(seedHash) {
+  const idx = Math.abs((seedHash | 0)) % SEASONS.length;
+  return SEASONS[idx];
 }
 
 // ─── Building dimension variation (pure helper, exported) ───────────────────
