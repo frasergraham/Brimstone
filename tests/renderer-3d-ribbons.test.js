@@ -9,9 +9,12 @@ import assert from 'node:assert/strict';
 import {
   ribbonOffsetPaths,
   sampleQuadBezier,
+  ribbonMaterialColors,
   RIVER_RIBBON_WIDTH,
   ROAD_RIBBON_WIDTH,
+  RIBBON_EMISSIVE_SCALE,
 } from '../src/renderer-3d.js';
+import { TileType, TILE_COLOR } from '../src/tiles.js';
 
 const dist = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
 const APPROX = (a, b, eps = 1e-9) => Math.abs(a - b) < eps;
@@ -122,6 +125,40 @@ describe('ribbonOffsetPaths — orientation', () => {
       assert.ok(APPROX(left[i].x, pts[i].x), `left[${i}].x stays on axis`);
       assert.ok(APPROX(left[i].z, +0.25), `left[${i}].z = +0.25`);
       assert.ok(APPROX(right[i].z, -0.25), `right[${i}].z = -0.25`);
+    }
+  });
+});
+
+describe('ribbonMaterialColors — diffuse + emissive split', () => {
+  // The 3D scene is lit by a single +Y hemispheric light, and CreateRibbon's
+  // path-pair winding produces face normals pointing −Y for the road/river
+  // ribbons (the underside catches the light). A small emissive keeps the
+  // top face readable without making the network glow — without it the
+  // ribbons read as solid black against the lit terrain.
+  test('emissive is RIBBON_EMISSIVE_SCALE × diffuse component-wise', () => {
+    const { diffuse, emissive } = ribbonMaterialColors('#8a5a2b');
+    assert.equal(emissive.length, 3);
+    for (let i = 0; i < 3; i++) {
+      assert.ok(APPROX(emissive[i], diffuse[i] * RIBBON_EMISSIVE_SCALE, 1e-9),
+        `channel ${i}: ${emissive[i]} != ${diffuse[i]} × ${RIBBON_EMISSIVE_SCALE}`);
+    }
+  });
+
+  test('emissive scale is small but non-zero (modest lift, not full glow)', () => {
+    assert.ok(RIBBON_EMISSIVE_SCALE > 0,
+      `emissive scale must be positive — was ${RIBBON_EMISSIVE_SCALE}`);
+    assert.ok(RIBBON_EMISSIVE_SCALE < 0.5,
+      `emissive scale must stay subtle — was ${RIBBON_EMISSIVE_SCALE}`);
+  });
+
+  test('all diffuse channels are non-zero for road and river tile colours', () => {
+    // Guards against TILE_COLOR slots accidentally becoming black/transparent
+    // and dragging the ribbon down with them.
+    for (const tt of [TileType.ROAD, TileType.RIVER]) {
+      const { diffuse } = ribbonMaterialColors(TILE_COLOR[tt]);
+      const sum = diffuse[0] + diffuse[1] + diffuse[2];
+      assert.ok(sum > 0,
+        `TILE_COLOR[${tt}] ribbon diffuse should not be all-black (sum=${sum})`);
     }
   });
 });
