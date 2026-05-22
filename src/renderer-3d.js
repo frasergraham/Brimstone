@@ -3042,6 +3042,13 @@ export class Renderer3D {
     for (const [tkey, list] of ribbonsByTileKey) {
       const merged = BABYLON.Mesh.MergeMeshes(list, true, true, undefined, false, false);
       if (!merged) continue;
+      // Set receiveShadows FIRST, immediately post-merge. `MergeMeshes` creates
+      // a fresh mesh whose `receiveShadows` defaults to false — the source
+      // ribbons' flag is NOT copied — so this MUST happen on the merged result.
+      // Doing it before any other configuration keeps the dependency
+      // unambiguous: nothing between the merge and the receiver flag can
+      // accidentally reset it.
+      this._setShadowReceiver(merged);
       merged.parent          = this._mapRoot;
       merged.isPickable      = false;
       // Per-tile material clone — only diffuse/emissive Color3s differ between
@@ -3068,7 +3075,6 @@ export class Renderer3D {
         baseDiffuse:  { r: baseDiff.r, g: baseDiff.g, b: baseDiff.b },
         baseEmissive: { r: baseEmis.r, g: baseEmis.g, b: baseEmis.b },
       };
-      this._setShadowReceiver(merged);
       // Register with the per-tile prop list so fog veil walks it.
       const props = this._tilePropsByKey.get(tkey);
       if (props) props.push(merged);
