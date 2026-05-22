@@ -941,8 +941,6 @@ export class Renderer3D {
     this._lightState = null;            // populated on first draw after init
     this._lastPhase  = null;
     this._phaseTransition = null;       // { from, to, startMs, durMs } or null
-    // Babylon GlowLayer shared by the selection halo and the node-glow discs.
-    this._glowLayer  = null;
     this._onBeforeRenderObs = null;     // observer handle so we can dispose it
     // FPS counter throttle state — see _pumpFpsCounter / FPS_COUNTER_UPDATE_MS.
     this._fpsCounterEl       = null;
@@ -2253,16 +2251,6 @@ export class Renderer3D {
     this._light             = light;
     this._sunLight          = sunLight;
     this._shadowGenerator   = shadowGenerator;
-
-    // Phase 6: GlowLayer powers the selection halo and the power-node discs.
-    // Round 4: switched to *include-only* mode — meshes have to be explicitly
-    // added via `addIncludedOnlyMesh` to contribute to the bloom. Previously
-    // any mesh with non-zero emissive (HP bars, waypoint badges, floating
-    // text, plan/highlight discs) joined the glow and blew it out at zoomed-
-    // out distances. Node discs and the selected standee's base disc are the
-    // only meshes that should glow; we register them on creation/selection.
-    this._glowLayer = new BABYLON.GlowLayer('glow', scene, { mainTextureFixedSize: GLOW_LAYER_TEXTURE_SIZE });
-    this._glowLayer.intensity = GLOW_LAYER_INTENSITY;
 
     // Per-unit hex outlines are built lazily by `_syncEntityHexOutlines`
     // (one thin + one thick mesh per alive entity). The old golden singleton
@@ -4381,7 +4369,6 @@ export class Renderer3D {
         if (this.selectedEntityId === e.id) {
           outline.thin.isVisible  = false;
           outline.thick.isVisible = true;
-          this._glowLayer?.addIncludedOnlyMesh?.(outline.thick);
         }
       } else {
         // Recolour if the entity's owner colour changed (e.g. side-flip).
@@ -4409,7 +4396,6 @@ export class Renderer3D {
     // Dispose outlines for entities that no longer exist or just died.
     for (const [id, outline] of this._entityHexOutlines) {
       if (seen.has(id)) continue;
-      this._glowLayer?.removeIncludedOnlyMesh?.(outline.thick);
       outline.thin.dispose();
       outline.thick.dispose();
       this._entityHexOutlines.delete(id);
@@ -4479,7 +4465,7 @@ export class Renderer3D {
 
   /** Lazy, owner-keyed material for the selected unit's thicker glow ring.
    *  Emissive is capped at `UNIT_HEX_OUTLINE_GLOW_EMISSIVE_MUL × diffuse` so
-   *  the GlowLayer's bloom stays owner-tinted instead of clipping to white. */
+   *  the ring stays owner-tinted at high emissive values. */
   _thickOutlineMaterialFor(ownerKey) {
     if (this._thickOutlineMatCache.has(ownerKey)) {
       return this._thickOutlineMatCache.get(ownerKey);
@@ -4647,33 +4633,28 @@ export class Renderer3D {
   }
 
   /** Apply the renderer's selectedEntityId: drive the per-unit hex outline
-   *  (swap thin → thick + glow) and slide the camera target to the new
-   *  selection. The standee silhouette itself no longer mutates on selection
-   *  — the ground-level base disc was retired and the thick hex outline + the
-   *  glow it sits in are the selection signal now. */
+   *  (swap thin → thick) and slide the camera target to the new selection.
+   *  The standee silhouette itself no longer mutates on selection — the
+   *  ground-level base disc was retired and the thick hex outline is the
+   *  selection signal now. */
   _applySelectionAndFocus() {
     if (!this._scene) return;
     const newId  = this.selectedEntityId ?? null;
     const prevId = this._lastSelectedEntityId;
     if (newId === prevId) return;
     // Per-unit hex outline: swap the previously-selected unit back to its
-    // thin always-on ring, and the newly-selected unit up to the thick
-    // glowing ring. The thick mesh joins the GlowLayer's include-only set so
-    // only the selection blooms; thin rings stay out so they read as plain
-    // owner-tinted lines.
+    // thin always-on ring, and the newly-selected unit up to the thick ring.
     if (prevId && this._entityHexOutlines.has(prevId)) {
       const prevOutline = this._entityHexOutlines.get(prevId);
       // Restore the previous selection's thin ring only for local-side units —
       // enemy units never carry an always-on thin outline.
       prevOutline.thin.isVisible  = !!prevOutline.isLocal;
       prevOutline.thick.isVisible = false;
-      this._glowLayer?.removeIncludedOnlyMesh?.(prevOutline.thick);
     }
     if (newId && this._entityHexOutlines.has(newId)) {
       const newOutline = this._entityHexOutlines.get(newId);
       newOutline.thin.isVisible  = false;
       newOutline.thick.isVisible = true;
-      this._glowLayer?.addIncludedOnlyMesh?.(newOutline.thick);
     }
     if (newId && this._entityStandees.has(newId)) {
       const standee = this._entityStandees.get(newId);
@@ -5224,8 +5205,7 @@ export class Renderer3D {
     mat.diffuseTexture = tex;
     mat.opacityTexture = tex;
     // Flat UI sticker — see `applyFlatUnitIconMaterial`. Crucially keeps the
-    // badge at identical brightness across every phase and outside the
-    // GlowLayer's bloom, which is reserved for selection halo + node discs.
+    // badge at identical brightness across every phase.
     applyFlatUnitIconMaterial(BABYLON, mat);
 
     const plane = BABYLON.MeshBuilder.CreatePlane(
@@ -6143,9 +6123,6 @@ export class Renderer3D {
         discMat.specularColor = new BABYLON.Color3(0, 0, 0);
         discMat.emissiveColor = new BABYLON.Color3(0.8, 0.8, 0.8);
         disc.material = discMat;
-        // Keep the ring in the GlowLayer for a slight bloom — gives a sense of
-        // "this hex is special" without the previous pulsing.
-        this._glowLayer?.addIncludedOnlyMesh?.(disc);
 
         this._nodeGlowMeshes.push({
           obj, disc,
@@ -6497,7 +6474,7 @@ export function entityBaseColor(entity) {
 // selected unit's outline is swapped for a thicker glowing variant. The
 // constants below place the ring above the road/river ribbon apex and node
 // rings but below the movement-highlight disc, and bound the glow emissive
-// so the GlowLayer stays owner-tinted (bloom clips to white at higher mults).
+// so the ring stays owner-tinted at high emissive values.
 // See `_syncEntityHexOutlines` for the wiring.
 
 // ─── Hex highlight Y band ──────────────────────────────────────────────────
@@ -6542,7 +6519,7 @@ export const UNIT_HEX_OUTLINE_THICK_TUBE = 0.06;
 export const UNIT_HEX_OUTLINE_THIN_EMISSIVE_MUL = 0.30;
 /** Emissive cap (× diffuse) for the selected unit's glow outline material.
  *  Capped at 0.6 — the same convention `NODE_DISC_EMISSIVE_MUL` uses — so
- *  the GlowLayer bloom stays owner-tinted instead of clipping to white. */
+ *  the ring stays owner-tinted at high emissive values. */
 export const UNIT_HEX_OUTLINE_GLOW_EMISSIVE_MUL = 0.6;
 
 /** Pure: closed hex ring of 7 points (last == first) at the given world Y,
@@ -6768,7 +6745,7 @@ export const NETWORK_BEZIER_SEGMENTS = 22;
  *  `#1a3d5c` ≈ 0.10–0.36), and phase tinting can crush channels further at
  *  night/dusk. A 0.45 emissive lift floors the strip's apparent brightness so
  *  it stays legible against the grass and dirt terrain regardless of phase,
- *  without spilling into the GlowLayer or reading as self-glowing. PR #323's
+ *  without reading as self-glowing. PR #323's
  *  0.15 was sized for tube geometry that already caught wraparound from the
  *  hemi light's rounded cross-section; flat ribbons need more help. */
 export const RIBBON_EMISSIVE_SCALE = 0.45;
@@ -7611,22 +7588,6 @@ export function getNodeGlowColor(controller) {
 /** Duration of phase-to-phase light cross-fade. */
 export const PHASE_TRANSITION_MS = 3000;
 
-/** GlowLayer intensity (applied to selection halo + node-glow discs). Round
- *  4: dropped 0.7 → 0.5 because the higher value blew HP bars and waypoint
- *  badges (white emissive ≈ 1.0) into a milky halo at zoomed-out distances.
- *  The glow layer also runs in *include-only* mode now (see `_glowLayer.addIncludedOnlyMesh`
- *  calls in `_buildNodeGlowMeshes` + `_applySelectionAndFocus`) — so only the
- *  selection halo and node discs contribute. Other emissive meshes (HP bars,
- *  waypoint badges, floating text) no longer bloom regardless of intensity. */
-export const GLOW_LAYER_INTENSITY = 0.5;
-
-/** GlowLayer render-target size, in pixels. Power-of-two square — only the
- *  selection halo and the (≤4) power-node ring discs feed the layer in
- *  include-only mode, so a 512×512 RT was massively overprovisioned. Dropped
- *  to 256×256 — softer bloom on the few included meshes, ~4× less RT memory
- *  and per-frame fill cost. */
-export const GLOW_LAYER_TEXTURE_SIZE = 256;
-
 /** Selection halo pulse. Configurable so designers can tune the breathing.
  *  Round 3: dialled MIN/MAX down ~50% — earlier values produced a halo bright
  *  enough to swallow the standee silhouette at zoomed-out distances. */
@@ -7642,11 +7603,11 @@ export const NODE_PULSE_PERIOD_MS = 3000;
 export const NODE_PULSE_MIN       = 0.45;
 export const NODE_PULSE_MAX       = 0.95;
 /** Multiplier applied to the per-frame node-disc emissive (`glowColor * pulseK
- *  * NODE_DISC_EMISSIVE_MUL`). Held at 0.4 so the GlowLayer's bloom carries the
- *  controller colour without saturating: at 1.0 the brightest channels of
- *  hero (#ffb800 → 1.0), neutral (#e8e8e8 → 0.91), and contested (#ff6a00 → 1.0)
- *  clipped through the bloom and washed every node to white. 0.4 keeps the peak
- *  channel ≤ ~0.38 (after pulse k ≤ 0.95) so the bloom stays tinted. */
+ *  * NODE_DISC_EMISSIVE_MUL`). Held at 0.4 so the controller colour stays
+ *  tinted without saturating: at 1.0 the brightest channels of hero
+ *  (#ffb800 → 1.0), neutral (#e8e8e8 → 0.91), and contested (#ff6a00 → 1.0)
+ *  clipped through the emissive and washed every node to white. 0.4 keeps the
+ *  peak channel ≤ ~0.38 (after pulse k ≤ 0.95) so the tint reads. */
 export const NODE_DISC_EMISSIVE_MUL = 0.4;
 /** Disc footprint in world units. Slightly larger than the historical 1.7 so
  *  the saturated colour fills more of the tile's visible top. */

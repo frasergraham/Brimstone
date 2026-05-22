@@ -1,4 +1,4 @@
-// 3D-renderer static-mesh freeze pass + GlowLayer RT shrink.
+// 3D-renderer static-mesh freeze pass.
 //
 // `_buildMap` builds hundreds-to-thousands of meshes (tile cylinders, terrain
 // props, buildings, road/river ribbons, border-forest cones, …) that never
@@ -14,7 +14,6 @@ import assert from 'node:assert/strict';
 
 import {
   Renderer3D,
-  GLOW_LAYER_TEXTURE_SIZE,
 } from '../src/renderer-3d.js';
 
 function fakeMesh(name) {
@@ -33,19 +32,11 @@ function newInst() {
   return new Renderer3D(fakeCanvas, {});
 }
 
-describe('GLOW_LAYER_TEXTURE_SIZE — shrunk from 512 → 256', () => {
-  test('exported constant is 256 (power-of-two square RT)', () => {
-    assert.equal(GLOW_LAYER_TEXTURE_SIZE, 256);
-  });
-
-  test('value is a positive power of two', () => {
-    assert.ok(GLOW_LAYER_TEXTURE_SIZE > 0);
-    assert.equal(GLOW_LAYER_TEXTURE_SIZE & (GLOW_LAYER_TEXTURE_SIZE - 1), 0,
-      `expected power of two, got ${GLOW_LAYER_TEXTURE_SIZE}`);
-  });
-
-  test('strictly smaller than the previous 512 default', () => {
-    assert.ok(GLOW_LAYER_TEXTURE_SIZE < 512);
+describe('Renderer3D — GlowLayer removed', () => {
+  test('instance has no `_glowLayer` field (bloom layer was retired — added noise)', () => {
+    const inst = newInst();
+    assert.equal(inst._glowLayer, undefined,
+      'Renderer3D should not carry a GlowLayer reference any more');
   });
 });
 

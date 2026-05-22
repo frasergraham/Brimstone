@@ -8,8 +8,6 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  // item 1
-  GLOW_LAYER_INTENSITY,
   // item 3
   PLAN_MARKER_DIAMETER,
   PLAN_MARKER_HEIGHT,
@@ -32,15 +30,6 @@ import {
   hexToWorld,
   parseRgba01,
 } from '../src/renderer-3d.js';
-
-// ── Item 1: glow layer intensity dialled down ────────────────────────────────
-
-describe('Renderer3D round-4 polish — GLOW_LAYER_INTENSITY', () => {
-  test('intensity dropped from round-3 0.7 to a value ≤ 0.6 so non-include meshes do not blow out', () => {
-    assert.ok(GLOW_LAYER_INTENSITY > 0 && GLOW_LAYER_INTENSITY <= 0.6,
-      `GLOW_LAYER_INTENSITY ${GLOW_LAYER_INTENSITY} out of expected band (0, 0.6]`);
-  });
-});
 
 // ── Item 3: smaller waypoint markers + dashed path connector ─────────────────
 
