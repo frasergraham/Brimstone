@@ -37,8 +37,9 @@ describe('admin-assets.html', () => {
 
   test('references the seed model files the brief calls out', () => {
     assert.match(html, /house\.glb/);
-    assert.match(html, /paladin\.glb/);
+    assert.match(html, /paladin-idle\.glb/);
     assert.match(html, /walking\.glb/);
+    assert.match(html, /running\.glb/);
   });
 
   test('uses ArcRotateCamera with attachControl (default Babylon orbit/zoom)', () => {

@@ -53,12 +53,13 @@ import {
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 describe('Renderer3D Phase 5 — anim duration constants', () => {
-  test('MOVE_ANIM_MS sits in the slow-enough-to-walk band [400, 900]', () => {
-    // Bumped from 250 → 600 in the 3D renderer to give the paladin's
-    // walking animation room to play. Band rather than a single pin so
-    // visual tuning can shift without test churn.
-    assert.ok(MOVE_ANIM_MS >= 400 && MOVE_ANIM_MS <= 900,
-      `expected MOVE_ANIM_MS in [400, 900], got ${MOVE_ANIM_MS}`);
+  test('MOVE_ANIM_MS sits in the slow-enough-to-walk band [400, 1500]', () => {
+    // Bumped over iterations to give the paladin's walking animation room
+    // to play and (with the multi-keyframe polyline path) to keep multi-hex
+    // moves at a single MOVE_ANIM_MS window total. Band rather than a
+    // single pin so visual tuning can shift without test churn.
+    assert.ok(MOVE_ANIM_MS >= 400 && MOVE_ANIM_MS <= 1500,
+      `expected MOVE_ANIM_MS in [400, 1500], got ${MOVE_ANIM_MS}`);
   });
 
   test('LUNGE_ANIM_MS < MOVE_ANIM_MS (sharper, snappier feel)', () => {
