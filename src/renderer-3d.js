@@ -3796,10 +3796,16 @@ export class Renderer3D {
     if (exits.length === 0) return;
     // Sibling of the in-map river material — built via the SAME helper so any
     // future tweak to the river ribbon's diffuse/emissive recipe automatically
-    // applies to the extension. One material shared across all extensions; no
-    // per-tile fog clones are needed because the extension never gets fogged
-    // (it sits outside the playable area). `hasVertexAlpha` is set per-mesh.
+    // applies to the extension. Darken to FOG_TILE_DARKEN so the extension
+    // reads as wilderness-beyond-sight, matching the fogged tint of the
+    // border-forest hex tiles it weaves through (those are always fogged
+    // because they sit outside the playable area). Without this the river
+    // would render at full unfogged brightness, looking out of place against
+    // the dimmed forest tiles.
     const extMat = this._buildRibbonMaterial('river_extension', TILE_COLOR[TileType.RIVER]);
+    const k = this._fogTileDarken;
+    if (extMat.diffuseColor)  { extMat.diffuseColor.r  *= k; extMat.diffuseColor.g  *= k; extMat.diffuseColor.b  *= k; }
+    if (extMat.emissiveColor) { extMat.emissiveColor.r *= k; extMat.emissiveColor.g *= k; extMat.emissiveColor.b *= k; }
     // Extend one hex past the outermost band tile so the ribbon's far end
     // clearly carries past the band's silhouette instead of fading inside it.
     // Centre-to-centre spacing in any axial direction is SQRT3 world units.
@@ -3811,12 +3817,26 @@ export class Renderer3D {
     for (const exit of exits) {
       // Centreline samples along the outward tangent from `exit.point` (which
       // is exactly where the in-map ribbon's bezier ends — see `riverExitPoints`).
+      // Add a tapered sine-wave perpendicular offset so the extension WINDS
+      // away from the playable map instead of running dead straight, matching
+      // the bezier-curve behaviour of the in-map river. Amplitude is 0 at
+      // both endpoints (so the join at exit.point is exact and the far tip
+      // feathers naturally) and peaks mid-path. The phase is seeded off the
+      // exit point's world coordinates so multiple exits wind differently.
+      const perpX = -exit.tangent.z;
+      const perpZ =  exit.tangent.x;
+      const RIVER_EXT_WIND_AMP    = 0.6;  // world units of lateral sway at peak
+      const RIVER_EXT_WIND_CYCLES = 1.25; // wave cycles across the extension
+      const phaseOffset = Math.atan2(exit.point.x + 7.1, exit.point.z + 3.3);
       const pts = new Array(segments + 1);
       for (let i = 0; i <= segments; i++) {
         const t = i / segments;
+        const taper = Math.sin(Math.PI * t); // 0 → 1 → 0
+        const wind  = RIVER_EXT_WIND_AMP * taper
+          * Math.sin(t * 2 * Math.PI * RIVER_EXT_WIND_CYCLES + phaseOffset);
         pts[i] = {
-          x: exit.point.x + exit.tangent.x * length * t,
-          z: exit.point.z + exit.tangent.z * length * t,
+          x: exit.point.x + exit.tangent.x * length * t + perpX * wind,
+          z: exit.point.z + exit.tangent.z * length * t + perpZ * wind,
         };
       }
       // Five-path ribbon with lateral alpha taper, matching the in-map river
