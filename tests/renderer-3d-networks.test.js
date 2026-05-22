@@ -32,9 +32,15 @@ describe('Item 2 — bezier visual constants', () => {
       `road Y ${ROAD_RIBBON_Y} should exceed river Y ${RIVER_RIBBON_Y}`);
   });
 
-  test('both ribbons sit above the tile prism top (y=0.075) and disc (y=0.084)', () => {
-    assert.ok(RIVER_RIBBON_Y > 0.084);
-    assert.ok(ROAD_RIBBON_Y  > 0.084);
+  test('both ribbons sit just above the flat tile (depth-bias only, not visually raised)', () => {
+    // Tiles are now flat polygons at Y=0 — no prism walls, no disc cap.
+    // Roads and rivers just need a tiny positive Y to win the depth fight
+    // against the tile beneath them; raised values cause visible levitation
+    // (and shadows that cast under the ribbon onto the ground).
+    assert.ok(RIVER_RIBBON_Y > 0 && RIVER_RIBBON_Y < 0.05,
+      `river Y ${RIVER_RIBBON_Y} should be a small positive depth-bias`);
+    assert.ok(ROAD_RIBBON_Y  > 0 && ROAD_RIBBON_Y  < 0.05,
+      `road Y ${ROAD_RIBBON_Y} should be a small positive depth-bias`);
   });
 
   test('segment count is reasonable (smooth without ballooning the vertex budget)', () => {

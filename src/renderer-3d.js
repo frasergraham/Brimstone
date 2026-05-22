@@ -1721,26 +1721,17 @@ export class Renderer3D {
       this._borderForestHexesByKey.set(hexKey(pos.col, pos.row), hex);
       const props = [hex];
 
-      // Forest cones — denser than in-map forest tiles.
+      // Pine trees — denser than in-map forest tiles.
       const trees = borderForestTreesForHex(pos.col, pos.row);
       for (let i = 0; i < trees.length; i++) {
         const t = trees[i];
-        const cone = BABYLON.MeshBuilder.CreateCylinder(
-          `border_forest_${pos.col}_${pos.row}_${i}`,
-          { diameterTop: 0, diameterBottom: 0.7, height: 0.9, tessellation: 8 },
-          scene,
+        const meshes = this._buildPineTreeMeshes(
+          `border_forest_${pos.col}_${pos.row}_${i}`, parent, x + t.x, z + t.z, t.scale,
         );
-        cone.parent     = parent;
-        cone.position.x = x + t.x;
-        cone.position.z = z + t.z;
-        cone.position.y = 0.45 * t.scale;
-        cone.scaling.x  = t.scale;
-        cone.scaling.y  = t.scale;
-        cone.scaling.z  = t.scale;
-        cone.material   = treeMat;
-        cone.isPickable = false;
-        this._addShadowCaster(cone);
-        props.push(cone);
+        for (const m of meshes) {
+          this._addShadowCaster(m);
+          props.push(m);
+        }
       }
 
       this._borderPropsByKey.set(hexKey(pos.col, pos.row), props);
@@ -1823,34 +1814,22 @@ export class Renderer3D {
     const props = [];
     const trackProp = (m) => { props.push(m); };
 
-    // ── Forests: a small cluster of varied cones in the unified tile-slot
+    // ── Forests: a small cluster of pine-shaped trees in the unified tile-slot
     // positions, leaving the centre slot clear for an entity standee.
     // Layout is deterministic per (col, row) so the same hex always shows the
     // same cluster across runs. See forestTreesForHex / TILE_SLOTS.
     if (tile.type === TileType.FOREST) {
-      const treeMat = this._materialFor('#234c1f'); // shared green material
       const trees = forestTreesForHex(tile.col, tile.row);
       for (let i = 0; i < trees.length; i++) {
         const t = trees[i];
-        const cone = BABYLON.MeshBuilder.CreateCylinder(
-          `forest_${tile.col}_${tile.row}_${i}`,
-          { diameterTop: 0, diameterBottom: 0.7, height: 0.9, tessellation: 8 },
-          scene,
+        const meshes = this._buildPineTreeMeshes(
+          `forest_${tile.col}_${tile.row}_${i}`, parent, x + t.x, z + t.z, t.scale,
         );
-        cone.parent     = parent;
-        cone.position.x = x + t.x;
-        cone.position.z = z + t.z;
-        cone.position.y = 0.45 * t.scale;
-        cone.scaling.x  = t.scale;
-        cone.scaling.y  = t.scale;
-        cone.scaling.z  = t.scale;
-        cone.material   = treeMat;
-        cone.isPickable = false; // pick the tile underneath, not the prop
-        this._addShadowCaster(cone);
-        // Trees stay visible under fog of war — they're permanent terrain
-        // features, not tactical info. See `_setTileFogged`.
-        cone.metadata   = { respectsFog: false };
-        trackProp(cone);
+        for (const m of meshes) {
+          this._addShadowCaster(m);
+          m.metadata = { respectsFog: false };
+          trackProp(m);
+        }
       }
     }
 
@@ -1859,22 +1838,33 @@ export class Renderer3D {
     // carries the visual. The grass-coloured cylinder + textured top disc
     // above is what shows on either side of the path.
 
-    // ── Bridge: wooden planks crossing the river hex ──────────────────────
-    // Plank sits just above the road ribbon (ROAD_RIBBON_Y = 0.086) so it
-    // reads as a low deck spanning the water. plank height = 0.12 so bottom
-    // = pos.y − 0.06; pos.y = 0.16 → bottom 0.10, comfortably above the road
-    // and river ribbons without floating high off the terrain.
+    // ── Bridge: arched wooden plank crossing the river hex ──────────────
+    // An arc traced from start → midspan → end so the bridge reads as a
+    // little hump over the water rather than a flat slab. The shape is built
+    // along +X by CreateTube along a curved path, then rotated into the
+    // river's direction via bridgeRotationY.
     if (tile.type === TileType.BRIDGE) {
-      const plank = BABYLON.MeshBuilder.CreateBox(
+      const yaw  = bridgeRotationY(tile, this.state.tiles);
+      const span = 1.6;           // length of the bridge along the road direction
+      const peak = 0.42;          // height of arch midspan above ground
+      const seat = 0.06;          // height where the bridge meets the road
+      const samples = 10;
+      const path = [];
+      for (let i = 0; i <= samples; i++) {
+        const t = i / samples;
+        const local = (t - 0.5) * span;        // -span/2 .. +span/2 along +X
+        const arc   = seat + (peak - seat) * Math.sin(Math.PI * t);
+        // Rotate from local +X into the river-crossing direction.
+        const wx = x + Math.cos(yaw) * local;
+        const wz = z + Math.sin(yaw) * local;
+        path.push(new BABYLON.Vector3(wx, arc, wz));
+      }
+      const plank = BABYLON.MeshBuilder.CreateTube(
         `bridge_${tile.col}_${tile.row}`,
-        { width: 1.7, height: 0.12, depth: 0.7 },
+        { path, radius: 0.28, tessellation: 6, cap: BABYLON.Mesh.CAP_ALL },
         scene,
       );
       plank.parent     = parent;
-      plank.position.x = x;
-      plank.position.z = z;
-      plank.position.y = 0.16;
-      plank.rotation.y = bridgeRotationY(tile, this.state.tiles);
       plank.material   = this._materialFor('#8a6030');
       plank.isPickable = false;
       this._addShadowCaster(plank);
@@ -2005,13 +1995,19 @@ export class Renderer3D {
       for (let i = 0; i < strokes.length; i++) {
         const pts = strokes[i];
         if (!pts || pts.length < 2) continue;
+        // Three-path ribbon: right edge, centerline, left edge. Adding the
+        // centerline gives us an interior row of vertices we can paint with
+        // full alpha while fading the side rows toward transparent — produces
+        // a soft-edged road/river that blends into the surrounding grass
+        // rather than hard-cutting at the ribbon edge.
         const { left, right } = ribbonOffsetPaths(pts, width);
-        const leftV3  = left.map(p  => new BABYLON.Vector3(p.x, yPos, p.z));
-        const rightV3 = right.map(p => new BABYLON.Vector3(p.x, yPos, p.z));
+        const leftV3   = left .map(p => new BABYLON.Vector3(p.x, yPos, p.z));
+        const centerV3 = pts  .map(p => new BABYLON.Vector3(p.x, yPos, p.z));
+        const rightV3  = right.map(p => new BABYLON.Vector3(p.x, yPos, p.z));
         const ribbon = BABYLON.MeshBuilder.CreateRibbon(
           `${networkName}_${tile.col}_${tile.row}_${i}`,
           {
-            pathArray: [rightV3, leftV3],
+            pathArray: [rightV3, centerV3, leftV3],
             sideOrientation: BABYLON.Mesh.DOUBLESIDE,
             closeArray: false,
             closePath: false,
@@ -2020,15 +2016,37 @@ export class Renderer3D {
           scene,
         );
         ribbon.isPickable = false;
+        // Per-vertex alpha: 0.0 on right edge, 1.0 on center, 0.0 on left.
+        // Babylon's Mesh uses VertexBuffer.ColorKind for vertex colors (RGBA).
+        const totalVerts = ribbon.getTotalVertices();
+        const N = pts.length;
+        const colors = new Float32Array(totalVerts * 4);
+        for (let v = 0; v < totalVerts; v++) {
+          // Path layout in the buffer is right (N) then center (N) then left (N).
+          let a;
+          if      (v < N)         a = 0.0;       // right edge
+          else if (v < 2 * N)     a = 1.0;       // center
+          else                    a = 0.0;       // left edge
+          colors[v * 4 + 0] = 1;
+          colors[v * 4 + 1] = 1;
+          colors[v * 4 + 2] = 1;
+          colors[v * 4 + 3] = a;
+        }
+        ribbon.setVerticesData(BABYLON.VertexBuffer.ColorKind, colors);
         ribbons.push(ribbon);
       }
     }
     if (ribbons.length === 0) return null;
+    // MergeMeshes args: (meshes, disposeSource, allow32bitIndices, meshSubclass,
+    //                    subdivideWithSubMeshes, multiMultiMaterials)
+    // Babylon's Mesh.MergeMeshes preserves vertex colors when present on every
+    // source mesh — needed here so the per-vertex alpha fade survives merging.
     const merged = BABYLON.Mesh.MergeMeshes(ribbons, true, true, undefined, false, false);
     if (!merged) return null;
     merged.parent     = this._mapRoot;
     merged.isPickable = false;
     merged.material   = this._buildRibbonMaterial(networkName, cssColor);
+    merged.hasVertexAlpha = true;
     merged.name       = `${networkName}Network`;
     // Road and river ribbons are flat terrain-level surfaces, so they should
     // catch shadows from anything that stands on or near them (standees on
@@ -2061,6 +2079,10 @@ export class Renderer3D {
     mat.emissiveColor   = new BABYLON.Color3(emissive[0], emissive[1], emissive[2]);
     mat.specularColor   = new BABYLON.Color3(0.04, 0.04, 0.04); // matte
     mat.backFaceCulling = false; // belt-and-braces for low/below camera angles
+    // Honour the per-vertex alpha written in `_buildNetworkMesh` so the road
+    // / river ribbon fades smoothly into the underlying grass at its lateral
+    // edges instead of cutting hard. needAlphaBlendingForMesh inherits from
+    // mesh.hasVertexAlpha, which the merged ribbon mesh sets.
     // disableLighting=false is the default — explicit here so a future refactor
     // that mass-disables lighting can't silently make the road/river look like
     // pure emissive (which at 0.45× a dark base colour reads as near-black —
@@ -2250,6 +2272,58 @@ export class Renderer3D {
    *  box (with a small inset so the atlas-sprite gutter pixels are never
    *  sampled). Triangulated as a fan from the centre vertex out to six rim
    *  vertices at 30°, 90°, 150°, 210°, 270°, 330°. */
+  /** Build a pine-shaped tree at world (x, z): a short brown cylinder trunk
+   *  with three green cones stacked overlapping above. Returns an array of
+   *  meshes (trunk + 3 cones) so callers can register each as a shadow caster
+   *  and tag fog metadata. Scale is applied uniformly via mesh.scaling so the
+   *  silhouette stays consistent across hash-varied tree sizes.
+   *
+   *  Tree heights/diameters are tuned so a stack reads as a clean pine
+   *  silhouette: trunk h≈0.25 d≈0.18, cone1 h≈0.5 d≈0.7, cone2 h≈0.45 d≈0.55,
+   *  cone3 h≈0.4 d≈0.4. Cones overlap by ~0.18 so the silhouette is solid. */
+  _buildPineTreeMeshes(name, parent, x, z, scale = 1) {
+    const BABYLON = this._babylon;
+    const scene   = this._scene;
+    const trunkMat = this._materialFor('#5a3a20');
+    const leafMat  = this._materialFor('#234c1f');
+    const meshes = [];
+    const trunk = BABYLON.MeshBuilder.CreateCylinder(
+      `${name}_trunk`,
+      { diameterTop: 0.16, diameterBottom: 0.20, height: 0.30, tessellation: 6 },
+      scene,
+    );
+    trunk.parent = parent;
+    trunk.position.x = x;
+    trunk.position.z = z;
+    trunk.position.y = 0.15 * scale;
+    trunk.scaling.x = trunk.scaling.y = trunk.scaling.z = scale;
+    trunk.material = trunkMat;
+    trunk.isPickable = false;
+    meshes.push(trunk);
+    const cones = [
+      { y: 0.45, dBot: 0.78, dTop: 0.35, h: 0.45 },
+      { y: 0.72, dBot: 0.58, dTop: 0.20, h: 0.40 },
+      { y: 0.96, dBot: 0.38, dTop: 0.00, h: 0.35 },
+    ];
+    for (let c = 0; c < cones.length; c++) {
+      const cfg = cones[c];
+      const cone = BABYLON.MeshBuilder.CreateCylinder(
+        `${name}_leaf${c}`,
+        { diameterTop: cfg.dTop, diameterBottom: cfg.dBot, height: cfg.h, tessellation: 6 },
+        scene,
+      );
+      cone.parent = parent;
+      cone.position.x = x;
+      cone.position.z = z;
+      cone.position.y = cfg.y * scale;
+      cone.scaling.x = cone.scaling.y = cone.scaling.z = scale;
+      cone.material = leafMat;
+      cone.isPickable = false;
+      meshes.push(cone);
+    }
+    return meshes;
+  }
+
   _buildFlatHexMesh(name, parent, x, z) {
     const BABYLON = this._babylon;
     const R = HEX_RADIUS_WORLD;
@@ -4466,17 +4540,26 @@ export function tileSlotWorldPositions(col, row, occupants, radius = HEX_RADIUS_
 /** River ribbon width in world units. Hex-width = SQRT3 ≈ 1.732, so this is
  *  roughly half the hex width — broad enough to read as a river without
  *  spilling outside the tile diamond. */
+// Roads and rivers used to sit ~0.085 above the ground tile so they wouldn't
+// z-fight with the hex prism. Now that tiles are flat polygons at Y=0, the
+// ribbons just need a small polygon-offset-style epsilon to win the depth
+// fight without visibly hovering. 0.005 reads as flush — the new directional
+// sun cast shadows ACROSS the old raised ribbons that made them look levitated.
 export const RIVER_RIBBON_WIDTH = 0.85;
 /** Road ribbon width — narrower than the river (matches the 2D path's strokeWidth
  *  ratio: rivers wider than roads). ~0.35 × hex-width. */
 export const ROAD_RIBBON_WIDTH  = 0.6;
 /** Y above tile prism top (0.075) and disc top (0.084) — ribbon hugs the terrain. */
-export const RIVER_RIBBON_Y     = 0.085;
+export const RIVER_RIBBON_Y     = 0.005;
 /** Road sits 1 mm above the river so over-bridge crossings layer cleanly. */
-export const ROAD_RIBBON_Y      = 0.086;
+export const ROAD_RIBBON_Y      = 0.008;
 /** Number of bezier samples per stroke. 10 is smooth enough at this radius
  *  without bloating the tube vertex count on Campaign-size maps. */
-export const NETWORK_BEZIER_SEGMENTS = 10;
+// Bumped from 10 → 22 — at tight bezier bends the old segment count produced
+// visible polygon seams (especially on the wider river ribbon), and the ribbon
+// width-fade pass (per-vertex alpha tapering at the road endpoints) needs more
+// segments to read as a smooth fade rather than a 3-step stair.
+export const NETWORK_BEZIER_SEGMENTS = 22;
 
 /** Fraction of the ribbon's diffuse colour copied into `emissiveColor`. After
  *  flipping the ribbon's face normals to point +Y (see `_buildNetworkMesh`),
