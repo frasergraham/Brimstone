@@ -1661,16 +1661,20 @@ export class Renderer3D {
         if (typeof m.setEnabled === 'function') m.setEnabled(false);
         m.isPickable = false;
       }
-      // Keep the source idleGroup running on the source skeleton. Clones share
-      // the source skeleton (Babylon's glTF animation targets TransformNodes
-      // that the bones link to via _linkedTransformNode, so per-clone skeleton
-      // cloning + bone-name retargeting fails silently — leaving every clone
-      // in T-pose). One playing animation animates the source skeleton; every
-      // clone references that skeleton and skins identically. Idle plays in
-      // sync across all paladins, which reads fine for a board-game token.
+      // Don't start the source animation at load. Pause/play it from the
+      // blend tick instead, so the rig holds whatever frame it was on
+      // (mid-stride) when no hero entity is mid-move. With NewPaladin's
+      // single embedded animation being walking, "pause" reads as
+      // "stopped mid-step" which is what the operator wants between turns
+      // in playback. play()/pause() (not start()/stop()) resumes from the
+      // current frame on each motion event instead of snapping to frame 0.
       if (idleGroup && typeof idleGroup.start === 'function') {
         idleGroup.weight = 1.0;
+        // Kick the animatables into existence by starting then immediately
+        // pausing — so the first .play() in the tick resumes cleanly instead
+        // of having no animatables to resume.
         idleGroup.start(true, 1.0);
+        if (typeof idleGroup.pause === 'function') idleGroup.pause();
       }
 
       // Compute an aggregate hierarchy bbox + scale so the entire model
@@ -1855,114 +1859,16 @@ export class Renderer3D {
       this._walkingSource.playing = false;
     }
 
-    // Build the name → target map from the IDLE group's targetedAnimations.
-    // Idle works — its targets are by definition the correct TransformNodes
-    // that drive the paladin's skeleton. Adding the import's TNs + bones
-    // expands coverage for any walking-anim target that idle didn't touch
-    // (idle animates a subset of bones). Strip Babylon's `.NNN` dedup
-    // suffixes on lookup so walking's "mixamorig:Hips.001" matches paladin's
-    // "mixamorig:Hips".
-    const nameMap = new Map();
-    const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
-    const addEntry = (name, target) => {
-      if (!name || !target) return;
-      if (!nameMap.has(name)) nameMap.set(name, target);
-      const stripped = stripDup(name);
-      if (stripped !== name && !nameMap.has(stripped)) nameMap.set(stripped, target);
-    };
-    // Idle's targets first — these are proven-correct.
-    for (const ta of src.idleGroup?.targetedAnimations || []) {
-      if (ta?.target?.name) addEntry(ta.target.name, ta.target);
-    }
-    // Then paladin's full TN hierarchy from the import.
-    for (const tn of src.transformNodes || []) {
-      if (tn && tn.name) addEntry(tn.name, tn);
-    }
-    // Plus skeleton bones + their linked TNs as a final fallback.
-    if (src.skeleton && Array.isArray(src.skeleton.bones)) {
-      for (const bone of src.skeleton.bones) {
-        if (!bone) continue;
-        const tn = bone._linkedTransformNode
-          || (typeof bone.getTransformNode === 'function' && bone.getTransformNode());
-        if (tn && tn.name) addEntry(tn.name, tn);
-        if (bone.name) addEntry(bone.name, tn || bone);
-      }
-    }
-
-    // Clone the native walkGroup and retarget the CLONE to paladin's
-    // TransformNodes — leaves the original (driving walking's skeleton for
-    // ghosts) untouched. The cloned group drives paladin's skeleton when
-    // the main standees enter walking state during resolution.
-    let walkGroupForPaladin = null;
-    let remapped = 0;
-    let missed = 0;
-    const missingExamples = [];
-    if (typeof walkGroupNative.clone === 'function') {
-      walkGroupForPaladin = walkGroupNative.clone('paladinWalkRetargeted', (oldTarget) => {
-        if (!oldTarget || !oldTarget.name) {
-          missed++;
-          return oldTarget;
-        }
-        const match = nameMap.get(oldTarget.name) || nameMap.get(stripDup(oldTarget.name));
-        if (match) {
-          remapped++;
-          return match;
-        }
-        missed++;
-        if (missingExamples.length < 5) missingExamples.push(oldTarget.name);
-        return oldTarget;
-      });
-    }
-    console.info(
-      `[Renderer3D] walking.glb retarget: ${remapped} hit, ${missed} miss`
-      + (missed > 0 ? ` (e.g. ${missingExamples.join(', ')})` : '')
-      + ` — nameMap size ${nameMap.size}`,
-    );
-    if (!walkGroupForPaladin || remapped === 0) {
-      console.warn('[Renderer3D] walking.glb: paladin retarget produced 0 hits — main standees stay in idle during resolution (ghosts still walk natively).');
-      // Don't tear down walkGroupNative — ghosts still need it. Just leave
-      // walkGroupForPaladin null and the tick keeps main standees on idle.
-      src.walkGroup = null;
-      src.activeGroup = 'idle';
-      this._paladinAnimObserver = this._installPaladinAnimBlendTick();
-      return walkGroupNative;
-    }
-    src.walkRemappedCount = remapped;
-    const walkGroup = walkGroupForPaladin;
-
-    // Enable per-animation blending on EVERY animation in both groups so
-    // start()/stop() crossfade smoothly. We use the start/stop swap pattern
-    // (not weight-blending) because weight-blending leaves any bones the
-    // walking group doesn't animate snapping back to bind pose — i.e.
-    // T-pose on the arms if walking only touches legs. With per-animation
-    // blending Babylon interpolates from the current bone state into the
-    // new group's frame instead of resetting.
-    const enableBlend = (group) => {
-      if (!group || !Array.isArray(group.targetedAnimations)) return;
-      for (const ta of group.targetedAnimations) {
-        const anim = ta && ta.animation;
-        if (anim) {
-          anim.enableBlending = true;
-          anim.blendingSpeed = 0.08;
-        }
-      }
-    };
-    enableBlend(src.idleGroup);
-    enableBlend(walkGroup);
-
-    // Walking group is loaded but NOT started — idle holds the rig until
-    // a move kicks the tick into swapping. Idle was already started in
-    // _loadPaladinModel.
-    src.walkGroup = walkGroup;
+    // With NewPaladin shipping its own walking clip, the live paladin
+    // doesn't need a retargeted copy of walking.glb's animation — its
+    // built-in group is paused/played directly via
+    // _maybeTogglePaladinAnimation. We keep walking.glb's meshes + skeleton
+    // alive as the GHOST source (walkGroupNative drives walking's own
+    // skeleton independently). Don't dispose those.
+    src.walkGroup = null;
     src.activeGroup = 'idle';
     this._paladinAnimObserver = this._installPaladinAnimBlendTick();
-
-    // NOTE: do NOT call _disposeWalkingImport here. We keep walking's
-    // meshes + skeleton alive as the ghost source (walking.glb's native
-    // skeleton + native walkGroupNative drive the ghost path animation
-    // independently of paladin's skeleton). Only the cloned walkGroup
-    // was retargeted to paladin's TNs; the originals stay native.
-    return walkGroup;
+    return walkGroupNative;
   }
 
   /** Dispose every mesh + skeleton brought in by the walking.glb import.
@@ -1984,6 +1890,36 @@ export class Renderer3D {
       if (tn && typeof tn.dispose === 'function') {
         try { tn.dispose(); } catch { /* ignore */ }
       }
+    }
+  }
+
+  /** Resume or pause the paladin's BUILT-IN animation group (the one that
+   *  ships with the .glb — for NewPaladin this is the walking clip, treated
+   *  as the rig's default animation). Should play whenever any hero
+   *  paladin is mid-move/lunge; pause when nothing is moving so the model
+   *  freezes mid-stride between turns in playback. Uses pause()/play()
+   *  (not stop()/start()) so the animation resumes from its current frame
+   *  on each motion event instead of snapping back to frame 0. */
+  _maybeTogglePaladinAnimation() {
+    const src = this._paladinSource;
+    if (!src || !src.idleGroup) return;
+    let wantPlay = paladinAnimTargetWeight(
+      this._activeMoveIds, this._activeLungeIds,
+      this.state?.entities, unitUsesPaladinModel,
+    ) === 0;
+    const now = performance.now();
+    if (wantPlay) this._paladinLastWalkTs = now;
+    else if (typeof this._paladinLastWalkTs === 'number'
+      && (now - this._paladinLastWalkTs) < PALADIN_WALK_SUSTAIN_MS) {
+      wantPlay = true;
+    }
+    if (wantPlay && !src._playing) {
+      if (typeof src.idleGroup.play === 'function') src.idleGroup.play(true);
+      else if (typeof src.idleGroup.start === 'function') src.idleGroup.start(true, 1.0);
+      src._playing = true;
+    } else if (!wantPlay && src._playing) {
+      if (typeof src.idleGroup.pause === 'function') src.idleGroup.pause();
+      src._playing = false;
     }
   }
 
@@ -2024,6 +1960,12 @@ export class Renderer3D {
       // and nobody is mid-move. Resume otherwise. This keeps the rig from
       // moonwalking in place when nothing on screen needs it.
       this._maybeToggleNativeWalking();
+      this._maybeTogglePaladinAnimation();
+      // The legacy idle↔walk swap below only fires when a SEPARATE
+      // retargeted walking group was loaded onto the paladin's skeleton.
+      // With NewPaladin shipping its own walking animation as the rig's
+      // sole group, _maybeTogglePaladinAnimation handles pause/play and
+      // this branch is a no-op (walkGroup remains null).
       const src = this._paladinSource;
       if (!src || !src.idleGroup || !src.walkGroup) return;
       // Main standees only enter walking during ACTUAL resolution motion
