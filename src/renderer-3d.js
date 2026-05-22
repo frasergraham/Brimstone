@@ -794,6 +794,15 @@ export class Renderer3D {
     this._planArrowMatCache = new Map();
     // Cached material used to highlight a hex on attack flash.
     this._attackHexFlashMat = null;
+    // Plan-mode battle overlay: red attack-arrow tubes + ×N badges,
+    // rebuilt every draw from `this.planGhostSteps` (BATTLE_UNIT /
+    // BATTLE_HEX steps). Mirrors `_planArrowMeshes` but for attacks
+    // instead of moves. Each entry: { shaft, head1, head2, mat,
+    // badge, badgeMat, badgeTex }.
+    this._planBattleMeshes = [];
+    // Single shared red material for all attack arrow tubes — every
+    // attack uses the same colour, so one allocation is enough.
+    this._attackArrowMat = null;
 
     // ── Highlight overlay (movement / target hexes from ui.js) ─────────────
     // The 2D path tints valid-move and target hexes via `highlightHexes`
@@ -832,6 +841,7 @@ export class Renderer3D {
     this._applySelectionAndFocus();
     this._syncMovementHighlights();
     this._syncPlanArrows();
+    this._syncPlanBattleOverlay();
     this._syncPlanGhosts();
     // Phase 6: atmosphere updates — phase-driven lighting transitions, node
     // glow recolour, and fog veil. Standees are hidden in fogged hexes after
@@ -4213,6 +4223,165 @@ export class Renderer3D {
     }
   }
 
+  /** Rebuild the plan-mode battle overlay from `this.planGhostSteps`.
+   *  Mirrors the 2D path's Layer 4 in `_drawPlanOverlay`: a red dashed
+   *  shaft + wedge arrow head from attacker → target hex per planned
+   *  BATTLE_UNIT / BATTLE_HEX step, plus a single ×N badge above each
+   *  unique target hex (single attacks render the ⚔ glyph instead).
+   *  Disposed and rebuilt every draw so the overlay tracks plan edits
+   *  without dirty-tracking. Kept in its own helper to avoid colliding
+   *  with concurrent work on `_syncEntityStandees` (icon billboards,
+   *  hex outlines). */
+  _syncPlanBattleOverlay() {
+    for (const e of this._planBattleMeshes) {
+      e.shaft?.dispose();
+      e.head1?.dispose();
+      e.head2?.dispose();
+      e.badge?.dispose();
+      e.badgeMat?.dispose();
+      e.badgeTex?.dispose();
+    }
+    this._planBattleMeshes = [];
+
+    const steps = this.planGhostSteps;
+    if (!steps || !this._babylon || !this._scene) return;
+
+    const BABYLON = this._babylon;
+
+    // Shared red material — every attack arrow uses the same colour.
+    if (!this._attackArrowMat) {
+      const [r, g, b] = cssHexToRgb01(ATTACK_ARROW_COLOR);
+      const mat = new BABYLON.StandardMaterial('planAttackArrowMat', this._scene);
+      mat.diffuseColor  = new BABYLON.Color3(r, g, b);
+      mat.emissiveColor = new BABYLON.Color3(r * 0.7, g * 0.4, b * 0.4);
+      mat.specularColor = new BABYLON.Color3(0, 0, 0);
+      this._attackArrowMat = mat;
+    }
+    const arrowMat = this._attackArrowMat;
+
+    const counts = countAttacksPerTarget(steps);
+
+    // Tube shafts + arrow-head wedges — one per attack step.
+    let arrowIdx = 0;
+    for (const step of steps) {
+      if (!step.attackArrow) continue;
+      const { fromCol, fromRow, toCol, toRow } = step.attackArrow;
+      const geo = computeAttackArrowGeometry(fromCol, fromRow, toCol, toRow);
+      if (!geo) continue;
+      const { shaftStart, shaftEnd, headLeft, headRight } = geo;
+
+      const shaft = BABYLON.MeshBuilder.CreateTube(
+        `planAttackShaft_${arrowIdx}`,
+        {
+          path: [
+            new BABYLON.Vector3(shaftStart.x, shaftStart.y, shaftStart.z),
+            new BABYLON.Vector3(shaftEnd.x,   shaftEnd.y,   shaftEnd.z),
+          ],
+          radius: ATTACK_ARROW_RADIUS,
+          tessellation: 8,
+          cap: BABYLON.Mesh.CAP_ALL,
+        },
+        this._scene,
+      );
+      shaft.parent = this._mapRoot;
+      shaft.isPickable = false;
+      shaft.material = arrowMat;
+
+      const head1 = BABYLON.MeshBuilder.CreateTube(
+        `planAttackHead1_${arrowIdx}`,
+        {
+          path: [
+            new BABYLON.Vector3(shaftEnd.x, shaftEnd.y, shaftEnd.z),
+            new BABYLON.Vector3(headLeft.x, headLeft.y, headLeft.z),
+          ],
+          radius: ATTACK_ARROW_RADIUS,
+          tessellation: 8,
+          cap: BABYLON.Mesh.CAP_ALL,
+        },
+        this._scene,
+      );
+      head1.parent = this._mapRoot;
+      head1.isPickable = false;
+      head1.material = arrowMat;
+
+      const head2 = BABYLON.MeshBuilder.CreateTube(
+        `planAttackHead2_${arrowIdx}`,
+        {
+          path: [
+            new BABYLON.Vector3(shaftEnd.x,  shaftEnd.y,  shaftEnd.z),
+            new BABYLON.Vector3(headRight.x, headRight.y, headRight.z),
+          ],
+          radius: ATTACK_ARROW_RADIUS,
+          tessellation: 8,
+          cap: BABYLON.Mesh.CAP_ALL,
+        },
+        this._scene,
+      );
+      head2.parent = this._mapRoot;
+      head2.isPickable = false;
+      head2.material = arrowMat;
+
+      this._planBattleMeshes.push({ shaft, head1, head2 });
+      arrowIdx++;
+    }
+
+    // One ×N badge per unique target hex (⚔ glyph for single attacks).
+    if (typeof document === 'undefined') return;
+    const drawnTargets = new Set();
+    for (const step of steps) {
+      if (!step.attackArrow) continue;
+      const { toCol, toRow } = step.attackArrow;
+      const key = `${toCol},${toRow}`;
+      if (drawnTargets.has(key)) continue;
+      drawnTargets.add(key);
+
+      const count = counts.get(key) ?? 1;
+      const label = attackBadgeLabel(count);
+
+      const badgeTex = new BABYLON.DynamicTexture(
+        `planAttackBadgeTex_${key}`,
+        { width: 96, height: 96 },
+        this._scene, false,
+      );
+      badgeTex.hasAlpha = true;
+      const ctx = badgeTex.getContext();
+      ctx.clearRect(0, 0, 96, 96);
+      ctx.fillStyle = 'rgba(180,30,30,0.92)';
+      ctx.beginPath(); ctx.arc(48, 48, 40, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.arc(48, 48, 40, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = '#ffffff';
+      ctx.font = `bold ${count > 1 ? 48 : 56}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, 48, 52);
+      badgeTex.update();
+
+      const badgeMat = new BABYLON.StandardMaterial(`planAttackBadgeMat_${key}`, this._scene);
+      badgeMat.diffuseTexture = badgeTex;
+      badgeMat.opacityTexture = badgeTex;
+      badgeMat.useAlphaFromDiffuseTexture = true;
+      badgeMat.specularColor = new BABYLON.Color3(0, 0, 0);
+      badgeMat.emissiveColor = new BABYLON.Color3(1, 1, 1);
+      badgeMat.backFaceCulling = false;
+
+      const badge = BABYLON.MeshBuilder.CreatePlane(
+        `planAttackBadge_${key}`,
+        { width: ATTACK_BADGE_SIZE, height: ATTACK_BADGE_SIZE },
+        this._scene,
+      );
+      badge.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+      badge.isPickable = false;
+      badge.material = badgeMat;
+      const { x, y, z } = attackBadgePosition(toCol, toRow);
+      badge.position.set(x, y, z);
+      if (this._mapRoot) badge.parent = this._mapRoot;
+
+      this._planBattleMeshes.push({ badge, badgeMat, badgeTex });
+    }
+  }
+
   // ─── Plan ghost (walking previewer) ──────────────────────────────────────
   //
   // Mirrors the 2D path's "ghost walks the plan" preview: a translucent clone
@@ -6110,6 +6279,129 @@ export const PLAN_LINE_RADIUS = 0.06;
  *  so a 0.28 dash + 0.16 gap yields ~4 chunky dashes per hop. */
 export const PLAN_LINE_DASH_SIZE = 0.28;
 export const PLAN_LINE_GAP_SIZE  = 0.16;
+
+/** Attack-arrow overlay (BATTLE_UNIT / BATTLE_HEX plan steps).
+ *  Mirrors the 2D renderer's "red dashed arrow + ×N badge" idiom in
+ *  `_drawPlanOverlay` (Layer 4) — see `src/renderer.js`. */
+
+/** Y for the attack arrow tubes. Sits just above the move plan lines
+ *  (PLAN_LINE_Y = 0.18) so battle arrows clearly overlay them without
+ *  z-fighting, but still well below the floating ×N badge. */
+export const ATTACK_ARROW_Y = 0.20;
+
+/** Tube radius for the attack-arrow shaft. Slightly thicker than the
+ *  move plan dashes (0.06) so the attack reads as a heavier, more
+ *  aggressive overlay against the dashed-line move plan. */
+export const ATTACK_ARROW_RADIUS = 0.07;
+
+/** Trim from the attacker hex centre — keeps the shaft from spawning
+ *  inside the attacker's standee. Matches the 2D path's `hs * 0.38`. */
+export const ATTACK_ARROW_TRIM_FROM = 0.42;
+
+/** Trim from the target hex centre — keeps the tip just outside the
+ *  target standee, matching the 2D path's `hs * 0.45`. */
+export const ATTACK_ARROW_TRIM_TO = 0.50;
+
+/** Arrow head length (world units). Two short tubes splay back from
+ *  the tip — same wedge shape as the 2D arrow heads. */
+export const ATTACK_ARROW_HEAD_LEN = 0.32;
+/** Half-angle of the arrow head wedge, in radians. Matches the 2D
+ *  path's `0.4` rad spread. */
+export const ATTACK_ARROW_HEAD_ANGLE = 0.4;
+
+/** Red diffuse for the attack arrow. Matches the 2D path's
+ *  `rgba(220,60,60,…)`. */
+export const ATTACK_ARROW_COLOR = '#dc3c3c';
+
+/** Floating ×N badge above the target hex. Sits above the move-badge
+ *  layer (0.6) so the attack readout floats clearly above the move
+ *  plan, plus the standee portrait. */
+export const ATTACK_BADGE_Y = 0.95;
+
+/** Pixel size of the badge billboard plane (world units). Slightly
+ *  larger than the move badge (0.45) so the ×N glyph reads cleanly. */
+export const ATTACK_BADGE_SIZE = 0.55;
+
+/**
+ * Tally attacks per target hex from a `planGhostSteps` array. Returns
+ * Map<"col,row", number>. Mirrors the 2D path's `attackCounts` map in
+ * `_drawPlanOverlay`. Pure — safe to unit-test without Babylon.
+ */
+export function countAttacksPerTarget(steps) {
+  const counts = new Map();
+  if (!Array.isArray(steps)) return counts;
+  for (const s of steps) {
+    if (!s?.attackArrow) continue;
+    const { toCol, toRow } = s.attackArrow;
+    const key = `${toCol},${toRow}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/**
+ * Badge label for `count` attacks on a target hex. Matches the 2D
+ * path: a single attack uses the ⚔ glyph; ≥2 collapse into `×N`.
+ */
+export function attackBadgeLabel(count) {
+  return count > 1 ? `×${count}` : '⚔';
+}
+
+/**
+ * Compute the world-space geometry of a single attack arrow.
+ * Returns `{ shaftStart, shaftEnd, headLeft, headRight }` (each a
+ * `{x,y,z}`), or `null` if the source and target hexes coincide.
+ *
+ * The shaft is trimmed back from both hex centres so it does not draw
+ * inside the standees, and the head is a wedge whose two strokes
+ * spring from the shaft tip — mirrors the 2D path's two-line arrow
+ * head in `_drawPlanOverlay`.
+ */
+export function computeAttackArrowGeometry(fromCol, fromRow, toCol, toRow, y = ATTACK_ARROW_Y) {
+  const a = hexToWorld(fromCol, fromRow);
+  const b = hexToWorld(toCol,   toRow);
+  const dx = b.x - a.x;
+  const dz = b.z - a.z;
+  const len = Math.hypot(dx, dz);
+  if (len < 1e-6) return null;
+  const ux = dx / len;
+  const uz = dz / len;
+  const shaftStart = {
+    x: a.x + ux * ATTACK_ARROW_TRIM_FROM,
+    y,
+    z: a.z + uz * ATTACK_ARROW_TRIM_FROM,
+  };
+  const shaftEnd = {
+    x: b.x - ux * ATTACK_ARROW_TRIM_TO,
+    y,
+    z: b.z - uz * ATTACK_ARROW_TRIM_TO,
+  };
+  const ang = Math.atan2(uz, ux);
+  const leftAng  = ang - Math.PI + ATTACK_ARROW_HEAD_ANGLE;
+  const rightAng = ang - Math.PI - ATTACK_ARROW_HEAD_ANGLE;
+  const headLeft = {
+    x: shaftEnd.x + Math.cos(leftAng)  * ATTACK_ARROW_HEAD_LEN,
+    y,
+    z: shaftEnd.z + Math.sin(leftAng)  * ATTACK_ARROW_HEAD_LEN,
+  };
+  const headRight = {
+    x: shaftEnd.x + Math.cos(rightAng) * ATTACK_ARROW_HEAD_LEN,
+    y,
+    z: shaftEnd.z + Math.sin(rightAng) * ATTACK_ARROW_HEAD_LEN,
+  };
+  return { shaftStart, shaftEnd, headLeft, headRight };
+}
+
+/**
+ * World position for the ×N attack badge — directly above the target
+ * hex centre. Mirrors the 2D path's "badge near target" placement,
+ * with the 3D camera looking down meaning we float above rather than
+ * offsetting to the upper-right.
+ */
+export function attackBadgePosition(toCol, toRow, y = ATTACK_BADGE_Y) {
+  const { x, z } = hexToWorld(toCol, toRow);
+  return { x, y, z };
+}
 
 /** Plan ghost — translucent standee clone walking the planned path. */
 export const PLAN_GHOST_ALPHA          = 0.4;
