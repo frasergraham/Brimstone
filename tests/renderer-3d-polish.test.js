@@ -118,6 +118,88 @@ describe('Renderer3D polish — bridgeRotationY', () => {
     assert.equal(bridgeRotationY(null, new Map()), 0);
     assert.equal(bridgeRotationY({ col: 0, row: 0, type: TileType.BRIDGE }, null), 0);
   });
+
+  // ── Road-based orientation (2D parity) ────────────────────────────────────
+  // The 2D renderer (`src/renderer.js` _drawRoadLayer ≈L1951-1992) orients the
+  // bridge along its road exits, NOT directly off the water axis. The crossing
+  // pair is chosen by maximising perpendicularity-to-water. These tests lock
+  // in that the 3D helper mirrors the same selection.
+
+  // ── Road-based orientation (2D parity) ────────────────────────────────────
+  // The 2D renderer (`src/renderer.js` _drawRoadLayer ≈L1951-1992) orients the
+  // bridge along its road exits, NOT directly off the water axis. The crossing
+  // pair is chosen by maximising perpendicularity-to-water. These tests lock
+  // in that the 3D helper mirrors the same selection.
+
+  test('road exits drive orientation: plank long axis aligns with the road', () => {
+    // Bridge with river bending through NW→SW (water-avg ≈ west), road exits
+    // at NE and SE (both perpendicular-ish to the average water direction).
+    // The plank's long axis (+X) must align with the NE→SE line — which is
+    // straight north-south in world coords (both NE and SE neighbours of an
+    // even row share the same world x) → rotation.y = π/2.
+    const bridge = { col: 4, row: 4, type: TileType.BRIDGE };
+    bridge.roadDirs = new Set([hexKey(4, 3), hexKey(4, 5)]);
+    const w1 = { col: 3, row: 3, type: TileType.RIVER }; // NW
+    const w2 = { col: 3, row: 5, type: TileType.RIVER }; // SW
+    const r1 = { col: 4, row: 3, type: TileType.ROAD };  // NE
+    const r2 = { col: 4, row: 5, type: TileType.ROAD };  // SE
+    const tiles = buildTileMap([bridge, w1, w2, r1, r2]);
+
+    const rot = bridgeRotationY(bridge, tiles);
+    // Plank +X must lie along ±Z → cos(rot) ≈ 0.
+    assert.ok(Math.abs(Math.cos(rot)) < 1e-9,
+      `expected plank long-axis along road (±Z); rotation ${rot}`);
+  });
+
+  test('road logic differs from water-only logic when river curves', () => {
+    // Same NW→SW bending river as above, plus a road pair that the old
+    // water-only heuristic would orient incorrectly. Old logic took
+    // `bestPair.diff = (0, 3)` → rotation.y = atan2(3, 0) + π/2 = π → plank
+    // along ±X. New logic picks the road axis (NE↔SE) → ±Z. Different.
+    const bridge = { col: 4, row: 4, type: TileType.BRIDGE };
+    bridge.roadDirs = new Set([hexKey(4, 3), hexKey(4, 5)]);
+    const w1 = { col: 3, row: 3, type: TileType.RIVER };
+    const w2 = { col: 3, row: 5, type: TileType.RIVER };
+    const r1 = { col: 4, row: 3, type: TileType.ROAD };
+    const r2 = { col: 4, row: 5, type: TileType.ROAD };
+    const tiles = buildTileMap([bridge, w1, w2, r1, r2]);
+
+    const rot = bridgeRotationY(bridge, tiles);
+    // The OLD water-only result would be ~π (plank along ±X). The new road
+    // result is π/2 (along ±Z). |cos(π/2)| = 0; |cos(π)| = 1. Ensure we are
+    // NOT in the old regime.
+    assert.ok(Math.abs(Math.cos(rot)) < 0.1,
+      `road logic must override water-only (would be ~π); rotation ${rot}`);
+  });
+
+  test('no water + ≥2 road exits → most-opposing road pair (fallback)', () => {
+    const bridge = { col: 4, row: 4, type: TileType.BRIDGE };
+    bridge.roadDirs = new Set([hexKey(3, 4), hexKey(5, 4)]);
+    const r1 = { col: 3, row: 4, type: TileType.ROAD };
+    const r2 = { col: 5, row: 4, type: TileType.ROAD };
+    const tiles = buildTileMap([bridge, r1, r2]);
+
+    const rot = bridgeRotationY(bridge, tiles);
+    // r1↔r2 are opposite along ±X, so plank +X should align ±X → sin(rot)≈0.
+    assert.ok(Math.abs(Math.sin(rot)) < 1e-9,
+      `expected plank to align ±X for opposite road pair; rotation ${rot}`);
+  });
+
+  test('single road exit → falls back to water-perpendicular heuristic', () => {
+    // One road exit can't define a crossing axis; fall through to the
+    // water-based orientation. Water is horizontal (W, E neighbours), so the
+    // plank should align perpendicular to the river → along ±Z (cos≈0).
+    const bridge = { col: 4, row: 4, type: TileType.BRIDGE };
+    bridge.roadDirs = new Set([hexKey(4, 3)]);
+    const w1 = { col: 3, row: 4, type: TileType.RIVER };
+    const w2 = { col: 5, row: 4, type: TileType.RIVER };
+    const r1 = { col: 4, row: 3, type: TileType.ROAD };
+    const tiles = buildTileMap([bridge, w1, w2, r1]);
+
+    const rot = bridgeRotationY(bridge, tiles);
+    assert.ok(Math.abs(Math.cos(rot)) < 1e-9,
+      `single-road fallback should orient perpendicular to horizontal river; rotation ${rot}`);
+  });
 });
 
 // ── Plan ghost path computation (item 6) ────────────────────────────────────

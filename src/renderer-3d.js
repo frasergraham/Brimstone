@@ -4724,22 +4724,29 @@ export function planArrowBadgePosition(toCol, toRow, height = 1.0) {
 
 /**
  * Rotation (radians, around world Y) for a bridge plank so its long axis
- * crosses the river perpendicularly. Mirrors the 2D path's bridge-crossing
- * heuristic in `_drawRoadLayer`: find the two water neighbours most opposed
- * across the bridge hex, use the line between them as the river axis, and
- * orient the plank's long side perpendicular to that axis.
+ * follows the road that crosses the river through this hex. Mirrors the 2D
+ * renderer's `_drawRoadLayer` bridge-crossing-pair selection (see
+ * `src/renderer.js` ≈L1951-1992): the bridge's road axis is the line between
+ * the two *road exits* whose directions are most perpendicular to the
+ * river-neighbour direction. The plank's long axis (+X) is aligned with that
+ * road axis, so it visually sits along the road and across the water.
  *
- *   • 0 water neighbours → returns 0 (no rotation; nothing to perpend to).
- *   • 1 water neighbour  → uses the direction *to* that neighbour as the axis.
- *   • 2+ water neighbours → picks the most-opposing pair (dot product closest
- *     to -1) and uses the displacement between them as the axis.
+ *   • If the tile has ≥2 road exits (`tile.roadDirs`):
+ *     – With ≥1 water neighbour: pick the road-exit pair maximising the
+ *       sum of |cross-product| with the averaged water direction
+ *       (i.e. the pair most perpendicular to the river).
+ *     – With 0 water neighbours: pick the most-opposing pair
+ *       (lowest dot product) as a fallback.
+ *     The axis is the unit-direction difference between the chosen exits,
+ *     and `rotation.y = atan2(axisZ, axisX)` aligns the plank's +X to it.
+ *   • If the tile lacks road metadata (e.g. tests/headless without map gen)
+ *     fall back to the previous water-axis behaviour: orient the plank
+ *     perpendicular to the river direction (+π/2 offset).
+ *   • Returns 0 when no usable orientation cue exists.
  *
- * The plank's default geometry is `{ width: 1.7, depth: 0.7 }` — wide along X,
- * narrow along Z. Babylon's left-handed Y-up rotation.y rotates the +X axis
- * toward +Z (i.e. rotation.y = θ takes X → (cos θ, 0, sin θ)). We want the
- * plank's +X to land on the perpendicular direction, so:
- *
- *     rotation.y = atan2(axisZ, axisX) + π/2
+ * The plank's default geometry is `{ width: 1.7, depth: 0.7 }` — wide along
+ * +X, narrow along +Z. Babylon's left-handed Y-up rotation.y takes
+ * X → (cos θ, 0, sin θ).
  *
  * `tilesByKey` is a Map<hexKey, Tile> — typically the state's `tiles` map.
  * Exposed as a pure function so tests can lock down the math without Babylon.
@@ -4747,6 +4754,21 @@ export function planArrowBadgePosition(toCol, toRow, height = 1.0) {
 export function bridgeRotationY(tile, tilesByKey) {
   if (!tile || !tilesByKey) return 0;
   const here = hexToWorld(tile.col, tile.row);
+
+  // ── Road exits (mirrors 2D: tile.roadDirs is the source of truth) ──
+  const roadDirs = [];
+  if (tile.roadDirs && typeof tile.roadDirs[Symbol.iterator] === 'function') {
+    for (const k of tile.roadDirs) {
+      const nt = tilesByKey.get(k);
+      if (!nt) continue;
+      const there = hexToWorld(nt.col, nt.row);
+      const dx = there.x - here.x, dz = there.z - here.z;
+      const d  = Math.hypot(dx, dz) || 1;
+      roadDirs.push({ dx: dx / d, dz: dz / d });
+    }
+  }
+
+  // ── Water neighbours (RIVER + BRIDGE — rivers continue through bridges) ──
   const waterDirs = [];
   for (const n of getNeighbors(tile.col, tile.row)) {
     const nt = tilesByKey.get(hexKey(n.col, n.row));
@@ -4755,14 +4777,52 @@ export function bridgeRotationY(tile, tilesByKey) {
     const there = hexToWorld(n.col, n.row);
     waterDirs.push({ dx: there.x - here.x, dz: there.z - here.z });
   }
-  if (waterDirs.length === 0) return 0;
 
+  // ── Primary: 2D-style road-pair selection ──
+  if (roadDirs.length >= 2) {
+    let primaryA = 0, primaryB = 1;
+    if (waterDirs.length >= 1) {
+      // Averaged water direction (matches 2D bWaterNbrs sum/normalise).
+      let wdx = 0, wdz = 0;
+      for (const w of waterDirs) { wdx += w.dx; wdz += w.dz; }
+      const wl = Math.hypot(wdx, wdz) || 1;
+      wdx /= wl; wdz /= wl;
+      // Maximise summed |cross product| with water direction = most perpendicular pair.
+      let best = -Infinity;
+      for (let i = 0; i < roadDirs.length; i++) {
+        for (let j = i + 1; j < roadDirs.length; j++) {
+          const s = Math.abs(roadDirs[i].dx * wdz - roadDirs[i].dz * wdx)
+                  + Math.abs(roadDirs[j].dx * wdz - roadDirs[j].dz * wdx);
+          if (s > best) { best = s; primaryA = i; primaryB = j; }
+        }
+      }
+    } else {
+      // No water — most-opposing road exits (matches 2D fallback).
+      let minDot = Infinity;
+      for (let i = 0; i < roadDirs.length; i++) {
+        for (let j = i + 1; j < roadDirs.length; j++) {
+          const dot = roadDirs[i].dx * roadDirs[j].dx + roadDirs[i].dz * roadDirs[j].dz;
+          if (dot < minDot) { minDot = dot; primaryA = i; primaryB = j; }
+        }
+      }
+    }
+    // Plank long axis = difference between the two unit road directions
+    // (same as 2D `edgeMids[primaryB] − edgeMids[primaryA]` up to scale).
+    const axisX = roadDirs[primaryB].dx - roadDirs[primaryA].dx;
+    const axisZ = roadDirs[primaryB].dz - roadDirs[primaryA].dz;
+    if (Math.hypot(axisX, axisZ) > 1e-9) {
+      return Math.atan2(axisZ, axisX);
+    }
+    // (Degenerate: opposite road exits cancel — fall through to water heuristic.)
+  }
+
+  // ── Fallback: orient perpendicular to the river (original 3D behaviour) ──
+  if (waterDirs.length === 0) return 0;
   let axisX, axisZ;
   if (waterDirs.length === 1) {
     axisX = waterDirs[0].dx;
     axisZ = waterDirs[0].dz;
   } else {
-    // Pick the pair with the most-opposed unit vectors (lowest dot product).
     let bestDot = Infinity;
     let bestPair = [waterDirs[0], waterDirs[1]];
     for (let i = 0; i < waterDirs.length; i++) {
