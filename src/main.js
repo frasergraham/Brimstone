@@ -1032,7 +1032,8 @@ function _updateNodeDiscoveryDuringStep(gs, humanFaction, rend) {
       const isHuman = humanFaction === fac.id
         || (!humanFaction && gs.fogOfWar === 'none'); // no fog — show for everyone
       if (isHuman && rend) {
-        rend.addNodeRevealAnim(obj.hexes, obj.color ?? '#8800cc');
+        const nodeColor = obj.color ?? '#8800cc';
+        rend.addNodeDiscovered(obj.hexes, nodeColor, 'Power Node Discovered');
       }
     }
   }
@@ -1052,7 +1053,9 @@ function _updateNodeDiscoveryDuringStep(gs, humanFaction, rend) {
         const isHuman = humanFaction === 'hero'
           || (!humanFaction && gs.fogOfWar === 'none');
         if (isHuman && rend) {
-          rend.addNodeRevealAnim([{ col: mt.col, row: mt.row }], mt.color);
+          rend.addNodeDiscovered(
+            [{ col: mt.col, row: mt.row }], mt.color, 'Objective Discovered',
+          );
         }
       }
     }
@@ -1845,11 +1848,10 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         }
       }
 
-      // Gold expanding ring showing the 4-hex horn range
-      renderer.addNodeRevealAnim(
-        [{ col: actor.col, row: actor.row }], '#d4a72c',
-        { radiusMultiplier: 7, duration: 2000 },
-      );
+      // Gold expanding ring telegraphing the horn pulse. Renderer-agnostic
+      // hook — 2D paints a flat node-reveal ring, 3D builds a torus ring
+      // that scales outward; see `addSoundHorn` in both renderers.
+      renderer.addSoundHorn(actor.col, actor.row, '#d4a72c');
       redrawFn();
 
       // Wait for the horn animation to finish before showing dialogs
