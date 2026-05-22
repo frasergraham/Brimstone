@@ -40,7 +40,6 @@ function withSceneStubs(r) {
   r._scene = {};
   r._babylon = {};
   r._entityHexOutlines = new Map();
-  r._glowLayer = null; // no-op
   // Material lookups go through Babylon's StandardMaterial in the real code;
   // stub them so the recolour path (owner flip) doesn't try to build a real
   // material against the empty fake babylon namespace.
