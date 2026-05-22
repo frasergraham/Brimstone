@@ -1540,6 +1540,35 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   }
 }
 
+/* ── 3D camera controls ──────────────────────────────────────────────────
+   `body.renderer-3d` is set in main.js when the 3D renderer is selected.
+   We swap the 3D cluster in and hide the duplicated 2D zoom/rotate buttons
+   so the user sees ONE cluster of camera controls (the 3D one), plus the
+   non-camera buttons (fit, focus-me, speed) from the legacy cluster. */
+body.renderer-3d #camera-controls-3d {
+  display: flex !important;
+  /* Stack above #zoom-controls (which sits at bottom: 12px) so the two
+     clusters read as one column without overlapping. 7 buttons × (36px+4px)
+     = ~280px, plus a small gap. */
+  bottom: 200px;
+}
+body.renderer-3d #zoom-in,
+body.renderer-3d #zoom-out,
+body.renderer-3d #rotate-left,
+body.renderer-3d #rotate-right {
+  display: none;
+}
+/* Touch devices: hide the desktop-only rotate buttons (twist gesture covers
+   rotation on mobile, per the camera-controls spec). */
+@media (hover: none) and (pointer: coarse) {
+  .cam3d-desktop-only { display: none; }
+  body.renderer-3d #camera-controls-3d {
+    /* 4 buttons × (42px+4px) ≈ 184px — sits comfortably above the legacy
+       cluster's remaining 3 buttons (fit, focus, speed). */
+    bottom: 195px;
+  }
+}
+
 /* ── Chronicle toggle (top-left, independent of zoom controls) ─────────── */
 
 /* Shift map controls right when AI debug panel is open */

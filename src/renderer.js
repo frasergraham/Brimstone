@@ -121,6 +121,9 @@ export class Renderer {
     this.ctx     = canvas.getContext('2d');
     this.state   = state;
     this.hexSize = 30; // will be updated by _resize()
+    /** Parity flag with Renderer3D — false here so ui.js routes pan / pinch
+     *  through the 2D-canvas pathway. */
+    this.is3D    = false;
 
     this.selectedHex    = null;
     this.highlightHexes = [];
@@ -1048,6 +1051,7 @@ export class Renderer {
   // 3D-only operation; 2D camera has no rotation axes. Defined for interface
   // parity with Renderer3D so ui.js can wire rotate buttons unconditionally.
   rotateBy(_alphaDelta, _betaDelta) { /* no-op in 2D */ }
+  tiltBy(_betaDelta) { /* no-op in 2D */ }
 
   _clampPan() {
     const wrapper = this.canvas.parentElement;

@@ -215,6 +215,45 @@ export class UIController {
       this.renderer.rotateBy(rotateStep, 0);
       this.onRedraw();
     }, sig);
+    // ── 3D camera-controls cluster (#camera-controls-3d) ────────────────────
+    // Shown only on body.renderer-3d (CSS-driven). Each button hold-to-repeats
+    // at CAMERA_BUTTON_REPEAT_MS so tilt + rotate feel continuous. The bind
+    // helper attaches pointerdown / pointerup (with pointerleave fallback) so
+    // touch and mouse drive the same repeater.
+    const TILT_STEP = Math.PI / 60;           // ≈3° per tick (matches TILT_BUTTON_STEP)
+    const ROT_STEP  = Math.PI / 90;           // ≈2° per tick — finer than the click-step rotate buttons
+    const REPEAT_MS = 50;
+    const zoomFactorPerTick = Math.pow(zoomStep, 0.25); // ~5%/tick → 1.25 in ~5 ticks
+    const bindHoldToRepeat = (id, tickFn) => {
+      const el = this._el(id);
+      if (!el) return;
+      let timer = null;
+      const stop = () => { if (timer != null) { clearInterval(timer); timer = null; } };
+      const start = (ev) => {
+        ev.preventDefault();
+        // Fire once immediately, then repeat — single-tap users still get a tick.
+        tickFn();
+        this.onRedraw();
+        stop();
+        timer = setInterval(() => { tickFn(); this.onRedraw(); }, REPEAT_MS);
+      };
+      el.addEventListener('pointerdown', start, sig);
+      el.addEventListener('pointerup',     stop, sig);
+      el.addEventListener('pointercancel', stop, sig);
+      el.addEventListener('pointerleave',  stop, sig);
+    };
+    bindHoldToRepeat('cam3d-zoom-in',  () => {
+      const cx = this.canvas.width / 2, cy = this.canvas.height / 2;
+      this.renderer.setZoom(this.renderer.zoomLevel * zoomFactorPerTick, cx, cy);
+    });
+    bindHoldToRepeat('cam3d-zoom-out', () => {
+      const cx = this.canvas.width / 2, cy = this.canvas.height / 2;
+      this.renderer.setZoom(this.renderer.zoomLevel / zoomFactorPerTick, cx, cy);
+    });
+    bindHoldToRepeat('cam3d-tilt-up',   () => this.renderer.tiltBy?.(-TILT_STEP));
+    bindHoldToRepeat('cam3d-tilt-down', () => this.renderer.tiltBy?.( TILT_STEP));
+    bindHoldToRepeat('cam3d-rotate-left',  () => this.renderer.rotateBy(-ROT_STEP, 0));
+    bindHoldToRepeat('cam3d-rotate-right', () => this.renderer.rotateBy( ROT_STEP, 0));
     this._lastFitTapTime = 0;
     this._el('zoom-fit')?.addEventListener('click', () => {
       const now = Date.now();
@@ -283,6 +322,13 @@ export class UIController {
     }, sig);
 
     // Touch: tap, drag-to-pan, pinch-to-zoom (mobile)
+    //
+    // When the 3D renderer is active, drag-to-pan / pinch-to-zoom are owned
+    // by the custom camera input in renderer-3d.js (`_installCustomCameraInput`).
+    // We still need touchend → tap → _onClick for hex selection, so the
+    // touchstart/move/end handlers stay attached — they just skip the pan
+    // and pinch maths against `renderer._panX` / `setZoom` (those would
+    // double-apply on top of the 3D camera's own inertial accumulators).
     this.canvas.addEventListener('touchstart', e => {
       if (e.touches.length === 2) {
         this._pinchDist  = touchDist(e.touches[0], e.touches[1]);
@@ -300,6 +346,19 @@ export class UIController {
     this.canvas.addEventListener('touchmove', e => {
       e.preventDefault();
       if (this.renderer.viewLocked) return;
+      // 3D mode: pan / pinch live in renderer-3d's custom camera input. Just
+      // track whether the user has dragged far enough to suppress the tap.
+      if (this.renderer.is3D) {
+        if (e.touches.length === 1 && this._touchStart) {
+          const t = e.touches[0];
+          const total = Math.hypot(
+            t.clientX - this._touchStart.clientX,
+            t.clientY - this._touchStart.clientY
+          );
+          if (total > 10) this._isDragging = true;
+        }
+        return;
+      }
       if (e.touches.length === 2 && this._pinchDist !== null) {
         const newDist = touchDist(e.touches[0], e.touches[1]);
         const midCX  = (e.touches[0].clientX + e.touches[1].clientX) / 2;
@@ -519,7 +578,16 @@ export class UIController {
     if (this._mouseDown && this.renderer.viewLocked) {
       this._mouseDown = null; // release drag if view was locked mid-drag
     }
-    if (this._mouseDown) {
+    // 3D mode owns its own pan/rotate via renderer-3d's custom camera input
+    // (left-drag pans, right-drag rotates). Just track drag distance so a
+    // dragged-and-released click doesn't fire hex selection.
+    if (this._mouseDown && this.renderer.is3D) {
+      const dx = e.clientX - this._mouseDown.clientX;
+      const dy = e.clientY - this._mouseDown.clientY;
+      if (Math.hypot(dx, dy) > 5) {
+        this._didDragPan = true;
+      }
+    } else if (this._mouseDown) {
       const dx = e.clientX - this._mouseDown.clientX;
       const dy = e.clientY - this._mouseDown.clientY;
       if (Math.hypot(dx, dy) > 5) {

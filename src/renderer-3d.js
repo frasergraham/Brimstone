@@ -74,9 +74,31 @@ export const SELECTION_FOCUS_RADIUS = 14;
  *  clamped tilt range so the player can dip toward head-on or rise toward a
  *  bird's-eye view; the anchor remains "isometric" and the clamps stay safely
  *  inside (0, π/2) so the camera never points straight down or sees through
- *  the tile prisms horizontally. */
+ *  the tile prisms horizontally.
+ *
+ *  NOTE: superseded for the camera-controls overhaul by the absolute
+ *  CAMERA_BETA_MIN/MAX pair below. The deltas are still exported because
+ *  the existing camera-controls tests reference them; the camera itself
+ *  is clamped against the absolute pair via `clampTilt`. */
 export const CAMERA_BETA_LOWER_DELTA = 0.25; // ~14° toward head-on
 export const CAMERA_BETA_UPPER_DELTA = 0.15; // ~8.6° toward bird's-eye
+
+/** Absolute tilt (beta) clamp range used by the custom camera input + the
+ *  Tilt-up / Tilt-down buttons. 0.2π ≈ 36° (closer to head-on, still angled
+ *  enough that tile prisms read three-dimensionally) and 0.45π ≈ 81° (close
+ *  to bird's-eye without going dead-flat — flat-top hexes start to look like
+ *  flat hexagons rather than 3D blocks at exactly 90°). Both stay safely
+ *  inside (0, π/2) so the camera never flips under the map. */
+export const CAMERA_BETA_MIN = 0.20 * Math.PI;
+export const CAMERA_BETA_MAX = 0.45 * Math.PI;
+
+/** Tilt step (radians) applied per Tilt-up / Tilt-down button press. Pressed
+ *  buttons hold-to-repeat at TILT_REPEAT_MS, so this is per-tick, not the
+ *  total travel from one click. ≈3° per tick → comfortable ramp without
+ *  feeling laggy. */
+export const TILT_BUTTON_STEP = Math.PI / 60;
+/** Repeat cadence for hold-to-repeat tilt + rotate buttons (ms). */
+export const CAMERA_BUTTON_REPEAT_MS = 50;
 
 /** Camera radius at zoomLevel === 1.0. The 2D renderer expresses zoom as a
  *  unitless multiplier on hex size; the 3D camera works in ArcRotate `radius`.
@@ -113,6 +135,57 @@ export function clampRotation(currentAlpha, currentBeta, alphaDelta, betaDelta, 
   const alpha = currentAlpha + alphaDelta;
   const beta  = Math.max(betaMin, Math.min(betaMax, currentBeta + betaDelta));
   return { alpha, beta };
+}
+
+/** One-axis tilt clamp. Same maths as clampRotation's beta branch, broken out
+ *  so the buttons + the custom input share the exact clamp helper. */
+export function clampTilt(currentBeta, betaDelta, betaMin = CAMERA_BETA_MIN, betaMax = CAMERA_BETA_MAX) {
+  return Math.max(betaMin, Math.min(betaMax, currentBeta + betaDelta));
+}
+
+/** Distance between two pointer positions. Pure helper used by the two-finger
+ *  pinch path of the custom camera input. */
+export function pinchDistance(p1, p2) {
+  return Math.hypot(p2.x - p1.x, p2.y - p1.y);
+}
+
+/** Angle (radians) of the segment p1→p2, measured via atan2. Used by the
+ *  two-finger twist path: the difference between two such angles is the
+ *  rotation the user's fingers have swept since the previous frame. */
+export function pinchAngle(p1, p2) {
+  return Math.atan2(p2.y - p1.y, p2.x - p1.x);
+}
+
+/** Twist delta given previous and current pinch angles, normalised to
+ *  (-π, π]. Without normalisation a wraparound from +179° to -179° would
+ *  spin the camera nearly all the way around in a single frame; this helper
+ *  picks the short way round so two-finger rotation stays continuous through
+ *  the discontinuity at ±π. */
+export function twistDelta(prevAngle, currAngle) {
+  let d = currAngle - prevAngle;
+  // Normalise to (-π, π].
+  while (d >  Math.PI) d -= 2 * Math.PI;
+  while (d < -Math.PI) d += 2 * Math.PI;
+  return d;
+}
+
+/** Clamp a camera pan target so it can't roam beyond the map's XZ extents.
+ *  Returns a new {x, y, z} object — does not mutate the input. `margin` is
+ *  in world units, applied uniformly outside the map bounds (so the player
+ *  can frame the edge tiles with a little breathing room).
+ *
+ *  Pure helper — Babylon-free, so it's unit-testable. */
+export function clampPanTarget(target, bounds, margin = 0) {
+  if (!target || !bounds) return target;
+  const minX = bounds.minX - margin;
+  const maxX = bounds.maxX + margin;
+  const minZ = bounds.minZ - margin;
+  const maxZ = bounds.maxZ + margin;
+  return {
+    x: Math.max(minX, Math.min(maxX, target.x)),
+    y: target.y ?? 0,
+    z: Math.max(minZ, Math.min(maxZ, target.z)),
+  };
 }
 
 const SQRT3 = Math.sqrt(3);
@@ -290,6 +363,9 @@ export class Renderer3D {
   constructor(canvas, state) {
     this.canvas = canvas;
     this.state  = state;
+    /** Flag inspected by ui.js so it can bypass 2D-specific drag-pan / pinch
+     *  handlers that would otherwise fight the custom 3D camera input. */
+    this.is3D   = true;
 
     // ── Interface property slots (read/written by main.js and ui.js) ────────
     this.onImagesLoaded     = null;
@@ -637,11 +713,25 @@ export class Renderer3D {
     if (this.viewLocked) return;
     const camera = this._camera;
     if (!camera) return;
-    const betaMin = camera.lowerBetaLimit ?? (this._lockedBeta - CAMERA_BETA_LOWER_DELTA);
-    const betaMax = camera.upperBetaLimit ?? (this._lockedBeta + CAMERA_BETA_UPPER_DELTA);
+    const betaMin = camera.lowerBetaLimit ?? CAMERA_BETA_MIN;
+    const betaMax = camera.upperBetaLimit ?? CAMERA_BETA_MAX;
     const { alpha, beta } = clampRotation(camera.alpha, camera.beta, alphaDelta, betaDelta, betaMin, betaMax);
     camera.alpha = alpha;
     camera.beta  = beta;
+  }
+
+  /** Tilt the camera by a beta delta, clamped to the absolute tilt range.
+   *  Driven by the Tilt-up / Tilt-down buttons (which hold-to-repeat at
+   *  CAMERA_BUTTON_REPEAT_MS). Negative delta = tilt up (toward bird's-eye);
+   *  positive delta = tilt down (toward head-on). No-op until Babylon has
+   *  initialised. */
+  tiltBy(betaDelta) {
+    if (this.viewLocked) return;
+    const camera = this._camera;
+    if (!camera) return;
+    const betaMin = camera.lowerBetaLimit ?? CAMERA_BETA_MIN;
+    const betaMax = camera.upperBetaLimit ?? CAMERA_BETA_MAX;
+    camera.beta = clampTilt(camera.beta, betaDelta, betaMin, betaMax);
   }
 
   /** Refit the whole map. Animates target+radius via `frameHexes`; deliberately
@@ -790,46 +880,44 @@ export class Renderer3D {
       BABYLON.Vector3.Zero(),
       scene,
     );
-    camera.attachControl(this.canvas, true);
+    // Camera-controls overhaul (t-0bd3e8c2): we deliberately skip Babylon's
+    // built-in `camera.attachControl(canvas, true)` and replace the default
+    // pointer/wheel inputs with `_installCustomCameraInput` below. Babylon's
+    // defaults bake in 1-finger-rotate, which tested poorly on mobile — the
+    // operator's iPhone playtest of #321 called it "wonky". The custom input
+    // maps 1-pointer → pan, 2-pointer → simultaneous pinch + twist (the new
+    // mobile gesture spec), and right-mouse-drag → rotate alpha on desktop.
 
-    // Yaw (alpha) is unbounded — left-mouse drag rotates around the vertical
-    // axis. Tilt (beta) is clamped around the isometric anchor so the player
-    // can dip closer to head-on or rise to a more bird's-eye view, but can't
-    // flip the board to look up from below or stare straight down. We rotate
-    // the *camera*, not `mapRoot`, so world-space stays stable for picking +
-    // `hexToCanvasPos` projection (see the note on hexToCanvasPos).
+    // Yaw (alpha) is unbounded — right-mouse / button-driven rotation spins
+    // the camera around the vertical axis. Tilt (beta) is clamped to the
+    // absolute CAMERA_BETA_MIN/MAX range so the camera can't flip under the
+    // map or stare dead-flat. We rotate the *camera*, not `mapRoot`, so
+    // world-space stays stable for picking + `hexToCanvasPos` projection
+    // (see the note on hexToCanvasPos).
     camera.lowerAlphaLimit = null;
     camera.upperAlphaLimit = null;
-    camera.lowerBetaLimit  = this._lockedBeta - CAMERA_BETA_LOWER_DELTA;
-    camera.upperBetaLimit  = this._lockedBeta + CAMERA_BETA_UPPER_DELTA;
+    camera.lowerBetaLimit  = CAMERA_BETA_MIN;
+    camera.upperBetaLimit  = CAMERA_BETA_MAX;
 
     // Zoom limits — close enough to see a single tile clearly, far enough to
     // hold a Campaign-size map without flying outside the scene.
     camera.lowerRadiusLimit = 4;
     camera.upperRadiusLimit = 80;
-    camera.wheelDeltaPercentage = 0.02; // smoother wheel zoom
+    camera.wheelDeltaPercentage = 0.02; // smoother wheel zoom (legacy default — wheel handled by custom input)
     camera.pinchDeltaPercentage = 0.005;
 
-    // Pan controls. Babylon's ArcRotateCamera pans the target on the
-    // camera-plane; the lower the panningSensibility the *faster* the pan.
-    // 250 is brisk without feeling twitchy on a trackpad.
+    // Pan controls. Babylon's ArcRotateCamera still consumes inertialPanningX/Y
+    // in its per-frame update even without attached inputs; the custom input
+    // writes to those accumulators so the existing panningSensibility /
+    // panningInertia tuning still applies.
     camera.panningSensibility = 250;
     camera.panningInertia     = 0.85;
-    // RMB drag pans by default; allow LMB to also pan since the renderer
-    // doesn't yet wire selection picking.
     camera.useBouncingBehavior = false;
 
-    // Round 4: swap touch gestures so the board feels like a map app —
-    // single-finger drag pans, two-finger gestures rotate + pinch-zoom.
-    // Babylon's default (single-finger rotate, two-finger pan+zoom) reads as
-    // a 3D-viewer convention but tested poorly on mobile where players
-    // expected map-style panning.
-    //
-    // Implementation: we monkey-patch the bound `onTouch` / `onMultiTouch`
-    // methods on the camera's pointers input. Desktop mouse behaviour is
-    // preserved (we sniff `point.pointerType` and only swap for touch).
-    this._installMobileGestureSwap(camera, BABYLON);
-    this._installTrackpadRotateInput(camera);
+    // Install the custom input — one capture-phase pointer + wheel handler set
+    // covering both mobile and desktop. Babylon's default `pointers` input is
+    // never attached, so there's nothing to detach.
+    this._installCustomCameraInput(camera);
 
     const light = new BABYLON.HemisphericLight('hemi', new BABYLON.Vector3(0, 1, 0.3), scene);
     light.intensity = 0.95;
@@ -874,117 +962,184 @@ export class Renderer3D {
   }
 
   /**
-   * Round 4 mobile gesture swap. The default ArcRotateCameraPointersInput
-   * does single-finger-rotate / two-finger-pan-and-zoom; we want the inverse
-   * for touch (single-finger pan, two-finger rotate, pinch-zoom unchanged).
-   * Mouse input is left untouched: we sniff `point.pointerType` in onTouch
-   * and only divert when the pointer is a touch.
+   * Custom camera input — replaces Babylon's default ArcRotateCamera pointer
+   * + wheel inputs. Single capture-phase listener set on the canvas covers
+   * mobile (touch) and desktop (mouse + wheel) with the gesture spec from
+   * t-0bd3e8c2:
    *
-   * Public-method override is brittle if Babylon changes its internal Math
-   * later, but this is the only practical hook — they don't expose a flag
-   * for the swap. If a future Babylon upgrade regresses, this method is
-   * easy to gut.
+   *   Mobile / touch:
+   *     • 1 finger drag        → pan (writes inertialPanningX/Y)
+   *     • 2 finger pinch+twist → simultaneous radius + alpha update
+   *     • NO 1-finger rotate, NO 3-finger tilt — buttons cover tilt on mobile
+   *
+   *   Desktop / mouse:
+   *     • Wheel                → zoom (radius)
+   *     • Left-drag            → pan (parity with mobile 1-finger)
+   *     • Right-drag           → rotate alpha (and tilt beta on vertical)
+   *
+   * Wires straight to the camera's inertial accumulators so Babylon's
+   * panningSensibility / inertia / radius limits all still apply. Pan extent
+   * clamping happens in `_onBeforeRender` (see the clampPanTarget call) since
+   * inertia carries the target a few frames past the pointer-up event.
    */
-  _installMobileGestureSwap(camera, BABYLON) {
-    const ptr = camera?.inputs?.attached?.pointers;
-    if (!ptr) return;
-    const originalOnTouch = ptr.onTouch?.bind(ptr);
-    ptr.onTouch = function (point, offsetX, offsetY) {
-      // Pointer type unknown OR mouse → keep Babylon's default behaviour.
-      if (!point || (point.pointerType && point.pointerType !== 'touch')) {
-        if (originalOnTouch) originalOnTouch(point, offsetX, offsetY);
-        return;
-      }
-      // Single-finger touch: pan instead of rotate.
-      // The signs here mirror Babylon's internal panning math so the gesture
-      // direction matches what the user's finger does.
-      this.camera.inertialPanningX += -offsetX / (this.panningSensibility || 1);
-      this.camera.inertialPanningY += offsetY / (this.panningSensibility || 1);
-    };
-    // Two-finger gestures: rotate yaw/pitch instead of panning, keep pinch
-    // zoom enabled. We compute rotation from the *average* movement of the
-    // two touch points (multiTouchPanPosition tracks the midpoint each frame).
-    ptr.multiTouchPanning      = false;
-    ptr.multiTouchPanAndZoom   = false;
-    ptr.onMultiTouch = function (
-      pointA, pointB,
-      previousPinchSquaredDistance, pinchSquaredDistance,
-      previousMultiTouchPanPosition, multiTouchPanPosition,
-    ) {
-      // Pinch zoom — same formula Babylon uses internally; lifted directly so
-      // the feel matches the default.
-      if (previousPinchSquaredDistance !== 0 && pinchSquaredDistance !== 0) {
-        const pinchDelta = (pinchSquaredDistance - previousPinchSquaredDistance)
-          * (this.pinchPrecision || 12) / (this.angularSensibilityX * 1000);
-        this.camera.inertialRadiusOffset -= pinchDelta;
-      }
-      // Two-finger drag → rotate the camera. dx/dy is the midpoint travel
-      // since the previous frame; we feed it into the same alpha/beta
-      // accumulators the single-touch path used to feed.
-      if (previousMultiTouchPanPosition && multiTouchPanPosition) {
-        const dx = multiTouchPanPosition.x - previousMultiTouchPanPosition.x;
-        const dy = multiTouchPanPosition.y - previousMultiTouchPanPosition.y;
-        this.camera.inertialAlphaOffset -= dx / (this.angularSensibilityX || 1000);
-        this.camera.inertialBetaOffset  -= dy / (this.angularSensibilityY || 1000);
-      }
-    };
-  }
-
-  /**
-   * Desktop trackpad two-finger swipes arrive as `wheel` events with non-zero
-   * deltaX (purely vertical mouse-wheel ticks have deltaX === 0). Babylon's
-   * default `ArcRotateCameraMouseWheelInput` only zooms on deltaY, which means
-   * horizontal two-finger swipes do nothing and vertical swipes zoom — neither
-   * matches a "drag the camera's view direction" feel.
-   *
-   * This handler intercepts wheel events in capture phase and routes them as:
-   *   • ctrlKey set (synthetic, Mac trackpad pinch)      → zoom (radius)
-   *   • shiftKey set                                     → rotate both axes
-   *   • non-zero deltaX (trackpad two-finger swipe)      → rotate both axes
-   *   • pure deltaY (mouse wheel or vertical scroll)     → fall through to Babylon's zoom
-   *
-   * Horizontal swipe → alpha (yaw); vertical swipe → beta (clamped). Both axes
-   * move at once on diagonal swipes, which is the requested "view direction"
-   * behaviour. We `preventDefault` on the cases we handle so Babylon's wheel
-   * input doesn't double-process the event.
-   */
-  _installTrackpadRotateInput(camera) {
+  _installCustomCameraInput(camera) {
     if (!this.canvas || typeof this.canvas.addEventListener !== 'function') return;
-    // Sensitivity: 1px of deltaX rotates alpha by this many radians. ≈3° per
-    // 30px of trackpad travel — gentle enough not to whip the camera around.
-    const ALPHA_PER_PIXEL = 0.005;
-    const BETA_PER_PIXEL  = 0.005;
-    // Mac trackpad pinch synthesises wheel events with ctrlKey=true; treat
-    // those as zoom (radius adjust) and scale modestly.
-    const PINCH_RADIUS_PER_DELTA = 0.05;
 
-    this._onWheelRotate = (event) => {
+    // Active pointer tracking: pointerId → { x, y, type, button, prevX, prevY }.
+    // Touch pinch/twist needs the previous frame's positions to compute deltas.
+    const pointers = new Map();
+    this._customInputPointers = pointers;
+    // Two-finger gesture state — primed on the second pointerdown, used and
+    // reset on pointerup/cancel.
+    let lastPinchDist  = 0;
+    let lastPinchAngle = 0;
+
+    // Sensitivity knobs — tuned to the operator's iPhone playtest. Pan uses
+    // panningSensibility (Babylon convention: lower number = faster). Twist
+    // applies the raw radian delta directly (1px-of-rotation = 1px). Pinch
+    // converts a "fingers spread by X px" gesture into a radius delta.
+    const PINCH_RADIUS_PER_PX  = 0.04;  // 25px spread = 1 radius unit
+    const ALPHA_PER_PIXEL      = 0.006; // right-drag rotate yaw
+    const BETA_PER_PIXEL       = 0.006; // right-drag tilt
+    const WHEEL_RADIUS_PER_DEL = 0.05;  // mouse wheel zoom
+
+    const isTouchPoint = (p) => p && p.type === 'touch';
+
+    const applySinglePan = (entry, dx, dy) => {
+      if (this.viewLocked) return;
+      const sens = camera.panningSensibility || 1;
+      camera.inertialPanningX += -dx / sens;
+      camera.inertialPanningY +=  dy / sens;
+    };
+
+    const applyTwoFingerGesture = (entries) => {
+      if (this.viewLocked) return;
+      const [a, b] = entries;
+      const newDist  = pinchDistance(a, b);
+      const newAngle = pinchAngle(a, b);
+      if (lastPinchDist > 0) {
+        const dDist = newDist - lastPinchDist;
+        // Spread fingers (newDist > lastPinchDist) → zoom in → radius shrinks.
+        camera.inertialRadiusOffset -= dDist * PINCH_RADIUS_PER_PX;
+      }
+      if (lastPinchAngle !== 0 || lastPinchDist > 0) {
+        const dAngle = twistDelta(lastPinchAngle, newAngle);
+        // Twist sign convention: clockwise finger rotation spins the camera
+        // clockwise (alpha decreases) — matches "I'm rotating the board".
+        camera.inertialAlphaOffset -= dAngle;
+      }
+      lastPinchDist  = newDist;
+      lastPinchAngle = newAngle;
+    };
+
+    const applyRightDragRotate = (entry, dx, dy) => {
+      if (this.viewLocked) return;
+      camera.inertialAlphaOffset += dx * ALPHA_PER_PIXEL;
+      camera.inertialBetaOffset  += dy * BETA_PER_PIXEL;
+    };
+
+    this._onCustomPointerDown = (e) => {
+      // We capture the pointer so move/up still fire if the user drags off-
+      // canvas; this is important for the buttons row at the bottom edge.
+      try { this.canvas.setPointerCapture?.(e.pointerId); } catch { /* ignore */ }
+      pointers.set(e.pointerId, {
+        id: e.pointerId,
+        x:  e.clientX,
+        y:  e.clientY,
+        prevX: e.clientX,
+        prevY: e.clientY,
+        type: e.pointerType,
+        button: e.button,
+      });
+      // Reset two-finger state when the second finger lands so the first
+      // frame's deltas don't snap-rotate the camera.
+      if (pointers.size === 2) {
+        const arr = [...pointers.values()];
+        lastPinchDist  = pinchDistance(arr[0], arr[1]);
+        lastPinchAngle = pinchAngle(arr[0], arr[1]);
+      } else if (pointers.size > 2) {
+        // 3+ pointers — ignore extras; the spec is explicit about no 3-finger
+        // tilt. Wipe two-finger state so the recent extras don't drive twist.
+        lastPinchDist  = 0;
+        lastPinchAngle = 0;
+      }
+    };
+
+    this._onCustomPointerMove = (e) => {
+      const entry = pointers.get(e.pointerId);
+      if (!entry) return; // pointer never went down inside the canvas
+      entry.prevX = entry.x;
+      entry.prevY = entry.y;
+      entry.x = e.clientX;
+      entry.y = e.clientY;
+
+      const active = [...pointers.values()];
+      if (active.length === 1) {
+        const p = active[0];
+        const dx = p.x - p.prevX;
+        const dy = p.y - p.prevY;
+        if (isTouchPoint(p)) {
+          // 1-finger touch = pan (no 1-finger rotate, per spec).
+          applySinglePan(p, dx, dy);
+          e.preventDefault();
+        } else if (p.type === 'mouse') {
+          if (p.button === 0) {
+            applySinglePan(p, dx, dy);
+            e.preventDefault();
+          } else if (p.button === 2) {
+            applyRightDragRotate(p, dx, dy);
+            e.preventDefault();
+          }
+        }
+      } else if (active.length === 2) {
+        applyTwoFingerGesture(active);
+        e.preventDefault();
+      }
+    };
+
+    this._onCustomPointerUp = (e) => {
+      pointers.delete(e.pointerId);
+      try { this.canvas.releasePointerCapture?.(e.pointerId); } catch { /* ignore */ }
+      // Drop two-finger state on transition back to fewer pointers — the next
+      // 2-finger gesture re-primes on the second pointerdown.
+      if (pointers.size < 2) {
+        lastPinchDist  = 0;
+        lastPinchAngle = 0;
+      }
+    };
+
+    this._onCustomContextMenu = (e) => {
+      // Suppress the browser context menu so right-drag works smoothly.
+      e.preventDefault();
+    };
+
+    this._onCustomWheel = (e) => {
       if (this.viewLocked) return;
       const cam = this._camera;
       if (!cam) return;
-
-      const dx = event.deltaX || 0;
-      const dy = event.deltaY || 0;
-
-      if (event.ctrlKey) {
-        event.preventDefault();
-        const newRadius = Math.max(
-          cam.lowerRadiusLimit ?? 4,
-          Math.min(cam.upperRadiusLimit ?? 80, cam.radius + dy * PINCH_RADIUS_PER_DELTA),
-        );
-        cam.radius = newRadius;
-        this.zoomLevel = radiusToZoom(newRadius);
-        return;
-      }
-
-      const wantsRotate = event.shiftKey || dx !== 0;
-      if (!wantsRotate) return; // pure deltaY mouse wheel → let Babylon zoom
-
-      event.preventDefault();
-      this.rotateBy(dx * ALPHA_PER_PIXEL, dy * BETA_PER_PIXEL);
+      e.preventDefault();
+      // ctrlKey is set by Mac trackpad pinch — treat the same as a wheel zoom
+      // (the gesture's natural direction matches deltaY's sign).
+      const dy = e.deltaY || 0;
+      const newRadius = Math.max(
+        cam.lowerRadiusLimit ?? 4,
+        Math.min(cam.upperRadiusLimit ?? 80, cam.radius + dy * WHEEL_RADIUS_PER_DEL),
+      );
+      cam.radius = newRadius;
+      this.zoomLevel = radiusToZoom(newRadius);
     };
 
-    this.canvas.addEventListener('wheel', this._onWheelRotate, { passive: false, capture: true });
+    const optsCap = { capture: true, passive: false };
+    this.canvas.addEventListener('pointerdown',   this._onCustomPointerDown,   optsCap);
+    this.canvas.addEventListener('pointermove',   this._onCustomPointerMove,   optsCap);
+    this.canvas.addEventListener('pointerup',     this._onCustomPointerUp,     optsCap);
+    this.canvas.addEventListener('pointercancel', this._onCustomPointerUp,     optsCap);
+    this.canvas.addEventListener('pointerleave',  this._onCustomPointerUp,     optsCap);
+    this.canvas.addEventListener('contextmenu',   this._onCustomContextMenu,   optsCap);
+    this.canvas.addEventListener('wheel',         this._onCustomWheel,         optsCap);
+    // Stop the touch-action default so scrollback / pull-to-refresh doesn't
+    // hijack a vertical pan on iOS Safari.
+    if (this.canvas.style) this.canvas.style.touchAction = 'none';
   }
 
   // ─── Map construction ────────────────────────────────────────────────────
@@ -1016,6 +1171,14 @@ export class Renderer3D {
     // Frame the playable area with darker hex prisms on every off-map
     // neighbour position. Static like the road/river networks.
     this._buildEdgeFrame();
+    // Cache map bounds in world-space XZ for the pan clamp (consumed by
+    // _onBeforeRender → clampPanTarget). One-shot — map topology is immutable
+    // once the game starts.
+    const allHexes = [];
+    for (const tile of this.state.tiles.values()) {
+      allHexes.push({ col: tile.col, row: tile.row });
+    }
+    this._mapPanBounds = computeMapBounds(allHexes);
     this._mapBuilt = true;
   }
 
@@ -2768,6 +2931,22 @@ export class Renderer3D {
    *  even when game state is idle. */
   _onBeforeRender() {
     const now = this._nowMs();
+    // Pan extent clamp — runs every frame so inertial overshoot past the map
+    // edge is corrected by the next render. Margin = 2 hex-radii so the player
+    // can frame the very edge tiles with a tiny bit of breathing room without
+    // being able to pan into the void.
+    if (this._camera && this._mapPanBounds) {
+      const t = this._camera.target;
+      const clamped = clampPanTarget(t, this._mapPanBounds, 2);
+      // Mutate in place — Babylon's ArcRotateCamera tracks `target` by ref.
+      if (t.x !== clamped.x || t.z !== clamped.z) {
+        t.x = clamped.x;
+        t.z = clamped.z;
+        // Kill inertial pan so we don't keep crashing against the wall.
+        this._camera.inertialPanningX = 0;
+        this._camera.inertialPanningY = 0;
+      }
+    }
     // Phase-light interpolation.
     const t = this._phaseTransition;
     if (t) {

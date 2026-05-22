@@ -14,6 +14,15 @@ import {
   clampRotation,
   CAMERA_BETA_LOWER_DELTA,
   CAMERA_BETA_UPPER_DELTA,
+  CAMERA_BETA_MIN,
+  CAMERA_BETA_MAX,
+  TILT_BUTTON_STEP,
+  CAMERA_BUTTON_REPEAT_MS,
+  clampTilt,
+  pinchDistance,
+  pinchAngle,
+  twistDelta,
+  clampPanTarget,
 } from '../src/renderer-3d.js';
 import { Renderer }   from '../src/renderer.js';
 import { Renderer3D } from '../src/renderer-3d.js';
@@ -186,5 +195,203 @@ describe('Renderer interface — rotateBy on both classes', () => {
     // Same arity expectation — both take 2 params for parity.
     assert.equal(Renderer.prototype.rotateBy.length, 2);
     assert.equal(Renderer3D.prototype.rotateBy.length, 2);
+  });
+});
+
+// ── Camera-controls overhaul (t-0bd3e8c2) ──────────────────────────────────
+// Pure-helper tests for the math driving the custom Babylon camera input.
+// Babylon-free imports so they run in node-test without a browser context.
+
+describe('CAMERA_BETA_MIN / CAMERA_BETA_MAX — absolute tilt range', () => {
+  test('min sits at ≈0.2π (close to head-on, still angled)', () => {
+    assert.ok(Math.abs(CAMERA_BETA_MIN - 0.20 * Math.PI) < 1e-9);
+  });
+  test('max sits at ≈0.45π (close to bird\'s-eye without flat-flat)', () => {
+    assert.ok(Math.abs(CAMERA_BETA_MAX - 0.45 * Math.PI) < 1e-9);
+  });
+  test('range stays inside (0, π/2) — camera never flips under the map', () => {
+    assert.ok(CAMERA_BETA_MIN > 0);
+    assert.ok(CAMERA_BETA_MAX < Math.PI / 2);
+    assert.ok(CAMERA_BETA_MIN < CAMERA_BETA_MAX);
+  });
+  test('legacy delta constants are still exported (back-compat with older tests)', () => {
+    assert.equal(typeof CAMERA_BETA_LOWER_DELTA, 'number');
+    assert.equal(typeof CAMERA_BETA_UPPER_DELTA, 'number');
+  });
+  test('TILT_BUTTON_STEP is a sensible per-tick nudge (< 10°)', () => {
+    const deg = TILT_BUTTON_STEP * 180 / Math.PI;
+    assert.ok(deg > 0 && deg < 10, `TILT_BUTTON_STEP=${deg}° outside (0, 10°)`);
+  });
+  test('CAMERA_BUTTON_REPEAT_MS is in a sensible range for hold-to-repeat', () => {
+    assert.ok(CAMERA_BUTTON_REPEAT_MS >= 16 && CAMERA_BUTTON_REPEAT_MS <= 200);
+  });
+});
+
+describe('clampTilt — one-axis beta clamp shared by buttons + custom input', () => {
+  test('within range: delta passes through', () => {
+    assert.equal(clampTilt(CAMERA_BETA_MIN + 0.1, 0.05), CAMERA_BETA_MIN + 0.15);
+  });
+  test('huge positive delta clamps to betaMax', () => {
+    assert.equal(clampTilt(CAMERA_BETA_MIN, 10), CAMERA_BETA_MAX);
+  });
+  test('huge negative delta clamps to betaMin', () => {
+    assert.equal(clampTilt(CAMERA_BETA_MAX, -10), CAMERA_BETA_MIN);
+  });
+  test('uses default CAMERA_BETA_MIN/MAX when no explicit bounds passed', () => {
+    assert.equal(clampTilt(CAMERA_BETA_MIN - 1, 0), CAMERA_BETA_MIN);
+    assert.equal(clampTilt(CAMERA_BETA_MAX + 1, 0), CAMERA_BETA_MAX);
+  });
+  test('accepts explicit clamp range (so the custom input can use the camera\'s configured limits)', () => {
+    assert.equal(clampTilt(0.5, 0.5, 0.0, 1.0), 1.0);
+    assert.equal(clampTilt(0.5, -0.5, 0.2, 0.8), 0.2);
+  });
+});
+
+describe('pinchDistance / pinchAngle — two-pointer geometry helpers', () => {
+  test('pinchDistance: zero between identical points', () => {
+    assert.equal(pinchDistance({ x: 5, y: 5 }, { x: 5, y: 5 }), 0);
+  });
+  test('pinchDistance: 3-4-5 triangle', () => {
+    assert.equal(pinchDistance({ x: 0, y: 0 }, { x: 3, y: 4 }), 5);
+  });
+  test('pinchDistance is order-independent', () => {
+    const a = { x: 1, y: 2 }, b = { x: 4, y: 6 };
+    assert.equal(pinchDistance(a, b), pinchDistance(b, a));
+  });
+  test('pinchAngle: pure +X = 0 radians', () => {
+    assert.equal(pinchAngle({ x: 0, y: 0 }, { x: 1, y: 0 }), 0);
+  });
+  test('pinchAngle: pure +Y = π/2', () => {
+    assert.ok(Math.abs(pinchAngle({ x: 0, y: 0 }, { x: 0, y: 1 }) - Math.PI / 2) < 1e-9);
+  });
+  test('pinchAngle is order-flipped → π offset', () => {
+    const f = pinchAngle({ x: 0, y: 0 }, { x: 1, y: 1 });
+    const r = pinchAngle({ x: 1, y: 1 }, { x: 0, y: 0 });
+    assert.ok(Math.abs(Math.abs(f - r) - Math.PI) < 1e-9);
+  });
+});
+
+describe('twistDelta — atan2-based rotation between frames, wrap-safe', () => {
+  test('zero when angles match', () => {
+    assert.equal(twistDelta(1.0, 1.0), 0);
+  });
+  test('small positive delta passes through', () => {
+    assert.ok(Math.abs(twistDelta(0.5, 0.7) - 0.2) < 1e-9);
+  });
+  test('small negative delta passes through', () => {
+    assert.ok(Math.abs(twistDelta(0.7, 0.5) - (-0.2)) < 1e-9);
+  });
+  test('wraparound from +179° to -179° = -2° (the short way round)', () => {
+    const prev = (179 / 180) * Math.PI;
+    const curr = (-179 / 180) * Math.PI;
+    const d = twistDelta(prev, curr);
+    const degrees = d * 180 / Math.PI;
+    assert.ok(Math.abs(degrees - 2) < 0.01,
+      `expected ≈ +2° (short way), got ${degrees}°`);
+  });
+  test('wraparound from -179° to +179° = -2° (still short way)', () => {
+    const prev = (-179 / 180) * Math.PI;
+    const curr = (179 / 180) * Math.PI;
+    const d = twistDelta(prev, curr);
+    const degrees = d * 180 / Math.PI;
+    assert.ok(Math.abs(degrees + 2) < 0.01,
+      `expected ≈ -2° (short way), got ${degrees}°`);
+  });
+  test('result is always in (-π, π]', () => {
+    for (let i = 0; i < 100; i++) {
+      const prev = (Math.random() - 0.5) * 4 * Math.PI;
+      const curr = (Math.random() - 0.5) * 4 * Math.PI;
+      const d = twistDelta(prev, curr);
+      assert.ok(d > -Math.PI - 1e-9 && d <= Math.PI + 1e-9,
+        `out-of-range result ${d}`);
+    }
+  });
+});
+
+describe('clampPanTarget — keeps camera.target within map XZ bounds', () => {
+  const bounds = { minX: -10, maxX: 10, minZ: -8, maxZ: 8 };
+
+  test('target inside bounds passes through unchanged', () => {
+    const out = clampPanTarget({ x: 3, y: 0, z: -2 }, bounds);
+    assert.deepEqual(out, { x: 3, y: 0, z: -2 });
+  });
+  test('target past +X edge is clamped to maxX', () => {
+    const out = clampPanTarget({ x: 999, y: 0, z: 0 }, bounds);
+    assert.equal(out.x, 10);
+  });
+  test('target past -Z edge is clamped to minZ', () => {
+    const out = clampPanTarget({ x: 0, y: 0, z: -999 }, bounds);
+    assert.equal(out.z, -8);
+  });
+  test('margin widens the allowed range symmetrically', () => {
+    const out = clampPanTarget({ x: 999, y: 0, z: 999 }, bounds, 5);
+    assert.equal(out.x, 15);
+    assert.equal(out.z, 13);
+  });
+  test('preserves y unchanged (only XZ is clamped)', () => {
+    const out = clampPanTarget({ x: 999, y: 42, z: -999 }, bounds);
+    assert.equal(out.y, 42);
+  });
+  test('does not mutate the input target', () => {
+    const input = { x: 999, y: 0, z: 999 };
+    clampPanTarget(input, bounds);
+    assert.equal(input.x, 999, 'input.x should be untouched');
+    assert.equal(input.z, 999, 'input.z should be untouched');
+  });
+  test('null bounds → target returned as-is (graceful fallback before _buildMap)', () => {
+    const t = { x: 5, y: 0, z: 5 };
+    assert.equal(clampPanTarget(t, null), t);
+  });
+});
+
+describe('Renderer3D — is3D flag + tiltBy method', () => {
+  test('Renderer3D instances expose is3D = true (ui.js uses this to bypass 2D drag)', () => {
+    const fakeCanvas = { parentElement: null, width: 800, height: 600, addEventListener() {} };
+    const inst = new Renderer3D(fakeCanvas, {});
+    assert.equal(inst.is3D, true);
+  });
+  test('2D Renderer instances expose is3D = false', () => {
+    const fakeCanvas = { getContext() { return {}; }, addEventListener() {}, width: 800, height: 600 };
+    const inst = new Renderer(fakeCanvas, {});
+    assert.equal(inst.is3D, false);
+  });
+  test('Renderer3D.tiltBy without camera is a safe no-op', () => {
+    const fakeCanvas = { parentElement: null, width: 800, height: 600, addEventListener() {} };
+    const inst = new Renderer3D(fakeCanvas, {});
+    assert.doesNotThrow(() => inst.tiltBy(0.05));
+  });
+  test('Renderer3D.tiltBy mutates a stand-in camera and clamps to tilt range', () => {
+    const fakeCanvas = { parentElement: null, width: 800, height: 600, addEventListener() {} };
+    const inst = new Renderer3D(fakeCanvas, {});
+    const cam = {
+      alpha: 0, beta: CAMERA_BETA_MIN + 0.05,
+      lowerBetaLimit: CAMERA_BETA_MIN, upperBetaLimit: CAMERA_BETA_MAX,
+      lowerRadiusLimit: 4, upperRadiusLimit: 80, radius: 12,
+      target: { x: 0, y: 0, z: 0 },
+    };
+    inst._camera = cam;
+    inst.tiltBy(10);
+    assert.equal(cam.beta, CAMERA_BETA_MAX, 'huge positive delta should clamp to max');
+    inst.tiltBy(-100);
+    assert.equal(cam.beta, CAMERA_BETA_MIN, 'huge negative delta should clamp to min');
+  });
+  test('Renderer3D.tiltBy respects viewLocked', () => {
+    const fakeCanvas = { parentElement: null, width: 800, height: 600, addEventListener() {} };
+    const inst = new Renderer3D(fakeCanvas, {});
+    inst.viewLocked = true;
+    const startBeta = CAMERA_BETA_MIN + 0.1;
+    const cam = {
+      alpha: 0, beta: startBeta,
+      lowerBetaLimit: CAMERA_BETA_MIN, upperBetaLimit: CAMERA_BETA_MAX,
+      lowerRadiusLimit: 4, upperRadiusLimit: 80, radius: 12,
+      target: { x: 0, y: 0, z: 0 },
+    };
+    inst._camera = cam;
+    inst.tiltBy(0.1);
+    assert.equal(cam.beta, startBeta);
+  });
+  test('2D Renderer.tiltBy is a parity no-op', () => {
+    const inst = Object.create(Renderer.prototype);
+    assert.doesNotThrow(() => inst.tiltBy(0.1));
   });
 });

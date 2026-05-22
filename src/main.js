@@ -13,10 +13,17 @@ import { Renderer3D }        from './renderer-3d.js';
  */
 function _pickRenderer() {
   // 3D is the default on feature/3d-renderer; users can opt back to 2D in Options.
+  let Cls = Renderer3D;
   try {
-    if (localStorage.getItem('brimstone:renderer') === '2d') return Renderer;
+    if (localStorage.getItem('brimstone:renderer') === '2d') Cls = Renderer;
   } catch { /* localStorage may be unavailable in some sandboxes */ }
-  return Renderer3D;
+  // Tag the body so CSS can swap in the 3D camera-controls cluster (see
+  // `body.renderer-3d` rules in styles.css). Done once at startup — the
+  // renderer choice is fixed for the session.
+  if (typeof document !== 'undefined' && document.body) {
+    document.body.classList.toggle('renderer-3d', Cls === Renderer3D);
+  }
+  return Cls;
 }
 import { UIController, UIMode } from './ui.js';
 import { WITCH_PERSONALITIES }   from './ai.js';
