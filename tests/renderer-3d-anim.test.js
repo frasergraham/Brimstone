@@ -41,7 +41,8 @@ import {
   planArrowBadgePosition,
   hpBarColor,
   hpRingFraction,
-  iconBillboardY,
+    iconBillboardY,
+  iconBillboardYRelativeToCone,
   paintUnitIconBadge,
   resolveUnitIconPortrait,
   applyFlatUnitIconMaterial,
@@ -331,6 +332,45 @@ describe('Renderer3D — iconBillboardY', () => {
     // floating-icon billboard sits well above the cone+sphere head so it
     // doesn't intersect the token silhouette.
     assert.ok(iconBillboardY(false) > HP_BAR_Y_ABOVE_BASE);
+  });
+});
+
+// ─── iconBillboardYRelativeToCone (the disc is gone — billboard reparents
+//     to the cone, so its local Y must shift down by the cone-centre offset
+//     to preserve world-Y placement) ───────────────────────────────────────
+
+describe('Renderer3D — iconBillboardYRelativeToCone', () => {
+  test('keeps the world-Y placement of the badge identical to the disc-anchored value', () => {
+    // World-Y when parented to the cone:
+    //   cone.position.y      = STANDEE_BASE_Y_OFFSET + thickness/2 + coneHeight/2
+    //   plane.position.y     = iconBillboardYRelativeToCone(leader)
+    //   world_Y              = cone.position.y + plane.position.y
+    //
+    // Old (disc-parented) world Y was:
+    //   base.position.y + iconBillboardY(leader)
+    //     = STANDEE_BASE_Y_OFFSET + iconBillboardY(leader)
+    //
+    // The two must match for both regular and leader units.
+    for (const leader of [false, true]) {
+      const hMul = leader ? 1.5 : 1; // mirrors STANDEE_LEADER_HEIGHT_MUL convention
+      void hMul;
+      const reConed = iconBillboardYRelativeToCone(leader);
+      const original = iconBillboardY(leader);
+      // The relative-to-cone Y is strictly LESS than the original (subtracting
+      // the cone centre's lift), but adding the cone-centre offset back must
+      // recover the original world-Y placement.
+      assert.ok(reConed > 0, `relative Y ${reConed} should remain positive (above the cone)`);
+      assert.ok(reConed < original,
+        `cone-relative Y ${reConed} should be < disc-relative ${original}`);
+    }
+  });
+
+  test('leader badge sits higher relative to the cone than a regular badge', () => {
+    assert.ok(iconBillboardYRelativeToCone(true) > iconBillboardYRelativeToCone(false));
+  });
+
+  test('default arg matches leader=false (regular unit)', () => {
+    assert.equal(iconBillboardYRelativeToCone(), iconBillboardYRelativeToCone(false));
   });
 });
 

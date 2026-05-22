@@ -820,8 +820,6 @@ export class Renderer3D {
     this._portraitMaterials = new Map();
     // Cache: base material per "ownerKey" so all standees of one player share a material.
     this._baseMaterialCache = new Map();
-    // Selection-highlight material (emissive cyan) shared across all selected bases.
-    this._selectedBaseMaterial = null;
     // Last selectedEntityId we acted on, so we only retarget the camera on change.
     this._lastSelectedEntityId = null;
     // ── Per-unit ground-level hex outlines ─────────────────────────────────
@@ -3258,28 +3256,21 @@ export class Renderer3D {
     return mat;
   }
 
-  /** Cyan glow material applied to the selected entity's base. */
-  _getSelectedBaseMaterial() {
-    if (this._selectedBaseMaterial) return this._selectedBaseMaterial;
-    const BABYLON = this._babylon;
-    const mat = new BABYLON.StandardMaterial('base_selected', this._scene);
-    mat.diffuseColor  = new BABYLON.Color3(0.20, 0.85, 0.95);
-    mat.emissiveColor = new BABYLON.Color3(0.25, 0.85, 0.95);
-    mat.specularColor = new BABYLON.Color3(0, 0, 0);
-    this._selectedBaseMaterial = mat;
-    return mat;
-  }
-
-  /** Build the {plane, base, sphere, leader} mesh group for a single entity.
+  /** Build the {plane, sphere, leader} mesh group for a single entity.
    *
    *  Unit body is a player-colour cone with a spherical head — a classic
    *  board-game token. The cone is exposed as `plane` to preserve the field
    *  name used by every animation / focus / picking site (lunge, move, plan
    *  ghost, selection halo, fog-of-war visibility). The sphere is parented to
-   *  the cone, so animating the cone moves the head along with it for free. */
+   *  the cone, so animating the cone moves the head along with it for free.
+   *
+   *  The ground-level base disc was retired with the per-unit hex outline
+   *  rollout — selection is now signalled by the thick hex outline + glow,
+   *  so the redundant disc is gone. Cone bottom still anchors at
+   *  STANDEE_BASE_Y_OFFSET + STANDEE_BASE_THICKNESS/2 so the silhouette and
+   *  every floater (icon billboard, HP ring, plan ghost, lantern) keep their
+   *  current world-Y placement. */
   _buildStandeeMesh(entity) {
-    const BABYLON = this._babylon;
-    const scene   = this._scene;
     const leader  = isLeaderType(entity.type);
     const hMul    = leader ? STANDEE_LEADER_HEIGHT_MUL : 1;
     const wMul    = leader ? STANDEE_LEADER_WIDTH_MUL  : 1;
@@ -3309,22 +3300,7 @@ export class Renderer3D {
     this._addShadowCaster(cone);
     this._addShadowCaster(sphere);
 
-    const base = BABYLON.MeshBuilder.CreateCylinder(
-      `unitbase_${entity.id}`,
-      {
-        tessellation: 24,
-        height:   STANDEE_BASE_THICKNESS,
-        diameter: STANDEE_BASE_DIAMETER * (leader ? 1.15 : 1),
-      },
-      scene,
-    );
-    base.material = bodyMat;
-    // Don't pick on the base — the cone is the click target for a more
-    // predictable hit area.
-    base.isPickable = false;
-    base.renderingGroupId = 0; // shares world-geometry group with the cone — depth-test handles z-order
-
-    const standee = { plane: cone, base, sphere, leader };
+    const standee = { plane: cone, sphere, leader };
     this._positionStandee(standee, entity);
     return standee;
   }
@@ -3339,15 +3315,14 @@ export class Renderer3D {
     const hMul = standee.leader ? STANDEE_LEADER_HEIGHT_MUL : 1;
     standee.plane.position.x = x;
     standee.plane.position.z = z;
-    // Cone is centred on its local Y axis — lift it so its bottom rim sits on
-    // top of the base disc (the cone bottom = base disc top + ε).
+    // Cone is centred on its local Y axis — lift it so its bottom rim sits at
+    // the legacy disc-top anchor (STANDEE_BASE_Y_OFFSET + thickness/2). The
+    // disc is gone but the anchor stays so every floater (icon billboard,
+    // HP ring, plan ghost) keeps its world-Y placement.
     const coneHeight = STANDEE_CONE_HEIGHT * hMul;
     standee.plane.position.y = STANDEE_BASE_Y_OFFSET
       + STANDEE_BASE_THICKNESS / 2
       + coneHeight / 2;
-    standee.base.position.x = x;
-    standee.base.position.z = z;
-    standee.base.position.y = STANDEE_BASE_Y_OFFSET;
     // Keep the metadata's col/row in sync so picking returns the current tile.
     standee.plane.metadata.col = entity.col;
     standee.plane.metadata.row = entity.row;
@@ -3372,15 +3347,9 @@ export class Renderer3D {
         // state's destination and cancel the animation visually.
         this._positionStandee(standee, e);
         // Owner colour can change (e.g. recruit changing sides — defensive).
+        // Cone + sphere share the owner material; keep them in sync so a side-
+        // flip recolours the whole token.
         const expected = this._baseMaterialForOwner(this._ownerColorFor(e));
-        // If the entity is currently selected, _applySelectionAndFocus owns the
-        // base material — don't fight it here.
-        if (standee.base.material !== this._getSelectedBaseMaterial()
-            && standee.base.material !== expected) {
-          standee.base.material = expected;
-        }
-        // Cone + sphere share the owner colour with the base disc. Keep them in
-        // sync so a side-flip recolours the whole token, not just the floor.
         if (standee.plane.material !== expected)  standee.plane.material  = expected;
         if (standee.sphere && standee.sphere.material !== expected) {
           standee.sphere.material = expected;
@@ -3396,7 +3365,6 @@ export class Renderer3D {
     for (const [id, standee] of this._entityStandees) {
       if (!seen.has(id)) {
         standee.plane.dispose();
-        standee.base.dispose();
         this._entityStandees.delete(id);
       }
     }
@@ -3471,18 +3439,25 @@ export class Renderer3D {
    *  below drops outlines for entities that have died this turn. */
   _syncEntityHexOutlines() {
     if (!this._scene || !this._babylon || !this.state?.entities) return;
+    const observerOwner = this._observerOwner();
     const seen = new Set();
     for (const e of this.state.entities) {
       if (!e || !e.alive) continue;
       if (typeof e.col !== 'number' || typeof e.row !== 'number') continue;
       seen.add(e.id);
+      // Always-on thin outline only renders for local-side units. Enemy units
+      // get no thin ring; the thick selection outline still applies when they
+      // are picked, regardless of side. When there is no local observer (AI-
+      // vs-AI or generic spectator), no unit qualifies as "local" — nobody
+      // gets the thin ring.
+      const isLocal = !!(observerOwner && e.owner === observerOwner);
       let outline = this._entityHexOutlines.get(e.id);
       if (!outline) {
-        outline = this._buildEntityHexOutline(e);
+        outline = this._buildEntityHexOutline(e, isLocal);
         this._entityHexOutlines.set(e.id, outline);
-        // Newly-built outline starts on the thin ring; only flip to thick if
-        // the unit is the current selection (rare — usually selection happens
-        // after the outline already exists).
+        // Newly-built outline starts on the thin ring (if local); only flip to
+        // thick if the unit is the current selection (rare — usually selection
+        // happens after the outline already exists).
         if (this.selectedEntityId === e.id) {
           outline.thin.isVisible  = false;
           outline.thick.isVisible = true;
@@ -3495,6 +3470,14 @@ export class Renderer3D {
           outline.thin.material  = this._thinOutlineMaterialFor(ownerKey);
           outline.thick.material = this._thickOutlineMaterialFor(ownerKey);
           outline.ownerKey = ownerKey;
+        }
+        // Refresh the local-side flag — observer can change mid-game (e.g.
+        // hot-seat two-player) and a recruited survivor can change ownership.
+        if (outline.isLocal !== isLocal) {
+          outline.isLocal = isLocal;
+          if (this.selectedEntityId !== e.id) {
+            outline.thin.isVisible = isLocal;
+          }
         }
       }
       const { x, z } = hexToWorld(e.col, e.row);
@@ -3514,9 +3497,10 @@ export class Renderer3D {
   }
 
   /** Build the {thin, thick} hex ring pair for a single entity. Thin is
-   *  visible by default; thick is parked invisible and toggled on by
-   *  `_applySelectionAndFocus` when the unit is selected. */
-  _buildEntityHexOutline(entity) {
+   *  visible by default only for local-side units (enemy units get no thin
+   *  outline); thick is parked invisible and toggled on by
+   *  `_applySelectionAndFocus` when the unit is selected, regardless of side. */
+  _buildEntityHexOutline(entity, isLocal) {
     const BABYLON = this._babylon;
     const scene   = this._scene;
     const path    = unitHexOutlineRingPath().map(
@@ -3536,6 +3520,7 @@ export class Renderer3D {
     // river ribbons but below buildings, so the depth buffer draws it in the
     // correct order without a group bump.
     thin.renderingGroupId = 0;
+    thin.isVisible        = !!isLocal;
 
     const thick = BABYLON.MeshBuilder.CreateTube(`unitOutlineThick_${entity.id}`, {
       path,
@@ -3552,7 +3537,7 @@ export class Renderer3D {
     thin.position.x  = x; thin.position.z  = z;
     thick.position.x = x; thick.position.z = z;
 
-    return { thin, thick, ownerKey };
+    return { thin, thick, ownerKey, isLocal: !!isLocal };
   }
 
   /** Lazy, owner-keyed material for the always-on thin hex outline. Low
@@ -3741,29 +3726,16 @@ export class Renderer3D {
     }
   }
 
-  /** Restore a standee's owner base material (clearing the selection glow). */
-  _restoreBaseColor(standee, entityId) {
-    const entity = this.state?.entities?.find?.(e => e.id === entityId);
-    if (!entity) return;
-    standee.base.material = this._baseMaterialForOwner(this._ownerColorFor(entity));
-  }
-
-  /** Apply the renderer's selectedEntityId: swap base materials to highlight
-   *  the chosen unit, restore previous selection, and slide the camera target
-   *  to the new selection. */
+  /** Apply the renderer's selectedEntityId: drive the per-unit hex outline
+   *  (swap thin → thick + glow) and slide the camera target to the new
+   *  selection. The standee silhouette itself no longer mutates on selection
+   *  — the ground-level base disc was retired and the thick hex outline + the
+   *  glow it sits in are the selection signal now. */
   _applySelectionAndFocus() {
     if (!this._scene) return;
     const newId  = this.selectedEntityId ?? null;
     const prevId = this._lastSelectedEntityId;
     if (newId === prevId) return;
-
-    if (prevId && this._entityStandees.has(prevId)) {
-      const prev = this._entityStandees.get(prevId);
-      this._restoreBaseColor(prev, prevId);
-      // Round 4: drop the previous standee from the GlowLayer's include-only
-      // set so its (now non-emissive) base no longer counts toward the layer.
-      this._glowLayer?.removeIncludedOnlyMesh?.(prev.base);
-    }
     // Per-unit hex outline: swap the previously-selected unit back to its
     // thin always-on ring, and the newly-selected unit up to the thick
     // glowing ring. The thick mesh joins the GlowLayer's include-only set so
@@ -3771,7 +3743,9 @@ export class Renderer3D {
     // owner-tinted lines.
     if (prevId && this._entityHexOutlines.has(prevId)) {
       const prevOutline = this._entityHexOutlines.get(prevId);
-      prevOutline.thin.isVisible  = true;
+      // Restore the previous selection's thin ring only for local-side units —
+      // enemy units never carry an always-on thin outline.
+      prevOutline.thin.isVisible  = !!prevOutline.isLocal;
       prevOutline.thick.isVisible = false;
       this._glowLayer?.removeIncludedOnlyMesh?.(prevOutline.thick);
     }
@@ -3783,16 +3757,12 @@ export class Renderer3D {
     }
     if (newId && this._entityStandees.has(newId)) {
       const standee = this._entityStandees.get(newId);
-      standee.base.material = this._getSelectedBaseMaterial();
-      // Round 4: include the newly-selected standee's base in the GlowLayer
-      // so its cyan pulse blooms. Other emissive meshes stay out of the layer.
-      this._glowLayer?.addIncludedOnlyMesh?.(standee.base);
       const BABYLON = this._babylon;
       if (BABYLON && this._camera) {
         const newTarget = new BABYLON.Vector3(
-          standee.base.position.x,
+          standee.plane.position.x,
           0,
-          standee.base.position.z,
+          standee.plane.position.z,
         );
         // Selecting a unit should always feel like "the camera moved to it" —
         // skip the no-op-shift early-out that `_focusCamera` applies for
@@ -3932,7 +3902,6 @@ export class Renderer3D {
     if (this._scene) {
       for (const standee of this._entityStandees.values()) {
         this._scene.stopAnimation(standee.plane);
-        this._scene.stopAnimation(standee.base);
       }
     }
     this._activeMoveIds.clear();
@@ -3960,7 +3929,6 @@ export class Renderer3D {
     // Cancel any in-flight move on this entity so plan-step "A→B→C" hops
     // don't queue up and play simultaneously.
     this._scene.stopAnimation(standee.plane);
-    this._scene.stopAnimation(standee.base);
     this._activeMoveIds.add(entityId);
 
     const animX = new BABYLON.Animation('mvX', 'position.x', 60,
@@ -3972,10 +3940,8 @@ export class Renderer3D {
 
     // Set start positions immediately so the very first frame is at "from".
     standee.plane.position.x = fromX; standee.plane.position.z = fromZ;
-    standee.base.position.x  = fromX; standee.base.position.z  = fromZ;
 
     const promise = new Promise(resolve => {
-      this._scene.beginDirectAnimation(standee.base, [animX, animZ], 0, FRAMES_MOVE, false);
       this._scene.beginDirectAnimation(standee.plane, [animX, animZ], 0, FRAMES_MOVE, false, 1, () => {
         this._activeMoveIds.delete(entityId);
         resolve();
@@ -4001,11 +3967,9 @@ export class Renderer3D {
     const FRAMES_LUNGE = 12; // ≈200ms — quick, aggressive
 
     this._scene.stopAnimation(standee.plane);
-    this._scene.stopAnimation(standee.base);
     this._activeLungeIds.add(entityId);
 
     standee.plane.position.x = fromX; standee.plane.position.z = fromZ;
-    standee.base.position.x  = fromX; standee.base.position.z  = fromZ;
 
     const animX = new BABYLON.Animation('lgX', 'position.x', 60,
       BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
@@ -4020,7 +3984,6 @@ export class Renderer3D {
     standee.lungeHome = { fromX, fromZ, midX, midZ };
 
     const promise = new Promise(resolve => {
-      this._scene.beginDirectAnimation(standee.base,  [animX, animZ], 0, FRAMES_LUNGE, false);
       this._scene.beginDirectAnimation(standee.plane, [animX, animZ], 0, FRAMES_LUNGE, false, 1, resolve);
     });
     this._trackAnim(promise);
@@ -4037,7 +4000,6 @@ export class Renderer3D {
       if (!standee.lungeHome) continue;
       const { fromX, fromZ, midX, midZ } = standee.lungeHome;
       this._scene.stopAnimation(standee.plane);
-      this._scene.stopAnimation(standee.base);
       const animX = new BABYLON.Animation('lrX', 'position.x', 60,
         BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
       animX.setKeys([{ frame: 0, value: midX }, { frame: FRAMES_RET, value: fromX }]);
@@ -4045,7 +4007,6 @@ export class Renderer3D {
         BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
       animZ.setKeys([{ frame: 0, value: midZ }, { frame: FRAMES_RET, value: fromZ }]);
       const promise = new Promise(resolve => {
-        this._scene.beginDirectAnimation(standee.base,  [animX, animZ], 0, FRAMES_RET, false);
         this._scene.beginDirectAnimation(standee.plane, [animX, animZ], 0, FRAMES_RET, false, 1, () => {
           standee.lungeHome = null;
           this._activeLungeIds.delete(id);
@@ -4066,10 +4027,8 @@ export class Renderer3D {
     for (const [id, standee] of this._entityStandees) {
       if (!standee.lungeHome) continue;
       this._scene.stopAnimation(standee.plane);
-      this._scene.stopAnimation(standee.base);
       const { fromX, fromZ } = standee.lungeHome;
       standee.plane.position.x = fromX; standee.plane.position.z = fromZ;
-      standee.base.position.x  = fromX; standee.base.position.z  = fromZ;
       standee.lungeHome = null;
       this._activeLungeIds.delete(id);
     }
@@ -4357,11 +4316,15 @@ export class Renderer3D {
     plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
     plane.isPickable    = false;
     plane.material      = mat;
-    plane.parent        = standee.base;
+    // Parent to the cone (standee.plane) — the base disc that used to anchor
+    // this billboard is gone. `iconBillboardYRelativeToCone` gives the local
+    // Y above the cone centre so the badge keeps its world-Y placement above
+    // the cone+sphere head.
+    plane.parent        = standee.plane;
     // Render above all world geometry (terrain, ribbons, buildings, standees,
     // hex outlines — all now in group 0). UI badge must never be occluded.
     plane.renderingGroupId = 2;
-    plane.position.set(0, iconBillboardY(standee.leader), 0);
+    plane.position.set(0, iconBillboardYRelativeToCone(standee.leader), 0);
 
     const entry = {
       plane, mat, tex,
@@ -5159,14 +5122,9 @@ export class Renderer3D {
         this._sunLight.direction.z = target.z;
       }
     }
-    // Selection halo pulse.
-    if (this.selectedEntityId != null) {
-      const standee = this._entityStandees.get(this.selectedEntityId);
-      if (standee) {
-        const k = pulseFactor(now, SELECTION_PULSE_PERIOD_MS, SELECTION_PULSE_MIN, SELECTION_PULSE_MAX);
-        this._setStandeeHaloIntensity(standee, k);
-      }
-    }
+    // Selection signal is the thick per-unit hex outline + its glow-layer
+    // bloom (driven by `_applySelectionAndFocus`); no per-frame standee-
+    // material pulse to drive.
     // Node hex outlines no longer pulse — they hold a steady controller tint
     // (task 7). Initial colour is set by `_syncNodeGlowMeshes` whenever the
     // controller changes; no per-frame mutation needed.
@@ -5194,18 +5152,6 @@ export class Renderer3D {
     const el = this._fpsCounterEl;
     if (!el || !this._engine) return;
     el.textContent = formatFpsLabel(this._engine.getFps(), this._engine.getDeltaTime());
-  }
-
-  /** Modulate a selected standee's halo. We use the base disc's emissive
-   *  colour as the GlowLayer's input — base material was already swapped to
-   *  the cyan-emissive `_selectedBaseMaterial` by `_applySelectionAndFocus`. */
-  _setStandeeHaloIntensity(standee, k) {
-    const mat = standee?.base?.material;
-    if (!mat || !mat.emissiveColor) return;
-    // Selection emissive base colour is cyan-tinted; scale toward `k` of full.
-    mat.emissiveColor.r = SELECTION_EMISSIVE_BASE.r * k;
-    mat.emissiveColor.g = SELECTION_EMISSIVE_BASE.g * k;
-    mat.emissiveColor.b = SELECTION_EMISSIVE_BASE.b * k;
   }
 
   _setNodeGlowIntensity(ng, k) {
@@ -5333,10 +5279,10 @@ export class Renderer3D {
     }
 
     // Hide standees on fogged hexes; reveal them when visible again. The
-    // floating icon badge is parented to the standee base but Babylon's
-    // `isVisible` does not propagate to children, so we mirror visibility
-    // onto the badge plane explicitly — otherwise a hidden standee would
-    // leave a floating icon over an empty fogged hex.
+    // floating icon badge is parented to the standee cone (`.plane`) but
+    // Babylon's `isVisible` does not propagate to children, so we mirror
+    // visibility onto the badge plane explicitly — otherwise a hidden
+    // standee would leave a floating icon over an empty fogged hex.
     if (target) {
       for (const [id, standee] of this._entityStandees) {
         const k = hexKey(standee.plane.metadata.col, standee.plane.metadata.row);
@@ -5344,9 +5290,8 @@ export class Renderer3D {
         // Use setEnabled (not isVisible) so the standee's child portrait
         // sticker meshes inherit visibility. isVisible only hides the mesh
         // itself, not its parented children — switching to setEnabled
-        // propagates the fog-hide through the tombstone → sticker tree.
+        // propagates the fog-hide through the cone → sphere tree.
         if (standee.plane.isEnabled?.() !== visible) standee.plane.setEnabled(visible);
-        if (standee.base.isEnabled?.()  !== visible) standee.base.setEnabled(visible);
         const icon = this._unitIconBadges.get(id);
         if (icon && icon.plane.isVisible !== visible) icon.plane.isVisible = visible;
         // Mirror onto the per-unit hex outlines so the ground ring vanishes
@@ -5363,7 +5308,6 @@ export class Renderer3D {
       // No fog → make sure everything is visible (covers fog-toggling mid-game).
       for (const [id, standee] of this._entityStandees) {
         if (!standee.plane.isEnabled?.()) standee.plane.setEnabled(true);
-        if (!standee.base.isEnabled?.())  standee.base.setEnabled(true);
         const icon = this._unitIconBadges.get(id);
         if (icon && !icon.plane.isVisible) icon.plane.isVisible = true;
         const outline = this._entityHexOutlines.get(id);
@@ -5636,10 +5580,31 @@ export function entityBaseColor(entity) {
 // so the GlowLayer stays owner-tinted (bloom clips to white at higher mults).
 // See `_syncEntityHexOutlines` for the wiring.
 
-/** Y of the always-on per-unit hex outline ring. Above the road apex (≈0.09)
- *  and well below `HIGHLIGHT_DISC_Y = 0.15`, so the perimeter outline keeps
- *  reading when the unit is standing on a highlighted movement-range hex. */
-export const UNIT_HEX_OUTLINE_Y = 0.10;
+// ─── Hex highlight Y band ──────────────────────────────────────────────────
+//
+// All ground-level hex highlights (per-unit thin / thick outline ring, the
+// move-range highlight disc, the plan disc, the plan line) sit inside an
+// explicit Y band defined here. The band sits above the tile-prism top
+// (Y = 0.075) and above the road / river ribbon apex (≈ 0.09), so the
+// highlights always draw over the floor + the network ribbons. The upper
+// bound stays well below the tree-canopy / building-top Ys (~0.5+); because
+// the highlights share `renderingGroupId = 0` with the trees and buildings,
+// the depth buffer occludes any highlight that a building or tree fronts.
+//
+// Tests in `renderer-3d-highlight-band.test.js` pin the ordering so a future
+// tweak to any one Y can't silently break the band.
+/** Lower bound of the hex highlight Y band. */
+export const HEX_HIGHLIGHT_BAND_MIN_Y = 0.10;
+/** Upper bound of the hex highlight Y band. Held well below the tree-canopy /
+ *  building-top Ys so depth-test in group 0 handles "obscured by trees /
+ *  buildings" without the highlight ever poking through. */
+export const HEX_HIGHLIGHT_BAND_MAX_Y = 0.20;
+
+/** Y of the always-on per-unit hex outline ring. Floor of the highlight band
+ *  (= HEX_HIGHLIGHT_BAND_MIN_Y). Above the road apex (≈ 0.09) and well below
+ *  `HIGHLIGHT_DISC_Y = 0.15`, so the perimeter outline keeps reading when the
+ *  unit is standing on a highlighted movement-range hex. */
+export const UNIT_HEX_OUTLINE_Y = HEX_HIGHLIGHT_BAND_MIN_Y;
 
 /** Hex polygon radius for the per-unit outline ring. Set inside
  *  `HIGHLIGHT_OUTER_R = 0.95` so when both rings overlap (unit standing on
@@ -7399,6 +7364,24 @@ export function iconBillboardY(leader = false) {
     + (STANDEE_CONE_HEIGHT   * hMul)
     + (STANDEE_SPHERE_DIAMETER * wMul)
     + UNIT_ICON_Y_GAP;
+}
+
+/**
+ * Y placement of the icon billboard expressed as a LOCAL offset from the
+ * cone's centre (rather than the legacy base-disc origin). With the ground
+ * disc retired, the billboard parents to the cone directly; this helper keeps
+ * the world-Y identical by subtracting the cone-centre's offset above the
+ * disc anchor. Pure — exported so tests can pin the offset stays in step
+ * with `iconBillboardY`.
+ */
+export function iconBillboardYRelativeToCone(leader = false) {
+  const hMul = leader ? STANDEE_LEADER_HEIGHT_MUL : 1;
+  // Cone centre sits at  (STANDEE_BASE_THICKNESS / 2) + (coneHeight / 2)
+  // above the base-disc origin, so the local-relative Y is the world-relative
+  // billboard Y minus that offset.
+  const coneCenterAboveDisc =
+    (STANDEE_BASE_THICKNESS / 2) + (STANDEE_CONE_HEIGHT * hMul) / 2;
+  return iconBillboardY(leader) - coneCenterAboveDisc;
 }
 
 /**
