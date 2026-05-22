@@ -3209,10 +3209,13 @@ export class Renderer3D {
     // Picking target: the cone (the bigger of the two volumes). Metadata mirrors
     // what the tombstone-era plane carried so canvasToHex still resolves clicks.
     cone.metadata = { kind: 'entity', entityId: entity.id, col: entity.col, row: entity.row };
-    // Render in group 1 so tokens always draw on top of ground-level translucent
-    // geometry (roads / rivers / fog overlay).
-    cone.renderingGroupId   = 1;
-    sphere.renderingGroupId = 1;
+    // Standees share renderingGroupId 0 with the rest of the world geometry
+    // (terrain, road / river ribbons, buildings) so the depth buffer handles
+    // unit-vs-building occlusion. Babylon renders higher groups unconditionally
+    // on top, which previously made standees draw over buildings regardless of
+    // camera angle.
+    cone.renderingGroupId   = 0;
+    sphere.renderingGroupId = 0;
     // Sun throws a token-shaped shadow onto the terrain. Both meshes cast.
     this._addShadowCaster(cone);
     this._addShadowCaster(sphere);
@@ -3230,7 +3233,7 @@ export class Renderer3D {
     // Don't pick on the base — the cone is the click target for a more
     // predictable hit area.
     base.isPickable = false;
-    base.renderingGroupId = 1; // same as the cone — always above terrain
+    base.renderingGroupId = 0; // shares world-geometry group with the cone — depth-test handles z-order
 
     const standee = { plane: cone, base, sphere, leader };
     this._positionStandee(standee, entity);
@@ -3440,7 +3443,10 @@ export class Renderer3D {
     }, scene);
     thin.material         = this._thinOutlineMaterialFor(ownerKey);
     thin.isPickable       = false;
-    thin.renderingGroupId = 1; // ride above road/river ribbons + node rings
+    // World geometry group (0): the outline's Y placement sits above the road/
+    // river ribbons but below buildings, so the depth buffer draws it in the
+    // correct order without a group bump.
+    thin.renderingGroupId = 0;
 
     const thick = BABYLON.MeshBuilder.CreateTube(`unitOutlineThick_${entity.id}`, {
       path,
@@ -3450,7 +3456,7 @@ export class Renderer3D {
     }, scene);
     thick.material         = this._thickOutlineMaterialFor(ownerKey);
     thick.isPickable       = false;
-    thick.renderingGroupId = 1;
+    thick.renderingGroupId = 0;
     thick.isVisible        = false; // _applySelectionAndFocus drives visibility
 
     const { x, z } = hexToWorld(entity.col, entity.row);
@@ -4263,8 +4269,8 @@ export class Renderer3D {
     plane.isPickable    = false;
     plane.material      = mat;
     plane.parent        = standee.base;
-    // Render above scene geometry (terrain/standee body/highlights in group
-    // 0 + 1). UI badge must never be occluded by another mesh.
+    // Render above all world geometry (terrain, ribbons, buildings, standees,
+    // hex outlines — all now in group 0). UI badge must never be occluded.
     plane.renderingGroupId = 2;
     plane.position.set(0, iconBillboardY(standee.leader), 0);
 
@@ -4804,8 +4810,10 @@ export class Renderer3D {
       cone.material   = mat;
       sphere.material = mat;
       cone.isPickable = false;
-      cone.renderingGroupId   = 1;
-      sphere.renderingGroupId = 1;
+      // Plan ghosts are standees too — share renderingGroupId 0 so they
+      // depth-test against buildings the same as live units.
+      cone.renderingGroupId   = 0;
+      sphere.renderingGroupId = 0;
 
       this._planGhostMeshes.set(id, {
         plane: cone, mat, path,
@@ -6777,12 +6785,13 @@ export const ATTACK_BADGE_Y = 1.5;
 export const ATTACK_BADGE_SIZE = 0.55;
 
 /** Babylon `renderingGroupId` for planning-mode attack overlays (arrow
- *  tubes + ×N target badges). Strictly above unit standees (group 1)
- *  and the floating unit-icon billboard (group 2, owned by the icon
- *  fix in task t-40ab45b0) so the planning UI always draws on top —
- *  rendering groups bypass the depth buffer, which is what we need at
- *  the locked 45° tilt where a unit cone can otherwise occlude an
- *  arrow shaft or badge that lives at the same screen pixel.
+ *  tubes + ×N target badges). Strictly above all world geometry (group 0
+ *  — terrain, ribbons, buildings, standees, hex outlines, plan ghosts) and
+ *  the floating unit-icon billboard (group 2, owned by the icon fix in
+ *  task t-40ab45b0) so the planning UI always draws on top — rendering
+ *  groups bypass the depth buffer, which is what we need at the locked
+ *  45° tilt where a unit cone can otherwise occlude an arrow shaft or
+ *  badge that lives at the same screen pixel.
  *
  *  Default Babylon `MaxRenderingGroupId` is 4 (valid range 0..3), so
  *  3 is the highest legal group without configuring the scene. */

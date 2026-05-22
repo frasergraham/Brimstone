@@ -62,8 +62,9 @@ describe('Renderer3D attack arrow — Y placement layers above move plan', () =>
 // order, so we pin a constant strictly above the known group ids used
 // elsewhere in the renderer.
 //
-//   group 0  default scene geometry (ground, ribbons, fog)
-//   group 1  unit standees (cone + sphere + base)
+//   group 0  world geometry — terrain, ribbons, buildings, standees, hex
+//            outlines, plan ghosts. Depth buffer handles z-order here so
+//            buildings can occlude units they sit in front of.
 //   group 2  unit-icon billboard (owned by task t-40ab45b0)
 //   group 3  attack overlay (this task)
 //
@@ -71,9 +72,9 @@ describe('Renderer3D attack arrow — Y placement layers above move plan', () =>
 // value without touching scene config.
 
 describe('Renderer3D attack overlay — renderingGroupId z-order', () => {
-  test('ATTACK_OVERLAY_GROUP is strictly above the unit standee group (1)', () => {
-    assert.ok(ATTACK_OVERLAY_GROUP > 1,
-      `ATTACK_OVERLAY_GROUP ${ATTACK_OVERLAY_GROUP} must beat unit standees (group 1)`);
+  test('ATTACK_OVERLAY_GROUP is strictly above world geometry (group 0)', () => {
+    assert.ok(ATTACK_OVERLAY_GROUP > 0,
+      `ATTACK_OVERLAY_GROUP ${ATTACK_OVERLAY_GROUP} must beat world geometry (group 0)`);
   });
 
   test('ATTACK_OVERLAY_GROUP is strictly above the unit-icon billboard group (2)', () => {
