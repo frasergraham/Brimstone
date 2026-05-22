@@ -1687,6 +1687,9 @@ export class Renderer3D {
         cone.material   = treeMat;
         cone.isPickable = false; // pick the tile underneath, not the prop
         this._addShadowCaster(cone);
+        // Trees stay visible under fog of war — they're permanent terrain
+        // features, not tactical info. See `_setTileFogged`.
+        cone.metadata   = { respectsFog: false };
         trackProp(cone);
       }
     }
@@ -1736,6 +1739,9 @@ export class Renderer3D {
       box.material   = this._materialFor(BUILDING_COLOR[tile.building] || '#8a7a5a');
       box.isPickable = false;
       this._addShadowCaster(box);
+      // Buildings stay visible under fog of war — permanent terrain, not
+      // tactical info. See `_setTileFogged`.
+      box.metadata   = { respectsFog: false };
       trackProp(box);
 
       // Tiny roof block to add silhouette variety.
@@ -1751,6 +1757,7 @@ export class Renderer3D {
       roof.material   = this._materialFor('#2c2520');
       roof.isPickable = false;
       this._addShadowCaster(roof);
+      roof.metadata   = { respectsFog: false };
       trackProp(roof);
     }
 
@@ -3841,7 +3848,14 @@ export class Renderer3D {
     if (!baseColor) return;
     tileMesh.material = fogged ? this._fogMaterialFor(baseColor) : this._materialFor(baseColor);
     const props = this._tilePropsByKey.get(hexK);
-    if (props) for (const p of props) p.isVisible = !fogged;
+    if (props) for (const p of props) {
+      // Terrain features (forest cones, building boxes/roofs) opt out via
+      // `metadata.respectsFog === false` and stay visible through fog — they're
+      // permanent geometry, not tactical info. Tagged at build time in
+      // `_buildTileMesh`. Standees, HP bars, node discs still hide.
+      if (p.metadata?.respectsFog === false) continue;
+      p.isVisible = !fogged;
+    }
     if (fogged) this._fogActiveSet.add(hexK);
     else this._fogActiveSet.delete(hexK);
   }
