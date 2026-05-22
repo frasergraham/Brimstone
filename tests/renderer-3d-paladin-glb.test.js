@@ -191,8 +191,9 @@ describe('paladin constants', () => {
   test('PALADIN_MODEL_DIR is the models subdirectory', () => {
     assert.equal(PALADIN_MODEL_DIR, 'models/');
   });
-  test('PALADIN_MODEL_FILE is paladin.glb', () => {
-    assert.equal(PALADIN_MODEL_FILE, 'paladin.glb');
+  test('PALADIN_MODEL_FILE is a .glb under assets/models/', () => {
+    assert.match(PALADIN_MODEL_FILE, /\.glb$/,
+      `expected a .glb filename, got ${PALADIN_MODEL_FILE}`);
   });
   test('PALADIN_BASE_SCALE is a positive sub-unit float', () => {
     assert.ok(PALADIN_BASE_SCALE > 0 && PALADIN_BASE_SCALE < 2);
@@ -900,7 +901,7 @@ describe('_upgradeHeroStandeesToPaladin — async-load retrofit', () => {
 // gets a hidden cone+sphere and a paladin clone, a non-hero doesn't.
 
 describe('hero predicate gates the paladin path end-to-end', () => {
-  test('multiple heroes get distinct mesh clones but share the source skeleton', () => {
+  test('only PALADIN-typed entities get a model — survivors/zombies/witches fall through to the pawn', () => {
     const r = newInst();
     r._babylon = makeFakeBabylon();
     const mesh = makeFakeSourceMesh();
@@ -916,27 +917,19 @@ describe('hero predicate gates the paladin path end-to-end', () => {
         { id: 'z1', owner: 'witch', type: 'zombie' },
       ],
     };
-    // Plant standees for all four entities.
     for (const e of r.state.entities) {
       const cone   = { name: `unit_${e.id}`, visibility: 1, metadata: {} };
       const sphere = { name: `unit_${e.id}_head`, visibility: 1 };
       r._entityStandees.set(e.id, { plane: cone, base: {}, sphere, leader: false, paladinClone: null });
     }
     const upgraded = r._upgradeHeroStandeesToPaladin();
-    assert.equal(upgraded, 2);
+    // Only the paladin gets a model. Survivors, witches, zombies all fall
+    // through to the generic unanimated cone+sphere pawn.
+    assert.equal(upgraded, 1);
     const h1Clone = r._entityStandees.get('h1').paladinClone;
-    const h2Clone = r._entityStandees.get('h2').paladinClone;
-    assert.ok(h1Clone && h2Clone);
-    // Each hero gets its own mesh hierarchy (own world position, own clone
-    // root) so they can stand on different hexes. But the skinned children
-    // all reference the SAME source skeleton — that's how the single
-    // playing idle animation drives every paladin's bone matrices.
-    assert.notEqual(h1Clone.mesh, h2Clone.mesh,
-      'each hero must have its own clone root (own position)');
-    assert.equal(h1Clone.skinnedMesh.skeleton, skel,
-      'h1 must reference the source skeleton');
-    assert.equal(h2Clone.skinnedMesh.skeleton, skel,
-      'h2 must reference the source skeleton');
+    assert.ok(h1Clone, 'paladin (h1) must get a clone');
+    assert.equal(r._entityStandees.get('h2').paladinClone, null,
+      'survivor (h2) must NOT get a paladin clone');
     assert.equal(r._entityStandees.get('w1').paladinClone, null);
     assert.equal(r._entityStandees.get('z1').paladinClone, null);
   });

@@ -116,7 +116,7 @@ export const HOUSE_INSTANCE_BASE_SCALE = 0.55;
 // optional — if it's missing or fails to parse, hero standees fall back to the
 // existing cone+sphere body so gameplay never blocks on a 404.
 export const PALADIN_MODEL_DIR  = 'models/';
-export const PALADIN_MODEL_FILE = 'paladin.glb';
+export const PALADIN_MODEL_FILE = 'newpaladin.glb';
 
 // Fallback world-space scale applied to each cloned paladin when the source
 // mesh's natural bounding box can't be measured (test stubs, malformed GLB).
@@ -148,13 +148,13 @@ export const WALKING_MODEL_FILE = 'walking.glb';
 export const PALADIN_ANIM_BLEND_RATE = 5.0;
 
 // Sustain (ms) for the walking state when consecutive moves chain back-to-back.
-// The resolver fires each MOVE step as a fresh _activeMoveIds insert + remove
-// pair; between two consecutive moves the set briefly empties for a few frames
-// while the next step queues up. Without a sustain window the blend would
-// snap idle → walk → idle → walk … visibly between every step. 400ms covers
-// the typical inter-step gap at MOVE_ANIM_MS=600 + the next step's setup,
-// so a multi-hex move reads as one continuous walk cycle.
-export const PALADIN_WALK_SUSTAIN_MS = 400;
+// Just enough to bridge the few-ms inter-step gap when one unit's moves chain
+// (so a multi-hex hop reads as one continuous walk cycle) without holding
+// walking across the longer pause between DIFFERENT units' move sequences
+// in turn-resolution playback (which should snap back to idle). Operator
+// reported the previous 400ms value kept the paladin walking through the
+// entire replay without ever showing idle between unit sequences.
+export const PALADIN_WALK_SUSTAIN_MS = 150;
 
 /** Predicate: does this entity belong to the day-side hero faction (and thus
  *  render as the paladin GLB when available)? Routes through `sideFactionOf`
@@ -164,6 +164,22 @@ export function isHeroFactionEntity(entity) {
   if (!entity) return false;
   const f = findFaction(entity.owner);
   return !!(f && f.side === Side.DAY);
+}
+
+/** Map of entity types that have a dedicated 3D model. Everything not in
+ *  the map falls back to the generic unanimated cone+sphere pawn. Extend
+ *  this as new GLBs land (e.g. zombies, witches, golems). */
+export const UNIT_MODEL_BY_TYPE = Object.freeze({
+  [EntityType.PALADIN]: 'paladin', // covers HERO alias since they share the value
+});
+
+/** Should this entity render with the paladin GLB model? True only for the
+ *  hero/paladin entity type — survivors, soldiers, witches, zombies, etc.
+ *  all fall through to the generic pawn since we don't have models for them
+ *  yet. */
+export function unitUsesPaladinModel(entity) {
+  if (!entity || !entity.type) return false;
+  return UNIT_MODEL_BY_TYPE[entity.type] === 'paladin';
 }
 
 // ─── Standee constants (Phase 3) ────────────────────────────────────────────
@@ -2017,7 +2033,7 @@ export class Renderer3D {
       // walks the preview path.
       let wantWalk = paladinAnimTargetWeight(
         this._activeMoveIds, this._activeLungeIds,
-        this.state?.entities, isHeroFactionEntity,
+        this.state?.entities, unitUsesPaladinModel,
       ) === 0;
       const now = performance.now();
       if (wantWalk) this._paladinLastWalkTs = now;
@@ -2272,7 +2288,7 @@ export class Renderer3D {
     for (const [id, standee] of this._entityStandees) {
       if (!standee || standee.paladinClone) continue;
       const ent = byId.get(id);
-      if (!isHeroFactionEntity(ent)) continue;
+      if (!unitUsesPaladinModel(ent)) continue;
       const clone = this._buildPaladinClone(ent, standee.plane);
       if (!clone) continue;
       // Hide the cone+sphere body so the paladin reads on its own.
@@ -4660,7 +4676,7 @@ export class Renderer3D {
     // anchor + picking target (their `.visibility` is dropped to 0 so they
     // don't render). If the source isn't loaded yet, `_loadPaladinModel`
     // resolves later and retrofits via `_upgradeHeroStandeesToPaladin`.
-    if (this._paladinSource && isHeroFactionEntity(entity)) {
+    if (this._paladinSource && unitUsesPaladinModel(entity)) {
       const clone = this._buildPaladinClone(entity, cone);
       if (clone) {
         cone.visibility   = 0;
@@ -6277,7 +6293,7 @@ export class Renderer3D {
       // per-ghost so the 50% alpha doesn't leak onto the source.
       let ghostClone = null;
       let ghostMats = null;
-      if (this._walkingSource && isHeroFactionEntity(ent)) {
+      if (this._walkingSource && unitUsesPaladinModel(ent)) {
         ghostClone = this._buildWalkingGhostClone(ent, cone);
         if (ghostClone) {
           cone.visibility = 0;
