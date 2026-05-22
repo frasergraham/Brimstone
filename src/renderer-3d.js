@@ -1869,15 +1869,31 @@ export class Renderer3D {
     // Stash on the source so the blend tick can guard against partial loads.
     src.walkRemappedCount = remapped;
 
-    // Wire blending. Both groups loop at weight {idle:1, walk:0} initially;
-    // a per-frame tick nudges the weights toward (1,0) or (0,1) depending
-    // on whether any hero standee is currently mid-move. Crossfade rate
-    // is PALADIN_ANIM_BLEND_RATE (≈200ms full transition).
-    walkGroup.weight = 0.0;
-    if (typeof walkGroup.start === 'function') walkGroup.start(true, 1.0);
+    // Enable per-animation blending on EVERY animation in both groups so
+    // start()/stop() crossfade smoothly. We use the start/stop swap pattern
+    // (not weight-blending) because weight-blending leaves any bones the
+    // walking group doesn't animate snapping back to bind pose — i.e.
+    // T-pose on the arms if walking only touches legs. With per-animation
+    // blending Babylon interpolates from the current bone state into the
+    // new group's frame instead of resetting.
+    const enableBlend = (group) => {
+      if (!group || !Array.isArray(group.targetedAnimations)) return;
+      for (const ta of group.targetedAnimations) {
+        const anim = ta && ta.animation;
+        if (anim) {
+          anim.enableBlending = true;
+          anim.blendingSpeed = 0.08;
+        }
+      }
+    };
+    enableBlend(src.idleGroup);
+    enableBlend(walkGroup);
 
+    // Walking group is loaded but NOT started — idle holds the rig until
+    // a move kicks the tick into swapping. Idle was already started in
+    // _loadPaladinModel.
     src.walkGroup = walkGroup;
-    this._paladinAnimBlend = 1.0; // 1 = full idle, 0 = full walk
+    src.activeGroup = 'idle';
     this._paladinAnimObserver = this._installPaladinAnimBlendTick();
 
     // Dispose walking.glb's geometry — we only kept its keyframes.
@@ -1907,50 +1923,41 @@ export class Renderer3D {
     }
   }
 
-  /** Subscribe a per-frame tick that cross-fades between the paladin's
-   *  idle and walking animation groups. Target weight is 0 (full walking)
-   *  whenever any hero entity is mid-move or mid-lunge; otherwise 1
-   *  (full idle). Returns the Babylon observer handle for disposal. */
+  /** Subscribe a per-frame tick that swaps the paladin's idle and walking
+   *  animation groups. Decision: play walking whenever any hero entity is
+   *  mid-move/lunge OR a plan-ghost is animating; otherwise idle. The
+   *  per-Animation blending wired in _loadWalkingAnimation crossfades the
+   *  swap smoothly. Sustained for PALADIN_WALK_SUSTAIN_MS across
+   *  consecutive moves so the walk reads as one continuous cycle.
+   *  Returns the Babylon observer handle for disposal. */
   _installPaladinAnimBlendTick() {
     if (!this._scene || !this._scene.onBeforeRenderObservable) return null;
-    let last = performance.now();
     return this._scene.onBeforeRenderObservable.add(() => {
       const src = this._paladinSource;
       if (!src || !src.idleGroup || !src.walkGroup) return;
-      const now = performance.now();
-      const dt = Math.max(0, Math.min(0.1, (now - last) / 1000));
-      last = now;
-      // Target: 0 (walking) if any hero entity is currently being animated
-      // through a move / lunge by the resolver, OR a plan-ghost is walking
-      // a previewed path through the planning UI; else 1 (idle). The
-      // shared-skeleton design means all paladins (live + ghost) animate
-      // in unison — fine for board-game tokens, far better than T-pose.
-      let target = paladinAnimTargetWeight(
+      let wantWalk = paladinAnimTargetWeight(
         this._activeMoveIds, this._activeLungeIds,
         this.state?.entities, isHeroFactionEntity,
-      );
-      if (target === 1 && this._planGhostMeshes && this._planGhostMeshes.size > 0) {
-        target = 0;
+      ) === 0;
+      if (!wantWalk && this._planGhostMeshes && this._planGhostMeshes.size > 0) {
+        wantWalk = true;
       }
-      // Sustain the walking state across the tiny gap between consecutive
-      // moves so a multi-hex chain reads as one continuous walk cycle
-      // instead of snapping idle ↔ walk between steps. PALADIN_WALK_SUSTAIN_MS
-      // covers the typical inter-step gap; if a fresh move queues within
-      // that window, target flips back to 0 before the sustain expires.
-      const nowPerf = now;
-      if (target === 0) this._paladinLastWalkTs = nowPerf;
+      const now = performance.now();
+      if (wantWalk) this._paladinLastWalkTs = now;
       else if (typeof this._paladinLastWalkTs === 'number'
-        && (nowPerf - this._paladinLastWalkTs) < PALADIN_WALK_SUSTAIN_MS) {
-        target = 0;
+        && (now - this._paladinLastWalkTs) < PALADIN_WALK_SUSTAIN_MS) {
+        wantWalk = true;
       }
-      const cur = this._paladinAnimBlend ?? 1.0;
-      const step = PALADIN_ANIM_BLEND_RATE * dt;
-      let next = cur;
-      if (cur < target) next = Math.min(target, cur + step);
-      else if (cur > target) next = Math.max(target, cur - step);
-      this._paladinAnimBlend = next;
-      src.idleGroup.weight = next;
-      src.walkGroup.weight = 1 - next;
+      const desired = wantWalk ? 'walk' : 'idle';
+      if (src.activeGroup === desired) return;
+      if (desired === 'walk') {
+        if (typeof src.idleGroup.stop === 'function') src.idleGroup.stop();
+        if (typeof src.walkGroup.start === 'function') src.walkGroup.start(true, 1.0);
+      } else {
+        if (typeof src.walkGroup.stop === 'function') src.walkGroup.stop();
+        if (typeof src.idleGroup.start === 'function') src.idleGroup.start(true, 1.0);
+      }
+      src.activeGroup = desired;
     });
   }
 
