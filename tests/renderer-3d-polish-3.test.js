@@ -138,13 +138,13 @@ describe('Renderer3D round-3 polish — parseRgba01', () => {
 // ── Highlight tuning constants (item 3) ────────────────────────────────────
 
 describe('Renderer3D round-3 polish — highlight constants', () => {
-  test('min alpha keeps the outline ring legible against varied terrain', () => {
-    // Round 4: highlight changed from a tile-covering disc (low alpha OK) to
-    // a thin outline ring (needs much higher alpha to read). The new band
-    // covers 0.6..1.0 — the ring has to push through hemispheric lighting
-    // and varied tile colours.
-    assert.ok(HIGHLIGHT_MIN_ALPHA >= 0.6 && HIGHLIGHT_MIN_ALPHA <= 1.0,
-      `HIGHLIGHT_MIN_ALPHA ${HIGHLIGHT_MIN_ALPHA} out of expected band`);
+  test('overlay alpha stays in the translucent-overlay band (0.6..0.7)', () => {
+    // Operator-tuned overlay alpha: 0.6..0.7 reads as a translucent ring
+    // letting the tile show through, rather than a solid floor sticker. The
+    // legacy HIGHLIGHT_MIN_ALPHA name aliases the new HIGHLIGHT_OVERLAY_ALPHA
+    // and now denotes the *applied* alpha, not a clamp floor.
+    assert.ok(HIGHLIGHT_MIN_ALPHA >= 0.6 && HIGHLIGHT_MIN_ALPHA <= 0.7,
+      `HIGHLIGHT_MIN_ALPHA ${HIGHLIGHT_MIN_ALPHA} out of expected band [0.6, 0.7]`);
   });
 
   test('default rgba parses cleanly (used when ui.js omits the color field)', () => {
