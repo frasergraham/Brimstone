@@ -179,6 +179,24 @@ export const PINCH_LOCK_THRESHOLD_PX  = 6;          // ~6 pixels of spread
 export const TWIST_LOCK_THRESHOLD_RAD = 3 * Math.PI / 180; // ≈0.052 rad / 3°
 export const GESTURE_SAMPLING_WINDOW_MS = 100;
 
+/** Sensitivity for the 2-finger pinch → radius mapping. 25px of spread
+ *  corresponds to ~1 radius unit. */
+export const PINCH_RADIUS_PER_PX = 0.04;
+
+/** Pure helper: convert a per-frame pinch-distance delta (px, positive when
+ *  fingers spread apart) into the radius change to apply to the camera.
+ *
+ *  Convention (matches mobile platform norms):
+ *    • Fingers spread (dDist > 0) → zoom IN → radius shrinks → returns negative.
+ *    • Fingers pinch (dDist < 0) → zoom OUT → radius grows → returns positive.
+ *
+ *  Note: Babylon's ArcRotateCamera applies `radius -= inertialRadiusOffset`
+ *  each frame, so the call site negates this when accumulating into
+ *  `inertialRadiusOffset`. */
+export function pinchDeltaToRadiusDelta(dDist, perPx = PINCH_RADIUS_PER_PX) {
+  return -dDist * perPx;
+}
+
 /** Decide which two-finger gesture intent the user has expressed.
  *
  *  Inputs are the absolute Δ-from-start of each axis (distance in pixels,
@@ -1089,7 +1107,8 @@ export class Renderer3D {
     // panningSensibility (Babylon convention: lower number = faster). Twist
     // applies the raw radian delta directly (1px-of-rotation = 1px). Pinch
     // converts a "fingers spread by X px" gesture into a radius delta.
-    const PINCH_RADIUS_PER_PX  = 0.04;  // 25px spread = 1 radius unit
+    // PINCH_RADIUS_PER_PX is exported at module scope so the pure pinch→radius
+    // helper can be unit-tested without spinning up Babylon.
     const ALPHA_PER_PIXEL      = 0.006; // right-drag rotate yaw
     const BETA_PER_PIXEL       = 0.006; // right-drag tilt
     const WHEEL_RADIUS_PER_DEL = 0.05;  // mouse wheel zoom
@@ -1129,8 +1148,12 @@ export class Renderer3D {
 
       if (gestureMode === 'zoom' && lastPinchDist > 0) {
         const dDist = newDist - lastPinchDist;
-        // Spread fingers (newDist > lastPinchDist) → zoom in → radius shrinks.
-        camera.inertialRadiusOffset -= dDist * PINCH_RADIUS_PER_PX;
+        // Spread fingers (dDist > 0) → zoom in → radius shrinks. Helper returns
+        // the desired radius delta (negative on spread); Babylon's
+        // ArcRotateCamera does `radius -= inertialRadiusOffset` each frame, so
+        // we accumulate -radiusDelta into the inertial offset.
+        const radiusDelta = pinchDeltaToRadiusDelta(dDist, PINCH_RADIUS_PER_PX);
+        camera.inertialRadiusOffset -= radiusDelta;
       } else if (gestureMode === 'rotate' && (lastPinchAngle !== 0 || lastPinchDist > 0)) {
         const dAngle = twistDelta(lastPinchAngle, newAngle);
         // Twist sign convention: clockwise finger rotation spins the camera
