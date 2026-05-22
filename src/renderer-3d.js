@@ -1254,11 +1254,29 @@ export class Renderer3D {
     if (!merged) return null;
     merged.parent     = this._mapRoot;
     merged.isPickable = false;
-    const mat = this._materialFor(cssColor);
-    mat.backFaceCulling = false; // belt-and-braces for any low/below camera angles
-    merged.material   = mat;
+    merged.material   = this._buildRibbonMaterial(networkName, cssColor);
     merged.name       = `${networkName}Network`;
     return merged;
+  }
+
+  /** Dedicated StandardMaterial for the ribbon networks. Unlike the cached
+   *  `_materialFor()` (used by tile cylinders), this one carries an
+   *  `emissiveColor` so the strip stays readable under the scene's mostly-
+   *  ambient lighting. CreateRibbon's path-pair winding produces face normals
+   *  pointing −Y (away from the +Y hemispheric light), so the lit face is the
+   *  underside; a small emissive (`RIBBON_EMISSIVE_SCALE` × diffuse) gives the
+   *  top face its colour back without making the network glow. Kept out of the
+   *  shared cache so adding emissive to ribbons doesn't bleed onto road/river
+   *  tile cylinders. */
+  _buildRibbonMaterial(networkName, hexColor) {
+    const BABYLON = this._babylon;
+    const { diffuse, emissive } = ribbonMaterialColors(hexColor);
+    const mat = new BABYLON.StandardMaterial(`${networkName}_ribbon_mat`, this._scene);
+    mat.diffuseColor    = new BABYLON.Color3(diffuse[0],  diffuse[1],  diffuse[2]);
+    mat.emissiveColor   = new BABYLON.Color3(emissive[0], emissive[1], emissive[2]);
+    mat.specularColor   = new BABYLON.Color3(0.04, 0.04, 0.04); // matte
+    mat.backFaceCulling = false; // belt-and-braces for low/below camera angles
+    return mat;
   }
 
   /** Cache a StandardMaterial per CSS hex colour so we hand a few materials
@@ -3400,6 +3418,27 @@ export const ROAD_RIBBON_Y      = 0.086;
 /** Number of bezier samples per stroke. 10 is smooth enough at this radius
  *  without bloating the tube vertex count on Campaign-size maps. */
 export const NETWORK_BEZIER_SEGMENTS = 10;
+
+/** Fraction of the ribbon's diffuse colour copied into `emissiveColor`. The
+ *  network ribbons get their face normals pointing −Y from CreateRibbon's
+ *  path-pair winding (the +Y hemispheric light lands on the underside), so a
+ *  modest emissive keeps the top face readable without making the road/river
+ *  glow. 0.15 was chosen to match the look of the prior tube geometry, which
+ *  caught the hemispheric light's wraparound term thanks to its rounded
+ *  cross-section. */
+export const RIBBON_EMISSIVE_SCALE = 0.15;
+
+/** Pure helper: split a CSS hex colour into `{ diffuse, emissive }` Color3
+ *  tuples for a ribbon material. `emissive = diffuse × RIBBON_EMISSIVE_SCALE`.
+ *  Kept pure so the colour math can be unit-tested without Babylon. */
+export function ribbonMaterialColors(hexColor) {
+  const [r, g, b] = cssHexToRgb01(hexColor);
+  const s = RIBBON_EMISSIVE_SCALE;
+  return {
+    diffuse:  [r, g, b],
+    emissive: [r * s, g * s, b * s],
+  };
+}
 
 /** Apothem (centre-to-edge distance) for a unit-radius pointy-top hex. */
 const HEX_APOTHEM = SQRT3 / 2;
