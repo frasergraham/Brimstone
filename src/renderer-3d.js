@@ -5418,15 +5418,22 @@ export function buildRiverNetworkStrokes(tiles, hexKeyFn = hexKey, getNeighborsF
 
 /**
  * Walk the full map and build every road segment's bezier strokes.
- * Road network tiles: ROAD and BRIDGE. Neighbours come from
+ * Road network tiles: ROAD, BRIDGE, and BUILDING. Neighbours come from
  * `tile.roadDirs` (a Set of hexKeys recorded at generation time) — this is
  * what the 2D renderer uses, so phantom-junction inference is avoided.
+ *
+ * BUILDING tiles participate when they sit on the road MST so the 3D ribbon
+ * reads as contiguous through the village (the box prop only occupies slot 1,
+ * leaving plenty of the hex top for the ribbon underneath).
  */
 export function buildRoadNetworkStrokes(tiles, hexKeyFn = hexKey) {
   if (!tiles || typeof tiles.values !== 'function') return [];
   const out = [];
   for (const tile of tiles.values()) {
-    if (!tile || (tile.type !== TileType.ROAD && tile.type !== TileType.BRIDGE)) continue;
+    if (!tile) continue;
+    if (tile.type !== TileType.ROAD
+      && tile.type !== TileType.BRIDGE
+      && tile.type !== TileType.BUILDING) continue;
     if (!tile.roadDirs || tile.roadDirs.size === 0) continue;
     const nbrs = [];
     for (const k of tile.roadDirs) {
