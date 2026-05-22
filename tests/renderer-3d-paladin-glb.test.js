@@ -32,9 +32,25 @@ function newInst() {
 function fakeVector3Ctor(x = 0, y = 0, z = 0) { this.x = x; this.y = y; this.z = z; }
 
 /** Build a minimal BABYLON stub exposing only what the paladin pipeline
- *  touches. `SceneLoader.ImportMeshAsync` is overridable per-case. */
-function makeFakeBabylon({ importImpl } = {}) {
-  return {
+ *  touches. `SceneLoader.ImportMeshAsync` is overridable per-case.
+ *  `TransformNode` is provided so the clone path can build a per-standee
+ *  root that parents the geometry submeshes — without it the renderer
+ *  falls back to the legacy single-mesh path. Set `includeTransformNode`
+ *  false to exercise that fallback. */
+function makeFakeBabylon({ importImpl, includeTransformNode = true } = {}) {
+  function FakeTransformNode(name, scene) {
+    this.name = name;
+    this.scene = scene;
+    this.parent = null;
+    this.position = { x: 0, y: 0, z: 0 };
+    this.scaling  = null;
+    this.rotation = null;
+    this._isTransformNode = true;
+    this._disposed = false;
+  }
+  FakeTransformNode.prototype.dispose = function dispose() { this._disposed = true; };
+
+  const out = {
     Vector3: fakeVector3Ctor,
     Matrix: {
       Translation: (x, y, z) => ({ _kind: 'translation', x, y, z }),
@@ -43,6 +59,8 @@ function makeFakeBabylon({ importImpl } = {}) {
       ImportMeshAsync: importImpl || (async () => ({ meshes: [] })),
     },
   };
+  if (includeTransformNode) out.TransformNode = FakeTransformNode;
+  return out;
 }
 
 /** Source mesh stub — `clone()` returns a fresh stub that the renderer
@@ -341,19 +359,21 @@ describe('_loadPaladinModel — async load + caching + fallback', () => {
     assert.equal(a, b);
   });
 
-  test('stores a bbox-derived _paladinScale after load (replaces the fixed constant)', async () => {
+  test('stores a bbox-derived _paladinScale + feet offset after load (replaces the fixed constant)', async () => {
     const r = newInst();
     r._scene = {};
-    const mesh = makeFakeSourceMesh();  // default: 1.8 m tall
+    const mesh = makeFakeSourceMesh();  // default: 1.8 m tall, feet at y=-0.9
     r._babylon = makeFakeBabylon({
       importImpl: async () => ({ meshes: [mesh] }),
     });
     await r._loadPaladinModel('assets');
-    const expected = TARGET_PALADIN_WORLD_HEIGHT / 1.8;
-    assert.ok(Math.abs(r._paladinScale - expected) < 1e-9,
-      `expected scale ${expected}, got ${r._paladinScale}`);
-    // And the bake was applied (feet at origin post-load).
-    assert.equal(mesh._bbox.boundingBox.minimum.y, 0);
+    const expectedScale = TARGET_PALADIN_WORLD_HEIGHT / 1.8;
+    assert.ok(Math.abs(r._paladinScale - expectedScale) < 1e-9,
+      `expected scale ${expectedScale}, got ${r._paladinScale}`);
+    // Feet offset = -minY, so the clone root can lift the model so feet
+    // sit at the cone bottom rather than the Mixamo hip-pivot.
+    assert.ok(Math.abs(r._paladinFeetOffset - 0.9) < 1e-9,
+      `expected feet offset 0.9 (= -minY), got ${r._paladinFeetOffset}`);
   });
 
   // Bridge regression — the broken `await import(BABYLON_LOADERS_CDN)` pattern
@@ -385,16 +405,20 @@ describe('_loadPaladinModel — async load + caching + fallback', () => {
 
 // ─── Bbox normalisation (`_normalisePaladinSource`) ─────────────────────────
 
-describe('_normalisePaladinSource — bbox-derived scale + feet-to-origin bake', () => {
+describe('_normalisePaladinSource — aggregate-bbox scale + feet offset', () => {
   test('returns target/naturalHeight scale for an m-units source (~1.8 m tall)', () => {
     const r = newInst();
     r._babylon = makeFakeBabylon();
     // Default fake source: bbox.y ∈ [-0.9, 0.9] → naturalHeight = 1.8 m.
     const mesh = makeFakeSourceMesh();
-    const scale = r._normalisePaladinSource(mesh);
+    const { scale, feetOffset } = r._normalisePaladinSource(mesh);
     const expected = TARGET_PALADIN_WORLD_HEIGHT / 1.8;
     assert.ok(Math.abs(scale - expected) < 1e-9,
       `expected ${expected}, got ${scale}`);
+    // Feet sit 0.9 below the mesh origin (Mixamo hip-pivot) — feetOffset
+    // is the positive distance the clone root needs to lift to land feet
+    // at root-local y=0.
+    assert.ok(Math.abs(feetOffset - 0.9) < 1e-9);
   });
 
   test('returns target/naturalHeight scale for a cm-units source (~180 cm tall)', () => {
@@ -407,7 +431,7 @@ describe('_normalisePaladinSource — bbox-derived scale + feet-to-origin bake',
       bboxMin: { x: -45, y: 0,   z: -25 },
       bboxMax: { x:  45, y: 180, z:  25 },
     });
-    const scale = r._normalisePaladinSource(mesh);
+    const { scale } = r._normalisePaladinSource(mesh);
     const expected = TARGET_PALADIN_WORLD_HEIGHT / 180;
     assert.ok(Math.abs(scale - expected) < 1e-9,
       `cm-units export must scale tiny (${expected}), got ${scale}`);
@@ -417,40 +441,47 @@ describe('_normalisePaladinSource — bbox-derived scale + feet-to-origin bake',
       'cm-units scale must be far smaller than the old fixed scale');
   });
 
-  test('bakes a translation that places feet at the source mesh origin', () => {
+  test('aggregates min/max Y across a multi-submesh hierarchy (the giant-floating-head fix)', () => {
     const r = newInst();
     r._babylon = makeFakeBabylon();
-    const mesh = makeFakeSourceMesh();
-    // Pre-bake: bbox.minimum.y = -0.9 (hip-pivot).
-    r._normalisePaladinSource(mesh);
-    // The fake's bakeTransformIntoVertices applies the translation to the
-    // bbox, so post-bake minimum.y should be 0 (feet at origin).
-    assert.equal(mesh._bbox.boundingBox.minimum.y, 0);
-    assert.equal(mesh._bakeCalls.length, 1);
-    assert.equal(mesh._bakeCalls[0]._kind, 'translation');
-    assert.equal(mesh._bakeCalls[0].y, 0.9);
-    assert.equal(mesh._refreshed, 1);
-  });
-
-  test('skips the bake when the bbox is already feet-at-origin', () => {
-    const r = newInst();
-    r._babylon = makeFakeBabylon();
-    const mesh = makeFakeSourceMesh('already_baked', {
-      bboxMin: { x: -0.4, y: 0,   z: -0.2 },
-      bboxMax: { x:  0.4, y: 1.8, z:  0.2 },
+    // Helmet alone is ~0.2 m tall sitting near the top. Body is 1.8 m
+    // tall. PR #375 measured ONLY the helmet's bbox (scale = 0.8/0.2 = 4×)
+    // — when applied to the helmet clone, the helmet filled the target
+    // height; the body submesh was never cloned, so the visible model was
+    // a giant floating head. The aggregated bbox here measures the WHOLE
+    // hierarchy (-0.9 .. 0.9 = 1.8 m), giving the correct scale.
+    const helmet = makeFakeSourceMesh('helmet', {
+      bboxMin: { x: -0.2, y:  0.7, z: -0.2 },
+      bboxMax: { x:  0.2, y:  0.9, z:  0.2 },
     });
-    r._normalisePaladinSource(mesh);
-    // A bake with translation (0,0,0) is a no-op — calling it is harmless.
-    // We assert the OUTCOME (feet still at y=0) rather than whether bake
-    // was called, since either is correct.
-    assert.equal(mesh._bbox.boundingBox.minimum.y, 0);
+    const body = makeFakeSourceMesh('body', {
+      bboxMin: { x: -0.4, y: -0.9, z: -0.2 },
+      bboxMax: { x:  0.4, y:  0.5, z:  0.2 },
+    });
+    const cape = makeFakeSourceMesh('cape', {
+      bboxMin: { x: -0.3, y: -0.6, z: -0.1 },
+      bboxMax: { x:  0.3, y:  0.4, z:  0.1 },
+    });
+    const { scale, feetOffset } = r._normalisePaladinSource([helmet, body, cape]);
+    // Aggregate min.y = -0.9 (body), aggregate max.y = 0.9 (helmet)
+    // → naturalHeight = 1.8 → scale = 0.8/1.8.
+    const expectedScale = TARGET_PALADIN_WORLD_HEIGHT / 1.8;
+    assert.ok(Math.abs(scale - expectedScale) < 1e-9,
+      `expected aggregate scale ${expectedScale}, got ${scale}`);
+    // Feet offset = -minY = 0.9 (taken from the body, not the helmet).
+    // This is exactly the regression — measuring helmet alone gives
+    // feet offset = -0.7 and a 4× scale that explodes the model.
+    assert.ok(Math.abs(feetOffset - 0.9) < 1e-9,
+      `feet offset must reflect the body's lowest point, got ${feetOffset}`);
   });
 
   test('falls back to PALADIN_BASE_SCALE when getBoundingInfo is unavailable', () => {
     const r = newInst();
     r._babylon = makeFakeBabylon();
     const mesh = { name: 'no_bbox', getTotalVertices: () => 100, setEnabled() {} };
-    assert.equal(r._normalisePaladinSource(mesh), PALADIN_BASE_SCALE);
+    const { scale, feetOffset } = r._normalisePaladinSource(mesh);
+    assert.equal(scale, PALADIN_BASE_SCALE);
+    assert.equal(feetOffset, 0);
   });
 
   test('falls back when bbox is degenerate (zero height)', () => {
@@ -460,38 +491,64 @@ describe('_normalisePaladinSource — bbox-derived scale + feet-to-origin bake',
       bboxMin: { x: 0, y: 0, z: 0 },
       bboxMax: { x: 0, y: 0, z: 0 },
     });
-    assert.equal(r._normalisePaladinSource(mesh), PALADIN_BASE_SCALE);
+    const { scale } = r._normalisePaladinSource(mesh);
+    assert.equal(scale, PALADIN_BASE_SCALE);
   });
 
-  test('returns the fallback (and does not throw) when the bake call throws', () => {
+  test('skips meshes whose getBoundingInfo throws and aggregates the rest', () => {
     const r = newInst();
     r._babylon = makeFakeBabylon();
-    const mesh = makeFakeSourceMesh();
-    mesh.bakeTransformIntoVertices = () => { throw new Error('bake failed'); };
-    const scale = r._normalisePaladinSource(mesh);
-    // Scale is still computed from the (pre-bake) bbox.
+    const bad = makeFakeSourceMesh('bad');
+    bad.getBoundingInfo = () => { throw new Error('bbox failed'); };
+    const good = makeFakeSourceMesh('good');
+    const { scale, feetOffset } = r._normalisePaladinSource([bad, good]);
     const expected = TARGET_PALADIN_WORLD_HEIGHT / 1.8;
     assert.ok(Math.abs(scale - expected) < 1e-9);
+    assert.ok(Math.abs(feetOffset - 0.9) < 1e-9);
   });
 
-  test('null source returns fallback scale', () => {
+  test('null source returns fallback scale + zero feet offset', () => {
     const r = newInst();
     r._babylon = makeFakeBabylon();
-    assert.equal(r._normalisePaladinSource(null), PALADIN_BASE_SCALE);
+    const { scale, feetOffset } = r._normalisePaladinSource(null);
+    assert.equal(scale, PALADIN_BASE_SCALE);
+    assert.equal(feetOffset, 0);
+  });
+
+  test('empty meshes array returns fallback', () => {
+    const r = newInst();
+    r._babylon = makeFakeBabylon();
+    const { scale, feetOffset } = r._normalisePaladinSource([]);
+    assert.equal(scale, PALADIN_BASE_SCALE);
+    assert.equal(feetOffset, 0);
   });
 });
 
 // ─── Clone helper (`_buildPaladinClone`) ────────────────────────────────────
 
-describe('_buildPaladinClone — per-hero mesh + skeleton + animation', () => {
-  function setupLoaded(r) {
+describe('_buildPaladinClone — per-hero hierarchy clone + skeleton + animation', () => {
+  function setupLoaded(r, { multi = false } = {}) {
     r._babylon = makeFakeBabylon();
-    const mesh = makeFakeSourceMesh();
+    r._scene = {};
+    const mesh = makeFakeSourceMesh('body');
     const skel = makeFakeSkeleton();
     const grp  = makeFakeAnimGroup();
     mesh.skeleton = skel;
-    r._paladinSource = { mesh, skeleton: skel, idleGroup: grp };
-    return { mesh, skel, grp };
+    const meshes = multi
+      ? [
+          makeFakeSourceMesh('helmet', {
+            bboxMin: { x: -0.2, y:  0.7, z: -0.2 },
+            bboxMax: { x:  0.2, y:  0.9, z:  0.2 },
+          }),
+          mesh,
+          makeFakeSourceMesh('cape', {
+            bboxMin: { x: -0.3, y: -0.6, z: -0.1 },
+            bboxMax: { x:  0.3, y:  0.4, z:  0.1 },
+          }),
+        ]
+      : [mesh];
+    r._paladinSource = { mesh, meshes, skeleton: skel, idleGroup: grp };
+    return { mesh, meshes, skel, grp };
   }
 
   test('returns null when source isn\'t loaded yet', () => {
@@ -501,22 +558,24 @@ describe('_buildPaladinClone — per-hero mesh + skeleton + animation', () => {
     assert.equal(r._buildPaladinClone({ id: 'e1', type: 'paladin' }, null), null);
   });
 
-  test('clones the source mesh with a per-entity name', () => {
+  test('clones the primary skinned mesh with a per-entity name', () => {
     const r = newInst();
     const { mesh } = setupLoaded(r);
     const out = r._buildPaladinClone({ id: 'e42', type: 'paladin' }, null);
-    assert.ok(out && out.mesh);
-    assert.equal(out.mesh.name, 'paladin_e42');
-    assert.equal(out.mesh.source, mesh);
+    assert.ok(out && out.skinnedMesh);
+    assert.equal(out.skinnedMesh.source, mesh);
+    // Child mesh name embeds the entity id + the source mesh's name.
+    assert.ok(out.skinnedMesh.name.startsWith('paladin_e42'),
+      `expected skinned clone name to start with 'paladin_e42', got '${out.skinnedMesh.name}'`);
   });
 
-  test('clones the skeleton and binds it to the cloned mesh', () => {
+  test('clones the skeleton and binds it to the skinned child', () => {
     const r = newInst();
     setupLoaded(r);
     const out = r._buildPaladinClone({ id: 'e1', type: 'paladin' }, null);
     assert.ok(out.skeleton);
     assert.equal(out.skeleton.name, 'paladinSkel_e1');
-    assert.equal(out.mesh.skeleton, out.skeleton);
+    assert.equal(out.skinnedMesh.skeleton, out.skeleton);
   });
 
   test('clones the idle animation group and starts it looping at speed 1.0', () => {
@@ -534,9 +593,6 @@ describe('_buildPaladinClone — per-hero mesh + skeleton + animation', () => {
     const out = r._buildPaladinClone({ id: 'e1', type: 'paladin' }, null);
     const conv = out.animationGroup._converter;
     assert.equal(typeof conv, 'function');
-    // The converter should return the cloned-skeleton bone matching the
-    // source target's name. We can't compare by reference (clones are
-    // distinct), so just check that name-matched lookup happens.
     const fakeOldTarget = { name: 'mixamorig:Hips' };
     const remapped = conv(fakeOldTarget);
     assert.equal(remapped.name, 'mixamorig:Hips');
@@ -548,11 +604,10 @@ describe('_buildPaladinClone — per-hero mesh + skeleton + animation', () => {
     const out = r._buildPaladinClone({ id: 'e1', type: 'paladin' }, null);
     const conv = out.animationGroup._converter;
     const fake = { name: 'NonExistentBone' };
-    // Returns the original target (passthrough) rather than throwing.
     assert.equal(conv(fake), fake);
   });
 
-  test('per-hero cloned animation groups are distinct objects', () => {
+  test('per-hero cloned animation groups + skeletons are distinct objects', () => {
     const r = newInst();
     setupLoaded(r);
     const a = r._buildPaladinClone({ id: 'eA', type: 'paladin' }, null);
@@ -563,7 +618,7 @@ describe('_buildPaladinClone — per-hero mesh + skeleton + animation', () => {
       'each hero must have its own skeleton instance');
   });
 
-  test('cloned mesh is parented to the provided anchor (the cone)', () => {
+  test('clone root is parented to the provided anchor (the cone)', () => {
     const r = newInst();
     setupLoaded(r);
     const cone = { name: 'cone' };
@@ -571,12 +626,11 @@ describe('_buildPaladinClone — per-hero mesh + skeleton + animation', () => {
     assert.equal(out.mesh.parent, cone);
   });
 
-  test('cloned mesh receives the bbox-derived scale + forward-facing yaw', () => {
+  test('clone root receives the bbox-derived scale + forward-facing yaw', () => {
     const r = newInst();
     setupLoaded(r);
-    // Pin a known scale so the test isn't coupled to the bbox numbers used
-    // by the default fake source.
     r._paladinScale = 0.5;
+    r._paladinFeetOffset = 0;
     const out = r._buildPaladinClone({ id: 'e1', type: 'paladin' }, null);
     assert.equal(out.mesh.scaling.x, 0.5);
     assert.equal(out.mesh.scaling.y, 0.5);
@@ -595,30 +649,101 @@ describe('_buildPaladinClone — per-hero mesh + skeleton + animation', () => {
     }
   });
 
-  test('cloned mesh has alwaysSelectAsActiveMesh set (defeats bbox-based culling)', () => {
+  test('every cloned CHILD mesh has alwaysSelectAsActiveMesh set (per-submesh culling fix)', () => {
+    // The "giant floating head" regression came partly from per-submesh
+    // bbox culling — even after fixing scale, Babylon culls each child by
+    // its own bbox during skinning. Setting the flag on the root alone
+    // doesn't propagate; every child needs it.
     const r = newInst();
-    setupLoaded(r);
+    setupLoaded(r, { multi: true });
     const out = r._buildPaladinClone({ id: 'e1', type: 'paladin' }, null);
-    assert.equal(out.mesh.alwaysSelectAsActiveMesh, true);
+    assert.ok(out.childMeshes.length >= 2,
+      `multi-mesh clone must have >1 child, got ${out.childMeshes.length}`);
+    for (const child of out.childMeshes) {
+      assert.equal(child.alwaysSelectAsActiveMesh, true,
+        `child ${child.name} must have alwaysSelectAsActiveMesh set`);
+    }
   });
 
-  test('mesh sits at cone-local feet (Y = -coneHeight/2) so feet rest on the base disc', () => {
+  test('mesh root anchors feet at the cone bottom rim (lifts model by scale * feetOffset)', () => {
     const r = newInst();
     setupLoaded(r);
-    // Non-leader unit (regular paladin).
+    r._paladinScale = 0.5;
+    r._paladinFeetOffset = 0.9; // Mixamo hip-pivot → feet 0.9 below origin
     const out = r._buildPaladinClone({ id: 'e1', type: 'survivor' }, null);
-    const expected = -(STANDEE_CONE_HEIGHT) / 2;
-    assert.ok(Math.abs(out.mesh.position.y - expected) < 1e-9,
-      `expected feet at ${expected}, got ${out.mesh.position.y}`);
+    // Expected: coneFeetY + scale * feetOffset = -0.275 + 0.45 = 0.175
+    // → the model's natural feet (at local y = -0.9, scaled to -0.45)
+    // sit at root.position.y + (-0.45) = -0.275, exactly the cone bottom.
+    const expectedRootY = -(STANDEE_CONE_HEIGHT) / 2 + 0.5 * 0.9;
+    assert.ok(Math.abs(out.mesh.position.y - expectedRootY) < 1e-9,
+      `expected root y ${expectedRootY}, got ${out.mesh.position.y}`);
+    // Verify the derived feet position lands at the cone bottom rim.
+    const feetWorldYInCone = out.mesh.position.y + 0.5 * (-0.9);
+    const coneBottom = -(STANDEE_CONE_HEIGHT) / 2;
+    assert.ok(Math.abs(feetWorldYInCone - coneBottom) < 1e-9,
+      `feet should land at cone bottom ${coneBottom}, got ${feetWorldYInCone}`);
   });
 
   test('leader entities use the leader height multiplier for the feet offset', () => {
     const r = newInst();
     setupLoaded(r);
+    r._paladinScale = 1;
+    r._paladinFeetOffset = 0;
     const out = r._buildPaladinClone({ id: 'leader', type: 'paladin' }, null);
     const expected = -(STANDEE_CONE_HEIGHT * STANDEE_LEADER_HEIGHT_MUL) / 2;
     assert.ok(Math.abs(out.mesh.position.y - expected) < 1e-9,
-      `leader feet should be at ${expected}, got ${out.mesh.position.y}`);
+      `leader root should sit at ${expected}, got ${out.mesh.position.y}`);
+  });
+
+  // ── Multi-mesh hierarchy ─────────────────────────────────────────────────
+  test('multi-mesh hierarchy: each source submesh produces a cloned child parented to the root', () => {
+    const r = newInst();
+    setupLoaded(r, { multi: true });
+    const out = r._buildPaladinClone({ id: 'multi', type: 'paladin' }, null);
+    // 3 source meshes → 3 child clones.
+    assert.equal(out.childMeshes.length, 3);
+    // Every child has the cloned root as its parent.
+    for (const c of out.childMeshes) {
+      assert.equal(c.parent, out.mesh,
+        `child ${c.name} must be parented to the cloned root`);
+    }
+    // Root is the new TransformNode, NOT one of the child meshes.
+    assert.equal(out.mesh._isTransformNode, true);
+    assert.equal(out.childMeshes.includes(out.mesh), false);
+  });
+
+  test('multi-mesh hierarchy: skinned child is identified and skeleton attaches only to it', () => {
+    const r = newInst();
+    const { mesh: srcSkinned } = setupLoaded(r, { multi: true });
+    const out = r._buildPaladinClone({ id: 'multi2', type: 'paladin' }, null);
+    // The skinned child is the clone whose source mesh === src.mesh.
+    assert.equal(out.skinnedMesh.source, srcSkinned);
+    assert.equal(out.skinnedMesh.skeleton, out.skeleton);
+    // Non-skinned children keep their skeleton=null (or absent) — only
+    // the primary skinned child carries the cloned skeleton.
+    for (const c of out.childMeshes) {
+      if (c === out.skinnedMesh) continue;
+      assert.notEqual(c.skeleton, out.skeleton,
+        `non-skinned child ${c.name} must not share the cloned skeleton`);
+    }
+  });
+
+  test('TransformNode fallback path: when BABYLON.TransformNode is unavailable, the primary skinned clone serves as the root', () => {
+    const r = newInst();
+    // Build a paladin source the same way setupLoaded does, but with a
+    // BABYLON stub that lacks TransformNode — the implementation should
+    // fall back to using the primary skinned clone as the root.
+    r._babylon = makeFakeBabylon({ includeTransformNode: false });
+    r._scene = {};
+    const mesh = makeFakeSourceMesh('body');
+    const skel = makeFakeSkeleton();
+    mesh.skeleton = skel;
+    r._paladinSource = { mesh, meshes: [mesh], skeleton: skel, idleGroup: null };
+    const out = r._buildPaladinClone({ id: 'no_tn', type: 'paladin' }, null);
+    assert.ok(out);
+    // mesh === skinnedMesh in fallback path; scale/rotation applied to it.
+    assert.equal(out.mesh, out.skinnedMesh);
+    assert.equal(out.ownsRootNode, false);
   });
 });
 
@@ -632,25 +757,65 @@ describe('_disposePaladinClone — tears down animation + skeleton + mesh', () =
     assert.doesNotThrow(() => r._disposePaladinClone(null));
   });
 
-  test('disposes all three pieces and clears the field', () => {
+  test('disposes the animation group, skeleton, and every child mesh, then clears the field', () => {
     const r = newInst();
-    const mesh = makeFakeClonedMesh('m', null);
+    const root = { name: 'root', _disposed: false, dispose() { this._disposed = true; } };
+    const child1 = makeFakeClonedMesh('c1', null);
+    const child2 = makeFakeClonedMesh('c2', null);
     const skel = makeFakeSkeleton('s');
     const grp  = makeFakeAnimGroup('g');
-    const standee = { paladinClone: { mesh, skeleton: skel, animationGroup: grp } };
+    const standee = {
+      paladinClone: {
+        mesh: root,
+        skinnedMesh: child1,
+        childMeshes: [child1, child2],
+        ownsRootNode: true,
+        skeleton: skel,
+        animationGroup: grp,
+      },
+    };
     r._disposePaladinClone(standee);
     assert.equal(grp._disposed, true);
     assert.equal(skel._disposed, true);
-    assert.equal(mesh._disposed, true);
+    assert.equal(child1._disposed, true);
+    assert.equal(child2._disposed, true);
+    assert.equal(root._disposed, true);
+    assert.equal(standee.paladinClone, null);
+  });
+
+  test('does NOT double-dispose the root when ownsRootNode is false (root is one of the children)', () => {
+    const r = newInst();
+    const child = makeFakeClonedMesh('c', null);
+    // Legacy / fallback shape: mesh === skinnedMesh === single child.
+    const standee = {
+      paladinClone: {
+        mesh: child,
+        skinnedMesh: child,
+        childMeshes: [child],
+        ownsRootNode: false,
+        skeleton: null,
+        animationGroup: null,
+      },
+    };
+    let disposeCalls = 0;
+    const origDispose = child.dispose.bind(child);
+    child.dispose = function() { disposeCalls++; origDispose(); };
+    r._disposePaladinClone(standee);
+    assert.equal(disposeCalls, 1, 'child should be disposed exactly once');
     assert.equal(standee.paladinClone, null);
   });
 
   test('survives partial clones (e.g. when skeleton.clone returned null)', () => {
     const r = newInst();
-    const mesh = makeFakeClonedMesh('m', null);
-    const standee = { paladinClone: { mesh, skeleton: null, animationGroup: null } };
+    const child = makeFakeClonedMesh('m', null);
+    const standee = {
+      paladinClone: {
+        mesh: child, skinnedMesh: child, childMeshes: [child],
+        ownsRootNode: false, skeleton: null, animationGroup: null,
+      },
+    };
     assert.doesNotThrow(() => r._disposePaladinClone(standee));
-    assert.equal(mesh._disposed, true);
+    assert.equal(child._disposed, true);
   });
 });
 
