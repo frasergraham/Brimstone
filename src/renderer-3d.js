@@ -5686,8 +5686,12 @@ export class Renderer3D {
     const { x: toX,   z: toZ   } = hexToWorld(toCol,   toRow);
     // Cone slide time tied to MOVE_ANIM_MS so the walking-speed-match
     // calc in _loadWalkingAnimation actually corresponds to real cone
-    // motion. 60fps × MOVE_ANIM_MS/1000 = frames for one slide.
-    const FRAMES_MOVE = Math.max(1, Math.round(MOVE_ANIM_MS * 60 / 1000));
+    // motion. Scaled by the current playback speed multiplier so vfast
+    // mode produces a faster cone slide AND a proportionally faster
+    // walking cycle (next code block) → feet plant in every mode.
+    const speedMul   = this._playbackSpeedMul ?? 1.0;
+    const effMoveMs  = MOVE_ANIM_MS * speedMul;
+    const FRAMES_MOVE = Math.max(1, Math.round(effMoveMs * 60 / 1000));
 
     // Cancel any in-flight move on this entity so plan-step "A→B→C" hops
     // don't queue up and play simultaneously.
@@ -5715,7 +5719,10 @@ export class Renderer3D {
       const walkGroup = this._paladinSource?.walkGroup;
       const baseRatio = this._walkingSource?.speedRatio ?? 1.0;
       if (walkGroup && 'speedRatio' in walkGroup) {
-        walkGroup.speedRatio = baseRatio * distMul;
+        // Dividing by speedMul makes a faster (smaller) speedMul produce
+        // a higher walking speedRatio — i.e. a faster cycle that matches
+        // the shorter cone-slide duration.
+        walkGroup.speedRatio = (baseRatio * distMul) / Math.max(0.05, speedMul);
       }
     }
 
@@ -5740,6 +5747,23 @@ export class Renderer3D {
 
   // ─── Lunge animation ─────────────────────────────────────────────────────
 
+  /** Set the playback-speed multiplier the move/lunge animations use to
+   *  compress their durations + scale the walking-animation playback
+   *  rate. Pass a mode key from PLAYBACK_SPEED_MULS ('cinematic' |
+   *  'fast' | 'vfast') or a raw number (clamped to [0.1, 2.0]). Called
+   *  from main.js whenever the operator changes the playback speed. */
+  setPlaybackSpeed(modeOrMul) {
+    let mul;
+    if (typeof modeOrMul === 'number' && Number.isFinite(modeOrMul)) {
+      mul = Math.max(0.1, Math.min(2.0, modeOrMul));
+    } else if (typeof modeOrMul === 'string' && PLAYBACK_SPEED_MULS[modeOrMul] != null) {
+      mul = PLAYBACK_SPEED_MULS[modeOrMul];
+    } else {
+      mul = 1.0;
+    }
+    this._playbackSpeedMul = mul;
+  }
+
   /** Slide the attacker's standee to the midpoint between attacker and target
    *  hexes and hold there until `returnAllLungeAnims()` is called. Mirrors
    *  the 2D contract: an "attack-in-progress" pose, not a one-shot. */
@@ -5752,7 +5776,8 @@ export class Renderer3D {
     const { x: toX,   z: toZ   } = hexToWorld(toCol,   toRow);
     const midX = (fromX + toX) * 0.5;
     const midZ = (fromZ + toZ) * 0.5;
-    const FRAMES_LUNGE = 12; // ≈200ms — quick, aggressive
+    const lungeSpeedMul = this._playbackSpeedMul ?? 1.0;
+    const FRAMES_LUNGE = Math.max(1, Math.round(LUNGE_ANIM_MS * lungeSpeedMul * 60 / 1000));
 
     this._scene.stopAnimation(standee.plane);
     this._activeLungeIds.add(entityId);
@@ -8926,6 +8951,16 @@ export const MOVE_ANIM_MS = 1000;
  *  to a normal move (~80% of one). */
 export const LUNGE_ANIM_MS = 800;
 
+/** Per-speed-mode multipliers applied to MOVE_ANIM_MS and friends.
+ *  setPlaybackSpeed('cinematic'|'fast'|'vfast') reads from here. Fast
+ *  modes compress the cone-slide AND scale walkGroup.speedRatio in
+ *  step so the foot-plant math stays correct regardless of mode. */
+export const PLAYBACK_SPEED_MULS = Object.freeze({
+  cinematic: 1.0,
+  fast:      0.55,
+  vfast:     0.30,
+});
+
 /** Duration (ms) of a projectile arc. ~320ms — matches the 2D path's
  *  default `addProjectileAnim` duration. */
 export const PROJECTILE_ANIM_MS = 320;
@@ -9138,8 +9173,11 @@ export function attackBadgePosition(toCol, toRow, y = ATTACK_BADGE_Y) {
 
 /** Plan ghost — translucent standee clone walking the planned path. */
 export const PLAN_GHOST_ALPHA          = 0.4;
-/** Duration (ms) of a single step of the walking ghost. */
-export const PLAN_GHOST_STEP_MS        = 600;
+/** Duration (ms) of a single step of the walking ghost. Mirrors
+ *  MOVE_ANIM_MS so the ghost's per-hex slide matches the live paladin's
+ *  resolution pace and the walking-animation foot-plant math stays
+ *  identical between the two paths. */
+export const PLAN_GHOST_STEP_MS        = MOVE_ANIM_MS;
 /** Duration (ms) of the post-arrival fade before the ghost teleports back to
  *  the path's origin and starts the next cycle. */
 export const PLAN_GHOST_FADE_MS        = 280;
