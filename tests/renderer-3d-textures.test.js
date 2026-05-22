@@ -29,9 +29,12 @@ describe('Renderer3D — terrainSpriteIdFor', () => {
     assert.match(id, /^grass_[1-5]$/);
   });
 
-  test('forest tile picks a forest_N variant', () => {
+  test('forest tile uses a grass underlay variant (real 3D tree cones sit on top)', () => {
+    // FOREST sprite atlas variants are obsolete now — we render trees as
+    // actual cone meshes on the tile, so the ground underneath is plain
+    // grass. Same pattern BUILDING uses (dirt underlay + building box on top).
     const id = terrainSpriteIdFor({ type: TileType.FOREST }, 1, 2);
-    assert.match(id, /^forest_[1-5]$/);
+    assert.match(id, /^grass_[1-5]$/);
   });
 
   test('dirt tile picks a dirt_N variant', () => {

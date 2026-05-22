@@ -1569,6 +1569,17 @@ body.renderer-3d #rotate-right {
   }
 }
 
+/* Desktop devices: hide zoom/rotate map control buttons entirely — the wheel
+   handles zoom and right-drag handles rotation, so the on-screen buttons are
+   pure visual clutter. fit-map / focus-on-me / speed toggle remain. */
+@media (hover: hover) and (pointer: fine) {
+  body.renderer-3d #camera-controls-3d { display: none !important; }
+  #zoom-controls #zoom-in,
+  #zoom-controls #zoom-out,
+  #zoom-controls #rotate-left,
+  #zoom-controls #rotate-right { display: none; }
+}
+
 /* ── Chronicle toggle (top-left, independent of zoom controls) ─────────── */
 
 /* Shift map controls right when AI debug panel is open */

@@ -27,10 +27,12 @@ import { Phase } from '../src/game.js';
 describe('Renderer3D — sunDirectionForPhase', () => {
   test('dawn shines from the east at a low angle', () => {
     const d = sunDirectionForPhase(Phase.DAWN);
-    assert.equal(d.x, -0.6, 'dawn x = -0.6 (sun east of map)');
-    assert.equal(d.y, -0.7, 'dawn y < 0 (light travels downward)');
-    assert.ok(Math.abs(d.x) > Math.abs(d.y * 0.5),
-      'dawn has a meaningful horizontal component (low sun)');
+    assert.ok(d.x < 0, 'dawn x negative (sun east of map)');
+    assert.ok(d.y < 0, 'dawn y < 0 (light travels downward)');
+    // Low sun: the horizontal component must dominate the vertical so we get
+    // long, raked shadows rather than near-overhead noon shadows.
+    assert.ok(Math.abs(d.x) > Math.abs(d.y),
+      `dawn |x|=${Math.abs(d.x)} should exceed |y|=${Math.abs(d.y)} (low sun, near horizon)`);
   });
 
   test('day sun is dominantly downward but tilted enough to cast visible shadows', () => {
@@ -48,7 +50,7 @@ describe('Renderer3D — sunDirectionForPhase', () => {
   test('dusk mirrors dawn — shines from the west', () => {
     const dawn = sunDirectionForPhase(Phase.DAWN);
     const dusk = sunDirectionForPhase(Phase.DUSK);
-    assert.equal(dusk.x, 0.6, 'dusk x = 0.6 (sun west of map)');
+    assert.ok(dusk.x > 0, 'dusk x positive (sun west of map)');
     assert.equal(dusk.x, -dawn.x, 'dusk x is the mirror of dawn x');
     assert.equal(dusk.y, dawn.y, 'dusk and dawn share the same low pitch');
   });

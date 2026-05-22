@@ -166,9 +166,14 @@ describe('Renderer interface — rotateBy on both classes', () => {
 // Pure-helper tests for the math driving the custom Babylon camera input.
 // Babylon-free imports so they run in node-test without a browser context.
 
-describe('CAMERA_BETA_LOCKED — tilt permanently pinned at 45°', () => {
-  test('CAMERA_BETA_LOCKED equals π/4 exactly', () => {
-    assert.equal(CAMERA_BETA_LOCKED, Math.PI / 4);
+describe('CAMERA_BETA_LOCKED — tilt permanently pinned at the locked angle', () => {
+  test('CAMERA_BETA_LOCKED is in the playable range (15° – 60°)', () => {
+    // Lock is now operator-tuned (~35°) — keep it inside a sensible band but
+    // don't pin the exact value here, that's taste.
+    const min = Math.PI * 15 / 180;
+    const max = Math.PI * 60 / 180;
+    assert.ok(CAMERA_BETA_LOCKED >= min && CAMERA_BETA_LOCKED <= max,
+      `tilt ${CAMERA_BETA_LOCKED} out of [${min}, ${max}]`);
   });
   test('CAMERA_BETA_LOCKED stays inside (0, π/2) — camera never flips under the map', () => {
     assert.ok(CAMERA_BETA_LOCKED > 0);

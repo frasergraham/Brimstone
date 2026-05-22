@@ -99,7 +99,11 @@ export const SELECTION_FOCUS_RADIUS = 14;
  *  tilt-lock task) so the board always reads as a fixed isometric. The
  *  camera's lowerBetaLimit and upperBetaLimit are both pinned to π/4 in
  *  _initBabylon, so any stray beta mutation is immediately re-clamped. */
-export const CAMERA_BETA_LOCKED = Math.PI / 4;
+// Locked tilt angle for the ArcRotateCamera (radians from +Y). Higher = more
+// top-down; π/2 would be a flat-on horizon view. 35° → camera sits higher in
+// the sky and looks down more sharply, which reads the texture-rich top faces
+// and standee silhouettes clearly without going pure top-down.
+export const CAMERA_BETA_LOCKED = Math.PI * 35 / 180;
 
 /** Repeat cadence for hold-to-repeat rotate buttons (ms). */
 export const CAMERA_BUTTON_REPEAT_MS = 50;
@@ -1378,7 +1382,7 @@ export class Renderer3D {
     // converts a "fingers spread by X px" gesture into a radius delta.
     // PINCH_RADIUS_PER_PX is exported at module scope so the pure pinch→radius
     // helper can be unit-tested without spinning up Babylon.
-    const ALPHA_PER_PIXEL      = 0.006; // right-drag rotate yaw
+    const ALPHA_PER_PIXEL      = 0.0025; // right-drag rotate yaw (dialled down — old 0.006 spun too fast on desktop)
     const WHEEL_RADIUS_PER_DEL = 0.05;  // mouse wheel zoom
 
     const isTouchPoint = (p) => p && p.type === 'touch';
@@ -4134,7 +4138,11 @@ export function terrainSpriteIdFor(tile, col, row) {
   if (!tile) return null;
   let baseType;
   if (tile.type === TileType.BUILDING) baseType = TileType.DIRT;
-  else if (tile.type === TileType.GRASS || tile.type === TileType.FOREST || tile.type === TileType.DIRT) baseType = tile.type;
+  // FOREST tiles now render trees as real 3D cones — the underlying ground
+  // is grass, not a "forest" sprite of painted-on trees that would clash with
+  // the cone silhouettes. Same trick BUILDING uses (dirt underlay).
+  else if (tile.type === TileType.GRASS || tile.type === TileType.DIRT) baseType = tile.type;
+  else if (tile.type === TileType.FOREST) baseType = TileType.GRASS;
   // Road / river / bridge get a grass underlay sprite — the network pass
   // overlays bezier tubes on top of the grass, so the grass texture is what
   // shows on either side of the path.
@@ -4816,7 +4824,8 @@ export function forestTreesForHex(col, row) {
 export const PHASE_LIGHT_CONFIG = Object.freeze({
   dawn:  {
     intensity: 0.25, color: { r: 1.00, g: 0.82, b: 0.62 }, clear: { r: 0.55, g: 0.38, b: 0.36 },
-    sun: { dir: { x: -0.6, y: -0.7, z: 0.1 }, intensity: 1.2 },
+    // Low sun close to the horizon — long shadows raked across the map east-to-west.
+    sun: { dir: { x: -0.85, y: -0.40, z: 0.1 }, intensity: 1.2 },
   },
   day:   {
     intensity: 0.30, color: { r: 1.00, g: 1.00, b: 0.97 }, clear: { r: 0.55, g: 0.72, b: 0.85 },
@@ -4827,7 +4836,8 @@ export const PHASE_LIGHT_CONFIG = Object.freeze({
   },
   dusk:  {
     intensity: 0.25, color: { r: 1.00, g: 0.62, b: 0.48 }, clear: { r: 0.50, g: 0.32, b: 0.36 },
-    sun: { dir: { x:  0.6, y: -0.7, z: 0.1 }, intensity: 1.2 },
+    // Low sun mirrored from dawn — long shadows raked west-to-east.
+    sun: { dir: { x:  0.85, y: -0.40, z: 0.1 }, intensity: 1.2 },
   },
   night: {
     intensity: 0.21, color: { r: 0.70, g: 0.78, b: 1.00 }, clear: { r: 0.12, g: 0.18, b: 0.32 },
@@ -4914,8 +4924,8 @@ export const GLOW_LAYER_INTENSITY = 0.5;
  *  Round 3: dialled MIN/MAX down ~50% — earlier values produced a halo bright
  *  enough to swallow the standee silhouette at zoomed-out distances. */
 export const SELECTION_PULSE_PERIOD_MS = 1500;
-export const SELECTION_PULSE_MIN       = 0.18;
-export const SELECTION_PULSE_MAX       = 0.45;
+export const SELECTION_PULSE_MIN       = 0.06;
+export const SELECTION_PULSE_MAX       = 0.18;
 /** Base cyan emissive that the selection pulse modulates each frame. */
 export const SELECTION_EMISSIVE_BASE = Object.freeze({ r: 0.25, g: 0.85, b: 0.95 });
 
