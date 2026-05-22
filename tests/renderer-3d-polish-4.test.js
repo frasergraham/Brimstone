@@ -142,9 +142,13 @@ describe('Renderer3D round-4 polish — hexOutlinePaths', () => {
 // ── Item 5: fog readability bump ─────────────────────────────────────────────
 
 describe('Renderer3D round-4 polish — FOG_TILE_DARKEN', () => {
-  test('fog darken factor lets terrain stay readable (≥ 0.5) but visibly dim (≤ 0.7)', () => {
-    assert.ok(FOG_TILE_DARKEN >= 0.5 && FOG_TILE_DARKEN <= 0.7,
-      `FOG_TILE_DARKEN ${FOG_TILE_DARKEN} out of expected band [0.5, 0.7]`);
+  test('fog darken factor leaves terrain visibly fogged against the daytime sun', () => {
+    // After the daytime lighting bump (sun cranked to 2.0 intensity, hemi
+    // dropped to 0.3), fog needs a stronger tint to read against the bright
+    // backdrop. Anywhere in (0, 0.4] keeps unfogged tiles legible while
+    // clearly signalling "this hex is out of sight."
+    assert.ok(FOG_TILE_DARKEN > 0 && FOG_TILE_DARKEN <= 0.4,
+      `FOG_TILE_DARKEN ${FOG_TILE_DARKEN} out of expected band (0, 0.4]`);
   });
 });
 

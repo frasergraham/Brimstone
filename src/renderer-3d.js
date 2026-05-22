@@ -1192,6 +1192,37 @@ export class Renderer3D {
     this._glowLayer = new BABYLON.GlowLayer('glow', scene, { mainTextureFixedSize: 512 });
     this._glowLayer.intensity = GLOW_LAYER_INTENSITY;
 
+    // Selected-hex outline — a thick golden hex ring drawn just above the
+    // tile top. Positioned each draw in `_syncSelectedHexOutline`; hidden
+    // when no unit is selected. Uses CreateTube around a closed hex loop so
+    // the ring has visible thickness at any zoom (LinesMesh aliases hard at
+    // high zoom-out).
+    {
+      const SQRT3 = Math.sqrt(3);
+      const ringR = HEX_RADIUS_WORLD * 0.96;
+      const path = [];
+      for (let i = 0; i <= 6; i++) {
+        const a = Math.PI / 6 + i * Math.PI / 3;
+        path.push(new BABYLON.Vector3(ringR * Math.cos(a), 0.02, ringR * Math.sin(a)));
+      }
+      const ring = BABYLON.MeshBuilder.CreateTube('selectedHexOutline', {
+        path,
+        radius: 0.05,
+        tessellation: 6,
+        sideOrientation: BABYLON.Mesh.DOUBLESIDE,
+      }, scene);
+      const ringMat = new BABYLON.StandardMaterial('selectedHexOutlineMat', scene);
+      ringMat.diffuseColor  = new BABYLON.Color3(1.0, 0.78, 0.20);
+      ringMat.emissiveColor = new BABYLON.Color3(0.85, 0.65, 0.10);
+      ringMat.specularColor = new BABYLON.Color3(0, 0, 0);
+      ring.material   = ringMat;
+      ring.isPickable = false;
+      ring.isVisible  = false;
+      // Don't parent to mapRoot — that would inherit any future map yaw and
+      // the ring would tilt off the ground. Position is in world space.
+      this._selectedHexOutline = ring;
+    }
+
     // Apply the starting phase's lighting immediately (no transition) so the
     // very first frame already reads dawn/day/dusk/night correctly.
     this._lastPhase   = this.state?.phase ?? null;
@@ -2765,10 +2796,11 @@ export class Renderer3D {
       scene,
     );
     plane.parent        = parent;
-    // BILLBOARDMODE_Y keeps the label upright while rotating to face the camera
-    // around the world Y axis — matches the rest of the scene's billboarded
-    // sprites (standees, badges) and reads naturally at the locked 45° tilt.
-    plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_Y;
+    // BILLBOARDMODE_ALL keeps the label fully camera-facing on all axes — at
+    // the steeper-down 35° tilt a Y-only billboard reads as a slanted plane
+    // ("tilted backwards into the map"), while full screen-space text always
+    // looks flat-on regardless of camera angle or zoom.
+    plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
     plane.isPickable    = false;
     plane.material      = mat;
     // Sit above the building's NE-slot roof, not over the hex centre, so the
@@ -2821,6 +2853,18 @@ export class Renderer3D {
       // Round 4: drop the previous standee from the GlowLayer's include-only
       // set so its (now non-emissive) base no longer counts toward the layer.
       this._glowLayer?.removeIncludedOnlyMesh?.(prev.base);
+    }
+    // Selected-hex outline: parked off-screen when nothing's selected, snapped
+    // to the new selection's tile centre when there is one.
+    if (this._selectedHexOutline) {
+      if (newId && this._entityStandees.has(newId)) {
+        const standee = this._entityStandees.get(newId);
+        this._selectedHexOutline.position.x = standee.base.position.x;
+        this._selectedHexOutline.position.z = standee.base.position.z;
+        this._selectedHexOutline.isVisible  = true;
+      } else {
+        this._selectedHexOutline.isVisible = false;
+      }
     }
     if (newId && this._entityStandees.has(newId)) {
       const standee = this._entityStandees.get(newId);
@@ -3800,7 +3844,13 @@ export class Renderer3D {
     // look. Direction is set via Vector3, but only when a sun config exists
     // (defensive — older snapshots may not have one).
     if (cfg.sun && this._sunLight) {
-      this._sunLight.direction = new BABYLON.Vector3(cfg.sun.dir.x, cfg.sun.dir.y, cfg.sun.dir.z);
+      // Sun direction is round-based (sweeps across the day) rather than
+      // phase-locked — every DAY round shows the sun in a different
+      // position. _onBeforeRender re-applies the round direction each frame
+      // so this assignment is overridden as soon as state.round is known.
+      const round = this.state?.round ?? 1;
+      const dir = sunDirectionForRound(round, this.state?.cycleConfig);
+      this._sunLight.direction = new BABYLON.Vector3(dir.x, dir.y, dir.z);
       this._sunLight.intensity = cfg.sun.intensity;
     }
     // Mirror into _lightState so transition snapshots see the new anchor.
@@ -3861,6 +3911,16 @@ export class Renderer3D {
       this._applyLightConfig(cur);
       if (u >= 1) this._phaseTransition = null;
     }
+    // Sun direction per round (overrides phase config sun dir). Sweeps across
+    // the day rather than snapping at phase boundaries — see
+    // `sunDirectionForRound` for the dawn→day1→day2→day3→dusk progression.
+    if (this._sunLight && this.state) {
+      const round = this.state.round ?? 1;
+      const dir = sunDirectionForRound(round, this.state.cycleConfig);
+      this._sunLight.direction.x = dir.x;
+      this._sunLight.direction.y = dir.y;
+      this._sunLight.direction.z = dir.z;
+    }
     // Selection halo pulse.
     if (this.selectedEntityId != null) {
       const standee = this._entityStandees.get(this.selectedEntityId);
@@ -3869,13 +3929,9 @@ export class Renderer3D {
         this._setStandeeHaloIntensity(standee, k);
       }
     }
-    // Node glow pulse.
-    if (this._nodeGlowMeshes.length > 0) {
-      const k = pulseFactor(now, NODE_PULSE_PERIOD_MS, NODE_PULSE_MIN, NODE_PULSE_MAX);
-      for (const ng of this._nodeGlowMeshes) {
-        this._setNodeGlowIntensity(ng, k);
-      }
-    }
+    // Node hex outlines no longer pulse — they hold a steady controller tint
+    // (task 7). Initial colour is set by `_syncNodeGlowMeshes` whenever the
+    // controller changes; no per-frame mutation needed.
     // Plan ghost walking previewer.
     this._pumpPlanGhosts(now);
     // FPS chip — throttled DOM text update, 3D-only.
@@ -3929,46 +3985,59 @@ export class Renderer3D {
       this._nodeGlowBuilt = true;
     }
     // Recolour by controller each draw — controller can flip when entities move.
+    // Pulsing was removed (task 7): write the emissive directly so the ring
+    // holds a steady controller tint.
     for (const ng of this._nodeGlowMeshes) {
       const ctrl = nodeController(ng.obj, this.state.entities);
       const css = getNodeGlowColor(ctrl);
       const [r, g, b] = cssHexToRgb01(css);
-      // Pulse intensity is applied per-frame from _onBeforeRender; here we set
-      // the *target* colour so the next pulse step picks it up.
       ng.glowColor = { r, g, b };
+      const mat = ng.disc?.material;
+      if (mat?.emissiveColor) {
+        mat.emissiveColor.r = r * 0.7;
+        mat.emissiveColor.g = g * 0.7;
+        mat.emissiveColor.b = b * 0.7;
+      }
+      if (mat?.diffuseColor) {
+        mat.diffuseColor.r = r * 0.4;
+        mat.diffuseColor.g = g * 0.4;
+        mat.diffuseColor.b = b * 0.4;
+      }
     }
   }
 
   _buildNodeGlowMeshes() {
     const BABYLON = this._babylon;
     if (!BABYLON || !this._scene) return;
+    const SQRT3 = Math.sqrt(3);
+    const ringR = HEX_RADIUS_WORLD * 0.96;
     for (const obj of this.state.witchObjectives) {
-      // The glow visualises the whole cluster — anchor on each cluster hex so
-      // multi-hex nodes still read as a unified controlled area.
+      // Hex outline ring tinted with the controller colour — replaces the
+      // pulsing disc. CreateTube around a closed hex loop so the ring stays
+      // visible at any zoom (LinesMesh aliases hard at zoomed-out distances).
       for (const h of obj.hexes) {
         const { x, z } = hexToWorld(h.col, h.row);
-        // Saturated emissive disc resting just above the tile prism. The
-        // upward shaft was dropped (playtest feedback) — controller clarity
-        // now comes from a larger, more saturated, opaque-feeling disc.
-        const disc = BABYLON.MeshBuilder.CreateCylinder(
-          `node_disc_${obj.label.replace(/\W+/g, '_')}_${h.col}_${h.row}`,
-          { tessellation: 24, height: 0.04, diameter: NODE_DISC_DIAMETER },
+        const path = [];
+        for (let i = 0; i <= 6; i++) {
+          const a = Math.PI / 6 + i * Math.PI / 3;
+          path.push(new BABYLON.Vector3(ringR * Math.cos(a), 0.03, ringR * Math.sin(a)));
+        }
+        const disc = BABYLON.MeshBuilder.CreateTube(
+          `node_ring_${obj.label.replace(/\W+/g, '_')}_${h.col}_${h.row}`,
+          { path, radius: 0.06, tessellation: 6, sideOrientation: BABYLON.Mesh.DOUBLESIDE },
           this._scene,
         );
         disc.parent = this._mapRoot;
         disc.position.x = x;
         disc.position.z = z;
-        disc.position.y = 0.10;
         disc.isPickable = false;
-        const discMat = new BABYLON.StandardMaterial(`nodeDiscMat_${h.col}_${h.row}`, this._scene);
+        const discMat = new BABYLON.StandardMaterial(`nodeRingMat_${h.col}_${h.row}`, this._scene);
         discMat.diffuseColor  = new BABYLON.Color3(0.05, 0.05, 0.05);
         discMat.specularColor = new BABYLON.Color3(0, 0, 0);
         discMat.emissiveColor = new BABYLON.Color3(0.8, 0.8, 0.8);
-        discMat.alpha = NODE_DISC_ALPHA;
         disc.material = discMat;
-        // Round 4: explicitly include the node disc in the GlowLayer's
-        // include-only set so it still blooms now that the layer no longer
-        // picks up every emissive material in the scene.
+        // Keep the ring in the GlowLayer for a slight bloom — gives a sense of
+        // "this hex is special" without the previous pulsing.
         this._glowLayer?.addIncludedOnlyMesh?.(disc);
 
         this._nodeGlowMeshes.push({
@@ -4850,6 +4919,38 @@ export function sunDirectionForPhase(phase) {
   return getPhaseLightConfig(phase).sun.dir;
 }
 
+/** Sun direction for a specific round in the day/night cycle. Where
+ *  `sunDirectionForPhase` returns the same vector for every round in a phase
+ *  (so all three DAY rounds share one overhead direction), this helper sweeps
+ *  the sun across the sky as the day progresses — dawn → day1 → day2 → day3
+ *  → dusk reads as a clean linear horizontal lerp with a sinusoidal arc on
+ *  the vertical, so the sun rises, peaks at noon, and sets without snapping.
+ *
+ *  Round indexing: this assumes the default 8-step cycle (dawn, day×3, dusk,
+ *  night×3). For custom cycleConfigs, falls back to per-phase direction. */
+export function sunDirectionForRound(round, cycleConfig = null) {
+  if (cycleConfig) {
+    // Custom cycle: fall back to the per-phase sun direction; sweeping across
+    // arbitrary cycle shapes isn't well-defined.
+    return getPhaseLightConfig(undefined).sun.dir;
+  }
+  const r = ((round - 1) % 8 + 8) % 8; // 0..7
+  // Daylight band is rounds 0..4 (dawn through dusk). NIGHT rounds 5..7 sit
+  // at the night-phase direction (sun effectively off).
+  if (r >= 5) return getPhaseLightConfig('night').sun.dir;
+  const t = r / 4; // 0 at dawn, 1 at dusk
+  const dawn = getPhaseLightConfig('dawn').sun.dir;
+  const dusk = getPhaseLightConfig('dusk').sun.dir;
+  // Horizontal: straight lerp east-to-west.
+  const x = dawn.x + (dusk.x - dawn.x) * t;
+  const z = dawn.z + (dusk.z - dawn.z) * t;
+  // Vertical: arc from horizon at endpoints to overhead at noon (t=0.5).
+  const horizonY = (dawn.y + dusk.y) / 2;     // ≈ -0.4
+  const noonY    = getPhaseLightConfig('day').sun.dir.y; // ≈ -0.85
+  const y = horizonY + (noonY - horizonY) * Math.sin(Math.PI * t);
+  return { x, y, z };
+}
+
 /** Sun intensity for a phase. Drives both light strength and shadow darkness
  *  contribution. NIGHT is ~0 so the directional light effectively cuts out
  *  and lanterns/hemi carry the look. */
@@ -4953,7 +5054,12 @@ export const NODE_DISC_ALPHA = 0.88;
  *  on the 3D path — terrain identity was barely legible. 0.55 keeps tiles
  *  visibly dimmed (~half brightness) while preserving "there's grass / dirt
  *  / forest there" reads. Props + standees still hide via `_applyFogVeil`. */
-export const FOG_TILE_DARKEN = 0.55;
+// Multiplier applied to fogged tile materials' diffuseColor (which scales both
+// hemi and sun contributions). 0.20 reads as clearly "this tile is fogged"
+// against a daytime backdrop where the sun is cranked to intensity 2.0 — at
+// 0.55 the bright sun would still flood-light the surface and the fog would
+// look like a mild tint rather than a tactical signal.
+export const FOG_TILE_DARKEN = 0.20;
 
 /** Cubic ease-in-out — interpolates 0→1 smoothly with no jolt at endpoints. */
 export function easeInOutCubic(u) {
