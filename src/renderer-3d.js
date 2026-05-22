@@ -1793,12 +1793,46 @@ export class Renderer3D {
       return null;
     }
 
-    const walkGroup = (result.animationGroups || []).find(g => g) || null;
-    if (!walkGroup) {
+    const walkGroupNative = (result.animationGroups || []).find(g => g) || null;
+    if (!walkGroupNative) {
       console.warn('[Renderer3D] walking.glb contained no animation group');
       this._disposeWalkingImport(result);
       return null;
     }
+
+    // Keep walking's mesh + skeleton alive — they're the GHOST source.
+    // The native walkGroup drives walking's own skeleton natively (no
+    // retargeting), so ghost clones reading from walking's skeleton get a
+    // clean walk animation that's completely decoupled from the main
+    // paladin's skeleton. The walking source meshes themselves are hidden
+    // (setEnabled=false); ghosts clone them per-standee.
+    const walkingMeshes = (result.meshes || []).filter(m =>
+      m && typeof m.getTotalVertices === 'function' && m.getTotalVertices() > 0,
+    );
+    const walkingPrimary = walkingMeshes.find(m => m.skeleton) || walkingMeshes[0] || null;
+    const walkingSkeleton = walkingPrimary?.skeleton
+      || (Array.isArray(result.skeletons) ? result.skeletons[0] : null) || null;
+    for (const m of walkingMeshes) {
+      if (typeof m.setEnabled === 'function') m.setEnabled(false);
+      m.isPickable = false;
+    }
+    this._walkingSource = {
+      mesh: walkingPrimary,
+      meshes: walkingMeshes,
+      skeleton: walkingSkeleton,
+      walkGroup: walkGroupNative,
+      transformNodes: Array.isArray(result.transformNodes) ? result.transformNodes.slice() : [],
+    };
+    // Tune the walking playback so one stride roughly matches MOVE_ANIM_MS.
+    // Mixamo's Walking clip natural duration is ~0.83 s (24 frames @ 30 fps).
+    // At MOVE_ANIM_MS=600 the model crosses one hex in 0.6 s; speedRatio
+    // 0.83/0.6 ≈ 1.4 makes a full stride coincide with one hex hop so the
+    // foot placement reads as a real walk rather than a moonwalk.
+    const walkSpeedRatio = 1.4;
+    if (typeof walkGroupNative.start === 'function') {
+      walkGroupNative.start(true, walkSpeedRatio);
+    }
+    this._walkingSource.speedRatio = walkSpeedRatio;
 
     // Build the name → target map from the IDLE group's targetedAnimations.
     // Idle works — its targets are by definition the correct TransformNodes
@@ -1834,40 +1868,46 @@ export class Renderer3D {
       }
     }
 
+    // Clone the native walkGroup and retarget the CLONE to paladin's
+    // TransformNodes — leaves the original (driving walking's skeleton for
+    // ghosts) untouched. The cloned group drives paladin's skeleton when
+    // the main standees enter walking state during resolution.
+    let walkGroupForPaladin = null;
     let remapped = 0;
     let missed = 0;
     const missingExamples = [];
-    const tas = walkGroup.targetedAnimations || [];
-    for (const ta of tas) {
-      const old = ta && ta.target;
-      if (!old || !old.name) continue;
-      const match = nameMap.get(old.name) || nameMap.get(stripDup(old.name));
-      if (match && match !== old) {
-        ta.target = match;
-        remapped++;
-      } else if (match === old) {
-        // Already pointing at the right target (rare — only if walking
-        // somehow got the SAME TN reference, e.g. via shared parent).
-        remapped++;
-      } else {
+    if (typeof walkGroupNative.clone === 'function') {
+      walkGroupForPaladin = walkGroupNative.clone('paladinWalkRetargeted', (oldTarget) => {
+        if (!oldTarget || !oldTarget.name) {
+          missed++;
+          return oldTarget;
+        }
+        const match = nameMap.get(oldTarget.name) || nameMap.get(stripDup(oldTarget.name));
+        if (match) {
+          remapped++;
+          return match;
+        }
         missed++;
-        if (missingExamples.length < 5) missingExamples.push(old.name);
-      }
+        if (missingExamples.length < 5) missingExamples.push(oldTarget.name);
+        return oldTarget;
+      });
     }
     console.info(
       `[Renderer3D] walking.glb retarget: ${remapped} hit, ${missed} miss`
       + (missed > 0 ? ` (e.g. ${missingExamples.join(', ')})` : '')
       + ` — nameMap size ${nameMap.size}`,
     );
-    if (remapped === 0) {
-      console.warn('[Renderer3D] walking.glb: 0 targets remapped — disabling walk blend (would T-pose).');
-      // Tear down the partial state so the blend tick never flips to walking.
-      try { walkGroup.dispose?.(); } catch { /* ignore */ }
-      this._disposeWalkingImport(result);
-      return null;
+    if (!walkGroupForPaladin || remapped === 0) {
+      console.warn('[Renderer3D] walking.glb: paladin retarget produced 0 hits — main standees stay in idle during resolution (ghosts still walk natively).');
+      // Don't tear down walkGroupNative — ghosts still need it. Just leave
+      // walkGroupForPaladin null and the tick keeps main standees on idle.
+      src.walkGroup = null;
+      src.activeGroup = 'idle';
+      this._paladinAnimObserver = this._installPaladinAnimBlendTick();
+      return walkGroupNative;
     }
-    // Stash on the source so the blend tick can guard against partial loads.
     src.walkRemappedCount = remapped;
+    const walkGroup = walkGroupForPaladin;
 
     // Enable per-animation blending on EVERY animation in both groups so
     // start()/stop() crossfade smoothly. We use the start/stop swap pattern
@@ -1896,8 +1936,11 @@ export class Renderer3D {
     src.activeGroup = 'idle';
     this._paladinAnimObserver = this._installPaladinAnimBlendTick();
 
-    // Dispose walking.glb's geometry — we only kept its keyframes.
-    this._disposeWalkingImport(result);
+    // NOTE: do NOT call _disposeWalkingImport here. We keep walking's
+    // meshes + skeleton alive as the ghost source (walking.glb's native
+    // skeleton + native walkGroupNative drive the ghost path animation
+    // independently of paladin's skeleton). Only the cloned walkGroup
+    // was retargeted to paladin's TNs; the originals stay native.
     return walkGroup;
   }
 
@@ -1935,13 +1978,15 @@ export class Renderer3D {
     return this._scene.onBeforeRenderObservable.add(() => {
       const src = this._paladinSource;
       if (!src || !src.idleGroup || !src.walkGroup) return;
+      // Main standees only enter walking during ACTUAL resolution motion
+      // (_activeMoveIds / _activeLungeIds). Plan-ghosts don't trigger this
+      // because they animate on their OWN skeleton (walking source), so
+      // during planning the live paladin stays in idle while the ghost
+      // walks the preview path.
       let wantWalk = paladinAnimTargetWeight(
         this._activeMoveIds, this._activeLungeIds,
         this.state?.entities, isHeroFactionEntity,
       ) === 0;
-      if (!wantWalk && this._planGhostMeshes && this._planGhostMeshes.size > 0) {
-        wantWalk = true;
-      }
       const now = performance.now();
       if (wantWalk) this._paladinLastWalkTs = now;
       else if (typeof this._paladinLastWalkTs === 'number'
@@ -1950,15 +1995,100 @@ export class Renderer3D {
       }
       const desired = wantWalk ? 'walk' : 'idle';
       if (src.activeGroup === desired) return;
+      const walkSpeed = this._walkingSource?.speedRatio ?? 1.0;
       if (desired === 'walk') {
         if (typeof src.idleGroup.stop === 'function') src.idleGroup.stop();
-        if (typeof src.walkGroup.start === 'function') src.walkGroup.start(true, 1.0);
+        if (typeof src.walkGroup.start === 'function') src.walkGroup.start(true, walkSpeed);
       } else {
         if (typeof src.walkGroup.stop === 'function') src.walkGroup.stop();
         if (typeof src.idleGroup.start === 'function') src.idleGroup.start(true, 1.0);
       }
       src.activeGroup = desired;
     });
+  }
+
+  /** Build a translucent walking-paladin clone for a plan-ghost. Uses
+   *  the walking GLB as source (mesh + skeleton + already-playing native
+   *  walking animation). Returns the same `{ mesh, childMeshes, ... }`
+   *  shape as `_buildPaladinClone` so the ghost teardown path can share
+   *  `_disposePaladinClone`. The walking source's skeleton is SHARED
+   *  across every ghost — they all march in step at the same animation
+   *  frame, which reads fine for a planning preview. */
+  _buildWalkingGhostClone(entity, parent) {
+    const src = this._walkingSource;
+    if (!src || !this._babylon) return null;
+    const BABYLON = this._babylon;
+    const srcMeshes = Array.isArray(src.meshes) && src.meshes.length > 0
+      ? src.meshes
+      : (src.mesh ? [src.mesh] : []);
+    if (srcMeshes.length === 0) return null;
+    const id = entity?.id ?? 'unknown';
+
+    let cloneRoot = null;
+    if (typeof BABYLON.TransformNode === 'function') {
+      try {
+        cloneRoot = new BABYLON.TransformNode(`ghost_${id}`, this._scene || null);
+      } catch { cloneRoot = null; }
+    }
+    const ownsRootNode = !!cloneRoot;
+
+    const childClones = [];
+    let primarySkinnedClone = null;
+    for (const srcMesh of srcMeshes) {
+      if (!srcMesh || typeof srcMesh.clone !== 'function') continue;
+      const name = `ghost_${id}_${srcMesh.name || 'mesh'}`;
+      const childClone = srcMesh.clone(name);
+      if (!childClone) continue;
+      if (typeof childClone.setEnabled === 'function') childClone.setEnabled(true);
+      childClone.isPickable = false;
+      if (typeof childClone.renderingGroupId !== 'undefined') childClone.renderingGroupId = 0;
+      childClone.alwaysSelectAsActiveMesh = true;
+      childClones.push(childClone);
+      if (srcMesh === src.mesh) primarySkinnedClone = childClone;
+    }
+    if (childClones.length === 0) {
+      if (cloneRoot && typeof cloneRoot.dispose === 'function') cloneRoot.dispose();
+      return null;
+    }
+    if (!primarySkinnedClone) primarySkinnedClone = childClones[0];
+
+    if (cloneRoot) {
+      for (const c of childClones) {
+        if ('parent' in c) c.parent = cloneRoot;
+      }
+    } else {
+      cloneRoot = primarySkinnedClone;
+    }
+
+    if (src.skeleton && primarySkinnedClone) {
+      primarySkinnedClone.skeleton = src.skeleton;
+    }
+
+    // Match the live paladin's scale/yaw + feet-on-cone-bottom anchor so
+    // the ghost reads as the same character at the same height.
+    const scale = (typeof this._paladinScale === 'number' && this._paladinScale > 0)
+      ? this._paladinScale : PALADIN_BASE_SCALE;
+    const feetOffsetLocal = (typeof this._paladinFeetOffset === 'number'
+      && Number.isFinite(this._paladinFeetOffset))
+      ? this._paladinFeetOffset : 0;
+    if (BABYLON.Vector3) {
+      cloneRoot.scaling  = new BABYLON.Vector3(scale, scale, scale);
+      cloneRoot.rotation = new BABYLON.Vector3(0, PALADIN_YAW, 0);
+      const leader = isLeaderType(entity?.type);
+      const hMul = leader ? STANDEE_LEADER_HEIGHT_MUL : 1;
+      const coneFeetY = -(STANDEE_CONE_HEIGHT * hMul) / 2;
+      cloneRoot.position = new BABYLON.Vector3(0, coneFeetY + scale * feetOffsetLocal, 0);
+    }
+    if (parent && 'parent' in cloneRoot) cloneRoot.parent = parent;
+
+    return {
+      mesh: cloneRoot,
+      skinnedMesh: primarySkinnedClone,
+      childMeshes: childClones,
+      ownsRootNode,
+      skeleton: null,        // shared from src.skeleton, not owned
+      animationGroup: null,  // walkGroup runs on src.skeleton, not owned
+    };
   }
 
   _buildPaladinClone(entity, parent) {
@@ -5142,6 +5272,14 @@ export class Renderer3D {
     this._scene.stopAnimation(standee.plane);
     this._activeMoveIds.add(entityId);
 
+    // Face the direction of motion: rotate the paladin clone around Y so
+    // the model walks forward into its destination rather than sliding
+    // sideways/backwards. Witch/zombie cone tokens are rotationally
+    // symmetric, so we only yaw the paladin clone (when present).
+    if (standee.paladinClone?.mesh && (toX !== fromX || toZ !== fromZ)) {
+      standee.paladinClone.mesh.rotation.y = Math.atan2(toX - fromX, toZ - fromZ) + PALADIN_YAW;
+    }
+
     const animX = new BABYLON.Animation('mvX', 'position.x', 60,
       BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
     animX.setKeys([{ frame: 0, value: fromX }, { frame: FRAMES_MOVE, value: toX }]);
@@ -5179,6 +5317,11 @@ export class Renderer3D {
 
     this._scene.stopAnimation(standee.plane);
     this._activeLungeIds.add(entityId);
+
+    // Face the lunge direction (same model-yaw logic as MOVE).
+    if (standee.paladinClone?.mesh && (toX !== fromX || toZ !== fromZ)) {
+      standee.paladinClone.mesh.rotation.y = Math.atan2(toX - fromX, toZ - fromZ) + PALADIN_YAW;
+    }
 
     standee.plane.position.x = fromX; standee.plane.position.z = fromZ;
 
@@ -6091,16 +6234,19 @@ export class Renderer3D {
       cone.renderingGroupId   = 0;
       sphere.renderingGroupId = 0;
 
-      // For hero entities with the paladin GLB loaded, replace the cone+sphere
-      // ghost silhouette with a translucent paladin clone. Cone+sphere become
-      // invisible positioning anchors (cone still drives `entry.plane.position`
-      // via the path animation in `_pumpPlanGhosts`); the paladin clone parents
-      // to cone and inherits its world motion. Materials are cloned per-ghost
-      // so the translucency doesn't leak onto the live paladin.
+      // For hero entities with the walking GLB loaded, build the ghost
+      // silhouette from the WALKING source (not paladin). Walking's native
+      // skeleton + animation drive the ghost independently of the main
+      // paladin's skeleton — so the live paladin stays in idle while the
+      // ghost walks the preview path. Cone+sphere become invisible
+      // positioning anchors (cone drives `entry.plane.position` via the
+      // path animation in `_pumpPlanGhosts`); the walking clone parents
+      // to cone and inherits its world motion. Materials are cloned
+      // per-ghost so the 50% alpha doesn't leak onto the source.
       let ghostClone = null;
       let ghostMats = null;
-      if (this._paladinSource && isHeroFactionEntity(ent)) {
-        ghostClone = this._buildPaladinClone(ent, cone);
+      if (this._walkingSource && isHeroFactionEntity(ent)) {
+        ghostClone = this._buildWalkingGhostClone(ent, cone);
         if (ghostClone) {
           cone.visibility = 0;
           sphere.visibility = 0;
@@ -6177,6 +6323,15 @@ export class Renderer3D {
         + STANDEE_BASE_THICKNESS / 2
         + (STANDEE_CONE_HEIGHT * hMul) / 2;
       entry.mat.alpha = PLAN_GHOST_ALPHA * pose.alpha;
+      // Face the direction of motion for hero ghost paladins. Skip when
+      // the segment has zero length (e.g. ghost paused on a single hex).
+      if (entry.ghostClone?.mesh) {
+        const dx = b.x - a.x;
+        const dz = b.z - a.z;
+        if (dx !== 0 || dz !== 0) {
+          entry.ghostClone.mesh.rotation.y = Math.atan2(dx, dz) + PALADIN_YAW;
+        }
+      }
     }
   }
 

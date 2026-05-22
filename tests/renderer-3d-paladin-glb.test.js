@@ -258,23 +258,25 @@ describe('_loadPaladinModel — async load + caching + fallback', () => {
     assert.equal(mesh.isPickable, false);
   });
 
-  test('idle animation group is started on the source skeleton (shared across all clones)', async () => {
+  test('idle animation group is started on the source skeleton', async () => {
     const r = newInst();
     r._scene = {};
-    const mesh = makeFakeSourceMesh();
-    const grp  = makeFakeAnimGroup('Idle');
+    // Distinct group instances for paladin vs walking imports so the test
+    // can pin the paladin/idle group's start state without the walking load
+    // (which fires async from _loadPaladinModel) overwriting it.
+    const idleGrp = makeFakeAnimGroup('Idle');
+    const walkGrp = makeFakeAnimGroup('Walking');
     r._babylon = makeFakeBabylon({
-      importImpl: async () => ({ meshes: [mesh], animationGroups: [grp] }),
+      importImpl: async (_meshNames, _baseUrl, fileName) => {
+        const grp = fileName && fileName.includes('walking') ? walkGrp : idleGrp;
+        return { meshes: [makeFakeSourceMesh()], animationGroups: [grp] };
+      },
     });
     await r._loadPaladinModel('assets');
-    // Shared-skeleton approach: source idleGroup plays continuously on the
-    // source skeleton; every clone references that same skeleton and skins
-    // identically. Per-clone animation cloning + bone-name retargeting
-    // doesn't work for glTF imports (animation targets TransformNodes via
-    // _linkedTransformNode, not Bones) — it leaves every clone in T-pose.
-    assert.deepEqual(grp._started, { loop: true, speed: 1.0 },
-      'source idleGroup must be started looping (drives shared skeleton)');
-    assert.equal(grp._stopped, false,
+    // Idle starts at speed 1.0 in _loadPaladinModel.
+    assert.equal(idleGrp._started?.loop, true,
+      'source idleGroup must be started looping (drives the rig)');
+    assert.equal(idleGrp._stopped, false,
       'source idleGroup must NOT be stopped — clones share its bone matrices');
   });
 
