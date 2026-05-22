@@ -183,6 +183,61 @@ export function tileColorFor(tile) {
   return TILE_COLOR[tile.type] || TILE_COLOR[TileType.GRASS];
 }
 
+// ─── 2D thumbnail helpers (UI portrait + terrain icons) ─────────────────────
+// These exist for `getPortraitDataURL` / `getTileDataURL`, which the unit-
+// stats bar (and other ui.js portrait callsites) invokes on the renderer
+// regardless of mode. The 3D renderer doesn't draw to a 2D canvas at runtime,
+// but it still owns the shared sprite atlas, so it's the natural place to
+// produce these tiny offscreen-canvas thumbnails.
+
+/** Trace a flat-top hexagon path on a 2D canvas context, centred at (cx, cy)
+ *  with radius r. Matches the 2D renderer's `_traceHexPath` so thumbnails
+ *  rendered through either renderer look identical. */
+function _traceHexPath2D(ctx, cx, cy, r) {
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const a = Math.PI / 6 + (Math.PI / 3) * i;
+    const x = cx + r * Math.cos(a);
+    const y = cy + r * Math.sin(a);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+}
+
+/** Pick a hex fill colour for the terrain thumbnail. Roads/rivers/bridges
+ *  collapse to grass (their cosmetic strips are layered on top in the 2D
+ *  renderer but we don't replicate those for thumbnails). */
+function _tileFillColor(tile) {
+  if (!tile) return TILE_COLOR[TileType.GRASS];
+  if (tile.type === TileType.BUILDING) {
+    return BUILDING_COLOR[tile.building] || '#8a7a5a';
+  }
+  if (tile.type === 'road' || tile.type === 'river' || tile.type === 'bridge') {
+    return TILE_COLOR[TileType.GRASS];
+  }
+  return TILE_COLOR[tile.type] || TILE_COLOR[TileType.GRASS];
+}
+
+/** Choose a representative sprite id (e.g. 'grass_3') for a tile, hashed
+ *  deterministically by (col, row) so the same hex always renders the same
+ *  variant. Lighter version of the 2D renderer's `_pickVariant` — we only
+ *  cover the variant pools that exist in the atlas (grass/forest/dirt). */
+export function _terrainThumbSpriteId(tile, col, row) {
+  if (!tile) return null;
+  let base = tile.type;
+  if (tile.type === TileType.BUILDING) base = TileType.DIRT;
+  else if (tile.type === 'road' || tile.type === 'river' || tile.type === 'bridge') {
+    base = TileType.GRASS;
+  }
+  const variants = { grass: 5, forest: 5, dirt: 5 };
+  const count = variants[base];
+  if (!count) return null;
+  // Stable hash mirroring the 2D renderer's variant choice.
+  const hash = Math.abs((col * 73856093) ^ (row * 19349663)) % count;
+  return `${base}_${hash + 1}`;
+}
+
 // ─── Renderer class ──────────────────────────────────────────────────────────
 
 export class Renderer3D {
@@ -518,8 +573,95 @@ export class Renderer3D {
   getFadeOutOpacity(_entityId)                        { return 1; }
   getEntityScreenPositions(_col, _row, _entities, _rect)                     { return []; }
   getEntityScreenPos(_col, _row, _id, _stackIdx, _stackTotal, _rect)         { return null; }
-  getPortraitDataURL(_assetId, _size)                 { return null; }
-  getTileDataURL(_tile, _col, _row, _size)            { return null; }
+  /**
+   * Round 4: return a small data-URL portrait for the given asset id by
+   * cropping the shared tilemap atlas. `ui.js` calls this for the unit-stats
+   * bar, the plan-panel portrait map, the disambiguation arc, and the combat
+   * dialog. The 2D Renderer has the same method on it — by implementing it
+   * here too the UI layer doesn't have to branch on renderer mode.
+   *
+   * Cached per (assetId, size) — repeat lookups are O(1) after first build.
+   * Falls back to null when the tilemap hasn't loaded yet or the id is
+   * unknown; ui.js degrades to a glyph fallback in that case.
+   */
+  getPortraitDataURL(assetId, size = 128) {
+    if (!assetId || !this._tilemapImg || !this._spriteRects) return null;
+    if (typeof document === 'undefined') return null;
+    const rect = this._spriteRects.get(assetId);
+    if (!rect) return null;
+    if (!this._portraitDataURLCache) this._portraitDataURLCache = new Map();
+    const key = `${assetId}@${size}`;
+    if (this._portraitDataURLCache.has(key)) {
+      return this._portraitDataURLCache.get(key);
+    }
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    c.getContext('2d').drawImage(
+      this._tilemapImg,
+      rect.x, rect.y, rect.size, rect.size,
+      0, 0, size, size,
+    );
+    const url = c.toDataURL();
+    this._portraitDataURLCache.set(key, url);
+    return url;
+  }
+
+  /**
+   * Round 4: terrain thumbnail used by the unit-stats bar's "current tile"
+   * preview. We render a simple hex-cropped tile thumbnail (background colour
+   * + sprite if available) — the 2D Renderer adds fortification rings and a
+   * border, which we omit here as they were minor cues the 3D scene already
+   * conveys at the camera level. Caller's UI degrades to "no terrain image"
+   * if this returns null.
+   */
+  getTileDataURL(tile, col, row, size = 28) {
+    if (!tile || typeof document === 'undefined') return null;
+    if (!this._tileDataURLCache) this._tileDataURLCache = new Map();
+    const cacheKey = `${tile.type}_${tile.building || ''}_${tile.fortifyLevel || 0}@${size}`;
+    if (this._tileDataURLCache.has(cacheKey)) {
+      return this._tileDataURLCache.get(cacheKey);
+    }
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    const ctx = c.getContext('2d');
+    const hs = size / 2;
+    _traceHexPath2D(ctx, hs, hs, hs - 0.5);
+    const baseColor = _tileFillColor(tile);
+    ctx.fillStyle = baseColor;
+    ctx.fill();
+
+    if (this._tilemapImg && this._spriteRects) {
+      const spriteId = _terrainThumbSpriteId(tile, col, row);
+      const rect = spriteId ? this._spriteRects.get(spriteId) : null;
+      if (rect) {
+        ctx.save();
+        _traceHexPath2D(ctx, hs, hs, hs - 0.5);
+        ctx.clip();
+        ctx.drawImage(this._tilemapImg, rect.x, rect.y, rect.size, rect.size, 0, 0, size, size);
+        ctx.restore();
+      }
+      // Building overlay sprite on top of dirt.
+      if (tile.type === TileType.BUILDING && tile.building) {
+        const bldgRect = this._spriteRects.get(tile.building);
+        if (bldgRect) {
+          ctx.save();
+          _traceHexPath2D(ctx, hs, hs, hs - 0.5);
+          ctx.clip();
+          ctx.drawImage(this._tilemapImg, bldgRect.x, bldgRect.y, bldgRect.size, bldgRect.size, 0, 0, size, size);
+          ctx.restore();
+        }
+      }
+    }
+    // Hex outline for a touch of grid definition.
+    _traceHexPath2D(ctx, hs, hs, hs - 0.5);
+    ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+    ctx.lineWidth = 0.8;
+    ctx.stroke();
+
+    const url = c.toDataURL();
+    this._tileDataURLCache.set(cacheKey, url);
+    return url;
+  }
 
   // ─── Babylon scene setup ─────────────────────────────────────────────────
 
@@ -572,6 +714,17 @@ export class Renderer3D {
     // doesn't yet wire selection picking.
     camera.useBouncingBehavior = false;
 
+    // Round 4: swap touch gestures so the board feels like a map app —
+    // single-finger drag pans, two-finger gestures rotate + pinch-zoom.
+    // Babylon's default (single-finger rotate, two-finger pan+zoom) reads as
+    // a 3D-viewer convention but tested poorly on mobile where players
+    // expected map-style panning.
+    //
+    // Implementation: we monkey-patch the bound `onTouch` / `onMultiTouch`
+    // methods on the camera's pointers input. Desktop mouse behaviour is
+    // preserved (we sniff `point.pointerType` and only swap for touch).
+    this._installMobileGestureSwap(camera, BABYLON);
+
     const light = new BABYLON.HemisphericLight('hemi', new BABYLON.Vector3(0, 1, 0.3), scene);
     light.intensity = 0.95;
 
@@ -581,7 +734,12 @@ export class Renderer3D {
     this._light  = light;
 
     // Phase 6: GlowLayer powers the selection halo and the power-node discs.
-    // Built once at init; meshes opt in by raising their emissive colour.
+    // Round 4: switched to *include-only* mode — meshes have to be explicitly
+    // added via `addIncludedOnlyMesh` to contribute to the bloom. Previously
+    // any mesh with non-zero emissive (HP bars, waypoint badges, floating
+    // text, plan/highlight discs) joined the glow and blew it out at zoomed-
+    // out distances. Node discs and the selected standee's base disc are the
+    // only meshes that should glow; we register them on creation/selection.
     this._glowLayer = new BABYLON.GlowLayer('glow', scene, { mainTextureFixedSize: 512 });
     this._glowLayer.intensity = GLOW_LAYER_INTENSITY;
 
@@ -607,6 +765,63 @@ export class Renderer3D {
 
     engine.runRenderLoop(() => scene.render());
     engine.resize();
+  }
+
+  /**
+   * Round 4 mobile gesture swap. The default ArcRotateCameraPointersInput
+   * does single-finger-rotate / two-finger-pan-and-zoom; we want the inverse
+   * for touch (single-finger pan, two-finger rotate, pinch-zoom unchanged).
+   * Mouse input is left untouched: we sniff `point.pointerType` in onTouch
+   * and only divert when the pointer is a touch.
+   *
+   * Public-method override is brittle if Babylon changes its internal Math
+   * later, but this is the only practical hook — they don't expose a flag
+   * for the swap. If a future Babylon upgrade regresses, this method is
+   * easy to gut.
+   */
+  _installMobileGestureSwap(camera, BABYLON) {
+    const ptr = camera?.inputs?.attached?.pointers;
+    if (!ptr) return;
+    const originalOnTouch = ptr.onTouch?.bind(ptr);
+    ptr.onTouch = function (point, offsetX, offsetY) {
+      // Pointer type unknown OR mouse → keep Babylon's default behaviour.
+      if (!point || (point.pointerType && point.pointerType !== 'touch')) {
+        if (originalOnTouch) originalOnTouch(point, offsetX, offsetY);
+        return;
+      }
+      // Single-finger touch: pan instead of rotate.
+      // The signs here mirror Babylon's internal panning math so the gesture
+      // direction matches what the user's finger does.
+      this.camera.inertialPanningX += -offsetX / (this.panningSensibility || 1);
+      this.camera.inertialPanningY += offsetY / (this.panningSensibility || 1);
+    };
+    // Two-finger gestures: rotate yaw/pitch instead of panning, keep pinch
+    // zoom enabled. We compute rotation from the *average* movement of the
+    // two touch points (multiTouchPanPosition tracks the midpoint each frame).
+    ptr.multiTouchPanning      = false;
+    ptr.multiTouchPanAndZoom   = false;
+    ptr.onMultiTouch = function (
+      pointA, pointB,
+      previousPinchSquaredDistance, pinchSquaredDistance,
+      previousMultiTouchPanPosition, multiTouchPanPosition,
+    ) {
+      // Pinch zoom — same formula Babylon uses internally; lifted directly so
+      // the feel matches the default.
+      if (previousPinchSquaredDistance !== 0 && pinchSquaredDistance !== 0) {
+        const pinchDelta = (pinchSquaredDistance - previousPinchSquaredDistance)
+          * (this.pinchPrecision || 12) / (this.angularSensibilityX * 1000);
+        this.camera.inertialRadiusOffset -= pinchDelta;
+      }
+      // Two-finger drag → rotate the camera. dx/dy is the midpoint travel
+      // since the previous frame; we feed it into the same alpha/beta
+      // accumulators the single-touch path used to feed.
+      if (previousMultiTouchPanPosition && multiTouchPanPosition) {
+        const dx = multiTouchPanPosition.x - previousMultiTouchPanPosition.x;
+        const dy = multiTouchPanPosition.y - previousMultiTouchPanPosition.y;
+        this.camera.inertialAlphaOffset -= dx / (this.angularSensibilityX || 1000);
+        this.camera.inertialBetaOffset  -= dy / (this.angularSensibilityY || 1000);
+      }
+    };
   }
 
   // ─── Map construction ────────────────────────────────────────────────────
@@ -1159,11 +1374,18 @@ export class Renderer3D {
     if (newId === prevId) return;
 
     if (prevId && this._entityStandees.has(prevId)) {
-      this._restoreBaseColor(this._entityStandees.get(prevId), prevId);
+      const prev = this._entityStandees.get(prevId);
+      this._restoreBaseColor(prev, prevId);
+      // Round 4: drop the previous standee from the GlowLayer's include-only
+      // set so its (now non-emissive) base no longer counts toward the layer.
+      this._glowLayer?.removeIncludedOnlyMesh?.(prev.base);
     }
     if (newId && this._entityStandees.has(newId)) {
       const standee = this._entityStandees.get(newId);
       standee.base.material = this._getSelectedBaseMaterial();
+      // Round 4: include the newly-selected standee's base in the GlowLayer
+      // so its cyan pulse blooms. Other emissive meshes stay out of the layer.
+      this._glowLayer?.addIncludedOnlyMesh?.(standee.base);
       const BABYLON = this._babylon;
       if (BABYLON && this._camera) {
         const newTarget = new BABYLON.Vector3(
@@ -1745,20 +1967,26 @@ export class Renderer3D {
     const BABYLON = this._babylon;
     for (const h of list) {
       if (typeof h?.col !== 'number' || typeof h?.row !== 'number') continue;
-      const { x, z } = hexToWorld(h.col, h.row);
-      const disc = BABYLON.MeshBuilder.CreateCylinder(
+      // Round 4: replaced the flat tinted cylinder ("the whole tile lights up
+      // a muddy green") with a hex *outline ring*. The underlying terrain stays
+      // readable, but the player can still see at a glance which hexes are
+      // valid move/attack targets. Built as a ribbon between two concentric
+      // hex polygons (outer + inner) so the ring keeps its width regardless of
+      // camera distance — line meshes don't reliably scale across browsers.
+      const { outer, inner } = hexOutlinePaths(h.col, h.row);
+      const toVec = p => new BABYLON.Vector3(p.x, p.y, p.z);
+      const ribbon = BABYLON.MeshBuilder.CreateRibbon(
         `highlight_${h.col}_${h.row}`,
-        { tessellation: 6, height: 0.02, diameter: 1.85 * HEX_RADIUS_WORLD },
+        {
+          pathArray: [outer.map(toVec), inner.map(toVec)],
+          sideOrientation: BABYLON.Mesh.DOUBLESIDE,
+        },
         this._scene,
       );
-      disc.parent     = this._mapRoot;
-      disc.position.x = x;
-      disc.position.z = z;
-      disc.position.y = HIGHLIGHT_DISC_Y;
-      disc.rotation.y = Math.PI / 6; // match tile prism vertex alignment
-      disc.material   = this._highlightMaterialFor(h.color || HIGHLIGHT_DEFAULT_RGBA);
-      disc.isPickable = false;
-      this._highlightMeshes.push(disc);
+      ribbon.parent = this._mapRoot;
+      ribbon.material   = this._highlightMaterialFor(h.color || HIGHLIGHT_DEFAULT_RGBA);
+      ribbon.isPickable = false;
+      this._highlightMeshes.push(ribbon);
     }
   }
 
@@ -1785,14 +2013,16 @@ export class Renderer3D {
    *  meshes (one per MOVE step) and avoids hand-tracking dirty plan state. */
   _syncPlanArrows() {
     // Dispose previous frame's plan marker geometry first. We rebuild every
-    // draw — the per-call cost is small (one disc + badge per MOVE step) and
-    // avoids hand-tracking which plan steps changed.
+    // draw — the per-call cost is small (one marker + badge per MOVE step,
+    // plus one dashed line per entity) and avoids hand-tracking which plan
+    // steps changed.
     for (const arrow of this._planArrowMeshes) {
       arrow.disc?.dispose();
       arrow.discMat?.dispose();
       arrow.badge?.dispose();
       arrow.badgeMat?.dispose();
       arrow.badgeTex?.dispose();
+      arrow.line?.dispose();
     }
     this._planArrowMeshes = [];
 
@@ -1800,6 +2030,45 @@ export class Renderer3D {
     if (!steps || !this._babylon || !this._scene) return;
 
     const BABYLON = this._babylon;
+
+    // Round 4: collect per-entity path so we can draw a dashed line connecting
+    // consecutive waypoints (origin → step 1 → step 2 → …). The previous
+    // round only laid down tile-sized discs at each destination — the *path*
+    // between them was implicit, which read fine for a single hop but got
+    // confusing as soon as a plan had two or more chained moves.
+    const pathsByEntity = new Map();
+    for (const step of steps) {
+      if (!step.arrow) continue;
+      const { entityId, fromCol, fromRow, toCol, toRow } = step.arrow;
+      let arr = pathsByEntity.get(entityId);
+      if (!arr) {
+        arr = [{ col: fromCol, row: fromRow }];
+        pathsByEntity.set(entityId, arr);
+      }
+      arr.push({ col: toCol, row: toRow });
+    }
+
+    // Per-entity dashed line tracing the planned path.
+    for (const [entityId, path] of pathsByEntity) {
+      if (path.length < 2) continue;
+      const ent = this.state?.entities?.find?.(e => e.id === entityId);
+      const ownerColor = entityBaseColor(ent ?? {});
+      const [r, g, b] = cssHexToRgb01(ownerColor);
+      const points = path.map(p => {
+        const { x, z } = hexToWorld(p.col, p.row);
+        return new BABYLON.Vector3(x, PLAN_LINE_Y, z);
+      });
+      const line = BABYLON.MeshBuilder.CreateDashedLines(
+        `planLine_${entityId}`,
+        { points, dashSize: 6, gapSize: 3, dashNb: Math.max(8, (path.length - 1) * 8) },
+        this._scene,
+      );
+      line.parent = this._mapRoot;
+      line.isPickable = false;
+      line.color = new BABYLON.Color3(r, g, b);
+      this._planArrowMeshes.push({ line });
+    }
+
     for (const step of steps) {
       if (!step.arrow) continue;
       const { toCol, toRow, entityId } = step.arrow;
@@ -1809,29 +2078,29 @@ export class Renderer3D {
       const ownerColor = entityBaseColor(ent ?? {});
       const [r, g, b] = cssHexToRgb01(ownerColor);
 
-      // Flat owner-tinted disc lying on the destination hex top. Replaces the
-      // floating dashed line from Phase 5 — the user found ground markers per
-      // hex destination much easier to read than airborne arrows.
-      const disc = BABYLON.MeshBuilder.CreateDisc(
-        `planDisc_${entityId}_${step.stepNumber ?? 0}`,
-        { tessellation: 24, radius: 0.7 }, this._scene,
+      // Round 4: replaced the large floating disc (radius 0.7, covered most of
+      // the tile) with a small ground-puck cylinder under the badge. Reads as
+      // a "marker pin" rather than a tinted overlay, so the underlying terrain
+      // stays visible — and the numbered badge floating above the puck remains
+      // the primary read for waypoint identity.
+      const disc = BABYLON.MeshBuilder.CreateCylinder(
+        `planMarker_${entityId}_${step.stepNumber ?? 0}`,
+        { tessellation: 16, height: PLAN_MARKER_HEIGHT, diameter: PLAN_MARKER_DIAMETER },
+        this._scene,
       );
       const { x: tx, z: tz } = hexToWorld(toCol, toRow);
-      disc.position.set(tx, PLAN_DISC_Y, tz);
-      // Disc faces +Z by default — rotate 90° around X so it lies flat on XZ.
-      disc.rotation.x = Math.PI / 2;
+      disc.position.set(tx, PLAN_MARKER_Y, tz);
       disc.isPickable = false;
 
       const discMat = new BABYLON.StandardMaterial(
-        `planDiscMat_${entityId}_${step.stepNumber ?? 0}`, this._scene);
+        `planMarkerMat_${entityId}_${step.stepNumber ?? 0}`, this._scene);
       discMat.diffuseColor  = new BABYLON.Color3(r, g, b);
       discMat.emissiveColor = new BABYLON.Color3(r * 0.5, g * 0.5, b * 0.5);
       discMat.specularColor = new BABYLON.Color3(0, 0, 0);
       discMat.alpha = PLAN_DISC_ALPHA;
-      discMat.backFaceCulling = false;
       disc.material = discMat;
 
-      // Numbered badge above the disc — small billboarded plane.
+      // Numbered badge above the puck — small billboarded plane.
       let badge = null, badgeMat = null, badgeTex = null;
       if (step.stepNumber != null && typeof document !== 'undefined') {
         badgeTex = new BABYLON.DynamicTexture(`badgeTex_${entityId}_${step.stepNumber}`,
@@ -2144,6 +2413,10 @@ export class Renderer3D {
         discMat.emissiveColor = new BABYLON.Color3(0.8, 0.8, 0.8);
         discMat.alpha = NODE_DISC_ALPHA;
         disc.material = discMat;
+        // Round 4: explicitly include the node disc in the GlowLayer's
+        // include-only set so it still blooms now that the layer no longer
+        // picks up every emissive material in the scene.
+        this._glowLayer?.addIncludedOnlyMesh?.(disc);
 
         this._nodeGlowMeshes.push({
           obj, disc,
@@ -2412,8 +2685,14 @@ export function getNodeGlowColor(controller) {
 /** Duration of phase-to-phase light cross-fade. */
 export const PHASE_TRANSITION_MS = 3000;
 
-/** GlowLayer intensity (applied to selection halo + node-glow discs). */
-export const GLOW_LAYER_INTENSITY = 0.7;
+/** GlowLayer intensity (applied to selection halo + node-glow discs). Round
+ *  4: dropped 0.7 → 0.5 because the higher value blew HP bars and waypoint
+ *  badges (white emissive ≈ 1.0) into a milky halo at zoomed-out distances.
+ *  The glow layer also runs in *include-only* mode now (see `_glowLayer.addIncludedOnlyMesh`
+ *  calls in `_buildNodeGlowMeshes` + `_applySelectionAndFocus`) — so only the
+ *  selection halo and node discs contribute. Other emissive meshes (HP bars,
+ *  waypoint badges, floating text) no longer bloom regardless of intensity. */
+export const GLOW_LAYER_INTENSITY = 0.5;
 
 /** Selection halo pulse. Configurable so designers can tune the breathing.
  *  Round 3: dialled MIN/MAX down ~50% — earlier values produced a halo bright
@@ -2439,10 +2718,12 @@ export const NODE_DISC_DIAMETER = 1.9;
  *  the underlying tile colour still bleeds through faintly. */
 export const NODE_DISC_ALPHA = 0.88;
 
-/** Multiplier applied to fogged-tile diffuse colour. ~0.32 keeps the tile
- *  legible (a player can still see "there's grass there") while clearly
- *  reading as out-of-sight. */
-export const FOG_TILE_DARKEN = 0.32;
+/** Multiplier applied to fogged-tile diffuse colour. Round 4: bumped
+ *  0.32 → 0.55 after playtest feedback that fogged tiles read as nearly black
+ *  on the 3D path — terrain identity was barely legible. 0.55 keeps tiles
+ *  visibly dimmed (~half brightness) while preserving "there's grass / dirt
+ *  / forest there" reads. Props + standees still hide via `_applyFogVeil`. */
+export const FOG_TILE_DARKEN = 0.55;
 
 /** Cubic ease-in-out — interpolates 0→1 smoothly with no jolt at endpoints. */
 export function easeInOutCubic(u) {
@@ -2566,9 +2847,23 @@ export const HP_BAR_Y_ABOVE_BASE = 0.2;
 
 /** Plan-marker disc — flat owner-tinted circle laid on the destination hex
  *  top. Y just clears the tile prism top (0.075) and the road deck (0.155)
- *  so it reads against both terrain and crossings. */
+ *  so it reads against both terrain and crossings. (Retained for back-compat
+ *  / tests; the round-4 markers now use the smaller PLAN_MARKER_* geometry.) */
 export const PLAN_DISC_Y     = 0.16;
-export const PLAN_DISC_ALPHA = 0.5;
+export const PLAN_DISC_ALPHA = 0.85;
+
+/** Round 4 waypoint marker — small ground puck under the numbered badge so
+ *  the underlying terrain stays visible. Diameter shrunk from 1.4 (a full
+ *  hex's worth) → 0.36, height 0.02 (almost flush with the tile top), Y =
+ *  0.08 (just above tile top). */
+export const PLAN_MARKER_DIAMETER = 0.36;
+export const PLAN_MARKER_HEIGHT   = 0.02;
+export const PLAN_MARKER_Y        = 0.08;
+
+/** Dashed-line Y for the path-connector tracing the planned waypoints.
+ *  Slightly above the marker puck top so the dashes read above the puck
+ *  but below the badge. */
+export const PLAN_LINE_Y = 0.12;
 
 /** Plan ghost — translucent standee clone walking the planned path. */
 export const PLAN_GHOST_ALPHA          = 0.4;
@@ -2771,17 +3066,56 @@ export function floatingTextTransform(t, riseDistance = 1.2) {
 
 // ─── Movement highlight overlay (exported for tests) ────────────────────────
 
-/** Y position of the flat highlight disc above the tile prism top (+0.075).
+/** Y position of the flat highlight ring above the tile prism top (+0.075).
  *  Sits below the plan-marker disc (PLAN_DISC_Y = 0.16) and the road deck top
- *  (~0.155), so highlights read as a tint ON the tile, not floating above
+ *  (~0.155), so highlights read as an outline ON the tile, not floating above
  *  road decks or stacking on top of plan markers when both are active. */
 export const HIGHLIGHT_DISC_Y      = 0.085;
 /** Minimum alpha applied when the source rgba is too transparent to read in
- *  the lit 3D scene. ui.js currently uses alphas as low as 0.14 for ally hexes;
- *  the 2D renderer reads those fine but they wash out under hemispheric light. */
-export const HIGHLIGHT_MIN_ALPHA   = 0.30;
+ *  the lit 3D scene. Round 4: bumped 0.30 → 0.75 because the highlight changed
+ *  from a tile-covering disc (which read fine at low alpha) to a thin outline
+ *  ring (which disappears at low alpha). ui.js still uses values as low as
+ *  0.14 for ally hexes — we clamp up to keep the outline legible. */
+export const HIGHLIGHT_MIN_ALPHA   = 0.75;
 /** Fallback rgba when an entry lacks `color` — neutral green (movement). */
-export const HIGHLIGHT_DEFAULT_RGBA = 'rgba(60,220,80,0.40)';
+export const HIGHLIGHT_DEFAULT_RGBA = 'rgba(60,220,80,0.85)';
+/** Outer/inner hex polygon radii (world units) for the outline ring. The gap
+ *  between the two defines the ring's visual thickness. Outer is just inside
+ *  the tile's footprint (1.0 = HEX_RADIUS_WORLD) so adjacent tiles' rings
+ *  don't visually touch; inner is far enough in that the ring reads as a
+ *  clear band even when the camera is tilted. */
+export const HIGHLIGHT_OUTER_R     = 0.95;
+export const HIGHLIGHT_INNER_R     = 0.78;
+
+/**
+ * Two concentric pointy-top hex polygons (outer + inner) for a single hex,
+ * raised to `y` on the world XZ plane. Used to build the movement-highlight
+ * outline ribbon — Babylon ribbons need two paths to fill the annulus between
+ * them. Each path has 7 points (last == first) so the ribbon closes around
+ * the hex without a seam.
+ *
+ * Pure function — exported so tests can lock down the geometry without a
+ * Babylon scene.
+ */
+export function hexOutlinePaths(
+  col, row,
+  outerR = HIGHLIGHT_OUTER_R,
+  innerR = HIGHLIGHT_INNER_R,
+  y = HIGHLIGHT_DISC_Y,
+) {
+  const { x, z } = hexToWorld(col, row);
+  const outer = [];
+  const inner = [];
+  for (let i = 0; i <= 6; i++) {
+    // Pointy-top hex: vertices at 30°, 90°, 150°, 210°, 270°, 330°.
+    const a = Math.PI / 6 + (Math.PI / 3) * i;
+    const cosA = Math.cos(a);
+    const sinA = Math.sin(a);
+    outer.push({ x: x + outerR * cosA, y, z: z + outerR * sinA });
+    inner.push({ x: x + innerR * cosA, y, z: z + innerR * sinA });
+  }
+  return { outer, inner };
+}
 
 /**
  * Compute a stable signature for a `highlightHexes` array so the renderer can

@@ -139,8 +139,12 @@ describe('Renderer3D round-3 polish — parseRgba01', () => {
 // ── Highlight tuning constants (item 3) ────────────────────────────────────
 
 describe('Renderer3D round-3 polish — highlight constants', () => {
-  test('min alpha keeps highlights legible against varied terrain', () => {
-    assert.ok(HIGHLIGHT_MIN_ALPHA >= 0.2 && HIGHLIGHT_MIN_ALPHA <= 0.6,
+  test('min alpha keeps the outline ring legible against varied terrain', () => {
+    // Round 4: highlight changed from a tile-covering disc (low alpha OK) to
+    // a thin outline ring (needs much higher alpha to read). The new band
+    // covers 0.6..1.0 — the ring has to push through hemispheric lighting
+    // and varied tile colours.
+    assert.ok(HIGHLIGHT_MIN_ALPHA >= 0.6 && HIGHLIGHT_MIN_ALPHA <= 1.0,
       `HIGHLIGHT_MIN_ALPHA ${HIGHLIGHT_MIN_ALPHA} out of expected band`);
   });
 

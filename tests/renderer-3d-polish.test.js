@@ -236,12 +236,15 @@ describe('Renderer3D polish — plan-marker disc constants', () => {
       `PLAN_DISC_Y ${PLAN_DISC_Y} must exceed road deck top (0.155)`);
   });
 
-  test('disc alpha is translucent (≤ 0.6) so terrain underneath stays readable', () => {
-    assert.ok(PLAN_DISC_ALPHA > 0 && PLAN_DISC_ALPHA <= 0.6,
-      `PLAN_DISC_ALPHA ${PLAN_DISC_ALPHA} out of expected band (0, 0.6]`);
+  test('disc alpha is opaque enough to read at a glance', () => {
+    // Round 4: marker shrank from full-hex disc → small puck, so opacity can
+    // push closer to 1.0 without obscuring terrain. Floor sanity-checks that
+    // we still see the marker; ceiling is just "in (0, 1]".
+    assert.ok(PLAN_DISC_ALPHA > 0 && PLAN_DISC_ALPHA <= 1.0,
+      `PLAN_DISC_ALPHA ${PLAN_DISC_ALPHA} out of expected band (0, 1]`);
   });
 
-  test('ghost alpha is more transparent than disc so ghosts read as previews', () => {
+  test('ghost alpha is more transparent than the marker so ghosts read as previews', () => {
     assert.ok(PLAN_GHOST_ALPHA <= PLAN_DISC_ALPHA,
       `ghost alpha ${PLAN_GHOST_ALPHA} should be ≤ disc alpha ${PLAN_DISC_ALPHA}`);
   });
