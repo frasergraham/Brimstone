@@ -398,3 +398,32 @@ describe('Renderer3D — buildFogVisibleSet', () => {
     assert.ok(!v.has(hexKey(6, 2)), 'dead hero sight not folded in');
   });
 });
+
+// ── Lantern subsystem removal ────────────────────────────────────────────────
+//
+// The per-unit lantern PointLights were dropped (operator decision: subtle
+// effect not worth the per-material/per-shader light limits — see GL_MAX
+// vertex-uniform-buffer overflow on Standard maps with 10+ standees). These
+// negative assertions pin the removal so we don't reintroduce the exports
+// inadvertently.
+describe('lantern subsystem removed', () => {
+  test('LANTERN_* constants and lantern helpers are not exported', async () => {
+    const mod = await import('../src/renderer-3d.js');
+    const banned = [
+      'LANTERN_INTENSITY_BY_PHASE',
+      'LANTERN_COLOR_HEX',
+      'LANTERN_RANGE',
+      'LANTERN_HEIGHT_OFFSET',
+      'LANTERN_FADE_MS',
+      'LANTERN_FLICKER_FREQ_HZ',
+      'LANTERN_FLICKER_SLOW_FREQ_HZ',
+      'LANTERN_MATERIAL_LIGHT_CAP',
+      'lanternIntensityForPhase',
+      'flickerScale',
+      'diffLanternLifecycle',
+    ];
+    for (const name of banned) {
+      assert.equal(mod[name], undefined, `expected ${name} to be removed from renderer-3d exports`);
+    }
+  });
+});

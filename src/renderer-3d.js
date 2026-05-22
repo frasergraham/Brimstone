@@ -575,20 +575,6 @@ export class Renderer3D {
     this._glowLayer  = null;
     this._onBeforeRenderObs = null;     // observer handle so we can dispose it
 
-    // ── Phase 6 (night lanterns subsystem — Piper) ─────────────────────────
-    // Per-living-entity warm point-light that flickers gently after dusk and
-    // through night, fading out at dawn into day. State is self-contained:
-    //   • _lanternLights — Map<entityId, { light, phaseOffset }>
-    //   • _lanternCurrentIntensity — current eased base intensity (peak)
-    //   • _lanternFade — { from, to, startMs, durMs } during a phase change
-    //   • _lastLanternPhase — own phase tracker so we don't race the shared one
-    //   • _lanternSubsystemInit — flag for one-time material light-cap bump
-    this._lanternLights            = new Map();
-    this._lanternCurrentIntensity  = 0;
-    this._lanternFade              = null;
-    this._lastLanternPhase         = null;
-    this._lanternSubsystemInit     = false;
-
     // ── Phase 3: standees + selection ───────────────────────────────────────
     // Map<entityId, { plane, base, assetId, ownerKey, leader }> for incremental diff.
     this._entityStandees   = new Map();
@@ -678,10 +664,6 @@ export class Renderer3D {
     this._notePhaseChange();
     this._syncNodeGlowMeshes();
     this._applyFogVeil();
-    // Night lanterns subsystem (Piper): warm flickering point-lights around
-    // living units after dusk. Sync runs after the fog veil so newly-fogged
-    // standees are tagged before the next flicker pump reads their visibility.
-    this._syncLanternLights();
   }
 
   resize() {
@@ -3394,8 +3376,6 @@ export class Renderer3D {
     }
     // Plan ghost walking previewer.
     this._pumpPlanGhosts(now);
-    // Night lanterns subsystem (Piper): per-frame flicker + fade pump.
-    this._pumpLanternFlicker(now);
   }
 
   /** Modulate a selected standee's halo. We use the base disc's emissive
@@ -3416,127 +3396,6 @@ export class Renderer3D {
     ng.disc.material.emissiveColor.r = c.r * k * NODE_DISC_EMISSIVE_MUL;
     ng.disc.material.emissiveColor.g = c.g * k * NODE_DISC_EMISSIVE_MUL;
     ng.disc.material.emissiveColor.b = c.b * k * NODE_DISC_EMISSIVE_MUL;
-  }
-
-  // ─── Night lanterns subsystem (Piper) ──────────────────────────────────────
-  //
-  // A separate Phase 6 mini-feature: each living entity emits a warm amber
-  // BABYLON.PointLight parented to its standee base, additive to the global
-  // hemispheric light. Intensity is keyed off `state.phase` via
-  // `lanternIntensityForPhase` and cross-faded over LANTERN_FADE_MS on phase
-  // transitions; per-frame it picks up a gentle two-frequency flicker so the
-  // group reads as separately-held lanterns, not a strobe.
-  //
-  // Lifecycle is fully self-contained: own phase tracker (`_lastLanternPhase`)
-  // so we never race the shared `_lastPhase` used by the hemispheric transition;
-  // own diff (`diffLanternLifecycle`) over `state.entities`; lanterns for
-  // fogged-out standees are disabled (not disposed) so reveals snap straight
-  // back. Babylon's default per-material light cap is 4 — bumped to
-  // LANTERN_MATERIAL_LIGHT_CAP on every StandardMaterial currently in the scene
-  // (plus any added later via onNewMaterialAddedObservable) the first time
-  // the subsystem fires, so the 10-20 active lanterns on a Standard map don't
-  // get silently dropped past slot 4.
-
-  /** Diff lantern lifecycle against the live entity set and mutate Babylon
-   *  state to match. Skips entities without a standee (the standee diff in
-   *  `_syncEntityStandees` runs earlier in `draw()` so missing-standee should
-   *  only happen briefly during late init). */
-  _syncLanternLights() {
-    if (!this._scene || !this._babylon) return;
-    const BABYLON = this._babylon;
-
-    // Phase-change detection: own tracker so we stay decoupled from the
-    // hemispheric-light transition pump (which Nora may be re-tuning in
-    // parallel). When the phase changes, start an eased fade between the
-    // current eased intensity and the new phase's peak.
-    const phase = this.state?.phase ?? null;
-    if (phase !== this._lastLanternPhase) {
-      this._lanternFade = {
-        from:    this._lanternCurrentIntensity,
-        to:      lanternIntensityForPhase(phase),
-        startMs: this._nowMs(),
-        durMs:   LANTERN_FADE_MS,
-      };
-      this._lastLanternPhase = phase;
-    }
-
-    // One-time material light-cap bump so the default-4 simultaneous-light
-    // shader doesn't drop lanterns past slot 4 on tile/standee meshes.
-    if (!this._lanternSubsystemInit) {
-      this._lanternSubsystemInit = true;
-      const apply = m => {
-        if (m && typeof m.maxSimultaneousLights === 'number'
-            && m.maxSimultaneousLights < LANTERN_MATERIAL_LIGHT_CAP) {
-          m.maxSimultaneousLights = LANTERN_MATERIAL_LIGHT_CAP;
-        }
-      };
-      for (const m of this._scene.materials) apply(m);
-      // Any materials minted later (texture upgrades, projectile flashes, …)
-      // also need the bump or their meshes will go dim near a lantern cluster.
-      this._scene.onNewMaterialAddedObservable?.add(apply);
-    }
-
-    const priorIds = new Set(this._lanternLights.keys());
-    const { add, remove } = diffLanternLifecycle(priorIds, this.state?.entities ?? []);
-
-    for (const id of remove) {
-      const entry = this._lanternLights.get(id);
-      entry?.light?.dispose();
-      this._lanternLights.delete(id);
-    }
-
-    for (const id of add) {
-      const standee = this._entityStandees.get(id);
-      if (!standee || !standee.base) continue; // try again next sync
-      const light = new BABYLON.PointLight(
-        `lantern_${id}`,
-        new BABYLON.Vector3(0, LANTERN_HEIGHT_OFFSET, 0),
-        this._scene,
-      );
-      const colour = BABYLON.Color3.FromHexString(LANTERN_COLOR_HEX);
-      light.diffuse  = colour;
-      light.specular = colour;
-      light.range    = LANTERN_RANGE;
-      light.intensity = 0; // pumped per-frame by _pumpLanternFlicker
-      // Parenting to the base means the lantern follows move/lunge animations
-      // for free — no per-frame position update needed.
-      light.parent   = standee.base;
-      this._lanternLights.set(id, {
-        light,
-        // Per-light phase offset so the flicker doesn't strobe in sync across
-        // a cluster of nearby standees.
-        phaseOffset: Math.random() * Math.PI * 2,
-      });
-    }
-  }
-
-  /** Per-frame pump: advance the lantern fade, then write per-light intensity
-   *  by multiplying the eased base by `flickerScale`. Lanterns whose standee
-   *  is hidden by fog (or whose base intensity is zero) are disabled so they
-   *  don't contribute to the per-material 4-light cap. */
-  _pumpLanternFlicker(now) {
-    // Advance the cross-phase fade.
-    if (this._lanternFade) {
-      const elapsed = now - this._lanternFade.startMs;
-      const u = Math.min(1, Math.max(0, elapsed / this._lanternFade.durMs));
-      const eased = easeInOutCubic(u);
-      this._lanternCurrentIntensity =
-        this._lanternFade.from + (this._lanternFade.to - this._lanternFade.from) * eased;
-      if (u >= 1) this._lanternFade = null;
-    }
-    if (this._lanternLights.size === 0) return;
-
-    const base = this._lanternCurrentIntensity;
-    const lit  = base > 1e-4;
-    for (const [id, entry] of this._lanternLights) {
-      const standee = this._entityStandees.get(id);
-      const visible = standee && standee.base?.isVisible !== false;
-      const enable  = lit && visible;
-      if (entry.light.isEnabled() !== enable) entry.light.setEnabled(enable);
-      if (!enable) continue;
-      const k = flickerScale(now, entry.phaseOffset);
-      entry.light.intensity = base * k;
-    }
   }
 
   /** Build one emissive disc per Power Node hex on first call, then on every
@@ -4410,101 +4269,6 @@ export const NODE_DISC_ALPHA = 0.88;
  *  visibly dimmed (~half brightness) while preserving "there's grass / dirt
  *  / forest there" reads. Props + standees still hide via `_applyFogVeil`. */
 export const FOG_TILE_DARKEN = 0.55;
-
-// ─── Night lanterns subsystem (Piper) — pure constants & helpers ────────────
-//
-// Phase 6 mini-feature: warm flickering point-lights around living units at
-// night. Daytime returns 0 so the lanterns are effectively off — they only
-// re-enable themselves on the fade-in into dusk/night. The subsystem is
-// intentionally read-only against the rest of Phase 6 (it never touches
-// `_glowLayer.intensity`, the selection halo, or the fog-darken constant) so
-// it composes cleanly with the existing atmosphere stack.
-
-/** Per-phase peak intensity for each unit's lantern PointLight. Day is exactly
- *  zero — the subsystem fades to "no contribution" at sunrise. Dawn and dusk
- *  are intermediate so dim-out / dim-in feel natural across the cycle. */
-export const LANTERN_INTENSITY_BY_PHASE = Object.freeze({
-  dawn:  0.3,
-  day:   0.0,
-  dusk:  0.4,
-  night: 0.8,
-});
-
-/** Look up a phase's lantern peak intensity. Unknown phases default to 0 so
- *  the renderer stays safe under unexpected save loads. */
-export function lanternIntensityForPhase(phase) {
-  return LANTERN_INTENSITY_BY_PHASE[phase] ?? 0;
-}
-
-/** Warm amber tint applied to both diffuse and specular on each PointLight.
- *  Chosen by eye against the night clear-colour (cool blue ~#1f2e52) so the
- *  warm/cool contrast reads strongly without looking neon. */
-export const LANTERN_COLOR_HEX = '#ffb060';
-
-/** Babylon-world units. ~5.0 reaches roughly the second ring of neighbouring
- *  hexes at the playmat's spacing, so a unit's lantern washes its hex plus a
- *  generous halo around it. */
-export const LANTERN_RANGE = 5.0;
-
-/** Vertical offset above the standee base where the PointLight sits — about
- *  chest height on the standee plane, so it shines outward from where a
- *  carried lantern would be held. */
-export const LANTERN_HEIGHT_OFFSET = 0.6;
-
-/** Phase-transition fade for the lantern peak intensity. Matches
- *  PHASE_TRANSITION_MS so the hemispheric light and the lanterns cross-fade
- *  in lockstep rather than reading as two separate events. */
-export const LANTERN_FADE_MS = PHASE_TRANSITION_MS;
-
-/** Flicker frequency (Hz) for the single slow breathing band. A faster
- *  noise band used to layer on top, but it read as a buzz rather than a
- *  candle wobble — the result is calmer with just the slow pulse. */
-export const LANTERN_FLICKER_FREQ_HZ = 2;
-
-/** Per-StandardMaterial simultaneous-light cap to override Babylon's default
- *  of 4. On a Standard map there can be 10–20 live entities; without this
- *  bump only the first 4 lanterns added would affect each tile's shader. */
-export const LANTERN_MATERIAL_LIGHT_CAP = 16;
-
-/** Flicker scale for one lantern at time `nowMs`. Returns a unit-less
- *  multiplier in [0.7, 1.0] — the per-light intensity is `base * flickerScale`.
- *  A single slow sine band carries the breathing pulse; an earlier fast pseudo-
- *  noise term was removed because it read as buzz rather than candle wobble. */
-export function flickerScale(
-  nowMs,
-  phaseOffset = 0,
-  freqHz     = LANTERN_FLICKER_FREQ_HZ,
-) {
-  const tSec  = nowMs / 1000;
-  const angle = tSec * freqHz * (Math.PI * 2) + phaseOffset;
-  return 0.85 + 0.15 * Math.sin(angle);
-}
-
-/** Lantern lifecycle diff: classify each live entity as `add` (new lantern
- *  needed), `keep` (already lit, leave the PointLight alone), or, for ids in
- *  `priorIds` that aren't in the live set, `remove` (dispose). Pure — exported
- *  so the lifecycle can be unit-tested without Babylon.
- *
- *  Dead entities and entities missing col/row are filtered out — they're
- *  treated as "not present", so a lantern for a dying unit lands in `remove`
- *  on the same frame the standee disposes. */
-export function diffLanternLifecycle(priorIds, currentEntities) {
-  const add = [];
-  const keep = [];
-  const remove = [];
-  const seen = new Set();
-  for (const e of currentEntities ?? []) {
-    if (!e || !e.alive) continue;
-    if (typeof e.col !== 'number' || typeof e.row !== 'number') continue;
-    seen.add(e.id);
-    if (priorIds.has(e.id)) keep.push(e.id);
-    else add.push(e.id);
-  }
-  for (const id of priorIds) {
-    if (!seen.has(id)) remove.push(id);
-  }
-  return { add, keep, remove };
-}
 
 /** Cubic ease-in-out — interpolates 0→1 smoothly with no jolt at endpoints. */
 export function easeInOutCubic(u) {
