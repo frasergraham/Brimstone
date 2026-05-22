@@ -155,6 +155,83 @@ export const IDLE_MODEL_FILE    = 'paladin-idle.glb';
 // steps if there's a pause in the resolution loop.
 export const PALADIN_ANIM_BLEND_RATE = 5.0;
 
+/** Read the root bone's first/last position keys to compute how far the
+ *  source animation translates the rig per cycle (in source-mesh units).
+ *  Returns the XZ distance between the first and last keyframe values —
+ *  for a properly-authored walk cycle this is one stride length. Pure;
+ *  exported for tests. Returns 0 if no usable position track is found. */
+export function computeRootStrideLength(animGroup, rootName = 'mixamorig:Hips') {
+  if (!animGroup || !Array.isArray(animGroup.targetedAnimations)) return 0;
+  const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
+  for (const ta of animGroup.targetedAnimations) {
+    const target = ta && ta.target;
+    const tName = target && target.name;
+    const prop  = ta.animation && ta.animation.targetProperty;
+    if (!tName || !prop) continue;
+    if (tName !== rootName && stripDup(tName) !== rootName) continue;
+    if (!/position/i.test(prop)) continue;
+    const keys = ta.animation.getKeys ? ta.animation.getKeys() : null;
+    if (!keys || keys.length < 2) continue;
+    const first = keys[0].value;
+    const last  = keys[keys.length - 1].value;
+    if (!first || !last || !('x' in first) || !('z' in first)) continue;
+    const dx = (last.x ?? 0) - (first.x ?? 0);
+    const dz = (last.z ?? 0) - (first.z ?? 0);
+    return Math.sqrt(dx * dx + dz * dz);
+  }
+  return 0;
+}
+
+/** Duration in seconds of an AnimationGroup's natural cycle (one play
+ *  at speedRatio=1). Pulls from the first animation's framePerSecond,
+ *  defaulting to 60. Pure; exported for tests. */
+export function animDurationSeconds(animGroup) {
+  if (!animGroup || !Array.isArray(animGroup.targetedAnimations)) return 0;
+  const first = animGroup.targetedAnimations[0];
+  const anim  = first && first.animation;
+  if (!anim) return 0;
+  const fps = (typeof anim.framePerSecond === 'number' && anim.framePerSecond > 0)
+    ? anim.framePerSecond : 60;
+  const from = typeof animGroup.from === 'number' ? animGroup.from : 0;
+  const to   = typeof animGroup.to === 'number'   ? animGroup.to   : 0;
+  return Math.max(0, (to - from) / fps);
+}
+
+/** Solve for the AnimationGroup.speedRatio that makes one stride of the
+ *  source clip cover `targetDistanceWU` of world-distance in
+ *  `targetTimeMs` milliseconds, after the mesh is rendered at `scale`.
+ *
+ *  Derivation: at speedRatio=1, the rig translates
+ *  `stride * scale` world-units per `natCycleSec` seconds. We want the
+ *  same world-distance in `targetTimeMs / 1000` seconds. speedRatio
+ *  multiplies playback speed (cycles/sec), so:
+ *
+ *      speedRatio = (targetDistanceWU / scale)
+ *                 / (stride * (targetTimeMs / 1000) / natCycleSec)
+ *                 = (targetDistanceWU * natCycleSec)
+ *                 / (stride * scale * (targetTimeMs / 1000))
+ *
+ *  Returns `fallback` when stride or scale or natCycleSec is non-positive
+ *  (can't solve). Clamped to a reasonable [0.25, 6.0] band to avoid
+ *  pathological values from broken clips. Pure; exported for tests. */
+export function computeAnimSpeedRatioForStride(
+  strideSourceUnits,
+  natCycleSec,
+  scale,
+  targetDistanceWU,
+  targetTimeMs,
+  fallback = 1.0,
+) {
+  if (!(strideSourceUnits > 0)) return fallback;
+  if (!(natCycleSec > 0)) return fallback;
+  if (!(scale > 0)) return fallback;
+  if (!(targetDistanceWU > 0)) return fallback;
+  if (!(targetTimeMs > 0)) return fallback;
+  const targetTimeSec = targetTimeMs / 1000;
+  const ratio = (targetDistanceWU * natCycleSec) / (strideSourceUnits * scale * targetTimeSec);
+  return Math.max(0.25, Math.min(6.0, ratio));
+}
+
 /** Zero out the root-bone's translation keyframes so the animation drives
  *  the rig in place. Mixamo's walk/run/idle clips bake root motion into
  *  mixamorig:Hips's position channel — without stripping, the model
@@ -1923,13 +2000,24 @@ export class Renderer3D {
       walkGroup: walkGroupNative,
       transformNodes: Array.isArray(result.transformNodes) ? result.transformNodes.slice() : [],
     };
-    // Walking playback at 2× natural — operator wanted a brisker cycle
-    // than the default Mixamo Walking (which reads as slow at our scale).
-    // Native walkGroup starts PAUSED; the per-frame tick resumes it
-    // whenever a ghost is animating (planning preview) or any hero is
-    // mid-move (resolution playback), and pauses it again when nothing
-    // is moving so the rig holds its current pose instead of moonwalking.
-    const walkSpeedRatio = 2.0;
+    // Compute the source clip's stride length and natural cycle duration
+    // BEFORE stripping root motion — once stripped, the keyframes are
+    // zeroed and stride reads as 0. Then back-calc a speedRatio that
+    // makes one stride cover one hex's world-distance in MOVE_ANIM_MS.
+    // Hex spacing on the X axis = HEX_RADIUS_WORLD * sqrt(3) ≈ 1.732 wu
+    // for radius=1.
+    const strideSrcUnits = computeRootStrideLength(walkGroupNative);
+    const natCycleSec    = animDurationSeconds(walkGroupNative);
+    const paladinScale   = this._paladinScale > 0 ? this._paladinScale : PALADIN_BASE_SCALE;
+    const hexStepWU      = HEX_RADIUS_WORLD * Math.sqrt(3);
+    const walkSpeedRatio = computeAnimSpeedRatioForStride(
+      strideSrcUnits, natCycleSec, paladinScale, hexStepWU, MOVE_ANIM_MS, /*fallback*/ 2.0,
+    );
+    console.info(
+      `[Renderer3D] walking speed ratio = ${walkSpeedRatio.toFixed(2)} `
+      + `(stride=${strideSrcUnits.toFixed(2)} src-units, cycle=${natCycleSec.toFixed(2)}s, `
+      + `scale=${paladinScale.toFixed(3)}, hex=${hexStepWU.toFixed(2)}wu, anim=${MOVE_ANIM_MS}ms)`,
+    );
     this._walkingSource.speedRatio = walkSpeedRatio;
     // Strip root motion on the native walking group too — ghost clones
     // riding walking's skeleton would otherwise translate through space
