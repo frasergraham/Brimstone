@@ -17,8 +17,10 @@ import {
   hexToWorld,
   computeMapBounds,
   radiusForFit,
+  radiusForStandardFit,
   shouldAnimateFocus,
 } from '../src/renderer-3d.js';
+import { MAP_SIZES } from '../src/map.js';
 
 describe('Renderer3D Phase 4 — constants', () => {
   test('FOCUS_ANIM_FRAMES is ~300ms at 60fps', () => {
@@ -131,5 +133,89 @@ describe('Renderer3D Phase 4 — computeMapBounds for frameHexes', () => {
     const r = radiusForFit(bounds.width, bounds.depth, 16 / 9);
     assert.ok(r > 0, 'single-hex framing must not collapse to radius 0');
     assert.ok(Number.isFinite(r));
+  });
+});
+
+describe('Renderer3D — radiusForStandardFit (max-zoom cap)', () => {
+  function rectPositions(cols, rows) {
+    const out = [];
+    for (let c = 0; c < cols; c++) for (let r = 0; r < rows; r++) {
+      out.push({ col: c, row: r });
+    }
+    return out;
+  }
+
+  test('returns the radius that would frame a standard 13×13 map', () => {
+    const aspect = 16 / 9;
+    const fov = 0.8;
+    const margin = 1.05;
+    const paddingHexes = 1;
+
+    const cfg = MAP_SIZES.standard;
+    const bounds = computeMapBounds(rectPositions(cfg.cols, cfg.rows));
+    const padding = paddingHexes * HEX_RADIUS_WORLD * Math.sqrt(3);
+    const expected = radiusForFit(
+      bounds.width + 2 * padding,
+      bounds.depth + 2 * padding,
+      aspect,
+      fov,
+      margin,
+    );
+
+    const got = radiusForStandardFit(aspect, fov, margin, paddingHexes);
+    assert.ok(Math.abs(got - expected) < 1e-9, `${got} vs ${expected}`);
+  });
+
+  test('positive for typical aspects', () => {
+    for (const aspect of [16 / 9, 4 / 3, 1, 0.75, 0.5]) {
+      const r = radiusForStandardFit(aspect);
+      assert.ok(Number.isFinite(r) && r > 0, `aspect=${aspect} → ${r}`);
+    }
+  });
+
+  test('narrower aspect → larger radius (need to pull back further to fit width)', () => {
+    const wide = radiusForStandardFit(2);
+    const square = radiusForStandardFit(1);
+    const portrait = radiusForStandardFit(0.5);
+    assert.ok(square > wide);
+    assert.ok(portrait > square);
+  });
+
+  test('clamps the framing radius of a campaign-size map (regression: cap kicks in)', () => {
+    // For a campaign map the unclamped fit radius is bigger than the
+    // standard-fit cap, so a renderer that clamps via upperRadiusLimit will
+    // end up showing only a standard-sized chunk.
+    const aspect = 16 / 9;
+    const cfg = MAP_SIZES.campaign;
+    const bounds = computeMapBounds(rectPositions(cfg.cols, cfg.rows));
+    const padding = 1 * HEX_RADIUS_WORLD * Math.sqrt(3);
+    const fullR = radiusForFit(
+      bounds.width + 2 * padding,
+      bounds.depth + 2 * padding,
+      aspect,
+    );
+    const cap = radiusForStandardFit(aspect);
+    assert.ok(fullR > cap, `campaign-fit radius ${fullR} must exceed standard cap ${cap}`);
+
+    // What `_radiusForFit` returns after the upper-limit clamp:
+    const clamped = Math.min(fullR, cap);
+    assert.equal(clamped, cap);
+  });
+
+  test('does NOT clamp the framing radius of a skirmish-size map (smaller fits inside cap)', () => {
+    // For skirmish 9×9 the unclamped fit radius is smaller than the cap, so
+    // it should pass through untouched — small maps still frame to actual extent.
+    const aspect = 16 / 9;
+    const cfg = MAP_SIZES.skirmish;
+    const bounds = computeMapBounds(rectPositions(cfg.cols, cfg.rows));
+    const padding = 1 * HEX_RADIUS_WORLD * Math.sqrt(3);
+    const fullR = radiusForFit(
+      bounds.width + 2 * padding,
+      bounds.depth + 2 * padding,
+      aspect,
+    );
+    const cap = radiusForStandardFit(aspect);
+    assert.ok(fullR < cap, `skirmish-fit radius ${fullR} must be below standard cap ${cap}`);
+    assert.equal(Math.min(fullR, cap), fullR);
   });
 });
