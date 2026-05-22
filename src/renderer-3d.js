@@ -813,12 +813,20 @@ export class Renderer3D {
     this._planArrowMatCache = new Map();
     // Cached material used to highlight a hex on attack flash.
     this._attackHexFlashMat = null;
+    // Change-detect signature for the plan-arrow overlay. Recomputed each
+    // draw() from steps + per-entity owner colour; identical signature → skip
+    // the dispose/rebuild cycle entirely (otherwise plan-edit drags GC a fresh
+    // marker + dash + badge per MOVE step every frame).
+    this._planArrowSig = '';
     // Plan-mode battle overlay: red attack-arrow tubes + ×N badges,
     // rebuilt every draw from `this.planGhostSteps` (BATTLE_UNIT /
     // BATTLE_HEX steps). Mirrors `_planArrowMeshes` but for attacks
     // instead of moves. Each entry: { shaft, head1, head2, mat,
     // badge, badgeMat, badgeTex }.
     this._planBattleMeshes = [];
+    // Change-detect signature for the battle overlay; same purpose as
+    // `_planArrowSig` but for attackArrow steps + per-target ×N counts.
+    this._planBattleSig = '';
     // Single shared red material for all attack arrow tubes — every
     // attack uses the same colour, so one allocation is enough.
     this._attackArrowMat = null;
@@ -4203,6 +4211,20 @@ export class Renderer3D {
    *  rebuild from scratch every draw() — the per-call cost is a handful of
    *  meshes (one per MOVE step) and avoids hand-tracking dirty plan state. */
   _syncPlanArrows() {
+    // Babylon loads lazily — bail before the signature check so the first
+    // draw() after init isn't stamped as "already rendered" while the build
+    // phase below is still no-op.
+    if (!this._babylon || !this._scene) return;
+
+    // Change-detect: skip the full dispose/rebuild when nothing the rebuild
+    // depends on has changed. The signature covers every (entityId, from/to
+    // hex, stepNumber) tuple plus each acting entity's owner colour — the only
+    // inputs the rebuild reads. During plan editing draw() fires on every
+    // hover / selection event, so this early-out saves GC + GPU buffer churn.
+    const sig = planArrowsSignature(this.planGhostSteps, this.state?.entities);
+    if (sig === this._planArrowSig) return;
+    this._planArrowSig = sig;
+
     // Dispose previous frame's plan marker geometry first. We rebuild every
     // draw — the per-call cost is small (one marker + badge per MOVE step,
     // plus one tube material + N dash tubes per entity) and avoids
@@ -4220,7 +4242,7 @@ export class Renderer3D {
     this._planArrowMeshes = [];
 
     const steps = this.planGhostSteps;
-    if (!steps || !this._babylon || !this._scene) return;
+    if (!steps) return;
 
     const BABYLON = this._babylon;
 
@@ -4372,6 +4394,18 @@ export class Renderer3D {
    *  with concurrent work on `_syncEntityStandees` (icon billboards,
    *  hex outlines). */
   _syncPlanBattleOverlay() {
+    // Babylon loads lazily — bail before the signature check so the first
+    // draw() after init doesn't stamp the cache while the build phase below
+    // is still no-op.
+    if (!this._babylon || !this._scene) return;
+
+    // Change-detect: skip the rebuild when neither the attack steps nor the
+    // per-target ×N counts have changed. Inputs are deterministic in plan
+    // order, so identical steps → identical signature.
+    const sig = planBattleOverlaySignature(this.planGhostSteps);
+    if (sig === this._planBattleSig) return;
+    this._planBattleSig = sig;
+
     for (const e of this._planBattleMeshes) {
       e.shaft?.dispose();
       e.head1?.dispose();
@@ -4383,7 +4417,7 @@ export class Renderer3D {
     this._planBattleMeshes = [];
 
     const steps = this.planGhostSteps;
-    if (!steps || !this._babylon || !this._scene) return;
+    if (!steps) return;
 
     const BABYLON = this._babylon;
 
@@ -7125,6 +7159,60 @@ export function movementHighlightSignature(list) {
   for (const h of list) {
     if (!h || typeof h.col !== 'number' || typeof h.row !== 'number') continue;
     out += `${h.col},${h.row},${h.color || ''}|`;
+  }
+  return out;
+}
+
+/**
+ * Compute a stable signature for the inputs of `_syncPlanArrows` so the
+ * renderer can early-out when nothing in the move plan has changed. The
+ * rebuild reads (a) the MOVE arrows in `planGhostSteps` and (b) each acting
+ * entity's owner colour (via `entityBaseColor`) for the dash material and
+ * badge border. Both pieces go into the signature so any plan edit, entity
+ * move, or owner-colour change triggers a rebuild — and nothing else does.
+ *
+ * Pure so it can be unit-tested without a Babylon scene.
+ */
+export function planArrowsSignature(steps, entities) {
+  if (!Array.isArray(steps) || steps.length === 0) return '';
+  let out = '';
+  const seenIds = new Set();
+  for (const s of steps) {
+    if (!s?.arrow) continue;
+    const { entityId, fromCol, fromRow, toCol, toRow } = s.arrow;
+    out += `${entityId};${fromCol},${fromRow};${toCol},${toRow};${s.stepNumber ?? ''}|`;
+    seenIds.add(entityId);
+  }
+  if (out === '') return '';
+  // Append per-acting-entity owner colour. Looking up via `find` matches the
+  // renderer's own lookup (`state.entities.find(e => e.id === entityId)`), so
+  // the colour we sign matches the colour the rebuild will read.
+  if (Array.isArray(entities) && seenIds.size > 0) {
+    const ids = [...seenIds].sort();
+    for (const id of ids) {
+      const ent = entities.find(e => e?.id === id);
+      out += `${id}=${entityBaseColor(ent ?? {})}|`;
+    }
+  }
+  return out;
+}
+
+/**
+ * Compute a stable signature for the inputs of `_syncPlanBattleOverlay`. The
+ * rebuild reads (a) every BATTLE_UNIT / BATTLE_HEX `attackArrow` step in plan
+ * order and (b) the per-target ×N count derived from those steps. Steps are
+ * deterministic in plan order, so a per-step (from, to) hash uniquely
+ * identifies the overlay — the ×N badge counts fall out automatically.
+ *
+ * Pure so it can be unit-tested without a Babylon scene.
+ */
+export function planBattleOverlaySignature(steps) {
+  if (!Array.isArray(steps) || steps.length === 0) return '';
+  let out = '';
+  for (const s of steps) {
+    if (!s?.attackArrow) continue;
+    const { fromCol, fromRow, toCol, toRow } = s.attackArrow;
+    out += `${fromCol},${fromRow}>${toCol},${toRow}|`;
   }
   return out;
 }
