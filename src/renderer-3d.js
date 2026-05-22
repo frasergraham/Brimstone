@@ -1587,7 +1587,19 @@ export class Renderer3D {
       this._paladinScale      = scale;
       this._paladinFeetOffset = feetOffset;
 
-      this._paladinSource = { mesh: skinned, meshes, skeleton, idleGroup, walkGroup: null };
+      // Capture the imported TransformNode hierarchy so the walking anim
+      // retargeter has a comprehensive name → node map to look up against.
+      // Mixamo node names ("mixamorig:Hips", etc) line up between paladin
+      // and walking exports, but Babylon's glTF loader uses TransformNodes
+      // (not Bones) as the canonical animation targets, so we MUST include
+      // every imported TN in the lookup or retargeting silently drops
+      // targets and the model T-poses when blend weight flips to walking.
+      const transformNodes = Array.isArray(result.transformNodes)
+        ? result.transformNodes.slice() : [];
+      this._paladinSource = {
+        mesh: skinned, meshes, skeleton, idleGroup, walkGroup: null,
+        transformNodes,
+      };
 
       // Fire-and-forget the walking companion GLB. Paladins start in idle
       // immediately and pop into the walk cycle as soon as the load resolves;
@@ -1709,33 +1721,55 @@ export class Renderer3D {
       return null;
     }
 
-    // Build a name → TransformNode map from the paladin source skeleton's
-    // linked nodes. Mixamo names ("mixamorig:Hips", etc) line up between
-    // paladin.glb and walking.glb, so look-up-by-name retargets cleanly.
+    // Build a comprehensive name → target map from the paladin import:
+    // every TransformNode (the canonical glTF animation target), plus
+    // skeleton bones and their _linkedTransformNodes as fallbacks. Babylon
+    // sometimes namespaces duplicate imports with a `.001` suffix — strip
+    // that to match cross-file. The richer the map, the fewer targets fall
+    // through to walking-glb's about-to-be-disposed TNs.
     const nameMap = new Map();
+    const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
+    const addEntry = (name, target) => {
+      if (!name || !target) return;
+      if (!nameMap.has(name)) nameMap.set(name, target);
+      const stripped = stripDup(name);
+      if (stripped !== name && !nameMap.has(stripped)) nameMap.set(stripped, target);
+    };
+    for (const tn of src.transformNodes || []) {
+      if (tn && tn.name) addEntry(tn.name, tn);
+    }
     if (src.skeleton && Array.isArray(src.skeleton.bones)) {
       for (const bone of src.skeleton.bones) {
-        const tn = bone && (bone._linkedTransformNode
-          || (typeof bone.getTransformNode === 'function' && bone.getTransformNode()));
-        if (tn && tn.name) nameMap.set(tn.name, tn);
-        // Some Babylon paths expose the linked node only via the bone itself.
-        if (bone && bone.name && !nameMap.has(bone.name)) nameMap.set(bone.name, bone);
+        if (!bone) continue;
+        const tn = bone._linkedTransformNode
+          || (typeof bone.getTransformNode === 'function' && bone.getTransformNode());
+        if (tn && tn.name) addEntry(tn.name, tn);
+        if (bone.name) addEntry(bone.name, tn || bone);
       }
     }
 
     let remapped = 0;
+    let missed = 0;
+    const missingExamples = [];
     const tas = walkGroup.targetedAnimations || [];
     for (const ta of tas) {
       const old = ta && ta.target;
       if (!old || !old.name) continue;
-      const match = nameMap.get(old.name);
+      const match = nameMap.get(old.name) || nameMap.get(stripDup(old.name));
       if (match) {
         ta.target = match;
         remapped++;
+      } else {
+        missed++;
+        if (missingExamples.length < 3) missingExamples.push(old.name);
       }
     }
+    console.info(
+      `[Renderer3D] walking.glb retarget: ${remapped} hit, ${missed} miss`
+      + (missed > 0 ? ` (e.g. ${missingExamples.join(', ')})` : ''),
+    );
     if (remapped === 0) {
-      console.warn('[Renderer3D] walking.glb: no targets remapped — paladin will not walk.');
+      console.warn('[Renderer3D] walking.glb: 0 targets remapped — paladin will not walk.');
     }
 
     // Wire blending. Both groups loop at weight {idle:1, walk:0} initially;
