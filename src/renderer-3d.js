@@ -155,6 +155,38 @@ export const IDLE_MODEL_FILE    = 'paladin-idle.glb';
 // steps if there's a pause in the resolution loop.
 export const PALADIN_ANIM_BLEND_RATE = 5.0;
 
+/** Zero out the root-bone's translation keyframes so the animation drives
+ *  the rig in place. Mixamo's walk/run/idle clips bake root motion into
+ *  mixamorig:Hips's position channel — without stripping, the model
+ *  translates through space on top of whatever world-space animation the
+ *  renderer is doing (cone slide, ghost path), producing double-displacement
+ *  or float. Pure; exported for tests. */
+export function stripRootBoneTranslation(animGroup, rootName = 'mixamorig:Hips') {
+  if (!animGroup || !Array.isArray(animGroup.targetedAnimations)) return 0;
+  const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
+  let stripped = 0;
+  for (const ta of animGroup.targetedAnimations) {
+    const target = ta && ta.target;
+    const tName = target && target.name;
+    const prop  = ta.animation && ta.animation.targetProperty;
+    if (!tName || !prop) continue;
+    if (tName !== rootName && stripDup(tName) !== rootName) continue;
+    if (!/position/i.test(prop)) continue;
+    const keys = ta.animation.getKeys ? ta.animation.getKeys() : null;
+    if (!keys) continue;
+    for (const k of keys) {
+      if (k.value && typeof k.value === 'object'
+        && 'x' in k.value && 'y' in k.value && 'z' in k.value) {
+        k.value.x = 0;
+        k.value.y = 0;
+        k.value.z = 0;
+      }
+    }
+    stripped++;
+  }
+  return stripped;
+}
+
 // Sustain (ms) for the walking state when consecutive moves chain back-to-back.
 // Just enough to bridge the few-ms inter-step gap when one unit's moves chain
 // (so a multi-hex hop reads as one continuous walk cycle) without holding
@@ -1700,6 +1732,13 @@ export class Renderer3D {
         if (typeof m.setEnabled === 'function') m.setEnabled(false);
         m.isPickable = false;
       }
+      // Strip root-bone X/Y/Z translation from idle's keyframes so the
+      // animation doesn't pull the model away from the cone anchor. Mixamo
+      // idle clips often have a Hips.position baseline that lifts the rig
+      // off the ground; without this strip the paladin floats. Y is
+      // included so the cone's feet-on-tile placement is the SOLE Y
+      // authority (no breathing bob, but solid ground contact).
+      stripRootBoneTranslation(idleGroup);
       // Start the embedded idle animation immediately so the rig animates
       // from load instead of sitting in bind-pose T-pose. The swap tick
       // (_maybeTogglePaladinAnimation) will stop()/start() between idle and
@@ -1892,6 +1931,10 @@ export class Renderer3D {
     // is moving so the rig holds its current pose instead of moonwalking.
     const walkSpeedRatio = 2.0;
     this._walkingSource.speedRatio = walkSpeedRatio;
+    // Strip root motion on the native walking group too — ghost clones
+    // riding walking's skeleton would otherwise translate through space
+    // on their own in addition to the cone slide along the planned path.
+    stripRootBoneTranslation(walkGroupNative);
     if (typeof walkGroupNative.start === 'function') {
       walkGroupNative.start(true, walkSpeedRatio);
     }
@@ -1948,6 +1991,11 @@ export class Renderer3D {
     );
 
     if (walkGroupForPaladin && remapped > 0) {
+      // Strip root motion so the walking clip animates the rig in place —
+      // the cone slide via Babylon Animation already handles world-space
+      // translation across hexes. Without this the walking model would
+      // also translate via its own root keyframes (double-displacement).
+      stripRootBoneTranslation(walkGroupForPaladin);
       // Kick the animatables into existence then immediately pause, so
       // _maybeTogglePaladinAnimation can use play()/pause() to resume from
       // current frame instead of restarting from frame 0 each move.
@@ -2204,13 +2252,26 @@ export class Renderer3D {
    *  across every ghost — they all march in step at the same animation
    *  frame, which reads fine for a planning preview. */
   _buildWalkingGhostClone(entity, parent) {
-    const src = this._walkingSource;
-    if (!src || !this._babylon) return null;
+    // Walking GLB is now an animation-only file (no embedded mesh), so its
+    // _walkingSource.meshes is empty. Fall back to the paladin source's
+    // mesh + skeleton for the ghost geometry — shared skeleton means ghost
+    // animates same pose as live paladin, which is acceptable for a
+    // planning preview.
+    const walking = this._walkingSource;
+    const paladin = this._paladinSource;
+    if (!this._babylon || !paladin) return null;
     const BABYLON = this._babylon;
-    const srcMeshes = Array.isArray(src.meshes) && src.meshes.length > 0
-      ? src.meshes
-      : (src.mesh ? [src.mesh] : []);
+    const meshSrc = (walking && Array.isArray(walking.meshes) && walking.meshes.length > 0)
+      ? walking
+      : paladin;
+    const skelSrc = meshSrc.skeleton ? meshSrc : paladin;
+    const srcMeshes = Array.isArray(meshSrc.meshes) && meshSrc.meshes.length > 0
+      ? meshSrc.meshes
+      : (meshSrc.mesh ? [meshSrc.mesh] : []);
     if (srcMeshes.length === 0) return null;
+    // Patch src reference used below so the existing skeleton-binding code
+    // pulls from whichever source provided the mesh.
+    const src = { ...meshSrc, skeleton: skelSrc.skeleton };
     const id = entity?.id ?? 'unknown';
 
     let cloneRoot = null;
@@ -6434,7 +6495,7 @@ export class Renderer3D {
       // per-ghost so the 50% alpha doesn't leak onto the source.
       let ghostClone = null;
       let ghostMats = null;
-      if (this._walkingSource && unitUsesPaladinModel(ent)) {
+      if (this._paladinSource && unitUsesPaladinModel(ent)) {
         ghostClone = this._buildWalkingGhostClone(ent, cone);
         if (ghostClone) {
           cone.visibility = 0;
