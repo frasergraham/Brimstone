@@ -1553,10 +1553,16 @@ export class Renderer3D {
         if (typeof m.setEnabled === 'function') m.setEnabled(false);
         m.isPickable = false;
       }
-      // Stop the source's idleGroup — we'll start a per-clone copy instead.
-      // Otherwise Babylon advances bones on the hidden source skeleton too,
-      // which is wasted CPU.
-      if (idleGroup && typeof idleGroup.stop === 'function') idleGroup.stop();
+      // Keep the source idleGroup running on the source skeleton. Clones share
+      // the source skeleton (Babylon's glTF animation targets TransformNodes
+      // that the bones link to via _linkedTransformNode, so per-clone skeleton
+      // cloning + bone-name retargeting fails silently — leaving every clone
+      // in T-pose). One playing animation animates the source skeleton; every
+      // clone references that skeleton and skins identically. Idle plays in
+      // sync across all paladins, which reads fine for a board-game token.
+      if (idleGroup && typeof idleGroup.start === 'function') {
+        idleGroup.start(true, 1.0);
+      }
 
       // Compute an aggregate hierarchy bbox + scale so the entire model
       // (helmet to feet) lands at TARGET_PALADIN_WORLD_HEIGHT regardless of
@@ -1711,31 +1717,19 @@ export class Renderer3D {
       cloneRoot = primarySkinnedClone;
     }
 
-    // Skeleton clone — bind to the primary skinned child only. Cloning
-    // every child's skeleton field would multi-bind the same bone matrices
-    // and skin them incorrectly (or, worse, drive the source skeleton).
-    let clonedSkel = null;
-    if (src.skeleton && typeof src.skeleton.clone === 'function') {
-      clonedSkel = src.skeleton.clone(`paladinSkel_${id}`, `paladinSkel_${id}`);
-      if (clonedSkel && primarySkinnedClone) primarySkinnedClone.skeleton = clonedSkel;
-    }
-
-    let clonedGroup = null;
-    if (src.idleGroup && clonedSkel && typeof src.idleGroup.clone === 'function') {
-      // The targetConverter remaps each animation target (a bone in the
-      // source skeleton) to the corresponding bone in the cloned skeleton
-      // by name. Without it the cloned group would still drive the source
-      // skeleton, and every paladin would share one set of bone matrices.
-      const converter = (oldTarget) => {
-        if (!oldTarget || !oldTarget.name || !Array.isArray(clonedSkel.bones)) return oldTarget;
-        const found = clonedSkel.bones.find(b => b && b.name === oldTarget.name);
-        return found || oldTarget;
-      };
-      clonedGroup = src.idleGroup.clone(`paladinAnim_${id}`, converter);
-      if (clonedGroup && typeof clonedGroup.start === 'function') {
-        // (loop=true, speedRatio=1) — standard board-game idle loop.
-        clonedGroup.start(true, 1.0);
-      }
+    // Share the source skeleton across every clone. Babylon's glTF loader
+    // makes the imported AnimationGroup target TransformNodes, and bones link
+    // to those TransformNodes via _linkedTransformNode. Cloning the skeleton
+    // per-standee leaves the cloned bones still pointing at source nodes —
+    // the bone-name AnimationGroup retarget converter (which looks for Bones,
+    // not TransformNodes) ends up with no matches, falls back to the source
+    // target, and every clone stays in T-pose. Sharing the source skeleton
+    // sidesteps the problem: the source idleGroup (started in _loadPaladinModel)
+    // animates the source skeleton's bones, and every clone that references
+    // that skeleton skins from the same bone matrices. All paladins idle in
+    // unison — fine for a board-game token, far better than T-pose.
+    if (src.skeleton && primarySkinnedClone) {
+      primarySkinnedClone.skeleton = src.skeleton;
     }
 
     // Scale + rotate + position on the root. Children inherit transforms.
@@ -1765,25 +1759,19 @@ export class Renderer3D {
       skinnedMesh: primarySkinnedClone,
       childMeshes: childClones,
       ownsRootNode,
-      skeleton: clonedSkel,
-      animationGroup: clonedGroup,
+      skeleton: null,
+      animationGroup: null,
     };
   }
 
-  /** Dispose every part of a previously-built paladin clone — animation
-   *  group first (so the per-frame bone update stops), skeleton second
-   *  (frees bone matrix buffers), then every child mesh (cascades
-   *  materials), then the root transform node if we own it. Safe to call
-   *  when no clone is attached. */
+  /** Dispose a previously-built paladin clone — every child mesh first
+   *  (cascades materials), then the root transform node if we own it.
+   *  Skeleton + animation group are owned by `_paladinSource` (shared
+   *  across all clones) and live for the renderer's lifetime; no per-
+   *  clone teardown of either. Safe to call when no clone is attached. */
   _disposePaladinClone(standee) {
     if (!standee || !standee.paladinClone) return;
     const c = standee.paladinClone;
-    if (c.animationGroup && typeof c.animationGroup.dispose === 'function') {
-      c.animationGroup.dispose();
-    }
-    if (c.skeleton && typeof c.skeleton.dispose === 'function') {
-      c.skeleton.dispose();
-    }
     if (Array.isArray(c.childMeshes)) {
       for (const m of c.childMeshes) {
         if (m && typeof m.dispose === 'function') m.dispose();
@@ -5245,6 +5233,36 @@ export class Renderer3D {
     // hex outlines — all now in group 0). UI badge must never be occluded.
     plane.renderingGroupId = 2;
     plane.position.set(0, iconBillboardYRelativeToCone(standee.leader), 0);
+    // 80% alpha — lets the paladin model behind show through when camera
+    // angles bring them close on screen.
+    mat.alpha = UNIT_ICON_PLANE_ALPHA;
+    // Screen-space-constant size: scale the plane each frame proportional
+    // to the camera's distance to its world position so the icon's pixel
+    // size stays roughly constant as the player zooms in / out. Without
+    // this the badge shrinks to a dot at fully-zoomed-out radii.
+    const camera = scene.activeCamera;
+    if (camera && scene.onBeforeRenderObservable
+        && typeof scene.onBeforeRenderObservable.add === 'function') {
+      const observer = scene.onBeforeRenderObservable.add(() => {
+        if (plane.isDisposed && plane.isDisposed()) return;
+        const cam = scene.activeCamera;
+        if (!cam) return;
+        // ArcRotateCamera exposes radius directly; perspective cameras have
+        // position — fall back to distance to plane's world position.
+        let dist = cam.radius;
+        if (typeof dist !== 'number') {
+          const wp = plane.getAbsolutePosition?.();
+          dist = wp && cam.position
+            ? BABYLON.Vector3.Distance(cam.position, wp)
+            : UNIT_ICON_REFERENCE_RADIUS;
+        }
+        const s = iconScreenScale(dist, UNIT_ICON_REFERENCE_RADIUS);
+        plane.scaling.x = s;
+        plane.scaling.y = s;
+        plane.scaling.z = s;
+      });
+      plane._iconScaleObserver = observer;
+    }
 
     const entry = {
       plane, mat, tex,
@@ -5277,6 +5295,11 @@ export class Renderer3D {
   _disposeUnitIconBadge(entityId) {
     const entry = this._unitIconBadges.get(entityId);
     if (!entry) return;
+    // Detach the per-frame screen-space scale observer before disposing.
+    const obs = entry.plane?._iconScaleObserver;
+    if (obs && this._scene?.onBeforeRenderObservable?.remove) {
+      this._scene.onBeforeRenderObservable.remove(obs);
+    }
     entry.plane.dispose();
     entry.mat.dispose();
     entry.tex.dispose();
@@ -7815,17 +7838,26 @@ export const HP_BAR_Y_ABOVE_BASE = 0.2;
  *  camera is fully zoomed out. The badge intentionally now dominates the
  *  silhouette of the token below it; that's the desired readout. */
 export const UNIT_ICON_PLANE_SIZE = 1.10;
-/** Gap between the top of the sphere head and the bottom of the icon plane,
- *  in world units. Slightly larger than the old HP-bar gap so the (taller)
- *  circular badge has visual breathing room above the token. */
-export const UNIT_ICON_Y_GAP      = 0.22;
+/** Gap above the cone+sphere stack to the bottom of the icon plane, in world
+ *  units. Sized so the icon floats clearly above the paladin GLB model
+ *  (~0.8 world units tall) rather than overlapping its torso/head. */
+export const UNIT_ICON_Y_GAP      = 0.85;
 /** DynamicTexture pixel size for the icon+ring composite. 192² keeps the
  *  portrait crisp at any zoom and the arc rim smooth without burning extra
  *  GPU memory per entity. */
 export const UNIT_ICON_TEX_SIZE   = 192;
-/** Arc rim thickness as a fraction of the texture half-size — wide enough
- *  to read as a clear HP bar at zoomed-out camera distances. */
-export const UNIT_ICON_RING_THICKNESS_FRAC = 0.14;
+/** Arc rim thickness as a fraction of the texture half-size — thin enough
+ *  to read as a clean line at the icon edge without crowding the portrait.
+ *  Halved from the old 0.14 per operator request for a thinner HP border. */
+export const UNIT_ICON_RING_THICKNESS_FRAC = 0.07;
+/** Plane material alpha — 0.8 keeps the icon legible but lets the model
+ *  behind it show through when the camera angle clips them. */
+export const UNIT_ICON_PLANE_ALPHA = 0.8;
+/** Camera radius at which the icon plane is its natural world size. Beyond
+ *  this distance the per-frame screen-space scaling kicks in to keep the
+ *  icon roughly the same pixel size at any zoom. Tuned around the default
+ *  zoom radius (~12 world units). */
+export const UNIT_ICON_REFERENCE_RADIUS = 12;
 
 /** Plan-marker disc — flat owner-tinted circle laid on the destination hex
  *  top. Y just clears the tile prism top (0.075) and the road deck (0.155)
@@ -7895,11 +7927,11 @@ export const ATTACK_ARROW_COLOR = '#dc3c3c';
 
 /** Floating ×N badge above the target hex. Sits above the move-badge
  *  layer (0.6), the unit body, and the floating unit-icon billboard.
- *  With the 2× icon size bump, the leader badge's top edge now sits at
- *  `iconBillboardY(true) + UNIT_ICON_PLANE_SIZE/2` ≈ 1.349 + 0.55 ≈ 1.9,
- *  so this constant was raised from 1.5 → 2.1 to keep the ×N readout
- *  clearly floating above the entire unit token stack. */
-export const ATTACK_BADGE_Y = 2.1;
+ *  With the larger UNIT_ICON_Y_GAP (0.85) needed to clear the paladin GLB
+ *  model, the leader icon's top edge sits at iconBillboardY(true) + 0.55
+ *  ≈ 1.979 + 0.55 ≈ 2.53, so this constant was raised to 2.8 to stay
+ *  above the entire unit token stack. */
+export const ATTACK_BADGE_Y = 2.8;
 
 /** Pixel size of the badge billboard plane (world units). Slightly
  *  larger than the move badge (0.45) so the ×N glyph reads cleanly. */
@@ -8314,6 +8346,24 @@ export function iconBillboardY(leader = false) {
  * disc anchor. Pure — exported so tests can pin the offset stays in step
  * with `iconBillboardY`.
  */
+/**
+ * Compute the per-frame uniform scale for the unit-icon billboard so it
+ * stays roughly the same pixel size on screen across camera zoom levels.
+ * The scaling is linear in `distance / referenceDistance`: at the reference
+ * distance the plane is its natural world size; further away it's scaled
+ * up; closer it's scaled down. Bounded by a small min (so the icon doesn't
+ * vanish at extreme close-up) and a generous max (so it doesn't bloom into
+ * the screen at extreme zoom-out).
+ *
+ * Pure — exported so tests can pin the scaling without spinning up Babylon.
+ */
+export function iconScreenScale(distance, referenceDistance) {
+  if (!(referenceDistance > 0)) return 1;
+  const d = typeof distance === 'number' && distance > 0 ? distance : referenceDistance;
+  const s = d / referenceDistance;
+  return Math.max(0.35, Math.min(3.0, s));
+}
+
 export function iconBillboardYRelativeToCone(leader = false) {
   const hMul = leader ? STANDEE_LEADER_HEIGHT_MUL : 1;
   // Cone centre sits at  (STANDEE_BASE_THICKNESS / 2) + (coneHeight / 2)

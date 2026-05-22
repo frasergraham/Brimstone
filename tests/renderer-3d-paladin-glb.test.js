@@ -255,7 +255,7 @@ describe('_loadPaladinModel — async load + caching + fallback', () => {
     assert.equal(mesh.isPickable, false);
   });
 
-  test('idle animation group is stopped on the source (per-clone copy plays instead)', async () => {
+  test('idle animation group is started on the source skeleton (shared across all clones)', async () => {
     const r = newInst();
     r._scene = {};
     const mesh = makeFakeSourceMesh();
@@ -264,7 +264,15 @@ describe('_loadPaladinModel — async load + caching + fallback', () => {
       importImpl: async () => ({ meshes: [mesh], animationGroups: [grp] }),
     });
     await r._loadPaladinModel('assets');
-    assert.equal(grp._stopped, true);
+    // Shared-skeleton approach: source idleGroup plays continuously on the
+    // source skeleton; every clone references that same skeleton and skins
+    // identically. Per-clone animation cloning + bone-name retargeting
+    // doesn't work for glTF imports (animation targets TransformNodes via
+    // _linkedTransformNode, not Bones) — it leaves every clone in T-pose.
+    assert.deepEqual(grp._started, { loop: true, speed: 1.0 },
+      'source idleGroup must be started looping (drives shared skeleton)');
+    assert.equal(grp._stopped, false,
+      'source idleGroup must NOT be stopped — clones share its bone matrices');
   });
 
   test('prefers the mesh with a skeleton over the first mesh', async () => {
@@ -569,53 +577,34 @@ describe('_buildPaladinClone — per-hero hierarchy clone + skeleton + animation
       `expected skinned clone name to start with 'paladin_e42', got '${out.skinnedMesh.name}'`);
   });
 
-  test('clones the skeleton and binds it to the skinned child', () => {
+  test('binds the source skeleton (shared) onto the skinned child', () => {
+    // Per-clone skeleton cloning fails for glTF imports because the imported
+    // AnimationGroup targets TransformNodes (via _linkedTransformNode), not
+    // Bones — bone-name retargeting after Skeleton.clone leaves every clone
+    // in T-pose. Sharing the source skeleton sidesteps the problem: the
+    // source idleGroup animates the source skeleton, and every clone that
+    // references that skeleton skins identically.
     const r = newInst();
-    setupLoaded(r);
+    const { skel } = setupLoaded(r);
     const out = r._buildPaladinClone({ id: 'e1', type: 'paladin' }, null);
-    assert.ok(out.skeleton);
-    assert.equal(out.skeleton.name, 'paladinSkel_e1');
-    assert.equal(out.skinnedMesh.skeleton, out.skeleton);
+    assert.equal(out.skinnedMesh.skeleton, skel,
+      'skinned child must reference the source skeleton (shared, not cloned)');
+    // Per-clone fields are nulled out by design — the shared skeleton +
+    // shared animation group are owned by _paladinSource and live for the
+    // renderer's lifetime.
+    assert.equal(out.skeleton, null);
+    assert.equal(out.animationGroup, null);
   });
 
-  test('clones the idle animation group and starts it looping at speed 1.0', () => {
+  test('all clones share the source skeleton (one playing idleGroup drives them all)', () => {
     const r = newInst();
-    setupLoaded(r);
-    const out = r._buildPaladinClone({ id: 'e1', type: 'paladin' }, null);
-    assert.ok(out.animationGroup);
-    assert.equal(out.animationGroup.name, 'paladinAnim_e1');
-    assert.deepEqual(out.animationGroup._started, { loop: true, speed: 1.0 });
-  });
-
-  test('animation clone passes a target-converter that maps bones by name', () => {
-    const r = newInst();
-    setupLoaded(r);
-    const out = r._buildPaladinClone({ id: 'e1', type: 'paladin' }, null);
-    const conv = out.animationGroup._converter;
-    assert.equal(typeof conv, 'function');
-    const fakeOldTarget = { name: 'mixamorig:Hips' };
-    const remapped = conv(fakeOldTarget);
-    assert.equal(remapped.name, 'mixamorig:Hips');
-  });
-
-  test('animation clone falls through gracefully when name has no bone match', () => {
-    const r = newInst();
-    setupLoaded(r);
-    const out = r._buildPaladinClone({ id: 'e1', type: 'paladin' }, null);
-    const conv = out.animationGroup._converter;
-    const fake = { name: 'NonExistentBone' };
-    assert.equal(conv(fake), fake);
-  });
-
-  test('per-hero cloned animation groups + skeletons are distinct objects', () => {
-    const r = newInst();
-    setupLoaded(r);
+    const { skel } = setupLoaded(r);
     const a = r._buildPaladinClone({ id: 'eA', type: 'paladin' }, null);
     const b = r._buildPaladinClone({ id: 'eB', type: 'paladin' }, null);
-    assert.notEqual(a.animationGroup, b.animationGroup,
-      'each hero must drive its own AnimationGroup so idles desync naturally');
-    assert.notEqual(a.skeleton, b.skeleton,
-      'each hero must have its own skeleton instance');
+    assert.equal(a.skinnedMesh.skeleton, skel);
+    assert.equal(b.skinnedMesh.skeleton, skel);
+    assert.equal(a.skinnedMesh.skeleton, b.skinnedMesh.skeleton,
+      'paladins must share the source skeleton — otherwise they all T-pose');
   });
 
   test('clone root is parented to the provided anchor (the cone)', () => {
@@ -712,19 +701,21 @@ describe('_buildPaladinClone — per-hero hierarchy clone + skeleton + animation
     assert.equal(out.childMeshes.includes(out.mesh), false);
   });
 
-  test('multi-mesh hierarchy: skinned child is identified and skeleton attaches only to it', () => {
+  test('multi-mesh hierarchy: skinned child is identified and the source skeleton attaches only to it', () => {
     const r = newInst();
-    const { mesh: srcSkinned } = setupLoaded(r, { multi: true });
+    const { mesh: srcSkinned, skel } = setupLoaded(r, { multi: true });
     const out = r._buildPaladinClone({ id: 'multi2', type: 'paladin' }, null);
     // The skinned child is the clone whose source mesh === src.mesh.
     assert.equal(out.skinnedMesh.source, srcSkinned);
-    assert.equal(out.skinnedMesh.skeleton, out.skeleton);
-    // Non-skinned children keep their skeleton=null (or absent) — only
-    // the primary skinned child carries the cloned skeleton.
+    // It carries the SOURCE skeleton (shared), not a cloned one.
+    assert.equal(out.skinnedMesh.skeleton, skel);
+    // Non-skinned children must NOT carry the shared skeleton — otherwise
+    // multiple meshes would each try to skin from the same bone matrices
+    // with their own bind poses, producing visual chaos.
     for (const c of out.childMeshes) {
       if (c === out.skinnedMesh) continue;
-      assert.notEqual(c.skeleton, out.skeleton,
-        `non-skinned child ${c.name} must not share the cloned skeleton`);
+      assert.notEqual(c.skeleton, skel,
+        `non-skinned child ${c.name} must not share the source skeleton`);
     }
   });
 
@@ -749,7 +740,7 @@ describe('_buildPaladinClone — per-hero hierarchy clone + skeleton + animation
 
 // ─── Dispose (`_disposePaladinClone`) ───────────────────────────────────────
 
-describe('_disposePaladinClone — tears down animation + skeleton + mesh', () => {
+describe('_disposePaladinClone — tears down mesh hierarchy (skeleton + anim are shared, not owned)', () => {
   test('no-ops cleanly when no clone is attached', () => {
     const r = newInst();
     assert.doesNotThrow(() => r._disposePaladinClone({ paladinClone: null }));
@@ -757,26 +748,26 @@ describe('_disposePaladinClone — tears down animation + skeleton + mesh', () =
     assert.doesNotThrow(() => r._disposePaladinClone(null));
   });
 
-  test('disposes the animation group, skeleton, and every child mesh, then clears the field', () => {
+  test('disposes every child mesh + the root, leaves the SHARED skeleton + anim group alive', () => {
+    // Skeleton + animation group live on _paladinSource and are shared
+    // across every clone. Disposing them per-clone would kill the idle
+    // animation for the survivors. The standee teardown only owns the
+    // mesh hierarchy (children + root).
     const r = newInst();
     const root = { name: 'root', _disposed: false, dispose() { this._disposed = true; } };
     const child1 = makeFakeClonedMesh('c1', null);
     const child2 = makeFakeClonedMesh('c2', null);
-    const skel = makeFakeSkeleton('s');
-    const grp  = makeFakeAnimGroup('g');
     const standee = {
       paladinClone: {
         mesh: root,
         skinnedMesh: child1,
         childMeshes: [child1, child2],
         ownsRootNode: true,
-        skeleton: skel,
-        animationGroup: grp,
+        skeleton: null,
+        animationGroup: null,
       },
     };
     r._disposePaladinClone(standee);
-    assert.equal(grp._disposed, true);
-    assert.equal(skel._disposed, true);
     assert.equal(child1._disposed, true);
     assert.equal(child2._disposed, true);
     assert.equal(root._disposed, true);
@@ -901,14 +892,14 @@ describe('_upgradeHeroStandeesToPaladin — async-load retrofit', () => {
 // gets a hidden cone+sphere and a paladin clone, a non-hero doesn't.
 
 describe('hero predicate gates the paladin path end-to-end', () => {
-  test('multiple heroes each get a distinct paladin clone after retrofit', () => {
+  test('multiple heroes get distinct mesh clones but share the source skeleton', () => {
     const r = newInst();
     r._babylon = makeFakeBabylon();
     const mesh = makeFakeSourceMesh();
     const skel = makeFakeSkeleton();
     const grp  = makeFakeAnimGroup();
     mesh.skeleton = skel;
-    r._paladinSource = { mesh, skeleton: skel, idleGroup: grp };
+    r._paladinSource = { mesh, meshes: [mesh], skeleton: skel, idleGroup: grp };
     r.state = {
       entities: [
         { id: 'h1', owner: 'hero',  type: 'paladin' },
@@ -928,10 +919,16 @@ describe('hero predicate gates the paladin path end-to-end', () => {
     const h1Clone = r._entityStandees.get('h1').paladinClone;
     const h2Clone = r._entityStandees.get('h2').paladinClone;
     assert.ok(h1Clone && h2Clone);
-    assert.notEqual(h1Clone.skeleton, h2Clone.skeleton,
-      'each hero must have its own skeleton — paladins can\'t share bone matrices');
-    assert.notEqual(h1Clone.animationGroup, h2Clone.animationGroup,
-      'each hero must have its own AnimationGroup so idles play independently');
+    // Each hero gets its own mesh hierarchy (own world position, own clone
+    // root) so they can stand on different hexes. But the skinned children
+    // all reference the SAME source skeleton — that's how the single
+    // playing idle animation drives every paladin's bone matrices.
+    assert.notEqual(h1Clone.mesh, h2Clone.mesh,
+      'each hero must have its own clone root (own position)');
+    assert.equal(h1Clone.skinnedMesh.skeleton, skel,
+      'h1 must reference the source skeleton');
+    assert.equal(h2Clone.skinnedMesh.skeleton, skel,
+      'h2 must reference the source skeleton');
     assert.equal(r._entityStandees.get('w1').paladinClone, null);
     assert.equal(r._entityStandees.get('z1').paladinClone, null);
   });
