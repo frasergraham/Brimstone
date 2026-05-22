@@ -1888,6 +1888,13 @@ export class Renderer3D {
         for (const m of list) freeze(m);
       }
     }
+    // Cross-tile merged border-forest trees (`_buildBorderForestTreesBatched`
+    // collapses ~240–900 per-tile cone clusters into ≤10 merged meshes — the
+    // biggest static draw-call payoff on the map, so freezing them here is
+    // load-bearing for the perf win).
+    if (Array.isArray(this._borderForestBatchMeshes)) {
+      for (const m of this._borderForestBatchMeshes) freeze(m);
+    }
     // Power-node ring tubes (built lazily on first draw — re-invocation picks
     // them up).
     if (this._nodeGlowMeshes) {

@@ -95,6 +95,24 @@ describe('_freezeStaticMeshes — locks world matrices of build-time meshes', ()
     }
   });
 
+  test('walks _borderForestBatchMeshes — cross-tile merged border-forest trees', () => {
+    // The cross-tile merge collapses ~240–900 per-tile cone clusters into ≤10
+    // merged meshes. These are the biggest static payoff on the map, so the
+    // freeze pass MUST cover them — otherwise the merge wins are silently
+    // halved by per-frame world-matrix syncs on the merged meshes.
+    const inst = newInst();
+    inst._tileMeshes = [];
+    const merged0 = fakeMesh('borderForestBatch_0');
+    const merged1 = fakeMesh('borderForestBatch_1');
+    inst._borderForestBatchMeshes = [merged0, merged1];
+    const n = inst._freezeStaticMeshes();
+    assert.equal(n, 2);
+    for (const m of [merged0, merged1]) {
+      assert.equal(m.isWorldMatrixFrozen, true);
+      assert.equal(m.doNotSyncBoundingInfo, true);
+    }
+  });
+
   test('walks _nodeGlowMeshes (ring tubes built lazily on first draw)', () => {
     const inst = newInst();
     inst._tileMeshes = [];
