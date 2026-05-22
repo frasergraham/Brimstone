@@ -118,11 +118,11 @@ export const HOUSE_INSTANCE_BASE_SCALE = 0.55;
 export const PALADIN_MODEL_DIR  = 'models/';
 // Back-compat constant; UNIT_RIG_BANK is the source-of-truth for which
 // .glb maps to which entity type.
-// idle.glb is the paladin's source rig — mesh + skeleton + idle animation
-// all in one Mixamo export. The embedded idle clip is auto-detected as
-// idleGroup at load time; no separate retarget needed. Walking is still
-// loaded as a separate animation-only file (when present) and retargeted.
-export const PALADIN_MODEL_FILE = 'idle.glb';
+// paladin-idle.glb is the paladin's source rig — mesh + skeleton + idle
+// animation all in one Mixamo export. The embedded idle clip is
+// auto-detected as idleGroup at load time; no separate retarget needed.
+// Walking + running are loaded as animation-only files and retargeted.
+export const PALADIN_MODEL_FILE = 'paladin-idle.glb';
 
 // Fallback world-space scale applied to each cloned paladin when the source
 // mesh's natural bounding box can't be measured (test stubs, malformed GLB).
@@ -144,7 +144,10 @@ export const PALADIN_YAW        = Math.PI;
 // back-compat with existing call sites; UNIT_RIG_BANK is the architectural
 // source of truth going forward (UNIT_RIG_BANK[type].animations.{idle,walking}).
 export const WALKING_MODEL_FILE = 'walking.glb';
-export const IDLE_MODEL_FILE    = 'idle.glb';
+// IDLE_MODEL_FILE matches PALADIN_MODEL_FILE — paladin-idle.glb ships the
+// idle clip embedded, so the loader picks it up at model-load time and
+// _loadIdleAnimation skips (avoids a duplicate import).
+export const IDLE_MODEL_FILE    = 'paladin-idle.glb';
 
 // Crossfade rate between idle and walking, in 1/seconds. 5.0 = full transition
 // in 200ms. Slow enough to read as a deliberate state change, fast enough that
@@ -176,8 +179,9 @@ export function isHeroFactionEntity(entity) {
  *  loader retargets that group onto a unit's skeleton by bone name. Extend
  *  this as new clips drop in. */
 export const ANIMATION_BANK = Object.freeze({
-  idle:    'idle.glb',
+  idle:    'paladin-idle.glb', // mesh + idle in one file; doubles as the rig source
   walking: 'walking.glb',
+  running: 'running.glb',
 });
 
 /** Renderer-side bank of available unit rigs. Each entry pairs a model
@@ -189,11 +193,12 @@ export const ANIMATION_BANK = Object.freeze({
 export const UNIT_RIG_BANK = Object.freeze({
   [EntityType.PALADIN]: Object.freeze({
     // Model file ships with the idle clip embedded — auto-detected as
-    // the rig's idle by _loadPaladinModel. Walking is loaded separately
-    // and retargeted onto this skeleton.
-    model: 'idle.glb',
+    // the rig's idle by _loadPaladinModel. Walking + running are loaded
+    // separately and retargeted onto this skeleton by bone name.
+    model: 'paladin-idle.glb',
     animations: Object.freeze({
       walking: ANIMATION_BANK.walking,
+      running: ANIMATION_BANK.running,
     }),
   }),
   // Future:
