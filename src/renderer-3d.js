@@ -35,11 +35,14 @@ import { MAP_SIZES } from './map.js';
 
 const BABYLON_CDN = 'https://cdn.jsdelivr.net/npm/@babylonjs/core@7.42.0/+esm';
 // The glTF loader plugin lives in a separate npm package (not @babylonjs/core).
-// Importing this module registers the .glb / .gltf plugins on
-// BABYLON.SceneLoader as a side-effect — without it, ImportMeshAsync rejects
-// .glb files with "Unable to find a plugin". Loaded lazily from `_loadHouseModel`
-// so the renderer doesn't pay for the loader bundle on maps that never need it.
-const BABYLON_LOADERS_CDN = 'https://cdn.jsdelivr.net/npm/@babylonjs/loaders@7.42.0/+esm';
+// We load it as a UMD bundle via <script> tag (not as an ESM import) because the
+// jsdelivr `+esm` wrapper bundles its OWN copy of @babylonjs/core — registering
+// the plugin on the internal copy, not the window-global BABYLON our renderer
+// uses. Two BABYLON instances → ImportMeshAsync never sees the .glb plugin →
+// SceneLoader falls back to the .babylon JSON loader and rejects with
+// "importMesh has failed JSON parse" on binary GLB files. The UMD bundle below
+// attaches to the same window.BABYLON the rest of the renderer uses.
+const BABYLON_LOADERS_UMD = 'https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js';
 
 // ─── House GLB model (replaces the procedural box+roof building) ───────────
 // Path is relative to the assets base directory (`assets/` in production), so
@@ -1025,6 +1028,77 @@ export class Renderer3D {
     if (this.onImagesLoaded) this.onImagesLoaded();
   }
 
+  /** Inject the Babylon glTF loaders UMD bundle into the page so SceneLoader
+   *  recognizes `.glb` / `.gltf` files. Idempotent and shared by every GLB
+   *  consumer in the renderer (house, paladin, future props) — registration
+   *  is a global side-effect on BABYLON.SceneLoader so the first caller pays
+   *  the network cost and subsequent callers fast-path through the cached
+   *  promise.
+   *
+   *  Returns true if the loaders plugin is available after the call (script
+   *  loaded AND .glb plugin registered), false otherwise. Callers should not
+   *  abort on `false` if their fake BABYLON already stubs ImportMeshAsync —
+   *  the test path bypasses the script tag entirely.
+   *
+   *  Why a `<script>` tag instead of `await import(...+esm)`: the jsdelivr
+   *  `+esm` ESM wrapper bundles its own copy of @babylonjs/core, registering
+   *  the plugin on the wrong BABYLON instance. The UMD bundle attaches to
+   *  the same window.BABYLON the rest of the renderer uses. */
+  async _ensureBabylonLoaders() {
+    if (this._babylonLoadersReady) return true;
+    // No DOM (headless tests / node-test runner): there's no <script> tag to
+    // inject. Tests stub SceneLoader directly on the fake BABYLON, so the
+    // caller's plugin-availability check will let things proceed regardless.
+    if (typeof document === 'undefined') return false;
+
+    const BABYLON = this._babylon;
+    const hasPlugin = () =>
+      typeof BABYLON?.SceneLoader?.IsPluginForExtensionAvailable === 'function'
+        ? !!BABYLON.SceneLoader.IsPluginForExtensionAvailable('.glb')
+        : false;
+
+    // Already registered (e.g. an earlier renderer instance, or a host page
+    // that loaded the bundle itself). Skip the script injection.
+    if (hasPlugin()) {
+      this._babylonLoadersReady = true;
+      return true;
+    }
+
+    if (!this._babylonLoadersPromise) {
+      this._babylonLoadersPromise = new Promise((resolve) => {
+        const existing = document.querySelector('script[data-babylon-loaders]');
+        if (existing) {
+          if (existing.dataset.loaded === 'true') return resolve(true);
+          existing.addEventListener('load', () => resolve(true), { once: true });
+          existing.addEventListener('error', () => resolve(false), { once: true });
+          return;
+        }
+        const s = document.createElement('script');
+        s.src = BABYLON_LOADERS_UMD;
+        s.async = true;
+        s.dataset.babylonLoaders = 'true';
+        s.addEventListener('load', () => { s.dataset.loaded = 'true'; resolve(true); }, { once: true });
+        s.addEventListener('error', () => resolve(false), { once: true });
+        document.head.appendChild(s);
+      });
+    }
+
+    const scriptOk = await this._babylonLoadersPromise;
+    if (!scriptOk) {
+      console.warn('[Renderer3D] Babylon glTF loaders script failed to load; GLB models unavailable.');
+      return false;
+    }
+    // The script may have loaded but failed to register (CDN returned wrong
+    // content, BABYLON global mismatch, etc.). Verify by asking SceneLoader
+    // whether it can handle .glb — that's the question we actually care about.
+    if (!hasPlugin()) {
+      console.warn('[Renderer3D] Babylon loaders script loaded but .glb plugin not registered.');
+      return false;
+    }
+    this._babylonLoadersReady = true;
+    return true;
+  }
+
   /** Lazy-load `<basePath>/models/house.glb` and stash it as `_houseSourceMesh`.
    *  Subsequent building tiles (and any already-built tiles, via the retrofit
    *  pass) render `mesh.createInstance(...)` of this source so all houses on
@@ -1044,18 +1118,12 @@ export class Renderer3D {
     const BABYLON = this._babylon;
 
     const promise = (async () => {
-      // Step 1: register glTF loader plugin (side-effect of importing the
-      // loaders package). Best-effort — if SceneLoader.ImportMeshAsync is
-      // already wired (tests stub it directly on the fake BABYLON), we don't
-      // need the loaders import at all. Real-browser path: this populates
-      // the .glb / .gltf plugin entries on BABYLON.SceneLoader.
-      try {
-        await import(/* @vite-ignore */ BABYLON_LOADERS_CDN);
-      } catch (err) {
-        // Don't abort yet — SceneLoader may still be usable (tests + edge
-        // cases). The plugin-availability check below makes the final call.
-        console.warn('[Renderer3D] @babylonjs/loaders import failed.', err);
-      }
+      // Step 1: register glTF loader plugin via the UMD bundle. Best-effort —
+      // if SceneLoader.ImportMeshAsync is already wired (tests stub it
+      // directly on the fake BABYLON), we don't need the loaders script at
+      // all. Real-browser path: the bundle attaches to window.BABYLON and
+      // populates the .glb / .gltf plugin entries on BABYLON.SceneLoader.
+      await this._ensureBabylonLoaders();
 
       if (!BABYLON.SceneLoader || typeof BABYLON.SceneLoader.ImportMeshAsync !== 'function') {
         console.warn('[Renderer3D] BABYLON.SceneLoader.ImportMeshAsync unavailable; skipping house model.');
