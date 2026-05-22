@@ -1,89 +1,192 @@
 // Tests for the bundled polish: bridge plank rendering disabled, and the
-// river extension ribbons that thread through the border-forest band tinted
-// dark to match the surrounding out-of-play forest.
+// river-extension ribbons that thread through the border-forest band
+// rendering with the SAME colour as the in-map river network (no fog tint).
 //
-// The renderer itself can't run in node-test (Babylon + WebGL), so we cover
-// the change with two angles:
-//   • A pure helper `fogRibbonMaterialColors` that derives the darkened
-//     diffuse + emissive tuple from a CSS hex colour — exercised here.
+// Why no fog tint: bridge planks are off, so the road ribbon visibly crosses
+// the river at every bridge tile, and the river extension carries the water
+// past the playable edge through the forest band. Earlier polish tinted the
+// extension down to match the dark border hexes, which read as a dimmer
+// stripe than the playable-area river. Operator wants the water to look the
+// same colour and brightness inside and outside the playable area — the
+// border band's ambient darkness handles the visual fade naturally without
+// any explicit material multiplier.
+//
+// Babylon + WebGL can't run in node-test, so we cover the change with two
+// angles:
+//   • A stubbed-Babylon test that drives `_buildRiverExtensions` and asserts
+//     the extension mesh's material diffuse / emissive equal the unfogged
+//     in-map river ribbon colours.
 //   • The bridge-plank gate inside `_buildTileMesh` is a `_renderBridges`
 //     flag on the renderer instance; we exercise it by constructing a bare
 //     instance and asserting the flag defaults to off (so the plank build
 //     is dead code at runtime until a future caller flips it).
-//
-// Visual layering of the road tube across the river hex is unchanged — the
-// road network builds itself from `roadDirs`, independent of whether the
-// bridge plank is present. That's covered by the existing network tests
-// (renderer-3d-networks.test.js).
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  fogRibbonMaterialColors,
   ribbonMaterialColors,
-  FOG_TILE_DARKEN,
   Renderer3D,
+  RIVER_ALPHA_INDEX,
 } from '../src/renderer-3d.js';
 import { TileType, TILE_COLOR } from '../src/tiles.js';
+import { hexKey } from '../src/hex.js';
 
-// ── fogRibbonMaterialColors ──────────────────────────────────────────────────
+// ── Stubbed Babylon for the river-extension build path ────────────────────────
 
-describe('Renderer3D — fogRibbonMaterialColors', () => {
-  test('returns the same shape as ribbonMaterialColors (diffuse + emissive triplets)', () => {
-    const out = fogRibbonMaterialColors('#1a3d5c');
-    assert.ok(Array.isArray(out.diffuse) && out.diffuse.length === 3);
-    assert.ok(Array.isArray(out.emissive) && out.emissive.length === 3);
+function makeStubBabylon() {
+  const makeMesh = (name) => ({
+    name,
+    position:   { set() {} },
+    rotation:   { x: 0, y: 0, z: 0 },
+    scaling:    { x: 1, y: 1, z: 1 },
+    parent:     null,
+    material:   null,
+    metadata:   undefined,
+    isPickable: true,
+    alphaIndex: undefined,
+    receiveShadows: false,
+    setEnabled() {},
+    dispose() {},
   });
+  return {
+    MeshBuilder: {
+      CreateRibbon: (name) => makeMesh(name),
+    },
+    Mesh: {
+      DOUBLESIDE: 2,
+    },
+    StandardMaterial: function (name) {
+      this.name             = name;
+      this.diffuseColor     = null;
+      this.emissiveColor    = null;
+      this.specularColor    = null;
+      this.backFaceCulling  = true;
+      this.disableLighting  = false;
+    },
+    Color3: function (r, g, b) { this.r = r; this.g = g; this.b = b; },
+    Vector3: function (x, y, z) { this.x = x; this.y = y; this.z = z; },
+  };
+}
 
-  test('each channel is the unfogged ribbon colour × FOG_TILE_DARKEN by default', () => {
-    const hex   = TILE_COLOR[TileType.RIVER];
-    const lit   = ribbonMaterialColors(hex);
-    const dark  = fogRibbonMaterialColors(hex);
-    const k     = FOG_TILE_DARKEN;
-    for (let i = 0; i < 3; i++) {
-      assert.ok(Math.abs(dark.diffuse[i]  - lit.diffuse[i]  * k) < 1e-9,
-        `diffuse[${i}] ${dark.diffuse[i]} should equal ${lit.diffuse[i] * k}`);
-      assert.ok(Math.abs(dark.emissive[i] - lit.emissive[i] * k) < 1e-9,
-        `emissive[${i}] ${dark.emissive[i]} should equal ${lit.emissive[i] * k}`);
+/** Tiny tiles map: river crosses horizontally through (0..4, row=2). Endpoints
+ *  at col=0 and col=4 each have one water neighbour → two exits. */
+function makeRiverAcross(cols = 5, row = 2) {
+  const tiles = new Map();
+  for (let c = 0; c < cols; c++) {
+    tiles.set(hexKey(c, row), { col: c, row, type: TileType.RIVER, roadDirs: new Set() });
+  }
+  return tiles;
+}
+
+function newInst() {
+  const fakeCanvas = {
+    parentElement: null, width: 800, height: 600, addEventListener() {},
+  };
+  return new Renderer3D(fakeCanvas, {});
+}
+
+describe('Renderer3D — river extension uses the in-map river colour (no fog tint)', () => {
+  test('extension material diffuse + emissive equal ribbonMaterialColors(TILE_COLOR.RIVER)', () => {
+    const r = newInst();
+    r._babylon = makeStubBabylon();
+    r._scene   = {};
+    r._mapRoot = { name: 'mapRoot' };
+    r.state    = { tiles: makeRiverAcross(5, 2) };
+    // Sentinel "river exists" probe — `_buildRiverExtensions` checks this and
+    // bails out if the map has no river. The mesh contents don't matter
+    // because the extension material is now built from `ribbonMaterialColors`
+    // directly rather than cloned off the in-map river mesh.
+    r._riverNetworkMesh = { name: 'river_5,5', material: { name: 'river_anchor' } };
+
+    r._buildRiverExtensions(2);
+
+    const exts = [];
+    for (const list of r._borderPropsByKey.values()) {
+      for (const m of list) if (m.metadata?.kind === 'river-extension') exts.push(m);
+    }
+    assert.ok(exts.length >= 1, 'expected at least one river-extension mesh');
+
+    const expected = ribbonMaterialColors(TILE_COLOR[TileType.RIVER]);
+    for (const m of exts) {
+      const d = m.material.diffuseColor;
+      const e = m.material.emissiveColor;
+      assert.ok(Math.abs(d.r - expected.diffuse[0]) < 1e-9,
+        `extension ${m.name} diffuse.r ${d.r} should equal in-map river ${expected.diffuse[0]}`);
+      assert.ok(Math.abs(d.g - expected.diffuse[1]) < 1e-9);
+      assert.ok(Math.abs(d.b - expected.diffuse[2]) < 1e-9);
+      assert.ok(Math.abs(e.r - expected.emissive[0]) < 1e-9,
+        `extension ${m.name} emissive.r ${e.r} should equal in-map river ${expected.emissive[0]}`);
+      assert.ok(Math.abs(e.g - expected.emissive[1]) < 1e-9);
+      assert.ok(Math.abs(e.b - expected.emissive[2]) < 1e-9);
     }
   });
 
-  test('fog tint reduces brightness — every channel is dimmer than the lit ribbon', () => {
-    const lit  = ribbonMaterialColors(TILE_COLOR[TileType.RIVER]);
-    const dark = fogRibbonMaterialColors(TILE_COLOR[TileType.RIVER]);
-    for (let i = 0; i < 3; i++) {
-      assert.ok(dark.diffuse[i]  < lit.diffuse[i],
-        `diffuse[${i}] should darken: ${dark.diffuse[i]} < ${lit.diffuse[i]}`);
-      assert.ok(dark.emissive[i] < lit.emissive[i],
-        `emissive[${i}] should darken: ${dark.emissive[i]} < ${lit.emissive[i]}`);
+  test('extension meshes do NOT carry a fogged: true tag', () => {
+    // The old polish stashed `fogged: true` on the metadata so the renderer
+    // could distinguish darkened extensions from the playable-area river.
+    // After dropping the fog tint there is nothing to distinguish — pin that
+    // the tag is gone so a future change can't silently re-darken extensions.
+    const r = newInst();
+    r._babylon = makeStubBabylon();
+    r._scene   = {};
+    r._mapRoot = { name: 'mapRoot' };
+    r.state    = { tiles: makeRiverAcross(5, 2) };
+    r._riverNetworkMesh = { name: 'river_5,5', material: {} };
+
+    r._buildRiverExtensions(2);
+
+    for (const list of r._borderPropsByKey.values()) {
+      for (const m of list) {
+        if (m.metadata?.kind === 'river-extension') {
+          assert.notEqual(m.metadata.fogged, true,
+            `extension ${m.name} should not carry fogged:true after the tint drop`);
+        }
+      }
     }
   });
 
-  test('explicit darken parameter is honoured (used by the renderer when fog tuner moves)', () => {
-    const lit  = ribbonMaterialColors('#1a3d5c');
-    const out  = fogRibbonMaterialColors('#1a3d5c', 0.5);
-    for (let i = 0; i < 3; i++) {
-      assert.ok(Math.abs(out.diffuse[i]  - lit.diffuse[i]  * 0.5) < 1e-9);
-      assert.ok(Math.abs(out.emissive[i] - lit.emissive[i] * 0.5) < 1e-9);
+  test('extension meshes set receiveShadows + alphaIndex to match the in-map river', () => {
+    // Matching in-map ribbons means matching shadow + transparency behaviour —
+    // unit shadows should fall across the extension, and the road ribbon's
+    // higher alphaIndex must still win at any crossing point.
+    const r = newInst();
+    r._babylon = makeStubBabylon();
+    r._scene   = {};
+    r._mapRoot = { name: 'mapRoot' };
+    r.state    = { tiles: makeRiverAcross(5, 2) };
+    r._riverNetworkMesh = { name: 'river_5,5', material: {} };
+
+    r._buildRiverExtensions(2);
+
+    for (const list of r._borderPropsByKey.values()) {
+      for (const m of list) {
+        if (m.metadata?.kind === 'river-extension') {
+          assert.equal(m.receiveShadows, true,
+            `extension ${m.name} must catch shadows like the in-map river`);
+          assert.equal(m.alphaIndex, RIVER_ALPHA_INDEX,
+            `extension ${m.name} alphaIndex should equal RIVER_ALPHA_INDEX`);
+        }
+      }
     }
   });
 
-  test('darken=1 returns the unfogged colours unchanged', () => {
-    const lit  = ribbonMaterialColors('#1a3d5c');
-    const out  = fogRibbonMaterialColors('#1a3d5c', 1.0);
-    for (let i = 0; i < 3; i++) {
-      assert.ok(Math.abs(out.diffuse[i]  - lit.diffuse[i])  < 1e-9);
-      assert.ok(Math.abs(out.emissive[i] - lit.emissive[i]) < 1e-9);
-    }
-  });
+  test('no river on the map → no extension built (no-op)', () => {
+    const r = newInst();
+    r._babylon = makeStubBabylon();
+    r._scene   = {};
+    r._mapRoot = { name: 'mapRoot' };
+    r.state    = { tiles: makeRiverAcross(5, 2) };
+    r._riverNetworkMesh = null;
 
-  test('darken=0 floors every channel to zero', () => {
-    const out = fogRibbonMaterialColors('#1a3d5c', 0);
-    for (let i = 0; i < 3; i++) {
-      assert.equal(out.diffuse[i], 0);
-      assert.equal(out.emissive[i], 0);
+    r._buildRiverExtensions(2);
+
+    let count = 0;
+    for (const list of r._borderPropsByKey.values()) {
+      for (const m of list) if (m.metadata?.kind === 'river-extension') count++;
     }
+    assert.equal(count, 0,
+      'with no in-map river the extension build must short-circuit before creating ribbons');
   });
 });
 

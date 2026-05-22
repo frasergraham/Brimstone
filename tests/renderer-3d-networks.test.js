@@ -17,6 +17,8 @@ import {
   ROAD_RIBBON_WIDTH,
   RIVER_RIBBON_Y,
   ROAD_RIBBON_Y,
+  RIVER_ALPHA_INDEX,
+  ROAD_ALPHA_INDEX,
   NETWORK_BEZIER_SEGMENTS,
   hexToWorld,
 } from '../src/renderer-3d.js';
@@ -27,9 +29,24 @@ describe('Item 2 — bezier visual constants', () => {
       `river ${RIVER_RIBBON_WIDTH} should exceed road ${ROAD_RIBBON_WIDTH}`);
   });
 
-  test('road sits slightly above the river so over-bridge crossings layer cleanly', () => {
-    assert.ok(ROAD_RIBBON_Y > RIVER_RIBBON_Y,
-      `road Y ${ROAD_RIBBON_Y} should exceed river Y ${RIVER_RIBBON_Y}`);
+  test('road sits clearly above the river so road paints over water at crossings', () => {
+    // Bridge planks are disabled (`_renderBridges = false`), so the road
+    // ribbon is what visibly crosses the river. A 3 mm gap was not enough
+    // for Babylon's alpha-blend sort to consistently put the road above
+    // the river at low camera tilts — require a robust margin.
+    assert.ok(ROAD_RIBBON_Y - RIVER_RIBBON_Y >= 0.01,
+      `road Y ${ROAD_RIBBON_Y} should sit at least 0.01 above river Y ${RIVER_RIBBON_Y}`);
+  });
+
+  test('alphaIndex pins road > river in the transparency sort', () => {
+    // Babylon transparent pass sorts by alphaIndex ascending — lower draws
+    // first. Road must draw AFTER river within renderingGroupId 0 so the
+    // road ribbon visibly crosses over the water at bridge tiles, even when
+    // the per-mesh distance-to-camera sort would otherwise flip.
+    assert.ok(typeof RIVER_ALPHA_INDEX === 'number');
+    assert.ok(typeof ROAD_ALPHA_INDEX === 'number');
+    assert.ok(ROAD_ALPHA_INDEX > RIVER_ALPHA_INDEX,
+      `road alphaIndex ${ROAD_ALPHA_INDEX} should exceed river alphaIndex ${RIVER_ALPHA_INDEX}`);
   });
 
   test('both ribbons sit just above the flat tile (depth-bias only, not visually raised)', () => {
