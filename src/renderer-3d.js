@@ -93,6 +93,21 @@ export const DEFAULT_ZOOM_RADIUS = 12;
  *  per click — enough to feel like a meaningful nudge without disorienting. */
 export const ROTATE_BUTTON_STEP = Math.PI / 12;
 
+/** Update interval (ms) for the on-canvas FPS / ms-per-frame chip. Updating
+ *  every frame would cost a layout per frame for no readable gain; 100ms is
+ *  fast enough to feel live while keeping DOM churn negligible. */
+export const FPS_COUNTER_UPDATE_MS = 100;
+
+/** Format the FPS chip label. Pure — both inputs come straight from Babylon's
+ *  Engine (`getFps()`, `getDeltaTime()`). Returns e.g. "60.0 fps · 16.7 ms".
+ *  Non-finite or negative inputs are coerced to 0 so a transient NaN on the
+ *  first frame doesn't render as "NaN fps". */
+export function formatFpsLabel(fps, dtMs) {
+  const safeFps = Number.isFinite(fps) && fps >= 0 ? fps : 0;
+  const safeDt  = Number.isFinite(dtMs) && dtMs >= 0 ? dtMs : 0;
+  return `${safeFps.toFixed(1)} fps · ${safeDt.toFixed(1)} ms`;
+}
+
 /** Translate a 2D-style zoom multiplier into an ArcRotateCamera radius.
  *  Reciprocal mapping (higher zoom = smaller radius = closer in); the result
  *  is clamped to [lowerRadiusLimit, upperRadiusLimit]. Pure helper for tests. */
@@ -596,6 +611,9 @@ export class Renderer3D {
     // Babylon GlowLayer shared by the selection halo and the node-glow discs.
     this._glowLayer  = null;
     this._onBeforeRenderObs = null;     // observer handle so we can dispose it
+    // FPS counter throttle state — see _pumpFpsCounter / FPS_COUNTER_UPDATE_MS.
+    this._fpsCounterEl       = null;
+    this._fpsCounterLastMs   = 0;
 
     // ── Phase 3: standees + selection ───────────────────────────────────────
     // Map<entityId, { plane, base, assetId, ownerKey, leader }> for incremental diff.
@@ -3557,6 +3575,23 @@ export class Renderer3D {
     }
     // Plan ghost walking previewer.
     this._pumpPlanGhosts(now);
+    // FPS chip — throttled DOM text update, 3D-only.
+    this._pumpFpsCounter(now);
+  }
+
+  /** Update the on-canvas FPS / ms-per-frame chip. Throttled to
+   *  FPS_COUNTER_UPDATE_MS so we don't write to the DOM every frame. The
+   *  element is resolved lazily on first call — index.html ships it in the
+   *  canvas-wrapper, but a host page that omits it is fine (we just skip). */
+  _pumpFpsCounter(now) {
+    if (now - this._fpsCounterLastMs < FPS_COUNTER_UPDATE_MS) return;
+    this._fpsCounterLastMs = now;
+    if (!this._fpsCounterEl && typeof document !== 'undefined') {
+      this._fpsCounterEl = document.getElementById('fps-counter');
+    }
+    const el = this._fpsCounterEl;
+    if (!el || !this._engine) return;
+    el.textContent = formatFpsLabel(this._engine.getFps(), this._engine.getDeltaTime());
   }
 
   /** Modulate a selected standee's halo. We use the base disc's emissive

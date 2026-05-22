@@ -1574,6 +1574,30 @@ body.renderer-3d #rotate-right {
 /* Shift map controls right when AI debug panel is open */
 .ai-debug-open .zoom-controls { left: 272px; }
 
+/* ── FPS / ms-per-frame counter ────────────────────────────────────────────
+   3D-only perf readout. Top-right of canvas, semi-transparent dark chip with
+   monospace text so digit width doesn't jitter as the value changes. Hidden
+   by default; shown when `body.renderer-3d` is set (parity with how the 3D
+   camera cluster is toggled above). */
+#fps-counter {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 10;
+  display: none;
+  padding: 3px 7px;
+  background: rgba(20, 14, 30, 0.72);
+  border: 1px solid rgba(180, 150, 80, 0.35);
+  border-radius: 4px;
+  color: #fff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.2;
+  pointer-events: none;
+  user-select: none;
+}
+body.renderer-3d #fps-counter { display: block; }
+
 /* ── Chronicle sidebar (left-edge collapsible panel mirroring the plan panel) ── */
 
 .chronicle-panel {
