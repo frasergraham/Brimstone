@@ -431,7 +431,11 @@ export function radiusForCloseFit(minVisibleHexes, aspect, fov = 0.8, margin = 1
 /** Minimum hex span we want visible at max zoom-in. 5 reads as a comfortable
  *  close-up: the focused tile plus its full ring of neighbours, with a touch
  *  of context past them. Closer than that and we start clipping into meshes. */
-export const MIN_VISIBLE_HEXES = 5;
+// Was 5; dropped to 1.5 so the operator can zoom in close enough to fill the
+// screen with a single unit / hex. Lower bound shifts radiusForCloseFit down
+// and lets the camera get within a hex-width of its target before the radius
+// limit kicks in.
+export const MIN_VISIBLE_HEXES = 1.5;
 
 /**
  * Per-side depth (in hexes) the forest border band must cover so that, when
@@ -590,6 +594,9 @@ export class Renderer3D {
     this.hoveredHex         = null;
     this.selectedHex        = null;
     this.selectedEntityId   = null;
+    // 3D camera drag mode: 'pan' (default) or 'rotate'. UI toggle button
+    // flips this via `setCameraDragMode`. Pinch / wheel always zooms.
+    this.cameraDragMode     = 'pan';
     this.highlightHexes     = [];
     this.planGhostSteps     = null;
     this.viewLocked         = false;
@@ -624,10 +631,10 @@ export class Renderer3D {
     // `_upgradeTileTextures` can swap their material when the atlas arrives
     // after init (parallel to `_tileMeshByKey` for playable tiles).
     this._borderForestHexesByKey = new Map();
-    // Border-forest band is hidden by default — the playable map reads
-    // cleanly on its own and the band's hundreds of tree cones can drag fps.
-    // Toggle live with the `F` hotkey.
-    this._borderForestHidden = true;
+    // Border-forest band is visible by default — the wilderness frame is
+    // part of the intended visual. Toggle off live with the `F` hotkey
+    // if it's tanking fps on a slow GPU.
+    this._borderForestHidden = false;
     // One-shot warning gate per failed sprite id, so a missing or broken
     // sprite doesn't spam the console once per redraw.
     this._textureWarnedFor     = new Set();
@@ -938,6 +945,13 @@ export class Renderer3D {
     camera.alpha = camera.alpha + alphaDelta;
   }
 
+  /** Set the 3D drag-mode toggle: 'pan' or 'rotate'. UI calls this when the
+   *  operator taps the camera-mode button in #zoom-controls. Wheel / pinch
+   *  always zooms regardless of mode. */
+  setCameraDragMode(mode) {
+    this.cameraDragMode = (mode === 'rotate') ? 'rotate' : 'pan';
+  }
+
   /** Stub for interface parity with the 2D Renderer's `tiltBy(_betaDelta)`
    *  no-op. Tilt is permanently locked at CAMERA_BETA_LOCKED (π/4); the
    *  camera's lowerBetaLimit/upperBetaLimit are both pinned to that value
@@ -1119,7 +1133,7 @@ export class Renderer3D {
     // is radiusForStandardFit (so larger maps must be panned to view in full)
     // and the floor is radiusForCloseFit(MIN_VISIBLE_HEXES) (so the camera
     // can't dive inside meshes at max zoom-in).
-    camera.lowerRadiusLimit = 4;
+    camera.lowerRadiusLimit = 1.5;
     camera.upperRadiusLimit = 80;
     camera.wheelDeltaPercentage = 0.02; // smoother wheel zoom (legacy default — wheel handled by custom input)
     camera.pinchDeltaPercentage = 0.005;
@@ -1139,22 +1153,15 @@ export class Renderer3D {
 
     const light = new BABYLON.HemisphericLight('hemi', new BABYLON.Vector3(0, 1, 0.3), scene);
     light.intensity = 0.95;
-    // Scene-wide ambient term — mixes with each StandardMaterial's
-    // ambientColor (default white) so faces in deep shadow aren't pitch
-    // black. Operator wanted to soften the high contrast between sunlit
-    // and shadowed faces; a modest ambient floor knocks the cleanest
-    // edges off without flattening the sun's directional read.
-    scene.ambientColor = new BABYLON.Color3(0.25, 0.25, 0.28);
+    // scene.ambientColor is set per-phase in _applyLightConfig (was a fixed
+    // value here; now varies — stronger and warm at dawn/dusk, stronger and
+    // cool at night, low neutral at noon when the sun dominates).
 
-    // Scene fog — fades distant geometry (mainly the border-forest band) into
-    // a muted grey so the playable area reads as the focal point. Linear mode
-    // with start/end tuned so playable hexes (typically 12-20 units from the
-    // camera at default zoom) stay clear of fog and only the wilderness
-    // beyond fades. The fog colour matches the scene clear colour so the
-    // band's far edge blends into the sky horizon instead of cutting hard.
+    // Scene fog — start/end recomputed every frame from the camera radius
+    // (see `_pumpSceneFog`) so the fog band always sits just past the
+    // playable map regardless of zoom. Fixed values would either fog the
+    // playable area when zoomed out or never reach the border when zoomed in.
     scene.fogMode    = BABYLON.Scene.FOGMODE_LINEAR;
-    scene.fogStart   = 18;
-    scene.fogEnd     = 40;
     scene.fogColor   = new BABYLON.Color3(0.70, 0.74, 0.80);
     scene.fogEnabled = true;
 
@@ -1567,13 +1574,19 @@ export class Renderer3D {
         const p = active[0];
         const dx = p.x - p.prevX;
         const dy = p.y - p.prevY;
+        // Drag mode toggle (UI button) chooses pan vs rotate for both touch
+        // and left-mouse drag. Right-mouse-drag stays as a power-user rotate
+        // shortcut on desktop regardless of the toggle.
+        const mode = this.cameraDragMode || 'pan';
+        const doDrag = (mode === 'rotate')
+          ? () => applyRightDragRotate(p, dx, dy)
+          : () => applySinglePan(p, dx, dy);
         if (isTouchPoint(p)) {
-          // 1-finger touch = pan (no 1-finger rotate, per spec).
-          applySinglePan(p, dx, dy);
+          doDrag();
           e.preventDefault();
         } else if (p.type === 'mouse') {
           if (p.button === 0) {
-            applySinglePan(p, dx, dy);
+            doDrag();
             e.preventDefault();
           } else if (p.button === 2) {
             applyRightDragRotate(p, dx, dy);
@@ -4136,6 +4149,22 @@ export class Renderer3D {
 
   /** Per-frame: walk each ghost along its path on a loop. Cheap — runs once
    *  per ghost (a handful) regardless of map size. */
+  /** Recompute scene fog start/end from the current camera radius so the fog
+   *  band always begins just past the playable map's far edge regardless of
+   *  zoom. At max zoom-out the fog only just begins to creep into the
+   *  outermost playable tiles; at default zoom the playable area is clear
+   *  and only the border-forest ring fades; at max zoom-in the player is
+   *  close to a unit and nothing visible is fogged. */
+  _pumpSceneFog() {
+    if (!this._scene || !this._camera) return;
+    const r = this._camera.radius;
+    // 14 world units past the camera target = "near edge of the playable map
+    // is just past fog start" on a standard 13×13 map. End 16 units later
+    // gives a soft band that fully obscures by the outer border ring.
+    this._scene.fogStart = r + 14;
+    this._scene.fogEnd   = r + 30;
+  }
+
   _pumpPlanGhosts(nowMs) {
     if (this._planGhostMeshes.size === 0) return;
     for (const [, entry] of this._planGhostMeshes) {
@@ -4225,6 +4254,11 @@ export class Renderer3D {
     const gs = HEMI_GROUND_SCALE;
     this._light.groundColor = new BABYLON.Color3(cfg.color.r * gs, cfg.color.g * gs, cfg.color.b * gs);
     this._scene.clearColor = new BABYLON.Color4(cfg.clear.r, cfg.clear.g, cfg.clear.b, 1.0);
+    // Phase-tinted ambient — boosts visibility on shadowed faces when the
+    // sun is low/off (night/dawn/dusk) while staying neutral at noon.
+    if (cfg.ambient) {
+      this._scene.ambientColor = new BABYLON.Color3(cfg.ambient.r, cfg.ambient.g, cfg.ambient.b);
+    }
     // Directional sun: drives shadow casting strength + angle. NIGHT
     // intensity≈0 effectively turns the sun off so lanterns / hemi carry the
     // look. Direction is set via Vector3, but only when a sun config exists
@@ -4348,6 +4382,9 @@ export class Renderer3D {
     // controller changes; no per-frame mutation needed.
     // Plan ghost walking previewer.
     this._pumpPlanGhosts(now);
+    // Scene fog tracking — keep the start/end relative to the camera so the
+    // band fades just past the playable map at every zoom level.
+    this._pumpSceneFog();
     // FPS chip — throttled DOM text update, 3D-only.
     this._pumpFpsCounter(now);
     // Building hover labels: fade in/out based on camera zoom.
@@ -5356,14 +5393,21 @@ export function forestTreesForHex(col, row) {
 // real dark patches rather than getting washed out — shadows only darken the
 // sun's contribution, so a strong hemi makes them invisible. Sun is boosted to
 // keep the overall brightness similar to pre-shadow tuning.
+// `ambient` per phase = `scene.ambientColor`, which mixes with each material's
+// ambientColor (default white on StandardMaterial) to lift faces that the
+// directional sun can't reach. Day uses a low neutral grey (sun dominates),
+// dawn/dusk add a warm orange tint, night a cool blue-violet, both at higher
+// intensity so the map stays readable when the sun is low or off.
 export const PHASE_LIGHT_CONFIG = Object.freeze({
   dawn:  {
     intensity: 0.25, color: { r: 1.00, g: 0.82, b: 0.62 }, clear: { r: 0.55, g: 0.38, b: 0.36 },
+    ambient: { r: 0.42, g: 0.35, b: 0.30 },
     // Low sun close to the horizon — long shadows raked across the map east-to-west.
     sun: { dir: { x: -0.85, y: -0.40, z: 0.1 }, intensity: 1.2 },
   },
   day:   {
     intensity: 0.30, color: { r: 1.00, g: 1.00, b: 0.97 }, clear: { r: 0.55, g: 0.72, b: 0.85 },
+    ambient: { r: 0.22, g: 0.22, b: 0.24 },
     // Tilt the day sun off vertical so shadows actually project a visible
     // footprint. A near-vertical sun (e.g. 0,-1,0) projects a near-zero
     // offset and shadows disappear into the caster itself.
@@ -5371,11 +5415,13 @@ export const PHASE_LIGHT_CONFIG = Object.freeze({
   },
   dusk:  {
     intensity: 0.25, color: { r: 1.00, g: 0.62, b: 0.48 }, clear: { r: 0.50, g: 0.32, b: 0.36 },
+    ambient: { r: 0.45, g: 0.30, b: 0.28 },
     // Low sun mirrored from dawn — long shadows raked west-to-east.
     sun: { dir: { x:  0.85, y: -0.40, z: 0.1 }, intensity: 1.2 },
   },
   night: {
     intensity: 0.21, color: { r: 0.70, g: 0.78, b: 1.00 }, clear: { r: 0.12, g: 0.18, b: 0.32 },
+    ambient: { r: 0.20, g: 0.24, b: 0.40 },
     sun: { dir: { x:  0.0, y: -1.0, z: 0.1 }, intensity: 0.10 },
   },
 });
@@ -5571,6 +5617,13 @@ export function lerpLightConfig(from, to, t) {
         z: lerp(from.sun.dir.z, to.sun.dir.z),
       },
       intensity: lerp(from.sun.intensity, to.sun.intensity),
+    };
+  }
+  if (from.ambient && to.ambient) {
+    out.ambient = {
+      r: lerp(from.ambient.r, to.ambient.r),
+      g: lerp(from.ambient.g, to.ambient.g),
+      b: lerp(from.ambient.b, to.ambient.b),
     };
   }
   return out;

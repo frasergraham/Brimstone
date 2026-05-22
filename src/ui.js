@@ -252,6 +252,23 @@ export class UIController {
     });
     bindHoldToRepeat('cam3d-rotate-left',  () => this.renderer.rotateBy(-ROT_STEP, 0));
     bindHoldToRepeat('cam3d-rotate-right', () => this.renderer.rotateBy( ROT_STEP, 0));
+    // 3D camera mode toggle — swaps drag between pan and rotate. Wheel /
+    // pinch always zooms regardless of mode.
+    const modeBtn = this._el('cam3d-mode-toggle');
+    if (modeBtn) {
+      modeBtn.addEventListener('click', () => {
+        const cur  = modeBtn.dataset.mode === 'rotate' ? 'rotate' : 'pan';
+        const next = cur === 'pan' ? 'rotate' : 'pan';
+        modeBtn.dataset.mode    = next;
+        modeBtn.textContent     = next === 'pan' ? '✋' : '↻';
+        modeBtn.title           = next === 'pan'
+          ? 'Drag = pan (tap to switch to rotate)'
+          : 'Drag = rotate (tap to switch to pan)';
+        if (typeof this.renderer.setCameraDragMode === 'function') {
+          this.renderer.setCameraDragMode(next);
+        }
+      }, sig);
+    }
     this._lastFitTapTime = 0;
     this._el('zoom-fit')?.addEventListener('click', () => {
       const now = Date.now();

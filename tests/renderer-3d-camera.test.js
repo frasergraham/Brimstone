@@ -271,8 +271,12 @@ describe('Renderer3D — radiusForCloseFit (max-zoom-in floor)', () => {
     assert.equal(rNeg, r1);
   });
 
-  test('MIN_VISIBLE_HEXES is a sensible close-up (5 — focused hex + ring of 6 neighbours fit comfortably)', () => {
-    assert.ok(Number.isInteger(MIN_VISIBLE_HEXES));
-    assert.ok(MIN_VISIBLE_HEXES >= 4 && MIN_VISIBLE_HEXES <= 8);
+  test('MIN_VISIBLE_HEXES allows tight zoom-in (≤ 2 hexes — close enough to fill the screen with a single unit)', () => {
+    // Lowered from 5 → 1.5 so the operator can zoom in until a single hex /
+    // standee fills the viewport. Keep > 0 so radiusForCloseFit can never
+    // collapse to zero, but otherwise bias toward "as tight as we can go".
+    assert.ok(MIN_VISIBLE_HEXES > 0);
+    assert.ok(MIN_VISIBLE_HEXES <= 2,
+      `MIN_VISIBLE_HEXES ${MIN_VISIBLE_HEXES} should allow a tight close-up`);
   });
 });
