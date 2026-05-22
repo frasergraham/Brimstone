@@ -850,6 +850,12 @@ export class Renderer3D {
     // lands at TARGET_PALADIN_WORLD_HEIGHT regardless of FBX export units
     // (m vs cm). Falls back to PALADIN_BASE_SCALE if bbox is unavailable.
     this._paladinScale      = PALADIN_BASE_SCALE;
+    // Local-space distance from the paladin model's origin to its feet
+    // (= -minY of the aggregated hierarchy bbox, positive). Used at clone
+    // time to lift the cloned root so the model's feet rest on the cone
+    // anchor — without it the Mixamo hip-pivot puts the feet below the
+    // base disc. Defaults to 0 when bbox is unavailable.
+    this._paladinFeetOffset = 0;
     this._engine        = null;
     this._scene         = null;
     this._camera        = null;
@@ -1511,9 +1517,12 @@ export class Renderer3D {
         return null;
       }
 
-      // Step 3: identify the skinned mesh (the one carrying geometry; glTF
-      //         imports often return a `__root__` TransformNode plus N child
-      //         meshes — we only want the ones with vertex data).
+      // Step 3: collect every geometry mesh in the import. Mixamo paladin
+      // GLBs ship as a hierarchy (helmet + body + cape + …), and PR #375's
+      // single-mesh selection produced the "giant floating head" regression
+      // — only the helmet was cloned, and the scale derived from the
+      // helmet's bbox alone blew it up to fill the target height. Walk the
+      // full list, hide every source, and use the aggregated bbox below.
       const meshes = (result.meshes || []).filter(m =>
         m && typeof m.getTotalVertices === 'function' && m.getTotalVertices() > 0,
       );
@@ -1521,8 +1530,9 @@ export class Renderer3D {
         console.warn('[Renderer3D] paladin.glb contained no geometry; using cone+sphere bodies.');
         return null;
       }
-      // Prefer the mesh that has a skeleton attached (Mixamo's `Beta_Surface`
-      // / `Beta_Joints` sub-meshes). Fall back to the first geometry mesh.
+      // The skinned mesh carries the skeleton + animation targets. Prefer
+      // the mesh with a skeleton attached (Mixamo's `Beta_Surface`); fall
+      // back to the first geometry mesh.
       const skinned  = meshes.find(m => m.skeleton) || meshes[0];
       const skeleton = skinned.skeleton
         || (Array.isArray(result.skeletons) ? result.skeletons[0] : null)
@@ -1535,9 +1545,10 @@ export class Renderer3D {
       const idleGroup = groups.find(g => g && /idle|mixamo/i.test(g.name || ''))
         || groups[0] || null;
 
-      // Hide the source meshes — clones render geometry on their behalf, but
-      // the templates themselves are never drawn directly. Otherwise an
-      // un-positioned paladin would render at world origin every frame.
+      // Hide every source mesh — clones render geometry on their behalf,
+      // but the templates themselves must never draw. Hiding only the
+      // skinned mesh would leave the helmet / cape submeshes floating at
+      // world origin.
       for (const m of meshes) {
         if (typeof m.setEnabled === 'function') m.setEnabled(false);
         m.isPickable = false;
@@ -1547,16 +1558,16 @@ export class Renderer3D {
       // which is wasted CPU.
       if (idleGroup && typeof idleGroup.stop === 'function') idleGroup.stop();
 
-      // Bake the feet-to-origin offset into the source vertices and compute a
-      // bbox-derived scale so the visible model height lands at
-      // TARGET_PALADIN_WORLD_HEIGHT regardless of FBX export units (Mixamo
-      // can ship either metres or centimetres). Without this, a cm-units
-      // export at PALADIN_BASE_SCALE=0.4 renders ~72 world-units tall and the
-      // body extends far above the camera frustum — only the helmet is
-      // visible at the unit position.
-      this._paladinScale = this._normalisePaladinSource(skinned);
+      // Compute an aggregate hierarchy bbox + scale so the entire model
+      // (helmet to feet) lands at TARGET_PALADIN_WORLD_HEIGHT regardless of
+      // submesh count or FBX export units. Store the feet offset separately
+      // — applied at clone time via the root's position rather than baked
+      // into vertices, so it survives the hierarchical clone path.
+      const { scale, feetOffset } = this._normalisePaladinSource(meshes);
+      this._paladinScale      = scale;
+      this._paladinFeetOffset = feetOffset;
 
-      this._paladinSource = { mesh: skinned, skeleton, idleGroup };
+      this._paladinSource = { mesh: skinned, meshes, skeleton, idleGroup };
 
       // If standees were built before the GLB landed (the common case —
       // _initBabylon kicks the load off async and `_syncEntityStandees`
@@ -1570,73 +1581,143 @@ export class Renderer3D {
     return promise;
   }
 
-  /** Measure the source mesh's natural bounding box, bake a feet-to-origin
-   *  translation into its vertices (so the model's local y=0 sits at the
-   *  feet rather than the Mixamo hip-pivot), and return the uniform scale
-   *  needed to hit TARGET_PALADIN_WORLD_HEIGHT.
+  /** Measure the aggregated bounding box across all geometry meshes in the
+   *  paladin hierarchy and return both the uniform scale needed to hit
+   *  TARGET_PALADIN_WORLD_HEIGHT and the feet offset (= -minY, positive)
+   *  that the cloned root needs to lift its feet to local origin.
    *
-   *  Returns PALADIN_BASE_SCALE as a safe fallback when the bbox isn't
-   *  available (test stubs that don't implement getBoundingInfo, or a
-   *  degenerate mesh with zero height). */
-  _normalisePaladinSource(source) {
-    if (!source) return PALADIN_BASE_SCALE;
-    const BABYLON = this._babylon;
-    if (typeof source.getBoundingInfo !== 'function') return PALADIN_BASE_SCALE;
-    let info;
-    try { info = source.getBoundingInfo(); } catch { return PALADIN_BASE_SCALE; }
-    const bb = info && info.boundingBox;
-    if (!bb) return PALADIN_BASE_SCALE;
-    // Prefer the local-space minimum/maximum so we measure the mesh's own
-    // bbox, not whatever transform it currently carries (which the clones
-    // will override anyway).
-    const min = bb.minimum || bb.minimumWorld;
-    const max = bb.maximum || bb.maximumWorld;
-    if (!min || !max) return PALADIN_BASE_SCALE;
-    const naturalHeight = (max.y ?? 0) - (min.y ?? 0);
-    if (!(naturalHeight > 0)) return PALADIN_BASE_SCALE;
+   *  Accepts either a single mesh (legacy) or an array of meshes. The
+   *  array form is the multi-submesh GLB case fixed in #375's follow-up:
+   *  a Mixamo paladin imports as helmet + body + cape (+ …) and measuring
+   *  only the skinned mesh's bbox produced a scale that fit the helmet to
+   *  the target height — leaving the body geometry inflated off-screen
+   *  ("giant floating head"). Walking every mesh's bbox aggregates the
+   *  true natural height of the model.
+   *
+   *  Returns `{ scale: PALADIN_BASE_SCALE, feetOffset: 0 }` as a safe
+   *  fallback when no usable bbox is available (test stubs without
+   *  getBoundingInfo, or a degenerate hierarchy with zero height). */
+  _normalisePaladinSource(input) {
+    const fallback = { scale: PALADIN_BASE_SCALE, feetOffset: 0 };
+    if (!input) return fallback;
+    const meshes = Array.isArray(input) ? input : [input];
+    if (meshes.length === 0) return fallback;
 
-    // Bake -min.y as a translation so the feet land at the mesh's local
-    // origin. After this, the clone's `position.y` directly controls where
-    // the feet sit in cone-local space.
-    if (BABYLON && BABYLON.Matrix && typeof BABYLON.Matrix.Translation === 'function'
-      && typeof source.bakeTransformIntoVertices === 'function') {
-      try {
-        source.bakeTransformIntoVertices(BABYLON.Matrix.Translation(0, -(min.y ?? 0), 0));
-        if (typeof source.refreshBoundingInfo === 'function') source.refreshBoundingInfo();
-      } catch {
-        // Bake failed — return the computed scale anyway; clones will still
-        // be the right size, just offset by the source's hip-pivot.
-      }
+    let minY = Number.POSITIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    for (const m of meshes) {
+      if (!m || typeof m.getBoundingInfo !== 'function') continue;
+      let info;
+      try { info = m.getBoundingInfo(); } catch { continue; }
+      const bb = info && info.boundingBox;
+      if (!bb) continue;
+      // Prefer local-space min/max so the measurement isn't perturbed by
+      // a transform we're about to override on the clone anyway.
+      const lo = bb.minimum || bb.minimumWorld;
+      const hi = bb.maximum || bb.maximumWorld;
+      if (!lo || !hi) continue;
+      if (typeof lo.y === 'number' && lo.y < minY) minY = lo.y;
+      if (typeof hi.y === 'number' && hi.y > maxY) maxY = hi.y;
     }
+    if (!Number.isFinite(minY) || !Number.isFinite(maxY)) return fallback;
+    const naturalHeight = maxY - minY;
+    if (!(naturalHeight > 0)) return fallback;
 
-    return TARGET_PALADIN_WORLD_HEIGHT / naturalHeight;
+    return {
+      scale: TARGET_PALADIN_WORLD_HEIGHT / naturalHeight,
+      // Positive value: how far above the model's local origin the feet
+      // sit. The clone root lifts by `scale * feetOffset` so feet land at
+      // root-local y=0.
+      feetOffset: -minY,
+    };
   }
 
   /** Clone the loaded paladin source for one hero standee. Returns
-   *  `{ mesh, skeleton, animationGroup }` (any field may be null if the
-   *  source lacked it) or null if the source isn't loaded yet. Each clone
-   *  carries its own skinned mesh + skeleton + animation group so per-unit
-   *  idle animations play independently — InstancedMesh doesn't support
-   *  per-instance bone matrices, hence the deeper clone path. */
+   *  `{ mesh, skinnedMesh, childMeshes, skeleton, animationGroup }` (any
+   *  field may be null/empty if the source lacked it) or null if the
+   *  source isn't loaded yet.
+   *
+   *  The Mixamo paladin GLB ships as a hierarchy (helmet + body + cape).
+   *  PR #375 cloned only the skinned mesh and produced the "giant floating
+   *  head" regression. This version clones every geometry mesh and parents
+   *  them under a fresh per-standee root TransformNode, then applies
+   *  scale / rotation / position on the root so the entire hierarchy
+   *  transforms as a unit. The skeleton + idle animation are bound to the
+   *  primary skinned child so per-unit idles play independently —
+   *  InstancedMesh doesn't support per-instance bone matrices, hence the
+   *  deeper clone path. */
   _buildPaladinClone(entity, parent) {
     const src = this._paladinSource;
-    if (!src || !src.mesh || !this._babylon) return null;
-    if (typeof src.mesh.clone !== 'function') return null;
+    if (!src || !this._babylon) return null;
     const BABYLON = this._babylon;
+    // Backward-compat with the pre-multi-mesh _paladinSource shape that
+    // only stashed `mesh`. The retrofit + standee-build paths populate
+    // `meshes` going forward.
+    const srcMeshes = Array.isArray(src.meshes) && src.meshes.length > 0
+      ? src.meshes
+      : (src.mesh ? [src.mesh] : []);
+    if (srcMeshes.length === 0) return null;
     const id = entity?.id ?? 'unknown';
 
-    const clonedMesh = src.mesh.clone(`paladin_${id}`);
-    if (!clonedMesh) return null;
-    // Source was disabled in `_loadPaladinModel`; the clone defaults to
-    // enabled, but be explicit in case future Babylon versions inherit.
-    if (typeof clonedMesh.setEnabled === 'function') clonedMesh.setEnabled(true);
-    clonedMesh.isPickable = false;
-    if (typeof clonedMesh.renderingGroupId !== 'undefined') clonedMesh.renderingGroupId = 0;
+    // Per-standee root. Owns scale / rotation / position so every cloned
+    // child mesh moves as a unit. Fall back to using the first cloned
+    // child as the root when TransformNode isn't available (e.g. test
+    // stubs that don't implement it).
+    let cloneRoot = null;
+    if (typeof BABYLON.TransformNode === 'function') {
+      try {
+        cloneRoot = new BABYLON.TransformNode(`paladin_${id}`, this._scene || null);
+      } catch { cloneRoot = null; }
+    }
+    const ownsRootNode = !!cloneRoot;
 
+    // Clone every source mesh; parent each to the root so the hierarchy
+    // hangs together. Track the primary skinned clone (the one matching
+    // src.mesh) — that's where the skeleton + animation group attach.
+    const childClones = [];
+    let primarySkinnedClone = null;
+    for (const srcMesh of srcMeshes) {
+      if (!srcMesh || typeof srcMesh.clone !== 'function') continue;
+      const name = `paladin_${id}_${srcMesh.name || 'mesh'}`;
+      const childClone = srcMesh.clone(name);
+      if (!childClone) continue;
+      if (typeof childClone.setEnabled === 'function') childClone.setEnabled(true);
+      childClone.isPickable = false;
+      if (typeof childClone.renderingGroupId !== 'undefined') childClone.renderingGroupId = 0;
+      // Defeat bbox-based culling on EVERY child. Babylon caches each
+      // submesh's natural bbox; even with the root scaled correctly,
+      // skinning can move verts outside that bbox (Mixamo bone-scale
+      // quirk on cape / cloth bones in particular) and a culled child
+      // mesh leaves a gap in the silhouette.
+      childClone.alwaysSelectAsActiveMesh = true;
+      childClones.push(childClone);
+      if (srcMesh === src.mesh) primarySkinnedClone = childClone;
+    }
+    if (childClones.length === 0) {
+      if (cloneRoot && typeof cloneRoot.dispose === 'function') cloneRoot.dispose();
+      return null;
+    }
+    if (!primarySkinnedClone) primarySkinnedClone = childClones[0];
+
+    // Parent every child to the root. When TransformNode isn't available
+    // we collapse to the legacy single-mesh path: use the primary skinned
+    // clone as the "root" handle and leave siblings unparented (the test
+    // fakes only ever populate one mesh in that mode anyway).
+    if (cloneRoot) {
+      for (const c of childClones) {
+        if ('parent' in c) c.parent = cloneRoot;
+      }
+    } else {
+      cloneRoot = primarySkinnedClone;
+    }
+
+    // Skeleton clone — bind to the primary skinned child only. Cloning
+    // every child's skeleton field would multi-bind the same bone matrices
+    // and skin them incorrectly (or, worse, drive the source skeleton).
     let clonedSkel = null;
     if (src.skeleton && typeof src.skeleton.clone === 'function') {
       clonedSkel = src.skeleton.clone(`paladinSkel_${id}`, `paladinSkel_${id}`);
-      if (clonedSkel) clonedMesh.skeleton = clonedSkel;
+      if (clonedSkel && primarySkinnedClone) primarySkinnedClone.skeleton = clonedSkel;
     }
 
     let clonedGroup = null;
@@ -1657,41 +1738,43 @@ export class Renderer3D {
       }
     }
 
-    if (parent && 'parent' in clonedMesh) clonedMesh.parent = parent;
-    // Scale + rotate the mesh so the silhouette matches the cone+sphere it
-    // replaces. Position is owned by the parent transform (the cone) — the
-    // mesh sits at parent-local origin so the cone's per-tile movement
-    // moves the paladin along with it.
+    // Scale + rotate + position on the root. Children inherit transforms.
     const scale = (typeof this._paladinScale === 'number' && this._paladinScale > 0)
       ? this._paladinScale : PALADIN_BASE_SCALE;
+    const feetOffsetLocal = (typeof this._paladinFeetOffset === 'number'
+      && Number.isFinite(this._paladinFeetOffset))
+      ? this._paladinFeetOffset : 0;
     if (BABYLON.Vector3) {
-      clonedMesh.scaling = new BABYLON.Vector3(scale, scale, scale);
-      clonedMesh.rotation = new BABYLON.Vector3(0, PALADIN_YAW, 0);
-      // Y-offset: drop the mesh so its feet rest on the base disc rather
-      // than floating at the cone's centre. The cone's local origin is its
-      // centre; the cone bottom rim is at -coneHeight/2 in cone-local space.
-      // The source mesh's feet were baked to local y=0 in
-      // `_normalisePaladinSource`, so setting position.y to the cone bottom
-      // lands the feet exactly on the cone's lower rim.
+      cloneRoot.scaling  = new BABYLON.Vector3(scale, scale, scale);
+      cloneRoot.rotation = new BABYLON.Vector3(0, PALADIN_YAW, 0);
+      // The cone's local origin is its centre; the cone bottom rim is at
+      // -coneHeight/2 in cone-local space. The model's natural feet sit at
+      // local y = -feetOffsetLocal; after scaling, they're at -scale *
+      // feetOffsetLocal relative to the root. Lifting the root by
+      // scale * feetOffsetLocal puts feet at root-local y=0; then
+      // subtracting coneHeight/2 lands them on the cone bottom rim.
       const leader = isLeaderType(entity?.type);
       const hMul = leader ? STANDEE_LEADER_HEIGHT_MUL : 1;
-      const feetY = -(STANDEE_CONE_HEIGHT * hMul) / 2;
-      clonedMesh.position = new BABYLON.Vector3(0, feetY, 0);
+      const coneFeetY = -(STANDEE_CONE_HEIGHT * hMul) / 2;
+      cloneRoot.position = new BABYLON.Vector3(0, coneFeetY + scale * feetOffsetLocal, 0);
     }
-    // Babylon culls meshes by their natural bbox even after skinning can move
-    // verts outside it — belt-and-braces against the eInheritRrs / Mixamo
-    // bone-scale quirk where some body bones come through with a different
-    // scale than the skeleton root and the visible body can extend outside
-    // the cached bbox. Cheap on a few-dozen-unit budget.
-    clonedMesh.alwaysSelectAsActiveMesh = true;
+    if (parent && 'parent' in cloneRoot) cloneRoot.parent = parent;
 
-    return { mesh: clonedMesh, skeleton: clonedSkel, animationGroup: clonedGroup };
+    return {
+      mesh: cloneRoot,
+      skinnedMesh: primarySkinnedClone,
+      childMeshes: childClones,
+      ownsRootNode,
+      skeleton: clonedSkel,
+      animationGroup: clonedGroup,
+    };
   }
 
   /** Dispose every part of a previously-built paladin clone — animation
    *  group first (so the per-frame bone update stops), skeleton second
-   *  (frees bone matrix buffers), mesh last (cascades materials). Safe to
-   *  call when no clone is attached. */
+   *  (frees bone matrix buffers), then every child mesh (cascades
+   *  materials), then the root transform node if we own it. Safe to call
+   *  when no clone is attached. */
   _disposePaladinClone(standee) {
     if (!standee || !standee.paladinClone) return;
     const c = standee.paladinClone;
@@ -1701,7 +1784,15 @@ export class Renderer3D {
     if (c.skeleton && typeof c.skeleton.dispose === 'function') {
       c.skeleton.dispose();
     }
-    if (c.mesh && typeof c.mesh.dispose === 'function') {
+    if (Array.isArray(c.childMeshes)) {
+      for (const m of c.childMeshes) {
+        if (m && typeof m.dispose === 'function') m.dispose();
+      }
+    }
+    // Only dispose the root if we own it (a real TransformNode we created)
+    // AND it's not already part of childMeshes (legacy single-mesh path).
+    if (c.ownsRootNode && c.mesh && typeof c.mesh.dispose === 'function'
+      && (!Array.isArray(c.childMeshes) || !c.childMeshes.includes(c.mesh))) {
       c.mesh.dispose();
     }
     standee.paladinClone = null;
