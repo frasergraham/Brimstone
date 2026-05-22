@@ -23,6 +23,7 @@ import {
   TileType,
   TILE_COLOR,
   BUILDING_COLOR,
+  BUILDING_LABEL,
 } from './tiles.js';
 import { EntityType, isLeaderType } from './entities.js';
 import { Renderer } from './renderer.js';
@@ -52,6 +53,28 @@ export const STANDEE_BASE_Y_OFFSET    = 0.18; // tile prism top is at 0.075; bas
 // the unified slot layout. Frozen so callers can't mutate it accidentally.
 // Distance from centre comfortably clears the STANDEE_BASE_DIAMETER=0.75 disc.
 export const BUILDING_OFFSET = Object.freeze({ x: 0.42, z: -0.42 });
+
+// ─── Building labels (hover text above each building) ───────────────────────
+// Mirrors the 2D renderer's fade-on-zoom logic from src/renderer.js (~line
+// 1684): labels are fully visible when the camera is close (small radius) and
+// fade out as the camera zooms back (large radius). 2D uses
+//   effectiveHex = hs * zoomLevel  (bigger as you zoom in)
+//   alpha = clamp((effectiveHex - 40) / (60 - 40), 0, 1)
+// We use ArcRotateCamera radius (smaller = closer) instead, so the formula
+// inverts the sign — see `labelAlphaForZoom`.
+
+/** Camera radius at or below which building labels are fully visible. */
+export const BUILDING_LABEL_FADE_RADIUS_CLOSE = 12;
+/** Camera radius at or above which building labels are fully invisible. */
+export const BUILDING_LABEL_FADE_RADIUS_FAR   = 28;
+/** World-units height above the building roof at which the label plane sits. */
+export const BUILDING_LABEL_Y = 1.55;
+/** Plane size (world units) for the label sprite. */
+export const BUILDING_LABEL_WIDTH  = 1.6;
+export const BUILDING_LABEL_HEIGHT = 0.4;
+/** Texture canvas dimensions (px). Power-of-two friendly. */
+export const BUILDING_LABEL_TEX_W = 256;
+export const BUILDING_LABEL_TEX_H = 64;
 
 
 // ─── Pure helpers (exported for tests; no Babylon dependency) ────────────────
@@ -107,6 +130,28 @@ export function zoomToRadius(zoom, lowerLimit = 4, upperLimit = 80, defaultRadiu
 export function radiusToZoom(radius, defaultRadius = DEFAULT_ZOOM_RADIUS) {
   const r = Math.max(1e-3, radius);
   return defaultRadius / r;
+}
+
+/** Building-label alpha for a given camera radius. Mirrors the 2D renderer's
+ *  fade ramp but operates on ArcRotateCamera `radius` (smaller = closer in).
+ *  Returns 1.0 at fadeStart (or closer), 0.0 at fadeEnd (or farther), and a
+ *  linear interpolation in between. Pure helper for tests. */
+export function labelAlphaForZoom(
+  radius,
+  fadeStart = BUILDING_LABEL_FADE_RADIUS_CLOSE,
+  fadeEnd   = BUILDING_LABEL_FADE_RADIUS_FAR,
+) {
+  if (fadeEnd <= fadeStart) return radius <= fadeStart ? 1 : 0;
+  const a = (fadeEnd - radius) / (fadeEnd - fadeStart);
+  return Math.max(0, Math.min(1, a));
+}
+
+/** Returns the human-readable label string for a tile, or null if the tile
+ *  doesn't get a label (anything other than a BUILDING tile with a building
+ *  field). Pure helper — single source of truth for label text + visibility. */
+export function labelTextForTile(tile) {
+  if (!tile || tile.type !== TileType.BUILDING || !tile.building) return null;
+  return BUILDING_LABEL[tile.building] || tile.building;
 }
 
 /** Distance between two pointer positions. Pure helper used by the two-finger
@@ -561,6 +606,11 @@ export class Renderer3D {
     // Item 8 — overflow "+N" badges keyed by hexKey; created lazily when a
     // tile has more standees than free slots, disposed when overflow drops to 0.
     this._overflowBadges       = new Map(); // hexKey → { plane, mat, tex, lastN }
+    // Building hover labels: floating planes above each building tile, fade
+    // with camera zoom (alpha pumped each frame in `_onBeforeRender`). Built
+    // alongside the building mesh in `_buildTileMesh`; never rebuilt because
+    // map topology is immutable once the game starts.
+    this._buildingLabelsByKey  = new Map(); // hexKey → { plane, mat, tex }
     this._fogMaterialCache = new Map();  // base hex color → darker StandardMaterial
     this._fogActiveSet     = new Set();  // hexKeys currently rendered as fogged
     // Power-node glow meshes: { obj, disc, col, row, glowColor } per node hex.
@@ -1632,6 +1682,11 @@ export class Renderer3D {
       roof.material   = this._materialFor('#2c2520');
       roof.isPickable = false;
       trackProp(roof);
+
+      // Hover label — floating billboarded plane above the roof, painted with
+      // the building's display name. Alpha is driven each frame by
+      // `_pumpBuildingLabelFade` so labels fade as the camera zooms back.
+      this._buildBuildingLabel(tile, x, z, parent);
     }
 
     if (props.length > 0) this._tilePropsByKey.set(tkey, props);
@@ -2345,6 +2400,89 @@ export class Renderer3D {
     ctx.fillText(`+${overflow}`, 32, 34);
     badge.tex.update();
     badge.lastN = overflow;
+  }
+
+  /** Build the floating hover label above a building tile. One DynamicTexture
+   *  per label (~256×64 px); painted once at build time and never repainted
+   *  because building names are immutable. Alpha is driven each frame from
+   *  `_pumpBuildingLabelFade`. Tracked in `_buildingLabelsByKey` so the
+   *  per-frame pump can iterate them without a scene walk. */
+  _buildBuildingLabel(tile, hexX, hexZ, parent) {
+    const BABYLON = this._babylon;
+    const scene   = this._scene;
+    if (!BABYLON || !scene || typeof document === 'undefined') return;
+    const text = labelTextForTile(tile);
+    if (!text) return;
+
+    const tkey = hexKey(tile.col, tile.row);
+    const tex = new BABYLON.DynamicTexture(
+      `bldgLabelTex_${tkey}`,
+      { width: BUILDING_LABEL_TEX_W, height: BUILDING_LABEL_TEX_H },
+      scene,
+      false,
+    );
+    tex.hasAlpha = true;
+    const ctx = tex.getContext();
+    ctx.clearRect(0, 0, BUILDING_LABEL_TEX_W, BUILDING_LABEL_TEX_H);
+    // Mirror the 2D label style: cream serif text with a dark shadow for legibility.
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font         = 'bold 36px Georgia, serif';
+    const cx = BUILDING_LABEL_TEX_W / 2;
+    const cy = BUILDING_LABEL_TEX_H / 2;
+    ctx.fillStyle = 'rgba(0,0,0,0.85)';
+    ctx.fillText(text, cx + 2, cy + 2);
+    ctx.fillStyle = 'rgba(255,248,230,0.95)';
+    ctx.fillText(text, cx, cy);
+    tex.update();
+
+    const mat = new BABYLON.StandardMaterial(`bldgLabelMat_${tkey}`, scene);
+    mat.diffuseTexture = tex;
+    mat.opacityTexture = tex;
+    mat.useAlphaFromDiffuseTexture = true;
+    mat.specularColor  = new BABYLON.Color3(0, 0, 0);
+    mat.emissiveColor  = new BABYLON.Color3(1, 1, 1);
+    mat.backFaceCulling = false;
+    mat.alpha = 1;
+
+    const plane = BABYLON.MeshBuilder.CreatePlane(
+      `bldgLabel_${tkey}`,
+      { width: BUILDING_LABEL_WIDTH, height: BUILDING_LABEL_HEIGHT },
+      scene,
+    );
+    plane.parent        = parent;
+    // BILLBOARDMODE_Y keeps the label upright while rotating to face the camera
+    // around the world Y axis — matches the rest of the scene's billboarded
+    // sprites (standees, badges) and reads naturally at the locked 45° tilt.
+    plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_Y;
+    plane.isPickable    = false;
+    plane.material      = mat;
+    // Sit above the building's NE-slot roof, not over the hex centre, so the
+    // label visually anchors to the building rather than floating off-axis.
+    const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
+    plane.position.set(hexX + slot.x, BUILDING_LABEL_Y, hexZ + slot.z);
+
+    this._buildingLabelsByKey.set(tkey, { plane, mat, tex });
+  }
+
+  /** Per-frame: walk every building label and set its material alpha from the
+   *  current camera radius using `labelAlphaForZoom`. Cheap — one Map walk
+   *  and a scalar assignment per label per frame. */
+  _pumpBuildingLabelFade() {
+    if (!this._camera) return;
+    if (this._buildingLabelsByKey.size === 0) return;
+    const a = labelAlphaForZoom(
+      this._camera.radius,
+      BUILDING_LABEL_FADE_RADIUS_CLOSE,
+      BUILDING_LABEL_FADE_RADIUS_FAR,
+    );
+    for (const entry of this._buildingLabelsByKey.values()) {
+      if (entry.mat) entry.mat.alpha = a;
+      // Skip the draw call entirely when fully faded — Babylon still uploads
+      // the geometry for alpha=0 alpha-blended meshes, so isVisible is the
+      // cheap path. setEnabled() is overkill (parent toggling overhead).
+      if (entry.plane) entry.plane.isVisible = a > 0;
+    }
   }
 
   /** Restore a standee's owner base material (clearing the selection glow). */
@@ -3396,6 +3534,8 @@ export class Renderer3D {
     this._pumpPlanGhosts(now);
     // Night lanterns subsystem (Piper): per-frame flicker + fade pump.
     this._pumpLanternFlicker(now);
+    // Building hover labels: fade in/out based on camera zoom.
+    this._pumpBuildingLabelFade();
   }
 
   /** Modulate a selected standee's halo. We use the base disc's emissive
