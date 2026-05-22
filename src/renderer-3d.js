@@ -1080,10 +1080,35 @@ export class Renderer3D {
     const light = new BABYLON.HemisphericLight('hemi', new BABYLON.Vector3(0, 1, 0.3), scene);
     light.intensity = 0.95;
 
-    this._engine = engine;
-    this._scene  = scene;
-    this._camera = camera;
-    this._light  = light;
+    // Directional sun light — casts shadows from standees / buildings / trees
+    // onto the terrain. Starts pointing straight down with day-tier intensity;
+    // _applyLightConfig immediately overrides both from the current phase
+    // (and `_onBeforeRender` interpolates them across phase transitions).
+    const sunLight = new BABYLON.DirectionalLight(
+      'sun',
+      new BABYLON.Vector3(0, -1, 0.1),
+      scene,
+    );
+    // Lift the light's position so the shadow camera frustum sees the whole
+    // map from above even when autoUpdateExtends nudges it.
+    sunLight.position = new BABYLON.Vector3(0, 30, 0);
+    sunLight.intensity = 1.0;
+
+    const shadowGenerator = new BABYLON.ShadowGenerator(SUN_SHADOW_MAP_SIZE, sunLight);
+    shadowGenerator.usePercentageCloserFiltering = SUN_SHADOW_USE_PCF;
+    shadowGenerator.filteringQuality = SUN_SHADOW_FILTERING_QUALITY;
+    shadowGenerator.bias = SUN_SHADOW_BIAS;
+    shadowGenerator.darkness = SUN_SHADOW_DARKNESS;
+    // Honour the alpha channel of standee textures so each unit casts a
+    // silhouette-shaped shadow rather than a billboard rectangle.
+    shadowGenerator.transparencyShadow = true;
+
+    this._engine            = engine;
+    this._scene             = scene;
+    this._camera            = camera;
+    this._light             = light;
+    this._sunLight          = sunLight;
+    this._shadowGenerator   = shadowGenerator;
 
     // Phase 6: GlowLayer powers the selection halo and the power-node discs.
     // Round 4: switched to *include-only* mode — meshes have to be explicitly
@@ -1098,7 +1123,12 @@ export class Renderer3D {
     // Apply the starting phase's lighting immediately (no transition) so the
     // very first frame already reads dawn/day/dusk/night correctly.
     this._lastPhase   = this.state?.phase ?? null;
-    this._lightState  = { intensity: 0, color: { r: 1, g: 1, b: 1 }, clear: { r: 0, g: 0, b: 0 } };
+    this._lightState  = {
+      intensity: 0,
+      color: { r: 1, g: 1, b: 1 },
+      clear: { r: 0, g: 0, b: 0 },
+      sun: { dir: { x: 0, y: -1, z: 0.1 }, intensity: 1.0 },
+    };
     this._applyLightConfig(getPhaseLightConfig(this._lastPhase));
 
     // Per-frame pump: drives phase-light interpolation and selection / node glow pulses.
@@ -1500,6 +1530,7 @@ export class Renderer3D {
       hex.material   = baseMat;
       hex.isPickable = false;
       hex.metadata   = { kind: 'map-border-forest', col: pos.col, row: pos.row };
+      this._setShadowReceiver(hex);
       const props = [hex];
 
       // Textured top disc — synthetic forest tile drives sprite variant.
@@ -1507,6 +1538,7 @@ export class Renderer3D {
       const disc = this._buildTileTopDisc(syntheticTile, parent);
       if (disc) {
         disc.metadata = { kind: 'map-border-forest-disc', col: pos.col, row: pos.row };
+        this._setShadowReceiver(disc);
         props.push(disc);
       }
 
@@ -1528,6 +1560,7 @@ export class Renderer3D {
         cone.scaling.z  = t.scale;
         cone.material   = treeMat;
         cone.isPickable = false;
+        this._addShadowCaster(cone);
         props.push(cone);
       }
 
@@ -1611,6 +1644,9 @@ export class Renderer3D {
     hex.rotation.y = Math.PI / 6;
     hex.material   = this._materialFor(baseColor);
     hex.metadata   = { kind: 'tile', col: tile.col, row: tile.row, baseColor };
+    // Terrain cylinder receives shadows from standees / trees / buildings /
+    // bridges (cast registrations below).
+    this._setShadowReceiver(hex);
     this._tileMeshes.push(hex);
     const tkey = hexKey(tile.col, tile.row);
     this._tileMeshByKey.set(tkey, hex);
@@ -1620,6 +1656,9 @@ export class Renderer3D {
     // ── Textured top face (when a terrain sprite exists) ─────────────────
     const topDisc = this._buildTileTopDisc(tile, parent);
     if (topDisc) {
+      // The disc sits just above the cylinder top and is the visually-
+      // dominant terrain surface, so it's the one shadows actually paint on.
+      this._setShadowReceiver(topDisc);
       this._tileTopDiscByKey.set(tkey, topDisc);
       trackProp(topDisc);
     }
@@ -1647,6 +1686,7 @@ export class Renderer3D {
         cone.scaling.z  = t.scale;
         cone.material   = treeMat;
         cone.isPickable = false; // pick the tile underneath, not the prop
+        this._addShadowCaster(cone);
         trackProp(cone);
       }
     }
@@ -1674,6 +1714,7 @@ export class Renderer3D {
       plank.rotation.y = bridgeRotationY(tile, this.state.tiles);
       plank.material   = this._materialFor('#8a6030');
       plank.isPickable = false;
+      this._addShadowCaster(plank);
       trackProp(plank);
     }
 
@@ -1694,6 +1735,7 @@ export class Renderer3D {
       box.position.y = 0.43; // sit on top of the tile prism
       box.material   = this._materialFor(BUILDING_COLOR[tile.building] || '#8a7a5a');
       box.isPickable = false;
+      this._addShadowCaster(box);
       trackProp(box);
 
       // Tiny roof block to add silhouette variety.
@@ -1708,6 +1750,7 @@ export class Renderer3D {
       roof.position.y = 0.85;
       roof.material   = this._materialFor('#2c2520');
       roof.isPickable = false;
+      this._addShadowCaster(roof);
       trackProp(roof);
     }
 
@@ -1815,6 +1858,10 @@ export class Renderer3D {
     merged.isPickable = false;
     merged.material   = this._buildRibbonMaterial(networkName, cssColor);
     merged.name       = `${networkName}Network`;
+    // Road and river ribbons are flat terrain-level surfaces, so they should
+    // catch shadows from anything that stands on or near them (standees on
+    // road, bridge plank over river, building boxes).
+    this._setShadowReceiver(merged);
     return merged;
   }
 
@@ -2233,6 +2280,10 @@ export class Renderer3D {
     plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_Y;
     plane.material      = this._planeMaterialFor(this._assetIdFor(entity));
     plane.metadata      = { kind: 'entity', entityId: entity.id, col: entity.col, row: entity.row };
+    // The standee plane is the unit silhouette — register it so the sun
+    // throws a unit-shaped shadow onto the terrain. transparencyShadow on
+    // the ShadowGenerator honours the portrait's alpha channel.
+    this._addShadowCaster(plane);
 
     const base = BABYLON.MeshBuilder.CreateCylinder(
       `unitbase_${entity.id}`,
@@ -3406,6 +3457,10 @@ export class Renderer3D {
       intensity: s.intensity,
       color: { r: s.color.r, g: s.color.g, b: s.color.b },
       clear: { r: s.clear.r, g: s.clear.g, b: s.clear.b },
+      sun: {
+        dir: { x: s.sun.dir.x, y: s.sun.dir.y, z: s.sun.dir.z },
+        intensity: s.sun.intensity,
+      },
     };
   }
 
@@ -3430,10 +3485,38 @@ export class Renderer3D {
     const gs = HEMI_GROUND_SCALE;
     this._light.groundColor = new BABYLON.Color3(cfg.color.r * gs, cfg.color.g * gs, cfg.color.b * gs);
     this._scene.clearColor = new BABYLON.Color4(cfg.clear.r, cfg.clear.g, cfg.clear.b, 1.0);
+    // Directional sun: drives shadow casting strength + angle. NIGHT
+    // intensity≈0 effectively turns the sun off so lanterns / hemi carry the
+    // look. Direction is set via Vector3, but only when a sun config exists
+    // (defensive — older snapshots may not have one).
+    if (cfg.sun && this._sunLight) {
+      this._sunLight.direction = new BABYLON.Vector3(cfg.sun.dir.x, cfg.sun.dir.y, cfg.sun.dir.z);
+      this._sunLight.intensity = cfg.sun.intensity;
+    }
     // Mirror into _lightState so transition snapshots see the new anchor.
     this._lightState.intensity = cfg.intensity;
     this._lightState.color = { r: cfg.color.r, g: cfg.color.g, b: cfg.color.b };
     this._lightState.clear = { r: cfg.clear.r, g: cfg.clear.g, b: cfg.clear.b };
+    if (cfg.sun) {
+      this._lightState.sun = {
+        dir: { x: cfg.sun.dir.x, y: cfg.sun.dir.y, z: cfg.sun.dir.z },
+        intensity: cfg.sun.intensity,
+      };
+    }
+  }
+
+  /** Register a mesh as a shadow caster on the sun ShadowGenerator. No-op
+   *  before _initBabylon has run (so build-time call sites in headless tests
+   *  stay quiet) or for null meshes. */
+  _addShadowCaster(mesh) {
+    if (!mesh || !this._shadowGenerator) return;
+    this._shadowGenerator.addShadowCaster(mesh);
+  }
+
+  /** Mark a mesh as a shadow receiver. Idempotent + null-safe. */
+  _setShadowReceiver(mesh) {
+    if (!mesh) return;
+    mesh.receiveShadows = true;
   }
 
   /** Per-frame pump: advance the phase-light transition (if any) and update
@@ -4508,13 +4591,58 @@ export function forestTreesForHex(col, row) {
 /** Hemispheric-light + clear-colour config per game phase.
  *  intensity → light.intensity; color → light.diffuse (warm at dawn/dusk,
  *  white at day, cool blue at night); clear → scene.clearColor (sky/horizon
- *  tint that shows through gaps and behind transparent props). */
+ *  tint that shows through gaps and behind transparent props); sun.dir →
+ *  DirectionalLight.direction (low-angle warm at dawn/dusk, near-overhead at
+ *  day, irrelevant at night); sun.intensity → DirectionalLight.intensity
+ *  (drives the strength of cast shadows). */
 export const PHASE_LIGHT_CONFIG = Object.freeze({
-  dawn:  { intensity: 1.00, color: { r: 1.00, g: 0.82, b: 0.62 }, clear: { r: 0.55, g: 0.38, b: 0.36 } },
-  day:   { intensity: 1.20, color: { r: 1.00, g: 1.00, b: 0.97 }, clear: { r: 0.55, g: 0.72, b: 0.85 } },
-  dusk:  { intensity: 1.00, color: { r: 1.00, g: 0.62, b: 0.48 }, clear: { r: 0.50, g: 0.32, b: 0.36 } },
-  night: { intensity: 0.85, color: { r: 0.70, g: 0.78, b: 1.00 }, clear: { r: 0.12, g: 0.18, b: 0.32 } },
+  dawn:  {
+    intensity: 1.00, color: { r: 1.00, g: 0.82, b: 0.62 }, clear: { r: 0.55, g: 0.38, b: 0.36 },
+    sun: { dir: { x: -0.6, y: -0.7, z: 0.1 }, intensity: 0.6 },
+  },
+  day:   {
+    intensity: 1.20, color: { r: 1.00, g: 1.00, b: 0.97 }, clear: { r: 0.55, g: 0.72, b: 0.85 },
+    sun: { dir: { x:  0.0, y: -1.0, z: 0.1 }, intensity: 1.0 },
+  },
+  dusk:  {
+    intensity: 1.00, color: { r: 1.00, g: 0.62, b: 0.48 }, clear: { r: 0.50, g: 0.32, b: 0.36 },
+    sun: { dir: { x:  0.6, y: -0.7, z: 0.1 }, intensity: 0.6 },
+  },
+  night: {
+    intensity: 0.85, color: { r: 0.70, g: 0.78, b: 1.00 }, clear: { r: 0.12, g: 0.18, b: 0.32 },
+    sun: { dir: { x:  0.0, y: -1.0, z: 0.1 }, intensity: 0.05 },
+  },
 });
+
+/** Sun direction for a phase. Pure helper used both internally and by tests. */
+export function sunDirectionForPhase(phase) {
+  return getPhaseLightConfig(phase).sun.dir;
+}
+
+/** Sun intensity for a phase. Drives both light strength and shadow darkness
+ *  contribution. NIGHT is ~0 so the directional light effectively cuts out
+ *  and lanterns/hemi carry the look. */
+export function sunIntensityForPhase(phase) {
+  return getPhaseLightConfig(phase).sun.intensity;
+}
+
+/** Shadow generator config — tuned for legibility without crushing iOS GPUs.
+ *  2048 + PCF MEDIUM gives crisp standee shadows on the laptop; if iOS perf
+ *  is a problem the operator can drop this to 1024. */
+export const SUN_SHADOW_MAP_SIZE = 2048;
+/** PCF (percentage-closer filtering) softens the shadow edge so the
+ *  silhouettes don't look pixel-stepped on the terrain. */
+export const SUN_SHADOW_USE_PCF = true;
+/** Babylon shadow-filter quality enum value — 1 = MEDIUM (matches
+ *  BABYLON.ShadowGenerator.QUALITY_MEDIUM; pinned here so tests don't have to
+ *  import Babylon). */
+export const SUN_SHADOW_FILTERING_QUALITY = 1;
+/** Slight depth bias to suppress shadow acne on the near-coplanar tile
+ *  prism / disc surfaces. */
+export const SUN_SHADOW_BIAS = 0.005;
+/** 0 = pitch-black shadow, 1 = no shadow. 0.4 gives a strong but not
+ *  oppressive shadow — terrain underneath still reads. */
+export const SUN_SHADOW_DARKNESS = 0.4;
 
 /** Look up a phase's lighting config. Falls back to DAY if the phase is
  *  unrecognised (defensive — keeps the renderer usable on weird save loads). */
@@ -4701,12 +4829,13 @@ export function easeInOutCubic(u) {
 }
 
 /** Lerp two light-config snapshots: intensity (scalar) + diffuse + clear
- *  (each {r,g,b}). Exported so phase-transition math can be unit-tested
+ *  (each {r,g,b}) + sun (directional-light direction + intensity, when both
+ *  sides carry one). Exported so phase-transition math can be unit-tested
  *  without a Babylon scene. */
 export function lerpLightConfig(from, to, t) {
   const tt = Math.min(1, Math.max(0, t));
   const lerp = (a, b) => a + (b - a) * tt;
-  return {
+  const out = {
     intensity: lerp(from.intensity, to.intensity),
     color: {
       r: lerp(from.color.r, to.color.r),
@@ -4719,6 +4848,17 @@ export function lerpLightConfig(from, to, t) {
       b: lerp(from.clear.b, to.clear.b),
     },
   };
+  if (from.sun && to.sun) {
+    out.sun = {
+      dir: {
+        x: lerp(from.sun.dir.x, to.sun.dir.x),
+        y: lerp(from.sun.dir.y, to.sun.dir.y),
+        z: lerp(from.sun.dir.z, to.sun.dir.z),
+      },
+      intensity: lerp(from.sun.intensity, to.sun.intensity),
+    };
+  }
+  return out;
 }
 
 /** Sine-driven pulse mapping `nowMs` into the [min, max] range over `periodMs`. */
