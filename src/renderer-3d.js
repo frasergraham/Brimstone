@@ -1352,7 +1352,7 @@ export class Renderer3D {
     // text, plan/highlight discs) joined the glow and blew it out at zoomed-
     // out distances. Node discs and the selected standee's base disc are the
     // only meshes that should glow; we register them on creation/selection.
-    this._glowLayer = new BABYLON.GlowLayer('glow', scene, { mainTextureFixedSize: 512 });
+    this._glowLayer = new BABYLON.GlowLayer('glow', scene, { mainTextureFixedSize: GLOW_LAYER_TEXTURE_SIZE });
     this._glowLayer.intensity = GLOW_LAYER_INTENSITY;
 
     // Per-unit hex outlines are built lazily by `_syncEntityHexOutlines`
@@ -1818,6 +1818,67 @@ export class Renderer3D {
     // forest band. See `panBoundsForPlayableExtent` for the rationale.
     this._panClampBounds = panBoundsForPlayableExtent(this._mapPanBounds);
     this._mapBuilt = true;
+    // Static meshes built above never move again — freeze their world matrices
+    // so Babylon stops recomputing them every frame, and skip bounding-info
+    // sync (used for active-mesh selection / picking; we don't depend on
+    // dynamic bounds for any of these meshes). Single biggest unrealised perf
+    // win on standard 13×13 + zoom-out — ~600–1500 static meshes per scene.
+    this._freezeStaticMeshes();
+  }
+
+  /** Walk the known static-mesh registries built by `_buildMap` (tiles, props,
+   *  border-forest, road/river network, node rings) and lock each mesh's world
+   *  matrix + skip bounding-info sync. Idempotent — safe to call again after
+   *  `_buildNodeGlowMeshes` to pick up the lazily-built node rings. Returns
+   *  the number of meshes freshly frozen on this call, for tests + diagnostics.
+   *
+   *  What is freezed: anything that never moves post-build — playable hex
+   *  prisms, terrain props (trees, buildings, roofs), bridges, road/river
+   *  per-tile ribbon meshes + river extensions, border-forest cylinders + tree
+   *  clusters, and power-node ring tubes.
+   *
+   *  What is NOT freezed (and must stay walking each frame): entity standees
+   *  (cones, sphere heads, owner discs, icon billboards), per-unit hex
+   *  outlines, plan ghosts / dashes / attack arrows / movement highlights,
+   *  the selection halo, the overflow "+N" badges, and the building hover
+   *  labels (those use `billboardMode = BILLBOARDMODE_ALL`, which requires a
+   *  per-frame world-matrix update — freezing them would lock their rotation
+   *  away from the camera). Dynamic meshes live in their own registries
+   *  (`_entityStandees`, `_planGhostMeshes`, `_buildingLabelsByKey`, …) which
+   *  this helper deliberately does not touch. */
+  _freezeStaticMeshes() {
+    let frozen = 0;
+    const freeze = (mesh) => {
+      if (!mesh || typeof mesh.freezeWorldMatrix !== 'function') return;
+      if (mesh.isWorldMatrixFrozen) return;
+      mesh.freezeWorldMatrix();
+      mesh.doNotSyncBoundingInfo = true;
+      frozen++;
+    };
+    // Playable tile cylinders.
+    if (this._tileMeshes) for (const m of this._tileMeshes) freeze(m);
+    // Per-tile props (trees, buildings, roofs, bridges, road/river per-tile
+    // merged ribbons, node-disc rings registered into the tile prop list).
+    if (this._tilePropsByKey) {
+      for (const list of this._tilePropsByKey.values()) {
+        for (const m of list) freeze(m);
+      }
+    }
+    // Border-forest hex prisms + props (trees, river extensions).
+    if (this._borderForestHexesByKey) {
+      for (const m of this._borderForestHexesByKey.values()) freeze(m);
+    }
+    if (this._borderPropsByKey) {
+      for (const list of this._borderPropsByKey.values()) {
+        for (const m of list) freeze(m);
+      }
+    }
+    // Power-node ring tubes (built lazily on first draw — re-invocation picks
+    // them up).
+    if (this._nodeGlowMeshes) {
+      for (const ng of this._nodeGlowMeshes) freeze(ng?.disc);
+    }
+    return frozen;
   }
 
   /** Surround the playable hex grid with a band of impassable, visual-only
@@ -5013,6 +5074,10 @@ export class Renderer3D {
         if (this._fogActiveSet.has(tkey)) disc.isVisible = false;
       }
     }
+    // Node rings are static for the rest of the game — fold them into the
+    // freeze pass. _freezeStaticMeshes is idempotent; the previously-frozen
+    // tile/prop meshes from `_buildMap` are skipped on this second call.
+    this._freezeStaticMeshes();
   }
 
   /** Apply the fog-of-war veil: swap fogged-tile materials to a darker variant
@@ -6303,6 +6368,13 @@ export const PHASE_TRANSITION_MS = 3000;
  *  selection halo and node discs contribute. Other emissive meshes (HP bars,
  *  waypoint badges, floating text) no longer bloom regardless of intensity. */
 export const GLOW_LAYER_INTENSITY = 0.5;
+
+/** GlowLayer render-target size, in pixels. Power-of-two square — only the
+ *  selection halo and the (≤4) power-node ring discs feed the layer in
+ *  include-only mode, so a 512×512 RT was massively overprovisioned. Dropped
+ *  to 256×256 — softer bloom on the few included meshes, ~4× less RT memory
+ *  and per-frame fill cost. */
+export const GLOW_LAYER_TEXTURE_SIZE = 256;
 
 /** Selection halo pulse. Configurable so designers can tune the breathing.
  *  Round 3: dialled MIN/MAX down ~50% — earlier values produced a halo bright
