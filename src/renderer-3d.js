@@ -4425,6 +4425,7 @@ export class Renderer3D {
       shaft.parent = this._mapRoot;
       shaft.isPickable = false;
       shaft.material = arrowMat;
+      shaft.renderingGroupId = ATTACK_OVERLAY_GROUP;
 
       const head1 = BABYLON.MeshBuilder.CreateTube(
         `planAttackHead1_${arrowIdx}`,
@@ -4442,6 +4443,7 @@ export class Renderer3D {
       head1.parent = this._mapRoot;
       head1.isPickable = false;
       head1.material = arrowMat;
+      head1.renderingGroupId = ATTACK_OVERLAY_GROUP;
 
       const head2 = BABYLON.MeshBuilder.CreateTube(
         `planAttackHead2_${arrowIdx}`,
@@ -4459,6 +4461,7 @@ export class Renderer3D {
       head2.parent = this._mapRoot;
       head2.isPickable = false;
       head2.material = arrowMat;
+      head2.renderingGroupId = ATTACK_OVERLAY_GROUP;
 
       this._planBattleMeshes.push({ shaft, head1, head2 });
       arrowIdx++;
@@ -4513,6 +4516,7 @@ export class Renderer3D {
       badge.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
       badge.isPickable = false;
       badge.material = badgeMat;
+      badge.renderingGroupId = ATTACK_OVERLAY_GROUP;
       const { x, y, z } = attackBadgePosition(toCol, toRow);
       badge.position.set(x, y, z);
       if (this._mapRoot) badge.parent = this._mapRoot;
@@ -6550,13 +6554,26 @@ export const ATTACK_ARROW_HEAD_ANGLE = 0.4;
 export const ATTACK_ARROW_COLOR = '#dc3c3c';
 
 /** Floating ×N badge above the target hex. Sits above the move-badge
- *  layer (0.6) so the attack readout floats clearly above the move
- *  plan, plus the standee portrait. */
-export const ATTACK_BADGE_Y = 0.95;
+ *  layer (0.6), the unit body, and the floating unit-icon billboard
+ *  (`iconBillboardY` peaks ≈1.35 for leaders) so the attack readout
+ *  reads as clearly floating above the entire unit token stack. */
+export const ATTACK_BADGE_Y = 1.5;
 
 /** Pixel size of the badge billboard plane (world units). Slightly
  *  larger than the move badge (0.45) so the ×N glyph reads cleanly. */
 export const ATTACK_BADGE_SIZE = 0.55;
+
+/** Babylon `renderingGroupId` for planning-mode attack overlays (arrow
+ *  tubes + ×N target badges). Strictly above unit standees (group 1)
+ *  and the floating unit-icon billboard (group 2, owned by the icon
+ *  fix in task t-40ab45b0) so the planning UI always draws on top —
+ *  rendering groups bypass the depth buffer, which is what we need at
+ *  the locked 45° tilt where a unit cone can otherwise occlude an
+ *  arrow shaft or badge that lives at the same screen pixel.
+ *
+ *  Default Babylon `MaxRenderingGroupId` is 4 (valid range 0..3), so
+ *  3 is the highest legal group without configuring the scene. */
+export const ATTACK_OVERLAY_GROUP = 3;
 
 /**
  * Tally attacks per target hex from a `planGhostSteps` array. Returns

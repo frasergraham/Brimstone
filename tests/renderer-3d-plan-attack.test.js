@@ -15,12 +15,14 @@ import {
   ATTACK_ARROW_COLOR,
   ATTACK_BADGE_Y,
   ATTACK_BADGE_SIZE,
+  ATTACK_OVERLAY_GROUP,
   PLAN_LINE_Y,
   countAttacksPerTarget,
   attackBadgeLabel,
   attackBadgePosition,
   computeAttackArrowGeometry,
   hexToWorld,
+  iconBillboardY,
 } from '../src/renderer-3d.js';
 
 // ── Y placement ─────────────────────────────────────────────────────────────
@@ -39,6 +41,53 @@ describe('Renderer3D attack arrow — Y placement layers above move plan', () =>
   test('ATTACK_BADGE_Y floats above ground geometry and the arrow shaft', () => {
     assert.ok(ATTACK_BADGE_Y > ATTACK_ARROW_Y + 0.4,
       `ATTACK_BADGE_Y ${ATTACK_BADGE_Y} should clearly float above the shaft`);
+  });
+
+  test('ATTACK_BADGE_Y floats above the unit-icon billboard (non-leader)', () => {
+    assert.ok(ATTACK_BADGE_Y > iconBillboardY(false),
+      `ATTACK_BADGE_Y ${ATTACK_BADGE_Y} should float above the non-leader icon at ${iconBillboardY(false)}`);
+  });
+
+  test('ATTACK_BADGE_Y floats above the leader unit-icon billboard', () => {
+    assert.ok(ATTACK_BADGE_Y > iconBillboardY(true),
+      `ATTACK_BADGE_Y ${ATTACK_BADGE_Y} should float above the leader icon at ${iconBillboardY(true)}`);
+  });
+});
+
+// ── Rendering-group z-order ─────────────────────────────────────────────────
+//
+// Planning-mode attack visuals (arrow tubes + ×N badges) must always draw on
+// top of unit standees and the floating unit-icon billboard. Babylon
+// `renderingGroupId` groups bypass the depth buffer and render in ascending
+// order, so we pin a constant strictly above the known group ids used
+// elsewhere in the renderer.
+//
+//   group 0  default scene geometry (ground, ribbons, fog)
+//   group 1  unit standees (cone + sphere + base)
+//   group 2  unit-icon billboard (owned by task t-40ab45b0)
+//   group 3  attack overlay (this task)
+//
+// Babylon's default MaxRenderingGroupId is 4, so group 3 is the highest legal
+// value without touching scene config.
+
+describe('Renderer3D attack overlay — renderingGroupId z-order', () => {
+  test('ATTACK_OVERLAY_GROUP is strictly above the unit standee group (1)', () => {
+    assert.ok(ATTACK_OVERLAY_GROUP > 1,
+      `ATTACK_OVERLAY_GROUP ${ATTACK_OVERLAY_GROUP} must beat unit standees (group 1)`);
+  });
+
+  test('ATTACK_OVERLAY_GROUP is strictly above the unit-icon billboard group (2)', () => {
+    assert.ok(ATTACK_OVERLAY_GROUP > 2,
+      `ATTACK_OVERLAY_GROUP ${ATTACK_OVERLAY_GROUP} must beat the icon billboard (group 2, t-40ab45b0)`);
+  });
+
+  test('ATTACK_OVERLAY_GROUP fits within Babylon\'s default MaxRenderingGroupId (≤ 3)', () => {
+    assert.ok(ATTACK_OVERLAY_GROUP <= 3,
+      `ATTACK_OVERLAY_GROUP ${ATTACK_OVERLAY_GROUP} must fit Babylon's default 0..3 range`);
+  });
+
+  test('ATTACK_OVERLAY_GROUP is an integer', () => {
+    assert.equal(Number.isInteger(ATTACK_OVERLAY_GROUP), true);
   });
 });
 
