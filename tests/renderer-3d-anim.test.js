@@ -32,10 +32,16 @@ import {
   HP_BAR_Y_ABOVE_BASE,
   HP_RED_BELOW,
   HP_YELLOW_BELOW,
+  UNIT_ICON_PLANE_SIZE,
+  UNIT_ICON_TEX_SIZE,
+  UNIT_ICON_RING_THICKNESS_FRAC,
   interpolatePosition,
   planArrowPolyline,
   planArrowBadgePosition,
   hpBarColor,
+  hpRingFraction,
+  iconBillboardY,
+  paintUnitIconBadge,
   floatingTextTransform,
   projectileColor01,
 } from '../src/renderer-3d.js';
@@ -268,5 +274,199 @@ describe('Renderer3D Phase 5 — projectile colour table', () => {
 describe('Renderer3D Phase 5 — HP bar layout', () => {
   test('HP bar sits above the standee base (positive Y offset)', () => {
     assert.ok(HP_BAR_Y_ABOVE_BASE > 0);
+  });
+});
+
+// ─── hpRingFraction (icon-billboard arc length helper) ──────────────────────
+
+describe('Renderer3D — hpRingFraction', () => {
+  test('full HP maps to a full arc (fraction = 1)', () => {
+    assert.equal(hpRingFraction(10, 10), 1);
+  });
+
+  test('half HP maps to a half arc (fraction = 0.5)', () => {
+    assert.equal(hpRingFraction(5, 10), 0.5);
+  });
+
+  test('zero HP maps to zero arc length (no coloured rim drawn)', () => {
+    assert.equal(hpRingFraction(0, 10), 0);
+  });
+
+  test('negative HP clamps to zero (does not produce negative arc)', () => {
+    assert.equal(hpRingFraction(-3, 10), 0);
+  });
+
+  test('overheal (hp > maxHp) clamps to one (never sweeps past 2π)', () => {
+    assert.equal(hpRingFraction(15, 10), 1);
+  });
+
+  test('maxHp ≤ 0 is treated as 1 (defensive; matches hpBarColor)', () => {
+    assert.doesNotThrow(() => hpRingFraction(0, 0));
+    // hp=0, maxHp=0 → safeMax=1, ratio=0 → fraction 0
+    assert.equal(hpRingFraction(0, 0), 0);
+  });
+});
+
+// ─── iconBillboardY (Y placement above cone+sphere head) ────────────────────
+
+describe('Renderer3D — iconBillboardY', () => {
+  test('produces a strictly positive Y (always above the base disc)', () => {
+    assert.ok(iconBillboardY(false) > 0);
+    assert.ok(iconBillboardY(true)  > 0);
+  });
+
+  test('leader badge sits higher than a regular badge (taller cone+sphere)', () => {
+    assert.ok(iconBillboardY(true) > iconBillboardY(false));
+  });
+
+  test('default arg matches leader=false (regular unit)', () => {
+    assert.equal(iconBillboardY(), iconBillboardY(false));
+  });
+
+  test('sits above the old rectangular HP bar Y offset (it replaces it)', () => {
+    // Old HP bar lived at HP_BAR_Y_ABOVE_BASE = 0.2 above the base disc; the
+    // floating-icon billboard sits well above the cone+sphere head so it
+    // doesn't intersect the token silhouette.
+    assert.ok(iconBillboardY(false) > HP_BAR_Y_ABOVE_BASE);
+  });
+});
+
+// ─── paintUnitIconBadge (canvas composition: portrait + HP ring) ────────────
+//
+// We exercise the painter against a stub 2D context that records the calls
+// it received. This locks down the contract that:
+//   • the canvas is cleared first
+//   • a dark "empty" track is stroked for the full ring
+//   • a coloured arc is stroked only when HP > 0
+//   • the arc sweep matches the HP fraction
+//   • the icon disc is clipped before drawing the portrait
+
+function makeStubCtx() {
+  const calls = [];
+  const noop = (name) => (...args) => { calls.push({ name, args }); };
+  return {
+    calls,
+    clearRect: noop('clearRect'),
+    save: noop('save'),
+    restore: noop('restore'),
+    beginPath: noop('beginPath'),
+    closePath: noop('closePath'),
+    arc: (...args) => { calls.push({ name: 'arc', args }); },
+    stroke: noop('stroke'),
+    fill: noop('fill'),
+    fillRect: noop('fillRect'),
+    drawImage: noop('drawImage'),
+    clip: noop('clip'),
+    set strokeStyle(v) { calls.push({ name: 'strokeStyle', args: [v] }); },
+    set fillStyle(v)   { calls.push({ name: 'fillStyle',   args: [v] }); },
+    set lineWidth(v)   { calls.push({ name: 'lineWidth',   args: [v] }); },
+    set lineCap(v)     { calls.push({ name: 'lineCap',     args: [v] }); },
+  };
+}
+
+describe('Renderer3D — paintUnitIconBadge', () => {
+  test('clears the canvas before painting', () => {
+    const ctx = makeStubCtx();
+    paintUnitIconBadge(ctx, { size: 64, hp: 5, maxHp: 10 });
+    const first = ctx.calls.find(c => c.name === 'clearRect');
+    assert.ok(first, 'expected clearRect to be called');
+    assert.deepEqual(first.args, [0, 0, 64, 64]);
+  });
+
+  test('draws the dark empty-track ring (full circle)', () => {
+    const ctx = makeStubCtx();
+    paintUnitIconBadge(ctx, { size: 64, hp: 5, maxHp: 10 });
+    // The track is a full-circle arc (2π sweep) drawn before the coloured arc.
+    const fullArcs = ctx.calls.filter(c => c.name === 'arc'
+      && Math.abs((c.args[4] - c.args[3]) - Math.PI * 2) < 1e-9);
+    assert.ok(fullArcs.length >= 1,
+      'expected at least one full-circle arc (the empty track / clip disc)');
+  });
+
+  test('coloured HP arc starts at 12 o\'clock (−π/2) and sweeps proportionally', () => {
+    const ctx = makeStubCtx();
+    paintUnitIconBadge(ctx, { size: 64, hp: 5, maxHp: 10 });
+    const arc = ctx.calls.find(c => c.name === 'arc'
+      && Math.abs(c.args[3] + Math.PI / 2) < 1e-9
+      && Math.abs((c.args[4] - c.args[3]) - Math.PI) < 1e-9);
+    assert.ok(arc, 'expected an arc starting at −π/2 with π sweep for hp=5/10');
+  });
+
+  test('skips the coloured arc entirely at 0 HP (only the dark track remains)', () => {
+    const ctx = makeStubCtx();
+    paintUnitIconBadge(ctx, { size: 64, hp: 0, maxHp: 10 });
+    // No arc that starts at −π/2 with a positive sweep (no coloured arc drawn).
+    const colouredArc = ctx.calls.find(c => c.name === 'arc'
+      && Math.abs(c.args[3] + Math.PI / 2) < 1e-9
+      && (c.args[4] - c.args[3]) > 1e-9);
+    assert.equal(colouredArc, undefined,
+      'expected no coloured-arc stroke when hp = 0');
+  });
+
+  test('uses the hpBarColor palette for the arc stroke colour', () => {
+    const ctx = makeStubCtx();
+    paintUnitIconBadge(ctx, { size: 64, hp: 9, maxHp: 10 });
+    // Last strokeStyle set before the coloured arc should be the green colour.
+    const greens = ctx.calls.filter(c => c.name === 'strokeStyle'
+      && c.args[0] === '#46c84a');
+    assert.ok(greens.length >= 1);
+  });
+
+  test('clips to the inner disc before painting the portrait fill', () => {
+    const ctx = makeStubCtx();
+    paintUnitIconBadge(ctx, { size: 64, hp: 5, maxHp: 10 });
+    const clipIdx = ctx.calls.findIndex(c => c.name === 'clip');
+    const fillIdx = ctx.calls.findIndex(c => c.name === 'fillRect');
+    assert.ok(clipIdx >= 0, 'expected clip()');
+    assert.ok(fillIdx >  clipIdx,
+      'expected fillRect() (icon backdrop) after the clip path was set');
+  });
+
+  test('draws the portrait image when one is supplied (no portraitRect)', () => {
+    const ctx = makeStubCtx();
+    const fakeImg = {};
+    paintUnitIconBadge(ctx, {
+      size: 64, hp: 5, maxHp: 10, portraitImg: fakeImg,
+    });
+    const draw = ctx.calls.find(c => c.name === 'drawImage');
+    assert.ok(draw, 'expected drawImage call when portraitImg present');
+    // No rect → 4-arg signature (img, x, y, w, h ⇒ 5 args including img).
+    assert.equal(draw.args.length, 5);
+    assert.strictEqual(draw.args[0], fakeImg);
+  });
+
+  test('draws the portrait sub-rect when a tilemap rect is supplied', () => {
+    const ctx = makeStubCtx();
+    const fakeImg = {};
+    const rect = { x: 10, y: 20, size: 64 };
+    paintUnitIconBadge(ctx, {
+      size: 64, hp: 5, maxHp: 10, portraitImg: fakeImg, portraitRect: rect,
+    });
+    const draw = ctx.calls.find(c => c.name === 'drawImage');
+    assert.ok(draw);
+    // sub-rect signature → 9-arg drawImage (img + 8 numbers).
+    assert.equal(draw.args.length, 9);
+    assert.equal(draw.args[1], 10); // sx
+    assert.equal(draw.args[2], 20); // sy
+    assert.equal(draw.args[3], 64); // swidth
+  });
+
+  test('omits drawImage when no portrait is supplied (still paints the disc)', () => {
+    const ctx = makeStubCtx();
+    paintUnitIconBadge(ctx, { size: 64, hp: 5, maxHp: 10 });
+    assert.ok(!ctx.calls.find(c => c.name === 'drawImage'),
+      'expected no drawImage when portraitImg is null');
+    // Disc backdrop is still painted (so the icon disc reads as a solid sticker).
+    assert.ok(ctx.calls.find(c => c.name === 'fillRect'));
+  });
+
+  test('ring thickness fraction is sane (not zero, not the whole texture)', () => {
+    assert.ok(UNIT_ICON_RING_THICKNESS_FRAC > 0);
+    assert.ok(UNIT_ICON_RING_THICKNESS_FRAC < 0.5);
+  });
+
+  test('plane and texture sizing constants are positive', () => {
+    assert.ok(UNIT_ICON_PLANE_SIZE > 0);
+    assert.ok(UNIT_ICON_TEX_SIZE   > 0);
   });
 });

@@ -785,7 +785,15 @@ export class Renderer3D {
     this._activeLungeIds  = new Set();
     // Map<entityId, { mesh, texture, lastHp, lastMax }> — billboarded HP bar
     // parented to the standee base, redrawn only when ratio changes.
+    // Retained as a no-op compatibility hook; the floating-icon badge below
+    // now carries the HP indicator (as a circular arc rim) and the
+    // rectangular bar is no longer built.
     this._hpBars          = new Map();
+    // Map<entityId, { plane, mat, tex, lastHp, lastMax, lastAssetId, leader }>
+    // — floating unit-icon billboard above each entity's cone+sphere body.
+    // Texture composites a portrait disc with a coloured HP ring; repainted
+    // only when HP / maxHp / assetId change.
+    this._unitIconBadges  = new Map();
     // [{ mesh, owner, fromCol, fromRow, toCol, toRow }] — solid ghost-arrow tubes
     // rebuilt every draw() from this.planGhostSteps so the overlay tracks any
     // plan-step edit.
@@ -829,6 +837,7 @@ export class Renderer3D {
     }
     if (!this._scene) return; // init in flight
     this._syncEntityStandees();
+    this._syncEntityIconBillboards();
     this._applySelectionAndFocus();
     this._syncMovementHighlights();
     this._syncPlanArrows();
@@ -1377,6 +1386,7 @@ export class Renderer3D {
     this._frameFullMap({ instant: true });
     // Initial standee population so the first frame already has units.
     this._syncEntityStandees();
+    this._syncEntityIconBillboards();
     this._applySelectionAndFocus();
     this._syncNodeGlowMeshes();
     this._applyFogVeil();
@@ -3122,14 +3132,15 @@ export class Renderer3D {
           standee.sphere.material = expected;
         }
       }
-      // Phase 5: keep the HP bar in step with the entity. Cheap when the ratio
-      // hasn't changed — the dynamic texture is only redrawn on delta.
-      this._syncHpBar(standee, e);
+      // HP indicator: drawn as a circular arc rim around the floating unit
+      // icon billboard (see _syncEntityIconBillboards), not the rectangular
+      // bar that used to live here.
     }
-    // Dispose standees for entities that no longer exist or just died.
+    // Dispose standees for entities that no longer exist or just died. The
+    // unit-icon billboards are owned by _syncEntityIconBillboards's own diff
+    // pass — it cleans up its meshes from the same seen-set logic.
     for (const [id, standee] of this._entityStandees) {
       if (!seen.has(id)) {
-        this._disposeHpBar(id);
         standee.plane.dispose();
         standee.base.dispose();
         this._entityStandees.delete(id);
@@ -3866,118 +3877,125 @@ export class Renderer3D {
     this._trackAnim(promise);
   }
 
-  // ─── HP bars ─────────────────────────────────────────────────────────────
+  // ─── Floating unit-icon billboards (icon disc + HP ring) ────────────────
+  //
+  // Each alive entity gets a billboarded square plane parented to its base
+  // disc. The plane's DynamicTexture composites two layers:
+  //   • a circular portrait sticker (clipped to the inner disc)
+  //   • a coloured arc rim around it (red/yellow/green by HP fraction)
+  //
+  // Dead entities (tombstones) do NOT get a badge — the desaturated
+  // cone+sphere is intentionally bare so the player reads it as "gone".
+  //
+  // Sync runs once per draw() pass *after* `_syncEntityStandees`, so the
+  // base disc + cone meshes exist before we try to parent a badge to them.
+  // The diff is keyed off the same alive-entity set the standee sync uses,
+  // so a dead/missing entity disposes its badge in the same tick its
+  // standee disappears.
 
-  /** Ensure the entity has an HP bar mesh parented to its base disc, and the
-   *  texture matches the current HP / maxHP ratio. */
-  _syncHpBar(standee, entity) {
-    if (!this._scene || !this._babylon || typeof document === 'undefined') return;
-    if (entity.hp == null || entity.maxHp == null) return;
-    let entry = this._hpBars.get(entity.id);
-    if (!entry) entry = this._createHpBar(standee, entity);
-    if (!entry) return;
-    if (entry.lastHp === entity.hp && entry.lastMax === entity.maxHp) return;
-    this._redrawHpBarTexture(entry, entity.hp, entity.maxHp);
-    entry.lastHp  = entity.hp;
-    entry.lastMax = entity.maxHp;
+  /** Per-frame diff: add badges for newly-spawned entities, repaint when HP
+   *  or asset id changed, dispose badges for entities that no longer exist
+   *  or just died. Idempotent — the repaint path early-exits when the
+   *  (hp, maxHp, assetId) tuple is unchanged. */
+  _syncEntityIconBillboards() {
+    if (!this._scene || !this.state?.entities) return;
+    if (!this._babylon || typeof document === 'undefined') return;
+    const seen = new Set();
+    for (const e of this.state.entities) {
+      if (!e || !e.alive) continue;
+      if (typeof e.col !== 'number' || typeof e.row !== 'number') continue;
+      if (e.hp == null || e.maxHp == null) continue;
+      const standee = this._entityStandees.get(e.id);
+      if (!standee) continue; // standee not built yet — pick up next tick
+      seen.add(e.id);
+      let entry = this._unitIconBadges.get(e.id);
+      if (!entry) entry = this._createUnitIconBadge(standee, e);
+      if (!entry) continue;
+      const assetId = this._assetIdFor(e);
+      if (entry.lastHp === e.hp
+          && entry.lastMax === e.maxHp
+          && entry.lastAssetId === assetId) {
+        continue;
+      }
+      this._repaintUnitIconBadge(entry, e, assetId);
+      entry.lastHp       = e.hp;
+      entry.lastMax      = e.maxHp;
+      entry.lastAssetId  = assetId;
+    }
+    // Dispose badges for entities that no longer exist or just died.
+    for (const id of [...this._unitIconBadges.keys()]) {
+      if (!seen.has(id)) this._disposeUnitIconBadge(id);
+    }
   }
 
-  _createHpBar(standee, entity) {
+  _createUnitIconBadge(standee, entity) {
     const BABYLON = this._babylon;
-    if (typeof document === 'undefined') return null;
-    // Bump texture resolution 4× (128×24 → 512×96) and disable mipmaps; the
-    // old setup was filtering between mip levels as the camera zoomed/panned,
-    // producing the operator-reported shimmer (texels alternately oversampled
-    // and undersampled at intermediate zooms). With noMipmap=true and bilinear
-    // filtering the bar reads as a clean rectangle at any zoom.
-    const tex = new BABYLON.DynamicTexture(`hpTex_${entity.id}`,
-      { width: 512, height: 96 }, this._scene, /* generateMipMaps */ false);
+    const scene   = this._scene;
+    if (!BABYLON || !scene || typeof document === 'undefined') return null;
+    const tex = new BABYLON.DynamicTexture(
+      `unitIconTex_${entity.id}`,
+      { width: UNIT_ICON_TEX_SIZE, height: UNIT_ICON_TEX_SIZE },
+      scene,
+      /* generateMipMaps */ false,
+    );
     tex.hasAlpha = true;
     tex.updateSamplingMode(BABYLON.Texture.BILINEAR_SAMPLINGMODE);
-    const mat = new BABYLON.StandardMaterial(`hpMat_${entity.id}`, this._scene);
+    const mat = new BABYLON.StandardMaterial(`unitIconMat_${entity.id}`, scene);
     mat.diffuseTexture = tex;
     mat.opacityTexture = tex;
     mat.useAlphaFromDiffuseTexture = true;
-    mat.specularColor = new BABYLON.Color3(0, 0, 0);
-    mat.emissiveColor = new BABYLON.Color3(1, 1, 1);
-    mat.backFaceCulling = false;
-    // disableLighting keeps the bar reading as flat UI rather than picking up
-    // the dawn/dusk colour tint from the hemispheric light.
+    mat.specularColor  = new BABYLON.Color3(0, 0, 0);
+    // Pure UI sticker — read flat (no light shading) at full brightness, and
+    // capped well under 1 to keep clear of GlowLayer bloom-clip to white.
+    mat.emissiveColor  = new BABYLON.Color3(0.55, 0.55, 0.55);
     mat.disableLighting = true;
+    mat.backFaceCulling = false;
+    mat.fogEnabled      = false;
 
-    const plane = BABYLON.MeshBuilder.CreatePlane(`hp_${entity.id}`,
-      { width: 0.6, height: 0.12 }, this._scene);
+    const plane = BABYLON.MeshBuilder.CreatePlane(
+      `unitIcon_${entity.id}`,
+      { width: UNIT_ICON_PLANE_SIZE, height: UNIT_ICON_PLANE_SIZE },
+      scene,
+    );
     plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
     plane.isPickable    = false;
     plane.material      = mat;
     plane.parent        = standee.base;
-    plane.renderingGroupId = 1; // always above ground-level translucent meshes
-    // Local position relative to the base disc (which sits at STANDEE_BASE_Y_OFFSET).
-    // Bar floats above the sphere head: half the disc thickness up to the disc
-    // top, then the full cone height, then the sphere head, plus a small gap.
-    const hMul = standee.leader ? STANDEE_LEADER_HEIGHT_MUL : 1;
-    const barY = (STANDEE_BASE_THICKNESS / 2)
-      + (STANDEE_CONE_HEIGHT * hMul)
-      + (STANDEE_SPHERE_DIAMETER * (standee.leader ? STANDEE_LEADER_WIDTH_MUL : 1))
-      + 0.18;
-    plane.position.set(0, barY, 0);
+    plane.renderingGroupId = 1; // above terrain / road / fog overlay
+    plane.position.set(0, iconBillboardY(standee.leader), 0);
 
-    const entry = { plane, mat, tex, lastHp: -1, lastMax: -1 };
-    this._hpBars.set(entity.id, entry);
+    const entry = {
+      plane, mat, tex,
+      lastHp: -1, lastMax: -1, lastAssetId: '__pending__',
+      leader: standee.leader,
+    };
+    this._unitIconBadges.set(entity.id, entry);
     return entry;
   }
 
-  _redrawHpBarTexture(entry, hp, maxHp) {
-    const tex = entry.tex;
-    const ctx = tex.getContext();
-    const W = 512, H = 96;
-    const ratio = Math.max(0, Math.min(1, hp / Math.max(1, maxHp)));
-    const colour = hpBarColor(hp, maxHp);
-    ctx.clearRect(0, 0, W, H);
-    // Bold black outline — drawn first as a thick rounded rect, then the inner
-    // panel paints over the centre so the outline stays consistent thickness
-    // regardless of fill ratio.
-    const r = 14;
-    const drawRoundedRect = (x, y, w, h, rad) => {
-      ctx.beginPath();
-      ctx.moveTo(x + rad, y);
-      ctx.lineTo(x + w - rad, y);
-      ctx.quadraticCurveTo(x + w, y, x + w, y + rad);
-      ctx.lineTo(x + w, y + h - rad);
-      ctx.quadraticCurveTo(x + w, y + h, x + w - rad, y + h);
-      ctx.lineTo(x + rad, y + h);
-      ctx.quadraticCurveTo(x, y + h, x, y + h - rad);
-      ctx.lineTo(x, y + rad);
-      ctx.quadraticCurveTo(x, y, x + rad, y);
-      ctx.closePath();
-    };
-    // Outline layer
-    ctx.fillStyle = 'rgba(0,0,0,1)';
-    drawRoundedRect(0, 0, W, H, r);
-    ctx.fill();
-    // Inner panel (dark grey, full width — this is the "empty" track)
-    const pad = 10;
-    ctx.fillStyle = 'rgba(40,40,40,1)';
-    drawRoundedRect(pad, pad, W - pad * 2, H - pad * 2, r - 4);
-    ctx.fill();
-    // Foreground fill (clipped to the inner panel via the same rounded path,
-    // then cut to the ratio width via a rectangle clip)
-    ctx.save();
-    drawRoundedRect(pad, pad, W - pad * 2, H - pad * 2, r - 4);
-    ctx.clip();
-    ctx.fillStyle = colour;
-    ctx.fillRect(pad, pad, Math.round((W - pad * 2) * ratio), H - pad * 2);
-    ctx.restore();
-    tex.update();
+  _repaintUnitIconBadge(entry, entity, assetId) {
+    const ctx = entry.tex.getContext();
+    const portraitImg  = this._tilemapImg ?? null;
+    const portraitRect = (assetId && this._spriteRects)
+      ? (this._spriteRects.get(assetId) ?? null)
+      : null;
+    paintUnitIconBadge(ctx, {
+      size: UNIT_ICON_TEX_SIZE,
+      portraitImg: portraitImg && portraitRect ? portraitImg : null,
+      portraitRect,
+      hp: entity.hp,
+      maxHp: entity.maxHp,
+    });
+    entry.tex.update();
   }
 
-  _disposeHpBar(entityId) {
-    const entry = this._hpBars.get(entityId);
+  _disposeUnitIconBadge(entityId) {
+    const entry = this._unitIconBadges.get(entityId);
     if (!entry) return;
     entry.plane.dispose();
     entry.mat.dispose();
     entry.tex.dispose();
-    this._hpBars.delete(entityId);
+    this._unitIconBadges.delete(entityId);
   }
 
   // ─── Highlight overlay (movement / target hexes) ─────────────────────────
@@ -4716,10 +4734,11 @@ export class Renderer3D {
       }
     }
 
-    // Hide standees on fogged hexes; reveal them when visible again. HP bars
-    // are parented to the standee base but Babylon's `isVisible` does not
-    // propagate to children, so we mirror visibility onto the HP bar mesh
-    // explicitly — otherwise a hidden standee leaves a floating HP bar.
+    // Hide standees on fogged hexes; reveal them when visible again. The
+    // floating icon badge is parented to the standee base but Babylon's
+    // `isVisible` does not propagate to children, so we mirror visibility
+    // onto the badge plane explicitly — otherwise a hidden standee would
+    // leave a floating icon over an empty fogged hex.
     if (target) {
       for (const [id, standee] of this._entityStandees) {
         const k = hexKey(standee.plane.metadata.col, standee.plane.metadata.row);
@@ -4730,16 +4749,16 @@ export class Renderer3D {
         // propagates the fog-hide through the tombstone → sticker tree.
         if (standee.plane.isEnabled?.() !== visible) standee.plane.setEnabled(visible);
         if (standee.base.isEnabled?.()  !== visible) standee.base.setEnabled(visible);
-        const hp = this._hpBars.get(id);
-        if (hp && hp.plane.isVisible !== visible) hp.plane.isVisible = visible;
+        const icon = this._unitIconBadges.get(id);
+        if (icon && icon.plane.isVisible !== visible) icon.plane.isVisible = visible;
       }
     } else {
       // No fog → make sure everything is visible (covers fog-toggling mid-game).
       for (const [id, standee] of this._entityStandees) {
         if (!standee.plane.isEnabled?.()) standee.plane.setEnabled(true);
         if (!standee.base.isEnabled?.())  standee.base.setEnabled(true);
-        const hp = this._hpBars.get(id);
-        if (hp && !hp.plane.isVisible) hp.plane.isVisible = true;
+        const icon = this._unitIconBadges.get(id);
+        if (icon && !icon.plane.isVisible) icon.plane.isVisible = true;
       }
     }
   }
@@ -6078,6 +6097,25 @@ export const FLOAT_TEXT_MS = 700;
 /** HP-bar height (world units) above the standee's base disc. */
 export const HP_BAR_Y_ABOVE_BASE = 0.2;
 
+/** Floating unit-icon billboard — circular sticker (portrait + HP ring) that
+ *  sits above the cone+sphere head. Plane size is square; the icon disc and
+ *  ring are painted inside it with transparent corners.
+ *
+ *  Sized so the ring around the icon reads cleanly at typical zoom but the
+ *  badge doesn't dominate the silhouette of the token below it. */
+export const UNIT_ICON_PLANE_SIZE = 0.55;
+/** Gap between the top of the sphere head and the bottom of the icon plane,
+ *  in world units. Slightly larger than the old HP-bar gap so the (taller)
+ *  circular badge has visual breathing room above the token. */
+export const UNIT_ICON_Y_GAP      = 0.22;
+/** DynamicTexture pixel size for the icon+ring composite. 192² keeps the
+ *  portrait crisp at any zoom and the arc rim smooth without burning extra
+ *  GPU memory per entity. */
+export const UNIT_ICON_TEX_SIZE   = 192;
+/** Arc rim thickness as a fraction of the texture half-size — wide enough
+ *  to read as a clear HP bar at zoomed-out camera distances. */
+export const UNIT_ICON_RING_THICKNESS_FRAC = 0.14;
+
 /** Plan-marker disc — flat owner-tinted circle laid on the destination hex
  *  top. Y just clears the tile prism top (0.075) and the road deck (0.155)
  *  so it reads against both terrain and crossings. (Retained for back-compat
@@ -6388,6 +6426,111 @@ export function hpBarColor(hp, maxHp) {
   if (ratio < HP_RED_BELOW)    return '#d83333';
   if (ratio < HP_YELLOW_BELOW) return '#d8c333';
   return '#46c84a';
+}
+
+/**
+ * Fraction of the unit-icon HP ring that should read as "filled" (coloured)
+ * given the entity's HP. Clamps to [0,1] so a freshly-spawned overheal or a
+ * mid-death negative HP can't render an arc of length > 2π or < 0. maxHp ≤ 0
+ * is treated as 1 (matching `hpBarColor`).
+ */
+export function hpRingFraction(hp, maxHp) {
+  const safeMax = Math.max(1, maxHp);
+  return Math.max(0, Math.min(1, hp / safeMax));
+}
+
+/**
+ * Y placement (relative to the standee base disc) for the floating
+ * unit-icon billboard. Sits above the cone+sphere head with a small gap,
+ * scaled up for leaders to match their taller cone.
+ *
+ * Mirrors `_createUnitIconBadge`'s positioning so tests can lock the
+ * geometry without spinning up Babylon.
+ */
+export function iconBillboardY(leader = false) {
+  const hMul = leader ? STANDEE_LEADER_HEIGHT_MUL : 1;
+  const wMul = leader ? STANDEE_LEADER_WIDTH_MUL  : 1;
+  return (STANDEE_BASE_THICKNESS / 2)
+    + (STANDEE_CONE_HEIGHT   * hMul)
+    + (STANDEE_SPHERE_DIAMETER * wMul)
+    + UNIT_ICON_Y_GAP;
+}
+
+/**
+ * Paint the floating unit-icon badge into a 2D canvas context: portrait
+ * image clipped to a centred disc, with a coloured HP arc rim around it.
+ *
+ * The portrait `img` argument is optional — when null/undefined the icon
+ * disc is filled with a neutral grey so the ring still reads. The arc is
+ * drawn from 12 o'clock clockwise (matching how players read clocks) and
+ * shrinks counter-clockwise as HP drops, so a near-dead unit shows a tiny
+ * sliver of colour over a dark "empty" track.
+ *
+ * Pure with respect to its inputs (no Babylon, no canvas creation); the
+ * Babylon-side `_createUnitIconBadge` is a thin wrapper that creates the
+ * DynamicTexture and calls back into here.
+ */
+export function paintUnitIconBadge(ctx, opts) {
+  const {
+    size,
+    portraitImg = null,
+    portraitRect = null, // { x, y, size } when drawing from a tilemap
+    hp,
+    maxHp,
+  } = opts;
+  const W = size;
+  const H = size;
+  const cx = W / 2;
+  const cy = H / 2;
+  const ringThickness = Math.max(2, Math.round(W * UNIT_ICON_RING_THICKNESS_FRAC));
+  // Outer ring radius is just inside the plane edge; inner radius is the
+  // icon disc radius. The icon image is clipped to the inner disc.
+  const outerR = (W / 2) - 2;
+  const innerR = outerR - ringThickness;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // Dark track behind the arc — so a low-HP unit still shows a full ring
+  // outline against the bright terrain.
+  ctx.lineWidth = ringThickness;
+  ctx.strokeStyle = 'rgba(0,0,0,0.75)';
+  ctx.beginPath();
+  ctx.arc(cx, cy, (outerR + innerR) / 2, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Coloured arc — 12 o'clock start, sweep clockwise by HP fraction.
+  const fraction = hpRingFraction(hp, maxHp);
+  if (fraction > 0) {
+    const startAngle = -Math.PI / 2;
+    const endAngle   = startAngle + Math.PI * 2 * fraction;
+    ctx.strokeStyle = hpBarColor(hp, maxHp);
+    ctx.lineWidth = ringThickness;
+    ctx.lineCap = 'butt';
+    ctx.beginPath();
+    ctx.arc(cx, cy, (outerR + innerR) / 2, startAngle, endAngle, false);
+    ctx.stroke();
+  }
+
+  // Icon disc: portrait clipped to a circle. Neutral pale fill behind the
+  // image so the disc reads as a solid sticker even before the portrait
+  // pixels paint (and as a fallback when no portrait is available).
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(cx, cy, innerR, 0, Math.PI * 2);
+  ctx.closePath();
+  ctx.clip();
+  ctx.fillStyle = 'rgba(225,220,210,1)';
+  ctx.fillRect(0, 0, W, H);
+  if (portraitImg && portraitRect) {
+    ctx.drawImage(
+      portraitImg,
+      portraitRect.x, portraitRect.y, portraitRect.size, portraitRect.size,
+      cx - innerR, cy - innerR, innerR * 2, innerR * 2,
+    );
+  } else if (portraitImg) {
+    ctx.drawImage(portraitImg, cx - innerR, cy - innerR, innerR * 2, innerR * 2);
+  }
+  ctx.restore();
 }
 
 /**
