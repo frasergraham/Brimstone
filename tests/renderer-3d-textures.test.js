@@ -140,7 +140,7 @@ describe('Renderer3D — texture-disc geometry constants', () => {
     // ArcRotateCamera distances (radius 20–80) — Babylon's default near/far
     // planes give depth precision in the ~1 mm range at radius 80, and the
     // disc became invisible behind the prism top. Round-5 bumped this to a
-    // ~8 mm gap which survives at every supported zoom level while still
+    // ~9 mm gap which survives at every supported zoom level while still
     // staying under the river bezier tube centre (0.085) so road / river
     // tile underlays don't pop in front of the tubes.
     assert.ok(TERRAIN_DISC_Y_OFFSET > 0.080, `disc Y ${TERRAIN_DISC_Y_OFFSET} must clear the cylinder top by enough to survive z-fighting at far camera distances`);
