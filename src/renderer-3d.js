@@ -5538,7 +5538,11 @@ export const PHASE_LIGHT_CONFIG = Object.freeze({
     // moonlit mood.
     ambient: { r: 0.58, g: 0.66, b: 0.91 },
     fogTint: 0.36,
-    sun: { dir: { x:  0.00, y: -1.00, z: 0.10 }, intensity: 0.60 },
+    // Moon peak direction — clearly tilted off vertical so cast shadows
+    // still project. `sunDirectionForRound` overrides for default cycles to
+    // sweep east → peak → west across the three night rounds; this value
+    // is the per-phase fallback used by custom cycleConfigs.
+    sun: { dir: { x:  0.00, y: -0.75, z: 0.35 }, intensity: 0.60 },
   },
 });
 
@@ -5563,19 +5567,40 @@ export function sunDirectionForRound(round, cycleConfig = null) {
     return getPhaseLightConfig(undefined).sun.dir;
   }
   const r = ((round - 1) % 8 + 8) % 8; // 0..7
-  // Daylight band is rounds 0..4 (dawn through dusk). NIGHT rounds 5..7 sit
-  // at the night-phase direction (sun effectively off).
-  if (r >= 5) return getPhaseLightConfig('night').sun.dir;
-  const t = r / 4; // 0 at dawn, 1 at dusk
-  const dawn = getPhaseLightConfig('dawn').sun.dir;
-  const dusk = getPhaseLightConfig('dusk').sun.dir;
-  // Horizontal: straight lerp east-to-west.
-  const x = dawn.x + (dusk.x - dawn.x) * t;
-  const z = dawn.z + (dusk.z - dawn.z) * t;
-  // Vertical: arc from horizon at endpoints to overhead at noon (t=0.5).
-  const horizonY = (dawn.y + dusk.y) / 2;     // ≈ -0.4
-  const noonY    = getPhaseLightConfig('day').sun.dir.y; // ≈ -0.85
-  const y = horizonY + (noonY - horizonY) * Math.sin(Math.PI * t);
+  const dawn  = getPhaseLightConfig('dawn').sun.dir;
+  const dusk  = getPhaseLightConfig('dusk').sun.dir;
+  const day   = getPhaseLightConfig('day').sun.dir;
+  // ── Daylight band (rounds 0..4 — dawn through dusk) ──────────────────────
+  // Linear horizontal lerp east-to-west, sinusoidal arc on Y (low at endpoints,
+  // peaking at noon) and on Z (so the noon sun has a meaningful tilt away from
+  // vertical — straight-down sun produces zero-offset shadows). Noon Y peaks
+  // at the day-phase config sun.dir.y; noon Z peaks at day.dir.z.
+  if (r <= 4) {
+    const t = r / 4; // 0 at dawn, 1 at dusk
+    const x = dawn.x + (dusk.x - dawn.x) * t;
+    const horizonY = (dawn.y + dusk.y) / 2;
+    const y        = horizonY + (day.y - horizonY) * Math.sin(Math.PI * t);
+    const horizonZ = (dawn.z + dusk.z) / 2;
+    const z        = horizonZ + (day.z - horizonZ) * Math.sin(Math.PI * t);
+    return { x, y, z };
+  }
+  // ── Night band (rounds 5..7 — moonlight arc) ─────────────────────────────
+  // A subtle mirror of the daytime sweep: moon rises in the east at start of
+  // night, peaks near (but never at) zenith, sets in the west by end of night.
+  // Less steep than day so shadows stay raked; non-zero Z always so the light
+  // is never straight down. Endpoints anchored at NIGHT_MOON_HORIZON_Y and
+  // peak at the night-phase config's sun.dir.y.
+  const night = getPhaseLightConfig('night').sun.dir;
+  const t = (r - 5) / 2; // 0 at first night round, 1 at last
+  const NIGHT_X_RANGE   = 0.85;
+  const NIGHT_HORIZON_Y = -0.40;
+  const NIGHT_PEAK_Z    = 0.40;
+  const x = -NIGHT_X_RANGE + 2 * NIGHT_X_RANGE * t;
+  const y = NIGHT_HORIZON_Y + (night.y - NIGHT_HORIZON_Y) * Math.sin(Math.PI * t);
+  // Z sweep — lower at moonrise/set (more horizontal), higher at peak so the
+  // angle stays clearly off-vertical throughout night.
+  const horizonZ = night.z;
+  const z = horizonZ + (NIGHT_PEAK_Z - horizonZ) * Math.sin(Math.PI * t);
   return { x, y, z };
 }
 
