@@ -4273,9 +4273,10 @@ export function lanternIntensityForPhase(phase) {
  *  warm/cool contrast reads strongly without looking neon. */
 export const LANTERN_COLOR_HEX = '#ffb060';
 
-/** Babylon-world units. ~3.5 covers ~3–4 hex radii at the playmat's hex
- *  spacing, so a lantern lights up its immediate hex and the ring around it. */
-export const LANTERN_RANGE = 3.5;
+/** Babylon-world units. ~5.0 reaches roughly the second ring of neighbouring
+ *  hexes at the playmat's spacing, so a unit's lantern washes its hex plus a
+ *  generous halo around it. */
+export const LANTERN_RANGE = 5.0;
 
 /** Vertical offset above the standee base where the PointLight sits — about
  *  chest height on the standee plane, so it shines outward from where a
@@ -4287,11 +4288,10 @@ export const LANTERN_HEIGHT_OFFSET = 0.6;
  *  in lockstep rather than reading as two separate events. */
 export const LANTERN_FADE_MS = PHASE_TRANSITION_MS;
 
-/** Flicker frequencies (Hz). The slow band carries the breathing pulse; the
- *  fast band adds an irregular wobble so the result reads as "candle flame",
- *  not "sine wave". */
-export const LANTERN_FLICKER_FREQ_HZ      = 2;
-export const LANTERN_FLICKER_FAST_FREQ_HZ = 7;
+/** Flicker frequency (Hz) for the single slow breathing band. A faster
+ *  noise band used to layer on top, but it read as a buzz rather than a
+ *  candle wobble — the result is calmer with just the slow pulse. */
+export const LANTERN_FLICKER_FREQ_HZ = 2;
 
 /** Per-StandardMaterial simultaneous-light cap to override Babylon's default
  *  of 4. On a Standard map there can be 10–20 live entities; without this
@@ -4299,30 +4299,17 @@ export const LANTERN_FLICKER_FAST_FREQ_HZ = 7;
 export const LANTERN_MATERIAL_LIGHT_CAP = 16;
 
 /** Flicker scale for one lantern at time `nowMs`. Returns a unit-less
- *  multiplier in [0.7, 1.1] — the per-light intensity is `base * flickerScale`.
- *  The fast-band term is a product of two offset sines (deterministic and
- *  pseudo-noisy without a dependency on `Math.random`). Output is clamped to
- *  the documented band so callers / tests can rely on tight bounds. */
+ *  multiplier in [0.7, 1.0] — the per-light intensity is `base * flickerScale`.
+ *  A single slow sine band carries the breathing pulse; an earlier fast pseudo-
+ *  noise term was removed because it read as buzz rather than candle wobble. */
 export function flickerScale(
   nowMs,
   phaseOffset = 0,
   freqHz     = LANTERN_FLICKER_FREQ_HZ,
-  fastFreqHz = LANTERN_FLICKER_FAST_FREQ_HZ,
 ) {
-  const tSec       = nowMs / 1000;
-  const TWO_PI     = Math.PI * 2;
-  const slowAngle  = tSec * freqHz * TWO_PI + phaseOffset;
-  const slow       = 0.85 + 0.15 * Math.sin(slowAngle);
-  // Two-frequency pseudo-noise: product of two offset sines is in [-1, 1].
-  const noise      = Math.sin(tSec * fastFreqHz * TWO_PI * 1.31 + 0.7)
-                   * Math.cos(tSec * fastFreqHz * TWO_PI * 0.73 + 1.31);
-  const fast       = 1 + 0.05 * noise;
-  const raw        = slow * fast;
-  // Clamp to the documented band — defensive against future tuning that
-  // widens slow/fast amplitudes past where the math overlaps.
-  if (raw < 0.7) return 0.7;
-  if (raw > 1.1) return 1.1;
-  return raw;
+  const tSec  = nowMs / 1000;
+  const angle = tSec * freqHz * (Math.PI * 2) + phaseOffset;
+  return 0.85 + 0.15 * Math.sin(angle);
 }
 
 /** Lantern lifecycle diff: classify each live entity as `add` (new lantern

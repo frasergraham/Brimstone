@@ -3,7 +3,7 @@
 // What we lock down without a Babylon scene:
 //   • lanternIntensityForPhase returns the documented peak per phase (and 0
 //     for day / unknown).
-//   • flickerScale stays inside the documented [0.7, 1.1] band for any t /
+//   • flickerScale stays inside the documented [0.7, 1.0] band for any t /
 //     phaseOffset, and varies enough to actually read as flicker (i.e. it's
 //     not stuck at a constant).
 //   • diffLanternLifecycle adds new live entities, keeps already-lit ones,
@@ -23,7 +23,6 @@ import {
   LANTERN_HEIGHT_OFFSET,
   LANTERN_FADE_MS,
   LANTERN_FLICKER_FREQ_HZ,
-  LANTERN_FLICKER_FAST_FREQ_HZ,
   LANTERN_MATERIAL_LIGHT_CAP,
   PHASE_TRANSITION_MS,
 } from '../src/renderer-3d.js';
@@ -74,15 +73,24 @@ describe('Renderer3D — lanternIntensityForPhase', () => {
 // ── Flicker oscillator ──────────────────────────────────────────────────────
 
 describe('Renderer3D — flickerScale', () => {
-  test('stays inside the documented [0.7, 1.1] band for a dense sweep', () => {
+  test('stays inside the documented [0.7, 1.0] band for a dense sweep', () => {
     // Sweep across ~10 s at high resolution to cover several full cycles of
-    // both the slow and fast bands.
+    // the slow band. With the fast/noise term removed, peak-to-peak swing is
+    // tighter (0.3 vs the previous 0.4) so the light reads as calmer.
+    let observedMax = -Infinity;
+    let observedMin =  Infinity;
     for (let i = 0; i < 4000; i++) {
       const t = i * 2.5; // 0..10_000 ms
       const v = flickerScale(t, 0);
-      assert.ok(v >= 0.7 - 1e-9 && v <= 1.1 + 1e-9,
-        `flickerScale=${v} out of [0.7, 1.1] at t=${t}`);
+      assert.ok(v >= 0.7 - 1e-9 && v <= 1.0 + 1e-9,
+        `flickerScale=${v} out of [0.7, 1.0] at t=${t}`);
+      if (v > observedMax) observedMax = v;
+      if (v < observedMin) observedMin = v;
     }
+    // Peak-to-peak should sit inside the [0.3] envelope — confirms the fast
+    // band was actually removed and not re-added with a different name.
+    assert.ok(observedMax - observedMin <= 0.30 + 1e-9,
+      `swing ${observedMax - observedMin} exceeds calm band of 0.30`);
   });
 
   test('respects a non-zero phaseOffset (decorrelates from another lantern)', () => {
@@ -107,27 +115,27 @@ describe('Renderer3D — flickerScale', () => {
     assert.ok(max - min > 0.05, `flicker range ${max - min} too tight`);
   });
 
-  test('respects custom frequencies (different freq → different waveform)', () => {
+  test('respects custom frequency (different freq → different waveform)', () => {
     const slowSweep = [];
     const fastSweep = [];
     for (let i = 0; i < 100; i++) {
       const t = i * 13;
-      slowSweep.push(flickerScale(t, 0, 0.5, 1));
-      fastSweep.push(flickerScale(t, 0, 10,  20));
+      slowSweep.push(flickerScale(t, 0, 0.5));
+      fastSweep.push(flickerScale(t, 0, 10));
     }
     // Identical inputs would produce identical sequences; this confirms the
-    // freq args actually feed into the oscillators.
+    // freq arg actually feeds into the oscillator.
     let differ = 0;
     for (let i = 0; i < slowSweep.length; i++) {
       if (Math.abs(slowSweep[i] - fastSweep[i]) > 1e-9) differ++;
     }
-    assert.ok(differ > 80, `freq args ignored? only ${differ}/100 samples differed`);
+    assert.ok(differ > 80, `freq arg ignored? only ${differ}/100 samples differed`);
   });
 
   test('default args produce the same value as explicit args', () => {
     const t = 1234;
     const phaseOffset = 0.42;
-    const explicit = flickerScale(t, phaseOffset, LANTERN_FLICKER_FREQ_HZ, LANTERN_FLICKER_FAST_FREQ_HZ);
+    const explicit = flickerScale(t, phaseOffset, LANTERN_FLICKER_FREQ_HZ);
     const def      = flickerScale(t, phaseOffset);
     assert.ok(Math.abs(explicit - def) < 1e-12,
       `defaults drifted: ${explicit} vs ${def}`);
@@ -221,6 +229,10 @@ describe('Renderer3D — lantern constants', () => {
     assert.ok(LANTERN_RANGE > 1.5 && LANTERN_RANGE < 10);
   });
 
+  test('LANTERN_RANGE is the calmer 5.0 (extended from the earlier 3.5)', () => {
+    assert.equal(LANTERN_RANGE, 5.0);
+  });
+
   test('LANTERN_HEIGHT_OFFSET sits above the standee base (positive)', () => {
     assert.ok(LANTERN_HEIGHT_OFFSET > 0);
   });
@@ -229,9 +241,10 @@ describe('Renderer3D — lantern constants', () => {
     assert.equal(LANTERN_FADE_MS, PHASE_TRANSITION_MS);
   });
 
-  test('flicker freqs are in the right order (fast > slow)', () => {
-    assert.ok(LANTERN_FLICKER_FAST_FREQ_HZ > LANTERN_FLICKER_FREQ_HZ);
+  test('flicker freq is a sub-audible breathing rate (>0 and not buzzing)', () => {
     assert.ok(LANTERN_FLICKER_FREQ_HZ > 0);
+    assert.ok(LANTERN_FLICKER_FREQ_HZ < 5,
+      'slow band should stay below ~5Hz so it reads as candle wobble, not buzz');
   });
 
   test('material light cap is well above Babylon default of 4', () => {
