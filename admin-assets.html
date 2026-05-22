@@ -347,6 +347,35 @@
       return map;
     }
 
+    function stripRootMotion(animGroup, rootName = 'mixamorig:Hips') {
+      // Zero out X/Z translation keyframes on the root bone so the model
+      // animates in place instead of walking off across the scene. Keeps
+      // Y so any up-down bob in the cycle still reads. Mixamo's "Walking"
+      // and "Running" clips have root motion baked into mixamorig:Hips's
+      // position channel; this strip is the equivalent of ticking
+      // "In Place" on the Mixamo download.
+      if (!animGroup || !Array.isArray(animGroup.targetedAnimations)) return 0;
+      let stripped = 0;
+      for (const ta of animGroup.targetedAnimations) {
+        const target = ta.target;
+        const tName = target && target.name;
+        const prop  = ta.animation && ta.animation.targetProperty;
+        if (!tName || !prop) continue;
+        if (tName !== rootName && tName !== rootName.replace(/\.\d{3}$/, '')) continue;
+        if (!/position/i.test(prop)) continue;
+        const keys = ta.animation.getKeys ? ta.animation.getKeys() : null;
+        if (!keys) continue;
+        for (const k of keys) {
+          if (k.value && typeof k.value === 'object' && 'x' in k.value && 'z' in k.value) {
+            k.value.x = 0;
+            k.value.z = 0;
+          }
+        }
+        stripped++;
+      }
+      return stripped;
+    }
+
     function retargetAnimGroupOntoBase(animGroup, baseMeshes, baseSkeletons) {
       // Clone the imported animation group with a name-based target
       // converter so the clone drives the base rig instead of the
@@ -409,9 +438,11 @@
               try { g.stop(); } catch (_) {}
               const retargeted = retargetAnimGroupOntoBase(g, currentMeshes, currentSkeletons);
               if (retargeted) {
-                // Use the source filename (sans .glb) as the dropdown label
-                // so the entries read as "walking", "running", etc.
                 retargeted.name = animFile.replace(/\.glb$/i, '');
+                // Strip the root-bone X/Z translation so playback stays in
+                // place — operator wants the asset viewer to preview the
+                // animation cycle without the model walking out of frame.
+                stripRootMotion(retargeted);
                 currentAnimGroups.push(retargeted);
               }
               try { g.dispose(); } catch (_) {}

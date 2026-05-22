@@ -1700,20 +1700,13 @@ export class Renderer3D {
         if (typeof m.setEnabled === 'function') m.setEnabled(false);
         m.isPickable = false;
       }
-      // Don't start the source animation at load. Pause/play it from the
-      // blend tick instead, so the rig holds whatever frame it was on
-      // (mid-stride) when no hero entity is mid-move. With NewPaladin's
-      // single embedded animation being walking, "pause" reads as
-      // "stopped mid-step" which is what the operator wants between turns
-      // in playback. play()/pause() (not start()/stop()) resumes from the
-      // current frame on each motion event instead of snapping to frame 0.
+      // Start the embedded idle animation immediately so the rig animates
+      // from load instead of sitting in bind-pose T-pose. The swap tick
+      // (_maybeTogglePaladinAnimation) will stop()/start() between idle and
+      // walking based on motion state from there on.
       if (idleGroup && typeof idleGroup.start === 'function') {
         idleGroup.weight = 1.0;
-        // Kick the animatables into existence by starting then immediately
-        // pausing — so the first .play() in the tick resumes cleanly instead
-        // of having no animatables to resume.
         idleGroup.start(true, 1.0);
-        if (typeof idleGroup.pause === 'function') idleGroup.pause();
       }
 
       // Compute an aggregate hierarchy bbox + scale so the entire model
