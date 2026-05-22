@@ -5498,39 +5498,46 @@ export function forestTreesForHex(col, row) {
 // dawn/dusk add a warm orange tint, night a cool blue-violet, both at higher
 // intensity so the map stays readable when the sun is low or off.
 export const PHASE_LIGHT_CONFIG = Object.freeze({
+  // Operator-tuned values via /admin/lighting (2026-05-22). Dawn / dusk clear
+  // (sky) colours pushed toward warm golden tones, night brightened
+  // considerably — hemi intensity 1.16 (up from 0.21) so the moonlit map
+  // stays readable without the sun. Per-phase fogTint varies meaningfully:
+  // dusk 0.65 (light dusty veil), dawn 0.55, night 0.36, day 0.26 (deepest
+  // fog when the sun is brightest, since contrast against lit hexes is
+  // highest).
   dawn:  {
-    intensity: 0.25, color: { r: 1.00, g: 0.82, b: 0.62 }, clear: { r: 0.55, g: 0.38, b: 0.36 },
+    intensity: 0.25, color: { r: 1.00, g: 0.82, b: 0.62 }, clear: { r: 0.84, g: 0.65, b: 0.38 },
     ambient: { r: 0.42, g: 0.35, b: 0.30 },
-    fogTint: 0.20,
+    fogTint: 0.55,
     // Low sun close to the horizon — long shadows raked across the map east-to-west.
-    sun: { dir: { x: -0.85, y: -0.40, z: 0.1 }, intensity: 1.2 },
+    sun: { dir: { x: -0.85, y: -0.40, z: 0.10 }, intensity: 1.20 },
   },
   day:   {
-    intensity: 0.30, color: { r: 1.00, g: 1.00, b: 0.97 }, clear: { r: 0.55, g: 0.72, b: 0.85 },
+    intensity: 0.43, color: { r: 1.00, g: 1.00, b: 0.97 }, clear: { r: 0.78, g: 0.93, b: 0.93 },
     ambient: { r: 0.22, g: 0.22, b: 0.24 },
-    fogTint: 0.20,
+    fogTint: 0.26,
     // Tilt the day sun off vertical so shadows actually project a visible
     // footprint. A near-vertical sun (e.g. 0,-1,0) projects a near-zero
     // offset and shadows disappear into the caster itself.
-    sun: { dir: { x:  0.35, y: -0.85, z: 0.4 }, intensity: 2.0 },
+    sun: { dir: { x:  0.35, y: -0.85, z: 0.40 }, intensity: 2.00 },
   },
   dusk:  {
-    intensity: 0.25, color: { r: 1.00, g: 0.62, b: 0.48 }, clear: { r: 0.50, g: 0.32, b: 0.36 },
+    intensity: 0.25, color: { r: 1.00, g: 0.62, b: 0.48 }, clear: { r: 1.00, g: 0.81, b: 0.73 },
     ambient: { r: 0.45, g: 0.30, b: 0.28 },
-    fogTint: 0.20,
+    fogTint: 0.65,
     // Low sun mirrored from dawn — long shadows raked west-to-east.
-    sun: { dir: { x:  0.85, y: -0.40, z: 0.1 }, intensity: 1.2 },
+    sun: { dir: { x:  0.85, y: -0.40, z: 0.10 }, intensity: 1.20 },
   },
   night: {
-    intensity: 0.21, color: { r: 0.70, g: 0.78, b: 1.00 }, clear: { r: 0.12, g: 0.18, b: 0.32 },
-    // Night ambient bumped — sun is effectively off, hemi is dim, so the
-    // ambient term is the only thing carrying the floor on most surfaces
-    // (including fogged-of-war hexes whose own diffuse contribution is
-    // multiplied by FOG_TILE_DARKEN). Cool blue-violet keeps the moonlit
-    // mood while making both lit and fogged terrain readable.
-    ambient: { r: 0.42, g: 0.48, b: 0.66 },
-    fogTint: 0.20,
-    sun: { dir: { x:  0.0, y: -1.0, z: 0.1 }, intensity: 0.10 },
+    intensity: 1.16, color: { r: 0.68, g: 0.73, b: 0.86 }, clear: { r: 0.00, g: 0.05, b: 0.15 },
+    // Night ambient bumped considerably — the sun is effectively off
+    // (intensity 0.08), so the ambient + hemi terms carry the entire
+    // visibility floor for both lit and fogged tiles. Cool blue-violet
+    // ambient + the lifted hemi makes the moonlit map readable without
+    // forcing the operator to crank brightness.
+    ambient: { r: 0.58, g: 0.66, b: 0.91 },
+    fogTint: 0.36,
+    sun: { dir: { x:  0.00, y: -1.00, z: 0.10 }, intensity: 0.08 },
   },
 });
 

@@ -386,10 +386,15 @@ describe('Renderer3D polish — phase lighting brightness floor', () => {
     }
   });
 
-  test('clear-colour luminance ≥ 0.5 at night (no nearly-black sky)', () => {
+  test('night clear-colour is a deep blue sky (cool, low luminance — readability comes from hemi/ambient)', () => {
+    // Operator chose a deep-night sky on the lighting tuner (clear ≈ (0,0.05,0.15)).
+    // Tile readability is carried by hemi.intensity + ambient at night now,
+    // not by the sky tint behind them — so the previous "luminance ≥ 0.5"
+    // floor doesn't apply. Keep the colour-shape constraint: the sky must
+    // still read as a cool blue (not warm or grey).
     const cfg = PHASE_LIGHT_CONFIG.night;
-    const lum = cfg.clear.r + cfg.clear.g + cfg.clear.b;
-    assert.ok(lum > 0.5, `night clear-colour luminance ${lum.toFixed(2)} too dark`);
+    assert.ok(cfg.clear.b >= cfg.clear.r, 'night sky blue ≥ red (cool tone)');
+    assert.ok(cfg.clear.b >= cfg.clear.g, 'night sky blue ≥ green (cool tone)');
   });
 });
 
