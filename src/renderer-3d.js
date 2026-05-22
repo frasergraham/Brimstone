@@ -613,11 +613,17 @@ export class Renderer3D {
     // Both keyed by sprite id ('grass_3', 'dirt_1', 'road', …) so every tile of
     // one variant shares one Texture + one Material — ~10 unique materials for
     // the textured-terrain set across an entire Campaign-size map.
-    this._terrainTextureCache  = new Map();
-    this._terrainMaterialCache = new Map();
-    // Top-disc meshes per hex, separate from the prop array so we can hide
-    // them on fogged tiles alongside the colour cylinder swap.
-    this._tileTopDiscByKey     = new Map();
+    this._terrainTextureCache    = new Map();
+    this._terrainMaterialCache   = new Map();
+    this._terrainFogMaterialCache = new Map(); // darkened variants for fog-of-war
+    // Per-hex lookup for visual-only border-forest cylinders, so
+    // `_upgradeTileTextures` can swap their material when the atlas arrives
+    // after init (parallel to `_tileMeshByKey` for playable tiles).
+    this._borderForestHexesByKey = new Map();
+    // Border-forest band is hidden by default — the playable map reads
+    // cleanly on its own and the band's hundreds of tree cones can drag fps.
+    // Toggle live with the `F` hotkey.
+    this._borderForestHidden = true;
     // One-shot warning gate per failed sprite id, so a missing or broken
     // sprite doesn't spam the console once per redraw.
     this._textureWarnedFor     = new Set();
@@ -1136,13 +1142,25 @@ export class Renderer3D {
     // (and `_onBeforeRender` interpolates them across phase transitions).
     const sunLight = new BABYLON.DirectionalLight(
       'sun',
-      new BABYLON.Vector3(0, -1, 0.1),
+      new BABYLON.Vector3(0.35, -0.85, 0.4),
       scene,
     );
     // Lift the light's position so the shadow camera frustum sees the whole
     // map from above even when autoUpdateExtends nudges it.
     sunLight.position = new BABYLON.Vector3(0, 30, 0);
     sunLight.intensity = 1.0;
+    // Auto-compute the shadow camera's near/far so the frustum hugs the
+    // casters, then enlarge the orthographic shadow camera to cover a whole
+    // Campaign-size map plus the visual border ring. Without these, Babylon's
+    // default ortho size is ~10 world units — far smaller than our maps —
+    // and shadows just don't render outside that footprint.
+    sunLight.autoCalcShadowZBounds = true;
+    const SHADOW_HALF = 40;
+    sunLight.shadowOrthoScale = 0; // disable padding; rely on explicit ortho bounds
+    sunLight.orthoLeft   = -SHADOW_HALF;
+    sunLight.orthoRight  =  SHADOW_HALF;
+    sunLight.orthoTop    =  SHADOW_HALF;
+    sunLight.orthoBottom = -SHADOW_HALF;
 
     const shadowGenerator = new BABYLON.ShadowGenerator(SUN_SHADOW_MAP_SIZE, sunLight);
     shadowGenerator.usePercentageCloserFiltering = SUN_SHADOW_USE_PCF;
@@ -1205,12 +1223,97 @@ export class Renderer3D {
 
     // Diagnostic handle: lets the operator run `__brimstone3dDebug.ribbons()`
     // from the browser console to inspect the runtime material/light state of
-    // the road and river ribbons. No-op when `window` is undefined (tests).
+    // the road and river ribbons. `inspector()` toggles the Babylon Inspector
+    // (also bound to the `I` hotkey). No-op when `window` is undefined (tests).
     if (typeof window !== 'undefined') {
       window.__brimstone3dDebug = {
         ribbons: () => this.dumpRibbonDebug(),
         renderer: this,
+        inspector: () => this._toggleInspector(),
       };
+      if (typeof document !== 'undefined' && !this._inspectorKeyBound) {
+        this._inspectorKeyBound = true;
+        window.addEventListener('keydown', (e) => {
+          if (e.metaKey || e.ctrlKey || e.altKey) return;
+          const t = e.target;
+          const tag = (t?.tagName || '').toUpperCase();
+          if (tag === 'INPUT' || tag === 'TEXTAREA' || t?.isContentEditable) return;
+          if (e.key === 'i' || e.key === 'I') {
+            e.preventDefault();
+            this._toggleInspector();
+          } else if (e.key === 'f' || e.key === 'F') {
+            e.preventDefault();
+            this._toggleBorderForest();
+          }
+        });
+      }
+    }
+  }
+
+  /** Apply the current `_borderForestHidden` flag to every border-band mesh.
+   *  Called by `_toggleBorderForest` and by `_buildMapBorderForest` so meshes
+   *  built while the band is hidden start in the right state. */
+  _syncBorderForestVisibility() {
+    const hide = this._borderForestHidden;
+    for (const [, hex] of this._borderForestHexesByKey) hex.setEnabled(!hide);
+    for (const [, props] of this._borderPropsByKey) for (const m of props) m.setEnabled?.(!hide);
+  }
+
+  /** Toggle the visual-only border-forest band (the wilderness ring around the
+   *  playable map) on/off. The band carries a few hundred tree cones plus
+   *  textured hex cylinders, so even though it's static geometry it can drag
+   *  fps on slow GPUs. Bound to the `F` hotkey for live debugging. Hidden by
+   *  default — the playable map reads cleanly without it. */
+  _toggleBorderForest() {
+    this._borderForestHidden = !this._borderForestHidden;
+    this._syncBorderForestVisibility();
+    console.log(`[Renderer3D] border forest ${this._borderForestHidden ? 'hidden' : 'visible'}`);
+  }
+
+  /** Lazy-load the Babylon Inspector ESM bundle (pinned to the same version as
+   *  core) and toggle it on the current scene. The Inspector exposes the full
+   *  scene tree, per-mesh material/shadow panels, texture previews, and
+   *  ShadowGenerator caster/receiver lists — invaluable for diagnosing
+   *  "tile renders but is untextured / why aren't shadows painting" without
+   *  guessing. Triggered by the `I` hotkey or `__brimstone3dDebug.inspector()`. */
+  async _toggleInspector() {
+    if (!this._scene) return;
+    const layer = this._scene.debugLayer;
+    if (layer?.isVisible?.()) {
+      layer.hide();
+      return;
+    }
+    if (!this._inspectorLoaded) {
+      try {
+        // The Inspector ships as a UMD bundle that hooks into a global
+        // `window.BABYLON`. We import core as ESM (frozen namespace), so we
+        // can't assign that directly — the bundle mutates the global (adds
+        // DebugLayer etc.) and assignments to a frozen namespace throw
+        // "Attempted to assign to readonly property". Mirror the namespace
+        // into a plain writable object first; class prototypes are shared by
+        // reference so `scene.debugLayer` still wires up correctly.
+        if (!window.BABYLON) {
+          const shim = {};
+          for (const k of Object.keys(this._babylon)) shim[k] = this._babylon[k];
+          window.BABYLON = shim;
+        }
+        await new Promise((resolve, reject) => {
+          const s = document.createElement('script');
+          s.src = 'https://cdn.babylonjs.com/inspector/babylon.inspector.bundle.js';
+          s.onload = resolve;
+          s.onerror = () => reject(new Error('script load failed'));
+          document.head.appendChild(s);
+        });
+        this._inspectorLoaded = true;
+      } catch (err) {
+        console.warn('[Renderer3D] failed to load Babylon Inspector:', err);
+        return;
+      }
+    }
+    try {
+      await layer.show({ embedMode: true, overlay: true, globalRoot: document.body });
+    } catch (err) {
+      console.warn('[Renderer3D] failed to show Babylon Inspector:', err);
     }
   }
 
@@ -1518,6 +1621,7 @@ export class Renderer3D {
     // logic skips them, and the camera pan clamp below still bounds to
     // the playable extent.
     this._buildMapBorderForest();
+    this._syncBorderForestVisibility();
     // Cache map bounds in world-space XZ for the pan clamp (consumed by
     // _onBeforeRender → clampPanTarget). One-shot — map topology is immutable
     // once the game starts.
@@ -1566,31 +1670,21 @@ export class Renderer3D {
     for (const pos of borderTilePositions(this.state.tiles, bandDepth)) {
       const { x, z } = hexToWorld(pos.col, pos.row);
 
-      // Base hex cylinder — identical recipe to _buildTileMesh's prism.
-      const hex = BABYLON.MeshBuilder.CreateCylinder(
-        `border_tile_${pos.col}_${pos.row}`,
-        { tessellation: 6, height: 0.15, diameter: 2 * HEX_RADIUS_WORLD },
-        scene,
+      // Flat hex polygon — identical recipe to _buildTileMesh's flat tile.
+      const hex = this._buildFlatHexMesh(`border_tile_${pos.col}_${pos.row}`, parent, x, z);
+      // Textured forest material when the atlas is loaded, else fall back to
+      // the flat green base material — `_upgradeTileTextures` will swap the
+      // textured material in retroactively if the atlas arrives after init.
+      const syntheticTile = { type: TileType.FOREST, col: pos.col, row: pos.row };
+      const borderMat = this._terrainMaterialFor(
+        terrainSpriteIdFor(syntheticTile, pos.col, pos.row),
       );
-      hex.parent     = parent;
-      hex.position.x = x;
-      hex.position.z = z;
-      hex.position.y = 0;
-      hex.rotation.y = Math.PI / 6;
-      hex.material   = baseMat;
+      hex.material   = borderMat || baseMat;
       hex.isPickable = false;
       hex.metadata   = { kind: 'map-border-forest', col: pos.col, row: pos.row };
       this._setShadowReceiver(hex);
+      this._borderForestHexesByKey.set(hexKey(pos.col, pos.row), hex);
       const props = [hex];
-
-      // Textured top disc — synthetic forest tile drives sprite variant.
-      const syntheticTile = { type: TileType.FOREST, col: pos.col, row: pos.row };
-      const disc = this._buildTileTopDisc(syntheticTile, parent);
-      if (disc) {
-        disc.metadata = { kind: 'map-border-forest-disc', col: pos.col, row: pos.row };
-        this._setShadowReceiver(disc);
-        props.push(disc);
-      }
 
       // Forest cones — denser than in-map forest tiles.
       const trees = borderForestTreesForHex(pos.col, pos.row);
@@ -1678,21 +1772,12 @@ export class Renderer3D {
     const scene   = this._scene;
     const { x, z } = hexToWorld(tile.col, tile.row);
 
-    // ── Base hex prism ────────────────────────────────────────────────────
+    // ── Base hex tile (flat, single face, no side walls) ─────────────────
+    // Open-faced pointy-top hex polygon at Y=0, tightly tileable with no
+    // cylinder rim to produce dark seams at the perimeter.
     const baseColor = tileColorFor(tile);
-    const hex = BABYLON.MeshBuilder.CreateCylinder(
-      `tile_${tile.col}_${tile.row}`,
-      { tessellation: 6, height: 0.15, diameter: 2 * HEX_RADIUS_WORLD },
-      scene,
-    );
-    hex.parent     = parent;
-    hex.position.x = x;
-    hex.position.z = z;
-    hex.position.y = 0;
-    // Pointy-top alignment: default cylinder has a vertex on +X; rotate 30°
-    // so vertices land at ±Z (visually aligns with the odd-row offset).
-    hex.rotation.y = Math.PI / 6;
-    hex.material   = this._materialFor(baseColor);
+    const hex = this._buildFlatHexMesh(`tile_${tile.col}_${tile.row}`, parent, x, z);
+    hex.material   = this._tileMaterialFor(tile);
     hex.metadata   = { kind: 'tile', col: tile.col, row: tile.row, baseColor };
     // Terrain cylinder receives shadows from standees / trees / buildings /
     // bridges (cast registrations below).
@@ -1702,16 +1787,6 @@ export class Renderer3D {
     this._tileMeshByKey.set(tkey, hex);
     const props = [];
     const trackProp = (m) => { props.push(m); };
-
-    // ── Textured top face (when a terrain sprite exists) ─────────────────
-    const topDisc = this._buildTileTopDisc(tile, parent);
-    if (topDisc) {
-      // The disc sits just above the cylinder top and is the visually-
-      // dominant terrain surface, so it's the one shadows actually paint on.
-      this._setShadowReceiver(topDisc);
-      this._tileTopDiscByKey.set(tkey, topDisc);
-      trackProp(topDisc);
-    }
 
     // ── Forests: a small cluster of varied cones in the unified tile-slot
     // positions, leaving the centre slot clear for an entity standee.
@@ -2097,71 +2172,157 @@ export class Renderer3D {
 
   /** Cached textured StandardMaterial for one terrain sprite id. Returns null
    *  if the texture isn't available — callers fall back to the solid-colour
-   *  material returned by `_materialFor` for the tile's colour. */
-  _terrainMaterialFor(spriteId) {
+   *  material returned by `_materialFor` for the tile's colour.
+   *
+   *  `fogged: true` returns a darkened variant (diffuseColor multiplies the
+   *  texture) for use under fog of war. Two separate cache entries per sprite
+   *  so the bright and dark forms can coexist without mutation. */
+  _terrainMaterialFor(spriteId, { fogged = false } = {}) {
     if (!spriteId) return null;
-    if (this._terrainMaterialCache.has(spriteId)) return this._terrainMaterialCache.get(spriteId);
+    const cache = fogged ? this._terrainFogMaterialCache : this._terrainMaterialCache;
+    if (cache.has(spriteId)) return cache.get(spriteId);
     const tex = this._terrainTextureFor(spriteId);
     if (!tex) return null;
     const BABYLON = this._babylon;
-    const mat = new BABYLON.StandardMaterial(`terrain_${spriteId}`, this._scene);
+    const name = fogged ? `terrainFog_${spriteId}` : `terrain_${spriteId}`;
+    const mat = new BABYLON.StandardMaterial(name, this._scene);
     mat.diffuseTexture = tex;
     mat.specularColor  = new BABYLON.Color3(0.04, 0.04, 0.04); // matte, picks up phase light
-    this._terrainMaterialCache.set(spriteId, mat);
+    if (fogged) {
+      const d = FOG_TILE_DARKEN;
+      mat.diffuseColor = new BABYLON.Color3(d, d, d);
+    }
+    cache.set(spriteId, mat);
     return mat;
   }
 
-  /** Build (and return) a thin hex-shaped disc that sits flush with the top of
-   *  the tile cylinder, textured with the matching terrain sprite. Returns
-   *  null for tile types that have no sprite (road/river/bridge) or when the
-   *  tilemap isn't ready — the solid-colour cylinder then carries the look. */
-  _buildTileTopDisc(tile, parent) {
+  /** Pick the right material for a tile cylinder — textured terrain material
+   *  when the sprite + atlas are available, otherwise the solid-colour base
+   *  material. Called by `_buildTileMesh` at construction time and by
+   *  `_upgradeTileTextures` when the atlas finishes loading after init. */
+  _tileMaterialFor(tile, { fogged = false } = {}) {
     const spriteId = terrainSpriteIdFor(tile, tile.col, tile.row);
-    if (!spriteId) return null;
-    const mat = this._terrainMaterialFor(spriteId);
-    if (!mat) return null;
-
-    const BABYLON = this._babylon;
-    const { x, z } = hexToWorld(tile.col, tile.row);
-    const disc = BABYLON.MeshBuilder.CreateDisc(
-      `tiletop_${tile.col}_${tile.row}`,
-      { tessellation: 6, radius: HEX_RADIUS_WORLD * TERRAIN_DISC_RADIUS_MUL },
-      this._scene,
-    );
-    disc.parent     = parent;
-    disc.position.x = x;
-    disc.position.z = z;
-    // Cylinder top is at height/2 = 0.075; lift the disc by a tiny ε so the
-    // textured face wins the depth fight against the cylinder's coloured top.
-    disc.position.y = TERRAIN_DISC_Y_OFFSET;
-    // Lay the disc flat (face up along +Y) and align its pointy-top hex
-    // edges with the underlying cylinder.
-    disc.rotation.x = -Math.PI / 2;
-    disc.rotation.y =  Math.PI / 6;
-    disc.material   = mat;
-    disc.isPickable = false; // let the cylinder underneath receive clicks
-    return disc;
+    const terrainMat = spriteId ? this._terrainMaterialFor(spriteId, { fogged }) : null;
+    if (terrainMat) return terrainMat;
+    const baseColor = tileColorFor(tile);
+    return fogged ? this._fogMaterialFor(baseColor) : this._materialFor(baseColor);
   }
 
-  /** Retro-fit textured discs onto an already-built map. No-op when called
-   *  before the map exists; safe to call repeatedly (skips tiles that already
-   *  have a disc). Used by `loadImages` when the tilemap finishes loading
-   *  after `_initBabylon` has already laid down solid-colour tiles. */
+  /** Build a flat, pointy-top hexagonal tile mesh at world (x, z), lying in the
+   *  XZ plane at Y=0. One face only — no side walls — so adjacent hexes tile
+   *  tightly with no z-fight at the seams and no cylinder-rim artefacts. UVs
+   *  are written directly to map the terrain texture across the hex's bounding
+   *  box (with a small inset so the atlas-sprite gutter pixels are never
+   *  sampled). Triangulated as a fan from the centre vertex out to six rim
+   *  vertices at 30°, 90°, 150°, 210°, 270°, 330°. */
+  _buildFlatHexMesh(name, parent, x, z) {
+    const BABYLON = this._babylon;
+    const R = HEX_RADIUS_WORLD;
+    const SQRT3 = Math.sqrt(3);
+    const inset = 0.04;
+    const uvScale = 1 - 2 * inset;
+    const positions = [0, 0, 0];
+    const uvs = [0.5, 0.5];
+    const indices = [];
+    for (let i = 0; i < 6; i++) {
+      const angle = Math.PI / 6 + i * Math.PI / 3; // pointy-top: vertex at +Z when i=1
+      const vx = R * Math.cos(angle);
+      const vz = R * Math.sin(angle);
+      positions.push(vx, 0, vz);
+      const u = 0.5 + vx / (R * SQRT3);     // pointy-top bounding box: x ∈ [-R√3/2, R√3/2]
+      const v = 0.5 + 0.5 * (vz / R);       //                          z ∈ [-R, R]
+      uvs.push(inset + uvScale * u, inset + uvScale * v);
+    }
+    for (let i = 0; i < 6; i++) indices.push(0, i + 1, ((i + 1) % 6) + 1);
+
+    const mesh = new BABYLON.Mesh(name, this._scene);
+    const vd = new BABYLON.VertexData();
+    vd.positions = positions;
+    vd.indices   = indices;
+    vd.uvs       = uvs;
+    vd.normals   = [];
+    BABYLON.VertexData.ComputeNormals(positions, indices, vd.normals);
+    vd.applyToMesh(mesh);
+    mesh.parent     = parent;
+    mesh.position.x = x;
+    mesh.position.z = z;
+    mesh.position.y = 0;
+    return mesh;
+  }
+
+  /** Rewrite a hex cylinder's top-cap UVs so the terrain texture spans the hex's
+   *  bounding box rather than being mapped into the inscribed circle (the default
+   *  for `CreateCylinder` caps — which leaves the six hex corners sampling
+   *  outside [0,1] and rendering as black).
+   *
+   *  The mesh is rotated by +π/6 around Y at build time (flat-top cylinder →
+   *  pointy-top hex in world). We compose that rotation into the UV mapping so
+   *  the texture's "north" (v=1) lands on the hex's pointy +Z vertex rather
+   *  than 30° off to the side. For each top-cap vertex (local y ≈ +halfHeight),
+   *  rotate the local (x, z) by +π/6 into world frame, then map the pointy-top
+   *  bounding box [-R·√3/2 .. R·√3/2] × [-R .. R] to [0..1] × [0..1]. Cap centre
+   *  stays at (0.5, 0.5). Side / bottom UVs are left untouched. */
+  _remapHexTopCapUVs(hex, halfHeight) {
+    const BABYLON = this._babylon;
+    if (!BABYLON || !hex) return;
+    const positions = hex.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+    const uvs       = hex.getVerticesData(BABYLON.VertexBuffer.UVKind);
+    if (!positions || !uvs) return;
+    const next = uvs.slice();
+    const R    = HEX_RADIUS_WORLD;
+    const SQRT3 = Math.sqrt(3);
+    const cos = SQRT3 / 2, sin = 0.5; // rotation by +π/6 around Y
+    const eps  = 0.001;
+    // Inset the UV sample range a few % away from the texture's rim. The
+    // atlas sprite has transparent / dark padding at its edges (sprite-sheet
+    // gutters), and sampling at UV ∈ {0, 1} picks those pixels up — visible
+    // as thin black seams at every hex perimeter.
+    const inset = 0.04;
+    const scale = 1 - 2 * inset;
+    for (let i = 0; i < positions.length / 3; i++) {
+      const y = positions[i * 3 + 1];
+      if (Math.abs(y - halfHeight) > eps) continue;
+      const xl = positions[i * 3];
+      const zl = positions[i * 3 + 2];
+      // Babylon Y-rotation: world.x = x·cos + z·sin, world.z = −x·sin + z·cos
+      const xw = xl * cos + zl * sin;
+      const zw = -xl * sin + zl * cos;
+      const u = 0.5 + xw / (R * SQRT3);
+      const v = 0.5 + 0.5 * (zw / R);
+      next[i * 2]     = inset + scale * u;
+      next[i * 2 + 1] = inset + scale * v;
+    }
+    // Use setVerticesData (not updateVerticesData): CreateCylinder builds a
+    // non-updatable VBO by default, on which updateVerticesData silently
+    // no-ops. setVerticesData forces a fresh writable buffer.
+    hex.setVerticesData(BABYLON.VertexBuffer.UVKind, next);
+  }
+
+  /** Walk the playable tiles and re-assign each cylinder material now that the
+   *  atlas has loaded. No-op when called before the map exists; safe to call
+   *  repeatedly (cached materials are reused). Used by `loadImages` when the
+   *  tilemap arrives after `_initBabylon` has already laid down solid-colour
+   *  tiles. Border-forest cylinders are upgraded in the same pass. */
   _upgradeTileTextures() {
     if (!this._mapBuilt || !this._mapRoot || !this._scene || !this._tilemapImg) return;
     if (!this.state?.tiles) return;
     for (const tile of this.state.tiles.values()) {
-      const tkey = hexKey(tile.col, tile.row);
-      if (this._tileTopDiscByKey.has(tkey)) continue;
-      const disc = this._buildTileTopDisc(tile, this._mapRoot);
-      if (!disc) continue;
-      this._tileTopDiscByKey.set(tkey, disc);
-      // Honor existing fog state: _applyFogVeil's diff loop skips already-fogged
-      // tiles, so a disc created after fog was applied would stay visible.
-      if (this._fogActiveSet.has(tkey)) disc.isVisible = false;
-      const props = this._tilePropsByKey.get(tkey);
-      if (props) props.push(disc);
-      else this._tilePropsByKey.set(tkey, [disc]);
+      const tkey = tile.col + ',' + tile.row;
+      const hex = this._tileMeshByKey.get(tkey);
+      if (!hex) continue;
+      const isFogged = this._fogActiveSet.has(tkey);
+      hex.material = this._tileMaterialFor(tile, { fogged: isFogged });
+    }
+    // Border-forest cylinders share the FOREST sprite pool but live in a
+    // separate map — upgrade them too so the texture appears around the edge.
+    for (const [, hex] of this._borderForestHexesByKey) {
+      const md = hex.metadata;
+      if (!md) continue;
+      const syntheticTile = { type: TileType.FOREST, col: md.col, row: md.row };
+      const mat = this._terrainMaterialFor(
+        terrainSpriteIdFor(syntheticTile, md.col, md.row),
+      );
+      if (mat) hex.material = mat;
     }
   }
 
@@ -3878,9 +4039,14 @@ export class Renderer3D {
   }
 
   _setTileFogged(hexK, tileMesh, fogged) {
-    const baseColor = tileMesh.metadata?.baseColor;
-    if (!baseColor) return;
-    tileMesh.material = fogged ? this._fogMaterialFor(baseColor) : this._materialFor(baseColor);
+    const md = tileMesh.metadata;
+    if (!md?.baseColor) return;
+    const tile = this.state?.tiles?.get(hexK);
+    // When we have the tile in state we can pick a textured fog material;
+    // otherwise (shouldn't happen for playable hexes) fall back to colour-only.
+    tileMesh.material = tile
+      ? this._tileMaterialFor(tile, { fogged })
+      : (fogged ? this._fogMaterialFor(md.baseColor) : this._materialFor(md.baseColor));
     const props = this._tilePropsByKey.get(hexK);
     if (props) for (const p of props) {
       // Terrain features (forest cones, building boxes/roofs) opt out via
@@ -4643,22 +4809,29 @@ export function forestTreesForHex(col, row) {
  *  DirectionalLight.direction (low-angle warm at dawn/dusk, near-overhead at
  *  day, irrelevant at night); sun.intensity → DirectionalLight.intensity
  *  (drives the strength of cast shadows). */
+// Hemi (ambient fill) is kept low so shadows from the directional sun read as
+// real dark patches rather than getting washed out — shadows only darken the
+// sun's contribution, so a strong hemi makes them invisible. Sun is boosted to
+// keep the overall brightness similar to pre-shadow tuning.
 export const PHASE_LIGHT_CONFIG = Object.freeze({
   dawn:  {
-    intensity: 1.00, color: { r: 1.00, g: 0.82, b: 0.62 }, clear: { r: 0.55, g: 0.38, b: 0.36 },
-    sun: { dir: { x: -0.6, y: -0.7, z: 0.1 }, intensity: 0.6 },
+    intensity: 0.25, color: { r: 1.00, g: 0.82, b: 0.62 }, clear: { r: 0.55, g: 0.38, b: 0.36 },
+    sun: { dir: { x: -0.6, y: -0.7, z: 0.1 }, intensity: 1.2 },
   },
   day:   {
-    intensity: 1.20, color: { r: 1.00, g: 1.00, b: 0.97 }, clear: { r: 0.55, g: 0.72, b: 0.85 },
-    sun: { dir: { x:  0.0, y: -1.0, z: 0.1 }, intensity: 1.0 },
+    intensity: 0.30, color: { r: 1.00, g: 1.00, b: 0.97 }, clear: { r: 0.55, g: 0.72, b: 0.85 },
+    // Tilt the day sun off vertical so shadows actually project a visible
+    // footprint. A near-vertical sun (e.g. 0,-1,0) projects a near-zero
+    // offset and shadows disappear into the caster itself.
+    sun: { dir: { x:  0.35, y: -0.85, z: 0.4 }, intensity: 2.0 },
   },
   dusk:  {
-    intensity: 1.00, color: { r: 1.00, g: 0.62, b: 0.48 }, clear: { r: 0.50, g: 0.32, b: 0.36 },
-    sun: { dir: { x:  0.6, y: -0.7, z: 0.1 }, intensity: 0.6 },
+    intensity: 0.25, color: { r: 1.00, g: 0.62, b: 0.48 }, clear: { r: 0.50, g: 0.32, b: 0.36 },
+    sun: { dir: { x:  0.6, y: -0.7, z: 0.1 }, intensity: 1.2 },
   },
   night: {
-    intensity: 0.85, color: { r: 0.70, g: 0.78, b: 1.00 }, clear: { r: 0.12, g: 0.18, b: 0.32 },
-    sun: { dir: { x:  0.0, y: -1.0, z: 0.1 }, intensity: 0.05 },
+    intensity: 0.21, color: { r: 0.70, g: 0.78, b: 1.00 }, clear: { r: 0.12, g: 0.18, b: 0.32 },
+    sun: { dir: { x:  0.0, y: -1.0, z: 0.1 }, intensity: 0.10 },
   },
 });
 
@@ -4690,7 +4863,7 @@ export const SUN_SHADOW_FILTERING_QUALITY = 1;
 export const SUN_SHADOW_BIAS = 0.005;
 /** 0 = pitch-black shadow, 1 = no shadow. 0.4 gives a strong but not
  *  oppressive shadow — terrain underneath still reads. */
-export const SUN_SHADOW_DARKNESS = 0.4;
+export const SUN_SHADOW_DARKNESS = 0;
 
 /** Look up a phase's lighting config. Falls back to DAY if the phase is
  *  unrecognised (defensive — keeps the renderer usable on weird save loads). */

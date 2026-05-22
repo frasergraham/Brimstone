@@ -39,34 +39,40 @@ import { hexKey } from '../src/hex.js';
 // ── Phase → light config map ─────────────────────────────────────────────────
 
 describe('Renderer3D — getPhaseLightConfig', () => {
-  test('dawn = warm amber, mid intensity', () => {
+  // Hemi intensity values are now small (sub-1) so directional-sun shadows
+  // read as real darkening; readability is carried by the sun, which is
+  // boosted above 1. Phase identity tests below assert *colour* and ordering,
+  // not specific intensity magnitudes (taste-level, tracked separately).
+  test('dawn = warm amber', () => {
     const c = getPhaseLightConfig(Phase.DAWN);
-    assert.ok(c.intensity >= 0.9 && c.intensity <= 1.1, 'dawn intensity in playable band');
+    assert.ok(c.intensity > 0, 'dawn hemi intensity positive');
     assert.equal(c.color.r, 1.00);
     assert.ok(c.color.g > 0.6 && c.color.g < 0.9, 'dawn green channel mid');
     assert.ok(c.color.b < c.color.g,             'dawn blue channel lowest');
   });
 
-  test('day = white-ish, full intensity', () => {
+  test('day = white-ish, sun brighter than hemi', () => {
     const c = getPhaseLightConfig(Phase.DAY);
-    assert.ok(c.intensity > 1.0, 'day intensity > 1');
+    assert.ok(c.intensity > 0, 'day hemi intensity positive');
+    assert.ok(c.sun.intensity > c.intensity,
+      `day sun ${c.sun.intensity} should outshine hemi ${c.intensity}`);
     assert.ok(c.color.r >= 0.95 && c.color.g >= 0.95 && c.color.b >= 0.9);
   });
 
-  test('dusk = orange-red, mid intensity (similar to dawn)', () => {
+  test('dusk = orange-red (similar tone to dawn)', () => {
     const c = getPhaseLightConfig(Phase.DUSK);
-    assert.ok(c.intensity >= 0.9 && c.intensity <= 1.1, 'dusk intensity in playable band');
+    assert.ok(c.intensity > 0, 'dusk hemi intensity positive');
     assert.equal(c.color.r, 1.00);
     assert.ok(c.color.g < 0.7, 'dusk green darker than dawn');
     assert.ok(c.color.b < c.color.g, 'dusk blue lowest');
   });
 
-  test('night = cool blue, lower intensity than day but still readable', () => {
+  test('night = cool blue, sun effectively off', () => {
     const c = getPhaseLightConfig(Phase.NIGHT);
     assert.ok(c.intensity < getPhaseLightConfig(Phase.DAY).intensity,
-      'night dimmer than day');
-    assert.ok(c.intensity >= 0.7,
-      `night intensity ${c.intensity} must stay above 0.7 for terrain readability`);
+      'night hemi dimmer than day');
+    assert.ok(c.sun.intensity < 0.2,
+      `night sun ${c.sun.intensity} should be near-zero so the moon/lanterns read`);
     // Cool tone: blue channel dominates red, green sits between.
     assert.ok(c.color.b > c.color.r, 'night blue > red');
     assert.ok(c.color.r < c.color.b, 'night red channel cooler than blue');

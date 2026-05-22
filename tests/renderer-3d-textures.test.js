@@ -300,22 +300,20 @@ describe('Renderer3D consumers — must call loadImages() to populate the atlas'
     );
   });
 
-  test('_buildTileTopDisc returns null when _tilemapImg is absent (contract that justifies the loadImages requirement)', () => {
+  test('_terrainMaterialFor returns null when _tilemapImg is absent (contract that justifies the loadImages requirement)', () => {
     // Pin the failure mode that makes the missing-loadImages bug invisible:
-    // _buildTileTopDisc silently returns null when the atlas isn't loaded,
-    // which means the renderer happily produces a map with no textured
-    // discs at all rather than throwing or warning. That silent fallback
-    // is what made it possible for a Renderer3D consumer (the preview
-    // tool) to ship without loadImages and look "fine" except for the
-    // missing terrain art.
+    // _terrainMaterialFor silently returns null when the atlas isn't loaded,
+    // which means tile cylinders happily fall back to solid colour rather
+    // than throwing or warning. That silent fallback is what made it
+    // possible for a Renderer3D consumer (the preview tool) to ship without
+    // loadImages and look "fine" except for the missing terrain art.
     const fakeCanvas = { parentElement: null, width: 800, height: 600, addEventListener() {} };
     const inst = new Renderer3D(fakeCanvas, { tiles: new Map() });
     // No _tilemapImg, no _spriteRects, no _babylon, no _scene — exactly the
     // state a freshly-constructed Renderer3D is in before loadImages runs.
-    const tile = { type: TileType.GRASS, col: 0, row: 0 };
-    const disc = inst._buildTileTopDisc(tile, /* parent */ null);
-    assert.equal(disc, null,
-      '_buildTileTopDisc must return null without an atlas — the silent ' +
+    const mat = inst._terrainMaterialFor('grass_1');
+    assert.equal(mat, null,
+      '_terrainMaterialFor must return null without an atlas — the silent ' +
       'fallback that makes the missing-loadImages bug user-visible');
   });
 });

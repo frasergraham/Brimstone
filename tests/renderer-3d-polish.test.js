@@ -372,11 +372,17 @@ describe('Renderer3D polish — SELECTION_FOCUS_RADIUS', () => {
 // taste and tracked by the existing assertions in renderer-3d-atmosphere.test.js.
 
 describe('Renderer3D polish — phase lighting brightness floor', () => {
-  test('every phase intensity ≥ 0.8 so terrain stays legible', () => {
+  test('every phase intensity > 0 so the hemi fill keeps shadowed areas legible', () => {
+    // Hemi intensity is intentionally low across the board now — shadows from
+    // the directional sun only darken the sun's contribution, so a strong
+    // hemi washes them out. We still need a non-zero fill so unlit faces
+    // don't go pitch black.
     for (const phase of [Phase.DAWN, Phase.DAY, Phase.DUSK, Phase.NIGHT]) {
       const cfg = getPhaseLightConfig(phase);
-      assert.ok(cfg.intensity >= 0.8,
-        `phase ${phase} intensity ${cfg.intensity} below readability floor (0.8)`);
+      assert.ok(cfg.intensity > 0,
+        `phase ${phase} intensity ${cfg.intensity} must be positive`);
+      assert.ok(cfg.intensity < cfg.sun.intensity * 3 || phase === Phase.NIGHT,
+        `phase ${phase} hemi ${cfg.intensity} should not swamp the sun ${cfg.sun.intensity}`);
     }
   });
 

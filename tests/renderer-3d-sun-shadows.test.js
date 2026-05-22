@@ -33,10 +33,16 @@ describe('Renderer3D — sunDirectionForPhase', () => {
       'dawn has a meaningful horizontal component (low sun)');
   });
 
-  test('day sun is near-overhead — dominant -Y', () => {
+  test('day sun is dominantly downward but tilted enough to cast visible shadows', () => {
     const d = sunDirectionForPhase(Phase.DAY);
-    assert.equal(d.x, 0, 'day x = 0 (sun directly overhead in X)');
-    assert.equal(d.y, -1, 'day y = -1 (straight down)');
+    // -Y must dominate so noon reads as "from above"...
+    assert.ok(d.y < -0.7, `day y=${d.y} must be predominantly downward (< -0.7)`);
+    // ...but not be a perfect (0,-1,0) vector — a perfectly vertical sun
+    // projects a near-zero shadow offset and shadows disappear into the
+    // caster itself. Require a meaningful lateral component on at least one
+    // horizontal axis so the operator sees a visible shadow footprint.
+    const lateral = Math.hypot(d.x, d.z);
+    assert.ok(lateral > 0.2, `day sun lateral ${lateral.toFixed(2)} must be > 0.2 so shadows actually project`);
   });
 
   test('dusk mirrors dawn — shines from the west', () => {
@@ -65,18 +71,23 @@ describe('Renderer3D — sunDirectionForPhase', () => {
 describe('Renderer3D — sunIntensityForPhase', () => {
   test('day sun is brightest', () => {
     const day = sunIntensityForPhase(Phase.DAY);
-    assert.equal(day, 1.0);
+    // Boosted above 1 so the directional sun dominates the (low) hemi fill
+    // and cast shadows read as real dark patches instead of pale tints.
+    assert.ok(day >= 1.5, `day intensity ${day} should be ≥ 1.5`);
   });
 
   test('dawn and dusk are mid-intensity (matching golden-hour feel)', () => {
-    assert.equal(sunIntensityForPhase(Phase.DAWN), 0.6);
-    assert.equal(sunIntensityForPhase(Phase.DUSK), 0.6);
+    const dawn = sunIntensityForPhase(Phase.DAWN);
+    const dusk = sunIntensityForPhase(Phase.DUSK);
+    assert.equal(dawn, dusk);
+    assert.ok(dawn > 0.5 && dawn < sunIntensityForPhase(Phase.DAY),
+      `dawn/dusk intensity ${dawn} should sit between night and day`);
   });
 
   test('night is effectively off — close to zero so shadows fade out', () => {
     const night = sunIntensityForPhase(Phase.NIGHT);
     assert.ok(night >= 0, 'night intensity non-negative');
-    assert.ok(night < 0.1, `night intensity should fade to near-zero, got ${night}`);
+    assert.ok(night < 0.2, `night intensity should fade to near-zero, got ${night}`);
   });
 
   test('day > dawn = dusk > night ordering', () => {
@@ -121,11 +132,9 @@ describe('Renderer3D — shadow generator constants', () => {
       `bias ${SUN_SHADOW_BIAS} should be in (0, 0.05)`);
   });
 
-  test('darkness sits in (0, 1) — visible but not pitch black', () => {
-    assert.ok(SUN_SHADOW_DARKNESS > 0 && SUN_SHADOW_DARKNESS < 1,
-      `darkness ${SUN_SHADOW_DARKNESS} out of (0, 1)`);
-    assert.ok(SUN_SHADOW_DARKNESS <= 0.5,
-      'darkness ≤ 0.5 so shadows read strongly');
+  test('darkness sits in [0, 0.5] — strong cast shadows', () => {
+    assert.ok(SUN_SHADOW_DARKNESS >= 0 && SUN_SHADOW_DARKNESS <= 0.5,
+      `darkness ${SUN_SHADOW_DARKNESS} out of [0, 0.5]`);
   });
 });
 
