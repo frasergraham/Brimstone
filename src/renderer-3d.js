@@ -1188,9 +1188,8 @@ export class Renderer3D {
     this.aiDebugOverlay     = null;
     this.insetLeft          = 0;
     this.insetRight         = 0;
-    this.hoveredHex         = null;
-    this.selectedHex        = null;
-    this.selectedEntityId   = null;
+    // Selection + hover state live on `_selection` / `_hover` (initialised by
+    // installOverlayShims above); the legacy field proxies were retired in PR 3.
     // 3D camera drag mode: 'pan' (default) or 'rotate'. UI toggle button
     // flips this via `setCameraDragMode`. Pinch / wheel always zooms.
     this.cameraDragMode     = 'pan';
@@ -1441,6 +1440,13 @@ export class Renderer3D {
     this._highlightMeshes      = [];                  // disposable hex overlay meshes
     this._highlightMatCache    = new Map();           // rgba-string → cached StandardMaterial
     this._highlightSig         = '';                  // change-detect signature
+    // Selection + hover outline rings (overlay layer `selection`). Tube rings,
+    // owner-tinted for the selection, white-ish for the hover. Rebuilt by
+    // `_syncOverlays` with their own signature so they don't churn the
+    // highlight-disc diff above.
+    this._selectionOverlayMeshes  = [];               // disposable selection/hover ring meshes
+    this._selectionOverlayMatCache = new Map();       // "css|emissiveMul" → cached StandardMaterial
+    this._selectionOverlaySig      = '';              // change-detect signature
     // ── Plan ghost (walking previewer) ─────────────────────────────────────
     // For each entity with at least one MOVE step in `planGhostSteps`, a
     // translucent standee clone walks its path on a loop while planning. The
@@ -5714,10 +5720,11 @@ export class Renderer3D {
   // ─── Phase 3: entities & selection ─────────────────────────────────────────
   //
   // Standees are billboarded textured planes sitting on solid coloured discs,
-  // one pair per entity. Selection state lives in `this.selectedEntityId` —
-  // written from ui.js _selectEntity() via the renderer-agnostic interface
-  // (the 2D path reads the same property in its draw loop). draw() runs the
-  // diff every redraw; standees are added/removed/moved incrementally.
+  // one pair per entity. Selection state lives in `this._selection.entityId` —
+  // written from ui.js _selectEntity() via `setSelection()` on the
+  // renderer-agnostic interface (the 2D path reads the same state in its draw
+  // loop). draw() runs the diff every redraw; standees are added/removed/moved
+  // incrementally.
 
   /** Compute a stable "owner key" we can use to colour a standee's base disc.
    *  Prefer the entity's per-player colour (`e.color` is set by the game on
@@ -6054,7 +6061,7 @@ export class Renderer3D {
         // Newly-built outline starts on the thin ring (if local); only flip to
         // thick if the unit is the current selection (rare — usually selection
         // happens after the outline already exists).
-        if (this.selectedEntityId === e.id) {
+        if (this._selection?.entityId === e.id) {
           outline.thin.isVisible  = false;
           outline.thick.isVisible = true;
         }
@@ -6070,7 +6077,7 @@ export class Renderer3D {
         // hot-seat two-player) and a recruited survivor can change ownership.
         if (outline.isLocal !== isLocal) {
           outline.isLocal = isLocal;
-          if (this.selectedEntityId !== e.id) {
+          if (this._selection?.entityId !== e.id) {
             outline.thin.isVisible = isLocal;
           }
         }
@@ -6320,14 +6327,14 @@ export class Renderer3D {
     }
   }
 
-  /** Apply the renderer's selectedEntityId: drive the per-unit hex outline
-   *  (swap thin → thick) and slide the camera target to the new selection.
+  /** Apply the renderer's selection (`this._selection.entityId`): drive the
+   *  per-unit hex outline (swap thin → thick) and slide the camera to it.
    *  The standee silhouette itself no longer mutates on selection — the
    *  ground-level base disc was retired and the thick hex outline is the
    *  selection signal now. */
   _applySelectionAndFocus() {
     if (!this._scene) return;
-    const newId  = this.selectedEntityId ?? null;
+    const newId  = this._selection?.entityId ?? null;
     const prevId = this._lastSelectedEntityId;
     if (newId === prevId) return;
     // Per-unit hex outline: swap the previously-selected unit back to its
@@ -7235,6 +7242,11 @@ export class Renderer3D {
   _syncOverlays() {
     if (!this._scene || !this._babylon) return;
 
+    // Selection + hover outline rings (layer `selection`). Has its own
+    // signature/early-out, so call it before the highlight-disc early-returns
+    // below skip the rest of this method.
+    this._syncSelectionOverlays();
+
     // Fill overlays in the highlight-disc layer, alphabetical by id so the
     // nested Y for each is stable across frames.
     const ids = [];
@@ -7279,6 +7291,110 @@ export class Renderer3D {
         this._highlightMeshes.push(ribbon);
       }
     });
+  }
+
+  /**
+   * Build the selection + hover outline rings from the unified overlay map.
+   * Walks `kind:'outline'` overlays in the `selection` layer (ids 'hover' and
+   * 'selection'), laying one tube ring per tagged hex. The selection ring is
+   * owner-tinted (resolved from `meta.entityId`) with a glow-grade emissive;
+   * the hover ring is a subtle white-ish thin tube. Alphabetical id order →
+   * 'selection' nests above 'hover' in the Y band so it reads on top.
+   *
+   * Signature-diffed like `_syncOverlays`: selection / hover only change on
+   * click + mouse-move events, so the rebuild is skipped when nothing moved.
+   * The signature folds in the resolved owner colour (overlaySignature ignores
+   * `meta`) so retargeting the selection to another unit on the same hex still
+   * rebuilds with the new tint.
+   */
+  _syncSelectionOverlays() {
+    if (!this._scene || !this._babylon) return;
+
+    const ids = [];
+    for (const [id, ov] of this._overlays) {
+      if (ov.kind === 'outline' && ov.layer === 'selection') ids.push(id);
+    }
+    ids.sort();
+
+    // Resolve each overlay's draw colour up front so it folds into the signature.
+    const resolved = ids.map((id, i) => {
+      const ov = this._overlays.get(id);
+      const entityId = ov.meta?.entityId ?? null;
+      const entity = entityId != null
+        ? this.state?.entities?.find(e => e.id === entityId) : null;
+      const glow = !!ov.style?.glow;
+      let rgb, alpha;
+      if (entity) {
+        rgb = cssHexToRgb01(unitHexOutlineColor(entity));
+        alpha = 1;
+      } else {
+        const css = ov.style?.color || (glow ? '#f5c842' : 'rgba(255,255,255,0.3)');
+        if (css.startsWith('#')) { rgb = cssHexToRgb01(css); alpha = 1; }
+        else { const p = parseRgba01(css); rgb = [p[0], p[1], p[2]]; alpha = p[3]; }
+      }
+      return { id, ov, glow, rgb, alpha, y: yForLayer('selection', i) };
+    });
+
+    let sig = '';
+    for (const r of resolved) {
+      sig += `${r.id}@${r.y}:${overlaySignature(r.ov)}:${r.rgb.join(',')}:${r.alpha}|`;
+    }
+    if (sig === this._selectionOverlaySig) return;
+    this._selectionOverlaySig = sig;
+
+    for (const mesh of this._selectionOverlayMeshes) mesh.dispose();
+    this._selectionOverlayMeshes = [];
+    if (resolved.length === 0) return;
+
+    const BABYLON = this._babylon;
+    for (const { id, ov, glow, rgb, alpha, y } of resolved) {
+      const tube = glow ? UNIT_HEX_OUTLINE_THICK_TUBE : UNIT_HEX_OUTLINE_THIN_TUBE;
+      const emissiveMul = glow
+        ? UNIT_HEX_OUTLINE_GLOW_EMISSIVE_MUL
+        : UNIT_HEX_OUTLINE_THIN_EMISSIVE_MUL;
+      const material = this._selectionOverlayMaterialFor(rgb, alpha, emissiveMul);
+      for (const key of Array.from(ov.hexes).sort()) {
+        const [col, row] = key.split(',').map(Number);
+        if (!Number.isFinite(col) || !Number.isFinite(row)) continue;
+        const path = unitHexOutlineRingPath(undefined, y).map(
+          p => new BABYLON.Vector3(p.x, p.y, p.z),
+        );
+        const ring = BABYLON.MeshBuilder.CreateTube(`selOverlay_${id}_${col}_${row}`, {
+          path,
+          radius:          tube,
+          tessellation:    6,
+          sideOrientation: BABYLON.Mesh.DOUBLESIDE,
+        }, this._scene);
+        const { x, z } = hexToWorld(col, row);
+        ring.position.x     = x;
+        ring.position.z     = z;
+        ring.parent         = this._mapRoot;
+        ring.material       = material;
+        ring.isPickable     = false;
+        ring.renderingGroupId = 0;
+        this._selectionOverlayMeshes.push(ring);
+      }
+    }
+  }
+
+  /** Lazy, colour-keyed material for a selection / hover ring. Emissive is
+   *  capped at `emissiveMul × diffuse` (glow-grade for selection, low for the
+   *  hover). Alpha lets the hover ring read as a faint white line. */
+  _selectionOverlayMaterialFor(rgb, alpha, emissiveMul) {
+    const [r, g, b] = rgb;
+    const cacheKey = `${r.toFixed(3)},${g.toFixed(3)},${b.toFixed(3)}|${alpha}|${emissiveMul}`;
+    if (this._selectionOverlayMatCache.has(cacheKey)) {
+      return this._selectionOverlayMatCache.get(cacheKey);
+    }
+    const BABYLON = this._babylon;
+    const mat = new BABYLON.StandardMaterial(`selOverlayMat_${cacheKey}`, this._scene);
+    mat.diffuseColor  = new BABYLON.Color3(r, g, b);
+    mat.specularColor = new BABYLON.Color3(0, 0, 0);
+    mat.emissiveColor = new BABYLON.Color3(r * emissiveMul, g * emissiveMul, b * emissiveMul);
+    mat.alpha = alpha;
+    mat.backFaceCulling = false;
+    this._selectionOverlayMatCache.set(cacheKey, mat);
+    return mat;
   }
 
   /** @deprecated Legacy entry point — now delegates to the unified

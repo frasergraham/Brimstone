@@ -144,9 +144,9 @@ export function makeFakeRenderer() {
     hexToCanvasPos(col, row) { return { x: col * 50, y: row * 50 }; },
     canvasToHex()     { return { col: 0, row: 0 }; },
   };
-  // Real overlay API + legacy field proxies (selectedHex / selectedEntityId /
-  // highlightHexes / hoveredHex), matching what both renderers expose. ui.js
-  // drives selection / target highlights through setOverlay / clearOverlaysByLayer.
+  // Real overlay API (setOverlay / clearOverlaysByLayer / setSelection /
+  // setHover) + the legacy READ-ONLY highlightHexes getter, matching what both
+  // renderers expose. Selection / hover state lives on r._selection / r._hover.
   installOverlayShims(r);
   return r;
 }

@@ -147,7 +147,7 @@ describe('target overlays (move / battle / battle-hex)', () => {
   });
 });
 
-describe('legacy field proxy', () => {
+describe('highlightHexes legacy getter', () => {
   function makeDouble() {
     const obj = {};
     installOverlayShims(obj);
@@ -177,32 +177,112 @@ describe('legacy field proxy', () => {
     }));
     assert.deepEqual(obj.highlightHexes, [{ col: 2, row: 3, color: 'rgba(220,60,60,0.55)' }]);
   });
+});
 
-  test('setSelection with nulls clears the selection overlay', () => {
+describe('selection + hover API', () => {
+  function makeDouble() {
+    const obj = {};
+    installOverlayShims(obj);
+    return obj;
+  }
+
+  test('setSelection({entityId, hex}) creates the selection overlay with the right shape', () => {
+    const obj = makeDouble();
+    obj.setSelection({ entityId: 7, hex: { col: 4, row: 5 } });
+    const ov = obj.getOverlay('selection');
+    assert.ok(ov, 'selection overlay exists');
+    assert.equal(ov.kind, 'outline');
+    assert.equal(ov.layer, 'selection');
+    assert.ok(ov.hexes.has('4,5'));
+    assert.equal(ov.style.glow, true);
+    assert.equal(ov.style.strokeWidth, 2);
+    assert.equal(ov.style.color, '#f5c842');
+    assert.equal(ov.meta.entityId, 7);
+    assert.deepEqual(obj._selection, { entityId: 7, hex: { col: 4, row: 5 } });
+  });
+
+  test('setSelection({entityId:null, hex:null}) removes the selection overlay', () => {
     const obj = makeDouble();
     obj.setSelection({ entityId: 7, hex: { col: 4, row: 5 } });
     assert.ok(obj._overlays.has('selection'));
-    assert.equal(obj.selectedEntityId, 7);
-    assert.deepEqual(obj.selectedHex, { col: 4, row: 5 });
     obj.setSelection({ entityId: null, hex: null });
     assert.ok(!obj._overlays.has('selection'));
-    assert.equal(obj.selectedHex, null);
+    assert.deepEqual(obj._selection, { entityId: null, hex: null });
   });
 
-  test('selectedHex / selectedEntityId setters preserve the other field', () => {
+  test('selection without an entityId omits meta (tile-only selection)', () => {
     const obj = makeDouble();
-    obj.selectedEntityId = 9;
-    obj.selectedHex = { col: 1, row: 2 };
-    assert.equal(obj.selectedEntityId, 9);
-    assert.deepEqual(obj.selectedHex, { col: 1, row: 2 });
+    obj.setSelection({ entityId: null, hex: { col: 1, row: 1 } });
+    const ov = obj.getOverlay('selection');
+    assert.ok(ov);
+    assert.equal(ov.meta, undefined);
+    assert.equal(ov.style.color, '#f5c842');
   });
 
-  test('hoveredHex proxies through setHover', () => {
+  test('setHover(hex) / setHover(null) is symmetric', () => {
     const obj = makeDouble();
-    obj.hoveredHex = { col: 6, row: 6 };
-    assert.ok(obj._overlays.has('hover'));
-    obj.hoveredHex = null;
+    obj.setHover({ col: 6, row: 6 });
+    const ov = obj.getOverlay('hover');
+    assert.ok(ov, 'hover overlay exists');
+    assert.equal(ov.kind, 'outline');
+    assert.equal(ov.layer, 'selection');
+    assert.ok(ov.hexes.has('6,6'));
+    assert.equal(ov.style.glow, false);
+    assert.equal(ov.style.strokeWidth, 1);
+    assert.equal(ov.style.color, 'rgba(255,255,255,0.3)');
+    assert.deepEqual(obj._hover, { col: 6, row: 6 });
+    obj.setHover(null);
     assert.ok(!obj._overlays.has('hover'));
-    assert.equal(obj.hoveredHex, null);
+    assert.equal(obj._hover, null);
+  });
+
+  test('selection + hover coexist in the selection layer, selection sorts on top', () => {
+    const obj = makeDouble();
+    obj.setHover({ col: 1, row: 1 });
+    obj.setSelection({ entityId: 2, hex: { col: 2, row: 2 } });
+    const ids = [...obj._overlays.keys()]
+      .filter(id => obj._overlays.get(id).layer === 'selection')
+      .sort();
+    // Alphabetical: 'hover' < 'selection' — selection is drawn last (on top).
+    assert.deepEqual(ids, ['hover', 'selection']);
+  });
+
+  test('onSelectionChange fires after the overlay + _selection are updated', () => {
+    const obj = makeDouble();
+    const calls = [];
+    obj.onSelectionChange = (next) => {
+      calls.push({ next, hasOverlay: obj._overlays.has('selection'), sel: { ...obj._selection } });
+    };
+    obj.setSelection({ entityId: 9, hex: { col: 3, row: 3 } });
+    obj.setSelection({ entityId: null, hex: null });
+    assert.equal(calls.length, 2, 'hook fired on every setSelection');
+    assert.deepEqual(calls[0].next, { entityId: 9, hex: { col: 3, row: 3 } });
+    assert.equal(calls[0].hasOverlay, true, 'overlay present when hook fires');
+    assert.deepEqual(calls[0].sel, { entityId: 9, hex: { col: 3, row: 3 } });
+    assert.equal(calls[1].hasOverlay, false, 'overlay cleared when hook fires for null');
+  });
+});
+
+describe('installOverlayShims idempotency', () => {
+  test('second call preserves live overlays + selection/hover state', () => {
+    const obj = {};
+    installOverlayShims(obj);
+    obj.setOverlay('move-targets', makeOverlay({
+      id: 'move-targets', kind: 'fill', layer: 'highlight-disc',
+      hexes: [{ col: 1, row: 1 }], style: { color: 'rgba(60,220,80,0.22)' },
+    }));
+    obj.setSelection({ entityId: 5, hex: { col: 2, row: 2 } });
+    obj.setHover({ col: 7, row: 8 });
+    const overlaysRef = obj._overlays;
+
+    // Second install must not wipe the map or the selection / hover state.
+    installOverlayShims(obj);
+
+    assert.equal(obj._overlays, overlaysRef, 'overlay map identity preserved');
+    assert.ok(obj._overlays.has('move-targets'), 'fill overlay survives');
+    assert.ok(obj._overlays.has('selection'), 'selection overlay survives');
+    assert.ok(obj._overlays.has('hover'), 'hover overlay survives');
+    assert.deepEqual(obj._selection, { entityId: 5, hex: { col: 2, row: 2 } });
+    assert.deepEqual(obj._hover, { col: 7, row: 8 });
   });
 });

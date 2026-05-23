@@ -226,7 +226,9 @@ const UNIT_GLYPH = {
  * @param {Array}   entities                   Live entity array (for name lookups).
  * @param {object}  [initialInv]               Starting inventory snapshot.
  * @param {Array}   [controllableUnits]        Every unit the local player controls, in display order.
- * @param {string}  [selectedEntityId]         Id of the currently selected unit (for highlight).
+ * @param {string}  [selectedEntityId]         Deprecated/unused — the selection highlight is now
+ *                                             applied post-render by UIController._syncPlanSelectionClass.
+ *                                             Kept as a positional slot so `portraitMap` stays aligned.
  * @param {Map<string,string>} [portraitMap]   entityId → portrait data URL (optional; falls back to glyph).
  * @returns {string}  HTML string safe to assign to stepsEl.innerHTML.
  */
@@ -309,15 +311,16 @@ export function buildUnitPlanBlocksHtml(
     const count  = actions.filter(a =>
       a.type !== PlanActionType.EQUIP_WEAPON && a.type !== PlanActionType.USE_ITEM
     ).length;
-    const isSelected = entityId === selectedEntityId;
-    const selectedCls = isSelected ? ' plan-unit-selected' : '';
 
     const portraitSrc = portraitMap?.get(entityId);
     const avatarHtml = portraitSrc
       ? `<img class="plan-step-avatar" src="${portraitSrc}" style="border-color:${color}" alt="">`
       : `<span class="plan-step-avatar" style="background:${color}">${glyph}</span>`;
 
-    html += `<div class="plan-unit-block${selectedCls}" data-entity-id="${entityId}">`;
+    // The `.plan-unit-selected` highlight is applied post-render by
+    // UIController._syncPlanSelectionClass (single subscriber to the renderer's
+    // onSelectionChange hook), not baked into this HTML.
+    html += `<div class="plan-unit-block" data-entity-id="${entityId}">`;
     html += `<div class="plan-unit-header">`;
     html += avatarHtml;
     html += `<span class="plan-unit-name">${name}</span>`;

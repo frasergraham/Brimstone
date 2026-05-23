@@ -73,14 +73,14 @@ describe('SUBMITTED mode view-only selection', () => {
     assert.deepEqual(ui._validActions, [], 'no valid actions');
   });
 
-  test('sets renderer selectedHex and selectedEntityId', () => {
+  test('sets renderer selection (hex + entityId)', () => {
     const { ui, state, renderer } = makeSubmittedUI();
     const hero = state.entities.find(e => e.owner === 'hero' && e.alive);
 
     ui._handleViewOnlyClick({ col: hero.col, row: hero.row });
 
-    assert.deepEqual(renderer.selectedHex, { col: hero.col, row: hero.row });
-    assert.equal(renderer.selectedEntityId, hero.id);
+    assert.deepEqual(renderer._selection.hex, { col: hero.col, row: hero.row });
+    assert.equal(renderer._selection.entityId, hero.id);
   });
 
   test('clicking already-selected entity hex deselects', () => {
