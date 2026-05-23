@@ -11,7 +11,8 @@ import {
   // item 3
   PLAN_MARKER_DIAMETER,
   PLAN_MARKER_HEIGHT,
-  PLAN_MARKER_Y,
+  PLAN_WAYPOINT_Y,
+  UNIT_HEX_OUTLINE_Y,
   PLAN_LINE_Y,
   PLAN_DISC_Y,
   // item 4
@@ -44,16 +45,14 @@ describe('Renderer3D round-4 polish — waypoint marker geometry', () => {
       `PLAN_MARKER_HEIGHT ${PLAN_MARKER_HEIGHT} should hug the tile`);
   });
 
-  test('marker Y is above the tile top (0.075) and below the legacy PLAN_DISC_Y', () => {
-    assert.ok(PLAN_MARKER_Y > 0.075,
-      `PLAN_MARKER_Y ${PLAN_MARKER_Y} must clear tile top`);
-    assert.ok(PLAN_MARKER_Y < PLAN_DISC_Y,
-      `PLAN_MARKER_Y ${PLAN_MARKER_Y} should sit below the legacy disc layer`);
-  });
-
-  test('path-connector line sits above the marker puck so the dashes read on top', () => {
-    assert.ok(PLAN_LINE_Y > PLAN_MARKER_Y,
-      `PLAN_LINE_Y ${PLAN_LINE_Y} must be above PLAN_MARKER_Y ${PLAN_MARKER_Y}`);
+  test('waypoint Y is promoted into the plan-arrow band, clearing the unit outline ring', () => {
+    // Regression guard for the old PLAN_MARKER_Y=0.08 < UNIT_HEX_OUTLINE_Y=0.10
+    // collision: a waypoint dropped on a unit's hex used to hide under that
+    // unit's selection ring. Plan-arrow layer (≥0.180) sits well above it.
+    assert.ok(PLAN_WAYPOINT_Y >= UNIT_HEX_OUTLINE_Y,
+      `PLAN_WAYPOINT_Y ${PLAN_WAYPOINT_Y} must clear UNIT_HEX_OUTLINE_Y ${UNIT_HEX_OUTLINE_Y}`);
+    assert.ok(PLAN_WAYPOINT_Y >= 0.180,
+      `PLAN_WAYPOINT_Y ${PLAN_WAYPOINT_Y} must sit in the plan-arrow band (≥0.180)`);
   });
 });
 

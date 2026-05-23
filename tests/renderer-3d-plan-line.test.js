@@ -11,8 +11,8 @@ import {
   PLAN_LINE_RADIUS,
   PLAN_LINE_DASH_SIZE,
   PLAN_LINE_GAP_SIZE,
-  PLAN_MARKER_Y,
-  PLAN_MARKER_HEIGHT,
+  PLAN_WAYPOINT_Y,
+  UNIT_HEX_OUTLINE_Y,
   HIGHLIGHT_DISC_Y,
   computeDashSegments,
 } from '../src/renderer-3d.js';
@@ -20,10 +20,11 @@ import {
 // ── Y placement constants ───────────────────────────────────────────────────
 
 describe('Renderer3D plan-line — Y placement clears ground geometry', () => {
-  test('PLAN_LINE_Y sits above the marker puck top with margin (no z-fight)', () => {
-    const markerTop = PLAN_MARKER_Y + PLAN_MARKER_HEIGHT / 2;
-    assert.ok(PLAN_LINE_Y > markerTop + 0.05,
-      `PLAN_LINE_Y ${PLAN_LINE_Y} should sit ≥0.05 above marker top ${markerTop}`);
+  test('PLAN_WAYPOINT_Y clears the per-unit outline ring (PLAN_MARKER_Y collision fix)', () => {
+    // The waypoint puck moved from the old PLAN_MARKER_Y=0.08 into the
+    // plan-arrow overlay band so it stops hiding under UNIT_HEX_OUTLINE_Y (0.10).
+    assert.ok(PLAN_WAYPOINT_Y >= UNIT_HEX_OUTLINE_Y,
+      `PLAN_WAYPOINT_Y ${PLAN_WAYPOINT_Y} should clear UNIT_HEX_OUTLINE_Y ${UNIT_HEX_OUTLINE_Y}`);
   });
 
   test('PLAN_LINE_Y sits above the highlight-disc layer (avoids ring fight)', () => {
