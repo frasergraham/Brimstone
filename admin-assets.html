@@ -66,6 +66,8 @@
     <aside>
       <h2>Models</h2>
       <div id="model-list"></div>
+      <h2 style="margin-top:14px">Tiles</h2>
+      <div id="tile-list"></div>
       <div id="tree-list"></div>
       <div id="remove-bar">
         <button id="show-remove" class="primary">Show removal command</button>
@@ -75,6 +77,11 @@
 
     <div id="stage">
       <canvas id="render-canvas" tabindex="0"></canvas>
+      <!-- Tile preview canvas — hidden until the user selects a tile in the
+           sidebar. Hosts a sandboxed Renderer3D against a one-tile stub state
+           so we can inspect each TileType in isolation without bringing the
+           full game UI along. -->
+      <canvas id="tile-render-canvas" tabindex="0" style="display:none; width:100%; height:100%; touch-action:none; outline:none;"></canvas>
       <div id="overlay">drag = orbit · wheel = zoom · right-drag = pan</div>
       <a class="nav-back" href="/admin">← Back to admin</a>
     </div>
@@ -129,9 +136,20 @@
   <script src="/assets/vendor/babylonjs/babylon.js"></script>
   <script src="/assets/vendor/babylonjs/babylonjs.loaders.min.js"></script>
 
-  <script>
-  (function () {
+  <script type="module">
     'use strict';
+    // The tile preview mode below sandboxes the in-game Renderer3D against a
+    // stubbed one-tile state. The model-viewer mode remains standalone (its
+    // own engine + scene + ArcRotateCamera) so GLB import bugs can be
+    // isolated from per-tile placement logic.
+    import { Renderer3D } from '/src/renderer-3d.js';
+    import { TileType, BuildingType } from '/src/tiles.js';
+    import { hexKey } from '/src/hex.js';
+
+    // Wrap the module body in an IIFE so the early `return` below (used when
+    // BABYLON failed to load) is legal — `return` is a syntax error at module
+    // top-level, but fine inside a function.
+    (function () {
 
     // Hardcoded model list (the brief mentions dynamic discovery is a stretch).
     // Each entry: { file, label } — file is fetched from /assets/models/<file>.
@@ -224,7 +242,10 @@
     const axes = makeAxes(1);
 
     engine.runRenderLoop(() => scene.render());
-    window.addEventListener('resize', () => engine.resize());
+    window.addEventListener('resize', () => {
+      try { engine.resize(); } catch (_) {}
+      try { tileRenderer?.resize(); } catch (_) {}
+    });
 
     // ── Loaded model state ─────────────────────────────────────────────────
     // Tracks meshes added by the current model so we can dispose them on
@@ -600,12 +621,174 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
       }
     });
 
+    // ── Tile preview mode ──────────────────────────────────────────────────
+    // Sandbox a fresh Renderer3D against a stubbed one-tile state every time
+    // the user picks a TileType. The current renderer is disposed (engine +
+    // scene + WebGL context) before the next one mounts so we don't leak
+    // contexts across tile switches.
+    //
+    // Tiles render on a SECOND canvas (#tile-render-canvas) overlaid on the
+    // model-viewer canvas: visibility flips between them per mode. Two
+    // engines that don't render at the same time costs basically nothing
+    // and avoids tearing down the model viewer every time the operator
+    // wants to flip back and forth.
+    const tileCanvas = $('tile-render-canvas');
+    let tileRenderer = null;
+
+    // The TileTypes the sidebar exposes for previewing. BUILDING expands into
+    // one entry per BuildingType so the operator can inspect each procedural
+    // façade (the house GLB swap only fires for tile.building === HOUSE).
+    function buildTileEntries() {
+      const entries = [
+        { id: 'grass',          label: 'Grass',       type: TileType.GRASS },
+        { id: 'forest',         label: 'Forest',      type: TileType.FOREST },
+        { id: 'dirt',           label: 'Dirt',        type: TileType.DIRT },
+        { id: 'road',           label: 'Road',        type: TileType.ROAD },
+        { id: 'river',          label: 'River',       type: TileType.RIVER },
+        { id: 'bridge',         label: 'Bridge',      type: TileType.BRIDGE },
+      ];
+      for (const [k, v] of Object.entries(BuildingType)) {
+        entries.push({
+          id: `building-${v}`,
+          label: `Building — ${k.toLowerCase().replace(/_/g, ' ')}`,
+          type: TileType.BUILDING,
+          building: v,
+        });
+      }
+      return entries;
+    }
+
+    // Build the stub state Renderer3D expects. The central tile sits at
+    // (5,5) so all 6 hex neighbours have valid (non-negative) offset coords
+    // — getNeighbors filters out negatives, so anchoring at the origin would
+    // leave the ribbon strokes one-sided.
+    //
+    // Roads / rivers / bridges need at least one same-network neighbour to
+    // render a ribbon (the bezier path is built between tile centre and the
+    // neighbour's centre). We stub two opposite-side neighbours so the
+    // ribbon reads as a through-segment instead of a stub.
+    function buildSingleTileState(entry) {
+      const tiles = new Map();
+      const COL = 5, ROW = 5;
+      const central = { col: COL, row: ROW, type: entry.type };
+      if (entry.type === TileType.BUILDING) {
+        central.building = entry.building || BuildingType.HOUSE;
+      }
+      const isRoadNet   = (t) => t === TileType.ROAD   || t === TileType.BRIDGE || t === TileType.BUILDING;
+      const isWaterNet  = (t) => t === TileType.RIVER  || t === TileType.BRIDGE;
+
+      // Neighbours on a pointy-top, odd-r offset grid. ROW is odd (5) so use
+      // the odd-row dir set; pick W and E so the through-ribbon reads straight.
+      const west = { col: COL - 1, row: ROW };
+      const east = { col: COL + 1, row: ROW };
+
+      if (isRoadNet(entry.type)) {
+        central.roadDirs = new Set([hexKey(west.col, west.row), hexKey(east.col, east.row)]);
+        // Drop ROAD neighbours either side so the central tile's ribbon has
+        // somewhere to fade into.
+        const nbrType = TileType.ROAD;
+        const wTile = { col: west.col, row: west.row, type: nbrType, roadDirs: new Set([hexKey(COL, ROW)]) };
+        const eTile = { col: east.col, row: east.row, type: nbrType, roadDirs: new Set([hexKey(COL, ROW)]) };
+        tiles.set(hexKey(wTile.col, wTile.row), wTile);
+        tiles.set(hexKey(eTile.col, eTile.row), eTile);
+      }
+      if (isWaterNet(entry.type)) {
+        // Water network uses pure adjacency (no roadDirs) — just place
+        // RIVER tiles either side and the bezier joiner picks them up.
+        const wKey = hexKey(west.col, west.row);
+        const eKey = hexKey(east.col, east.row);
+        if (!tiles.has(wKey)) tiles.set(wKey, { col: west.col, row: west.row, type: TileType.RIVER });
+        if (!tiles.has(eKey)) tiles.set(eKey, { col: east.col, row: east.row, type: TileType.RIVER });
+      }
+      tiles.set(hexKey(central.col, central.row), central);
+
+      return {
+        tiles,
+        entities: [],
+        witchObjectives: [],
+        phase: 'DAY',
+        round: 1,
+        fogOfWar: 'none',
+        cycleConfig: null,
+      };
+    }
+
+    function disposeTileRenderer() {
+      if (!tileRenderer) return;
+      try { tileRenderer._engine?.stopRenderLoop(); } catch (_) {}
+      try { tileRenderer._scene?.dispose();         } catch (_) {}
+      try { tileRenderer._engine?.dispose();        } catch (_) {}
+      tileRenderer = null;
+    }
+
+    function showModelMode() {
+      disposeTileRenderer();
+      tileCanvas.style.display  = 'none';
+      canvas.style.display      = 'block';
+      try { engine.runRenderLoop(() => scene.render()); } catch (_) {}
+      try { engine.resize(); } catch (_) {}
+    }
+
+    function showTileMode(entry) {
+      try { engine.stopRenderLoop(); } catch (_) {}
+      disposeTileRenderer();
+      canvas.style.display     = 'none';
+      tileCanvas.style.display = 'block';
+      const state = buildSingleTileState(entry);
+      tileRenderer = new Renderer3D(tileCanvas, state, { previewMode: true });
+      tileRenderer.resize();
+      tileRenderer.loadImages('/assets');
+      // First draw() triggers lazy Babylon init + _buildMap; subsequent draws
+      // are no-ops for a static one-tile preview.
+      tileRenderer.draw();
+      // Clear the metadata panel — those fields apply to GLB inspection, not
+      // procedural tiles. Leaving stale model data there is just confusing.
+      $('meta-file').textContent    = `tile:${entry.id}`;
+      $('meta-submesh').textContent = '—';
+      $('meta-verts').textContent   = '—';
+      $('meta-bones').textContent   = '—';
+      $('meta-bbox').textContent    = '—';
+      animSelect.innerHTML  = '<option value="">— none —</option>';
+      animListEl.innerHTML  = '<span class="empty">tile preview — no animations</span>';
+      errEl.textContent     = '';
+    }
+
+    // Render the tile sidebar.
+    const tileListEl = $('tile-list');
+    for (const entry of buildTileEntries()) {
+      const el = document.createElement('div');
+      el.className = 'model-item';
+      el.textContent = entry.label;
+      el.addEventListener('click', () => {
+        if (activeItem) activeItem.classList.remove('active');
+        el.classList.add('active');
+        activeItem = el;
+        activeFile = `tile:${entry.id}`;
+        showTileMode(entry);
+      });
+      tileListEl.appendChild(el);
+    }
+
+    // Wrap the model sidebar clicks so they switch back to model mode after
+    // the user has been in tile mode. Re-binding here (after the original
+    // listener registered above) keeps the logic in one place.
+    for (const child of Array.from(listEl.children)) {
+      child.addEventListener('click', () => { if (tileRenderer) showModelMode(); });
+    }
+    // Tree items also live in #tree-list. Wire them up too (they were created
+    // by the async manifest loader above; bind on the parent via delegation
+    // since individual items may still be appending while this runs).
+    treeListEl.addEventListener('click', (ev) => {
+      if (ev.target.closest('.model-item') && tileRenderer) showModelMode();
+    });
+
     // ── Auto-load the first model so the page is useful immediately. ───────
     if (MODELS.length) {
       const first = listEl.firstChild;
       if (first) first.click();
     }
-  })();
+
+    })();
   </script>
 </body>
 </html>

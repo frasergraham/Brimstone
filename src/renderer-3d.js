@@ -1149,12 +1149,18 @@ export function _terrainThumbSpriteId(tile, col, row) {
 // ─── Renderer class ──────────────────────────────────────────────────────────
 
 export class Renderer3D {
-  constructor(canvas, state) {
+  constructor(canvas, state, options = {}) {
     this.canvas = canvas;
     this.state  = state;
     /** Flag inspected by ui.js so it can bypass 2D-specific drag-pan / pinch
      *  handlers that would otherwise fight the custom 3D camera input. */
     this.is3D   = true;
+    /** Preview mode — used by the admin asset viewer to render a single hex
+     *  tile in isolation. When true: skips the wilderness border-forest band
+     *  (visual noise on a one-tile preview) and skips the paladin GLB load
+     *  (there are no entities to render). Other heavy loaders (house, tree
+     *  pack) stay on so building / forest previews still show the real GLB. */
+    this._previewMode = !!options.previewMode;
 
     // ── Interface property slots (read/written by main.js and ui.js) ────────
     this.onImagesLoaded     = null;
@@ -3639,7 +3645,11 @@ export class Renderer3D {
     // resolves (heavy ~7 MB file), `_upgradeHeroStandeesToPaladin` retrofits
     // every hero standee with a paladin clone. Errors are caught inside
     // `_loadPaladinModel`.
-    this._loadPaladinModel(this._assetsBasePath || 'assets');
+    // Preview mode skips this — no entities means no standees to retrofit,
+    // and the 7 MB fetch is pure waste on an asset-viewer page.
+    if (!this._previewMode) {
+      this._loadPaladinModel(this._assetsBasePath || 'assets');
+    }
 
     // Kick off the tree-pack manifest + per-model GLB loads asynchronously.
     // Fire-and-forget — `_buildMap` runs synchronously right after and
@@ -4080,8 +4090,13 @@ export class Renderer3D {
     // are NOT added to `state.tiles`, so units can't path into them, fog
     // logic skips them, and the camera pan clamp below still bounds to
     // the playable extent.
-    this._buildMapBorderForest();
-    this._syncBorderForestVisibility();
+    // Preview mode skips the border band: a single-tile preview shouldn't
+    // be framed by 200+ wilderness cones (it would dominate the view and
+    // make the tile under inspection feel like an afterthought).
+    if (!this._previewMode) {
+      this._buildMapBorderForest();
+      this._syncBorderForestVisibility();
+    }
     // Cache map bounds in world-space XZ for the pan clamp (consumed by
     // _onBeforeRender → clampPanTarget). One-shot — map topology is immutable
     // once the game starts.
