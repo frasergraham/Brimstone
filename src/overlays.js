@@ -143,12 +143,26 @@ export const OVERLAY_METHODS = Object.freeze({
 
   setSelection({ entityId = null, hex = null } = {}) {
     this._selection = { entityId, hex };
-    if (!hex) { this._overlays.delete('selection'); return; }
-    this.setOverlay('selection', makeOverlay({
-      id: 'selection', kind: 'outline', layer: 'selection',
-      hexes: [hex], style: { glow: true },
-      meta: entityId != null ? { entityId } : undefined,
-    }));
+    if (!hex) {
+      this._overlays.delete('selection');
+    } else {
+      this.setOverlay('selection', makeOverlay({
+        id: 'selection', kind: 'outline', layer: 'selection',
+        hexes: [hex],
+        // Default palette matches the 2D `_drawOutline(glow=true)` selected-hex
+        // look: yellow, 2px stroke, glow halo. When `meta.entityId` resolves to
+        // a unit the renderers override `color` per-entity (player / faction
+        // tint) at draw time — see the 'selection' layer loops in renderer.js
+        // and renderer-3d.js. Resolution stays in the renderers because the
+        // player-colour map + faction palette live there, not here.
+        style: { color: '#f5c842', alpha: 1, strokeWidth: 2, glow: true },
+        meta: entityId != null ? { entityId } : undefined,
+      }));
+    }
+    // Single observer hook: ui.js registers one subscriber to toggle the
+    // `.plan-unit-selected` class on the plan-panel block. Fired after the
+    // overlay + `_selection` are updated so the callback sees fresh state.
+    this.onSelectionChange?.({ entityId, hex });
   },
 
   setHover(hex) {
@@ -156,7 +170,8 @@ export const OVERLAY_METHODS = Object.freeze({
     if (!hex) { this._overlays.delete('hover'); return; }
     this.setOverlay('hover', makeOverlay({
       id: 'hover', kind: 'outline', layer: 'selection',
-      hexes: [hex], style: { glow: false },
+      hexes: [hex],
+      style: { color: 'rgba(255,255,255,0.3)', alpha: 1, strokeWidth: 1, glow: false },
     }));
   },
 });
@@ -164,10 +179,14 @@ export const OVERLAY_METHODS = Object.freeze({
 /**
  * Initialise the overlay state (`_overlays` / `_selection` / `_hover`), copy the
  * overlay methods onto plain test doubles (renderer instances already inherit
- * them from the prototype), and define the legacy `highlightHexes` /
- * `selectedHex` / `selectedEntityId` / `hoveredHex` compat accessors. Must run
- * before any `this.selectedHex = …` constructor assignment so those route
- * through the proxy. Idempotent — safe to call more than once per instance.
+ * them from the prototype), and define the legacy READ-ONLY `highlightHexes`
+ * compat getter. Idempotent — safe to call more than once per instance, even
+ * with live overlays in between (verified by a unit test in overlays.test.js).
+ *
+ * The `selectedHex` / `selectedEntityId` / `hoveredHex` field proxies were
+ * retired in PR 3 — all selection / hover state now flows through
+ * `setSelection({ entityId, hex })` / `setHover(hex)` and is read off
+ * `this._selection` / `this._hover` directly.
  */
 export function installOverlayShims(target) {
   // Idempotent: a second call must not wipe an existing overlay map / selection.
@@ -179,10 +198,9 @@ export function installOverlayShims(target) {
   // module load); only plain test doubles need them copied onto the object.
   if (typeof target.setOverlay !== 'function') Object.assign(target, OVERLAY_METHODS);
 
-  // ── Legacy compat fields. `highlightHexes` is now READ-ONLY: ui.js writes
-  // overlays directly via setOverlay() (PR 2). The setter is a deprecated
-  // no-op that warns once if any straggler still assigns to it. selectedHex /
-  // selectedEntityId / hoveredHex remain live proxies until PR 3. ──
+  // ── Legacy compat field. `highlightHexes` is READ-ONLY: ui.js writes overlays
+  // directly via setOverlay() (PR 2). The setter is a deprecated no-op that
+  // warns once if any straggler still assigns to it. ──
   Object.defineProperty(target, 'highlightHexes', {
     configurable: true,
     enumerable: true,
@@ -208,27 +226,6 @@ export function installOverlayShims(target) {
         );
       }
     },
-  });
-
-  Object.defineProperty(target, 'selectedHex', {
-    configurable: true,
-    enumerable: true,
-    get() { return this._selection?.hex ?? null; },
-    set(value) { this.setSelection({ entityId: this._selection?.entityId ?? null, hex: value }); },
-  });
-
-  Object.defineProperty(target, 'selectedEntityId', {
-    configurable: true,
-    enumerable: true,
-    get() { return this._selection?.entityId ?? null; },
-    set(value) { this.setSelection({ entityId: value, hex: this._selection?.hex ?? null }); },
-  });
-
-  Object.defineProperty(target, 'hoveredHex', {
-    configurable: true,
-    enumerable: true,
-    get() { return this._hover ?? null; },
-    set(value) { this.setHover(value); },
   });
 }
 

@@ -42,6 +42,12 @@ export class UIController {
     this.canvas    = canvas;
     this.state     = state;
     this.renderer  = renderer;
+    // Single subscriber for the plan-panel selection highlight: every
+    // setSelection() fires this hook, which re-syncs the `.plan-unit-selected`
+    // class. Centralises what used to be a class baked into the panel HTML.
+    if (this.renderer) {
+      this.renderer.onSelectionChange = () => this._syncPlanSelectionClass();
+    }
     this.ai        = witchAI;
     this.heroAI    = heroAI;
     this.onRedraw  = onRedraw;
@@ -165,7 +171,7 @@ export class UIController {
     this.canvas.addEventListener('mousemove', e => this._onMouseMove(e), sig);
     this.canvas.addEventListener('click',     e => this._onClick(e), sig);
     this.canvas.addEventListener('mouseleave', () => {
-      this.renderer.hoveredHex = null;
+      this.renderer.setHover(null);
       this._mouseDown = null;
       this._didDragPan = false;
       this.onRedraw();
@@ -623,8 +629,9 @@ export class UIController {
 
     const { x, y } = this._canvasPos(e);
     const hex = this._canvasToHex(x, y);
-    this.renderer.hoveredHex = (hex.col >= 0 && hex.col < MAP_COLS && hex.row >= 0 && hex.row < MAP_ROWS)
-      ? hex : null;
+    this.renderer.setHover(
+      (hex.col >= 0 && hex.col < MAP_COLS && hex.row >= 0 && hex.row < MAP_ROWS) ? hex : null,
+    );
     this.onRedraw();
   }
 
@@ -1327,6 +1334,9 @@ export class UIController {
       this._planSubmitted, this.state.entities ?? [], initialInv,
       controllable, this._selectedEntity?.id ?? null, portraitMap,
     );
+    // The rebuilt HTML drops any `.plan-unit-selected` class — re-apply it from
+    // the single subscriber so selection highlight survives the rebuild.
+    this._syncPlanSelectionClass();
 
     // Attach remove listeners — per-unit: data-entity-id + data-step-idx
     stepsEl.querySelectorAll('.plan-step-remove').forEach(btn => {
@@ -1397,6 +1407,27 @@ export class UIController {
 
     // Render inventory section at the bottom of the plan panel
     this._renderInventory();
+  }
+
+  /**
+   * Single source for the plan-panel selection highlight. Toggles the
+   * `.plan-unit-selected` class on the unit block whose `data-entity-id`
+   * matches the current selection, clearing it from all others. Fired by the
+   * renderer's `onSelectionChange` hook (every setSelection) and re-run after
+   * each panel rebuild (the rebuilt HTML carries no class).
+   *
+   * Planning mode selects a ghost-projected entity, but the plan block is keyed
+   * by the real entity id either way, so the lookup is unaffected. Enemy / tile
+   * selections have no matching block, so the highlight simply clears.
+   */
+  _syncPlanSelectionClass() {
+    const stepsEl = this._el('plan-steps');
+    if (!stepsEl || typeof stepsEl.querySelectorAll !== 'function') return;
+    const selId = this._selectedEntity?.id ?? null;
+    stepsEl.querySelectorAll('.plan-unit-block').forEach(block => {
+      const match = selId != null && block.dataset?.entityId === String(selId);
+      block.classList?.toggle('plan-unit-selected', match);
+    });
   }
 
   /** True when the viewport matches the mobile breakpoint used elsewhere in styles.css. */
@@ -1551,7 +1582,7 @@ export class UIController {
         this._selectedEntity       = null;
         this._popupVisible         = true;
         this._validActions         = [];
-        this.renderer.selectedHex    = { col: hex.col, row: hex.row };
+        this.renderer.setSelection({ entityId: null, hex: { col: hex.col, row: hex.row } });
         this.renderer.clearOverlaysByLayer('highlight-disc');
         this._pendingEnemyPick = { units: viewOnlyEntities };
         this._showActionPopup(null);
@@ -1562,7 +1593,7 @@ export class UIController {
         // Empty hex — show tile info in stats bar
         this._clearSelection();
         this._selectedTile = { col: hex.col, row: hex.row };
-        this.renderer.selectedHex = { col: hex.col, row: hex.row };
+        this.renderer.setSelection({ entityId: null, hex: { col: hex.col, row: hex.row } });
       }
     } else if (clickedEntities.length === 1) {
       const entity = clickedEntities[0];
@@ -1586,7 +1617,7 @@ export class UIController {
       this._selectedEntity  = null;
       this._popupVisible    = true;
       this._validActions    = [];
-      this.renderer.selectedHex    = { col: hex.col, row: hex.row };
+      this.renderer.setSelection({ entityId: null, hex: { col: hex.col, row: hex.row } });
       this.renderer.clearOverlaysByLayer('highlight-disc');
       this._pendingUnitPick = { units: clickedEntities };
       this._showActionPopup(null);
@@ -1612,7 +1643,7 @@ export class UIController {
       // Multiple units on hex — show picker popup
       this._popupVisible = true;
       this._validActions = [];
-      this.renderer.selectedHex = { col: hex.col, row: hex.row };
+      this.renderer.setSelection({ entityId: null, hex: { col: hex.col, row: hex.row } });
       this.renderer.clearOverlaysByLayer('highlight-disc');
       this._pendingEnemyPick = { units: viewUnits };
       this._showActionPopup(null);
@@ -1621,7 +1652,7 @@ export class UIController {
     } else {
       // Empty hex — show tile info
       this._selectedTile = { col: hex.col, row: hex.row };
-      this.renderer.selectedHex = { col: hex.col, row: hex.row };
+      this.renderer.setSelection({ entityId: null, hex: { col: hex.col, row: hex.row } });
     }
     this._updateSidebar();
     this.onRedraw();
@@ -1650,8 +1681,10 @@ export class UIController {
       }
     }
 
-    this.renderer.selectedHex      = { col: effectiveEntity.col, row: effectiveEntity.row };
-    this.renderer.selectedEntityId = entity.id;
+    this.renderer.setSelection({
+      entityId: entity.id,
+      hex: { col: effectiveEntity.col, row: effectiveEntity.row },
+    });
     this._validActions = getValidActions(this.state, effectiveEntity);
     // Move is always the default awaiting action — clicking a green hex moves.
     const hasMoveAction = this._validActions.some(a => a.type === ActionType.MOVE);
@@ -1684,8 +1717,7 @@ export class UIController {
     this._validActions         = [];
     hideActionPopup(this);
 
-    this.renderer.selectedHex      = { col: entity.col, row: entity.row };
-    this.renderer.selectedEntityId = entity.id;
+    this.renderer.setSelection({ entityId: entity.id, hex: { col: entity.col, row: entity.row } });
     this.renderer.clearOverlaysByLayer('highlight-disc');
 
     this.onEntitySelected?.(entity);
@@ -1763,8 +1795,7 @@ export class UIController {
     this._pendingEnemyPick     = null;
     this._popupVisible         = false;
     this._unitStatsExpanded    = false;
-    this.renderer.selectedHex      = null;
-    this.renderer.selectedEntityId = null;
+    this.renderer.setSelection({ entityId: null, hex: null });
     this.renderer.clearOverlaysByLayer('highlight-disc');
     hideActionPopup(this);
     this._hideTileDetail();
@@ -1932,8 +1963,9 @@ export class UIController {
       // - Defender/enemy picker: use the targets' position (they share a hex).
       //   In plan mode, use ghost position if available.
       let originHex;
-      if (this._pendingUnitPick && this.renderer.selectedHex) {
-        originHex = this.renderer.selectedHex;
+      const selHex = this.renderer._selection?.hex ?? null;
+      if (this._pendingUnitPick && selHex) {
+        originHex = selHex;
       } else {
         const u = pickerUnits[0];
         const ghost = this._planMode ? this._getProjectedPos(u.id) : null;

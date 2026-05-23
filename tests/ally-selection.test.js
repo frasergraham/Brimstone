@@ -92,16 +92,16 @@ describe('_handleSelection ally fallback', () => {
     assert.equal(ui._isEnemySelection, false, 'controllable selection');
   });
 
-  test('ally selection sets renderer selectedHex and selectedEntityId', () => {
+  test('ally selection sets renderer selection (hex + entityId)', () => {
     const { ui, renderer, allyUnit } = makeAllyUI();
 
     ui._handleSelection({ col: allyUnit.col, row: allyUnit.row });
 
-    assert.deepEqual(renderer.selectedHex, {
+    assert.deepEqual(renderer._selection.hex, {
       col: allyUnit.col,
       row: allyUnit.row,
     });
-    assert.equal(renderer.selectedEntityId, allyUnit.id);
+    assert.equal(renderer._selection.entityId, allyUnit.id);
     assert.deepEqual(
       renderer.highlightHexes,
       [],

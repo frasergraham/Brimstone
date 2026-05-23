@@ -61,13 +61,13 @@ describe('enemy unit view-only selection', () => {
     assert.equal(ui._awaitingTarget, null, 'no awaiting target for enemy units');
   });
 
-  test('enemy selection sets renderer selectedHex and selectedEntityId', () => {
+  test('enemy selection sets renderer selection (hex + entityId)', () => {
     const { ui, state, renderer } = makeUI();
     const enemy = state.entities.find(e => e.owner === 'witch' && e.alive);
     ui._selectEnemyEntity(enemy);
 
-    assert.deepEqual(renderer.selectedHex, { col: enemy.col, row: enemy.row });
-    assert.equal(renderer.selectedEntityId, enemy.id);
+    assert.deepEqual(renderer._selection.hex, { col: enemy.col, row: enemy.row });
+    assert.equal(renderer._selection.entityId, enemy.id);
   });
 
   test('enemy selection clears highlight hexes', () => {
