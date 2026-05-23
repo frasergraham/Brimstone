@@ -70,6 +70,25 @@ describe('_freezeStaticMeshes — locks world matrices of build-time meshes', ()
     }
   });
 
+  test('walks _tileClusterMeshes — merged hex-tile cluster bake', () => {
+    // `_bakeTileClusters` produces one merged mesh per (material × 4×4
+    // region). These ride the same static-meshes-never-move guarantee as
+    // the source flat-hexes — without freezing them the per-tile freeze
+    // wins are silently halved by per-frame world-matrix syncs on the
+    // merged cluster meshes.
+    const inst = newInst();
+    inst._tileMeshes = [];
+    const c0 = fakeMesh('tileCluster_0');
+    const c1 = fakeMesh('tileCluster_1');
+    inst._tileClusterMeshes = [c0, c1];
+    const n = inst._freezeStaticMeshes();
+    assert.equal(n, 2);
+    for (const m of [c0, c1]) {
+      assert.equal(m.isWorldMatrixFrozen, true);
+      assert.equal(m.doNotSyncBoundingInfo, true);
+    }
+  });
+
   test('walks _borderForestHexesByKey and _borderPropsByKey', () => {
     const inst = newInst();
     inst._tileMeshes = [];

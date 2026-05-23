@@ -557,6 +557,44 @@ export const FOCUS_EPSILON = 1e-3;
  *  Picked to frame ~3-tile diameter around the unit on a standard map. */
 export const SELECTION_FOCUS_RADIUS = 14;
 
+/** Tile-cluster bake size (in hexes per row/col of a square region). At 4,
+ *  each spatial cluster covers up to 16 hexes; tiles within the same cluster
+ *  region AND sharing the same StandardMaterial are merged into a single
+ *  draw call. Picking still routes through the per-tile flat-hex meshes
+ *  (kept in the scene with `isVisible=false, isPickable=true`).
+ *
+ *  Standard 13×13 map → 16 cluster regions × a handful of dominant materials
+ *  collapses tile draw calls from ~169 to ≤ 30 while keeping per-cluster
+ *  bounding boxes small enough for Babylon's frustum culler to skip
+ *  offscreen clusters at zoomed-in views. */
+export const CLUSTER_HEX_SIZE = 4;
+
+/** Pure: which spatial cluster a (col, row) hex belongs to. The id is the
+ *  cluster's grid coordinate, formatted as `"cx,cy"`. Negative cols/rows are
+ *  handled via `Math.floor`, so the border-forest band (col<0 or row<0) lands
+ *  in its own clusters — though the border band uses a separate registry and
+ *  does not go through `assignTilesToClusters` today. Exported for tests. */
+export function clusterIdForTile(col, row, clusterSize = CLUSTER_HEX_SIZE) {
+  const cx = Math.floor(col / clusterSize);
+  const cy = Math.floor(row / clusterSize);
+  return cx + ',' + cy;
+}
+
+/** Pure: bucket an iterable of tiles by `clusterIdForTile`. Returns a Map
+ *  keyed by cluster id, whose values are arrays of the original tile
+ *  references (caller decides what to do with them). Exported for tests so
+ *  the bucketing logic can be exercised without spinning up Babylon. */
+export function assignTilesToClusters(tiles, clusterSize = CLUSTER_HEX_SIZE) {
+  const out = new Map();
+  for (const tile of tiles) {
+    const id = clusterIdForTile(tile.col, tile.row, clusterSize);
+    const list = out.get(id);
+    if (list) list.push(tile);
+    else out.set(id, [tile]);
+  }
+  return out;
+}
+
 /** Camera tilt (beta) is permanently locked at π/4 (45°). Earlier rounds
  *  allowed a clamped tilt range with Tilt-up/Tilt-down buttons and a
  *  right-drag dy → beta branch; both were removed (operator decision —
@@ -1232,6 +1270,19 @@ export class Renderer3D {
     this._mapRoot       = null; // TransformNode parent for all tile meshes
     this._materialCache = new Map(); // hex string → BABYLON.StandardMaterial
     this._tileMeshes    = [];   // for picking + future incremental rebuild
+    // Cluster baking — see `_bakeTileClusters`. Tile flat-hex meshes that
+    // share a material and live in the same 4×4 spatial region get merged
+    // into one cluster mesh, dropping draw calls from ~169 → ≤30 on a
+    // standard map. Per-tile sources stay in the scene as picking proxies
+    // (`isVisible=false, isPickable=true`); merged clusters carry the
+    // rendering (`isPickable=false`). Fog of war updates vertex colors on
+    // the cluster mesh — see `_setTileFogged`.
+    this._tileClusterMeshes = [];        // Mesh[]   — merged cluster meshes
+    // hexKey → { mesh, vertexStart, vertexCount }. Points at the merged
+    // cluster mesh for tiles in multi-tile buckets, OR at the source
+    // flat-hex itself for tiles in 1-tile buckets (so `_setTileFogged` has
+    // a uniform vertex-color path either way).
+    this._tileVertexColorRef = new Map();
     this._mapBuilt      = false;
     // Per-map deterministic season tag — picked in `_buildMap` from a hash of
     // the tile layout (or `state.mapSeed` if exposed later). Drives seasonal
@@ -4070,6 +4121,11 @@ export class Renderer3D {
     for (const tile of this.state.tiles.values()) {
       this._buildTileMesh(tile, mapRoot);
     }
+    // Bake per-tile flat-hex meshes into one mesh per (material × spatial
+    // 4×4 cluster). The merged meshes do the rendering; the source flat-hex
+    // meshes stay in the scene as invisible-but-pickable proxies so
+    // `canvasToHex` still resolves clicks back to a tile. See helper.
+    this._bakeTileClusters();
     // Item 2: after every per-tile mesh exists, lay down the bezier road and
     // river networks on top of the grass tiles. Built once at map-load and
     // never rebuilt (the map topology is immutable once a game has started).
@@ -4134,6 +4190,8 @@ export class Renderer3D {
     };
     // Playable tile cylinders.
     if (this._tileMeshes) for (const m of this._tileMeshes) freeze(m);
+    // Merged tile clusters (one per material × 4×4 region).
+    if (this._tileClusterMeshes) for (const m of this._tileClusterMeshes) freeze(m);
     // Per-tile props (trees, buildings, roofs, bridges, road/river per-tile
     // merged ribbons, node-disc rings registered into the tile prop list).
     if (this._tilePropsByKey) {
@@ -4596,6 +4654,147 @@ export class Renderer3D {
       for (const t of trees) staticOcc.push({ id: t.id, kind: 'tree' });
     }
     if (staticOcc.length > 0) this._staticOccupantsByKey.set(tkey, staticOcc);
+  }
+
+  /** Bake per-tile flat-hex meshes into one merged mesh per (material ×
+   *  4×4 spatial cluster). The merged meshes do all the rendering; the
+   *  source flat-hex meshes stay in the scene as invisible-but-pickable
+   *  proxies so `canvasToHex` still resolves clicks back to a tile.
+   *
+   *  Why this saves frames:
+   *    • Each merged cluster is one draw call regardless of how many tiles
+   *      contributed — collapses ~169 individual tile draws down to ≤ 30 on
+   *      a standard 13×13 map.
+   *    • Clusters are spatially bounded (max ≈ 4×SQRT3 ≈ 7 world units
+   *      wide), so Babylon's frustum culler still skips clusters that fall
+   *      entirely outside the camera view when zoomed in.
+   *    • Picking still hits the per-tile source meshes — they keep their
+   *      tile metadata (`{kind:'tile', col, row}`) and `isPickable=true`,
+   *      and `isVisible=false` does NOT block picking in Babylon.
+   *
+   *  Fog of war: each tile's contribution to the cluster mesh's COLOR_0
+   *  buffer is recorded in `_tileVertexColorRef`. `_setTileFogged` writes
+   *  into that subrange (RGB scaled by `_fogTileDarken`) so the fogged tile
+   *  darkens while its neighbours in the same cluster stay bright. NOT
+   *  swapping materials — the cluster's diffuse material is shared across
+   *  every tile in the bucket.
+   *
+   *  Idempotent. If called a second time (e.g. by `_rebakeTileClusters`
+   *  after the terrain atlas loads), existing cluster meshes are disposed
+   *  first and source flat-hexes are made visible again before re-bucketing
+   *  on the current materials. */
+  _bakeTileClusters() {
+    const BABYLON = this._babylon;
+    if (!BABYLON || !this._scene || !this._mapRoot) return;
+    if (!this._tileMeshByKey || this._tileMeshByKey.size === 0) return;
+
+    // Dispose any previously-built cluster meshes and reset source visibility
+    // so we re-bucket from a clean slate. Source meshes themselves are NOT
+    // disposed — they're still the picking proxies.
+    if (Array.isArray(this._tileClusterMeshes)) {
+      for (const m of this._tileClusterMeshes) m?.dispose?.();
+    }
+    this._tileClusterMeshes = [];
+    this._tileVertexColorRef = new Map();
+    for (const hex of this._tileMeshByKey.values()) {
+      hex.isVisible = true;
+      hex.isPickable = true;
+    }
+
+    // Bucket source meshes by (material reference × spatial cluster id).
+    // We key on the material *reference* so tiles that already share a
+    // cached material (e.g. all GRASS hexes pointing at the same textured
+    // StandardMaterial) merge together.
+    const buckets = new Map();           // bucketKey → { material, sources, hexKeys }
+    for (const [hexK, hex] of this._tileMeshByKey) {
+      const mat = hex.material;
+      if (!mat) continue; // safety: a tile without a material can't be merged
+      const md = hex.metadata;
+      if (!md || typeof md.col !== 'number') continue;
+      const cluster = clusterIdForTile(md.col, md.row, CLUSTER_HEX_SIZE);
+      // Material id may not be unique across instances, so fall back on the
+      // Babylon material's uniqueId (numeric, set per `new BABYLON.Material`).
+      const matKey = (typeof mat.uniqueId === 'number') ? mat.uniqueId : mat.id;
+      const key = matKey + '|' + cluster;
+      let bucket = buckets.get(key);
+      if (!bucket) {
+        bucket = { material: mat, sources: [], hexKeys: [] };
+        buckets.set(key, bucket);
+      }
+      bucket.sources.push(hex);
+      bucket.hexKeys.push(hexK);
+    }
+
+    let clusterIdx = 0;
+    for (const bucket of buckets.values()) {
+      const { material, sources, hexKeys } = bucket;
+      if (sources.length === 1) {
+        // 1-tile bucket: leave the source visible + pickable. Fog still
+        // routes through its COLOR_0 buffer (set up in `_buildFlatHexMesh`).
+        const hex = sources[0];
+        this._tileVertexColorRef.set(hexKeys[0], {
+          mesh: hex,
+          vertexStart: 0,
+          vertexCount: hex.getTotalVertices?.() || 7,
+        });
+        continue;
+      }
+
+      // Multi-tile bucket: merge into one cluster mesh. `disposeSource=false`
+      // keeps the source flat-hexes alive as picking proxies; we then hide
+      // them visually below.
+      const merged = BABYLON.Mesh.MergeMeshes(
+        sources,
+        /* disposeSource     */ false,
+        /* allow32BitsIndices*/ true,
+        /* meshSubclass      */ undefined,
+        /* subdivideWithSubMeshes */ false,
+        /* multiMultiMaterials */ false,
+      );
+      if (!merged) continue;
+      merged.name        = `tileCluster_${clusterIdx++}`;
+      merged.parent      = this._mapRoot;
+      merged.material    = material;
+      merged.isPickable  = false;
+      // Clusters span a 4×4 hex region — visible only when at least one
+      // contributing tile is in the frustum. Babylon's frustum culler uses
+      // the merged bounding box automatically.
+      this._setShadowReceiver(merged);
+      this._tileClusterMeshes.push(merged);
+
+      // Record each source tile's vertex range within the merged buffer.
+      // `MergeMeshes` concatenates vertex attributes in the order sources
+      // were passed, so we can compute offsets by walking `sources` again.
+      let vOffset = 0;
+      for (let i = 0; i < sources.length; i++) {
+        const src = sources[i];
+        const vCount = src.getTotalVertices?.() || 7;
+        this._tileVertexColorRef.set(hexKeys[i], {
+          mesh: merged,
+          vertexStart: vOffset,
+          vertexCount: vCount,
+        });
+        vOffset += vCount;
+        // Hide the source visually but KEEP it picking-eligible. Babylon
+        // routes `scene.pick` through `isPickable`+`isEnabled` — invisible
+        // meshes are still pick targets. (Do NOT call `setEnabled(false)`
+        // here: that would short-circuit picking.)
+        src.isVisible  = false;
+        src.isPickable = true;
+      }
+    }
+  }
+
+  /** Re-run `_bakeTileClusters` after per-tile materials have been swapped
+   *  (e.g. by `_upgradeTileTextures` once the terrain atlas finishes
+   *  loading). The bucketing keys off material identity, so material swaps
+   *  on the sources must trigger a re-merge or the cluster meshes would
+   *  keep rendering the old solid-colour materials.
+   *
+   *  No-op when no clusters have been baked yet. */
+  _rebakeTileClusters() {
+    if (!this._tileMeshByKey || this._tileMeshByKey.size === 0) return;
+    this._bakeTileClusters();
   }
 
   // ─── Item 2: bezier road + river networks ────────────────────────────────
@@ -5297,11 +5496,20 @@ export class Renderer3D {
     }
     for (let i = 0; i < 6; i++) indices.push(0, i + 1, ((i + 1) % 6) + 1);
 
+    // Per-vertex RGBA, all 1.0 at build time. After tile-cluster baking, the
+    // fog veil writes into these (on the merged cluster mesh) so individual
+    // tiles can be darkened without tinting the whole cluster's material —
+    // see `_setTileFogged` and `_bakeTileClusters`. Always emit them so
+    // every source flat-hex contributes a COLOR_0 buffer for MergeMeshes to
+    // concatenate.
+    const colors = new Array(7 * 4).fill(1);
+
     const mesh = new BABYLON.Mesh(name, this._scene);
     const vd = new BABYLON.VertexData();
     vd.positions = positions;
     vd.indices   = indices;
     vd.uvs       = uvs;
+    vd.colors    = colors;
     vd.normals   = [];
     BABYLON.VertexData.ComputeNormals(positions, indices, vd.normals);
     vd.applyToMesh(mesh);
@@ -5375,6 +5583,21 @@ export class Renderer3D {
       const isFogged = this._fogActiveSet.has(tkey);
       hex.material = this._tileMaterialFor(tile, { fogged: isFogged });
     }
+    // Source materials just changed — re-bake clusters so each merged mesh
+    // picks up the new textured material. Without this, the visible cluster
+    // meshes would keep rendering the pre-atlas solid colours even though
+    // the source meshes (which we use only for picking) now point at the
+    // textured materials.
+    this._rebakeTileClusters();
+    // Cluster rebake clears fog vertex colors; re-apply current fog state so
+    // any tile that was already fogged stays dark.
+    if (this._fogActiveSet?.size) {
+      for (const tkey of this._fogActiveSet) {
+        const hex = this._tileMeshByKey.get(tkey);
+        if (hex) this._applyFogVertexColors(tkey, true);
+      }
+    }
+    this._freezeStaticMeshes();
     // Border-forest cylinders share the FOREST sprite pool but live in a
     // separate map — upgrade them too so the texture appears around the edge.
     for (const [, hex] of this._borderForestHexesByKey) {
@@ -8245,12 +8468,13 @@ export class Renderer3D {
   _setTileFogged(hexK, tileMesh, fogged) {
     const md = tileMesh.metadata;
     if (!md?.baseColor) return;
-    const tile = this.state?.tiles?.get(hexK);
-    // When we have the tile in state we can pick a textured fog material;
-    // otherwise (shouldn't happen for playable hexes) fall back to colour-only.
-    tileMesh.material = tile
-      ? this._tileMaterialFor(tile, { fogged })
-      : (fogged ? this._fogMaterialFor(md.baseColor) : this._materialFor(md.baseColor));
+    // Fog of war darkens individual tiles by writing into the merged cluster
+    // mesh's COLOR_0 buffer — see `_bakeTileClusters` for how each tile's
+    // vertex range is recorded in `_tileVertexColorRef`. Swapping the cluster
+    // material would tint every tile in the bucket, which is the opposite
+    // of what we want. (For 1-tile buckets the ref points at the source
+    // flat-hex itself, so the same code path works.)
+    this._applyFogVertexColors(hexK, fogged);
     const props = this._tilePropsByKey.get(hexK);
     if (props) for (const p of props) {
       // Three fog policies per-prop, set via `metadata.respectsFog`:
@@ -8300,6 +8524,44 @@ export class Renderer3D {
     }
     if (fogged) this._fogActiveSet.add(hexK);
     else this._fogActiveSet.delete(hexK);
+  }
+
+  /** Write the fog darken factor into the cluster mesh's COLOR_0 buffer for
+   *  the vertex range owned by this hex. Reading the buffer back out, mutating
+   *  the slice, and writing the full Float32Array back is the cheapest path
+   *  Babylon offers — there is no per-vertex API for COLOR_0 updates.
+   *
+   *  The cluster material is unchanged; only this tile's RGB multiplier
+   *  shifts (alpha stays 1). For 1-tile buckets the ref points at the
+   *  source flat-hex itself, so this same code darkens the lone-tile
+   *  cluster equally well. */
+  _applyFogVertexColors(hexK, fogged) {
+    const BABYLON = this._babylon;
+    if (!BABYLON) return;
+    const ref = this._tileVertexColorRef?.get(hexK);
+    if (!ref || !ref.mesh) return;
+    const k = fogged ? this._fogTileDarken : 1.0;
+    const colorKind = BABYLON.VertexBuffer?.ColorKind;
+    if (!colorKind) return;
+    const colors = ref.mesh.getVerticesData?.(colorKind);
+    if (!colors) return;
+    const start = ref.vertexStart;
+    const end   = start + ref.vertexCount;
+    // Defensive bound — a re-bake with new vertex counts could leave a
+    // stale ref pointing past the end of the new buffer.
+    if (end * 4 > colors.length) return;
+    for (let v = start; v < end; v++) {
+      colors[v * 4 + 0] = k;
+      colors[v * 4 + 1] = k;
+      colors[v * 4 + 2] = k;
+      colors[v * 4 + 3] = 1;
+    }
+    // `updateVerticesData` writes in-place only on updatable buffers; the
+    // merged cluster's COLOR_0 from MergeMeshes is not updatable, so use
+    // `setVerticesData` to (re)build an updatable buffer of the same name.
+    if (typeof ref.mesh.setVerticesData === 'function') {
+      ref.mesh.setVerticesData(colorKind, colors, true);
+    }
   }
 
   _fogMaterialFor(baseHex) {
