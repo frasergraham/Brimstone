@@ -933,12 +933,34 @@ export function radiusForFitDepth(_fitWidth, fitDepth, _aspect, fov = 0.8, margi
  * the cap matches what a default-frame would show on a standard map exactly.
  */
 export function radiusForStandardFit(aspect, fov = 0.8, margin = 1.05, paddingHexes = 1) {
-  const cfg = MAP_SIZES.standard;
-  const cols = cfg.cols;
-  const rows = cfg.rows;
-  const positions = [];
-  for (let c = 0; c < cols; c++) for (let r = 0; r < rows; r++) {
-    positions.push({ col: c, row: r });
+  return radiusForMapFit(null, aspect, fov, margin, paddingHexes);
+}
+
+/**
+ * Radius required to fit the actual playable map in `state.tiles` at the
+ * given aspect / FOV / margin. Falls back to the standard 13×13 layout if
+ * `state` is null (init time, before state has been set). The cap is
+ * applied as the camera's `upperRadiusLimit` so larger maps (regional,
+ * campaign, battle) reach an upper bound that actually fits THEIR
+ * footprint — not the standard footprint — and the operator can see the
+ * whole battle map without panning.
+ */
+export function radiusForMapFit(state, aspect, fov = 0.8, margin = 1.05, paddingHexes = 1) {
+  let positions;
+  if (state && state.tiles && typeof state.tiles.values === 'function') {
+    positions = [];
+    for (const t of state.tiles.values()) {
+      if (t && typeof t.col === 'number' && typeof t.row === 'number') {
+        positions.push({ col: t.col, row: t.row });
+      }
+    }
+  }
+  if (!positions || positions.length === 0) {
+    const cfg = MAP_SIZES.standard;
+    positions = [];
+    for (let c = 0; c < cfg.cols; c++) for (let r = 0; r < cfg.rows; r++) {
+      positions.push({ col: c, row: r });
+    }
   }
   const bounds = computeMapBounds(positions);
   if (!bounds) return 0;
@@ -3655,8 +3677,11 @@ export class Renderer3D {
 
     // Build the map from current state and frame it (instant — no animation
     // on the very first frame, otherwise the camera "slides in" from the
-    // arbitrary radius=20 starting point).
+    // arbitrary radius=20 starting point). Then re-derive the max-zoom-out
+    // cap NOW that state.tiles is populated so campaign/battle maps get a
+    // cap that fits THEIR footprint, not the standard 13×13.
     this._buildMap();
+    this._recomputeMaxZoomCap();
     this._frameFullMap({ instant: true });
     // Initial standee population so the first frame already has units.
     this._syncEntityStandees();
@@ -5645,7 +5670,10 @@ export class Renderer3D {
     if (!this._engine || !this._camera) return;
     const aspect = this._engine.getRenderWidth() / Math.max(1, this._engine.getRenderHeight());
     const fov = this._camera.fov || 0.8;
-    const upper = radiusForStandardFit(aspect, fov);
+    // Cap fits THIS map's playable tiles — not a hardcoded standard 13×13.
+    // Campaign / battle maps with bigger footprints get a larger upper radius
+    // so the operator can zoom out far enough to see the whole map.
+    const upper = radiusForMapFit(this.state, aspect, fov);
     const lower = radiusForCloseFit(MIN_VISIBLE_HEXES, aspect, fov);
     if (Number.isFinite(upper) && upper > 0) {
       // Guarantee lower < upper even on pathological aspects (shouldn't be
