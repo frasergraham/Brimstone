@@ -168,6 +168,15 @@ export function classifyTree(bbox) {
   if (aspect > 3.0 && symmetry < 0.6) {
     return { species: 'palm', region: 'tropical' };
   }
+  // Top-heavy palm gate — palms with round canopies don't trip the asymmetric
+  // check above (their canopy spread is uniform). When the bbox has high
+  // `topHeavy` (most vertices clustered in the upper third), it's a palm with
+  // a frond canopy on a bare trunk, regardless of bbox symmetry. Caller must
+  // pass `topHeavy` (ratio of upper-third vertices / lower-third vertices)
+  // for this gate to fire.
+  if (Number.isFinite(bbox.topHeavy) && bbox.topHeavy > 10) {
+    return { species: 'palm', region: 'tropical' };
+  }
   // Conifer: tall + narrow round canopy. Threshold 1.8 keeps oaks (typical
   // aspect ~1.0–1.6) in the deciduous bucket while still catching pines /
   // hemlocks / spruces (aspect typically >= 2).

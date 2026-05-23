@@ -31,17 +31,7 @@
         "region": "new-england"
       },
       {
-        "file": "tree-summer-complete/tree-summer-complete-46-006.glb",
-        "species": "oak",
-        "region": "new-england"
-      },
-      {
         "file": "tree-summer-complete/tree-summer-complete-43-007.glb",
-        "species": "oak",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-summer-complete/tree-summer-complete-49-008.glb",
         "species": "oak",
         "region": "new-england"
       },
@@ -196,11 +186,6 @@
         "region": "new-england"
       },
       {
-        "file": "tree-summer-complete/tree-summer-complete-16-039.glb",
-        "species": "maple",
-        "region": "new-england"
-      },
-      {
         "file": "tree-summer-complete/tree-summer-complete-17-040.glb",
         "species": "spruce",
         "region": "new-england"
@@ -348,18 +333,8 @@
         "region": "new-england"
       },
       {
-        "file": "tree-autumn-complete/tree-autumn-complete-2-006.glb",
-        "species": "willow",
-        "region": "new-england"
-      },
-      {
         "file": "tree-autumn-complete/tree-autumn-complete-3-007.glb",
         "species": "beech",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-autumn-complete/tree-autumn-complete-4-008.glb",
-        "species": "birch",
         "region": "new-england"
       },
       {
@@ -420,18 +395,8 @@
         "region": "new-england"
       },
       {
-        "file": "tree-winter-complete/tree-winter-complete-2-006.glb",
-        "species": "willow",
-        "region": "new-england"
-      },
-      {
         "file": "tree-winter-complete/tree-winter-complete-3-007.glb",
         "species": "beech",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-winter-complete/tree-winter-complete-4-008.glb",
-        "species": "birch",
         "region": "new-england"
       },
       {
@@ -492,18 +457,8 @@
         "region": "new-england"
       },
       {
-        "file": "tree-dead-complete/tree-dead-complete-2-006.glb",
-        "species": "willow",
-        "region": "new-england"
-      },
-      {
         "file": "tree-dead-complete/tree-dead-complete-3-007.glb",
         "species": "beech",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-dead-complete/tree-dead-complete-4-008.glb",
-        "species": "birch",
         "region": "new-england"
       },
       {
