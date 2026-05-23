@@ -4743,6 +4743,28 @@ export class Renderer3D {
             uvs[v * 2 + 1] = vByPath[pathIdx];
           }
           ribbon.setVerticesData(BABYLON.VertexBuffer.UVKind, uvs);
+          // Force flat +Y normals on every vertex. The ribbon is built at a
+          // constant Y (ROAD_RIBBON_Y) so its true surface normal IS (0,1,0)
+          // everywhere — but Babylon's CreateRibbon with DOUBLESIDE generates
+          // tangent-space normals via path-direction cross products which can
+          // point slightly off-axis along curves, and the back-face half gets
+          // -Y. The diffuse sun + hemispheric lights expect the surface
+          // pointing up to read as fully lit; with the original normals the
+          // road sampled ~0.4× lighting and read as unlit. backFaceCulling
+          // stays false on the material so the back face still draws when the
+          // camera dips below, just with the wrong normal — acceptable since
+          // that's an edge view and the surface is flat.
+          const pos = ribbon.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+          if (pos) {
+            const vcount = pos.length / 3;
+            const flatNormals = new Float32Array(vcount * 3);
+            for (let v = 0; v < vcount; v++) {
+              flatNormals[v * 3 + 0] = 0;
+              flatNormals[v * 3 + 1] = 1;
+              flatNormals[v * 3 + 2] = 0;
+            }
+            ribbon.setVerticesData(BABYLON.VertexBuffer.NormalKind, flatNormals);
+          }
         }
         ribbons.push(ribbon);
         const list = ribbonsByTileKey.get(tkey) || [];
