@@ -593,6 +593,18 @@ export const FPS_COUNTER_UPDATE_MS = 100;
  *  Engine (`getFps()`, `getDeltaTime()`). Returns e.g. "60.0 fps · 16.7 ms".
  *  Non-finite or negative inputs are coerced to 0 so a transient NaN on the
  *  first frame doesn't render as "NaN fps". */
+/** Format a "polys: {drawn} / {total}" label with thousands separators.
+ *  Drawn = polys actually rendered this frame (post frustum cull).
+ *  Total = sum of all triangle indices across every mesh + instance in
+ *  the scene, regardless of visibility. */
+export function formatPolyLabel(totalPolys, activePolys) {
+  const fmt = (n) => {
+    const v = Math.max(0, Math.round(Number.isFinite(n) ? n : 0));
+    return v.toLocaleString('en-US');
+  };
+  return `polys: ${fmt(activePolys)} / ${fmt(totalPolys)}`;
+}
+
 export function formatFpsLabel(fps, dtMs) {
   const safeFps = Number.isFinite(fps) && fps >= 0 ? fps : 0;
   const safeDt  = Number.isFinite(dtMs) && dtMs >= 0 ? dtMs : 0;
@@ -1313,6 +1325,7 @@ export class Renderer3D {
     this._onBeforeRenderObs = null;     // observer handle so we can dispose it
     // FPS counter throttle state — see _pumpFpsCounter / FPS_COUNTER_UPDATE_MS.
     this._fpsCounterEl       = null;
+    this._polyCounterEl      = null;
     this._fpsCounterLastMs   = 0;
 
     // ── Phase 3: standees + selection ───────────────────────────────────────
@@ -7793,6 +7806,31 @@ export class Renderer3D {
     const el = this._fpsCounterEl;
     if (!el || !this._engine) return;
     el.textContent = formatFpsLabel(this._engine.getFps(), this._engine.getDeltaTime());
+    // Poly counter just below — total polys submitted (across every mesh
+    // in the scene, regardless of frustum/visibility) vs polys actually
+    // drawn this frame (scene.getActiveIndices / 3). Helps the operator
+    // tell at a glance whether perf regressions come from too much
+    // geometry overall (total) or from too much being VISIBLE (active).
+    if (!this._polyCounterEl && typeof document !== 'undefined') {
+      this._polyCounterEl = document.getElementById('poly-counter');
+    }
+    const polyEl = this._polyCounterEl;
+    if (!polyEl || !this._scene) return;
+    let totalPolys = 0;
+    for (const mesh of this._scene.meshes) {
+      if (!mesh.getTotalIndices) continue;
+      // Instances re-use their source mesh's index buffer — count once
+      // per source, but multiply by the count of enabled instances so
+      // the "total" reflects the screen-space draw volume.
+      if (mesh.sourceMesh) continue; // skip; counted on source below
+      const triCount = mesh.getTotalIndices() / 3;
+      const instCount = (mesh.instances?.length || 0) + 1;
+      totalPolys += triCount * instCount;
+    }
+    const activePolys = this._scene.getActiveIndices
+      ? this._scene.getActiveIndices() / 3
+      : 0;
+    polyEl.textContent = formatPolyLabel(totalPolys, activePolys);
   }
 
   _setNodeGlowIntensity(ng, k) {
