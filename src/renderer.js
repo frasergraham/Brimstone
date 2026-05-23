@@ -12,6 +12,7 @@ import { getVisiblePositions, sightRange, buildFogMovementHexes } from './action
 import { getFaction, sightRangeForEntity } from './factions.js';
 import { getFactionTheme, NEUTRAL_NODE_FILL } from './theme.js';
 import { nodeController, Phase } from './game.js';
+import { installOverlayShims } from './overlays.js';
 
 // PAD_X/PAD_Y are now computed dynamically in _resize() as this._padX / this._padY.
 // These constants are kept for backward-compat imports but should not be used internally.
@@ -124,6 +125,10 @@ export class Renderer {
     /** Parity flag with Renderer3D — false here so ui.js routes pan / pinch
      *  through the 2D-canvas pathway. */
     this.is3D    = false;
+
+    // Unified overlay map + legacy field proxies. Installed before the field
+    // assignments below so `this.highlightHexes = …` etc. route through it.
+    installOverlayShims(this);
 
     this.selectedHex    = null;
     this.highlightHexes = [];
