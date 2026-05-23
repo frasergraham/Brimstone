@@ -4716,11 +4716,15 @@ export class Renderer3D {
         // the texture repeats every ~1 world unit, roughly hex-sized).
         if (networkName === 'road') {
           const uvs = new Float32Array(totalVerts * 2);
-          // V for each of the 5 paths — texture's full range maps across the
-          // central 3 paths (innerRight, centre, innerLeft) where vertex alpha
-          // is opaque. Outer paths (alpha=0) repeat the edge V; they're
-          // invisible anyway.
-          const vByPath = [0.0, 0.0, 0.5, 1.0, 1.0];
+          // V for each of the 5 paths. The OPAQUE band (inner-right → centre
+          // → inner-left) samples the texture's middle 40% (V 0.3–0.7) where
+          // the road artwork sits; the alpha-faded OUTER paths sample the
+          // texture's V edges (0 / 1) where the artist's dark/transparent
+          // shoulder lives. Previously this mapped inner paths to V=0 / V=1,
+          // which sampled the texture's dark edges and produced a black
+          // border around the road. Tightening the V window keeps the road
+          // bulk on the texture's road-colored region.
+          const vByPath = [0.0, 0.3, 0.5, 0.7, 1.0];
           // U along the centreline (path index 2 = centre). All five paths
           // share the same U at each point index so vertices stay seam-aligned
           // across the width.
