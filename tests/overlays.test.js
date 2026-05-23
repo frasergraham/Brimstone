@@ -148,35 +148,25 @@ describe('target overlays (move / battle / battle-hex)', () => {
   });
 });
 
-describe('highlightHexes legacy getter', () => {
+describe('highlightHexes legacy field is fully retired', () => {
   function makeDouble() {
     const obj = {};
     installOverlayShims(obj);
     return obj;
   }
 
-  test('highlightHexes setter is a deprecated no-op (does not mutate overlays)', () => {
+  test('no `highlightHexes` getter/setter is installed (PR 5 retirement)', () => {
     const obj = makeDouble();
-    const origWarn = console.warn;
-    let warned = 0;
-    console.warn = () => { warned++; };
-    try {
-      obj.highlightHexes = [{ col: 1, row: 1, color: 'rgba(60,220,80,0.22)' }];
-    } finally {
-      console.warn = origWarn;
-    }
-    assert.ok(!obj._overlays.has('move-targets'), 'setter must not create overlays');
-    // Warn fires at most once globally; allow 0 (already warned in a prior test).
-    assert.ok(warned <= 1);
-  });
-
-  test('highlightHexes getter reconstructs from the overlay map', () => {
-    const obj = makeDouble();
+    // The legacy compat field is gone — there is no accessor on the object and
+    // a plain assignment lands as an ordinary own property (no overlay side
+    // effect). Reads/writes flow through setOverlay() / getOverlay() now.
+    assert.equal(Object.getOwnPropertyDescriptor(obj, 'highlightHexes'), undefined,
+      'highlightHexes accessor must not be installed');
     obj.setOverlay('battle-targets', makeOverlay({
       id: 'battle-targets', kind: 'fill', layer: 'highlight-disc',
       hexes: [{ col: 2, row: 3 }], style: { color: 'rgba(220,60,60,0.55)' },
     }));
-    assert.deepEqual(obj.highlightHexes, [{ col: 2, row: 3, color: 'rgba(220,60,60,0.55)' }]);
+    assert.ok(obj.getOverlay('battle-targets').hexes.has('2,3'));
   });
 });
 

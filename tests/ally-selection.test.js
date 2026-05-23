@@ -102,11 +102,12 @@ describe('_handleSelection ally fallback', () => {
       row: allyUnit.row,
     });
     assert.equal(renderer._selection.entityId, allyUnit.id);
-    assert.deepEqual(
-      renderer.highlightHexes,
-      [],
-      'no movement highlights for ally inspection'
-    );
+    // No movement highlights for ally inspection — the highlight-disc layer
+    // (move/battle target overlays) is empty. (Migrated off the retired
+    // `highlightHexes` getter in PR 5.)
+    const moveOv = renderer.getOverlay('move-targets');
+    assert.ok(!moveOv || moveOv.hexes.size === 0,
+      'no movement highlights for ally inspection');
   });
 
   test('clicking my own unit clears any prior ally selection', () => {

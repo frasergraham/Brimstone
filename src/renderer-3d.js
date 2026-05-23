@@ -1182,8 +1182,10 @@ export class Renderer3D {
      *  handlers that would otherwise fight the custom 3D camera input. */
     this.is3D   = true;
 
-    // Unified overlay map + legacy field proxies. Installed before the field
-    // assignments below so `this.highlightHexes = …` etc. route through it.
+    // Unified overlay map (`_overlays` / `_selection` / `_hover`). All overlay
+    // state flows through setOverlay / getOverlay / setSelection / setHover —
+    // the legacy `highlightHexes` / `selectedHex` field proxies were retired
+    // across PRs 2–5.
     installOverlayShims(this);
 
     // ── Interface property slots (read/written by main.js and ui.js) ────────
@@ -1486,17 +1488,19 @@ export class Renderer3D {
     this._syncEntityIconBillboards();
     this._syncEntityHexOutlines();
     this._applySelectionAndFocus();
-    // _syncOverlays is the dispatcher for the unified overlay map; the legacy
-    // _syncMovementHighlights now delegates to it, so it is no longer called here.
+    // _syncOverlays is the SINGLE dispatcher for the unified overlay map: it
+    // publishes the state-derived overlays (move + battle plan arrows,
+    // objective rings) and then dispatches every overlay kind to a builder that
+    // reads the descriptor. The four legacy per-system sync entry points
+    // (movement highlights, plan move arrows, plan battle arrows, node glow)
+    // were retired in PR 5 — this one call replaces them.
     this._syncOverlays();
-    this._syncPlanArrows();
-    this._syncPlanBattleOverlay();
     this._syncPlanGhosts();
-    // Phase 6: atmosphere updates — phase-driven lighting transitions, node
-    // glow recolour, and fog veil. Standees are hidden in fogged hexes after
-    // the standee sync above so newly-built standees are tagged correctly.
+    // Phase 6: atmosphere updates — phase-driven lighting transitions and the
+    // fog veil. Node-glow recolour now happens inside _syncOverlays via the
+    // ring-pulse builder. Standees are hidden in fogged hexes after the standee
+    // sync above so newly-built standees are tagged correctly.
     this._notePhaseChange();
-    this._syncNodeGlowMeshes();
     this._applyFogVeil();
   }
 
@@ -3710,7 +3714,10 @@ export class Renderer3D {
     this._syncEntityIconBillboards();
     this._syncEntityHexOutlines();
     this._applySelectionAndFocus();
-    this._syncNodeGlowMeshes();
+    // Build the unified overlay map (objective rings + any pending highlights)
+    // so the first rendered frame already has node rings. _syncOverlays is the
+    // single dispatcher; it publishes state-derived overlays then builds them.
+    this._syncOverlays();
     this._applyFogVeil();
 
     engine.runRenderLoop(() => scene.render());
@@ -6188,7 +6195,7 @@ export class Renderer3D {
 
   /** Lazily create / update / dispose the "+N" badge plane above a hex.
    *  Reuses the dynamic-texture + billboard-plane pattern from plan-step
-   *  badges (see `_syncPlanArrows`). Idempotent — only repaints the texture
+   *  badges (see `_buildPlanArrows`). Idempotent — only repaints the texture
    *  when N changes, and disposes the mesh when N drops back to 0. */
   _syncOverflowBadge(k, overflow, col, row) {
     const BABYLON = this._babylon;
@@ -7225,37 +7232,57 @@ export class Renderer3D {
 
   // ─── Highlight overlay (movement / target hexes) ─────────────────────────
   //
-  // ui.js sets `this.highlightHexes = [{col,row,color},...]` whenever a unit
-  // is selected (or the user is targeting an action). The 2D renderer reads
-  // the same field and tints those hexes. Here we lay a thin flat hex disc
-  // on each highlighted tile, materialised with the rgba colour ui.js chose.
+  // ui.js publishes `fill` overlays in the `highlight-disc` layer (ids
+  // 'move-targets' / 'battle-targets' / 'battle-hex-targets') via setOverlay
+  // whenever a unit is selected or the user is targeting an action. The fill
+  // builder lays a thin flat hex-outline ribbon on each tagged tile in the
+  // overlay's chosen colour.
   //
   // Rebuild policy: signature-diff each draw. Highlights rarely change frame
   // to frame (only on selection / targeting events), so the cost is near-zero
   // when nothing moved and a handful of disposals + creations when it did.
 
   /**
-   * Diff-and-rebuild the unified overlay map. The dispatcher walks
-   * `this._overlays` and, for every `kind: 'fill'` overlay in the
-   * `highlight-disc` layer, lays a thin hex-outline ribbon on each hex (the
-   * same geometry the legacy movement-highlight builder produced — only now
-   * keyed by explicit overlay id instead of colour-sniffed out of one array).
+   * The single overlay dispatcher. Runs the producers (which derive transient
+   * state-driven overlays into `this._overlays`) then the per-kind consumers
+   * (which build meshes by reading ONLY the overlay descriptors). Replaces the
+   * four legacy `_sync*` entry points the draw loop used to call by hand.
    *
-   * Each overlay's nested Y comes from `yForLayer('highlight-disc', index)`
-   * where index is the overlay id's alphabetical position within the layer —
-   * deterministic frame to frame, so two overlapping discs don't z-fight.
-   *
-   * Signature-diff each draw: highlights only change on selection / targeting
-   * events, so the cost is near-zero when nothing changed and a handful of
-   * disposals + creations when it did.
+   * Each builder owns its own signature/early-out, so calling the dispatcher
+   * every draw is cheap when nothing overlay-related changed.
    */
   _syncOverlays() {
     if (!this._scene || !this._babylon) return;
 
-    // Selection + hover outline rings (layer `selection`). Has its own
-    // signature/early-out, so call it before the highlight-disc early-returns
-    // below skip the rest of this method.
-    this._syncSelectionOverlays();
+    // ── Producers ──────────────────────────────────────────────────────────
+    // Derive the transient, state-driven overlays into `this._overlays`. The
+    // selection / hover / movement-target overlays are pushed in directly by
+    // ui.js (setSelection / setHover / setOverlay); these three derive from
+    // game state each frame because they track entity positions + node control.
+    this._publishPlanMoveOverlays();
+    this._publishPlanBattleOverlays();
+    this._publishObjectiveRingOverlays();
+
+    // ── Consumers ──────────────────────────────────────────────────────────
+    // Dispatch by (kind, layer) to per-kind builders. Each builder reads ONLY
+    // the published overlay descriptors — never game state — so the overlay
+    // map is the single source of truth for what gets drawn.
+    this._syncSelectionOverlays();   // kind:'outline'    layer:'selection'
+    this._buildFillOverlays();       // kind:'fill'       layer:'highlight-disc'
+    this._buildObjectiveRings();     // kind:'ring-pulse' layer:'objective-ring'
+    this._buildPlanArrows();         // kind:'plan-arrow' layer:'plan-arrow' (move)
+    this._buildPlanBattleArrows();   // kind:'plan-arrow' layer:'plan-arrow' (battle)
+  }
+
+  /**
+   * Build the movement / battle / battle-hex target rings. Walks every
+   * `kind:'fill'` overlay in the `highlight-disc` layer, alphabetical by id so
+   * the nested Y for each is stable across frames, and lays a thin hex-outline
+   * ribbon on each tagged hex. Signature-diffed each draw so the rebuild is
+   * near-free when nothing targeting-related changed.
+   */
+  _buildFillOverlays() {
+    if (!this._scene || !this._babylon) return;
 
     // Fill overlays in the highlight-disc layer, alphabetical by id so the
     // nested Y for each is stable across frames.
@@ -7407,19 +7434,12 @@ export class Renderer3D {
     return mat;
   }
 
-  /** @deprecated Legacy entry point — now delegates to the unified
-   *  `_syncOverlays` dispatcher. Kept so any stray external caller still works;
-   *  the draw loop calls `_syncOverlays` directly. */
-  _syncMovementHighlights() {
-    this._syncOverlays();
-  }
-
   /** Cached `ring-pulse` material keyed by `overlayMaterialKey(rgb, alpha,
    *  glow)`. Overlays that share a colour share one StandardMaterial so the
-   *  builder never re-allocates per ring. The emissive is `rgb` (glow-grade,
-   *  picked up by the GlowLayer); the diffuse is a dim 0.4× wash. Used for the
-   *  static node identifier rings — controller rings keep per-instance
-   *  materials because they recolour in place when a node flips. */
+   *  builder never re-allocates per ring. The emissive is `rgb` (a bright,
+   *  self-lit tint so the ring reads at any phase); the diffuse is a dim 0.4×
+   *  wash. Used for the static node identifier rings — controller rings keep
+   *  per-instance materials because they recolour in place when a node flips. */
   _ringPulseMaterialFor(rgb, alpha = 1, glow = true) {
     const key = overlayMaterialKey(rgb, alpha, glow);
     if (this._ringPulseMatCache.has(key)) return this._ringPulseMatCache.get(key);
@@ -7455,20 +7475,12 @@ export class Renderer3D {
 
   // ─── Plan ghost arrows ───────────────────────────────────────────────────
 
-  /** Delegating shim (overlay API). Publishes one `plan-arrow` overlay per
-   *  planned MOVE step into the unified overlay map, then materialises them.
-   *  Kept as the public entry point the draw loop + tests call; the mesh build
-   *  lives in `_buildPlanArrows`. */
-  _syncPlanArrows() {
-    this._publishPlanMoveOverlays();
-    this._buildPlanArrows();
-  }
-
-  /** Publish a `plan-arrow` overlay per MOVE step. The 3D builder still reads
-   *  the richer `planGhostSteps` (badge numbers, owner colour) when it
-   *  materialises, but the overlay map carries the canonical descriptor so the
-   *  plan layer has a single published representation. Idempotent — re-derived
-   *  from `planGhostSteps` each call; stale move overlays are cleared first. */
+  /** Publish a `plan-arrow` overlay per MOVE step. This is the producer: it
+   *  derives the canonical descriptors from `planGhostSteps` (the move's
+   *  from/to hexes, owner colour, badge number) and writes them into the
+   *  overlay map. `_buildPlanArrows` is the consumer — it materialises meshes
+   *  by reading these descriptors back, never `planGhostSteps`. Idempotent —
+   *  re-derived each call; stale move overlays are cleared first. */
   _publishPlanMoveOverlays() {
     for (const id of Array.from(this._overlays.keys())) {
       if (id.startsWith('plan-move-')) this._overlays.delete(id);
@@ -7491,28 +7503,28 @@ export class Renderer3D {
     }
   }
 
-  /** Rebuild the plan-ghost arrow meshes from `this.planGhostSteps`. We
-   *  rebuild from scratch every draw() — the per-call cost is a handful of
-   *  meshes (one per MOVE step) and avoids hand-tracking dirty plan state. */
+  /** Consumer for the move `plan-arrow` overlays. Reads the descriptors
+   *  `_publishPlanMoveOverlays` wrote into `this._overlays` — never
+   *  `planGhostSteps` — and materialises the dashed per-entity path plus a
+   *  waypoint puck + numbered badge per step. Rebuilt from scratch each draw
+   *  (gated by a signature early-out); the per-call cost is a handful of
+   *  meshes per MOVE step. */
   _buildPlanArrows() {
     // Babylon loads lazily — bail before the signature check so the first
     // draw() after init isn't stamped as "already rendered" while the build
     // phase below is still no-op.
     if (!this._babylon || !this._scene) return;
 
-    // Change-detect: skip the full dispose/rebuild when nothing the rebuild
-    // depends on has changed. The signature covers every (entityId, from/to
-    // hex, stepNumber) tuple plus each acting entity's owner colour — the only
-    // inputs the rebuild reads. During plan editing draw() fires on every
-    // hover / selection event, so this early-out saves GC + GPU buffer churn.
+    // Change-detect: the signature is derived from `planGhostSteps` (the
+    // deterministic source the publisher converts into the move overlays), so
+    // it changes iff the published descriptors change — yet the geometry below
+    // is built entirely from the overlay map. During plan editing draw() fires
+    // on every hover / selection event, so this early-out saves GC + GPU churn.
     const sig = planArrowsSignature(this.planGhostSteps, this.state?.entities);
     if (sig === this._planArrowSig) return;
     this._planArrowSig = sig;
 
-    // Dispose previous frame's plan marker geometry first. We rebuild every
-    // draw — the per-call cost is small (one marker + badge per MOVE step,
-    // plus one tube material + N dash tubes per entity) and avoids
-    // hand-tracking which plan steps changed.
+    // Dispose previous frame's plan marker geometry first.
     for (const arrow of this._planArrowMeshes) {
       arrow.disc?.dispose();
       arrow.discMat?.dispose();
@@ -7525,39 +7537,47 @@ export class Renderer3D {
     }
     this._planArrowMeshes = [];
 
-    const steps = this.planGhostSteps;
-    if (!steps) return;
+    // Collect the move `plan-arrow` overlays (excludes the battle variant).
+    const moveOvs = [];
+    for (const ov of this._overlays.values()) {
+      if (ov.kind === 'plan-arrow' && ov.layer === 'plan-arrow'
+          && ov.meta?.variant !== 'battle') {
+        moveOvs.push(ov);
+      }
+    }
+    if (moveOvs.length === 0) return;
 
     const BABYLON = this._babylon;
+    const parseKey = (k) => { const [col, row] = k.split(',').map(Number); return { col, row }; };
 
-    // Round 4: collect per-entity path so we can draw a dashed line connecting
-    // consecutive waypoints (origin → step 1 → step 2 → …). The previous
-    // round only laid down tile-sized discs at each destination — the *path*
-    // between them was implicit, which read fine for a single hop but got
-    // confusing as soon as a plan had two or more chained moves.
-    const pathsByEntity = new Map();
-    for (const step of steps) {
-      if (!step.arrow) continue;
-      const { entityId, fromCol, fromRow, toCol, toRow } = step.arrow;
-      let arr = pathsByEntity.get(entityId);
-      if (!arr) {
-        arr = [{ col: fromCol, row: fromRow }];
-        pathsByEntity.set(entityId, arr);
-      }
-      arr.push({ col: toCol, row: toRow });
+    // Group overlays by entity, ordered by stepIndex, so we can draw a dashed
+    // line connecting consecutive waypoints (origin → step 1 → step 2 → …).
+    // Each overlay's `path` is [from, to]; the chain for an entity is
+    // [step0.from, step0.to, step1.to, …]. Owner colour rides in `style.color`.
+    const byEntity = new Map();
+    for (const ov of moveOvs) {
+      const eid = ov.meta?.entityId;
+      let e = byEntity.get(eid);
+      if (!e) { e = { color: ov.style?.color || '#ffffff', steps: [] }; byEntity.set(eid, e); }
+      e.steps.push(ov);
+    }
+    for (const e of byEntity.values()) {
+      e.steps.sort((a, b) => (a.meta?.stepIndex ?? 0) - (b.meta?.stepIndex ?? 0));
     }
 
     // Per-entity dashed path tracing the planned waypoints. We render each
-    // dash as a short tube (radius PLAN_LINE_RADIUS) rather than a
-    // LinesMesh — native WebGL line width is driver-capped at ~1px, so a
-    // dashed-line approach reads as a hair regardless of any width
-    // setting. Tubes give us guaranteed visible thickness and let us lift
-    // the dashes above tile/marker geometry without z-fight.
-    for (const [entityId, path] of pathsByEntity) {
+    // dash as a short tube (radius PLAN_LINE_RADIUS) rather than a LinesMesh —
+    // native WebGL line width is driver-capped at ~1px, so tubes give us
+    // guaranteed visible thickness and let us lift the dashes above tile /
+    // marker geometry without z-fight.
+    for (const [entityId, e] of byEntity) {
+      const path = [];
+      e.steps.forEach((ov, i) => {
+        if (i === 0) path.push(parseKey(ov.path[0]));
+        path.push(parseKey(ov.path[1]));
+      });
       if (path.length < 2) continue;
-      const ent = this.state?.entities?.find?.(e => e.id === entityId);
-      const ownerColor = entityBaseColor(ent ?? {});
-      const [r, g, b] = cssHexToRgb01(ownerColor);
+      const [r, g, b] = cssHexToRgb01(e.color);
 
       const dashMat = new BABYLON.StandardMaterial(
         `planLineMat_${entityId}`, this._scene);
@@ -7597,35 +7617,31 @@ export class Renderer3D {
       this._planArrowMeshes.push({ dashes, dashMat });
     }
 
-    for (const step of steps) {
-      if (!step.arrow) continue;
-      const { toCol, toRow, entityId } = step.arrow;
-      // Owner colour: prefer the entity's per-player colour, fall back to
-      // faction theme, then neutral white.
-      const ent   = this.state?.entities?.find?.(e => e.id === entityId);
-      const ownerColor = entityBaseColor(ent ?? {});
+    // Waypoint puck + numbered badge per move step.
+    for (const ov of moveOvs) {
+      const entityId   = ov.meta?.entityId;
+      const stepNumber = ov.meta?.stepIndex ?? 0;
+      const badgeLabel = ov.meta?.badge ?? String(stepNumber);
+      const ownerColor = ov.style?.color || '#ffffff';
+      const { col: toCol, row: toRow } = parseKey(ov.path[1]);
       const [r, g, b] = cssHexToRgb01(ownerColor);
 
-      // Round 4: replaced the large floating disc (radius 0.7, covered most of
-      // the tile) with a small ground-puck cylinder under the badge. Reads as
-      // a "marker pin" rather than a tinted overlay, so the underlying terrain
-      // stays visible — and the numbered badge floating above the puck remains
-      // the primary read for waypoint identity.
+      // Small ground-puck cylinder under the badge — reads as a "marker pin"
+      // rather than a tinted overlay, so the underlying terrain stays visible.
       const disc = BABYLON.MeshBuilder.CreateCylinder(
-        `planMarker_${entityId}_${step.stepNumber ?? 0}`,
+        `planMarker_${entityId}_${stepNumber}`,
         { tessellation: 16, height: PLAN_MARKER_HEIGHT, diameter: PLAN_MARKER_DIAMETER },
         this._scene,
       );
       const { x: tx, z: tz } = hexToWorld(toCol, toRow);
-      // Waypoint puck promoted from the old PLAN_MARKER_Y (0.08) into the
-      // `plan-arrow` overlay layer (≥0.180). This clears UNIT_HEX_OUTLINE_Y
-      // (0.10) so the marker no longer hides under a unit's selection ring —
-      // the long-standing PLAN_MARKER_Y < UNIT_HEX_OUTLINE_Y collision.
+      // Waypoint puck lives in the `plan-arrow` overlay layer (Y ≥ 0.180,
+      // = PLAN_WAYPOINT_Y) — above UNIT_HEX_OUTLINE_Y (0.10) so the marker
+      // never hides under a unit's selection ring.
       disc.position.set(tx, PLAN_WAYPOINT_Y, tz);
       disc.isPickable = false;
 
       const discMat = new BABYLON.StandardMaterial(
-        `planMarkerMat_${entityId}_${step.stepNumber ?? 0}`, this._scene);
+        `planMarkerMat_${entityId}_${stepNumber}`, this._scene);
       discMat.diffuseColor  = new BABYLON.Color3(r, g, b);
       discMat.emissiveColor = new BABYLON.Color3(r * 0.5, g * 0.5, b * 0.5);
       discMat.specularColor = new BABYLON.Color3(0, 0, 0);
@@ -7634,8 +7650,8 @@ export class Renderer3D {
 
       // Numbered badge above the puck — small billboarded plane.
       let badge = null, badgeMat = null, badgeTex = null;
-      if (step.stepNumber != null && typeof document !== 'undefined') {
-        badgeTex = new BABYLON.DynamicTexture(`badgeTex_${entityId}_${step.stepNumber}`,
+      if (typeof document !== 'undefined') {
+        badgeTex = new BABYLON.DynamicTexture(`badgeTex_${entityId}_${stepNumber}`,
           { width: 64, height: 64 }, this._scene, false);
         badgeTex.hasAlpha = true;
         const ctx = badgeTex.getContext();
@@ -7649,10 +7665,10 @@ export class Renderer3D {
         ctx.font = 'bold 36px sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(String(step.stepNumber), 32, 34);
+        ctx.fillText(badgeLabel, 32, 34);
         badgeTex.update();
 
-        badgeMat = new BABYLON.StandardMaterial(`badgeMat_${entityId}_${step.stepNumber}`, this._scene);
+        badgeMat = new BABYLON.StandardMaterial(`badgeMat_${entityId}_${stepNumber}`, this._scene);
         badgeMat.diffuseTexture = badgeTex;
         badgeMat.opacityTexture = badgeTex;
         badgeMat.useAlphaFromDiffuseTexture = true;
@@ -7660,7 +7676,7 @@ export class Renderer3D {
         badgeMat.emissiveColor = new BABYLON.Color3(1, 1, 1);
         badgeMat.backFaceCulling = false;
 
-        badge = BABYLON.MeshBuilder.CreatePlane(`badge_${entityId}_${step.stepNumber}`,
+        badge = BABYLON.MeshBuilder.CreatePlane(`badge_${entityId}_${stepNumber}`,
           { width: 0.45, height: 0.45 }, this._scene);
         badge.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
         badge.isPickable    = false;
@@ -7672,25 +7688,12 @@ export class Renderer3D {
     }
   }
 
-  /** Rebuild the plan-mode battle overlay from `this.planGhostSteps`.
-   *  Mirrors the 2D path's Layer 4 in `_drawPlanOverlay`: a red dashed
-   *  shaft + wedge arrow head from attacker → target hex per planned
-   *  BATTLE_UNIT / BATTLE_HEX step, plus a single ×N badge above each
-   *  unique target hex (single attacks render the ⚔ glyph instead).
-   *  Disposed and rebuilt every draw so the overlay tracks plan edits
-   *  without dirty-tracking. Kept in its own helper to avoid colliding
-   *  with concurrent work on `_syncEntityStandees` (icon billboards,
-   *  hex outlines). */
-  _syncPlanBattleOverlay() {
-    this._publishPlanBattleOverlays();
-    this._buildPlanBattleArrows();
-  }
-
   /** Publish one `plan-arrow` (variant 'battle') overlay per planned attack
-   *  step. Stale battle overlays are cleared first; the ×N count for batched
-   *  attacks on a shared target rides in `meta`. The 3D builder reads
-   *  `planGhostSteps` to materialise; the overlay map is the published record
-   *  (and the input the 2D legacy path would consume). */
+   *  step. This is the producer: it derives the from/to hexes and the per-
+   *  target ×N count from `planGhostSteps` and writes them into the overlay
+   *  map. `_buildPlanBattleArrows` is the consumer — it materialises the shaft,
+   *  arrow head, and ×N badge by reading these descriptors back. Stale battle
+   *  overlays are cleared first. */
   _publishPlanBattleOverlays() {
     for (const id of Array.from(this._overlays.keys())) {
       if (id.startsWith('plan-battle-')) this._overlays.delete(id);
@@ -7714,16 +7717,21 @@ export class Renderer3D {
     }
   }
 
-  /** Rebuild the plan-mode battle meshes from `this.planGhostSteps`. */
+  /** Consumer for the battle `plan-arrow` overlays. Reads the descriptors
+   *  `_publishPlanBattleOverlays` wrote into `this._overlays` — never
+   *  `planGhostSteps` — and materialises a red shaft + wedge arrow head per
+   *  attack plus a single ×N badge above each unique target hex (single attacks
+   *  render the ⚔ glyph). Rebuilt each draw, gated by a signature early-out. */
   _buildPlanBattleArrows() {
     // Babylon loads lazily — bail before the signature check so the first
     // draw() after init doesn't stamp the cache while the build phase below
     // is still no-op.
     if (!this._babylon || !this._scene) return;
 
-    // Change-detect: skip the rebuild when neither the attack steps nor the
-    // per-target ×N counts have changed. Inputs are deterministic in plan
-    // order, so identical steps → identical signature.
+    // Change-detect: the signature is derived from `planGhostSteps` (the
+    // deterministic source the publisher converts into the battle overlays), so
+    // it changes iff the published descriptors change — yet the geometry below
+    // is built entirely from the overlay map.
     const sig = planBattleOverlaySignature(this.planGhostSteps);
     if (sig === this._planBattleSig) return;
     this._planBattleSig = sig;
@@ -7738,10 +7746,19 @@ export class Renderer3D {
     }
     this._planBattleMeshes = [];
 
-    const steps = this.planGhostSteps;
-    if (!steps) return;
+    // Collect the battle-variant `plan-arrow` overlays (insertion order = plan
+    // order, since the publisher rewrites them just before this builder runs).
+    const battleOvs = [];
+    for (const ov of this._overlays.values()) {
+      if (ov.kind === 'plan-arrow' && ov.layer === 'plan-arrow'
+          && ov.meta?.variant === 'battle') {
+        battleOvs.push(ov);
+      }
+    }
+    if (battleOvs.length === 0) return;
 
     const BABYLON = this._babylon;
+    const parseHex = (k) => { const [col, row] = k.split(',').map(Number); return { col, row }; };
 
     // Shared red material — every attack arrow uses the same colour.
     if (!this._attackArrowMat) {
@@ -7754,13 +7771,11 @@ export class Renderer3D {
     }
     const arrowMat = this._attackArrowMat;
 
-    const counts = countAttacksPerTarget(steps);
-
-    // Tube shafts + arrow-head wedges — one per attack step.
+    // Tube shafts + arrow-head wedges — one per attack overlay.
     let arrowIdx = 0;
-    for (const step of steps) {
-      if (!step.attackArrow) continue;
-      const { fromCol, fromRow, toCol, toRow } = step.attackArrow;
+    for (const ov of battleOvs) {
+      const { col: fromCol, row: fromRow } = parseHex(ov.meta.fromHex);
+      const { col: toCol,   row: toRow   } = parseHex(ov.meta.toHex);
       const geo = computeAttackArrowGeometry(fromCol, fromRow, toCol, toRow);
       if (!geo) continue;
       const { shaftStart, shaftEnd, headLeft, headRight } = geo;
@@ -7823,17 +7838,17 @@ export class Renderer3D {
       arrowIdx++;
     }
 
-    // One ×N badge per unique target hex (⚔ glyph for single attacks).
+    // One ×N badge per unique target hex (⚔ glyph for single attacks). The
+    // per-target count rides in each overlay's `meta.count`.
     if (typeof document === 'undefined') return;
     const drawnTargets = new Set();
-    for (const step of steps) {
-      if (!step.attackArrow) continue;
-      const { toCol, toRow } = step.attackArrow;
-      const key = `${toCol},${toRow}`;
+    for (const ov of battleOvs) {
+      const key = ov.meta.toHex;
       if (drawnTargets.has(key)) continue;
       drawnTargets.add(key);
+      const { col: toCol, row: toRow } = parseHex(key);
 
-      const count = counts.get(key) ?? 1;
+      const count = ov.meta.count ?? 1;
       const label = attackBadgeLabel(count);
 
       const badgeTex = new BABYLON.DynamicTexture(
@@ -8308,8 +8323,9 @@ export class Renderer3D {
     // bloom (driven by `_applySelectionAndFocus`); no per-frame standee-
     // material pulse to drive.
     // Node hex outlines no longer pulse — they hold a steady controller tint
-    // (task 7). Initial colour is set by `_syncNodeGlowMeshes` whenever the
-    // controller changes; no per-frame mutation needed.
+    // (task 7). Colour is set by `_buildObjectiveRings` (the ring-pulse
+    // consumer in `_syncOverlays`) whenever the controller changes; no
+    // per-frame mutation needed.
     // Plan ghost walking previewer.
     this._pumpPlanGhosts(now);
     // Scene fog tracking — keep the start/end relative to the camera so the
@@ -8421,16 +8437,6 @@ export class Renderer3D {
     ng.disc.material.emissiveColor.r = c.r * k * NODE_DISC_EMISSIVE_MUL;
     ng.disc.material.emissiveColor.g = c.g * k * NODE_DISC_EMISSIVE_MUL;
     ng.disc.material.emissiveColor.b = c.b * k * NODE_DISC_EMISSIVE_MUL;
-  }
-
-  /** Delegating shim (overlay API). Publishes one `ring-pulse` overlay per
-   *  power-node hex for the controller ring and the identifier ring, then
-   *  materialises them. The published descriptors are the source of truth for
-   *  ring colour — `_buildObjectiveRings` recolours the controller meshes from
-   *  the overlay map. Kept as the public entry point the draw loop calls. */
-  _syncNodeGlowMeshes() {
-    this._publishObjectiveRingOverlays();
-    this._buildObjectiveRings();
   }
 
   /** Publish two `ring-pulse` overlays per node hex: the controller ring
@@ -10497,11 +10503,10 @@ export const UNIT_ICON_RING_THICKNESS_FRAC = 0.07;
  *  reads as washed-out on the bright icon textures. */
 export const UNIT_ICON_PLANE_ALPHA = 1.0;
 
-/** Plan-marker disc — flat owner-tinted circle laid on the destination hex
- *  top. Y just clears the tile prism top (0.075) and the road deck (0.155)
- *  so it reads against both terrain and crossings. (Retained for back-compat
- *  / tests; the round-4 markers now use the smaller PLAN_MARKER_* geometry.) */
-export const PLAN_DISC_Y     = 0.16;
+/** Plan-marker puck alpha. (The legacy flat `PLAN_DISC_Y` disc elevation was
+ *  retired in PR 5 — it was dead since the round-4 markers switched to the
+ *  smaller PLAN_MARKER_* puck geometry at PLAN_WAYPOINT_Y. This alpha is still
+ *  applied to that puck's material.) */
 export const PLAN_DISC_ALPHA = 0.85;
 
 /** Round 4 waypoint marker — small ground puck under the numbered badge so
@@ -10518,12 +10523,13 @@ export const PLAN_MARKER_HEIGHT   = 0.02;
  *  top of the highlight discs (0.160–0.175) the same way the dashed line is. */
 export const PLAN_WAYPOINT_Y      = yForLayer('plan-arrow', 0);
 
-/** Dashed-line Y for the path-connector tracing the planned waypoints.
- *  Raised well above the marker puck top (0.09) and the highlight disc
- *  layer (0.085) so the tube segments clear ground geometry without any
- *  z-fight. Sits well below the floating badge (0.6) so it still reads
- *  as ground-anchored, not floating. */
-export const PLAN_LINE_Y = 0.18;
+/** Dashed-line Y for the path-connector tracing the planned waypoints. Lives
+ *  at the floor of the unified `plan-arrow` overlay layer (= PLAN_WAYPOINT_Y),
+ *  so it shares the waypoint puck's elevation — above the highlight-disc layer
+ *  (0.160–0.175) so the tube segments clear ground geometry without z-fight,
+ *  and well below the floating badge (0.6) so it still reads as ground-
+ *  anchored. See Y_TABLE in src/overlays.js. */
+export const PLAN_LINE_Y = yForLayer('plan-arrow', 0);
 
 /** Tube radius for each dash segment. Tuned for "visibly chunky" without
  *  overpowering the waypoint puck (0.36 diameter) — ~33% of the marker's
@@ -10540,10 +10546,12 @@ export const PLAN_LINE_GAP_SIZE  = 0.16;
  *  Mirrors the 2D renderer's "red dashed arrow + ×N badge" idiom in
  *  `_drawPlanOverlay` (Layer 4) — see `src/renderer.js`. */
 
-/** Y for the attack arrow tubes. Sits just above the move plan lines
- *  (PLAN_LINE_Y = 0.18) so battle arrows clearly overlay them without
- *  z-fighting, but still well below the floating ×N badge. */
-export const ATTACK_ARROW_Y = 0.20;
+/** Y for the attack arrow tubes. Nests near the top of the `plan-arrow`
+ *  overlay layer (yForLayer('plan-arrow', 3) = 0.195) so battle arrows clearly
+ *  overlay the move plan lines at the layer floor (PLAN_LINE_Y = 0.180)
+ *  without z-fighting, while staying well below the floating ×N badge.
+ *  See Y_TABLE in src/overlays.js. */
+export const ATTACK_ARROW_Y = yForLayer('plan-arrow', 3);
 
 /** Tube radius for the attack-arrow shaft. Slightly thicker than the
  *  move plan dashes (0.06) so the attack reads as a heavier, more
@@ -11240,11 +11248,12 @@ export function floatingTextTransform(t, riseDistance = 1.2) {
  *  the road/river network and node rings (RIVER_RIBBON_Y = 0.005, ROAD_RIBBON_Y
  *  = 0.008, node-ring tube apex ≈ 0.09) sit well below this layer, leaving a
  *  comfortable depth margin instead of the ~0.03 separation 0.12 used to give.
- *  Sits BELOW PLAN_DISC_Y (0.16) and PLAN_LINE_Y (0.18) so the plan overlay
- *  still draws on top. The strict ordering — ribbons < highlight < plan disc
- *  < plan line — is locked by tests in `renderer-3d-polish-4.test.js` and the
- *  new `renderer-3d-highlight-overlay.test.js` suite. */
-export const HIGHLIGHT_DISC_Y      = 0.15;
+ *  Pinned to the floor of the `highlight-disc` overlay layer (0.160); sits
+ *  BELOW the `plan-arrow` layer (PLAN_LINE_Y = 0.180) so the plan overlay still
+ *  draws on top. The strict ordering — ribbons < highlight < plan line — is
+ *  locked by tests in `renderer-3d-polish-4.test.js` and the
+ *  `renderer-3d-highlight-overlay.test.js` suite. See Y_TABLE in overlays.js. */
+export const HIGHLIGHT_DISC_Y      = yForLayer('highlight-disc', 0);
 /** Applied alpha on the highlight ring material. The overlay reads as a
  *  translucent ring over the tile rather than a solid floor sticker — operator
  *  wants 0.6–0.7 so the underlying terrain stays visible. We OVERRIDE the
@@ -11321,12 +11330,13 @@ export function movementHighlightSignature(list) {
 }
 
 /**
- * Compute a stable signature for the inputs of `_syncPlanArrows` so the
- * renderer can early-out when nothing in the move plan has changed. The
- * rebuild reads (a) the MOVE arrows in `planGhostSteps` and (b) each acting
- * entity's owner colour (via `entityBaseColor`) for the dash material and
- * badge border. Both pieces go into the signature so any plan edit, entity
- * move, or owner-colour change triggers a rebuild — and nothing else does.
+ * Compute a stable signature for the inputs of `_buildPlanArrows` so the
+ * renderer can early-out when nothing in the move plan has changed. The move
+ * overlays are derived deterministically from (a) the MOVE arrows in
+ * `planGhostSteps` and (b) each acting entity's owner colour (via
+ * `entityBaseColor`), so signing those two pieces is equivalent to signing the
+ * published descriptors — any plan edit, entity move, or owner-colour change
+ * triggers a rebuild, and nothing else does.
  *
  * Pure so it can be unit-tested without a Babylon scene.
  */
@@ -11355,11 +11365,11 @@ export function planArrowsSignature(steps, entities) {
 }
 
 /**
- * Compute a stable signature for the inputs of `_syncPlanBattleOverlay`. The
- * rebuild reads (a) every BATTLE_UNIT / BATTLE_HEX `attackArrow` step in plan
- * order and (b) the per-target ×N count derived from those steps. Steps are
- * deterministic in plan order, so a per-step (from, to) hash uniquely
- * identifies the overlay — the ×N badge counts fall out automatically.
+ * Compute a stable signature for the inputs of `_buildPlanBattleArrows`. The
+ * battle overlays are derived deterministically from every BATTLE_UNIT /
+ * BATTLE_HEX `attackArrow` step in plan order, so a per-step (from, to) hash
+ * uniquely identifies the overlay set — the ×N badge counts fall out
+ * automatically — and signing it is equivalent to signing the descriptors.
  *
  * Pure so it can be unit-tested without a Babylon scene.
  */

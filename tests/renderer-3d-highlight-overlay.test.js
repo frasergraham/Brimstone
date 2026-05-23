@@ -12,7 +12,7 @@ import {
   HIGHLIGHT_MIN_ALPHA,
   HIGHLIGHT_DEEPEN_FACTOR,
   HIGHLIGHT_DEFAULT_RGBA,
-  PLAN_DISC_Y,
+  PLAN_WAYPOINT_Y,
   PLAN_LINE_Y,
   ROAD_RIBBON_Y,
   RIVER_RIBBON_Y,
@@ -41,9 +41,11 @@ describe('Renderer3D highlight overlay — Y ordering with margin', () => {
     assert.ok(HIGHLIGHT_DISC_Y > RIVER_RIBBON_Y);
   });
 
-  test('HIGHLIGHT_DISC_Y stays strictly below PLAN_DISC_Y and PLAN_LINE_Y', () => {
-    assert.ok(HIGHLIGHT_DISC_Y < PLAN_DISC_Y,
-      `HIGHLIGHT_DISC_Y ${HIGHLIGHT_DISC_Y} must remain below PLAN_DISC_Y ${PLAN_DISC_Y}`);
+  test('HIGHLIGHT_DISC_Y stays strictly below the plan-arrow layer (waypoint + line)', () => {
+    // The highlight-disc layer sits below the plan-arrow layer, where the
+    // waypoint puck and dashed line both live (PLAN_WAYPOINT_Y === PLAN_LINE_Y).
+    assert.ok(HIGHLIGHT_DISC_Y < PLAN_WAYPOINT_Y,
+      `HIGHLIGHT_DISC_Y ${HIGHLIGHT_DISC_Y} must remain below PLAN_WAYPOINT_Y ${PLAN_WAYPOINT_Y}`);
     assert.ok(HIGHLIGHT_DISC_Y < PLAN_LINE_Y,
       `HIGHLIGHT_DISC_Y ${HIGHLIGHT_DISC_Y} must remain below PLAN_LINE_Y ${PLAN_LINE_Y}`);
   });

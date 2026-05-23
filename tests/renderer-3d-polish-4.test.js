@@ -14,7 +14,6 @@ import {
   PLAN_WAYPOINT_Y,
   UNIT_HEX_OUTLINE_Y,
   PLAN_LINE_Y,
-  PLAN_DISC_Y,
   // item 4
   hexOutlinePaths,
   HIGHLIGHT_OUTER_R,
@@ -119,9 +118,9 @@ describe('Renderer3D round-4 polish — hexOutlinePaths', () => {
       `HIGHLIGHT_DISC_Y ${HIGHLIGHT_DISC_Y} must clear RIVER_RIBBON_Y ${RIVER_RIBBON_Y}`);
   });
 
-  test('highlight Y sits BELOW plan disc and plan-line layers so plan overlay still reads on top', () => {
-    assert.ok(HIGHLIGHT_DISC_Y < PLAN_DISC_Y,
-      `HIGHLIGHT_DISC_Y ${HIGHLIGHT_DISC_Y} must be below PLAN_DISC_Y ${PLAN_DISC_Y}`);
+  test('highlight Y sits BELOW the plan-arrow layer (waypoint + line) so plan overlay still reads on top', () => {
+    assert.ok(HIGHLIGHT_DISC_Y < PLAN_WAYPOINT_Y,
+      `HIGHLIGHT_DISC_Y ${HIGHLIGHT_DISC_Y} must be below PLAN_WAYPOINT_Y ${PLAN_WAYPOINT_Y}`);
     assert.ok(HIGHLIGHT_DISC_Y < PLAN_LINE_Y,
       `HIGHLIGHT_DISC_Y ${HIGHLIGHT_DISC_Y} must be below PLAN_LINE_Y ${PLAN_LINE_Y}`);
   });

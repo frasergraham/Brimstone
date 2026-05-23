@@ -5,6 +5,11 @@
 import { hexKey } from './hex.js';
 
 /** Z-order of overlay layers, low to high. */
+// NOTE: the `spotlight` layer is reserved but not yet wired. The 2D renderer
+// has a tutorial spotlight (`tutorialSpotlightHex`, renderer.js) with no 3D
+// equivalent; migrating it into the overlay map is a documented 3D parity gap
+// left for a future wave (the layer slot is held here so the Y band is stable
+// when that lands).
 export const LAYERS = Object.freeze([
   'objective-tint',
   'fill',
@@ -94,24 +99,6 @@ export function makeOverlay({ id, kind, layer, hexes, style, animation, meta, pa
   return Object.freeze(descriptor);
 }
 
-/** Stable id order for reconstituting the (read-only, legacy) flat
- *  `highlightHexes` array from the overlay map. The colour-sniffing *setter*
- *  was retired in PR 2 — ui.js now writes these ids directly via setOverlay —
- *  so this list is only consumed by the deprecated getter below. */
-const HIGHLIGHT_IDS = Object.freeze([
-  'move-targets', 'battle-targets', 'battle-hex-targets', 'guard-zone', 'misc-highlights',
-]);
-
-/** One-shot guard so a stray legacy `renderer.highlightHexes = [...]` write
- *  warns once instead of spamming the console every frame. */
-let _warnedHighlightSetter = false;
-
-/** Parse a "col,row" hex key back to numeric coords. */
-function parseHexKey(key) {
-  const [col, row] = key.split(',').map(Number);
-  return { col, row };
-}
-
 /**
  * The unified overlay API as plain methods (use `this`). Shared between the
  * renderer prototypes (via `Object.assign(<Renderer>.prototype, OVERLAY_METHODS)`
@@ -177,16 +164,16 @@ export const OVERLAY_METHODS = Object.freeze({
 });
 
 /**
- * Initialise the overlay state (`_overlays` / `_selection` / `_hover`), copy the
- * overlay methods onto plain test doubles (renderer instances already inherit
- * them from the prototype), and define the legacy READ-ONLY `highlightHexes`
- * compat getter. Idempotent — safe to call more than once per instance, even
- * with live overlays in between (verified by a unit test in overlays.test.js).
+ * Initialise the overlay state (`_overlays` / `_selection` / `_hover`) and copy
+ * the overlay methods onto plain test doubles (renderer instances already
+ * inherit them from the prototype). Idempotent — safe to call more than once
+ * per instance, even with live overlays in between (verified by a unit test in
+ * overlays.test.js).
  *
- * The `selectedHex` / `selectedEntityId` / `hoveredHex` field proxies were
- * retired in PR 3 — all selection / hover state now flows through
- * `setSelection({ entityId, hex })` / `setHover(hex)` and is read off
- * `this._selection` / `this._hover` directly.
+ * The legacy field proxies (`highlightHexes`, `selectedHex`, `selectedEntityId`,
+ * `hoveredHex`) were all retired across PRs 2–5 — overlay reads/writes now flow
+ * exclusively through `setOverlay` / `getOverlay` / `setSelection` / `setHover`
+ * and are read off `this._overlays` / `this._selection` / `this._hover`.
  */
 export function installOverlayShims(target) {
   // Idempotent: a second call must not wipe an existing overlay map / selection.
@@ -197,36 +184,6 @@ export function installOverlayShims(target) {
   // Renderer instances already carry these on their prototype (assigned at
   // module load); only plain test doubles need them copied onto the object.
   if (typeof target.setOverlay !== 'function') Object.assign(target, OVERLAY_METHODS);
-
-  // ── Legacy compat field. `highlightHexes` is READ-ONLY: ui.js writes overlays
-  // directly via setOverlay() (PR 2). The setter is a deprecated no-op that
-  // warns once if any straggler still assigns to it. ──
-  Object.defineProperty(target, 'highlightHexes', {
-    configurable: true,
-    enumerable: true,
-    get() {
-      const out = [];
-      for (const id of HIGHLIGHT_IDS) {
-        const ov = this._overlays.get(id);
-        if (!ov) continue;
-        const color = ov.style?.color;
-        for (const key of Array.from(ov.hexes).sort()) {
-          const { col, row } = parseHexKey(key);
-          out.push({ col, row, color });
-        }
-      }
-      return out;
-    },
-    set(_list) {
-      if (!_warnedHighlightSetter) {
-        _warnedHighlightSetter = true;
-        console.warn(
-          'renderer.highlightHexes is deprecated and no longer writable — ' +
-          'use setOverlay(id, makeOverlay({...})) instead. Ignoring assignment.',
-        );
-      }
-    },
-  });
 }
 
 /**

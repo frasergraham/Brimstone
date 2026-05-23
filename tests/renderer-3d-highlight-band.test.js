@@ -20,7 +20,7 @@ import {
   HEX_HIGHLIGHT_BAND_MAX_Y,
   UNIT_HEX_OUTLINE_Y,
   HIGHLIGHT_DISC_Y,
-  PLAN_DISC_Y,
+  PLAN_WAYPOINT_Y,
   PLAN_LINE_Y,
   ROAD_RIBBON_Y,
 } from '../src/renderer-3d.js';
@@ -73,7 +73,7 @@ describe('Renderer3D — every hex highlight Y lives in the band', () => {
   const cases = [
     ['UNIT_HEX_OUTLINE_Y', UNIT_HEX_OUTLINE_Y],
     ['HIGHLIGHT_DISC_Y',   HIGHLIGHT_DISC_Y],
-    ['PLAN_DISC_Y',        PLAN_DISC_Y],
+    ['PLAN_WAYPOINT_Y',    PLAN_WAYPOINT_Y],
     ['PLAN_LINE_Y',        PLAN_LINE_Y],
   ];
 
@@ -96,15 +96,16 @@ describe('Renderer3D — every hex highlight Y lives in the band', () => {
     });
   }
 
-  test('strict stacking order: outline < disc < plan disc < plan line', () => {
-    // Outline ring (lowest) ≺ movement-range highlight ≺ plan ghost disc
-    // ≺ plan ghost dashed line. Keeps the per-frame draw deterministic and
-    // protects against future drift inside the band.
+  test('strict stacking order: outline < disc < plan-arrow layer', () => {
+    // Outline ring (lowest) ≺ movement-range highlight ≺ plan-arrow layer.
+    // The waypoint puck and dashed line now share the plan-arrow layer floor
+    // (PLAN_WAYPOINT_Y === PLAN_LINE_Y), so they sit together above the
+    // highlight disc. Keeps the per-frame draw deterministic.
     assert.ok(UNIT_HEX_OUTLINE_Y < HIGHLIGHT_DISC_Y,
       `UNIT_HEX_OUTLINE_Y ${UNIT_HEX_OUTLINE_Y} must be < HIGHLIGHT_DISC_Y ${HIGHLIGHT_DISC_Y}`);
-    assert.ok(HIGHLIGHT_DISC_Y < PLAN_DISC_Y,
-      `HIGHLIGHT_DISC_Y ${HIGHLIGHT_DISC_Y} must be < PLAN_DISC_Y ${PLAN_DISC_Y}`);
-    assert.ok(PLAN_DISC_Y < PLAN_LINE_Y,
-      `PLAN_DISC_Y ${PLAN_DISC_Y} must be < PLAN_LINE_Y ${PLAN_LINE_Y}`);
+    assert.ok(HIGHLIGHT_DISC_Y < PLAN_WAYPOINT_Y,
+      `HIGHLIGHT_DISC_Y ${HIGHLIGHT_DISC_Y} must be < PLAN_WAYPOINT_Y ${PLAN_WAYPOINT_Y}`);
+    assert.equal(PLAN_WAYPOINT_Y, PLAN_LINE_Y,
+      `PLAN_WAYPOINT_Y ${PLAN_WAYPOINT_Y} and PLAN_LINE_Y ${PLAN_LINE_Y} share the plan-arrow floor`);
   });
 });

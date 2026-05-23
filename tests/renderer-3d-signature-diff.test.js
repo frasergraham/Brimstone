@@ -169,7 +169,7 @@ function spyMesh() {
   return m;
 }
 
-describe('_syncPlanArrows — early-out leaves existing meshes alone', () => {
+describe('_buildPlanArrows — early-out leaves existing meshes alone', () => {
   test('unchanged steps + entities → no dispose() calls', () => {
     const r = makeRenderer();
     r.state = { entities: [{ id: 7, owner: 'hero' }] };
@@ -187,7 +187,7 @@ describe('_syncPlanArrows — early-out leaves existing meshes alone', () => {
     };
     r._planArrowMeshes = [fake];
 
-    r._syncPlanArrows();
+    r._buildPlanArrows();
 
     assert.equal(fake.disc.disposed,    0, 'disc was disposed despite unchanged plan');
     assert.equal(fake.discMat.disposed, 0);
@@ -226,7 +226,7 @@ describe('_syncPlanArrows — early-out leaves existing meshes alone', () => {
     //  the code path will throw on the first BABYLON.MeshBuilder call.
     //  Catch it.)
     let threw = false;
-    try { r._syncPlanArrows(); } catch (_) { threw = true; }
+    try { r._buildPlanArrows(); } catch (_) { threw = true; }
 
     assert.equal(fake.disc.disposed,    1, 'dispose must run when signature changes');
     assert.equal(fake.discMat.disposed, 1);
@@ -237,7 +237,7 @@ describe('_syncPlanArrows — early-out leaves existing meshes alone', () => {
   });
 });
 
-describe('_syncPlanBattleOverlay — early-out leaves existing meshes alone', () => {
+describe('_buildPlanBattleArrows — early-out leaves existing meshes alone', () => {
   test('unchanged attack steps → no dispose() calls', () => {
     const r = makeRenderer();
     r.planGhostSteps = [
@@ -251,7 +251,7 @@ describe('_syncPlanBattleOverlay — early-out leaves existing meshes alone', ()
     };
     r._planBattleMeshes = [fake];
 
-    r._syncPlanBattleOverlay();
+    r._buildPlanBattleArrows();
 
     assert.equal(fake.shaft.disposed,    0);
     assert.equal(fake.head1.disposed,    0);
@@ -273,7 +273,7 @@ describe('_syncPlanBattleOverlay — early-out leaves existing meshes alone', ()
     r._planBattleMeshes = [fake];
 
     let threw = false;
-    try { r._syncPlanBattleOverlay(); } catch (_) { threw = true; }
+    try { r._buildPlanBattleArrows(); } catch (_) { threw = true; }
 
     assert.equal(fake.shaft.disposed, 1, 'dispose must run when target hex changes');
     assert.equal(fake.head1.disposed, 1);
@@ -289,7 +289,7 @@ describe('_syncPlanBattleOverlay — early-out leaves existing meshes alone', ()
 // frame would see a "matching" cached signature and skip the build entirely,
 // leaving the player with a blank overlay.
 
-describe('_syncPlanArrows — pre-Babylon draw does not poison the signature cache', () => {
+describe('_buildPlanArrows — pre-Babylon draw does not poison the signature cache', () => {
   test('with _babylon unset, signature stays empty so a later draw still builds', () => {
     const fakeCanvas = { parentElement: null, width: 800, height: 600, addEventListener() {} };
     const r = new Renderer3D(fakeCanvas, {});
@@ -299,20 +299,20 @@ describe('_syncPlanArrows — pre-Babylon draw does not poison the signature cac
       { arrow: { entityId: 7, fromCol: 1, fromRow: 1, toCol: 2, toRow: 1 }, stepNumber: 1 },
     ];
 
-    r._syncPlanArrows();
+    r._buildPlanArrows();
 
     assert.equal(r._planArrowSig, '',
       'signature must remain unstamped until Babylon is loaded — otherwise the first post-init draw skips the build');
   });
 });
 
-describe('_syncPlanBattleOverlay — pre-Babylon draw does not poison the signature cache', () => {
+describe('_buildPlanBattleArrows — pre-Babylon draw does not poison the signature cache', () => {
   test('with _babylon unset, signature stays empty so a later draw still builds', () => {
     const fakeCanvas = { parentElement: null, width: 800, height: 600, addEventListener() {} };
     const r = new Renderer3D(fakeCanvas, {});
     r.planGhostSteps = [{ attackArrow: { fromCol: 0, fromRow: 0, toCol: 1, toRow: 0 } }];
 
-    r._syncPlanBattleOverlay();
+    r._buildPlanBattleArrows();
 
     assert.equal(r._planBattleSig, '');
   });
