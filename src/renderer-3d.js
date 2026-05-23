@@ -34,6 +34,7 @@ import { nodeController, Phase } from './game.js';
 import { sightRangeForEntity, findFaction } from './factions.js';
 import { Side } from './sides.js';
 import { MAP_SIZES, NODE_COLORS } from './map.js';
+import { installOverlayShims } from './overlays.js';
 
 // Babylon core + glTF loaders are served from the packaged `assets/vendor/`
 // directory rather than any CDN — the Electron / iOS bundles must run with zero
@@ -1178,6 +1179,10 @@ export class Renderer3D {
      *  handlers that would otherwise fight the custom 3D camera input. */
     this.is3D   = true;
 
+    // Unified overlay map + legacy field proxies. Installed before the field
+    // assignments below so `this.highlightHexes = …` etc. route through it.
+    installOverlayShims(this);
+
     // ── Interface property slots (read/written by main.js and ui.js) ────────
     this.onImagesLoaded     = null;
     this.aiDebugOverlay     = null;
@@ -1467,6 +1472,7 @@ export class Renderer3D {
     this._syncEntityHexOutlines();
     this._applySelectionAndFocus();
     this._syncMovementHighlights();
+    this._syncOverlays();
     this._syncPlanArrows();
     this._syncPlanBattleOverlay();
     this._syncPlanGhosts();
@@ -7214,6 +7220,12 @@ export class Renderer3D {
   /** Mirror `highlightHexes` into a set of flat emissive hex discs. Disposes
    *  previous overlay geometry when the signature changes; idempotent when it
    *  hasn't. Skipped silently if Babylon hasn't loaded yet. */
+  /** Diff-and-rebuild the unified overlay map. PR 1 stub — overlay builders
+   *  land in PR 2+; existing `_sync*` methods still own the draws for now. */
+  _syncOverlays() {
+    return;
+  }
+
   _syncMovementHighlights() {
     if (!this._scene || !this._babylon) return;
     const sig = movementHighlightSignature(this.highlightHexes);
