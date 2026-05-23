@@ -12,7 +12,7 @@ import { getVisiblePositions, sightRange, buildFogMovementHexes } from './action
 import { getFaction, sightRangeForEntity } from './factions.js';
 import { getFactionTheme, NEUTRAL_NODE_FILL } from './theme.js';
 import { nodeController, Phase } from './game.js';
-import { installOverlayShims } from './overlays.js';
+import { installOverlayShims, OVERLAY_METHODS } from './overlays.js';
 
 // PAD_X/PAD_Y are now computed dynamically in _resize() as this._padX / this._padY.
 // These constants are kept for backward-compat imports but should not be used internally.
@@ -131,7 +131,6 @@ export class Renderer {
     installOverlayShims(this);
 
     this.selectedHex    = null;
-    this.highlightHexes = [];
     this.hoveredHex     = null;
 
     /** Ghost overlay steps from computeGhostState(). null = no overlay. */
@@ -1322,9 +1321,22 @@ export class Renderer {
     // Thick outlines on hexes occupied by units
     this._drawUnitPresenceOutlines(revealedHexes);
 
-    // Highlights
-    for (const h of this.highlightHexes) {
-      this._drawHighlight(h.col, h.row, h.color || 'rgba(100,200,100,0.15)');
+    // Highlights — move/battle/battle-hex target overlays (layer
+    // `highlight-disc`), drawn in alphabetical id order. Each overlay carries a
+    // single rgba fill colour in `style.color`; the 2D path tints every hex in
+    // its set with that colour. (Migrated off the legacy `highlightHexes` array.)
+    const discIds = [];
+    for (const [id, ov] of this._overlays) {
+      if (ov.layer === 'highlight-disc') discIds.push(id);
+    }
+    discIds.sort();
+    for (const id of discIds) {
+      const ov = this._overlays.get(id);
+      const color = ov.style?.color || 'rgba(100,200,100,0.15)';
+      for (const key of Array.from(ov.hexes).sort()) {
+        const [c, r] = key.split(',').map(Number);
+        this._drawHighlight(c, r, color);
+      }
     }
 
     // Battle highlights (combatants = bright red, assisting allies = faint red)
@@ -3280,6 +3292,11 @@ export class Renderer {
     }
   }
 }
+
+// Overlay API lives on the prototype (shared impl from overlays.js) so the
+// renderer-interface conformance test sees setOverlay / removeOverlay /
+// clearOverlaysByLayer / setSelection / setHover as real methods.
+Object.assign(Renderer.prototype, OVERLAY_METHODS);
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 

@@ -94,18 +94,17 @@ export function makeOverlay({ id, kind, layer, hexes, style, animation, meta, pa
   return Object.freeze(descriptor);
 }
 
-/** Colour-prefix → overlay id/style buckets for the legacy `highlightHexes`
- *  setter. The 2D/3D draw code historically distinguished move/battle/etc.
- *  hexes purely by the rgba string ui.js wrote; this preserves that mapping. */
-const HIGHLIGHT_BUCKETS = [
-  { id: 'move-targets',       prefix: 'rgba(60,220,80',  color: 'rgba(60,220,80,0.22)',  alpha: 0.22 },
-  { id: 'battle-targets',     prefix: 'rgba(220,60,60',  color: 'rgba(220,60,60,0.55)',  alpha: 0.55 },
-  { id: 'battle-hex-targets', prefix: 'rgba(220,120,40', color: 'rgba(220,120,40,0.50)', alpha: 0.50 },
-  { id: 'guard-zone',         prefix: 'rgba(230,160,60', color: 'rgba(230,160,60,0.18)', alpha: 0.18 },
-];
-const MISC_HIGHLIGHT_ID = 'misc-highlights';
-/** Stable id order for reconstituting the flat `highlightHexes` array. */
-const HIGHLIGHT_IDS = Object.freeze([...HIGHLIGHT_BUCKETS.map(b => b.id), MISC_HIGHLIGHT_ID]);
+/** Stable id order for reconstituting the (read-only, legacy) flat
+ *  `highlightHexes` array from the overlay map. The colour-sniffing *setter*
+ *  was retired in PR 2 — ui.js now writes these ids directly via setOverlay —
+ *  so this list is only consumed by the deprecated getter below. */
+const HIGHLIGHT_IDS = Object.freeze([
+  'move-targets', 'battle-targets', 'battle-hex-targets', 'guard-zone', 'misc-highlights',
+]);
+
+/** One-shot guard so a stray legacy `renderer.highlightHexes = [...]` write
+ *  warns once instead of spamming the console every frame. */
+let _warnedHighlightSetter = false;
 
 /** Parse a "col,row" hex key back to numeric coords. */
 function parseHexKey(key) {
@@ -114,36 +113,35 @@ function parseHexKey(key) {
 }
 
 /**
- * Install the unified overlay API + legacy compat accessors onto a renderer
- * (or a test double). Must run before any `this.highlightHexes = …` /
- * `this.selectedHex = …` constructor assignments so they route through the
- * proxy setters. Idempotent enough for one call per instance.
+ * The unified overlay API as plain methods (use `this`). Shared between the
+ * renderer prototypes (via `Object.assign(<Renderer>.prototype, OVERLAY_METHODS)`
+ * — so the static interface-conformance test sees them on the prototype) and
+ * plain test doubles (via `installOverlayShims`). One source of truth, no drift.
  */
-export function installOverlayShims(target) {
-  target._overlays = new Map();
-  target._selection = { entityId: null, hex: null };
-  target._hover = null;
-  target._highlightHexes = [];
-
-  target.setOverlay = function (id, overlay) {
+export const OVERLAY_METHODS = Object.freeze({
+  setOverlay(id, overlay) {
     if (overlay == null) { this._overlays.delete(id); return; }
     if (!Object.isFrozen(overlay) || typeof overlay.kind !== 'string') {
       throw new Error('setOverlay: overlay must be produced by makeOverlay()');
     }
     this._overlays.set(id, overlay);
-  };
+  },
 
-  target.removeOverlay = function (id) {
+  getOverlay(id) {
+    return this._overlays.get(id) ?? null;
+  },
+
+  removeOverlay(id) {
     this._overlays.delete(id);
-  };
+  },
 
-  target.clearOverlaysByLayer = function (layer) {
+  clearOverlaysByLayer(layer) {
     for (const [id, ov] of this._overlays) {
       if (ov.layer === layer) this._overlays.delete(id);
     }
-  };
+  },
 
-  target.setSelection = function ({ entityId = null, hex = null } = {}) {
+  setSelection({ entityId = null, hex = null } = {}) {
     this._selection = { entityId, hex };
     if (!hex) { this._overlays.delete('selection'); return; }
     this.setOverlay('selection', makeOverlay({
@@ -151,18 +149,40 @@ export function installOverlayShims(target) {
       hexes: [hex], style: { glow: true },
       meta: entityId != null ? { entityId } : undefined,
     }));
-  };
+  },
 
-  target.setHover = function (hex) {
+  setHover(hex) {
     this._hover = hex ?? null;
     if (!hex) { this._overlays.delete('hover'); return; }
     this.setOverlay('hover', makeOverlay({
       id: 'hover', kind: 'outline', layer: 'selection',
       hexes: [hex], style: { glow: false },
     }));
-  };
+  },
+});
 
-  // ── Legacy compat: four fields that existing draw code reads/writes. ──
+/**
+ * Initialise the overlay state (`_overlays` / `_selection` / `_hover`), copy the
+ * overlay methods onto plain test doubles (renderer instances already inherit
+ * them from the prototype), and define the legacy `highlightHexes` /
+ * `selectedHex` / `selectedEntityId` / `hoveredHex` compat accessors. Must run
+ * before any `this.selectedHex = …` constructor assignment so those route
+ * through the proxy. Idempotent — safe to call more than once per instance.
+ */
+export function installOverlayShims(target) {
+  // Idempotent: a second call must not wipe an existing overlay map / selection.
+  if (!target._overlays) target._overlays = new Map();
+  if (!target._selection) target._selection = { entityId: null, hex: null };
+  if (target._hover === undefined) target._hover = null;
+
+  // Renderer instances already carry these on their prototype (assigned at
+  // module load); only plain test doubles need them copied onto the object.
+  if (typeof target.setOverlay !== 'function') Object.assign(target, OVERLAY_METHODS);
+
+  // ── Legacy compat fields. `highlightHexes` is now READ-ONLY: ui.js writes
+  // overlays directly via setOverlay() (PR 2). The setter is a deprecated
+  // no-op that warns once if any straggler still assigns to it. selectedHex /
+  // selectedEntityId / hoveredHex remain live proxies until PR 3. ──
   Object.defineProperty(target, 'highlightHexes', {
     configurable: true,
     enumerable: true,
@@ -179,21 +199,13 @@ export function installOverlayShims(target) {
       }
       return out;
     },
-    set(list) {
-      for (const id of HIGHLIGHT_IDS) this._overlays.delete(id);
-      this._highlightHexes = Array.isArray(list) ? list : [];
-      const buckets = new Map();
-      for (const h of this._highlightHexes) {
-        if (typeof h?.col !== 'number' || typeof h?.row !== 'number') continue;
-        const color = h.color ?? '';
-        const def = HIGHLIGHT_BUCKETS.find(b => color.startsWith(b.prefix));
-        const id = def ? def.id : MISC_HIGHLIGHT_ID;
-        if (!buckets.has(id)) buckets.set(id, { hexes: [], color: def ? def.color : color, alpha: def?.alpha });
-        buckets.get(id).hexes.push({ col: h.col, row: h.row });
-      }
-      for (const [id, b] of buckets) {
-        const style = b.alpha != null ? { color: b.color, alpha: b.alpha } : { color: b.color };
-        this.setOverlay(id, makeOverlay({ id, kind: 'fill', layer: 'highlight-disc', hexes: b.hexes, style }));
+    set(_list) {
+      if (!_warnedHighlightSetter) {
+        _warnedHighlightSetter = true;
+        console.warn(
+          'renderer.highlightHexes is deprecated and no longer writable — ' +
+          'use setOverlay(id, makeOverlay({...})) instead. Ignoring assignment.',
+        );
       }
     },
   });

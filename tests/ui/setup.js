@@ -2,6 +2,8 @@
 //
 // Usage:
 //   import { makeUIFixture, makeState, makeFakeElement } from './setup.js';
+
+import { installOverlayShims } from '../../src/overlays.js';
 //
 // Pattern: call installGlobalMocks() ONCE at the top of your test file
 // (before any dynamic imports), then createUIFixture() for each test.
@@ -123,15 +125,11 @@ export function makeFakeCanvas() {
 // ── Renderer stub ─────────────────────────────────────────────────────────────
 
 export function makeFakeRenderer() {
-  return {
-    selectedHex:      null,
-    selectedEntityId: null,
-    highlightHexes:   [],
+  const r = {
     planGhostSteps:   [],
     insetRight:       0,
     hexSize:          30,
     zoomLevel:        1,
-    hoveredHex:       null,
     _panX: 0, _panY: 0,
     _zoomAnim: null,
     resize()          {},
@@ -146,6 +144,11 @@ export function makeFakeRenderer() {
     hexToCanvasPos(col, row) { return { x: col * 50, y: row * 50 }; },
     canvasToHex()     { return { col: 0, row: 0 }; },
   };
+  // Real overlay API + legacy field proxies (selectedHex / selectedEntityId /
+  // highlightHexes / hoveredHex), matching what both renderers expose. ui.js
+  // drives selection / target highlights through setOverlay / clearOverlaysByLayer.
+  installOverlayShims(r);
+  return r;
 }
 
 // ── Global browser mock ───────────────────────────────────────────────────────

@@ -34,7 +34,7 @@ import { nodeController, Phase } from './game.js';
 import { sightRangeForEntity, findFaction } from './factions.js';
 import { Side } from './sides.js';
 import { MAP_SIZES, NODE_COLORS } from './map.js';
-import { installOverlayShims } from './overlays.js';
+import { installOverlayShims, OVERLAY_METHODS, yForLayer, overlaySignature } from './overlays.js';
 
 // Babylon core + glTF loaders are served from the packaged `assets/vendor/`
 // directory rather than any CDN — the Electron / iOS bundles must run with zero
@@ -1194,7 +1194,6 @@ export class Renderer3D {
     // 3D camera drag mode: 'pan' (default) or 'rotate'. UI toggle button
     // flips this via `setCameraDragMode`. Pinch / wheel always zooms.
     this.cameraDragMode     = 'pan';
-    this.highlightHexes     = [];
     this.planGhostSteps     = null;
     this.viewLocked         = false;
     this.zoomLevel          = 1.0;
@@ -1471,7 +1470,8 @@ export class Renderer3D {
     this._syncEntityIconBillboards();
     this._syncEntityHexOutlines();
     this._applySelectionAndFocus();
-    this._syncMovementHighlights();
+    // _syncOverlays is the dispatcher for the unified overlay map; the legacy
+    // _syncMovementHighlights now delegates to it, so it is no longer called here.
     this._syncOverlays();
     this._syncPlanArrows();
     this._syncPlanBattleOverlay();
@@ -7217,58 +7217,85 @@ export class Renderer3D {
   // to frame (only on selection / targeting events), so the cost is near-zero
   // when nothing moved and a handful of disposals + creations when it did.
 
-  /** Mirror `highlightHexes` into a set of flat emissive hex discs. Disposes
-   *  previous overlay geometry when the signature changes; idempotent when it
-   *  hasn't. Skipped silently if Babylon hasn't loaded yet. */
-  /** Diff-and-rebuild the unified overlay map. PR 1 stub — overlay builders
-   *  land in PR 2+; existing `_sync*` methods still own the draws for now. */
+  /**
+   * Diff-and-rebuild the unified overlay map. The dispatcher walks
+   * `this._overlays` and, for every `kind: 'fill'` overlay in the
+   * `highlight-disc` layer, lays a thin hex-outline ribbon on each hex (the
+   * same geometry the legacy movement-highlight builder produced — only now
+   * keyed by explicit overlay id instead of colour-sniffed out of one array).
+   *
+   * Each overlay's nested Y comes from `yForLayer('highlight-disc', index)`
+   * where index is the overlay id's alphabetical position within the layer —
+   * deterministic frame to frame, so two overlapping discs don't z-fight.
+   *
+   * Signature-diff each draw: highlights only change on selection / targeting
+   * events, so the cost is near-zero when nothing changed and a handful of
+   * disposals + creations when it did.
+   */
   _syncOverlays() {
-    return;
-  }
-
-  _syncMovementHighlights() {
     if (!this._scene || !this._babylon) return;
-    const sig = movementHighlightSignature(this.highlightHexes);
+
+    // Fill overlays in the highlight-disc layer, alphabetical by id so the
+    // nested Y for each is stable across frames.
+    const ids = [];
+    for (const [id, ov] of this._overlays) {
+      if (ov.kind === 'fill' && ov.layer === 'highlight-disc') ids.push(id);
+    }
+    ids.sort();
+
+    let sig = '';
+    ids.forEach((id, i) => { sig += `${id}@${i}:${overlaySignature(this._overlays.get(id))}|`; });
     if (sig === this._highlightSig) return;
     this._highlightSig = sig;
 
     for (const mesh of this._highlightMeshes) mesh.dispose();
     this._highlightMeshes = [];
-
-    const list = Array.isArray(this.highlightHexes) ? this.highlightHexes : [];
-    if (list.length === 0) return;
+    if (ids.length === 0) return;
 
     const BABYLON = this._babylon;
-    for (const h of list) {
-      if (typeof h?.col !== 'number' || typeof h?.row !== 'number') continue;
-      // Round 4: replaced the flat tinted cylinder ("the whole tile lights up
-      // a muddy green") with a hex *outline ring*. The underlying terrain stays
-      // readable, but the player can still see at a glance which hexes are
-      // valid move/attack targets. Built as a ribbon between two concentric
-      // hex polygons (outer + inner) so the ring keeps its width regardless of
-      // camera distance — line meshes don't reliably scale across browsers.
-      const { outer, inner } = hexOutlinePaths(h.col, h.row);
-      const toVec = p => new BABYLON.Vector3(p.x, p.y, p.z);
-      const ribbon = BABYLON.MeshBuilder.CreateRibbon(
-        `highlight_${h.col}_${h.row}`,
-        {
-          pathArray: [outer.map(toVec), inner.map(toVec)],
-          sideOrientation: BABYLON.Mesh.DOUBLESIDE,
-        },
-        this._scene,
-      );
-      ribbon.parent = this._mapRoot;
-      ribbon.material   = this._highlightMaterialFor(h.color || HIGHLIGHT_DEFAULT_RGBA);
-      ribbon.isPickable = false;
-      this._highlightMeshes.push(ribbon);
-    }
+    ids.forEach((id, nestedIndex) => {
+      const ov    = this._overlays.get(id);
+      const color = ov.style?.color || HIGHLIGHT_DEFAULT_RGBA;
+      const y     = yForLayer('highlight-disc', nestedIndex);
+      for (const key of Array.from(ov.hexes).sort()) {
+        const [col, row] = key.split(',').map(Number);
+        if (!Number.isFinite(col) || !Number.isFinite(row)) continue;
+        // Hex *outline ring* (not a flat tinted disc — that lit the whole tile
+        // a muddy colour). Built as a ribbon between two concentric hex polygons
+        // so the ring keeps its width regardless of camera distance.
+        const { outer, inner } = hexOutlinePaths(col, row, HIGHLIGHT_OUTER_R, HIGHLIGHT_INNER_R, y);
+        const toVec = p => new BABYLON.Vector3(p.x, p.y, p.z);
+        const ribbon = BABYLON.MeshBuilder.CreateRibbon(
+          `highlight_${id}_${col}_${row}`,
+          {
+            pathArray: [outer.map(toVec), inner.map(toVec)],
+            sideOrientation: BABYLON.Mesh.DOUBLESIDE,
+          },
+          this._scene,
+        );
+        ribbon.parent     = this._mapRoot;
+        ribbon.material   = this._highlightMaterialFor(ov.kind, color);
+        ribbon.isPickable = false;
+        this._highlightMeshes.push(ribbon);
+      }
+    });
   }
 
-  _highlightMaterialFor(rgbaCss) {
-    if (this._highlightMatCache.has(rgbaCss)) return this._highlightMatCache.get(rgbaCss);
+  /** @deprecated Legacy entry point — now delegates to the unified
+   *  `_syncOverlays` dispatcher. Kept so any stray external caller still works;
+   *  the draw loop calls `_syncOverlays` directly. */
+  _syncMovementHighlights() {
+    this._syncOverlays();
+  }
+
+  /** Cached overlay material keyed by `(kind, color-css)`. Hit each frame for
+   *  the same colour set, so the dispatcher never disposes+rebuilds materials. */
+  _highlightMaterialFor(kind, rgbaCss) {
+    const cacheKey = `${kind}|${rgbaCss}`;
+    if (this._highlightMatCache.has(cacheKey)) return this._highlightMatCache.get(cacheKey);
     const BABYLON = this._babylon;
     const [dr, dg, db] = deepenHighlight01(parseRgba01(rgbaCss));
-    const mat = new BABYLON.StandardMaterial(`highlightMat_${rgbaCss}`, this._scene);
+    const mat = new BABYLON.StandardMaterial(`highlightMat_${cacheKey}`, this._scene);
     mat.diffuseColor  = new BABYLON.Color3(dr, dg, db);
     // Emissive at half the deepened diffuse — keeps the ring legible across
     // dawn/day/dusk/night phases without blowing into the glow layer.
@@ -7276,7 +7303,7 @@ export class Renderer3D {
     mat.specularColor = new BABYLON.Color3(0, 0, 0);
     mat.alpha = HIGHLIGHT_OVERLAY_ALPHA;
     mat.backFaceCulling = false;
-    this._highlightMatCache.set(rgbaCss, mat);
+    this._highlightMatCache.set(cacheKey, mat);
     return mat;
   }
 
@@ -8640,6 +8667,11 @@ export class Renderer3D {
     return null;
   }
 }
+
+// Overlay API lives on the prototype (shared impl from overlays.js) so the
+// renderer-interface conformance test sees setOverlay / removeOverlay /
+// clearOverlaysByLayer / setSelection / setHover as real methods.
+Object.assign(Renderer3D.prototype, OVERLAY_METHODS);
 
 // ─── Tile top-face texture constants & pure helpers (exported for tests) ──
 

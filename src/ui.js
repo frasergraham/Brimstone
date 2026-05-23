@@ -6,6 +6,7 @@ import { EFFECTS } from './effects.js';
 import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, attackOf, defenseOf } from './entities.js';
 import { Phase, PHASE_ICON, phaseForRound, DEFAULT_CYCLE_PHASES, nodeController, countHeldNodes } from './game.js';
 import { PAD_X, PAD_Y, Renderer } from './renderer.js';
+import { makeOverlay } from './overlays.js';
 import { concreteFactionOf } from './factions.js';
 import {
   ActionType, getValidActions, getVisiblePositions,
@@ -518,7 +519,7 @@ export class UIController {
         this._selectEntity(entity);
       } else {
         this._awaitingTarget = null;
-        this.renderer.highlightHexes = [];
+        this.renderer.clearOverlaysByLayer('highlight-disc');
       }
       this._updateSidebar();
       this.onRedraw();
@@ -1551,7 +1552,7 @@ export class UIController {
         this._popupVisible         = true;
         this._validActions         = [];
         this.renderer.selectedHex    = { col: hex.col, row: hex.row };
-        this.renderer.highlightHexes = [];
+        this.renderer.clearOverlaysByLayer('highlight-disc');
         this._pendingEnemyPick = { units: viewOnlyEntities };
         this._showActionPopup(null);
       } else if (viewOnlyEntities.length === 1) {
@@ -1586,7 +1587,7 @@ export class UIController {
       this._popupVisible    = true;
       this._validActions    = [];
       this.renderer.selectedHex    = { col: hex.col, row: hex.row };
-      this.renderer.highlightHexes = [];
+      this.renderer.clearOverlaysByLayer('highlight-disc');
       this._pendingUnitPick = { units: clickedEntities };
       this._showActionPopup(null);
     }
@@ -1612,7 +1613,7 @@ export class UIController {
       this._popupVisible = true;
       this._validActions = [];
       this.renderer.selectedHex = { col: hex.col, row: hex.row };
-      this.renderer.highlightHexes = [];
+      this.renderer.clearOverlaysByLayer('highlight-disc');
       this._pendingEnemyPick = { units: viewUnits };
       this._showActionPopup(null);
     } else if (viewUnits.length === 1) {
@@ -1685,7 +1686,7 @@ export class UIController {
 
     this.renderer.selectedHex      = { col: entity.col, row: entity.row };
     this.renderer.selectedEntityId = entity.id;
-    this.renderer.highlightHexes   = [];
+    this.renderer.clearOverlaysByLayer('highlight-disc');
 
     this.onEntitySelected?.(entity);
     if (this._planMode) this._refreshUndoButtons();
@@ -1764,7 +1765,7 @@ export class UIController {
     this._unitStatsExpanded    = false;
     this.renderer.selectedHex      = null;
     this.renderer.selectedEntityId = null;
-    this.renderer.highlightHexes   = [];
+    this.renderer.clearOverlaysByLayer('highlight-disc');
     hideActionPopup(this);
     this._hideTileDetail();
     // Refresh plan panel so selection highlight clears from the unit rows.
@@ -1774,15 +1775,32 @@ export class UIController {
     }
   }
 
+  /**
+   * Publish a movement/battle target overlay (layer `highlight-disc`) under a
+   * stable id. Empty target lists remove the id so no stale overlay lingers.
+   * Replaces the legacy colour-sniffed `renderer.highlightHexes = [...]` writes.
+   */
+  _setTargetOverlay(id, color, targets) {
+    const hexes = (targets ?? []).map(t => ({ col: t.col, row: t.row }));
+    if (hexes.length === 0) { this.renderer.removeOverlay(id); return; }
+    this.renderer.setOverlay(id, makeOverlay({
+      id, kind: 'fill', layer: 'highlight-disc', hexes, style: { color },
+    }));
+  }
+
+  /** Clear every move/battle/battle-hex target overlay (the `highlight-disc` layer). */
+  _clearTargetOverlays() {
+    this.renderer.clearOverlaysByLayer('highlight-disc');
+  }
+
   _updateHighlights() {
-    const renderer = this.renderer;
-    renderer.highlightHexes = [];
+    this._clearTargetOverlays();
     if (!this._selectedEntity) return;
 
     const { actionType } = this._awaitingTarget || {};
     if (!actionType || actionType === ActionType.MOVE) {
       const a = this._validActions.find(a => a.type === ActionType.MOVE);
-      if (a) renderer.highlightHexes = a.targets.map(t => ({ ...t, color: 'rgba(60,220,80,0.22)' }));
+      if (a) this._setTargetOverlay('move-targets', 'rgba(60,220,80,0.22)', a.targets);
       // Highlight enemy hexes in red — but only VISIBLE ones when fog is active.
       // Fogged enemies must be attacked via the explicit "Attack Hex" action instead.
       const b = this._validActions.find(a => a.type === ActionType.BATTLE);
@@ -1793,9 +1811,7 @@ export class UIController {
           const visHexes = getVisiblePositions(state, this._selectedEntity.owner);
           visTargets = b.targets.filter(t => visHexes.has(hexKey(t.col, t.row)));
         }
-        renderer.highlightHexes = renderer.highlightHexes.concat(
-          visTargets.map(t => ({ col: t.col, row: t.row, color: 'rgba(220,60,60,0.55)' }))
-        );
+        this._setTargetOverlay('battle-targets', 'rgba(220,60,60,0.55)', visTargets);
       }
     } else if (actionType === ActionType.BATTLE) {
       const a = this._validActions.find(a => a.type === ActionType.BATTLE);
@@ -1806,12 +1822,12 @@ export class UIController {
           const visHexes = getVisiblePositions(state, this._selectedEntity.owner);
           visTargets = a.targets.filter(t => visHexes.has(hexKey(t.col, t.row)));
         }
-        renderer.highlightHexes = visTargets.map(t => ({ col: t.col, row: t.row, color: 'rgba(220,60,60,0.55)' }));
+        this._setTargetOverlay('battle-targets', 'rgba(220,60,60,0.55)', visTargets);
       }
     } else if (actionType === ActionType.BATTLE_HEX) {
       // Highlight all adjacent non-river hexes as potential targets
-      renderer.highlightHexes = (this._awaitingTarget.hexTargets ?? [])
-        .map(t => ({ col: t.col, row: t.row, color: 'rgba(220,120,40,0.50)' }));
+      this._setTargetOverlay('battle-hex-targets', 'rgba(220,120,40,0.50)',
+        this._awaitingTarget.hexTargets ?? []);
     }
   }
 
@@ -1844,7 +1860,7 @@ export class UIController {
       // intentionally skipped — see _pendingDisambig / _showDisambigPopup which
       // are kept around but no longer triggered from the move path.)
       this._awaitingTarget = null;
-      this.renderer.highlightHexes = [];
+      this.renderer.clearOverlaysByLayer('highlight-disc');
 
       // Add to plan queue (only reachable in planning mode)
       this._addToPlan({ type: PlanActionType.MOVE, entityId: actor.id, toCol: hex.col, toRow: hex.row });
@@ -1860,7 +1876,7 @@ export class UIController {
       if (!targetsAtHex.length) return;
 
       this._awaitingTarget = null;
-      this.renderer.highlightHexes = [];
+      this.renderer.clearOverlaysByLayer('highlight-disc');
 
       const executeFight = (target) => {
         // Add battle to plan, then re-select the actor so red
@@ -1881,7 +1897,7 @@ export class UIController {
 
     } else if (actionType === ActionType.BATTLE_HEX) {
       this._awaitingTarget = null;
-      this.renderer.highlightHexes = [];
+      this.renderer.clearOverlaysByLayer('highlight-disc');
 
       this._addToPlan({ type: PlanActionType.BATTLE_HEX, entityId: actor.id, targetCol: hex.col, targetRow: hex.row });
       if (actor.alive) this._selectEntity(actor);
@@ -2819,7 +2835,7 @@ export class UIController {
         this._selectEntity(entity);
       } else {
         this._awaitingTarget = null;
-        this.renderer.highlightHexes = [];
+        this.renderer.clearOverlaysByLayer('highlight-disc');
       }
       this._updateSidebar();
       this.onRedraw();
@@ -2878,7 +2894,7 @@ export class UIController {
       if (!disambig) return;
       const { actor, hex } = disambig;
       this._awaitingTarget = null;
-      this.renderer.highlightHexes = [];
+      this.renderer.clearOverlaysByLayer('highlight-disc');
 
       this._addToPlan({ type: PlanActionType.MOVE, entityId: actor.id, toCol: hex.col, toRow: hex.row });
       if (actor.alive) this._selectEntity(actor);
@@ -2965,7 +2981,8 @@ export class UIController {
         const bhAction = this._validActions.find(a => a.type === ActionType.BATTLE_HEX);
         const hexTargets = bhAction?.targets ?? [];
         this._awaitingTarget = { actionType: ActionType.BATTLE_HEX, actor: entity, hexTargets };
-        this.renderer.highlightHexes = hexTargets.map(t => ({ col: t.col, row: t.row, color: 'rgba(220,120,40,0.50)' }));
+        this._clearTargetOverlays();
+        this._setTargetOverlay('battle-hex-targets', 'rgba(220,120,40,0.50)', hexTargets);
         state.addLog('Click a hex to attack it (skips if empty).');
         this._updateSidebar();
         this.onRedraw();
