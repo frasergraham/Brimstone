@@ -92,21 +92,22 @@ describe('_handleSelection ally fallback', () => {
     assert.equal(ui._isEnemySelection, false, 'controllable selection');
   });
 
-  test('ally selection sets renderer selectedHex and selectedEntityId', () => {
+  test('ally selection sets renderer selection (hex + entityId)', () => {
     const { ui, renderer, allyUnit } = makeAllyUI();
 
     ui._handleSelection({ col: allyUnit.col, row: allyUnit.row });
 
-    assert.deepEqual(renderer.selectedHex, {
+    assert.deepEqual(renderer._selection.hex, {
       col: allyUnit.col,
       row: allyUnit.row,
     });
-    assert.equal(renderer.selectedEntityId, allyUnit.id);
-    assert.deepEqual(
-      renderer.highlightHexes,
-      [],
-      'no movement highlights for ally inspection'
-    );
+    assert.equal(renderer._selection.entityId, allyUnit.id);
+    // No movement highlights for ally inspection — the highlight-disc layer
+    // (move/battle target overlays) is empty. (Migrated off the retired
+    // `highlightHexes` getter in PR 5.)
+    const moveOv = renderer.getOverlay('move-targets');
+    assert.ok(!moveOv || moveOv.hexes.size === 0,
+      'no movement highlights for ally inspection');
   });
 
   test('clicking my own unit clears any prior ally selection', () => {

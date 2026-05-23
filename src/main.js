@@ -4,6 +4,27 @@ import { AppMode, getMode, setMode, isInGame, isAnimating, shouldBufferMessages,
 import { initServerSelector } from './server-selector.js';
 import { GameState, phaseForRound } from './game.js';
 import { Renderer }          from './renderer.js';
+import { Renderer3D }        from './renderer-3d.js';
+
+/**
+ * Pick the renderer class based on the 'brimstone:renderer' localStorage
+ * value. Returns the constructor (not an instance) so callers can `new` it
+ * with the right (canvas, state) pair.
+ */
+function _pickRenderer() {
+  // 3D is the default on feature/3d-renderer; users can opt back to 2D in Options.
+  let Cls = Renderer3D;
+  try {
+    if (localStorage.getItem('brimstone:renderer') === '2d') Cls = Renderer;
+  } catch { /* localStorage may be unavailable in some sandboxes */ }
+  // Tag the body so CSS can swap in the 3D camera-controls cluster (see
+  // `body.renderer-3d` rules in styles.css). Done once at startup — the
+  // renderer choice is fixed for the session.
+  if (typeof document !== 'undefined' && document.body) {
+    document.body.classList.toggle('renderer-3d', Cls === Renderer3D);
+  }
+  return Cls;
+}
 import { UIController, UIMode } from './ui.js';
 import { WITCH_PERSONALITIES }   from './ai.js';
 import { WitchAIEngine, estimateCombat } from './ai-engine.js';
@@ -210,7 +231,7 @@ function _setupLocalUI(canvas, localWitchAI, localHeroAI, autoplay) {
   // submit an empty plan from the old instance's _unitPlans.
   if (ui) ui.destroy();
 
-  renderer = new Renderer(canvas, state);
+  renderer = new (_pickRenderer())(canvas, state);
   renderer.resize();
   renderer.onImagesLoaded = () => { if (ui) ui._renderTurnInfo(); };
   renderer.loadImages();
@@ -1011,7 +1032,8 @@ function _updateNodeDiscoveryDuringStep(gs, humanFaction, rend) {
       const isHuman = humanFaction === fac.id
         || (!humanFaction && gs.fogOfWar === 'none'); // no fog — show for everyone
       if (isHuman && rend) {
-        rend.addNodeRevealAnim(obj.hexes, obj.color ?? '#8800cc');
+        const nodeColor = obj.color ?? '#8800cc';
+        rend.addNodeDiscovered(obj.hexes, nodeColor, 'Power Node Discovered');
       }
     }
   }
@@ -1031,7 +1053,9 @@ function _updateNodeDiscoveryDuringStep(gs, humanFaction, rend) {
         const isHuman = humanFaction === 'hero'
           || (!humanFaction && gs.fogOfWar === 'none');
         if (isHuman && rend) {
-          rend.addNodeRevealAnim([{ col: mt.col, row: mt.row }], mt.color);
+          rend.addNodeDiscovered(
+            [{ col: mt.col, row: mt.row }], mt.color, 'Objective Discovered',
+          );
         }
       }
     }
@@ -1294,29 +1318,55 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       const _spd = ui?.speedMode ?? 'cinematic';
       const hopDelay = _spd === 'vfast' ? 160 : 320;
 
-      // Determine max hops across all moving entities
-      const maxHops = moveAnims.reduce((m, a) => Math.max(m, a.path.length), 0);
-
-      for (let hop = 0; hop < maxHops; hop++) {
-        // Start animations for all entities at this hop index
+      if (renderer?.is3D) {
+        // 3D: animate the entire path as ONE move per entity, passing
+        // the full waypoint list as a 9th arg so the renderer builds a
+        // multi-keyframe polyline (origin → path[0] → … → path[last]).
+        // Frames are allocated proportionally to segment lengths so the
+        // cone moves at constant ground speed across the polyline —
+        // total move duration is MOVE_ANIM_MS regardless of segment
+        // count. A 2-hex road = 500ms per segment, a 3-hex horse run =
+        // 333ms per segment, etc. addMoveAnim scales walkGroup.speedRatio
+        // by totalLen / hexStep so the walk cycle's foot-plant stays
+        // accurate across every segment.
         for (const { ev, preSnap, path } of moveAnims) {
-          if (hop >= path.length) continue;
-          const fromPos = hop === 0 ? preSnap : path[hop - 1];
-          const toPos   = path[hop];
+          const lastPos = path[path.length - 1];
           renderer.addMoveAnim(
             ev.action.entityId,
-            fromPos.col, fromPos.row,
-            toPos.col, toPos.row,
+            preSnap.col, preSnap.row,
+            lastPos.col, lastPos.row,
             preSnap.type, preSnap.owner,
             preSnap.title ?? null,
+            path, // full waypoint list
           );
-          // Patch display entity to current hop destination
           const ent = displayEntities.find(e => e.id === ev.action.entityId);
-          if (ent) { ent.col = toPos.col; ent.row = toPos.row; }
+          if (ent) { ent.col = lastPos.col; ent.row = lastPos.row; }
         }
         state.entities = displayEntities;
         redrawFn();
         if (!_autoplay && hopDelay > 0) await playbackDelay(hopDelay);
+      } else {
+        // 2D: hop-by-hop animation as before.
+        const maxHops = moveAnims.reduce((m, a) => Math.max(m, a.path.length), 0);
+        for (let hop = 0; hop < maxHops; hop++) {
+          for (const { ev, preSnap, path } of moveAnims) {
+            if (hop >= path.length) continue;
+            const fromPos = hop === 0 ? preSnap : path[hop - 1];
+            const toPos   = path[hop];
+            renderer.addMoveAnim(
+              ev.action.entityId,
+              fromPos.col, fromPos.row,
+              toPos.col, toPos.row,
+              preSnap.type, preSnap.owner,
+              preSnap.title ?? null,
+            );
+            const ent = displayEntities.find(e => e.id === ev.action.entityId);
+            if (ent) { ent.col = toPos.col; ent.row = toPos.row; }
+          }
+          state.entities = displayEntities;
+          redrawFn();
+          if (!_autoplay && hopDelay > 0) await playbackDelay(hopDelay);
+        }
       }
 
       // Bounce-back for partial moves: if the unit stopped short due to an
@@ -1798,11 +1848,10 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         }
       }
 
-      // Gold expanding ring showing the 4-hex horn range
-      renderer.addNodeRevealAnim(
-        [{ col: actor.col, row: actor.row }], '#d4a72c',
-        { radiusMultiplier: 7, duration: 2000 },
-      );
+      // Gold expanding ring telegraphing the horn pulse. Renderer-agnostic
+      // hook — 2D paints a flat node-reveal ring, 3D builds a torus ring
+      // that scales outward; see `addSoundHorn` in both renderers.
+      renderer.addSoundHorn(actor.col, actor.row, '#d4a72c');
       redrawFn();
 
       // Wait for the horn animation to finish before showing dialogs
@@ -1991,7 +2040,7 @@ function initOnline(mirrorState, myFaction, mpClient) {
 
   if (ui) ui.destroy();
 
-  renderer = new Renderer(canvas, state);
+  renderer = new (_pickRenderer())(canvas, state);
   renderer.resize();
   renderer.onImagesLoaded = () => { if (ui) ui._renderTurnInfo(); };
   renderer.loadImages();
@@ -2189,6 +2238,22 @@ document.getElementById('reconnect-back').addEventListener('click', () => locati
       b.classList.toggle('active', b.dataset.mode === btn.dataset.mode);
     });
   });
+}
+
+// ── Renderer toggle (2D / 3D experimental) ───────────────────────────────────
+{
+  const RENDERER_KEY = 'brimstone:renderer';
+  const select = document.getElementById('options-renderer-select');
+  const hint   = document.getElementById('options-renderer-hint');
+  if (select) {
+    const saved = localStorage.getItem(RENDERER_KEY) === '2d' ? '2d' : '3d';
+    select.value = saved;
+    select.addEventListener('change', () => {
+      const value = select.value === '2d' ? '2d' : '3d';
+      localStorage.setItem(RENDERER_KEY, value);
+      if (hint) hint.style.display = '';
+    });
+  }
 }
 
 // Initialize persistent session bar on page load
@@ -7481,7 +7546,7 @@ function initSpectator(roomId) {
   function _initSpectatorUI(mirrorState) {
     if (ui) ui.destroy();
     const canvas = document.getElementById('game-canvas');
-    renderer = new Renderer(canvas, mirrorState);
+    renderer = new (_pickRenderer())(canvas, mirrorState);
     renderer.resize();
     renderer.onImagesLoaded = () => { if (ui) ui._renderTurnInfo(); };
     renderer.loadImages();

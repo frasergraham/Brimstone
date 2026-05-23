@@ -143,6 +143,7 @@ export function serializeState(state) {
     mapCols,
     mapRows,
     mapSize:              state.mapSize ?? 'standard',
+    season:               state.season ?? null,
     campaignAIBudgetBonus: state.campaignAIBudgetBonus ?? 0,
     // Per-state entity/roster counters. Persisting `usedRosterIndices` prevents
     // duplicate survivor names when a mid-game save is resumed and new
@@ -297,6 +298,7 @@ export function deserializeState(snap) {
     }
   }
   state.mapSize              = snap.mapSize   ?? 'standard';
+  state.season               = snap.season    ?? null;
   state.winner               = snap.winner    ?? null;
   state.winReason            = snap.winReason ?? null;
   state.heroKills            = snap.heroKills        ?? 0;

@@ -8,6 +8,10 @@ const WITCH_OBJECTIVE_LABELS = [
   'Witches\' Mound', 'Blighted Fen', 'Shadow Cairn',
 ];
 
+// Allowed values for state.season. Kept in sync with SEASONS in renderer-3d.js;
+// declared here to avoid a map.js → renderer-3d.js (and thus DOM/Babylon) import.
+export const SEASONS = Object.freeze(['summer', 'fall', 'spring', 'winter']);
+
 // Distinct colors for each power node index — used in renderer and score tracker.
 // Chosen to be visually distinct from hero blue (#4488ff) and witch red (#cc3333).
 export const NODE_COLORS = [
@@ -1029,7 +1033,9 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
     prevCtrl:    'neutral',
   }));
 
-  return { tiles, witchObjectives, heroStart, witchStart, mapSize, survivorCounts: cfg.survivorCounts };
+  const season = SEASONS[Math.floor(rand() * SEASONS.length)];
+
+  return { tiles, witchObjectives, heroStart, witchStart, mapSize, season, survivorCounts: cfg.survivorCounts };
 }
 
 // ── Multiple start positions (multiplayer) ───────────────────────────────────

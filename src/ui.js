@@ -6,6 +6,7 @@ import { EFFECTS } from './effects.js';
 import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, attackOf, defenseOf } from './entities.js';
 import { Phase, PHASE_ICON, phaseForRound, DEFAULT_CYCLE_PHASES, nodeController, countHeldNodes } from './game.js';
 import { PAD_X, PAD_Y, Renderer } from './renderer.js';
+import { makeOverlay } from './overlays.js';
 import { concreteFactionOf } from './factions.js';
 import {
   ActionType, getValidActions, getVisiblePositions,
@@ -41,6 +42,12 @@ export class UIController {
     this.canvas    = canvas;
     this.state     = state;
     this.renderer  = renderer;
+    // Single subscriber for the plan-panel selection highlight: every
+    // setSelection() fires this hook, which re-syncs the `.plan-unit-selected`
+    // class. Centralises what used to be a class baked into the panel HTML.
+    if (this.renderer) {
+      this.renderer.onSelectionChange = () => this._syncPlanSelectionClass();
+    }
     this.ai        = witchAI;
     this.heroAI    = heroAI;
     this.onRedraw  = onRedraw;
@@ -164,7 +171,7 @@ export class UIController {
     this.canvas.addEventListener('mousemove', e => this._onMouseMove(e), sig);
     this.canvas.addEventListener('click',     e => this._onClick(e), sig);
     this.canvas.addEventListener('mouseleave', () => {
-      this.renderer.hoveredHex = null;
+      this.renderer.setHover(null);
       this._mouseDown = null;
       this._didDragPan = false;
       this.onRedraw();
@@ -203,6 +210,72 @@ export class UIController {
       this.renderer.setZoom(this.renderer.zoomLevel / zoomStep, cx, cy);
       this.onRedraw();
     }, sig);
+    // Rotate buttons — 3D only; 2D Renderer.rotateBy is a no-op stub.
+    // ROTATE_BUTTON_STEP (π/12 ≈ 15°) is duplicated here from renderer-3d.js
+    // so ui.js stays free of 3D-renderer-specific imports.
+    const rotateStep = Math.PI / 12;
+    this._el('rotate-left')?.addEventListener('click', () => {
+      this.renderer.rotateBy(-rotateStep, 0);
+      this.onRedraw();
+    }, sig);
+    this._el('rotate-right')?.addEventListener('click', () => {
+      this.renderer.rotateBy(rotateStep, 0);
+      this.onRedraw();
+    }, sig);
+    // ── 3D camera-controls cluster (#camera-controls-3d) ────────────────────
+    // Shown only on body.renderer-3d (CSS-driven). Each button hold-to-repeats
+    // at CAMERA_BUTTON_REPEAT_MS so zoom + rotate feel continuous. The bind
+    // helper attaches pointerdown / pointerup (with pointerleave fallback) so
+    // touch and mouse drive the same repeater. Tilt is locked at π/4 — see
+    // CAMERA_BETA_LOCKED in renderer-3d.js — so there are no tilt buttons.
+    const ROT_STEP  = Math.PI / 90;           // ≈2° per tick — finer than the click-step rotate buttons
+    const REPEAT_MS = 50;
+    const zoomFactorPerTick = Math.pow(zoomStep, 0.25); // ~5%/tick → 1.25 in ~5 ticks
+    const bindHoldToRepeat = (id, tickFn) => {
+      const el = this._el(id);
+      if (!el) return;
+      let timer = null;
+      const stop = () => { if (timer != null) { clearInterval(timer); timer = null; } };
+      const start = (ev) => {
+        ev.preventDefault();
+        // Fire once immediately, then repeat — single-tap users still get a tick.
+        tickFn();
+        this.onRedraw();
+        stop();
+        timer = setInterval(() => { tickFn(); this.onRedraw(); }, REPEAT_MS);
+      };
+      el.addEventListener('pointerdown', start, sig);
+      el.addEventListener('pointerup',     stop, sig);
+      el.addEventListener('pointercancel', stop, sig);
+      el.addEventListener('pointerleave',  stop, sig);
+    };
+    bindHoldToRepeat('cam3d-zoom-in',  () => {
+      const cx = this.canvas.width / 2, cy = this.canvas.height / 2;
+      this.renderer.setZoom(this.renderer.zoomLevel * zoomFactorPerTick, cx, cy);
+    });
+    bindHoldToRepeat('cam3d-zoom-out', () => {
+      const cx = this.canvas.width / 2, cy = this.canvas.height / 2;
+      this.renderer.setZoom(this.renderer.zoomLevel / zoomFactorPerTick, cx, cy);
+    });
+    bindHoldToRepeat('cam3d-rotate-left',  () => this.renderer.rotateBy(-ROT_STEP, 0));
+    bindHoldToRepeat('cam3d-rotate-right', () => this.renderer.rotateBy( ROT_STEP, 0));
+    // 3D camera mode toggle — swaps drag between pan and rotate. Wheel /
+    // pinch always zooms regardless of mode.
+    const modeBtn = this._el('cam3d-mode-toggle');
+    if (modeBtn) {
+      modeBtn.addEventListener('click', () => {
+        const cur  = modeBtn.dataset.mode === 'rotate' ? 'rotate' : 'pan';
+        const next = cur === 'pan' ? 'rotate' : 'pan';
+        modeBtn.dataset.mode    = next;
+        modeBtn.textContent     = next === 'pan' ? '✋' : '↻';
+        modeBtn.title           = next === 'pan'
+          ? 'Drag = pan (tap to switch to rotate)'
+          : 'Drag = rotate (tap to switch to pan)';
+        if (typeof this.renderer.setCameraDragMode === 'function') {
+          this.renderer.setCameraDragMode(next);
+        }
+      }, sig);
+    }
     this._lastFitTapTime = 0;
     this._el('zoom-fit')?.addEventListener('click', () => {
       const now = Date.now();
@@ -271,6 +344,13 @@ export class UIController {
     }, sig);
 
     // Touch: tap, drag-to-pan, pinch-to-zoom (mobile)
+    //
+    // When the 3D renderer is active, drag-to-pan / pinch-to-zoom are owned
+    // by the custom camera input in renderer-3d.js (`_installCustomCameraInput`).
+    // We still need touchend → tap → _onClick for hex selection, so the
+    // touchstart/move/end handlers stay attached — they just skip the pan
+    // and pinch maths against `renderer._panX` / `setZoom` (those would
+    // double-apply on top of the 3D camera's own inertial accumulators).
     this.canvas.addEventListener('touchstart', e => {
       if (e.touches.length === 2) {
         this._pinchDist  = touchDist(e.touches[0], e.touches[1]);
@@ -288,6 +368,19 @@ export class UIController {
     this.canvas.addEventListener('touchmove', e => {
       e.preventDefault();
       if (this.renderer.viewLocked) return;
+      // 3D mode: pan / pinch live in renderer-3d's custom camera input. Just
+      // track whether the user has dragged far enough to suppress the tap.
+      if (this.renderer.is3D) {
+        if (e.touches.length === 1 && this._touchStart) {
+          const t = e.touches[0];
+          const total = Math.hypot(
+            t.clientX - this._touchStart.clientX,
+            t.clientY - this._touchStart.clientY
+          );
+          if (total > 10) this._isDragging = true;
+        }
+        return;
+      }
       if (e.touches.length === 2 && this._pinchDist !== null) {
         const newDist = touchDist(e.touches[0], e.touches[1]);
         const midCX  = (e.touches[0].clientX + e.touches[1].clientX) / 2;
@@ -432,7 +525,7 @@ export class UIController {
         this._selectEntity(entity);
       } else {
         this._awaitingTarget = null;
-        this.renderer.highlightHexes = [];
+        this.renderer.clearOverlaysByLayer('highlight-disc');
       }
       this._updateSidebar();
       this.onRedraw();
@@ -507,7 +600,16 @@ export class UIController {
     if (this._mouseDown && this.renderer.viewLocked) {
       this._mouseDown = null; // release drag if view was locked mid-drag
     }
-    if (this._mouseDown) {
+    // 3D mode owns its own pan/rotate via renderer-3d's custom camera input
+    // (left-drag pans, right-drag rotates). Just track drag distance so a
+    // dragged-and-released click doesn't fire hex selection.
+    if (this._mouseDown && this.renderer.is3D) {
+      const dx = e.clientX - this._mouseDown.clientX;
+      const dy = e.clientY - this._mouseDown.clientY;
+      if (Math.hypot(dx, dy) > 5) {
+        this._didDragPan = true;
+      }
+    } else if (this._mouseDown) {
       const dx = e.clientX - this._mouseDown.clientX;
       const dy = e.clientY - this._mouseDown.clientY;
       if (Math.hypot(dx, dy) > 5) {
@@ -527,8 +629,9 @@ export class UIController {
 
     const { x, y } = this._canvasPos(e);
     const hex = this._canvasToHex(x, y);
-    this.renderer.hoveredHex = (hex.col >= 0 && hex.col < MAP_COLS && hex.row >= 0 && hex.row < MAP_ROWS)
-      ? hex : null;
+    this.renderer.setHover(
+      (hex.col >= 0 && hex.col < MAP_COLS && hex.row >= 0 && hex.row < MAP_ROWS) ? hex : null,
+    );
     this.onRedraw();
   }
 
@@ -1231,6 +1334,9 @@ export class UIController {
       this._planSubmitted, this.state.entities ?? [], initialInv,
       controllable, this._selectedEntity?.id ?? null, portraitMap,
     );
+    // The rebuilt HTML drops any `.plan-unit-selected` class — re-apply it from
+    // the single subscriber so selection highlight survives the rebuild.
+    this._syncPlanSelectionClass();
 
     // Attach remove listeners — per-unit: data-entity-id + data-step-idx
     stepsEl.querySelectorAll('.plan-step-remove').forEach(btn => {
@@ -1303,6 +1409,27 @@ export class UIController {
     this._renderInventory();
   }
 
+  /**
+   * Single source for the plan-panel selection highlight. Toggles the
+   * `.plan-unit-selected` class on the unit block whose `data-entity-id`
+   * matches the current selection, clearing it from all others. Fired by the
+   * renderer's `onSelectionChange` hook (every setSelection) and re-run after
+   * each panel rebuild (the rebuilt HTML carries no class).
+   *
+   * Planning mode selects a ghost-projected entity, but the plan block is keyed
+   * by the real entity id either way, so the lookup is unaffected. Enemy / tile
+   * selections have no matching block, so the highlight simply clears.
+   */
+  _syncPlanSelectionClass() {
+    const stepsEl = this._el('plan-steps');
+    if (!stepsEl || typeof stepsEl.querySelectorAll !== 'function') return;
+    const selId = this._selectedEntity?.id ?? null;
+    stepsEl.querySelectorAll('.plan-unit-block').forEach(block => {
+      const match = selId != null && block.dataset?.entityId === String(selId);
+      block.classList?.toggle('plan-unit-selected', match);
+    });
+  }
+
   /** True when the viewport matches the mobile breakpoint used elsewhere in styles.css. */
   _isMobileViewport() {
     return typeof window !== 'undefined'
@@ -1338,6 +1465,14 @@ export class UIController {
 
   _onClick(e) {
     if (this._didDragPan) { this._didDragPan = false; return; }
+    // In 3D mode the custom pointer input calls preventDefault on pointermove,
+    // which suppresses compat `mousemove` and so the `_didDragPan` flag above
+    // is never set during a 3D drag. The renderer tracks the drag itself and
+    // publishes the verdict on every pointerup — consume + clear it here.
+    if (this.renderer?.is3D && this.renderer._lastGestureWasDrag) {
+      this.renderer._lastGestureWasDrag = false;
+      return;
+    }
     if (this.tutorialClickBlocked) return;
     if (this.state.gameOver) return;
 
@@ -1447,8 +1582,8 @@ export class UIController {
         this._selectedEntity       = null;
         this._popupVisible         = true;
         this._validActions         = [];
-        this.renderer.selectedHex    = { col: hex.col, row: hex.row };
-        this.renderer.highlightHexes = [];
+        this.renderer.setSelection({ entityId: null, hex: { col: hex.col, row: hex.row } });
+        this.renderer.clearOverlaysByLayer('highlight-disc');
         this._pendingEnemyPick = { units: viewOnlyEntities };
         this._showActionPopup(null);
       } else if (viewOnlyEntities.length === 1) {
@@ -1458,7 +1593,7 @@ export class UIController {
         // Empty hex — show tile info in stats bar
         this._clearSelection();
         this._selectedTile = { col: hex.col, row: hex.row };
-        this.renderer.selectedHex = { col: hex.col, row: hex.row };
+        this.renderer.setSelection({ entityId: null, hex: { col: hex.col, row: hex.row } });
       }
     } else if (clickedEntities.length === 1) {
       const entity = clickedEntities[0];
@@ -1482,8 +1617,8 @@ export class UIController {
       this._selectedEntity  = null;
       this._popupVisible    = true;
       this._validActions    = [];
-      this.renderer.selectedHex    = { col: hex.col, row: hex.row };
-      this.renderer.highlightHexes = [];
+      this.renderer.setSelection({ entityId: null, hex: { col: hex.col, row: hex.row } });
+      this.renderer.clearOverlaysByLayer('highlight-disc');
       this._pendingUnitPick = { units: clickedEntities };
       this._showActionPopup(null);
     }
@@ -1508,8 +1643,8 @@ export class UIController {
       // Multiple units on hex — show picker popup
       this._popupVisible = true;
       this._validActions = [];
-      this.renderer.selectedHex = { col: hex.col, row: hex.row };
-      this.renderer.highlightHexes = [];
+      this.renderer.setSelection({ entityId: null, hex: { col: hex.col, row: hex.row } });
+      this.renderer.clearOverlaysByLayer('highlight-disc');
       this._pendingEnemyPick = { units: viewUnits };
       this._showActionPopup(null);
     } else if (viewUnits.length === 1) {
@@ -1517,7 +1652,7 @@ export class UIController {
     } else {
       // Empty hex — show tile info
       this._selectedTile = { col: hex.col, row: hex.row };
-      this.renderer.selectedHex = { col: hex.col, row: hex.row };
+      this.renderer.setSelection({ entityId: null, hex: { col: hex.col, row: hex.row } });
     }
     this._updateSidebar();
     this.onRedraw();
@@ -1546,8 +1681,10 @@ export class UIController {
       }
     }
 
-    this.renderer.selectedHex      = { col: effectiveEntity.col, row: effectiveEntity.row };
-    this.renderer.selectedEntityId = entity.id;
+    this.renderer.setSelection({
+      entityId: entity.id,
+      hex: { col: effectiveEntity.col, row: effectiveEntity.row },
+    });
     this._validActions = getValidActions(this.state, effectiveEntity);
     // Move is always the default awaiting action — clicking a green hex moves.
     const hasMoveAction = this._validActions.some(a => a.type === ActionType.MOVE);
@@ -1580,9 +1717,8 @@ export class UIController {
     this._validActions         = [];
     hideActionPopup(this);
 
-    this.renderer.selectedHex      = { col: entity.col, row: entity.row };
-    this.renderer.selectedEntityId = entity.id;
-    this.renderer.highlightHexes   = [];
+    this.renderer.setSelection({ entityId: entity.id, hex: { col: entity.col, row: entity.row } });
+    this.renderer.clearOverlaysByLayer('highlight-disc');
 
     this.onEntitySelected?.(entity);
     if (this._planMode) this._refreshUndoButtons();
@@ -1659,9 +1795,8 @@ export class UIController {
     this._pendingEnemyPick     = null;
     this._popupVisible         = false;
     this._unitStatsExpanded    = false;
-    this.renderer.selectedHex      = null;
-    this.renderer.selectedEntityId = null;
-    this.renderer.highlightHexes   = [];
+    this.renderer.setSelection({ entityId: null, hex: null });
+    this.renderer.clearOverlaysByLayer('highlight-disc');
     hideActionPopup(this);
     this._hideTileDetail();
     // Refresh plan panel so selection highlight clears from the unit rows.
@@ -1671,15 +1806,32 @@ export class UIController {
     }
   }
 
+  /**
+   * Publish a movement/battle target overlay (layer `highlight-disc`) under a
+   * stable id. Empty target lists remove the id so no stale overlay lingers.
+   * Replaces the legacy colour-sniffed `renderer.highlightHexes = [...]` writes.
+   */
+  _setTargetOverlay(id, color, targets) {
+    const hexes = (targets ?? []).map(t => ({ col: t.col, row: t.row }));
+    if (hexes.length === 0) { this.renderer.removeOverlay(id); return; }
+    this.renderer.setOverlay(id, makeOverlay({
+      id, kind: 'fill', layer: 'highlight-disc', hexes, style: { color },
+    }));
+  }
+
+  /** Clear every move/battle/battle-hex target overlay (the `highlight-disc` layer). */
+  _clearTargetOverlays() {
+    this.renderer.clearOverlaysByLayer('highlight-disc');
+  }
+
   _updateHighlights() {
-    const renderer = this.renderer;
-    renderer.highlightHexes = [];
+    this._clearTargetOverlays();
     if (!this._selectedEntity) return;
 
     const { actionType } = this._awaitingTarget || {};
     if (!actionType || actionType === ActionType.MOVE) {
       const a = this._validActions.find(a => a.type === ActionType.MOVE);
-      if (a) renderer.highlightHexes = a.targets.map(t => ({ ...t, color: 'rgba(60,220,80,0.22)' }));
+      if (a) this._setTargetOverlay('move-targets', 'rgba(60,220,80,0.22)', a.targets);
       // Highlight enemy hexes in red — but only VISIBLE ones when fog is active.
       // Fogged enemies must be attacked via the explicit "Attack Hex" action instead.
       const b = this._validActions.find(a => a.type === ActionType.BATTLE);
@@ -1690,9 +1842,7 @@ export class UIController {
           const visHexes = getVisiblePositions(state, this._selectedEntity.owner);
           visTargets = b.targets.filter(t => visHexes.has(hexKey(t.col, t.row)));
         }
-        renderer.highlightHexes = renderer.highlightHexes.concat(
-          visTargets.map(t => ({ col: t.col, row: t.row, color: 'rgba(220,60,60,0.55)' }))
-        );
+        this._setTargetOverlay('battle-targets', 'rgba(220,60,60,0.55)', visTargets);
       }
     } else if (actionType === ActionType.BATTLE) {
       const a = this._validActions.find(a => a.type === ActionType.BATTLE);
@@ -1703,12 +1853,12 @@ export class UIController {
           const visHexes = getVisiblePositions(state, this._selectedEntity.owner);
           visTargets = a.targets.filter(t => visHexes.has(hexKey(t.col, t.row)));
         }
-        renderer.highlightHexes = visTargets.map(t => ({ col: t.col, row: t.row, color: 'rgba(220,60,60,0.55)' }));
+        this._setTargetOverlay('battle-targets', 'rgba(220,60,60,0.55)', visTargets);
       }
     } else if (actionType === ActionType.BATTLE_HEX) {
       // Highlight all adjacent non-river hexes as potential targets
-      renderer.highlightHexes = (this._awaitingTarget.hexTargets ?? [])
-        .map(t => ({ col: t.col, row: t.row, color: 'rgba(220,120,40,0.50)' }));
+      this._setTargetOverlay('battle-hex-targets', 'rgba(220,120,40,0.50)',
+        this._awaitingTarget.hexTargets ?? []);
     }
   }
 
@@ -1741,7 +1891,7 @@ export class UIController {
       // intentionally skipped — see _pendingDisambig / _showDisambigPopup which
       // are kept around but no longer triggered from the move path.)
       this._awaitingTarget = null;
-      this.renderer.highlightHexes = [];
+      this.renderer.clearOverlaysByLayer('highlight-disc');
 
       // Add to plan queue (only reachable in planning mode)
       this._addToPlan({ type: PlanActionType.MOVE, entityId: actor.id, toCol: hex.col, toRow: hex.row });
@@ -1757,7 +1907,7 @@ export class UIController {
       if (!targetsAtHex.length) return;
 
       this._awaitingTarget = null;
-      this.renderer.highlightHexes = [];
+      this.renderer.clearOverlaysByLayer('highlight-disc');
 
       const executeFight = (target) => {
         // Add battle to plan, then re-select the actor so red
@@ -1778,7 +1928,7 @@ export class UIController {
 
     } else if (actionType === ActionType.BATTLE_HEX) {
       this._awaitingTarget = null;
-      this.renderer.highlightHexes = [];
+      this.renderer.clearOverlaysByLayer('highlight-disc');
 
       this._addToPlan({ type: PlanActionType.BATTLE_HEX, entityId: actor.id, targetCol: hex.col, targetRow: hex.row });
       if (actor.alive) this._selectEntity(actor);
@@ -1813,8 +1963,9 @@ export class UIController {
       // - Defender/enemy picker: use the targets' position (they share a hex).
       //   In plan mode, use ghost position if available.
       let originHex;
-      if (this._pendingUnitPick && this.renderer.selectedHex) {
-        originHex = this.renderer.selectedHex;
+      const selHex = this.renderer._selection?.hex ?? null;
+      if (this._pendingUnitPick && selHex) {
+        originHex = selHex;
       } else {
         const u = pickerUnits[0];
         const ghost = this._planMode ? this._getProjectedPos(u.id) : null;
@@ -2716,7 +2867,7 @@ export class UIController {
         this._selectEntity(entity);
       } else {
         this._awaitingTarget = null;
-        this.renderer.highlightHexes = [];
+        this.renderer.clearOverlaysByLayer('highlight-disc');
       }
       this._updateSidebar();
       this.onRedraw();
@@ -2775,7 +2926,7 @@ export class UIController {
       if (!disambig) return;
       const { actor, hex } = disambig;
       this._awaitingTarget = null;
-      this.renderer.highlightHexes = [];
+      this.renderer.clearOverlaysByLayer('highlight-disc');
 
       this._addToPlan({ type: PlanActionType.MOVE, entityId: actor.id, toCol: hex.col, toRow: hex.row });
       if (actor.alive) this._selectEntity(actor);
@@ -2862,7 +3013,8 @@ export class UIController {
         const bhAction = this._validActions.find(a => a.type === ActionType.BATTLE_HEX);
         const hexTargets = bhAction?.targets ?? [];
         this._awaitingTarget = { actionType: ActionType.BATTLE_HEX, actor: entity, hexTargets };
-        this.renderer.highlightHexes = hexTargets.map(t => ({ col: t.col, row: t.row, color: 'rgba(220,120,40,0.50)' }));
+        this._clearTargetOverlays();
+        this._setTargetOverlay('battle-hex-targets', 'rgba(220,120,40,0.50)', hexTargets);
         state.addLog('Click a hex to attack it (skips if empty).');
         this._updateSidebar();
         this.onRedraw();

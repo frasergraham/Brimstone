@@ -11,6 +11,7 @@ import {
   makeFakeRenderer,
   makeFakeCanvas,
 } from './ui/setup.js';
+import { makeOverlay } from '../src/overlays.js';
 
 const { fakeCanvas, _elements } = installGlobalMocks();
 
@@ -60,22 +61,31 @@ describe('enemy unit view-only selection', () => {
     assert.equal(ui._awaitingTarget, null, 'no awaiting target for enemy units');
   });
 
-  test('enemy selection sets renderer selectedHex and selectedEntityId', () => {
+  test('enemy selection sets renderer selection (hex + entityId)', () => {
     const { ui, state, renderer } = makeUI();
     const enemy = state.entities.find(e => e.owner === 'witch' && e.alive);
     ui._selectEnemyEntity(enemy);
 
-    assert.deepEqual(renderer.selectedHex, { col: enemy.col, row: enemy.row });
-    assert.equal(renderer.selectedEntityId, enemy.id);
+    assert.deepEqual(renderer._selection.hex, { col: enemy.col, row: enemy.row });
+    assert.equal(renderer._selection.entityId, enemy.id);
   });
 
   test('enemy selection clears highlight hexes', () => {
     const { ui, state, renderer } = makeUI();
-    renderer.highlightHexes = [{ col: 0, row: 0 }];
+    // Seed a move-target overlay via the overlay API, then confirm enemy
+    // selection clears the highlight-disc layer.
+    renderer.setOverlay('move-targets', makeOverlay({
+      id: 'move-targets', kind: 'fill', layer: 'highlight-disc',
+      hexes: [{ col: 0, row: 0 }], style: { color: 'rgba(60,220,80,0.22)' },
+    }));
     const enemy = state.entities.find(e => e.owner === 'witch' && e.alive);
     ui._selectEnemyEntity(enemy);
 
-    assert.deepEqual(renderer.highlightHexes, [], 'highlights should be empty');
+    // Highlights should be cleared — no overlays remain in the highlight-disc
+    // layer. (Migrated off the retired `highlightHexes` getter in PR 5.)
+    const remaining = [...renderer._overlays.values()]
+      .filter(ov => ov.layer === 'highlight-disc');
+    assert.deepEqual(remaining, [], 'highlights should be empty');
   });
 
   test('_clearSelection resets _isEnemySelection', () => {

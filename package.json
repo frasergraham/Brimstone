@@ -1,6 +1,6 @@
 {
   "name": "calebs-hollow",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Caleb's Hollow hex turn-based game with multiplayer",
   "main": "electron/main.js",
   "type": "module",
@@ -18,9 +18,11 @@
     "test:ui:verbose": "node --test --test-reporter=spec tests/ui/*.test.js",
     "test:all": "node --test tests/*.test.js tests/ui/*.test.js",
     "test:mp-net": "node scripts/headless-mp-net.js",
+    "render:3d-map": "node scripts/render-3d-map.js",
     "validate": "node scripts/validate.js",
     "release": "node scripts/release.js",
     "release:dry": "node scripts/release.js --dry-run",
+    "extract-trees": "node scripts/extract-tree-pack.js",
     "assets:dry": "node scripts/generate-assets.js --dry-run",
     "assets:test": "node scripts/generate-assets.js --test",
     "assets:gen": "node scripts/generate-assets.js",
@@ -48,8 +50,11 @@
     "cap:run:android": "node scripts/cap-copy-web.js && npx cap run android"
   },
   "devDependencies": {
+    "@gltf-transform/core": "^4.3.0",
+    "@gltf-transform/functions": "^4.3.0",
     "electron": "^33.0.0",
     "electron-builder": "^25.0.0",
+    "meshoptimizer": "^1.1.1",
     "sharp": "^0.33.5"
   },
   "dependencies": {

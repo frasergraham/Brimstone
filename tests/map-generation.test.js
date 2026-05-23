@@ -254,6 +254,39 @@ describe('Bridge pre-placement', () => {
     }
   });
 
+  test('every BUILDING tile has roadDirs (connected to the road network)', () => {
+    // The MST road network terminates at — and passes through — buildings.
+    // The 3D renderer relies on these roadDirs to draw the road ribbon
+    // contiguously across building tiles, so every building must carry at
+    // least one entry. (A disconnected building would leave a visible gap.)
+    const sizes = ['skirmish', 'standard', 'regional', 'campaign'];
+    for (const size of sizes) {
+      for (let seed = 0; seed < 10; seed++) {
+        const { tiles } = generateMap(seed, size);
+        const buildings = allTilesOfType(tiles, TileType.BUILDING);
+        for (const b of buildings) {
+          assert.ok(b.roadDirs.size > 0,
+            `Seed ${seed}, ${size}: building at (${b.col},${b.row}) has no road connections`);
+        }
+      }
+    }
+  });
+
+  test('road MST passes through some BUILDING tiles with ≥2 roadDirs (transit, not just endpoint)', () => {
+    // Verifies that at least one building on a typical standard map sits
+    // mid-path rather than as a leaf spoke — the case the 3D renderer needs
+    // to draw a through-bezier across.
+    let transitBuildings = 0;
+    for (let seed = 0; seed < 20; seed++) {
+      const { tiles } = generateMap(seed, 'standard');
+      for (const t of tiles.values()) {
+        if (t.type === TileType.BUILDING && t.roadDirs.size >= 2) transitBuildings++;
+      }
+    }
+    assert.ok(transitBuildings > 0,
+      `Expected at least one transit building across 20 standard seeds, found ${transitBuildings}`);
+  });
+
   test('no road tile is adjacent to river without a bridge', () => {
     // This checks for dead-end roads at the river: a ROAD tile should never
     // be hex-adjacent to a RIVER tile unless there's a BRIDGE between them.

@@ -12,6 +12,7 @@ import { getVisiblePositions, sightRange, buildFogMovementHexes } from './action
 import { getFaction, sightRangeForEntity } from './factions.js';
 import { getFactionTheme, NEUTRAL_NODE_FILL } from './theme.js';
 import { nodeController, Phase } from './game.js';
+import { installOverlayShims, OVERLAY_METHODS } from './overlays.js';
 
 // PAD_X/PAD_Y are now computed dynamically in _resize() as this._padX / this._padY.
 // These constants are kept for backward-compat imports but should not be used internally.
@@ -121,10 +122,14 @@ export class Renderer {
     this.ctx     = canvas.getContext('2d');
     this.state   = state;
     this.hexSize = 30; // will be updated by _resize()
+    /** Parity flag with Renderer3D — false here so ui.js routes pan / pinch
+     *  through the 2D-canvas pathway. */
+    this.is3D    = false;
 
-    this.selectedHex    = null;
-    this.highlightHexes = [];
-    this.hoveredHex     = null;
+    // Unified overlay map + legacy `highlightHexes` getter. Initialises
+    // `_overlays` / `_selection` / `_hover`; selection & hover now flow through
+    // setSelection() / setHover() rather than the retired field proxies.
+    installOverlayShims(this);
 
     /** Ghost overlay steps from computeGhostState(). null = no overlay. */
     this._planGhostSteps = null;
@@ -141,9 +146,6 @@ export class Renderer {
 
     /** Tutorial spotlight: pulsing ring drawn over this hex. null = inactive. */
     this.tutorialSpotlightHex = null;
-
-    /** ID of the currently selected entity; drives the ⊕ indicator drawn above its hex. */
-    this.selectedEntityId = null;
 
     /** Arc menu connecting lines: { col, row, items: [{ x, y, color }] } or null. */
     this.arcMenuLines = null;
@@ -513,6 +515,26 @@ export class Renderer {
       radiusMultiplier,
     });
     this._startAnimLoop();
+  }
+
+  /** Sound-horn reaction: gold expanding ring at the actor's hex. The 2D
+   *  path reuses `addNodeRevealAnim` with the same params it always used —
+   *  the new dedicated method exists so the call site is renderer-agnostic
+   *  (3D implements its own torus-based ring; see `src/renderer-3d.js`). */
+  addSoundHorn(col, row, color = '#d4a72c') {
+    this.addNodeRevealAnim(
+      [{ col, row }], color,
+      { radiusMultiplier: 7, duration: 2000 },
+    );
+  }
+
+  /** Power-node-discovered reaction: pulse + reveal ring on the node cluster.
+   *  Hexes is `[{col, row}, ...]` (single-hex or multi-hex node). The 2D path
+   *  reuses `addNodeRevealAnim` with the legacy params; 3D builds a starburst
+   *  + floating label. The `label` argument is consumed only by the 3D path
+   *  — 2D ignores it (the encounter is delivered through the UI panel). */
+  addNodeDiscovered(hexes, color = '#ffd54a', _label = 'Power Node Discovered') {
+    this.addNodeRevealAnim(hexes, color);
   }
 
   /** Sparkle animation at a hex — used for summon/spawn. */
@@ -1045,6 +1067,11 @@ export class Renderer {
     this._panY = 0;
   }
 
+  // 3D-only operation; 2D camera has no rotation axes. Defined for interface
+  // parity with Renderer3D so ui.js can wire rotate buttons unconditionally.
+  rotateBy(_alphaDelta, _betaDelta) { /* no-op in 2D */ }
+  tiltBy(_betaDelta) { /* no-op in 2D */ }
+
   _clampPan() {
     const wrapper = this.canvas.parentElement;
     const wrapW = wrapper?.clientWidth  ?? this.canvas.width;
@@ -1289,9 +1316,26 @@ export class Renderer {
     // Thick outlines on hexes occupied by units
     this._drawUnitPresenceOutlines(revealedHexes);
 
-    // Highlights
-    for (const h of this.highlightHexes) {
-      this._drawHighlight(h.col, h.row, h.color || 'rgba(100,200,100,0.15)');
+    // Highlights — move/battle/battle-hex target overlays (layer
+    // `highlight-disc`), drawn in alphabetical id order. Each overlay carries a
+    // single rgba fill colour in `style.color`; the 2D path tints every hex in
+    // its set with that colour. (Migrated off the legacy `highlightHexes` array.)
+    //
+    // NOTE: within-layer draw order is alphabetical by overlay id. The
+    // `selection` layer (drawn lower down) relies on this too: 'hover' <
+    // 'selection', so the selection outline draws on top of the hover outline.
+    const discIds = [];
+    for (const [id, ov] of this._overlays) {
+      if (ov.layer === 'highlight-disc') discIds.push(id);
+    }
+    discIds.sort();
+    for (const id of discIds) {
+      const ov = this._overlays.get(id);
+      const color = ov.style?.color || 'rgba(100,200,100,0.15)';
+      for (const key of Array.from(ov.hexes).sort()) {
+        const [c, r] = key.split(',').map(Number);
+        this._drawHighlight(c, r, color);
+      }
     }
 
     // Battle highlights (combatants = bright red, assisting allies = faint red)
@@ -1320,25 +1364,40 @@ export class Renderer {
       }
     }
 
-    if (this.selectedHex) {
-      const selEntity = this.selectedEntityId
-        ? this.state.entities.find(e => e.id === this.selectedEntityId)
-        : null;
-      // Use faction colour for the selected hex outline (consistent with unit
-      // presence outlines); in multiplayer use the per-player colour.
-      let selColor = '#f5c842';
-      if (selEntity) {
-        const playerColor = selEntity.ownerId
-          ? this._playerColorMap.get(selEntity.ownerId) : null;
-        const factionColor = selEntity.owner === 'hero'
-          ? ENTITY_COLOR[EntityType.HERO]
-          : ENTITY_COLOR[EntityType.WITCH];
-        selColor = _hexToRgba(playerColor ?? factionColor, 0.95);
-      }
-      this._drawOutline(this.selectedHex.col, this.selectedHex.row, selColor, 2, true);
+    // Selection + hover outlines — both live in the `selection` overlay layer
+    // (ids 'hover' and 'selection'). Drawn in alphabetical id order so
+    // 'selection' lands on top of 'hover' (see the layer-ordering note at the
+    // highlight-disc loop above). Each outline carries strokeWidth + glow in
+    // its style; the 'selection' overlay's colour is resolved per-entity here
+    // (player / faction tint) since the colour map + palette live in this file.
+    const selLayerIds = [];
+    for (const [id, ov] of this._overlays) {
+      if (ov.layer === 'selection' && ov.kind === 'outline') selLayerIds.push(id);
     }
-    if (this.hoveredHex) {
-      this._drawOutline(this.hoveredHex.col, this.hoveredHex.row, 'rgba(255,255,255,0.3)', 1);
+    selLayerIds.sort();
+    for (const id of selLayerIds) {
+      const ov = this._overlays.get(id);
+      const strokeWidth = ov.style?.strokeWidth ?? 1;
+      const glow = !!ov.style?.glow;
+      let color = ov.style?.color || 'rgba(255,255,255,0.3)';
+      const entityId = ov.meta?.entityId ?? null;
+      if (entityId != null) {
+        const selEntity = this.state.entities.find(e => e.id === entityId);
+        // Use faction colour for the selected hex outline (consistent with unit
+        // presence outlines); in multiplayer use the per-player colour.
+        if (selEntity) {
+          const playerColor = selEntity.ownerId
+            ? this._playerColorMap.get(selEntity.ownerId) : null;
+          const factionColor = selEntity.owner === 'hero'
+            ? ENTITY_COLOR[EntityType.HERO]
+            : ENTITY_COLOR[EntityType.WITCH];
+          color = _hexToRgba(playerColor ?? factionColor, 0.95);
+        }
+      }
+      for (const key of Array.from(ov.hexes).sort()) {
+        const [c, r] = key.split(',').map(Number);
+        this._drawOutline(c, r, color, strokeWidth, glow);
+      }
     }
 
     // Entities — skip any entity whose move or lunge animation is still in flight
@@ -1798,9 +1857,8 @@ export class Renderer {
       }
     }
 
-    const selKey = this.selectedHex
-      ? hexKey(this.selectedHex.col, this.selectedHex.row)
-      : null;
+    const selHex = this._selection?.hex ?? null;
+    const selKey = selHex ? hexKey(selHex.col, selHex.row) : null;
     for (const [k, color] of hexColors) {
       const [col, row] = k.split(',').map(Number);
       // Skip the selected hex here — the main render loop draws a separate,
@@ -3247,6 +3305,11 @@ export class Renderer {
     }
   }
 }
+
+// Overlay API lives on the prototype (shared impl from overlays.js) so the
+// renderer-interface conformance test sees setOverlay / removeOverlay /
+// clearOverlaysByLayer / setSelection / setHover as real methods.
+Object.assign(Renderer.prototype, OVERLAY_METHODS);
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 

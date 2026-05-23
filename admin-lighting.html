@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Brimstone — Lighting Tuner</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    body { margin: 0; background: #0a0a0a; color: #d4cba0; font-family: var(--font-ui, system-ui), sans-serif; }
+    #wrap { display: grid; grid-template-columns: 1fr 360px; height: 100vh; overflow: hidden; }
+    #canvas-pane { position: relative; overflow: hidden; background: #050505; }
+    #render-canvas { width: 100%; height: 100%; display: block; touch-action: none; }
+    #controls { padding: 12px 16px; overflow-y: auto; border-left: 1px solid #2c2620; background: #14110d; }
+    h1 { font-size: 16px; margin: 0 0 8px 0; color: #c4a04a; letter-spacing: 1px; }
+    .nav-back { font-size: 12px; color: #a08858; }
+    .phase-row { display: flex; gap: 4px; margin: 12px 0 16px 0; }
+    .phase-btn {
+      flex: 1; padding: 8px 4px; background: #211c16; color: #d4cba0; border: 1px solid #443a2a;
+      font-family: inherit; font-size: 12px; cursor: pointer; text-transform: uppercase; letter-spacing: 1px;
+    }
+    .phase-btn.active { background: #5a4a30; border-color: #c4a04a; color: #ffd680; }
+    .section { margin: 14px 0; padding: 10px 12px; border: 1px solid #2c2620; background: #1a1610; }
+    .section h2 { margin: 0 0 8px 0; font-size: 12px; color: #c4a04a; letter-spacing: 1.5px; text-transform: uppercase; }
+    .row { display: grid; grid-template-columns: 64px 1fr 56px; gap: 8px; align-items: center; margin: 6px 0; font-size: 12px; }
+    .row label { color: #a08858; }
+    .row input[type=range] { width: 100%; }
+    .row .val { color: #d4cba0; text-align: right; font-variant-numeric: tabular-nums; font-size: 11px; }
+    .colorrow { display: grid; grid-template-columns: 64px 1fr; gap: 8px; align-items: center; margin: 6px 0; font-size: 12px; }
+    .colorrow input[type=color] { width: 100%; height: 28px; background: transparent; border: 1px solid #443a2a; cursor: pointer; }
+    button.action {
+      padding: 8px 12px; background: #5a4a30; color: #ffd680; border: 1px solid #c4a04a;
+      font-family: inherit; cursor: pointer; margin: 4px 4px 4px 0; font-size: 12px; letter-spacing: 1px;
+    }
+    button.action:hover { background: #6a5a3a; }
+    #export-area {
+      width: 100%; height: 240px; margin-top: 8px; background: #050505; color: #c4a04a;
+      border: 1px solid #443a2a; font-family: ui-monospace, Menlo, monospace; font-size: 11px;
+      padding: 8px; box-sizing: border-box;
+    }
+    #status { margin-top: 8px; font-size: 11px; color: #8a8060; }
+    .helper { font-size: 11px; color: #8a8060; margin: 4px 0 8px 0; line-height: 1.4; }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div id="canvas-pane">
+      <canvas id="render-canvas"></canvas>
+    </div>
+    <div id="controls">
+      <h1>BRIMSTONE LIGHTING TUNER</h1>
+      <a class="nav-back" href="/admin">← Back to admin</a>
+
+      <div class="phase-row" id="phase-row">
+        <button class="phase-btn active" data-phase="dawn">Dawn</button>
+        <button class="phase-btn" data-phase="day">Day</button>
+        <button class="phase-btn" data-phase="dusk">Dusk</button>
+        <button class="phase-btn" data-phase="night">Night</button>
+      </div>
+
+      <div class="helper">
+        Sliders write straight to the live renderer for the active phase. Other phases keep their last-edited
+        values. When you're happy, hit <b>Export</b> to copy the full <code>PHASE_LIGHT_CONFIG</code> block.
+      </div>
+
+      <div class="section">
+        <h2>Hemi (ambient fill)</h2>
+        <div class="row"><label>Intensity</label><input id="hemi-int" type="range" min="0" max="3" step="0.01" /><span class="val" id="hemi-int-v"></span></div>
+        <div class="colorrow"><label>Color</label><input id="hemi-color" type="color" /></div>
+      </div>
+
+      <div class="section">
+        <h2>Sun (directional)</h2>
+        <div class="row"><label>Intensity</label><input id="sun-int" type="range" min="0" max="4" step="0.01" /><span class="val" id="sun-int-v"></span></div>
+        <div class="row"><label>Dir X</label><input id="sun-x" type="range" min="-1" max="1" step="0.01" /><span class="val" id="sun-x-v"></span></div>
+        <div class="row"><label>Dir Y</label><input id="sun-y" type="range" min="-1" max="0" step="0.01" /><span class="val" id="sun-y-v"></span></div>
+        <div class="row"><label>Dir Z</label><input id="sun-z" type="range" min="-1" max="1" step="0.01" /><span class="val" id="sun-z-v"></span></div>
+      </div>
+
+      <div class="section">
+        <h2>Scene Ambient</h2>
+        <div class="colorrow"><label>Color</label><input id="ambient-color" type="color" /></div>
+        <div class="row"><label>Strength</label><input id="ambient-str" type="range" min="0" max="2" step="0.01" /><span class="val" id="ambient-str-v"></span></div>
+        <div class="helper">Strength multiplies the color before it's applied — lets you keep a tint and pump the brightness.</div>
+      </div>
+
+      <div class="section">
+        <h2>Sky / Clear</h2>
+        <div class="colorrow"><label>Color</label><input id="clear-color" type="color" /></div>
+      </div>
+
+      <div class="section">
+        <h2>Fog of War tint</h2>
+        <div class="row"><label>Darken</label><input id="fog-tint" type="range" min="0" max="1" step="0.01" /><span class="val" id="fog-tint-v"></span></div>
+        <div class="helper">Multiplier applied to fogged tile colours (0 = fully black, 1 = no darkening). Re-applies live to every already-fogged tile when you slide.</div>
+      </div>
+
+      <div class="section">
+        <h2>Map / View</h2>
+        <button class="action" id="regen-map">New random map</button>
+        <button class="action" id="reframe">Reframe</button>
+        <button class="action" id="toggle-fog">Toggle fog of war</button>
+      </div>
+
+      <div class="section">
+        <h2>Export</h2>
+        <button class="action" id="export-btn">Export PHASE_LIGHT_CONFIG</button>
+        <button class="action" id="copy-btn">Copy to clipboard</button>
+        <textarea id="export-area" readonly placeholder="Click Export to dump the current PHASE_LIGHT_CONFIG…"></textarea>
+        <div id="status"></div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    // Suppress any imports from main.js — we own the canvas lifecycle here.
+    import { Renderer3D, PHASE_LIGHT_CONFIG } from '/src/renderer-3d.js';
+    import { generateMap } from '/src/map.js';
+    import { GameState, Phase } from '/src/game.js';
+    import { createHero, createWitch } from '/src/entities.js';
+
+    const PHASES = ['dawn', 'day', 'dusk', 'night'];
+
+    // Start from a deep clone of the current PHASE_LIGHT_CONFIG so the tool's
+    // initial values match the live game. Ambient is split into color + strength
+    // so the operator can pump brightness without losing the tint.
+    const live = {};
+    for (const phase of PHASES) {
+      const cfg = PHASE_LIGHT_CONFIG[phase];
+      const amb = cfg.ambient || { r: 0.3, g: 0.3, b: 0.3 };
+      const ambStrength = Math.max(amb.r, amb.g, amb.b) || 1;
+      const ambNorm = ambStrength > 0
+        ? { r: amb.r / ambStrength, g: amb.g / ambStrength, b: amb.b / ambStrength }
+        : { r: 1, g: 1, b: 1 };
+      live[phase] = {
+        hemi:    { intensity: cfg.intensity, color: { ...cfg.color } },
+        sun:     { intensity: cfg.sun.intensity, dir: { ...cfg.sun.dir } },
+        ambient: { color: ambNorm, strength: ambStrength },
+        clear:   { ...cfg.clear },
+        fogTint: typeof cfg.fogTint === 'number' ? cfg.fogTint : 0.20,
+      };
+    }
+
+    let activePhase = 'dawn';
+
+    // ── Mini game state with a generated map ────────────────────────────────
+    function buildState() {
+      const seed = Math.floor(Math.random() * 1e9);
+      const state = new GameState({ size: 'standard', seed });
+      // Drop a hero/witch standee so we can see units in the test scene.
+      const hero  = createHero(6, 6, 'p_hero', state);
+      const witch = createWitch(6, 4, 'p_witch', state);
+      state.entities.push(hero, witch);
+      state.phase = activePhase;
+      state.round = activePhase === 'dawn' ? 1
+                  : activePhase === 'day'  ? 3
+                  : activePhase === 'dusk' ? 5
+                  : 7;
+      return state;
+    }
+
+    const canvas = document.getElementById('render-canvas');
+    let state    = buildState();
+    let renderer = new Renderer3D(canvas, state);
+    let fogOn    = false;
+    state.fogOfWar = 'none';
+
+    // Absolute path — the page lives at /admin/lighting, so the default
+    // relative `assets/tilemap.png` would resolve to /admin/assets/...
+    renderer.loadImages('/assets');
+    renderer.draw();
+
+    // After renderer's _initBabylon finished (async), grab references to the
+    // lights and detach the renderer's per-frame light pump so our UI values
+    // stick. We retry briefly until _scene/_light exist.
+    async function waitForRenderer() {
+      for (let i = 0; i < 60; i++) {
+        if (renderer._scene && renderer._light && renderer._sunLight) return;
+        await new Promise(r => setTimeout(r, 100));
+      }
+    }
+
+    await waitForRenderer();
+
+    // Detach the renderer's onBeforeRender (which would reset lights from the
+    // baked-in phase config every frame). Our own observer pushes UI values
+    // each frame instead so changes take effect immediately.
+    if (renderer._onBeforeRenderObs) {
+      renderer._scene.onBeforeRenderObservable.remove(renderer._onBeforeRenderObs);
+      renderer._onBeforeRenderObs = null;
+    }
+
+    const BABYLON = renderer._babylon;
+
+    function applyLiveLighting() {
+      const cfg = live[activePhase];
+      if (!cfg) return;
+      renderer._light.intensity = cfg.hemi.intensity;
+      renderer._light.diffuse   = new BABYLON.Color3(cfg.hemi.color.r, cfg.hemi.color.g, cfg.hemi.color.b);
+      renderer._light.specular  = new BABYLON.Color3(cfg.hemi.color.r * 0.3, cfg.hemi.color.g * 0.3, cfg.hemi.color.b * 0.3);
+      renderer._light.groundColor = new BABYLON.Color3(cfg.hemi.color.r * 0.35, cfg.hemi.color.g * 0.35, cfg.hemi.color.b * 0.35);
+      renderer._sunLight.intensity = cfg.sun.intensity;
+      renderer._sunLight.direction = new BABYLON.Vector3(cfg.sun.dir.x, cfg.sun.dir.y, cfg.sun.dir.z);
+      const ambR = cfg.ambient.color.r * cfg.ambient.strength;
+      const ambG = cfg.ambient.color.g * cfg.ambient.strength;
+      const ambB = cfg.ambient.color.b * cfg.ambient.strength;
+      renderer._scene.ambientColor = new BABYLON.Color3(ambR, ambG, ambB);
+      renderer._scene.clearColor   = new BABYLON.Color4(cfg.clear.r, cfg.clear.g, cfg.clear.b, 1);
+      renderer._scene.fogColor     = new BABYLON.Color3(cfg.clear.r, cfg.clear.g, cfg.clear.b);
+      // Fog-of-war tint — only re-apply when the value actually changed, so
+      // we don't trigger `_applyFogVeil` every single frame.
+      if (typeof renderer.setFogTint === 'function'
+          && Math.abs((renderer._fogTileDarken ?? 0) - cfg.fogTint) > 1e-4) {
+        renderer.setFogTint(cfg.fogTint);
+      }
+    }
+
+    // Per-frame override so the lighting values can't drift back to baked.
+    renderer._scene.onBeforeRenderObservable.add(applyLiveLighting);
+
+    // ── UI helpers ─────────────────────────────────────────────────────────
+    const rgbToHex = ({ r, g, b }) => {
+      const toByte = (v) => Math.max(0, Math.min(255, Math.round(v * 255)));
+      return '#' + [r, g, b].map(c => toByte(c).toString(16).padStart(2, '0')).join('');
+    };
+    const hexToRgb = (hex) => {
+      const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+      if (!m) return { r: 1, g: 1, b: 1 };
+      return { r: parseInt(m[1], 16) / 255, g: parseInt(m[2], 16) / 255, b: parseInt(m[3], 16) / 255 };
+    };
+    const $ = (id) => document.getElementById(id);
+    const fmt = (n, d = 2) => (Math.round(n * Math.pow(10, d)) / Math.pow(10, d)).toFixed(d);
+
+    function syncControlsFromLive() {
+      const cfg = live[activePhase];
+      $('hemi-int').value = cfg.hemi.intensity;
+      $('hemi-int-v').textContent = fmt(cfg.hemi.intensity);
+      $('hemi-color').value = rgbToHex(cfg.hemi.color);
+      $('sun-int').value = cfg.sun.intensity;
+      $('sun-int-v').textContent = fmt(cfg.sun.intensity);
+      $('sun-x').value = cfg.sun.dir.x;
+      $('sun-x-v').textContent = fmt(cfg.sun.dir.x);
+      $('sun-y').value = cfg.sun.dir.y;
+      $('sun-y-v').textContent = fmt(cfg.sun.dir.y);
+      $('sun-z').value = cfg.sun.dir.z;
+      $('sun-z-v').textContent = fmt(cfg.sun.dir.z);
+      $('ambient-color').value = rgbToHex(cfg.ambient.color);
+      $('ambient-str').value = cfg.ambient.strength;
+      $('ambient-str-v').textContent = fmt(cfg.ambient.strength);
+      $('clear-color').value = rgbToHex(cfg.clear);
+      $('fog-tint').value = cfg.fogTint;
+      $('fog-tint-v').textContent = fmt(cfg.fogTint);
+    }
+
+    function onPhaseSwitch(phase) {
+      activePhase = phase;
+      for (const btn of document.querySelectorAll('.phase-btn')) {
+        btn.classList.toggle('active', btn.dataset.phase === phase);
+      }
+      // Update the game state's phase so any phase-dependent visuals
+      // (besides the lighting we override) read correctly.
+      state.phase = phase;
+      state.round = phase === 'dawn' ? 1 : phase === 'day' ? 3 : phase === 'dusk' ? 5 : 7;
+      syncControlsFromLive();
+    }
+
+    // Wire phase buttons
+    for (const btn of document.querySelectorAll('.phase-btn')) {
+      btn.addEventListener('click', () => onPhaseSwitch(btn.dataset.phase));
+    }
+
+    // Slider bindings — read input → write to live → apply
+    function bindNumber(id, displayId, getter, setter, formatter = (v) => fmt(v)) {
+      const el = $(id);
+      const disp = $(displayId);
+      el.addEventListener('input', () => {
+        const v = parseFloat(el.value);
+        setter(v);
+        disp.textContent = formatter(v);
+      });
+    }
+    bindNumber('hemi-int', 'hemi-int-v',
+      () => live[activePhase].hemi.intensity,
+      (v) => { live[activePhase].hemi.intensity = v; });
+    bindNumber('sun-int', 'sun-int-v',
+      () => live[activePhase].sun.intensity,
+      (v) => { live[activePhase].sun.intensity = v; });
+    bindNumber('sun-x', 'sun-x-v',
+      () => live[activePhase].sun.dir.x,
+      (v) => { live[activePhase].sun.dir.x = v; });
+    bindNumber('sun-y', 'sun-y-v',
+      () => live[activePhase].sun.dir.y,
+      (v) => { live[activePhase].sun.dir.y = v; });
+    bindNumber('sun-z', 'sun-z-v',
+      () => live[activePhase].sun.dir.z,
+      (v) => { live[activePhase].sun.dir.z = v; });
+    bindNumber('ambient-str', 'ambient-str-v',
+      () => live[activePhase].ambient.strength,
+      (v) => { live[activePhase].ambient.strength = v; });
+    bindNumber('fog-tint', 'fog-tint-v',
+      () => live[activePhase].fogTint,
+      (v) => { live[activePhase].fogTint = v; });
+
+    $('hemi-color').addEventListener('input', (e) => {
+      live[activePhase].hemi.color = hexToRgb(e.target.value);
+    });
+    $('ambient-color').addEventListener('input', (e) => {
+      live[activePhase].ambient.color = hexToRgb(e.target.value);
+    });
+    $('clear-color').addEventListener('input', (e) => {
+      live[activePhase].clear = hexToRgb(e.target.value);
+    });
+
+    // Map controls
+    $('regen-map').addEventListener('click', () => {
+      // Tear down and rebuild — Renderer3D doesn't support live re-map without
+      // a fresh GameState, so we recreate.
+      try { renderer._scene?.dispose(); } catch {}
+      try { renderer._engine?.dispose(); } catch {}
+      state = buildState();
+      renderer = new Renderer3D(canvas, state);
+      renderer.loadImages('/assets');
+      renderer.draw();
+      waitForRenderer().then(() => {
+        if (renderer._onBeforeRenderObs) {
+          renderer._scene.onBeforeRenderObservable.remove(renderer._onBeforeRenderObs);
+          renderer._onBeforeRenderObs = null;
+        }
+        renderer._scene.onBeforeRenderObservable.add(applyLiveLighting);
+      });
+    });
+    $('reframe').addEventListener('click', () => {
+      renderer._frameFullMap?.({ instant: false });
+    });
+    $('toggle-fog').addEventListener('click', () => {
+      fogOn = !fogOn;
+      state.fogOfWar = fogOn ? 'standard' : 'none';
+      renderer.draw();
+    });
+
+    // Export
+    function buildExport() {
+      const out = [];
+      out.push('export const PHASE_LIGHT_CONFIG = Object.freeze({');
+      for (const phase of PHASES) {
+        const cfg = live[phase];
+        const ambR = cfg.ambient.color.r * cfg.ambient.strength;
+        const ambG = cfg.ambient.color.g * cfg.ambient.strength;
+        const ambB = cfg.ambient.color.b * cfg.ambient.strength;
+        out.push(`  ${phase.padEnd(6)}: {`);
+        out.push(`    intensity: ${fmt(cfg.hemi.intensity)}, ` +
+                 `color: { r: ${fmt(cfg.hemi.color.r)}, g: ${fmt(cfg.hemi.color.g)}, b: ${fmt(cfg.hemi.color.b)} }, ` +
+                 `clear: { r: ${fmt(cfg.clear.r)}, g: ${fmt(cfg.clear.g)}, b: ${fmt(cfg.clear.b)} },`);
+        out.push(`    ambient: { r: ${fmt(ambR)}, g: ${fmt(ambG)}, b: ${fmt(ambB)} },`);
+        out.push(`    fogTint: ${fmt(cfg.fogTint)},`);
+        out.push(`    sun: { dir: { x: ${fmt(cfg.sun.dir.x)}, y: ${fmt(cfg.sun.dir.y)}, z: ${fmt(cfg.sun.dir.z)} }, intensity: ${fmt(cfg.sun.intensity)} },`);
+        out.push('  },');
+      }
+      out.push('});');
+      return out.join('\n');
+    }
+    $('export-btn').addEventListener('click', () => {
+      $('export-area').value = buildExport();
+      $('status').textContent = 'Exported. Edit other phases as needed, then re-export.';
+    });
+    $('copy-btn').addEventListener('click', async () => {
+      const text = $('export-area').value || buildExport();
+      $('export-area').value = text;
+      try {
+        await navigator.clipboard.writeText(text);
+        $('status').textContent = 'Copied to clipboard.';
+      } catch (err) {
+        $('status').textContent = 'Copy failed — select the textarea and copy manually.';
+      }
+    });
+
+    // Resize handling
+    window.addEventListener('resize', () => renderer._engine?.resize());
+
+    // Initial UI fill
+    syncControlsFromLive();
+  </script>
+</body>
+</html>

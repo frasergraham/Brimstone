@@ -538,6 +538,22 @@
         </div>
       </div>
 
+      <!-- Renderer (experimental) -->
+      <div class="acct-section" style="text-align:left">
+        <div class="acct-label">Renderer</div>
+        <p style="font-size:0.8rem;color:var(--muted);margin:0.25rem 0 0.5rem">
+          The 3D renderer is experimental and only shows a placeholder scene.
+          Changing this requires a reload.
+        </p>
+        <select id="options-renderer-select" class="setup-input" style="width:100%;box-sizing:border-box">
+          <option value="2d">2D (legacy)</option>
+          <option value="3d" selected>3D (default)</option>
+        </select>
+        <p id="options-renderer-hint" style="font-size:0.75rem;color:var(--muted);margin:0.4rem 0 0;display:none">
+          Reload the page to apply.
+        </p>
+      </div>
+
       <div id="options-empty-msg" class="setup-lore" style="display:none">
         <p>No options are available yet.<br>Check back in a future update.</p>
       </div>
@@ -912,6 +928,12 @@
       </div>
       <div id="canvas-wrapper">
         <canvas id="game-canvas"></canvas>
+        <!-- FPS / ms-per-frame counter — top-right of canvas. Shown only when
+             the 3D renderer is active (CSS gates on `body.renderer-3d`).
+             Text is pumped from renderer-3d.js's per-frame observer, throttled
+             to ~100ms so the DOM write doesn't cost a frame. -->
+        <div id="fps-counter">--</div>
+        <div id="poly-counter">--</div>
         <!-- Replay HUD: shown during full-game replay -->
         <div id="replay-hud" style="display:none">
           <div class="replay-controls">
@@ -926,12 +948,30 @@
         </div>
         <!-- Unit stats bar: shown during planning when a unit is selected -->
         <div id="unit-stats-bar" style="display:none"></div>
+        <!-- 3D camera controls — shown only when the 3D renderer is active
+             (toggled by `body.renderer-3d` in main.js). Mirrors #zoom-controls
+             placement (bottom-left) and inherits .zoom-btn styling. Mobile
+             shows the zoom +/− pair; desktop adds rotate left/right since
+             right-drag is harder to discover than a button. Tilt is locked
+             at π/4 (45°) — see CAMERA_BETA_LOCKED in renderer-3d.js — so
+             there are no tilt buttons. -->
+        <div id="camera-controls-3d" class="zoom-controls" style="display:none">
+          <button id="cam3d-zoom-in"  class="zoom-btn" title="Zoom in">＋</button>
+          <button id="cam3d-zoom-out" class="zoom-btn" title="Zoom out">－</button>
+          <button id="cam3d-rotate-left"  class="zoom-btn cam3d-desktop-only" title="Rotate left">↶</button>
+          <button id="cam3d-rotate-right" class="zoom-btn cam3d-desktop-only" title="Rotate right">↷</button>
+        </div>
         <!-- Zoom controls — always visible on desktop, hidden on touch-only devices -->
         <div id="zoom-controls" class="zoom-controls">
           <button id="zoom-in"  class="zoom-btn" title="Zoom in (+)">＋</button>
           <button id="zoom-out" class="zoom-btn" title="Zoom out (−)">－</button>
+          <button id="rotate-left"  class="zoom-btn" title="Rotate left (3D)">↶</button>
+          <button id="rotate-right" class="zoom-btn" title="Rotate right (3D)">↷</button>
           <button id="zoom-fit" class="zoom-btn" title="Fit map">⛶</button>
           <button id="zoom-me"  class="zoom-btn" title="Focus on my units">⊙</button>
+          <!-- 3D camera mode toggle: pan (✋) ↔ rotate (↻). Drag does the
+               active action; pinch / wheel always zooms. -->
+          <button id="cam3d-mode-toggle" class="zoom-btn" title="Drag = pan / rotate (3D)" data-mode="pan">✋</button>
           <button id="speed-toggle" class="zoom-btn" title="Battle speed">⚡</button>
           <!-- Map options button hidden — kept for future debug use -->
           <button id="map-options-toggle" class="zoom-btn" title="Map options" style="display:none">⚙</button>

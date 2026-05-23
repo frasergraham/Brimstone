@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Brimstone — 3D Asset Debug Viewer</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; background: #0a0a0a; color: #d4cba0; font-family: system-ui, sans-serif; font-size: 13px; }
+    #wrap { display: grid; grid-template-columns: 220px 1fr 280px; height: 100vh; overflow: hidden; }
+
+    aside { background: #14110d; border-right: 1px solid #2c2620; overflow-y: auto; padding: 12px; }
+    aside h2 { font-size: 11px; color: #c4a04a; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 10px; }
+    .model-item {
+      display: block; padding: 8px 10px; margin: 4px 0; cursor: pointer;
+      background: #1a1610; border: 1px solid #2c2620; color: #d4cba0;
+      font-family: ui-monospace, Menlo, monospace; font-size: 12px;
+    }
+    .model-item:hover { background: #211c16; border-color: #443a2a; }
+    .model-item.active { background: #5a4a30; border-color: #c4a04a; color: #ffd680; }
+    .model-item.broken { color: #c46060; }
+    .model-item .check { margin-right: 6px; vertical-align: middle; }
+    .model-item .label { vertical-align: middle; }
+    .folder { margin: 10px 0 4px 0; font-size: 11px; color: #c4a04a; letter-spacing: 1.2px; text-transform: uppercase; cursor: pointer; user-select: none; }
+    .folder.collapsed + .folder-body { display: none; }
+    .folder::before { content: '▾ '; }
+    .folder.collapsed::before { content: '▸ '; }
+    #remove-bar { position: sticky; bottom: 0; background: #14110d; border-top: 1px solid #2c2620; padding: 8px 0 4px 0; margin-top: 10px; }
+    #remove-bar button { width: 100%; }
+    #remove-output { margin-top: 6px; font-family: ui-monospace, Menlo, monospace; font-size: 10px; color: #a08858; max-height: 200px; overflow-y: auto; background: #0a0805; padding: 6px; border: 1px solid #2c2620; white-space: pre-wrap; word-break: break-all; }
+
+    #stage { position: relative; background: #050505; overflow: hidden; }
+    #render-canvas { width: 100%; height: 100%; display: block; touch-action: none; outline: none; }
+    #overlay {
+      position: absolute; top: 10px; left: 10px; font-family: ui-monospace, Menlo, monospace;
+      font-size: 11px; color: #8a8060; background: rgba(0,0,0,0.5); padding: 4px 8px;
+      border: 1px solid #2c2620; pointer-events: none;
+    }
+    .nav-back { position: absolute; top: 10px; right: 10px; font-size: 12px; color: #a08858; }
+
+    #info { background: #14110d; border-left: 1px solid #2c2620; overflow-y: auto; padding: 12px; }
+    #info h2 { font-size: 11px; color: #c4a04a; letter-spacing: 1.5px; text-transform: uppercase; margin: 0 0 8px 0; }
+    .section { margin: 12px 0; padding: 10px 12px; border: 1px solid #2c2620; background: #1a1610; }
+    .section h3 { font-size: 11px; color: #c4a04a; letter-spacing: 1.2px; text-transform: uppercase; margin: 0 0 6px 0; }
+    .row { display: grid; grid-template-columns: 90px 1fr; gap: 8px; margin: 3px 0; font-size: 11px; }
+    .row label { color: #8a8060; }
+    .row .val { color: #d4cba0; font-family: ui-monospace, Menlo, monospace; font-variant-numeric: tabular-nums; }
+    select, button {
+      width: 100%; padding: 6px 8px; background: #211c16; color: #d4cba0;
+      border: 1px solid #443a2a; font-family: inherit; font-size: 12px; cursor: pointer;
+    }
+    button:hover, select:hover { background: #2a241c; }
+    button.primary { background: #5a4a30; color: #ffd680; border-color: #c4a04a; }
+    button.primary:hover { background: #6a5a3a; }
+    .button-row { display: flex; gap: 6px; margin-top: 6px; }
+    .button-row button { flex: 1; }
+    .anim-list { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: #a08858; margin-top: 6px; }
+    .anim-list div { padding: 2px 0; }
+    .toggle-row { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 11px; color: #a08858; }
+    #error { color: #c46060; font-size: 11px; margin: 8px 0; min-height: 16px; }
+    .empty { color: #6a6050; font-style: italic; font-size: 11px; }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <aside>
+      <h2>Models</h2>
+      <div id="model-list"></div>
+      <div id="tree-list"></div>
+      <div id="remove-bar">
+        <button id="show-remove" class="primary">Show removal command</button>
+        <pre id="remove-output" style="display:none"></pre>
+      </div>
+    </aside>
+
+    <div id="stage">
+      <canvas id="render-canvas" tabindex="0"></canvas>
+      <div id="overlay">drag = orbit · wheel = zoom · right-drag = pan</div>
+      <a class="nav-back" href="/admin">← Back to admin</a>
+    </div>
+
+    <div id="info">
+      <h2>Asset Inspector</h2>
+      <div id="error"></div>
+
+      <div class="section">
+        <h3>Metadata</h3>
+        <div class="row"><label>File</label><span class="val" id="meta-file">—</span></div>
+        <div class="row"><label>Submeshes</label><span class="val" id="meta-submesh">—</span></div>
+        <div class="row"><label>Vertices</label><span class="val" id="meta-verts">—</span></div>
+        <div class="row"><label>Bones</label><span class="val" id="meta-bones">—</span></div>
+        <div class="row"><label>BBox W·H·D</label><span class="val" id="meta-bbox">—</span></div>
+      </div>
+
+      <div class="section">
+        <h3>Animations</h3>
+        <select id="anim-select"><option value="">— none —</option></select>
+        <div class="button-row">
+          <button id="anim-play" class="primary">Play</button>
+          <button id="anim-pause">Pause</button>
+          <button id="anim-stop">Stop</button>
+        </div>
+        <div class="toggle-row">
+          <input type="checkbox" id="anim-loop" checked />
+          <label for="anim-loop">Loop</label>
+        </div>
+        <div class="anim-list" id="anim-list"><span class="empty">no animations</span></div>
+      </div>
+
+
+      <div class="section">
+        <h3>View</h3>
+        <button id="reframe">Reframe camera</button>
+        <div class="toggle-row">
+          <input type="checkbox" id="show-grid" checked />
+          <label for="show-grid">Show ground grid</label>
+        </div>
+        <div class="toggle-row">
+          <input type="checkbox" id="wireframe" />
+          <label for="wireframe">Wireframe</label>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Local UMD Babylon + glTF loaders (no CDN). These attach to window.BABYLON.
+       Loading order matters: core first, then loaders so the .glb plugin
+       registers on the same SceneLoader instance the page uses. -->
+  <script src="/assets/vendor/babylonjs/babylon.js"></script>
+  <script src="/assets/vendor/babylonjs/babylonjs.loaders.min.js"></script>
+
+  <script>
+  (function () {
+    'use strict';
+
+    // Hardcoded model list (the brief mentions dynamic discovery is a stretch).
+    // Each entry: { file, label } — file is fetched from /assets/models/<file>.
+    // Sidebar: mesh-having models the user can preview. Each rigged
+    // model auto-retargets every entry of ANIMATION_FILES onto its
+    // skeleton at load so the animations dropdown lists them all for
+    // one-click playback.
+    const MODELS = [
+      { file: 'house.glb',         label: 'house.glb' },
+      { file: 'paladin-idle.glb',  label: 'paladin-idle.glb' },
+    ];
+
+    // Animation-only .glb files (Mixamo "without skin" exports — joint
+    // hierarchy + keyframes, no mesh). Retargeted by bone name onto
+    // whichever rigged mesh the user selects.
+    const ANIMATION_FILES = [
+      'walking.glb',
+      'running.glb',
+    ];
+
+    const MODEL_DIR = '/assets/models/';
+
+    const $ = (id) => document.getElementById(id);
+    const errEl = $('error');
+    const animSelect = $('anim-select');
+    const animListEl = $('anim-list');
+
+    if (typeof BABYLON === 'undefined') {
+      errEl.textContent = 'Babylon failed to load (check /assets/vendor/babylonjs/).';
+      return;
+    }
+
+    // ── Engine + scene boilerplate ─────────────────────────────────────────
+    const canvas = $('render-canvas');
+    const engine = new BABYLON.Engine(canvas, true, { preserveDrawingBuffer: true, stencil: true });
+    const scene  = new BABYLON.Scene(engine);
+    scene.clearColor = new BABYLON.Color4(0.04, 0.04, 0.05, 1);
+
+    const camera = new BABYLON.ArcRotateCamera(
+      'cam', -Math.PI / 2, Math.PI / 3, 3, BABYLON.Vector3.Zero(), scene,
+    );
+    camera.lowerRadiusLimit = 0.2;
+    camera.upperRadiusLimit = 100;
+    camera.wheelDeltaPercentage = 0.02;
+    camera.attachControl(canvas, true);
+
+    // Plain debug lighting — NOT the in-game PHASE_LIGHT_CONFIG. Want the
+    // asset to read clearly under neutral illumination, with one directional
+    // shadow caster so we can spot pivot/ground-sink issues.
+    const hemi = new BABYLON.HemisphericLight('hemi', new BABYLON.Vector3(0, 1, 0), scene);
+    hemi.intensity = 1.0;
+    hemi.diffuse = new BABYLON.Color3(1, 1, 1);
+
+    const sun = new BABYLON.DirectionalLight('sun', new BABYLON.Vector3(-0.4, -1, -0.3), scene);
+    sun.position = new BABYLON.Vector3(5, 10, 5);
+    sun.intensity = 0.8;
+
+    // Ground grid (10×10) — gives the operator a sense of asset scale and
+    // catches the "model floats above tile" vs "sinks into ground" classes
+    // of pivot bugs that motivated this tool.
+    const ground = BABYLON.MeshBuilder.CreateGround('ground', { width: 10, height: 10, subdivisions: 10 }, scene);
+    const gridMat = new BABYLON.StandardMaterial('groundMat', scene);
+    gridMat.diffuseColor  = new BABYLON.Color3(0.18, 0.16, 0.12);
+    gridMat.specularColor = new BABYLON.Color3(0, 0, 0);
+    gridMat.wireframe = true;
+    ground.material = gridMat;
+    ground.receiveShadows = true;
+
+    // Shadow generator on the sun so the asset casts onto the grid.
+    const shadows = new BABYLON.ShadowGenerator(1024, sun);
+    shadows.useBlurExponentialShadowMap = true;
+    shadows.blurKernel = 16;
+
+    // Axis gizmo at world origin — quick scale + orientation reference.
+    function makeAxes(size) {
+      const axisX = BABYLON.MeshBuilder.CreateLines('axisX', {
+        points: [BABYLON.Vector3.Zero(), new BABYLON.Vector3(size, 0, 0)],
+      }, scene);
+      axisX.color = new BABYLON.Color3(1, 0.3, 0.3);
+      const axisY = BABYLON.MeshBuilder.CreateLines('axisY', {
+        points: [BABYLON.Vector3.Zero(), new BABYLON.Vector3(0, size, 0)],
+      }, scene);
+      axisY.color = new BABYLON.Color3(0.3, 1, 0.3);
+      const axisZ = BABYLON.MeshBuilder.CreateLines('axisZ', {
+        points: [BABYLON.Vector3.Zero(), new BABYLON.Vector3(0, 0, size)],
+      }, scene);
+      axisZ.color = new BABYLON.Color3(0.3, 0.6, 1);
+      return [axisX, axisY, axisZ];
+    }
+    const axes = makeAxes(1);
+
+    engine.runRenderLoop(() => scene.render());
+    window.addEventListener('resize', () => engine.resize());
+
+    // ── Loaded model state ─────────────────────────────────────────────────
+    // Tracks meshes added by the current model so we can dispose them on
+    // load-next. We deliberately keep the ground + axes alive across loads.
+    let currentMeshes = [];
+    let currentSkeletons = [];
+    let currentAnimGroups = [];
+    let activeAnimGroup = null;
+
+    function clearCurrent() {
+      for (const g of currentAnimGroups) { try { g.stop(); g.dispose(); } catch (_) {} }
+      for (const s of currentSkeletons) { try { s.dispose(); } catch (_) {} }
+      for (const m of currentMeshes) { try { m.dispose(); } catch (_) {} }
+      currentAnimGroups = [];
+      currentSkeletons = [];
+      currentMeshes = [];
+      activeAnimGroup = null;
+    }
+
+    function computeHierarchyBBox(meshes) {
+      // Combine bounding boxes of every imported mesh in world space. Returns
+      // null when no mesh has geometry (e.g. a GLB that only contains nodes).
+      let min = null, max = null;
+      for (const m of meshes) {
+        if (!m.getBoundingInfo) continue;
+        const verts = m.getTotalVertices ? m.getTotalVertices() : 0;
+        if (!verts) continue;
+        m.computeWorldMatrix(true);
+        const bb = m.getBoundingInfo().boundingBox;
+        const mn = bb.minimumWorld, mx = bb.maximumWorld;
+        if (!min) { min = mn.clone(); max = mx.clone(); }
+        else {
+          min = BABYLON.Vector3.Minimize(min, mn);
+          max = BABYLON.Vector3.Maximize(max, mx);
+        }
+      }
+      if (!min) return null;
+      return { min, max, center: min.add(max).scale(0.5), size: max.subtract(min) };
+    }
+
+    function frameCamera() {
+      const bbox = computeHierarchyBBox(currentMeshes);
+      if (!bbox) {
+        camera.target = BABYLON.Vector3.Zero();
+        camera.radius = 3;
+        return;
+      }
+      // Frame radius = max bbox dimension × heuristic; clamp so tiny models
+      // don't put the camera inside the mesh.
+      const maxDim = Math.max(bbox.size.x, bbox.size.y, bbox.size.z);
+      camera.target = bbox.center.clone();
+      camera.radius = Math.max(0.6, maxDim * 2.2);
+      camera.lowerRadiusLimit = Math.max(0.1, maxDim * 0.2);
+      camera.upperRadiusLimit = Math.max(20, maxDim * 20);
+    }
+
+    function fmt(n) {
+      if (n == null || !isFinite(n)) return '—';
+      return (Math.round(n * 100) / 100).toFixed(2);
+    }
+
+    function updateMetadata(file, result) {
+      $('meta-file').textContent = file;
+      $('meta-submesh').textContent = String(currentMeshes.filter(m => m.getTotalVertices && m.getTotalVertices() > 0).length);
+      let totalVerts = 0;
+      for (const m of currentMeshes) {
+        if (m.getTotalVertices) totalVerts += m.getTotalVertices();
+      }
+      $('meta-verts').textContent = totalVerts.toLocaleString();
+      let totalBones = 0;
+      for (const s of currentSkeletons) {
+        totalBones += (s.bones && s.bones.length) || 0;
+      }
+      $('meta-bones').textContent = totalBones ? String(totalBones) : '0';
+      const bbox = computeHierarchyBBox(currentMeshes);
+      $('meta-bbox').textContent = bbox
+        ? `${fmt(bbox.size.x)} · ${fmt(bbox.size.y)} · ${fmt(bbox.size.z)}`
+        : '—';
+
+      // Animation dropdown + list.
+      animSelect.innerHTML = '<option value="">— none —</option>';
+      animListEl.innerHTML = '';
+      if (!currentAnimGroups.length) {
+        animListEl.innerHTML = '<span class="empty">no animations</span>';
+      } else {
+        for (let i = 0; i < currentAnimGroups.length; i++) {
+          const g = currentAnimGroups[i];
+          const opt = document.createElement('option');
+          opt.value = String(i);
+          opt.textContent = g.name || `anim-${i}`;
+          animSelect.appendChild(opt);
+
+          const dur = (g.to - g.from) / 60; // GLB anims default to 60fps
+          const row = document.createElement('div');
+          row.textContent = `${g.name || `anim-${i}`} — ${fmt(dur)}s (${g.targetedAnimations ? g.targetedAnimations.length : 0} tracks)`;
+          animListEl.appendChild(row);
+        }
+      }
+    }
+
+    function isAnimOnly(result) {
+      const meshes = result.meshes || [];
+      const hasGeometry = meshes.some(m => m.getTotalVertices && m.getTotalVertices() > 0);
+      const hasAnim = (result.animationGroups || []).length > 0;
+      return !hasGeometry && hasAnim;
+    }
+
+    function buildTargetNameMap(skeletons, meshes) {
+      // Build a name → TransformNode/Bone map from the base rig that the
+      // anim's keyframes will retarget against. Mirrors the renderer's
+      // retarget logic (paladin's skeleton bones + their _linkedTransformNode
+      // + raw bone names). Mixamo bone names line up between any two
+      // exports so look-up by name "just works".
+      const map = new Map();
+      const stripDup = (n) => n ? String(n).replace(/\.\d{3}$/, '') : n;
+      const add = (name, target) => {
+        if (!name || !target) return;
+        if (!map.has(name)) map.set(name, target);
+        const stripped = stripDup(name);
+        if (stripped !== name && !map.has(stripped)) map.set(stripped, target);
+      };
+      for (const m of meshes) {
+        if (m && m.name) add(m.name, m);
+      }
+      for (const s of skeletons) {
+        for (const bone of (s.bones || [])) {
+          if (!bone) continue;
+          const tn = bone._linkedTransformNode
+            || (typeof bone.getTransformNode === 'function' && bone.getTransformNode());
+          if (tn && tn.name) add(tn.name, tn);
+          if (bone.name) add(bone.name, tn || bone);
+        }
+      }
+      return map;
+    }
+
+    function stripRootMotion(animGroup, rootName = 'mixamorig:Hips') {
+      // Zero out X/Z translation keyframes on the root bone so the model
+      // animates in place instead of walking off across the scene. Keeps
+      // Y so any up-down bob in the cycle still reads. Mixamo's "Walking"
+      // and "Running" clips have root motion baked into mixamorig:Hips's
+      // position channel; this strip is the equivalent of ticking
+      // "In Place" on the Mixamo download.
+      if (!animGroup || !Array.isArray(animGroup.targetedAnimations)) return 0;
+      let stripped = 0;
+      for (const ta of animGroup.targetedAnimations) {
+        const target = ta.target;
+        const tName = target && target.name;
+        const prop  = ta.animation && ta.animation.targetProperty;
+        if (!tName || !prop) continue;
+        if (tName !== rootName && tName !== rootName.replace(/\.\d{3}$/, '')) continue;
+        if (!/position/i.test(prop)) continue;
+        const keys = ta.animation.getKeys ? ta.animation.getKeys() : null;
+        if (!keys) continue;
+        for (const k of keys) {
+          if (k.value && typeof k.value === 'object' && 'x' in k.value && 'z' in k.value) {
+            k.value.x = 0;
+            k.value.z = 0;
+          }
+        }
+        stripped++;
+      }
+      return stripped;
+    }
+
+    function retargetAnimGroupOntoBase(animGroup, baseMeshes, baseSkeletons) {
+      // Clone the imported animation group with a name-based target
+      // converter so the clone drives the base rig instead of the
+      // anim's own about-to-be-disposed skeleton stub.
+      const nameMap = buildTargetNameMap(baseSkeletons, baseMeshes);
+      let hit = 0, miss = 0;
+      const cloned = animGroup.clone(animGroup.name + '_retargeted', (oldTarget) => {
+        if (!oldTarget || !oldTarget.name) { miss++; return oldTarget; }
+        const m = nameMap.get(oldTarget.name)
+          || nameMap.get(oldTarget.name.replace(/\.\d{3}$/, ''));
+        if (m) { hit++; return m; }
+        miss++; return oldTarget;
+      });
+      console.info(`[asset-viewer] retarget ${animGroup.name}: ${hit} hit, ${miss} miss`);
+      return cloned;
+    }
+
+    // Load the mesh, then sequentially import every animation file and
+    // retarget its keyframes onto the mesh's skeleton. The dropdown
+    // ends up listing the mesh's embedded anims + every ANIMATION_FILES
+    // entry retargeted.
+    async function loadModel(file) {
+      errEl.textContent = '';
+      clearCurrent();
+      updateMetadata(file, null);
+
+      let result;
+      try {
+        result = await BABYLON.SceneLoader.ImportMeshAsync('', MODEL_DIR, file, scene);
+      } catch (err) {
+        errEl.textContent = `Failed to load ${file}: ${err && err.message ? err.message : err}`;
+        updateMetadata(file, null);
+        return;
+      }
+
+      currentMeshes = result.meshes || [];
+      currentSkeletons = result.skeletons || [];
+      currentAnimGroups = result.animationGroups || [];
+      for (const g of currentAnimGroups) { try { g.stop(); } catch (_) {} }
+      for (const m of currentMeshes) {
+        if (m.getTotalVertices && m.getTotalVertices() > 0) {
+          shadows.addShadowCaster(m);
+          m.receiveShadows = true;
+        }
+      }
+
+      // For rigged meshes, auto-load every animation file and retarget.
+      // We skip this on meshes with no skeleton (e.g. house.glb) since
+      // there's no rig to retarget against.
+      if (currentSkeletons.length > 0) {
+        for (const animFile of ANIMATION_FILES) {
+          try {
+            const animResult = await BABYLON.SceneLoader.ImportMeshAsync(
+              '', MODEL_DIR, animFile, scene,
+            );
+            const groups = (animResult.animationGroups || []).slice();
+            const stubMeshes = animResult.meshes || [];
+            const stubSkels  = animResult.skeletons || [];
+            for (const g of groups) {
+              try { g.stop(); } catch (_) {}
+              const retargeted = retargetAnimGroupOntoBase(g, currentMeshes, currentSkeletons);
+              if (retargeted) {
+                retargeted.name = animFile.replace(/\.glb$/i, '');
+                // Strip the root-bone X/Z translation so playback stays in
+                // place — operator wants the asset viewer to preview the
+                // animation cycle without the model walking out of frame.
+                stripRootMotion(retargeted);
+                currentAnimGroups.push(retargeted);
+              }
+              try { g.dispose(); } catch (_) {}
+            }
+            // Stub geometry stays in scene only as throwaway — we only kept
+            // the keyframes (now cloned onto our visible base).
+            for (const m of stubMeshes) { try { m.dispose(); } catch (_) {} }
+            for (const s of stubSkels)  { try { s.dispose(); } catch (_) {} }
+          } catch (err) {
+            console.warn(`[asset-viewer] skipping ${animFile}:`, err && err.message ? err.message : err);
+          }
+        }
+      }
+
+      updateMetadata(file, result);
+      frameCamera();
+    }
+
+    // ── Sidebar list ───────────────────────────────────────────────────────
+    const listEl = $('model-list');
+    let activeItem = null;
+    let activeFile = null;
+    for (const m of MODELS) {
+      const el = document.createElement('div');
+      el.className = 'model-item';
+      el.textContent = m.label;
+      el.addEventListener('click', () => {
+        if (activeItem) activeItem.classList.remove('active');
+        el.classList.add('active');
+        activeItem = el;
+        activeFile = m.file;
+        loadModel(m.file).catch(() => { el.classList.add('broken'); });
+      });
+      listEl.appendChild(el);
+    }
+
+    // ── Tree folders ──────────────────────────────────────────────────────
+    // Loads the tree-pack manifest and renders each group as a collapsible
+    // folder. Each tree item has a checkbox so the user can pick the ones
+    // they want removed; the "Show removal command" button at the bottom
+    // emits a shell rm + jq prune script the user can paste into a terminal.
+    const treeListEl = $('tree-list');
+    const checkedRemovals = new Set();
+    (async () => {
+      try {
+        const res = await fetch('/assets/models/trees/manifest.json');
+        if (!res.ok) return;
+        const manifest = await res.json();
+        for (const [groupName, entries] of Object.entries(manifest.groups || {})) {
+          const folder = document.createElement('div');
+          folder.className = 'folder';
+          folder.textContent = `${groupName} (${entries.length})`;
+          folder.addEventListener('click', () => folder.classList.toggle('collapsed'));
+          treeListEl.appendChild(folder);
+          const body = document.createElement('div');
+          body.className = 'folder-body';
+          treeListEl.appendChild(body);
+          for (const entry of entries) {
+            const file = typeof entry === 'string' ? entry : entry.file;
+            const species = typeof entry === 'object' ? (entry.species || '') : '';
+            const item = document.createElement('div');
+            item.className = 'model-item';
+            const chk = document.createElement('input');
+            chk.type = 'checkbox';
+            chk.className = 'check';
+            chk.addEventListener('click', (ev) => {
+              ev.stopPropagation();
+              if (chk.checked) checkedRemovals.add(file); else checkedRemovals.delete(file);
+            });
+            item.appendChild(chk);
+            const lbl = document.createElement('span');
+            lbl.className = 'label';
+            const short = file.split('/').pop();
+            lbl.textContent = species ? `${short} [${species}]` : short;
+            item.appendChild(lbl);
+            item.addEventListener('click', () => {
+              if (activeItem) activeItem.classList.remove('active');
+              item.classList.add('active');
+              activeItem = item;
+              activeFile = `trees/${file}`;
+              loadModel(`trees/${file}`).catch(() => { item.classList.add('broken'); });
+            });
+            body.appendChild(item);
+          }
+          folder.classList.add('collapsed');
+        }
+      } catch (e) {
+        console.warn('Tree manifest load failed:', e);
+      }
+    })();
+
+    $('show-remove').addEventListener('click', () => {
+      const pre = $('remove-output');
+      if (checkedRemovals.size === 0) {
+        pre.textContent = '(no trees selected)';
+        pre.style.display = 'block';
+        return;
+      }
+      const files = Array.from(checkedRemovals).sort();
+      const rms = files.map(f => `rm assets/models/trees/${f}`).join(' && \\\n');
+      const filterJs = `
+# Then prune the manifest:
+node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/models/trees/manifest.json','utf8'));const remove=new Set(${JSON.stringify(files)});for(const g of Object.keys(m.groups)){m.groups[g]=m.groups[g].filter(e=>!remove.has(typeof e==='string'?e:e.file));}fs.writeFileSync('assets/models/trees/manifest.json',JSON.stringify(m,null,2)+'\\n');"
+`.trim();
+      pre.textContent = `# Remove ${files.length} tree GLBs:\n${rms} && \\\n${filterJs}`;
+      pre.style.display = 'block';
+    });
+
+
+    // ── Animation controls ────────────────────────────────────────────────
+    function selectedGroup() {
+      const idx = parseInt(animSelect.value, 10);
+      if (isNaN(idx) || idx < 0 || idx >= currentAnimGroups.length) return null;
+      return currentAnimGroups[idx];
+    }
+    $('anim-play').addEventListener('click', () => {
+      const g = selectedGroup();
+      if (!g) return;
+      if (activeAnimGroup && activeAnimGroup !== g) { try { activeAnimGroup.stop(); } catch (_) {} }
+      activeAnimGroup = g;
+      g.start($('anim-loop').checked, 1.0, g.from, g.to, false);
+    });
+    $('anim-pause').addEventListener('click', () => {
+      if (activeAnimGroup) { try { activeAnimGroup.pause(); } catch (_) {} }
+    });
+    $('anim-stop').addEventListener('click', () => {
+      if (activeAnimGroup) { try { activeAnimGroup.stop(); } catch (_) {} }
+      activeAnimGroup = null;
+    });
+
+    // ── View toggles ───────────────────────────────────────────────────────
+    $('reframe').addEventListener('click', frameCamera);
+    $('show-grid').addEventListener('change', (e) => {
+      ground.setEnabled(!!e.target.checked);
+      for (const a of axes) a.setEnabled(!!e.target.checked);
+    });
+    $('wireframe').addEventListener('change', (e) => {
+      const on = !!e.target.checked;
+      for (const m of currentMeshes) {
+        if (m.material) m.material.wireframe = on;
+      }
+    });
+
+    // ── Auto-load the first model so the page is useful immediately. ───────
+    if (MODELS.length) {
+      const first = listEl.firstChild;
+      if (first) first.click();
+    }
+  })();
+  </script>
+</body>
+</html>

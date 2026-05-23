@@ -1,0 +1,331 @@
+{
+  "version": 2,
+  "generatedAt": "2026-05-23T02:04:46.938Z",
+  "source": "tree_pack.glb",
+  "generated_by": "scripts/extract-tree-pack.js",
+  "groups": {
+    "tree-summer-complete": [
+      {
+        "file": "tree-summer-complete/tree-summer-complete-11-001.glb",
+        "species": "hemlock",
+        "region": "new-england"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-35-002.glb",
+        "species": "spruce",
+        "region": "new-england"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-36-004.glb",
+        "species": "hemlock",
+        "region": "new-england"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-38-005.glb",
+        "species": "beech",
+        "region": "new-england"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-43-007.glb",
+        "species": "oak",
+        "region": "new-england"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-37-013.glb",
+        "species": "maple",
+        "region": "new-england"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-28-015.glb",
+        "species": "beech",
+        "region": "new-england"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-26-016.glb",
+        "species": "oak",
+        "region": "new-england"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-42-020.glb",
+        "species": "hemlock",
+        "region": "new-england"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-29-021.glb",
+        "species": "maple",
+        "region": "new-england"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-31-022.glb",
+        "species": "hemlock",
+        "region": "new-england"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-45-024.glb",
+        "species": "hemlock",
+        "region": "new-england"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-25-048.glb",
+        "species": "oak",
+        "region": "new-england"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-50-049.glb",
+        "species": "white-pine",
+        "region": "new-england"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-39-050.glb",
+        "species": "beech",
+        "region": "new-england"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-10-053.glb",
+        "species": "beech",
+        "region": "new-england"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-11-054.glb",
+        "species": "maple",
+        "region": "new-england"
+      },
+      {
+        "file": "tree-summer-complete/tree-summer-complete-7-061.glb",
+        "species": "spruce",
+        "region": "new-england"
+      }
+    ],
+    "rock": [
+      {
+        "file": "rock/rock-001.glb"
+      },
+      {
+        "file": "rock/rock-002.glb"
+      },
+      {
+        "file": "rock/rock-003.glb"
+      },
+      {
+        "file": "rock/rock-004.glb"
+      },
+      {
+        "file": "rock/rock-005.glb"
+      },
+      {
+        "file": "rock/rock-006.glb"
+      },
+      {
+        "file": "rock/rock-007.glb"
+      },
+      {
+        "file": "rock/rock-008.glb"
+      },
+      {
+        "file": "rock/rock-009.glb"
+      },
+      {
+        "file": "rock/rock-010.glb"
+      },
+      {
+        "file": "rock/rock-011.glb"
+      },
+      {
+        "file": "rock/rock-012.glb"
+      },
+      {
+        "file": "rock/rock-013.glb"
+      },
+      {
+        "file": "rock/rock-014.glb"
+      },
+      {
+        "file": "rock/rock-015.glb"
+      },
+      {
+        "file": "rock/rock-016.glb"
+      },
+      {
+        "file": "rock/rock-017.glb"
+      },
+      {
+        "file": "rock/rock-018.glb"
+      },
+      {
+        "file": "rock/rock-019.glb"
+      },
+      {
+        "file": "rock/rock-020.glb"
+      },
+      {
+        "file": "rock/rock-021.glb"
+      },
+      {
+        "file": "rock/rock-022.glb"
+      },
+      {
+        "file": "rock/rock-023.glb"
+      },
+      {
+        "file": "rock/rock-024.glb"
+      },
+      {
+        "file": "rock/rock-025.glb"
+      },
+      {
+        "file": "rock/rock-026.glb"
+      },
+      {
+        "file": "rock/rock-027.glb"
+      },
+      {
+        "file": "rock/rock-028.glb"
+      },
+      {
+        "file": "rock/rock-029.glb"
+      },
+      {
+        "file": "rock/rock-030.glb"
+      },
+      {
+        "file": "rock/rock-031.glb"
+      },
+      {
+        "file": "rock/rock-032.glb"
+      },
+      {
+        "file": "rock/rock-033.glb"
+      },
+      {
+        "file": "rock/rock-034.glb"
+      },
+      {
+        "file": "rock/rock-035.glb"
+      },
+      {
+        "file": "rock/rock-036.glb"
+      },
+      {
+        "file": "rock/rock-037.glb"
+      },
+      {
+        "file": "rock/rock-038.glb"
+      },
+      {
+        "file": "rock/rock-039.glb"
+      },
+      {
+        "file": "rock/rock-040.glb"
+      },
+      {
+        "file": "rock/rock-041.glb"
+      },
+      {
+        "file": "rock/rock-042.glb"
+      },
+      {
+        "file": "rock/rock-043.glb"
+      },
+      {
+        "file": "rock/rock-044.glb"
+      },
+      {
+        "file": "rock/rock-045.glb"
+      }
+    ],
+    "cloud": [
+      {
+        "file": "cloud/cloud-001.glb"
+      },
+      {
+        "file": "cloud/cloud-002.glb"
+      },
+      {
+        "file": "cloud/cloud-003.glb"
+      },
+      {
+        "file": "cloud/cloud-004.glb"
+      },
+      {
+        "file": "cloud/cloud-005.glb"
+      },
+      {
+        "file": "cloud/cloud-006.glb"
+      },
+      {
+        "file": "cloud/cloud-007.glb"
+      },
+      {
+        "file": "cloud/cloud-008.glb"
+      },
+      {
+        "file": "cloud/cloud-009.glb"
+      },
+      {
+        "file": "cloud/cloud-010.glb"
+      },
+      {
+        "file": "cloud/cloud-011.glb"
+      },
+      {
+        "file": "cloud/cloud-012.glb"
+      },
+      {
+        "file": "cloud/cloud-013.glb"
+      },
+      {
+        "file": "cloud/cloud-014.glb"
+      },
+      {
+        "file": "cloud/cloud-015.glb"
+      },
+      {
+        "file": "cloud/cloud-016.glb"
+      },
+      {
+        "file": "cloud/cloud-017.glb"
+      },
+      {
+        "file": "cloud/cloud-018.glb"
+      },
+      {
+        "file": "cloud/cloud-019.glb"
+      },
+      {
+        "file": "cloud/cloud-020.glb"
+      },
+      {
+        "file": "cloud/cloud-021.glb"
+      },
+      {
+        "file": "cloud/cloud-022.glb"
+      },
+      {
+        "file": "cloud/cloud-023.glb"
+      },
+      {
+        "file": "cloud/cloud-024.glb"
+      }
+    ],
+    "grass": [
+      {
+        "file": "grass/grass-001.glb"
+      },
+      {
+        "file": "grass/grass-002.glb"
+      },
+      {
+        "file": "grass/grass-003.glb"
+      },
+      {
+        "file": "grass/grass-004.glb"
+      },
+      {
+        "file": "grass/grass-005.glb"
+      },
+      {
+        "file": "grass/grass-006.glb"
+      }
+    ]
+  }
+}
