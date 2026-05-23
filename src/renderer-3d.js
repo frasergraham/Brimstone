@@ -3537,17 +3537,14 @@ export class Renderer3D {
     // value here; now varies — stronger and warm at dawn/dusk, stronger and
     // cool at night, low neutral at noon when the sun dominates).
 
-    // Scene fog — start/end recomputed every frame from the camera radius
-    // (see `_pumpSceneFog`) so the fog band always sits just past the
-    // playable map regardless of zoom. Fixed values would either fog the
-    // playable area when zoomed out or never reach the border when zoomed in.
-    scene.fogMode    = BABYLON.Scene.FOGMODE_LINEAR;
-    // fogColor follows the phase clear colour each frame (see
-    // `_applyLightConfig`) so the wilderness band blends seamlessly into
-    // the sky. Initial value here just so the first frame before
-    // `_applyLightConfig` runs has something sensible.
+    // Scene fog disabled — was washing out tree shadows and contrast
+    // without delivering the intended atmospheric fade. _pumpSceneFog
+    // and the fogColor sync in _applyLightConfig are still wired but
+    // no-op while fogEnabled stays false. Reinstate by flipping this
+    // flag if we ever want the linear-fog band back.
+    scene.fogMode    = BABYLON.Scene.FOGMODE_NONE;
     scene.fogColor   = new BABYLON.Color3(0.55, 0.72, 0.85);
-    scene.fogEnabled = true;
+    scene.fogEnabled = false;
 
     // Directional sun light — casts shadows from standees / buildings / trees
     // onto the terrain. Starts pointing straight down with day-tier intensity;
