@@ -3828,11 +3828,52 @@ export class Renderer3D {
 
     const isTouchPoint = (p) => p && p.type === 'touch';
 
-    const applySinglePan = (entry, dx, dy) => {
+    // World-space drag pan: when the user starts dragging, we snapshot the
+    // ground point (Y=0 plane) under the cursor; every subsequent pointermove
+    // recomputes the ground point under the current cursor and shifts the
+    // camera target by (grab − current). Because the camera's position
+    // tracks target (radius offset only), the next frame's ray-through-pixel
+    // converges so the grabbed terrain stays under the cursor exactly. This
+    // delivers the "grab the world and pull it" feel the operator asked for
+    // and replaces the old screen-space inertial-pan path which moved at a
+    // fixed pixels-per-world rate regardless of zoom or camera angle.
+    const groundPointFromScreen = (clientX, clientY) => {
+      if (!this._scene || !camera) return null;
+      const rect = this.canvas.getBoundingClientRect ? this.canvas.getBoundingClientRect() : { left: 0, top: 0 };
+      const localX = clientX - (rect.left || 0);
+      const localY = clientY - (rect.top  || 0);
+      if (typeof this._scene.createPickingRay !== 'function') return null;
+      const BABYLON = this._babylon;
+      const idMat = BABYLON && BABYLON.Matrix && typeof BABYLON.Matrix.Identity === 'function'
+        ? BABYLON.Matrix.Identity() : null;
+      const ray = this._scene.createPickingRay(localX, localY, idMat, camera);
+      if (!ray || !ray.direction) return null;
+      // Ray going up or parallel to ground → no hit. Camera looking down has
+      // direction.y < 0.
+      if (ray.direction.y >= -1e-6) return null;
+      const t = -ray.origin.y / ray.direction.y;
+      if (t <= 0) return null;
+      return {
+        x: ray.origin.x + ray.direction.x * t,
+        z: ray.origin.z + ray.direction.z * t,
+      };
+    };
+
+    const applySinglePan = (entry, _dx, _dy) => {
       if (this.viewLocked) return;
-      const sens = camera.panningSensibility || 1;
-      camera.inertialPanningX += -dx / sens;
-      camera.inertialPanningY +=  dy / sens;
+      if (!entry.grab) entry.grab = groundPointFromScreen(entry.x, entry.y);
+      if (!entry.grab) return; // ray missed (sky / parallel) — can't pan
+      const current = groundPointFromScreen(entry.x, entry.y);
+      if (!current) return;
+      const ddx = entry.grab.x - current.x;
+      const ddz = entry.grab.z - current.z;
+      if (ddx === 0 && ddz === 0) return;
+      camera.target.x += ddx;
+      camera.target.z += ddz;
+      // Kill the old inertial-pan accumulators so nothing competes with the
+      // world-space drag math.
+      camera.inertialPanningX = 0;
+      camera.inertialPanningY = 0;
     };
 
     const applyTwoFingerGesture = (entries) => {
@@ -3902,7 +3943,7 @@ export class Renderer3D {
       } else {
         gestureDragged = true;
       }
-      pointers.set(e.pointerId, {
+      const entry = {
         id: e.pointerId,
         x:  e.clientX,
         y:  e.clientY,
@@ -3910,7 +3951,13 @@ export class Renderer3D {
         prevY: e.clientY,
         type: e.pointerType,
         button: e.button,
-      });
+        grab: null, // ground point under cursor at first drag-move
+      };
+      // World-space drag pan needs the ground point at touchdown so the same
+      // terrain feature stays under the cursor for the rest of the gesture.
+      // Compute now while camera state is stable (no in-flight motion).
+      if (pointers.size === 0) entry.grab = groundPointFromScreen(e.clientX, e.clientY);
+      pointers.set(e.pointerId, entry);
       // Reset two-finger state when the second finger lands so the first
       // frame's deltas don't snap-rotate the camera. Also enter the
       // 'sampling' phase of intent-locking — applyTwoFingerGesture will
