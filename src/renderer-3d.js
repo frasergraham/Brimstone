@@ -7970,6 +7970,10 @@ export class Renderer3D {
     // Scene fog tracking — keep the start/end relative to the camera so the
     // band fades just past the playable map at every zoom level.
     this._pumpSceneFog();
+    // Unit icon scaling — shrink the floating badge as the camera zooms in
+    // so it doesn't dominate the model's head. Smoothly ramps between
+    // UNIT_ICON_SCALE_FAR (full size) and UNIT_ICON_SCALE_NEAR (1/3 size).
+    this._pumpUnitIconScale();
     // FPS chip — throttled DOM text update, 3D-only.
     this._pumpFpsCounter(now);
     // Building hover labels: fade in/out based on camera zoom.
@@ -7980,6 +7984,23 @@ export class Renderer3D {
    *  FPS_COUNTER_UPDATE_MS so we don't write to the DOM every frame. The
    *  element is resolved lazily on first call — index.html ships it in the
    *  canvas-wrapper, but a host page that omits it is fine (we just skip). */
+  /** Scale every unit icon billboard by the proximity-aware factor so the
+   *  badge shrinks as the camera zooms in. Reads camera.radius once per
+   *  frame and writes scaling.xyz on each plane. Cheap (few units typical;
+   *  setting Vector3.x/y/z directly avoids allocations). */
+  _pumpUnitIconScale() {
+    if (!this._unitIconBadges || this._unitIconBadges.size === 0) return;
+    if (!this._camera) return;
+    const factor = unitIconScaleForRadius(this._camera.radius);
+    for (const entry of this._unitIconBadges.values()) {
+      const plane = entry?.plane;
+      if (!plane?.scaling) continue;
+      if (plane.scaling.x !== factor) plane.scaling.x = factor;
+      if (plane.scaling.y !== factor) plane.scaling.y = factor;
+      if (plane.scaling.z !== factor) plane.scaling.z = factor;
+    }
+  }
+
   _pumpFpsCounter(now) {
     if (now - this._fpsCounterLastMs < FPS_COUNTER_UPDATE_MS) return;
     this._fpsCounterLastMs = now;
@@ -10023,6 +10044,22 @@ export const HP_BAR_Y_ABOVE_BASE = 0.2;
  *  camera is fully zoomed out. The badge intentionally now dominates the
  *  silhouette of the token below it; that's the desired readout. */
 export const UNIT_ICON_PLANE_SIZE = 0.88;
+/** Proximity-aware icon scaling. The badge sits at scale=1 (full size) for
+ *  radius ≥ UNIT_ICON_SCALE_FAR; shrinks linearly to UNIT_ICON_MIN_SCALE
+ *  by radius = UNIT_ICON_SCALE_NEAR. At max zoom-in the badge reads as
+ *  about the size of the paladin's head — close enough to feel attached
+ *  to the model rather than a giant floating sticker. */
+export const UNIT_ICON_SCALE_FAR  = 25;   // radius at which icon is full-size
+export const UNIT_ICON_SCALE_NEAR = 8;    // radius at which icon is min-size
+export const UNIT_ICON_MIN_SCALE  = 0.33; // ≈ 1/3, matches head-on-mesh
+
+export function unitIconScaleForRadius(radius) {
+  const r = Number.isFinite(radius) ? radius : UNIT_ICON_SCALE_FAR;
+  if (r >= UNIT_ICON_SCALE_FAR)  return 1;
+  if (r <= UNIT_ICON_SCALE_NEAR) return UNIT_ICON_MIN_SCALE;
+  const t = (r - UNIT_ICON_SCALE_NEAR) / (UNIT_ICON_SCALE_FAR - UNIT_ICON_SCALE_NEAR);
+  return UNIT_ICON_MIN_SCALE + (1 - UNIT_ICON_MIN_SCALE) * t;
+}
 /** Gap above the cone+sphere stack to the icon plane CENTRE, in world
  *  units. With the paladin model now ~0.92 wu tall (15% taller than the
  *  cone+sphere stack it replaced), the icon needs to sit just above the
