@@ -61,11 +61,6 @@
         "region": "new-england"
       },
       {
-        "file": "tree-summer-complete/tree-summer-complete-2-014.glb",
-        "species": "maple",
-        "region": "new-england"
-      },
-      {
         "file": "tree-summer-complete/tree-summer-complete-28-015.glb",
         "species": "beech",
         "region": "new-england"
@@ -299,11 +294,6 @@
         "file": "tree-summer-complete/tree-summer-complete-9-062.glb",
         "species": "beech",
         "region": "new-england"
-      },
-      {
-        "file": "tree-summer-complete/tree-summer-complete-misc-0-063.glb",
-        "species": "elm",
-        "region": "new-england"
       }
     ],
     "tree-autumn-complete": [
@@ -360,11 +350,6 @@
       {
         "file": "tree-autumn-complete/tree-autumn-complete-15-013.glb",
         "species": "hemlock",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-autumn-complete/tree-autumn-complete-misc-0-014.glb",
-        "species": "elm",
         "region": "new-england"
       }
     ],
@@ -423,11 +408,6 @@
         "file": "tree-winter-complete/tree-winter-complete-15-013.glb",
         "species": "maple",
         "region": "new-england"
-      },
-      {
-        "file": "tree-winter-complete/tree-winter-complete-misc-0-014.glb",
-        "species": "elm",
-        "region": "new-england"
       }
     ],
     "tree-dead-complete": [
@@ -484,11 +464,6 @@
       {
         "file": "tree-dead-complete/tree-dead-complete-15-013.glb",
         "species": "hemlock",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-dead-complete/tree-dead-complete-misc-0-014.glb",
-        "species": "elm",
         "region": "new-england"
       }
     ],
