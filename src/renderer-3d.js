@@ -29,7 +29,7 @@ import {
 import { EntityType, isLeaderType } from './entities.js';
 import { Renderer } from './renderer.js';
 import { getFactionTheme } from './theme.js';
-import { hexKey, hexDistance, getNeighbors } from './hex.js';
+import { hexKey, hexDistance, getNeighbors, pixelToHex } from './hex.js';
 import { nodeController, Phase } from './game.js';
 import { sightRangeForEntity, findFaction } from './factions.js';
 import { Side } from './sides.js';
@@ -866,6 +866,33 @@ export function hexToWorld(col, row, radius = HEX_RADIUS_WORLD) {
   };
 }
 
+/** Invert `hexToWorld`: world (x, z) → (col, row). Pointy-top, odd-r, axial
+ *  rounding under the hood (via `pixelToHex` — the 2D and 3D layouts share
+ *  the same hex math, just swap y↔z). Used by tile picking so a ray hit on
+ *  an InstancedMesh tile recovers the logical hex without depending on
+ *  per-instance metadata (which is unreliable under hardware instancing —
+ *  see `tileSourceKey` callers). */
+export function worldToHex(x, z, radius = HEX_RADIUS_WORLD) {
+  return pixelToHex(x, z, radius);
+}
+
+/** Convenience wrapper — returns the canonical "col,row" string used by
+ *  `state.tiles`. */
+export function worldToHexKey(x, z, radius = HEX_RADIUS_WORLD) {
+  const { col, row } = worldToHex(x, z, radius);
+  return hexKey(col, row);
+}
+
+/** Stable identifier for one (tileType × textureVariant) source-mesh bucket.
+ *  Tiles with the same source key share one pair of master meshes (unfogged
+ *  + fogged) and render as hardware instances of those. `textureVariant` is
+ *  the sprite-id picked by `terrainSpriteIdFor` (e.g. 'grass_3', 'forest_2',
+ *  'dirt_1') when an atlas sprite is available, or 'solid' for tiles that
+ *  fall back to a solid-colour cylinder material. */
+export function tileSourceKey(tileType, textureVariant) {
+  return `${tileType}:${textureVariant ?? 'solid'}`;
+}
+
 /**
  * Bounding box (in world units) for a set of hex positions.
  * Pads by the hex's footprint so the box covers the whole rendered tiles,
@@ -1273,8 +1300,21 @@ export class Renderer3D {
     // decks, bridge planks, building boxes/roofs). Populated by _buildTileMesh.
     // Used by _applyFogVeil to swap tile materials and hide props on hexes the
     // observer can't see.
-    this._tileMeshByKey   = new Map();   // hexKey → base hex cylinder
+    this._tileMeshByKey   = new Map();   // hexKey → canonical (unfogged) tile mesh
     this._tilePropsByKey  = new Map();   // hexKey → Array<Mesh> (forest, road, bridge, bldg, roof)
+    // ── Hardware-instanced tile masters ────────────────────────────────────
+    // Two hidden source meshes per (TileType × texture-variant) bucket — one
+    // textured for the "unfogged" look, one darkened for "under fog". Each
+    // playable tile gets one InstancedMesh against EACH source at the same
+    // world position; `_setTileFogged` flips which one is enabled. Babylon
+    // collapses every enabled instance of a given source into a single draw
+    // call, so the whole map renders in ≤ N_buckets draws regardless of tile
+    // count (~14 vs the old ~169 on Standard 13×13). See `_ensureTileSources`
+    // / `_buildTileMesh`. Falls back to a per-tile mesh in environments where
+    // `createInstance` isn't available (node-test stubs).
+    this._tileSourcesUnfogged = new Map(); // sourceKey → Mesh
+    this._tileSourcesFogged   = new Map(); // sourceKey → Mesh
+    this._tileInstancePairs   = new Map(); // hexKey → { unfogged, fogged }
     // Visual-only forest border surrounding the playable map (see
     // _buildMapBorderForest). Kept on a separate map from _tilePropsByKey so
     // gameplay-coupled passes (fog veil, slot reassignment) never pick these
@@ -3234,8 +3274,25 @@ export class Renderer3D {
       const k = mesh.metadata?.kind;
       return k === 'tile' || k === 'entity';
     });
-    if (pick?.hit && pick.pickedMesh?.metadata) {
-      const md = pick.pickedMesh.metadata;
+    if (!pick?.hit) return { col: -1, row: -1 };
+    const md = pick.pickedMesh?.metadata;
+    // Entities carry their col/row directly — read it out.
+    if (md?.kind === 'entity' && typeof md.col === 'number' && typeof md.row === 'number') {
+      return { col: md.col, row: md.row };
+    }
+    // Tiles: derive (col, row) from the ray hit point in world space.
+    // Hardware-instanced picking can resolve `pickedMesh` to the SOURCE mesh
+    // (which has no meaningful col/row) instead of the InstancedMesh actually
+    // under the cursor, so we never trust per-mesh metadata for tile picks.
+    // Inverting hexToWorld from the hit point recovers the hex regardless of
+    // whether the renderer is using instances or per-tile meshes.
+    if (md?.kind === 'tile' && pick.pickedPoint) {
+      const { col, row } = worldToHex(pick.pickedPoint.x, pick.pickedPoint.z);
+      if (this.state?.tiles?.has(hexKey(col, row))) {
+        return { col, row };
+      }
+      // Legacy non-instanced builds (no state.tiles match — shouldn't happen
+      // for in-map picks, but guard so tests with stub state still work).
       if (typeof md.col === 'number' && typeof md.row === 'number') {
         return { col: md.col, row: md.row };
       }
@@ -4132,8 +4189,18 @@ export class Renderer3D {
       mesh.doNotSyncBoundingInfo = true;
       frozen++;
     };
-    // Playable tile cylinders.
+    // Playable tile cylinders. With hardware instancing each playable hex
+    // owns TWO instances (unfogged + fogged) — `_tileMeshes` only carries
+    // the canonical unfogged one, so we also walk `_tileInstancePairs` to
+    // catch the fogged twin. Source meshes are intentionally skipped:
+    // they're hidden via `setEnabled(false)`, never enter the render list,
+    // and freezing their world matrix offers no measurable benefit.
     if (this._tileMeshes) for (const m of this._tileMeshes) freeze(m);
+    if (this._tileInstancePairs) {
+      for (const pair of this._tileInstancePairs.values()) {
+        freeze(pair.fogged);
+      }
+    }
     // Per-tile props (trees, buildings, roofs, bridges, road/river per-tile
     // merged ribbons, node-disc rings registered into the tile prop list).
     if (this._tilePropsByKey) {
@@ -4409,6 +4476,58 @@ export class Renderer3D {
     }
   }
 
+  /** Get-or-build the pair of hidden master meshes (unfogged + fogged) for the
+   *  tile's (TileType × textureVariant) bucket. Returns the source key under
+   *  which both masters are registered (in `_tileSourcesUnfogged` and
+   *  `_tileSourcesFogged`), or `null` when the renderer isn't initialised
+   *  with Babylon (test stubs that bypass `_initBabylon`).
+   *
+   *  Masters sit at world origin (0, 0, 0) and are kept hidden via
+   *  `setEnabled(false)` — Babylon still renders their instances, which carry
+   *  their own per-tile world positions. Each master also flag-tagged
+   *  `isPickable = false` so `scene.pick` only ever resolves to an instance
+   *  (the source mesh has no game meaning by itself).
+   *
+   *  The brief calls for stock PBR — no instancedBuffer / vertex-colour
+   *  tricks. Phase-driven tinting still works because Phase 6 lighting
+   *  mutates `scene.clearColor` and the hemispheric light, not the tile
+   *  material itself. Fog handling lives entirely in the unfogged/fogged
+   *  toggle here, not via per-material darkening. */
+  _ensureTileSources(tile, parent) {
+    if (!this._babylon || !this._scene) return null;
+    const spriteId = terrainSpriteIdFor(tile, tile.col, tile.row);
+    const variant  = spriteId || 'solid';
+    const key      = tileSourceKey(tile.type, variant);
+    if (this._tileSourcesUnfogged.has(key) && this._tileSourcesFogged.has(key)) {
+      return key;
+    }
+    // Build a fresh master mesh at the origin. `_buildFlatHexMesh` returns a
+    // regular Mesh with VertexData applied, which `createInstance` can clone
+    // cheaply into a hardware InstancedMesh.
+    const makeSource = (suffix, mat) => {
+      const src = this._buildFlatHexMesh(`tileSrc_${key}_${suffix}`, parent || null, 0, 0);
+      if (mat) src.material = mat;
+      src.isPickable = false;
+      // Hide the source — its instances render geometry on its behalf, but the
+      // template itself should never appear in the scene.
+      if (typeof src.setEnabled === 'function') src.setEnabled(false);
+      // Mark as a shadow receiver up front; instances inherit but we set
+      // explicitly on each instance too for defensive parity (see Babylon's
+      // InstancedMesh.receiveShadows quirks).
+      if ('receiveShadows' in src) src.receiveShadows = true;
+      return src;
+    };
+    if (!this._tileSourcesUnfogged.has(key)) {
+      const mat = this._tileMaterialFor(tile, { fogged: false });
+      this._tileSourcesUnfogged.set(key, makeSource('unfogged', mat));
+    }
+    if (!this._tileSourcesFogged.has(key)) {
+      const mat = this._tileMaterialFor(tile, { fogged: true });
+      this._tileSourcesFogged.set(key, makeSource('fogged', mat));
+    }
+    return key;
+  }
+
   _buildTileMesh(tile, parent) {
     const BABYLON = this._babylon;
     const scene   = this._scene;
@@ -4417,15 +4536,60 @@ export class Renderer3D {
     // ── Base hex tile (flat, single face, no side walls) ─────────────────
     // Open-faced pointy-top hex polygon at Y=0, tightly tileable with no
     // cylinder rim to produce dark seams at the perimeter.
+    //
+    // Hardware instancing: every tile that shares (TileType × textureVariant)
+    // renders as an InstancedMesh against one of two hidden master meshes —
+    // one carrying the bright "unfogged" material, one carrying the darker
+    // "fogged" material. Per-tile fog state then toggles which of the two
+    // instances is enabled (`_setTileFogged`). One draw call per (variant,
+    // fog state) for the whole map, regardless of how many tiles share it.
     const baseColor = tileColorFor(tile);
-    const hex = this._buildFlatHexMesh(`tile_${tile.col}_${tile.row}`, parent, x, z);
-    hex.material   = this._tileMaterialFor(tile);
-    hex.metadata   = { kind: 'tile', col: tile.col, row: tile.row, baseColor };
+    const tkey = hexKey(tile.col, tile.row);
+    const sourceKey = this._ensureTileSources(tile, parent);
+    const unfoggedSrc = sourceKey ? this._tileSourcesUnfogged.get(sourceKey) : null;
+    const foggedSrc   = sourceKey ? this._tileSourcesFogged.get(sourceKey)   : null;
+
+    let hex;
+    if (unfoggedSrc && foggedSrc && typeof unfoggedSrc.createInstance === 'function') {
+      // Instanced path — production runtime.
+      const ufInst = unfoggedSrc.createInstance(`tileU_${tile.col}_${tile.row}`);
+      const fgInst = foggedSrc.createInstance(`tileF_${tile.col}_${tile.row}`);
+      for (const inst of [ufInst, fgInst]) {
+        if (parent && 'parent' in inst) inst.parent = parent;
+        if (inst.position && typeof inst.position === 'object') {
+          inst.position.x = x;
+          inst.position.y = 0;
+          inst.position.z = z;
+        }
+        // Tile cylinders catch shadows from props/standees; the source mesh
+        // already has `receiveShadows = true`, but Babylon does not always
+        // propagate that to instances — set it explicitly per-instance.
+        if ('receiveShadows' in inst) inst.receiveShadows = true;
+      }
+      // Carry the same metadata shape the per-tile-mesh path used, so the
+      // pick filter, fog veil, and `_flashTile` keep finding it. Both
+      // instances share the col/row/baseColor — `fogged` distinguishes them
+      // internally. Picking inverts world→hex from the ray hit point
+      // (`canvasToHex` → `worldToHex`) instead of trusting metadata.col/row,
+      // because hardware-instanced picks can resolve to the source mesh.
+      ufInst.metadata = { kind: 'tile', col: tile.col, row: tile.row, baseColor };
+      fgInst.metadata = { kind: 'tile', col: tile.col, row: tile.row, baseColor, fogged: true };
+      // Default: tile is unfogged. `_applyFogVeil` flips this after build.
+      fgInst.setEnabled?.(false);
+      this._tileInstancePairs.set(tkey, { unfogged: ufInst, fogged: fgInst });
+      hex = ufInst;
+    } else {
+      // Fallback path: tests / environments without `createInstance`. Build a
+      // standalone per-tile flat hex mesh exactly as the pre-instancing code
+      // did. Keeps the existing fog-terrain unit tests green.
+      hex = this._buildFlatHexMesh(`tile_${tile.col}_${tile.row}`, parent, x, z);
+      hex.material   = this._tileMaterialFor(tile);
+      hex.metadata   = { kind: 'tile', col: tile.col, row: tile.row, baseColor };
+    }
     // Terrain cylinder receives shadows from standees / trees / buildings /
     // bridges (cast registrations below).
     this._setShadowReceiver(hex);
     this._tileMeshes.push(hex);
-    const tkey = hexKey(tile.col, tile.row);
     this._tileMeshByKey.set(tkey, hex);
     const props = [];
     const trackProp = (m) => { props.push(m); };
@@ -5418,12 +5582,35 @@ export class Renderer3D {
   _upgradeTileTextures() {
     if (!this._mapBuilt || !this._mapRoot || !this._scene || !this._tilemapImg) return;
     if (!this.state?.tiles) return;
-    for (const tile of this.state.tiles.values()) {
-      const tkey = tile.col + ',' + tile.row;
-      const hex = this._tileMeshByKey.get(tkey);
-      if (!hex) continue;
-      const isFogged = this._fogActiveSet.has(tkey);
-      hex.material = this._tileMaterialFor(tile, { fogged: isFogged });
+    // Instanced path: re-assign the SOURCE meshes' materials — instances pick
+    // the new look up automatically because they share material with their
+    // source. Setting `instance.material` would instead force the instance
+    // out of the hardware-instancing render path, defeating the perf win.
+    const haveSources =
+      this._tileSourcesUnfogged?.size > 0 || this._tileSourcesFogged?.size > 0;
+    if (haveSources) {
+      const seen = new Set();
+      for (const tile of this.state.tiles.values()) {
+        const spriteId = terrainSpriteIdFor(tile, tile.col, tile.row);
+        const variant  = spriteId || 'solid';
+        const key      = tileSourceKey(tile.type, variant);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const ufSrc = this._tileSourcesUnfogged.get(key);
+        const fgSrc = this._tileSourcesFogged.get(key);
+        if (ufSrc) ufSrc.material = this._tileMaterialFor(tile, { fogged: false });
+        if (fgSrc) fgSrc.material = this._tileMaterialFor(tile, { fogged: true });
+      }
+    } else {
+      // Legacy per-tile path (test environments without `createInstance`):
+      // swap material on each tile mesh directly.
+      for (const tile of this.state.tiles.values()) {
+        const tkey = tile.col + ',' + tile.row;
+        const hex = this._tileMeshByKey.get(tkey);
+        if (!hex) continue;
+        const isFogged = this._fogActiveSet.has(tkey);
+        hex.material = this._tileMaterialFor(tile, { fogged: isFogged });
+      }
     }
     // Border-forest cylinders share the FOREST sprite pool but live in a
     // separate map — upgrade them too so the texture appears around the edge.
@@ -6595,7 +6782,7 @@ export class Renderer3D {
     // shared per-colour material cache (every grass tile shares one material).
     const original = tileMesh.material;
     const flashMat = new BABYLON.StandardMaterial(`flash_${col}_${row}_${Date.now()}`, this._scene);
-    flashMat.diffuseColor  = original.diffuseColor?.clone() ?? new BABYLON.Color3(0.4, 0.4, 0.4);
+    flashMat.diffuseColor  = original?.diffuseColor?.clone() ?? new BABYLON.Color3(0.4, 0.4, 0.4);
     flashMat.specularColor = new BABYLON.Color3(0, 0, 0);
     flashMat.emissiveColor = new BABYLON.Color3(emissive01[0], emissive01[1], emissive01[2]);
     tileMesh.material = flashMat;
@@ -6604,9 +6791,14 @@ export class Renderer3D {
     const promise = new Promise(resolve => {
       setTimeout(() => {
         // Defensive: tile may have been disposed (map rebuild) — only restore
-        // if the tile mesh is still in the scene.
+        // if the tile mesh is still in the scene. For InstancedMesh tiles we
+        // assign `null` to clear the per-instance override and fall back to
+        // the SHARED source material — that puts the tile back into the
+        // hardware-instancing render path. (Assigning `original` would keep
+        // the instance in override mode forever, costing one extra draw call
+        // per ever-flashed tile.)
         if (!tileMesh.isDisposed?.()) {
-          tileMesh.material = original;
+          tileMesh.material = tileMesh.sourceMesh ? null : original;
         }
         flashMat.dispose();
         resolve();
@@ -8293,14 +8485,24 @@ export class Renderer3D {
   }
 
   _setTileFogged(hexK, tileMesh, fogged) {
-    const md = tileMesh.metadata;
-    if (!md?.baseColor) return;
-    const tile = this.state?.tiles?.get(hexK);
-    // When we have the tile in state we can pick a textured fog material;
-    // otherwise (shouldn't happen for playable hexes) fall back to colour-only.
-    tileMesh.material = tile
-      ? this._tileMaterialFor(tile, { fogged })
-      : (fogged ? this._fogMaterialFor(md.baseColor) : this._materialFor(md.baseColor));
+    const md = tileMesh?.metadata;
+    const pair = this._tileInstancePairs?.get(hexK);
+    if (!pair && !md?.baseColor) return; // nothing to flip
+    // Instanced path: just toggle which of the two pre-built instances is
+    // enabled. The shared masters already carry the right material, so no
+    // per-tile material swap is needed (and we avoid mutating the source's
+    // material — which would tint EVERY tile sharing the bucket).
+    if (pair) {
+      pair.unfogged?.setEnabled?.(!fogged);
+      pair.fogged?.setEnabled?.(fogged);
+    } else {
+      // Fallback (no instance pair — test stubs or hexes built via the legacy
+      // per-tile-mesh path): swap material as before.
+      const tile = this.state?.tiles?.get(hexK);
+      tileMesh.material = tile
+        ? this._tileMaterialFor(tile, { fogged })
+        : (fogged ? this._fogMaterialFor(md.baseColor) : this._materialFor(md.baseColor));
+    }
     const props = this._tilePropsByKey.get(hexK);
     if (props) for (const p of props) {
       // Three fog policies per-prop, set via `metadata.respectsFog`:
