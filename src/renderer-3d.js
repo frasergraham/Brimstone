@@ -3587,13 +3587,17 @@ export class Renderer3D {
 
     // Pick the per-map season BEFORE building any tile meshes — `_buildTileMesh`
     // and `_buildMapBorderForest` both consult `this._season` to choose tree
-    // palettes / geometry. Deterministic per map: same tile layout → same
-    // season across reloads. Prefer `state.mapSeed` if the game state exposes
-    // it (currently it doesn't); otherwise hash the tile layout.
-    const seedSource = (typeof this.state?.mapSeed === 'number')
-      ? this.state.mapSeed
-      : hashTileLayout(this.state.tiles);
-    this._season = pickSeason(seedSource);
+    // palettes / geometry. Prefer `state.season` (now set by generateMap() and
+    // round-tripped through state-sync); fall back to a hash of the tile layout
+    // for old saves / synthetic states that don't carry the field.
+    if (this.state?.season && SEASONS.includes(this.state.season)) {
+      this._season = this.state.season;
+    } else {
+      const seedSource = (typeof this.state?.mapSeed === 'number')
+        ? this.state.mapSeed
+        : hashTileLayout(this.state.tiles);
+      this._season = pickSeason(seedSource);
+    }
 
     // Reusable shared geometry — clone for each instance, all parented to mapRoot.
     // (We do not yet use Babylon InstancedMesh; one mesh per tile keeps picking
