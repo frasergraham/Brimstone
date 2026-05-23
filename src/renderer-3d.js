@@ -4682,15 +4682,24 @@ export class Renderer3D {
         let perPointOuterWidth = width;
         let perPointInnerWidth = width * OPAQUE_FRAC;
         if (networkName === 'road' || networkName === 'river') {
-          const seed = (tile.col * 73 + tile.row * 131 + i * 17) % 1024;
-          const phase = (seed / 1024) * Math.PI * 2;
-          const cycles = 1.5; // ~1.5 waves across the stroke's length
-          const amp = 0.15;
+          // Width modulates as a function of WORLD position so adjacent tiles
+          // produce the SAME width at shared seam points — no visible width
+          // jump where one tile's stroke ends and the next begins. The 2D
+          // sine field uses a wavelength of WIDTH_NOISE_WAVELENGTH world
+          // units (~5 hexes) — long enough that neighbour points within a
+          // single stroke (≤0.2 wu apart) see ≤1% width delta, well under
+          // operator's 5% inter-vertex cap. Peak-to-peak swing is 15%
+          // (amp 0.075 → range [0.925, 1.075]).
+          const WIDTH_NOISE_WAVELENGTH = 8.0;
+          const amp = 0.075;
+          const widthModAt = (x, z) => {
+            const u = (x / WIDTH_NOISE_WAVELENGTH + z / WIDTH_NOISE_WAVELENGTH * 0.7) * Math.PI * 2;
+            return 1 + amp * Math.sin(u);
+          };
           const outerArr = new Array(pts.length);
           const innerArr = new Array(pts.length);
           for (let p = 0; p < pts.length; p++) {
-            const t = pts.length > 1 ? p / (pts.length - 1) : 0;
-            const mod = 1 + amp * Math.sin(t * Math.PI * 2 * cycles + phase);
+            const mod = widthModAt(pts[p].x, pts[p].z);
             outerArr[p] = width * mod;
             innerArr[p] = width * OPAQUE_FRAC * mod;
           }
@@ -4765,26 +4774,25 @@ export class Renderer3D {
           }
           ribbon.setVerticesData(BABYLON.VertexBuffer.UVKind, uvs);
           // Force flat +Y normals on every vertex. The ribbon is built at a
-          // constant Y (ROAD_RIBBON_Y) so its true surface normal IS (0,1,0)
-          // everywhere — but Babylon's CreateRibbon with DOUBLESIDE generates
-          // tangent-space normals via path-direction cross products which can
-          // point slightly off-axis along curves, and the back-face half gets
-          // -Y. The diffuse sun + hemispheric lights expect the surface
-          // pointing up to read as fully lit; with the original normals the
-          // road sampled ~0.4× lighting and read as unlit. backFaceCulling
-          // stays false on the material so the back face still draws when the
-          // camera dips below, just with the wrong normal — acceptable since
-          // that's an edge view and the surface is flat.
-          const pos = ribbon.getVerticesData(BABYLON.VertexBuffer.PositionKind);
-          if (pos) {
-            const vcount = pos.length / 3;
-            const flatNormals = new Float32Array(vcount * 3);
-            for (let v = 0; v < vcount; v++) {
-              flatNormals[v * 3 + 0] = 0;
-              flatNormals[v * 3 + 1] = 1;
-              flatNormals[v * 3 + 2] = 0;
+          // constant Y so its true surface normal IS (0,1,0) everywhere —
+          // but CreateRibbon with DOUBLESIDE generates tangent-space normals
+          // via path-direction cross products which can drift off-axis along
+          // curves. backFaceCulling stays false on the material so the back
+          // face still draws on edge views, just with the wrong normal.
+          // Guarded by getVerticesData existence so test stubs without that
+          // method don't throw.
+          if (typeof ribbon.getVerticesData === 'function') {
+            const pos = ribbon.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+            if (pos) {
+              const vcount = pos.length / 3;
+              const flatNormals = new Float32Array(vcount * 3);
+              for (let v = 0; v < vcount; v++) {
+                flatNormals[v * 3 + 0] = 0;
+                flatNormals[v * 3 + 1] = 1;
+                flatNormals[v * 3 + 2] = 0;
+              }
+              ribbon.setVerticesData(BABYLON.VertexBuffer.NormalKind, flatNormals);
             }
-            ribbon.setVerticesData(BABYLON.VertexBuffer.NormalKind, flatNormals);
           }
         }
         ribbons.push(ribbon);
