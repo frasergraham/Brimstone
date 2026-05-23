@@ -4845,16 +4845,28 @@ export class Renderer3D {
     // road surface (not just the flat coloured ribbon). The texture is
     // 1024×1024 and tileable left-to-right; UVs are written per-vertex in
     // `_buildNetworkMesh` so the texture U-axis runs along the ribbon's
-    // length and V across its width.
+    // length and V across its width. Loaded with explicit success callback —
+    // if the load FAILS, we leave the original coloured diffuse alone (no
+    // black ribbon when the path 404s).
     if (networkName === 'road' && this._scene && typeof BABYLON.Texture === 'function') {
       const url = `${this._assetsBasePath || 'assets'}/road-ribbon.png`;
+      // 2-arg constructor only (some Babylon 7.x versions reject onLoad in
+      // positional args). Then attach a listener via onLoadObservable and
+      // configure wrap/sampling AFTER the image decodes — texture defaults
+      // to clamp until then, which is fine for the brief unloaded window.
       const tex = new BABYLON.Texture(url, this._scene);
       tex.wrapU = BABYLON.Texture.WRAP_ADDRESSMODE;
-      tex.wrapV = BABYLON.Texture.CLAMP_ADDRESSMODE; // V across width — clamp so no edge bleed
+      tex.wrapV = BABYLON.Texture.CLAMP_ADDRESSMODE;
       tex.anisotropicFilteringLevel = 8;
+      if (tex.onLoadObservable && typeof tex.onLoadObservable.add === 'function') {
+        tex.onLoadObservable.add(() => {
+          // Image loaded — diffuseColor goes white so the texture passes through
+          // at full strength. Before this, the coloured diffuse remains so the
+          // road reads as its TILE_COLOR instead of going black.
+          mat.diffuseColor = new BABYLON.Color3(1, 1, 1);
+        });
+      }
       mat.diffuseTexture = tex;
-      // White diffuseColor so the texture passes through at full strength.
-      mat.diffuseColor = new BABYLON.Color3(1, 1, 1);
     }
     return mat;
   }
