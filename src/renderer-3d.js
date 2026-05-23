@@ -4314,18 +4314,14 @@ export class Renderer3D {
     if (!this._riverNetworkMesh) return; // no river on this map
     const exits = riverExitPoints(this.state.tiles);
     if (exits.length === 0) return;
-    // Sibling of the in-map river material — built via the SAME helper so any
-    // future tweak to the river ribbon's diffuse/emissive recipe automatically
-    // applies to the extension. Darken to FOG_TILE_DARKEN so the extension
-    // reads as wilderness-beyond-sight, matching the fogged tint of the
-    // border-forest hex tiles it weaves through (those are always fogged
-    // because they sit outside the playable area). Without this the river
-    // would render at full unfogged brightness, looking out of place against
-    // the dimmed forest tiles.
-    const extMat = this._buildRibbonMaterial('river_extension', TILE_COLOR[TileType.RIVER]);
-    const k = this._fogTileDarken;
-    if (extMat.diffuseColor)  { extMat.diffuseColor.r  *= k; extMat.diffuseColor.g  *= k; extMat.diffuseColor.b  *= k; }
-    if (extMat.emissiveColor) { extMat.emissiveColor.r *= k; extMat.emissiveColor.g *= k; extMat.emissiveColor.b *= k; }
+    // Build via the SAME helper as the playable-map river ribbons — same
+    // 'river' branch, so the extension picks up the river-ribbon texture,
+    // useAlphaFromDiffuseTexture, white diffuse, zero emissive. The
+    // extension's wilderness fade now comes from the texture's alpha and
+    // the existing tapered amplitude (it winds, narrows, fades) rather than
+    // a hand-multiplied fog tint — the playable river and its wilderness
+    // continuation read as one continuous flow.
+    const extMat = this._buildRibbonMaterial('river', TILE_COLOR[TileType.RIVER]);
     // Extend one hex past the outermost band tile so the ribbon's far end
     // clearly carries past the band's silhouette instead of fading inside it.
     // Centre-to-centre spacing in any axial direction is SQRT3 world units.
@@ -4364,9 +4360,25 @@ export class Renderer3D {
       // `[rightOuter, rightInner, center, leftInner, leftOuter]`; first triangle
       // winding produces a +Y face normal so the hemispheric light hits the
       // camera-visible top face (see the contract comment on `_buildNetworkMesh`).
-      const innerWidth = RIVER_RIBBON_WIDTH * OPAQUE_FRAC;
-      const { left: outerLeft,  right: outerRight  } = ribbonOffsetPaths(pts, RIVER_RIBBON_WIDTH);
-      const { left: innerLeft,  right: innerRight  } = ribbonOffsetPaths(pts, innerWidth);
+      // Same world-space width modulation as the playable river so the
+      // ribbon widths at the playable→wilderness seam are continuous (both
+      // sample the same world (x,z) at the shared exit point). Wavelength
+      // and amplitude must match _buildNetworkMesh's modulator.
+      const WIDTH_NOISE_WAVELENGTH = 8.0;
+      const WIDTH_AMP = 0.075;
+      const widthModAt = (x, z) => {
+        const u = (x / WIDTH_NOISE_WAVELENGTH + z / WIDTH_NOISE_WAVELENGTH * 0.7) * Math.PI * 2;
+        return 1 + WIDTH_AMP * Math.sin(u);
+      };
+      const outerWidths = new Array(pts.length);
+      const innerWidths = new Array(pts.length);
+      for (let p = 0; p < pts.length; p++) {
+        const mod = widthModAt(pts[p].x, pts[p].z);
+        outerWidths[p] = RIVER_RIBBON_WIDTH * mod;
+        innerWidths[p] = RIVER_RIBBON_WIDTH * OPAQUE_FRAC * mod;
+      }
+      const { left: outerLeft,  right: outerRight  } = ribbonOffsetPaths(pts, outerWidths);
+      const { left: innerLeft,  right: innerRight  } = ribbonOffsetPaths(pts, innerWidths);
       const toV3 = (arr) => arr.map(p => new BABYLON.Vector3(p.x, RIVER_RIBBON_Y, p.z));
       const ribbon = BABYLON.MeshBuilder.CreateRibbon(
         `river_extension_${exit.tile.col}_${exit.tile.row}`,
@@ -4396,6 +4408,43 @@ export class Renderer3D {
         colors[v * 4 + 3] = a;
       }
       ribbon.setVerticesData(BABYLON.VertexBuffer.ColorKind, colors);
+      // Per-vertex UVs — same recipe as the playable river: U = cumulative
+      // XZ length, V = path index → {0, 0.3, 0.5, 0.7, 1}. The first sample
+      // of the extension starts at the same world position as the playable
+      // river's last sample, but we restart U=0 here; that's a small seam
+      // but invisible at typical zoom because the texture tile period is
+      // ~1 world unit and the join point is feathered to alpha ~0 anyway.
+      const vByPath = [0.0, 0.3, 0.5, 0.7, 1.0];
+      const periods = new Array(N);
+      periods[0] = 0;
+      for (let p = 1; p < N; p++) {
+        const dx = pts[p].x - pts[p - 1].x;
+        const dz = pts[p].z - pts[p - 1].z;
+        periods[p] = periods[p - 1] + Math.sqrt(dx * dx + dz * dz);
+      }
+      const RIVER_TILE_PERIOD = 1.0;
+      const uvs = new Float32Array(totalVerts * 2);
+      for (let v = 0; v < totalVerts; v++) {
+        const pathIdx  = Math.min(vByPath.length - 1, Math.floor(v / N));
+        const pointIdx = v % N;
+        uvs[v * 2 + 0] = periods[pointIdx] / RIVER_TILE_PERIOD;
+        uvs[v * 2 + 1] = vByPath[pathIdx];
+      }
+      ribbon.setVerticesData(BABYLON.VertexBuffer.UVKind, uvs);
+      // Flat +Y normals for full sun lighting — see _buildNetworkMesh.
+      if (typeof ribbon.getVerticesData === 'function') {
+        const pos = ribbon.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+        if (pos) {
+          const vcount = pos.length / 3;
+          const flatNormals = new Float32Array(vcount * 3);
+          for (let v = 0; v < vcount; v++) {
+            flatNormals[v * 3 + 0] = 0;
+            flatNormals[v * 3 + 1] = 1;
+            flatNormals[v * 3 + 2] = 0;
+          }
+          ribbon.setVerticesData(BABYLON.VertexBuffer.NormalKind, flatNormals);
+        }
+      }
       ribbon.hasVertexAlpha = true;
       ribbon.alphaIndex     = RIVER_ALPHA_INDEX;
       // Match the playable-map river ribbons — same flat ground-hugging strip,

@@ -113,17 +113,13 @@ function newInst() {
   return new Renderer3D(fakeCanvas, {});
 }
 
-describe('Renderer3D — river extension is fog-tinted to match the wilderness border', () => {
-  test('extension diffuse + emissive equal in-map river × FOG_TILE_DARKEN', () => {
+describe('Renderer3D — river extension uses the same textured river material as the playable map', () => {
+  test('extension uses the same _buildRibbonMaterial("river", ...) path — no fog tint multiplication', () => {
     const r = newInst();
     r._babylon = makeStubBabylon();
     r._scene   = {};
     r._mapRoot = { name: 'mapRoot' };
     r.state    = { tiles: makeRiverAcross(5, 2) };
-    // Sentinel "river exists" probe — `_buildRiverExtensions` checks this and
-    // bails out if the map has no river. The mesh contents don't matter
-    // because the extension material is now built from `ribbonMaterialColors`
-    // directly rather than cloned off the in-map river mesh.
     r._riverNetworkMesh = { name: 'river_5,5', material: { name: 'river_anchor' } };
 
     r._buildRiverExtensions(2);
@@ -134,22 +130,18 @@ describe('Renderer3D — river extension is fog-tinted to match the wilderness b
     }
     assert.ok(exts.length >= 1, 'expected at least one river-extension mesh');
 
-    // The extension now multiplies the in-map ribbon colours by the
-    // renderer's _fogTileDarken so it reads as wilderness-beyond-sight.
-    // Mirrors the border-forest hex tiles it weaves through.
-    const expected = ribbonMaterialColors(TILE_COLOR[TileType.RIVER]);
-    const k = r._fogTileDarken;
+    // After operator's "same rendering methods" change: extension uses the
+    // 'river' branch of _buildRibbonMaterial → white diffuse + zero emissive
+    // (textured PBR-ish path; texture sample handles colour). No manual fog
+    // tint multiplier any more — wilderness continuity comes from the
+    // textured river reading the same as its playable-map counterpart.
     for (const m of exts) {
       const d = m.material.diffuseColor;
       const e = m.material.emissiveColor;
-      assert.ok(Math.abs(d.r - expected.diffuse[0] * k) < 1e-9,
-        `extension ${m.name} diffuse.r ${d.r} should equal in-map × ${k} = ${expected.diffuse[0] * k}`);
-      assert.ok(Math.abs(d.g - expected.diffuse[1] * k) < 1e-9);
-      assert.ok(Math.abs(d.b - expected.diffuse[2] * k) < 1e-9);
-      assert.ok(Math.abs(e.r - expected.emissive[0] * k) < 1e-9,
-        `extension ${m.name} emissive.r ${e.r} should equal in-map × ${k} = ${expected.emissive[0] * k}`);
-      assert.ok(Math.abs(e.g - expected.emissive[1] * k) < 1e-9);
-      assert.ok(Math.abs(e.b - expected.emissive[2] * k) < 1e-9);
+      assert.ok(Math.abs(d.r - 1) < 1e-9 && Math.abs(d.g - 1) < 1e-9 && Math.abs(d.b - 1) < 1e-9,
+        `extension ${m.name} diffuse should be white (1,1,1), got (${d.r}, ${d.g}, ${d.b})`);
+      assert.ok(Math.abs(e.r) < 1e-9 && Math.abs(e.g) < 1e-9 && Math.abs(e.b) < 1e-9,
+        `extension ${m.name} emissive should be zero, got (${e.r}, ${e.g}, ${e.b})`);
     }
   });
 
