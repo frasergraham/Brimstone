@@ -7089,6 +7089,7 @@ export class Renderer3D {
 
     const entry = {
       plane, mat, tex,
+      leader: !!standee.leader,
       lastHp: -1, lastMax: -1, lastAssetId: '__pending__',
       // Track whether the last paint actually drew the portrait sprite. The
       // race we're guarding against: badge created before `loadImages()`
@@ -7986,8 +7987,10 @@ export class Renderer3D {
    *  canvas-wrapper, but a host page that omits it is fine (we just skip). */
   /** Scale every unit icon billboard by the proximity-aware factor so the
    *  badge shrinks as the camera zooms in. Reads camera.radius once per
-   *  frame and writes scaling.xyz on each plane. Cheap (few units typical;
-   *  setting Vector3.x/y/z directly avoids allocations). */
+   *  frame and writes scaling.xyz + position.y on each plane. The position
+   *  drops as scale shrinks so the icon bottom stays at a fixed clearance
+   *  above the head (sphere top) regardless of scale — closer to the
+   *  model when zoomed in, never overlapping. Cheap (few units typical). */
   _pumpUnitIconScale() {
     if (!this._unitIconBadges || this._unitIconBadges.size === 0) return;
     if (!this._camera) return;
@@ -7998,6 +8001,12 @@ export class Renderer3D {
       if (plane.scaling.x !== factor) plane.scaling.x = factor;
       if (plane.scaling.y !== factor) plane.scaling.y = factor;
       if (plane.scaling.z !== factor) plane.scaling.z = factor;
+      // Lower the icon's centre as it shrinks so its bottom keeps the same
+      // clearance above the head. `entry.leader` is captured at create time
+      // (passed in via standee.leader); for missing entries default to false.
+      const leader = entry.leader === true;
+      const ny = iconBillboardYForScale(leader, factor);
+      if (plane.position && plane.position.y !== ny) plane.position.y = ny;
     }
   }
 
@@ -10059,6 +10068,26 @@ export function unitIconScaleForRadius(radius) {
   if (r <= UNIT_ICON_SCALE_NEAR) return UNIT_ICON_MIN_SCALE;
   const t = (r - UNIT_ICON_SCALE_NEAR) / (UNIT_ICON_SCALE_FAR - UNIT_ICON_SCALE_NEAR);
   return UNIT_ICON_MIN_SCALE + (1 - UNIT_ICON_MIN_SCALE) * t;
+}
+
+/** Clearance between the head (sphere top) and the bottom of the icon
+ *  plane. Keeps the icon from ever touching the model regardless of
+ *  scale. */
+export const UNIT_ICON_HEAD_CLEARANCE = 0.05;
+
+/** Y position of the icon billboard, in cone-relative space, adjusted so
+ *  the BOTTOM of the scaled icon plane is exactly UNIT_ICON_HEAD_CLEARANCE
+ *  above the head (sphere top). As the icon shrinks toward
+ *  UNIT_ICON_MIN_SCALE the centre drops closer to the head; at scale=1 it
+ *  matches the legacy `iconBillboardYRelativeToCone` value (UNIT_ICON_Y_GAP
+ *  was tuned to give scale=1 the same clearance + half-size offset). */
+export function iconBillboardYForScale(leader = false, scale = 1) {
+  const hMul = leader ? STANDEE_LEADER_HEIGHT_MUL : 1;
+  const wMul = leader ? STANDEE_LEADER_WIDTH_MUL  : 1;
+  // Head top, expressed cone-relative (cone center at origin):
+  //   coneHeight/2 (top of cone) + sphereDiameter (top of sphere)
+  const headTopRel = (STANDEE_CONE_HEIGHT * hMul) / 2 + STANDEE_SPHERE_DIAMETER * wMul;
+  return headTopRel + UNIT_ICON_HEAD_CLEARANCE + (UNIT_ICON_PLANE_SIZE * scale) / 2;
 }
 /** Gap above the cone+sphere stack to the icon plane CENTRE, in world
  *  units. With the paladin model now ~0.92 wu tall (15% taller than the
