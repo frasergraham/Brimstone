@@ -623,14 +623,18 @@ describe('_upgradeForestToRealTrees — retrofit after async load', () => {
     assert.notEqual(bldg._disposed, true);
   });
 
-  test('disposes batched border-forest meshes when retrofitting the band', () => {
+  test('preserves batched border-forest meshes when no real trees are available', () => {
+    // Defensive two-phase swap: only dispose the procedural batch when at
+    // least one real instance was produced. Without this guard a season
+    // with no template bucket would wipe the cones and leave the border
+    // empty.
     const r = setupForRetrofit();
     r.state = { tiles: new Map() };
     const oldMesh = { name: 'border_forest_trunks', dispose() { this._disposed = true; } };
     r._borderForestBatchMeshes = [oldMesh];
     r._upgradeForestToRealTrees();
-    assert.equal(oldMesh._disposed, true);
-    // No border tiles registered → real-tree instances list ends up empty.
-    assert.deepEqual(r._borderForestBatchMeshes, []);
+    // No border tiles registered → no real instances built → old batch stays.
+    assert.notEqual(oldMesh._disposed, true);
+    assert.deepEqual(r._borderForestBatchMeshes, [oldMesh]);
   });
 });
