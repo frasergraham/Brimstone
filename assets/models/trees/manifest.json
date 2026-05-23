@@ -16,11 +16,6 @@
         "region": "new-england"
       },
       {
-        "file": "tree-summer-complete/tree-summer-complete-40-003.glb",
-        "species": "white-pine",
-        "region": "new-england"
-      },
-      {
         "file": "tree-summer-complete/tree-summer-complete-36-004.glb",
         "species": "hemlock",
         "region": "new-england"
@@ -36,23 +31,8 @@
         "region": "new-england"
       },
       {
-        "file": "tree-summer-complete/tree-summer-complete-5-009.glb",
-        "species": "willow",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-summer-complete/tree-summer-complete-47-010.glb",
-        "species": "maple",
-        "region": "new-england"
-      },
-      {
         "file": "tree-summer-complete/tree-summer-complete-33-011.glb",
         "species": "beech",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-summer-complete/tree-summer-complete-48-012.glb",
-        "species": "oak",
         "region": "new-england"
       },
       {
@@ -72,11 +52,6 @@
       },
       {
         "file": "tree-summer-complete/tree-summer-complete-32-017.glb",
-        "species": "maple",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-summer-complete/tree-summer-complete-34-018.glb",
         "species": "maple",
         "region": "new-england"
       },
@@ -101,123 +76,13 @@
         "region": "new-england"
       },
       {
-        "file": "tree-summer-complete/tree-summer-complete-44-023.glb",
-        "species": "elm",
-        "region": "new-england"
-      },
-      {
         "file": "tree-summer-complete/tree-summer-complete-45-024.glb",
         "species": "hemlock",
         "region": "new-england"
       },
       {
-        "file": "tree-summer-complete/tree-summer-complete-30-025.glb",
-        "species": "hemlock",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-summer-complete/tree-summer-complete-27-026.glb",
-        "species": "maple",
-        "region": "new-england"
-      },
-      {
         "file": "tree-summer-complete/tree-summer-complete-1-027.glb",
         "species": "beech",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-summer-complete/tree-summer-complete-3-028.glb",
-        "species": "maple",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-summer-complete/tree-summer-complete-4-029.glb",
-        "species": "elm",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-summer-complete/tree-summer-complete-6-030.glb",
-        "species": "hemlock",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-summer-complete/tree-summer-complete-7-031.glb",
-        "species": "spruce",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-summer-complete/tree-summer-complete-8-032.glb",
-        "species": "spruce",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-summer-complete/tree-summer-complete-9-033.glb",
-        "species": "hemlock",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-summer-complete/tree-summer-complete-10-034.glb",
-        "species": "hemlock",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-summer-complete/tree-summer-complete-12-035.glb",
-        "species": "hemlock",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-summer-complete/tree-summer-complete-13-036.glb",
-        "species": "spruce",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-summer-complete/tree-summer-complete-14-037.glb",
-        "species": "hemlock",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-summer-complete/tree-summer-complete-15-038.glb",
-        "species": "spruce",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-summer-complete/tree-summer-complete-17-040.glb",
-        "species": "spruce",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-summer-complete/tree-summer-complete-18-041.glb",
-        "species": "birch",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-summer-complete/tree-summer-complete-19-042.glb",
-        "species": "birch",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-summer-complete/tree-summer-complete-20-043.glb",
-        "species": "spruce",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-summer-complete/tree-summer-complete-21-044.glb",
-        "species": "beech",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-summer-complete/tree-summer-complete-22-045.glb",
-        "species": "spruce",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-summer-complete/tree-summer-complete-23-046.glb",
-        "species": "maple",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-summer-complete/tree-summer-complete-24-047.glb",
-        "species": "maple",
         "region": "new-england"
       },
       {
@@ -241,11 +106,6 @@
         "region": "new-england"
       },
       {
-        "file": "tree-summer-complete/tree-summer-complete-1-052.glb",
-        "species": "birch",
-        "region": "new-england"
-      },
-      {
         "file": "tree-summer-complete/tree-summer-complete-10-053.glb",
         "species": "beech",
         "region": "new-england"
@@ -256,43 +116,13 @@
         "region": "new-england"
       },
       {
-        "file": "tree-summer-complete/tree-summer-complete-12-055.glb",
-        "species": "willow",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-summer-complete/tree-summer-complete-13-056.glb",
-        "species": "birch",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-summer-complete/tree-summer-complete-3-057.glb",
-        "species": "beech",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-summer-complete/tree-summer-complete-4-058.glb",
-        "species": "birch",
-        "region": "new-england"
-      },
-      {
         "file": "tree-summer-complete/tree-summer-complete-5-059.glb",
         "species": "willow",
         "region": "new-england"
       },
       {
-        "file": "tree-summer-complete/tree-summer-complete-6-060.glb",
-        "species": "beech",
-        "region": "new-england"
-      },
-      {
         "file": "tree-summer-complete/tree-summer-complete-7-061.glb",
         "species": "spruce",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-summer-complete/tree-summer-complete-9-062.glb",
-        "species": "beech",
         "region": "new-england"
       }
     ],
@@ -305,11 +135,6 @@
       {
         "file": "tree-autumn-complete/tree-autumn-complete-10-002.glb",
         "species": "beech",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-autumn-complete/tree-autumn-complete-11-003.glb",
-        "species": "maple",
         "region": "new-england"
       },
       {
@@ -328,23 +153,8 @@
         "region": "new-england"
       },
       {
-        "file": "tree-autumn-complete/tree-autumn-complete-5-009.glb",
-        "species": "willow",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-autumn-complete/tree-autumn-complete-6-010.glb",
-        "species": "beech",
-        "region": "new-england"
-      },
-      {
         "file": "tree-autumn-complete/tree-autumn-complete-7-011.glb",
         "species": "spruce",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-autumn-complete/tree-autumn-complete-9-012.glb",
-        "species": "beech",
         "region": "new-england"
       },
       {
@@ -365,11 +175,6 @@
         "region": "new-england"
       },
       {
-        "file": "tree-winter-complete/tree-winter-complete-11-003.glb",
-        "species": "maple",
-        "region": "new-england"
-      },
-      {
         "file": "tree-winter-complete/tree-winter-complete-12-004.glb",
         "species": "willow",
         "region": "new-england"
@@ -385,23 +190,8 @@
         "region": "new-england"
       },
       {
-        "file": "tree-winter-complete/tree-winter-complete-5-009.glb",
-        "species": "willow",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-winter-complete/tree-winter-complete-6-010.glb",
-        "species": "beech",
-        "region": "new-england"
-      },
-      {
         "file": "tree-winter-complete/tree-winter-complete-7-011.glb",
         "species": "spruce",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-winter-complete/tree-winter-complete-9-012.glb",
-        "species": "beech",
         "region": "new-england"
       },
       {
@@ -422,11 +212,6 @@
         "region": "new-england"
       },
       {
-        "file": "tree-dead-complete/tree-dead-complete-11-003.glb",
-        "species": "maple",
-        "region": "new-england"
-      },
-      {
         "file": "tree-dead-complete/tree-dead-complete-12-004.glb",
         "species": "willow",
         "region": "new-england"
@@ -442,23 +227,8 @@
         "region": "new-england"
       },
       {
-        "file": "tree-dead-complete/tree-dead-complete-5-009.glb",
-        "species": "willow",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-dead-complete/tree-dead-complete-6-010.glb",
-        "species": "beech",
-        "region": "new-england"
-      },
-      {
         "file": "tree-dead-complete/tree-dead-complete-7-011.glb",
         "species": "spruce",
-        "region": "new-england"
-      },
-      {
-        "file": "tree-dead-complete/tree-dead-complete-9-012.glb",
-        "species": "beech",
         "region": "new-england"
       },
       {
