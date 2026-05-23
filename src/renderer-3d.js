@@ -2132,16 +2132,12 @@ export class Renderer3D {
       upgraded++;
     }
 
-    // Border forest — collapse the cross-tile merged meshes and rebuild
-    // per-tile instances. Border tiles aren't in state.tiles so iterate
-    // the `_borderForestHexesByKey` map (each entry's mesh metadata
-    // carries col + row from `_buildMapBorderForest`).
-    if (this._borderForestBatchMeshes && this._borderForestBatchMeshes.length > 0) {
-      for (const m of this._borderForestBatchMeshes) {
-        if (m && typeof m.dispose === 'function') m.dispose();
-      }
-      this._borderForestBatchMeshes = [];
-    }
+    // Border forest — build new real-tree instances FIRST, only dispose the
+    // procedural batch if the rebuild actually produced trees. Without this
+    // guard a season without a populated template bucket (anything but
+    // summer in the current manifest) would dispose the procedural cones
+    // and leave the border empty.
+    const newBorderInsts = [];
     for (const [, hex] of this._borderForestHexesByKey) {
       const md = hex?.metadata;
       if (!md) continue;
@@ -2155,11 +2151,19 @@ export class Renderer3D {
       const insts = this._buildRealForestTreesForHex(
         this._mapRoot, col, row, x, z, trees, namePrefix, { season: this._season },
       );
-      for (const m of insts) {
-        this._borderForestBatchMeshes.push(m);
-        upgraded++;
-      }
+      for (const m of insts) newBorderInsts.push(m);
     }
+    if (newBorderInsts.length > 0) {
+      if (this._borderForestBatchMeshes && this._borderForestBatchMeshes.length > 0) {
+        for (const m of this._borderForestBatchMeshes) {
+          if (m && typeof m.dispose === 'function') m.dispose();
+        }
+      }
+      this._borderForestBatchMeshes = newBorderInsts;
+      upgraded += newBorderInsts.length;
+    }
+    // else: keep the existing procedural batch — no real trees available
+    // for this season, no reason to wipe what's already on screen.
 
     if (upgraded > 0) this._freezeStaticMeshes();
     return upgraded;
@@ -3994,19 +3998,13 @@ export class Renderer3D {
     const mapRoot = new BABYLON.TransformNode('mapRoot', scene);
     this._mapRoot = mapRoot;
 
-    // Pick the per-map season BEFORE building any tile meshes — `_buildTileMesh`
-    // and `_buildMapBorderForest` both consult `this._season` to choose tree
-    // palettes / geometry. Prefer `state.season` (now set by generateMap() and
-    // round-tripped through state-sync); fall back to a hash of the tile layout
-    // for old saves / synthetic states that don't carry the field.
-    if (this.state?.season && SEASONS.includes(this.state.season)) {
-      this._season = this.state.season;
-    } else {
-      const seedSource = (typeof this.state?.mapSeed === 'number')
-        ? this.state.mapSeed
-        : hashTileLayout(this.state.tiles);
-      this._season = pickSeason(seedSource);
-    }
+    // TEMPORARY: hardcode summer until the tree-pack extraction is re-done
+    // for the other seasons. The current manifest only has tree-summer-complete
+    // populated, so any other season falls through to the procedural cone
+    // path AND silently disposes the procedural border-forest meshes during
+    // _upgradeForestToRealTrees → border ends up empty. Forcing summer
+    // makes real trees render until Phase 1.5 lands the other seasons.
+    this._season = 'summer';
 
     // Reusable shared geometry — clone for each instance, all parented to mapRoot.
     // (We do not yet use Babylon InstancedMesh; one mesh per tile keeps picking
