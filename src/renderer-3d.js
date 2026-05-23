@@ -1969,6 +1969,27 @@ export class Renderer3D {
         if (typeof source.setEnabled === 'function') source.setEnabled(false);
         source.isPickable = false;
         if (typeof source.renderingGroupId !== 'undefined') source.renderingGroupId = 0;
+        // Receive shadows. Set BEFORE the material's shader is first
+        // compiled so the SHADOWS define is baked in — setting this
+        // later (on an instance) wouldn't re-trigger compilation, so
+        // the shader would ignore the shadow map. Source-mesh
+        // receiveShadows propagates to all instances created from this
+        // template.
+        if ('receiveShadows' in source) source.receiveShadows = true;
+        // Walk child meshes too — glTF imports often have the geometry
+        // on a child of the imported node, with the source we kept being
+        // a TransformNode-ish root.
+        if (typeof source.getChildMeshes === 'function') {
+          for (const child of source.getChildMeshes()) {
+            if ('receiveShadows' in child) child.receiveShadows = true;
+            if (child.material && typeof child.material.markAsDirty === 'function') {
+              child.material.markAsDirty(BABYLON.Material?.MiscDirtyFlag ?? 0);
+            }
+          }
+        }
+        if (source.material && typeof source.material.markAsDirty === 'function') {
+          source.material.markAsDirty(BABYLON.Material?.MiscDirtyFlag ?? 0);
+        }
         // Stash a bbox-derived per-template uniform scale so callers don't
         // re-measure on every instance. Falls back to 1.0 when bbox is
         // unavailable (test stubs) — caller can multiply by the per-tree
