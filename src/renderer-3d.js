@@ -34,7 +34,10 @@ import { nodeController, Phase } from './game.js';
 import { sightRangeForEntity, findFaction } from './factions.js';
 import { Side } from './sides.js';
 import { MAP_SIZES, NODE_COLORS } from './map.js';
-import { installOverlayShims, OVERLAY_METHODS, yForLayer, overlaySignature } from './overlays.js';
+import {
+  installOverlayShims, OVERLAY_METHODS, yForLayer, overlaySignature,
+  makeOverlay, overlayMaterialKey,
+} from './overlays.js';
 
 // Babylon core + glTF loaders are served from the packaged `assets/vendor/`
 // directory rather than any CDN — the Electron / iOS bundles must run with zero
@@ -1447,6 +1450,13 @@ export class Renderer3D {
     this._selectionOverlayMeshes  = [];               // disposable selection/hover ring meshes
     this._selectionOverlayMatCache = new Map();       // "css|emissiveMul" → cached StandardMaterial
     this._selectionOverlaySig      = '';              // change-detect signature
+    // Ring-pulse (objective-ring layer) material cache, keyed by
+    // overlayMaterialKey(rgb, alpha, glow) so overlays that share a colour share
+    // one StandardMaterial — fixes the per-ring material churn the node-ring
+    // builder used to incur. Static identifier rings reuse these freely; the
+    // controller rings keep per-instance materials (see `_buildObjectiveRings`)
+    // because they recolour in place when control of a node flips.
+    this._ringPulseMatCache       = new Map();
     // ── Plan ghost (walking previewer) ─────────────────────────────────────
     // For each entity with at least one MOVE step in `planGhostSteps`, a
     // translucent standee clone walks its path on a loop while planning. The
@@ -7404,6 +7414,26 @@ export class Renderer3D {
     this._syncOverlays();
   }
 
+  /** Cached `ring-pulse` material keyed by `overlayMaterialKey(rgb, alpha,
+   *  glow)`. Overlays that share a colour share one StandardMaterial so the
+   *  builder never re-allocates per ring. The emissive is `rgb` (glow-grade,
+   *  picked up by the GlowLayer); the diffuse is a dim 0.4× wash. Used for the
+   *  static node identifier rings — controller rings keep per-instance
+   *  materials because they recolour in place when a node flips. */
+  _ringPulseMaterialFor(rgb, alpha = 1, glow = true) {
+    const key = overlayMaterialKey(rgb, alpha, glow);
+    if (this._ringPulseMatCache.has(key)) return this._ringPulseMatCache.get(key);
+    const BABYLON = this._babylon;
+    const [r, g, b] = rgb;
+    const mat = new BABYLON.StandardMaterial(`ringPulseMat_${key}`, this._scene);
+    mat.diffuseColor  = new BABYLON.Color3(r * 0.4, g * 0.4, b * 0.4);
+    mat.specularColor = new BABYLON.Color3(0, 0, 0);
+    mat.emissiveColor = new BABYLON.Color3(r, g, b);
+    mat.alpha = alpha;
+    this._ringPulseMatCache.set(key, mat);
+    return mat;
+  }
+
   /** Cached overlay material keyed by `(kind, color-css)`. Hit each frame for
    *  the same colour set, so the dispatcher never disposes+rebuilds materials. */
   _highlightMaterialFor(kind, rgbaCss) {
@@ -7425,10 +7455,46 @@ export class Renderer3D {
 
   // ─── Plan ghost arrows ───────────────────────────────────────────────────
 
-  /** Rebuild the plan-ghost arrow overlay from `this.planGhostSteps`. We
+  /** Delegating shim (overlay API). Publishes one `plan-arrow` overlay per
+   *  planned MOVE step into the unified overlay map, then materialises them.
+   *  Kept as the public entry point the draw loop + tests call; the mesh build
+   *  lives in `_buildPlanArrows`. */
+  _syncPlanArrows() {
+    this._publishPlanMoveOverlays();
+    this._buildPlanArrows();
+  }
+
+  /** Publish a `plan-arrow` overlay per MOVE step. The 3D builder still reads
+   *  the richer `planGhostSteps` (badge numbers, owner colour) when it
+   *  materialises, but the overlay map carries the canonical descriptor so the
+   *  plan layer has a single published representation. Idempotent — re-derived
+   *  from `planGhostSteps` each call; stale move overlays are cleared first. */
+  _publishPlanMoveOverlays() {
+    for (const id of Array.from(this._overlays.keys())) {
+      if (id.startsWith('plan-move-')) this._overlays.delete(id);
+    }
+    const steps = this.planGhostSteps;
+    if (!steps) return;
+    for (const step of steps) {
+      if (!step.arrow) continue;
+      const { entityId, fromCol, fromRow, toCol, toRow } = step.arrow;
+      const ent = this.state?.entities?.find?.(e => e.id === entityId);
+      const ownerColor = entityBaseColor(ent ?? {});
+      const stepNumber = step.stepNumber ?? 0;
+      const id = `plan-move-${entityId}-${stepNumber}`;
+      this.setOverlay(id, makeOverlay({
+        id, kind: 'plan-arrow', layer: 'plan-arrow',
+        path: [{ col: fromCol, row: fromRow }, { col: toCol, row: toRow }],
+        style: { color: ownerColor, alpha: 1 },
+        meta: { stepIndex: stepNumber, badge: String(stepNumber), entityId },
+      }));
+    }
+  }
+
+  /** Rebuild the plan-ghost arrow meshes from `this.planGhostSteps`. We
    *  rebuild from scratch every draw() — the per-call cost is a handful of
    *  meshes (one per MOVE step) and avoids hand-tracking dirty plan state. */
-  _syncPlanArrows() {
+  _buildPlanArrows() {
     // Babylon loads lazily — bail before the signature check so the first
     // draw() after init isn't stamped as "already rendered" while the build
     // phase below is still no-op.
@@ -7551,7 +7617,11 @@ export class Renderer3D {
         this._scene,
       );
       const { x: tx, z: tz } = hexToWorld(toCol, toRow);
-      disc.position.set(tx, PLAN_MARKER_Y, tz);
+      // Waypoint puck promoted from the old PLAN_MARKER_Y (0.08) into the
+      // `plan-arrow` overlay layer (≥0.180). This clears UNIT_HEX_OUTLINE_Y
+      // (0.10) so the marker no longer hides under a unit's selection ring —
+      // the long-standing PLAN_MARKER_Y < UNIT_HEX_OUTLINE_Y collision.
+      disc.position.set(tx, PLAN_WAYPOINT_Y, tz);
       disc.isPickable = false;
 
       const discMat = new BABYLON.StandardMaterial(
@@ -7612,6 +7682,40 @@ export class Renderer3D {
    *  with concurrent work on `_syncEntityStandees` (icon billboards,
    *  hex outlines). */
   _syncPlanBattleOverlay() {
+    this._publishPlanBattleOverlays();
+    this._buildPlanBattleArrows();
+  }
+
+  /** Publish one `plan-arrow` (variant 'battle') overlay per planned attack
+   *  step. Stale battle overlays are cleared first; the ×N count for batched
+   *  attacks on a shared target rides in `meta`. The 3D builder reads
+   *  `planGhostSteps` to materialise; the overlay map is the published record
+   *  (and the input the 2D legacy path would consume). */
+  _publishPlanBattleOverlays() {
+    for (const id of Array.from(this._overlays.keys())) {
+      if (id.startsWith('plan-battle-')) this._overlays.delete(id);
+    }
+    const steps = this.planGhostSteps;
+    if (!steps) return;
+    const counts = countAttacksPerTarget(steps);
+    let i = 0;
+    for (const step of steps) {
+      if (!step.attackArrow) continue;
+      const { fromCol, fromRow, toCol, toRow } = step.attackArrow;
+      const id = `plan-battle-${i++}`;
+      const fromHex = `${fromCol},${fromRow}`;
+      const toHex = `${toCol},${toRow}`;
+      this.setOverlay(id, makeOverlay({
+        id, kind: 'plan-arrow', layer: 'plan-arrow',
+        path: [{ col: fromCol, row: fromRow }, { col: toCol, row: toRow }],
+        style: { color: ATTACK_ARROW_COLOR, alpha: 1 },
+        meta: { variant: 'battle', fromHex, toHex, count: counts.get(toHex) ?? 1 },
+      }));
+    }
+  }
+
+  /** Rebuild the plan-mode battle meshes from `this.planGhostSteps`. */
+  _buildPlanBattleArrows() {
     // Babylon loads lazily — bail before the signature check so the first
     // draw() after init doesn't stamp the cache while the build phase below
     // is still no-op.
@@ -8319,10 +8423,51 @@ export class Renderer3D {
     ng.disc.material.emissiveColor.b = c.b * k * NODE_DISC_EMISSIVE_MUL;
   }
 
+  /** Delegating shim (overlay API). Publishes one `ring-pulse` overlay per
+   *  power-node hex for the controller ring and the identifier ring, then
+   *  materialises them. The published descriptors are the source of truth for
+   *  ring colour — `_buildObjectiveRings` recolours the controller meshes from
+   *  the overlay map. Kept as the public entry point the draw loop calls. */
+  _syncNodeGlowMeshes() {
+    this._publishObjectiveRingOverlays();
+    this._buildObjectiveRings();
+  }
+
+  /** Publish two `ring-pulse` overlays per node hex: the controller ring
+   *  (recoloured each draw to the current controller) and the static
+   *  identifier ring. `animation` is omitted — both rings hold a steady tint
+   *  today (the pulse was retired in an earlier pass). IDs are stable per hex
+   *  so the overlays upsert without churning the map. */
+  _publishObjectiveRingOverlays() {
+    const objs = this.state?.witchObjectives;
+    if (!objs) return;
+    objs.forEach((obj, nodeIndex) => {
+      const ctrl = nodeController(obj, this.state.entities);
+      const ctrlCss = getNodeGlowColor(ctrl);
+      const idCss = nodeIdentifyingColor(obj);
+      for (const h of obj.hexes) {
+        const hexArg = [{ col: h.col, row: h.row }];
+        this.setOverlay(`node-ctrl-${h.col}-${h.row}`, makeOverlay({
+          id: `node-ctrl-${h.col}-${h.row}`, kind: 'ring-pulse', layer: 'objective-ring',
+          hexes: hexArg,
+          style: { color: ctrlCss, alpha: 1, glow: true },
+          meta: { nodeIndex, isController: true, factionColorKey: ctrl },
+        }));
+        this.setOverlay(`node-id-${h.col}-${h.row}`, makeOverlay({
+          id: `node-id-${h.col}-${h.row}`, kind: 'ring-pulse', layer: 'objective-ring',
+          hexes: hexArg,
+          style: { color: idCss, alpha: 1, glow: true },
+          meta: { nodeIndex, isController: false },
+        }));
+      }
+    });
+  }
+
   /** Build one emissive disc per Power Node hex on first call, then on every
    *  draw update the per-disc material colour to reflect the current
-   *  controller. Cheap because witchObjectives count rarely exceeds 3. */
-  _syncNodeGlowMeshes() {
+   *  controller (read from the published `node-ctrl-*` overlay). Cheap because
+   *  witchObjectives count rarely exceeds 3. */
+  _buildObjectiveRings() {
     if (!this._scene || !this.state?.witchObjectives) return;
     if (!this._nodeGlowBuilt) {
       this._buildNodeGlowMeshes();
@@ -8330,10 +8475,12 @@ export class Renderer3D {
     }
     // Recolour by controller each draw — controller can flip when entities move.
     // Pulsing was removed (task 7): write the emissive directly so the ring
-    // holds a steady controller tint.
+    // holds a steady controller tint. Colour comes from the published
+    // controller-ring overlay so the overlay map drives the visual.
     for (const ng of this._nodeGlowMeshes) {
-      const ctrl = nodeController(ng.obj, this.state.entities);
-      const css = getNodeGlowColor(ctrl);
+      const ov = this._overlays.get(`node-ctrl-${ng.col}-${ng.row}`);
+      const css = ov?.style?.color
+        ?? getNodeGlowColor(nodeController(ng.obj, this.state.entities));
       const [r, g, b] = cssHexToRgb01(css);
       ng.glowColor = { r, g, b };
       const mat = ng.disc?.material;
@@ -8447,13 +8594,11 @@ export class Renderer3D {
         idRing.position.x = x;
         idRing.position.z = z;
         idRing.isPickable = false;
-        const idMat = new BABYLON.StandardMaterial(
-          `nodeIdRingMat_${h.col}_${h.row}`, this._scene,
-        );
-        idMat.diffuseColor  = new BABYLON.Color3(ir * 0.4, ig * 0.4, ib * 0.4);
-        idMat.specularColor = new BABYLON.Color3(0, 0, 0);
-        idMat.emissiveColor = new BABYLON.Color3(ir, ig, ib);
-        idRing.material = idMat;
+        // Identifier ring colour never changes, so share one cached material
+        // across every hex with the same identifying colour (overlayMaterialKey
+        // dedups). diffuse = id×0.4, emissive = id — same look as before, just
+        // no longer one fresh StandardMaterial per ring.
+        idRing.material = this._ringPulseMaterialFor([ir, ig, ib], 1, true);
 
         // Same fog-veil registration as the controller ring. By this point
         // the per-tile list exists (we just registered the controller disc
@@ -10361,11 +10506,17 @@ export const PLAN_DISC_ALPHA = 0.85;
 
 /** Round 4 waypoint marker — small ground puck under the numbered badge so
  *  the underlying terrain stays visible. Diameter shrunk from 1.4 (a full
- *  hex's worth) → 0.36, height 0.02 (almost flush with the tile top), Y =
- *  0.08 (just above tile top). */
+ *  hex's worth) → 0.36, height 0.02 (almost flush with the tile top). */
 export const PLAN_MARKER_DIAMETER = 0.36;
 export const PLAN_MARKER_HEIGHT   = 0.02;
-export const PLAN_MARKER_Y        = 0.08;
+
+/** Waypoint puck elevation. Promoted into the unified `plan-arrow` overlay
+ *  layer (≥0.180) — see Y_TABLE in src/overlays.js. The legacy PLAN_MARKER_Y
+ *  was 0.08, which sat *below* UNIT_HEX_OUTLINE_Y (0.10), so a waypoint dropped
+ *  on a unit's hex hid under that unit's selection ring. Lifting it into the
+ *  plan-arrow band fixes the long-standing collision and keeps the marker on
+ *  top of the highlight discs (0.160–0.175) the same way the dashed line is. */
+export const PLAN_WAYPOINT_Y      = yForLayer('plan-arrow', 0);
 
 /** Dashed-line Y for the path-connector tracing the planned waypoints.
  *  Raised well above the marker puck top (0.09) and the highlight disc

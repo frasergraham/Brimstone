@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   LAYERS, Y_TABLE, yForLayer, OVERLAY_KINDS,
   makeOverlay, overlaySignature, installOverlayShims,
+  ringPulseState, overlayMaterialKey,
 } from '../src/overlays.js';
 
 describe('LAYERS', () => {
@@ -284,5 +285,135 @@ describe('installOverlayShims idempotency', () => {
     assert.ok(obj._overlays.has('hover'), 'hover overlay survives');
     assert.deepEqual(obj._selection, { entityId: 5, hex: { col: 2, row: 2 } });
     assert.deepEqual(obj._hover, { col: 7, row: 8 });
+  });
+});
+
+// ── ring-pulse animation curve ──────────────────────────────────────────────
+
+describe('ringPulseState — animation curves for the ring-pulse builder', () => {
+  test('null animation is the static case (full alpha, unit radius, never done)', () => {
+    assert.deepEqual(ringPulseState(null, 1000), { radiusScale: 1, alpha: 1, done: false });
+  });
+
+  test('expand: radius grows over the duration while alpha fades', () => {
+    const a = { kind: 'expand', startedAtMs: 0, durationMs: 1000, maxScale: 3 };
+    const start = ringPulseState(a, 0);
+    const mid   = ringPulseState(a, 500);
+    const end   = ringPulseState(a, 1000);
+    assert.equal(start.radiusScale, 1);
+    assert.ok(mid.radiusScale > start.radiusScale, 'radius grows toward maxScale');
+    assert.equal(end.radiusScale, 3, 'reaches maxScale at the end');
+    assert.ok(end.alpha < start.alpha, 'alpha fades as the ring expands');
+    assert.equal(start.alpha, 1);
+    assert.equal(end.alpha, 0);
+    assert.equal(end.done, true);
+    assert.equal(start.done, false);
+  });
+
+  test('pulse: radius static, alpha oscillates across the cycle', () => {
+    const a = { kind: 'pulse', startedAtMs: 0, durationMs: 1000, loop: true };
+    const q0 = ringPulseState(a, 0);     // sin(0) = 0   → 0.5
+    const q1 = ringPulseState(a, 250);   // sin(π/2) = 1 → 1.0
+    const q3 = ringPulseState(a, 750);   // sin(3π/2)=-1 → 0.0
+    assert.equal(q0.radiusScale, 1);
+    assert.equal(q1.radiusScale, 1);
+    assert.ok(Math.abs(q0.alpha - 0.5) < 1e-9);
+    assert.ok(Math.abs(q1.alpha - 1.0) < 1e-9);
+    assert.ok(Math.abs(q3.alpha - 0.0) < 1e-9);
+    assert.equal(q1.done, false, 'a looping pulse never reports done');
+  });
+
+  test('fade: alpha decays to 0 and the overlay reports done at the end', () => {
+    const a = { kind: 'fade', startedAtMs: 100, durationMs: 200 };
+    const mid = ringPulseState(a, 200);  // halfway
+    const end = ringPulseState(a, 300);  // complete
+    assert.equal(mid.radiusScale, 1);
+    assert.ok(Math.abs(mid.alpha - 0.5) < 1e-9);
+    assert.equal(end.alpha, 0);
+    assert.equal(end.done, true, 'caller removes the overlay once done');
+  });
+
+  test('loop wraps the phase instead of completing', () => {
+    const a = { kind: 'expand', startedAtMs: 0, durationMs: 1000, loop: true, maxScale: 2 };
+    const past = ringPulseState(a, 2500); // 2.5 cycles → phase 0.5
+    assert.ok(past.radiusScale > 1 && past.radiusScale < 2, 'phase wrapped, mid-expand');
+    assert.equal(past.done, false, 'looping animation is never done');
+  });
+});
+
+// ── overlay material cache key ──────────────────────────────────────────────
+
+describe('overlayMaterialKey — shared-material keying for ring-pulse', () => {
+  test('identical (rgb, alpha, glow) produce the same key (materials share)', () => {
+    const a = overlayMaterialKey([0.2, 0.4, 0.6], 1, true);
+    const b = overlayMaterialKey([0.2, 0.4, 0.6], 1, true);
+    assert.equal(a, b);
+  });
+
+  test('a different colour yields a different key (materials do not share)', () => {
+    const a = overlayMaterialKey([0.2, 0.4, 0.6], 1, true);
+    const b = overlayMaterialKey([0.9, 0.4, 0.6], 1, true);
+    assert.notEqual(a, b);
+  });
+
+  test('alpha and glow are part of the key', () => {
+    const base = overlayMaterialKey([0.2, 0.4, 0.6], 1, true);
+    assert.notEqual(base, overlayMaterialKey([0.2, 0.4, 0.6], 0.5, true), 'alpha matters');
+    assert.notEqual(base, overlayMaterialKey([0.2, 0.4, 0.6], 1, false), 'glow matters');
+  });
+
+  test('tiny float dust within 3 decimals collapses to one key', () => {
+    const a = overlayMaterialKey([0.2000001, 0.4, 0.6], 1, true);
+    const b = overlayMaterialKey([0.2000002, 0.4, 0.6], 1, true);
+    assert.equal(a, b);
+  });
+});
+
+// ── plan-arrow descriptor: path-based, not hex-set-based ─────────────────────
+
+describe('plan-arrow overlays carry an ordered path', () => {
+  test('makeOverlay stores path (ordered) for kind plan-arrow', () => {
+    const ov = makeOverlay({
+      id: 'plan-move-7-1', kind: 'plan-arrow', layer: 'plan-arrow',
+      path: [{ col: 1, row: 1 }, { col: 2, row: 1 }, { col: 3, row: 1 }],
+      style: { color: '#abcdef', alpha: 1 },
+      meta: { entityId: 7, badge: '1' },
+    });
+    assert.deepEqual(ov.path, ['1,1', '2,1', '3,1']);
+    assert.ok(ov.hexes instanceof Set);
+  });
+
+  test('signature folds in the path order (not just membership)', () => {
+    const mk = path => makeOverlay({
+      id: 'p', kind: 'plan-arrow', layer: 'plan-arrow', path,
+      style: { color: '#fff', alpha: 1 },
+    });
+    const forward = overlaySignature(mk([{ col: 1, row: 1 }, { col: 2, row: 1 }]));
+    const reverse = overlaySignature(mk([{ col: 2, row: 1 }, { col: 1, row: 1 }]));
+    assert.notEqual(forward, reverse, 'path order changes the signature');
+    // Signature uses `path` (joined with ">"), not a sorted hex set.
+    assert.ok(forward.includes('1,1>2,1'));
+  });
+
+  test('a changed path rebuilds; an identical path does not', () => {
+    const mk = path => makeOverlay({
+      id: 'p', kind: 'plan-arrow', layer: 'plan-arrow', path,
+      style: { color: '#fff', alpha: 1 },
+    });
+    const a = overlaySignature(mk([{ col: 1, row: 1 }, { col: 2, row: 1 }]));
+    const aAgain = overlaySignature(mk([{ col: 1, row: 1 }, { col: 2, row: 1 }]));
+    const moved = overlaySignature(mk([{ col: 1, row: 1 }, { col: 2, row: 2 }]));
+    assert.equal(a, aAgain, 'identical path → identical signature → no rebuild');
+    assert.notEqual(a, moved, 'destination moved → signature differs → rebuild');
+  });
+});
+
+// ── plan-arrow Y placement regression (PLAN_MARKER_Y collision fix) ──────────
+
+describe('plan-arrow layer sits above the per-unit outline band', () => {
+  test('plan-arrow band min ≥ outline band min (waypoints no longer hide under unit rings)', () => {
+    assert.ok(Y_TABLE['plan-arrow'].min >= Y_TABLE['outline'].min,
+      'plan-arrow layer must elevate above the outline layer');
+    assert.ok(yForLayer('plan-arrow', 0) >= 0.180);
   });
 });

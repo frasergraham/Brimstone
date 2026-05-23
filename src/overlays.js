@@ -229,6 +229,56 @@ export function installOverlayShims(target) {
   });
 }
 
+/**
+ * Pure animation curve for a `ring-pulse` overlay. Given an `animation`
+ * descriptor (`{ kind, startedAtMs, durationMs, loop?, maxScale? }`) and the
+ * current wall-clock `nowMs`, returns the per-frame `{ radiusScale, alpha,
+ * done }` the renderer applies to a ring mesh. Babylon-free so the curve is
+ * unit-testable:
+ *
+ *  • `expand` — radius grows 1 → `maxScale` (default 2) while alpha fades 1 → 0
+ *    (node-reveal + death-burst look).
+ *  • `pulse`  — radius static; alpha oscillates 0 → 1 → 0 via a sine over the
+ *    duration (held-node controller ring).
+ *  • `fade`   — radius static; alpha decays 1 → 0 then `done` flips true so the
+ *    caller removes the overlay (one-shot).
+ *
+ * A null/absent animation is the static case: full alpha, unit radius, never
+ * done. `loop:true` wraps the phase so the curve repeats instead of completing.
+ */
+export function ringPulseState(animation, nowMs) {
+  if (!animation) return { radiusScale: 1, alpha: 1, done: false };
+  const {
+    kind, startedAtMs = 0, durationMs = 1, loop = false, maxScale = 2,
+  } = animation;
+  const raw = (nowMs - startedAtMs) / Math.max(1, durationMs);
+  const t = loop ? ((raw % 1) + 1) % 1 : Math.min(1, Math.max(0, raw));
+  const done = !loop && raw >= 1;
+  switch (kind) {
+    case 'expand':
+      return { radiusScale: 1 + t * (maxScale - 1), alpha: Math.max(0, 1 - t), done };
+    case 'pulse':
+      return { radiusScale: 1, alpha: 0.5 + 0.5 * Math.sin(t * Math.PI * 2), done };
+    case 'fade':
+      return { radiusScale: 1, alpha: Math.max(0, 1 - t), done };
+    default:
+      return { radiusScale: 1, alpha: 1, done };
+  }
+}
+
+/**
+ * Stable cache key for a renderer overlay material, keyed by colour + alpha +
+ * glow. Two overlays whose `(rgb, alpha, glow)` match resolve to the same key
+ * (and therefore share one StandardMaterial in the renderer's per-kind cache);
+ * any difference yields a distinct key. Colours are rounded to 3 decimals so
+ * floating-point dust doesn't fragment the cache. `rgb` is a `[r,g,b]` triple
+ * in 0..1.
+ */
+export function overlayMaterialKey(rgb, alpha = 1, glow = false) {
+  const [r = 0, g = 0, b = 0] = rgb ?? [];
+  return `${r.toFixed(3)},${g.toFixed(3)},${b.toFixed(3)}|${alpha}|${glow ? 1 : 0}`;
+}
+
 /** JSON.stringify with object keys sorted, for stable signatures. */
 function stableStringify(value) {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
