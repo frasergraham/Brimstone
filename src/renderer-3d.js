@@ -4675,9 +4675,30 @@ export class Renderer3D {
         // opaque region covers the inner 80% of the ribbon and the outer 10%
         // on each side fades smoothly into the grass beneath.
         const OPAQUE_FRAC   = 0.80;
-        const innerWidth    = width * OPAQUE_FRAC;
-        const { left: outerLeft,  right: outerRight  } = ribbonOffsetPaths(pts, width);
-        const { left: innerLeft,  right: innerRight  } = ribbonOffsetPaths(pts, innerWidth);
+        // Road gets a smooth ±15% per-point width modulation along its length
+        // so each strand reads as hand-laid rather than uniform-machined. The
+        // sine wave is seeded off the tile col/row + stroke index so a given
+        // hex looks the same across reloads. River stays uniform-width.
+        let perPointOuterWidth = width;
+        let perPointInnerWidth = width * OPAQUE_FRAC;
+        if (networkName === 'road') {
+          const seed = (tile.col * 73 + tile.row * 131 + i * 17) % 1024;
+          const phase = (seed / 1024) * Math.PI * 2;
+          const cycles = 1.5; // ~1.5 waves across the stroke's length
+          const amp = 0.15;
+          const outerArr = new Array(pts.length);
+          const innerArr = new Array(pts.length);
+          for (let p = 0; p < pts.length; p++) {
+            const t = pts.length > 1 ? p / (pts.length - 1) : 0;
+            const mod = 1 + amp * Math.sin(t * Math.PI * 2 * cycles + phase);
+            outerArr[p] = width * mod;
+            innerArr[p] = width * OPAQUE_FRAC * mod;
+          }
+          perPointOuterWidth = outerArr;
+          perPointInnerWidth = innerArr;
+        }
+        const { left: outerLeft,  right: outerRight  } = ribbonOffsetPaths(pts, perPointOuterWidth);
+        const { left: innerLeft,  right: innerRight  } = ribbonOffsetPaths(pts, perPointInnerWidth);
         const toV3 = (arr) => arr.map(p => new BABYLON.Vector3(p.x, yPos, p.z));
         const rightOuterV3 = toV3(outerRight);
         const rightInnerV3 = toV3(innerRight);
@@ -8925,7 +8946,10 @@ export function ribbonOffsetPaths(points, width) {
   if (!Array.isArray(points) || points.length < 2) {
     return { left: [], right: [] };
   }
-  const half = width / 2;
+  // `width` may be a scalar (uniform width along the ribbon) OR an array of
+  // per-point widths (each point gets its own width — used to introduce
+  // smooth thickness variation along the ribbon's length).
+  const isArray = Array.isArray(width);
   const n = points.length;
   const left  = new Array(n);
   const right = new Array(n);
@@ -8944,6 +8968,8 @@ export function ribbonOffsetPaths(points, width) {
     const len = Math.hypot(tx, tz) || 1;
     tx /= len; tz /= len;
     const px = -tz, pz = tx;
+    const w  = isArray ? width[i] : width;
+    const half = w / 2;
     left[i]  = { x: points[i].x + px * half, z: points[i].z + pz * half };
     right[i] = { x: points[i].x - px * half, z: points[i].z - pz * half };
   }
