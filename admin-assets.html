@@ -19,6 +19,15 @@
     .model-item:hover { background: #211c16; border-color: #443a2a; }
     .model-item.active { background: #5a4a30; border-color: #c4a04a; color: #ffd680; }
     .model-item.broken { color: #c46060; }
+    .model-item .check { margin-right: 6px; vertical-align: middle; }
+    .model-item .label { vertical-align: middle; }
+    .folder { margin: 10px 0 4px 0; font-size: 11px; color: #c4a04a; letter-spacing: 1.2px; text-transform: uppercase; cursor: pointer; user-select: none; }
+    .folder.collapsed + .folder-body { display: none; }
+    .folder::before { content: '▾ '; }
+    .folder.collapsed::before { content: '▸ '; }
+    #remove-bar { position: sticky; bottom: 0; background: #14110d; border-top: 1px solid #2c2620; padding: 8px 0 4px 0; margin-top: 10px; }
+    #remove-bar button { width: 100%; }
+    #remove-output { margin-top: 6px; font-family: ui-monospace, Menlo, monospace; font-size: 10px; color: #a08858; max-height: 200px; overflow-y: auto; background: #0a0805; padding: 6px; border: 1px solid #2c2620; white-space: pre-wrap; word-break: break-all; }
 
     #stage { position: relative; background: #050505; overflow: hidden; }
     #render-canvas { width: 100%; height: 100%; display: block; touch-action: none; outline: none; }
@@ -57,6 +66,11 @@
     <aside>
       <h2>Models</h2>
       <div id="model-list"></div>
+      <div id="tree-list"></div>
+      <div id="remove-bar">
+        <button id="show-remove" class="primary">Show removal command</button>
+        <pre id="remove-output" style="display:none"></pre>
+      </div>
     </aside>
 
     <div id="stage">
@@ -478,6 +492,78 @@
       });
       listEl.appendChild(el);
     }
+
+    // ── Tree folders ──────────────────────────────────────────────────────
+    // Loads the tree-pack manifest and renders each group as a collapsible
+    // folder. Each tree item has a checkbox so the user can pick the ones
+    // they want removed; the "Show removal command" button at the bottom
+    // emits a shell rm + jq prune script the user can paste into a terminal.
+    const treeListEl = $('tree-list');
+    const checkedRemovals = new Set();
+    (async () => {
+      try {
+        const res = await fetch('/assets/models/trees/manifest.json');
+        if (!res.ok) return;
+        const manifest = await res.json();
+        for (const [groupName, entries] of Object.entries(manifest.groups || {})) {
+          const folder = document.createElement('div');
+          folder.className = 'folder';
+          folder.textContent = `${groupName} (${entries.length})`;
+          folder.addEventListener('click', () => folder.classList.toggle('collapsed'));
+          treeListEl.appendChild(folder);
+          const body = document.createElement('div');
+          body.className = 'folder-body';
+          treeListEl.appendChild(body);
+          for (const entry of entries) {
+            const file = typeof entry === 'string' ? entry : entry.file;
+            const species = typeof entry === 'object' ? (entry.species || '') : '';
+            const item = document.createElement('div');
+            item.className = 'model-item';
+            const chk = document.createElement('input');
+            chk.type = 'checkbox';
+            chk.className = 'check';
+            chk.addEventListener('click', (ev) => {
+              ev.stopPropagation();
+              if (chk.checked) checkedRemovals.add(file); else checkedRemovals.delete(file);
+            });
+            item.appendChild(chk);
+            const lbl = document.createElement('span');
+            lbl.className = 'label';
+            const short = file.split('/').pop();
+            lbl.textContent = species ? `${short} [${species}]` : short;
+            item.appendChild(lbl);
+            item.addEventListener('click', () => {
+              if (activeItem) activeItem.classList.remove('active');
+              item.classList.add('active');
+              activeItem = item;
+              activeFile = `trees/${file}`;
+              loadModel(`trees/${file}`).catch(() => { item.classList.add('broken'); });
+            });
+            body.appendChild(item);
+          }
+          folder.classList.add('collapsed');
+        }
+      } catch (e) {
+        console.warn('Tree manifest load failed:', e);
+      }
+    })();
+
+    $('show-remove').addEventListener('click', () => {
+      const pre = $('remove-output');
+      if (checkedRemovals.size === 0) {
+        pre.textContent = '(no trees selected)';
+        pre.style.display = 'block';
+        return;
+      }
+      const files = Array.from(checkedRemovals).sort();
+      const rms = files.map(f => `rm assets/models/trees/${f}`).join(' && \\\n');
+      const filterJs = `
+# Then prune the manifest:
+node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/models/trees/manifest.json','utf8'));const remove=new Set(${JSON.stringify(files)});for(const g of Object.keys(m.groups)){m.groups[g]=m.groups[g].filter(e=>!remove.has(typeof e==='string'?e:e.file));}fs.writeFileSync('assets/models/trees/manifest.json',JSON.stringify(m,null,2)+'\\n');"
+`.trim();
+      pre.textContent = `# Remove ${files.length} tree GLBs:\n${rms} && \\\n${filterJs}`;
+      pre.style.display = 'block';
+    });
 
 
     // ── Animation controls ────────────────────────────────────────────────
