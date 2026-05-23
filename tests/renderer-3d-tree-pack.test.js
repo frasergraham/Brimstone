@@ -353,6 +353,85 @@ describe('_loadTreePackManifest', () => {
     }
   });
 
+  test('manifest v2: filters out non-new-england tree entries', async () => {
+    const r = newInst();
+    r._scene = {};
+    const loaded = [];
+    r._babylon = makeFakeBabylon({
+      importImpl: async (_n, _base, file) => {
+        loaded.push(file);
+        return { meshes: [makeFakeTemplate(file)] };
+      },
+    });
+    const restore = stubFetch({
+      __default__: {
+        ok: true,
+        async json() {
+          return {
+            version: 2,
+            groups: {
+              'tree-summer-complete': [
+                { file: 'ne.glb',     species: 'oak',  region: 'new-england' },
+                { file: 'palm.glb',   species: 'palm', region: 'tropical' },
+                { file: 'spruce.glb', species: 'spruce', region: 'new-england' },
+              ],
+            },
+          };
+        },
+      },
+    });
+    const originalLog = console.log;
+    console.log = () => {};
+    try {
+      await r._loadTreePackManifest('assets');
+      // palm.glb should never have been imported — region filter drops it
+      // before the parallel-import step.
+      assert.ok(!loaded.includes('palm.glb'), 'tropical entry must be skipped');
+      assert.equal(r._treeTemplates.size, 2);
+      assert.ok(r._treeTemplates.has('ne.glb'));
+      assert.ok(r._treeTemplates.has('spruce.glb'));
+      assert.equal(r._treeTemplates.has('palm.glb'), false);
+      assert.deepEqual(
+        r._treeGroupsByName.get('tree-summer-complete').sort(),
+        ['ne.glb', 'spruce.glb'],
+      );
+    } finally {
+      restore();
+      console.log = originalLog;
+    }
+  });
+
+  test('manifest v1 back-compat: entries with no region field are kept', async () => {
+    const r = newInst();
+    r._scene = {};
+    r._babylon = makeFakeBabylon({
+      importImpl: async (_n, _base, file) => ({ meshes: [makeFakeTemplate(file)] }),
+    });
+    const restore = stubFetch({
+      __default__: {
+        ok: true,
+        async json() {
+          return {
+            version: 1,
+            groups: {
+              'tree-summer-complete': [{ file: 'legacy.glb' }],
+            },
+          };
+        },
+      },
+    });
+    const originalLog = console.log;
+    console.log = () => {};
+    try {
+      await r._loadTreePackManifest('assets');
+      assert.equal(r._treeTemplates.size, 1);
+      assert.ok(r._treeTemplates.has('legacy.glb'));
+    } finally {
+      restore();
+      console.log = originalLog;
+    }
+  });
+
   test('isolates per-file import failures — surviving files still register', async () => {
     const r = newInst();
     r._scene = {};

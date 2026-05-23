@@ -1914,21 +1914,32 @@ export class Renderer3D {
         return null;
       }
 
+      // Manifest v2 (PR for tree-pack species/region tagging) tags each entry
+      // with `{species, region}`. Filter to colonial New England species so
+      // the runtime forest excludes any flagged-tropical/exotic trees. The
+      // filter is permissive — entries missing a `region` field (manifest v1
+      // back-compat, or non-tree extras that slip into a tree-* group) are
+      // kept rather than silently dropped.
+      const isNewEngland = (e) => {
+        if (!e || typeof e.file !== 'string' || e.file.length === 0) return false;
+        if (typeof e.region !== 'string') return true;
+        return e.region === 'new-england';
+      };
+
       const uniqueFiles = new Set();
       const filesByGroup = new Map(); // groupName → array of file paths
       for (const g of wantedGroups) {
         const entries = Array.isArray(groups[g]) ? groups[g] : [];
         const list = [];
         for (const e of entries) {
-          if (e && typeof e.file === 'string' && e.file.length > 0) {
-            uniqueFiles.add(e.file);
-            list.push(e.file);
-          }
+          if (!isNewEngland(e)) continue;
+          uniqueFiles.add(e.file);
+          list.push(e.file);
         }
         if (list.length > 0) filesByGroup.set(g, list);
       }
       if (uniqueFiles.size === 0) {
-        console.warn('[Renderer3D] tree pack manifest listed no tree files; using procedural trees.');
+        console.warn('[Renderer3D] tree pack manifest listed no new-england tree files; using procedural trees.');
         return null;
       }
 
