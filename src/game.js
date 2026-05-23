@@ -232,6 +232,7 @@ export class GameState {
     };
 
     this.mapSize       = mapData.mapSize;
+    this.season        = mapData.season ?? null;
     this._survivorCounts = mapData.survivorCounts;
     this.witchObjectives = mapData.witchObjectives;
     this.missionTargetHex = mapData.targetHex
