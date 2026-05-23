@@ -8,7 +8,12 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-import { groupModelName, buildGroupKey } from '../scripts/extract-tree-pack.js';
+import {
+  groupModelName,
+  buildGroupKey,
+  buildTreeRecords,
+  classifyTree,
+} from '../scripts/extract-tree-pack.js';
 
 const _here = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(_here, '..');
@@ -101,6 +106,136 @@ describe('groupModelName — classification by name + materials', () => {
     assert.equal(buildGroupKey({ category: 'tree-trunk', season: 'dead' }), 'tree-dead-trunk');
     assert.equal(buildGroupKey({ category: 'rock', season: null }), 'rock');
     assert.equal(buildGroupKey({ category: 'cloud', season: null }), 'cloud');
+  });
+});
+
+describe('buildTreeRecords — assembles complete-tree records', () => {
+  // The extractor emits ONE record per FULL tree. Split source nodes (one
+  // material each) get paired into multi-index records; pre-merged nodes
+  // produce single-index records.
+
+  test('pre-merged "Tree N" → single-index summer-complete record', () => {
+    const recs = buildTreeRecords([
+      { name: 'Tree 11_60', materials: ['green.001', 'brown.004'] },
+    ]);
+    assert.equal(recs.length, 1);
+    assert.equal(recs[0].groupKey, 'tree-summer-complete');
+    assert.equal(recs[0].species, '11');
+    assert.deepEqual(recs[0].indices, [0]);
+  });
+
+  test('split TREE N + TREE N.001 → single summer record with paired indices', () => {
+    const recs = buildTreeRecords([
+      { name: 'TREE 1_279', materials: ['light_green'] },        // 0 = leaves
+      { name: 'TREE 1.001_280', materials: ['brown'] },          // 1 = trunk
+    ]);
+    assert.equal(recs.length, 1);
+    assert.equal(recs[0].groupKey, 'tree-summer-complete');
+    assert.equal(recs[0].species, '1');
+    assert.deepEqual(recs[0].indices.sort(), [0, 1]);
+  });
+
+  test('all four seasons emit when species has all 8 variants', () => {
+    // Source-GLB node names always end in `_NNN` (exporter index suffix);
+    // the species/variant regex requires that to match.
+    const nodes = [
+      { name: 'TREE 5_100',     materials: ['light_green'] }, // summer leaves
+      { name: 'TREE 5.001_101', materials: ['brown'] },       // summer trunk
+      { name: 'TREE 5.002_102', materials: ['brown.001'] },   // autumn trunk
+      { name: 'TREE 5.003_103', materials: ['orange'] },      // autumn leaves
+      { name: 'TREE 5.004_104', materials: ['brown.002'] },   // winter trunk
+      { name: 'TREE 5.005_105', materials: ['light_blue'] },  // winter leaves
+      { name: 'TREE 5.006_106', materials: ['brown.003'] },   // dead trunk
+      { name: 'TREE 5.007_107', materials: ['material'] },    // dead leaves
+    ];
+    const recs = buildTreeRecords(nodes);
+    const seasons = recs.map(r => r.groupKey).sort();
+    assert.deepEqual(seasons, [
+      'tree-autumn-complete',
+      'tree-dead-complete',
+      'tree-summer-complete',
+      'tree-winter-complete',
+    ]);
+    for (const rec of recs) {
+      assert.equal(rec.indices.length, 2, `${rec.groupKey} should pair leaves+trunk`);
+      assert.equal(rec.species, '5');
+    }
+  });
+
+  test('incomplete species (leaves only) emits nothing for that season', () => {
+    const recs = buildTreeRecords([
+      { name: 'TREE 50_999', materials: ['light_green'] }, // summer leaves, no trunk
+    ]);
+    assert.equal(recs.length, 0);
+  });
+
+  test('lowercase "tree.NNN" big oak: pairs by variant table', () => {
+    const recs = buildTreeRecords([
+      { name: 'tree_278',     materials: ['light_green'] },   // summer leaves
+      { name: 'tree.004_320', materials: ['brown'] },         // summer trunk
+      { name: 'tree.001_380', materials: ['orange'] },        // autumn leaves
+      { name: 'tree.005_422', materials: ['brown.001'] },     // autumn trunk
+    ]);
+    const seasons = recs.map(r => r.groupKey).sort();
+    assert.deepEqual(seasons, ['tree-autumn-complete', 'tree-summer-complete']);
+    for (const rec of recs) {
+      assert.equal(rec.species, 'misc-0');
+      assert.equal(rec.indices.length, 2);
+    }
+  });
+
+  test('non-tree nodes are ignored', () => {
+    const recs = buildTreeRecords([
+      { name: 'Rock 5_540',  materials: ['gray'] },
+      { name: 'cloud 1_26',  materials: ['cloud'] },
+      { name: 'Plane.002_49', materials: ['Material.108'] },
+      { name: 'Trunk 5_112', materials: ['brown.004'] },
+    ]);
+    assert.deepEqual(recs, []);
+  });
+});
+
+describe('classifyTree — species + region from bbox shape', () => {
+  test('round small canopy → birch (NE)', () => {
+    const c = classifyTree({ w: 3, h: 4, d: 3 });
+    assert.equal(c.region, 'new-england');
+    assert.equal(c.species, 'birch');
+  });
+
+  test('tall narrow conifer (h >> w) → pine / hemlock / spruce by height', () => {
+    assert.equal(classifyTree({ w: 4, h: 14, d: 4 }).species, 'white-pine');
+    assert.equal(classifyTree({ w: 4, h: 11, d: 4 }).species, 'hemlock');
+    assert.equal(classifyTree({ w: 4, h: 8,  d: 4 }).species, 'spruce');
+  });
+
+  test('large round deciduous → oak (NE)', () => {
+    const c = classifyTree({ w: 8, h: 13, d: 8 });
+    assert.equal(c.region, 'new-england');
+    assert.equal(c.species, 'oak');
+  });
+
+  test('very wide low canopy → elm / willow', () => {
+    assert.equal(classifyTree({ w: 12, h: 10, d: 12 }).species, 'elm');
+    assert.equal(classifyTree({ w: 12, h: 8,  d: 12 }).species, 'willow');
+  });
+
+  test('extreme tall-thin asymmetric silhouette → palm (tropical, EXCLUDED)', () => {
+    const c = classifyTree({ w: 2, h: 12, d: 0.5 });
+    assert.equal(c.region, 'tropical');
+    assert.equal(c.species, 'palm');
+  });
+
+  test('bad / missing bbox falls back to mixed/new-england', () => {
+    assert.deepEqual(classifyTree(null), { species: 'mixed', region: 'new-england' });
+    assert.deepEqual(classifyTree({}), { species: 'mixed', region: 'new-england' });
+  });
+
+  test('every classification has a region', () => {
+    for (const bbox of [{w:1,h:1,d:1}, {w:5,h:20,d:5}, {w:10,h:5,d:10}, {w:0.5,h:15,d:0.5}]) {
+      const c = classifyTree(bbox);
+      assert.ok(['new-england', 'tropical', 'other'].includes(c.region));
+      assert.ok(typeof c.species === 'string' && c.species.length > 0);
+    }
   });
 });
 
