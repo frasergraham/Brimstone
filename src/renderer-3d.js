@@ -7827,9 +7827,34 @@ export class Renderer3D {
       const instCount = (mesh.instances?.length || 0) + 1;
       totalPolys += triCount * instCount;
     }
-    const activePolys = this._scene.getActiveIndices
-      ? this._scene.getActiveIndices() / 3
-      : 0;
+    // Count active polys by iterating the scene's active-mesh smart-array
+    // directly. Babylon's `scene.getActiveIndices()` returns 0 when read
+    // from onBeforeRender (the perf counter hasn't been written yet for
+    // this frame), so we compute it here instead. Instances share their
+    // source mesh's geometry — count one tris-payload per visible
+    // instance plus the source itself when enabled.
+    let activePolys = 0;
+    const active = this._scene.getActiveMeshes ? this._scene.getActiveMeshes() : null;
+    if (active && active.length > 0) {
+      for (let i = 0; i < active.length; i++) {
+        const m = active.data[i];
+        if (!m || !m.getTotalIndices) continue;
+        const tris = m.getTotalIndices() / 3;
+        if (m.sourceMesh) {
+          // It's an InstancedMesh — count its share once.
+          activePolys += tris;
+        } else {
+          // Source mesh: count itself plus any visible instances.
+          let count = 1;
+          if (m.instances && m.instances.length > 0) {
+            for (const inst of m.instances) {
+              if (inst.isEnabled && inst.isEnabled()) count++;
+            }
+          }
+          activePolys += tris * count;
+        }
+      }
+    }
     polyEl.textContent = formatPolyLabel(totalPolys, activePolys);
   }
 
