@@ -4862,11 +4862,17 @@ export class Renderer3D {
         const tex = new BABYLON.Texture(url, this._scene);
         tex.wrapU = 1; // WRAP
         tex.wrapV = 0; // CLAMP
+        tex.hasAlpha = true;
         mat.diffuseTexture = tex;
-        // White diffuse so the texture passes through at full strength. If
-        // the texture 404s the road will read as white-tinted instead of
-        // black, but the fallback colour path stayed in baseDiff so fog
-        // still darkens.
+        // road-ribbon.png is 21% alpha=0 / 78% opaque — designed with
+        // transparent cut-outs for the road shoulder. Without this flag
+        // Babylon ignores the texture's alpha and renders the cut-out
+        // pixels as their RGB (≈ black), producing dark borders + dark
+        // gaps. Combined with per-vertex alpha (path edges) the final
+        // alpha = vertAlpha × texAlpha, so the road feathered edges still
+        // fade smoothly AND the texture's intended holes stay see-through.
+        mat.useAlphaFromDiffuseTexture = true;
+        // White diffuse so the texture passes through at full strength.
         mat.diffuseColor = new BABYLON.Color3(1, 1, 1);
       } catch (err) {
         console.warn('[Renderer3D] road-ribbon texture setup failed:', err);
