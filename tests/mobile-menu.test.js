@@ -8,6 +8,7 @@
 
 import { describe, test, before } from 'node:test';
 import assert from 'node:assert/strict';
+import { installOverlayShims } from '../src/overlays.js';
 
 // ── Minimal DOM mock ──────────────────────────────────────────────────────────
 // Installed before any module that touches document/canvas is loaded.
@@ -134,15 +135,14 @@ before(async () => {
 });
 
 function makeRenderer() {
-  return {
-    selectedHex:      null,
-    selectedEntityId: null,
-    highlightHexes:   [],
+  const r = {
     planGhostSteps:   [],
     resize()    {},
     loadImages() {},
     draw()      {},
   };
+  installOverlayShims(r);  // overlay API + legacy field proxies
+  return r;
 }
 
 function makeUI() {

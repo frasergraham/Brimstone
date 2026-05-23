@@ -70,6 +70,83 @@ describe('overlaySignature', () => {
   });
 });
 
+describe('target overlays (move / battle / battle-hex)', () => {
+  function makeDouble() {
+    const obj = {};
+    installOverlayShims(obj);
+    return obj;
+  }
+
+  const TARGETS = [
+    { id: 'move-targets',       color: 'rgba(60,220,80,0.22)' },
+    { id: 'battle-targets',     color: 'rgba(220,60,60,0.55)' },
+    { id: 'battle-hex-targets', color: 'rgba(220,120,40,0.50)' },
+    { id: 'guard-zone',         color: 'rgba(230,160,60,0.18)' },
+    { id: 'misc-highlights',    color: 'rgba(100,100,200,0.30)' },
+  ];
+
+  function setTarget(obj, id, color, hexes) {
+    obj.setOverlay(id, makeOverlay({ id, kind: 'fill', layer: 'highlight-disc', hexes, style: { color } }));
+  }
+
+  test('all 5 target ids round-trip through setOverlay/getOverlay with the right colour', () => {
+    const obj = makeDouble();
+    for (const { id, color } of TARGETS) {
+      setTarget(obj, id, color, [{ col: 1, row: 1 }]);
+      const ov = obj.getOverlay(id);
+      assert.ok(ov, `${id} should exist`);
+      assert.equal(ov.style.color, color);
+      assert.equal(ov.layer, 'highlight-disc');
+      assert.equal(ov.kind, 'fill');
+      assert.ok(ov.hexes.has('1,1'));
+    }
+  });
+
+  test("clearOverlaysByLayer('highlight-disc') removes all 5 but leaves other layers", () => {
+    const obj = makeDouble();
+    for (const { id, color } of TARGETS) setTarget(obj, id, color, [{ col: 0, row: 0 }]);
+    // A selection overlay in a different layer must survive the clear.
+    obj.setSelection({ entityId: 3, hex: { col: 9, row: 9 } });
+    assert.ok(obj._overlays.has('selection'));
+
+    obj.clearOverlaysByLayer('highlight-disc');
+    for (const { id } of TARGETS) assert.ok(!obj._overlays.has(id), `${id} should be cleared`);
+    assert.ok(obj._overlays.has('selection'), 'selection (other layer) survives');
+  });
+
+  test("removeOverlay('move-targets') removes only that id", () => {
+    const obj = makeDouble();
+    setTarget(obj, 'move-targets',   'rgba(60,220,80,0.22)', [{ col: 0, row: 0 }]);
+    setTarget(obj, 'battle-targets', 'rgba(220,60,60,0.55)', [{ col: 1, row: 1 }]);
+    obj.removeOverlay('move-targets');
+    assert.ok(!obj._overlays.has('move-targets'));
+    assert.ok(obj._overlays.has('battle-targets'));
+  });
+
+  test('setOverlay(id, null) is a removal', () => {
+    const obj = makeDouble();
+    setTarget(obj, 'move-targets', 'rgba(60,220,80,0.22)', [{ col: 0, row: 0 }]);
+    obj.setOverlay('move-targets', null);
+    assert.ok(!obj._overlays.has('move-targets'));
+  });
+
+  test('setOverlay rejects a non-frozen literal (must use makeOverlay)', () => {
+    const obj = makeDouble();
+    assert.throws(() => obj.setOverlay('x', { id: 'x', kind: 'fill', layer: 'highlight-disc' }));
+  });
+
+  test('setOverlay upserts: same id replaces, never duplicates', () => {
+    const obj = makeDouble();
+    setTarget(obj, 'move-targets', 'rgba(60,220,80,0.22)', [{ col: 0, row: 0 }]);
+    setTarget(obj, 'move-targets', 'rgba(60,220,80,0.22)', [{ col: 5, row: 5 }]);
+    const ids = [...obj._overlays.keys()].filter(k => k === 'move-targets');
+    assert.equal(ids.length, 1);
+    const ov = obj._overlays.get('move-targets');
+    assert.ok(ov.hexes.has('5,5'));
+    assert.ok(!ov.hexes.has('0,0'));
+  });
+});
+
 describe('legacy field proxy', () => {
   function makeDouble() {
     const obj = {};
@@ -77,24 +154,27 @@ describe('legacy field proxy', () => {
     return obj;
   }
 
-  test('highlightHexes setter creates a move-targets overlay', () => {
+  test('highlightHexes setter is a deprecated no-op (does not mutate overlays)', () => {
     const obj = makeDouble();
-    obj.highlightHexes = [{ col: 1, row: 1, color: 'rgba(60,220,80,0.22)' }];
-    assert.ok(obj._overlays.has('move-targets'));
-    assert.ok(obj._overlays.get('move-targets').hexes.has('1,1'));
+    const origWarn = console.warn;
+    let warned = 0;
+    console.warn = () => { warned++; };
+    try {
+      obj.highlightHexes = [{ col: 1, row: 1, color: 'rgba(60,220,80,0.22)' }];
+    } finally {
+      console.warn = origWarn;
+    }
+    assert.ok(!obj._overlays.has('move-targets'), 'setter must not create overlays');
+    // Warn fires at most once globally; allow 0 (already warned in a prior test).
+    assert.ok(warned <= 1);
   });
 
-  test('highlightHexes = [] clears the overlay', () => {
+  test('highlightHexes getter reconstructs from the overlay map', () => {
     const obj = makeDouble();
-    obj.highlightHexes = [{ col: 1, row: 1, color: 'rgba(60,220,80,0.22)' }];
-    obj.highlightHexes = [];
-    assert.ok(!obj._overlays.has('move-targets'));
-    assert.deepEqual(obj.highlightHexes, []);
-  });
-
-  test('highlightHexes getter round-trips col/row/color', () => {
-    const obj = makeDouble();
-    obj.highlightHexes = [{ col: 2, row: 3, color: 'rgba(220,60,60,0.55)' }];
+    obj.setOverlay('battle-targets', makeOverlay({
+      id: 'battle-targets', kind: 'fill', layer: 'highlight-disc',
+      hexes: [{ col: 2, row: 3 }], style: { color: 'rgba(220,60,60,0.55)' },
+    }));
     assert.deepEqual(obj.highlightHexes, [{ col: 2, row: 3, color: 'rgba(220,60,60,0.55)' }]);
   });
 

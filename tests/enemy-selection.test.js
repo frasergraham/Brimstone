@@ -11,6 +11,7 @@ import {
   makeFakeRenderer,
   makeFakeCanvas,
 } from './ui/setup.js';
+import { makeOverlay } from '../src/overlays.js';
 
 const { fakeCanvas, _elements } = installGlobalMocks();
 
@@ -71,7 +72,12 @@ describe('enemy unit view-only selection', () => {
 
   test('enemy selection clears highlight hexes', () => {
     const { ui, state, renderer } = makeUI();
-    renderer.highlightHexes = [{ col: 0, row: 0 }];
+    // Seed a move-target overlay via the overlay API, then confirm enemy
+    // selection clears the highlight-disc layer.
+    renderer.setOverlay('move-targets', makeOverlay({
+      id: 'move-targets', kind: 'fill', layer: 'highlight-disc',
+      hexes: [{ col: 0, row: 0 }], style: { color: 'rgba(60,220,80,0.22)' },
+    }));
     const enemy = state.entities.find(e => e.owner === 'witch' && e.alive);
     ui._selectEnemyEntity(enemy);
 
