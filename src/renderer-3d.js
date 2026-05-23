@@ -4316,12 +4316,19 @@ export class Renderer3D {
     if (exits.length === 0) return;
     // Build via the SAME helper as the playable-map river ribbons — same
     // 'river' branch, so the extension picks up the river-ribbon texture,
-    // useAlphaFromDiffuseTexture, white diffuse, zero emissive. The
-    // extension's wilderness fade now comes from the texture's alpha and
-    // the existing tapered amplitude (it winds, narrows, fades) rather than
-    // a hand-multiplied fog tint — the playable river and its wilderness
-    // continuation read as one continuous flow.
+    // useAlphaFromDiffuseTexture, zero emissive. THEN multiply diffuseColor
+    // by _fogTileDarken so the textured extension always reads as
+    // wilderness-beyond-sight (matching the border-forest hex tiles it
+    // weaves through — which are permanently fogged). The sampled texel is
+    // texture.rgb × diffuseColor.rgb, so this darkens the entire extension
+    // ribbon by FOG_TILE_DARKEN regardless of the actual fog veil state.
     const extMat = this._buildRibbonMaterial('river', TILE_COLOR[TileType.RIVER]);
+    const k = this._fogTileDarken;
+    if (extMat.diffuseColor) {
+      extMat.diffuseColor.r *= k;
+      extMat.diffuseColor.g *= k;
+      extMat.diffuseColor.b *= k;
+    }
     // Extend one hex past the outermost band tile so the ribbon's far end
     // clearly carries past the band's silhouette instead of fading inside it.
     // Centre-to-centre spacing in any axial direction is SQRT3 world units.
