@@ -7893,6 +7893,16 @@ export class Renderer3D {
    *  even when game state is idle. */
   _onBeforeRender() {
     const now = this._nowMs();
+    // Lock the camera target to the ground plane (Y=0). Babylon's
+    // ArcRotateCamera pan moves the target along the screen-aligned plane
+    // (perpendicular to look direction), so panning vertically on screen
+    // would drift target.y above or below the ground — and since camera
+    // position is target + radius offset, that drift propagates into camera
+    // Y. Clamping target.y here keeps the camera at a fixed height (radius
+    // offset above the ground) no matter how the operator pans.
+    if (this._camera && this._camera.target && this._camera.target.y !== 0) {
+      this._camera.target.y = 0;
+    }
     // Pan extent clamp — runs every frame so inertial overshoot past the map
     // edge is corrected by the next render. Bounds come from
     // `panBoundsForPlayableExtent`, which keeps the camera target inside the
