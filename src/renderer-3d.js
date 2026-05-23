@@ -3526,7 +3526,11 @@ export class Renderer3D {
     // is radiusForStandardFit (so larger maps must be panned to view in full)
     // and the floor is radiusForCloseFit(MIN_VISIBLE_HEXES) (so the camera
     // can't dive inside meshes at max zoom-in).
-    camera.lowerRadiusLimit = 1.5;
+    // Lower radius capped at 6 wu — at ~radius 6 the camera frame holds
+    // roughly 3-4 hex tiles which is the closest sensible inspection zoom
+    // without the camera diving inside meshes. Previous value (1.5) let
+    // the operator zoom in until the camera sat inside a single hex.
+    camera.lowerRadiusLimit = 6;
     camera.upperRadiusLimit = 80;
     camera.wheelDeltaPercentage = 0.02; // smoother wheel zoom (legacy default — wheel handled by custom input)
     camera.pinchDeltaPercentage = 0.005;
