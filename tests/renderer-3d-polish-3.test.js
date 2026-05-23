@@ -18,7 +18,7 @@ import {
   CAMERA_BETA_LOCKED,
   SELECTION_PULSE_MIN,
   SELECTION_PULSE_MAX,
-  PLAN_DISC_Y,
+  PLAN_WAYPOINT_Y,
 } from '../src/renderer-3d.js';
 
 // ── Fog visibility (item 2: HP bars follow standee visibility) ─────────────
@@ -89,15 +89,15 @@ describe('Renderer3D round-3 polish — movementHighlightPosition', () => {
     }
   });
 
-  test('Y is the configured disc height (above tile prism, below plan disc)', () => {
+  test('Y is the configured disc height (above tile prism, below plan-arrow layer)', () => {
     const { y } = movementHighlightPosition(0, 0);
     assert.equal(y, HIGHLIGHT_DISC_Y);
     // tile prism top sits at 0.075 → highlight must clear it visually.
     assert.ok(y > 0.075, `highlight Y ${y} must clear tile prism top (0.075)`);
-    // ...but stay BELOW the plan-marker disc so when both are present the
-    // plan marker remains the dominant visual cue.
-    assert.ok(y < PLAN_DISC_Y,
-      `highlight Y ${y} must sit below PLAN_DISC_Y (${PLAN_DISC_Y})`);
+    // ...but stay BELOW the plan-arrow layer (waypoint puck) so when both are
+    // present the plan marker remains the dominant visual cue.
+    assert.ok(y < PLAN_WAYPOINT_Y,
+      `highlight Y ${y} must sit below PLAN_WAYPOINT_Y (${PLAN_WAYPOINT_Y})`);
   });
 });
 

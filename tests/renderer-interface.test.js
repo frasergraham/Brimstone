@@ -126,10 +126,11 @@ describe('Renderer3D — interface conformance with 2D Renderer', () => {
     // Spot-check the slots assigned externally by main.js / ui.js.
     const slots = [
       'onImagesLoaded', 'aiDebugOverlay', 'insetLeft', 'insetRight',
-      // selectedHex / selectedEntityId / hoveredHex field proxies were retired
-      // in PR 3 — selection / hover now live on _selection / _hover and flow
-      // through setSelection() / setHover(). highlightHexes stays as a getter.
-      '_selection', '_hover', 'highlightHexes',
+      // selectedHex / selectedEntityId / hoveredHex / highlightHexes field
+      // proxies were all retired across PRs 3–5 — selection / hover now live on
+      // _selection / _hover and flow through setSelection() / setHover();
+      // highlights flow through setOverlay() / getOverlay().
+      '_selection', '_hover',
       'planGhostSteps', 'viewLocked', 'zoomLevel', 'hexSize',
       'useTileImages', '_zoomAnim', '_panX', '_panY',
     ];

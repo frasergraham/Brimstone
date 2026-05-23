@@ -14,7 +14,7 @@ import {
   planGhostPose,
   PLAN_GHOST_STEP_MS,
   PLAN_GHOST_FADE_MS,
-  PLAN_DISC_Y,
+  PLAN_WAYPOINT_Y,
   PLAN_DISC_ALPHA,
   PLAN_GHOST_ALPHA,
   BUILDING_OFFSET,
@@ -313,9 +313,9 @@ describe('Renderer3D polish — planGhostPose', () => {
 // ── Plan-disc visual constants (item 3) ─────────────────────────────────────
 
 describe('Renderer3D polish — plan-marker disc constants', () => {
-  test('disc Y clears the tile prism top (0.075) and the road deck top (0.155)', () => {
-    assert.ok(PLAN_DISC_Y > 0.155,
-      `PLAN_DISC_Y ${PLAN_DISC_Y} must exceed road deck top (0.155)`);
+  test('waypoint puck Y clears the tile prism top (0.075) and the road deck top (0.155)', () => {
+    assert.ok(PLAN_WAYPOINT_Y > 0.155,
+      `PLAN_WAYPOINT_Y ${PLAN_WAYPOINT_Y} must exceed road deck top (0.155)`);
   });
 
   test('disc alpha is opaque enough to read at a glance', () => {

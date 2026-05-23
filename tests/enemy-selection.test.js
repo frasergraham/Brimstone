@@ -81,7 +81,11 @@ describe('enemy unit view-only selection', () => {
     const enemy = state.entities.find(e => e.owner === 'witch' && e.alive);
     ui._selectEnemyEntity(enemy);
 
-    assert.deepEqual(renderer.highlightHexes, [], 'highlights should be empty');
+    // Highlights should be cleared — no overlays remain in the highlight-disc
+    // layer. (Migrated off the retired `highlightHexes` getter in PR 5.)
+    const remaining = [...renderer._overlays.values()]
+      .filter(ov => ov.layer === 'highlight-disc');
+    assert.deepEqual(remaining, [], 'highlights should be empty');
   });
 
   test('_clearSelection resets _isEnemySelection', () => {
