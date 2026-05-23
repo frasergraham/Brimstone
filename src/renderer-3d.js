@@ -121,10 +121,12 @@ export const HOUSE_INSTANCE_BASE_SCALE = 0.55;
 export const TREE_PACK_DIR           = 'models/trees/';
 export const TREE_PACK_MANIFEST_FILE = 'manifest.json';
 // Target world-space height for an instanced tree (post bbox-derived scale,
-// before the per-tree FOREST_SCALE_MIN..MAX multiplier). Picked so the GLB
-// trees occupy roughly the same vertical envelope as the procedural pine
-// stack (~1.3 world units), leaving headroom for the per-tree scale jitter.
-export const TARGET_TREE_WORLD_HEIGHT = 1.0;
+// before the per-tree FOREST_SCALE_MIN..MAX multiplier). Bumped from 1.0 →
+// 1.8 after operator feedback: at 1.0 the new GLB trees read as much
+// smaller than the old procedural pines, making the forest look sparse.
+// 1.8 gives them more presence than the procedural stack while staying
+// within one hex's footprint.
+export const TARGET_TREE_WORLD_HEIGHT = 1.8;
 
 /** Map a season tag (as used by `_buildMap` / forestTreesForHex) to the
  *  manifest group name we should pull tree GLBs from. Pure; exported for
