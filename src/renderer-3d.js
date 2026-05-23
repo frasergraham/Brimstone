@@ -110,6 +110,63 @@ export function _bakeOriginToBottom(source, BABYLON) {
 // `gltf-transform` resize pass — see PR body for the offline recipe.
 export const HOUSE_INSTANCE_BASE_SCALE = 0.55;
 
+// ─── Tree pack (real GLB trees from `assets/models/trees/`) ────────────────
+// Phase 1 (PR #381) extracted `tree_pack.glb` into per-model GLBs + a manifest
+// indexed by group ("tree-summer-complete", etc.). Phase 2 (this code) loads
+// the manifest at renderer init, lazy-loads each unique GLB as a hidden
+// template, and the FOREST tile + map-border builders instance the templates
+// in place of the procedural cone+sphere trees. Procedural fallback stays
+// alive — any load failure or missing season bucket falls through to the
+// existing batched merge path so a missing manifest never blocks gameplay.
+export const TREE_PACK_DIR           = 'models/trees/';
+export const TREE_PACK_MANIFEST_FILE = 'manifest.json';
+// Target world-space height for an instanced tree (post bbox-derived scale,
+// before the per-tree FOREST_SCALE_MIN..MAX multiplier). Picked so the GLB
+// trees occupy roughly the same vertical envelope as the procedural pine
+// stack (~1.3 world units), leaving headroom for the per-tree scale jitter.
+export const TARGET_TREE_WORLD_HEIGHT = 1.0;
+
+/** Map a season tag (as used by `_buildMap` / forestTreesForHex) to the
+ *  manifest group name we should pull tree GLBs from. Pure; exported for
+ *  tests. The "complete" buckets are pre-built single-mesh trees (trunk +
+ *  leaves combined) — the only group shape this loader needs to handle.
+ *  Spring leans on summer because the seasonal palettes also treat it as a
+ *  green-canopy variant. Falls back to summer when the season is unknown so
+ *  any future season tag still resolves to a real bucket. */
+export function treeGroupsForSeason(season) {
+  switch (season) {
+    case 'summer': return 'tree-summer-complete';
+    case 'spring': return 'tree-summer-complete';
+    case 'fall':
+    case 'autumn': return 'tree-autumn-complete';
+    case 'winter': return 'tree-winter-complete';
+    case 'dead':   return 'tree-dead-complete';
+    default:       return 'tree-summer-complete';
+  }
+}
+
+/** Deterministic [0,1) hash from (col, row, salt). Module-internal hex
+ *  hash duplicated here so the export below can ship without dragging
+ *  `_forestHash` (defined far below in this file) into scope. */
+function _treePackHash(col, row, salt) {
+  let h = ((col | 0) * 73856093) ^ ((row | 0) * 19349663) ^ ((salt | 0) * 83492791);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  h = (h ^ (h >>> 16)) >>> 0;
+  return h / 0x100000000;
+}
+
+/** Deterministic pick of a file from a manifest group for one tree slot.
+ *  `files` is the array of file paths the manifest lists under the chosen
+ *  group; the hash key is (col, row, treeIdx) so the same hex always picks
+ *  the same tree silhouette across sessions. Returns null when the group
+ *  is empty or missing — caller should fall back to the procedural path
+ *  for that slot. Pure; exported for tests. */
+export function pickTreeFileForSlot(files, col, row, treeIdx) {
+  if (!Array.isArray(files) || files.length === 0) return null;
+  const h = _treePackHash(col, row, treeIdx * 11 + 7);
+  return files[Math.floor(h * files.length) % files.length];
+}
+
 // ─── Paladin GLB model (replaces cone+sphere body for hero-side standees) ──
 // Path is relative to the assets base directory captured by `loadImages()` —
 // the loader fetches `<base>/models/paladin.glb`. The file is intentionally
@@ -1117,6 +1174,23 @@ export class Renderer3D {
     this._houseSourceMesh = null;
     this._houseLoadPromise = null; // de-dupes concurrent load attempts
     this._assetsBasePath   = null; // captured by loadImages()
+    // ── Tree-pack GLB state (see `_loadTreePackManifest`) ─────────────────
+    // `_treeTemplates`     : Map<filename, mesh>   — hidden source meshes,
+    //                       one per unique GLB file loaded from the manifest.
+    //                       Instances reference these via createInstance().
+    // `_treeGroupsByName`  : Map<groupName, filename[]> — manifest group →
+    //                       loaded filenames in that group. The seasonal
+    //                       FOREST builder picks one filename per tree slot
+    //                       via `pickTreeFileForSlot`.
+    // `_treePackLoadPromise`: de-dupes concurrent load attempts.
+    // `_useRealTrees`      : feature flag — true once at least one template
+    //                       loaded. False keeps the procedural cone+sphere
+    //                       path active (intentional fallback so a missing
+    //                       manifest never blocks gameplay).
+    this._treeTemplates      = new Map();
+    this._treeGroupsByName   = new Map();
+    this._treePackLoadPromise = null;
+    this._useRealTrees       = false;
     // ── Paladin GLB model state (see `_loadPaladinModel`) ─────────────────
     // _paladinSource: { mesh, skeleton, idleGroup } — the imported source
     // skinned mesh, its skeleton, and the idle AnimationGroup. Each hero
@@ -1760,6 +1834,333 @@ export class Renderer3D {
     // already frozen on initial build; disposing unfreezes nothing the GPU
     // still cares about, but the new instances need their world matrices
     // locked too.
+    if (upgraded > 0) this._freezeStaticMeshes();
+    return upgraded;
+  }
+
+  /** Lazy-load the tree-pack manifest at `<basePath>/<TREE_PACK_DIR>manifest.json`
+   *  and import every unique GLB file it lists. Each GLB lands as a hidden
+   *  template mesh (`setEnabled(false)`); the FOREST + map-border-forest
+   *  builders later call `createInstance()` on these templates so a forest
+   *  hex with 5 trees still costs one draw call per unique template the GPU
+   *  has to dispatch.
+   *
+   *  Single-mesh GLBs are used directly. Multi-mesh / multi-material GLBs
+   *  collapse via MergeMeshes (mirrors `_loadHouseModel`'s recipe). A
+   *  per-template uniform scale is computed at load time so the template's
+   *  bbox-height lands at TARGET_TREE_WORLD_HEIGHT — instances then apply
+   *  the per-tree FOREST_SCALE_MIN..MAX multiplier on top of that.
+   *
+   *  The manifest is intentionally optional — any fetch / parse / import
+   *  failure leaves `_useRealTrees = false`, so the procedural cone+sphere
+   *  path stays active. Test environments can pre-stub `_treeTemplates` /
+   *  `_treeGroupsByName` / `_useRealTrees` to drive the build paths without
+   *  exercising the network. */
+  async _loadTreePackManifest(basePath = 'assets') {
+    if (!this._babylon || !this._scene) return null;
+    if (this._useRealTrees) return this._treeTemplates;
+    if (this._treePackLoadPromise) return this._treePackLoadPromise;
+    const BABYLON = this._babylon;
+
+    const promise = (async () => {
+      await this._ensureBabylonLoaders();
+      if (!BABYLON.SceneLoader || typeof BABYLON.SceneLoader.ImportMeshAsync !== 'function') {
+        console.warn('[Renderer3D] BABYLON.SceneLoader.ImportMeshAsync unavailable; skipping tree pack.');
+        return null;
+      }
+
+      // Step 1: fetch manifest. `fetch` is the only network call here — the
+      // GLB loads below go through SceneLoader.ImportMeshAsync which is
+      // already wired for asset paths.
+      let manifest;
+      try {
+        const fetchFn = (typeof globalThis !== 'undefined' && typeof globalThis.fetch === 'function')
+          ? globalThis.fetch.bind(globalThis) : null;
+        if (!fetchFn) {
+          console.warn('[Renderer3D] global fetch unavailable; skipping tree pack.');
+          return null;
+        }
+        const url = `${basePath}/${TREE_PACK_DIR}${TREE_PACK_MANIFEST_FILE}`;
+        const res = await fetchFn(url);
+        if (!res || !res.ok) {
+          console.warn(`[Renderer3D] tree pack manifest fetch failed (${res?.status}); using procedural trees.`);
+          return null;
+        }
+        manifest = await res.json();
+      } catch (err) {
+        console.warn('[Renderer3D] tree pack manifest fetch failed; using procedural trees.', err);
+        return null;
+      }
+
+      const groups = manifest?.groups;
+      if (!groups || typeof groups !== 'object') {
+        console.warn('[Renderer3D] tree pack manifest has no `groups` field; using procedural trees.');
+        return null;
+      }
+
+      // Step 2: collect every unique file across the "complete" tree groups.
+      // Only complete-buckets are loaded — the trunk/leaves split groups
+      // aren't used by this loader (they'd need pairwise composition). Other
+      // groups (rocks, grass, clouds) are intentionally out of scope for
+      // this PR.
+      const wantedGroups = [];
+      for (const name of Object.keys(groups)) {
+        if (/-complete$/.test(name)) wantedGroups.push(name);
+      }
+      if (wantedGroups.length === 0) {
+        console.warn('[Renderer3D] tree pack manifest has no *-complete groups; using procedural trees.');
+        return null;
+      }
+
+      const uniqueFiles = new Set();
+      const filesByGroup = new Map(); // groupName → array of file paths
+      for (const g of wantedGroups) {
+        const entries = Array.isArray(groups[g]) ? groups[g] : [];
+        const list = [];
+        for (const e of entries) {
+          if (e && typeof e.file === 'string' && e.file.length > 0) {
+            uniqueFiles.add(e.file);
+            list.push(e.file);
+          }
+        }
+        if (list.length > 0) filesByGroup.set(g, list);
+      }
+      if (uniqueFiles.size === 0) {
+        console.warn('[Renderer3D] tree pack manifest listed no tree files; using procedural trees.');
+        return null;
+      }
+
+      // Step 3: import every unique file in parallel. Each import resolves
+      // to a single template mesh (single-submesh imports use the mesh
+      // directly; multi-submesh imports merge first). Failures are isolated
+      // per-file so one bad GLB doesn't kill the whole pack.
+      const baseUrl = `${basePath}/${TREE_PACK_DIR}`;
+      const loadOne = async (file) => {
+        let result;
+        try {
+          result = await BABYLON.SceneLoader.ImportMeshAsync(
+            null, baseUrl, file, this._scene,
+          );
+        } catch (err) {
+          console.warn(`[Renderer3D] tree GLB load failed (${file}); skipping.`, err);
+          return null;
+        }
+        const realMeshes = (result?.meshes || []).filter(m =>
+          m && typeof m.getTotalVertices === 'function' && m.getTotalVertices() > 0,
+        );
+        if (realMeshes.length === 0) return null;
+        let source = realMeshes[0];
+        if (realMeshes.length > 1 && typeof BABYLON.Mesh?.MergeMeshes === 'function') {
+          try {
+            const merged = BABYLON.Mesh.MergeMeshes(
+              realMeshes, true, true, undefined, false, true,
+            );
+            if (merged) source = merged;
+          } catch (err) {
+            console.warn(`[Renderer3D] tree GLB merge failed (${file}); using first submesh.`, err);
+          }
+        }
+        if (!source) return null;
+        // Drop the mesh pivot to the floor so instances anchor at Y=0.
+        _bakeOriginToBottom(source, BABYLON);
+        // Hide template — instances render geometry on its behalf.
+        if (typeof source.setEnabled === 'function') source.setEnabled(false);
+        source.isPickable = false;
+        if (typeof source.renderingGroupId !== 'undefined') source.renderingGroupId = 0;
+        // Stash a bbox-derived per-template uniform scale so callers don't
+        // re-measure on every instance. Falls back to 1.0 when bbox is
+        // unavailable (test stubs) — caller can multiply by the per-tree
+        // FOREST_SCALE_MIN..MAX jitter on top.
+        let templateScale = 1.0;
+        try {
+          const info = typeof source.getBoundingInfo === 'function' ? source.getBoundingInfo() : null;
+          const bb = info?.boundingBox;
+          const minY = bb?.minimumWorld?.y ?? bb?.minimum?.y ?? 0;
+          const maxY = bb?.maximumWorld?.y ?? bb?.maximum?.y ?? 0;
+          const h = Math.max(1e-3, maxY - minY);
+          templateScale = TARGET_TREE_WORLD_HEIGHT / h;
+        } catch { /* keep templateScale = 1 */ }
+        source.metadata = Object.assign(source.metadata || {}, {
+          kind: 'tree-template', file, templateScale,
+        });
+        return source;
+      };
+
+      const fileList = Array.from(uniqueFiles);
+      const loaded = await Promise.all(fileList.map(loadOne));
+      for (let i = 0; i < fileList.length; i++) {
+        const mesh = loaded[i];
+        if (mesh) this._treeTemplates.set(fileList[i], mesh);
+      }
+      if (this._treeTemplates.size === 0) {
+        console.warn('[Renderer3D] tree pack: no templates loaded; using procedural trees.');
+        return null;
+      }
+
+      // Filter group → file lists down to files that actually loaded.
+      for (const [g, files] of filesByGroup) {
+        const ok = files.filter(f => this._treeTemplates.has(f));
+        if (ok.length > 0) this._treeGroupsByName.set(g, ok);
+      }
+      if (this._treeGroupsByName.size === 0) {
+        console.warn('[Renderer3D] tree pack: no usable groups after filter; using procedural trees.');
+        return null;
+      }
+
+      console.log(
+        `[Renderer3D] tree pack loaded: ${this._treeTemplates.size} templates`
+        + ` across ${this._treeGroupsByName.size} group(s).`,
+      );
+      this._useRealTrees = true;
+      // Retrofit any forest tiles built before the load completed.
+      if (this._mapBuilt) this._upgradeForestToRealTrees();
+      return this._treeTemplates;
+    })();
+
+    this._treePackLoadPromise = promise;
+    return promise;
+  }
+
+  /** Create one real-tree InstancedMesh for a given tree slot. Picks the
+   *  template via `pickTreeFileForSlot` against the season's group; falls
+   *  back to a clone if `createInstance` isn't supported on the test stub.
+   *  Returns null when no template is available (caller falls back to the
+   *  procedural cone+sphere path for that slot). */
+  _buildRealTreeInstance(parent, col, row, tree, treeIdx, namePrefix, opts = {}) {
+    if (!this._useRealTrees || !this._babylon) return null;
+    const BABYLON = this._babylon;
+    const season  = opts.season ?? this._season;
+    const group   = treeGroupsForSeason(season);
+    const files   = this._treeGroupsByName.get(group);
+    if (!files || files.length === 0) return null;
+    const file = pickTreeFileForSlot(files, col, row, treeIdx);
+    if (!file) return null;
+    const template = this._treeTemplates.get(file);
+    if (!template) return null;
+
+    const instName = `${namePrefix}_t${treeIdx}_real`;
+    let inst = null;
+    if (typeof template.createInstance === 'function') {
+      inst = template.createInstance(instName);
+    } else if (typeof template.clone === 'function') {
+      inst = template.clone(instName);
+    }
+    if (!inst) return null;
+
+    if (parent && 'parent' in inst) inst.parent = parent;
+    const templateScale = template.metadata?.templateScale ?? 1.0;
+    const s = templateScale * (tree.scale || 1.0);
+    if (BABYLON.Vector3 && (inst.scaling == null || typeof inst.scaling === 'object')) {
+      inst.scaling = new BABYLON.Vector3(s, s, s);
+    }
+    const yaw = _treePackHash(col, row, treeIdx * 17 + 3) * Math.PI * 2;
+    if (BABYLON.Vector3 && (inst.rotation == null || typeof inst.rotation === 'object')) {
+      inst.rotation = new BABYLON.Vector3(0, yaw, 0);
+    }
+    if (inst.position && typeof inst.position === 'object') {
+      inst.position.x = (opts.cx ?? 0) + tree.x;
+      inst.position.y = 0; // bbox bottom already baked to local Y=0
+      inst.position.z = (opts.cz ?? 0) + tree.z;
+    }
+    inst.isPickable = false;
+    if (typeof inst.renderingGroupId !== 'undefined') inst.renderingGroupId = 0;
+    // Trees stay visible under fog — permanent terrain. Matches the
+    // procedural cone+sphere metadata in _buildTileMesh.
+    inst.metadata = { respectsFog: false, kind: 'tree-glb', col, row, file };
+    this._addShadowCaster(inst);
+    return inst;
+  }
+
+  /** Build instances for every tree on one forest hex (in-map or border).
+   *  Returns the array of instances. Falls back to an empty array when
+   *  `_useRealTrees` is false or no template resolves for any slot — caller
+   *  should consult the return and fall back to the procedural path when
+   *  empty. */
+  _buildRealForestTreesForHex(parent, col, row, cx, cz, trees, namePrefix, opts = {}) {
+    if (!trees || trees.length === 0) return [];
+    const out = [];
+    for (let i = 0; i < trees.length; i++) {
+      const inst = this._buildRealTreeInstance(
+        parent, col, row, trees[i], i, namePrefix, { ...opts, cx, cz },
+      );
+      if (inst) out.push(inst);
+    }
+    return out;
+  }
+
+  /** Retrofit forest tiles built before the tree-pack manifest finished
+   *  loading. Walks every FOREST tile in `_tilePropsByKey` and the entire
+   *  map-border band, disposes the procedural cone+sphere merged meshes,
+   *  and rebuilds them as real-tree instances. Idempotent — tiles that
+   *  already hold a real-tree instance are skipped. Mirrors
+   *  `_upgradeBuildingsToHouseModel`. */
+  _upgradeForestToRealTrees() {
+    if (!this._mapBuilt || !this._useRealTrees || !this.state?.tiles) return 0;
+    let upgraded = 0;
+
+    // In-map FOREST tiles — props key is hexKey, identifies the cluster by
+    // the `forest_${col}_${row}_*` name prefix the procedural builder uses.
+    for (const tile of this.state.tiles.values()) {
+      if (tile.type !== TileType.FOREST) continue;
+      const tkey  = hexKey(tile.col, tile.row);
+      const props = this._tilePropsByKey.get(tkey) || [];
+      // Skip if this tile already holds a real-tree instance.
+      if (props.some(m => m?.metadata?.kind === 'tree-glb')) continue;
+      const procIdx = [];
+      for (let i = 0; i < props.length; i++) {
+        const name = props[i]?.name || '';
+        if (name.startsWith(`forest_${tile.col}_${tile.row}_`)) procIdx.push(i);
+      }
+      if (procIdx.length === 0) continue;
+      const { x, z } = hexToWorld(tile.col, tile.row);
+      const trees = forestTreesForHex(tile.col, tile.row, this._season);
+      const namePrefix = `forest_${tile.col}_${tile.row}`;
+      const insts = this._buildRealForestTreesForHex(
+        this._mapRoot, tile.col, tile.row, x, z, trees, namePrefix,
+        { season: this._season },
+      );
+      if (insts.length === 0) continue;
+      // Dispose old procedural cluster meshes (back-to-front to keep
+      // indices valid as we splice).
+      for (let i = procIdx.length - 1; i >= 0; i--) {
+        const m = props[procIdx[i]];
+        if (m && typeof m.dispose === 'function') m.dispose();
+        props.splice(procIdx[i], 1);
+      }
+      for (const m of insts) props.push(m);
+      this._tilePropsByKey.set(tkey, props);
+      upgraded++;
+    }
+
+    // Border forest — collapse the cross-tile merged meshes and rebuild
+    // per-tile instances. Border tiles aren't in state.tiles so iterate
+    // the `_borderForestHexesByKey` map (each entry's mesh metadata
+    // carries col + row from `_buildMapBorderForest`).
+    if (this._borderForestBatchMeshes && this._borderForestBatchMeshes.length > 0) {
+      for (const m of this._borderForestBatchMeshes) {
+        if (m && typeof m.dispose === 'function') m.dispose();
+      }
+      this._borderForestBatchMeshes = [];
+    }
+    for (const [, hex] of this._borderForestHexesByKey) {
+      const md = hex?.metadata;
+      if (!md) continue;
+      const { col, row } = md;
+      const { x, z } = hexToWorld(col, row);
+      const trees = forestTreesForHex(col, row, this._season).filter(t =>
+        !this._borderTreeBlockedByRiver(x + t.x, z + t.z),
+      );
+      if (trees.length === 0) continue;
+      const namePrefix = `border_forest_${col}_${row}`;
+      const insts = this._buildRealForestTreesForHex(
+        this._mapRoot, col, row, x, z, trees, namePrefix, { season: this._season },
+      );
+      for (const m of insts) {
+        this._borderForestBatchMeshes.push(m);
+        upgraded++;
+      }
+    }
+
     if (upgraded > 0) this._freezeStaticMeshes();
     return upgraded;
   }
@@ -3178,6 +3579,14 @@ export class Renderer3D {
     // `_loadPaladinModel`.
     this._loadPaladinModel(this._assetsBasePath || 'assets');
 
+    // Kick off the tree-pack manifest + per-model GLB loads asynchronously.
+    // Fire-and-forget — `_buildMap` runs synchronously right after and
+    // FOREST tiles + the map-border forest render with the procedural
+    // cone+sphere fallback. Once the manifest resolves,
+    // `_upgradeForestToRealTrees` retrofits every forest cluster with real
+    // GLB-tree instances. Errors are caught inside `_loadTreePackManifest`.
+    this._loadTreePackManifest(this._assetsBasePath || 'assets');
+
     // Build the map from current state and frame it (instant — no animation
     // on the very first frame, otherwise the camera "slides in" from the
     // arbitrary radius=20 starting point).
@@ -3795,13 +4204,31 @@ export class Renderer3D {
       if (trees.length > 0) {
         treeJobs.push({
           namePrefix: `border_forest_${pos.col}_${pos.row}`,
-          cx: x, cz: z, trees,
+          cx: x, cz: z, trees, col: pos.col, row: pos.row,
         });
       }
     }
-    const mergedTreeMeshes = this._buildBorderForestTreesBatched(parent, treeJobs, { season: this._season });
-    for (const m of mergedTreeMeshes) this._addShadowCaster(m);
-    this._borderForestBatchMeshes = mergedTreeMeshes;
+    // Real GLB trees take precedence when the manifest has loaded with a
+    // template for this season; otherwise the original cross-tile batched
+    // merge path takes over so the band still renders. Real-tree path
+    // builds per-tile instances (one createInstance call per tree); Babylon
+    // hardware-instancing collapses that to one draw call per template.
+    let bandTreeMeshes = [];
+    if (this._useRealTrees) {
+      for (const job of treeJobs) {
+        const insts = this._buildRealForestTreesForHex(
+          parent, job.col, job.row, job.cx, job.cz, job.trees, job.namePrefix,
+          { season: this._season },
+        );
+        for (const m of insts) bandTreeMeshes.push(m);
+      }
+    }
+    if (bandTreeMeshes.length === 0) {
+      const mergedTreeMeshes = this._buildBorderForestTreesBatched(parent, treeJobs, { season: this._season });
+      for (const m of mergedTreeMeshes) this._addShadowCaster(m);
+      bandTreeMeshes = mergedTreeMeshes;
+    }
+    this._borderForestBatchMeshes = bandTreeMeshes;
     // After the band is in place, extend any river that exits the playable
     // map outward in a straight line through the band so the water doesn't
     // visually dead-end at the playable edge. Built last so `bandDepth` is in
@@ -3953,14 +4380,29 @@ export class Renderer3D {
     // same cluster across runs. See forestTreesForHex / TILE_SLOTS.
     if (tile.type === TileType.FOREST) {
       const trees = forestTreesForHex(tile.col, tile.row, this._season);
-      const meshes = this._buildPineTreeBatchedMeshes(
-        `forest_${tile.col}_${tile.row}`, parent, x, z, trees,
-        { season: this._season },
-      );
-      for (const m of meshes) {
-        this._addShadowCaster(m);
-        m.metadata = { respectsFog: false };
-        trackProp(m);
+      // Prefer the real GLB-tree path when the tree-pack manifest has
+      // resolved AND has a template for the current season. Falls back to
+      // the procedural cone+sphere stack on any miss (empty group, missing
+      // template, etc.) so a missing manifest never leaves a FOREST tile
+      // bare.
+      const realInsts = this._useRealTrees
+        ? this._buildRealForestTreesForHex(
+            parent, tile.col, tile.row, x, z, trees,
+            `forest_${tile.col}_${tile.row}`, { season: this._season },
+          )
+        : [];
+      if (realInsts.length > 0) {
+        for (const m of realInsts) trackProp(m);
+      } else {
+        const meshes = this._buildPineTreeBatchedMeshes(
+          `forest_${tile.col}_${tile.row}`, parent, x, z, trees,
+          { season: this._season },
+        );
+        for (const m of meshes) {
+          this._addShadowCaster(m);
+          m.metadata = { respectsFog: false };
+          trackProp(m);
+        }
       }
     }
 
