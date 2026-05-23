@@ -4710,6 +4710,36 @@ export class Renderer3D {
           colors[v * 4 + 3] = a;
         }
         ribbon.setVerticesData(BABYLON.VertexBuffer.ColorKind, colors);
+        // Per-vertex UVs. Texture tiles along U (length) and spans V across
+        // the ribbon width. Path index → V coordinate; cumulative XZ distance
+        // along the centreline → U coordinate (scaled by ROAD_TILE_PERIOD so
+        // the texture repeats every ~1 world unit, roughly hex-sized).
+        if (networkName === 'road') {
+          const uvs = new Float32Array(totalVerts * 2);
+          // V for each of the 5 paths — texture's full range maps across the
+          // central 3 paths (innerRight, centre, innerLeft) where vertex alpha
+          // is opaque. Outer paths (alpha=0) repeat the edge V; they're
+          // invisible anyway.
+          const vByPath = [0.0, 0.0, 0.5, 1.0, 1.0];
+          // U along the centreline (path index 2 = centre). All five paths
+          // share the same U at each point index so vertices stay seam-aligned
+          // across the width.
+          const periods = new Array(N);
+          periods[0] = 0;
+          for (let p = 1; p < N; p++) {
+            const dx = pts[p].x - pts[p - 1].x;
+            const dz = pts[p].z - pts[p - 1].z;
+            periods[p] = periods[p - 1] + Math.sqrt(dx * dx + dz * dz);
+          }
+          const ROAD_TILE_PERIOD = 1.0; // world units per texture tile
+          for (let v = 0; v < totalVerts; v++) {
+            const pathIdx  = Math.min(vByPath.length - 1, Math.floor(v / N));
+            const pointIdx = v % N;
+            uvs[v * 2 + 0] = periods[pointIdx] / ROAD_TILE_PERIOD;
+            uvs[v * 2 + 1] = vByPath[pathIdx];
+          }
+          ribbon.setVerticesData(BABYLON.VertexBuffer.UVKind, uvs);
+        }
         ribbons.push(ribbon);
         const list = ribbonsByTileKey.get(tkey) || [];
         list.push(ribbon);
@@ -4794,18 +4824,38 @@ export class Renderer3D {
     const { diffuse, emissive } = ribbonMaterialColors(hexColor);
     const mat = new BABYLON.StandardMaterial(`${networkName}_ribbon_mat`, this._scene);
     mat.diffuseColor    = new BABYLON.Color3(diffuse[0],  diffuse[1],  diffuse[2]);
-    mat.emissiveColor   = new BABYLON.Color3(emissive[0], emissive[1], emissive[2]);
+    // Drop emissive to zero for ROAD so shadows actually read on it. Emissive
+    // is self-lit and washes out the directional sun's shadow contribution —
+    // the cure for the "ribbon reads near-black under direct sun" symptom is
+    // a textured diffuse (below), not an emissive boost. River keeps a tiny
+    // emissive so water still glows slightly at dusk/night.
+    if (networkName === 'road') {
+      mat.emissiveColor = new BABYLON.Color3(0, 0, 0);
+    } else {
+      mat.emissiveColor = new BABYLON.Color3(emissive[0], emissive[1], emissive[2]);
+    }
     mat.specularColor   = new BABYLON.Color3(0.04, 0.04, 0.04); // matte
     mat.backFaceCulling = false; // belt-and-braces for low/below camera angles
     // Honour the per-vertex alpha written in `_buildNetworkMesh` so the road
     // / river ribbon fades smoothly into the underlying grass at its lateral
     // edges instead of cutting hard. needAlphaBlendingForMesh inherits from
     // mesh.hasVertexAlpha, which the merged ribbon mesh sets.
-    // disableLighting=false is the default — explicit here so a future refactor
-    // that mass-disables lighting can't silently make the road/river look like
-    // pure emissive (which at 0.45× a dark base colour reads as near-black —
-    // exactly the "ribbon is still black" symptom PR #323 chased).
     mat.disableLighting = false;
+    // Road gets a tiled diffuse texture so shadow detail reads against the
+    // road surface (not just the flat coloured ribbon). The texture is
+    // 1024×1024 and tileable left-to-right; UVs are written per-vertex in
+    // `_buildNetworkMesh` so the texture U-axis runs along the ribbon's
+    // length and V across its width.
+    if (networkName === 'road' && this._scene && typeof BABYLON.Texture === 'function') {
+      const url = `${this._assetsBasePath || 'assets'}/road-ribbon.png`;
+      const tex = new BABYLON.Texture(url, this._scene);
+      tex.wrapU = BABYLON.Texture.WRAP_ADDRESSMODE;
+      tex.wrapV = BABYLON.Texture.CLAMP_ADDRESSMODE; // V across width — clamp so no edge bleed
+      tex.anisotropicFilteringLevel = 8;
+      mat.diffuseTexture = tex;
+      // White diffuseColor so the texture passes through at full strength.
+      mat.diffuseColor = new BABYLON.Color3(1, 1, 1);
+    }
     return mat;
   }
 
