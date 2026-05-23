@@ -4675,13 +4675,13 @@ export class Renderer3D {
         // opaque region covers the inner 80% of the ribbon and the outer 10%
         // on each side fades smoothly into the grass beneath.
         const OPAQUE_FRAC   = 0.80;
-        // Road gets a smooth ±15% per-point width modulation along its length
-        // so each strand reads as hand-laid rather than uniform-machined. The
-        // sine wave is seeded off the tile col/row + stroke index so a given
-        // hex looks the same across reloads. River stays uniform-width.
+        // Road + river get a smooth ±15% per-point width modulation along
+        // their length so each strand reads as hand-laid / natural rather
+        // than uniform-machined. The sine wave is seeded off the tile col/row
+        // + stroke index so a given hex looks the same across reloads.
         let perPointOuterWidth = width;
         let perPointInnerWidth = width * OPAQUE_FRAC;
-        if (networkName === 'road') {
+        if (networkName === 'road' || networkName === 'river') {
           const seed = (tile.col * 73 + tile.row * 131 + i * 17) % 1024;
           const phase = (seed / 1024) * Math.PI * 2;
           const cycles = 1.5; // ~1.5 waves across the stroke's length
@@ -4735,7 +4735,7 @@ export class Renderer3D {
         // the ribbon width. Path index → V coordinate; cumulative XZ distance
         // along the centreline → U coordinate (scaled by ROAD_TILE_PERIOD so
         // the texture repeats every ~1 world unit, roughly hex-sized).
-        if (networkName === 'road') {
+        if (networkName === 'road' || networkName === 'river') {
           const uvs = new Float32Array(totalVerts * 2);
           // V for each of the 5 paths. The OPAQUE band (inner-right → centre
           // → inner-left) samples the texture's middle 40% (V 0.3–0.7) where
@@ -4871,12 +4871,11 @@ export class Renderer3D {
     const { diffuse, emissive } = ribbonMaterialColors(hexColor);
     const mat = new BABYLON.StandardMaterial(`${networkName}_ribbon_mat`, this._scene);
     mat.diffuseColor    = new BABYLON.Color3(diffuse[0],  diffuse[1],  diffuse[2]);
-    // Drop emissive to zero for ROAD so shadows actually read on it. Emissive
-    // is self-lit and washes out the directional sun's shadow contribution —
-    // the cure for the "ribbon reads near-black under direct sun" symptom is
-    // a textured diffuse (below), not an emissive boost. River keeps a tiny
-    // emissive so water still glows slightly at dusk/night.
-    if (networkName === 'road') {
+    // Drop emissive to zero for ROAD and RIVER so shadows actually read on
+    // them. Emissive is self-lit and washes out the directional sun's shadow
+    // contribution. The cure for the "ribbon reads near-black under direct
+    // sun" symptom is a textured diffuse (below), not an emissive boost.
+    if (networkName === 'road' || networkName === 'river') {
       mat.emissiveColor = new BABYLON.Color3(0, 0, 0);
     } else {
       mat.emissiveColor = new BABYLON.Color3(emissive[0], emissive[1], emissive[2]);
@@ -4895,9 +4894,10 @@ export class Renderer3D {
     // length and V across its width. Loaded with explicit success callback —
     // if the load FAILS, we leave the original coloured diffuse alone (no
     // black ribbon when the path 404s).
-    if (networkName === 'road' && this._scene && typeof BABYLON.Texture === 'function') {
+    if ((networkName === 'road' || networkName === 'river') && this._scene && typeof BABYLON.Texture === 'function') {
       try {
-        const url = `${this._assetsBasePath || 'assets'}/road-ribbon.png`;
+        const fileName = networkName === 'road' ? 'road-ribbon.png' : 'river-ribbon.png';
+        const url = `${this._assetsBasePath || 'assets'}/${fileName}`;
         // 2-arg constructor only — anything more positional has broken with
         // Babylon 7.x's minified signature. Use numeric wrap mode constants
         // directly (BABYLON.Texture.WRAP_ADDRESSMODE may live on a different
@@ -4918,7 +4918,7 @@ export class Renderer3D {
         // White diffuse so the texture passes through at full strength.
         mat.diffuseColor = new BABYLON.Color3(1, 1, 1);
       } catch (err) {
-        console.warn('[Renderer3D] road-ribbon texture setup failed:', err);
+        console.warn(`[Renderer3D] ${networkName}-ribbon texture setup failed:`, err);
       }
     }
     return mat;
