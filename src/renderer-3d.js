@@ -6063,32 +6063,35 @@ export class Renderer3D {
     const BABYLON = this._babylon;
     const { x, z } = hexToWorld(col, row);
 
-    // 256×96 dynamic texture, larger than necessary so the text reads sharp
-    // at any camera distance up to the upperRadiusLimit.
-    const tex = new BABYLON.DynamicTexture(`floatTex_${Date.now()}`, { width: 256, height: 96 }, this._scene, false);
+    const tex = new BABYLON.DynamicTexture(
+      `floatTex_${Date.now()}`,
+      { width: FLOAT_TEXT_TEX_WIDTH, height: FLOAT_TEXT_TEX_HEIGHT },
+      this._scene,
+      false,
+    );
     tex.hasAlpha = true;
-    const ctx = tex.getContext();
-    ctx.clearRect(0, 0, 256, 96);
-    ctx.font = `bold ${Math.round(56 * fontScale)}px sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillStyle = 'rgba(0,0,0,0.7)';
-    ctx.fillText(text, 130, 50);
-    ctx.fillStyle = hexColor;
-    ctx.fillText(text, 128, 48);
+    paintFloaterText(tex.getContext(), {
+      width:    FLOAT_TEXT_TEX_WIDTH,
+      height:   FLOAT_TEXT_TEX_HEIGHT,
+      text,
+      fillColor: hexColor,
+      fontScale,
+    });
     tex.update();
 
     const plane = BABYLON.MeshBuilder.CreatePlane(`float_${col}_${row}_${Date.now()}`,
-      { width: 1.6, height: 0.6 }, this._scene);
+      { width: FLOAT_TEXT_PLANE_WIDTH, height: FLOAT_TEXT_PLANE_HEIGHT }, this._scene);
     plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
     plane.isPickable    = false;
+    // Render above all world geometry so floaters never hide behind terrain
+    // or standees — matches the unit-icon badge group (2).
+    plane.renderingGroupId = 2;
     const mat = new BABYLON.StandardMaterial(`floatMat_${plane.uniqueId}`, this._scene);
     mat.diffuseTexture = tex;
     mat.opacityTexture = tex;
-    mat.useAlphaFromDiffuseTexture = true;
-    mat.specularColor  = new BABYLON.Color3(0, 0, 0);
-    mat.emissiveColor  = new BABYLON.Color3(1, 1, 1);
-    mat.backFaceCulling = false;
+    // Flat-lit UI sticker — text stays at full brightness across every
+    // phase and is never dimmed by scene fog.
+    applyFlatUnitIconMaterial(BABYLON, mat);
     plane.material = mat;
 
     // Spawn above the tallest possible token (leader-sized cone + sphere).
@@ -9049,6 +9052,18 @@ export const PROJECTILE_ANIM_MS = 320;
  *  enough to read "CRUSH 3", short enough not to back up the queue. */
 export const FLOAT_TEXT_MS = 700;
 
+/** Floating combat-text plane — world-space dimensions of the billboarded
+ *  plane that carries the "HIT 2" / "CRUSH 3" / "-2" labels. Roughly 2× the
+ *  legacy 1.6×0.6 so the text reads at any zoom; matches the operator brief
+ *  to make floaters prominent rather than incidental. */
+export const FLOAT_TEXT_PLANE_WIDTH  = 3.2;
+export const FLOAT_TEXT_PLANE_HEIGHT = 1.2;
+/** DynamicTexture pixel size for the floater. Bumped to 512×192 (2× each
+ *  axis) so the larger plane stays crisp without visible upscaling, and
+ *  there's room for the outlined text + background pill. */
+export const FLOAT_TEXT_TEX_WIDTH  = 512;
+export const FLOAT_TEXT_TEX_HEIGHT = 192;
+
 /** HP-bar height (world units) above the standee's base disc. */
 export const HP_BAR_Y_ABOVE_BASE = 0.2;
 
@@ -9645,6 +9660,72 @@ export function applyFlatUnitIconMaterial(BABYLON, mat) {
   mat.backFaceCulling = false;
   mat.fogEnabled      = false;
   mat.alpha           = 1;
+}
+
+/**
+ * Paint a floating combat-text label into a 2D canvas context: a
+ * semi-opaque dark "pill" background fitted to the text, the text stroked
+ * with a thick black outline for legibility against any tile colour, then
+ * the coloured fill on top.
+ *
+ * Pure with respect to its inputs — no Babylon, no canvas creation. The
+ * Babylon-side `_spawnFloatingText` is a thin wrapper that creates the
+ * DynamicTexture and calls back into here.
+ */
+export function paintFloaterText(ctx, opts) {
+  const {
+    width,
+    height,
+    text,
+    fillColor = '#ffe0a0',
+    fontScale = 1,
+  } = opts;
+  ctx.clearRect(0, 0, width, height);
+  if (!text) return;
+
+  // Font: heavy weight + large pixel size so the label reads at zoom-out.
+  const fontPx = Math.round(96 * fontScale);
+  ctx.font = `900 ${fontPx}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  const metrics = ctx.measureText(text);
+  const padX = Math.round(fontPx * 0.45);
+  const padY = Math.round(fontPx * 0.20);
+  const pillW = Math.min(width - 8, Math.ceil(metrics.width) + padX * 2);
+  const pillH = Math.min(height - 8, fontPx + padY * 2);
+  const pillX = (width - pillW) / 2;
+  const pillY = (height - pillH) / 2;
+  const radius = Math.round(pillH / 2);
+
+  // Background pill — semi-opaque dark fill so the text reads against any
+  // tile colour. Rounded with the half-height radius for a pill silhouette.
+  ctx.fillStyle = 'rgba(0,0,0,0.65)';
+  ctx.beginPath();
+  ctx.moveTo(pillX + radius, pillY);
+  ctx.lineTo(pillX + pillW - radius, pillY);
+  ctx.arcTo(pillX + pillW, pillY, pillX + pillW, pillY + radius, radius);
+  ctx.lineTo(pillX + pillW, pillY + pillH - radius);
+  ctx.arcTo(pillX + pillW, pillY + pillH, pillX + pillW - radius, pillY + pillH, radius);
+  ctx.lineTo(pillX + radius, pillY + pillH);
+  ctx.arcTo(pillX, pillY + pillH, pillX, pillY + pillH - radius, radius);
+  ctx.lineTo(pillX, pillY + radius);
+  ctx.arcTo(pillX, pillY, pillX + radius, pillY, radius);
+  ctx.closePath();
+  ctx.fill();
+
+  // Outline: chunky black stroke drawn BEFORE the fill so the fill paints
+  // over its inner half — gives a crisp halo with no ghosting.
+  const cx = width / 2;
+  const cy = height / 2;
+  ctx.lineJoin = 'round';
+  ctx.miterLimit = 2;
+  ctx.lineWidth = Math.max(6, Math.round(fontPx * 0.14));
+  ctx.strokeStyle = '#000';
+  ctx.strokeText(text, cx, cy);
+
+  ctx.fillStyle = fillColor;
+  ctx.fillText(text, cx, cy);
 }
 
 /**

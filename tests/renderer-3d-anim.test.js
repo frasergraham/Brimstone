@@ -29,6 +29,11 @@ import {
   LUNGE_ANIM_MS,
   PROJECTILE_ANIM_MS,
   FLOAT_TEXT_MS,
+  FLOAT_TEXT_PLANE_WIDTH,
+  FLOAT_TEXT_PLANE_HEIGHT,
+  FLOAT_TEXT_TEX_WIDTH,
+  FLOAT_TEXT_TEX_HEIGHT,
+  paintFloaterText,
   HP_BAR_Y_ABOVE_BASE,
   HP_RED_BELOW,
   HP_YELLOW_BELOW,
@@ -74,6 +79,74 @@ describe('Renderer3D Phase 5 — anim duration constants', () => {
   test('FLOAT_TEXT_MS is around 700ms — long enough to read', () => {
     assert.ok(FLOAT_TEXT_MS >= 500 && FLOAT_TEXT_MS <= 1200,
       `expected FLOAT_TEXT_MS in [500, 1200], got ${FLOAT_TEXT_MS}`);
+  });
+
+  test('FLOAT_TEXT_PLANE_* are roughly 2× the legacy 1.6×0.6 plane', () => {
+    // Operator brief: floaters must be prominent enough to read at zoom-out.
+    // Width pinned to ≥ 2.4 (1.5×) and height to ≥ 0.9 — gives the new label
+    // a clear floor without locking out future visual tuning.
+    assert.ok(FLOAT_TEXT_PLANE_WIDTH  >= 2.4,
+      `expected FLOAT_TEXT_PLANE_WIDTH ≥ 2.4, got ${FLOAT_TEXT_PLANE_WIDTH}`);
+    assert.ok(FLOAT_TEXT_PLANE_HEIGHT >= 0.9,
+      `expected FLOAT_TEXT_PLANE_HEIGHT ≥ 0.9, got ${FLOAT_TEXT_PLANE_HEIGHT}`);
+    assert.ok(FLOAT_TEXT_TEX_WIDTH  >= 384 && FLOAT_TEXT_TEX_HEIGHT >= 128,
+      'floater dynamic texture should be large enough for crisp text');
+  });
+});
+
+// ─── paintFloaterText — pill + outline + fill ──────────────────────────────
+
+describe('Renderer3D — paintFloaterText (pure helper)', () => {
+  function makeMockCtx() {
+    const calls = [];
+    return {
+      calls,
+      _font: '',
+      get font() { return this._font; },
+      set font(v) { this._font = v; calls.push(['font', v]); },
+      set textAlign(v)    { calls.push(['textAlign', v]); },
+      set textBaseline(v) { calls.push(['textBaseline', v]); },
+      set fillStyle(v)    { calls.push(['fillStyle', v]); },
+      set strokeStyle(v)  { calls.push(['strokeStyle', v]); },
+      set lineWidth(v)    { calls.push(['lineWidth', v]); },
+      set lineJoin(v)     { calls.push(['lineJoin', v]); },
+      set miterLimit(v)   { calls.push(['miterLimit', v]); },
+      clearRect: () => calls.push(['clearRect']),
+      beginPath: () => calls.push(['beginPath']),
+      closePath: () => calls.push(['closePath']),
+      moveTo:    () => calls.push(['moveTo']),
+      lineTo:    () => calls.push(['lineTo']),
+      arcTo:     () => calls.push(['arcTo']),
+      fill:      () => calls.push(['fill']),
+      strokeText: (...args) => calls.push(['strokeText', ...args]),
+      fillText:   (...args) => calls.push(['fillText',   ...args]),
+      measureText: (s) => ({ width: s.length * 30 }),
+    };
+  }
+
+  test('no-ops when text is empty (still clears the canvas)', () => {
+    const ctx = makeMockCtx();
+    paintFloaterText(ctx, { width: 512, height: 192, text: '' });
+    const ops = ctx.calls.map(c => c[0]);
+    assert.deepEqual(ops, ['clearRect']);
+  });
+
+  test('paints pill background, then black outline stroke, then fill', () => {
+    const ctx = makeMockCtx();
+    paintFloaterText(ctx, {
+      width: 512, height: 192, text: 'CRUSH 3', fillColor: '#ff5050',
+    });
+    const ops = ctx.calls.map(c => c[0]);
+    const fillIdx     = ops.indexOf('fill');             // pill
+    const strokeIdx   = ops.indexOf('strokeText');       // outline
+    const fillTextIdx = ops.indexOf('fillText');         // text
+    assert.ok(fillIdx     >= 0, 'expected pill background fill()');
+    assert.ok(strokeIdx   >  fillIdx,     'outline stroke must come after pill');
+    assert.ok(fillTextIdx >  strokeIdx,   'text fill must come after outline');
+    const strokeStyles = ctx.calls.filter(c => c[0] === 'strokeStyle').map(c => c[1]);
+    assert.ok(strokeStyles.includes('#000'), 'text outline should be black');
+    const fillStyles = ctx.calls.filter(c => c[0] === 'fillStyle').map(c => c[1]);
+    assert.ok(fillStyles.includes('#ff5050'), 'fillColor should be applied to the text');
   });
 });
 
