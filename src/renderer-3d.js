@@ -6162,6 +6162,143 @@ export class Renderer3D {
     this._trackAnim(promise);
   }
 
+  // ─── Reaction effects: Sound Horn ring + Power-Node-Discovered burst ────
+
+  /** Expanding flat ring at a hex — the 3D equivalent of the gold horn pulse
+   *  in `src/renderer.js`. Triggered from the resolution loop's SOUND_HORN
+   *  phase to telegraph "this leader just sounded the horn" before the
+   *  encounter dialog opens. Self-disposes when the radius animation
+   *  completes; the resolution loop awaits it via `waitForAnimations()`. */
+  addSoundHorn(col, row, color = '#d4a72c') {
+    if (!this._scene || !this._babylon) return;
+    const BABYLON = this._babylon;
+    const { x, z } = hexToWorld(col, row);
+
+    // CreateTorus builds a unit-diameter ring; the scaling animation grows
+    // it from SOUND_HORN_RING_R0 → SOUND_HORN_RING_R1. Y is fixed to a
+    // ground-hugging band (above the ribbon apex, below the icon billboards)
+    // so the ring stays flat against the terrain even when the camera tilts.
+    const ring = BABYLON.MeshBuilder.CreateTorus(
+      `sound_horn_${col}_${row}_${Date.now()}`,
+      { diameter: 2, thickness: SOUND_HORN_RING_TUBE, tessellation: 48 },
+      this._scene,
+    );
+    ring.isPickable = false;
+    ring.position.set(x, SOUND_HORN_RING_Y, z);
+
+    const mat = new BABYLON.StandardMaterial(`sound_horn_mat_${ring.uniqueId}`, this._scene);
+    const [r, g, b] = cssHexToRgb01(color);
+    mat.diffuseColor   = new BABYLON.Color3(r, g, b);
+    mat.emissiveColor  = new BABYLON.Color3(r, g, b);
+    mat.specularColor  = new BABYLON.Color3(0, 0, 0);
+    mat.backFaceCulling = false;
+    mat.alpha = 1;
+    ring.material = mat;
+
+    // Diameter=2 ⇒ base radius=1, so scaling.x|z directly = world radius.
+    ring.scaling.set(SOUND_HORN_RING_R0, 1, SOUND_HORN_RING_R0);
+
+    const FRAMES = Math.max(6, Math.round(SOUND_HORN_RING_MS / 1000 * 60));
+    const animScaleX = new BABYLON.Animation('shScaleX', 'scaling.x', 60,
+      BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+    animScaleX.setKeys([
+      { frame: 0,      value: SOUND_HORN_RING_R0 },
+      { frame: FRAMES, value: SOUND_HORN_RING_R1 },
+    ]);
+    const animScaleZ = new BABYLON.Animation('shScaleZ', 'scaling.z', 60,
+      BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+    animScaleZ.setKeys([
+      { frame: 0,      value: SOUND_HORN_RING_R0 },
+      { frame: FRAMES, value: SOUND_HORN_RING_R1 },
+    ]);
+    const animAlpha = new BABYLON.Animation('shAlpha', 'material.alpha', 60,
+      BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+    animAlpha.setKeys([
+      { frame: 0,      value: 1 },
+      { frame: FRAMES, value: 0 },
+    ]);
+
+    const promise = new Promise(resolve => {
+      this._scene.beginDirectAnimation(ring, [animScaleX, animScaleZ, animAlpha],
+        0, FRAMES, false, 1, () => {
+          ring.dispose();
+          mat.dispose();
+          resolve();
+        });
+    });
+    this._trackAnim(promise);
+  }
+
+  /** Starburst + floating label at a node hex — the 3D equivalent of the
+   *  2D node-reveal pulse. `hexes` is the cluster of hexes covered by the
+   *  node (usually 1, sometimes 3 for multi-hex nodes); the burst spawns
+   *  at the centroid and the label sits above it. */
+  addNodeDiscovered(hexes, color = '#ffd54a', label = 'Power Node Discovered') {
+    if (!this._scene || !this._babylon) return;
+    if (!Array.isArray(hexes) || hexes.length === 0) return;
+    const BABYLON = this._babylon;
+
+    // Centroid of the cluster — single-hex nodes collapse to their own centre.
+    let cx = 0, cz = 0;
+    for (const h of hexes) {
+      const { x, z } = hexToWorld(h.col, h.row);
+      cx += x; cz += z;
+    }
+    cx /= hexes.length; cz /= hexes.length;
+    const labelHex = hexes[0];
+
+    // Build N rays radiating from the origin; scale animates 0 → 1 so the
+    // burst appears to grow outward from the centre.
+    const endpoints = nodeDiscoveredRayEndpoints(
+      NODE_DISCOVERED_RAY_COUNT, NODE_DISCOVERED_R1,
+    );
+    const lines = endpoints.map(p => [
+      new BABYLON.Vector3(0, 0, 0),
+      new BABYLON.Vector3(p.x, 0, p.z),
+    ]);
+    const burst = BABYLON.MeshBuilder.CreateLineSystem(
+      `node_burst_${Date.now()}`,
+      { lines, updatable: false },
+      this._scene,
+    );
+    burst.isPickable = false;
+    burst.position.set(cx, NODE_DISCOVERED_Y, cz);
+    const [r, g, b] = cssHexToRgb01(color);
+    burst.color = new BABYLON.Color3(r, g, b);
+    burst.alpha = 1;
+    burst.scaling.set(0, 1, 0);
+
+    const FRAMES = Math.max(6, Math.round(NODE_DISCOVERED_MS / 1000 * 60));
+    const animSX = new BABYLON.Animation('ndSX', 'scaling.x', 60,
+      BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+    animSX.setKeys([{ frame: 0, value: 0 }, { frame: FRAMES, value: 1 }]);
+    const animSZ = new BABYLON.Animation('ndSZ', 'scaling.z', 60,
+      BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+    animSZ.setKeys([{ frame: 0, value: 0 }, { frame: FRAMES, value: 1 }]);
+    const animAlpha = new BABYLON.Animation('ndAlpha', 'alpha', 60,
+      BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+    animAlpha.setKeys([
+      { frame: 0,                          value: 1 },
+      { frame: Math.floor(FRAMES / 2),     value: 1 },
+      { frame: FRAMES,                     value: 0 },
+    ]);
+    const promise = new Promise(resolve => {
+      this._scene.beginDirectAnimation(burst, [animSX, animSZ, animAlpha],
+        0, FRAMES, false, 1, () => { burst.dispose(); resolve(); });
+    });
+    this._trackAnim(promise);
+
+    // Floating label above the cluster. Reuses the existing floater pipeline
+    // — t-d5fed35e (floater rework) will resize it once it lands.
+    if (label) {
+      this._spawnFloatingText(
+        labelHex.col, labelHex.row,
+        label, color,
+        NODE_DISCOVERED_LABEL_MS, 0.6,
+      );
+    }
+  }
+
   // ─── Floating unit-icon billboards (icon disc + HP ring) ────────────────
   //
   // Each alive entity gets a billboarded square plane parented to its base
@@ -10096,4 +10233,98 @@ export function projectileColor01(projectileType) {
     default:
       return [1.0, 0.95, 0.7];
   }
+}
+
+// ─── Reaction effects: Sound Horn ring + Power-Node-Discovered burst ────────
+//
+// Both effects sit just above the tile-prism top so the ground geometry never
+// occludes them, but below the standee silhouettes so the unit on the hex
+// still reads clearly. Pure curve helpers below let tests lock the radius /
+// alpha shapes without spinning up a Babylon scene.
+
+/** Y of the flat sound-horn ring. Above the tile prism top (0.075) and the
+ *  road/river ribbon apex (≈ 0.09), well below the icon billboards (>0.5). */
+export const SOUND_HORN_RING_Y      = 0.12;
+/** Lifetime of the horn ring (ms). 700ms — long enough to register, short
+ *  enough that the post-horn dialog opens promptly. */
+export const SOUND_HORN_RING_MS     = 700;
+/** Starting radius of the ring in world units. ~0.2 wu so the ring spawns
+ *  small at the actor's feet rather than blooming out of nowhere. */
+export const SOUND_HORN_RING_R0     = 0.2;
+/** Ending radius of the ring in world units. 2.5 wu — comfortably larger
+ *  than a single hex (radius ≈ 1) but still local enough to read as the
+ *  actor's pulse, not a global shockwave. */
+export const SOUND_HORN_RING_R1     = 2.5;
+/** Tube thickness for the torus that backs the ring mesh. Thin so the ring
+ *  reads as a wave, not a blob. Scaled with the ring radius during the
+ *  animation (the diameter and thickness scale together on a torus). */
+export const SOUND_HORN_RING_TUBE   = 0.03;
+
+/** Linear lerp of the horn ring radius from `r0` to `r1` as `t` walks 0→1.
+ *  Mirrors the keyframes set on the Babylon scaling animation in
+ *  `addSoundHorn`, so tests can pin the curve without a scene. Clamped
+ *  outside [0, 1] so callers can hand in raw elapsed/duration without
+ *  worrying about overshoot at the endpoints. */
+export function soundHornRingRadius(t, r0 = SOUND_HORN_RING_R0, r1 = SOUND_HORN_RING_R1) {
+  const c = Math.max(0, Math.min(1, t));
+  return r0 + (r1 - r0) * c;
+}
+
+/** Linear fade of the horn ring alpha — 1 at t=0, 0 at t=1, clamped at
+ *  the endpoints. Keeps the ring visible at full strength when it spawns
+ *  and lets it dissolve over the same window the radius expands. */
+export function soundHornRingAlpha(t) {
+  const c = Math.max(0, Math.min(1, t));
+  return 1 - c;
+}
+
+/** Y of the flat node-discovered starburst. Same band as the horn ring so
+ *  ground geometry doesn't occlude either effect. */
+export const NODE_DISCOVERED_Y          = 0.12;
+/** Lifetime of the node-discovered starburst (ms). Shorter than the horn
+ *  ring because the floating label carries the punctuation. */
+export const NODE_DISCOVERED_MS         = 600;
+/** Inner radius of the rays at t=0. The burst starts as a single point at
+ *  the hex centre. */
+export const NODE_DISCOVERED_R0         = 0;
+/** Outer radius of the rays at t=1. 1.5 wu — pokes one hex out from the
+ *  node centre so it's visible without splashing onto neighbouring tiles. */
+export const NODE_DISCOVERED_R1         = 1.5;
+/** Number of rays in the starburst. 8 evenly-spaced spokes — enough to read
+ *  as a burst, few enough to keep the LinesMesh cheap. */
+export const NODE_DISCOVERED_RAY_COUNT  = 8;
+/** Lifetime of the floating "Power Node Discovered" label (ms). Held longer
+ *  than a combat floater so the player can read it. */
+export const NODE_DISCOVERED_LABEL_MS   = 1500;
+
+/** Endpoint positions for the starburst rays — `count` evenly-spaced spokes
+ *  at the unit radius. The renderer scales the resulting mesh from 0 → 1 on
+ *  x/z to animate the burst, so the endpoints here represent the final
+ *  outer ring. Returns `[{x, z}]` in local space (Y is fixed by the caller). */
+export function nodeDiscoveredRayEndpoints(
+  count  = NODE_DISCOVERED_RAY_COUNT,
+  radius = NODE_DISCOVERED_R1,
+) {
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const a = (i / count) * Math.PI * 2;
+    out.push({ x: Math.cos(a) * radius, z: Math.sin(a) * radius });
+  }
+  return out;
+}
+
+/** Linear scale curve for the node-discovered burst: 0 at t=0, 1 at t=1,
+ *  clamped at the endpoints. The renderer applies this to mesh.scaling.x/z
+ *  so the rays appear to grow outward from the centre. */
+export function nodeDiscoveredRayScale(t) {
+  return Math.max(0, Math.min(1, t));
+}
+
+/** Alpha curve for the node-discovered burst — full opacity for the first
+ *  half of its lifetime, then linear fade to 0 over the second half. Matches
+ *  the floating-text fade in `floatingTextTransform` so the burst and its
+ *  label sustain together before dissolving in sync. */
+export function nodeDiscoveredAlpha(t) {
+  const c = Math.max(0, Math.min(1, t));
+  return c < 0.5 ? 1 : Math.max(0, 1 - (c - 0.5) * 2);
 }

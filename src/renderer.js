@@ -518,6 +518,26 @@ export class Renderer {
     this._startAnimLoop();
   }
 
+  /** Sound-horn reaction: gold expanding ring at the actor's hex. The 2D
+   *  path reuses `addNodeRevealAnim` with the same params it always used —
+   *  the new dedicated method exists so the call site is renderer-agnostic
+   *  (3D implements its own torus-based ring; see `src/renderer-3d.js`). */
+  addSoundHorn(col, row, color = '#d4a72c') {
+    this.addNodeRevealAnim(
+      [{ col, row }], color,
+      { radiusMultiplier: 7, duration: 2000 },
+    );
+  }
+
+  /** Power-node-discovered reaction: pulse + reveal ring on the node cluster.
+   *  Hexes is `[{col, row}, ...]` (single-hex or multi-hex node). The 2D path
+   *  reuses `addNodeRevealAnim` with the legacy params; 3D builds a starburst
+   *  + floating label. The `label` argument is consumed only by the 3D path
+   *  — 2D ignores it (the encounter is delivered through the UI panel). */
+  addNodeDiscovered(hexes, color = '#ffd54a', _label = 'Power Node Discovered') {
+    this.addNodeRevealAnim(hexes, color);
+  }
+
   /** Sparkle animation at a hex — used for summon/spawn. */
   addSpawnAnim(col, row, color = '#b39ddb') {
     // Reuse flash with sparkle text and a short purple burst
