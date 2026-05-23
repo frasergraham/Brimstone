@@ -4849,24 +4849,24 @@ export class Renderer3D {
     // if the load FAILS, we leave the original coloured diffuse alone (no
     // black ribbon when the path 404s).
     if (networkName === 'road' && this._scene && typeof BABYLON.Texture === 'function') {
-      const url = `${this._assetsBasePath || 'assets'}/road-ribbon.png`;
-      // 2-arg constructor only (some Babylon 7.x versions reject onLoad in
-      // positional args). Then attach a listener via onLoadObservable and
-      // configure wrap/sampling AFTER the image decodes — texture defaults
-      // to clamp until then, which is fine for the brief unloaded window.
-      const tex = new BABYLON.Texture(url, this._scene);
-      tex.wrapU = BABYLON.Texture.WRAP_ADDRESSMODE;
-      tex.wrapV = BABYLON.Texture.CLAMP_ADDRESSMODE;
-      tex.anisotropicFilteringLevel = 8;
-      if (tex.onLoadObservable && typeof tex.onLoadObservable.add === 'function') {
-        tex.onLoadObservable.add(() => {
-          // Image loaded — diffuseColor goes white so the texture passes through
-          // at full strength. Before this, the coloured diffuse remains so the
-          // road reads as its TILE_COLOR instead of going black.
-          mat.diffuseColor = new BABYLON.Color3(1, 1, 1);
-        });
+      try {
+        const url = `${this._assetsBasePath || 'assets'}/road-ribbon.png`;
+        // 2-arg constructor only — anything more positional has broken with
+        // Babylon 7.x's minified signature. Use numeric wrap mode constants
+        // directly (BABYLON.Texture.WRAP_ADDRESSMODE may live on a different
+        // namespace in some builds).
+        const tex = new BABYLON.Texture(url, this._scene);
+        tex.wrapU = 1; // WRAP
+        tex.wrapV = 0; // CLAMP
+        mat.diffuseTexture = tex;
+        // White diffuse so the texture passes through at full strength. If
+        // the texture 404s the road will read as white-tinted instead of
+        // black, but the fallback colour path stayed in baseDiff so fog
+        // still darkens.
+        mat.diffuseColor = new BABYLON.Color3(1, 1, 1);
+      } catch (err) {
+        console.warn('[Renderer3D] road-ribbon texture setup failed:', err);
       }
-      mat.diffuseTexture = tex;
     }
     return mat;
   }
