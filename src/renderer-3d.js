@@ -2066,6 +2066,12 @@ export class Renderer3D {
     }
     inst.isPickable = false;
     if (typeof inst.renderingGroupId !== 'undefined') inst.renderingGroupId = 0;
+    // Receive shadows from neighbouring trees / buildings / standees as
+    // well as cast them. InstancedMesh inherits receiveShadows from its
+    // source mesh, so set it on the template too (idempotent — Babylon
+    // will short-circuit if already true).
+    if (template && 'receiveShadows' in template) template.receiveShadows = true;
+    if ('receiveShadows' in inst) inst.receiveShadows = true;
     // Trees stay visible under fog — permanent terrain. Matches the
     // procedural cone+sphere metadata in _buildTileMesh.
     inst.metadata = { respectsFog: false, kind: 'tree-glb', col, row, file };
