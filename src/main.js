@@ -51,6 +51,7 @@ import { compileTurnBattleSummary } from './battle-utils.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import { playback, resetPlayback, replayFullGame, playbackDelay, swapState, patchAlive } from './playback.js';
 import { ReplayCache } from './replay-cache.js';
+import { makeShowLoadingAndReveal } from './loading-reveal.js';
 import { MAP_SIZES } from './map.js';
 import { nodeController } from './game.js';
 import { MissionConductor } from './mission-conductor.js';
@@ -228,46 +229,16 @@ function _genSaveId() {
  *
  * Fire-and-forget from the synchronous init paths — the game's planning setup
  * runs in parallel; rendering simply catches up when the scene is ready.
+ *
+ * Reveals are serialized by a monotonic token inside the coordinator (see
+ * `src/loading-reveal.js`): all three init paths drive the SAME overlay, and a
+ * double-tapped "Start" (or any re-entry of an init path) starts two reveals at
+ * once. Without the token, the slower one re-shows the overlay over the scene
+ * the faster one already faded in ("the scene comes in and then goes back to
+ * the loading screen for forest"). The token lets only the latest reveal touch
+ * the shared overlay; superseded reveals become no-ops on it.
  */
-async function _showLoadingAndReveal(renderer) {
-  const overlay = document.getElementById('loading-overlay');
-  const canvas  = document.getElementById('game-canvas');
-  const fill    = overlay?.querySelector('.loading-bar-fill');
-  const label   = overlay?.querySelector('.loading-label');
-
-  if (overlay) {
-    overlay.hidden = false;
-    overlay.classList.remove('fading-out');
-  }
-  canvas?.classList.remove('canvas-ready');
-  if (fill) fill.style.width = '0%';
-
-  renderer.onProgress = (loaded, total, what) => {
-    if (fill && total > 0) fill.style.width = `${Math.round(100 * loaded / total)}%`;
-    if (label && what) label.textContent = `Loading ${what}…`;
-  };
-
-  try {
-    renderer.beginLoad();
-    await renderer.whenReady();
-  } catch (err) {
-    console.warn('[main] asset load failed; revealing scene anyway:', err);
-  }
-
-  // Draw the first full-quality frame while the overlay still covers it, then
-  // wait one animation frame so the canvas has painted before the fade-in.
-  try { renderer.draw(); } catch { /* draw is defensive — ignore */ }
-  await new Promise(r => requestAnimationFrame(r));
-
-  canvas?.classList.add('canvas-ready'); // 400ms fade-in
-  if (overlay) {
-    overlay.classList.add('fading-out');  // 300ms fade-out
-    setTimeout(() => {
-      overlay.hidden = true;
-      overlay.classList.remove('fading-out');
-    }, 350);
-  }
-}
+const _showLoadingAndReveal = makeShowLoadingAndReveal();
 
 /**
  * Shared setup for all local (single-player) game starts.

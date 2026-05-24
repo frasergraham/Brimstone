@@ -291,21 +291,32 @@ describe('Renderer3D consumers — must call loadImages() to populate the atlas'
     );
   });
 
-  test('src/main.js drives the atlas load via renderer.beginLoad()', () => {
+  test('the game flow drives the atlas load via renderer.beginLoad()', () => {
     // Sibling check — locks in the main game flow too, so a future refactor
     // that moves the renderer construction can't silently drop the call.
     //
     // The loading-screen work (feat/loading-screen) moved the direct
-    // loadImages() call into the renderer: main.js now calls beginLoad(), and
-    // beginLoad() loads the tilemap atlas (alongside the GLB bundle). So the
-    // contract that "the active game populates its tilemap atlas" is now
-    // satisfied by the beginLoad() call rather than a bare loadImages().
-    const path = resolve(__dirname, '../src/main.js');
-    const src = readFileSync(path, 'utf8');
+    // loadImages() call into the renderer: the active game now calls
+    // beginLoad(), and beginLoad() loads the tilemap atlas (alongside the GLB
+    // bundle). So the contract that "the active game populates its tilemap
+    // atlas" is now satisfied by the beginLoad() call rather than a bare
+    // loadImages().
+    //
+    // The reveal logic was further extracted out of main.js into the
+    // loading-reveal coordinator (fix/loading-screen-second-pass), so the
+    // beginLoad() call now lives there; main.js wires that coordinator up.
+    const revealSrc = readFileSync(resolve(__dirname, '../src/loading-reveal.js'), 'utf8');
     assert.ok(
-      /renderer\.beginLoad\s*\(/.test(src),
-      'src/main.js must call renderer.beginLoad() so the active game has a ' +
-      'populated tilemap atlas (beginLoad() loads the atlas internally)',
+      /renderer\.beginLoad\s*\(/.test(revealSrc),
+      'src/loading-reveal.js must call renderer.beginLoad() so the active game ' +
+      'has a populated tilemap atlas (beginLoad() loads the atlas internally)',
+    );
+
+    const mainSrc = readFileSync(resolve(__dirname, '../src/main.js'), 'utf8');
+    assert.ok(
+      /makeShowLoadingAndReveal\s*\(/.test(mainSrc),
+      'src/main.js must wire up the loading-reveal coordinator so the game ' +
+      'flow still drives beginLoad() through it',
     );
   });
 
