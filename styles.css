@@ -1484,9 +1484,14 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   justify-content: center;
   background: var(--bg);
   opacity: 1;
-  /* [hidden] still wins (display:none) — this only animates the fade-out. */
   transition: opacity 300ms ease-out;
 }
+/* `display:flex` above is an ID selector (specificity 1,0,0) and would beat the
+   UA `[hidden] { display:none }` (0,1,0) — so without this rule, setting
+   `overlay.hidden = true` never actually hides the overlay. It would snap back
+   to full opacity the moment `.fading-out` is removed and cover the revealed
+   scene. This ID+attribute rule (1,1,0) restores the hidden contract. */
+#loading-overlay[hidden] { display: none; }
 #loading-overlay.fading-out { opacity: 0; }
 
 .loading-card {
