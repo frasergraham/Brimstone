@@ -154,7 +154,10 @@
       // frame after `_upgradeTileTextures()` retro-fits them when the atlas
       // resolves. No await needed.
       renderer.loadImages();
-      renderer.draw();
+      // `draw()` is render-only after the loading-screen change; Babylon is
+      // bootstrapped by `beginLoad()` (which kicks off `_initBabylon` and its
+      // continuous render loop). The preview tool relies on that bootstrap.
+      renderer.beginLoad();
       bootMsg.style.display = 'none';
       setStatus(`rendering · ${size} · seed ${seed}`);
     }

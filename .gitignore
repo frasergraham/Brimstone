@@ -31,3 +31,6 @@ android/capacitor-cordova-android-plugins/
 specs/.supervisor-state.json
 .auto-turn
 .tmp/
+
+# Teem orchestrator journal — per-worker event log, never committed
+.teem-events/

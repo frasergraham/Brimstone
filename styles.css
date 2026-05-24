@@ -1465,6 +1465,69 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   display: block;
   cursor: pointer;
   image-rendering: pixelated;
+  /* Hidden until the loading overlay reveals it — main.js adds .canvas-ready
+     once renderer.whenReady() resolves and the first full-quality frame is
+     drawn, fading the scene in instead of showing the procedural fallbacks. */
+  opacity: 0;
+  transition: opacity 400ms ease-in;
+}
+#game-canvas.canvas-ready { opacity: 1; }
+
+/* ── Loading overlay ────────────────────────────────────────────────────── */
+
+#loading-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  opacity: 1;
+  /* [hidden] still wins (display:none) — this only animates the fade-out. */
+  transition: opacity 300ms ease-out;
+}
+#loading-overlay.fading-out { opacity: 0; }
+
+.loading-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.1rem;
+  padding: 2rem 2.5rem;
+  text-align: center;
+}
+
+.loading-title {
+  font-family: var(--font-serif);
+  font-size: 1.8rem;
+  letter-spacing: 0.04em;
+  color: var(--text-bright);
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+}
+
+.loading-bar {
+  width: min(60vw, 320px);
+  height: 8px;
+  background: var(--bg-section);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.loading-bar-fill {
+  width: 0%;
+  height: 100%;
+  background: linear-gradient(90deg, var(--witch), var(--hero));
+  /* Width is driven by inline style from main.js as items settle. */
+  transition: width 200ms ease-out;
+}
+
+.loading-label {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  letter-spacing: 0.03em;
 }
 
 /* ── Zoom controls ──────────────────────────────────────────────────────── */

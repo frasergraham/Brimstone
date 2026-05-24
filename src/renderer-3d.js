@@ -1269,6 +1269,18 @@ export class Renderer3D {
     this._season        = null;
     this._babylonInit   = null; // pending init promise (de-dupes draw() calls)
 
+    // ── Loading-screen asset bundle (see beginLoad / whenReady / onProgress) ─
+    // beginLoad() populates `_assetBundle` with one item per major load
+    // (engine, atlas, houses, paladin, forest). whenReady() resolves once
+    // every item settles; `onProgress(loaded, total, label)` fires on each
+    // item's .finally. The scene stays hidden behind the loading overlay
+    // (main.js) until whenReady resolves, then fades in.
+    this._assetBundle   = null;  // [{ id, label, promise, settled }]
+    this._loadStarted   = false; // beginLoad idempotency guard
+    this._loadedCount   = 0;     // bundle items settled so far
+    this.onProgress     = null;  // (loaded, total, label?) => void, set by main.js
+    this._loadTimeoutMs = 30000; // whenReady safety timeout (overridable in tests)
+
     // Tile top-face textures (see "Tile top-face textures" banner below).
     // Both keyed by sprite id ('grass_3', 'dirt_1', 'road', …) so every tile of
     // one variant shares one Texture + one Material — ~10 unique materials for
@@ -1477,13 +1489,11 @@ export class Renderer3D {
    *  via main.js's onRedraw, so this is where the standee diff and camera
    *  focus updates happen. */
   draw() {
-    if (!this._engine && !this._babylonInit) {
-      this._babylonInit = this._initBabylon().catch(err => {
-        console.error('[Renderer3D] Babylon init failed:', err);
-      });
-      return;
-    }
-    if (!this._scene) return; // init in flight
+    // Render-only by contract. `beginLoad()` is the sole entry point that
+    // boots Babylon and populates the asset bundle — draw() never triggers
+    // init anymore. It still no-ops while the scene is in flight so any
+    // state-change redraw fired before whenReady() resolves is harmless.
+    if (!this._scene) return; // not ready yet — beginLoad() drives init
     this._syncEntityStandees();
     this._syncEntityIconBillboards();
     this._syncEntityHexOutlines();
@@ -1502,6 +1512,99 @@ export class Renderer3D {
     // sync above so newly-built standees are tagged correctly.
     this._notePhaseChange();
     this._applyFogVeil();
+  }
+
+  // ─── Loading-screen API ──────────────────────────────────────────────────
+  //
+  // The 3D renderer fires several heavy loads (Babylon engine, tilemap atlas,
+  // house GLB, paladin GLB, tree pack). Historically these ran fire-and-forget
+  // from `_initBabylon` and the scene rendered procedural fallbacks that
+  // visibly morphed into the real assets over a few seconds. main.js now hides
+  // the canvas behind a loading overlay until `whenReady()` resolves, ticking a
+  // progress bar from `onProgress`.
+
+  /** Kick off Babylon init + every tracked asset load and populate
+   *  `_assetBundle`. Idempotent — calling twice does nothing the second time.
+   *  Each scene-dependent loader (house/paladin/trees) is chained behind the
+   *  engine promise; the loaders themselves de-dupe (they cache their in-flight
+   *  promise), so `_initBabylon`'s own fire-and-forget kickoff and the bundle's
+   *  re-invocation share a single network load. Per-item `.catch(() => null)`
+   *  means an individual GLB failure never rejects `whenReady` — the renderer
+   *  keeps its procedural fallback. */
+  beginLoad() {
+    if (this._loadStarted) return;
+    this._loadStarted = true;
+    this._loadedCount = 0;
+
+    const basePath = this._assetsBasePath || 'assets';
+
+    // Engine + scene. This is the existing init path (no longer triggered by
+    // draw()). It also kicks off the scene-dependent loaders fire-and-forget;
+    // we re-await their cached promises below so the bundle tracks them.
+    const babylonP = this._babylonInit
+      || (this._babylonInit = this._initBabylon().catch(err => {
+        console.error('[Renderer3D] Babylon init failed:', err);
+      }));
+
+    // tilemap atlas — independent of the scene.
+    const atlasP = this.loadImages(basePath);
+
+    // Scene-dependent GLB loaders. Wait for init, then (re-)invoke each loader.
+    // The loaders return their cached in-flight promise (or the loaded source
+    // if already resolved), so this never starts a duplicate network load.
+    const afterInit = (fn) => babylonP.then(() => (this._scene ? fn() : null));
+    const houseP   = afterInit(() => this._loadHouseModel(basePath));
+    const paladinP = afterInit(() => this._loadPaladinModel(basePath));
+    const treesP   = afterInit(() => this._loadTreePackManifest(basePath));
+
+    this._assetBundle = [
+      { id: 'engine',  label: 'engine',  promise: babylonP },
+      { id: 'sprites', label: 'sprites', promise: atlasP },
+      { id: 'houses',  label: 'houses',  promise: houseP },
+      { id: 'paladin', label: 'paladin', promise: paladinP },
+      { id: 'forest',  label: 'forest',  promise: treesP },
+    ];
+
+    const total = this._assetBundle.length;
+    for (const item of this._assetBundle) {
+      // `.catch` so a single failed GLB never rejects whenReady; `.finally`
+      // ticks progress regardless of resolve/reject order.
+      item.settled = Promise.resolve(item.promise)
+        .catch(() => null)
+        .finally(() => this._emitProgress(item.label, total));
+    }
+  }
+
+  /** Fire the `onProgress` callback for one settled bundle item. */
+  _emitProgress(label, total) {
+    this._loadedCount += 1;
+    if (typeof this.onProgress === 'function') {
+      try {
+        this.onProgress(this._loadedCount, total, label);
+      } catch (err) {
+        console.warn('[Renderer3D] onProgress handler threw:', err);
+      }
+    }
+  }
+
+  /** Resolve once every bundle item has settled (resolved OR rejected). A
+   *  safety timeout (`_loadTimeoutMs`, default 30s) resolves anyway with a
+   *  console.warn so a hung load never traps the player behind the overlay.
+   *  Returns immediately if `beginLoad()` was never called. */
+  whenReady() {
+    if (!this._assetBundle) return Promise.resolve();
+    const all = Promise.all(this._assetBundle.map(b => b.settled)).then(() => undefined);
+    const ms = this._loadTimeoutMs;
+    if (!(ms > 0)) return all;
+    const safety = new Promise(resolve => {
+      const t = setTimeout(() => {
+        console.warn(`[Renderer3D] whenReady safety timeout (${ms}ms) — revealing scene anyway`);
+        resolve();
+      }, ms);
+      // Don't keep a node test process alive waiting on the timer.
+      if (t && typeof t.unref === 'function') t.unref();
+    });
+    return Promise.race([all, safety]);
   }
 
   resize() {

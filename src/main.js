@@ -217,6 +217,59 @@ function _genSaveId() {
 }
 
 /**
+ * Show the loading overlay, drive its progress bar from the renderer's asset
+ * bundle, and fade the canvas in once everything is ready. Works against either
+ * renderer — the 2D path resolves almost immediately, the 3D path waits for the
+ * Babylon engine + every GLB/atlas load (or the renderer's 30s safety timeout).
+ *
+ * `beginLoad()` is the single entry point that boots the renderer; `draw()` no
+ * longer triggers init. We draw one full-quality frame while the overlay is
+ * still up, wait a frame so it paints, then cross-fade overlay → canvas.
+ *
+ * Fire-and-forget from the synchronous init paths — the game's planning setup
+ * runs in parallel; rendering simply catches up when the scene is ready.
+ */
+async function _showLoadingAndReveal(renderer) {
+  const overlay = document.getElementById('loading-overlay');
+  const canvas  = document.getElementById('game-canvas');
+  const fill    = overlay?.querySelector('.loading-bar-fill');
+  const label   = overlay?.querySelector('.loading-label');
+
+  if (overlay) {
+    overlay.hidden = false;
+    overlay.classList.remove('fading-out');
+  }
+  canvas?.classList.remove('canvas-ready');
+  if (fill) fill.style.width = '0%';
+
+  renderer.onProgress = (loaded, total, what) => {
+    if (fill && total > 0) fill.style.width = `${Math.round(100 * loaded / total)}%`;
+    if (label && what) label.textContent = `Loading ${what}…`;
+  };
+
+  try {
+    renderer.beginLoad();
+    await renderer.whenReady();
+  } catch (err) {
+    console.warn('[main] asset load failed; revealing scene anyway:', err);
+  }
+
+  // Draw the first full-quality frame while the overlay still covers it, then
+  // wait one animation frame so the canvas has painted before the fade-in.
+  try { renderer.draw(); } catch { /* draw is defensive — ignore */ }
+  await new Promise(r => requestAnimationFrame(r));
+
+  canvas?.classList.add('canvas-ready'); // 400ms fade-in
+  if (overlay) {
+    overlay.classList.add('fading-out');  // 300ms fade-out
+    setTimeout(() => {
+      overlay.hidden = true;
+      overlay.classList.remove('fading-out');
+    }, 350);
+  }
+}
+
+/**
  * Shared setup for all local (single-player) game starts.
  * Creates the Renderer, UIController, and wires the callbacks that must be
  * present regardless of whether the game is new or resumed:
@@ -234,7 +287,10 @@ function _setupLocalUI(canvas, localWitchAI, localHeroAI, autoplay) {
   renderer = new (_pickRenderer())(canvas, state);
   renderer.resize();
   renderer.onImagesLoaded = () => { if (ui) ui._renderTurnInfo(); };
-  renderer.loadImages();
+  // Show the loading overlay + drive the progress bar; reveals the canvas once
+  // the renderer's asset bundle is ready. Subsumes the old fire-and-forget
+  // loadImages() — beginLoad() (called inside) loads the atlas too.
+  _showLoadingAndReveal(renderer);
 
   ui = new UIController(canvas, state, renderer, localWitchAI, redraw, localHeroAI, autoplay);
   ui.onQuitToMenu = () => location.reload();
@@ -2043,7 +2099,8 @@ function initOnline(mirrorState, myFaction, mpClient) {
   renderer = new (_pickRenderer())(canvas, state);
   renderer.resize();
   renderer.onImagesLoaded = () => { if (ui) ui._renderTurnInfo(); };
-  renderer.loadImages();
+  // Loading overlay + progress bar; reveals the canvas when assets are ready.
+  _showLoadingAndReveal(renderer);
 
   // No local AI — all turns handled server-side
   ui = new UIController(canvas, state, renderer, null, redrawOnline, null, false);
@@ -7549,12 +7606,13 @@ function initSpectator(roomId) {
     renderer = new (_pickRenderer())(canvas, mirrorState);
     renderer.resize();
     renderer.onImagesLoaded = () => { if (ui) ui._renderTurnInfo(); };
-    renderer.loadImages();
     ui = new UIController(canvas, mirrorState, renderer, null, () => renderer.draw(), null, false);
     ui.setMode(UIMode.SPECTATOR);
     ui.speedMode = 'fast';
     window.addEventListener('resize', () => { renderer.resize(); renderer.draw(); });
-    renderer.draw();
+    // Loading overlay + progress bar; reveals the canvas once assets are ready.
+    // (Also boots the renderer — draw() no longer triggers init.)
+    _showLoadingAndReveal(renderer);
   }
 }
 
