@@ -951,15 +951,14 @@
         <!-- 3D camera controls — shown only when the 3D renderer is active
              (toggled by `body.renderer-3d` in main.js). Mirrors #zoom-controls
              placement (bottom-left) and inherits .zoom-btn styling. Mobile
-             shows the zoom +/− pair; desktop adds rotate left/right since
-             right-drag is harder to discover than a button. Tilt is locked
-             at π/4 (45°) — see CAMERA_BETA_LOCKED in renderer-3d.js — so
-             there are no tilt buttons. -->
+             shows rotate left/right — pinch-to-zoom already covers zoom on
+             touch, whereas the twist gesture for rotation is harder to
+             discover than a button. Tilt is locked at π/4 (45°) — see
+             CAMERA_BETA_LOCKED in renderer-3d.js — so there are no tilt
+             buttons. -->
         <div id="camera-controls-3d" class="zoom-controls" style="display:none">
-          <button id="cam3d-zoom-in"  class="zoom-btn" title="Zoom in">＋</button>
-          <button id="cam3d-zoom-out" class="zoom-btn" title="Zoom out">－</button>
-          <button id="cam3d-rotate-left"  class="zoom-btn cam3d-desktop-only" title="Rotate left">↶</button>
-          <button id="cam3d-rotate-right" class="zoom-btn cam3d-desktop-only" title="Rotate right">↷</button>
+          <button id="cam3d-rotate-left"  class="zoom-btn" title="Rotate left">↶</button>
+          <button id="cam3d-rotate-right" class="zoom-btn" title="Rotate right">↷</button>
         </div>
         <!-- Zoom controls — always visible on desktop, hidden on touch-only devices -->
         <div id="zoom-controls" class="zoom-controls">
