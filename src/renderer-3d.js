@@ -6844,13 +6844,37 @@ export class Renderer3D {
         // Defensive: tile may have been disposed (map rebuild) — only restore
         // if the tile mesh is still in the scene.
         if (!tileMesh.isDisposed?.()) {
-          tileMesh.material = original;
+          // Don't blindly slam the pre-flash material back on: the fog veil is
+          // diff-based, so if this hex's fog state changed during the ~220ms
+          // flash window (e.g. the turn resolved and the hex fell out of /
+          // into sight) the captured `original` is now stale. Restoring it
+          // desyncs the mesh from `_fogActiveSet`, and the next veil pass — a
+          // no-op since the set already says "correct" — never repaints it,
+          // leaving the hex stuck. Recompute the material from the CURRENT fog
+          // state instead so the veil and the mesh can't drift apart.
+          tileMesh.material = this._currentTileMaterial(col, row, tileMesh, original);
         }
         flashMat.dispose();
         resolve();
       }, duration);
     });
     this._trackAnim(promise);
+  }
+
+  /** Material a tile should currently display given the live fog state. Mirrors
+   *  `_setTileFogged`'s material selection so callers that touch a tile's
+   *  material outside the veil (e.g. `_flashTile`'s delayed restore) can hand
+   *  back a fog-consistent material rather than a stale captured one. Falls
+   *  back to `fallback` when the tile isn't in state and there's no baseColor
+   *  to synthesise a colour-only material from. */
+  _currentTileMaterial(col, row, tileMesh, fallback = null) {
+    const key    = hexKey(col, row);
+    const fogged = this._fogActiveSet.has(key);
+    const tile   = this.state?.tiles?.get(key);
+    if (tile) return this._tileMaterialFor(tile, { fogged });
+    const baseColor = tileMesh?.metadata?.baseColor;
+    if (!baseColor) return fallback;
+    return fogged ? this._fogMaterialFor(baseColor) : this._materialFor(baseColor);
   }
 
   // ─── HP-change flash + floating text ─────────────────────────────────────
