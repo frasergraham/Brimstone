@@ -223,14 +223,14 @@ export class UIController {
       this.onRedraw();
     }, sig);
     // ── 3D camera-controls cluster (#camera-controls-3d) ────────────────────
-    // Shown only on body.renderer-3d (CSS-driven). Each button hold-to-repeats
-    // at CAMERA_BUTTON_REPEAT_MS so zoom + rotate feel continuous. The bind
-    // helper attaches pointerdown / pointerup (with pointerleave fallback) so
-    // touch and mouse drive the same repeater. Tilt is locked at π/4 — see
-    // CAMERA_BETA_LOCKED in renderer-3d.js — so there are no tilt buttons.
+    // Shown only on body.renderer-3d (CSS-driven), mobile-only: rotate
+    // left/right buttons (pinch-to-zoom covers zoom on touch). Each button
+    // hold-to-repeats so rotation feels continuous. The bind helper attaches
+    // pointerdown / pointerup (with pointerleave fallback) so touch and mouse
+    // drive the same repeater. Tilt is locked at π/4 — see CAMERA_BETA_LOCKED
+    // in renderer-3d.js — so there are no tilt buttons.
     const ROT_STEP  = Math.PI / 90;           // ≈2° per tick — finer than the click-step rotate buttons
     const REPEAT_MS = 50;
-    const zoomFactorPerTick = Math.pow(zoomStep, 0.25); // ~5%/tick → 1.25 in ~5 ticks
     const bindHoldToRepeat = (id, tickFn) => {
       const el = this._el(id);
       if (!el) return;
@@ -249,14 +249,6 @@ export class UIController {
       el.addEventListener('pointercancel', stop, sig);
       el.addEventListener('pointerleave',  stop, sig);
     };
-    bindHoldToRepeat('cam3d-zoom-in',  () => {
-      const cx = this.canvas.width / 2, cy = this.canvas.height / 2;
-      this.renderer.setZoom(this.renderer.zoomLevel * zoomFactorPerTick, cx, cy);
-    });
-    bindHoldToRepeat('cam3d-zoom-out', () => {
-      const cx = this.canvas.width / 2, cy = this.canvas.height / 2;
-      this.renderer.setZoom(this.renderer.zoomLevel / zoomFactorPerTick, cx, cy);
-    });
     bindHoldToRepeat('cam3d-rotate-left',  () => this.renderer.rotateBy(-ROT_STEP, 0));
     bindHoldToRepeat('cam3d-rotate-right', () => this.renderer.rotateBy( ROT_STEP, 0));
     // 3D camera mode toggle — swaps drag between pan and rotate. Wheel /

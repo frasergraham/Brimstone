@@ -1558,12 +1558,11 @@ body.renderer-3d #rotate-left,
 body.renderer-3d #rotate-right {
   display: none;
 }
-/* Touch devices: hide the desktop-only rotate buttons (twist gesture covers
-   rotation on mobile, per the camera-controls spec). */
+/* Touch devices: the cluster shows rotate left/right only (pinch-to-zoom
+   covers zoom; the twist gesture for rotation is harder to discover). */
 @media (hover: none) and (pointer: coarse) {
-  .cam3d-desktop-only { display: none; }
   body.renderer-3d #camera-controls-3d {
-    /* 4 buttons × (42px+4px) ≈ 184px — sits comfortably above the legacy
+    /* 2 buttons × (42px+4px) ≈ 92px — sits comfortably above the legacy
        cluster's remaining 3 buttons (fit, focus, speed). */
     bottom: 195px;
   }
