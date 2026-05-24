@@ -129,7 +129,7 @@ export class Renderer {
     // ── Loading-screen API parity (see beginLoad / whenReady) ───────────────
     // The 2D renderer loads only tilemap.png, so these are near no-ops, but the
     // slots + methods mirror Renderer3D so main.js drives either without a branch.
-    this.onProgress    = null;  // (loaded, total, label?) => void, set by main.js
+    this.onProgress    = null;  // (progress01, label?) => void, set by main.js
     this._loadStarted  = false; // beginLoad idempotency guard
     this._readyPromise = null;  // resolves when the atlas settles
     this._assetsBasePath = null;
@@ -330,7 +330,7 @@ export class Renderer {
       .catch(() => null)
       .finally(() => {
         if (typeof this.onProgress === 'function') {
-          try { this.onProgress(1, 1, 'sprites'); }
+          try { this.onProgress(1, 'sprites'); }
           catch (err) { console.warn('[Renderer] onProgress handler threw:', err); }
         }
       });

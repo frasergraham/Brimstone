@@ -1503,14 +1503,6 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   text-align: center;
 }
 
-.loading-title {
-  font-family: var(--font-serif);
-  font-size: 1.8rem;
-  letter-spacing: 0.04em;
-  color: var(--text-bright);
-  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
-}
-
 .loading-bar {
   width: min(60vw, 320px);
   height: 8px;
@@ -1521,11 +1513,41 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 }
 
 .loading-bar-fill {
+  position: relative;
   width: 0%;
   height: 100%;
   background: linear-gradient(90deg, var(--witch), var(--hero));
-  /* Width is driven by inline style from main.js as items settle. */
+  /* Width is driven by inline style from the loading coordinator as byte-level
+     progress arrives. */
   transition: width 200ms ease-out;
+  overflow: hidden;
+}
+
+/* Always-moving shimmer: a translucent highlight sweeps across the filled
+   portion on a continuous loop, independent of the fill width. So even between
+   byte-level progress ticks (or when a load reports no Content-Length) the bar
+   reads as alive rather than frozen. */
+.loading-bar-fill::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.35) 50%,
+    transparent 100%
+  );
+  transform: translateX(-100%);
+  animation: loading-shimmer 1.2s ease-in-out infinite;
+}
+
+@keyframes loading-shimmer {
+  to { transform: translateX(100%); }
+}
+
+/* Honour reduced-motion: drop the looping sweep for users who opt out. */
+@media (prefers-reduced-motion: reduce) {
+  .loading-bar-fill::after { animation: none; }
 }
 
 .loading-label {

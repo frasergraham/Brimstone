@@ -104,8 +104,8 @@ describe('loading-reveal coordinator', () => {
     const r = makeRenderer();
     const p = show(r);
 
-    r.onProgress(3, 5, 'forest');
-    assert.equal(doc.fill.style.width, '60%', 'bar width tracks loaded/total');
+    r.onProgress(0.6, 'forest');
+    assert.equal(doc.fill.style.width, '60%', 'bar width tracks aggregate progress');
     assert.equal(doc.label.textContent, 'Loading forest…', 'label tracks the asset');
 
     r._finishLoad();
@@ -166,11 +166,11 @@ describe('loading-reveal coordinator', () => {
     show(rA);
     show(rB); // B now current
 
-    rB.onProgress(1, 5, 'engine');
+    rB.onProgress(0.2, 'engine');
     assert.equal(doc.label.textContent, 'Loading engine…');
 
     // Stale A's progress must be ignored — no flicker back to A's labels.
-    rA.onProgress(4, 5, 'forest');
+    rA.onProgress(0.8, 'forest');
     assert.equal(doc.label.textContent, 'Loading engine…', 'stale progress ignored');
     assert.equal(doc.fill.style.width, '20%', 'stale progress did not move the bar');
   });

@@ -58,10 +58,13 @@ export function makeShowLoadingAndReveal({ doc, raf, setTimer, hideDelayMs = 350
     canvas?.classList.remove('canvas-ready');
     if (fill) fill.style.width = '0%';
 
-    renderer.onProgress = (loaded, total, what) => {
+    renderer.onProgress = (progress01, what) => {
       // A superseded renderer's load must not drive the shared progress bar.
       if (!isCurrent()) return;
-      if (fill && total > 0) fill.style.width = `${Math.round(100 * loaded / total)}%`;
+      if (fill && typeof progress01 === 'number') {
+        const pct = Math.max(0, Math.min(100, Math.round(progress01 * 100)));
+        fill.style.width = `${pct}%`;
+      }
       if (label && what) label.textContent = `Loading ${what}…`;
     };
 
