@@ -126,6 +126,14 @@ export class Renderer {
      *  through the 2D-canvas pathway. */
     this.is3D    = false;
 
+    // ── Loading-screen API parity (see beginLoad / whenReady) ───────────────
+    // The 2D renderer loads only tilemap.png, so these are near no-ops, but the
+    // slots + methods mirror Renderer3D so main.js drives either without a branch.
+    this.onProgress    = null;  // (loaded, total, label?) => void, set by main.js
+    this._loadStarted  = false; // beginLoad idempotency guard
+    this._readyPromise = null;  // resolves when the atlas settles
+    this._assetsBasePath = null;
+
     // Unified overlay map + legacy `highlightHexes` getter. Initialises
     // `_overlays` / `_selection` / `_hover`; selection & hover now flow through
     // setSelection() / setHover() rather than the retired field proxies.
@@ -304,6 +312,34 @@ export class Renderer {
     this._portraitCache = new Map();
     this.draw();
     if (this.onImagesLoaded) this.onImagesLoaded();
+  }
+
+  // ─── Loading-screen API ──────────────────────────────────────────────────
+  //
+  // Mirrors the 3D renderer's beginLoad/whenReady/onProgress so main.js can
+  // drive the loading overlay without branching on which renderer is active.
+  // The 2D renderer loads only tilemap.png, so this is effectively a no-op:
+  // one bundle item that resolves as fast as the atlas decodes.
+
+  /** Kick off the (single) 2D asset load. Idempotent. */
+  beginLoad() {
+    if (this._loadStarted) return;
+    this._loadStarted = true;
+    const promise = this.loadImages(this._assetsBasePath || 'assets');
+    this._readyPromise = Promise.resolve(promise)
+      .catch(() => null)
+      .finally(() => {
+        if (typeof this.onProgress === 'function') {
+          try { this.onProgress(1, 1, 'sprites'); }
+          catch (err) { console.warn('[Renderer] onProgress handler threw:', err); }
+        }
+      });
+  }
+
+  /** Resolve once the atlas has settled (or immediately if beginLoad wasn't
+   *  called). The 2D path never hangs, so no safety timeout is needed. */
+  whenReady() {
+    return this._readyPromise || Promise.resolve();
   }
 
   /**

@@ -291,15 +291,21 @@ describe('Renderer3D consumers — must call loadImages() to populate the atlas'
     );
   });
 
-  test('src/main.js calls renderer.loadImages() after constructing the renderer', () => {
+  test('src/main.js drives the atlas load via renderer.beginLoad()', () => {
     // Sibling check — locks in the main game flow too, so a future refactor
     // that moves the renderer construction can't silently drop the call.
+    //
+    // The loading-screen work (feat/loading-screen) moved the direct
+    // loadImages() call into the renderer: main.js now calls beginLoad(), and
+    // beginLoad() loads the tilemap atlas (alongside the GLB bundle). So the
+    // contract that "the active game populates its tilemap atlas" is now
+    // satisfied by the beginLoad() call rather than a bare loadImages().
     const path = resolve(__dirname, '../src/main.js');
     const src = readFileSync(path, 'utf8');
     assert.ok(
-      /renderer\.loadImages\s*\(/.test(src),
-      'src/main.js must call renderer.loadImages() so the active game has a ' +
-      'populated tilemap atlas',
+      /renderer\.beginLoad\s*\(/.test(src),
+      'src/main.js must call renderer.beginLoad() so the active game has a ' +
+      'populated tilemap atlas (beginLoad() loads the atlas internally)',
     );
   });
 

@@ -892,6 +892,17 @@
   <!-- ── Game screen ───────────────────────────────────────────────── -->
   <div id="game-screen">
 
+    <!-- Loading overlay — covers the whole game screen until the 3D renderer's
+         asset bundle (engine, sprites, houses, paladin, forest) is ready, then
+         fades out as the canvas fades in. Hidden by default via [hidden]. -->
+    <div id="loading-overlay" hidden>
+      <div class="loading-card">
+        <h2 class="loading-title">Caleb's Hollow</h2>
+        <div class="loading-bar"><div class="loading-bar-fill"></div></div>
+        <div class="loading-label">Loading…</div>
+      </div>
+    </div>
+
     <header id="game-header">
       <button id="menu-btn" class="header-icon-btn" title="Menu">☰</button>
       <div id="turn-info"></div>
