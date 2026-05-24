@@ -167,7 +167,9 @@
     // Absolute path — the page lives at /admin/lighting, so the default
     // relative `assets/tilemap.png` would resolve to /admin/assets/...
     renderer.loadImages('/assets');
-    renderer.draw();
+    // `draw()` is render-only now; `beginLoad()` is what bootstraps Babylon
+    // (_initBabylon + render loop). waitForRenderer() below depends on it.
+    renderer.beginLoad();
 
     // After renderer's _initBabylon finished (async), grab references to the
     // lights and detach the renderer's per-frame light pump so our UI values
@@ -319,7 +321,8 @@
       state = buildState();
       renderer = new Renderer3D(canvas, state);
       renderer.loadImages('/assets');
-      renderer.draw();
+      // beginLoad() bootstraps Babylon (draw() is render-only post loading-screen).
+      renderer.beginLoad();
       waitForRenderer().then(() => {
         if (renderer._onBeforeRenderObs) {
           renderer._scene.onBeforeRenderObservable.remove(renderer._onBeforeRenderObs);
