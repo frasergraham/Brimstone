@@ -1271,14 +1271,16 @@ export class Renderer3D {
 
     // ── Loading-screen asset bundle (see beginLoad / whenReady / onProgress) ─
     // beginLoad() populates `_assetBundle` with one item per major load
-    // (engine, atlas, houses, paladin, forest). whenReady() resolves once
-    // every item settles; `onProgress(loaded, total, label)` fires on each
-    // item's .finally. The scene stays hidden behind the loading overlay
-    // (main.js) until whenReady resolves, then fades in.
-    this._assetBundle   = null;  // [{ id, label, promise, settled }]
+    // (engine, atlas, houses, paladin, forest). Each item carries a smoothed
+    // `progress: 0..1` — bumped by byte-level ImportMeshAsync callbacks while
+    // the GLB streams, then pinned to 1 on settle. `onProgress(progress01,
+    // label)` fires with the aggregate (mean of all item fractions) every time
+    // any item advances. whenReady() resolves once every item settles. The
+    // scene stays hidden behind the loading overlay (main.js) until whenReady
+    // resolves, then fades in.
+    this._assetBundle   = null;  // [{ id, label, promise, progress, settled }]
     this._loadStarted   = false; // beginLoad idempotency guard
-    this._loadedCount   = 0;     // bundle items settled so far
-    this.onProgress     = null;  // (loaded, total, label?) => void, set by main.js
+    this.onProgress     = null;  // (progress01, label?) => void, set by main.js
     this._loadTimeoutMs = 30000; // whenReady safety timeout (overridable in tests)
 
     // Tile top-face textures (see "Tile top-face textures" banner below).
@@ -1534,7 +1536,6 @@ export class Renderer3D {
   beginLoad() {
     if (this._loadStarted) return;
     this._loadStarted = true;
-    this._loadedCount = 0;
 
     const basePath = this._assetsBasePath || 'assets';
 
@@ -1558,32 +1559,65 @@ export class Renderer3D {
     const treesP   = afterInit(() => this._loadTreePackManifest(basePath));
 
     this._assetBundle = [
-      { id: 'engine',  label: 'engine',  promise: babylonP },
-      { id: 'sprites', label: 'sprites', promise: atlasP },
-      { id: 'houses',  label: 'houses',  promise: houseP },
-      { id: 'paladin', label: 'paladin', promise: paladinP },
-      { id: 'forest',  label: 'forest',  promise: treesP },
+      { id: 'engine',  label: 'engine',  promise: babylonP,  progress: 0 },
+      { id: 'sprites', label: 'sprites', promise: atlasP,    progress: 0 },
+      { id: 'houses',  label: 'houses',  promise: houseP,    progress: 0 },
+      { id: 'paladin', label: 'paladin', promise: paladinP,  progress: 0 },
+      { id: 'forest',  label: 'forest',  promise: treesP,    progress: 0 },
     ];
 
-    const total = this._assetBundle.length;
     for (const item of this._assetBundle) {
       // `.catch` so a single failed GLB never rejects whenReady; `.finally`
-      // ticks progress regardless of resolve/reject order.
+      // pins the item to 100% regardless of resolve/reject order (byte-level
+      // ticks may not reach 1 if the server sent no Content-Length).
       item.settled = Promise.resolve(item.promise)
         .catch(() => null)
-        .finally(() => this._emitProgress(item.label, total));
+        .finally(() => {
+          item.progress = 1;
+          this._emitProgress(item.label);
+        });
     }
   }
 
-  /** Fire the `onProgress` callback for one settled bundle item. */
-  _emitProgress(label, total) {
-    this._loadedCount += 1;
-    if (typeof this.onProgress === 'function') {
-      try {
-        this.onProgress(this._loadedCount, total, label);
-      } catch (err) {
-        console.warn('[Renderer3D] onProgress handler threw:', err);
-      }
+  /** Advance one bundle item's byte-level progress and re-emit the aggregate.
+   *  Monotonic — a regressing or already-settled fraction is ignored, so a
+   *  late/duplicate ProgressEvent never drags the bar backwards. No-op before
+   *  `beginLoad()` populates the bundle or for an unknown id. */
+  _setItemProgress(id, frac) {
+    if (!this._assetBundle) return;
+    const item = this._assetBundle.find(b => b.id === id);
+    if (!item) return;
+    const f = Math.max(0, Math.min(1, frac));
+    if (!(f > (item.progress || 0))) return;
+    item.progress = f;
+    this._emitProgress(item.label);
+  }
+
+  /** Build an ImportMeshAsync `onProgress` handler bound to one bundle item.
+   *  Babylon hands it a ProgressEvent-like `{ lengthComputable, loaded, total }`
+   *  per network tick; when the server sent no Content-Length the event isn't
+   *  computable and we skip the tick (the item's `.finally` still pins it to 1
+   *  on completion, and the shimmer keeps the bar alive in the meantime). */
+  _glbProgressHandler(id) {
+    return (evt) => {
+      if (!evt || !evt.lengthComputable || !(evt.total > 0)) return;
+      this._setItemProgress(id, evt.loaded / evt.total);
+    };
+  }
+
+  /** Re-emit aggregate load progress (mean of every item's 0..1 fraction).
+   *  `label` is the item that just advanced, surfaced as the overlay caption. */
+  _emitProgress(label) {
+    if (typeof this.onProgress !== 'function') return;
+    const items = this._assetBundle;
+    if (!items || items.length === 0) return;
+    let sum = 0;
+    for (const b of items) sum += (b.progress || 0);
+    const progress01 = sum / items.length;
+    try {
+      this.onProgress(progress01, label);
+    } catch (err) {
+      console.warn('[Renderer3D] onProgress handler threw:', err);
     }
   }
 
@@ -1839,6 +1873,7 @@ export class Renderer3D {
           `${basePath}/${HOUSE_MODEL_DIR}`,
           HOUSE_MODEL_FILE,
           this._scene,
+          this._glbProgressHandler('houses'),
         );
       } catch (err) {
         console.warn('[Renderer3D] house.glb load failed; using procedural buildings.', err);
@@ -2112,16 +2147,36 @@ export class Renderer3D {
       // directly; multi-submesh imports merge first). Failures are isolated
       // per-file so one bad GLB doesn't kill the whole pack.
       const baseUrl = `${basePath}/${TREE_PACK_DIR}`;
+      // Byte-level progress for the 'forest' bundle item is the mean fraction
+      // across every tree GLB. Each file's per-tick fraction feeds this map;
+      // the item climbs smoothly toward 1 as files stream and settle (a
+      // settled file pins to 1 so a missing Content-Length never stalls it).
+      const fileCount = uniqueFiles.size;
+      const fileFractions = new Map();
+      const reportForest = () => {
+        let s = 0;
+        for (const v of fileFractions.values()) s += v;
+        this._setItemProgress('forest', fileCount > 0 ? s / fileCount : 0);
+      };
       const loadOne = async (file) => {
         let result;
         try {
           result = await BABYLON.SceneLoader.ImportMeshAsync(
             null, baseUrl, file, this._scene,
+            (evt) => {
+              if (!evt || !evt.lengthComputable || !(evt.total > 0)) return;
+              fileFractions.set(file, evt.loaded / evt.total);
+              reportForest();
+            },
           );
         } catch (err) {
           console.warn(`[Renderer3D] tree GLB load failed (${file}); skipping.`, err);
+          fileFractions.set(file, 1); // settled (failed) — count it as done
+          reportForest();
           return null;
         }
+        fileFractions.set(file, 1); // file fully streamed
+        reportForest();
         const realMeshes = (result?.meshes || []).filter(m =>
           m && typeof m.getTotalVertices === 'function' && m.getTotalVertices() > 0,
         );
@@ -2419,6 +2474,7 @@ export class Renderer3D {
           `${basePath}/${PALADIN_MODEL_DIR}`,
           PALADIN_MODEL_FILE,
           this._scene,
+          this._glbProgressHandler('paladin'),
         );
       } catch (err) {
         console.warn('[Renderer3D] paladin.glb load failed; using cone+sphere bodies.', err);
@@ -2616,6 +2672,7 @@ export class Renderer3D {
         `${basePath}/${PALADIN_MODEL_DIR}`,
         WALKING_MODEL_FILE,
         this._scene,
+        this._glbProgressHandler('paladin'),
       );
     } catch (err) {
       console.warn('[Renderer3D] walking.glb import failed', err);
@@ -2797,6 +2854,7 @@ export class Renderer3D {
         `${basePath}/${PALADIN_MODEL_DIR}`,
         IDLE_MODEL_FILE,
         this._scene,
+        this._glbProgressHandler('paladin'),
       );
     } catch (err) {
       console.warn('[Renderer3D] idle.glb import failed', err);
