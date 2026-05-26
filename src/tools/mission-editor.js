@@ -336,6 +336,141 @@ function _clone(obj) {
   return JSON.parse(JSON.stringify(obj));
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Mission META model + form operations (P6)
+// ─────────────────────────────────────────────────────────────────────────────
+// The editor's working model is three pieces:
+//   • mapDef     — the P1 map sub-schema (above).
+//   • enemyUnits — the sibling placement list (above).
+//   • meta       — EVERYTHING ELSE in the mission JSON (scalars, briefing text,
+//                  phaseCycle, resources, waves, objectives, storyTriggers,
+//                  survivorStartPositions). The authoring forms edit `meta`.
+//
+// `assembleMission` recombines the three into a complete schema:1 mission JSON;
+// `populateFromMission` splits a parsed mission back into the three. The two are
+// inverses (lossless round-trip), which the forms tests pin.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** A fresh, complete mission meta block (all fields present). */
+export function createDefaultMeta() {
+  return {
+    id: 'new_mission',
+    title: 'New Mission',
+    chapter: 1,
+    campaignId: null,
+    requires: null,
+    briefing: '',
+    victoryText: '',
+    defeatText: '',
+    phaseCycle: { phases: ['dawn', 'day', 'day', 'day'], loop: true },
+    mapSize: 'skirmish',
+    hasWitch: false,
+    disableScoring: true,
+    aiPersonality: 'balanced',
+    aiBudgetBonus: 0,
+    maxSurvivorsFromRoster: 0,
+    missionSurvivors: 0,
+    maxDiscoverableSurvivors: 0,
+    startingResources: {},
+    rewards: {},
+    healBonus: 0,
+    lootOverrides: null,
+    waves: [],
+    objectives: { win: { type: 'eliminate_all' }, lose: { type: 'hero_killed' } },
+    storyTriggers: [],
+    survivorStartPositions: [],
+  };
+}
+
+// ── storyTriggers list ops ────────────────────────────────────────────────────
+
+/** Append a story trigger (round-based by default). `entry` overrides fields. */
+export function addStoryTrigger(meta, entry = {}) {
+  if (!Array.isArray(meta.storyTriggers)) meta.storyTriggers = [];
+  meta.storyTriggers.push({ type: 'round', round: 1, title: '', text: '', ...entry });
+  return meta;
+}
+
+export function removeStoryTrigger(meta, idx) {
+  if (Array.isArray(meta.storyTriggers) && idx >= 0 && idx < meta.storyTriggers.length) {
+    meta.storyTriggers.splice(idx, 1);
+  }
+  return meta;
+}
+
+/** Reorder a story trigger by `dir` (−1 up, +1 down). No-op at the edges. */
+export function moveStoryTrigger(meta, idx, dir) {
+  const list = meta.storyTriggers;
+  if (!Array.isArray(list)) return meta;
+  const j = idx + dir;
+  if (idx < 0 || idx >= list.length || j < 0 || j >= list.length) return meta;
+  [list[idx], list[j]] = [list[j], list[idx]];
+  return meta;
+}
+
+// ── waves list ops ────────────────────────────────────────────────────────────
+
+/** Append a wave (round-triggered by default). `wave` overrides fields. */
+export function addWave(meta, wave = {}) {
+  if (!Array.isArray(meta.waves)) meta.waves = [];
+  meta.waves.push({ trigger: 'round', round: 1, count: 1, units: [], ...wave });
+  return meta;
+}
+
+export function removeWave(meta, idx) {
+  if (Array.isArray(meta.waves) && idx >= 0 && idx < meta.waves.length) {
+    meta.waves.splice(idx, 1);
+  }
+  return meta;
+}
+
+// ── objectives ────────────────────────────────────────────────────────────────
+
+/** Set the win/lose objective (a def `{type, ...params}` or array for lose). */
+export function setObjective(meta, side, def) {
+  if (side !== 'win' && side !== 'lose') return meta;
+  if (!meta.objectives || typeof meta.objectives !== 'object') meta.objectives = {};
+  meta.objectives[side] = def;
+  return meta;
+}
+
+// ── Assemble / populate (inverses) ─────────────────────────────────────────────
+
+/**
+ * Recombine the working model into a complete schema:1 mission JSON object.
+ * Tiles are already COMPLETE defs (mapDef stores them in snapshot form);
+ * storyTrigger conditions are already STRING keys; enemyUnits keep their
+ * lowercase runtime `type`. `map.roadSeed` (if any) rides along inside `mapDef`.
+ *
+ * @param {{ meta: object, mapDef: object, enemyUnits: object[] }} model
+ */
+export function assembleMission({ meta, mapDef, enemyUnits }) {
+  return {
+    schema: 1,
+    ...meta,
+    map: mapDef,
+    enemyUnits: enemyUnits ?? [],
+  };
+}
+
+/**
+ * Split a parsed mission JSON into the editor's three model pieces (inverse of
+ * {@link assembleMission}). `schema`, `map`, and `enemyUnits` are peeled off;
+ * everything else becomes `meta`.
+ *
+ * @param {object} parsed
+ * @returns {{ meta: object, mapDef: object, enemyUnits: object[] }}
+ */
+export function populateFromMission(parsed) {
+  // eslint-disable-next-line no-unused-vars
+  const { schema, map, enemyUnits, ...meta } = parsed;
+  return {
+    meta,
+    mapDef: map,
+    enemyUnits: enemyUnits ?? [],
+  };
+}
+
 // ── Controller ───────────────────────────────────────────────────────────────
 
 const _TOOL_DISPATCH = {
@@ -365,6 +500,7 @@ const _TOOL_DISPATCH = {
 export function createMissionEditor({ render } = {}) {
   let mapDef = createDefaultMapDef();
   let enemyUnits = [];
+  let meta = createDefaultMeta();
   let activeTool = EditorTool.PAINT_TILE;
   const paintValues = {
     tile: _enumKey(TileType, TileType.GRASS),
@@ -379,7 +515,7 @@ export function createMissionEditor({ render } = {}) {
 
   // Snapshot the full serialisable model before each edit (undo).
   function snapshot() {
-    undoStack.push(JSON.stringify({ mapDef, enemyUnits }));
+    undoStack.push(JSON.stringify({ mapDef, enemyUnits, meta }));
   }
 
   function _inBounds({ col, row }) {
@@ -396,6 +532,20 @@ export function createMissionEditor({ render } = {}) {
     setMapDef(def) { snapshot(); mapDef = def; emit(); },
     getEnemyUnits: () => enemyUnits,
     setEnemyUnits(list) { snapshot(); enemyUnits = list; emit(); },
+    getMeta: () => meta,
+    setMeta(m) { snapshot(); meta = m; emit(); },
+
+    // ── Full-mission assemble / load (P6) ────────────────────────────────
+    /** Recombine the model into a complete schema:1 mission JSON object. */
+    assemble() { return assembleMission({ meta, mapDef, enemyUnits }); },
+    /** Replace the whole model atomically (one undo step) from a split mission. */
+    applyMission({ meta: m, mapDef: md, enemyUnits: eu }) {
+      snapshot();
+      meta = m;
+      mapDef = md;
+      enemyUnits = eu ?? [];
+      emit();
+    },
 
     // ── Tool / paint state ───────────────────────────────────────────────
     get activeTool() { return activeTool; },
@@ -437,6 +587,7 @@ export function createMissionEditor({ render } = {}) {
       const prev = JSON.parse(undoStack.pop());
       mapDef = prev.mapDef;
       enemyUnits = prev.enemyUnits;
+      if (prev.meta) meta = prev.meta;
       emit();
       return true;
     },
