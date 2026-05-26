@@ -22,11 +22,27 @@ describe('admin-tools.html', () => {
 
   const html = readFileSync(PAGE_PATH, 'utf8');
 
-  test('has the three tabs: Assets | Lighting | Mission Editor', () => {
+  test('has the three tools: Assets | Lighting | Mission Editor', () => {
     assert.match(html, /data-tab="assets"/);
     assert.match(html, /data-tab="lighting"/);
     assert.match(html, /data-tab="editor"/);
     assert.match(html, />Mission Editor</);
+  });
+
+  test('uses a top-left ☰ menu button to switch tools (not a tab strip)', () => {
+    assert.match(html, /id="tools-menu-btn"/);
+    assert.match(html, /id="tools-menu-list"/);
+    // The tools live inside the dropdown menu, driven by controller.activate.
+    assert.match(html, /controller\.activate\(item\.dataset\.tab\)/);
+  });
+
+  test('has a File menu with Load + Save (relocated from the side panel)', () => {
+    assert.match(html, /id="file-menu"/);
+    assert.match(html, /id="file-load"/);
+    assert.match(html, /id="file-save"/);
+    // Wired to the editor handle's relocated load/save flow.
+    assert.match(html, /handles\.editor\?\.loadMissionFile/);
+    assert.match(html, /handles\.editor\?\.saveMission/);
   });
 
   test('uses the lazy-init tab controller', () => {
