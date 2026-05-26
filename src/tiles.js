@@ -170,17 +170,166 @@ export function rollLoot(table) {
   return table[table.length - 1].type;
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Layered tile model (P0 of the tile-model refactor)
+//
+// A tile is split into THREE independent layers so that a road/river/building
+// can sit on ANY base material (e.g. a road through forest):
+//
+//   base      ∈ {grass, forest, dirt}            — the terrain material
+//   structure ∈ {none(null), 'building'}         — is there a building or not
+//   path      ∈ {none(null), road, river, bridge}— overlaid path/water feature
+//
+// `building` (BuildingType) and `roadDirs` (Set of connected neighbours) stay
+// as their own fields. The legacy single `tile.type` (TileType) is preserved
+// as a derived get/set shim so the ~60-file codebase keeps working untouched
+// while later phases migrate readers to the explicit layers + predicates below.
+//
+// REPRESENTATION CHOICE: `structure` is a coarse marker — either null (none) or
+// the string 'building'. The actual BuildingType lives in `building`, exactly
+// as before. `structureOf()` treats a tile as having a building when EITHER
+// `structure === 'building'` OR `building != null`, so existing code that sets
+// `tile.building = X` directly (without touching `structure`) still yields
+// `tile.type === 'building'`. This keeps the shim robust to both the new
+// explicit writes and legacy direct-field writes.
+// ─────────────────────────────────────────────────────────────────────────
+
+// Path-layer values (in addition to null = none).
+export const PathType = Object.freeze({
+  ROAD:   'road',
+  RIVER:  'river',
+  BRIDGE: 'bridge',
+});
+
+// Structure-layer marker (in addition to null = none).
+export const StructureType = Object.freeze({
+  BUILDING: 'building',
+});
+
 export class Tile {
   constructor(col, row, type = TileType.GRASS) {
     this.col = col;
     this.row = row;
+    // Explicit layers. Defaults are set before `type` is decomposed below.
+    this.base = TileType.GRASS;   // 'grass' | 'forest' | 'dirt'
+    this.structure = null;        // null (none) | 'building'
+    this.path = null;             // null (none) | 'road' | 'river' | 'bridge'
+    this.building = null;         // BuildingType or null
+    // Decompose the legacy TileType into (base, structure, path) via the setter.
     this.type = type;
-    this.building = null;   // BuildingType or null
     this.explored = false;
     this.resource = null;   // ResourceType or null (on open tiles)
     this.fortifyLevel = 0;  // 0=none, 1..6=fortified (see getFortifyCombatBonus)
     this.roadDirs = new Set(); // hexKeys of road-connected neighbours (set at map gen time)
   }
+
+  // Derived legacy TileType from the three layers. Precedence (matches the old
+  // single-type semantics): river > bridge > road > building > base material.
+  get type() {
+    if (this.path === PathType.RIVER)  return TileType.RIVER;
+    if (this.path === PathType.BRIDGE) return TileType.BRIDGE;
+    if (this.path === PathType.ROAD)   return TileType.ROAD;
+    // A building (set explicitly via `structure` OR implied by `building`).
+    if (this.structure === StructureType.BUILDING || this.building != null) {
+      return TileType.BUILDING;
+    }
+    return this.base ?? TileType.GRASS;
+  }
+
+  // Decompose a legacy TileType into the three layers. Lossless round-trip with
+  // the getter for every TileType value.
+  set type(v) {
+    switch (v) {
+      case TileType.GRASS:
+      case TileType.FOREST:
+      case TileType.DIRT:
+        this.base = v;
+        this.structure = null;
+        this.path = null;
+        break;
+      case TileType.ROAD:
+        this.path = PathType.ROAD;     // base unchanged (defaults to grass)
+        break;
+      case TileType.RIVER:
+        this.path = PathType.RIVER;
+        break;
+      case TileType.BRIDGE:
+        this.path = PathType.BRIDGE;
+        break;
+      case TileType.BUILDING:
+        // Buildings render on dirt today; default the base to match. Legacy
+        // `type` is single-valued, so setting BUILDING must make the tile REPORT
+        // building — clear the `path` layer (it sits above building in the getter
+        // precedence). Road-through-building is carried by the separate `roadDirs`
+        // Set (untouched here), which is how the renderer has always drawn it —
+        // NOT by the `path` layer. So clearing `path` loses no road-through info.
+        this.base = TileType.DIRT;
+        this.structure = StructureType.BUILDING;
+        this.path = null;
+        break;
+      default:
+        // Unknown value: store as base so nothing silently breaks.
+        this.base = v;
+        this.structure = null;
+        this.path = null;
+    }
+  }
+}
+
+// ── Layer accessors ────────────────────────────────────────────────────────
+// Tolerant of plain (non-Tile) serialized tile objects: fall back to defaults.
+
+export function baseOf(tile) {
+  return tile?.base ?? TileType.GRASS;
+}
+
+export function pathOf(tile) {
+  return tile?.path ?? null;
+}
+
+export function structureOf(tile) {
+  if (!tile) return null;
+  // Either the explicit marker or a legacy direct `building` write counts.
+  if (tile.structure === StructureType.BUILDING || tile.building != null) {
+    return StructureType.BUILDING;
+  }
+  return null;
+}
+
+// ── Predicate helpers ────────────────────────────────────────────────────────
+// Later phases use these instead of comparing `tile.type` directly.
+
+// A river is impassable water (no bridge).
+export function isRiver(tile) {
+  return pathOf(tile) === PathType.RIVER;
+}
+
+// A bridge crosses water and is passable.
+export function isBridge(tile) {
+  return pathOf(tile) === PathType.BRIDGE;
+}
+
+// Is there a building on this tile?
+export function hasBuilding(tile) {
+  return structureOf(tile) === StructureType.BUILDING;
+}
+
+// "Road-like" for movement cost (1 instead of 2): a road, a bridge, or any
+// building tile. Mirrors the old inline `type === ROAD || BRIDGE || BUILDING`.
+export function isPathRoadLike(tile) {
+  const p = pathOf(tile);
+  return p === PathType.ROAD || p === PathType.BRIDGE || hasBuilding(tile);
+}
+
+// Does this tile provide forest cover (defender +1 DEF vs ranged)?
+//
+// LOCKED operator decision: cover is granted whenever the BASE material is
+// forest, REGARDLESS of any path or structure on top — i.e. a road or building
+// over forest STILL gives cover. This differs from today's behaviour (where
+// laying a road cleared the forest type); the gameplay change is adopted in a
+// later phase (P4). Readers should switch to this predicate now.
+export function isForestCover(tile) {
+  return baseOf(tile) === TileType.FOREST;
 }
 
 // Hard cap on fortification level.
