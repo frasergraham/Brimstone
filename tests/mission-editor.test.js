@@ -48,11 +48,18 @@ import {
   resizeHandmadeMap,
   setOverlayMapSize,
   MAP_EDGES,
+  valuePanelKind,
+  ToolValueKind,
+  createLayerVisibility,
+  showStructures,
+  roadNodeMarkersVisible,
+  stripTileOverlays,
 } from '../src/tools/mission-editor.js';
+import { loadMissionJSON } from '../src/campaign/json-mission.js';
 import { MAP_SIZES } from '../src/map.js';
 import { buildMissionMap } from '../src/campaign/mission-map.js';
 import { hexKey } from '../src/hex.js';
-import { Tile, TileType, PathType, StructureType } from '../src/tiles.js';
+import { Tile, TileType, PathType, StructureType, BuildingType } from '../src/tiles.js';
 
 // The complete set of fields a canonical layered tile def carries.
 const LAYERED_FIELDS = [
@@ -771,6 +778,181 @@ describe('mission-editor — overlay map sizing (item 3)', () => {
     const blocked = ed.resizeEdge('left', -1);
     assert.equal(blocked.ok, false);
     assert.equal(ed.getDims().cols, 6, 'blocked resize left dims unchanged');
+  });
+});
+
+// ── Undo / Redo stack semantics (item 5) ──────────────────────────────────────
+
+describe('mission-editor — undo / redo (item 5)', () => {
+  test('redo is empty until an undo; undo then redo restores the edit', () => {
+    const ed = createMissionEditor();
+    assert.equal(ed.canUndo(), false);
+    assert.equal(ed.canRedo(), false);
+    ed.setActiveTool(EditorTool.PAINT_BASE);
+    ed.setPaintValue('base', 'FOREST');
+    ed.applyAt({ col: 2, row: 2 });
+    assert.ok(ed.canUndo());
+    assert.equal(ed.canRedo(), false);
+    ed.undo();
+    assert.ok(!ed.getMapDef().tiles.some(t => t.col === 2 && t.row === 2), 'edit undone');
+    assert.equal(ed.canUndo(), false);
+    assert.ok(ed.canRedo(), 'redo now available');
+    ed.redo();
+    const def = ed.getMapDef().tiles.find(t => t.col === 2 && t.row === 2);
+    assert.equal(def.base, 'FOREST', 'edit restored by redo');
+    assert.equal(ed.canRedo(), false);
+    assert.ok(ed.canUndo());
+  });
+
+  test('a NEW action after undo clears the redo stack (standard semantics)', () => {
+    const ed = createMissionEditor();
+    ed.setActiveTool(EditorTool.PAINT_BASE);
+    ed.applyAt({ col: 1, row: 1 });
+    ed.applyAt({ col: 2, row: 2 });
+    ed.undo();                       // undo the (2,2) edit → redo holds it
+    assert.ok(ed.canRedo());
+    ed.applyAt({ col: 3, row: 3 });  // new branch
+    assert.equal(ed.canRedo(), false, 'new action wiped the redo stack');
+    assert.equal(ed.redo(), false, 'redo is a no-op on an empty stack');
+  });
+
+  test('undo / redo on empty stacks are no-ops returning false', () => {
+    const ed = createMissionEditor();
+    assert.equal(ed.undo(), false);
+    assert.equal(ed.redo(), false);
+  });
+
+  test('redo restores a multi-step sequence in order', () => {
+    const ed = createMissionEditor();
+    ed.setActiveTool(EditorTool.PAINT_BASE);
+    ed.setPaintValue('base', 'DIRT');
+    ed.applyAt({ col: 0, row: 0 });
+    ed.applyAt({ col: 1, row: 0 });
+    ed.undo();
+    ed.undo();
+    assert.equal(ed.canUndo(), false);
+    ed.redo();
+    assert.ok(ed.getMapDef().tiles.some(t => t.col === 0 && t.row === 0));
+    assert.ok(!ed.getMapDef().tiles.some(t => t.col === 1 && t.row === 0));
+    ed.redo();
+    assert.ok(ed.getMapDef().tiles.some(t => t.col === 1 && t.row === 0));
+  });
+});
+
+// ── Dirty tracking — fresh editor is clean (carried-over nit) ──────────────────
+
+describe('mission-editor — dirty flag', () => {
+  test('a fresh editor is NOT dirty; an edit dirties it; markClean resets', () => {
+    const ed = createMissionEditor();
+    assert.equal(ed.isDirty(), false, 'fresh editor starts clean (no spurious New prompt)');
+    ed.applyAt({ col: 1, row: 1 });
+    assert.equal(ed.isDirty(), true);
+    ed.markClean();
+    assert.equal(ed.isDirty(), false);
+  });
+
+  test('undo / redo mark the model dirty again', () => {
+    const ed = createMissionEditor();
+    ed.applyAt({ col: 1, row: 1 });
+    ed.markClean();
+    ed.undo();
+    assert.equal(ed.isDirty(), true);
+  });
+});
+
+// ── Active-tool → VALUE-panel mapping (item 7) ─────────────────────────────────
+
+describe('mission-editor — valuePanelKind (item 7)', () => {
+  test('paint tools expose their own value kind', () => {
+    assert.equal(valuePanelKind(EditorTool.PAINT_BASE), ToolValueKind.BASE);
+    assert.equal(valuePanelKind(EditorTool.PAINT_STRUCTURE), ToolValueKind.STRUCTURE);
+    assert.equal(valuePanelKind(EditorTool.PAINT_PATH), ToolValueKind.PATH);
+    assert.equal(valuePanelKind(EditorTool.SET_RESOURCE), ToolValueKind.RESOURCE);
+    assert.equal(valuePanelKind(EditorTool.ENEMY_UNIT), ToolValueKind.ENEMY);
+  });
+
+  test('value-less tools map to NONE', () => {
+    for (const t of [EditorTool.HIDDEN_SURVIVOR, EditorTool.HERO_START,
+      EditorTool.WITCH_START, EditorTool.ROAD_NODE, EditorTool.POWER_NODE]) {
+      assert.equal(valuePanelKind(t), ToolValueKind.NONE);
+    }
+  });
+
+  test('an unknown tool falls back to NONE', () => {
+    assert.equal(valuePanelKind('not-a-tool'), ToolValueKind.NONE);
+  });
+});
+
+// ── Layer visibility (item 6) ──────────────────────────────────────────────────
+
+describe('mission-editor — layer visibility (item 6)', () => {
+  test('default visibility draws structures + nodes + starts, hides road markers', () => {
+    const layers = createLayerVisibility();
+    assert.equal(showStructures(layers), true);
+    assert.equal(layers.powerNodes, true);
+    assert.equal(layers.playerStarts, true);
+    assert.equal(layers.roadNodeMarkers, false);
+  });
+
+  test('"Base only" OR un-checking "Roads + Buildings" hides the structure layer', () => {
+    const a = createLayerVisibility(); a.baseOnly = true;
+    assert.equal(showStructures(a), false);
+    const b = createLayerVisibility(); b.roadsBuildings = false;
+    assert.equal(showStructures(b), false);
+  });
+
+  test('road-node markers AUTO-SHOW when the Road Node tool is active', () => {
+    const layers = createLayerVisibility(); // roadNodeMarkers: false
+    assert.equal(roadNodeMarkersVisible(layers, EditorTool.ROAD_NODE), true,
+      'auto-shown while authoring road nodes');
+    assert.equal(roadNodeMarkersVisible(layers, EditorTool.PAINT_BASE), false,
+      'hidden for other tools when the toggle is off');
+    layers.roadNodeMarkers = true;
+    assert.equal(roadNodeMarkersVisible(layers, EditorTool.PAINT_BASE), true,
+      'shown for any tool once the toggle is on');
+  });
+
+  test('stripTileOverlays clears structure / path / building / roadDirs, keeps base', () => {
+    const tiles = new Map();
+    const building = new Tile(1, 1, TileType.DIRT);
+    building.structure = StructureType.BUILDING;
+    building.building = BuildingType.INN;
+    building.roadDirs = new Set([hexKey(1, 2)]);
+    const road = new Tile(2, 2, TileType.FOREST);
+    road.path = PathType.ROAD;
+    road.roadDirs = new Set([hexKey(1, 2)]);
+    tiles.set(hexKey(1, 1), building);
+    tiles.set(hexKey(2, 2), road);
+
+    stripTileOverlays(tiles);
+
+    const b = tiles.get(hexKey(1, 1));
+    assert.equal(b.base, TileType.DIRT, 'base terrain preserved');
+    assert.equal(b.structure, null);
+    assert.equal(b.building, null);
+    assert.equal(b.roadDirs.size, 0);
+    const r = tiles.get(hexKey(2, 2));
+    assert.equal(r.base, TileType.FOREST, 'base terrain preserved');
+    assert.equal(r.path, null);
+    assert.equal(r.roadDirs.size, 0);
+  });
+});
+
+// ── Baked-generated map → assemble → validate → round-trip (carried-over nit) ──
+
+describe('mission-editor — baked map assembles + validates + round-trips', () => {
+  test('a Baked-Generated map validates cleanly and survives a load round-trip', () => {
+    const ed = createMissionEditor();
+    ed.createNew({ mode: CreationMode.BAKED, seed: 7, mapSize: 'skirmish' });
+    const mission = ed.assemble();
+    assert.equal(mission.map.baked, true, 'baked marker rides along (harmless)');
+
+    // Validates against the schema:1 contract (no throw).
+    assert.doesNotThrow(() => loadMissionJSON(mission));
+
+    // Lossless split → reassemble round-trip.
+    const reassembled = assembleMission(populateFromMission(mission));
+    assert.deepEqual(reassembled, mission);
   });
 });
 

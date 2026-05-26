@@ -196,6 +196,43 @@
     }
     #editor-panel .e-tool:hover { background: #2a241c; }
     #editor-panel .e-tool.active { background: #5a4a30; border-color: #c4a04a; color: #ffd680; }
+    /* Item 7: icon tool palette */
+    #editor-panel .e-toolgrid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; }
+    #editor-panel .e-toolbtn {
+      aspect-ratio: 1; display: flex; align-items: center; justify-content: center;
+      background: #211c16; color: #d4cba0; border: 1px solid #443a2a;
+      font-size: 16px; line-height: 1; cursor: pointer; padding: 0;
+    }
+    #editor-panel .e-toolbtn:hover { background: #2a241c; }
+    #editor-panel .e-toolbtn.active { background: #5a4a30; border-color: #c4a04a; }
+    /* Item 7: VALUE-panel swatches + path chips */
+    #editor-panel .e-swatches { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+    #editor-panel .e-swatch {
+      display: flex; align-items: center; gap: 6px; padding: 4px 6px; text-align: left;
+      background: #211c16; color: #d4cba0; border: 1px solid #443a2a; cursor: pointer; font-size: 11px;
+    }
+    #editor-panel .e-swatch:hover { background: #2a241c; }
+    #editor-panel .e-swatch.active { background: #5a4a30; border-color: #c4a04a; color: #ffd680; }
+    #editor-panel .e-swatch-chip {
+      width: 18px; height: 18px; flex: 0 0 18px; border: 1px solid #0a0805; display: inline-flex;
+      align-items: center; justify-content: center; font-size: 11px; line-height: 1;
+    }
+    #editor-panel .e-swatch-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #editor-panel .e-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+    #editor-panel .e-chip {
+      flex: 1 1 40%; padding: 6px 8px; background: #211c16; color: #d4cba0; border: 1px solid #443a2a;
+      font-family: inherit; font-size: 12px; cursor: pointer;
+    }
+    #editor-panel .e-chip:hover { background: #2a241c; }
+    #editor-panel .e-chip.active { background: #5a4a30; border-color: #c4a04a; color: #ffd680; }
+    /* Item 5: top-bar Undo / Redo */
+    #menu-bar .tb-btn {
+      padding: 7px 12px; background: #211c16; color: #d4cba0; border: 1px solid #443a2a;
+      font-family: inherit; font-size: 13px; cursor: pointer; letter-spacing: 0.5px; line-height: 1;
+    }
+    #menu-bar .tb-btn:hover:not(:disabled) { background: #2a241c; }
+    #menu-bar .tb-btn:disabled { color: #5a5444; cursor: default; opacity: 0.6; }
+    #menu-bar .tb-btn[hidden] { display: none; }
     #editor-panel .e-action {
       width: 100%; margin: 4px 0; padding: 7px 10px; background: #5a4a30; color: #ffd680;
       border: 1px solid #c4a04a; font-family: inherit; font-size: 12px; cursor: pointer; letter-spacing: 1px;
@@ -281,6 +318,12 @@
         <div class="menu-list" id="mission-picker-list" hidden></div>
       </div>
       <input type="file" id="file-load-input" accept=".json,application/json" hidden />
+
+      <!-- Editor-only Undo / Redo (item 5). Hidden unless the Mission Editor is
+           active; enabled-state driven by the editor handle's onHistoryChange. -->
+      <button class="tb-btn" id="tb-undo" title="Undo (⌘/Ctrl+Z)" hidden disabled>↶ Undo</button>
+      <button class="tb-btn" id="tb-redo" title="Redo (⇧⌘/Ctrl+Z)" hidden disabled>↷ Redo</button>
+
       <span class="file-status" id="file-status"></span>
 
       <a class="nav-back" href="/admin">← Back to admin</a>
@@ -1133,6 +1176,8 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
         initPromises.lighting = initLighting().then((h) => { handles.lighting = h; return h; });
       } else if (id === 'editor') {
         handles.editor = initEditor();
+        // Drive the top-bar Undo/Redo enabled-state off the editor's history.
+        handles.editor.onHistoryChange?.(refreshHistoryButtons);
       }
     }
 
@@ -1149,9 +1194,15 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
       }
       const label = document.getElementById('active-tool-name');
       if (label) label.textContent = TAB_LABELS[id] ?? id;
-      // The File menu (Load / Save) is only meaningful for the Mission Editor.
+      // The File menu (Load / Save) + Undo/Redo are only meaningful for the
+      // Mission Editor.
+      const editorActive = (id === 'editor');
       const fileMenu = document.getElementById('file-menu');
-      if (fileMenu) fileMenu.hidden = (id !== 'editor');
+      if (fileMenu) fileMenu.hidden = !editorActive;
+      const tbUndo = document.getElementById('tb-undo');
+      const tbRedo = document.getElementById('tb-redo');
+      if (tbUndo) tbUndo.hidden = !editorActive;
+      if (tbRedo) tbRedo.hidden = !editorActive;
       closeMenus();
       // Pause every other tab's renderer; resume the active one.
       for (const tab of TABS) {
@@ -1239,6 +1290,30 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
     document.getElementById('file-save')?.addEventListener('click', (e) => {
       e.stopPropagation(); closeMenus();
       if (handles.editor?.saveMission) setFileStatus(handles.editor.saveMission());
+    });
+
+    // ── Undo / Redo (item 5) — top-bar buttons + keyboard shortcuts ─────────
+    const tbUndoBtn = document.getElementById('tb-undo');
+    const tbRedoBtn = document.getElementById('tb-redo');
+    function refreshHistoryButtons(s) {
+      if (tbUndoBtn) tbUndoBtn.disabled = !s?.canUndo;
+      if (tbRedoBtn) tbRedoBtn.disabled = !s?.canRedo;
+    }
+    tbUndoBtn?.addEventListener('click', (e) => { e.stopPropagation(); handles.editor?.undo?.(); });
+    tbRedoBtn?.addEventListener('click', (e) => { e.stopPropagation(); handles.editor?.redo?.(); });
+    document.addEventListener('keydown', (e) => {
+      if (controller.active !== 'editor' || !handles.editor) return;
+      // Let native undo work inside text fields (briefing, JSON blobs, etc.).
+      const tag = (e.target?.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || e.target?.isContentEditable) return;
+      if (!(e.metaKey || e.ctrlKey)) return;
+      if (e.key === 'z' || e.key === 'Z') {
+        e.preventDefault();
+        if (e.shiftKey) handles.editor.redo?.(); else handles.editor.undo?.();
+      } else if (e.key === 'y' || e.key === 'Y') { // Windows-style redo
+        e.preventDefault();
+        handles.editor.redo?.();
+      }
     });
 
     // ── File ▸ "Load existing mission…" → bundled-mission picker flyout ──────
