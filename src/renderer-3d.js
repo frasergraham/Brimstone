@@ -1333,6 +1333,10 @@ export class Renderer3D {
     // Item 8 — static (build-time) per-tile occupant registry consumed by the
     // per-draw standee re-slot pass.
     this._staticOccupantsByKey = new Map(); // hexKey → [{id, kind: 'building'|'tree'}]
+    // Per-tile Set of TILE_SLOTS indices a road deck crosses on a forest tile
+    // (from `roadBlockedTreeSlots`). Computed at build time so the per-draw
+    // standee re-slot reserves the same slots the forest trees skipped.
+    this._roadBlockedSlotsByKey = new Map(); // hexKey → Set<slotIdx>
     // Item 8 — overflow "+N" badges keyed by hexKey; created lazily when a
     // tile has more standees than free slots, disposed when overflow drops to 0.
     this._overflowBadges       = new Map(); // hexKey → { plane, mat, tex, lastN }
@@ -2377,10 +2381,13 @@ export class Renderer3D {
       }
       if (procIdx.length === 0) continue;
       const { x, z } = hexToWorld(tile.col, tile.row);
-      // Same building-slot reservation as the BUILD pass so the real-tree
-      // upgrade keeps cones off BUILDING_SLOT_INDEX on building-on-forest tiles.
+      // Same building-slot AND road-deck reservation as the BUILD pass so the
+      // real-tree upgrade keeps cones off BUILDING_SLOT_INDEX on
+      // building-on-forest tiles and off the road deck on road-through-forest
+      // tiles.
       const trees = forestTreesForHex(tile.col, tile.row, this._season, {
         reserveBuildingSlot: hasBuilding(tile),
+        blockedSlots: this._roadBlockedSlotsByKey.get(tkey),
       });
       const namePrefix = `forest_${tile.col}_${tile.row}`;
       const insts = this._buildRealForestTreesForHex(
@@ -4732,6 +4739,34 @@ export class Renderer3D {
     }
   }
 
+  /** Set of TILE_SLOTS indices a road deck crosses on a forest tile, so the
+   *  forest cones skip them (and the standee re-slot reserves them). Returns an
+   *  empty Set for a forest tile with no road, or when the tile carries no road
+   *  metadata. The road centreline geometry is the SAME `networkStrokesForTile`
+   *  the merged road mesh is built from, so the exclusion matches the deck the
+   *  player sees. */
+  _forestRoadBlockedSlots(tile) {
+    const empty = new Set();
+    if (!tile) return empty;
+    const hasRoad = pathOf(tile) === PathType.ROAD
+      || (tile.roadDirs && tile.roadDirs.size > 0);
+    if (!hasRoad) return empty;
+    const tiles = this.state?.tiles;
+    if (!tiles) return empty;
+    const nbrs = [];
+    if (tile.roadDirs && typeof tile.roadDirs[Symbol.iterator] === 'function') {
+      for (const k of tile.roadDirs) {
+        const nt = tiles.get(k);
+        if (nt) nbrs.push({ col: nt.col, row: nt.row });
+      }
+    }
+    if (nbrs.length === 0) return empty;
+    const strokes = networkStrokesForTile(tile, nbrs, { kind: 'road' });
+    if (!strokes.length) return empty;
+    const center = hexToWorld(tile.col, tile.row);
+    return roadBlockedTreeSlots(strokes, center);
+  }
+
   _buildTileMesh(tile, parent) {
     const BABYLON = this._babylon;
     const scene   = this._scene;
@@ -4764,8 +4799,14 @@ export class Renderer3D {
     if (baseOf(tile) === TileType.FOREST) {
       // On a building-on-forest tile, reserve the building slot so the forest
       // cones skip BUILDING_SLOT_INDEX (where the procedural box below sits).
+      // On a road-through-forest tile, also skip the slots the road deck
+      // crosses so cones never land on the road mesh. Cached so the per-draw
+      // standee re-slot reserves the same slots.
+      const blockedSlots = this._forestRoadBlockedSlots(tile);
+      if (blockedSlots.size > 0) this._roadBlockedSlotsByKey.set(tkey, blockedSlots);
       const trees = forestTreesForHex(tile.col, tile.row, this._season, {
         reserveBuildingSlot: hasBuilding(tile),
+        blockedSlots,
       });
       // Prefer the real GLB-tree path when the tree-pack manifest has
       // resolved AND has a template for the current season. Falls back to
@@ -4925,7 +4966,12 @@ export class Renderer3D {
       staticOcc.push({ id: 'building', kind: 'building' });
     }
     if (baseOf(tile) === TileType.FOREST) {
-      const trees = forestTreesForHex(tile.col, tile.row, this._season);
+      // Match the rendered cluster: the building occupant is added separately
+      // above, so only blockedSlots (road deck) need to be re-applied here so a
+      // tree dropped from the deck isn't listed as a phantom occupant.
+      const trees = forestTreesForHex(tile.col, tile.row, this._season, {
+        blockedSlots: this._roadBlockedSlotsByKey.get(tkey),
+      });
       for (const t of trees) staticOcc.push({ id: t.id, kind: 'tree' });
     }
     if (staticOcc.length > 0) this._staticOccupantsByKey.set(tkey, staticOcc);
@@ -4997,6 +5043,15 @@ export class Renderer3D {
     for (let s = 0; s < segments.length; s++) {
       const { tile, strokes } = segments[s];
       const tkey = hexKey(tile.col, tile.row);
+      // A road laid through a FOREST-base tile renders 20% narrower so the
+      // flanking trees aren't crowded. Width is decided PER TILE: each tile
+      // contributes its own stroke(s), so a road spanning a forest tile and a
+      // grass tile narrows only on the forest half — the two strokes meet at
+      // the shared edge midpoint with a small width step (both centred on the
+      // same centreline, so the narrow forest deck sits flush inside the wider
+      // grass deck — no lateral gap). Per-tile is simpler than a taper and the
+      // alpha-faded ribbon edges hide the seam. River never narrows.
+      const tileWidth = roadTileRibbonWidth(networkName, tile, width);
       for (let i = 0; i < strokes.length; i++) {
         const pts = strokes[i];
         if (!pts || pts.length < 2) continue;
@@ -5012,8 +5067,8 @@ export class Renderer3D {
         // their length so each strand reads as hand-laid / natural rather
         // than uniform-machined. The sine wave is seeded off the tile col/row
         // + stroke index so a given hex looks the same across reloads.
-        let perPointOuterWidth = width;
-        let perPointInnerWidth = width * OPAQUE_FRAC;
+        let perPointOuterWidth = tileWidth;
+        let perPointInnerWidth = tileWidth * OPAQUE_FRAC;
         if (networkName === 'road' || networkName === 'river') {
           // Width modulates as a function of WORLD position so adjacent tiles
           // produce the SAME width at shared seam points — no visible width
@@ -5033,8 +5088,8 @@ export class Renderer3D {
           const innerArr = new Array(pts.length);
           for (let p = 0; p < pts.length; p++) {
             const mod = widthModAt(pts[p].x, pts[p].z);
-            outerArr[p] = width * mod;
-            innerArr[p] = width * OPAQUE_FRAC * mod;
+            outerArr[p] = tileWidth * mod;
+            innerArr[p] = tileWidth * OPAQUE_FRAC * mod;
           }
           perPointOuterWidth = outerArr;
           perPointInnerWidth = innerArr;
@@ -6201,7 +6256,8 @@ export class Renderer3D {
       }
       const { col, row } = hexCenter.get(k);
       const { positionByOccupantId, overflow } = tileSlotWorldPositions(
-        col, row, [...staticOcc, ...standeeOccs],
+        col, row, [...staticOcc, ...standeeOccs], HEX_RADIUS_WORLD,
+        { reservedSlots: this._roadBlockedSlotsByKey.get(k) },
       );
       for (const occ of standeeOccs) {
         const pos = positionByOccupantId.get(occ.id);
@@ -9446,7 +9502,7 @@ export const BUILDING_SLOT_INDEX = 1;
  * Sort key is the string form of `id` so the function is stable across
  * runs regardless of insertion order in the caller.
  */
-export function assignTileSlotIndices(occupants) {
+export function assignTileSlotIndices(occupants, opts = {}) {
   const out = new Map();
   if (!Array.isArray(occupants) || occupants.length === 0) {
     return { slotByOccupantId: out, overflow: 0 };
@@ -9473,6 +9529,19 @@ export function assignTileSlotIndices(occupants) {
     used.add(BUILDING_SLOT_INDEX);
     for (let i = 1; i < buildings.length; i++) {
       out.set(buildings[i].id, CENTRE_SLOT_INDEX);
+    }
+  }
+  // Reserved slots (e.g. a road deck crossing a forest tile, via
+  // `roadBlockedTreeSlots`) are unavailable to trees and overflow standees.
+  // Applied AFTER the building anchor so a building keeps slot 1 even when the
+  // road footprint also covers it — buildings legitimately sit over the road
+  // through their own hex. The centre slot is never reserved here (it carries
+  // the standee, not a tree). No occupant is assigned to a reserved slot;
+  // surplus trees simply go unplaced (caller drops them).
+  const reserved = opts.reservedSlots;
+  if (reserved && typeof reserved[Symbol.iterator] === 'function') {
+    for (const s of reserved) {
+      if (typeof s === 'number' && s !== CENTRE_SLOT_INDEX) used.add(s);
     }
   }
   // Trees → outer slots (skip centre, skip building slot).
@@ -9504,8 +9573,8 @@ export function assignTileSlotIndices(occupants) {
  * renderer to place building/tree props at build time and to re-slot standees
  * every draw.
  */
-export function tileSlotWorldPositions(col, row, occupants, radius = HEX_RADIUS_WORLD) {
-  const { slotByOccupantId, overflow } = assignTileSlotIndices(occupants);
+export function tileSlotWorldPositions(col, row, occupants, radius = HEX_RADIUS_WORLD, opts = {}) {
+  const { slotByOccupantId, overflow } = assignTileSlotIndices(occupants, opts);
   const { x: cx, z: cz } = hexToWorld(col, row, radius);
   const positionByOccupantId = new Map();
   for (const [id, slotIdx] of slotByOccupantId) {
@@ -9513,6 +9582,65 @@ export function tileSlotWorldPositions(col, row, occupants, radius = HEX_RADIUS_
     positionByOccupantId.set(id, { x: cx + slot.x, z: cz + slot.z });
   }
   return { positionByOccupantId, overflow };
+}
+
+/** Shortest distance from point (px, pz) to the line segment (ax, az)–(bx, bz)
+ *  in the XZ plane. Pure. A degenerate (zero-length) segment reduces to the
+ *  point-to-endpoint distance. */
+export function _pointSegmentDistanceXZ(px, pz, ax, az, bx, bz) {
+  const vx = bx - ax, vz = bz - az;
+  const wx = px - ax, wz = pz - az;
+  const len2 = vx * vx + vz * vz;
+  let t = len2 > 0 ? (wx * vx + wz * vz) / len2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  const cx = ax + t * vx, cz = az + t * vz;
+  return Math.hypot(px - cx, pz - cz);
+}
+
+/** Which outer tile slots (indices 1..6 of TILE_SLOTS) sit on a road deck
+ *  crossing this tile — i.e. their world position is within `reach` of any road
+ *  stroke segment. A forest tree placed in such a slot would visibly overlap
+ *  the road, so `forestTreesForHex` excludes these slots (dropping surplus
+ *  trees rather than relocating them onto the deck).
+ *
+ *  `strokes` are world-XZ polylines exactly as `networkStrokesForTile` returns
+ *  them (`[{x,z}, …]` arrays). `center` is the hex centre `{x, z}` so the
+ *  local TILE_SLOTS offsets can be lifted into world space for the comparison.
+ *  The centre slot (0) is never returned — it is reserved for a standee and
+ *  never carries a tree. Pure; exported for tests. */
+export function roadBlockedTreeSlots(strokes, center, reach = FOREST_ROAD_TREE_REACH) {
+  const blocked = new Set();
+  if (!Array.isArray(strokes) || strokes.length === 0 || !center) return blocked;
+  for (let i = 1; i < TILE_SLOTS.length; i++) {
+    const px = center.x + TILE_SLOTS[i].x;
+    const pz = center.z + TILE_SLOTS[i].z;
+    for (const stroke of strokes) {
+      if (!Array.isArray(stroke) || stroke.length < 2) continue;
+      let hit = false;
+      for (let s = 0; s + 1 < stroke.length; s++) {
+        const a = stroke[s], b = stroke[s + 1];
+        if (_pointSegmentDistanceXZ(px, pz, a.x, a.z, b.x, b.z) <= reach) {
+          hit = true;
+          break;
+        }
+      }
+      if (hit) { blocked.add(i); break; }
+    }
+  }
+  return blocked;
+}
+
+/** Per-tile ribbon width for one network stroke. A ROAD segment on a
+ *  FOREST-base tile narrows by FOREST_ROAD_WIDTH_FACTOR (renders 20% thinner)
+ *  so the flanking trees have room and the deck doesn't crowd them. Rivers and
+ *  roads on any non-forest base keep the full `baseWidth`. Width is decided
+ *  per-tile, so a road spanning a forest tile and a grass tile narrows only on
+ *  the forest tile's stroke. Pure; exported for tests. */
+export function roadTileRibbonWidth(networkName, tile, baseWidth) {
+  if (networkName === 'road' && baseOf(tile) === TileType.FOREST) {
+    return baseWidth * FOREST_ROAD_WIDTH_FACTOR;
+  }
+  return baseWidth;
 }
 
 // ─── Road / river bezier networks (exported for tests) ─────────────────────
@@ -9542,6 +9670,12 @@ export const RIVER_RIBBON_WIDTH = 0.85;
 /** Road ribbon width — narrower than the river (matches the 2D path's strokeWidth
  *  ratio: rivers wider than roads). ~0.35 × hex-width. */
 export const ROAD_RIBBON_WIDTH  = 0.6;
+/** Road segments laid through a FOREST-base tile render this fraction of the
+ *  normal width (20% narrower) so the flanking trees have room and don't crowd
+ *  the deck. Non-forest road tiles keep the full ROAD_RIBBON_WIDTH. Applied
+ *  per-tile in `_buildNetworkMesh` (see the forest→grass seam note there).
+ *  Operator-tunable. */
+export const FOREST_ROAD_WIDTH_FACTOR = 0.8;
 /** Y above tile prism top (0.075) and disc top (0.084) — ribbon hugs the terrain. */
 export const RIVER_RIBBON_Y     = 0.005;
 /** Road sits clearly above the river so the road tube paints OVER the water at
@@ -9952,6 +10086,18 @@ export const FOREST_SCALE_MAX = 1.2;
 export const FOREST_TREES_MIN = 3;
 export const FOREST_TREES_MAX = 5;
 
+/** Half-width of the (narrowed) road deck through a forest tile, world units. */
+export const FOREST_ROAD_HALF_WIDTH = (ROAD_RIBBON_WIDTH * FOREST_ROAD_WIDTH_FACTOR) / 2;
+/** Extra clearance past the road half-width when deciding which forest tree
+ *  slots sit on the deck (≈ a tree-base radius). Bigger = trees kept further
+ *  off the road, but blocks more slots and thins the cluster. Tunable. */
+export const FOREST_ROAD_TREE_CLEARANCE = 0.12;
+/** A forest tree slot is dropped if its centre lies within this distance of any
+ *  road segment crossing the tile. = narrowed half-width + tree-base clearance.
+ *  Kept below the diagonal outer-slot distance (~0.42) so an axis-aligned road
+ *  only blocks the two in-line slots, leaving the corner slots for trees. */
+export const FOREST_ROAD_TREE_REACH = FOREST_ROAD_HALF_WIDTH + FOREST_ROAD_TREE_CLEARANCE;
+
 /** Deterministic [0, 1) hash from (col, row, salt). Tiny integer mixer — not
  *  cryptographic, just stable across runs and well-distributed enough for
  *  placement jitter. */
@@ -9976,7 +10122,12 @@ function _forestHash(col, row, salt) {
  *  (see `_syncEntityStandees`): a building occupant is fed into the slot
  *  assignment but excluded from the returned cluster — only trees are returned.
  *  Without this, tree[0] would be baked at the building's slot and clip through
- *  it. Plain (non-building) forest tiles leave it false and use the full ring. */
+ *  it. Plain (non-building) forest tiles leave it false and use the full ring.
+ *
+ *  `opts.blockedSlots` — a Set of TILE_SLOTS indices a road deck crosses on
+ *  this tile (computed via `roadBlockedTreeSlots`). Trees skip those slots so
+ *  cones never land on the road mesh; surplus trees beyond the remaining free
+ *  slots are dropped. Empty / omitted on a roadless forest tile. */
 export function forestTreesForHex(col, row, season = null, opts = {}) {
   const reserveBuildingSlot = !!opts.reserveBuildingSlot;
   const span = FOREST_TREES_MAX - FOREST_TREES_MIN + 1;
@@ -9999,10 +10150,16 @@ export function forestTreesForHex(col, row, season = null, opts = {}) {
   const slotInput = reserveBuildingSlot
     ? [{ id: 'building', kind: 'building' }, ...occupants]
     : occupants;
-  const { slotByOccupantId } = assignTileSlotIndices(slotInput);
+  const { slotByOccupantId } = assignTileSlotIndices(slotInput, {
+    reservedSlots: opts.blockedSlots,
+  });
   const trees = [];
   for (const occ of occupants) {
-    const slotIdx = slotByOccupantId.get(occ.id) ?? CENTRE_SLOT_INDEX;
+    // A tree whose slot was taken by the building or a road deck (blockedSlots)
+    // gets no assignment — drop it rather than piling it on the centre (which
+    // sits on the road / is reserved for a standee).
+    const slotIdx = slotByOccupantId.get(occ.id);
+    if (slotIdx === undefined) continue;
     const slot = TILE_SLOTS[slotIdx];
     const scale = FOREST_SCALE_MIN + _forestHash(col, row, occ._idx * 3 + 3) * scaleSpan;
     trees.push({
