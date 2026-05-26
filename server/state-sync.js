@@ -5,6 +5,7 @@ import { VERSION }           from '../src/version.js';
 import { Entity, BASE_AGILITY, BASE_RANGE } from '../src/entities.js';
 import { GameState }         from '../src/game.js';
 import { setMapDimensions }  from '../src/hex.js';
+import { Tile, TileType }    from '../src/tiles.js';
 
 export function serializeState(state) {
   const tiles = [];
@@ -16,11 +17,19 @@ export function serializeState(state) {
       key,
       col:            tile.col,
       row:            tile.row,
+      // Layered tile model (P1): serialize the three explicit layers so the
+      // canonical shape round-trips losslessly — crucially a road/building over
+      // a non-grass base (e.g. road-through-forest) preserves its `base`, which
+      // the derived `type` enum alone cannot express.  `type` is read via the
+      // prototype getter and kept for back-compat / legacy readers; it is NOT
+      // an own-enumerable field, so it must be read explicitly here (a `{...tile}`
+      // spread would silently drop it).
+      base:           tile.base ?? TileType.GRASS,
+      structure:      tile.structure ?? null,
+      path:           tile.path ?? null,
       type:           tile.type,
       building:       tile.building       ?? null,
-      road:           tile.road           ?? false,
-      river:          tile.river          ?? false,
-      bridge:         tile.bridge         ?? false,
+      resource:       tile.resource       ?? null,
       fortifyLevel:   tile.fortifyLevel   ?? 0,
       explored:       tile.explored       ?? false,
       hiddenSurvivor: tile.hiddenSurvivor ?? false,
@@ -175,9 +184,38 @@ export function deserializeState(snap) {
   const state = new GameState(snap.witchIsAI ?? false, snap.heroIsAI ?? false);
 
   // ── Tiles ─────────────────────────────────────────────────────────────────
+  // Reconstruct each tile as a real `Tile` instance (matching the live map-gen
+  // representation) so the layered model's get/set `type` shim and the
+  // baseOf/pathOf/structureOf accessors all return correct values downstream.
+  //
+  // Two snapshot shapes are handled:
+  //   • NEW saves (P1+): carry explicit `base`/`structure`/`path` layers. These
+  //     are restored DIRECTLY — routing through the `type` shim would be lossy
+  //     (e.g. a road over forest serializes base='forest', path='road', but
+  //     `type` is just 'road', so re-deriving from `type` would reset base to
+  //     the grass default and drop the forest cover).
+  //   • LEGACY saves: carry only the derived `type` enum (no layer fields).
+  //     Assigning `tile.type` runs the P0 decomposition setter, producing the
+  //     correct (base, structure, path) — the single source of that mapping.
   state.tiles = new Map();
   for (const t of snap.tiles) {
-    state.tiles.set(t.key, { ...t, roadDirs: new Set(t.roadDirs || []) });
+    const tile = new Tile(t.col, t.row);
+    const hasLayers = t.base !== undefined || t.structure !== undefined || t.path !== undefined;
+    if (hasLayers) {
+      tile.base      = t.base      ?? TileType.GRASS;
+      tile.structure = t.structure ?? null;
+      tile.path      = t.path      ?? null;
+    } else {
+      // Legacy snapshot — derive the layers from the single `type` via the shim.
+      tile.type = t.type;
+    }
+    tile.building       = t.building       ?? null;
+    tile.resource       = t.resource       ?? null;
+    tile.fortifyLevel   = t.fortifyLevel   ?? 0;
+    tile.explored       = t.explored       ?? false;
+    tile.hiddenSurvivor = t.hiddenSurvivor ?? false;
+    tile.roadDirs       = new Set(t.roadDirs || []);
+    state.tiles.set(t.key, tile);
   }
 
   // ── Entities — restore as real Entity instances so game-logic methods work ─

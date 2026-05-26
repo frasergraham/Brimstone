@@ -25,7 +25,15 @@ export const VERSION = '1.4.1';
 //               ABILITIES[id].statMods at call time). Pre-v4 saves would
 //               double-count the passive on reload and lack the new
 //               abilities array; pruned on boot.
-export const SAVE_VERSION = 4;
+// v5 (2026-05): P1 of the layered tile-model refactor. Each tile snapshot now
+//               carries explicit base/structure/path layers (in addition to the
+//               derived `type`) so the new layer accessors (baseOf/pathOf/
+//               structureOf) work on resumed tiles — required for road-over-
+//               forest and the upcoming P2/P3/P4 readers. Pre-v5 saves lack the
+//               layer fields; deserialize derives them from `type`, but per the
+//               locked operator decision old in-flight online games are dropped
+//               rather than shimmed, so the bump prunes them on boot.
+export const SAVE_VERSION = 5;
 
 // Unique build identifier — appends Railway's commit SHA when deployed.
 // Falls back to plain VERSION in local dev and in-browser (where process is
