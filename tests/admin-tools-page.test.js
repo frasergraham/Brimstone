@@ -58,9 +58,16 @@ describe('admin-tools.html', () => {
     assert.match(html, /controller\.active\s*===\s*id/);
   });
 
-  test('Mission Editor tab is a placeholder (no editor controller yet)', () => {
+  test('Mission Editor tab boots the 2D editor lazily (P5)', () => {
     assert.match(html, /id="editor-panel"/);
-    assert.doesNotMatch(html, /mission-editor\.js/);
+    // Canvas + palette shell present; controller wired via the editor-ui module.
+    assert.match(html, /id="e-render-canvas"/);
+    assert.match(html, /id="e-palette"/);
+    assert.match(html, /from\s+['"]\/src\/tools\/mission-editor-ui\.js['"]/);
+    assert.match(html, /initEditor\(\)/);
+    // Boot is deferred to first activation (bootTab → onFirstActivate), not at
+    // module top level.
+    assert.doesNotMatch(html, /initEditor\(\);\s*\n\s*controller\.activate/);
   });
 
   test('namespaces canvas ids per tab to avoid collisions', () => {
