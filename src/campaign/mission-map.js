@@ -93,7 +93,12 @@ function _buildHandmade(mapDef) {
 // (blockRiver BFS + convertRiverToBridge:false / pre-placed-bridge semantics).
 // No new bridges are created, so bridges only ever sit over the river crossings
 // the base map already placed.
-function _rederiveRoads(tiles, nodeKeys, rand) {
+//
+// Exported so the mission editor can run the same regen on a handmade map and
+// snapshot the derived roadDirs back into the tile defs (see P5 "Regenerate
+// Roads then snapshot" — handmade roads have no load-time regen, so the editor
+// must persist them).
+export function rederiveRoads(tiles, nodeKeys, rand) {
   // Reset: ROAD → GRASS, clear all connectivity. Bridges stay as crossings.
   for (const t of tiles.values()) {
     if (t.type === TileType.ROAD) t.type = TileType.GRASS;
@@ -147,7 +152,7 @@ function _buildProcedural(mapDef) {
   }
 
   // 3. Re-derive roads from the node set.
-  _rederiveRoads(tiles, roadNodes, rng((mapDef.seed ?? 0) + 1));
+  rederiveRoads(tiles, roadNodes, rng((mapDef.seed ?? 0) + 1));
 
   // 4. Apply deltas.
   const hidden = overlay.hiddenSurvivors ?? {};

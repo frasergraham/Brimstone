@@ -120,12 +120,32 @@
     #lighting-panel .helper { font-size: 11px; color: #8a8060; margin: 4px 0 8px 0; line-height: 1.4; }
 
     /* ════════════════════════════════════════════════════════════════════
-       MISSION EDITOR TAB — placeholder (filled by a later phase).
+       MISSION EDITOR TAB — 2D tile-painting / placement editor (P5).
        ════════════════════════════════════════════════════════════════════ */
-    #editor-panel { display: flex; align-items: center; justify-content: center; height: 100%; background: #050505; }
-    #editor-panel .placeholder { text-align: center; color: #6a6050; }
-    #editor-panel .placeholder h2 { font-size: 14px; color: #c4a04a; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 8px; }
-    #editor-panel .placeholder p { font-size: 12px; font-style: italic; }
+    #editor-panel { display: grid; grid-template-columns: 1fr 280px; height: 100%; }
+    #editor-panel #e-canvas-pane { position: relative; overflow: hidden; background: #050505; }
+    #editor-panel #e-render-canvas { width: 100%; height: 100%; display: block; touch-action: none; cursor: crosshair; }
+    #editor-panel #e-palette { padding: 12px 14px; overflow-y: auto; border-left: 1px solid #2c2620; background: #14110d; }
+    #editor-panel .e-section { margin: 10px 0; padding: 10px 12px; border: 1px solid #2c2620; background: #1a1610; }
+    #editor-panel .e-section h3 { margin: 0 0 8px 0; font-size: 11px; color: #c4a04a; letter-spacing: 1.5px; text-transform: uppercase; }
+    #editor-panel .e-row { display: grid; grid-template-columns: 70px 1fr; gap: 8px; align-items: center; margin: 5px 0; font-size: 12px; }
+    #editor-panel .e-row label { color: #a08858; }
+    #editor-panel select, #editor-panel input[type=number] {
+      width: 100%; padding: 5px 6px; background: #211c16; color: #d4cba0;
+      border: 1px solid #443a2a; font-family: inherit; font-size: 12px;
+    }
+    #editor-panel .e-tool {
+      display: block; width: 100%; margin: 3px 0; padding: 7px 10px; text-align: left;
+      background: #211c16; color: #d4cba0; border: 1px solid #443a2a;
+      font-family: inherit; font-size: 12px; cursor: pointer;
+    }
+    #editor-panel .e-tool:hover { background: #2a241c; }
+    #editor-panel .e-tool.active { background: #5a4a30; border-color: #c4a04a; color: #ffd680; }
+    #editor-panel .e-action {
+      width: 100%; margin: 4px 0; padding: 7px 10px; background: #5a4a30; color: #ffd680;
+      border: 1px solid #c4a04a; font-family: inherit; font-size: 12px; cursor: pointer; letter-spacing: 1px;
+    }
+    #editor-panel .e-action:hover { background: #6a5a3a; }
   </style>
 </head>
 <body>
@@ -268,12 +288,12 @@
         </div>
       </section>
 
-      <!-- ── MISSION EDITOR PANEL (placeholder) ─────────────────────────── -->
+      <!-- ── MISSION EDITOR PANEL ────────────────────────────────────────── -->
       <section id="editor-panel" class="tab-panel">
-        <div class="placeholder">
-          <h2>Campaign Mission Editor</h2>
-          <p>Coming soon — tile painting, event authoring, and 3D preview.</p>
+        <div id="e-canvas-pane">
+          <canvas id="e-render-canvas"></canvas>
         </div>
+        <aside id="e-palette"><!-- tool palette built by initEditor() --></aside>
       </section>
     </div>
   </div>
@@ -294,6 +314,9 @@
     import { generateMap } from '/src/map.js';
     import { GameState, Phase } from '/src/game.js';
     import { createHero, createWitch } from '/src/entities.js';
+    // Mission Editor tab. The 2D Renderer + palette boot only when initEditor()
+    // runs (first activation of that tab) — nothing heavy at module load.
+    import { initEditor } from '/src/tools/mission-editor-ui.js';
 
     // ════════════════════════════════════════════════════════════════════
     //  ASSETS TAB  (ported from admin-assets.html; ids prefixed `a-`)
@@ -969,8 +992,9 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
         handles.assets = initAssets();
       } else if (id === 'lighting') {
         initPromises.lighting = initLighting().then((h) => { handles.lighting = h; return h; });
+      } else if (id === 'editor') {
+        handles.editor = initEditor();
       }
-      // 'editor' is a static placeholder — nothing to boot.
     }
 
     function showPanel(id) {
