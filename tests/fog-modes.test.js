@@ -13,7 +13,12 @@ import {
 } from '../src/actions.js';
 import { GameState, Phase } from '../src/game.js';
 import { createHero, createWitch, createMinion } from '../src/entities.js';
-import { TileType } from '../src/tiles.js';
+import { TileType, Tile } from '../src/tiles.js';
+
+// Build a layered Tile fixture (carries base/path/structure for the predicates).
+function mkTile(type) {
+  return new Tile(0, 0, type);
+}
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -28,9 +33,7 @@ function makeTinyState() {
   };
   for (let row = 0; row < 5; row++) {
     for (let col = 0; col < 5; col++) {
-      state.tiles.set(hexKey(col, row), {
-        type: TileType.GRASS, building: null, fortifyLevel: 0, explored: false,
-      });
+      state.tiles.set(hexKey(col, row), mkTile(TileType.GRASS));
     }
   }
   return state;
@@ -88,9 +91,7 @@ describe('getFogReachableHexes', () => {
 
   test('river tiles are impassable', () => {
     const state = makeTinyState();
-    state.tiles.set(hexKey(2, 1), {
-      type: TileType.RIVER, building: null, fortifyLevel: 0, explored: false,
-    });
+    state.tiles.set(hexKey(2, 1), mkTile(TileType.RIVER));
     const hero = createHero(2, 2, 'hero');
     placeEntity(state, hero);
     const reachable = getFogReachableHexes(state, hero);
@@ -100,12 +101,8 @@ describe('getFogReachableHexes', () => {
   test('road tiles extend range (cost 1 instead of 2)', () => {
     const state = makeTinyState();
     // Make a road path: (2,2) -> (2,1) -> (2,0)
-    state.tiles.set(hexKey(2, 1), {
-      type: TileType.ROAD, building: null, fortifyLevel: 0, explored: false,
-    });
-    state.tiles.set(hexKey(2, 0), {
-      type: TileType.ROAD, building: null, fortifyLevel: 0, explored: false,
-    });
+    state.tiles.set(hexKey(2, 1), mkTile(TileType.ROAD));
+    state.tiles.set(hexKey(2, 0), mkTile(TileType.ROAD));
     const hero = createHero(2, 2, 'hero');
     placeEntity(state, hero);
     const reachable = getFogReachableHexes(state, hero);
@@ -203,9 +200,7 @@ describe('updateExploredHexes', () => {
     state.exploredHexes = { hero: new Set(), witch: new Set() };
     for (let row = 0; row < 8; row++) {
       for (let col = 0; col < 8; col++) {
-        state.tiles.set(hexKey(col, row), {
-          type: TileType.GRASS, building: null, fortifyLevel: 0, explored: false,
-        });
+        state.tiles.set(hexKey(col, row), mkTile(TileType.GRASS));
       }
     }
     const hero = createHero(4, 4, 'hero');
@@ -231,9 +226,7 @@ describe('updateExploredHexes', () => {
     state.exploredHexes = { hero: new Set(), witch: new Set() };
     for (let row = 0; row < 8; row++) {
       for (let col = 0; col < 8; col++) {
-        state.tiles.set(hexKey(col, row), {
-          type: TileType.GRASS, building: null, fortifyLevel: 0, explored: false,
-        });
+        state.tiles.set(hexKey(col, row), mkTile(TileType.GRASS));
       }
     }
     const witch = createWitch(4, 4, 'witch');
@@ -258,9 +251,7 @@ describe('updateExploredHexes', () => {
     state.exploredHexes = { hero: new Set(), witch: new Set() };
     for (let row = 0; row < 8; row++) {
       for (let col = 0; col < 8; col++) {
-        state.tiles.set(hexKey(col, row), {
-          type: TileType.GRASS, building: null, fortifyLevel: 0, explored: false,
-        });
+        state.tiles.set(hexKey(col, row), mkTile(TileType.GRASS));
       }
     }
     const hero = createHero(1, 1, 'hero');
@@ -290,9 +281,7 @@ describe('updateExploredHexes', () => {
     state.exploredHexes = { hero: new Set(), witch: new Set() };
     for (let row = 0; row < 5; row++) {
       for (let col = 0; col < 5; col++) {
-        state.tiles.set(hexKey(col, row), {
-          type: TileType.GRASS, building: null, fortifyLevel: 0, explored: false,
-        });
+        state.tiles.set(hexKey(col, row), mkTile(TileType.GRASS));
       }
     }
     const hero = createHero(2, 2, 'hero');

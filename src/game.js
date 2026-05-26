@@ -1,7 +1,7 @@
 // Central game state and turn management
 import { generateMap } from './map.js';
 import { createHero, createWitch, createMinion, createSurvivor, resetRoster, survivorRosterIndexByName, bumpEntityId as _bumpModuleEntityId, EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType } from './entities.js';
-import { BuildingType, ResourceType, TileType } from './tiles.js';
+import { BuildingType, ResourceType, hasBuilding, isRiver } from './tiles.js';
 import { hexKey, hexDistance, getNeighbors, setMapDimensions, MAP_COLS, MAP_ROWS } from './hex.js';
 import { applyPostRoundEffects, attritionForCycle } from './post-round-effects.js';
 import { sightRange } from './actions.js';
@@ -673,7 +673,7 @@ export class GameState {
     const targetBuilding = faction === 'hero' ? BuildingType.INN : BuildingType.GRAVEYARD;
     const buildings = [];
     for (const [, t] of this.tiles) {
-      if (t.type === TileType.BUILDING && t.building === targetBuilding) {
+      if (hasBuilding(t) && t.building === targetBuilding) {
         buildings.push({ col: t.col, row: t.row });
       }
     }
@@ -683,7 +683,7 @@ export class GameState {
       const cols = faction === 'hero' ? [0, 1, 2] : [MAP_COLS - 3, MAP_COLS - 2, MAP_COLS - 1];
       const candidates = [];
       for (const [, t] of this.tiles) {
-        if (!cols.includes(t.col) || t.type === TileType.RIVER) continue;
+        if (!cols.includes(t.col) || isRiver(t)) continue;
         const occupied = this.entities.some(e => e.alive && e.col === t.col && e.row === t.row);
         if (!occupied) candidates.push({ col: t.col, row: t.row });
       }
@@ -706,7 +706,7 @@ export class GameState {
     for (const b of buildings) {
       for (const n of getNeighbors(b.col, b.row)) {
         const t = this.tiles.get(hexKey(n.col, n.row));
-        if (!t || t.type === TileType.RIVER) continue;
+        if (!t || isRiver(t)) continue;
         const occupied = this.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
         if (!occupied) return { col: n.col, row: n.row };
       }
@@ -1239,9 +1239,9 @@ export class GameState {
     const buildings = [];
     const terrain   = [];
     for (const t of this.tiles.values()) {
-      if (t.type === TileType.RIVER) continue;
+      if (isRiver(t)) continue;
       if (tooClose(t)) continue;
-      if (t.type === TileType.BUILDING) buildings.push(t);
+      if (hasBuilding(t)) buildings.push(t);
       else terrain.push(t);
     }
 

@@ -1,9 +1,10 @@
 // Action system: definitions, validation, and execution
 import { getNeighbors, hexKey, hexDistance, hexRange, offsetToAxial, axialToOffset } from './hex.js';
 import {
-  TileType, ResourceType, WEAPON_LABEL, BUILDING_LOOT, TERRAIN_LOOT, rollLoot,
+  ResourceType, WEAPON_LABEL, BUILDING_LOOT, TERRAIN_LOOT, rollLoot,
   MAX_FORTIFY_LEVEL, getFortifyCombatBonus, isFortWall,
   FORT_IMPASSABLE_THRESHOLD,
+  isRiver, isPathRoadLike, hasBuilding, isForestCover, baseOf,
 } from './tiles.js';
 import { ITEMS } from './items.js';
 import { ABILITIES } from './abilities.js';
@@ -82,11 +83,10 @@ export function getReachableHexes(state, actor, range, posOverride = null, visib
     for (const n of getNeighbors(col, row)) {
       const nk = hexKey(n.col, n.row);
       const nt = tile(state, n.col, n.row);
-      if (!nt || nt.type === TileType.RIVER) continue;
+      if (!nt || isRiver(nt)) continue;
       if (hasVisibleEnemy(state, actor, n.col, n.row, visibleEnemyHexes)) continue;
       if (isFortBlocking(nt, actor.owner)) continue;
-      const isRoadLike = nt.type === TileType.ROAD || nt.type === TileType.BRIDGE ||
-                         nt.type === TileType.BUILDING;
+      const isRoadLike = isPathRoadLike(nt);
       const nc = c + (isRoadLike ? 1 : 2);
       if (nc <= budget && nc < (dist.get(nk) ?? Infinity)) {
         dist.set(nk, nc);
@@ -129,11 +129,10 @@ function findShortestPath(state, actor, toCol, toRow, posOverride = null) {
     for (const n of getNeighbors(col, row)) {
       const nk = hexKey(n.col, n.row);
       const nt = tile(state, n.col, n.row);
-      if (!nt || nt.type === TileType.RIVER) continue;
+      if (!nt || isRiver(nt)) continue;
       if (hasEnemy(state, actor, n.col, n.row) && nk !== goalK) continue;
       if (isFortBlocking(nt, actor.owner) && nk !== goalK) continue;
-      const isRoadLike = nt.type === TileType.ROAD || nt.type === TileType.BRIDGE ||
-                         nt.type === TileType.BUILDING;
+      const isRoadLike = isPathRoadLike(nt);
       const nc = c + (isRoadLike ? 1 : 2);
       if (nc < (dist.get(nk) ?? Infinity)) {
         dist.set(nk, nc);
@@ -195,11 +194,10 @@ export function getFogReachableHexes(state, actor, posOverride = null) {
     for (const n of getNeighbors(col, row)) {
       const nk = hexKey(n.col, n.row);
       const nt = tile(state, n.col, n.row);
-      if (!nt || nt.type === TileType.RIVER) continue;
+      if (!nt || isRiver(nt)) continue;
       // No enemy blocking — this is theoretical reachability for fog visibility
       if (isFortBlocking(nt, actor.owner)) continue;
-      const isRoadLike = nt.type === TileType.ROAD || nt.type === TileType.BRIDGE ||
-                         nt.type === TileType.BUILDING;
+      const isRoadLike = isPathRoadLike(nt);
       const nc = c + (isRoadLike ? 1 : 2);
       if (nc <= budget && nc < (dist.get(nk) ?? Infinity)) {
         dist.set(nk, nc);
@@ -339,7 +337,7 @@ export function getValidActions(state, actor) {
     if (!nt) return false;
     // Melee: exclude rivers (can't wade/attack into one). Ranged: rivers are
     // fine as targets (you can shoot over water).
-    if (actorRange <= 1 && nt.type === TileType.RIVER) return false;
+    if (actorRange <= 1 && isRiver(nt)) return false;
     return true;
   });
   if (battleHexTargets.length) {
@@ -348,7 +346,7 @@ export function getValidActions(state, actor) {
 
   // Fortify — faction-gated; cap at MAX_FORTIFY_LEVEL, uses shared inventory.
   // Always included when contextually valid; affordable=false when no resources.
-  if (t && t.type !== TileType.RIVER && t.fortifyLevel < MAX_FORTIFY_LEVEL && faction.canFortify()) {
+  if (t && !isRiver(t) && t.fortifyLevel < MAX_FORTIFY_LEVEL && faction.canFortify()) {
     const inv        = faction.getInventory(state);
     const woodCount  = (inv[ResourceType.WOOD]  || 0);
     const metalCount = (inv[ResourceType.METAL] || 0);
@@ -517,7 +515,7 @@ export function executeMove(state, actor, targetCol, targetRow) {
     // Check if this hex is blocked by an enemy (could have moved here since plan was made)
     if (hasEnemy(state, actor, step.col, step.row)) break;
     const st = tile(state, step.col, step.row);
-    if (!st || st.type === TileType.RIVER) break;
+    if (!st || isRiver(st)) break;
     if (isFortBlocking(st, actor.owner)) break;
 
     actor.col = step.col;
@@ -609,11 +607,14 @@ export function executeExplore(state, actor) {
 
   const runLoot = () => {
     let table;
-    if (t.type === TileType.BUILDING && t.building && BUILDING_LOOT[t.building]) {
+    if (hasBuilding(t) && t.building && BUILDING_LOOT[t.building]) {
       table = _effectiveLoot(state, 'buildings', t.building, BUILDING_LOOT[t.building]);
     } else {
-      const baseTable = TERRAIN_LOOT[t.type] || TERRAIN_LOOT['grass'];
-      table = _effectiveLoot(state, 'terrain', t.type, baseTable);
+      // Terrain loot rolls off the BASE material — a road-over-forest rolls
+      // forest loot, not road/grass loot.
+      const base = baseOf(t);
+      const baseTable = TERRAIN_LOOT[base] || TERRAIN_LOOT['grass'];
+      table = _effectiveLoot(state, 'terrain', base, baseTable);
     }
     const raw = rollLoot(table);
     const lootType = concreteFaction.modifyLootRoll(state, actor, table, raw);
@@ -805,7 +806,7 @@ function _knockbackDestination(state, entity, centerCol, centerRow) {
   const dr = here.r - center.r;
   const push = axialToOffset(here.q + dq, here.r + dr);
   const t = state.tiles.get(hexKey(push.col, push.row));
-  if (!t || t.type === TileType.RIVER) return null;
+  if (!t || isRiver(t)) return null;
   if (isFortBlocking(t, entity.owner)) return null;
   if (state.entities.some(e => e.alive && e.id !== entity.id && e.col === push.col && e.row === push.row)) return null;
   return push;
@@ -858,7 +859,7 @@ export function executeBattle(state, actor, target) {
   // Forest-cover bonus — ranged-only. The defender blends into the trees
   // and gains +1 DEF against incoming projectiles. Melee attackers are
   // already in the same thicket, so cover does not apply.
-  const forestCoverBonus = (isRanged && defTile?.type === TileType.FOREST) ? 1 : 0;
+  const forestCoverBonus = (isRanged && isForestCover(defTile)) ? 1 : 0;
 
   // Gang-up: melee only. Ranged attacks explicitly ignore ally adjacency
   // for both attacker and defender.
@@ -1160,7 +1161,7 @@ export function executeFortAssault(state, actor, targetCol, targetRow) {
 
 export function executeFortify(state, actor) {
   const t = tile(state, actor.col, actor.row);
-  if (!t || t.type === TileType.RIVER) return { success: false, log: ['Cannot fortify here.'] };
+  if (!t || isRiver(t)) return { success: false, log: ['Cannot fortify here.'] };
   if (t.fortifyLevel >= MAX_FORTIFY_LEVEL) return { success: false, log: ['Cannot fortify further.'] };
   const shared     = state.inventory.hero;
   const metalCount = (shared[ResourceType.METAL] || 0);

@@ -6,7 +6,7 @@
 
 import { Phase } from './game.js';
 import { EntityType } from './entities.js';
-import { TileType } from './tiles.js';
+import { hasBuilding } from './tiles.js';
 import { hexKey } from './hex.js';
 import { tickEffects, EFFECTS, dispatchTrigger } from './effects.js';
 import { getFaction } from './factions.js';
@@ -80,7 +80,7 @@ function nightAttritionEffect(state) {
   const exposed = [];
   for (const e of allSurvivors) {
     const t = state.tiles.get(hexKey(e.col, e.row));
-    if (t && t.type === TileType.BUILDING) {
+    if (t && hasBuilding(t)) {
       inBuilding.push(e);
     } else {
       exposed.push(e);

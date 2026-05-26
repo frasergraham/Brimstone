@@ -8,7 +8,7 @@
 
 import { Phase } from './game.js';
 import { EntityType, SurvivorAbility, createHero, createWitch, createSurvivor, createZombie, createMinion, createWoodGolem, createIronGolem, createRogue, createCaptain, createNecromancer, createBrute, isLeaderType } from './entities.js';
-import { ResourceType, TileType, BuildingType, rollLoot } from './tiles.js';
+import { ResourceType, BuildingType, rollLoot, hasBuilding, isRiver } from './tiles.js';
 import { hexKey, getNeighbors } from './hex.js';
 import { AI_HERO_NAMES, AI_WITCH_NAMES } from './ai-names.js';
 import { Side, getOpposingSide as _opposingSide } from './sides.js';
@@ -386,7 +386,7 @@ export class HeroFaction extends Faction {
     );
     for (const hero of heroLeaders) {
       const heroTile = state.tiles.get(hexKey(hero.col, hero.row));
-      if (heroTile?.type === TileType.BUILDING && hero.hp < hero.maxHp) {
+      if (hasBuilding(heroTile) && hero.hp < hero.maxHp) {
         const b = heroTile.building;
         if (b === BuildingType.INN) {
           hero.heal(3);
@@ -431,7 +431,7 @@ export class HeroFaction extends Faction {
         for (const clusterHex of obj.hexes) {
           const n = getNeighbors(clusterHex.col, clusterHex.row).find(nb => {
             const t = state.tiles.get(hexKey(nb.col, nb.row));
-            return t && t.type !== TileType.RIVER &&
+            return t && !isRiver(t) &&
               !state.entities.some(e => e.alive && e.col === nb.col && e.row === nb.row);
           });
           if (n) return n;
@@ -670,12 +670,12 @@ export class RogueFaction extends HeroFaction {
   onAfterMoveStep(state, actor, col, row) {
     const hits = [];
     const here = state.tiles.get(hexKey(col, row));
-    if (here?.type === TileType.BUILDING && here.hiddenSurvivor) {
+    if (hasBuilding(here) && here.hiddenSurvivor) {
       hits.push({ col, row });
     }
     for (const n of getNeighbors(col, row)) {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      if (t?.type === TileType.BUILDING && t.hiddenSurvivor) {
+      if (hasBuilding(t) && t.hiddenSurvivor) {
         hits.push({ col: n.col, row: n.row });
       }
     }
@@ -761,12 +761,12 @@ export class BruteFaction extends WitchFaction {
   onAfterMoveStep(state, actor, col, row) {
     const hits = [];
     const here = state.tiles.get(hexKey(col, row));
-    if (here?.type === TileType.BUILDING && here.hiddenSurvivor) {
+    if (hasBuilding(here) && here.hiddenSurvivor) {
       hits.push({ col, row });
     }
     for (const n of getNeighbors(col, row)) {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      if (t?.type === TileType.BUILDING && t.hiddenSurvivor) {
+      if (hasBuilding(t) && t.hiddenSurvivor) {
         hits.push({ col: n.col, row: n.row });
       }
     }

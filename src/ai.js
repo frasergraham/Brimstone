@@ -2,7 +2,7 @@
 // Hero AI: hero-ai-engine.js (HeroAIEngine)
 // Witch AI: ai-engine.js (WitchAIEngine)
 import { getNeighbors, hexDistance, hexKey } from './hex.js';
-import { TileType } from './tiles.js';
+import { hasBuilding, isRiver } from './tiles.js';
 import { Entity, EntityType, isLeaderType } from './entities.js';
 import { Phase, computeActions, computeActionsForPlayer, nodeController, countHeldNodes } from './game.js';
 import { getReachableHexes, isFortBlocking } from './actions.js';
@@ -22,7 +22,7 @@ export function stepToward(state, actor, target) {
       const k = hexKey(n.col, n.row);
       if (visited.has(k)) continue;
       const t = state.tiles.get(k);
-      if (!t || t.type === TileType.RIVER) continue;
+      if (!t || isRiver(t)) continue;
       visited.add(k);
       queue.push({ col: n.col, row: n.row, first: first || n });
     }
@@ -71,7 +71,7 @@ export function roadStepToward(state, actor, target) {
 export function nearestBuilding(state, actor) {
   let best = null, bestDist = Infinity;
   for (const [, t] of state.tiles) {
-    if (t.type !== TileType.BUILDING) continue;
+    if (!hasBuilding(t)) continue;
     const d = hexDistance(actor.col, actor.row, t.col, t.row);
     if (d < bestDist) { bestDist = d; best = t; }
   }
@@ -81,7 +81,7 @@ export function nearestBuilding(state, actor) {
 export function stepAwayFrom(state, actor, threat) {
   const neighbors = getNeighbors(actor.col, actor.row).filter(n => {
     const t = state.tiles.get(hexKey(n.col, n.row));
-    return t && t.type !== TileType.RIVER &&
+    return t && !isRiver(t) &&
       !state.entities.some(e => e.alive && e.owner === 'hero' && e.col === n.col && e.row === n.row);
   });
   if (!neighbors.length) return null;
@@ -146,7 +146,7 @@ export function bestWitchObjective(state, actor, claimedNodes = null) {
 
 export function inBuilding(state, entity) {
   const t = state.tiles.get(hexKey(entity.col, entity.row));
-  return t && t.type === TileType.BUILDING;
+  return t && hasBuilding(t);
 }
 
 // ── Plan simulation state ─────────────────────────────────────────────────────

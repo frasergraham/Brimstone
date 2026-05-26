@@ -20,7 +20,7 @@ import {
   Entity, EntityType,
   createHero, createWitch, createMinion,
 } from '../src/entities.js';
-import { TileType } from '../src/tiles.js';
+import { TileType, PathType, StructureType } from '../src/tiles.js';
 import { hexKey, hexDistance } from '../src/hex.js';
 import { PlanActionType, snapEntity } from '../src/planner.js';
 import { resolvePlans } from '../server/resolver.js';
@@ -152,6 +152,68 @@ describe('ranged attack — forest cover', () => {
     const expectedDef = r.breakdown.defBaseDie + hero.getDefense()
       + (r.breakdown.fortBonus || 0) + 1;
     assert.equal(r.defenseRoll, expectedDef);
+  });
+
+  // P4 locked behaviour change: forest cover is BASE-driven. A defender whose
+  // tile has base=forest gets +1 DEF vs ranged EVEN IF a road or building sits
+  // on top (previously laying a road cleared the forest type and removed cover).
+  test('road-over-forest STILL grants ranged forest cover (+1 DEF) — new base-driven rule', () => {
+    const state = freshState();
+    const witch = state.witch;
+    const hero  = state.hero;
+    placeAt(witch, 5, 5);
+    placeAt(hero,  7, 5);
+
+    // Forest base with a road laid on top — derived tile.type === ROAD, but the
+    // base material is still forest, so cover applies.
+    const t = state.tiles.get(hexKey(hero.col, hero.row));
+    t.base = TileType.FOREST;
+    t.path = PathType.ROAD;
+    assert.equal(t.type, TileType.ROAD, 'derived type is road (path wins)');
+
+    state.setForcedDice(3, 3);
+    const r = executeBattle(state, witch, hero);
+
+    assert.equal(r.ranged, true);
+    assert.equal(r.breakdown.forestCoverBonus, 1, 'base=forest still grants cover');
+  });
+
+  test('building-over-forest STILL grants ranged forest cover (+1 DEF)', () => {
+    const state = freshState();
+    const witch = state.witch;
+    const hero  = state.hero;
+    placeAt(witch, 5, 5);
+    placeAt(hero,  7, 5);
+
+    const t = state.tiles.get(hexKey(hero.col, hero.row));
+    t.base = TileType.FOREST;
+    t.path = null;
+    t.structure = StructureType.BUILDING;
+    assert.equal(t.type, TileType.BUILDING, 'derived type is building');
+
+    state.setForcedDice(3, 3);
+    const r = executeBattle(state, witch, hero);
+
+    assert.equal(r.ranged, true);
+    assert.equal(r.breakdown.forestCoverBonus, 1, 'base=forest under a building still grants cover');
+  });
+
+  test('non-forest base (road over grass) grants NO forest cover', () => {
+    const state = freshState();
+    const witch = state.witch;
+    const hero  = state.hero;
+    placeAt(witch, 5, 5);
+    placeAt(hero,  7, 5);
+
+    const t = state.tiles.get(hexKey(hero.col, hero.row));
+    t.base = TileType.GRASS;
+    t.path = PathType.ROAD;
+
+    state.setForcedDice(3, 3);
+    const r = executeBattle(state, witch, hero);
+
+    assert.equal(r.ranged, true);
+    assert.equal(r.breakdown.forestCoverBonus, 0, 'grass base = no cover');
   });
 
   test('melee attacker gets no forest cover bonus (defender is already in the same trees)', () => {
