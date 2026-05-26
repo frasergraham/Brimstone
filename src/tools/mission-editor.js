@@ -526,6 +526,19 @@ export function mapModeLabel(mapDef) {
   return mapDef.baked ? 'handmade (baked)' : 'handmade';
 }
 
+/**
+ * Resolve a standard map-size preset name (a MAP_SIZES key — skirmish / standard
+ * / regional / campaign) to its `{ cols, rows }` dimensions. Returns null for an
+ * unknown name (the New-map dialog treats that as "Custom"). Pure; exported so
+ * the size-preset → X/Y prefill in the creation dialog is unit-testable without
+ * the DOM (item 12).
+ */
+export function mapSizePreset(name) {
+  const cfg = MAP_SIZES[name];
+  if (!cfg) return null;
+  return { cols: cfg.cols, rows: cfg.rows };
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Map sizing (item 3) — explicit cols/rows + per-edge add/remove with remap
 // ─────────────────────────────────────────────────────────────────────────────
