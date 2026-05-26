@@ -504,7 +504,11 @@ describe('TUTORIAL_CONDUCTOR_CONFIG', () => {
 // ── Prologue campaign definition ─────────────────────────────────────────────
 
 describe('Prologue campaign', async () => {
-  const { default: prologue } = await import('../src/campaign/campaigns/prologue.js');
+  // The tutorial mission def is data-driven (src/campaign/missions/tutorial.json)
+  // and registered into the campaign shell by campaign-registry.js at init, so we
+  // source the populated campaign through the registry rather than the bare shell.
+  const { getCampaignById } = await import('../src/campaign/campaign-registry.js');
+  const prologue = getCampaignById('prologue');
 
   test('has expected campaign shape', () => {
     assert.equal(prologue.id, 'prologue');
