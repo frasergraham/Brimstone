@@ -6,6 +6,7 @@ import {
 } from './hex.js';
 import {
   TileType, TILE_COLOR, BUILDING_COLOR, BUILDING_LABEL, BUILDING_ICON,
+  PathType, baseOf, pathOf, hasBuilding, isRiver, isBridge,
 } from './tiles.js';
 import { ENTITY_COLOR, EntityType, SurvivorAbility, isLeaderType } from './entities.js';
 import { getVisiblePositions, sightRange, buildFogMovementHexes } from './actions.js';
@@ -409,7 +410,9 @@ export class Renderer {
     if (!this._portraitCache) return null;
     const fortKey = tile.fortifyLevel || 0;
     const bldg = tile.building || '';
-    const cacheKey = `tile_${tile.type}_${bldg}_${fortKey}@${size}`;
+    // base is part of the key now that road/river/building render on the real
+    // base material (two same-`type` tiles can differ by base material).
+    const cacheKey = `tile_${tile.type}_${baseOf(tile)}_${bldg}_${fortKey}@${size}`;
     if (this._portraitCache.has(cacheKey)) return this._portraitCache.get(cacheKey);
 
     const c = document.createElement('canvas');
@@ -417,22 +420,20 @@ export class Renderer {
     const ctx = c.getContext('2d');
     const hs = size / 2;
 
-    // Hex fill colour
-    const color = tile.type === TileType.BUILDING
-      ? (BUILDING_COLOR[tile.building] || '#8a7a5a')
-      : (tile.type === 'road' || tile.type === 'river' || tile.type === 'bridge')
-        ? TILE_COLOR[TileType.GRASS]
-        : (TILE_COLOR[tile.type] || TILE_COLOR[TileType.GRASS]);
+    // Hex fill colour — real base material, with the building block layered on
+    // top (matching _drawTile: roads/rivers/buildings sit on their true base).
     _traceHexPath(ctx, hs, hs, hs - 0.5);
-    ctx.fillStyle = color;
+    ctx.fillStyle = TILE_COLOR[baseOf(tile)] || TILE_COLOR[TileType.GRASS];
     ctx.fill();
+    if (hasBuilding(tile)) {
+      _traceHexPath(ctx, hs, hs, hs - 0.5);
+      ctx.fillStyle = BUILDING_COLOR[tile.building] || '#8a7a5a';
+      ctx.fill();
+    }
 
-    // Sprite texture (if tilemap available)
-    if (this._tilemapImg && this._spriteRects && TERRAIN_SPRITES[tile.type]) {
-      const baseType = tile.type === TileType.BUILDING ? TileType.DIRT
-        : (tile.type === 'road' || tile.type === 'river' || tile.type === 'bridge') ? TileType.GRASS
-        : tile.type;
-      const spriteId = this._pickVariant(baseType, col, row);
+    // Sprite texture (if tilemap available) — always the real base material.
+    if (this._tilemapImg && this._spriteRects && TERRAIN_SPRITES[baseOf(tile)]) {
+      const spriteId = this._pickVariant(baseOf(tile), col, row);
       const rect = this._spriteRects.get(spriteId);
       if (rect) {
         ctx.save();
@@ -444,7 +445,7 @@ export class Renderer {
     }
 
     // Building overlay
-    if (tile.type === TileType.BUILDING && this._tilemapImg) {
+    if (hasBuilding(tile) && this._tilemapImg) {
       const bldgRect = this._spriteRects?.get(tile.building);
       if (bldgRect) {
         ctx.save();
@@ -1257,7 +1258,7 @@ export class Renderer {
       for (let col = vr.minCol; col <= vr.maxCol; col++) {
         if (fogKnownHexes && !fogKnownHexes.has(hexKey(col, row))) continue;
         const t = state.tiles.get(hexKey(col, row));
-        if (t && t.type !== TileType.BUILDING) this._drawTile(col, row);
+        if (t && !hasBuilding(t)) this._drawTile(col, row);
       }
     }
 
@@ -1270,7 +1271,7 @@ export class Renderer {
       for (let col = vr.minCol; col <= vr.maxCol; col++) {
         if (fogKnownHexes && !fogKnownHexes.has(hexKey(col, row))) continue;
         const t = state.tiles.get(hexKey(col, row));
-        if (t && t.type === TileType.BUILDING) this._drawTile(col, row);
+        if (t && hasBuilding(t)) this._drawTile(col, row);
       }
     }
 
@@ -1660,19 +1661,25 @@ export class Renderer {
     const tileImgs = this.useTileImages && this._tilemapImg;
     const fillSize = tileImgs ? hs - 0.5 : hs - 1;
 
-    // Road and river tiles use a grass background — the actual road strips and
-    // water ribbons are drawn in dedicated layers on top.
-    const color = tile.type === TileType.BUILDING
-      ? (BUILDING_COLOR[tile.building] || '#8a7a5a')
-      : (tile.type === TileType.ROAD || tile.type === TileType.RIVER || tile.type === TileType.BRIDGE)
-        ? TILE_COLOR[TileType.GRASS]
-        : (TILE_COLOR[tile.type] || TILE_COLOR[TileType.GRASS]);
+    // Base material colour — drawn for EVERY tile. Roads, rivers, bridges and
+    // buildings now sit on their REAL base material (grass/forest/dirt) instead
+    // of an implicit grass/dirt background; their path ribbons / water beziers /
+    // building blocks are layered on top in dedicated passes.
+    const baseColor = TILE_COLOR[baseOf(tile)] || TILE_COLOR[TileType.GRASS];
 
-    // Color fill — always drawn as base; skipped for buildings when tile
-    // images are active (dirt sprite covers it).
-    if (!(tile.type === TileType.BUILDING && tileImgs)) {
+    // Base fill — skipped for buildings in tilemap mode (the base sprite +
+    // building image cover the hex).
+    if (!(hasBuilding(tile) && tileImgs)) {
       _traceHexPath(ctx, x, y, fillSize);
-      ctx.fillStyle = color;
+      ctx.fillStyle = baseColor;
+      ctx.fill();
+    }
+
+    // Building colour block layered on top of the base (classic colour-fill
+    // mode only; in tilemap mode the building image overlay below provides it).
+    if (hasBuilding(tile) && !tileImgs) {
+      _traceHexPath(ctx, x, y, fillSize);
+      ctx.fillStyle = BUILDING_COLOR[tile.building] || '#8a7a5a';
       ctx.fill();
     }
 
@@ -1685,13 +1692,11 @@ export class Renderer {
     }
 
     // ── Sprite image from tilemap (using pre-clipped cache) ──────────────
-    if (TERRAIN_SPRITES[tile.type] && tileImgs) {
-      const baseId = tile.type === TileType.BUILDING
-        ? this._pickVariant(TileType.DIRT, col, row)
-        : (tile.type === TileType.ROAD || tile.type === TileType.RIVER || tile.type === TileType.BRIDGE)
-          ? this._pickVariant(TileType.GRASS, col, row)
-          : this._pickVariant(tile.type, col, row);
-      const clipSize = tile.type === TileType.BUILDING ? hs : fillSize;
+    if (TERRAIN_SPRITES[baseOf(tile)] && tileImgs) {
+      // Always draw the REAL base material sprite — a road/river/building no
+      // longer forces a grass/dirt sprite underneath it.
+      const baseId = this._pickVariant(baseOf(tile), col, row);
+      const clipSize = hasBuilding(tile) ? hs : fillSize;
       const cached = this._getHexTileSprite(baseId, clipSize);
       if (cached) {
         // cached buffer is rendered at higher resolution; draw it at logical size
@@ -1701,7 +1706,7 @@ export class Renderer {
     }
 
     // Building image overlay — always drawn when tilemap is available
-    if (tile.type === TileType.BUILDING && this._tilemapImg) {
+    if (hasBuilding(tile) && this._tilemapImg) {
       const bldgRect = this._spriteRects?.get(tile.building);
       if (bldgRect) {
         ctx.drawImage(this._tilemapImg,
@@ -1753,11 +1758,11 @@ export class Renderer {
 
     // Bridge tiles: only the water background is drawn here.
     // The water bezier and road strip are layered on top in _drawRiverLayer / _drawRoadLayer.
-    if (tile.type === TileType.BRIDGE) return;
+    if (isBridge(tile)) return;
 
 
     // ── Building: icon + name ─────────────────────────────────────────────
-    if (tile.type === TileType.BUILDING && tile.building) {
+    if (hasBuilding(tile) && tile.building) {
       const hasBuildingImg = !!this._spriteRects?.get(tile.building) && !!this._tilemapImg;
 
       // Show emoji icon only when there is no image (image provides the visual)
@@ -1915,7 +1920,7 @@ export class Renderer {
     const hs      = this.hexSize;
     const apothem = hs * SQRT3 / 2;
 
-    const isWater = t => t && (t.type === TileType.RIVER || t.type === TileType.BRIDGE);
+    const isWater = t => t && (isRiver(t) || isBridge(t));
 
     ctx.strokeStyle = TILE_COLOR[TileType.RIVER];
     ctx.lineWidth   = hs * 0.52;
@@ -1927,7 +1932,7 @@ export class Renderer {
         if (fogKnownHexes && !fogKnownHexes.has(hexKey(col, row))) continue;
         const tile = tiles.get(hexKey(col, row));
         // Bridges handle their own water+road layering in _drawRoadLayer
-        if (!tile || tile.type !== TileType.RIVER) continue;
+        if (!tile || !isRiver(tile)) continue;
 
         const { x, y } = this._toCanvas(col, row);
         const riverNbrs = getNeighbors(col, row).filter(n => isWater(tiles.get(hexKey(n.col, n.row))));
@@ -1975,8 +1980,10 @@ export class Renderer {
     const hs      = this.hexSize;
     const apothem = hs * SQRT3 / 2;
 
+    // "Road-like" connectable: a road, a bridge, or any building tile (buildings
+    // carry road-through via their roadDirs Set, not the `path` layer).
     const isRoadLike = t => t && (
-      t.type === TileType.ROAD || t.type === TileType.BRIDGE || t.type === TileType.BUILDING
+      pathOf(t) === PathType.ROAD || isBridge(t) || hasBuilding(t)
     );
 
     ctx.lineCap = 'round';
@@ -1985,7 +1992,7 @@ export class Renderer {
       for (let col = 0; col < MAP_COLS; col++) {
         if (fogKnownHexes && !fogKnownHexes.has(hexKey(col, row))) continue;
         const tile = tiles.get(hexKey(col, row));
-        if (!tile || (tile.type !== TileType.ROAD && tile.type !== TileType.BRIDGE)) continue;
+        if (!tile || !(pathOf(tile) === PathType.ROAD || isBridge(tile))) continue;
 
         // Reset per-tile so bridge water/railing state changes never bleed through
         ctx.lineWidth   = hs * 0.42;
@@ -2005,8 +2012,8 @@ export class Renderer {
         });
 
         // ── Bridge: draw water bezier first, then road on top ─────────────
-        if (tile.type === TileType.BRIDGE) {
-          const isWater = t => t && (t.type === TileType.RIVER || t.type === TileType.BRIDGE);
+        if (isBridge(tile)) {
+          const isWater = t => t && (isRiver(t) || isBridge(t));
           const waterNbrs = getNeighbors(col, row).filter(n => isWater(tiles.get(hexKey(n.col, n.row))));
           if (waterNbrs.length >= 1) {
             const wEdge = waterNbrs.map(n => {
@@ -2038,10 +2045,10 @@ export class Renderer {
         // The crossing pair is the road exits most perpendicular to the
         // river flow (inferred from water neighbour directions).
         let primaryA = 0, primaryB = Math.min(1, edgeMids.length - 1);
-        if (tile.type === TileType.BRIDGE && edgeMids.length >= 2) {
+        if (isBridge(tile) && edgeMids.length >= 2) {
           const bWaterNbrs = getNeighbors(col, row).filter(n => {
             const t = tiles.get(hexKey(n.col, n.row));
-            return t && (t.type === TileType.RIVER || t.type === TileType.BRIDGE);
+            return t && (isRiver(t) || isBridge(t));
           });
           const edgeDirs = edgeMids.map(em => {
             const dx = em.x - x, dy = em.y - y;
@@ -2078,7 +2085,7 @@ export class Renderer {
         }
 
         // ── Road strip ────────────────────────────────────────────────────
-        if (tile.type === TileType.BRIDGE && edgeMids.length >= 2) {
+        if (isBridge(tile) && edgeMids.length >= 2) {
           // Bridge: draw crossing bezier along the primary pair, spokes for branches
           ctx.beginPath();
           ctx.moveTo(edgeMids[primaryA].x, edgeMids[primaryA].y);
@@ -2130,7 +2137,7 @@ export class Renderer {
         }
 
         // ── Bridge railings (bezier curves matching the crossing pair) ─────
-        if (tile.type === TileType.BRIDGE && edgeMids.length >= 2) {
+        if (isBridge(tile) && edgeMids.length >= 2) {
           const em0 = edgeMids[primaryA], em1 = edgeMids[primaryB];
           // Perpendicular offset based on overall road direction
           const dx = em1.x - em0.x, dy = em1.y - em0.y;

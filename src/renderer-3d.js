@@ -25,6 +25,12 @@ import {
   BUILDING_COLOR,
   BUILDING_LABEL,
   BuildingType,
+  PathType,
+  baseOf,
+  pathOf,
+  hasBuilding,
+  isRiver,
+  isBridge,
 } from './tiles.js';
 import { EntityType, isLeaderType } from './entities.js';
 import { Renderer } from './renderer.js';
@@ -74,7 +80,7 @@ export const BUILDING_GLB_BY_TYPE = Object.freeze({
  *  that isn't in `BUILDING_GLB_BY_TYPE` so non-HOUSE buildings keep their
  *  procedural box+roof. */
 export function buildingUsesHouseModel(tile) {
-  if (!tile || tile.type !== TileType.BUILDING) return false;
+  if (!tile || !hasBuilding(tile)) return false;
   return tile.building === BuildingType.HOUSE;
 }
 
@@ -649,7 +655,7 @@ export function labelAlphaForZoom(
  *  doesn't get a label (anything other than a BUILDING tile with a building
  *  field). Pure helper — single source of truth for label text + visibility. */
 export function labelTextForTile(tile) {
-  if (!tile || tile.type !== TileType.BUILDING || !tile.building) return null;
+  if (!tile || !hasBuilding(tile) || !tile.building) return null;
   return BUILDING_LABEL[tile.building] || tile.building;
 }
 
@@ -1102,19 +1108,12 @@ export function cssHexToRgb01(hex) {
  */
 export function tileColorFor(tile) {
   if (!tile) return TILE_COLOR[TileType.GRASS];
-  if (tile.type === TileType.BUILDING) {
-    return BUILDING_COLOR[tile.building] || '#8a7a5a';
-  }
-  // Road / river / bridge tiles now render with a grass base — the network
-  // pass draws smooth bezier tubes overlaying the grass, mirroring the 2D
-  // renderer's _drawRiverLayer / _drawRoadLayer (which also keep the grass
-  // background intact and lay the path on top).
-  if (tile.type === TileType.ROAD
-      || tile.type === TileType.RIVER
-      || tile.type === TileType.BRIDGE) {
-    return TILE_COLOR[TileType.GRASS];
-  }
-  return TILE_COLOR[tile.type] || TILE_COLOR[TileType.GRASS];
+  // The disc/prism colour is the tile's REAL base material (grass/forest/dirt).
+  // Roads, rivers and bridges no longer collapse to grass — the bezier network
+  // pass overlays the path on top of the honest base. Buildings show their base
+  // material under the box/roof props (BUILDING_COLOR is the prop colour, set in
+  // _buildTileMesh, not the disc colour).
+  return TILE_COLOR[baseOf(tile)] || TILE_COLOR[TileType.GRASS];
 }
 
 // ─── 2D thumbnail helpers (UI portrait + terrain icons) ─────────────────────
@@ -1144,13 +1143,13 @@ function _traceHexPath2D(ctx, cx, cy, r) {
  *  renderer but we don't replicate those for thumbnails). */
 function _tileFillColor(tile) {
   if (!tile) return TILE_COLOR[TileType.GRASS];
-  if (tile.type === TileType.BUILDING) {
+  // Building thumbnails show the building's colour as the informative cue;
+  // everything else fills from the real base material so a road-over-forest
+  // thumbnail reads as forest rather than collapsing to grass.
+  if (hasBuilding(tile)) {
     return BUILDING_COLOR[tile.building] || '#8a7a5a';
   }
-  if (tile.type === 'road' || tile.type === 'river' || tile.type === 'bridge') {
-    return TILE_COLOR[TileType.GRASS];
-  }
-  return TILE_COLOR[tile.type] || TILE_COLOR[TileType.GRASS];
+  return TILE_COLOR[baseOf(tile)] || TILE_COLOR[TileType.GRASS];
 }
 
 /** Choose a representative sprite id (e.g. 'grass_3') for a tile, hashed
@@ -1159,11 +1158,9 @@ function _tileFillColor(tile) {
  *  cover the variant pools that exist in the atlas (grass/forest/dirt). */
 export function _terrainThumbSpriteId(tile, col, row) {
   if (!tile) return null;
-  let base = tile.type;
-  if (tile.type === TileType.BUILDING) base = TileType.DIRT;
-  else if (tile.type === 'road' || tile.type === 'river' || tile.type === 'bridge') {
-    base = TileType.GRASS;
-  }
+  // Real base material — a road/river/building thumbnail picks the sprite for
+  // its true base (e.g. forest under a road) rather than collapsing to grass.
+  const base = baseOf(tile);
   const variants = { grass: 5, forest: 5, dirt: 5 };
   const count = variants[base];
   if (!count) return null;
@@ -2004,7 +2001,7 @@ export class Renderer3D {
     if (!this._mapBuilt || !this._houseSourceMesh || !this.state?.tiles) return 0;
     let upgraded = 0;
     for (const tile of this.state.tiles.values()) {
-      if (tile.type !== TileType.BUILDING || !tile.building) continue;
+      if (!hasBuilding(tile) || !tile.building) continue;
       // Only HOUSE-type buildings swap to the GLB; everything else keeps the
       // procedural box+roof built by `_buildTileMesh`.
       if (!buildingUsesHouseModel(tile)) continue;
@@ -2368,7 +2365,7 @@ export class Renderer3D {
     // In-map FOREST tiles — props key is hexKey, identifies the cluster by
     // the `forest_${col}_${row}_*` name prefix the procedural builder uses.
     for (const tile of this.state.tiles.values()) {
-      if (tile.type !== TileType.FOREST) continue;
+      if (baseOf(tile) !== TileType.FOREST) continue;
       const tkey  = hexKey(tile.col, tile.row);
       const props = this._tilePropsByKey.get(tkey) || [];
       // Skip if this tile already holds a real-tree instance.
@@ -3657,7 +3654,7 @@ export class Renderer3D {
         ctx.restore();
       }
       // Building overlay sprite on top of dirt.
-      if (tile.type === TileType.BUILDING && tile.building) {
+      if (hasBuilding(tile) && tile.building) {
         const bldgRect = this._spriteRects.get(tile.building);
         if (bldgRect) {
           ctx.save();
@@ -4502,7 +4499,7 @@ export class Renderer3D {
       // so they consistently read as wilderness ground beyond sight. The
       // trees on top stay in their normal (unfogged) colours so the
       // wilderness silhouette doesn't go too dark to read against the sky.
-      const syntheticTile = { type: TileType.FOREST, col: pos.col, row: pos.row };
+      const syntheticTile = { type: TileType.FOREST, base: TileType.FOREST, col: pos.col, row: pos.row };
       const borderMat = this._terrainMaterialFor(
         terrainSpriteIdFor(syntheticTile, pos.col, pos.row),
         { fogged: true },
@@ -4756,7 +4753,11 @@ export class Renderer3D {
     // positions, leaving the centre slot clear for an entity standee.
     // Layout is deterministic per (col, row) so the same hex always shows the
     // same cluster across runs. See forestTreesForHex / TILE_SLOTS.
-    if (tile.type === TileType.FOREST) {
+    // Forest cones are gated on the BASE material, NOT tile.type — so a road
+    // laid through a forest (or a building on a forest tile) still shows trees
+    // alongside the path/structure, instead of the forest vanishing the moment
+    // a path was painted over it.
+    if (baseOf(tile) === TileType.FOREST) {
       const trees = forestTreesForHex(tile.col, tile.row, this._season);
       // Prefer the real GLB-tree path when the tree-pack manifest has
       // resolved AND has a template for the current season. Falls back to
@@ -4795,7 +4796,7 @@ export class Renderer3D {
     // and lands on the road at either end. Width / endpoint height tuned to
     // line up visually with the road ribbon (ROAD_RIBBON_WIDTH = 0.6, sitting
     // at Y = ROAD_RIBBON_Y ≈ 0.008).
-    if (this._renderBridges && tile.type === TileType.BRIDGE) {
+    if (this._renderBridges && isBridge(tile)) {
       const yaw       = bridgeRotationY(tile, this.state.tiles);
       const span      = 1.8;                     // bridge length along the road
       const thickness = 0.10;                    // slab thickness
@@ -4848,7 +4849,7 @@ export class Renderer3D {
     // overlap. The GLB load runs async from `_initBabylon` — when it resolves
     // after `_buildMap` completes, `_upgradeBuildingsToHouseModel` swaps the
     // procedural meshes here for instances.
-    if (tile.type === TileType.BUILDING && tile.building) {
+    if (hasBuilding(tile) && tile.building) {
       // Only HOUSE-type buildings render as the imported GLB; every other
       // building type (INN, GRAVEYARD, CHURCH, etc.) keeps the procedural
       // box+roof until a model is authored for it. See BUILDING_GLB_BY_TYPE.
@@ -4908,12 +4909,14 @@ export class Renderer3D {
 
     // Register this tile's static occupants (building + forest trees) so the
     // per-draw standee re-slot pass knows which slots are already consumed.
-    // Tile types are mutually exclusive — at most one of {building, trees}
-    // exists per tile, never both.
+    // With the layered tile model a building and a forest base CAN coexist on
+    // one tile (a building on forest), so the occupants are additive rather
+    // than mutually exclusive.
     const staticOcc = [];
-    if (tile.type === TileType.BUILDING && tile.building) {
+    if (hasBuilding(tile) && tile.building) {
       staticOcc.push({ id: 'building', kind: 'building' });
-    } else if (tile.type === TileType.FOREST) {
+    }
+    if (baseOf(tile) === TileType.FOREST) {
       const trees = forestTreesForHex(tile.col, tile.row, this._season);
       for (const t of trees) staticOcc.push({ id: t.id, kind: 'tree' });
     }
@@ -5825,7 +5828,7 @@ export class Renderer3D {
     for (const [, hex] of this._borderForestHexesByKey) {
       const md = hex.metadata;
       if (!md) continue;
-      const syntheticTile = { type: TileType.FOREST, col: md.col, row: md.row };
+      const syntheticTile = { type: TileType.FOREST, base: TileType.FOREST, col: md.col, row: md.row };
       // Always use the fogged variant — border tiles are permanently
       // out-of-sight wilderness (see `_buildMapBorderForest`).
       const mat = this._terrainMaterialFor(
@@ -9169,20 +9172,16 @@ export const TERRAIN_VARIANT_COUNTS = Object.freeze({
  */
 export function terrainSpriteIdFor(tile, col, row) {
   if (!tile) return null;
-  let baseType;
-  if (tile.type === TileType.BUILDING) baseType = TileType.DIRT;
-  // FOREST tiles now render trees as real 3D cones — the underlying ground
-  // is grass, not a "forest" sprite of painted-on trees that would clash with
-  // the cone silhouettes. Same trick BUILDING uses (dirt underlay).
-  else if (tile.type === TileType.GRASS || tile.type === TileType.DIRT) baseType = tile.type;
-  else if (tile.type === TileType.FOREST) baseType = TileType.GRASS;
-  // Road / river / bridge get a grass underlay sprite — the network pass
-  // overlays bezier tubes on top of the grass, so the grass texture is what
-  // shows on either side of the path.
-  else if (tile.type === TileType.ROAD || tile.type === TileType.RIVER || tile.type === TileType.BRIDGE) {
-    baseType = TileType.GRASS;
-  } else return null;
+  // Ground texture = the tile's REAL base material. Roads/rivers/bridges and
+  // buildings no longer force a grass/dirt underlay — they sit on whatever
+  // base they were laid over.
+  let baseType = baseOf(tile);
+  // FOREST base is the one exception: trees render as real 3D cones, so the
+  // ground beneath uses the grass sprite (a painted-forest sprite would clash
+  // with the cone silhouettes). Same trick buildings used for a dirt underlay.
+  if (baseType === TileType.FOREST) baseType = TileType.GRASS;
   const count = TERRAIN_VARIANT_COUNTS[baseType] ?? 0;
+  if (count <= 0) return null;  // base material has no sprite pool — solid colour
   if (count > 1) {
     const v = (((col * 7 + row * 13 + col * row) % count) + count) % count + 1;
     return `${baseType}_${v}`;
@@ -9788,7 +9787,7 @@ export function networkStrokesForTile(tile, neighbours, opts = {}) {
  */
 export function buildRiverNetworkStrokes(tiles, hexKeyFn = hexKey, getNeighborsFn = getNeighbors) {
   if (!tiles || typeof tiles.values !== 'function') return [];
-  const isWater = t => t && (t.type === TileType.RIVER || t.type === TileType.BRIDGE);
+  const isWater = t => t && (isRiver(t) || isBridge(t));
   const out = [];
   for (const tile of tiles.values()) {
     if (!isWater(tile)) continue;
@@ -9816,9 +9815,12 @@ export function buildRoadNetworkStrokes(tiles, hexKeyFn = hexKey) {
   const out = [];
   for (const tile of tiles.values()) {
     if (!tile) continue;
-    if (tile.type !== TileType.ROAD
-      && tile.type !== TileType.BRIDGE
-      && tile.type !== TileType.BUILDING) continue;
+    // Road network = road tiles, bridges, and building tiles. Buildings carry
+    // their road-through purely via `roadDirs` (their `path` layer is null), so
+    // they're included by hasBuilding(), NOT by a path===road test.
+    if (pathOf(tile) !== PathType.ROAD
+      && !isBridge(tile)
+      && !hasBuilding(tile)) continue;
     if (!tile.roadDirs || tile.roadDirs.size === 0) continue;
     const nbrs = [];
     for (const k of tile.roadDirs) {
@@ -9869,7 +9871,7 @@ export function riverExitPoints(
   radius = HEX_RADIUS_WORLD,
 ) {
   if (!tiles || typeof tiles.values !== 'function') return [];
-  const isWater = t => t && (t.type === TileType.RIVER || t.type === TileType.BRIDGE);
+  const isWater = t => t && (isRiver(t) || isBridge(t));
   const apo = HEX_APOTHEM * radius;
   const out = [];
   for (const tile of tiles.values()) {
@@ -11067,7 +11069,7 @@ export function bridgeRotationY(tile, tilesByKey) {
   for (const n of getNeighbors(tile.col, tile.row)) {
     const nt = tilesByKey.get(hexKey(n.col, n.row));
     if (!nt) continue;
-    if (nt.type !== TileType.RIVER && nt.type !== TileType.BRIDGE) continue;
+    if (!isRiver(nt) && !isBridge(nt)) continue;
     const there = hexToWorld(n.col, n.row);
     waterDirs.push({ dx: there.x - here.x, dz: there.z - here.z });
   }

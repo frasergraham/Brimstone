@@ -25,7 +25,7 @@ import {
   _bakeOriginToBottom,
 } from '../src/renderer-3d.js';
 
-import { TileType, BuildingType } from '../src/tiles.js';
+import { TileType, BuildingType, StructureType, Tile } from '../src/tiles.js';
 
 function newInst() {
   const fakeCanvas = {
@@ -542,15 +542,24 @@ describe('buildingUsesHouseModel — gating predicate', () => {
     }
   });
 
-  test('false for non-BUILDING tile types even if building field is set', () => {
-    assert.equal(
-      buildingUsesHouseModel({ type: TileType.FOREST, building: BuildingType.HOUSE }),
-      false,
-    );
-    assert.equal(
-      buildingUsesHouseModel({ type: TileType.GRASS, building: BuildingType.HOUSE }),
-      false,
-    );
+  test('false for tiles with no building (layered model: base material only)', () => {
+    // In the layered model a tile is a building when it has a structure /
+    // building — NOT by tile.type. A forest or grass tile with no building
+    // field is not a building.
+    const forest = new Tile(0, 0, TileType.FOREST);
+    const grass  = new Tile(0, 0, TileType.GRASS);
+    assert.equal(buildingUsesHouseModel(forest), false);
+    assert.equal(buildingUsesHouseModel(grass), false);
+  });
+
+  test('P3 payoff: a HOUSE building on a forest base still uses the house GLB', () => {
+    // A building can now sit on any base material (e.g. a house on a forest
+    // tile, with trees rendered alongside). It's still a building, so the
+    // house-GLB gate is keyed on the structure/building, not the base.
+    const houseOnForest = new Tile(2, 3, TileType.FOREST);
+    houseOnForest.structure = StructureType.BUILDING;
+    houseOnForest.building  = BuildingType.HOUSE;
+    assert.equal(buildingUsesHouseModel(houseOnForest), true);
   });
 
   test('false for null / undefined input', () => {
