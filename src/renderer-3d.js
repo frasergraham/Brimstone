@@ -1533,12 +1533,21 @@ export class Renderer3D {
    *  promise), so `_initBabylon`'s own fire-and-forget kickoff and the bundle's
    *  re-invocation share a single network load. Per-item `.catch(() => null)`
    *  means an individual GLB failure never rejects `whenReady` — the renderer
-   *  keeps its procedural fallback. */
-  beginLoad() {
+   *  keeps its procedural fallback.
+   *
+   *  @param {string} [basePath] - absolute or relative asset root. Pass an
+   *    ABSOLUTE base (e.g. '/assets') when the host page is served from a
+   *    sub-path URL (such as `/admin/tools`); otherwise the relative default
+   *    'assets' resolves against the page's directory and 404s. Supplied
+   *    synchronously here because `loadImages()` only pins `_assetsBasePath`
+   *    after its async image load — too late for this call to read. Omit it to
+   *    keep the relative default (correct for the root-served live game). */
+  beginLoad(basePath) {
     if (this._loadStarted) return;
     this._loadStarted = true;
 
-    const basePath = this._assetsBasePath || 'assets';
+    if (typeof basePath === 'string' && basePath) this._assetsBasePath = basePath;
+    basePath = this._assetsBasePath || 'assets';
 
     // Engine + scene. This is the existing init path (no longer triggered by
     // draw()). It also kicks off the scene-dependent loaders fire-and-forget;

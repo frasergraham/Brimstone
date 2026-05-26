@@ -91,4 +91,32 @@ describe('admin-tools.html', () => {
     assert.match(html, /id="a-render-canvas"/);
     assert.match(html, /id="l-render-canvas"/);
   });
+
+  test('panel `display` is gated on `.active` — no unconditional id-level grid', () => {
+    // Regression for the blank-Assets/Lighting bug: the per-panel id rules used
+    // to be `#assets-panel { display: grid; ... }`. Id specificity (0,1,0,0)
+    // beats the `.tab-panel`/`.tab-panel.active` toggle (0,0,1,0 / 0,0,2,0), so
+    // ALL three panels rendered at once and the last one in DOM order (editor)
+    // painted over Assets + Lighting — they looked like they never loaded.
+    // The grid `display` must therefore live ONLY on `.active`-qualified rules.
+    for (const id of ['assets-panel', 'lighting-panel', 'editor-panel']) {
+      const base = new RegExp(`#${id}\\s*\\{[^}]*\\}`);
+      const m = html.match(base);
+      assert.ok(m, `#${id} rule should exist`);
+      assert.doesNotMatch(
+        m[0], /display\s*:/,
+        `#${id} base rule must NOT set display unconditionally (it would override the .active toggle)`,
+      );
+    }
+    // The grid display is applied via the active-qualified selectors instead.
+    assert.match(html, /#assets-panel\.active[\s\S]*?display\s*:\s*grid/);
+    assert.match(html, /#editor-panel\.active/);
+    assert.match(html, /#lighting-panel\.active/);
+  });
+
+  test('Lighting tab passes an absolute asset base to beginLoad (sub-path URL)', () => {
+    // admin-tools.html is served at /admin/tools, so beginLoad()'s relative
+    // 'assets' default 404s. The Lighting tab must hand it the absolute base.
+    assert.match(html, /beginLoad\(['"]\/assets['"]\)/);
+  });
 });
