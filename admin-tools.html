@@ -242,8 +242,13 @@
         <button class="menu-btn" id="file-menu-btn" aria-haspopup="true" aria-expanded="false">File</button>
         <div class="menu-list" id="file-menu-list" hidden>
           <button class="menu-item" id="file-load">Load…</button>
+          <button class="menu-item" id="file-load-existing">Load existing mission…</button>
           <button class="menu-item" id="file-save">Save / Download</button>
         </div>
+        <!-- Bundled-mission picker: a flyout listing the in-repo campaign
+             missions, populated from MIGRATED_MISSIONS. Opened by the
+             "Load existing mission…" item above. -->
+        <div class="menu-list" id="mission-picker-list" hidden></div>
       </div>
       <input type="file" id="file-load-input" accept=".json,application/json" hidden />
       <span class="file-status" id="file-status"></span>
@@ -417,6 +422,9 @@
     // Mission Editor tab. The 2D Renderer + palette boot only when initEditor()
     // runs (first activation of that tab) — nothing heavy at module load.
     import { initEditor } from '/src/tools/mission-editor-ui.js';
+    // Bundled-mission catalog for the File ▸ "Load existing mission…" picker.
+    // Dependency-free shared list (also imported by campaign-registry.js).
+    import { MIGRATED_MISSIONS } from '/src/campaign/mission-catalog.js';
 
     // ════════════════════════════════════════════════════════════════════
     //  ASSETS TAB  (ported from admin-assets.html; ids prefixed `a-`)
@@ -1145,7 +1153,11 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
       if (list) list.hidden = !open;
       if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
     }
-    function closeMenus() { for (const m of MENUS) setMenuOpen(m, false); }
+    function closeMenus() {
+      for (const m of MENUS) setMenuOpen(m, false);
+      const picker = document.getElementById('mission-picker-list');
+      if (picker) picker.hidden = true;
+    }
     function toggleMenu(name) {
       const list = document.getElementById(`${name}-menu-list`);
       const willOpen = list ? list.hidden : false;
@@ -1192,6 +1204,35 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
     document.getElementById('file-save')?.addEventListener('click', (e) => {
       e.stopPropagation(); closeMenus();
       if (handles.editor?.saveMission) setFileStatus(handles.editor.saveMission());
+    });
+
+    // ── File ▸ "Load existing mission…" → bundled-mission picker flyout ──────
+    // Populate the picker once from the shared MIGRATED_MISSIONS catalog so it
+    // always matches what's actually shipped under src/campaign/missions/.
+    const missionPicker = document.getElementById('mission-picker-list');
+    if (missionPicker) {
+      for (const { id, title } of MIGRATED_MISSIONS) {
+        const item = document.createElement('button');
+        item.className = 'menu-item';
+        item.dataset.missionId = id;
+        item.textContent = title ? `${title} (${id})` : id;
+        missionPicker.appendChild(item);
+      }
+    }
+    document.getElementById('file-load-existing')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      // Swap the File list for the mission picker flyout.
+      setMenuOpen('file', false);
+      if (missionPicker) missionPicker.hidden = false;
+    });
+    missionPicker?.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const btn = e.target.closest('.menu-item[data-mission-id]');
+      if (!btn) return;
+      closeMenus();
+      if (handles.editor?.loadMissionById) {
+        setFileStatus(await handles.editor.loadMissionById(btn.dataset.missionId));
+      }
     });
 
     // Boot the default tab (Assets) — its scene comes up on load, the other two

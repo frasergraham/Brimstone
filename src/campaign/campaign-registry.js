@@ -15,6 +15,7 @@
 import prologue from './campaigns/prologue.js';
 import calebsHollowPrologue from './campaigns/calebs-hollow-prologue.js';
 import { registerMissionJSON } from './json-mission.js';
+import { MIGRATED_MISSIONS } from './mission-catalog.js';
 
 /**
  * All available campaigns. Each entry is a campaign definition object with:
@@ -105,18 +106,9 @@ export function registerJSONMissions(campaignId, parsedMissions) {
 
 // ── Migrated-mission auto-registration ────────────────────────────────────────
 
-// Mission files in canonical campaign order — order drives the campaign mission
-// list and `firstMission === missions[0].id`.
-const MIGRATED_MISSIONS = [
-  { id: 'tutorial',            campaignId: 'prologue' },
-  { id: 'prologue',            campaignId: 'calebs_hollow_prologue' },
-  { id: 'gathering_survivors', campaignId: 'calebs_hollow_prologue' },
-  { id: 'first_night',         campaignId: 'calebs_hollow_prologue' },
-  { id: 'river_crossing',      campaignId: 'calebs_hollow_prologue' },
-  { id: 'dark_ritual',         campaignId: 'calebs_hollow_prologue' },
-  { id: 'long_watch',          campaignId: 'calebs_hollow_prologue' },
-  { id: 'witchs_trail',        campaignId: 'calebs_hollow_prologue' },
-];
+// Canonical migrated-mission list (id/campaignId/title, in campaign order) lives
+// in ./mission-catalog.js so the Mission Editor's "Load existing mission" picker
+// can share it without importing this registry's full runtime + fetch loop.
 
 // No DOM ⇒ node (tests, headless scripts). Any webview (browser, Electron
 // renderer, Capacitor) has `window` and uses fetch.

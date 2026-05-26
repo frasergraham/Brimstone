@@ -47,6 +47,7 @@ import {
 import { createTabController } from './tab-controller.js';
 import { attachEditorCanvasControls } from './editor-canvas-input.js';
 import { loadMissionJSON, KNOWN_OBJECTIVE_TYPES } from '../campaign/json-mission.js';
+import { missionJSONUrl } from '../campaign/mission-catalog.js';
 import { CONDITIONS } from '../campaign/condition-registry.js';
 
 // Enum VALUE → KEY pairs for select option lists (KEY is what the model stores).
@@ -179,6 +180,21 @@ export function initEditor(doc = document) {
 
   // ── Load / Save — relocated to the top File menu; flow is unchanged. ──────
   // Validate-before-populate on load; validate + block-download on save.
+
+  // Shared convergence point for BOTH load sources (external file picker and
+  // bundled "Load existing mission"). Takes RAW parsed JSON — validate first,
+  // then populate. Throws on validation failure so the caller can leave the
+  // current model untouched. Note: we route the raw parsed object (not the
+  // transformed def from fetchMissionJSON, which deletes schema/conductor and
+  // swaps map → mapBuilderFn / condition strings → fns) so a load→edit→download
+  // round-trip stays byte-faithful.
+  function applyParsedMission(parsed) {
+    loadMissionJSON(parsed); // VALIDATE before touching the model
+    editor.applyMission(populateFromMission(parsed));
+    rebuildForms();
+    resetViewAndDraw();
+  }
+
   function loadMissionFile(file) {
     return new Promise((resolve) => {
       if (!file) { resolve({ ok: false, message: 'No file selected.' }); return; }
@@ -186,10 +202,7 @@ export function initEditor(doc = document) {
       reader.onload = () => {
         try {
           const parsed = JSON.parse(String(reader.result));
-          loadMissionJSON(parsed); // VALIDATE before touching the model
-          editor.applyMission(populateFromMission(parsed));
-          rebuildForms();
-          resetViewAndDraw();
+          applyParsedMission(parsed);
           resolve({ ok: true, message: `Loaded "${parsed.id}".` });
         } catch (err) {
           // Validation / parse failure: do NOT clobber the current model.
@@ -199,6 +212,23 @@ export function initEditor(doc = document) {
       reader.onerror = () => resolve({ ok: false, message: 'Could not read file.' });
       reader.readAsText(file);
     });
+  }
+
+  // Load one of the bundled in-repo missions by id. Same validate→populate path
+  // as the file picker; only the JSON source differs (same-origin fetch vs
+  // FileReader). The URL is resolved by mission-catalog.js relative to its own
+  // module location, so it matches campaign-registry.js's loader exactly.
+  async function loadMissionById(id) {
+    try {
+      const res = await fetch(missionJSONUrl(id));
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const parsed = await res.json();
+      applyParsedMission(parsed);
+      return { ok: true, message: `Loaded "${parsed.id}".` };
+    } catch (err) {
+      // Fetch / parse / validation failure: do NOT clobber the current model.
+      return { ok: false, message: `Load failed: ${err.message}` };
+    }
   }
 
   function saveMission() {
@@ -220,6 +250,7 @@ export function initEditor(doc = document) {
     editor,
     buildState: () => buildState(editor),
     loadMissionFile,
+    loadMissionById,
     saveMission,
     // 2D Renderer has no render loop. But the 3D preview owns a live Babylon
     // engine; tear it down (and hide the overlay) when the tab is switched away
