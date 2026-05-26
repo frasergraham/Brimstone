@@ -16,7 +16,7 @@ import { PlanActionType, actionCosts, computeGhostState, computeProjectedInvento
 import { compileTurnBattleSummary } from './battle-utils.js';
 import { ResEventType } from '../server/resolver.js';
 import { collectUIElements } from './ui-elements.js';
-import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml } from './ui-render.js';
+import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml, buildNodeBadgeHtml } from './ui-render.js';
 import {
   hideActionPopup, getEntityScreenPos, computeArcPositions,
   positionArcPopup, startArcTracking, positionPopup,
@@ -2450,7 +2450,8 @@ export class UIController {
     if (!entity && tileSelection) {
       const tile = this.state.tiles.get(hexKey(tileSelection.col, tileSelection.row));
       if (!tile) { bar.style.display = 'none'; return; }
-      const terrainBadge = _buildTerrainBadge(tile);
+      const nodeBadge = buildNodeBadgeHtml(this.state.witchObjectives, this.state.entities, tileSelection.col, tileSelection.row);
+      const terrainBadge = _buildTerrainBadge(tile, nodeBadge);
       const TERRAIN_ICON = {
         [TileType.GRASS]: '🌿', [TileType.FOREST]: '🌲', [TileType.DIRT]: '🪨',
         [TileType.ROAD]: '🛤', [TileType.RIVER]: '💧', [TileType.BRIDGE]: '🌉',
@@ -2533,7 +2534,8 @@ export class UIController {
     if (tile) {
       const tileSrc = this.renderer.getTileDataURL(tile, entCol, entRow, 56);
       const tileImgHtml = tileSrc ? `<img class="usb-terrain-hex" src="${tileSrc}" alt="">` : '';
-      terrainBoxHtml = `<div class="usb-terrain-box">${tileImgHtml}${_buildTerrainBadge(tile)}</div>`;
+      const nodeBadge = buildNodeBadgeHtml(this.state.witchObjectives, this.state.entities, entCol, entRow);
+      terrainBoxHtml = `<div class="usb-terrain-box">${tileImgHtml}${_buildTerrainBadge(tile, nodeBadge)}</div>`;
     }
 
     // Expanded block: ATK, DEF, and any ability description — toggled by the (i) glyph
@@ -4722,7 +4724,7 @@ export class UIController {
 // ── Module-level helpers ───────────────────────────────────────────────────
 
 /** Build HTML for a terrain badge (used in unit stats bar). */
-function _buildTerrainBadge(tile) {
+function _buildTerrainBadge(tile, nodeBadge = '') {
   const parts = [];
   const label = tile.building ? (BUILDING_LABEL[tile.building] ?? 'Building') : (legacyTileType(tile) ?? '');
   parts.push(label);
@@ -4732,8 +4734,8 @@ function _buildTerrainBadge(tile) {
   if (tile.fortifyLevel) {
     parts.push(`<span class="usb-terrain-fort">⚙ Fort lvl ${tile.fortifyLevel}</span>`);
   }
-  if (tile.powerNode) {
-    parts.push(`<span class="usb-terrain-node">⬡ Power Node</span>`);
+  if (nodeBadge) {
+    parts.push(nodeBadge);
   }
   return parts.join(' · ');
 }
