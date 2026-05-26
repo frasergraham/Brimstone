@@ -29,7 +29,7 @@ import {
   baseOf, pathOf, structureOf, hasBuilding, isBridge,
 } from '../tiles.js';
 import { hexKey } from '../hex.js';
-import { rng } from '../map.js';
+import { rng, generateMap, MAP_SIZES } from '../map.js';
 import { buildMissionMap, rederiveRoads } from '../campaign/mission-map.js';
 
 /** Active-tool ids the click loop dispatches on. */
@@ -325,21 +325,368 @@ export function regenerateHandmadeRoads(mapDef) {
   return mapDef;
 }
 
-// ── Mode toggle ──────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// Map creation (item 4) — three LOCKED modes
+// ─────────────────────────────────────────────────────────────────────────────
+// A mission's map mode is chosen once, at creation, and then LOCKED — there is
+// no mid-edit toggle (the old side-panel handmade↔procedural toggle is gone).
+// Three creation modes, mapped onto the two underlying model shapes:
+//
+//   • "blank"   → mode:"handmade", an empty grass grid at the chosen cols×rows.
+//   • "baked"   → mode:"handmade", but SNAPSHOTTED from generateMap(seed,size)
+//                 so it starts generated yet every tile is directly editable
+//                 (NO overlay). Carries `baked:true` purely as an editor marker.
+//   • "overlay" → mode:"procedural", a regenerable seeded base + an edit overlay.
+//
+// `cols`/`rows` are stored EXPLICITLY on every mapDef (item 3) so the size model
+// and the per-edge resize are uniform across modes (procedural derives its dims
+// from MAP_SIZES at build time, but tracking them here keeps the editor honest).
+// ═══════════════════════════════════════════════════════════════════════════
 
-/** A fresh handmade default map: a small grass grid with sensible starts. */
-export function createDefaultMapDef() {
+const _DEFAULT_COLS = 9;
+const _DEFAULT_ROWS = 9;
+
+/** A fresh handmade BLANK map: an all-grass grid with proportionally-placed
+ *  starts (clamped in-bounds). */
+export function createBlankMapDef(cols = _DEFAULT_COLS, rows = _DEFAULT_ROWS) {
+  cols = Math.max(1, Math.floor(cols));
+  rows = Math.max(1, Math.floor(rows));
+  const cc = (c) => Math.max(0, Math.min(cols - 1, c));
+  const cr = (r) => Math.max(0, Math.min(rows - 1, r));
   return {
     mode: 'handmade',
-    cols: 9,
-    rows: 9,
-    heroStart: { col: 2, row: 6 },
-    witchStart: { col: 6, row: 2 },
+    cols,
+    rows,
+    heroStart: { col: cc(Math.floor(cols * 0.2)), row: cr(Math.floor(rows * 0.75)) },
+    witchStart: { col: cc(Math.floor(cols * 0.75)), row: cr(Math.floor(rows * 0.2)) },
     witchObjectives: [],
     roadNodes: [],
     tiles: [],
   };
 }
+
+/** The editor's initial map (a blank 9×9 handmade grid). */
+export function createDefaultMapDef() {
+  return createBlankMapDef(_DEFAULT_COLS, _DEFAULT_ROWS);
+}
+
+/**
+ * A BAKED GENERATED map: run generateMap(seed, size) and snapshot the result
+ * into the explicit handmade shape (canonical layered tile defs) so it starts
+ * as a generated map but every tile is directly editable — no overlay. Marked
+ * `baked:true` so the locked-mode readout can say "handmade (baked)".
+ */
+export function createBakedMapDef({ seed = 12345, mapSize = 'standard', nodeCount = null } = {}) {
+  const built = generateMap(seed, mapSize, nodeCount);
+  const cfg = MAP_SIZES[mapSize] ?? MAP_SIZES.standard;
+  return {
+    mode: 'handmade',
+    baked: true,
+    cols: cfg.cols,
+    rows: cfg.rows,
+    heroStart: built.heroStart ?? { col: 0, row: 0 },
+    witchStart: built.witchStart ?? { col: 0, row: 0 },
+    witchObjectives: built.witchObjectives ?? [],
+    roadNodes: [],
+    tiles: snapshotTiles(built.tiles),
+  };
+}
+
+/**
+ * An OVERLAY map: a seeded procedural base (regenerable) plus an edit overlay.
+ * Stores explicit cols/rows (from MAP_SIZES) alongside the named `mapSize` so
+ * the size model is uniform with handmade.
+ */
+export function createOverlayMapDef({ seed = 12345, mapSize = 'standard', nodeCount = null } = {}) {
+  const cfg = MAP_SIZES[mapSize] ?? MAP_SIZES.standard;
+  return {
+    mode: 'procedural',
+    seed,
+    mapSize,
+    nodeCount: nodeCount ?? cfg.nodeCount ?? 3,
+    cols: cfg.cols,
+    rows: cfg.rows,
+    overlay: {
+      tiles: [],
+      roadNodes: { add: [], remove: [] },
+      witchObjectives: [],
+    },
+  };
+}
+
+/** Creation-dialog modes (item 4). */
+export const CreationMode = Object.freeze({
+  BLANK: 'blank',
+  BAKED: 'baked',
+  OVERLAY: 'overlay',
+});
+
+/**
+ * Build a fresh mapDef for one of the three creation modes. The single entry
+ * point the creation dialog calls; the resulting mode is then LOCKED.
+ */
+export function buildCreationMapDef(opts = {}) {
+  switch (opts.mode ?? CreationMode.BLANK) {
+    case CreationMode.BLANK:
+      return createBlankMapDef(opts.cols ?? _DEFAULT_COLS, opts.rows ?? _DEFAULT_ROWS);
+    case CreationMode.BAKED:
+      return createBakedMapDef(opts);
+    case CreationMode.OVERLAY:
+      return createOverlayMapDef(opts);
+    default:
+      throw new Error(`buildCreationMapDef: unknown creation mode "${opts.mode}"`);
+  }
+}
+
+/** A human-readable label for the LOCKED map mode (item 4 read-only readout). */
+export function mapModeLabel(mapDef) {
+  if (!mapDef) return '—';
+  if (mapDef.mode === 'procedural') return 'overlay';
+  return mapDef.baked ? 'handmade (baked)' : 'handmade';
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Map sizing (item 3) — explicit cols/rows + per-edge add/remove with remap
+// ─────────────────────────────────────────────────────────────────────────────
+// HANDMADE maps resize by adding/removing one row/column on a named edge.
+// Adding/removing on the TOP or LEFT edge shifts every existing coordinate, so
+// `resizeHandmadeMap` remaps ALL coordinate-bearing data consistently: tile
+// positions + their roadDirs neighbour keys, heroStart, witchStart, every
+// witchObjective (anchor + hexes), the authored roadNode key set, enemyUnits,
+// and meta.survivorStartPositions. BOTTOM/RIGHT edits don't shift — they just
+// extend (grass fills implicitly) or truncate the grid.
+//
+// Removing an edge that holds a hero/witch start or a power node is BLOCKED
+// (guarded) rather than silently orphaning it. The function is PURE: it takes
+// and returns the full `{ mapDef, enemyUnits, meta }` model and never mutates
+// its input. OVERLAY maps resize differently — see `setOverlayMapSize`.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** The four resizable edges. */
+export const MAP_EDGES = Object.freeze(['top', 'bottom', 'left', 'right']);
+
+function _shiftKey(key, dCol, dRow) {
+  const [c, r] = String(key).split(',').map(Number);
+  return hexKey(c + dCol, r + dRow);
+}
+function _keyInBounds(key, cols, rows) {
+  const [c, r] = String(key).split(',').map(Number);
+  return c >= 0 && r >= 0 && c < cols && r < rows;
+}
+function _crInBounds(col, row, cols, rows) {
+  return col >= 0 && row >= 0 && col < cols && row < rows;
+}
+
+/**
+ * Resize a HANDMADE map by adding (`delta:+1`) or removing (`delta:-1`) one
+ * row/column on `edge` ∈ MAP_EDGES, remapping ALL coordinate-bearing model
+ * data. PURE — returns `{ ok, model, warning }` and never mutates the input.
+ * A blocked removal (start/node on the edge, or shrinking below 1×1) returns
+ * `{ ok:false, warning }` with the input model unchanged.
+ *
+ * @param {{ mapDef: object, enemyUnits?: object[], meta?: object }} model
+ */
+export function resizeHandmadeMap(model, edge, delta) {
+  const md = model.mapDef;
+  if (!md || md.mode !== 'handmade') {
+    return { ok: false, model, warning: 'Edge resize applies to handmade maps only.' };
+  }
+  if (delta !== 1 && delta !== -1) {
+    return { ok: false, model, warning: 'delta must be +1 or -1.' };
+  }
+  if (!MAP_EDGES.includes(edge)) {
+    return { ok: false, model, warning: `Unknown edge "${edge}".` };
+  }
+
+  const C = md.cols;
+  const R = md.rows;
+  let newCols = C;
+  let newRows = R;
+  let dCol = 0;
+  let dRow = 0;
+  let dropAxis = null; // 'col' | 'row' for a removal's dropped line
+  let dropIndex = -1;
+
+  switch (edge) {
+    case 'right':
+      newCols = C + delta;
+      if (delta < 0) { dropAxis = 'col'; dropIndex = C - 1; }
+      break;
+    case 'bottom':
+      newRows = R + delta;
+      if (delta < 0) { dropAxis = 'row'; dropIndex = R - 1; }
+      break;
+    case 'left':
+      newCols = C + delta;
+      if (delta > 0) dCol = 1; else { dropAxis = 'col'; dropIndex = 0; dCol = -1; }
+      break;
+    case 'top':
+      newRows = R + delta;
+      if (delta > 0) dRow = 1; else { dropAxis = 'row'; dropIndex = 0; dRow = -1; }
+      break;
+  }
+
+  if (newCols < 1 || newRows < 1) {
+    return { ok: false, model, warning: 'Map must keep at least 1×1.' };
+  }
+
+  // Guard: a removal must not orphan a start or a power node on the dropped line.
+  if (delta < 0) {
+    const onEdge = (col, row) => (dropAxis === 'col' ? col === dropIndex : row === dropIndex);
+    const orphans = new Set();
+    if (md.heroStart && onEdge(md.heroStart.col, md.heroStart.row)) orphans.add('hero start');
+    if (md.witchStart && onEdge(md.witchStart.col, md.witchStart.row)) orphans.add('witch start');
+    for (const o of md.witchObjectives ?? []) {
+      if (onEdge(o.col, o.row) || (o.hexes ?? []).some(h => onEdge(h.col, h.row))) {
+        orphans.add('a power node');
+        break;
+      }
+    }
+    if (orphans.size) {
+      return { ok: false, model, warning: `Cannot remove that edge — it holds ${[...orphans].join(', ')}.` };
+    }
+  }
+
+  // Build the remapped model on a deep clone (purity).
+  const out = _clone(model);
+  const nd = out.mapDef;
+  nd.cols = newCols;
+  nd.rows = newRows;
+  const keep = (col, row) => _crInBounds(col, row, newCols, newRows);
+  let dropped = 0;
+
+  // Tiles: shift position + roadDirs neighbour keys, drop out-of-bounds tiles,
+  // then prune roadDirs that now point past the (possibly shrunk) edge.
+  const tilesBefore = (nd.tiles ?? []).length;
+  nd.tiles = (nd.tiles ?? [])
+    .map(t => ({
+      ...t,
+      col: t.col + dCol,
+      row: t.row + dRow,
+      roadDirs: (t.roadDirs ?? []).map(k => _shiftKey(k, dCol, dRow)),
+    }))
+    .filter(t => keep(t.col, t.row))
+    .map(t => ({ ...t, roadDirs: t.roadDirs.filter(k => _keyInBounds(k, newCols, newRows)) }));
+  dropped += tilesBefore - nd.tiles.length;
+
+  // Starts (guarded above, so always in-bounds after the shift).
+  if (nd.heroStart) nd.heroStart = { col: nd.heroStart.col + dCol, row: nd.heroStart.row + dRow };
+  if (nd.witchStart) nd.witchStart = { col: nd.witchStart.col + dCol, row: nd.witchStart.row + dRow };
+
+  // Power nodes: shift anchor + hexes; drop out-of-bounds hexes / objectives.
+  const objsBefore = (nd.witchObjectives ?? []).length;
+  nd.witchObjectives = (nd.witchObjectives ?? [])
+    .map(o => ({
+      ...o,
+      col: o.col + dCol,
+      row: o.row + dRow,
+      hexes: (o.hexes ?? [])
+        .map(h => ({ col: h.col + dCol, row: h.row + dRow }))
+        .filter(h => keep(h.col, h.row)),
+    }))
+    .filter(o => keep(o.col, o.row));
+  dropped += objsBefore - nd.witchObjectives.length;
+
+  // Authored road-node waypoint keys.
+  const rnBefore = (nd.roadNodes ?? []).length;
+  nd.roadNodes = (nd.roadNodes ?? [])
+    .map(k => _shiftKey(k, dCol, dRow))
+    .filter(k => _keyInBounds(k, newCols, newRows));
+  dropped += rnBefore - nd.roadNodes.length;
+
+  // Sibling enemy units.
+  const euBefore = (out.enemyUnits ?? []).length;
+  out.enemyUnits = (out.enemyUnits ?? [])
+    .map(u => ({ ...u, col: u.col + dCol, row: u.row + dRow }))
+    .filter(u => keep(u.col, u.row));
+  dropped += euBefore - out.enemyUnits.length;
+
+  // Survivor start positions live on meta.
+  if (out.meta && Array.isArray(out.meta.survivorStartPositions)) {
+    const ssBefore = out.meta.survivorStartPositions.length;
+    out.meta.survivorStartPositions = out.meta.survivorStartPositions
+      .map(s => ({ ...s, col: s.col + dCol, row: s.row + dRow }))
+      .filter(s => keep(s.col, s.row));
+    dropped += ssBefore - out.meta.survivorStartPositions.length;
+  }
+
+  const warning = (delta < 0 && dropped > 0)
+    ? `Removed ${edge} edge — dropped ${dropped} item(s) on it.`
+    : '';
+  return { ok: true, model: out, warning };
+}
+
+/**
+ * Resize an OVERLAY (procedural) map by switching its named generation size.
+ * generateMap only produces the discrete MAP_SIZES, so overlay maps resize by
+ * picking a different size (the base regenerates at build time); overlay edits
+ * and placements that fall outside the new bounds are dropped (with a warning).
+ * PURE — returns `{ ok, model, warning }`.
+ */
+export function setOverlayMapSize(model, mapSize) {
+  const md = model.mapDef;
+  if (!md || md.mode !== 'procedural') {
+    return { ok: false, model, warning: 'Size change via map size applies to overlay maps.' };
+  }
+  const cfg = MAP_SIZES[mapSize];
+  if (!cfg) return { ok: false, model, warning: `Unknown map size "${mapSize}".` };
+
+  const out = _clone(model);
+  const nd = out.mapDef;
+  nd.mapSize = mapSize;
+  nd.cols = cfg.cols;
+  nd.rows = cfg.rows;
+  const keep = (col, row) => _crInBounds(col, row, cfg.cols, cfg.rows);
+  const keepKey = (k) => _keyInBounds(k, cfg.cols, cfg.rows);
+  let dropped = 0;
+
+  const ov = nd.overlay ?? (nd.overlay = {});
+  if (Array.isArray(ov.tiles)) {
+    const b = ov.tiles.length;
+    ov.tiles = ov.tiles.filter(t => keep(t.col, t.row));
+    dropped += b - ov.tiles.length;
+  }
+  if (ov.roadNodes && typeof ov.roadNodes === 'object') {
+    for (const k of ['add', 'remove']) {
+      if (Array.isArray(ov.roadNodes[k])) {
+        const b = ov.roadNodes[k].length;
+        ov.roadNodes[k] = ov.roadNodes[k].filter(keepKey);
+        dropped += b - ov.roadNodes[k].length;
+      }
+    }
+  }
+  if (Array.isArray(ov.witchObjectives)) {
+    const b = ov.witchObjectives.length;
+    ov.witchObjectives = ov.witchObjectives
+      .filter(o => keep(o.col, o.row))
+      .map(o => ({ ...o, hexes: (o.hexes ?? []).filter(h => keep(h.col, h.row)) }));
+    dropped += b - ov.witchObjectives.length;
+  }
+  if (ov.hiddenSurvivors && typeof ov.hiddenSurvivors === 'object') {
+    for (const k of ['add', 'remove']) {
+      if (Array.isArray(ov.hiddenSurvivors[k])) ov.hiddenSurvivors[k] = ov.hiddenSurvivors[k].filter(keepKey);
+    }
+  }
+  if (ov.heroStart && !keep(ov.heroStart.col, ov.heroStart.row)) { delete ov.heroStart; dropped++; }
+  if (ov.witchStart && !keep(ov.witchStart.col, ov.witchStart.row)) { delete ov.witchStart; dropped++; }
+
+  const euBefore = (out.enemyUnits ?? []).length;
+  out.enemyUnits = (out.enemyUnits ?? []).filter(u => keep(u.col, u.row));
+  dropped += euBefore - out.enemyUnits.length;
+
+  if (out.meta && Array.isArray(out.meta.survivorStartPositions)) {
+    const b = out.meta.survivorStartPositions.length;
+    out.meta.survivorStartPositions = out.meta.survivorStartPositions.filter(s => keep(s.col, s.row));
+    dropped += b - out.meta.survivorStartPositions.length;
+  }
+
+  const warning = dropped > 0
+    ? `Resized to ${cfg.cols}×${cfg.rows} — dropped ${dropped} edit(s) outside the new bounds.`
+    : '';
+  return { ok: true, model: out, warning };
+}
+
+// ── Mode toggle (legacy; retained for the model, no UI path post-lock) ─────────
 
 /**
  * Switch the map between handmade and procedural while keeping a coherent
@@ -612,6 +959,46 @@ export function createMissionEditor({ render } = {}) {
       snapshot();
       fn(model(), { col: hex.col, row: hex.row }, paintValues);
       emit();
+    },
+
+    // ── Creation (item 4) — one of the three LOCKED modes ────────────────
+    /**
+     * Start a fresh mission with a newly-created map (blank / baked / overlay).
+     * Resets enemyUnits and meta; the chosen map mode is then LOCKED (no UI
+     * toggle). One undo step. `opts` is passed to buildCreationMapDef.
+     */
+    createNew(opts = {}) {
+      snapshot();
+      mapDef = buildCreationMapDef(opts);
+      enemyUnits = [];
+      meta = createDefaultMeta();
+      if (opts.mapSize) meta.mapSize = opts.mapSize;
+      emit();
+    },
+
+    // ── Sizing (item 3) — explicit dims + per-edge resize ────────────────
+    getDims: () => ({ cols: mapDef.cols, rows: mapDef.rows }),
+    getMapModeLabel: () => mapModeLabel(mapDef),
+    /**
+     * Add/remove a row/column on `edge` (handmade) with full coordinate remap.
+     * Returns `{ ok, warning }`; on a blocked resize the model is untouched.
+     */
+    resizeEdge(edge, delta) {
+      const res = resizeHandmadeMap({ mapDef, enemyUnits, meta }, edge, delta);
+      if (!res.ok) return { ok: false, warning: res.warning };
+      snapshot();
+      ({ mapDef, enemyUnits, meta } = res.model);
+      emit();
+      return { ok: true, warning: res.warning };
+    },
+    /** Switch an overlay map's generation size; drops out-of-bounds edits. */
+    setOverlaySize(mapSize) {
+      const res = setOverlayMapSize({ mapDef, enemyUnits, meta }, mapSize);
+      if (!res.ok) return { ok: false, warning: res.warning };
+      snapshot();
+      ({ mapDef, enemyUnits, meta } = res.model);
+      emit();
+      return { ok: true, warning: res.warning };
     },
 
     // ── Mode / seed / roads ──────────────────────────────────────────────
