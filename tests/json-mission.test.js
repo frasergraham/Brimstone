@@ -148,6 +148,24 @@ describe('loadMissionJSON — resolution', () => {
     assert.ok(inn.roadDirs.has('1,2'));
   });
 
+  test('builds a handmade map from the layered tile shape (base/structure/path)', () => {
+    const parsed = handmadeFixture();
+    parsed.map.tiles = [
+      {
+        col: 1, row: 3, base: 'DIRT', structure: 'BUILDING', path: null,
+        building: 'INN', fortifyLevel: 1, resource: null, hiddenSurvivor: false, roadDirs: ['1,2'],
+      },
+    ];
+    const def = loadMissionJSON(parsed);
+    const map = def.mapBuilderFn();
+    const inn = map.tiles.get(hexKey(1, 3));
+    assert.equal(inn.type, TileType.BUILDING);
+    assert.equal(inn.base, TileType.DIRT);
+    assert.equal(inn.building, BuildingType.INN);
+    assert.equal(inn.fortifyLevel, 1);
+    assert.ok(inn.roadDirs.has('1,2'));
+  });
+
   test('keeps the raw mapDef on the def so main.js can distinguish JSON missions', () => {
     const def = loadMissionJSON(handmadeFixture());
     assert.ok(def.map, 'mapDef preserved');

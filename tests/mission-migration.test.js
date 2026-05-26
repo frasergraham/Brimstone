@@ -29,7 +29,7 @@ import path from 'node:path';
 
 import { loadMissionJSON } from '../src/campaign/json-mission.js';
 import { buildMissionMap } from '../src/campaign/mission-map.js';
-import { TileType, BuildingType, ResourceType } from '../src/tiles.js';
+import { TileType, BuildingType, ResourceType, PathType, StructureType } from '../src/tiles.js';
 import { hexKey } from '../src/hex.js';
 import { resolveCondition } from '../src/campaign/condition-registry.js';
 import { resolveConductorScript } from '../src/campaign/conductor-scripts.js';
@@ -63,6 +63,8 @@ function invert(enumObj) {
 const TILE_KEY = invert(TileType);
 const BLDG_KEY = invert(BuildingType);
 const RES_KEY = invert(ResourceType);
+const PATH_KEY = invert(PathType);
+const STRUCT_KEY = invert(StructureType);
 
 function isDefaultTile(t) {
   return t.type === TileType.GRASS
@@ -73,8 +75,10 @@ function isDefaultTile(t) {
     && (t.roadDirs?.size ?? 0) === 0;
 }
 
-// Re-snapshot a built map into the same comparable shape as a file's
-// `map.tiles[]`, keyed by "col,row" for order-independent comparison.
+// Re-snapshot a built map into a comparable shape, keyed by "col,row" for
+// order-independent comparison. Carries BOTH the derived legacy `type` and the
+// three explicit layers (base/structure/path, uppercase KEY form) so the
+// round-trip proof asserts the full layered shape — not just the legacy type.
 function snapshotTiles(built) {
   const out = new Map();
   for (let row = 0; row < built.rows; row++) {
@@ -84,6 +88,9 @@ function snapshotTiles(built) {
       out.set(hexKey(col, row), {
         col, row,
         type: TILE_KEY[t.type] ?? t.type,
+        base: TILE_KEY[t.base] ?? t.base,
+        structure: t.structure ? (STRUCT_KEY[t.structure] ?? t.structure) : null,
+        path: t.path ? (PATH_KEY[t.path] ?? t.path) : null,
         building: t.building ? (BLDG_KEY[t.building] ?? t.building) : null,
         fortifyLevel: t.fortifyLevel ?? 0,
         resource: t.resource ? (RES_KEY[t.resource] ?? t.resource) : null,
@@ -95,11 +102,25 @@ function snapshotTiles(built) {
   return out;
 }
 
-// Normalise a file tile def into the same comparable shape.
+// Derive the legacy TileType KEY a layered file tile def reports — mirrors the
+// P0 `get type()` precedence (path > structure/building > base).
+function fileTileTypeKey(def) {
+  if (def.path === 'RIVER') return 'RIVER';
+  if (def.path === 'BRIDGE') return 'BRIDGE';
+  if (def.path === 'ROAD') return 'ROAD';
+  if (def.structure === 'BUILDING' || def.building != null) return 'BUILDING';
+  return def.base ?? 'GRASS';
+}
+
+// Normalise a (layered) file tile def into the same comparable shape as
+// snapshotTiles, computing the derived `type` from the layers.
 function normFileTile(def) {
   return {
     col: def.col, row: def.row,
-    type: def.type,
+    type: fileTileTypeKey(def),
+    base: def.base ?? 'GRASS',
+    structure: def.structure ?? null,
+    path: def.path ?? null,
     building: def.building ?? null,
     fortifyLevel: def.fortifyLevel ?? 0,
     resource: def.resource ?? null,
