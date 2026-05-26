@@ -81,6 +81,79 @@ describe('buildMissionMap — handmade', () => {
   });
 });
 
+// ── Handmade — layered tile shape (base/structure/path) ──────────────────────
+// P5 canonical on-disk shape: explicit base/structure/path uppercase KEYs.
+// The builder must reconstruct the SAME Tile (derived type + layers) as the
+// legacy `type`-only form, and old+new defs must be interchangeable.
+
+describe('buildMissionMap — handmade, layered tile shape', () => {
+  const layeredDef = {
+    mode: 'handmade',
+    cols: 6,
+    rows: 6,
+    heroStart: { col: 0, row: 5 },
+    witchStart: { col: 5, row: 0 },
+    tiles: [
+      // building over dirt, road-through carried by roadDirs
+      { col: 1, row: 1, base: 'DIRT', structure: 'BUILDING', path: null, building: 'INN', fortifyLevel: 2, roadDirs: ['1,2'] },
+      { col: 2, row: 2, base: 'FOREST', structure: null, path: null, resource: 'HERBS', hiddenSurvivor: true },
+      { col: 3, row: 3, base: 'GRASS', structure: null, path: 'ROAD', roadDirs: ['2,3', '4,3'] },
+      { col: 4, row: 4, base: 'GRASS', structure: null, path: 'RIVER' },
+      { col: 5, row: 5, base: 'GRASS', structure: null, path: 'BRIDGE' },
+    ],
+  };
+
+  test('sets each layer and derives the legacy type', () => {
+    const m = buildMissionMap(layeredDef);
+
+    const inn = m.tiles.get(hexKey(1, 1));
+    assert.equal(inn.base, TileType.DIRT);
+    assert.equal(inn.type, TileType.BUILDING);
+    assert.equal(inn.building, BuildingType.INN);
+    assert.equal(inn.fortifyLevel, 2);
+    assert.deepEqual([...inn.roadDirs], ['1,2']);
+
+    const forest = m.tiles.get(hexKey(2, 2));
+    assert.equal(forest.base, TileType.FOREST);
+    assert.equal(forest.type, TileType.FOREST);
+    assert.equal(forest.resource, ResourceType.HERBS);
+    assert.equal(forest.hiddenSurvivor, true);
+
+    const road = m.tiles.get(hexKey(3, 3));
+    assert.equal(road.base, TileType.GRASS);
+    assert.equal(road.type, TileType.ROAD);
+    assert.deepEqual([...road.roadDirs].sort(), ['2,3', '4,3']);
+
+    assert.equal(m.tiles.get(hexKey(4, 4)).type, TileType.RIVER);
+    assert.equal(m.tiles.get(hexKey(5, 5)).type, TileType.BRIDGE);
+  });
+
+  test('layered and legacy type-only defs build identical tiles', () => {
+    const legacyDef = {
+      mode: 'handmade', cols: 6, rows: 6,
+      tiles: [
+        { col: 1, row: 1, type: 'BUILDING', building: 'INN', fortifyLevel: 2, roadDirs: ['1,2'] },
+        { col: 2, row: 2, type: 'FOREST', resource: 'HERBS', hiddenSurvivor: true },
+        { col: 3, row: 3, type: 'ROAD', roadDirs: ['2,3', '4,3'] },
+        { col: 4, row: 4, type: 'RIVER' },
+        { col: 5, row: 5, type: 'BRIDGE' },
+      ],
+    };
+    const a = buildMissionMap(layeredDef);
+    const b = buildMissionMap(legacyDef);
+    for (const k of ['1,1', '2,2', '3,3', '4,4', '5,5']) {
+      const ta = a.tiles.get(k);
+      const tb = b.tiles.get(k);
+      assert.equal(ta.type, tb.type, `${k} type`);
+      assert.equal(ta.base, tb.base, `${k} base`);
+      assert.equal(ta.structure ?? null, tb.structure ?? null, `${k} structure`);
+      assert.equal(ta.path ?? null, tb.path ?? null, `${k} path`);
+      assert.equal(ta.building ?? null, tb.building ?? null, `${k} building`);
+      assert.deepEqual([...ta.roadDirs].sort(), [...tb.roadDirs].sort(), `${k} roadDirs`);
+    }
+  });
+});
+
 // ── Procedural + overlay ───────────────────────────────────────────────────────
 
 // Assert every roadDirs link is mirrored on the neighbour (no one-way roads).

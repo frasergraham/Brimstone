@@ -22,7 +22,7 @@
 // docs/design/campaign-mission-editor.md → "map sub-schema".
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { Tile, TileType, BuildingType, ResourceType } from '../tiles.js';
+import { Tile, TileType, BuildingType, ResourceType, PathType, StructureType } from '../tiles.js';
 import { hexKey, setMapDimensions } from '../hex.js';
 import { generateMap, rng, bfsPath } from '../map.js';
 import { buildMST, placeRoadPath } from '../road-network.js';
@@ -38,8 +38,23 @@ function _resolveEnum(enumObj, v) {
 
 // Merge a tile-def's fields onto a Tile instance, mapping enum strings and
 // converting a roadDirs array of "col,row" strings into a Set.
+//
+// Two on-disk tile shapes are accepted:
+//   • Layered (canonical, P5+): explicit `base` / `structure` / `path` fields
+//     (uppercase enum KEYs — GRASS/FOREST/DIRT, BUILDING, ROAD/RIVER/BRIDGE).
+//     Each layer is set directly; a missing/null structure or path means "none".
+//   • Legacy (type-only): a single `type` field (uppercase TileType KEY). Falls
+//     back to the P0 `set type()` shim, which decomposes it into the three
+//     layers. Both shapes therefore reconstruct an identical Tile.
 function _applyTileDef(tile, def) {
-  if (def.type != null) tile.type = _resolveEnum(TileType, def.type);
+  const hasLayers = 'base' in def || 'structure' in def || 'path' in def;
+  if (hasLayers) {
+    if ('base' in def) tile.base = _resolveEnum(TileType, def.base) ?? TileType.GRASS;
+    tile.structure = 'structure' in def ? _resolveEnum(StructureType, def.structure) : null;
+    tile.path = 'path' in def ? _resolveEnum(PathType, def.path) : null;
+  } else if (def.type != null) {
+    tile.type = _resolveEnum(TileType, def.type);
+  }
   if ('building' in def) tile.building = _resolveEnum(BuildingType, def.building);
   if ('resource' in def) tile.resource = _resolveEnum(ResourceType, def.resource);
   if (def.fortifyLevel != null) tile.fortifyLevel = def.fortifyLevel;
