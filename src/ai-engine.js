@@ -12,7 +12,7 @@ import { PlanSimState, stepToward, stepAwayFrom, roadStepToward, bestWitchObject
 import { hexDistance, hexKey, getNeighbors } from './hex.js';
 import { Phase, nodeController } from './game.js';
 import { EntityType, ADVANTAGE_CAP, expectedDieValue, isLeaderType, attackOf, defenseOf } from './entities.js';
-import { TileType, ResourceType } from './tiles.js';
+import { ResourceType, hasBuilding } from './tiles.js';
 import { PlanActionType, MAX_PLAN_LENGTH } from './planner.js';
 
 // ── Goal names ───────────────────────────────────────────────────────────────
@@ -196,7 +196,7 @@ export function assessBoard(sim) {
   // Unexplored buildings
   const unexploredBuildings = [];
   for (const [, t] of sim.tiles) {
-    if (t.type === TileType.BUILDING && !t.explored) {
+    if (hasBuilding(t) && !t.explored) {
       unexploredBuildings.push(t);
     }
   }
@@ -727,7 +727,7 @@ export function genHuntHeroes(sim, board, budget) {
 function _pickExploreBuilding(sim, actor) {
   const candidates = [];
   for (const [, t] of sim.tiles) {
-    if (t.type !== TileType.BUILDING) continue;
+    if (!hasBuilding(t)) continue;
     if (sim.isExplored(t.col, t.row)) continue;
     const d = hexDistance(actor.col, actor.row, t.col, t.row);
     candidates.push({ tile: t, dist: d });
