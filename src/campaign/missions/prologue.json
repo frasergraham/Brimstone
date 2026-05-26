@@ -1,0 +1,625 @@
+{
+  "schema": 1,
+  "campaignId": "calebs_hollow_prologue",
+  "id": "prologue",
+  "title": "The Awakening",
+  "chapter": 1,
+  "briefing": "You awaken at the Caleb's Hollow Inn to the sound of screaming. Shambling corpses stagger through the streets — but something worse stirs behind them, a crude thing of wood and bone answering to their blood. Cut down the dead and face what rises in their wake.",
+  "victoryText": "The golem crumbles into splintered timber and dust. Silence returns to Caleb's Hollow's streets, but you sense this is only the beginning. A survivor stumbles from the wreckage — together, you may stand a chance against what's coming.",
+  "defeatText": "The dead overwhelm you. Caleb's Hollow falls before the fight even begins.",
+  "phaseCycle": {
+    "phases": [
+      "dawn",
+      "day",
+      "day",
+      "day"
+    ],
+    "loop": true
+  },
+  "mapSize": "skirmish",
+  "hasWitch": false,
+  "disableScoring": true,
+  "enemyUnits": [
+    {
+      "type": "zombie",
+      "col": 3,
+      "row": 2,
+      "overrides": {
+        "attack": 1
+      }
+    },
+    {
+      "type": "zombie",
+      "col": 6,
+      "row": 5,
+      "overrides": {
+        "attack": 1
+      }
+    },
+    {
+      "type": "zombie",
+      "col": 4,
+      "row": 6,
+      "overrides": {
+        "attack": 1
+      }
+    }
+  ],
+  "waves": [
+    {
+      "id": "golem-awakens",
+      "trigger": "hero_kills",
+      "count": 3,
+      "units": [
+        {
+          "type": "wood_golem",
+          "spawnAt": "near_hero",
+          "overrides": {
+            "maxHp": 2,
+            "hp": 2,
+            "attack": 1,
+            "defense": 1
+          },
+          "spawnLog": "🗿 A crude wood-and-bone golem lurches out of the alley!"
+        }
+      ]
+    }
+  ],
+  "aiPersonality": "balanced",
+  "aiBudgetBonus": 0,
+  "maxSurvivorsFromRoster": 0,
+  "missionSurvivors": 1,
+  "maxDiscoverableSurvivors": 0,
+  "objectives": {
+    "win": {
+      "type": "eliminate_all",
+      "reason": "The golem shatters — Caleb's Hollow is silent again."
+    },
+    "lose": {
+      "type": "hero_killed"
+    }
+  },
+  "startingResources": {
+    "food": 1,
+    "herbs": 1,
+    "wood": 1
+  },
+  "rewards": {
+    "herbs": 2,
+    "food": 1,
+    "wood": 1
+  },
+  "healBonus": 2,
+  "lootOverrides": {
+    "remove": [
+      "horse"
+    ]
+  },
+  "requires": null,
+  "map": {
+    "mode": "handmade",
+    "cols": 9,
+    "rows": 9,
+    "heroStart": {
+      "col": 2,
+      "row": 7
+    },
+    "witchStart": {
+      "col": 7,
+      "row": 1
+    },
+    "witchObjectives": [],
+    "roadNodes": [
+      "2,7",
+      "3,3",
+      "4,4",
+      "4,5",
+      "6,4",
+      "7,6"
+    ],
+    "mapSize": "skirmish",
+    "survivorCounts": {
+      "buildings": 0,
+      "terrain": 0
+    },
+    "tiles": [
+      {
+        "col": 0,
+        "row": 0,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 1,
+        "row": 0,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 2,
+        "row": 0,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 3,
+        "row": 0,
+        "type": "RIVER",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 7,
+        "row": 0,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 0,
+        "row": 1,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 3,
+        "row": 1,
+        "type": "RIVER",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 6,
+        "row": 1,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 7,
+        "row": 1,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 8,
+        "row": 1,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 0,
+        "row": 2,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 1,
+        "row": 2,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 2,
+        "row": 2,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 3,
+        "row": 2,
+        "type": "RIVER",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 8,
+        "row": 2,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 0,
+        "row": 3,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 1,
+        "row": 3,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 2,
+        "row": 3,
+        "type": "DIRT",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 3,
+        "row": 3,
+        "type": "BUILDING",
+        "building": "HOUSE",
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "4,4"
+        ]
+      },
+      {
+        "col": 5,
+        "row": 3,
+        "type": "GRASS",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": "WOOD",
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 7,
+        "row": 3,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 0,
+        "row": 4,
+        "type": "DIRT",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 1,
+        "row": 4,
+        "type": "DIRT",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 2,
+        "row": 4,
+        "type": "DIRT",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 4,
+        "row": 4,
+        "type": "BRIDGE",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "3,3",
+          "4,5"
+        ]
+      },
+      {
+        "col": 6,
+        "row": 4,
+        "type": "BUILDING",
+        "building": "BLACKSMITH",
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "5,5",
+          "6,5"
+        ]
+      },
+      {
+        "col": 1,
+        "row": 5,
+        "type": "GRASS",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": "HERBS",
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 2,
+        "row": 5,
+        "type": "DIRT",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 3,
+        "row": 5,
+        "type": "DIRT",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 4,
+        "row": 5,
+        "type": "BUILDING",
+        "building": "CHURCH",
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "4,4",
+          "4,6",
+          "5,5"
+        ]
+      },
+      {
+        "col": 5,
+        "row": 5,
+        "type": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "4,5",
+          "6,4"
+        ]
+      },
+      {
+        "col": 6,
+        "row": 5,
+        "type": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "6,4",
+          "7,6"
+        ]
+      },
+      {
+        "col": 3,
+        "row": 6,
+        "type": "DIRT",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 4,
+        "row": 6,
+        "type": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "3,7",
+          "4,5"
+        ]
+      },
+      {
+        "col": 5,
+        "row": 6,
+        "type": "RIVER",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 7,
+        "row": 6,
+        "type": "BUILDING",
+        "building": "BARN",
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "6,5"
+        ]
+      },
+      {
+        "col": 2,
+        "row": 7,
+        "type": "BUILDING",
+        "building": "INN",
+        "fortifyLevel": 1,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "3,7"
+        ]
+      },
+      {
+        "col": 3,
+        "row": 7,
+        "type": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "2,7",
+          "4,6"
+        ]
+      },
+      {
+        "col": 5,
+        "row": 7,
+        "type": "RIVER",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 6,
+        "row": 7,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 7,
+        "row": 7,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 8,
+        "row": 7,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 5,
+        "row": 8,
+        "type": "RIVER",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 6,
+        "row": 8,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 7,
+        "row": 8,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 8,
+        "row": 8,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      }
+    ]
+  },
+  "storyTriggers": [
+    {
+      "type": "round",
+      "round": 1,
+      "title": "A Grim Dawn",
+      "text": "The streets of Caleb's Hollow are eerily silent. Through the morning mist, you can make out shambling figures — the dead have risen. The Caleb's Hollow Inn stands behind you, its doors battered but holding. You must clear the village before nightfall.",
+      "flag": "prologue_intro"
+    }
+  ]
+}

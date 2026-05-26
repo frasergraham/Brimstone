@@ -1,0 +1,1183 @@
+{
+  "schema": 1,
+  "campaignId": "calebs_hollow_prologue",
+  "id": "long_watch",
+  "title": "The Long Watch",
+  "chapter": 1,
+  "briefing": "The nights are growing longer. Three Power Nodes pulse through Caleb's Hollow — seize them all and hold them until dawn. The witch herself walks the streets, but she keeps her distance; her thralls are the real threat.",
+  "victoryText": "Dawn breaks. Every node bears your mark. The town breathes again — for one more day.",
+  "defeatText": "Dawn breaks on a town still in her grip. The watch is broken; her ritual feeds another night.",
+  "mapSize": "standard",
+  "hasWitch": true,
+  "disableScoring": true,
+  "phaseCycle": {
+    "phases": [
+      "day",
+      "dusk",
+      "night",
+      "night",
+      "night",
+      "night",
+      "night",
+      "night",
+      "night",
+      "dawn"
+    ],
+    "loop": false
+  },
+  "enemyUnits": [
+    {
+      "type": "minion",
+      "col": 6,
+      "row": 9
+    },
+    {
+      "type": "minion",
+      "col": 7,
+      "row": 2
+    },
+    {
+      "type": "minion",
+      "col": 11,
+      "row": 6
+    },
+    {
+      "type": "minion",
+      "col": 8,
+      "row": 3
+    },
+    {
+      "type": "wood_golem",
+      "col": 10,
+      "row": 5
+    }
+  ],
+  "waves": [
+    {
+      "round": 4,
+      "units": [
+        {
+          "type": "minion",
+          "spawnAt": "graveyard"
+        }
+      ]
+    },
+    {
+      "round": 6,
+      "units": [
+        {
+          "type": "minion",
+          "spawnAt": "graveyard"
+        }
+      ]
+    },
+    {
+      "round": 8,
+      "units": [
+        {
+          "type": "minion",
+          "spawnAt": "map_edge"
+        },
+        {
+          "type": "minion",
+          "spawnAt": "graveyard"
+        }
+      ]
+    }
+  ],
+  "aiPersonality": "evasive",
+  "heroPersonality": "node_denier",
+  "aiBudgetBonus": 0,
+  "maxSurvivorsFromRoster": 5,
+  "missionSurvivors": 1,
+  "minSurvivors": 2,
+  "maxSurvivors": 5,
+  "objectives": {
+    "win": {
+      "type": "hero_holds_all_nodes",
+      "phase": "dawn",
+      "reason": "You hold every node at dawn — the watch holds."
+    },
+    "lose": [
+      {
+        "type": "hero_killed"
+      },
+      {
+        "type": "witch_holds_node",
+        "phase": "dawn",
+        "reason": "Dawn — and the nodes are not yours."
+      }
+    ]
+  },
+  "startingResources": {
+    "wood": 1,
+    "food": 2
+  },
+  "rewards": {
+    "silver": 1,
+    "scripture": 1,
+    "food": 2
+  },
+  "healBonus": 5,
+  "requires": [
+    "dark_ritual"
+  ],
+  "map": {
+    "mode": "handmade",
+    "cols": 13,
+    "rows": 13,
+    "heroStart": {
+      "col": 1,
+      "row": 10
+    },
+    "witchStart": {
+      "col": 11,
+      "row": 1
+    },
+    "witchObjectives": [
+      {
+        "col": 6,
+        "row": 9,
+        "label": "Town Square",
+        "hexes": [
+          {
+            "col": 6,
+            "row": 9
+          },
+          {
+            "col": 5,
+            "row": 9
+          },
+          {
+            "col": 6,
+            "row": 10
+          }
+        ],
+        "color": "#22c55e",
+        "seenByHero": true,
+        "seenByWitch": true,
+        "prevCtrl": "neutral"
+      },
+      {
+        "col": 7,
+        "row": 2,
+        "label": "North Plaza",
+        "hexes": [
+          {
+            "col": 7,
+            "row": 2
+          },
+          {
+            "col": 8,
+            "row": 2
+          },
+          {
+            "col": 7,
+            "row": 3
+          }
+        ],
+        "color": "#f59e0b",
+        "seenByHero": true,
+        "seenByWitch": true,
+        "prevCtrl": "neutral"
+      },
+      {
+        "col": 11,
+        "row": 6,
+        "label": "East Terrace",
+        "hexes": [
+          {
+            "col": 11,
+            "row": 6
+          },
+          {
+            "col": 11,
+            "row": 5
+          },
+          {
+            "col": 10,
+            "row": 5
+          }
+        ],
+        "color": "#06b6d4",
+        "seenByHero": true,
+        "seenByWitch": true,
+        "prevCtrl": "neutral"
+      }
+    ],
+    "roadNodes": [
+      "1,10",
+      "10,6",
+      "10,7",
+      "11,3",
+      "11,8",
+      "2,8",
+      "3,10",
+      "5,9",
+      "8,2",
+      "9,10"
+    ],
+    "mapSize": "standard",
+    "survivorCounts": {
+      "buildings": 0,
+      "terrain": 0
+    },
+    "tiles": [
+      {
+        "col": 2,
+        "row": 0,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 5,
+        "row": 0,
+        "type": "DIRT",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 6,
+        "row": 0,
+        "type": "DIRT",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 7,
+        "row": 0,
+        "type": "DIRT",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 12,
+        "row": 0,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 0,
+        "row": 1,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 1,
+        "row": 1,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 5,
+        "row": 1,
+        "type": "DIRT",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 6,
+        "row": 1,
+        "type": "DIRT",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 10,
+        "row": 1,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 11,
+        "row": 1,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 0,
+        "row": 2,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 1,
+        "row": 2,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 2,
+        "row": 2,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 4,
+        "row": 2,
+        "type": "GRASS",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": "HERBS",
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 8,
+        "row": 2,
+        "type": "BUILDING",
+        "building": "GRAVEYARD",
+        "fortifyLevel": 1,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "8,3"
+        ]
+      },
+      {
+        "col": 12,
+        "row": 2,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 0,
+        "row": 3,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 5,
+        "row": 3,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 6,
+        "row": 3,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 8,
+        "row": 3,
+        "type": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "8,2",
+          "9,3"
+        ]
+      },
+      {
+        "col": 9,
+        "row": 3,
+        "type": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "10,3",
+          "8,3"
+        ]
+      },
+      {
+        "col": 10,
+        "row": 3,
+        "type": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "11,3",
+          "9,3"
+        ]
+      },
+      {
+        "col": 11,
+        "row": 3,
+        "type": "BUILDING",
+        "building": "HOUSE",
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "10,3",
+          "11,4"
+        ]
+      },
+      {
+        "col": 6,
+        "row": 4,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 7,
+        "row": 4,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 10,
+        "row": 4,
+        "type": "GRASS",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": "METAL",
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 11,
+        "row": 4,
+        "type": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "10,5",
+          "11,3"
+        ]
+      },
+      {
+        "col": 0,
+        "row": 5,
+        "type": "RIVER",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 1,
+        "row": 5,
+        "type": "DIRT",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": "SILVER",
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 2,
+        "row": 5,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 3,
+        "row": 5,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 5,
+        "row": 5,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 6,
+        "row": 5,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 7,
+        "row": 5,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 10,
+        "row": 5,
+        "type": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "10,6",
+          "11,4"
+        ]
+      },
+      {
+        "col": 11,
+        "row": 5,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 1,
+        "row": 6,
+        "type": "RIVER",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 2,
+        "row": 6,
+        "type": "RIVER",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 3,
+        "row": 6,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 4,
+        "row": 6,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 5,
+        "row": 6,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 7,
+        "row": 6,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 9,
+        "row": 6,
+        "type": "RIVER",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 10,
+        "row": 6,
+        "type": "BRIDGE",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "10,5",
+          "10,7"
+        ]
+      },
+      {
+        "col": 11,
+        "row": 6,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 2,
+        "row": 7,
+        "type": "RIVER",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 3,
+        "row": 7,
+        "type": "RIVER",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 4,
+        "row": 7,
+        "type": "RIVER",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 6,
+        "row": 7,
+        "type": "RIVER",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 7,
+        "row": 7,
+        "type": "RIVER",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 8,
+        "row": 7,
+        "type": "RIVER",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 9,
+        "row": 7,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 10,
+        "row": 7,
+        "type": "BRIDGE",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "10,6",
+          "11,8"
+        ]
+      },
+      {
+        "col": 11,
+        "row": 7,
+        "type": "RIVER",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 2,
+        "row": 8,
+        "type": "BUILDING",
+        "building": "STABLE",
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "1,9"
+        ]
+      },
+      {
+        "col": 5,
+        "row": 8,
+        "type": "RIVER",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 6,
+        "row": 8,
+        "type": "RIVER",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 9,
+        "row": 8,
+        "type": "DIRT",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 11,
+        "row": 8,
+        "type": "BUILDING",
+        "building": "WATCHTOWER",
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "10,7",
+          "10,9"
+        ]
+      },
+      {
+        "col": 12,
+        "row": 8,
+        "type": "RIVER",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 1,
+        "row": 9,
+        "type": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "1,10",
+          "2,8"
+        ]
+      },
+      {
+        "col": 5,
+        "row": 9,
+        "type": "BUILDING",
+        "building": "CHURCH",
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "5,10",
+          "6,10"
+        ]
+      },
+      {
+        "col": 9,
+        "row": 9,
+        "type": "DIRT",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 10,
+        "row": 9,
+        "type": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "10,10",
+          "11,8"
+        ]
+      },
+      {
+        "col": 1,
+        "row": 10,
+        "type": "BUILDING",
+        "building": "INN",
+        "fortifyLevel": 1,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "1,9",
+          "2,10"
+        ]
+      },
+      {
+        "col": 2,
+        "row": 10,
+        "type": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "1,10",
+          "3,10"
+        ]
+      },
+      {
+        "col": 3,
+        "row": 10,
+        "type": "BUILDING",
+        "building": "HOUSE",
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "2,10",
+          "4,10"
+        ]
+      },
+      {
+        "col": 4,
+        "row": 10,
+        "type": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "3,10",
+          "5,10"
+        ]
+      },
+      {
+        "col": 5,
+        "row": 10,
+        "type": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "4,10",
+          "5,9"
+        ]
+      },
+      {
+        "col": 6,
+        "row": 10,
+        "type": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "5,9",
+          "7,10"
+        ]
+      },
+      {
+        "col": 7,
+        "row": 10,
+        "type": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "6,10",
+          "8,10"
+        ]
+      },
+      {
+        "col": 8,
+        "row": 10,
+        "type": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "7,10",
+          "9,10"
+        ]
+      },
+      {
+        "col": 9,
+        "row": 10,
+        "type": "BUILDING",
+        "building": "HOUSE",
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "10,10",
+          "8,10"
+        ]
+      },
+      {
+        "col": 10,
+        "row": 10,
+        "type": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [
+          "10,9",
+          "9,10"
+        ]
+      },
+      {
+        "col": 12,
+        "row": 10,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 0,
+        "row": 11,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 1,
+        "row": 11,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 6,
+        "row": 11,
+        "type": "GRASS",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": "WOOD",
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 8,
+        "row": 11,
+        "type": "DIRT",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 11,
+        "row": 11,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 12,
+        "row": 11,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 1,
+        "row": 12,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 2,
+        "row": 12,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 9,
+        "row": 12,
+        "type": "DIRT",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      },
+      {
+        "col": 12,
+        "row": 12,
+        "type": "FOREST",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": []
+      }
+    ]
+  },
+  "storyTriggers": [
+    {
+      "type": "round",
+      "round": 1,
+      "title": "The Long Watch",
+      "text": "Three Power Nodes. One night. Hold them all when the sun returns.",
+      "flag": "long_watch_start"
+    },
+    {
+      "type": "round",
+      "round": 4,
+      "condition": "notHoldingAllNodes",
+      "title": "The Hour Wears On",
+      "text": "A node still pulses without your banner. Seize them all before dawn.",
+      "flag": "long_watch_remind_4"
+    },
+    {
+      "type": "round",
+      "round": 7,
+      "condition": "notHoldingAllNodes",
+      "title": "Dawn Approaches",
+      "text": "Dawn nears, and the watch is incomplete. The nodes must be yours.",
+      "flag": "long_watch_remind_7"
+    }
+  ]
+}
