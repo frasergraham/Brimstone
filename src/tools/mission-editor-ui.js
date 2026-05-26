@@ -11,15 +11,24 @@
 // Lighting tabs; the 2D Renderer has no render loop, so pause is a no-op and
 // resume just re-fits + redraws.
 //
-// SEAMS for later phases:
-//   • P6 (authoring forms + load/save): `handle.editor` exposes the controller
-//     (getMapDef/setMapDef/getEnemyUnits/setEnemyUnits). A `#e-forms` slot is
-//     left empty in the palette for the forms to mount into.
-//   • P7 (3D preview): a "Preview in 3D" palette button shows the #e-preview-3d
+// UX restructure:
+//   • Canvas pan + zoom — wired to the SAME Renderer the game uses via
+//     attachEditorCanvasControls (src/tools/editor-canvas-input.js). Wheel /
+//     pinch zoom, drag-to-pan, click-to-paint with drag-vs-paint discrimination.
+//   • Tabbed sidebar — the palette + authoring forms are grouped into four
+//     sidebar tabs (Map / Mission / Events / Units) reusing the lazy
+//     tab-controller pattern; only one group shows at a time.
+//   • Load / Save relocated — the editor exposes loadMissionFile() / saveMission()
+//     so the top File menu in admin-tools.html can drive them. The flow is
+//     unchanged (validate-before-populate on load; validate + block-download on
+//     save) — only the controls moved out of the side panel.
+//
+// SEAMS:
+//   • `handle.editor` exposes the controller (getMapDef/setMapDef/…).
+//   • 3D preview: a "Preview in 3D" button (Map tab) shows the #e-preview-3d
 //     overlay and hands `buildState()` to a lazily-constructed Renderer3D
-//     (beginLoad → whenReady → draw, same as the Lighting tab). The engine is
-//     built on first press and disposed on close / tab-switch — see the
-//     `preview` controller + `dispose3dPreview` below.
+//     (beginLoad → whenReady → draw). The engine is built on first press and
+//     disposed on close / tab-switch — see the `preview` controller below.
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { Renderer } from '../renderer.js';
@@ -35,6 +44,8 @@ import {
   addStoryTrigger, removeStoryTrigger, moveStoryTrigger,
   addWave, removeWave, populateFromMission,
 } from './mission-editor.js';
+import { createTabController } from './tab-controller.js';
+import { attachEditorCanvasControls } from './editor-canvas-input.js';
 import { loadMissionJSON, KNOWN_OBJECTIVE_TYPES } from '../campaign/json-mission.js';
 import { CONDITIONS } from '../campaign/condition-registry.js';
 
@@ -79,7 +90,9 @@ function buildState(editor) {
  *
  * @param {Document} [doc] - document root (defaults to global document).
  * @returns {{ pause: () => void, resume: () => void, editor: object,
- *             buildState: () => object }}
+ *             buildState: () => object,
+ *             loadMissionFile: (file:File) => Promise<{ok:boolean,message:string}>,
+ *             saveMission: () => {ok:boolean,message:string} }}
  */
 export function initEditor(doc = document) {
   const canvas = doc.getElementById('e-render-canvas');
@@ -99,14 +112,20 @@ export function initEditor(doc = document) {
     renderer.draw();
   }
 
-  // ── Click → hex edit loop ────────────────────────────────────────────────
-  canvas.addEventListener('click', (ev) => {
-    const rect = canvas.getBoundingClientRect();
-    if (!rect.width || !rect.height) return;
-    const cx = (ev.clientX - rect.left) * (canvas.width / rect.width);
-    const cy = (ev.clientY - rect.top) * (canvas.height / rect.height);
-    const hex = renderer.canvasToHex(cx, cy);
-    editor.applyAt(hex);
+  // Recenter + reset zoom, then redraw. Used by the Reset View button and
+  // whenever the map dimensions change (mode / map-size switch) so the new map
+  // is reframed instead of left half-off-screen under the old pan.
+  function resetViewAndDraw() {
+    renderer.resize();          // recompute hexSize for the (possibly new) map
+    renderer.resetView();       // zoom → 1, pan centered on the visible area
+    renderer._clampPan();
+    renderer.draw();
+  }
+
+  // ── Pan / zoom / paint (reuses the in-game Renderer transform) ────────────
+  attachEditorCanvasControls(canvas, renderer, {
+    onPaint: (hex) => editor.applyAt(hex),
+    onRedraw: () => renderer.draw(),
   });
 
   // ── 3D preview (lazy Renderer3D over the #e-preview-3d overlay) ───────────
@@ -147,15 +166,51 @@ export function initEditor(doc = document) {
   const onResize = () => { try { preview.current()?._engine?.resize(); } catch { /* ignore */ } };
   (doc.defaultView ?? globalThis).addEventListener?.('resize', onResize);
 
-  buildPalette(doc, palette, editor, rerender, openPreview);
+  // Build the tabbed sidebar (Map / Mission / Events / Units). The Map tab is
+  // static; the other three are (re)populated by rebuildForms() so a load can
+  // refresh the whole authoring tree at once.
+  const formStatus = (msg, ok) => sidebar.setStatus(msg, ok);
+  const sidebar = buildSidebar(doc, palette, editor, rerender, openPreview, resetViewAndDraw);
 
-  // Authoring forms + load/save mount into the #e-forms slot the palette left.
-  // `rebuildForms` re-reads the model, so load can refresh the whole form tree.
   function rebuildForms() {
-    const slot = doc.getElementById('e-forms');
-    if (slot) buildForms(doc, slot, editor, rerender, rebuildForms);
+    buildForms(doc, sidebar.panes, editor, rerender, rebuildForms, formStatus);
   }
   rebuildForms();
+
+  // ── Load / Save — relocated to the top File menu; flow is unchanged. ──────
+  // Validate-before-populate on load; validate + block-download on save.
+  function loadMissionFile(file) {
+    return new Promise((resolve) => {
+      if (!file) { resolve({ ok: false, message: 'No file selected.' }); return; }
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const parsed = JSON.parse(String(reader.result));
+          loadMissionJSON(parsed); // VALIDATE before touching the model
+          editor.applyMission(populateFromMission(parsed));
+          rebuildForms();
+          resetViewAndDraw();
+          resolve({ ok: true, message: `Loaded "${parsed.id}".` });
+        } catch (err) {
+          // Validation / parse failure: do NOT clobber the current model.
+          resolve({ ok: false, message: `Load failed: ${err.message}` });
+        }
+      };
+      reader.onerror = () => resolve({ ok: false, message: 'Could not read file.' });
+      reader.readAsText(file);
+    });
+  }
+
+  function saveMission() {
+    const json = editor.assemble();
+    try {
+      loadMissionJSON(json); // block the download on any validation error
+    } catch (err) {
+      return { ok: false, message: `Cannot save: ${err.message}` };
+    }
+    downloadJSON(doc, json, `${json.id || 'mission'}.json`);
+    return { ok: true, message: `Validated — downloaded ${json.id}.json` };
+  }
 
   // First fit once layout settles.
   renderer.resize();
@@ -164,6 +219,8 @@ export function initEditor(doc = document) {
   return {
     editor,
     buildState: () => buildState(editor),
+    loadMissionFile,
+    saveMission,
     // 2D Renderer has no render loop. But the 3D preview owns a live Babylon
     // engine; tear it down (and hide the overlay) when the tab is switched away
     // so a hidden tab never leaves an engine spinning.
@@ -172,11 +229,81 @@ export function initEditor(doc = document) {
   };
 }
 
-// ── Palette DOM ──────────────────────────────────────────────────────────────
-
-function buildPalette(doc, root, editor, rerender, onPreview3D) {
+// ── Tabbed sidebar ────────────────────────────────────────────────────────────
+// Splits the old single-scroll palette into four tabs so only one group of
+// controls shows at a time. Returns { panes, setStatus } where `panes` holds the
+// three form-pane containers (mission / events / units) that buildForms fills,
+// and `setStatus` writes to the shared form-validation status line.
+function buildSidebar(doc, root, editor, rerender, onPreview3D, onResetView) {
   root.innerHTML = '';
 
+  const SIDEBAR_TABS = [
+    { id: 'map', label: 'Map' },
+    { id: 'mission', label: 'Mission' },
+    { id: 'events', label: 'Events' },
+    { id: 'units', label: 'Units' },
+  ];
+
+  // Tab buttons.
+  const tabbar = doc.createElement('div');
+  tabbar.className = 'e-tabbar';
+  const tabBtns = {};
+  for (const t of SIDEBAR_TABS) {
+    const b = doc.createElement('button');
+    b.className = 'e-stab';
+    b.textContent = t.label;
+    b.dataset.stab = t.id;
+    b.addEventListener('click', () => stabs.activate(t.id));
+    tabBtns[t.id] = b;
+    tabbar.append(b);
+  }
+  root.append(tabbar);
+
+  // Tab panes.
+  const paneEls = {};
+  for (const t of SIDEBAR_TABS) {
+    const p = doc.createElement('div');
+    p.className = 'e-spane';
+    p.dataset.spane = t.id;
+    paneEls[t.id] = p;
+    root.append(p);
+  }
+
+  // Shared form-validation status line (JSON parse errors etc.).
+  const status = doc.createElement('div');
+  status.className = 'e-status';
+  root.append(status);
+  const setStatus = (msg, ok) => {
+    status.textContent = msg || '';
+    status.classList.toggle('err', !ok);
+    status.classList.toggle('ok', !!ok && !!msg);
+  };
+
+  // Lazy tab-switch via the shared controller — DOM-free + already unit-tested.
+  const stabs = createTabController(SIDEBAR_TABS.map(t => t.id), {
+    onActivate: (id) => {
+      for (const t of SIDEBAR_TABS) {
+        paneEls[t.id].classList.toggle('active', t.id === id);
+        tabBtns[t.id].classList.toggle('active', t.id === id);
+      }
+    },
+  });
+
+  // ── Map tab: paint/placement palette + view controls ────────────────────
+  buildMapPalette(doc, paneEls.map, editor, rerender, onPreview3D, onResetView);
+
+  stabs.activate('map');
+
+  return {
+    // The three authoring-form panes buildForms mounts into.
+    panes: { mission: paneEls.mission, events: paneEls.events, units: paneEls.units },
+    setStatus,
+  };
+}
+
+// ── Map-tab palette DOM ───────────────────────────────────────────────────────
+
+function buildMapPalette(doc, root, editor, rerender, onPreview3D, onResetView) {
   // Mode + seed.
   const modeSection = section(doc, 'Map');
   const modeRow = doc.createElement('div');
@@ -188,6 +315,7 @@ function buildPalette(doc, root, editor, rerender, onPreview3D) {
     editor.setMode(v, { seed: parseInt(seedInput.value, 10) || 12345 });
     seedRow.style.display = v === 'procedural' ? '' : 'none';
     regenBtn.textContent = v === 'procedural' ? 'Rebuild Map' : 'Regenerate Roads';
+    onResetView?.(); // reframe — a mode switch can change map dimensions
   });
   modeRow.append(labelFor(doc, 'Mode'), modeSel);
   modeSection.append(modeRow);
@@ -249,9 +377,10 @@ function buildPalette(doc, root, editor, rerender, onPreview3D) {
   );
   root.append(valSection);
 
-  // Edit actions.
+  // Edit + view actions.
   const editSection = section(doc, 'Edit');
   editSection.append(actionBtn(doc, 'Undo', () => editor.undo()));
+  if (onResetView) editSection.append(actionBtn(doc, 'Reset View', () => onResetView()));
   root.append(editSection);
 
   // Preview — rebuilds the current mission map in 3D via Renderer3D.
@@ -260,75 +389,24 @@ function buildPalette(doc, root, editor, rerender, onPreview3D) {
     previewSection.append(actionBtn(doc, 'Preview in 3D', () => onPreview3D()));
     root.append(previewSection);
   }
-
-  // Empty slot for P6 authoring forms to mount into.
-  const forms = doc.createElement('div');
-  forms.id = 'e-forms';
-  root.append(forms);
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// Authoring forms + load / save / validate  (P6)
+// Authoring forms  (P6)
 // ─────────────────────────────────────────────────────────────────────────────
-// Forms over the existing mission schema. Inputs mutate the LIVE meta object
+// Forms over the existing mission schema, distributed across the Mission /
+// Events / Units sidebar panes. Inputs mutate the LIVE meta object
 // (editor.getMeta() returns a reference) for cheap text edits; list add/remove
 // and load go through the controller and trigger a full form rebuild. Map-
 // affecting edits (enemyUnits, survivor positions) also redraw the canvas.
+// Load/Save live in the top File menu (see initEditor) — not here.
 // ══════════════════════════════════════════════════════════════════════════
 
-function buildForms(doc, root, editor, rerenderCanvas, rebuild) {
-  root.innerHTML = '';
+function buildForms(doc, panes, editor, rerenderCanvas, rebuild, setStatus) {
+  panes.mission.innerHTML = '';
+  panes.events.innerHTML = '';
+  panes.units.innerHTML = '';
   const meta = editor.getMeta();
-
-  // ── File I/O (load / save / validate) ──────────────────────────────────
-  const io = section(doc, 'Mission File');
-  const status = doc.createElement('div');
-  status.className = 'e-status';
-  const setStatus = (msg, ok) => {
-    status.textContent = msg || '';
-    status.classList.toggle('err', !ok);
-    status.classList.toggle('ok', !!ok && !!msg);
-  };
-
-  const fileInput = doc.createElement('input');
-  fileInput.type = 'file';
-  fileInput.accept = '.json,application/json';
-  fileInput.className = 'e-file';
-  fileInput.addEventListener('change', () => {
-    const file = fileInput.files && fileInput.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const parsed = JSON.parse(String(reader.result));
-        loadMissionJSON(parsed); // VALIDATE before touching the model
-        editor.applyMission(populateFromMission(parsed));
-        rebuild();
-        rerenderCanvas();
-        setStatus(`Loaded "${parsed.id}".`, true);
-      } catch (err) {
-        // Validation / parse failure: do NOT clobber the current model.
-        setStatus(`Load failed: ${err.message}`, false);
-      }
-      fileInput.value = '';
-    };
-    reader.readAsText(file);
-  });
-  io.append(labelFor(doc, 'Load'), fileInput);
-
-  io.append(actionBtn(doc, 'Validate + Download JSON', () => {
-    const json = editor.assemble();
-    try {
-      loadMissionJSON(json); // block the download on any validation error
-    } catch (err) {
-      setStatus(`Cannot save: ${err.message}`, false);
-      return;
-    }
-    downloadJSON(doc, json, `${json.id || 'mission'}.json`);
-    setStatus(`Validated — downloaded ${json.id}.json`, true);
-  }));
-  io.append(status);
-  root.append(io);
 
   // ── Scalar properties ───────────────────────────────────────────────────
   const props = section(doc, 'Properties');
@@ -349,7 +427,7 @@ function buildForms(doc, root, editor, rerenderCanvas, rebuild) {
     numRow(doc, 'Discoverable', meta.maxDiscoverableSurvivors, v => { meta.maxDiscoverableSurvivors = v; }),
     numRow(doc, 'Heal Bonus', meta.healBonus, v => { meta.healBonus = v; }),
   );
-  root.append(props);
+  panes.mission.append(props);
 
   // ── Briefing / texts ──────────────────────────────────────────────────────
   const text = section(doc, 'Narrative');
@@ -358,7 +436,7 @@ function buildForms(doc, root, editor, rerenderCanvas, rebuild) {
     textArea(doc, 'Victory', meta.victoryText, v => { meta.victoryText = v; }),
     textArea(doc, 'Defeat', meta.defeatText, v => { meta.defeatText = v; }),
   );
-  root.append(text);
+  panes.mission.append(text);
 
   // ── Phase cycle ─────────────────────────────────────────────────────────
   const phase = section(doc, 'Phase Cycle');
@@ -372,7 +450,7 @@ function buildForms(doc, root, editor, rerenderCanvas, rebuild) {
       meta.phaseCycle.loop = v;
     }),
   );
-  root.append(phase);
+  panes.mission.append(phase);
 
   // ── Resources / rewards / loot (JSON blobs) ─────────────────────────────
   const res = section(doc, 'Resources & Rewards');
@@ -381,7 +459,7 @@ function buildForms(doc, root, editor, rerenderCanvas, rebuild) {
     jsonRow(doc, 'Rewards', meta.rewards, v => { meta.rewards = v; }, setStatus),
     jsonRow(doc, 'Loot Ovr', meta.lootOverrides, v => { meta.lootOverrides = v; }, setStatus),
   );
-  root.append(res);
+  panes.mission.append(res);
 
   // ── Objectives ──────────────────────────────────────────────────────────
   const obj = section(doc, 'Objectives');
@@ -393,7 +471,7 @@ function buildForms(doc, root, editor, rerenderCanvas, rebuild) {
     if (!meta.objectives) meta.objectives = {};
     meta.objectives.lose = def;
   }, setStatus));
-  root.append(obj);
+  panes.events.append(obj);
 
   // ── Story triggers (list editor) ─────────────────────────────────────────
   const story = section(doc, 'Story Triggers');
@@ -405,7 +483,7 @@ function buildForms(doc, root, editor, rerenderCanvas, rebuild) {
     }, setStatus));
   });
   story.append(actionBtn(doc, '+ Add Trigger', () => { addStoryTrigger(meta); rebuild(); }));
-  root.append(story);
+  panes.events.append(story);
 
   // ── Waves (list editor) ─────────────────────────────────────────────────
   const waves = section(doc, 'Waves');
@@ -413,7 +491,7 @@ function buildForms(doc, root, editor, rerenderCanvas, rebuild) {
     waves.append(waveCard(doc, w, i, { remove: () => { removeWave(meta, i); rebuild(); } }, setStatus));
   });
   waves.append(actionBtn(doc, '+ Add Wave', () => { addWave(meta); rebuild(); }));
-  root.append(waves);
+  panes.events.append(waves);
 
   // ── Enemy units (placed on map; list-view for delete / override edit) ─────
   const enemies = section(doc, 'Enemy Units');
@@ -428,7 +506,7 @@ function buildForms(doc, root, editor, rerenderCanvas, rebuild) {
         rerenderCanvas();
       }, setStatus));
   });
-  root.append(enemies);
+  panes.units.append(enemies);
 
   // ── Survivor start positions (list-view) ─────────────────────────────────
   const surv = section(doc, 'Survivor Starts');
@@ -440,7 +518,7 @@ function buildForms(doc, root, editor, rerenderCanvas, rebuild) {
       rebuild();
     }, setStatus));
   });
-  root.append(surv);
+  panes.units.append(surv);
 }
 
 // ── Browser file download (Blob + transient anchor) ─────────────────────────

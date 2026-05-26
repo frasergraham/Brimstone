@@ -10,24 +10,59 @@
     *, *::before, *::after { box-sizing: border-box; }
     html, body { height: 100%; margin: 0; background: #0a0a0a; color: #d4cba0; font-family: var(--font-ui, system-ui), sans-serif; font-size: 13px; }
 
-    /* ── Tab shell ──────────────────────────────────────────────────────── */
+    /* ── Top menu bar (☰ tool switcher + File menu) ────────────────────────── */
     #tools-shell { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
-    #tab-bar {
-      display: flex; align-items: center; gap: 4px; flex: 0 0 auto;
+    #menu-bar {
+      display: flex; align-items: center; gap: 10px; flex: 0 0 auto;
       background: #14110d; border-bottom: 1px solid #2c2620; padding: 6px 10px;
     }
-    #tab-bar .brand { font-size: 12px; color: #c4a04a; letter-spacing: 1.5px; text-transform: uppercase; margin-right: 14px; }
-    #tab-bar .nav-back { margin-left: auto; font-size: 12px; color: #a08858; }
-    .tab-btn {
-      padding: 7px 16px; background: #211c16; color: #d4cba0; border: 1px solid #443a2a;
-      font-family: inherit; font-size: 12px; cursor: pointer; letter-spacing: 1px; text-transform: uppercase;
+    #menu-bar .brand { font-size: 12px; color: #c4a04a; letter-spacing: 1.5px; text-transform: uppercase; }
+    #menu-bar .active-tool-name { font-size: 12px; color: #d4cba0; letter-spacing: 1px; }
+    #menu-bar .nav-back { margin-left: auto; font-size: 12px; color: #a08858; }
+    #menu-bar .file-status { font-size: 11px; color: #8a8060; min-width: 0; }
+    #menu-bar .file-status.err { color: #d77; }
+    #menu-bar .file-status.ok { color: #7d7; }
+
+    /* Dropdown menus (☰ tools + File). The .menu is the anchor; .menu-list is
+       absolutely positioned beneath the trigger button. */
+    .menu { position: relative; }
+    .menu[hidden] { display: none; }
+    .menu-btn {
+      padding: 7px 14px; background: #211c16; color: #d4cba0; border: 1px solid #443a2a;
+      font-family: inherit; font-size: 13px; cursor: pointer; letter-spacing: 1px; line-height: 1;
     }
-    .tab-btn:hover { background: #2a241c; }
-    .tab-btn.active { background: #5a4a30; border-color: #c4a04a; color: #ffd680; }
+    .menu-btn:hover { background: #2a241c; }
+    .menu-btn[aria-expanded="true"] { background: #5a4a30; border-color: #c4a04a; color: #ffd680; }
+    .menu-list {
+      position: absolute; top: calc(100% + 4px); left: 0; z-index: 50; min-width: 160px;
+      background: #1a1610; border: 1px solid #443a2a; box-shadow: 0 6px 18px rgba(0,0,0,0.6);
+      display: flex; flex-direction: column; padding: 4px;
+    }
+    .menu-list[hidden] { display: none; }
+    .menu-item {
+      padding: 7px 12px; background: transparent; color: #d4cba0; border: 0; text-align: left;
+      font-family: inherit; font-size: 12px; cursor: pointer; letter-spacing: 0.5px;
+    }
+    .menu-item:hover { background: #2a241c; color: #ffd680; }
+    .menu-item.active { color: #ffd680; }
+    .menu-item:disabled { color: #6a6050; cursor: default; }
 
     #tab-content { position: relative; flex: 1 1 auto; overflow: hidden; }
     .tab-panel { position: absolute; inset: 0; display: none; overflow: hidden; }
     .tab-panel.active { display: block; }
+
+    /* ── Editor sidebar tabs (Map / Mission / Events / Units) ──────────────── */
+    #editor-panel .e-tabbar { display: flex; gap: 2px; margin: -12px -14px 10px -14px; padding: 8px 10px 0 10px;
+      position: sticky; top: 0; background: #14110d; border-bottom: 1px solid #2c2620; z-index: 2; }
+    #editor-panel .e-stab {
+      flex: 1; padding: 6px 4px; background: #211c16; color: #d4cba0; border: 1px solid #443a2a;
+      border-bottom: 0; font-family: inherit; font-size: 11px; cursor: pointer;
+      text-transform: uppercase; letter-spacing: 0.5px;
+    }
+    #editor-panel .e-stab:hover { background: #2a241c; }
+    #editor-panel .e-stab.active { background: #5a4a30; border-color: #c4a04a; color: #ffd680; }
+    #editor-panel .e-spane { display: none; }
+    #editor-panel .e-spane.active { display: block; }
 
     /* ════════════════════════════════════════════════════════════════════
        ASSETS TAB — scoped from admin-assets.html. All selectors scoped under
@@ -186,11 +221,33 @@
 </head>
 <body>
   <div id="tools-shell">
-    <div id="tab-bar">
+    <div id="menu-bar">
+      <!-- ☰ tool switcher: opens a dropdown to switch between the three tools.
+           The createTabController lazy-init + pause/resume contract is unchanged;
+           this is purely the switcher UI. -->
+      <div class="menu" id="tools-menu">
+        <button class="menu-btn" id="tools-menu-btn" aria-haspopup="true" aria-expanded="false" title="Tools">☰</button>
+        <div class="menu-list" id="tools-menu-list" hidden>
+          <button class="menu-item" data-tab="assets">Assets</button>
+          <button class="menu-item" data-tab="lighting">Lighting</button>
+          <button class="menu-item" data-tab="editor">Mission Editor</button>
+        </div>
+      </div>
       <span class="brand">Caleb's Hollow Tools</span>
-      <button class="tab-btn active" data-tab="assets">Assets</button>
-      <button class="tab-btn" data-tab="lighting">Lighting</button>
-      <button class="tab-btn" data-tab="editor">Mission Editor</button>
+      <span class="active-tool-name" id="active-tool-name">Assets</span>
+
+      <!-- File menu: editor-only Load / Save. Hidden unless the Mission Editor
+           tool is active. Drives the editor's loadMissionFile / saveMission. -->
+      <div class="menu" id="file-menu" hidden>
+        <button class="menu-btn" id="file-menu-btn" aria-haspopup="true" aria-expanded="false">File</button>
+        <div class="menu-list" id="file-menu-list" hidden>
+          <button class="menu-item" id="file-load">Load…</button>
+          <button class="menu-item" id="file-save">Save / Download</button>
+        </div>
+      </div>
+      <input type="file" id="file-load-input" accept=".json,application/json" hidden />
+      <span class="file-status" id="file-status"></span>
+
       <a class="nav-back" href="/admin">← Back to admin</a>
     </div>
 
@@ -1040,14 +1097,23 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
       }
     }
 
+    const TAB_LABELS = { assets: 'Assets', lighting: 'Lighting', editor: 'Mission Editor' };
+
     function showPanel(id) {
       for (const tab of TABS) {
         const panel = document.getElementById(`${tab}-panel`);
         if (panel) panel.classList.toggle('active', tab === id);
       }
-      for (const btn of document.querySelectorAll('#tab-bar .tab-btn')) {
-        btn.classList.toggle('active', btn.dataset.tab === id);
+      // Reflect the active tool in the menu list + the bar label.
+      for (const item of document.querySelectorAll('#tools-menu-list .menu-item')) {
+        item.classList.toggle('active', item.dataset.tab === id);
       }
+      const label = document.getElementById('active-tool-name');
+      if (label) label.textContent = TAB_LABELS[id] ?? id;
+      // The File menu (Load / Save) is only meaningful for the Mission Editor.
+      const fileMenu = document.getElementById('file-menu');
+      if (fileMenu) fileMenu.hidden = (id !== 'editor');
+      closeMenus();
       // Pause every other tab's renderer; resume the active one.
       for (const tab of TABS) {
         if (tab === id) continue;
@@ -1071,9 +1137,62 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
       onActivate: showPanel,
     });
 
-    for (const btn of document.querySelectorAll('#tab-bar .tab-btn')) {
-      btn.addEventListener('click', () => controller.activate(btn.dataset.tab));
+    // ── Dropdown menu plumbing (☰ tools switcher + File) ────────────────────
+    const MENUS = ['tools', 'file'];
+    function setMenuOpen(name, open) {
+      const list = document.getElementById(`${name}-menu-list`);
+      const btn  = document.getElementById(`${name}-menu-btn`);
+      if (list) list.hidden = !open;
+      if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
     }
+    function closeMenus() { for (const m of MENUS) setMenuOpen(m, false); }
+    function toggleMenu(name) {
+      const list = document.getElementById(`${name}-menu-list`);
+      const willOpen = list ? list.hidden : false;
+      closeMenus();
+      if (willOpen) setMenuOpen(name, true);
+    }
+    document.getElementById('tools-menu-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation(); toggleMenu('tools');
+    });
+    document.getElementById('file-menu-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation(); toggleMenu('file');
+    });
+    // Click-away closes any open menu.
+    document.addEventListener('click', () => closeMenus());
+
+    // Tool switching: each menu item activates its tab (lazy-boot + pause/resume
+    // all flow through the unchanged controller).
+    for (const item of document.querySelectorAll('#tools-menu-list .menu-item')) {
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        controller.activate(item.dataset.tab);
+      });
+    }
+
+    // ── File menu → editor load / save (relocated from the side panel) ──────
+    const fileStatus = document.getElementById('file-status');
+    function setFileStatus(res) {
+      if (!fileStatus) return;
+      fileStatus.textContent = res?.message || '';
+      fileStatus.classList.toggle('err', !!res && res.ok === false);
+      fileStatus.classList.toggle('ok', !!res && res.ok === true);
+    }
+    const fileLoadInput = document.getElementById('file-load-input');
+    document.getElementById('file-load')?.addEventListener('click', (e) => {
+      e.stopPropagation(); closeMenus();
+      fileLoadInput?.click();
+    });
+    fileLoadInput?.addEventListener('change', async () => {
+      const file = fileLoadInput.files && fileLoadInput.files[0];
+      fileLoadInput.value = '';
+      if (!file || !handles.editor?.loadMissionFile) return;
+      setFileStatus(await handles.editor.loadMissionFile(file));
+    });
+    document.getElementById('file-save')?.addEventListener('click', (e) => {
+      e.stopPropagation(); closeMenus();
+      if (handles.editor?.saveMission) setFileStatus(handles.editor.saveMission());
+    });
 
     // Boot the default tab (Assets) — its scene comes up on load, the other two
     // stay dormant until their tab is first opened.
