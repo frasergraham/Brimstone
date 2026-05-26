@@ -100,20 +100,41 @@ function _buildHandmade(mapDef) {
 
 // ── Procedural + overlay ───────────────────────────────────────────────────────
 
+// Default bridge budget for handmade (`bridgeRivers:true`) regen. Generous
+// enough for a hand-authored map with several road nodes straddling a river,
+// but capped so a pathological MST can't pave the whole waterway.
+const HANDMADE_MAX_BRIDGES = 8;
+
 // Re-derive the ROAD layer from a road-node set, in place.
 //
 // Clears existing ROAD tiles (back to GRASS) and every tile's roadDirs, keeps
-// BRIDGE tiles untouched, then lays a fresh MST over the node list using the
-// same primitives + invocation style as the procedural generator
-// (blockRiver BFS + convertRiverToBridge:false / pre-placed-bridge semantics).
-// No new bridges are created, so bridges only ever sit over the river crossings
-// the base map already placed.
+// BRIDGE tiles untouched, then lays a fresh MST over the node list.
+//
+// Two river-crossing modes, selected by `opts.bridgeRivers`:
+//
+//   • bridgeRivers:true  (DEFAULT — handmade editor regen) — rivers do NOT
+//     block BFS; a RIVER tile the path crosses is converted to BRIDGE inline
+//     (up to `opts.maxBridges`), exactly like `buildRoadNetwork`. Handmade /
+//     editor maps have NO pre-placed bridges, so without this two road nodes on
+//     opposite banks could never connect — the MST edge had no legal crossing.
+//
+//   • bridgeRivers:false (procedural overlay regen) — the legacy
+//     generateMap-style behaviour: blockRiver BFS routes AROUND rivers and
+//     `convertRiverToBridge:false` creates no new bridges, so bridges only ever
+//     sit over the river crossings the generated base map already placed. The
+//     procedural overlay sits over such a base, so its output is unchanged.
+//
+// `bridgeRivers` DEFAULTS TO true so the mission editor's untouched
+// `regenerateHandmadeRoads` call bridges by default; the procedural overlay
+// path in `_buildProcedural` explicitly opts out (`bridgeRivers:false`).
 //
 // Exported so the mission editor can run the same regen on a handmade map and
 // snapshot the derived roadDirs back into the tile defs (see P5 "Regenerate
 // Roads then snapshot" — handmade roads have no load-time regen, so the editor
 // must persist them).
-export function rederiveRoads(tiles, nodeKeys, rand) {
+export function rederiveRoads(tiles, nodeKeys, rand, opts = {}) {
+  const { bridgeRivers = true, maxBridges = HANDMADE_MAX_BRIDGES } = opts;
+
   // Reset: ROAD → GRASS, clear all connectivity. Bridges stay as crossings.
   for (const t of tiles.values()) {
     if (pathOf(t) === PathType.ROAD) decomposeTileType(t, TileType.GRASS);
@@ -134,9 +155,17 @@ export function rederiveRoads(tiles, nodeKeys, rand) {
     if (isBridge(t)) roadTiles.add(hexKey(t.col, t.row));
   }
 
+  // bridgeRivers:true  → rivers are passable (blockRiver=false) and crossings
+  //                      become bridges (convertRiverToBridge=true, budgeted).
+  // bridgeRivers:false → legacy: route around rivers, place no new bridges.
+  let bridgesPlaced = 0;
   for (const { from, to } of buildMST(nodes)) {
-    const path = bfsPath(tiles, from.col, from.row, to.col, to.row, rand, roadTiles, true);
-    placeRoadPath(tiles, path, roadTiles, { convertRiverToBridge: false });
+    const path = bfsPath(tiles, from.col, from.row, to.col, to.row, rand, roadTiles, !bridgeRivers);
+    bridgesPlaced = placeRoadPath(tiles, path, roadTiles, {
+      convertRiverToBridge: bridgeRivers,
+      maxBridges,
+      bridgesPlaced,
+    });
   }
 }
 
@@ -166,8 +195,10 @@ function _buildProcedural(mapDef) {
     }
   }
 
-  // 3. Re-derive roads from the node set.
-  rederiveRoads(tiles, roadNodes, rng((mapDef.seed ?? 0) + 1));
+  // 3. Re-derive roads from the node set. The procedural base already has its
+  //    rivers + pre-placed bridges, so opt OUT of inline bridging
+  //    (bridgeRivers:false) to keep overlay road output byte-identical.
+  rederiveRoads(tiles, roadNodes, rng((mapDef.seed ?? 0) + 1), { bridgeRivers: false });
 
   // 4. Apply deltas.
   const hidden = overlay.hiddenSurvivors ?? {};
