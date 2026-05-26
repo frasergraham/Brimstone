@@ -3,6 +3,7 @@
 
 import prologue from './campaigns/prologue.js';
 import calebsHollowPrologue from './campaigns/calebs-hollow-prologue.js';
+import { registerMissionJSON } from './json-mission.js';
 
 /**
  * All available campaigns. Each entry is a campaign definition object with:
@@ -47,4 +48,23 @@ export const CAMPAIGNS = [
 /** Look up a campaign definition by ID. */
 export function getCampaignById(id) {
   return CAMPAIGNS.find(c => c.id === id) ?? null;
+}
+
+/**
+ * Load one or more parsed JSON missions into a registered campaign, resolving
+ * map/condition/conductor references at registration so each JSON mission is
+ * indistinguishable from a hand-written JS mission downstream. This is the
+ * registry-side bridge for the data-driven mission format (the migrated missions
+ * land here in P3). The parsed objects come from the browser via `fetch` or from
+ * node via `fs` — both already-parsed, so registration is synchronous.
+ *
+ * @param {string} campaignId — id of an existing campaign in CAMPAIGNS.
+ * @param {object|object[]} parsedMissions — one or more parsed mission JSON objects.
+ * @returns {object[]} the resolved runtime mission defs that were appended.
+ */
+export function registerJSONMissions(campaignId, parsedMissions) {
+  const campaignDef = getCampaignById(campaignId);
+  if (!campaignDef) throw new Error(`registerJSONMissions: unknown campaign "${campaignId}"`);
+  const list = Array.isArray(parsedMissions) ? parsedMissions : [parsedMissions];
+  return list.map((parsed) => registerMissionJSON(campaignDef, parsed));
 }
