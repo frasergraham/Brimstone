@@ -6,9 +6,9 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildMissionMap } from '../src/campaign/mission-map.js';
-import { TileType, BuildingType, ResourceType, legacyTileType } from '../src/tiles.js';
-import { hexKey } from '../src/hex.js';
+import { buildMissionMap, rederiveRoads } from '../src/campaign/mission-map.js';
+import { TileType, BuildingType, ResourceType, Tile, PathType, pathOf, legacyTileType, decomposeTileType } from '../src/tiles.js';
+import { hexKey, setMapDimensions } from '../src/hex.js';
 
 // ── Handmade ─────────────────────────────────────────────────────────────────
 
@@ -282,6 +282,89 @@ describe('buildMissionMap — procedural overlay', () => {
     assert.deepEqual(roadsOf(a), roadsOf(b));
   });
 });
+
+// ── rederiveRoads — river crossing (handmade vs procedural modes) ────────────
+// Handmade/editor regen (bridgeRivers:true, the DEFAULT) must route ACROSS a
+// river and create a BRIDGE at the crossing, since handmade maps have NO
+// pre-placed bridges. Procedural-overlay regen (bridgeRivers:false) keeps the
+// legacy generateMap behaviour: route around rivers, never invent a bridge.
+
+describe('rederiveRoads — river crossing', () => {
+  // A flat grass grid with a single vertical RIVER column splitting it in two.
+  // Two road nodes sit on opposite banks, so the only MST edge MUST cross.
+  function bankedGrid({ cols = 7, rows = 3, riverCol = 3 } = {}) {
+    setMapDimensions(cols, rows);
+    const tiles = new Map();
+    for (let row = 0; row < rows; row++) {
+      for (let col = 0; col < cols; col++) {
+        const t = new Tile(col, row, TileType.GRASS);
+        if (col === riverCol) decomposeTileType(t, TileType.RIVER);
+        tiles.set(hexKey(col, row), t);
+      }
+    }
+    return tiles;
+  }
+
+  const rand = () => 0.5; // deterministic neighbour ordering for BFS
+  const leftNode = '1,1';
+  const rightNode = '5,1';
+
+  test('handmade (bridgeRivers:true, default) bridges across the river and connects both banks', () => {
+    const tiles = bankedGrid();
+    rederiveRoads(tiles, [leftNode, rightNode], rand); // default bridgeRivers:true
+
+    // A BRIDGE was created, and it sits on the river column (col 3).
+    const bridges = [...tiles.values()].filter(t => legacyTileType(t) === TileType.BRIDGE);
+    assert.equal(bridges.length, 1, 'exactly one bridge over the single river column');
+    assert.equal(bridges[0].col, 3, 'bridge sits on the river line');
+    assert.equal(pathOf(bridges[0]), PathType.BRIDGE);
+
+    // The bridge links across the river: roadDirs reach a tile on each bank.
+    const bridge = bridges[0];
+    const dirCols = [...bridge.roadDirs].map(k => tiles.get(k)).map(t => t.col);
+    assert.ok(dirCols.some(c => c < 3), 'bridge connects to the left bank');
+    assert.ok(dirCols.some(c => c > 3), 'bridge connects to the right bank');
+
+    // Both authored nodes are road-connected (the path runs through them).
+    assert.ok(tiles.get(leftNode).roadDirs.size > 0, 'left node connected');
+    assert.ok(tiles.get(rightNode).roadDirs.size > 0, 'right node connected');
+
+    // The two nodes are mutually reachable via the roadDirs graph (crosses river).
+    assert.ok(roadConnected(tiles, leftNode, rightNode), 'nodes joined across the river');
+  });
+
+  test('procedural (bridgeRivers:false) does NOT cross the river — no new bridge created', () => {
+    const tiles = bankedGrid();
+    rederiveRoads(tiles, [leftNode, rightNode], rand, { bridgeRivers: false });
+
+    // Legacy behaviour: rivers block BFS, no river→bridge conversion. With a
+    // full-height river wall and no pre-placed bridge, no bridge can appear.
+    const bridges = [...tiles.values()].filter(t => legacyTileType(t) === TileType.BRIDGE);
+    assert.equal(bridges.length, 0, 'no bridge invented over the river');
+
+    // No road tile sits on the river column either (it routes around / fails).
+    const onRiver = [...tiles.values()].some(
+      t => t.col === 3 && pathOf(t) === PathType.ROAD,
+    );
+    assert.equal(onRiver, false, 'no road paved onto the river column');
+  });
+});
+
+// Flood the roadDirs graph from `start`; true if `goal` is reachable.
+function roadConnected(tiles, start, goal) {
+  const seen = new Set([start]);
+  const stack = [start];
+  while (stack.length) {
+    const k = stack.pop();
+    if (k === goal) return true;
+    const t = tiles.get(k);
+    if (!t) continue;
+    for (const nk of t.roadDirs) {
+      if (!seen.has(nk)) { seen.add(nk); stack.push(nk); }
+    }
+  }
+  return false;
+}
 
 describe('buildMissionMap — errors', () => {
   test('rejects missing mapDef', () => {
