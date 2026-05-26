@@ -225,6 +225,17 @@
     }
     #editor-panel .e-chip:hover { background: #2a241c; }
     #editor-panel .e-chip.active { background: #5a4a30; border-color: #c4a04a; color: #ffd680; }
+    /* Item 6: Power-Node cluster list (colour dot + editable name + hex count) */
+    #editor-panel .e-pn-row { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+    #editor-panel .e-pn-dot {
+      flex: 0 0 auto; width: 14px; height: 14px; border-radius: 50%;
+      border: 1px solid #0a0805; box-shadow: 0 0 0 1px rgba(255,255,255,0.15);
+    }
+    #editor-panel .e-pn-name {
+      flex: 1 1 auto; min-width: 0; padding: 4px 6px; background: #211c16; color: #d4cba0;
+      border: 1px solid #443a2a; font-family: inherit; font-size: 12px;
+    }
+    #editor-panel .e-pn-size { flex: 0 0 auto; color: #9a8c64; font-size: 11px; }
     /* Item 5: top-bar Undo / Redo */
     #menu-bar .tb-btn {
       padding: 7px 12px; background: #211c16; color: #d4cba0; border: 1px solid #443a2a;

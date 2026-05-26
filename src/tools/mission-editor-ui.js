@@ -36,7 +36,7 @@ import { Renderer3D } from '../renderer-3d.js';
 import { GameState } from '../game.js';
 import { buildMissionMap } from '../campaign/mission-map.js';
 import {
-  TileType, BuildingType, ResourceType, PathType,
+  TileType, BuildingType, ResourceType,
   TILE_COLOR, BUILDING_COLOR, BUILDING_ICON, hasBuilding, isBridge,
 } from '../tiles.js';
 import { hexKey } from '../hex.js';
@@ -49,6 +49,7 @@ import {
   addWave, removeWave, populateFromMission, CreationMode, MAP_EDGES,
   valuePanelKind, ToolValueKind, createLayerVisibility, showStructures,
   roadNodeMarkersVisible, stripTileOverlays, mapSizePreset,
+  overlayDarkenVisible, overlayEditedKeys, PATH_TOOL_OPTIONS,
 } from './mission-editor.js';
 import { MAP_SIZES } from '../map.js';
 import { createTabController } from './tab-controller.js';
@@ -102,8 +103,9 @@ const TOOL_PALETTE = [
   { id: EditorTool.ENEMY_UNIT,      icon: '🧟', label: 'Enemy Unit',      tip: 'Place / remove a pre-placed enemy unit on a tile' },
   { id: EditorTool.HERO_START,      icon: '🛡', label: 'Hero Start',      tip: 'Move the hero starting position to the clicked tile' },
   { id: EditorTool.WITCH_START,     icon: '🧙', label: 'Witch Start',     tip: 'Move the witch starting position to the clicked tile' },
-  { id: EditorTool.ROAD_NODE,       icon: '📍', label: 'Road Node',       tip: 'Toggle an extra road-network waypoint (then Regenerate Roads)' },
-  { id: EditorTool.POWER_NODE,      icon: '🔮', label: 'Power Node',      tip: 'Toggle a Power Node objective on the clicked tile' },
+  { id: EditorTool.ROAD_NODE,       icon: '📍', label: 'Road Node',       tip: 'Toggle a road-network waypoint — roads re-generate automatically' },
+  { id: EditorTool.POWER_NODE,      icon: '🔮', label: 'Power Node',      tip: 'Toggle a Power Node hex — contiguous hexes group into one node (max 5)' },
+  { id: EditorTool.DELETE,          icon: '🧹', label: 'Delete',          tip: 'Clear a tile back to blank base (terrain, structure, path, resource, survivor)' },
 ];
 
 // Short hints shown in the VALUE panel for the value-less tools.
@@ -111,8 +113,9 @@ const TOOL_HINTS = {
   [EditorTool.HIDDEN_SURVIVOR]: 'Click a tile to toggle a hidden survivor.',
   [EditorTool.HERO_START]: 'Click a tile to move the hero start.',
   [EditorTool.WITCH_START]: 'Click a tile to move the witch start.',
-  [EditorTool.ROAD_NODE]: 'Click tiles to toggle road-network waypoints, then Regenerate Roads.',
-  [EditorTool.POWER_NODE]: 'Click a tile to toggle a Power Node.',
+  [EditorTool.ROAD_NODE]: 'Click tiles to toggle road-network waypoints — roads regenerate automatically.',
+  [EditorTool.POWER_NODE]: 'Click tiles to toggle Power Node hexes. Contiguous hexes group into one node (max 5).',
+  [EditorTool.DELETE]: 'Click a tile to clear it back to blank base.',
 };
 
 // Build a live GameState the 2D Renderer can draw from the current model. The
@@ -203,12 +206,17 @@ export function initEditor(doc = document) {
     drawEditorOverlays();
   }
 
+  // Refreshes the Map-tab "Power Nodes" list after a node toggle / rename. The
+  // Map palette registers the real implementation; default is a no-op until then.
+  let refreshPowerNodes = () => {};
+
   function rerender() {
     // Cheap full rebuild — editor maps are small. Reassigning state keeps the
     // Renderer instance, so zoom/pan persist across edits.
     renderer.state = buildState(editor, layers);
     renderer.resize();
     draw();
+    refreshPowerNodes(); // node toggles change the cluster list
     notifyHistory();
   }
 
@@ -229,9 +237,44 @@ export function initEditor(doc = document) {
   // waypoints from the road-node set. Auto-shown while the Road Node tool is
   // active (so authoring is always visible), else gated on the Layers toggle.
   function drawEditorOverlays() {
-    if (!roadNodeMarkersVisible(layers, editor.activeTool)) return;
     const ctx = renderer.ctx;
     if (!ctx) return;
+    drawDarkenGeneratedOverlay(ctx);
+    drawRoadNodeMarkers(ctx);
+  }
+
+  // ── Darken auto-generated tiles (item 9) ───────────────────────────────────
+  // OVERLAY-mode only: dim every hex that came from the generated base (i.e. is
+  // NOT in the explicit overlay-edit set) so the author can see at a glance which
+  // hexes are their preserved edits vs the regenerable base. Drawn as a flat dark
+  // hex fill over each non-edited tile — renderer.js is untouched.
+  function drawDarkenGeneratedOverlay(ctx) {
+    const mapDef = editor.getMapDef();
+    if (!overlayDarkenVisible(layers, mapDef)) return;
+    const edited = overlayEditedKeys(mapDef);
+    let built;
+    try { built = buildMissionMap(mapDef); } catch { return; }
+    const r = renderer.hexSize * renderer.zoomLevel;
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    for (const t of built.tiles.values()) {
+      if (edited.has(hexKey(t.col, t.row))) continue; // a preserved edit — keep bright
+      const { x, y } = renderer.hexToCanvasPos(t.col, t.row);
+      ctx.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const a = Math.PI / 180 * (60 * i - 30);
+        const px = x + r * Math.cos(a);
+        const py = y + r * Math.sin(a);
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawRoadNodeMarkers(ctx) {
+    if (!roadNodeMarkersVisible(layers, editor.activeTool)) return;
     const mapDef = editor.getMapDef();
     const nodes = new Map(); // hexKey → { col, row, structural }
     // Structural nodes: rebuild a throwaway map so base-only filtering can't hide
@@ -266,7 +309,11 @@ export function initEditor(doc = document) {
 
   // ── Pan / zoom / paint (reuses the in-game Renderer transform) ────────────
   attachEditorCanvasControls(canvas, renderer, {
-    onPaint: (hex) => editor.applyAt(hex),
+    onPaint: (hex) => {
+      const res = editor.applyAt(hex);
+      // A blocked edit (e.g. the Power-Node 5-hex cap) surfaces its reason.
+      if (res && res.ok === false && res.warning) toast.show(res.warning, { type: 'err' });
+    },
     onRedraw: () => draw(),
   });
 
@@ -339,6 +386,9 @@ export function initEditor(doc = document) {
       setStatus: formStatus,
       // Tool change can flip the road-node-marker auto-show, so redraw overlays.
       onToolChange: () => draw(),
+      // The Map palette owns the Power-Node list; capture its refresh so a node
+      // toggle/rename (which goes through rerender) re-renders just that list.
+      registerPowerNodeRefresh: (fn) => { refreshPowerNodes = fn; },
     });
     mapArea?.refresh();
   }
@@ -351,7 +401,8 @@ export function initEditor(doc = document) {
   });
   // The Layers (visibility) pane toggles the editor-side display filters.
   function rebuildLayers() {
-    buildLayersPanel(doc, sidebar.panes.layers, layers, () => rerender());
+    buildLayersPanel(doc, sidebar.panes.layers, layers, () => rerender(),
+      editor.getMode() === 'procedural');
   }
   rebuildMapPalette();
   rebuildForms();
@@ -370,8 +421,10 @@ export function initEditor(doc = document) {
   function applyParsedMission(parsed) {
     loadMissionJSON(parsed); // VALIDATE before touching the model
     editor.applyMission(populateFromMission(parsed));
+    toast.dismissAll(); // clear any stale validation/resize toasts (carried nit)
     rebuildMapPalette(); // mode + dims may have changed
     rebuildForms();
+    rebuildLayers();     // the darken toggle is overlay-only — mode may have changed
     resetViewAndDraw();
     editor.markClean(); // a freshly-loaded mission starts clean
     notifyHistory();
@@ -433,8 +486,10 @@ export function initEditor(doc = document) {
     }
     openCreationDialog(doc, (opts) => {
       editor.createNew(opts);
+      toast.dismissAll(); // clear stale toasts when starting fresh (carried nit)
       rebuildMapPalette();
       rebuildForms();
+      rebuildLayers();    // the darken toggle is overlay-only — mode may have changed
       resetViewAndDraw();
       editor.markClean(); // a fresh mission starts clean
       notifyHistory();
@@ -785,6 +840,25 @@ function buildMapPalette(doc, root, editor, rerender, onPreview3D, hooks = {}) {
   }
   renderValuePanel();
 
+  // ── Power Nodes (item 6) — list each cluster with its colour, editable name,
+  // and hex count. Re-rendered on every node toggle/rename via the registered
+  // refresh hook so the list tracks contiguity grouping live. ──────────────────
+  const pnSection = section(doc, 'Power Nodes');
+  const pnHost = doc.createElement('div');
+  pnSection.append(pnHost);
+  root.append(pnSection);
+  function renderPowerNodes() {
+    pnHost.innerHTML = '';
+    const nodes = editor.getPowerNodes();
+    if (!nodes.length) {
+      pnHost.append(hint(doc, 'Use the Power Node tool to mark hexes. Contiguous hexes group into one node (max 5).'));
+      return;
+    }
+    nodes.forEach((n, i) => pnHost.append(powerNodeRow(doc, n, i, editor)));
+  }
+  renderPowerNodes();
+  (hooks.registerPowerNodeRefresh ?? (() => {}))(renderPowerNodes);
+
   // View / Reset moved to the in-map fit-map control (item 3). Undo / Redo live
   // on the top bar (item 5). Only the 3D preview action remains in the sidebar.
   if (onPreview3D) {
@@ -819,9 +893,11 @@ function buildValuePanel(doc, host, kind, editor, rerenderPanel) {
       break;
     }
     case ToolValueKind.PATH: {
+      // Bridge dropped (item 7): bridges are IMPLIED at road/river crossings,
+      // never hand-painted. PATH_TOOL_OPTIONS (model) is the canonical list.
       const items = [
         { key: null, label: 'None' },
-        ..._entries(PathType).map(e => ({ key: e.key, label: titleCase(e.key) })),
+        ...PATH_TOOL_OPTIONS.map(k => ({ key: k, label: titleCase(k) })),
       ];
       host.append(chipRow(doc, items, editor.getPaintValue('path'), (key) => {
         editor.setPaintValue('path', key); rerenderPanel();
@@ -867,7 +943,31 @@ function swatchGrid(doc, items, selected, onPick) {
   return grid;
 }
 
-// A row of text chips (None / Road / River / Bridge). Active = key === selected.
+// A single Power-Node cluster row: a colour swatch, an editable name field, and
+// the hex count. Renaming goes through editor.renamePowerNode (one undo step).
+function powerNodeRow(doc, node, idx, editor) {
+  const row = doc.createElement('div');
+  row.className = 'e-pn-row';
+  const dot = doc.createElement('span');
+  dot.className = 'e-pn-dot';
+  dot.style.background = node.color || '#8800cc';
+  dot.title = `Node colour ${node.color || ''}`;
+  const name = doc.createElement('input');
+  name.type = 'text';
+  name.className = 'e-pn-name';
+  name.value = node.label ?? `Power Node ${idx + 1}`;
+  name.title = 'Rename this Power Node';
+  name.addEventListener('change', () => editor.renamePowerNode(idx, name.value));
+  const size = doc.createElement('span');
+  size.className = 'e-pn-size';
+  const n = (node.hexes ?? []).length;
+  size.textContent = `×${n}`;
+  size.title = `${n} hex${n === 1 ? '' : 'es'} in this cluster`;
+  row.append(dot, name, size);
+  return row;
+}
+
+// A row of text chips (None / Road / River). Active = key === selected.
 function chipRow(doc, items, selected, onPick) {
   const row = doc.createElement('div');
   row.className = 'e-chips';
@@ -891,7 +991,7 @@ function titleCase(s) {
 // ── Layers (visibility) panel (item 6) ──────────────────────────────────────
 // Checkbox toggles over the editor-side display filters. Mutates the shared
 // `layers` object in place; `onChange` triggers a rerender (filter + overlay).
-function buildLayersPanel(doc, root, layers, onChange) {
+function buildLayersPanel(doc, root, layers, onChange, isOverlay = false) {
   root.innerHTML = '';
   const sec = section(doc, 'Visibility');
   // item 11 — each toggle carries a tooltip explaining exactly what it shows.
@@ -906,6 +1006,10 @@ function buildLayersPanel(doc, root, layers, onChange) {
       tip: 'Draw the hero + witch start markers' },
     { key: 'roadNodeMarkers', label: 'Road-network nodes',
       tip: 'Draw the road-graph node overlay (structural + authored waypoints)' },
+    // item 9 — overlay maps only: there's no generated base to darken on a
+    // handmade map, so this toggle is omitted there.
+    ...(isOverlay ? [{ key: 'darkenGenerated', label: 'Darken auto-generated',
+      tip: 'Dim hexes that came from the generated base, so your explicit edits stand out' }] : []),
   ];
   for (const t of toggles) {
     sec.append(layerToggleRow(doc, t.label, t.tip, layers[t.key],
