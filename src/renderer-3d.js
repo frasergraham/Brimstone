@@ -2377,7 +2377,11 @@ export class Renderer3D {
       }
       if (procIdx.length === 0) continue;
       const { x, z } = hexToWorld(tile.col, tile.row);
-      const trees = forestTreesForHex(tile.col, tile.row, this._season);
+      // Same building-slot reservation as the BUILD pass so the real-tree
+      // upgrade keeps cones off BUILDING_SLOT_INDEX on building-on-forest tiles.
+      const trees = forestTreesForHex(tile.col, tile.row, this._season, {
+        reserveBuildingSlot: hasBuilding(tile),
+      });
       const namePrefix = `forest_${tile.col}_${tile.row}`;
       const insts = this._buildRealForestTreesForHex(
         this._mapRoot, tile.col, tile.row, x, z, trees, namePrefix,
@@ -4758,7 +4762,11 @@ export class Renderer3D {
     // alongside the path/structure, instead of the forest vanishing the moment
     // a path was painted over it.
     if (baseOf(tile) === TileType.FOREST) {
-      const trees = forestTreesForHex(tile.col, tile.row, this._season);
+      // On a building-on-forest tile, reserve the building slot so the forest
+      // cones skip BUILDING_SLOT_INDEX (where the procedural box below sits).
+      const trees = forestTreesForHex(tile.col, tile.row, this._season, {
+        reserveBuildingSlot: hasBuilding(tile),
+      });
       // Prefer the real GLB-tree path when the tree-pack manifest has
       // resolved AND has a template for the current season. Falls back to
       // the procedural cone+sphere stack on any miss (empty group, missing
@@ -9960,8 +9968,17 @@ function _forestHash(col, row, salt) {
  *  tile-slot system (outer ring only — the centre is reserved for standees).
  *  Per-tree scale, species, and leaf-shade index are all hex-stable so the
  *  same forest hex always paints the same cluster across sessions. Pure:
- *  same (col, row) → same trees. */
-export function forestTreesForHex(col, row, season = null) {
+ *  same (col, row) → same trees.
+ *
+ *  `opts.reserveBuildingSlot` — set on a building-on-forest tile so the trees
+ *  SKIP BUILDING_SLOT_INDEX (the slot the procedural building box occupies).
+ *  Mirrors the additive staticOccupants the draw-time standee re-slot reserves
+ *  (see `_syncEntityStandees`): a building occupant is fed into the slot
+ *  assignment but excluded from the returned cluster — only trees are returned.
+ *  Without this, tree[0] would be baked at the building's slot and clip through
+ *  it. Plain (non-building) forest tiles leave it false and use the full ring. */
+export function forestTreesForHex(col, row, season = null, opts = {}) {
+  const reserveBuildingSlot = !!opts.reserveBuildingSlot;
   const span = FOREST_TREES_MAX - FOREST_TREES_MIN + 1;
   const n    = FOREST_TREES_MIN + Math.floor(_forestHash(col, row, 0) * span);
   // _forestHash returns < 1, so floor(<span) ∈ [0, span-1]; n ∈ [MIN, MAX].
@@ -9976,7 +9993,13 @@ export function forestTreesForHex(col, row, season = null) {
     const order = ((i + rotation) % 6).toString().padStart(2, '0');
     occupants.push({ id: `tree_${order}_${i}`, kind: 'tree', _idx: i });
   }
-  const { slotByOccupantId } = assignTileSlotIndices(occupants);
+  // On a building tile, hand a building occupant to the slot allocator so it
+  // claims BUILDING_SLOT_INDEX and trees fall into the remaining outer slots.
+  // It is NOT pushed onto `occupants`, so the returned cluster is trees only.
+  const slotInput = reserveBuildingSlot
+    ? [{ id: 'building', kind: 'building' }, ...occupants]
+    : occupants;
+  const { slotByOccupantId } = assignTileSlotIndices(slotInput);
   const trees = [];
   for (const occ of occupants) {
     const slotIdx = slotByOccupantId.get(occ.id) ?? CENTRE_SLOT_INDEX;

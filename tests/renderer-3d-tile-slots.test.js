@@ -14,6 +14,7 @@ import {
   assignTileSlotIndices,
   tileSlotWorldPositions,
   hexToWorld,
+  forestTreesForHex,
 } from '../src/renderer-3d.js';
 
 describe('TILE_SLOTS layout', () => {
@@ -189,5 +190,58 @@ describe('tileSlotWorldPositions', () => {
     const occ = ['a','b','c','d','e','f','g','h'].map(id => ({ id, kind: 'standee' }));
     const { overflow } = tileSlotWorldPositions(0, 0, occ);
     assert.equal(overflow, 1);
+  });
+});
+
+describe('forestTreesForHex — building-slot reservation (building-on-forest clip fix)', () => {
+  // Scan a grid of hexes so the assertions cover the full range of per-hex
+  // tree counts and slot rotations, not just one layout.
+  const HEXES = [];
+  for (let col = 0; col < 12; col++) {
+    for (let row = 0; row < 12; row++) HEXES.push([col, row]);
+  }
+
+  test('on a building tile, NO tree takes BUILDING_SLOT_INDEX', () => {
+    for (const [col, row] of HEXES) {
+      const trees = forestTreesForHex(col, row, null, { reserveBuildingSlot: true });
+      for (const t of trees) {
+        assert.notEqual(t.slotIdx, BUILDING_SLOT_INDEX,
+          `tree ${t.id} on building tile (${col},${row}) clips the building slot`);
+        assert.notEqual(t.slotIdx, CENTRE_SLOT_INDEX,
+          `tree ${t.id} on (${col},${row}) took the centre slot`);
+      }
+    }
+  });
+
+  test('on a plain forest tile, trees DO use the full outer ring (incl. slot 1)', () => {
+    // Without reservation the building slot is just another outer slot, so at
+    // least one tree somewhere must land on BUILDING_SLOT_INDEX — proving the
+    // fix is gated on the building flag and plain forests are unchanged.
+    let sawBuildingSlot = false;
+    for (const [col, row] of HEXES) {
+      const trees = forestTreesForHex(col, row, null);
+      for (const t of trees) {
+        if (t.slotIdx === BUILDING_SLOT_INDEX) sawBuildingSlot = true;
+        assert.notEqual(t.slotIdx, CENTRE_SLOT_INDEX,
+          `tree ${t.id} on (${col},${row}) took the centre slot`);
+      }
+    }
+    assert.ok(sawBuildingSlot,
+      'no plain-forest tree ever used slot 1 — reservation may be leaking');
+  });
+
+  test('reservation re-slots the SAME cluster — same tree ids and count', () => {
+    // The building flag must only move trees off slot 1, never change which
+    // trees exist (count, ids, scale, species are all hex-stable).
+    for (const [col, row] of HEXES) {
+      const plain    = forestTreesForHex(col, row, null);
+      const reserved = forestTreesForHex(col, row, null, { reserveBuildingSlot: true });
+      assert.equal(reserved.length, plain.length,
+        `tree count changed on (${col},${row})`);
+      assert.deepEqual(
+        reserved.map(t => t.id).sort(),
+        plain.map(t => t.id).sort(),
+        `tree id set changed on (${col},${row})`);
+    }
   });
 });
