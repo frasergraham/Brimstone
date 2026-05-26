@@ -9,8 +9,7 @@ import { SAVE_VERSION } from '../src/version.js';
 import {
   Tile, TileType, PathType, StructureType, BuildingType,
   baseOf, pathOf, structureOf, isRiver, isBridge, hasBuilding,
-  isPathRoadLike, isForestCover,
-} from '../src/tiles.js';
+  isPathRoadLike, isForestCover, legacyTileType } from '../src/tiles.js';
 
 function freshState() { return new GameState(true, true); }
 
@@ -197,7 +196,7 @@ describe('state-sync — layered tile model round-trip (P1)', () => {
     assert.equal(hasBuilding(get(0, 2)),   true);
     assert.equal(structureOf(get(0, 2)),   StructureType.BUILDING);
     assert.equal(get(0, 2).building,       BuildingType.INN);
-    assert.equal(get(0, 2).type,           TileType.BUILDING);
+    assert.equal(legacyTileType(get(0, 2)),           TileType.BUILDING);
     assert.equal(isPathRoadLike(get(0, 2)), true);
 
     // road-over-forest: BOTH the road path AND the forest base must survive.
@@ -205,7 +204,7 @@ describe('state-sync — layered tile model round-trip (P1)', () => {
     assert.equal(baseOf(rf),       TileType.FOREST, 'forest base must survive under a road');
     assert.equal(pathOf(rf),       PathType.ROAD);
     assert.equal(isForestCover(rf), true, 'road over forest still grants cover (P0 semantics)');
-    assert.equal(rf.type,          TileType.ROAD, 'derived type prefers path over base');
+    assert.equal(legacyTileType(rf),          TileType.ROAD, 'derived type prefers path over base');
     assert.deepEqual([...rf.roadDirs].sort(), ['1,1', '1,3']);
   });
 
@@ -268,7 +267,7 @@ describe('state-sync — layered tile model round-trip (P1)', () => {
     for (const [key, orig] of state.tiles) {
       const rt = restored.tiles.get(key);
       assert.ok(rt, `tile ${key} restored`);
-      assert.equal(rt.type, orig.type, `tile ${key} derived type must round-trip`);
+      assert.equal(legacyTileType(rt), legacyTileType(orig), `tile ${key} derived type must round-trip`);
     }
   });
 });

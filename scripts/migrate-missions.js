@@ -36,7 +36,7 @@ import path from 'node:path';
 import calebsHollowPrologue from '../src/campaign/campaigns/calebs-hollow-prologue.js';
 import tutorialCampaign from '../src/campaign/campaigns/prologue.js';
 import { TUTORIAL_WAVES } from '../src/tutorial/tutorial-config.js';
-import { TileType, BuildingType, ResourceType } from '../src/tiles.js';
+import { TileType, BuildingType, ResourceType, legacyTileType, hasBuilding, isBridge } from '../src/tiles.js';
 import { hexKey } from '../src/hex.js';
 import { buildMissionMap } from '../src/campaign/mission-map.js';
 import { resolveCondition, CONDITIONS } from '../src/campaign/condition-registry.js';
@@ -61,7 +61,7 @@ const RES_KEY = invert(ResourceType);
 // We emit only non-default tiles — the handmade builder fills a grass grid
 // first, so this is lossless while keeping the JSON lean.
 function isDefaultTile(t) {
-  return t.type === TileType.GRASS
+  return legacyTileType(t) === TileType.GRASS
     && !t.building
     && (t.fortifyLevel ?? 0) === 0
     && !t.resource
@@ -73,7 +73,7 @@ function snapshotTile(t) {
   return {
     col: t.col,
     row: t.row,
-    type: TILE_KEY[t.type] ?? t.type,
+    type: TILE_KEY[legacyTileType(t)] ?? legacyTileType(t),
     building: t.building ? (BLDG_KEY[t.building] ?? t.building) : null,
     fortifyLevel: t.fortifyLevel ?? 0,
     resource: t.resource ? (RES_KEY[t.resource] ?? t.resource) : null,
@@ -102,7 +102,7 @@ function snapshotMap(built) {
   // bridges) for editor friendliness.
   const roadNodes = [];
   for (const t of tiles.values()) {
-    if (t.type === TileType.BUILDING || t.type === TileType.BRIDGE) {
+    if (hasBuilding(t) || isBridge(t)) {
       roadNodes.push(hexKey(t.col, t.row));
     }
   }
@@ -200,7 +200,7 @@ function assertMapsEquivalent(id, jsMap, jsonMap) {
   for (const [k, a] of jsMap.tiles) {
     const b = jsonMap.tiles.get(k);
     if (!b) fail(`missing tile ${k}`);
-    if (a.type !== b.type) fail(`tile ${k} type ${a.type} != ${b.type}`);
+    if (legacyTileType(a) !== legacyTileType(b)) fail(`tile ${k} type ${legacyTileType(a)} != ${legacyTileType(b)}`);
     if ((a.building ?? null) !== (b.building ?? null)) fail(`tile ${k} building mismatch`);
     if ((a.resource ?? null) !== (b.resource ?? null)) fail(`tile ${k} resource mismatch`);
     if ((a.fortifyLevel ?? 0) !== (b.fortifyLevel ?? 0)) fail(`tile ${k} fortifyLevel mismatch`);

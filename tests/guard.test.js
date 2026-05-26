@@ -14,7 +14,7 @@ import {
   Entity, EntityType, createMinion, createZombie, createSurvivor,
   createHero, createWitch, resetRoster,
 } from '../src/entities.js';
-import { ResourceType, TileType } from '../src/tiles.js';
+import { ResourceType, TileType, legacyTileType } from '../src/tiles.js';
 import { hexKey, getNeighbors } from '../src/hex.js';
 import { getReachableHexes } from '../src/actions.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
@@ -26,7 +26,7 @@ function freshState() {
 function emptyPassableNeighbor(state, entity) {
   return getNeighbors(entity.col, entity.row).find(n => {
     const t = state.tiles.get(hexKey(n.col, n.row));
-    if (!t || t.type === TileType.RIVER) return false;
+    if (!t || legacyTileType(t) === TileType.RIVER) return false;
     return !state.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
   }) ?? null;
 }
@@ -261,7 +261,7 @@ describe('Guard strikes in resolver', () => {
     const heroNeighbors = getNeighbors(hero.col, hero.row);
     const adjHex = heroNeighbors.find(n => {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      return t && t.type !== TileType.RIVER &&
+      return t && legacyTileType(t) !== TileType.RIVER &&
         !state.entities.some(e => e.alive && e.id !== witch.id && e.col === n.col && e.row === n.row);
     });
     if (!adjHex) return;
@@ -269,7 +269,7 @@ describe('Guard strikes in resolver', () => {
     // Find a hex 2 away from hero that passes through adjHex
     const farHexes = getNeighbors(adjHex.col, adjHex.row).filter(n => {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      return t && t.type !== TileType.RIVER &&
+      return t && legacyTileType(t) !== TileType.RIVER &&
         n.col !== hero.col && n.row !== hero.row &&
         !state.entities.some(e => e.alive && e.id !== witch.id && e.col === n.col && e.row === n.row);
     });
@@ -353,7 +353,7 @@ describe('Guard strikes in resolver', () => {
     // Put witch 2 hexes away
     const farHexes = getNeighbors(adj.col, adj.row).filter(n => {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      return t && t.type !== TileType.RIVER &&
+      return t && legacyTileType(t) !== TileType.RIVER &&
         n.col !== hero.col && n.row !== hero.row &&
         !state.entities.some(e => e.alive && e.id !== state.witch.id && e.col === n.col && e.row === n.row);
     });

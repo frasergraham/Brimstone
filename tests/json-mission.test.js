@@ -19,7 +19,7 @@ import {
   CONDUCTOR_SCRIPTS, resolveConductorScript,
 } from '../src/campaign/conductor-scripts.js';
 import { CONDITIONS } from '../src/campaign/condition-registry.js';
-import { TileType, BuildingType } from '../src/tiles.js';
+import { TileType, BuildingType, legacyTileType } from '../src/tiles.js';
 import { hexKey } from '../src/hex.js';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -141,7 +141,7 @@ describe('loadMissionJSON — resolution', () => {
     assert.deepEqual(map.heroStart, { col: 1, row: 3 });
     assert.deepEqual(map.witchStart, { col: 3, row: 1 });
     const inn = map.tiles.get(hexKey(1, 3));
-    assert.equal(inn.type, TileType.BUILDING);
+    assert.equal(legacyTileType(inn), TileType.BUILDING);
     assert.equal(inn.building, BuildingType.INN);
     assert.equal(inn.fortifyLevel, 1);
     assert.ok(inn.roadDirs instanceof Set);
@@ -159,7 +159,7 @@ describe('loadMissionJSON — resolution', () => {
     const def = loadMissionJSON(parsed);
     const map = def.mapBuilderFn();
     const inn = map.tiles.get(hexKey(1, 3));
-    assert.equal(inn.type, TileType.BUILDING);
+    assert.equal(legacyTileType(inn), TileType.BUILDING);
     assert.equal(inn.base, TileType.DIRT);
     assert.equal(inn.building, BuildingType.INN);
     assert.equal(inn.fortifyLevel, 1);
@@ -199,7 +199,7 @@ describe('loadMissionJSON — resolution', () => {
     const map = def.mapBuilderFn();
     assert.ok(map.tiles.size > 0);
     const church = map.tiles.get(hexKey(4, 5));
-    assert.equal(church.type, TileType.BUILDING);
+    assert.equal(legacyTileType(church), TileType.BUILDING);
     assert.equal(church.building, BuildingType.CHURCH);
   });
 });

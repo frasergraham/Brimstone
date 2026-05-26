@@ -10,7 +10,7 @@ import {
   setMapDimensions, hexToPixel, hexKey, getNeighbors, SQRT3,
 } from '../src/hex.js';
 import {
-  TileType, TILE_COLOR, BUILDING_COLOR, BUILDING_LABEL,
+  TileType, TILE_COLOR, BUILDING_COLOR, BUILDING_LABEL, legacyTileType,
 } from '../src/tiles.js';
 import { EntityType, ENTITY_COLOR } from '../src/entities.js';
 import { nodeController, Phase } from '../src/game.js';
@@ -163,16 +163,16 @@ export function renderGameState(state, opts = {}) {
       const corners  = hexCorners(x, y, hs - 1);
 
       let color;
-      if (tile.type === TileType.BUILDING) {
+      if (legacyTileType(tile) === TileType.BUILDING) {
         color = BUILDING_COLOR[tile.building] ?? '#8a7a5a';
       } else if (
-        tile.type === TileType.ROAD ||
-        tile.type === TileType.RIVER ||
-        tile.type === TileType.BRIDGE
+        legacyTileType(tile) === TileType.ROAD ||
+        legacyTileType(tile) === TileType.RIVER ||
+        legacyTileType(tile) === TileType.BRIDGE
       ) {
         color = TILE_COLOR[TileType.GRASS];
       } else {
-        color = TILE_COLOR[tile.type] ?? TILE_COLOR[TileType.GRASS];
+        color = TILE_COLOR[legacyTileType(tile)] ?? TILE_COLOR[TileType.GRASS];
       }
 
       ctx.beginPath();
@@ -183,9 +183,9 @@ export function renderGameState(state, opts = {}) {
       ctx.fill();
 
       if (_tilemapImg && _spriteRects) {
-        const baseType = tile.type === TileType.BUILDING ? TileType.DIRT
-          : (tile.type === TileType.ROAD || tile.type === TileType.RIVER || tile.type === TileType.BRIDGE) ? TileType.GRASS
-          : tile.type;
+        const baseType = legacyTileType(tile) === TileType.BUILDING ? TileType.DIRT
+          : (legacyTileType(tile) === TileType.ROAD || legacyTileType(tile) === TileType.RIVER || legacyTileType(tile) === TileType.BRIDGE) ? TileType.GRASS
+          : legacyTileType(tile);
         const spriteId = _pickVariant(baseType, c, r);
         const rect = _spriteRects.get(spriteId);
         if (rect) {
@@ -208,7 +208,7 @@ export function renderGameState(state, opts = {}) {
   }
 
   // ── River layer ─────────────────────────────────────────────────────────────
-  const isWater = t => t && (t.type === TileType.RIVER || t.type === TileType.BRIDGE);
+  const isWater = t => t && (legacyTileType(t) === TileType.RIVER || legacyTileType(t) === TileType.BRIDGE);
 
   ctx.strokeStyle = TILE_COLOR[TileType.RIVER];
   ctx.lineWidth   = hs * 0.52;
@@ -218,7 +218,7 @@ export function renderGameState(state, opts = {}) {
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const tile = state.tiles.get(hexKey(c, r));
-      if (!tile || tile.type !== TileType.RIVER) continue;
+      if (!tile || legacyTileType(tile) !== TileType.RIVER) continue;
 
       const { x, y } = toCanvas(c, r);
       const riverNbrs = getNeighbors(c, r).filter(n => isWater(state.tiles.get(hexKey(n.col, n.row))));
@@ -250,7 +250,7 @@ export function renderGameState(state, opts = {}) {
 
   // ── Road layer ──────────────────────────────────────────────────────────────
   const isRoadLike = t => t && (
-    t.type === TileType.ROAD || t.type === TileType.BRIDGE || t.type === TileType.BUILDING
+    legacyTileType(t) === TileType.ROAD || legacyTileType(t) === TileType.BRIDGE || legacyTileType(t) === TileType.BUILDING
   );
 
   ctx.lineCap = 'round';
@@ -258,7 +258,7 @@ export function renderGameState(state, opts = {}) {
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const tile = state.tiles.get(hexKey(c, r));
-      if (!tile || (tile.type !== TileType.ROAD && tile.type !== TileType.BRIDGE)) continue;
+      if (!tile || (legacyTileType(tile) !== TileType.ROAD && legacyTileType(tile) !== TileType.BRIDGE)) continue;
 
       const { x, y } = toCanvas(c, r);
       const roadNbrs = [...tile.roadDirs].map(k => state.tiles.get(k)).filter(t => isRoadLike(t));
@@ -271,7 +271,7 @@ export function renderGameState(state, opts = {}) {
       });
 
       // Bridge: draw river ribbon beneath
-      if (tile.type === TileType.BRIDGE) {
+      if (legacyTileType(tile) === TileType.BRIDGE) {
         const waterNbrs = getNeighbors(c, r).filter(n => isWater(state.tiles.get(hexKey(n.col, n.row))));
         if (waterNbrs.length >= 1) {
           const wEdge = waterNbrs.map(n => {
@@ -335,7 +335,7 @@ export function renderGameState(state, opts = {}) {
       }
 
       // Bridge railings
-      if (tile.type === TileType.BRIDGE && roadNbrs.length >= 2) {
+      if (legacyTileType(tile) === TileType.BRIDGE && roadNbrs.length >= 2) {
         const em0 = edgeMids[0], em1 = edgeMids[1];
         const dx = em1.x - em0.x, dy = em1.y - em0.y;
         const len = Math.sqrt(dx * dx + dy * dy);
@@ -362,7 +362,7 @@ export function renderGameState(state, opts = {}) {
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const tile = state.tiles.get(hexKey(c, r));
-      if (!tile || tile.type !== TileType.BUILDING || !tile.building) continue;
+      if (!tile || legacyTileType(tile) !== TileType.BUILDING || !tile.building) continue;
 
       const { x, y } = toCanvas(c, r);
 

@@ -22,7 +22,7 @@
 // docs/design/campaign-mission-editor.md → "map sub-schema".
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { Tile, TileType, BuildingType, ResourceType, PathType, StructureType } from '../tiles.js';
+import { Tile, TileType, BuildingType, ResourceType, PathType, StructureType, decomposeTileType, hasBuilding, isBridge, pathOf } from '../tiles.js';
 import { hexKey, setMapDimensions } from '../hex.js';
 import { generateMap, rng, bfsPath } from '../map.js';
 import { buildMST, placeRoadPath } from '../road-network.js';
@@ -53,7 +53,7 @@ function _applyTileDef(tile, def) {
     tile.structure = 'structure' in def ? _resolveEnum(StructureType, def.structure) : null;
     tile.path = 'path' in def ? _resolveEnum(PathType, def.path) : null;
   } else if (def.type != null) {
-    tile.type = _resolveEnum(TileType, def.type);
+    decomposeTileType(tile, _resolveEnum(TileType, def.type));
   }
   if ('building' in def) tile.building = _resolveEnum(BuildingType, def.building);
   if ('resource' in def) tile.resource = _resolveEnum(ResourceType, def.resource);
@@ -116,7 +116,7 @@ function _buildHandmade(mapDef) {
 export function rederiveRoads(tiles, nodeKeys, rand) {
   // Reset: ROAD → GRASS, clear all connectivity. Bridges stay as crossings.
   for (const t of tiles.values()) {
-    if (t.type === TileType.ROAD) t.type = TileType.GRASS;
+    if (pathOf(t) === PathType.ROAD) decomposeTileType(t, TileType.GRASS);
     t.roadDirs = new Set();
   }
 
@@ -131,7 +131,7 @@ export function rederiveRoads(tiles, nodeKeys, rand) {
   // road grid (matching generateMap's bridge handling).
   const roadTiles = new Set();
   for (const t of tiles.values()) {
-    if (t.type === TileType.BRIDGE) roadTiles.add(hexKey(t.col, t.row));
+    if (isBridge(t)) roadTiles.add(hexKey(t.col, t.row));
   }
 
   for (const { from, to } of buildMST(nodes)) {
@@ -161,7 +161,7 @@ function _buildProcedural(mapDef) {
   for (const k of rn.add ?? []) roadNodes.add(k);
   for (const k of rn.remove ?? []) roadNodes.delete(k);
   for (const t of tiles.values()) {
-    if (t.type === TileType.BUILDING || t.type === TileType.BRIDGE) {
+    if (hasBuilding(t) || isBridge(t)) {
       roadNodes.add(hexKey(t.col, t.row));
     }
   }

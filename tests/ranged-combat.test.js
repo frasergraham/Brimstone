@@ -20,7 +20,7 @@ import {
   Entity, EntityType,
   createHero, createWitch, createMinion,
 } from '../src/entities.js';
-import { TileType, PathType, StructureType } from '../src/tiles.js';
+import { TileType, PathType, StructureType, legacyTileType, decomposeTileType } from '../src/tiles.js';
 import { hexKey, hexDistance } from '../src/hex.js';
 import { PlanActionType, snapEntity } from '../src/planner.js';
 import { resolvePlans } from '../server/resolver.js';
@@ -141,7 +141,7 @@ describe('ranged attack — forest cover', () => {
 
     // Paint the hero's hex as forest.
     const t = state.tiles.get(hexKey(hero.col, hero.row));
-    t.type = TileType.FOREST;
+    decomposeTileType(t, TileType.FOREST);
 
     state.setForcedDice(3, 3);
     const r = executeBattle(state, witch, hero);
@@ -169,7 +169,7 @@ describe('ranged attack — forest cover', () => {
     const t = state.tiles.get(hexKey(hero.col, hero.row));
     t.base = TileType.FOREST;
     t.path = PathType.ROAD;
-    assert.equal(t.type, TileType.ROAD, 'derived type is road (path wins)');
+    assert.equal(legacyTileType(t), TileType.ROAD, 'derived type is road (path wins)');
 
     state.setForcedDice(3, 3);
     const r = executeBattle(state, witch, hero);
@@ -189,7 +189,7 @@ describe('ranged attack — forest cover', () => {
     t.base = TileType.FOREST;
     t.path = null;
     t.structure = StructureType.BUILDING;
-    assert.equal(t.type, TileType.BUILDING, 'derived type is building');
+    assert.equal(legacyTileType(t), TileType.BUILDING, 'derived type is building');
 
     state.setForcedDice(3, 3);
     const r = executeBattle(state, witch, hero);
@@ -222,7 +222,7 @@ describe('ranged attack — forest cover', () => {
     const minion = createMinion(hero.col + 1, hero.row);
     state.entities.push(minion);
     const t = state.tiles.get(hexKey(hero.col, hero.row));
-    t.type = TileType.FOREST;
+    decomposeTileType(t, TileType.FOREST);
 
     state.setForcedDice(3, 3);
     const r = executeBattle(state, minion, hero);

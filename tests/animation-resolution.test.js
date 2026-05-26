@@ -7,7 +7,7 @@ import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { GameState } from '../src/game.js';
 import { PlanActionType } from '../src/planner.js';
 import { EntityType, createMinion } from '../src/entities.js';
-import { ResourceType } from '../src/tiles.js';
+import { ResourceType, legacyTileType } from '../src/tiles.js';
 import { hexKey, getNeighbors } from '../src/hex.js';
 import { getReachableHexes } from '../src/actions.js';
 
@@ -18,7 +18,7 @@ function freshState() {
 function emptyPassableNeighbor(state, entity) {
   return getNeighbors(entity.col, entity.row).find(n => {
     const t = state.tiles.get(hexKey(n.col, n.row));
-    if (!t || t.type === 'river') return false;
+    if (!t || legacyTileType(t) === 'river') return false;
     return !state.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
   }) ?? null;
 }
@@ -48,7 +48,7 @@ describe('food floater position — acting entity lookup', () => {
       const nb = getNeighbors(cur.col, cur.row).find(n => {
         if (visited.has(hexKey(n.col, n.row))) return false;
         const t = state.tiles.get(hexKey(n.col, n.row));
-        if (!t || t.type === 'river') return false;
+        if (!t || legacyTileType(t) === 'river') return false;
         return !state.entities.some(e => e.alive && e.id !== hero.id && e.col === n.col && e.row === n.row);
       });
       if (!nb) break;

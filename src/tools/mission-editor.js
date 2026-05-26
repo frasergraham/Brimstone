@@ -26,7 +26,7 @@
 
 import {
   TileType, BuildingType, ResourceType, PathType, StructureType,
-  baseOf, pathOf, structureOf,
+  baseOf, pathOf, structureOf, hasBuilding, isBridge,
 } from '../tiles.js';
 import { hexKey } from '../hex.js';
 import { rng } from '../map.js';
@@ -315,7 +315,7 @@ export function regenerateHandmadeRoads(mapDef) {
 
   const nodeKeys = new Set(mapDef.roadNodes ?? []);
   for (const t of built.tiles.values()) {
-    if (t.type === TileType.BUILDING || t.type === TileType.BRIDGE) {
+    if (hasBuilding(t) || isBridge(t)) {
       nodeKeys.add(hexKey(t.col, t.row));
     }
   }

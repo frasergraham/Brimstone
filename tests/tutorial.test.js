@@ -7,7 +7,7 @@ import { GameState } from '../src/game.js';
 import { MissionConductor } from '../src/mission-conductor.js';
 import { EntityType, setForcedDice, Entity } from '../src/entities.js';
 import { hexKey, MAP_COLS, MAP_ROWS } from '../src/hex.js';
-import { TileType, BuildingType } from '../src/tiles.js';
+import { TileType, BuildingType, legacyTileType } from '../src/tiles.js';
 import { PlanActionType } from '../src/planner.js';
 
 // ── buildTutorialMap ─────────────────────────────────────────────────────────
@@ -30,7 +30,7 @@ describe('buildTutorialMap', () => {
     const { tiles } = buildTutorialMap();
     const t = tiles.get(hexKey(2, 7));
     assert.ok(t, 'tile exists at (2,7)');
-    assert.equal(t.type, TileType.BUILDING);
+    assert.equal(legacyTileType(t), TileType.BUILDING);
     assert.equal(t.building, BuildingType.INN);
   });
 
@@ -38,7 +38,7 @@ describe('buildTutorialMap', () => {
     const { tiles } = buildTutorialMap();
     const t = tiles.get(hexKey(2, 5));
     assert.ok(t, 'tile exists at (2,5)');
-    assert.equal(t.type, TileType.BUILDING);
+    assert.equal(legacyTileType(t), TileType.BUILDING);
     assert.equal(t.building, BuildingType.CHURCH);
   });
 
@@ -46,7 +46,7 @@ describe('buildTutorialMap', () => {
     const { tiles } = buildTutorialMap();
     const t = tiles.get(hexKey(2, 3));
     assert.ok(t, 'tile exists at (2,3)');
-    assert.equal(t.type, TileType.BUILDING);
+    assert.equal(legacyTileType(t), TileType.BUILDING);
     assert.equal(t.building, BuildingType.HOUSE);
   });
 
@@ -54,7 +54,7 @@ describe('buildTutorialMap', () => {
     const { tiles } = buildTutorialMap();
     const t = tiles.get(hexKey(5, 5));
     assert.ok(t, 'tile exists at (5,5)');
-    assert.equal(t.type, TileType.BUILDING);
+    assert.equal(legacyTileType(t), TileType.BUILDING);
     assert.equal(t.building, BuildingType.BLACKSMITH);
   });
 
@@ -62,7 +62,7 @@ describe('buildTutorialMap', () => {
     const { tiles } = buildTutorialMap();
     const t = tiles.get(hexKey(6, 3));
     assert.ok(t, 'tile exists at (6,3)');
-    assert.equal(t.type, TileType.BUILDING);
+    assert.equal(legacyTileType(t), TileType.BUILDING);
     assert.equal(t.building, BuildingType.BARN);
   });
 
@@ -70,7 +70,7 @@ describe('buildTutorialMap', () => {
     const { tiles } = buildTutorialMap();
     const t = tiles.get(hexKey(7, 2));
     assert.ok(t, 'tile exists at (7,2)');
-    assert.equal(t.type, TileType.BUILDING);
+    assert.equal(legacyTileType(t), TileType.BUILDING);
     assert.equal(t.building, BuildingType.GRAVEYARD);
   });
 

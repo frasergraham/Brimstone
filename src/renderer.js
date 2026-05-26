@@ -410,9 +410,9 @@ export class Renderer {
     if (!this._portraitCache) return null;
     const fortKey = tile.fortifyLevel || 0;
     const bldg = tile.building || '';
-    // base is part of the key now that road/river/building render on the real
-    // base material (two same-`type` tiles can differ by base material).
-    const cacheKey = `tile_${tile.type}_${baseOf(tile)}_${bldg}_${fortKey}@${size}`;
+    // base + path together identify the visual: road/river/building render on
+    // the real base material (two tiles can share a base but differ by path).
+    const cacheKey = `tile_${pathOf(tile) ?? ''}_${baseOf(tile)}_${bldg}_${fortKey}@${size}`;
     if (this._portraitCache.has(cacheKey)) return this._portraitCache.get(cacheKey);
 
     const c = document.createElement('canvas');

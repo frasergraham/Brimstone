@@ -1,6 +1,6 @@
 // Procedural map generator for the Caleb's Hollow hex map
 import { MAP_COLS, MAP_ROWS, setMapDimensions, getNeighbors, hexKey, hexDistance } from './hex.js';
-import { Tile, TileType, BuildingType, PathType, StructureType } from './tiles.js';
+import { Tile, TileType, BuildingType, PathType, StructureType, legacyTileType, isRiver, isBridge, hasBuilding, pathOf } from './tiles.js';
 import { buildMST, placeRoadPath } from './road-network.js';
 
 // Flavor labels for the witch power nodes (extra labels for larger maps)
@@ -204,7 +204,7 @@ export function bfsPath(tiles, startCol, startRow, endCol, endRow, rand, roadTil
       const nk = key(n.col, n.row);
       const nTile = tiles.get(nk);
       if (!nTile) continue;
-      if (blockRiver && nTile.type === TileType.RIVER) continue;
+      if (blockRiver && isRiver(nTile)) continue;
       const deg = roadDeg(n.col, n.row);
       const step = 1 + Math.max(0, deg - (MAX_ROAD_DEG - 1)) * ROAD_DEG_PENALTY;
       const nc = cost + step;
@@ -233,7 +233,7 @@ export function bfsPath(tiles, startCol, startRow, endCol, endRow, rand, roadTil
 function _pickSpread(rand, tiles, count, minDist, forbiddenKeys = new Set()) {
   const candidates = [];
   for (const [k, t] of tiles) {
-    if (t.type !== TileType.GRASS) continue;
+    if (legacyTileType(t) !== TileType.GRASS) continue;
     if (forbiddenKeys.has(k)) continue;
     if (t.col < 1 || t.col > MAP_COLS - 2 || t.row < 1 || t.row > MAP_ROWS - 2) continue;
     candidates.push({ col: t.col, row: t.row });
@@ -264,12 +264,12 @@ function _pickCornerBuildings(rand, tiles) {
   const gravZone  = innZone === zA ? zB : zA;
 
   const hasRiverNeighbor = (col, row) =>
-    getNeighbors(col, row).some(n => tiles.get(hexKey(n.col, n.row))?.type === TileType.RIVER);
+    getNeighbors(col, row).some(n => isRiver(tiles.get(hexKey(n.col, n.row))));
 
   const pickFrom = zone => {
     const cs = [];
     for (const [, t] of tiles) {
-      if (t.type !== TileType.GRASS) continue;
+      if (legacyTileType(t) !== TileType.GRASS) continue;
       if (t.col < zone.minCol || t.col > zone.maxCol) continue;
       if (t.row < zone.minRow || t.row > zone.maxRow) continue;
       if (hasRiverNeighbor(t.col, t.row)) continue;
@@ -295,13 +295,13 @@ function _placeBattleSpawnBuildings(rand, tiles, riverMap, riverEW) {
 
   const EDGE_MARGIN = 3;
   const hasRiverNeighbor = (col, row) =>
-    getNeighbors(col, row).some(n => tiles.get(hexKey(n.col, n.row))?.type === TileType.RIVER);
+    getNeighbors(col, row).some(n => isRiver(tiles.get(hexKey(n.col, n.row))));
 
   // Collect candidates on each side — exclude edges and center third of map
   const collectCandidates = (side) => {
     const cands = [];
     for (const [, t] of tiles) {
-      if (t.type !== TileType.GRASS) continue;
+      if (legacyTileType(t) !== TileType.GRASS) continue;
       if (t.col < EDGE_MARGIN || t.col > MAP_COLS - 1 - EDGE_MARGIN) continue;
       if (t.row < EDGE_MARGIN || t.row > MAP_ROWS - 1 - EDGE_MARGIN) continue;
       if (hasRiverNeighbor(t.col, t.row)) continue;
@@ -388,7 +388,7 @@ function _pickNodesAcrossRiver(rand, tiles, count, minDist, forbiddenKeys, river
   const colMax = nodeColRange?.max ?? (MAP_COLS - 2);
   const left = [], right = [];
   for (const [k, t] of tiles) {
-    if (t.type === TileType.RIVER || t.type === TileType.BRIDGE || t.type === TileType.BUILDING) continue;
+    if (isRiver(t) || isBridge(t) || hasBuilding(t)) continue;
     if (forbiddenKeys.has(k)) continue;
     if (t.col < colMin || t.col > colMax || t.row < 1 || t.row > MAP_ROWS - 2) continue;
     if (startPositions.some(sp => hexDistance(sp.col, sp.row, t.col, t.row) <= 3)) continue;
@@ -421,7 +421,7 @@ function _pickNodeCluster(rand, tiles, center, forbiddenKeys, startPositions = [
   const neighbors = shuffle(
     getNeighbors(center.col, center.row).filter(n => {
       const t = tiles.get(hexKey(n.col, n.row));
-      if (!t || t.type === TileType.RIVER) return false;
+      if (!t || isRiver(t)) return false;
       if (forbiddenKeys.has(hexKey(n.col, n.row))) return false;
       if (startPositions.some(sp => hexDistance(sp.col, sp.row, n.col, n.row) <= 3)) return false;
       return true;
@@ -444,7 +444,7 @@ function _pickNodeCluster(rand, tiles, center, forbiddenKeys, startPositions = [
     const ring2 = getNeighbors(n0.col, n0.row).filter(n2 => {
       if (n2.col === center.col && n2.row === center.row) return false;
       const t = tiles.get(hexKey(n2.col, n2.row));
-      if (!t || t.type === TileType.RIVER) return false;
+      if (!t || isRiver(t)) return false;
       if (forbiddenKeys.has(hexKey(n2.col, n2.row))) return false;
       return hexDistance(center.col, center.row, n2.col, n2.row) === 1;
     });
@@ -468,7 +468,7 @@ function _pickRiverCrossings(rand, tiles, riverPath, riverMap, riverEW, keyPoint
     const t = tiles.get(hexKey(n.col, n.row));
     if (!t) return 999;
     let typeRank;
-    switch (t.type) {
+    switch (legacyTileType(t)) {
       case TileType.ROAD:
       case TileType.BRIDGE:
       case TileType.BUILDING: typeRank = 0; break;
@@ -489,11 +489,11 @@ function _pickRiverCrossings(rand, tiles, riverPath, riverMap, riverEW, keyPoint
     const neighbors = getNeighbors(col, row);
     const leftNbrs = neighbors.filter(n => {
       const t = tiles.get(hexKey(n.col, n.row));
-      return t && t.type !== TileType.RIVER && riverSide(n.col, n.row, riverMap, riverEW) === 'left';
+      return t && !isRiver(t) && riverSide(n.col, n.row, riverMap, riverEW) === 'left';
     });
     const rightNbrs = neighbors.filter(n => {
       const t = tiles.get(hexKey(n.col, n.row));
-      return t && t.type !== TileType.RIVER && riverSide(n.col, n.row, riverMap, riverEW) === 'right';
+      return t && !isRiver(t) && riverSide(n.col, n.row, riverMap, riverEW) === 'right';
     });
     if (leftNbrs.length === 0 || rightNbrs.length === 0) continue;
 
@@ -557,11 +557,11 @@ function _placeVillageBuildings(rand, tiles, centerCol, centerRow, buildings, us
   const MIN_SEP = 3; // min separation between any two buildings in this village
 
   const hasRiverNeighbor = (col, row) =>
-    getNeighbors(col, row).some(n => tiles.get(hexKey(n.col, n.row))?.type === TileType.RIVER);
+    getNeighbors(col, row).some(n => isRiver(tiles.get(hexKey(n.col, n.row))));
 
   const candidates = [];
   for (const [, t] of tiles) {
-    if (t.type !== TileType.GRASS) continue;
+    if (legacyTileType(t) !== TileType.GRASS) continue;
     const k = hexKey(t.col, t.row);
     if (usedKeys.has(k)) continue;
     if (hasRiverNeighbor(t.col, t.row)) continue;
@@ -601,7 +601,7 @@ function _generateVillages(rand, tiles, villageNames, minVillageDist, reservedKe
   // Collect eligible center candidates away from map edges
   const centerCandidates = [];
   for (const [, t] of tiles) {
-    if (t.type !== TileType.GRASS) continue;
+    if (legacyTileType(t) !== TileType.GRASS) continue;
     if (t.col < 2 || t.col > MAP_COLS - 3 || t.row < 2 || t.row > MAP_ROWS - 3) continue;
     centerCandidates.push({ col: t.col, row: t.row });
   }
@@ -894,7 +894,7 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
   const isAdjacentToBuilding = (col, row) => {
     for (const n of getNeighbors(col, row)) {
       const nt = tiles.get(hexKey(n.col, n.row));
-      if (nt && nt.type === TileType.BUILDING) return true;
+      if (nt && hasBuilding(nt)) return true;
     }
     return false;
   };
@@ -906,7 +906,7 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
 
     // Prune stub roads (degree ≤ 1, not next to a building).
     for (const t of tiles.values()) {
-      if (t.type !== TileType.ROAD) continue;
+      if (pathOf(t) !== PathType.ROAD) continue;
       if (t.roadDirs.size > 1) continue;
       if (isAdjacentToBuilding(t.col, t.row)) continue;
       const nextKey = [...t.roadDirs][0];
@@ -923,7 +923,7 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
     // Revert one-sided or unreached bridges back to river.
     for (const c of crossings) {
       const t = tiles.get(hexKey(c.col, c.row));
-      if (!t || t.type !== TileType.BRIDGE) continue;
+      if (!t || !isBridge(t)) continue;
       let leftSide = false, rightSide = false;
       for (const nk of t.roadDirs) {
         const [nc, nr] = nk.split(',').map(Number);
@@ -947,12 +947,12 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
     const candidates = [seed, ...neighbors];
     for (const { col, row } of candidates) {
       const t = tiles.get(hexKey(col, row));
-      if (t && t.type === TileType.GRASS && rand() < 0.70) {
+      if (t && legacyTileType(t) === TileType.GRASS && rand() < 0.70) {
         // Forest is a BASE material change (no path/structure on these grass tiles).
         t.base = TileType.FOREST;
         for (const n of getNeighbors(col, row)) {
           const t2 = tiles.get(hexKey(n.col, n.row));
-          if (t2 && t2.type === TileType.GRASS && rand() < 0.40) {
+          if (t2 && legacyTileType(t2) === TileType.GRASS && rand() < 0.40) {
             t2.base = TileType.FOREST;
           }
         }
@@ -964,7 +964,7 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
   for (let i = 0; i < 10; i++) {
     const grassTiles = [];
     for (const [, t] of tiles) {
-      if (t.type === TileType.GRASS && t.col >= 1 && t.col <= MAP_COLS - 2) grassTiles.push(t);
+      if (legacyTileType(t) === TileType.GRASS && t.col >= 1 && t.col <= MAP_COLS - 2) grassTiles.push(t);
     }
     shuffle(grassTiles, rand);
     if (grassTiles.length === 0) break;
@@ -974,7 +974,7 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
     const spreadNeighbors = shuffle(
       getNeighbors(seedTile.col, seedTile.row)
         .map(n => tiles.get(hexKey(n.col, n.row)))
-        .filter(t => t && t.type === TileType.GRASS),
+        .filter(t => t && legacyTileType(t) === TileType.GRASS),
       rand
     );
     for (const n of spreadNeighbors.slice(0, Math.floor(rand() * 3))) {
@@ -1039,7 +1039,7 @@ export function generateMultipleStarts(tiles, primaryStart, count, minSep = 2, s
       if (visited.has(k)) continue;
       visited.add(k);
       const t = tiles.get(k);
-      if (!t || t.type === TileType.RIVER) continue;
+      if (!t || isRiver(t)) continue;
       candidates.push({ col: n.col, row: n.row });
       queue.push({ col: n.col, row: n.row, dist: cur.dist + 1 });
     }
@@ -1075,7 +1075,7 @@ export function generateBattleStarts(tiles, faction, count, minSep = 2) {
   // Find all faction buildings on the map
   const buildings = [];
   for (const [, t] of tiles) {
-    if (t.type === TileType.BUILDING && t.building === targetBuilding) {
+    if (hasBuilding(t) && t.building === targetBuilding) {
       buildings.push({ col: t.col, row: t.row });
     }
   }
@@ -1086,7 +1086,7 @@ export function generateBattleStarts(tiles, faction, count, minSep = 2) {
     const candidates = [];
     for (const [, t] of tiles) {
       if (!cols.includes(t.col)) continue;
-      if (t.type === TileType.RIVER) continue;
+      if (isRiver(t)) continue;
       candidates.push({ col: t.col, row: t.row });
     }
     for (let i = candidates.length - 1; i > 0; i--) {
@@ -1120,7 +1120,7 @@ export function generateBattleStarts(tiles, faction, count, minSep = 2) {
         const k = hexKey(n.col, n.row);
         if (usedKeys.has(k)) continue;
         const t = tiles.get(k);
-        if (!t || t.type === TileType.RIVER) continue;
+        if (!t || isRiver(t)) continue;
         placed.push({ col: n.col, row: n.row });
         usedKeys.add(k);
         found = true;

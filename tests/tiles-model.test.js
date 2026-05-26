@@ -1,7 +1,8 @@
-// P0 of the tile-model refactor — the layered (base/structure/path) model on
-// the Tile class plus the derived legacy `type` get/set shim and predicates.
-// The whole point of P0 is transparency: the shim must round-trip every legacy
-// TileType losslessly so the rest of the codebase keeps working unchanged.
+// The layered (base/structure/path) model on the Tile class plus the explicit
+// decomposeTileType()/legacyTileType() helpers (which replaced the old derived
+// `type` get/set shim in P7) and the predicates. The helpers must round-trip
+// every legacy TileType losslessly so legacy data and display call sites keep
+// working unchanged.
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -20,21 +21,23 @@ import {
   hasBuilding,
   isPathRoadLike,
   isForestCover,
+  legacyTileType,
+  decomposeTileType,
 } from '../src/tiles.js';
 
-describe('Tile layered model — get/set type shim', () => {
+describe('Tile layered model — decompose/derive helpers', () => {
   test('round-trips every legacy TileType value losslessly', () => {
     for (const v of Object.values(TileType)) {
       const t = new Tile(0, 0);
-      t.type = v;
-      assert.equal(t.type, v, `round-trip failed for ${v}`);
+      decomposeTileType(t, v);
+      assert.equal(legacyTileType(t), v, `round-trip failed for ${v}`);
     }
   });
 
   test('decomposes base materials into (base, none, none)', () => {
     for (const v of [TileType.GRASS, TileType.FOREST, TileType.DIRT]) {
       const t = new Tile(0, 0);
-      t.type = v;
+      decomposeTileType(t, v);
       assert.equal(t.base, v);
       assert.equal(t.structure, null);
       assert.equal(t.path, null);
@@ -43,38 +46,38 @@ describe('Tile layered model — get/set type shim', () => {
 
   test('decomposes road onto the path layer, base unchanged', () => {
     const t = new Tile(0, 0); // default base grass
-    t.type = TileType.ROAD;
+    decomposeTileType(t, TileType.ROAD);
     assert.equal(t.path, PathType.ROAD);
     assert.equal(t.base, TileType.GRASS);
     assert.equal(t.structure, null);
-    assert.equal(t.type, TileType.ROAD);
+    assert.equal(legacyTileType(t), TileType.ROAD);
   });
 
   test('decomposes river and bridge onto the path layer', () => {
     const r = new Tile(0, 0);
-    r.type = TileType.RIVER;
+    decomposeTileType(r, TileType.RIVER);
     assert.equal(r.path, PathType.RIVER);
-    assert.equal(r.type, TileType.RIVER);
+    assert.equal(legacyTileType(r), TileType.RIVER);
 
     const b = new Tile(0, 0);
-    b.type = TileType.BRIDGE;
+    decomposeTileType(b, TileType.BRIDGE);
     assert.equal(b.path, PathType.BRIDGE);
-    assert.equal(b.type, TileType.BRIDGE);
+    assert.equal(legacyTileType(b), TileType.BRIDGE);
   });
 
   test('decomposes building onto the structure layer (base → dirt)', () => {
     const t = new Tile(0, 0);
-    t.type = TileType.BUILDING;
+    decomposeTileType(t, TileType.BUILDING);
     assert.equal(t.structure, StructureType.BUILDING);
     assert.equal(t.base, TileType.DIRT);
-    assert.equal(t.type, TileType.BUILDING);
+    assert.equal(legacyTileType(t), TileType.BUILDING);
   });
 
   test('road over forest: base forest preserved, type reports road', () => {
     const t = new Tile(0, 0);
     t.base = TileType.FOREST;
     t.path = PathType.ROAD;
-    assert.equal(t.type, TileType.ROAD);
+    assert.equal(legacyTileType(t), TileType.ROAD);
     assert.equal(baseOf(t), TileType.FOREST);
   });
 
@@ -83,34 +86,34 @@ describe('Tile layered model — get/set type shim', () => {
     t.base = TileType.FOREST;
     t.structure = StructureType.BUILDING;
     t.path = PathType.RIVER;
-    assert.equal(t.type, TileType.RIVER);
+    assert.equal(legacyTileType(t), TileType.RIVER);
     t.path = PathType.BRIDGE;
-    assert.equal(t.type, TileType.BRIDGE);
+    assert.equal(legacyTileType(t), TileType.BRIDGE);
     t.path = PathType.ROAD;
-    assert.equal(t.type, TileType.ROAD);
+    assert.equal(legacyTileType(t), TileType.ROAD);
     t.path = null;
-    assert.equal(t.type, TileType.BUILDING);
+    assert.equal(legacyTileType(t), TileType.BUILDING);
     t.structure = null;
-    assert.equal(t.type, TileType.FOREST);
+    assert.equal(legacyTileType(t), TileType.FOREST);
   });
 });
 
 describe('Tile legacy direct-field writes still work', () => {
   test('setting tile.building (legacy) ⇒ type === building', () => {
     const t = new Tile(0, 0); // grass, no structure marker
-    assert.equal(t.type, TileType.GRASS);
+    assert.equal(legacyTileType(t), TileType.GRASS);
     t.building = BuildingType.INN;
-    assert.equal(t.type, TileType.BUILDING);
+    assert.equal(legacyTileType(t), TileType.BUILDING);
     assert.equal(hasBuilding(t), true);
     assert.equal(structureOf(t), StructureType.BUILDING);
   });
 
   test('a building tile with roadDirs ⇒ type still building & road-like', () => {
     const t = new Tile(0, 0);
-    t.type = TileType.BUILDING;
+    decomposeTileType(t, TileType.BUILDING);
     t.building = BuildingType.MILL;
     t.roadDirs.add('1,0');
-    assert.equal(t.type, TileType.BUILDING); // road-through-building preserved
+    assert.equal(legacyTileType(t), TileType.BUILDING); // road-through-building preserved
     assert.equal(isPathRoadLike(t), true);
   });
 
@@ -119,12 +122,12 @@ describe('Tile legacy direct-field writes still work', () => {
     // building. Legacy `type` is single-valued, so it must report building — the
     // road layer must not shadow it via the getter precedence.
     const t = new Tile(0, 0);
-    t.type = TileType.ROAD;
-    assert.equal(t.type, TileType.ROAD);
+    decomposeTileType(t, TileType.ROAD);
+    assert.equal(legacyTileType(t), TileType.ROAD);
     t.roadDirs.add('1,0'); // connectivity carried separately
-    t.type = TileType.BUILDING;
+    decomposeTileType(t, TileType.BUILDING);
     t.building = BuildingType.CHURCH;
-    assert.equal(t.type, TileType.BUILDING);
+    assert.equal(legacyTileType(t), TileType.BUILDING);
     assert.equal(t.path, null);             // path cleared
     assert.equal(t.roadDirs.has('1,0'), true); // roadDirs preserved (road-through)
     assert.equal(isPathRoadLike(t), true);
@@ -132,16 +135,16 @@ describe('Tile legacy direct-field writes still work', () => {
 
   test('constructor with building type, building assigned after', () => {
     const t = new Tile(2, 3, TileType.BUILDING);
-    assert.equal(t.type, TileType.BUILDING); // structure marker set by ctor
+    assert.equal(legacyTileType(t), TileType.BUILDING); // structure marker set by ctor
     t.building = BuildingType.CHURCH;
-    assert.equal(t.type, TileType.BUILDING);
+    assert.equal(legacyTileType(t), TileType.BUILDING);
   });
 });
 
 describe('Tile predicate helpers', () => {
   function tileOfType(v) {
     const t = new Tile(0, 0);
-    t.type = v;
+    decomposeTileType(t, v);
     return t;
   }
 
@@ -179,7 +182,7 @@ describe('Tile predicate helpers', () => {
     roadOnForest.base = TileType.FOREST;
     roadOnForest.path = PathType.ROAD;
     assert.equal(isForestCover(roadOnForest), true);
-    assert.equal(roadOnForest.type, TileType.ROAD); // type reports road, cover still forest
+    assert.equal(legacyTileType(roadOnForest), TileType.ROAD); // type reports road, cover still forest
 
     const buildingOnForest = new Tile(0, 0);
     buildingOnForest.base = TileType.FOREST;

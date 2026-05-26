@@ -3630,7 +3630,7 @@ export class Renderer3D {
   getTileDataURL(tile, col, row, size = 28) {
     if (!tile || typeof document === 'undefined') return null;
     if (!this._tileDataURLCache) this._tileDataURLCache = new Map();
-    const cacheKey = `${tile.type}_${tile.building || ''}_${tile.fortifyLevel || 0}@${size}`;
+    const cacheKey = `${baseOf(tile)}_${pathOf(tile) ?? ''}_${tile.building || ''}_${tile.fortifyLevel || 0}@${size}`;
     if (this._tileDataURLCache.has(cacheKey)) {
       return this._tileDataURLCache.get(cacheKey);
     }

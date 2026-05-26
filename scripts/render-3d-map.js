@@ -49,7 +49,7 @@ import { fileURLToPath } from 'url';
 
 import { generateMap, MAP_SIZES } from '../src/map.js';
 import { setMapDimensions, hexKey, hexToPixel, SQRT3 } from '../src/hex.js';
-import { TileType, TILE_COLOR, BUILDING_COLOR, BUILDING_LABEL } from '../src/tiles.js';
+import { TileType, TILE_COLOR, BUILDING_COLOR, BUILDING_LABEL, legacyTileType, hasBuilding, isRiver, isBridge, pathOf } from '../src/tiles.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -151,7 +151,7 @@ function darken(hex, factor) {
 // medium-height; water sits below grass; everything else is grass level.
 function tileHeight(tile) {
   if (!tile) return 0;
-  switch (tile.type) {
+  switch (legacyTileType(tile)) {
     case TileType.BUILDING: return 0.95;
     case TileType.FOREST:   return 0.55;
     case TileType.HILL:     return 0.65;
@@ -166,10 +166,10 @@ function tileHeight(tile) {
 
 function tileFillColor(tile) {
   if (!tile) return TILE_COLOR[TileType.GRASS];
-  if (tile.type === TileType.BUILDING) return BUILDING_COLOR[tile.building] ?? '#8a7a5a';
-  if (tile.type === TileType.ROAD || tile.type === TileType.BRIDGE) return '#6b5a3a';
-  if (tile.type === TileType.RIVER) return TILE_COLOR[TileType.RIVER];
-  return TILE_COLOR[tile.type] ?? TILE_COLOR[TileType.GRASS];
+  if (hasBuilding(tile)) return BUILDING_COLOR[tile.building] ?? '#8a7a5a';
+  if (pathOf(tile) === TileType.ROAD || isBridge(tile)) return '#6b5a3a';
+  if (isRiver(tile)) return TILE_COLOR[TileType.RIVER];
+  return TILE_COLOR[legacyTileType(tile)] ?? TILE_COLOR[TileType.GRASS];
 }
 
 // ── Main render ──────────────────────────────────────────────────────────────
@@ -302,7 +302,7 @@ export function render3DMapToBuffer({ seed, size = 'standard', width = DEFAULT_W
       ctx.stroke();
 
       // Building label
-      if (tile.type === TileType.BUILDING && tile.building) {
+      if (hasBuilding(tile) && tile.building) {
         const label = BUILDING_LABEL[tile.building] ?? tile.building;
         const centre = toCanvas(wx, wy, tz);
         ctx.fillStyle    = 'rgba(255,248,230,0.92)';

@@ -6,7 +6,7 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { buildMST, placeRoadPath, buildRoadNetwork } from '../src/road-network.js';
-import { TileType, Tile, PathType, StructureType, baseOf, pathOf, hasBuilding } from '../src/tiles.js';
+import { TileType, Tile, PathType, StructureType, baseOf, pathOf, hasBuilding, legacyTileType, decomposeTileType } from '../src/tiles.js';
 import { hexKey, setMapDimensions } from '../src/hex.js';
 
 // Build a flat all-grass grid of the given size.
@@ -23,7 +23,7 @@ function gridTiles(cols, rows) {
 
 function tilesOfType(tiles, type) {
   const out = [];
-  for (const t of tiles.values()) if (t.type === type) out.push(t);
+  for (const t of tiles.values()) if (legacyTileType(t) === type) out.push(t);
   return out;
 }
 
@@ -71,15 +71,15 @@ describe('buildMST', () => {
 describe('placeRoadPath', () => {
   test('converts grass/dirt/forest tiles to ROAD and records them', () => {
     const tiles = gridTiles(5, 1);
-    tiles.get(hexKey(1, 0)).type = TileType.DIRT;
-    tiles.get(hexKey(2, 0)).type = TileType.FOREST;
+    decomposeTileType(tiles.get(hexKey(1, 0)), TileType.DIRT);
+    decomposeTileType(tiles.get(hexKey(2, 0)), TileType.FOREST);
     const path = [
       { col: 0, row: 0 }, { col: 1, row: 0 }, { col: 2, row: 0 }, { col: 3, row: 0 },
     ];
     const roadTiles = new Set();
     placeRoadPath(tiles, path, roadTiles);
     for (const p of path) {
-      assert.equal(tiles.get(hexKey(p.col, p.row)).type, TileType.ROAD);
+      assert.equal(legacyTileType(tiles.get(hexKey(p.col, p.row))), TileType.ROAD);
       assert.ok(roadTiles.has(hexKey(p.col, p.row)));
     }
   });
@@ -98,7 +98,7 @@ describe('placeRoadPath', () => {
 
   test('bridges are only placed over RIVER tiles, never plain terrain', () => {
     const tiles = gridTiles(5, 1);
-    tiles.get(hexKey(2, 0)).type = TileType.RIVER;
+    decomposeTileType(tiles.get(hexKey(2, 0)), TileType.RIVER);
     const path = [
       { col: 0, row: 0 }, { col: 1, row: 0 }, { col: 2, row: 0 }, { col: 3, row: 0 },
     ];
@@ -109,14 +109,14 @@ describe('placeRoadPath', () => {
     assert.equal(bridges[0].col, 2);
     // Every bridge sits on a former river tile — no land tile became a bridge.
     for (const b of bridges) {
-      assert.notEqual(b.type, TileType.ROAD);
+      assert.notEqual(legacyTileType(b), TileType.ROAD);
     }
   });
 
   test('maxBridges cap stops further river-to-bridge conversion', () => {
     const tiles = gridTiles(6, 1);
-    tiles.get(hexKey(2, 0)).type = TileType.RIVER;
-    tiles.get(hexKey(4, 0)).type = TileType.RIVER;
+    decomposeTileType(tiles.get(hexKey(2, 0)), TileType.RIVER);
+    decomposeTileType(tiles.get(hexKey(4, 0)), TileType.RIVER);
     const path = [
       { col: 0, row: 0 }, { col: 1, row: 0 }, { col: 2, row: 0 },
       { col: 3, row: 0 }, { col: 4, row: 0 }, { col: 5, row: 0 },
@@ -125,19 +125,19 @@ describe('placeRoadPath', () => {
     assert.equal(placed, 1);
     assert.equal(tilesOfType(tiles, TileType.BRIDGE).length, 1);
     // The second river crossing stays a RIVER (budget exhausted).
-    assert.equal(tiles.get(hexKey(4, 0)).type, TileType.RIVER);
+    assert.equal(legacyTileType(tiles.get(hexKey(4, 0))), TileType.RIVER);
   });
 
   test('pre-placed BRIDGE mode records the bridge without converting rivers', () => {
     const tiles = gridTiles(5, 1);
-    tiles.get(hexKey(2, 0)).type = TileType.BRIDGE;
+    decomposeTileType(tiles.get(hexKey(2, 0)), TileType.BRIDGE);
     const path = [
       { col: 0, row: 0 }, { col: 1, row: 0 }, { col: 2, row: 0 }, { col: 3, row: 0 },
     ];
     const roadTiles = new Set();
     const placed = placeRoadPath(tiles, path, roadTiles, { convertRiverToBridge: false });
     assert.equal(placed, 0);
-    assert.equal(tiles.get(hexKey(2, 0)).type, TileType.BRIDGE);
+    assert.equal(legacyTileType(tiles.get(hexKey(2, 0))), TileType.BRIDGE);
     assert.ok(roadTiles.has(hexKey(2, 0)), 'pre-placed bridge should join the road grid');
   });
 });
@@ -155,7 +155,7 @@ describe('placeRoadPath — layer preservation', () => {
     const path = [{ col: 0, row: 0 }, { col: 1, row: 0 }, { col: 2, row: 0 }];
     placeRoadPath(tiles, path, new Set());
     // Derived legacy type still reports ROAD (back-compat) …
-    assert.equal(forest.type, TileType.ROAD);
+    assert.equal(legacyTileType(forest), TileType.ROAD);
     // … but the explicit layers preserve the forest base under the road.
     assert.equal(baseOf(forest), TileType.FOREST);
     assert.equal(pathOf(forest), PathType.ROAD);
@@ -166,7 +166,7 @@ describe('placeRoadPath — layer preservation', () => {
     const dirt = tiles.get(hexKey(1, 0));
     dirt.base = TileType.DIRT;
     placeRoadPath(tiles, [{ col: 0, row: 0 }, { col: 1, row: 0 }], new Set());
-    assert.equal(dirt.type, TileType.ROAD);
+    assert.equal(legacyTileType(dirt), TileType.ROAD);
     assert.equal(baseOf(dirt), TileType.DIRT);
     assert.equal(pathOf(dirt), PathType.ROAD);
   });
@@ -178,7 +178,7 @@ describe('placeRoadPath — layer preservation', () => {
     const placed = placeRoadPath(tiles, [{ col: 0, row: 0 }, { col: 1, row: 0 }, { col: 2, row: 0 }],
       new Set(), { convertRiverToBridge: true, maxBridges: 1 });
     assert.equal(placed, 1);
-    assert.equal(river.type, TileType.BRIDGE);
+    assert.equal(legacyTileType(river), TileType.BRIDGE);
     assert.equal(pathOf(river), PathType.BRIDGE);
     assert.equal(baseOf(river), TileType.GRASS); // base under the water intact
   });
@@ -190,7 +190,7 @@ describe('placeRoadPath — layer preservation', () => {
     const path = [{ col: 0, row: 0 }, { col: 1, row: 0 }, { col: 2, row: 0 }];
     placeRoadPath(tiles, path, new Set());
     // The building still reports BUILDING (path never set on it) …
-    assert.equal(bldg.type, TileType.BUILDING);
+    assert.equal(legacyTileType(bldg), TileType.BUILDING);
     assert.equal(pathOf(bldg), null, 'building must not gain a path layer');
     assert.ok(hasBuilding(bldg));
     // … but road-through is recorded via symmetric roadDirs to both neighbours.
@@ -216,7 +216,7 @@ describe('buildRoadNetwork', () => {
     // Mark the node tiles as buildings (as the real maps do).
     for (const n of nodes) {
       const t = tiles.get(hexKey(n.col, n.row));
-      t.type = TileType.BUILDING;
+      decomposeTileType(t, TileType.BUILDING);
     }
     const rand = () => 0.5;
     buildRoadNetwork(tiles, nodes, rand, 2);
@@ -234,7 +234,7 @@ describe('buildRoadNetwork', () => {
   test('places bridges only over river tiles, within the cap', () => {
     const tiles = gridTiles(9, 9);
     // A vertical river down column 4.
-    for (let row = 0; row < 9; row++) tiles.get(hexKey(4, row)).type = TileType.RIVER;
+    for (let row = 0; row < 9; row++) decomposeTileType(tiles.get(hexKey(4, row)), TileType.RIVER);
     const nodes = [{ col: 1, row: 4 }, { col: 7, row: 4 }];
     const rand = () => 0.5;
     const bridges = buildRoadNetwork(tiles, nodes, rand, 2);
