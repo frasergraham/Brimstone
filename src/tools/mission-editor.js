@@ -24,15 +24,22 @@
 //      pass-through to the existing runtime shape, not a map enum.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { TileType, BuildingType, ResourceType } from '../tiles.js';
+import {
+  TileType, BuildingType, ResourceType, PathType, StructureType,
+  baseOf, pathOf, structureOf,
+} from '../tiles.js';
 import { hexKey } from '../hex.js';
 import { rng } from '../map.js';
 import { buildMissionMap, rederiveRoads } from '../campaign/mission-map.js';
 
 /** Active-tool ids the click loop dispatches on. */
 export const EditorTool = Object.freeze({
-  PAINT_TILE: 'paint-tile',
-  SET_BUILDING: 'set-building',
+  // Three independent layer-paint tools (P6 tile-model refactor). Each touches
+  // exactly ONE of the (base, structure, path) layers — a road can sit over a
+  // forest base, a building on dirt, etc.
+  PAINT_BASE: 'paint-base',           // base material: grass | forest | dirt
+  PAINT_STRUCTURE: 'paint-structure', // building (BuildingType) or clear
+  PAINT_PATH: 'paint-path',           // path overlay: none | road | river | bridge
   SET_RESOURCE: 'set-resource',
   HIDDEN_SURVIVOR: 'hidden-survivor',
   ENEMY_UNIT: 'enemy-unit',
@@ -76,14 +83,18 @@ function _tileList(mapDef) {
   return mapDef.tiles;
 }
 
-// A blank, COMPLETE tile def (rule #1) — all fields explicit.
+// A blank, COMPLETE tile def (rule #1) — all fields explicit, in the canonical
+// P5 layered shape: base/structure/path layers (NO legacy `type`). Field order
+// matches the migrated mission JSONs so snapshots diff cleanly.
 function _blankTileDef(col, row) {
   return {
     col, row,
-    type: _enumKey(TileType, TileType.GRASS),
+    base: _enumKey(TileType, TileType.GRASS),
+    structure: null,
+    path: null,
     building: null,
-    resource: null,
     fortifyLevel: 0,
+    resource: null,
     hiddenSurvivor: false,
     roadDirs: [],
   };
@@ -102,25 +113,55 @@ function _getOrCreateTileDef(mapDef, col, row) {
 
 // ── Pure tool functions (mutate the mapDef in place) ─────────────────────────
 
-/** Paint a terrain tile. Painting a non-building type clears any building. */
-export function paintTile(mapDef, { col, row }, tileTypeKey) {
+const _GRASS_KEY = _enumKey(TileType, TileType.GRASS);
+const _DIRT_KEY = _enumKey(TileType, TileType.DIRT);
+const _BUILDING_STRUCT_KEY = _enumKey(StructureType, StructureType.BUILDING); // 'BUILDING'
+
+/**
+ * PAINT_BASE — set ONLY the base material ∈ {GRASS, FOREST, DIRT}. Does not
+ * touch structure (building) or path (road/river/bridge), so e.g. re-basing a
+ * road tile to forest keeps the road overlay.
+ */
+export function paintBase(mapDef, { col, row }, baseKey) {
   const def = _getOrCreateTileDef(mapDef, col, row);
-  def.type = tileTypeKey;
-  if (tileTypeKey !== 'BUILDING') def.building = null;
+  def.base = baseKey;
   return mapDef;
 }
 
-/** Set (or clear) a building. A building forces type=BUILDING; clearing it
- *  reverts a building tile back to grass so the def stays coherent. */
-export function setBuilding(mapDef, { col, row }, buildingKey) {
+/**
+ * PAINT_STRUCTURE — place a building (BuildingType KEY) or clear it. Touches
+ * ONLY the structure layer (`structure` + `building`); base & path untouched.
+ *
+ * CRITICAL (P5 review note): a building must build on DIRT, not GRASS. The
+ * runtime `set type = BUILDING` shim forces base=DIRT, but the layered build
+ * path applies each layer literally — a def with base=GRASS would yield a
+ * grass-floored building. So when placing a building we emit an EXPLICIT
+ * base=DIRT *unless* the user already painted a non-default base (GRASS is the
+ * blank-def default ⇒ "unset"; FOREST/DIRT ⇒ a deliberate choice we keep).
+ * Clearing a building leaves the base as-is.
+ */
+export function paintStructure(mapDef, { col, row }, buildingKey) {
   const def = _getOrCreateTileDef(mapDef, col, row);
   if (buildingKey) {
+    def.structure = _BUILDING_STRUCT_KEY;
     def.building = buildingKey;
-    def.type = 'BUILDING';
+    if (def.base === _GRASS_KEY) def.base = _DIRT_KEY; // default building floor
   } else {
+    def.structure = null;
     def.building = null;
-    if (def.type === 'BUILDING') def.type = _enumKey(TileType, TileType.GRASS);
   }
+  return mapDef;
+}
+
+/**
+ * PAINT_PATH — set the path overlay ∈ {none(null), ROAD, RIVER, BRIDGE}. Touches
+ * ONLY the path layer; base & structure untouched (a road can sit over forest).
+ * roadDirs are derived separately by "Regenerate Roads"; this just sets the
+ * per-tile path value.
+ */
+export function paintPath(mapDef, { col, row }, pathKey) {
+  const def = _getOrCreateTileDef(mapDef, col, row);
+  def.path = pathKey || null;
   return mapDef;
 }
 
@@ -230,24 +271,29 @@ export function placeEnemyUnit(enemyUnits, { col, row }, typeValue) {
 
 // ── Tile snapshot (Map<key,Tile> → complete tile-def array) ──────────────────
 
-// Serialise a built Tile Map back to COMPLETE tile defs in uppercase KEY form,
-// dropping plain-grass tiles (buildMissionMap re-fills those). Lossless for
-// everything non-trivial: terrain, buildings, resources, fortify, hidden
-// survivors, and derived roadDirs.
+// Serialise a built Tile Map back to COMPLETE tile defs in the canonical P5
+// LAYERED shape (base/structure/path uppercase KEYS, NO legacy `type`), dropping
+// plain-grass tiles (buildMissionMap re-fills those). ALWAYS emits an explicit
+// base. Lossless for everything non-trivial: base material, building, path,
+// resources, fortify, hidden survivors, and derived roadDirs.
 export function snapshotTiles(tilesMap) {
   const out = [];
   for (const t of tilesMap.values()) {
-    const typeKey = _enumKey(TileType, t.type);
+    const baseKey = _enumKey(TileType, baseOf(t)); // GRASS | FOREST | DIRT
+    const structKey = structureOf(t) ? _BUILDING_STRUCT_KEY : null;
+    const pathKey = _enumKey(PathType, pathOf(t)); // ROAD | RIVER | BRIDGE | null
     const roadDirs = t.roadDirs ? [...t.roadDirs] : [];
-    const trivial = typeKey === 'GRASS' && !t.building && !t.resource &&
-      !t.fortifyLevel && !t.hiddenSurvivor && roadDirs.length === 0;
+    const trivial = baseKey === 'GRASS' && !structKey && !pathKey && !t.building &&
+      !t.resource && !t.fortifyLevel && !t.hiddenSurvivor && roadDirs.length === 0;
     if (trivial) continue;
     out.push({
       col: t.col, row: t.row,
-      type: typeKey,
+      base: baseKey,
+      structure: structKey,
+      path: pathKey,
       building: _enumKey(BuildingType, t.building),
-      resource: _enumKey(ResourceType, t.resource),
       fortifyLevel: t.fortifyLevel || 0,
+      resource: _enumKey(ResourceType, t.resource),
       hiddenSurvivor: !!t.hiddenSurvivor,
       roadDirs,
     });
@@ -474,8 +520,9 @@ export function populateFromMission(parsed) {
 // ── Controller ───────────────────────────────────────────────────────────────
 
 const _TOOL_DISPATCH = {
-  [EditorTool.PAINT_TILE]: (m, hex, pv) => paintTile(m.mapDef, hex, pv.tile),
-  [EditorTool.SET_BUILDING]: (m, hex, pv) => setBuilding(m.mapDef, hex, pv.building),
+  [EditorTool.PAINT_BASE]: (m, hex, pv) => paintBase(m.mapDef, hex, pv.base),
+  [EditorTool.PAINT_STRUCTURE]: (m, hex, pv) => paintStructure(m.mapDef, hex, pv.structure),
+  [EditorTool.PAINT_PATH]: (m, hex, pv) => paintPath(m.mapDef, hex, pv.path),
   [EditorTool.SET_RESOURCE]: (m, hex, pv) => setResource(m.mapDef, hex, pv.resource),
   [EditorTool.HIDDEN_SURVIVOR]: (m, hex) => toggleHiddenSurvivor(m.mapDef, hex),
   [EditorTool.ENEMY_UNIT]: (m, hex, pv) => placeEnemyUnit(m.enemyUnits, hex, pv.enemyType),
@@ -501,10 +548,13 @@ export function createMissionEditor({ render } = {}) {
   let mapDef = createDefaultMapDef();
   let enemyUnits = [];
   let meta = createDefaultMeta();
-  let activeTool = EditorTool.PAINT_TILE;
+  let activeTool = EditorTool.PAINT_BASE;
   const paintValues = {
-    tile: _enumKey(TileType, TileType.GRASS),
-    building: _enumKey(BuildingType, BuildingType.HOUSE),
+    base: _enumKey(TileType, TileType.GRASS),
+    // Default building so a fresh PAINT_STRUCTURE click places one; the UI's
+    // "None" option clears (null ⇒ paintStructure removes the building).
+    structure: _enumKey(BuildingType, BuildingType.HOUSE),
+    path: null, // none — PAINT_PATH paints null until a path is picked
     resource: _enumKey(ResourceType, ResourceType.HERBS),
     enemyType: ENEMY_UNIT_TYPES[0],
   };

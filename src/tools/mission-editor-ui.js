@@ -35,7 +35,7 @@ import { Renderer } from '../renderer.js';
 import { Renderer3D } from '../renderer-3d.js';
 import { GameState } from '../game.js';
 import { buildMissionMap } from '../campaign/mission-map.js';
-import { TileType, BuildingType, ResourceType } from '../tiles.js';
+import { TileType, BuildingType, ResourceType, PathType } from '../tiles.js';
 import {
   createZombie, createMinion, createWoodGolem, createIronGolem,
 } from '../entities.js';
@@ -52,6 +52,14 @@ import { CONDITIONS } from '../campaign/condition-registry.js';
 
 // Enum VALUE → KEY pairs for select option lists (KEY is what the model stores).
 const _entries = (enumObj) => Object.keys(enumObj).map(k => ({ key: k, value: enumObj[k] }));
+
+// The base layer is exactly {GRASS, FOREST, DIRT} — a strict subset of TileType
+// (road/river/bridge/building are NOT base materials; they live in path/structure).
+const BASE_ENTRIES = [
+  { key: 'GRASS', value: TileType.GRASS },
+  { key: 'FOREST', value: TileType.FOREST },
+  { key: 'DIRT', value: TileType.DIRT },
+];
 
 const ENEMY_FACTORIES = {
   zombie: createZombie,
@@ -368,8 +376,9 @@ function buildMapPalette(doc, root, editor, rerender, onPreview3D, onResetView) 
   // Tools.
   const toolSection = section(doc, 'Tools');
   const tools = [
-    { id: EditorTool.PAINT_TILE, label: 'Paint Tile' },
-    { id: EditorTool.SET_BUILDING, label: 'Set Building' },
+    { id: EditorTool.PAINT_BASE, label: 'Paint Base' },
+    { id: EditorTool.PAINT_STRUCTURE, label: 'Paint Structure' },
+    { id: EditorTool.PAINT_PATH, label: 'Paint Path' },
     { id: EditorTool.SET_RESOURCE, label: 'Set Resource' },
     { id: EditorTool.HIDDEN_SURVIVOR, label: 'Hidden Survivor' },
     { id: EditorTool.ENEMY_UNIT, label: 'Enemy Unit' },
@@ -391,16 +400,25 @@ function buildMapPalette(doc, root, editor, rerender, onPreview3D, onResetView) 
     toolBtns[t.id] = btn;
     toolSection.append(btn);
   }
-  toolBtns[EditorTool.PAINT_TILE].classList.add('active');
+  toolBtns[EditorTool.PAINT_BASE].classList.add('active');
   root.append(toolSection);
 
-  // Paint-value selectors (which value the painting tools stamp).
+  // Paint-value selectors (which value the painting tools stamp). The three
+  // layer tools each have their own selector: Base (grass/forest/dirt),
+  // Structure (a building or "None" to clear), Path (none/road/river/bridge).
+  // Structure & Path use a "None" sentinel option → stored as null (clear).
+  const NONE_OPT = { key: 'None', value: null };
+  const denull = (v) => (v === NONE_OPT.key ? null : v);
   const valSection = section(doc, 'Paint Value');
   valSection.append(
-    labeledSelect(doc, 'Tile', _entries(TileType), editor.getPaintValue('tile'),
-      (v) => editor.setPaintValue('tile', v)),
-    labeledSelect(doc, 'Building', _entries(BuildingType), editor.getPaintValue('building'),
-      (v) => editor.setPaintValue('building', v)),
+    labeledSelect(doc, 'Base', BASE_ENTRIES, editor.getPaintValue('base'),
+      (v) => editor.setPaintValue('base', v)),
+    labeledSelect(doc, 'Structure', [NONE_OPT, ..._entries(BuildingType)],
+      editor.getPaintValue('structure') ?? NONE_OPT.key,
+      (v) => editor.setPaintValue('structure', denull(v))),
+    labeledSelect(doc, 'Path', [NONE_OPT, ..._entries(PathType)],
+      editor.getPaintValue('path') ?? NONE_OPT.key,
+      (v) => editor.setPaintValue('path', denull(v))),
     labeledSelect(doc, 'Resource', _entries(ResourceType), editor.getPaintValue('resource'),
       (v) => editor.setPaintValue('resource', v)),
     labeledSelect(doc, 'Enemy', ENEMY_UNIT_TYPES.map(t => ({ key: t, value: t })),
