@@ -15,11 +15,15 @@
 //   • P6 (authoring forms + load/save): `handle.editor` exposes the controller
 //     (getMapDef/setMapDef/getEnemyUnits/setEnemyUnits). A `#e-forms` slot is
 //     left empty in the palette for the forms to mount into.
-//   • P7 (3D preview): `handle.buildState()` returns the live GameState a
-//     "Preview in 3D" button can hand to Renderer3D.
+//   • P7 (3D preview): a "Preview in 3D" palette button shows the #e-preview-3d
+//     overlay and hands `buildState()` to a lazily-constructed Renderer3D
+//     (beginLoad → whenReady → draw, same as the Lighting tab). The engine is
+//     built on first press and disposed on close / tab-switch — see the
+//     `preview` controller + `dispose3dPreview` below.
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { Renderer } from '../renderer.js';
+import { Renderer3D } from '../renderer-3d.js';
 import { GameState } from '../game.js';
 import { buildMissionMap } from '../campaign/mission-map.js';
 import { TileType, BuildingType, ResourceType } from '../tiles.js';
@@ -27,7 +31,7 @@ import {
   createZombie, createMinion, createWoodGolem, createIronGolem,
 } from '../entities.js';
 import {
-  createMissionEditor, EditorTool, ENEMY_UNIT_TYPES,
+  createMissionEditor, createPreviewController, EditorTool, ENEMY_UNIT_TYPES,
   addStoryTrigger, removeStoryTrigger, moveStoryTrigger,
   addWave, removeWave, populateFromMission,
 } from './mission-editor.js';
@@ -105,7 +109,45 @@ export function initEditor(doc = document) {
     editor.applyAt(hex);
   });
 
-  buildPalette(doc, palette, editor, rerender);
+  // ── 3D preview (lazy Renderer3D over the #e-preview-3d overlay) ───────────
+  // Dispose helper: tear down a preview Renderer3D's scene + engine. Mirrors the
+  // Lighting tab's regen-map teardown so we never leak a running Babylon engine.
+  const dispose3dPreview = (r) => {
+    try { r?._scene?.dispose(); } catch { /* already gone */ }
+    try { r?._engine?.dispose(); } catch { /* already gone */ }
+  };
+  const previewCanvas = doc.getElementById('e-preview-canvas');
+  const previewOverlay = doc.getElementById('e-preview-3d');
+  // The controller owns the single-live-renderer + dispose-before-rebuild rule;
+  // `construct` follows Renderer3D's beginLoad → whenReady → draw contract.
+  const preview = createPreviewController({
+    construct: () => {
+      const r = new Renderer3D(previewCanvas, buildState(editor));
+      r.beginLoad();
+      // Reveal the fully-loaded scene once assets settle (draw() is a no-op
+      // before whenReady resolves, harmless if the overlay was closed meanwhile).
+      r.whenReady().then(() => { try { r.draw(); } catch { /* disposed */ } });
+      return r;
+    },
+    dispose: dispose3dPreview,
+  });
+
+  function openPreview() {
+    if (previewOverlay) previewOverlay.hidden = false;
+    // Rebuild from the CURRENT editor state every press (author edits in 2D,
+    // hits Preview to see 3D). rebuild() disposes any prior engine first.
+    preview.rebuild();
+  }
+  function closePreview() {
+    preview.teardown();
+    if (previewOverlay) previewOverlay.hidden = true;
+  }
+  doc.getElementById('e-preview-close')?.addEventListener('click', closePreview);
+  // Keep the preview engine sized to its pane while it's live.
+  const onResize = () => { try { preview.current()?._engine?.resize(); } catch { /* ignore */ } };
+  (doc.defaultView ?? globalThis).addEventListener?.('resize', onResize);
+
+  buildPalette(doc, palette, editor, rerender, openPreview);
 
   // Authoring forms + load/save mount into the #e-forms slot the palette left.
   // `rebuildForms` re-reads the model, so load can refresh the whole form tree.
@@ -122,16 +164,17 @@ export function initEditor(doc = document) {
   return {
     editor,
     buildState: () => buildState(editor),
-    // 2D Renderer has no render loop — nothing to stop. Resume re-fits in case
-    // the panel was hidden (zero-size) while inactive.
-    pause() { /* no-op */ },
+    // 2D Renderer has no render loop. But the 3D preview owns a live Babylon
+    // engine; tear it down (and hide the overlay) when the tab is switched away
+    // so a hidden tab never leaves an engine spinning.
+    pause() { closePreview(); },
     resume() { renderer.resize(); renderer.draw(); },
   };
 }
 
 // ── Palette DOM ──────────────────────────────────────────────────────────────
 
-function buildPalette(doc, root, editor, rerender) {
+function buildPalette(doc, root, editor, rerender, onPreview3D) {
   root.innerHTML = '';
 
   // Mode + seed.
@@ -210,6 +253,13 @@ function buildPalette(doc, root, editor, rerender) {
   const editSection = section(doc, 'Edit');
   editSection.append(actionBtn(doc, 'Undo', () => editor.undo()));
   root.append(editSection);
+
+  // Preview — rebuilds the current mission map in 3D via Renderer3D.
+  if (onPreview3D) {
+    const previewSection = section(doc, 'Preview');
+    previewSection.append(actionBtn(doc, 'Preview in 3D', () => onPreview3D()));
+    root.append(previewSection);
+  }
 
   // Empty slot for P6 authoring forms to mount into.
   const forms = doc.createElement('div');

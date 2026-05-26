@@ -28,6 +28,7 @@ import {
   regenerateHandmadeRoads,
   snapshotTiles,
   setMode,
+  createPreviewController,
 } from '../src/tools/mission-editor.js';
 import { hexKey } from '../src/hex.js';
 import { Tile, TileType } from '../src/tiles.js';
@@ -295,5 +296,74 @@ describe('mission-editor — controller edit loop & undo', () => {
     fresh.tiles.push({ col: 0, row: 0, type: 'DIRT', building: null, resource: null, fortifyLevel: 0, hiddenSurvivor: false, roadDirs: [] });
     ed.setMapDef(fresh);
     assert.equal(ed.getMapDef().tiles[0].type, 'DIRT');
+  });
+});
+
+// ── 3D preview lifecycle bookkeeping (P7) ─────────────────────────────────────
+// The Renderer3D + Babylon engine are mocked: we only verify the controller's
+// lazy-construct + dispose-before-rebuild + idempotent-teardown bookkeeping.
+
+describe('mission-editor — createPreviewController (P7)', () => {
+  // A fake renderer + construct/dispose pair that records call order.
+  function harness() {
+    const events = [];
+    let nextId = 0;
+    const ctl = createPreviewController({
+      construct: () => { const r = { id: nextId++ }; events.push(`construct:${r.id}`); return r; },
+      dispose: (r) => { events.push(`dispose:${r.id}`); },
+    });
+    return { ctl, events };
+  }
+
+  test('lazy: nothing is constructed until the first rebuild', () => {
+    const { ctl, events } = harness();
+    assert.equal(ctl.isActive(), false);
+    assert.equal(ctl.current(), null);
+    assert.deepEqual(events, []);
+  });
+
+  test('rebuild constructs, returns the renderer, and marks active', () => {
+    const { ctl, events } = harness();
+    const r = ctl.rebuild();
+    assert.equal(ctl.isActive(), true);
+    assert.equal(ctl.current(), r);
+    assert.deepEqual(events, ['construct:0']);
+  });
+
+  test('rebuild disposes the previous renderer BEFORE constructing the new one', () => {
+    const { ctl, events } = harness();
+    ctl.rebuild();
+    ctl.rebuild();
+    // Dispose of #0 must precede construct of #1 — no leaked engine.
+    assert.deepEqual(events, ['construct:0', 'dispose:0', 'construct:1']);
+    assert.equal(ctl.current().id, 1);
+  });
+
+  test('teardown disposes the live renderer and clears the slot', () => {
+    const { ctl, events } = harness();
+    ctl.rebuild();
+    ctl.teardown();
+    assert.deepEqual(events, ['construct:0', 'dispose:0']);
+    assert.equal(ctl.isActive(), false);
+    assert.equal(ctl.current(), null);
+  });
+
+  test('teardown is idempotent — second call disposes nothing', () => {
+    const { ctl, events } = harness();
+    ctl.rebuild();
+    ctl.teardown();
+    ctl.teardown();
+    assert.deepEqual(events, ['construct:0', 'dispose:0']);
+  });
+
+  test('a throwing dispose still clears the slot (no stranded engine)', () => {
+    let constructs = 0;
+    const ctl = createPreviewController({
+      construct: () => ({ n: constructs++ }),
+      dispose: () => { throw new Error('boom'); },
+    });
+    ctl.rebuild();
+    assert.doesNotThrow(() => ctl.teardown());
+    assert.equal(ctl.isActive(), false);
   });
 });

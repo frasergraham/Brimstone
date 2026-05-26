@@ -125,6 +125,16 @@
     #editor-panel { display: grid; grid-template-columns: 1fr 280px; height: 100%; }
     #editor-panel #e-canvas-pane { position: relative; overflow: hidden; background: #050505; }
     #editor-panel #e-render-canvas { width: 100%; height: 100%; display: block; touch-action: none; cursor: crosshair; }
+    /* 3D preview overlay: fills the canvas pane above the 2D editor canvas. */
+    #editor-panel #e-preview-3d { position: absolute; inset: 0; background: #050505; z-index: 5; }
+    #editor-panel #e-preview-3d[hidden] { display: none; }
+    #editor-panel #e-preview-canvas { width: 100%; height: 100%; display: block; touch-action: none; }
+    #editor-panel #e-preview-close {
+      position: absolute; top: 10px; right: 10px; z-index: 6;
+      padding: 6px 12px; font-size: 12px; cursor: pointer;
+      background: #5a4a30; border: 1px solid #c4a04a; color: #ffd680; border-radius: 4px;
+    }
+    #editor-panel #e-preview-close:hover { background: #6a5a3a; }
     #editor-panel #e-palette { padding: 12px 14px; overflow-y: auto; border-left: 1px solid #2c2620; background: #14110d; }
     #editor-panel .e-section { margin: 10px 0; padding: 10px 12px; border: 1px solid #2c2620; background: #1a1610; }
     #editor-panel .e-section h3 { margin: 0 0 8px 0; font-size: 11px; color: #c4a04a; letter-spacing: 1.5px; text-transform: uppercase; }
@@ -318,6 +328,13 @@
       <section id="editor-panel" class="tab-panel">
         <div id="e-canvas-pane">
           <canvas id="e-render-canvas"></canvas>
+          <!-- 3D preview overlay — hidden until "Preview in 3D" is pressed. The
+               Renderer3D + Babylon engine are constructed lazily on first show
+               and disposed on close / tab-switch (see initEditor). -->
+          <div id="e-preview-3d" hidden>
+            <canvas id="e-preview-canvas"></canvas>
+            <button id="e-preview-close" type="button">✕ Close 3D</button>
+          </div>
         </div>
         <aside id="e-palette"><!-- tool palette built by initEditor() --></aside>
       </section>

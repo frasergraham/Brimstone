@@ -593,3 +593,44 @@ export function createMissionEditor({ render } = {}) {
     },
   };
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 3D preview lifecycle bookkeeping (P7)
+// ─────────────────────────────────────────────────────────────────────────────
+// DOM-free and Babylon-free: the renderer is constructed/disposed through
+// injected callbacks so the lazy-construct + dispose-before-rebuild bookkeeping
+// is unit-testable without a canvas or a Babylon engine. The UI half
+// (mission-editor-ui.js) supplies `construct` (build a Renderer3D on the current
+// editor state) and `dispose` (tear down its scene + engine).
+//
+// Guarantees:
+//   • Lazy: nothing is constructed until the first `rebuild()`.
+//   • Single live renderer: `rebuild()` disposes any prior one before building
+//     a fresh one, so pressing "Preview in 3D" repeatedly never leaks an engine.
+//   • `teardown()` is idempotent and dispose errors are swallowed, so it's safe
+//     to call on close AND on tab-switch without double-dispose crashes.
+//
+// @param {{ construct: (...args) => object, dispose: (renderer: object) => void }} cbs
+export function createPreviewController({ construct, dispose }) {
+  let active = null; // current renderer instance, or null when torn down
+
+  return {
+    /** True while a preview renderer is live. */
+    isActive: () => active !== null,
+    /** The current renderer instance (or null) — for resize plumbing. */
+    current: () => active,
+    /** Dispose any existing renderer, then construct a fresh one. Returns it. */
+    rebuild(...args) {
+      this.teardown();
+      active = construct(...args);
+      return active;
+    },
+    /** Dispose the live renderer (if any) and clear the slot. Idempotent. */
+    teardown() {
+      if (active === null) return;
+      const r = active;
+      active = null; // clear FIRST so a throwing dispose can't strand the slot
+      try { dispose(r); } catch { /* ignore teardown errors */ }
+    },
+  };
+}
