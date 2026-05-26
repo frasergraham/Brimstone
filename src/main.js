@@ -60,6 +60,7 @@ import { hexKey as _hexKey } from './hex.js';
 import { Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves, reconcileRosterAfterMission } from './campaign/campaign.js';
 import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
 import { processStoryTriggers } from './campaign/missions.js';
+import { buildMissionMap } from './campaign/mission-map.js';
 import {
   campaignMissionSaveKey, loadCampaignMissionSave, deleteCampaignMissionSave,
   RESOURCE_ICONS as _RESOURCE_ICONS, hpColor as _hpColor,
@@ -2874,10 +2875,20 @@ function _initCampaignMission(missionDef) {
   // Persist pre-mission campaign state so defeat can restore from it
   _activeCampaign.save();
 
-  // Build map
-  const builder = _activeCampaign.getMapBuilder(missionDef.mapBuilder);
-  if (!builder) { console.error('No map builder for', missionDef.mapBuilder); return; }
-  const mapData = builder();
+  // Build map. JSON missions carry a declarative `map` def (built via
+  // buildMissionMap); legacy JS missions reference a builder fn by string key in
+  // the campaign's mapBuilders registry. A resolved `mapBuilderFn` (attached by
+  // loadMissionJSON) is preferred when present so the call is uniform.
+  let mapData;
+  if (missionDef.mapBuilderFn) {
+    mapData = missionDef.mapBuilderFn();
+  } else if (missionDef.map) {
+    mapData = buildMissionMap(missionDef.map);
+  } else {
+    const builder = _activeCampaign.getMapBuilder(missionDef.mapBuilder);
+    if (!builder) { console.error('No map builder for', missionDef.mapBuilder); return; }
+    mapData = builder();
+  }
   mapData.noWitch = !missionDef.hasWitch;
   mapData.disableScoring  = !!missionDef.disableScoring;
   mapData.disableCycleBar = !!missionDef.disableCycleBar;
