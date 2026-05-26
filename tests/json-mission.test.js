@@ -8,9 +8,12 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync, readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 
 import {
-  loadMissionJSON, registerMissionJSON,
+  loadMissionJSON, registerMissionJSON, KNOWN_OBJECTIVE_TYPES,
 } from '../src/campaign/json-mission.js';
 import {
   CONDUCTOR_SCRIPTS, resolveConductorScript,
@@ -288,6 +291,54 @@ describe('registerMissionJSON + consumable shape', () => {
     // Resolved story triggers are processStoryTriggers-ready (fn conditions).
     for (const t of def.storyTriggers) {
       if ('condition' in t) assert.equal(typeof t.condition, 'function');
+    }
+  });
+});
+
+// ── KNOWN_OBJECTIVE_TYPES ↔ campaign.js switch guard ─────────────────────────
+// KNOWN_OBJECTIVE_TYPES (json-mission.js) and the objective-type switch in
+// buildVictoryDelegate (campaign.js) live in different files but MUST stay in
+// lockstep: the validator rejects any type not in the set, and the runtime can
+// only handle the types in the switch. This guard parses the switch's `case`
+// labels out of campaign.js source and asserts the two sets are identical, so
+// future drift (a new objective handled in one file but not the other) fails CI.
+
+const _here = dirname(fileURLToPath(import.meta.url));
+
+describe('KNOWN_OBJECTIVE_TYPES stays in sync with campaign.js', () => {
+  test('matches the buildVictoryDelegate switch cases exactly', () => {
+    const src = readFileSync(join(_here, '../src/campaign/campaign.js'), 'utf8');
+    // Scope to the two switch bodies (_checkLoseCondition + _checkWinCondition)
+    // by reading every `case '<type>':` label in the file. These functions own
+    // the only objective-type switches in campaign.js.
+    const caseTypes = new Set();
+    for (const m of src.matchAll(/case\s+'([a-z_]+)'\s*:/g)) {
+      caseTypes.add(m[1]);
+    }
+    assert.ok(caseTypes.size > 0, 'expected to parse objective case labels from campaign.js');
+
+    const known = KNOWN_OBJECTIVE_TYPES;
+    // Every type the runtime switch handles must be accepted by the validator…
+    const missingFromKnown = [...caseTypes].filter(t => !known.has(t));
+    assert.deepEqual(missingFromKnown, [],
+      `objective types handled in campaign.js but missing from KNOWN_OBJECTIVE_TYPES: ${missingFromKnown.join(', ')}`);
+    // …and the validator must not accept any type the runtime can't handle.
+    const extraInKnown = [...known].filter(t => !caseTypes.has(t));
+    assert.deepEqual(extraInKnown, [],
+      `objective types in KNOWN_OBJECTIVE_TYPES but not handled by campaign.js: ${extraInKnown.join(', ')}`);
+  });
+
+  test('every objective type used by the shipped missions is known', () => {
+    const dir = join(_here, '../src/campaign/missions');
+    const files = readdirSync(dir).filter(f => f.endsWith('.json'));
+    assert.ok(files.length >= 8, `expected the shipped mission JSONs, found ${files.length}`);
+    const asArray = (side) => (Array.isArray(side) ? side : side ? [side] : []);
+    for (const f of files) {
+      const m = JSON.parse(readFileSync(join(dir, f), 'utf8'));
+      for (const o of [...asArray(m.objectives?.win), ...asArray(m.objectives?.lose)]) {
+        assert.ok(KNOWN_OBJECTIVE_TYPES.has(o.type),
+          `${f}: objective type "${o.type}" is not in KNOWN_OBJECTIVE_TYPES`);
+      }
     }
   });
 });
