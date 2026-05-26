@@ -29,7 +29,7 @@ import {
   Renderer3D,
   RIVER_ALPHA_INDEX,
 } from '../src/renderer-3d.js';
-import { TileType, TILE_COLOR } from '../src/tiles.js';
+import { TileType, TILE_COLOR, Tile } from '../src/tiles.js';
 import { hexKey } from '../src/hex.js';
 
 // ── Stubbed Babylon for the river-extension build path ────────────────────────
@@ -101,7 +101,10 @@ function makeStubBabylon() {
 function makeRiverAcross(cols = 5, row = 2) {
   const tiles = new Map();
   for (let c = 0; c < cols; c++) {
-    tiles.set(hexKey(c, row), { col: c, row, type: TileType.RIVER, roadDirs: new Set() });
+    // Real layered Tile so isRiver()/isBridge() resolve from the path layer.
+    const t = new Tile(c, row, TileType.RIVER);
+    t.roadDirs = new Set();
+    tiles.set(hexKey(c, row), t);
   }
   return tiles;
 }

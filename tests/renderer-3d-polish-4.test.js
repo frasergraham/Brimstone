@@ -30,6 +30,17 @@ import {
   hexToWorld,
   parseRgba01,
 } from '../src/renderer-3d.js';
+import { TileType, PathType, StructureType, Tile } from '../src/tiles.js';
+
+// Build a Tile with explicit layers — _terrainThumbSpriteId reads baseOf(tile).
+function layered({ base = TileType.GRASS, path = null, structure = null, building = null }, col = 0, row = 0) {
+  const t = new Tile(col, row, TileType.GRASS);
+  t.base = base;
+  t.path = path;
+  t.structure = structure;
+  t.building = building;
+  return t;
+}
 
 // ── Item 3: smaller waypoint markers + dashed path connector ─────────────────
 
@@ -142,41 +153,43 @@ describe('Renderer3D round-4 polish — FOG_TILE_DARKEN', () => {
 // ── Item 9: UI portrait/terrain thumbnail helpers ───────────────────────────
 
 describe('Renderer3D round-4 polish — _terrainThumbSpriteId', () => {
-  test('returns null for unsupported tile types', () => {
+  test('returns null for unsupported base materials', () => {
     assert.equal(_terrainThumbSpriteId(null, 0, 0), null);
-    assert.equal(_terrainThumbSpriteId({ type: 'unknown_type' }, 0, 0), null);
+    assert.equal(_terrainThumbSpriteId(layered({ base: 'unknown_type' }), 0, 0), null);
   });
 
   test('grass maps to a grass variant', () => {
-    const id = _terrainThumbSpriteId({ type: 'grass' }, 0, 0);
+    const id = _terrainThumbSpriteId(layered({ base: TileType.GRASS }), 0, 0);
     assert.ok(/^grass_[1-5]$/.test(id), `unexpected id ${id}`);
   });
 
   test('forest maps to a forest variant', () => {
-    const id = _terrainThumbSpriteId({ type: 'forest' }, 1, 2);
+    const id = _terrainThumbSpriteId(layered({ base: TileType.FOREST }), 1, 2);
     assert.ok(/^forest_[1-5]$/.test(id), `unexpected id ${id}`);
   });
 
   test('dirt maps to a dirt variant', () => {
-    const id = _terrainThumbSpriteId({ type: 'dirt' }, 1, 2);
+    const id = _terrainThumbSpriteId(layered({ base: TileType.DIRT }), 1, 2);
     assert.ok(/^dirt_[1-5]$/.test(id), `unexpected id ${id}`);
   });
 
-  test('road/river/bridge collapse to grass variants', () => {
-    for (const t of ['road', 'river', 'bridge']) {
-      const id = _terrainThumbSpriteId({ type: t }, 4, 5);
-      assert.ok(/^grass_[1-5]$/.test(id), `${t} → unexpected id ${id}`);
-    }
+  test('P3: a path tile thumbnails its REAL base (road over dirt → dirt)', () => {
+    // Thumbnails now reflect the base material under the path instead of
+    // always collapsing to grass.
+    assert.ok(/^grass_[1-5]$/.test(_terrainThumbSpriteId(layered({ base: TileType.GRASS, path: PathType.ROAD }), 4, 5)));
+    assert.ok(/^dirt_[1-5]$/.test(_terrainThumbSpriteId(layered({ base: TileType.DIRT, path: PathType.RIVER }), 4, 5)));
+    assert.ok(/^forest_[1-5]$/.test(_terrainThumbSpriteId(layered({ base: TileType.FOREST, path: PathType.BRIDGE }), 4, 5)));
   });
 
-  test('building tiles fall back to dirt variants (the building sprite is layered on top)', () => {
-    const id = _terrainThumbSpriteId({ type: 'building', building: 'inn' }, 4, 5);
-    assert.ok(/^dirt_[1-5]$/.test(id), `building → unexpected id ${id}`);
+  test('building tiles thumbnail their base material (building sprite layered on top)', () => {
+    const onDirt = _terrainThumbSpriteId(
+      layered({ base: TileType.DIRT, structure: StructureType.BUILDING, building: 'inn' }), 4, 5);
+    assert.ok(/^dirt_[1-5]$/.test(onDirt), `building → unexpected id ${onDirt}`);
   });
 
   test('variant choice is stable per (col, row) — same input yields same output', () => {
-    const a = _terrainThumbSpriteId({ type: 'grass' }, 7, 9);
-    const b = _terrainThumbSpriteId({ type: 'grass' }, 7, 9);
+    const a = _terrainThumbSpriteId(layered({ base: TileType.GRASS }), 7, 9);
+    const b = _terrainThumbSpriteId(layered({ base: TileType.GRASS }), 7, 9);
     assert.equal(a, b);
   });
 
@@ -184,7 +197,7 @@ describe('Renderer3D round-4 polish — _terrainThumbSpriteId', () => {
     const variants = new Set();
     for (let c = 0; c < 5; c++) {
       for (let r = 0; r < 5; r++) {
-        variants.add(_terrainThumbSpriteId({ type: 'grass' }, c, r));
+        variants.add(_terrainThumbSpriteId(layered({ base: TileType.GRASS }), c, r));
       }
     }
     assert.ok(variants.size > 1,

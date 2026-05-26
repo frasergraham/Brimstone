@@ -5,7 +5,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { TileType } from '../src/tiles.js';
+import { TileType, Tile } from '../src/tiles.js';
 import { hexKey } from '../src/hex.js';
 import {
   riverExitPoints,
@@ -14,13 +14,21 @@ import {
   RIVER_RIBBON_WIDTH,
 } from '../src/renderer-3d.js';
 
+// Real layered Tile so the isRiver/isBridge predicates resolve from the path
+// layer (plain `{type}` objects carry no path layer).
+function mkTile(col, row, type) {
+  const t = new Tile(col, row, type);
+  t.roadDirs = new Set();
+  return t;
+}
+
 /** Build a tiles map where a river crosses horizontally through (0..N, row).
  *  Endpoints at col=0 and col=N each have exactly one water neighbour, so
  *  they should be detected as river exits. */
 function makeRiverAcross(cols, row = 2) {
   const tiles = new Map();
   for (let c = 0; c < cols; c++) {
-    tiles.set(hexKey(c, row), { col: c, row, type: TileType.RIVER, roadDirs: new Set() });
+    tiles.set(hexKey(c, row), mkTile(c, row, TileType.RIVER));
   }
   return tiles;
 }
@@ -75,23 +83,22 @@ describe('riverExitPoints', () => {
 
   test('isolated river tile (no water neighbours) is NOT an exit', () => {
     const tiles = new Map();
-    tiles.set(hexKey(5, 5),
-      { col: 5, row: 5, type: TileType.RIVER, roadDirs: new Set() });
+    tiles.set(hexKey(5, 5), mkTile(5, 5, TileType.RIVER));
     assert.equal(riverExitPoints(tiles).length, 0);
   });
 
   test('non-water tiles never appear as exits', () => {
     const tiles = new Map();
-    tiles.set(hexKey(0, 0), { col: 0, row: 0, type: TileType.GRASS,  roadDirs: new Set() });
-    tiles.set(hexKey(1, 0), { col: 1, row: 0, type: TileType.FOREST, roadDirs: new Set() });
+    tiles.set(hexKey(0, 0), mkTile(0, 0, TileType.GRASS));
+    tiles.set(hexKey(1, 0), mkTile(1, 0, TileType.FOREST));
     assert.equal(riverExitPoints(tiles).length, 0);
   });
 
   test('BRIDGE tiles count as water — a river ending at a bridge still exits', () => {
     const tiles = new Map();
     // River → bridge → off-map. The bridge is a 1-water-neighbour tile → exit.
-    tiles.set(hexKey(0, 0), { col: 0, row: 0, type: TileType.RIVER,  roadDirs: new Set() });
-    tiles.set(hexKey(1, 0), { col: 1, row: 0, type: TileType.BRIDGE, roadDirs: new Set() });
+    tiles.set(hexKey(0, 0), mkTile(0, 0, TileType.RIVER));
+    tiles.set(hexKey(1, 0), mkTile(1, 0, TileType.BRIDGE));
     const exits = riverExitPoints(tiles);
     assert.equal(exits.length, 2);
     // Both endpoints (river @ col=0, bridge @ col=1) qualify since each has

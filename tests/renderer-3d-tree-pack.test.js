@@ -657,7 +657,7 @@ describe('_upgradeForestToRealTrees — retrofit after async load', () => {
   test('replaces procedural FOREST cluster meshes with real-tree instances', () => {
     const r = setupForRetrofit();
     const tiles = new Map();
-    tiles.set('2,3', { col: 2, row: 3, type: TileType.FOREST });
+    tiles.set('2,3', { col: 2, row: 3, type: TileType.FOREST, base: TileType.FOREST });
     r.state = { tiles };
     // Pre-existing procedural meshes named with the forest cluster prefix.
     const trunks = {
@@ -680,7 +680,7 @@ describe('_upgradeForestToRealTrees — retrofit after async load', () => {
   test('idempotent — second pass finds no work', () => {
     const r = setupForRetrofit();
     const tiles = new Map();
-    tiles.set('0,0', { col: 0, row: 0, type: TileType.FOREST });
+    tiles.set('0,0', { col: 0, row: 0, type: TileType.FOREST, base: TileType.FOREST });
     r.state = { tiles };
     r._tilePropsByKey.set('0,0', [{
       name: 'forest_0_0_trunks', dispose() {},

@@ -6,8 +6,19 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { TileType } from '../src/tiles.js';
+import { TileType, Tile } from '../src/tiles.js';
 import { hexKey } from '../src/hex.js';
+
+// Build a real layered Tile so the network builders' baseOf/pathOf/isBridge/
+// hasBuilding predicates resolve correctly (plain `{type}` objects carry no
+// path/structure layers). `new Tile(col,row,type)` decomposes the legacy type
+// into the (base, structure, path) layers via the shim setter.
+function mkTile(col, row, type, { roadDirs = [], building = null } = {}) {
+  const t = new Tile(col, row, type);
+  t.roadDirs = new Set(roadDirs);
+  if (building != null) t.building = building;
+  return t;
+}
 import {
   sampleQuadBezier,
   networkStrokesForTile,
@@ -198,7 +209,7 @@ describe('buildRiverNetworkStrokes', () => {
   function makeTiles() {
     const tiles = new Map();
     const add = (col, row, type) => {
-      tiles.set(hexKey(col, row), { col, row, type, roadDirs: new Set() });
+      tiles.set(hexKey(col, row), mkTile(col, row, type));
     };
     add(0, 1, TileType.RIVER);
     add(1, 1, TileType.BRIDGE);
@@ -222,15 +233,13 @@ describe('buildRiverNetworkStrokes', () => {
 
   test('isolated water tile (no water neighbours) is skipped', () => {
     const tiles = new Map();
-    tiles.set(hexKey(5, 5),
-      { col: 5, row: 5, type: TileType.RIVER, roadDirs: new Set() });
+    tiles.set(hexKey(5, 5), mkTile(5, 5, TileType.RIVER));
     assert.equal(buildRiverNetworkStrokes(tiles).length, 0);
   });
 
   test('grass tiles are not part of the river network', () => {
     const tiles = new Map();
-    tiles.set(hexKey(0, 0),
-      { col: 0, row: 0, type: TileType.GRASS, roadDirs: new Set() });
+    tiles.set(hexKey(0, 0), mkTile(0, 0, TileType.GRASS));
     assert.equal(buildRiverNetworkStrokes(tiles).length, 0);
   });
 });
@@ -240,8 +249,7 @@ describe('buildRoadNetworkStrokes', () => {
   function makeTiles() {
     const tiles = new Map();
     const add = (col, row, type, roadDirs = []) => {
-      tiles.set(hexKey(col, row),
-        { col, row, type, roadDirs: new Set(roadDirs) });
+      tiles.set(hexKey(col, row), mkTile(col, row, type, { roadDirs }));
     };
     add(0, 1, TileType.ROAD, [hexKey(1, 1)]);
     add(1, 1, TileType.ROAD, [hexKey(0, 1), hexKey(2, 1)]);
@@ -275,8 +283,7 @@ describe('buildRoadNetworkStrokes', () => {
 
   test('tiles without roadDirs are skipped (no phantom junctions)', () => {
     const tiles = new Map();
-    tiles.set(hexKey(0, 0),
-      { col: 0, row: 0, type: TileType.ROAD, roadDirs: new Set() });
+    tiles.set(hexKey(0, 0), mkTile(0, 0, TileType.ROAD));
     assert.equal(buildRoadNetworkStrokes(tiles).length, 0);
   });
 
@@ -285,13 +292,9 @@ describe('buildRoadNetworkStrokes', () => {
     // sits on the MST, so its roadDirs are populated at gen time. The 3D
     // ribbon must pass through it so the road reads as contiguous.
     const tiles = new Map();
-    tiles.set(hexKey(0, 0),
-      { col: 0, row: 0, type: TileType.ROAD,     roadDirs: new Set([hexKey(1, 0)]) });
-    tiles.set(hexKey(1, 0),
-      { col: 1, row: 0, type: TileType.BUILDING, building: 'INN',
-        roadDirs: new Set([hexKey(0, 0), hexKey(2, 0)]) });
-    tiles.set(hexKey(2, 0),
-      { col: 2, row: 0, type: TileType.ROAD,     roadDirs: new Set([hexKey(1, 0)]) });
+    tiles.set(hexKey(0, 0), mkTile(0, 0, TileType.ROAD,     { roadDirs: [hexKey(1, 0)] }));
+    tiles.set(hexKey(1, 0), mkTile(1, 0, TileType.BUILDING, { building: 'INN', roadDirs: [hexKey(0, 0), hexKey(2, 0)] }));
+    tiles.set(hexKey(2, 0), mkTile(2, 0, TileType.ROAD,     { roadDirs: [hexKey(1, 0)] }));
 
     const segs = buildRoadNetworkStrokes(tiles);
     assert.equal(segs.length, 3, 'all three tiles (road–building–road) should emit strokes');
@@ -305,11 +308,8 @@ describe('buildRoadNetworkStrokes', () => {
 
   test('BUILDING tile with one roadDir (spoke endpoint) emits a stub into the building', () => {
     const tiles = new Map();
-    tiles.set(hexKey(0, 0),
-      { col: 0, row: 0, type: TileType.ROAD,     roadDirs: new Set([hexKey(1, 0)]) });
-    tiles.set(hexKey(1, 0),
-      { col: 1, row: 0, type: TileType.BUILDING, building: 'INN',
-        roadDirs: new Set([hexKey(0, 0)]) });
+    tiles.set(hexKey(0, 0), mkTile(0, 0, TileType.ROAD,     { roadDirs: [hexKey(1, 0)] }));
+    tiles.set(hexKey(1, 0), mkTile(1, 0, TileType.BUILDING, { building: 'INN', roadDirs: [hexKey(0, 0)] }));
 
     const segs = buildRoadNetworkStrokes(tiles);
     const building = segs.find(s => s.tile.type === TileType.BUILDING);
@@ -320,20 +320,16 @@ describe('buildRoadNetworkStrokes', () => {
 
   test('BUILDING tile without roadDirs (off the network) emits no strokes', () => {
     const tiles = new Map();
-    tiles.set(hexKey(0, 0),
-      { col: 0, row: 0, type: TileType.BUILDING, building: 'INN', roadDirs: new Set() });
+    tiles.set(hexKey(0, 0), mkTile(0, 0, TileType.BUILDING, { building: 'INN' }));
     assert.equal(buildRoadNetworkStrokes(tiles).length, 0,
       'unconnected building must not draw road ribbon');
   });
 
   test('BRIDGE tiles with roadDirs participate in the road network', () => {
     const tiles = new Map();
-    tiles.set(hexKey(0, 0),
-      { col: 0, row: 0, type: TileType.ROAD, roadDirs: new Set([hexKey(1, 0)]) });
-    tiles.set(hexKey(1, 0),
-      { col: 1, row: 0, type: TileType.BRIDGE, roadDirs: new Set([hexKey(0, 0), hexKey(2, 0)]) });
-    tiles.set(hexKey(2, 0),
-      { col: 2, row: 0, type: TileType.ROAD, roadDirs: new Set([hexKey(1, 0)]) });
+    tiles.set(hexKey(0, 0), mkTile(0, 0, TileType.ROAD,   { roadDirs: [hexKey(1, 0)] }));
+    tiles.set(hexKey(1, 0), mkTile(1, 0, TileType.BRIDGE, { roadDirs: [hexKey(0, 0), hexKey(2, 0)] }));
+    tiles.set(hexKey(2, 0), mkTile(2, 0, TileType.ROAD,   { roadDirs: [hexKey(1, 0)] }));
     const segs = buildRoadNetworkStrokes(tiles);
     assert.equal(segs.length, 3);
     // The bridge segment should contribute one through-bezier
