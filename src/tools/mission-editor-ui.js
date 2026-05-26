@@ -48,7 +48,7 @@ import {
   addStoryTrigger, removeStoryTrigger, moveStoryTrigger,
   addWave, removeWave, populateFromMission, CreationMode, MAP_EDGES,
   valuePanelKind, ToolValueKind, createLayerVisibility, showStructures,
-  roadNodeMarkersVisible, stripTileOverlays,
+  roadNodeMarkersVisible, stripTileOverlays, mapSizePreset,
 } from './mission-editor.js';
 import { MAP_SIZES } from '../map.js';
 import { createTabController } from './tab-controller.js';
@@ -94,16 +94,16 @@ const ENEMY_FACTORIES = {
 // The icon tool palette (item 7) — emoji glyph + tooltip label per tool, in a
 // stable display order. Glyphs are plain emoji so they need no asset loading.
 const TOOL_PALETTE = [
-  { id: EditorTool.PAINT_BASE,      icon: '🌿', label: 'Paint Base' },
-  { id: EditorTool.PAINT_STRUCTURE, icon: '🏠', label: 'Paint Structure' },
-  { id: EditorTool.PAINT_PATH,      icon: '🛤', label: 'Paint Path' },
-  { id: EditorTool.SET_RESOURCE,    icon: '💎', label: 'Set Resource' },
-  { id: EditorTool.HIDDEN_SURVIVOR, icon: '🙋', label: 'Hidden Survivor' },
-  { id: EditorTool.ENEMY_UNIT,      icon: '🧟', label: 'Enemy Unit' },
-  { id: EditorTool.HERO_START,      icon: '🛡', label: 'Hero Start' },
-  { id: EditorTool.WITCH_START,     icon: '🧙', label: 'Witch Start' },
-  { id: EditorTool.ROAD_NODE,       icon: '📍', label: 'Road Node' },
-  { id: EditorTool.POWER_NODE,      icon: '🔮', label: 'Power Node' },
+  { id: EditorTool.PAINT_BASE,      icon: '🌿', label: 'Paint Base',      tip: 'Paint base terrain (grass / forest / dirt) on clicked tiles' },
+  { id: EditorTool.PAINT_STRUCTURE, icon: '🏠', label: 'Paint Structure', tip: 'Place or clear a building on clicked tiles' },
+  { id: EditorTool.PAINT_PATH,      icon: '🛤', label: 'Paint Path',      tip: 'Paint a path overlay (road / river / bridge) over the base' },
+  { id: EditorTool.SET_RESOURCE,    icon: '💎', label: 'Set Resource',    tip: 'Set or clear a harvestable resource on clicked tiles' },
+  { id: EditorTool.HIDDEN_SURVIVOR, icon: '🙋', label: 'Hidden Survivor', tip: 'Toggle a hidden survivor to be discovered on a tile' },
+  { id: EditorTool.ENEMY_UNIT,      icon: '🧟', label: 'Enemy Unit',      tip: 'Place / remove a pre-placed enemy unit on a tile' },
+  { id: EditorTool.HERO_START,      icon: '🛡', label: 'Hero Start',      tip: 'Move the hero starting position to the clicked tile' },
+  { id: EditorTool.WITCH_START,     icon: '🧙', label: 'Witch Start',     tip: 'Move the witch starting position to the clicked tile' },
+  { id: EditorTool.ROAD_NODE,       icon: '📍', label: 'Road Node',       tip: 'Toggle an extra road-network waypoint (then Regenerate Roads)' },
+  { id: EditorTool.POWER_NODE,      icon: '🔮', label: 'Power Node',      tip: 'Toggle a Power Node objective on the clicked tile' },
 ];
 
 // Short hints shown in the VALUE panel for the value-less tools.
@@ -168,6 +168,14 @@ function buildState(editor, layers = null) {
 export function initEditor(doc = document) {
   const canvas = doc.getElementById('e-render-canvas');
   const palette = doc.getElementById('e-palette');
+  // The map-area frame (#e-canvas-pane) is position:relative — both the toast
+  // host (item 4) and the in-map controls (items 1 + 3) are anchored to it so
+  // they ride above the canvas and stay put across pan / zoom / refit.
+  const pane = doc.getElementById('e-canvas-pane') ?? canvas?.parentElement ?? doc.body;
+
+  // Toast host (item 4): load/save/validate errors + resize guards pop over the
+  // map instead of cluttering the sidebar. Auto-fade, [x] to dismiss now.
+  const toast = createToastHost(doc, pane);
 
   // Editor canvas layer visibility (item 6). Applied EDITOR-SIDE in buildState
   // (filtered display build) + the post-draw overlay pass — renderer.js stays
@@ -310,7 +318,15 @@ export function initEditor(doc = document) {
   // load / New / resize can refresh whatever changed (the Map tab depends on
   // the LOCKED mode + current dims; the forms depend on meta).
   const sidebar = buildSidebar(doc, palette);
-  const formStatus = (msg, ok) => sidebar.setStatus(msg, ok);
+  // Status now routes to a toast over the map (item 4) instead of a sidebar line.
+  const formStatus = (msg, ok) => { if (msg) toast.show(msg, { type: ok ? 'ok' : 'err' }); };
+
+  // In-map controls (items 1 + 3): the per-edge circular resize buttons, the
+  // fit-map control, and the N×N size badge. Created once over the pane; refresh()
+  // re-reads the mode (edge buttons are handmade-only) + live dims after any
+  // structural change. mapArea is assigned below; rebuildMapPalette calls
+  // mapArea.refresh() so the badge / edge visibility track every rebuild.
+  let mapArea = null;
 
   function rebuildForms() {
     buildForms(doc, sidebar.panes, editor, rerender, rebuildForms, formStatus);
@@ -318,13 +334,21 @@ export function initEditor(doc = document) {
   // The Map palette reflects the locked mode + live dims; rebuild it whenever
   // those can change (creation, resize, load) and reframe the canvas.
   function rebuildMapPalette() {
-    buildMapPalette(doc, sidebar.panes.map, editor, rerender, openPreview, resetViewAndDraw, {
+    buildMapPalette(doc, sidebar.panes.map, editor, rerender, openPreview, {
       onSizeChange: () => { rebuildMapPalette(); resetViewAndDraw(); },
       setStatus: formStatus,
       // Tool change can flip the road-node-marker auto-show, so redraw overlays.
       onToolChange: () => draw(),
     });
+    mapArea?.refresh();
   }
+
+  mapArea = buildMapAreaControls(doc, pane, editor, {
+    onFit: () => resetViewAndDraw(),
+    // A successful edge resize changes dims → rebuild the palette + reframe.
+    onResize: (res) => { if (res.ok) { rebuildMapPalette(); resetViewAndDraw(); } },
+    toast,
+  });
   // The Layers (visibility) pane toggles the editor-side display filters.
   function rebuildLayers() {
     buildLayersPanel(doc, sidebar.panes.layers, layers, () => rerender());
@@ -469,20 +493,21 @@ function authoredRoadNodeKeys(mapDef) {
 }
 
 // ── Tabbed sidebar ────────────────────────────────────────────────────────────
-// Splits the old single-scroll palette into four tabs so only one group of
-// controls shows at a time. Returns { panes, setStatus } where `panes` holds the
-// four pane containers (map / mission / events / units) — `map` is (re)built by
-// rebuildMapPalette and the other three by buildForms — and `setStatus` writes
-// to the shared form-validation status line.
+// Splits the old single-scroll palette into five tabs so only one group of
+// controls shows at a time. Returns { panes } where `panes` holds the five pane
+// containers (map / layers / mission / events / units) — `map` is (re)built by
+// rebuildMapPalette, `layers` by buildLayersPanel, and the other three by
+// buildForms. Status now surfaces as a toast over the map (item 4), not a
+// sidebar line.
 function buildSidebar(doc, root) {
   root.innerHTML = '';
 
   const SIDEBAR_TABS = [
-    { id: 'map', label: 'Map' },
-    { id: 'layers', label: 'Layers' },
-    { id: 'mission', label: 'Mission' },
-    { id: 'events', label: 'Events' },
-    { id: 'units', label: 'Units' },
+    { id: 'map', label: 'Map', tip: 'Terrain, structures, paths, starts, nodes + sizing tools' },
+    { id: 'layers', label: 'Layers', tip: 'Toggle which map layers are drawn in the editor view' },
+    { id: 'mission', label: 'Mission', tip: 'Mission properties, narrative, phase cycle, resources' },
+    { id: 'events', label: 'Events', tip: 'Win/lose objectives, story triggers, enemy waves' },
+    { id: 'units', label: 'Units', tip: 'Placed enemy units + survivor start positions' },
   ];
 
   // Tab buttons.
@@ -493,6 +518,7 @@ function buildSidebar(doc, root) {
     const b = doc.createElement('button');
     b.className = 'e-stab';
     b.textContent = t.label;
+    b.title = t.tip; // item 2 — tooltip on every control
     b.dataset.stab = t.id;
     b.addEventListener('click', () => stabs.activate(t.id));
     tabBtns[t.id] = b;
@@ -509,16 +535,6 @@ function buildSidebar(doc, root) {
     paneEls[t.id] = p;
     root.append(p);
   }
-
-  // Shared form-validation status line (JSON parse errors etc.).
-  const status = doc.createElement('div');
-  status.className = 'e-status';
-  root.append(status);
-  const setStatus = (msg, ok) => {
-    status.textContent = msg || '';
-    status.classList.toggle('err', !ok);
-    status.classList.toggle('ok', !!ok && !!msg);
-  };
 
   // Lazy tab-switch via the shared controller — DOM-free + already unit-tested.
   const stabs = createTabController(SIDEBAR_TABS.map(t => t.id), {
@@ -541,29 +557,155 @@ function buildSidebar(doc, root) {
       events: paneEls.events,
       units: paneEls.units,
     },
-    setStatus,
   };
+}
+
+// ── Toast host (item 4) ─────────────────────────────────────────────────────────
+// A reusable toast stack anchored over the map area. show(msg, opts) pops a toast
+// that auto-fades after `timeout` ms (0 = sticky) and carries an [✕] to dismiss
+// immediately; it returns a { dismiss } handle. dismissAll() clears the stack.
+// Pure DOM (createElement / append / remove / addEventListener) so it unit-tests
+// against a lightweight fake document.
+export function createToastHost(doc, container) {
+  const host = doc.createElement('div');
+  host.className = 'e-toast-host';
+  container.append(host);
+  const live = new Set();
+
+  function show(msg, { type = 'info', timeout = 4500 } = {}) {
+    if (!msg) return { dismiss() {} };
+    const el = doc.createElement('div');
+    el.className = `e-toast e-toast-${type}`;
+    const text = doc.createElement('span');
+    text.className = 'e-toast-msg';
+    text.textContent = msg;
+    const close = doc.createElement('button');
+    close.type = 'button';
+    close.className = 'e-toast-x';
+    close.textContent = '✕';
+    close.title = 'Dismiss';
+    el.append(text, close);
+    host.append(el);
+    live.add(el);
+
+    let timer = null;
+    const dismiss = () => {
+      if (!live.has(el)) return;
+      live.delete(el);
+      if (timer) { clearTimeout(timer); timer = null; }
+      el.remove();
+    };
+    close.addEventListener('click', dismiss);
+    if (timeout > 0) timer = setTimeout(dismiss, timeout);
+    return { dismiss };
+  }
+
+  function dismissAll() {
+    for (const el of [...live]) { live.delete(el); el.remove(); }
+  }
+
+  return { show, dismissAll, _host: host };
+}
+
+// ── In-map controls (items 1 + 3) ───────────────────────────────────────────────
+// Three overlays anchored to the map-area frame: the per-edge circular resize
+// buttons (handmade only), the fit-map control cluster, and the N×N size badge.
+// refresh() re-reads mode + dims after any structural change.
+function buildMapAreaControls(doc, pane, editor, { onFit, onResize, toast }) {
+  const edges = buildEdgeButtons(doc, editor, { onResize, toast });
+  const controls = buildMapControls(doc, { onFit });
+  const badge = doc.createElement('div');
+  badge.className = 'e-size-badge';
+  badge.title = 'Current map size (columns × rows)';
+  pane.append(edges, controls, badge);
+
+  function refresh() {
+    edges.style.display = editor.getMode() === 'handmade' ? '' : 'none';
+    const dims = editor.getDims();
+    badge.textContent = `${dims.cols} × ${dims.rows}`;
+  }
+  refresh();
+  return { refresh };
+}
+
+/**
+ * Build the in-map circular per-edge resize controls (item 1). One round −/+ pair
+ * anchored to each map-frame edge (top/bottom/left/right). Each click routes
+ * through editor.resizeEdge(edge, ±1) — the SAME coordinate-remap logic the old
+ * sidebar rows used (relocated, not reimplemented). A blocked / lossy resize
+ * surfaces its warning via `toast`, and the result is handed to `onResize`.
+ * Returns the overlay container; exported for unit-testing the relocation wiring.
+ */
+export function buildEdgeButtons(doc, editor, { onResize = () => {}, toast } = {}) {
+  const wrap = doc.createElement('div');
+  wrap.className = 'e-edge-overlay';
+  for (const edge of MAP_EDGES) {
+    const group = doc.createElement('div');
+    group.className = `e-edge-group e-edge-${edge}`;
+    group.append(edgeBtn('−', edge, -1), edgeBtn('+', edge, 1));
+    wrap.append(group);
+  }
+  return wrap;
+
+  function edgeBtn(glyph, edge, delta) {
+    const b = doc.createElement('button');
+    b.type = 'button';
+    b.className = 'e-edge-btn';
+    b.textContent = glyph;
+    b.dataset.edge = edge;
+    b.dataset.delta = String(delta);
+    const unit = (edge === 'left' || edge === 'right') ? 'column' : 'row';
+    b.title = delta > 0 ? `Add a ${edge} ${unit}` : `Remove the ${edge} ${unit}`;
+    b.addEventListener('click', () => {
+      const res = editor.resizeEdge(edge, delta);
+      if (toast) {
+        if (!res.ok) toast.show(res.warning || 'Resize blocked.', { type: 'err' });
+        else if (res.warning) toast.show(res.warning, { type: 'info' });
+      }
+      onResize(res);
+    });
+    return b;
+  }
+}
+
+/**
+ * Build the in-map control cluster (item 3). Currently a single "fit map" button
+ * (⛶) matching the in-game zoom-fit control: pressing it reframes the map via the
+ * injected `onFit` (which resize()s + resetView()s the SAME Renderer the game
+ * uses, exactly like ui.js's zoom-fit handler). Returns the cluster element so the
+ * next chunk can append more map controls to it (clean seam). Exported for tests.
+ */
+export function buildMapControls(doc, { onFit = () => {} } = {}) {
+  const cluster = doc.createElement('div');
+  cluster.className = 'e-mapctl';
+  const fit = doc.createElement('button');
+  fit.type = 'button';
+  fit.className = 'e-mapctl-btn';
+  fit.textContent = '⛶';
+  fit.title = 'Fit map to view';
+  fit.setAttribute('aria-label', 'Fit map to view');
+  fit.addEventListener('click', () => onFit());
+  cluster.append(fit);
+  return cluster;
 }
 
 // ── Map-tab palette DOM ───────────────────────────────────────────────────────
 
-function buildMapPalette(doc, root, editor, rerender, onPreview3D, onResetView, hooks = {}) {
+function buildMapPalette(doc, root, editor, rerender, onPreview3D, hooks = {}) {
   root.innerHTML = '';
   const onSizeChange = hooks.onSizeChange ?? (() => {});
   const setStatus = hooks.setStatus ?? (() => {});
 
   const mapDef = editor.getMapDef();
   const isProcedural = mapDef.mode === 'procedural';
-  const dims = editor.getDims();
 
-  // ── Map properties: LOCKED mode (read-only) + live size ──────────────────
+  // ── Map properties: LOCKED mode (read-only) ──────────────────────────────
   // The map mode is chosen once at creation (File ▸ New…) and cannot be toggled
-  // here — only displayed. Size is editable via the per-edge buttons (handmade)
-  // or the size selector (overlay).
+  // here — only displayed. Size is editable via the in-map per-edge buttons
+  // (handmade) or the Gen Size selector (overlay); the live N×N is shown by the
+  // in-map size badge (item 12), so no Size field is duplicated here.
   const mapSection = section(doc, 'Map');
   mapSection.append(readonlyRow(doc, 'Mode', editor.getMapModeLabel()));
-  const sizeRow = readonlyRow(doc, 'Size', `${dims.cols} × ${dims.rows}`);
-  mapSection.append(sizeRow);
 
   if (isProcedural) {
     // Overlay: seed + named size selector (generateMap is discrete, so resizing
@@ -574,6 +716,7 @@ function buildMapPalette(doc, root, editor, rerender, onPreview3D, onResetView, 
     const seedInput = doc.createElement('input');
     seedInput.type = 'number';
     seedInput.value = String(mapDef.seed ?? 12345);
+    seedInput.title = 'Procedural generation seed — same seed reproduces the same base map';
     seedInput.addEventListener('change', () => editor.setSeed(parseInt(seedInput.value, 10) || 0));
     seedRow.append(labelFor(doc, 'Seed'), seedInput);
     mapSection.append(seedRow);
@@ -585,13 +728,16 @@ function buildMapPalette(doc, root, editor, rerender, onPreview3D, onResetView, 
         if (res.warning) setStatus(res.warning, res.ok);
         onSizeChange();
       }));
-    mapSection.append(actionBtn(doc, 'Rebuild Map', () => editor.regenerateRoads()));
+    mapSection.append(actionBtn(doc, 'Rebuild Map',
+      () => editor.regenerateRoads(),
+      'Regenerate the procedural base + roads from the current seed'));
   } else {
-    // Handmade (blank/baked): per-edge add/remove. Top/left shift remaps every
-    // coordinate; bottom/right extend or truncate. A blocked remove (start /
-    // node on the edge) surfaces a warning instead of orphaning it.
-    mapSection.append(buildEdgeControls(doc, editor, setStatus, onSizeChange));
-    mapSection.append(actionBtn(doc, 'Regenerate Roads', () => editor.regenerateRoads()));
+    // Handmade (blank/baked): resize via the IN-MAP per-edge circular buttons
+    // (item 1) — relocated out of the sidebar. Only the road-derivation action
+    // stays here.
+    mapSection.append(actionBtn(doc, 'Regenerate Roads',
+      () => editor.regenerateRoads(),
+      'Re-derive the road network from buildings, bridges + authored road nodes'));
   }
   root.append(mapSection);
 
@@ -608,7 +754,7 @@ function buildMapPalette(doc, root, editor, rerender, onPreview3D, onResetView, 
     const btn = doc.createElement('button');
     btn.className = 'e-toolbtn';
     btn.textContent = t.icon;
-    btn.title = t.label;
+    btn.title = t.tip ?? t.label; // item 2 — descriptive tooltip, not just the label
     btn.setAttribute('aria-label', t.label);
     btn.dataset.tool = t.id;
     btn.addEventListener('click', () => {
@@ -639,17 +785,12 @@ function buildMapPalette(doc, root, editor, rerender, onPreview3D, onResetView, 
   }
   renderValuePanel();
 
-  // Edit + view actions. (Undo / Redo moved to the top bar — item 5.)
-  if (onResetView) {
-    const editSection = section(doc, 'View');
-    editSection.append(actionBtn(doc, 'Reset View', () => onResetView()));
-    root.append(editSection);
-  }
-
-  // Preview — rebuilds the current mission map in 3D via Renderer3D.
+  // View / Reset moved to the in-map fit-map control (item 3). Undo / Redo live
+  // on the top bar (item 5). Only the 3D preview action remains in the sidebar.
   if (onPreview3D) {
     const previewSection = section(doc, 'Preview');
-    previewSection.append(actionBtn(doc, 'Preview in 3D', () => onPreview3D()));
+    previewSection.append(actionBtn(doc, 'Preview in 3D', () => onPreview3D(),
+      'Open a live 3D preview of the current map (Babylon renderer)'));
     root.append(previewSection);
   }
 }
@@ -709,7 +850,7 @@ function swatchGrid(doc, items, selected, onPick) {
   for (const it of items) {
     const btn = doc.createElement('button');
     btn.className = 'e-swatch';
-    btn.title = it.label;
+    btn.title = `Select ${it.label}`;
     btn.dataset.value = it.key == null ? '' : it.key;
     if (it.key === selected) btn.classList.add('active');
     const chip = doc.createElement('span');
@@ -734,6 +875,7 @@ function chipRow(doc, items, selected, onPick) {
     const btn = doc.createElement('button');
     btn.className = 'e-chip';
     btn.textContent = it.label;
+    btn.title = `Select ${it.label}`;
     btn.dataset.value = it.key == null ? '' : it.key;
     if (it.key === selected) btn.classList.add('active');
     btn.addEventListener('click', () => onPick(it.key));
@@ -752,18 +894,43 @@ function titleCase(s) {
 function buildLayersPanel(doc, root, layers, onChange) {
   root.innerHTML = '';
   const sec = section(doc, 'Visibility');
+  // item 11 — each toggle carries a tooltip explaining exactly what it shows.
   const toggles = [
-    { key: 'baseOnly', label: 'Base only' },
-    { key: 'roadsBuildings', label: 'Roads + Buildings' },
-    { key: 'powerNodes', label: 'Power Nodes' },
-    { key: 'playerStarts', label: 'Player Start points' },
-    { key: 'roadNodeMarkers', label: 'Road-network nodes' },
+    { key: 'baseOnly', label: 'Base only',
+      tip: 'Show only base terrain (grass / forest / dirt) — hides structures + paths' },
+    { key: 'roadsBuildings', label: 'Roads + Buildings',
+      tip: 'Draw the structure + path layers (buildings, roads, rivers, bridges)' },
+    { key: 'powerNodes', label: 'Power Nodes',
+      tip: 'Draw the Power Node objective markers' },
+    { key: 'playerStarts', label: 'Player Start points',
+      tip: 'Draw the hero + witch start markers' },
+    { key: 'roadNodeMarkers', label: 'Road-network nodes',
+      tip: 'Draw the road-graph node overlay (structural + authored waypoints)' },
   ];
   for (const t of toggles) {
-    sec.append(boolRow(doc, t.label, layers[t.key], (v) => { layers[t.key] = v; onChange(); }));
+    sec.append(layerToggleRow(doc, t.label, t.tip, layers[t.key],
+      (v) => { layers[t.key] = v; onChange(); }));
   }
   sec.append(hint(doc, 'Road-network nodes also auto-show while the Road Node tool is active.'));
   root.append(sec);
+}
+
+// A full-width layer toggle row (item 11): the label fills the row, the checkbox
+// sits at the right edge, and the whole row carries the explanatory tooltip.
+function layerToggleRow(doc, label, tip, value, onChange) {
+  const row = doc.createElement('label');
+  row.className = 'e-layer-row';
+  if (tip) row.title = tip;
+  const txt = doc.createElement('span');
+  txt.className = 'e-layer-label';
+  txt.textContent = label;
+  const input = doc.createElement('input');
+  input.type = 'checkbox';
+  input.checked = !!value;
+  if (tip) input.title = tip;
+  input.addEventListener('change', () => onChange(input.checked));
+  row.append(txt, input);
+  return row;
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -791,8 +958,9 @@ function buildForms(doc, panes, editor, rerenderCanvas, rebuild, setStatus) {
     numRow(doc, 'Chapter', meta.chapter, v => { meta.chapter = v; }),
     textRow(doc, 'Campaign', meta.campaignId ?? '', v => { meta.campaignId = v || null; }),
     textRow(doc, 'Requires', csv(meta.requires), v => { meta.requires = parseCsvOrNull(v); }),
-    selRow(doc, 'Map Size', ['skirmish', 'standard', 'regional', 'campaign'], meta.mapSize,
-      v => { meta.mapSize = v; }),
+    // Map Size field removed (item 12) — size is set explicitly via the New-map
+    // dialog + in-map edge buttons, and shown by the in-map N×N badge. meta.mapSize
+    // still rides along in the model (set at creation) so the round-trip is lossless.
     boolRow(doc, 'Has Witch', meta.hasWitch, v => { meta.hasWitch = v; }),
     boolRow(doc, 'No Scoring', meta.disableScoring, v => { meta.disableScoring = v; }),
     textRow(doc, 'AI Persona', meta.aiPersonality ?? '', v => { meta.aiPersonality = v || null; }),
@@ -857,7 +1025,8 @@ function buildForms(doc, panes, editor, rerenderCanvas, rebuild, setStatus) {
       down: () => { moveStoryTrigger(meta, i, 1); rebuild(); },
     }, setStatus));
   });
-  story.append(actionBtn(doc, '+ Add Trigger', () => { addStoryTrigger(meta); rebuild(); }));
+  story.append(actionBtn(doc, '+ Add Trigger', () => { addStoryTrigger(meta); rebuild(); },
+    'Add a new story trigger (round- or area-based narrative beat)'));
   panes.events.append(story);
 
   // ── Waves (list editor) ─────────────────────────────────────────────────
@@ -865,7 +1034,8 @@ function buildForms(doc, panes, editor, rerenderCanvas, rebuild, setStatus) {
   (meta.waves ?? []).forEach((w, i) => {
     waves.append(waveCard(doc, w, i, { remove: () => { removeWave(meta, i); rebuild(); } }, setStatus));
   });
-  waves.append(actionBtn(doc, '+ Add Wave', () => { addWave(meta); rebuild(); }));
+  waves.append(actionBtn(doc, '+ Add Wave', () => { addWave(meta); rebuild(); },
+    'Add a new enemy wave (spawns units on a round / kill / area trigger)'));
   panes.events.append(waves);
 
   // ── Enemy units (placed on map; list-view for delete / override edit) ─────
@@ -909,38 +1079,6 @@ function readonlyRow(doc, label, value) {
   return row;
 }
 
-// Per-edge add/remove controls: one row per edge (top/bottom/left/right) with
-// − and + buttons. Each click routes through the controller's resizeEdge; a
-// blocked resize (start/node on the edge) surfaces its warning via setStatus.
-function buildEdgeControls(doc, editor, setStatus, onSizeChange) {
-  const wrap = doc.createElement('div');
-  wrap.className = 'e-edges';
-  const hdr = doc.createElement('div');
-  hdr.className = 'e-edges-hdr';
-  hdr.textContent = 'Resize edges';
-  wrap.append(hdr);
-
-  for (const edge of MAP_EDGES) {
-    const row = doc.createElement('div');
-    row.className = 'e-edge-row';
-    const lbl = doc.createElement('span');
-    lbl.className = 'e-edge-label';
-    lbl.textContent = edge;
-    const minus = smallBtn(doc, '−', () => applyEdge(edge, -1));
-    const plus = smallBtn(doc, '+', () => applyEdge(edge, 1));
-    row.append(lbl, minus, plus);
-    wrap.append(row);
-  }
-  return wrap;
-
-  function applyEdge(edge, delta) {
-    const res = editor.resizeEdge(edge, delta);
-    if (!res.ok) { setStatus(res.warning || 'Resize blocked.', false); return; }
-    setStatus(res.warning || '', true);
-    onSizeChange(); // rebuild the palette (new dims) + reframe the canvas
-  }
-}
-
 // ── New-mission creation dialog (item 4) ───────────────────────────────────────
 // A small modal overlay over the editor panel: pick a LOCKED map mode (Blank /
 // Baked Generated / Overlay) + size (and seed for the generated modes), then
@@ -966,6 +1104,7 @@ function openCreationDialog(doc, onCreate) {
     { key: 'Baked Generated', value: CreationMode.BAKED },
     { key: 'Overlay (procedural)', value: CreationMode.OVERLAY },
   ], 'Blank (custom)', () => {}); // value read via selectedOptions below
+  modeSel.title = 'Blank = empty editable grid · Baked = generated then fully editable · Overlay = regenerable seeded base + edits';
   // The `select` helper keys options by display text; map back to the mode value.
   const MODE_BY_LABEL = {
     'Blank (custom)': CreationMode.BLANK,
@@ -979,17 +1118,46 @@ function openCreationDialog(doc, onCreate) {
   modeRow.append(labelFor(doc, 'Mode'), modeSel);
   dlg.append(modeRow);
 
-  // Blank dims.
+  // Blank dims: a standard-size preset dropdown that prefills Cols/Rows (item 12),
+  // plus a "Custom" option that re-enables the explicit X/Y inputs.
   const colsInput = numInput(doc, 13);
   const rowsInput = numInput(doc, 13);
+  colsInput.title = 'Number of columns (X)';
+  rowsInput.title = 'Number of rows (Y)';
+  const CUSTOM = 'Custom';
+  const presetOpts = [
+    ...Object.keys(MAP_SIZES).map(k => ({ key: k, value: k })),
+    { key: CUSTOM, value: CUSTOM },
+  ];
+  // Default to "standard" (13×13) — matches the previous hard-coded default.
+  const presetSel = select(doc, presetOpts, 'standard', applyPreset);
+  presetSel.title = 'Pick a standard map size to prefill Cols/Rows, or Custom to set them by hand';
   const blankWrap = doc.createElement('div');
-  blankWrap.append(twoCol(doc, 'Cols', colsInput), twoCol(doc, 'Rows', rowsInput));
+  blankWrap.append(twoCol(doc, 'Size', presetSel), twoCol(doc, 'Cols', colsInput), twoCol(doc, 'Rows', rowsInput));
   dlg.append(blankWrap);
+  applyPreset('standard'); // prefill + lock the inputs for the default preset
+
+  // A preset name prefills + locks Cols/Rows; "Custom" re-enables manual entry.
+  function applyPreset(name) {
+    const dims = mapSizePreset(name);
+    if (dims) {
+      colsInput.value = String(dims.cols);
+      rowsInput.value = String(dims.rows);
+      colsInput.disabled = true;
+      rowsInput.disabled = true;
+    } else {
+      colsInput.disabled = false;
+      rowsInput.disabled = false;
+    }
+  }
 
   // Generated (baked + overlay): named size + seed (+ node count).
   const sizeSel = select(doc, Object.keys(MAP_SIZES).map(k => ({ key: k, value: k })), 'standard', () => {});
+  sizeSel.title = 'Standard generation size for the procedural base';
   const seedInput = numInput(doc, 12345);
+  seedInput.title = 'Generation seed — the same seed reproduces the same map';
   const nodeInput = numInput(doc, 3);
+  nodeInput.title = 'Number of Power Nodes to place';
   const genWrap = doc.createElement('div');
   genWrap.append(twoCol(doc, 'Gen Size', sizeSel), twoCol(doc, 'Seed', seedInput), twoCol(doc, 'Nodes', nodeInput));
   dlg.append(genWrap);
@@ -1003,7 +1171,7 @@ function openCreationDialog(doc, onCreate) {
   // Buttons.
   const btns = doc.createElement('div');
   btns.className = 'e-modal-btns';
-  const cancel = actionBtn(doc, 'Cancel', () => close());
+  const cancel = actionBtn(doc, 'Cancel', () => close(), 'Discard and close without creating a map');
   const create = actionBtn(doc, 'Create', () => {
     const opts = { mode };
     if (mode === CreationMode.BLANK) {
@@ -1016,7 +1184,7 @@ function openCreationDialog(doc, onCreate) {
     }
     close();
     onCreate(opts);
-  });
+  }, 'Create the new map with these settings');
   btns.append(cancel, create);
   dlg.append(btns);
 
@@ -1211,7 +1379,7 @@ function placedCard(doc, label, overrides, onOverrides, onDelete, setStatus) {
   head.className = 'e-card-head';
   const name = doc.createElement('span');
   name.textContent = label;
-  const del = smallBtn(doc, '✕', onDelete);
+  const del = smallBtn(doc, '✕', onDelete, 'Remove this placement');
   head.append(name, del);
   card.append(head);
   if (overrides && onOverrides) {
@@ -1223,16 +1391,17 @@ function placedCard(doc, label, overrides, onOverrides, onDelete, setStatus) {
 function cardButtons(doc, { remove, up, down }) {
   const row = doc.createElement('div');
   row.className = 'e-card-btns';
-  if (up) row.append(smallBtn(doc, '▲', up));
-  if (down) row.append(smallBtn(doc, '▼', down));
-  if (remove) row.append(smallBtn(doc, '✕', remove));
+  if (up) row.append(smallBtn(doc, '▲', up, 'Move up'));
+  if (down) row.append(smallBtn(doc, '▼', down, 'Move down'));
+  if (remove) row.append(smallBtn(doc, '✕', remove, 'Delete'));
   return row;
 }
 
-function smallBtn(doc, text, onClick) {
+function smallBtn(doc, text, onClick, title) {
   const b = doc.createElement('button');
   b.className = 'e-small';
   b.textContent = text;
+  if (title) b.title = title; // item 2 — optional descriptive tooltip
   b.addEventListener('click', onClick);
   return b;
 }
@@ -1285,10 +1454,11 @@ function labeledSelect(doc, label, options, initial, onChange) {
   return row;
 }
 
-function actionBtn(doc, text, onClick) {
+function actionBtn(doc, text, onClick, title) {
   const b = doc.createElement('button');
   b.className = 'e-action';
   b.textContent = text;
+  if (title) b.title = title; // item 2 — optional descriptive tooltip
   b.addEventListener('click', onClick);
   return b;
 }

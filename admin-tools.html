@@ -271,6 +271,75 @@
     #editor-panel .e-edge-row { display: grid; grid-template-columns: 1fr auto auto; gap: 4px; align-items: center; margin: 3px 0; }
     #editor-panel .e-edge-label { font-size: 12px; color: #d4cba0; text-transform: capitalize; }
     #editor-panel .e-edge-row .e-small { min-width: 30px; text-align: center; }
+
+    /* ── In-map per-edge resize buttons (item 1) ───────────────────────────── */
+    /* Anchored to the map-area frame, so they stay legible as the map pans/zooms.
+       Each edge gets a circular −/+ pair centered on that edge of the pane. */
+    #editor-panel .e-edge-overlay { position: absolute; inset: 0; z-index: 4; pointer-events: none; }
+    #editor-panel .e-edge-group { position: absolute; display: flex; gap: 6px; pointer-events: auto; }
+    #editor-panel .e-edge-top    { top: 8px;    left: 50%; transform: translateX(-50%); }
+    #editor-panel .e-edge-bottom { bottom: 8px; left: 50%; transform: translateX(-50%); }
+    #editor-panel .e-edge-left   { left: 8px;   top: 50%; transform: translateY(-50%); flex-direction: column; }
+    #editor-panel .e-edge-right  { right: 8px;  top: 50%; transform: translateY(-50%); flex-direction: column; }
+    #editor-panel .e-edge-btn {
+      width: 28px; height: 28px; border-radius: 50%; border: 1px solid #c4a04a;
+      background: rgba(26,22,16,0.85); color: #ffd680; font-size: 16px; line-height: 1;
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+    }
+    #editor-panel .e-edge-btn:hover { background: #5a4a30; }
+
+    /* ── In-map control cluster (item 3 — fit map) ─────────────────────────── */
+    #editor-panel .e-mapctl {
+      position: absolute; right: 10px; bottom: 10px; z-index: 4;
+      display: flex; flex-direction: column; gap: 6px;
+    }
+    #editor-panel .e-mapctl-btn {
+      width: 34px; height: 34px; border-radius: 6px; border: 1px solid #c4a04a;
+      background: rgba(26,22,16,0.85); color: #ffd680; font-size: 18px; line-height: 1;
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+    }
+    #editor-panel .e-mapctl-btn:hover { background: #5a4a30; }
+
+    /* ── In-map N×N size badge (item 12) ───────────────────────────────────── */
+    #editor-panel .e-size-badge {
+      position: absolute; left: 10px; bottom: 10px; z-index: 4;
+      padding: 3px 8px; border: 1px solid #2c2620; border-radius: 4px;
+      background: rgba(10,8,5,0.8); color: #d4cba0; font-size: 11px; letter-spacing: 0.5px;
+      pointer-events: none;
+    }
+
+    /* ── Full-width layer toggles (item 11) ────────────────────────────────── */
+    #editor-panel .e-layer-row {
+      display: flex; align-items: center; justify-content: space-between; width: 100%;
+      gap: 8px; margin: 4px 0; padding: 5px 6px; font-size: 12px; cursor: pointer;
+      border: 1px solid #2c2620; background: #14110d; border-radius: 3px;
+    }
+    #editor-panel .e-layer-row:hover { background: #1f1a13; }
+    #editor-panel .e-layer-label { color: #d4cba0; flex: 1; }
+
+    /* ── Toast stack over the map (item 4) ─────────────────────────────────── */
+    #editor-panel .e-toast-host {
+      position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+      z-index: 20; display: flex; flex-direction: column; gap: 6px; align-items: center;
+      pointer-events: none; max-width: 80%;
+    }
+    #editor-panel .e-toast {
+      display: flex; align-items: center; gap: 10px; pointer-events: auto;
+      padding: 8px 12px; border-radius: 5px; font-size: 12px; color: #f0e8d0;
+      background: rgba(26,22,16,0.96); border: 1px solid #5a4a30;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.6); animation: e-toast-in 0.18s ease-out;
+    }
+    #editor-panel .e-toast-err { border-color: #a44; color: #f3c8c8; }
+    #editor-panel .e-toast-ok  { border-color: #5a7a3a; color: #cfe6b8; }
+    #editor-panel .e-toast-msg { line-height: 1.3; }
+    #editor-panel .e-toast-x {
+      border: none; background: none; color: inherit; opacity: 0.7;
+      cursor: pointer; font-size: 12px; padding: 0; line-height: 1;
+    }
+    #editor-panel .e-toast-x:hover { opacity: 1; }
+    @keyframes e-toast-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
     /* Creation dialog (File ▸ New…) */
     #editor-panel .e-modal {
       position: absolute; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center;
@@ -294,9 +363,9 @@
       <div class="menu" id="tools-menu">
         <button class="menu-btn" id="tools-menu-btn" aria-haspopup="true" aria-expanded="false" title="Tools">☰</button>
         <div class="menu-list" id="tools-menu-list" hidden>
-          <button class="menu-item" data-tab="assets">Assets</button>
-          <button class="menu-item" data-tab="lighting">Lighting</button>
-          <button class="menu-item" data-tab="editor">Mission Editor</button>
+          <button class="menu-item" data-tab="assets" title="Browse 3D models + tree assets">Assets</button>
+          <button class="menu-item" data-tab="lighting" title="Tune the per-phase 3D lighting">Lighting</button>
+          <button class="menu-item" data-tab="editor" title="Author campaign mission maps">Mission Editor</button>
         </div>
       </div>
       <span class="brand">Caleb's Hollow Tools</span>
@@ -305,12 +374,12 @@
       <!-- File menu: editor-only Load / Save. Hidden unless the Mission Editor
            tool is active. Drives the editor's loadMissionFile / saveMission. -->
       <div class="menu" id="file-menu" hidden>
-        <button class="menu-btn" id="file-menu-btn" aria-haspopup="true" aria-expanded="false">File</button>
+        <button class="menu-btn" id="file-menu-btn" aria-haspopup="true" aria-expanded="false" title="File operations — New, Load, Save">File</button>
         <div class="menu-list" id="file-menu-list" hidden>
-          <button class="menu-item" id="file-new">New…</button>
-          <button class="menu-item" id="file-load">Load…</button>
-          <button class="menu-item" id="file-load-existing">Load existing mission…</button>
-          <button class="menu-item" id="file-save">Save / Download</button>
+          <button class="menu-item" id="file-new" title="Start a new mission map (pick mode + size)">New…</button>
+          <button class="menu-item" id="file-load" title="Load a mission JSON file from disk">Load…</button>
+          <button class="menu-item" id="file-load-existing" title="Load one of the bundled in-repo campaign missions">Load existing mission…</button>
+          <button class="menu-item" id="file-save" title="Validate the mission and download it as JSON">Save / Download</button>
         </div>
         <!-- Bundled-mission picker: a flyout listing the in-repo campaign
              missions, populated from MIGRATED_MISSIONS. Opened by the
@@ -468,7 +537,7 @@
                and disposed on close / tab-switch (see initEditor). -->
           <div id="e-preview-3d" hidden>
             <canvas id="e-preview-canvas"></canvas>
-            <button id="e-preview-close" type="button">✕ Close 3D</button>
+            <button id="e-preview-close" type="button" title="Close the 3D preview and return to the 2D editor">✕ Close 3D</button>
           </div>
         </div>
         <aside id="e-palette"><!-- tool palette built by initEditor() --></aside>
