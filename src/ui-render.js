@@ -7,6 +7,8 @@ import { ITEMS } from './items.js';
 import { EntityType, ENTITY_COLOR } from './entities.js';
 import { ResourceType } from './tiles.js';
 import { nodeController } from './game.js';
+import { hexKey } from './hex.js';
+import { getFactionTheme } from './theme.js';
 
 // ── Plan action description ───────────────────────────────────────────────────
 
@@ -505,4 +507,31 @@ export function buildObjectivesHtml(witchObjectives, entities, nodeScore, gameMo
               : 'Power Nodes';
 
   return { html, title };
+}
+
+/**
+ * Badge describing the Power Node occupying a hex, for the Unit Stats Bar.
+ * Returns '' when the hex (col,row) is not part of any node cluster.
+ * Shows the node name in its own color plus the controlling faction.
+ */
+export function buildNodeBadgeHtml(witchObjectives, entities, col, row) {
+  if (!witchObjectives || !witchObjectives.length) return '';
+  const key = hexKey(col, row);
+  const node = witchObjectives.find(o =>
+    (o.hexes ?? []).some(h => hexKey(h.col, h.row) === key));
+  if (!node) return '';
+
+  const ctrl = nodeController(node, entities ?? []);
+  const CTRL_DISPLAY = {
+    hero:      { label: 'Hero',         color: getFactionTheme('hero').highlight },
+    witch:     { label: 'Witch',        color: getFactionTheme('witch').highlight },
+    contested: { label: 'Contested',    color: '#ffaa00' },
+    neutral:   { label: 'Uncontrolled', color: '#9a9488' },
+  };
+  const disp = CTRL_DISPLAY[ctrl] ?? CTRL_DISPLAY.neutral;
+
+  const nodeColor = node.color ?? '#c89dff';
+  const name = node.label ?? 'Power Node';
+  return `<span class="usb-terrain-node" style="color:${nodeColor}">⬡ ${name}</span>` +
+    ` · <span style="color:${disp.color}">${disp.label}</span>`;
 }

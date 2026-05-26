@@ -8,6 +8,7 @@ import {
   buildPlanStepsHtml,
   buildPlayerStatusHtml,
   buildObjectivesHtml,
+  buildNodeBadgeHtml,
 } from '../../src/ui-render.js';
 import { PlanActionType } from '../../src/planner.js';
 import { EntityType } from '../../src/entities.js';
@@ -333,5 +334,54 @@ describe('buildObjectivesHtml', () => {
     ];
     const { html } = buildObjectivesHtml(objectives, entities, { hero: 0, witch: 0 });
     assert.ok(html.includes('node-dot contested'), 'equally occupied node should have contested class');
+  });
+});
+
+// ── buildNodeBadgeHtml ────────────────────────────────────────────────────────
+
+describe('buildNodeBadgeHtml', () => {
+  const node = {
+    col: 3, row: 3, label: 'Ancient Altar', color: '#22c55e',
+    hexes: [{ col: 3, row: 3 }, { col: 3, row: 2 }, { col: 4, row: 3 }],
+  };
+  const objectives = [node];
+
+  test('hex outside any node → empty string', () => {
+    assert.equal(buildNodeBadgeHtml(objectives, [], 9, 9), '');
+  });
+
+  test('no objectives → empty string', () => {
+    assert.equal(buildNodeBadgeHtml([], [], 3, 3), '');
+    assert.equal(buildNodeBadgeHtml(undefined, [], 3, 3), '');
+  });
+
+  test('uncontrolled node shows name, color and Uncontrolled', () => {
+    const html = buildNodeBadgeHtml(objectives, [], 3, 3);
+    assert.ok(html.includes('Ancient Altar'), 'shows node name');
+    assert.ok(html.includes('#22c55e'), 'shows node color');
+    assert.ok(html.includes('Uncontrolled'), 'shows uncontrolled state');
+  });
+
+  test('hero-controlled node shows Hero in hero color', () => {
+    const entities = [{ alive: true, owner: 'hero', col: 3, row: 3 }];
+    const html = buildNodeBadgeHtml(objectives, entities, 4, 3);
+    assert.ok(html.includes('Hero'), 'shows Hero');
+    assert.ok(html.includes('#4488ff'), 'shows hero highlight color');
+  });
+
+  test('witch-controlled node shows Witch', () => {
+    const entities = [{ alive: true, owner: 'witch', col: 3, row: 2 }];
+    const html = buildNodeBadgeHtml(objectives, entities, 3, 3);
+    assert.ok(html.includes('Witch'), 'shows Witch');
+    assert.ok(html.includes('#cc3333'), 'shows witch highlight color');
+  });
+
+  test('contested node (equal occupation) shows Contested', () => {
+    const entities = [
+      { alive: true, owner: 'hero', col: 3, row: 3 },
+      { alive: true, owner: 'witch', col: 3, row: 2 },
+    ];
+    const html = buildNodeBadgeHtml(objectives, entities, 4, 3);
+    assert.ok(html.includes('Contested'), 'shows Contested');
   });
 });
