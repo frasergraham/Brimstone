@@ -1,8 +1,14 @@
 # Caleb's Hollow Tools — Unified Editor + Campaign Mission Editor
 
-> **Status:** Approved design, not yet implemented. This document is the spec for a
-> future agent to build against. It was produced after a full exploration of the
-> existing tools, campaign runtime, and map/tile systems.
+> **Status:** ✅ IMPLEMENTED on `dev`. All phases P0–P7 landed: P0 road-network
+> extraction (`1fa7357`), P1 mission-map builder + condition registry (`3233932`),
+> P2 JSON loader + conductor-script registry (`98f38cb`), P3 migration of all 8
+> missions to JSON (`9ed7046`), P4 unified tools page (`85b82f0`), P5 editor core
+> (`ddd57cf`), P6 authoring forms + load/save/validate (`9157d08`), P7 3D-preview
+> button. This document is kept as the historical spec — see the "as-built"
+> divergences noted in `docs/05-game-systems.md` and `docs/07-data-persistence.md`.
+> It was produced after a full exploration of the existing tools, campaign
+> runtime, and map/tile systems.
 
 ## Context
 

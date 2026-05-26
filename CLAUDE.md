@@ -486,6 +486,28 @@ Combat, pathfinding, serialization, and plan-action validation flow through the 
 
 Subclass `HeroFaction` or `WitchFaction` in `src/factions.js`, override `id` / `name` / `leaderType` / `_buildLeader`, register in the `FACTIONS` map, and add a leader factory in `src/entities.js`. If the faction has unique leader abilities, override `innateLeaderAbilities` to return the parent list plus the new ids — `Faction.createLeader()` pushes them onto the entity automatically. See `RogueFaction` / `CaptainFaction` in `factions.js` for the minimal stub pattern.
 
+### New mission (JSON)
+
+Campaign missions are **data-driven JSON** under `src/campaign/missions/*.json` (`schema: 1`). The format is **offline/campaign-only** — there is no server path and no online parity to keep (don't touch `server/`). Author missions in the **Mission Editor**, not by hand-writing tiles.
+
+**Author via the editor** at `/admin/tools` (start the dev server, then the **Mission Editor** tab):
+- Paint the map: terrain, buildings, resources, hidden survivors; place hero/witch starts and Power Nodes; place enemy units.
+- Set extra road-node waypoints, then **Regenerate Roads** — roads (`ROAD`/`BRIDGE` + `roadDirs`) are *derived* from the road-node set (buildings & bridges are implicit nodes). On a handmade map the editor snapshots the derived `roadDirs` back into the tiles (no load-time regen).
+- Author story triggers (round# or area hexes, with an optional `condition` from the registry), waves, objectives, briefing/victory/defeat text, phaseCycle, resources/rewards via the forms.
+- **Preview in 3D** (hands the built `GameState` to `Renderer3D`), then **download** the JSON.
+
+**Schema & loader:** see `src/campaign/missions/long_watch.json` for the canonical example, `docs/design/campaign-mission-editor.md` for the full spec, and `docs/07-data-persistence.md` → "JSON Mission Format". The `map` sub-object (`mode: "handmade"` | `"procedural"`) is built by `buildMissionMap` (`src/campaign/mission-map.js`); everything else mirrors the runtime mission shape verbatim.
+
+**Two fields are string keys, not data:**
+- `storyTriggers[].condition` → a named predicate in `src/campaign/condition-registry.js` (`CONDITIONS`). Add a new condition there (`(state) => boolean`, no mutation) before referencing it.
+- `conductor.scriptKey` → `{ steps, config }` in `src/campaign/conductor-scripts.js` (e.g. `"tutorial"`, whose imperative scripting stays in `src/tutorial/tutorial-config.js` — the registry only aggregates it).
+
+**Validation:** the editor runs the assembled JSON through `loadMissionJSON` / `validateMissionJSON` before download. The four hardening checks: (1) tiles in-bounds, (2) `objectives.win`/`lose` types in `KNOWN_OBJECTIVE_TYPES` (mirrors the 17-case switch in `buildVictoryDelegate`, `src/campaign/campaign.js`), (3) handmade maps define their starts, (4) `map.roadSeed` carried verbatim for regen determinism.
+
+**Register it:** add the mission's `{ id, campaignId }` to `MIGRATED_MISSIONS` in `src/campaign/campaign-registry.js` and drop the file in `src/campaign/missions/`. It's loaded at module init (node via `fs`, browser via same-origin `fetch`) under a top-level `await`, so importers see a populated registry.
+
+> **Admin tooling:** `/admin/tools` (`admin-tools.html`) is the unified **Caleb's Hollow Tools** page — **Assets** (Babylon 3D model browser) | **Lighting** (Renderer3D tuner) | **Mission Editor** tabs, each lazy-initialised on first activation.
+
 ---
 
 ## UI Terminology

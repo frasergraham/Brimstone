@@ -404,6 +404,42 @@ Players can link email and Game Center identities for cross-device access. Magic
 
 ---
 
+## JSON Mission Format (offline/campaign)
+
+Campaign missions are **on-disk content**, not database rows: each mission is a JSON file under `src/campaign/missions/*.json` (8 migrated missions — the 7 Caleb's Hollow prologue missions + the tutorial). This is **offline/campaign-only** — campaigns run through `src/main.js`; `server/lobby.js` has no campaign path, so the loader has **no online parity concern** and never touches `state-sync.js` or the DB.
+
+### `schema: 1` format
+
+A mission JSON mirrors the runtime mission-def shape verbatim for every field *except* three that can't live in plain data (which become string keys), plus the new `map` sub-object:
+
+| Field | Notes |
+|-------|-------|
+| `id`, `title`, `chapter`, `campaignId`, `requires` | identity / ordering |
+| `briefing`, `victoryText`, `defeatText` | story text |
+| `phaseCycle`, `mapSize`, `hasWitch`, `disableScoring`, `aiPersonality`, `aiBudgetBonus`, `startingResources`, `rewards`, `healBonus`, `lootOverrides`, survivor counts | scalars, passed through untouched |
+| `enemyUnits`, `waves`, `survivorStartPositions`, `objectives` | mirror the runtime shape verbatim |
+| `map` | **new** — `mode: "handmade"` or `"procedural"`; built by `buildMissionMap` (see [05-game-systems.md](05-game-systems.md#campaign-mission-maps-srccampaignmission-mapjs)) |
+| `storyTriggers[].condition` | **string key** into the condition registry (`src/campaign/condition-registry.js`), resolved to a predicate fn |
+| `conductor.scriptKey` | **string key** into the conductor-script registry (`src/campaign/conductor-scripts.js`), resolved to `{ steps, config }` |
+
+`src/campaign/missions/long_watch.json` is the canonical example (a `handmade` map with a `notHoldingAllNodes` condition); `tutorial.json` is the canonical conducted example (`conductor.scriptKey: "tutorial"`). See [docs/design/campaign-mission-editor.md](design/campaign-mission-editor.md) for the full schema.
+
+### Loader (`src/campaign/json-mission.js`)
+
+`loadMissionJSON(parsed)` takes an **already-parsed** object (so the browser `fetch` path and the node `fs` path share one code path), validates it, then returns a runtime mission def indistinguishable from a hand-written JS mission:
+
+- `map` → a lazy `mapBuilderFn` closure over `buildMissionMap` is attached; the raw `map` sub-object is preserved (main.js detects JSON missions by its presence).
+- `storyTriggers[].condition` string → predicate fn via `resolveCondition`.
+- `conductor.scriptKey` → surfaced as `conductorSteps` / `conductorConfig`; the `schema` / `conductor` fields are stripped.
+
+`validateMissionJSON` throws a `MissionValidationError` on the first problem and applies four hardening checks: **(1)** every authored tile must sit inside the map extent (handmade `cols`/`rows`, or the procedural `mapSize` grid); **(2)** `objectives.win`/`objectives.lose` types must be in `KNOWN_OBJECTIVE_TYPES`; **(3)** a handmade map must define `heroStart` (and `witchStart` when `hasWitch`); **(4)** `map.roadSeed` is carried verbatim so handmade road-regen determinism survives save→load. `KNOWN_OBJECTIVE_TYPES` mirrors the full 17-case `switch` in `buildVictoryDelegate()` (`src/campaign/campaign.js`) — that switch is the source of truth, and a guard test pins the set equal to it.
+
+> **Note (conductor scripting):** the tutorial's imperative scripting (`TUTORIAL_STEPS`, witch plan provider, forced dice) is **not** declarative and stays in `src/tutorial/tutorial-config.js`. The conductor-script registry only *aggregates* those pieces under the key `"tutorial"` — they are not physically relocated.
+
+### Registration (`src/campaign/campaign-registry.js`)
+
+The campaign defs (`prologue`, `calebs-hollow-prologue`) are thin shells; their `missions[]` and `mapBuilders` are populated at module init. `campaign-registry.js` declares `MIGRATED_MISSIONS` (mission id → campaign id, in canonical order) and registers each via `registerJSONMissions` → `registerMissionJSON`. Loading is environment-aware: **node** (`window` undefined → tests, headless runner) reads via `fs`; any **webview** (browser, Electron, Capacitor) reads via same-origin `fetch`. Both feed the same parsed object to `loadMissionJSON`. The module uses **top-level `await`**, so any importer (the app, headless scripts, tests) transparently waits for a fully populated registry.
+
 ## Data Flow Summary
 
 ```

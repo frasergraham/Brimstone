@@ -309,7 +309,7 @@ Defined in `src/map.js`. Seeded procedural generation.
 3. BUILDINGS           Place INN + GRAVEYARD in opposite corners
        │                Cluster remaining buildings nearby
        │
-4. ROAD NETWORK        MST connecting all buildings
+4. ROAD NETWORK        MST connecting all buildings (src/road-network.js)
        │                Add bridges where roads cross river
        │
 5. FOREST CLUSTERS     Seed forest patches (proportional to map size)
@@ -323,6 +323,36 @@ Defined in `src/map.js`. Seeded procedural generation.
        │
 9. HIDDEN SURVIVORS    Place discoverable survivors in buildings
 ```
+
+### Shared Road Builder (`src/road-network.js`)
+
+The MST road logic used to be duplicated in `src/map.js` (the procedural generator) and in the hand-rolled campaign map builders. The genuinely shared primitives now live in `src/road-network.js`:
+
+- `buildMST(nodes)` — Kruskal's minimum spanning tree over a list of `{col,row}` nodes, weighted by hex distance.
+- `placeRoadPath(tiles, path, roadTiles, opts)` — lay a single BFS path onto the tile map: GRASS/DIRT/FOREST → ROAD, optionally RIVER → BRIDGE (up to a budget), recording symmetric `roadDirs` links between consecutive tiles.
+- `buildRoadNetwork(tiles, nodes, rand, maxBridges)` — the simple MST-over-nodes composition (Kruskal → BFS per edge → convert crossed RIVER tiles to BRIDGE) used by the bespoke mission maps.
+
+`map.js` keeps its own two-tier orchestration (spokes/trunk, pre-selected river crossings, redundant-edge skipping) but composes it from these primitives. The two original copies were *materially different algorithms* (map.js routes with `blockRiver=true` and pre-places bridges at chosen crossings; the campaign builder routes with `blockRiver=false` and converts whatever RIVER tiles a path crosses into bridges) — the module preserves **both** behaviours so map output stays byte-for-byte identical at each call site.
+
+### Campaign Mission Maps (`src/campaign/mission-map.js`)
+
+Campaign missions no longer build their maps with bespoke imperative `buildXMap()` functions. `buildMissionMap(mapDef)` turns a declarative `map` sub-object (from a JSON mission def — see [07-data-persistence.md](07-data-persistence.md#json-mission-format-offlinecampaign)) into the same shape `generateMap()` returns: `{ tiles, heroStart, witchStart, witchObjectives, mapSize, survivorCounts, cols, rows }`. Two modes:
+
+- **`handmade`** — a full explicit tile list (a lossless snapshot of a bespoke map). Starts from a grass grid, then field-merges each tile def (enum strings resolved to enum values, `roadDirs` array → `Set`). Derived `roadDirs` are persisted in the def, so roads load **without** a regen.
+- **`procedural`** — a seeded `generateMap()` base plus an `overlay` that replaces individual tiles, edits the road-node set, and applies start / hidden-survivor / objective deltas. After the overlay, roads are **re-derived** from the node set via `rederiveRoads()`.
+
+**Road-graph model.** The source of truth for connectivity is the **road-node set**. Buildings and bridges are *implicitly* nodes (unioned in last, so an over-eager `remove` can never strip a structural node); the overlay's `roadNodes.add`/`remove` toggle extra waypoints. Roads (`ROAD`/`BRIDGE` tile types + `roadDirs`) are *derived*. `rederiveRoads()` clears existing ROAD tiles back to GRASS, keeps BRIDGE crossings, and lays a fresh MST over the node set.
+
+> **Divergence from the design doc, documented as built:** the runtime road regen (`rederiveRoads`) uses a **flat MST over all nodes** (`buildMST` + `placeRoadPath` with `convertRiverToBridge:false`), *not* map.js's two-tier spoke/trunk model. It creates no new bridges, so bridges only ever sit over the river crossings the base map already placed. This is aesthetic-only and intentional. It also means handmade maps persist their derived `roadDirs` losslessly (no load-time regen), while procedural maps re-derive on every build.
+
+### Mission Editor (`/admin/tools`)
+
+The data-driven format is authored through the **Caleb's Hollow Tools** page (`admin-tools.html`, served at `/admin/tools`), a tabbed shell with **Assets | Lighting | Mission Editor** tabs (each canvas lazy-inits on first activation). The Mission Editor uses the same 2D `Renderer` the game uses:
+
+- `src/tools/mission-editor.js` — the DOM-free controller: owns the working `mapDef`, the sibling `enemyUnits` list, and the `meta` block (everything else in the mission JSON); exposes pure tool functions (`paintTile`, `setBuilding`, `togglePowerNode`, `regenerateHandmadeRoads`, …), an undo stack, and `assembleMission`/`populateFromMission` (lossless inverses).
+- `src/tools/mission-editor-ui.js` — the canvas + palette wiring (click → `renderer.canvasToHex` → tool → redraw) and the authoring forms. A **"Preview in 3D"** button hands the built `GameState` to `Renderer3D`.
+
+Authored JSON is validated through `loadMissionJSON` before download. See [07-data-persistence.md](07-data-persistence.md#json-mission-format-offlinecampaign) for the schema and loader, and [docs/design/campaign-mission-editor.md](design/campaign-mission-editor.md) for the full spec.
 
 ### Coordinate System
 
