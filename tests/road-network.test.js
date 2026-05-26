@@ -6,7 +6,7 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { buildMST, placeRoadPath, buildRoadNetwork } from '../src/road-network.js';
-import { TileType, Tile } from '../src/tiles.js';
+import { TileType, Tile, PathType, StructureType, baseOf, pathOf, hasBuilding } from '../src/tiles.js';
 import { hexKey, setMapDimensions } from '../src/hex.js';
 
 // Build a flat all-grass grid of the given size.
@@ -139,6 +139,63 @@ describe('placeRoadPath', () => {
     assert.equal(placed, 0);
     assert.equal(tiles.get(hexKey(2, 0)).type, TileType.BRIDGE);
     assert.ok(roadTiles.has(hexKey(2, 0)), 'pre-placed bridge should join the road grid');
+  });
+});
+
+// ── placeRoadPath: layer preservation (P2 of the tile-model refactor) ────────
+// The road/bridge is a PATH overlay laid on top of the base material — laying a
+// road must NOT clobber the underlying base (e.g. forest cover survives roads),
+// and a building tile records road-through via roadDirs only, never `path`.
+
+describe('placeRoadPath — layer preservation', () => {
+  test('road over forest keeps base=forest, path=road', () => {
+    const tiles = gridTiles(4, 1);
+    const forest = tiles.get(hexKey(1, 0));
+    forest.base = TileType.FOREST; // force a forest base under the road
+    const path = [{ col: 0, row: 0 }, { col: 1, row: 0 }, { col: 2, row: 0 }];
+    placeRoadPath(tiles, path, new Set());
+    // Derived legacy type still reports ROAD (back-compat) …
+    assert.equal(forest.type, TileType.ROAD);
+    // … but the explicit layers preserve the forest base under the road.
+    assert.equal(baseOf(forest), TileType.FOREST);
+    assert.equal(pathOf(forest), PathType.ROAD);
+  });
+
+  test('road over dirt keeps base=dirt, path=road', () => {
+    const tiles = gridTiles(4, 1);
+    const dirt = tiles.get(hexKey(1, 0));
+    dirt.base = TileType.DIRT;
+    placeRoadPath(tiles, [{ col: 0, row: 0 }, { col: 1, row: 0 }], new Set());
+    assert.equal(dirt.type, TileType.ROAD);
+    assert.equal(baseOf(dirt), TileType.DIRT);
+    assert.equal(pathOf(dirt), PathType.ROAD);
+  });
+
+  test('bridge over river preserves the base under the water', () => {
+    const tiles = gridTiles(4, 1);
+    const river = tiles.get(hexKey(1, 0));
+    river.path = PathType.RIVER; // river path over a grass base
+    const placed = placeRoadPath(tiles, [{ col: 0, row: 0 }, { col: 1, row: 0 }, { col: 2, row: 0 }],
+      new Set(), { convertRiverToBridge: true, maxBridges: 1 });
+    assert.equal(placed, 1);
+    assert.equal(river.type, TileType.BRIDGE);
+    assert.equal(pathOf(river), PathType.BRIDGE);
+    assert.equal(baseOf(river), TileType.GRASS); // base under the water intact
+  });
+
+  test('building tile gets roadDirs but never a path layer', () => {
+    const tiles = gridTiles(4, 1);
+    const bldg = tiles.get(hexKey(1, 0));
+    bldg.structure = StructureType.BUILDING; // a building sitting on the road MST
+    const path = [{ col: 0, row: 0 }, { col: 1, row: 0 }, { col: 2, row: 0 }];
+    placeRoadPath(tiles, path, new Set());
+    // The building still reports BUILDING (path never set on it) …
+    assert.equal(bldg.type, TileType.BUILDING);
+    assert.equal(pathOf(bldg), null, 'building must not gain a path layer');
+    assert.ok(hasBuilding(bldg));
+    // … but road-through is recorded via symmetric roadDirs to both neighbours.
+    assert.ok(bldg.roadDirs.has(hexKey(0, 0)));
+    assert.ok(bldg.roadDirs.has(hexKey(2, 0)));
   });
 });
 

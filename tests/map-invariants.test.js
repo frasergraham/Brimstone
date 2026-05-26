@@ -16,7 +16,7 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { generateMap, generateMultipleStarts, MAP_SIZES } from '../src/map.js';
-import { TileType, BuildingType } from '../src/tiles.js';
+import { TileType, BuildingType, PathType, StructureType, baseOf, pathOf } from '../src/tiles.js';
 import { hexKey, hexDistance } from '../src/hex.js';
 
 const SIZES = ['skirmish', 'standard', 'regional'];
@@ -137,6 +137,86 @@ describe('Bridge counts respect preset bounds', () => {
           `${size} seed=${seed}: ${bridges} bridges < min ${cfg.minBridges}`);
         assert.ok(bridges <= cfg.bridgeMax,
           `${size} seed=${seed}: ${bridges} bridges > max ${cfg.bridgeMax}`);
+      }
+    }
+  });
+});
+
+// ── Layered tile model (P2: generation writes base/structure/path) ───────────
+// Generation now sets the explicit (base, structure, path) layers rather than
+// overwriting the single `type`. These invariants pin the layer semantics:
+//   - base is always one of grass/forest/dirt
+//   - rivers/bridges are PATH overlays that preserve their base material
+//   - buildings are a STRUCTURE with NO path (road-through lives in roadDirs)
+
+describe('Layered tile model', () => {
+  test('every tile has a valid base material and consistent derived type', () => {
+    for (const size of SIZES) {
+      for (let seed = 0; seed < 4; seed++) {
+        const { tiles } = generateMap(seed, size);
+        for (const t of tiles.values()) {
+          assert.ok([TileType.GRASS, TileType.FOREST, TileType.DIRT].includes(baseOf(t)),
+            `${size} seed=${seed}: tile (${t.col},${t.row}) has invalid base "${baseOf(t)}"`);
+          // The derived legacy type must follow the documented precedence.
+          if (pathOf(t) === PathType.RIVER)       assert.equal(t.type, TileType.RIVER);
+          else if (pathOf(t) === PathType.BRIDGE) assert.equal(t.type, TileType.BRIDGE);
+          else if (pathOf(t) === PathType.ROAD)   assert.equal(t.type, TileType.ROAD);
+          else if (t.structure === StructureType.BUILDING) assert.equal(t.type, TileType.BUILDING);
+          else assert.equal(t.type, baseOf(t));
+        }
+      }
+    }
+  });
+
+  test('river tiles are a path overlay over a base (base preserved under water)', () => {
+    for (const size of SIZES) {
+      for (let seed = 0; seed < 4; seed++) {
+        const { tiles } = generateMap(seed, size);
+        for (const t of tiles.values()) {
+          if (t.type !== TileType.RIVER) continue;
+          assert.equal(pathOf(t), PathType.RIVER);
+          // River was carved onto the grass fill before anything else.
+          assert.equal(baseOf(t), TileType.GRASS,
+            `${size} seed=${seed}: river (${t.col},${t.row}) base "${baseOf(t)}" not grass`);
+        }
+      }
+    }
+  });
+
+  test('building tiles carry structure + path=none; MST-connected ones use roadDirs', () => {
+    for (const size of SIZES) {
+      for (let seed = 0; seed < 6; seed++) {
+        const { tiles } = generateMap(seed, size);
+        let connectedBuildings = 0;
+        for (const t of tiles.values()) {
+          if (t.type !== TileType.BUILDING) continue;
+          assert.equal(t.structure, StructureType.BUILDING,
+            `${size} seed=${seed}: building (${t.col},${t.row}) missing structure marker`);
+          // P0 semantics: a building never carries a path; road-through is roadDirs.
+          assert.equal(pathOf(t), null,
+            `${size} seed=${seed}: building (${t.col},${t.row}) must not have a path layer`);
+          assert.equal(baseOf(t), TileType.DIRT,
+            `${size} seed=${seed}: building (${t.col},${t.row}) base "${baseOf(t)}" not dirt`);
+          if (t.roadDirs.size > 0) connectedBuildings++;
+        }
+        // The road MST connects buildings, so at least some are road-linked.
+        assert.ok(connectedBuildings > 0,
+          `${size} seed=${seed}: expected some buildings to be road-connected via roadDirs`);
+      }
+    }
+  });
+
+  test('road tiles are a path overlay that preserves their base material', () => {
+    for (const size of SIZES) {
+      for (let seed = 0; seed < 4; seed++) {
+        const { tiles } = generateMap(seed, size);
+        for (const t of tiles.values()) {
+          if (t.type !== TileType.ROAD) continue;
+          assert.equal(pathOf(t), PathType.ROAD);
+          // Roads are laid before forests/dirt patches, so base is grass.
+          assert.ok([TileType.GRASS, TileType.FOREST, TileType.DIRT].includes(baseOf(t)),
+            `${size} seed=${seed}: road (${t.col},${t.row}) has invalid base "${baseOf(t)}"`);
+        }
       }
     }
   });

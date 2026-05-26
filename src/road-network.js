@@ -27,7 +27,7 @@
 // report for the full discrepancy notes.
 
 import { hexKey, hexDistance } from './hex.js';
-import { TileType } from './tiles.js';
+import { PathType, pathOf, hasBuilding } from './tiles.js';
 // bfsPath lives in map.js (the road/Dijkstra path finder). The resulting
 // import cycle (map.js ↔ road-network.js) is benign: both sides export hoisted
 // function declarations and only reference each other at call time.
@@ -70,11 +70,15 @@ export function buildMST(nodes) {
 /**
  * Lay a single BFS path onto the tile map.
  *
- * For each tile on the path:
- *   • GRASS / DIRT / FOREST → ROAD (and added to `roadTiles`).
- *   • RIVER → BRIDGE, if `convertRiverToBridge` is set and the bridge budget
- *     (`maxBridges`) has not been exhausted.
+ * For each tile on the path (LAYER-AWARE — base material is preserved):
+ *   • base material (grass/dirt/forest, no building, no path) → set
+ *     `path = 'road'` (base UNCHANGED, e.g. a road through forest keeps
+ *     base=forest) and add to `roadTiles`.
+ *   • RIVER → set `path = 'bridge'` (base unchanged), if `convertRiverToBridge`
+ *     is set and the bridge budget (`maxBridges`) has not been exhausted.
  *   • BRIDGE → left as-is but added to `roadTiles` (pre-placed-bridge mode).
+ *   • BUILDING → never gets a `path`; road-through is carried by `roadDirs`
+ *     only (matches P0 building semantics + how the renderer reads it).
  * Consecutive path tiles get symmetric `roadDirs` links so the renderer and
  * connectivity checks can read exact topology.
  *
@@ -97,16 +101,23 @@ export function placeRoadPath(tiles, path, roadTiles, opts = {}) {
     const t = tiles.get(k);
     if (!t) continue;
 
-    if (t.type === TileType.GRASS || t.type === TileType.DIRT || t.type === TileType.FOREST) {
-      t.type = TileType.ROAD;
+    // Read the current path layer rather than the derived `type` so we can set
+    // the road/bridge path WITHOUT clobbering the base material. A tile reports
+    // GRASS/DIRT/FOREST exactly when it has no path AND no building, so that is
+    // the condition for "plain base material we may pave over".
+    const p = pathOf(t);
+    if (p === null && !hasBuilding(t)) {
+      t.path = PathType.ROAD;        // base preserved (grass/dirt/forest)
       roadTiles.add(k);
-    } else if (convertRiverToBridge && t.type === TileType.RIVER && placed < maxBridges) {
-      t.type = TileType.BRIDGE;
+    } else if (convertRiverToBridge && p === PathType.RIVER && placed < maxBridges) {
+      t.path = PathType.BRIDGE;      // base preserved (water sits on grass base)
       placed++;
       roadTiles.add(k);
-    } else if (!convertRiverToBridge && t.type === TileType.BRIDGE) {
+    } else if (!convertRiverToBridge && p === PathType.BRIDGE) {
       roadTiles.add(k);
     }
+    // BUILDING tiles fall through: no path is set; their road-through-ness is
+    // recorded solely via the roadDirs links below (P0 building semantics).
 
     // Record bidirectional connectivity so the renderer and floodConnected
     // can use exact road topology rather than inferring from tile types.

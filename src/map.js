@@ -1,6 +1,6 @@
 // Procedural map generator for the Caleb's Hollow hex map
 import { MAP_COLS, MAP_ROWS, setMapDimensions, getNeighbors, hexKey, hexDistance } from './hex.js';
-import { Tile, TileType, BuildingType } from './tiles.js';
+import { Tile, TileType, BuildingType, PathType, StructureType } from './tiles.js';
 import { buildMST, placeRoadPath } from './road-network.js';
 
 // Flavor labels for the witch power nodes (extra labels for larger maps)
@@ -778,7 +778,8 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
   const riverMap  = buildRiverMap(riverPath, riverEW);
   for (const { col, row } of riverPath) {
     const t = tiles.get(hexKey(col, row));
-    if (t) t.type = TileType.RIVER;
+    // River is a PATH overlay — set path, leave base material (grass) intact.
+    if (t) t.path = PathType.RIVER;
   }
 
   // 3. Place INN and GRAVEYARD — battle maps get 5+5 faction buildings on opposite
@@ -793,7 +794,12 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
   for (const { col, row, building } of buildingPlacements) {
     const t = tiles.get(hexKey(col, row));
     if (!t) continue;
-    t.type = TileType.BUILDING;
+    // Building is a STRUCTURE layer. Default base to dirt (matches the
+    // building-on-dirt rendering) and clear any path — road-through-building
+    // is carried by `roadDirs` only, never the path layer (P0 semantics).
+    t.base = TileType.DIRT;
+    t.structure = StructureType.BUILDING;
+    t.path = null;
     t.building = building;
     t.fortifyLevel = 1;
   }
@@ -827,7 +833,9 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
   const crossings = _pickRiverCrossings(rand, tiles, riverPath, riverMap, riverEW, keyPoints, cfg.minBridges ?? 1, cfg.bridgeMax);
   for (const c of crossings) {
     const t = tiles.get(hexKey(c.col, c.row));
-    if (t) t.type = TileType.BRIDGE;
+    // Pre-place a bridge over the river crossing — path overlay only, the
+    // (grass) base under the water is preserved.
+    if (t) t.path = PathType.BRIDGE;
   }
 
   for (const c of crossings) {
@@ -902,7 +910,10 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
       if (t.roadDirs.size > 1) continue;
       if (isAdjacentToBuilding(t.col, t.row)) continue;
       const nextKey = [...t.roadDirs][0];
-      t.type = TileType.GRASS;
+      // Strip the road path. Roads are only ever laid over grass at this stage
+      // (forests/dirt come later), so clearing the path returns the tile to
+      // its grass base — equivalent to the old full reset to GRASS.
+      t.path = null;
       t.roadDirs.clear();
       roadTiles.delete(hexKey(t.col, t.row));
       if (nextKey) tiles.get(nextKey)?.roadDirs.delete(hexKey(t.col, t.row));
@@ -921,7 +932,8 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
       }
       if (leftSide && rightSide) continue;
       const stubStarts = [...t.roadDirs];
-      t.type = TileType.RIVER;
+      // Revert the bridge back to plain river — path overlay only, base intact.
+      t.path = PathType.RIVER;
       t.roadDirs.clear();
       roadTiles.delete(hexKey(c.col, c.row));
       for (const nk of stubStarts) tiles.get(nk)?.roadDirs.delete(hexKey(c.col, c.row));
@@ -936,11 +948,12 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
     for (const { col, row } of candidates) {
       const t = tiles.get(hexKey(col, row));
       if (t && t.type === TileType.GRASS && rand() < 0.70) {
-        t.type = TileType.FOREST;
+        // Forest is a BASE material change (no path/structure on these grass tiles).
+        t.base = TileType.FOREST;
         for (const n of getNeighbors(col, row)) {
           const t2 = tiles.get(hexKey(n.col, n.row));
           if (t2 && t2.type === TileType.GRASS && rand() < 0.40) {
-            t2.type = TileType.FOREST;
+            t2.base = TileType.FOREST;
           }
         }
       }
@@ -956,7 +969,8 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
     shuffle(grassTiles, rand);
     if (grassTiles.length === 0) break;
     const seedTile = grassTiles[0];
-    seedTile.type = TileType.DIRT;
+    // Dirt patches are a BASE material change on grass tiles.
+    seedTile.base = TileType.DIRT;
     const spreadNeighbors = shuffle(
       getNeighbors(seedTile.col, seedTile.row)
         .map(n => tiles.get(hexKey(n.col, n.row)))
@@ -964,7 +978,7 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
       rand
     );
     for (const n of spreadNeighbors.slice(0, Math.floor(rand() * 3))) {
-      n.type = TileType.DIRT;
+      n.base = TileType.DIRT;
     }
   }
 
