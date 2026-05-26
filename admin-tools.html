@@ -227,6 +227,25 @@
     #editor-panel .e-status.err { color: #d77; }
     #editor-panel .e-status.ok { color: #7d7; }
     #editor-panel .e-hint { margin: 4px 0; font-size: 11px; color: #6a6050; font-style: italic; }
+    /* Item 3/4: locked-mode readout + per-edge resize controls */
+    #editor-panel .e-readonly .e-readonly-val { color: #d4cba0; font-size: 12px; }
+    #editor-panel .e-edges { margin: 6px 0; }
+    #editor-panel .e-edges-hdr { font-size: 11px; color: #a08858; margin-bottom: 4px; }
+    #editor-panel .e-edge-row { display: grid; grid-template-columns: 1fr auto auto; gap: 4px; align-items: center; margin: 3px 0; }
+    #editor-panel .e-edge-label { font-size: 12px; color: #d4cba0; text-transform: capitalize; }
+    #editor-panel .e-edge-row .e-small { min-width: 30px; text-align: center; }
+    /* Creation dialog (File ▸ New…) */
+    #editor-panel .e-modal {
+      position: absolute; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center;
+      background: rgba(0,0,0,0.6);
+    }
+    #editor-panel .e-modal-box {
+      min-width: 260px; max-width: 340px; padding: 16px 18px; background: #1a1610;
+      border: 1px solid #c4a04a; box-shadow: 0 8px 30px rgba(0,0,0,0.6);
+    }
+    #editor-panel .e-modal-box h3 { margin: 0 0 10px 0; font-size: 12px; color: #c4a04a; letter-spacing: 1.5px; text-transform: uppercase; }
+    #editor-panel .e-modal-btns { display: flex; gap: 8px; margin-top: 14px; }
+    #editor-panel .e-modal-btns .e-action { margin: 0; }
   </style>
 </head>
 <body>
@@ -251,6 +270,7 @@
       <div class="menu" id="file-menu" hidden>
         <button class="menu-btn" id="file-menu-btn" aria-haspopup="true" aria-expanded="false">File</button>
         <div class="menu-list" id="file-menu-list" hidden>
+          <button class="menu-item" id="file-new">New…</button>
           <button class="menu-item" id="file-load">Load…</button>
           <button class="menu-item" id="file-load-existing">Load existing mission…</button>
           <button class="menu-item" id="file-save">Save / Download</button>
@@ -1201,6 +1221,10 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
       fileStatus.classList.toggle('err', !!res && res.ok === false);
       fileStatus.classList.toggle('ok', !!res && res.ok === true);
     }
+    document.getElementById('file-new')?.addEventListener('click', (e) => {
+      e.stopPropagation(); closeMenus();
+      if (handles.editor?.newMission) setFileStatus(handles.editor.newMission());
+    });
     const fileLoadInput = document.getElementById('file-load-input');
     document.getElementById('file-load')?.addEventListener('click', (e) => {
       e.stopPropagation(); closeMenus();

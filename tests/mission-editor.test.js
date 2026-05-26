@@ -39,7 +39,17 @@ import {
   assembleMission,
   populateFromMission,
   createPreviewController,
+  CreationMode,
+  buildCreationMapDef,
+  createBlankMapDef,
+  createBakedMapDef,
+  createOverlayMapDef,
+  mapModeLabel,
+  resizeHandmadeMap,
+  setOverlayMapSize,
+  MAP_EDGES,
 } from '../src/tools/mission-editor.js';
+import { MAP_SIZES } from '../src/map.js';
 import { buildMissionMap } from '../src/campaign/mission-map.js';
 import { hexKey } from '../src/hex.js';
 import { Tile, TileType, PathType, StructureType } from '../src/tiles.js';
@@ -457,6 +467,310 @@ describe('mission-editor — controller edit loop & undo', () => {
     fresh.tiles.push({ col: 0, row: 0, base: 'DIRT', structure: null, path: null, building: null, fortifyLevel: 0, resource: null, hiddenSurvivor: false, roadDirs: [] });
     ed.setMapDef(fresh);
     assert.equal(ed.getMapDef().tiles[0].base, 'DIRT');
+  });
+});
+
+// ── Map creation: three LOCKED modes (item 4) ─────────────────────────────────
+
+describe('mission-editor — map creation modes (item 4)', () => {
+  test('BLANK → an all-grass handmade grid at the chosen size, starts in-bounds', () => {
+    const md = buildCreationMapDef({ mode: CreationMode.BLANK, cols: 11, rows: 7 });
+    assert.equal(md.mode, 'handmade');
+    assert.ok(!md.baked, 'blank is not marked baked');
+    assert.equal(md.cols, 11);
+    assert.equal(md.rows, 7);
+    assert.deepEqual(md.tiles, [], 'no explicit tiles — grass fills implicitly');
+    for (const start of [md.heroStart, md.witchStart]) {
+      assert.ok(start.col >= 0 && start.col < 11 && start.row >= 0 && start.row < 7,
+        'start clamped into the grid');
+    }
+    assert.equal(mapModeLabel(md), 'handmade');
+  });
+
+  test('BAKED → handmade snapshot of generateMap, every tile explicit + canonical', () => {
+    const md = buildCreationMapDef({ mode: CreationMode.BAKED, seed: 7, mapSize: 'skirmish' });
+    assert.equal(md.mode, 'handmade');
+    assert.equal(md.baked, true);
+    const cfg = MAP_SIZES.skirmish;
+    assert.equal(md.cols, cfg.cols);
+    assert.equal(md.rows, cfg.rows);
+    assert.ok(Array.isArray(md.tiles) && md.tiles.length > 0, 'baked explicit tiles');
+    assert.ok(md.heroStart && md.witchStart, 'baked carries starts');
+    // No overlay — it's a true handmade snapshot.
+    assert.ok(!('overlay' in md), 'baked has no overlay');
+    // Canonical layered tile defs (rule #1): NO legacy `type`.
+    const sample = md.tiles[0];
+    for (const f of ['base', 'structure', 'path', 'building', 'resource', 'fortifyLevel', 'hiddenSurvivor', 'roadDirs']) {
+      assert.ok(f in sample, `baked tile carries ${f}`);
+    }
+    assert.ok(!('type' in sample), 'no legacy type field');
+    assert.equal(mapModeLabel(md), 'handmade (baked)');
+  });
+
+  test('BAKED is deterministic for a fixed seed + size', () => {
+    const a = createBakedMapDef({ seed: 99, mapSize: 'skirmish' });
+    const b = createBakedMapDef({ seed: 99, mapSize: 'skirmish' });
+    assert.deepEqual(a.tiles, b.tiles);
+    assert.deepEqual(a.heroStart, b.heroStart);
+  });
+
+  test('OVERLAY → procedural base + overlay, explicit dims tracked', () => {
+    const md = buildCreationMapDef({ mode: CreationMode.OVERLAY, seed: 42, mapSize: 'standard', nodeCount: 3 });
+    assert.equal(md.mode, 'procedural');
+    assert.equal(md.seed, 42);
+    assert.equal(md.mapSize, 'standard');
+    assert.equal(md.nodeCount, 3);
+    assert.equal(md.cols, MAP_SIZES.standard.cols);
+    assert.equal(md.rows, MAP_SIZES.standard.rows);
+    assert.ok(md.overlay && Array.isArray(md.overlay.tiles), 'overlay edits container present');
+    assert.equal(mapModeLabel(md), 'overlay');
+  });
+
+  test('buildCreationMapDef rejects an unknown creation mode', () => {
+    assert.throws(() => buildCreationMapDef({ mode: 'nope' }), /unknown creation mode/);
+  });
+
+  test('controller.createNew installs the chosen mode and resets the model', () => {
+    const ed = createMissionEditor();
+    // Dirty the current model first.
+    paintBase(ed.getMapDef(), { col: 1, row: 1 }, 'DIRT');
+    ed.createNew({ mode: CreationMode.OVERLAY, seed: 5, mapSize: 'skirmish' });
+    assert.equal(ed.getMode(), 'procedural');
+    assert.equal(ed.getMapModeLabel(), 'overlay');
+    assert.equal(ed.getEnemyUnits().length, 0, 'enemy units reset');
+    assert.equal(ed.getMeta().mapSize, 'skirmish', 'meta size synced to the new map');
+    // The mode is fixed by creation — only a fresh createNew changes it.
+    assert.ok(ed.canUndo());
+  });
+
+  test('mode is LOCKED across edits — painting/resizing never changes it', () => {
+    const ed = createMissionEditor();
+    ed.createNew({ mode: CreationMode.BLANK, cols: 8, rows: 8 });
+    assert.equal(ed.getMode(), 'handmade');
+    ed.setActiveTool(EditorTool.PAINT_PATH);
+    ed.setPaintValue('path', 'ROAD');
+    ed.applyAt({ col: 2, row: 2 });
+    ed.resizeEdge('right', 1);
+    assert.equal(ed.getMode(), 'handmade', 'still handmade after edits + resize');
+  });
+});
+
+// ── Map sizing: explicit dims + per-edge add/remove with remap (item 3) ────────
+
+// A coordinate-rich handmade model for round-trip remap tests.
+function richModel() {
+  return {
+    mapDef: {
+      mode: 'handmade',
+      cols: 5,
+      rows: 5,
+      heroStart: { col: 1, row: 3 },
+      witchStart: { col: 3, row: 1 },
+      witchObjectives: [
+        { col: 2, row: 2, hexes: [{ col: 2, row: 2 }, { col: 3, row: 2 }], label: 'Node 1' },
+      ],
+      roadNodes: [hexKey(1, 1), hexKey(3, 3)],
+      tiles: [
+        { col: 1, row: 1, base: 'DIRT', structure: 'BUILDING', path: null, building: 'INN', fortifyLevel: 0, resource: null, hiddenSurvivor: false, roadDirs: [hexKey(1, 2)] },
+        { col: 1, row: 2, base: 'GRASS', structure: null, path: 'ROAD', building: null, fortifyLevel: 0, resource: null, hiddenSurvivor: false, roadDirs: [hexKey(1, 1)] },
+      ],
+    },
+    enemyUnits: [{ type: 'zombie', col: 4, row: 4, overrides: {} }],
+    meta: { survivorStartPositions: [{ col: 0, row: 2 }] },
+  };
+}
+
+describe('mission-editor — edge resize: bottom/right extend & truncate (item 3)', () => {
+  test('add on RIGHT grows cols without shifting any coordinate', () => {
+    const before = richModel();
+    const { ok, model } = resizeHandmadeMap(before, 'right', 1);
+    assert.ok(ok);
+    assert.equal(model.mapDef.cols, 6);
+    assert.equal(model.mapDef.rows, 5);
+    // Coordinates are untouched (no shift on right/bottom).
+    assert.deepEqual(model.mapDef.heroStart, before.mapDef.heroStart);
+    assert.deepEqual(model.mapDef.tiles[0], before.mapDef.tiles[0]);
+    assert.deepEqual(model.enemyUnits[0], before.enemyUnits[0]);
+  });
+
+  test('add on BOTTOM grows rows without shifting', () => {
+    const { ok, model } = resizeHandmadeMap(richModel(), 'bottom', 1);
+    assert.ok(ok);
+    assert.equal(model.mapDef.rows, 6);
+    assert.deepEqual(model.mapDef.witchStart, { col: 3, row: 1 });
+  });
+
+  test('remove on RIGHT drops the last column data', () => {
+    const m = richModel();
+    m.mapDef.tiles.push({ col: 4, row: 0, base: 'FOREST', structure: null, path: null, building: null, fortifyLevel: 0, resource: null, hiddenSurvivor: false, roadDirs: [] });
+    const { ok, model, warning } = resizeHandmadeMap(m, 'right', -1);
+    assert.ok(ok);
+    assert.equal(model.mapDef.cols, 4);
+    // The col-4 tile AND the col-4 enemy unit are dropped.
+    assert.ok(!model.mapDef.tiles.some(t => t.col === 4));
+    assert.equal(model.enemyUnits.length, 0, 'enemy at col 4 dropped');
+    assert.match(warning, /dropped/i);
+  });
+
+  test('remove on BOTTOM drops the last row data', () => {
+    const m = richModel();
+    m.enemyUnits = [{ type: 'minion', col: 0, row: 4, overrides: {} }];
+    const { ok, model } = resizeHandmadeMap(m, 'bottom', -1);
+    assert.ok(ok);
+    assert.equal(model.mapDef.rows, 4);
+    assert.equal(model.enemyUnits.length, 0, 'row-4 enemy dropped');
+  });
+});
+
+describe('mission-editor — edge resize: top/left SHIFT + remap (item 3)', () => {
+  test('add on LEFT shifts every coordinate by +1 col (incl roadDirs keys)', () => {
+    const before = richModel();
+    const { ok, model } = resizeHandmadeMap(before, 'left', 1);
+    assert.ok(ok);
+    assert.equal(model.mapDef.cols, 6);
+    assert.deepEqual(model.mapDef.heroStart, { col: 2, row: 3 });
+    assert.deepEqual(model.mapDef.witchStart, { col: 4, row: 1 });
+    const inn = model.mapDef.tiles.find(t => t.building === 'INN');
+    assert.equal(inn.col, 2); // was 1
+    assert.equal(inn.row, 1);
+    assert.deepEqual(inn.roadDirs, [hexKey(2, 2)]); // was 1,2
+    assert.deepEqual(model.mapDef.roadNodes, [hexKey(2, 1), hexKey(4, 3)]);
+    const obj = model.mapDef.witchObjectives[0];
+    assert.equal(obj.col, 3);
+    assert.deepEqual(obj.hexes, [{ col: 3, row: 2 }, { col: 4, row: 2 }]);
+    assert.deepEqual(model.enemyUnits[0], { type: 'zombie', col: 5, row: 4, overrides: {} });
+    assert.deepEqual(model.meta.survivorStartPositions, [{ col: 1, row: 2 }]);
+  });
+
+  test('add on TOP shifts every coordinate by +1 row', () => {
+    const { ok, model } = resizeHandmadeMap(richModel(), 'top', 1);
+    assert.ok(ok);
+    assert.equal(model.mapDef.rows, 6);
+    assert.deepEqual(model.mapDef.heroStart, { col: 1, row: 4 });
+    const inn = model.mapDef.tiles.find(t => t.building === 'INN');
+    assert.deepEqual(inn.roadDirs, [hexKey(1, 3)]); // 1,2 → 1,3
+  });
+
+  test('LEFT add then LEFT remove is an identity round-trip (full remap)', () => {
+    const before = richModel();
+    const added = resizeHandmadeMap(before, 'left', 1);
+    assert.ok(added.ok);
+    const back = resizeHandmadeMap(added.model, 'left', -1);
+    assert.ok(back.ok, back.warning);
+    assert.deepEqual(back.model, before, 'round-trip restores the exact model');
+  });
+
+  test('TOP add then TOP remove is an identity round-trip', () => {
+    const before = richModel();
+    const added = resizeHandmadeMap(before, 'top', 1);
+    const back = resizeHandmadeMap(added.model, 'top', -1);
+    assert.ok(back.ok);
+    assert.deepEqual(back.model, before);
+  });
+});
+
+describe('mission-editor — edge resize guards & purity (item 3)', () => {
+  test('removing an edge that holds the hero start is BLOCKED', () => {
+    const m = createBlankMapDef(5, 5);
+    m.heroStart = { col: 0, row: 2 }; // on the LEFT edge
+    const res = resizeHandmadeMap({ mapDef: m, enemyUnits: [], meta: {} }, 'left', -1);
+    assert.equal(res.ok, false);
+    assert.match(res.warning, /hero start/);
+    assert.equal(res.model.mapDef.cols, 5, 'input untouched');
+  });
+
+  test('removing an edge that holds a power node is BLOCKED', () => {
+    const m = createBlankMapDef(5, 5);
+    m.heroStart = { col: 2, row: 2 };
+    m.witchStart = { col: 3, row: 3 };
+    m.witchObjectives = [{ col: 1, row: 4, hexes: [{ col: 1, row: 4 }], label: 'N' }]; // bottom edge
+    const res = resizeHandmadeMap({ mapDef: m, enemyUnits: [], meta: {} }, 'bottom', -1);
+    assert.equal(res.ok, false);
+    assert.match(res.warning, /power node/);
+  });
+
+  test('cannot shrink below 1×1', () => {
+    const m = createBlankMapDef(1, 1);
+    m.heroStart = { col: 0, row: 0 };
+    m.witchStart = { col: 0, row: 0 };
+    const res = resizeHandmadeMap({ mapDef: m, enemyUnits: [], meta: {} }, 'right', -1);
+    assert.equal(res.ok, false);
+    assert.match(res.warning, /1×1/);
+  });
+
+  test('resize is PURE — the input model is never mutated', () => {
+    const before = richModel();
+    const snapshot = JSON.parse(JSON.stringify(before));
+    resizeHandmadeMap(before, 'left', 1);
+    assert.deepEqual(before, snapshot, 'input untouched after resize');
+  });
+
+  test('resize rejects non-handmade maps', () => {
+    const md = createOverlayMapDef({ seed: 1, mapSize: 'skirmish' });
+    const res = resizeHandmadeMap({ mapDef: md, enemyUnits: [], meta: {} }, 'right', 1);
+    assert.equal(res.ok, false);
+    assert.match(res.warning, /handmade/);
+  });
+
+  test('MAP_EDGES enumerates the four edges', () => {
+    assert.deepEqual([...MAP_EDGES].sort(), ['bottom', 'left', 'right', 'top']);
+  });
+});
+
+describe('mission-editor — overlay map sizing (item 3)', () => {
+  test('switching size updates dims and drops out-of-bounds overlay edits', () => {
+    const md = createOverlayMapDef({ seed: 1, mapSize: 'standard' }); // 13×13
+    // An overlay tile + enemy + survivor near the far corner.
+    md.overlay.tiles.push({ col: 11, row: 11, base: 'DIRT', structure: null, path: null, building: null, fortifyLevel: 0, resource: null, hiddenSurvivor: false, roadDirs: [] });
+    md.overlay.witchObjectives.push({ col: 12, row: 1, hexes: [{ col: 12, row: 1 }], label: 'N' });
+    const model = {
+      mapDef: md,
+      enemyUnits: [{ type: 'zombie', col: 10, row: 10, overrides: {} }],
+      meta: { survivorStartPositions: [{ col: 12, row: 12 }] },
+    };
+    const res = setOverlayMapSize(model, 'skirmish'); // 9×9
+    assert.ok(res.ok);
+    assert.equal(res.model.mapDef.mapSize, 'skirmish');
+    assert.equal(res.model.mapDef.cols, MAP_SIZES.skirmish.cols);
+    assert.equal(res.model.mapDef.overlay.tiles.length, 0, 'col-11 tile dropped');
+    assert.equal(res.model.mapDef.overlay.witchObjectives.length, 0, 'col-12 node dropped');
+    assert.equal(res.model.enemyUnits.length, 0, 'col-10 enemy dropped');
+    assert.equal(res.model.meta.survivorStartPositions.length, 0);
+    assert.match(res.warning, /dropped/i);
+  });
+
+  test('switching size keeps in-bounds edits and reports no drops', () => {
+    const md = createOverlayMapDef({ seed: 1, mapSize: 'standard' });
+    md.overlay.tiles.push({ col: 2, row: 2, base: 'FOREST', structure: null, path: null, building: null, fortifyLevel: 0, resource: null, hiddenSurvivor: false, roadDirs: [] });
+    const res = setOverlayMapSize({ mapDef: md, enemyUnits: [], meta: {} }, 'regional'); // bigger
+    assert.ok(res.ok);
+    assert.equal(res.model.mapDef.overlay.tiles.length, 1, 'in-bounds tile kept');
+    assert.equal(res.warning, '');
+  });
+
+  test('controller.setOverlaySize is undoable', () => {
+    const ed = createMissionEditor();
+    ed.createNew({ mode: CreationMode.OVERLAY, seed: 1, mapSize: 'standard' });
+    const { ok } = ed.setOverlaySize('skirmish');
+    assert.ok(ok);
+    assert.equal(ed.getDims().cols, MAP_SIZES.skirmish.cols);
+    ed.undo();
+    assert.equal(ed.getDims().cols, MAP_SIZES.standard.cols);
+  });
+
+  test('controller.resizeEdge applies and is undoable; blocked resize is a no-op', () => {
+    const ed = createMissionEditor();
+    ed.createNew({ mode: CreationMode.BLANK, cols: 6, rows: 6 });
+    const grow = ed.resizeEdge('right', 1);
+    assert.ok(grow.ok);
+    assert.equal(ed.getDims().cols, 7);
+    ed.undo();
+    assert.equal(ed.getDims().cols, 6);
+    // Put a start on the left edge, then a left-remove must be blocked.
+    ed.getMapDef().heroStart = { col: 0, row: 3 };
+    const blocked = ed.resizeEdge('left', -1);
+    assert.equal(blocked.ok, false);
+    assert.equal(ed.getDims().cols, 6, 'blocked resize left dims unchanged');
   });
 });
 

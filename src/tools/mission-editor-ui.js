@@ -42,8 +42,9 @@ import {
 import {
   createMissionEditor, createPreviewController, EditorTool, ENEMY_UNIT_TYPES,
   addStoryTrigger, removeStoryTrigger, moveStoryTrigger,
-  addWave, removeWave, populateFromMission,
+  addWave, removeWave, populateFromMission, CreationMode, MAP_EDGES,
 } from './mission-editor.js';
+import { MAP_SIZES } from '../map.js';
 import { createTabController } from './tab-controller.js';
 import { attachEditorCanvasControls } from './editor-canvas-input.js';
 import { loadMissionJSON, KNOWN_OBJECTIVE_TYPES } from '../campaign/json-mission.js';
@@ -123,6 +124,10 @@ export function initEditor(doc = document) {
   const canvas = doc.getElementById('e-render-canvas');
   const palette = doc.getElementById('e-palette');
 
+  // Unsaved-work flag — set on any model change, cleared by load / New / save.
+  // Only gates the New… confirm prompt, so a coarse flag is plenty.
+  let dirty = false;
+
   // The controller drives the model; `render()` rebuilds + redraws.
   const editor = createMissionEditor({ render: rerender });
 
@@ -130,6 +135,7 @@ export function initEditor(doc = document) {
   renderer.loadImages(ASSET_BASE);
 
   function rerender() {
+    dirty = true;
     // Cheap full rebuild — editor maps are small. Reassigning state keeps the
     // Renderer instance, so zoom/pan persist across edits.
     renderer.state = buildState(editor);
@@ -196,15 +202,25 @@ export function initEditor(doc = document) {
   const onResize = () => { try { preview.current()?._engine?.resize(); } catch { /* ignore */ } };
   (doc.defaultView ?? globalThis).addEventListener?.('resize', onResize);
 
-  // Build the tabbed sidebar (Map / Mission / Events / Units). The Map tab is
-  // static; the other three are (re)populated by rebuildForms() so a load can
-  // refresh the whole authoring tree at once.
+  // Build the tabbed sidebar shell (Map / Mission / Events / Units). Both the
+  // Map palette and the three authoring panes are (re)built on demand so a
+  // load / New / resize can refresh whatever changed (the Map tab depends on
+  // the LOCKED mode + current dims; the forms depend on meta).
+  const sidebar = buildSidebar(doc, palette);
   const formStatus = (msg, ok) => sidebar.setStatus(msg, ok);
-  const sidebar = buildSidebar(doc, palette, editor, rerender, openPreview, resetViewAndDraw);
 
   function rebuildForms() {
     buildForms(doc, sidebar.panes, editor, rerender, rebuildForms, formStatus);
   }
+  // The Map palette reflects the locked mode + live dims; rebuild it whenever
+  // those can change (creation, resize, load) and reframe the canvas.
+  function rebuildMapPalette() {
+    buildMapPalette(doc, sidebar.panes.map, editor, rerender, openPreview, resetViewAndDraw, {
+      onSizeChange: () => { rebuildMapPalette(); resetViewAndDraw(); },
+      setStatus: formStatus,
+    });
+  }
+  rebuildMapPalette();
   rebuildForms();
 
   // ── Load / Save — relocated to the top File menu; flow is unchanged. ──────
@@ -220,8 +236,10 @@ export function initEditor(doc = document) {
   function applyParsedMission(parsed) {
     loadMissionJSON(parsed); // VALIDATE before touching the model
     editor.applyMission(populateFromMission(parsed));
+    rebuildMapPalette(); // mode + dims may have changed
     rebuildForms();
     resetViewAndDraw();
+    dirty = false; // a freshly-loaded mission starts clean
   }
 
   function loadMissionFile(file) {
@@ -268,7 +286,24 @@ export function initEditor(doc = document) {
       return { ok: false, message: `Cannot save: ${err.message}` };
     }
     downloadJSON(doc, json, `${json.id || 'mission'}.json`);
+    dirty = false;
     return { ok: true, message: `Validated — downloaded ${json.id}.json` };
+  }
+
+  // ── New… — the creation flow (item 4). Pick a LOCKED mode + size, confirm if
+  // there's unsaved work, then install the freshly-created map. ──────────────
+  function newMission() {
+    if (dirty && !(doc.defaultView ?? globalThis).confirm?.('Discard the current mission and start a new one?')) {
+      return { ok: false, message: 'New mission cancelled.' };
+    }
+    openCreationDialog(doc, (opts) => {
+      editor.createNew(opts);
+      rebuildMapPalette();
+      rebuildForms();
+      resetViewAndDraw();
+      dirty = false; // a fresh mission starts clean
+    });
+    return { ok: true, message: '' };
   }
 
   // First fit once layout settles.
@@ -278,6 +313,7 @@ export function initEditor(doc = document) {
   return {
     editor,
     buildState: () => buildState(editor),
+    newMission,
     loadMissionFile,
     loadMissionById,
     saveMission,
@@ -292,9 +328,10 @@ export function initEditor(doc = document) {
 // ── Tabbed sidebar ────────────────────────────────────────────────────────────
 // Splits the old single-scroll palette into four tabs so only one group of
 // controls shows at a time. Returns { panes, setStatus } where `panes` holds the
-// three form-pane containers (mission / events / units) that buildForms fills,
-// and `setStatus` writes to the shared form-validation status line.
-function buildSidebar(doc, root, editor, rerender, onPreview3D, onResetView) {
+// four pane containers (map / mission / events / units) — `map` is (re)built by
+// rebuildMapPalette and the other three by buildForms — and `setStatus` writes
+// to the shared form-validation status line.
+function buildSidebar(doc, root) {
   root.innerHTML = '';
 
   const SIDEBAR_TABS = [
@@ -349,50 +386,69 @@ function buildSidebar(doc, root, editor, rerender, onPreview3D, onResetView) {
     },
   });
 
-  // ── Map tab: paint/placement palette + view controls ────────────────────
-  buildMapPalette(doc, paneEls.map, editor, rerender, onPreview3D, onResetView);
-
   stabs.activate('map');
 
   return {
-    // The three authoring-form panes buildForms mounts into.
-    panes: { mission: paneEls.mission, events: paneEls.events, units: paneEls.units },
+    // All four panes: `map` (paint/size palette) + the three authoring panes.
+    panes: {
+      map: paneEls.map,
+      mission: paneEls.mission,
+      events: paneEls.events,
+      units: paneEls.units,
+    },
     setStatus,
   };
 }
 
 // ── Map-tab palette DOM ───────────────────────────────────────────────────────
 
-function buildMapPalette(doc, root, editor, rerender, onPreview3D, onResetView) {
-  // Mode + seed.
-  const modeSection = section(doc, 'Map');
-  const modeRow = doc.createElement('div');
-  modeRow.className = 'e-row';
-  const modeSel = select(doc, [
-    { key: 'handmade', value: 'handmade' },
-    { key: 'procedural', value: 'procedural' },
-  ], 'handmade', (v) => {
-    editor.setMode(v, { seed: parseInt(seedInput.value, 10) || 12345 });
-    seedRow.style.display = v === 'procedural' ? '' : 'none';
-    regenBtn.textContent = v === 'procedural' ? 'Rebuild Map' : 'Regenerate Roads';
-    onResetView?.(); // reframe — a mode switch can change map dimensions
-  });
-  modeRow.append(labelFor(doc, 'Mode'), modeSel);
-  modeSection.append(modeRow);
+function buildMapPalette(doc, root, editor, rerender, onPreview3D, onResetView, hooks = {}) {
+  root.innerHTML = '';
+  const onSizeChange = hooks.onSizeChange ?? (() => {});
+  const setStatus = hooks.setStatus ?? (() => {});
 
-  const seedRow = doc.createElement('div');
-  seedRow.className = 'e-row';
-  seedRow.style.display = 'none';
-  const seedInput = doc.createElement('input');
-  seedInput.type = 'number';
-  seedInput.value = '12345';
-  seedInput.addEventListener('change', () => editor.setSeed(parseInt(seedInput.value, 10) || 0));
-  seedRow.append(labelFor(doc, 'Seed'), seedInput);
-  modeSection.append(seedRow);
+  const mapDef = editor.getMapDef();
+  const isProcedural = mapDef.mode === 'procedural';
+  const dims = editor.getDims();
 
-  const regenBtn = actionBtn(doc, 'Regenerate Roads', () => editor.regenerateRoads());
-  modeSection.append(regenBtn);
-  root.append(modeSection);
+  // ── Map properties: LOCKED mode (read-only) + live size ──────────────────
+  // The map mode is chosen once at creation (File ▸ New…) and cannot be toggled
+  // here — only displayed. Size is editable via the per-edge buttons (handmade)
+  // or the size selector (overlay).
+  const mapSection = section(doc, 'Map');
+  mapSection.append(readonlyRow(doc, 'Mode', editor.getMapModeLabel()));
+  const sizeRow = readonlyRow(doc, 'Size', `${dims.cols} × ${dims.rows}`);
+  mapSection.append(sizeRow);
+
+  if (isProcedural) {
+    // Overlay: seed + named size selector (generateMap is discrete, so resizing
+    // an overlay map means switching its generation size — out-of-bounds edits
+    // are then dropped). Changing size reframes + rebuilds the palette.
+    const seedRow = doc.createElement('div');
+    seedRow.className = 'e-row';
+    const seedInput = doc.createElement('input');
+    seedInput.type = 'number';
+    seedInput.value = String(mapDef.seed ?? 12345);
+    seedInput.addEventListener('change', () => editor.setSeed(parseInt(seedInput.value, 10) || 0));
+    seedRow.append(labelFor(doc, 'Seed'), seedInput);
+    mapSection.append(seedRow);
+
+    mapSection.append(labeledSelect(doc, 'Gen Size',
+      Object.keys(MAP_SIZES).map(k => ({ key: k, value: k })), mapDef.mapSize ?? 'standard',
+      (v) => {
+        const res = editor.setOverlaySize(v);
+        if (res.warning) setStatus(res.warning, res.ok);
+        onSizeChange();
+      }));
+    mapSection.append(actionBtn(doc, 'Rebuild Map', () => editor.regenerateRoads()));
+  } else {
+    // Handmade (blank/baked): per-edge add/remove. Top/left shift remaps every
+    // coordinate; bottom/right extend or truncate. A blocked remove (start /
+    // node on the edge) surfaces a warning instead of orphaning it.
+    mapSection.append(buildEdgeControls(doc, editor, setStatus, onSizeChange));
+    mapSection.append(actionBtn(doc, 'Regenerate Roads', () => editor.regenerateRoads()));
+  }
+  root.append(mapSection);
 
   // Tools.
   const toolSection = section(doc, 'Tools');
@@ -421,7 +477,8 @@ function buildMapPalette(doc, root, editor, rerender, onPreview3D, onResetView) 
     toolBtns[t.id] = btn;
     toolSection.append(btn);
   }
-  toolBtns[EditorTool.PAINT_BASE].classList.add('active');
+  // Highlight the controller's current tool (persists across palette rebuilds).
+  (toolBtns[editor.activeTool] ?? toolBtns[EditorTool.PAINT_BASE]).classList.add('active');
   root.append(toolSection);
 
   // Paint-value selectors (which value the painting tools stamp). The three
@@ -589,6 +646,152 @@ function buildForms(doc, panes, editor, rerenderCanvas, rebuild, setStatus) {
     }, setStatus));
   });
   panes.units.append(surv);
+}
+
+// ── Size controls (item 3) ────────────────────────────────────────────────────
+
+// A read-only "label: value" row for surfacing the locked mode / live size.
+function readonlyRow(doc, label, value) {
+  const row = doc.createElement('div');
+  row.className = 'e-row e-readonly';
+  const val = doc.createElement('span');
+  val.className = 'e-readonly-val';
+  val.textContent = value;
+  row.append(labelFor(doc, label), val);
+  return row;
+}
+
+// Per-edge add/remove controls: one row per edge (top/bottom/left/right) with
+// − and + buttons. Each click routes through the controller's resizeEdge; a
+// blocked resize (start/node on the edge) surfaces its warning via setStatus.
+function buildEdgeControls(doc, editor, setStatus, onSizeChange) {
+  const wrap = doc.createElement('div');
+  wrap.className = 'e-edges';
+  const hdr = doc.createElement('div');
+  hdr.className = 'e-edges-hdr';
+  hdr.textContent = 'Resize edges';
+  wrap.append(hdr);
+
+  for (const edge of MAP_EDGES) {
+    const row = doc.createElement('div');
+    row.className = 'e-edge-row';
+    const lbl = doc.createElement('span');
+    lbl.className = 'e-edge-label';
+    lbl.textContent = edge;
+    const minus = smallBtn(doc, '−', () => applyEdge(edge, -1));
+    const plus = smallBtn(doc, '+', () => applyEdge(edge, 1));
+    row.append(lbl, minus, plus);
+    wrap.append(row);
+  }
+  return wrap;
+
+  function applyEdge(edge, delta) {
+    const res = editor.resizeEdge(edge, delta);
+    if (!res.ok) { setStatus(res.warning || 'Resize blocked.', false); return; }
+    setStatus(res.warning || '', true);
+    onSizeChange(); // rebuild the palette (new dims) + reframe the canvas
+  }
+}
+
+// ── New-mission creation dialog (item 4) ───────────────────────────────────────
+// A small modal overlay over the editor panel: pick a LOCKED map mode (Blank /
+// Baked Generated / Overlay) + size (and seed for the generated modes), then
+// Create. `onCreate(opts)` receives the buildCreationMapDef options. The mode is
+// fixed by this choice — there is no mid-edit toggle afterwards.
+function openCreationDialog(doc, onCreate) {
+  const panel = doc.getElementById('editor-panel') ?? doc.body;
+  const overlay = doc.createElement('div');
+  overlay.className = 'e-modal';
+
+  const dlg = doc.createElement('div');
+  dlg.className = 'e-modal-box';
+  const h = doc.createElement('h3');
+  h.textContent = 'New Mission Map';
+  dlg.append(h);
+
+  // Mode picker.
+  let mode = CreationMode.BLANK;
+  const modeRow = doc.createElement('div');
+  modeRow.className = 'e-row';
+  const modeSel = select(doc, [
+    { key: 'Blank (custom)', value: CreationMode.BLANK },
+    { key: 'Baked Generated', value: CreationMode.BAKED },
+    { key: 'Overlay (procedural)', value: CreationMode.OVERLAY },
+  ], 'Blank (custom)', () => {}); // value read via selectedOptions below
+  // The `select` helper keys options by display text; map back to the mode value.
+  const MODE_BY_LABEL = {
+    'Blank (custom)': CreationMode.BLANK,
+    'Baked Generated': CreationMode.BAKED,
+    'Overlay (procedural)': CreationMode.OVERLAY,
+  };
+  modeSel.addEventListener('change', () => {
+    mode = MODE_BY_LABEL[modeSel.value] ?? CreationMode.BLANK;
+    syncFields();
+  });
+  modeRow.append(labelFor(doc, 'Mode'), modeSel);
+  dlg.append(modeRow);
+
+  // Blank dims.
+  const colsInput = numInput(doc, 13);
+  const rowsInput = numInput(doc, 13);
+  const blankWrap = doc.createElement('div');
+  blankWrap.append(twoCol(doc, 'Cols', colsInput), twoCol(doc, 'Rows', rowsInput));
+  dlg.append(blankWrap);
+
+  // Generated (baked + overlay): named size + seed (+ node count).
+  const sizeSel = select(doc, Object.keys(MAP_SIZES).map(k => ({ key: k, value: k })), 'standard', () => {});
+  const seedInput = numInput(doc, 12345);
+  const nodeInput = numInput(doc, 3);
+  const genWrap = doc.createElement('div');
+  genWrap.append(twoCol(doc, 'Gen Size', sizeSel), twoCol(doc, 'Seed', seedInput), twoCol(doc, 'Nodes', nodeInput));
+  dlg.append(genWrap);
+
+  function syncFields() {
+    blankWrap.style.display = mode === CreationMode.BLANK ? '' : 'none';
+    genWrap.style.display = mode === CreationMode.BLANK ? 'none' : '';
+  }
+  syncFields();
+
+  // Buttons.
+  const btns = doc.createElement('div');
+  btns.className = 'e-modal-btns';
+  const cancel = actionBtn(doc, 'Cancel', () => close());
+  const create = actionBtn(doc, 'Create', () => {
+    const opts = { mode };
+    if (mode === CreationMode.BLANK) {
+      opts.cols = parseInt(colsInput.value, 10) || 9;
+      opts.rows = parseInt(rowsInput.value, 10) || 9;
+    } else {
+      opts.mapSize = sizeSel.value;
+      opts.seed = parseInt(seedInput.value, 10) || 0;
+      opts.nodeCount = parseInt(nodeInput.value, 10) || null;
+    }
+    close();
+    onCreate(opts);
+  });
+  btns.append(cancel, create);
+  dlg.append(btns);
+
+  overlay.append(dlg);
+  // Click on the dim backdrop (not the box) cancels.
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  panel.append(overlay);
+
+  function close() { overlay.remove(); }
+}
+
+function numInput(doc, value) {
+  const i = doc.createElement('input');
+  i.type = 'number';
+  i.value = String(value);
+  return i;
+}
+
+function twoCol(doc, label, input) {
+  const row = doc.createElement('div');
+  row.className = 'e-row';
+  row.append(labelFor(doc, label), input);
+  return row;
 }
 
 // ── Browser file download (Blob + transient anchor) ─────────────────────────
