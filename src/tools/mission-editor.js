@@ -28,8 +28,8 @@ import {
   TileType, BuildingType, ResourceType, PathType, StructureType,
   baseOf, pathOf, structureOf, hasBuilding, isBridge,
 } from '../tiles.js';
-import { hexKey } from '../hex.js';
-import { rng, generateMap, MAP_SIZES } from '../map.js';
+import { hexKey, getNeighbors } from '../hex.js';
+import { rng, generateMap, MAP_SIZES, NODE_COLORS } from '../map.js';
 import { buildMissionMap, rederiveRoads } from '../campaign/mission-map.js';
 
 /** Active-tool ids the click loop dispatches on. */
@@ -47,12 +47,19 @@ export const EditorTool = Object.freeze({
   WITCH_START: 'witch-start',
   ROAD_NODE: 'road-node',
   POWER_NODE: 'power-node',
+  DELETE: 'delete',                   // clear a tile back to blank/base (item 5)
 });
 
 /** Enemy unit types the placement tool can stamp (runtime lowercase values). */
 export const ENEMY_UNIT_TYPES = Object.freeze([
   'zombie', 'minion', 'wood_golem', 'iron_golem',
 ]);
+
+// Selectable path values for the Paint Path tool (item 7) — uppercase enum KEYs.
+// BRIDGE is intentionally EXCLUDED: bridges are IMPLIED wherever a road crosses a
+// river (the builder/renderer converts road-over-river to a bridge), so the user
+// never paints one. Authoring options are None (null) / Road / River only.
+export const PATH_TOOL_OPTIONS = Object.freeze(['ROAD', 'RIVER']);
 
 // ── Tool → VALUE-panel mapping (item 7) ──────────────────────────────────────
 // The side-panel VALUE section is context-sensitive: each tool exposes exactly
@@ -78,6 +85,7 @@ const _TOOL_VALUE_KIND = Object.freeze({
   [EditorTool.WITCH_START]: ToolValueKind.NONE,
   [EditorTool.ROAD_NODE]: ToolValueKind.NONE,
   [EditorTool.POWER_NODE]: ToolValueKind.NONE,
+  [EditorTool.DELETE]: ToolValueKind.NONE,
 });
 
 /** Which VALUE-panel kind a given tool exposes. Unknown tools → NONE. */
@@ -101,6 +109,8 @@ export function createLayerVisibility() {
     powerNodes: true,       // draw the Power-Node objectives
     playerStarts: true,     // draw the hero / witch start markers
     roadNodeMarkers: false, // draw the road-network node overlay
+    darkenGenerated: false, // (overlay only) dim hexes that came from the
+                            // generated base, leaving explicit edits bright
   };
 }
 
@@ -116,6 +126,29 @@ export function showStructures(layers) {
  */
 export function roadNodeMarkersVisible(layers, activeTool) {
   return (!!layers && !!layers.roadNodeMarkers) || activeTool === EditorTool.ROAD_NODE;
+}
+
+/**
+ * Whether the "darken auto-generated" overlay (item 9) should be drawn. This is
+ * an OVERLAY-mode-only affordance — handmade maps have no generated base to
+ * distinguish from edits — so it's gated on BOTH the toggle and the mode.
+ */
+export function overlayDarkenVisible(layers, mapDef) {
+  return !!layers && !!layers.darkenGenerated && !!mapDef && mapDef.mode === 'procedural';
+}
+
+/**
+ * The set of hex keys carrying an EXPLICIT overlay edit (procedural maps). These
+ * are the author's preserved tiles — everything else on the rendered map came
+ * from the regenerable generated base. Pure; exported so the darken overlay's
+ * "generated vs edited" partition is unit-testable. Returns an empty Set for
+ * handmade maps (every tile is authored there — nothing is "generated").
+ */
+export function overlayEditedKeys(mapDef) {
+  const keys = new Set();
+  if (!mapDef || mapDef.mode !== 'procedural') return keys;
+  for (const t of mapDef.overlay?.tiles ?? []) keys.add(hexKey(t.col, t.row));
+  return keys;
 }
 
 // Deterministic seed for handmade road regen so repeated regens are stable.
@@ -180,6 +213,7 @@ function _getOrCreateTileDef(mapDef, col, row) {
 const _GRASS_KEY = _enumKey(TileType, TileType.GRASS);
 const _DIRT_KEY = _enumKey(TileType, TileType.DIRT);
 const _BUILDING_STRUCT_KEY = _enumKey(StructureType, StructureType.BUILDING); // 'BUILDING'
+const _ROAD_KEY = _enumKey(PathType, PathType.ROAD);   // 'ROAD'
 
 /**
  * PAINT_BASE — set ONLY the base material ∈ {GRASS, FOREST, DIRT}. Does not
@@ -218,14 +252,76 @@ export function paintStructure(mapDef, { col, row }, buildingKey) {
 }
 
 /**
- * PAINT_PATH — set the path overlay ∈ {none(null), ROAD, RIVER, BRIDGE}. Touches
- * ONLY the path layer; base & structure untouched (a road can sit over forest).
- * roadDirs are derived separately by "Regenerate Roads"; this just sets the
- * per-tile path value.
+ * PAINT_PATH — set the path overlay ∈ {none(null), ROAD, RIVER} (BRIDGE is no
+ * longer an authored option — item 7: bridges are IMPLIED wherever a road
+ * crosses a river, never hand-painted). Touches ONLY the path layer; base &
+ * structure untouched (a road can sit over forest).
+ *
+ * An explicitly-painted ROAD now also WIRES UP `roadDirs` to its painted-road
+ * neighbours (bidirectionally) so the road renders immediately — the renderer
+ * draws road segments from each tile's roadDirs, so a road with no connectivity
+ * was invisible (the old no-op feel). Clearing a road (or switching it to river)
+ * unwires it from its neighbours so no dangling segment points at a non-road.
  */
 export function paintPath(mapDef, { col, row }, pathKey) {
   const def = _getOrCreateTileDef(mapDef, col, row);
   def.path = pathKey || null;
+  if (def.path === _ROAD_KEY) _wireRoadConnections(mapDef, col, row);
+  else _unwireRoadConnections(mapDef, col, row);
+  return mapDef;
+}
+
+// True when the tile def at (col,row) is an explicitly-painted ROAD.
+function _isPaintedRoad(list, col, row) {
+  const d = list.find(t => t.col === col && t.row === row);
+  return !!d && d.path === _ROAD_KEY;
+}
+
+// Connect a painted-road tile to each painted-road neighbour, both directions,
+// so the renderer draws the joining segments. roadDirs are hexKey strings.
+function _wireRoadConnections(mapDef, col, row) {
+  const list = _tileList(mapDef);
+  const self = list.find(t => t.col === col && t.row === row);
+  if (!self) return;
+  if (!Array.isArray(self.roadDirs)) self.roadDirs = [];
+  const selfKey = hexKey(col, row);
+  for (const nb of getNeighbors(col, row)) {
+    if (!_isPaintedRoad(list, nb.col, nb.row)) continue;
+    const nbKey = hexKey(nb.col, nb.row);
+    const nbDef = list.find(t => t.col === nb.col && t.row === nb.row);
+    if (!self.roadDirs.includes(nbKey)) self.roadDirs.push(nbKey);
+    if (!Array.isArray(nbDef.roadDirs)) nbDef.roadDirs = [];
+    if (!nbDef.roadDirs.includes(selfKey)) nbDef.roadDirs.push(selfKey);
+  }
+}
+
+// Drop a tile's own roadDirs and remove it from every neighbour's roadDirs.
+function _unwireRoadConnections(mapDef, col, row) {
+  const list = _tileList(mapDef);
+  const selfKey = hexKey(col, row);
+  const self = list.find(t => t.col === col && t.row === row);
+  if (self) self.roadDirs = [];
+  for (const nb of getNeighbors(col, row)) {
+    const nbDef = list.find(t => t.col === nb.col && t.row === nb.row);
+    if (nbDef && Array.isArray(nbDef.roadDirs)) {
+      nbDef.roadDirs = nbDef.roadDirs.filter(k => k !== selfKey);
+    }
+  }
+}
+
+/**
+ * DELETE (item 5) — clear a tile back to a blank/base def: base→GRASS, structure
+ * → none, path → none, building → null, resource → null, hiddenSurvivor → false,
+ * fortifyLevel → 0, roadDirs cleared. In OVERLAY mode this records the cleared
+ * tile as an EXPLICIT overlay edit (a complete blank def in overlay.tiles), so
+ * it overrides the generated base rather than reverting to it. Also unwires the
+ * tile from any painted-road neighbours so no segment dangles into the cleared
+ * hex.
+ */
+export function deleteTile(mapDef, { col, row }) {
+  const def = _getOrCreateTileDef(mapDef, col, row);
+  Object.assign(def, _blankTileDef(col, row));
+  _unwireRoadConnections(mapDef, col, row);
   return mapDef;
 }
 
@@ -300,19 +396,155 @@ function _witchObjectives(mapDef) {
   return mapDef.witchObjectives;
 }
 
-/** Toggle a Power Node (witchObjectives entry) on a tile. */
+// ── Power-Node clustering (item 6) ───────────────────────────────────────────
+// Power-node hexes that are CONTIGUOUS (hex-adjacent) collapse into ONE objective
+// (one Power Node). Each cluster is capped at MAX_NODE_CLUSTER hexes; adding a
+// hex that would grow OR merge a cluster past the cap is blocked. Every cluster
+// carries an auto-assigned name (`label`) + `color` from NODE_COLORS (the same
+// per-node palette the 3D renderer + 2D HUD score dots use); both survive an
+// add/remove because metadata is inherited from the prior objective that shares
+// the most hexes. The objective shape mirrors the runtime witchObjectives:
+//   { col, row (anchor = cluster's first hex), hexes:[{col,row}…], label, color }
+
+/** Max hexes allowed in a single Power-Node cluster. */
+export const MAX_NODE_CLUSTER = 5;
+
+// Flood-fill a flat hex list into contiguous clusters via hex adjacency.
+// `hexes` is [{col,row}…]; returns an array of clusters (each a [{col,row}…]).
+function _clusterHexes(hexes) {
+  const remaining = new Map();
+  for (const h of hexes) remaining.set(hexKey(h.col, h.row), { col: h.col, row: h.row });
+  const clusters = [];
+  while (remaining.size) {
+    const [startKey, start] = remaining.entries().next().value;
+    remaining.delete(startKey);
+    const cluster = [start];
+    const stack = [start];
+    while (stack.length) {
+      const cur = stack.pop();
+      for (const nb of getNeighbors(cur.col, cur.row)) {
+        const k = hexKey(nb.col, nb.row);
+        if (remaining.has(k)) {
+          const h = remaining.get(k);
+          remaining.delete(k);
+          cluster.push(h);
+          stack.push(h);
+        }
+      }
+    }
+    clusters.push(cluster);
+  }
+  return clusters;
+}
+
+// Pick the next palette colour not already taken this round; cycles when the
+// palette is exhausted (so a 8th cluster reuses the 1st colour).
+function _nextNodeColor(usedColors) {
+  for (const c of NODE_COLORS) if (!usedColors.has(c)) return c;
+  return NODE_COLORS[usedColors.size % NODE_COLORS.length];
+}
+
+// Pick the next free "Power Node N" name not already taken this round.
+function _nextNodeLabel(usedLabels) {
+  let n = 1;
+  while (usedLabels.has(`Power Node ${n}`)) n++;
+  return `Power Node ${n}`;
+}
+
+// Re-derive the objectives list from a flat power-node hex set, inheriting each
+// cluster's name + colour from the prior objective it shares the most hexes with
+// (so existing nodes keep their identity across an add/remove). Brand-new
+// clusters get a fresh palette colour + auto name.
+function _deriveObjectives(hexSet, prior) {
+  const clusters = _clusterHexes(hexSet);
+  // First pass: match each cluster to its best-overlapping prior objective.
+  const matches = clusters.map(cluster => {
+    const keys = new Set(cluster.map(h => hexKey(h.col, h.row)));
+    let best = null;
+    let bestShared = 0;
+    for (const o of prior) {
+      const shared = (o.hexes ?? []).reduce(
+        (n, h) => n + (keys.has(hexKey(h.col, h.row)) ? 1 : 0), 0);
+      if (shared > bestShared) { bestShared = shared; best = o; }
+    }
+    return { cluster, prior: bestShared > 0 ? best : null };
+  });
+  // A prior objective may only be inherited by ONE cluster (whichever shares
+  // more of its hexes) — otherwise splitting a node would duplicate its name.
+  const claimedPrior = new Set();
+  for (const m of matches) {
+    if (m.prior && !claimedPrior.has(m.prior)) claimedPrior.add(m.prior);
+    else m.prior = null;
+  }
+  const usedColors = new Set();
+  const usedLabels = new Set();
+  for (const m of matches) {
+    if (m.prior) {
+      if (m.prior.color) usedColors.add(m.prior.color);
+      if (m.prior.label) usedLabels.add(m.prior.label);
+    }
+  }
+  return matches.map(({ cluster, prior: p }) => {
+    const anchor = cluster[0];
+    const label = p?.label ?? (() => { const l = _nextNodeLabel(usedLabels); usedLabels.add(l); return l; })();
+    const color = p?.color ?? (() => { const c = _nextNodeColor(usedColors); usedColors.add(c); return c; })();
+    return {
+      col: anchor.col, row: anchor.row,
+      hexes: cluster.map(h => ({ col: h.col, row: h.row })),
+      label,
+      color,
+    };
+  });
+}
+
+// Flatten the current objectives into a single power-node hex list.
+function _objectiveHexSet(objs) {
+  const out = [];
+  for (const o of objs) for (const h of (o.hexes ?? [])) out.push({ col: h.col, row: h.row });
+  return out;
+}
+
+function _replaceObjectives(mapDef, derived) {
+  const objs = _witchObjectives(mapDef);
+  objs.length = 0;
+  for (const o of derived) objs.push(o);
+}
+
+/**
+ * Toggle a Power-Node hex (item 6). Adding a hex contiguous to an existing
+ * cluster GROWS that cluster (one objective); a non-contiguous hex starts a new
+ * cluster. Removing recomputes clusters (which may split one node into two).
+ * Blocked (returns `{ ok:false, warning }`, model untouched) when adding would
+ * push a cluster past MAX_NODE_CLUSTER hexes. Returns `{ ok:true, warning:'' }`
+ * on success.
+ */
 export function togglePowerNode(mapDef, { col, row }) {
   const objs = _witchObjectives(mapDef);
-  const i = objs.findIndex(o => o.col === col && o.row === row);
-  if (i >= 0) {
-    objs.splice(i, 1);
-  } else {
-    objs.push({
-      col, row,
-      hexes: [{ col, row }],
-      label: `Power Node ${objs.length + 1}`,
-    });
+  const key = hexKey(col, row);
+  const hexSet = _objectiveHexSet(objs);
+  const present = hexSet.some(h => hexKey(h.col, h.row) === key);
+
+  if (present) {
+    const next = hexSet.filter(h => hexKey(h.col, h.row) !== key);
+    _replaceObjectives(mapDef, _deriveObjectives(next, objs));
+    return { ok: true, warning: '' };
   }
+
+  // Adding: enforce the per-cluster cap on the tentative set.
+  const tentative = [...hexSet, { col, row }];
+  const newCluster = _clusterHexes(tentative).find(c => c.some(h => hexKey(h.col, h.row) === key));
+  if (newCluster && newCluster.length > MAX_NODE_CLUSTER) {
+    return { ok: false, warning: `Power Node clusters are capped at ${MAX_NODE_CLUSTER} hexes.` };
+  }
+  _replaceObjectives(mapDef, _deriveObjectives(tentative, objs));
+  return { ok: true, warning: '' };
+}
+
+/** Rename a Power-Node cluster by index (item 6 rename field). No-op out of range. */
+export function renamePowerNode(mapDef, index, name) {
+  const objs = _witchObjectives(mapDef);
+  if (index < 0 || index >= objs.length) return mapDef;
+  objs[index].label = name;
   return mapDef;
 }
 
@@ -969,8 +1201,13 @@ const _TOOL_DISPATCH = {
   [EditorTool.ENEMY_UNIT]: (m, hex, pv) => placeEnemyUnit(m.enemyUnits, hex, pv.enemyType),
   [EditorTool.HERO_START]: (m, hex) => setHeroStart(m.mapDef, hex),
   [EditorTool.WITCH_START]: (m, hex) => setWitchStart(m.mapDef, hex),
-  [EditorTool.ROAD_NODE]: (m, hex) => toggleRoadNode(m.mapDef, hex),
+  // Toggling a road node AUTO-regenerates the handmade road network (item 8) —
+  // no manual "Regenerate Roads" click needed. No-op regen on overlay maps
+  // (those regen at build time anyway).
+  [EditorTool.ROAD_NODE]: (m, hex) => { toggleRoadNode(m.mapDef, hex); regenerateHandmadeRoads(m.mapDef); },
+  // POWER_NODE returns { ok, warning } — applyAt surfaces a blocked cluster cap.
   [EditorTool.POWER_NODE]: (m, hex) => togglePowerNode(m.mapDef, hex),
+  [EditorTool.DELETE]: (m, hex) => deleteTile(m.mapDef, hex),
 };
 
 /**
@@ -1063,14 +1300,28 @@ export function createMissionEditor({ render } = {}) {
     setPaintValue(kind, value) { paintValues[kind] = value; },
 
     // ── Edit loop ────────────────────────────────────────────────────────
-    /** Apply the active tool to a hex. No-op outside bounds. */
+    /**
+     * Apply the active tool to a hex. No-op outside bounds. Returns
+     * `{ ok, warning }` so callers can surface a blocked edit (e.g. the
+     * Power-Node 5-hex cap). A blocked edit leaves the model AND the
+     * undo/redo history untouched.
+     */
     applyAt(hex) {
-      if (!hex || !_inBounds(hex)) return;
+      if (!hex || !_inBounds(hex)) return { ok: true, warning: '' };
       const fn = _TOOL_DISPATCH[activeTool];
-      if (!fn) return;
+      if (!fn) return { ok: true, warning: '' };
+      const redoBackup = redoStack.slice();
       snapshot();
-      fn(model(), { col: hex.col, row: hex.row }, paintValues);
+      const res = fn(model(), { col: hex.col, row: hex.row }, paintValues);
+      if (res && res.ok === false) {
+        // Blocked: discard the snapshot + restore the redo stack (no mutation).
+        undoStack.pop();
+        redoStack.length = 0;
+        for (const s of redoBackup) redoStack.push(s);
+        return res;
+      }
       emit();
+      return (res && typeof res === 'object' && 'ok' in res) ? res : { ok: true, warning: '' };
     },
 
     // ── Creation (item 4) — one of the three LOCKED modes ────────────────
@@ -1126,6 +1377,16 @@ export function createMissionEditor({ render } = {}) {
     regenerateRoads() {
       snapshot();
       regenerateHandmadeRoads(mapDef);
+      emit();
+    },
+
+    // ── Power Nodes (item 6) ─────────────────────────────────────────────
+    /** The current Power-Node clusters (witchObjectives) — read-only view. */
+    getPowerNodes: () => _witchObjectives(mapDef),
+    /** Rename a Power-Node cluster by index. One undo step. */
+    renamePowerNode(index, name) {
+      snapshot();
+      renamePowerNode(mapDef, index, name);
       emit();
     },
 
