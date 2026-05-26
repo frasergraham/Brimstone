@@ -1,0 +1,1017 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Caleb's Hollow — Tools</title>
+  <!-- Shared dark gothic theme for consistent styling across tabs. -->
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; background: #0a0a0a; color: #d4cba0; font-family: var(--font-ui, system-ui), sans-serif; font-size: 13px; }
+
+    /* ── Tab shell ──────────────────────────────────────────────────────── */
+    #tools-shell { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+    #tab-bar {
+      display: flex; align-items: center; gap: 4px; flex: 0 0 auto;
+      background: #14110d; border-bottom: 1px solid #2c2620; padding: 6px 10px;
+    }
+    #tab-bar .brand { font-size: 12px; color: #c4a04a; letter-spacing: 1.5px; text-transform: uppercase; margin-right: 14px; }
+    #tab-bar .nav-back { margin-left: auto; font-size: 12px; color: #a08858; }
+    .tab-btn {
+      padding: 7px 16px; background: #211c16; color: #d4cba0; border: 1px solid #443a2a;
+      font-family: inherit; font-size: 12px; cursor: pointer; letter-spacing: 1px; text-transform: uppercase;
+    }
+    .tab-btn:hover { background: #2a241c; }
+    .tab-btn.active { background: #5a4a30; border-color: #c4a04a; color: #ffd680; }
+
+    #tab-content { position: relative; flex: 1 1 auto; overflow: hidden; }
+    .tab-panel { position: absolute; inset: 0; display: none; overflow: hidden; }
+    .tab-panel.active { display: block; }
+
+    /* ════════════════════════════════════════════════════════════════════
+       ASSETS TAB — scoped from admin-assets.html. All selectors scoped under
+       #assets-panel so they don't bleed into the other tabs.
+       ════════════════════════════════════════════════════════════════════ */
+    #assets-panel { display: grid; grid-template-columns: 220px 1fr 280px; height: 100%; }
+    #assets-panel aside { background: #14110d; border-right: 1px solid #2c2620; overflow-y: auto; padding: 12px; }
+    #assets-panel aside h2 { font-size: 11px; color: #c4a04a; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 10px; }
+    #assets-panel .model-item {
+      display: block; padding: 8px 10px; margin: 4px 0; cursor: pointer;
+      background: #1a1610; border: 1px solid #2c2620; color: #d4cba0;
+      font-family: ui-monospace, Menlo, monospace; font-size: 12px;
+    }
+    #assets-panel .model-item:hover { background: #211c16; border-color: #443a2a; }
+    #assets-panel .model-item.active { background: #5a4a30; border-color: #c4a04a; color: #ffd680; }
+    #assets-panel .model-item.broken { color: #c46060; }
+    #assets-panel .model-item .check { margin-right: 6px; vertical-align: middle; }
+    #assets-panel .model-item .label { vertical-align: middle; }
+    #assets-panel .folder { margin: 10px 0 4px 0; font-size: 11px; color: #c4a04a; letter-spacing: 1.2px; text-transform: uppercase; cursor: pointer; user-select: none; }
+    #assets-panel .folder.collapsed + .folder-body { display: none; }
+    #assets-panel .folder::before { content: '▾ '; }
+    #assets-panel .folder.collapsed::before { content: '▸ '; }
+    #assets-panel #a-remove-bar { position: sticky; bottom: 0; background: #14110d; border-top: 1px solid #2c2620; padding: 8px 0 4px 0; margin-top: 10px; }
+    #assets-panel #a-remove-bar button { width: 100%; }
+    #assets-panel #a-remove-output { margin-top: 6px; font-family: ui-monospace, Menlo, monospace; font-size: 10px; color: #a08858; max-height: 200px; overflow-y: auto; background: #0a0805; padding: 6px; border: 1px solid #2c2620; white-space: pre-wrap; word-break: break-all; }
+
+    #assets-panel #a-stage { position: relative; background: #050505; overflow: hidden; }
+    #assets-panel #a-render-canvas { width: 100%; height: 100%; display: block; touch-action: none; outline: none; }
+    #assets-panel #a-overlay {
+      position: absolute; top: 10px; left: 10px; font-family: ui-monospace, Menlo, monospace;
+      font-size: 11px; color: #8a8060; background: rgba(0,0,0,0.5); padding: 4px 8px;
+      border: 1px solid #2c2620; pointer-events: none;
+    }
+
+    #assets-panel #a-info { background: #14110d; border-left: 1px solid #2c2620; overflow-y: auto; padding: 12px; }
+    #assets-panel #a-info h2 { font-size: 11px; color: #c4a04a; letter-spacing: 1.5px; text-transform: uppercase; margin: 0 0 8px 0; }
+    #assets-panel .section { margin: 12px 0; padding: 10px 12px; border: 1px solid #2c2620; background: #1a1610; }
+    #assets-panel .section h3 { font-size: 11px; color: #c4a04a; letter-spacing: 1.2px; text-transform: uppercase; margin: 0 0 6px 0; }
+    #assets-panel .row { display: grid; grid-template-columns: 90px 1fr; gap: 8px; margin: 3px 0; font-size: 11px; }
+    #assets-panel .row label { color: #8a8060; }
+    #assets-panel .row .val { color: #d4cba0; font-family: ui-monospace, Menlo, monospace; font-variant-numeric: tabular-nums; }
+    #assets-panel select, #assets-panel button {
+      width: 100%; padding: 6px 8px; background: #211c16; color: #d4cba0;
+      border: 1px solid #443a2a; font-family: inherit; font-size: 12px; cursor: pointer;
+    }
+    #assets-panel button:hover, #assets-panel select:hover { background: #2a241c; }
+    #assets-panel button.primary { background: #5a4a30; color: #ffd680; border-color: #c4a04a; }
+    #assets-panel button.primary:hover { background: #6a5a3a; }
+    #assets-panel .button-row { display: flex; gap: 6px; margin-top: 6px; }
+    #assets-panel .button-row button { flex: 1; }
+    #assets-panel .anim-list { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: #a08858; margin-top: 6px; }
+    #assets-panel .anim-list div { padding: 2px 0; }
+    #assets-panel .toggle-row { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 11px; color: #a08858; }
+    #assets-panel #a-error { color: #c46060; font-size: 11px; margin: 8px 0; min-height: 16px; }
+    #assets-panel .empty { color: #6a6050; font-style: italic; font-size: 11px; }
+
+    /* ════════════════════════════════════════════════════════════════════
+       LIGHTING TAB — scoped from admin-lighting.html.
+       ════════════════════════════════════════════════════════════════════ */
+    #lighting-panel { display: grid; grid-template-columns: 1fr 360px; height: 100%; }
+    #lighting-panel #l-canvas-pane { position: relative; overflow: hidden; background: #050505; }
+    #lighting-panel #l-render-canvas { width: 100%; height: 100%; display: block; touch-action: none; }
+    #lighting-panel #l-controls { padding: 12px 16px; overflow-y: auto; border-left: 1px solid #2c2620; background: #14110d; }
+    #lighting-panel h1 { font-size: 16px; margin: 0 0 8px 0; color: #c4a04a; letter-spacing: 1px; }
+    #lighting-panel .phase-row { display: flex; gap: 4px; margin: 12px 0 16px 0; }
+    #lighting-panel .phase-btn {
+      flex: 1; padding: 8px 4px; background: #211c16; color: #d4cba0; border: 1px solid #443a2a;
+      font-family: inherit; font-size: 12px; cursor: pointer; text-transform: uppercase; letter-spacing: 1px;
+    }
+    #lighting-panel .phase-btn.active { background: #5a4a30; border-color: #c4a04a; color: #ffd680; }
+    #lighting-panel .section { margin: 14px 0; padding: 10px 12px; border: 1px solid #2c2620; background: #1a1610; }
+    #lighting-panel .section h2 { margin: 0 0 8px 0; font-size: 12px; color: #c4a04a; letter-spacing: 1.5px; text-transform: uppercase; }
+    #lighting-panel .row { display: grid; grid-template-columns: 64px 1fr 56px; gap: 8px; align-items: center; margin: 6px 0; font-size: 12px; }
+    #lighting-panel .row label { color: #a08858; }
+    #lighting-panel .row input[type=range] { width: 100%; }
+    #lighting-panel .row .val { color: #d4cba0; text-align: right; font-variant-numeric: tabular-nums; font-size: 11px; }
+    #lighting-panel .colorrow { display: grid; grid-template-columns: 64px 1fr; gap: 8px; align-items: center; margin: 6px 0; font-size: 12px; }
+    #lighting-panel .colorrow input[type=color] { width: 100%; height: 28px; background: transparent; border: 1px solid #443a2a; cursor: pointer; }
+    #lighting-panel button.action {
+      padding: 8px 12px; background: #5a4a30; color: #ffd680; border: 1px solid #c4a04a;
+      font-family: inherit; cursor: pointer; margin: 4px 4px 4px 0; font-size: 12px; letter-spacing: 1px;
+    }
+    #lighting-panel button.action:hover { background: #6a5a3a; }
+    #lighting-panel #l-export-area {
+      width: 100%; height: 240px; margin-top: 8px; background: #050505; color: #c4a04a;
+      border: 1px solid #443a2a; font-family: ui-monospace, Menlo, monospace; font-size: 11px;
+      padding: 8px; box-sizing: border-box;
+    }
+    #lighting-panel #l-status { margin-top: 8px; font-size: 11px; color: #8a8060; }
+    #lighting-panel .helper { font-size: 11px; color: #8a8060; margin: 4px 0 8px 0; line-height: 1.4; }
+
+    /* ════════════════════════════════════════════════════════════════════
+       MISSION EDITOR TAB — placeholder (filled by a later phase).
+       ════════════════════════════════════════════════════════════════════ */
+    #editor-panel { display: flex; align-items: center; justify-content: center; height: 100%; background: #050505; }
+    #editor-panel .placeholder { text-align: center; color: #6a6050; }
+    #editor-panel .placeholder h2 { font-size: 14px; color: #c4a04a; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 8px; }
+    #editor-panel .placeholder p { font-size: 12px; font-style: italic; }
+  </style>
+</head>
+<body>
+  <div id="tools-shell">
+    <div id="tab-bar">
+      <span class="brand">Caleb's Hollow Tools</span>
+      <button class="tab-btn active" data-tab="assets">Assets</button>
+      <button class="tab-btn" data-tab="lighting">Lighting</button>
+      <button class="tab-btn" data-tab="editor">Mission Editor</button>
+      <a class="nav-back" href="/admin">← Back to admin</a>
+    </div>
+
+    <div id="tab-content">
+      <!-- ── ASSETS PANEL ───────────────────────────────────────────────── -->
+      <section id="assets-panel" class="tab-panel active">
+        <aside>
+          <h2>Models</h2>
+          <div id="a-model-list"></div>
+          <div id="a-tree-list"></div>
+          <div id="a-remove-bar">
+            <button id="a-show-remove" class="primary">Show removal command</button>
+            <pre id="a-remove-output" style="display:none"></pre>
+          </div>
+        </aside>
+
+        <div id="a-stage">
+          <canvas id="a-render-canvas" tabindex="0"></canvas>
+          <div id="a-overlay">drag = orbit · wheel = zoom · right-drag = pan</div>
+        </div>
+
+        <div id="a-info">
+          <h2>Asset Inspector</h2>
+          <div id="a-error"></div>
+
+          <div class="section">
+            <h3>Metadata</h3>
+            <div class="row"><label>File</label><span class="val" id="a-meta-file">—</span></div>
+            <div class="row"><label>Submeshes</label><span class="val" id="a-meta-submesh">—</span></div>
+            <div class="row"><label>Vertices</label><span class="val" id="a-meta-verts">—</span></div>
+            <div class="row"><label>Bones</label><span class="val" id="a-meta-bones">—</span></div>
+            <div class="row"><label>BBox W·H·D</label><span class="val" id="a-meta-bbox">—</span></div>
+          </div>
+
+          <div class="section">
+            <h3>Animations</h3>
+            <select id="a-anim-select"><option value="">— none —</option></select>
+            <div class="button-row">
+              <button id="a-anim-play" class="primary">Play</button>
+              <button id="a-anim-pause">Pause</button>
+              <button id="a-anim-stop">Stop</button>
+            </div>
+            <div class="toggle-row">
+              <input type="checkbox" id="a-anim-loop" checked />
+              <label for="a-anim-loop">Loop</label>
+            </div>
+            <div class="anim-list" id="a-anim-list"><span class="empty">no animations</span></div>
+          </div>
+
+          <div class="section">
+            <h3>View</h3>
+            <button id="a-reframe">Reframe camera</button>
+            <div class="toggle-row">
+              <input type="checkbox" id="a-show-grid" checked />
+              <label for="a-show-grid">Show ground grid</label>
+            </div>
+            <div class="toggle-row">
+              <input type="checkbox" id="a-wireframe" />
+              <label for="a-wireframe">Wireframe</label>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── LIGHTING PANEL ─────────────────────────────────────────────── -->
+      <section id="lighting-panel" class="tab-panel">
+        <div id="l-canvas-pane">
+          <canvas id="l-render-canvas"></canvas>
+        </div>
+        <div id="l-controls">
+          <h1>BRIMSTONE LIGHTING TUNER</h1>
+
+          <div class="phase-row" id="l-phase-row">
+            <button class="phase-btn active" data-phase="dawn">Dawn</button>
+            <button class="phase-btn" data-phase="day">Day</button>
+            <button class="phase-btn" data-phase="dusk">Dusk</button>
+            <button class="phase-btn" data-phase="night">Night</button>
+          </div>
+
+          <div class="helper">
+            Sliders write straight to the live renderer for the active phase. Other phases keep their last-edited
+            values. When you're happy, hit <b>Export</b> to copy the full <code>PHASE_LIGHT_CONFIG</code> block.
+          </div>
+
+          <div class="section">
+            <h2>Hemi (ambient fill)</h2>
+            <div class="row"><label>Intensity</label><input id="l-hemi-int" type="range" min="0" max="3" step="0.01" /><span class="val" id="l-hemi-int-v"></span></div>
+            <div class="colorrow"><label>Color</label><input id="l-hemi-color" type="color" /></div>
+          </div>
+
+          <div class="section">
+            <h2>Sun (directional)</h2>
+            <div class="row"><label>Intensity</label><input id="l-sun-int" type="range" min="0" max="4" step="0.01" /><span class="val" id="l-sun-int-v"></span></div>
+            <div class="row"><label>Dir X</label><input id="l-sun-x" type="range" min="-1" max="1" step="0.01" /><span class="val" id="l-sun-x-v"></span></div>
+            <div class="row"><label>Dir Y</label><input id="l-sun-y" type="range" min="-1" max="0" step="0.01" /><span class="val" id="l-sun-y-v"></span></div>
+            <div class="row"><label>Dir Z</label><input id="l-sun-z" type="range" min="-1" max="1" step="0.01" /><span class="val" id="l-sun-z-v"></span></div>
+          </div>
+
+          <div class="section">
+            <h2>Scene Ambient</h2>
+            <div class="colorrow"><label>Color</label><input id="l-ambient-color" type="color" /></div>
+            <div class="row"><label>Strength</label><input id="l-ambient-str" type="range" min="0" max="2" step="0.01" /><span class="val" id="l-ambient-str-v"></span></div>
+            <div class="helper">Strength multiplies the color before it's applied — lets you keep a tint and pump the brightness.</div>
+          </div>
+
+          <div class="section">
+            <h2>Sky / Clear</h2>
+            <div class="colorrow"><label>Color</label><input id="l-clear-color" type="color" /></div>
+          </div>
+
+          <div class="section">
+            <h2>Fog of War tint</h2>
+            <div class="row"><label>Darken</label><input id="l-fog-tint" type="range" min="0" max="1" step="0.01" /><span class="val" id="l-fog-tint-v"></span></div>
+            <div class="helper">Multiplier applied to fogged tile colours (0 = fully black, 1 = no darkening). Re-applies live to every already-fogged tile when you slide.</div>
+          </div>
+
+          <div class="section">
+            <h2>Map / View</h2>
+            <button class="action" id="l-regen-map">New random map</button>
+            <button class="action" id="l-reframe">Reframe</button>
+            <button class="action" id="l-toggle-fog">Toggle fog of war</button>
+          </div>
+
+          <div class="section">
+            <h2>Export</h2>
+            <button class="action" id="l-export-btn">Export PHASE_LIGHT_CONFIG</button>
+            <button class="action" id="l-copy-btn">Copy to clipboard</button>
+            <textarea id="l-export-area" readonly placeholder="Click Export to dump the current PHASE_LIGHT_CONFIG…"></textarea>
+            <div id="l-status"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── MISSION EDITOR PANEL (placeholder) ─────────────────────────── -->
+      <section id="editor-panel" class="tab-panel">
+        <div class="placeholder">
+          <h2>Campaign Mission Editor</h2>
+          <p>Coming soon — tile painting, event authoring, and 3D preview.</p>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <!-- Local UMD Babylon + glTF loaders (no CDN). These attach to window.BABYLON.
+       Loading order matters: core first, then loaders so the .glb plugin
+       registers on the same SceneLoader instance the Assets tab uses. They only
+       DEFINE globals here; the Assets scene isn't booted until that tab is
+       activated (lazy-init). -->
+  <script src="/assets/vendor/babylonjs/babylon.js"></script>
+  <script src="/assets/vendor/babylonjs/babylonjs.loaders.min.js"></script>
+
+  <script type="module">
+    import { createTabController } from '/src/tools/tab-controller.js';
+    // Lighting tab deps. Importing the module is cheap; the heavy Babylon scene
+    // is only built when initLighting() runs (first activation of that tab).
+    import { Renderer3D, PHASE_LIGHT_CONFIG } from '/src/renderer-3d.js';
+    import { generateMap } from '/src/map.js';
+    import { GameState, Phase } from '/src/game.js';
+    import { createHero, createWitch } from '/src/entities.js';
+
+    // ════════════════════════════════════════════════════════════════════
+    //  ASSETS TAB  (ported from admin-assets.html; ids prefixed `a-`)
+    //  Returns a small lifecycle handle { pause, resume } so the tab shell
+    //  can stop the render loop when another tab is active.
+    // ════════════════════════════════════════════════════════════════════
+    function initAssets() {
+      'use strict';
+
+      const MODELS = [
+        { file: 'house.glb',         label: 'house.glb' },
+        { file: 'paladin-idle.glb',  label: 'paladin-idle.glb' },
+      ];
+      const ANIMATION_FILES = ['walking.glb', 'running.glb'];
+      const MODEL_DIR = '/assets/models/';
+
+      const $ = (id) => document.getElementById('a-' + id);
+      const errEl = $('error');
+      const animSelect = $('anim-select');
+      const animListEl = $('anim-list');
+
+      if (typeof BABYLON === 'undefined') {
+        errEl.textContent = 'Babylon failed to load (check /assets/vendor/babylonjs/).';
+        return { pause() {}, resume() {} };
+      }
+
+      const canvas = $('render-canvas');
+      const engine = new BABYLON.Engine(canvas, true, { preserveDrawingBuffer: true, stencil: true });
+      const scene  = new BABYLON.Scene(engine);
+      scene.clearColor = new BABYLON.Color4(0.04, 0.04, 0.05, 1);
+
+      const camera = new BABYLON.ArcRotateCamera(
+        'cam', -Math.PI / 2, Math.PI / 3, 3, BABYLON.Vector3.Zero(), scene,
+      );
+      camera.lowerRadiusLimit = 0.2;
+      camera.upperRadiusLimit = 100;
+      camera.wheelDeltaPercentage = 0.02;
+      camera.attachControl(canvas, true);
+
+      const hemi = new BABYLON.HemisphericLight('hemi', new BABYLON.Vector3(0, 1, 0), scene);
+      hemi.intensity = 1.0;
+      hemi.diffuse = new BABYLON.Color3(1, 1, 1);
+
+      const sun = new BABYLON.DirectionalLight('sun', new BABYLON.Vector3(-0.4, -1, -0.3), scene);
+      sun.position = new BABYLON.Vector3(5, 10, 5);
+      sun.intensity = 0.8;
+
+      const ground = BABYLON.MeshBuilder.CreateGround('ground', { width: 10, height: 10, subdivisions: 10 }, scene);
+      const gridMat = new BABYLON.StandardMaterial('groundMat', scene);
+      gridMat.diffuseColor  = new BABYLON.Color3(0.18, 0.16, 0.12);
+      gridMat.specularColor = new BABYLON.Color3(0, 0, 0);
+      gridMat.wireframe = true;
+      ground.material = gridMat;
+      ground.receiveShadows = true;
+
+      const shadows = new BABYLON.ShadowGenerator(1024, sun);
+      shadows.useBlurExponentialShadowMap = true;
+      shadows.blurKernel = 16;
+
+      function makeAxes(size) {
+        const axisX = BABYLON.MeshBuilder.CreateLines('axisX', {
+          points: [BABYLON.Vector3.Zero(), new BABYLON.Vector3(size, 0, 0)],
+        }, scene);
+        axisX.color = new BABYLON.Color3(1, 0.3, 0.3);
+        const axisY = BABYLON.MeshBuilder.CreateLines('axisY', {
+          points: [BABYLON.Vector3.Zero(), new BABYLON.Vector3(0, size, 0)],
+        }, scene);
+        axisY.color = new BABYLON.Color3(0.3, 1, 0.3);
+        const axisZ = BABYLON.MeshBuilder.CreateLines('axisZ', {
+          points: [BABYLON.Vector3.Zero(), new BABYLON.Vector3(0, 0, size)],
+        }, scene);
+        axisZ.color = new BABYLON.Color3(0.3, 0.6, 1);
+        return [axisX, axisY, axisZ];
+      }
+      const axes = makeAxes(1);
+
+      const renderFn = () => scene.render();
+      engine.runRenderLoop(renderFn);
+      window.addEventListener('resize', () => engine.resize());
+
+      let currentMeshes = [];
+      let currentSkeletons = [];
+      let currentAnimGroups = [];
+      let activeAnimGroup = null;
+
+      function clearCurrent() {
+        for (const g of currentAnimGroups) { try { g.stop(); g.dispose(); } catch (_) {} }
+        for (const s of currentSkeletons) { try { s.dispose(); } catch (_) {} }
+        for (const m of currentMeshes) { try { m.dispose(); } catch (_) {} }
+        currentAnimGroups = [];
+        currentSkeletons = [];
+        currentMeshes = [];
+        activeAnimGroup = null;
+      }
+
+      function computeHierarchyBBox(meshes) {
+        let min = null, max = null;
+        for (const m of meshes) {
+          if (!m.getBoundingInfo) continue;
+          const verts = m.getTotalVertices ? m.getTotalVertices() : 0;
+          if (!verts) continue;
+          m.computeWorldMatrix(true);
+          const bb = m.getBoundingInfo().boundingBox;
+          const mn = bb.minimumWorld, mx = bb.maximumWorld;
+          if (!min) { min = mn.clone(); max = mx.clone(); }
+          else {
+            min = BABYLON.Vector3.Minimize(min, mn);
+            max = BABYLON.Vector3.Maximize(max, mx);
+          }
+        }
+        if (!min) return null;
+        return { min, max, center: min.add(max).scale(0.5), size: max.subtract(min) };
+      }
+
+      function frameCamera() {
+        const bbox = computeHierarchyBBox(currentMeshes);
+        if (!bbox) {
+          camera.target = BABYLON.Vector3.Zero();
+          camera.radius = 3;
+          return;
+        }
+        const maxDim = Math.max(bbox.size.x, bbox.size.y, bbox.size.z);
+        camera.target = bbox.center.clone();
+        camera.radius = Math.max(0.6, maxDim * 2.2);
+        camera.lowerRadiusLimit = Math.max(0.1, maxDim * 0.2);
+        camera.upperRadiusLimit = Math.max(20, maxDim * 20);
+      }
+
+      function fmt(n) {
+        if (n == null || !isFinite(n)) return '—';
+        return (Math.round(n * 100) / 100).toFixed(2);
+      }
+
+      function updateMetadata(file, result) {
+        $('meta-file').textContent = file;
+        $('meta-submesh').textContent = String(currentMeshes.filter(m => m.getTotalVertices && m.getTotalVertices() > 0).length);
+        let totalVerts = 0;
+        for (const m of currentMeshes) {
+          if (m.getTotalVertices) totalVerts += m.getTotalVertices();
+        }
+        $('meta-verts').textContent = totalVerts.toLocaleString();
+        let totalBones = 0;
+        for (const s of currentSkeletons) {
+          totalBones += (s.bones && s.bones.length) || 0;
+        }
+        $('meta-bones').textContent = totalBones ? String(totalBones) : '0';
+        const bbox = computeHierarchyBBox(currentMeshes);
+        $('meta-bbox').textContent = bbox
+          ? `${fmt(bbox.size.x)} · ${fmt(bbox.size.y)} · ${fmt(bbox.size.z)}`
+          : '—';
+
+        animSelect.innerHTML = '<option value="">— none —</option>';
+        animListEl.innerHTML = '';
+        if (!currentAnimGroups.length) {
+          animListEl.innerHTML = '<span class="empty">no animations</span>';
+        } else {
+          for (let i = 0; i < currentAnimGroups.length; i++) {
+            const g = currentAnimGroups[i];
+            const opt = document.createElement('option');
+            opt.value = String(i);
+            opt.textContent = g.name || `anim-${i}`;
+            animSelect.appendChild(opt);
+
+            const dur = (g.to - g.from) / 60;
+            const row = document.createElement('div');
+            row.textContent = `${g.name || `anim-${i}`} — ${fmt(dur)}s (${g.targetedAnimations ? g.targetedAnimations.length : 0} tracks)`;
+            animListEl.appendChild(row);
+          }
+        }
+      }
+
+      function buildTargetNameMap(skeletons, meshes) {
+        const map = new Map();
+        const stripDup = (n) => n ? String(n).replace(/\.\d{3}$/, '') : n;
+        const add = (name, target) => {
+          if (!name || !target) return;
+          if (!map.has(name)) map.set(name, target);
+          const stripped = stripDup(name);
+          if (stripped !== name && !map.has(stripped)) map.set(stripped, target);
+        };
+        for (const m of meshes) {
+          if (m && m.name) add(m.name, m);
+        }
+        for (const s of skeletons) {
+          for (const bone of (s.bones || [])) {
+            if (!bone) continue;
+            const tn = bone._linkedTransformNode
+              || (typeof bone.getTransformNode === 'function' && bone.getTransformNode());
+            if (tn && tn.name) add(tn.name, tn);
+            if (bone.name) add(bone.name, tn || bone);
+          }
+        }
+        return map;
+      }
+
+      function stripRootMotion(animGroup, rootName = 'mixamorig:Hips') {
+        if (!animGroup || !Array.isArray(animGroup.targetedAnimations)) return 0;
+        let stripped = 0;
+        for (const ta of animGroup.targetedAnimations) {
+          const target = ta.target;
+          const tName = target && target.name;
+          const prop  = ta.animation && ta.animation.targetProperty;
+          if (!tName || !prop) continue;
+          if (tName !== rootName && tName !== rootName.replace(/\.\d{3}$/, '')) continue;
+          if (!/position/i.test(prop)) continue;
+          const keys = ta.animation.getKeys ? ta.animation.getKeys() : null;
+          if (!keys) continue;
+          for (const k of keys) {
+            if (k.value && typeof k.value === 'object' && 'x' in k.value && 'z' in k.value) {
+              k.value.x = 0;
+              k.value.z = 0;
+            }
+          }
+          stripped++;
+        }
+        return stripped;
+      }
+
+      function retargetAnimGroupOntoBase(animGroup, baseMeshes, baseSkeletons) {
+        const nameMap = buildTargetNameMap(baseSkeletons, baseMeshes);
+        let hit = 0, miss = 0;
+        const cloned = animGroup.clone(animGroup.name + '_retargeted', (oldTarget) => {
+          if (!oldTarget || !oldTarget.name) { miss++; return oldTarget; }
+          const m = nameMap.get(oldTarget.name)
+            || nameMap.get(oldTarget.name.replace(/\.\d{3}$/, ''));
+          if (m) { hit++; return m; }
+          miss++; return oldTarget;
+        });
+        console.info(`[asset-viewer] retarget ${animGroup.name}: ${hit} hit, ${miss} miss`);
+        return cloned;
+      }
+
+      async function loadModel(file) {
+        errEl.textContent = '';
+        clearCurrent();
+        updateMetadata(file, null);
+
+        let result;
+        try {
+          result = await BABYLON.SceneLoader.ImportMeshAsync('', MODEL_DIR, file, scene);
+        } catch (err) {
+          errEl.textContent = `Failed to load ${file}: ${err && err.message ? err.message : err}`;
+          updateMetadata(file, null);
+          return;
+        }
+
+        currentMeshes = result.meshes || [];
+        currentSkeletons = result.skeletons || [];
+        currentAnimGroups = result.animationGroups || [];
+        for (const g of currentAnimGroups) { try { g.stop(); } catch (_) {} }
+        for (const m of currentMeshes) {
+          if (m.getTotalVertices && m.getTotalVertices() > 0) {
+            shadows.addShadowCaster(m);
+            m.receiveShadows = true;
+          }
+        }
+
+        if (currentSkeletons.length > 0) {
+          for (const animFile of ANIMATION_FILES) {
+            try {
+              const animResult = await BABYLON.SceneLoader.ImportMeshAsync(
+                '', MODEL_DIR, animFile, scene,
+              );
+              const groups = (animResult.animationGroups || []).slice();
+              const stubMeshes = animResult.meshes || [];
+              const stubSkels  = animResult.skeletons || [];
+              for (const g of groups) {
+                try { g.stop(); } catch (_) {}
+                const retargeted = retargetAnimGroupOntoBase(g, currentMeshes, currentSkeletons);
+                if (retargeted) {
+                  retargeted.name = animFile.replace(/\.glb$/i, '');
+                  stripRootMotion(retargeted);
+                  currentAnimGroups.push(retargeted);
+                }
+                try { g.dispose(); } catch (_) {}
+              }
+              for (const m of stubMeshes) { try { m.dispose(); } catch (_) {} }
+              for (const s of stubSkels)  { try { s.dispose(); } catch (_) {} }
+            } catch (err) {
+              console.warn(`[asset-viewer] skipping ${animFile}:`, err && err.message ? err.message : err);
+            }
+          }
+        }
+
+        updateMetadata(file, result);
+        frameCamera();
+      }
+
+      const listEl = $('model-list');
+      let activeItem = null;
+      let activeFile = null;
+      for (const m of MODELS) {
+        const el = document.createElement('div');
+        el.className = 'model-item';
+        el.textContent = m.label;
+        el.addEventListener('click', () => {
+          if (activeItem) activeItem.classList.remove('active');
+          el.classList.add('active');
+          activeItem = el;
+          activeFile = m.file;
+          loadModel(m.file).catch(() => { el.classList.add('broken'); });
+        });
+        listEl.appendChild(el);
+      }
+
+      const treeListEl = $('tree-list');
+      const checkedRemovals = new Set();
+      (async () => {
+        try {
+          const res = await fetch('/assets/models/trees/manifest.json');
+          if (!res.ok) return;
+          const manifest = await res.json();
+          for (const [groupName, entries] of Object.entries(manifest.groups || {})) {
+            const folder = document.createElement('div');
+            folder.className = 'folder';
+            folder.textContent = `${groupName} (${entries.length})`;
+            folder.addEventListener('click', () => folder.classList.toggle('collapsed'));
+            treeListEl.appendChild(folder);
+            const body = document.createElement('div');
+            body.className = 'folder-body';
+            treeListEl.appendChild(body);
+            for (const entry of entries) {
+              const file = typeof entry === 'string' ? entry : entry.file;
+              const species = typeof entry === 'object' ? (entry.species || '') : '';
+              const item = document.createElement('div');
+              item.className = 'model-item';
+              const chk = document.createElement('input');
+              chk.type = 'checkbox';
+              chk.className = 'check';
+              chk.addEventListener('click', (ev) => {
+                ev.stopPropagation();
+                if (chk.checked) checkedRemovals.add(file); else checkedRemovals.delete(file);
+              });
+              item.appendChild(chk);
+              const lbl = document.createElement('span');
+              lbl.className = 'label';
+              const short = file.split('/').pop();
+              lbl.textContent = species ? `${short} [${species}]` : short;
+              item.appendChild(lbl);
+              item.addEventListener('click', () => {
+                if (activeItem) activeItem.classList.remove('active');
+                item.classList.add('active');
+                activeItem = item;
+                activeFile = `trees/${file}`;
+                loadModel(`trees/${file}`).catch(() => { item.classList.add('broken'); });
+              });
+              body.appendChild(item);
+            }
+            folder.classList.add('collapsed');
+          }
+        } catch (e) {
+          console.warn('Tree manifest load failed:', e);
+        }
+      })();
+
+      $('show-remove').addEventListener('click', () => {
+        const pre = $('remove-output');
+        if (checkedRemovals.size === 0) {
+          pre.textContent = '(no trees selected)';
+          pre.style.display = 'block';
+          return;
+        }
+        const files = Array.from(checkedRemovals).sort();
+        const rms = files.map(f => `rm assets/models/trees/${f}`).join(' && \\\n');
+        const filterJs = `
+# Then prune the manifest:
+node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/models/trees/manifest.json','utf8'));const remove=new Set(${JSON.stringify(files)});for(const g of Object.keys(m.groups)){m.groups[g]=m.groups[g].filter(e=>!remove.has(typeof e==='string'?e:e.file));}fs.writeFileSync('assets/models/trees/manifest.json',JSON.stringify(m,null,2)+'\\n');"
+`.trim();
+        pre.textContent = `# Remove ${files.length} tree GLBs:\n${rms} && \\\n${filterJs}`;
+        pre.style.display = 'block';
+      });
+
+      function selectedGroup() {
+        const idx = parseInt(animSelect.value, 10);
+        if (isNaN(idx) || idx < 0 || idx >= currentAnimGroups.length) return null;
+        return currentAnimGroups[idx];
+      }
+      $('anim-play').addEventListener('click', () => {
+        const g = selectedGroup();
+        if (!g) return;
+        if (activeAnimGroup && activeAnimGroup !== g) { try { activeAnimGroup.stop(); } catch (_) {} }
+        activeAnimGroup = g;
+        g.start($('anim-loop').checked, 1.0, g.from, g.to, false);
+      });
+      $('anim-pause').addEventListener('click', () => {
+        if (activeAnimGroup) { try { activeAnimGroup.pause(); } catch (_) {} }
+      });
+      $('anim-stop').addEventListener('click', () => {
+        if (activeAnimGroup) { try { activeAnimGroup.stop(); } catch (_) {} }
+        activeAnimGroup = null;
+      });
+
+      $('reframe').addEventListener('click', frameCamera);
+      $('show-grid').addEventListener('change', (e) => {
+        ground.setEnabled(!!e.target.checked);
+        for (const a of axes) a.setEnabled(!!e.target.checked);
+      });
+      $('wireframe').addEventListener('change', (e) => {
+        const on = !!e.target.checked;
+        for (const m of currentMeshes) {
+          if (m.material) m.material.wireframe = on;
+        }
+      });
+
+      if (MODELS.length) {
+        const first = listEl.firstChild;
+        if (first) first.click();
+      }
+
+      return {
+        pause() { engine.stopRenderLoop(); },
+        resume() { engine.stopRenderLoop(); engine.runRenderLoop(renderFn); engine.resize(); },
+      };
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  LIGHTING TAB  (ported from admin-lighting.html; ids prefixed `l-`)
+    // ════════════════════════════════════════════════════════════════════
+    async function initLighting() {
+      const PHASES = ['dawn', 'day', 'dusk', 'night'];
+
+      const live = {};
+      for (const phase of PHASES) {
+        const cfg = PHASE_LIGHT_CONFIG[phase];
+        const amb = cfg.ambient || { r: 0.3, g: 0.3, b: 0.3 };
+        const ambStrength = Math.max(amb.r, amb.g, amb.b) || 1;
+        const ambNorm = ambStrength > 0
+          ? { r: amb.r / ambStrength, g: amb.g / ambStrength, b: amb.b / ambStrength }
+          : { r: 1, g: 1, b: 1 };
+        live[phase] = {
+          hemi:    { intensity: cfg.intensity, color: { ...cfg.color } },
+          sun:     { intensity: cfg.sun.intensity, dir: { ...cfg.sun.dir } },
+          ambient: { color: ambNorm, strength: ambStrength },
+          clear:   { ...cfg.clear },
+          fogTint: typeof cfg.fogTint === 'number' ? cfg.fogTint : 0.20,
+        };
+      }
+
+      let activePhase = 'dawn';
+
+      function buildState() {
+        const seed = Math.floor(Math.random() * 1e9);
+        const state = new GameState({ size: 'standard', seed });
+        const hero  = createHero(6, 6, 'p_hero', state);
+        const witch = createWitch(6, 4, 'p_witch', state);
+        state.entities.push(hero, witch);
+        state.phase = activePhase;
+        state.round = activePhase === 'dawn' ? 1
+                    : activePhase === 'day'  ? 3
+                    : activePhase === 'dusk' ? 5
+                    : 7;
+        return state;
+      }
+
+      const $ = (id) => document.getElementById('l-' + id);
+      const canvas = $('render-canvas');
+      let state    = buildState();
+      let renderer = new Renderer3D(canvas, state);
+      let fogOn    = false;
+      state.fogOfWar = 'none';
+
+      renderer.loadImages('/assets');
+      renderer.beginLoad();
+
+      async function waitForRenderer() {
+        for (let i = 0; i < 60; i++) {
+          if (renderer._scene && renderer._light && renderer._sunLight) return;
+          await new Promise(r => setTimeout(r, 100));
+        }
+      }
+
+      await waitForRenderer();
+
+      if (renderer._onBeforeRenderObs) {
+        renderer._scene.onBeforeRenderObservable.remove(renderer._onBeforeRenderObs);
+        renderer._onBeforeRenderObs = null;
+      }
+
+      const BABYLON = renderer._babylon;
+
+      function applyLiveLighting() {
+        const cfg = live[activePhase];
+        if (!cfg) return;
+        renderer._light.intensity = cfg.hemi.intensity;
+        renderer._light.diffuse   = new BABYLON.Color3(cfg.hemi.color.r, cfg.hemi.color.g, cfg.hemi.color.b);
+        renderer._light.specular  = new BABYLON.Color3(cfg.hemi.color.r * 0.3, cfg.hemi.color.g * 0.3, cfg.hemi.color.b * 0.3);
+        renderer._light.groundColor = new BABYLON.Color3(cfg.hemi.color.r * 0.35, cfg.hemi.color.g * 0.35, cfg.hemi.color.b * 0.35);
+        renderer._sunLight.intensity = cfg.sun.intensity;
+        renderer._sunLight.direction = new BABYLON.Vector3(cfg.sun.dir.x, cfg.sun.dir.y, cfg.sun.dir.z);
+        const ambR = cfg.ambient.color.r * cfg.ambient.strength;
+        const ambG = cfg.ambient.color.g * cfg.ambient.strength;
+        const ambB = cfg.ambient.color.b * cfg.ambient.strength;
+        renderer._scene.ambientColor = new BABYLON.Color3(ambR, ambG, ambB);
+        renderer._scene.clearColor   = new BABYLON.Color4(cfg.clear.r, cfg.clear.g, cfg.clear.b, 1);
+        renderer._scene.fogColor     = new BABYLON.Color3(cfg.clear.r, cfg.clear.g, cfg.clear.b);
+        if (typeof renderer.setFogTint === 'function'
+            && Math.abs((renderer._fogTileDarken ?? 0) - cfg.fogTint) > 1e-4) {
+          renderer.setFogTint(cfg.fogTint);
+        }
+      }
+
+      renderer._scene.onBeforeRenderObservable.add(applyLiveLighting);
+
+      const rgbToHex = ({ r, g, b }) => {
+        const toByte = (v) => Math.max(0, Math.min(255, Math.round(v * 255)));
+        return '#' + [r, g, b].map(c => toByte(c).toString(16).padStart(2, '0')).join('');
+      };
+      const hexToRgb = (hex) => {
+        const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+        if (!m) return { r: 1, g: 1, b: 1 };
+        return { r: parseInt(m[1], 16) / 255, g: parseInt(m[2], 16) / 255, b: parseInt(m[3], 16) / 255 };
+      };
+      const fmt = (n, d = 2) => (Math.round(n * Math.pow(10, d)) / Math.pow(10, d)).toFixed(d);
+
+      function syncControlsFromLive() {
+        const cfg = live[activePhase];
+        $('hemi-int').value = cfg.hemi.intensity;
+        $('hemi-int-v').textContent = fmt(cfg.hemi.intensity);
+        $('hemi-color').value = rgbToHex(cfg.hemi.color);
+        $('sun-int').value = cfg.sun.intensity;
+        $('sun-int-v').textContent = fmt(cfg.sun.intensity);
+        $('sun-x').value = cfg.sun.dir.x;
+        $('sun-x-v').textContent = fmt(cfg.sun.dir.x);
+        $('sun-y').value = cfg.sun.dir.y;
+        $('sun-y-v').textContent = fmt(cfg.sun.dir.y);
+        $('sun-z').value = cfg.sun.dir.z;
+        $('sun-z-v').textContent = fmt(cfg.sun.dir.z);
+        $('ambient-color').value = rgbToHex(cfg.ambient.color);
+        $('ambient-str').value = cfg.ambient.strength;
+        $('ambient-str-v').textContent = fmt(cfg.ambient.strength);
+        $('clear-color').value = rgbToHex(cfg.clear);
+        $('fog-tint').value = cfg.fogTint;
+        $('fog-tint-v').textContent = fmt(cfg.fogTint);
+      }
+
+      function onPhaseSwitch(phase) {
+        activePhase = phase;
+        for (const btn of document.querySelectorAll('#lighting-panel .phase-btn')) {
+          btn.classList.toggle('active', btn.dataset.phase === phase);
+        }
+        state.phase = phase;
+        state.round = phase === 'dawn' ? 1 : phase === 'day' ? 3 : phase === 'dusk' ? 5 : 7;
+        syncControlsFromLive();
+      }
+
+      for (const btn of document.querySelectorAll('#lighting-panel .phase-btn')) {
+        btn.addEventListener('click', () => onPhaseSwitch(btn.dataset.phase));
+      }
+
+      function bindNumber(id, displayId, getter, setter, formatter = (v) => fmt(v)) {
+        const el = $(id);
+        const disp = $(displayId);
+        el.addEventListener('input', () => {
+          const v = parseFloat(el.value);
+          setter(v);
+          disp.textContent = formatter(v);
+        });
+      }
+      bindNumber('hemi-int', 'hemi-int-v',
+        () => live[activePhase].hemi.intensity,
+        (v) => { live[activePhase].hemi.intensity = v; });
+      bindNumber('sun-int', 'sun-int-v',
+        () => live[activePhase].sun.intensity,
+        (v) => { live[activePhase].sun.intensity = v; });
+      bindNumber('sun-x', 'sun-x-v',
+        () => live[activePhase].sun.dir.x,
+        (v) => { live[activePhase].sun.dir.x = v; });
+      bindNumber('sun-y', 'sun-y-v',
+        () => live[activePhase].sun.dir.y,
+        (v) => { live[activePhase].sun.dir.y = v; });
+      bindNumber('sun-z', 'sun-z-v',
+        () => live[activePhase].sun.dir.z,
+        (v) => { live[activePhase].sun.dir.z = v; });
+      bindNumber('ambient-str', 'ambient-str-v',
+        () => live[activePhase].ambient.strength,
+        (v) => { live[activePhase].ambient.strength = v; });
+      bindNumber('fog-tint', 'fog-tint-v',
+        () => live[activePhase].fogTint,
+        (v) => { live[activePhase].fogTint = v; });
+
+      $('hemi-color').addEventListener('input', (e) => {
+        live[activePhase].hemi.color = hexToRgb(e.target.value);
+      });
+      $('ambient-color').addEventListener('input', (e) => {
+        live[activePhase].ambient.color = hexToRgb(e.target.value);
+      });
+      $('clear-color').addEventListener('input', (e) => {
+        live[activePhase].clear = hexToRgb(e.target.value);
+      });
+
+      $('regen-map').addEventListener('click', () => {
+        try { renderer._scene?.dispose(); } catch {}
+        try { renderer._engine?.dispose(); } catch {}
+        state = buildState();
+        renderer = new Renderer3D(canvas, state);
+        renderer.loadImages('/assets');
+        renderer.beginLoad();
+        waitForRenderer().then(() => {
+          if (renderer._onBeforeRenderObs) {
+            renderer._scene.onBeforeRenderObservable.remove(renderer._onBeforeRenderObs);
+            renderer._onBeforeRenderObs = null;
+          }
+          renderer._scene.onBeforeRenderObservable.add(applyLiveLighting);
+        });
+      });
+      $('reframe').addEventListener('click', () => {
+        renderer._frameFullMap?.({ instant: false });
+      });
+      $('toggle-fog').addEventListener('click', () => {
+        fogOn = !fogOn;
+        state.fogOfWar = fogOn ? 'standard' : 'none';
+        renderer.draw();
+      });
+
+      function buildExport() {
+        const out = [];
+        out.push('export const PHASE_LIGHT_CONFIG = Object.freeze({');
+        for (const phase of PHASES) {
+          const cfg = live[phase];
+          const ambR = cfg.ambient.color.r * cfg.ambient.strength;
+          const ambG = cfg.ambient.color.g * cfg.ambient.strength;
+          const ambB = cfg.ambient.color.b * cfg.ambient.strength;
+          out.push(`  ${phase.padEnd(6)}: {`);
+          out.push(`    intensity: ${fmt(cfg.hemi.intensity)}, ` +
+                   `color: { r: ${fmt(cfg.hemi.color.r)}, g: ${fmt(cfg.hemi.color.g)}, b: ${fmt(cfg.hemi.color.b)} }, ` +
+                   `clear: { r: ${fmt(cfg.clear.r)}, g: ${fmt(cfg.clear.g)}, b: ${fmt(cfg.clear.b)} },`);
+          out.push(`    ambient: { r: ${fmt(ambR)}, g: ${fmt(ambG)}, b: ${fmt(ambB)} },`);
+          out.push(`    fogTint: ${fmt(cfg.fogTint)},`);
+          out.push(`    sun: { dir: { x: ${fmt(cfg.sun.dir.x)}, y: ${fmt(cfg.sun.dir.y)}, z: ${fmt(cfg.sun.dir.z)} }, intensity: ${fmt(cfg.sun.intensity)} },`);
+          out.push('  },');
+        }
+        out.push('});');
+        return out.join('\n');
+      }
+      $('export-btn').addEventListener('click', () => {
+        $('export-area').value = buildExport();
+        $('status').textContent = 'Exported. Edit other phases as needed, then re-export.';
+      });
+      $('copy-btn').addEventListener('click', async () => {
+        const text = $('export-area').value || buildExport();
+        $('export-area').value = text;
+        try {
+          await navigator.clipboard.writeText(text);
+          $('status').textContent = 'Copied to clipboard.';
+        } catch (err) {
+          $('status').textContent = 'Copy failed — select the textarea and copy manually.';
+        }
+      });
+
+      window.addEventListener('resize', () => renderer._engine?.resize());
+
+      syncControlsFromLive();
+
+      // Lifecycle handle so the shell can stop the render loop when this tab is
+      // not the active one. Renderer3D's loop is simply `scene.render()`.
+      return {
+        pause() { try { renderer._engine?.stopRenderLoop(); } catch {} },
+        resume() {
+          try {
+            renderer._engine?.stopRenderLoop();
+            renderer._engine?.runRenderLoop(() => renderer._scene?.render());
+            renderer._engine?.resize();
+          } catch {}
+        },
+      };
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  TAB SHELL — lazy-init + pause/resume. Only the active tab's renderer
+    //  is left running; the others init on first activation then pause.
+    // ════════════════════════════════════════════════════════════════════
+    const TABS = ['assets', 'lighting', 'editor'];
+    // Per-tab lifecycle handles ({pause, resume}) once a tab has been booted.
+    const handles = {};
+    // Lighting init is async; track its promise so resume() can await it.
+    const initPromises = {};
+
+    function bootTab(id) {
+      if (id === 'assets') {
+        handles.assets = initAssets();
+      } else if (id === 'lighting') {
+        initPromises.lighting = initLighting().then((h) => { handles.lighting = h; return h; });
+      }
+      // 'editor' is a static placeholder — nothing to boot.
+    }
+
+    function showPanel(id) {
+      for (const tab of TABS) {
+        const panel = document.getElementById(`${tab}-panel`);
+        if (panel) panel.classList.toggle('active', tab === id);
+      }
+      for (const btn of document.querySelectorAll('#tab-bar .tab-btn')) {
+        btn.classList.toggle('active', btn.dataset.tab === id);
+      }
+      // Pause every other tab's renderer; resume the active one.
+      for (const tab of TABS) {
+        if (tab === id) continue;
+        handles[tab]?.pause?.();
+      }
+      if (handles[id]) {
+        handles[id].resume?.();
+      } else if (initPromises[id]) {
+        initPromises[id].then((h) => h?.resume?.());
+      }
+    }
+
+    const controller = createTabController(TABS, {
+      onFirstActivate: bootTab,
+      onActivate: showPanel,
+    });
+
+    for (const btn of document.querySelectorAll('#tab-bar .tab-btn')) {
+      btn.addEventListener('click', () => controller.activate(btn.dataset.tab));
+    }
+
+    // Boot the default tab (Assets) — its scene comes up on load, the other two
+    // stay dormant until their tab is first opened.
+    controller.activate('assets');
+  </script>
+</body>
+</html>

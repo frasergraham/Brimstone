@@ -691,6 +691,7 @@ app.get('/admin/stats',         (_req, res) => res.redirect('/admin'));
 app.get('/admin/campaign-stats',(_req, res) => res.redirect('/admin'));
 app.get('/admin/lighting',      (_req, res) => res.sendFile(join(__dirname, 'admin-lighting.html')));
 app.get('/admin/assets',        (_req, res) => res.sendFile(join(__dirname, 'admin-assets.html')));
+app.get('/admin/tools',         (_req, res) => res.sendFile(join(__dirname, 'admin-tools.html')));
 app.get('/spectate', (_req, res) => res.sendFile(join(__dirname, 'index.html')));
 app.get('/replay',   (_req, res) => res.sendFile(join(__dirname, 'index.html')));
 
