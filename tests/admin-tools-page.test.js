@@ -51,6 +51,13 @@ describe('admin-tools.html', () => {
     assert.match(html, /new\s+Renderer3D/);
   });
 
+  test('deferred async resume is gated on the tab still being active', () => {
+    // Guards the mid-boot switch race: if the user switches away from a tab
+    // before its async boot resolves, the deferred resume() must NOT run (or
+    // it leaves a hidden tab's render loop going). The gate is controller.active.
+    assert.match(html, /controller\.active\s*===\s*id/);
+  });
+
   test('Mission Editor tab is a placeholder (no editor controller yet)', () => {
     assert.match(html, /id="editor-panel"/);
     assert.doesNotMatch(html, /mission-editor\.js/);

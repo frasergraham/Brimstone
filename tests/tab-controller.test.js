@@ -72,6 +72,33 @@ describe('createTabController', () => {
     assert.deepEqual(every, ['assets', 'assets', 'lighting']);
   });
 
+  test('active reflects the current tab when an async boot resolves (mid-boot switch race)', () => {
+    // Models admin-tools.html's deferred-resume gate: a tab boots async, the
+    // user switches away before it resolves, and the deferred resume() must be
+    // suppressed because `active` now points at a different tab.
+    const ctl = createTabController(['assets', 'lighting', 'editor']);
+    let resumed = false;
+    let paused = false;
+
+    ctl.activate('lighting'); // start booting lighting (async, unresolved)
+    ctl.activate('assets');   // user switches away before the boot resolves
+
+    // Simulate the deferred boot resolving now:
+    if (ctl.active === 'lighting') resumed = true;
+    else paused = true;
+
+    assert.equal(resumed, false, 'lighting must NOT resume — it is no longer active');
+    assert.equal(paused, true, 'lighting stays paused');
+    assert.equal(ctl.active, 'assets');
+  });
+
+  test('active still matches when the booting tab is the one displayed at resolve', () => {
+    const ctl = createTabController(['assets', 'lighting', 'editor']);
+    ctl.activate('lighting'); // boot lighting, stay on it
+    // Deferred boot resolves while lighting is still active → resume allowed.
+    assert.equal(ctl.active === 'lighting', true, 'lighting still active → resume runs');
+  });
+
   test('rejects unknown tabs and empty tab lists', () => {
     const ctl = createTabController(['assets']);
     assert.throws(() => ctl.activate('nope'), /unknown tab/);

@@ -843,7 +843,7 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
         btn.addEventListener('click', () => onPhaseSwitch(btn.dataset.phase));
       }
 
-      function bindNumber(id, displayId, getter, setter, formatter = (v) => fmt(v)) {
+      function bindNumber(id, displayId, setter, formatter = (v) => fmt(v)) {
         const el = $(id);
         const disp = $(displayId);
         el.addEventListener('input', () => {
@@ -853,25 +853,18 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
         });
       }
       bindNumber('hemi-int', 'hemi-int-v',
-        () => live[activePhase].hemi.intensity,
         (v) => { live[activePhase].hemi.intensity = v; });
       bindNumber('sun-int', 'sun-int-v',
-        () => live[activePhase].sun.intensity,
         (v) => { live[activePhase].sun.intensity = v; });
       bindNumber('sun-x', 'sun-x-v',
-        () => live[activePhase].sun.dir.x,
         (v) => { live[activePhase].sun.dir.x = v; });
       bindNumber('sun-y', 'sun-y-v',
-        () => live[activePhase].sun.dir.y,
         (v) => { live[activePhase].sun.dir.y = v; });
       bindNumber('sun-z', 'sun-z-v',
-        () => live[activePhase].sun.dir.z,
         (v) => { live[activePhase].sun.dir.z = v; });
       bindNumber('ambient-str', 'ambient-str-v',
-        () => live[activePhase].ambient.strength,
         (v) => { live[activePhase].ambient.strength = v; });
       bindNumber('fog-tint', 'fog-tint-v',
-        () => live[activePhase].fogTint,
         (v) => { live[activePhase].fogTint = v; });
 
       $('hemi-color').addEventListener('input', (e) => {
@@ -996,7 +989,13 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
       if (handles[id]) {
         handles[id].resume?.();
       } else if (initPromises[id]) {
-        initPromises[id].then((h) => h?.resume?.());
+        // Async boot: only resume once it resolves IF this tab is still the
+        // active one. Otherwise the user switched away mid-boot and resuming
+        // here would leave a hidden tab's render loop running.
+        initPromises[id].then((h) => {
+          if (controller.active === id) h?.resume?.();
+          else h?.pause?.();
+        });
       }
     }
 
