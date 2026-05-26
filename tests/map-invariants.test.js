@@ -183,11 +183,12 @@ describe('Layered tile model', () => {
     }
   });
 
-  test('building tiles carry structure + path=none; MST-connected ones use roadDirs', () => {
+  test('building tiles carry structure + path=none; sit on cleared dirt/grass (never forest)', () => {
     for (const size of SIZES) {
       for (let seed = 0; seed < 6; seed++) {
         const { tiles } = generateMap(seed, size);
         let connectedBuildings = 0;
+        let dirtBases = 0, grassBases = 0;
         for (const t of tiles.values()) {
           if (legacyTileType(t) !== TileType.BUILDING) continue;
           assert.equal(t.structure, StructureType.BUILDING,
@@ -195,30 +196,65 @@ describe('Layered tile model', () => {
           // P0 semantics: a building never carries a path; road-through is roadDirs.
           assert.equal(pathOf(t), null,
             `${size} seed=${seed}: building (${t.col},${t.row}) must not have a path layer`);
-          assert.equal(baseOf(t), TileType.DIRT,
-            `${size} seed=${seed}: building (${t.col},${t.row}) base "${baseOf(t)}" not dirt`);
+          // Operator-locked: a building clears its tile, so the base is dirt or
+          // grass — NEVER forest (and never a river/bridge, which would be a path).
+          assert.ok([TileType.DIRT, TileType.GRASS].includes(baseOf(t)),
+            `${size} seed=${seed}: building (${t.col},${t.row}) base "${baseOf(t)}" not dirt/grass`);
+          assert.notEqual(baseOf(t), TileType.FOREST,
+            `${size} seed=${seed}: building (${t.col},${t.row}) must never sit on forest`);
+          if (baseOf(t) === TileType.DIRT) dirtBases++;
+          else grassBases++;
           if (t.roadDirs.size > 0) connectedBuildings++;
         }
         // The road MST connects buildings, so at least some are road-linked.
         assert.ok(connectedBuildings > 0,
           `${size} seed=${seed}: expected some buildings to be road-connected via roadDirs`);
+        // Sanity: there ARE buildings (so the never-forest assertions ran).
+        assert.ok(dirtBases + grassBases > 0,
+          `${size} seed=${seed}: no buildings found`);
       }
     }
   });
 
-  test('road tiles are a path overlay that preserves their base material', () => {
+  test('building bases vary between dirt and grass across maps (not always dirt)', () => {
+    // Aggregate across seeds: the variety knob should produce BOTH dirt-based and
+    // grass-based building tiles somewhere in the population.
+    let dirt = 0, grass = 0;
+    for (const size of SIZES) {
+      for (let seed = 0; seed < 8; seed++) {
+        const { tiles } = generateMap(seed, size);
+        for (const t of tiles.values()) {
+          if (legacyTileType(t) !== TileType.BUILDING) continue;
+          if (baseOf(t) === TileType.DIRT) dirt++;
+          else if (baseOf(t) === TileType.GRASS) grass++;
+        }
+      }
+    }
+    assert.ok(dirt > 0, 'expected some buildings on a dirt base');
+    assert.ok(grass > 0, 'expected some buildings on a grass base');
+  });
+
+  test('road tiles are a path overlay that preserves their crossed base material', () => {
+    // Roads now grow AFTER forest/dirt, so a road preserves whatever terrain it
+    // crosses: grass, forest, or dirt (operator-locked: roads preserve terrain).
+    const baseHistogram = { [TileType.GRASS]: 0, [TileType.FOREST]: 0, [TileType.DIRT]: 0 };
     for (const size of SIZES) {
       for (let seed = 0; seed < 4; seed++) {
         const { tiles } = generateMap(seed, size);
         for (const t of tiles.values()) {
           if (legacyTileType(t) !== TileType.ROAD) continue;
           assert.equal(pathOf(t), PathType.ROAD);
-          // Roads are laid before forests/dirt patches, so base is grass.
-          assert.ok([TileType.GRASS, TileType.FOREST, TileType.DIRT].includes(baseOf(t)),
-            `${size} seed=${seed}: road (${t.col},${t.row}) has invalid base "${baseOf(t)}"`);
+          const b = baseOf(t);
+          assert.ok([TileType.GRASS, TileType.FOREST, TileType.DIRT].includes(b),
+            `${size} seed=${seed}: road (${t.col},${t.row}) has invalid base "${b}"`);
+          baseHistogram[b]++;
         }
       }
     }
+    // Roads should land on more than just grass now — at least one road over a
+    // non-grass base must exist across the sampled maps.
+    assert.ok(baseHistogram[TileType.FOREST] + baseHistogram[TileType.DIRT] > 0,
+      `expected some roads over forest/dirt, got ${JSON.stringify(baseHistogram)}`);
   });
 });
 

@@ -176,6 +176,11 @@ export function shuffle(arr, rand) {
 const MAX_ROAD_DEG = 3;
 const ROAD_DEG_PENALTY = 10; // extra cost per degree above the cap
 
+// Chance a building's cleared-ground base is GRASS rather than DIRT. Buildings
+// never sit on forest (the tile is cleared); this just adds dirt/grass variety
+// so settlements aren't a uniform dirt patch. Tunable.
+const BUILDING_GRASS_CHANCE = 0.4;
+
 export function bfsPath(tiles, startCol, startRow, endCol, endRow, rand, roadTiles = new Set(), blockRiver = false) {
   const key = (c, r) => `${c},${r}`;
   const start = key(startCol, startRow);
@@ -794,17 +799,70 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
   for (const { col, row, building } of buildingPlacements) {
     const t = tiles.get(hexKey(col, row));
     if (!t) continue;
-    // Building is a STRUCTURE layer. Default base to dirt (matches the
-    // building-on-dirt rendering) and clear any path — road-through-building
+    // Building is a STRUCTURE layer on CLEARED ground. Operator-locked design:
+    // a building clears the trees on its tile, so the base is always dirt or
+    // grass — NEVER forest. Give the base some variety (not always dirt) so a
+    // settlement doesn't read as a uniform dirt patch. The pick is seeded, so
+    // same-seed maps stay reproducible. Clear any path — road-through-building
     // is carried by `roadDirs` only, never the path layer (P0 semantics).
-    t.base = TileType.DIRT;
+    t.base = rand() < BUILDING_GRASS_CHANCE ? TileType.GRASS : TileType.DIRT;
     t.structure = StructureType.BUILDING;
     t.path = null;
     t.building = building;
     t.fortifyLevel = 1;
   }
 
-  // 4. Two-tier road network — avoids the dense web produced by running MST on
+  // 4. Grow forest clusters and scatter dirt patches BEFORE the road network.
+  //    This is the payoff of the layered tile model: because `placeRoadPath`
+  //    preserves the base material (P2), routing the MST over forest/dirt now
+  //    yields roads that keep base=FOREST / base=DIRT under the road deck
+  //    (operator-locked: roads PRESERVE whatever terrain they cross). Forest
+  //    and dirt grow only on plain grass — building tiles report BUILDING and
+  //    river tiles report RIVER, so both are skipped automatically and no
+  //    building ever ends up on a forest base.
+
+  // 4a. Grow forest clusters from seeds
+  for (const seed of cfg.forestSeeds) {
+    const neighbors = getNeighbors(seed.col, seed.row);
+    const candidates = [seed, ...neighbors];
+    for (const { col, row } of candidates) {
+      const t = tiles.get(hexKey(col, row));
+      if (t && legacyTileType(t) === TileType.GRASS && rand() < 0.70) {
+        // Forest is a BASE material change (no path/structure on these grass tiles).
+        t.base = TileType.FOREST;
+        for (const n of getNeighbors(col, row)) {
+          const t2 = tiles.get(hexKey(n.col, n.row));
+          if (t2 && legacyTileType(t2) === TileType.GRASS && rand() < 0.40) {
+            t2.base = TileType.FOREST;
+          }
+        }
+      }
+    }
+  }
+
+  // 4b. Scatter small dirt/gravel patches for visual texture
+  for (let i = 0; i < 10; i++) {
+    const grassTiles = [];
+    for (const [, t] of tiles) {
+      if (legacyTileType(t) === TileType.GRASS && t.col >= 1 && t.col <= MAP_COLS - 2) grassTiles.push(t);
+    }
+    shuffle(grassTiles, rand);
+    if (grassTiles.length === 0) break;
+    const seedTile = grassTiles[0];
+    // Dirt patches are a BASE material change on grass tiles.
+    seedTile.base = TileType.DIRT;
+    const spreadNeighbors = shuffle(
+      getNeighbors(seedTile.col, seedTile.row)
+        .map(n => tiles.get(hexKey(n.col, n.row)))
+        .filter(t => t && legacyTileType(t) === TileType.GRASS),
+      rand
+    );
+    for (const n of spreadNeighbors.slice(0, Math.floor(rand() * 3))) {
+      n.base = TileType.DIRT;
+    }
+  }
+
+  // 5. Two-tier road network — avoids the dense web produced by running MST on
   //    every building when many are clustered tightly in the same village.
   //
   //    Tier 1 — intra-village spokes: each building connects to its village's root
@@ -885,7 +943,7 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
     placeRoadPath(tiles, path, roadTiles, { convertRiverToBridge: false });
   }
 
-  // 4b. Bridge audit & stub-road cleanup.
+  // 5b. Bridge audit & stub-road cleanup.
   // Iteratively (a) prune ROAD tiles that became dead-ends (degree ≤ 1 and
   // not adjacent to a building), and (b) revert BRIDGE tiles to RIVER if
   // their roadDirs no longer reach both river banks.  Both steps can cascade
@@ -910,9 +968,10 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
       if (t.roadDirs.size > 1) continue;
       if (isAdjacentToBuilding(t.col, t.row)) continue;
       const nextKey = [...t.roadDirs][0];
-      // Strip the road path. Roads are only ever laid over grass at this stage
-      // (forests/dirt come later), so clearing the path returns the tile to
-      // its grass base — equivalent to the old full reset to GRASS.
+      // Strip the road path. Forest/dirt now grow BEFORE roads, so the tile's
+      // base may be grass, forest, or dirt — clearing the path correctly
+      // reverts it to whatever terrain the road was laid over (the base layer
+      // was never touched when the road was placed).
       t.path = null;
       t.roadDirs.clear();
       roadTiles.delete(hexKey(t.col, t.row));
@@ -938,47 +997,6 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
       roadTiles.delete(hexKey(c.col, c.row));
       for (const nk of stubStarts) tiles.get(nk)?.roadDirs.delete(hexKey(c.col, c.row));
       changed = true;
-    }
-  }
-
-  // 5. Grow forest clusters from seeds
-  for (const seed of cfg.forestSeeds) {
-    const neighbors = getNeighbors(seed.col, seed.row);
-    const candidates = [seed, ...neighbors];
-    for (const { col, row } of candidates) {
-      const t = tiles.get(hexKey(col, row));
-      if (t && legacyTileType(t) === TileType.GRASS && rand() < 0.70) {
-        // Forest is a BASE material change (no path/structure on these grass tiles).
-        t.base = TileType.FOREST;
-        for (const n of getNeighbors(col, row)) {
-          const t2 = tiles.get(hexKey(n.col, n.row));
-          if (t2 && legacyTileType(t2) === TileType.GRASS && rand() < 0.40) {
-            t2.base = TileType.FOREST;
-          }
-        }
-      }
-    }
-  }
-
-  // 5.5 Scatter small dirt/gravel patches for visual texture
-  for (let i = 0; i < 10; i++) {
-    const grassTiles = [];
-    for (const [, t] of tiles) {
-      if (legacyTileType(t) === TileType.GRASS && t.col >= 1 && t.col <= MAP_COLS - 2) grassTiles.push(t);
-    }
-    shuffle(grassTiles, rand);
-    if (grassTiles.length === 0) break;
-    const seedTile = grassTiles[0];
-    // Dirt patches are a BASE material change on grass tiles.
-    seedTile.base = TileType.DIRT;
-    const spreadNeighbors = shuffle(
-      getNeighbors(seedTile.col, seedTile.row)
-        .map(n => tiles.get(hexKey(n.col, n.row)))
-        .filter(t => t && legacyTileType(t) === TileType.GRASS),
-      rand
-    );
-    for (const n of spreadNeighbors.slice(0, Math.floor(rand() * 3))) {
-      n.base = TileType.DIRT;
     }
   }
 
