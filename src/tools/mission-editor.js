@@ -54,6 +54,70 @@ export const ENEMY_UNIT_TYPES = Object.freeze([
   'zombie', 'minion', 'wood_golem', 'iron_golem',
 ]);
 
+// ── Tool → VALUE-panel mapping (item 7) ──────────────────────────────────────
+// The side-panel VALUE section is context-sensitive: each tool exposes exactly
+// one kind of value selector (or none). The UI reads `valuePanelKind(tool)` to
+// decide what to render; kept here (DOM-free) so the mapping is unit-testable.
+export const ToolValueKind = Object.freeze({
+  BASE: 'base',         // base-material swatches (grass/forest/dirt)
+  STRUCTURE: 'structure', // building swatches + None/clear
+  PATH: 'path',         // none/road/river/bridge
+  RESOURCE: 'resource', // resource picker
+  ENEMY: 'enemy',       // enemy unit-type picker
+  NONE: 'none',         // no value — show a hint
+});
+
+const _TOOL_VALUE_KIND = Object.freeze({
+  [EditorTool.PAINT_BASE]: ToolValueKind.BASE,
+  [EditorTool.PAINT_STRUCTURE]: ToolValueKind.STRUCTURE,
+  [EditorTool.PAINT_PATH]: ToolValueKind.PATH,
+  [EditorTool.SET_RESOURCE]: ToolValueKind.RESOURCE,
+  [EditorTool.ENEMY_UNIT]: ToolValueKind.ENEMY,
+  [EditorTool.HIDDEN_SURVIVOR]: ToolValueKind.NONE,
+  [EditorTool.HERO_START]: ToolValueKind.NONE,
+  [EditorTool.WITCH_START]: ToolValueKind.NONE,
+  [EditorTool.ROAD_NODE]: ToolValueKind.NONE,
+  [EditorTool.POWER_NODE]: ToolValueKind.NONE,
+});
+
+/** Which VALUE-panel kind a given tool exposes. Unknown tools → NONE. */
+export function valuePanelKind(tool) {
+  return _TOOL_VALUE_KIND[tool] ?? ToolValueKind.NONE;
+}
+
+// ── Editor canvas layer visibility (item 6) ──────────────────────────────────
+// Visibility is implemented EDITOR-SIDE (renderer.js stays untouched): the
+// `base`/`roads+buildings` toggles drive a filtered display copy of the built
+// tiles (stripTileOverlays); power-node / player-start visibility is applied at
+// build time (omit from the rendered GameState); road-network node markers are
+// drawn as an editor overlay on top of the canvas. These pure helpers describe
+// the model so the toggle semantics + auto-show rule are unit-testable.
+
+/** A fresh layer-visibility state — everything but the road-node markers on. */
+export function createLayerVisibility() {
+  return {
+    baseOnly: false,        // when on: hide structures + paths (terrain only)
+    roadsBuildings: true,   // draw the structure + path layers
+    powerNodes: true,       // draw the Power-Node objectives
+    playerStarts: true,     // draw the hero / witch start markers
+    roadNodeMarkers: false, // draw the road-network node overlay
+  };
+}
+
+/** True when the structure + path layers should be drawn for the given state. */
+export function showStructures(layers) {
+  return !!layers && !!layers.roadsBuildings && !layers.baseOnly;
+}
+
+/**
+ * Whether the road-network node markers should be drawn. They AUTO-SHOW whenever
+ * the Road Node tool is active (so authoring waypoints is always visible), and
+ * are otherwise gated on the explicit `roadNodeMarkers` toggle.
+ */
+export function roadNodeMarkersVisible(layers, activeTool) {
+  return (!!layers && !!layers.roadNodeMarkers) || activeTool === EditorTool.ROAD_NODE;
+}
+
 // Deterministic seed for handmade road regen so repeated regens are stable.
 const HANDMADE_ROAD_SEED = 1337;
 
@@ -299,6 +363,23 @@ export function snapshotTiles(tilesMap) {
     });
   }
   return out;
+}
+
+/**
+ * Strip the structure + path layers off a BUILT tiles Map in place, leaving only
+ * the base terrain. Used by the "Base only" / "Roads + Buildings" visibility
+ * toggles (item 6) to render a display-only copy without touching renderer.js.
+ * Mutates and returns the same Map (callers pass a throwaway display build).
+ */
+export function stripTileOverlays(tilesMap) {
+  for (const t of tilesMap.values()) {
+    t.structure = null;
+    t.building = null;
+    t.path = null;
+    if (t.roadDirs instanceof Set) t.roadDirs.clear();
+    else if (Array.isArray(t.roadDirs)) t.roadDirs = [];
+  }
+  return tilesMap;
 }
 
 /**
@@ -905,14 +986,32 @@ export function createMissionEditor({ render } = {}) {
     resource: _enumKey(ResourceType, ResourceType.HERBS),
     enemyType: ENEMY_UNIT_TYPES[0],
   };
+  // Full undo + redo history (item 5). Each entry is a serialised snapshot of
+  // the whole working model. A NEW action (snapshot) invalidates the redo stack;
+  // undo/redo shuttle snapshots between the two stacks (standard semantics).
   const undoStack = [];
+  const redoStack = [];
+  // Unsaved-work flag (carried-over nit): lives on the controller so a fresh
+  // editor starts CLEAN and `isDirty()` is unit-testable. Set on every model
+  // mutation (emit), cleared by markClean() after a load / save / New.
+  let dirty = false;
 
-  const emit = () => { if (render) render(); };
+  const emit = () => { dirty = true; if (render) render(); };
   const model = () => ({ mapDef, enemyUnits });
 
-  // Snapshot the full serialisable model before each edit (undo).
+  const _serialize = () => JSON.stringify({ mapDef, enemyUnits, meta });
+  function _restore(json) {
+    const prev = JSON.parse(json);
+    mapDef = prev.mapDef;
+    enemyUnits = prev.enemyUnits;
+    if (prev.meta) meta = prev.meta;
+  }
+
+  // Snapshot the full serialisable model before each edit (undo). A fresh edit
+  // clears the redo stack — you can't redo past a new branch of history.
   function snapshot() {
-    undoStack.push(JSON.stringify({ mapDef, enemyUnits, meta }));
+    undoStack.push(_serialize());
+    redoStack.length = 0;
   }
 
   function _inBounds({ col, row }) {
@@ -1017,17 +1116,27 @@ export function createMissionEditor({ render } = {}) {
       emit();
     },
 
-    // ── Undo ─────────────────────────────────────────────────────────────
+    // ── Undo / Redo (item 5) ─────────────────────────────────────────────
     canUndo: () => undoStack.length > 0,
+    canRedo: () => redoStack.length > 0,
     undo() {
       if (undoStack.length === 0) return false;
-      const prev = JSON.parse(undoStack.pop());
-      mapDef = prev.mapDef;
-      enemyUnits = prev.enemyUnits;
-      if (prev.meta) meta = prev.meta;
+      redoStack.push(_serialize()); // current state becomes redoable
+      _restore(undoStack.pop());
       emit();
       return true;
     },
+    redo() {
+      if (redoStack.length === 0) return false;
+      undoStack.push(_serialize()); // current state becomes undoable again
+      _restore(redoStack.pop());
+      emit();
+      return true;
+    },
+
+    // ── Dirty tracking (carried-over nit) ────────────────────────────────
+    isDirty: () => dirty,
+    markClean() { dirty = false; },
   };
 }
 

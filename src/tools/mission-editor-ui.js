@@ -35,7 +35,11 @@ import { Renderer } from '../renderer.js';
 import { Renderer3D } from '../renderer-3d.js';
 import { GameState } from '../game.js';
 import { buildMissionMap } from '../campaign/mission-map.js';
-import { TileType, BuildingType, ResourceType, PathType } from '../tiles.js';
+import {
+  TileType, BuildingType, ResourceType, PathType,
+  TILE_COLOR, BUILDING_COLOR, BUILDING_ICON, hasBuilding, isBridge,
+} from '../tiles.js';
+import { hexKey } from '../hex.js';
 import {
   createZombie, createMinion, createWoodGolem, createIronGolem,
 } from '../entities.js';
@@ -43,6 +47,8 @@ import {
   createMissionEditor, createPreviewController, EditorTool, ENEMY_UNIT_TYPES,
   addStoryTrigger, removeStoryTrigger, moveStoryTrigger,
   addWave, removeWave, populateFromMission, CreationMode, MAP_EDGES,
+  valuePanelKind, ToolValueKind, createLayerVisibility, showStructures,
+  roadNodeMarkersVisible, stripTileOverlays,
 } from './mission-editor.js';
 import { MAP_SIZES } from '../map.js';
 import { createTabController } from './tab-controller.js';
@@ -85,17 +91,50 @@ const ENEMY_FACTORIES = {
   iron_golem: createIronGolem,
 };
 
+// The icon tool palette (item 7) — emoji glyph + tooltip label per tool, in a
+// stable display order. Glyphs are plain emoji so they need no asset loading.
+const TOOL_PALETTE = [
+  { id: EditorTool.PAINT_BASE,      icon: '🌿', label: 'Paint Base' },
+  { id: EditorTool.PAINT_STRUCTURE, icon: '🏠', label: 'Paint Structure' },
+  { id: EditorTool.PAINT_PATH,      icon: '🛤', label: 'Paint Path' },
+  { id: EditorTool.SET_RESOURCE,    icon: '💎', label: 'Set Resource' },
+  { id: EditorTool.HIDDEN_SURVIVOR, icon: '🙋', label: 'Hidden Survivor' },
+  { id: EditorTool.ENEMY_UNIT,      icon: '🧟', label: 'Enemy Unit' },
+  { id: EditorTool.HERO_START,      icon: '🛡', label: 'Hero Start' },
+  { id: EditorTool.WITCH_START,     icon: '🧙', label: 'Witch Start' },
+  { id: EditorTool.ROAD_NODE,       icon: '📍', label: 'Road Node' },
+  { id: EditorTool.POWER_NODE,      icon: '🔮', label: 'Power Node' },
+];
+
+// Short hints shown in the VALUE panel for the value-less tools.
+const TOOL_HINTS = {
+  [EditorTool.HIDDEN_SURVIVOR]: 'Click a tile to toggle a hidden survivor.',
+  [EditorTool.HERO_START]: 'Click a tile to move the hero start.',
+  [EditorTool.WITCH_START]: 'Click a tile to move the witch start.',
+  [EditorTool.ROAD_NODE]: 'Click tiles to toggle road-network waypoints, then Regenerate Roads.',
+  [EditorTool.POWER_NODE]: 'Click a tile to toggle a Power Node.',
+};
+
 // Build a live GameState the 2D Renderer can draw from the current model. The
 // hero/witch leaders the GameState constructor places double as start markers;
 // enemy units are injected as entities for visual feedback. Editor view always
 // runs fog-free.
-function buildState(editor) {
+//
+// `layers` (item 6) applies EDITOR-SIDE visibility filtering — renderer.js is
+// untouched. When the structure/path layers are hidden we strip them off a
+// throwaway display build (stripTileOverlays); Power-Node and Player-Start
+// visibility is applied by omitting them from the rendered state. Passing no
+// `layers` (3D preview / external buildState) renders the full, unfiltered map.
+function buildState(editor, layers = null) {
   const mapDef = editor.getMapDef();
   const built = buildMissionMap(mapDef);
+  if (layers && !showStructures(layers)) stripTileOverlays(built.tiles);
+  const showNodes = !layers || layers.powerNodes;
   const state = new GameState(false, false, built.mapSize, null, {
     ...built,
     heroStart: built.heroStart ?? { col: 0, row: 0 },
     witchStart: built.witchStart ?? { col: 0, row: 0 },
+    witchObjectives: showNodes ? (built.witchObjectives ?? []) : [],
   });
   state.fogOfWar = 'none';
 
@@ -106,6 +145,12 @@ function buildState(editor) {
     try {
       state.entities.push(factory(u.col, u.row, 'witch', state));
     } catch { /* malformed placement — ignore in preview */ }
+  }
+
+  // Player-Start visibility: drop the hero / witch leader markers (enemy units,
+  // which are distinct entities, stay).
+  if (layers && !layers.playerStarts) {
+    state.entities = state.entities.filter(e => e !== state.hero && e !== state.witch);
   }
   return state;
 }
@@ -124,23 +169,39 @@ export function initEditor(doc = document) {
   const canvas = doc.getElementById('e-render-canvas');
   const palette = doc.getElementById('e-palette');
 
-  // Unsaved-work flag — set on any model change, cleared by load / New / save.
-  // Only gates the New… confirm prompt, so a coarse flag is plenty.
-  let dirty = false;
+  // Editor canvas layer visibility (item 6). Applied EDITOR-SIDE in buildState
+  // (filtered display build) + the post-draw overlay pass — renderer.js stays
+  // a pure game renderer.
+  const layers = createLayerVisibility();
 
-  // The controller drives the model; `render()` rebuilds + redraws.
+  // Notifies the top-bar Undo/Redo buttons after every history change. Wired by
+  // the host page via the returned handle's onHistoryChange().
+  let historyListener = null;
+  const notifyHistory = () => {
+    historyListener?.({ canUndo: editor.canUndo(), canRedo: editor.canRedo() });
+  };
+
+  // The controller drives the model; `render()` rebuilds + redraws. (Dirty
+  // tracking now lives on the controller — a fresh editor starts clean.)
   const editor = createMissionEditor({ render: rerender });
 
-  const renderer = new Renderer(canvas, buildState(editor));
+  const renderer = new Renderer(canvas, buildState(editor, layers));
   renderer.loadImages(ASSET_BASE);
 
+  // Draw the map then the editor overlays (road-network node markers). Used in
+  // place of bare renderer.draw() everywhere so overlays survive pan/zoom.
+  function draw() {
+    renderer.draw();
+    drawEditorOverlays();
+  }
+
   function rerender() {
-    dirty = true;
     // Cheap full rebuild — editor maps are small. Reassigning state keeps the
     // Renderer instance, so zoom/pan persist across edits.
-    renderer.state = buildState(editor);
+    renderer.state = buildState(editor, layers);
     renderer.resize();
-    renderer.draw();
+    draw();
+    notifyHistory();
   }
 
   // Recenter + reset zoom, then redraw. Used by the Reset View button and
@@ -150,13 +211,55 @@ export function initEditor(doc = document) {
     renderer.resize();          // recompute hexSize for the (possibly new) map
     renderer.resetView();       // zoom → 1, pan centered on the visible area
     renderer._clampPan();
-    renderer.draw();
+    draw();
+  }
+
+  // ── Editor overlays (item 6) ──────────────────────────────────────────────
+  // Road-network node markers are an EDITOR concept the game renderer never
+  // draws, so they're painted directly on the 2D context after renderer.draw().
+  // Structural nodes (buildings + bridges) come from the built tiles; authored
+  // waypoints from the road-node set. Auto-shown while the Road Node tool is
+  // active (so authoring is always visible), else gated on the Layers toggle.
+  function drawEditorOverlays() {
+    if (!roadNodeMarkersVisible(layers, editor.activeTool)) return;
+    const ctx = renderer.ctx;
+    if (!ctx) return;
+    const mapDef = editor.getMapDef();
+    const nodes = new Map(); // hexKey → { col, row, structural }
+    // Structural nodes: rebuild a throwaway map so base-only filtering can't hide
+    // them (we want graph nodes visible regardless of the terrain filter).
+    try {
+      const built = buildMissionMap(mapDef);
+      for (const t of built.tiles.values()) {
+        if (hasBuilding(t) || isBridge(t)) {
+          nodes.set(hexKey(t.col, t.row), { col: t.col, row: t.row, structural: true });
+        }
+      }
+    } catch { /* malformed map — skip structural markers */ }
+    // Authored road-node waypoints.
+    for (const key of authoredRoadNodeKeys(mapDef)) {
+      const [c, r] = String(key).split(',').map(Number);
+      nodes.set(key, { col: c, row: r, structural: false });
+    }
+    const radius = Math.max(3, renderer.hexSize * renderer.zoomLevel * 0.22);
+    ctx.save();
+    ctx.lineWidth = 1.5;
+    for (const n of nodes.values()) {
+      const { x, y } = renderer.hexToCanvasPos(n.col, n.row);
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fillStyle = n.structural ? 'rgba(120,180,255,0.55)' : 'rgba(255,210,120,0.9)';
+      ctx.strokeStyle = '#0a0805';
+      ctx.fill();
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   // ── Pan / zoom / paint (reuses the in-game Renderer transform) ────────────
   attachEditorCanvasControls(canvas, renderer, {
     onPaint: (hex) => editor.applyAt(hex),
-    onRedraw: () => renderer.draw(),
+    onRedraw: () => draw(),
   });
 
   // ── 3D preview (lazy Renderer3D over the #e-preview-3d overlay) ───────────
@@ -218,10 +321,17 @@ export function initEditor(doc = document) {
     buildMapPalette(doc, sidebar.panes.map, editor, rerender, openPreview, resetViewAndDraw, {
       onSizeChange: () => { rebuildMapPalette(); resetViewAndDraw(); },
       setStatus: formStatus,
+      // Tool change can flip the road-node-marker auto-show, so redraw overlays.
+      onToolChange: () => draw(),
     });
+  }
+  // The Layers (visibility) pane toggles the editor-side display filters.
+  function rebuildLayers() {
+    buildLayersPanel(doc, sidebar.panes.layers, layers, () => rerender());
   }
   rebuildMapPalette();
   rebuildForms();
+  rebuildLayers();
 
   // ── Load / Save — relocated to the top File menu; flow is unchanged. ──────
   // Validate-before-populate on load; validate + block-download on save.
@@ -239,7 +349,8 @@ export function initEditor(doc = document) {
     rebuildMapPalette(); // mode + dims may have changed
     rebuildForms();
     resetViewAndDraw();
-    dirty = false; // a freshly-loaded mission starts clean
+    editor.markClean(); // a freshly-loaded mission starts clean
+    notifyHistory();
   }
 
   function loadMissionFile(file) {
@@ -286,14 +397,14 @@ export function initEditor(doc = document) {
       return { ok: false, message: `Cannot save: ${err.message}` };
     }
     downloadJSON(doc, json, `${json.id || 'mission'}.json`);
-    dirty = false;
+    editor.markClean();
     return { ok: true, message: `Validated — downloaded ${json.id}.json` };
   }
 
   // ── New… — the creation flow (item 4). Pick a LOCKED mode + size, confirm if
   // there's unsaved work, then install the freshly-created map. ──────────────
   function newMission() {
-    if (dirty && !(doc.defaultView ?? globalThis).confirm?.('Discard the current mission and start a new one?')) {
+    if (editor.isDirty() && !(doc.defaultView ?? globalThis).confirm?.('Discard the current mission and start a new one?')) {
       return { ok: false, message: 'New mission cancelled.' };
     }
     openCreationDialog(doc, (opts) => {
@@ -301,14 +412,30 @@ export function initEditor(doc = document) {
       rebuildMapPalette();
       rebuildForms();
       resetViewAndDraw();
-      dirty = false; // a fresh mission starts clean
+      editor.markClean(); // a fresh mission starts clean
+      notifyHistory();
     });
     return { ok: true, message: '' };
   }
 
-  // First fit once layout settles.
+  // ── Undo / Redo (item 5) — driven from the host page's top bar. editor.undo /
+  // .redo already trigger rerender() (via the controller's emit→render); we just
+  // rebuild the palette + forms in case the model's mode / dims / meta changed,
+  // and refresh the button enabled-state.
+  function undo() {
+    if (editor.undo()) { rebuildMapPalette(); rebuildForms(); rebuildLayers(); }
+    notifyHistory();
+  }
+  function redo() {
+    if (editor.redo()) { rebuildMapPalette(); rebuildForms(); rebuildLayers(); }
+    notifyHistory();
+  }
+
+  // First fit once layout settles, then mark clean so a freshly-opened editor
+  // doesn't prompt "discard unsaved work?" on the first File ▸ New.
   renderer.resize();
-  renderer.draw();
+  draw();
+  editor.markClean();
 
   return {
     editor,
@@ -317,12 +444,28 @@ export function initEditor(doc = document) {
     loadMissionFile,
     loadMissionById,
     saveMission,
+    // Undo / redo wiring for the top-bar buttons + keyboard shortcuts.
+    undo,
+    redo,
+    canUndo: () => editor.canUndo(),
+    canRedo: () => editor.canRedo(),
+    isDirty: () => editor.isDirty(),
+    /** Register a listener fired on every history change with { canUndo, canRedo }. */
+    onHistoryChange(fn) { historyListener = fn; notifyHistory(); },
     // 2D Renderer has no render loop. But the 3D preview owns a live Babylon
     // engine; tear it down (and hide the overlay) when the tab is switched away
     // so a hidden tab never leaves an engine spinning.
     pause() { closePreview(); },
-    resume() { renderer.resize(); renderer.draw(); },
+    resume() { renderer.resize(); draw(); },
   };
+}
+
+// Authored road-node waypoint keys for the current map (mode-aware). Structural
+// building/bridge nodes are NOT included here — they're derived from the built
+// tiles by the overlay pass.
+function authoredRoadNodeKeys(mapDef) {
+  if (mapDef.mode === 'procedural') return mapDef.overlay?.roadNodes?.add ?? [];
+  return mapDef.roadNodes ?? [];
 }
 
 // ── Tabbed sidebar ────────────────────────────────────────────────────────────
@@ -336,6 +479,7 @@ function buildSidebar(doc, root) {
 
   const SIDEBAR_TABS = [
     { id: 'map', label: 'Map' },
+    { id: 'layers', label: 'Layers' },
     { id: 'mission', label: 'Mission' },
     { id: 'events', label: 'Events' },
     { id: 'units', label: 'Units' },
@@ -389,9 +533,10 @@ function buildSidebar(doc, root) {
   stabs.activate('map');
 
   return {
-    // All four panes: `map` (paint/size palette) + the three authoring panes.
+    // `map` (paint/size palette) + `layers` (visibility) + the three authoring panes.
     panes: {
       map: paneEls.map,
+      layers: paneEls.layers,
       mission: paneEls.mission,
       events: paneEls.events,
       units: paneEls.units,
@@ -450,65 +595,56 @@ function buildMapPalette(doc, root, editor, rerender, onPreview3D, onResetView, 
   }
   root.append(mapSection);
 
-  // Tools.
+  const onToolChange = hooks.onToolChange ?? (() => {});
+
+  // ── Tools (item 7) — a compact icon palette. Each button carries an emoji
+  // glyph + a tooltip; the active tool is highlighted. The Road Node entry pairs
+  // with a "Regenerate Roads" action surfaced in the Map section above. ─────────
   const toolSection = section(doc, 'Tools');
-  const tools = [
-    { id: EditorTool.PAINT_BASE, label: 'Paint Base' },
-    { id: EditorTool.PAINT_STRUCTURE, label: 'Paint Structure' },
-    { id: EditorTool.PAINT_PATH, label: 'Paint Path' },
-    { id: EditorTool.SET_RESOURCE, label: 'Set Resource' },
-    { id: EditorTool.HIDDEN_SURVIVOR, label: 'Hidden Survivor' },
-    { id: EditorTool.ENEMY_UNIT, label: 'Enemy Unit' },
-    { id: EditorTool.HERO_START, label: 'Hero Start' },
-    { id: EditorTool.WITCH_START, label: 'Witch Start' },
-    { id: EditorTool.ROAD_NODE, label: 'Mark Road Node' },
-    { id: EditorTool.POWER_NODE, label: 'Power Node' },
-  ];
+  const toolGrid = doc.createElement('div');
+  toolGrid.className = 'e-toolgrid';
   const toolBtns = {};
-  for (const t of tools) {
+  for (const t of TOOL_PALETTE) {
     const btn = doc.createElement('button');
-    btn.className = 'e-tool';
-    btn.textContent = t.label;
+    btn.className = 'e-toolbtn';
+    btn.textContent = t.icon;
+    btn.title = t.label;
+    btn.setAttribute('aria-label', t.label);
+    btn.dataset.tool = t.id;
     btn.addEventListener('click', () => {
       editor.setActiveTool(t.id);
       for (const b of Object.values(toolBtns)) b.classList.remove('active');
       btn.classList.add('active');
+      renderValuePanel();   // VALUE section adapts to the new tool (item 7)
+      onToolChange();       // road-node markers may auto-show/hide
     });
     toolBtns[t.id] = btn;
-    toolSection.append(btn);
+    toolGrid.append(btn);
   }
+  toolSection.append(toolGrid);
   // Highlight the controller's current tool (persists across palette rebuilds).
   (toolBtns[editor.activeTool] ?? toolBtns[EditorTool.PAINT_BASE]).classList.add('active');
   root.append(toolSection);
 
-  // Paint-value selectors (which value the painting tools stamp). The three
-  // layer tools each have their own selector: Base (grass/forest/dirt),
-  // Structure (a building or "None" to clear), Path (none/road/river/bridge).
-  // Structure & Path use a "None" sentinel option → stored as null (clear).
-  const NONE_OPT = { key: 'None', value: null };
-  const denull = (v) => (v === NONE_OPT.key ? null : v);
-  const valSection = section(doc, 'Paint Value');
-  valSection.append(
-    labeledSelect(doc, 'Base', BASE_ENTRIES, editor.getPaintValue('base'),
-      (v) => editor.setPaintValue('base', v)),
-    labeledSelect(doc, 'Structure', [NONE_OPT, ..._entries(BuildingType)],
-      editor.getPaintValue('structure') ?? NONE_OPT.key,
-      (v) => editor.setPaintValue('structure', denull(v))),
-    labeledSelect(doc, 'Path', [NONE_OPT, ..._entries(PathType)],
-      editor.getPaintValue('path') ?? NONE_OPT.key,
-      (v) => editor.setPaintValue('path', denull(v))),
-    labeledSelect(doc, 'Resource', _entries(ResourceType), editor.getPaintValue('resource'),
-      (v) => editor.setPaintValue('resource', v)),
-    labeledSelect(doc, 'Enemy', ENEMY_UNIT_TYPES.map(t => ({ key: t, value: t })),
-      editor.getPaintValue('enemyType'), (v) => editor.setPaintValue('enemyType', v)),
-  );
+  // ── VALUE section (item 7) — context-sensitive to the active tool. The host
+  // div is rebuilt by renderValuePanel() whenever the tool changes. ────────────
+  const valSection = section(doc, 'Value');
+  const valHost = doc.createElement('div');
+  valSection.append(valHost);
   root.append(valSection);
 
-  // Edit + view actions.
-  const editSection = section(doc, 'Edit');
-  editSection.append(actionBtn(doc, 'Undo', () => editor.undo()));
-  if (onResetView) editSection.append(actionBtn(doc, 'Reset View', () => onResetView()));
-  root.append(editSection);
+  function renderValuePanel() {
+    valHost.innerHTML = '';
+    buildValuePanel(doc, valHost, valuePanelKind(editor.activeTool), editor, renderValuePanel);
+  }
+  renderValuePanel();
+
+  // Edit + view actions. (Undo / Redo moved to the top bar — item 5.)
+  if (onResetView) {
+    const editSection = section(doc, 'View');
+    editSection.append(actionBtn(doc, 'Reset View', () => onResetView()));
+    root.append(editSection);
+  }
 
   // Preview — rebuilds the current mission map in 3D via Renderer3D.
   if (onPreview3D) {
@@ -516,6 +652,118 @@ function buildMapPalette(doc, root, editor, rerender, onPreview3D, onResetView, 
     previewSection.append(actionBtn(doc, 'Preview in 3D', () => onPreview3D()));
     root.append(previewSection);
   }
+}
+
+// ── Context-sensitive VALUE panel (item 7) ──────────────────────────────────
+// Renders the value selector for the active tool's kind into `host`. Picking a
+// value updates the controller's paint value and re-renders the panel so the
+// active swatch highlight tracks the selection. Value-less tools show a hint.
+function buildValuePanel(doc, host, kind, editor, rerenderPanel) {
+  switch (kind) {
+    case ToolValueKind.BASE:
+      host.append(swatchGrid(doc, BASE_ENTRIES.map(e => ({
+        key: e.key, label: e.key, color: TILE_COLOR[e.value] || '#444',
+      })), editor.getPaintValue('base'), (key) => {
+        editor.setPaintValue('base', key); rerenderPanel();
+      }));
+      break;
+    case ToolValueKind.STRUCTURE: {
+      const items = [{ key: null, label: 'None', color: 'transparent', glyph: '∅' }];
+      for (const e of _entries(BuildingType)) {
+        items.push({ key: e.key, label: e.key, color: BUILDING_COLOR[e.value] || '#4a3c2c', glyph: BUILDING_ICON[e.value] || '' });
+      }
+      host.append(swatchGrid(doc, items, editor.getPaintValue('structure'), (key) => {
+        editor.setPaintValue('structure', key); rerenderPanel();
+      }));
+      break;
+    }
+    case ToolValueKind.PATH: {
+      const items = [
+        { key: null, label: 'None' },
+        ..._entries(PathType).map(e => ({ key: e.key, label: titleCase(e.key) })),
+      ];
+      host.append(chipRow(doc, items, editor.getPaintValue('path'), (key) => {
+        editor.setPaintValue('path', key); rerenderPanel();
+      }));
+      break;
+    }
+    case ToolValueKind.RESOURCE:
+      host.append(labeledSelect(doc, 'Resource', _entries(ResourceType),
+        editor.getPaintValue('resource'), (v) => editor.setPaintValue('resource', v)));
+      break;
+    case ToolValueKind.ENEMY:
+      host.append(labeledSelect(doc, 'Enemy', ENEMY_UNIT_TYPES.map(t => ({ key: t, value: t })),
+        editor.getPaintValue('enemyType'), (v) => editor.setPaintValue('enemyType', v)));
+      break;
+    default:
+      host.append(hint(doc, TOOL_HINTS[editor.activeTool] || 'This tool has no value.'));
+  }
+}
+
+// A grid of colour swatches. `items` are { key, label, color, glyph? }; the one
+// whose key === selected gets the .active highlight. `selected===null` matches
+// the "None" item (key null).
+function swatchGrid(doc, items, selected, onPick) {
+  const grid = doc.createElement('div');
+  grid.className = 'e-swatches';
+  for (const it of items) {
+    const btn = doc.createElement('button');
+    btn.className = 'e-swatch';
+    btn.title = it.label;
+    btn.dataset.value = it.key == null ? '' : it.key;
+    if (it.key === selected) btn.classList.add('active');
+    const chip = doc.createElement('span');
+    chip.className = 'e-swatch-chip';
+    chip.style.background = it.color ?? 'transparent';
+    if (it.glyph) chip.textContent = it.glyph;
+    const lbl = doc.createElement('span');
+    lbl.className = 'e-swatch-label';
+    lbl.textContent = it.label;
+    btn.append(chip, lbl);
+    btn.addEventListener('click', () => onPick(it.key));
+    grid.append(btn);
+  }
+  return grid;
+}
+
+// A row of text chips (None / Road / River / Bridge). Active = key === selected.
+function chipRow(doc, items, selected, onPick) {
+  const row = doc.createElement('div');
+  row.className = 'e-chips';
+  for (const it of items) {
+    const btn = doc.createElement('button');
+    btn.className = 'e-chip';
+    btn.textContent = it.label;
+    btn.dataset.value = it.key == null ? '' : it.key;
+    if (it.key === selected) btn.classList.add('active');
+    btn.addEventListener('click', () => onPick(it.key));
+    row.append(btn);
+  }
+  return row;
+}
+
+function titleCase(s) {
+  return String(s).charAt(0) + String(s).slice(1).toLowerCase();
+}
+
+// ── Layers (visibility) panel (item 6) ──────────────────────────────────────
+// Checkbox toggles over the editor-side display filters. Mutates the shared
+// `layers` object in place; `onChange` triggers a rerender (filter + overlay).
+function buildLayersPanel(doc, root, layers, onChange) {
+  root.innerHTML = '';
+  const sec = section(doc, 'Visibility');
+  const toggles = [
+    { key: 'baseOnly', label: 'Base only' },
+    { key: 'roadsBuildings', label: 'Roads + Buildings' },
+    { key: 'powerNodes', label: 'Power Nodes' },
+    { key: 'playerStarts', label: 'Player Start points' },
+    { key: 'roadNodeMarkers', label: 'Road-network nodes' },
+  ];
+  for (const t of toggles) {
+    sec.append(boolRow(doc, t.label, layers[t.key], (v) => { layers[t.key] = v; onChange(); }));
+  }
+  sec.append(hint(doc, 'Road-network nodes also auto-show while the Road Node tool is active.'));
+  root.append(sec);
 }
 
 // ══════════════════════════════════════════════════════════════════════════
