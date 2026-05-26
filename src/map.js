@@ -1,6 +1,7 @@
 // Procedural map generator for the Caleb's Hollow hex map
 import { MAP_COLS, MAP_ROWS, setMapDimensions, getNeighbors, hexKey, hexDistance } from './hex.js';
 import { Tile, TileType, BuildingType } from './tiles.js';
+import { buildMST, placeRoadPath } from './road-network.js';
 
 // Flavor labels for the witch power nodes (extra labels for larger maps)
 const WITCH_OBJECTIVE_LABELS = [
@@ -833,26 +834,8 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
     keyPoints.push(c.leftBank, c.rightBank);
   }
 
-  const nk = keyPoints.length;
-  const interEdges = [];
-  if (nk > 1) {
-    const allEdges = [];
-    for (let i = 0; i < nk; i++) {
-      for (let j = i + 1; j < nk; j++) {
-        allEdges.push({ i, j, d: hexDistance(keyPoints[i].col, keyPoints[i].row, keyPoints[j].col, keyPoints[j].row) });
-      }
-    }
-    allEdges.sort((a, b) => a.d - b.d);
-    const parent = Array.from({ length: nk }, (_, i) => i);
-    const find = i => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
-    for (const { i, j } of allEdges) {
-      if (find(i) !== find(j)) {
-        parent[find(i)] = find(j);
-        interEdges.push({ from: keyPoints[i], to: keyPoints[j] });
-        if (interEdges.length === nk - 1) break;
-      }
-    }
-  }
+  // Inter-village trunk: Kruskal's MST over the key points + river-crossing banks.
+  const interEdges = buildMST(keyPoints);
 
   // Prepend bank-to-bank edges so each bridge is routed through first while
   // the road grid is still empty (giving BFS a clean shortest path).
@@ -866,29 +849,6 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
   const roadTiles = new Set();
   // Seed roadTiles with pre-placed bridges so BFS considers them connected
   for (const c of crossings) roadTiles.add(hexKey(c.col, c.row));
-  const placeRoad = path => {
-    for (let i = 0; i < path.length; i++) {
-      const { col, row } = path[i];
-      const t = tiles.get(hexKey(col, row));
-      if (!t) continue;
-      if (t.type === TileType.GRASS || t.type === TileType.DIRT || t.type === TileType.FOREST) {
-        t.type = TileType.ROAD;
-        roadTiles.add(hexKey(col, row));
-      } else if (t.type === TileType.BRIDGE) {
-        roadTiles.add(hexKey(col, row));
-      }
-      // Record bidirectional connectivity so the renderer and floodConnected
-      // can use exact road topology rather than inferring from tile types.
-      if (i > 0) {
-        const prev = path[i - 1];
-        const prevTile = tiles.get(hexKey(prev.col, prev.row));
-        if (prevTile) {
-          t.roadDirs.add(hexKey(prev.col, prev.row));
-          prevTile.roadDirs.add(hexKey(col, row));
-        }
-      }
-    }
-  };
 
   // Returns true if 'to' is already reachable from 'from' via roadDirs links.
   // Used to skip edges that are already satisfied by previously-placed roads.
@@ -911,7 +871,10 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
 
   for (const { from, to } of roadEdges) {
     if (floodConnected(from, to)) continue;
-    placeRoad(bfsPath(tiles, from.col, from.row, to.col, to.row, rand, roadTiles, true));
+    const path = bfsPath(tiles, from.col, from.row, to.col, to.row, rand, roadTiles, true);
+    // Pre-placed-bridge mode: BFS routed with blockRiver, so bridges already
+    // exist at crossings — placeRoadPath just records connectivity over them.
+    placeRoadPath(tiles, path, roadTiles, { convertRiverToBridge: false });
   }
 
   // 4b. Bridge audit & stub-road cleanup.

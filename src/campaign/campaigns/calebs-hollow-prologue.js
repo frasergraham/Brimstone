@@ -4,11 +4,12 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { Tile, TileType, BuildingType, ResourceType } from '../../tiles.js';
-import { hexKey, setMapDimensions, getNeighbors, hexDistance } from '../../hex.js';
+import { hexKey, setMapDimensions, getNeighbors } from '../../hex.js';
 import {
-  NODE_COLORS, rng, bfsPath, shuffle, generateRiverNS, generateRiverEW,
+  NODE_COLORS, rng, shuffle, generateRiverNS, generateRiverEW,
   buildRiverMap, riverSide,
 } from '../../map.js';
+import { buildRoadNetwork } from '../../road-network.js';
 import { countHeldNodes } from '../../game.js';
 
 // True when at least one Power Node is not currently hero-controlled.
@@ -95,66 +96,9 @@ function scatterDirt(tiles, count, rand, cols) {
   }
 }
 
-/**
- * Build MST road network between a set of key building positions.
- * Returns number of bridges placed.
- */
-function buildRoadNetwork(tiles, buildings, rand, maxBridges = 2) {
-  if (buildings.length < 2) return 0;
-
-  // Kruskal's MST
-  const n = buildings.length;
-  const edges = [];
-  for (let i = 0; i < n; i++) {
-    for (let j = i + 1; j < n; j++) {
-      edges.push({ i, j, d: hexDistance(buildings[i].col, buildings[i].row, buildings[j].col, buildings[j].row) });
-    }
-  }
-  edges.sort((a, b) => a.d - b.d);
-
-  const parent = Array.from({ length: n }, (_, i) => i);
-  const find = i => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
-
-  const mstEdges = [];
-  for (const { i, j } of edges) {
-    if (find(i) !== find(j)) {
-      parent[find(i)] = find(j);
-      mstEdges.push({ from: buildings[i], to: buildings[j] });
-      if (mstEdges.length === n - 1) break;
-    }
-  }
-
-  // Place roads via BFS pathfinding
-  let bridgesPlaced = 0;
-  const roadTiles = new Set();
-
-  for (const { from, to } of mstEdges) {
-    const path = bfsPath(tiles, from.col, from.row, to.col, to.row, rand, roadTiles);
-    for (let k = 0; k < path.length; k++) {
-      const { col, row } = path[k];
-      const t = tiles.get(hexKey(col, row));
-      if (!t) continue;
-      if (t.type === TileType.GRASS || t.type === TileType.DIRT || t.type === TileType.FOREST) {
-        t.type = TileType.ROAD;
-        roadTiles.add(hexKey(col, row));
-      } else if (t.type === TileType.RIVER && bridgesPlaced < maxBridges) {
-        t.type = TileType.BRIDGE;
-        bridgesPlaced++;
-        roadTiles.add(hexKey(col, row));
-      }
-      if (k > 0) {
-        const prev = path[k - 1];
-        const prevTile = tiles.get(hexKey(prev.col, prev.row));
-        if (prevTile) {
-          t.roadDirs.add(hexKey(prev.col, prev.row));
-          prevTile.roadDirs.add(hexKey(col, row));
-        }
-      }
-    }
-  }
-
-  return bridgesPlaced;
-}
+// MST road network (Kruskal MST → BFS roads → RIVER→BRIDGE up to a cap) is
+// shared with the procedural generator — see `buildRoadNetwork` in
+// src/road-network.js.
 
 // ── Map builders ───────────────────────────────────────────────────────────
 
