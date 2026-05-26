@@ -169,6 +169,19 @@ describe('networkStrokesForTile — per-tile geometry', () => {
     assert.ok(byLen[1].length > 2);
   });
 
+  test('four-neighbour junction emits a through-bezier plus 2 spokes', () => {
+    // A full + junction: E/W opposed as the through-channel, N/S as spokes.
+    const strokes = networkStrokesForTile({ col: 2, row: 2 }, [
+      { col: 1, row: 2 }, { col: 3, row: 2 }, // W + E
+      { col: 2, row: 1 }, { col: 2, row: 3 }, // N + S branches
+    ]);
+    assert.equal(strokes.length, 3, 'expected through-bezier + 2 spokes');
+    const spokes = strokes.filter(s => s.length === 2);
+    const bezier = strokes.filter(s => s.length > 2);
+    assert.equal(spokes.length, 2, 'two straight spokes for the N/S branches');
+    assert.equal(bezier.length, 1, 'one smooth through-bezier for the main channel');
+  });
+
   test('multi-neighbour through-bezier picks the most-opposing pair', () => {
     // Edges to E and W are diametrically opposed (dot = -1); the NE branch is
     // not in the through-bezier. Verify by checking which spoke is the short
@@ -241,6 +254,33 @@ describe('buildRiverNetworkStrokes', () => {
     const tiles = new Map();
     tiles.set(hexKey(0, 0), mkTile(0, 0, TileType.GRASS));
     assert.equal(buildRiverNetworkStrokes(tiles).length, 0);
+  });
+
+  test('forked river (3 branches meeting at a junction tile) renders every branch', () => {
+    // Human-edited fork: a central RIVER junction at (1,1) with three RIVER
+    // arms — W (0,1), E (2,1), N (1,0). The procedural generator never makes
+    // this, but the renderer must connect all three branches at the junction.
+    const tiles = new Map();
+    const add = (c, r) => tiles.set(hexKey(c, r), mkTile(c, r, TileType.RIVER));
+    add(1, 1); // junction
+    add(0, 1); // W arm
+    add(2, 1); // E arm
+    add(1, 0); // N arm
+    const segs = buildRiverNetworkStrokes(tiles);
+    assert.equal(segs.length, 4, 'junction + 3 arms all emit segments');
+
+    const junction = segs.find(s => s.tile.col === 1 && s.tile.row === 1);
+    assert.ok(junction, 'junction tile emits a segment');
+    // 3 water neighbours → through-bezier (1 stroke) + 1 spoke for the 3rd arm.
+    assert.equal(junction.strokes.length, 2,
+      'junction draws a through-bezier plus a spoke (not a single through-stroke)');
+    const spoke = junction.strokes.find(s => s.length === 2);
+    assert.ok(spoke, 'the third arm is drawn as a centre→edge spoke');
+
+    // Each arm is a 2-neighbour-or-fewer tile → no spokes, just its own stroke.
+    for (const arm of segs.filter(s => s !== junction)) {
+      assert.ok(arm.strokes.length >= 1, 'each arm draws toward the junction');
+    }
   });
 });
 

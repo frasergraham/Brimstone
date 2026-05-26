@@ -117,6 +117,55 @@ export function _parseColor(color) {
   return null;
 }
 
+/**
+ * Pure geometry planner for one water tile's branches, given its pixel centre
+ * `(cx, cy)`, the pixel centres of its water neighbours, and the hex apothem.
+ *
+ * Returns `{ edgeMids, through, spokes, endpoint }`:
+ *   - `edgeMids[i]`  — the shared-edge midpoint toward neighbour `i`
+ *   - `through`      — index pair `[a, b]` for the smooth through-bezier
+ *                      (centre between the two most-opposing edges), or `[a]`
+ *                      for a 1-neighbour endpoint, or `null` for 0 neighbours.
+ *   - `spokes`       — indices of the remaining branches drawn as straight
+ *                      centre→edge spokes (only populated for 3+ neighbours).
+ *   - `endpoint`     — off-tile extension origin for the 1-neighbour case, else
+ *                      `null`.
+ *
+ * This generalises the old "exactly 2 endpoints" assumption: a 2-exit tile
+ * still draws a single smooth bezier (visually unchanged), while a 3- or 4-way
+ * junction connects every branch at the tile centre (a fork).
+ */
+export function planRiverTileBranches(cx, cy, neighbourCenters, apothem) {
+  const edgeMids = [];
+  const dirs = [];
+  for (const nc of neighbourCenters) {
+    const dx = nc.x - cx, dy = nc.y - cy;
+    const d  = Math.sqrt(dx * dx + dy * dy) || 1;
+    const ux = dx / d, uy = dy / d;
+    dirs.push({ x: ux, y: uy });
+    edgeMids.push({ x: cx + ux * apothem, y: cy + uy * apothem });
+  }
+  const n = edgeMids.length;
+  if (n === 0) return { edgeMids, through: null, spokes: [], endpoint: null };
+  if (n === 1) {
+    // Endpoint tile: extend off-tile in the opposite direction so the river
+    // fades past the hex border instead of stopping dead at the centre.
+    const endpoint = { x: cx - dirs[0].x * apothem, y: cy - dirs[0].y * apothem };
+    return { edgeMids, through: [0], spokes: [], endpoint };
+  }
+  // Pick the most-opposing pair (lowest dot product) as the through-channel.
+  let pA = 0, pB = 1, minDot = Infinity;
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const dot = dirs[i].x * dirs[j].x + dirs[i].y * dirs[j].y;
+      if (dot < minDot) { minDot = dot; pA = i; pB = j; }
+    }
+  }
+  const spokes = [];
+  for (let i = 0; i < n; i++) if (i !== pA && i !== pB) spokes.push(i);
+  return { edgeMids, through: [pA, pB], spokes, endpoint: null };
+}
+
 export class Renderer {
   constructor(canvas, state) {
     this.canvas  = canvas;
@@ -1937,33 +1986,35 @@ export class Renderer {
         const { x, y } = this._toCanvas(col, row);
         const riverNbrs = getNeighbors(col, row).filter(n => isWater(tiles.get(hexKey(n.col, n.row))));
 
-        // Build edge midpoints toward each river/bridge neighbour
-        const edgeMids = riverNbrs.map(n => {
-          const { x: nx, y: ny } = this._toCanvas(n.col, n.row);
-          const dx = nx - x, dy = ny - y;
-          const d  = Math.sqrt(dx * dx + dy * dy);
-          return { x: x + dx / d * apothem, y: y + dy / d * apothem };
-        });
+        // Plan the branches: 2-way → smooth through-bezier (unchanged), 1-way →
+        // off-tile endpoint extension, 3+/junction → through-bezier on the main
+        // channel plus straight spokes so every fork branch connects at centre.
+        const plan = planRiverTileBranches(
+          x, y, riverNbrs.map(n => this._toCanvas(n.col, n.row)), apothem,
+        );
+        if (!plan.through) continue; // isolated water tile — skip
 
+        const { edgeMids } = plan;
         ctx.beginPath();
-        if (riverNbrs.length >= 2) {
-          // Two river neighbours: smooth bezier entry → center → exit
-          ctx.moveTo(edgeMids[0].x, edgeMids[0].y);
-          ctx.quadraticCurveTo(x, y, edgeMids[1].x, edgeMids[1].y);
-        } else if (riverNbrs.length === 1) {
+        if (plan.endpoint) {
           // Endpoint tile: extend bezier off-screen in the upstream/downstream direction
-          const { x: nx, y: ny } = this._toCanvas(riverNbrs[0].col, riverNbrs[0].row);
-          const dx = nx - x, dy = ny - y;
-          const d  = Math.sqrt(dx * dx + dy * dy);
-          // Cap at the far edge of this hex (don't extend beyond the map)
-          const offX = x - (dx / d) * apothem;
-          const offY = y - (dy / d) * apothem;
-          ctx.moveTo(offX, offY);
-          ctx.quadraticCurveTo(x, y, edgeMids[0].x, edgeMids[0].y);
+          ctx.moveTo(plan.endpoint.x, plan.endpoint.y);
+          ctx.quadraticCurveTo(x, y, edgeMids[plan.through[0]].x, edgeMids[plan.through[0]].y);
         } else {
-          continue; // isolated water tile — skip
+          // Main channel: smooth bezier entry → center → exit
+          const a = edgeMids[plan.through[0]], b = edgeMids[plan.through[1]];
+          ctx.moveTo(a.x, a.y);
+          ctx.quadraticCurveTo(x, y, b.x, b.y);
         }
         ctx.stroke();
+
+        // Junction spokes: connect any remaining fork branches to the centre.
+        for (const i of plan.spokes) {
+          ctx.beginPath();
+          ctx.moveTo(x, y);
+          ctx.lineTo(edgeMids[i].x, edgeMids[i].y);
+          ctx.stroke();
+        }
       }
     }
 
@@ -2016,25 +2067,31 @@ export class Renderer {
           const isWater = t => t && (isRiver(t) || isBridge(t));
           const waterNbrs = getNeighbors(col, row).filter(n => isWater(tiles.get(hexKey(n.col, n.row))));
           if (waterNbrs.length >= 1) {
-            const wEdge = waterNbrs.map(n => {
-              const { x: nx, y: ny } = this._toCanvas(n.col, n.row);
-              const dx = nx - x, dy = ny - y, d = Math.sqrt(dx * dx + dy * dy);
-              return { x: x + dx / d * apothem, y: y + dy / d * apothem };
-            });
+            const wPlan = planRiverTileBranches(
+              x, y, waterNbrs.map(n => this._toCanvas(n.col, n.row)), apothem,
+            );
+            const wEdge = wPlan.edgeMids;
             ctx.strokeStyle = TILE_COLOR[TileType.RIVER];
             ctx.lineWidth   = hs * 0.52;
             ctx.beginPath();
-            if (wEdge.length >= 2) {
-              ctx.moveTo(wEdge[0].x, wEdge[0].y);
-              ctx.quadraticCurveTo(x, y, wEdge[1].x, wEdge[1].y);
-            } else {
+            if (wPlan.endpoint) {
               // single water neighbour — extend bezier off-screen on the other side
               const { x: nx, y: ny } = this._toCanvas(waterNbrs[0].col, waterNbrs[0].row);
               const dx = nx - x, dy = ny - y, d = Math.sqrt(dx * dx + dy * dy);
               ctx.moveTo(x - (dx / d) * apothem * 2, y - (dy / d) * apothem * 2);
               ctx.quadraticCurveTo(x, y, wEdge[0].x, wEdge[0].y);
+            } else {
+              ctx.moveTo(wEdge[wPlan.through[0]].x, wEdge[wPlan.through[0]].y);
+              ctx.quadraticCurveTo(x, y, wEdge[wPlan.through[1]].x, wEdge[wPlan.through[1]].y);
             }
             ctx.stroke();
+            // Junction under a bridge: connect remaining water branches to centre.
+            for (const i of wPlan.spokes) {
+              ctx.beginPath();
+              ctx.moveTo(x, y);
+              ctx.lineTo(wEdge[i].x, wEdge[i].y);
+              ctx.stroke();
+            }
           }
           // Restore road colour + width after the water bezier
           ctx.strokeStyle = TILE_COLOR[TileType.ROAD];
