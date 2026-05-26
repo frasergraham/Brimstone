@@ -11,6 +11,7 @@ import { Phase, nodeController, phaseForRound } from '../src/game.js';
 import { sightRange } from '../src/actions.js';
 import { PlanActionType } from '../src/planner.js';
 import { EntityType } from '../src/entities.js';
+import { legacyTileType, pathOf, PathType } from '../src/tiles.js';
 
 // ── Phase info ──────────────────────────────────────────────────────────────
 
@@ -110,11 +111,11 @@ function describeNearbyTerrain(state, entities, radius = 2) {
       if (d > radius) continue;
       seen.add(key);
 
-      const parts = [`(${tile.col},${tile.row}): ${tile.type}`];
+      const parts = [`(${tile.col},${tile.row}): ${legacyTileType(tile)}`];
       if (tile.building) parts.push(`(${tile.building})`);
       if (!tile.explored) parts.push('unexplored');
       if (tile.fortifyLevel > 0) parts.push(`fortified:${tile.fortifyLevel}`);
-      if (tile.road || tile.type === 'road') parts.push('road');
+      if (tile.road || pathOf(tile) === PathType.ROAD) parts.push('road');
 
       // Check if a node hex
       for (const node of state.witchObjectives ?? []) {

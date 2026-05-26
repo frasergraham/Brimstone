@@ -8,7 +8,7 @@ import {
 } from '../src/game.js';
 import { EntityType, createMinion, resetRoster } from '../src/entities.js';
 import { hexKey } from '../src/hex.js';
-import { TileType } from '../src/tiles.js';
+import { TileType, legacyTileType } from '../src/tiles.js';
 import { getFaction } from '../src/factions.js';
 
 // ── Phase cycle ───────────────────────────────────────────────────────────────
@@ -471,7 +471,7 @@ describe('endRound rest healing', () => {
     // Find the INN tile
     let innTile = null;
     for (const [, t] of state.tiles) {
-      if (t.type === TileType.BUILDING && t.building === 'inn') { innTile = t; break; }
+      if (legacyTileType(t) === TileType.BUILDING && t.building === 'inn') { innTile = t; break; }
     }
     if (!innTile) return; // no inn found (shouldn't happen)
 
@@ -493,7 +493,7 @@ describe('endRound rest healing', () => {
     const state = new GameState(true, true);
     let otherBuilding = null;
     for (const [, t] of state.tiles) {
-      if (t.type === TileType.BUILDING && t.building !== 'inn' && t.building !== 'church') {
+      if (legacyTileType(t) === TileType.BUILDING && t.building !== 'inn' && t.building !== 'church') {
         otherBuilding = t; break;
       }
     }
@@ -517,7 +517,7 @@ describe('endRound rest healing', () => {
     const state = new GameState(true, true);
     let innTile = null;
     for (const [, t] of state.tiles) {
-      if (t.type === TileType.BUILDING && t.building === 'inn') { innTile = t; break; }
+      if (legacyTileType(t) === TileType.BUILDING && t.building === 'inn') { innTile = t; break; }
     }
     if (!innTile) return;
 

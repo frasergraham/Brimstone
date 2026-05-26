@@ -1,6 +1,6 @@
 // UI controller: handles canvas clicks, sidepanel updates, action buttons
 import { hexKey, hexToPixel, MAP_COLS, MAP_ROWS } from './hex.js';
-import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus } from './tiles.js';
+import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus, legacyTileType } from './tiles.js';
 import { ITEMS } from './items.js';
 import { EFFECTS } from './effects.js';
 import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, attackOf, defenseOf } from './entities.js';
@@ -2455,8 +2455,8 @@ export class UIController {
         [TileType.GRASS]: '🌿', [TileType.FOREST]: '🌲', [TileType.DIRT]: '🪨',
         [TileType.ROAD]: '🛤', [TileType.RIVER]: '💧', [TileType.BRIDGE]: '🌉',
       };
-      const icon = tile.building ? (BUILDING_ICON[tile.building] ?? '🏠') : (TERRAIN_ICON[tile.type] ?? '🌿');
-      const label = tile.building ? (BUILDING_LABEL[tile.building] ?? 'Building') : (tile.type ?? 'terrain');
+      const icon = tile.building ? (BUILDING_ICON[tile.building] ?? '🏠') : (TERRAIN_ICON[legacyTileType(tile)] ?? '🌿');
+      const label = tile.building ? (BUILDING_LABEL[tile.building] ?? 'Building') : (legacyTileType(tile) ?? 'terrain');
       const tileSrc = this.renderer.getTileDataURL(tile, tileSelection.col, tileSelection.row, 56);
       const tileImgHtml = tileSrc
         ? `<img class="usb-terrain-hex" src="${tileSrc}" alt="">`
@@ -3882,12 +3882,12 @@ export class UIController {
     const fortEl = this._el('tile-zoom-fort');
     const iconEl = this._el('tile-zoom-icon');
 
-    const fillColor = TILE_COLOR_MAP[tile.type] ?? '#3a5430';
+    const fillColor = TILE_COLOR_MAP[legacyTileType(tile)] ?? '#3a5430';
     if (polyEl) polyEl.setAttribute('fill', fillColor);
 
     // Icon: building emoji or terrain fallback
     const icon = tile.building ? (BUILDING_ICON[tile.building] ?? '🏠')
-                                : (TERRAIN_ICON[tile.type] ?? '');
+                                : (TERRAIN_ICON[legacyTileType(tile)] ?? '');
     if (iconEl) iconEl.textContent = icon;
 
     // Fortification glow ring
@@ -3906,8 +3906,8 @@ export class UIController {
     const linesEl = this._el('tile-zoom-info-lines');
 
     if (nameEl) {
-      nameEl.textContent = tile.building ? (BUILDING_LABEL[tile.building] ?? tile.type)
-                                         : tile.type;
+      nameEl.textContent = tile.building ? (BUILDING_LABEL[tile.building] ?? legacyTileType(tile))
+                                         : legacyTileType(tile);
     }
 
     const obj       = state.witchObjectives.find(o =>
@@ -4724,7 +4724,7 @@ export class UIController {
 /** Build HTML for a terrain badge (used in unit stats bar). */
 function _buildTerrainBadge(tile) {
   const parts = [];
-  const label = tile.building ? (BUILDING_LABEL[tile.building] ?? 'Building') : (tile.type ?? '');
+  const label = tile.building ? (BUILDING_LABEL[tile.building] ?? 'Building') : (legacyTileType(tile) ?? '');
   parts.push(label);
   if (tile.explored) {
     parts.push('<span class="usb-terrain-explored">Explored</span>');

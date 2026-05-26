@@ -7,7 +7,7 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { buildMissionMap } from '../src/campaign/mission-map.js';
-import { TileType, BuildingType, ResourceType } from '../src/tiles.js';
+import { TileType, BuildingType, ResourceType, legacyTileType } from '../src/tiles.js';
 import { hexKey } from '../src/hex.js';
 
 // ── Handmade ─────────────────────────────────────────────────────────────────
@@ -50,18 +50,18 @@ describe('buildMissionMap — handmade', () => {
     const m = buildMissionMap(mapDef);
     assert.equal(m.tiles.size, 9 * 9);
     const blank = m.tiles.get(hexKey(0, 0));
-    assert.equal(blank.type, TileType.GRASS);
+    assert.equal(legacyTileType(blank), TileType.GRASS);
   });
 
   test('reconstructs explicit tiles with mapped enums', () => {
     const m = buildMissionMap(mapDef);
     const inn = m.tiles.get(hexKey(2, 7));
-    assert.equal(inn.type, TileType.BUILDING);
+    assert.equal(legacyTileType(inn), TileType.BUILDING);
     assert.equal(inn.building, BuildingType.INN);
     assert.equal(inn.fortifyLevel, 1);
 
     const forest = m.tiles.get(hexKey(4, 4));
-    assert.equal(forest.type, TileType.FOREST);
+    assert.equal(legacyTileType(forest), TileType.FOREST);
     assert.equal(forest.resource, ResourceType.HERBS);
   });
 
@@ -108,24 +108,24 @@ describe('buildMissionMap — handmade, layered tile shape', () => {
 
     const inn = m.tiles.get(hexKey(1, 1));
     assert.equal(inn.base, TileType.DIRT);
-    assert.equal(inn.type, TileType.BUILDING);
+    assert.equal(legacyTileType(inn), TileType.BUILDING);
     assert.equal(inn.building, BuildingType.INN);
     assert.equal(inn.fortifyLevel, 2);
     assert.deepEqual([...inn.roadDirs], ['1,2']);
 
     const forest = m.tiles.get(hexKey(2, 2));
     assert.equal(forest.base, TileType.FOREST);
-    assert.equal(forest.type, TileType.FOREST);
+    assert.equal(legacyTileType(forest), TileType.FOREST);
     assert.equal(forest.resource, ResourceType.HERBS);
     assert.equal(forest.hiddenSurvivor, true);
 
     const road = m.tiles.get(hexKey(3, 3));
     assert.equal(road.base, TileType.GRASS);
-    assert.equal(road.type, TileType.ROAD);
+    assert.equal(legacyTileType(road), TileType.ROAD);
     assert.deepEqual([...road.roadDirs].sort(), ['2,3', '4,3']);
 
-    assert.equal(m.tiles.get(hexKey(4, 4)).type, TileType.RIVER);
-    assert.equal(m.tiles.get(hexKey(5, 5)).type, TileType.BRIDGE);
+    assert.equal(legacyTileType(m.tiles.get(hexKey(4, 4))), TileType.RIVER);
+    assert.equal(legacyTileType(m.tiles.get(hexKey(5, 5))), TileType.BRIDGE);
   });
 
   test('layered and legacy type-only defs build identical tiles', () => {
@@ -144,7 +144,7 @@ describe('buildMissionMap — handmade, layered tile shape', () => {
     for (const k of ['1,1', '2,2', '3,3', '4,4', '5,5']) {
       const ta = a.tiles.get(k);
       const tb = b.tiles.get(k);
-      assert.equal(ta.type, tb.type, `${k} type`);
+      assert.equal(legacyTileType(ta), legacyTileType(tb), `${k} type`);
       assert.equal(ta.base, tb.base, `${k} base`);
       assert.equal(ta.structure ?? null, tb.structure ?? null, `${k} structure`);
       assert.equal(ta.path ?? null, tb.path ?? null, `${k} path`);
@@ -169,7 +169,7 @@ function assertSymmetricRoads(tiles) {
 
 function bridgeKeys(tiles) {
   const out = new Set();
-  for (const [k, t] of tiles) if (t.type === TileType.BRIDGE) out.add(k);
+  for (const [k, t] of tiles) if (legacyTileType(t) === TileType.BRIDGE) out.add(k);
   return out;
 }
 
@@ -194,7 +194,7 @@ describe('buildMissionMap — procedural overlay', () => {
       },
     });
     const t = m.tiles.get(hexKey(4, 5));
-    assert.equal(t.type, TileType.BUILDING);
+    assert.equal(legacyTileType(t), TileType.BUILDING);
     assert.equal(t.building, BuildingType.CHURCH);
     assert.equal(t.fortifyLevel, 2);
   });
@@ -204,7 +204,7 @@ describe('buildMissionMap — procedural overlay', () => {
     assertSymmetricRoads(m.tiles);
     // At least some road tiles were laid between the buildings.
     let roadCount = 0;
-    for (const t of m.tiles.values()) if (t.type === TileType.ROAD) roadCount++;
+    for (const t of m.tiles.values()) if (legacyTileType(t) === TileType.ROAD) roadCount++;
     assert.ok(roadCount > 0, 'expected roads between building nodes');
   });
 
@@ -248,7 +248,7 @@ describe('buildMissionMap — procedural overlay', () => {
     let connectedBuildings = 0;
     let totalBuildings = 0;
     for (const t of m.tiles.values()) {
-      if (t.type !== TileType.BUILDING) continue;
+      if (legacyTileType(t) !== TileType.BUILDING) continue;
       totalBuildings++;
       if (t.roadDirs.size > 0) connectedBuildings++;
     }
@@ -277,7 +277,7 @@ describe('buildMissionMap — procedural overlay', () => {
     const a = buildMissionMap(baseDef);
     const b = buildMissionMap(baseDef);
     const roadsOf = (m) => [...m.tiles.entries()]
-      .filter(([, t]) => t.type === TileType.ROAD)
+      .filter(([, t]) => legacyTileType(t) === TileType.ROAD)
       .map(([k]) => k).sort();
     assert.deepEqual(roadsOf(a), roadsOf(b));
   });

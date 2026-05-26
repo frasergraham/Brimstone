@@ -3,6 +3,7 @@
 // the UI should present a disambiguation choice rather than auto-moving.
 
 import { describe, test } from 'node:test';
+import { legacyTileType } from '../src/tiles.js';
 import assert from 'node:assert/strict';
 import { GameState } from '../src/game.js';
 import { EntityType, createSurvivor } from '../src/entities.js';
@@ -18,7 +19,7 @@ describe('move disambiguation — friendly unit on target hex', () => {
     const neighbors = getNeighbors(hero.col, hero.row);
     const passable = neighbors.find(n => {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      return t && t.type !== 'river' &&
+      return t && legacyTileType(t) !== 'river' &&
         !state.entities.some(e => e.alive && e.id !== hero.id && e.col === n.col && e.row === n.row);
     });
     assert.ok(passable, 'need a passable neighbor hex');
@@ -52,7 +53,7 @@ describe('move disambiguation — friendly unit on target hex', () => {
     const neighbors = getNeighbors(hero.col, hero.row);
     const emptyPassable = neighbors.find(n => {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      return t && t.type !== 'river' &&
+      return t && legacyTileType(t) !== 'river' &&
         !state.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
     });
     assert.ok(emptyPassable, 'need an empty passable neighbor hex');

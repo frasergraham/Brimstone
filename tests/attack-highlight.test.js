@@ -4,6 +4,7 @@
 // - Both MOVE and BATTLE valid simultaneously (green+red highlights at once)
 
 import { describe, test } from 'node:test';
+import { legacyTileType } from '../src/tiles.js';
 import assert from 'node:assert/strict';
 import { GameState, Phase, Player } from '../src/game.js';
 import { getValidActions, ActionType } from '../src/actions.js';
@@ -20,7 +21,7 @@ function freshState() {
 function emptyPassableNeighbor(state, entity) {
   return getNeighbors(entity.col, entity.row).find(n => {
     const t = state.tiles.get(hexKey(n.col, n.row));
-    if (!t || t.type === 'river') return false;
+    if (!t || legacyTileType(t) === 'river') return false;
     return !state.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
   }) ?? null;
 }

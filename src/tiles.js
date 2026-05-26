@@ -181,17 +181,22 @@ export function rollLoot(table) {
 //   path      ∈ {none(null), road, river, bridge}— overlaid path/water feature
 //
 // `building` (BuildingType) and `roadDirs` (Set of connected neighbours) stay
-// as their own fields. The legacy single `tile.type` (TileType) is preserved
-// as a derived get/set shim so the ~60-file codebase keeps working untouched
-// while later phases migrate readers to the explicit layers + predicates below.
+// as their own fields. The codebase reads/writes the explicit layers directly
+// via the predicates below (baseOf / pathOf / structureOf / isRiver / isBridge /
+// hasBuilding / …). The legacy single `tile.type` (TileType) is no longer a
+// property of the Tile — the P0 get/set shim was removed in P7 once every reader
+// had migrated. The two explicit helpers `decomposeTileType()` (write a legacy
+// type → layers) and `legacyTileType()` (derive the legacy type ← layers) cover
+// the remaining spots that genuinely need a single categorical value (legacy
+// save/JSON reconstruction, display maps keyed by TileType).
 //
 // REPRESENTATION CHOICE: `structure` is a coarse marker — either null (none) or
 // the string 'building'. The actual BuildingType lives in `building`, exactly
 // as before. `structureOf()` treats a tile as having a building when EITHER
 // `structure === 'building'` OR `building != null`, so existing code that sets
-// `tile.building = X` directly (without touching `structure`) still yields
-// `tile.type === 'building'`. This keeps the shim robust to both the new
-// explicit writes and legacy direct-field writes.
+// `tile.building = X` directly (without touching `structure`) still reports a
+// building. This keeps the layer accessors robust to both the new explicit
+// writes and legacy direct-field writes.
 // ─────────────────────────────────────────────────────────────────────────
 
 // Path-layer values (in addition to null = none).
@@ -215,65 +220,59 @@ export class Tile {
     this.structure = null;        // null (none) | 'building'
     this.path = null;             // null (none) | 'road' | 'river' | 'bridge'
     this.building = null;         // BuildingType or null
-    // Decompose the legacy TileType into (base, structure, path) via the setter.
-    this.type = type;
+    // Decompose the legacy TileType arg into (base, structure, path). This is
+    // the canonical way tiles are constructed (`new Tile(col, row, TileType.X)`)
+    // throughout map-gen, missions, and tests — the explicit-layer fields above
+    // stay as their authored defaults for the ROAD/RIVER/BRIDGE cases.
+    decomposeTileType(this, type);
     this.explored = false;
     this.resource = null;   // ResourceType or null (on open tiles)
     this.fortifyLevel = 0;  // 0=none, 1..6=fortified (see getFortifyCombatBonus)
     this.roadDirs = new Set(); // hexKeys of road-connected neighbours (set at map gen time)
   }
+}
 
-  // Derived legacy TileType from the three layers. Precedence (matches the old
-  // single-type semantics): river > bridge > road > building > base material.
-  get type() {
-    if (this.path === PathType.RIVER)  return TileType.RIVER;
-    if (this.path === PathType.BRIDGE) return TileType.BRIDGE;
-    if (this.path === PathType.ROAD)   return TileType.ROAD;
-    // A building (set explicitly via `structure` OR implied by `building`).
-    if (this.structure === StructureType.BUILDING || this.building != null) {
-      return TileType.BUILDING;
-    }
-    return this.base ?? TileType.GRASS;
+// Decompose a legacy TileType value into the three explicit layers, in place.
+// This is the WRITE-side inverse of `legacyTileType()` and the canonical way to
+// import a single-`type` value (the Tile constructor, legacy save/mission JSON
+// reconstruction). Replaces the old `set type()` shim — callers set layers
+// explicitly via this named helper rather than through a hidden property setter.
+export function decomposeTileType(tile, v) {
+  switch (v) {
+    case TileType.GRASS:
+    case TileType.FOREST:
+    case TileType.DIRT:
+      tile.base = v;
+      tile.structure = null;
+      tile.path = null;
+      break;
+    case TileType.ROAD:
+      tile.path = PathType.ROAD;     // base unchanged (defaults to grass)
+      break;
+    case TileType.RIVER:
+      tile.path = PathType.RIVER;
+      break;
+    case TileType.BRIDGE:
+      tile.path = PathType.BRIDGE;
+      break;
+    case TileType.BUILDING:
+      // Buildings render on dirt today; default the base to match. Legacy
+      // `type` is single-valued, so importing BUILDING must make the tile REPORT
+      // building — clear the `path` layer (it sits above building in the
+      // precedence). Road-through-building is carried by the separate `roadDirs`
+      // Set (untouched here), which is how the renderer has always drawn it —
+      // NOT by the `path` layer. So clearing `path` loses no road-through info.
+      tile.base = TileType.DIRT;
+      tile.structure = StructureType.BUILDING;
+      tile.path = null;
+      break;
+    default:
+      // Unknown value: store as base so nothing silently breaks.
+      tile.base = v;
+      tile.structure = null;
+      tile.path = null;
   }
-
-  // Decompose a legacy TileType into the three layers. Lossless round-trip with
-  // the getter for every TileType value.
-  set type(v) {
-    switch (v) {
-      case TileType.GRASS:
-      case TileType.FOREST:
-      case TileType.DIRT:
-        this.base = v;
-        this.structure = null;
-        this.path = null;
-        break;
-      case TileType.ROAD:
-        this.path = PathType.ROAD;     // base unchanged (defaults to grass)
-        break;
-      case TileType.RIVER:
-        this.path = PathType.RIVER;
-        break;
-      case TileType.BRIDGE:
-        this.path = PathType.BRIDGE;
-        break;
-      case TileType.BUILDING:
-        // Buildings render on dirt today; default the base to match. Legacy
-        // `type` is single-valued, so setting BUILDING must make the tile REPORT
-        // building — clear the `path` layer (it sits above building in the getter
-        // precedence). Road-through-building is carried by the separate `roadDirs`
-        // Set (untouched here), which is how the renderer has always drawn it —
-        // NOT by the `path` layer. So clearing `path` loses no road-through info.
-        this.base = TileType.DIRT;
-        this.structure = StructureType.BUILDING;
-        this.path = null;
-        break;
-      default:
-        // Unknown value: store as base so nothing silently breaks.
-        this.base = v;
-        this.structure = null;
-        this.path = null;
-    }
-  }
+  return tile;
 }
 
 // ── Layer accessors ────────────────────────────────────────────────────────
@@ -294,6 +293,21 @@ export function structureOf(tile) {
     return StructureType.BUILDING;
   }
   return null;
+}
+
+// Derive the single legacy TileType from the three layers — the READ-side
+// inverse of `decomposeTileType()`. Replaces the old `get type()` shim for the
+// few call sites that genuinely need one categorical value (display maps keyed
+// by TileType, the back-compat `type` field in the serialized snapshot / JSON
+// export). Precedence matches the old getter exactly: a path (river/bridge/road)
+// wins over a building, which wins over the base material. Note PathType values
+// are identical to the TileType ROAD/RIVER/BRIDGE values, so the path can be
+// returned directly.
+export function legacyTileType(tile) {
+  const p = pathOf(tile);
+  if (p) return p;
+  if (hasBuilding(tile)) return TileType.BUILDING;
+  return baseOf(tile);
 }
 
 // ── Predicate helpers ────────────────────────────────────────────────────────

@@ -12,7 +12,7 @@ import { PlanSimState, stepToward, stepAwayFrom, roadStepToward, bestWitchObject
 import { hexDistance, hexKey, getNeighbors } from './hex.js';
 import { Phase, nodeController } from './game.js';
 import { EntityType, ADVANTAGE_CAP, expectedDieValue, isLeaderType, attackOf, defenseOf } from './entities.js';
-import { ResourceType, hasBuilding } from './tiles.js';
+import { ResourceType, hasBuilding, isRiver } from './tiles.js';
 import { PlanActionType, MAX_PLAN_LENGTH } from './planner.js';
 
 // ── Goal names ───────────────────────────────────────────────────────────────
@@ -850,7 +850,7 @@ export function genBuildArmy(sim, board, budget) {
         const candidates = [];
         for (const [, t] of sim.tiles) {
           if (sim.isExplored(t.col, t.row)) continue;
-          if (t.terrain === 'river') continue;
+          if (isRiver(t)) continue;
           const d = hexDistance(witchEntity.col, witchEntity.row, t.col, t.row);
           if (d <= 5) candidates.push(t);
         }
@@ -858,7 +858,7 @@ export function genBuildArmy(sim, board, budget) {
         if (candidates.length === 0) {
           for (const [, t] of sim.tiles) {
             if (sim.isExplored(t.col, t.row)) continue;
-            if (t.terrain === 'river') continue;
+            if (isRiver(t)) continue;
             candidates.push(t);
           }
         }
@@ -1321,7 +1321,7 @@ function _fillGaps(plan, sim, board, witchEntity, remaining, prevPositions) {
     let bestHex = null, bestDist = Infinity;
     for (const [, t] of sim.tiles) {
       if (sim.isExplored(t.col, t.row)) continue;
-      if (t.terrain === 'river') continue;
+      if (isRiver(t)) continue;
       const d = hexDistance(witchEntity.col, witchEntity.row, t.col, t.row);
       if (d < bestDist) { bestDist = d; bestHex = t; }
     }

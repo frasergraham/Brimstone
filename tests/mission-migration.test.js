@@ -29,7 +29,7 @@ import path from 'node:path';
 
 import { loadMissionJSON } from '../src/campaign/json-mission.js';
 import { buildMissionMap } from '../src/campaign/mission-map.js';
-import { TileType, BuildingType, ResourceType, PathType, StructureType } from '../src/tiles.js';
+import { TileType, BuildingType, ResourceType, PathType, StructureType, legacyTileType } from '../src/tiles.js';
 import { hexKey } from '../src/hex.js';
 import { resolveCondition } from '../src/campaign/condition-registry.js';
 import { resolveConductorScript } from '../src/campaign/conductor-scripts.js';
@@ -67,7 +67,7 @@ const PATH_KEY = invert(PathType);
 const STRUCT_KEY = invert(StructureType);
 
 function isDefaultTile(t) {
-  return t.type === TileType.GRASS
+  return legacyTileType(t) === TileType.GRASS
     && !t.building
     && (t.fortifyLevel ?? 0) === 0
     && !t.resource
@@ -87,7 +87,7 @@ function snapshotTiles(built) {
       if (!t || isDefaultTile(t)) continue;
       out.set(hexKey(col, row), {
         col, row,
-        type: TILE_KEY[t.type] ?? t.type,
+        type: TILE_KEY[legacyTileType(t)] ?? legacyTileType(t),
         base: TILE_KEY[t.base] ?? t.base,
         structure: t.structure ? (STRUCT_KEY[t.structure] ?? t.structure) : null,
         path: t.path ? (PATH_KEY[t.path] ?? t.path) : null,

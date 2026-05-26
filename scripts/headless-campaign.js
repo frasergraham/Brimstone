@@ -33,7 +33,7 @@ import {
 } from '../src/entities.js';
 import { SURVIVOR_ROSTER } from '../src/content/survivors.js';
 import { getNeighbors, hexKey } from '../src/hex.js';
-import { TileType } from '../src/tiles.js';
+import { TileType, isRiver } from '../src/tiles.js';
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
@@ -119,7 +119,7 @@ function buildMissionState(missionDef) {
     if (occupied.has(k)) return false;
     const t = state.tiles.get(k);
     if (!t) return false;
-    if (t.type === TileType.RIVER) return false;
+    if (isRiver(t)) return false;
     return true;
   });
   let deployed = 0;

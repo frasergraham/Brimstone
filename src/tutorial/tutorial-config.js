@@ -5,7 +5,7 @@
 // forced dice settings, and MissionConductor config.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { Tile, TileType, BuildingType, ResourceType } from '../tiles.js';
+import { Tile, TileType, BuildingType, ResourceType, decomposeTileType, legacyTileType } from '../tiles.js';
 import { hexKey, setMapDimensions } from '../hex.js';
 import { NODE_COLORS } from '../map.js';
 import { PlanActionType } from '../planner.js';
@@ -25,13 +25,13 @@ function makeTiles(cols, rows) {
 
 function setBuilding(tiles, col, row, building, fortLevel = 0) {
   const t = tiles.get(hexKey(col, row));
-  if (t) { t.type = TileType.BUILDING; t.building = building; t.fortifyLevel = fortLevel; }
+  if (t) { decomposeTileType(t, TileType.BUILDING); t.building = building; t.fortifyLevel = fortLevel; }
 }
 
 function setForest(tiles, hexes) {
   for (const { col, row } of hexes) {
     const t = tiles.get(hexKey(col, row));
-    if (t && t.type === TileType.GRASS) t.type = TileType.FOREST;
+    if (t && legacyTileType(t) === TileType.GRASS) decomposeTileType(t, TileType.FOREST);
   }
 }
 
@@ -105,7 +105,7 @@ export function buildTutorialMap() {
     { col: 6, row: 4 },
   ]) {
     const t = tiles.get(hexKey(rc.col, rc.row));
-    if (t && t.type === TileType.GRASS) t.type = TileType.ROAD;
+    if (t && legacyTileType(t) === TileType.GRASS) decomposeTileType(t, TileType.ROAD);
   }
 
   // ── Forest clusters ──────────────────────────────────────────────────────

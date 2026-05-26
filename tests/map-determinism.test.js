@@ -16,6 +16,7 @@ import assert from 'node:assert/strict';
 
 import { generateMap, MAP_SIZES } from '../src/map.js';
 import { hexKey } from '../src/hex.js';
+import { legacyTileType } from '../src/tiles.js';
 
 // Canonicalise a generated map into a plain JSON-stable shape so deep-equal
 // comparisons aren't tripped up by Set iteration order on `roadDirs`.
@@ -26,7 +27,7 @@ function _snapshot(result) {
       k,
       col: t.col,
       row: t.row,
-      type: t.type,
+      type: legacyTileType(t),
       building: t.building,
       explored: t.explored,
       resource: t.resource,

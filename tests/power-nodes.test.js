@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 
 import { GameState, nodeController, Phase } from '../src/game.js';
 import { hexKey, hexDistance, getNeighbors, MAP_COLS, MAP_ROWS } from '../src/hex.js';
-import { TileType } from '../src/tiles.js';
+import { TileType, legacyTileType } from '../src/tiles.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import { executeFortify, getValidActions, sightRange } from '../src/actions.js';
 import { generateMap } from '../src/map.js';
@@ -126,7 +126,7 @@ describe('Power node cluster structure', () => {
     for (const obj of mapData.witchObjectives) {
       for (const h of obj.hexes) {
         const t = mapData.tiles.get(hexKey(h.col, h.row));
-        assert.notEqual(t?.type, TileType.RIVER,
+        assert.notEqual(legacyTileType(t), TileType.RIVER,
           `Node hex (${h.col},${h.row}) should not be RIVER`);
       }
     }

@@ -6,7 +6,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { TileType, Tile } from '../src/tiles.js';
+import { TileType, Tile, legacyTileType } from '../src/tiles.js';
 import { hexKey } from '../src/hex.js';
 
 // Build a real layered Tile so the network builders' baseOf/pathOf/isBridge/
@@ -299,7 +299,7 @@ describe('buildRoadNetworkStrokes', () => {
     const segs = buildRoadNetworkStrokes(tiles);
     assert.equal(segs.length, 3, 'all three tiles (road–building–road) should emit strokes');
 
-    const building = segs.find(s => s.tile.type === TileType.BUILDING);
+    const building = segs.find(s => legacyTileType(s.tile) === TileType.BUILDING);
     assert.ok(building, 'building tile with roadDirs must emit a road segment');
     // Two roadDirs neighbours → one through-bezier across the tile centre.
     assert.equal(building.strokes.length, 1, 'transit building emits one through-bezier');
@@ -312,7 +312,7 @@ describe('buildRoadNetworkStrokes', () => {
     tiles.set(hexKey(1, 0), mkTile(1, 0, TileType.BUILDING, { building: 'INN', roadDirs: [hexKey(0, 0)] }));
 
     const segs = buildRoadNetworkStrokes(tiles);
-    const building = segs.find(s => s.tile.type === TileType.BUILDING);
+    const building = segs.find(s => legacyTileType(s.tile) === TileType.BUILDING);
     assert.ok(building, 'spoke-endpoint building still emits a road segment');
     assert.equal(building.strokes.length, 1);
     assert.equal(building.strokes[0].length, 2, 'spoke endpoint is a 2-point stub');

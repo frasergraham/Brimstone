@@ -1,6 +1,7 @@
 // Tests for campaign/story mode: Campaign class, victory delegates, no-witch games, wave spawner.
 
 import { describe, test, beforeEach } from 'node:test';
+import { legacyTileType } from '../src/tiles.js';
 import assert from 'node:assert/strict';
 import { GameState, Phase, phaseForRound, getCycleLength, DEFAULT_CYCLE_PHASES } from '../src/game.js';
 import { EntityType, createMinion, createZombie, createWoodGolem, createSurvivor, markRosterUsedByName, resetRoster, SURVIVOR_ROSTER } from '../src/entities.js';
@@ -2151,7 +2152,7 @@ describe('Mission 3 (The First Night) balance', () => {
     for (const pos of positions) {
       const tile = mapData.tiles.get(`${pos.col},${pos.row}`);
       assert.ok(tile, `survivor start (${pos.col},${pos.row}) must exist on map`);
-      assert.equal(tile.type, 'building',
+      assert.equal(legacyTileType(tile), 'building',
         `survivor start (${pos.col},${pos.row}) should be a building tile`);
     }
   });
@@ -2193,7 +2194,7 @@ describe('Mission 3 (The First Night) balance', () => {
     const mapData = buildMap('first_night');
     const buildings = [];
     for (const [, tile] of mapData.tiles) {
-      if (tile.type === 'building' && tile.building !== 'graveyard') {
+      if (legacyTileType(tile) === 'building' && tile.building !== 'graveyard') {
         buildings.push({ col: tile.col, row: tile.row });
       }
     }
@@ -2269,7 +2270,7 @@ describe('Mission 4 (The River Crossing) balance', () => {
     const mapData = buildMap('river_crossing');
     const church = mapData.tiles.get('15,4');
     assert.ok(church);
-    assert.equal(church.type, 'building');
+    assert.equal(legacyTileType(church), 'building');
     assert.equal(church.building, 'church');
     // The church tile itself conceals the final survivor.
     assert.ok(church.hiddenSurvivor, 'church should hide a survivor to rescue');
@@ -2355,10 +2356,10 @@ describe('Mission 5 (Dark Ritual) balance', () => {
     const mapData = buildMap('dark_ritual');
     let forest = 0, river = 0, building = 0, grass = 0;
     for (const [, tile] of mapData.tiles) {
-      if (tile.type === 'forest')   forest++;
-      if (tile.type === 'river')    river++;
-      if (tile.type === 'building') building++;
-      if (tile.type === 'grass')    grass++;
+      if (legacyTileType(tile) === 'forest')   forest++;
+      if (legacyTileType(tile) === 'river')    river++;
+      if (legacyTileType(tile) === 'building') building++;
+      if (legacyTileType(tile) === 'grass')    grass++;
     }
     assert.equal(river, 0, 'dark_ritual map should have no river');
     assert.ok(building <= 2, `expected ≤2 buildings, got ${building}`);
@@ -2372,8 +2373,8 @@ describe('Mission 5 (Dark Ritual) balance', () => {
     for (const obj of mapData.witchObjectives) {
       const t = mapData.tiles.get(`${obj.col},${obj.row}`);
       assert.ok(t, `node hex (${obj.col},${obj.row}) missing`);
-      assert.notEqual(t.type, 'forest', `node hex (${obj.col},${obj.row}) should not be forest`);
-      assert.notEqual(t.type, 'building', `node hex (${obj.col},${obj.row}) should not be a building`);
+      assert.notEqual(legacyTileType(t), 'forest', `node hex (${obj.col},${obj.row}) should not be forest`);
+      assert.notEqual(legacyTileType(t), 'building', `node hex (${obj.col},${obj.row}) should not be a building`);
     }
   });
 });
@@ -2452,7 +2453,7 @@ describe('processWaves near_hero spawn appears in view', () => {
     // produce a candidate — forces the fallback branch to pick from 1 or 4.
     for (const [, tile] of state.tiles) {
       const d = hexDistance(tile.col, tile.row, state.hero.col, state.hero.row);
-      if (d >= 2 && d <= 3 && tile.type !== 'river' && tile.type !== 'building') {
+      if (d >= 2 && d <= 3 && legacyTileType(tile) !== 'river' && legacyTileType(tile) !== 'building') {
         state.entities.push(createZombie(tile.col, tile.row, 'witch'));
       }
     }

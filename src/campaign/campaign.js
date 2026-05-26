@@ -5,6 +5,7 @@ import { countHeldNodes } from '../game.js';
 import { getFaction } from '../factions.js';
 import { hexDistance } from '../hex.js';
 import { EntityType } from '../entities.js';
+import { isRiver, hasBuilding } from '../tiles.js';
 
 // v1: initial campaign save format.
 // v2 (Phase 4 of units/items/abilities refactor): BRAWLER / STURDY
@@ -394,8 +395,8 @@ function resolveSpawnPosition(state, spawnAt) {
       const isEdge = tile.col === 0 || tile.col === maxCol
                   || tile.row === 0 || tile.row === maxRow;
       if (!isEdge) continue;
-      if (tile.type === 'river') continue;
-      if (tile.type === 'building') continue;
+      if (isRiver(tile)) continue;
+      if (hasBuilding(tile)) continue;
       edges.push(tile);
     }
     if (edges.length === 0) return null;
@@ -408,7 +409,7 @@ function resolveSpawnPosition(state, spawnAt) {
     const hero = state.hero;
     if (!hero) return null;
     const isPassable = (tile) =>
-      tile.type !== 'river' && tile.type !== 'building';
+      !isRiver(tile) && !hasBuilding(tile);
     const isOccupied = (col, row) =>
       state.entities.some(e => e.alive && e.col === col && e.row === row);
     const pickFrom = (minDist, maxDist) => {

@@ -16,7 +16,7 @@ import {
   EntityType,
   createHero, createWitch, createMinion, createIronGolem, createWoodGolem, createZombie,
 } from '../src/entities.js';
-import { ResourceType, TileType } from '../src/tiles.js';
+import { ResourceType, TileType, decomposeTileType } from '../src/tiles.js';
 import { hexKey } from '../src/hex.js';
 import { getFaction } from '../src/factions.js';
 
@@ -308,7 +308,7 @@ describe('Sound Horn action', () => {
     // Place a hidden survivor at (3, 4) — within 4 hexes
     const tile = state.tiles.get(hexKey(3, 4));
     if (tile) {
-      tile.type = TileType.BUILDING;
+      decomposeTileType(tile, TileType.BUILDING);
       tile.hiddenSurvivor = true;
     } else {
       state.tiles.set(hexKey(3, 4), {
@@ -330,7 +330,7 @@ describe('Sound Horn action', () => {
       s.inventory.hero.food = 5;
       const t = s.tiles.get(hexKey(3, 4));
       if (t) {
-        t.type = TileType.BUILDING;
+        decomposeTileType(t, TileType.BUILDING);
         t.hiddenSurvivor = true;
       } else {
         s.tiles.set(hexKey(3, 4), {

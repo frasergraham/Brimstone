@@ -61,6 +61,7 @@ import path from 'node:path';
 
 import { buildMissionMap } from '../src/campaign/mission-map.js';
 import { hexKey } from '../src/hex.js';
+import { legacyTileType } from '../src/tiles.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MISSIONS_DIR = path.join(__dirname, '..', 'src', 'campaign', 'missions');
@@ -142,7 +143,7 @@ function assertBuiltMapsEquivalent(id, before, after) {
   for (const [k, a] of before.tiles) {
     const b = after.tiles.get(k);
     if (!b) fail(`missing tile ${k}`);
-    if (a.type !== b.type) fail(`tile ${k} derived type ${a.type} != ${b.type}`);
+    if (legacyTileType(a) !== legacyTileType(b)) fail(`tile ${k} derived type ${legacyTileType(a)} != ${legacyTileType(b)}`);
     if (a.base !== b.base) fail(`tile ${k} base ${a.base} != ${b.base}`);
     if ((a.path ?? null) !== (b.path ?? null)) fail(`tile ${k} path ${a.path} != ${b.path}`);
     if ((a.structure ?? null) !== (b.structure ?? null)) fail(`tile ${k} structure ${a.structure} != ${b.structure}`);

@@ -5,7 +5,7 @@ import { VERSION }           from '../src/version.js';
 import { Entity, BASE_AGILITY, BASE_RANGE } from '../src/entities.js';
 import { GameState }         from '../src/game.js';
 import { setMapDimensions }  from '../src/hex.js';
-import { Tile, TileType }    from '../src/tiles.js';
+import { Tile, TileType, legacyTileType, decomposeTileType } from '../src/tiles.js';
 
 export function serializeState(state) {
   const tiles = [];
@@ -20,14 +20,14 @@ export function serializeState(state) {
       // Layered tile model (P1): serialize the three explicit layers so the
       // canonical shape round-trips losslessly — crucially a road/building over
       // a non-grass base (e.g. road-through-forest) preserves its `base`, which
-      // the derived `type` enum alone cannot express.  `type` is read via the
-      // prototype getter and kept for back-compat / legacy readers; it is NOT
-      // an own-enumerable field, so it must be read explicitly here (a `{...tile}`
-      // spread would silently drop it).
+      // the derived `type` enum alone cannot express. The vestigial `type` is
+      // still emitted (derived via legacyTileType) so the legacy-snapshot
+      // reconstruction fallback in deserializeState — and any external legacy
+      // reader — keeps working; base/structure/path are the canonical fields.
       base:           tile.base ?? TileType.GRASS,
       structure:      tile.structure ?? null,
       path:           tile.path ?? null,
-      type:           tile.type,
+      type:           legacyTileType(tile),
       building:       tile.building       ?? null,
       resource:       tile.resource       ?? null,
       fortifyLevel:   tile.fortifyLevel   ?? 0,
@@ -185,8 +185,8 @@ export function deserializeState(snap) {
 
   // ── Tiles ─────────────────────────────────────────────────────────────────
   // Reconstruct each tile as a real `Tile` instance (matching the live map-gen
-  // representation) so the layered model's get/set `type` shim and the
-  // baseOf/pathOf/structureOf accessors all return correct values downstream.
+  // representation) so the layered model and the baseOf/pathOf/structureOf
+  // accessors all return correct values downstream.
   //
   // Two snapshot shapes are handled:
   //   • NEW saves (P1+): carry explicit `base`/`structure`/`path` layers. These
@@ -195,8 +195,8 @@ export function deserializeState(snap) {
   //     `type` is just 'road', so re-deriving from `type` would reset base to
   //     the grass default and drop the forest cover).
   //   • LEGACY saves: carry only the derived `type` enum (no layer fields).
-  //     Assigning `tile.type` runs the P0 decomposition setter, producing the
-  //     correct (base, structure, path) — the single source of that mapping.
+  //     `decomposeTileType()` produces the correct (base, structure, path) —
+  //     the single source of that mapping.
   state.tiles = new Map();
   for (const t of snap.tiles) {
     const tile = new Tile(t.col, t.row);
@@ -206,8 +206,8 @@ export function deserializeState(snap) {
       tile.structure = t.structure ?? null;
       tile.path      = t.path      ?? null;
     } else {
-      // Legacy snapshot — derive the layers from the single `type` via the shim.
-      tile.type = t.type;
+      // Legacy snapshot — decompose the single `type` into the three layers.
+      decomposeTileType(tile, t.type);
     }
     tile.building       = t.building       ?? null;
     tile.resource       = t.resource       ?? null;

@@ -16,7 +16,7 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { generateMap, generateMultipleStarts, MAP_SIZES } from '../src/map.js';
-import { TileType, BuildingType, PathType, StructureType, baseOf, pathOf } from '../src/tiles.js';
+import { TileType, BuildingType, PathType, StructureType, baseOf, pathOf, legacyTileType } from '../src/tiles.js';
 import { hexKey, hexDistance } from '../src/hex.js';
 
 const SIZES = ['skirmish', 'standard', 'regional'];
@@ -63,7 +63,7 @@ describe('Spawn buildings (INN & GRAVEYARD)', () => {
         const { tiles } = generateMap(seed, size);
         let innCount = 0, gravCount = 0;
         for (const t of tiles.values()) {
-          if (t.type !== TileType.BUILDING) continue;
+          if (legacyTileType(t) !== TileType.BUILDING) continue;
           if (t.building === BuildingType.INN) innCount++;
           else if (t.building === BuildingType.GRAVEYARD) gravCount++;
         }
@@ -112,9 +112,9 @@ describe('Starting positions are walkable', () => {
         const { tiles, heroStart, witchStart } = generateMap(seed, size);
         const hT = tiles.get(hexKey(heroStart.col, heroStart.row));
         const wT = tiles.get(hexKey(witchStart.col, witchStart.row));
-        assert.notEqual(hT.type, TileType.RIVER,
+        assert.notEqual(legacyTileType(hT), TileType.RIVER,
           `${size} seed=${seed}: heroStart is on RIVER`);
-        assert.notEqual(wT.type, TileType.RIVER,
+        assert.notEqual(legacyTileType(wT), TileType.RIVER,
           `${size} seed=${seed}: witchStart is on RIVER`);
       }
     }
@@ -131,7 +131,7 @@ describe('Bridge counts respect preset bounds', () => {
         const { tiles } = generateMap(seed, size);
         let bridges = 0;
         for (const t of tiles.values()) {
-          if (t.type === TileType.BRIDGE) bridges++;
+          if (legacyTileType(t) === TileType.BRIDGE) bridges++;
         }
         assert.ok(bridges >= cfg.minBridges,
           `${size} seed=${seed}: ${bridges} bridges < min ${cfg.minBridges}`);
@@ -158,11 +158,11 @@ describe('Layered tile model', () => {
           assert.ok([TileType.GRASS, TileType.FOREST, TileType.DIRT].includes(baseOf(t)),
             `${size} seed=${seed}: tile (${t.col},${t.row}) has invalid base "${baseOf(t)}"`);
           // The derived legacy type must follow the documented precedence.
-          if (pathOf(t) === PathType.RIVER)       assert.equal(t.type, TileType.RIVER);
-          else if (pathOf(t) === PathType.BRIDGE) assert.equal(t.type, TileType.BRIDGE);
-          else if (pathOf(t) === PathType.ROAD)   assert.equal(t.type, TileType.ROAD);
-          else if (t.structure === StructureType.BUILDING) assert.equal(t.type, TileType.BUILDING);
-          else assert.equal(t.type, baseOf(t));
+          if (pathOf(t) === PathType.RIVER)       assert.equal(legacyTileType(t), TileType.RIVER);
+          else if (pathOf(t) === PathType.BRIDGE) assert.equal(legacyTileType(t), TileType.BRIDGE);
+          else if (pathOf(t) === PathType.ROAD)   assert.equal(legacyTileType(t), TileType.ROAD);
+          else if (t.structure === StructureType.BUILDING) assert.equal(legacyTileType(t), TileType.BUILDING);
+          else assert.equal(legacyTileType(t), baseOf(t));
         }
       }
     }
@@ -173,7 +173,7 @@ describe('Layered tile model', () => {
       for (let seed = 0; seed < 4; seed++) {
         const { tiles } = generateMap(seed, size);
         for (const t of tiles.values()) {
-          if (t.type !== TileType.RIVER) continue;
+          if (legacyTileType(t) !== TileType.RIVER) continue;
           assert.equal(pathOf(t), PathType.RIVER);
           // River was carved onto the grass fill before anything else.
           assert.equal(baseOf(t), TileType.GRASS,
@@ -189,7 +189,7 @@ describe('Layered tile model', () => {
         const { tiles } = generateMap(seed, size);
         let connectedBuildings = 0;
         for (const t of tiles.values()) {
-          if (t.type !== TileType.BUILDING) continue;
+          if (legacyTileType(t) !== TileType.BUILDING) continue;
           assert.equal(t.structure, StructureType.BUILDING,
             `${size} seed=${seed}: building (${t.col},${t.row}) missing structure marker`);
           // P0 semantics: a building never carries a path; road-through is roadDirs.
@@ -211,7 +211,7 @@ describe('Layered tile model', () => {
       for (let seed = 0; seed < 4; seed++) {
         const { tiles } = generateMap(seed, size);
         for (const t of tiles.values()) {
-          if (t.type !== TileType.ROAD) continue;
+          if (legacyTileType(t) !== TileType.ROAD) continue;
           assert.equal(pathOf(t), PathType.ROAD);
           // Roads are laid before forests/dirt patches, so base is grass.
           assert.ok([TileType.GRASS, TileType.FOREST, TileType.DIRT].includes(baseOf(t)),
@@ -255,7 +255,7 @@ describe('generateMultipleStarts', () => {
       for (const p of out) {
         const t = tiles.get(hexKey(p.col, p.row));
         assert.ok(t, `count=${n}: position (${p.col},${p.row}) has no tile`);
-        assert.notEqual(t.type, TileType.RIVER,
+        assert.notEqual(legacyTileType(t), TileType.RIVER,
           `count=${n}: position (${p.col},${p.row}) is on RIVER`);
       }
     }

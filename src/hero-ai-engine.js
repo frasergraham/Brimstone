@@ -1209,7 +1209,7 @@ export function fillGapsHero(plan, sim, board, heroEntity, remaining, prevPositi
     let bestAnyHex = null, bestAnyDist = Infinity;
     for (const [, t] of sim.tiles) {
       if (sim.isExplored(t.col, t.row)) continue;
-      if (t.terrain === 'river') continue;
+      if (isRiver(t)) continue;
       const d = hexDistance(heroEntity.col, heroEntity.row, t.col, t.row);
       if (hasBuilding(t) && d < bestDist) { bestDist = d; bestHex = t; }
       if (d < bestAnyDist) { bestAnyDist = d; bestAnyHex = t; }
