@@ -50,6 +50,22 @@ import { loadMissionJSON, KNOWN_OBJECTIVE_TYPES } from '../campaign/json-mission
 import { missionJSONUrl } from '../campaign/mission-catalog.js';
 import { CONDITIONS } from '../campaign/condition-registry.js';
 
+// Absolute asset root for both the 2D editor renderer AND the 3D preview.
+// MUST be absolute ('/assets', not 'assets'): admin-tools.html is served at the
+// sub-path URL `/admin/tools`, so a relative base resolves against `/admin/`
+// (→ `/admin/assets/...` → 404 for the tilemap atlas and every GLB). The 3D
+// preview's Renderer3D.beginLoad() falls back to the relative 'assets' default
+// unless loadImages() pins this first — that fallback is what blanked the
+// preview's textures + models. See `resolveAssetBase` below (exported for tests).
+export const ASSET_BASE = '/assets';
+
+// Resolve the asset base a Renderer should load from. Pure; exported for tests.
+// Guards the one rule that matters: never hand a renderer a relative base under
+// the /admin/tools sub-path. Falls back to ASSET_BASE for empty/relative input.
+export function resolveAssetBase(base) {
+  return (typeof base === 'string' && base.startsWith('/')) ? base : ASSET_BASE;
+}
+
 // Enum VALUE → KEY pairs for select option lists (KEY is what the model stores).
 const _entries = (enumObj) => Object.keys(enumObj).map(k => ({ key: k, value: enumObj[k] }));
 
@@ -111,7 +127,7 @@ export function initEditor(doc = document) {
   const editor = createMissionEditor({ render: rerender });
 
   const renderer = new Renderer(canvas, buildState(editor));
-  renderer.loadImages('/assets');
+  renderer.loadImages(ASSET_BASE);
 
   function rerender() {
     // Cheap full rebuild — editor maps are small. Reassigning state keeps the
@@ -151,7 +167,12 @@ export function initEditor(doc = document) {
   const preview = createPreviewController({
     construct: () => {
       const r = new Renderer3D(previewCanvas, buildState(editor));
-      r.beginLoad();
+      // Pass the ABSOLUTE asset base to beginLoad(): its relative 'assets'
+      // default 404s under the /admin/tools sub-path, leaving the preview scene
+      // textureless + GLB-less (houses/paladin/trees fall back to procedural).
+      // beginLoad() loads the atlas + GLBs from this base, so no separate
+      // loadImages() call is needed.
+      r.beginLoad(resolveAssetBase(ASSET_BASE));
       // Reveal the fully-loaded scene once assets settle (draw() is a no-op
       // before whenReady resolves, harmless if the overlay was closed meanwhile).
       r.whenReady().then(() => { try { r.draw(); } catch { /* disposed */ } });
