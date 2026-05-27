@@ -410,6 +410,12 @@ export const ANIMATION_BANK = Object.freeze({
   idle:    'paladin-idle.glb', // mesh + idle in one file; doubles as the rig source
   walking: 'walking.glb',
   running: 'running.glb',
+  // Combat clips (Mixamo, animation-only — see scripts/convert-mixamo-anim.js).
+  // Registered here + on the paladin rig so the asset viewer auto-retargets
+  // and plays them; combat playback wiring is a separate follow-up task.
+  punch:   'punch.glb',
+  hit:     'hit.glb',
+  block:   'block.glb',
 });
 
 /** Renderer-side bank of available unit rigs. Each entry pairs a model
@@ -427,6 +433,9 @@ export const UNIT_RIG_BANK = Object.freeze({
     animations: Object.freeze({
       walking: ANIMATION_BANK.walking,
       running: ANIMATION_BANK.running,
+      punch:   ANIMATION_BANK.punch,
+      hit:     ANIMATION_BANK.hit,
+      block:   ANIMATION_BANK.block,
     }),
   }),
   // Future:
