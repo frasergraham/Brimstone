@@ -55,6 +55,7 @@ import {
   buildTimelineModel,
   resourceMapToRows, rowsToResourceMap,
   lootOverridesToPicker, pickerToLootOverrides,
+  saveWip, listWip, loadWip, removeWip,
 } from './mission-editor.js';
 import { MAP_SIZES } from '../map.js';
 import { createTabController } from './tab-controller.js';
@@ -71,6 +72,11 @@ import { CONDITIONS } from '../campaign/condition-registry.js';
 // unless loadImages() pins this first — that fallback is what blanked the
 // preview's textures + models. See `resolveAssetBase` below (exported for tests).
 export const ASSET_BASE = '/assets';
+
+// Debounce window for WIP autosave: a meaningful edit re-arms this timer, so the
+// draft is persisted ~this long after the author pauses (not on every keystroke
+// or paint stroke). Tunable.
+export const AUTOSAVE_DELAY_MS = 2000;
 
 // Resolve the asset base a Renderer should load from. Pure; exported for tests.
 // Guards the one rule that matters: never hand a renderer a relative base under
@@ -262,6 +268,27 @@ export function initEditor(doc = document) {
   // tracking now lives on the controller — a fresh editor starts clean.)
   const editor = createMissionEditor({ render: rerender });
 
+  // ── WIP autosave (localStorage) ───────────────────────────────────────────
+  // Every meaningful edit schedules a debounced save of the assembled mission to
+  // localStorage so an accidental reload/close doesn't lose work. The save is
+  // gated on editor.isDirty() at fire-time, so a freshly-loaded/created (clean)
+  // mission is never written, and we don't pollute the store with blank drafts.
+  const view = doc.defaultView ?? globalThis;
+  const storage = (() => {
+    try { return view.localStorage ?? null; } catch { return null; }
+  })();
+  let autosaveTimer = null;
+  function flushAutosave() {
+    if (autosaveTimer != null) { view.clearTimeout?.(autosaveTimer); autosaveTimer = null; }
+    if (!storage || !editor.isDirty()) return;
+    try { saveWip(storage, editor.assemble()); } catch { /* never let autosave break editing */ }
+  }
+  function scheduleAutosave() {
+    if (!storage) return;
+    if (autosaveTimer != null) view.clearTimeout?.(autosaveTimer);
+    autosaveTimer = view.setTimeout?.(flushAutosave, AUTOSAVE_DELAY_MS);
+  }
+
   const renderer = new Renderer(canvas, buildState(editor, layers));
   renderer.loadImages(ASSET_BASE);
 
@@ -285,6 +312,7 @@ export function initEditor(doc = document) {
     refreshPowerNodes(); // node toggles change the cluster list
     rebuildTimeline();   // events / phaseCycle may have changed
     notifyHistory();
+    scheduleAutosave();  // persist the edit to localStorage (debounced)
   }
 
   // Recenter + reset zoom, then redraw. Used by the Reset View button and
@@ -587,7 +615,14 @@ export function initEditor(doc = document) {
   // fire bubbling `change`; a full rerender relocates a re-rounded card and
   // refreshes the canvas area-trigger overlay. Add/remove go through editMeta
   // (their own undo step). Attached once — rebuildTimeline only clears children.
-  timelinePane?.addEventListener('change', () => rerender());
+  timelinePane?.addEventListener('change', () => { editor.markDirty(); rerender(); });
+
+  // Sidebar form fields (Mission / Objectives / Units) edit getMeta()'s object
+  // in place — bypassing the controller's emit — so they don't trip rerender or
+  // the dirty flag on their own. A bubbling `change` here marks the model dirty
+  // and schedules a WIP autosave so authored properties (title, briefing, phase
+  // cycle, objectives, …) are captured, not just canvas paint edits.
+  palette?.addEventListener('change', () => { editor.markDirty(); scheduleAutosave(); });
 
   rebuildMapPalette();
   rebuildForms();
@@ -604,8 +639,9 @@ export function initEditor(doc = document) {
   // transformed def from fetchMissionJSON, which deletes schema/conductor and
   // swaps map → mapBuilderFn / condition strings → fns) so a load→edit→download
   // round-trip stays byte-faithful.
-  function applyParsedMission(parsed) {
-    loadMissionJSON(parsed); // VALIDATE before touching the model
+  // Install an already-parsed mission into the model and refresh the whole UI.
+  // No validation — callers that need it (disk/bundled load) validate first.
+  function installMission(parsed) {
     editor.applyMission(populateFromMission(parsed));
     toast.dismissAll(); // clear any stale validation/resize toasts (carried nit)
     rebuildMapPalette(); // mode + dims may have changed
@@ -614,6 +650,11 @@ export function initEditor(doc = document) {
     resetViewAndDraw();
     editor.markClean(); // a freshly-loaded mission starts clean
     notifyHistory();
+  }
+
+  function applyParsedMission(parsed) {
+    loadMissionJSON(parsed); // VALIDATE before touching the model
+    installMission(parsed);
   }
 
   function loadMissionFile(file) {
@@ -696,11 +737,50 @@ export function initEditor(doc = document) {
     notifyHistory();
   }
 
+  // ── Launch picker (WIP resume) ────────────────────────────────────────────
+  // On open, offer to resume any in-progress drafts (newest first) before the
+  // blank default. Resuming a WIP draft bypasses full validation (drafts are
+  // intentionally incomplete) — a corrupt/unloadable draft is reported and
+  // dropped rather than crashing the editor.
+  function openLaunchPicker() {
+    const entries = storage ? listWip(storage) : [];
+    return buildLaunchPicker(doc, {
+      entries,
+      onPick: (id) => {
+        const e = loadWip(storage, id);
+        if (!e) { toast.show('That draft could not be loaded.', { type: 'err' }); removeWip(storage, id); return; }
+        try {
+          installMission(e.mission);
+          toast.show(`Resumed draft "${e.name}".`, { type: 'ok' });
+        } catch (err) {
+          toast.show(`Could not resume draft: ${err.message}`, { type: 'err' });
+          removeWip(storage, id); // unrecoverable — drop it so it stops appearing
+        }
+      },
+      // [+] New keeps the blank default the editor already booted with.
+      onNew: () => { toast.dismissAll(); },
+      // Load from disk: a transient picker routed through the existing load path.
+      onLoadDisk: () => {
+        const inp = doc.createElement('input');
+        inp.type = 'file';
+        inp.accept = '.json,application/json';
+        inp.addEventListener('change', async () => {
+          const f = inp.files && inp.files[0];
+          if (!f) return;
+          const res = await loadMissionFile(f);
+          toast.show(res.message, { type: res.ok ? 'ok' : 'err' });
+        });
+        inp.click();
+      },
+    });
+  }
+
   // First fit once layout settles, then mark clean so a freshly-opened editor
   // doesn't prompt "discard unsaved work?" on the first File ▸ New.
   renderer.resize();
   draw();
   editor.markClean();
+  openLaunchPicker();
 
   return {
     editor,
@@ -709,6 +789,8 @@ export function initEditor(doc = document) {
     loadMissionFile,
     loadMissionById,
     saveMission,
+    /** Re-open the WIP launch picker (also shown automatically on init). */
+    openLaunchPicker,
     // Undo / redo wiring for the top-bar buttons + keyboard shortcuts.
     undo,
     redo,
@@ -720,7 +802,7 @@ export function initEditor(doc = document) {
     // 2D Renderer has no render loop. But the 3D preview owns a live Babylon
     // engine; tear it down (and hide the overlay) when the tab is switched away
     // so a hidden tab never leaves an engine spinning.
-    pause() { closePreview(); },
+    pause() { flushAutosave(); closePreview(); },
     resume() { renderer.resize(); draw(); },
   };
 }
@@ -1464,6 +1546,83 @@ function readonlyRow(doc, label, value) {
   val.textContent = value;
   row.append(labelFor(doc, label), val);
   return row;
+}
+
+// ── Launch picker (WIP resume) ─────────────────────────────────────────────────
+// A modal shown when the Mission Editor opens. Lists in-progress WIP drafts
+// (newest first), each loadable, plus [+] New (blank default) and Load from
+// disk… (the existing file-load path). Pure DOM over injected callbacks so it's
+// unit-testable with a fake document. Returns { overlay, close }.
+export function buildLaunchPicker(doc, { entries = [], onPick, onNew, onLoadDisk, container } = {}) {
+  const host = container ?? doc.getElementById('editor-panel') ?? doc.body;
+  const overlay = doc.createElement('div');
+  overlay.className = 'e-modal';
+
+  const box = doc.createElement('div');
+  box.className = 'e-modal-box e-launch-box';
+  const h = doc.createElement('h3');
+  h.textContent = 'Mission Editor';
+  box.append(h);
+
+  const listWrap = doc.createElement('div');
+  listWrap.className = 'e-launch-list';
+  if (entries.length === 0) {
+    const empty = doc.createElement('div');
+    empty.className = 'e-launch-empty';
+    empty.textContent = 'No saved drafts yet — start a new mission or load one.';
+    listWrap.append(empty);
+  } else {
+    const sub = doc.createElement('div');
+    sub.className = 'e-launch-sub';
+    sub.textContent = 'Resume a draft';
+    listWrap.append(sub);
+    for (const e of entries) {
+      const row = doc.createElement('button');
+      row.className = 'e-launch-row';
+      row.type = 'button';
+      row.dataset.missionId = e.id;
+      const name = doc.createElement('span');
+      name.className = 'e-launch-name';
+      name.textContent = e.name || e.id;
+      const time = doc.createElement('span');
+      time.className = 'e-launch-time';
+      time.textContent = formatWipTime(e.savedAt);
+      row.append(name, time);
+      row.addEventListener('click', () => { close(); onPick?.(e.id); });
+      listWrap.append(row);
+    }
+  }
+  box.append(listWrap);
+
+  const btns = doc.createElement('div');
+  btns.className = 'e-modal-btns';
+  const newBtn = actionBtn(doc, '＋ New', () => { close(); onNew?.(); }, 'Start a new blank mission');
+  const diskBtn = actionBtn(doc, 'Load from disk…', () => { close(); onLoadDisk?.(); }, 'Load a mission JSON file from disk');
+  btns.append(newBtn, diskBtn);
+  box.append(btns);
+
+  overlay.append(box);
+  // Backdrop click dismisses to the blank default (same outcome as [+] New).
+  overlay.addEventListener('click', (ev) => { if (ev.target === overlay) close(); });
+  host.append(overlay);
+
+  function close() { overlay.remove(); }
+  return { overlay, close };
+}
+
+// Human-friendly "last edited" label for a WIP draft timestamp. Pure; exported
+// for tests. Falls back to a locale date string for drafts older than a week.
+export function formatWipTime(ts, now = Date.now()) {
+  if (!ts || typeof ts !== 'number') return '';
+  const diff = Math.max(0, now - ts);
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 7) return `${day}d ago`;
+  try { return new Date(ts).toLocaleDateString(); } catch { return `${day}d ago`; }
 }
 
 // ── New-mission creation dialog (item 4) ───────────────────────────────────────

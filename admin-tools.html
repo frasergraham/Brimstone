@@ -398,6 +398,18 @@
     #editor-panel .e-modal-box h3 { margin: 0 0 10px 0; font-size: 12px; color: #c4a04a; letter-spacing: 1.5px; text-transform: uppercase; }
     #editor-panel .e-modal-btns { display: flex; gap: 8px; margin-top: 14px; }
     #editor-panel .e-modal-btns .e-action { margin: 0; }
+    /* Launch picker (WIP resume) */
+    #editor-panel .e-launch-list { display: flex; flex-direction: column; gap: 4px; max-height: 280px; overflow-y: auto; }
+    #editor-panel .e-launch-sub { font-size: 10px; color: #a08858; letter-spacing: 1px; text-transform: uppercase; margin: 2px 0 4px; }
+    #editor-panel .e-launch-empty { font-size: 11px; color: #8a7a5a; padding: 8px 2px; }
+    #editor-panel .e-launch-row {
+      display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+      width: 100%; text-align: left; padding: 7px 9px; background: #221d14;
+      border: 1px solid #3a3122; color: #e6d8b8; cursor: pointer; font-size: 12px;
+    }
+    #editor-panel .e-launch-row:hover { background: #2c2418; border-color: #c4a04a; }
+    #editor-panel .e-launch-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #editor-panel .e-launch-time { font-size: 10px; color: #8a7a5a; flex: none; }
   </style>
 </head>
 <body>

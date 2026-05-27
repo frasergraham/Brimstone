@@ -1432,6 +1432,141 @@ export function populateFromMission(parsed) {
   };
 }
 
+// ── WIP autosave store (localStorage-backed) ─────────────────────────────────
+// As the author edits, the editor periodically serialises the working mission
+// (the SAME assembled schema:1 JSON that download/validate use) into browser
+// localStorage so an accidental reload/close doesn't lose work. Entries are
+// namespaced and keyed by mission id — one slot per named mission, so re-saving
+// the same mission overwrites in place rather than growing unbounded. A global
+// cap evicts the oldest drafts beyond `WIP_MAX_SLOTS`.
+//
+// All helpers take an injected `storage` (a localStorage-like object exposing
+// getItem / setItem / removeItem / key / length) so they're unit-testable with a
+// plain stub and never touch a real DOM. Every read is guarded: a corrupt or
+// schema-incompatible entry is skipped (and purged) rather than crashing the
+// editor.
+
+export const WIP_KEY_PREFIX = 'brimstone:mission-editor:wip:';
+/** The mission-JSON schema this editor reads/writes. WIP entries with a
+ *  different `mission.schema` are treated as incompatible and discarded. */
+export const WIP_SCHEMA = 1;
+/** Maximum distinct WIP drafts retained; the oldest beyond this are evicted. */
+export const WIP_MAX_SLOTS = 12;
+
+/** localStorage key for a WIP draft of mission `id`. */
+export function wipStorageKey(id) {
+  return WIP_KEY_PREFIX + String(id ?? 'mission');
+}
+
+/**
+ * Wrap an assembled mission in the stored envelope: `{ id, name, savedAt,
+ * mission }`. `id`/`name` are derived from the mission so the launch picker can
+ * label drafts without re-parsing the whole map.
+ */
+export function makeWipEntry(mission, { name, savedAt } = {}) {
+  const id = (mission && mission.id != null) ? String(mission.id) : 'mission';
+  return {
+    id,
+    name: name || (mission && mission.title) || id,
+    savedAt: typeof savedAt === 'number' ? savedAt : Date.now(),
+    mission,
+  };
+}
+
+// Collect the localStorage keys belonging to WIP drafts. Snapshotted up front so
+// callers can removeItem() during iteration without index-shift surprises.
+function _wipKeys(storage) {
+  const keys = [];
+  const n = storage.length ?? 0;
+  for (let i = 0; i < n; i++) {
+    const k = storage.key(i);
+    if (typeof k === 'string' && k.startsWith(WIP_KEY_PREFIX)) keys.push(k);
+  }
+  return keys;
+}
+
+// Parse one stored entry; returns a normalised envelope or null when the slot is
+// missing, unparseable, or schema-incompatible (so corrupt data never crashes).
+function _readWipAt(storage, key) {
+  let raw;
+  try { raw = storage.getItem(key); } catch { return null; }
+  if (!raw) return null;
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch { return null; }
+  if (!parsed || typeof parsed !== 'object') return null;
+  const m = parsed.mission;
+  if (!m || typeof m !== 'object') return null;
+  // Incompatible schema → discard rather than feed bad data into the model.
+  if (m.schema != null && m.schema !== WIP_SCHEMA) return null;
+  return {
+    id: parsed.id != null ? String(parsed.id) : (m.id != null ? String(m.id) : 'mission'),
+    name: parsed.name || m.title || (parsed.id != null ? String(parsed.id) : 'mission'),
+    savedAt: typeof parsed.savedAt === 'number' ? parsed.savedAt : 0,
+    mission: m,
+  };
+}
+
+/**
+ * Persist `mission` (an assembled schema:1 JSON object) as a WIP draft, then
+ * evict the oldest drafts beyond `cap`. No-op (returns null) when there's no
+ * storage or the write fails (e.g. quota exceeded). Returns the stored envelope.
+ */
+export function saveWip(storage, mission, opts = {}) {
+  if (!storage || !mission) return null;
+  const entry = makeWipEntry(mission, opts);
+  try {
+    storage.setItem(wipStorageKey(entry.id), JSON.stringify(entry));
+  } catch {
+    return null; // quota / serialisation failure — keep editing, just don't persist
+  }
+  evictWip(storage, opts.cap ?? WIP_MAX_SLOTS);
+  return entry;
+}
+
+/** All valid WIP drafts, newest first. Corrupt/incompatible entries are skipped. */
+export function listWip(storage) {
+  if (!storage) return [];
+  const out = [];
+  for (const k of _wipKeys(storage)) {
+    const e = _readWipAt(storage, k);
+    if (e) out.push(e);
+  }
+  out.sort((a, b) => b.savedAt - a.savedAt);
+  return out;
+}
+
+/** Load a single WIP draft by id, or null if missing/corrupt/incompatible. */
+export function loadWip(storage, id) {
+  if (!storage) return null;
+  return _readWipAt(storage, wipStorageKey(id));
+}
+
+/** Delete a WIP draft by id. Silent on any storage error. */
+export function removeWip(storage, id) {
+  if (!storage) return;
+  try { storage.removeItem(wipStorageKey(id)); } catch { /* ignore */ }
+}
+
+/**
+ * Trim the WIP store to at most `cap` drafts, evicting the oldest by `savedAt`.
+ * Corrupt/incompatible entries are purged in the same pass (they can't be
+ * resumed anyway and would otherwise occupy a slot forever).
+ */
+export function evictWip(storage, cap = WIP_MAX_SLOTS) {
+  if (!storage) return;
+  const live = [];
+  for (const k of _wipKeys(storage)) {
+    const e = _readWipAt(storage, k);
+    if (!e) { try { storage.removeItem(k); } catch { /* ignore */ } continue; }
+    live.push({ key: k, savedAt: e.savedAt });
+  }
+  if (live.length <= cap) return;
+  live.sort((a, b) => a.savedAt - b.savedAt); // oldest first
+  for (let i = 0; i < live.length - cap; i++) {
+    try { storage.removeItem(live[i].key); } catch { /* ignore */ }
+  }
+}
+
 // ── Controller ───────────────────────────────────────────────────────────────
 
 const _TOOL_DISPATCH = {
@@ -1662,6 +1797,10 @@ export function createMissionEditor({ render } = {}) {
     // ── Dirty tracking (carried-over nit) ────────────────────────────────
     isDirty: () => dirty,
     markClean() { dirty = false; },
+    // Form fields edit getMeta()'s object in place (bypassing emit), so the UI
+    // marks the model dirty explicitly on those change events — this is what the
+    // WIP autosave gates on. Pure flag flip; no render.
+    markDirty() { dirty = true; },
   };
 }
 
