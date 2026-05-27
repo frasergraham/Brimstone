@@ -25,9 +25,10 @@ import {
   forestTreesForHex,
   hexToWorld,
   Renderer3D,
+  riverExtensionRingAlphas,
   tilesExtent,
 } from '../src/renderer-3d.js';
-import { hexKey } from '../src/hex.js';
+import { hexKey, SQRT3 } from '../src/hex.js';
 
 function buildRectTiles(cols, rows) {
   const m = new Map();
@@ -456,5 +457,141 @@ describe('Renderer3D — _fadedTreeTemplateFor (real-tree path)', () => {
     const r = new Renderer3D(null, null);
     r._babylon = makeStubBabylon();
     assert.equal(r._fadedTreeTemplateFor('nope.glb', 0.2), null);
+  });
+});
+
+// ── MultiMaterial sub-material fade (the trees-stay-opaque ROOT CAUSE) ───────
+//
+// A merged GLB tree's material is a Babylon MultiMaterial. At draw time each
+// sub-mesh renders with its corresponding SUBMATERIAL — the container's own
+// `alpha` / `transparencyMode` are ignored. The original border-tree fade set
+// alpha only on the container, so the actual trunk/leaf PBR submaterials stayed
+// alpha=1 / OPAQUE and the trees rendered as a solid wall (verified in-browser
+// via headless Chrome: subMaterials were alpha:1, transparencyMode:0). The fix
+// clones + fades every submaterial (cloning so the shared opaque originals the
+// in-map forest instances off are never mutated). This guards against silently
+// regressing back to opaque.
+
+describe('Renderer3D — _fadedTreeTemplateFor (MultiMaterial sub-materials)', () => {
+  function makeSubMat(name) {
+    return {
+      name, alpha: 1, transparencyMode: 0, needDepthPrePass: false,
+      clone(n) { return makeSubMat(n); },
+      forceCompilation() {},
+    };
+  }
+  // Template whose mesh material is a MultiMaterial (subMaterials array).
+  // `MultiMaterial.clone()` shares the sub-materials by reference, mirroring
+  // Babylon — so the renderer MUST clone each sub before fading it.
+  function makeMultiTemplateStub(name) {
+    const subs = [makeSubMat('trunk'), makeSubMat('leaf')];
+    const multi = {
+      name: `${name}_multi`, alpha: 1, transparencyMode: 0, needDepthPrePass: false,
+      subMaterials: subs,
+      clone(n) {
+        // shallow: new container, SAME sub-material references (like Babylon)
+        return { ...this, name: n, subMaterials: this.subMaterials, clone: this.clone };
+      },
+      // MultiMaterial has no forceCompilation — omitted on purpose.
+    };
+    return {
+      name, material: multi, metadata: { kind: 'tree-template', file: name },
+      isPickable: false, getChildMeshes: () => [], setEnabled() {},
+      clone(n) {
+        return {
+          name: n, material: this.material.clone(`${this.material.name}_clone`),
+          metadata: undefined, isPickable: true, getChildMeshes: () => [], setEnabled() {},
+        };
+      },
+    };
+  }
+
+  test('fades every PBR sub-material — not just the container', () => {
+    const r = new Renderer3D(null, null);
+    r._babylon = makeStubBabylon();
+    const tmpl = makeMultiTemplateStub('tree-multi.glb');
+    r._treeTemplates.set('tree-multi.glb', tmpl);
+    const faded = r._fadedTreeTemplateFor('tree-multi.glb', 0.2);
+    // Container reflects the requested alpha + alpha-blend mode…
+    assert.equal(faded.material.alpha, 0.2);
+    assert.equal(faded.material.transparencyMode, 2);
+    // …AND every sub-material (what actually draws) is faded + alpha-blended.
+    assert.equal(faded.material.subMaterials.length, 2);
+    for (const sub of faded.material.subMaterials) {
+      assert.equal(sub.alpha, 0.2, 'sub-material must carry the fade alpha');
+      assert.equal(sub.transparencyMode, 2, 'sub-material must alpha-blend');
+      assert.equal(sub.needDepthPrePass, true);
+    }
+  });
+
+  test('clones sub-materials — the shared opaque originals stay untouched', () => {
+    const r = new Renderer3D(null, null);
+    r._babylon = makeStubBabylon();
+    const tmpl = makeMultiTemplateStub('tree-multi.glb');
+    const originalSubs = tmpl.material.subMaterials;
+    r._treeTemplates.set('tree-multi.glb', tmpl);
+    const faded = r._fadedTreeTemplateFor('tree-multi.glb', 0.5);
+    // Originals must NOT be mutated (the in-map forest instances off them).
+    for (const sub of originalSubs) {
+      assert.equal(sub.alpha, 1, 'shared sub-material left opaque');
+      assert.equal(sub.transparencyMode, 0);
+    }
+    // And the faded clone holds DISTINCT sub-material objects.
+    for (let i = 0; i < originalSubs.length; i++) {
+      assert.notEqual(faded.material.subMaterials[i], originalSubs[i]);
+    }
+  });
+});
+
+// ── River-extension per-ring edge fade ──────────────────────────────────────
+//
+// The wilderness river extension is one ribbon spanning the whole band, so it
+// can't bucket into a single per-tier material like the trees. Instead each
+// centreline sample maps to its border ring and the per-ring alpha is folded
+// into the ribbon's vertex colour. `riverExtensionRingAlphas` is that pure
+// mapping; before the fix the river ran at full opacity to the band edge.
+
+describe('Renderer3D — riverExtensionRingAlphas (river edge fade)', () => {
+  const ext = tilesExtent(buildRectTiles(13, 13)); // cols/rows 0..12
+  const bandDepth = 6;
+
+  // World position of a hex centre (radius=1) — same layout the renderer uses.
+  const at = (col, row) => ({ x: SQRT3 * (col + 0.5 * (row & 1)), z: 1.5 * row });
+
+  test('samples over the outer rings get the same alpha as ground + trees', () => {
+    // Walk outward along row 6, left of the playable map: depth 6→0.2, 5→0.5,
+    // 4→0.8, ≤3→opaque — identical to borderForestAlphaForTile.
+    const pts = [-6, -5, -4, -3].map(c => at(c, 6));
+    const alphas = riverExtensionRingAlphas(pts, ext, bandDepth);
+    assert.deepEqual(alphas, [0.2, 0.5, 0.8, 1.0]);
+    // And it matches the ground/tree curve tile-for-tile.
+    for (let i = 0; i < pts.length; i++) {
+      const col = [-6, -5, -4, -3][i];
+      assert.equal(alphas[i], borderForestAlphaForTile(col, 6, ext, bandDepth));
+    }
+  });
+
+  test('samples inside the playable map stay fully opaque', () => {
+    const alphas = riverExtensionRingAlphas([at(6, 6), at(0, 0)], ext, bandDepth);
+    assert.deepEqual(alphas, [1.0, 1.0]);
+  });
+
+  test('non-array input → empty (defensive)', () => {
+    assert.deepEqual(riverExtensionRingAlphas(null, ext, bandDepth), []);
+  });
+});
+
+// ── _applyAlphaBlend (shared fade recipe) ───────────────────────────────────
+
+describe('Renderer3D — _applyAlphaBlend', () => {
+  test('flags a material alpha-blended at the requested alpha', () => {
+    const r = new Renderer3D(null, null);
+    r._babylon = makeStubBabylon();
+    const mat = { alpha: 1, transparencyMode: 0, needDepthPrePass: false };
+    const out = r._applyAlphaBlend(mat, 0.5);
+    assert.equal(out, mat, 'mutates + returns the same material');
+    assert.equal(mat.alpha, 0.5);
+    assert.equal(mat.transparencyMode, 2); // MATERIAL_ALPHABLEND
+    assert.equal(mat.needDepthPrePass, true);
   });
 });

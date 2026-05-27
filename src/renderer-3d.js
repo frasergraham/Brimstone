@@ -2428,9 +2428,28 @@ export class Renderer3D {
     for (const m of meshes) {
       if (m.material && typeof m.material.clone === 'function') {
         const fm = m.material.clone(`${m.material.name || 'treemat'}_a${alpha}`);
-        fm.alpha = alpha;
-        if (BABYLON?.Material) fm.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
-        fm.needDepthPrePass = true;
+        this._applyAlphaBlend(fm, alpha);
+        // ROOT CAUSE of "border trees stay opaque": a merged GLB tree's material
+        // is a MultiMaterial. Its own `alpha` / `transparencyMode` are IGNORED
+        // at draw time — each sub-mesh renders with its corresponding
+        // SUBMATERIAL (here a trunk PBR + a leaf PBR), so fading only the
+        // container left the actual foliage fully opaque. `MultiMaterial.clone()`
+        // also shares the original subMaterials by reference, so we must clone
+        // each one before fading (otherwise the shared opaque originals the
+        // in-map forest instances off would go translucent too), then rebind.
+        if (Array.isArray(fm.subMaterials) && fm.subMaterials.length > 0) {
+          fm.subMaterials = fm.subMaterials.map((sub) => {
+            if (!sub || typeof sub.clone !== 'function') return sub;
+            const fsub = sub.clone(`${sub.name || 'submat'}_a${alpha}`);
+            this._applyAlphaBlend(fsub, alpha);
+            // Re-bake INSTANCES (+ SHADOWS) defines on the faded submaterial so
+            // its hardware instances compile the alpha path (see below).
+            if (typeof fsub.forceCompilation === 'function') {
+              try { fsub.forceCompilation(m, { useInstances: true }); } catch (_e) { /* headless */ }
+            }
+            return fsub;
+          });
+        }
         m.material = fm;
         // Re-bake the INSTANCES (+ SHADOWS) shader defines on the faded
         // material so its hardware instances render with shadow sampling,
@@ -4803,6 +4822,18 @@ export class Renderer3D {
       extMat.diffuseColor.g *= k;
       extMat.diffuseColor.b *= k;
     }
+    // Mark the (private, freshly-built) extension material for explicit
+    // alpha-blending so the per-ring edge fade baked into the ribbon's vertex
+    // alpha below actually composites against the scene — matching the ground
+    // + tree fade recipe (`_applyAlphaBlend`). `_buildRibbonMaterial` returns a
+    // NEW StandardMaterial each call, so this never touches the in-map river's
+    // material. The playable river ribbon stays fully opaque.
+    if (this._babylon?.Material) {
+      extMat.transparencyMode = this._babylon.Material.MATERIAL_ALPHABLEND;
+    }
+    // Playable-map extent — used to map each ribbon sample to its border ring
+    // so the river fades in lockstep with the ground + trees on that ring.
+    const ringExt = tilesExtent(this.state.tiles);
     // Extend one hex past the outermost band tile so the ribbon's far end
     // clearly carries past the band's silhouette instead of fading inside it.
     // Centre-to-centre spacing in any axial direction is SQRT3 world units.
@@ -4875,14 +4906,24 @@ export class Renderer3D {
       ribbon.parent     = this._mapRoot;
       ribbon.isPickable = false;
       ribbon.material   = extMat;
-      // Per-vertex alpha keyed off path index (5 paths × N points).
+      // Per-vertex alpha = lateral feather (path index) × per-ring EDGE FADE
+      // (point index). The lateral term tapers the ribbon's left/right edges
+      // into the ground (paths 0 and 4 → 0); the per-ring term dissolves the
+      // ribbon outward so it fades in lockstep with the border ground + trees
+      // it threads through (outermost ring → 0.2, next → 0.5, …). Without the
+      // per-ring term the centreline ran at full opacity all the way to the
+      // band's outer edge and then hard-stopped (operator: the river isn't
+      // fading either).
       const totalVerts = ribbon.getTotalVertices();
       const N = pts.length;
       const alphaByPath = [0.0, 1.0, 1.0, 1.0, 0.0];
+      const ringAlphas  = riverExtensionRingAlphas(pts, ringExt, bandDepth);
       const colors = new Float32Array(totalVerts * 4);
       for (let v = 0; v < totalVerts; v++) {
-        const pathIdx = Math.min(alphaByPath.length - 1, Math.floor(v / N));
-        const a = alphaByPath[pathIdx];
+        const pathIdx  = Math.min(alphaByPath.length - 1, Math.floor(v / N));
+        const pointIdx = v % N;
+        const ringA    = ringAlphas[pointIdx] ?? 1.0;
+        const a = alphaByPath[pathIdx] * ringA;
         colors[v * 4 + 0] = 1;
         colors[v * 4 + 1] = 1;
         colors[v * 4 + 2] = 1;
@@ -5585,6 +5626,22 @@ export class Renderer3D {
     return mat;
   }
 
+  /** Flag a material for standard alpha-blending at `alpha`, plus a per-mesh
+   *  depth pre-pass — the same recipe `_alphaMaterialFor` /
+   *  `_borderGroundMaterialFor` apply, factored out so the faded GLB tree
+   *  template can fade BOTH its MultiMaterial container AND each PBR
+   *  submaterial identically (ground, trees, and river all blend + sort the
+   *  same way). Mutates `mat` in place — callers pass a CLONE so shared opaque
+   *  materials are never touched. */
+  _applyAlphaBlend(mat, alpha) {
+    if (!mat) return mat;
+    const BABYLON = this._babylon;
+    mat.alpha = alpha;
+    if (BABYLON?.Material) mat.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
+    mat.needDepthPrePass = true;
+    return mat;
+  }
+
   /** Like `_materialFor`, but returns a translucent variant at `alpha` < 1 with
    *  standard alpha-blending enabled. Cached separately (keyed `color@a<alpha>`)
    *  so the opaque shared materials used by the in-map forest are never mutated.
@@ -6148,15 +6205,33 @@ export class Renderer3D {
     }
     // Border-forest cylinders share the FOREST sprite pool but live in a
     // separate map — upgrade them too so the texture appears around the edge.
+    // CRITICAL: route through `_borderGroundMaterialFor` (NOT the plain
+    // `_terrainMaterialFor`) so the per-ring EDGE FADE is preserved. A plain
+    // terrain material is fully opaque, so swapping it in when the atlas
+    // arrives would silently un-fade the band's outer rings — the ground would
+    // snap back to a hard opaque wall while the trees + river stayed
+    // translucent. Re-derive ext + bandDepth exactly as `_buildMapBorderForest`
+    // does so the alpha matches the original build tier-for-tier.
+    const ext = tilesExtent(this.state.tiles);
+    let bandDepth = 0;
+    for (const [, hex] of this._borderForestHexesByKey) {
+      const md = hex?.metadata;
+      if (!md) continue;
+      bandDepth = Math.max(bandDepth, borderTileDepthFromPlayable(md.col, md.row, ext));
+    }
+    const borderBaseColor = TILE_COLOR[TileType.FOREST] || TILE_COLOR[TileType.GRASS];
     for (const [, hex] of this._borderForestHexesByKey) {
       const md = hex.metadata;
       if (!md) continue;
       const syntheticTile = { type: TileType.FOREST, base: TileType.FOREST, col: md.col, row: md.row };
       // Always use the fogged variant — border tiles are permanently
-      // out-of-sight wilderness (see `_buildMapBorderForest`).
-      const mat = this._terrainMaterialFor(
+      // out-of-sight wilderness (see `_buildMapBorderForest`) — at this ring's
+      // edge-fade alpha so ground keeps dissolving in lockstep with the trees.
+      const alpha = borderForestAlphaForTile(md.col, md.row, ext, bandDepth);
+      const mat = this._borderGroundMaterialFor(
         terrainSpriteIdFor(syntheticTile, md.col, md.row),
-        { fogged: true },
+        borderBaseColor,
+        alpha,
       );
       if (mat) hex.material = mat;
     }
@@ -9616,6 +9691,24 @@ export function borderForestAlphaForTile(col, row, ext, bandDepth) {
   const depth = borderTileDepthFromPlayable(col, row, ext);
   if (depth <= 0) return 1.0;
   return borderForestAlphaForOuterRing(bandDepth - depth);
+}
+
+/** Per-ring edge-fade alpha for each centreline sample of a river extension,
+ *  so the wilderness river dissolves in lockstep with the border ground +
+ *  trees it threads through (operator: the river must fade too). Each
+ *  world-space `{x, z}` sample is mapped back to its hex via the odd-r inverse
+ *  of `hexToWorld`, then looked up through `borderForestAlphaForTile` — the
+ *  SAME per-ring alpha curve the ground and trees use, so a sample sitting over
+ *  the outermost ring gets 0.2, the next 0.5, etc. Samples over (or inside) the
+ *  playable map return 1.0. Pure — same inputs, same output. */
+export function riverExtensionRingAlphas(pts, ext, bandDepth, radius = HEX_RADIUS_WORLD) {
+  if (!Array.isArray(pts)) return [];
+  return pts.map((p) => {
+    if (!p) return 1.0;
+    const row = Math.round(p.z / (1.5 * radius));
+    const col = Math.round(p.x / (SQRT3 * radius) - 0.5 * (row & 1));
+    return borderForestAlphaForTile(col, row, ext, bandDepth);
+  });
 }
 
 /** Deterministic cone layout for a border-forest hex. Same recipe as
