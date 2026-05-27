@@ -947,6 +947,33 @@ function _playAttackIntroAnim(actorSnap, targetSnap, fromCol, fromRow, toCol, to
   }
 }
 
+// 3D cinematic combat resolution (G4 Phase 2+3): NO modal dialog in 3D — the
+// dice/total read out on billboarded cards above the combatants while the
+// attacker's punch is FROZEN mid-strike, then the strike resumes to completion
+// and the result floaters play. Mirrors what the modal used to gate, but driven
+// purely by the animation queue so resolution still advances.
+//
+// Sequence: lunge+punch already started by `_playAttackIntroAnim`. Here:
+//   1. freeze the punch on its impact frame (holds the strike pose),
+//   2. spawn the dice cards above both heads,
+//   3. await the card hold+fade (strike stays frozen the whole time),
+//   4. resume the punch through to completion,
+//   5. play the result floaters and drain them.
+// The caller still owns the lunge return (returnAllLungeAnims) afterwards.
+async function _run3DCombatCardHold(actorSnap, targetSnap, result, redrawFn) {
+  renderer.holdPunchAtImpact?.();
+  if (typeof renderer.addCombatCard === 'function') {
+    renderer.addCombatCard(actorSnap.id,  'attacker', result);
+    renderer.addCombatCard(targetSnap.id, 'defender', result);
+  }
+  // Hold while the cards are up — the punch stays paused at impact.
+  await renderer.waitForAnimations();
+  // Resume the strike to completion (no-op resolve if nothing was frozen).
+  await (renderer.resumePunch?.() ?? Promise.resolve());
+  _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
+  await renderer.waitForAnimations();
+}
+
 function _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn) {
   renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
   if (result?.damage)      renderer.addHpChangeFlash(targetSnap.col, targetSnap.row, -(result.damage));
@@ -1578,29 +1605,23 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
               redrawFn();
             }
 
-            // ── Step 3: Dialog (cinematic) or toast+floater (fast/vfast) ─
+            // ── Step 3: Card-hold (3D) / Dialog (2D cinematic) or toast (fast) ─
             if (speed === 'cinematic') {
-              // Full dialog for every battle — no significance filter.
               if (_stepHas3DCombat && _eventFrameIndex) {
                 // 3D (Phase 1): frame this battle's CLUSTER and HOLD. Only
                 // re-issue the camera move when crossing into a new cluster;
                 // same-cluster battles issue no camera op, so the non-restoring
-                // `frameEntities` frame persists across the chain. No 2D inset
-                // docking in 3D (the dialog is a centered overlay there).
+                // `frameEntities` frame persists across the chain.
                 const fi = _eventFrameIndex.get(ev);
                 if (fi != null && fi !== _heldFrameIndex) {
                   renderer.frameEntities(_combatFrames[fi].ids, { padding: 1.15 });
                   _heldFrameIndex = fi;
                 }
                 _heldCombatFrame3D = true;
-                // G4 Phase 2: float a dice/total card above BOTH combatants'
-                // heads, alongside the modal (modal stays until Phase 3). The
-                // card tracks the lunge (parented to the standee) and self-
-                // disposes after a hold+fade; waitForAnimations() drains it.
-                if (typeof renderer.addCombatCard === 'function') {
-                  renderer.addCombatCard(actorSnap.id,  'attacker', result);
-                  renderer.addCombatCard(targetSnap.id, 'defender', result);
-                }
+                // G4 Phase 3: NO modal in 3D. Freeze the strike mid-swing, read
+                // the dice cards above both heads, resume the strike, then play
+                // the result floaters — all via the animation queue.
+                await _run3DCombatCardHold(actorSnap, targetSnap, result, redrawFn);
               } else {
                 // 2D: per-battle frameHexes with right-dock inset (unchanged).
                 // Offset camera so the map is visible beside the docked dialog.
@@ -1620,14 +1641,14 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
                   );
                 }
                 _lastBattleFrameKey = frameKey;
+                // 2D keeps the modal: wait for dismiss, THEN play floaters.
+                await new Promise(resolve => {
+                  ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
+                });
+                _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
+                // Drain all floaters (HP text 1800ms, death burst 600ms) before next battle.
+                await renderer.waitForAnimations();
               }
-              // Wait for dialog dismiss, THEN play floaters so nothing overlaps.
-              await new Promise(resolve => {
-                ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
-              });
-              _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
-              // Drain all floaters (HP text 1800ms, death burst 600ms) before next battle.
-              await renderer.waitForAnimations();
             } else if (speed === 'fast' || speed === 'vfast') {
               // Toast + floater only — no dialog.
               // On a miss show a randomised flavour word; hits communicate via HP floater.
@@ -1856,6 +1877,9 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
               renderer.frameEntities([actorSnap.id, targetSnap.id], { padding: 1.15 });
             }
             _heldCombatFrame3D = true;
+            // G4 Phase 3: NO modal in 3D — frozen strike + dice cards + resume +
+            // floaters, same as the regular battle arm.
+            await _run3DCombatCardHold(actorSnap, targetSnap, result, redrawFn);
           } else {
             // 2D: reuse the same frame-key tracking from Phase 2 so guard strikes
             // at the same position as a preceding regular battle skip reframing.
@@ -1872,12 +1896,13 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
               );
             }
             _lastBattleFrameKey = frameKey;
+            // 2D keeps the modal.
+            await new Promise(resolve => {
+              ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
+            });
+            _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
+            await renderer.waitForAnimations();
           }
-          await new Promise(resolve => {
-            ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
-          });
-          _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
-          await renderer.waitForAnimations();
         } else {
           if (!result.hit) {
             const _MISS_TEXT = ['miss', 'dodged', 'blocked', 'parried', 'deflected'];

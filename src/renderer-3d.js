@@ -1620,6 +1620,7 @@ export class Renderer3D {
     this._paladinSource     = null;
     this._paladinLoadPromise = null; // de-dupes concurrent load attempts
     this._punchLoadPromise   = null; // de-dupes the lazy punch.glb load
+    this._frozenPunchImpactFrame = null; // set while a punch is held mid-strike
     // Uniform scale applied to cloned paladin meshes. Computed once at load
     // time from the source mesh's natural bbox height so the visible model
     // lands at TARGET_PALADIN_WORLD_HEIGHT regardless of FBX export units
@@ -3666,6 +3667,74 @@ export class Renderer3D {
       src.punchPlaying = false;
       src.activeGroup = null;
     }
+  }
+
+  /** Frame range [from, to] of the shared retargeted punch clip, or null when
+   *  the clip hasn't loaded / has a degenerate range. */
+  _punchFrameRange() {
+    const punch = this._paladinSource?.punchGroup;
+    if (!punch) return null;
+    const from = Number.isFinite(punch.from) ? punch.from : 0;
+    const to   = Number.isFinite(punch.to)   ? punch.to   : 0;
+    if (!(to > from)) return null;
+    return { from, to };
+  }
+
+  /** Freeze an IN-FLIGHT punch on its mid/impact frame and hold it there.
+   *
+   *  Used by the 3D cinematic battle arm: the attacker lunges in and the punch
+   *  starts (via `addLungeAnim` → `_startPaladinPunch`), then this pauses the
+   *  strike at the impact pose while the dice cards read out, after which
+   *  `resumePunch()` carries it through to completion. `punchPlaying` stays set
+   *  so the idle/walk toggle won't grab the shared skeleton mid-freeze.
+   *
+   *  No-op (returns false) unless a punch is actually playing — so a ranged or
+   *  cone-token attacker (which never started the shared punch) doesn't freeze
+   *  every idle paladin in the scene. The frozen frame is stashed for resume. */
+  holdPunchAtImpact() {
+    const src = this._paladinSource;
+    const punch = src?.punchGroup;
+    if (!src || !punch || !src.punchPlaying) return false;
+    const range = this._punchFrameRange();
+    if (!range) return false;
+    const impact = range.from + (range.to - range.from) * PUNCH_IMPACT_FRAC;
+    this._frozenPunchImpactFrame = impact;
+    if (typeof punch.goToFrame === 'function') punch.goToFrame(impact);
+    if (typeof punch.pause === 'function') punch.pause();
+    return true;
+  }
+
+  /** Resume a punch frozen by `holdPunchAtImpact()` from its impact frame
+   *  through to the end of the clip. Returns a promise that resolves when the
+   *  strike completes (so the cinematic arm can await it before the lunge
+   *  return). Clears `punchPlaying` on completion so idle/walk resume. No-op
+   *  resolve when nothing is frozen. */
+  resumePunch() {
+    const src = this._paladinSource;
+    const punch = src?.punchGroup;
+    if (!src || !punch || this._frozenPunchImpactFrame == null) return Promise.resolve();
+    this._frozenPunchImpactFrame = null;
+    return new Promise(resolve => {
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        src.punchPlaying = false;
+        src.activeGroup = null;
+        resolve();
+      };
+      const obs = punch.onAnimationGroupEndObservable;
+      if (obs && typeof obs.addOnce === 'function') {
+        obs.addOnce(done);
+        // Unpause: resume the paused group from the impact frame to its end.
+        if (typeof punch.play === 'function') punch.play(false);
+        else done();
+      } else {
+        // Stub / no end observable — just unpause and resolve.
+        if (typeof punch.play === 'function') punch.play(false);
+        done();
+      }
+    });
   }
 
   /** Clone the paladin source skeleton and re-link each cloned bone's
@@ -8766,18 +8835,29 @@ export class Renderer3D {
     applyFlatUnitIconMaterial(BABYLON, mat); // flat-lit UI sticker
     plane.material = mat;
 
-    // Parent to the standee so the card tracks the lunge slide. Sit just above
-    // the unit-icon badge (badge centre is cone-relative; clear its top edge,
-    // then add half the card height + the gap).
+    // Parent to the standee so the card tracks the lunge slide. Sit JUST ABOVE
+    // THE HEAD with a small gap — not stacked above the unit-icon badge. The
+    // old badge-stacked offset pushed the card off the top of the screen at the
+    // tight combat-frame zoom (operator feedback). Anchoring to the head top
+    // (cone-relative) + small gap + half the card height keeps it inside the
+    // viewport. The unit-icon badge is hidden for the card's lifetime (below)
+    // so the two billboards never overlap.
     plane.parent = standee.plane;
-    const badgeCentreY = iconBillboardYRelativeToCone(standee.leader);
+    const headTopRel = headTopRelativeToCone(standee.leader);
     plane.position.set(
       0,
-      badgeCentreY + UNIT_ICON_PLANE_SIZE / 2 + COMBAT_CARD_Y_GAP
-        + COMBAT_CARD_PLANE_HEIGHT / 2,
+      headTopRel + COMBAT_CARD_Y_GAP + COMBAT_CARD_PLANE_HEIGHT / 2,
       0,
     );
     plane.visibility = 1;
+
+    // Hide this unit's icon badge while the card is up. The card carries the
+    // dice/total readout and sits where the icon would; hiding the icon keeps
+    // the above-head stack clean (no overlap) and is restored on dispose.
+    const iconEntry  = this._unitIconBadges?.get(entityId);
+    const iconPlane  = iconEntry?.plane ?? null;
+    const iconVisRestore = iconPlane ? iconPlane.visibility : null;
+    if (iconPlane) iconPlane.visibility = 0;
 
     const fps = 60;
     const holdFrames = Math.max(1, Math.round(holdMs / 1000 * fps));
@@ -8797,6 +8877,8 @@ export class Renderer3D {
         plane.dispose();
         mat.dispose();
         tex.dispose();
+        // Restore the icon badge we hid for the card's lifetime.
+        if (iconPlane && iconVisRestore != null) iconPlane.visibility = iconVisRestore;
         resolve();
       });
     });
@@ -13070,6 +13152,13 @@ export const LUNGE_ANIM_MS = 400;
  *  as a strike rather than slow-mo. Operator-tunable in one place. */
 export const PUNCH_TARGET_MS = 500;
 
+/** Fraction through the punch clip's frame range at which the strike "lands"
+ *  (the mid/impact pose). The 3D cinematic battle arm freezes the punch here
+ *  (`holdPunchAtImpact`) while the dice cards read out, then resumes from this
+ *  frame to the end (`resumePunch`). 0.55 ≈ just past the contact moment of a
+ *  Mixamo punch, so the held pose reads as "fist landed". Operator-tunable. */
+export const PUNCH_IMPACT_FRAC = 0.55;
+
 /** Fraction of the way from the attacker's current position toward the
  *  target hex the lunge slides (operator decision). 0.75 closes the gap
  *  for an "attack" pose without overlapping the target token. */
@@ -13152,24 +13241,45 @@ export function unitIconScaleForRadius(radius) {
   return UNIT_ICON_MIN_SCALE + (1 - UNIT_ICON_MIN_SCALE) * t;
 }
 
-/** Clearance between the head (sphere top) and the bottom of the icon
- *  plane. Keeps the icon from ever touching the model regardless of
- *  scale. */
+/** Clearance between the cone+sphere head (sphere top) and the bottom of the
+ *  icon plane. LEGACY — `iconBillboardYForScale` no longer anchors to this; it
+ *  anchors to `iconBillboardYRelativeToCone` (the gap-0.70 placement that
+ *  clears the taller paladin GLB head) so the per-frame scale pump can't drop
+ *  the icon onto the model. Kept for back-compat of the export. */
 export const UNIT_ICON_HEAD_CLEARANCE = 0.05;
 
 /** Y position of the icon billboard, in cone-relative space, adjusted so
- *  the BOTTOM of the scaled icon plane is exactly UNIT_ICON_HEAD_CLEARANCE
- *  above the head (sphere top). As the icon shrinks toward
- *  UNIT_ICON_MIN_SCALE the centre drops closer to the head; at scale=1 it
- *  matches the legacy `iconBillboardYRelativeToCone` value (UNIT_ICON_Y_GAP
+ *  the BOTTOM of the scaled icon plane stays fixed at the gap-0.70 placement
+ *  bottom line (`iconBillboardYRelativeToCone` − size/2). As the icon shrinks
+ *  toward UNIT_ICON_MIN_SCALE the centre drops toward that fixed bottom; at
+ *  scale=1 it matches `iconBillboardYRelativeToCone` exactly (UNIT_ICON_Y_GAP
  *  was tuned to give scale=1 the same clearance + half-size offset). */
 export function iconBillboardYForScale(leader = false, scale = 1) {
+  const s = Number.isFinite(scale) ? scale : 1;
+  // Anchor the BOTTOM of the icon plane at the gap-0.70 placement
+  // (`iconBillboardYRelativeToCone`) — the value tuned to clear the paladin
+  // GLB head, NOT just the (shorter) cone+sphere head. Keeping that bottom
+  // line fixed as the icon shrinks means the badge never drops onto the model.
+  //
+  // Previously this anchored to the cone+sphere head top + UNIT_ICON_HEAD_CLEARANCE,
+  // which sat ~0.21wu LOWER than the create-time placement; the per-frame
+  // `_pumpUnitIconScale` then yanked the icon down onto the (taller) paladin
+  // head every frame — the overlap regression. At scale=1 this now matches
+  // `iconBillboardYRelativeToCone` exactly, so the pump is a no-op at full size.
+  const bottomAtScale1 = iconBillboardYRelativeToCone(leader) - UNIT_ICON_PLANE_SIZE / 2;
+  return bottomAtScale1 + (UNIT_ICON_PLANE_SIZE * s) / 2;
+}
+
+/** Head top (cone+sphere stack) expressed in cone-relative space — the local
+ *  Y above the cone centre at which the sphere head ends. Shared by the
+ *  combat-card anchor (`addCombatCard`) so the card sits just above the head.
+ *  Pure — exported so tests can pin the geometry without Babylon. */
+export function headTopRelativeToCone(leader = false) {
   const hMul = leader ? STANDEE_LEADER_HEIGHT_MUL : 1;
   const wMul = leader ? STANDEE_LEADER_WIDTH_MUL  : 1;
-  // Head top, expressed cone-relative (cone center at origin):
-  //   coneHeight/2 (top of cone) + sphereDiameter (top of sphere)
-  const headTopRel = (STANDEE_CONE_HEIGHT * hMul) / 2 + STANDEE_SPHERE_DIAMETER * wMul;
-  return headTopRel + UNIT_ICON_HEAD_CLEARANCE + (UNIT_ICON_PLANE_SIZE * scale) / 2;
+  // Cone centre at origin → top of cone is coneHeight/2, top of sphere adds
+  // the full sphere diameter.
+  return (STANDEE_CONE_HEIGHT * hMul) / 2 + STANDEE_SPHERE_DIAMETER * wMul;
 }
 /** Gap above the cone+sphere stack to the icon plane CENTRE, in world
  *  units. With the paladin model now ~0.92 wu tall (15% taller than the
@@ -13263,13 +13373,20 @@ export const ATTACK_ARROW_HEAD_ANGLE = 0.4;
  *  `rgba(220,60,60,…)`. */
 export const ATTACK_ARROW_COLOR = '#dc3c3c';
 
-/** Floating ×N badge above the target hex. Sits above the move-badge
- *  layer (0.6), the unit body, and the floating unit-icon billboard.
- *  With the larger UNIT_ICON_Y_GAP (0.85) needed to clear the paladin GLB
- *  model, the leader icon's top edge sits at iconBillboardY(true) + 0.55
- *  ≈ 1.979 + 0.55 ≈ 2.53, so this constant was raised to 2.8 to stay
- *  above the entire unit token stack. */
-export const ATTACK_BADGE_Y = 2.8;
+/** Floating ×N badge (planning overlay) above the target hex, in WORLD-Y.
+ *  Sits just above the floating unit-icon billboard so the planning stack
+ *  reads head → icon → ×N badge.
+ *
+ *  Was 2.8 when the icon's runtime placement had drifted DOWN (the
+ *  `_pumpUnitIconScale` / `iconBillboardYForScale` bug — see that function),
+ *  leaving a big empty gap that read as "badge floating much too high"
+ *  (operator regression). With the icon restored to its gap-0.70 placement,
+ *  the leader icon's top edge sits at world-Y
+ *    coneCentreY(0.4415) + iconBillboardYRelativeToCone(true)(1.4415) + size/2(0.44)
+ *    ≈ 2.32,
+ *  so 2.65 clears it (badge bottom ≈ 2.375) with a small gap while sitting
+ *  noticeably lower than the old 2.8. */
+export const ATTACK_BADGE_Y = 2.65;
 
 /** Pixel size of the badge billboard plane (world units). Slightly
  *  larger than the move badge (0.45) so the ×N glyph reads cleanly. */

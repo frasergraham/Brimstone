@@ -56,6 +56,9 @@ import {
   hpRingFraction,
     iconBillboardY,
   iconBillboardYRelativeToCone,
+  iconBillboardYForScale,
+  headTopRelativeToCone,
+  UNIT_ICON_MIN_SCALE,
   paintUnitIconBadge,
   resolveUnitIconPortrait,
   applyFlatUnitIconMaterial,
@@ -627,6 +630,52 @@ describe('Renderer3D — iconBillboardYRelativeToCone', () => {
 
   test('default arg matches leader=false (regular unit)', () => {
     assert.equal(iconBillboardYRelativeToCone(), iconBillboardYRelativeToCone(false));
+  });
+});
+
+// ─── iconBillboardYForScale — the per-frame proximity-scale placement must
+//     reconcile with the gap-0.70 create-time placement (icon-overlap fix) ───
+
+describe('Renderer3D — iconBillboardYForScale reconciliation', () => {
+  test('at scale=1 it EXACTLY matches iconBillboardYRelativeToCone (no per-frame drop)', () => {
+    for (const leader of [false, true]) {
+      assert.ok(
+        Math.abs(iconBillboardYForScale(leader, 1) - iconBillboardYRelativeToCone(leader)) < 1e-9,
+        `scale=1 placement should equal the create-time gap-0.70 value for leader=${leader}`,
+      );
+    }
+  });
+
+  test('the icon BOTTOM stays fixed (clears the paladin head) as the icon shrinks', () => {
+    for (const leader of [false, true]) {
+      const bottomFull = iconBillboardYForScale(leader, 1)               - UNIT_ICON_PLANE_SIZE / 2;
+      const bottomMin  = iconBillboardYForScale(leader, UNIT_ICON_MIN_SCALE) - (UNIT_ICON_PLANE_SIZE * UNIT_ICON_MIN_SCALE) / 2;
+      assert.ok(Math.abs(bottomFull - bottomMin) < 1e-9,
+        `icon bottom should be scale-invariant for leader=${leader}`);
+    }
+  });
+
+  test('shrinking the icon LOWERS its centre (drops toward the fixed bottom)', () => {
+    assert.ok(iconBillboardYForScale(false, UNIT_ICON_MIN_SCALE) < iconBillboardYForScale(false, 1));
+  });
+});
+
+// ─── headTopRelativeToCone — the combat-card anchor (just above the head) ────
+
+describe('Renderer3D — headTopRelativeToCone', () => {
+  test('sits below the icon billboard (head < icon, cone-relative)', () => {
+    for (const leader of [false, true]) {
+      assert.ok(headTopRelativeToCone(leader) < iconBillboardYRelativeToCone(leader),
+        `head top should be below the icon centre for leader=${leader}`);
+    }
+  });
+
+  test('leader head is taller than a regular head', () => {
+    assert.ok(headTopRelativeToCone(true) > headTopRelativeToCone(false));
+  });
+
+  test('default arg matches leader=false', () => {
+    assert.equal(headTopRelativeToCone(), headTopRelativeToCone(false));
   });
 });
 

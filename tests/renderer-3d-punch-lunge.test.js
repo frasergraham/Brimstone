@@ -19,6 +19,7 @@ import {
   computePunchSpeedRatio,
   PUNCH_MODEL_FILE,
   PUNCH_TARGET_MS,
+  PUNCH_IMPACT_FRAC,
 } from '../src/renderer-3d.js';
 
 // ── computePunchSpeedRatio (pure) ───────────────────────────────────────────
@@ -65,11 +66,16 @@ describe('punch constants', () => {
 // ── _startPaladinPunch / _stopPaladinPunch ──────────────────────────────────
 
 function makeGroupSpy() {
-  const calls = { start: [], stop: 0, endCbs: [] };
+  const calls = { start: [], stop: 0, endCbs: [], pause: 0, play: [], goToFrame: [] };
   return {
     calls,
-    start(loop, ratio) { calls.start.push({ loop, ratio }); },
+    from: 0,
+    to: 100,
+    start(loop, ratio, from, to) { calls.start.push({ loop, ratio, from, to }); },
     stop() { calls.stop += 1; },
+    pause() { calls.pause += 1; },
+    play(loop) { calls.play.push({ loop }); },
+    goToFrame(f) { calls.goToFrame.push(f); },
     onAnimationGroupEndObservable: {
       addOnce(cb) { calls.endCbs.push(cb); },
     },
@@ -127,6 +133,85 @@ describe('Renderer3D._startPaladinPunch', () => {
     punch.calls.endCbs[0]();
     assert.equal(inst._paladinSource.punchPlaying, false);
     assert.equal(inst._paladinSource.activeGroup, null);
+  });
+});
+
+// ── holdPunchAtImpact / resumePunch — the freeze→roll→resume sequence ───────
+
+describe('PUNCH_IMPACT_FRAC', () => {
+  test('is a mid/impact fraction in (0,1)', () => {
+    assert.ok(PUNCH_IMPACT_FRAC > 0 && PUNCH_IMPACT_FRAC < 1);
+    // ~50-60% through the clip — past the wind-up, at the contact pose.
+    assert.ok(PUNCH_IMPACT_FRAC >= 0.4 && PUNCH_IMPACT_FRAC <= 0.7);
+  });
+});
+
+describe('Renderer3D.holdPunchAtImpact', () => {
+  test('freezes a live punch on the impact frame and pauses it', () => {
+    const inst = Object.create(Renderer3D.prototype);
+    const punch = makeGroupSpy();
+    punch.from = 0; punch.to = 100;
+    inst._paladinSource = { punchGroup: punch, punchPlaying: true, activeGroup: 'punch' };
+    inst._frozenPunchImpactFrame = null;
+
+    assert.equal(inst.holdPunchAtImpact(), true);
+    // Impact frame = from + (to-from)*frac.
+    const expected = 0 + (100 - 0) * PUNCH_IMPACT_FRAC;
+    assert.equal(punch.calls.goToFrame.at(-1), expected);
+    assert.equal(punch.calls.pause, 1, 'punch paused at the impact pose');
+    assert.equal(inst._frozenPunchImpactFrame, expected, 'frozen frame stashed for resume');
+    // punchPlaying stays set so the idle/walk toggle won't grab the skeleton.
+    assert.equal(inst._paladinSource.punchPlaying, true);
+  });
+
+  test('no-ops (returns false) when no punch is playing — ranged/cone attacker', () => {
+    const inst = Object.create(Renderer3D.prototype);
+    const punch = makeGroupSpy();
+    inst._paladinSource = { punchGroup: punch, punchPlaying: false };
+    inst._frozenPunchImpactFrame = null;
+    assert.equal(inst.holdPunchAtImpact(), false);
+    assert.equal(punch.calls.pause, 0, 'a non-playing shared punch is left alone');
+    assert.equal(inst._frozenPunchImpactFrame, null);
+  });
+
+  test('no-ops when the punch clip never loaded', () => {
+    const inst = Object.create(Renderer3D.prototype);
+    inst._paladinSource = { punchPlaying: true };
+    inst._frozenPunchImpactFrame = null;
+    assert.equal(inst.holdPunchAtImpact(), false);
+  });
+});
+
+describe('Renderer3D.resumePunch', () => {
+  test('unpauses a frozen punch and resolves when the strike ends', async () => {
+    const inst = Object.create(Renderer3D.prototype);
+    const punch = makeGroupSpy();
+    inst._paladinSource = { punchGroup: punch, punchPlaying: true, activeGroup: 'punch' };
+    inst._frozenPunchImpactFrame = 55;
+
+    const p = inst.resumePunch();
+    // Resumed via play() (unpause), not a fresh start().
+    assert.equal(punch.calls.play.length, 1);
+    assert.equal(inst._frozenPunchImpactFrame, null, 'frozen frame cleared on resume');
+    // End-observable pending — promise not yet resolved.
+    let resolved = false;
+    p.then(() => { resolved = true; });
+    await Promise.resolve();
+    assert.equal(resolved, false);
+    // Fire the strike-complete callback.
+    assert.equal(punch.calls.endCbs.length, 1);
+    punch.calls.endCbs.at(-1)();
+    await p;
+    assert.equal(inst._paladinSource.punchPlaying, false, 'idle/walk released after the strike');
+    assert.equal(inst._paladinSource.activeGroup, null);
+  });
+
+  test('resolves immediately (no-op) when nothing is frozen', async () => {
+    const inst = Object.create(Renderer3D.prototype);
+    inst._paladinSource = { punchGroup: makeGroupSpy() };
+    inst._frozenPunchImpactFrame = null;
+    await inst.resumePunch(); // should resolve without hanging
+    assert.ok(true);
   });
 });
 

@@ -9,7 +9,12 @@
 import { describe, test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { Renderer3D } from '../src/renderer-3d.js';
+import {
+  Renderer3D,
+  headTopRelativeToCone,
+  COMBAT_CARD_Y_GAP,
+  COMBAT_CARD_PLANE_HEIGHT,
+} from '../src/renderer-3d.js';
 
 function makeDisposable(extra = {}) {
   return { disposed: 0, dispose() { this.disposed += 1; }, ...extra };
@@ -175,6 +180,39 @@ describe('Renderer3D.addCombatCard', () => {
     assert.equal(createdTex[0].disposed, 1, 'texture disposed on anim end');
     assert.equal(createdMat[0].disposed, 1, 'material disposed on anim end');
     assert.equal(createdPlane[0].disposed, 1, 'plane disposed on anim end');
+  });
+
+  test('sits JUST ABOVE THE HEAD (not stacked above the icon badge)', () => {
+    const inst = makeInst({ autoFinish: false });
+    let captured = null;
+    const origCreate = inst._babylon.MeshBuilder.CreatePlane;
+    inst._babylon.MeshBuilder.CreatePlane = (...a) => { captured = origCreate(...a); return captured; };
+    inst.addCombatCard('e1', 'attacker', RESULT);
+
+    // Card centre = head top (cone-relative) + gap + half the card height.
+    const expected = headTopRelativeToCone(false) + COMBAT_CARD_Y_GAP + COMBAT_CARD_PLANE_HEIGHT / 2;
+    assert.ok(Math.abs(captured.position.y - expected) < 1e-9,
+      `card y ${captured.position.y} should equal head-anchored ${expected}`);
+  });
+
+  test('hides the unit-icon badge while up, and restores it on dispose', () => {
+    const inst = makeInst({ autoFinish: false });
+    const iconPlane = { visibility: 1 };
+    inst._unitIconBadges = new Map([['e1', { plane: iconPlane }]]);
+
+    inst.addCombatCard('e1', 'attacker', RESULT);
+    assert.equal(iconPlane.visibility, 0, 'icon hidden while the card holds');
+
+    // Fire the end callback → card disposes and the icon is restored.
+    assert.equal(inst._endCbs.length, 1);
+    inst._endCbs[0]();
+    assert.equal(iconPlane.visibility, 1, 'icon restored after the card fades');
+  });
+
+  test('no icon badge present → still spawns the card without throwing', () => {
+    const inst = makeInst();
+    inst._unitIconBadges = new Map(); // no entry for e1
+    assert.doesNotThrow(() => inst.addCombatCard('e1', 'attacker', RESULT));
   });
 
   test('speedFactor scales the hold (more frames at slower speed)', () => {
