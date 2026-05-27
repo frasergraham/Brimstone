@@ -2057,6 +2057,12 @@ export class Renderer3D {
       // World-geometry render group so depth-tests against units/buildings
       // behave like the other terrain props (see PR #361).
       if (typeof source.renderingGroupId !== 'undefined') source.renderingGroupId = 0;
+      // Receive shadows from neighbouring buildings / trees / standees as well
+      // as cast them. InstancedMesh inherits receiveShadows from its source
+      // template, so setting it here means every building instance inherits it
+      // — the durable fix (mirrors the tree template path). Cover any retained
+      // sub-meshes too in the single-mesh (un-merged) case.
+      applyShadowReceiving([source, ...(typeof source.getChildMeshes === 'function' ? source.getChildMeshes() : [])]);
 
       // Compute a bbox-derived uniform scale so this template's height lands at
       // TARGET_BUILDING_WORLD_HEIGHT regardless of the GLB's intrinsic units.
@@ -2134,6 +2140,9 @@ export class Renderer3D {
     // Buildings stay visible under fog of war — permanent terrain, not
     // tactical info. Mirrors the procedural box+roof metadata.
     inst.metadata = { respectsFog: false, kind: 'building-glb', col: tile.col, row: tile.row };
+    // Belt-and-suspenders: the template already carries receiveShadows (so the
+    // instance inherits it), but set it explicitly too — mirrors the tree path.
+    if ('receiveShadows' in inst) inst.receiveShadows = true;
     this._addShadowCaster(inst);
     // World-geometry render group, same as the procedural box+roof + tile
     // cylinders — keeps the depth buffer consistent for unit/building overlap.
@@ -5218,6 +5227,7 @@ export class Renderer3D {
         box.position.y = tileTopY + dims.box.height / 2;
         box.material   = this._materialFor(BUILDING_COLOR[tile.building] || '#8a7a5a');
         box.isPickable = false;
+        box.receiveShadows = true;
         this._addShadowCaster(box);
         // Buildings stay visible under fog of war — permanent terrain, not
         // tactical info. See `_setTileFogged`.
@@ -5236,6 +5246,7 @@ export class Renderer3D {
         roof.position.y = tileTopY + dims.box.height + dims.roof.height / 2;
         roof.material   = this._materialFor('#2c2520');
         roof.isPickable = false;
+        roof.receiveShadows = true;
         this._addShadowCaster(roof);
         roof.metadata   = { respectsFog: false };
         trackProp(roof);
