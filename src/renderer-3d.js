@@ -1046,6 +1046,63 @@ export function computeMapBounds(hexes, radius = HEX_RADIUS_WORLD) {
   };
 }
 
+// ─── Fortifications (3D) — pure helpers ──────────────────────────────────────
+// The hero "fortify" action raises a tile's `fortifyLevel` (0..MAX_FORTIFY_LEVEL
+// = 6; see tiles.js). The 3D renderer draws a low wall/fence around a fortified
+// hex's outer perimeter as a VISUAL INDICATOR — not a full enclosing barrier.
+// These two helpers are Babylon-free so they unit-test directly.
+
+// Neighbour direction deltas, odd-r offset — a verbatim copy of hex.js's
+// DIRS_EVEN / DIRS_ODD. We replicate them (rather than call getNeighbors)
+// because getNeighbors filters out negative-coord neighbours, which would drop
+// the perimeter wall on a fortified hex sitting against the col 0 / row 0 edge.
+// Index order is W, NW, NE, E, SE, SW and is consistent across parities.
+const FORT_DIRS_EVEN = [[-1, 0], [-1, -1], [0, -1], [1, 0], [0, 1], [-1, 1]];
+const FORT_DIRS_ODD  = [[-1, 0], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1]];
+
+/** Offset (col,row) of the neighbour across edge-direction `d` (0..5). Pure;
+ *  may return negative coords for off-map neighbours (callers treat those as
+ *  unfortified, so the perimeter edge is drawn). */
+export function fortNeighborOffset(col, row, d) {
+  const dirs = (row & 1) ? FORT_DIRS_ODD : FORT_DIRS_EVEN;
+  const [dc, dr] = dirs[d];
+  return { col: col + dc, row: row + dr };
+}
+
+/** Wall style for a fortify level. Three tiers keyed off the gameplay-meaningful
+ *  thresholds in tiles.js (level 1 = passable, level 2 = FORT_IMPASSABLE_THRESHOLD
+ *  wall, 4+ = high rampart):
+ *    1     → 'stakes' — sparse low wooden posts (passable terrain)
+ *    2–3   → 'low'    — continuous low wooden wall
+ *    4–6   → 'tall'   — taller stone rampart
+ *  Returns null for level ≤ 0 (no fortification). Heights/thickness are world
+ *  units (HEX_RADIUS_WORLD = 1); colours are wood tones for stakes/low and a
+ *  grey stone tone for tall. */
+export function fortifyWallStyle(level) {
+  const lvl = level | 0;
+  if (lvl <= 0) return null;
+  if (lvl === 1) return { kind: 'stakes', height: 0.20, thickness: 0.07, color: '#6b4f2a' };
+  if (lvl <= 3)  return { kind: 'low',    height: 0.30, thickness: 0.12, color: '#7a5a30' };
+  return             { kind: 'tall',   height: 0.50, thickness: 0.16, color: '#8d8a82' };
+}
+
+/** Which of a hex's 6 edges should carry a wall segment. ADJACENCY RULE: an
+ *  edge is drawn only when the neighbour ACROSS it is NOT also fortified — so a
+ *  cluster of fortified hexes reads as ONE compound walled on its outer
+ *  perimeter, with no doubled interior walls. Off-map neighbours count as
+ *  "not fortified" → that perimeter edge is drawn. `fortLevelAt(col,row)`
+ *  returns a hex's level (0 if unfortified / off-map). Returns an array of
+ *  direction indices (0..5); empty when this hex itself is unfortified. Pure. */
+export function fortifyEdgeDirs(col, row, fortLevelAt) {
+  if ((fortLevelAt(col, row) | 0) <= 0) return [];
+  const dirs = [];
+  for (let d = 0; d < 6; d++) {
+    const nb = fortNeighborOffset(col, row, d);
+    if ((fortLevelAt(nb.col, nb.row) | 0) <= 0) dirs.push(d);
+  }
+  return dirs;
+}
+
 /**
  * Pick a camera radius so a `fitWidth × fitDepth` rectangle on the ground
  * fills the canvas at the locked isometric tilt. Uses the larger of the two
@@ -1543,6 +1600,13 @@ export class Renderer3D {
     // gameplay-coupled passes (fog veil, slot reassignment) never pick these
     // up — they live in a parallel namespace that just renders.
     this._borderPropsByKey = new Map(); // hexKey → Array<Mesh>
+    // Fortification wall segments, in their OWN registry (not _tilePropsByKey)
+    // so the building/tree GLB-upgrade sweeps and the static-mesh freeze pass
+    // never touch them — they're dynamic, rebuilt by `_syncFortifications` when
+    // a tile's fortifyLevel changes. hexKey → { sig, meshes:Mesh[], mat,
+    // baseDiffuse:{r,g,b} }. Fog darkening is applied here directly (mirroring
+    // the 'darken' policy) since these never live in the fog-veil prop walk.
+    this._fortByKey = new Map();
     // Cross-tile merged tree meshes for the border-forest band. One trunk
     // mesh + one mesh per leaf-colour bucket (≤10 total) instead of 2–4 per
     // tile (≈240–900 meshes at max zoom-out). Lives in its own registry so
@@ -1751,6 +1815,10 @@ export class Renderer3D {
     // sync above so newly-built standees are tagged correctly.
     this._notePhaseChange();
     this._applyFogVeil();
+    // Fortification walls — built/refreshed/disposed against the live
+    // fortifyLevel of every tile. Runs AFTER _applyFogVeil so `_fogActiveSet`
+    // is current when we tint fogged segments.
+    this._syncFortifications();
   }
 
   // ─── Loading-screen API ──────────────────────────────────────────────────
@@ -5624,6 +5692,153 @@ export class Renderer3D {
       for (const t of trees) staticOcc.push({ id: t.id, kind: 'tree' });
     }
     if (staticOcc.length > 0) this._staticOccupantsByKey.set(tkey, staticOcc);
+  }
+
+  // ─── Fortifications: perimeter wall segments ─────────────────────────────
+  //
+  // Hero fortify raises `tile.fortifyLevel` (0..6). We draw a low wall around
+  // the OUTER perimeter of each fortified hex — only on edges whose neighbour
+  // isn't also fortified (see `fortifyEdgeDirs`), so a cluster reads as one
+  // walled compound. Wall style scales with level (`fortifyWallStyle`).
+  //
+  // Lifecycle: `_syncFortifications` runs every draw(). Per fortified hex it
+  // computes a signature (style kind + drawn-edge set); if unchanged it just
+  // re-applies fog tint, otherwise it disposes and rebuilds. Hexes that drop to
+  // level 0 are disposed. Meshes live in `_fortByKey` (their own registry), so
+  // the GLB-upgrade sweeps and the static-mesh freeze never disturb them.
+
+  _syncFortifications() {
+    if (!this._scene || !this._mapRoot || !this.state?.tiles) return;
+    const tiles = this.state.tiles;
+    const fortLevelAt = (col, row) => tiles.get(hexKey(col, row))?.fortifyLevel || 0;
+
+    const seen = new Set();
+    for (const tile of tiles.values()) {
+      const lvl = tile.fortifyLevel || 0;
+      if (lvl <= 0) continue;
+      const tkey = hexKey(tile.col, tile.row);
+      seen.add(tkey);
+
+      const style = fortifyWallStyle(lvl);
+      const dirs  = fortifyEdgeDirs(tile.col, tile.row, fortLevelAt);
+      const sig   = `${style.kind}|${dirs.join(',')}`;
+
+      const existing = this._fortByKey.get(tkey);
+      if (!existing || existing.sig !== sig) {
+        if (existing) this._disposeFortHex(tkey);
+        const entry = this._buildFortMeshesForHex(tile, dirs, style);
+        entry.sig = sig;
+        this._fortByKey.set(tkey, entry);
+      }
+      // Re-apply fog tint every draw (fog can change without the wall changing).
+      this._applyFortFog(tkey);
+    }
+
+    // Dispose walls on hexes that are no longer fortified (e.g. siege/combat
+    // knocked the level back to 0, or a save was swapped in).
+    for (const tkey of [...this._fortByKey.keys()]) {
+      if (!seen.has(tkey)) this._disposeFortHex(tkey);
+    }
+  }
+
+  /** Build the wall/stake meshes for one fortified hex. Returns
+   *  `{ meshes, mat, baseDiffuse }` (sig is set by the caller). */
+  _buildFortMeshesForHex(tile, dirs, style) {
+    const BABYLON = this._babylon;
+    const scene   = this._scene;
+    const { x, z } = hexToWorld(tile.col, tile.row);
+    const R = HEX_RADIUS_WORLD;
+    const apothem = R * SQRT3 / 2;       // hex centre → edge-midpoint distance
+    const side    = R;                   // hex edge (side) length
+    // Sit the wall base on the tile-prism top, the same anchor buildings use.
+    const tileTopY = 0.43 - 0.7 / 2;
+
+    // Per-hex material clone so the fog-darken tint (which mutates diffuseColor
+    // in place) never bleeds onto another hex's walls or a shared cache entry.
+    const [cr, cg, cb] = cssHexToRgb01(style.color);
+    const mat = new BABYLON.StandardMaterial(`fortmat_${tile.col}_${tile.row}`, scene);
+    mat.diffuseColor  = new BABYLON.Color3(cr, cg, cb);
+    mat.specularColor = new BABYLON.Color3(0.04, 0.04, 0.04); // matte, like terrain
+
+    const meshes = [];
+    const place = (m, wx, wy, wz) => {
+      m.parent     = this._mapRoot;
+      m.material    = mat;
+      m.isPickable  = false;
+      m.position.x  = wx;
+      m.position.y  = wy;
+      m.position.z  = wz;
+      this._addShadowCaster(m);
+      meshes.push(m);
+    };
+
+    for (const d of dirs) {
+      const nb = fortNeighborOffset(tile.col, tile.row, d);
+      const np = hexToWorld(nb.col, nb.row);
+      let ux = np.x - x, uz = np.z - z;
+      const len = Math.hypot(ux, uz) || 1;
+      ux /= len; uz /= len;
+      const midX = x + ux * apothem;
+      const midZ = z + uz * apothem;
+      // Edge runs perpendicular to the centre→neighbour direction.
+      const perpX = -uz, perpZ = ux;
+      // rotation.y aligns a mesh's local +Z axis to (perpX, perpZ).
+      const yaw = Math.atan2(perpX, perpZ);
+
+      if (style.kind === 'stakes') {
+        // Sparse low posts spread along the edge (passable level-1 marker).
+        const POSTS = 3;
+        for (let i = 0; i < POSTS; i++) {
+          const t = (i / (POSTS - 1) - 0.5) * side * 0.8; // -0.4..+0.4 of the side
+          const post = BABYLON.MeshBuilder.CreateCylinder(
+            `fort_${tile.col}_${tile.row}_${d}_${i}`,
+            { diameterTop: style.thickness * 0.7, diameterBottom: style.thickness,
+              height: style.height, tessellation: 6 },
+            scene,
+          );
+          place(post, midX + perpX * t, tileTopY + style.height / 2, midZ + perpZ * t);
+        }
+      } else {
+        // Continuous wall slab spanning the edge. Depth (local Z) = the hex side,
+        // slightly overlapped at the corners so adjacent segments read as one
+        // unbroken rampart.
+        const wall = BABYLON.MeshBuilder.CreateBox(
+          `fort_${tile.col}_${tile.row}_${d}`,
+          { width: style.thickness, height: style.height, depth: side * 1.04 },
+          scene,
+        );
+        wall.rotation.y = yaw;
+        place(wall, midX, tileTopY + style.height / 2, midZ);
+      }
+    }
+
+    return { meshes, mat, baseDiffuse: { r: cr, g: cg, b: cb } };
+  }
+
+  /** Tint one hex's fort walls for the current fog state — mirrors the 'darken'
+   *  fog policy used by roads (multiply diffuse by `_fogTileDarken` when the hex
+   *  is fogged, restore to the anchor colour otherwise). */
+  _applyFortFog(tkey) {
+    const entry = this._fortByKey.get(tkey);
+    if (!entry?.mat?.diffuseColor) return;
+    const fogged = this._fogActiveSet?.has(tkey) || false;
+    const k  = fogged ? this._fogTileDarken : 1.0;
+    const bd = entry.baseDiffuse;
+    entry.mat.diffuseColor.r = bd.r * k;
+    entry.mat.diffuseColor.g = bd.g * k;
+    entry.mat.diffuseColor.b = bd.b * k;
+  }
+
+  /** Dispose a hex's fort meshes + its material clone and forget the entry. */
+  _disposeFortHex(tkey) {
+    const entry = this._fortByKey.get(tkey);
+    if (!entry) return;
+    for (const m of entry.meshes) {
+      try { if (m && typeof m.dispose === 'function') m.dispose(); } catch { /* gone */ }
+    }
+    try { if (entry.mat && typeof entry.mat.dispose === 'function') entry.mat.dispose(); }
+    catch { /* gone */ }
+    this._fortByKey.delete(tkey);
   }
 
   // ─── Item 2: bezier road + river networks ────────────────────────────────
