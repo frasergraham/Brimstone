@@ -441,15 +441,31 @@ function _unwireRoadConnections(mapDef, col, row) {
 }
 
 /**
- * DELETE (item 5) — clear a tile back to a blank/base def: base→GRASS, structure
- * → none, path → none, building → null, resource → null, hiddenSurvivor → false,
- * fortifyLevel → 0, roadDirs cleared. In OVERLAY mode this records the cleared
- * tile as an EXPLICIT overlay edit (a complete blank def in overlay.tiles), so
- * it overrides the generated base rather than reverting to it. Also unwires the
- * tile from any painted-road neighbours so no segment dangles into the cleared
- * hex.
+ * DELETE (item 5) — clear a tile, with mode-aware semantics:
+ *
+ *   • OVERLAY (procedural): REVERT the hex to its GENERATED version by REMOVING
+ *     any explicit overlay edit for it from `overlay.tiles`. buildMissionMap then
+ *     falls back to the generated base tile. Deleting a hex with no overlay edit
+ *     is a no-op (nothing to remove → still no overlay entry). This is the fix for
+ *     the old behaviour, which wrote a blank def into overlay.tiles and so
+ *     OVERRODE the generated tile with empty grass instead of reverting to it.
+ *
+ *   • HANDMADE (blank/baked): there's no generated base to revert to, so clear the
+ *     tile back to a blank/base def: base→GRASS, structure/path/building/resource
+ *     → none, hiddenSurvivor→false, fortifyLevel→0, roadDirs cleared.
+ *
+ * Either way, unwire the tile from any painted-road neighbours first (while the
+ * def still exists) so no segment dangles into the cleared/reverted hex.
  */
 export function deleteTile(mapDef, { col, row }) {
+  if (mapDef.mode === 'procedural') {
+    // Unwire BEFORE dropping the def so neighbours lose their reference to it.
+    _unwireRoadConnections(mapDef, col, row);
+    const list = _tileList(mapDef);
+    const i = list.findIndex(t => t.col === col && t.row === row);
+    if (i >= 0) list.splice(i, 1); // revert to the generated base; no-op if absent
+    return mapDef;
+  }
   const def = _getOrCreateTileDef(mapDef, col, row);
   Object.assign(def, _blankTileDef(col, row));
   _unwireRoadConnections(mapDef, col, row);
@@ -1272,6 +1288,95 @@ export function removeWave(meta, idx) {
     meta.waves.splice(idx, 1);
   }
   return meta;
+}
+
+// ── Phase-cycle ops (item 9) ────────────────────────────────────────────────
+// The phaseCycle shape is `{ phases: string[], loop: boolean }`. `phases` is an
+// ordered sequence of phase keys drawn from PHASE_KINDS; EC's timeline tab reads
+// this same array to lay out its day/night track, so these ops keep the shape
+// clean (no nulls, no unknown phase keys leaking in). All mutate `meta` in place.
+
+/** The four canonical phase keys, in natural cycle order, for the chip palette. */
+export const PHASE_KINDS = Object.freeze(['dawn', 'day', 'dusk', 'night']);
+
+function _phaseCycle(meta) {
+  if (!meta.phaseCycle || typeof meta.phaseCycle !== 'object') {
+    meta.phaseCycle = { phases: [], loop: true };
+  }
+  if (!Array.isArray(meta.phaseCycle.phases)) meta.phaseCycle.phases = [];
+  return meta.phaseCycle;
+}
+
+/** Append a phase chip to the cycle. Ignores keys outside PHASE_KINDS. */
+export function addPhase(meta, phase) {
+  if (!PHASE_KINDS.includes(phase)) return meta;
+  _phaseCycle(meta).phases.push(phase);
+  return meta;
+}
+
+/** Remove the phase chip at `idx`. No-op out of range. */
+export function removePhaseAt(meta, idx) {
+  const pc = _phaseCycle(meta);
+  if (idx >= 0 && idx < pc.phases.length) pc.phases.splice(idx, 1);
+  return meta;
+}
+
+/** Reorder a phase chip by `dir` (−1 left, +1 right). No-op at the edges. */
+export function movePhase(meta, idx, dir) {
+  const pc = _phaseCycle(meta);
+  const j = idx + dir;
+  if (idx < 0 || idx >= pc.phases.length || j < 0 || j >= pc.phases.length) return meta;
+  [pc.phases[idx], pc.phases[j]] = [pc.phases[j], pc.phases[idx]];
+  return meta;
+}
+
+/** Set the loop flag (whether the cycle repeats after its last phase). */
+export function setPhaseLoop(meta, loop) {
+  _phaseCycle(meta).loop = !!loop;
+  return meta;
+}
+
+// ── Resources / rewards picker transforms (item 8) ──────────────────────────
+// startingResources + rewards are `{ [ResourceType]: amount }` maps. The picker
+// edits them as ordered rows of `{ type, amount }`; these are the lossless
+// inverse pair the picker round-trips through (and what the tests pin).
+
+/** A resource map → ordered picker rows. */
+export function resourceMapToRows(obj) {
+  return Object.entries(obj ?? {}).map(([type, amount]) => ({ type, amount }));
+}
+
+/** Picker rows → a resource map. Skips blank/typeless rows; later rows win on
+ *  duplicate type (last write). Amounts coerce to numbers. */
+export function rowsToResourceMap(rows) {
+  const out = {};
+  for (const r of rows ?? []) {
+    if (!r || !r.type) continue;
+    out[r.type] = Number(r.amount) || 0;
+  }
+  return out;
+}
+
+// ── lootOverrides picker transforms (item 8) ────────────────────────────────
+// lootOverrides is `{ add?: string[], remove?: string[], ...rest }` where `rest`
+// may carry richer keys (e.g. per-building weighted tables) the picker leaves
+// untouched. The picker edits the add/remove id lists; `rest` rides along so the
+// round-trip is lossless even for fields the picker doesn't surface.
+
+/** lootOverrides object → picker model `{ add, remove, rest }`. */
+export function lootOverridesToPicker(lo) {
+  const { add = [], remove = [], ...rest } = lo ?? {};
+  return { add: [...add], remove: [...remove], rest };
+}
+
+/** Picker model → lootOverrides object (or null when fully empty). Only emits
+ *  add/remove keys when non-empty so a `{remove:[…]}`-shaped input round-trips
+ *  without gaining an empty `add`. */
+export function pickerToLootOverrides({ add = [], remove = [], rest = {} } = {}) {
+  const out = { ...rest };
+  if (add.length) out.add = [...add];
+  if (remove.length) out.remove = [...remove];
+  return Object.keys(out).length ? out : null;
 }
 
 // ── objectives ────────────────────────────────────────────────────────────────
