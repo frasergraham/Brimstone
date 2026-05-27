@@ -168,7 +168,30 @@
        MISSION EDITOR TAB — 2D tile-painting / placement editor (P5).
        ════════════════════════════════════════════════════════════════════ */
     #editor-panel { grid-template-columns: 1fr 280px; height: 100%; }
-    #editor-panel #e-canvas-pane { position: relative; overflow: hidden; background: #050505; }
+    /* EC — main area: a vertical flex of the Map/Timeline tab bar + the two
+       stacked panes; only the .active pane is shown. */
+    #editor-panel #e-main { display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+    #editor-panel #e-main-tabs { display: flex; gap: 2px; padding: 6px 8px 0 8px; background: #14110d; border-bottom: 1px solid #2c2620; flex: 0 0 auto; }
+    #editor-panel #e-canvas-pane { position: relative; overflow: hidden; background: #050505; flex: 1 1 auto; display: none; }
+    #editor-panel #e-canvas-pane.active { display: block; }
+    /* Timeline pane (EC) — scrollable round track. */
+    #editor-panel #e-timeline-pane { flex: 1 1 auto; display: none; overflow-y: auto; padding: 12px 14px; background: #0f0d0a; color: #d4cba0; }
+    #editor-panel #e-timeline-pane.active { display: block; }
+    #editor-panel .e-tl-intro { margin-bottom: 8px; }
+    #editor-panel .e-tl-track { display: flex; flex-direction: column; gap: 6px; }
+    #editor-panel .e-tl-row { display: grid; grid-template-columns: 104px 1fr; gap: 10px; border: 1px solid #2c2620; background: #1a1610; padding: 8px; align-items: start; }
+    #editor-panel .e-tl-rail { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; border-left: 4px solid #5a4a30; padding-left: 8px; }
+    #editor-panel .e-tl-round { font-size: 13px; font-weight: bold; color: #ffd680; letter-spacing: 1px; }
+    #editor-panel .e-tl-phase { font-size: 12px; color: #d4cba0; white-space: nowrap; }
+    #editor-panel .e-tl-phase-dawn  { border-left-color: #d8893a; }
+    #editor-panel .e-tl-phase-day   { border-left-color: #e9c54a; }
+    #editor-panel .e-tl-phase-dusk  { border-left-color: #b5603a; }
+    #editor-panel .e-tl-phase-night { border-left-color: #4a5aa0; }
+    #editor-panel .e-tl-phase-none  { border-left-color: #3a342a; }
+    #editor-panel .e-tl-events { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+    #editor-panel .e-tl-adds { display: flex; gap: 6px; }
+    #editor-panel .e-tl-adds .e-action { margin: 0; }
+    #editor-panel .e-tl-lane { margin-top: 12px; }
     #editor-panel #e-render-canvas { width: 100%; height: 100%; display: block; touch-action: none; cursor: crosshair; }
     /* 3D preview overlay: fills the canvas pane above the 2D editor canvas. */
     #editor-panel #e-preview-3d { position: absolute; inset: 0; background: #050505; z-index: 5; }
@@ -567,15 +590,22 @@
 
       <!-- ── MISSION EDITOR PANEL ────────────────────────────────────────── -->
       <section id="editor-panel" class="tab-panel">
-        <div id="e-canvas-pane">
-          <canvas id="e-render-canvas"></canvas>
-          <!-- 3D preview overlay — hidden until "Preview in 3D" is pressed. The
-               Renderer3D + Babylon engine are constructed lazily on first show
-               and disposed on close / tab-switch (see initEditor). -->
-          <div id="e-preview-3d" hidden>
-            <canvas id="e-preview-canvas"></canvas>
-            <button id="e-preview-close" type="button" title="Close the 3D preview and return to the 2D editor">✕ Close 3D</button>
+        <!-- Main area: a tab bar (Map ⇄ Timeline) over two stacked panes. Only
+             one pane is .active at a time; built/toggled by initEditor() (EC). -->
+        <div id="e-main">
+          <div id="e-main-tabs"><!-- Map / Timeline tabs built by initEditor() --></div>
+          <div id="e-canvas-pane">
+            <canvas id="e-render-canvas"></canvas>
+            <!-- 3D preview overlay — hidden until "Preview in 3D" is pressed. The
+                 Renderer3D + Babylon engine are constructed lazily on first show
+                 and disposed on close / tab-switch (see initEditor). -->
+            <div id="e-preview-3d" hidden>
+              <canvas id="e-preview-canvas"></canvas>
+              <button id="e-preview-close" type="button" title="Close the 3D preview and return to the 2D editor">✕ Close 3D</button>
+            </div>
           </div>
+          <!-- Round-by-round timeline tab (EC) — day/night track + event lanes. -->
+          <div id="e-timeline-pane"><!-- built by initEditor() --></div>
         </div>
         <aside id="e-palette"><!-- tool palette built by initEditor() --></aside>
       </section>
