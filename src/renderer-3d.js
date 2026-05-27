@@ -1287,6 +1287,12 @@ export class Renderer3D {
     this._treeGroupsByName   = new Map();
     this._treePackLoadPromise = null;
     this._useRealTrees       = false;
+    // Translucent template clones for the border-forest edge fade, keyed by
+    // `file@a<alpha>`. Cloned once per (file, alpha) so faded border trees can
+    // still hardware-instance off a shared (faded) template instead of forcing
+    // per-instance alpha. The opaque `_treeTemplates` are never mutated, so the
+    // in-map forest stays fully opaque. See `_fadedTreeTemplateFor`.
+    this._fadedTreeTemplates  = new Map();
     // ── Paladin GLB model state (see `_loadPaladinModel`) ─────────────────
     // _paladinSource: { mesh, skeleton, idleGroup } — the imported source
     // skinned mesh, its skeleton, and the idle AnimationGroup. Each hero
@@ -2390,16 +2396,64 @@ export class Renderer3D {
    *  back to a clone if `createInstance` isn't supported on the test stub.
    *  Returns null when no template is available (caller falls back to the
    *  procedural cone+sphere path for that slot). */
+  /** Return a translucent clone of a loaded tree template at `alpha` < 1, so the
+   *  border-forest edge fade can hardware-instance faded trees without mutating
+   *  the shared opaque template (which the in-map forest also instances off).
+   *  Clones the template hierarchy once per (file, alpha), then clones+fades
+   *  every material in it. Returns the plain opaque template when `alpha` ≥ 1,
+   *  or null when the file has no template. Cached in `_fadedTreeTemplates`
+   *  (null results are cached too, so a failed clone isn't retried per tree). */
+  _fadedTreeTemplateFor(file, alpha) {
+    if (!(alpha < 1)) return this._treeTemplates.get(file) || null;
+    const BABYLON = this._babylon;
+    const key = `${file}@a${alpha}`;
+    if (this._fadedTreeTemplates.has(key)) return this._fadedTreeTemplates.get(key);
+    const src = this._treeTemplates.get(file);
+    if (!src || typeof src.clone !== 'function') {
+      this._fadedTreeTemplates.set(key, null);
+      return null;
+    }
+    const clone = src.clone(`tree_faded_${key}`);
+    if (!clone) { this._fadedTreeTemplates.set(key, null); return null; }
+    const meshes = [clone];
+    if (typeof clone.getChildMeshes === 'function') {
+      for (const c of clone.getChildMeshes()) meshes.push(c);
+    }
+    for (const m of meshes) {
+      if (m.material && typeof m.material.clone === 'function') {
+        const fm = m.material.clone(`${m.material.name || 'treemat'}_a${alpha}`);
+        fm.alpha = alpha;
+        if (BABYLON?.Material) fm.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
+        fm.needDepthPrePass = true;
+        m.material = fm;
+        // Re-bake the INSTANCES (+ SHADOWS) shader defines on the faded
+        // material so its hardware instances render with shadow sampling,
+        // matching the opaque template's pre-compile (see `_loadTreePackManifest`).
+        if (typeof fm.forceCompilation === 'function') {
+          try { fm.forceCompilation(m, { useInstances: true }); } catch (_e) { /* headless */ }
+        }
+      }
+    }
+    if (typeof clone.setEnabled === 'function') clone.setEnabled(false);
+    clone.isPickable = false;
+    clone.metadata = Object.assign(clone.metadata || {}, { kind: 'tree-template-faded', file, alpha });
+    this._fadedTreeTemplates.set(key, clone);
+    return clone;
+  }
+
   _buildRealTreeInstance(parent, col, row, tree, treeIdx, namePrefix, opts = {}) {
     if (!this._useRealTrees || !this._babylon) return null;
     const BABYLON = this._babylon;
     const season  = opts.season ?? this._season;
+    const alpha   = opts.alpha ?? 1;
     const group   = treeGroupsForSeason(season);
     const files   = this._treeGroupsByName.get(group);
     if (!files || files.length === 0) return null;
     const file = pickTreeFileForSlot(files, col, row, treeIdx);
     if (!file) return null;
-    const template = this._treeTemplates.get(file);
+    // Faded border-forest tiles instance off a translucent template clone; all
+    // other trees (and fully-opaque inner band tiles) use the shared opaque one.
+    const template = alpha < 1 ? this._fadedTreeTemplateFor(file, alpha) : this._treeTemplates.get(file);
     if (!template) return null;
 
     const instName = `${namePrefix}_t${treeIdx}_real`;
@@ -2514,19 +2568,31 @@ export class Renderer3D {
     // guard a season without a populated template bucket (anything but
     // summer in the current manifest) would dispose the procedural cones
     // and leave the border empty.
+    // Re-derive the band depth + extent so the edge-fade alpha matches the
+    // original procedural build (see `_buildMapBorderForest`). The band is keyed
+    // to the current `_borderForestHexesByKey`, so depth comes straight off each
+    // tile's Chebyshev distance from the playable extent.
+    const ext = tilesExtent(this.state.tiles);
+    let bandDepth = 0;
+    for (const [, hex] of this._borderForestHexesByKey) {
+      const md = hex?.metadata;
+      if (!md) continue;
+      bandDepth = Math.max(bandDepth, borderTileDepthFromPlayable(md.col, md.row, ext));
+    }
     const newBorderInsts = [];
     for (const [, hex] of this._borderForestHexesByKey) {
       const md = hex?.metadata;
       if (!md) continue;
       const { col, row } = md;
       const { x, z } = hexToWorld(col, row);
+      const alpha = borderForestAlphaForTile(col, row, ext, bandDepth);
       const trees = forestTreesForHex(col, row, this._season).filter(t =>
         !this._borderTreeBlockedByRiver(x + t.x, z + t.z),
       );
       if (trees.length === 0) continue;
       const namePrefix = `border_forest_${col}_${row}`;
       const insts = this._buildRealForestTreesForHex(
-        this._mapRoot, col, row, x, z, trees, namePrefix, { season: this._season },
+        this._mapRoot, col, row, x, z, trees, namePrefix, { season: this._season, alpha },
       );
       for (const m of insts) newBorderInsts.push(m);
     }
@@ -4601,9 +4667,14 @@ export class Renderer3D {
     // across the whole band — see `_buildBorderForestTreesBatched`. The result
     // is ≤10 merged meshes regardless of `bandDepth`, instead of 2–4 per tile
     // (≈240–900 meshes at max zoom-out).
+    // Playable extent drives the edge-fade: each border tile's alpha is keyed
+    // to how many rings it sits from the OUTER edge of the band (outermost ring
+    // dissolves most). See `borderForestAlphaForTile`.
+    const ext = tilesExtent(this.state.tiles);
     const treeJobs = [];
     for (const pos of borderTilePositions(this.state.tiles, bandDepth)) {
       const { x, z } = hexToWorld(pos.col, pos.row);
+      const alpha = borderForestAlphaForTile(pos.col, pos.row, ext, bandDepth);
 
       // Flat hex polygon — identical recipe to _buildTileMesh's flat tile.
       const hex = this._buildFlatHexMesh(`border_tile_${pos.col}_${pos.row}`, parent, x, z);
@@ -4636,7 +4707,7 @@ export class Renderer3D {
       if (trees.length > 0) {
         treeJobs.push({
           namePrefix: `border_forest_${pos.col}_${pos.row}`,
-          cx: x, cz: z, trees, col: pos.col, row: pos.row,
+          cx: x, cz: z, trees, col: pos.col, row: pos.row, alpha,
         });
       }
     }
@@ -4650,15 +4721,30 @@ export class Renderer3D {
       for (const job of treeJobs) {
         const insts = this._buildRealForestTreesForHex(
           parent, job.col, job.row, job.cx, job.cz, job.trees, job.namePrefix,
-          { season: this._season },
+          { season: this._season, alpha: job.alpha },
         );
         for (const m of insts) bandTreeMeshes.push(m);
       }
     }
     if (bandTreeMeshes.length === 0) {
-      const mergedTreeMeshes = this._buildBorderForestTreesBatched(parent, treeJobs, { season: this._season });
-      for (const m of mergedTreeMeshes) this._addShadowCaster(m);
-      bandTreeMeshes = mergedTreeMeshes;
+      // Bucket jobs by alpha tier: Babylon can't do per-instance alpha on a
+      // shared merged mesh, so each tier merges into its own translucent
+      // material. ≤4 tiers (1.0 / 0.8 / 0.5 / 0.2) → ≤4× the (≤10) merged
+      // meshes, still O(1) in band depth and far below the per-tile path.
+      const jobsByAlpha = new Map();
+      for (const job of treeJobs) {
+        const a = job.alpha ?? 1;
+        let bucket = jobsByAlpha.get(a);
+        if (!bucket) { bucket = []; jobsByAlpha.set(a, bucket); }
+        bucket.push(job);
+      }
+      for (const [a, jobs] of jobsByAlpha) {
+        const prefix = a < 1 ? `border_forest_a${Math.round(a * 100)}` : 'border_forest';
+        const mergedTreeMeshes = this._buildBorderForestTreesBatched(
+          parent, jobs, { season: this._season, alpha: a, namePrefix: prefix },
+        );
+        for (const m of mergedTreeMeshes) { this._addShadowCaster(m); bandTreeMeshes.push(m); }
+      }
     }
     this._borderForestBatchMeshes = bandTreeMeshes;
     // After the band is in place, extend any river that exits the playable
@@ -5487,6 +5573,30 @@ export class Renderer3D {
     return mat;
   }
 
+  /** Like `_materialFor`, but returns a translucent variant at `alpha` < 1 with
+   *  standard alpha-blending enabled. Cached separately (keyed `color@a<alpha>`)
+   *  so the opaque shared materials used by the in-map forest are never mutated.
+   *  Returns the plain opaque material when `alpha` ≥ 1. Used by the
+   *  border-forest edge fade — see `borderForestAlphaForTile`. */
+  _alphaMaterialFor(hexColor, alpha) {
+    if (!(alpha < 1)) return this._materialFor(hexColor);
+    const BABYLON = this._babylon;
+    const key = `${hexColor}@a${alpha}`;
+    if (this._materialCache.has(key)) return this._materialCache.get(key);
+    const base = this._materialFor(hexColor);
+    const mat = typeof base.clone === 'function' ? base.clone(`mat_${key}`) : base;
+    mat.alpha = alpha;
+    // Standard alpha blending. A per-mesh depth pre-pass writes depth first so
+    // overlapping translucent foliage within a tier sorts sanely instead of
+    // flickering, and keeps backface culling honest (no double-blended cone
+    // backsides). Inner tiers are more opaque and sit behind the outer ones, so
+    // back-to-front transparent sorting across tiers reads correctly.
+    if (BABYLON?.Material) mat.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
+    mat.needDepthPrePass = true;
+    this._materialCache.set(key, mat);
+    return mat;
+  }
+
   // ─── Tile top-face textures ──────────────────────────────────────────────
   //
   // Asset layout (mirrors src/renderer.js):
@@ -5825,7 +5935,7 @@ export class Renderer3D {
    *  trees feeds the input arrays. Returns the merged meshes in emission order
    *  ([trunk, ...leafBuckets]) so callers can register them with the shadow
    *  generator in one pass. */
-  _mergeTreeBuckets(trunks, leavesByColor, parent, namePrefix, trunkMat) {
+  _mergeTreeBuckets(trunks, leavesByColor, parent, namePrefix, trunkMat, { alpha = 1 } = {}) {
     const BABYLON = this._babylon;
     const out = [];
     if (!BABYLON) return out;
@@ -5845,7 +5955,7 @@ export class Renderer3D {
       const merged = BABYLON.Mesh.MergeMeshes(bucket, true, true, undefined, false, false);
       if (!merged) { bucketIdx++; continue; }
       merged.name       = `${namePrefix}_leaves_${bucketIdx}`;
-      merged.material   = this._materialFor(color);
+      merged.material   = this._alphaMaterialFor(color, alpha);
       merged.parent     = parent;
       merged.isPickable = false;
       out.push(merged);
@@ -5870,7 +5980,10 @@ export class Renderer3D {
    *
    *  `treeJobs` is `[{ namePrefix, cx, cz, trees }, ...]` — one entry per
    *  border tile that has any trees. */
-  _buildBorderForestTreesBatched(parent, treeJobs, { fogged = false, season = null } = {}) {
+  _buildBorderForestTreesBatched(
+    parent, treeJobs,
+    { fogged = false, season = null, alpha = 1, namePrefix = 'border_forest' } = {},
+  ) {
     const BABYLON = this._babylon;
     const scene   = this._scene;
     if (!BABYLON || !scene || !treeJobs || treeJobs.length === 0) return [];
@@ -5888,8 +6001,8 @@ export class Renderer3D {
       }
     }
     const trunkCss = fogged ? '#241710' : '#5a3a20';
-    const trunkMat = this._materialFor(trunkCss);
-    return this._mergeTreeBuckets(allTrunks, allLeavesByColor, parent, 'border_forest', trunkMat);
+    const trunkMat = this._alphaMaterialFor(trunkCss, alpha);
+    return this._mergeTreeBuckets(allTrunks, allLeavesByColor, parent, namePrefix, trunkMat, { alpha });
   }
 
   _buildFlatHexMesh(name, parent, x, z) {
@@ -9416,6 +9529,50 @@ export function borderTilePositions(tilesMap, bandDepth = BORDER_BAND_DEPTH) {
     }
   }
   return out;
+}
+
+/** Alpha tiers for the fade-out at the OUTER edge of the border-forest band,
+ *  indexed by rings-from-the-outer-edge. The outermost ring (index 0) is the
+ *  most transparent; each ring inward is less so; rings deeper than this list
+ *  (closer to the playable map) stay fully opaque. Operator request: fade the
+ *  outer 3 rings so the map edge dissolves instead of ending at a hard wall. */
+export const BORDER_FOREST_EDGE_ALPHAS = Object.freeze([0.2, 0.5, 0.8]);
+
+/** Chebyshev depth of a tile from the playable rectangle's edge: 0 for tiles
+ *  inside the playable rectangle, 1 for the ring immediately outside it, and
+ *  growing outward. `ext` is a `{minCol, maxCol, minRow, maxRow}` extent (from
+ *  `tilesExtent`). Pure. */
+export function borderTileDepthFromPlayable(col, row, ext) {
+  if (!ext) return 0;
+  const dCol = col < ext.minCol ? ext.minCol - col
+             : col > ext.maxCol ? col - ext.maxCol : 0;
+  const dRow = row < ext.minRow ? ext.minRow - row
+             : row > ext.maxRow ? row - ext.maxRow : 0;
+  return Math.max(dCol, dRow);
+}
+
+/** Map a border tile's distance (in rings) from the OUTER edge of the band to
+ *  its leaf/trunk alpha. Outermost ring (0) → 0.2, next in (1) → 0.5, next (2)
+ *  → 0.8; any ring deeper in (≥3, i.e. closer to the playable map) → 1.0 (fully
+ *  opaque). Anchoring the fade to the outer edge makes it look identical
+ *  regardless of band depth — a 2-deep band still fades outer=0.2, next=0.5.
+ *  NaN / negative inputs are treated as inner (opaque). Pure. */
+export function borderForestAlphaForOuterRing(ringsFromOuter) {
+  if (!(ringsFromOuter >= 0)) return 1.0;
+  if (ringsFromOuter < BORDER_FOREST_EDGE_ALPHAS.length) {
+    return BORDER_FOREST_EDGE_ALPHAS[ringsFromOuter];
+  }
+  return 1.0;
+}
+
+/** Convenience: a border tile's leaf/trunk alpha given the playable extent and
+ *  the band depth. Computes rings-from-outer-edge = `bandDepth − depthFrom
+ *  playableEdge`, then maps to an alpha tier. Tiles inside the playable
+ *  rectangle (depth 0) return 1.0. Pure. */
+export function borderForestAlphaForTile(col, row, ext, bandDepth) {
+  const depth = borderTileDepthFromPlayable(col, row, ext);
+  if (depth <= 0) return 1.0;
+  return borderForestAlphaForOuterRing(bandDepth - depth);
 }
 
 /** Deterministic cone layout for a border-forest hex. Same recipe as
