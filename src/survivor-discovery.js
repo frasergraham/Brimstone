@@ -26,9 +26,13 @@ export function triggerSurvivorEncounter(state, actor, col, row) {
     return null;
   }
 
-  st.hiddenSurvivor = false;
+  // Authored missions may pin a specific roster survivor to this tile.
+  const forcedSurvivorId = st.hiddenSurvivorId ?? null;
 
-  const entity = faction.createDiscoveryEntity(col, row, actor.ownerId, state);
+  st.hiddenSurvivor = false;
+  st.hiddenSurvivorId = null;
+
+  const entity = faction.createDiscoveryEntity(col, row, actor.ownerId, state, forcedSurvivorId);
   state.entities.push(entity);
   if (faction.canDiscoverNPCs()) {
     state.discoveredSurvivorCount = (state.discoveredSurvivorCount || 0) + 1;

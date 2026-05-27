@@ -59,6 +59,9 @@ function _applyTileDef(tile, def) {
   if ('resource' in def) tile.resource = _resolveEnum(ResourceType, def.resource);
   if (def.fortifyLevel != null) tile.fortifyLevel = def.fortifyLevel;
   if (def.hiddenSurvivor != null) tile.hiddenSurvivor = !!def.hiddenSurvivor;
+  // Carry the editor-authored specific-survivor pin (roster name) so the
+  // discovery spawn can materialise THAT survivor instead of random-picking.
+  if (def.hiddenSurvivorId != null) tile.hiddenSurvivorId = def.hiddenSurvivorId;
   if (Array.isArray(def.roadDirs)) tile.roadDirs = new Set(def.roadDirs);
   return tile;
 }
