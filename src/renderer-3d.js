@@ -615,6 +615,12 @@ export const FOCUS_EPSILON = 1e-3;
  *  Picked to frame ~3-tile diameter around the unit on a standard map. */
 export const SELECTION_FOCUS_RADIUS = 14;
 
+/** Camera radius the combat-framing ease zooms IN to when an attack starts.
+ *  Tighter than SELECTION_FOCUS_RADIUS (14) so the exchange reads as a
+ *  deliberate "lean in" on the two combatants. Normal play restores the
+ *  prior framing on the next selection/draw — no manual restore needed. */
+export const COMBAT_FOCUS_RADIUS = 12;
+
 /** Camera tilt (beta) is permanently locked at π/4 (45°). Earlier rounds
  *  allowed a clamped tilt range with Tilt-up/Tilt-down buttons and a
  *  right-drag dy → beta branch; both were removed (operator decision —
@@ -1096,6 +1102,22 @@ export function shouldAnimateFocus(curTarget, curRadius, newTarget, newRadius, e
   const dy = (curTarget?.y ?? 0) - (newTarget?.y ?? 0);
   const dz = (curTarget?.z ?? 0) - (newTarget?.z ?? 0);
   return (dx * dx + dy * dy + dz * dz) > epsilon * epsilon;
+}
+
+/** Lunge end-point: slide from the standee's CURRENT world position a
+ *  `fraction` of the way toward the target hex's world position. Stopping
+ *  short of the target (fraction < 1) closes the gap for an "attack" pose
+ *  without overlapping the target token. Returns `{ x, z }`.
+ *
+ *  Note this starts from `current`, not the attacker's hex centre — so a
+ *  unit that's mid-slide (or off-centre) lunges from where it actually is,
+ *  with no pre-snap "pop" to the hex centre. */
+export function computeLungeTarget(current, target, fraction = LUNGE_FRACTION) {
+  const f = Number.isFinite(fraction) ? fraction : LUNGE_FRACTION;
+  return {
+    x: current.x + f * (target.x - current.x),
+    z: current.z + f * (target.z - current.z),
+  };
 }
 
 /** Set `receiveShadows = true` on every (non-null) mesh in the iterable.
@@ -7249,9 +7271,22 @@ export class Renderer3D {
     this._playbackSpeedMul = mul;
   }
 
-  /** Slide the attacker's standee to the midpoint between attacker and target
-   *  hexes and hold there until `returnAllLungeAnims()` is called. Mirrors
-   *  the 2D contract: an "attack-in-progress" pose, not a one-shot. */
+  /** Slide the attacker's standee from its CURRENT position toward the target
+   *  hex, stopping LUNGE_FRACTION (~75%) of the way, and hold there until
+   *  `returnAllLungeAnims()` is called. Mirrors the 2D contract: an
+   *  "attack-in-progress" pose, not a one-shot.
+   *
+   *  Also eases the camera to the midpoint of the two hexes at a tighter
+   *  combat radius so the exchange is framed — only on the FIRST lunge of a
+   *  step (when no other lunge is in flight) to avoid camera thrash when
+   *  several lunges fire together.
+   *
+   *  Future-overhaul seam: the position-slide below is the FALLBACK pose for
+   *  rigs with no dedicated attack/lunge clip. When the combat overhaul lands
+   *  an attack clip on the paladin rig, branch here — play the clip on
+   *  `standee.paladinClone` and skip the position-slide — and keep this slide
+   *  as the no-clip fallback. The slide-vs-clip decision is the only thing
+   *  that needs to change; camera framing and lunge-home bookkeeping stay. */
   addLungeAnim(entityId, fromCol, fromRow, toCol, toRow, _type, _owner, _title) {
     if (!this._scene || !this._babylon) return;
     const standee = this._entityStandees.get(entityId);
@@ -7259,32 +7294,55 @@ export class Renderer3D {
     const BABYLON = this._babylon;
     const { x: fromX, z: fromZ } = hexToWorld(fromCol, fromRow);
     const { x: toX,   z: toZ   } = hexToWorld(toCol,   toRow);
-    const midX = (fromX + toX) * 0.5;
-    const midZ = (fromZ + toZ) * 0.5;
+
+    // Frame the combat: only when this is the first lunge of the step (the
+    // active-lunge set is still empty), so simultaneous lunges don't re-issue
+    // the focus and yoyo the camera. Eases to the world midpoint of the two
+    // hexes; the default _focusCamera early-out skips the animation when the
+    // camera already sits there (consecutive battles at the same spot).
+    const shouldFrameCombat = this._activeLungeIds.size === 0;
+
     const lungeSpeedMul = this._playbackSpeedMul ?? 1.0;
     const FRAMES_LUNGE = Math.max(1, Math.round(LUNGE_ANIM_MS * lungeSpeedMul * 60 / 1000));
 
     this._scene.stopAnimation(standee.plane);
     this._activeLungeIds.add(entityId);
 
-    // Face the lunge direction (same model-yaw logic as MOVE).
-    if (standee.paladinClone?.mesh && (toX !== fromX || toZ !== fromZ)) {
-      standee.paladinClone.mesh.rotation.y = Math.atan2(toX - fromX, toZ - fromZ);
+    if (shouldFrameCombat && this._camera) {
+      const midTarget = new BABYLON.Vector3((fromX + toX) * 0.5, 0, (fromZ + toZ) * 0.5);
+      const combatRadius = Math.min(
+        this._camera.radius,
+        Math.max(this._camera.lowerRadiusLimit ?? 4, COMBAT_FOCUS_RADIUS),
+      );
+      this._focusCamera(midTarget, combatRadius);
     }
 
-    standee.plane.position.x = fromX; standee.plane.position.z = fromZ;
+    // Start from the standee's CURRENT position — no pre-snap to the hex
+    // centre (that snap was the "pop" bug). Slide LUNGE_FRACTION toward the
+    // target hex world position so we close the gap without overlapping it.
+    const startX = standee.plane.position.x;
+    const startZ = standee.plane.position.z;
+    const { x: lungeX, z: lungeZ } = computeLungeTarget(
+      { x: startX, z: startZ }, { x: toX, z: toZ },
+    );
+
+    // Face the lunge direction (same model-yaw logic as MOVE) — yaw toward
+    // the actual motion vector (current → lunge end), not the hex centres.
+    if (standee.paladinClone?.mesh && (lungeX !== startX || lungeZ !== startZ)) {
+      standee.paladinClone.mesh.rotation.y = Math.atan2(lungeX - startX, lungeZ - startZ);
+    }
 
     const animX = new BABYLON.Animation('lgX', 'position.x', 60,
       BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
-    animX.setKeys([{ frame: 0, value: fromX }, { frame: FRAMES_LUNGE, value: midX }]);
+    animX.setKeys([{ frame: 0, value: startX }, { frame: FRAMES_LUNGE, value: lungeX }]);
     const animZ = new BABYLON.Animation('lgZ', 'position.z', 60,
       BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
-    animZ.setKeys([{ frame: 0, value: fromZ }, { frame: FRAMES_LUNGE, value: midZ }]);
+    animZ.setKeys([{ frame: 0, value: startZ }, { frame: FRAMES_LUNGE, value: lungeZ }]);
 
-    // Stash the "home" position on the standee so returnAllLungeAnims() knows
-    // where to slide back to without consulting the state (which may have
-    // changed by then — e.g. a follow-up move).
-    standee.lungeHome = { fromX, fromZ, midX, midZ };
+    // Stash the true pre-lunge position as "home" so returnAllLungeAnims()
+    // slides back to where the standee actually started — not a recomputed
+    // hex centre (which may be stale if the entity also moved this step).
+    standee.lungeHome = { homeX: startX, homeZ: startZ };
 
     const promise = new Promise(resolve => {
       this._scene.beginDirectAnimation(standee.plane, [animX, animZ], 0, FRAMES_LUNGE, false, 1, resolve);
@@ -7301,14 +7359,19 @@ export class Renderer3D {
     const FRAMES_RET = 10; // ≈170ms
     for (const [id, standee] of this._entityStandees) {
       if (!standee.lungeHome) continue;
-      const { fromX, fromZ, midX, midZ } = standee.lungeHome;
+      const { homeX, homeZ } = standee.lungeHome;
+      // Slide back from wherever the standee currently is (the lunge end) to
+      // its true pre-lunge home — read live so a stopped/partial lunge still
+      // returns smoothly rather than jumping.
+      const curX = standee.plane.position.x;
+      const curZ = standee.plane.position.z;
       this._scene.stopAnimation(standee.plane);
       const animX = new BABYLON.Animation('lrX', 'position.x', 60,
         BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
-      animX.setKeys([{ frame: 0, value: midX }, { frame: FRAMES_RET, value: fromX }]);
+      animX.setKeys([{ frame: 0, value: curX }, { frame: FRAMES_RET, value: homeX }]);
       const animZ = new BABYLON.Animation('lrZ', 'position.z', 60,
         BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
-      animZ.setKeys([{ frame: 0, value: midZ }, { frame: FRAMES_RET, value: fromZ }]);
+      animZ.setKeys([{ frame: 0, value: curZ }, { frame: FRAMES_RET, value: homeZ }]);
       const promise = new Promise(resolve => {
         this._scene.beginDirectAnimation(standee.plane, [animX, animZ], 0, FRAMES_RET, false, 1, () => {
           standee.lungeHome = null;
@@ -7330,8 +7393,8 @@ export class Renderer3D {
     for (const [id, standee] of this._entityStandees) {
       if (!standee.lungeHome) continue;
       this._scene.stopAnimation(standee.plane);
-      const { fromX, fromZ } = standee.lungeHome;
-      standee.plane.position.x = fromX; standee.plane.position.z = fromZ;
+      const { homeX, homeZ } = standee.lungeHome;
+      standee.plane.position.x = homeX; standee.plane.position.z = homeZ;
       standee.lungeHome = null;
       this._activeLungeIds.delete(id);
     }
@@ -7397,14 +7460,14 @@ export class Renderer3D {
 
   // ─── Attack hex flash ────────────────────────────────────────────────────
 
-  /** Briefly tint the attacker and target tiles' emissive colour red.
-   *  Restores the original material when the timeout fires so the tiles
-   *  return to their normal hue. */
-  addAttackAnim(actorCol, actorRow, targetCol, targetRow) {
-    if (!this._scene || !this._babylon) return;
-    this._flashTile(actorCol,  actorRow,  [0.45, 0.20, 0.05]); // amber actor
-    this._flashTile(targetCol, targetRow, [0.55, 0.10, 0.10]); // red target
-  }
+  /** No-op in 3D. The shared resolution loop calls addAttackAnim on both
+   *  renderers; the 2D renderer keeps its own actor/target hex tint, but the
+   *  3D path deliberately drops the tile flash (operator decision) — combat
+   *  feedback now reads entirely through the lunge + result floaters, which
+   *  the hex tint used to compete with. Kept as an empty hook for API parity
+   *  with the 2D renderer. `_flashTile` stays defined (it has its own
+   *  fog-persistence tests) but nothing in the combat path calls it now. */
+  addAttackAnim(_actorCol, _actorRow, _targetCol, _targetRow) { /* no tile flash in 3D */ }
 
   _flashTile(col, row, emissive01) {
     if (!this._scene || !this._babylon) return;
@@ -11218,6 +11281,11 @@ export const MOVE_ANIM_MS = 1000;
  *  alongside MOVE_ANIM_MS to keep the lunge feeling snappy relative
  *  to a normal move (~80% of one). */
 export const LUNGE_ANIM_MS = 800;
+
+/** Fraction of the way from the attacker's current position toward the
+ *  target hex the lunge slides (operator decision). 0.75 closes the gap
+ *  for an "attack" pose without overlapping the target token. */
+export const LUNGE_FRACTION = 0.75;
 
 /** Per-speed-mode multipliers applied to MOVE_ANIM_MS and friends.
  *  setPlaybackSpeed('cinematic'|'fast'|'vfast') reads from here. Fast
