@@ -49,7 +49,8 @@ import {
   addWave, removeWave, populateFromMission, CreationMode, MAP_EDGES,
   valuePanelKind, ToolValueKind, createLayerVisibility, showStructures,
   roadNodeMarkersVisible, stripTileOverlays, mapSizePreset,
-  overlayDarkenVisible, overlayEditedKeys, PATH_TOOL_OPTIONS,
+  overlayDarkenVisible, overlayEditedKeys,
+  areaTriggerLayerVisible, areaTriggerHexKeys,
 } from './mission-editor.js';
 import { MAP_SIZES } from '../map.js';
 import { createTabController } from './tab-controller.js';
@@ -97,7 +98,8 @@ const ENEMY_FACTORIES = {
 const TOOL_PALETTE = [
   { id: EditorTool.PAINT_BASE,      icon: '🌿', label: 'Paint Base',      tip: 'Paint base terrain (grass / forest / dirt) on clicked tiles' },
   { id: EditorTool.PAINT_STRUCTURE, icon: '🏠', label: 'Paint Structure', tip: 'Place or clear a building on clicked tiles' },
-  { id: EditorTool.PAINT_PATH,      icon: '🛤', label: 'Paint Path',      tip: 'Paint a path overlay (road / river / bridge) over the base' },
+  { id: EditorTool.PAINT_ROAD,      icon: '🛤', label: 'Road',           tip: 'Paint a road over the base + wire it to adjacent roads' },
+  { id: EditorTool.PAINT_RIVER,     icon: '🌊', label: 'River',          tip: 'Paint a river — must stay a branching tree (no loops or merges)' },
   { id: EditorTool.SET_RESOURCE,    icon: '💎', label: 'Set Resource',    tip: 'Set or clear a harvestable resource on clicked tiles' },
   { id: EditorTool.HIDDEN_SURVIVOR, icon: '🙋', label: 'Hidden Survivor', tip: 'Toggle a hidden survivor to be discovered on a tile' },
   { id: EditorTool.ENEMY_UNIT,      icon: '🧟', label: 'Enemy Unit',      tip: 'Place / remove a pre-placed enemy unit on a tile' },
@@ -110,6 +112,8 @@ const TOOL_PALETTE = [
 
 // Short hints shown in the VALUE panel for the value-less tools.
 const TOOL_HINTS = {
+  [EditorTool.PAINT_ROAD]: 'Click tiles to paint roads — they auto-wire to adjacent roads.',
+  [EditorTool.PAINT_RIVER]: 'Click tiles to paint a river. Rivers must stay a branching tree — a paint that would loop or merge two branches is blocked.',
   [EditorTool.HIDDEN_SURVIVOR]: 'Click a tile to toggle a hidden survivor.',
   [EditorTool.HERO_START]: 'Click a tile to move the hero start.',
   [EditorTool.WITCH_START]: 'Click a tile to move the witch start.',
@@ -240,7 +244,44 @@ export function initEditor(doc = document) {
     const ctx = renderer.ctx;
     if (!ctx) return;
     drawDarkenGeneratedOverlay(ctx);
+    drawAreaTriggerMarkers(ctx);
     drawRoadNodeMarkers(ctx);
+  }
+
+  // ── Area-event trigger layer (item 5) ──────────────────────────────────────
+  // Draw a distinct marker on every hex covered by an AREA story trigger (a
+  // trigger carrying a `hexes` array) — a "something happens when the player
+  // enters here" cue. Editor-only: painted on the 2D context after
+  // renderer.draw(), so renderer.js stays untouched. Gated on the Layers toggle.
+  function drawAreaTriggerMarkers(ctx) {
+    if (!areaTriggerLayerVisible(layers)) return;
+    const keys = areaTriggerHexKeys(editor.getMeta());
+    if (!keys.size) return;
+    const r = renderer.hexSize * renderer.zoomLevel;
+    ctx.save();
+    ctx.lineWidth = 2;
+    ctx.font = `${Math.max(10, r * 0.85)}px serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const key of keys) {
+      const [c, rr] = String(key).split(',').map(Number);
+      const { x, y } = renderer.hexToCanvasPos(c, rr);
+      ctx.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const a = Math.PI / 180 * (60 * i - 30);
+        const px = x + r * Math.cos(a);
+        const py = y + r * Math.sin(a);
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(150,90,230,0.28)'; // translucent event tint
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(200,150,255,0.85)';
+      ctx.stroke();
+      ctx.fillStyle = '#f0e0ff';
+      ctx.fillText('⚑', x, y); // "event fires when the player enters"
+    }
+    ctx.restore();
   }
 
   // ── Darken auto-generated tiles (item 9) ───────────────────────────────────
@@ -892,18 +933,6 @@ function buildValuePanel(doc, host, kind, editor, rerenderPanel) {
       }));
       break;
     }
-    case ToolValueKind.PATH: {
-      // Bridge dropped (item 7): bridges are IMPLIED at road/river crossings,
-      // never hand-painted. PATH_TOOL_OPTIONS (model) is the canonical list.
-      const items = [
-        { key: null, label: 'None' },
-        ...PATH_TOOL_OPTIONS.map(k => ({ key: k, label: titleCase(k) })),
-      ];
-      host.append(chipRow(doc, items, editor.getPaintValue('path'), (key) => {
-        editor.setPaintValue('path', key); rerenderPanel();
-      }));
-      break;
-    }
     case ToolValueKind.RESOURCE:
       host.append(labeledSelect(doc, 'Resource', _entries(ResourceType),
         editor.getPaintValue('resource'), (v) => editor.setPaintValue('resource', v)));
@@ -967,27 +996,6 @@ function powerNodeRow(doc, node, idx, editor) {
   return row;
 }
 
-// A row of text chips (None / Road / River). Active = key === selected.
-function chipRow(doc, items, selected, onPick) {
-  const row = doc.createElement('div');
-  row.className = 'e-chips';
-  for (const it of items) {
-    const btn = doc.createElement('button');
-    btn.className = 'e-chip';
-    btn.textContent = it.label;
-    btn.title = `Select ${it.label}`;
-    btn.dataset.value = it.key == null ? '' : it.key;
-    if (it.key === selected) btn.classList.add('active');
-    btn.addEventListener('click', () => onPick(it.key));
-    row.append(btn);
-  }
-  return row;
-}
-
-function titleCase(s) {
-  return String(s).charAt(0) + String(s).slice(1).toLowerCase();
-}
-
 // ── Layers (visibility) panel (item 6) ──────────────────────────────────────
 // Checkbox toggles over the editor-side display filters. Mutates the shared
 // `layers` object in place; `onChange` triggers a rerender (filter + overlay).
@@ -996,8 +1004,6 @@ function buildLayersPanel(doc, root, layers, onChange, isOverlay = false) {
   const sec = section(doc, 'Visibility');
   // item 11 — each toggle carries a tooltip explaining exactly what it shows.
   const toggles = [
-    { key: 'baseOnly', label: 'Base only',
-      tip: 'Show only base terrain (grass / forest / dirt) — hides structures + paths' },
     { key: 'roadsBuildings', label: 'Roads + Buildings',
       tip: 'Draw the structure + path layers (buildings, roads, rivers, bridges)' },
     { key: 'powerNodes', label: 'Power Nodes',
@@ -1006,6 +1012,8 @@ function buildLayersPanel(doc, root, layers, onChange, isOverlay = false) {
       tip: 'Draw the hero + witch start markers' },
     { key: 'roadNodeMarkers', label: 'Road-network nodes',
       tip: 'Draw the road-graph node overlay (structural + authored waypoints)' },
+    { key: 'areaTriggers', label: 'Area events',
+      tip: 'Mark hexes where an area story trigger fires when the player enters' },
     // item 9 — overlay maps only: there's no generated base to darken on a
     // handmade map, so this toggle is omitted there.
     ...(isOverlay ? [{ key: 'darkenGenerated', label: 'Darken auto-generated',

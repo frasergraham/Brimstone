@@ -397,11 +397,10 @@ describe('mission-editor — controller edit loop & undo', () => {
     assert.equal(ed.activeTool, EditorTool.PAINT_BASE);
   });
 
-  test('applyAt dispatches PAINT_PATH and invokes render', () => {
+  test('applyAt dispatches PAINT_RIVER and invokes render', () => {
     let renders = 0;
     const ed = createMissionEditor({ render: () => { renders++; } });
-    ed.setActiveTool(EditorTool.PAINT_PATH);
-    ed.setPaintValue('path', 'RIVER');
+    ed.setActiveTool(EditorTool.PAINT_RIVER);
     ed.applyAt({ col: 3, row: 3 });
     assert.equal(renders, 1);
     const def = ed.getMapDef().tiles.find(t => t.col === 3 && t.row === 3);
@@ -554,8 +553,7 @@ describe('mission-editor — map creation modes (item 4)', () => {
     const ed = createMissionEditor();
     ed.createNew({ mode: CreationMode.BLANK, cols: 8, rows: 8 });
     assert.equal(ed.getMode(), 'handmade');
-    ed.setActiveTool(EditorTool.PAINT_PATH);
-    ed.setPaintValue('path', 'ROAD');
+    ed.setActiveTool(EditorTool.PAINT_ROAD);
     ed.applyAt({ col: 2, row: 2 });
     ed.resizeEdge('right', 1);
     assert.equal(ed.getMode(), 'handmade', 'still handmade after edits + resize');
@@ -866,13 +864,13 @@ describe('mission-editor — valuePanelKind (item 7)', () => {
   test('paint tools expose their own value kind', () => {
     assert.equal(valuePanelKind(EditorTool.PAINT_BASE), ToolValueKind.BASE);
     assert.equal(valuePanelKind(EditorTool.PAINT_STRUCTURE), ToolValueKind.STRUCTURE);
-    assert.equal(valuePanelKind(EditorTool.PAINT_PATH), ToolValueKind.PATH);
     assert.equal(valuePanelKind(EditorTool.SET_RESOURCE), ToolValueKind.RESOURCE);
     assert.equal(valuePanelKind(EditorTool.ENEMY_UNIT), ToolValueKind.ENEMY);
   });
 
-  test('value-less tools map to NONE', () => {
-    for (const t of [EditorTool.HIDDEN_SURVIVOR, EditorTool.HERO_START,
+  test('value-less tools map to NONE (incl. the split Road / River tools)', () => {
+    for (const t of [EditorTool.PAINT_ROAD, EditorTool.PAINT_RIVER,
+      EditorTool.HIDDEN_SURVIVOR, EditorTool.HERO_START,
       EditorTool.WITCH_START, EditorTool.ROAD_NODE, EditorTool.POWER_NODE]) {
       assert.equal(valuePanelKind(t), ToolValueKind.NONE);
     }
@@ -886,17 +884,18 @@ describe('mission-editor — valuePanelKind (item 7)', () => {
 // ── Layer visibility (item 6) ──────────────────────────────────────────────────
 
 describe('mission-editor — layer visibility (item 6)', () => {
-  test('default visibility draws structures + nodes + starts, hides road markers', () => {
+  test('default visibility draws structures + nodes + starts, hides marker overlays', () => {
     const layers = createLayerVisibility();
     assert.equal(showStructures(layers), true);
     assert.equal(layers.powerNodes, true);
     assert.equal(layers.playerStarts, true);
     assert.equal(layers.roadNodeMarkers, false);
+    assert.equal(layers.areaTriggers, false);
+    // item 6 — the "Base only" toggle was removed entirely.
+    assert.ok(!('baseOnly' in layers), 'baseOnly toggle removed');
   });
 
-  test('"Base only" OR un-checking "Roads + Buildings" hides the structure layer', () => {
-    const a = createLayerVisibility(); a.baseOnly = true;
-    assert.equal(showStructures(a), false);
+  test('un-checking "Roads + Buildings" hides the structure layer', () => {
     const b = createLayerVisibility(); b.roadsBuildings = false;
     assert.equal(showStructures(b), false);
   });
