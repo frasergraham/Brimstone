@@ -43,6 +43,7 @@ import { buildPlayerStatusHtml } from './ui-render.js';
 import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { PlanActionType, groupPlanByEntity } from './planner.js';
 import { hexDistance, getNeighbors, hexKey } from './hex.js';
+import { planCombatFrames } from './combat-presentation.js';
 import { MAX_FORTIFY_LEVEL, FORT_IMPASSABLE_THRESHOLD } from './tiles.js';
 import { sightRange } from './actions.js';
 import { UNIT_TYPES } from './unit-types.js';
@@ -1154,6 +1155,13 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     if (t) t.fortifyLevel = Math.max(0, (postFortMap.get(k) ?? 0) - delta);
   }
 
+  // 3D combat-presentation (Phase 1): when a step's combat frame is held by
+  // `renderer.frameEntities` (non-restoring), this tracks that a hold is live
+  // so we can RELEASE it after the loop if the very last step was a battle and
+  // nothing else moved the camera before the SUMMARY transition. A non-combat
+  // step's own step-level frame releases it naturally (and clears this flag).
+  let _heldCombatFrame3D = false;
+
   for (let i = 0; i < steps.length; i++) {
     // During replay: if BACK or STOP was pressed, abort remaining steps immediately
     if (playback.goBack || playback.aborted || playback.jumpToEnd) break;
@@ -1218,8 +1226,50 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       && window.matchMedia?.('(min-width: 900px) and (min-aspect-ratio: 5/4)')?.matches) ?? false;
     const _battleInsetValue = _dialogDocksRight ? 500 : 0;
 
+    // ── 3D cinematic combat framing (Phase 1) ────────────────────────────────
+    // Cluster this step's visible battles by map proximity so the camera frames
+    // each cluster ONCE (via the non-restoring `frameEntities`) and HOLDS across
+    // every same-cluster battle. The 2D path is unchanged — gated on `is3D`.
+    const _cinematic = !_autoplay && (ui?.speedMode ?? 'cinematic') === 'cinematic';
+    const _is3DCinematic = !!(renderer?.is3D) && _cinematic;
+    // Same visibility predicate Phase 2 applies per battle (lines below) — so we
+    // only cluster battles that will actually be presented to this viewer.
+    const _battleShown = (ev) => {
+      const bs = ev.battleSnaps;
+      if (!bs) return false;
+      const myUnit = myPlayerId && (
+        bs.actorSnap?.ownerId === myPlayerId || bs.targetSnap?.ownerId === myPlayerId
+      );
+      return myPlayerId
+        ? myUnit
+        : (!humanFaction || state.fogOfWar === 'none' || ev.faction === humanFaction
+            || (bs.targetSnap?.owner === humanFaction || bs.actorSnap?.owner === humanFaction));
+    };
+    let _combatFrames = null;        // ordered frames from planCombatFrames
+    let _eventFrameIndex = null;     // Map<battleEvent, frameIndex>
+    let _heldFrameIndex = -1;        // which cluster the camera currently holds
+    if (_is3DCinematic) {
+      const battleEvents = events.filter(ev =>
+        (ev.action.type === PlanActionType.BATTLE_UNIT || ev.action.type === PlanActionType.BATTLE_HEX)
+        && ev.battleSnaps && !ev.result?.fortAssault && _battleShown(ev)
+      );
+      if (battleEvents.length) {
+        _combatFrames = planCombatFrames(battleEvents);
+        _eventFrameIndex = new Map();
+        for (let fi = 0; fi < _combatFrames.length; fi++) {
+          for (const ei of _combatFrames[fi].eventIndices) {
+            _eventFrameIndex.set(battleEvents[ei], fi);
+          }
+        }
+      }
+    }
+    // True when this 3D step presents battles — the step-level frame and the
+    // per-battle 2D frameHexes are suppressed for it so they don't stomp the
+    // held cluster frame.
+    const _stepHas3DCombat = !!(_combatFrames && _combatFrames.length);
+
     // ── Frame camera on this step's actors ──────────────────────────────────
-    if (!_autoplay) {
+    if (!_autoplay && !_stepHas3DCombat) {
       const _cspd = ui?.speedMode ?? 'cinematic';
       {
         // In cinematic mode, battles get per-battle dialog framing
@@ -1287,6 +1337,9 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             maxZoom:      2.0,
             duration:     250,
           });
+          // This step-level move releases any held 3D combat frame (Phase 1):
+          // the camera has just panned to a non-combat step's actors.
+          _heldCombatFrame3D = false;
           await playbackDelay(_cspd === 'vfast' ? 140 : 280);
         }
       }
@@ -1528,23 +1581,38 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             // ── Step 3: Dialog (cinematic) or toast+floater (fast/vfast) ─
             if (speed === 'cinematic') {
               // Full dialog for every battle — no significance filter.
-              // Offset camera so the map is visible beside the docked dialog.
-              // Skip the reframe if the camera is already positioned for these
-              // same hex positions (avoids yoyo between consecutive battles at
-              // the same spot).
-              const frameKey = `${actorSnap.col},${actorSnap.row}|${targetSnap.col},${targetSnap.row}`;
-              const needsReframe = frameKey !== _lastBattleFrameKey || (_dialogDocksRight && !_battleInsetActive);
-              if (needsReframe) {
-                if (_dialogDocksRight) {
-                  renderer.insetRight = _battleInsetValue;
-                  _battleInsetActive = true;
+              if (_stepHas3DCombat && _eventFrameIndex) {
+                // 3D (Phase 1): frame this battle's CLUSTER and HOLD. Only
+                // re-issue the camera move when crossing into a new cluster;
+                // same-cluster battles issue no camera op, so the non-restoring
+                // `frameEntities` frame persists across the chain. No 2D inset
+                // docking in 3D (the dialog is a centered overlay there).
+                const fi = _eventFrameIndex.get(ev);
+                if (fi != null && fi !== _heldFrameIndex) {
+                  renderer.frameEntities(_combatFrames[fi].ids, { padding: 1.15 });
+                  _heldFrameIndex = fi;
                 }
-                renderer.frameHexes(
-                  [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
-                  { paddingHexes: 2.5, maxZoom: 2.0, duration: 200 },
-                );
+                _heldCombatFrame3D = true;
+              } else {
+                // 2D: per-battle frameHexes with right-dock inset (unchanged).
+                // Offset camera so the map is visible beside the docked dialog.
+                // Skip the reframe if the camera is already positioned for these
+                // same hex positions (avoids yoyo between consecutive battles at
+                // the same spot).
+                const frameKey = `${actorSnap.col},${actorSnap.row}|${targetSnap.col},${targetSnap.row}`;
+                const needsReframe = frameKey !== _lastBattleFrameKey || (_dialogDocksRight && !_battleInsetActive);
+                if (needsReframe) {
+                  if (_dialogDocksRight) {
+                    renderer.insetRight = _battleInsetValue;
+                    _battleInsetActive = true;
+                  }
+                  renderer.frameHexes(
+                    [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
+                    { paddingHexes: 2.5, maxZoom: 2.0, duration: 200 },
+                  );
+                }
+                _lastBattleFrameKey = frameKey;
               }
-              _lastBattleFrameKey = frameKey;
               // Wait for dialog dismiss, THEN play floaters so nothing overlaps.
               await new Promise(resolve => {
                 ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
@@ -1770,21 +1838,33 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         redrawFn();
 
         if (speed === 'cinematic') {
-          // Reuse the same frame-key tracking from Phase 2 so guard strikes
-          // at the same position as a preceding regular battle skip reframing.
-          const frameKey = `${actorSnap.col},${actorSnap.row}|${targetSnap.col},${targetSnap.row}`;
-          const needsReframe = frameKey !== _lastBattleFrameKey || (_dialogDocksRight && !_battleInsetActive);
-          if (needsReframe) {
-            if (_dialogDocksRight) {
-              renderer.insetRight = _battleInsetValue;
-              _battleInsetActive = true;
+          if (_is3DCinematic) {
+            // 3D (Phase 1): hold the held cluster frame when this step already
+            // presented battles (guard strikes fire at those same hexes, so the
+            // cluster frame covers them). If the guard strike stands alone (no
+            // ACTION_OK battles this step), frame its participants once via the
+            // non-restoring primitive and hold. Either way no 2D inset docking.
+            if (!_stepHas3DCombat && !_heldCombatFrame3D) {
+              renderer.frameEntities([actorSnap.id, targetSnap.id], { padding: 1.15 });
             }
-            renderer.frameHexes(
-              [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
-              { paddingHexes: 2.5, maxZoom: 2.0, duration: 200 },
-            );
+            _heldCombatFrame3D = true;
+          } else {
+            // 2D: reuse the same frame-key tracking from Phase 2 so guard strikes
+            // at the same position as a preceding regular battle skip reframing.
+            const frameKey = `${actorSnap.col},${actorSnap.row}|${targetSnap.col},${targetSnap.row}`;
+            const needsReframe = frameKey !== _lastBattleFrameKey || (_dialogDocksRight && !_battleInsetActive);
+            if (needsReframe) {
+              if (_dialogDocksRight) {
+                renderer.insetRight = _battleInsetValue;
+                _battleInsetActive = true;
+              }
+              renderer.frameHexes(
+                [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
+                { paddingHexes: 2.5, maxZoom: 2.0, duration: 200 },
+              );
+            }
+            _lastBattleFrameKey = frameKey;
           }
-          _lastBattleFrameKey = frameKey;
           await new Promise(resolve => {
             ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
           });
@@ -1979,6 +2059,29 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       const _spd3 = ui?.speedMode ?? 'cinematic';
       await playbackDelay(_spd3 === 'vfast' ? 75 : 150);
     }
+  }
+
+  // RELEASE the held 3D combat frame (Phase 1): if the LAST presented step was
+  // a battle (or guard strike) and nothing reframed the camera before the
+  // SUMMARY transition, pull back to this player's surviving units so the
+  // resolution doesn't end clamped on a single skirmish.
+  if (_heldCombatFrame3D && renderer?.is3D && !_autoplay
+      && !playback.goBack && !playback.aborted && !playback.jumpToEnd) {
+    const mine = (finalEntities || [])
+      .filter(e => e && e.alive && e.col != null && (
+        myPlayerId ? e.ownerId === myPlayerId
+                   : (!humanFaction || e.owner === humanFaction)
+      ))
+      .map(e => ({ col: e.col, row: e.row }));
+    if (mine.length) {
+      renderer.frameHexes(mine, { paddingHexes: 3, maxZoom: 1.8, duration: 400 });
+    } else {
+      renderer.frameHexes(
+        (finalEntities || []).filter(e => e && e.alive && e.col != null).map(e => ({ col: e.col, row: e.row })),
+        { paddingHexes: 3, maxZoom: 1.8, duration: 400 },
+      );
+    }
+    _heldCombatFrame3D = false;
   }
 
   // Wait for any in-flight canvas animations (node reveals, flashes, etc.)
