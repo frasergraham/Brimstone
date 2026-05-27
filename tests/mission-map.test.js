@@ -28,7 +28,7 @@ describe('buildMissionMap — handmade', () => {
       },
       {
         col: 4, row: 4, type: 'FOREST', building: null,
-        resource: 'HERBS', hiddenSurvivor: true, roadDirs: [],
+        resource: 'HERBS', hiddenSurvivor: true, hiddenSurvivorId: 'Goody Whitlock', roadDirs: [],
       },
       { col: 5, row: 5, type: 'RIVER' },
     ],
@@ -78,6 +78,13 @@ describe('buildMissionMap — handmade', () => {
     const m = buildMissionMap(mapDef);
     assert.equal(m.tiles.get(hexKey(4, 4)).hiddenSurvivor, true);
     assert.equal(m.tiles.get(hexKey(2, 7)).hiddenSurvivor, false);
+  });
+
+  test('carries authored hiddenSurvivorId onto the tile', () => {
+    const m = buildMissionMap(mapDef);
+    assert.equal(m.tiles.get(hexKey(4, 4)).hiddenSurvivorId, 'Goody Whitlock');
+    // Tiles without an authored id leave it undefined (random-pick at runtime).
+    assert.equal(m.tiles.get(hexKey(2, 7)).hiddenSurvivorId, undefined);
   });
 });
 

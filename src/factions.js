@@ -160,7 +160,7 @@ export class Faction {
    * Create the entity discovered when this faction explores a hidden survivor tile.
    * @returns {object} entity
    */
-  createDiscoveryEntity(_col, _row, _ownerId, _state) {
+  createDiscoveryEntity(_col, _row, _ownerId, _state, _forcedSurvivorId) {
     throw new Error('Subclass must implement createDiscoveryEntity');
   }
 
@@ -468,8 +468,8 @@ export class HeroFaction extends Faction {
   }
 
   // Discovery & Loot
-  createDiscoveryEntity(col, row, ownerId, state = null) {
-    const s = createSurvivor(col, row, ownerId, state);
+  createDiscoveryEntity(col, row, ownerId, state = null, forcedSurvivorId = null) {
+    const s = createSurvivor(col, row, ownerId, state, forcedSurvivorId);
     s.owner = 'hero';
     return s;
   }

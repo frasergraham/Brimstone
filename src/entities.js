@@ -565,21 +565,32 @@ export function defaultDisplayName(type) {
   return _DEFAULT_DISPLAY_NAMES[type] ?? type;
 }
 
-export function createSurvivor(col, row, ownerId = null, state = null) {
+export function createSurvivor(col, row, ownerId = null, state = null, forcedName = null) {
   const e = new Entity(EntityType.SURVIVOR, null, col, row, ownerId, state);
 
   // Roster de-dup tracker lives on the GameState when one is provided;
   // otherwise fall back to the module-level set (editor previews / raw tests).
   const usedIndices = state ? state.usedRosterIndices : _usedRosterIndices;
 
-  // Pick a random unused character from the roster
-  const available = SURVIVOR_ROSTER
-    .map((c, i) => ({ c, i }))
-    .filter(({ i }) => !usedIndices.has(i));
+  // Forced pick: when an authored mission tile names a specific survivor,
+  // spawn THAT roster character. Unknown / null names fall through to the
+  // existing random pick (back-compat).
+  let pick = null;
+  if (forcedName != null) {
+    const fi = SURVIVOR_ROSTER.findIndex(c => c.name === forcedName);
+    if (fi >= 0) pick = { c: SURVIVOR_ROSTER[fi], i: fi };
+  }
 
-  const pick = available.length > 0
-    ? available[Math.floor(Math.random() * available.length)]
-    : { c: SURVIVOR_ROSTER[Math.floor(Math.random() * SURVIVOR_ROSTER.length)], i: -1 };
+  if (!pick) {
+    // Pick a random unused character from the roster
+    const available = SURVIVOR_ROSTER
+      .map((c, i) => ({ c, i }))
+      .filter(({ i }) => !usedIndices.has(i));
+
+    pick = available.length > 0
+      ? available[Math.floor(Math.random() * available.length)]
+      : { c: SURVIVOR_ROSTER[Math.floor(Math.random() * SURVIVOR_ROSTER.length)], i: -1 };
+  }
 
   if (pick.i >= 0) usedIndices.add(pick.i);
 
