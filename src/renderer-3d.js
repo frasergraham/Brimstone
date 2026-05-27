@@ -507,6 +507,10 @@ export const STANDEE_CONE_DIAMETER_BOTTOM = 0.55;
 export const STANDEE_CONE_DIAMETER_TOP    = 0.18;
 // Sphere "head" diameter — sits centred on the cone's flat top.
 export const STANDEE_SPHERE_DIAMETER      = 0.32;
+// X-ray occlusion sweep cadence — only ray-pick every Nth frame (and only when
+// the camera or a unit actually moved). Higher = cheaper, laggier; 4 keeps the
+// outline membership feeling instant at 60fps without picking every frame.
+export const XRAY_SWEEP_EVERY_N           = 4;
 // Y-offset for the base disc centre so it sits clear of the tile prism top
 // (which is at y=0.075). The cone/sphere are positioned relative to this disc.
 // Was 0.18 when the ground disc sat 0.105 clear of the tile prism top (0.075).
@@ -1534,6 +1538,17 @@ export class Renderer3D {
     // so the animation isn't snapped back to the state position every frame.
     this._activeMoveIds   = new Set();
     this._activeLungeIds  = new Set();
+    // X-ray occlusion outline (see `_pumpXrayOcclusion`). When an alive,
+    // fog-visible unit is hidden behind a tree/building from the current
+    // camera, its meshes are added to `_xrayHL` (a depth-ignoring
+    // HighlightLayer) with the faction colour so a see-through silhouette
+    // reads over the occluder.
+    this._xrayHL          = null;       // BABYLON.HighlightLayer, created in _initBabylon
+    this._xrayOutlinedIds = new Set();  // entity ids currently in the layer
+    this._xrayColorCache  = new Map();  // owner-css-hex → BABYLON.Color3
+    this._xrayRay         = null;       // reused BABYLON.Ray for the per-unit picks
+    this._xrayFrame       = 0;          // frame counter driving the sweep throttle
+    this._xrayLastCamKey  = '';         // quantized camera transform at last sweep
     // Map<entityId, { mesh, texture, lastHp, lastMax }> — billboarded HP bar
     // parented to the standee base, redrawn only when ratio changes.
     // Retained as a no-op compatibility hook; the floating-icon badge below
@@ -4273,6 +4288,30 @@ export class Renderer3D {
     this._sunLight          = sunLight;
     this._shadowGenerator   = shadowGenerator;
 
+    // X-ray occlusion outline layer. A HighlightLayer renders its outline
+    // over scene geometry IGNORING the depth buffer, which gives us the
+    // see-through effect for free — a unit behind a tree/building still
+    // shows a faction-coloured silhouette. `isStroke: true` draws a crisp
+    // thin border rather than the soft bloom of the old GlowLayer (removed
+    // for bloom-noise), and `innerGlow = false` keeps it outline-only with
+    // no solid fill. Membership is pumped in `_pumpXrayOcclusion`; meshes
+    // are added by reference with a per-call Color3, so no shared material
+    // is ever mutated. Requires the stencil buffer (engine created with
+    // `stencil: true` above).
+    if (typeof BABYLON.HighlightLayer === 'function') {
+      try {
+        const hl = new BABYLON.HighlightLayer('xrayOccluded', scene, {
+          isStroke: true,
+          blurHorizontalSize: 1,
+          blurVerticalSize: 1,
+          mainTextureRatio: 2,
+        });
+        hl.innerGlow = false;
+        hl.outerGlow = true;
+        this._xrayHL = hl;
+      } catch { this._xrayHL = null; }
+    }
+
     // Per-unit hex outlines are built lazily by `_syncEntityHexOutlines`
     // (one thin + one thick mesh per alive entity). The old golden singleton
     // hex outline that only showed on the selected unit has been generalised
@@ -6817,6 +6856,9 @@ export class Renderer3D {
         // because the animation group lives in scene.animationGroups, not
         // mesh.children. Dispose them first so the per-frame bone update
         // stops before the cone is gone.
+        // Drop any x-ray outline BEFORE disposing the meshes — removeMesh on
+        // a disposed mesh would throw.
+        this._clearXrayOutlineFor(id, standee);
         this._disposePaladinClone(standee);
         standee.plane.dispose();
         this._entityStandees.delete(id);
@@ -9041,6 +9083,154 @@ export class Renderer3D {
     }
   }
 
+  /** Resolve (and cache) the faction-coloured `BABYLON.Color3` for an entity's
+   *  x-ray outline. Keyed by the css hex so two units of the same owner share
+   *  one Color3 — the HighlightLayer takes the colour by value per addMesh
+   *  call, so this is purely an allocation cache (no material mutation). */
+  _xrayColorFor(entity) {
+    const key = factionOutlineColor(entity);
+    let c = this._xrayColorCache.get(key);
+    if (!c) {
+      const [r, g, b] = cssHexToRgb01(key);
+      c = new this._babylon.Color3(r, g, b);
+      this._xrayColorCache.set(key, c);
+    }
+    return c;
+  }
+
+  /** The meshes that carry a standee's visible silhouette: the paladin clone's
+   *  child meshes when it's loaded (the cone+sphere are hidden at visibility 0
+   *  in that case), otherwise the cone (`plane`) + sphere head. */
+  _xrayMeshesForStandee(standee) {
+    if (!standee) return [];
+    const clone = standee.paladinClone;
+    if (clone && Array.isArray(clone.childMeshes) && clone.childMeshes.length) {
+      return clone.childMeshes.filter(Boolean);
+    }
+    const out = [];
+    if (standee.plane)  out.push(standee.plane);
+    if (standee.sphere) out.push(standee.sphere);
+    return out;
+  }
+
+  _addXrayOutlineForStandee(standee, color) {
+    if (!this._xrayHL || !standee) return;
+    for (const m of this._xrayMeshesForStandee(standee)) {
+      try { this._xrayHL.addMesh(m, color); } catch { /* mesh gone — skip */ }
+    }
+  }
+
+  _removeXrayOutlineForStandee(standee) {
+    if (!this._xrayHL || !standee) return;
+    for (const m of this._xrayMeshesForStandee(standee)) {
+      try { this._xrayHL.removeMesh(m); } catch { /* mesh gone — skip */ }
+    }
+  }
+
+  /** Drop a single entity from the x-ray layer + tracking set. Called from the
+   *  standee-dispose loop BEFORE the mesh is disposed (removeMesh on a disposed
+   *  mesh would throw) and whenever a unit stops being occluded. */
+  _clearXrayOutlineFor(id, standee) {
+    if (this._xrayOutlinedIds.has(id)) {
+      this._removeXrayOutlineForStandee(standee || this._entityStandees.get(id));
+      this._xrayOutlinedIds.delete(id);
+    }
+  }
+
+  /** Per-frame x-ray occlusion sweep (throttled). For each alive, fog-visible
+   *  standee, cast a ray from the camera to the unit's torso anchor and pick
+   *  against occluder geometry (trees / buildings / border forest). A unit is
+   *  occluded iff the nearest occluder hit is closer than the camera→anchor
+   *  distance. The occluded set is diffed against the previous one so we only
+   *  add/remove the changed meshes — no per-frame churn on a static scene. */
+  _pumpXrayOcclusion() {
+    const HL = this._xrayHL;
+    const BABYLON = this._babylon;
+    if (!HL || !BABYLON || !this._scene || !this._camera || !this.state?.entities) return;
+
+    this._xrayFrame = (this._xrayFrame | 0) + 1;
+
+    // Camera-moved detection — quantize the ArcRotateCamera transform so tiny
+    // inertial jitter doesn't force a sweep every frame.
+    const cam = this._camera;
+    const q = (v, step) => Math.round((v ?? 0) / step);
+    const tgt = cam.target || { x: 0, z: 0 };
+    const camKey = [
+      q(cam.alpha, 0.01), q(cam.beta, 0.01), q(cam.radius, 0.1),
+      q(tgt.x, 0.1), q(tgt.z, 0.1),
+    ].join(',');
+    const camMoved = camKey !== this._xrayLastCamKey;
+    const unitsMoved = (this._activeMoveIds?.size > 0) || (this._activeLungeIds?.size > 0);
+
+    if (!shouldSweepXray({ frame: this._xrayFrame, N: XRAY_SWEEP_EVERY_N, camMoved, unitsMoved })) {
+      return;
+    }
+    this._xrayLastCamKey = camKey;
+
+    // Reused ray + reused predicate — avoid per-unit allocation.
+    let ray = this._xrayRay;
+    if (!ray) {
+      ray = this._xrayRay = new BABYLON.Ray(
+        BABYLON.Vector3.Zero(), new BABYLON.Vector3(0, 0, 1), 1,
+      );
+    }
+    const camPos = cam.position;
+
+    const next = new Set();
+    for (const [id, standee] of this._entityStandees) {
+      const plane = standee?.plane;
+      if (!plane || !plane.position) continue;
+      // NEVER outline a fog-hidden unit (the standee is setEnabled(false)).
+      if (plane.isEnabled?.() === false) continue;
+      const p = plane.position;
+      // Torso anchor: the cone centre (plane.position.y is already mid-cone)
+      // lifted a touch toward the head so the ray aims inside the silhouette.
+      const anchor = new BABYLON.Vector3(p.x, p.y + STANDEE_CONE_HEIGHT * 0.25, p.z);
+      const dir = anchor.subtract(camPos);
+      const camDist = dir.length();
+      if (camDist <= 1e-4) continue;
+      dir.normalize();
+      ray.origin.copyFrom(camPos);
+      ray.direction.copyFrom(dir);
+      ray.length = camDist;
+      const pick = this._scene.pickWithRay(ray, xrayOccluderPredicate);
+      if (isOccluded(camDist, pick?.distance ?? Infinity, !!pick?.hit)) {
+        next.add(id);
+      }
+    }
+
+    // Membership diff — only touch the layer for ids that changed state.
+    const prev = this._xrayOutlinedIds;
+    const { added, removed } = diffOccludedSets(prev, next);
+    for (const id of removed) {
+      this._removeXrayOutlineForStandee(this._entityStandees.get(id));
+      prev.delete(id);
+    }
+    if (added.length) {
+      const byId = new Map();
+      for (const e of this.state.entities) if (e && e.id != null) byId.set(e.id, e);
+      for (const id of added) {
+        const standee = this._entityStandees.get(id);
+        if (!standee) continue;
+        this._addXrayOutlineForStandee(standee, this._xrayColorFor(byId.get(id)));
+        prev.add(id);
+      }
+    }
+  }
+
+  /** Tear down the x-ray HighlightLayer + tracking state. Wired into the
+   *  renderer's teardown path (and safe to call when the layer was never
+   *  created — e.g. node-test with no Babylon scene). */
+  _disposeXray() {
+    if (this._xrayHL) {
+      try { this._xrayHL.dispose(); } catch { /* already gone */ }
+    }
+    this._xrayHL = null;
+    this._xrayOutlinedIds.clear();
+    this._xrayColorCache.clear();
+    this._xrayRay = null;
+  }
+
   // ─── Phase 6: atmosphere — lighting, node glow, fog veil, selection halo ──
   //
   // Scene-global concerns that make 3D mode feel alive: time-of-day lighting
@@ -9270,6 +9460,8 @@ export class Renderer3D {
     // per-frame mutation needed.
     // Plan ghost walking previewer.
     this._pumpPlanGhosts(now);
+    // X-ray occlusion outline — silhouette units hidden behind trees/buildings.
+    this._pumpXrayOcclusion();
     // Scene fog tracking — keep the start/end relative to the camera so the
     // band fades just past the playable map at every zoom level.
     this._pumpSceneFog();
@@ -11531,6 +11723,80 @@ export function buildFogVisibleSet(state, observerOwner) {
     }
   }
   return visible;
+}
+
+// ─── X-ray occlusion outline — pure helpers (see `_pumpXrayOcclusion`) ──────
+
+/**
+ * The css hex colour for an entity's faction outline. Mirrors the
+ * `_ownerColorFor` resolution order (explicit entity colour → faction theme
+ * primary → neutral grey) but kept pure + Babylon-free so the colour rule is
+ * unit-testable. The renderer wraps the result in a cached `Color3`.
+ */
+export function factionOutlineColor(entity) {
+  if (entity?.color) return entity.color;
+  if (entity?.owner) {
+    const theme = getFactionTheme(entity.owner);
+    if (theme?.primary) return theme.primary;
+  }
+  return '#888888';
+}
+
+/**
+ * Predicate deciding whether a mesh counts as an x-ray occluder — trees,
+ * buildings, and the map-border forest, identified by `metadata.kind` or
+ * (for the procedural / merged variants that carry no kind) a name prefix.
+ * Returning `true` from a `scene.pickWithRay` predicate overrides the meshes'
+ * `isPickable = false`, so static world geometry stays unpickable for clicks
+ * yet still blocks the x-ray ray. Unit standees never match any of these
+ * kinds, so a unit's own meshes are naturally excluded.
+ */
+export function xrayOccluderPredicate(mesh) {
+  if (!mesh) return false;
+  const kind = mesh.metadata?.kind;
+  if (kind === 'tree-glb' || kind === 'building-glb' || kind === 'map-border-forest') {
+    return true;
+  }
+  const name = mesh.name || '';
+  return name.startsWith('bldg_')
+    || name.startsWith('roof_')
+    || name.startsWith('border_forest');
+}
+
+/**
+ * A unit is occluded iff a ray from the camera to its torso anchor hits an
+ * occluder strictly nearer than the anchor itself. The epsilon guards against
+ * an occluder co-planar with the anchor counting as a (false) block.
+ */
+export function isOccluded(camDist, hitDist, hasHit) {
+  if (!hasHit) return false;
+  return hitDist < camDist - 1e-3;
+}
+
+/**
+ * Diff two occluded-id sets into {added, removed} so the renderer only mutates
+ * HighlightLayer membership for ids that actually changed state this sweep.
+ */
+export function diffOccludedSets(prev, next) {
+  const prevSet = prev instanceof Set ? prev : new Set(prev);
+  const nextSet = next instanceof Set ? next : new Set(next);
+  const added = [];
+  const removed = [];
+  for (const id of nextSet) if (!prevSet.has(id)) added.push(id);
+  for (const id of prevSet) if (!nextSet.has(id)) removed.push(id);
+  return { added, removed };
+}
+
+/**
+ * Throttle gate for the x-ray sweep: only on every Nth frame, and only when
+ * the camera transform changed since the last sweep OR a unit is mid-move/
+ * lunge. A fully static scene never re-sweeps (the membership can't change),
+ * but the first frame always sweeps because the stored camera key starts empty
+ * (→ camMoved true).
+ */
+export function shouldSweepXray({ frame, N, camMoved, unitsMoved }) {
+  if (N > 0 && (frame % N) !== 0) return false;
+  return !!(camMoved || unitsMoved);
 }
 
 /**
