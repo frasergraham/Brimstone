@@ -10188,6 +10188,12 @@ export const BORDER_BAND_DEPTH = 2;
 export const BORDER_FOREST_TREES_MIN = 5;
 export const BORDER_FOREST_TREES_MAX = 7;
 
+/** Density multiplier applied to the raw per-hex border-forest tree count
+ *  (see `scaledForestTreeCount`). 0.8 = 20% fewer trees in the border band
+ *  than the raw 5–7 range, thinning the wilderness wall while keeping the
+ *  hash-seeded placement identical. Tunable. */
+export const BORDER_FOREST_DENSITY_SCALE = 0.8;
+
 /** Returns the (col, row) positions for a `bandDepth`-hex band wrapping the
  *  rectangular playable map. Includes diagonal corner cells (i.e. fills the
  *  full surrounding rectangle minus the playable rectangle), so the formula
@@ -10290,7 +10296,8 @@ export function riverExtensionRingAlphas(pts, ext, bandDepth, radius = HEX_RADIU
  *  same (col, row) → same trees. */
 export function borderForestTreesForHex(col, row, season = null) {
   const span = BORDER_FOREST_TREES_MAX - BORDER_FOREST_TREES_MIN + 1;
-  const n    = BORDER_FOREST_TREES_MIN + Math.floor(_forestHash(col, row, 0) * span);
+  const rawN = BORDER_FOREST_TREES_MIN + Math.floor(_forestHash(col, row, 0) * span);
+  const n    = scaledForestTreeCount(rawN, BORDER_FOREST_DENSITY_SCALE);
   const scaleSpan = FOREST_SCALE_MAX - FOREST_SCALE_MIN;
   const rotation = Math.floor(_forestHash(col, row, 99) * TILE_SLOTS.length);
   const trees = [];
@@ -11100,6 +11107,21 @@ export const FOREST_SCALE_MAX = 1.2;
 export const FOREST_TREES_MIN = 3;
 export const FOREST_TREES_MAX = 5;
 
+/** Density multiplier applied to the raw per-hex playable-map forest tree
+ *  count (see `scaledForestTreeCount`). 0.6 = 40% fewer trees than the raw
+ *  3–5 range, opening up the playable map while keeping the hash-seeded
+ *  placement identical. Tunable. */
+export const FOREST_DENSITY_SCALE = 0.6;
+
+/** Scale a raw hash-derived per-hex tree count by a density multiplier,
+ *  rounding to the nearest whole tree and clamping to ≥1 so a forest hex is
+ *  never left empty. Pure + deterministic: identical (rawCount, scale) →
+ *  identical result, so the same map seed stays stable — only the count
+ *  changes, never the placement. */
+export function scaledForestTreeCount(rawCount, densityScale) {
+  return Math.max(1, Math.round(rawCount * densityScale));
+}
+
 /** Half-width of the (narrowed) road deck through a forest tile, world units. */
 export const FOREST_ROAD_HALF_WIDTH = (ROAD_RIBBON_WIDTH * FOREST_ROAD_WIDTH_FACTOR) / 2;
 /** Extra clearance past the road half-width when deciding which forest tree
@@ -11145,8 +11167,10 @@ function _forestHash(col, row, salt) {
 export function forestTreesForHex(col, row, season = null, opts = {}) {
   const reserveBuildingSlot = !!opts.reserveBuildingSlot;
   const span = FOREST_TREES_MAX - FOREST_TREES_MIN + 1;
-  const n    = FOREST_TREES_MIN + Math.floor(_forestHash(col, row, 0) * span);
-  // _forestHash returns < 1, so floor(<span) ∈ [0, span-1]; n ∈ [MIN, MAX].
+  const rawN = FOREST_TREES_MIN + Math.floor(_forestHash(col, row, 0) * span);
+  // _forestHash returns < 1, so floor(<span) ∈ [0, span-1]; rawN ∈ [MIN, MAX].
+  // Scale down to FOREST_DENSITY_SCALE of the raw count (placement unchanged).
+  const n    = scaledForestTreeCount(rawN, FOREST_DENSITY_SCALE);
   const scaleSpan = FOREST_SCALE_MAX - FOREST_SCALE_MIN;
   // Rotate the slot order per-hex so neighbouring forest hexes don't all
   // start at the same NE slot — keeps the visual variety the ring layout had.

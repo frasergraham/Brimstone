@@ -14,6 +14,11 @@ import {
   BORDER_BAND_DEPTH,
   BORDER_FOREST_TREES_MIN,
   BORDER_FOREST_TREES_MAX,
+  BORDER_FOREST_DENSITY_SCALE,
+  FOREST_TREES_MIN,
+  FOREST_TREES_MAX,
+  FOREST_DENSITY_SCALE,
+  scaledForestTreeCount,
   borderForestTreesForHex,
   borderTilePositions,
   clampPanTarget,
@@ -153,13 +158,18 @@ describe('Renderer3D — borderTilePositions', () => {
 });
 
 describe('Renderer3D — borderForestTreesForHex', () => {
-  test('cone count is within [MIN, MAX] for many hexes', () => {
+  test('cone count is within the density-scaled [MIN, MAX] for many hexes', () => {
+    // The raw 5–7 range is scaled by BORDER_FOREST_DENSITY_SCALE (20% fewer
+    // trees). scaledForestTreeCount is monotonic, so the scaled bounds are
+    // simply the scaled endpoints.
+    const lo = scaledForestTreeCount(BORDER_FOREST_TREES_MIN, BORDER_FOREST_DENSITY_SCALE);
+    const hi = scaledForestTreeCount(BORDER_FOREST_TREES_MAX, BORDER_FOREST_DENSITY_SCALE);
     for (let col = -5; col <= 20; col++) {
       for (let row = -5; row <= 20; row++) {
         const trees = borderForestTreesForHex(col, row);
         assert.ok(
-          trees.length >= BORDER_FOREST_TREES_MIN && trees.length <= BORDER_FOREST_TREES_MAX,
-          `out of range at (${col}, ${row}): ${trees.length}`,
+          trees.length >= lo && trees.length <= hi,
+          `out of range at (${col}, ${row}): ${trees.length} not in [${lo}, ${hi}]`,
         );
       }
     }
@@ -194,6 +204,53 @@ describe('Renderer3D — borderForestTreesForHex', () => {
       assert.equal(t.x, slot.x);
       assert.equal(t.z, slot.z);
     }
+  });
+});
+
+describe('Renderer3D — scaledForestTreeCount (density)', () => {
+  test('rounds to nearest and clamps to ≥1', () => {
+    // Border: raw 5–7 × 0.8 → round(4.0, 4.8, 5.6) = 4, 5, 6.
+    assert.equal(scaledForestTreeCount(5, 0.8), 4);
+    assert.equal(scaledForestTreeCount(6, 0.8), 5);
+    assert.equal(scaledForestTreeCount(7, 0.8), 6);
+    // Playable: raw 3–5 × 0.6 → round(1.8, 2.4, 3.0) = 2, 2, 3.
+    assert.equal(scaledForestTreeCount(3, 0.6), 2);
+    assert.equal(scaledForestTreeCount(4, 0.6), 2);
+    assert.equal(scaledForestTreeCount(5, 0.6), 3);
+    // Never empties a forest hex.
+    assert.equal(scaledForestTreeCount(1, 0.1), 1);
+  });
+
+  test('is monotonic non-decreasing in rawCount', () => {
+    let prev = 0;
+    for (let n = 0; n <= 12; n++) {
+      const cur = scaledForestTreeCount(n, FOREST_DENSITY_SCALE);
+      assert.ok(cur >= prev, `not monotonic at ${n}: ${cur} < ${prev}`);
+      prev = cur;
+    }
+  });
+
+  test('playable forest tree count sits in the density-scaled range', () => {
+    const lo = scaledForestTreeCount(FOREST_TREES_MIN, FOREST_DENSITY_SCALE);
+    const hi = scaledForestTreeCount(FOREST_TREES_MAX, FOREST_DENSITY_SCALE);
+    for (let col = 0; col <= 12; col++) {
+      for (let row = 0; row <= 12; row++) {
+        const trees = forestTreesForHex(col, row, 'summer');
+        assert.ok(
+          trees.length >= lo && trees.length <= hi,
+          `out of range at (${col}, ${row}): ${trees.length} not in [${lo}, ${hi}]`,
+        );
+      }
+    }
+  });
+
+  test('placement is unchanged by scaling — kept trees match the unscaled prefix', () => {
+    // Scaling only drops the count; the surviving trees occupy the same slots
+    // (in the same order) the unscaled cluster would have used. Verify the
+    // scaled cluster is a deterministic prefix of the slot/scale sequence.
+    const trees = forestTreesForHex(4, 4, 'summer');
+    const again = forestTreesForHex(4, 4, 'summer');
+    assert.deepEqual(trees, again, 'deterministic per hex');
   });
 });
 

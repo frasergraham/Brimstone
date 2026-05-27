@@ -31,6 +31,8 @@ import {
   hexToWorld,
   FOREST_TREES_MIN,
   FOREST_TREES_MAX,
+  FOREST_DENSITY_SCALE,
+  scaledForestTreeCount,
 } from '../src/renderer-3d.js';
 
 // Build a forest tile with a straight road across it (two opposite neighbours).
@@ -156,7 +158,9 @@ describe('assignTileSlotIndices — reservedSlots', () => {
 describe('forestTreesForHex — blockedSlots (road through forest)', () => {
   test('plain forest tile (no blockedSlots) uses the full outer ring', () => {
     const trees = forestTreesForHex(7, 3, 'summer');
-    assert.ok(trees.length >= FOREST_TREES_MIN && trees.length <= FOREST_TREES_MAX);
+    const lo = scaledForestTreeCount(FOREST_TREES_MIN, FOREST_DENSITY_SCALE);
+    const hi = scaledForestTreeCount(FOREST_TREES_MAX, FOREST_DENSITY_SCALE);
+    assert.ok(trees.length >= lo && trees.length <= hi);
     for (const t of trees) {
       assert.notEqual(t.slotIdx, CENTRE_SLOT_INDEX); // never the centre
       assert.ok(t.slotIdx >= 1 && t.slotIdx < TILE_SLOTS.length);
