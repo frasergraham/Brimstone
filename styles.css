@@ -35,6 +35,23 @@ button, canvas { -webkit-tap-highlight-color: transparent; touch-action: manipul
 /* pan-x pan-y: browser handles scroll gestures; JS handles taps */
 canvas { touch-action: pan-x pan-y; }
 
+/* Disable text selection game-wide — on mobile, tapping buttons (e.g. the
+   rotate controls) was selecting adjacent label text. Text-entry elements
+   opt back in so the mission editor / name / search fields still work. */
+body {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+input, textarea, select, [contenteditable], [contenteditable] * {
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  -ms-user-select: text;
+  user-select: text;
+}
+
 /* ── Setup screen ──────────────────────────────────────────────────────── */
 
 #setup-screen {
