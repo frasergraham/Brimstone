@@ -663,6 +663,13 @@ export const SELECTION_FOCUS_RADIUS = 14;
  *  prior framing on the next selection/draw — no manual restore needed. */
 export const COMBAT_FOCUS_RADIUS = 12;
 
+/** Breathing room (world units) added around an entity-framing bounding box so
+ *  standees aren't flush against the viewport edge when `frameEntities` fits a
+ *  cluster. ~1 hex of slack on every side. The actual zoom-in is still floored
+ *  at the camera's `lowerRadiusLimit`, so a single entity frames at the tightest
+ *  allowed zoom regardless of this pad. */
+export const ENTITY_FRAME_PADDING = 1.5;
+
 /** Camera tilt (beta) is permanently locked at π/4 (45°). Earlier rounds
  *  allowed a clamped tilt range with Tilt-up/Tilt-down buttons and a
  *  right-drag dy → beta branch; both were removed (operator decision —
@@ -1094,6 +1101,50 @@ export function radiusForCloseFit(minVisibleHexes, aspect, fov = 0.8, margin = 1
   const fitWidth = n * HEX_RADIUS_WORLD * SQRT3;
   const fitDepth = n * HEX_RADIUS_WORLD * 1.5;
   return radiusForFit(fitWidth, fitDepth, aspect, fov, margin);
+}
+
+/**
+ * Compute the camera framing (target centre + radius) that fits a set of world
+ * positions into the viewport at the locked isometric tilt. Pure helper for
+ * `Renderer3D.frameEntities` — unit-testable with no Babylon/DOM.
+ *
+ * `positions` is an array of `{ x, z }` world anchors (entity standee feet).
+ * `viewport` carries `{ aspect, fov, margin, padding }` (all optional with
+ * sensible defaults). `maxZoomRadius` is the tightest radius the camera is
+ * allowed to reach (the camera's `lowerRadiusLimit`) — the returned radius is
+ * floored at it so a tight cluster (or a single entity) never dives closer
+ * than the engine allows.
+ *
+ * Returns `{ centerX, centerZ, radius }`, or `null` when no finite position is
+ * supplied. The centre is the bounding-box centre of the positions (so the
+ * whole cluster fits symmetrically); for a single entity that is just its
+ * anchor, framed at `maxZoomRadius`.
+ */
+export function framingForEntities(positions, viewport = {}, maxZoomRadius = 0) {
+  if (!positions || positions.length === 0) return null;
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (const p of positions) {
+    if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.z)) continue;
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.z < minZ) minZ = p.z;
+    if (p.z > maxZ) maxZ = p.z;
+  }
+  if (!Number.isFinite(minX)) return null;
+
+  const aspect  = Number.isFinite(viewport.aspect) ? viewport.aspect : 16 / 9;
+  const fov     = Number.isFinite(viewport.fov)     ? viewport.fov     : 0.8;
+  const margin  = Number.isFinite(viewport.margin)  ? viewport.margin  : 1.05;
+  const padding = Number.isFinite(viewport.padding) ? viewport.padding : 0;
+
+  const centerX  = (minX + maxX) / 2;
+  const centerZ  = (minZ + maxZ) / 2;
+  const fitWidth = (maxX - minX) + 2 * padding;
+  const fitDepth = (maxZ - minZ) + 2 * padding;
+
+  const fitRadius = radiusForFit(fitWidth, fitDepth, aspect, fov, margin);
+  const radius    = Math.max(maxZoomRadius || 0, fitRadius);
+  return { centerX, centerZ, radius };
 }
 
 /** Minimum hex span we want visible at max zoom-in. 5 reads as a comfortable
@@ -7354,6 +7405,91 @@ export class Renderer3D {
 
     this._scene.stopAnimation(camera);
     this._scene.beginDirectAnimation(camera, [targetAnim, radiusAnim], 0, FOCUS_ANIM_FRAMES, false);
+  }
+
+  /** Resolve an entity id to its current world anchor `{ x, z }`. Prefers the
+   *  live standee position (so it tracks mid-move/lunge slides), falling back
+   *  to the entity's hex centre from game state. Returns null when neither is
+   *  available (unknown id). */
+  _entityWorldPos(id) {
+    const standee = this._entityStandees?.get(id);
+    const pos = standee?.plane?.position;
+    if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.z)) {
+      return { x: pos.x, z: pos.z };
+    }
+    const e = this.state?.entities?.find?.(en => en && en.id === id);
+    if (e && Number.isFinite(e.col) && Number.isFinite(e.row)) {
+      return hexToWorld(e.col, e.row);
+    }
+    return null;
+  }
+
+  /** Ease the camera to FRAME one or more entities — fit their collective
+   *  bounds to the viewport at the HIGHEST allowed zoom-in (closest the camera
+   *  is permitted to get, i.e. `lowerRadiusLimit`). A single entity frames at
+   *  that tightest zoom; multiple entities fit all of them with a little
+   *  padding. General-purpose mechanism reused by combat (G4) and dialog.
+   *
+   *  This is the shared, additive counterpart to the bespoke selection-focus
+   *  (`_applySelectionAndFocus`) and combat-lunge framing (`addLungeAnim`):
+   *  it reuses `_focusCamera` for the eased move and `framingForEntities` for
+   *  the centroid + fit-radius + max-zoom-clamp math, but unlike those two it
+   *  takes an explicit id list so any caller can drive it.
+   *
+   *  PERSIST / RELEASE (for G4): this method does NOT stash or auto-restore the
+   *  prior framing — once eased, the frame simply HOLDS until something else
+   *  moves the camera (a selection, a `_frameFullMap`, the next combat frame, a
+   *  manual pan/zoom). So a caller that wants the frame to persist across
+   *  consecutive combats holds it by NOT re-issuing camera moves between them,
+   *  and releases it by calling another camera op (e.g. re-select or fit-map).
+   *
+   *  `opts`:
+   *    - `forceAnimate` (default true) — animate even on a tiny shift, so the
+   *      reframe always reads as deliberate. Set false to allow the no-op
+   *      early-out.
+   *    - `instant` — snap with no animation (first-frame / test use).
+   *    - `maxZoomRadius` — override the tightest zoom (defaults to the camera's
+   *      `lowerRadiusLimit`).
+   *    - `padding` / `margin` — override the framing slack.
+   *
+   *  Returns true when a frame was issued, false when no entity resolved to a
+   *  position (so the caller can fall back). */
+  frameEntities(entityIds, opts = {}) {
+    const BABYLON = this._babylon;
+    const camera  = this._camera;
+    if (!BABYLON || !camera) return false;
+
+    const ids = Array.isArray(entityIds) ? entityIds : [entityIds];
+    const positions = [];
+    for (const id of ids) {
+      const p = this._entityWorldPos(id);
+      if (p) positions.push(p);
+    }
+    if (positions.length === 0) return false;
+
+    const aspect = this._engine
+      ? this._engine.getRenderWidth() / Math.max(1, this._engine.getRenderHeight())
+      : 16 / 9;
+    const fov = camera.fov || 0.8;
+    const maxZoom = Number.isFinite(opts.maxZoomRadius)
+      ? opts.maxZoomRadius
+      : (camera.lowerRadiusLimit ?? 4);
+
+    const framing = framingForEntities(positions, {
+      aspect, fov,
+      margin:  Number.isFinite(opts.margin)  ? opts.margin  : 1.05,
+      padding: Number.isFinite(opts.padding) ? opts.padding : ENTITY_FRAME_PADDING,
+    }, maxZoom);
+    if (!framing) return false;
+
+    // Never zoom out past the camera's max-zoom-out cap.
+    const radius = Math.min(framing.radius, camera.upperRadiusLimit ?? 200);
+    const target = new BABYLON.Vector3(framing.centerX, 0, framing.centerZ);
+    this._focusCamera(target, radius, {
+      forceAnimate: opts.forceAnimate !== false,
+      instant:      opts.instant === true,
+    });
+    return true;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
