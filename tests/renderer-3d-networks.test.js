@@ -24,6 +24,8 @@ import {
   networkStrokesForTile,
   buildRiverNetworkStrokes,
   buildRoadNetworkStrokes,
+  terminusCapSamples,
+  TERMINUS_CAP_SEGMENTS,
   RIVER_RIBBON_WIDTH,
   ROAD_RIBBON_WIDTH,
   RIVER_RIBBON_Y,
@@ -142,6 +144,21 @@ describe('networkStrokesForTile — per-tile geometry', () => {
     assert.ok(Math.abs(pts[1].x - (centre.x + apo)) < 1e-9,
       `road 1-neighbour endpoint x ${pts[1].x} should sit on east edge ${centre.x + apo}`);
     assert.ok(Math.abs(pts[1].z - centre.z) < 1e-9);
+    // The centre end is a genuine dead-end → tagged so the ribbon builder
+    // rounds + fades it into a terminus cap.
+    assert.equal(pts.terminusStart, true, 'road dead-end stub tags its centre terminus');
+  });
+
+  test('river 1-neighbour stub is NOT tagged as a terminus (flows off-map)', () => {
+    const strokes = networkStrokesForTile(
+      { col: 0, row: 0 }, [{ col: 1, row: 0 }], { kind: 'river' });
+    assert.notEqual(strokes[0].terminusStart, true);
+  });
+
+  test('multi-neighbour road strokes are not terminus-tagged', () => {
+    const strokes = networkStrokesForTile({ col: 1, row: 0 },
+      [{ col: 0, row: 0 }, { col: 2, row: 0 }], { kind: 'road' });
+    for (const s of strokes) assert.notEqual(s.terminusStart, true);
   });
 
   test('two-neighbour tile emits one smooth through-bezier between edges', () => {
@@ -380,5 +397,63 @@ describe('buildRoadNetworkStrokes', () => {
   test('null or empty tiles input returns []', () => {
     assert.deepEqual(buildRoadNetworkStrokes(null), []);
     assert.deepEqual(buildRoadNetworkStrokes(new Map()), []);
+  });
+});
+
+describe('terminusCapSamples — rounded fading road dead-end cap', () => {
+  const tip = { x: 0, z: 0 };
+  const inward = { x: 1, z: 0 }; // road body runs east; cap bulges west
+
+  test('returns TERMINUS_CAP_SEGMENTS samples by default', () => {
+    const caps = terminusCapSamples(tip, inward, 0.3);
+    assert.equal(caps.length, TERMINUS_CAP_SEGMENTS);
+  });
+
+  test('outermost sample is the tip: zero width and zero alpha, full radius out', () => {
+    const r = 0.3;
+    const caps = terminusCapSamples(tip, inward, r);
+    const outer = caps[0];
+    assert.ok(Math.abs(outer.widthScale) < 1e-9, 'tip half-width collapses to 0 (semicircle point)');
+    assert.ok(Math.abs(outer.alpha) < 1e-9, 'tip fully transparent');
+    // Tip sits a full radius OUTWARD (−inward) from the dead-end point.
+    assert.ok(Math.abs(outer.x - (-r)) < 1e-9, `tip x ${outer.x} should be ${-r}`);
+    assert.ok(Math.abs(outer.z) < 1e-9);
+  });
+
+  test('width and alpha rise monotonically from tip toward the base', () => {
+    const caps = terminusCapSamples(tip, inward, 0.3);
+    for (let i = 1; i < caps.length; i++) {
+      assert.ok(caps[i].widthScale > caps[i - 1].widthScale, 'widthScale increases inward');
+      assert.ok(caps[i].alpha >= caps[i - 1].alpha, 'alpha increases inward');
+    }
+    // Base sample is near (but below) full width/alpha — it blends into the
+    // full-width opaque road body that follows it.
+    const base = caps[caps.length - 1];
+    assert.ok(base.widthScale > 0.9 && base.widthScale <= 1.0);
+    assert.ok(base.alpha > 0.9 && base.alpha <= 1.0);
+  });
+
+  test('samples trace a quarter-circle: axisDist² + halfWidth² == radius²', () => {
+    const r = 0.42;
+    const caps = terminusCapSamples(tip, inward, r);
+    for (const c of caps) {
+      const axisDist = Math.hypot(c.x - tip.x, c.z - tip.z); // outward distance
+      const halfWidth = c.widthScale * r;
+      assert.ok(Math.abs(axisDist * axisDist + halfWidth * halfWidth - r * r) < 1e-9,
+        `sample should lie on the circle of radius ${r}`);
+    }
+  });
+
+  test('cap extends along −inward (away from the road body)', () => {
+    // inward points +x, so all cap samples sit at x ≤ 0 (west of the dead-end).
+    const caps = terminusCapSamples(tip, inward, 0.3);
+    for (const c of caps) assert.ok(c.x <= 1e-9, `cap sample x ${c.x} should be ≤ 0`);
+  });
+
+  test('guards: bad inputs return []', () => {
+    assert.deepEqual(terminusCapSamples(null, inward, 0.3), []);
+    assert.deepEqual(terminusCapSamples(tip, null, 0.3), []);
+    assert.deepEqual(terminusCapSamples(tip, inward, 0), []);
+    assert.deepEqual(terminusCapSamples(tip, inward, -1), []);
   });
 });

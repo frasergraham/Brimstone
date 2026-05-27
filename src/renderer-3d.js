@@ -5599,8 +5599,28 @@ export class Renderer3D {
       // alpha-faded ribbon edges hide the seam. River never narrows.
       const tileWidth = roadTileRibbonWidth(networkName, tile, width);
       for (let i = 0; i < strokes.length; i++) {
-        const pts = strokes[i];
-        if (!pts || pts.length < 2) continue;
+        const rawPts = strokes[i];
+        if (!rawPts || rawPts.length < 2) continue;
+        // Rounded terminus cap. A 1-neighbour ROAD stub dead-ends at its tile
+        // centre (rawPts[0]); round that end into a fading semicircle so the
+        // road dissolves into the ground instead of stopping in a hard
+        // rectangle. River termini flow off-map (border extension) and keep a
+        // square end, so this only fires for `road`. `widthScaleByPoint`
+        // narrows the ribbon's half-width to 0 at the tip (semicircle); the
+        // matching `alphaScaleByPoint` is folded into the per-vertex alpha so
+        // the cap fades to transparent.
+        let pts = rawPts;
+        let widthScaleByPoint = null;
+        let alphaScaleByPoint = null;
+        if (networkName === 'road' && rawPts.terminusStart) {
+          const dirInward = { x: rawPts[1].x - rawPts[0].x, z: rawPts[1].z - rawPts[0].z };
+          const caps = terminusCapSamples(rawPts[0], dirInward, tileWidth / 2);
+          if (caps.length > 0) {
+            pts = [...caps.map(c => ({ x: c.x, z: c.z })), ...rawPts];
+            widthScaleByPoint = [...caps.map(c => c.widthScale), ...rawPts.map(() => 1)];
+            alphaScaleByPoint = [...caps.map(c => c.alpha), ...rawPts.map(() => 1)];
+          }
+        }
         // Five-path ribbon so the alpha fade only affects the outer 10% of
         // the ribbon width on each side. Paths laid out as:
         //   right edge (alpha 0) → right inner (alpha 1) → centre (alpha 1)
@@ -5634,8 +5654,11 @@ export class Renderer3D {
           const innerArr = new Array(pts.length);
           for (let p = 0; p < pts.length; p++) {
             const mod = widthModAt(pts[p].x, pts[p].z);
-            outerArr[p] = tileWidth * mod;
-            innerArr[p] = tileWidth * OPAQUE_FRAC * mod;
+            // Cap samples shrink the half-width to 0 at the tip (semicircle);
+            // body points keep widthScale 1.
+            const wScale = widthScaleByPoint ? widthScaleByPoint[p] : 1;
+            outerArr[p] = tileWidth * mod * wScale;
+            innerArr[p] = tileWidth * OPAQUE_FRAC * mod * wScale;
           }
           perPointOuterWidth = outerArr;
           perPointInnerWidth = innerArr;
@@ -5667,7 +5690,11 @@ export class Renderer3D {
         const colors = new Float32Array(totalVerts * 4);
         for (let v = 0; v < totalVerts; v++) {
           const pathIdx = Math.min(alphaByPath.length - 1, Math.floor(v / N));
-          const a = alphaByPath[pathIdx];
+          // Length-wise cap fade multiplies the per-path edge fade so the
+          // terminus dissolves to fully transparent at its rounded tip.
+          const pointIdx = v % N;
+          const aScale = alphaScaleByPoint ? alphaScaleByPoint[pointIdx] : 1;
+          const a = alphaByPath[pathIdx] * aScale;
           colors[v * 4 + 0] = 1;
           colors[v * 4 + 1] = 1;
           colors[v * 4 + 2] = 1;
@@ -10817,6 +10844,55 @@ export function ribbonOffsetPaths(points, width) {
   return { left, right };
 }
 
+/** Number of extra centreline samples a rounded terminus cap prepends past the
+ *  dead-end tip. Higher = smoother semicircle. Tunable. */
+export const TERMINUS_CAP_SEGMENTS = 6;
+
+/** Pure helper: build the rounded semicircular cap samples for a ribbon
+ *  terminus (a road dead-end / map-edge stub). The flat end of a ribbon stops
+ *  in a hard rectangle; this rounds it into a half-disc of radius = the
+ *  ribbon's half-width and fades it out so the road dissolves into the ground
+ *  instead of butting up against it.
+ *
+ *  Given the terminus `tip` (`{x, z}`, the dead-end centreline endpoint) and
+ *  `inwardDir` (`{x, z}` pointing from the tip back along the road toward its
+ *  body), returns `count` extra centreline samples extending OUTWARD past the
+ *  tip, ordered from the OUTERMOST sample (the very tip of the semicircle)
+ *  inward toward — but not including — `tip`. Each sample carries:
+ *    • `x`, `z`        world position along the cap's central axis
+ *    • `widthScale`    half-width multiplier (0 at the tip → ~1 at the base),
+ *                      following `cos θ` so the two offset edges trace a
+ *                      quarter-circle and meet at the tip in a semicircle
+ *    • `alpha`         length-wise alpha multiplier (0 at the tip → ~1 at the
+ *                      base) so the cap fades to fully transparent at its point
+ *
+ *  Pure — no Babylon dependency, exported for unit tests. The caller prepends
+ *  these to the stroke's point list and threads `widthScale` into the per-point
+ *  ribbon width and `alpha` into the per-vertex colour buffer. */
+export function terminusCapSamples(tip, inwardDir, radius, count = TERMINUS_CAP_SEGMENTS) {
+  const out = [];
+  if (!tip || !inwardDir || !(radius > 0)) return out;
+  const len = Math.hypot(inwardDir.x, inwardDir.z) || 1;
+  const ox = -inwardDir.x / len; // outward unit (away from the road body)
+  const oz = -inwardDir.z / len;
+  const n = Math.max(1, count | 0);
+  for (let i = 0; i < n; i++) {
+    // θ runs from π/2 at the tip (i = 0) down toward 0 at the base. The base
+    // sample (i = n − 1) sits just shy of the tip point so it blends smoothly
+    // into the full-width, full-alpha road body that follows it.
+    const theta = (Math.PI / 2) * ((n - i) / n);
+    const a = radius * Math.sin(theta);   // outward distance along the axis
+    const widthScale = Math.cos(theta);   // half-width fraction at this sample
+    out.push({
+      x: tip.x + ox * a,
+      z: tip.z + oz * a,
+      widthScale,
+      alpha: widthScale,
+    });
+  }
+  return out;
+}
+
 /** Pure helper: face normal (unit vector) of the first triangle CreateRibbon
  *  emits for a `pathArray = [path0, path1]` ribbon. Babylon builds each rung
  *  of the strip as the triangle `(path0[i], path1[i], path0[i+1])`, so the
@@ -10906,8 +10982,13 @@ export function networkStrokesForTile(tile, neighbours, opts = {}) {
     const e = edges[0];
     if (kind === 'road') {
       // Dead-end stub: straight line from centre to the edge midpoint facing
-      // the lone neighbour (matches the 2D path at building entrances).
-      strokes.push([{ x: here.x, z: here.z }, { x: e.mx, z: e.mz }]);
+      // the lone neighbour (matches the 2D path at building entrances). The
+      // centre end (pts[0]) is a genuine terminus — nothing continues past it —
+      // so tag it for the rounded fading cap in `_buildNetworkMesh`. Rivers
+      // flow off-map (handled by the border extension) and keep a square end.
+      const stub = [{ x: here.x, z: here.z }, { x: e.mx, z: e.mz }];
+      stub.terminusStart = true;
+      strokes.push(stub);
       return strokes;
     }
     // River: extend off-tile in the opposite direction so endpoints fade past
