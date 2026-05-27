@@ -38,12 +38,14 @@ import {
   isOccluded,
   diffOccludedSets,
   shouldSweepXray,
+  xrayFadeFactor,
   XRAY_SWEEP_EVERY_N,
   XRAY_GHOST_GROUP,
   XRAY_GHOST_DEPTH_FUNC,
   XRAY_MASK_DEPTH_FUNC,
   XRAY_GHOST_ALPHA,
   XRAY_OUTLINE_SCALE,
+  XRAY_FADE_MS,
   XRAY_STENCIL_REF,
   XRAY_MASK_ALPHA_INDEX,
   XRAY_RING_ALPHA_INDEX,
@@ -269,8 +271,13 @@ describe('Renderer3D — xray two-layer outline build', () => {
     assert.equal(mat.depthFunction, Constants.GREATER, 'matches BABYLON.Constants.GREATER');
     assert.equal(mat.disableDepthWrite, true, 'no depth write');
     assert.equal(mat.backFaceCulling, true, 'culls back faces (front-faces-only)');
-    assert.equal(mat.alpha, XRAY_GHOST_ALPHA, 'alpha just under 1 → transparent pass');
-    assert.ok(mat.alpha > 0 && mat.alpha < 1, 'alpha in (0,1)');
+    // A freshly built ghost starts faded OUT (factor 0) — the pump fades the
+    // ring in once the unit is actually occluded. XRAY_GHOST_ALPHA is the FULL
+    // (fade target) alpha, held just under 1 so the layer routes to the
+    // transparent sub-pass; at factor 0 the ring alpha is 0.
+    assert.equal(ghost.fadeFactor, 0, 'ring starts faded out');
+    assert.equal(mat.alpha, 0, 'faded-out ring has alpha 0');
+    assert.ok(XRAY_GHOST_ALPHA > 0 && XRAY_GHOST_ALPHA < 1, 'full alpha in (0,1) → transparent pass');
     assert.equal(mat.disableColorWrite, false, 'ring DOES write colour');
     // Stencil: draw only where the body footprint bit is NOT set → hollow ring,
     // never a fill over the body (occluded or visible).
@@ -386,8 +393,10 @@ describe('Renderer3D — xray occlusion pump', () => {
     assert.equal(clear.xrayGhost, null, 'clear unit never built a ghost');
   });
 
-  test('orbiting so the unit is no longer occluded disables (but keeps) the ghost', () => {
+  test('orbiting so the unit is no longer occluded fades the ghost out, then disables it', () => {
     const r = makeRenderer();
+    let T = 1000;
+    r._nowMs = () => T;
     const occludedXs = new Set([0]);
     r._scene = makeScene(occludedXs);
     const s = makeStandee(0);
@@ -399,6 +408,9 @@ describe('Renderer3D — xray occlusion pump', () => {
     const builtGhost = s.xrayGhost;
     assert.ok(builtGhost);
     for (const m of builtGhost.meshes) assert.equal(m._enabled, true);
+    // Drive the fade-in to completion so the ring is fully on before we orbit.
+    r._pumpXrayFades(T + XRAY_FADE_MS);
+    assert.equal(builtGhost.fadeFactor, 1, 'ring fully faded in');
 
     // "Orbit": the unit is no longer occluded, and bump the camera so the
     // throttle re-sweeps (camMoved) on the next aligned frame.
@@ -409,7 +421,15 @@ describe('Renderer3D — xray occlusion pump', () => {
 
     assert.equal(r._xrayOutlinedIds.has(1), false, 'no longer occluded → dropped from set');
     assert.equal(s.xrayGhost, builtGhost, 'ghost is cached, not disposed');
-    for (const m of s.xrayGhost.meshes) assert.equal(m._enabled, false, 'whole ghost disabled when clear');
+    // Fade-out has STARTED but not finished — meshes still enabled, ring ramping down.
+    for (const m of s.xrayGhost.meshes) assert.equal(m._enabled, true, 'meshes stay enabled while fading out');
+    r._pumpXrayFades(T + XRAY_FADE_MS / 2);
+    assert.ok(builtGhost.fadeFactor > 0 && builtGhost.fadeFactor < 1, 'ring mid fade-out');
+
+    // Complete the fade-out → meshes disabled.
+    r._pumpXrayFades(T + XRAY_FADE_MS);
+    assert.equal(builtGhost.fadeFactor, 0, 'ring fully faded out');
+    for (const m of s.xrayGhost.meshes) assert.equal(m._enabled, false, 'whole ghost disabled once fade completes');
   });
 
   test('fog-hidden unit is never ghosted', () => {
@@ -524,5 +544,81 @@ describe('Renderer3D — xray occlusion pump', () => {
     assert.equal(ghost.ringMaterial.disposed, true);
     assert.equal(ghost.maskMaterial.disposed, true);
     assert.equal(r._xrayOutlinedIds.size, 0);
+  });
+});
+
+// ── Ring fade-in / fade-out ──────────────────────────────────────────────────
+// Occlusion-state changes ramp the RING layer's emissive + alpha over
+// XRAY_FADE_MS instead of flicking it on/off. The MASK layer is untouched so
+// the hollow-ring stencil keeps working through the transition.
+describe('xray ring fade', () => {
+  test('XRAY_FADE_MS is a positive tunable, XRAY_OUTLINE_SCALE is the thicker 1.13', () => {
+    assert.ok(XRAY_FADE_MS > 0, 'fade duration is positive');
+    assert.ok(Math.abs(XRAY_OUTLINE_SCALE - 1.13) < 1e-9, 'outline scale bumped to 1.13');
+    assert.ok(XRAY_OUTLINE_SCALE > 1, 'hull expanded → the rim is the outline');
+  });
+
+  test('xrayFadeFactor — linear ramp in/out, clamped, zero-duration snaps', () => {
+    // Fade IN: 0 → 1 across the window.
+    assert.equal(xrayFadeFactor({ from: 0, dir: 'in', startMs: 0, durMs: 200, now: 0 }), 0);
+    assert.equal(xrayFadeFactor({ from: 0, dir: 'in', startMs: 0, durMs: 200, now: 100 }), 0.5);
+    assert.equal(xrayFadeFactor({ from: 0, dir: 'in', startMs: 0, durMs: 200, now: 200 }), 1);
+    // Fade OUT: 1 → 0 across the window.
+    assert.equal(xrayFadeFactor({ from: 1, dir: 'out', startMs: 0, durMs: 200, now: 50 }), 0.75);
+    assert.equal(xrayFadeFactor({ from: 1, dir: 'out', startMs: 0, durMs: 200, now: 200 }), 0);
+    // Reversal mid-flight: fade in starting from a half-faded-out 0.4.
+    assert.equal(xrayFadeFactor({ from: 0.4, dir: 'in', startMs: 0, durMs: 200, now: 100 }), 0.7);
+    // Past the end clamps to the target; zero duration snaps to it.
+    assert.equal(xrayFadeFactor({ from: 0, dir: 'in', startMs: 0, durMs: 200, now: 9999 }), 1);
+    assert.equal(xrayFadeFactor({ from: 1, dir: 'in', startMs: 0, durMs: 0, now: 0 }), 1);
+    assert.equal(xrayFadeFactor({ from: 1, dir: 'out', startMs: 0, durMs: 0, now: 0 }), 0);
+  });
+
+  test('occlusion fades the ring IN — alpha ramps over the window, not a snap', () => {
+    const r = makeRenderer();
+    let T = 5000;
+    r._nowMs = () => T;
+    r._scene = makeScene(new Set([0]));
+    const s = makeStandee(0);
+    r._entityStandees = new Map([[1, s]]);
+    r.state = { entities: [{ id: 1, alive: true, owner: 'hero', col: 0, row: 0 }] };
+
+    r._pumpXrayOcclusion(); // occluded → ghost built + enabled, fade-in started at T
+    const g = s.xrayGhost;
+    assert.ok(g, 'ghost built');
+    // Right after the sweep the ring is still at the start of the fade (alpha 0).
+    assert.equal(g.fadeFactor, 0, 'starts faded out');
+    assert.equal(g.ringMaterial.alpha, 0, 'ring alpha 0 at fade start');
+    // The MASK layer is NOT faded — held at full alpha so the stencil works.
+    assert.equal(g.maskMaterial.alpha, XRAY_GHOST_ALPHA, 'mask alpha untouched during fade');
+
+    // Tick to the midpoint — alpha is partway, proving it ramps rather than snaps.
+    r._pumpXrayFades(T + XRAY_FADE_MS / 2);
+    assert.ok(g.fadeFactor > 0 && g.fadeFactor < 1, 'mid fade-in factor in (0,1)');
+    assert.ok(g.ringMaterial.alpha > 0 && g.ringMaterial.alpha < XRAY_GHOST_ALPHA,
+      'ring alpha partway between 0 and full');
+    assert.ok(g.ringMaterial.emissiveColor.r > 0, 'emissive also ramping up');
+
+    // Tick to the end — full alpha + full emissive; the fade map drains.
+    r._pumpXrayFades(T + XRAY_FADE_MS);
+    assert.equal(g.fadeFactor, 1, 'fully faded in');
+    assert.equal(g.ringMaterial.alpha, XRAY_GHOST_ALPHA, 'ring at full alpha');
+    assert.equal(r._xrayFading.size, 0, 'settled fade removed from the per-frame map');
+  });
+
+  test('steady-state ghost is not in the fade map (no per-frame churn)', () => {
+    const r = makeRenderer();
+    let T = 0;
+    r._nowMs = () => T;
+    r._scene = makeScene(new Set([0]));
+    const s = makeStandee(0);
+    r._entityStandees = new Map([[1, s]]);
+    r.state = { entities: [{ id: 1, alive: true, owner: 'hero', col: 0, row: 0 }] };
+    r._pumpXrayOcclusion();
+    r._pumpXrayFades(T + XRAY_FADE_MS); // settle the fade-in
+    assert.equal(r._xrayFading.size, 0, 'no in-flight fades once settled');
+    // A further idle tick is a no-op (map already empty).
+    r._pumpXrayFades(T + 10 * XRAY_FADE_MS);
+    assert.equal(r._xrayFading.size, 0);
   });
 });

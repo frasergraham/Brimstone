@@ -659,7 +659,14 @@ export const XRAY_GHOST_ALPHA             = 0.92;
 // Uniform scale of the RING hull above the unit's real size. The annulus between
 // the hull silhouette and the real silhouette is the visible outline thickness —
 // operator-tunable: larger = thicker outline.
-export const XRAY_OUTLINE_SCALE           = 1.08;
+export const XRAY_OUTLINE_SCALE           = 1.13;
+// Fade duration (ms) for the ring appearing/disappearing as a unit becomes
+// occluded / un-occluded. Instead of flicking the ghost on/off the instant the
+// occlusion-state changes, the RING layer's emissive + alpha ramp 0→full
+// (fade-in) or full→0 (fade-out, then the meshes are disabled). The MASK layer
+// is held at full alpha for the whole transition so the hollow-ring stencil
+// keeps working while the ring fades. Operator-tunable.
+export const XRAY_FADE_MS                 = 200;
 // Stencil bit the MASK layer writes and the RING layer tests against. Any free
 // bit works; 0x01 is simple (no other stencil consumer in the scene).
 export const XRAY_STENCIL_REF             = 0x01;
@@ -1901,6 +1908,7 @@ export class Renderer3D {
     this._xrayRay         = null;       // reused BABYLON.Ray for the per-unit picks
     this._xrayFrame       = 0;          // frame counter driving the sweep throttle
     this._xrayLastCamKey  = '';         // quantized camera transform at last sweep
+    this._xrayFading      = new Map();  // entityId → standee, ghosts with an in-flight ring fade
     // Map<entityId, { mesh, texture, lastHp, lastMax }> — billboarded HP bar
     // parented to the standee base, redrawn only when ratio changes.
     // Retained as a no-op compatibility hook; the floating-icon badge below
@@ -10296,7 +10304,11 @@ export class Renderer3D {
     } else {
       // Ring: flat faction colour, drawn only where BEHIND scene geometry
       // (depth GREATER) AND outside the masked body footprint (stencil NOTEQUAL).
-      if (color) mat.emissiveColor = color;
+      // Use an INDEPENDENT Color3 instance (not the shared cache entry) so the
+      // per-ghost fade can ramp this material's emissive 0→full without touching
+      // the cached colour or a sibling unit's ring.
+      if (color && BABYLON.Color3) mat.emissiveColor = new BABYLON.Color3(color.r, color.g, color.b);
+      else if (color) mat.emissiveColor = color;
       mat.depthFunction = FUNC_GREATER;
       if (mat.stencil) {
         mat.stencil.enabled  = true;
@@ -10423,7 +10435,15 @@ export class Renderer3D {
       ringMaterial: ringMat,
       materials: [maskMat, ringMat].filter(Boolean),
       colorKey,
+      // Fade state (see `_startXrayFade` / `_pumpXrayFades`). `ringBaseColor` is
+      // the full-strength emissive the ring fades toward; `fadeFactor` is the
+      // current 0..1 ramp; `fade` is the in-flight tween descriptor (null when
+      // steady). A freshly built ghost is fully off until the pump fades it in.
+      ringBaseColor: color ? { r: color.r, g: color.g, b: color.b } : { r: 1, g: 1, b: 1 },
+      fadeFactor: 0,
+      fade: null,
     };
+    this._applyXrayRingFade(standee.xrayGhost, 0);
     return standee.xrayGhost;
   }
 
@@ -10451,6 +10471,60 @@ export class Renderer3D {
     }
   }
 
+  /** Apply a fade factor `f` (0..1) to a ghost's RING layer ONLY: ramp the
+   *  emissive 0→full and the alpha 0→XRAY_GHOST_ALPHA. The MASK layer is left
+   *  untouched (it writes no colour — `disableColorWrite` — and stays at full
+   *  alpha so the hollow-ring stencil keeps working through the whole fade). */
+  _applyXrayRingFade(ghost, f) {
+    if (!ghost) return;
+    const k = Math.min(1, Math.max(0, f));
+    ghost.fadeFactor = k;
+    const mat = ghost.ringMaterial;
+    if (!mat) return;
+    mat.alpha = XRAY_GHOST_ALPHA * k;
+    const base = ghost.ringBaseColor;
+    if (base && mat.emissiveColor) {
+      mat.emissiveColor.r = base.r * k;
+      mat.emissiveColor.g = base.g * k;
+      mat.emissiveColor.b = base.b * k;
+    }
+  }
+
+  /** Kick off a ring fade on a standee's ghost. `dir` is `'in'` (occluded —
+   *  ramp 0→full) or `'out'` (un-occluded / fog-hidden — ramp full→0, then the
+   *  pump disables the meshes). Ramps from the CURRENT factor so a fade that
+   *  reverses mid-flight (occlude→clear→occlude) glides smoothly instead of
+   *  snapping. Registers the ghost in `_xrayFading` so `_pumpXrayFades` ticks
+   *  it; steady-state ghosts aren't in the map (no per-frame churn). */
+  _startXrayFade(standee, id, dir) {
+    const ghost = standee?.xrayGhost;
+    if (!ghost) return;
+    const from = typeof ghost.fadeFactor === 'number' ? ghost.fadeFactor : (dir === 'in' ? 0 : 1);
+    ghost.fade = { dir, from, startMs: this._nowMs(), durMs: XRAY_FADE_MS };
+    this._applyXrayRingFade(ghost, from);
+    this._xrayFading.set(id, standee);
+  }
+
+  /** Per-frame: advance every in-flight ring fade. Cheap — iterates only ghosts
+   *  mid-transition (a handful), and the map empties once each fade settles. A
+   *  completed fade-out disables the ghost's meshes (mask + ring). */
+  _pumpXrayFades(now) {
+    if (!this._xrayFading || this._xrayFading.size === 0) return;
+    for (const [id, standee] of this._xrayFading) {
+      const ghost = standee?.xrayGhost;
+      const fade = ghost?.fade;
+      if (!ghost || !fade) { this._xrayFading.delete(id); continue; }
+      const f = xrayFadeFactor({ ...fade, now });
+      this._applyXrayRingFade(ghost, f);
+      const u = fade.durMs > 0 ? (now - fade.startMs) / fade.durMs : 1;
+      if (u >= 1) {
+        ghost.fade = null;
+        this._xrayFading.delete(id);
+        if (fade.dir === 'out') this._setXrayGhostEnabled(standee, false);
+      }
+    }
+  }
+
   /** Dispose a standee's ghost meshes (mask + ring) + both cloned materials and
    *  drop the cache. */
   _disposeXrayGhost(standee) {
@@ -10472,6 +10546,7 @@ export class Renderer3D {
   _clearXrayGhostFor(id, standee) {
     this._disposeXrayGhost(standee || this._entityStandees?.get(id));
     this._xrayOutlinedIds.delete(id);
+    this._xrayFading?.delete(id);
   }
 
   /** Per-frame x-ray occlusion sweep (throttled). For each alive, fog-visible
@@ -10542,7 +10617,10 @@ export class Renderer3D {
     const prev = this._xrayOutlinedIds;
     const { added, removed } = diffOccludedSets(prev, next);
     for (const id of removed) {
-      this._setXrayGhostEnabled(this._entityStandees.get(id), false);
+      // Un-occluded (or gone fog-hidden) → fade the ring OUT, then the fade
+      // pump disables the meshes once it reaches 0 (no instant flick-off).
+      const standee = this._entityStandees.get(id);
+      if (standee?.xrayGhost) this._startXrayFade(standee, id, 'out');
       prev.delete(id);
     }
     if (added.length) {
@@ -10551,7 +10629,11 @@ export class Renderer3D {
       for (const id of added) {
         const standee = this._entityStandees.get(id);
         if (!standee) continue;
+        // Enable the meshes (builds the ghost lazily the first time) then fade
+        // the ring IN from its current factor (0 on a fresh build, or wherever
+        // an interrupted fade-out left off).
         this._enableXrayGhostFor(standee, byId.get(id));
+        this._startXrayFade(standee, id, 'in');
         prev.add(id);
       }
     }
@@ -10569,6 +10651,7 @@ export class Renderer3D {
     }
     this._xrayOutlinedIds.clear();
     this._xrayColorCache.clear();
+    this._xrayFading?.clear();
     this._xrayRay = null;
   }
 
@@ -10834,6 +10917,8 @@ export class Renderer3D {
     this._pumpPlanGhosts(now);
     // X-ray occlusion outline — silhouette units hidden behind trees/buildings.
     this._pumpXrayOcclusion();
+    // Ring fade-in/out tween for ghosts whose occlusion state just changed.
+    this._pumpXrayFades(now);
     // Scene fog tracking — keep the start/end relative to the camera so the
     // band fades just past the playable map at every zoom level.
     this._pumpSceneFog();
@@ -13330,6 +13415,22 @@ export function diffOccludedSets(prev, next) {
 export function shouldSweepXray({ frame, N, camMoved, unitsMoved }) {
   if (N > 0 && (frame % N) !== 0) return false;
   return !!(camMoved || unitsMoved);
+}
+
+/**
+ * Pure ring-fade interpolation for the x-ray outline. Given a tween descriptor
+ * (`from` factor, `dir` 'in'|'out', `startMs`, `durMs`) and the current `now`,
+ * returns the 0..1 factor the ring's emissive/alpha should be scaled by this
+ * frame. Linear ramp from `from` toward the direction's target (1 for 'in', 0
+ * for 'out'), clamped to [0,1]; a zero/negative duration snaps straight to the
+ * target. Kept Babylon-free so the fade curve is unit-testable.
+ */
+export function xrayFadeFactor({ from = 0, dir = 'in', startMs = 0, durMs = 0, now = 0 }) {
+  const target = dir === 'out' ? 0 : 1;
+  if (!(durMs > 0)) return target;
+  const u = Math.min(1, Math.max(0, (now - startMs) / durMs));
+  const f = from + (target - from) * u;
+  return Math.min(1, Math.max(0, f));
 }
 
 /**
