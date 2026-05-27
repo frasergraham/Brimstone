@@ -21,6 +21,12 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
+const _here = dirname(fileURLToPath(import.meta.url));
+const _renderer3dSrc = readFileSync(join(_here, '..', 'src', 'renderer-3d.js'), 'utf8');
 
 import {
   hexToWorld,
@@ -70,6 +76,30 @@ describe('Renderer3D Phase 5 — anim duration constants', () => {
   test('LUNGE_ANIM_MS < MOVE_ANIM_MS (sharper, snappier feel)', () => {
     assert.ok(LUNGE_ANIM_MS < MOVE_ANIM_MS,
       `expected LUNGE_ANIM_MS (${LUNGE_ANIM_MS}) < MOVE_ANIM_MS (${MOVE_ANIM_MS})`);
+  });
+
+  test('LUNGE_ANIM_MS is ~2× faster than the legacy 800ms (operator feel)', () => {
+    // Operator: the lunge "takes a little too long — about twice as fast".
+    // Halved from 800 → 400. Pin to a tight band so it can't silently
+    // regress back toward the old sluggish glide.
+    assert.ok(LUNGE_ANIM_MS >= 350 && LUNGE_ANIM_MS <= 450,
+      `expected LUNGE_ANIM_MS in [350, 450] (≈half of legacy 800), got ${LUNGE_ANIM_MS}`);
+  });
+
+  test('addLungeAnim attaches an ease-OUT easing to the lunge X/Z slide', () => {
+    // Babylon mesh wiring can't run under node:test, so guard the contract
+    // at the source level: the lunge animations must build a CubicEase set
+    // to EASINGMODE_EASEOUT and attach it to both position tracks (fast
+    // launch → decelerate into the strike, not the old ramp-up feel).
+    const start = _renderer3dSrc.indexOf('addLungeAnim(entityId');
+    const body = _renderer3dSrc.slice(
+      start,
+      _renderer3dSrc.indexOf('returnAllLungeAnims() {', start),
+    );
+    assert.match(body, /new BABYLON\.CubicEase\(\)/, 'lunge should build a CubicEase');
+    assert.match(body, /EASINGMODE_EASEOUT/, 'lunge easing mode should be EASEOUT');
+    assert.match(body, /animX\.setEasingFunction\(/, 'ease must attach to animX');
+    assert.match(body, /animZ\.setEasingFunction\(/, 'ease must attach to animZ');
   });
 
   test('PROJECTILE_ANIM_MS matches the 2D renderer default (≈320ms)', () => {

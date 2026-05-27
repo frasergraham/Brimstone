@@ -7352,12 +7352,20 @@ export class Renderer3D {
       standee.paladinClone.mesh.rotation.y = Math.atan2(lungeX - startX, lungeZ - startZ);
     }
 
+    // Ease-OUT: the lunge launches fast and decelerates into the strike
+    // (operator feel note — the old default linear/ease-in felt like it
+    // ramped up, which reads backwards for an attack).
+    const ease = new BABYLON.CubicEase();
+    ease.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEOUT);
+
     const animX = new BABYLON.Animation('lgX', 'position.x', 60,
       BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
     animX.setKeys([{ frame: 0, value: startX }, { frame: FRAMES_LUNGE, value: lungeX }]);
+    animX.setEasingFunction(ease);
     const animZ = new BABYLON.Animation('lgZ', 'position.z', 60,
       BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
     animZ.setKeys([{ frame: 0, value: startZ }, { frame: FRAMES_LUNGE, value: lungeZ }]);
+    animZ.setEasingFunction(ease);
 
     // Stash the true pre-lunge position as "home" so returnAllLungeAnims()
     // slides back to where the standee actually started — not a recomputed
@@ -7376,7 +7384,7 @@ export class Renderer3D {
   returnAllLungeAnims() {
     if (!this._scene || !this._babylon) return;
     const BABYLON = this._babylon;
-    const FRAMES_RET = 10; // ≈170ms
+    const FRAMES_RET = 8; // ≈133ms — tightened to stay snappy vs the faster lunge
     for (const [id, standee] of this._entityStandees) {
       if (!standee.lungeHome) continue;
       const { homeX, homeZ } = standee.lungeHome;
@@ -11297,10 +11305,10 @@ export function diffStandees(existingIds, entities) {
  *  stay in lockstep. */
 export const MOVE_ANIM_MS = 1000;
 
-/** Duration (ms) of an attack-lunge slide to the midpoint. Scaled
- *  alongside MOVE_ANIM_MS to keep the lunge feeling snappy relative
- *  to a normal move (~80% of one). */
-export const LUNGE_ANIM_MS = 800;
+/** Duration (ms) of an attack-lunge slide to the midpoint. The lunge
+ *  uses an ease-OUT curve (fast launch, decelerating into the strike)
+ *  and is kept short so the attack reads as a quick snap, not a glide. */
+export const LUNGE_ANIM_MS = 400;
 
 /** Fraction of the way from the attacker's current position toward the
  *  target hex the lunge slides (operator decision). 0.75 closes the gap
