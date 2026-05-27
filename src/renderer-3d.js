@@ -10770,6 +10770,10 @@ export class Renderer3D {
         mat.alpha = NODE_TINT_ALPHA;
         mat.backFaceCulling = false;
         disc.material = mat;
+        // Pin a stable alphaIndex so the transparent tint disc stops
+        // reshuffling under Babylon's per-frame distance sort as the camera
+        // moves (the same flicker fixed for overlays/road/river/border).
+        disc.alphaIndex = NODE_TINT_ALPHA_INDEX;
 
         this._nodeTintMeshes.push({
           obj, mesh: disc, mat,
@@ -11669,6 +11673,21 @@ export function riverFlowOffset(elapsedMs, speed = RIVER_FLOW_SPEED) {
   const tiles = (elapsedMs / 1000) * speed;
   return tiles - Math.floor(tiles);
 }
+/** Stable `alphaIndex` for the transparent Power-Node tint discs — the faint
+ *  faction-tinted hex overlays laid flush over each Power Node hex
+ *  (`NODE_TINT_ALPHA = 0.1`). Like the border-forest band and combat overlays,
+ *  these alpha-blended discs otherwise sit at Babylon's default `alphaIndex`
+ *  (Number.MAX_VALUE), so the transparent pass tie-breaks them purely on
+ *  distance-to-camera and they reshuffle / pop as the camera moves. Pinned at
+ *  70 — the LOWEST in the band — so the tints draw first (behind everything):
+ *  below the border ground (80) and foliage (90), below the road/river ribbons
+ *  (100/200), and below the combat overlays (300+). That ordering reads right:
+ *  node tints are faint ground-level objective markers, so roads, water, and
+ *  interactive overlays all correctly draw on top of them. Only the transparent
+ *  tint discs are pinned here — the R5 controller ring (opaque tube, gated via
+ *  `nodeControllerRingVisible`) is untouched. */
+export const NODE_TINT_ALPHA_INDEX = 70;
+
 /** Stable `alphaIndex` values for the FADED (alpha < 1) border-forest band
  *  meshes — the dissolving outer rings of ground discs and foliage. Without an
  *  explicit index every faded band mesh sits at Babylon's default
