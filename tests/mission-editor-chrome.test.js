@@ -1,7 +1,8 @@
 // Tests for the mission-editor CHROME/LAYOUT polish chunk (items 1–4, 11, 12):
 //   • createToastHost   — show / auto-dismiss / [✕] dismiss / dismissAll (item 4)
 //   • mapSizePreset     — standard-size → X/Y prefill mapping (item 12)
-//   • buildEdgeButtons  — relocated in-map edge controls still drive resizeEdge (item 1)
+//   • edgeButtonTargets / hitTestEdgeButton — canvas-drawn in-map resize buttons:
+//        layout tracks the map edges + clicks map back to resizeEdge args (item 1)
 //   • buildMapControls  — fit-map button calls the injected renderer-fit (item 3)
 //
 // DOM-light per CLAUDE.md: a tiny fake `document` (createElement + append/remove/
@@ -14,8 +15,10 @@ import assert from 'node:assert/strict';
 
 import {
   createToastHost,
-  buildEdgeButtons,
   buildMapControls,
+  edgeButtonTargets,
+  hitTestEdgeButton,
+  EDGE_BTN_RADIUS,
 } from '../src/tools/mission-editor-ui.js';
 import { mapSizePreset, MAP_EDGES } from '../src/tools/mission-editor.js';
 import { MAP_SIZES } from '../src/map.js';
@@ -118,54 +121,56 @@ describe('mapSizePreset', () => {
   });
 });
 
-// ── buildEdgeButtons (item 1) ─────────────────────────────────────────────────────
-describe('buildEdgeButtons', () => {
-  function fakeEditor() {
-    const calls = [];
-    return {
-      calls,
-      resizeEdge(edge, delta) { calls.push({ edge, delta }); return { ok: true, warning: '' }; },
-    };
-  }
+// ── edgeButtonTargets / hitTestEdgeButton (item 1) ────────────────────────────────
+// The per-edge resize −/+ buttons are now painted on the canvas; these pure helpers
+// own the layout (canvas-pixel circles tracking each map edge) and the click→
+// resizeEdge mapping. A trivial `anchor` (col,row → centre) lets us assert geometry
+// without a real Renderer; the resize LOGIC itself is covered in mission-editor.test.js.
+describe('edgeButtonTargets', () => {
+  // anchor: hex (c,r) sits at pixel (c*10, r*10) — a clean grid for assertions.
+  const anchor = (c, r) => ({ x: c * 10, y: r * 10 });
+  const HEX_PX = 10;
 
-  test('builds one −/+ pair per map edge', () => {
-    const editor = fakeEditor();
-    const wrap = buildEdgeButtons(fakeDoc, editor, {});
-    const btns = wrap.findAll('e-edge-btn');
-    assert.equal(btns.length, MAP_EDGES.length * 2);
+  test('builds one −/+ pair per map edge, in (−,+) order', () => {
+    const targets = edgeButtonTargets({ cols: 9, rows: 9 }, anchor, HEX_PX);
+    assert.equal(targets.length, MAP_EDGES.length * 2);
+    // Every edge appears exactly once at delta −1 and once at +1.
+    for (const edge of MAP_EDGES) {
+      assert.equal(targets.filter(t => t.edge === edge && t.delta === -1).length, 1, `−1 for ${edge}`);
+      assert.equal(targets.filter(t => t.edge === edge && t.delta === 1).length, 1, `+1 for ${edge}`);
+    }
+    // Glyphs follow the delta sign.
+    assert.ok(targets.every(t => t.glyph === (t.delta > 0 ? '+' : '−')));
   });
 
-  test('+ drives resizeEdge(edge, +1); − drives resizeEdge(edge, −1)', () => {
-    const editor = fakeEditor();
-    const wrap = buildEdgeButtons(fakeDoc, editor, {});
-    const btns = wrap.findAll('e-edge-btn');
-    for (const b of btns) b.click();
-    // Every edge appears once at +1 and once at −1.
-    for (const edge of MAP_EDGES) {
-      assert.ok(editor.calls.some(c => c.edge === edge && c.delta === 1), `+1 for ${edge}`);
-      assert.ok(editor.calls.some(c => c.edge === edge && c.delta === -1), `−1 for ${edge}`);
+  test('right/left pairs sit beyond the map x-extent; top/bottom beyond the y-extent', () => {
+    const targets = edgeButtonTargets({ cols: 9, rows: 9 }, anchor, HEX_PX);
+    const maxX = 8 * 10, maxY = 8 * 10; // rightmost col / bottom row pixel
+    const right = targets.filter(t => t.edge === 'right');
+    const left = targets.filter(t => t.edge === 'left');
+    const bottom = targets.filter(t => t.edge === 'bottom');
+    const top = targets.filter(t => t.edge === 'top');
+    assert.ok(right.every(t => t.x > maxX), 'right pair is past the right edge');
+    assert.ok(left.every(t => t.x < 0), 'left pair is past the left edge');
+    assert.ok(bottom.every(t => t.y > maxY), 'bottom pair is below the bottom edge');
+    assert.ok(top.every(t => t.y < 0), 'top pair is above the top edge');
+  });
+
+  test('hitTestEdgeButton maps a click on a button back to its (edge, delta)', () => {
+    const targets = edgeButtonTargets({ cols: 9, rows: 9 }, anchor, HEX_PX);
+    for (const t of targets) {
+      const hit = hitTestEdgeButton(targets, t.x, t.y);
+      assert.ok(hit, 'centre of a button is a hit');
+      assert.equal(hit.edge, t.edge);
+      assert.equal(hit.delta, t.delta);
     }
   });
 
-  test('onResize receives the resizeEdge result', () => {
-    const editor = fakeEditor();
-    let got = null;
-    const wrap = buildEdgeButtons(fakeDoc, editor, { onResize: (r) => { got = r; } });
-    wrap.findAll('e-edge-btn')[0].click();
-    assert.equal(got.ok, true);
-  });
-
-  test('a blocked resize surfaces a toast', () => {
-    const editor = {
-      resizeEdge() { return { ok: false, warning: 'Cannot remove that edge.' }; },
-    };
-    const shown = [];
-    const toast = { show: (msg, opts) => shown.push({ msg, opts }) };
-    const wrap = buildEdgeButtons(fakeDoc, editor, { toast });
-    wrap.findAll('e-edge-btn')[0].click();
-    assert.equal(shown.length, 1);
-    assert.equal(shown[0].opts.type, 'err');
-    assert.match(shown[0].msg, /Cannot remove/);
+  test('hitTestEdgeButton respects the button radius (just inside hits, just outside misses)', () => {
+    const targets = edgeButtonTargets({ cols: 9, rows: 9 }, anchor, HEX_PX);
+    const t = targets[0];
+    assert.ok(hitTestEdgeButton(targets, t.x + EDGE_BTN_RADIUS - 0.5, t.y), 'just inside the rim');
+    assert.equal(hitTestEdgeButton(targets, t.x + EDGE_BTN_RADIUS + 2, t.y - 1000), null, 'far outside any button');
   });
 });
 

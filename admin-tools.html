@@ -332,22 +332,8 @@
     #editor-panel .e-edge-label { font-size: 12px; color: #d4cba0; text-transform: capitalize; }
     #editor-panel .e-edge-row .e-small { min-width: 30px; text-align: center; }
 
-    /* ── In-map per-edge resize buttons (item 1) ───────────────────────────── */
-    /* Anchored to the map-area frame, so they stay legible as the map pans/zooms.
-       Each edge gets a circular −/+ pair centered on that edge of the pane. */
-    #editor-panel .e-edge-overlay { position: absolute; inset: 0; z-index: 4; pointer-events: none; }
-    #editor-panel .e-edge-group { position: absolute; display: flex; gap: 6px; pointer-events: auto; }
-    #editor-panel .e-edge-top    { top: 8px;    left: 50%; transform: translateX(-50%); }
-    #editor-panel .e-edge-bottom { bottom: 8px; left: 50%; transform: translateX(-50%); }
-    #editor-panel .e-edge-left   { left: 8px;   top: 50%; transform: translateY(-50%); flex-direction: column; }
-    #editor-panel .e-edge-right  { right: 8px;  top: 50%; transform: translateY(-50%); flex-direction: column; }
-    #editor-panel .e-edge-btn {
-      width: 28px; height: 28px; border-radius: 50%; border: 1px solid #c4a04a;
-      background: rgba(26,22,16,0.85); color: #ffd680; font-size: 16px; line-height: 1;
-      cursor: pointer; display: flex; align-items: center; justify-content: center;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.5);
-    }
-    #editor-panel .e-edge-btn:hover { background: #5a4a30; }
+    /* Per-edge map resize −/+ buttons are now painted on the canvas itself (see
+       drawEdgeResizeButtons in mission-editor-ui.js), so they need no DOM/CSS. */
 
     /* ── In-map control cluster (item 3 — fit map) ─────────────────────────── */
     #editor-panel .e-mapctl {

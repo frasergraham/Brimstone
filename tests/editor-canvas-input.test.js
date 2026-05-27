@@ -13,6 +13,7 @@ import { Renderer } from '../src/renderer.js';
 import {
   pointerToCanvas, hexFromPointer, isPanDrag, PAN_DRAG_THRESHOLD_PX,
 } from '../src/tools/editor-canvas-input.js';
+import { edgeButtonTargets, hitTestEdgeButton } from '../src/tools/mission-editor-ui.js';
 
 // ── Minimal fake canvas the Renderer can lay out + transform against ──────────
 function makeFakeCanvas(cssW = 800, cssH = 600, bufW = 800, bufH = 600) {
@@ -104,5 +105,53 @@ describe('editor-canvas-input — click→hex under zoom + pan', () => {
     const clientY = center.y * (rect.height / canvas.height) + rect.top;
     const hex = hexFromPointer(r, clientX, clientY, rect, canvas);
     assert.deepEqual({ col: hex.col, row: hex.row }, { col, row });
+  });
+});
+
+// The in-map resize buttons are laid out against the SAME renderer transform the
+// click handler inverts. This exercises the real round-trip (renderer.hexToCanvasPos
+// as the anchor) to confirm: (a) the buttons sit OFF the grid (so they never overlap
+// a paintable hex) and (b) a click at a button centre hit-tests to the right
+// (edge, delta) — the args fed verbatim to editor.resizeEdge.
+describe('edge resize buttons — layout + hit-test against a real Renderer', () => {
+  const dims = { cols: 9, rows: 9 };
+
+  function targetsFor(r) {
+    const hexPx = r.hexSize * r.zoomLevel;
+    return edgeButtonTargets(dims, (c, rr) => r.hexToCanvasPos(c, rr), hexPx);
+  }
+
+  test('a click on a button resolves to its (edge, delta); none lands on a hex centre', () => {
+    const canvas = makeFakeCanvas();
+    const r = makeRenderer(canvas);
+    r.zoomLevel = 1.6;
+    r._panX = 30;
+    r._panY = -20;
+    const targets = targetsFor(r);
+    assert.equal(targets.length, 8); // 4 edges × (−,+)
+
+    for (const t of targets) {
+      const hit = hitTestEdgeButton(targets, t.x, t.y);
+      assert.equal(hit.edge, t.edge);
+      assert.equal(hit.delta, t.delta);
+      // The button centre sits outside every in-bounds hex (it's beyond the edge),
+      // so routing it to resize rather than paint is unambiguous.
+      const hex = r.canvasToHex(t.x, t.y);
+      const inBounds = hex.col >= 0 && hex.col < dims.cols && hex.row >= 0 && hex.row < dims.rows;
+      assert.equal(inBounds, false, `button ${t.edge}${t.delta > 0 ? '+' : '−'} is off the grid`);
+    }
+  });
+
+  test('buttons track the map: re-laying out after a pan moves them with the grid', () => {
+    const canvas = makeFakeCanvas();
+    const r = makeRenderer(canvas);
+    const before = targetsFor(r);
+    r._panX += 100;
+    r._panY += 40;
+    const after = targetsFor(r);
+    for (let i = 0; i < before.length; i++) {
+      assert.ok(Math.abs(after[i].x - (before[i].x + 100)) < 1e-6, 'x shifts with pan');
+      assert.ok(Math.abs(after[i].y - (before[i].y + 40)) < 1e-6, 'y shifts with pan');
+    }
   });
 });

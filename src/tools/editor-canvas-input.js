@@ -67,10 +67,13 @@ export function isPanDrag(dx, dy, threshold = PAN_DRAG_THRESHOLD_PX) {
  * @param {import('../renderer.js').Renderer} renderer
  * @param {object} cb
  * @param {(hex:{col:number,row:number}) => void} cb.onPaint  fired on a non-drag click/tap
+ * @param {(pt:{x:number,y:number}) => boolean} [cb.onCanvasClick] fired with canvas
+ *        backing-store coords on a non-drag click/tap BEFORE onPaint; return true to
+ *        consume the click (e.g. it hit an on-canvas control) and suppress painting.
  * @param {() => void} [cb.onRedraw]                          redraw after pan/zoom
  * @returns {() => void} detach — removes every listener it added
  */
-export function attachEditorCanvasControls(canvas, renderer, { onPaint, onRedraw } = {}) {
+export function attachEditorCanvasControls(canvas, renderer, { onPaint, onCanvasClick, onRedraw } = {}) {
   const ac = new AbortController();
   const sig = { signal: ac.signal };
   const redraw = () => { try { onRedraw?.(); } catch { /* ignore */ } };
@@ -111,7 +114,10 @@ export function attachEditorCanvasControls(canvas, renderer, { onPaint, onRedraw
   canvas.addEventListener('click', (e) => {
     if (didDrag) { didDrag = false; return; } // a pan, not a paint
     const rect = canvas.getBoundingClientRect();
-    const hex = hexFromPointer(renderer, e.clientX, e.clientY, rect, canvas);
+    const pt = pointerToCanvas(e.clientX, e.clientY, rect, canvas);
+    if (!pt) return;
+    if (onCanvasClick?.(pt)) return; // consumed by an on-canvas control (e.g. resize button)
+    const hex = renderer.canvasToHex(pt.x, pt.y);
     if (hex) onPaint?.(hex);
   }, sig);
 
@@ -177,12 +183,16 @@ export function attachEditorCanvasControls(canvas, renderer, { onPaint, onRedraw
   }, { passive: false, ...sig });
 
   canvas.addEventListener('touchend', (e) => {
-    // A clean one-finger tap (no drag, no pinch) paints.
+    // A clean one-finger tap (no drag, no pinch) paints — unless it hits an
+    // on-canvas control (resize button), which consumes the tap first.
     if (touchStart && !touchDidDrag && e.changedTouches.length) {
       const rect = canvas.getBoundingClientRect();
       const t = e.changedTouches[0];
-      const hex = hexFromPointer(renderer, t.clientX, t.clientY, rect, canvas);
-      if (hex) onPaint?.(hex);
+      const pt = pointerToCanvas(t.clientX, t.clientY, rect, canvas);
+      if (pt && !onCanvasClick?.(pt)) {
+        const hex = renderer.canvasToHex(pt.x, pt.y);
+        if (hex) onPaint?.(hex);
+      }
     }
     if (e.touches.length === 0) { touchStart = null; touchDidDrag = false; pinchDist = 0; }
   }, sig);

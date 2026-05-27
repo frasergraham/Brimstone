@@ -46,7 +46,7 @@ import {
 import {
   createMissionEditor, createPreviewController, EditorTool, ENEMY_UNIT_TYPES,
   addStoryTrigger, removeStoryTrigger,
-  addWave, removeWave, populateFromMission, CreationMode, MAP_EDGES,
+  addWave, removeWave, populateFromMission, CreationMode,
   valuePanelKind, ToolValueKind, createLayerVisibility, showStructures,
   roadNodeMarkersVisible, stripTileOverlays, mapSizePreset,
   overlayDarkenVisible, overlayEditedKeys,
@@ -309,6 +309,55 @@ export function initEditor(doc = document) {
     drawDarkenGeneratedOverlay(ctx);
     drawAreaTriggerMarkers(ctx);
     drawRoadNodeMarkers(ctx);
+    drawEdgeResizeButtons(ctx);
+  }
+
+  // ── In-map per-edge resize buttons (item 1) ─────────────────────────────────
+  // Painted on the 2D context after renderer.draw() — round −/+ pairs just outside
+  // each map edge (handmade only). `edgeButtonHits` caches the exact circles drawn
+  // so the canvas click handler can hit-test against the same geometry. Replaces
+  // the old DOM overlay buttons; the resize logic (editor.resizeEdge) is unchanged.
+  let edgeButtonHits = [];
+  function drawEdgeResizeButtons(ctx) {
+    edgeButtonHits = [];
+    if (editor.getMode() !== 'handmade') return; // size is preset-driven for overlay maps
+    const hexPx = renderer.hexSize * renderer.zoomLevel;
+    const targets = edgeButtonTargets(
+      editor.getDims(),
+      (c, r) => renderer.hexToCanvasPos(c, r),
+      hexPx,
+    );
+    edgeButtonHits = targets;
+    ctx.save();
+    ctx.font = `${Math.round(EDGE_BTN_RADIUS * 1.5)}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineWidth = 1.5;
+    for (const t of targets) {
+      ctx.beginPath();
+      ctx.arc(t.x, t.y, t.r, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(26,22,16,0.88)';
+      ctx.fill();
+      ctx.strokeStyle = '#c4a04a';
+      ctx.stroke();
+      ctx.fillStyle = '#ffd680';
+      ctx.fillText(t.glyph, t.x, t.y + 1);
+    }
+    ctx.restore();
+  }
+
+  // Route a canvas click that lands on a resize button to editor.resizeEdge — the
+  // SAME handler the old DOM buttons used. Returns true when the click is consumed
+  // (so the canvas input layer skips painting a tile). A blocked / lossy resize
+  // surfaces via toast; a successful one rebuilds the palette + reframes.
+  function handleEdgeButtonClick(canvasPt) {
+    const hit = hitTestEdgeButton(edgeButtonHits, canvasPt.x, canvasPt.y);
+    if (!hit) return false;
+    const res = editor.resizeEdge(hit.edge, hit.delta);
+    if (!res.ok) toast.show(res.warning || 'Resize blocked.', { type: 'err' });
+    else if (res.warning) toast.show(res.warning, { type: 'info' });
+    if (res.ok) { rebuildMapPalette(); resetViewAndDraw(); }
+    return true;
   }
 
   // ── Area-event trigger layer (item 5) ──────────────────────────────────────
@@ -413,6 +462,8 @@ export function initEditor(doc = document) {
 
   // ── Pan / zoom / paint (reuses the in-game Renderer transform) ────────────
   attachEditorCanvasControls(canvas, renderer, {
+    // Intercept clicks landing on an on-canvas resize button before they paint.
+    onCanvasClick: (pt) => handleEdgeButtonClick(pt),
     onPaint: (hex) => {
       const res = editor.applyAt(hex);
       // A blocked edit (e.g. the Power-Node 5-hex cap) surfaces its reason.
@@ -500,9 +551,6 @@ export function initEditor(doc = document) {
 
   mapArea = buildMapAreaControls(doc, pane, editor, {
     onFit: () => resetViewAndDraw(),
-    // A successful edge resize changes dims → rebuild the palette + reframe.
-    onResize: (res) => { if (res.ok) { rebuildMapPalette(); resetViewAndDraw(); } },
-    toast,
   });
   // The Layers (visibility) pane toggles the editor-side display filters.
   function rebuildLayers() {
@@ -940,19 +988,19 @@ export function createToastHost(doc, container) {
 }
 
 // ── In-map controls (items 1 + 3) ───────────────────────────────────────────────
-// Three overlays anchored to the map-area frame: the per-edge circular resize
-// buttons (handmade only), the fit-map control cluster, and the N×N size badge.
-// refresh() re-reads mode + dims after any structural change.
-function buildMapAreaControls(doc, pane, editor, { onFit, onResize, toast }) {
-  const edges = buildEdgeButtons(doc, editor, { onResize, toast });
+// Two DOM overlays anchored to the map-area frame: the fit-map control cluster
+// and the N×N size badge. The per-edge resize −/+ buttons are NOT DOM — they're
+// painted directly on the canvas (see drawEdgeResizeButtons in
+// initMissionEditorUI) so they sit beside the grid and track pan / zoom / resize.
+// refresh() re-reads dims after any structural change to update the badge.
+function buildMapAreaControls(doc, pane, editor, { onFit }) {
   const controls = buildMapControls(doc, { onFit });
   const badge = doc.createElement('div');
   badge.className = 'e-size-badge';
   badge.title = 'Current map size (columns × rows)';
-  pane.append(edges, controls, badge);
+  pane.append(controls, badge);
 
   function refresh() {
-    edges.style.display = editor.getMode() === 'handmade' ? '' : 'none';
     const dims = editor.getDims();
     badge.textContent = `${dims.cols} × ${dims.rows}`;
   }
@@ -960,44 +1008,55 @@ function buildMapAreaControls(doc, pane, editor, { onFit, onResize, toast }) {
   return { refresh };
 }
 
-/**
- * Build the in-map circular per-edge resize controls (item 1). One round −/+ pair
- * anchored to each map-frame edge (top/bottom/left/right). Each click routes
- * through editor.resizeEdge(edge, ±1) — the SAME coordinate-remap logic the old
- * sidebar rows used (relocated, not reimplemented). A blocked / lossy resize
- * surfaces its warning via `toast`, and the result is handed to `onResize`.
- * Returns the overlay container; exported for unit-testing the relocation wiring.
- */
-export function buildEdgeButtons(doc, editor, { onResize = () => {}, toast } = {}) {
-  const wrap = doc.createElement('div');
-  wrap.className = 'e-edge-overlay';
-  for (const edge of MAP_EDGES) {
-    const group = doc.createElement('div');
-    group.className = `e-edge-group e-edge-${edge}`;
-    group.append(edgeBtn('−', edge, -1), edgeBtn('+', edge, 1));
-    wrap.append(group);
-  }
-  return wrap;
+// ── In-map per-edge resize buttons (item 1) — canvas-drawn ──────────────────────
+// On-screen radius (canvas backing-store px) of each round −/+ resize button.
+// Fixed in screen space so the buttons stay legible at any zoom.
+export const EDGE_BTN_RADIUS = 15;
 
-  function edgeBtn(glyph, edge, delta) {
-    const b = doc.createElement('button');
-    b.type = 'button';
-    b.className = 'e-edge-btn';
-    b.textContent = glyph;
-    b.dataset.edge = edge;
-    b.dataset.delta = String(delta);
-    const unit = (edge === 'left' || edge === 'right') ? 'column' : 'row';
-    b.title = delta > 0 ? `Add a ${edge} ${unit}` : `Remove the ${edge} ${unit}`;
-    b.addEventListener('click', () => {
-      const res = editor.resizeEdge(edge, delta);
-      if (toast) {
-        if (!res.ok) toast.show(res.warning || 'Resize blocked.', { type: 'err' });
-        else if (res.warning) toast.show(res.warning, { type: 'info' });
-      }
-      onResize(res);
-    });
-    return b;
+/**
+ * Compute the canvas-pixel hit targets for the in-map per-edge resize buttons.
+ * One −/+ pair per edge, placed just OUTSIDE the middle hex of that edge so each
+ * pair tracks the map as it pans / zooms / resizes. Pure & testable: `anchor(col,
+ * row)` returns the canvas-pixel centre of a hex (renderer.hexToCanvasPos) and
+ * `hexPx` is the on-screen hex radius (hexSize × zoom). Returns
+ * `[{ edge, delta, glyph, x, y, r }]` in draw + hit-test order. The −/+ semantics
+ * are unchanged — each entry feeds editor.resizeEdge(edge, delta) verbatim.
+ */
+export function edgeButtonTargets(dims, anchor, hexPx, R = EDGE_BTN_RADIUS) {
+  const { cols, rows } = dims;
+  const midCol = Math.floor((cols - 1) / 2);
+  const midRow = Math.floor((rows - 1) / 2);
+  const gap = R + 4;               // centre-to-centre half-distance of the pair
+  const off = hexPx * 1.15 + R;    // how far outside the edge hex the pair sits
+  const out = [];
+  // axis 'v' → stack the pair vertically (left/right edges); 'h' → side by side.
+  const place = (edge, baseX, baseY, axis) => {
+    const minus = axis === 'v' ? { x: baseX, y: baseY - gap } : { x: baseX - gap, y: baseY };
+    const plus  = axis === 'v' ? { x: baseX, y: baseY + gap } : { x: baseX + gap, y: baseY };
+    out.push({ edge, delta: -1, glyph: '−', x: minus.x, y: minus.y, r: R });
+    out.push({ edge, delta: 1,  glyph: '+', x: plus.x,  y: plus.y,  r: R });
+  };
+  const right = anchor(cols - 1, midRow);
+  place('right', right.x + off, right.y, 'v');
+  const left = anchor(0, midRow);
+  place('left', left.x - off, left.y, 'v');
+  const bottom = anchor(midCol, rows - 1);
+  place('bottom', bottom.x, bottom.y + off, 'h');
+  const top = anchor(midCol, 0);
+  place('top', top.x, top.y - off, 'h');
+  return out;
+}
+
+/**
+ * Hit-test a click (canvas backing-store px) against resize-button targets from
+ * edgeButtonTargets(). Returns the matched `{ edge, delta, … }` (first circle
+ * containing the point) or null. Pure — exported for unit-testing the wiring.
+ */
+export function hitTestEdgeButton(targets, px, py) {
+  for (const t of targets) {
+    if (Math.hypot(px - t.x, py - t.y) <= t.r) return t;
   }
+  return null;
 }
 
 /**
