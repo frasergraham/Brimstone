@@ -166,7 +166,7 @@ export const HOUSE_INSTANCE_BASE_SCALE = 0.55;
 // bbox height lands here — the same bbox-normalize trick the tree + paladin
 // pipelines use. Roughly matches the procedural box+roof stack (0.70 + 0.15).
 // Operator can retune by adjusting this constant.
-export const TARGET_BUILDING_WORLD_HEIGHT = 0.85;
+export const TARGET_BUILDING_WORLD_HEIGHT = 1.28; // ~50% larger — buildings taller than units (paladin ≈0.92), bigger footprint may overlap tiles a bit
 
 // ─── Tree pack (real GLB trees from `assets/models/trees/`) ────────────────
 // Phase 1 (PR #381) extracted `tree_pack.glb` into per-model GLBs + a manifest
