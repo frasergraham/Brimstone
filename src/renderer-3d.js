@@ -478,6 +478,112 @@ export function unitUsesPaladinModel(entity) {
   return getUnitRigConfig(entity) != null;
 }
 
+// ─── Bone attachment (G5 horse + G6 weapon) ─────────────────────────────────
+// The paladin rig uses Mixamo bone names (`mixamorig:Hips`, `mixamorig:RightHand`,
+// `mixamorig:LeftUpLeg`, …). The skeleton is SHARED across every hero standee
+// (see _buildPaladinClone), so anything attached to a bone via the bone's WORLD
+// matrix alone would land on every paladin at once. Babylon's
+// `mesh.attachToBone(bone, affectorMesh)` instead positions the mesh by the
+// bone's LOCAL matrix composed with the affectorMesh's world matrix — pass each
+// standee's own clone root as the affector and the attachment is per-unit even
+// though the bone is shared. That's the trick G6 (weapon-in-hand) leans on.
+
+/** Mixamo bone the weapon stand-in attaches to. Suffix-anchored so it matches
+ *  whether or not the `mixamorig:` namespace prefix (or a `.001` dedup suffix)
+ *  is present. */
+export const WEAPON_BONE_NAME_RE = /RightHand(\.\d+)?$/i;
+
+/** Item key marking a unit as mounted — mirrors Entity.getMoveRange()'s
+ *  `items['horse']` check in src/entities.js. */
+export const HORSE_ITEM_KEY = 'horse';
+
+/** Weapon stand-in geometry (no weapon GLBs yet): a long thin cylinder posed
+ *  as a sword gripped in the fist. Lengths are in the rig's UNSCALED local
+ *  units — attachToBone folds in the per-standee scale via the affector mesh's
+ *  world matrix, so these are model-space numbers, not world units. Operator-
+ *  tunable. */
+export const WEAPON_STANDIN_LENGTH    = 32;   // blade + grip, hand-local units
+export const WEAPON_STANDIN_DIAMETER  = 2.2;  // skinny — a stand-in blade
+
+/** Horse placeholder geometry, in the rig's UNSCALED clone-root-local space
+ *  (the clone root carries the paladin scale). The body's centre Y sits at
+ *  HORSE_PLACEHOLDER_BACK_Y below the rider's feet origin so the rider appears
+ *  to sit astride it. MOUNTED_RIDER_LIFT raises the whole rider clone onto the
+ *  horse's back. Both operator-tunable. */
+export const HORSE_PLACEHOLDER_BACK_Y = -0.55;
+export const MOUNTED_RIDER_LIFT       = 0.42;
+
+/** Find the first bone in `skeleton.bones` whose name matches `re`. Pure;
+ *  null-safe against missing skeleton / bones array. Exported for tests. */
+export function findBoneByName(skeleton, re) {
+  if (!skeleton || !Array.isArray(skeleton.bones) || !re) return null;
+  for (const bone of skeleton.bones) {
+    if (bone && typeof bone.name === 'string' && re.test(bone.name)) return bone;
+  }
+  return null;
+}
+
+/** Does this entity have a weapon equipped? Mirrors Entity.weapon (a truthy
+ *  item-id string like 'sword'). Pure; exported for tests. */
+export function entityHasWeapon(entity) {
+  return !!(entity && typeof entity.weapon === 'string' && entity.weapon.length > 0);
+}
+
+/** Is this entity mounted? Mirrors Entity.getMoveRange()'s horse check —
+ *  `items['horse'] > 0`. Pure; exported for tests. */
+export function entityIsMounted(entity) {
+  return !!(entity && entity.items && (entity.items[HORSE_ITEM_KEY] || 0) > 0);
+}
+
+/** Local transform for the weapon stand-in relative to its hand bone. A
+ *  default `CreateCylinder` runs along local +Y centred on the origin; we
+ *  push the cylinder out of the fist (so the grip — not the midpoint — sits at
+ *  the bone) and tilt it forward so it reads as a held blade rather than a
+ *  flagpole. Pure; exported for tests. */
+export function weaponStandInTransform() {
+  return {
+    height:   WEAPON_STANDIN_LENGTH,
+    diameter: WEAPON_STANDIN_DIAMETER,
+    // Tilt the blade forward (~25°) from straight-up so it angles ahead of the
+    // fist instead of standing vertical.
+    rotation: { x: -Math.PI * 0.14, y: 0, z: 0 },
+    // Slide half the length up the blade's local axis so the grip end lands at
+    // the hand bone rather than the cylinder's centre.
+    offset:   { x: 0, y: WEAPON_STANDIN_LENGTH / 2, z: 0 },
+  };
+}
+
+/** Classify a Mixamo leg bone by name → 'thigh' | 'shin' | 'foot' | null.
+ *  Mixamo names: `…UpLeg` (thigh), `…Leg` (shin/knee), `…Foot` (ankle),
+ *  `…ToeBase` (toes). Suffix-anchored and prefix-agnostic. Pure; exported. */
+export function classifyLegBone(name) {
+  if (typeof name !== 'string') return null;
+  const n = name.replace(/(\.\d+)?$/, '');
+  if (/(Left|Right)UpLeg$/i.test(n)) return 'thigh';
+  if (/(Left|Right)Leg$/i.test(n))  return 'shin';
+  if (/(Left|Right)Foot$/i.test(n)) return 'foot';
+  return null;
+}
+
+/** Euler rotation (radians) to force a leg bone into a riding pose: thighs
+ *  splayed out and forward to straddle the horse, shins bent back at the knee,
+ *  feet levelled. Side ('Left'|'Right' from the bone name) mirrors the Z
+ *  (splay) component. Returns null for non-leg bones. Pure; exported for tests.
+ *
+ *  NOTE: applying these on the SHARED paladin skeleton poses every paladin at
+ *  once — see _applyRidingPose for why this is not auto-wired per-unit yet. */
+export function ridingLegPose(name) {
+  const kind = classifyLegBone(name);
+  if (!kind) return null;
+  const side = /Right/i.test(name) ? -1 : 1;
+  switch (kind) {
+    case 'thigh': return { x: -1.15, y: 0, z: side * 0.32 };
+    case 'shin':  return { x: 1.35,  y: 0, z: 0 };
+    case 'foot':  return { x: -0.2,  y: 0, z: 0 };
+    default:      return null;
+  }
+}
+
 // ─── Standee constants (Phase 3) ────────────────────────────────────────────
 // Units are now rendered as traditional board-game tokens — a coloured cone
 // "body" with a spherical "head" on top, both tinted in the owning player's
@@ -3997,6 +4103,235 @@ export class Renderer3D {
       c.mesh.dispose();
     }
     standee.paladinClone = null;
+    // Weapon + horse attachments hang off the clone — tear them down too so a
+    // re-clone (retrofit) or entity death doesn't leak a floating sword/horse.
+    this._disposeStandeeWeapon(standee);
+    this._disposeStandeeHorse(standee);
+  }
+
+  /** ─── G6: weapon-in-hand ────────────────────────────────────────────────
+   *  Attach a per-standee weapon stand-in to the paladin's right-hand bone
+   *  when the entity has a weapon equipped; dispose it when the weapon is
+   *  dropped. Idempotent — safe to call every sync pass.
+   *
+   *  Per-unit attachment on the SHARED skeleton works because Babylon's
+   *  `attachToBone(bone, affectorMesh)` positions the mesh from the bone's
+   *  LOCAL pose composed with the affector mesh's WORLD matrix. We pass the
+   *  standee's own skinned clone as the affector, so each unit's sword tracks
+   *  that unit's hand — not a single shared hand. */
+  _syncStandeeWeapon(standee, entity) {
+    if (!standee) return;
+    const want = entityHasWeapon(entity) && !!standee.paladinClone;
+    if (want === !!standee.weaponMesh) return;  // already in the right state
+    if (!want) { this._disposeStandeeWeapon(standee); return; }
+
+    const BABYLON = this._babylon;
+    const src = this._paladinSource;
+    if (!BABYLON?.MeshBuilder || !src?.skeleton) return;
+    const clone = standee.paladinClone;
+    const affector = clone.skinnedMesh || clone.mesh;
+    if (!affector || typeof affector.attachToBone !== 'function') return;
+    const handBone = findBoneByName(src.skeleton, WEAPON_BONE_NAME_RE);
+    if (!handBone) return;
+
+    const t = weaponStandInTransform();
+    let blade;
+    try {
+      blade = BABYLON.MeshBuilder.CreateCylinder(
+        `weapon_${entity?.id ?? 'x'}`,
+        { height: t.height, diameter: t.diameter, tessellation: 6 },
+        this._scene,
+      );
+    } catch { return; }
+    blade.isPickable = false;
+    if (typeof blade.renderingGroupId !== 'undefined') blade.renderingGroupId = 0;
+    blade.alwaysSelectAsActiveMesh = true;
+    // Steel-grey stand-in material (freshly created — never a shared material).
+    if (BABYLON.StandardMaterial) {
+      const mat = new BABYLON.StandardMaterial(`weapon_mat_${entity?.id ?? 'x'}`, this._scene);
+      if (BABYLON.Color3) {
+        mat.diffuseColor  = new BABYLON.Color3(0.72, 0.74, 0.8);
+        mat.specularColor = new BABYLON.Color3(0.9, 0.9, 0.95);
+        mat.emissiveColor = new BABYLON.Color3(0.18, 0.18, 0.22);
+      }
+      blade.material = mat;
+      standee.weaponMat = mat;
+    }
+    // Local pose relative to the hand bone (grip at the fist, blade tilted
+    // forward). Set BEFORE attachToBone so the first frame is already posed.
+    if (BABYLON.Vector3) {
+      blade.position = new BABYLON.Vector3(t.offset.x, t.offset.y, t.offset.z);
+      blade.rotation = new BABYLON.Vector3(t.rotation.x, t.rotation.y, t.rotation.z);
+    }
+    blade.attachToBone(handBone, affector);
+    this._addShadowCaster(blade);
+    standee.weaponMesh = blade;
+  }
+
+  _disposeStandeeWeapon(standee) {
+    if (!standee || !standee.weaponMesh) return;
+    const m = standee.weaponMesh;
+    if (typeof m.detachFromBone === 'function') { try { m.detachFromBone(); } catch { /* ignore */ } }
+    this._removeShadowCaster(m);
+    if (typeof m.dispose === 'function') m.dispose();
+    if (standee.weaponMat && typeof standee.weaponMat.dispose === 'function') {
+      standee.weaponMat.dispose();
+    }
+    standee.weaponMesh = null;
+    standee.weaponMat = null;
+  }
+
+  /** ─── G5: mounted / horse ───────────────────────────────────────────────
+   *  When a unit is mounted (`items['horse'] > 0`), append a placeholder horse
+   *  beneath the rider and lift the rider onto its back. Both are per-standee
+   *  (parented under the clone root) so they're fully per-unit. Idempotent.
+   *
+   *  CHECKPOINT — riding leg-pose is NOT applied here. Forcing the leg bones
+   *  into ridingLegPose() mutates the SHARED paladin skeleton (every standee
+   *  references it), so it would splay the legs of every paladin — mounted or
+   *  not. The pure pose math (ridingLegPose / classifyLegBone) and the global
+   *  applier (_applyRidingPose) are implemented + tested, but auto-wiring a
+   *  per-unit riding pose needs a per-mounted-unit skeleton clone, which the
+   *  rig's animation-retarget machinery actively fights (see _buildPaladinClone
+   *  T-pose history). Deferred to a follow-up. The placeholder + rider lift
+   *  below are the shippable per-unit slice. */
+  _syncStandeeHorse(standee, entity) {
+    if (!standee) return;
+    const want = entityIsMounted(entity) && !!standee.paladinClone;
+    if (want === !!standee.horseMesh) return;
+    const riderRoot = standee.paladinClone?.mesh;
+    if (!want) {
+      this._disposeStandeeHorse(standee);
+      // Lower the rider back to the ground (undo the mount lift).
+      if (riderRoot?.position && typeof riderRoot.position.y === 'number') {
+        riderRoot.position.y -= MOUNTED_RIDER_LIFT;
+      }
+      return;
+    }
+    const horse = this._buildHorsePlaceholder(entity, riderRoot);
+    if (!horse) return;
+    standee.horseMesh = horse;
+    // Lift the rider onto the horse's back.
+    if (riderRoot?.position && typeof riderRoot.position.y === 'number') {
+      riderRoot.position.y += MOUNTED_RIDER_LIFT;
+    }
+  }
+
+  /** Build a simple cylinder horse (body + 4 legs + neck + head) parented
+   *  under the rider's clone root. Dimensions are in the rig's UNSCALED local
+   *  space (the clone root carries the paladin scale), so the horse scales
+   *  with the rider. Returns the root TransformNode (or the body mesh as a
+   *  fallback when TransformNode is unavailable). */
+  _buildHorsePlaceholder(entity, parent) {
+    const BABYLON = this._babylon;
+    if (!BABYLON?.MeshBuilder) return null;
+    const id = entity?.id ?? 'x';
+    let root = null;
+    if (typeof BABYLON.TransformNode === 'function') {
+      try { root = new BABYLON.TransformNode(`horse_${id}`, this._scene || null); } catch { root = null; }
+    }
+    // Horse sits in clone-root-local space. The clone root's origin is at the
+    // cone's feet (y = coneFeetY); the rider model rises from there. We keep
+    // the horse just below the feet and lift the rider in _syncEntityStandees.
+    const HORSE_BACK_Y = HORSE_PLACEHOLDER_BACK_Y;
+    const parts = [];
+    const mkMat = () => {
+      if (!BABYLON.StandardMaterial) return null;
+      const mat = new BABYLON.StandardMaterial(`horse_mat_${id}`, this._scene);
+      if (BABYLON.Color3) {
+        mat.diffuseColor  = new BABYLON.Color3(0.34, 0.24, 0.16);
+        mat.specularColor = new BABYLON.Color3(0.1, 0.1, 0.1);
+      }
+      return mat;
+    };
+    const sharedMat = mkMat();
+    const place = (mesh, x, y, z, rotZ = 0, rotX = 0) => {
+      if (!mesh) return;
+      mesh.isPickable = false;
+      if (typeof mesh.renderingGroupId !== 'undefined') mesh.renderingGroupId = 0;
+      mesh.alwaysSelectAsActiveMesh = true;
+      if (sharedMat) mesh.material = sharedMat;
+      if (BABYLON.Vector3) {
+        mesh.position = new BABYLON.Vector3(x, y, z);
+        if (rotZ || rotX) mesh.rotation = new BABYLON.Vector3(rotX, 0, rotZ);
+      }
+      if (root && 'parent' in mesh) mesh.parent = root;
+      this._addShadowCaster(mesh);
+      parts.push(mesh);
+    };
+    try {
+      // Body: a horizontal cylinder along Z (rotated 90° about X).
+      place(BABYLON.MeshBuilder.CreateCylinder(`horse_${id}_body`,
+        { height: 1.0, diameter: 0.42, tessellation: 8 }, this._scene),
+        0, HORSE_BACK_Y, 0, 0, Math.PI / 2);
+      // 4 legs (short vertical cylinders) at the body corners.
+      const legY = HORSE_BACK_Y - 0.36;
+      for (const [lx, lz] of [[0.16, 0.38], [-0.16, 0.38], [0.16, -0.38], [-0.16, -0.38]]) {
+        place(BABYLON.MeshBuilder.CreateCylinder(`horse_${id}_leg`,
+          { height: 0.5, diameter: 0.1, tessellation: 6 }, this._scene),
+          lx, legY, lz);
+      }
+      // Neck (tilted forward) + head block at the front (+Z).
+      place(BABYLON.MeshBuilder.CreateCylinder(`horse_${id}_neck`,
+        { height: 0.5, diameter: 0.16, tessellation: 6 }, this._scene),
+        0, HORSE_BACK_Y + 0.18, 0.5, 0, -0.5);
+      place(BABYLON.MeshBuilder.CreateBox(`horse_${id}_head`,
+        { width: 0.16, height: 0.16, depth: 0.3 }, this._scene),
+        0, HORSE_BACK_Y + 0.34, 0.68);
+    } catch { /* partial build — dispose what we made */ }
+    if (parts.length === 0) {
+      if (root && typeof root.dispose === 'function') root.dispose();
+      if (sharedMat && typeof sharedMat.dispose === 'function') sharedMat.dispose();
+      return null;
+    }
+    // With a TransformNode root, parent it under the rider clone so the whole
+    // horse follows the standee. Without one (test stubs), the first part IS
+    // the root and was already parented in place().
+    if (!root) root = parts[0];
+    else if (parent && 'parent' in root) root.parent = parent;
+    root._horseParts = parts;
+    root._horseMat = sharedMat;
+    return root;
+  }
+
+  _disposeStandeeHorse(standee) {
+    if (!standee || !standee.horseMesh) return;
+    const root = standee.horseMesh;
+    const parts = root._horseParts || [];
+    for (const m of parts) {
+      this._removeShadowCaster(m);
+      if (m && typeof m.dispose === 'function') m.dispose();
+    }
+    if (root._horseMat && typeof root._horseMat.dispose === 'function') root._horseMat.dispose();
+    if (!parts.includes(root) && typeof root.dispose === 'function') root.dispose();
+    standee.horseMesh = null;
+  }
+
+  /** Force every leg bone of `skeleton` into the riding pose (ridingLegPose).
+   *  GLOBAL by construction — the paladin skeleton is shared, so this poses
+   *  ALL paladins. Returns the count of bones posed. Implemented + tested but
+   *  intentionally NOT auto-called from the per-unit sync (see the checkpoint
+   *  note on _syncStandeeHorse); exposed for an all-mounted scenario or a
+   *  future per-unit-skeleton path. */
+  _applyRidingPose(skeleton) {
+    if (!skeleton || !Array.isArray(skeleton.bones)) return 0;
+    const BABYLON = this._babylon;
+    let posed = 0;
+    for (const bone of skeleton.bones) {
+      if (!bone || typeof bone.name !== 'string') continue;
+      const pose = ridingLegPose(bone.name);
+      if (!pose) continue;
+      const tn = bone._linkedTransformNode
+        || (typeof bone.getTransformNode === 'function' && bone.getTransformNode());
+      const target = tn || bone;
+      if (BABYLON?.Vector3) {
+        target.rotation = new BABYLON.Vector3(pose.x, pose.y, pose.z);
+      } else if (typeof bone.setRotation === 'function') {
+        bone.setRotation(pose);
+      }
+      posed++;
+    }
+    return posed;
   }
 
   /** Retrofit existing hero standees with a paladin clone after the GLB
@@ -4028,6 +4363,9 @@ export class Renderer3D {
       if (standee.sphere) this._removeShadowCaster(standee.sphere);
       for (const m of clone.childMeshes || []) this._addShadowCaster(m);
       standee.paladinClone = clone;
+      // Attach weapon / horse now that the rig (and its bones) exist.
+      this._syncStandeeWeapon(standee, ent);
+      this._syncStandeeHorse(standee, ent);
       upgraded++;
     }
     return upgraded;
@@ -7188,6 +7526,11 @@ export class Renderer3D {
         standee.plane.metadata.col = e.col;
         standee.plane.metadata.row = e.row;
       }
+      // Weapon-in-hand (G6) and mount (G5) follow the entity's equipment /
+      // items each pass. Both no-op until the paladin clone exists (GLB load)
+      // and short-circuit when already in the desired state, so this is cheap.
+      this._syncStandeeWeapon(standee, e);
+      this._syncStandeeHorse(standee, e);
       // HP indicator: drawn as a circular arc rim around the floating unit
       // icon billboard (see _syncEntityIconBillboards), not the rectangular
       // bar that used to live here.
