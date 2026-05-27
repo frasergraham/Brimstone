@@ -51,6 +51,9 @@ import {
   roadNodeMarkersVisible, stripTileOverlays, mapSizePreset,
   overlayDarkenVisible, overlayEditedKeys,
   areaTriggerLayerVisible, areaTriggerHexKeys,
+  PHASE_KINDS, addPhase, removePhaseAt, movePhase, setPhaseLoop,
+  resourceMapToRows, rowsToResourceMap,
+  lootOverridesToPicker, pickerToLootOverrides,
 } from './mission-editor.js';
 import { MAP_SIZES } from '../map.js';
 import { createTabController } from './tab-controller.js';
@@ -120,6 +123,60 @@ const TOOL_HINTS = {
   [EditorTool.ROAD_NODE]: 'Click tiles to toggle road-network waypoints — roads regenerate automatically.',
   [EditorTool.POWER_NODE]: 'Click tiles to toggle Power Node hexes. Contiguous hexes group into one node (max 5).',
   [EditorTool.DELETE]: 'Click a tile to clear it back to blank base.',
+};
+
+// ── Field help text (item 3) ────────────────────────────────────────────────
+// A one-line explanation for EVERY logic-bearing sidebar field, keyed by the
+// label the form helper renders. Surfaced via labelWithInfo() as both a `title=`
+// tooltip AND a small "(i)" affordance so no control is left unexplained.
+// Exported so a test can assert coverage of the key fields.
+export const FIELD_HELP = Object.freeze({
+  // Properties
+  'ID': 'Unique mission id — referenced by the campaign registry and save files.',
+  'Title': 'Human-readable mission name shown in menus and the briefing.',
+  'Chapter': 'Ordering index within its campaign (lower chapters come first).',
+  'Campaign': 'Campaign id this mission belongs to (blank = standalone).',
+  'Requires': 'Comma-separated mission ids that must be completed before this unlocks.',
+  'Has Witch': 'Whether the Witch faction is present (AI-controlled antagonist).',
+  'No Scoring': 'Disable Power-Node dawn/dusk scoring — win purely by objectives.',
+  'AI Persona': 'AI personality key driving the enemy (e.g. berserker, balanced).',
+  'AI Budget+': 'Extra action budget granted to the AI each round (difficulty knob).',
+  'Roster Max': 'Max survivors the player may bring in from their recruited roster.',
+  'Mission Surv': 'Survivors pre-granted to the player at mission start.',
+  'Discoverable': 'Cap on survivors that can be found by exploring buildings.',
+  'Heal Bonus': 'Extra HP healed by herbs/rest in this mission.',
+  // Phase cycle
+  'Loop': 'Whether the phase sequence repeats after its last phase.',
+  // Narrative
+  'Briefing': 'Intro text shown before the mission starts.',
+  'Victory': 'Text shown when the player wins.',
+  'Defeat': 'Text shown when the player loses.',
+  // Objectives
+  'Win': 'Condition the player must meet to win the mission.',
+  'Lose': 'Condition that ends the mission in defeat.',
+  // Story trigger fields
+  'Type': 'Trigger kind — "round" fires on a turn number, "area" when a hex is entered.',
+  'Round': 'Round number on which this fires (1 = first turn).',
+  'Hexes': 'Hexes (["col,row", …]) that fire this area trigger when entered.',
+  'Text': 'Body narrative shown when this beat fires.',
+  'Flag': 'Optional story flag set when this fires (gates later conditions).',
+  'Condition': 'Optional named predicate (condition registry) gating this trigger.',
+  // Wave fields
+  'Trigger': 'What launches this wave — a round, a hero-kill count, or an area entry.',
+  'Count': 'How many units this wave spawns.',
+  'Units': 'Unit specs spawned by this wave (["zombie", …] or typed entries).',
+  'Spawn At': 'Optional spawn anchor hex ("col,row") for this wave.',
+  // Overrides / placements
+  'Overrides': 'Per-placement stat overrides (e.g. {"maxHp":5}) merged onto the unit.',
+});
+
+// ── Phase chip metadata (item 9) ────────────────────────────────────────────
+// Icon + tooltip per canonical phase, for the icon-based phase-cycle editor.
+const PHASE_META = {
+  dawn:  { icon: '🌅', label: 'Dawn',  tip: 'Dawn — node scoring checkpoint; transition into day.' },
+  day:   { icon: '☀️', label: 'Day',   tip: 'Day — favours the Hero (better sight, bonuses).' },
+  dusk:  { icon: '🌇', label: 'Dusk',  tip: 'Dusk — node scoring checkpoint; transition into night.' },
+  night: { icon: '🌙', label: 'Night', tip: 'Night — favours the Witch (combat bonus, attrition).' },
 };
 
 // Build a live GameState the 2D Renderer can draw from the current model. The
@@ -1093,26 +1150,21 @@ function buildForms(doc, panes, editor, rerenderCanvas, rebuild, setStatus) {
   );
   panes.mission.append(text);
 
-  // ── Phase cycle ─────────────────────────────────────────────────────────
+  // ── Phase cycle (item 9) — icon-chip sequence editor ─────────────────────
   const phase = section(doc, 'Phase Cycle');
-  phase.append(
-    textRow(doc, 'Phases', (meta.phaseCycle?.phases ?? []).join(','), v => {
-      if (!meta.phaseCycle) meta.phaseCycle = { phases: [], loop: true };
-      meta.phaseCycle.phases = v.split(',').map(s => s.trim()).filter(Boolean);
-    }),
-    boolRow(doc, 'Loop', meta.phaseCycle?.loop ?? true, v => {
-      if (!meta.phaseCycle) meta.phaseCycle = { phases: [], loop: true };
-      meta.phaseCycle.loop = v;
-    }),
-  );
+  phase.append(phaseCycleEditor(doc, meta, rebuild));
   panes.mission.append(phase);
 
-  // ── Resources / rewards / loot (JSON blobs) ─────────────────────────────
+  // ── Resources / rewards / loot — picker UIs (item 8) ────────────────────
   const res = section(doc, 'Resources & Rewards');
   res.append(
-    jsonRow(doc, 'Starting', meta.startingResources, v => { meta.startingResources = v; }, setStatus),
-    jsonRow(doc, 'Rewards', meta.rewards, v => { meta.rewards = v; }, setStatus),
-    jsonRow(doc, 'Loot Ovr', meta.lootOverrides, v => { meta.lootOverrides = v; }, setStatus),
+    resourcePicker(doc, 'Starting', meta.startingResources,
+      m => { meta.startingResources = m; },
+      'Resources the player begins the mission holding.'),
+    resourcePicker(doc, 'Rewards', meta.rewards,
+      m => { meta.rewards = m; },
+      'Resources granted to the player on victory.'),
+    lootOverridePicker(doc, meta.lootOverrides, lo => { meta.lootOverrides = lo; }),
   );
   panes.mission.append(res);
 
@@ -1414,6 +1466,175 @@ function jsonRow(doc, label, value, onChange, setStatus) {
   return wrap;
 }
 
+// ── Phase-cycle icon editor (item 9) ────────────────────────────────────────
+// A friendly chip-sequence editor over phaseCycle { phases:[…], loop }. The
+// current sequence renders as ordered icon chips (◀ move-earlier · glyph · ▶
+// move-later · ✕ remove); an "add phase" palette of the four canonical phases
+// appends a chip; a loop checkbox toggles repeat. All edits route through the
+// pure ops (addPhase / removePhaseAt / movePhase / setPhaseLoop) then `rebuild`
+// re-renders the forms — EC's timeline tab reads the same clean phases[] array.
+function phaseCycleEditor(doc, meta, rebuild) {
+  const wrap = doc.createElement('div');
+  wrap.className = 'e-phase-editor';
+
+  const phases = meta.phaseCycle?.phases ?? [];
+  const seq = doc.createElement('div');
+  seq.className = 'e-phase-seq';
+  if (!phases.length) {
+    seq.append(hint(doc, 'No phases — add dawn / day / dusk / night chips below.'));
+  }
+  phases.forEach((p, i) => seq.append(phaseChip(doc, p, i, phases.length, {
+    left:   () => { movePhase(meta, i, -1); rebuild(); },
+    right:  () => { movePhase(meta, i, 1); rebuild(); },
+    remove: () => { removePhaseAt(meta, i); rebuild(); },
+  })));
+  wrap.append(seq);
+
+  const add = doc.createElement('div');
+  add.className = 'e-phase-add';
+  add.append(labelWithInfo(doc, 'Add phase', 'Append a phase to the cycle sequence.'));
+  for (const key of PHASE_KINDS) {
+    const m = PHASE_META[key];
+    const b = doc.createElement('button');
+    b.type = 'button';
+    b.className = 'e-phase-addbtn';
+    b.textContent = `${m.icon} ${m.label}`;
+    b.title = m.tip;
+    b.setAttribute('aria-label', `Add ${m.label} phase`);
+    b.addEventListener('click', () => { addPhase(meta, key); rebuild(); });
+    add.append(b);
+  }
+  wrap.append(add);
+
+  wrap.append(boolRow(doc, 'Loop', meta.phaseCycle?.loop ?? true, v => setPhaseLoop(meta, v)));
+  return wrap;
+}
+
+function phaseChip(doc, phase, idx, count, { left, right, remove }) {
+  const m = PHASE_META[phase] ?? { icon: '❔', label: phase, tip: `Unknown phase "${phase}".` };
+  const chip = doc.createElement('span');
+  chip.className = 'e-phase-chip';
+  chip.title = m.tip;
+  if (idx > 0) chip.append(smallBtn(doc, '◀', left, 'Move this phase earlier'));
+  const glyph = doc.createElement('span');
+  glyph.className = 'e-phase-glyph';
+  glyph.textContent = `${m.icon} ${m.label}`;
+  chip.append(glyph);
+  if (idx < count - 1) chip.append(smallBtn(doc, '▶', right, 'Move this phase later'));
+  chip.append(smallBtn(doc, '✕', remove, 'Remove this phase'));
+  return chip;
+}
+
+// ── Resource map picker (item 8) ────────────────────────────────────────────
+// Replaces the raw-JSON textarea for startingResources / rewards with rows of
+// {ResourceType dropdown + amount}. Self-rerendering host: every edit reassembles
+// the rows into a { [type]: amount } map via the pure helpers and pushes it back
+// through `onChange`. Round-trips losslessly (resourceMapToRows ↔ rowsToResourceMap).
+function resourcePicker(doc, label, obj, onChange, tip) {
+  const wrap = doc.createElement('div');
+  wrap.className = 'e-res-picker';
+  wrap.append(labelWithInfo(doc, label, tip ?? null));
+  const host = doc.createElement('div');
+  host.className = 'e-res-rows';
+  wrap.append(host);
+
+  const rows = resourceMapToRows(obj);
+  const commit = () => onChange(rowsToResourceMap(rows));
+  const RES_ENTRIES = _entries(ResourceType); // { key:'HERBS', value:'herbs' }
+
+  function render() {
+    host.innerHTML = '';
+    if (!rows.length) host.append(hint(doc, 'No resources — use “+ Add”.'));
+    rows.forEach((r, i) => host.append(resourceRow(doc, r, RES_ENTRIES, {
+      onType:   (v) => { r.type = v; commit(); },
+      onAmount: (v) => { r.amount = v; commit(); },
+      onRemove: () => { rows.splice(i, 1); commit(); render(); },
+    })));
+    host.append(actionBtn(doc, '+ Add', () => {
+      rows.push({ type: RES_ENTRIES[0].value, amount: 1 });
+      commit(); render();
+    }, `Add a ${label.toLowerCase()} resource row`));
+  }
+  render();
+  return wrap;
+}
+
+function resourceRow(doc, row, entries, { onType, onAmount, onRemove }) {
+  const r = doc.createElement('div');
+  r.className = 'e-row e-res-row';
+  // select() keys options by display text === stored value, so use the runtime
+  // value ('herbs') for both — that's what the resource map stores.
+  const sel = select(doc, entries.map(e => ({ key: e.value, value: e.value })), row.type, onType);
+  sel.title = 'Resource type';
+  const amt = doc.createElement('input');
+  amt.type = 'number';
+  amt.className = 'e-res-amt';
+  amt.value = String(row.amount ?? 0);
+  amt.title = 'Amount';
+  amt.addEventListener('change', () => onAmount(parseInt(amt.value, 10) || 0));
+  r.append(sel, amt, smallBtn(doc, '✕', onRemove, 'Remove this resource'));
+  return r;
+}
+
+// Loot ids the add/remove pickers offer (weapons + resource drops + the special
+// 'horse' / 'nothing' outcomes). A value already present in the model but absent
+// here is still offered, so a legacy/unknown id round-trips without being dropped.
+const LOOT_ITEM_IDS = [
+  'sword', 'axe', 'bow', 'crossbow', 'shield', 'staff', 'dagger',
+  'herbs', 'silver', 'wood', 'metal', 'food', 'scripture',
+  'horse', 'nothing',
+];
+
+// ── lootOverrides picker (item 8) ───────────────────────────────────────────
+// Edits the add / remove id lists as dropdown rows; richer keys (e.g. per-building
+// weighted tables) ride along untouched via the picker model's `rest`. Assembles
+// back through pickerToLootOverrides (null when fully empty). Round-trips lossless.
+function lootOverridePicker(doc, lo, onChange) {
+  const model = lootOverridesToPicker(lo);
+  const wrap = doc.createElement('div');
+  wrap.className = 'e-loot-picker';
+  wrap.append(labelWithInfo(doc, 'Loot Overrides',
+    'Force-add or remove loot ids from drop tables. Other override keys (e.g. per-building tables) are preserved.'));
+  const commit = () => onChange(pickerToLootOverrides(model));
+  wrap.append(lootIdList(doc, 'Add', model.add, commit));
+  wrap.append(lootIdList(doc, 'Remove', model.remove, commit));
+  if (model.rest && Object.keys(model.rest).length) {
+    wrap.append(hint(doc, `Preserving ${Object.keys(model.rest).length} other loot-override field(s) verbatim.`));
+  }
+  return wrap;
+}
+
+function lootIdList(doc, label, arr, commit) {
+  const wrap = doc.createElement('div');
+  wrap.className = 'e-loot-list';
+  wrap.append(labelWithInfo(doc, label, label === 'Add'
+    ? 'Loot ids force-added to drop tables.'
+    : 'Loot ids removed from drop tables.'));
+  const host = doc.createElement('div');
+  const optsFor = (current) => {
+    const ids = [...LOOT_ITEM_IDS];
+    if (current && !ids.includes(current)) ids.unshift(current);
+    return ids.map(id => ({ key: id, value: id }));
+  };
+  function render() {
+    host.innerHTML = '';
+    arr.forEach((id, i) => {
+      const r = doc.createElement('div');
+      r.className = 'e-row e-loot-row';
+      const sel = select(doc, optsFor(id), id, v => { arr[i] = v; commit(); });
+      sel.title = `Loot id to ${label.toLowerCase()}`;
+      r.append(sel, smallBtn(doc, '✕', () => { arr.splice(i, 1); commit(); render(); }, 'Remove'));
+      host.append(r);
+    });
+    host.append(actionBtn(doc, `+ ${label}`, () => {
+      arr.push(LOOT_ITEM_IDS[0]); commit(); render();
+    }, `${label} a loot id`));
+  }
+  wrap.append(host);
+  render();
+  return wrap;
+}
+
 // Objective editor: a type <select> over the known types + a params JSON blob
 // (merged with the chosen type). Arrays (multi-lose) are edited as JSON.
 function objectiveEditor(doc, label, current, onChange, setStatus) {
@@ -1540,9 +1761,33 @@ function section(doc, title) {
   return s;
 }
 
-function labelFor(doc, text) {
+// A form label. When a `tip` is supplied (explicitly, or auto-looked-up from
+// FIELD_HELP by label text) the label gains both a `title=` tooltip AND a small
+// "(i)" info affordance carrying the same text — so every field is discoverable
+// (item 3). Pass `tip === false` to opt out of the auto-lookup (e.g. structural
+// sub-labels like "type"/"params"/"list" that aren't user-facing fields).
+function labelFor(doc, text, tip) {
+  const resolved = tip === false ? null : (tip ?? FIELD_HELP[text] ?? null);
+  return labelWithInfo(doc, text, resolved);
+}
+
+/**
+ * Build a `<label>` carrying `text` plus, when `tip` is non-empty, a `title=`
+ * tooltip on the label AND a trailing "(i)" info span (also tooltipped). Pure
+ * DOM — exported so the help-helper coverage is unit-testable.
+ */
+export function labelWithInfo(doc, text, tip) {
   const l = doc.createElement('label');
   l.textContent = text;
+  if (tip) {
+    l.title = tip;
+    const info = doc.createElement('span');
+    info.className = 'e-info';
+    info.textContent = 'ⓘ';
+    info.title = tip;
+    info.setAttribute('aria-label', tip);
+    l.append(info);
+  }
   return l;
 }
 

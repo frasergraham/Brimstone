@@ -275,6 +275,32 @@
     #editor-panel .e-status.err { color: #d77; }
     #editor-panel .e-status.ok { color: #7d7; }
     #editor-panel .e-hint { margin: 4px 0; font-size: 11px; color: #6a6050; font-style: italic; }
+    /* Field help "(i)" affordance (item 3) — small tooltipped marker after a label */
+    #editor-panel .e-info {
+      display: inline-block; margin-left: 4px; font-size: 10px; color: #6a6050;
+      cursor: help; vertical-align: top; opacity: 0.75;
+    }
+    #editor-panel .e-info:hover { opacity: 1; color: #c4a04a; }
+    /* Phase-cycle icon editor (item 9) */
+    #editor-panel .e-phase-seq { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0; }
+    #editor-panel .e-phase-chip {
+      display: inline-flex; align-items: center; gap: 2px; padding: 2px 4px;
+      border: 1px solid #2c2620; background: #221c14; border-radius: 4px;
+    }
+    #editor-panel .e-phase-glyph { font-size: 12px; color: #d4cba0; padding: 0 2px; white-space: nowrap; }
+    #editor-panel .e-phase-add { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin: 6px 0 4px; }
+    #editor-panel .e-phase-addbtn {
+      font-size: 11px; padding: 2px 6px; background: #2a2418; color: #d4cba0;
+      border: 1px solid #3a3022; cursor: pointer; border-radius: 3px;
+    }
+    #editor-panel .e-phase-addbtn:hover { background: #3a3022; }
+    /* Resource + loot pickers (item 8) */
+    #editor-panel .e-res-picker, #editor-panel .e-loot-picker, #editor-panel .e-loot-list { margin: 6px 0; }
+    #editor-panel .e-res-row, #editor-panel .e-loot-row {
+      grid-template-columns: 1fr auto auto; gap: 4px;
+    }
+    #editor-panel .e-res-amt { width: 100%; }
+    #editor-panel .e-loot-list > label { display: block; font-size: 11px; color: #a08858; margin: 4px 0 2px; }
     /* Item 3/4: locked-mode readout + per-edge resize controls */
     #editor-panel .e-readonly .e-readonly-val { color: #d4cba0; font-size: 12px; }
     #editor-panel .e-edges { margin: 6px 0; }

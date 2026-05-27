@@ -1,6 +1,6 @@
 // Tests for the E2 editor tool/model additions (operator items 5–9):
-//   • DELETE tool clears a tile back to blank base (+ explicit overlay edit in
-//     overlay mode); one undo step.
+//   • DELETE tool: handmade clears a tile back to blank base; overlay REVERTS to
+//     the generated tile (drops the overlay entry); one undo step.
 //   • Power-Node CLUSTERING: contiguous hexes group into one objective, a 5-hex
 //     cap blocks a 6th, each cluster gets a name + palette colour, clusters map
 //     to the runtime witchObjectives shape, clusters recompute on add/remove,
@@ -64,16 +64,22 @@ describe('mission-editor — DELETE tool (item 5)', () => {
     assert.deepEqual(def.roadDirs, []);
   });
 
-  test('OVERLAY mode records the cleared tile as an EXPLICIT overlay edit', () => {
+  test('OVERLAY mode REVERTS an edited tile to the generated base (drops the overlay entry)', () => {
     const map = createOverlayMapDef({ seed: 7, mapSize: 'skirmish' });
+    // First make an explicit overlay edit, then delete it.
+    paintBase(map, { col: 3, row: 3 }, 'DIRT');
+    assert.ok(overlayEditedKeys(map).has(hexKey(3, 3)), 'edit recorded in overlay.tiles');
     deleteTile(map, { col: 3, row: 3 });
-    const def = map.overlay.tiles.find(t => t.col === 3 && t.row === 3);
-    assert.ok(def, 'a blank def was written into overlay.tiles (overrides the base)');
-    assert.equal(def.base, 'GRASS');
-    assert.equal(def.structure, null);
-    assert.equal(def.path, null);
-    // It is now in the overlay-edited set used by the darken overlay.
-    assert.ok(overlayEditedKeys(map).has(hexKey(3, 3)));
+    assert.ok(!map.overlay.tiles.some(t => t.col === 3 && t.row === 3),
+      'overlay entry removed → buildMissionMap falls back to the generated tile');
+    assert.ok(!overlayEditedKeys(map).has(hexKey(3, 3)), 'no longer in the overlay-edited set');
+  });
+
+  test('OVERLAY mode delete on a NON-edited hex never writes a blank overlay entry', () => {
+    const map = createOverlayMapDef({ seed: 7, mapSize: 'skirmish' });
+    deleteTile(map, { col: 4, row: 4 });
+    assert.ok(!map.overlay.tiles.some(t => t.col === 4 && t.row === 4),
+      'no blank def written — the generated base is preserved');
   });
 
   test('DELETE unwires a painted-road neighbour so no segment dangles in', () => {
