@@ -9776,7 +9776,10 @@ export class Renderer3D {
       ray.origin.copyFrom(camPos);
       ray.direction.copyFrom(dir);
       ray.length = camDist;
-      const pick = this._scene.pickWithRay(ray, xrayOccluderPredicate);
+      // fastCheck=true: we only need to know if ANY occluder is nearer than the
+      // anchor, not the nearest one — early-out on the first hit (many per-leaf
+      // border-forest candidates make this a meaningful pan/orbit perf win).
+      const pick = this._scene.pickWithRay(ray, xrayOccluderPredicate, true);
       if (isOccluded(camDist, pick?.distance ?? Infinity, !!pick?.hit)) {
         next.add(id);
       }
@@ -9803,7 +9806,8 @@ export class Renderer3D {
 
   /** Tear down all x-ray ghost state: dispose every standee's ghost (meshes +
    *  cloned material) and clear tracking. Safe to call when nothing was ever
-   *  ghosted (e.g. node-test with no Babylon scene). */
+   *  ghosted (e.g. node-test with no Babylon scene). Currently has no caller —
+   *  intended for a future teardown path (scene rebuild / renderer dispose). */
   _disposeXray() {
     if (this._entityStandees) {
       for (const standee of this._entityStandees.values()) {
@@ -12504,6 +12508,12 @@ export function factionOutlineColor(entity) {
  */
 export function xrayOccluderPredicate(mesh) {
   if (!mesh) return false;
+  // A supplied predicate REPLACES Babylon's default isPickable && isVisible &&
+  // isEnabled filter, so we must re-apply enable/visibility ourselves — else a
+  // border-forest mesh hidden at certain zooms (setEnabled(false)) would still
+  // match by name and falsely ghost a unit near the map edge.
+  if (mesh.isEnabled?.() === false) return false;
+  if (mesh.isVisible === false) return false;
   const kind = mesh.metadata?.kind;
   if (kind === 'tree-glb' || kind === 'building-glb' || kind === 'map-border-forest') {
     return true;

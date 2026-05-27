@@ -157,6 +157,29 @@ describe('xray pure helpers', () => {
     assert.equal(xrayOccluderPredicate(null), false);
   });
 
+  test('xrayOccluderPredicate respects isEnabled / isVisible', () => {
+    // A disabled occluder (e.g. border-forest hidden at certain zooms) must NOT
+    // match — else a unit near the map edge gets a false ghost.
+    assert.equal(
+      xrayOccluderPredicate({ name: 'border_forest_a50_leaves_0', isEnabled: () => false }),
+      false,
+    );
+    assert.equal(
+      xrayOccluderPredicate({ metadata: { kind: 'tree-glb' }, isEnabled: () => false }),
+      false,
+    );
+    // Explicitly invisible occluder also excluded.
+    assert.equal(
+      xrayOccluderPredicate({ metadata: { kind: 'building-glb' }, isVisible: false }),
+      false,
+    );
+    // Enabled + visible occluder still matches.
+    assert.equal(
+      xrayOccluderPredicate({ name: 'border_forest_a50_leaves_0', isEnabled: () => true, isVisible: true }),
+      true,
+    );
+  });
+
   test('isOccluded — nearer hit blocks, farther/no hit does not', () => {
     assert.equal(isOccluded(10, 5, true), true);
     assert.equal(isOccluded(10, 9.9, true), true);
