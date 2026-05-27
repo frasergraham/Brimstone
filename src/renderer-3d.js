@@ -8022,6 +8022,12 @@ export class Renderer3D {
         ribbon.parent     = this._mapRoot;
         ribbon.material   = this._highlightMaterialFor(ov.kind, color);
         ribbon.isPickable = false;
+        // Pin a stable transparent-sort index (these fills are always alpha-
+        // blended at HIGHLIGHT_OVERLAY_ALPHA). Base + nestedIndex so two fills
+        // stacked on one hex (e.g. a valid-move hex that is also a target) keep
+        // a fixed order instead of distance-sorting and popping as the combat
+        // camera pans. See OVERLAY_HIGHLIGHT_DISC_ALPHA_INDEX.
+        ribbon.alphaIndex = OVERLAY_HIGHLIGHT_DISC_ALPHA_INDEX + nestedIndex;
         this._highlightMeshes.push(ribbon);
       }
     });
@@ -8066,7 +8072,8 @@ export class Renderer3D {
         if (css.startsWith('#')) { rgb = cssHexToRgb01(css); alpha = 1; }
         else { const p = parseRgba01(css); rgb = [p[0], p[1], p[2]]; alpha = p[3]; }
       }
-      return { id, ov, glow, rgb, alpha, y: yForLayer('selection', i) };
+      return { id, ov, glow, rgb, alpha, y: yForLayer('selection', i),
+               aidx: OVERLAY_SELECTION_ALPHA_INDEX + i };
     });
 
     let sig = '';
@@ -8081,7 +8088,7 @@ export class Renderer3D {
     if (resolved.length === 0) return;
 
     const BABYLON = this._babylon;
-    for (const { id, ov, glow, rgb, alpha, y } of resolved) {
+    for (const { id, ov, glow, rgb, alpha, y, aidx } of resolved) {
       const tube = glow ? UNIT_HEX_OUTLINE_THICK_TUBE : UNIT_HEX_OUTLINE_THIN_TUBE;
       const emissiveMul = glow
         ? UNIT_HEX_OUTLINE_GLOW_EMISSIVE_MUL
@@ -8106,6 +8113,12 @@ export class Renderer3D {
         ring.material       = material;
         ring.isPickable     = false;
         ring.renderingGroupId = 0;
+        // Pin a stable transparent-sort index ONLY for the transparent rings
+        // (the hover ring at alpha < 1). The selected-unit ring is opaque
+        // (alpha 1) so the opaque pass ignores alphaIndex — leave it default.
+        // Without this the hover ring distance-sorts against the highlight /
+        // plan overlays and pops as the combat camera moves.
+        if (alpha < 1) ring.alphaIndex = aidx;
         this._selectionOverlayMeshes.push(ring);
       }
     }
@@ -8344,6 +8357,11 @@ export class Renderer3D {
       discMat.specularColor = new BABYLON.Color3(0, 0, 0);
       discMat.alpha = PLAN_DISC_ALPHA;
       disc.material = discMat;
+      // The puck is alpha-blended (PLAN_DISC_ALPHA < 1). Pin its transparent-
+      // sort index above the highlight fills so it keeps a fixed order over
+      // them rather than distance-sorting and popping as the combat camera
+      // pans. See OVERLAY_PLAN_ARROW_ALPHA_INDEX.
+      disc.alphaIndex = OVERLAY_PLAN_ARROW_ALPHA_INDEX;
 
       // Numbered badge above the puck — small billboarded plane.
       let badge = null, badgeMat = null, badgeTex = null;
@@ -8379,6 +8397,10 @@ export class Renderer3D {
         badge.isPickable    = false;
         badge.material      = badgeMat;
         badge.position.set(tx, 0.6, tz);
+        // Transparent (alpha texture). Pin just above the puck so the numbered
+        // badge stays layered over its own marker and the highlight fills,
+        // camera-angle-independent. See OVERLAY_PLAN_BADGE_ALPHA_INDEX.
+        badge.alphaIndex = OVERLAY_PLAN_BADGE_ALPHA_INDEX;
       }
 
       this._planArrowMeshes.push({ disc, discMat, badge, badgeMat, badgeTex });
@@ -10234,6 +10256,35 @@ export const ROAD_ALPHA_INDEX  = 200;
  *  the river extension still draws last. */
 export const BORDER_GROUND_ALPHA_INDEX = 80;
 export const BORDER_TREE_ALPHA_INDEX   = 90;
+
+/** Stable `alphaIndex` values for the transparent COMBAT OVERLAY discs —
+ *  movement / target highlight fills, the plan waypoint puck + numbered badge,
+ *  and the transparent hover ring. Like the border-forest band, every one of
+ *  these alpha-blended meshes sat at Babylon's default `alphaIndex`
+ *  (Number.MAX_VALUE), so the transparent pass tie-broke purely on
+ *  distance-to-camera. The combat camera pan (lunge framing + ease-back) moves
+ *  and rotates across these discs, and at grazing angles different-coloured
+ *  overlays that overlap in screen space reshuffle their draw order frame to
+ *  frame — popping the alpha blend (the "hexes flicker at the end of combat"
+ *  bug). Measured with Babylon's real `defaultTransparentSortCompare` over an
+ *  80-frame combat-camera sweep: cross-category overlay draw order changed in
+ *  24 of 79 frame transitions; pinning these indices drops it to 0.
+ *
+ *  Values ascend in the same order as the overlay Y bands (`Y_TABLE` in
+ *  src/overlays.js: selection 0.12 < highlight-disc 0.16 < plan-arrow 0.18),
+ *  so the alpha sort agrees with the intended back-to-front layering
+ *  regardless of camera angle. All sit ABOVE `ROAD_ALPHA_INDEX` (200) so the
+ *  overlays still draw over the road / river / border terrain ribbons. The
+ *  highlight-disc builder adds the overlay's nested index (move vs target vs
+ *  battle-hex) on top of the base so two fills stacked on one hex never tie;
+ *  the gap to the plan-arrow index leaves room for that. Opaque overlays (the
+ *  selected-unit ring at alpha 1, the opaque plan dashes/arrow shafts) are left
+ *  at the default — the opaque pass ignores `alphaIndex`. */
+export const OVERLAY_SELECTION_ALPHA_INDEX     = 300;
+export const OVERLAY_HIGHLIGHT_DISC_ALPHA_INDEX = 310;
+export const OVERLAY_PLAN_ARROW_ALPHA_INDEX    = 320;
+export const OVERLAY_PLAN_BADGE_ALPHA_INDEX    = 330;
+
 /** Number of bezier samples per stroke. 10 is smooth enough at this radius
  *  without bloating the tube vertex count on Campaign-size maps. */
 // Bumped from 10 → 22 — at tight bezier bends the old segment count produced
