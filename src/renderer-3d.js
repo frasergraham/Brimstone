@@ -4095,7 +4095,7 @@ export class Renderer3D {
     // Diagnostic handle: lets the operator run `__brimstone3dDebug.ribbons()`
     // from the browser console to inspect the runtime material/light state of
     // the road and river ribbons. `inspector()` toggles the Babylon Inspector
-    // (also bound to the `I` hotkey). No-op when `window` is undefined (tests).
+    // (also bound to the `D` hotkey). No-op when `window` is undefined (tests).
     if (typeof window !== 'undefined') {
       window.__brimstone3dDebug = {
         ribbons: () => this.dumpRibbonDebug(),
@@ -4109,7 +4109,7 @@ export class Renderer3D {
           const t = e.target;
           const tag = (t?.tagName || '').toUpperCase();
           if (tag === 'INPUT' || tag === 'TEXTAREA' || t?.isContentEditable) return;
-          if (e.key === 'i' || e.key === 'I') {
+          if (e.key === 'd' || e.key === 'D') {
             e.preventDefault();
             this._toggleInspector();
           } else if (e.key === 'f' || e.key === 'F') {
@@ -4147,7 +4147,7 @@ export class Renderer3D {
    *  scene tree, per-mesh material/shadow panels, texture previews, and
    *  ShadowGenerator caster/receiver lists — invaluable for diagnosing
    *  "tile renders but is untextured / why aren't shadows painting" without
-   *  guessing. Triggered by the `I` hotkey or `__brimstone3dDebug.inspector()`. */
+   *  guessing. Triggered by the `D` hotkey or `__brimstone3dDebug.inspector()`. */
   async _toggleInspector() {
     if (!this._scene) return;
     const layer = this._scene.debugLayer;
