@@ -511,6 +511,15 @@ export const STANDEE_SPHERE_DIAMETER      = 0.32;
 // the camera or a unit actually moved). Higher = cheaper, laggier; 4 keeps the
 // outline membership feeling instant at 60fps without picking every frame.
 export const XRAY_SWEEP_EVERY_N           = 4;
+// Rendering group occluded units are promoted to so their outline shows THROUGH
+// trees/buildings. Babylon clears the depth buffer between rendering groups, so
+// anything in a group > 0 draws on top of the world geometry (group 0) — group
+// 1 sits above the world but below the UI billboards (group 2) and attack
+// overlays (group 3). Combined with `mesh.renderOutline`, this gives a crisp
+// faction-coloured edge that reads through the obstacle (not a filled glow).
+export const XRAY_OUTLINE_GROUP           = 1;
+// Babylon outline width (inverted-hull thickness) for the see-through edge.
+export const XRAY_OUTLINE_WIDTH           = 0.06;
 // Y-offset for the base disc centre so it sits clear of the tile prism top
 // (which is at y=0.075). The cone/sphere are positioned relative to this disc.
 // Was 0.18 when the ground disc sat 0.105 clear of the tile prism top (0.075).
@@ -1540,11 +1549,11 @@ export class Renderer3D {
     this._activeLungeIds  = new Set();
     // X-ray occlusion outline (see `_pumpXrayOcclusion`). When an alive,
     // fog-visible unit is hidden behind a tree/building from the current
-    // camera, its meshes are added to `_xrayHL` (a depth-ignoring
-    // HighlightLayer) with the faction colour so a see-through silhouette
-    // reads over the occluder.
-    this._xrayHL          = null;       // BABYLON.HighlightLayer, created in _initBabylon
-    this._xrayOutlinedIds = new Set();  // entity ids currently in the layer
+    // camera, its meshes are promoted to a higher rendering group (so they
+    // draw OVER the occluder — Babylon clears depth between groups) and given
+    // a faction-coloured `renderOutline` edge, so the unit reads THROUGH the
+    // obstacle as a crisp ring rather than being hidden behind it.
+    this._xrayOutlinedIds = new Set();  // entity ids currently outlined
     this._xrayColorCache  = new Map();  // owner-css-hex → BABYLON.Color3
     this._xrayRay         = null;       // reused BABYLON.Ray for the per-unit picks
     this._xrayFrame       = 0;          // frame counter driving the sweep throttle
@@ -4288,29 +4297,12 @@ export class Renderer3D {
     this._sunLight          = sunLight;
     this._shadowGenerator   = shadowGenerator;
 
-    // X-ray occlusion outline layer. A HighlightLayer renders its outline
-    // over scene geometry IGNORING the depth buffer, which gives us the
-    // see-through effect for free — a unit behind a tree/building still
-    // shows a faction-coloured silhouette. `isStroke: true` draws a crisp
-    // thin border rather than the soft bloom of the old GlowLayer (removed
-    // for bloom-noise), and `innerGlow = false` keeps it outline-only with
-    // no solid fill. Membership is pumped in `_pumpXrayOcclusion`; meshes
-    // are added by reference with a per-call Color3, so no shared material
-    // is ever mutated. Requires the stencil buffer (engine created with
-    // `stencil: true` above).
-    if (typeof BABYLON.HighlightLayer === 'function') {
-      try {
-        const hl = new BABYLON.HighlightLayer('xrayOccluded', scene, {
-          isStroke: true,
-          blurHorizontalSize: 1,
-          blurVerticalSize: 1,
-          mainTextureRatio: 2,
-        });
-        hl.innerGlow = false;
-        hl.outerGlow = true;
-        this._xrayHL = hl;
-      } catch { this._xrayHL = null; }
-    }
+    // X-ray occlusion outline: handled per-mesh in `_pumpXrayOcclusion` via
+    // `mesh.renderOutline` + a rendering-group promotion (no HighlightLayer —
+    // that post-process respects depth, so it rendered the silhouette BEHIND
+    // the occluder and as a filled glow). The new path draws a faction edge
+    // that shows through. Stencil buffer (engine `stencil: true`) backs the
+    // built-in outline renderer's ring.
 
     // Per-unit hex outlines are built lazily by `_syncEntityHexOutlines`
     // (one thin + one thick mesh per alive entity). The old golden singleton
@@ -9085,8 +9077,8 @@ export class Renderer3D {
 
   /** Resolve (and cache) the faction-coloured `BABYLON.Color3` for an entity's
    *  x-ray outline. Keyed by the css hex so two units of the same owner share
-   *  one Color3 — the HighlightLayer takes the colour by value per addMesh
-   *  call, so this is purely an allocation cache (no material mutation). */
+   *  one Color3 — assigned to `mesh.outlineColor` (a per-mesh property), so
+   *  this is purely an allocation cache (no shared material is mutated). */
   _xrayColorFor(entity) {
     const key = factionOutlineColor(entity);
     let c = this._xrayColorCache.get(key);
@@ -9113,17 +9105,39 @@ export class Renderer3D {
     return out;
   }
 
+  /** Turn ON the see-through outline for a standee's meshes: promote them to
+   *  `XRAY_OUTLINE_GROUP` (renders over the world geometry since Babylon clears
+   *  depth between rendering groups) and enable Babylon's built-in
+   *  `renderOutline` ring in the faction colour. `renderingGroupId`/
+   *  `renderOutline`/`outlineColor`/`outlineWidth` are per-MESH properties — no
+   *  shared material is mutated. The pre-promotion group is stashed on the mesh
+   *  so `_removeXrayOutlineForStandee` can restore it exactly. */
   _addXrayOutlineForStandee(standee, color) {
-    if (!this._xrayHL || !standee) return;
+    if (!standee) return;
     for (const m of this._xrayMeshesForStandee(standee)) {
-      try { this._xrayHL.addMesh(m, color); } catch { /* mesh gone — skip */ }
+      if (!m || m._xrayOn) continue;
+      try {
+        m._xrayPrevGroup = (m.renderingGroupId | 0);
+        m.renderingGroupId = XRAY_OUTLINE_GROUP;
+        m.renderOutline = true;
+        if (color) m.outlineColor = color;
+        m.outlineWidth = XRAY_OUTLINE_WIDTH;
+        m._xrayOn = true;
+      } catch { /* mesh gone — skip */ }
     }
   }
 
+  /** Turn OFF the see-through outline: disable `renderOutline` and drop the
+   *  mesh back to its original rendering group. */
   _removeXrayOutlineForStandee(standee) {
-    if (!this._xrayHL || !standee) return;
+    if (!standee) return;
     for (const m of this._xrayMeshesForStandee(standee)) {
-      try { this._xrayHL.removeMesh(m); } catch { /* mesh gone — skip */ }
+      if (!m || !m._xrayOn) continue;
+      try {
+        m.renderOutline = false;
+        m.renderingGroupId = (m._xrayPrevGroup | 0);
+        m._xrayOn = false;
+      } catch { /* mesh gone — skip */ }
     }
   }
 
@@ -9144,9 +9158,8 @@ export class Renderer3D {
    *  distance. The occluded set is diffed against the previous one so we only
    *  add/remove the changed meshes — no per-frame churn on a static scene. */
   _pumpXrayOcclusion() {
-    const HL = this._xrayHL;
     const BABYLON = this._babylon;
-    if (!HL || !BABYLON || !this._scene || !this._camera || !this.state?.entities) return;
+    if (!BABYLON || !this._scene || !this._camera || !this.state?.entities) return;
 
     this._xrayFrame = (this._xrayFrame | 0) + 1;
 
@@ -9218,14 +9231,13 @@ export class Renderer3D {
     }
   }
 
-  /** Tear down the x-ray HighlightLayer + tracking state. Wired into the
-   *  renderer's teardown path (and safe to call when the layer was never
-   *  created — e.g. node-test with no Babylon scene). */
+  /** Tear down x-ray outline state: restore every still-outlined standee to its
+   *  original rendering group (outline off) and clear tracking. Safe to call
+   *  when nothing was ever outlined (e.g. node-test with no Babylon scene). */
   _disposeXray() {
-    if (this._xrayHL) {
-      try { this._xrayHL.dispose(); } catch { /* already gone */ }
+    for (const id of this._xrayOutlinedIds) {
+      this._removeXrayOutlineForStandee(this._entityStandees?.get(id));
     }
-    this._xrayHL = null;
     this._xrayOutlinedIds.clear();
     this._xrayColorCache.clear();
     this._xrayRay = null;

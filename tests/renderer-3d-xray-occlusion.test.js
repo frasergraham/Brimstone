@@ -1,14 +1,17 @@
-// X-ray occlusion outline (v1) — units hidden behind trees / buildings get a
-// faction-coloured, depth-ignoring HighlightLayer silhouette so they read
-// through the occluder. This pins:
+// X-ray occlusion outline — units hidden behind trees / buildings get a
+// faction-coloured, see-through edge so they read through the occluder. The
+// render mechanism: when occluded, a unit's meshes are promoted to a higher
+// rendering group (Babylon clears depth between groups → draws over the world
+// geometry) and given Babylon's built-in `renderOutline` ring in the faction
+// colour. This pins:
 //   • the pure helpers (occluder predicate, isOccluded, faction colour,
 //     set-diff, sweep throttle), and
-//   • the membership pump against a stubbed HighlightLayer + scene — occluded
-//     units are added with their faction colour, un-occluded / fog-hidden
-//     units are never outlined, and dispose tears the layer down.
+//   • the membership pump against a stubbed scene — occluded units get
+//     renderOutline + the group promotion with their faction colour,
+//     un-occluded / fog-hidden units do not, and dispose restores them.
 //
 // The pump (`_pumpXrayOcclusion`) needs no real Babylon — minimal Vector3 /
-// Ray / Color3 / HighlightLayer / scene stubs drive the real math.
+// Ray / Color3 / scene stubs drive the real math.
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -21,6 +24,7 @@ import {
   diffOccludedSets,
   shouldSweepXray,
   XRAY_SWEEP_EVERY_N,
+  XRAY_OUTLINE_GROUP,
 } from '../src/renderer-3d.js';
 
 // ── Babylon stubs ──────────────────────────────────────────────────────────
@@ -34,33 +38,22 @@ class V3 {
 }
 class Ray { constructor(origin, direction, length) { this.origin = origin; this.direction = direction; this.length = length; } }
 class Color3 { constructor(r, g, b) { this.r = r; this.g = g; this.b = b; } }
-const BABYLON = { Vector3: V3, Ray, Color3, HighlightLayer: function () {} };
+const BABYLON = { Vector3: V3, Ray, Color3 };
 
-function fakeHL() {
-  const added = new Map(); // mesh → color
-  const calls = { add: [], remove: [], disposed: false };
-  return {
-    _added: added,
-    calls,
-    innerGlow: true,
-    outerGlow: true,
-    addMesh(m, c) { added.set(m, c); calls.add.push({ mesh: m, color: c }); },
-    removeMesh(m) { added.delete(m); calls.remove.push(m); },
-    dispose() { calls.disposed = true; },
-  };
-}
-
-/** A cone+sphere standee at world-x `x`. The fake scene decides occlusion from
- *  the reconstructed anchor x (see `makeScene`). */
+/** A cone+sphere standee at world-x `x`. Meshes start in rendering group 0 (the
+ *  world group). The fake scene decides occlusion from the reconstructed anchor
+ *  x (see `makeScene`). */
 function makeStandee(x, { enabled = true } = {}) {
   const plane = {
     name: 'unit_cone',
     position: new V3(x, 0.3, 0),
     metadata: { kind: 'entity' },
+    renderingGroupId: 0,
+    renderOutline: false,
     _enabled: enabled,
     isEnabled() { return this._enabled; },
   };
-  const sphere = { name: 'unit_sphere', position: new V3(x, 0.6, 0) };
+  const sphere = { name: 'unit_sphere', position: new V3(x, 0.6, 0), renderingGroupId: 0, renderOutline: false };
   return { plane, sphere, leader: false, paladinClone: null };
 }
 
@@ -92,6 +85,8 @@ function makeRenderer() {
   r._xrayFrame = XRAY_SWEEP_EVERY_N - 1;
   return r;
 }
+
+const isOutlined = (m) => m.renderOutline === true && m.renderingGroupId === XRAY_OUTLINE_GROUP;
 
 // ── Pure helpers ────────────────────────────────────────────────────────────
 describe('xray pure helpers', () => {
@@ -146,9 +141,8 @@ describe('xray pure helpers', () => {
 
 // ── Pump membership / fog / dispose ─────────────────────────────────────────
 describe('Renderer3D — xray occlusion pump', () => {
-  test('occluded unit is added to the layer with its faction colour; clear one is not', () => {
+  test('occluded unit gets a see-through outline in its faction colour; clear one does not', () => {
     const r = makeRenderer();
-    const hl = r._xrayHL = fakeHL();
     r._scene = makeScene(new Set([0])); // unit at x=0 is occluded, x=5 is clear
     const occ = makeStandee(0);
     const clear = makeStandee(5);
@@ -162,17 +156,17 @@ describe('Renderer3D — xray occlusion pump', () => {
 
     assert.equal(r._xrayOutlinedIds.has(1), true,  'occluded unit outlined');
     assert.equal(r._xrayOutlinedIds.has(2), false, 'clear unit not outlined');
-    // cone + sphere of the occluded unit are in the layer; clear unit's are not.
-    assert.equal(hl._added.has(occ.plane), true);
-    assert.equal(hl._added.has(occ.sphere), true);
-    assert.equal(hl._added.has(clear.plane), false);
-    // Added with a Color3 (faction colour), not undefined.
-    assert.ok(hl._added.get(occ.plane) instanceof Color3);
+    // cone + sphere of the occluded unit are promoted + outlined; clear unit's are not.
+    assert.ok(isOutlined(occ.plane), 'occluded cone promoted + renderOutline on');
+    assert.ok(isOutlined(occ.sphere), 'occluded sphere promoted + renderOutline on');
+    assert.equal(clear.plane.renderOutline, false, 'clear unit cone not outlined');
+    assert.equal(clear.plane.renderingGroupId, 0, 'clear unit cone stays in world group');
+    // Outline colour is a Color3 (faction colour), not undefined.
+    assert.ok(occ.plane.outlineColor instanceof Color3);
   });
 
-  test('orbiting so the unit is no longer occluded removes it from the layer', () => {
+  test('orbiting so the unit is no longer occluded restores it to the world group', () => {
     const r = makeRenderer();
-    const hl = r._xrayHL = fakeHL();
     const occludedXs = new Set([0]);
     r._scene = makeScene(occludedXs);
     const s = makeStandee(0);
@@ -181,7 +175,7 @@ describe('Renderer3D — xray occlusion pump', () => {
 
     r._pumpXrayOcclusion();
     assert.equal(r._xrayOutlinedIds.has(1), true);
-    assert.equal(hl._added.has(s.plane), true);
+    assert.ok(isOutlined(s.plane));
 
     // "Orbit": the unit is no longer occluded, and bump the camera so the
     // throttle re-sweeps (camMoved) on the next aligned frame.
@@ -191,13 +185,12 @@ describe('Renderer3D — xray occlusion pump', () => {
     r._pumpXrayOcclusion();
 
     assert.equal(r._xrayOutlinedIds.has(1), false, 'no longer occluded → dropped');
-    assert.equal(hl._added.has(s.plane), false, 'meshes removed from layer');
-    assert.ok(hl.calls.remove.length >= 1);
+    assert.equal(s.plane.renderOutline, false, 'outline turned off');
+    assert.equal(s.plane.renderingGroupId, 0, 'restored to original world group');
   });
 
   test('fog-hidden unit is never outlined', () => {
     const r = makeRenderer();
-    const hl = r._xrayHL = fakeHL();
     r._scene = makeScene(new Set([0])); // would be occluded if visible
     const hidden = makeStandee(0, { enabled: false }); // setEnabled(false) via fog
     r._entityStandees = new Map([[1, hidden]]);
@@ -206,57 +199,58 @@ describe('Renderer3D — xray occlusion pump', () => {
     r._pumpXrayOcclusion();
 
     assert.equal(r._xrayOutlinedIds.has(1), false);
-    assert.equal(hl._added.size, 0, 'fog-hidden unit contributes no outline meshes');
+    assert.equal(hidden.plane.renderOutline, false, 'fog-hidden unit gets no outline');
   });
 
   test('paladin clone child meshes are outlined instead of the hidden cone', () => {
     const r = makeRenderer();
-    const hl = r._xrayHL = fakeHL();
     r._scene = makeScene(new Set([0]));
     const s = makeStandee(0);
-    const body = { name: 'paladin_body' };
-    const sword = { name: 'paladin_sword' };
+    const body = { name: 'paladin_body', renderingGroupId: 0, renderOutline: false };
+    const sword = { name: 'paladin_sword', renderingGroupId: 0, renderOutline: false };
     s.paladinClone = { childMeshes: [body, sword] };
     r._entityStandees = new Map([[1, s]]);
     r.state = { entities: [{ id: 1, alive: true, owner: 'hero', col: 0, row: 0 }] };
 
     r._pumpXrayOcclusion();
 
-    assert.equal(hl._added.has(body), true);
-    assert.equal(hl._added.has(sword), true);
-    assert.equal(hl._added.has(s.plane), false, 'hidden cone is not outlined when paladin loaded');
+    assert.ok(isOutlined(body), 'paladin body outlined');
+    assert.ok(isOutlined(sword), 'paladin sword outlined');
+    assert.equal(s.plane.renderOutline, false, 'hidden cone is not outlined when paladin loaded');
   });
 
   test('throttle: off-cadence frame with no movement does not sweep', () => {
     const r = makeRenderer();
-    r._xrayHL = fakeHL();
     r._scene = makeScene(new Set([0]));
-    r._entityStandees = new Map([[1, makeStandee(0)]]);
+    const s = makeStandee(0);
+    r._entityStandees = new Map([[1, s]]);
     r.state = { entities: [{ id: 1, alive: true, owner: 'hero', col: 0, row: 0 }] };
 
     // First pump establishes membership (camMoved true on first sweep).
     r._pumpXrayOcclusion();
     assert.equal(r._xrayOutlinedIds.has(1), true);
+    const groupAfterFirst = s.plane.renderingGroupId;
 
     // Now nothing moves and the frame is off-cadence → no churn, set unchanged.
     r._xrayFrame = XRAY_SWEEP_EVERY_N; // → frame+1 not a multiple of N
-    const before = r._xrayHL.calls.add.length;
     r._pumpXrayOcclusion();
-    assert.equal(r._xrayHL.calls.add.length, before, 'no extra addMesh on skipped sweep');
+    assert.equal(s.plane.renderingGroupId, groupAfterFirst, 'no re-promotion on skipped sweep');
+    assert.equal(r._xrayOutlinedIds.has(1), true, 'membership unchanged');
   });
 
-  test('_disposeXray tears down the layer and clears tracking', () => {
+  test('_disposeXray restores outlined meshes and clears tracking', () => {
     const r = makeRenderer();
-    const hl = r._xrayHL = fakeHL();
     r._scene = makeScene(new Set([0]));
-    r._entityStandees = new Map([[1, makeStandee(0)]]);
+    const s = makeStandee(0);
+    r._entityStandees = new Map([[1, s]]);
     r.state = { entities: [{ id: 1, alive: true, owner: 'hero', col: 0, row: 0 }] };
     r._pumpXrayOcclusion();
     assert.equal(r._xrayOutlinedIds.size, 1);
+    assert.ok(isOutlined(s.plane));
 
     r._disposeXray();
-    assert.equal(hl.calls.disposed, true);
-    assert.equal(r._xrayHL, null);
+    assert.equal(s.plane.renderOutline, false, 'outline off after dispose');
+    assert.equal(s.plane.renderingGroupId, 0, 'restored to world group after dispose');
     assert.equal(r._xrayOutlinedIds.size, 0);
   });
 });
