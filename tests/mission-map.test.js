@@ -28,7 +28,8 @@ describe('buildMissionMap — handmade', () => {
       },
       {
         col: 4, row: 4, type: 'FOREST', building: null,
-        resource: 'HERBS', hiddenSurvivor: true, hiddenSurvivorId: 'Goody Whitlock', roadDirs: [],
+        resource: 'HERBS', hiddenSurvivor: true, hiddenSurvivorId: 'Goody Whitlock',
+        exploreOverride: { kind: 'resource', id: 'wood', amount: 3 }, roadDirs: [],
       },
       { col: 5, row: 5, type: 'RIVER' },
     ],
@@ -85,6 +86,14 @@ describe('buildMissionMap — handmade', () => {
     assert.equal(m.tiles.get(hexKey(4, 4)).hiddenSurvivorId, 'Goody Whitlock');
     // Tiles without an authored id leave it undefined (random-pick at runtime).
     assert.equal(m.tiles.get(hexKey(2, 7)).hiddenSurvivorId, undefined);
+  });
+
+  test('carries authored exploreOverride onto the tile', () => {
+    const m = buildMissionMap(mapDef);
+    assert.deepEqual(m.tiles.get(hexKey(4, 4)).exploreOverride,
+      { kind: 'resource', id: 'wood', amount: 3 });
+    // Tiles without an authored override leave it undefined (random roll at runtime).
+    assert.equal(m.tiles.get(hexKey(2, 7)).exploreOverride, undefined);
   });
 });
 

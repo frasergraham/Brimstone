@@ -632,18 +632,32 @@ export function executeExplore(state, actor) {
     const lootType = concreteFaction.modifyLootRoll(state, actor, table, raw);
     _applyLoot(state, actor, lootType, log, lootItems);
   };
-  runLoot();
+  // Editor-authored fixed-explore result (offline/campaign only): short-circuit
+  // the random roll (and NvN bonus rolls) and yield exactly the authored loot.
+  // `kind:'nothing'` or a null id finds nothing; resources apply `amount` (≥1)
+  // times. No override (procedural / unauthored hex) → unchanged random roll.
+  const ov = t.exploreOverride;
+  if (ov != null) {
+    if (ov.kind === 'nothing' || ov.id == null) {
+      _applyLoot(state, actor, 'nothing', log, lootItems);
+    } else {
+      const count = ov.kind === 'resource' ? Math.max(1, ov.amount ?? 1) : 1;
+      for (let i = 0; i < count; i++) _applyLoot(state, actor, ov.id, log, lootItems);
+    }
+  } else {
+    runLoot();
 
-  // NvN bonus rolls: larger teams field more units and need more resources.
-  // 1v1 → 1 roll; 2v2+ → one extra roll per additional player per side, with a
-  // half-step 30% bonus roll between integer steps. Skipped entirely in 1v1 so
-  // tests that mock Math.random() with fixed sequences aren't perturbed.
-  const sidePlayers = Math.max(1, Math.floor((state.players?.length || 2) / 2));
-  if (sidePlayers > 1) {
-    const extraRolls = Math.floor((sidePlayers - 1) / 2);
-    for (let i = 0; i < extraRolls; i++) runLoot();
-    const bonusProb = 0.3 * ((sidePlayers - 1) % 2);
-    if (bonusProb > 0 && Math.random() < bonusProb) runLoot();
+    // NvN bonus rolls: larger teams field more units and need more resources.
+    // 1v1 → 1 roll; 2v2+ → one extra roll per additional player per side, with a
+    // half-step 30% bonus roll between integer steps. Skipped entirely in 1v1 so
+    // tests that mock Math.random() with fixed sequences aren't perturbed.
+    const sidePlayers = Math.max(1, Math.floor((state.players?.length || 2) / 2));
+    if (sidePlayers > 1) {
+      const extraRolls = Math.floor((sidePlayers - 1) / 2);
+      for (let i = 0; i < extraRolls; i++) runLoot();
+      const bonusProb = 0.3 * ((sidePlayers - 1) % 2);
+      if (bonusProb > 0 && Math.random() < bonusProb) runLoot();
+    }
   }
 
   if (isHerbalist && getFaction(actor.owner).canDiscoverNPCs()) {

@@ -62,6 +62,9 @@ function _applyTileDef(tile, def) {
   // Carry the editor-authored specific-survivor pin (roster name) so the
   // discovery spawn can materialise THAT survivor instead of random-picking.
   if (def.hiddenSurvivorId != null) tile.hiddenSurvivorId = def.hiddenSurvivorId;
+  // Carry the editor-authored fixed-explore result so executeExplore yields
+  // THAT instead of a random loot roll (offline/campaign only).
+  if (def.exploreOverride != null) tile.exploreOverride = def.exploreOverride;
   if (Array.isArray(def.roadDirs)) tile.roadDirs = new Set(def.roadDirs);
   return tile;
 }

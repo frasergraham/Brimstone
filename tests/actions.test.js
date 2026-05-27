@@ -462,6 +462,96 @@ describe('executeExplore', () => {
         `Expected at most 1 loot entry but got ${found.length}: ${JSON.stringify(r.lootItems)}`);
     }
   });
+
+  // ── exploreOverride: editor-authored fixed loot (offline/campaign only) ──────
+  // Set up a deterministic grass tile under the hero so only the override (or,
+  // when absent, the terrain roll) decides the result.
+  function plainTileUnder(state, ent) {
+    const t = state.tiles.get(hexKey(ent.col, ent.row));
+    decomposeTileType(t, TileType.GRASS);
+    t.building = null;
+    t.hiddenSurvivor = false;
+    t.explored = false;
+    return t;
+  }
+
+  test('exploreOverride resource yields exactly amount, no random roll', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const t = plainTileUnder(state, hero);
+    t.exploreOverride = { kind: 'resource', id: ResourceType.WOOD, amount: 3 };
+    const before = state.inventory.hero[ResourceType.WOOD] ?? 0;
+    const r = executeExplore(state, hero);
+    assert.equal(r.success, true);
+    assert.equal((state.inventory.hero[ResourceType.WOOD] ?? 0) - before, 3,
+      'should add exactly the authored amount of wood');
+  });
+
+  test('exploreOverride resource without amount yields 1', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const t = plainTileUnder(state, hero);
+    t.exploreOverride = { kind: 'resource', id: ResourceType.METAL };
+    const before = state.inventory.hero[ResourceType.METAL] ?? 0;
+    executeExplore(state, hero);
+    assert.equal((state.inventory.hero[ResourceType.METAL] ?? 0) - before, 1);
+  });
+
+  test('exploreOverride weapon equips the authored weapon', () => {
+    const state = freshState();
+    const hero = state.hero;
+    hero.weapon = null;
+    const t = plainTileUnder(state, hero);
+    t.exploreOverride = { kind: 'weapon', id: WeaponType.SWORD };
+    executeExplore(state, hero);
+    assert.equal(hero.weapon, WeaponType.SWORD);
+  });
+
+  test('exploreOverride horse grants a horse', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const t = plainTileUnder(state, hero);
+    t.exploreOverride = { kind: 'horse', id: 'horse' };
+    executeExplore(state, hero);
+    assert.equal(hero.items['horse'], 1);
+  });
+
+  test('exploreOverride nothing finds nothing (no inventory change)', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const t = plainTileUnder(state, hero);
+    t.exploreOverride = { kind: 'nothing', id: null };
+    const invBefore = JSON.stringify(state.inventory.hero);
+    const itemsBefore = JSON.stringify(hero.items);
+    const r = executeExplore(state, hero);
+    assert.equal(r.success, true);
+    assert.equal(JSON.stringify(state.inventory.hero), invBefore);
+    assert.equal(JSON.stringify(hero.items), itemsBefore);
+    assert.ok(r.log.some(l => /nothing useful/.test(l)));
+  });
+
+  test('exploreOverride is one-shot: re-explore fails like normal explore', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const t = plainTileUnder(state, hero);
+    t.exploreOverride = { kind: 'resource', id: ResourceType.WOOD, amount: 2 };
+    const r1 = executeExplore(state, hero);
+    assert.equal(r1.success, true);
+    const r2 = executeExplore(state, hero);
+    assert.equal(r2.success, false, 'already-explored hex does not re-yield the override');
+  });
+
+  test('no exploreOverride → random roll path is unchanged', () => {
+    // A plain hex with no override carries no exploreOverride field and still
+    // rolls (success + lootItems array), exactly as before.
+    const state = freshState();
+    const hero = state.hero;
+    const t = plainTileUnder(state, hero);
+    assert.equal(t.exploreOverride, undefined);
+    const r = executeExplore(state, hero);
+    assert.equal(r.success, true);
+    assert.ok(Array.isArray(r.lootItems));
+  });
 });
 
 // ── executeBattle ─────────────────────────────────────────────────────────────
