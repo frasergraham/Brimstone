@@ -39,7 +39,12 @@ export const EditorTool = Object.freeze({
   // forest base, a building on dirt, etc.
   PAINT_BASE: 'paint-base',           // base material: grass | forest | dirt
   PAINT_STRUCTURE: 'paint-structure', // building (BuildingType) or clear
-  PAINT_PATH: 'paint-path',           // path overlay: none | road | river | bridge
+  // Path painting is split into two single-kind tools (item 2): Road paints
+  // path=ROAD + wires roadDirs; River paints path=RIVER under the tree-topology
+  // rule (item 4). The old combined PAINT_PATH (with a Road/River value selector)
+  // is gone — each tool paints exactly its kind.
+  PAINT_ROAD: 'paint-road',           // path overlay: ROAD (wires roadDirs)
+  PAINT_RIVER: 'paint-river',         // path overlay: RIVER (tree topology only)
   SET_RESOURCE: 'set-resource',
   HIDDEN_SURVIVOR: 'hidden-survivor',
   ENEMY_UNIT: 'enemy-unit',
@@ -55,10 +60,11 @@ export const ENEMY_UNIT_TYPES = Object.freeze([
   'zombie', 'minion', 'wood_golem', 'iron_golem',
 ]);
 
-// Selectable path values for the Paint Path tool (item 7) — uppercase enum KEYs.
-// BRIDGE is intentionally EXCLUDED: bridges are IMPLIED wherever a road crosses a
-// river (the builder/renderer converts road-over-river to a bridge), so the user
-// never paints one. Authoring options are None (null) / Road / River only.
+// The path kinds the editor can paint (item 2) — uppercase enum KEYs. Split
+// across the Road / River tools (one kind each). BRIDGE is intentionally
+// EXCLUDED: bridges are IMPLIED wherever a road crosses a river (the
+// builder/renderer converts road-over-river to a bridge), so the user never
+// paints one.
 export const PATH_TOOL_OPTIONS = Object.freeze(['ROAD', 'RIVER']);
 
 // ── Tool → VALUE-panel mapping (item 7) ──────────────────────────────────────
@@ -68,16 +74,18 @@ export const PATH_TOOL_OPTIONS = Object.freeze(['ROAD', 'RIVER']);
 export const ToolValueKind = Object.freeze({
   BASE: 'base',         // base-material swatches (grass/forest/dirt)
   STRUCTURE: 'structure', // building swatches + None/clear
-  PATH: 'path',         // none/road/river/bridge
   RESOURCE: 'resource', // resource picker
   ENEMY: 'enemy',       // enemy unit-type picker
   NONE: 'none',         // no value — show a hint
 });
 
+// Road / River paint exactly one kind each (item 2), so neither exposes a value
+// selector — both map to NONE (the combined Road/River path selector is gone).
 const _TOOL_VALUE_KIND = Object.freeze({
   [EditorTool.PAINT_BASE]: ToolValueKind.BASE,
   [EditorTool.PAINT_STRUCTURE]: ToolValueKind.STRUCTURE,
-  [EditorTool.PAINT_PATH]: ToolValueKind.PATH,
+  [EditorTool.PAINT_ROAD]: ToolValueKind.NONE,
+  [EditorTool.PAINT_RIVER]: ToolValueKind.NONE,
   [EditorTool.SET_RESOURCE]: ToolValueKind.RESOURCE,
   [EditorTool.ENEMY_UNIT]: ToolValueKind.ENEMY,
   [EditorTool.HIDDEN_SURVIVOR]: ToolValueKind.NONE,
@@ -101,14 +109,14 @@ export function valuePanelKind(tool) {
 // drawn as an editor overlay on top of the canvas. These pure helpers describe
 // the model so the toggle semantics + auto-show rule are unit-testable.
 
-/** A fresh layer-visibility state — everything but the road-node markers on. */
+/** A fresh layer-visibility state — everything but the marker overlays on. */
 export function createLayerVisibility() {
   return {
-    baseOnly: false,        // when on: hide structures + paths (terrain only)
     roadsBuildings: true,   // draw the structure + path layers
     powerNodes: true,       // draw the Power-Node objectives
     playerStarts: true,     // draw the hero / witch start markers
     roadNodeMarkers: false, // draw the road-network node overlay
+    areaTriggers: false,    // draw the area-event trigger overlay (item 5)
     darkenGenerated: false, // (overlay only) dim hexes that came from the
                             // generated base, leaving explicit edits bright
   };
@@ -116,7 +124,30 @@ export function createLayerVisibility() {
 
 /** True when the structure + path layers should be drawn for the given state. */
 export function showStructures(layers) {
-  return !!layers && !!layers.roadsBuildings && !layers.baseOnly;
+  return !!layers && !!layers.roadsBuildings;
+}
+
+/** Whether the area-event trigger overlay (item 5) should be drawn. */
+export function areaTriggerLayerVisible(layers) {
+  return !!layers && !!layers.areaTriggers;
+}
+
+/**
+ * The set of hex keys covered by AREA story triggers (item 5) — every trigger
+ * carrying a `hexes` array contributes its hexes. Pure; exported so the
+ * area-event layer's "which hexes light up" mapping is unit-testable. Round- (or
+ * other non-area) triggers have no `hexes` array and contribute nothing.
+ */
+export function areaTriggerHexKeys(meta) {
+  const keys = new Set();
+  if (!meta || !Array.isArray(meta.storyTriggers)) return keys;
+  for (const tr of meta.storyTriggers) {
+    if (!tr || !Array.isArray(tr.hexes)) continue;
+    for (const h of tr.hexes) {
+      if (h && Number.isFinite(h.col) && Number.isFinite(h.row)) keys.add(hexKey(h.col, h.row));
+    }
+  }
+  return keys;
 }
 
 /**
@@ -214,6 +245,7 @@ const _GRASS_KEY = _enumKey(TileType, TileType.GRASS);
 const _DIRT_KEY = _enumKey(TileType, TileType.DIRT);
 const _BUILDING_STRUCT_KEY = _enumKey(StructureType, StructureType.BUILDING); // 'BUILDING'
 const _ROAD_KEY = _enumKey(PathType, PathType.ROAD);   // 'ROAD'
+const _RIVER_KEY = _enumKey(PathType, PathType.RIVER); // 'RIVER'
 
 /**
  * PAINT_BASE — set ONLY the base material ∈ {GRASS, FOREST, DIRT}. Does not
@@ -269,6 +301,105 @@ export function paintPath(mapDef, { col, row }, pathKey) {
   if (def.path === _ROAD_KEY) _wireRoadConnections(mapDef, col, row);
   else _unwireRoadConnections(mapDef, col, row);
   return mapDef;
+}
+
+/**
+ * ROAD tool (item 2) — paint path=ROAD and wire up roadDirs to painted-road
+ * neighbours (the road-wiring half of the old combined Paint Path). Roads keep
+ * their any-junction / MST behaviour: no topology constraint. Thin wrapper over
+ * {@link paintPath} so the road-wiring stays in one place.
+ */
+export function paintRoad(mapDef, hex) {
+  paintPath(mapDef, hex, _ROAD_KEY);
+  return mapDef;
+}
+
+/**
+ * RIVER tool (item 2 + item 4) — paint path=RIVER, but ONLY if the result keeps
+ * the river graph a branching TREE. A river paint is BLOCKED (model untouched,
+ * returns `{ ok:false, warning }`) when it would close a cycle or merge two
+ * already-separate river branches; a valid fork (the fork hex accumulates >2
+ * connections by being the neighbour of separately-painted hexes) and ordinary
+ * 2-entry flow are allowed. Returns `{ ok:true, warning:'' }` on success.
+ */
+export function paintRiver(mapDef, { col, row }) {
+  const riverKeys = _riverKeySet(mapDef);
+  const check = validateRiverAddition(riverKeys, { col, row });
+  if (!check.ok) return { ok: false, warning: check.reason };
+  paintPath(mapDef, { col, row }, _RIVER_KEY);
+  return { ok: true, warning: '' };
+}
+
+// Collect the hex keys of every tile def currently painted as a RIVER.
+function _riverKeySet(mapDef) {
+  const set = new Set();
+  for (const t of _tileList(mapDef)) {
+    if (t.path === _RIVER_KEY) set.add(hexKey(t.col, t.row));
+  }
+  return set;
+}
+
+// Label each river hex with its connected-component root (flood-fill over hex
+// adjacency). Returns Map<hexKey, rootKey>. Pure over the given key set.
+function _riverComponents(riverKeys) {
+  const comp = new Map();
+  for (const key of riverKeys) {
+    if (comp.has(key)) continue;
+    const root = key;
+    const stack = [key];
+    comp.set(key, root);
+    while (stack.length) {
+      const cur = stack.pop();
+      const [c, r] = String(cur).split(',').map(Number);
+      for (const nb of getNeighbors(c, r)) {
+        const k = hexKey(nb.col, nb.row);
+        if (riverKeys.has(k) && !comp.has(k)) { comp.set(k, root); stack.push(k); }
+      }
+    }
+  }
+  return comp;
+}
+
+/**
+ * Pure river tree-topology check (item 4). Given the existing river hex keys and
+ * a candidate hex, decide whether painting RIVER there keeps the river graph a
+ * branching tree (a forest of acyclic trees). Returns `{ ok, reason }`.
+ *
+ * A candidate with ≤1 river-neighbour always extends a branch or starts a fresh
+ * river — allowed (a fork hex reaches >2 connections this way, one painted
+ * neighbour at a time). A candidate with ≥2 river-neighbours would either close
+ * a cycle (two neighbours already in the same river) or merge two separate
+ * rivers/branches (neighbours in distinct components) — both BLOCKED, with a
+ * reason that names which rule it broke.
+ *
+ * @param {Set<string>|string[]} riverKeys existing RIVER hex keys
+ * @param {{col:number,row:number}} hex candidate
+ */
+export function validateRiverAddition(riverKeys, { col, row }) {
+  const set = riverKeys instanceof Set ? riverKeys : new Set(riverKeys);
+  const selfKey = hexKey(col, row);
+  // Re-painting an existing river hex changes no topology — always allowed.
+  if (set.has(selfKey)) return { ok: true, reason: '' };
+
+  const nbKeys = [];
+  for (const nb of getNeighbors(col, row)) {
+    const k = hexKey(nb.col, nb.row);
+    if (set.has(k)) nbKeys.push(k);
+  }
+  if (nbKeys.length <= 1) return { ok: true, reason: '' };
+
+  const comp = _riverComponents(set);
+  const roots = new Set(nbKeys.map(k => comp.get(k)));
+  if (roots.size < nbKeys.length) {
+    return {
+      ok: false,
+      reason: 'A river cannot loop back on itself — that would close a cycle. Rivers must branch like a tree.',
+    };
+  }
+  return {
+    ok: false,
+    reason: 'A river cannot rejoin downstream — that would merge two separate branches. Only a fork may split.',
+  };
 }
 
 // True when the tile def at (col,row) is an explicitly-painted ROAD.
@@ -1195,7 +1326,10 @@ export function populateFromMission(parsed) {
 const _TOOL_DISPATCH = {
   [EditorTool.PAINT_BASE]: (m, hex, pv) => paintBase(m.mapDef, hex, pv.base),
   [EditorTool.PAINT_STRUCTURE]: (m, hex, pv) => paintStructure(m.mapDef, hex, pv.structure),
-  [EditorTool.PAINT_PATH]: (m, hex, pv) => paintPath(m.mapDef, hex, pv.path),
+  // Road: any-junction wiring. River: returns { ok, warning } so applyAt can
+  // surface a blocked tree-topology violation (item 4).
+  [EditorTool.PAINT_ROAD]: (m, hex) => paintRoad(m.mapDef, hex),
+  [EditorTool.PAINT_RIVER]: (m, hex) => paintRiver(m.mapDef, hex),
   [EditorTool.SET_RESOURCE]: (m, hex, pv) => setResource(m.mapDef, hex, pv.resource),
   [EditorTool.HIDDEN_SURVIVOR]: (m, hex) => toggleHiddenSurvivor(m.mapDef, hex),
   [EditorTool.ENEMY_UNIT]: (m, hex, pv) => placeEnemyUnit(m.enemyUnits, hex, pv.enemyType),
@@ -1232,7 +1366,6 @@ export function createMissionEditor({ render } = {}) {
     // Default building so a fresh PAINT_STRUCTURE click places one; the UI's
     // "None" option clears (null ⇒ paintStructure removes the building).
     structure: _enumKey(BuildingType, BuildingType.HOUSE),
-    path: null, // none — PAINT_PATH paints null until a path is picked
     resource: _enumKey(ResourceType, ResourceType.HERBS),
     enemyType: ENEMY_UNIT_TYPES[0],
   };
