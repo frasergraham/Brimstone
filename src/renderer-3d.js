@@ -2528,11 +2528,18 @@ export class Renderer3D {
   _buildRealForestTreesForHex(parent, col, row, cx, cz, trees, namePrefix, opts = {}) {
     if (!trees || trees.length === 0) return [];
     const out = [];
+    const faded = opts.alpha != null && opts.alpha < 1; // border-band edge fade
     for (let i = 0; i < trees.length; i++) {
       const inst = this._buildRealTreeInstance(
         parent, col, row, trees[i], i, namePrefix, { ...opts, cx, cz },
       );
-      if (inst) out.push(inst);
+      if (inst) {
+        // Faded border-band trees are alpha-blended — pin the same stable
+        // alphaIndex as the merged-cone band path so they don't reshuffle
+        // under the per-frame distance sort (see BORDER_TREE_ALPHA_INDEX).
+        if (faded) inst.alphaIndex = BORDER_TREE_ALPHA_INDEX;
+        out.push(inst);
+      }
     }
     return out;
   }
@@ -4723,6 +4730,11 @@ export class Renderer3D {
       hex.isPickable = false;
       hex.metadata   = { kind: 'map-border-forest', col: pos.col, row: pos.row };
       this._setShadowReceiver(hex);
+      // Faded outer-ring ground discs are alpha-blended — pin a stable
+      // alphaIndex so they stop reshuffling under the per-frame distance sort
+      // (see BORDER_GROUND_ALPHA_INDEX). Opaque inner-band discs render in the
+      // opaque pass where alphaIndex is ignored, so only tag the faded ones.
+      if (alpha < 1) hex.alphaIndex = BORDER_GROUND_ALPHA_INDEX;
       this._borderForestHexesByKey.set(hexKey(pos.col, pos.row), hex);
       this._borderPropsByKey.set(hexKey(pos.col, pos.row), [hex]);
 
@@ -4774,7 +4786,14 @@ export class Renderer3D {
         const mergedTreeMeshes = this._buildBorderForestTreesBatched(
           parent, jobs, { season: this._season, alpha: a, namePrefix: prefix },
         );
-        for (const m of mergedTreeMeshes) { this._addShadowCaster(m); bandTreeMeshes.push(m); }
+        for (const m of mergedTreeMeshes) {
+          this._addShadowCaster(m);
+          // Faded foliage tiers are alpha-blended — pin a stable alphaIndex
+          // (above the ground discs, below the river) so the band's draw order
+          // no longer flips per-frame under the distance sort.
+          if (a < 1) m.alphaIndex = BORDER_TREE_ALPHA_INDEX;
+          bandTreeMeshes.push(m);
+        }
       }
     }
     this._borderForestBatchMeshes = bandTreeMeshes;
@@ -9674,13 +9693,27 @@ export function borderTileDepthFromPlayable(col, row, ext) {
  *  → 0.8; any ring deeper in (≥3, i.e. closer to the playable map) → 1.0 (fully
  *  opaque). Anchoring the fade to the outer edge makes it look identical
  *  regardless of band depth — a 2-deep band still fades outer=0.2, next=0.5.
- *  NaN / negative inputs are treated as inner (opaque). Pure. */
+ *
+ *  Rings BEYOND the outer edge (`ringsFromOuter < 0`) are NOT inner/opaque —
+ *  they sit past the band's silhouette. This happens for river-extension
+ *  centreline samples, which run one hex past the outermost band tile (see
+ *  `riverExtensionRingAlphas` / `_buildRiverExtensions`). Returning 1.0 there
+ *  snapped the river's far tip back to fully opaque, leaving a hard opaque stub
+ *  poking past the faded map edge. Instead we CONTINUE the fade outward at the
+ *  same per-ring slope (clamped to ≥ 0) so the water keeps dissolving toward
+ *  transparent off the edge — matching how the ground/trees simply end at the
+ *  outer ring. NaN is still treated as opaque (defensive). Pure. */
 export function borderForestAlphaForOuterRing(ringsFromOuter) {
-  if (!(ringsFromOuter >= 0)) return 1.0;
-  if (ringsFromOuter < BORDER_FOREST_EDGE_ALPHAS.length) {
-    return BORDER_FOREST_EDGE_ALPHAS[ringsFromOuter];
-  }
-  return 1.0;
+  if (Number.isNaN(ringsFromOuter)) return 1.0;
+  const tiers = BORDER_FOREST_EDGE_ALPHAS;
+  if (ringsFromOuter >= tiers.length) return 1.0;          // inner band → opaque
+  if (ringsFromOuter >= 0) return tiers[ringsFromOuter];    // within the fade band
+  // Beyond the outermost ring: extrapolate the fade toward 0 along the slope
+  // between the two outermost tiers (0.2 → 0.5 ⇒ −0.3 per ring outward), so a
+  // sample one ring past the edge lands at 0 (fully transparent) rather than
+  // snapping to opaque. Clamp so it never goes negative.
+  const slope = tiers.length >= 2 ? tiers[1] - tiers[0] : tiers[0];
+  return Math.max(0, tiers[0] + ringsFromOuter * slope);
 }
 
 /** Convenience: a border tile's leaf/trunk alpha given the playable extent and
@@ -10095,6 +10128,21 @@ export const ROAD_RIBBON_Y      = 0.025;
  *  the alpha sort. */
 export const RIVER_ALPHA_INDEX = 100;
 export const ROAD_ALPHA_INDEX  = 200;
+/** Stable `alphaIndex` values for the FADED (alpha < 1) border-forest band
+ *  meshes — the dissolving outer rings of ground discs and foliage. Without an
+ *  explicit index every faded band mesh sits at Babylon's default
+ *  `Number.MAX_VALUE`, so they all tie and the transparent pass falls back to
+ *  sorting them by distance-to-camera every frame. Across the ring of coplanar
+ *  ground discs and the foliage stacked on top, that distance order reshuffles
+ *  constantly as the camera moves (measured: the band's transparent draw order
+ *  changed in 59 of 60 frames over a slow yaw sweep), popping the alpha blend —
+ *  the same per-mesh-distance-sort flicker the road/river ribbons already pin
+ *  away via RIVER/ROAD_ALPHA_INDEX. Ground < trees < river keeps the natural
+ *  back-to-front layering (foliage in front of the ground it stands on, water
+ *  on top) stable regardless of camera angle. Kept below RIVER_ALPHA_INDEX so
+ *  the river extension still draws last. */
+export const BORDER_GROUND_ALPHA_INDEX = 80;
+export const BORDER_TREE_ALPHA_INDEX   = 90;
 /** Number of bezier samples per stroke. 10 is smooth enough at this radius
  *  without bloating the tube vertex count on Campaign-size maps. */
 // Bumped from 10 → 22 — at tight bezier bends the old segment count produced

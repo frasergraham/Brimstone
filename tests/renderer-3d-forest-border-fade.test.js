@@ -18,6 +18,8 @@ import assert from 'node:assert/strict';
 
 import {
   BORDER_FOREST_EDGE_ALPHAS,
+  BORDER_GROUND_ALPHA_INDEX,
+  BORDER_TREE_ALPHA_INDEX,
   borderForestAlphaForOuterRing,
   borderForestAlphaForTile,
   borderTileDepthFromPlayable,
@@ -25,6 +27,8 @@ import {
   forestTreesForHex,
   hexToWorld,
   Renderer3D,
+  RIVER_ALPHA_INDEX,
+  ROAD_ALPHA_INDEX,
   riverExtensionRingAlphas,
   tilesExtent,
 } from '../src/renderer-3d.js';
@@ -61,8 +65,25 @@ describe('Renderer3D — borderForestAlphaForOuterRing', () => {
     assert.equal(borderForestAlphaForOuterRing(99), 1.0);
   });
 
-  test('negative / NaN treated as inner → opaque', () => {
-    assert.equal(borderForestAlphaForOuterRing(-1), 1.0);
+  // Rings BEYOND the outer edge (negative ringsFromOuter) sit PAST the band's
+  // silhouette — river-extension samples poke one hex past the outermost band
+  // tile. They must NOT snap back to opaque (the old behaviour, which left a
+  // hard opaque river stub jutting into the faded map edge). Instead the fade
+  // continues outward toward 0.
+  test('beyond the outer edge (negative) keeps fading toward 0 — never opaque', () => {
+    // Slope between the two outermost tiers is 0.2→0.5 ⇒ −0.3 per ring out, so
+    // one ring past the edge already clamps to 0 (fully transparent).
+    assert.equal(borderForestAlphaForOuterRing(-1), 0);
+    assert.equal(borderForestAlphaForOuterRing(-2), 0);
+    assert.equal(borderForestAlphaForOuterRing(-99), 0);
+    // Crucially: NONE of these are the opaque 1.0 that caused the stub.
+    for (const r of [-1, -2, -3, -10]) {
+      assert.notEqual(borderForestAlphaForOuterRing(r), 1.0,
+        `beyond-edge ring ${r} must not be opaque`);
+    }
+  });
+
+  test('NaN still treated as opaque (defensive)', () => {
     assert.equal(borderForestAlphaForOuterRing(NaN), 1.0);
   });
 });
@@ -576,8 +597,82 @@ describe('Renderer3D — riverExtensionRingAlphas (river edge fade)', () => {
     assert.deepEqual(alphas, [1.0, 1.0]);
   });
 
+  // Regression (in-browser bug): the river extension runs one hex PAST the
+  // outermost band tile. Those tail samples have depth > bandDepth, i.e.
+  // negative ringsFromOuter, and used to map back to 1.0 → a solid opaque river
+  // stub poking out beyond the faded map edge. They must now be ≤ the outer-ring
+  // alpha and dissolve toward 0 — never opaque.
+  test('samples BEYOND the outer ring dissolve toward 0 — not an opaque stub', () => {
+    // Row 6, walking past the outermost band tile (col -6) to cols -7, -8.
+    const tail = riverExtensionRingAlphas(
+      [at(-6, 6), at(-7, 6), at(-8, 6)], ext, bandDepth,
+    );
+    assert.equal(tail[0], 0.2, 'outermost ring stays at the 0.2 tier');
+    for (let i = 1; i < tail.length; i++) {
+      assert.ok(tail[i] < 0.2, `beyond-edge sample ${i} should be more transparent than the outer ring`);
+      assert.notEqual(tail[i], 1.0, `beyond-edge sample ${i} must NOT snap to opaque`);
+      assert.ok(tail[i] >= 0, 'alpha stays non-negative');
+    }
+    // The far tail is fully transparent (dissolved off the edge).
+    assert.equal(tail[tail.length - 1], 0);
+  });
+
   test('non-array input → empty (defensive)', () => {
     assert.deepEqual(riverExtensionRingAlphas(null, ext, bandDepth), []);
+  });
+});
+
+// ── Border-band transparent-sort stability (alphaIndex) ──────────────────────
+//
+// In-browser bug: the faded edge meshes (ground discs + foliage) flickered as
+// the camera moved. Diagnosed via headless Chrome (CDP): every faded band mesh
+// sat at Babylon's default alphaIndex (Number.MAX_VALUE), so the transparent
+// pass tie-broke on distance-to-camera and the band's draw order reshuffled in
+// 59 of 60 frames over a slow yaw sweep — popping the alpha blend (the same
+// per-mesh-distance-sort flicker road/river ribbons already pin away). The fix
+// pins a stable alphaIndex on the faded band meshes: ground < trees < river, so
+// the back-to-front layering no longer depends on camera angle.
+
+describe('Renderer3D — border-band alphaIndex (transparent-sort stability)', () => {
+  test('ground < trees < river keeps the band layered front-to-back stably', () => {
+    assert.ok(
+      BORDER_GROUND_ALPHA_INDEX < BORDER_TREE_ALPHA_INDEX,
+      'ground discs must draw behind the foliage standing on them',
+    );
+    assert.ok(
+      BORDER_TREE_ALPHA_INDEX < RIVER_ALPHA_INDEX,
+      'foliage must draw behind the river so water stays on top',
+    );
+    // All kept below the river/road indices so the existing ribbon ordering
+    // (river < road) is undisturbed.
+    assert.ok(BORDER_GROUND_ALPHA_INDEX < ROAD_ALPHA_INDEX);
+    assert.ok(BORDER_TREE_ALPHA_INDEX < ROAD_ALPHA_INDEX);
+  });
+
+  test('_buildRealForestTreesForHex pins faded instances to BORDER_TREE_ALPHA_INDEX', () => {
+    const r = new Renderer3D(null, null);
+    r._babylon = makeStubBabylon();
+    r._scene   = {};
+    // Stub the per-tree instance builder so we exercise just the alphaIndex
+    // tagging branch without the full GLB instancing path.
+    r._buildRealTreeInstance = (parent, col, row, t, i, prefix) => ({
+      name: `${prefix}_inst${i}`, alphaIndex: Number.MAX_VALUE,
+    });
+    const trees = [{ x: 0, z: 0, scale: 1 }, { x: 0.2, z: 0.1, scale: 1 }];
+
+    // Faded (alpha < 1) → every instance pinned to the stable band index.
+    const faded = r._buildRealForestTreesForHex(
+      { name: 'root' }, -6, 6, 0, 0, trees, 'border_forest', { alpha: 0.2 },
+    );
+    assert.equal(faded.length, 2);
+    for (const m of faded) assert.equal(m.alphaIndex, BORDER_TREE_ALPHA_INDEX);
+
+    // Opaque (alpha ≥ 1, e.g. in-map forest) → left untouched (opaque pass
+    // ignores alphaIndex; tagging would be meaningless and risks reordering).
+    const opaque = r._buildRealForestTreesForHex(
+      { name: 'root' }, 3, 3, 0, 0, trees, 'forest', { alpha: 1 },
+    );
+    for (const m of opaque) assert.equal(m.alphaIndex, Number.MAX_VALUE);
   });
 });
 
