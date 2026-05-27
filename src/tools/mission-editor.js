@@ -31,6 +31,7 @@ import {
 import { hexKey, getNeighbors } from '../hex.js';
 import { rng, generateMap, MAP_SIZES, NODE_COLORS } from '../map.js';
 import { buildMissionMap, rederiveRoads } from '../campaign/mission-map.js';
+import { SURVIVOR_ROSTER } from '../content/survivors.js';
 
 /** Active-tool ids the click loop dispatches on. */
 export const EditorTool = Object.freeze({
@@ -76,8 +77,31 @@ export const ToolValueKind = Object.freeze({
   STRUCTURE: 'structure', // building swatches + None/clear
   RESOURCE: 'resource', // resource picker
   ENEMY: 'enemy',       // enemy unit-type picker
+  SURVIVOR: 'survivor', // hidden-survivor roster picker (Any / a specific char)
   NONE: 'none',         // no value — show a hint
 });
+
+// ── Hidden-survivor picker options ───────────────────────────────────────────
+// The Hidden Survivor tool can place a SPECIFIC survivor from the roster, or an
+// unspecified one ("Any" → null id, the runtime's existing random-pick). The id
+// is the roster `name` (unique + stable + human-readable). Exported so the UI's
+// value-panel dropdown stays in lockstep with the roster without importing it.
+export const HIDDEN_SURVIVOR_ANY = null;
+
+/** Picker options for the Hidden Survivor tool: [{ id, label }]. */
+export function survivorPickerOptions() {
+  return [
+    { id: HIDDEN_SURVIVOR_ANY, label: 'Any (random)' },
+    ...SURVIVOR_ROSTER.map(c => ({ id: c.name, label: `${c.name} — ${c.title}` })),
+  ];
+}
+
+/** Human label for a stored hidden-survivor id (null → "Any"). */
+export function survivorLabelForId(id) {
+  if (id == null) return 'Any';
+  const c = SURVIVOR_ROSTER.find(s => s.name === id);
+  return c ? c.name : id;
+}
 
 // Road / River paint exactly one kind each (item 2), so neither exposes a value
 // selector — both map to NONE (the combined Road/River path selector is gone).
@@ -88,7 +112,7 @@ const _TOOL_VALUE_KIND = Object.freeze({
   [EditorTool.PAINT_RIVER]: ToolValueKind.NONE,
   [EditorTool.SET_RESOURCE]: ToolValueKind.RESOURCE,
   [EditorTool.ENEMY_UNIT]: ToolValueKind.ENEMY,
-  [EditorTool.HIDDEN_SURVIVOR]: ToolValueKind.NONE,
+  [EditorTool.HIDDEN_SURVIVOR]: ToolValueKind.SURVIVOR,
   [EditorTool.HERO_START]: ToolValueKind.NONE,
   [EditorTool.WITCH_START]: ToolValueKind.NONE,
   [EditorTool.ROAD_NODE]: ToolValueKind.NONE,
@@ -224,6 +248,7 @@ function _blankTileDef(col, row) {
     fortifyLevel: 0,
     resource: null,
     hiddenSurvivor: false,
+    hiddenSurvivorId: null,
     roadDirs: [],
   };
 }
@@ -402,11 +427,48 @@ export function setResource(mapDef, { col, row }, resourceKey) {
   return mapDef;
 }
 
-/** Toggle the hidden-survivor flag on a tile. */
-export function toggleHiddenSurvivor(mapDef, { col, row }) {
+/**
+ * Place (or remove) a hidden survivor on a tile, optionally pinning a SPECIFIC
+ * roster character via `survivorId` (the roster `name`; null/empty ⇒ "Any" =
+ * the runtime's existing random pick). Click semantics mirror the other
+ * placement tools:
+ *   • empty hex          → place (hiddenSurvivor=true, id=survivorId)
+ *   • same survivor again → remove (toggle off)
+ *   • different survivor  → re-pin to the newly-selected id (overwrite)
+ * so the picker can re-paint a hex without first clearing it.
+ */
+export function setHiddenSurvivor(mapDef, { col, row }, survivorId = null) {
   const def = _getOrCreateTileDef(mapDef, col, row);
-  def.hiddenSurvivor = !def.hiddenSurvivor;
+  const id = survivorId || null;
+  if (def.hiddenSurvivor && (def.hiddenSurvivorId ?? null) === id) {
+    def.hiddenSurvivor = false;
+    def.hiddenSurvivorId = null;
+  } else {
+    def.hiddenSurvivor = true;
+    def.hiddenSurvivorId = id;
+  }
   return mapDef;
+}
+
+/** Toggle the hidden-survivor flag on a tile (legacy "Any" toggle). */
+export function toggleHiddenSurvivor(mapDef, hex) {
+  return setHiddenSurvivor(mapDef, hex, HIDDEN_SURVIVOR_ANY);
+}
+
+/**
+ * List the authored hidden-survivor placements as `[{ col, row, id }]` (id null
+ * ⇒ "Any"/random). Reads the active tile list (handmade `tiles` or procedural
+ * `overlay.tiles`). DOM-free so the canvas-marker layer is unit-testable.
+ */
+export function hiddenSurvivorPlacements(mapDef) {
+  const list = mapDef.mode === 'procedural'
+    ? (mapDef.overlay?.tiles ?? [])
+    : (mapDef.tiles ?? []);
+  const out = [];
+  for (const t of list) {
+    if (t && t.hiddenSurvivor) out.push({ col: t.col, row: t.row, id: t.hiddenSurvivorId ?? null });
+  }
+  return out;
 }
 
 /** Move the single hero-start marker. Procedural mode writes it to the overlay. */
@@ -661,6 +723,9 @@ export function snapshotTiles(tilesMap) {
       fortifyLevel: t.fortifyLevel || 0,
       resource: _enumKey(ResourceType, t.resource),
       hiddenSurvivor: !!t.hiddenSurvivor,
+      // Built runtime Tiles don't (yet) carry a specific-survivor id, but pass
+      // it through defensively so a future runtime extension round-trips here.
+      hiddenSurvivorId: t.hiddenSurvivorId ?? null,
       roadDirs,
     });
   }
@@ -1577,7 +1642,7 @@ const _TOOL_DISPATCH = {
   [EditorTool.PAINT_ROAD]: (m, hex) => paintRoad(m.mapDef, hex),
   [EditorTool.PAINT_RIVER]: (m, hex) => paintRiver(m.mapDef, hex),
   [EditorTool.SET_RESOURCE]: (m, hex, pv) => setResource(m.mapDef, hex, pv.resource),
-  [EditorTool.HIDDEN_SURVIVOR]: (m, hex) => toggleHiddenSurvivor(m.mapDef, hex),
+  [EditorTool.HIDDEN_SURVIVOR]: (m, hex, pv) => setHiddenSurvivor(m.mapDef, hex, pv.survivor),
   [EditorTool.ENEMY_UNIT]: (m, hex, pv) => placeEnemyUnit(m.enemyUnits, hex, pv.enemyType),
   [EditorTool.HERO_START]: (m, hex) => setHeroStart(m.mapDef, hex),
   [EditorTool.WITCH_START]: (m, hex) => setWitchStart(m.mapDef, hex),
@@ -1614,6 +1679,8 @@ export function createMissionEditor({ render } = {}) {
     structure: _enumKey(BuildingType, BuildingType.HOUSE),
     resource: _enumKey(ResourceType, ResourceType.HERBS),
     enemyType: ENEMY_UNIT_TYPES[0],
+    // Hidden-survivor picker selection (roster `name`; null ⇒ "Any"/random).
+    survivor: HIDDEN_SURVIVOR_ANY,
   };
   // Full undo + redo history (item 5). Each entry is a serialised snapshot of
   // the whole working model. A NEW action (snapshot) invalidates the redo stack;

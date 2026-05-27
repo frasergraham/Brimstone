@@ -28,6 +28,13 @@ import {
   paintPath,
   setResource,
   toggleHiddenSurvivor,
+  setHiddenSurvivor,
+  hiddenSurvivorPlacements,
+  survivorPickerOptions,
+  survivorLabelForId,
+  HIDDEN_SURVIVOR_ANY,
+  saveWip,
+  loadWip,
   placeEnemyUnit,
   setHeroStart,
   setWitchStart,
@@ -63,7 +70,7 @@ import { Tile, TileType, PathType, StructureType, BuildingType } from '../src/ti
 
 // The complete set of fields a canonical layered tile def carries.
 const LAYERED_FIELDS = [
-  'base', 'building', 'col', 'fortifyLevel', 'hiddenSurvivor',
+  'base', 'building', 'col', 'fortifyLevel', 'hiddenSurvivor', 'hiddenSurvivorId',
   'path', 'resource', 'roadDirs', 'row', 'structure',
 ];
 
@@ -171,6 +178,105 @@ describe('mission-editor — layered tile painting', () => {
     assert.equal(map.tiles.find(t => t.col === 4 && t.row === 4).hiddenSurvivor, true);
     toggleHiddenSurvivor(map, { col: 4, row: 4 });
     assert.equal(map.tiles.find(t => t.col === 4 && t.row === 4).hiddenSurvivor, false);
+  });
+});
+
+describe('mission-editor — hidden-survivor picker (specific roster char)', () => {
+  const findDef = (map, col, row) => map.tiles.find(t => t.col === col && t.row === row);
+
+  test('survivorPickerOptions leads with "Any" then every roster character', () => {
+    const opts = survivorPickerOptions();
+    assert.equal(opts[0].id, HIDDEN_SURVIVOR_ANY); // null = Any
+    assert.match(opts[0].label, /Any/i);
+    // First roster entry is John O'Connor — Innkeeper; option carries name+title.
+    assert.ok(opts.some(o => o.id === "John O'Connor" && /Innkeeper/.test(o.label)));
+    // No null ids past the leading "Any" — every other option pins a real name.
+    assert.ok(opts.slice(1).every(o => typeof o.id === 'string' && o.id.length));
+  });
+
+  test('survivorLabelForId resolves a name, falls back to Any for null', () => {
+    assert.equal(survivorLabelForId(null), 'Any');
+    assert.equal(survivorLabelForId("John O'Connor"), "John O'Connor");
+  });
+
+  test('setHiddenSurvivor places a SPECIFIC survivor (id stored on the def)', () => {
+    const map = createDefaultMapDef();
+    setHiddenSurvivor(map, { col: 2, row: 3 }, 'Mary Quinn');
+    const def = findDef(map, 2, 3);
+    assert.equal(def.hiddenSurvivor, true);
+    assert.equal(def.hiddenSurvivorId, 'Mary Quinn');
+  });
+
+  test('"Any" placement stores a null id (runtime random pick)', () => {
+    const map = createDefaultMapDef();
+    setHiddenSurvivor(map, { col: 1, row: 1 }, HIDDEN_SURVIVOR_ANY);
+    const def = findDef(map, 1, 1);
+    assert.equal(def.hiddenSurvivor, true);
+    assert.equal(def.hiddenSurvivorId, null);
+  });
+
+  test('re-clicking the SAME survivor removes it (toggle off)', () => {
+    const map = createDefaultMapDef();
+    setHiddenSurvivor(map, { col: 5, row: 5 }, 'Mary Quinn');
+    setHiddenSurvivor(map, { col: 5, row: 5 }, 'Mary Quinn');
+    const def = findDef(map, 5, 5);
+    assert.equal(def.hiddenSurvivor, false);
+    assert.equal(def.hiddenSurvivorId, null);
+  });
+
+  test('clicking a DIFFERENT survivor re-pins (overwrites) without clearing', () => {
+    const map = createDefaultMapDef();
+    setHiddenSurvivor(map, { col: 6, row: 6 }, 'Mary Quinn');
+    setHiddenSurvivor(map, { col: 6, row: 6 }, "John O'Connor");
+    const def = findDef(map, 6, 6);
+    assert.equal(def.hiddenSurvivor, true);
+    assert.equal(def.hiddenSurvivorId, "John O'Connor");
+  });
+
+  test('hiddenSurvivorPlacements lists every placed survivor with its id', () => {
+    const map = createDefaultMapDef();
+    setHiddenSurvivor(map, { col: 2, row: 3 }, 'Mary Quinn');
+    setHiddenSurvivor(map, { col: 4, row: 4 }, HIDDEN_SURVIVOR_ANY);
+    const places = hiddenSurvivorPlacements(map).sort((a, b) => a.col - b.col);
+    assert.deepEqual(places, [
+      { col: 2, row: 3, id: 'Mary Quinn' },
+      { col: 4, row: 4, id: null },
+    ]);
+  });
+
+  test('a specific survivor round-trips through assemble → populateFromMission', () => {
+    const ed = createMissionEditor();
+    ed.setActiveTool(EditorTool.HIDDEN_SURVIVOR);
+    ed.setPaintValue('survivor', 'Mary Quinn');
+    ed.applyAt({ col: 3, row: 3 });
+    // Download (assemble) then reload (populateFromMission) must preserve the id.
+    const mission = ed.assemble();
+    const { mapDef } = populateFromMission(JSON.parse(JSON.stringify(mission)));
+    const def = mapDef.tiles.find(t => t.col === 3 && t.row === 3);
+    assert.equal(def.hiddenSurvivor, true);
+    assert.equal(def.hiddenSurvivorId, 'Mary Quinn');
+  });
+
+  test('a specific survivor round-trips through the M2 WIP autosave', () => {
+    const store = (() => {
+      const m = {};
+      return {
+        setItem: (k, v) => { m[k] = String(v); },
+        getItem: (k) => (k in m ? m[k] : null),
+        removeItem: (k) => { delete m[k]; },
+        key: (i) => Object.keys(m)[i] ?? null,
+        get length() { return Object.keys(m).length; },
+      };
+    })();
+    const ed = createMissionEditor();
+    ed.setActiveTool(EditorTool.HIDDEN_SURVIVOR);
+    ed.setPaintValue('survivor', 'Mary Quinn');
+    ed.applyAt({ col: 7, row: 2 });
+    const entry = saveWip(store, ed.assemble());
+    const restored = loadWip(store, entry.id);
+    const { mapDef } = populateFromMission(restored.mission);
+    const def = mapDef.tiles.find(t => t.col === 7 && t.row === 2);
+    assert.equal(def.hiddenSurvivorId, 'Mary Quinn');
   });
 });
 
@@ -866,11 +972,12 @@ describe('mission-editor — valuePanelKind (item 7)', () => {
     assert.equal(valuePanelKind(EditorTool.PAINT_STRUCTURE), ToolValueKind.STRUCTURE);
     assert.equal(valuePanelKind(EditorTool.SET_RESOURCE), ToolValueKind.RESOURCE);
     assert.equal(valuePanelKind(EditorTool.ENEMY_UNIT), ToolValueKind.ENEMY);
+    assert.equal(valuePanelKind(EditorTool.HIDDEN_SURVIVOR), ToolValueKind.SURVIVOR);
   });
 
   test('value-less tools map to NONE (incl. the split Road / River tools)', () => {
     for (const t of [EditorTool.PAINT_ROAD, EditorTool.PAINT_RIVER,
-      EditorTool.HIDDEN_SURVIVOR, EditorTool.HERO_START,
+      EditorTool.HERO_START,
       EditorTool.WITCH_START, EditorTool.ROAD_NODE, EditorTool.POWER_NODE]) {
       assert.equal(valuePanelKind(t), ToolValueKind.NONE);
     }

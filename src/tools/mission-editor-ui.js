@@ -49,6 +49,7 @@ import {
   addWave, removeWave, populateFromMission, CreationMode,
   valuePanelKind, ToolValueKind, createLayerVisibility, showStructures,
   roadNodeMarkersVisible, stripTileOverlays, mapSizePreset,
+  survivorPickerOptions, survivorLabelForId, hiddenSurvivorPlacements,
   overlayDarkenVisible, overlayEditedKeys,
   areaTriggerLayerVisible, areaTriggerHexKeys,
   PHASE_KINDS, addPhase, removePhaseAt, movePhase, setPhaseLoop,
@@ -111,7 +112,7 @@ const TOOL_PALETTE = [
   { id: EditorTool.PAINT_ROAD,      icon: '🛤', label: 'Road',           tip: 'Paint a road over the base + wire it to adjacent roads' },
   { id: EditorTool.PAINT_RIVER,     icon: '🌊', label: 'River',          tip: 'Paint a river — must stay a branching tree (no loops or merges)' },
   { id: EditorTool.SET_RESOURCE,    icon: '💎', label: 'Set Resource',    tip: 'Set or clear a harvestable resource on clicked tiles' },
-  { id: EditorTool.HIDDEN_SURVIVOR, icon: '🙋', label: 'Hidden Survivor', tip: 'Toggle a hidden survivor to be discovered on a tile' },
+  { id: EditorTool.HIDDEN_SURVIVOR, icon: '🙋', label: 'Hidden Survivor', tip: 'Place a hidden survivor to be discovered on a tile — pick a specific roster character or "Any"' },
   { id: EditorTool.ENEMY_UNIT,      icon: '🧟', label: 'Enemy Unit',      tip: 'Place / remove a pre-placed enemy unit on a tile' },
   { id: EditorTool.HERO_START,      icon: '🛡', label: 'Hero Start',      tip: 'Move the hero starting position to the clicked tile' },
   { id: EditorTool.WITCH_START,     icon: '🧙', label: 'Witch Start',     tip: 'Move the witch starting position to the clicked tile' },
@@ -124,7 +125,7 @@ const TOOL_PALETTE = [
 const TOOL_HINTS = {
   [EditorTool.PAINT_ROAD]: 'Click tiles to paint roads — they auto-wire to adjacent roads.',
   [EditorTool.PAINT_RIVER]: 'Click tiles to paint a river. Rivers must stay a branching tree — a paint that would loop or merge two branches is blocked.',
-  [EditorTool.HIDDEN_SURVIVOR]: 'Click a tile to toggle a hidden survivor.',
+  [EditorTool.HIDDEN_SURVIVOR]: 'Pick a survivor (or "Any"), then click a tile to place/remove a hidden survivor.',
   [EditorTool.HERO_START]: 'Click a tile to move the hero start.',
   [EditorTool.WITCH_START]: 'Click a tile to move the witch start.',
   [EditorTool.ROAD_NODE]: 'Click tiles to toggle road-network waypoints — roads regenerate automatically.',
@@ -336,8 +337,45 @@ export function initEditor(doc = document) {
     if (!ctx) return;
     drawDarkenGeneratedOverlay(ctx);
     drawAreaTriggerMarkers(ctx);
+    drawHiddenSurvivorMarkers(ctx);
     drawRoadNodeMarkers(ctx);
     drawEdgeResizeButtons(ctx);
+  }
+
+  // ── Hidden-survivor markers ─────────────────────────────────────────────────
+  // The game renderer hides survivors (they're discovered through fog), so the
+  // editor paints an author-only cue on every authored hidden-survivor hex: a
+  // green-tinted badge with the 🙋 glyph, plus the chosen character's initial
+  // (or "?" for an unspecified "Any" placement). Read straight off the mapDef
+  // tile defs so it tracks the authored placements (not a built GameState).
+  function drawHiddenSurvivorMarkers(ctx) {
+    const placements = hiddenSurvivorPlacements(editor.getMapDef());
+    if (!placements.length) return;
+    const r = renderer.hexSize * renderer.zoomLevel;
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const p of placements) {
+      const { x, y } = renderer.hexToCanvasPos(p.col, p.row);
+      const br = r * 0.42;
+      ctx.beginPath();
+      ctx.arc(x, y - r * 0.18, br, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(40,120,60,0.82)';
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = 'rgba(160,230,170,0.95)';
+      ctx.stroke();
+      ctx.font = `${Math.max(10, br * 1.1)}px serif`;
+      ctx.fillStyle = '#eaffea';
+      ctx.fillText('🙋', x, y - r * 0.18);
+      // Initial badge — first letter of the chosen survivor, or "?" for Any.
+      const label = survivorLabelForId(p.id);
+      const initial = p.id == null ? '?' : (label[0] || '?').toUpperCase();
+      ctx.font = `bold ${Math.max(9, br * 0.85)}px sans-serif`;
+      ctx.fillStyle = '#fff7d0';
+      ctx.fillText(initial, x + br * 0.7, y - r * 0.18 + br * 0.7);
+    }
+    ctx.restore();
   }
 
   // ── In-map per-edge resize buttons (item 1) ─────────────────────────────────
@@ -1318,6 +1356,15 @@ function buildValuePanel(doc, host, kind, editor, rerenderPanel) {
       host.append(labeledSelect(doc, 'Enemy', ENEMY_UNIT_TYPES.map(t => ({ key: t, value: t })),
         editor.getPaintValue('enemyType'), (v) => editor.setPaintValue('enemyType', v)));
       break;
+    case ToolValueKind.SURVIVOR: {
+      // Picker maps the "Any" option (null id) to an empty-string <option> value
+      // and back. Each option shows "Name — Title"; the stored id is the name.
+      const cur = editor.getPaintValue('survivor');
+      const opts = survivorPickerOptions().map(o => ({ key: o.id == null ? '' : o.id, label: o.label }));
+      host.append(labeledSelect(doc, 'Survivor', opts, cur == null ? '' : cur,
+        (v) => editor.setPaintValue('survivor', v === '' ? null : v)));
+      break;
+    }
     default:
       host.append(hint(doc, TOOL_HINTS[editor.activeTool] || 'This tool has no value.'));
   }
@@ -2178,7 +2225,7 @@ function select(doc, options, initial, onChange) {
   for (const o of options) {
     const opt = doc.createElement('option');
     opt.value = o.key;
-    opt.textContent = o.key;
+    opt.textContent = o.label ?? o.key; // optional human label, falls back to key
     if (o.key === initial) opt.selected = true;
     sel.append(opt);
   }
