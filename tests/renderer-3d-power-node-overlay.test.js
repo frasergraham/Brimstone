@@ -21,6 +21,9 @@ import {
   nodeLabelText,
   nodeOverlayColor,
   getNodeGlowColor,
+  nodeControllerRingVisible,
+  clusterCentroidWorld,
+  hexToWorld,
 } from '../src/renderer-3d.js';
 
 describe('nodeLabelText — display string for a power-node label', () => {
@@ -135,5 +138,67 @@ describe('Faction palette — tint and label both read as the controller colour'
 
   test('contested = vivid orange', () => {
     assert.equal(nodeOverlayColor('contested'), '#ff6a00');
+  });
+});
+
+describe('nodeControllerRingVisible — R5a: ring only on occupied nodes', () => {
+  test('neutral / unoccupied node hides the controller ring', () => {
+    assert.equal(nodeControllerRingVisible('neutral'), false);
+  });
+
+  test('a side holding the node shows the ring', () => {
+    assert.equal(nodeControllerRingVisible('hero'),  true);
+    assert.equal(nodeControllerRingVisible('witch'), true);
+  });
+
+  test('contested (both sides on the node) still shows the ring', () => {
+    // Contested is occupied — the brief only drops the *white* (neutral) ring.
+    assert.equal(nodeControllerRingVisible('contested'), true);
+  });
+
+  test('an arbitrary player owner id shows the ring', () => {
+    assert.equal(nodeControllerRingVisible('player-abc-123'), true);
+  });
+
+  test('null / undefined controller is treated as hidden', () => {
+    assert.equal(nodeControllerRingVisible(null),      false);
+    assert.equal(nodeControllerRingVisible(undefined), false);
+  });
+});
+
+describe('clusterCentroidWorld — R5b: label anchors at cluster centre of mass', () => {
+  test('single-hex cluster centroid equals that hex world position', () => {
+    const c = clusterCentroidWorld([{ col: 3, row: 4 }]);
+    const w = hexToWorld(3, 4);
+    assert.equal(c.x, w.x);
+    assert.equal(c.z, w.z);
+  });
+
+  test('centroid is the mean of the member hex world positions', () => {
+    const hexes = [{ col: 2, row: 2 }, { col: 3, row: 2 }, { col: 2, row: 3 }];
+    const c = clusterCentroidWorld(hexes);
+    let sx = 0;
+    let sz = 0;
+    for (const h of hexes) {
+      const w = hexToWorld(h.col, h.row);
+      sx += w.x;
+      sz += w.z;
+    }
+    assert.ok(Math.abs(c.x - sx / hexes.length) < 1e-9);
+    assert.ok(Math.abs(c.z - sz / hexes.length) < 1e-9);
+  });
+
+  test('centroid lies strictly between the extreme hexes of a spread cluster', () => {
+    const a = hexToWorld(0, 0);
+    const b = hexToWorld(4, 0);
+    const c = clusterCentroidWorld([{ col: 0, row: 0 }, { col: 4, row: 0 }]);
+    assert.ok(c.x > Math.min(a.x, b.x) && c.x < Math.max(a.x, b.x),
+      'centroid x sits between the two hexes, not over either one');
+  });
+
+  test('empty / invalid cluster returns null', () => {
+    assert.equal(clusterCentroidWorld([]),        null);
+    assert.equal(clusterCentroidWorld(null),      null);
+    assert.equal(clusterCentroidWorld(undefined), null);
   });
 });

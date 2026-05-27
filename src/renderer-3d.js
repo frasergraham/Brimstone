@@ -570,7 +570,7 @@ export const BUILDING_LABEL_TEX_H = 64;
 // ─── Power-node tint overlay + name label ───────────────────────────────────
 // A faint faction-tinted hex sits over every power-node tile (just above the
 // terrain disc, below highlight / plan layers), and a single billboarded name
-// label floats above the cluster's centre hex. Both retint when the
+// label floats above the cluster's centroid. Both retint when the
 // controller flips (hero / witch / neutral / contested) and hide under fog
 // alongside the existing node ring discs.
 //
@@ -616,6 +616,16 @@ export function nodeLabelText(obj) {
  *  glow palette is retuned, the tint and label retint with it. */
 export function nodeOverlayColor(controller) {
   return getNodeGlowColor(controller);
+}
+
+/** Whether the controller-coloured ring (the per-hex node outline) should be
+ *  drawn for a node with the given controller. Only a node actually held by a
+ *  side — or contested by occupying units — gets the ring; an unoccupied /
+ *  neutral node drops the pale-white outline entirely so the map reads
+ *  quieter. (`nodeController` returns `'neutral'` for an empty node,
+ *  `'contested'` for a tie, or a faction id otherwise.) Pure helper. */
+export function nodeControllerRingVisible(controller) {
+  return controller != null && controller !== 'neutral';
 }
 
 /** Resolve a node's *identifying* colour — the per-node palette entry that
@@ -988,6 +998,24 @@ export function hexToWorld(col, row, radius = HEX_RADIUS_WORLD) {
     x: radius * SQRT3 * (col + 0.5 * (row & 1)),
     z: radius * 1.5 * row,
   };
+}
+
+/**
+ * World-space centroid of a hex cluster — the mean of each member hex's world
+ * position. Used to anchor a power node's floating name label in the middle of
+ * its hex cluster rather than over the first ("head") hex. Pure helper for
+ * tests. Returns null for an empty / invalid cluster.
+ */
+export function clusterCentroidWorld(hexes, radius = HEX_RADIUS_WORLD) {
+  if (!Array.isArray(hexes) || hexes.length === 0) return null;
+  let sx = 0;
+  let sz = 0;
+  for (const h of hexes) {
+    const { x, z } = hexToWorld(h.col, h.row, radius);
+    sx += x;
+    sz += z;
+  }
+  return { x: sx / hexes.length, z: sz / hexes.length };
 }
 
 /**
@@ -1550,7 +1578,8 @@ export class Renderer3D {
     // the node ring tubes in `_buildNodeGlowMeshes`.
     this._nodeTintMeshes   = [];           // [{ obj, mesh, mat, col, row }]
     // Power-node floating name labels: one billboarded plane per node, anchored
-    // above the cluster's centre hex. Keyed by centre-hex key so the per-tile
+    // above the cluster's centroid. Keyed by centre-hex key (hexes[0]) for fog
+    // tracking even though the plane sits at the centroid. Keyed so the per-tile
     // fog veil can hide them in `_setTileFogged` without freezing the world
     // matrix (billboarding requires per-frame matrix sync — registering in
     // `_tilePropsByKey` would freeze the plane and lock its rotation).
@@ -7280,6 +7309,10 @@ export class Renderer3D {
     plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
     plane.isPickable    = false;
     plane.material      = mat;
+    // R7: render above all world geometry (group 2, same as the floating
+    // unit-icon billboards) so the hover label is never occluded by trees or
+    // taller buildings. Babylon clears depth between rendering groups.
+    plane.renderingGroupId = 2;
     // Sit above the building's NE-slot roof, not over the hex centre, so the
     // label visually anchors to the building rather than floating off-axis.
     const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
@@ -7305,6 +7338,25 @@ export class Renderer3D {
       // the geometry for alpha=0 alpha-blended meshes, so isVisible is the
       // cheap path. setEnabled() is overkill (parent toggling overhead).
       if (entry.plane) entry.plane.isVisible = a > 0;
+    }
+  }
+
+  /** Per-frame: fade every power-node name label by camera distance, reusing
+   *  the building-label ramp (`labelAlphaForZoom` with the same fade radii) so
+   *  node names disappear at the same zoom-out as house labels. Visibility is
+   *  the zoom alpha ANDed with the label's fog state so a fogged node never
+   *  shows its name just because the camera zoomed in. */
+  _pumpNodeLabelFade() {
+    if (!this._camera) return;
+    if (!this._nodeNameLabels || this._nodeNameLabels.length === 0) return;
+    const a = labelAlphaForZoom(
+      this._camera.radius,
+      BUILDING_LABEL_FADE_RADIUS_CLOSE,
+      BUILDING_LABEL_FADE_RADIUS_FAR,
+    );
+    for (const entry of this._nodeNameLabels) {
+      if (entry.mat) entry.mat.alpha = a;
+      if (entry.plane) entry.plane.isVisible = a > 0 && !entry.fogged;
     }
   }
 
@@ -9773,6 +9825,8 @@ export class Renderer3D {
     this._pumpFpsCounter(now);
     // Building hover labels: fade in/out based on camera zoom.
     this._pumpBuildingLabelFade();
+    // Power-node name labels: same zoom-driven fade as the building labels.
+    this._pumpNodeLabelFade();
   }
 
   /** Update the on-canvas FPS / ms-per-frame chip. Throttled to
@@ -9918,9 +9972,9 @@ export class Renderer3D {
     // holds a steady controller tint. Colour comes from the published
     // controller-ring overlay so the overlay map drives the visual.
     for (const ng of this._nodeGlowMeshes) {
+      const ctrl = nodeController(ng.obj, this.state.entities);
       const ov = this._overlays.get(`node-ctrl-${ng.col}-${ng.row}`);
-      const css = ov?.style?.color
-        ?? getNodeGlowColor(nodeController(ng.obj, this.state.entities));
+      const css = ov?.style?.color ?? getNodeGlowColor(ctrl);
       const [r, g, b] = cssHexToRgb01(css);
       ng.glowColor = { r, g, b };
       const mat = ng.disc?.material;
@@ -9933,6 +9987,16 @@ export class Renderer3D {
         mat.diffuseColor.r = r * 0.4;
         mat.diffuseColor.g = g * 0.4;
         mat.diffuseColor.b = b * 0.4;
+      }
+      // R5a: only show the controller-tint ring when a side actually holds (or
+      // contests) the node — an unoccupied / neutral node drops the pale-white
+      // outline entirely. Still respect fog: a controlled ring on a fogged hex
+      // stays hidden. `_buildObjectiveRings` runs every draw, so this gate is
+      // the steady-state authority even though `_setTileFogged` flips the same
+      // mesh's visibility on a fog *transition*.
+      if (ng.disc) {
+        const fogged = this._fogActiveSet.has(hexKey(ng.col, ng.row));
+        ng.disc.isVisible = nodeControllerRingVisible(ctrl) && !fogged;
       }
     }
     // Tint discs: same controller-driven recolour, kept on its own loop so the
@@ -10112,8 +10176,9 @@ export class Renderer3D {
         if (this._fogActiveSet.has(tkey)) disc.isVisible = false;
       }
 
-      // Floating name label — one per node, anchored above the centre hex
-      // (obj.hexes[0] per `_pickNodeCluster`). The label is the operator's
+      // Floating name label — one per node, anchored at the cluster centroid
+      // but fog-tracked by the centre hex (obj.hexes[0]). The label is the
+      // operator's
       // primary "this is Power Node X, controlled by Y" read, so it's a
       // single mesh rather than one per hex.
       const center = obj.hexes[0];
@@ -10160,15 +10225,23 @@ export class Renderer3D {
     plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
     plane.isPickable = false;
     plane.material = mat;
-    // Anchor over the centre hex (the cluster's "head"), not the centroid —
-    // the centre is where the ring discs of the three-hex cluster radiate
-    // from, so a label above it reads as belonging to the whole node.
-    const { x, z } = hexToWorld(center.col, center.row);
-    plane.position.set(x, NODE_LABEL_Y, z);
+    // R7: render above all world geometry (group 2, same as the floating
+    // unit-icon billboards) so the name is never occluded by trees/buildings.
+    plane.renderingGroupId = 2;
+    // R5b: anchor in the MIDDLE of the cluster (mean of every member hex's
+    // world position), not over the first ("head") hex — a multi-hex node now
+    // labels its centre of mass. Fall back to the centre hex for a degenerate
+    // single-hex cluster.
+    const c = clusterCentroidWorld(obj.hexes) ?? hexToWorld(center.col, center.row);
+    plane.position.set(c.x, NODE_LABEL_Y, c.z);
 
     const entry = {
       obj, plane, mat, tex,
       hexKey: tkey,
+      // Fog state of the centre (tracking) hex. Driven by `_setTileFogged`;
+      // the per-frame fade pump ANDs it with the zoom alpha so a fogged label
+      // never reappears just because the camera zoomed in.
+      fogged: this._fogActiveSet.has(tkey),
     };
     // The label colour is the node's identifying palette colour, which is
     // static for the life of the game — paint once at build time and never
@@ -10333,8 +10406,12 @@ export class Renderer3D {
     // visibility tracks that one hex's fog state. Hide fully on fog (unlike
     // building labels) — node ownership IS the tactical secret being hidden.
     const nodeLabelEntry = this._nodeLabelsByCenterHex?.get(hexK);
-    if (nodeLabelEntry?.plane) {
-      nodeLabelEntry.plane.isVisible = !fogged;
+    if (nodeLabelEntry) {
+      // Record fog so the zoom-fade pump (`_pumpNodeLabelFade`) keeps the label
+      // hidden under fog regardless of the camera-distance alpha. Set the
+      // immediate visibility too so a fog change reads on the same frame.
+      nodeLabelEntry.fogged = fogged;
+      if (nodeLabelEntry.plane) nodeLabelEntry.plane.isVisible = !fogged;
     }
     if (fogged) this._fogActiveSet.add(hexK);
     else this._fogActiveSet.delete(hexK);
