@@ -2172,9 +2172,10 @@ export class Renderer3D {
       applyShadowReceiving([source, ...(typeof source.getChildMeshes === 'function' ? source.getChildMeshes() : [])]);
 
       // Compute a bbox-derived uniform scale so this template's height lands at
-      // TARGET_BUILDING_WORLD_HEIGHT regardless of the GLB's intrinsic units.
-      // Falls back to HOUSE_INSTANCE_BASE_SCALE when bbox is unmeasurable
-      // (test stubs) — instances then multiply by the per-hex jitter ratio.
+      // TARGET_BUILDING_WORLD_HEIGHT regardless of the GLB's intrinsic units —
+      // this is what makes every building type the same world height. Falls
+      // back to HOUSE_INSTANCE_BASE_SCALE when bbox is unmeasurable (test
+      // stubs); instances then multiply by the small uniform per-hex jitter.
       let scale = HOUSE_INSTANCE_BASE_SCALE;
       try {
         const info = typeof source.getBoundingInfo === 'function' ? source.getBoundingInfo() : null;
@@ -2209,10 +2210,12 @@ export class Renderer3D {
   }
 
   /** Create one BABYLON.InstancedMesh of the building tile's chosen GLB variant
-   *  template, positioned at the tile's NE building slot with the hash-seeded
-   *  scale + yaw jitter so neighbouring buildings don't look stamped out of one
-   *  mould. Returns the instance, or null if no template for this tile's
-   *  variant is loaded yet (caller falls back to procedural box+roof). */
+   *  template, positioned at the tile's NE building slot. Scale is the
+   *  template's bbox-derived base (every type lands at the same world height)
+   *  times a small *uniform* per-hex jitter so a cluster doesn't look stamped;
+   *  yaw faces the hex centre (`houseYawForHex`) for a consistent inward facing.
+   *  Returns the instance, or null if no template for this tile's variant is
+   *  loaded yet (caller falls back to procedural box+roof). */
   _buildBuildingInstance(tile, x, z, parent) {
     if (!this._babylon) return null;
     const variant = buildingGlbVariantForHex(tile);
@@ -11738,6 +11741,13 @@ export function pickSeason(seedHash) {
  *  silhouette ambiguity threshold. */
 export const BUILDING_DIM_JITTER = 0.15;
 
+/** Uniform (isotropic) scale jitter applied to a GLB *building instance* on top
+ *  of its bbox-derived base scale — see `houseInstanceScalingForHex`. Kept
+ *  small and equal-on-all-axes so buildings stay a consistent size and never
+ *  distort; only the procedural box+roof fallback uses the larger anisotropic
+ *  `BUILDING_DIM_JITTER`. */
+export const HOUSE_INSTANCE_JITTER = 0.04;
+
 /** Base box dimensions before jitter (matches the historical fixed values). */
 export const BUILDING_BASE_DIM = Object.freeze({ width: 0.55, height: 0.70, depth: 0.55 });
 
@@ -11745,24 +11755,31 @@ export const BUILDING_BASE_DIM = Object.freeze({ width: 0.55, height: 0.70, dept
  *  with the box; roof height is constant so the lid silhouette stays crisp. */
 export const BUILDING_ROOF_DIM = Object.freeze({ width: 0.62, height: 0.15, depth: 0.62 });
 
-/** Deterministic yaw (radians, [0, 2π)) for the house instance on (col, row).
- *  Spins each building around its vertical axis so identical models read as a
- *  village rather than a regimented row. Uses a fresh hash seed so yaw doesn't
- *  correlate with the existing dimension jitter. */
-export function houseYawForHex(col, row) {
-  return _forestHash(col, row, 251) * Math.PI * 2;
+/** Yaw (radians, [0, 2π)) for a building instance — oriented so the model
+ *  faces the centre of its hex. Every building occupies the same NE building
+ *  slot (`BUILDING_SLOT_INDEX`), so the vector from the slot back to the tile
+ *  centre is `(-slot.x, -slot.z)`; turning the model to look down that vector
+ *  gives one consistent inward facing for all buildings. This replaces the
+ *  former hash-seeded arbitrary spin — the operator asked for a consistent
+ *  orientation rather than a randomly rotated village. `col`/`row` are retained
+ *  in the signature for call-site symmetry but no longer affect the result. */
+export function houseYawForHex(col, row) { // eslint-disable-line no-unused-vars
+  const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
+  const yaw  = Math.atan2(-slot.x, -slot.z);
+  return yaw < 0 ? yaw + Math.PI * 2 : yaw;
 }
 
-/** Per-hex anisotropic scaling factors for the house instance, derived from
- *  the existing `buildingDimensionsForHex` so the procedural-vs-instance paths
- *  share one source of jitter. Each axis ratio = jittered-box-axis / base. */
+/** Small *uniform* (isotropic) scale jitter for a building instance, applied on
+ *  top of the template's bbox-derived base scale. The base scale already lands
+ *  every template at `TARGET_BUILDING_WORLD_HEIGHT` (the real normalization), so
+ *  this only adds ≤±`HOUSE_INSTANCE_JITTER` of subtle size variety so a cluster
+ *  of identical GLBs doesn't read as stamped. The factor is identical on x/y/z
+ *  — buildings are never squashed or stretched. This replaces the former
+ *  per-axis ±15% jitter (derived from `buildingDimensionsForHex`) that made
+ *  buildings look "all slightly different" in both size and shape. */
 export function houseInstanceScalingForHex(col, row) {
-  const dims = buildingDimensionsForHex(col, row);
-  return {
-    x: dims.box.width  / BUILDING_BASE_DIM.width,
-    y: dims.box.height / BUILDING_BASE_DIM.height,
-    z: dims.box.depth  / BUILDING_BASE_DIM.depth,
-  };
+  const f = 1 + (_forestHash(col, row, 211) - 0.5) * 2 * HOUSE_INSTANCE_JITTER;
+  return { x: f, y: f, z: f };
 }
 
 /** Deterministic dimensions for the building on (col, row). Returns

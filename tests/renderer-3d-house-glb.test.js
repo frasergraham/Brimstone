@@ -15,11 +15,11 @@ import {
   Renderer3D,
   houseYawForHex,
   houseInstanceScalingForHex,
-  buildingDimensionsForHex,
   BUILDING_BASE_DIM,
   HOUSE_MODEL_DIR,
   HOUSE_MODEL_FILE,
   HOUSE_INSTANCE_BASE_SCALE,
+  HOUSE_INSTANCE_JITTER,
   TARGET_BUILDING_WORLD_HEIGHT,
   LEGACY_HOUSE_PATH,
   BUILDINGS_MODEL_DIR,
@@ -128,12 +128,21 @@ describe('houseYawForHex', () => {
     }
   });
 
-  test('different hexes generally produce different yaws', () => {
+  test('is consistent across all hexes (faces the hex centre, not random)', () => {
     const sample = new Set();
     for (let c = -5; c <= 5; c++) {
       for (let r = -5; r <= 5; r++) sample.add(houseYawForHex(c, r));
     }
-    assert.ok(sample.size > 60, `expected wide spread, only ${sample.size} unique yaws`);
+    assert.equal(sample.size, 1, `expected one consistent yaw, got ${sample.size}`);
+  });
+
+  test('points from the NE building slot back toward the hex centre', () => {
+    const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
+    // Vector from the building slot to the tile centre, in world XZ.
+    const expected = Math.atan2(-slot.x, -slot.z);
+    const norm = expected < 0 ? expected + Math.PI * 2 : expected;
+    assert.ok(Math.abs(houseYawForHex(0, 0) - norm) < 1e-9,
+      `yaw ${houseYawForHex(0, 0)} does not face centre (${norm})`);
   });
 });
 
@@ -142,27 +151,31 @@ describe('houseInstanceScalingForHex', () => {
     assert.deepEqual(houseInstanceScalingForHex(2, 3), houseInstanceScalingForHex(2, 3));
   });
 
-  test('matches the buildingDimensionsForHex jitter ratios on each axis', () => {
+  test('is uniform (isotropic) — same factor on every axis, never distorts', () => {
     for (let c = -4; c <= 4; c++) {
       for (let r = -4; r <= 4; r++) {
-        const s    = houseInstanceScalingForHex(c, r);
-        const dims = buildingDimensionsForHex(c, r);
-        assert.ok(Math.abs(s.x - dims.box.width  / BUILDING_BASE_DIM.width)  < 1e-9);
-        assert.ok(Math.abs(s.y - dims.box.height / BUILDING_BASE_DIM.height) < 1e-9);
-        assert.ok(Math.abs(s.z - dims.box.depth  / BUILDING_BASE_DIM.depth)  < 1e-9);
+        const s = houseInstanceScalingForHex(c, r);
+        assert.equal(s.x, s.y, `x/y differ at (${c},${r})`);
+        assert.equal(s.y, s.z, `y/z differ at (${c},${r})`);
       }
     }
   });
 
-  test('per-axis ratios stay within ±15% of unity (matches BUILDING_DIM_JITTER)', () => {
+  test('stays within ±HOUSE_INSTANCE_JITTER of unity (small uniform variety)', () => {
+    let sawBelow = false, sawAbove = false;
     for (let c = -6; c <= 6; c++) {
       for (let r = -6; r <= 6; r++) {
         const s = houseInstanceScalingForHex(c, r);
         for (const v of [s.x, s.y, s.z]) {
-          assert.ok(Math.abs(v - 1) <= 0.15 + 1e-9, `axis ${v} out of ±15% band`);
+          assert.ok(Math.abs(v - 1) <= HOUSE_INSTANCE_JITTER + 1e-9,
+            `axis ${v} out of ±${HOUSE_INSTANCE_JITTER} band`);
         }
+        if (s.x < 1 - 1e-6) sawBelow = true;
+        if (s.x > 1 + 1e-6) sawAbove = true;
       }
     }
+    // Confirms there *is* some jitter (not pinned to exactly 1.0 everywhere).
+    assert.ok(sawBelow && sawAbove, 'expected jitter both below and above unity');
   });
 });
 
@@ -360,7 +373,7 @@ describe('_buildBuildingInstance — positioning + jitter + metadata', () => {
     assert.ok(Math.abs(inst.position.y - 0.08) < 1e-9, `tile-top Y ${inst.position.y}`);
   });
 
-  test('scaling combines the template scale with the per-hex axis ratios', () => {
+  test('scaling combines the template scale with the uniform per-hex jitter', () => {
     const r = newInst();
     r._babylon = makeFakeBabylon();
     // Explicit template scale so we can assert the product exactly.
@@ -381,7 +394,7 @@ describe('_buildBuildingInstance — positioning + jitter + metadata', () => {
     assert.ok(Math.abs(inst.scaling.x - HOUSE_INSTANCE_BASE_SCALE * sc.x) < 1e-9);
   });
 
-  test('rotation yaw is hash-seeded per (col, row)', () => {
+  test('rotation yaw faces the hex centre (houseYawForHex)', () => {
     const r = newInst();
     r._babylon = makeFakeBabylon();
     stubTemplate(r, BUILDING_GLB_BY_TYPE[BuildingType.STABLE][0]);
