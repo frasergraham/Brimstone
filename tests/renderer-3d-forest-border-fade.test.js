@@ -305,6 +305,92 @@ describe('Renderer3D — _buildBorderForestTreesBatched (per-tier alpha)', () =>
   });
 });
 
+// ── Border GROUND edge fade ──────────────────────────────────────────────
+//
+// The band's ground hexes fade with the SAME per-ring alpha as the trees, so
+// the whole map edge (ground + foliage) dissolves as one layer. The fade
+// clones the shared fogged terrain material per alpha tier — the playable
+// map's ground material must NEVER be mutated. In node-test the atlas isn't
+// loaded, so `_terrainMaterialFor` returns null and the fade falls back to a
+// clone of the colour-fog material, which the Babylon stub supports.
+
+describe('Renderer3D — _borderGroundMaterialFor (ground edge fade)', () => {
+  function mkRenderer() {
+    const r = new Renderer3D(null, null);
+    r._babylon = makeStubBabylon();
+    r._scene   = {};
+    return r;
+  }
+
+  test('alpha ≥ 1 returns the shared opaque fog material (no clone)', () => {
+    const r = mkRenderer();
+    const shared = r._fogMaterialFor('#3a5f3a');
+    assert.equal(r._borderGroundMaterialFor('forest_1', '#3a5f3a', 1), shared);
+    assert.equal(r._borderGroundMaterialFor('forest_1', '#3a5f3a', 1.5), shared);
+    assert.equal(shared.alpha, 1, 'shared material left opaque');
+  });
+
+  test('alpha < 1 returns a translucent clone; shared material untouched', () => {
+    const r = mkRenderer();
+    const shared = r._fogMaterialFor('#3a5f3a');
+    const faded  = r._borderGroundMaterialFor('forest_1', '#3a5f3a', 0.2);
+    assert.notEqual(faded, shared, 'must clone, not mutate the shared material');
+    assert.equal(shared.alpha, 1, 'shared playable-tile material stays alpha 1');
+    assert.equal(faded.alpha, 0.2);
+    assert.equal(faded.transparencyMode, 2); // MATERIAL_ALPHABLEND
+    assert.equal(faded.needDepthPrePass, true);
+  });
+
+  test('clones are cached per (base material, alpha) tier — bounded', () => {
+    const r = mkRenderer();
+    assert.equal(
+      r._borderGroundMaterialFor('forest_1', '#3a5f3a', 0.5),
+      r._borderGroundMaterialFor('forest_1', '#3a5f3a', 0.5),
+      'same tier reuses one clone',
+    );
+    assert.notEqual(
+      r._borderGroundMaterialFor('forest_1', '#3a5f3a', 0.5),
+      r._borderGroundMaterialFor('forest_1', '#3a5f3a', 0.8),
+      'distinct tiers get distinct clones',
+    );
+  });
+
+  test('the three outer rings fade ground to 0.2/0.5/0.8; inner rings opaque', () => {
+    const r = mkRenderer();
+    const ext = tilesExtent(buildRectTiles(13, 13));
+    const bandDepth = 6;
+    // Walk a single edge ray outward (left of the map, fixed row 6) so each
+    // step is one ring deeper, and confirm the ground material's alpha tracks
+    // borderForestAlphaForTile exactly.
+    const cases = [
+      { col: -6, expect: 0.2 }, // outermost ring
+      { col: -5, expect: 0.5 },
+      { col: -4, expect: 0.8 },
+      { col: -3, expect: 1.0 }, // inner rings opaque
+      { col: -2, expect: 1.0 },
+      { col: -1, expect: 1.0 },
+    ];
+    for (const { col, expect } of cases) {
+      const alpha = borderForestAlphaForTile(col, 6, ext, bandDepth);
+      assert.equal(alpha, expect, `ring at col ${col} expected alpha ${expect}`);
+      const mat = r._borderGroundMaterialFor('forest_1', '#3a5f3a', alpha);
+      assert.equal(mat.alpha, expect, `ground material at col ${col} should be alpha ${expect}`);
+      if (expect < 1) assert.equal(mat.transparencyMode, 2, 'faded ground is alpha-blended');
+    }
+  });
+
+  test('ground and trees on the same ring share one alpha (lockstep fade)', () => {
+    const r = mkRenderer();
+    const ext = tilesExtent(buildRectTiles(13, 13));
+    const bandDepth = 6;
+    const alpha = borderForestAlphaForTile(-6, 6, ext, bandDepth); // outermost
+    const ground = r._borderGroundMaterialFor('forest_1', '#3a5f3a', alpha);
+    const tree   = r._alphaMaterialFor('#234c1f', alpha);
+    assert.equal(ground.alpha, tree.alpha, 'ground + tree fade in lockstep');
+    assert.equal(ground.alpha, 0.2);
+  });
+});
+
 describe('Renderer3D — _fadedTreeTemplateFor (real-tree path)', () => {
   function makeTemplateStub(name) {
     const mat = {

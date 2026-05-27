@@ -1348,6 +1348,12 @@ export class Renderer3D {
     this._terrainTextureCache    = new Map();
     this._terrainMaterialCache   = new Map();
     this._terrainFogMaterialCache = new Map(); // darkened variants for fog-of-war
+    // Per-(base-material, alpha) translucent CLONES of the fogged terrain (or
+    // colour-fog fallback) material, used by the border-forest GROUND edge fade
+    // so the band's ground dissolves in lockstep with its trees. Kept separate
+    // from the shared terrain caches so the playable map's opaque ground
+    // materials are never mutated. See `_borderGroundMaterialFor`.
+    this._borderGroundAlphaMatCache = new Map();
     // Per-instance fog-tint multiplier — initialised from the FOG_TILE_DARKEN
     // export but tunable at runtime via `setFogTint` (and per-phase via the
     // optional `cfg.fogTint` field consumed by `_applyLightConfig`).
@@ -4684,9 +4690,15 @@ export class Renderer3D {
       // trees on top stay in their normal (unfogged) colours so the
       // wilderness silhouette doesn't go too dark to read against the sky.
       const syntheticTile = { type: TileType.FOREST, base: TileType.FOREST, col: pos.col, row: pos.row };
-      const borderMat = this._terrainMaterialFor(
+      // Fade the ground hex with the SAME per-ring alpha as the trees on this
+      // tile (`alpha`), so the band's ground and foliage dissolve together at
+      // the map edge. `_borderGroundMaterialFor` clones the shared fogged
+      // terrain material per alpha tier — the playable map's ground material
+      // is never touched.
+      const borderMat = this._borderGroundMaterialFor(
         terrainSpriteIdFor(syntheticTile, pos.col, pos.row),
-        { fogged: true },
+        baseColor,
+        alpha,
       );
       hex.material   = borderMat || this._fogMaterialFor(baseColor);
       hex.isPickable = false;
@@ -5594,6 +5606,37 @@ export class Renderer3D {
     if (BABYLON?.Material) mat.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
     mat.needDepthPrePass = true;
     this._materialCache.set(key, mat);
+    return mat;
+  }
+
+  /** Material for a border-forest GROUND hex at edge-fade `alpha`. The band's
+   *  ground dissolves in lockstep with its trees — same per-ring alpha from
+   *  `borderForestAlphaForTile` — so the whole map edge reads as one fading
+   *  layer (operator: fade the ground, not just the trees).
+   *
+   *  The base is the SHARED fogged terrain material for the tile's sprite
+   *  (border ground always renders fogged), or the colour-fog fallback when
+   *  the atlas hasn't loaded. At `alpha` ≥ 1 that shared material is returned
+   *  as-is. At `alpha` < 1 a translucent CLONE is returned instead — bucketed
+   *  per (base material, alpha) tier in a dedicated cache so the playable
+   *  map's terrain materials are never mutated and the clone count stays
+   *  bounded (≤ sprite-variants × 3 tiers). Alpha-blend + depth pre-pass match
+   *  the tree fade (`_alphaMaterialFor`) so ground and trees sort together. */
+  _borderGroundMaterialFor(spriteId, baseColor, alpha) {
+    const base = this._terrainMaterialFor(spriteId, { fogged: true })
+              || this._fogMaterialFor(baseColor);
+    if (!base || !(alpha < 1)) return base;
+    const BABYLON = this._babylon;
+    const key = `${base.name}@a${alpha}`;
+    if (this._borderGroundAlphaMatCache.has(key)) return this._borderGroundAlphaMatCache.get(key);
+    const mat = typeof base.clone === 'function' ? base.clone(`mat_${key}`) : base;
+    mat.alpha = alpha;
+    // Standard alpha blending + per-mesh depth pre-pass — identical recipe to
+    // `_alphaMaterialFor` (the tree fade) so a ring's ground and trees blend
+    // and sort as a single translucent layer instead of z-fighting.
+    if (BABYLON?.Material) mat.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
+    mat.needDepthPrePass = true;
+    this._borderGroundAlphaMatCache.set(key, mat);
     return mat;
   }
 
