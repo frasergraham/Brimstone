@@ -1,20 +1,29 @@
-// X-ray occlusion ghost — units hidden behind trees / buildings get a flat
-// faction-colour "ghost" duplicate of their meshes that shows ONLY over the
-// occluder. The render mechanism: when occluded, a cloned, unlit, emissive
-// faction-colour duplicate of the unit's meshes is enabled in the WORLD
-// rendering group (0) with `depthFunction = GREATER` + `disableDepthWrite`, so
-// it depth-tests against the already-drawn scene and rasterizes only where it's
-// FARTHER than what's in the depth buffer (= the part hidden behind the
-// occluder). Where the unit is clear the ghost fails the depth test and the
-// normal unit shows. No HighlightLayer. No renderOutline. No group promotion.
+// X-ray occlusion outline — units hidden behind trees / buildings get a flat
+// faction-colour OUTLINE (a hollow ring), NOT a fill, confined STRICTLY to the
+// part of the unit hidden behind the occluder (zero pixels over the visible
+// body). The render mechanism is two cloned, per-ghost layers in the WORLD
+// rendering group (0), both routed to the transparent sub-pass (alpha < 1) so
+// they draw AFTER all opaque world geometry (occluder depth present):
+//
+//   1. MASK layer (`disableColorWrite`, depthFunction ALWAYS) — stamps the
+//      unit's full 2D footprint into the STENCIL buffer (bit XRAY_STENCIL_REF),
+//      drawn first (lower alphaIndex). Marks the body interior.
+//   2. RING layer — an expanded hull (scaled by XRAY_OUTLINE_SCALE) in flat
+//      emissive faction colour, depthFunction GREATER (only where behind scene
+//      geometry) AND stencil func NOTEQUAL ref (only outside the mask footprint)
+//      → a hollow ring confined to the occluded region.
+//
+// No HighlightLayer. No renderOutline. No single GREATER-tested fill (a
+// non-convex skinned mesh self-occludes → bleeds the ghost over the visible
+// body — the artifact this rework eliminates).
 //
 // This pins:
 //   • the pure helpers (occluder predicate, isOccluded, faction colour,
 //     set-diff, sweep throttle), and
-//   • the ghost pump against a stubbed scene — occluded units get a ghost
-//     built + enabled with the right faction colour, depthFunction GREATER and
-//     world rendering group; un-occluded / fog-hidden units do not; dispose
-//     tears the ghost down.
+//   • the ghost pump + builder against a stubbed scene — occluded units get a
+//     two-layer ghost built + enabled with the right faction colour, stencil
+//     config, depth functions, draw order, and hull expansion; un-occluded /
+//     fog-hidden units do not; dispose tears both layers + materials down.
 //
 // The pump (`_pumpXrayOcclusion`) needs no real Babylon — minimal Vector3 / Ray
 // / Color3 / StandardMaterial / mesh-clone stubs drive the real math.
@@ -32,7 +41,12 @@ import {
   XRAY_SWEEP_EVERY_N,
   XRAY_GHOST_GROUP,
   XRAY_GHOST_DEPTH_FUNC,
+  XRAY_MASK_DEPTH_FUNC,
   XRAY_GHOST_ALPHA,
+  XRAY_OUTLINE_SCALE,
+  XRAY_STENCIL_REF,
+  XRAY_MASK_ALPHA_INDEX,
+  XRAY_RING_ALPHA_INDEX,
 } from '../src/renderer-3d.js';
 
 // ── Babylon stubs ──────────────────────────────────────────────────────────
@@ -46,21 +60,36 @@ class V3 {
 }
 class Ray { constructor(origin, direction, length) { this.origin = origin; this.direction = direction; this.length = length; } }
 class Color3 { constructor(r, g, b) { this.r = r; this.g = g; this.b = b; } }
+// MaterialStencilState analogue — Babylon auto-creates `material.stencil`.
+class StencilState {
+  constructor() {
+    this.enabled = false;
+    this.func = 519; this.funcRef = 0xFF; this.funcMask = 0xFF; this.mask = 0xFF;
+    this.opStencilFail = 7680; this.opDepthFail = 7680; this.opStencilDepthPass = 7680;
+  }
+}
 class StandardMaterial {
-  constructor(name) { this.name = name; this.disposed = false; this.backFaceCulling = false; }
+  constructor(name) {
+    this.name = name; this.disposed = false;
+    this.backFaceCulling = false; this.disableColorWrite = false;
+    this.stencil = new StencilState();
+  }
   dispose() { this.disposed = true; }
 }
-const Constants = { GREATER: 516 };
+// GL enum values shared by depth + stencil funcs / ops.
+const Constants = { GREATER: 516, ALWAYS: 519, NOTEQUAL: 517, REPLACE: 7681, KEEP: 7680 };
 const BABYLON = { Vector3: V3, Ray, Color3, StandardMaterial, Constants };
 
 let _meshSeq = 0;
 /** A minimal clonable mesh stub. `clone()` returns a tracked duplicate so the
- *  ghost build can be inspected (material, group, depth, enabled, skeleton). */
+ *  ghost build can be inspected (material, group, depth, enabled, skeleton,
+ *  alphaIndex, scaling). */
 function makeMesh(name, { renderingGroupId = 0 } = {}) {
   return {
     name,
     id: ++_meshSeq,
     renderingGroupId,
+    alphaIndex: 0,
     isPickable: true,
     skeleton: null,
     position: new V3(),
@@ -77,6 +106,7 @@ function makeMesh(name, { renderingGroupId = 0 } = {}) {
       const c = makeMesh(cloneName, { renderingGroupId: this.renderingGroupId });
       c.skeleton = this.skeleton;       // shallow skeleton share (Babylon does too)
       c.parent = this.parent;           // clone keeps source's parent by default
+      c.scaling = new V3(this.scaling.x, this.scaling.y, this.scaling.z);
       c._clonedFrom = this.name;
       return c;
     },
@@ -126,13 +156,16 @@ function makeRenderer() {
   return r;
 }
 
-/** A ghost mesh is enabled, in the world group, faction-coloured, depth-GREATER. */
+/** A ghost mesh is enabled, in the world group, not pickable, has a material. */
 function assertGhostEnabled(ghostMesh) {
   assert.equal(ghostMesh._enabled, true, 'ghost mesh enabled');
   assert.equal(ghostMesh.renderingGroupId, XRAY_GHOST_GROUP, 'ghost in world group');
   assert.equal(ghostMesh.isPickable, false, 'ghost not pickable');
   assert.ok(ghostMesh.material, 'ghost has a material');
 }
+
+const maskMeshes = (g) => g.meshes.filter(m => m.material === g.maskMaterial);
+const ringMeshes = (g) => g.meshes.filter(m => m.material === g.ringMaterial);
 
 // ── Pure helpers ────────────────────────────────────────────────────────────
 describe('xray pure helpers', () => {
@@ -208,31 +241,89 @@ describe('xray pure helpers', () => {
   });
 });
 
-// ── Ghost material setup ─────────────────────────────────────────────────────
-describe('Renderer3D — xray ghost material', () => {
-  test('ghost material is unlit faction emissive, depth-GREATER, no depth-write, transparent', () => {
+// ── Ghost layer + material setup ─────────────────────────────────────────────
+describe('Renderer3D — xray two-layer outline build', () => {
+  test('builds a mask layer + a ring layer (cone + sphere each → 4 meshes)', () => {
     const r = makeRenderer();
     r._scene = {};
     const s = makeStandee(0);
     const ghost = r._buildXrayGhost(s, { id: 7, owner: 'hero' });
     assert.ok(ghost, 'ghost built');
-    const mat = ghost.material;
+    assert.equal(ghost.meshes.length, 4, 'cone+sphere cloned for BOTH the mask and ring layers');
+    assert.equal(maskMeshes(ghost).length, 2, 'mask: cone + sphere');
+    assert.equal(ringMeshes(ghost).length, 2, 'ring: cone + sphere');
+    // Built ghosts start disabled (the pump enables on occlusion).
+    for (const m of ghost.meshes) assert.equal(m._enabled, false, 'ghost starts disabled');
+  });
+
+  test('RING material — unlit faction emissive, depth GREATER, stencil NOTEQUAL (draw outside body)', () => {
+    const r = makeRenderer();
+    r._scene = {};
+    const s = makeStandee(0);
+    const ghost = r._buildXrayGhost(s, { id: 7, owner: 'hero' });
+    const mat = ghost.ringMaterial;
     assert.ok(mat instanceof StandardMaterial, 'cloned StandardMaterial');
     assert.equal(mat.disableLighting, true, 'unlit');
     assert.ok(mat.emissiveColor instanceof Color3, 'faction emissive colour');
     assert.equal(mat.depthFunction, XRAY_GHOST_DEPTH_FUNC, 'depthFunction GREATER (516)');
     assert.equal(mat.depthFunction, Constants.GREATER, 'matches BABYLON.Constants.GREATER');
     assert.equal(mat.disableDepthWrite, true, 'no depth write');
-    // Load-bearing for the GREATER test: ghost back faces sit farther than the
-    // unit body and would bleed the ghost over the visible unit if drawn.
     assert.equal(mat.backFaceCulling, true, 'culls back faces (front-faces-only)');
     assert.equal(mat.alpha, XRAY_GHOST_ALPHA, 'alpha just under 1 → transparent pass');
     assert.ok(mat.alpha > 0 && mat.alpha < 1, 'alpha in (0,1)');
-    // Cone + sphere both cloned, both share this one per-ghost material.
-    assert.equal(ghost.meshes.length, 2, 'cone + sphere cloned');
-    for (const m of ghost.meshes) assert.equal(m.material, mat, 'meshes share the ghost material');
-    // Built ghosts start disabled (the pump enables on occlusion).
-    for (const m of ghost.meshes) assert.equal(m._enabled, false, 'ghost starts disabled');
+    assert.equal(mat.disableColorWrite, false, 'ring DOES write colour');
+    // Stencil: draw only where the body footprint bit is NOT set → hollow ring,
+    // never a fill over the body (occluded or visible).
+    assert.equal(mat.stencil.enabled, true, 'ring stencil enabled');
+    assert.equal(mat.stencil.func, Constants.NOTEQUAL, 'stencil func NOTEQUAL');
+    assert.equal(mat.stencil.funcRef, XRAY_STENCIL_REF, 'tests the mask bit');
+    assert.equal(mat.stencil.funcMask, XRAY_STENCIL_REF, 'read mask = the mask bit');
+    assert.equal(mat.stencil.opStencilDepthPass, Constants.KEEP, 'ring never writes the stencil');
+  });
+
+  test('MASK material — colour-disabled, depth ALWAYS, stamps the stencil bit', () => {
+    const r = makeRenderer();
+    r._scene = {};
+    const s = makeStandee(0);
+    const ghost = r._buildXrayGhost(s, { id: 7, owner: 'hero' });
+    const mat = ghost.maskMaterial;
+    assert.ok(mat instanceof StandardMaterial, 'cloned StandardMaterial');
+    assert.equal(mat.disableColorWrite, true, 'mask writes NO colour (stencil only)');
+    assert.equal(mat.depthFunction, XRAY_MASK_DEPTH_FUNC, 'depthFunction ALWAYS (519)');
+    assert.equal(mat.depthFunction, Constants.ALWAYS, 'matches BABYLON.Constants.ALWAYS');
+    assert.equal(mat.disableDepthWrite, true, 'no depth write');
+    assert.equal(mat.alpha, XRAY_GHOST_ALPHA, 'alpha just under 1 → transparent pass (after opaque)');
+    // Stencil: stamp the body-footprint bit everywhere the mask draws.
+    assert.equal(mat.stencil.enabled, true, 'mask stencil enabled');
+    assert.equal(mat.stencil.func, Constants.ALWAYS, 'stencil func ALWAYS (stamp everywhere covered)');
+    assert.equal(mat.stencil.funcRef, XRAY_STENCIL_REF, 'writes the mask bit');
+    assert.equal(mat.stencil.mask, XRAY_STENCIL_REF, 'write mask = the mask bit only');
+    assert.equal(mat.stencil.opStencilDepthPass, Constants.REPLACE, 'sets the bit on draw');
+  });
+
+  test('draw order: mask layer alphaIndex < ring layer (transparent sub-pass ordering)', () => {
+    const r = makeRenderer();
+    r._scene = {};
+    const s = makeStandee(0);
+    const ghost = r._buildXrayGhost(s, { id: 7, owner: 'hero' });
+    for (const m of maskMeshes(ghost)) assert.equal(m.alphaIndex, XRAY_MASK_ALPHA_INDEX, 'mask alphaIndex');
+    for (const m of ringMeshes(ghost)) assert.equal(m.alphaIndex, XRAY_RING_ALPHA_INDEX, 'ring alphaIndex');
+    assert.ok(XRAY_MASK_ALPHA_INDEX < XRAY_RING_ALPHA_INDEX, 'mask draws before ring → stencil ready');
+  });
+
+  test('ring hull is expanded by XRAY_OUTLINE_SCALE; mask stays at real size', () => {
+    const r = makeRenderer();
+    r._scene = {};
+    const s = makeStandee(0);
+    const ghost = r._buildXrayGhost(s, { id: 1, owner: 'witch' });
+    for (const m of maskMeshes(ghost)) {
+      assert.equal(m.scaling.x, 1, 'mask cone/sphere at real size');
+    }
+    for (const m of ringMeshes(ghost)) {
+      assert.ok(Math.abs(m.scaling.x - XRAY_OUTLINE_SCALE) < 1e-9,
+        `ring scaled to ${XRAY_OUTLINE_SCALE} (was ${m.scaling.x})`);
+    }
+    assert.ok(XRAY_OUTLINE_SCALE > 1, 'hull is expanded so the rim is the outline');
   });
 
   test('cone clone is re-parented under the live cone (tracks position); sphere keeps its parent', () => {
@@ -240,18 +331,18 @@ describe('Renderer3D — xray ghost material', () => {
     r._scene = {};
     const s = makeStandee(3);
     const ghost = r._buildXrayGhost(s, { id: 1, owner: 'witch' });
-    const coneGhost = ghost.meshes.find(m => m._clonedFrom === 'unit_cone');
-    const sphereGhost = ghost.meshes.find(m => m._clonedFrom === 'unit_sphere');
-    assert.equal(coneGhost.parent, s.plane, 'cone ghost parented under live cone → tracks');
+    const maskCone = ghost.maskMeshes.find(m => m._clonedFrom === 'unit_cone');
+    const maskSphere = ghost.maskMeshes.find(m => m._clonedFrom === 'unit_sphere');
+    assert.equal(maskCone.parent, s.plane, 'cone ghost parented under live cone → tracks');
     assert.deepEqual(
-      [coneGhost.position.x, coneGhost.position.y, coneGhost.position.z], [0, 0, 0],
+      [maskCone.position.x, maskCone.position.y, maskCone.position.z], [0, 0, 0],
       'cone ghost at identity local position',
     );
     // sphere was a child of the cone; clone keeps that parent → tracks for free.
-    assert.equal(sphereGhost.parent, s.plane, 'sphere ghost keeps cone parent');
+    assert.equal(maskSphere.parent, s.plane, 'sphere ghost keeps cone parent');
   });
 
-  test('paladin ghost shares the source skeleton (never clones it)', () => {
+  test('paladin ghost shares the source skeleton (never clones it) on both layers', () => {
     const r = makeRenderer();
     r._scene = {};
     const sharedSkeleton = { bones: [{ name: 'mixamorig:Hips' }] };
@@ -261,11 +352,12 @@ describe('Renderer3D — xray ghost material', () => {
     const sword = makeMesh('paladin_sword');
     s.paladinClone = { childMeshes: [body, sword], skinnedMesh: body };
     const ghost = r._buildXrayGhost(s, { id: 9, owner: 'hero' });
-    assert.equal(ghost.meshes.length, 2, 'both paladin children cloned');
+    assert.equal(ghost.meshes.length, 4, 'both paladin children cloned for BOTH layers');
     for (const m of ghost.meshes) {
       assert.equal(m.skeleton, sharedSkeleton, 'ghost shares the SOURCE skeleton (no clone)');
-      assert.equal(m.material, ghost.material, 'flat ghost material applied over the texture');
     }
+    for (const m of maskMeshes(ghost)) assert.equal(m.material, ghost.maskMaterial);
+    for (const m of ringMeshes(ghost)) assert.equal(m.material, ghost.ringMaterial);
   });
 });
 
@@ -286,10 +378,11 @@ describe('Renderer3D — xray occlusion pump', () => {
 
     assert.equal(r._xrayOutlinedIds.has(1), true,  'occluded unit ghosted');
     assert.equal(r._xrayOutlinedIds.has(2), false, 'clear unit not ghosted');
-    // Occluded unit's ghost is built + enabled; clear unit has no ghost.
+    // Occluded unit's ghost is built + enabled (all 4 layer meshes); clear unit has none.
     assert.ok(occ.xrayGhost, 'occluded unit built a ghost');
+    assert.equal(occ.xrayGhost.meshes.length, 4);
     for (const m of occ.xrayGhost.meshes) assertGhostEnabled(m);
-    assert.ok(occ.xrayGhost.material.emissiveColor instanceof Color3, 'faction-colour emissive');
+    assert.ok(occ.xrayGhost.ringMaterial.emissiveColor instanceof Color3, 'faction-colour emissive ring');
     assert.equal(clear.xrayGhost, null, 'clear unit never built a ghost');
   });
 
@@ -316,7 +409,7 @@ describe('Renderer3D — xray occlusion pump', () => {
 
     assert.equal(r._xrayOutlinedIds.has(1), false, 'no longer occluded → dropped from set');
     assert.equal(s.xrayGhost, builtGhost, 'ghost is cached, not disposed');
-    for (const m of s.xrayGhost.meshes) assert.equal(m._enabled, false, 'ghost disabled when clear');
+    for (const m of s.xrayGhost.meshes) assert.equal(m._enabled, false, 'whole ghost disabled when clear');
   });
 
   test('fog-hidden unit is never ghosted', () => {
@@ -346,7 +439,7 @@ describe('Renderer3D — xray occlusion pump', () => {
     r._pumpXrayOcclusion();
 
     assert.ok(s.xrayGhost, 'paladin unit ghosted');
-    assert.equal(s.xrayGhost.meshes.length, 2, 'both paladin children duplicated');
+    assert.equal(s.xrayGhost.meshes.length, 4, 'both paladin children duplicated × 2 layers');
     for (const m of s.xrayGhost.meshes) assertGhostEnabled(m);
     // The cone itself was NOT cloned (paladin path uses the clone children).
     assert.ok(s.xrayGhost.meshes.every(m => m._clonedFrom.startsWith('paladin_')),
@@ -392,10 +485,12 @@ describe('Renderer3D — xray occlusion pump', () => {
     r._pumpXrayOcclusion();
     assert.notEqual(s.xrayGhost, firstGhost, 'ghost rebuilt on colour change');
     assert.equal(s.xrayGhost.colorKey, '#00ff00');
-    assert.equal(firstGhost.material.disposed, true, 'old ghost material disposed');
+    // Both layers' materials from the old ghost are disposed.
+    assert.equal(firstGhost.ringMaterial.disposed, true, 'old ring material disposed');
+    assert.equal(firstGhost.maskMaterial.disposed, true, 'old mask material disposed');
   });
 
-  test('_clearXrayGhostFor disposes meshes + material and drops tracking', () => {
+  test('_clearXrayGhostFor disposes meshes + both materials and drops tracking', () => {
     const r = makeRenderer();
     r._scene = makeScene(new Set([0]));
     const s = makeStandee(0);
@@ -408,7 +503,8 @@ describe('Renderer3D — xray occlusion pump', () => {
     r._clearXrayGhostFor(1, s);
     assert.equal(s.xrayGhost, null, 'ghost cleared off the standee');
     for (const m of ghost.meshes) assert.equal(m.disposed, true, 'ghost meshes disposed');
-    assert.equal(ghost.material.disposed, true, 'ghost material disposed');
+    assert.equal(ghost.ringMaterial.disposed, true, 'ring material disposed');
+    assert.equal(ghost.maskMaterial.disposed, true, 'mask material disposed');
     assert.equal(r._xrayOutlinedIds.has(1), false, 'dropped from tracking');
   });
 
@@ -425,7 +521,8 @@ describe('Renderer3D — xray occlusion pump', () => {
     r._disposeXray();
     assert.equal(s.xrayGhost, null, 'ghost disposed off the standee');
     for (const m of ghost.meshes) assert.equal(m.disposed, true);
-    assert.equal(ghost.material.disposed, true);
+    assert.equal(ghost.ringMaterial.disposed, true);
+    assert.equal(ghost.maskMaterial.disposed, true);
     assert.equal(r._xrayOutlinedIds.size, 0);
   });
 });

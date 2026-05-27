@@ -617,26 +617,58 @@ export const STANDEE_SPHERE_DIAMETER      = 0.32;
 // the camera or a unit actually moved). Higher = cheaper, laggier; 4 keeps the
 // outline membership feeling instant at 60fps without picking every frame.
 export const XRAY_SWEEP_EVERY_N           = 4;
-// X-ray occluded units are drawn as a "ghost" — a flat faction-colour duplicate
-// of the unit's visible meshes (see `_buildXrayGhost`). The ghost lives in the
-// WORLD rendering group (0) alongside the real scene depth, with depthFunction
-// GREATER + no depth-write, so each ghost fragment rasterizes ONLY where it is
-// FARTHER than what's already in the depth buffer — i.e. exactly the part of the
-// unit hidden behind an occluder. Where the unit is unoccluded the ghost fails
-// the depth test and the normal textured unit shows through instead. This is the
-// operator-mandated mechanism after both HighlightLayer (drew behind, read as a
-// filled glow) and renderOutline + group-promotion (exploded the skinned paladin
-// and dragged its textured body forward) were rejected.
+// X-ray occluded units are drawn as a faction-colour OUTLINE — a hollow ring,
+// not a fill — STRICTLY confined to the part of the unit hidden behind an
+// occluder, with ZERO pixels over its visible body. Built from TWO cloned,
+// per-ghost layers (see `_buildXrayGhost`), both in the WORLD rendering group
+// (0) and routed to the transparent sub-pass (alpha < 1) so they draw AFTER all
+// opaque world geometry — the occluder depth is present when the depth test runs:
+//
+//   1. MASK layer (`disableColorWrite`, depthFunction ALWAYS) — stamps the
+//      unit's full 2D footprint into the STENCIL buffer (bit XRAY_STENCIL_REF).
+//      Drawn first (lower alphaIndex). Writes no colour; it exists only so the
+//      ring can subtract the body interior.
+//   2. RING layer — an expanded hull (scaled by XRAY_OUTLINE_SCALE) in flat
+//      emissive faction colour, depthFunction GREATER (draws only where the hull
+//      is BEHIND scene geometry = occluded) AND stencil func NOTEQUAL ref (draws
+//      only OUTSIDE the mask footprint). The intersection is a hollow ring that
+//      hugs the unit's silhouette ONLY where it meets the occluder — the
+//      occluder shows through the middle, and no ring pixel lands on the body.
+//
+// Why stencil + an expanded hull rather than the prior single GREATER-tested
+// fill: a non-convex skinned mesh self-occludes, so GREATER alone passed ghost
+// fragments wherever a far body part sat behind a near one — bleeding the ghost
+// over the VISIBLE body (operator artifact "B"). Masking the entire footprint
+// out of the ring kills that bleed deterministically, and the expanded-hull rim
+// turns the fill into an edge (operator artifact "A"). HighlightLayer (drew
+// behind, read as a filled glow) and renderOutline + group-promotion (exploded
+// the skinned paladin and dragged its textured body forward) were both rejected.
 export const XRAY_GHOST_GROUP             = 0;
-// WebGL `GREATER` depth comparison (=== BABYLON.Constants.GREATER). A ghost
+// WebGL `GREATER` depth comparison (=== BABYLON.Constants.GREATER). A ring
 // fragment passes only where its depth is GREATER (farther) than the stored
 // scene depth — i.e. behind the already-drawn occluder.
 export const XRAY_GHOST_DEPTH_FUNC        = 516;
-// Ghost alpha. Held just under 1 so Babylon routes the ghost into the
+// WebGL `ALWAYS` depth comparison (=== BABYLON.Constants.ALWAYS). The mask layer
+// stamps the unit's full footprint into the stencil regardless of depth.
+export const XRAY_MASK_DEPTH_FUNC         = 519;
+// Ghost alpha. Held just under 1 so Babylon routes BOTH layers into the
 // transparent sub-pass (drawn AFTER all opaque world geometry, so the occluders'
-// depth is guaranteed present when the GREATER test runs), while still reading
-// as a near-solid faction silhouette.
+// depth is guaranteed present when the GREATER test runs), while the ring still
+// reads as a near-solid faction edge.
 export const XRAY_GHOST_ALPHA             = 0.92;
+// Uniform scale of the RING hull above the unit's real size. The annulus between
+// the hull silhouette and the real silhouette is the visible outline thickness —
+// operator-tunable: larger = thicker outline.
+export const XRAY_OUTLINE_SCALE           = 1.08;
+// Stencil bit the MASK layer writes and the RING layer tests against. Any free
+// bit works; 0x01 is simple (no other stencil consumer in the scene).
+export const XRAY_STENCIL_REF             = 0x01;
+// Transparent-pass draw order (lower draws first): the MASK must stamp the
+// stencil before the RING tests it. Babylon sorts the transparent sub-pass by
+// mesh alphaIndex ascending, so MASK < RING guarantees the ordering globally
+// (all masks before all rings, even across multiple ghosts).
+export const XRAY_MASK_ALPHA_INDEX        = 100;
+export const XRAY_RING_ALPHA_INDEX        = 200;
 // Y-offset for the base disc centre so it sits clear of the tile prism top
 // (which is at y=0.075). The cone/sphere are positioned relative to this disc.
 // Was 0.18 when the ground disc sat 0.105 clear of the tile prism top (0.075).
@@ -4915,13 +4947,16 @@ export class Renderer3D {
     this._sunLight          = sunLight;
     this._shadowGenerator   = shadowGenerator;
 
-    // X-ray occlusion: handled in `_pumpXrayOcclusion` via a flat faction-colour
-    // "ghost" duplicate of each occluded unit's meshes (see `_buildXrayGhost`),
-    // depth-tested with GREATER so the ghost shows ONLY over the occluding
-    // object. Two prior mechanisms were rejected: HighlightLayer (a depth-
-    // respecting post-process → drew BEHIND the occluder, read as a filled glow)
-    // and renderOutline + rendering-group promotion (exploded the skinned
-    // paladin into stray triangles and dragged its textured body forward).
+    // X-ray occlusion: handled in `_pumpXrayOcclusion` via a stencil-masked
+    // faction-colour OUTLINE (a hollow ring) over each occluded unit (see
+    // `_buildXrayGhost`): a stencil MASK layer stamps the body footprint, then an
+    // expanded RING hull draws (depthFunction GREATER + stencil NOTEQUAL) only
+    // where the unit is behind scene geometry AND outside the body — a hollow
+    // edge confined to the occluded region, no fill, nothing over the visible
+    // body. Three prior mechanisms were rejected: HighlightLayer (drew behind,
+    // read as a filled glow), renderOutline + group-promotion (exploded the
+    // skinned paladin), and a single GREATER-tested fill (a non-convex mesh
+    // self-occludes → bled the ghost over the visible body).
 
     // Per-unit hex outlines are built lazily by `_syncEntityHexOutlines`
     // (one thin + one thick mesh per alive entity). The old golden singleton
@@ -10213,81 +10248,94 @@ export class Renderer3D {
     return out;
   }
 
-  /** Lazily build (and cache on the standee as `standee.xrayGhost`) the x-ray
-   *  ghost: a flat faction-colour duplicate of the unit's visible meshes that,
-   *  via the GREATER depth test, rasterizes ONLY over an occluding object.
-   *
-   *  The build is the landmine for skinned paladins, so the proven-safe path
-   *  (matching the live paladin clone + punch machinery) is used:
-   *   • Paladin (skinned): clone each child mesh of the live `paladinClone` and
-   *     SHARE the source skeleton (never clone the skeleton — that caused the
-   *     historical T-pose / giant-head bugs). `mesh.clone` keeps the source's
-   *     parent (the per-standee cloneRoot), so position / orientation / scale
-   *     track for free; the shared skeleton makes pose + animation track for
-   *     free — no per-frame transform copy.
-   *   • Cone/sphere: clone the cone (`plane`) + sphere head. The cone is moved
-   *     directly via `plane.position`, so its clone (parentless) is re-parented
-   *     under the live cone at identity to track; the sphere is already a child
-   *     of the cone, so its clone tracks for free.
-   *
-   *  The ghost material is CLONED per ghost (never a shared material mutated):
-   *  unlit, emissive faction colour, no texture, alpha just under 1 (→ rendered
-   *  in the transparent sub-pass, after all opaque world geometry), in the WORLD
-   *  rendering group with `depthFunction = GREATER` and `disableDepthWrite`. */
-  _buildXrayGhost(standee, entity) {
-    if (!standee) return null;
-    if (standee.xrayGhost) return standee.xrayGhost;
+  /** Build a per-ghost StandardMaterial. `kind` is `'mask'` (stencil-only
+   *  footprint stamp — no colour, depthFunction ALWAYS, writes XRAY_STENCIL_REF)
+   *  or `'ring'` (flat emissive faction edge — depthFunction GREATER, stencil
+   *  func NOTEQUAL so it only draws OUTSIDE the masked body footprint). Returns
+   *  null if StandardMaterial isn't available (defensive — never on real
+   *  Babylon). Materials are CLONED per ghost, never a shared material mutated. */
+  _buildXrayMaterial(kind, id, color) {
     const BABYLON = this._babylon;
-    if (!BABYLON) return null;
-    const srcMeshes = this._xrayMeshesForStandee(standee);
-    if (!srcMeshes.length) return null;
+    if (!BABYLON || typeof BABYLON.StandardMaterial !== 'function') return null;
+    const C = BABYLON.Constants || {};
+    const FUNC_ALWAYS   = C.ALWAYS   ?? XRAY_MASK_DEPTH_FUNC;  // 519
+    const FUNC_GREATER  = C.GREATER  ?? XRAY_GHOST_DEPTH_FUNC; // 516
+    const FUNC_NOTEQUAL = C.NOTEQUAL ?? 517;
+    const OP_REPLACE    = C.REPLACE  ?? 7681;
+    const OP_KEEP       = C.KEEP     ?? 7680;
 
-    const id = entity?.id ?? 'x';
-    const colorKey = factionOutlineColor(entity);
-    const color = this._xrayColorFor(entity);
-
-    // One cloned material for this ghost's meshes (per-ghost, never shared).
-    let mat = null;
-    if (typeof BABYLON.StandardMaterial === 'function') {
-      mat = new BABYLON.StandardMaterial(`xrayGhost_${id}`, this._scene || null);
-      mat.disableLighting = true;
-      if (color) mat.emissiveColor = color;
-      if (BABYLON.Color3) {
-        mat.diffuseColor  = new BABYLON.Color3(0, 0, 0);
-        mat.specularColor = new BABYLON.Color3(0, 0, 0);
-      }
-      // Cull back faces — LOAD-BEARING for the GREATER depth test. The ghost is
-      // the same geometry as the live unit, so its front faces are at exactly
-      // the unit's depth (GREATER fails → ghost hidden where the unit is
-      // visible). But its BACK faces sit FARTHER than the unit's front face, so
-      // if drawn they pass GREATER and bleed the ghost over the visible body.
-      // Front-faces-only kills that leak — verified in headless SwiftShader.
-      mat.backFaceCulling = true;
-      mat.fogEnabled = false;
-      mat.alpha = XRAY_GHOST_ALPHA;
-      mat.disableDepthWrite = true;
-      mat.depthFunction = (BABYLON.Constants && BABYLON.Constants.GREATER) || XRAY_GHOST_DEPTH_FUNC;
+    const mat = new BABYLON.StandardMaterial(`xray${kind === 'mask' ? 'Mask' : 'Ring'}_${id}`, this._scene || null);
+    mat.disableLighting = true;
+    if (BABYLON.Color3) {
+      mat.diffuseColor  = new BABYLON.Color3(0, 0, 0);
+      mat.specularColor = new BABYLON.Color3(0, 0, 0);
     }
+    // Front faces only — the ring's silhouette is its front-face boundary; the
+    // mask's footprint is likewise its front-face coverage.
+    mat.backFaceCulling = true;
+    mat.fogEnabled = false;
+    // alpha < 1 → transparent sub-pass (drawn after opaque world geometry, so
+    // the occluder depth is present for the GREATER test).
+    mat.alpha = XRAY_GHOST_ALPHA;
+    mat.disableDepthWrite = true;
 
-    const usesPaladin = !!(standee.paladinClone
-      && Array.isArray(standee.paladinClone.childMeshes)
-      && standee.paladinClone.childMeshes.length);
-    const sharedSkeleton = usesPaladin
-      ? (this._paladinSource?.skeleton || standee.paladinClone.skinnedMesh?.skeleton || null)
-      : null;
+    if (kind === 'mask') {
+      // Stencil-only: stamp the unit's full 2D footprint (depth ALWAYS) into the
+      // stencil so the ring can subtract the body interior. Writes no colour.
+      mat.disableColorWrite = true;
+      mat.depthFunction = FUNC_ALWAYS;
+      if (mat.stencil) {
+        mat.stencil.enabled  = true;
+        mat.stencil.func     = FUNC_ALWAYS;          // always pass → stamp everywhere covered
+        mat.stencil.funcRef  = XRAY_STENCIL_REF;
+        mat.stencil.mask     = XRAY_STENCIL_REF;     // WRITE mask — touch only our bit
+        mat.stencil.opStencilDepthPass = OP_REPLACE; // set the bit where drawn
+        mat.stencil.opStencilFail = OP_KEEP;
+        mat.stencil.opDepthFail   = OP_KEEP;
+      }
+    } else {
+      // Ring: flat faction colour, drawn only where BEHIND scene geometry
+      // (depth GREATER) AND outside the masked body footprint (stencil NOTEQUAL).
+      if (color) mat.emissiveColor = color;
+      mat.depthFunction = FUNC_GREATER;
+      if (mat.stencil) {
+        mat.stencil.enabled  = true;
+        mat.stencil.func     = FUNC_NOTEQUAL;        // draw where bit NOT set
+        mat.stencil.funcRef  = XRAY_STENCIL_REF;
+        mat.stencil.funcMask = XRAY_STENCIL_REF;     // READ mask — test only our bit
+        mat.stencil.opStencilDepthPass = OP_KEEP;    // read-only; never modify the buffer
+        mat.stencil.opStencilFail = OP_KEEP;
+        mat.stencil.opDepthFail   = OP_KEEP;
+      }
+    }
+    return mat;
+  }
 
-    const meshes = [];
+  /** Clone one x-ray layer (mask or ring) from a standee's source meshes,
+   *  applying `material`, `alphaIndex` (transparent draw order), and uniform
+   *  `scale` (ring hull expansion; 1 for the mask). Skinned-paladin safety is
+   *  the same proven path as the live clone: clone each child mesh and SHARE the
+   *  source skeleton (never clone it — that caused the historical T-pose /
+   *  giant-head bugs); the clone keeps the source's parent (cloneRoot) so the
+   *  transform tracks for free. The cone (`plane`) is moved directly via its
+   *  position, so its clone is re-parented under the live cone at identity (then
+   *  scaled) to track; the sphere is a child of the cone and tracks for free.
+   *  Every clone starts disabled — the pump enables it on occlusion. */
+  _cloneXrayLayer(srcMeshes, standee, { id, layer, material, alphaIndex, scale, usesPaladin, sharedSkeleton }) {
+    const BABYLON = this._babylon;
+    const out = [];
     for (const src of srcMeshes) {
       if (!src || typeof src.clone !== 'function') continue;
       // doNotCloneChildren=true: the cone owns the sphere as a child, so a deep
       // clone would duplicate the sphere (which we clone separately). Paladin
       // child clones are flat siblings, so the flag is a harmless no-op there.
-      const ghost = src.clone(`xrayGhost_${id}_${src.name || 'm'}`, undefined, true);
+      const ghost = src.clone(`xray${layer}_${id}_${src.name || 'm'}`, undefined, true);
       if (!ghost) continue;
-      meshes.push(ghost);
-      if (mat) ghost.material = mat;
+      out.push(ghost);
+      if (material) ghost.material = material;
       ghost.isPickable = false;
       if ('renderingGroupId' in ghost) ghost.renderingGroupId = XRAY_GHOST_GROUP;
+      ghost.alphaIndex = alphaIndex;
       // Skinning can push verts past the cached bbox — defeat bbox culling so
       // the ghost silhouette never drops a limb (same fix as the live clone).
       ghost.alwaysSelectAsActiveMesh = true;
@@ -10304,18 +10352,78 @@ export class Renderer3D {
           ghost.scaling  = new BABYLON.Vector3(1, 1, 1);
         }
       }
-      // The cone clone is visible by default; the live cone may be at
-      // visibility 0 (paladin path), but the paladin path doesn't clone the
-      // cone. Start disabled — the pump enables on occlusion.
+      // Expand the ring hull (scale > 1) so the annulus between it and the real
+      // silhouette is the visible outline. The mask layer uses scale 1.
+      if (scale !== 1 && ghost.scaling) {
+        ghost.scaling.x *= scale;
+        ghost.scaling.y *= scale;
+        ghost.scaling.z *= scale;
+      }
       if (typeof ghost.setEnabled === 'function') ghost.setEnabled(false);
     }
+    return out;
+  }
 
+  /** Lazily build (and cache on the standee as `standee.xrayGhost`) the x-ray
+   *  occlusion outline: TWO cloned layers of the unit's visible meshes —
+   *   • MASK (unexpanded, `_buildXrayMaterial('mask')`) — stamps the body
+   *     footprint into the stencil; drawn first (lower alphaIndex).
+   *   • RING (expanded by XRAY_OUTLINE_SCALE, `_buildXrayMaterial('ring')`) —
+   *     the flat faction-colour edge, drawn only where the hull is behind scene
+   *     geometry (depth GREATER) AND outside the masked footprint (stencil
+   *     NOTEQUAL) → a hollow ring confined to the occluded region.
+   *
+   *  Both materials are cloned per ghost (never a shared material mutated), and
+   *  both layers share the source skeleton so the outline tracks the unit's
+   *  pose. See the XRAY_* constants block for the full rationale. */
+  _buildXrayGhost(standee, entity) {
+    if (!standee) return null;
+    if (standee.xrayGhost) return standee.xrayGhost;
+    const BABYLON = this._babylon;
+    if (!BABYLON) return null;
+    const srcMeshes = this._xrayMeshesForStandee(standee);
+    if (!srcMeshes.length) return null;
+
+    const id = entity?.id ?? 'x';
+    const colorKey = factionOutlineColor(entity);
+    const color = this._xrayColorFor(entity);
+
+    const maskMat = this._buildXrayMaterial('mask', id, color);
+    const ringMat = this._buildXrayMaterial('ring', id, color);
+
+    const usesPaladin = !!(standee.paladinClone
+      && Array.isArray(standee.paladinClone.childMeshes)
+      && standee.paladinClone.childMeshes.length);
+    const sharedSkeleton = usesPaladin
+      ? (this._paladinSource?.skeleton || standee.paladinClone.skinnedMesh?.skeleton || null)
+      : null;
+
+    const maskMeshes = this._cloneXrayLayer(srcMeshes, standee, {
+      id, layer: 'Mask', material: maskMat, alphaIndex: XRAY_MASK_ALPHA_INDEX,
+      scale: 1, usesPaladin, sharedSkeleton,
+    });
+    const ringMeshes = this._cloneXrayLayer(srcMeshes, standee, {
+      id, layer: 'Ring', material: ringMat, alphaIndex: XRAY_RING_ALPHA_INDEX,
+      scale: XRAY_OUTLINE_SCALE, usesPaladin, sharedSkeleton,
+    });
+
+    const meshes = [...maskMeshes, ...ringMeshes];
     if (!meshes.length) {
-      if (mat && typeof mat.dispose === 'function') { try { mat.dispose(); } catch { /* gone */ } }
+      for (const m of [maskMat, ringMat]) {
+        if (m && typeof m.dispose === 'function') { try { m.dispose(); } catch { /* gone */ } }
+      }
       return null;
     }
 
-    standee.xrayGhost = { meshes, material: mat, colorKey };
+    standee.xrayGhost = {
+      meshes,
+      maskMeshes,
+      ringMeshes,
+      maskMaterial: maskMat,
+      ringMaterial: ringMat,
+      materials: [maskMat, ringMat].filter(Boolean),
+      colorKey,
+    };
     return standee.xrayGhost;
   }
 
@@ -10343,15 +10451,17 @@ export class Renderer3D {
     }
   }
 
-  /** Dispose a standee's ghost meshes + cloned material and drop the cache. */
+  /** Dispose a standee's ghost meshes (mask + ring) + both cloned materials and
+   *  drop the cache. */
   _disposeXrayGhost(standee) {
     const ghost = standee?.xrayGhost;
     if (!ghost) return;
     for (const m of ghost.meshes || []) {
       try { if (m && typeof m.dispose === 'function') m.dispose(); } catch { /* gone */ }
     }
-    try { if (ghost.material && typeof ghost.material.dispose === 'function') ghost.material.dispose(); }
-    catch { /* gone */ }
+    for (const mat of ghost.materials || []) {
+      try { if (mat && typeof mat.dispose === 'function') mat.dispose(); } catch { /* gone */ }
+    }
     standee.xrayGhost = null;
   }
 
