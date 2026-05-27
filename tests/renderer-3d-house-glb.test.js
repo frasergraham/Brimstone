@@ -1,10 +1,12 @@
-// House GLB model tests — covers the pure transform helpers + the stub-driven
+// Building GLB model tests — covers the pure helpers + the stub-driven
 // load / instance / retrofit machinery that lets `_buildTileMesh` swap the
-// procedural box+roof for an instance of `assets/models/house.glb`.
+// procedural box+roof for an instance of a Scenario-generated GLB
+// (`assets/models/buildings/<type>.glb`), with HOUSE keeping the legacy
+// hand-made `assets/models/house.glb` as a second hash-picked variant.
 //
 // Babylon can't run in node-test (no WebGL), so the load + instance paths are
-// exercised against a stubbed `_babylon` namespace. Pure transform math is
-// tested directly. Task: t-cfee95e5.
+// exercised against a stubbed `_babylon` namespace. Pure helpers are tested
+// directly. (Generalized from the original HOUSE-only pipeline.)
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -18,10 +20,15 @@ import {
   HOUSE_MODEL_DIR,
   HOUSE_MODEL_FILE,
   HOUSE_INSTANCE_BASE_SCALE,
+  TARGET_BUILDING_WORLD_HEIGHT,
+  LEGACY_HOUSE_PATH,
+  BUILDINGS_MODEL_DIR,
   TILE_SLOTS,
   BUILDING_SLOT_INDEX,
   BUILDING_GLB_BY_TYPE,
+  buildingUsesGlbModel,
   buildingUsesHouseModel,
+  buildingGlbVariantForHex,
   _bakeOriginToBottom,
 } from '../src/renderer-3d.js';
 
@@ -34,7 +41,7 @@ function newInst() {
   return new Renderer3D(fakeCanvas, {});
 }
 
-/** Minimal BABYLON stub exposing only what the renderer's house pipeline
+/** Minimal BABYLON stub exposing only what the renderer's building pipeline
  *  touches. `SceneLoader.ImportMeshAsync` returns a fake mesh that supports
  *  `createInstance`; tests can swap the implementation per-case. */
 function makeFakeBabylon({ importImpl, mergeImpl } = {}) {
@@ -96,6 +103,15 @@ function makeFakeInstance(name, source) {
   };
 }
 
+/** Pre-load a building template for `relPath` directly into the renderer's
+ *  template map (bypassing the async loader) so instance/retrofit tests can
+ *  run synchronously. */
+function stubTemplate(r, relPath, { scale } = {}) {
+  const mesh = makeFakeMesh(`tpl_${relPath}`);
+  r._buildingTemplates.set(relPath, { mesh, scale });
+  return mesh;
+}
+
 describe('houseYawForHex', () => {
   test('deterministic per (col, row)', () => {
     for (const [c, r] of [[0, 0], [3, 7], [-4, 2]]) {
@@ -117,9 +133,6 @@ describe('houseYawForHex', () => {
     for (let c = -5; c <= 5; c++) {
       for (let r = -5; r <= 5; r++) sample.add(houseYawForHex(c, r));
     }
-    // 121 samples should fill the [0, 2π) range densely. The bar is well
-    // below the sample count — collapsed-to-one would mean the hash seed
-    // is wrong, but we don't expect zero hash collisions.
     assert.ok(sample.size > 60, `expected wide spread, only ${sample.size} unique yaws`);
   });
 });
@@ -160,28 +173,178 @@ describe('exported constants', () => {
   test('HOUSE_MODEL_FILE is house.glb', () => {
     assert.equal(HOUSE_MODEL_FILE, 'house.glb');
   });
+  test('LEGACY_HOUSE_PATH is the original hand-made house model', () => {
+    assert.equal(LEGACY_HOUSE_PATH, 'models/house.glb');
+  });
+  test('BUILDINGS_MODEL_DIR points at the scenario buildings subdirectory', () => {
+    assert.equal(BUILDINGS_MODEL_DIR, 'models/buildings/');
+  });
   test('HOUSE_INSTANCE_BASE_SCALE is a positive number near the procedural box width', () => {
     assert.ok(HOUSE_INSTANCE_BASE_SCALE > 0);
     assert.ok(Math.abs(HOUSE_INSTANCE_BASE_SCALE - BUILDING_BASE_DIM.width) < 0.5,
       `scale ${HOUSE_INSTANCE_BASE_SCALE} drifted far from box width ${BUILDING_BASE_DIM.width}`);
   });
+  test('TARGET_BUILDING_WORLD_HEIGHT is a sane positive height', () => {
+    assert.ok(TARGET_BUILDING_WORLD_HEIGHT > 0 && TARGET_BUILDING_WORLD_HEIGHT < 3,
+      `target height ${TARGET_BUILDING_WORLD_HEIGHT} out of sane range`);
+  });
 });
 
-describe('_buildHouseInstance — positioning + jitter + metadata', () => {
-  test('returns null when _houseSourceMesh is not loaded yet', () => {
+describe('BUILDING_GLB_BY_TYPE — covers all 13 building types', () => {
+  test('has an entry for every BuildingType value', () => {
+    const types = Object.values(BuildingType);
+    assert.equal(types.length, 13, 'expected 13 building types');
+    for (const t of types) {
+      assert.ok(Array.isArray(BUILDING_GLB_BY_TYPE[t]),
+        `building type "${t}" must map to a variant array`);
+      assert.ok(BUILDING_GLB_BY_TYPE[t].length >= 1,
+        `building type "${t}" must list at least one GLB path`);
+    }
+  });
+
+  test('non-HOUSE types map to a single assets/models/buildings/<key>.glb path', () => {
+    for (const t of Object.values(BuildingType)) {
+      if (t === BuildingType.HOUSE) continue;
+      const variants = BUILDING_GLB_BY_TYPE[t];
+      assert.equal(variants.length, 1, `"${t}" should have exactly one variant`);
+      assert.equal(variants[0], `${BUILDINGS_MODEL_DIR}${t}.glb`,
+        `"${t}" should point at models/buildings/${t}.glb`);
+    }
+  });
+
+  test('paths use the lowercase generator keys (church, town_hall, …)', () => {
+    assert.equal(BUILDING_GLB_BY_TYPE[BuildingType.CHURCH][0],     'models/buildings/church.glb');
+    assert.equal(BUILDING_GLB_BY_TYPE[BuildingType.TOWN_HALL][0],  'models/buildings/town_hall.glb');
+    assert.equal(BUILDING_GLB_BY_TYPE[BuildingType.INN][0],        'models/buildings/inn.glb');
+    assert.equal(BUILDING_GLB_BY_TYPE[BuildingType.BLACKSMITH][0], 'models/buildings/blacksmith.glb');
+    assert.equal(BUILDING_GLB_BY_TYPE[BuildingType.GRAVEYARD][0],  'models/buildings/graveyard.glb');
+    assert.equal(BUILDING_GLB_BY_TYPE[BuildingType.WATCHTOWER][0], 'models/buildings/watchtower.glb');
+    assert.equal(BUILDING_GLB_BY_TYPE[BuildingType.APOTHECARY][0], 'models/buildings/apothecary.glb');
+    assert.equal(BUILDING_GLB_BY_TYPE[BuildingType.STOREHOUSE][0], 'models/buildings/storehouse.glb');
+    assert.equal(BUILDING_GLB_BY_TYPE[BuildingType.STABLE][0],     'models/buildings/stable.glb');
+  });
+
+  test('HOUSE lists BOTH the legacy and scenario models as two variants', () => {
+    const variants = BUILDING_GLB_BY_TYPE[BuildingType.HOUSE];
+    assert.equal(variants.length, 2, 'HOUSE must have exactly two variants');
+    assert.ok(variants.includes(LEGACY_HOUSE_PATH), 'legacy models/house.glb must be a HOUSE variant');
+    assert.ok(variants.includes(`${BUILDINGS_MODEL_DIR}house.glb`),
+      'scenario models/buildings/house.glb must be a HOUSE variant');
+  });
+
+  test('legacy house.glb is NOT overwritten — both house paths are distinct', () => {
+    assert.notEqual(LEGACY_HOUSE_PATH, `${BUILDINGS_MODEL_DIR}house.glb`);
+  });
+
+  test('is frozen so accidental writes during render do not mutate the table', () => {
+    assert.ok(Object.isFrozen(BUILDING_GLB_BY_TYPE));
+    assert.ok(Object.isFrozen(BUILDING_GLB_BY_TYPE[BuildingType.HOUSE]),
+      'variant arrays must also be frozen');
+  });
+});
+
+describe('buildingUsesGlbModel — gating predicate', () => {
+  test('true for every building type (all 13 render a GLB)', () => {
+    for (const t of Object.values(BuildingType)) {
+      assert.equal(
+        buildingUsesGlbModel({ type: TileType.BUILDING, building: t }),
+        true,
+        `building "${t}" should use a GLB`,
+      );
+    }
+  });
+
+  test('false for tiles with no building (layered model: base material only)', () => {
+    const forest = new Tile(0, 0, TileType.FOREST);
+    const grass  = new Tile(0, 0, TileType.GRASS);
+    assert.equal(buildingUsesGlbModel(forest), false);
+    assert.equal(buildingUsesGlbModel(grass), false);
+  });
+
+  test('a HOUSE building on a forest base still uses a GLB', () => {
+    const houseOnForest = new Tile(2, 3, TileType.FOREST);
+    houseOnForest.structure = StructureType.BUILDING;
+    houseOnForest.building  = BuildingType.HOUSE;
+    assert.equal(buildingUsesGlbModel(houseOnForest), true);
+  });
+
+  test('false for null / undefined input', () => {
+    assert.equal(buildingUsesGlbModel(null), false);
+    assert.equal(buildingUsesGlbModel(undefined), false);
+  });
+
+  test('buildingUsesHouseModel is a back-compat alias of buildingUsesGlbModel', () => {
+    assert.equal(buildingUsesHouseModel, buildingUsesGlbModel);
+  });
+});
+
+describe('buildingGlbVariantForHex — per-tile variant pick', () => {
+  test('single-variant types always return that one path', () => {
+    for (const t of Object.values(BuildingType)) {
+      if (t === BuildingType.HOUSE) continue;
+      const path = BUILDING_GLB_BY_TYPE[t][0];
+      for (const [c, r] of [[0, 0], [3, 7], [-4, 2]]) {
+        assert.equal(buildingGlbVariantForHex({ building: t, col: c, row: r }), path);
+      }
+    }
+  });
+
+  test('HOUSE pick is deterministic per (col, row)', () => {
+    for (let c = -4; c <= 4; c++) {
+      for (let r = -4; r <= 4; r++) {
+        const tile = { building: BuildingType.HOUSE, col: c, row: r };
+        assert.equal(buildingGlbVariantForHex(tile), buildingGlbVariantForHex(tile));
+      }
+    }
+  });
+
+  test('HOUSE pick chooses between exactly the two house variants — and nothing else', () => {
+    const allowed = new Set(BUILDING_GLB_BY_TYPE[BuildingType.HOUSE]);
+    assert.equal(allowed.size, 2);
+    for (let c = -8; c <= 8; c++) {
+      for (let r = -8; r <= 8; r++) {
+        const v = buildingGlbVariantForHex({ building: BuildingType.HOUSE, col: c, row: r });
+        assert.ok(allowed.has(v), `picked ${v} which is not a house variant`);
+      }
+    }
+  });
+
+  test('HOUSE pick actually mixes both variants across a village (neither dominates)', () => {
+    const counts = new Map();
+    for (let c = 0; c < 16; c++) {
+      for (let r = 0; r < 16; r++) {
+        const v = buildingGlbVariantForHex({ building: BuildingType.HOUSE, col: c, row: r });
+        counts.set(v, (counts.get(v) || 0) + 1);
+      }
+    }
+    // Both variants should appear; neither collapses to zero.
+    assert.equal(counts.size, 2, 'both house variants should be picked across a grid');
+    for (const [variant, n] of counts) {
+      assert.ok(n > 0, `${variant} never picked`);
+    }
+  });
+
+  test('returns null for a tile with no building', () => {
+    assert.equal(buildingGlbVariantForHex({ col: 0, row: 0 }), null);
+    assert.equal(buildingGlbVariantForHex(null), null);
+  });
+});
+
+describe('_buildBuildingInstance — positioning + jitter + metadata', () => {
+  test('returns null when no template for the tile variant is loaded yet', () => {
     const inst = newInst();
     inst._babylon = makeFakeBabylon();
-    inst._houseSourceMesh = null;
-    const result = inst._buildHouseInstance({ col: 0, row: 0 }, 0, 0, null);
+    // No templates loaded.
+    const result = inst._buildBuildingInstance({ building: BuildingType.CHURCH, col: 0, row: 0 }, 0, 0, null);
     assert.equal(result, null);
   });
 
   test('createInstance is called with a per-hex unique name', () => {
     const r = newInst();
     r._babylon = makeFakeBabylon();
-    r._houseSourceMesh = makeFakeMesh('house_source');
-    const a = r._buildHouseInstance({ col: 3, row: 5 }, 0, 0, null);
-    const b = r._buildHouseInstance({ col: 4, row: 5 }, 0, 0, null);
+    stubTemplate(r, BUILDING_GLB_BY_TYPE[BuildingType.INN][0]);
+    const a = r._buildBuildingInstance({ building: BuildingType.INN, col: 3, row: 5 }, 0, 0, null);
+    const b = r._buildBuildingInstance({ building: BuildingType.INN, col: 4, row: 5 }, 0, 0, null);
     assert.equal(a.name, 'bldgInst_3_5');
     assert.equal(b.name, 'bldgInst_4_5');
   });
@@ -189,43 +352,66 @@ describe('_buildHouseInstance — positioning + jitter + metadata', () => {
   test('positions the instance at the NE building slot, anchored at tile-top', () => {
     const r = newInst();
     r._babylon = makeFakeBabylon();
-    r._houseSourceMesh = makeFakeMesh('house_source');
+    stubTemplate(r, BUILDING_GLB_BY_TYPE[BuildingType.MILL][0]);
     const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
-    const inst = r._buildHouseInstance({ col: 2, row: 3 }, 10, 20, null);
+    const inst = r._buildBuildingInstance({ building: BuildingType.MILL, col: 2, row: 3 }, 10, 20, null);
     assert.ok(Math.abs(inst.position.x - (10 + slot.x)) < 1e-9, 'x slot offset');
     assert.ok(Math.abs(inst.position.z - (20 + slot.z)) < 1e-9, 'z slot offset');
-    // Tile-top Y matches the procedural building's base (0.43 - 0.7/2 = 0.08).
     assert.ok(Math.abs(inst.position.y - 0.08) < 1e-9, `tile-top Y ${inst.position.y}`);
   });
 
-  test('scaling combines HOUSE_INSTANCE_BASE_SCALE with the per-hex axis ratios', () => {
+  test('scaling combines the template scale with the per-hex axis ratios', () => {
     const r = newInst();
     r._babylon = makeFakeBabylon();
-    r._houseSourceMesh = makeFakeMesh('house_source');
-    const inst = r._buildHouseInstance({ col: 1, row: 1 }, 0, 0, null);
+    // Explicit template scale so we can assert the product exactly.
+    stubTemplate(r, BUILDING_GLB_BY_TYPE[BuildingType.BARN][0], { scale: 0.4 });
+    const inst = r._buildBuildingInstance({ building: BuildingType.BARN, col: 1, row: 1 }, 0, 0, null);
     const sc = houseInstanceScalingForHex(1, 1);
+    assert.ok(Math.abs(inst.scaling.x - 0.4 * sc.x) < 1e-9);
+    assert.ok(Math.abs(inst.scaling.y - 0.4 * sc.y) < 1e-9);
+    assert.ok(Math.abs(inst.scaling.z - 0.4 * sc.z) < 1e-9);
+  });
+
+  test('falls back to HOUSE_INSTANCE_BASE_SCALE when the template has no measured scale', () => {
+    const r = newInst();
+    r._babylon = makeFakeBabylon();
+    stubTemplate(r, BUILDING_GLB_BY_TYPE[BuildingType.DOCK][0]); // no scale
+    const inst = r._buildBuildingInstance({ building: BuildingType.DOCK, col: 2, row: 2 }, 0, 0, null);
+    const sc = houseInstanceScalingForHex(2, 2);
     assert.ok(Math.abs(inst.scaling.x - HOUSE_INSTANCE_BASE_SCALE * sc.x) < 1e-9);
-    assert.ok(Math.abs(inst.scaling.y - HOUSE_INSTANCE_BASE_SCALE * sc.y) < 1e-9);
-    assert.ok(Math.abs(inst.scaling.z - HOUSE_INSTANCE_BASE_SCALE * sc.z) < 1e-9);
   });
 
   test('rotation yaw is hash-seeded per (col, row)', () => {
     const r = newInst();
     r._babylon = makeFakeBabylon();
-    r._houseSourceMesh = makeFakeMesh('house_source');
-    const inst = r._buildHouseInstance({ col: 4, row: 9 }, 0, 0, null);
+    stubTemplate(r, BUILDING_GLB_BY_TYPE[BuildingType.STABLE][0]);
+    const inst = r._buildBuildingInstance({ building: BuildingType.STABLE, col: 4, row: 9 }, 0, 0, null);
     assert.ok(Math.abs(inst.rotation.y - houseYawForHex(4, 9)) < 1e-9);
   });
 
   test('instance is unpickable, fog-immune, and on world-geometry render group', () => {
     const r = newInst();
     r._babylon = makeFakeBabylon();
-    r._houseSourceMesh = makeFakeMesh('house_source');
-    const inst = r._buildHouseInstance({ col: 0, row: 0 }, 0, 0, null);
+    stubTemplate(r, BUILDING_GLB_BY_TYPE[BuildingType.CHURCH][0]);
+    const inst = r._buildBuildingInstance({ building: BuildingType.CHURCH, col: 0, row: 0 }, 0, 0, null);
     assert.equal(inst.isPickable, false);
     assert.equal(inst.metadata.respectsFog, false);
-    assert.equal(inst.metadata.kind, 'building-house');
+    assert.equal(inst.metadata.kind, 'building-glb');
     assert.equal(inst.renderingGroupId, 0);
+  });
+
+  test('HOUSE picks the right template for its hashed variant', () => {
+    const r = newInst();
+    r._babylon = makeFakeBabylon();
+    // Load BOTH house variant templates so whichever the hash picks resolves.
+    for (const v of BUILDING_GLB_BY_TYPE[BuildingType.HOUSE]) stubTemplate(r, v);
+    for (const [c, rr] of [[0, 0], [1, 0], [2, 2], [5, 7]]) {
+      const tile = { building: BuildingType.HOUSE, col: c, row: rr };
+      const inst = r._buildBuildingInstance(tile, 0, 0, null);
+      const expected = buildingGlbVariantForHex(tile);
+      assert.equal(inst.source.name, `tpl_${expected}`,
+        `(${c},${rr}) should instance the hashed variant ${expected}`);
+    }
   });
 
   test('shadow caster registration happens via _addShadowCaster', () => {
@@ -233,40 +419,73 @@ describe('_buildHouseInstance — positioning + jitter + metadata', () => {
     const casters = [];
     r._babylon = makeFakeBabylon();
     r._shadowGenerator = { addShadowCaster: (m) => casters.push(m) };
-    r._houseSourceMesh = makeFakeMesh('house_source');
-    const inst = r._buildHouseInstance({ col: 0, row: 0 }, 0, 0, null);
+    stubTemplate(r, BUILDING_GLB_BY_TYPE[BuildingType.GRAVEYARD][0]);
+    const inst = r._buildBuildingInstance({ building: BuildingType.GRAVEYARD, col: 0, row: 0 }, 0, 0, null);
     assert.deepEqual(casters, [inst]);
   });
 });
 
-describe('_loadHouseModel — async load + retrofit + fallback', () => {
+describe('_loadBuildingModel — async load + retrofit + fallback', () => {
   test('returns null when scene is not yet ready', async () => {
     const r = newInst();
     r._babylon = makeFakeBabylon();
     r._scene   = null;
-    assert.equal(await r._loadHouseModel('assets'), null);
+    assert.equal(await r._loadBuildingModel('models/buildings/inn.glb', 'assets'), null);
   });
 
-  test('caches the loaded source mesh on _houseSourceMesh', async () => {
+  test('splits the relative path into rootUrl + fileName for ImportMeshAsync', async () => {
     const r = newInst();
-    r._scene = { _id: 'scene' };
-    const fakeMesh = makeFakeMesh('imported_house', { vertices: 100, indices: 90 });
+    r._scene = {};
+    let importArgs = null;
+    r._babylon = makeFakeBabylon({
+      importImpl: async (names, rootUrl, fileName) => {
+        importArgs = { rootUrl, fileName };
+        return { meshes: [makeFakeMesh('m', { vertices: 10 })] };
+      },
+    });
+    await r._loadBuildingModel('models/buildings/church.glb', 'assets');
+    assert.equal(importArgs.rootUrl, 'assets/models/buildings/');
+    assert.equal(importArgs.fileName, 'church.glb');
+  });
+
+  test('caches the loaded source mesh + scale in _buildingTemplates', async () => {
+    const r = newInst();
+    r._scene = {};
+    const fakeMesh = makeFakeMesh('imported', { vertices: 100, indices: 90 });
     r._babylon = makeFakeBabylon({
       importImpl: async () => ({ meshes: [fakeMesh] }),
     });
-    const loaded = await r._loadHouseModel('assets');
+    const loaded = await r._loadBuildingModel('models/buildings/mill.glb', 'assets');
     assert.equal(loaded, fakeMesh);
-    assert.equal(r._houseSourceMesh, fakeMesh);
+    const tpl = r._buildingTemplates.get('models/buildings/mill.glb');
+    assert.equal(tpl.mesh, fakeMesh);
+    // No measurable bbox on the fake mesh → fallback scale.
+    assert.equal(tpl.scale, HOUSE_INSTANCE_BASE_SCALE);
+  });
+
+  test('computes a bbox-derived scale so the template lands at the target height', async () => {
+    const r = newInst();
+    r._scene = {};
+    const imported = {
+      name: 'tall_church', isPickable: true, isEnabled: true, renderingGroupId: 7,
+      getTotalVertices: () => 100, getTotalIndices: () => 60,
+      setEnabled(b) { this.isEnabled = b; },
+      getBoundingInfo() { return { boundingBox: { minimumWorld: { y: 0 }, maximumWorld: { y: 4 } } }; },
+    };
+    r._babylon = makeFakeBabylon({ importImpl: async () => ({ meshes: [imported] }) });
+    await r._loadBuildingModel('models/buildings/church.glb', 'assets');
+    const tpl = r._buildingTemplates.get('models/buildings/church.glb');
+    // height 4 → scale = TARGET / 4
+    assert.ok(Math.abs(tpl.scale - TARGET_BUILDING_WORLD_HEIGHT / 4) < 1e-9,
+      `bbox-derived scale ${tpl.scale} != ${TARGET_BUILDING_WORLD_HEIGHT / 4}`);
   });
 
   test('hides the source mesh and lands it on rendering group 0', async () => {
     const r = newInst();
     r._scene = {};
-    const fakeMesh = makeFakeMesh('imported_house');
-    r._babylon = makeFakeBabylon({
-      importImpl: async () => ({ meshes: [fakeMesh] }),
-    });
-    await r._loadHouseModel('assets');
+    const fakeMesh = makeFakeMesh('imported');
+    r._babylon = makeFakeBabylon({ importImpl: async () => ({ meshes: [fakeMesh] }) });
+    await r._loadBuildingModel('models/buildings/barn.glb', 'assets');
     assert.equal(fakeMesh.isEnabled, false, 'source must be hidden');
     assert.equal(fakeMesh.isPickable, false);
     assert.equal(fakeMesh.renderingGroupId, 0);
@@ -277,10 +496,8 @@ describe('_loadHouseModel — async load + retrofit + fallback', () => {
     r._scene = {};
     const empty = makeFakeMesh('__root__', { vertices: 0, indices: 0 });
     const real  = makeFakeMesh('walls', { vertices: 100 });
-    r._babylon = makeFakeBabylon({
-      importImpl: async () => ({ meshes: [empty, real] }),
-    });
-    const loaded = await r._loadHouseModel('assets');
+    r._babylon = makeFakeBabylon({ importImpl: async () => ({ meshes: [empty, real] }) });
+    const loaded = await r._loadBuildingModel('models/buildings/inn.glb', 'assets');
     assert.equal(loaded, real);
   });
 
@@ -289,7 +506,7 @@ describe('_loadHouseModel — async load + retrofit + fallback', () => {
     r._scene = {};
     const walls = makeFakeMesh('walls', { vertices: 50 });
     const roof  = makeFakeMesh('roof',  { vertices: 30 });
-    const merged = makeFakeMesh('merged_house', { vertices: 80 });
+    const merged = makeFakeMesh('merged', { vertices: 80 });
     let mergeArgs = null;
     r._babylon = makeFakeBabylon({
       importImpl: async () => ({ meshes: [walls, roof] }),
@@ -298,7 +515,7 @@ describe('_loadHouseModel — async load + retrofit + fallback', () => {
         return merged;
       },
     });
-    const loaded = await r._loadHouseModel('assets');
+    const loaded = await r._loadBuildingModel('models/buildings/blacksmith.glb', 'assets');
     assert.equal(loaded, merged);
     assert.deepEqual(mergeArgs.meshes, [walls, roof]);
     assert.equal(mergeArgs.multiMulti, true,
@@ -309,14 +526,15 @@ describe('_loadHouseModel — async load + retrofit + fallback', () => {
     const r = newInst();
     r._scene = {};
     r._babylon = makeFakeBabylon({
-      importImpl: async () => { throw new Error('404: assets/models/house.glb'); },
+      importImpl: async () => { throw new Error('404: assets/models/buildings/dock.glb'); },
     });
     const original = console.warn;
     console.warn = () => {};
     try {
-      const loaded = await r._loadHouseModel('assets');
+      const loaded = await r._loadBuildingModel('models/buildings/dock.glb', 'assets');
       assert.equal(loaded, null);
-      assert.equal(r._houseSourceMesh, null);
+      assert.equal(r._buildingTemplates.has('models/buildings/dock.glb'), false,
+        'a failed load must not register a template (tile keeps procedural box)');
     } finally {
       console.warn = original;
     }
@@ -325,20 +543,18 @@ describe('_loadHouseModel — async load + retrofit + fallback', () => {
   test('returns null when import succeeds but the GLB has no geometry', async () => {
     const r = newInst();
     r._scene = {};
-    r._babylon = makeFakeBabylon({
-      importImpl: async () => ({ meshes: [] }),
-    });
+    r._babylon = makeFakeBabylon({ importImpl: async () => ({ meshes: [] }) });
     const original = console.warn;
     console.warn = () => {};
     try {
-      const loaded = await r._loadHouseModel('assets');
+      const loaded = await r._loadBuildingModel('models/buildings/stable.glb', 'assets');
       assert.equal(loaded, null);
     } finally {
       console.warn = original;
     }
   });
 
-  test('de-dupes concurrent load attempts via _houseLoadPromise', async () => {
+  test('de-dupes concurrent load attempts per path via _buildingLoadPromises', async () => {
     const r = newInst();
     r._scene = {};
     let importCalls = 0;
@@ -348,54 +564,116 @@ describe('_loadHouseModel — async load + retrofit + fallback', () => {
         return { meshes: [makeFakeMesh('mesh')] };
       },
     });
-    const a = r._loadHouseModel('assets');
-    const b = r._loadHouseModel('assets');
+    const a = r._loadBuildingModel('models/buildings/apothecary.glb', 'assets');
+    const b = r._loadBuildingModel('models/buildings/apothecary.glb', 'assets');
     const [ra, rb] = await Promise.all([a, b]);
-    // The async function wraps the inner promise in a fresh outer Promise
-    // each call, so `a !== b`. The de-dupe guarantee is that ImportMeshAsync
-    // is invoked at most once — the second call falls into the
-    // `_houseLoadPromise` shortcut and resolves to the same source mesh.
     assert.equal(importCalls, 1, 'concurrent loads must share one ImportMeshAsync invocation');
     assert.equal(ra, rb, 'both calls resolve to the same source mesh');
   });
 });
 
-describe('_upgradeBuildingsToHouseModel — retrofit after async load', () => {
-  function makeState(buildingHexes) {
+describe('_loadBuildingModels — loads every variant path', () => {
+  test('loads each unique path across BUILDING_GLB_BY_TYPE exactly once', async () => {
+    const r = newInst();
+    r._scene = {};
+    const requested = [];
+    r._babylon = makeFakeBabylon({
+      importImpl: async (names, rootUrl, fileName) => {
+        requested.push(rootUrl + fileName);
+        return { meshes: [makeFakeMesh(fileName, { vertices: 10 })] };
+      },
+    });
+    await r._loadBuildingModels('assets');
+
+    // Expected unique paths = 12 single-variant types + 2 HOUSE variants = 14.
+    const uniquePaths = new Set();
+    for (const variants of Object.values(BUILDING_GLB_BY_TYPE)) {
+      for (const p of variants) uniquePaths.add(p);
+    }
+    assert.equal(uniquePaths.size, 14, '13 types, HOUSE has 2 → 14 unique paths');
+    assert.equal(requested.length, uniquePaths.size, 'every unique path loaded once');
+    for (const p of uniquePaths) {
+      assert.ok(requested.includes(`assets/${p}`), `path ${p} should have been requested`);
+      assert.ok(r._buildingTemplates.has(p), `template for ${p} should be cached`);
+    }
+  });
+
+  test('a single failing path does not block the others', async () => {
+    const r = newInst();
+    r._scene = {};
+    r._babylon = makeFakeBabylon({
+      importImpl: async (names, rootUrl, fileName) => {
+        if (fileName === 'church.glb') throw new Error('boom');
+        return { meshes: [makeFakeMesh(fileName, { vertices: 10 })] };
+      },
+    });
+    const original = console.warn;
+    console.warn = () => {};
+    try {
+      await r._loadBuildingModels('assets');
+    } finally {
+      console.warn = original;
+    }
+    assert.equal(r._buildingTemplates.has('models/buildings/church.glb'), false,
+      'failed church load is absent');
+    assert.ok(r._buildingTemplates.has('models/buildings/inn.glb'),
+      'other types still loaded despite the church failure');
+  });
+});
+
+describe('_upgradeBuildingsToGlbModel — retrofit after async load', () => {
+  function makeState(buildings) {
     const tiles = new Map();
-    for (const { col, row } of buildingHexes) {
+    for (const { col, row, building } of buildings) {
       tiles.set(`${col},${row}`, {
-        col, row, type: TileType.BUILDING, building: BuildingType.HOUSE,
+        col, row, type: TileType.BUILDING, building,
       });
     }
     return { tiles };
   }
 
-  test('replaces procedural box+roof meshes with a house instance', () => {
+  test('replaces procedural box+roof meshes with a GLB instance', () => {
     const r = newInst();
     r._babylon = makeFakeBabylon();
     r._mapBuilt = true;
     r._mapRoot  = { name: 'mapRoot' };
-    r.state     = makeState([{ col: 2, row: 3 }]);
-    r._houseSourceMesh = makeFakeMesh('house_source');
+    r.state     = makeState([{ col: 2, row: 3, building: BuildingType.INN }]);
+    stubTemplate(r, BUILDING_GLB_BY_TYPE[BuildingType.INN][0]);
 
-    // Pre-existing procedural building props for tile (2,3).
     const box  = { name: 'bldg_2_3', dispose() { this._disposed = true; } };
     const roof = { name: 'roof_2_3', dispose() { this._disposed = true; } };
     const labelPlane = { name: 'bldgLabel_2_3', dispose() { this._disposed = true; } };
     r._tilePropsByKey.set('2,3', [box, roof, labelPlane]);
 
-    const upgraded = r._upgradeBuildingsToHouseModel();
+    const upgraded = r._upgradeBuildingsToGlbModel();
     assert.equal(upgraded, 1);
     assert.equal(box._disposed, true);
     assert.equal(roof._disposed, true);
-    // Non-bldg / non-roof props (e.g. hover labels) are left alone.
     assert.notEqual(labelPlane._disposed, true);
 
     const props = r._tilePropsByKey.get('2,3');
-    const inst  = props.find(p => p?.metadata?.kind === 'building-house');
-    assert.ok(inst, 'house instance must be present after retrofit');
+    const inst  = props.find(p => p?.metadata?.kind === 'building-glb');
+    assert.ok(inst, 'GLB instance must be present after retrofit');
     assert.ok(props.includes(labelPlane), 'hover label must survive');
+  });
+
+  test('leaves procedural box+roof in place when the tile variant template is not loaded', () => {
+    const r = newInst();
+    r._babylon = makeFakeBabylon();
+    r._mapBuilt = true;
+    r._mapRoot  = { name: 'mapRoot' };
+    r.state     = makeState([{ col: 1, row: 1, building: BuildingType.CHURCH }]);
+    // Load a DIFFERENT type's template — the church template is missing.
+    stubTemplate(r, BUILDING_GLB_BY_TYPE[BuildingType.INN][0]);
+    const box  = { name: 'bldg_1_1', dispose() { this._disposed = true; } };
+    const roof = { name: 'roof_1_1', dispose() { this._disposed = true; } };
+    r._tilePropsByKey.set('1,1', [box, roof]);
+
+    const upgraded = r._upgradeBuildingsToGlbModel();
+    assert.equal(upgraded, 0, 'church tile must not upgrade without its template');
+    assert.notEqual(box._disposed, true, 'procedural box must survive');
+    assert.notEqual(roof._disposed, true, 'procedural roof must survive');
+    assert.equal(r._tilePropsByKey.get('1,1').some(p => p?.metadata?.kind === 'building-glb'), false);
   });
 
   test('idempotent — skips tiles already carrying an instance', () => {
@@ -403,11 +681,11 @@ describe('_upgradeBuildingsToHouseModel — retrofit after async load', () => {
     r._babylon = makeFakeBabylon();
     r._mapBuilt = true;
     r._mapRoot  = { name: 'mapRoot' };
-    r.state     = makeState([{ col: 0, row: 0 }]);
-    r._houseSourceMesh = makeFakeMesh('house_source');
+    r.state     = makeState([{ col: 0, row: 0, building: BuildingType.MILL }]);
+    stubTemplate(r, BUILDING_GLB_BY_TYPE[BuildingType.MILL][0]);
 
-    const first  = r._upgradeBuildingsToHouseModel();
-    const second = r._upgradeBuildingsToHouseModel();
+    const first  = r._upgradeBuildingsToGlbModel();
+    const second = r._upgradeBuildingsToGlbModel();
     assert.equal(first, 1);
     assert.equal(second, 0, 'second pass must find no work to do');
   });
@@ -415,29 +693,27 @@ describe('_upgradeBuildingsToHouseModel — retrofit after async load', () => {
   test('no-ops when the map is not yet built', () => {
     const r = newInst();
     r._mapBuilt = false;
-    r._houseSourceMesh = makeFakeMesh('house_source');
-    assert.equal(r._upgradeBuildingsToHouseModel(), 0);
+    stubTemplate(r, BUILDING_GLB_BY_TYPE[BuildingType.INN][0]);
+    assert.equal(r._upgradeBuildingsToGlbModel(), 0);
   });
 
-  test('no-ops when the source mesh is missing', () => {
+  test('no-ops when no templates are loaded', () => {
     const r = newInst();
     r._mapBuilt = true;
-    r.state = makeState([{ col: 0, row: 0 }]);
-    r._houseSourceMesh = null;
-    assert.equal(r._upgradeBuildingsToHouseModel(), 0);
+    r.state = makeState([{ col: 0, row: 0, building: BuildingType.INN }]);
+    assert.equal(r._upgradeBuildingsToGlbModel(), 0);
   });
 
-  test('only touches BUILDING tiles — other tiles in _tilePropsByKey are untouched', () => {
+  test('only touches building tiles — other tiles in _tilePropsByKey are untouched', () => {
     const r = newInst();
     r._babylon = makeFakeBabylon();
     r._mapBuilt = true;
     r._mapRoot  = { name: 'mapRoot' };
-    // State has only one BUILDING tile + one bystander tree tile in props.
     const tiles = new Map();
-    tiles.set('1,1', { col: 1, row: 1, type: TileType.BUILDING, building: BuildingType.HOUSE });
+    tiles.set('1,1', { col: 1, row: 1, type: TileType.BUILDING, building: BuildingType.INN });
     tiles.set('5,5', { col: 5, row: 5, type: TileType.FOREST });
     r.state = { tiles };
-    r._houseSourceMesh = makeFakeMesh('house_source');
+    stubTemplate(r, BUILDING_GLB_BY_TYPE[BuildingType.INN][0]);
 
     const tree = { name: 'tree_5_5', dispose() { this._disposed = true; } };
     r._tilePropsByKey.set('5,5', [tree]);
@@ -446,7 +722,7 @@ describe('_upgradeBuildingsToHouseModel — retrofit after async load', () => {
       { name: 'roof_1_1', dispose() { this._disposed = true; } },
     ]);
 
-    r._upgradeBuildingsToHouseModel();
+    r._upgradeBuildingsToGlbModel();
     assert.notEqual(tree._disposed, true, 'tree on a non-building tile must be preserved');
     assert.deepEqual(r._tilePropsByKey.get('5,5'), [tree]);
   });
@@ -456,180 +732,54 @@ describe('_upgradeBuildingsToHouseModel — retrofit after async load', () => {
     r._babylon = makeFakeBabylon();
     r._mapBuilt = true;
     r._mapRoot  = { name: 'mapRoot' };
-    r.state     = makeState([{ col: 7, row: 7 }]);
-    r._houseSourceMesh = makeFakeMesh('house_source');
+    r.state     = makeState([{ col: 7, row: 7, building: BuildingType.STABLE }]);
+    stubTemplate(r, BUILDING_GLB_BY_TYPE[BuildingType.STABLE][0]);
     r._tilePropsByKey.set('7,7', [
       { name: 'bldg_7_7', dispose() {} },
       { name: 'roof_7_7', dispose() {} },
     ]);
 
-    r._upgradeBuildingsToHouseModel();
-    const inst = r._tilePropsByKey.get('7,7').find(p => p?.metadata?.kind === 'building-house');
+    r._upgradeBuildingsToGlbModel();
+    const inst = r._tilePropsByKey.get('7,7').find(p => p?.metadata?.kind === 'building-glb');
     assert.ok(inst);
     assert.equal(inst._frozen, true,
       'freeze pass must walk _tilePropsByKey and lock the new instance');
   });
-});
 
-describe('integration: house source available during _buildTileMesh', () => {
-  // We can't call the real `_buildTileMesh` (it pokes too many Babylon APIs),
-  // but we can confirm the branch logic by inspecting what
-  // `_upgradeBuildingsToHouseModel` does end-to-end: with a source loaded
-  // post-build, every building tile ends up with exactly one instance.
-  test('every building tile gets exactly one house instance after retrofit', () => {
+  test('mixed map: every type with a loaded template upgrades to its own model', () => {
     const r = newInst();
     r._babylon = makeFakeBabylon();
     r._mapBuilt = true;
     r._mapRoot  = { name: 'mapRoot' };
+    const types = [BuildingType.CHURCH, BuildingType.INN, BuildingType.GRAVEYARD, BuildingType.HOUSE];
     const tiles = new Map();
-    const buildings = [
-      { col: 0, row: 0 }, { col: 1, row: 0 }, { col: 0, row: 1 }, { col: 3, row: 5 },
-    ];
-    for (const { col, row } of buildings) {
-      tiles.set(`${col},${row}`, { col, row, type: TileType.BUILDING, building: BuildingType.HOUSE });
-      r._tilePropsByKey.set(`${col},${row}`, [
-        { name: `bldg_${col}_${row}`, dispose() {} },
-        { name: `roof_${col}_${row}`, dispose() {} },
-      ]);
-    }
-    r.state = { tiles };
-    r._houseSourceMesh = makeFakeMesh('house_source');
-
-    const upgraded = r._upgradeBuildingsToHouseModel();
-    assert.equal(upgraded, buildings.length);
-    for (const { col, row } of buildings) {
-      const props = r._tilePropsByKey.get(`${col},${row}`);
-      const insts = props.filter(p => p?.metadata?.kind === 'building-house');
-      assert.equal(insts.length, 1, `tile (${col},${row}) should have 1 house instance`);
-    }
-  });
-});
-
-describe('BUILDING_GLB_BY_TYPE — only HOUSE has an asset entry', () => {
-  test('contains a HOUSE → assets/models/house.glb mapping', () => {
-    assert.equal(BUILDING_GLB_BY_TYPE[BuildingType.HOUSE], `${HOUSE_MODEL_DIR}${HOUSE_MODEL_FILE}`);
-  });
-
-  test('does NOT list INN / GRAVEYARD / CHURCH / other building types', () => {
-    const nonHouseTypes = Object.values(BuildingType).filter(t => t !== BuildingType.HOUSE);
-    for (const t of nonHouseTypes) {
-      assert.equal(BUILDING_GLB_BY_TYPE[t], undefined,
-        `building type "${t}" must not yet map to a GLB`);
-    }
-  });
-
-  test('is frozen so accidental writes during render don\'t mutate the table', () => {
-    assert.ok(Object.isFrozen(BUILDING_GLB_BY_TYPE));
-  });
-});
-
-describe('buildingUsesHouseModel — gating predicate', () => {
-  test('true only for BUILDING tiles whose building === HOUSE', () => {
-    assert.equal(
-      buildingUsesHouseModel({ type: TileType.BUILDING, building: BuildingType.HOUSE }),
-      true,
-    );
-  });
-
-  test('false for every non-HOUSE building type', () => {
-    for (const t of Object.values(BuildingType)) {
-      if (t === BuildingType.HOUSE) continue;
-      assert.equal(
-        buildingUsesHouseModel({ type: TileType.BUILDING, building: t }),
-        false,
-        `building "${t}" must NOT use the house GLB`,
-      );
-    }
-  });
-
-  test('false for tiles with no building (layered model: base material only)', () => {
-    // In the layered model a tile is a building when it has a structure /
-    // building — NOT by tile.type. A forest or grass tile with no building
-    // field is not a building.
-    const forest = new Tile(0, 0, TileType.FOREST);
-    const grass  = new Tile(0, 0, TileType.GRASS);
-    assert.equal(buildingUsesHouseModel(forest), false);
-    assert.equal(buildingUsesHouseModel(grass), false);
-  });
-
-  test('P3 payoff: a HOUSE building on a forest base still uses the house GLB', () => {
-    // A building can now sit on any base material (e.g. a house on a forest
-    // tile, with trees rendered alongside). It's still a building, so the
-    // house-GLB gate is keyed on the structure/building, not the base.
-    const houseOnForest = new Tile(2, 3, TileType.FOREST);
-    houseOnForest.structure = StructureType.BUILDING;
-    houseOnForest.building  = BuildingType.HOUSE;
-    assert.equal(buildingUsesHouseModel(houseOnForest), true);
-  });
-
-  test('false for null / undefined input', () => {
-    assert.equal(buildingUsesHouseModel(null), false);
-    assert.equal(buildingUsesHouseModel(undefined), false);
-  });
-});
-
-describe('_upgradeBuildingsToHouseModel — HOUSE-only scope', () => {
-  test('non-HOUSE building tiles keep their procedural box+roof', () => {
-    const r = newInst();
-    r._babylon = makeFakeBabylon();
-    r._mapBuilt = true;
-    r._mapRoot  = { name: 'mapRoot' };
-    const tiles = new Map();
-    // Cover every non-HOUSE building type to guard against future regressions.
-    const nonHouseTypes = Object.values(BuildingType).filter(t => t !== BuildingType.HOUSE);
     let col = 0;
-    for (const t of nonHouseTypes) {
+    for (const t of types) {
       tiles.set(`${col},0`, { col, row: 0, type: TileType.BUILDING, building: t });
       r._tilePropsByKey.set(`${col},0`, [
-        { name: `bldg_${col}_0`, dispose() { this._disposed = true; } },
-        { name: `roof_${col}_0`, dispose() { this._disposed = true; } },
+        { name: `bldg_${col}_0`, dispose() {} },
+        { name: `roof_${col}_0`, dispose() {} },
       ]);
       col++;
     }
     r.state = { tiles };
-    r._houseSourceMesh = makeFakeMesh('house_source');
+    // Load every variant template so all four tiles can upgrade.
+    for (const t of types) {
+      for (const v of BUILDING_GLB_BY_TYPE[t]) stubTemplate(r, v);
+    }
 
-    const upgraded = r._upgradeBuildingsToHouseModel();
-    assert.equal(upgraded, 0, 'no non-HOUSE building should upgrade');
-    // Procedural meshes must still be present (not disposed).
-    for (let c = 0; c < nonHouseTypes.length; c++) {
+    const upgraded = r._upgradeBuildingsToGlbModel();
+    assert.equal(upgraded, types.length, 'all four building tiles upgrade');
+    let c = 0;
+    for (const t of types) {
+      const tile  = { building: t, col: c, row: 0 };
       const props = r._tilePropsByKey.get(`${c},0`);
-      assert.equal(props.length, 2, `tile (${c},0) keeps both procedural meshes`);
-      assert.notEqual(props[0]._disposed, true);
-      assert.notEqual(props[1]._disposed, true);
-      assert.equal(props.some(p => p?.metadata?.kind === 'building-house'), false);
-    }
-  });
-
-  test('mixed map: HOUSE tiles upgrade, non-HOUSE tiles untouched', () => {
-    const r = newInst();
-    r._babylon = makeFakeBabylon();
-    r._mapBuilt = true;
-    r._mapRoot  = { name: 'mapRoot' };
-    const tiles = new Map();
-    tiles.set('0,0', { col: 0, row: 0, type: TileType.BUILDING, building: BuildingType.HOUSE });
-    tiles.set('1,0', { col: 1, row: 0, type: TileType.BUILDING, building: BuildingType.INN });
-    tiles.set('2,0', { col: 2, row: 0, type: TileType.BUILDING, building: BuildingType.GRAVEYARD });
-    for (const k of ['0,0', '1,0', '2,0']) {
-      const [c, rr] = k.split(',').map(Number);
-      r._tilePropsByKey.set(k, [
-        { name: `bldg_${c}_${rr}`, dispose() { this._disposed = true; } },
-        { name: `roof_${c}_${rr}`, dispose() { this._disposed = true; } },
-      ]);
-    }
-    r.state = { tiles };
-    r._houseSourceMesh = makeFakeMesh('house_source');
-
-    const upgraded = r._upgradeBuildingsToHouseModel();
-    assert.equal(upgraded, 1, 'exactly the HOUSE tile upgrades');
-    // HOUSE tile: procedural meshes disposed, instance added.
-    const houseProps = r._tilePropsByKey.get('0,0');
-    assert.ok(houseProps.some(p => p?.metadata?.kind === 'building-house'));
-    // INN / GRAVEYARD tiles: still hold their procedural meshes, no instance.
-    for (const k of ['1,0', '2,0']) {
-      const props = r._tilePropsByKey.get(k);
-      assert.equal(props.length, 2, `tile ${k} keeps procedural meshes`);
-      assert.equal(props.some(p => p?.metadata?.kind === 'building-house'), false);
+      const inst  = props.find(p => p?.metadata?.kind === 'building-glb');
+      assert.ok(inst, `tile (${c},0) [${t}] should have a GLB instance`);
+      const expected = buildingGlbVariantForHex(tile);
+      assert.equal(inst.source.name, `tpl_${expected}`,
+        `tile (${c},0) [${t}] should instance its own model (${expected})`);
+      c++;
     }
   });
 });
@@ -666,7 +816,6 @@ describe('_bakeOriginToBottom — pivot fix', () => {
     assert.equal(m.kind, 'translation');
     assert.equal(m.x, 0);
     assert.equal(m.z, 0);
-    // minY was -0.8 → yOffset = +0.8 (lifts the mesh so its floor lands at 0).
     assert.ok(Math.abs(m.y - 0.8) < 1e-9, `y offset was ${m.y}, expected 0.8`);
     assert.equal(mesh._refreshed, true, 'bounding info must be refreshed post-bake');
   });
@@ -690,19 +839,19 @@ describe('_bakeOriginToBottom — pivot fix', () => {
     assert.doesNotThrow(() => _bakeOriginToBottom(mesh, BABYLON));
   });
 
-  test('runs as part of _loadHouseModel so instances inherit the corrected origin', async () => {
+  test('runs as part of _loadBuildingModel so instances inherit the corrected origin', async () => {
     const r = newInst();
     r._scene = {};
     const baked = [];
     const imported = {
-      name: 'imported_house',
+      name: 'imported',
       isPickable: true,
       isEnabled: true,
       renderingGroupId: 7,
       getTotalVertices: () => 100,
       getTotalIndices:  () => 60,
       setEnabled(b) { this.isEnabled = b; },
-      getBoundingInfo() { return { boundingBox: { minimumWorld: { y: -0.5 } } }; },
+      getBoundingInfo() { return { boundingBox: { minimumWorld: { y: -0.5 }, maximumWorld: { y: 0.5 } } }; },
       bakeTransformIntoVertices(m) { baked.push(m); },
       refreshBoundingInfo() {},
     };
@@ -710,8 +859,8 @@ describe('_bakeOriginToBottom — pivot fix', () => {
       ...makeFakeBabylon({ importImpl: async () => ({ meshes: [imported] }) }),
       Matrix: { Translation: (x, y, z) => ({ kind: 'translation', x, y, z }) },
     };
-    await r._loadHouseModel('assets');
-    assert.equal(baked.length, 1, 'pivot bake must run inside _loadHouseModel');
+    await r._loadBuildingModel('models/buildings/inn.glb', 'assets');
+    assert.equal(baked.length, 1, 'pivot bake must run inside _loadBuildingModel');
     assert.ok(Math.abs(baked[0].y - 0.5) < 1e-9);
   });
 });

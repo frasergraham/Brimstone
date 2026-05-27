@@ -34,7 +34,7 @@ function makeStubbedRenderer() {
   });
   r._initBabylon          = () => defer('engine');
   r.loadImages            = () => defer('sprites');
-  r._loadHouseModel       = () => defer('houses');
+  r._loadBuildingModels   = () => defer('buildings');
   r._loadPaladinModel     = () => defer('paladin');
   r._loadTreePackManifest = () => defer('forest');
   return { r, settle };
@@ -72,7 +72,7 @@ describe('Renderer3D loading bundle', () => {
     await tick();
     assert.equal(resolved, false, 'whenReady resolved before house/paladin/forest settled');
 
-    settle.houses.resolve();
+    settle.buildings.resolve();
     settle.paladin.resolve();
     await tick();
     assert.equal(resolved, false, 'whenReady resolved before forest settled');
@@ -94,7 +94,7 @@ describe('Renderer3D loading bundle', () => {
     settle.forest.resolve();
     settle.sprites.resolve();
     settle.paladin.resolve();
-    settle.houses.resolve();
+    settle.buildings.resolve();
     await r.whenReady();
 
     assert.equal(ticks.length, 5, 'onProgress should fire exactly 5 times (once per settle)');
@@ -103,7 +103,7 @@ describe('Renderer3D loading bundle', () => {
     // Every label was reported as the item that advanced.
     assert.deepEqual(
       ticks.map(t => t.label).sort(),
-      ['engine', 'forest', 'houses', 'paladin', 'sprites'],
+      ['buildings', 'engine', 'forest', 'paladin', 'sprites'],
     );
   });
 
@@ -113,23 +113,23 @@ describe('Renderer3D loading bundle', () => {
     r.onProgress = (progress01, label) => ticks.push({ progress01, label });
     r.beginLoad();
 
-    // houses at 50% of its bytes → 0.5 of one of five items = 0.1 aggregate.
-    r._glbProgressHandler('houses')({ lengthComputable: true, loaded: 50, total: 100 });
+    // buildings at 50% of its bytes → 0.5 of one of five items = 0.1 aggregate.
+    r._glbProgressHandler('buildings')({ lengthComputable: true, loaded: 50, total: 100 });
     assert.equal(ticks.at(-1).progress01, 0.1);
-    assert.equal(ticks.at(-1).label, 'houses');
+    assert.equal(ticks.at(-1).label, 'buildings');
 
     // A regressing fraction is ignored — the bar never goes backwards.
     const beforeRegress = ticks.length;
-    r._glbProgressHandler('houses')({ lengthComputable: true, loaded: 10, total: 100 });
+    r._glbProgressHandler('buildings')({ lengthComputable: true, loaded: 10, total: 100 });
     assert.equal(ticks.length, beforeRegress, 'regressing byte progress is ignored');
 
     // A non-computable event (no Content-Length) is ignored — .finally pins it.
-    r._glbProgressHandler('houses')({ lengthComputable: false, loaded: 0, total: 0 });
+    r._glbProgressHandler('buildings')({ lengthComputable: false, loaded: 0, total: 0 });
     assert.equal(ticks.length, beforeRegress, 'non-computable progress is ignored');
 
     // Advancing further re-emits a higher aggregate.
-    r._glbProgressHandler('houses')({ lengthComputable: true, loaded: 100, total: 100 });
-    assert.equal(ticks.at(-1).progress01, 0.2, 'houses fully streamed → 1/5 of the bundle');
+    r._glbProgressHandler('buildings')({ lengthComputable: true, loaded: 100, total: 100 });
+    assert.equal(ticks.at(-1).progress01, 0.2, 'buildings fully streamed → 1/5 of the bundle');
 
     // An unknown id is a no-op (no crash, no emit).
     const beforeUnknown = ticks.length;
@@ -147,7 +147,7 @@ describe('Renderer3D loading bundle', () => {
     settle.engine.resolve();
     await tick();
     settle.sprites.resolve();
-    settle.houses.reject(new Error('house.glb 404'));   // simulated GLB failure
+    settle.buildings.reject(new Error('buildings church.glb 404'));   // simulated GLB failure
     settle.paladin.reject(new Error('paladin.glb 404'));
     settle.forest.resolve();
 

@@ -49,7 +49,7 @@ describe('Renderer3D.beginLoad(basePath)', () => {
     const bases = {};
     r._initBabylon          = async () => {};
     r.loadImages            = async (b) => { bases.sprites = b; };
-    r._loadHouseModel       = async (b) => { bases.houses = b; };
+    r._loadBuildingModels   = async (b) => { bases.buildings = b; };
     r._loadPaladinModel     = async (b) => { bases.paladin = b; };
     r._loadTreePackManifest = async (b) => { bases.forest = b; };
     return { r, bases };
@@ -67,7 +67,7 @@ describe('Renderer3D.beginLoad(basePath)', () => {
     r.beginLoad('/assets');
     await new Promise(res => setTimeout(res, 0)); // let chained loaders run
     assert.equal(bases.sprites, '/assets');
-    assert.equal(bases.houses, '/assets');
+    assert.equal(bases.buildings, '/assets');
     assert.equal(bases.paladin, '/assets');
     assert.equal(bases.forest, '/assets');
   });
@@ -86,7 +86,7 @@ describe('Renderer3D.beginLoad(basePath)', () => {
     r.beginLoad();
     assert.equal(r._assetsBasePath, '/assets');
     return new Promise(res => setTimeout(res, 0)).then(() => {
-      assert.equal(bases.houses, '/assets');
+      assert.equal(bases.buildings, '/assets');
     });
   });
 });

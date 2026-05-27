@@ -65,23 +65,62 @@ const BABYLON_LOADERS_LOCAL = '/assets/vendor/babylonjs/babylonjs.loaders.min.js
 // existing procedural box+roof, so gameplay never blocks on a 404.
 export const HOUSE_MODEL_DIR  = 'models/';
 export const HOUSE_MODEL_FILE = 'house.glb';
+// The legacy hand-authored house model — kept as ONE of the two HOUSE
+// variants (see BUILDING_GLB_BY_TYPE) so a village shows a mix of it and the
+// newer scenario-generated house.
+export const LEGACY_HOUSE_PATH = `${HOUSE_MODEL_DIR}${HOUSE_MODEL_FILE}`;
 
-// Building-type → GLB asset map. Only listed types swap the procedural
-// box+roof for an imported model; everything else (INN, GRAVEYARD, etc.) keeps
-// the existing procedural rendering until a model is authored for it. Extend
-// by adding entries here; the conditional load + retrofit machinery already
-// keys off this table via `buildingUsesHouseModel()`.
-export const BUILDING_GLB_BY_TYPE = Object.freeze({
-  [BuildingType.HOUSE]: `${HOUSE_MODEL_DIR}${HOUSE_MODEL_FILE}`,
-});
+// Directory holding the per-building-type GLBs generated via Scenario. Each
+// file is named after the lowercase BuildingType value (e.g. `church.glb`,
+// `town_hall.glb`), so the path map below is derived directly from the enum.
+export const BUILDINGS_MODEL_DIR = 'models/buildings/';
 
-/** Predicate: does this tile's specific building type render as the shared
- *  house GLB? Pure; exported for tests. Returns false for any building type
- *  that isn't in `BUILDING_GLB_BY_TYPE` so non-HOUSE buildings keep their
- *  procedural box+roof. */
-export function buildingUsesHouseModel(tile) {
+// Building-type → ordered list of GLB variant paths (relative to the assets
+// base). EVERY building type now renders an imported model; the loader fetches
+// each unique path once as a hidden template and instances it per tile. A type
+// with >1 variant hash-picks one deterministically per (col,row) — currently
+// only HOUSE, which keeps the legacy hand-made model AND the scenario model so
+// the same village can show both. Any per-type load failure falls back to the
+// procedural box+roof for tiles of that type only (other types are unaffected).
+//
+// Derived programmatically from BuildingType so it can never drift out of sync
+// with the enum — all 13 values are guaranteed covered.
+export const BUILDING_GLB_BY_TYPE = Object.freeze(
+  Object.fromEntries(
+    Object.values(BuildingType).map((key) => {
+      const variants = key === BuildingType.HOUSE
+        ? [LEGACY_HOUSE_PATH, `${BUILDINGS_MODEL_DIR}${key}.glb`]
+        : [`${BUILDINGS_MODEL_DIR}${key}.glb`];
+      return [key, Object.freeze(variants)];
+    }),
+  ),
+);
+
+/** Predicate: does this tile carry a building that renders as an imported GLB?
+ *  Pure; exported for tests. True for any tile with a building type present in
+ *  `BUILDING_GLB_BY_TYPE` (all 13 types). Keyed on the building/structure, not
+ *  the base material, so a HOUSE on a forest base still counts. */
+export function buildingUsesGlbModel(tile) {
   if (!tile || !hasBuilding(tile)) return false;
-  return tile.building === BuildingType.HOUSE;
+  return Object.prototype.hasOwnProperty.call(BUILDING_GLB_BY_TYPE, tile.building);
+}
+
+// Back-compat alias: the pipeline used to handle HOUSE only, so callers/tests
+// referenced `buildingUsesHouseModel`. Now generalized to every type.
+export const buildingUsesHouseModel = buildingUsesGlbModel;
+
+/** Deterministic per-tile pick of which GLB variant a building renders. For
+ *  single-variant types this is just that path; for multi-variant types
+ *  (HOUSE) it hash-picks across the variants by (col,row) so the choice is
+ *  stable across sessions but varies tile-to-tile. Returns null when the tile
+ *  has no building or no variant list. Pure; exported for tests. */
+export function buildingGlbVariantForHex(tile) {
+  if (!tile || tile.building == null) return null;
+  const variants = BUILDING_GLB_BY_TYPE[tile.building];
+  if (!Array.isArray(variants) || variants.length === 0) return null;
+  if (variants.length === 1) return variants[0];
+  const h = _treePackHash(tile.col, tile.row, 269);
+  return variants[Math.floor(h * variants.length) % variants.length];
 }
 
 /** Bake a translation into the given source mesh so its bounding-box bottom
@@ -113,12 +152,21 @@ export function _bakeOriginToBottom(source, BABYLON) {
   if (typeof source.refreshBoundingInfo === 'function') source.refreshBoundingInfo();
 }
 
-// Default world-space scale for the imported model. The GLB's intrinsic unit
-// system is unknown until the file lands; this value sits the model at
-// roughly the same footprint as the procedural BUILDING_BASE_DIM (≈0.55 wide).
-// Operator can retune by adjusting this constant or running a one-off
-// `gltf-transform` resize pass — see PR body for the offline recipe.
+// Fallback world-space scale for an imported building when its natural
+// bounding box can't be measured (test stubs, malformed GLB). In real-browser
+// use the load step computes a bbox-derived scale instead (see
+// TARGET_BUILDING_WORLD_HEIGHT) so each generated model — whose intrinsic unit
+// system varies per export — lands at a consistent on-tile size. This value
+// sits the model at roughly the procedural BUILDING_BASE_DIM footprint (≈0.55).
 export const HOUSE_INSTANCE_BASE_SCALE = 0.55;
+
+// Target world-space height for an instanced building (before the per-hex
+// jitter ratio). The scenario-generated GLBs export at wildly different
+// intrinsic scales, so each template is uniformly scaled at load time so its
+// bbox height lands here — the same bbox-normalize trick the tree + paladin
+// pipelines use. Roughly matches the procedural box+roof stack (0.70 + 0.15).
+// Operator can retune by adjusting this constant.
+export const TARGET_BUILDING_WORLD_HEIGHT = 0.85;
 
 // ─── Tree pack (real GLB trees from `assets/models/trees/`) ────────────────
 // Phase 1 (PR #381) extracted `tree_pack.glb` into per-model GLBs + a manifest
@@ -1207,13 +1255,20 @@ export class Renderer3D {
 
     // ── Babylon state — populated by _initBabylon() on first draw ───────────
     this._babylon       = null; // module namespace once loaded
-    // ── House GLB model state (see `_loadHouseModel`) ─────────────────────
-    // _houseSourceMesh is the (merged) imported BABYLON.Mesh used as the
-    // template for `mesh.createInstance(...)`. Null until the GLB load
-    // resolves; null forever if the file is missing or fails to parse —
-    // building tiles fall back to the procedural box+roof in that case.
-    this._houseSourceMesh = null;
-    this._houseLoadPromise = null; // de-dupes concurrent load attempts
+    // ── Building GLB model state (see `_loadBuildingModels`) ──────────────
+    // `_buildingTemplates`   : Map<relPath, { mesh, scale }> — one hidden
+    //                          source mesh per unique GLB variant path across
+    //                          BUILDING_GLB_BY_TYPE. Building tiles render
+    //                          `mesh.createInstance(...)` so all instances of
+    //                          a type share one vertex buffer / material.
+    //                          `scale` is the bbox-derived uniform scale that
+    //                          lands the template at TARGET_BUILDING_WORLD_HEIGHT.
+    // `_buildingLoadPromises`: Map<relPath, Promise> — de-dupes concurrent
+    //                          loads of the same path. A failed load leaves the
+    //                          path absent from `_buildingTemplates`, so tiles
+    //                          of that type keep the procedural box+roof.
+    this._buildingTemplates   = new Map();
+    this._buildingLoadPromises = new Map();
     this._assetsBasePath   = null; // captured by loadImages()
     // ── Tree-pack GLB state (see `_loadTreePackManifest`) ─────────────────
     // `_treeTemplates`     : Map<filename, mesh>   — hidden source meshes,
@@ -1564,16 +1619,16 @@ export class Renderer3D {
     // The loaders return their cached in-flight promise (or the loaded source
     // if already resolved), so this never starts a duplicate network load.
     const afterInit = (fn) => babylonP.then(() => (this._scene ? fn() : null));
-    const houseP   = afterInit(() => this._loadHouseModel(basePath));
-    const paladinP = afterInit(() => this._loadPaladinModel(basePath));
-    const treesP   = afterInit(() => this._loadTreePackManifest(basePath));
+    const buildingsP = afterInit(() => this._loadBuildingModels(basePath));
+    const paladinP   = afterInit(() => this._loadPaladinModel(basePath));
+    const treesP     = afterInit(() => this._loadTreePackManifest(basePath));
 
     this._assetBundle = [
-      { id: 'engine',  label: 'engine',  promise: babylonP,  progress: 0 },
-      { id: 'sprites', label: 'sprites', promise: atlasP,    progress: 0 },
-      { id: 'houses',  label: 'houses',  promise: houseP,    progress: 0 },
-      { id: 'paladin', label: 'paladin', promise: paladinP,  progress: 0 },
-      { id: 'forest',  label: 'forest',  promise: treesP,    progress: 0 },
+      { id: 'engine',    label: 'engine',    promise: babylonP,   progress: 0 },
+      { id: 'sprites',   label: 'sprites',   promise: atlasP,     progress: 0 },
+      { id: 'buildings', label: 'buildings', promise: buildingsP, progress: 0 },
+      { id: 'paladin',   label: 'paladin',   promise: paladinP,   progress: 0 },
+      { id: 'forest',    label: 'forest',    promise: treesP,     progress: 0 },
     ];
 
     for (const item of this._assetBundle) {
@@ -1701,8 +1756,8 @@ export class Renderer3D {
       // portrait sprite before the next draw cycle.
       this._syncEntityIconBillboards();
     }
-    // Remember the basePath so `_loadHouseModel` (kicked off from
-    // `_initBabylon` once the scene exists) can fetch the GLB from the same
+    // Remember the basePath so `_loadBuildingModels` (kicked off from
+    // `_initBabylon` once the scene exists) can fetch the GLBs from the same
     // root the tilemap came from.
     this._assetsBasePath = basePath;
     if (this.onImagesLoaded) this.onImagesLoaded();
@@ -1844,67 +1899,92 @@ export class Renderer3D {
     return true;
   }
 
-  /** Lazy-load `<basePath>/models/house.glb` and stash it as `_houseSourceMesh`.
-   *  Subsequent building tiles (and any already-built tiles, via the retrofit
-   *  pass) render `mesh.createInstance(...)` of this source so all houses on
-   *  the map share one vertex buffer / material. The GLB is intentionally
-   *  optional: if the loader plugin import, the ImportMeshAsync call, or the
-   *  merge step fails, the renderer silently falls back to the procedural
-   *  box+roof so a missing file never blocks gameplay.
+  /** Kick off the load of every unique building-GLB variant path across
+   *  `BUILDING_GLB_BY_TYPE` (lazily, in parallel) and retrofit the map once
+   *  any of them resolves. Fire-and-forget from `beginLoad`; each individual
+   *  load is de-duped + fault-isolated so a missing/broken GLB for one type
+   *  never blocks the others or the game. Returns a promise that settles once
+   *  all variant loads have settled (used by the loading-screen bundle). */
+  async _loadBuildingModels(basePath = 'assets') {
+    if (!this._babylon || !this._scene) return null;
+    // Collect the unique relative paths (HOUSE contributes two).
+    const paths = new Set();
+    for (const variants of Object.values(BUILDING_GLB_BY_TYPE)) {
+      for (const p of variants) paths.add(p);
+    }
+    const results = await Promise.all(
+      Array.from(paths).map(p => this._loadBuildingModel(p, basePath)),
+    );
+    // A final retrofit sweep in case the map finished building between the last
+    // per-load retrofit and now (per-load retrofits already handle the common
+    // case where each GLB resolves after _buildMap).
+    if (this._mapBuilt) this._upgradeBuildingsToGlbModel();
+    return results;
+  }
+
+  /** Lazy-load one building GLB variant (`<basePath>/<relPath>`) and stash it
+   *  as a hidden template in `_buildingTemplates` keyed by `relPath`. Building
+   *  tiles whose variant resolves to this path render
+   *  `mesh.createInstance(...)` of the template so all instances share one
+   *  vertex buffer / material. The GLB is intentionally optional: any loader /
+   *  import / merge failure leaves the path absent from `_buildingTemplates`,
+   *  so tiles of that type keep the procedural box+roof. De-duped per path via
+   *  `_buildingLoadPromises`.
    *
    *  Loading the @babylonjs/loaders package has the side-effect of registering
-   *  the .glb / .gltf plugins on BABYLON.SceneLoader. Without that import,
-   *  ImportMeshAsync rejects .glb files with "Unable to find a plugin for file
-   *  extension .glb". */
-  async _loadHouseModel(basePath = 'assets') {
-    if (!this._babylon || !this._scene) return null;
-    if (this._houseSourceMesh) return this._houseSourceMesh;
-    if (this._houseLoadPromise) return this._houseLoadPromise;
+   *  the .glb / .gltf plugins on BABYLON.SceneLoader — without it,
+   *  ImportMeshAsync rejects .glb with "Unable to find a plugin". */
+  async _loadBuildingModel(relPath, basePath = 'assets') {
+    if (!this._babylon || !this._scene || !relPath) return null;
+    const existing = this._buildingTemplates.get(relPath);
+    if (existing && existing.mesh) return existing.mesh;
+    if (this._buildingLoadPromises.has(relPath)) return this._buildingLoadPromises.get(relPath);
     const BABYLON = this._babylon;
 
+    // Split the relative path into rootUrl + fileName for ImportMeshAsync
+    // (e.g. 'models/buildings/church.glb' → dir 'models/buildings/', file
+    // 'church.glb'). Mirrors how the house path used to be split.
+    const slash    = relPath.lastIndexOf('/');
+    const dir      = slash >= 0 ? relPath.slice(0, slash + 1) : '';
+    const fileName = slash >= 0 ? relPath.slice(slash + 1) : relPath;
+
     const promise = (async () => {
-      // Step 1: register glTF loader plugin via the UMD bundle. Best-effort —
-      // if SceneLoader.ImportMeshAsync is already wired (tests stub it
-      // directly on the fake BABYLON), we don't need the loaders script at
-      // all. Real-browser path: the bundle attaches to window.BABYLON and
-      // populates the .glb / .gltf plugin entries on BABYLON.SceneLoader.
+      // Best-effort loaders plugin registration (no-op if the fake BABYLON in
+      // tests already wires SceneLoader.ImportMeshAsync directly).
       await this._ensureBabylonLoaders();
 
       if (!BABYLON.SceneLoader || typeof BABYLON.SceneLoader.ImportMeshAsync !== 'function') {
-        console.warn('[Renderer3D] BABYLON.SceneLoader.ImportMeshAsync unavailable; skipping house model.');
+        console.warn('[Renderer3D] BABYLON.SceneLoader.ImportMeshAsync unavailable; skipping building model.');
         return null;
       }
 
-      // Step 2: import the GLB. `null` for meshNames pulls everything in.
+      // Import. `null` for meshNames pulls everything in.
       let result;
       try {
         result = await BABYLON.SceneLoader.ImportMeshAsync(
           null,
-          `${basePath}/${HOUSE_MODEL_DIR}`,
-          HOUSE_MODEL_FILE,
+          `${basePath}/${dir}`,
+          fileName,
           this._scene,
-          this._glbProgressHandler('houses'),
+          this._glbProgressHandler('buildings'),
         );
       } catch (err) {
-        console.warn('[Renderer3D] house.glb load failed; using procedural buildings.', err);
+        console.warn(`[Renderer3D] ${relPath} load failed; using procedural box for that type.`, err);
         return null;
       }
 
-      // Step 3: filter to meshes carrying real geometry. glTF imports often
-      //         return a `__root__` TransformNode plus N sub-meshes — we only
-      //         want the ones with vertex data.
+      // Filter to meshes carrying real geometry (glTF imports include an empty
+      // `__root__` TransformNode + N sub-meshes).
       const realMeshes = (result.meshes || []).filter(m =>
         m && typeof m.getTotalVertices === 'function' && m.getTotalVertices() > 0,
       );
       if (realMeshes.length === 0) {
-        console.warn('[Renderer3D] house.glb contained no geometry; using procedural buildings.');
+        console.warn(`[Renderer3D] ${relPath} contained no geometry; using procedural box.`);
         return null;
       }
 
-      // Step 4: collapse to ONE source mesh so instances share a single
-      //         vertex buffer + material. `multiMultiMaterials=true` keeps the
-      //         per-submesh materials (textures) intact across the merge so
-      //         the imported visual still renders correctly.
+      // Collapse to ONE source mesh so instances share a single vertex buffer
+      // + material. `multiMultiMaterials=true` keeps per-submesh textures.
       let source = realMeshes[0];
       if (realMeshes.length > 1 && typeof BABYLON.Mesh?.MergeMeshes === 'function') {
         try {
@@ -1918,64 +1998,78 @@ export class Renderer3D {
           );
           if (merged) source = merged;
         } catch (err) {
-          console.warn('[Renderer3D] house.glb merge failed; falling back to first sub-mesh.', err);
+          console.warn(`[Renderer3D] ${relPath} merge failed; falling back to first sub-mesh.`, err);
           source = realMeshes[0];
         }
       }
       if (!source) return null;
 
-      // Pivot fix: GLB authoring tools commonly export with the mesh pivot at
-      // the centre of the bounding box, which means an instance placed at
-      // tile-top (y ≈ 0.08) renders with its bottom half sunk into the tile
-      // prism. Bake a one-shot translation into the source's vertex buffer so
-      // the model's minimum-Y sits at local 0 — every instance inherits the
-      // adjusted origin and sits *on* the ground rather than in it.
+      // Pivot fix: drop the source's bounding-box bottom to local Y = 0 so an
+      // instance placed at tile-top sits *on* the ground rather than half-sunk.
       _bakeOriginToBottom(source, BABYLON);
 
-      // Hide the source from the scene — instances render geometry on its
-      // behalf, but the template itself is never drawn directly.
+      // Hide the template — instances render geometry on its behalf.
       if (typeof source.setEnabled === 'function') source.setEnabled(false);
       source.isPickable = false;
       // World-geometry render group so depth-tests against units/buildings
-      // behave the same way as the existing terrain props (see PR #361).
+      // behave like the other terrain props (see PR #361).
       if (typeof source.renderingGroupId !== 'undefined') source.renderingGroupId = 0;
 
-      // Diagnostic: log tri count so the operator can see whether geometry or
-      // textures dominate the file size before reaching for gltf-transform.
+      // Compute a bbox-derived uniform scale so this template's height lands at
+      // TARGET_BUILDING_WORLD_HEIGHT regardless of the GLB's intrinsic units.
+      // Falls back to HOUSE_INSTANCE_BASE_SCALE when bbox is unmeasurable
+      // (test stubs) — instances then multiply by the per-hex jitter ratio.
+      let scale = HOUSE_INSTANCE_BASE_SCALE;
+      try {
+        const info = typeof source.getBoundingInfo === 'function' ? source.getBoundingInfo() : null;
+        const bb   = info?.boundingBox;
+        if (bb) {
+          const minY = bb.minimumWorld?.y ?? bb.minimum?.y ?? 0;
+          const maxY = bb.maximumWorld?.y ?? bb.maximum?.y ?? 0;
+          const h    = maxY - minY;
+          if (h > 1e-3) scale = TARGET_BUILDING_WORLD_HEIGHT / h;
+        }
+      } catch { /* keep fallback scale */ }
+
       const triCount = typeof source.getTotalIndices === 'function'
         ? Math.floor((source.getTotalIndices() || 0) / 3) : null;
       console.log(
-        `[Renderer3D] house.glb loaded (${realMeshes.length} sub-mesh${realMeshes.length === 1 ? '' : 'es'}`
+        `[Renderer3D] ${relPath} loaded (${realMeshes.length} sub-mesh${realMeshes.length === 1 ? '' : 'es'}`
         + (triCount != null ? `, ${triCount} tris` : '')
         + `).`,
       );
 
-      this._houseSourceMesh = source;
+      this._buildingTemplates.set(relPath, { mesh: source, scale });
 
-      // If the map's already been built (the common case — GLB load is slow,
-      // _buildMap runs synchronously right after Babylon init), retrofit
-      // existing procedural buildings with instances of the new source.
-      if (this._mapBuilt) this._upgradeBuildingsToHouseModel();
+      // If the map's already built (the common case — GLB load is slow,
+      // _buildMap runs synchronously right after Babylon init), retrofit the
+      // procedural buildings that use this variant.
+      if (this._mapBuilt) this._upgradeBuildingsToGlbModel();
       return source;
     })();
 
-    this._houseLoadPromise = promise;
+    this._buildingLoadPromises.set(relPath, promise);
     return promise;
   }
 
-  /** Create one BABYLON.InstancedMesh from `_houseSourceMesh` for the given
-   *  building tile, position it at the tile's NE building slot, and apply the
-   *  hash-seeded scale + yaw jitter so neighbouring houses don't look stamped
-   *  out of a single mould. Returns the instance, or null if the source mesh
-   *  isn't loaded yet (caller's responsibility to fall back to procedural). */
-  _buildHouseInstance(tile, x, z, parent) {
-    if (!this._houseSourceMesh || !this._babylon) return null;
+  /** Create one BABYLON.InstancedMesh of the building tile's chosen GLB variant
+   *  template, positioned at the tile's NE building slot with the hash-seeded
+   *  scale + yaw jitter so neighbouring buildings don't look stamped out of one
+   *  mould. Returns the instance, or null if no template for this tile's
+   *  variant is loaded yet (caller falls back to procedural box+roof). */
+  _buildBuildingInstance(tile, x, z, parent) {
+    if (!this._babylon) return null;
+    const variant = buildingGlbVariantForHex(tile);
+    if (!variant) return null;
+    const tpl = this._buildingTemplates.get(variant);
+    if (!tpl || !tpl.mesh) return null;
     const BABYLON = this._babylon;
-    const source  = this._houseSourceMesh;
+    const source  = tpl.mesh;
     if (typeof source.createInstance !== 'function') return null;
     const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
     // Tile-top anchor — matches the procedural building's base Y (0.43 - 0.7/2).
     const tileTopY = 0.43 - 0.7 / 2;
+    const baseScale = tpl.scale != null ? tpl.scale : HOUSE_INSTANCE_BASE_SCALE;
 
     const inst = source.createInstance(`bldgInst_${tile.col}_${tile.row}`);
     if (parent && 'parent' in inst) inst.parent = parent;
@@ -1987,16 +2081,16 @@ export class Renderer3D {
     const sc = houseInstanceScalingForHex(tile.col, tile.row);
     if (BABYLON.Vector3) {
       inst.scaling = new BABYLON.Vector3(
-        HOUSE_INSTANCE_BASE_SCALE * sc.x,
-        HOUSE_INSTANCE_BASE_SCALE * sc.y,
-        HOUSE_INSTANCE_BASE_SCALE * sc.z,
+        baseScale * sc.x,
+        baseScale * sc.y,
+        baseScale * sc.z,
       );
       inst.rotation = new BABYLON.Vector3(0, houseYawForHex(tile.col, tile.row), 0);
     }
     inst.isPickable = false;
     // Buildings stay visible under fog of war — permanent terrain, not
     // tactical info. Mirrors the procedural box+roof metadata.
-    inst.metadata = { respectsFog: false, kind: 'building-house', col: tile.col, row: tile.row };
+    inst.metadata = { respectsFog: false, kind: 'building-glb', col: tile.col, row: tile.row };
     this._addShadowCaster(inst);
     // World-geometry render group, same as the procedural box+roof + tile
     // cylinders — keeps the depth buffer consistent for unit/building overlap.
@@ -2004,24 +2098,29 @@ export class Renderer3D {
     return inst;
   }
 
-  /** Sweep `_tilePropsByKey` for every BUILDING tile, dispose the procedural
-   *  box + roof meshes (`bldg_…` / `roof_…`), and replace them with a house
-   *  instance. Called after `_loadHouseModel` resolves on an already-built
-   *  map. Idempotent: tiles that already hold a house instance are skipped.
-   *  Re-runs `_freezeStaticMeshes` so the freshly created instances are picked
-   *  up by the per-frame world-matrix lock pass. */
-  _upgradeBuildingsToHouseModel() {
-    if (!this._mapBuilt || !this._houseSourceMesh || !this.state?.tiles) return 0;
+  /** Sweep `_tilePropsByKey` for every building tile, dispose the procedural
+   *  box + roof meshes (`bldg_…` / `roof_…`), and replace them with a GLB
+   *  instance of the tile's chosen variant. Called after each
+   *  `_loadBuildingModel` resolves on an already-built map. A tile whose
+   *  variant template hasn't loaded (or failed) is left on its procedural
+   *  box+roof — so a missing GLB for one type doesn't strip other buildings.
+   *  Idempotent: tiles already carrying a `building-glb` instance are skipped.
+   *  Re-runs `_freezeStaticMeshes` so new instances get world-matrix-locked. */
+  _upgradeBuildingsToGlbModel() {
+    if (!this._mapBuilt || this._buildingTemplates.size === 0 || !this.state?.tiles) return 0;
     let upgraded = 0;
     for (const tile of this.state.tiles.values()) {
-      if (!hasBuilding(tile) || !tile.building) continue;
-      // Only HOUSE-type buildings swap to the GLB; everything else keeps the
-      // procedural box+roof built by `_buildTileMesh`.
-      if (!buildingUsesHouseModel(tile)) continue;
+      if (!buildingUsesGlbModel(tile)) continue;
       const tkey  = hexKey(tile.col, tile.row);
       const props = this._tilePropsByKey.get(tkey) || [];
-      // Skip if this tile already holds a building-house instance.
-      if (props.some(m => m?.metadata?.kind === 'building-house')) continue;
+      // Skip if this tile already holds a GLB building instance.
+      if (props.some(m => m?.metadata?.kind === 'building-glb')) continue;
+
+      // Build the instance FIRST — if the tile's variant template isn't loaded
+      // yet, bail without touching the procedural meshes so they stay visible.
+      const { x, z } = hexToWorld(tile.col, tile.row);
+      const inst = this._buildBuildingInstance(tile, x, z, this._mapRoot);
+      if (!inst) continue;
 
       const remaining = [];
       for (const m of props) {
@@ -2032,19 +2131,13 @@ export class Renderer3D {
         }
         remaining.push(m);
       }
-      const { x, z } = hexToWorld(tile.col, tile.row);
-      const inst = this._buildHouseInstance(tile, x, z, this._mapRoot);
-      if (inst) {
-        remaining.push(inst);
-        upgraded++;
-      }
-      if (remaining.length > 0) this._tilePropsByKey.set(tkey, remaining);
-      else this._tilePropsByKey.delete(tkey);
+      remaining.push(inst);
+      upgraded++;
+      this._tilePropsByKey.set(tkey, remaining);
     }
     // Freeze pass picks up the new instances. The procedural meshes were
-    // already frozen on initial build; disposing unfreezes nothing the GPU
-    // still cares about, but the new instances need their world matrices
-    // locked too.
+    // already frozen on initial build; the new instances need their world
+    // matrices locked too.
     if (upgraded > 0) this._freezeStaticMeshes();
     return upgraded;
   }
@@ -2057,7 +2150,7 @@ export class Renderer3D {
    *  has to dispatch.
    *
    *  Single-mesh GLBs are used directly. Multi-mesh / multi-material GLBs
-   *  collapse via MergeMeshes (mirrors `_loadHouseModel`'s recipe). A
+   *  collapse via MergeMeshes (mirrors `_loadBuildingModel`'s recipe). A
    *  per-template uniform scale is computed at load time so the template's
    *  bbox-height lands at TARGET_TREE_WORLD_HEIGHT — instances then apply
    *  the per-tree FOREST_SCALE_MIN..MAX multiplier on top of that.
@@ -2370,7 +2463,7 @@ export class Renderer3D {
    *  map-border band, disposes the procedural cone+sphere merged meshes,
    *  and rebuilds them as real-tree instances. Idempotent — tiles that
    *  already hold a real-tree instance are skipped. Mirrors
-   *  `_upgradeBuildingsToHouseModel`. */
+   *  `_upgradeBuildingsToGlbModel`. */
   _upgradeForestToRealTrees() {
     if (!this._mapBuilt || !this._useRealTrees || !this.state?.tiles) return 0;
     let upgraded = 0;
@@ -3855,13 +3948,13 @@ export class Renderer3D {
     // limit) and BEFORE _buildMap (whose forest band depth is sized off it).
     this._recomputeMaxZoomCap();
 
-    // Kick off the house GLB load asynchronously. We deliberately don't
-    // await it here — `_buildMap` below is synchronous and the model is
-    // heavy (~7 MB). Building tiles render with the procedural box+roof
-    // fallback; when the GLB resolves, `_upgradeBuildingsToHouseModel`
-    // retrofits each building tile with an instance of the loaded source.
-    // Fire-and-forget — errors are caught inside `_loadHouseModel`.
-    this._loadHouseModel(this._assetsBasePath || 'assets');
+    // Kick off the building GLB loads asynchronously (one template per unique
+    // variant path across all 13 building types). We deliberately don't await
+    // here — `_buildMap` below is synchronous and the models are heavy.
+    // Building tiles render with the procedural box+roof fallback; as each GLB
+    // resolves, `_upgradeBuildingsToGlbModel` retrofits the matching tiles with
+    // instances. Fire-and-forget — errors are caught inside `_loadBuildingModel`.
+    this._loadBuildingModels(this._assetsBasePath || 'assets');
 
     // Kick off the paladin GLB load asynchronously. Fire-and-forget —
     // `_buildMap` + `_syncEntityStandees` run synchronously right after and
@@ -4900,20 +4993,22 @@ export class Renderer3D {
       trackProp(plank);
     }
 
-    // ── Building: either a glTF house instance (if `_loadHouseModel` has
-    // resolved by now) or the procedural box + roof fallback. Both paths
+    // ── Building: either a glTF model instance (if the tile's variant template
+    // has loaded by now) or the procedural box + roof fallback. Both paths
     // anchor the building at the NE outer slot (BUILDING_SLOT_INDEX); a
     // standee on the same hex takes the centre slot so silhouettes don't
-    // overlap. The GLB load runs async from `_initBabylon` — when it resolves
-    // after `_buildMap` completes, `_upgradeBuildingsToHouseModel` swaps the
+    // overlap. The GLB loads run async from `_initBabylon` — as each resolves
+    // after `_buildMap` completes, `_upgradeBuildingsToGlbModel` swaps the
     // procedural meshes here for instances.
     if (hasBuilding(tile) && tile.building) {
-      // Only HOUSE-type buildings render as the imported GLB; every other
-      // building type (INN, GRAVEYARD, CHURCH, etc.) keeps the procedural
-      // box+roof until a model is authored for it. See BUILDING_GLB_BY_TYPE.
-      if (this._houseSourceMesh && buildingUsesHouseModel(tile)) {
-        const inst = this._buildHouseInstance(tile, x, z, parent);
-        if (inst) trackProp(inst);
+      // Every building type renders an imported GLB once its template loads;
+      // until then (or on a per-type load failure) it keeps the procedural
+      // box+roof. See BUILDING_GLB_BY_TYPE.
+      const glbInst = buildingUsesGlbModel(tile)
+        ? this._buildBuildingInstance(tile, x, z, parent)
+        : null;
+      if (glbInst) {
+        trackProp(glbInst);
       } else {
         const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
         // Per-tile dimension jitter so buildings show silhouette variety
