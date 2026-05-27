@@ -1,0 +1,244 @@
+// Punch-during-lunge coverage. The attacker paladin plays the retargeted
+// punch clip on top of the position-slide; cone-token units (and the window
+// before punch.glb has lazily loaded) fall back to the pure slide.
+//
+// The Babylon-touching playback is verified in headless Chrome; here we pin
+// the extractable contracts:
+//   1. computePunchSpeedRatio compresses the clip into the strike window
+//   2. _startPaladinPunch hands the shared skeleton to punch + restores it
+//   3. _stopPaladinPunch releases it (round-snap path)
+//   4. the idle/walk toggle yields while a punch is mid-swing
+//   5. addLungeAnim plays the punch for a paladin clone, lazy-loads it when
+//      not yet present, and never touches it for a cone-token attacker.
+
+import { describe, test } from 'node:test';
+import assert from 'node:assert/strict';
+
+import {
+  Renderer3D,
+  computePunchSpeedRatio,
+  PUNCH_MODEL_FILE,
+  PUNCH_TARGET_MS,
+} from '../src/renderer-3d.js';
+
+// ── computePunchSpeedRatio (pure) ───────────────────────────────────────────
+
+describe('computePunchSpeedRatio', () => {
+  test('compresses a 1s clip into a 500ms strike at 2× speed', () => {
+    assert.equal(computePunchSpeedRatio(1.0, 500), 2.0);
+  });
+
+  test('a 2s clip into 500ms reads at 4×', () => {
+    assert.equal(computePunchSpeedRatio(2.0, 500), 4.0);
+  });
+
+  test('clamps a pathologically fast ratio to 8.0', () => {
+    assert.equal(computePunchSpeedRatio(10, 100), 8.0);
+  });
+
+  test('clamps a pathologically slow ratio to 0.5', () => {
+    assert.equal(computePunchSpeedRatio(0.1, 1000), 0.5);
+  });
+
+  test('falls back when the natural duration is unknown', () => {
+    assert.equal(computePunchSpeedRatio(0, 500), 2.0);
+    assert.equal(computePunchSpeedRatio(undefined, 500, 3.0), 3.0);
+  });
+
+  test('falls back when the target time is non-positive', () => {
+    assert.equal(computePunchSpeedRatio(1.0, 0), 2.0);
+  });
+});
+
+// ── constants ───────────────────────────────────────────────────────────────
+
+describe('punch constants', () => {
+  test('PUNCH_MODEL_FILE points at punch.glb', () => {
+    assert.equal(PUNCH_MODEL_FILE, 'punch.glb');
+  });
+
+  test('PUNCH_TARGET_MS is a positive, lunge-scaled window', () => {
+    assert.ok(PUNCH_TARGET_MS > 0 && PUNCH_TARGET_MS < 2000);
+  });
+});
+
+// ── _startPaladinPunch / _stopPaladinPunch ──────────────────────────────────
+
+function makeGroupSpy() {
+  const calls = { start: [], stop: 0, endCbs: [] };
+  return {
+    calls,
+    start(loop, ratio) { calls.start.push({ loop, ratio }); },
+    stop() { calls.stop += 1; },
+    onAnimationGroupEndObservable: {
+      addOnce(cb) { calls.endCbs.push(cb); },
+    },
+  };
+}
+
+describe('Renderer3D._startPaladinPunch', () => {
+  test('returns false (no crash) when the punch clip never loaded', () => {
+    const inst = Object.create(Renderer3D.prototype);
+    inst._paladinSource = { idleGroup: makeGroupSpy(), walkGroup: makeGroupSpy() };
+    assert.equal(inst._startPaladinPunch(), false);
+    assert.ok(!inst._paladinSource.punchPlaying);
+  });
+
+  test('returns false when there is no paladin source at all', () => {
+    const inst = Object.create(Renderer3D.prototype);
+    inst._paladinSource = null;
+    assert.equal(inst._startPaladinPunch(), false);
+  });
+
+  test('stops idle+walk, starts the punch one-shot, and marks punchPlaying', () => {
+    const inst = Object.create(Renderer3D.prototype);
+    const idle = makeGroupSpy();
+    const walk = makeGroupSpy();
+    const punch = makeGroupSpy();
+    inst._playbackSpeedMul = 1.0;
+    inst._paladinSource = {
+      idleGroup: idle, walkGroup: walk, punchGroup: punch,
+      punchDurationSec: 1.0, activeGroup: 'idle',
+    };
+
+    assert.equal(inst._startPaladinPunch(), true);
+    assert.equal(idle.calls.stop, 1, 'idle silenced');
+    assert.equal(walk.calls.stop, 1, 'walk silenced');
+    assert.equal(inst._paladinSource.punchPlaying, true);
+    assert.equal(inst._paladinSource.activeGroup, 'punch');
+    // Started non-looping (false) at the compressed strike ratio (2× for 1s → 500ms).
+    const started = punch.calls.start.at(-1);
+    assert.equal(started.loop, false);
+    assert.equal(started.ratio, 2.0);
+  });
+
+  test('the registered end-handler releases the skeleton back to idle/walk', () => {
+    const inst = Object.create(Renderer3D.prototype);
+    const punch = makeGroupSpy();
+    inst._playbackSpeedMul = 1.0;
+    inst._paladinSource = {
+      idleGroup: makeGroupSpy(), walkGroup: makeGroupSpy(),
+      punchGroup: punch, punchDurationSec: 1.0,
+    };
+    inst._startPaladinPunch();
+    assert.equal(inst._paladinSource.punchPlaying, true);
+    // Fire the strike-complete callback.
+    assert.equal(punch.calls.endCbs.length, 1);
+    punch.calls.endCbs[0]();
+    assert.equal(inst._paladinSource.punchPlaying, false);
+    assert.equal(inst._paladinSource.activeGroup, null);
+  });
+});
+
+describe('Renderer3D._stopPaladinPunch', () => {
+  test('stops the group and clears the playing flag', () => {
+    const inst = Object.create(Renderer3D.prototype);
+    const punch = makeGroupSpy();
+    inst._paladinSource = { punchGroup: punch, punchPlaying: true, activeGroup: 'punch' };
+    inst._stopPaladinPunch();
+    assert.equal(punch.calls.stop, 1);
+    assert.equal(inst._paladinSource.punchPlaying, false);
+    assert.equal(inst._paladinSource.activeGroup, null);
+  });
+
+  test('is a no-op when there is no source', () => {
+    const inst = Object.create(Renderer3D.prototype);
+    inst._paladinSource = null;
+    assert.doesNotThrow(() => inst._stopPaladinPunch());
+  });
+});
+
+// ── idle/walk toggle yields to a mid-swing punch ────────────────────────────
+
+describe('Renderer3D._maybeTogglePaladinAnimation — punch yield', () => {
+  test('does not touch idle/walk while a punch is playing', () => {
+    const inst = Object.create(Renderer3D.prototype);
+    const idle = makeGroupSpy();
+    const walk = makeGroupSpy();
+    inst._paladinSource = {
+      idleGroup: idle, walkGroup: walk, punchGroup: makeGroupSpy(),
+      punchPlaying: true, activeGroup: 'punch',
+    };
+    inst._activeMoveIds = new Set();
+    inst._activeLungeIds = new Set(['e1']); // would normally request 'walk'
+    inst._maybeTogglePaladinAnimation();
+    // Skeleton left to the punch — neither idle nor walk was poked.
+    assert.equal(idle.calls.start.length + idle.calls.stop, 0);
+    assert.equal(walk.calls.start.length + walk.calls.stop, 0);
+    assert.equal(inst._paladinSource.activeGroup, 'punch');
+  });
+});
+
+// ── addLungeAnim integration ────────────────────────────────────────────────
+
+function makeFakeBabylon() {
+  function Animation() {}
+  Animation.ANIMATIONTYPE_FLOAT = 0;
+  Animation.ANIMATIONLOOPMODE_CONSTANT = 0;
+  Animation.prototype.setKeys = function () {};
+  Animation.prototype.setEasingFunction = function () {};
+  function CubicEase() {}
+  CubicEase.prototype.setEasingMode = function () {};
+  return {
+    Animation,
+    CubicEase,
+    EasingFunction: { EASINGMODE_EASEOUT: 1 },
+    Vector3: class { constructor(x, y, z) { this.x = x; this.y = y; this.z = z; } },
+  };
+}
+
+function makeLungeInst(standee) {
+  const inst = Object.create(Renderer3D.prototype);
+  inst._babylon = makeFakeBabylon();
+  inst._scene = {
+    stopAnimation() {},
+    beginDirectAnimation(_t, _a, _f, _to, _loop, _spd, onEnd) { if (onEnd) onEnd(); },
+  };
+  inst._camera = null;
+  inst._activeLungeIds = new Set();
+  inst._entityStandees = new Map([['e1', standee]]);
+  inst._trackAnim = () => {};
+  inst._playbackSpeedMul = 1.0;
+  inst._assetsBasePath = 'assets';
+  return inst;
+}
+
+describe('Renderer3D.addLungeAnim — punch wiring', () => {
+  test('plays the punch when the attacker is a paladin clone with a loaded clip', () => {
+    const standee = { plane: { position: { x: 0, z: 0 } }, paladinClone: { mesh: { rotation: { y: 0 } } } };
+    const inst = makeLungeInst(standee);
+    inst._paladinSource = { punchGroup: {} };
+    let punched = 0, ensured = 0;
+    inst._startPaladinPunch = () => { punched += 1; };
+    inst._ensurePunchAnimation = () => { ensured += 1; };
+    assert.doesNotThrow(() => inst.addLungeAnim('e1', 0, 0, 1, 0, 'hero', 'hero'));
+    assert.equal(punched, 1, 'punch played on the loaded clip');
+    assert.equal(ensured, 0);
+  });
+
+  test('lazily loads the punch clip when not yet present (this lunge slides only)', () => {
+    const standee = { plane: { position: { x: 0, z: 0 } }, paladinClone: { mesh: { rotation: { y: 0 } } } };
+    const inst = makeLungeInst(standee);
+    inst._paladinSource = {}; // no punchGroup yet
+    let punched = 0, ensured = 0;
+    inst._startPaladinPunch = () => { punched += 1; };
+    inst._ensurePunchAnimation = () => { ensured += 1; };
+    inst.addLungeAnim('e1', 0, 0, 1, 0, 'hero', 'hero');
+    assert.equal(punched, 0, 'no clip → no punch this frame');
+    assert.equal(ensured, 1, 'lazy load kicked');
+  });
+
+  test('cone-token attacker (no clone) slides with no punch and no crash', () => {
+    const standee = { plane: { position: { x: 0, z: 0 } }, paladinClone: null };
+    const inst = makeLungeInst(standee);
+    inst._paladinSource = { punchGroup: {} };
+    let punched = 0, ensured = 0;
+    inst._startPaladinPunch = () => { punched += 1; };
+    inst._ensurePunchAnimation = () => { ensured += 1; };
+    assert.doesNotThrow(() => inst.addLungeAnim('e1', 0, 0, 1, 0, 'witch', 'witch'));
+    assert.equal(punched, 0);
+    assert.equal(ensured, 0);
+    // The slide still registered the lunge.
+    assert.ok(inst._activeLungeIds.has('e1'));
+  });
+});

@@ -265,6 +265,11 @@ export const WALKING_MODEL_FILE = 'walking.glb';
 // idle clip embedded, so the loader picks it up at model-load time and
 // _loadIdleAnimation skips (avoids a duplicate import).
 export const IDLE_MODEL_FILE    = 'paladin-idle.glb';
+// Combat strike clip — animation-only Mixamo export (~47k). Retargeted onto
+// the shared paladin skeleton exactly like walking/idle and played during a
+// lunge. Loaded lazily (off the beginLoad critical path) — see
+// `_ensurePunchAnimation`.
+export const PUNCH_MODEL_FILE   = 'punch.glb';
 
 // Crossfade rate between idle and walking, in 1/seconds. 5.0 = full transition
 // in 200ms. Slow enough to read as a deliberate state change, fast enough that
@@ -347,6 +352,21 @@ export function computeAnimSpeedRatioForStride(
   const targetTimeSec = targetTimeMs / 1000;
   const ratio = (targetDistanceWU * natCycleSec) / (strideSourceUnits * scale * targetTimeSec);
   return Math.max(0.25, Math.min(6.0, ratio));
+}
+
+/** Solve for the speedRatio that compresses a clip of natural duration
+ *  `natCycleSec` into `targetMs` of real time. A Mixamo punch clip is ~1–2s;
+ *  the lunge it accompanies is only ~LUNGE_ANIM_MS, so we speed the clip up
+ *  to read as a sharp strike rather than slow-mo. speedRatio scales playback
+ *  rate, so ratio = natCycleSec / (targetMs/1000). Returns `fallback` when the
+ *  natural duration is unknown (clip not measured yet). Clamped to [0.5, 8.0]
+ *  so a malformed/zero-length clip can't produce a pathological rate. Pure;
+ *  exported for tests. */
+export function computePunchSpeedRatio(natCycleSec, targetMs, fallback = 2.0) {
+  if (!(natCycleSec > 0)) return fallback;
+  if (!(targetMs > 0)) return fallback;
+  const ratio = natCycleSec / (targetMs / 1000);
+  return Math.max(0.5, Math.min(8.0, ratio));
 }
 
 /** Zero out the root-bone's translation keyframes so the animation drives
@@ -1333,6 +1353,7 @@ export class Renderer3D {
     // cone+sphere fallback in that case.
     this._paladinSource     = null;
     this._paladinLoadPromise = null; // de-dupes concurrent load attempts
+    this._punchLoadPromise   = null; // de-dupes the lazy punch.glb load
     // Uniform scale applied to cloned paladin meshes. Computed once at load
     // time from the source mesh's natural bbox height so the visible model
     // lands at TARGET_PALADIN_WORLD_HEIGHT regardless of FBX export units
@@ -2820,6 +2841,16 @@ export class Renderer3D {
         });
       }
 
+      // Pre-warm the combat punch clip a beat after the rig + walk/idle have
+      // a head start, so the FIRST paladin attack usually has its strike clip
+      // ready. Deferred (not awaited, not in the loading-screen bundle) so the
+      // ~47k never delays first paint; addLungeAnim also lazy-loads it as a
+      // safety net. The timer is unref'd so it can't keep a node process alive.
+      if (typeof setTimeout === 'function') {
+        const t = setTimeout(() => { this._ensurePunchAnimation(basePath); }, 1200);
+        if (t && typeof t.unref === 'function') t.unref();
+      }
+
       // If standees were built before the GLB landed (the common case —
       // _initBabylon kicks the load off async and `_syncEntityStandees`
       // runs synchronously right after), retrofit each hero standee with
@@ -3169,6 +3200,180 @@ export class Renderer3D {
     return idleForPaladin;
   }
 
+  /** Kick the lazy punch.glb load exactly once. Idempotent — returns the
+   *  in-flight (or settled) promise on repeat calls. Kept OFF the beginLoad
+   *  critical path / loading-screen bundle: the ~47k clip only fetches once
+   *  the paladin rig is loaded and combat is imminent, so it never gates
+   *  first paint. Safe to call before the rig loads (no-ops until
+   *  `_paladinSource` exists) and from environments without a real
+   *  SceneLoader (the loader itself early-returns). */
+  _ensurePunchAnimation(basePath = 'assets') {
+    if (this._punchLoadPromise) return this._punchLoadPromise;
+    if (!this._paladinSource) return null;
+    if (this._paladinSource.punchGroup) return Promise.resolve(this._paladinSource.punchGroup);
+    this._punchLoadPromise = Promise.resolve()
+      .then(() => this._loadPunchAnimation(basePath))
+      .catch(err => {
+        console.warn('[Renderer3D] punch.glb load failed; paladins lunge without a strike clip.', err);
+        return null;
+      });
+    return this._punchLoadPromise;
+  }
+
+  /** Load punch.glb and retarget its AnimationGroup onto the shared paladin
+   *  skeleton by bone/TransformNode name — the exact pattern of
+   *  `_loadIdleAnimation` (clone the native group with a target remapper,
+   *  strip root motion, dispose the imported geometry, keep only the
+   *  keyframes). The retargeted group is stored INERT on
+   *  `_paladinSource.punchGroup` (started once to instantiate animatables,
+   *  then stopped) so `_startPaladinPunch` can play it once per lunge.
+   *
+   *  Like idle/walk, the punch group drives the SHARED source skeleton, so it
+   *  plays on every visible paladin in unison — the same board-game-token
+   *  tradeoff documented on `_buildPaladinClone` (per-standee skeletons caused
+   *  the historical T-pose/giant-head bugs, so we never clone the skeleton).
+   *  Returns the retargeted group, or null if the import/retarget failed (the
+   *  lunge then falls back to the pure position-slide). */
+  async _loadPunchAnimation(basePath = 'assets') {
+    if (!this._babylon || !this._scene || !this._paladinSource) return null;
+    const BABYLON = this._babylon;
+    const src = this._paladinSource;
+    if (src.punchGroup) return src.punchGroup;
+    if (!BABYLON.SceneLoader || typeof BABYLON.SceneLoader.ImportMeshAsync !== 'function') {
+      return null;
+    }
+
+    let result;
+    try {
+      result = await BABYLON.SceneLoader.ImportMeshAsync(
+        null,
+        `${basePath}/${PALADIN_MODEL_DIR}`,
+        PUNCH_MODEL_FILE,
+        this._scene,
+        this._glbProgressHandler('paladin'),
+      );
+    } catch (err) {
+      console.warn('[Renderer3D] punch.glb import failed', err);
+      return null;
+    }
+
+    const punchNative = (result.animationGroups || []).find(g => g) || null;
+    if (!punchNative) {
+      console.warn('[Renderer3D] punch.glb contained no animation group');
+      this._disposeWalkingImport(result);
+      return null;
+    }
+
+    const nameMap = new Map();
+    const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
+    const addEntry = (name, target) => {
+      if (!name || !target) return;
+      if (!nameMap.has(name)) nameMap.set(name, target);
+      const stripped = stripDup(name);
+      if (stripped !== name && !nameMap.has(stripped)) nameMap.set(stripped, target);
+    };
+    for (const tn of src.transformNodes || []) {
+      if (tn && tn.name) addEntry(tn.name, tn);
+    }
+    if (src.skeleton && Array.isArray(src.skeleton.bones)) {
+      for (const bone of src.skeleton.bones) {
+        if (!bone) continue;
+        const tn = bone._linkedTransformNode
+          || (typeof bone.getTransformNode === 'function' && bone.getTransformNode());
+        if (tn && tn.name) addEntry(tn.name, tn);
+        if (bone.name) addEntry(bone.name, tn || bone);
+      }
+    }
+
+    let punchForPaladin = null;
+    let remapped = 0;
+    let missed = 0;
+    if (typeof punchNative.clone === 'function') {
+      punchForPaladin = punchNative.clone('paladinPunchRetargeted', (oldTarget) => {
+        if (!oldTarget || !oldTarget.name) { missed++; return oldTarget; }
+        const match = nameMap.get(oldTarget.name) || nameMap.get(stripDup(oldTarget.name));
+        if (match) { remapped++; return match; }
+        missed++;
+        return oldTarget;
+      });
+    }
+    console.info(`[Renderer3D] punch → paladin retarget: ${remapped} hit, ${missed} miss`);
+
+    if (punchForPaladin && remapped > 0) {
+      // Strip root motion so the strike animates in place — the cone lunge
+      // slide already handles world-space displacement.
+      stripRootBoneTranslation(punchForPaladin);
+      src.punchDurationSec = animDurationSeconds(punchNative);
+      // Instantiate the animatables, then stop so it sits inert at frame 0
+      // until _startPaladinPunch plays it. (Idle/walk pause(); punch is a
+      // one-shot, so stop() is the cleaner resting state.)
+      if (typeof punchForPaladin.start === 'function') punchForPaladin.start(false, 1.0);
+      if (typeof punchForPaladin.stop === 'function') punchForPaladin.stop();
+      src.punchGroup = punchForPaladin;
+    } else {
+      console.warn('[Renderer3D] punch retarget produced 0 hits — lunge falls back to slide-only.');
+      try { punchForPaladin?.dispose?.(); } catch { /* ignore */ }
+      src.punchGroup = null;
+    }
+
+    // Dispose punch.glb's imported mesh + skeleton — only the keyframes are kept.
+    this._disposeWalkingImport(result);
+    return src.punchGroup;
+  }
+
+  /** Play the retargeted punch clip once on the shared paladin skeleton,
+   *  compressed to read as a sharp strike across the lunge window. Sets
+   *  `src.punchPlaying` so the idle/walk toggles yield the skeleton for the
+   *  duration; clears it (and lets the toggles resume idle/walk) when the
+   *  one-shot ends. No-op if the punch clip never loaded — the caller's
+   *  position-slide is then the whole animation (graceful fallback). */
+  _startPaladinPunch() {
+    const src = this._paladinSource;
+    if (!src || !src.punchGroup) return false;
+    const punch = src.punchGroup;
+    const speedMul = this._playbackSpeedMul ?? 1.0;
+    const ratio = computePunchSpeedRatio(src.punchDurationSec, PUNCH_TARGET_MS * speedMul);
+    // Hand the skeleton to punch: silence idle + walk so they don't fight it.
+    if (src.idleGroup && typeof src.idleGroup.stop === 'function') src.idleGroup.stop();
+    if (src.walkGroup && typeof src.walkGroup.stop === 'function') src.walkGroup.stop();
+    src.punchPlaying = true;
+    src.activeGroup = 'punch';
+
+    // Resume the idle/walk toggle once the strike completes. Babylon fires
+    // onAnimationGroupEndObservable for a non-looping group; guard for stubs.
+    const onEnd = () => {
+      src.punchPlaying = false;
+      // Force the next toggle tick to re-resolve idle/walk from scratch.
+      src.activeGroup = null;
+    };
+    if (punch.onAnimationGroupEndObservable
+      && typeof punch.onAnimationGroupEndObservable.addOnce === 'function') {
+      punch.onAnimationGroupEndObservable.addOnce(onEnd);
+    } else if (punch.onAnimationGroupEndObservable
+      && typeof punch.onAnimationGroupEndObservable.add === 'function') {
+      punch.onAnimationGroupEndObservable.add(onEnd);
+    }
+
+    if (typeof punch.stop === 'function') punch.stop();
+    if (typeof punch.start === 'function') punch.start(false, ratio);
+    return true;
+  }
+
+  /** Force-stop any in-flight punch and release the skeleton back to the
+   *  idle/walk toggle. Used when a lunge is hard-cleared (round snap) so the
+   *  rig doesn't freeze mid-strike. Safe when no punch is playing. */
+  _stopPaladinPunch() {
+    const src = this._paladinSource;
+    if (!src) return;
+    if (src.punchGroup && typeof src.punchGroup.stop === 'function') {
+      try { src.punchGroup.stop(); } catch { /* ignore */ }
+    }
+    if (src.punchPlaying) {
+      src.punchPlaying = false;
+      src.activeGroup = null;
+    }
+  }
+
   /** Clone the paladin source skeleton and re-link each cloned bone's
    *  _linkedTransformNode to the walking import's matching TransformNode
    *  by name. The resulting skeleton has paladin's bind matrices + bone
@@ -3238,6 +3443,10 @@ export class Renderer3D {
   _maybeTogglePaladinAnimation() {
     const src = this._paladinSource;
     if (!src) return;
+    // A one-shot punch owns the shared skeleton while it plays — yield so we
+    // don't yank the rig back into idle/walk mid-strike. _startPaladinPunch's
+    // end handler clears punchPlaying and the next tick resumes normally.
+    if (src.punchPlaying) return;
     // Three states: 'walk' (motion active), 'paused' (mid-chain freeze
     // — walking is paused at its current frame, idle does NOT run), and
     // 'idle' (no motion for SUSTAIN_MS). 'paused' is the new state that
@@ -3340,6 +3549,8 @@ export class Renderer3D {
       // this branch is a no-op (walkGroup remains null).
       const src = this._paladinSource;
       if (!src || !src.idleGroup || !src.walkGroup) return;
+      // Yield the shared skeleton to an in-flight punch one-shot.
+      if (src.punchPlaying) return;
       // Main standees only enter walking during ACTUAL resolution motion
       // (_activeMoveIds / _activeLungeIds). Plan-ghosts don't trigger this
       // because they animate on their OWN skeleton (walking source), so
@@ -7301,12 +7512,11 @@ export class Renderer3D {
    *  step (when no other lunge is in flight) to avoid camera thrash when
    *  several lunges fire together.
    *
-   *  Future-overhaul seam: the position-slide below is the FALLBACK pose for
-   *  rigs with no dedicated attack/lunge clip. When the combat overhaul lands
-   *  an attack clip on the paladin rig, branch here — play the clip on
-   *  `standee.paladinClone` and skip the position-slide — and keep this slide
-   *  as the no-clip fallback. The slide-vs-clip decision is the only thing
-   *  that needs to change; camera framing and lunge-home bookkeeping stay. */
+   *  When the attacker is a paladin clone, the retargeted punch clip plays
+   *  ON TOP of the position-slide (the slide closes the gap; the punch is the
+   *  strike). The slide is ALSO the standalone fallback for cone-token units
+   *  (no `paladinClone`) and for the window before punch.glb has lazily
+   *  loaded — in both cases the pure slide plays with no clip and no crash. */
   addLungeAnim(entityId, fromCol, fromRow, toCol, toRow, _type, _owner, _title) {
     if (!this._scene || !this._babylon) return;
     const standee = this._entityStandees.get(entityId);
@@ -7350,6 +7560,16 @@ export class Renderer3D {
     // the actual motion vector (current → lunge end), not the hex centres.
     if (standee.paladinClone?.mesh && (lungeX !== startX || lungeZ !== startZ)) {
       standee.paladinClone.mesh.rotation.y = Math.atan2(lungeX - startX, lungeZ - startZ);
+    }
+
+    // Paladin attacker: throw the punch clip on top of the slide so the
+    // strike reads as a strike. Lazily kick the punch.glb load (idempotent,
+    // off the critical path) — already-resolved → plays now; first-ever
+    // combat may still be downloading, in which case this lunge is slide-only
+    // and the next one punches. Cone-token attackers (no clone) just slide.
+    if (standee.paladinClone) {
+      if (this._paladinSource?.punchGroup) this._startPaladinPunch();
+      else this._ensurePunchAnimation(this._assetsBasePath || 'assets');
     }
 
     // Ease-OUT: the lunge launches fast and decelerates into the strike
@@ -7414,6 +7634,9 @@ export class Renderer3D {
   /** Immediately snap all lunging entities back home and clear lunge state.
    *  Used between rounds when we don't want the return animation to play. */
   clearAllLungeAnims(skipResolve = false) {
+    // Release the shared skeleton if a strike was mid-swing — otherwise the
+    // idle/walk toggle stays parked behind punchPlaying and the rig freezes.
+    this._stopPaladinPunch();
     if (!this._scene) {
       this._activeLungeIds.clear();
       return;
@@ -11360,6 +11583,13 @@ export const MOVE_ANIM_MS = 1000;
  *  uses an ease-OUT curve (fast launch, decelerating into the strike)
  *  and is kept short so the attack reads as a quick snap, not a glide. */
 export const LUNGE_ANIM_MS = 400;
+
+/** Real-time the punch clip is compressed to play across (ms) when it
+ *  accompanies a lunge. Picked a touch longer than LUNGE_ANIM_MS=400 so the
+ *  strike's contact frame lands near the end of the fast approach (~75% of
+ *  the lunge) and the follow-through carries into the return slide, reading
+ *  as a strike rather than slow-mo. Operator-tunable in one place. */
+export const PUNCH_TARGET_MS = 500;
 
 /** Fraction of the way from the attacker's current position toward the
  *  target hex the lunge slides (operator decision). 0.75 closes the gap
