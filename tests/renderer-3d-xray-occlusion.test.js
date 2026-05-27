@@ -1,17 +1,23 @@
-// X-ray occlusion outline — units hidden behind trees / buildings get a
-// faction-coloured, see-through edge so they read through the occluder. The
-// render mechanism: when occluded, a unit's meshes are promoted to a higher
-// rendering group (Babylon clears depth between groups → draws over the world
-// geometry) and given Babylon's built-in `renderOutline` ring in the faction
-// colour. This pins:
+// X-ray occlusion ghost — units hidden behind trees / buildings get a flat
+// faction-colour "ghost" duplicate of their meshes that shows ONLY over the
+// occluder. The render mechanism: when occluded, a cloned, unlit, emissive
+// faction-colour duplicate of the unit's meshes is enabled in the WORLD
+// rendering group (0) with `depthFunction = GREATER` + `disableDepthWrite`, so
+// it depth-tests against the already-drawn scene and rasterizes only where it's
+// FARTHER than what's in the depth buffer (= the part hidden behind the
+// occluder). Where the unit is clear the ghost fails the depth test and the
+// normal unit shows. No HighlightLayer. No renderOutline. No group promotion.
+//
+// This pins:
 //   • the pure helpers (occluder predicate, isOccluded, faction colour,
 //     set-diff, sweep throttle), and
-//   • the membership pump against a stubbed scene — occluded units get
-//     renderOutline + the group promotion with their faction colour,
-//     un-occluded / fog-hidden units do not, and dispose restores them.
+//   • the ghost pump against a stubbed scene — occluded units get a ghost
+//     built + enabled with the right faction colour, depthFunction GREATER and
+//     world rendering group; un-occluded / fog-hidden units do not; dispose
+//     tears the ghost down.
 //
-// The pump (`_pumpXrayOcclusion`) needs no real Babylon — minimal Vector3 /
-// Ray / Color3 / scene stubs drive the real math.
+// The pump (`_pumpXrayOcclusion`) needs no real Babylon — minimal Vector3 / Ray
+// / Color3 / StandardMaterial / mesh-clone stubs drive the real math.
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -24,7 +30,9 @@ import {
   diffOccludedSets,
   shouldSweepXray,
   XRAY_SWEEP_EVERY_N,
-  XRAY_OUTLINE_GROUP,
+  XRAY_GHOST_GROUP,
+  XRAY_GHOST_DEPTH_FUNC,
+  XRAY_GHOST_ALPHA,
 } from '../src/renderer-3d.js';
 
 // ── Babylon stubs ──────────────────────────────────────────────────────────
@@ -38,23 +46,55 @@ class V3 {
 }
 class Ray { constructor(origin, direction, length) { this.origin = origin; this.direction = direction; this.length = length; } }
 class Color3 { constructor(r, g, b) { this.r = r; this.g = g; this.b = b; } }
-const BABYLON = { Vector3: V3, Ray, Color3 };
+class StandardMaterial {
+  constructor(name) { this.name = name; this.disposed = false; this.backFaceCulling = false; }
+  dispose() { this.disposed = true; }
+}
+const Constants = { GREATER: 516 };
+const BABYLON = { Vector3: V3, Ray, Color3, StandardMaterial, Constants };
+
+let _meshSeq = 0;
+/** A minimal clonable mesh stub. `clone()` returns a tracked duplicate so the
+ *  ghost build can be inspected (material, group, depth, enabled, skeleton). */
+function makeMesh(name, { renderingGroupId = 0 } = {}) {
+  return {
+    name,
+    id: ++_meshSeq,
+    renderingGroupId,
+    isPickable: true,
+    skeleton: null,
+    position: new V3(),
+    rotation: new V3(),
+    scaling: new V3(1, 1, 1),
+    parent: null,
+    _enabled: true,
+    material: null,
+    disposed: false,
+    isEnabled() { return this._enabled; },
+    setEnabled(v) { this._enabled = !!v; },
+    dispose() { this.disposed = true; },
+    clone(cloneName, _parent, _dncc) {
+      const c = makeMesh(cloneName, { renderingGroupId: this.renderingGroupId });
+      c.skeleton = this.skeleton;       // shallow skeleton share (Babylon does too)
+      c.parent = this.parent;           // clone keeps source's parent by default
+      c._clonedFrom = this.name;
+      return c;
+    },
+  };
+}
 
 /** A cone+sphere standee at world-x `x`. Meshes start in rendering group 0 (the
  *  world group). The fake scene decides occlusion from the reconstructed anchor
  *  x (see `makeScene`). */
 function makeStandee(x, { enabled = true } = {}) {
-  const plane = {
-    name: 'unit_cone',
-    position: new V3(x, 0.3, 0),
-    metadata: { kind: 'entity' },
-    renderingGroupId: 0,
-    renderOutline: false,
-    _enabled: enabled,
-    isEnabled() { return this._enabled; },
-  };
-  const sphere = { name: 'unit_sphere', position: new V3(x, 0.6, 0), renderingGroupId: 0, renderOutline: false };
-  return { plane, sphere, leader: false, paladinClone: null };
+  const plane = makeMesh('unit_cone');
+  plane.position = new V3(x, 0.3, 0);
+  plane.metadata = { kind: 'entity' };
+  plane._enabled = enabled;
+  const sphere = makeMesh('unit_sphere');
+  sphere.position = new V3(x, 0.6, 0);
+  sphere.parent = plane;              // sphere is a child of the cone
+  return { plane, sphere, leader: false, paladinClone: null, xrayGhost: null };
 }
 
 /** Scene whose `pickWithRay` reports a hit (occluded) when the ray's anchor x
@@ -86,7 +126,13 @@ function makeRenderer() {
   return r;
 }
 
-const isOutlined = (m) => m.renderOutline === true && m.renderingGroupId === XRAY_OUTLINE_GROUP;
+/** A ghost mesh is enabled, in the world group, faction-coloured, depth-GREATER. */
+function assertGhostEnabled(ghostMesh) {
+  assert.equal(ghostMesh._enabled, true, 'ghost mesh enabled');
+  assert.equal(ghostMesh.renderingGroupId, XRAY_GHOST_GROUP, 'ghost in world group');
+  assert.equal(ghostMesh.isPickable, false, 'ghost not pickable');
+  assert.ok(ghostMesh.material, 'ghost has a material');
+}
 
 // ── Pure helpers ────────────────────────────────────────────────────────────
 describe('xray pure helpers', () => {
@@ -139,9 +185,70 @@ describe('xray pure helpers', () => {
   });
 });
 
+// ── Ghost material setup ─────────────────────────────────────────────────────
+describe('Renderer3D — xray ghost material', () => {
+  test('ghost material is unlit faction emissive, depth-GREATER, no depth-write, transparent', () => {
+    const r = makeRenderer();
+    r._scene = {};
+    const s = makeStandee(0);
+    const ghost = r._buildXrayGhost(s, { id: 7, owner: 'hero' });
+    assert.ok(ghost, 'ghost built');
+    const mat = ghost.material;
+    assert.ok(mat instanceof StandardMaterial, 'cloned StandardMaterial');
+    assert.equal(mat.disableLighting, true, 'unlit');
+    assert.ok(mat.emissiveColor instanceof Color3, 'faction emissive colour');
+    assert.equal(mat.depthFunction, XRAY_GHOST_DEPTH_FUNC, 'depthFunction GREATER (516)');
+    assert.equal(mat.depthFunction, Constants.GREATER, 'matches BABYLON.Constants.GREATER');
+    assert.equal(mat.disableDepthWrite, true, 'no depth write');
+    // Load-bearing for the GREATER test: ghost back faces sit farther than the
+    // unit body and would bleed the ghost over the visible unit if drawn.
+    assert.equal(mat.backFaceCulling, true, 'culls back faces (front-faces-only)');
+    assert.equal(mat.alpha, XRAY_GHOST_ALPHA, 'alpha just under 1 → transparent pass');
+    assert.ok(mat.alpha > 0 && mat.alpha < 1, 'alpha in (0,1)');
+    // Cone + sphere both cloned, both share this one per-ghost material.
+    assert.equal(ghost.meshes.length, 2, 'cone + sphere cloned');
+    for (const m of ghost.meshes) assert.equal(m.material, mat, 'meshes share the ghost material');
+    // Built ghosts start disabled (the pump enables on occlusion).
+    for (const m of ghost.meshes) assert.equal(m._enabled, false, 'ghost starts disabled');
+  });
+
+  test('cone clone is re-parented under the live cone (tracks position); sphere keeps its parent', () => {
+    const r = makeRenderer();
+    r._scene = {};
+    const s = makeStandee(3);
+    const ghost = r._buildXrayGhost(s, { id: 1, owner: 'witch' });
+    const coneGhost = ghost.meshes.find(m => m._clonedFrom === 'unit_cone');
+    const sphereGhost = ghost.meshes.find(m => m._clonedFrom === 'unit_sphere');
+    assert.equal(coneGhost.parent, s.plane, 'cone ghost parented under live cone → tracks');
+    assert.deepEqual(
+      [coneGhost.position.x, coneGhost.position.y, coneGhost.position.z], [0, 0, 0],
+      'cone ghost at identity local position',
+    );
+    // sphere was a child of the cone; clone keeps that parent → tracks for free.
+    assert.equal(sphereGhost.parent, s.plane, 'sphere ghost keeps cone parent');
+  });
+
+  test('paladin ghost shares the source skeleton (never clones it)', () => {
+    const r = makeRenderer();
+    r._scene = {};
+    const sharedSkeleton = { bones: [{ name: 'mixamorig:Hips' }] };
+    r._paladinSource = { skeleton: sharedSkeleton };
+    const s = makeStandee(0);
+    const body = makeMesh('paladin_body');
+    const sword = makeMesh('paladin_sword');
+    s.paladinClone = { childMeshes: [body, sword], skinnedMesh: body };
+    const ghost = r._buildXrayGhost(s, { id: 9, owner: 'hero' });
+    assert.equal(ghost.meshes.length, 2, 'both paladin children cloned');
+    for (const m of ghost.meshes) {
+      assert.equal(m.skeleton, sharedSkeleton, 'ghost shares the SOURCE skeleton (no clone)');
+      assert.equal(m.material, ghost.material, 'flat ghost material applied over the texture');
+    }
+  });
+});
+
 // ── Pump membership / fog / dispose ─────────────────────────────────────────
 describe('Renderer3D — xray occlusion pump', () => {
-  test('occluded unit gets a see-through outline in its faction colour; clear one does not', () => {
+  test('occluded unit gets an enabled faction-colour ghost; clear unit does not', () => {
     const r = makeRenderer();
     r._scene = makeScene(new Set([0])); // unit at x=0 is occluded, x=5 is clear
     const occ = makeStandee(0);
@@ -154,18 +261,16 @@ describe('Renderer3D — xray occlusion pump', () => {
 
     r._pumpXrayOcclusion();
 
-    assert.equal(r._xrayOutlinedIds.has(1), true,  'occluded unit outlined');
-    assert.equal(r._xrayOutlinedIds.has(2), false, 'clear unit not outlined');
-    // cone + sphere of the occluded unit are promoted + outlined; clear unit's are not.
-    assert.ok(isOutlined(occ.plane), 'occluded cone promoted + renderOutline on');
-    assert.ok(isOutlined(occ.sphere), 'occluded sphere promoted + renderOutline on');
-    assert.equal(clear.plane.renderOutline, false, 'clear unit cone not outlined');
-    assert.equal(clear.plane.renderingGroupId, 0, 'clear unit cone stays in world group');
-    // Outline colour is a Color3 (faction colour), not undefined.
-    assert.ok(occ.plane.outlineColor instanceof Color3);
+    assert.equal(r._xrayOutlinedIds.has(1), true,  'occluded unit ghosted');
+    assert.equal(r._xrayOutlinedIds.has(2), false, 'clear unit not ghosted');
+    // Occluded unit's ghost is built + enabled; clear unit has no ghost.
+    assert.ok(occ.xrayGhost, 'occluded unit built a ghost');
+    for (const m of occ.xrayGhost.meshes) assertGhostEnabled(m);
+    assert.ok(occ.xrayGhost.material.emissiveColor instanceof Color3, 'faction-colour emissive');
+    assert.equal(clear.xrayGhost, null, 'clear unit never built a ghost');
   });
 
-  test('orbiting so the unit is no longer occluded restores it to the world group', () => {
+  test('orbiting so the unit is no longer occluded disables (but keeps) the ghost', () => {
     const r = makeRenderer();
     const occludedXs = new Set([0]);
     r._scene = makeScene(occludedXs);
@@ -175,7 +280,9 @@ describe('Renderer3D — xray occlusion pump', () => {
 
     r._pumpXrayOcclusion();
     assert.equal(r._xrayOutlinedIds.has(1), true);
-    assert.ok(isOutlined(s.plane));
+    const builtGhost = s.xrayGhost;
+    assert.ok(builtGhost);
+    for (const m of builtGhost.meshes) assert.equal(m._enabled, true);
 
     // "Orbit": the unit is no longer occluded, and bump the camera so the
     // throttle re-sweeps (camMoved) on the next aligned frame.
@@ -184,12 +291,12 @@ describe('Renderer3D — xray occlusion pump', () => {
     r._xrayFrame = XRAY_SWEEP_EVERY_N - 1;
     r._pumpXrayOcclusion();
 
-    assert.equal(r._xrayOutlinedIds.has(1), false, 'no longer occluded → dropped');
-    assert.equal(s.plane.renderOutline, false, 'outline turned off');
-    assert.equal(s.plane.renderingGroupId, 0, 'restored to original world group');
+    assert.equal(r._xrayOutlinedIds.has(1), false, 'no longer occluded → dropped from set');
+    assert.equal(s.xrayGhost, builtGhost, 'ghost is cached, not disposed');
+    for (const m of s.xrayGhost.meshes) assert.equal(m._enabled, false, 'ghost disabled when clear');
   });
 
-  test('fog-hidden unit is never outlined', () => {
+  test('fog-hidden unit is never ghosted', () => {
     const r = makeRenderer();
     r._scene = makeScene(new Set([0])); // would be occluded if visible
     const hidden = makeStandee(0, { enabled: false }); // setEnabled(false) via fog
@@ -199,24 +306,28 @@ describe('Renderer3D — xray occlusion pump', () => {
     r._pumpXrayOcclusion();
 
     assert.equal(r._xrayOutlinedIds.has(1), false);
-    assert.equal(hidden.plane.renderOutline, false, 'fog-hidden unit gets no outline');
+    assert.equal(hidden.xrayGhost, null, 'fog-hidden unit builds no ghost');
   });
 
-  test('paladin clone child meshes are outlined instead of the hidden cone', () => {
+  test('paladin clone child meshes are ghosted instead of the hidden cone', () => {
     const r = makeRenderer();
     r._scene = makeScene(new Set([0]));
+    r._paladinSource = { skeleton: { bones: [] } };
     const s = makeStandee(0);
-    const body = { name: 'paladin_body', renderingGroupId: 0, renderOutline: false };
-    const sword = { name: 'paladin_sword', renderingGroupId: 0, renderOutline: false };
-    s.paladinClone = { childMeshes: [body, sword] };
+    const body = makeMesh('paladin_body');
+    const sword = makeMesh('paladin_sword');
+    s.paladinClone = { childMeshes: [body, sword], skinnedMesh: body };
     r._entityStandees = new Map([[1, s]]);
     r.state = { entities: [{ id: 1, alive: true, owner: 'hero', col: 0, row: 0 }] };
 
     r._pumpXrayOcclusion();
 
-    assert.ok(isOutlined(body), 'paladin body outlined');
-    assert.ok(isOutlined(sword), 'paladin sword outlined');
-    assert.equal(s.plane.renderOutline, false, 'hidden cone is not outlined when paladin loaded');
+    assert.ok(s.xrayGhost, 'paladin unit ghosted');
+    assert.equal(s.xrayGhost.meshes.length, 2, 'both paladin children duplicated');
+    for (const m of s.xrayGhost.meshes) assertGhostEnabled(m);
+    // The cone itself was NOT cloned (paladin path uses the clone children).
+    assert.ok(s.xrayGhost.meshes.every(m => m._clonedFrom.startsWith('paladin_')),
+      'ghost duplicates the paladin meshes, not the hidden cone');
   });
 
   test('throttle: off-cadence frame with no movement does not sweep', () => {
@@ -229,28 +340,69 @@ describe('Renderer3D — xray occlusion pump', () => {
     // First pump establishes membership (camMoved true on first sweep).
     r._pumpXrayOcclusion();
     assert.equal(r._xrayOutlinedIds.has(1), true);
-    const groupAfterFirst = s.plane.renderingGroupId;
+    const ghostAfterFirst = s.xrayGhost;
 
     // Now nothing moves and the frame is off-cadence → no churn, set unchanged.
     r._xrayFrame = XRAY_SWEEP_EVERY_N; // → frame+1 not a multiple of N
     r._pumpXrayOcclusion();
-    assert.equal(s.plane.renderingGroupId, groupAfterFirst, 'no re-promotion on skipped sweep');
+    assert.equal(s.xrayGhost, ghostAfterFirst, 'no rebuild on skipped sweep');
     assert.equal(r._xrayOutlinedIds.has(1), true, 'membership unchanged');
   });
 
-  test('_disposeXray restores outlined meshes and clears tracking', () => {
+  test('owner change rebuilds the ghost with the new faction colour', () => {
+    const r = makeRenderer();
+    r._scene = makeScene(new Set([0]));
+    const s = makeStandee(0);
+    r._entityStandees = new Map([[1, s]]);
+    r.state = { entities: [{ id: 1, alive: true, color: '#ff0000', col: 0, row: 0 }] };
+    r._pumpXrayOcclusion();
+    const firstGhost = s.xrayGhost;
+    assert.equal(firstGhost.colorKey, '#ff0000');
+
+    // Same unit, new owner colour, re-occluded after an orbit.
+    r.state.entities[0].color = '#00ff00';
+    r._camera.alpha += 0.5;
+    r._xrayFrame = XRAY_SWEEP_EVERY_N - 1;
+    // Force a fresh sweep that re-adds id 1: drop it from the set first.
+    r._setXrayGhostEnabled(s, false);
+    r._xrayOutlinedIds.delete(1);
+    r._pumpXrayOcclusion();
+    assert.notEqual(s.xrayGhost, firstGhost, 'ghost rebuilt on colour change');
+    assert.equal(s.xrayGhost.colorKey, '#00ff00');
+    assert.equal(firstGhost.material.disposed, true, 'old ghost material disposed');
+  });
+
+  test('_clearXrayGhostFor disposes meshes + material and drops tracking', () => {
     const r = makeRenderer();
     r._scene = makeScene(new Set([0]));
     const s = makeStandee(0);
     r._entityStandees = new Map([[1, s]]);
     r.state = { entities: [{ id: 1, alive: true, owner: 'hero', col: 0, row: 0 }] };
     r._pumpXrayOcclusion();
+    const ghost = s.xrayGhost;
+    assert.ok(ghost);
+
+    r._clearXrayGhostFor(1, s);
+    assert.equal(s.xrayGhost, null, 'ghost cleared off the standee');
+    for (const m of ghost.meshes) assert.equal(m.disposed, true, 'ghost meshes disposed');
+    assert.equal(ghost.material.disposed, true, 'ghost material disposed');
+    assert.equal(r._xrayOutlinedIds.has(1), false, 'dropped from tracking');
+  });
+
+  test('_disposeXray tears down every ghost and clears tracking', () => {
+    const r = makeRenderer();
+    r._scene = makeScene(new Set([0]));
+    const s = makeStandee(0);
+    r._entityStandees = new Map([[1, s]]);
+    r.state = { entities: [{ id: 1, alive: true, owner: 'hero', col: 0, row: 0 }] };
+    r._pumpXrayOcclusion();
+    const ghost = s.xrayGhost;
     assert.equal(r._xrayOutlinedIds.size, 1);
-    assert.ok(isOutlined(s.plane));
 
     r._disposeXray();
-    assert.equal(s.plane.renderOutline, false, 'outline off after dispose');
-    assert.equal(s.plane.renderingGroupId, 0, 'restored to world group after dispose');
+    assert.equal(s.xrayGhost, null, 'ghost disposed off the standee');
+    for (const m of ghost.meshes) assert.equal(m.disposed, true);
+    assert.equal(ghost.material.disposed, true);
     assert.equal(r._xrayOutlinedIds.size, 0);
   });
 });

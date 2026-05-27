@@ -511,15 +511,26 @@ export const STANDEE_SPHERE_DIAMETER      = 0.32;
 // the camera or a unit actually moved). Higher = cheaper, laggier; 4 keeps the
 // outline membership feeling instant at 60fps without picking every frame.
 export const XRAY_SWEEP_EVERY_N           = 4;
-// Rendering group occluded units are promoted to so their outline shows THROUGH
-// trees/buildings. Babylon clears the depth buffer between rendering groups, so
-// anything in a group > 0 draws on top of the world geometry (group 0) — group
-// 1 sits above the world but below the UI billboards (group 2) and attack
-// overlays (group 3). Combined with `mesh.renderOutline`, this gives a crisp
-// faction-coloured edge that reads through the obstacle (not a filled glow).
-export const XRAY_OUTLINE_GROUP           = 1;
-// Babylon outline width (inverted-hull thickness) for the see-through edge.
-export const XRAY_OUTLINE_WIDTH           = 0.06;
+// X-ray occluded units are drawn as a "ghost" — a flat faction-colour duplicate
+// of the unit's visible meshes (see `_buildXrayGhost`). The ghost lives in the
+// WORLD rendering group (0) alongside the real scene depth, with depthFunction
+// GREATER + no depth-write, so each ghost fragment rasterizes ONLY where it is
+// FARTHER than what's already in the depth buffer — i.e. exactly the part of the
+// unit hidden behind an occluder. Where the unit is unoccluded the ghost fails
+// the depth test and the normal textured unit shows through instead. This is the
+// operator-mandated mechanism after both HighlightLayer (drew behind, read as a
+// filled glow) and renderOutline + group-promotion (exploded the skinned paladin
+// and dragged its textured body forward) were rejected.
+export const XRAY_GHOST_GROUP             = 0;
+// WebGL `GREATER` depth comparison (=== BABYLON.Constants.GREATER). A ghost
+// fragment passes only where its depth is GREATER (farther) than the stored
+// scene depth — i.e. behind the already-drawn occluder.
+export const XRAY_GHOST_DEPTH_FUNC        = 516;
+// Ghost alpha. Held just under 1 so Babylon routes the ghost into the
+// transparent sub-pass (drawn AFTER all opaque world geometry, so the occluders'
+// depth is guaranteed present when the GREATER test runs), while still reading
+// as a near-solid faction silhouette.
+export const XRAY_GHOST_ALPHA             = 0.92;
 // Y-offset for the base disc centre so it sits clear of the tile prism top
 // (which is at y=0.075). The cone/sphere are positioned relative to this disc.
 // Was 0.18 when the ground disc sat 0.105 clear of the tile prism top (0.075).
@@ -1598,13 +1609,13 @@ export class Renderer3D {
     // so the animation isn't snapped back to the state position every frame.
     this._activeMoveIds   = new Set();
     this._activeLungeIds  = new Set();
-    // X-ray occlusion outline (see `_pumpXrayOcclusion`). When an alive,
-    // fog-visible unit is hidden behind a tree/building from the current
-    // camera, its meshes are promoted to a higher rendering group (so they
-    // draw OVER the occluder — Babylon clears depth between groups) and given
-    // a faction-coloured `renderOutline` edge, so the unit reads THROUGH the
-    // obstacle as a crisp ring rather than being hidden behind it.
-    this._xrayOutlinedIds = new Set();  // entity ids currently outlined
+    // X-ray occlusion ghost (see `_pumpXrayOcclusion` + `_buildXrayGhost`). When
+    // an alive, fog-visible unit is hidden behind a tree/building from the
+    // current camera, a flat faction-colour duplicate of its meshes (the
+    // "ghost") is enabled. The ghost depth-tests with GREATER against the
+    // already-drawn scene, so it shows ONLY over the occluding object — the
+    // part of the unit hidden behind it — and vanishes where the unit is clear.
+    this._xrayOutlinedIds = new Set();  // entity ids whose ghost is currently enabled
     this._xrayColorCache  = new Map();  // owner-css-hex → BABYLON.Color3
     this._xrayRay         = null;       // reused BABYLON.Ray for the per-unit picks
     this._xrayFrame       = 0;          // frame counter driving the sweep throttle
@@ -4348,12 +4359,13 @@ export class Renderer3D {
     this._sunLight          = sunLight;
     this._shadowGenerator   = shadowGenerator;
 
-    // X-ray occlusion outline: handled per-mesh in `_pumpXrayOcclusion` via
-    // `mesh.renderOutline` + a rendering-group promotion (no HighlightLayer —
-    // that post-process respects depth, so it rendered the silhouette BEHIND
-    // the occluder and as a filled glow). The new path draws a faction edge
-    // that shows through. Stencil buffer (engine `stencil: true`) backs the
-    // built-in outline renderer's ring.
+    // X-ray occlusion: handled in `_pumpXrayOcclusion` via a flat faction-colour
+    // "ghost" duplicate of each occluded unit's meshes (see `_buildXrayGhost`),
+    // depth-tested with GREATER so the ghost shows ONLY over the occluding
+    // object. Two prior mechanisms were rejected: HighlightLayer (a depth-
+    // respecting post-process → drew BEHIND the occluder, read as a filled glow)
+    // and renderOutline + rendering-group promotion (exploded the skinned
+    // paladin into stray triangles and dragged its textured body forward).
 
     // Per-unit hex outlines are built lazily by `_syncEntityHexOutlines`
     // (one thin + one thick mesh per alive entity). The old golden singleton
@@ -6926,9 +6938,11 @@ export class Renderer3D {
         // because the animation group lives in scene.animationGroups, not
         // mesh.children. Dispose them first so the per-frame bone update
         // stops before the cone is gone.
-        // Drop any x-ray outline BEFORE disposing the meshes — removeMesh on
-        // a disposed mesh would throw.
-        this._clearXrayOutlineFor(id, standee);
+        // Dispose any x-ray ghost (meshes + cloned material) BEFORE disposing
+        // the standee meshes — the ghost is parented under the cone/cloneRoot,
+        // so the cone's dispose() would cascade-dispose the ghost meshes out
+        // from under us; tear it down explicitly + clear tracking first.
+        this._clearXrayGhostFor(id, standee);
         this._disposePaladinClone(standee);
         standee.plane.dispose();
         this._entityStandees.delete(id);
@@ -9253,9 +9267,10 @@ export class Renderer3D {
     return c;
   }
 
-  /** The meshes that carry a standee's visible silhouette: the paladin clone's
-   *  child meshes when it's loaded (the cone+sphere are hidden at visibility 0
-   *  in that case), otherwise the cone (`plane`) + sphere head. */
+  /** The meshes that carry a standee's visible silhouette — cloned by
+   *  `_buildXrayGhost` to build the ghost: the paladin clone's child meshes when
+   *  it's loaded (the cone+sphere are hidden at visibility 0 in that case),
+   *  otherwise the cone (`plane`) + sphere head. */
   _xrayMeshesForStandee(standee) {
     if (!standee) return [];
     const clone = standee.paladinClone;
@@ -9268,50 +9283,155 @@ export class Renderer3D {
     return out;
   }
 
-  /** Turn ON the see-through outline for a standee's meshes: promote them to
-   *  `XRAY_OUTLINE_GROUP` (renders over the world geometry since Babylon clears
-   *  depth between rendering groups) and enable Babylon's built-in
-   *  `renderOutline` ring in the faction colour. `renderingGroupId`/
-   *  `renderOutline`/`outlineColor`/`outlineWidth` are per-MESH properties — no
-   *  shared material is mutated. The pre-promotion group is stashed on the mesh
-   *  so `_removeXrayOutlineForStandee` can restore it exactly. */
-  _addXrayOutlineForStandee(standee, color) {
+  /** Lazily build (and cache on the standee as `standee.xrayGhost`) the x-ray
+   *  ghost: a flat faction-colour duplicate of the unit's visible meshes that,
+   *  via the GREATER depth test, rasterizes ONLY over an occluding object.
+   *
+   *  The build is the landmine for skinned paladins, so the proven-safe path
+   *  (matching the live paladin clone + punch machinery) is used:
+   *   • Paladin (skinned): clone each child mesh of the live `paladinClone` and
+   *     SHARE the source skeleton (never clone the skeleton — that caused the
+   *     historical T-pose / giant-head bugs). `mesh.clone` keeps the source's
+   *     parent (the per-standee cloneRoot), so position / orientation / scale
+   *     track for free; the shared skeleton makes pose + animation track for
+   *     free — no per-frame transform copy.
+   *   • Cone/sphere: clone the cone (`plane`) + sphere head. The cone is moved
+   *     directly via `plane.position`, so its clone (parentless) is re-parented
+   *     under the live cone at identity to track; the sphere is already a child
+   *     of the cone, so its clone tracks for free.
+   *
+   *  The ghost material is CLONED per ghost (never a shared material mutated):
+   *  unlit, emissive faction colour, no texture, alpha just under 1 (→ rendered
+   *  in the transparent sub-pass, after all opaque world geometry), in the WORLD
+   *  rendering group with `depthFunction = GREATER` and `disableDepthWrite`. */
+  _buildXrayGhost(standee, entity) {
+    if (!standee) return null;
+    if (standee.xrayGhost) return standee.xrayGhost;
+    const BABYLON = this._babylon;
+    if (!BABYLON) return null;
+    const srcMeshes = this._xrayMeshesForStandee(standee);
+    if (!srcMeshes.length) return null;
+
+    const id = entity?.id ?? 'x';
+    const colorKey = factionOutlineColor(entity);
+    const color = this._xrayColorFor(entity);
+
+    // One cloned material for this ghost's meshes (per-ghost, never shared).
+    let mat = null;
+    if (typeof BABYLON.StandardMaterial === 'function') {
+      mat = new BABYLON.StandardMaterial(`xrayGhost_${id}`, this._scene || null);
+      mat.disableLighting = true;
+      if (color) mat.emissiveColor = color;
+      if (BABYLON.Color3) {
+        mat.diffuseColor  = new BABYLON.Color3(0, 0, 0);
+        mat.specularColor = new BABYLON.Color3(0, 0, 0);
+      }
+      // Cull back faces — LOAD-BEARING for the GREATER depth test. The ghost is
+      // the same geometry as the live unit, so its front faces are at exactly
+      // the unit's depth (GREATER fails → ghost hidden where the unit is
+      // visible). But its BACK faces sit FARTHER than the unit's front face, so
+      // if drawn they pass GREATER and bleed the ghost over the visible body.
+      // Front-faces-only kills that leak — verified in headless SwiftShader.
+      mat.backFaceCulling = true;
+      mat.fogEnabled = false;
+      mat.alpha = XRAY_GHOST_ALPHA;
+      mat.disableDepthWrite = true;
+      mat.depthFunction = (BABYLON.Constants && BABYLON.Constants.GREATER) || XRAY_GHOST_DEPTH_FUNC;
+    }
+
+    const usesPaladin = !!(standee.paladinClone
+      && Array.isArray(standee.paladinClone.childMeshes)
+      && standee.paladinClone.childMeshes.length);
+    const sharedSkeleton = usesPaladin
+      ? (this._paladinSource?.skeleton || standee.paladinClone.skinnedMesh?.skeleton || null)
+      : null;
+
+    const meshes = [];
+    for (const src of srcMeshes) {
+      if (!src || typeof src.clone !== 'function') continue;
+      // doNotCloneChildren=true: the cone owns the sphere as a child, so a deep
+      // clone would duplicate the sphere (which we clone separately). Paladin
+      // child clones are flat siblings, so the flag is a harmless no-op there.
+      const ghost = src.clone(`xrayGhost_${id}_${src.name || 'm'}`, undefined, true);
+      if (!ghost) continue;
+      meshes.push(ghost);
+      if (mat) ghost.material = mat;
+      ghost.isPickable = false;
+      if ('renderingGroupId' in ghost) ghost.renderingGroupId = XRAY_GHOST_GROUP;
+      // Skinning can push verts past the cached bbox — defeat bbox culling so
+      // the ghost silhouette never drops a limb (same fix as the live clone).
+      ghost.alwaysSelectAsActiveMesh = true;
+      if (usesPaladin) {
+        if (sharedSkeleton) ghost.skeleton = sharedSkeleton;
+        // clone() kept src's parent (cloneRoot) → transform tracks for free.
+      } else if (src === standee.plane) {
+        // Re-parent the cone clone under the live cone at identity so it tracks
+        // the cone's per-frame position.
+        if ('parent' in ghost) ghost.parent = standee.plane;
+        if (BABYLON.Vector3) {
+          ghost.position = BABYLON.Vector3.Zero();
+          ghost.rotation = BABYLON.Vector3.Zero();
+          ghost.scaling  = new BABYLON.Vector3(1, 1, 1);
+        }
+      }
+      // The cone clone is visible by default; the live cone may be at
+      // visibility 0 (paladin path), but the paladin path doesn't clone the
+      // cone. Start disabled — the pump enables on occlusion.
+      if (typeof ghost.setEnabled === 'function') ghost.setEnabled(false);
+    }
+
+    if (!meshes.length) {
+      if (mat && typeof mat.dispose === 'function') { try { mat.dispose(); } catch { /* gone */ } }
+      return null;
+    }
+
+    standee.xrayGhost = { meshes, material: mat, colorKey };
+    return standee.xrayGhost;
+  }
+
+  /** Enable a standee's x-ray ghost, building it lazily the first time the unit
+   *  becomes occluded. Recolours by rebuilding if the cached colour is stale
+   *  (owner change — rare). */
+  _enableXrayGhostFor(standee, entity) {
     if (!standee) return;
-    for (const m of this._xrayMeshesForStandee(standee)) {
-      if (!m || m._xrayOn) continue;
-      try {
-        m._xrayPrevGroup = (m.renderingGroupId | 0);
-        m.renderingGroupId = XRAY_OUTLINE_GROUP;
-        m.renderOutline = true;
-        if (color) m.outlineColor = color;
-        m.outlineWidth = XRAY_OUTLINE_WIDTH;
-        m._xrayOn = true;
-      } catch { /* mesh gone — skip */ }
+    if (standee.xrayGhost && standee.xrayGhost.colorKey !== factionOutlineColor(entity)) {
+      this._disposeXrayGhost(standee);
+    }
+    const ghost = standee.xrayGhost || this._buildXrayGhost(standee, entity);
+    if (!ghost) return;
+    for (const m of ghost.meshes) {
+      if (m && typeof m.setEnabled === 'function') m.setEnabled(true);
     }
   }
 
-  /** Turn OFF the see-through outline: disable `renderOutline` and drop the
-   *  mesh back to its original rendering group. */
-  _removeXrayOutlineForStandee(standee) {
-    if (!standee) return;
-    for (const m of this._xrayMeshesForStandee(standee)) {
-      if (!m || !m._xrayOn) continue;
-      try {
-        m.renderOutline = false;
-        m.renderingGroupId = (m._xrayPrevGroup | 0);
-        m._xrayOn = false;
-      } catch { /* mesh gone — skip */ }
+  /** Toggle a standee's ghost meshes on/off (no build, no dispose). */
+  _setXrayGhostEnabled(standee, on) {
+    const ghost = standee?.xrayGhost;
+    if (!ghost) return;
+    for (const m of ghost.meshes) {
+      if (m && typeof m.setEnabled === 'function') m.setEnabled(!!on);
     }
   }
 
-  /** Drop a single entity from the x-ray layer + tracking set. Called from the
-   *  standee-dispose loop BEFORE the mesh is disposed (removeMesh on a disposed
-   *  mesh would throw) and whenever a unit stops being occluded. */
-  _clearXrayOutlineFor(id, standee) {
-    if (this._xrayOutlinedIds.has(id)) {
-      this._removeXrayOutlineForStandee(standee || this._entityStandees.get(id));
-      this._xrayOutlinedIds.delete(id);
+  /** Dispose a standee's ghost meshes + cloned material and drop the cache. */
+  _disposeXrayGhost(standee) {
+    const ghost = standee?.xrayGhost;
+    if (!ghost) return;
+    for (const m of ghost.meshes || []) {
+      try { if (m && typeof m.dispose === 'function') m.dispose(); } catch { /* gone */ }
     }
+    try { if (ghost.material && typeof ghost.material.dispose === 'function') ghost.material.dispose(); }
+    catch { /* gone */ }
+    standee.xrayGhost = null;
+  }
+
+  /** Drop a single entity from the x-ray tracking set AND dispose its ghost.
+   *  Called from the standee-dispose loop BEFORE the cone is disposed (the cone
+   *  owns the ghost meshes as children, so its dispose() would cascade them out
+   *  from under us). */
+  _clearXrayGhostFor(id, standee) {
+    this._disposeXrayGhost(standee || this._entityStandees?.get(id));
+    this._xrayOutlinedIds.delete(id);
   }
 
   /** Per-frame x-ray occlusion sweep (throttled). For each alive, fog-visible
@@ -9356,7 +9476,7 @@ export class Renderer3D {
     for (const [id, standee] of this._entityStandees) {
       const plane = standee?.plane;
       if (!plane || !plane.position) continue;
-      // NEVER outline a fog-hidden unit (the standee is setEnabled(false)).
+      // NEVER ghost a fog-hidden unit (the standee is setEnabled(false)).
       if (plane.isEnabled?.() === false) continue;
       const p = plane.position;
       // Torso anchor: the cone centre (plane.position.y is already mid-cone)
@@ -9375,11 +9495,11 @@ export class Renderer3D {
       }
     }
 
-    // Membership diff — only touch the layer for ids that changed state.
+    // Membership diff — only enable/disable ghosts for ids that changed state.
     const prev = this._xrayOutlinedIds;
     const { added, removed } = diffOccludedSets(prev, next);
     for (const id of removed) {
-      this._removeXrayOutlineForStandee(this._entityStandees.get(id));
+      this._setXrayGhostEnabled(this._entityStandees.get(id), false);
       prev.delete(id);
     }
     if (added.length) {
@@ -9388,18 +9508,20 @@ export class Renderer3D {
       for (const id of added) {
         const standee = this._entityStandees.get(id);
         if (!standee) continue;
-        this._addXrayOutlineForStandee(standee, this._xrayColorFor(byId.get(id)));
+        this._enableXrayGhostFor(standee, byId.get(id));
         prev.add(id);
       }
     }
   }
 
-  /** Tear down x-ray outline state: restore every still-outlined standee to its
-   *  original rendering group (outline off) and clear tracking. Safe to call
-   *  when nothing was ever outlined (e.g. node-test with no Babylon scene). */
+  /** Tear down all x-ray ghost state: dispose every standee's ghost (meshes +
+   *  cloned material) and clear tracking. Safe to call when nothing was ever
+   *  ghosted (e.g. node-test with no Babylon scene). */
   _disposeXray() {
-    for (const id of this._xrayOutlinedIds) {
-      this._removeXrayOutlineForStandee(this._entityStandees?.get(id));
+    if (this._entityStandees) {
+      for (const standee of this._entityStandees.values()) {
+        this._disposeXrayGhost(standee);
+      }
     }
     this._xrayOutlinedIds.clear();
     this._xrayColorCache.clear();
