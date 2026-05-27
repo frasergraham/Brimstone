@@ -1591,6 +1591,8 @@ export class Renderer3D {
     this._lastPhase  = null;
     this._phaseTransition = null;       // { from, to, startMs, durMs } or null
     this._onBeforeRenderObs = null;     // observer handle so we can dispose it
+    this._riverFlowTextures = [];       // per-tile river diffuse textures to scroll
+    this._riverExtensionMat = null;     // shared border river-extension material
     // FPS counter throttle state — see _pumpFpsCounter / FPS_COUNTER_UPDATE_MS.
     this._fpsCounterEl       = null;
     this._polyCounterEl      = null;
@@ -5227,6 +5229,12 @@ export class Renderer3D {
     if (this._babylon?.Material) {
       extMat.transparencyMode = this._babylon.Material.MATERIAL_ALPHABLEND;
     }
+    // Hold the (river-only, freshly-built) extension material so `_pumpRiverFlow`
+    // can scroll its diffuse texture's uOffset in lockstep with the in-map
+    // river — one shared extMat backs every exit ribbon, so the whole
+    // wilderness river flows downstream too. Reassigned each rebuild; the old
+    // material is disposed with its meshes via `_borderPropsByKey` teardown.
+    this._riverExtensionMat = extMat;
     // Playable-map extent — used to map each ribbon sample to its border ring
     // so the river fades in lockstep with the ground + trees on that ring.
     const ringExt = tilesExtent(this.state.tiles);
@@ -5868,6 +5876,9 @@ export class Renderer3D {
     const baseMat  = this._buildRibbonMaterial(networkName, cssColor);
     const baseDiff = baseMat.diffuseColor.clone();
     const baseEmis = baseMat.emissiveColor.clone();
+    // Reset the river-flow texture registry on each river rebuild so
+    // `_pumpRiverFlow` only scrolls live (non-disposed) per-tile clones.
+    if (networkName === 'river') this._riverFlowTextures = [];
     let primary = null;
     for (const [tkey, list] of ribbonsByTileKey) {
       const merged = BABYLON.Mesh.MergeMeshes(list, true, true, undefined, false, false);
@@ -5887,6 +5898,12 @@ export class Renderer3D {
       mat.diffuseColor  = baseDiff.clone();
       mat.emissiveColor = baseEmis.clone();
       merged.material        = mat;
+      // Register this tile clone's diffuse texture for per-frame flow scroll.
+      // (Babylon's StandardMaterial.clone() deep-clones textures, so each tile
+      // has its own — all must advance together for one continuous current.)
+      if (networkName === 'river' && mat.diffuseTexture) {
+        this._riverFlowTextures.push(mat.diffuseTexture);
+      }
       merged.hasVertexAlpha  = true;
       // Force road > river in the transparency sort so the road ribbon paints
       // OVER the water at every river / road crossing (bridge planks are
@@ -9724,6 +9741,35 @@ export class Renderer3D {
    *  the selection halo + node-glow pulses. Cheap — runs every render frame
    *  regardless of whether draw() was called, so the pulses keep cycling
    *  even when game state is idle. */
+  /** Slide the river ribbon texture downstream so the water reads as flowing.
+   *  Advances `uOffset` (the U axis runs ALONG the centreline — see
+   *  `_buildNetworkMesh` UV recipe) on both the playable-map river material
+   *  and the border river-extension material. Pure, time-derived offset from
+   *  `riverFlowOffset` keeps it frame-rate independent. Only mutates the
+   *  river's own materials (each `_buildRibbonMaterial('river', …)` call
+   *  returns a fresh StandardMaterial), so nothing leaks onto road ribbons or
+   *  tile cylinders. The per-vertex edge-fade alpha and pinned
+   *  `RIVER_ALPHA_INDEX` are untouched — only the texture sampling offset
+   *  moves. No-op until the async texture load resolves (no diffuseTexture). */
+  _pumpRiverFlow(now) {
+    const off = riverFlowOffset(now);
+    // The playable river is built as one merged mesh PER TILE, each carrying
+    // its own `baseMat.clone()` (per-tile fog darkening) — so there is no
+    // single river material to scroll. `_riverFlowTextures` collects every
+    // per-tile clone's diffuse texture at build time; advance them all in
+    // lockstep so the whole river flows as one continuous current.
+    const list = this._riverFlowTextures;
+    if (list) {
+      for (let i = 0; i < list.length; i++) {
+        const tex = list[i];
+        if (tex) tex.uOffset = off;
+      }
+    }
+    // Border river-extension ribbons share one material across all exits.
+    const extTex = this._riverExtensionMat?.diffuseTexture;
+    if (extTex) extTex.uOffset = off;
+  }
+
   _onBeforeRender() {
     const now = this._nowMs();
     // Lock the camera target to the ground plane (Y=0). Babylon's
@@ -9810,6 +9856,8 @@ export class Renderer3D {
     // (task 7). Colour is set by `_buildObjectiveRings` (the ring-pulse
     // consumer in `_syncOverlays`) whenever the controller changes; no
     // per-frame mutation needed.
+    // River flow — scroll the river ribbon texture's uOffset downstream.
+    this._pumpRiverFlow(now);
     // Plan ghost walking previewer.
     this._pumpPlanGhosts(now);
     // X-ray occlusion outline — silhouette units hidden behind trees/buildings.
@@ -11040,6 +11088,25 @@ export const ROAD_RIBBON_Y      = 0.025;
  *  the alpha sort. */
 export const RIVER_ALPHA_INDEX = 100;
 export const ROAD_ALPHA_INDEX  = 200;
+/** River-flow scroll speed, in texture-tile widths advanced per second. The
+ *  river ribbon's diffuse texture (`river-ribbon.png`) wraps along U (the
+ *  flow axis — `_buildNetworkMesh`/`_buildRiverExtensions` write U =
+ *  cumulative centreline length, V across the ribbon width, and the material
+ *  sets `wrapU = 1` WRAP). Advancing `uOffset` each frame slides the tiled
+ *  texture downstream so the water reads as flowing. Kept deliberately slow
+ *  and subtle; operator-tunable. One full tile period scrolls every
+ *  `1 / RIVER_FLOW_SPEED` seconds. */
+export const RIVER_FLOW_SPEED = 0.06;
+/** Pure helper: river-flow texture `uOffset` for a given elapsed time.
+ *  Returns the scroll offset wrapped into [0, 1) so the float never grows
+ *  unbounded over a long session (precision loss → visible jitter); the
+ *  WRAP address mode makes the [0,1) wrap seamless. Deterministic and
+ *  frame-rate independent — derived from absolute elapsed time, not a
+ *  per-frame delta, so a dropped frame can't make the water stutter. */
+export function riverFlowOffset(elapsedMs, speed = RIVER_FLOW_SPEED) {
+  const tiles = (elapsedMs / 1000) * speed;
+  return tiles - Math.floor(tiles);
+}
 /** Stable `alphaIndex` values for the FADED (alpha < 1) border-forest band
  *  meshes — the dissolving outer rings of ground discs and foliage. Without an
  *  explicit index every faded band mesh sits at Babylon's default
