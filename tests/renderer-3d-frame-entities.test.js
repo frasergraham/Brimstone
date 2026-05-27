@@ -12,6 +12,8 @@ import {
   framingForEntities,
   radiusForFit,
   ENTITY_FRAME_PADDING,
+  alphaForAxis,
+  combatCardFrameExtent,
 } from '../src/renderer-3d.js';
 
 const VIEW = { aspect: 16 / 9, fov: 0.8, margin: 1.05, padding: 0 };
@@ -105,5 +107,84 @@ describe('ENTITY_FRAME_PADDING', () => {
   test('is a small positive world-unit slack (~1 hex)', () => {
     assert.ok(ENTITY_FRAME_PADDING > 0);
     assert.ok(ENTITY_FRAME_PADDING <= 3);
+  });
+});
+
+describe('framingForEntities — cardExtent (combat card-aware loosening)', () => {
+  test('extends the depth span, pushing the radius out', () => {
+    // A single point has zero footprint, so any card extent is the dominant
+    // span and must drive the radius up off the (zero) fit.
+    const positions = [{ x: 0, z: 0 }];
+    const base   = framingForEntities(positions, { ...VIEW, padding: 0 }, 0);
+    const carded = framingForEntities(positions, { ...VIEW, padding: 0, cardExtent: 3 }, 0);
+    assert.ok(carded.radius > base.radius, 'card extent loosens the radius');
+  });
+
+  test('matches an equivalent manual depth increase', () => {
+    // cardExtent C is added to the depth span; a width-dominant cluster whose
+    // depth+C exceeds its width should fit exactly that depth.
+    const positions = [{ x: 0, z: -1 }, { x: 0, z: 1 }]; // depth span 2
+    const C = 4;
+    const f = framingForEntities(positions, { ...VIEW, padding: 0, cardExtent: C }, 0);
+    const expected = radiusForFit(0, 2 + C, VIEW.aspect, VIEW.fov, VIEW.margin);
+    assert.ok(Math.abs(f.radius - expected) < 1e-9);
+  });
+
+  test('zero / missing cardExtent is a no-op', () => {
+    const positions = [{ x: -3, z: 0 }, { x: 3, z: 0 }];
+    const a = framingForEntities(positions, { ...VIEW }, 0);
+    const b = framingForEntities(positions, { ...VIEW, cardExtent: 0 }, 0);
+    assert.equal(a.radius, b.radius);
+  });
+
+  test('does not move the centre (symmetric loosening)', () => {
+    const positions = [{ x: 1, z: 5 }, { x: 7, z: 11 }];
+    const f = framingForEntities(positions, { ...VIEW, cardExtent: 3 }, 0);
+    assert.equal(f.centerX, 4);
+    assert.equal(f.centerZ, 8);
+  });
+});
+
+describe('combatCardFrameExtent', () => {
+  test('is a positive world height (head + gap + card)', () => {
+    assert.ok(combatCardFrameExtent(true)  > 0);
+    assert.ok(combatCardFrameExtent(false) > 0);
+  });
+  test('leader geometry reaches at least as high as a pawn', () => {
+    assert.ok(combatCardFrameExtent(true) >= combatCardFrameExtent(false));
+  });
+});
+
+describe('alphaForAxis — orient a world-XZ axis horizontal on screen', () => {
+  // For an ArcRotateCamera the horizontal view direction (target→camera, in the
+  // XZ plane) is ∝ (cos α, sin α). The axis reads HORIZONTAL on screen exactly
+  // when it is PERPENDICULAR to that view direction.
+  const perpDot = (dx, dz, alpha) => dx * Math.cos(alpha) + dz * Math.sin(alpha);
+
+  test('returns null for a degenerate (zero-length) axis', () => {
+    assert.equal(alphaForAxis(0, 0), null);
+  });
+
+  test('returns null for non-finite components', () => {
+    assert.equal(alphaForAxis(NaN, 1), null);
+    assert.equal(alphaForAxis(1, Infinity), null);
+  });
+
+  test('axis is perpendicular to the camera view direction', () => {
+    for (const [dx, dz] of [[1, 0], [0, 1], [1, 1], [-3, 2], [5, -7], [-4, -9]]) {
+      const alpha = alphaForAxis(dx, dz);
+      assert.ok(Math.abs(perpDot(dx, dz, alpha)) < 1e-9,
+        `axis (${dx},${dz}) should be perpendicular to view dir at alpha=${alpha}`);
+    }
+  });
+
+  test('a reversed axis yields the opposite-facing alpha (π apart)', () => {
+    const a = alphaForAxis(3, 4);
+    const b = alphaForAxis(-3, -4);
+    // Normalize the delta to (−π, π]; a reversal should leave them ±π apart.
+    let d = (a - b) % (2 * Math.PI);
+    if (d <= -Math.PI) d += 2 * Math.PI;
+    if (d > Math.PI) d -= 2 * Math.PI;
+    assert.ok(Math.abs(Math.abs(d) - Math.PI) < 1e-9, 'reversed axis flips alpha by π');
   });
 });

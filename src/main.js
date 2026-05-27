@@ -1259,6 +1259,10 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     // every same-cluster battle. The 2D path is unchanged — gated on `is3D`.
     const _cinematic = !_autoplay && (ui?.speedMode ?? 'cinematic') === 'cinematic';
     const _is3DCinematic = !!(renderer?.is3D) && _cinematic;
+    // Default OFF for the move phase so move bump-back lunges keep their
+    // built-in framing; flipped ON just before the battle phases below (where
+    // main.js owns the rotated, card-aware, AWAITED cluster frame).
+    if (renderer) renderer._suppressLungeFraming = false;
     // Same visibility predicate Phase 2 applies per battle (lines below) — so we
     // only cluster battles that will actually be presented to this viewer.
     const _battleShown = (ev) => {
@@ -1541,6 +1545,12 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     }
 
     // ── Phase 2: battles and summons ──────────────────────────────────────────
+    // From here on (battles + guard strikes) the 3D cinematic arm frames the
+    // combat cluster itself — rotated so the axis reads left-to-right, zoomed to
+    // a card-aware radius, and AWAITED before the lunge — so suppress the
+    // lunge's own midpoint reframe. Fast/vfast/autoplay keep their built-in
+    // lean-in (flag stays false).
+    if (renderer) renderer._suppressLungeFraming = _is3DCinematic;
     let hadBattle = false;
     for (const ev of events) {
       const { action, result, battleSnaps } = ev;
@@ -1579,6 +1589,26 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             const lungeFromRow = actorDisplay?.row  ?? actorSnap.row;
             const lungeToCol   = targetDisplay?.col ?? targetSnap.col;
             const lungeToRow   = targetDisplay?.row ?? targetSnap.row;
+
+            // ── Step 0 (3D): FRAME first, AWAIT camera arrival, THEN lunge ─────
+            // The camera rotates the attacker→target axis to read left-to-right,
+            // zooms to a card-aware radius, and pans to the cluster centroid —
+            // all BEFORE the strike, so the attack never starts mid-pan. Only
+            // re-frame on a NEW cluster; the non-restoring frame persists across
+            // same-cluster battles, so we await it only on the change.
+            if (speed === 'cinematic' && _stepHas3DCombat && _eventFrameIndex) {
+              const fi = _eventFrameIndex.get(ev);
+              if (fi != null && fi !== _heldFrameIndex) {
+                const cl = _combatFrames[fi];
+                await renderer.frameCombatants(cl.ids[0], cl.ids[1], {
+                  extraIds: cl.ids.slice(2),
+                  padding: 1.15,
+                });
+                _heldFrameIndex = fi;
+              }
+              _heldCombatFrame3D = true;
+            }
+
             _playAttackIntroAnim(
               actorSnap, targetSnap,
               lungeFromCol, lungeFromRow,
@@ -1608,19 +1638,11 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             // ── Step 3: Card-hold (3D) / Dialog (2D cinematic) or toast (fast) ─
             if (speed === 'cinematic') {
               if (_stepHas3DCombat && _eventFrameIndex) {
-                // 3D (Phase 1): frame this battle's CLUSTER and HOLD. Only
-                // re-issue the camera move when crossing into a new cluster;
-                // same-cluster battles issue no camera op, so the non-restoring
-                // `frameEntities` frame persists across the chain.
-                const fi = _eventFrameIndex.get(ev);
-                if (fi != null && fi !== _heldFrameIndex) {
-                  renderer.frameEntities(_combatFrames[fi].ids, { padding: 1.15 });
-                  _heldFrameIndex = fi;
-                }
-                _heldCombatFrame3D = true;
-                // G4 Phase 3: NO modal in 3D. Freeze the strike mid-swing, read
-                // the dice cards above both heads, resume the strike, then play
-                // the result floaters — all via the animation queue.
+                // 3D: the cluster frame was issued + AWAITED before the lunge
+                // (Step 0 above) and HOLDS across same-cluster battles. Here we
+                // just run the presentation: NO modal — freeze the strike
+                // mid-swing, read the dice cards above both heads, resume the
+                // strike, then play the result floaters, all via the anim queue.
                 await _run3DCombatCardHold(actorSnap, targetSnap, result, redrawFn);
               } else {
                 // 2D: per-battle frameHexes with right-dock inset (unchanged).
@@ -1850,6 +1872,18 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         const lungeFromRow = guardDisplay?.row  ?? actorSnap.row;
         const lungeToCol   = targetDisplay?.col ?? targetSnap.col;
         const lungeToRow   = targetDisplay?.row ?? targetSnap.row;
+
+        // 3D cinematic: FRAME + AWAIT before the lunge (same as the regular
+        // battle arm). Only when this step had no clustered battles to frame —
+        // otherwise the held cluster frame already covers these hexes (guard
+        // strikes fire at the same positions). Stand-alone guard strikes orient
+        // their own attacker→target axis.
+        if (speed === 'cinematic' && _is3DCinematic
+            && !_stepHas3DCombat && !_heldCombatFrame3D) {
+          await renderer.frameCombatants(actorSnap.id, targetSnap.id, { padding: 1.15 });
+          _heldCombatFrame3D = true;
+        }
+
         _playAttackIntroAnim(
           actorSnap, targetSnap,
           lungeFromCol, lungeFromRow,
@@ -1868,17 +1902,11 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 
         if (speed === 'cinematic') {
           if (_is3DCinematic) {
-            // 3D (Phase 1): hold the held cluster frame when this step already
-            // presented battles (guard strikes fire at those same hexes, so the
-            // cluster frame covers them). If the guard strike stands alone (no
-            // ACTION_OK battles this step), frame its participants once via the
-            // non-restoring primitive and hold. Either way no 2D inset docking.
-            if (!_stepHas3DCombat && !_heldCombatFrame3D) {
-              renderer.frameEntities([actorSnap.id, targetSnap.id], { padding: 1.15 });
-            }
+            // 3D: the frame (held cluster frame, or the stand-alone frame issued
+            // + AWAITED before the lunge above) is already in place. No 2D inset
+            // docking. G4 Phase 3: NO modal — frozen strike + dice cards +
+            // resume + floaters, same as the regular battle arm.
             _heldCombatFrame3D = true;
-            // G4 Phase 3: NO modal in 3D — frozen strike + dice cards + resume +
-            // floaters, same as the regular battle arm.
             await _run3DCombatCardHold(actorSnap, targetSnap, result, redrawFn);
           } else {
             // 2D: reuse the same frame-key tracking from Phase 2 so guard strikes

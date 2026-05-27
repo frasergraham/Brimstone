@@ -1338,15 +1338,62 @@ export function framingForEntities(positions, viewport = {}, maxZoomRadius = 0) 
   const fov     = Number.isFinite(viewport.fov)     ? viewport.fov     : 0.8;
   const margin  = Number.isFinite(viewport.margin)  ? viewport.margin  : 1.05;
   const padding = Number.isFinite(viewport.padding) ? viewport.padding : 0;
+  // Card-aware extension: combat dice cards float ABOVE the standee heads, so
+  // fitting only the unit footprint pushes the cards off the top of the screen
+  // at the tight combat zoom. `cardExtent` is the world height the card top
+  // reaches above the unit; at the locked 45° isometric tilt a vertical offset
+  // of `h` projects to the same screen position as a ground point ~`h` units
+  // further back (tan(45°) = 1), so we add it to the depth (screen-vertical)
+  // span. This loosens the radius just enough that the card sits in frame
+  // while the combatants still fill a good portion. Default 0 → non-combat
+  // callers (selection, dialog) are unaffected.
+  const cardExtent = Number.isFinite(viewport.cardExtent) ? Math.max(0, viewport.cardExtent) : 0;
 
   const centerX  = (minX + maxX) / 2;
   const centerZ  = (minZ + maxZ) / 2;
   const fitWidth = (maxX - minX) + 2 * padding;
-  const fitDepth = (maxZ - minZ) + 2 * padding;
+  const fitDepth = (maxZ - minZ) + 2 * padding + cardExtent;
 
   const fitRadius = radiusForFit(fitWidth, fitDepth, aspect, fov, margin);
   const radius    = Math.max(maxZoomRadius || 0, fitRadius);
   return { centerX, centerZ, radius };
+}
+
+/**
+ * Camera azimuth (`alpha`) that orients a world-XZ axis HORIZONTALLY across the
+ * screen at the locked isometric tilt — used to frame two combatants side by
+ * side (attacker-left / target-right) rather than one behind the other.
+ *
+ * For an `ArcRotateCamera`, the camera sits at
+ *   pos.xz − target.xz = radius·sin(beta)·(cos α, sin α),
+ * so the horizontal view direction (target→camera) is ∝ (cos α, sin α) and the
+ * on-screen RIGHT vector is its in-plane perpendicular. The axis (dx, dz) reads
+ * horizontal exactly when it is perpendicular to the view direction:
+ *   dx·cos α + dz·sin α = 0  ⟹  α = atan2(−dx, dz).
+ *
+ * Of the two perpendicular solutions (α and α+π) this branch is the one that
+ * places the axis tail (attacker) on screen-left and its head (target) on
+ * screen-right — verified against Babylon's frame in headless. Returns a finite
+ * alpha in radians, or `null` for a degenerate (zero-length / non-finite) axis,
+ * so the caller can leave the current alpha untouched for a single-combatant
+ * frame.
+ *
+ * Pure — no Babylon/DOM — so the perpendicularity property is unit-testable.
+ */
+export function alphaForAxis(dx, dz) {
+  if (!Number.isFinite(dx) || !Number.isFinite(dz)) return null;
+  if (dx === 0 && dz === 0) return null;
+  return Math.atan2(-dx, dz);
+}
+
+/** World height the combat dice-card TOP reaches above a standee's anchor —
+ *  the head top (cone+sphere stack, cone-relative) plus the gap above the head
+ *  plus the full card height. Feeds `framingForEntities`' `cardExtent` so the
+ *  combat frame loosens just enough to keep the floating card on screen. Uses
+ *  the leader (taller) geometry by default so leader cards never clip; pure and
+ *  exported for tests. */
+export function combatCardFrameExtent(leader = true) {
+  return headTopRelativeToCone(leader) + COMBAT_CARD_Y_GAP + COMBAT_CARD_PLANE_HEIGHT;
 }
 
 /** Minimum hex span we want visible at max zoom-in. 5 reads as a comfortable
@@ -8071,24 +8118,43 @@ export class Renderer3D {
    *  ease-in-out over FOCUS_ANIM_FRAMES (≈300ms at 60fps). Skips the
    *  animation if the shift is below FOCUS_EPSILON, or if `opts.instant`
    *  is set (used on first frame). */
+  /** Ease the camera target + radius (and optionally azimuth `alpha`) to a new
+   *  framing. Returns a Promise that RESOLVES when the ease completes (or
+   *  immediately on the instant / no-op paths) so callers can sequence work
+   *  AFTER the camera is in place — e.g. the combat arm awaits arrival before
+   *  starting the lunge so the attack never begins mid-pan. `opts.alpha` (when
+   *  finite) eases the azimuth alongside target+radius, choosing the nearest
+   *  wrap so the camera never spins the long way around; beta/tilt is left
+   *  untouched (locked at ~45°). */
   _focusCamera(newTarget, newRadius, opts = {}) {
     const BABYLON = this._babylon;
     const camera  = this._camera;
-    if (!BABYLON || !camera) return;
+    if (!BABYLON || !camera) return Promise.resolve();
+
+    const wantAlpha = Number.isFinite(opts.alpha);
+    // Nearest-wrap alpha delta so a ~180° reframe doesn't take the long arc.
+    const alphaDelta = wantAlpha
+      ? (((opts.alpha - camera.alpha + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI) - Math.PI
+      : 0;
+    const alphaTarget = camera.alpha + alphaDelta;
 
     if (opts.instant) {
       camera.target = newTarget;
       camera.radius = newRadius;
-      return;
+      if (wantAlpha) camera.alpha = alphaTarget;
+      return Promise.resolve();
     }
     // `forceAnimate` overrides the small-shift early-out — callers that drive
     // user-facing focus changes (e.g. unit selection) want the animation even
     // when the delta is tiny, so the player gets a clear visual confirmation.
+    const alphaShift = wantAlpha && Math.abs(alphaDelta) > FOCUS_EPSILON;
     if (!opts.forceAnimate
+        && !alphaShift
         && !shouldAnimateFocus(camera.target, camera.radius, newTarget, newRadius)) {
       camera.target = newTarget;
       camera.radius = newRadius;
-      return;
+      if (wantAlpha) camera.alpha = alphaTarget;
+      return Promise.resolve();
     }
 
     const ease = new BABYLON.CubicEase();
@@ -8116,8 +8182,28 @@ export class Renderer3D {
     ]);
     radiusAnim.setEasingFunction(ease);
 
+    const anims = [targetAnim, radiusAnim];
+
+    if (wantAlpha) {
+      const alphaAnim = new BABYLON.Animation(
+        'focusAlpha', 'alpha', 60,
+        BABYLON.Animation.ANIMATIONTYPE_FLOAT,
+        BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT,
+      );
+      alphaAnim.setKeys([
+        { frame: 0,                 value: camera.alpha },
+        { frame: FOCUS_ANIM_FRAMES, value: alphaTarget },
+      ]);
+      alphaAnim.setEasingFunction(ease);
+      anims.push(alphaAnim);
+    }
+
     this._scene.stopAnimation(camera);
-    this._scene.beginDirectAnimation(camera, [targetAnim, radiusAnim], 0, FOCUS_ANIM_FRAMES, false);
+    return new Promise((resolve) => {
+      this._scene.beginDirectAnimation(
+        camera, anims, 0, FOCUS_ANIM_FRAMES, false, 1, () => resolve(),
+      );
+    });
   }
 
   /** Resolve an entity id to its current world anchor `{ x, z }`. Prefers the
@@ -8164,13 +8250,22 @@ export class Renderer3D {
    *    - `maxZoomRadius` — override the tightest zoom (defaults to the camera's
    *      `lowerRadiusLimit`).
    *    - `padding` / `margin` — override the framing slack.
+   *    - `cardExtent` — extra world height to fit ABOVE the units (combat dice
+   *      cards float above the heads); loosens the radius so the card stays on
+   *      screen. See `framingForEntities`.
+   *    - `axisIds` — `[tailId, headId]` (attacker, target). When both resolve,
+   *      the camera azimuth is rotated so this world-XZ axis reads horizontal
+   *      (tail-left / head-right). Omit (or supply <2 resolvable ids) to leave
+   *      the current alpha untouched (single-combatant frame).
    *
-   *  Returns true when a frame was issued, false when no entity resolved to a
-   *  position (so the caller can fall back). */
+   *  Returns a Promise that resolves to `true` when the frame was issued (after
+   *  the camera ease completes) or `false` when no entity resolved to a
+   *  position (so the caller can fall back). Awaiting it lets callers sequence
+   *  work — e.g. the combat lunge — only AFTER the camera is in place. */
   frameEntities(entityIds, opts = {}) {
     const BABYLON = this._babylon;
     const camera  = this._camera;
-    if (!BABYLON || !camera) return false;
+    if (!BABYLON || !camera) return Promise.resolve(false);
 
     const ids = Array.isArray(entityIds) ? entityIds : [entityIds];
     const positions = [];
@@ -8178,7 +8273,7 @@ export class Renderer3D {
       const p = this._entityWorldPos(id);
       if (p) positions.push(p);
     }
-    if (positions.length === 0) return false;
+    if (positions.length === 0) return Promise.resolve(false);
 
     const aspect = this._engine
       ? this._engine.getRenderWidth() / Math.max(1, this._engine.getRenderHeight())
@@ -8190,19 +8285,47 @@ export class Renderer3D {
 
     const framing = framingForEntities(positions, {
       aspect, fov,
-      margin:  Number.isFinite(opts.margin)  ? opts.margin  : 1.05,
-      padding: Number.isFinite(opts.padding) ? opts.padding : ENTITY_FRAME_PADDING,
+      margin:     Number.isFinite(opts.margin)     ? opts.margin     : 1.05,
+      padding:    Number.isFinite(opts.padding)    ? opts.padding    : ENTITY_FRAME_PADDING,
+      cardExtent: Number.isFinite(opts.cardExtent) ? opts.cardExtent : 0,
     }, maxZoom);
-    if (!framing) return false;
+    if (!framing) return Promise.resolve(false);
+
+    // Rotate the camera so the attacker→target axis runs left-to-right across
+    // the screen. Only when both endpoints resolve to live positions and the
+    // axis is non-degenerate; otherwise leave alpha alone.
+    let alpha;
+    if (Array.isArray(opts.axisIds) && opts.axisIds.length >= 2) {
+      const tail = this._entityWorldPos(opts.axisIds[0]);
+      const head = this._entityWorldPos(opts.axisIds[1]);
+      if (tail && head) {
+        const a = alphaForAxis(head.x - tail.x, head.z - tail.z);
+        if (a != null) alpha = a;
+      }
+    }
 
     // Never zoom out past the camera's max-zoom-out cap.
     const radius = Math.min(framing.radius, camera.upperRadiusLimit ?? 200);
     const target = new BABYLON.Vector3(framing.centerX, 0, framing.centerZ);
-    this._focusCamera(target, radius, {
+    return this._focusCamera(target, radius, {
       forceAnimate: opts.forceAnimate !== false,
       instant:      opts.instant === true,
+      alpha,
+    }).then(() => true);
+  }
+
+  /** Frame two combatants side-by-side: fit both (plus any extra cluster ids in
+   *  `opts.extraIds`), rotate the azimuth so attacker→target reads horizontal,
+   *  and loosen the radius for the floating dice card. Thin convenience over
+   *  `frameEntities` — returns the same awaitable Promise<boolean>. */
+  frameCombatants(attackerId, targetId, opts = {}) {
+    const extra = Array.isArray(opts.extraIds) ? opts.extraIds : [];
+    const ids = [attackerId, targetId, ...extra];
+    return this.frameEntities(ids, {
+      ...opts,
+      axisIds:    [attackerId, targetId],
+      cardExtent: Number.isFinite(opts.cardExtent) ? opts.cardExtent : combatCardFrameExtent(true),
     });
-    return true;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -8440,7 +8563,12 @@ export class Renderer3D {
     // the focus and yoyo the camera. Eases to the world midpoint of the two
     // hexes; the default _focusCamera early-out skips the animation when the
     // camera already sits there (consecutive battles at the same spot).
-    const shouldFrameCombat = this._activeLungeIds.size === 0;
+    // `_suppressLungeFraming` is set by the 3D cinematic combat arm, which
+    // frames the cluster itself (rotated + card-aware) and AWAITS the camera
+    // before starting the lunge — so the lunge must NOT re-issue its own
+    // midpoint/zoom focus and undo that. Fast/vfast/autoplay leave the flag
+    // false and keep this built-in lean-in.
+    const shouldFrameCombat = this._activeLungeIds.size === 0 && !this._suppressLungeFraming;
 
     const lungeSpeedMul = this._playbackSpeedMul ?? 1.0;
     const FRAMES_LUNGE = Math.max(1, Math.round(LUNGE_ANIM_MS * lungeSpeedMul * 60 / 1000));
