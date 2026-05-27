@@ -32,6 +32,7 @@ import { hexKey, getNeighbors } from '../hex.js';
 import { rng, generateMap, MAP_SIZES, NODE_COLORS } from '../map.js';
 import { buildMissionMap, rederiveRoads } from '../campaign/mission-map.js';
 import { SURVIVOR_ROSTER } from '../content/survivors.js';
+import { ITEMS } from '../items.js';
 
 /** Active-tool ids the click loop dispatches on. */
 export const EditorTool = Object.freeze({
@@ -48,6 +49,10 @@ export const EditorTool = Object.freeze({
   PAINT_RIVER: 'paint-river',         // path overlay: RIVER (tree topology only)
   SET_RESOURCE: 'set-resource',
   HIDDEN_SURVIVOR: 'hidden-survivor',
+  // Exploration override (M4): pin a FIXED loot result on a tile so searching it
+  // yields that result instead of the random loot roll. Authoring only — the
+  // runtime executeExplore does not yet read the override (see report).
+  EXPLORE_OVERRIDE: 'explore-override',
   ENEMY_UNIT: 'enemy-unit',
   HERO_START: 'hero-start',
   WITCH_START: 'witch-start',
@@ -78,6 +83,7 @@ export const ToolValueKind = Object.freeze({
   RESOURCE: 'resource', // resource picker
   ENEMY: 'enemy',       // enemy unit-type picker
   SURVIVOR: 'survivor', // hidden-survivor roster picker (Any / a specific char)
+  EXPLORE_OVERRIDE: 'explore-override', // fixed loot-result picker (M4)
   NONE: 'none',         // no value — show a hint
 });
 
@@ -103,6 +109,95 @@ export function survivorLabelForId(id) {
   return c ? c.name : id;
 }
 
+// ── Exploration-override picker (M4) ─────────────────────────────────────────
+// An exploration override pins a FIXED loot result on a tile so searching it
+// yields exactly that result instead of the random roll. The stored value
+// mirrors how the loot system already represents a result — a single loot
+// `type` string (resource / weapon / 'horse' / 'nothing'). The tile def carries:
+//
+//   exploreOverride: null | { kind, id, amount? }
+//     kind   ∈ 'resource' | 'weapon' | 'horse' | 'nothing'   (a coarse discriminator)
+//     id     the loot type string ('wood', 'sword', 'horse'); null for 'nothing'
+//     amount optional integer ≥1 (resources only; default 1 → omitted from JSON)
+//
+// So the runtime could consume it by treating `id` as a fixed `lootType` and
+// calling _applyLoot `amount` times (see report — not yet wired). Resource &
+// weapon vocabularies are pulled from the same registries the loot tables draw
+// on (ResourceType, ITEMS kind:'weapon') so the picker can't drift out of sync.
+
+/** Loot kinds the override picker can pin. */
+export const ExploreOverrideKind = Object.freeze({
+  RESOURCE: 'resource',
+  WEAPON: 'weapon',
+  HORSE: 'horse',
+  NOTHING: 'nothing',
+});
+
+// Weapon ids the picker offers (every ITEMS entry tagged kind:'weapon').
+const _WEAPON_IDS = Object.values(ITEMS)
+  .filter(it => it && it.kind === 'weapon')
+  .map(it => it.id);
+
+const _RESOURCE_ICON = { wood: '🪵', metal: '⚙', food: '🍞', silver: '🥈', scripture: '📜', herbs: '🌿' };
+
+/**
+ * Picker options for the Exploration Override tool: `[{ value, label }]`. `value`
+ * is the encoded key (see {@link exploreOverrideKeyFor}) the value-panel dropdown
+ * stores; decode it with {@link parseExploreOverrideKey} when placing.
+ */
+export function exploreOverridePickerOptions() {
+  const opts = [{ value: 'nothing', label: 'Nothing (empty search)' }];
+  for (const r of Object.values(ResourceType)) {
+    const icon = _RESOURCE_ICON[r] || '';
+    opts.push({ value: `resource:${r}`, label: `${icon} ${_capitalize(r)}`.trim() });
+  }
+  for (const w of _WEAPON_IDS) {
+    opts.push({ value: `weapon:${w}`, label: `⚔ ${_capitalize(w)}` });
+  }
+  opts.push({ value: 'horse', label: '🐴 Horse' });
+  return opts;
+}
+
+function _capitalize(s) {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
+/** Encode an override object into the dropdown key (null → 'nothing'). */
+export function exploreOverrideKeyFor(ov) {
+  if (!ov || ov.kind === ExploreOverrideKind.NOTHING) return 'nothing';
+  if (ov.kind === ExploreOverrideKind.HORSE) return 'horse';
+  if (ov.kind === ExploreOverrideKind.RESOURCE) return `resource:${ov.id}`;
+  if (ov.kind === ExploreOverrideKind.WEAPON) return `weapon:${ov.id}`;
+  return 'nothing';
+}
+
+/**
+ * Decode a dropdown key into a complete override object `{ kind, id }` (amount is
+ * added by {@link setExploreOverride} only when >1). Unknown keys → null.
+ */
+export function parseExploreOverrideKey(key) {
+  if (key == null || key === 'nothing') {
+    return { kind: ExploreOverrideKind.NOTHING, id: null };
+  }
+  if (key === 'horse') return { kind: ExploreOverrideKind.HORSE, id: 'horse' };
+  const i = key.indexOf(':');
+  if (i < 0) return null;
+  const kind = key.slice(0, i);
+  const id = key.slice(i + 1);
+  if (kind === ExploreOverrideKind.RESOURCE || kind === ExploreOverrideKind.WEAPON) {
+    return { kind, id };
+  }
+  return null;
+}
+
+/** Human label for a stored exploration override (null → "None"). */
+export function exploreOverrideLabel(ov) {
+  if (!ov) return 'None';
+  const found = exploreOverridePickerOptions().find(o => o.value === exploreOverrideKeyFor(ov));
+  const base = found ? found.label : (ov.id || ov.kind);
+  return (ov.amount && ov.amount > 1) ? `${base} ×${ov.amount}` : base;
+}
+
 // Road / River paint exactly one kind each (item 2), so neither exposes a value
 // selector — both map to NONE (the combined Road/River path selector is gone).
 const _TOOL_VALUE_KIND = Object.freeze({
@@ -113,6 +208,7 @@ const _TOOL_VALUE_KIND = Object.freeze({
   [EditorTool.SET_RESOURCE]: ToolValueKind.RESOURCE,
   [EditorTool.ENEMY_UNIT]: ToolValueKind.ENEMY,
   [EditorTool.HIDDEN_SURVIVOR]: ToolValueKind.SURVIVOR,
+  [EditorTool.EXPLORE_OVERRIDE]: ToolValueKind.EXPLORE_OVERRIDE,
   [EditorTool.HERO_START]: ToolValueKind.NONE,
   [EditorTool.WITCH_START]: ToolValueKind.NONE,
   [EditorTool.ROAD_NODE]: ToolValueKind.NONE,
@@ -249,6 +345,7 @@ function _blankTileDef(col, row) {
     resource: null,
     hiddenSurvivor: false,
     hiddenSurvivorId: null,
+    exploreOverride: null,
     roadDirs: [],
   };
 }
@@ -467,6 +564,47 @@ export function hiddenSurvivorPlacements(mapDef) {
   const out = [];
   for (const t of list) {
     if (t && t.hiddenSurvivor) out.push({ col: t.col, row: t.row, id: t.hiddenSurvivorId ?? null });
+  }
+  return out;
+}
+
+/**
+ * Pin (or remove) a FIXED exploration-override result on a tile (M4). `key` is a
+ * picker key (see {@link exploreOverridePickerOptions}); decoded into the stored
+ * `{ kind, id, amount? }` shape. Click semantics mirror the other placement
+ * tools:
+ *   • empty hex          → pin the override
+ *   • same override again → remove (toggle off)
+ *   • different override → re-pin to the newly-selected result (overwrite)
+ * `amount` (default 1) is only written when >1, keeping single-result JSON clean.
+ */
+export function setExploreOverride(mapDef, { col, row }, key, amount = 1) {
+  const def = _getOrCreateTileDef(mapDef, col, row);
+  const next = parseExploreOverrideKey(key);
+  if (next == null) return mapDef; // unknown key — leave untouched
+  if (amount > 1) next.amount = amount;
+  const curKey = def.exploreOverride ? exploreOverrideKeyFor(def.exploreOverride) : null;
+  const curAmt = def.exploreOverride?.amount ?? 1;
+  if (curKey === key && curAmt === amount) {
+    def.exploreOverride = null; // toggle off when re-clicked with the same result
+  } else {
+    def.exploreOverride = next;
+  }
+  return mapDef;
+}
+
+/**
+ * List the authored exploration overrides as `[{ col, row, override }]`. Reads the
+ * active tile list (handmade `tiles` or procedural `overlay.tiles`). DOM-free so
+ * the canvas-marker layer is unit-testable.
+ */
+export function exploreOverridePlacements(mapDef) {
+  const list = mapDef.mode === 'procedural'
+    ? (mapDef.overlay?.tiles ?? [])
+    : (mapDef.tiles ?? []);
+  const out = [];
+  for (const t of list) {
+    if (t && t.exploreOverride) out.push({ col: t.col, row: t.row, override: t.exploreOverride });
   }
   return out;
 }
@@ -712,7 +850,8 @@ export function snapshotTiles(tilesMap) {
     const pathKey = _enumKey(PathType, pathOf(t)); // ROAD | RIVER | BRIDGE | null
     const roadDirs = t.roadDirs ? [...t.roadDirs] : [];
     const trivial = baseKey === 'GRASS' && !structKey && !pathKey && !t.building &&
-      !t.resource && !t.fortifyLevel && !t.hiddenSurvivor && roadDirs.length === 0;
+      !t.resource && !t.fortifyLevel && !t.hiddenSurvivor && !t.exploreOverride &&
+      roadDirs.length === 0;
     if (trivial) continue;
     out.push({
       col: t.col, row: t.row,
@@ -723,9 +862,11 @@ export function snapshotTiles(tilesMap) {
       fortifyLevel: t.fortifyLevel || 0,
       resource: _enumKey(ResourceType, t.resource),
       hiddenSurvivor: !!t.hiddenSurvivor,
-      // Built runtime Tiles don't (yet) carry a specific-survivor id, but pass
-      // it through defensively so a future runtime extension round-trips here.
+      // Built runtime Tiles don't (yet) carry a specific-survivor id or explore
+      // override, but pass them through defensively so a future runtime extension
+      // round-trips here.
       hiddenSurvivorId: t.hiddenSurvivorId ?? null,
+      exploreOverride: t.exploreOverride ?? null,
       roadDirs,
     });
   }
@@ -1643,6 +1784,7 @@ const _TOOL_DISPATCH = {
   [EditorTool.PAINT_RIVER]: (m, hex) => paintRiver(m.mapDef, hex),
   [EditorTool.SET_RESOURCE]: (m, hex, pv) => setResource(m.mapDef, hex, pv.resource),
   [EditorTool.HIDDEN_SURVIVOR]: (m, hex, pv) => setHiddenSurvivor(m.mapDef, hex, pv.survivor),
+  [EditorTool.EXPLORE_OVERRIDE]: (m, hex, pv) => setExploreOverride(m.mapDef, hex, pv.exploreOverride),
   [EditorTool.ENEMY_UNIT]: (m, hex, pv) => placeEnemyUnit(m.enemyUnits, hex, pv.enemyType),
   [EditorTool.HERO_START]: (m, hex) => setHeroStart(m.mapDef, hex),
   [EditorTool.WITCH_START]: (m, hex) => setWitchStart(m.mapDef, hex),
@@ -1681,6 +1823,8 @@ export function createMissionEditor({ render } = {}) {
     enemyType: ENEMY_UNIT_TYPES[0],
     // Hidden-survivor picker selection (roster `name`; null ⇒ "Any"/random).
     survivor: HIDDEN_SURVIVOR_ANY,
+    // Exploration-override picker selection (encoded key; default: pin Wood).
+    exploreOverride: 'resource:wood',
   };
   // Full undo + redo history (item 5). Each entry is a serialised snapshot of
   // the whole working model. A NEW action (snapshot) invalidates the redo stack;

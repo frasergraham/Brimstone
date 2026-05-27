@@ -33,6 +33,13 @@ import {
   survivorPickerOptions,
   survivorLabelForId,
   HIDDEN_SURVIVOR_ANY,
+  setExploreOverride,
+  exploreOverridePlacements,
+  exploreOverridePickerOptions,
+  exploreOverrideKeyFor,
+  parseExploreOverrideKey,
+  exploreOverrideLabel,
+  ExploreOverrideKind,
   saveWip,
   loadWip,
   placeEnemyUnit,
@@ -70,8 +77,8 @@ import { Tile, TileType, PathType, StructureType, BuildingType } from '../src/ti
 
 // The complete set of fields a canonical layered tile def carries.
 const LAYERED_FIELDS = [
-  'base', 'building', 'col', 'fortifyLevel', 'hiddenSurvivor', 'hiddenSurvivorId',
-  'path', 'resource', 'roadDirs', 'row', 'structure',
+  'base', 'building', 'col', 'exploreOverride', 'fortifyLevel', 'hiddenSurvivor',
+  'hiddenSurvivorId', 'path', 'resource', 'roadDirs', 'row', 'structure',
 ];
 
 // ── Pure tool functions: layer isolation (rules #1, #2, #3, #6) ───────────────
@@ -277,6 +284,132 @@ describe('mission-editor — hidden-survivor picker (specific roster char)', () 
     const { mapDef } = populateFromMission(restored.mission);
     const def = mapDef.tiles.find(t => t.col === 7 && t.row === 2);
     assert.equal(def.hiddenSurvivorId, 'Mary Quinn');
+  });
+});
+
+describe('mission-editor — exploration override picker (M4)', () => {
+  const findDef = (map, col, row) => map.tiles.find(t => t.col === col && t.row === row);
+
+  test('picker offers nothing + every resource + every weapon + horse', () => {
+    const opts = exploreOverridePickerOptions();
+    const values = opts.map(o => o.value);
+    assert.equal(values[0], 'nothing');           // leads with the empty result
+    assert.ok(values.includes('resource:wood'));
+    assert.ok(values.includes('resource:scripture'));
+    assert.ok(values.includes('weapon:sword'));
+    assert.ok(values.includes('weapon:staff'));
+    assert.ok(values.includes('horse'));
+    // Every option carries a human label.
+    assert.ok(opts.every(o => typeof o.label === 'string' && o.label.length));
+  });
+
+  test('parseExploreOverrideKey round-trips with exploreOverrideKeyFor', () => {
+    for (const key of ['nothing', 'horse', 'resource:metal', 'weapon:axe']) {
+      const ov = parseExploreOverrideKey(key);
+      assert.equal(exploreOverrideKeyFor(ov), key);
+    }
+    // Unknown keys decode to null (ignored by setExploreOverride).
+    assert.equal(parseExploreOverrideKey('bogus:thing'), null);
+  });
+
+  test('setExploreOverride pins a fixed resource result on the def', () => {
+    const map = createDefaultMapDef();
+    setExploreOverride(map, { col: 2, row: 3 }, 'resource:metal');
+    const def = findDef(map, 2, 3);
+    assert.deepEqual(def.exploreOverride, { kind: ExploreOverrideKind.RESOURCE, id: 'metal' });
+  });
+
+  test('a weapon, horse, and nothing each store their kind + id', () => {
+    const map = createDefaultMapDef();
+    setExploreOverride(map, { col: 1, row: 1 }, 'weapon:sword');
+    setExploreOverride(map, { col: 2, row: 2 }, 'horse');
+    setExploreOverride(map, { col: 3, row: 3 }, 'nothing');
+    assert.deepEqual(findDef(map, 1, 1).exploreOverride, { kind: 'weapon', id: 'sword' });
+    assert.deepEqual(findDef(map, 2, 2).exploreOverride, { kind: 'horse', id: 'horse' });
+    assert.deepEqual(findDef(map, 3, 3).exploreOverride, { kind: 'nothing', id: null });
+  });
+
+  test('amount > 1 is recorded; default 1 is omitted from the def', () => {
+    const map = createDefaultMapDef();
+    setExploreOverride(map, { col: 4, row: 4 }, 'resource:food', 3);
+    assert.deepEqual(findDef(map, 4, 4).exploreOverride, { kind: 'resource', id: 'food', amount: 3 });
+    setExploreOverride(map, { col: 5, row: 5 }, 'resource:food', 1);
+    assert.ok(!('amount' in findDef(map, 5, 5).exploreOverride));
+  });
+
+  test('re-clicking the SAME result removes it (toggle off)', () => {
+    const map = createDefaultMapDef();
+    setExploreOverride(map, { col: 6, row: 6 }, 'resource:wood');
+    setExploreOverride(map, { col: 6, row: 6 }, 'resource:wood');
+    assert.equal(findDef(map, 6, 6).exploreOverride, null);
+  });
+
+  test('clicking a DIFFERENT result re-pins (overwrites) without clearing', () => {
+    const map = createDefaultMapDef();
+    setExploreOverride(map, { col: 7, row: 7 }, 'resource:wood');
+    setExploreOverride(map, { col: 7, row: 7 }, 'weapon:axe');
+    assert.deepEqual(findDef(map, 7, 7).exploreOverride, { kind: 'weapon', id: 'axe' });
+  });
+
+  test('an unknown key leaves the def untouched', () => {
+    const map = createDefaultMapDef();
+    setExploreOverride(map, { col: 8, row: 8 }, 'resource:wood');
+    setExploreOverride(map, { col: 8, row: 8 }, 'bogus:thing');
+    assert.deepEqual(findDef(map, 8, 8).exploreOverride, { kind: 'resource', id: 'wood' });
+  });
+
+  test('exploreOverridePlacements lists every override with its value', () => {
+    const map = createDefaultMapDef();
+    setExploreOverride(map, { col: 2, row: 3 }, 'resource:metal');
+    setExploreOverride(map, { col: 4, row: 4 }, 'horse');
+    const places = exploreOverridePlacements(map).sort((a, b) => a.col - b.col);
+    assert.deepEqual(places, [
+      { col: 2, row: 3, override: { kind: 'resource', id: 'metal' } },
+      { col: 4, row: 4, override: { kind: 'horse', id: 'horse' } },
+    ]);
+  });
+
+  test('exploreOverrideLabel reads cleanly (null → None, amount suffix)', () => {
+    assert.equal(exploreOverrideLabel(null), 'None');
+    assert.match(exploreOverrideLabel({ kind: 'resource', id: 'wood' }), /Wood/);
+    assert.match(exploreOverrideLabel({ kind: 'resource', id: 'food', amount: 3 }), /×3/);
+  });
+
+  test('an override round-trips through assemble → populateFromMission', () => {
+    const ed = createMissionEditor();
+    ed.setActiveTool(EditorTool.EXPLORE_OVERRIDE);
+    ed.setPaintValue('exploreOverride', 'weapon:staff');
+    ed.applyAt({ col: 3, row: 3 });
+    const mission = ed.assemble();
+    const { mapDef } = populateFromMission(JSON.parse(JSON.stringify(mission)));
+    const def = mapDef.tiles.find(t => t.col === 3 && t.row === 3);
+    assert.deepEqual(def.exploreOverride, { kind: 'weapon', id: 'staff' });
+  });
+
+  test('an override round-trips through the M2 WIP autosave', () => {
+    const store = (() => {
+      const m = {};
+      return {
+        setItem: (k, v) => { m[k] = String(v); },
+        getItem: (k) => (k in m ? m[k] : null),
+        removeItem: (k) => { delete m[k]; },
+        key: (i) => Object.keys(m)[i] ?? null,
+        get length() { return Object.keys(m).length; },
+      };
+    })();
+    const ed = createMissionEditor();
+    ed.setActiveTool(EditorTool.EXPLORE_OVERRIDE);
+    ed.setPaintValue('exploreOverride', 'resource:silver');
+    ed.applyAt({ col: 7, row: 2 });
+    const entry = saveWip(store, ed.assemble());
+    const restored = loadWip(store, entry.id);
+    const { mapDef } = populateFromMission(restored.mission);
+    const def = mapDef.tiles.find(t => t.col === 7 && t.row === 2);
+    assert.deepEqual(def.exploreOverride, { kind: 'resource', id: 'silver' });
+  });
+
+  test('valuePanelKind maps the tool to the EXPLORE_OVERRIDE value kind', () => {
+    assert.equal(valuePanelKind(EditorTool.EXPLORE_OVERRIDE), ToolValueKind.EXPLORE_OVERRIDE);
   });
 });
 

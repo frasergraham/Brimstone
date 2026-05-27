@@ -50,6 +50,7 @@ import {
   valuePanelKind, ToolValueKind, createLayerVisibility, showStructures,
   roadNodeMarkersVisible, stripTileOverlays, mapSizePreset,
   survivorPickerOptions, survivorLabelForId, hiddenSurvivorPlacements,
+  exploreOverridePickerOptions, exploreOverrideLabel, exploreOverridePlacements,
   overlayDarkenVisible, overlayEditedKeys,
   areaTriggerLayerVisible, areaTriggerHexKeys,
   PHASE_KINDS, addPhase, removePhaseAt, movePhase, setPhaseLoop,
@@ -113,12 +114,13 @@ const TOOL_PALETTE = [
   { id: EditorTool.PAINT_RIVER,     icon: '🌊', label: 'River',          tip: 'Paint a river — must stay a branching tree (no loops or merges)' },
   { id: EditorTool.SET_RESOURCE,    icon: '💎', label: 'Set Resource',    tip: 'Set or clear a harvestable resource on clicked tiles' },
   { id: EditorTool.HIDDEN_SURVIVOR, icon: '🙋', label: 'Hidden Survivor', tip: 'Place a hidden survivor to be discovered on a tile — pick a specific roster character or "Any"' },
+  { id: EditorTool.EXPLORE_OVERRIDE, icon: '🔍', label: 'Explore Override', tip: 'Pin a FIXED search result on a tile — exploring it yields exactly that loot instead of a random roll' },
   { id: EditorTool.ENEMY_UNIT,      icon: '🧟', label: 'Enemy Unit',      tip: 'Place / remove a pre-placed enemy unit on a tile' },
   { id: EditorTool.HERO_START,      icon: '🛡', label: 'Hero Start',      tip: 'Move the hero starting position to the clicked tile' },
   { id: EditorTool.WITCH_START,     icon: '🧙', label: 'Witch Start',     tip: 'Move the witch starting position to the clicked tile' },
   { id: EditorTool.ROAD_NODE,       icon: '📍', label: 'Road Node',       tip: 'Toggle a road-network waypoint — roads re-generate automatically' },
   { id: EditorTool.POWER_NODE,      icon: '🔮', label: 'Power Node',      tip: 'Toggle a Power Node hex — contiguous hexes group into one node (max 5)' },
-  { id: EditorTool.DELETE,          icon: '🧹', label: 'Delete',          tip: 'Clear a tile back to blank base (terrain, structure, path, resource, survivor)' },
+  { id: EditorTool.DELETE,          icon: '🧹', label: 'Delete',          tip: 'Clear a tile back to blank base (terrain, structure, path, resource, survivor, explore override)' },
 ];
 
 // Short hints shown in the VALUE panel for the value-less tools.
@@ -126,6 +128,7 @@ const TOOL_HINTS = {
   [EditorTool.PAINT_ROAD]: 'Click tiles to paint roads — they auto-wire to adjacent roads.',
   [EditorTool.PAINT_RIVER]: 'Click tiles to paint a river. Rivers must stay a branching tree — a paint that would loop or merge two branches is blocked.',
   [EditorTool.HIDDEN_SURVIVOR]: 'Pick a survivor (or "Any"), then click a tile to place/remove a hidden survivor.',
+  [EditorTool.EXPLORE_OVERRIDE]: 'Pick a fixed result, then click a tile to pin/remove it — searching that tile yields exactly this instead of a random loot roll.',
   [EditorTool.HERO_START]: 'Click a tile to move the hero start.',
   [EditorTool.WITCH_START]: 'Click a tile to move the witch start.',
   [EditorTool.ROAD_NODE]: 'Click tiles to toggle road-network waypoints — roads regenerate automatically.',
@@ -338,6 +341,7 @@ export function initEditor(doc = document) {
     drawDarkenGeneratedOverlay(ctx);
     drawAreaTriggerMarkers(ctx);
     drawHiddenSurvivorMarkers(ctx);
+    drawExploreOverrideMarkers(ctx);
     drawRoadNodeMarkers(ctx);
     drawEdgeResizeButtons(ctx);
   }
@@ -374,6 +378,41 @@ export function initEditor(doc = document) {
       ctx.font = `bold ${Math.max(9, br * 0.85)}px sans-serif`;
       ctx.fillStyle = '#fff7d0';
       ctx.fillText(initial, x + br * 0.7, y - r * 0.18 + br * 0.7);
+    }
+    ctx.restore();
+  }
+
+  // ── Exploration-override markers (M4) ──────────────────────────────────────
+  // Every authored explore-override hex gets an author-only cue: an amber badge
+  // in the lower-left of the hex with a 🔍 glyph and the result's icon (a leaf
+  // for a resource, ⚔ for a weapon, 🐴 horse, ∅ nothing). Read straight off the
+  // mapDef tile defs so it tracks the authored overrides (not a built state).
+  const _OV_ICON = {
+    resource: '📦', weapon: '⚔', horse: '🐴', nothing: '∅',
+  };
+  function drawExploreOverrideMarkers(ctx) {
+    const placements = exploreOverridePlacements(editor.getMapDef());
+    if (!placements.length) return;
+    const r = renderer.hexSize * renderer.zoomLevel;
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const p of placements) {
+      const { x, y } = renderer.hexToCanvasPos(p.col, p.row);
+      const br = r * 0.36;
+      const bx = x - r * 0.42;
+      const by = y + r * 0.36;
+      ctx.beginPath();
+      ctx.arc(bx, by, br, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(150,95,20,0.85)';
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = 'rgba(245,205,130,0.95)';
+      ctx.stroke();
+      ctx.font = `${Math.max(9, br * 1.05)}px serif`;
+      ctx.fillStyle = '#fff3d8';
+      const icon = _OV_ICON[p.override?.kind] || '🔍';
+      ctx.fillText(icon, bx, by);
     }
     ctx.restore();
   }
@@ -1363,6 +1402,14 @@ function buildValuePanel(doc, host, kind, editor, rerenderPanel) {
       const opts = survivorPickerOptions().map(o => ({ key: o.id == null ? '' : o.id, label: o.label }));
       host.append(labeledSelect(doc, 'Survivor', opts, cur == null ? '' : cur,
         (v) => editor.setPaintValue('survivor', v === '' ? null : v)));
+      break;
+    }
+    case ToolValueKind.EXPLORE_OVERRIDE: {
+      // Picker of fixed loot results; the stored paint value is the encoded key.
+      const cur = editor.getPaintValue('exploreOverride');
+      const opts = exploreOverridePickerOptions().map(o => ({ key: o.value, label: o.label }));
+      host.append(labeledSelect(doc, 'Yields', opts, cur,
+        (v) => editor.setPaintValue('exploreOverride', v)));
       break;
     }
     default:
