@@ -11544,14 +11544,7 @@ export class Renderer3D {
    *  inferred from `witchIsAI`/`heroIsAI`); returns null in AI-vs-AI runs
    *  and spectator mode, which suppresses the veil entirely. */
   _observerOwner() {
-    const state = this.state;
-    if (!state) return null;
-    // Prefer the explicit myFaction (set in online/PvP mode); fall back to
-    // the unique human side in local-AI games.
-    if (state.myFaction) return state.myFaction;
-    if (state.witchIsAI && !state.heroIsAI)  return 'hero';
-    if (state.heroIsAI  && !state.witchIsAI) return 'witch';
-    return null;
+    return resolveFogObserver(this.state);
   }
 }
 
@@ -13310,6 +13303,34 @@ export function pulseFactor(nowMs, periodMs, min, max) {
   const phase = (2 * Math.PI * (nowMs % periodMs)) / periodMs;
   const sin01 = (Math.sin(phase) + 1) / 2; // 0..1
   return min + (max - min) * sin01;
+}
+
+/**
+ * Determine which faction's perspective drives the fog veil, purely from the
+ * game-state flags. Exported (and Babylon-free) so the rule is unit-testable.
+ *
+ * Mirrors the convention used by `main.js` / the 2D renderer
+ * (`!heroIsAI ? 'hero' : !witchIsAI ? 'witch' : null`): the human controls
+ * whichever side is NOT flagged AI. `myFaction` (online / PvP) wins outright.
+ *
+ * Returns `null` ONLY for a true AI-vs-AI game (both sides flagged AI) — there
+ * is no human to hide the board from, so the renderer suppresses the veil and
+ * shows everything (autoplay / spectator-style watching).
+ */
+export function resolveFogObserver(state) {
+  if (!state) return null;
+  if (state.myFaction) return state.myFaction;
+  // The human controls whichever side is NOT flagged AI. Checking heroIsAI
+  // first matches main.js's `!heroIsAI ? 'hero' : !witchIsAI ? 'witch' : null`
+  // convention. The both-flags-false case (campaign / conductor-scripted
+  // missions, where the witch's plans come from the conductor rather than the
+  // WitchAI) resolves to 'hero' — WITHOUT this the veil would treat it as
+  // observer-less and reveal the entire map (full info leak).
+  if (!state.heroIsAI)  return 'hero';
+  if (!state.witchIsAI) return 'witch';
+  // Both sides flagged AI → a true AI-vs-AI game; no human to hide from, so
+  // the renderer suppresses the veil (autoplay watches the whole board).
+  return null;
 }
 
 /**

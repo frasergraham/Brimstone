@@ -32,6 +32,7 @@ import {
   lerpLightConfig,
   pulseFactor,
   buildFogVisibleSet,
+  resolveFogObserver,
 } from '../src/renderer-3d.js';
 import { Phase } from '../src/game.js';
 import { hexKey } from '../src/hex.js';
@@ -403,6 +404,61 @@ describe('Renderer3D — buildFogVisibleSet', () => {
     assert.ok(!v.has(hexKey(5, 5)), 'witch sight not folded in');
     // Dead third hero at (4,2) should not contribute either.
     assert.ok(!v.has(hexKey(6, 2)), 'dead hero sight not folded in');
+  });
+});
+
+// ── Fog observer resolution (info-leak regression) ──────────────────────────
+//
+// The 3D veil hides every hex / standee outside the OBSERVER's sight. If
+// `resolveFogObserver` returns null while fog is active, `_applyFogVeil` treats
+// it as "no observer → unfog the whole board", revealing every enemy unit — a
+// full-map info leak. The bug: a single-player game where the human's side is
+// not flagged `*IsAI` (campaign / conductor-scripted missions run with
+// `witchIsAI = false` because the conductor supplies the witch's plans, and
+// `heroIsAI = false`). The old logic returned null for that case; the 2D
+// renderer / main.js instead default the observer to the non-AI side
+// (`!heroIsAI ? 'hero' : !witchIsAI ? 'witch' : null`). These tests pin the 3D
+// observer to that same convention so the two renderers can't drift.
+describe('Renderer3D — resolveFogObserver (fog info-leak regression)', () => {
+  test('null state → null observer (defensive)', () => {
+    assert.equal(resolveFogObserver(null), null);
+    assert.equal(resolveFogObserver(undefined), null);
+  });
+
+  test('explicit myFaction (online / PvP) wins outright', () => {
+    assert.equal(resolveFogObserver({ myFaction: 'witch', witchIsAI: true, heroIsAI: false }), 'witch');
+    assert.equal(resolveFogObserver({ myFaction: 'hero',  witchIsAI: false, heroIsAI: true  }), 'hero');
+  });
+
+  test('standard human-hero vs AI-witch → hero observes', () => {
+    assert.equal(resolveFogObserver({ witchIsAI: true, heroIsAI: false }), 'hero');
+  });
+
+  test('human-witch vs AI-hero → witch observes', () => {
+    assert.equal(resolveFogObserver({ witchIsAI: false, heroIsAI: true }), 'witch');
+  });
+
+  test('true AI-vs-AI (both flagged) → null (autoplay reveals the board)', () => {
+    assert.equal(resolveFogObserver({ witchIsAI: true, heroIsAI: true }), null);
+  });
+
+  // THE BUG: conductor / campaign mission — neither side flagged AI, yet the
+  // human is the hero and fog is active. Must NOT resolve to null (that leaks
+  // the whole map). Defaults to the hero, matching main.js / the 2D renderer.
+  test('neither side flagged AI (conductor/campaign) → hero observes, NOT null', () => {
+    assert.equal(resolveFogObserver({ witchIsAI: false, heroIsAI: false }), 'hero');
+    // Regression guard: the observer must be a real side so the veil can apply.
+    assert.notEqual(resolveFogObserver({ witchIsAI: false, heroIsAI: false }), null);
+  });
+
+  test('with fog active, a derived observer means the veil is NOT suppressed', () => {
+    // Mirrors the _applyFogVeil gate: target=null (reveal-all) iff fog inactive
+    // OR observer null. A both-flags-false + fog=full game must keep the veil.
+    const state = { witchIsAI: false, heroIsAI: false, fogOfWar: 'full' };
+    const fogActive = state.fogOfWar && state.fogOfWar !== 'none';
+    const observer = resolveFogObserver(state);
+    const revealsWholeMap = !fogActive || !observer;
+    assert.equal(revealsWholeMap, false, 'campaign fog must not reveal the whole map');
   });
 });
 
