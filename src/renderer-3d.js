@@ -8713,6 +8713,96 @@ export class Renderer3D {
     this._trackAnim(promise);
   }
 
+  /** G4 Phase 2 — spawn a billboarded combat card (rolled dice + total) above
+   *  a combatant's head during a 3D cinematic battle, alongside the legacy
+   *  modal. `side` is 'attacker' | 'defender'; the model is derived from the
+   *  battle `result` via `combatCardModel`.
+   *
+   *  The plane is parented to the combatant's standee so it tracks the lunge,
+   *  positioned just above the unit-icon badge, billboarded, flat-lit, and on
+   *  renderingGroupId 2 (above all world geometry, like the badge/floaters).
+   *  Each spawn owns a fresh DynamicTexture + StandardMaterial (never shared)
+   *  and disposes both — plus the plane — when the hold+fade completes. The
+   *  animation promise is registered with `_trackAnim` so `waitForAnimations`
+   *  drains it before the next battle in the resolution loop. */
+  addCombatCard(entityId, side, result, opts = {}) {
+    if (!this._scene || !this._babylon) return;
+    if (typeof document === 'undefined') return;
+    const standee = this._entityStandees.get(entityId);
+    if (!standee || !standee.plane) return; // standee gone (e.g. killed) — skip
+    const BABYLON = this._babylon;
+
+    const model = combatCardModel(result, side);
+    const speedFactor = Number.isFinite(opts.speedFactor) && opts.speedFactor > 0
+      ? opts.speedFactor : 1;
+    const holdMs = (opts.holdMs ?? COMBAT_CARD_HOLD_MS) * speedFactor;
+    const fadeMs = (opts.fadeMs ?? COMBAT_CARD_FADE_MS) * speedFactor;
+
+    const tex = new BABYLON.DynamicTexture(
+      `combatCardTex_${entityId}_${side}_${Date.now()}`,
+      { width: COMBAT_CARD_TEX_WIDTH, height: COMBAT_CARD_TEX_HEIGHT },
+      this._scene,
+      false,
+    );
+    tex.hasAlpha = true;
+    paintCombatCard(tex.getContext(), model, {
+      width:  COMBAT_CARD_TEX_WIDTH,
+      height: COMBAT_CARD_TEX_HEIGHT,
+    });
+    tex.update();
+
+    const plane = BABYLON.MeshBuilder.CreatePlane(
+      `combatCard_${entityId}_${side}_${Date.now()}`,
+      { width: COMBAT_CARD_PLANE_WIDTH, height: COMBAT_CARD_PLANE_HEIGHT },
+      this._scene,
+    );
+    plane.billboardMode    = BABYLON.Mesh.BILLBOARDMODE_ALL;
+    plane.isPickable       = false;
+    plane.renderingGroupId = 2; // on top of world geometry + standees
+
+    const mat = new BABYLON.StandardMaterial(`combatCardMat_${plane.uniqueId}`, this._scene);
+    mat.diffuseTexture = tex;
+    mat.opacityTexture = tex;
+    applyFlatUnitIconMaterial(BABYLON, mat); // flat-lit UI sticker
+    plane.material = mat;
+
+    // Parent to the standee so the card tracks the lunge slide. Sit just above
+    // the unit-icon badge (badge centre is cone-relative; clear its top edge,
+    // then add half the card height + the gap).
+    plane.parent = standee.plane;
+    const badgeCentreY = iconBillboardYRelativeToCone(standee.leader);
+    plane.position.set(
+      0,
+      badgeCentreY + UNIT_ICON_PLANE_SIZE / 2 + COMBAT_CARD_Y_GAP
+        + COMBAT_CARD_PLANE_HEIGHT / 2,
+      0,
+    );
+    plane.visibility = 1;
+
+    const fps = 60;
+    const holdFrames = Math.max(1, Math.round(holdMs / 1000 * fps));
+    const fadeFrames = Math.max(1, Math.round(fadeMs / 1000 * fps));
+    const totalFrames = holdFrames + fadeFrames;
+
+    const animFade = new BABYLON.Animation('combatCardA', 'visibility', fps,
+      BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+    animFade.setKeys([
+      { frame: 0,           value: 1 },
+      { frame: holdFrames,  value: 1 },
+      { frame: totalFrames, value: 0 },
+    ]);
+
+    const promise = new Promise(resolve => {
+      this._scene.beginDirectAnimation(plane, [animFade], 0, totalFrames, false, 1, () => {
+        plane.dispose();
+        mat.dispose();
+        tex.dispose();
+        resolve();
+      });
+    });
+    this._trackAnim(promise);
+  }
+
   // ─── Reaction effects: Sound Horn ring + Power-Node-Discovered burst ────
 
   /** Expanding flat ring at a hex — the 3D equivalent of the gold horn pulse
@@ -13015,6 +13105,24 @@ export const FLOAT_TEXT_PLANE_HEIGHT = 1.2;
 export const FLOAT_TEXT_TEX_WIDTH  = 512;
 export const FLOAT_TEXT_TEX_HEIGHT = 192;
 
+/** Combat card (G4 Phase 2) — billboarded dice/total readout that floats
+ *  above a combatant's head during a 3D cinematic battle, alongside the
+ *  legacy modal. World-space plane dimensions (a wide rounded card) and the
+ *  backing DynamicTexture pixel size. The card is wider than the floater
+ *  pill so the dice row + total read cleanly even at zoom-out. */
+export const COMBAT_CARD_PLANE_WIDTH  = 2.2;
+export const COMBAT_CARD_PLANE_HEIGHT = 1.1;
+export const COMBAT_CARD_TEX_WIDTH    = 384;
+export const COMBAT_CARD_TEX_HEIGHT   = 192;
+/** Clearance (world units) between the unit-icon badge top and the bottom
+ *  edge of the combat card, so the card stacks above the badge/HP ring. */
+export const COMBAT_CARD_Y_GAP = 0.18;
+/** Default hold time (ms) at full opacity before the card fades. Scaled by
+ *  the caller's speed factor. */
+export const COMBAT_CARD_HOLD_MS = 1100;
+/** Fade-out time (ms) after the hold. */
+export const COMBAT_CARD_FADE_MS = 350;
+
 /** HP-bar height (world units) above the standee's base disc. */
 export const HP_BAR_Y_ABOVE_BASE = 0.2;
 
@@ -13721,6 +13829,143 @@ export function paintFloaterText(ctx, opts) {
 
   ctx.fillStyle = fillColor;
   ctx.fillText(text, cx, cy);
+}
+
+/**
+ * Pure: derive a combat-card view-model for one side of a battle `result`.
+ *
+ * Reads `result.breakdown` (set by `executeBattle` in actions.js): `atkPool`
+ * / `defPool` are the rolled d6 faces, `atkBaseDie` / `defBaseDie` are the
+ * picked die (best-of for advantage, worst-of for disadvantage), and the
+ * top-level `attackRoll` / `defenseRoll` are the post-modifier totals.
+ *
+ * Returns `{ poolFaces:number[], picked:number, total:number, won:boolean }`
+ * for `side` ('attacker' | 'defender'). The attacker "won" when the result
+ * hit; the defender "won" when it didn't. Falls back gracefully when the
+ * breakdown is missing (e.g. legacy snapshots): poolFaces collapses to the
+ * picked die when there's no pool, and total falls back to the picked die.
+ */
+export function combatCardModel(result, side) {
+  const isAtk = side === 'attacker';
+  const bd = (result && result.breakdown) || {};
+  const rawPool = isAtk ? bd.atkPool : bd.defPool;
+  const rawPicked = isAtk ? bd.atkBaseDie : bd.defBaseDie;
+  const rawTotal = isAtk ? result?.attackRoll : result?.defenseRoll;
+
+  let poolFaces = Array.isArray(rawPool)
+    ? rawPool.filter(n => Number.isFinite(n))
+    : [];
+  let picked = Number.isFinite(rawPicked)
+    ? rawPicked
+    : (poolFaces.length ? poolFaces[0] : 0);
+  // No pool but we have a picked die → show a single-die pool.
+  if (poolFaces.length === 0 && Number.isFinite(picked) && picked > 0) {
+    poolFaces = [picked];
+  }
+  const total = Number.isFinite(rawTotal) ? rawTotal : picked;
+  const won = isAtk ? !!result?.hit : !result?.hit;
+  return { poolFaces, picked, total, won };
+}
+
+/**
+ * Pure canvas painter for a combat card (sibling of `paintFloaterText`):
+ * draws the rolled dice as a row of rounded squares — the picked die rimmed
+ * in the accent colour — then the post-modifier total beneath them. The whole
+ * card is tinted by `won` (gold) vs lost (red). No Babylon, no canvas
+ * creation; the Babylon-side `addCombatCard` is the thin wrapper.
+ */
+export function paintCombatCard(ctx, model, opts) {
+  const { width, height } = opts;
+  const { poolFaces = [], picked, total, won } = model || {};
+  ctx.clearRect(0, 0, width, height);
+
+  const accent  = won ? '#ffd24a' : '#ff7a7a';
+  const dieFill = won ? '#2a3a20' : '#3a2020';
+
+  // Background card — semi-opaque dark rounded rect.
+  const margin = Math.round(width * 0.03);
+  const cardX = margin;
+  const cardY = margin;
+  const cardW = width - margin * 2;
+  const cardH = height - margin * 2;
+  const cardR = Math.round(Math.min(cardW, cardH) * 0.12);
+  ctx.fillStyle = 'rgba(0,0,0,0.72)';
+  ctx.beginPath();
+  ctx.moveTo(cardX + cardR, cardY);
+  ctx.lineTo(cardX + cardW - cardR, cardY);
+  ctx.arcTo(cardX + cardW, cardY, cardX + cardW, cardY + cardR, cardR);
+  ctx.lineTo(cardX + cardW, cardY + cardH - cardR);
+  ctx.arcTo(cardX + cardW, cardY + cardH, cardX + cardW - cardR, cardY + cardH, cardR);
+  ctx.lineTo(cardX + cardR, cardY + cardH);
+  ctx.arcTo(cardX, cardY + cardH, cardX, cardY + cardH - cardR, cardR);
+  ctx.lineTo(cardX, cardY + cardR);
+  ctx.arcTo(cardX, cardY, cardX + cardR, cardY, cardR);
+  ctx.closePath();
+  ctx.fill();
+  // Accent rim so the win/lose colour reads at a glance.
+  ctx.lineWidth = Math.max(3, Math.round(width * 0.012));
+  ctx.strokeStyle = accent;
+  ctx.stroke();
+
+  // ── Dice row ──────────────────────────────────────────────────────────
+  const n = Math.max(1, poolFaces.length);
+  // Reserve the top ~58% of the card for the dice, the rest for the total.
+  const diceBandH = cardH * 0.56;
+  const gap = Math.round(width * 0.02);
+  const die = Math.min(
+    Math.round(diceBandH * 0.9),
+    Math.floor((cardW - gap * (n + 1)) / n),
+  );
+  const dieR = Math.max(2, Math.round(die * 0.16));
+  const rowW = die * n + gap * (n - 1);
+  let dx = (width - rowW) / 2;
+  const dy = cardY + Math.round((diceBandH - die) / 2) + Math.round(cardH * 0.06);
+  ctx.font = `900 ${Math.round(die * 0.62)}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  let pickedDrawn = false;
+  for (let i = 0; i < poolFaces.length; i++) {
+    const face = poolFaces[i];
+    // Highlight the FIRST face that equals the picked die.
+    const isPicked = !pickedDrawn && face === picked;
+    if (isPicked) pickedDrawn = true;
+
+    ctx.fillStyle = isPicked ? dieFill : '#1a1a1f';
+    ctx.beginPath();
+    ctx.moveTo(dx + dieR, dy);
+    ctx.lineTo(dx + die - dieR, dy);
+    ctx.arcTo(dx + die, dy, dx + die, dy + dieR, dieR);
+    ctx.lineTo(dx + die, dy + die - dieR);
+    ctx.arcTo(dx + die, dy + die, dx + die - dieR, dy + die, dieR);
+    ctx.lineTo(dx + dieR, dy + die);
+    ctx.arcTo(dx, dy + die, dx, dy + die - dieR, dieR);
+    ctx.lineTo(dx, dy + dieR);
+    ctx.arcTo(dx, dy, dx + dieR, dy, dieR);
+    ctx.closePath();
+    ctx.fill();
+    ctx.lineWidth = isPicked
+      ? Math.max(3, Math.round(die * 0.10))
+      : Math.max(1, Math.round(die * 0.04));
+    ctx.strokeStyle = isPicked ? accent : '#555';
+    ctx.stroke();
+
+    ctx.fillStyle = isPicked ? '#fff' : '#bbb';
+    ctx.fillText(String(face), dx + die / 2, dy + die / 2);
+
+    dx += die + gap;
+  }
+
+  // ── Total ─────────────────────────────────────────────────────────────
+  const totalY = cardY + diceBandH + (cardH - diceBandH) / 2;
+  ctx.font = `900 ${Math.round(cardH * 0.26)}px sans-serif`;
+  ctx.lineWidth = Math.max(4, Math.round(cardH * 0.03));
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = '#000';
+  const totalStr = String(total);
+  ctx.strokeText(totalStr, width / 2, totalY);
+  ctx.fillStyle = accent;
+  ctx.fillText(totalStr, width / 2, totalY);
 }
 
 /**

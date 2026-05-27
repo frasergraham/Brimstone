@@ -1593,6 +1593,14 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
                   _heldFrameIndex = fi;
                 }
                 _heldCombatFrame3D = true;
+                // G4 Phase 2: float a dice/total card above BOTH combatants'
+                // heads, alongside the modal (modal stays until Phase 3). The
+                // card tracks the lunge (parented to the standee) and self-
+                // disposes after a hold+fade; waitForAnimations() drains it.
+                if (typeof renderer.addCombatCard === 'function') {
+                  renderer.addCombatCard(actorSnap.id,  'attacker', result);
+                  renderer.addCombatCard(targetSnap.id, 'defender', result);
+                }
               } else {
                 // 2D: per-battle frameHexes with right-dock inset (unchanged).
                 // Offset camera so the map is visible beside the docked dialog.
