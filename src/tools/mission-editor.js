@@ -1336,6 +1336,89 @@ export function setPhaseLoop(meta, loop) {
   return meta;
 }
 
+// ── Timeline model (EC) ─────────────────────────────────────────────────────
+// Pure data layer for the timeline tab. The timeline lays out rounds 1..span as
+// a day/night track (each round's phase walked from phaseCycle) with round-based
+// events (round storyTriggers + round waves) placed on their rounds. Area
+// triggers and non-round waves are surfaced SEPARATELY — they're position- /
+// condition-based, not round-based, so they're never forced onto a round.
+
+/**
+ * The phase key for a 1-based `round`, walking `phaseCycle.phases` in order.
+ * Mirrors game.js `phaseForRound`: a looping cycle wraps with modulo; a
+ * non-looping cycle CLAMPS to the last phase for rounds past the array's end.
+ * Returns null for an empty/absent cycle or a non-positive round.
+ *
+ * @param {{phases?: string[], loop?: boolean}} phaseCycle
+ * @param {number} round  1-based round number
+ */
+export function timelinePhaseForRound(phaseCycle, round) {
+  const phases = phaseCycle?.phases;
+  if (!Array.isArray(phases) || phases.length === 0) return null;
+  const idx = round - 1;
+  if (idx < 0) return null;
+  if (phaseCycle.loop) return phases[idx % phases.length];
+  return phases[Math.min(idx, phases.length - 1)];
+}
+
+/**
+ * How many rounds the timeline shows: at least `minRounds`, extended to cover
+ * the phase-cycle length AND the highest round any round-based event references
+ * (so an event at round 20 is always visible). Non-round events don't extend it.
+ *
+ * @param {object} meta
+ * @param {number} [minRounds=8]  floor (≈ one standard day/night cycle)
+ */
+export function timelineRoundSpan(meta, minRounds = 8) {
+  let span = Math.max(minRounds, meta?.phaseCycle?.phases?.length ?? 0);
+  for (const tr of meta?.storyTriggers ?? []) {
+    if (tr?.type === 'round' && Number.isFinite(tr.round)) span = Math.max(span, tr.round);
+  }
+  for (const w of meta?.waves ?? []) {
+    if (w?.trigger === 'round' && Number.isFinite(w.round)) span = Math.max(span, w.round);
+  }
+  return span;
+}
+
+/**
+ * Build the timeline model from `meta`:
+ *   • `rounds` — one descriptor per round 1..span: `{ round, phase, story[], waves[] }`
+ *     where `story`/`waves` carry `{ index, trigger|wave }` (the source-array index,
+ *     so edit/remove route back to meta.storyTriggers / meta.waves precisely).
+ *   • `areaTriggers` — `{ index, trigger }` for type:'area' storyTriggers (they
+ *     fire on-enter, no round — shown in their own lane).
+ *   • `offRoundWaves` — `{ index, wave }` for waves whose trigger isn't 'round'
+ *     (hero_kills / area) — also non-round, kept off the round lanes.
+ *
+ * @param {object} meta
+ * @param {number} [minRounds=8]
+ */
+export function buildTimelineModel(meta, minRounds = 8) {
+  const span = timelineRoundSpan(meta, minRounds);
+  const phaseCycle = meta?.phaseCycle ?? { phases: [], loop: true };
+  const rounds = [];
+  for (let r = 1; r <= span; r++) {
+    rounds.push({ round: r, phase: timelinePhaseForRound(phaseCycle, r), story: [], waves: [] });
+  }
+  (meta?.storyTriggers ?? []).forEach((tr, index) => {
+    if (tr?.type !== 'round') return;
+    const r = tr.round ?? 1;
+    if (r >= 1 && r <= span) rounds[r - 1].story.push({ index, trigger: tr });
+  });
+  (meta?.waves ?? []).forEach((w, index) => {
+    if (w?.trigger !== 'round') return;
+    const r = w.round ?? 1;
+    if (r >= 1 && r <= span) rounds[r - 1].waves.push({ index, wave: w });
+  });
+  const areaTriggers = (meta?.storyTriggers ?? [])
+    .map((trigger, index) => ({ index, trigger }))
+    .filter(({ trigger }) => trigger?.type === 'area');
+  const offRoundWaves = (meta?.waves ?? [])
+    .map((wave, index) => ({ index, wave }))
+    .filter(({ wave }) => wave?.trigger && wave.trigger !== 'round');
+  return { span, rounds, areaTriggers, offRoundWaves };
+}
+
 // ── Resources / rewards picker transforms (item 8) ──────────────────────────
 // startingResources + rewards are `{ [ResourceType]: amount }` maps. The picker
 // edits them as ordered rows of `{ type, amount }`; these are the lossless
@@ -1518,6 +1601,13 @@ export function createMissionEditor({ render } = {}) {
     setEnemyUnits(list) { snapshot(); enemyUnits = list; emit(); },
     getMeta: () => meta,
     setMeta(m) { snapshot(); meta = m; emit(); },
+    /**
+     * Run `mutator(meta)` as ONE undo step (snapshot → mutate-in-place → emit).
+     * The EC timeline routes its storyTrigger/wave authoring through this so each
+     * add/edit/remove is a discrete, undoable change to meta.storyTriggers /
+     * meta.waves — reusing the same list ops the sidebar forms call.
+     */
+    editMeta(mutator) { snapshot(); mutator(meta); emit(); },
 
     // ── Full-mission assemble / load (P6) ────────────────────────────────
     /** Recombine the model into a complete schema:1 mission JSON object. */

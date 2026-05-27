@@ -45,13 +45,14 @@ import {
 } from '../entities.js';
 import {
   createMissionEditor, createPreviewController, EditorTool, ENEMY_UNIT_TYPES,
-  addStoryTrigger, removeStoryTrigger, moveStoryTrigger,
+  addStoryTrigger, removeStoryTrigger,
   addWave, removeWave, populateFromMission, CreationMode, MAP_EDGES,
   valuePanelKind, ToolValueKind, createLayerVisibility, showStructures,
   roadNodeMarkersVisible, stripTileOverlays, mapSizePreset,
   overlayDarkenVisible, overlayEditedKeys,
   areaTriggerLayerVisible, areaTriggerHexKeys,
   PHASE_KINDS, addPhase, removePhaseAt, movePhase, setPhaseLoop,
+  buildTimelineModel,
   resourceMapToRows, rowsToResourceMap,
   lootOverridesToPicker, pickerToLootOverrides,
 } from './mission-editor.js';
@@ -232,6 +233,10 @@ function buildState(editor, layers = null) {
 export function initEditor(doc = document) {
   const canvas = doc.getElementById('e-render-canvas');
   const palette = doc.getElementById('e-palette');
+  // EC: the main-area timeline tab. The canvas pane and this pane are the two
+  // main-area views; #e-main-tabs (built below) toggles between them.
+  const timelinePane = doc.getElementById('e-timeline-pane');
+  const mainTabbar = doc.getElementById('e-main-tabs');
   // The map-area frame (#e-canvas-pane) is position:relative — both the toast
   // host (item 4) and the in-map controls (items 1 + 3) are anchored to it so
   // they ride above the canvas and stay put across pan / zoom / refit.
@@ -278,6 +283,7 @@ export function initEditor(doc = document) {
     renderer.resize();
     draw();
     refreshPowerNodes(); // node toggles change the cluster list
+    rebuildTimeline();   // events / phaseCycle may have changed
     notifyHistory();
   }
 
@@ -475,6 +481,7 @@ export function initEditor(doc = document) {
 
   function rebuildForms() {
     buildForms(doc, sidebar.panes, editor, rerender, rebuildForms, formStatus);
+    rebuildTimeline(); // phaseCycle edits (sidebar Mission tab) reshape the track
   }
   // The Map palette reflects the locked mode + live dims; rebuild it whenever
   // those can change (creation, resize, load) and reframe the canvas.
@@ -502,9 +509,42 @@ export function initEditor(doc = document) {
     buildLayersPanel(doc, sidebar.panes.layers, layers, () => rerender(),
       editor.getMode() === 'procedural');
   }
+  // ── Timeline tab (EC) ─────────────────────────────────────────────────────
+  // Rebuilds the main-area timeline pane from the current meta (phaseCycle +
+  // round events). Authoring routes through editor.editMeta (one undo step each)
+  // → rerender → rebuildTimeline, so the pane reflects every change live.
+  function rebuildTimeline() {
+    if (!timelinePane) return;
+    buildTimelinePane(doc, timelinePane, editor, formStatus);
+  }
+
+  // Main-area tabs (Map ⇄ Timeline). Switching to Map re-fits the canvas (it was
+  // display:none with zero size while Timeline showed); switching to Timeline
+  // rebuilds it from the latest model.
+  const mainTabs = buildMainTabs(doc, mainTabbar, {
+    onMap: () => {
+      if (timelinePane) timelinePane.classList.remove('active');
+      if (pane) pane.classList.add('active');
+      resetViewAndDraw();
+    },
+    onTimeline: () => {
+      if (pane) pane.classList.remove('active');
+      if (timelinePane) timelinePane.classList.add('active');
+      rebuildTimeline();
+    },
+  });
+  mainTabs?.activate('map');
+
+  // In-place field edits inside timeline event cards (title / round / type / …)
+  // fire bubbling `change`; a full rerender relocates a re-rounded card and
+  // refreshes the canvas area-trigger overlay. Add/remove go through editMeta
+  // (their own undo step). Attached once — rebuildTimeline only clears children.
+  timelinePane?.addEventListener('change', () => rerender());
+
   rebuildMapPalette();
   rebuildForms();
   rebuildLayers();
+  rebuildTimeline();
 
   // ── Load / Save — relocated to the top File menu; flow is unchanged. ──────
   // Validate-before-populate on load; validate + block-download on save.
@@ -659,7 +699,7 @@ function buildSidebar(doc, root) {
     { id: 'map', label: 'Map', tip: 'Terrain, structures, paths, starts, nodes + sizing tools' },
     { id: 'layers', label: 'Layers', tip: 'Toggle which map layers are drawn in the editor view' },
     { id: 'mission', label: 'Mission', tip: 'Mission properties, narrative, phase cycle, resources' },
-    { id: 'events', label: 'Events', tip: 'Win/lose objectives, story triggers, enemy waves' },
+    { id: 'events', label: 'Objectives', tip: 'Win / lose objectives (story triggers & waves live in the Timeline tab)' },
     { id: 'units', label: 'Units', tip: 'Placed enemy units + survivor start positions' },
   ];
 
@@ -711,6 +751,145 @@ function buildSidebar(doc, root) {
       units: paneEls.units,
     },
   };
+}
+
+// ── Main-area tabs (EC) ───────────────────────────────────────────────────────
+// The Map (canvas) and Timeline views are the two main-area panes; this bar
+// toggles between them via the shared (unit-tested) tab controller. Returns the
+// controller so the caller can `activate('map')` on boot.
+function buildMainTabs(doc, container, { onMap, onTimeline } = {}) {
+  if (!container) return null;
+  container.innerHTML = '';
+  const DEFS = [
+    { id: 'map', label: 'Map', tip: 'Paint terrain, structures, paths, starts, nodes + place units' },
+    { id: 'timeline', label: 'Timeline', tip: 'Round-by-round day/night cycle with story triggers & enemy waves' },
+  ];
+  const btns = {};
+  for (const d of DEFS) {
+    const b = doc.createElement('button');
+    b.className = 'e-stab';
+    b.textContent = d.label;
+    b.title = d.tip;
+    b.dataset.mtab = d.id;
+    b.addEventListener('click', () => tabs.activate(d.id));
+    btns[d.id] = b;
+    container.append(b);
+  }
+  const tabs = createTabController(DEFS.map(d => d.id), {
+    onActivate: (id) => {
+      for (const d of DEFS) btns[d.id].classList.toggle('active', d.id === id);
+      if (id === 'timeline') onTimeline?.(); else onMap?.();
+    },
+  });
+  return tabs;
+}
+
+// ── Timeline pane (EC) ──────────────────────────────────────────────────────
+// The main-area Timeline tab: a vertical round track whose left rail shows each
+// round's phase (the day/night cycle, derived from phaseCycle), and whose body
+// carries that round's story triggers + enemy waves. Below the track, separate
+// lanes hold area / on-enter triggers and non-round (kill / area) waves — these
+// aren't tied to a round so they're never forced onto one.
+//
+// Authoring REUSES the storyTrigger/wave model + cards: add/remove route through
+// editor.editMeta (one undo step each) → rerender → rebuild; in-place field
+// edits fire `change`, refreshed by the pane-level listener in initEditor.
+function buildTimelinePane(doc, host, editor, setStatus) {
+  host.innerHTML = '';
+  const meta = editor.getMeta();
+  const model = buildTimelineModel(meta);
+
+  const head = doc.createElement('div');
+  head.className = 'e-tl-intro e-section';
+  const h = doc.createElement('h3');
+  h.textContent = 'Mission Timeline';
+  head.append(h);
+  const looping = meta.phaseCycle?.loop ?? true;
+  head.append(hint(doc,
+    `Phases come from the Mission tab's Phase Cycle${looping ? ' (looping past its end)' : ' (last phase holds past its end)'}. ` +
+    'Click a round’s + to add a story trigger or wave there.'));
+  host.append(head);
+
+  const track = doc.createElement('div');
+  track.className = 'e-tl-track';
+  for (const rd of model.rounds) track.append(timelineRoundRow(doc, rd, editor, setStatus));
+  host.append(track);
+
+  host.append(timelineAreaLane(doc, model.areaTriggers, editor, setStatus));
+  if (model.offRoundWaves.length) {
+    host.append(timelineOffWavesLane(doc, model.offRoundWaves, editor, setStatus));
+  }
+}
+
+// One round row: phase rail (left) + that round's event cards & add buttons.
+function timelineRoundRow(doc, rd, editor, setStatus) {
+  const row = doc.createElement('div');
+  row.className = 'e-tl-row';
+
+  const rail = doc.createElement('div');
+  rail.className = `e-tl-rail e-tl-phase-${rd.phase ?? 'none'}`;
+  const num = doc.createElement('div');
+  num.className = 'e-tl-round';
+  num.textContent = `R${rd.round}`;
+  const meta = PHASE_META[rd.phase] ?? { icon: '·', label: rd.phase ?? '—', tip: 'No phase mapped for this round.' };
+  const badge = doc.createElement('div');
+  badge.className = 'e-tl-phase';
+  badge.textContent = `${meta.icon} ${meta.label}`;
+  badge.title = meta.tip;
+  rail.append(num, badge);
+  row.append(rail);
+
+  const body = doc.createElement('div');
+  body.className = 'e-tl-events';
+  if (!rd.story.length && !rd.waves.length) body.append(hint(doc, 'No events this round.'));
+  for (const { index, trigger } of rd.story) {
+    body.append(storyTriggerCard(doc, trigger, index,
+      { remove: () => editor.editMeta(m => removeStoryTrigger(m, index)) }, setStatus));
+  }
+  for (const { index, wave } of rd.waves) {
+    body.append(waveCard(doc, wave, index,
+      { remove: () => editor.editMeta(m => removeWave(m, index)) }, setStatus));
+  }
+  const adds = doc.createElement('div');
+  adds.className = 'e-tl-adds';
+  adds.append(
+    actionBtn(doc, '+ Trigger',
+      () => editor.editMeta(m => addStoryTrigger(m, { type: 'round', round: rd.round })),
+      `Add a story trigger that fires on round ${rd.round}`),
+    actionBtn(doc, '+ Wave',
+      () => editor.editMeta(m => addWave(m, { trigger: 'round', round: rd.round })),
+      `Add an enemy wave that spawns on round ${rd.round}`),
+  );
+  body.append(adds);
+  row.append(body);
+  return row;
+}
+
+// Area / on-enter triggers — fire on hex entry, not a round (their own lane).
+function timelineAreaLane(doc, areaTriggers, editor, setStatus) {
+  const sec = section(doc, 'On-Enter / Area Triggers');
+  sec.classList.add('e-tl-lane');
+  sec.append(hint(doc, 'Fire when the player enters the listed hexes — not tied to a round.'));
+  for (const { index, trigger } of areaTriggers) {
+    sec.append(storyTriggerCard(doc, trigger, index,
+      { remove: () => editor.editMeta(m => removeStoryTrigger(m, index)) }, setStatus));
+  }
+  sec.append(actionBtn(doc, '+ Area Trigger',
+    () => editor.editMeta(m => addStoryTrigger(m, { type: 'area', hexes: [] })),
+    'Add an area trigger (fires when the player enters its hexes)'));
+  return sec;
+}
+
+// Non-round waves (hero_kills / area triggered) — also off the round track.
+function timelineOffWavesLane(doc, offWaves, editor, setStatus) {
+  const sec = section(doc, 'Other Waves (kill / area triggered)');
+  sec.classList.add('e-tl-lane');
+  sec.append(hint(doc, 'Spawn on a kill-count or area trigger rather than a fixed round.'));
+  for (const { index, wave } of offWaves) {
+    sec.append(waveCard(doc, wave, index,
+      { remove: () => editor.editMeta(m => removeWave(m, index)) }, setStatus));
+  }
+  return sec;
 }
 
 // ── Toast host (item 4) ─────────────────────────────────────────────────────────
@@ -1180,27 +1359,12 @@ function buildForms(doc, panes, editor, rerenderCanvas, rebuild, setStatus) {
   }, setStatus));
   panes.events.append(obj);
 
-  // ── Story triggers (list editor) ─────────────────────────────────────────
-  const story = section(doc, 'Story Triggers');
-  (meta.storyTriggers ?? []).forEach((tr, i) => {
-    story.append(storyTriggerCard(doc, tr, i, {
-      remove: () => { removeStoryTrigger(meta, i); rebuild(); },
-      up: () => { moveStoryTrigger(meta, i, -1); rebuild(); },
-      down: () => { moveStoryTrigger(meta, i, 1); rebuild(); },
-    }, setStatus));
-  });
-  story.append(actionBtn(doc, '+ Add Trigger', () => { addStoryTrigger(meta); rebuild(); },
-    'Add a new story trigger (round- or area-based narrative beat)'));
-  panes.events.append(story);
-
-  // ── Waves (list editor) ─────────────────────────────────────────────────
-  const waves = section(doc, 'Waves');
-  (meta.waves ?? []).forEach((w, i) => {
-    waves.append(waveCard(doc, w, i, { remove: () => { removeWave(meta, i); rebuild(); } }, setStatus));
-  });
-  waves.append(actionBtn(doc, '+ Add Wave', () => { addWave(meta); rebuild(); },
-    'Add a new enemy wave (spawns units on a round / kill / area trigger)'));
-  panes.events.append(waves);
+  // Story triggers + waves moved OUT of this cramped sidebar tab and into the
+  // main-area Timeline tab (EC) — round events live on the round track, area /
+  // on-enter triggers + non-round waves in the Timeline's side lanes. A pointer
+  // keeps the relocation discoverable.
+  panes.events.append(hint(doc,
+    'Story triggers & enemy waves are authored in the Timeline tab (top-left).'));
 
   // ── Enemy units (placed on map; list-view for delete / override edit) ─────
   const enemies = section(doc, 'Enemy Units');
