@@ -2,9 +2,9 @@
 //   • Item 2 — Paint Path split into TWO single-kind tools: Road (path=ROAD +
 //     roadDirs wiring) and River (path=RIVER). Each paints exactly its kind; the
 //     combined path-value selector is gone.
-//   • Item 4 — River fork TOPOLOGY: a river must stay a branching TREE. A paint
-//     that would close a cycle or merge two separate branches is BLOCKED; a valid
-//     fork (only the fork hex has >2 connections) + ordinary 2-entry flow pass.
+//   • Item 4 — River placement is UNCONDITIONAL: no topology gate. A river tile
+//     can sit on any hex regardless of connectivity/forking (the old tree-topology
+//     check was removed so disjoint river pieces can be connected by hand).
 //   • Item 5 — area-event LAYER: story triggers carrying a `hexes` array light up
 //     those hexes; the toggle lives in the layer-visibility model.
 //   • Item 6 — the "Base only" layer toggle is removed entirely.
@@ -21,14 +21,13 @@ import {
   createBlankMapDef,
   paintRoad,
   paintRiver,
-  validateRiverAddition,
   createLayerVisibility,
   areaTriggerLayerVisible,
   areaTriggerHexKeys,
   ToolValueKind,
   valuePanelKind,
 } from '../src/tools/mission-editor.js';
-import { hexKey, getNeighbors } from '../src/hex.js';
+import { hexKey } from '../src/hex.js';
 
 // ── ITEM 2 — Road / River are two separate single-kind tools ──────────────────
 
@@ -75,87 +74,44 @@ describe('mission-editor — split Road / River tools (item 2)', () => {
   });
 });
 
-// ── ITEM 4 — River tree topology ──────────────────────────────────────────────
+// ── ITEM 4 — River placement is unconditional (topology gate removed) ─────────
 
-describe('mission-editor — river tree-topology validator (item 4)', () => {
-  test('an isolated first hex (no river-neighbours) is allowed', () => {
-    assert.deepEqual(validateRiverAddition(new Set(), { col: 2, row: 2 }),
-      { ok: true, reason: '' });
-  });
-
-  test('extending a branch (1 river-neighbour) is allowed — ordinary flow', () => {
-    const rivers = new Set([hexKey(0, 0), hexKey(1, 0)]);
-    // (2,0) is adjacent only to (1,0) among the rivers → a 2-entry flow segment.
-    const res = validateRiverAddition(rivers, { col: 2, row: 0 });
-    assert.equal(res.ok, true);
-  });
-
-  test('closing a cycle (2 neighbours in the SAME component) is BLOCKED', () => {
-    // (0,0),(1,0) are one river; (0,1) is adjacent to BOTH → would close a loop.
-    const rivers = new Set([hexKey(0, 0), hexKey(1, 0)]);
-    const res = validateRiverAddition(rivers, { col: 0, row: 1 });
-    assert.equal(res.ok, false);
-    assert.match(res.reason, /cycle|loop/i);
-  });
-
-  test('merging two SEPARATE rivers (neighbours in distinct comps) is BLOCKED', () => {
-    // (0,0) and (2,0) are two unconnected rivers; (1,0) bridges them.
-    const rivers = new Set([hexKey(0, 0), hexKey(2, 0)]);
-    const res = validateRiverAddition(rivers, { col: 1, row: 0 });
-    assert.equal(res.ok, false);
-    assert.match(res.reason, /merge|rejoin|branch/i);
-  });
-
-  test('a valid fork — built one branch at a time — where only the fork hex has 3 entries', () => {
+describe('mission-editor — unconditional river placement (item 4)', () => {
+  test('an isolated river hex paints fine (no neighbour required)', () => {
     const map = createBlankMapDef(13, 13);
-    // Trunk hub at (2,2); three branch tips each adjacent ONLY to (2,2).
-    assert.equal(paintRiver(map, { col: 2, row: 2 }).ok, true);
-    assert.equal(paintRiver(map, { col: 2, row: 1 }).ok, true);
-    assert.equal(paintRiver(map, { col: 2, row: 3 }).ok, true);
-    assert.equal(paintRiver(map, { col: 1, row: 2 }).ok, true);
-
-    // Count each river hex's river-neighbour connections.
-    const riverKeys = new Set(map.tiles.filter(t => t.path === 'RIVER')
-      .map(t => hexKey(t.col, t.row)));
-    const connOf = (col, row) =>
-      getNeighbors(col, row).filter(nb => riverKeys.has(hexKey(nb.col, nb.row))).length;
-    // The fork hub has 3 river connections; every branch tip has exactly 1.
-    assert.equal(connOf(2, 2), 3, 'fork hub has 3 connections');
-    for (const [c, r] of [[2, 1], [2, 3], [1, 2]]) {
-      assert.ok(connOf(c, r) <= 1, `branch tip (${c},${r}) has ≤1 connection`);
-    }
+    const res = paintRiver(map, { col: 2, row: 2 });
+    assert.deepEqual(res, { ok: true, warning: '' });
+    assert.ok(map.tiles.some(t => t.col === 2 && t.row === 2 && t.path === 'RIVER'));
   });
 
-  test('paintRiver blocks a cycle and leaves the model untouched', () => {
+  test('closing a cycle is now ALLOWED — a river can loop back', () => {
     const map = createBlankMapDef(13, 13);
     paintRiver(map, { col: 0, row: 0 });
     paintRiver(map, { col: 1, row: 0 });
-    const before = JSON.stringify(map);
-    const res = paintRiver(map, { col: 0, row: 1 }); // would close a triangle
-    assert.equal(res.ok, false);
-    assert.ok(res.warning);
-    assert.equal(JSON.stringify(map), before, 'blocked paint mutates nothing');
+    // (0,1) is adjacent to BOTH → would have closed a loop under the old gate.
+    const res = paintRiver(map, { col: 0, row: 1 });
+    assert.equal(res.ok, true);
+    assert.ok(map.tiles.some(t => t.col === 0 && t.row === 1 && t.path === 'RIVER'));
   });
 
-  test('controller applyAt surfaces a blocked river paint and keeps history clean', () => {
+  test('connecting two disjoint river pieces is now ALLOWED', () => {
+    const map = createBlankMapDef(13, 13);
+    paintRiver(map, { col: 0, row: 0 });
+    paintRiver(map, { col: 2, row: 0 });
+    // (1,0) bridges two separate rivers → was BLOCKED, now allowed.
+    const res = paintRiver(map, { col: 1, row: 0 });
+    assert.equal(res.ok, true);
+    assert.ok(map.tiles.some(t => t.col === 1 && t.row === 0 && t.path === 'RIVER'));
+  });
+
+  test('controller applyAt paints river unconditionally and records history', () => {
     const ed = createMissionEditor({ render: () => {} });
     ed.setActiveTool(EditorTool.PAINT_RIVER);
     ed.applyAt({ col: 0, row: 0 });
     ed.applyAt({ col: 1, row: 0 });
-    const undosBefore = ed.canUndo();
-    const tilesBefore = JSON.stringify(ed.getMapDef().tiles);
-    const res = ed.applyAt({ col: 0, row: 1 }); // cycle → blocked
-    assert.equal(res.ok, false);
-    assert.ok(res.warning);
-    assert.equal(JSON.stringify(ed.getMapDef().tiles), tilesBefore,
-      'a blocked edit leaves the model untouched');
-    assert.equal(ed.canUndo(), undosBefore, 'no extra undo step pushed');
-  });
-
-  test('re-painting an existing river hex is a no-op-allow (no false cycle)', () => {
-    const rivers = new Set([hexKey(0, 0), hexKey(1, 0), hexKey(0, 1)]);
-    // (0,1) is already a river — re-validating it must not flag the loop.
-    assert.equal(validateRiverAddition(rivers, { col: 0, row: 1 }).ok, true);
+    const res = ed.applyAt({ col: 0, row: 1 }); // cycle → now allowed
+    assert.equal(res.ok, true);
+    assert.ok(ed.getMapDef().tiles.some(t => t.col === 0 && t.row === 1 && t.path === 'RIVER'));
   });
 });
 

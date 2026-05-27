@@ -315,91 +315,14 @@ export function paintRoad(mapDef, hex) {
 }
 
 /**
- * RIVER tool (item 2 + item 4) — paint path=RIVER, but ONLY if the result keeps
- * the river graph a branching TREE. A river paint is BLOCKED (model untouched,
- * returns `{ ok:false, warning }`) when it would close a cycle or merge two
- * already-separate river branches; a valid fork (the fork hex accumulates >2
- * connections by being the neighbour of separately-painted hexes) and ordinary
- * 2-entry flow are allowed. Returns `{ ok:true, warning:'' }` on success.
+ * RIVER tool (item 2) — paint path=RIVER unconditionally. River placement has no
+ * topology constraint: a river tile can sit on any hex regardless of connectivity
+ * or forking, so disjoint pieces can be freely connected by hand. Returns
+ * `{ ok:true, warning:'' }` to match the dispatch/applyAt contract.
  */
 export function paintRiver(mapDef, { col, row }) {
-  const riverKeys = _riverKeySet(mapDef);
-  const check = validateRiverAddition(riverKeys, { col, row });
-  if (!check.ok) return { ok: false, warning: check.reason };
   paintPath(mapDef, { col, row }, _RIVER_KEY);
   return { ok: true, warning: '' };
-}
-
-// Collect the hex keys of every tile def currently painted as a RIVER.
-function _riverKeySet(mapDef) {
-  const set = new Set();
-  for (const t of _tileList(mapDef)) {
-    if (t.path === _RIVER_KEY) set.add(hexKey(t.col, t.row));
-  }
-  return set;
-}
-
-// Label each river hex with its connected-component root (flood-fill over hex
-// adjacency). Returns Map<hexKey, rootKey>. Pure over the given key set.
-function _riverComponents(riverKeys) {
-  const comp = new Map();
-  for (const key of riverKeys) {
-    if (comp.has(key)) continue;
-    const root = key;
-    const stack = [key];
-    comp.set(key, root);
-    while (stack.length) {
-      const cur = stack.pop();
-      const [c, r] = String(cur).split(',').map(Number);
-      for (const nb of getNeighbors(c, r)) {
-        const k = hexKey(nb.col, nb.row);
-        if (riverKeys.has(k) && !comp.has(k)) { comp.set(k, root); stack.push(k); }
-      }
-    }
-  }
-  return comp;
-}
-
-/**
- * Pure river tree-topology check (item 4). Given the existing river hex keys and
- * a candidate hex, decide whether painting RIVER there keeps the river graph a
- * branching tree (a forest of acyclic trees). Returns `{ ok, reason }`.
- *
- * A candidate with ≤1 river-neighbour always extends a branch or starts a fresh
- * river — allowed (a fork hex reaches >2 connections this way, one painted
- * neighbour at a time). A candidate with ≥2 river-neighbours would either close
- * a cycle (two neighbours already in the same river) or merge two separate
- * rivers/branches (neighbours in distinct components) — both BLOCKED, with a
- * reason that names which rule it broke.
- *
- * @param {Set<string>|string[]} riverKeys existing RIVER hex keys
- * @param {{col:number,row:number}} hex candidate
- */
-export function validateRiverAddition(riverKeys, { col, row }) {
-  const set = riverKeys instanceof Set ? riverKeys : new Set(riverKeys);
-  const selfKey = hexKey(col, row);
-  // Re-painting an existing river hex changes no topology — always allowed.
-  if (set.has(selfKey)) return { ok: true, reason: '' };
-
-  const nbKeys = [];
-  for (const nb of getNeighbors(col, row)) {
-    const k = hexKey(nb.col, nb.row);
-    if (set.has(k)) nbKeys.push(k);
-  }
-  if (nbKeys.length <= 1) return { ok: true, reason: '' };
-
-  const comp = _riverComponents(set);
-  const roots = new Set(nbKeys.map(k => comp.get(k)));
-  if (roots.size < nbKeys.length) {
-    return {
-      ok: false,
-      reason: 'A river cannot loop back on itself — that would close a cycle. Rivers must branch like a tree.',
-    };
-  }
-  return {
-    ok: false,
-    reason: 'A river cannot rejoin downstream — that would merge two separate branches. Only a fork may split.',
-  };
 }
 
 // True when the tile def at (col,row) is an explicitly-painted ROAD.
@@ -1514,8 +1437,8 @@ export function populateFromMission(parsed) {
 const _TOOL_DISPATCH = {
   [EditorTool.PAINT_BASE]: (m, hex, pv) => paintBase(m.mapDef, hex, pv.base),
   [EditorTool.PAINT_STRUCTURE]: (m, hex, pv) => paintStructure(m.mapDef, hex, pv.structure),
-  // Road: any-junction wiring. River: returns { ok, warning } so applyAt can
-  // surface a blocked tree-topology violation (item 4).
+  // Road: any-junction wiring. River: unconditional paint (no topology gate) —
+  // returns { ok:true, warning:'' } for the applyAt contract.
   [EditorTool.PAINT_ROAD]: (m, hex) => paintRoad(m.mapDef, hex),
   [EditorTool.PAINT_RIVER]: (m, hex) => paintRiver(m.mapDef, hex),
   [EditorTool.SET_RESOURCE]: (m, hex, pv) => setResource(m.mapDef, hex, pv.resource),
