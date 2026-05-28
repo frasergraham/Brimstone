@@ -49,6 +49,7 @@ import {
   worldToHex, neighborDeltas, DEFAULT_TERRAIN_TINTS,
 } from './terrain-splat.js';
 import { makeTerrainSplatPlugin, SPLAT_UNIFORM_DEFAULTS } from './terrain-splat-plugin.js';
+import { attachFogDarkenToMaterial } from './fog-darken-plugin.js';
 
 // Babylon core + glTF loaders are served from the packaged `assets/vendor/`
 // directory rather than any CDN — the Electron / iOS bundles must run with zero
@@ -2534,6 +2535,19 @@ export class Renderer3D {
 
       this._buildingTemplates.set(relPath, { mesh: source, scale });
 
+      // Per-instance fog darken: register a 1-stride instanced buffer on the
+      // template so each building instance can carry its own `fogDarken` value
+      // (1.0 = unfogged, FOG_HIDDEN_DARKEN = fogged), and attach the
+      // FogDarkenPlugin to the template's material (incl. multi-material
+      // sub-materials) so the value lands in the shader. Without this,
+      // hardware instances share the material and would all flip together.
+      try {
+        if (typeof source.registerInstancedBuffer === 'function') {
+          source.registerInstancedBuffer('fogDarken', 1);
+        }
+      } catch { /* test stub may lack the API */ }
+      attachFogDarkenToMaterial(BABYLON, source.material);
+
       // If the map's already built (the common case — GLB load is slow,
       // _buildMap runs synchronously right after Babylon init), retrofit the
       // procedural buildings that use this variant.
@@ -2583,9 +2597,17 @@ export class Renderer3D {
       inst.rotation = new BABYLON.Vector3(0, houseYawForHex(tile.col, tile.row), 0);
     }
     inst.isPickable = false;
-    // Buildings stay visible under fog of war — permanent terrain, not
-    // tactical info. Mirrors the procedural box+roof metadata.
-    inst.metadata = { respectsFog: false, kind: 'building-glb', col: tile.col, row: tile.row };
+    // Buildings stay visible under fog of war but darken to read as occluded
+    // (matches the splat ground beneath). Per-instance via the `fogDarken`
+    // instanced buffer registered on the template — `_setTilePropsFogged`
+    // flips it per-tile. 1.0 = unfogged baseline.
+    if (inst.instancedBuffers) inst.instancedBuffers.fogDarken = 1.0;
+    inst.metadata = {
+      respectsFog: 'building-instance',
+      kind: 'building-glb',
+      col: tile.col,
+      row: tile.row,
+    };
     // Belt-and-suspenders: the template already carries receiveShadows (so the
     // instance inherits it), but set it explicitly too — mirrors the tree path.
     if ('receiveShadows' in inst) inst.receiveShadows = true;
@@ -12014,12 +12036,22 @@ export class Renderer3D {
   _setTilePropsFogged(hexK, fogged) {
     const props = this._tilePropsByKey.get(hexK);
     if (props) for (const p of props) {
-      // Three fog policies per-prop, set via `metadata.respectsFog`:
-      //   • undefined / true → hide on fog (standees, HP bars, node discs)
-      //   • false             → permanent geometry, ignore fog (trees, buildings)
-      //   • 'darken'          → stay visible but tint dimmer (roads, rivers)
+      // Four fog policies per-prop, set via `metadata.respectsFog`:
+      //   • undefined / true     → hide on fog (standees, HP bars, node discs)
+      //   • false                → permanent geometry, ignore fog (trees)
+      //   • 'darken'             → tint dimmer (roads, rivers) — per-tile material
+      //   • 'building-instance'  → tint dimmer (GLB buildings) — per-instance
+      //                            attribute (template-shared material).
       const policy = p.metadata?.respectsFog;
       if (policy === false) continue;
+      if (policy === 'building-instance') {
+        // Hardware-instance fog darken: write the `fogDarken` instanced buffer
+        // slot on this one building, leaving sibling instances on other tiles
+        // untouched. Plugin reads it in the shader and multiplies gl_FragColor.
+        const k = fogged ? FOG_HIDDEN_DARKEN : 1.0;
+        if (p.instancedBuffers) p.instancedBuffers.fogDarken = k;
+        continue;
+      }
       if (policy === 'darken') {
         // Per-tile material darkening: the ribbon stays at full opacity but
         // its colour is multiplied so it matches the fogged ground beneath

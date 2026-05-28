@@ -95,6 +95,36 @@ describe('Renderer3D splat fog — _setTilePropsFogged', () => {
     assert.ok(!r._fogActiveSet.has(hexK));
   });
 
+  test("'building-instance' props darken via the per-instance `fogDarken` buffer", async () => {
+    // GLB buildings are hardware instances of a shared template — toggling
+    // the template material would dim every building at once, so each
+    // instance carries its own `fogDarken` value in an instanced buffer.
+    const { FOG_HIDDEN_DARKEN } = await import('../src/renderer-3d.js');
+    const r = makeRenderer();
+    const hexK = '6,2';
+    const bldgA = {
+      isVisible: true,
+      instancedBuffers: { fogDarken: 1.0 },
+      metadata: { respectsFog: 'building-instance' },
+    };
+    const bldgB = {
+      isVisible: true,
+      instancedBuffers: { fogDarken: 1.0 },
+      metadata: { respectsFog: 'building-instance' },
+    };
+    // Both buildings share a template; only A is on the fogged tile.
+    r._tilePropsByKey.set(hexK,        [bldgA]);
+    r._tilePropsByKey.set('99,99',     [bldgB]);
+    r._setTilePropsFogged(hexK, true);
+    assert.equal(bldgA.instancedBuffers.fogDarken, FOG_HIDDEN_DARKEN,
+      'fogged building darkens');
+    assert.equal(bldgB.instancedBuffers.fogDarken, 1.0,
+      'sibling building on a different tile is untouched');
+    assert.equal(bldgA.isVisible, true, 'building stays visible');
+    r._setTilePropsFogged(hexK, false);
+    assert.equal(bldgA.instancedBuffers.fogDarken, 1.0, 'restored on un-fog');
+  });
+
   test("'darken' props tint to FOG_HIDDEN_DARKEN cap on both texture level + colour", async () => {
     // Fog darken on roads/rivers must hit the TEXTURE level (outside the
     // lighting clamp) so it survives bright phases — same fix the terrain
