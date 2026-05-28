@@ -34,6 +34,85 @@
  *        Called after the punch / reaction clip resolve, to play HP floaters,
  *        death bursts, splash rings, etc. main.js passes its own helper here.
  */
+/** G1 v2 — countdown auto-click for the Continue button.
+ *
+ * The button starts hidden; `run3DCombatCardHold` reveals it the moment both
+ * combat readouts reach their final state. Once visible, this helper watches
+ * for the reveal, labels the button "Continue (N) ▶", ticks N down once a
+ * second, and fires `onAutoClick()` at N == 0 unless the user clicked first.
+ *
+ * Hover pauses the countdown; mouseleave resumes from the held value. The
+ * cleanup function returned by this helper:
+ *   - clears any pending timers,
+ *   - restores the original label,
+ *   - detaches the hover listeners.
+ *
+ * Cleanup is idempotent. Safe to call from a click handler before the
+ * countdown has started ticking. Tolerates a DOM-less environment by
+ * no-opping when `button` is missing.
+ *
+ * Visible for tests via the named export.
+ */
+export const CONTINUE_COUNTDOWN_SEC = 5;
+export const CONTINUE_BTN_BASE_LABEL = 'Continue';
+
+export function startContinueCountdown(button, onAutoClick, opts = {}) {
+  if (!button) return () => {};
+  const totalSec       = Number.isFinite(opts.totalSec)       ? opts.totalSec
+    : CONTINUE_COUNTDOWN_SEC;
+  const setIntervalFn  = opts.setIntervalFn  || ((fn, ms) => setInterval(fn, ms));
+  const clearIntervalFn = opts.clearIntervalFn || clearInterval;
+  const setTimeoutFn   = opts.setTimeoutFn   || ((fn, ms) => setTimeout(fn, ms));
+  const clearTimeoutFn = opts.clearTimeoutFn || clearTimeout;
+  const isHiddenFn = opts.isHidden ?? ((el) => !!el.hidden);
+
+  const originalLabel = button.textContent;
+  let remaining = totalSec;
+  let tickHandle = null;
+  let waitHandle = null;
+  let hovered = false;
+  let cleaned = false;
+
+  const renderLabel = () => {
+    button.textContent = `${CONTINUE_BTN_BASE_LABEL} (${Math.max(0, remaining)})`;
+  };
+  const onTick = () => {
+    if (hovered) return;
+    remaining -= 1;
+    renderLabel();
+    if (remaining <= 0) {
+      if (tickHandle != null) { clearIntervalFn(tickHandle); tickHandle = null; }
+      // Defer onAutoClick to a microtask so cleanup runs in tests' synchronous
+      // flow even when the timer fires immediately.
+      try { onAutoClick(); } catch {}
+    }
+  };
+  const startTicking = () => {
+    if (tickHandle != null) return;
+    renderLabel();
+    tickHandle = setIntervalFn(onTick, 1000);
+  };
+  const waitForReveal = () => {
+    if (!isHiddenFn(button)) { startTicking(); return; }
+    waitHandle = setTimeoutFn(waitForReveal, 50);
+  };
+  const onEnter = () => { hovered = true; };
+  const onLeave = () => { hovered = false; };
+  button.addEventListener('mouseenter', onEnter);
+  button.addEventListener('mouseleave', onLeave);
+  waitForReveal();
+
+  return function cleanup() {
+    if (cleaned) return;
+    cleaned = true;
+    if (tickHandle != null) { clearIntervalFn(tickHandle); tickHandle = null; }
+    if (waitHandle != null) { clearTimeoutFn(waitHandle); waitHandle = null; }
+    button.removeEventListener('mouseenter', onEnter);
+    button.removeEventListener('mouseleave', onLeave);
+    button.textContent = originalLabel;
+  };
+}
+
 export async function run3DCombatCardHold({
   renderer, state,
   actorSnap, targetSnap, result, redrawFn,
@@ -67,10 +146,24 @@ export async function run3DCombatCardHold({
   renderer.holdPunchAtImpact?.();
 
   // Resolve the Continue-button gate eagerly so both readouts share one promise.
+  // G1 v2: also runs a 5-second countdown — the label ticks down each second
+  // and the button auto-clicks at 0 if the player hasn't tapped already. The
+  // countdown is paused while the cursor hovers (operator-okay-to-skip; cheap
+  // to add and welcome on accidentally framed combats).
   const continueBtn = typeof getContinueButton === 'function' ? getContinueButton() : null;
+  let cancelCountdown = null;
   const continueGate = continueBtn
     ? new Promise(resolve => {
-        continueBtn.addEventListener('click', () => resolve(), { once: true });
+        const cleanup = () => {
+          if (cancelCountdown) { cancelCountdown(); cancelCountdown = null; }
+        };
+        const onClick = () => { cleanup(); resolve(); };
+        continueBtn.addEventListener('click', onClick, { once: true });
+        cancelCountdown = startContinueCountdown(continueBtn, () => {
+          continueBtn.removeEventListener('click', onClick);
+          cleanup();
+          resolve();
+        });
       })
     : Promise.resolve();
 

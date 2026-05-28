@@ -1496,22 +1496,22 @@ export function compassRotationDegFromCameraAlpha(alpha) {
 }
 
 /** World height the combat readout's TOP reaches above a standee's anchor —
- *  the head top (cone+sphere stack, cone-relative) plus the gap above the head
- *  plus the main number plane height plus the step-floater rise distance (so
- *  the floaters stay framed too). Feeds `framingForEntities`' `cardExtent` so
- *  the combat frame loosens just enough to keep the floating readout on
- *  screen. Uses the leader (taller) geometry by default so leader readouts
- *  never clip; pure and exported for tests. */
+ *  the icon top (badge centre + size/2) plus the persistent floater stack
+ *  plus the result-label slot. Sized for the worst case (~4 attacker
+ *  bonuses → 4 stacked floaters + 1 result label), which guarantees the
+ *  combat-camera framing leaves room for every readout we can produce.
+ *  Pure and exported for tests. */
 export function combatCardFrameExtent(leader = true) {
-  // Readout now anchors to the icon-badge top (icon centre + size/2), with
-  // a small gap above the icon, then the number plane, then the floater rise.
+  // Persistent floaters stack at fixed slots above the icon; the result label
+  // sits in the topmost slot. Reserve enough room for 4 floaters + label so
+  // the framing doesn't clip the longest readout the model can emit.
+  const MAX_FLOATERS = 4;
   return iconBillboardYRelativeToCone(leader)
     + UNIT_ICON_PLANE_SIZE / 2
-    + READOUT_GAP_ABOVE_ICON
-    + COMBAT_READOUT_NUM_PLANE_HEIGHT
     + COMBAT_READOUT_FLOATER_Y_OFFSET
-    + COMBAT_READOUT_FLOATER_PLANE_HEIGHT
-    + COMBAT_READOUT_FLOATER_RISE_WU;
+    + MAX_FLOATERS * (COMBAT_READOUT_FLOATER_PLANE_HEIGHT + COMBAT_READOUT_FLOATER_SLOT_GAP)
+    + COMBAT_READOUT_RESULT_LABEL_GAP
+    + COMBAT_READOUT_RESULT_LABEL_PLANE_HEIGHT;
 }
 
 /** Minimum hex span we want visible at max zoom-in. 5 reads as a comfortable
@@ -10389,184 +10389,166 @@ export class Renderer3D {
     const stepMs      = (opts.stepMs      ?? COMBAT_READOUT_STEP_MS)       * speedFactor;
     const finalHoldMs = (opts.finalHoldMs ?? COMBAT_READOUT_FINAL_HOLD_MS) * speedFactor;
     const fadeMs      = (opts.fadeMs      ?? COMBAT_READOUT_FADE_MS)       * speedFactor;
-    const pulseMs     = COMBAT_READOUT_PULSE_MS * speedFactor;
-    const floaterRiseMs = COMBAT_READOUT_FLOATER_RISE_MS * speedFactor;
     const setTimeoutFn = opts.setTimeoutFn || ((fn, ms) => setTimeout(fn, ms));
 
-    // ── Main number plane ───────────────────────────────────────────────────
-    const numTex = new BABYLON.DynamicTexture(
-      `readoutNumTex_${entityId}_${side}_${Date.now()}`,
-      { width: COMBAT_READOUT_NUM_TEX_SIZE, height: COMBAT_READOUT_NUM_TEX_SIZE },
-      this._scene,
-      false,
-    );
-    numTex.hasAlpha = true;
-    paintReadoutNumber(numTex.getContext(), {
-      width:  COMBAT_READOUT_NUM_TEX_SIZE,
-      height: COMBAT_READOUT_NUM_TEX_SIZE,
-      value:  model.start,
-      color:  model.sideColor,
-      icon:   model.sideIcon,
+    // ── G1 v2: paint the readout INTO the unit-icon DynamicTexture ─────────
+    // The icon stays visible during combat and serves as the readout surface.
+    // We grab the icon entry up-front, mark it as "combat-mode" so the per-
+    // frame icon-sync doesn't fight our paints, and snapshot the portrait
+    // source so we can restore on dispose.
+    if (!this._iconCombatMode) this._iconCombatMode = new Set();
+    const iconEntry = this._unitIconBadges?.get(entityId) ?? null;
+    if (iconEntry) this._iconCombatMode.add(entityId);
+
+    // Resolve the portrait source ONCE so the basePaint closure can re-draw
+    // the same portrait under every overlay refresh (start / steps / outcome).
+    const entity = (this.state?.entities ?? []).find(e => e && e.id === entityId) ?? null;
+    const portraitSource = (entity && this._tilemapImg && this._spriteRects)
+      ? resolveUnitIconPortrait(this._tilemapImg, this._spriteRects, this._assetIdFor(entity))
+      : { img: null, rect: null, hasPortrait: false };
+    const hp    = entity?.hp ?? 0;
+    const maxHp = entity?.maxHp ?? 1;
+    const basePaint = (ctx) => paintUnitIconBadge(ctx, {
+      size: UNIT_ICON_TEX_SIZE,
+      portraitImg:  portraitSource.hasPortrait ? portraitSource.img  : null,
+      portraitRect: portraitSource.hasPortrait ? portraitSource.rect : null,
+      hp, maxHp,
     });
-    numTex.update();
+    const repaintIcon = (value, color) => {
+      if (!iconEntry) return;
+      paintIconCombatReadout(iconEntry.tex.getContext(), {
+        size: UNIT_ICON_TEX_SIZE,
+        basePaint,
+        value,
+        color,
+        icon: model.sideIcon,
+      });
+      iconEntry.tex.update();
+    };
+    // Paint the start value into the icon immediately so the readout latches
+    // on the very first frame.
+    repaintIcon(model.start, model.sideColor);
 
-    const numPlane = BABYLON.MeshBuilder.CreatePlane(
-      `readoutNum_${entityId}_${side}_${Date.now()}`,
-      { width: COMBAT_READOUT_NUM_PLANE_WIDTH, height: COMBAT_READOUT_NUM_PLANE_HEIGHT },
-      this._scene,
-    );
-    numPlane.billboardMode    = BABYLON.Mesh.BILLBOARDMODE_ALL;
-    numPlane.isPickable       = false;
-    numPlane.renderingGroupId = 2;
-
-    const numMat = new BABYLON.StandardMaterial(`readoutNumMat_${numPlane.uniqueId}`, this._scene);
-    numMat.diffuseTexture = numTex;
-    numMat.opacityTexture = numTex;
-    applyFlatUnitIconMaterial(BABYLON, numMat);
-    numPlane.material = numMat;
-
-    // Parent to the standee so the readout tracks the lunge. Stack the
-    // number directly above the unit-icon badge (no horizontal axis offset).
-    numPlane.parent = standee.plane;
+    // ── Persistent floaters + result label state ───────────────────────────
+    // Stacked vertically above the icon. Slot 0 = bottom-most. The result
+    // label sits in the topmost slot, ABOVE all step floaters. None of these
+    // rise + fade individually — they park at fixed Y and fade together when
+    // Continue is pressed.
     const iconCenterY = iconBillboardYRelativeToCone(standee.leader);
     const iconTopY = iconCenterY + UNIT_ICON_PLANE_SIZE / 2;
-    const numCenterY = iconTopY + READOUT_GAP_ABOVE_ICON + COMBAT_READOUT_NUM_PLANE_HEIGHT / 2;
-    numPlane.position.set(0, numCenterY, 0);
-    numPlane.visibility = 1;
-
-    // Hide this unit's icon badge while the readout is up — keep the
-    // above-head stack clean.
-    const iconEntry  = this._unitIconBadges?.get(entityId);
-    const iconPlane  = iconEntry?.plane ?? null;
-    const iconVisRestore = iconPlane ? iconPlane.visibility : null;
-    if (iconPlane) iconPlane.visibility = 0;
+    const slotY = (slotIdx) => iconTopY
+      + COMBAT_READOUT_FLOATER_Y_OFFSET
+      + (slotIdx + 0.5) * COMBAT_READOUT_FLOATER_PLANE_HEIGHT
+      + slotIdx * COMBAT_READOUT_FLOATER_SLOT_GAP;
+    const resultSlotY = (numFloaters) => iconTopY
+      + COMBAT_READOUT_FLOATER_Y_OFFSET
+      + numFloaters * (COMBAT_READOUT_FLOATER_PLANE_HEIGHT + COMBAT_READOUT_FLOATER_SLOT_GAP)
+      + COMBAT_READOUT_RESULT_LABEL_GAP
+      + COMBAT_READOUT_RESULT_LABEL_PLANE_HEIGHT / 2;
 
     // Track everything that needs disposing if we abort early.
     let disposed = false;
-    const stepDisposables = [];
-    const disposeAll = () => {
-      if (disposed) return;
-      disposed = true;
-      try { numPlane.dispose(); } catch {}
-      try { numMat.dispose(); } catch {}
-      try { numTex.dispose(); } catch {}
-      for (const d of stepDisposables) {
+    const persistents = []; // { plane, mat, tex }
+    const disposePersistents = () => {
+      for (const d of persistents) {
         try { d.plane?.dispose(); } catch {}
         try { d.mat?.dispose();   } catch {}
         try { d.tex?.dispose();   } catch {}
       }
-      if (iconPlane && iconVisRestore != null) iconPlane.visibility = iconVisRestore;
+      persistents.length = 0;
+    };
+    const restoreIcon = () => {
+      if (!iconEntry) return;
+      if (this._iconCombatMode) this._iconCombatMode.delete(entityId);
+      // Snap-restore the icon to its normal portrait + HP ring so the next
+      // _syncEntityIconBillboards tick reads the badge as up-to-date.
+      try { basePaint(iconEntry.tex.getContext()); iconEntry.tex.update(); } catch {}
+    };
+    const disposeAll = () => {
+      if (disposed) return;
+      disposed = true;
+      disposePersistents();
+      restoreIcon();
     };
 
     // ── Gate plumbing ───────────────────────────────────────────────────────
-    // `awaitFinal()` lets external callers (main.js's _run3DCombatCardHold)
-    // gate UI on the moment the readout settles. `triggerFade()` lets the
-    // caller kick off the fade after the player taps Continue. Both are
-    // backed by manually-resolved promises captured here.
     let resolveFinal;
     const finalReached = new Promise(r => { resolveFinal = r; });
     let resolveContinue;
     const continueSignal = new Promise(r => { resolveContinue = r; });
     const triggerFade = () => { if (resolveContinue) { resolveContinue(); resolveContinue = null; } };
-    // Default awaitContinueFn: resolve immediately when not provided. Tests
-    // rely on this so they don't hang waiting for a DOM click.
     const awaitContinueFn = typeof opts.awaitContinueFn === 'function'
       ? opts.awaitContinueFn
       : () => Promise.resolve();
 
     // ── Sequence ────────────────────────────────────────────────────────────
     const promise = new Promise(resolve => {
-      // Schedule each bonus step: repaint the number + scale pulse + spawn floater.
+      // Schedule each bonus step: repaint icon with running total + spawn
+      // the persistent floater at slot i (bottom-up stack order).
       for (let i = 0; i < model.steps.length; i++) {
         const step = model.steps[i];
         const at = baseHoldMs + i * stepMs;
         setTimeoutFn(() => {
           if (disposed) return;
-          // Repaint the main number with the new running total.
-          paintReadoutNumber(numTex.getContext(), {
-            width:  COMBAT_READOUT_NUM_TEX_SIZE,
-            height: COMBAT_READOUT_NUM_TEX_SIZE,
-            value:  step.value,
-            color:  model.sideColor,
-            icon:   model.sideIcon,
-          });
-          numTex.update();
-          // Scale pulse 1 → peak → 1 over pulseMs.
-          this._pulseReadoutPlane(numPlane, COMBAT_READOUT_PULSE_PEAK, pulseMs);
-          // Spawn the "+N reason" floater beside the main number.
-          const fd = this._spawnReadoutStepFloater(
-            standee, numCenterY, step, model, floaterRiseMs,
-          );
-          if (fd) stepDisposables.push(fd);
+          repaintIcon(step.value, model.sideColor);
+          const fd = this._spawnPersistentStepFloater(standee, slotY(i), step);
+          if (fd) persistents.push(fd);
         }, at);
       }
 
-      // Final phase: outcome flash + minimum hold + wait for continue gate + fade.
+      // Final phase: outcome flash on icon + spawn result label + gate fade.
       const stepsEnd = baseHoldMs + model.steps.length * stepMs;
       const finalReachedAt = stepsEnd + finalHoldMs;
 
       setTimeoutFn(() => {
         if (disposed) { resolveFinal(); triggerFade(); resolve(); return; }
-        // Outcome flash — repaint the number in green (winner) or red (loser).
+        // Outcome flash on the icon's overlay number.
         const outcomeColor = model.won ? COMBAT_READOUT_WIN_COLOR : COMBAT_READOUT_LOSE_COLOR;
-        paintReadoutNumber(numTex.getContext(), {
-          width:  COMBAT_READOUT_NUM_TEX_SIZE,
-          height: COMBAT_READOUT_NUM_TEX_SIZE,
-          value:  model.total,
-          color:  outcomeColor,
-          icon:   model.sideIcon,
-        });
-        numTex.update();
-        // Signal external watchers that the readout has settled.
+        repaintIcon(model.total, outcomeColor);
+        // Spawn the persistent result label in the topmost slot.
+        const labelText = resultLabel(result, side);
+        const labelY = resultSlotY(model.steps.length);
+        const fd = this._spawnResultLabel(standee, labelY, labelText, outcomeColor);
+        if (fd) persistents.push(fd);
+
         resolveFinal();
 
-        // Wait until the caller (UI continue-button click OR test
-        // immediate-resolve) gives us the green light to start the fade.
-        // We race the explicit `triggerFade()` against `awaitContinueFn()`
-        // so either path moves us forward.
         const gate = Promise.race([
           continueSignal,
           Promise.resolve().then(awaitContinueFn),
         ]);
         gate.then(() => {
           if (disposed) { resolve(); return; }
-          // Fade out the plane. While alpha goes 1→0, also scale the number
-          // — winner grows 1.0→1.5×, loser shrinks 1.0→0.5×. Ease-out so the
-          // scale change is most visible at the start of the fade (the moment
-          // the player taps Continue).
+          // Fade out all persistent billboards (floaters + result label) in
+          // parallel via Animation on `visibility`. The icon itself is NOT
+          // faded — it snap-restores to the normal portrait once the fade
+          // completes (the badge is a persistent UI element).
           const fps = 60;
           const fadeFrames = Math.max(1, Math.round(fadeMs / 1000 * fps));
-          const animFade = new BABYLON.Animation('readoutFade', 'visibility', fps,
-            BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
-          animFade.setKeys([{ frame: 0, value: 1 }, { frame: fadeFrames, value: 0 }]);
-
-          const peakScale = model.won ? 1.5 : 0.5;
-          const baseSX = numPlane.scaling.x;
-          const baseSY = numPlane.scaling.y;
-          const baseSZ = numPlane.scaling.z;
-          const animScale = new BABYLON.Animation('readoutFadeScale', 'scaling', fps,
-            BABYLON.Animation.ANIMATIONTYPE_VECTOR3, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
-          animScale.setKeys([
-            { frame: 0,          value: new BABYLON.Vector3(baseSX, baseSY, baseSZ) },
-            { frame: fadeFrames, value: new BABYLON.Vector3(baseSX * peakScale, baseSY * peakScale, baseSZ * peakScale) },
-          ]);
-          const scaleEase = new BABYLON.CubicEase();
-          scaleEase.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEOUT);
-          animScale.setEasingFunction(scaleEase);
-
-          this._scene.beginDirectAnimation(numPlane, [animFade, animScale], 0, fadeFrames, false, 1, () => {
+          if (persistents.length === 0) {
             disposeAll();
             resolve();
-          });
+            return;
+          }
+          let remaining = persistents.length;
+          for (const d of persistents) {
+            const animFade = new BABYLON.Animation('readoutFade', 'visibility', fps,
+              BABYLON.Animation.ANIMATIONTYPE_FLOAT,
+              BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+            animFade.setKeys([{ frame: 0, value: 1 }, { frame: fadeFrames, value: 0 }]);
+            this._scene.beginDirectAnimation(d.plane, [animFade], 0, fadeFrames, false, 1, () => {
+              remaining -= 1;
+              if (remaining === 0) {
+                disposeAll();
+                resolve();
+              }
+            });
+          }
         });
       }, finalReachedAt);
     });
     this._trackAnim(promise);
 
-    // Build the handle object. We make it thenable so legacy callers that
-    // `await` the return value directly still work — they'll await the full
-    // sequence (including the gate), which is the same behaviour the test
-    // injector preserves by resolving `awaitContinueFn` immediately.
     return {
       promise,
       awaitFinal: () => finalReached,
@@ -10577,43 +10559,15 @@ export class Renderer3D {
     };
   }
 
-  /** Internal — scale pulse on the readout number plane (1 → peak → 1).
-   *  Used on each bonus tick to reinforce the bump. Doesn't track the
-   *  pulse promise (the parent readout fade controls overall lifetime). */
-  _pulseReadoutPlane(plane, peak, durationMs) {
-    if (!this._scene || !this._babylon || !plane) return;
-    const BABYLON = this._babylon;
-    const fps = 60;
-    const halfFrames = Math.max(1, Math.round((durationMs / 2) / 1000 * fps));
-    const totalFrames = halfFrames * 2;
-    const baseX = plane.scaling.x;
-    const baseY = plane.scaling.y;
-    const baseZ = plane.scaling.z;
-    const anim = new BABYLON.Animation('readoutPulse', 'scaling', fps,
-      BABYLON.Animation.ANIMATIONTYPE_VECTOR3, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
-    anim.setKeys([
-      { frame: 0,           value: new BABYLON.Vector3(baseX, baseY, baseZ) },
-      { frame: halfFrames,  value: new BABYLON.Vector3(baseX * peak, baseY * peak, baseZ * peak) },
-      { frame: totalFrames, value: new BABYLON.Vector3(baseX, baseY, baseZ) },
-    ]);
-    this._scene.beginDirectAnimation(plane, [anim], 0, totalFrames, false, 1, () => {
-      plane.scaling.x = baseX;
-      plane.scaling.y = baseY;
-      plane.scaling.z = baseZ;
-    });
-  }
-
-  /** Internal — spawn a "+N reason" floater plane beside the main readout
-   *  number, drift it up + fade it out. Returns `{ plane, mat, tex }` so
-   *  the parent readout can dispose it if the sequence aborts early. */
-  _spawnReadoutStepFloater(standee, numCenterY, step, model, riseMs) {
+  /** G1 v2 — spawn a persistent "+N reason" floater that parks at a fixed
+   *  slot above the icon and stays visible until the parent fade-out runs.
+   *  Returns `{ plane, mat, tex }` so the caller can fade + dispose it. */
+  _spawnPersistentStepFloater(standee, centreY, step) {
     if (!this._scene || !this._babylon) return null;
     const BABYLON = this._babylon;
     const sign = step.delta < 0 ? '−' : '+';
     const mag = Math.abs(step.delta | 0);
     const label = `${sign}${mag} ${step.icon ?? ''} ${step.label ?? ''}`.trim();
-    // Positive deltas → green-ish, negative → red-ish. Keeps the readout
-    // legible at a glance without depending on side colour.
     const color = step.delta < 0 ? COMBAT_READOUT_LOSE_COLOR : COMBAT_READOUT_WIN_COLOR;
 
     const tex = new BABYLON.DynamicTexture(
@@ -10647,36 +10601,52 @@ export class Renderer3D {
     plane.material = mat;
 
     plane.parent = standee.plane;
-    // Spawn BESIDE the main number (right side, vertically aligned with the
-    // number's centre) and drift up. Keeps the floater in the player's eye
-    // line on the same row as the number it modifies, instead of arcing
-    // up into the camera corner. Local-X = +0.7 × number plane width.
-    const startY = numCenterY;
-    const endY = startY + COMBAT_READOUT_FLOATER_RISE_WU;
-    const xOffset = COMBAT_READOUT_NUM_PLANE_WIDTH
-      * COMBAT_READOUT_FLOATER_X_OFFSET_FRAC;
-    plane.position.set(xOffset, startY, 0);
+    // Persistent: parked directly above the icon at the assigned slot Y.
+    // No horizontal offset — vertical stack only.
+    plane.position.set(0, centreY, 0);
     plane.visibility = 1;
+    return { plane, mat, tex };
+  }
 
-    const fps = 60;
-    const frames = Math.max(6, Math.round(riseMs / 1000 * fps));
-    const animPos = new BABYLON.Animation('readoutFloaterY', 'position.y', fps,
-      BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
-    animPos.setKeys([{ frame: 0, value: startY }, { frame: frames, value: endY }]);
-
-    const animFade = new BABYLON.Animation('readoutFloaterA', 'visibility', fps,
-      BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
-    animFade.setKeys([
-      { frame: 0,                        value: 1 },
-      { frame: Math.floor(frames * 0.4), value: 1 },
-      { frame: frames,                   value: 0 },
-    ]);
-
-    this._scene.beginDirectAnimation(plane, [animPos, animFade], 0, frames, false, 1, () => {
-      try { plane.dispose(); } catch {}
-      try { mat.dispose();   } catch {}
-      try { tex.dispose();   } catch {}
+  /** G1 v2 — spawn the persistent RESULT label billboard (HIT / BLOCKED /
+   *  CRUSH / COUNTERED / …) at the topmost slot. Bigger + bolder than the
+   *  per-bonus floaters so the outcome word reads from across the screen. */
+  _spawnResultLabel(standee, centreY, label, color) {
+    if (!this._scene || !this._babylon) return null;
+    const BABYLON = this._babylon;
+    const tex = new BABYLON.DynamicTexture(
+      `readoutResultTex_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      { width: COMBAT_READOUT_RESULT_LABEL_TEX_WIDTH, height: COMBAT_READOUT_RESULT_LABEL_TEX_HEIGHT },
+      this._scene,
+      false,
+    );
+    tex.hasAlpha = true;
+    paintReadoutFloater(tex.getContext(), {
+      width:  COMBAT_READOUT_RESULT_LABEL_TEX_WIDTH,
+      height: COMBAT_READOUT_RESULT_LABEL_TEX_HEIGHT,
+      label,
+      color,
     });
+    tex.update();
+
+    const plane = BABYLON.MeshBuilder.CreatePlane(
+      `readoutResult_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      { width: COMBAT_READOUT_RESULT_LABEL_PLANE_WIDTH, height: COMBAT_READOUT_RESULT_LABEL_PLANE_HEIGHT },
+      this._scene,
+    );
+    plane.billboardMode    = BABYLON.Mesh.BILLBOARDMODE_ALL;
+    plane.isPickable       = false;
+    plane.renderingGroupId = 2;
+
+    const mat = new BABYLON.StandardMaterial(`readoutResultMat_${plane.uniqueId}`, this._scene);
+    mat.diffuseTexture = tex;
+    mat.opacityTexture = tex;
+    applyFlatUnitIconMaterial(BABYLON, mat);
+    plane.material = mat;
+
+    plane.parent = standee.plane;
+    plane.position.set(0, centreY, 0);
+    plane.visibility = 1;
     return { plane, mat, tex };
   }
 
@@ -10914,6 +10884,10 @@ export class Renderer3D {
       let entry = this._unitIconBadges.get(e.id);
       if (!entry) entry = this._createUnitIconBadge(standee, e);
       if (!entry) continue;
+      // G1 v2: skip repainting icons that addCombatReadout is actively driving
+      // (combat-mode overlay). The readout's own paint path owns the texture
+      // until it restores the portrait on fade.
+      if (this._iconCombatMode?.has(e.id)) continue;
       const assetId = this._assetIdFor(e);
       // Recompute portrait availability each tick so badges painted before
       // the tilemap finished loading get a real portrait the moment the
@@ -10935,8 +10909,13 @@ export class Renderer3D {
       entry.lastHadPortrait  = portraitSource.hasPortrait;
     }
     // Dispose badges for entities that no longer exist or just died.
+    // G1 v2: skip entities mid-combat-readout — the readout drives the icon
+    // texture and tracks lifetime itself. Disposing under it would leave the
+    // running fade animations pointing at a dead texture.
     for (const id of [...this._unitIconBadges.keys()]) {
-      if (!seen.has(id)) this._disposeUnitIconBadge(id);
+      if (seen.has(id)) continue;
+      if (this._iconCombatMode?.has(id)) continue;
+      this._disposeUnitIconBadge(id);
     }
   }
 
@@ -15812,19 +15791,30 @@ export const COMBAT_READOUT_STEP_MS       = 700;
 // before the gate is checked.
 export const COMBAT_READOUT_FINAL_HOLD_MS = 600;
 export const COMBAT_READOUT_FADE_MS       = 500;
-export const COMBAT_READOUT_PULSE_MS      = 200;
-export const COMBAT_READOUT_PULSE_PEAK    = 1.2;
-/** Per-bonus floater rise + fade. Rises beside the main number and fades. */
-export const COMBAT_READOUT_FLOATER_RISE_MS = 900;
-export const COMBAT_READOUT_FLOATER_RISE_WU = 0.7;
-/** Horizontal offset (world units) applied to step floaters so they spawn
- *  beside the main number rather than above it. 0.7 × number plane width
- *  puts the floater visually adjacent on the right edge of the number. */
-export const COMBAT_READOUT_FLOATER_X_OFFSET_FRAC = 0.7;
-/** Vertical offset above the main-number plane TOP at which a step floater
- *  starts (extra clearance above the readout so the floater doesn't overlap
- *  the number while ticking). */
+/** Vertical offset above the icon TOP at which the bottom-most persistent
+ *  floater starts (extra clearance so the floater doesn't overlap the icon
+ *  number while ticking up). */
 export const COMBAT_READOUT_FLOATER_Y_OFFSET = 0.05;
+/** Gap (world units) between adjacent persistent floater slots. */
+export const COMBAT_READOUT_FLOATER_SLOT_GAP = 0.04;
+/** Result label billboard sits above ALL floater slots. Bigger + bolder than
+ *  the per-bonus floaters so the outcome word reads from across the screen. */
+export const COMBAT_READOUT_RESULT_LABEL_PLANE_WIDTH  = 1.7;
+export const COMBAT_READOUT_RESULT_LABEL_PLANE_HEIGHT = 0.45;
+export const COMBAT_READOUT_RESULT_LABEL_TEX_WIDTH    = 512;
+export const COMBAT_READOUT_RESULT_LABEL_TEX_HEIGHT   = 128;
+/** Extra Y gap above the topmost floater before the result label. */
+export const COMBAT_READOUT_RESULT_LABEL_GAP = 0.06;
+/** Portrait dim factor when the icon is in combat-readout mode — a dark
+ *  composite over the portrait so the big overlay number reads against it. */
+export const COMBAT_READOUT_PORTRAIT_DIM_ALPHA = 0.55;
+/** Font size as a fraction of the icon texture dim when painting the
+ *  combat readout NUMBER into the icon. Bigger than the bare-number plane
+ *  font (~40%) because the icon canvas has more room and the number is the
+ *  star of the show. */
+export const COMBAT_READOUT_ICON_NUMBER_FONT_FRAC = 0.62;
+/** Continue button countdown — auto-click after this many seconds. */
+export const COMBAT_CONTINUE_COUNTDOWN_SEC = 5;
 /** Horizontal offset (world units) applied to each combat readout along the
  *  attack axis so the attacker's and defender's numbers spread to opposite
  *  outer sides instead of stacking in screen space when combatants are
@@ -16754,6 +16744,90 @@ export function paintReadoutFloater(ctx, opts) {
   ctx.strokeText(label, width / 2, height / 2);
   ctx.fillStyle = color;
   ctx.fillText(label, width / 2, height / 2);
+}
+
+/**
+ * G1 v2 — paint the combat-mode readout INTO the unit-icon DynamicTexture.
+ * The icon stays visible during combat (no separate number plane); instead
+ * the existing portrait is dimmed and the big running total is overlaid in
+ * its centre. The HP ring is preserved by `basePaint(ctx)` (the caller hands
+ * us the normal portrait painter so we share its disc + arc geometry).
+ *
+ * `value` is the running total; `color` is the fill colour for the number
+ * (side tint while ticking → win/lose colour at outcome flash). `icon` is
+ * the side glyph (⚔ / 🛡).
+ */
+export function paintIconCombatReadout(ctx, opts) {
+  const {
+    size,
+    basePaint,
+    value,
+    color,
+    icon = '',
+    dimAlpha = COMBAT_READOUT_PORTRAIT_DIM_ALPHA,
+  } = opts;
+  // Repaint the normal badge (HP ring + portrait) first — gives us the
+  // continuous HP arc + portrait beneath the dim overlay.
+  if (typeof basePaint === 'function') basePaint(ctx);
+
+  // Dark composite over the portrait disc — lets the bright overlay number
+  // read against ANY unit portrait. Drawn as a full-canvas dim rect; the
+  // ring at the edges absorbs the same dim, which is fine — the overlay
+  // is the focal point during combat.
+  ctx.fillStyle = `rgba(0,0,0,${dimAlpha})`;
+  ctx.fillRect(0, 0, size, size);
+
+  // Big bold number with side-glyph prefix, outlined for contrast.
+  const text = icon ? `${icon} ${value}` : String(value);
+  let fontPx = Math.round(size * COMBAT_READOUT_ICON_NUMBER_FONT_FRAC);
+  ctx.font = `900 ${fontPx}px sans-serif`;
+  const maxTextWidth = size * 0.82;
+  const measured = ctx.measureText ? ctx.measureText(text).width : 0;
+  if (measured > maxTextWidth && measured > 0) {
+    fontPx = Math.max(1, Math.floor(fontPx * (maxTextWidth / measured)));
+    ctx.font = `900 ${fontPx}px sans-serif`;
+  }
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round';
+  ctx.miterLimit = 2;
+  ctx.lineWidth = Math.max(4, Math.round(fontPx * 0.20));
+  ctx.strokeStyle = '#000';
+  ctx.strokeText(text, size / 2, size / 2);
+  ctx.fillStyle = color;
+  ctx.fillText(text, size / 2, size / 2);
+}
+
+/**
+ * G1 v2 — map an executeBattle result + side to a human-readable outcome
+ * word that paints in the result label billboard above the readout.
+ *
+ *   • attacker side, won + damage>=2  → "CRUSH"
+ *   • attacker side, won              → "HIT"
+ *   • attacker side, lost + counterDmg→ "COUNTERED"
+ *   • attacker side, lost             → "BLOCKED"
+ *   • defender side, won + counterDmg → "COUNTER"
+ *   • defender side, won              → "BLOCK"
+ *   • defender side, lost + damage>=2 → "CRUSHED"
+ *   • defender side, lost             → "HIT"
+ *
+ * Pure helper — exported for tests. Tolerates partial results (e.g. raw
+ * Entity.resolveCombat output without damage/counterDmg) by falling back
+ * to the basic HIT/BLOCK/COUNTER outcome.
+ */
+export function resultLabel(result, side) {
+  const r = result || {};
+  const isAtk = side === 'attacker' || side === 'atk';
+  const won = isAtk ? !!r.hit : !r.hit;
+  const dmg = Number.isFinite(r.damage) ? r.damage : (r.hit ? 1 : 0);
+  const counter = Number.isFinite(r.counterDmg) ? r.counterDmg : 0;
+  if (isAtk) {
+    if (won) return dmg >= 2 ? 'CRUSH' : 'HIT';
+    return counter > 0 ? 'COUNTERED' : 'BLOCKED';
+  }
+  // Defender side.
+  if (won) return counter > 0 ? 'COUNTER' : 'BLOCK';
+  return dmg >= 2 ? 'CRUSHED' : 'HIT';
 }
 
 /**

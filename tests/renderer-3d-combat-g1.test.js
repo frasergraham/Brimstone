@@ -23,28 +23,29 @@ import {
   combatReadoutModel,
   paintReadoutNumber,
   paintReadoutFloater,
+  paintIconCombatReadout,
+  resultLabel,
   computeLungeTarget,
   computeCombatCardAxisOffset,
   combatCardFrameExtent,
-  iconBillboardYRelativeToCone,
-  headTopRelativeToCone,
   LUNGE_FRACTION,
   CARD_AXIS_OFFSET_WORLD,
   COMBAT_CARD_ATK_COLOR,
   COMBAT_CARD_DEF_COLOR,
   COMBAT_READOUT_WIN_COLOR,
-  COMBAT_READOUT_LOSE_COLOR,
   COMBAT_READOUT_NUM_TEX_SIZE,
-  COMBAT_READOUT_NUM_PLANE_WIDTH,
-  COMBAT_READOUT_NUM_PLANE_HEIGHT,
-  COMBAT_READOUT_FLOATER_TEX_WIDTH,
-  COMBAT_READOUT_FLOATER_TEX_HEIGHT,
+  COMBAT_READOUT_RESULT_LABEL_PLANE_WIDTH,
+  COMBAT_READOUT_RESULT_LABEL_PLANE_HEIGHT,
   COMBAT_READOUT_BASE_HOLD_MS,
   COMBAT_READOUT_STEP_MS,
   COMBAT_READOUT_FINAL_HOLD_MS,
-  READOUT_GAP_ABOVE_ICON,
-  UNIT_ICON_PLANE_SIZE,
+  UNIT_ICON_TEX_SIZE,
 } from '../src/renderer-3d.js';
+import {
+  startContinueCountdown,
+  CONTINUE_COUNTDOWN_SEC,
+  CONTINUE_BTN_BASE_LABEL,
+} from '../src/combat-cinematic.js';
 
 // ─── Pure model + painters ──────────────────────────────────────────────────
 
@@ -305,12 +306,21 @@ function makeFakeBabylon() {
       this._calls = [];
       this._ctx = {
         clearRect:   () => this._calls.push(['clearRect']),
+        fillRect:    () => this._calls.push(['fillRect']),
         strokeText:  (t) => this._calls.push(['strokeText', String(t)]),
         fillText:    (t) => this._calls.push(['fillText', String(t)]),
         measureText: (s) => ({ width: String(s).length * 10 }),
+        // Path APIs used by paintUnitIconBadge for the HP arc + portrait clip.
+        beginPath:   () => {}, closePath: () => {},
+        arc:         () => {}, moveTo:    () => {},
+        lineTo:      () => {}, quadraticCurveTo: () => {},
+        clip:        () => {}, stroke:    () => {},
+        fill:        () => {},
+        save:        () => {}, restore:   () => {},
+        drawImage:   () => {},
         set font(_v) {}, set textAlign(_v) {}, set textBaseline(_v) {},
         set fillStyle(_v) {}, set strokeStyle(_v) {}, set lineWidth(_v) {},
-        set lineJoin(_v) {}, set miterLimit(_v) {},
+        set lineCap(_v) {}, set lineJoin(_v) {}, set miterLimit(_v) {},
       };
     }
     getContext() { return this._ctx; }
@@ -352,7 +362,7 @@ function makeFakeBabylon() {
   return { Animation, CubicEase, EasingFunction, Vector3, DynamicTexture, Mesh, MeshBuilder, StandardMaterial, Color3 };
 }
 
-function makeInst({ ids = ['e1', 'a1'] } = {}) {
+function makeInst({ ids = ['e1', 'a1'], withIcons = true } = {}) {
   const inst = Object.create(Renderer3D.prototype);
   const captured = [];
   inst._babylon = makeFakeBabylon();
@@ -369,6 +379,11 @@ function makeInst({ ids = ['e1', 'a1'] } = {}) {
   inst._playbackSpeedMul = 1.0;
   inst._entityStandees = new Map();
   inst._unitIconBadges = new Map();
+  inst._iconCombatMode = new Set();
+  // Minimal state so addCombatReadout can resolve the entity for basePaint.
+  inst.state = { entities: ids.map(id => ({ id, alive: true, hp: 5, maxHp: 5, type: 'paladin' })) };
+  inst._tilemapImg = null;
+  inst._spriteRects = null;
   for (const id of ids) {
     inst._entityStandees.set(id, {
       plane: {
@@ -377,6 +392,16 @@ function makeInst({ ids = ['e1', 'a1'] } = {}) {
       },
       leader: false,
     });
+    if (withIcons) {
+      // Mock icon entry — the readout paints INTO this texture (G1 v2).
+      const iconTex = new inst._babylon.DynamicTexture(`mockIconTex_${id}`);
+      inst._unitIconBadges.set(id, {
+        plane: { visibility: 1 },
+        mat:   { alpha: 1 },
+        tex:   iconTex,
+        leader: false,
+      });
+    }
   }
   inst._capturedAnims = captured;
   return inst;
@@ -418,30 +443,40 @@ describe('G1 — addCombatReadout lifecycle', () => {
     assert.equal(inst._tracked.length, 0);
   });
 
-  test('spawns a billboarded main-number plane parented to the standee, on group 2', () => {
+  test('paints the readout INTO the icon texture (no separate number plane spawn at start)', () => {
     if (!('document' in globalThis)) globalThis.document = {};
     const inst = makeInst({ ids: ['e1'] });
+    const B = inst._babylon;
+    const planes = [];
+    const OrigMeshBuilder = B.MeshBuilder;
+    B.MeshBuilder = {
+      CreatePlane(name, opts, scene) {
+        const p = OrigMeshBuilder.CreatePlane(name, opts, scene);
+        planes.push(p);
+        return p;
+      },
+    };
     const sched = fakeScheduler();
     inst.addCombatReadout('e1', 'attacker',
       { hit: true, attackRoll: 6, defenseRoll: 3,
         breakdown: { atkPool: [6], atkBaseDie: 6, defPool: [3], defBaseDie: 3 } },
       { setTimeoutFn: sched },
     );
-    // The standee carries no extra meshes after the call; we only need to
-    // verify _tracked got a promise and the parent linkage held.
+    // No persistent floaters or result label until base-hold + steps complete.
+    assert.equal(planes.length, 0, 'no plane spawned at start — readout paints into existing icon');
     assert.equal(inst._tracked.length, 1, 'readout promise tracked');
+    // Icon texture has been painted at least once with the start value.
+    const iconTex = inst._unitIconBadges.get('e1').tex;
+    assert.ok(iconTex.drawnValues.some(v => v.includes('6')),
+      'icon texture painted with the picked die (6) at spawn');
+    assert.equal(inst._iconCombatMode.has('e1'), true,
+      'entity is flagged as combat-mode so icon-sync skips it');
   });
 
-  test('sequence: base hold → one step per bonus → final hold → fade; main number repaints', async () => {
+  test('sequence: base hold → one step per bonus → final hold → fade; icon repaints with running total', async () => {
     if (!('document' in globalThis)) globalThis.document = {};
     const inst = makeInst({ ids: ['e1'] });
-    // Capture every DynamicTexture so we can inspect what got drawn into it.
-    const B = inst._babylon;
-    const tex = [];
-    const OrigTex = B.DynamicTexture;
-    B.DynamicTexture = class extends OrigTex {
-      constructor(...a) { super(...a); tex.push(this); }
-    };
+    const iconTex = inst._unitIconBadges.get('e1').tex;
 
     const sched = fakeScheduler();
     const result = {
@@ -454,46 +489,39 @@ describe('G1 — addCombatReadout lifecycle', () => {
     };
     const promise = inst.addCombatReadout('e1', 'attacker', result, { setTimeoutFn: sched });
 
-    // tex[0] = main number plane (start = 5).
-    assert.equal(tex.length, 1, 'one DynamicTexture allocated for the main number at spawn');
-    assert.ok(tex[0].drawnValues.some(v => v.includes('5')),
-      'main number painted with picked die (5) at spawn');
+    // Icon repainted with start = 5 immediately.
+    assert.ok(iconTex.drawnValues.some(v => v.includes('5')),
+      'icon shows picked die (5) at spawn');
 
-    // Advance just past base hold → first step fires.
+    // Advance just past base hold → first step fires (phase +1 → 6).
     sched.runUntil(COMBAT_READOUT_BASE_HOLD_MS + 1);
-    // After first step: a per-step floater texture spawns, AND the main
-    // number tex is repainted with the new running total.
-    assert.ok(tex.length >= 2, 'step spawned a floater texture');
-    // Main number should now show the value AFTER step 1 (phase = +1 → 6).
-    assert.ok(tex[0].drawnValues.some(v => v.includes('6')),
-      'main number ticked up to 6 after step 1');
+    assert.ok(iconTex.drawnValues.some(v => v.includes('6')),
+      'icon shows running total 6 after step 1');
 
     // Advance through ALL steps.
     sched.runUntil(COMBAT_READOUT_BASE_HOLD_MS + 3 * COMBAT_READOUT_STEP_MS + 1);
-    // Main number should reach the final running total 9 (5 +1 +1 +2).
-    assert.ok(tex[0].drawnValues.some(v => v.includes('9')),
-      'main number ticked up to the final total');
+    assert.ok(iconTex.drawnValues.some(v => v.includes('9')),
+      'icon shows final running total 9');
 
-    // Advance to outcome flash + fade trigger.
     sched.runAll();
-    // Outcome flash: repaints main number with WIN colour.
-    // (Inspect by drawn fillStyle / drawn values — we know the value is 9
-    //  again with the outcome colour at that point.)
-    // We can't easily snapshot fillStyle through the simplified ctx mock; the
-    // key assertion is that the main number tex was repainted AT LEAST four
-    // times: spawn (5) + 3 ticks (6, 7, 9) + outcome flash = 5 updates min.
-    assert.ok(tex[0].updated >= 5,
-      `main number texture updated through the full sequence (got ${tex[0].updated})`);
-
     await promise;
-    assert.equal(tex[0].disposed, 1, 'main number texture disposed at end');
+    // Sequence: spawn(5) + 3 ticks (6, 7, 9) + outcome flash + portrait
+    // restore = at least 5 paints into the icon texture.
+    assert.ok(iconTex.updated >= 5,
+      `icon texture updated through the full sequence (got ${iconTex.updated})`);
+    // Icon stays alive — never disposed by the readout.
+    assert.equal(iconTex.disposed, 0,
+      'icon texture is NOT disposed by the readout (it is the persistent badge)');
+    // Combat-mode flag cleared.
+    assert.equal(inst._iconCombatMode.has('e1'), false,
+      'combat-mode flag cleared after fade');
   });
 
-  test('hides the unit-icon badge for the readout lifetime, restores on dispose', async () => {
+  test('icon plane stays visible the entire readout (no hide-then-show)', async () => {
     if (!('document' in globalThis)) globalThis.document = {};
     const inst = makeInst({ ids: ['e1'] });
-    const iconPlane = { visibility: 1 };
-    inst._unitIconBadges = new Map([['e1', { plane: iconPlane }]]);
+    const iconPlane = inst._unitIconBadges.get('e1').plane;
+    assert.equal(iconPlane.visibility, 1, 'icon visible before combat');
 
     const sched = fakeScheduler();
     const p = inst.addCombatReadout('e1', 'attacker',
@@ -501,38 +529,29 @@ describe('G1 — addCombatReadout lifecycle', () => {
         breakdown: { atkPool: [5], atkBaseDie: 5, defPool: [3], defBaseDie: 3 } },
       { setTimeoutFn: sched },
     );
-    assert.equal(iconPlane.visibility, 0, 'icon hidden while readout is up');
+    // The icon STAYS VISIBLE — it IS the readout surface now.
+    assert.equal(iconPlane.visibility, 1, 'icon stays visible while readout paints');
     sched.runAll();
     await p;
-    assert.equal(iconPlane.visibility, 1, 'icon restored after fade');
+    assert.equal(iconPlane.visibility, 1, 'icon still visible after fade');
   });
 
-  test('outcome flash uses GREEN colour for winner, RED for loser', async () => {
+  test('outcome flash on icon uses GREEN colour for winner, RED for loser', async () => {
     if (!('document' in globalThis)) globalThis.document = {};
-    // Winner (attacker who hits) → green flash at the end.
     const inst = makeInst({ ids: ['e1'] });
-    // Patch paintReadoutNumber to spy on the final colour.
-    const colours = [];
-    // We can't easily monkeypatch the imported function, so check via fillStyle
-    // calls captured on the DynamicTexture ctx.
-    const B = inst._babylon;
-    const allCtxCalls = [];
-    const OrigTex = B.DynamicTexture;
-    B.DynamicTexture = class extends OrigTex {
-      constructor(...a) {
-        super(...a);
-        const _ctx = this._ctx;
-        const proxy = new Proxy(_ctx, {
-          set(t, p, v) {
-            if (p === 'fillStyle') allCtxCalls.push(['fillStyle', v]);
-            t[p] = v;
-            return true;
-          },
-          get(t, p) { return t[p]; },
-        });
-        this.getContext = () => proxy;
-      }
-    };
+    // Spy on fillStyle calls inside the icon's DynamicTexture context.
+    const iconTex = inst._unitIconBadges.get('e1').tex;
+    const fillStyles = [];
+    const _ctx = iconTex._ctx;
+    const proxy = new Proxy(_ctx, {
+      set(t, p, v) {
+        if (p === 'fillStyle') fillStyles.push(v);
+        t[p] = v;
+        return true;
+      },
+      get(t, p) { return t[p]; },
+    });
+    iconTex.getContext = () => proxy;
 
     const sched = fakeScheduler();
     const p = inst.addCombatReadout('e1', 'attacker',
@@ -540,134 +559,155 @@ describe('G1 — addCombatReadout lifecycle', () => {
         breakdown: { atkPool: [6], atkBaseDie: 6, defPool: [3], defBaseDie: 3 } },
       { setTimeoutFn: sched },
     );
-    // Run past the final hold so the outcome flash fires.
     sched.runUntil(COMBAT_READOUT_BASE_HOLD_MS + COMBAT_READOUT_FINAL_HOLD_MS + 1);
     sched.runAll();
     await p;
-    void colours;
-    const fillStyles = allCtxCalls.map(c => c[1]);
     assert.ok(fillStyles.includes(COMBAT_READOUT_WIN_COLOR),
-      'winner uses the WIN colour somewhere in the sequence');
-    // Side colour (atk = red) used during the stack-up.
+      'winner uses the WIN colour on the icon overlay');
     assert.ok(fillStyles.includes(COMBAT_CARD_ATK_COLOR),
-      'side colour also used (start + ticks)');
+      'side colour (atk red) used during stack-up');
   });
 
-  test('texture/plane/material dimensions match the new readout constants', () => {
+  test('result label billboard spawns at final-state, parented to the standee', async () => {
     if (!('document' in globalThis)) globalThis.document = {};
     const inst = makeInst({ ids: ['e1'] });
     const B = inst._babylon;
-    const texArgs = [];
-    const OrigTex = B.DynamicTexture;
-    B.DynamicTexture = class extends OrigTex {
-      constructor(name, size, ...rest) {
-        super(name, size, ...rest);
-        texArgs.push(size);
-      }
-    };
-    const sched = fakeScheduler();
-    inst.addCombatReadout('e1', 'attacker',
-      { hit: true, attackRoll: 6, defenseRoll: 3,
-        breakdown: { atkPool: [6], atkBaseDie: 6, defPool: [3], defBaseDie: 3,
-                     atkGangupFlat: 1 } },
-      { setTimeoutFn: sched },
-    );
-    sched.runAll();
-    // First tex = main number (square).
-    assert.equal(texArgs[0].width,  COMBAT_READOUT_NUM_TEX_SIZE);
-    assert.equal(texArgs[0].height, COMBAT_READOUT_NUM_TEX_SIZE);
-    // Subsequent textures = step floaters (wider, shorter).
-    const floaterTex = texArgs[1];
-    assert.equal(floaterTex.width,  COMBAT_READOUT_FLOATER_TEX_WIDTH);
-    assert.equal(floaterTex.height, COMBAT_READOUT_FLOATER_TEX_HEIGHT);
-  });
-
-  test('main-number plane is sized to match the unit-icon badge', () => {
-    assert.equal(COMBAT_READOUT_NUM_PLANE_WIDTH,  UNIT_ICON_PLANE_SIZE,
-      'width matches UNIT_ICON_PLANE_SIZE so the readout reads at icon scale');
-    assert.equal(COMBAT_READOUT_NUM_PLANE_HEIGHT, UNIT_ICON_PLANE_SIZE,
-      'height matches UNIT_ICON_PLANE_SIZE so the readout reads at icon scale');
-  });
-
-  test('readout stacks directly above the icon (Y derived from iconTop + gap, no axis offset)', () => {
-    if (!('document' in globalThis)) globalThis.document = {};
-    const inst = makeInst({ ids: ['e1'] });
-    const B = inst._babylon;
-    // Capture every plane created during the readout so we can read positions.
     const planes = [];
     const OrigMeshBuilder = B.MeshBuilder;
     B.MeshBuilder = {
       CreatePlane(name, opts, scene) {
         const p = OrigMeshBuilder.CreatePlane(name, opts, scene);
+        p.createName = name;
         p.createOpts = opts;
         planes.push(p);
         return p;
       },
     };
     const sched = fakeScheduler();
-    // Use opts that would have given a non-zero axis offset under the old
-    // behaviour — the new placement must zero it out anyway.
-    inst.addCombatReadout('e1', 'attacker',
-      { hit: true, attackRoll: 6, defenseRoll: 3,
+    const p = inst.addCombatReadout('e1', 'attacker',
+      { hit: true, damage: 1, attackRoll: 7, defenseRoll: 3,
         breakdown: { atkPool: [6], atkBaseDie: 6, defPool: [3], defBaseDie: 3,
                      atkGangupFlat: 1 } },
-      { setTimeoutFn: sched,
-        attackerCol: 5, attackerRow: 5, targetCol: 6, targetRow: 5 },
-    );
-    sched.runUntil(COMBAT_READOUT_BASE_HOLD_MS + 1);
-
-    // First plane = main number readout.
-    const numPlane = planes[0];
-    assert.ok(numPlane, 'main number plane created');
-
-    // Expected Y: iconCenter + UNIT_ICON_PLANE_SIZE/2 + gap + planeHeight/2.
-    const leader = false; // makeInst standees are non-leader.
-    const expectedY = iconBillboardYRelativeToCone(leader)
-      + UNIT_ICON_PLANE_SIZE / 2
-      + READOUT_GAP_ABOVE_ICON
-      + COMBAT_READOUT_NUM_PLANE_HEIGHT / 2;
-    assert.ok(Math.abs(numPlane.position.y - expectedY) < 1e-6,
-      `main number Y derives from iconTop+gap (got ${numPlane.position.y}, expected ${expectedY})`);
-
-    // Strictly above the legacy head-anchored placement.
-    const legacyHeadAnchoredY = headTopRelativeToCone(leader)
-      + 0.18 + COMBAT_READOUT_NUM_PLANE_HEIGHT / 2;
-    assert.ok(numPlane.position.y > legacyHeadAnchoredY,
-      'readout sits above the legacy head-anchored placement (now icon-anchored)');
-
-    // No horizontal axis offset — directly above the icon.
-    assert.equal(numPlane.position.x, 0, 'no X offset along attack axis');
-    assert.equal(numPlane.position.z, 0, 'no Z offset along attack axis');
-
-    // Step floater plane stays in-plane (Z = 0) but is offset on the +X side
-    // of the number so it rises beside the digit rather than masking it.
-    const floaterPlane = planes[1];
-    assert.ok(floaterPlane, 'step floater plane created');
-    assert.equal(floaterPlane.position.z, 0, 'floater has no Z offset');
-    assert.ok(floaterPlane.position.x > 0,
-      'floater is offset along +X (beside the number)');
+      { setTimeoutFn: sched });
+    // Run only to final-state — the result label spawns here.
+    sched.runUntil(COMBAT_READOUT_BASE_HOLD_MS + COMBAT_READOUT_STEP_MS + COMBAT_READOUT_FINAL_HOLD_MS + 1);
+    // First plane = step floater. Last plane created in this window = result label.
+    const resultPlane = planes.find(pl => /readoutResult_/.test(pl.createName));
+    assert.ok(resultPlane, 'result label plane was created at final-state');
+    assert.equal(resultPlane.createOpts.width,  COMBAT_READOUT_RESULT_LABEL_PLANE_WIDTH);
+    assert.equal(resultPlane.createOpts.height, COMBAT_READOUT_RESULT_LABEL_PLANE_HEIGHT);
+    // Drain the gate so the readout completes.
+    sched.runAll();
+    await p;
   });
 
-  test('plane dimensions passed to CreatePlane match COMBAT_READOUT_NUM_PLANE_{WIDTH,HEIGHT}', () => {
+  test('result label sits ABOVE all step floaters (topmost slot)', () => {
     if (!('document' in globalThis)) globalThis.document = {};
     const inst = makeInst({ ids: ['e1'] });
     const B = inst._babylon;
-    const planeOpts = [];
+    const planes = [];
     const OrigMeshBuilder = B.MeshBuilder;
     B.MeshBuilder = {
       CreatePlane(name, opts, scene) {
-        planeOpts.push(opts);
-        return OrigMeshBuilder.CreatePlane(name, opts, scene);
+        const p = OrigMeshBuilder.CreatePlane(name, opts, scene);
+        p.createName = name;
+        planes.push(p);
+        return p;
       },
     };
     const sched = fakeScheduler();
     inst.addCombatReadout('e1', 'attacker',
-      { hit: true, attackRoll: 6, defenseRoll: 3,
-        breakdown: { atkPool: [6], atkBaseDie: 6, defPool: [3], defBaseDie: 3 } },
-      { setTimeoutFn: sched },
+      { hit: true, damage: 1, attackRoll: 9, defenseRoll: 3,
+        breakdown: { atkPool: [6], atkBaseDie: 6, defPool: [3], defBaseDie: 3,
+                     atkGangupFlat: 2, phaseBonus: 1 } },
+      { setTimeoutFn: sched });
+    sched.runUntil(COMBAT_READOUT_BASE_HOLD_MS
+      + 2 * COMBAT_READOUT_STEP_MS
+      + COMBAT_READOUT_FINAL_HOLD_MS + 1);
+    const floaters = planes.filter(p => /readoutFloater_/.test(p.createName));
+    const resultPlane = planes.find(p => /readoutResult_/.test(p.createName));
+    assert.ok(floaters.length >= 1, 'at least one floater spawned');
+    assert.ok(resultPlane, 'result label spawned');
+    const topFloaterY = Math.max(...floaters.map(p => p.position.y));
+    assert.ok(resultPlane.position.y > topFloaterY,
+      `result label Y (${resultPlane.position.y}) sits above topmost floater (${topFloaterY})`);
+  });
+
+  test('floaters stack BOTTOM-UP — first applied step is the lowest slot', () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInst({ ids: ['e1'] });
+    const B = inst._babylon;
+    const planes = [];
+    const OrigMeshBuilder = B.MeshBuilder;
+    B.MeshBuilder = {
+      CreatePlane(name, opts, scene) {
+        const p = OrigMeshBuilder.CreatePlane(name, opts, scene);
+        p.createName = name;
+        planes.push(p);
+        return p;
+      },
+    };
+    const sched = fakeScheduler();
+    inst.addCombatReadout('e1', 'attacker',
+      { hit: true, damage: 1, attackRoll: 9, defenseRoll: 3,
+        breakdown: { atkPool: [6], atkBaseDie: 6, defPool: [3], defBaseDie: 3,
+                     phaseBonus: 1, atkStaffBonus: 1, atkGangupFlat: 1 } },
+      { setTimeoutFn: sched });
+    sched.runUntil(COMBAT_READOUT_BASE_HOLD_MS
+      + 3 * COMBAT_READOUT_STEP_MS + 1);
+    const floaters = planes.filter(p => /readoutFloater_/.test(p.createName));
+    assert.equal(floaters.length, 3, 'three floaters for three steps');
+    // Each subsequent floater's Y is strictly above the previous one.
+    for (let i = 1; i < floaters.length; i++) {
+      assert.ok(floaters[i].position.y > floaters[i - 1].position.y,
+        `floater[${i}] Y > floater[${i - 1}] Y`);
+    }
+    // No X / Z offset — vertical stack only.
+    for (const f of floaters) {
+      assert.equal(f.position.x, 0, 'floater stays centred on icon (no X)');
+      assert.equal(f.position.z, 0, 'floater stays in-plane (no Z)');
+    }
+  });
+
+  test('persistent floaters + result label all fade together on Continue (visibility 1→0)', async () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInst({ ids: ['e1'] });
+    const B = inst._babylon;
+    const planes = [];
+    const OrigMeshBuilder = B.MeshBuilder;
+    B.MeshBuilder = {
+      CreatePlane(name, opts, scene) {
+        const p = OrigMeshBuilder.CreatePlane(name, opts, scene);
+        p.createName = name;
+        planes.push(p);
+        return p;
+      },
+    };
+    const sched = fakeScheduler();
+    const h = inst.addCombatReadout('e1', 'attacker',
+      { hit: true, damage: 1, attackRoll: 7, defenseRoll: 3,
+        breakdown: { atkPool: [6], atkBaseDie: 6, defPool: [3], defBaseDie: 3,
+                     atkGangupFlat: 1 } },
+      { setTimeoutFn: sched });
+    sched.runAll();
+    await h.promise;
+    // Each persistent plane got a `visibility` Animation queued (1 → 0).
+    const visAnims = inst._capturedAnims.flatMap(c =>
+      (c.anims || []).filter(a => a.prop === 'visibility' && a.name === 'readoutFade')
     );
-    assert.equal(planeOpts[0].width,  COMBAT_READOUT_NUM_PLANE_WIDTH);
-    assert.equal(planeOpts[0].height, COMBAT_READOUT_NUM_PLANE_HEIGHT);
+    // floater(s) + result label all fade.
+    assert.ok(visAnims.length >= 2,
+      `at least 2 fade animations queued (got ${visAnims.length})`);
+    for (const a of visAnims) {
+      assert.equal(a.keys[0].value, 1, 'fades start at 1');
+      assert.equal(a.keys[a.keys.length - 1].value, 0, 'fades end at 0');
+    }
+    // All persistent planes were disposed.
+    const persistentPlanes = planes.filter(p =>
+      /readoutFloater_/.test(p.createName) || /readoutResult_/.test(p.createName));
+    for (const p of persistentPlanes) {
+      assert.ok(p.disposed >= 1, `${p.createName} disposed at fade-end`);
+    }
   });
 });
 
@@ -733,7 +773,7 @@ describe('G1 — addCombatReadout continue-gate', () => {
     assert.equal(settled, true, 'promise resolves without an explicit triggerFade');
   });
 
-  test('step floater spawns BESIDE the number with a non-zero X offset', () => {
+  test('persistent step floater is centred above the icon (no X offset)', () => {
     if (!('document' in globalThis)) globalThis.document = {};
     const inst = makeInst({ ids: ['e1'] });
     const B = inst._babylon;
@@ -742,6 +782,7 @@ describe('G1 — addCombatReadout continue-gate', () => {
     B.MeshBuilder = {
       CreatePlane(name, opts, scene) {
         const p = OrigMeshBuilder.CreatePlane(name, opts, scene);
+        p.createName = name;
         planes.push(p);
         return p;
       },
@@ -753,16 +794,12 @@ describe('G1 — addCombatReadout continue-gate', () => {
                      atkGangupFlat: 2 } },
       { setTimeoutFn: sched });
     sched.runUntil(COMBAT_READOUT_BASE_HOLD_MS + 1);
-
-    // planes[0] = main number (X = 0). planes[1] = the first step floater.
-    const numPlane     = planes[0];
-    const floaterPlane = planes[1];
+    // First plane = first floater (no separate number plane any more).
+    const floaterPlane = planes.find(p => /readoutFloater_/.test(p.createName));
     assert.ok(floaterPlane, 'step floater plane created');
-    assert.equal(numPlane.position.x, 0, 'number plane stays centred');
-    assert.notEqual(floaterPlane.position.x, 0,
-      'floater spawns beside the number, not directly above it');
-    assert.ok(floaterPlane.position.x > 0,
-      'floater is on the +X side of the number');
+    assert.equal(floaterPlane.position.x, 0,
+      'persistent floater is centred above the icon — vertical stack only');
+    assert.equal(floaterPlane.position.z, 0, 'no Z offset either');
   });
 });
 
@@ -786,28 +823,10 @@ describe('G1 — addAllyHalfLunge (unchanged)', () => {
   });
 });
 
-describe('G1 — readout NUMBER scale-during-fade (winner grows, loser shrinks)', () => {
-  // Capture the planes targeted by beginDirectAnimation and the animations'
-  // keyframe target scale (last keyframe) for each call, so we can verify
-  // the scale animation runs on the readout number plane with the correct
-  // peak based on `won`.
-  function makeInstWithCapture(ids = ['e1']) {
-    const inst = makeInst({ ids });
-    const captured = [];
-    inst._scene = {
-      stopAnimation() {},
-      beginDirectAnimation(target, anims, _f, _to, _loop, _spd, onEnd) {
-        captured.push({ target, anims });
-        if (onEnd) onEnd();
-      },
-    };
-    inst._capturedAnims = captured;
-    return inst;
-  }
-
-  test('winner (hit=true) scales the readout number 1.0 → 1.5 during fade', async () => {
+describe('G1 v2 — fade-out behaviour (no scale, persistent billboards only)', () => {
+  test('NO scale animation is queued during the readout fade (icon is not scaled)', async () => {
     if (!('document' in globalThis)) globalThis.document = {};
-    const inst = makeInstWithCapture(['e1']);
+    const inst = makeInst({ ids: ['e1'] });
     const sched = fakeScheduler();
     const h = inst.addCombatReadout('e1', 'attacker',
       { hit: true, attackRoll: 6, defenseRoll: 3,
@@ -815,43 +834,16 @@ describe('G1 — readout NUMBER scale-during-fade (winner grows, loser shrinks)'
       { setTimeoutFn: sched });
     sched.runAll();
     await h.promise;
-
-    // Find the scale animation track on a beginDirectAnimation call.
     const scaleAnims = inst._capturedAnims.flatMap(c =>
-      (c.anims || []).filter(a => a.prop === 'scaling' && a.name === 'readoutFadeScale')
+      (c.anims || []).filter(a => a.prop === 'scaling')
     );
-    assert.equal(scaleAnims.length, 1, 'scale animation queued during fade');
-    const keys = scaleAnims[0].keys;
-    assert.equal(keys[0].value.x, 1, 'starts at base scale 1.0');
-    assert.ok(Math.abs(keys[keys.length - 1].value.x - 1.5) < 1e-6,
-      `winner final scale is 1.5 (got ${keys[keys.length - 1].value.x})`);
+    assert.equal(scaleAnims.length, 0,
+      'no scale animations during the readout (icon stays put, persistent floaters only fade)');
   });
 
-  test('loser (hit=false) scales the readout number 1.0 → 0.5 during fade', async () => {
+  test('standee scale is left untouched by the readout fade', async () => {
     if (!('document' in globalThis)) globalThis.document = {};
-    const inst = makeInstWithCapture(['e1']);
-    const sched = fakeScheduler();
-    const h = inst.addCombatReadout('e1', 'attacker',
-      // hit=false → attacker is the LOSER on the attacker side.
-      { hit: false, attackRoll: 3, defenseRoll: 6,
-        breakdown: { atkPool: [3], atkBaseDie: 3, defPool: [6], defBaseDie: 6 } },
-      { setTimeoutFn: sched });
-    sched.runAll();
-    await h.promise;
-
-    const scaleAnims = inst._capturedAnims.flatMap(c =>
-      (c.anims || []).filter(a => a.prop === 'scaling' && a.name === 'readoutFadeScale')
-    );
-    assert.equal(scaleAnims.length, 1, 'scale animation queued during fade');
-    const keys = scaleAnims[0].keys;
-    assert.equal(keys[0].value.x, 1, 'starts at base scale 1.0');
-    assert.ok(Math.abs(keys[keys.length - 1].value.x - 0.5) < 1e-6,
-      `loser final scale is 0.5 (got ${keys[keys.length - 1].value.x})`);
-  });
-
-  test('the fade-scale animation targets the readout number plane (not the standee)', async () => {
-    if (!('document' in globalThis)) globalThis.document = {};
-    const inst = makeInstWithCapture(['e1']);
+    const inst = makeInst({ ids: ['e1'] });
     const standeePlane = inst._entityStandees.get('e1').plane;
     const sched = fakeScheduler();
     const h = inst.addCombatReadout('e1', 'attacker',
@@ -860,33 +852,9 @@ describe('G1 — readout NUMBER scale-during-fade (winner grows, loser shrinks)'
       { setTimeoutFn: sched });
     sched.runAll();
     await h.promise;
-
-    // Find the call carrying the readoutFadeScale animation.
-    const fadeCall = inst._capturedAnims.find(c =>
-      (c.anims || []).some(a => a.name === 'readoutFadeScale'));
-    assert.ok(fadeCall, 'fade animation was scheduled');
-    assert.notEqual(fadeCall.target, standeePlane,
-      'fade-scale targets the readout NUMBER plane, not the standee');
-  });
-
-  test('standee scale is left untouched by the readout fade (no scale-pop on the unit)', async () => {
-    if (!('document' in globalThis)) globalThis.document = {};
-    const inst = makeInstWithCapture(['e1']);
-    const standeePlane = inst._entityStandees.get('e1').plane;
-    const sched = fakeScheduler();
-    const h = inst.addCombatReadout('e1', 'attacker',
-      { hit: true, attackRoll: 6, defenseRoll: 3,
-        breakdown: { atkPool: [6], atkBaseDie: 6, defPool: [3], defBaseDie: 3 } },
-      { setTimeoutFn: sched });
-    sched.runAll();
-    await h.promise;
-
-    // No call in the readout lifecycle should animate the standee's scale.
-    const standeeScaleCalls = inst._capturedAnims.filter(c =>
-      c.target === standeePlane
-      && (c.anims || []).some(a => a.prop === 'scaling'));
-    assert.equal(standeeScaleCalls.length, 0,
-      'standee should not receive a scale animation during the readout');
+    const standeeAnims = inst._capturedAnims.filter(c => c.target === standeePlane);
+    assert.equal(standeeAnims.length, 0,
+      'standee receives no animations during the readout');
   });
 });
 
@@ -911,5 +879,262 @@ describe('G1 — playReactionAnim (unchanged)', () => {
     const inst = makeInst();
     const r = await inst.playReactionAnim('bogus');
     assert.equal(r, undefined);
+  });
+});
+
+// ─── G1 v2 — resultLabel pure helper ────────────────────────────────────────
+
+describe('G1 v2 — resultLabel', () => {
+  test('attacker side: damage>=2 → CRUSH, hit+damage<2 → HIT', () => {
+    assert.equal(resultLabel({ hit: true, damage: 2 }, 'attacker'), 'CRUSH');
+    assert.equal(resultLabel({ hit: true, damage: 1 }, 'attacker'), 'HIT');
+    assert.equal(resultLabel({ hit: true }, 'attacker'), 'HIT'); // damage falls back to 1
+  });
+
+  test('attacker side: lost + counterDmg>0 → COUNTERED; lost no counter → BLOCKED', () => {
+    assert.equal(resultLabel({ hit: false, counterDmg: 1 }, 'attacker'), 'COUNTERED');
+    assert.equal(resultLabel({ hit: false }, 'attacker'), 'BLOCKED');
+  });
+
+  test('defender side: won + counterDmg>0 → COUNTER; won no counter → BLOCK', () => {
+    assert.equal(resultLabel({ hit: false, counterDmg: 1 }, 'defender'), 'COUNTER');
+    assert.equal(resultLabel({ hit: false }, 'defender'), 'BLOCK');
+  });
+
+  test('defender side: lost (took hit) + damage>=2 → CRUSHED; lost damage<2 → HIT', () => {
+    assert.equal(resultLabel({ hit: true, damage: 2 }, 'defender'), 'CRUSHED');
+    assert.equal(resultLabel({ hit: true, damage: 1 }, 'defender'), 'HIT');
+  });
+
+  test('atk/attacker alias accepted', () => {
+    assert.equal(resultLabel({ hit: true, damage: 1 }, 'atk'), 'HIT');
+  });
+
+  test('null result tolerated', () => {
+    assert.equal(resultLabel(null, 'attacker'), 'BLOCKED');
+  });
+});
+
+// ─── G1 v2 — paintIconCombatReadout pure helper ────────────────────────────
+
+describe('G1 v2 — paintIconCombatReadout', () => {
+  function makeCtx() {
+    const calls = [];
+    return {
+      calls,
+      clearRect(...a)  { calls.push(['clearRect', ...a]); },
+      fillRect(...a)   { calls.push(['fillRect', ...a]); },
+      strokeText(...a) { calls.push(['strokeText', ...a]); },
+      fillText(...a)   { calls.push(['fillText', ...a]); },
+      arc(...a)        { calls.push(['arc', ...a]); },
+      stroke()         { calls.push(['stroke']); },
+      save()           { calls.push(['save']); },
+      restore()        { calls.push(['restore']); },
+      beginPath()      { calls.push(['beginPath']); },
+      closePath()      { calls.push(['closePath']); },
+      clip()           { calls.push(['clip']); },
+      set font(v)         { calls.push(['font', v]); },
+      set textAlign(v)    { calls.push(['textAlign', v]); },
+      set textBaseline(v) { calls.push(['textBaseline', v]); },
+      set fillStyle(v)    { calls.push(['fillStyle', v]); },
+      set strokeStyle(v)  { calls.push(['strokeStyle', v]); },
+      set lineWidth(v)    { calls.push(['lineWidth', v]); },
+      set lineCap(v)      { calls.push(['lineCap', v]); },
+      set lineJoin(v)     { calls.push(['lineJoin', v]); },
+      set miterLimit(v)   { calls.push(['miterLimit', v]); },
+      drawImage()         { calls.push(['drawImage']); },
+      measureText: (s) => ({ width: String(s).length * 10 }),
+    };
+  }
+
+  test('calls basePaint first (so HP ring + portrait are beneath the overlay)', () => {
+    const ctx = makeCtx();
+    let baseCalled = false;
+    paintIconCombatReadout(ctx, {
+      size: UNIT_ICON_TEX_SIZE,
+      basePaint: () => { baseCalled = true; },
+      value: 7,
+      color: COMBAT_CARD_ATK_COLOR,
+      icon: '⚔',
+    });
+    assert.equal(baseCalled, true, 'base portrait painter invoked first');
+    // Dim composite rect is painted (covers entire canvas).
+    const fillRects = ctx.calls.filter(c => c[0] === 'fillRect');
+    assert.ok(fillRects.length >= 1, 'dim overlay rect was filled');
+  });
+
+  test('paints icon + value with side colour, outlined for legibility', () => {
+    const ctx = makeCtx();
+    paintIconCombatReadout(ctx, {
+      size: UNIT_ICON_TEX_SIZE,
+      basePaint: () => {},
+      value: 7,
+      color: COMBAT_CARD_ATK_COLOR,
+      icon: '⚔',
+    });
+    const fills = ctx.calls.filter(c => c[0] === 'fillText').map(c => c[1]);
+    const strokes = ctx.calls.filter(c => c[0] === 'strokeText').map(c => c[1]);
+    assert.ok(fills.includes('⚔ 7'), 'value drawn with side glyph prefix');
+    assert.ok(strokes.includes('⚔ 7'), 'value outlined too');
+    const fillStyles = ctx.calls.filter(c => c[0] === 'fillStyle').map(c => c[1]);
+    assert.ok(fillStyles.includes(COMBAT_CARD_ATK_COLOR),
+      'side colour applied to the overlay number');
+    // Dim overlay is a black-with-alpha rect.
+    assert.ok(fillStyles.some(s => typeof s === 'string' && s.startsWith('rgba(0,0,0')),
+      'dim overlay uses a dark rgba fill');
+  });
+
+  test('font is bigger than the bare-number plane font (uses icon canvas room)', () => {
+    const ctx = makeCtx();
+    paintIconCombatReadout(ctx, {
+      size: UNIT_ICON_TEX_SIZE,
+      basePaint: () => {},
+      value: 7,
+      color: COMBAT_CARD_ATK_COLOR,
+      icon: '⚔',
+    });
+    const fontEntries = ctx.calls.filter(c => c[0] === 'font').map(c => c[1]);
+    assert.ok(fontEntries.length >= 1);
+    const m = /(\d+)px/.exec(fontEntries[0]);
+    const px = Number(m[1]);
+    // Combat overlay number is bigger than the legacy bare-number plane font
+    // (which capped at ~40% of canvas dim).
+    assert.ok(px > UNIT_ICON_TEX_SIZE * 0.50,
+      `overlay font ${px}px is > 50% of ${UNIT_ICON_TEX_SIZE} canvas (got ${px / UNIT_ICON_TEX_SIZE})`);
+  });
+});
+
+// ─── G1 v2 — Continue button countdown ─────────────────────────────────────
+
+describe('G1 v2 — startContinueCountdown', () => {
+  function makeButton(initialLabel = 'Continue ▶', hidden = false) {
+    const listeners = {};
+    return {
+      textContent: initialLabel,
+      hidden,
+      addEventListener(name, fn) { (listeners[name] ||= []).push(fn); },
+      removeEventListener(name, fn) {
+        const arr = listeners[name];
+        if (arr) {
+          const i = arr.indexOf(fn);
+          if (i >= 0) arr.splice(i, 1);
+        }
+      },
+      _fire(name) { for (const fn of listeners[name] || []) fn(); },
+    };
+  }
+
+  function fakeInterval() {
+    const handles = new Map();
+    let nextId = 1;
+    const setIntervalFn = (fn) => { const id = nextId++; handles.set(id, fn); return id; };
+    const clearIntervalFn = (id) => { handles.delete(id); };
+    return {
+      setIntervalFn, clearIntervalFn,
+      tick(n = 1) { for (let i = 0; i < n; i++) { for (const fn of handles.values()) fn(); } },
+      size() { return handles.size; },
+    };
+  }
+
+  test('no-op when button is null', () => {
+    const cleanup = startContinueCountdown(null, () => {});
+    assert.equal(typeof cleanup, 'function');
+    cleanup(); // idempotent
+  });
+
+  test('starts ticking immediately when button is already visible', () => {
+    const btn = makeButton('Continue ▶', false);
+    const iv = fakeInterval();
+    const cleanup = startContinueCountdown(btn, () => {}, {
+      setIntervalFn: iv.setIntervalFn,
+      clearIntervalFn: iv.clearIntervalFn,
+      setTimeoutFn: () => 0, clearTimeoutFn: () => {},
+    });
+    assert.equal(btn.textContent, `${CONTINUE_BTN_BASE_LABEL} (${CONTINUE_COUNTDOWN_SEC})`,
+      'label shows initial countdown');
+    iv.tick();
+    assert.equal(btn.textContent, `${CONTINUE_BTN_BASE_LABEL} (${CONTINUE_COUNTDOWN_SEC - 1})`);
+    cleanup();
+  });
+
+  test('label ticks down to (0) and auto-clicks at 0', () => {
+    const btn = makeButton('Continue ▶', false);
+    const iv = fakeInterval();
+    let auto = 0;
+    startContinueCountdown(btn, () => { auto += 1; }, {
+      setIntervalFn: iv.setIntervalFn,
+      clearIntervalFn: iv.clearIntervalFn,
+      setTimeoutFn: () => 0, clearTimeoutFn: () => {},
+    });
+    iv.tick(CONTINUE_COUNTDOWN_SEC);
+    assert.equal(auto, 1, 'auto-click fired exactly once');
+    assert.equal(btn.textContent, `${CONTINUE_BTN_BASE_LABEL} (0)`,
+      'label settles on (0)');
+  });
+
+  test('hover pauses, mouseleave resumes', () => {
+    const btn = makeButton('Continue ▶', false);
+    const iv = fakeInterval();
+    let auto = 0;
+    startContinueCountdown(btn, () => { auto += 1; }, {
+      setIntervalFn: iv.setIntervalFn,
+      clearIntervalFn: iv.clearIntervalFn,
+      setTimeoutFn: () => 0, clearTimeoutFn: () => {},
+    });
+    iv.tick(); // 4
+    btn._fire('mouseenter');
+    iv.tick(3); // hovered — no decrement
+    assert.equal(btn.textContent, `${CONTINUE_BTN_BASE_LABEL} (${CONTINUE_COUNTDOWN_SEC - 1})`,
+      'label frozen while hovered');
+    btn._fire('mouseleave');
+    iv.tick(CONTINUE_COUNTDOWN_SEC - 1); // drains
+    assert.equal(auto, 1, 'auto-click after resume');
+  });
+
+  test('cleanup is idempotent and restores the label', () => {
+    const btn = makeButton('Continue ▶', false);
+    const iv = fakeInterval();
+    const cleanup = startContinueCountdown(btn, () => {}, {
+      setIntervalFn: iv.setIntervalFn,
+      clearIntervalFn: iv.clearIntervalFn,
+      setTimeoutFn: () => 0, clearTimeoutFn: () => {},
+    });
+    cleanup();
+    cleanup();
+    assert.equal(btn.textContent, 'Continue ▶', 'original label restored');
+    assert.equal(iv.size(), 0, 'no leaked interval');
+  });
+
+  test('waits for button to be revealed before ticking (hidden=true initially)', () => {
+    const btn = makeButton('Continue ▶', true);
+    const iv = fakeInterval();
+    let polled = 0;
+    const setTimeoutFn = (fn /*, ms */) => { polled += 1; if (polled < 3) fn(); return polled; };
+    startContinueCountdown(btn, () => {}, {
+      setIntervalFn: iv.setIntervalFn,
+      clearIntervalFn: iv.clearIntervalFn,
+      setTimeoutFn,
+      clearTimeoutFn: () => {},
+    });
+    // First two polls re-schedule themselves — button still hidden.
+    assert.equal(iv.size(), 0, 'no interval started while hidden');
+    btn.hidden = false;
+    // Drive one more poll synchronously by mimicking the setTimeoutFn loop.
+    // The loop body calls setTimeoutFn(waitForReveal, 50). We've returned an
+    // id; the next call to setTimeoutFn would re-invoke. Since `setTimeoutFn`
+    // we used invokes only the first 2 calls, the third polling tick fires
+    // through `startContinueCountdown` ending the wait-loop.
+    // Trigger via direct call: the test verifies the polling reads `.hidden`.
+    // Easiest path: use isHidden override and re-construct the helper.
+    let isHiddenCalls = 0;
+    const isHidden = () => { isHiddenCalls += 1; return false; };
+    startContinueCountdown(btn, () => {}, {
+      setIntervalFn: iv.setIntervalFn,
+      clearIntervalFn: iv.clearIntervalFn,
+      setTimeoutFn: () => 0, clearTimeoutFn: () => {},
+      isHidden,
+    });
+    assert.ok(isHiddenCalls >= 1, 'helper consults isHidden override');
+    assert.ok(iv.size() >= 1, 'starts ticking once visible');
   });
 });
