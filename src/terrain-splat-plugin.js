@@ -124,6 +124,7 @@ export function makeTerrainSplatPlugin(BABYLON) {
       attributes.push('aSplat');
       attributes.push('aFog');
       attributes.push('aEdgeAlpha');
+      attributes.push('aTint');
     }
 
     getSamplers(samplers) {
@@ -185,16 +186,19 @@ export function makeTerrainSplatPlugin(BABYLON) {
             attribute vec3 aSplat;
             attribute float aFog;
             attribute float aEdgeAlpha;
+            attribute vec3 aTint;
             varying vec3 vSplat;
             varying float vFog;
             varying float vEdgeAlpha;
             varying vec3 vWorldXZ;
+            varying vec3 vTint;
           #endif`,
           CUSTOM_VERTEX_MAIN_END: `#ifdef TERRAIN_SPLAT
             vSplat = aSplat;
             vFog = aFog;
             vEdgeAlpha = aEdgeAlpha;
             vWorldXZ = worldPos.xyz;
+            vTint = aTint;
           #endif`,
         };
       }
@@ -205,6 +209,7 @@ export function makeTerrainSplatPlugin(BABYLON) {
             varying float vFog;
             varying float vEdgeAlpha;
             varying vec3 vWorldXZ;
+            varying vec3 vTint;
             uniform sampler2D detailGrass;
             uniform sampler2D detailDirt;
             uniform sampler2D detailForest;
@@ -232,6 +237,11 @@ export function makeTerrainSplatPlugin(BABYLON) {
             vec3 tintBlend = w.x * uColTint0 + w.y * uColTint1 + w.z * uColTint2;
             vec3 col = clamp(tintBlend * varM, 0.0, 1.0);
             vec3 texel = col * detail;
+            // Per-vertex multiplicative tint — subtle ±6% RGB jitter so within
+            // a single hex the 7 fan verts (centre + 6 corners) each pull the
+            // colour in a slightly different direction. Goes BEFORE the fog
+            // mix so fog darken still dominates at fully fogged hexes.
+            texel *= vTint;
             texel *= mix(1.0, uFogDarken, vFog);
             // Playable splat ground renders opaque; the border-forest splat
             // mesh has alpha-blend enabled and gets its smooth dissolve via

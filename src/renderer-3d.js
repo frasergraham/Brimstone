@@ -58,7 +58,7 @@ import {
   makeOverlay, overlayMaterialKey,
 } from './overlays.js';
 import {
-  hexSplatWeights, hexFogWeights, splatChannelForTile,
+  hexSplatWeights, hexFogWeights, hexTintWeights, splatChannelForTile,
   worldToHex, neighborDeltas, DEFAULT_TERRAIN_TINTS,
 } from './terrain-splat.js';
 import { makeTerrainSplatPlugin, SPLAT_UNIFORM_DEFAULTS } from './terrain-splat-plugin.js';
@@ -6449,6 +6449,9 @@ export class Renderer3D {
       buffers.edgeA[baseV + v] = edgeAlpha;
     }
     buffers.splat.set(splatWeights, baseV * 3);
+    // Per-vertex tint — hashed purely by world XZ so coincident corners on
+    // adjacent hexes get identical tints (no boundary seam).
+    buffers.tint.set(hexTintWeights(col, row, { radius: R }), baseV * 3);
     const baseI = ti * 6 * 3;
     for (let j = 0; j < 6; j++) {
       buffers.indices[baseI + j * 3]     = baseV;
@@ -6465,6 +6468,7 @@ export class Renderer3D {
       splat:     new Float32Array(tileCount * VPT * 3),
       fog:       new Float32Array(tileCount * VPT),
       edgeA:     new Float32Array(tileCount * VPT),
+      tint:      new Float32Array(tileCount * VPT * 3),
       indices:   new Uint32Array(tileCount * 6 * 3),
       range:     new Map(),
     };
@@ -6495,6 +6499,7 @@ export class Renderer3D {
     mesh.setVerticesData('aSplat', buffers.splat, false, 3);
     mesh.setVerticesData('aFog', buffers.fog, true, 1);
     mesh.setVerticesData('aEdgeAlpha', buffers.edgeA, false, 1);
+    mesh.setVerticesData('aTint', buffers.tint, false, 3);
     mesh.parent = parent;
     if (mesh.position?.set) mesh.position.set(0, 0, 0);
     mesh.metadata = { kind: 'splatGround' };
@@ -6537,6 +6542,7 @@ export class Renderer3D {
     mesh.setVerticesData('aSplat', buffers.splat, false, 3);
     mesh.setVerticesData('aFog',   buffers.fog,   false, 1);
     mesh.setVerticesData('aEdgeAlpha', buffers.edgeA, false, 1);
+    mesh.setVerticesData('aTint',  buffers.tint,  false, 3);
     mesh.parent = parent;
     if (mesh.position?.set) mesh.position.set(0, 0, 0);
     mesh.metadata = { kind: 'splatBorderGround' };

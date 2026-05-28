@@ -170,6 +170,12 @@ export const DEFAULT_TERRAIN_TINTS = [
 
 export const DEFAULT_COLOR_VARIATION = Object.freeze({ amp: 0.18, freq: 0.12 });
 
+// Per-vertex multiplicative RGB tint applied AFTER the splat blend (inside the
+// plugin's CUSTOM_FRAGMENT_UPDATE_DIFFUSE, before fog). Default ±6% keeps the
+// look "varied but cohesive" — enough to break the flat-block read of a tile
+// without going gaudy. Bumped to ±8% if 6% reads too subtle.
+export const DEFAULT_TINT_AMP = 0.06;
+
 function hash2(ix, iz) {
   const s = Math.sin(ix * 127.1 + iz * 311.7) * 43758.5453;
   return s - Math.floor(s);
@@ -212,6 +218,56 @@ export function proceduralTerrainColor(channel, worldX, worldZ, opts = {}) {
     Math.min(1, Math.max(0, tint[1] * m)),
     Math.min(1, Math.max(0, tint[2] * m)),
   ];
+}
+
+// ── Per-vertex tint (subtle base-colour variation, edge-symmetric) ─────────
+//
+// Hashed purely by world XZ (quantized to 1e-4 to absorb FP jitter) so two
+// coincident vertices on adjacent hexes compute identical tints — preserving
+// the GPU-interpolation continuity contract that `hexSplatWeights` upholds.
+// If we hashed by (col,row,vertIdx) instead, a shared corner would carry a
+// different colour in each owning hex and the boundary would visibly seam.
+
+function tintHash(qx, qz, k) {
+  const s = Math.sin(qx * 127.1 + qz * 311.7 + k * 74.7) * 43758.5453;
+  return s - Math.floor(s);
+}
+
+/** Multiplicative RGB tint for a single vertex at world position (x, z).
+ *  Returns a 3-tuple centred on 1.0, range [1-amp, 1+amp]. Deterministic. */
+export function vertexTintAt(worldX, worldZ, opts = {}) {
+  const amp = opts.amp ?? DEFAULT_TINT_AMP;
+  // Quantize so adjacent hex corners (computed from independent cos/sin
+  // sums) hash to the same integer pair and produce identical tints.
+  const qx = Math.round(worldX * 1e4);
+  const qz = Math.round(worldZ * 1e4);
+  const r = 1 + (tintHash(qx, qz, 1) - 0.5) * 2 * amp;
+  const g = 1 + (tintHash(qx, qz, 2) - 0.5) * 2 * amp;
+  const b = 1 + (tintHash(qx, qz, 3) - 0.5) * 2 * amp;
+  return [r, g, b];
+}
+
+/** Per-vertex tints for a whole hex fan, row-major in the same vertex order
+ *  as `hexSplatWeights` (centre, then 6 rim corners). Returns Float32Array(7*3).
+ *
+ *  `radius` is the hex radius in world units (matches the renderer's
+ *  HEX_RADIUS_WORLD). */
+export function hexTintWeights(col, row, opts = {}) {
+  const R = opts.radius ?? 1;
+  const out = new Float32Array(7 * 3);
+  const cx = R * SQRT3 * (col + 0.5 * (row & 1));
+  const cz = R * 1.5 * row;
+  const c = vertexTintAt(cx, cz, opts);
+  out[0] = c[0]; out[1] = c[1]; out[2] = c[2];
+  for (let i = 0; i < 6; i++) {
+    const a = Math.PI / 6 + i * Math.PI / 3;
+    const vx = cx + R * Math.cos(a);
+    const vz = cz + R * Math.sin(a);
+    const v = vertexTintAt(vx, vz, opts);
+    const base = (i + 1) * 3;
+    out[base] = v[0]; out[base + 1] = v[1]; out[base + 2] = v[2];
+  }
+  return out;
 }
 
 // ── Fog weights ────────────────────────────────────────────────────────────
