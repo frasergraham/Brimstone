@@ -6622,24 +6622,29 @@ export class Renderer3D {
       this._emitSplatHex(buffers, ti, tile.col, tile.row,
         hexSplatWeights(tile, channelAt), 1.0);
     }
-    // R5 — river / bridge hexes get a Y-DISPLACED centre so the splat ground
-    // forms a bowl that lets the sunken water (at RIVER_BED_Y) be visible
-    // instead of occluded by a flat Y=0 plane. Perimeter vertices shared with
-    // an ADJACENT river hex also drop to RIVER_BED_Y so the channel runs
-    // continuously from one tile to the next instead of bouncing back up to
-    // ground level at every hex boundary. Vertices shared with a NON-river
-    // neighbour stay at Y=0 so the grass/dirt around the channel keeps a
-    // flush rim.
+    // R5 — sink the splat ground into a real channel under each river/bridge
+    // hex so the water ribbon at `RIVER_BED_Y` is actually visible instead of
+    // occluded by a flat Y=0 plane.
     //
-    // Each river hex's vertex layout (`_emitSplatHex`):
+    // Per river/bridge tile:
+    //   • CENTRE vertex drops to `RIVER_BED_Y - SPLAT_RIVER_CENTRE_EPS` —
+    //     1 cm BELOW the water ribbon. Without this extra epsilon the splat
+    //     centre is coplanar with the water at `RIVER_BED_Y` and z-fights
+    //     against it; the opaque splat (sampling grass for the surrounding
+    //     hex) wins the depth test and hides the animated water entirely.
+    //
+    // Per corner (ALL tiles, river OR not — symmetric):
+    //   • Each corner of `tile` is touched by THREE tiles total: `tile` plus
+    //     its two corner-adjacent neighbours (`CORNER_DIRS[j]` indexes into
+    //     the row-parity-aware neighbour DIRS, same algebra as
+    //     `hexSplatWeights`). Count how many of those THREE are water and
+    //     map the count through `riverCornerY()` to a Y. All three tiles
+    //     touching the same physical corner compute the SAME waterCount, so
+    //     all three emit the corner at the SAME Y → no seam gap.
+    //
+    // The vertex layout from `_emitSplatHex`:
     //   baseV + 0       = centre
     //   baseV + 1..6    = perimeter corners (j=0..5, angle π/6 + j·π/3)
-    //
-    // The 6 hex neighbour DIRS are addressed by `(tile.row & 1) ? DIRS_ODD :
-    // DIRS_EVEN` (same logic that drives `hexSplatWeights`). Each corner is
-    // shared by TWO adjacent neighbour-direction slots (CORNER_NEIGHBOR_DIRS);
-    // pulling the corner down only when one of those two neighbours is also
-    // water keeps the rim flush with grass tiles.
     {
       const isWater = (col, row) => {
         const t = this.state.tiles.get(hexKey(col, row));
@@ -6653,24 +6658,25 @@ export class Renderer3D {
       const HEX_DIRS_ODD  = [[-1, 0], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1]];
       const CORNER_DIRS   = [[3, 4], [4, 5], [5, 0], [0, 1], [1, 2], [2, 3]];
       for (const tile of playable) {
-        if (!isRiver(tile) && !isBridge(tile)) continue;
         const baseV = range.get(hexKey(tile.col, tile.row));
         if (baseV == null) continue;
-        // Centre drops to bed.
-        buffers.positions[baseV * 3 + 1] = RIVER_BED_Y;
+        const tileIsWater = isWater(tile.col, tile.row);
+        // Centre — only river/bridge hexes get their centre pushed below the
+        // water ribbon. Non-water hexes keep their centre at Y=0.
+        if (tileIsWater) {
+          buffers.positions[baseV * 3 + 1] = RIVER_BED_Y - SPLAT_RIVER_CENTRE_EPS;
+        }
         const dirs = (tile.row & 1) ? HEX_DIRS_ODD : HEX_DIRS_EVEN;
         for (let j = 0; j < 6; j++) {
           const [da, db] = CORNER_DIRS[j];
           const naCol = tile.col + dirs[da][0], naRow = tile.row + dirs[da][1];
           const nbCol = tile.col + dirs[db][0], nbRow = tile.row + dirs[db][1];
-          if (isWater(naCol, naRow) || isWater(nbCol, nbRow)) {
-            // Corner sits between this tile and an adjacent water neighbour
-            // → drop to the bed so the channel runs continuously across the
-            // shared edge. Slightly shallower than the centre (HALF bed depth)
-            // so the cross-section reads as a soft V instead of a hard flat
-            // bottom that hides every contour change.
-            buffers.positions[(baseV + 1 + j) * 3 + 1] = RIVER_BED_Y * 0.5;
-          }
+          const waterCount =
+            (tileIsWater ? 1 : 0)
+            + (isWater(naCol, naRow) ? 1 : 0)
+            + (isWater(nbCol, nbRow) ? 1 : 0);
+          if (waterCount === 0) continue; // pure-ground corner — leave at Y=0
+          buffers.positions[(baseV + 1 + j) * 3 + 1] = riverCornerY(waterCount);
         }
       }
     }
@@ -13802,6 +13808,37 @@ export const RIVER_RIBBON_Y     = 0.005;
  *  painted ribbon. Operator-tunable; -0.18 is enough to read clearly at the
  *  default camera tilt without making bridges/road crossings feel too high. */
 export const RIVER_BED_Y         = -0.18;
+/** R5 follow-up — extra depth pushed BELOW `RIVER_BED_Y` for the splat
+ *  ground's CENTRE vertex on each river/bridge hex. The river water ribbon
+ *  sits exactly at `RIVER_BED_Y`; if the splat centre also sits at
+ *  `RIVER_BED_Y` the two surfaces are coplanar and the opaque splat ground
+ *  (grass texture, since `splatChannelForTile(river) === SPLAT_DIRT` blends
+ *  but the surrounding hex centre splats to grass) wins the depth test,
+ *  hiding the animated water entirely. 1 cm is enough for Babylon's depth
+ *  buffer at the default near plane to consistently resolve "water above
+ *  bed". Operator-tunable. */
+export const SPLAT_RIVER_CENTRE_EPS = 0.01;
+/** R5 follow-up — pure helper computing the Y a splat-ground CORNER vertex
+ *  should sit at, given how many of the THREE tiles touching that corner
+ *  (`tile + 2 corner-neighbours`) are water (river or bridge). Symmetric:
+ *  all three tiles touching the corner compute the same `waterCount` and
+ *  therefore agree on the Y, eliminating the per-tile seam gap that the
+ *  river-only corner-drop loop used to produce.
+ *
+ *  Mapping:
+ *    0 → 0           (no drop — normal ground)
+ *    1 → -0.06       (shallow, bank slope start)
+ *    2 → -0.12       (mid bank)
+ *    3 → RIVER_BED_Y (full bed — corner is interior to the channel)
+ *
+ *  Linear in `waterCount` against `RIVER_BED_Y` so changing the bed depth
+ *  rescales the slope automatically. */
+export function riverCornerY(waterCount) {
+  const c = Math.max(0, Math.min(3, waterCount | 0));
+  // `|| 0` collapses the JS `-0` you'd otherwise get from `RIVER_BED_Y * 0`
+  // when waterCount is 0 — callers compare against `0` strictly.
+  return RIVER_BED_Y * (c / 3) || 0;
+}
 /** R5 — bank top Y. Sits a hair ABOVE the ground (Y=0) so the dirt-textured
  *  bank deck wins the depth fight against the underlying terrain disc at the
  *  river hex (same trick the road ribbon uses at ROAD_RIBBON_Y). Same value

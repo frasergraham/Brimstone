@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 
 import {
   riverHalfWidthsByCurvature,
+  riverCornerY,
   RIVER_HALF_WIDTH_MIN,
   RIVER_HALF_WIDTH_MAX,
   RIVER_BED_Y,
@@ -15,8 +16,11 @@ import {
   RIVER_RIBBON_Y,
   RIVER_RIBBON_WIDTH,
   RIVER_ALPHA_INDEX,
+  SPLAT_RIVER_CENTRE_EPS,
   Renderer3D,
 } from '../src/renderer-3d.js';
+import { hexKey } from '../src/hex.js';
+import { Tile, TileType } from '../src/tiles.js';
 
 describe('R5 — channel constants', () => {
   test('RIVER_BED_Y sits clearly below ground (negative Y)', () => {
@@ -238,5 +242,206 @@ describe('R5 — _buildRiverBankMeshes integration', () => {
     const props = inst._tilePropsByKey.get('7,7');
     assert.ok(props && props.length === 1, 'road tile should have exactly one prop (no bank)');
     assert.equal(props[0].metadata?.kind, 'road');
+  });
+});
+
+// ─── R5 follow-up: riverCornerY + symmetric splat-channel displacement ──────
+
+describe('riverCornerY (pure helper)', () => {
+  test('0 water neighbours → no drop', () => {
+    assert.equal(riverCornerY(0), 0);
+  });
+  test('3 water neighbours → full bed depth', () => {
+    assert.equal(riverCornerY(3), RIVER_BED_Y);
+  });
+  test('monotonic in waterCount (1 < 2 in magnitude)', () => {
+    assert.ok(riverCornerY(1) < 0 && riverCornerY(1) > RIVER_BED_Y);
+    assert.ok(riverCornerY(2) < riverCornerY(1)); // deeper
+    assert.ok(riverCornerY(2) > RIVER_BED_Y);
+  });
+  test('clamps negative / out-of-range input', () => {
+    assert.equal(riverCornerY(-2), 0);
+    assert.equal(riverCornerY(99), RIVER_BED_Y);
+  });
+  test('non-integer input is coerced (floor via |0)', () => {
+    assert.equal(riverCornerY(1.7), riverCornerY(1));
+  });
+});
+
+describe('SPLAT_RIVER_CENTRE_EPS — channel constant', () => {
+  test('strictly positive — splat centre must sit BELOW the water ribbon', () => {
+    assert.ok(SPLAT_RIVER_CENTRE_EPS > 0,
+      'centre epsilon must be > 0 so splat ground stays below the water ribbon and the river is visible');
+  });
+  test('small enough not to dominate the channel depth', () => {
+    assert.ok(SPLAT_RIVER_CENTRE_EPS < Math.abs(RIVER_BED_Y),
+      'centre epsilon should be much smaller than the bed depth itself');
+  });
+});
+
+// Integration: build a real splat ground over a tiny river map and verify
+// both (a) the centre/corner Y values match the spec and (b) every corner
+// shared by multiple hexes lands at the SAME Y across all sharers.
+describe('_buildSplatPlayableMesh — symmetric channel displacement', () => {
+  function makeSplatBabylon() {
+    const Color3 = makeColor3();
+    class Vector3 {
+      constructor(x = 0, y = 0, z = 0) { this.x = x; this.y = y; this.z = z; }
+      set(x, y, z) { this.x = x; this.y = y; this.z = z; }
+    }
+    class Mesh {
+      constructor(name) {
+        this.name = name;
+        this.position = new Vector3();
+        this.metadata = null;
+        this.material = null;
+        this.parent = null;
+        this._custom = new Map();
+      }
+      setVerticesData(kind, data) { this._custom.set(kind, data); }
+    }
+    class VertexData {
+      applyToMesh(mesh) {
+        mesh.positions = this.positions;
+        mesh.indices   = this.indices;
+        mesh.normals   = this.normals;
+      }
+    }
+    return {
+      Color3,
+      Vector3,
+      Mesh,
+      VertexData,
+      VertexBuffer: { ColorKind: 'color', UVKind: 'uv', PositionKind: 'position', NormalKind: 'normal' },
+    };
+  }
+
+  function setupSplatInst(tiles) {
+    const inst = Object.create(Renderer3D.prototype);
+    inst._babylon = makeSplatBabylon();
+    inst._scene = {};
+    inst.state = { tiles };
+    inst._buildSplatMaterial = () => ({ name: 'fakeSplatMat' });
+    inst._setShadowReceiver = () => {};
+    return inst;
+  }
+
+  function makeMap(riverKeys) {
+    // 5×3 grid; cells in `riverKeys` get TileType.RIVER, everything else GRASS.
+    const tiles = new Map();
+    for (let row = 0; row < 3; row++) {
+      for (let col = 0; col < 5; col++) {
+        const isRiverCell = riverKeys.has(`${col},${row}`);
+        tiles.set(hexKey(col, row),
+          new Tile(col, row, isRiverCell ? TileType.RIVER : TileType.GRASS));
+      }
+    }
+    return tiles;
+  }
+
+  function cornerY(mesh, range, col, row, j) {
+    const baseV = range.get(hexKey(col, row));
+    return mesh.positions[(baseV + 1 + j) * 3 + 1];
+  }
+  function centreY(mesh, range, col, row) {
+    const baseV = range.get(hexKey(col, row));
+    return mesh.positions[baseV * 3 + 1];
+  }
+  function cornerXZ(mesh, range, col, row, j) {
+    const baseV = range.get(hexKey(col, row));
+    return {
+      x: mesh.positions[(baseV + 1 + j) * 3 + 0],
+      z: mesh.positions[(baseV + 1 + j) * 3 + 2],
+    };
+  }
+
+  test('river hex centre sits BELOW the water ribbon (no z-fight)', () => {
+    // Horizontal river across row=1: (1,1) (2,1) (3,1).
+    const tiles = makeMap(new Set(['1,1', '2,1', '3,1']));
+    const inst = setupSplatInst(tiles);
+    inst._buildSplatPlayableMesh({ name: 'root' });
+    const mesh  = inst._splatGround;
+    const range = inst._hexVertexRange;
+    for (const [c, r] of [[1, 1], [2, 1], [3, 1]]) {
+      assert.ok(centreY(mesh, range, c, r) < RIVER_BED_Y,
+        `river hex (${c},${r}) centre Y ${centreY(mesh, range, c, r)} should sit below RIVER_BED_Y ${RIVER_BED_Y}`);
+    }
+    // Grass hex centre stays at ground level.
+    assert.equal(centreY(mesh, range, 0, 0), 0);
+    assert.equal(centreY(mesh, range, 2, 0), 0);
+  });
+
+  test('corner shared by 3 grass hexes stays at Y=0', () => {
+    const tiles = makeMap(new Set()); // pure grass
+    const inst = setupSplatInst(tiles);
+    inst._buildSplatPlayableMesh({ name: 'root' });
+    const mesh  = inst._splatGround;
+    const range = inst._hexVertexRange;
+    for (let j = 0; j < 6; j++) {
+      assert.equal(cornerY(mesh, range, 2, 1, j), 0,
+        `grass-only corner j=${j} should remain at Y=0`);
+    }
+  });
+
+  test('every shared corner agrees on Y across all hexes that touch it', () => {
+    // Horizontal river through the middle row + one tributary going up from (2,1) to (2,0).
+    const tiles = makeMap(new Set(['1,1', '2,1', '3,1', '2,0']));
+    const inst = setupSplatInst(tiles);
+    inst._buildSplatPlayableMesh({ name: 'root' });
+    const mesh  = inst._splatGround;
+    const range = inst._hexVertexRange;
+    // Group every corner vertex by (rounded) XZ position; assert all Y values
+    // in each group are identical. That's the symmetric-corner-drop invariant.
+    const groups = new Map();
+    for (const tile of tiles.values()) {
+      for (let j = 0; j < 6; j++) {
+        const { x, z } = cornerXZ(mesh, range, tile.col, tile.row, j);
+        const y = cornerY(mesh, range, tile.col, tile.row, j);
+        const k = `${x.toFixed(4)},${z.toFixed(4)}`;
+        if (!groups.has(k)) groups.set(k, []);
+        groups.get(k).push({ col: tile.col, row: tile.row, j, y });
+      }
+    }
+    for (const [k, members] of groups) {
+      if (members.length < 2) continue; // unshared border corner
+      const y0 = members[0].y;
+      for (const m of members) {
+        // Float32 round-trip can lose a few ULPs; sub-1e-5 still nails the
+        // "agree" invariant we care about (any real seam would be cm-scale).
+        assert.ok(Math.abs(m.y - y0) < 1e-5,
+          `corner ${k} sees Y=${y0} from ${members[0].col},${members[0].row}#${members[0].j} `
+          + `but Y=${m.y} from ${m.col},${m.row}#${m.j} — seam gap!`);
+      }
+    }
+  });
+
+  test('corner interior to a 3-water junction lands at the full bed depth', () => {
+    // Three river hexes meeting at a single corner: (1,1), (2,1), (2,0)
+    // share corner — that corner should sit at riverCornerY(3) = RIVER_BED_Y.
+    const tiles = makeMap(new Set(['1,1', '2,1', '2,0']));
+    const inst = setupSplatInst(tiles);
+    inst._buildSplatPlayableMesh({ name: 'root' });
+    const mesh  = inst._splatGround;
+    const range = inst._hexVertexRange;
+    // Walk every shared corner and find the deepest Y; for this map the corner
+    // shared by all 3 water tiles is the deepest, exactly RIVER_BED_Y.
+    const groups = new Map();
+    for (const tile of tiles.values()) {
+      for (let j = 0; j < 6; j++) {
+        const { x, z } = cornerXZ(mesh, range, tile.col, tile.row, j);
+        const y = cornerY(mesh, range, tile.col, tile.row, j);
+        const k = `${x.toFixed(4)},${z.toFixed(4)}`;
+        if (!groups.has(k)) groups.set(k, { count: 0, y });
+        groups.get(k).count++;
+      }
+    }
+    let deepest = 0;
+    for (const g of groups.values()) {
+      if (g.count >= 3 && g.y < deepest) deepest = g.y;
+    }
+    // Float32 storage loses ~1e-7 of precision on RIVER_BED_Y; allow a tiny
+    // tolerance and assert depth (not exact equality).
+    assert.ok(Math.abs(deepest - RIVER_BED_Y) < 1e-5,
+      `corner shared by 3 water hexes should sit at RIVER_BED_Y ${RIVER_BED_Y}, got ${deepest}`);
   });
 });
