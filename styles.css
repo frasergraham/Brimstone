@@ -1753,6 +1753,66 @@ body.renderer-3d #poly-counter { display: block; }
 }
 body.renderer-3d #cam-counter { display: block; }
 
+/* Compass rose — top-left of canvas, ~64px square. The outer wrapper plus the
+   cardinal letters stay world-fixed; `.compass-rose-needle` is the inner group
+   that `Renderer3D._pumpCompassRose` rotates each frame so the red tip points
+   at map north (-Z). Toggled visible by main.js via `hidden` attribute when in
+   game (MENU keeps it hidden). pointer-events:none so it never eats clicks. */
+#compass-rose {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  width: 64px;
+  height: 64px;
+  z-index: 10;
+  pointer-events: none;
+  user-select: none;
+  border-radius: 50%;
+  background: rgba(20, 14, 30, 0.55);
+  border: 1px solid rgba(180, 150, 80, 0.35);
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.4);
+}
+#compass-rose[hidden] { display: none; }
+.compass-rose-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.compass-rose-ring {
+  fill: none;
+  stroke: rgba(180, 150, 80, 0.55);
+  stroke-width: 1.2;
+}
+.compass-rose-letter {
+  font-family: var(--font-serif);
+  font-size: 11px;
+  font-weight: 700;
+  fill: var(--text-dim);
+}
+.compass-rose-letter-n {
+  fill: var(--gold, #c8a84b);
+}
+.compass-rose-needle {
+  /* Rotation applied via the SVG `transform` attribute by renderer-3d.js so the
+     pivot is the viewBox origin (0,0). No CSS transition: the per-frame pump
+     already updates smoothly while the camera animates. */
+}
+.compass-rose-needle-n {
+  fill: var(--red);
+  stroke: rgba(0, 0, 0, 0.6);
+  stroke-width: 0.5;
+  stroke-linejoin: round;
+}
+.compass-rose-needle-s {
+  fill: var(--text-bright);
+  stroke: rgba(0, 0, 0, 0.6);
+  stroke-width: 0.5;
+  stroke-linejoin: round;
+}
+.compass-rose-pivot {
+  fill: var(--gold, #c8a84b);
+}
+
 /* ── Chronicle sidebar (left-edge collapsible panel mirroring the plan panel) ── */
 
 .chronicle-panel {

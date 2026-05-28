@@ -922,6 +922,27 @@
       </div>
       <div id="canvas-wrapper">
         <canvas id="game-canvas"></canvas>
+        <!-- Compass rose — top-left of canvas, in-game only. Outer wrapper sits
+             fixed; the inner `.compass-rose-needle` is what `renderer-3d.js`
+             rotates each frame via `compassRotationDegFromCameraAlpha`. The 2D
+             renderer leaves it at the neutral north-up rotation. -->
+        <div id="compass-rose" hidden aria-hidden="true">
+          <svg class="compass-rose-svg" viewBox="-32 -32 64 64" xmlns="http://www.w3.org/2000/svg">
+            <!-- Outer ring -->
+            <circle cx="0" cy="0" r="29" class="compass-rose-ring" />
+            <!-- Cardinal letter ticks (fixed; do not rotate with needle) -->
+            <text class="compass-rose-letter compass-rose-letter-n" x="0" y="-21" text-anchor="middle" dominant-baseline="middle">N</text>
+            <text class="compass-rose-letter" x="21" y="0" text-anchor="middle" dominant-baseline="middle">E</text>
+            <text class="compass-rose-letter" x="0" y="21" text-anchor="middle" dominant-baseline="middle">S</text>
+            <text class="compass-rose-letter" x="-21" y="0" text-anchor="middle" dominant-baseline="middle">W</text>
+            <!-- Needle: red half (north tip up by default) + light half (south). -->
+            <g class="compass-rose-needle">
+              <polygon class="compass-rose-needle-n" points="0,-16 4,0 -4,0" />
+              <polygon class="compass-rose-needle-s" points="0,16 4,0 -4,0" />
+              <circle class="compass-rose-pivot" cx="0" cy="0" r="2" />
+            </g>
+          </svg>
+        </div>
         <!-- FPS / ms-per-frame counter — top-right of canvas. Shown only when
              the 3D renderer is active (CSS gates on `body.renderer-3d`).
              Text is pumped from renderer-3d.js's per-frame observer, throttled

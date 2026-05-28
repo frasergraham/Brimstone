@@ -1466,6 +1466,35 @@ export function alphaForAxis(dx, dz) {
   return Math.atan2(-dx, dz);
 }
 
+/**
+ * Compass-rose rotation (deg, CW from screen-up) needed for a needle whose
+ * default art points up to actually point toward MAP NORTH given the current
+ * ArcRotateCamera azimuth `alpha`.
+ *
+ * Derivation: for an ArcRotateCamera the camera position relative to its target
+ * (in XZ) is ∝ (cos α, sin α). View direction (camera→target) projected onto XZ
+ * is (-cos α, -sin α) — this maps to "up on screen". Screen-right axis (in XZ)
+ * is the in-plane perpendicular that yields screen_right · world_X > 0 at the
+ * canonical horizontal-axis frame (verified against `alphaForAxis(1,0) = -π/2`,
+ * which places +X on screen-right): screen_right_XZ = (-sin α, cos α).
+ *
+ * Map north = world -Z (hexToWorld: row 0 → z 0, increasing row → +Z). Project
+ * the unit north vector (0, -1) onto the screen frame:
+ *   screen_x   = (0)(-sin α) + (-1)(cos α) = -cos α
+ *   screen_y_up = (0)(-cos α) + (-1)(-sin α) = sin α
+ *
+ * CSS `transform: rotate(θdeg)` is CW positive in screen space; the needle
+ * (default pointing up) reaches the (screen_x, screen_y_up) direction at
+ *   θ_CW_from_up = atan2(screen_x, screen_y_up) = atan2(-cos α, sin α).
+ *
+ * Returns 0 for null / non-finite alpha so the 2D renderer (which has no
+ * azimuth) gets north-up. Pure — no Babylon/DOM — so unit-testable.
+ */
+export function compassRotationDegFromCameraAlpha(alpha) {
+  if (alpha == null || !Number.isFinite(alpha)) return 0;
+  return Math.atan2(-Math.cos(alpha), Math.sin(alpha)) * 180 / Math.PI;
+}
+
 /** World height the combat dice-card TOP reaches above a standee's anchor —
  *  the head top (cone+sphere stack, cone-relative) plus the gap above the head
  *  plus the full card height. Feeds `framingForEntities`' `cardExtent` so the
@@ -4994,6 +5023,13 @@ export class Renderer3D {
     const radius = zoomToRadius(newZoom, lower, upper);
     this.zoomLevel = radiusToZoom(radius);
     this._focusCamera(camera.target.clone(), radius, { forceAnimate: true });
+  }
+
+  /** Current camera azimuth in radians, or null if Babylon hasn't initialised.
+   *  Read by the compass-rose UI overlay; the 2D `Renderer.getCameraAlpha()`
+   *  stub returns null. */
+  getCameraAlpha() {
+    return this._camera ? this._camera.alpha : null;
   }
 
   /** Rotate the camera by an alpha (yaw) delta. The signature accepts a
@@ -11894,6 +11930,9 @@ export class Renderer3D {
     this._pumpUnitIconScale();
     // FPS chip — throttled DOM text update, 3D-only.
     this._pumpFpsCounter(now);
+    // Compass rose: rotate the top-left needle to keep pointing at map north
+    // as the camera orbits. Skips the DOM write when alpha hasn't moved.
+    this._pumpCompassRose();
     // Building hover labels: fade in/out based on camera zoom.
     this._pumpBuildingLabelFade();
     // Power-node name labels: same zoom-driven fade as the building labels.
@@ -12004,6 +12043,28 @@ export class Renderer3D {
     }
     polyEl.textContent = formatPolyLabel(totalPolys, activePolys);
     this._pumpCamDistanceCounter();
+  }
+
+  /** Rotate the #compass-rose needle each frame to keep it pointing at MAP
+   *  NORTH (world -Z). DOM write is skipped while the rotation hasn't changed
+   *  to spare per-frame layout work; the element being hidden (display:none in
+   *  MENU) doesn't change that — it's a single style mutation either way. */
+  _pumpCompassRose() {
+    if (!this._compassRoseEl && typeof document !== 'undefined') {
+      this._compassRoseEl = document.getElementById('compass-rose');
+    }
+    const el = this._compassRoseEl;
+    if (!el || !this._camera) return;
+    const needle = el.querySelector('.compass-rose-needle');
+    if (!needle) return;
+    const deg = compassRotationDegFromCameraAlpha(this._camera.alpha);
+    if (this._compassLastDeg === deg) return;
+    this._compassLastDeg = deg;
+    // Use the SVG `transform` attribute (not CSS) so the rotation pivot is the
+    // SVG user-space origin (0,0) — i.e. the centre of the viewBox-32 -32 64 64
+    // — without depending on browser interpretation of CSS transform-origin
+    // on SVG <g> children.
+    needle.setAttribute('transform', `rotate(${deg.toFixed(2)})`);
   }
 
   /** Camera distance from focus — ArcRotate radius is the world-space

@@ -194,6 +194,16 @@ function _handleReplayError(msg) {
 // Keep UIController.appMode in sync with the centralized mode.
 onModeChange((newMode) => { if (ui) ui.appMode = newMode; });
 
+// Compass rose visibility — show in every in-canvas mode (PLANNING / SUBMITTED
+// / RESOLVING / SUMMARY / PLAYBACK / SPECTATING). Hidden on MENU. The mission
+// editor / admin-tools pages load a different HTML shell, so the element isn't
+// present there at all and this listener is a no-op when run there.
+onModeChange(() => {
+  const el = document.getElementById('compass-rose');
+  if (!el) return;
+  el.hidden = getMode() === AppMode.MENU;
+});
+
 /** Return the correct base URL for shareable links (invite, join, etc.).
  *  Inside Capacitor, location.origin is "capacitor://localhost" — useless for
  *  links shared with other people. Use BRIMSTONE_SERVER when available. */
