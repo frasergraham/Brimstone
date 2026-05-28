@@ -889,6 +889,55 @@ export const ENTITY_FRAME_PADDING = 1.5;
 // and standee silhouettes clearly without going pure top-down.
 export const CAMERA_BETA_LOCKED = Math.PI * 35 / 180;
 
+/** Top-down tilt (beta) reached at maximum zoom-out. The camera "rises" as the
+ *  operator zooms out: it holds the locked isometric (`CAMERA_BETA_LOCKED`) for
+ *  the first part of the zoom range, then eases toward this near-overhead angle
+ *  so by max zoom you're looking mostly straight down (units read as their
+ *  billboard icons). 80° from +Y is close to top-down without going fully flat
+ *  (π/2 = 90° = exactly overhead, which flattens the standee silhouettes and
+ *  kills all sense of relief). Tune by eye. See `betaForRadius`. */
+export const CAMERA_BETA_TOPDOWN = Math.PI * 80 / 180;
+
+/** Fraction of the zoom range (`radius` from min→max) over which the camera
+ *  keeps the locked isometric tilt before it starts rising toward top-down.
+ *  0 .. RAMP_START → flat at `CAMERA_BETA_LOCKED`; RAMP_START .. 1 → smoothstep
+ *  ease up to `CAMERA_BETA_TOPDOWN`. */
+export const CAMERA_TILT_RAMP_START = 0.4;
+
+/**
+ * Camera tilt (beta) as a function of the current zoom radius — the "rise as
+ * you zoom out" ramp. Pure helper (no Babylon), exported for tests.
+ *
+ *   t = clamp01((radius - minR) / (maxR - minR))
+ *     0 .. RAMP_START         → betaBase (locked isometric)
+ *     RAMP_START .. 1.0        → smoothstep ease from betaBase → betaTopDown
+ *
+ * The ease is a cubic smoothstep on the renormalised fraction
+ * s = (t - RAMP_START) / (1 - RAMP_START): `s*s*(3 - 2s)`. This gives a flat
+ * hold at the bottom of the zoom range, then an accelerating-then-decelerating
+ * rise — distinct from a naive linear `lerp(betaBase, betaTopDown, t)`.
+ *
+ * Degenerate `maxR <= minR` returns betaBase (avoids divide-by-zero / NaN).
+ *
+ * @param {number} radius     current camera radius
+ * @param {number} minR       camera lowerRadiusLimit (closest zoom-in)
+ * @param {number} maxR       camera upperRadiusLimit (furthest zoom-out)
+ * @param {number} betaBase   tilt held through the flat region (e.g. CAMERA_BETA_LOCKED)
+ * @param {number} betaTopDown tilt reached at radius === maxR (e.g. CAMERA_BETA_TOPDOWN)
+ * @param {number} rampStart  fraction at which the rise begins (default CAMERA_TILT_RAMP_START)
+ * @returns {number} beta in radians
+ */
+export function betaForRadius(radius, minR, maxR, betaBase, betaTopDown, rampStart = CAMERA_TILT_RAMP_START) {
+  if (!(maxR > minR)) return betaBase;
+  const t = clamp01((radius - minR) / (maxR - minR));
+  if (t <= rampStart) return betaBase;
+  const span = 1 - rampStart;
+  // span is > 0 here because rampStart < t <= 1 ⇒ rampStart < 1.
+  const s = (t - rampStart) / span;
+  const smooth = s * s * (3 - 2 * s); // smoothstep
+  return betaBase + (betaTopDown - betaBase) * smooth;
+}
+
 /** Repeat cadence for hold-to-repeat rotate buttons (ms). */
 export const CAMERA_BUTTON_REPEAT_MS = 50;
 
@@ -1575,7 +1624,12 @@ export const MIN_VISIBLE_HEXES = 1.5;
  *  furthest they can zoom out. Replaces the previous map-fit-derived
  *  dynamic cap — a single consistent range across every map size. */
 export const CAMERA_MIN_ZOOM_RADIUS = 5.5;
-export const CAMERA_MAX_ZOOM_RADIUS = 17;
+// Bumped 17 → 28 so most of a Standard 13×13 map fits in frame at max zoom-out
+// (radiusForStandardFit ≈ 29 fits the whole board depth-wise with the default
+// 1-hex frame padding; 28 shows nearly all of it). This is also the radius at
+// which the tilt ramp (`betaForRadius`) reaches CAMERA_BETA_TOPDOWN, so the
+// "rise toward top-down" completes exactly at max zoom-out. Tune by eye.
+export const CAMERA_MAX_ZOOM_RADIUS = 28;
 
 /**
  * Per-side depth (in hexes) the forest border band must cover so that, when
@@ -5175,6 +5229,56 @@ export class Renderer3D {
     for (const tile of this.state.tiles.values()) all.push({ col: tile.col, row: tile.row });
     this.frameHexes(all, { paddingHexes: 1 });
   }
+
+  /** Zoom-to-fit (⛶) single-tap action in 3D. Eases the camera all the way out
+   *  to `upperRadiusLimit` (max zoom-out → near top-down via the tilt ramp) and
+   *  centres on the OBSERVER'S own units rather than the whole map: collect all
+   *  alive entities owned by the fog observer, take their world centroid, and
+   *  focus there at max radius. Current yaw (alpha) is preserved — this only
+   *  changes target + zoom, never rotation.
+   *
+   *  Fallbacks (no human observer in AI-vs-AI, or the observer owns no live
+   *  units): centre on the map centroid at max zoom — i.e. the classic
+   *  `resetView`-at-max-zoom-out behaviour. Returns a Promise for the ease. */
+  zoomOutToOwnedUnits() {
+    const BABYLON = this._babylon;
+    const camera  = this._camera;
+    if (!BABYLON || !camera) return Promise.resolve(false);
+
+    const radius = camera.upperRadiusLimit ?? CAMERA_MAX_ZOOM_RADIUS;
+    const observerOwner = this._observerOwner();
+
+    // Collect live positions of the observer's own units (live standee pos
+    // preferred, hex centre fallback — same resolution as combat framing).
+    const positions = [];
+    if (observerOwner && Array.isArray(this.state?.entities)) {
+      for (const e of this.state.entities) {
+        if (!e || !e.alive || e.owner !== observerOwner) continue;
+        const p = this._entityWorldPos(e.id);
+        if (p) positions.push(p);
+      }
+    }
+
+    let target;
+    if (positions.length > 0) {
+      let sx = 0, sz = 0;
+      for (const p of positions) { sx += p.x; sz += p.z; }
+      target = new BABYLON.Vector3(sx / positions.length, 0, sz / positions.length);
+    } else {
+      // No observer (AI-vs-AI) or no owned units → map centroid at max zoom.
+      const hexes = [];
+      if (this.state?.tiles) {
+        for (const tile of this.state.tiles.values()) hexes.push({ col: tile.col, row: tile.row });
+      }
+      const c = clusterCentroidWorld(hexes);
+      target = c
+        ? new BABYLON.Vector3(c.x, 0, c.z)
+        : camera.target.clone(); // no tiles loaded — hold current target
+    }
+
+    // Keep current alpha (no `alpha` opt) — don't change yaw.
+    return this._focusCamera(target, radius, { forceAnimate: true }).then(() => true);
+  }
   _clampPan()                                         { /* camera panning is bounded via panning limits in _initBabylon */ }
   // Phase 6: real fog visibility. Sums sight ranges across all alive entities
   // owned by `observerOwner` (same logic as 2D `_buildFogVisibleHexes`).
@@ -5329,18 +5433,20 @@ export class Renderer3D {
     // pointer input), and right-mouse-drag → rotate alpha on desktop.
 
     // Yaw (alpha) is unbounded — right-mouse / button-driven rotation spins
-    // the camera around the vertical axis. Tilt (beta) is permanently
-    // locked at CAMERA_BETA_LOCKED (π/4); both beta limits are pinned to
-    // the same value so anything that mutates camera.beta — Babylon's own
-    // inertia accumulators, a stray plugin, future code — is re-clamped
-    // back to π/4 on the next render tick. We rotate the *camera*, not
-    // `mapRoot`, so world-space stays stable for picking + `hexToCanvasPos`
-    // projection (see the note on hexToCanvasPos).
+    // the camera around the vertical axis. Tilt (beta) is NOT user-driven, but
+    // it is no longer pinned to a single angle: it RISES with zoom-out. Each
+    // frame `_onBeforeRender` sets `camera.beta = betaForRadius(...)`, holding
+    // CAMERA_BETA_LOCKED (isometric) through the near-zoom range and easing up
+    // to CAMERA_BETA_TOPDOWN (near-overhead) at max zoom-out. The beta limits
+    // are relaxed to span [LOCKED, TOPDOWN] so Babylon's per-frame clamp does
+    // not snap our ramped beta back. `tiltBy()` stays a no-op — no right-drag
+    // dy → beta and no Tilt buttons. We rotate the *camera*, not `mapRoot`, so
+    // world-space stays stable for picking + `hexToCanvasPos` projection.
     camera.lowerAlphaLimit = null;
     camera.upperAlphaLimit = null;
     camera.beta            = CAMERA_BETA_LOCKED;
     camera.lowerBetaLimit  = CAMERA_BETA_LOCKED;
-    camera.upperBetaLimit  = CAMERA_BETA_LOCKED;
+    camera.upperBetaLimit  = CAMERA_BETA_TOPDOWN;
 
     // Zoom limits — both are provisional and get replaced by
     // Operator-fixed bounds (CAMERA_MIN_ZOOM_RADIUS / CAMERA_MAX_ZOOM_RADIUS).
@@ -12855,6 +12961,23 @@ export class Renderer3D {
         this._camera.inertialPanningX = 0;
         this._camera.inertialPanningY = 0;
       }
+    }
+    // Tilt-on-zoom ramp — the camera "rises" toward top-down as it zooms out.
+    // Runs every frame AFTER the custom wheel/pinch input has written the new
+    // radius (Babylon applies inertial radius/zoom in the camera update that
+    // precedes onBeforeRenderObservable). We recompute beta from the current
+    // radius and assign it directly; the relaxed [LOCKED, TOPDOWN] beta limits
+    // (see _initBabylon) keep Babylon from clamping it back. No user tilt input
+    // feeds this — radius is the sole driver.
+    if (this._camera) {
+      const cam = this._camera;
+      cam.beta = betaForRadius(
+        cam.radius,
+        cam.lowerRadiusLimit ?? CAMERA_MIN_ZOOM_RADIUS,
+        cam.upperRadiusLimit ?? CAMERA_MAX_ZOOM_RADIUS,
+        CAMERA_BETA_LOCKED,
+        CAMERA_BETA_TOPDOWN,
+      );
     }
     // Phase-light interpolation.
     const t = this._phaseTransition;

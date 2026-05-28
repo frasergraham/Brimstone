@@ -284,9 +284,14 @@ export class UIController {
         this._updateFitBtnLockState();
         this.onRedraw();
       } else if (!this.renderer.viewLocked) {
-        // Single-tap when unlocked: fit map
+        // Single-tap when unlocked. 3D: rise to max zoom-out (near top-down)
+        // centred on the player's own units. 2D: classic fit-whole-map.
         this.renderer.resize();
-        this.renderer.resetView();
+        if (this.renderer.is3D && typeof this.renderer.zoomOutToOwnedUnits === 'function') {
+          this.renderer.zoomOutToOwnedUnits();
+        } else {
+          this.renderer.resetView();
+        }
         this.onRedraw();
       }
     }, sig);
