@@ -10503,7 +10503,7 @@ export class Renderer3D {
         setTimeoutFn(() => {
           if (disposed) return;
           repaintIcon(step.value, model.sideColor);
-          const fd = this._spawnPersistentStepFloater(standee, slotY(i), step);
+          const fd = this._spawnPersistentStepFloater(standee, slotY(i), step, model.sideColor);
           if (fd) persistents.push(fd);
         }, at);
       }
@@ -10705,15 +10705,16 @@ export class Renderer3D {
   /** G1 v2 — spawn a persistent "+N reason" floater that parks at a fixed
    *  slot above the icon and stays visible until the parent fade-out runs.
    *  Returns `{ plane, mat, tex }` so the caller can fade + dispose it. */
-  _spawnPersistentStepFloater(standee, centreY, step) {
+  _spawnPersistentStepFloater(standee, centreY, step, sideColor) {
     if (!this._scene || !this._babylon) return null;
     const BABYLON = this._babylon;
     const sign = step.delta < 0 ? '−' : '+';
     const mag = Math.abs(step.delta | 0);
-    // Plain-text reason label — no emoji glyphs. The floater is small and
-    // already side-tinted; piling icons on top read as noise.
+    // Plain-text reason label — no emoji glyphs. Side tint (red attacker /
+    // blue defender) so the floater visually belongs to its combatant; a
+    // negative delta is communicated by the leading minus glyph.
     const label = `${sign}${mag} ${step.label ?? ''}`.trim();
-    const color = step.delta < 0 ? COMBAT_READOUT_LOSE_COLOR : COMBAT_READOUT_WIN_COLOR;
+    const color = sideColor || COMBAT_READOUT_WIN_COLOR;
 
     const tex = new BABYLON.DynamicTexture(
       `readoutFloaterTex_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
@@ -15911,8 +15912,8 @@ export const COMBAT_READOUT_NUM_TEX_SIZE     = 256;
 /** Per-bonus "+N reason" floater that drifts up beside the main number.
  *  Scaled down to ~0.7× the previous size so it stays in proportion to the
  *  smaller (icon-sized) main number plane. */
-export const COMBAT_READOUT_FLOATER_PLANE_WIDTH  = 1.26;
-export const COMBAT_READOUT_FLOATER_PLANE_HEIGHT = 0.315;
+export const COMBAT_READOUT_FLOATER_PLANE_WIDTH  = 1.05;
+export const COMBAT_READOUT_FLOATER_PLANE_HEIGHT = 0.22;
 export const COMBAT_READOUT_FLOATER_TEX_WIDTH    = 384;
 export const COMBAT_READOUT_FLOATER_TEX_HEIGHT   = 96;
 /** Clearance (world units) between the head top and the BOTTOM of the
@@ -15939,7 +15940,7 @@ export const COMBAT_READOUT_FADE_MS       = 500;
 /** Vertical offset above the icon TOP at which the bottom-most persistent
  *  floater starts (extra clearance so the floater doesn't overlap the icon
  *  number while ticking up). */
-export const COMBAT_READOUT_FLOATER_Y_OFFSET = 0.05;
+export const COMBAT_READOUT_FLOATER_Y_OFFSET = 0.02;
 /** Gap (world units) between adjacent persistent floater slots. */
 export const COMBAT_READOUT_FLOATER_SLOT_GAP = 0.04;
 /** Result label billboard sits above ALL floater slots. Bigger + bolder than
