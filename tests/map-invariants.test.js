@@ -16,8 +16,8 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { generateMap, generateMultipleStarts, MAP_SIZES } from '../src/map.js';
-import { TileType, BuildingType, PathType, StructureType, baseOf, pathOf, legacyTileType, isRiver, isBridge } from '../src/tiles.js';
-import { hexKey, hexDistance, getNeighbors } from '../src/hex.js';
+import { TileType, BuildingType, PathType, StructureType, baseOf, pathOf, legacyTileType } from '../src/tiles.js';
+import { hexKey, hexDistance } from '../src/hex.js';
 
 const SIZES = ['skirmish', 'standard', 'regional'];
 
@@ -73,34 +73,24 @@ describe('Spawn buildings (INN & GRAVEYARD)', () => {
     }
   });
 
-  test('every DOCK and MILL sits adjacent to a river tile', () => {
-    // Water buildings (dock berths, mill water wheel) must touch the river.
-    // Harbor villages only appear on standard+ presets; iterate broadly so we
-    // catch real placements across seeds.
-    let waterBuildingsSeen = 0;
-    for (const size of ['standard', 'regional']) {
+  test('procedural map gen never places DOCK or MILL', () => {
+    // Water buildings (DOCK, MILL) are no longer placed by procedural gen.
+    // They remain valid enum values for the Mission Editor / explicit placement,
+    // but the random pool ignores them. Iterate broadly to confirm the harbor
+    // template (which still lists them, as a record of intent) silently drops
+    // them.
+    for (const size of ['standard', 'regional', 'campaign']) {
       for (let seed = 0; seed < 12; seed++) {
         const { tiles } = generateMap(seed, size);
         for (const t of tiles.values()) {
           if (legacyTileType(t) !== TileType.BUILDING) continue;
-          if (t.building !== BuildingType.DOCK && t.building !== BuildingType.MILL) continue;
-          waterBuildingsSeen++;
-          // A bridge sits over the river, so a hex adjacent to a bridge is still
-          // adjacent to the water crossing. The road network can convert a
-          // river tile to a bridge after placement, so accept either.
-          const waterAdjacent = getNeighbors(t.col, t.row).some(n => {
-            const nt = tiles.get(hexKey(n.col, n.row));
-            return isRiver(nt) || isBridge(nt);
-          });
-          assert.ok(waterAdjacent,
-            `${size} seed=${seed}: ${t.building} at ${t.col},${t.row} is not adjacent to river or bridge`);
+          assert.ok(
+            t.building !== BuildingType.DOCK && t.building !== BuildingType.MILL,
+            `${size} seed=${seed}: unexpected ${t.building} placed by procedural gen at ${t.col},${t.row}`,
+          );
         }
       }
     }
-    // Guard against the assertion silently passing because no water buildings
-    // were ever placed (which would make the test meaningless).
-    assert.ok(waterBuildingsSeen > 0,
-      'expected at least one DOCK/MILL placement across seeds');
   });
 
   test('INN and GRAVEYARD are placed in opposite corners (far apart)', () => {

@@ -3,27 +3,15 @@ import { onInactiveChange, tryGameCenterAuth, isNativeMobile, refreshPushToken, 
 import { AppMode, getMode, setMode, isInGame, isAnimating, shouldBufferMessages, onModeChange } from './app-mode.js';
 import { initServerSelector } from './server-selector.js';
 import { GameState, phaseForRound } from './game.js';
-import { Renderer }          from './renderer.js';
 import { Renderer3D }        from './renderer-3d.js';
 
-/**
- * Pick the renderer class based on the 'brimstone:renderer' localStorage
- * value. Returns the constructor (not an instance) so callers can `new` it
- * with the right (canvas, state) pair.
- */
+// The in-game renderer is always 3D. The 2D `Renderer` is still exported from
+// `./renderer.js` for the mission editor and admin-lighting tool.
 function _pickRenderer() {
-  // 3D is the default on feature/3d-renderer; users can opt back to 2D in Options.
-  let Cls = Renderer3D;
-  try {
-    if (localStorage.getItem('brimstone:renderer') === '2d') Cls = Renderer;
-  } catch { /* localStorage may be unavailable in some sandboxes */ }
-  // Tag the body so CSS can swap in the 3D camera-controls cluster (see
-  // `body.renderer-3d` rules in styles.css). Done once at startup — the
-  // renderer choice is fixed for the session.
   if (typeof document !== 'undefined' && document.body) {
-    document.body.classList.toggle('renderer-3d', Cls === Renderer3D);
+    document.body.classList.add('renderer-3d');
   }
-  return Cls;
+  return Renderer3D;
 }
 import { UIController, UIMode } from './ui.js';
 import { WITCH_PERSONALITIES }   from './ai.js';
@@ -2431,22 +2419,6 @@ document.getElementById('reconnect-back').addEventListener('click', () => locati
       b.classList.toggle('active', b.dataset.mode === btn.dataset.mode);
     });
   });
-}
-
-// ── Renderer toggle (2D / 3D experimental) ───────────────────────────────────
-{
-  const RENDERER_KEY = 'brimstone:renderer';
-  const select = document.getElementById('options-renderer-select');
-  const hint   = document.getElementById('options-renderer-hint');
-  if (select) {
-    const saved = localStorage.getItem(RENDERER_KEY) === '2d' ? '2d' : '3d';
-    select.value = saved;
-    select.addEventListener('change', () => {
-      const value = select.value === '2d' ? '2d' : '3d';
-      localStorage.setItem(RENDERER_KEY, value);
-      if (hint) hint.style.display = '';
-    });
-  }
 }
 
 // Initialize persistent session bar on page load

@@ -554,47 +554,37 @@ function _pickRiverCrossings(rand, tiles, riverPath, riverMap, riverEW, keyPoint
   return picked;
 }
 
-// Buildings with water features (the mill's water wheel, the dock's berths)
-// must sit on a hex adjacent to a river tile.
+// Water buildings (the mill's water wheel, the dock's berths) are no longer
+// placed by procedural map generation. They remain valid `BuildingType` enum
+// values and can still be placed by the Mission Editor — the runtime just
+// won't randomly pick them.
 const WATER_BUILDINGS = new Set([BuildingType.DOCK, BuildingType.MILL]);
 
 // Place one village's buildings in a compact cluster around a center hex.
 // Buildings are sorted closest-first (with seeded random tiebreaking) and
 // placed with MIN_SEP gaps so the result reads as a dense but walkable hamlet.
-// Water buildings (DOCK, MILL) are restricted to river-adjacent hexes; if none
-// is available in range they are skipped rather than forced inland.
+// Any water building requested by the template is silently skipped.
 function _placeVillageBuildings(rand, tiles, centerCol, centerRow, buildings, usedKeys) {
   const RADIUS  = 4; // max hex distance from village center
   const MIN_SEP = 3; // min separation between any two buildings in this village
 
-  const hasRiverNeighbor = (col, row) =>
-    getNeighbors(col, row).some(n => isRiver(tiles.get(hexKey(n.col, n.row))));
-
-  // Land candidates exclude river-adjacent hexes (most buildings sit inland);
-  // river candidates are exactly those river-adjacent hexes, reserved for the
-  // water buildings.
-  const landCandidates  = [];
-  const riverCandidates = [];
+  const landCandidates = [];
   for (const [, t] of tiles) {
     if (legacyTileType(t) !== TileType.GRASS) continue;
     const k = hexKey(t.col, t.row);
     if (usedKeys.has(k)) continue;
     const dist = hexDistance(centerCol, centerRow, t.col, t.row);
     if (dist < 0 || dist > RADIUS) continue;
-    const c = { col: t.col, row: t.row, dist };
-    if (hasRiverNeighbor(t.col, t.row)) riverCandidates.push(c);
-    else landCandidates.push(c);
+    landCandidates.push({ col: t.col, row: t.row, dist });
   }
   // Shuffle first so equal-distance tiles are randomly ordered, then stable-sort by distance
-  for (const pool of [landCandidates, riverCandidates]) {
-    shuffle(pool, rand);
-    pool.sort((a, b) => a.dist - b.dist);
-  }
+  shuffle(landCandidates, rand);
+  landCandidates.sort((a, b) => a.dist - b.dist);
 
   const placed = [];
   for (const building of buildings) {
-    const pool = WATER_BUILDINGS.has(building) ? riverCandidates : landCandidates;
-    for (const c of pool) {
+    if (WATER_BUILDINGS.has(building)) continue;
+    for (const c of landCandidates) {
       const k = hexKey(c.col, c.row);
       if (usedKeys.has(k)) continue;
       if (placed.some(p => hexDistance(p.col, p.row, c.col, c.row) < MIN_SEP)) continue;
@@ -602,7 +592,6 @@ function _placeVillageBuildings(rand, tiles, centerCol, centerRow, buildings, us
       usedKeys.add(k);
       break;
     }
-    // Water building with no river-adjacent hex available: skip it.
   }
   return placed;
 }
