@@ -945,6 +945,31 @@ function _playAttackIntroAnim(actorSnap, targetSnap, fromCol, fromRow, toCol, to
   }
 }
 
+// 3D cinematic combat Continue button — gates the readout fade on a click
+// so the player controls how long the totals stay on screen. Tied into
+// `_run3DCombatCardHold` via the `awaitContinueFn` opt on addCombatReadout.
+// Lives in main.js (rather than ui.js) so it sits next to the only call
+// site that uses it. The button itself is defined in index.html.
+function _combatContinueBtn() {
+  if (typeof document === 'undefined') return null;
+  return document.getElementById('combat-continue-btn');
+}
+function showCombatContinueButton() {
+  const btn = _combatContinueBtn();
+  if (btn) btn.hidden = false;
+}
+function hideCombatContinueButton() {
+  const btn = _combatContinueBtn();
+  if (btn) btn.hidden = true;
+}
+function waitForCombatContinueClick() {
+  const btn = _combatContinueBtn();
+  if (!btn) return Promise.resolve();
+  return new Promise(resolve => {
+    btn.addEventListener('click', () => resolve(), { once: true });
+  });
+}
+
 // 3D cinematic combat resolution (G4 Phase 2+3): NO modal dialog in 3D — the
 // dice/total read out on billboarded cards above the combatants while the
 // attacker's punch is FROZEN mid-strike, then the strike resumes to completion
@@ -994,13 +1019,23 @@ async function _run3DCombatCardHold(actorSnap, targetSnap, result, redrawFn) {
       attackerCol: actorSnap.col,  attackerRow: actorSnap.row,
       targetCol:   targetSnap.col, targetRow:   targetSnap.row,
     };
-    renderer.addCombatReadout(actorSnap.id,  'attacker', result, axis);
-    renderer.addCombatReadout(targetSnap.id, 'defender', result, axis);
+    // Gate the fade on a Continue-button click — both readouts share the
+    // same gate so the click advances attacker AND defender in lockstep.
+    const continueGate = waitForCombatContinueClick();
+    const readoutOpts = { ...axis, awaitContinueFn: () => continueGate };
+    const atkH = renderer.addCombatReadout(actorSnap.id,  'attacker', result, readoutOpts);
+    const defH = renderer.addCombatReadout(targetSnap.id, 'defender', result, readoutOpts);
+    // Show the Continue button the moment BOTH readouts reach final state.
+    Promise.all([
+      typeof atkH?.awaitFinal === 'function' ? atkH.awaitFinal() : Promise.resolve(),
+      typeof defH?.awaitFinal === 'function' ? defH.awaitFinal() : Promise.resolve(),
+    ]).then(() => { showCombatContinueButton(); });
   }
   // Hold while the readout is up — the punch stays paused at impact, allies
   // stay parked at their half-lunge position. waitForAnimations drains the
   // readout stack-up/hold/fade and any ally lunge promises (already resolved).
   await renderer.waitForAnimations();
+  hideCombatContinueButton();
   // G1: punch up winner/loser with a quick scale pop on the standees right as
   // the cards fade out. The cue plays in parallel with `resumePunch` so the
   // strike continues to follow through while the outcome reads.

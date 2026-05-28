@@ -10350,12 +10350,36 @@ export class Renderer3D {
    *    - speedFactor:   multiplies all timings (default 1)
    *    - attackerCol/Row, targetCol/Row: drives axis offset spreading
    *    - setTimeoutFn:  injectable scheduler for tests
-   *    - baseHoldMs/stepMs/finalHoldMs/fadeMs: override defaults */
+   *    - awaitContinueFn: () => Promise — resolved when the player taps the
+   *      "Continue ▶" button (production) or immediately (tests). The fade
+   *      does NOT start until this resolves, so the final number stays on
+   *      screen at full opacity for as long as the player wants.
+   *    - baseHoldMs/stepMs/finalHoldMs/fadeMs: override defaults
+   *
+   *  Returns `{ promise, awaitFinal, triggerFade }`:
+   *    - promise — resolves when the full sequence (including fade +
+   *      disposal) completes. The returned object is itself thenable
+   *      (delegates to `promise`) for back-compat with callers that
+   *      `await` the return value directly.
+   *    - awaitFinal() — Promise resolved the moment the readout has
+   *      ticked to its final value AND the floor `finalHoldMs` has
+   *      elapsed. Callers can use this to gate UI like a Continue
+   *      button.
+   *    - triggerFade() — start the fade now. No-op if already triggered.
+   *      The internal sequence awaits this signal (or `awaitContinueFn`)
+   *      between "final reached" and "fade". */
   addCombatReadout(entityId, side, result, opts = {}) {
-    if (!this._scene || !this._babylon) return Promise.resolve();
-    if (typeof document === 'undefined') return Promise.resolve();
+    const noop = () => {};
+    const inertHandle = () => ({
+      promise: Promise.resolve(),
+      awaitFinal: () => Promise.resolve(),
+      triggerFade: noop,
+      then(onFulfilled, onRejected) { return Promise.resolve().then(onFulfilled, onRejected); },
+    });
+    if (!this._scene || !this._babylon) return inertHandle();
+    if (typeof document === 'undefined') return inertHandle();
     const standee = this._entityStandees.get(entityId);
-    if (!standee || !standee.plane) return Promise.resolve();
+    if (!standee || !standee.plane) return inertHandle();
     const BABYLON = this._babylon;
 
     const model = combatReadoutModel(result, side);
@@ -10434,6 +10458,22 @@ export class Renderer3D {
       if (iconPlane && iconVisRestore != null) iconPlane.visibility = iconVisRestore;
     };
 
+    // ── Gate plumbing ───────────────────────────────────────────────────────
+    // `awaitFinal()` lets external callers (main.js's _run3DCombatCardHold)
+    // gate UI on the moment the readout settles. `triggerFade()` lets the
+    // caller kick off the fade after the player taps Continue. Both are
+    // backed by manually-resolved promises captured here.
+    let resolveFinal;
+    const finalReached = new Promise(r => { resolveFinal = r; });
+    let resolveContinue;
+    const continueSignal = new Promise(r => { resolveContinue = r; });
+    const triggerFade = () => { if (resolveContinue) { resolveContinue(); resolveContinue = null; } };
+    // Default awaitContinueFn: resolve immediately when not provided. Tests
+    // rely on this so they don't hang waiting for a DOM click.
+    const awaitContinueFn = typeof opts.awaitContinueFn === 'function'
+      ? opts.awaitContinueFn
+      : () => Promise.resolve();
+
     // ── Sequence ────────────────────────────────────────────────────────────
     const promise = new Promise(resolve => {
       // Schedule each bonus step: repaint the number + scale pulse + spawn floater.
@@ -10461,12 +10501,12 @@ export class Renderer3D {
         }, at);
       }
 
-      // Final phase: hold the total, then flash outcome colour + fade.
+      // Final phase: outcome flash + minimum hold + wait for continue gate + fade.
       const stepsEnd = baseHoldMs + model.steps.length * stepMs;
-      const fadeStartAt = stepsEnd + finalHoldMs;
+      const finalReachedAt = stepsEnd + finalHoldMs;
 
       setTimeoutFn(() => {
-        if (disposed) { resolve(); return; }
+        if (disposed) { resolveFinal(); triggerFade(); resolve(); return; }
         // Outcome flash — repaint the number in green (winner) or red (loser).
         const outcomeColor = model.won ? COMBAT_READOUT_WIN_COLOR : COMBAT_READOUT_LOSE_COLOR;
         paintReadoutNumber(numTex.getContext(), {
@@ -10477,20 +10517,46 @@ export class Renderer3D {
           icon:   model.sideIcon,
         });
         numTex.update();
-        // Fade out the plane.
-        const fps = 60;
-        const fadeFrames = Math.max(1, Math.round(fadeMs / 1000 * fps));
-        const animFade = new BABYLON.Animation('readoutFade', 'visibility', fps,
-          BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
-        animFade.setKeys([{ frame: 0, value: 1 }, { frame: fadeFrames, value: 0 }]);
-        this._scene.beginDirectAnimation(numPlane, [animFade], 0, fadeFrames, false, 1, () => {
-          disposeAll();
-          resolve();
+        // Signal external watchers that the readout has settled.
+        resolveFinal();
+
+        // Wait until the caller (UI continue-button click OR test
+        // immediate-resolve) gives us the green light to start the fade.
+        // We race the explicit `triggerFade()` against `awaitContinueFn()`
+        // so either path moves us forward.
+        const gate = Promise.race([
+          continueSignal,
+          Promise.resolve().then(awaitContinueFn),
+        ]);
+        gate.then(() => {
+          if (disposed) { resolve(); return; }
+          // Fade out the plane.
+          const fps = 60;
+          const fadeFrames = Math.max(1, Math.round(fadeMs / 1000 * fps));
+          const animFade = new BABYLON.Animation('readoutFade', 'visibility', fps,
+            BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+          animFade.setKeys([{ frame: 0, value: 1 }, { frame: fadeFrames, value: 0 }]);
+          this._scene.beginDirectAnimation(numPlane, [animFade], 0, fadeFrames, false, 1, () => {
+            disposeAll();
+            resolve();
+          });
         });
-      }, fadeStartAt);
+      }, finalReachedAt);
     });
     this._trackAnim(promise);
-    return promise;
+
+    // Build the handle object. We make it thenable so legacy callers that
+    // `await` the return value directly still work — they'll await the full
+    // sequence (including the gate), which is the same behaviour the test
+    // injector preserves by resolving `awaitContinueFn` immediately.
+    return {
+      promise,
+      awaitFinal: () => finalReached,
+      triggerFade,
+      then(onFulfilled, onRejected) { return promise.then(onFulfilled, onRejected); },
+      catch(onRejected) { return promise.catch(onRejected); },
+      finally(onFinally) { return promise.finally(onFinally); },
+    };
   }
 
   /** Internal — scale pulse on the readout number plane (1 → peak → 1).
@@ -10563,13 +10629,15 @@ export class Renderer3D {
     plane.material = mat;
 
     plane.parent = standee.plane;
-    // Floater starts just above the readout-number plane's TOP and drifts up.
-    const numTopY = numCenterY + COMBAT_READOUT_NUM_PLANE_HEIGHT / 2;
-    const startY = numTopY
-      + COMBAT_READOUT_FLOATER_Y_OFFSET
-      + COMBAT_READOUT_FLOATER_PLANE_HEIGHT / 2;
+    // Spawn BESIDE the main number (right side, vertically aligned with the
+    // number's centre) and drift up. Keeps the floater in the player's eye
+    // line on the same row as the number it modifies, instead of arcing
+    // up into the camera corner. Local-X = +0.7 × number plane width.
+    const startY = numCenterY;
     const endY = startY + COMBAT_READOUT_FLOATER_RISE_WU;
-    plane.position.set(0, startY, 0);
+    const xOffset = COMBAT_READOUT_NUM_PLANE_WIDTH
+      * COMBAT_READOUT_FLOATER_X_OFFSET_FRAC;
+    plane.position.set(xOffset, startY, 0);
     plane.visibility = 1;
 
     const fps = 60;
@@ -15718,15 +15786,23 @@ export const READOUT_GAP_ABOVE_ICON = 0.05;
  *  - FINAL_HOLD_MS: hold the final total before the outcome flash + fade.
  *  - FADE_MS: outcome-tinted (green/red) fade-out.
  *  - PULSE_MS / PULSE_PEAK: scale pulse of the main number on each tick. */
-export const COMBAT_READOUT_BASE_HOLD_MS  = 200;
-export const COMBAT_READOUT_STEP_MS       = 400;
+export const COMBAT_READOUT_BASE_HOLD_MS  = 350;
+export const COMBAT_READOUT_STEP_MS       = 700;
+// Floor for the final-state hold before fade. The actual hold is gated by
+// `awaitContinueFn` (the player's "Continue ▶" click in production); this
+// constant only sets a minimum pause so the final total registers visibly
+// before the gate is checked.
 export const COMBAT_READOUT_FINAL_HOLD_MS = 600;
-export const COMBAT_READOUT_FADE_MS       = 400;
+export const COMBAT_READOUT_FADE_MS       = 500;
 export const COMBAT_READOUT_PULSE_MS      = 200;
 export const COMBAT_READOUT_PULSE_PEAK    = 1.2;
-/** Per-bonus floater rise + fade. Rises above the main number and fades. */
-export const COMBAT_READOUT_FLOATER_RISE_MS = 500;
+/** Per-bonus floater rise + fade. Rises beside the main number and fades. */
+export const COMBAT_READOUT_FLOATER_RISE_MS = 900;
 export const COMBAT_READOUT_FLOATER_RISE_WU = 0.7;
+/** Horizontal offset (world units) applied to step floaters so they spawn
+ *  beside the main number rather than above it. 0.7 × number plane width
+ *  puts the floater visually adjacent on the right edge of the number. */
+export const COMBAT_READOUT_FLOATER_X_OFFSET_FRAC = 0.7;
 /** Vertical offset above the main-number plane TOP at which a step floater
  *  starts (extra clearance above the readout so the floater doesn't overlap
  *  the number while ticking). */
@@ -16611,18 +16687,46 @@ export function paintReadoutNumber(ctx, opts) {
 export function paintReadoutFloater(ctx, opts) {
   const { width, height, label, color = '#fff' } = opts;
   ctx.clearRect(0, 0, width, height);
-  // Match the proportions of the main readout — ~45% of canvas height
-  // keeps the floater readable without dominating the small plane.
-  let fontPx = Math.round(height * 0.45);
+  // ~60% of canvas height keeps floaters legible against busy terrain.
+  let fontPx = Math.round(height * 0.60);
   ctx.font = `800 ${fontPx}px sans-serif`;
   // Defensive width fit — long labels ("+2 ⚔ allies") shouldn't clip the
   // wide floater canvas either.
   const maxTextWidth = width * 0.90;
-  const measured = ctx.measureText ? ctx.measureText(label).width : 0;
+  let measured = ctx.measureText ? ctx.measureText(label).width : 0;
   if (measured > maxTextWidth && measured > 0) {
     fontPx = Math.max(1, Math.floor(fontPx * (maxTextWidth / measured)));
     ctx.font = `800 ${fontPx}px sans-serif`;
+    measured = ctx.measureText ? ctx.measureText(label).width : measured;
   }
+
+  // Dark backdrop pill — guarantees legibility against light terrain (snow,
+  // grass-in-sun). Sized to the text bounds + padding. We approximate the
+  // pill width from the measured text + font-derived padding; height tracks
+  // the font box.
+  const padX = Math.max(6, Math.round(fontPx * 0.45));
+  const padY = Math.max(4, Math.round(fontPx * 0.20));
+  const pillW = Math.min(width, (measured || width * 0.8) + padX * 2);
+  const pillH = Math.min(height, fontPx + padY * 2);
+  const pillX = (width - pillW) / 2;
+  const pillY = (height - pillH) / 2;
+  const radius = pillH / 2;
+  if (typeof ctx.beginPath === 'function') {
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.beginPath();
+    ctx.moveTo(pillX + radius, pillY);
+    ctx.lineTo(pillX + pillW - radius, pillY);
+    ctx.quadraticCurveTo(pillX + pillW, pillY, pillX + pillW, pillY + radius);
+    ctx.lineTo(pillX + pillW, pillY + pillH - radius);
+    ctx.quadraticCurveTo(pillX + pillW, pillY + pillH, pillX + pillW - radius, pillY + pillH);
+    ctx.lineTo(pillX + radius, pillY + pillH);
+    ctx.quadraticCurveTo(pillX, pillY + pillH, pillX, pillY + pillH - radius);
+    ctx.lineTo(pillX, pillY + radius);
+    ctx.quadraticCurveTo(pillX, pillY, pillX + radius, pillY);
+    ctx.closePath();
+    ctx.fill();
+  }
+
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.lineJoin = 'round';

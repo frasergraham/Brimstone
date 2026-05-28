@@ -1647,6 +1647,41 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   }
 }
 
+/* 3D cinematic combat: Continue button. Sits bottom-centre over the canvas
+   while the combat readout is parked at its final state. Click advances
+   the readout into its fade-out. Dark gothic palette to match the HUD;
+   bigger touch target than .zoom-btn since this is a primary action. */
+.combat-continue-btn {
+  position: absolute;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  padding: 10px 22px;
+  background: rgba(20, 14, 30, 0.92);
+  border: 1px solid rgba(200, 168, 75, 0.75);
+  border-radius: 8px;
+  color: var(--gold, #c8a84b);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  user-select: none;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+  transition: background 0.15s, border-color 0.15s, transform 0.08s;
+}
+.combat-continue-btn:hover {
+  background: rgba(40, 28, 55, 0.96);
+  border-color: rgba(220, 188, 95, 0.95);
+}
+.combat-continue-btn:active {
+  background: rgba(200, 168, 75, 0.22);
+  transform: translateX(-50%) translateY(1px);
+}
+.combat-continue-btn[hidden] {
+  display: none;
+}
+
 /* ── 3D camera controls ──────────────────────────────────────────────────
    `body.renderer-3d` is set in main.js when the 3D renderer is selected.
    We swap the 3D cluster in and hide the duplicated 2D zoom/rotate buttons

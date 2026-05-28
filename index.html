@@ -964,6 +964,11 @@
         </div>
         <!-- Unit stats bar: shown during planning when a unit is selected -->
         <div id="unit-stats-bar" style="display:none"></div>
+        <!-- 3D cinematic combat: "Continue" button. Hidden by default;
+             shown by main.js between the readout's "final state" and the
+             fade so the player controls how long the totals stay on screen.
+             Never appears in 2D or outside combat. -->
+        <button id="combat-continue-btn" class="combat-continue-btn" hidden>Continue ▶</button>
         <!-- 3D camera controls — shown only when the 3D renderer is active
              (toggled by `body.renderer-3d` in main.js). Mirrors #zoom-controls
              placement (bottom-left) and inherits .zoom-btn styling. Mobile

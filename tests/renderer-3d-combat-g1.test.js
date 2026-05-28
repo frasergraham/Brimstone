@@ -188,20 +188,57 @@ describe('G1 — paintReadoutFloater', () => {
     assert.ok(fills.includes('+2 allies'));
   });
 
-  test('font size is < 60% of texture canvas height', () => {
+  test('font size is ≥ 50% of texture canvas height (legibility floor)', () => {
     const ctx = makeFakeCtx();
     paintReadoutFloater(ctx, {
       width: 384, height: 96, label: '+2 ⚔ allies', color: COMBAT_READOUT_WIN_COLOR,
     });
     const fontEntries = ctx.calls.filter(c => c[0] === 'font').map(c => c[1]);
     assert.ok(fontEntries.length > 0, 'font was set');
+    // We only need the FIRST font entry to hit the legibility floor —
+    // the width-fit branch may scale it down for very wide labels.
+    const m0 = /(\d+)px/.exec(fontEntries[0]);
+    assert.ok(m0, `font string parses: "${fontEntries[0]}"`);
+    const px0 = Number(m0[1]);
+    assert.ok(px0 >= 96 * 0.50,
+      `initial font ${px0}px is ≥ 50% of 96 canvas height (got ${px0 / 96})`);
+    // Per-entry ceiling — keep room above the canvas edge. Allow a small
+    // tolerance since Math.round can push 0.60 to 0.604.
     for (const fontStr of fontEntries) {
       const m = /(\d+)px/.exec(fontStr);
-      assert.ok(m, `font string parses: "${fontStr}"`);
       const px = Number(m[1]);
-      assert.ok(px < 96 * 0.60,
-        `painted font ${px}px is < 60% of 96 canvas height (got ${px / 96})`);
+      assert.ok(px <= 96 * 0.65,
+        `painted font ${px}px stays at or below 65% of 96 canvas height (got ${px / 96})`);
     }
+  });
+
+  test('draws a dark backdrop pill behind the text', () => {
+    // Extend the fake ctx with the path APIs the painter now uses.
+    const ctx = makeFakeCtx();
+    ctx.beginPath  = () => ctx.calls.push(['beginPath']);
+    ctx.closePath  = () => ctx.calls.push(['closePath']);
+    ctx.moveTo     = (...a) => ctx.calls.push(['moveTo', ...a]);
+    ctx.lineTo     = (...a) => ctx.calls.push(['lineTo', ...a]);
+    ctx.quadraticCurveTo = (...a) => ctx.calls.push(['quadraticCurveTo', ...a]);
+    ctx.fill       = () => ctx.calls.push(['fill']);
+    paintReadoutFloater(ctx, {
+      width: 384, height: 96, label: '+2 allies', color: COMBAT_READOUT_WIN_COLOR,
+    });
+    const fillStyles = ctx.calls.filter(c => c[0] === 'fillStyle').map(c => c[1]);
+    // The pill fillStyle is the dark rgba; the text fillStyle is the
+    // `color` arg. Both must appear, with the pill BEFORE the text.
+    const pillIdx = ctx.calls.findIndex(c => c[0] === 'fillStyle'
+      && typeof c[1] === 'string' && c[1].startsWith('rgba(0,0,0'));
+    const textFillIdx = ctx.calls.findIndex(c => c[0] === 'fillText');
+    assert.ok(pillIdx >= 0, 'pill rgba fillStyle was set');
+    assert.ok(textFillIdx >= 0, 'text was filled');
+    assert.ok(pillIdx < textFillIdx, 'pill is painted BEFORE the text');
+    assert.ok(fillStyles.includes(COMBAT_READOUT_WIN_COLOR),
+      'text fillStyle carries the requested colour');
+    // The pill path uses rounded corners (quadraticCurveTo) — exactly 4 of
+    // them (one per corner).
+    const arcs = ctx.calls.filter(c => c[0] === 'quadraticCurveTo');
+    assert.equal(arcs.length, 4, 'pill has 4 rounded corners');
   });
 });
 
@@ -600,11 +637,13 @@ describe('G1 — addCombatReadout lifecycle', () => {
     assert.equal(numPlane.position.x, 0, 'no X offset along attack axis');
     assert.equal(numPlane.position.z, 0, 'no Z offset along attack axis');
 
-    // Step floater plane is also centred (X/Z = 0).
+    // Step floater plane stays in-plane (Z = 0) but is offset on the +X side
+    // of the number so it rises beside the digit rather than masking it.
     const floaterPlane = planes[1];
     assert.ok(floaterPlane, 'step floater plane created');
-    assert.equal(floaterPlane.position.x, 0, 'floater has no X offset');
     assert.equal(floaterPlane.position.z, 0, 'floater has no Z offset');
+    assert.ok(floaterPlane.position.x > 0,
+      'floater is offset along +X (beside the number)');
   });
 
   test('plane dimensions passed to CreatePlane match COMBAT_READOUT_NUM_PLANE_{WIDTH,HEIGHT}', () => {
@@ -627,6 +666,101 @@ describe('G1 — addCombatReadout lifecycle', () => {
     );
     assert.equal(planeOpts[0].width,  COMBAT_READOUT_NUM_PLANE_WIDTH);
     assert.equal(planeOpts[0].height, COMBAT_READOUT_NUM_PLANE_HEIGHT);
+  });
+});
+
+describe('G1 — addCombatReadout continue-gate', () => {
+  test('returns { promise, awaitFinal, triggerFade }; awaitFinal resolves before the fade', async () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInst({ ids: ['e1'] });
+    const sched = fakeScheduler();
+
+    // Block the gate: caller never resolves `awaitContinueFn`. We then drive
+    // `triggerFade()` ourselves to advance the fade.
+    let releaseGate;
+    const gate = new Promise(r => { releaseGate = r; });
+
+    const h = inst.addCombatReadout('e1', 'attacker',
+      { hit: true, attackRoll: 6, defenseRoll: 3,
+        breakdown: { atkPool: [6], atkBaseDie: 6, defPool: [3], defBaseDie: 3 } },
+      { setTimeoutFn: sched, awaitContinueFn: () => gate });
+
+    assert.equal(typeof h, 'object', 'returns a handle object');
+    assert.equal(typeof h.awaitFinal,  'function');
+    assert.equal(typeof h.triggerFade, 'function');
+    assert.equal(typeof h.then,        'function', 'still thenable for back-compat');
+    assert.equal(typeof h.promise.then, 'function');
+
+    // Run the timers; the fade scheduler fires the "finalReached" setTimeout.
+    sched.runAll();
+
+    // awaitFinal must already be settled — fire-and-forget the assertion.
+    let finalSettled = false;
+    h.awaitFinal().then(() => { finalSettled = true; });
+    // Yield microtasks so the .then runs.
+    await Promise.resolve(); await Promise.resolve();
+    assert.equal(finalSettled, true, 'awaitFinal resolves once final state is on screen');
+
+    // Promise should NOT yet be resolved — the gate is still blocking.
+    let outerSettled = false;
+    h.promise.then(() => { outerSettled = true; });
+    await Promise.resolve(); await Promise.resolve();
+    assert.equal(outerSettled, false, 'sequence still parked at final state pending gate');
+
+    // Trigger the fade directly (simulates Continue button click).
+    h.triggerFade();
+    await h.promise;
+    assert.ok(true, 'promise resolves once triggerFade is called');
+  });
+
+  test('default awaitContinueFn (none provided) resolves immediately', async () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInst({ ids: ['e1'] });
+    const sched = fakeScheduler();
+    const h = inst.addCombatReadout('e1', 'attacker',
+      { hit: true, attackRoll: 6, defenseRoll: 3,
+        breakdown: { atkPool: [6], atkBaseDie: 6, defPool: [3], defBaseDie: 3 } },
+      { setTimeoutFn: sched });
+    sched.runAll();
+    // Yield enough microtasks for the gate.then → fade.beginDirectAnimation
+    // → onEnd → resolve chain to settle.
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    let settled = false;
+    h.promise.then(() => { settled = true; });
+    await Promise.resolve(); await Promise.resolve();
+    assert.equal(settled, true, 'promise resolves without an explicit triggerFade');
+  });
+
+  test('step floater spawns BESIDE the number with a non-zero X offset', () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInst({ ids: ['e1'] });
+    const B = inst._babylon;
+    const planes = [];
+    const OrigMeshBuilder = B.MeshBuilder;
+    B.MeshBuilder = {
+      CreatePlane(name, opts, scene) {
+        const p = OrigMeshBuilder.CreatePlane(name, opts, scene);
+        planes.push(p);
+        return p;
+      },
+    };
+    const sched = fakeScheduler();
+    inst.addCombatReadout('e1', 'attacker',
+      { hit: true, attackRoll: 8, defenseRoll: 3,
+        breakdown: { atkPool: [6], atkBaseDie: 6, defPool: [3], defBaseDie: 3,
+                     atkGangupFlat: 2 } },
+      { setTimeoutFn: sched });
+    sched.runUntil(COMBAT_READOUT_BASE_HOLD_MS + 1);
+
+    // planes[0] = main number (X = 0). planes[1] = the first step floater.
+    const numPlane     = planes[0];
+    const floaterPlane = planes[1];
+    assert.ok(floaterPlane, 'step floater plane created');
+    assert.equal(numPlane.position.x, 0, 'number plane stays centred');
+    assert.notEqual(floaterPlane.position.x, 0,
+      'floater spawns beside the number, not directly above it');
+    assert.ok(floaterPlane.position.x > 0,
+      'floater is on the +X side of the number');
   });
 });
 
