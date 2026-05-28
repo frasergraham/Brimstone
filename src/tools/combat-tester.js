@@ -208,6 +208,11 @@ function _layoutCombatants(state, slots, size) {
  * @param {number} [opts.size=7]   Side length of the clearing map.
  * @param {Function} [opts.battleFn=executeBattle]  Injectable for tests.
  */
+/** Valid speed modes for the tester's "Run Battle" branch. The cinematic
+ * mode runs the dice-card readout + Continue gate; fast/vfast skip the
+ * readout entirely and just paint the floaters + miss flash. */
+export const SPEED_MODES = Object.freeze(['cinematic', 'fast', 'vfast']);
+
 export function createCombatTester(opts = {}) {
   const size = opts.size ?? DEFAULT_SIZE;
   const battleFn = opts.battleFn ?? executeBattle;
@@ -220,6 +225,10 @@ export function createCombatTester(opts = {}) {
     atkAllies: [],
     defAllies: [],
   };
+
+  // Speed mode — controls which display the UI's Run Battle button picks.
+  // Defaults to cinematic (matches the URL default and the prior behaviour).
+  let speedMode = 'cinematic';
 
   // Build a single GameState up front; rebuilds clear and re-place
   // entities in-place so the renderer keeps the same state reference and
@@ -282,6 +291,14 @@ export function createCombatTester(opts = {}) {
     slots.defAllies = [];
     _rebuild();
   }
+  function setSpeedMode(mode) {
+    // Unknown values fall back to cinematic so a stale URL never wedges the
+    // tester into an undefined branch.
+    const next = SPEED_MODES.includes(mode) ? mode : 'cinematic';
+    if (next === speedMode) return;
+    speedMode = next;
+    _emit();
+  }
   /**
    * Run the real combat through executeBattle and return its result.
    * No-op (returns null) if either main combatant is missing.
@@ -309,9 +326,11 @@ export function createCombatTester(opts = {}) {
     get slots() { return slots; },
     get layout() { return layout; },
     get size() { return size; },
+    get speedMode() { return speedMode; },
     setAttacker, setDefender,
     addAlly, removeAlly,
     swapRoles, reset, runBattle,
+    setSpeedMode,
     onChange,
   };
   return api;

@@ -51,6 +51,7 @@ import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
 import { processStoryTriggers } from './campaign/missions.js';
 import { buildMissionMap } from './campaign/mission-map.js';
 import { run3DCombatCardHold } from './combat-cinematic.js';
+import { playFastCombatDisplay } from './combat-fast.js';
 import {
   campaignMissionSaveKey, loadCampaignMissionSave, deleteCampaignMissionSave,
   RESOURCE_ICONS as _RESOURCE_ICONS, hpColor as _hpColor,
@@ -1697,17 +1698,19 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
                 await renderer.waitForAnimations();
               }
             } else if (speed === 'fast' || speed === 'vfast') {
-              // Toast + floater only — no dialog.
-              // On a miss show a randomised flavour word; hits communicate via HP floater.
-              if (!result.hit) {
-                // Shared with the cinematic result label so fast + vfast +
-                // cinematic all communicate "didn't connect" with the same set.
-                const missText = BLOCK_WORD_VARIANTS[Math.floor(Math.random() * BLOCK_WORD_VARIANTS.length)];
-                renderer.addFlash(targetSnap.col, targetSnap.row, missText, 'rgba(100,100,100,0.1)', 1000, 0.65, '#888');
-              }
-              _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
-              // Brief wait so floaters from different battles don't pile up.
-              await playbackDelay(speed === 'vfast' ? 200 : 400);
+              // Toast + floater only — no dialog. Shared with the tester via
+              // playFastCombatDisplay (src/combat-fast.js). The miss word is
+              // picked here (only when needed) so the Math.random() sequence
+              // matches the pre-refactor behaviour byte-for-byte.
+              const missText = !result.hit
+                ? BLOCK_WORD_VARIANTS[Math.floor(Math.random() * BLOCK_WORD_VARIANTS.length)]
+                : null;
+              await playFastCombatDisplay({
+                renderer, actorSnap, targetSnap, result,
+                playBattleResultAnims: (a, t, r) => _playBattleResultAnims(a, t, r, redrawFn),
+                speed, missText,
+                playbackDelay,
+              });
             }
 
             // ── Step 4: Clear highlights, animate lunge return ───────────────
@@ -1958,12 +1961,17 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             await renderer.waitForAnimations();
           }
         } else {
-          if (!result.hit) {
-            const missText = BLOCK_WORD_VARIANTS[Math.floor(Math.random() * BLOCK_WORD_VARIANTS.length)];
-            renderer.addFlash(targetSnap.col, targetSnap.row, missText, 'rgba(100,100,100,0.1)', 1000, 0.65, '#888');
-          }
-          _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
-          await playbackDelay(speed === 'vfast' ? 200 : 400);
+          // fast / vfast guard-strike display — shared with the regular battle
+          // arm and the admin combat tester via playFastCombatDisplay.
+          const missText = !result.hit
+            ? BLOCK_WORD_VARIANTS[Math.floor(Math.random() * BLOCK_WORD_VARIANTS.length)]
+            : null;
+          await playFastCombatDisplay({
+            renderer, actorSnap, targetSnap, result,
+            playBattleResultAnims: (a, t, r) => _playBattleResultAnims(a, t, r, redrawFn),
+            speed, missText,
+            playbackDelay,
+          });
         }
 
         // Clear highlights, return lunge

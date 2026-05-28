@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   buildClearingMap, newClearingState, createCombatTester,
-  ATK_SIDE_ID, DEF_SIDE_ID, UNIT_FACTORIES, MAX_ALLIES_PER_SIDE,
+  ATK_SIDE_ID, DEF_SIDE_ID, UNIT_FACTORIES, MAX_ALLIES_PER_SIDE, SPEED_MODES,
 } from '../src/tools/combat-tester.js';
 import { ADVANTAGE_CAP } from '../src/entities.js';
 import { hexKey, hexDistance } from '../src/hex.js';
@@ -296,6 +296,48 @@ describe('combat-tester — onChange notifications', () => {
   });
 });
 
+describe('combat-tester — speed mode', () => {
+  test('SPEED_MODES lists exactly cinematic, fast, vfast in that order', () => {
+    assert.deepEqual([...SPEED_MODES], ['cinematic', 'fast', 'vfast']);
+  });
+
+  test('default is cinematic', () => {
+    const t = createCombatTester();
+    assert.equal(t.speedMode, 'cinematic');
+  });
+
+  test('setSpeedMode flips the mode and notifies listeners', () => {
+    const t = createCombatTester();
+    let fires = 0;
+    t.onChange(() => { fires++; });
+    const baseline = fires;
+    t.setSpeedMode('fast');
+    assert.equal(t.speedMode, 'fast');
+    assert.ok(fires > baseline, 'setSpeedMode should fire onChange');
+    t.setSpeedMode('vfast');
+    assert.equal(t.speedMode, 'vfast');
+  });
+
+  test('setSpeedMode rejects unknown modes (falls back to cinematic)', () => {
+    const t = createCombatTester();
+    t.setSpeedMode('ludicrous');
+    assert.equal(t.speedMode, 'cinematic');
+    t.setSpeedMode(null);
+    assert.equal(t.speedMode, 'cinematic');
+    t.setSpeedMode(undefined);
+    assert.equal(t.speedMode, 'cinematic');
+  });
+
+  test('setSpeedMode with the same value is a no-op (no onChange)', () => {
+    const t = createCombatTester();
+    t.setSpeedMode('fast');
+    let fires = 0;
+    t.onChange(() => { fires++; });
+    t.setSpeedMode('fast');
+    assert.equal(fires, 0, 'idempotent set should not fire onChange');
+  });
+});
+
 describe('combat-tester — UNIT_FACTORIES coverage', () => {
   test('exposes a factory per UNIT_TYPES leader / minion / golem entry', () => {
     const expected = ['paladin', 'rogue', 'captain', 'witch', 'necromancer',
@@ -355,5 +397,44 @@ describe('combat-tester — damage floater protects the dying standee', () => {
       /addHpChangeFlash\(\s*actorSnap\.col,\s*actorSnap\.row,\s*-\(result\.counterDmg\),\s*\{\s*entityId:\s*actorSnap\.id\s*\}\s*\)/,
       'counter-damage floater on the attacker must pass { entityId: actorSnap.id }',
     );
+  });
+});
+
+// ─── Run Battle branches on speed ─────────────────────────────────────────
+//
+// The UI's runBattle() picks playFastCombatDisplay for fast / vfast and
+// run3DCombatCardHold for cinematic. Both paths share the live game's
+// extracted helpers — pin the imports and the branch shape at the source
+// level so a refactor that loses either path is caught here.
+
+describe('combat-tester-ui — runBattle branches on tester.speedMode', () => {
+  const TESTER_UI_SRC = readFileSync(
+    resolve(__dirname, '..', 'src', 'tools', 'combat-tester-ui.js'), 'utf8',
+  );
+
+  test('imports the shared fast helper from src/combat-fast.js', () => {
+    assert.match(
+      TESTER_UI_SRC,
+      /import\s*\{\s*playFastCombatDisplay\s*\}\s*from\s*['"]\.\.\/combat-fast\.js['"]/,
+      'fast helper must come from the shared module the live game uses',
+    );
+  });
+
+  test('imports BLOCK_WORD_VARIANTS so the tester picks the same miss word set', () => {
+    assert.match(
+      TESTER_UI_SRC,
+      /BLOCK_WORD_VARIANTS/,
+      'tester needs the shared miss-word list to match the live game',
+    );
+  });
+
+  test('branches on speedMode === fast | vfast vs cinematic', () => {
+    // Single-pin regex: the runBattle function reads tester.speedMode and
+    // branches into the fast helper for fast/vfast and the cinematic
+    // helper otherwise. A refactor that loses either branch breaks here.
+    assert.match(TESTER_UI_SRC, /tester\.speedMode/);
+    assert.match(TESTER_UI_SRC, /speed\s*===\s*['"]fast['"]\s*\|\|\s*speed\s*===\s*['"]vfast['"]/);
+    assert.match(TESTER_UI_SRC, /playFastCombatDisplay\s*\(/);
+    assert.match(TESTER_UI_SRC, /run3DCombatCardHold\s*\(/);
   });
 });

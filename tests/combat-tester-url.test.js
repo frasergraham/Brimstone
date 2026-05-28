@@ -17,7 +17,7 @@ import {
 
 describe('parseCombatParams', () => {
   test('returns the null/empty shape for an empty / missing search', () => {
-    const blank = { atk: null, def: null, atkAllies: [], defAllies: [] };
+    const blank = { atk: null, def: null, atkAllies: [], defAllies: [], speed: 'cinematic' };
     assert.deepEqual(parseCombatParams(''),        blank);
     assert.deepEqual(parseCombatParams(undefined), blank);
     assert.deepEqual(parseCombatParams('?utm=x'),  blank);
@@ -26,25 +26,25 @@ describe('parseCombatParams', () => {
   test('extracts atk / def and ally lists; accepts a leading "?"', () => {
     assert.deepEqual(
       parseCombatParams('?atk=paladin&def=witch'),
-      { atk: 'paladin', def: 'witch', atkAllies: [], defAllies: [] },
+      { atk: 'paladin', def: 'witch', atkAllies: [], defAllies: [], speed: 'cinematic' },
     );
     assert.deepEqual(
       parseCombatParams('atk=paladin&atkAllies=survivor,soldier&defAllies=minion'),
-      { atk: 'paladin', def: null, atkAllies: ['survivor', 'soldier'], defAllies: ['minion'] },
+      { atk: 'paladin', def: null, atkAllies: ['survivor', 'soldier'], defAllies: ['minion'], speed: 'cinematic' },
     );
   });
 
   test('tolerates comma-encoded values (%2C) — the UI may receive either', () => {
     assert.deepEqual(
       parseCombatParams('?atkAllies=survivor%2Csoldier'),
-      { atk: null, def: null, atkAllies: ['survivor', 'soldier'], defAllies: [] },
+      { atk: null, def: null, atkAllies: ['survivor', 'soldier'], defAllies: [], speed: 'cinematic' },
     );
   });
 
   test('drops empty / whitespace ally entries', () => {
     assert.deepEqual(
       parseCombatParams('?atkAllies=survivor,,  ,minion'),
-      { atk: null, def: null, atkAllies: ['survivor', 'minion'], defAllies: [] },
+      { atk: null, def: null, atkAllies: ['survivor', 'minion'], defAllies: [], speed: 'cinematic' },
     );
   });
 
@@ -54,7 +54,7 @@ describe('parseCombatParams', () => {
     // atk passes, def is unknown → null; ally list keeps the survivor only.
     assert.deepEqual(
       parseCombatParams('?atk=paladin&def=ghost&atkAllies=survivor,bogus', isValid),
-      { atk: 'paladin', def: null, atkAllies: ['survivor'], defAllies: [] },
+      { atk: 'paladin', def: null, atkAllies: ['survivor'], defAllies: [], speed: 'cinematic' },
     );
   });
 
@@ -145,7 +145,7 @@ describe('withCombatParams', () => {
 
 describe('parseCombatParams ∘ withCombatParams round-trip', () => {
   test('atk/def-only config encodes and decodes losslessly', () => {
-    const cfg = { atk: 'paladin', def: 'witch', atkAllies: [], defAllies: [] };
+    const cfg = { atk: 'paladin', def: 'witch', atkAllies: [], defAllies: [], speed: 'cinematic' };
     const encoded = withCombatParams('', cfg);
     assert.deepEqual(parseCombatParams(encoded), cfg);
   });
@@ -155,6 +155,7 @@ describe('parseCombatParams ∘ withCombatParams round-trip', () => {
       atk: 'paladin', def: 'witch',
       atkAllies: ['survivor', 'soldier'],
       defAllies: ['minion', 'wood_golem'],
+      speed: 'cinematic',
     };
     const encoded = withCombatParams('', cfg);
     assert.deepEqual(parseCombatParams(encoded), cfg);
@@ -170,7 +171,62 @@ describe('parseCombatParams ∘ withCombatParams round-trip', () => {
     assert.equal(ps.get('utm'), 'src');
     // combat shape decodes correctly
     assert.deepEqual(parseCombatParams(encoded), {
-      atk: 'paladin', def: null, atkAllies: [], defAllies: ['minion'],
+      atk: 'paladin', def: null, atkAllies: [], defAllies: ['minion'], speed: 'cinematic',
     });
+  });
+});
+
+// ── speed param ─────────────────────────────────────────────────────────
+
+describe('parseCombatParams — speed', () => {
+  test('absent param defaults to cinematic', () => {
+    assert.equal(parseCombatParams('').speed, 'cinematic');
+    assert.equal(parseCombatParams('?atk=paladin').speed, 'cinematic');
+  });
+
+  test('valid values round-trip as-is', () => {
+    assert.equal(parseCombatParams('?speed=cinematic').speed, 'cinematic');
+    assert.equal(parseCombatParams('?speed=fast').speed,      'fast');
+    assert.equal(parseCombatParams('?speed=vfast').speed,     'vfast');
+  });
+
+  test('invalid value falls back to cinematic', () => {
+    assert.equal(parseCombatParams('?speed=ludicrous').speed, 'cinematic');
+    assert.equal(parseCombatParams('?speed=').speed,          'cinematic');
+    assert.equal(parseCombatParams('?speed=CINEMATIC').speed, 'cinematic',
+      'case-sensitive — uppercase is rejected and falls back');
+  });
+});
+
+describe('withCombatParams — speed', () => {
+  test('explicit fast / vfast write the param', () => {
+    assert.equal(withCombatParams('', { speed: 'fast' }),  '?speed=fast');
+    assert.equal(withCombatParams('', { speed: 'vfast' }), '?speed=vfast');
+  });
+
+  test('cinematic is the default — the param is dropped to keep URLs tidy', () => {
+    assert.equal(withCombatParams('?speed=fast', { speed: 'cinematic' }), '');
+    assert.equal(withCombatParams('', { speed: 'cinematic' }), '');
+  });
+
+  test('undefined leaves the existing speed untouched', () => {
+    assert.equal(
+      withCombatParams('?speed=fast', { atk: 'paladin' }),
+      '?speed=fast&atk=paladin',
+    );
+  });
+
+  test('null deletes the speed param', () => {
+    assert.equal(withCombatParams('?speed=fast', { speed: null }), '');
+  });
+
+  test('round-trips alongside combatant slots', () => {
+    const cfg = {
+      atk: 'paladin', def: 'witch',
+      atkAllies: ['survivor'], defAllies: ['minion'],
+      speed: 'vfast',
+    };
+    const encoded = withCombatParams('', cfg);
+    assert.deepEqual(parseCombatParams(encoded), cfg);
   });
 });

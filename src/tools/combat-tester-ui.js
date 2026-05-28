@@ -6,10 +6,11 @@
 // resolves the dice, run3DCombatCardHold plays the cinematic readout, and
 // the renderer's animation queue handles the lunge / floaters / fade-out.
 
-import { createCombatTester, UNIT_FACTORIES } from './combat-tester.js';
+import { createCombatTester, UNIT_FACTORIES, SPEED_MODES } from './combat-tester.js';
 import { UNIT_TYPES } from '../unit-types.js';
-import { Renderer3D } from '../renderer-3d.js';
+import { Renderer3D, BLOCK_WORD_VARIANTS } from '../renderer-3d.js';
 import { run3DCombatCardHold } from '../combat-cinematic.js';
+import { playFastCombatDisplay } from '../combat-fast.js';
 import { parseCombatParams, withCombatParams } from './url-state.js';
 
 // Picker options — leader / minion / construct / survivor types from the
@@ -209,6 +210,31 @@ export async function initCombat(doc = document) {
   defAddRow.append(defAddSel, defAddBtn);
   sec2.appendChild(defAddRow);
 
+  // Section: Speed mode picker (3-button group). Mirrors the in-game
+  // cinematic / fast / vfast modes. Cinematic runs the dice-card readout +
+  // Continue gate; fast / vfast skip the readout entirely and use the
+  // shared playFastCombatDisplay helper that the live game also uses.
+  const secSpeed = doc.createElement('div');
+  secSpeed.className = 'c-section';
+  secSpeed.innerHTML = '<h3>Display speed</h3>';
+  controlsEl.appendChild(secSpeed);
+
+  const speedRow = doc.createElement('div');
+  speedRow.className = 'c-speed-row';
+  const speedBtns = {};
+  const SPEED_LABELS = { cinematic: 'Cinematic', fast: 'Fast', vfast: 'Very Fast' };
+  for (const mode of SPEED_MODES) {
+    const b = doc.createElement('button');
+    b.type = 'button';
+    b.className = 'c-speed-btn';
+    b.dataset.speed = mode;
+    b.textContent = SPEED_LABELS[mode] ?? mode;
+    b.addEventListener('click', () => tester.setSpeedMode(mode));
+    speedBtns[mode] = b;
+    speedRow.appendChild(b);
+  }
+  secSpeed.appendChild(speedRow);
+
   // Section: Actions
   const sec3 = doc.createElement('div');
   sec3.className = 'c-section';
@@ -277,7 +303,16 @@ export async function initCombat(doc = document) {
     atkSel.value = tester.slots.attacker ?? '';
     defSel.value = tester.slots.defender ?? '';
   }
-  function refreshAll() { refreshPickers(); refreshChips(); }
+  function refreshSpeed() {
+    for (const mode of SPEED_MODES) {
+      const b = speedBtns[mode];
+      if (!b) continue;
+      const active = tester.speedMode === mode;
+      b.classList.toggle('is-active', active);
+      b.setAttribute('aria-pressed', active ? 'true' : 'false');
+    }
+  }
+  function refreshAll() { refreshPickers(); refreshChips(); refreshSpeed(); }
 
   atkSel.addEventListener('change', () => tester.setAttacker(atkSel.value || null));
   defSel.addEventListener('change', () => tester.setDefender(defSel.value || null));
@@ -309,6 +344,7 @@ export async function initCombat(doc = document) {
       def:       slots.defender || null,
       atkAllies: slots.atkAllies.slice(),
       defAllies: slots.defAllies.slice(),
+      speed:     tester.speedMode,
     };
     const next = withCombatParams(location.search, patch);
     const url = `${location.pathname}${next}${location.hash || ''}`;
@@ -324,6 +360,7 @@ export async function initCombat(doc = document) {
       if (cfg.def) tester.setDefender(cfg.def);
       for (const a of cfg.atkAllies) tester.addAlly('attacker', a);
       for (const a of cfg.defAllies) tester.addAlly('defender', a);
+      if (cfg.speed) tester.setSpeedMode(cfg.speed);
     } finally {
       applyingFromUrl = false;
     }
@@ -335,7 +372,7 @@ export async function initCombat(doc = document) {
   // ── Action buttons ────────────────────────────────────────────────────
   let battleInFlight = false;
 
-  async function runBattleCinematic() {
+  async function runBattle() {
     if (battleInFlight) return;
     if (!tester.layout?.attackerEntity || !tester.layout?.defenderEntity) return;
     battleInFlight = true;
@@ -350,25 +387,45 @@ export async function initCombat(doc = document) {
       const targetSnap = _snap(defEntity);
 
       // 1. Lunge / projectile intro — kicks off before the dice resolve so
-      //    the cinematic's holdPunchAtImpact can freeze the strike.
+      //    the cinematic's holdPunchAtImpact can freeze the strike (cinematic
+      //    mode); in fast / vfast it just plays as the visible attack motion.
       _playAttackIntro(renderer, actorSnap, targetSnap);
 
       // 2. Resolve combat through the real executeBattle.
       const out = tester.runBattle();
       if (!out) return;
 
-      // 3. Cinematic readout + result floaters.
-      await run3DCombatCardHold({
-        renderer,
-        state: tester.state,
-        actorSnap,
-        targetSnap,
-        result: out.result,
-        redrawFn: redraw,
-        getContinueButton: () => continueBtn,
-        playBattleResultAnims: (a, t, r, rd) =>
-          _playBattleResultAnims(renderer, a, t, r, rd),
-      });
+      // 3. Branch on speed: cinematic runs the readout + Continue gate;
+      //    fast / vfast skip the readout entirely (shared with live game).
+      const speed = tester.speedMode;
+      if (speed === 'fast' || speed === 'vfast') {
+        const missText = !out.result.hit
+          ? BLOCK_WORD_VARIANTS[Math.floor(Math.random() * BLOCK_WORD_VARIANTS.length)]
+          : null;
+        await playFastCombatDisplay({
+          renderer,
+          actorSnap, targetSnap, result: out.result,
+          playBattleResultAnims: (a, t, r) =>
+            _playBattleResultAnims(renderer, a, t, r, redraw),
+          speed, missText,
+          // Tester runs outside the live playback machinery — a plain
+          // setTimeout matches the in-game delay without depending on
+          // src/playback.js's mode gating.
+          playbackDelay: (ms) => new Promise(r => setTimeout(r, ms)),
+        });
+      } else {
+        await run3DCombatCardHold({
+          renderer,
+          state: tester.state,
+          actorSnap,
+          targetSnap,
+          result: out.result,
+          redrawFn: redraw,
+          getContinueButton: () => continueBtn,
+          playBattleResultAnims: (a, t, r, rd) =>
+            _playBattleResultAnims(renderer, a, t, r, rd),
+        });
+      }
 
       // 4. Return any lunge anims to rest so the next battle starts clean.
       renderer.returnAllLungeAnims?.();
@@ -386,7 +443,7 @@ export async function initCombat(doc = document) {
     }
   }
 
-  runBtn.addEventListener('click', runBattleCinematic);
+  runBtn.addEventListener('click', runBattle);
   swapBtn.addEventListener('click', () => {
     tester.swapRoles();
   });

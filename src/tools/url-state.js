@@ -67,6 +67,12 @@ const COMBAT_ATK         = 'atk';
 const COMBAT_DEF         = 'def';
 const COMBAT_ATK_ALLIES  = 'atkAllies';
 const COMBAT_DEF_ALLIES  = 'defAllies';
+const COMBAT_SPEED       = 'speed';
+
+/** Valid combat-tester speed modes. Anything else (or an absent param)
+ * parses to `'cinematic'` — that's the default both in the URL and the
+ * controller. */
+export const COMBAT_SPEEDS = Object.freeze(['cinematic', 'fast', 'vfast']);
 
 /**
  * Parse combat-tester query params.
@@ -94,11 +100,14 @@ export function parseCombatParams(search = '', isValidUnit = null) {
     return v.split(',').map((s) => s.trim())
       .filter((s) => s && (ok ? ok(s) : true));
   };
+  const rawSpeed = params.get(COMBAT_SPEED);
+  const speed = rawSpeed && COMBAT_SPEEDS.includes(rawSpeed) ? rawSpeed : 'cinematic';
   return {
     atk:       one(COMBAT_ATK),
     def:       one(COMBAT_DEF),
     atkAllies: list(COMBAT_ATK_ALLIES),
     defAllies: list(COMBAT_DEF_ALLIES),
+    speed,
   };
 }
 
@@ -131,6 +140,10 @@ export function withCombatParams(search, patch = {}) {
   apply(COMBAT_DEF,        patch.def);
   apply(COMBAT_ATK_ALLIES, patch.atkAllies);
   apply(COMBAT_DEF_ALLIES, patch.defAllies);
+  // The default speed is implicit — drop `speed=cinematic` from the URL so
+  // bookmark forms stay tidy. Explicit fast / vfast round-trip as-is.
+  if (patch.speed === 'cinematic') params.delete(COMBAT_SPEED);
+  else apply(COMBAT_SPEED, patch.speed);
   // URLSearchParams escapes "," to %2C; comma is a legal query character and
   // the operator spec shows literal commas in the bookmark form, so undo it.
   const out = params.toString().replace(/%2C/g, ',');
