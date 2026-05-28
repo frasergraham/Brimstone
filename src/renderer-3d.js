@@ -816,6 +816,11 @@ export function nodeIdentifyingColor(objOrIndex) {
  *  Sits just outside the controller-coloured ring (radius ≈ 0.96) so both
  *  reads as a concentric pair without overlap. */
 export const NODE_IDENTIFIER_RING_RADIUS = 1.04;
+/** Pulse range for the node identifier-edge outline alpha — 30% → 50% → 30%
+ *  over NODE_OUTLINE_PULSE_PERIOD_MS. Subtle, never aggressive. */
+export const NODE_OUTLINE_PULSE_MIN       = 0.30;
+export const NODE_OUTLINE_PULSE_MAX       = 0.50;
+export const NODE_OUTLINE_PULSE_PERIOD_MS = 2400;
 /** Tube radius of the identifier ring. Thinner than the controller ring
  *  (0.06) so the controller signal stays dominant; the identifier just
  *  adds a quiet outline of palette colour. */
@@ -1881,6 +1886,10 @@ export class Renderer3D {
     this._fogDebugMarkers = new Map();
     // Power-node glow meshes: { obj, disc, col, row, glowColor } per node hex.
     this._nodeGlowMeshes   = [];
+    // Per-node identifier-outline materials — alpha is pulsed in
+    // _pumpNodeOutlinePulse so the outer edges breathe between
+    // NODE_OUTLINE_PULSE_MIN and NODE_OUTLINE_PULSE_MAX.
+    this._nodeOutlinePulseMats = [];
     this._nodeGlowBuilt    = false;
     // Power-node tint discs: one translucent faction-tinted hex per node hex.
     // Recoloured each draw alongside the glow ring; hidden via the per-tile
@@ -11503,6 +11512,21 @@ export class Renderer3D {
     this._pumpBuildingLabelFade();
     // Power-node name labels: same zoom-driven fade as the building labels.
     this._pumpNodeLabelFade();
+    // Power-node outer-edge identifier outlines breathe between
+    // NODE_OUTLINE_PULSE_MIN and NODE_OUTLINE_PULSE_MAX.
+    this._pumpNodeOutlinePulse(now);
+  }
+
+  /** Drive the alpha pulse on every node's identifier-edge outline material.
+   *  One shared phase across all nodes — synchronised gentle breathing. */
+  _pumpNodeOutlinePulse(now) {
+    const mats = this._nodeOutlinePulseMats;
+    if (!mats || mats.length === 0) return;
+    const phase = (now / NODE_OUTLINE_PULSE_PERIOD_MS) * Math.PI * 2;
+    const t     = Math.sin(phase) * 0.5 + 0.5; // 0..1
+    const alpha = NODE_OUTLINE_PULSE_MIN
+      + (NODE_OUTLINE_PULSE_MAX - NODE_OUTLINE_PULSE_MIN) * t;
+    for (const mat of mats) mat.alpha = alpha;
   }
 
   /** Update the on-canvas FPS / ms-per-frame chip. Throttled to
@@ -11725,7 +11749,6 @@ export class Renderer3D {
       // _nodeGlowMeshes entry kept so consumers' optional chaining is happy
       // and `_pumpNodeLabelFade` / fog state still has the per-hex key.
       for (const h of obj.hexes) {
-        const { x, z } = hexToWorld(h.col, h.row);
         this._nodeGlowMeshes.push({
           obj, disc: null,
           col: h.col, row: h.row,
@@ -11733,45 +11756,74 @@ export class Renderer3D {
         });
         const tkey = hexKey(h.col, h.row);
         if (!this._tilePropsByKey.has(tkey)) this._tilePropsByKey.set(tkey, []);
+      }
 
-        // Outer identifier ring: a second, slightly larger hex outline
-        // painted in the node's identifying palette colour (matches the
-        // HUD score dots). Static for the life of the game — set once,
-        // frozen below with the rest of the static map geometry. Sits
-        // *outside* the controller ring so the controller signal stays
-        // dominant and the identifier reads as a quiet edge.
-        const idCss = nodeIdentifyingColor(obj);
-        const [ir, ig, ib] = cssHexToRgb01(idCss);
-        const idPath = [];
-        for (let i = 0; i <= 6; i++) {
-          const a = Math.PI / 6 + i * Math.PI / 3;
-          idPath.push(new BABYLON.Vector3(
-            NODE_IDENTIFIER_RING_RADIUS * Math.cos(a),
-            0.028,
-            NODE_IDENTIFIER_RING_RADIUS * Math.sin(a),
-          ));
+      // ── Outer-edge identifier outline ──────────────────────────────────
+      // Only the OUTSIDE perimeter of the multi-hex node — edges shared with
+      // another node hex are internal and skipped (operator: "only the
+      // outside edges, not the internal borders"). Dedup by canonical
+      // world-space edge key: every internal edge appears in TWO node hexes'
+      // perimeter lists → count==2 → skipped; outer edges appear once.
+      const idCss = nodeIdentifyingColor(obj);
+      const [ir, ig, ib] = cssHexToRgb01(idCss);
+      // Per-node material so the alpha can pulse independently of other
+      // overlays (the shared _ringPulseMaterialFor cache won't survive
+      // per-instance alpha animation).
+      const nodeOutlineMat = new BABYLON.StandardMaterial(
+        `nodeOutlineMat_${obj.label.replace(/\W+/g, '_')}`, this._scene);
+      nodeOutlineMat.diffuseColor  = new BABYLON.Color3(ir * 0.4, ig * 0.4, ib * 0.4);
+      nodeOutlineMat.specularColor = new BABYLON.Color3(0, 0, 0);
+      nodeOutlineMat.emissiveColor = new BABYLON.Color3(ir, ig, ib);
+      nodeOutlineMat.alpha         = NODE_OUTLINE_PULSE_MIN;
+      this._nodeOutlinePulseMats.push(nodeOutlineMat);
+
+      const edgeMap = new Map(); // canonical key → { ax, az, bx, bz, count, hex }
+      for (const h of obj.hexes) {
+        const { x, z } = hexToWorld(h.col, h.row);
+        // Six perimeter corners on the identifier-ring radius.
+        const corners = [];
+        for (let j = 0; j < 6; j++) {
+          const a = Math.PI / 6 + j * Math.PI / 3;
+          corners.push({
+            x: x + NODE_IDENTIFIER_RING_RADIUS * Math.cos(a),
+            z: z + NODE_IDENTIFIER_RING_RADIUS * Math.sin(a),
+          });
         }
-        const idRing = BABYLON.MeshBuilder.CreateTube(
-          `node_id_ring_${obj.label.replace(/\W+/g, '_')}_${h.col}_${h.row}`,
-          { path: idPath, radius: NODE_IDENTIFIER_RING_TUBE, tessellation: 6,
-            sideOrientation: BABYLON.Mesh.DOUBLESIDE },
+        for (let i = 0; i < 6; i++) {
+          const a = corners[i], b = corners[(i + 1) % 6];
+          const ka = `${a.x.toFixed(4)},${a.z.toFixed(4)}`;
+          const kb = `${b.x.toFixed(4)},${b.z.toFixed(4)}`;
+          const key = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+          const existing = edgeMap.get(key);
+          if (existing) existing.count++;
+          else edgeMap.set(key, { a, b, count: 1, hex: h });
+        }
+      }
+
+      const Y = 0.028;
+      for (const edge of edgeMap.values()) {
+        if (edge.count !== 1) continue; // internal — skip
+        const tube = BABYLON.MeshBuilder.CreateTube(
+          `node_edge_${obj.label.replace(/\W+/g, '_')}`,
+          {
+            path: [
+              new BABYLON.Vector3(edge.a.x, Y, edge.a.z),
+              new BABYLON.Vector3(edge.b.x, Y, edge.b.z),
+            ],
+            radius: NODE_IDENTIFIER_RING_TUBE,
+            tessellation: 6,
+            sideOrientation: BABYLON.Mesh.DOUBLESIDE,
+          },
           this._scene,
         );
-        idRing.parent = this._mapRoot;
-        idRing.position.x = x;
-        idRing.position.z = z;
-        idRing.isPickable = false;
-        // Identifier ring colour never changes, so share one cached material
-        // across every hex with the same identifying colour (overlayMaterialKey
-        // dedups). diffuse = id×0.4, emissive = id — same look as before, just
-        // no longer one fresh StandardMaterial per ring.
-        idRing.material = this._ringPulseMaterialFor([ir, ig, ib], 1, true);
-
-        // Same fog-veil registration as the controller ring. By this point
-        // the per-tile list exists (we just registered the controller disc
-        // a few lines above) so a fresh lookup always returns the array.
-        this._tilePropsByKey.get(tkey).push(idRing);
-        if (this._fogActiveSet.has(tkey)) idRing.isVisible = false;
+        tube.parent     = this._mapRoot;
+        tube.isPickable = false;
+        tube.material   = nodeOutlineMat;
+        // Fog visibility tracks the hex this edge belongs to (one of the two
+        // bordering hexes is in the node; that's `edge.hex`).
+        const tkey = hexKey(edge.hex.col, edge.hex.row);
+        this._tilePropsByKey.get(tkey).push(tube);
+        if (this._fogActiveSet.has(tkey)) tube.isVisible = false;
       }
     }
     // Build the matching 10%-alpha tint disc + one floating name label per
