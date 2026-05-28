@@ -34,3 +34,9 @@ specs/.supervisor-state.json
 
 # Teem orchestrator journal — per-worker event log, never committed
 .teem-events/
+
+# Raw 4K terrain source textures (AmbientCG/PolyHaven) — kept locally, not shipped.
+# Only the prepared greyscale detail maps under terrain/ are tracked.
+assets/textures/*
+!assets/textures/terrain/
+!assets/textures/terrain/**
