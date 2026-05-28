@@ -5944,6 +5944,20 @@ export class Renderer3D {
     // Playable-map extent — used to map each ribbon sample to its border ring
     // so the river fades in lockstep with the ground + trees on that ring.
     const ringExt = tilesExtent(this.state.tiles);
+    // Canonical river-flow direction in world space (chord between the two
+    // exits). Each extension's bezier runs OUTWARD along exit.tangent; the
+    // exit on the downstream side has tangent aligned with the canonical
+    // direction, the upstream exit has tangent opposite. We flip U on the
+    // upstream extension so the shared diffuseTexture's uOffset scrolls the
+    // water in the same world direction across both the playable river and
+    // all extensions. With fewer than 2 exits, leave UVs as written.
+    let extFlowRef = null;
+    if (exits.length >= 2) {
+      const dx = exits[1].point.x - exits[0].point.x;
+      const dz = exits[1].point.z - exits[0].point.z;
+      const mag = Math.hypot(dx, dz);
+      if (mag > 1e-3) extFlowRef = { x: dx / mag, z: dz / mag };
+    }
     // Extend one hex past the outermost band tile so the ribbon's far end
     // clearly carries past the band's silhouette instead of fading inside it.
     // Centre-to-centre spacing in any axial direction is SQRT3 world units.
@@ -6055,11 +6069,22 @@ export class Renderer3D {
         periods[p] = periods[p - 1] + Math.sqrt(dx * dx + dz * dz);
       }
       const RIVER_TILE_PERIOD = 1.0;
+      // Extension runs outward along exit.tangent. If that points opposite to
+      // the canonical flow direction (extension on the upstream side), reverse
+      // U so it scrolls in the same world direction as everyone else under the
+      // shared uOffset.
+      let reverseU = false;
+      if (extFlowRef) {
+        reverseU = (exit.tangent.x * extFlowRef.x
+                  + exit.tangent.z * extFlowRef.z) < 0;
+      }
+      const totalU = periods[N - 1] / RIVER_TILE_PERIOD;
       const uvs = new Float32Array(totalVerts * 2);
       for (let v = 0; v < totalVerts; v++) {
         const pathIdx  = Math.min(vByPath.length - 1, Math.floor(v / N));
         const pointIdx = v % N;
-        uvs[v * 2 + 0] = periods[pointIdx] / RIVER_TILE_PERIOD;
+        const u = periods[pointIdx] / RIVER_TILE_PERIOD;
+        uvs[v * 2 + 0] = reverseU ? (totalU - u) : u;
         uvs[v * 2 + 1] = vByPath[pathIdx];
       }
       ribbon.setVerticesData(BABYLON.VertexBuffer.UVKind, uvs);
@@ -6842,6 +6867,41 @@ export class Renderer3D {
     // because the network spans many tiles and is built after `_buildTileMesh`.
     const ribbonsByTileKey = new Map();      // tkey → mesh[]
     const ribbons = [];
+
+    // ── Canonical river flow direction (used to align per-tile UV.u) ──────
+    // Each per-tile bezier writes its U from 0 at the first point to total at
+    // the last — direction along the local bezier. The bezier's start-to-end
+    // orientation can flip tile-to-tile depending on how the strokes were
+    // assembled, so a uniform uOffset scroll appears to advance "upstream" on
+    // some tiles and "downstream" on others. Pick one canonical world-space
+    // flow direction (the chord between the two river exits, falling back to
+    // the per-tile chord sum), then per stroke decide whether its UV needs to
+    // be reversed so the texture always scrolls the same way in world space.
+    let riverRef = null;
+    if (networkName === 'river' && this.state?.tiles) {
+      const exits = riverExitPoints(this.state.tiles);
+      if (exits && exits.length >= 2) {
+        const dx = exits[1].point.x - exits[0].point.x;
+        const dz = exits[1].point.z - exits[0].point.z;
+        const mag = Math.hypot(dx, dz);
+        if (mag > 1e-3) riverRef = { x: dx / mag, z: dz / mag };
+      }
+      if (!riverRef) {
+        // Fallback: sum chords across every per-tile stroke. Works for any
+        // river that has a net direction even with weird/no exits.
+        let sx = 0, sz = 0;
+        for (const seg of segments) {
+          for (const s of (seg.strokes || [])) {
+            if (s && s.length >= 2) {
+              sx += s[s.length - 1].x - s[0].x;
+              sz += s[s.length - 1].z - s[0].z;
+            }
+          }
+        }
+        const mag = Math.hypot(sx, sz);
+        if (mag > 1e-3) riverRef = { x: sx / mag, z: sz / mag };
+      }
+    }
     for (let s = 0; s < segments.length; s++) {
       const { tile, strokes } = segments[s];
       const tkey = hexKey(tile.col, tile.row);
@@ -6983,10 +7043,22 @@ export class Renderer3D {
             periods[p] = periods[p - 1] + Math.sqrt(dx * dx + dz * dz);
           }
           const ROAD_TILE_PERIOD = 1.0; // world units per texture tile
+          // If this is a river stroke that runs counter to the canonical flow
+          // direction, reverse its U so the texture scroll lands in the same
+          // world direction as every other ribbon. Road UVs aren't direction-
+          // sensitive (no scroll animation), so leave them.
+          let reverseU = false;
+          if (riverRef && pts.length >= 2) {
+            const cdx = pts[pts.length - 1].x - pts[0].x;
+            const cdz = pts[pts.length - 1].z - pts[0].z;
+            reverseU = (cdx * riverRef.x + cdz * riverRef.z) < 0;
+          }
+          const totalU = periods[N - 1] / ROAD_TILE_PERIOD;
           for (let v = 0; v < totalVerts; v++) {
             const pathIdx  = Math.min(vByPath.length - 1, Math.floor(v / N));
             const pointIdx = v % N;
-            uvs[v * 2 + 0] = periods[pointIdx] / ROAD_TILE_PERIOD;
+            const u = periods[pointIdx] / ROAD_TILE_PERIOD;
+            uvs[v * 2 + 0] = reverseU ? (totalU - u) : u;
             uvs[v * 2 + 1] = vByPath[pathIdx];
           }
           ribbon.setVerticesData(BABYLON.VertexBuffer.UVKind, uvs);
