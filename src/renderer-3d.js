@@ -10345,10 +10345,19 @@ export class Renderer3D {
     // so the two billboards never overlap.
     plane.parent = standee.plane;
     const headTopRel = headTopRelativeToCone(standee.leader);
+    // G1-polish: push the card BEHIND its combatant along the attack axis so
+    // attacker and defender cards don't overlap in screen space when the
+    // combatants are adjacent. Attacker → −axis (behind attacker, away from
+    // target); defender → +axis (behind defender, away from attacker). The
+    // offset is applied in the standee's local XZ — the standee carries no
+    // world rotation, so local XZ matches world XZ. The plane's billboard
+    // mode rotates around its origin AFTER the parent translation, so the
+    // card still faces the camera.
+    const axisOffset = computeCombatCardAxisOffset(side, opts);
     plane.position.set(
-      0,
+      axisOffset.x,
       headTopRel + COMBAT_CARD_Y_GAP + COMBAT_CARD_PLANE_HEIGHT / 2,
-      0,
+      axisOffset.z,
     );
     plane.visibility = 1;
 
@@ -15484,6 +15493,44 @@ export const COMBAT_CARD_Y_GAP = 0.18;
 export const COMBAT_CARD_HOLD_MS = 1100;
 /** Fade-out time (ms) after the hold. */
 export const COMBAT_CARD_FADE_MS = 350;
+/** Horizontal offset (world units) applied to each combat card along the
+ *  attack axis so the attacker's and defender's cards spread to opposite
+ *  outer sides instead of stacking in screen space when combatants are
+ *  adjacent. Attacker card sits BEHIND the attacker (−axis direction); the
+ *  defender card sits BEHIND the defender (+axis direction). */
+export const CARD_AXIS_OFFSET_WORLD = 0.8;
+/** Side-tinted colours for the combat card (attacker = red, defender =
+ *  blue). Used by both the header strip and the card border so the
+ *  player can tell at a glance which card belongs to which combatant. */
+export const COMBAT_CARD_ATK_COLOR = '#cc3939';
+export const COMBAT_CARD_DEF_COLOR = '#3a6ab8';
+
+/** Compute the local-space XZ offset for a combat card so attacker and
+ *  defender cards sit on opposite outer sides of the standees along the
+ *  attack axis. The card is parented to its combatant's standee (unrotated),
+ *  so local XZ = world XZ.
+ *
+ *  Returns `{ x: 0, z: 0 }` (no offset) when the attacker/target hex coords
+ *  aren't provided OR the two combatants share a hex (degenerate axis) —
+ *  preserves legacy behaviour and avoids divide-by-zero. Pure helper; lives
+ *  outside the class so tests can pin behaviour without Babylon. */
+export function computeCombatCardAxisOffset(side, opts = {}) {
+  const { attackerCol, attackerRow, targetCol, targetRow } = opts;
+  const haveCoords = Number.isFinite(attackerCol) && Number.isFinite(attackerRow)
+    && Number.isFinite(targetCol) && Number.isFinite(targetRow);
+  if (!haveCoords) return { x: 0, z: 0 };
+  const a = hexToWorld(attackerCol, attackerRow);
+  const t = hexToWorld(targetCol, targetRow);
+  const dx = t.x - a.x;
+  const dz = t.z - a.z;
+  const len = Math.hypot(dx, dz);
+  if (!(len > 1e-6)) return { x: 0, z: 0 };
+  // Axis points attacker → target. Attacker card sits behind the attacker
+  // (−axis); defender card sits behind the defender (+axis).
+  const sign = (side === 'attacker' || side === 'atk') ? -1 : 1;
+  const k = (sign * CARD_AXIS_OFFSET_WORLD) / len;
+  return { x: dx * k, z: dz * k };
+}
 
 /** HP-bar height (world units) above the standee's base disc. */
 export const HP_BAR_Y_ABOVE_BASE = 0.2;
@@ -16278,7 +16325,13 @@ export function combatCardModel(result, side) {
     if (bd.forestCoverBonus > 0)  modifiers.push({ icon: '🌲', label: 'cover',  value: bd.forestCoverBonus });
     if (bd.fatiguePenalty > 0)    modifiers.push({ icon: '💤', label: 'tired', value: -bd.fatiguePenalty });
   }
-  return { poolFaces, picked, total, won, modifiers };
+  // G1-polish: carry the side tag through to the painter so it can draw an
+  // ATK/DEF header strip + tinted border. 'atk' / 'def' are the short keys
+  // (the input `side` is the longer 'attacker' / 'defender' alias).
+  const sideKey = isAtk ? 'atk' : 'def';
+  const sideColor = isAtk ? COMBAT_CARD_ATK_COLOR : COMBAT_CARD_DEF_COLOR;
+  const sideLabel = isAtk ? '⚔ ATK' : '🛡 DEF';
+  return { poolFaces, picked, total, won, modifiers, side: sideKey, sideColor, sideLabel };
 }
 
 /**
@@ -16290,11 +16343,16 @@ export function combatCardModel(result, side) {
  */
 export function paintCombatCard(ctx, model, opts) {
   const { width, height } = opts;
-  const { poolFaces = [], picked, total, won } = model || {};
+  const { poolFaces = [], picked, total, won, side, sideColor, sideLabel } = model || {};
   ctx.clearRect(0, 0, width, height);
 
   const accent  = won ? '#ffd24a' : '#ff7a7a';
   const dieFill = won ? '#2a3a20' : '#3a2020';
+  // Side tint (red for attacker, blue for defender) — used for the header
+  // strip background and the card outline so the reader can tell at a glance
+  // which card belongs to which combatant.
+  const hasSide = side === 'atk' || side === 'def';
+  const sideTint = hasSide ? sideColor : null;
 
   // Background card — semi-opaque dark rounded rect.
   const margin = Math.round(width * 0.03);
@@ -16316,15 +16374,55 @@ export function paintCombatCard(ctx, model, opts) {
   ctx.arcTo(cardX, cardY, cardX + cardR, cardY, cardR);
   ctx.closePath();
   ctx.fill();
-  // Accent rim so the win/lose colour reads at a glance.
+  // Outline rim — tinted with the side colour (attacker = red, defender =
+  // blue) so the rim reinforces the side label at a glance. Falls back to
+  // the win/lose accent for legacy callers that don't pass a side.
   ctx.lineWidth = Math.max(3, Math.round(width * 0.012));
-  ctx.strokeStyle = accent;
+  ctx.strokeStyle = sideTint || accent;
   ctx.stroke();
 
+  // ── Side header strip ────────────────────────────────────────────────
+  // A short coloured band across the top of the card with "⚔ ATK" /
+  // "🛡 DEF" so the player can tell instantly which card belongs to the
+  // attacker vs defender, even when the cards are spread to opposite
+  // sides of the standees. Skip the header (and keep the legacy full-card
+  // layout) for callers that don't pass a side — keeps back-compat for
+  // tests/snapshots.
+  const headerH = hasSide ? Math.round(cardH * 0.14) : 0;
+  if (hasSide) {
+    // Filled rounded "tab" matching the top rounded corners; the bottom
+    // edge is a flat line that meets the dice band cleanly.
+    ctx.fillStyle = sideTint;
+    ctx.beginPath();
+    ctx.moveTo(cardX + cardR, cardY);
+    ctx.lineTo(cardX + cardW - cardR, cardY);
+    ctx.arcTo(cardX + cardW, cardY, cardX + cardW, cardY + cardR, cardR);
+    ctx.lineTo(cardX + cardW, cardY + headerH);
+    ctx.lineTo(cardX, cardY + headerH);
+    ctx.lineTo(cardX, cardY + cardR);
+    ctx.arcTo(cardX, cardY, cardX + cardR, cardY, cardR);
+    ctx.closePath();
+    ctx.fill();
+    // Label text — bold, white, centred in the strip.
+    const labelFont = Math.max(10, Math.round(headerH * 0.62));
+    ctx.font = `900 ${labelFont}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#fff';
+    ctx.fillText(sideLabel || '', cardX + cardW / 2, cardY + headerH / 2);
+  }
+
   // ── Dice row ──────────────────────────────────────────────────────────
+  // Content area starts BELOW the header strip; if there's no header (legacy
+  // model) we use the full card. All vertical bands (dice / chips / total)
+  // measure off `contentY` and `contentH` so the header can grow/shrink
+  // without re-tuning the layout.
+  const contentY = cardY + headerH;
+  const contentH = cardH - headerH;
   const n = Math.max(1, poolFaces.length);
-  // Reserve the top ~58% of the card for the dice, the rest for the total.
-  const diceBandH = cardH * 0.56;
+  // Reserve the top ~58% of the content area for the dice, the rest for
+  // the total / chip strip.
+  const diceBandH = contentH * 0.56;
   const gap = Math.round(width * 0.02);
   const die = Math.min(
     Math.round(diceBandH * 0.9),
@@ -16333,7 +16431,7 @@ export function paintCombatCard(ctx, model, opts) {
   const dieR = Math.max(2, Math.round(die * 0.16));
   const rowW = die * n + gap * (n - 1);
   let dx = (width - rowW) / 2;
-  const dy = cardY + Math.round((diceBandH - die) / 2) + Math.round(cardH * 0.06);
+  const dy = contentY + Math.round((diceBandH - die) / 2) + Math.round(contentH * 0.06);
   ctx.font = `900 ${Math.round(die * 0.62)}px sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -16378,8 +16476,8 @@ export function paintCombatCard(ctx, model, opts) {
   const modifiers = Array.isArray(opts?.modifiers)
     ? opts.modifiers
     : (Array.isArray(model?.modifiers) ? model.modifiers : []);
-  const chipBandTop = cardY + diceBandH;
-  const chipBandH   = Math.round(cardH * 0.18);
+  const chipBandTop = contentY + diceBandH;
+  const chipBandH   = Math.round(contentH * 0.18);
   if (modifiers.length > 0) {
     const chipFont = Math.max(10, Math.round(chipBandH * 0.55));
     ctx.font = `700 ${chipFont}px sans-serif`;
@@ -16428,11 +16526,11 @@ export function paintCombatCard(ctx, model, opts) {
   // Push the total below the chip strip if there is one, otherwise it
   // floats in the lower band as before.
   const totalY = (modifiers.length > 0)
-    ? chipBandTop + chipBandH + (cardH - diceBandH - chipBandH) / 2
-    : cardY + diceBandH + (cardH - diceBandH) / 2;
+    ? chipBandTop + chipBandH + (contentH - diceBandH - chipBandH) / 2
+    : contentY + diceBandH + (contentH - diceBandH) / 2;
   const totalFontPx = (modifiers.length > 0)
-    ? Math.round(cardH * 0.22)
-    : Math.round(cardH * 0.26);
+    ? Math.round(contentH * 0.22)
+    : Math.round(contentH * 0.26);
   ctx.font = `900 ${totalFontPx}px sans-serif`;
   ctx.lineWidth = Math.max(4, Math.round(cardH * 0.03));
   ctx.lineJoin = 'round';

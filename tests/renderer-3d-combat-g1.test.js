@@ -16,9 +16,13 @@ import {
   combatCardModel,
   paintCombatCard,
   computeLungeTarget,
+  computeCombatCardAxisOffset,
   LUNGE_FRACTION,
   COMBAT_CARD_TEX_WIDTH,
   COMBAT_CARD_TEX_HEIGHT,
+  CARD_AXIS_OFFSET_WORLD,
+  COMBAT_CARD_ATK_COLOR,
+  COMBAT_CARD_DEF_COLOR,
 } from '../src/renderer-3d.js';
 
 function makeFakeBabylon({ keys = [] } = {}) {
@@ -108,6 +112,66 @@ describe('G1 — combatCardModel surfaces modifier chips', () => {
     };
     const model = combatCardModel(result, 'attacker');
     assert.deepEqual(model.modifiers, []);
+  });
+});
+
+describe('G1-polish — combatCardModel carries side tag and tint colour', () => {
+  test('attacker side gets sideKey "atk" + red tint + ⚔ label', () => {
+    const m = combatCardModel({
+      hit: true, attackRoll: 5, defenseRoll: 3,
+      breakdown: { atkPool: [5], atkBaseDie: 5, defPool: [3], defBaseDie: 3 },
+    }, 'attacker');
+    assert.equal(m.side, 'atk');
+    assert.equal(m.sideColor, COMBAT_CARD_ATK_COLOR);
+    assert.ok(m.sideLabel.includes('ATK'));
+  });
+
+  test('defender side gets sideKey "def" + blue tint + 🛡 label', () => {
+    const m = combatCardModel({
+      hit: false, attackRoll: 3, defenseRoll: 5,
+      breakdown: { atkPool: [3], atkBaseDie: 3, defPool: [5], defBaseDie: 5 },
+    }, 'defender');
+    assert.equal(m.side, 'def');
+    assert.equal(m.sideColor, COMBAT_CARD_DEF_COLOR);
+    assert.ok(m.sideLabel.includes('DEF'));
+  });
+});
+
+describe('G1-polish — computeCombatCardAxisOffset spreads cards along attack axis', () => {
+  test('attacker card offset points AWAY from the target (−axis)', () => {
+    // Attacker at (5,5), target at (6,5): axis points roughly +X (same row).
+    const o = computeCombatCardAxisOffset('attacker', {
+      attackerCol: 5, attackerRow: 5, targetCol: 6, targetRow: 5,
+    });
+    assert.ok(o.x < 0, 'attacker offset x is in the −axis direction');
+    // Magnitude equals CARD_AXIS_OFFSET_WORLD (normalised).
+    const len = Math.hypot(o.x, o.z);
+    assert.ok(Math.abs(len - CARD_AXIS_OFFSET_WORLD) < 1e-9, 'offset length matches constant');
+  });
+
+  test('defender card offset points BEHIND defender (+axis), opposite to attacker', () => {
+    const atk = computeCombatCardAxisOffset('attacker', {
+      attackerCol: 5, attackerRow: 5, targetCol: 6, targetRow: 5,
+    });
+    const def = computeCombatCardAxisOffset('defender', {
+      attackerCol: 5, attackerRow: 5, targetCol: 6, targetRow: 5,
+    });
+    // Defender offset is the exact negation of attacker offset.
+    assert.ok(Math.abs(def.x + atk.x) < 1e-9);
+    assert.ok(Math.abs(def.z + atk.z) < 1e-9);
+    assert.ok(def.x > 0, 'defender offset x is in the +axis direction');
+  });
+
+  test('returns (0,0) when coords missing (legacy callers)', () => {
+    const o = computeCombatCardAxisOffset('attacker', {});
+    assert.deepEqual(o, { x: 0, z: 0 });
+  });
+
+  test('returns (0,0) when attacker and target share a hex (degenerate axis)', () => {
+    const o = computeCombatCardAxisOffset('attacker', {
+      attackerCol: 3, attackerRow: 3, targetCol: 3, targetRow: 3,
+    });
+    assert.deepEqual(o, { x: 0, z: 0 });
   });
 });
 
