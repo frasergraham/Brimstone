@@ -266,6 +266,157 @@ describe('combat-tester — ally cap', () => {
   });
 });
 
+describe('combat-tester — no stacked entities (defensive invariant)', () => {
+  test('every placed entity sits on a unique (col,row), even with 4+4 allies', () => {
+    // The pool of defender-adjacent slots is ~5 hexes on the clearing — short
+    // of the 4+4=8 the caps allow — so some allies will silently fail to
+    // place (takeNext returns null and the loop breaks). The invariant we
+    // care about is that NOTHING that DOES get placed shares a hex.
+    const t = createCombatTester();
+    t.setAttacker('paladin');
+    t.setDefender('witch');
+    for (let i = 0; i < MAX_ALLIES_PER_SIDE; i++) {
+      t.addAlly('attacker', 'survivor');
+      t.addAlly('defender', 'minion');
+    }
+    const seen = new Set();
+    for (const e of t.state.entities) {
+      const key = hexKey(e.col, e.row);
+      assert.ok(!seen.has(key),
+        `duplicate hex ${key} — two entities are stacked on the same tile`);
+      seen.add(key);
+    }
+    assert.equal(seen.size, t.state.entities.length);
+  });
+});
+
+describe('combat-tester — randomizeAllies', () => {
+  test('returns false (no-op) when no allies are placed', () => {
+    const t = createCombatTester();
+    t.setAttacker('paladin');
+    t.setDefender('witch');
+    assert.equal(t.randomizeAllies(), false);
+  });
+
+  test('returns true and reshuffles positions when allies are placed', () => {
+    const t = createCombatTester();
+    t.setAttacker('paladin');
+    t.setDefender('witch');
+    t.addAlly('attacker', 'survivor');
+    t.addAlly('attacker', 'soldier');
+    t.addAlly('defender', 'minion');
+    // Capture baseline positions.
+    const before = t.state.entities.map(e => `${e.type}@${e.col},${e.row}`);
+    // Force a deterministic non-identity permutation so the test never flakes
+    // on the (tiny) chance that Math.random produced the identity shuffle.
+    // Sequence reversed: each step picks index 0, which Fisher-Yates uses to
+    // swap the tail with element 0 — reverses the pool order.
+    let reverseCalls = 0;
+    t.randomizeAllies(() => {
+      // Returning 0 makes (i+1)*rng() === 0 → j=0 → swap shuffled[i] with [0].
+      // For a 5-element pool this produces [4,1,2,3,0] etc. — guaranteed
+      // distinct from the side-natural pool order.
+      reverseCalls++;
+      return 0;
+    });
+    assert.ok(reverseCalls > 0, 'rng should have been called');
+    const after = t.state.entities.map(e => `${e.type}@${e.col},${e.row}`);
+    assert.notDeepEqual(after, before,
+      'positions should change after randomizeAllies with a non-identity rng');
+  });
+
+  test('after randomize, every entity still sits on a unique hex', () => {
+    const t = createCombatTester();
+    t.setAttacker('paladin');
+    t.setDefender('witch');
+    for (let i = 0; i < MAX_ALLIES_PER_SIDE; i++) {
+      t.addAlly('attacker', 'survivor');
+      t.addAlly('defender', 'minion');
+    }
+    t.randomizeAllies();
+    const seen = new Set();
+    for (const e of t.state.entities) {
+      const key = hexKey(e.col, e.row);
+      assert.ok(!seen.has(key),
+        `duplicate hex ${key} after randomize — entities are stacked`);
+      seen.add(key);
+    }
+  });
+
+  test('does not change WHICH units are allies — only their hex positions', () => {
+    const t = createCombatTester();
+    t.setAttacker('paladin');
+    t.setDefender('witch');
+    t.addAlly('attacker', 'survivor');
+    t.addAlly('attacker', 'soldier');
+    t.addAlly('defender', 'minion');
+    const atkBefore = t.slots.atkAllies.slice();
+    const defBefore = t.slots.defAllies.slice();
+    t.randomizeAllies();
+    assert.deepEqual(t.slots.atkAllies, atkBefore);
+    assert.deepEqual(t.slots.defAllies, defBefore);
+  });
+
+  test('all randomized allies sit hex-adjacent to the defender (gang-up legal)', () => {
+    const t = createCombatTester();
+    t.setAttacker('paladin');
+    t.setDefender('witch');
+    t.addAlly('attacker', 'survivor');
+    t.addAlly('defender', 'minion');
+    t.addAlly('defender', 'zombie');
+    t.randomizeAllies();
+    const def = t.layout.defenderEntity;
+    const allies = [...t.layout.atkAllyEntities, ...t.layout.defAllyEntities];
+    for (const a of allies) {
+      assert.equal(hexDistance(def.col, def.row, a.col, a.row), 1,
+        `ally at (${a.col},${a.row}) must be adjacent to defender for gang-up`);
+    }
+  });
+
+  test('adding an ally after randomize clears the override (new ally takes default slot)', () => {
+    // Sticky override would leave the new ally without a position; clearing
+    // on mutate falls back to default pool placement.
+    const t = createCombatTester();
+    t.setAttacker('paladin');
+    t.setDefender('witch');
+    t.addAlly('attacker', 'survivor');
+    t.randomizeAllies();
+    assert.equal(t.slots.atkAllyPositions.length, 1, 'override persisted');
+    t.addAlly('attacker', 'soldier');
+    assert.equal(t.slots.atkAllyPositions.length, 0,
+      'addAlly should clear position overrides so default placement kicks in');
+    // Both allies still placed without stacking.
+    const allies = t.layout.atkAllyEntities;
+    assert.equal(allies.length, 2);
+    assert.notEqual(hexKey(allies[0].col, allies[0].row),
+                    hexKey(allies[1].col, allies[1].row));
+  });
+
+  test('randomized ally count never exceeds available slot pool', () => {
+    // The legal pool is ~5 hexes; the test asserts we can't place more
+    // allies than slots and don't crash.
+    const t = createCombatTester();
+    t.setAttacker('paladin');
+    t.setDefender('witch');
+    for (let i = 0; i < MAX_ALLIES_PER_SIDE; i++) {
+      t.addAlly('attacker', 'survivor');
+      t.addAlly('defender', 'minion');
+    }
+    t.randomizeAllies();
+    const placed = t.layout.atkAllyEntities.length + t.layout.defAllyEntities.length;
+    assert.ok(placed >= 1 && placed <= 8);
+    // Every placed ally is unique and adjacent to defender.
+    const def = t.layout.defenderEntity;
+    const positions = new Set();
+    for (const a of [...t.layout.atkAllyEntities, ...t.layout.defAllyEntities]) {
+      const k = hexKey(a.col, a.row);
+      assert.ok(!positions.has(k));
+      positions.add(k);
+      assert.equal(hexDistance(def.col, def.row, a.col, a.row), 1);
+    }
+  });
+});
+
 describe('combat-tester — reset', () => {
   test('clears slots and entity list back to a blank stage', () => {
     const t = createCombatTester();

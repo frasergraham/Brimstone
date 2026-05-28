@@ -168,7 +168,24 @@ function _layoutCombatants(state, slots, size) {
   // gang-up filter still counts them.
   const atkPool = [...atkSlots, ...defSlots];
   const defPool = [...defSlots, ...atkSlots];
-  const usedKeys = new Set();
+  // Attacker / defender hexes are off-limits to allies regardless of pool.
+  const usedKeys = new Set([
+    hexKey(centre.col, centre.row),
+    hexKey(adjacent.col, adjacent.row),
+  ]);
+  // Validate that an override falls inside the legal slot set (defender-
+  // adjacent, not on attacker / defender). Anything else (off-map, on a
+  // main combatant) is rejected so a stale override can never let an ally
+  // land on top of another entity.
+  const legalSlotKeys = new Set([...atkPool, ...defPool].map(s => hexKey(s.col, s.row)));
+  const takeOverride = (pos) => {
+    if (!pos) return null;
+    const k = hexKey(pos.col, pos.row);
+    if (usedKeys.has(k)) return null;
+    if (!legalSlotKeys.has(k)) return null;
+    usedKeys.add(k);
+    return { col: pos.col, row: pos.row };
+  };
   const takeNext = (pool) => {
     for (const s of pool) {
       const k = hexKey(s.col, s.row);
@@ -179,7 +196,7 @@ function _layoutCombatants(state, slots, size) {
     return null;
   };
   for (let i = 0; i < slots.atkAllies.length; i++) {
-    const slot = takeNext(atkPool);
+    const slot = takeOverride(slots.atkAllyPositions?.[i]) ?? takeNext(atkPool);
     if (!slot) break;
     const ally = _placeUnit(state, slots.atkAllies[i], slot.col, slot.row, ATK_SIDE_ID);
     // Force the ally's faction to match the attacker so executeBattle's
@@ -191,7 +208,7 @@ function _layoutCombatants(state, slots, size) {
     atkAllyEntities.push(ally);
   }
   for (let i = 0; i < slots.defAllies.length; i++) {
-    const slot = takeNext(defPool);
+    const slot = takeOverride(slots.defAllyPositions?.[i]) ?? takeNext(defPool);
     if (!slot) break;
     const ally = _placeUnit(state, slots.defAllies[i], slot.col, slot.row, DEF_SIDE_ID);
     if (defenderEntity) ally.owner = defenderEntity.owner;
@@ -219,12 +236,23 @@ export function createCombatTester(opts = {}) {
 
   // Slot model: which unit type sits at each role. Allies are an ordered
   // list; the i-th ally occupies the i-th ring slot on its side.
+  // atkAllyPositions / defAllyPositions are optional per-ally position
+  // overrides (one entry per ally, or undefined to use the default pool
+  // order). Set by randomizeAllies() and cleared on any slot mutation so
+  // the override is one-shot and doesn't leak across subsequent edits.
   const slots = {
     attacker: null,    // unitType string or null
     defender: null,
     atkAllies: [],
     defAllies: [],
+    atkAllyPositions: [],
+    defAllyPositions: [],
   };
+
+  function _clearAllyPositionOverrides() {
+    slots.atkAllyPositions = [];
+    slots.defAllyPositions = [];
+  }
 
   // Speed mode — controls which display the UI's Run Battle button picks.
   // Defaults to cinematic (matches the URL default and the prior behaviour).
@@ -249,10 +277,12 @@ export function createCombatTester(opts = {}) {
 
   function setAttacker(unitType) {
     slots.attacker = unitType || null;
+    _clearAllyPositionOverrides();
     _rebuild();
   }
   function setDefender(unitType) {
     slots.defender = unitType || null;
+    _clearAllyPositionOverrides();
     _rebuild();
   }
   function addAlly(side, unitType) {
@@ -262,6 +292,7 @@ export function createCombatTester(opts = {}) {
     // tester can't stack allies beyond what the gang-up math actually counts.
     if (list.length >= MAX_ALLIES_PER_SIDE) return false;
     list.push(unitType);
+    _clearAllyPositionOverrides();
     _rebuild();
     return true;
   }
@@ -269,6 +300,7 @@ export function createCombatTester(opts = {}) {
     const list = side === 'attacker' ? slots.atkAllies : slots.defAllies;
     if (idx < 0 || idx >= list.length) return;
     list.splice(idx, 1);
+    _clearAllyPositionOverrides();
     _rebuild();
   }
   function swapRoles() {
@@ -282,6 +314,7 @@ export function createCombatTester(opts = {}) {
     slots.defender  = prevAtk;
     slots.atkAllies = prevDefAllies;
     slots.defAllies = prevAtkAllies;
+    _clearAllyPositionOverrides();
     _rebuild();
   }
   function reset() {
@@ -289,7 +322,58 @@ export function createCombatTester(opts = {}) {
     slots.defender = null;
     slots.atkAllies = [];
     slots.defAllies = [];
+    _clearAllyPositionOverrides();
     _rebuild();
+  }
+  /**
+   * Reshuffle currently-placed allies across the available adjacent-to-
+   * defender hex slots. Doesn't change WHICH units are allies — only the
+   * hex each one stands on. Returns true if a shuffle happened, false if
+   * there are no allies to shuffle.
+   *
+   * The shuffled positions are persisted as per-ally overrides on
+   * `slots.atkAllyPositions` / `slots.defAllyPositions` so the cinematic
+   * rebuilds (triggered by every onChange) honour the new layout. Any
+   * subsequent slot mutation (add/remove/swap/reset/setAttacker/setDefender)
+   * clears the overrides — so randomization is one-shot per layout.
+   *
+   * @param {Function} [rng=Math.random] — injectable for deterministic tests.
+   * @returns {boolean}
+   */
+  function randomizeAllies(rng = Math.random) {
+    const totalAllies = slots.atkAllies.length + slots.defAllies.length;
+    if (totalAllies === 0) return false;
+    const centre   = { col: Math.floor(size / 2), row: Math.floor(size / 2) };
+    const adjacent = { col: centre.col + 1, row: centre.row };
+    const { atkSlots, defSlots } = _allySlots(centre, adjacent, size);
+    // All defender-adjacent hexes (minus the attacker hex) form the legal
+    // pool. There are typically 5 such hexes on a flat clearing.
+    const pool = [...atkSlots, ...defSlots];
+    if (pool.length === 0) return false;
+    // Fisher-Yates shuffle on a copy.
+    const shuffled = pool.slice();
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    // Assign in order: attacker-side allies first, then defender-side. The
+    // operator asked for "shuffled across" all slots — side ordering inside
+    // the shuffled stream still produces a uniformly-distributed assignment.
+    const atkPos = [];
+    const defPos = [];
+    let idx = 0;
+    for (let i = 0; i < slots.atkAllies.length && idx < shuffled.length; i++) {
+      atkPos.push({ col: shuffled[idx].col, row: shuffled[idx].row });
+      idx++;
+    }
+    for (let i = 0; i < slots.defAllies.length && idx < shuffled.length; i++) {
+      defPos.push({ col: shuffled[idx].col, row: shuffled[idx].row });
+      idx++;
+    }
+    slots.atkAllyPositions = atkPos;
+    slots.defAllyPositions = defPos;
+    _rebuild();
+    return true;
   }
   function setSpeedMode(mode) {
     // Unknown values fall back to cinematic so a stale URL never wedges the
@@ -330,6 +414,7 @@ export function createCombatTester(opts = {}) {
     setAttacker, setDefender,
     addAlly, removeAlly,
     swapRoles, reset, runBattle,
+    randomizeAllies,
     setSpeedMode,
     onChange,
   };

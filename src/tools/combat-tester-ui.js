@@ -250,7 +250,10 @@ export async function initCombat(doc = document) {
   const resetBtn = doc.createElement('button');
   resetBtn.type = 'button'; resetBtn.className = 'c-action';
   resetBtn.textContent = 'Reset';
-  sec3.append(runBtn, swapBtn, resetBtn);
+  const randomizeBtn = doc.createElement('button');
+  randomizeBtn.type = 'button'; randomizeBtn.className = 'c-action';
+  randomizeBtn.textContent = 'Randomize Allies';
+  sec3.append(runBtn, swapBtn, resetBtn, randomizeBtn);
 
   // Section: log
   const sec4 = doc.createElement('div');
@@ -312,7 +315,17 @@ export async function initCombat(doc = document) {
       b.setAttribute('aria-pressed', active ? 'true' : 'false');
     }
   }
-  function refreshAll() { refreshPickers(); refreshChips(); refreshSpeed(); }
+  function refreshRandomize() {
+    const hasAllies =
+      tester.slots.atkAllies.length + tester.slots.defAllies.length > 0;
+    randomizeBtn.disabled = !hasAllies;
+  }
+  function refreshAll() {
+    refreshPickers();
+    refreshChips();
+    refreshSpeed();
+    refreshRandomize();
+  }
 
   atkSel.addEventListener('change', () => tester.setAttacker(atkSel.value || null));
   defSel.addEventListener('change', () => tester.setDefender(defSel.value || null));
@@ -451,6 +464,9 @@ export async function initCombat(doc = document) {
   resetBtn.addEventListener('click', () => {
     tester.reset();
     logEl.innerHTML = '';
+  });
+  randomizeBtn.addEventListener('click', () => {
+    tester.randomizeAllies();
   });
 
   // ── Lifecycle handle ──────────────────────────────────────────────────
