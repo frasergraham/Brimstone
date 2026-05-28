@@ -45,7 +45,7 @@ export const FOREST_TREES_MIN     = _FOREST_TREES_MIN;
 export const FOREST_TREES_MAX     = _FOREST_TREES_MAX;
 export const FOREST_DENSITY_SCALE = _FOREST_DENSITY_SCALE;
 export const scaledForestTreeCount = _scaledForestTreeCount;
-import { EntityType, isLeaderType } from './entities.js';
+import { EntityType, isLeaderType, ADVANTAGE_CAP } from './entities.js';
 import { Renderer } from './renderer.js';
 import { getFactionTheme } from './theme.js';
 import { hexKey, hexDistance, getNeighbors } from './hex.js';
@@ -1183,6 +1183,54 @@ export function hexToWorld(col, row, radius = HEX_RADIUS_WORLD) {
   return {
     x: radius * SQRT3 * (col + 0.5 * (row & 1)),
     z: radius * 1.5 * row,
+  };
+}
+
+/**
+ * G2 combat positioning — plan target world (x,z) for the defender + each ally.
+ *
+ * Geometry: on a pointy-top hex grid, the midpoint of the segment connecting
+ * two adjacent hex centres IS the midpoint of the edge they share (the centres
+ * lie on the perpendicular bisector of that edge). So an ally "moving to the
+ * closest edge of the defender's hex" is simply the midpoint between the
+ * ally's hex centre and the defender's hex centre.
+ *
+ * Rules:
+ *   - defender re-centres on its hex.
+ *   - first `advantageCap` allies per side (in dice / executeBattle order)
+ *     move to the shared-edge midpoint.
+ *   - allies BEYOND the cap stay put: returned with `moves: false` and the
+ *     ally's own hex centre as `toX/toZ` (caller can skip them entirely).
+ *
+ * Pure helper — takes hex coords, returns world coords. No renderer / scene
+ * state touched. Visible for tests.
+ *
+ * @param {object} opts
+ * @param {{id:any, col:number, row:number}} opts.defender
+ * @param {Array<{id:any, col:number, row:number}>} [opts.attackAllies]
+ * @param {Array<{id:any, col:number, row:number}>} [opts.defenseAllies]
+ * @param {number} [opts.advantageCap=ADVANTAGE_CAP]
+ */
+export function planCombatPositions({
+  defender, attackAllies = [], defenseAllies = [], advantageCap = ADVANTAGE_CAP,
+} = {}) {
+  const defCentre = hexToWorld(defender.col, defender.row);
+  const project = (ally, i) => {
+    const allyCentre = hexToWorld(ally.col, ally.row);
+    if (i >= advantageCap) {
+      return { id: ally.id, toX: allyCentre.x, toZ: allyCentre.z, moves: false };
+    }
+    return {
+      id: ally.id,
+      toX: (allyCentre.x + defCentre.x) * 0.5,
+      toZ: (allyCentre.z + defCentre.z) * 0.5,
+      moves: true,
+    };
+  };
+  return {
+    defender: defCentre,
+    attackerAllies: attackAllies.map(project),
+    defenderAllies: defenseAllies.map(project),
   };
 }
 
@@ -10018,51 +10066,85 @@ export class Renderer3D {
     this._trackAnim(promise);
   }
 
-  /** G1: ally half-lunge — a gang-up participant slides HALF the distance of
-   *  a normal attacker lunge (so the attacker still reads as the primary
-   *  striker) and holds until `returnAllLungeAnims()` brings everyone back.
-   *
-   *  Mirrors `addLungeAnim` but: (a) deliberately skips the camera-framing
-   *  short-circuit (the attacker already framed the cluster, an ally chiming
-   *  in shouldn't re-target the camera), (b) does NOT trigger the shared
-   *  paladin punch animation (single skeleton — only the primary attacker
-   *  plays the strike; allies just slide and hold), and (c) uses
-   *  LUNGE_FRACTION * 0.5 so the visual hierarchy stays attacker > ally. */
-  addAllyHalfLunge(entityId, fromCol, fromRow, toCol, toRow) {
+  /** Internal: slide a standee from its CURRENT world position to an absolute
+   *  (toX, toZ) over `durMs`, ease-out, and register the move with the active-
+   *  lunge set so `waitForAnimations()` drains it and `returnAllLungeAnims()`
+   *  slides it back. No-ops when the target is the standee's current position
+   *  (within an epsilon) — used by the defender re-centre when the defender
+   *  is already at its hex centre. */
+  _animateStandeeTo(entityId, toX, toZ, durMs = LUNGE_ANIM_MS) {
     if (!this._scene || !this._babylon) return;
     const standee = this._entityStandees.get(entityId);
     if (!standee || !standee.plane) return;
-    const BABYLON = this._babylon;
-    const { x: toX, z: toZ } = hexToWorld(toCol, toRow);
-    const lungeSpeedMul = this._playbackSpeedMul ?? 1.0;
-    const FRAMES_LUNGE = Math.max(1, Math.round(LUNGE_ANIM_MS * lungeSpeedMul * 60 / 1000));
-
-    this._scene.stopAnimation(standee.plane);
-    this._activeLungeIds.add(entityId);
     const startX = standee.plane.position.x;
     const startZ = standee.plane.position.z;
-    const { x: lungeX, z: lungeZ } = computeLungeTarget(
-      { x: startX, z: startZ }, { x: toX, z: toZ },
-      LUNGE_FRACTION * 0.5, // ally lunges half-distance — primary attacker is still the striker
-    );
-    if (standee.paladinClone?.mesh && (lungeX !== startX || lungeZ !== startZ)) {
-      standee.paladinClone.mesh.rotation.y = Math.atan2(lungeX - startX, lungeZ - startZ);
+    if (Math.abs(toX - startX) < 1e-4 && Math.abs(toZ - startZ) < 1e-4) return;
+    const BABYLON = this._babylon;
+    this._scene.stopAnimation(standee.plane);
+    this._activeLungeIds.add(entityId);
+    if (standee.paladinClone?.mesh) {
+      standee.paladinClone.mesh.rotation.y = Math.atan2(toX - startX, toZ - startZ);
     }
+    const speedMul = this._playbackSpeedMul ?? 1.0;
+    const FRAMES = Math.max(1, Math.round(durMs * speedMul * 60 / 1000));
     const ease = new BABYLON.CubicEase();
     ease.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEOUT);
-    const animX = new BABYLON.Animation('algX', 'position.x', 60,
+    const animX = new BABYLON.Animation('cpX', 'position.x', 60,
       BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
-    animX.setKeys([{ frame: 0, value: startX }, { frame: FRAMES_LUNGE, value: lungeX }]);
+    animX.setKeys([{ frame: 0, value: startX }, { frame: FRAMES, value: toX }]);
     animX.setEasingFunction(ease);
-    const animZ = new BABYLON.Animation('algZ', 'position.z', 60,
+    const animZ = new BABYLON.Animation('cpZ', 'position.z', 60,
       BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
-    animZ.setKeys([{ frame: 0, value: startZ }, { frame: FRAMES_LUNGE, value: lungeZ }]);
+    animZ.setKeys([{ frame: 0, value: startZ }, { frame: FRAMES, value: toZ }]);
     animZ.setEasingFunction(ease);
     standee.lungeHome = { homeX: startX, homeZ: startZ };
     const promise = new Promise(resolve => {
-      this._scene.beginDirectAnimation(standee.plane, [animX, animZ], 0, FRAMES_LUNGE, false, 1, resolve);
+      this._scene.beginDirectAnimation(standee.plane, [animX, animZ], 0, FRAMES, false, 1, resolve);
     });
     this._trackAnim(promise);
+  }
+
+  /** G2 combat positioning — place every visible participant of a battle into
+   *  a clean cluster around the defender's hex before the readout/strike
+   *  resolves. Spec (operator):
+   *    • Defender slides to its hex centre (no-op if already centred).
+   *    • The first ADVANTAGE_CAP=3 allies per side slide to the midpoint of
+   *      the edge shared with the defender's hex (= midpoint between their
+   *      hex centre and the defender's hex centre on a hex grid).
+   *    • Allies BEYOND ADVANTAGE_CAP stay put — they don't contribute dice
+   *      and shouldn't crowd the cluster.
+   *  Attacker is excluded — the caller already fired `addLungeAnim` for it.
+   *  All standee homes are stashed so `returnAllLungeAnims()` slides everyone
+   *  back to their starting hex. Used by BOTH cinematic and fast/vfast — the
+   *  readout/floater presentation differs by speed; the spatial choreography
+   *  is identical, with `durMs` compressed in the faster modes. */
+  applyCombatPositioning({ defender, attackAllies = [], defenseAllies = [] } = {}, opts = {}) {
+    if (!this._scene || !this._babylon || !defender) return;
+    const durMs = Number.isFinite(opts.durMs) ? opts.durMs : LUNGE_ANIM_MS;
+    const plan = planCombatPositions({ defender, attackAllies, defenseAllies });
+    this._animateStandeeTo(defender.id, plan.defender.x, plan.defender.z, durMs);
+    for (const a of plan.attackerAllies) {
+      if (a.moves) this._animateStandeeTo(a.id, a.toX, a.toZ, durMs);
+    }
+    for (const a of plan.defenderAllies) {
+      if (a.moves) this._animateStandeeTo(a.id, a.toX, a.toZ, durMs);
+    }
+  }
+
+  /** G1 back-compat shim — slides a single gang-up ally toward the target hex.
+   *  Now delegates to the shared positioning machinery (slides to the edge
+   *  midpoint between ally hex and target hex). Kept so legacy callers and
+   *  tests keep working; new code should call `applyCombatPositioning`. */
+  addAllyHalfLunge(entityId, _fromCol, _fromRow, toCol, toRow) {
+    if (!this._scene || !this._babylon) return;
+    const standee = this._entityStandees.get(entityId);
+    if (!standee || !standee.plane) return;
+    const startX = standee.plane.position.x;
+    const startZ = standee.plane.position.z;
+    const { x: toX, z: toZ } = hexToWorld(toCol, toRow);
+    const midX = (startX + toX) * 0.5;
+    const midZ = (startZ + toZ) * 0.5;
+    this._animateStandeeTo(entityId, midX, midZ, LUNGE_ANIM_MS);
   }
 
   /** Reverse every active lunge: slide each standee back to its home hex.

@@ -404,6 +404,7 @@ export async function initCombat(doc = document) {
           : null;
         await playFastCombatDisplay({
           renderer,
+          state: tester.state,
           actorSnap, targetSnap, result: out.result,
           playBattleResultAnims: (a, t, r) =>
             _playBattleResultAnims(renderer, a, t, r, redraw),

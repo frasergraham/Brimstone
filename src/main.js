@@ -1706,7 +1706,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
                 ? BLOCK_WORD_VARIANTS[Math.floor(Math.random() * BLOCK_WORD_VARIANTS.length)]
                 : null;
               await playFastCombatDisplay({
-                renderer, actorSnap, targetSnap, result,
+                renderer, state, actorSnap, targetSnap, result,
                 playBattleResultAnims: (a, t, r) => _playBattleResultAnims(a, t, r, redrawFn),
                 speed, missText,
                 playbackDelay,

@@ -119,29 +119,31 @@ export async function run3DCombatCardHold({
   getContinueButton,
   playBattleResultAnims,
 }) {
-  // G1 — fire ally half-lunges so gang-up participants visibly join the
-  // strike before the punch freezes. Allies read from result.breakdown
-  // (set by executeBattle); ranged attacks intentionally have empty arrays.
-  // Skip allies that are the attacker/defender themselves (defensive — the
-  // ID arrays should already exclude them).
+  // G2 — position the cluster before the strike freezes: defender re-centres
+  // on its hex, the first ADVANTAGE_CAP allies per side slide to the edge they
+  // share with the defender's hex, and allies beyond the cap stay put. The
+  // attacker is excluded — the caller already kicked off its addLungeAnim via
+  // `_playAttackIntroAnim`. Allies are looked up in state by id so the helper
+  // gets accurate current hexes (mid-step moves landed already).
   const bd = result?.breakdown || {};
   const atkAllyIds = Array.isArray(bd.atkAllyIds) ? bd.atkAllyIds : [];
   const defAllyIds = Array.isArray(bd.defAllyIds) ? bd.defAllyIds : [];
-  if (typeof renderer.addAllyHalfLunge === 'function') {
-    for (const id of atkAllyIds) {
-      if (id === actorSnap.id || id === targetSnap.id) continue;
-      const ally = state?.entities?.find(e => e.id === id && e.alive);
-      if (!ally) continue;
-      renderer.addAllyHalfLunge(id, ally.col, ally.row, targetSnap.col, targetSnap.row);
-    }
-    for (const id of defAllyIds) {
-      if (id === actorSnap.id || id === targetSnap.id) continue;
-      const ally = state?.entities?.find(e => e.id === id && e.alive);
-      if (!ally) continue;
-      // Defender's allies "brace" toward the attacker — same half-distance
-      // visual but oriented to face the threat.
-      renderer.addAllyHalfLunge(id, ally.col, ally.row, actorSnap.col, actorSnap.row);
-    }
+  const lookupAlly = (id) => {
+    if (id === actorSnap.id || id === targetSnap.id) return null;
+    const ally = state?.entities?.find(e => e.id === id && e.alive);
+    return ally ? { id, col: ally.col, row: ally.row } : null;
+  };
+  if (typeof renderer.applyCombatPositioning === 'function') {
+    renderer.applyCombatPositioning(
+      {
+        defender: { id: targetSnap.id, col: targetSnap.col, row: targetSnap.row },
+        attackAllies:  atkAllyIds.map(lookupAlly).filter(Boolean),
+        defenseAllies: defAllyIds.map(lookupAlly).filter(Boolean),
+      },
+      // Cinematic uses the standard lunge duration so the cluster settles in
+      // step with the attacker's lunge.
+      { durMs: 400 },
+    );
   }
   renderer.holdPunchAtImpact?.();
 

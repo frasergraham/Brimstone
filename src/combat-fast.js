@@ -25,6 +25,9 @@ const MISS_FLASH_FG   = '#888';
 /**
  * @param {object} opts
  * @param {object} opts.renderer        Live Renderer3D instance
+ * @param {object} [opts.state]         GameState — used to look up ally entity
+ *        positions for the G2 cluster positioning. Optional for back-compat,
+ *        but without it the positioning step is skipped.
  * @param {object} opts.actorSnap       Attacker snapshot (id, col, row, owner, type, title?)
  * @param {object} opts.targetSnap      Defender snapshot (same shape)
  * @param {object} opts.result          executeBattle() result
@@ -41,10 +44,34 @@ const MISS_FLASH_FG   = '#888';
  *        a plain setTimeout.
  */
 export async function playFastCombatDisplay({
-  renderer, actorSnap, targetSnap, result,
+  renderer, state, actorSnap, targetSnap, result,
   playBattleResultAnims, speed, missText,
   playbackDelay,
 }) {
+  // G2 — same spatial choreography as cinematic (defender re-centre + allies
+  // slide to the shared edge of the defender's hex, capped at ADVANTAGE_CAP),
+  // just with a compressed duration so it lands inside the fast/vfast window.
+  // The attacker is already lunging via the caller's _playAttackIntroAnim;
+  // positioning fires for defender + allies only. Skipped on rangged battles
+  // where the breakdown has no ally arrays (executeBattle empties them).
+  if (typeof renderer.applyCombatPositioning === 'function') {
+    const bd = result?.breakdown || {};
+    const atkAllyIds = Array.isArray(bd.atkAllyIds) ? bd.atkAllyIds : [];
+    const defAllyIds = Array.isArray(bd.defAllyIds) ? bd.defAllyIds : [];
+    const lookupAlly = (id) => {
+      if (id === actorSnap.id || id === targetSnap.id) return null;
+      const ally = state?.entities?.find(e => e.id === id && e.alive);
+      return ally ? { id, col: ally.col, row: ally.row } : null;
+    };
+    renderer.applyCombatPositioning(
+      {
+        defender: { id: targetSnap.id, col: targetSnap.col, row: targetSnap.row },
+        attackAllies:  atkAllyIds.map(lookupAlly).filter(Boolean),
+        defenseAllies: defAllyIds.map(lookupAlly).filter(Boolean),
+      },
+      { durMs: speed === 'vfast' ? 200 : 400 },
+    );
+  }
   if (!result?.hit && missText) {
     renderer.addFlash(
       targetSnap.col, targetSnap.row,
