@@ -518,7 +518,12 @@ export const WEAPON_STANDIN_DIAMETER  = 2.2;  // skinny — a stand-in blade
  *  to sit astride it. MOUNTED_RIDER_LIFT raises the whole rider clone onto the
  *  horse's back. Both operator-tunable. */
 export const HORSE_PLACEHOLDER_BACK_Y = -0.55;
-export const MOUNTED_RIDER_LIFT       = 0.42;
+// World-space lift for the rider when mounted. Empirically tied to the
+// paladin's world height: lift ≈ 0.456 × TARGET_PALADIN_WORLD_HEIGHT lands
+// the (locally-scaled) horse's leg-bottoms cleanly on the ground. When the
+// paladin shrinks, the lift shrinks with it — otherwise the horse hangs in
+// the air because its (also-scaled) legs no longer reach Y=0.
+export const MOUNTED_RIDER_LIFT       = 0.456 * TARGET_PALADIN_WORLD_HEIGHT;
 
 /** Find the first bone in `skeleton.bones` whose name matches `re`. Pure;
  *  null-safe against missing skeleton / bones array. Exported for tests. */
@@ -615,11 +620,14 @@ export const STANDEE_LEADER_HEIGHT_MUL = 1.3;
 // Cone body dimensions (centred on Y axis; bottom rim wider than top to read
 // as a traditional "meeple" / board-game pawn). Bottom rim sits flush on the
 // top face of the base disc — no extra Y offset beyond the disc's thickness.
-export const STANDEE_CONE_HEIGHT          = 0.55;
-export const STANDEE_CONE_DIAMETER_BOTTOM = 0.55;
-export const STANDEE_CONE_DIAMETER_TOP    = 0.18;
+// All four dimensions scaled ×0.75 from the original (0.55/0.55/0.18/0.32)
+// so the cone+sphere pawn matches the proportionally-smaller paladin model
+// (TARGET_PALADIN_WORLD_HEIGHT also dropped to 0.69 = 0.75×0.92).
+export const STANDEE_CONE_HEIGHT          = 0.41;
+export const STANDEE_CONE_DIAMETER_BOTTOM = 0.41;
+export const STANDEE_CONE_DIAMETER_TOP    = 0.135;
 // Sphere "head" diameter — sits centred on the cone's flat top.
-export const STANDEE_SPHERE_DIAMETER      = 0.32;
+export const STANDEE_SPHERE_DIAMETER      = 0.24;
 // X-ray occlusion sweep cadence — only ray-pick every Nth frame (and only when
 // the camera or a unit actually moved). Higher = cheaper, laggier; 4 keeps the
 // outline membership feeling instant at 60fps without picking every frame.
@@ -12594,10 +12602,12 @@ export const UNIT_HEX_OUTLINE_Y = HEX_HIGHLIGHT_BAND_MIN_Y;
  *  fighting for the same pixels. */
 export const UNIT_HEX_OUTLINE_RING_R = HEX_RADIUS_WORLD * 0.88;
 
-/** Tube radius of the always-on thin outline. */
-export const UNIT_HEX_OUTLINE_THIN_TUBE  = 0.025;
-/** Tube radius of the thicker outline shown on the selected unit. */
-export const UNIT_HEX_OUTLINE_THICK_TUBE = 0.06;
+/** Tube radius of the always-on thin outline. Halved (0.025→0.012) per
+ *  operator so the ring reads as a thin pencil line, not a marker stroke. */
+export const UNIT_HEX_OUTLINE_THIN_TUBE  = 0.012;
+/** Tube radius of the thicker outline shown on the selected unit. Halved
+ *  alongside the thin tube to keep proportional. */
+export const UNIT_HEX_OUTLINE_THICK_TUBE = 0.03;
 
 /** Emissive cap (× diffuse) for the always-on thin outline material. Low
  *  enough that the ring reads as a tinted line, not a self-lit halo. */
@@ -15400,7 +15410,7 @@ export const HIGHLIGHT_DISC_Y      = yForLayer('highlight-disc', 0);
  *  source rgba alpha (which can be as low as 0.14 in ui.js for ally hexes, or
  *  as high as 0.85 for the default movement target) with this constant so the
  *  ring's translucency is consistent regardless of the caller's colour string. */
-export const HIGHLIGHT_OVERLAY_ALPHA = 0.5;
+export const HIGHLIGHT_OVERLAY_ALPHA = 0.3;
 /** @deprecated retained for tests that import the old name — same value as
  *  HIGHLIGHT_OVERLAY_ALPHA, semantics changed from "clamp floor" to
  *  "applied alpha". */

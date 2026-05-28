@@ -61,9 +61,10 @@ describe('Renderer3D highlight overlay — Y ordering with margin', () => {
 
 describe('Renderer3D highlight overlay — applied alpha', () => {
   test('HIGHLIGHT_OVERLAY_ALPHA reads as translucent overlay, not solid sticker', () => {
-    // Operator-tuned to 0.5 — half-opacity reads as a clearly translucent ring.
-    assert.ok(HIGHLIGHT_OVERLAY_ALPHA >= 0.4 && HIGHLIGHT_OVERLAY_ALPHA <= 0.7,
-      `HIGHLIGHT_OVERLAY_ALPHA ${HIGHLIGHT_OVERLAY_ALPHA} out of overlay band [0.4, 0.7]`);
+    // Operator-tuned to 0.3 — light touch so the ring reads as guidance,
+    // not a sticker; the terrain underneath is barely tinted.
+    assert.ok(HIGHLIGHT_OVERLAY_ALPHA >= 0.2 && HIGHLIGHT_OVERLAY_ALPHA <= 0.7,
+      `HIGHLIGHT_OVERLAY_ALPHA ${HIGHLIGHT_OVERLAY_ALPHA} out of overlay band [0.2, 0.7]`);
   });
 
   test('HIGHLIGHT_MIN_ALPHA aliases the overlay alpha (semantics changed)', () => {

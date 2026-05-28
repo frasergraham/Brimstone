@@ -1734,6 +1734,24 @@ body.renderer-3d #fps-counter { display: block; }
   user-select: none;
 }
 body.renderer-3d #poly-counter { display: block; }
+#cam-counter {
+  position: absolute;
+  top: 56px;
+  right: 8px;
+  z-index: 10;
+  display: none;
+  padding: 3px 7px;
+  background: rgba(20, 14, 30, 0.72);
+  border: 1px solid rgba(180, 150, 80, 0.35);
+  border-radius: 4px;
+  color: #fff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.2;
+  pointer-events: none;
+  user-select: none;
+}
+body.renderer-3d #cam-counter { display: block; }
 
 /* ── Chronicle sidebar (left-edge collapsible panel mirroring the plan panel) ── */
 
