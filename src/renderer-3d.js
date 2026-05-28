@@ -11759,11 +11759,15 @@ export class Renderer3D {
       }
 
       // ── Outer-edge identifier outline ──────────────────────────────────
-      // Only the OUTSIDE perimeter of the multi-hex node — edges shared with
-      // another node hex are internal and skipped (operator: "only the
-      // outside edges, not the internal borders"). Dedup by canonical
-      // world-space edge key: every internal edge appears in TWO node hexes'
-      // perimeter lists → count==2 → skipped; outer edges appear once.
+      // Only the OUTSIDE perimeter of the multi-hex node — edges whose
+      // other side is ALSO a node hex are internal and skipped (operator:
+      // "the edges that are touching"). The check is logical, not by world
+      // coordinates: the identifier-ring radius (1.04) pushes corners
+      // OUTWARD past the actual hex boundary, so two adjacent hexes' rim
+      // corners DO NOT coincide in world space — coord-dedup misses every
+      // internal edge. Instead, for each edge step √3 from the hex centre
+      // along the edge's outward direction and look up the resulting hex
+      // via worldToHex; if it belongs to the node set, that edge is shared.
       const idCss = nodeIdentifyingColor(obj);
       const [ir, ig, ib] = cssHexToRgb01(idCss);
       // Per-node material so the alpha can pulse independently of other
@@ -11777,53 +11781,50 @@ export class Renderer3D {
       nodeOutlineMat.alpha         = NODE_OUTLINE_PULSE_MIN;
       this._nodeOutlinePulseMats.push(nodeOutlineMat);
 
-      const edgeMap = new Map(); // canonical key → { ax, az, bx, bz, count, hex }
+      const nodeSet = new Set(obj.hexes.map(hh => hexKey(hh.col, hh.row)));
+      const Y = 0.028;
+      const SQRT3_ = Math.sqrt(3);
       for (const h of obj.hexes) {
         const { x, z } = hexToWorld(h.col, h.row);
-        // Six perimeter corners on the identifier-ring radius.
+        // Identifier-ring perimeter corners — six points at the ring radius.
         const corners = [];
         for (let j = 0; j < 6; j++) {
-          const a = Math.PI / 6 + j * Math.PI / 3;
+          const ca = Math.PI / 6 + j * Math.PI / 3;
           corners.push({
-            x: x + NODE_IDENTIFIER_RING_RADIUS * Math.cos(a),
-            z: z + NODE_IDENTIFIER_RING_RADIUS * Math.sin(a),
+            x: x + NODE_IDENTIFIER_RING_RADIUS * Math.cos(ca),
+            z: z + NODE_IDENTIFIER_RING_RADIUS * Math.sin(ca),
           });
         }
         for (let i = 0; i < 6; i++) {
+          // Edge i runs from corner i to corner (i+1)%6 and faces direction
+          // angle (i+1) * π/3 outward from the hex centre. The neighbour
+          // hex centre sits √3 (centre-to-centre) along that direction.
+          const dirA  = (i + 1) * Math.PI / 3;
+          const nx    = x + SQRT3_ * Math.cos(dirA);
+          const nz    = z + SQRT3_ * Math.sin(dirA);
+          const { col: ncol, row: nrow } = worldToHex(nx, nz);
+          if (nodeSet.has(hexKey(ncol, nrow))) continue; // internal — skip
           const a = corners[i], b = corners[(i + 1) % 6];
-          const ka = `${a.x.toFixed(4)},${a.z.toFixed(4)}`;
-          const kb = `${b.x.toFixed(4)},${b.z.toFixed(4)}`;
-          const key = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
-          const existing = edgeMap.get(key);
-          if (existing) existing.count++;
-          else edgeMap.set(key, { a, b, count: 1, hex: h });
+          const tube = BABYLON.MeshBuilder.CreateTube(
+            `node_edge_${obj.label.replace(/\W+/g, '_')}_${h.col}_${h.row}_${i}`,
+            {
+              path: [
+                new BABYLON.Vector3(a.x, Y, a.z),
+                new BABYLON.Vector3(b.x, Y, b.z),
+              ],
+              radius: NODE_IDENTIFIER_RING_TUBE,
+              tessellation: 6,
+              sideOrientation: BABYLON.Mesh.DOUBLESIDE,
+            },
+            this._scene,
+          );
+          tube.parent     = this._mapRoot;
+          tube.isPickable = false;
+          tube.material   = nodeOutlineMat;
+          const tkey = hexKey(h.col, h.row);
+          this._tilePropsByKey.get(tkey).push(tube);
+          if (this._fogActiveSet.has(tkey)) tube.isVisible = false;
         }
-      }
-
-      const Y = 0.028;
-      for (const edge of edgeMap.values()) {
-        if (edge.count !== 1) continue; // internal — skip
-        const tube = BABYLON.MeshBuilder.CreateTube(
-          `node_edge_${obj.label.replace(/\W+/g, '_')}`,
-          {
-            path: [
-              new BABYLON.Vector3(edge.a.x, Y, edge.a.z),
-              new BABYLON.Vector3(edge.b.x, Y, edge.b.z),
-            ],
-            radius: NODE_IDENTIFIER_RING_TUBE,
-            tessellation: 6,
-            sideOrientation: BABYLON.Mesh.DOUBLESIDE,
-          },
-          this._scene,
-        );
-        tube.parent     = this._mapRoot;
-        tube.isPickable = false;
-        tube.material   = nodeOutlineMat;
-        // Fog visibility tracks the hex this edge belongs to (one of the two
-        // bordering hexes is in the node; that's `edge.hex`).
-        const tkey = hexKey(edge.hex.col, edge.hex.row);
-        this._tilePropsByKey.get(tkey).push(tube);
-        if (this._fogActiveSet.has(tkey)) tube.isVisible = false;
       }
     }
     // Build the matching 10%-alpha tint disc + one floating name label per
