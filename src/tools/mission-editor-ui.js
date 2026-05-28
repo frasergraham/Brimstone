@@ -235,12 +235,19 @@ function buildState(editor, layers = null) {
  * #e-palette) already present in the page.
  *
  * @param {Document} [doc] - document root (defaults to global document).
+ * @param {object}   [initOpts]
+ * @param {{source:'bundled'|'wip', id:string}|null} [initOpts.initialLoad] —
+ *   E7: skip the onload modal and load this bundled mission / WIP draft
+ *   directly. `null` (the default) shows the unified File→New modal instead.
  * @returns {{ pause: () => void, resume: () => void, editor: object,
  *             buildState: () => object,
  *             loadMissionFile: (file:File) => Promise<{ok:boolean,message:string}>,
- *             saveMission: () => {ok:boolean,message:string} }}
+ *             saveMission: () => {ok:boolean,message:string},
+ *             resumeWipById: (id:string) => {ok:boolean,message:string},
+ *             onMissionChange: (fn:(info:object)=>void) => void }}
  */
-export function initEditor(doc = document) {
+export function initEditor(doc = document, initOpts = {}) {
+  const { initialLoad = null } = initOpts;
   const canvas = doc.getElementById('e-render-canvas');
   const palette = doc.getElementById('e-palette');
   // EC: the main-area timeline tab. The canvas pane and this pane are the two
@@ -266,6 +273,16 @@ export function initEditor(doc = document) {
   let historyListener = null;
   const notifyHistory = () => {
     historyListener?.({ canUndo: editor.canUndo(), canRedo: editor.canRedo() });
+  };
+
+  // E7 — mission-change listener so the host page can sync URL params
+  // (?mission=<id> / ?wip=<id>) with whatever the editor just loaded or created.
+  // Fired AFTER every successful load/create. `info.source` is one of:
+  //   'bundled' (loadMissionById), 'disk' (loadMissionFile), 'wip' (resume),
+  //   'new'     (createNew via the modal).
+  let missionChangeListener = null;
+  const notifyMissionChange = (info) => {
+    try { missionChangeListener?.(info); } catch { /* host listener errors must never break the editor */ }
   };
 
   // The controller drives the model; `render()` rebuilds + redraws. (Dirty
@@ -742,6 +759,7 @@ export function initEditor(doc = document) {
         try {
           const parsed = JSON.parse(String(reader.result));
           applyParsedMission(parsed);
+          notifyMissionChange({ source: 'disk', id: parsed.id ?? null });
           resolve({ ok: true, message: `Loaded "${parsed.id}".` });
         } catch (err) {
           // Validation / parse failure: do NOT clobber the current model.
@@ -763,10 +781,29 @@ export function initEditor(doc = document) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const parsed = await res.json();
       applyParsedMission(parsed);
+      notifyMissionChange({ source: 'bundled', id });
       return { ok: true, message: `Loaded "${parsed.id}".` };
     } catch (err) {
       // Fetch / parse / validation failure: do NOT clobber the current model.
       return { ok: false, message: `Load failed: ${err.message}` };
+    }
+  }
+
+  // E7 — restore an in-progress draft by id (mirrors the launch picker's
+  // onPick). Exposed so a URL like `?tool=editor&wip=foo` can resume directly
+  // without bouncing through the modal. Same corruption semantics as the
+  // picker: a bad draft is dropped, not surfaced as a crash.
+  function resumeWipById(id) {
+    if (!storage) return { ok: false, message: 'No localStorage available.' };
+    const e = loadWip(storage, id);
+    if (!e) { removeWip(storage, id); return { ok: false, message: `No draft "${id}".` }; }
+    try {
+      installMission(e.mission);
+      notifyMissionChange({ source: 'wip', wipId: id, id: e.mission?.id ?? null });
+      return { ok: true, message: `Resumed draft "${e.name}".` };
+    } catch (err) {
+      removeWip(storage, id);
+      return { ok: false, message: `Could not resume draft: ${err.message}` };
     }
   }
 
@@ -782,13 +819,16 @@ export function initEditor(doc = document) {
     return { ok: true, message: `Validated — downloaded ${json.id}.json` };
   }
 
-  // ── New… — the creation flow (item 4). Pick a LOCKED mode + size, confirm if
-  // there's unsaved work, then install the freshly-created map. ──────────────
+  // ── New… — the creation flow (item 4 + E1). Pick a LOCKED mode + size,
+  // confirm if there's unsaved work, then install the freshly-created map.
+  // E1: the dialog also exposes secondary actions (Resume WIP / Load from
+  // disk) so the user can switch tracks without bouncing through the File
+  // menu. The same modal is shown on editor onload (see openOnloadDialog).
   function newMission() {
     if (editor.isDirty() && !(doc.defaultView ?? globalThis).confirm?.('Discard the current mission and start a new one?')) {
       return { ok: false, message: 'New mission cancelled.' };
     }
-    openCreationDialog(doc, (opts) => {
+    openModalWithSecondaryActions((opts) => {
       editor.createNew(opts);
       toast.dismissAll(); // clear stale toasts when starting fresh (carried nit)
       rebuildMapPalette();
@@ -797,8 +837,37 @@ export function initEditor(doc = document) {
       resetViewAndDraw();
       editor.markClean(); // a fresh mission starts clean
       notifyHistory();
+      notifyMissionChange({ source: 'new', id: null });
     });
     return { ok: true, message: '' };
+  }
+
+  // Shared helper: open the creation dialog with the standard secondary
+  // actions wired (Resume WIP / Load from disk). Used by both newMission()
+  // and the onload flow so they share one modal.
+  function openModalWithSecondaryActions(onCreate) {
+    const entries = storage ? listWip(storage) : [];
+    return openCreationDialog(doc, onCreate, {
+      hasWip: entries.length > 0,
+      onResumeWip: openLaunchPicker,
+      onLoadDisk: openDiskFilePicker,
+    });
+  }
+
+  // A transient hidden <input type=file> for the "Load from disk" path.
+  // Reused by both the onload dialog and the legacy launch picker so the
+  // success message routes through the toast host either way.
+  function openDiskFilePicker() {
+    const inp = doc.createElement('input');
+    inp.type = 'file';
+    inp.accept = '.json,application/json';
+    inp.addEventListener('change', async () => {
+      const f = inp.files && inp.files[0];
+      if (!f) return;
+      const res = await loadMissionFile(f);
+      toast.show(res.message, { type: res.ok ? 'ok' : 'err' });
+    });
+    inp.click();
   }
 
   // ── Undo / Redo (item 5) — driven from the host page's top bar. editor.undo /
@@ -828,6 +897,7 @@ export function initEditor(doc = document) {
         if (!e) { toast.show('That draft could not be loaded.', { type: 'err' }); removeWip(storage, id); return; }
         try {
           installMission(e.mission);
+          notifyMissionChange({ source: 'wip', wipId: id, id: e.mission?.id ?? null });
           toast.show(`Resumed draft "${e.name}".`, { type: 'ok' });
         } catch (err) {
           toast.show(`Could not resume draft: ${err.message}`, { type: 'err' });
@@ -836,19 +906,8 @@ export function initEditor(doc = document) {
       },
       // [+] New keeps the blank default the editor already booted with.
       onNew: () => { toast.dismissAll(); },
-      // Load from disk: a transient picker routed through the existing load path.
-      onLoadDisk: () => {
-        const inp = doc.createElement('input');
-        inp.type = 'file';
-        inp.accept = '.json,application/json';
-        inp.addEventListener('change', async () => {
-          const f = inp.files && inp.files[0];
-          if (!f) return;
-          const res = await loadMissionFile(f);
-          toast.show(res.message, { type: res.ok ? 'ok' : 'err' });
-        });
-        inp.click();
-      },
+      // Load from disk: shared transient input — message routed via toast.
+      onLoadDisk: openDiskFilePicker,
     });
   }
 
@@ -857,7 +916,43 @@ export function initEditor(doc = document) {
   renderer.resize();
   draw();
   editor.markClean();
-  openLaunchPicker();
+
+  // E1 / E7 — on first open, show the unified File→New modal (same one that
+  // File ▸ New… pops). If the host requested an initialLoad via URL params,
+  // skip the modal and route straight to that load instead. The load may be
+  // async (bundled missions are fetched); we kick it off best-effort and don't
+  // block initEditor on it — load failures fall back to the modal.
+  if (initialLoad && initialLoad.source === 'bundled' && initialLoad.id) {
+    Promise.resolve(loadMissionById(initialLoad.id)).then((res) => {
+      if (!res.ok) {
+        toast.show(res.message, { type: 'err' });
+        openModalWithSecondaryActions((opts) => onCreateFromModal(opts));
+      }
+    });
+  } else if (initialLoad && initialLoad.source === 'wip' && initialLoad.id) {
+    const res = resumeWipById(initialLoad.id);
+    if (!res.ok) {
+      toast.show(res.message, { type: 'err' });
+      openModalWithSecondaryActions((opts) => onCreateFromModal(opts));
+    }
+  } else {
+    openModalWithSecondaryActions((opts) => onCreateFromModal(opts));
+  }
+
+  // Shared "Create" handler for the unified modal — mirrors newMission()'s
+  // post-create refresh, but without the "discard unsaved?" prompt (the modal
+  // is the user's first action).
+  function onCreateFromModal(opts) {
+    editor.createNew(opts);
+    toast.dismissAll();
+    rebuildMapPalette();
+    rebuildForms();
+    rebuildLayers();
+    resetViewAndDraw();
+    editor.markClean();
+    notifyHistory();
+    notifyMissionChange({ source: 'new', id: null });
+  }
 
   return {
     editor,
@@ -865,6 +960,7 @@ export function initEditor(doc = document) {
     newMission,
     loadMissionFile,
     loadMissionById,
+    resumeWipById,
     saveMission,
     /** Re-open the WIP launch picker (also shown automatically on init). */
     openLaunchPicker,
@@ -876,6 +972,11 @@ export function initEditor(doc = document) {
     isDirty: () => editor.isDirty(),
     /** Register a listener fired on every history change with { canUndo, canRedo }. */
     onHistoryChange(fn) { historyListener = fn; notifyHistory(); },
+    /**
+     * E7 — register a listener fired AFTER every successful mission
+     * load/create. info: { source: 'bundled'|'disk'|'wip'|'new', id?, wipId? }.
+     */
+    onMissionChange(fn) { missionChangeListener = fn; },
     // 2D Renderer has no render loop. But the 3D preview owns a live Babylon
     // engine; tear it down (and hide the overlay) when the tab is switched away
     // so a hidden tab never leaves an engine spinning.
@@ -1261,14 +1362,36 @@ function buildMapPalette(doc, root, editor, rerender, onPreview3D, hooks = {}) {
     // Overlay: seed + named size selector (generateMap is discrete, so resizing
     // an overlay map means switching its generation size — out-of-bounds edits
     // are then dropped). Changing size reframes + rebuilds the palette.
+    // E5 — Seed field paired with a "New Seed" die button. The die picks a
+    // fresh random integer in the same range generateMap accepts, drops it into
+    // the input, and snapshots through editor.setSeed so the change is undoable.
+    // The next render uses the new seed (procedural maps regen from it on every
+    // build), so no separate regenerate call is needed.
     const seedRow = doc.createElement('div');
     seedRow.className = 'e-row';
+    const seedInputWrap = doc.createElement('div');
+    seedInputWrap.className = 'e-seed-wrap';
+    seedInputWrap.style.display = 'flex';
+    seedInputWrap.style.gap = '4px';
     const seedInput = doc.createElement('input');
     seedInput.type = 'number';
     seedInput.value = String(mapDef.seed ?? 12345);
     seedInput.title = 'Procedural generation seed — same seed reproduces the same base map';
+    seedInput.style.flex = '1';
     seedInput.addEventListener('change', () => editor.setSeed(parseInt(seedInput.value, 10) || 0));
-    seedRow.append(labelFor(doc, 'Seed'), seedInput);
+    const seedDie = doc.createElement('button');
+    seedDie.type = 'button';
+    seedDie.className = 'e-small';
+    seedDie.textContent = '🎲';
+    seedDie.title = 'New random seed — picks a fresh procedural base';
+    seedDie.setAttribute('aria-label', 'New random seed');
+    seedDie.addEventListener('click', () => {
+      const fresh = randomSeed();
+      seedInput.value = String(fresh);
+      editor.setSeed(fresh);
+    });
+    seedInputWrap.append(seedInput, seedDie);
+    seedRow.append(labelFor(doc, 'Seed'), seedInputWrap);
     mapSection.append(seedRow);
 
     mapSection.append(labeledSelect(doc, 'Gen Size',
@@ -1719,12 +1842,21 @@ export function formatWipTime(ts, now = Date.now()) {
   try { return new Date(ts).toLocaleDateString(); } catch { return `${day}d ago`; }
 }
 
-// ── New-mission creation dialog (item 4) ───────────────────────────────────────
+// ── New-mission creation dialog (item 4 + E1) ─────────────────────────────────
 // A small modal overlay over the editor panel: pick a LOCKED map mode (Blank /
 // Baked Generated / Overlay) + size (and seed for the generated modes), then
 // Create. `onCreate(opts)` receives the buildCreationMapDef options. The mode is
 // fixed by this choice — there is no mid-edit toggle afterwards.
-function openCreationDialog(doc, onCreate) {
+//
+// E1: also used as the editor's onload modal — the previous "launch picker"
+// (resume WIP / load from disk) collapses into this same dialog via optional
+// secondary buttons. The host wires `onResumeWip` (only shown when there are
+// drafts to resume) + `onLoadDisk`. They close the dialog and hand off to the
+// existing pickers.
+//
+// Exported so unit tests can drive it with a fake document.
+export function openCreationDialog(doc, onCreate, opts = {}) {
+  const { onResumeWip, onLoadDisk, hasWip = false } = opts;
   const panel = doc.getElementById('editor-panel') ?? doc.body;
   const overlay = doc.createElement('div');
   overlay.className = 'e-modal';
@@ -1828,12 +1960,31 @@ function openCreationDialog(doc, onCreate) {
   btns.append(cancel, create);
   dlg.append(btns);
 
+  // E1 — secondary actions (Resume WIP / Load from disk). Rendered as a second
+  // button row so they're clearly separated from the primary mode-pick flow.
+  if (onResumeWip || onLoadDisk) {
+    const altBtns = doc.createElement('div');
+    altBtns.className = 'e-modal-btns e-modal-alt-btns';
+    if (onResumeWip && hasWip) {
+      const resume = actionBtn(doc, 'Resume WIP…', () => { close(); onResumeWip(); },
+        'Pick up an in-progress draft from this browser');
+      altBtns.append(resume);
+    }
+    if (onLoadDisk) {
+      const disk = actionBtn(doc, 'Load from disk…', () => { close(); onLoadDisk(); },
+        'Load a mission JSON file from disk');
+      altBtns.append(disk);
+    }
+    if (altBtns.children.length > 0) dlg.append(altBtns);
+  }
+
   overlay.append(dlg);
   // Click on the dim backdrop (not the box) cancels.
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
   panel.append(overlay);
 
   function close() { overlay.remove(); }
+  return { overlay, close };
 }
 
 function numInput(doc, value) {
@@ -2294,4 +2445,11 @@ function actionBtn(doc, text, onClick, title) {
   if (title) b.title = title; // item 2 — optional descriptive tooltip
   b.addEventListener('click', onClick);
   return b;
+}
+
+// E5 — fresh procedural seed. Positive 31-bit int (generateMap hashes via
+// rng(), so the exact range isn't critical, but staying in a single signed
+// int keeps it stable across JSON round-trips and human-readable).
+export function randomSeed() {
+  return Math.floor(Math.random() * 0x7fffffff);
 }

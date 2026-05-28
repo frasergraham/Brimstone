@@ -398,6 +398,17 @@
     #editor-panel .e-modal-box h3 { margin: 0 0 10px 0; font-size: 12px; color: #c4a04a; letter-spacing: 1.5px; text-transform: uppercase; }
     #editor-panel .e-modal-btns { display: flex; gap: 8px; margin-top: 14px; }
     #editor-panel .e-modal-btns .e-action { margin: 0; }
+    /* E1 — secondary actions row (Resume WIP / Load from disk) sits below the
+       primary Cancel/Create row, dimmed slightly so the primary flow stays
+       visually dominant. */
+    #editor-panel .e-modal-alt-btns {
+      margin-top: 10px; padding-top: 10px;
+      border-top: 1px solid #2c2620;
+    }
+    #editor-panel .e-modal-alt-btns .e-action {
+      background: #2a241c; color: #d4cba0; border-color: #443a2a;
+    }
+    #editor-panel .e-modal-alt-btns .e-action:hover { background: #3a3022; color: #ffd680; }
     /* Launch picker (WIP resume) */
     #editor-panel .e-launch-list { display: flex; flex-direction: column; gap: 4px; max-height: 280px; overflow-y: auto; }
     #editor-panel .e-launch-sub { font-size: 10px; color: #a08858; letter-spacing: 1px; text-transform: uppercase; margin: 2px 0 4px; }
@@ -632,6 +643,9 @@
     // Bundled-mission catalog for the File ▸ "Load existing mission…" picker.
     // Dependency-free shared list (also imported by campaign-registry.js).
     import { MIGRATED_MISSIONS } from '/src/campaign/mission-catalog.js';
+    // E7 — URL-state helpers: keep ?tool / ?mission / ?wip in sync with what's
+    // actually selected/loaded so links and reloads round-trip.
+    import { parseToolParams, withToolParams, KNOWN_TOOLS } from '/src/tools/url-state.js';
 
     // ════════════════════════════════════════════════════════════════════
     //  ASSETS TAB  (ported from admin-assets.html; ids prefixed `a-`)
@@ -1309,15 +1323,55 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
       } else if (id === 'lighting') {
         initPromises.lighting = initLighting().then((h) => { handles.lighting = h; return h; });
       } else if (id === 'editor') {
-        handles.editor = initEditor();
+        // E7 — pass any URL-supplied mission/wip id so initEditor can skip the
+        // creation modal and load directly. Only honoured on the FIRST boot
+        // (createTabController only fires onFirstActivate once per tab).
+        const urlParams = parseToolParams(location.search);
+        const initialLoad = urlParams.wip ? { source: 'wip', id: urlParams.wip }
+                          : urlParams.mission ? { source: 'bundled', id: urlParams.mission }
+                          : null;
+        handles.editor = initEditor(document, { initialLoad });
         // Drive the top-bar Undo/Redo enabled-state off the editor's history.
         handles.editor.onHistoryChange?.(refreshHistoryButtons);
+        // E7 — every load/create updates the URL so reloading recovers state.
+        handles.editor.onMissionChange?.(onMissionChange);
+      }
+    }
+
+    // E7 — apply a `{tool?, mission?, wip?}` patch to the current URL via
+    // history.replaceState. Null values delete the key; undefined leaves it.
+    // Uses replaceState so navigation history isn't littered.
+    function updateUrlParams(patch) {
+      const next = withToolParams(location.search, patch);
+      // Preserve hash (#fragment) — URLSearchParams doesn't carry it.
+      const url = `${location.pathname}${next}${location.hash || ''}`;
+      try { history.replaceState(null, '', url); } catch { /* same-origin guard or sandboxed iframe */ }
+    }
+
+    function onMissionChange(info) {
+      // info: { source: 'bundled'|'disk'|'wip'|'new', id?, wipId? }
+      // 'bundled' → ?mission=<id> (catalog id); clear ?wip
+      // 'wip'     → ?wip=<id>;   clear ?mission
+      // 'disk'    → user loaded a JSON from disk; no shareable id — clear both
+      // 'new'     → fresh blank/baked/overlay map — clear both
+      if (!info) return;
+      if (info.source === 'bundled' && info.id) {
+        updateUrlParams({ mission: info.id, wip: null });
+      } else if (info.source === 'wip' && info.wipId) {
+        updateUrlParams({ wip: info.wipId, mission: null });
+      } else {
+        updateUrlParams({ mission: null, wip: null });
       }
     }
 
     const TAB_LABELS = { assets: 'Assets', lighting: 'Lighting', editor: 'Mission Editor' };
 
     function showPanel(id) {
+      // E7 — keep ?tool=<id> in sync with the active tab. Switching off the
+      // editor also drops any mission/wip params (those are editor-scoped).
+      const patch = { tool: id };
+      if (id !== 'editor') { patch.mission = null; patch.wip = null; }
+      updateUrlParams(patch);
       for (const tab of TABS) {
         const panel = document.getElementById(`${tab}-panel`);
         if (panel) panel.classList.toggle('active', tab === id);
@@ -1479,9 +1533,11 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
       }
     });
 
-    // Boot the default tab (Assets) — its scene comes up on load, the other two
-    // stay dormant until their tab is first opened.
-    controller.activate('assets');
+    // Boot the URL-requested tab if any (?tool=editor / lighting / assets);
+    // otherwise fall back to Assets. The others stay dormant until their tab is
+    // first opened.
+    const bootParams = parseToolParams(location.search);
+    controller.activate(bootParams.tool && KNOWN_TOOLS.includes(bootParams.tool) ? bootParams.tool : 'assets');
   </script>
 </body>
 </html>
