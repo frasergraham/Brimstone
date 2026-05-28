@@ -1826,6 +1826,18 @@ export class Renderer3D {
     this._buildingLabelsByKey  = new Map(); // hexKey → { plane, mat, tex }
     this._fogMaterialCache = new Map();  // base hex color → darker StandardMaterial
     this._fogActiveSet     = new Set();  // hexKeys currently rendered as fogged
+    // Renderer-level fog DISPLAY override, cycled with the `T` hotkey for
+    // debugging. Independent of the game's actual fogOfWar state — see
+    // `_applyFogVeil` / `nextFogDebugMode`. One of:
+    //   'normal' → veil per game state + observer (default; no divergence)
+    //   'off'    → suppress the veil entirely (everything visible)
+    //   'full'   → treat ALL hexes as fogged (whole map darkened)
+    //   'debug'  → normal veil PLUS a billboarded "F" over every fogged hex
+    this._fogDebugMode    = 'normal';
+    // "F" markers spawned in debug mode, keyed by hexKey → { plane, mat, tex }.
+    // Diffed against the fogged set each veil pass; disposed on map rebuild and
+    // when leaving debug mode.
+    this._fogDebugMarkers = new Map();
     // Power-node glow meshes: { obj, disc, col, row, glowColor } per node hex.
     this._nodeGlowMeshes   = [];
     this._nodeGlowBuilt    = false;
@@ -5059,6 +5071,9 @@ export class Renderer3D {
           } else if (e.key === 'f' || e.key === 'F') {
             e.preventDefault();
             this._toggleBorderForest();
+          } else if (e.key === 't' || e.key === 'T') {
+            e.preventDefault();
+            this._cycleFogDebugMode();
           }
         });
       }
@@ -5084,6 +5099,20 @@ export class Renderer3D {
     this._borderForestHidden = !this._borderForestHidden;
     this._syncBorderForestVisibility();
     console.log(`[Renderer3D] border forest ${this._borderForestHidden ? 'hidden' : 'visible'}`);
+  }
+
+  /** Cycle the renderer-level fog DISPLAY override (normal → off → full →
+   *  debug → normal) and re-apply the veil. Bound to the `T` hotkey. This is a
+   *  pure display override that does NOT touch the game's `fogOfWar` state — it
+   *  only changes which hexes the renderer veils/darkens. The `debug` mode adds
+   *  a billboarded "F" over every fogged hex so the operator can SEE exactly
+   *  which hexes the renderer considers hidden. */
+  _cycleFogDebugMode() {
+    this._fogDebugMode = nextFogDebugMode(this._fogDebugMode);
+    console.log(`[Renderer3D] fog display mode → ${this._fogDebugMode}`);
+    // Re-apply the veil so the new override takes effect immediately. The veil
+    // pass also (re)builds or clears the debug "F" markers based on the mode.
+    this._applyFogVeil();
   }
 
   /** Lazy-load the Babylon Inspector ESM bundle (pinned to the same version as
@@ -11401,18 +11430,36 @@ export class Renderer3D {
     const state = this.state;
     const fogActive = state?.fogOfWar && state.fogOfWar !== 'none';
     const observerOwner = this._observerOwner();
+    const allKeys = [...this._tileMeshByKey.keys()];
 
-    let target;
+    // Real fogged set per game state + observer (the `normal`/`debug` source of
+    // truth, independent of the display override).
+    let realFogged;
     if (!fogActive || !observerOwner) {
-      target = null; // nothing fogged — unfog everything
+      realFogged = new Set(); // nothing fogged — unfog everything
     } else {
-      target = this._buildFogVisibleHexes(observerOwner);
+      const visible = this._buildFogVisibleHexes(observerOwner);
+      realFogged = new Set();
+      for (const k of allKeys) if (!visible.has(k)) realFogged.add(k);
+    }
+
+    // Apply the renderer-level display override (T-key): off→none, full→all,
+    // normal/debug→the real computed set.
+    const fogged = foggedSetForMode(this._fogDebugMode, realFogged, allKeys);
+
+    // Visible-set view consumed by `shouldRenderEntityAt` below: null means
+    // "nothing fogged" (matches the legacy no-fog path), otherwise the set of
+    // visible hex keys (complement of `fogged`).
+    let target = null;
+    if (fogged.size > 0) {
+      target = new Set();
+      for (const k of allKeys) if (!fogged.has(k)) target.add(k);
     }
 
     // Diff against the currently-fogged set: clear any previously-fogged tile
     // that is now visible, then fog any tile that should now be dark.
     for (const [k, mesh] of this._tileMeshByKey) {
-      const shouldBeFogged = target ? !target.has(k) : false;
+      const shouldBeFogged = fogged.has(k);
       const isFogged = this._fogActiveSet.has(k);
       if (shouldBeFogged && !isFogged) {
         this._setTileFogged(k, mesh, true);
@@ -11460,6 +11507,101 @@ export class Renderer3D {
         }
       }
     }
+
+    // Debug overlay: in `debug` mode paint a billboarded "F" over every fogged
+    // hex; in every other mode the overlay is cleared. The sync diffs against
+    // the current marker registry so it rebuilds naturally when the fogged set
+    // changes between passes.
+    if (this._fogDebugMode === 'debug') this._syncFogDebugMarkers(fogged);
+    else this._clearFogDebugMarkers();
+  }
+
+  /** Diff the debug "F"-marker registry against the given fogged-hex set:
+   *  spawn a marker for every newly-fogged hex, dispose markers whose hex is no
+   *  longer fogged. Each marker is a billboarded DynamicTexture plane on
+   *  renderingGroupId 2 (above world geometry) so it reads over terrain/props.
+   *  No-op in headless / node-test (no DOM). */
+  _syncFogDebugMarkers(fogged) {
+    if (!this._scene || !this._babylon || typeof document === 'undefined') return;
+    // Dispose markers no longer fogged.
+    for (const [k, m] of this._fogDebugMarkers) {
+      if (!fogged.has(k)) {
+        this._disposeFogDebugMarker(m);
+        this._fogDebugMarkers.delete(k);
+      }
+    }
+    // Spawn markers for newly-fogged hexes.
+    for (const k of fogged) {
+      if (this._fogDebugMarkers.has(k)) continue;
+      const marker = this._buildFogDebugMarker(k);
+      if (marker) this._fogDebugMarkers.set(k, marker);
+    }
+  }
+
+  /** Build one billboarded "F" marker over the given hex key. Mirrors the
+   *  node-label painter (own DynamicTexture + StandardMaterial, never shared)
+   *  so disposing it tears down both. Returns null when DOM is unavailable. */
+  _buildFogDebugMarker(hexK) {
+    const BABYLON = this._babylon;
+    const scene = this._scene;
+    if (!BABYLON || !scene || typeof document === 'undefined') return null;
+    const [col, row] = hexK.split(',').map(Number);
+    if (!Number.isFinite(col) || !Number.isFinite(row)) return null;
+
+    const tex = new BABYLON.DynamicTexture(
+      `fogDebugTex_${hexK}`,
+      { width: 128, height: 128 },
+      scene,
+      false,
+    );
+    tex.hasAlpha = true;
+    const ctx = tex.getContext();
+    ctx.clearRect(0, 0, 128, 128);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold 96px Georgia, serif';
+    ctx.fillStyle = 'rgba(0,0,0,0.85)';
+    ctx.fillText('F', 64 + 3, 64 + 3);
+    ctx.fillStyle = '#ff3b3b';
+    ctx.fillText('F', 64, 64);
+    tex.update();
+
+    const mat = new BABYLON.StandardMaterial(`fogDebugMat_${hexK}`, scene);
+    mat.diffuseTexture = tex;
+    mat.opacityTexture = tex;
+    mat.useAlphaFromDiffuseTexture = true;
+    mat.specularColor = new BABYLON.Color3(0, 0, 0);
+    mat.emissiveColor = new BABYLON.Color3(1, 1, 1);
+    mat.backFaceCulling = false;
+
+    const plane = BABYLON.MeshBuilder.CreatePlane(
+      `fogDebug_${hexK}`,
+      { width: 0.9, height: 0.9 },
+      scene,
+    );
+    if (this._mapRoot) plane.parent = this._mapRoot;
+    plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+    plane.isPickable = false;
+    plane.renderingGroupId = 2; // above world geometry + standees
+    const w = hexToWorld(col, row);
+    plane.position.set(w.x, 1.6, w.z);
+
+    return { plane, mat, tex };
+  }
+
+  _disposeFogDebugMarker(m) {
+    if (!m) return;
+    try { m.tex?.dispose?.(); } catch { /* gone */ }
+    try { m.mat?.dispose?.(); } catch { /* gone */ }
+    try { m.plane?.dispose?.(); } catch { /* gone */ }
+  }
+
+  /** Dispose all debug "F" markers and empty the registry. Called when leaving
+   *  debug mode and on map rebuild. */
+  _clearFogDebugMarkers() {
+    if (this._fogDebugMarkers.size === 0) return;
+    for (const [, m] of this._fogDebugMarkers) this._disposeFogDebugMarker(m);
+    this._fogDebugMarkers.clear();
   }
 
   _setTileFogged(hexK, tileMesh, fogged) {
@@ -13463,6 +13605,32 @@ export function xrayFadeFactor({ from = 0, dir = 'in', startMs = 0, durMs = 0, n
 export function shouldRenderEntityAt(target, hexK) {
   if (!target) return true;
   return target.has(hexK);
+}
+
+/** Fog DISPLAY-mode cycle order, driven by the `T` hotkey:
+ *  normal → off → full → debug → normal. `normal` is the default and the only
+ *  mode that matches the game's true fogOfWar state; the others are renderer-
+ *  level display overrides for debugging. Unknown input falls back to the
+ *  start of the cycle. */
+export const FOG_DEBUG_MODES = Object.freeze(['normal', 'off', 'full', 'debug']);
+
+export function nextFogDebugMode(cur) {
+  const i = FOG_DEBUG_MODES.indexOf(cur);
+  if (i < 0) return FOG_DEBUG_MODES[0];
+  return FOG_DEBUG_MODES[(i + 1) % FOG_DEBUG_MODES.length];
+}
+
+/** Map a fog display mode + the real (game-driven) fogged-hex set to the set
+ *  the renderer should actually veil:
+ *    • 'off'             → empty set (suppress the veil; everything visible)
+ *    • 'full'            → ALL hexes (darken the whole map)
+ *    • 'normal'/'debug'  → the real computed set, unchanged
+ *  `allKeys` is the full list of playable hex keys (used only for 'full').
+ *  Pure — returns a Set; never mutates `realFogged`. */
+export function foggedSetForMode(mode, realFogged, allKeys) {
+  if (mode === 'off')  return new Set();
+  if (mode === 'full') return new Set(allKeys);
+  return realFogged; // 'normal' and 'debug' both veil the real set
 }
 
 /**
