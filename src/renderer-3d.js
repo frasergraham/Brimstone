@@ -6891,6 +6891,17 @@ export class Renderer3D {
         mat.transparencyMode = 2; // numeric fallback (2 = ALPHABLEND)
       }
       mat.disableDepthWrite = true;
+    } else {
+      // R5 polish 3 — the playable splat carries a sunken hex centre + tilted
+      // corner displacement on river hexes (riverCornerY → -0.06..-0.18). At
+      // RIVER_BED_Y=-0.18 the water ribbon depth-fails against the splat cone
+      // everywhere except a tiny circle at each tile centre — producing the
+      // "~3 isolated arrow patches in a wide dirt channel" bug. Mirror the
+      // border splat: render the splat colours normally but skip the depth
+      // write so the water ribbon at -0.18 wins everywhere along the channel.
+      // Trees, buildings, and other props still write depth normally and
+      // continue to occlude the river where they sit on top.
+      mat.disableDepthWrite = true;
     }
     mat.backFaceCulling = true;
     const PluginClass = makeTerrainSplatPlugin(BABYLON);
@@ -7662,22 +7673,12 @@ export class Renderer3D {
       // terrain reads wavy/dirt-path rather than two clean parallel lines.
       // River keeps its tight straight banks (a river edge IS sharp).
       if (networkName === 'road') attachRoadEdgeToMaterial(BABYLON, mat);
-      // R5 — playable river only: the splat ground beneath each water hex is a
-      // displaced cone (centre at RIVER_BED_Y - eps, corners at -0.06 to -0.18
-      // by riverCornerY/waterCount). It's OPAQUE and WRITES depth, so the water
-      // ribbon at RIVER_BED_Y depth-fails everywhere except a tiny circle near
-      // each tile centre — producing the "~3 isolated arrow patches in a wide
-      // dirt channel" bug. The BORDER river extension renders fine because the
-      // border splat material runs in alpha-blend mode with depthWrite OFF, so
-      // its Y=0 ground doesn't push the depth buffer. We can't change that
-      // here (the playable splat's opaque depth write is load-bearing for unit
-      // shadows + standee z-sort), so instead force the water material to skip
-      // the depth test entirely — water "stamps" through whatever sits above
-      // it in the depth buffer, matching the border's effective behaviour.
-      // Constant 519 = WebGL ALWAYS (mirrors `BABYLON.Engine.ALWAYS`).
-      if (networkName === 'river') {
-        mat.depthFunction = (BABYLON.Engine?.ALWAYS ?? 519);
-      }
+      // R5 polish 3 — water renders with the NORMAL depth test now that the
+      // playable splat material runs `disableDepthWrite = true` (see
+      // `_buildSplatMaterial`). Trees + buildings continue to write depth and
+      // correctly occlude the water where they sit on top, instead of the
+      // previous `depthFunction = ALWAYS` workaround that let the river paint
+      // over everything in the scene.
       merged.material        = mat;
       // Register this tile clone's diffuse texture for per-frame flow scroll.
       // (Babylon's StandardMaterial.clone() deep-clones textures, so each tile
@@ -14049,15 +14050,21 @@ export const RIVER_HALF_WIDTH_MAX = 0.45;
  *  the outer rim of the bank top. Trimmed from 0.10 so the bank reads as a
  *  thin shoreline trim rather than a brown channel that swallows the water. */
 export const RIVER_BANK_WIDTH     = 0.05;
-/** R5 polish 2 — texture-repeat multiplier along the flow axis (U) of the
- *  river ribbon. The river-ribbon.png mapping was 1 sample per tile-segment,
- *  which printed exactly one arrow per segment and read as floating puddles
- *  between dirt bands. Scaling U by this factor tiles the arrow pattern
- *  ~N times per segment so the current reads as continuous flow. Set on the
- *  base material's diffuseTexture in `_buildRibbonMaterial`; per-tile material
- *  clones inherit it via StandardMaterial.clone() (which deep-clones the
- *  texture). `_pumpRiverFlow` only mutates uOffset, leaving uScale intact. */
-export const RIVER_RIBBON_U_SCALE = 4;
+/** R5 polish 3 — texture-repeat multiplier along the flow axis (U) of the
+ *  river ribbon. UVs already use cumulative WORLD-SPACE arclength
+ *  (periods/RIVER_TILE_PERIOD where PERIOD=1.0) so the period is constant in
+ *  world units regardless of stroke length. uScale only governs how many
+ *  texture repeats sit inside one world unit. Polish 2 set this to 4 (period
+ *  = 0.25 world units) which printed visibly tight per-stroke seams at every
+ *  tile boundary (each stroke restarts U=0, so a tight period makes the
+ *  texture-phase mismatch at the seam jarring). Dropping to 2 (period = 0.5
+ *  wu, ~3 repeats per tile-length crossing) keeps the arrow pattern reading
+ *  as flow while widening the period enough that the per-stroke phase reset
+ *  is much less obvious. Set on the base material's diffuseTexture in
+ *  `_buildRibbonMaterial`; per-tile material clones inherit it via
+ *  StandardMaterial.clone(). `_pumpRiverFlow` only mutates uOffset, leaving
+ *  uScale intact. */
+export const RIVER_RIBBON_U_SCALE = 2;
 /** Road sits clearly above the river so the road tube paints OVER the water at
  *  river crossings — the bridge plank is disabled (`_renderBridges = false`),
  *  so the road ribbon is the only thing carrying the visual at the crossing.

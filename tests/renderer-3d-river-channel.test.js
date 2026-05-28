@@ -316,22 +316,25 @@ describe('R5 — _buildRiverBankMeshes integration', () => {
     assert.equal(props[0].metadata?.kind, 'road');
   });
 
-  // R5 polish 2 — water material must skip the depth test so the displaced
-  // splat ground beneath each river tile (centre at RIVER_BED_Y-eps, corners
-  // up to -0.06) doesn't depth-occlude the water ribbon. Without this, the
-  // playable river degenerates into ~3 isolated arrow patches near each tile
-  // centre (the only spots where splat Y < water Y); the border extension
-  // doesn't have the bug because its splat ground runs alpha-blend with depth
-  // write off. WebGL ALWAYS = 519.
-  test('water material uses depthFunction=ALWAYS so splat-cone displacement does not occlude the river', () => {
+  // R5 polish 3 — water material renders with the NORMAL depth test now.
+  // The previous polish-2 workaround forced depthFunction=ALWAYS so the water
+  // could draw through the displaced splat-ground cone (riverCornerY drops to
+  // -0.18 on water hexes), but that also let the river paint OVER trees and
+  // buildings sitting in front of it. The real fix is `disableDepthWrite` on
+  // the splat material itself (see `_buildSplatMaterial`): the splat colours
+  // still render correctly but the cone no longer pushes the depth buffer,
+  // so the water at RIVER_BED_Y wins along the whole channel while trees +
+  // buildings (which DO write depth) keep occluding it correctly. WebGL
+  // ALWAYS = 519.
+  test('water material does NOT force depthFunction=ALWAYS (splat handles it via disableDepthWrite)', () => {
     const inst = setupInst();
     const stroke = [{ x: 0, z: 0 }, { x: 0.5, z: 0 }, { x: 1, z: 0 }];
     const segments = [{ tile: { col: 5, row: 5 }, strokes: [stroke] }];
     inst._buildNetworkMesh('river', segments, RIVER_RIBBON_WIDTH, RIVER_RIBBON_Y, '#1a3d5c');
     const water = inst._tilePropsByKey.get('5,5')?.find(p => p.metadata?.kind === 'river');
     assert.ok(water, 'water mesh must exist');
-    assert.equal(water.material.depthFunction, 519,
-      `playable river water material must set depthFunction=ALWAYS (519) to render through the splat-ground cone — got ${water.material.depthFunction}`);
+    assert.notEqual(water.material.depthFunction, 519,
+      `playable river water material must keep the normal depth test (not ALWAYS=519) so trees + buildings continue to occlude the river — got ${water.material.depthFunction}`);
   });
 
   test('road material does NOT touch depthFunction (road has no splat-cone occlusion)', () => {
@@ -345,6 +348,52 @@ describe('R5 — _buildRiverBankMeshes integration', () => {
     // than ALWAYS (519) means we kept the normal depth test for roads.
     assert.notEqual(road.material.depthFunction, 519,
       'road material should not force depthFunction=ALWAYS — only the river ribbon needs the override');
+  });
+
+  // R5 polish 3 — `_riverFlowTextures` registry must be populated after each
+  // river build so `_pumpRiverFlow` has a list of per-tile clone textures to
+  // scroll. The polish-2 work moved code around in `_buildNetworkMesh`; this
+  // is a regression guard so a later edit can't quietly de-list the textures
+  // and silently break the river animation.
+  test('_riverFlowTextures registry is populated after a river build', () => {
+    const inst = setupInst();
+    inst._assetsBasePath = 'assets';
+    const stroke = [{ x: 0, z: 0 }, { x: 0.5, z: 0 }, { x: 1, z: 0 }];
+    const segments = [
+      { tile: { col: 2, row: 2 }, strokes: [stroke] },
+      { tile: { col: 3, row: 2 }, strokes: [stroke] },
+    ];
+    inst._buildNetworkMesh('river', segments, RIVER_RIBBON_WIDTH, RIVER_RIBBON_Y, '#1a3d5c');
+    assert.ok(Array.isArray(inst._riverFlowTextures),
+      `_riverFlowTextures should be an array, got ${typeof inst._riverFlowTextures}`);
+    assert.equal(inst._riverFlowTextures.length, segments.length,
+      `_riverFlowTextures should hold one diffuse texture per per-tile river clone (expected ${segments.length}, got ${inst._riverFlowTextures.length})`);
+  });
+
+  // R5 polish 3 — the playable splat material must `disableDepthWrite` so the
+  // displaced river-hex cone (centre/corners at riverCornerY) does not
+  // depth-occlude the water ribbon at RIVER_BED_Y. Border splat already does
+  // this via its alpha-blend pipeline; the opaque playable splat needs the
+  // explicit flag.
+  test('_buildSplatMaterial(opaque) sets disableDepthWrite so the river-hex cone does not occlude the water', () => {
+    const inst = Object.create(Renderer3D.prototype);
+    inst._babylon = {
+      StandardMaterial: function (name) {
+        this.name = name;
+        this.disableDepthWrite = false;
+        this.transparencyMode = 0;
+        this.backFaceCulling = true;
+        this.specularColor = null;
+      },
+      Color3: function (r, g, b) { this.r = r; this.g = g; this.b = b; },
+      Material: { MATERIAL_ALPHABLEND: 2 },
+    };
+    inst._scene = {};
+    inst._fogTileDarken = 1;
+    inst._terrainDetailTexture = () => null;
+    const mat = inst._buildSplatMaterial({ alphaBlend: false });
+    assert.equal(mat.disableDepthWrite, true,
+      'playable (opaque) splat material must disableDepthWrite so the river-hex cone does not depth-occlude the water ribbon');
   });
 });
 
