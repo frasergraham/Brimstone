@@ -165,11 +165,11 @@
     state.fogOfWar = 'none';
 
     // Absolute path — the page lives at /admin/lighting, so the default
-    // relative `assets/tilemap.png` would resolve to /admin/assets/...
+    // relative `assets/tilemap.png` would resolve to /admin/assets/... and
+    // 404. beginLoad() also accepts the basePath and uses it for the splat-
+    // terrain detail textures + GLB models loaded inside the bundle.
     renderer.loadImages('/assets');
-    // `draw()` is render-only now; `beginLoad()` is what bootstraps Babylon
-    // (_initBabylon + render loop). waitForRenderer() below depends on it.
-    renderer.beginLoad();
+    renderer.beginLoad('/assets');
 
     // After renderer's _initBabylon finished (async), grab references to the
     // lights and detach the renderer's per-frame light pump so our UI values
@@ -321,8 +321,9 @@
       state = buildState();
       renderer = new Renderer3D(canvas, state);
       renderer.loadImages('/assets');
-      // beginLoad() bootstraps Babylon (draw() is render-only post loading-screen).
-      renderer.beginLoad();
+      // beginLoad() bootstraps Babylon + carries the absolute asset basePath
+      // through to the deferred detail-texture + GLB loaders.
+      renderer.beginLoad('/assets');
       waitForRenderer().then(() => {
         if (renderer._onBeforeRenderObs) {
           renderer._scene.onBeforeRenderObservable.remove(renderer._onBeforeRenderObs);

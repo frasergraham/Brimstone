@@ -6439,13 +6439,17 @@ export class Renderer3D {
   }
 
   /** Lazily load + cache a tiling greyscale detail texture, WRAP-addressed so
-   *  it repeats seamlessly across the merged ground (world-XZ UV). */
+   *  it repeats seamlessly across the merged ground (world-XZ UV). Honours
+   *  `this._assetsBasePath` (set by `beginLoad`) so consumers served from a
+   *  non-root URL — admin-lighting at /admin/lighting, the preview tool, etc.
+   *  — resolve the texture against the correct absolute path. */
   _terrainDetailTexture(name) {
     const BABYLON = this._babylon;
     if (!BABYLON?.Texture) return null;
     if (!this._detailTexCache) this._detailTexCache = new Map();
     if (this._detailTexCache.has(name)) return this._detailTexCache.get(name);
-    const tex = new BABYLON.Texture(`assets/textures/terrain/${name}-detail.jpg`, this._scene);
+    const base = this._assetsBasePath || 'assets';
+    const tex = new BABYLON.Texture(`${base}/textures/terrain/${name}-detail.jpg`, this._scene);
     if (BABYLON.Texture.WRAP_ADDRESSMODE != null) {
       tex.wrapU = BABYLON.Texture.WRAP_ADDRESSMODE;
       tex.wrapV = BABYLON.Texture.WRAP_ADDRESSMODE;
