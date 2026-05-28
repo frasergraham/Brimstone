@@ -71,9 +71,36 @@
       <div class="section">
         <h2>Sun (directional)</h2>
         <div class="row"><label>Intensity</label><input id="sun-int" type="range" min="0" max="4" step="0.01" /><span class="val" id="sun-int-v"></span></div>
-        <div class="row"><label>Dir X</label><input id="sun-x" type="range" min="-1" max="1" step="0.01" /><span class="val" id="sun-x-v"></span></div>
-        <div class="row"><label>Dir Y</label><input id="sun-y" type="range" min="-1" max="0" step="0.01" /><span class="val" id="sun-y-v"></span></div>
-        <div class="row"><label>Dir Z</label><input id="sun-z" type="range" min="-1" max="1" step="0.01" /><span class="val" id="sun-z-v"></span></div>
+
+        <!-- Single-direction controls — shown for DAWN / DUSK (1-round phases
+             whose sun direction is the cycleConfig fallback). For DAY / NIGHT
+             these are hidden and the start/end pair below is used instead. -->
+        <div id="sun-single">
+          <div class="row"><label>Dir X</label><input id="sun-x" type="range" min="-1" max="1" step="0.01" /><span class="val" id="sun-x-v"></span></div>
+          <div class="row"><label>Dir Y</label><input id="sun-y" type="range" min="-1" max="0" step="0.01" /><span class="val" id="sun-y-v"></span></div>
+          <div class="row"><label>Dir Z</label><input id="sun-z" type="range" min="-1" max="1" step="0.01" /><span class="val" id="sun-z-v"></span></div>
+          <div class="helper">Dawn / dusk are 1-round transitional phases; their sun direction is the
+            <em>fallback</em> for custom cycle configs. The default cycle auto-interpolates
+            between the neighbour phases' endpoints (NIGHT.end → DAY.start at dawn,
+            DAY.end → NIGHT.start at dusk).</div>
+        </div>
+
+        <!-- Start/end pair — shown for DAY / NIGHT. The renderer sweeps the
+             sun from dirStart at the first round of the phase to dirEnd at the
+             last round; midnight progress reaches dirEnd, dawn carries it
+             into the next phase. -->
+        <div id="sun-pair">
+          <div class="helper" style="margin-top:6px"><b>Start direction</b> — sun position at the first round of the phase.</div>
+          <div class="row"><label>Start X</label><input id="sun-sx" type="range" min="-1" max="1" step="0.01" /><span class="val" id="sun-sx-v"></span></div>
+          <div class="row"><label>Start Y</label><input id="sun-sy" type="range" min="-1" max="0" step="0.01" /><span class="val" id="sun-sy-v"></span></div>
+          <div class="row"><label>Start Z</label><input id="sun-sz" type="range" min="-1" max="1" step="0.01" /><span class="val" id="sun-sz-v"></span></div>
+          <div class="helper" style="margin-top:6px"><b>End direction</b> — sun position at the last round of the phase.</div>
+          <div class="row"><label>End X</label><input id="sun-ex" type="range" min="-1" max="1" step="0.01" /><span class="val" id="sun-ex-v"></span></div>
+          <div class="row"><label>End Y</label><input id="sun-ey" type="range" min="-1" max="0" step="0.01" /><span class="val" id="sun-ey-v"></span></div>
+          <div class="row"><label>End Z</label><input id="sun-ez" type="range" min="-1" max="1" step="0.01" /><span class="val" id="sun-ez-v"></span></div>
+          <button class="action" id="preview-sweep">Preview sweep</button>
+          <div class="helper">Preview eases the sun from start → end over ~8s so you can see the sweep without changing turn state.</div>
+        </div>
       </div>
 
       <div class="section">
@@ -120,6 +147,12 @@
 
     const PHASES = ['dawn', 'day', 'dusk', 'night'];
 
+    // Which phases use the start/end pair (sweep) vs. a single direction. Day
+    // and night sweep across their multi-round runs; dawn/dusk are 1-round
+    // transitions with a phase-locked fallback (the runtime auto-interpolates
+    // between adjacent phases on the default cycle).
+    const SWEEP_PHASES = new Set(['day', 'night']);
+
     // Start from a deep clone of the current PHASE_LIGHT_CONFIG so the tool's
     // initial values match the live game. Ambient is split into color + strength
     // so the operator can pump brightness without losing the tint.
@@ -131,9 +164,20 @@
       const ambNorm = ambStrength > 0
         ? { r: amb.r / ambStrength, g: amb.g / ambStrength, b: amb.b / ambStrength }
         : { r: 1, g: 1, b: 1 };
+      // Sun schema migration: prefer dirStart/dirEnd if present (new schema);
+      // else fall back to dir as both endpoints (legacy / single-direction).
+      const sunCfg = cfg.sun || {};
+      const sunDir = sunCfg.dir ?? { x: 0, y: -1, z: 0 };
+      const dirStart = sunCfg.dirStart ?? sunDir;
+      const dirEnd   = sunCfg.dirEnd   ?? sunDir;
       live[phase] = {
         hemi:    { intensity: cfg.intensity, color: { ...cfg.color } },
-        sun:     { intensity: cfg.sun.intensity, dir: { ...cfg.sun.dir } },
+        sun:     {
+          intensity: sunCfg.intensity ?? 1.0,
+          dir:      { ...sunDir },
+          dirStart: { ...dirStart },
+          dirEnd:   { ...dirEnd },
+        },
         ambient: { color: ambNorm, strength: ambStrength },
         clear:   { ...cfg.clear },
         fogTint: typeof cfg.fogTint === 'number' ? cfg.fogTint : 0.20,
@@ -193,6 +237,13 @@
 
     const BABYLON = renderer._babylon;
 
+    // Preview state. When `preview.active`, sun direction sweeps dirStart →
+    // dirEnd over `preview.durMs` (independent of game state/round). Live
+    // sliders still update the underlying live[active].sun.dirStart/dirEnd;
+    // the preview just animates the sweep based on the current values.
+    const PREVIEW_DURATION_MS = 8000;
+    const preview = { active: false, startMs: 0, durMs: PREVIEW_DURATION_MS };
+
     function applyLiveLighting() {
       const cfg = live[activePhase];
       if (!cfg) return;
@@ -201,7 +252,26 @@
       renderer._light.specular  = new BABYLON.Color3(cfg.hemi.color.r * 0.3, cfg.hemi.color.g * 0.3, cfg.hemi.color.b * 0.3);
       renderer._light.groundColor = new BABYLON.Color3(cfg.hemi.color.r * 0.35, cfg.hemi.color.g * 0.35, cfg.hemi.color.b * 0.35);
       renderer._sunLight.intensity = cfg.sun.intensity;
-      renderer._sunLight.direction = new BABYLON.Vector3(cfg.sun.dir.x, cfg.sun.dir.y, cfg.sun.dir.z);
+      // Choose the sun direction:
+      //   • DAY / NIGHT use the dirStart/dirEnd pair; when Preview is active
+      //     ease across the sweep; otherwise hold at dirStart so the slider
+      //     edits give immediate feedback at the phase's first round.
+      //   • DAWN / DUSK use the single `dir` (fallback for custom cycles).
+      let sx, sy, sz;
+      if (SWEEP_PHASES.has(activePhase)) {
+        const a = cfg.sun.dirStart, b = cfg.sun.dirEnd;
+        let t = 0;
+        if (preview.active) {
+          t = Math.min(1, Math.max(0, (performance.now() - preview.startMs) / preview.durMs));
+          if (t >= 1) preview.active = false; // one-shot sweep
+        }
+        sx = a.x + (b.x - a.x) * t;
+        sy = a.y + (b.y - a.y) * t;
+        sz = a.z + (b.z - a.z) * t;
+      } else {
+        sx = cfg.sun.dir.x; sy = cfg.sun.dir.y; sz = cfg.sun.dir.z;
+      }
+      renderer._sunLight.direction = new BABYLON.Vector3(sx, sy, sz);
       const ambR = cfg.ambient.color.r * cfg.ambient.strength;
       const ambG = cfg.ambient.color.g * cfg.ambient.strength;
       const ambB = cfg.ambient.color.b * cfg.ambient.strength;
@@ -234,17 +304,34 @@
 
     function syncControlsFromLive() {
       const cfg = live[activePhase];
+      const isSweep = SWEEP_PHASES.has(activePhase);
+      $('sun-single').style.display = isSweep ? 'none' : '';
+      $('sun-pair').style.display   = isSweep ? '' : 'none';
       $('hemi-int').value = cfg.hemi.intensity;
       $('hemi-int-v').textContent = fmt(cfg.hemi.intensity);
       $('hemi-color').value = rgbToHex(cfg.hemi.color);
       $('sun-int').value = cfg.sun.intensity;
       $('sun-int-v').textContent = fmt(cfg.sun.intensity);
+      // Single direction (dawn/dusk fallback)
       $('sun-x').value = cfg.sun.dir.x;
       $('sun-x-v').textContent = fmt(cfg.sun.dir.x);
       $('sun-y').value = cfg.sun.dir.y;
       $('sun-y-v').textContent = fmt(cfg.sun.dir.y);
       $('sun-z').value = cfg.sun.dir.z;
       $('sun-z-v').textContent = fmt(cfg.sun.dir.z);
+      // Start/end pair (day/night sweep)
+      $('sun-sx').value = cfg.sun.dirStart.x;
+      $('sun-sx-v').textContent = fmt(cfg.sun.dirStart.x);
+      $('sun-sy').value = cfg.sun.dirStart.y;
+      $('sun-sy-v').textContent = fmt(cfg.sun.dirStart.y);
+      $('sun-sz').value = cfg.sun.dirStart.z;
+      $('sun-sz-v').textContent = fmt(cfg.sun.dirStart.z);
+      $('sun-ex').value = cfg.sun.dirEnd.x;
+      $('sun-ex-v').textContent = fmt(cfg.sun.dirEnd.x);
+      $('sun-ey').value = cfg.sun.dirEnd.y;
+      $('sun-ey-v').textContent = fmt(cfg.sun.dirEnd.y);
+      $('sun-ez').value = cfg.sun.dirEnd.z;
+      $('sun-ez-v').textContent = fmt(cfg.sun.dirEnd.z);
       $('ambient-color').value = rgbToHex(cfg.ambient.color);
       $('ambient-str').value = cfg.ambient.strength;
       $('ambient-str-v').textContent = fmt(cfg.ambient.strength);
@@ -295,6 +382,33 @@
     bindNumber('sun-z', 'sun-z-v',
       () => live[activePhase].sun.dir.z,
       (v) => { live[activePhase].sun.dir.z = v; });
+    // dirStart / dirEnd sliders for DAY / NIGHT — wire each axis individually
+    // so sliding immediately reflects in the renderer (and the displayed value).
+    bindNumber('sun-sx', 'sun-sx-v',
+      () => live[activePhase].sun.dirStart.x,
+      (v) => { live[activePhase].sun.dirStart.x = v; });
+    bindNumber('sun-sy', 'sun-sy-v',
+      () => live[activePhase].sun.dirStart.y,
+      (v) => { live[activePhase].sun.dirStart.y = v; });
+    bindNumber('sun-sz', 'sun-sz-v',
+      () => live[activePhase].sun.dirStart.z,
+      (v) => { live[activePhase].sun.dirStart.z = v; });
+    bindNumber('sun-ex', 'sun-ex-v',
+      () => live[activePhase].sun.dirEnd.x,
+      (v) => { live[activePhase].sun.dirEnd.x = v; });
+    bindNumber('sun-ey', 'sun-ey-v',
+      () => live[activePhase].sun.dirEnd.y,
+      (v) => { live[activePhase].sun.dirEnd.y = v; });
+    bindNumber('sun-ez', 'sun-ez-v',
+      () => live[activePhase].sun.dirEnd.z,
+      (v) => { live[activePhase].sun.dirEnd.z = v; });
+
+    $('preview-sweep').addEventListener('click', () => {
+      // Kick off a one-shot ease from dirStart → dirEnd. applyLiveLighting
+      // checks `preview.active` each frame and unsets it at t=1.
+      preview.startMs = performance.now();
+      preview.active  = true;
+    });
     bindNumber('ambient-str', 'ambient-str-v',
       () => live[activePhase].ambient.strength,
       (v) => { live[activePhase].ambient.strength = v; });
@@ -356,7 +470,17 @@
                  `clear: { r: ${fmt(cfg.clear.r)}, g: ${fmt(cfg.clear.g)}, b: ${fmt(cfg.clear.b)} },`);
         out.push(`    ambient: { r: ${fmt(ambR)}, g: ${fmt(ambG)}, b: ${fmt(ambB)} },`);
         out.push(`    fogTint: ${fmt(cfg.fogTint)},`);
-        out.push(`    sun: { dir: { x: ${fmt(cfg.sun.dir.x)}, y: ${fmt(cfg.sun.dir.y)}, z: ${fmt(cfg.sun.dir.z)} }, intensity: ${fmt(cfg.sun.intensity)} },`);
+        if (SWEEP_PHASES.has(phase)) {
+          const s = cfg.sun.dirStart, e = cfg.sun.dirEnd;
+          out.push(`    sun: {`);
+          out.push(`      dirStart: { x: ${fmt(s.x)}, y: ${fmt(s.y)}, z: ${fmt(s.z)} },`);
+          out.push(`      dirEnd:   { x: ${fmt(e.x)}, y: ${fmt(e.y)}, z: ${fmt(e.z)} },`);
+          out.push(`      intensity: ${fmt(cfg.sun.intensity)},`);
+          out.push(`    },`);
+        } else {
+          const d = cfg.sun.dir;
+          out.push(`    sun: { dir: { x: ${fmt(d.x)}, y: ${fmt(d.y)}, z: ${fmt(d.z)} }, intensity: ${fmt(cfg.sun.intensity)} },`);
+        }
         out.push('  },');
       }
       out.push('});');

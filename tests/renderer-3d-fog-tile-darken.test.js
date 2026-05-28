@@ -131,4 +131,28 @@ describe('Renderer3D fog — terrain tile renders darker (texture level, not jus
     r.setFogTint(0.3);
     assert.ok(Math.abs(fog.level - 0.3) < 1e-9, 'fog texture level follows the new tint');
   });
+
+  test('setFogTint passes the raw value to the splat plugin (no in-renderer floor)', () => {
+    // The admin lighting tuner needs the splat ground to track the full
+    // 0..1 slider range — the FOG_HIDDEN_DARKEN floor for in-game readability
+    // is applied by `_applyLightConfig`, not by setFogTint itself. Regression
+    // for the operator's "Fog tint slider in lighting tool no longer affects
+    // fog" report: previously this method clamped splatFog to ≤0.40, which
+    // made every slider value from 0.4–1.0 produce the same splat darken.
+    const r = makeRenderer();
+    const splat = { uFogDarken: 1.0 };
+    r._splatPlugin = splat;
+
+    r.setFogTint(0.8);
+    assert.equal(splat.uFogDarken, 0.8, 'splat plugin tracks 0.8 unmodified');
+
+    r.setFogTint(0.5);
+    assert.equal(splat.uFogDarken, 0.5, 'splat plugin tracks 0.5 unmodified');
+
+    r.setFogTint(0.2);
+    assert.equal(splat.uFogDarken, 0.2, 'splat plugin tracks 0.2 unmodified');
+
+    r.setFogTint(1.0);
+    assert.equal(splat.uFogDarken, 1.0, 'splat plugin tracks 1.0 (fully bright, no veil)');
+  });
 });

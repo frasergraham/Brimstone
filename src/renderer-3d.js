@@ -5023,16 +5023,13 @@ export class Renderer3D {
     const v = Math.max(0, Math.min(1, Number(value) || 0));
     this._fogTileDarken = v;
     // Splat ground: the plugin's uFogDarken uniform multiplies the texel
-    // (CUSTOM_FRAGMENT_UPDATE_DIFFUSE), surviving the lighting clamp. We clamp
-    // it to FOG_HIDDEN_DARKEN so even at bright phases (where phase fogTint
-    // tops out at ~0.70) fogged hexes still read as a clear "can't see this"
-    // signal, not a mild shade. Per-tile prop darken still flows through
-    // _applyFogVeil below using the phase value.
-    // Guard against `value=0` (or any nullish input) collapsing splat fog to
-    // pure black. Floor at FOG_HIDDEN_DARKEN — a strong but readable veil.
+    // (CUSTOM_FRAGMENT_UPDATE_DIFFUSE), surviving the lighting clamp. We
+    // pass `v` through faithfully — the in-game "occluded-read" floor at
+    // FOG_HIDDEN_DARKEN lives in `_applyLightConfig` (the caller that
+    // applies PHASE_LIGHT_CONFIG values), not here, so the admin lighting
+    // tuner can preview the full 0..1 range on the slider.
     if (this._splatPlugin) {
-      const splatFog = v > 0 ? Math.min(v, FOG_HIDDEN_DARKEN) : FOG_HIDDEN_DARKEN;
-      this._splatPlugin.uFogDarken = splatFog;
+      this._splatPlugin.uFogDarken = v;
     }
     // Terrain fog materials: diffuseColor = (v, v, v) regardless of original.
     for (const [, mat] of this._terrainFogMaterialCache) {
@@ -6698,9 +6695,11 @@ export class Renderer3D {
       plugin.detailDirt   = this._terrainDetailTexture('dirt');
       plugin.detailForest = this._terrainDetailTexture('forest');
       plugin.tints      = DEFAULT_TERRAIN_TINTS.map((t) => t.slice());
-      // Cap fog darken at FOG_HIDDEN_DARKEN so the splat ground signals "you
-      // cannot see this hex" clearly, even at bright phases. See setFogTint.
-      plugin.uFogDarken = Math.min(this._fogTileDarken ?? 1.0, FOG_HIDDEN_DARKEN);
+      // Initial fog darken: use the currently-stored value (already
+      // normalized by `_applyLightConfig` or `setFogTint`); the in-game
+      // FOG_HIDDEN_DARKEN floor is applied by `_applyLightConfig` so we just
+      // pass the stored value through.
+      plugin.uFogDarken = this._fogTileDarken ?? 1.0;
       plugin.isEnabled  = true;
       this._splatPlugin = plugin;
     }
@@ -11667,31 +11666,44 @@ export class Renderer3D {
     }
     // Per-phase fog-of-war tint — `setFogTint` walks all cached fog
     // materials and re-applies the fog veil so existing fogged tiles
-    // immediately match the new darken factor.
+    // immediately match the new darken factor. We floor the phase value at
+    // FOG_HIDDEN_DARKEN here (not inside setFogTint) so PHASE_LIGHT_CONFIG
+    // values like dawn 0.70 / dusk 0.60 always read as a clear "you cannot
+    // see this hex" signal, while the admin lighting tuner — which calls
+    // setFogTint directly — sees the full 0..1 range it sliders across.
     if (typeof cfg.fogTint === 'number') {
-      this.setFogTint(cfg.fogTint);
+      this.setFogTint(Math.min(cfg.fogTint, FOG_HIDDEN_DARKEN));
     }
     // Directional sun: drives shadow casting strength + angle. NIGHT
     // intensity≈0 effectively turns the sun off so lanterns / hemi carry the
     // look. Direction is set via Vector3, but only when a sun config exists
     // (defensive — older snapshots may not have one).
+    let snapshotDir = null;
     if (cfg.sun && this._sunLight) {
-      // Sun direction is round-based (sweeps across the day) rather than
-      // phase-locked — every DAY round shows the sun in a different
-      // position. _onBeforeRender re-applies the round direction each frame
-      // so this assignment is overridden as soon as state.round is known.
+      // Sun direction is round-based (sweeps across each phase via
+      // dirStart→dirEnd) rather than phase-locked. _onBeforeRender re-applies
+      // the round direction each frame so this assignment is overridden as
+      // soon as state.round is known.
       const round = this.state?.round ?? 1;
       const dir = sunDirectionForRound(round, this.state?.cycleConfig);
       this._sunLight.direction = new BABYLON.Vector3(dir.x, dir.y, dir.z);
       this._sunLight.intensity = cfg.sun.intensity;
+      snapshotDir = dir;
     }
     // Mirror into _lightState so transition snapshots see the new anchor.
     this._lightState.intensity = cfg.intensity;
     this._lightState.color = { r: cfg.color.r, g: cfg.color.g, b: cfg.color.b };
     this._lightState.clear = { r: cfg.clear.r, g: cfg.clear.g, b: cfg.clear.b };
     if (cfg.sun) {
+      // Prefer the live round-resolved direction (computed above); fall back
+      // to legacy `cfg.sun.dir` if no _sunLight yet, then to the dirStart of
+      // the new schema, then to a sane straight-down default.
+      const dirRec = snapshotDir
+        ?? cfg.sun.dir
+        ?? cfg.sun.dirStart
+        ?? { x: 0, y: -1, z: 0 };
       this._lightState.sun = {
-        dir: { x: cfg.sun.dir.x, y: cfg.sun.dir.y, z: cfg.sun.dir.z },
+        dir: { x: dirRec.x, y: dirRec.y, z: dirRec.z },
         intensity: cfg.sun.intensity,
       };
     }
@@ -14218,10 +14230,15 @@ export function buildingDimensionsForHex(col, row) {
 /** Hemispheric-light + clear-colour config per game phase.
  *  intensity → light.intensity; color → light.diffuse (warm at dawn/dusk,
  *  white at day, cool blue at night); clear → scene.clearColor (sky/horizon
- *  tint that shows through gaps and behind transparent props); sun.dir →
- *  DirectionalLight.direction (low-angle warm at dawn/dusk, near-overhead at
- *  day, irrelevant at night); sun.intensity → DirectionalLight.intensity
- *  (drives the strength of cast shadows). */
+ *  tint that shows through gaps and behind transparent props);
+ *  sun.dirStart / sun.dirEnd → DirectionalLight.direction sweep across the
+ *  phase's round run (day rises east→sets west; night moon east→west).
+ *  Dawn / dusk are 1-round transitions that auto-interpolate between
+ *  neighbour phases (NIGHT.dirEnd→DAY.dirStart and DAY.dirEnd→NIGHT.dirStart);
+ *  for them, `sun.dir` is a phase-locked fallback used when cycleConfig is
+ *  non-default. Old configs with a single `sun.dir` are honored as both
+ *  dirStart and dirEnd via `resolveSunDirPair`.
+ *  sun.intensity → DirectionalLight.intensity (drives cast-shadow strength). */
 // Hemi (ambient fill) is kept low so shadows from the directional sun read as
 // real dark patches rather than getting washed out — shadows only darken the
 // sun's contribution, so a strong hemi makes them invisible. Sun is boosted to
@@ -14243,23 +14260,35 @@ export const PHASE_LIGHT_CONFIG = Object.freeze({
     intensity: 0.73, color: { r: 1.00, g: 0.82, b: 0.62 }, clear: { r: 0.84, g: 0.65, b: 0.38 },
     ambient: { r: 0.89, g: 0.74, b: 0.64 },
     fogTint: 0.70,
-    // Low sun close to the horizon — long shadows raked across the map east-to-west.
+    // Dawn is a 1-round transition phase — the sun direction auto-interpolates
+    // between NIGHT.dirEnd → DAY.dirStart at runtime (see resolveSunDirPair).
+    // `dir` here is the fallback used when a non-default cycleConfig prevents
+    // that auto-interpolation; chosen as the dawn-side endpoint so the look
+    // still reads as a low rising sun. Long shadows east-to-west.
     sun: { dir: { x: -0.85, y: -0.40, z: 0.10 }, intensity: 2.10 },
   },
   day:   {
     intensity: 0.43, color: { r: 1.00, g: 1.00, b: 0.97 }, clear: { r: 0.78, g: 0.93, b: 0.93 },
     ambient: { r: 0.22, g: 0.22, b: 0.24 },
     fogTint: 0.48,
-    // Tilt the day sun off vertical so shadows actually project a visible
-    // footprint. A near-vertical sun (e.g. 0,-1,0) projects a near-zero
-    // offset and shadows disappear into the caster itself.
-    sun: { dir: { x:  0.35, y: -0.85, z: 0.40 }, intensity: 2.00 },
+    // Day sun sweeps across multiple rounds — `dirStart` is the rising-side
+    // position (just past dawn, sun low in the east); `dirEnd` is the setting
+    // side (heading toward dusk, sun low in the west). Tilted off vertical
+    // (non-zero z) so cast shadows always project a visible footprint — a
+    // near-vertical sun (0,-1,0) would collapse shadows into their casters.
+    sun: {
+      dirStart: { x: -0.43, y: -0.72, z: 0.31 },
+      dirEnd:   { x:  0.43, y: -0.72, z: 0.31 },
+      intensity: 2.00,
+    },
   },
   dusk:  {
     intensity: 0.77, color: { r: 1.00, g: 0.62, b: 0.48 }, clear: { r: 1.00, g: 0.81, b: 0.73 },
     ambient: { r: 0.57, g: 0.38, b: 0.35 },
     fogTint: 0.60,
-    // Low sun mirrored from dawn — long shadows raked west-to-east.
+    // Dusk mirrors dawn — a 1-round transition that auto-interpolates between
+    // DAY.dirEnd → NIGHT.dirStart at runtime. `dir` is the cycleConfig
+    // fallback (low setting-side sun, shadows raked west-to-east).
     sun: { dir: { x:  0.85, y: -0.40, z: 0.10 }, intensity: 2.09 },
   },
   night: {
@@ -14272,70 +14301,101 @@ export const PHASE_LIGHT_CONFIG = Object.freeze({
     // moonlit mood.
     ambient: { r: 0.00, g: 0.55, b: 0.72 },
     fogTint: 0.50,
-    // Moon peak direction — clearly tilted off vertical so cast shadows
-    // still project. `sunDirectionForRound` overrides for default cycles to
-    // sweep east → peak → west across the three night rounds; this value
-    // is the per-phase fallback used by custom cycleConfigs.
-    sun: { dir: { x:  0.00, y: -0.75, z: 0.35 }, intensity: 0.60 },
+    // Moon rises east → sets west across the three night rounds. Endpoints
+    // kept clearly off vertical (non-zero z) so cast shadows still project.
+    sun: {
+      dirStart: { x: -0.85, y: -0.40, z: 0.35 },
+      dirEnd:   { x:  0.85, y: -0.40, z: 0.35 },
+      intensity: 0.60,
+    },
   },
 });
 
-/** Sun direction for a phase. Pure helper used both internally and by tests. */
-export function sunDirectionForPhase(phase) {
-  return getPhaseLightConfig(phase).sun.dir;
+/** Resolve a phase's effective {dirStart, dirEnd} pair from the schema. New
+ *  configs carry explicit dirStart + dirEnd (DAY/NIGHT); legacy configs with
+ *  just `dir` are honored as both start and end (a 1-round transitional
+ *  phase or a phase the operator hasn't yet tuned with a sweep). Pure helper
+ *  — does NOT do dawn/dusk neighbour-bridging; that lives in
+ *  `sunDirectionForRound` since it only applies on the default cycle. */
+export function resolveSunDirPair(phase) {
+  const sun = getPhaseLightConfig(phase).sun;
+  if (!sun) {
+    const fallback = { x: 0, y: -1, z: 0 };
+    return { dirStart: { ...fallback }, dirEnd: { ...fallback } };
+  }
+  const start = sun.dirStart ?? sun.dir ?? { x: 0, y: -1, z: 0 };
+  const end   = sun.dirEnd   ?? sun.dir ?? start;
+  return { dirStart: { ...start }, dirEnd: { ...end } };
 }
 
-/** Sun direction for a specific round in the day/night cycle. Where
- *  `sunDirectionForPhase` returns the same vector for every round in a phase
- *  (so all three DAY rounds share one overhead direction), this helper sweeps
- *  the sun across the sky as the day progresses — dawn → day1 → day2 → day3
- *  → dusk reads as a clean linear horizontal lerp with a sinusoidal arc on
- *  the vertical, so the sun rises, peaks at noon, and sets without snapping.
+/** Sun direction for a phase, in isolation (no cycle context). Returns the
+ *  phase's `dirStart` — the position at the start of the phase's run. Used
+ *  by snapshots and callers that need a single "characteristic" direction
+ *  per phase. Pure helper. */
+export function sunDirectionForPhase(phase) {
+  return resolveSunDirPair(phase).dirStart;
+}
+
+/** Compute (phase, t) for a given round and cycle config. `t` is the
+ *  normalized position within the phase's contiguous run (0 at the first
+ *  round of the run, 1 at the last; 0.5 for a 1-round phase). Pure helper
+ *  exported for tests. */
+export function phaseProgressForRound(round, cycleConfig = null) {
+  const cycle = cycleConfig?.phases ?? null;
+  if (cycle && cycle.length > 0) {
+    const len = cycle.length;
+    const loop = cycleConfig.loop !== false;
+    let idx = round - 1;
+    idx = loop ? ((idx % len) + len) % len : Math.min(Math.max(idx, 0), len - 1);
+    const phase = cycle[idx];
+    // Find the contiguous run that contains `idx`.
+    let start = idx, end = idx;
+    while (start > 0 && cycle[start - 1] === phase) start--;
+    while (end < len - 1 && cycle[end + 1] === phase) end++;
+    const runLen = end - start + 1;
+    const t = runLen > 1 ? (idx - start) / (runLen - 1) : 0.5;
+    return { phase, t };
+  }
+  // Default 8-step cycle: dawn(1), day(2,3,4), dusk(5), night(6,7,8).
+  const r = (((round - 1) % 8) + 8) % 8;
+  if (r === 0)              return { phase: 'dawn',  t: 0.5 };
+  if (r >= 1 && r <= 3)     return { phase: 'day',   t: (r - 1) / 2 };
+  if (r === 4)              return { phase: 'dusk',  t: 0.5 };
+  return { phase: 'night', t: (r - 5) / 2 };
+}
+
+/** Sun direction for a specific round in the day/night cycle. Locates the
+ *  round's phase + position-in-phase, then linearly interpolates between the
+ *  phase's dirStart and dirEnd.
  *
- *  Round indexing: this assumes the default 8-step cycle (dawn, day×3, dusk,
- *  night×3). For custom cycleConfigs, falls back to per-phase direction. */
+ *  On the default cycle, the 1-round transition phases (dawn/dusk) bridge
+ *  between their neighbours — NIGHT.dirEnd→DAY.dirStart during dawn, and
+ *  DAY.dirEnd→NIGHT.dirStart during dusk — so the sun glides smoothly across
+ *  the full 8-round cycle rather than snapping at phase boundaries. The dawn
+ *  / dusk `sun.dir` field is the fallback used on custom cycleConfigs where
+ *  neighbour-bridging isn't well-defined.
+ *
+ *  Works for both default and custom cycleConfigs. */
 export function sunDirectionForRound(round, cycleConfig = null) {
-  if (cycleConfig) {
-    // Custom cycle: fall back to the per-phase sun direction; sweeping across
-    // arbitrary cycle shapes isn't well-defined.
-    return getPhaseLightConfig(undefined).sun.dir;
+  const { phase, t } = phaseProgressForRound(round, cycleConfig);
+  // Default-cycle dawn / dusk: bridge between neighbour phases so the sweep
+  // is continuous across the whole 8-round cycle (no snap at phase boundary).
+  if (!cycleConfig && (phase === 'dawn' || phase === 'dusk')) {
+    const pair = phase === 'dawn'
+      ? { dirStart: resolveSunDirPair('night').dirEnd, dirEnd: resolveSunDirPair('day').dirStart }
+      : { dirStart: resolveSunDirPair('day').dirEnd,   dirEnd: resolveSunDirPair('night').dirStart };
+    return {
+      x: pair.dirStart.x + (pair.dirEnd.x - pair.dirStart.x) * t,
+      y: pair.dirStart.y + (pair.dirEnd.y - pair.dirStart.y) * t,
+      z: pair.dirStart.z + (pair.dirEnd.z - pair.dirStart.z) * t,
+    };
   }
-  const r = ((round - 1) % 8 + 8) % 8; // 0..7
-  const dawn  = getPhaseLightConfig('dawn').sun.dir;
-  const dusk  = getPhaseLightConfig('dusk').sun.dir;
-  const day   = getPhaseLightConfig('day').sun.dir;
-  // ── Daylight band (rounds 0..4 — dawn through dusk) ──────────────────────
-  // Linear horizontal lerp east-to-west, sinusoidal arc on Y (low at endpoints,
-  // peaking at noon) and on Z (so the noon sun has a meaningful tilt away from
-  // vertical — straight-down sun produces zero-offset shadows). Noon Y peaks
-  // at the day-phase config sun.dir.y; noon Z peaks at day.dir.z.
-  if (r <= 4) {
-    const t = r / 4; // 0 at dawn, 1 at dusk
-    const x = dawn.x + (dusk.x - dawn.x) * t;
-    const horizonY = (dawn.y + dusk.y) / 2;
-    const y        = horizonY + (day.y - horizonY) * Math.sin(Math.PI * t);
-    const horizonZ = (dawn.z + dusk.z) / 2;
-    const z        = horizonZ + (day.z - horizonZ) * Math.sin(Math.PI * t);
-    return { x, y, z };
-  }
-  // ── Night band (rounds 5..7 — moonlight arc) ─────────────────────────────
-  // A subtle mirror of the daytime sweep: moon rises in the east at start of
-  // night, peaks near (but never at) zenith, sets in the west by end of night.
-  // Less steep than day so shadows stay raked; non-zero Z always so the light
-  // is never straight down. Endpoints anchored at NIGHT_MOON_HORIZON_Y and
-  // peak at the night-phase config's sun.dir.y.
-  const night = getPhaseLightConfig('night').sun.dir;
-  const t = (r - 5) / 2; // 0 at first night round, 1 at last
-  const NIGHT_X_RANGE   = 0.85;
-  const NIGHT_HORIZON_Y = -0.40;
-  const NIGHT_PEAK_Z    = 0.40;
-  const x = -NIGHT_X_RANGE + 2 * NIGHT_X_RANGE * t;
-  const y = NIGHT_HORIZON_Y + (night.y - NIGHT_HORIZON_Y) * Math.sin(Math.PI * t);
-  // Z sweep — lower at moonrise/set (more horizontal), higher at peak so the
-  // angle stays clearly off-vertical throughout night.
-  const horizonZ = night.z;
-  const z = horizonZ + (NIGHT_PEAK_Z - horizonZ) * Math.sin(Math.PI * t);
-  return { x, y, z };
+  const { dirStart, dirEnd } = resolveSunDirPair(phase);
+  return {
+    x: dirStart.x + (dirEnd.x - dirStart.x) * t,
+    y: dirStart.y + (dirEnd.y - dirStart.y) * t,
+    z: dirStart.z + (dirEnd.z - dirStart.z) * t,
+  };
 }
 
 /** Sun intensity for a phase. Drives both light strength and shadow darkness
@@ -14489,12 +14549,20 @@ export function lerpLightConfig(from, to, t) {
     },
   };
   if (from.sun && to.sun) {
+    // Sun direction is round-driven, not phase-locked — the renderer overrides
+    // sun.dir each frame from `sunDirectionForRound`, so we only need to lerp
+    // intensity here. The `dir` field is preserved (best-effort: legacy `dir`
+    // first, else dirStart midpoint) for callers that snapshot a config.
+    const pickDir = (s) => s.dir
+      ?? (s.dirStart && s.dirEnd
+          ? { x: (s.dirStart.x + s.dirEnd.x) / 2,
+              y: (s.dirStart.y + s.dirEnd.y) / 2,
+              z: (s.dirStart.z + s.dirEnd.z) / 2 }
+          : { x: 0, y: -1, z: 0 });
+    const fd = pickDir(from.sun);
+    const td = pickDir(to.sun);
     out.sun = {
-      dir: {
-        x: lerp(from.sun.dir.x, to.sun.dir.x),
-        y: lerp(from.sun.dir.y, to.sun.dir.y),
-        z: lerp(from.sun.dir.z, to.sun.dir.z),
-      },
+      dir: { x: lerp(fd.x, td.x), y: lerp(fd.y, td.y), z: lerp(fd.z, td.z) },
       intensity: lerp(from.sun.intensity, to.sun.intensity),
     };
   }

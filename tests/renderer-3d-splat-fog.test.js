@@ -178,21 +178,67 @@ describe('Renderer3D splat fog — _applyFogVeil integration', () => {
     assert.ok(!r._fogActiveSet.has('1,1'));
   });
 
-  test('setFogTint drives the plugin uFogDarken, capped at FOG_HIDDEN_DARKEN', async () => {
-    // The splat plugin's uFogDarken is clamped to FOG_HIDDEN_DARKEN so fogged
-    // hexes always read as occluded vision, never a mild atmospheric tint.
-    // setFogTint still records the raw phase value in _fogTileDarken for the
-    // legacy / prop-fog paths.
+  test('_applyLightConfig floors fogTint to FOG_HIDDEN_DARKEN before handing it to setFogTint', async () => {
+    // In-game readability rule: even when a phase config carries a mild
+    // fogTint like dawn's 0.70, the splat ground must read as a clear
+    // "occluded vision" patch — never a thin atmospheric haze. The floor at
+    // FOG_HIDDEN_DARKEN lives in `_applyLightConfig` so that the admin
+    // lighting tuner (which calls `setFogTint` directly) keeps full
+    // slider range, while the live game's phase apply still floors.
     const { FOG_HIDDEN_DARKEN } = await import('../src/renderer-3d.js');
+    const r = makeRenderer();
+    r._babylon = {
+      Color3: class { constructor(x, y, z) { this.r = x; this.g = y; this.b = z; } },
+      Color4: class { constructor(x, y, z, w) { this.r = x; this.g = y; this.b = z; this.a = w; } },
+      Vector3: class { constructor(x, y, z) { this.x = x; this.y = y; this.z = z; } },
+    };
+    r._light = { intensity: 0, diffuse: null, specular: null, groundColor: null };
+    r._scene = { clearColor: null, fogColor: null, ambientColor: null };
+    r._sunLight = { direction: null, intensity: 0 };
+    r._lightState = { sun: { dir: {} } };
+    r._splatPlugin = { uFogDarken: 1.0 };
+    r.state = { round: 1, phase: 'dawn' };
+
+    // A mild phase value (>0.40) must be floored to FOG_HIDDEN_DARKEN.
+    r._applyLightConfig({
+      intensity: 1.0,
+      color: { r: 1, g: 1, b: 1 },
+      clear: { r: 0, g: 0, b: 0 },
+      ambient: { r: 0, g: 0, b: 0 },
+      fogTint: 0.70,
+      sun: { dir: { x: 0, y: -1, z: 0 }, intensity: 1.0 },
+    });
+    assert.equal(r._splatPlugin.uFogDarken, FOG_HIDDEN_DARKEN,
+      'phase fogTint 0.70 floors to FOG_HIDDEN_DARKEN for in-game readability');
+
+    // A value below the floor passes through unchanged.
+    r._applyLightConfig({
+      intensity: 1.0,
+      color: { r: 1, g: 1, b: 1 },
+      clear: { r: 0, g: 0, b: 0 },
+      ambient: { r: 0, g: 0, b: 0 },
+      fogTint: 0.20,
+      sun: { dir: { x: 0, y: -1, z: 0 }, intensity: 1.0 },
+    });
+    assert.equal(r._splatPlugin.uFogDarken, 0.20,
+      'phase fogTint 0.20 is below the floor — pass through unchanged');
+  });
+
+  test('setFogTint drives the plugin uFogDarken with the raw value (in-game floor lives in _applyLightConfig)', () => {
+    // The splat plugin tracks the raw fog tint through `setFogTint` — full
+    // 0..1 range — so the admin lighting tuner sees the slider take effect
+    // across its whole travel. The in-game readability floor at
+    // FOG_HIDDEN_DARKEN is applied by `_applyLightConfig` (the caller that
+    // hands phase-config values to setFogTint), not inside setFogTint itself.
     const r = makeRenderer();
     r._useSplatTerrain = true;
     r._splatPlugin = { uFogDarken: 1.0 };
     r._scene = null; // setFogTint guards _applyFogVeil on _scene
-    // High phase value (golden-hour mild fog) clamps to the strong cap.
+    // A mild golden-hour fog value passes through unmodified.
     r.setFogTint(0.7);
-    assert.equal(r._splatPlugin.uFogDarken, FOG_HIDDEN_DARKEN);
-    assert.equal(r._fogTileDarken, 0.7, 'raw phase value preserved for other paths');
-    // Below the cap, the phase value passes through unchanged.
+    assert.equal(r._splatPlugin.uFogDarken, 0.7);
+    assert.equal(r._fogTileDarken, 0.7, 'raw phase value preserved');
+    // Lower values also pass through.
     r.setFogTint(0.1);
     assert.equal(r._splatPlugin.uFogDarken, 0.1);
   });
