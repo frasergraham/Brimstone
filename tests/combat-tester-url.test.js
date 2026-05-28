@@ -17,7 +17,7 @@ import {
 
 describe('parseCombatParams', () => {
   test('returns the null/empty shape for an empty / missing search', () => {
-    const blank = { atk: null, def: null, atkAllies: [], defAllies: [], speed: 'cinematic' };
+    const blank = { atk: null, def: null, atkAllies: [], defAllies: [], speed: 'cinematic', mode: 'melee' };
     assert.deepEqual(parseCombatParams(''),        blank);
     assert.deepEqual(parseCombatParams(undefined), blank);
     assert.deepEqual(parseCombatParams('?utm=x'),  blank);
@@ -26,25 +26,25 @@ describe('parseCombatParams', () => {
   test('extracts atk / def and ally lists; accepts a leading "?"', () => {
     assert.deepEqual(
       parseCombatParams('?atk=paladin&def=witch'),
-      { atk: 'paladin', def: 'witch', atkAllies: [], defAllies: [], speed: 'cinematic' },
+      { atk: 'paladin', def: 'witch', atkAllies: [], defAllies: [], speed: 'cinematic', mode: 'melee' },
     );
     assert.deepEqual(
       parseCombatParams('atk=paladin&atkAllies=survivor,soldier&defAllies=minion'),
-      { atk: 'paladin', def: null, atkAllies: ['survivor', 'soldier'], defAllies: ['minion'], speed: 'cinematic' },
+      { atk: 'paladin', def: null, atkAllies: ['survivor', 'soldier'], defAllies: ['minion'], speed: 'cinematic', mode: 'melee' },
     );
   });
 
   test('tolerates comma-encoded values (%2C) — the UI may receive either', () => {
     assert.deepEqual(
       parseCombatParams('?atkAllies=survivor%2Csoldier'),
-      { atk: null, def: null, atkAllies: ['survivor', 'soldier'], defAllies: [], speed: 'cinematic' },
+      { atk: null, def: null, atkAllies: ['survivor', 'soldier'], defAllies: [], speed: 'cinematic', mode: 'melee' },
     );
   });
 
   test('drops empty / whitespace ally entries', () => {
     assert.deepEqual(
       parseCombatParams('?atkAllies=survivor,,  ,minion'),
-      { atk: null, def: null, atkAllies: ['survivor', 'minion'], defAllies: [], speed: 'cinematic' },
+      { atk: null, def: null, atkAllies: ['survivor', 'minion'], defAllies: [], speed: 'cinematic', mode: 'melee' },
     );
   });
 
@@ -54,7 +54,7 @@ describe('parseCombatParams', () => {
     // atk passes, def is unknown → null; ally list keeps the survivor only.
     assert.deepEqual(
       parseCombatParams('?atk=paladin&def=ghost&atkAllies=survivor,bogus', isValid),
-      { atk: 'paladin', def: null, atkAllies: ['survivor'], defAllies: [], speed: 'cinematic' },
+      { atk: 'paladin', def: null, atkAllies: ['survivor'], defAllies: [], speed: 'cinematic', mode: 'melee' },
     );
   });
 
@@ -145,7 +145,7 @@ describe('withCombatParams', () => {
 
 describe('parseCombatParams ∘ withCombatParams round-trip', () => {
   test('atk/def-only config encodes and decodes losslessly', () => {
-    const cfg = { atk: 'paladin', def: 'witch', atkAllies: [], defAllies: [], speed: 'cinematic' };
+    const cfg = { atk: 'paladin', def: 'witch', atkAllies: [], defAllies: [], speed: 'cinematic', mode: 'melee' };
     const encoded = withCombatParams('', cfg);
     assert.deepEqual(parseCombatParams(encoded), cfg);
   });
@@ -156,6 +156,7 @@ describe('parseCombatParams ∘ withCombatParams round-trip', () => {
       atkAllies: ['survivor', 'soldier'],
       defAllies: ['minion', 'wood_golem'],
       speed: 'cinematic',
+      mode: 'melee',
     };
     const encoded = withCombatParams('', cfg);
     assert.deepEqual(parseCombatParams(encoded), cfg);
@@ -171,7 +172,7 @@ describe('parseCombatParams ∘ withCombatParams round-trip', () => {
     assert.equal(ps.get('utm'), 'src');
     // combat shape decodes correctly
     assert.deepEqual(parseCombatParams(encoded), {
-      atk: 'paladin', def: null, atkAllies: [], defAllies: ['minion'], speed: 'cinematic',
+      atk: 'paladin', def: null, atkAllies: [], defAllies: ['minion'], speed: 'cinematic', mode: 'melee',
     });
   });
 });
@@ -205,8 +206,8 @@ describe('withCombatParams — speed', () => {
   });
 
   test('cinematic is the default — the param is dropped to keep URLs tidy', () => {
-    assert.equal(withCombatParams('?speed=fast', { speed: 'cinematic' }), '');
-    assert.equal(withCombatParams('', { speed: 'cinematic' }), '');
+    assert.equal(withCombatParams('?speed=fast', { speed: 'cinematic', mode: 'melee' }), '');
+    assert.equal(withCombatParams('', { speed: 'cinematic', mode: 'melee' }), '');
   });
 
   test('undefined leaves the existing speed untouched', () => {
@@ -225,6 +226,61 @@ describe('withCombatParams — speed', () => {
       atk: 'paladin', def: 'witch',
       atkAllies: ['survivor'], defAllies: ['minion'],
       speed: 'vfast',
+      mode: 'melee',
+    };
+    const encoded = withCombatParams('', cfg);
+    assert.deepEqual(parseCombatParams(encoded), cfg);
+  });
+});
+
+// ── mode param ──────────────────────────────────────────────────────────
+
+describe('parseCombatParams — mode', () => {
+  test('absent param defaults to melee', () => {
+    assert.equal(parseCombatParams('').mode, 'melee');
+    assert.equal(parseCombatParams('?atk=paladin').mode, 'melee');
+  });
+
+  test('valid values round-trip as-is', () => {
+    assert.equal(parseCombatParams('?mode=melee').mode,  'melee');
+    assert.equal(parseCombatParams('?mode=ranged').mode, 'ranged');
+  });
+
+  test('invalid value falls back to melee', () => {
+    assert.equal(parseCombatParams('?mode=ludicrous').mode, 'melee');
+    assert.equal(parseCombatParams('?mode=').mode,          'melee');
+    assert.equal(parseCombatParams('?mode=RANGED').mode,    'melee',
+      'case-sensitive — uppercase is rejected and falls back');
+  });
+});
+
+describe('withCombatParams — mode', () => {
+  test('explicit ranged writes the param', () => {
+    assert.equal(withCombatParams('', { mode: 'ranged' }), '?mode=ranged');
+  });
+
+  test('melee is the default — the param is dropped to keep URLs tidy', () => {
+    assert.equal(withCombatParams('?mode=ranged', { mode: 'melee' }), '');
+    assert.equal(withCombatParams('', { mode: 'melee' }), '');
+  });
+
+  test('undefined leaves the existing mode untouched', () => {
+    assert.equal(
+      withCombatParams('?mode=ranged', { atk: 'paladin' }),
+      '?mode=ranged&atk=paladin',
+    );
+  });
+
+  test('null deletes the mode param', () => {
+    assert.equal(withCombatParams('?mode=ranged', { mode: null }), '');
+  });
+
+  test('round-trips alongside combatant slots', () => {
+    const cfg = {
+      atk: 'paladin', def: 'witch',
+      atkAllies: ['survivor'], defAllies: ['minion'],
+      speed: 'cinematic',
+      mode: 'ranged',
     };
     const encoded = withCombatParams('', cfg);
     assert.deepEqual(parseCombatParams(encoded), cfg);

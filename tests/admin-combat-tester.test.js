@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import {
   buildClearingMap, newClearingState, createCombatTester,
   ATK_SIDE_ID, DEF_SIDE_ID, UNIT_FACTORIES, MAX_ALLIES_PER_SIDE, SPEED_MODES,
+  ATTACK_MODES, RANGED_DEFENDER_OFFSET, RANGED_ATTACK_RANGE,
 } from '../src/tools/combat-tester.js';
 import { ADVANTAGE_CAP } from '../src/entities.js';
 import { hexKey, hexDistance } from '../src/hex.js';
@@ -486,6 +487,152 @@ describe('combat-tester — speed mode', () => {
     t.onChange(() => { fires++; });
     t.setSpeedMode('fast');
     assert.equal(fires, 0, 'idempotent set should not fire onChange');
+  });
+});
+
+describe('combat-tester — attack mode', () => {
+  test('ATTACK_MODES lists melee and ranged in that order', () => {
+    assert.deepEqual([...ATTACK_MODES], ['melee', 'ranged']);
+  });
+
+  test('default is melee — defender placed adjacent (distance 1)', () => {
+    const t = createCombatTester();
+    assert.equal(t.attackMode, 'melee');
+    t.setAttacker('paladin');
+    t.setDefender('witch');
+    const atk = t.layout.attackerEntity;
+    const def = t.layout.defenderEntity;
+    assert.equal(hexDistance(atk.col, atk.row, def.col, def.row), 1);
+  });
+
+  test('setAttackMode("ranged") moves defender out to RANGED_DEFENDER_OFFSET hexes', () => {
+    const t = createCombatTester();
+    t.setAttacker('paladin');
+    t.setDefender('witch');
+    t.setAttackMode('ranged');
+    const atk = t.layout.attackerEntity;
+    const def = t.layout.defenderEntity;
+    assert.equal(hexDistance(atk.col, atk.row, def.col, def.row), RANGED_DEFENDER_OFFSET);
+    assert.ok(RANGED_DEFENDER_OFFSET > 1, 'ranged distance must exceed melee range');
+  });
+
+  test('setAttackMode flips state and notifies listeners', () => {
+    const t = createCombatTester();
+    let fires = 0;
+    t.onChange(() => { fires++; });
+    const baseline = fires;
+    t.setAttackMode('ranged');
+    assert.equal(t.attackMode, 'ranged');
+    assert.ok(fires > baseline, 'setAttackMode should fire onChange');
+    t.setAttackMode('melee');
+    assert.equal(t.attackMode, 'melee');
+  });
+
+  test('setAttackMode rejects unknown modes (falls back to melee)', () => {
+    const t = createCombatTester();
+    t.setAttackMode('ranged');
+    t.setAttackMode('ludicrous');
+    assert.equal(t.attackMode, 'melee');
+    t.setAttackMode(null);
+    assert.equal(t.attackMode, 'melee');
+    t.setAttackMode(undefined);
+    assert.equal(t.attackMode, 'melee');
+  });
+
+  test('setAttackMode with the same value is a no-op (no onChange)', () => {
+    const t = createCombatTester();
+    t.setAttackMode('ranged');
+    let fires = 0;
+    t.onChange(() => { fires++; });
+    t.setAttackMode('ranged');
+    assert.equal(fires, 0, 'idempotent set should not fire onChange');
+  });
+
+  test('ranged mode forces attacker.range so executeBattle routes through ranged branch', () => {
+    const t = createCombatTester();
+    t.setAttacker('paladin'); // paladin is range=1 (melee)
+    t.setDefender('zombie');
+    t.setAttackMode('ranged');
+    // Force-set range carried by the live entity
+    assert.equal(t.layout.attackerEntity.range, RANGED_ATTACK_RANGE,
+      'attacker.range must be forced so executeBattle treats the strike as ranged');
+    const out = t.runBattle();
+    assert.equal(out.result.ranged, true,
+      'executeBattle result must be flagged as a ranged attack');
+  });
+
+  test('melee mode (default) routes through executeBattle melee branch', () => {
+    const t = createCombatTester();
+    t.setAttacker('paladin');
+    t.setDefender('zombie');
+    const out = t.runBattle();
+    assert.equal(out.result.ranged, false,
+      'paladin in melee mode should NOT be flagged as a ranged attack');
+  });
+
+  test('ranged mode skips gang-up math even with adjacent-to-defender allies', () => {
+    // Ranged attacks ignore both attacker- and defender-side gang-up
+    // (executeBattle: atkAdvantageDice/defAdvantageDice forced to 0 when
+    // isRanged). The ally still gets PLACED so the operator can see them,
+    // but the result's attackerAllies/defenderAllies counts are zeroed.
+    const t = createCombatTester();
+    t.setAttacker('paladin');
+    t.setDefender('zombie');
+    t.setAttackMode('ranged');
+    t.addAlly('attacker', 'survivor');
+    const out = t.runBattle();
+    assert.equal(out.result.ranged, true);
+    // Even though we added an ally, ranged math zeros out the gang-up dice
+    // (the raw attackerAllies count still reflects the placed ally — only
+    // the breakdown's atkGangupFlat/atkAdvantageDice are zeroed for ranged).
+    assert.equal(out.result.breakdown.atkAdvantageDice, 0,
+      'ranged attacks ignore attacker-side advantage dice from allies');
+    assert.equal(out.result.breakdown.atkGangupFlat, 0,
+      'ranged attacks ignore attacker-side gang-up flat bonus');
+  });
+
+  test('flipping mode clears ally position overrides so randomize is fresh', () => {
+    const t = createCombatTester();
+    t.setAttacker('paladin');
+    t.setDefender('witch');
+    t.addAlly('attacker', 'survivor');
+    t.randomizeAllies();
+    assert.equal(t.slots.atkAllyPositions.length, 1, 'override persisted');
+    t.setAttackMode('ranged');
+    assert.equal(t.slots.atkAllyPositions.length, 0,
+      'switching attack mode must clear stale ally overrides');
+  });
+
+  test('after switching to ranged, allies still sit hex-adjacent to the (far) defender', () => {
+    const t = createCombatTester();
+    t.setAttacker('paladin');
+    t.setDefender('witch');
+    t.addAlly('defender', 'minion');
+    t.addAlly('attacker', 'survivor');
+    t.setAttackMode('ranged');
+    const def = t.layout.defenderEntity;
+    for (const a of [...t.layout.atkAllyEntities, ...t.layout.defAllyEntities]) {
+      assert.equal(hexDistance(def.col, def.row, a.col, a.row), 1,
+        `ally at (${a.col},${a.row}) must sit adjacent to the ranged-mode defender`);
+    }
+  });
+
+  test('no stacked entities in ranged mode (defensive invariant)', () => {
+    const t = createCombatTester();
+    t.setAttacker('paladin');
+    t.setDefender('witch');
+    for (let i = 0; i < MAX_ALLIES_PER_SIDE; i++) {
+      t.addAlly('attacker', 'survivor');
+      t.addAlly('defender', 'minion');
+    }
+    t.setAttackMode('ranged');
+    const seen = new Set();
+    for (const e of t.state.entities) {
+      const key = hexKey(e.col, e.row);
+      assert.ok(!seen.has(key),
+        `duplicate hex ${key} — two entities stacked in ranged mode`);
+      seen.add(key);
+    }
   });
 });
 

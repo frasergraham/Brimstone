@@ -68,11 +68,17 @@ const COMBAT_DEF         = 'def';
 const COMBAT_ATK_ALLIES  = 'atkAllies';
 const COMBAT_DEF_ALLIES  = 'defAllies';
 const COMBAT_SPEED       = 'speed';
+const COMBAT_MODE        = 'mode';
 
 /** Valid combat-tester speed modes. Anything else (or an absent param)
  * parses to `'cinematic'` — that's the default both in the URL and the
  * controller. */
 export const COMBAT_SPEEDS = Object.freeze(['cinematic', 'fast', 'vfast']);
+
+/** Valid combat-tester attack modes. Anything else (or an absent param)
+ * parses to `'melee'` — that's the default both in the URL and the
+ * controller. */
+export const COMBAT_MODES  = Object.freeze(['melee', 'ranged']);
 
 /**
  * Parse combat-tester query params.
@@ -102,12 +108,15 @@ export function parseCombatParams(search = '', isValidUnit = null) {
   };
   const rawSpeed = params.get(COMBAT_SPEED);
   const speed = rawSpeed && COMBAT_SPEEDS.includes(rawSpeed) ? rawSpeed : 'cinematic';
+  const rawMode = params.get(COMBAT_MODE);
+  const mode = rawMode && COMBAT_MODES.includes(rawMode) ? rawMode : 'melee';
   return {
     atk:       one(COMBAT_ATK),
     def:       one(COMBAT_DEF),
     atkAllies: list(COMBAT_ATK_ALLIES),
     defAllies: list(COMBAT_DEF_ALLIES),
     speed,
+    mode,
   };
 }
 
@@ -144,6 +153,10 @@ export function withCombatParams(search, patch = {}) {
   // bookmark forms stay tidy. Explicit fast / vfast round-trip as-is.
   if (patch.speed === 'cinematic') params.delete(COMBAT_SPEED);
   else apply(COMBAT_SPEED, patch.speed);
+  // The default attack mode is implicit — drop `mode=melee` so bookmark
+  // forms stay tidy. Explicit ranged rounds-trips as-is.
+  if (patch.mode === 'melee') params.delete(COMBAT_MODE);
+  else apply(COMBAT_MODE, patch.mode);
   // URLSearchParams escapes "," to %2C; comma is a legal query character and
   // the operator spec shows literal commas in the bookmark form, so undo it.
   const out = params.toString().replace(/%2C/g, ',');

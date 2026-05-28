@@ -6,7 +6,7 @@
 // resolves the dice, run3DCombatCardHold plays the cinematic readout, and
 // the renderer's animation queue handles the lunge / floaters / fade-out.
 
-import { createCombatTester, UNIT_FACTORIES, SPEED_MODES } from './combat-tester.js';
+import { createCombatTester, UNIT_FACTORIES, SPEED_MODES, ATTACK_MODES } from './combat-tester.js';
 import { UNIT_TYPES } from '../unit-types.js';
 import { Renderer3D, BLOCK_WORD_VARIANTS } from '../renderer-3d.js';
 import { run3DCombatCardHold } from '../combat-cinematic.js';
@@ -210,6 +210,31 @@ export async function initCombat(doc = document) {
   defAddRow.append(defAddSel, defAddBtn);
   sec2.appendChild(defAddRow);
 
+  // Section: Attack type picker (melee / ranged). Ranged moves the defender
+  // out to distance 3 and forces the attacker's range so executeBattle
+  // routes through its ranged branch (no gang-up, no counter, point-blank
+  // disadvantage if dist <= 1). Default melee.
+  const secMode = doc.createElement('div');
+  secMode.className = 'c-section';
+  secMode.innerHTML = '<h3>Attack type</h3>';
+  controlsEl.appendChild(secMode);
+
+  const modeRow = doc.createElement('div');
+  modeRow.className = 'c-speed-row';
+  const modeBtns = {};
+  const MODE_LABELS = { melee: 'Melee', ranged: 'Ranged' };
+  for (const mode of ATTACK_MODES) {
+    const b = doc.createElement('button');
+    b.type = 'button';
+    b.className = 'c-speed-btn';
+    b.dataset.attackMode = mode;
+    b.textContent = MODE_LABELS[mode] ?? mode;
+    b.addEventListener('click', () => tester.setAttackMode(mode));
+    modeBtns[mode] = b;
+    modeRow.appendChild(b);
+  }
+  secMode.appendChild(modeRow);
+
   // Section: Speed mode picker (3-button group). Mirrors the in-game
   // cinematic / fast / vfast modes. Cinematic runs the dice-card readout +
   // Continue gate; fast / vfast skip the readout entirely and use the
@@ -315,6 +340,15 @@ export async function initCombat(doc = document) {
       b.setAttribute('aria-pressed', active ? 'true' : 'false');
     }
   }
+  function refreshAttackMode() {
+    for (const mode of ATTACK_MODES) {
+      const b = modeBtns[mode];
+      if (!b) continue;
+      const active = tester.attackMode === mode;
+      b.classList.toggle('is-active', active);
+      b.setAttribute('aria-pressed', active ? 'true' : 'false');
+    }
+  }
   function refreshRandomize() {
     const hasAllies =
       tester.slots.atkAllies.length + tester.slots.defAllies.length > 0;
@@ -324,6 +358,7 @@ export async function initCombat(doc = document) {
     refreshPickers();
     refreshChips();
     refreshSpeed();
+    refreshAttackMode();
     refreshRandomize();
   }
 
@@ -358,6 +393,7 @@ export async function initCombat(doc = document) {
       atkAllies: slots.atkAllies.slice(),
       defAllies: slots.defAllies.slice(),
       speed:     tester.speedMode,
+      mode:      tester.attackMode,
     };
     const next = withCombatParams(location.search, patch);
     const url = `${location.pathname}${next}${location.hash || ''}`;
@@ -374,6 +410,7 @@ export async function initCombat(doc = document) {
       for (const a of cfg.atkAllies) tester.addAlly('attacker', a);
       for (const a of cfg.defAllies) tester.addAlly('defender', a);
       if (cfg.speed) tester.setSpeedMode(cfg.speed);
+      if (cfg.mode) tester.setAttackMode(cfg.mode);
     } finally {
       applyingFromUrl = false;
     }

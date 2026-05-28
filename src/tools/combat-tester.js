@@ -51,6 +51,25 @@ const DEFAULT_SIZE = 9;
 // the combatant but only 3 contribute to the gang-up math.
 export const MAX_ALLIES_PER_SIDE = 4;
 
+// Attack modes. 'melee' places the defender adjacent (distance 1); 'ranged'
+// places the defender at distance 3 (within the clearing's interior). In
+// ranged mode the attacker's range is forced to RANGED_ATTACK_RANGE so
+// executeBattle routes through its ranged branch regardless of which unit
+// type the operator picked.
+export const ATTACK_MODES = Object.freeze(['melee', 'ranged']);
+export const RANGED_DEFENDER_OFFSET = 3;
+export const RANGED_ATTACK_RANGE = 3;
+
+// The defender's offset hex for a given attack mode. Centre is the
+// attacker's hex; in melee the defender sits one hex east, in ranged
+// three hexes east. Shared by _layoutCombatants and randomizeAllies so
+// ally placement always lines up with the actual target hex.
+function _defenderHexFor(size, attackMode) {
+  const centre = { col: Math.floor(size / 2), row: Math.floor(size / 2) };
+  const offset = attackMode === 'ranged' ? RANGED_DEFENDER_OFFSET : 1;
+  return { col: centre.col + offset, row: centre.row };
+}
+
 // Ally placement: BOTH sides must be hex-adjacent to the defender (the TARGET
 // hex) — that's the gang-up rule in executeBattle (`atkAllies` and `defAllies`
 // are both filtered by `targetHexes`). Visually we split the defender's
@@ -144,9 +163,9 @@ function _placeUnit(state, unitType, col, row, sideId) {
 // Place the attacker / defender at the canonical positions and the allies
 // at the ring slots. Mutates the entity list in-place — callers clear it
 // first if they want a fresh layout.
-function _layoutCombatants(state, slots, size) {
+function _layoutCombatants(state, slots, size, attackMode = 'melee') {
   const centre   = { col: Math.floor(size / 2), row: Math.floor(size / 2) };
-  const adjacent = { col: centre.col + 1, row: centre.row };
+  const adjacent = _defenderHexFor(size, attackMode);
 
   let attackerEntity = null;
   let defenderEntity = null;
@@ -155,6 +174,12 @@ function _layoutCombatants(state, slots, size) {
 
   if (slots.attacker) {
     attackerEntity = _placeUnit(state, slots.attacker, centre.col, centre.row, ATK_SIDE_ID);
+    // In ranged mode, force the attacker's range so executeBattle treats the
+    // strike as ranged regardless of the picked unit type. Melee units
+    // (paladin etc.) gain no projectileType, so the renderer falls back to
+    // 'sparkle' — fine for the tester's "see what a ranged attack looks
+    // like" purpose.
+    if (attackMode === 'ranged') attackerEntity.range = RANGED_ATTACK_RANGE;
   }
   if (slots.defender) {
     defenderEntity = _placeUnit(state, slots.defender, adjacent.col, adjacent.row, DEF_SIDE_ID);
@@ -258,6 +283,10 @@ export function createCombatTester(opts = {}) {
   // Defaults to cinematic (matches the URL default and the prior behaviour).
   let speedMode = 'cinematic';
 
+  // Attack mode — 'melee' (defender adjacent) or 'ranged' (defender at
+  // distance 3, attacker forced to range 3). Defaults to melee.
+  let attackMode = 'melee';
+
   // Build a single GameState up front; rebuilds clear and re-place
   // entities in-place so the renderer keeps the same state reference and
   // doesn't have to be torn down between layouts.
@@ -271,7 +300,7 @@ export function createCombatTester(opts = {}) {
 
   function _rebuild() {
     state.entities.length = 0;
-    layout = _layoutCombatants(state, slots, size);
+    layout = _layoutCombatants(state, slots, size, attackMode);
     _emit();
   }
 
@@ -344,7 +373,7 @@ export function createCombatTester(opts = {}) {
     const totalAllies = slots.atkAllies.length + slots.defAllies.length;
     if (totalAllies === 0) return false;
     const centre   = { col: Math.floor(size / 2), row: Math.floor(size / 2) };
-    const adjacent = { col: centre.col + 1, row: centre.row };
+    const adjacent = _defenderHexFor(size, attackMode);
     const { atkSlots, defSlots } = _allySlots(centre, adjacent, size);
     // All defender-adjacent hexes (minus the attacker hex) form the legal
     // pool. There are typically 5 such hexes on a flat clearing.
@@ -374,6 +403,17 @@ export function createCombatTester(opts = {}) {
     slots.defAllyPositions = defPos;
     _rebuild();
     return true;
+  }
+  function setAttackMode(mode) {
+    // Unknown values fall back to melee so a stale URL never wedges the
+    // tester into an undefined branch.
+    const next = ATTACK_MODES.includes(mode) ? mode : 'melee';
+    if (next === attackMode) return;
+    attackMode = next;
+    // Changing the mode shifts the defender hex, so cached per-ally
+    // position overrides no longer correspond to legal slots — drop them.
+    _clearAllyPositionOverrides();
+    _rebuild();
   }
   function setSpeedMode(mode) {
     // Unknown values fall back to cinematic so a stale URL never wedges the
@@ -411,11 +451,12 @@ export function createCombatTester(opts = {}) {
     get layout() { return layout; },
     get size() { return size; },
     get speedMode() { return speedMode; },
+    get attackMode() { return attackMode; },
     setAttacker, setDefender,
     addAlly, removeAlly,
     swapRoles, reset, runBattle,
     randomizeAllies,
-    setSpeedMode,
+    setSpeedMode, setAttackMode,
     onChange,
   };
   return api;
