@@ -2924,7 +2924,11 @@ export class Renderer3D {
             // INSTANCES and SHADOWS{N} defines from the start.
             if (typeof m.material.forceCompilation === 'function') {
               try {
-                m.material.forceCompilation(m, { useInstances: true });
+                // Babylon signature: forceCompilation(mesh, onCompiled?, options?, onError?).
+                // Passing the options object as the 2nd arg makes Babylon try to
+                // call it as a function once compile finishes — TypeError per
+                // material, repeating through every PBR fallback pass.
+                m.material.forceCompilation(m, undefined, { useInstances: true });
               } catch (_err) { /* compilation may fail in headless tests */ }
             }
           }
@@ -3062,7 +3066,8 @@ export class Renderer3D {
             // Re-bake INSTANCES (+ SHADOWS) defines on the faded submaterial so
             // its hardware instances compile the alpha path (see below).
             if (typeof fsub.forceCompilation === 'function') {
-              try { fsub.forceCompilation(m, { useInstances: true }); } catch (_e) { /* headless */ }
+              // 2nd arg is onCompiled — pass undefined; options go in 3rd.
+              try { fsub.forceCompilation(m, undefined, { useInstances: true }); } catch (_e) { /* headless */ }
             }
             return fsub;
           });
@@ -3072,7 +3077,8 @@ export class Renderer3D {
         // material so its hardware instances render with shadow sampling,
         // matching the opaque template's pre-compile (see `_loadTreePackManifest`).
         if (typeof fm.forceCompilation === 'function') {
-          try { fm.forceCompilation(m, { useInstances: true }); } catch (_e) { /* headless */ }
+          // 2nd arg is onCompiled — pass undefined; options go in 3rd.
+          try { fm.forceCompilation(m, undefined, { useInstances: true }); } catch (_e) { /* headless */ }
         }
       }
     }
@@ -10436,6 +10442,12 @@ export class Renderer3D {
     // Continue is pressed.
     const iconCenterY = iconBillboardYRelativeToCone(standee.leader);
     const iconTopY = iconCenterY + UNIT_ICON_PLANE_SIZE / 2;
+    // Push the floater stack along the attack axis (atk → behind atk,
+    // def → behind def) so the two combatants' floaters separate in screen
+    // space instead of stacking on each other at the centre.
+    const axis = computeCombatCardAxisOffset(side, opts);
+    const axisScale = COMBAT_READOUT_FLOATER_AXIS_OFFSET / CARD_AXIS_OFFSET_WORLD;
+    const floaterAxis = { x: axis.x * axisScale, z: axis.z * axisScale };
     const slotY = (slotIdx) => iconTopY
       + COMBAT_READOUT_FLOATER_Y_OFFSET
       + (slotIdx + 0.5) * COMBAT_READOUT_FLOATER_PLANE_HEIGHT
@@ -10503,7 +10515,9 @@ export class Renderer3D {
         setTimeoutFn(() => {
           if (disposed) return;
           repaintIcon(step.value, model.sideColor);
-          const fd = this._spawnPersistentStepFloater(standee, slotY(i), step, model.sideColor);
+          const fd = this._spawnPersistentStepFloater(
+            standee, slotY(i), step, model.sideColor, floaterAxis,
+          );
           if (fd) persistents.push(fd);
         }, at);
       }
@@ -10705,7 +10719,7 @@ export class Renderer3D {
   /** G1 v2 — spawn a persistent "+N reason" floater that parks at a fixed
    *  slot above the icon and stays visible until the parent fade-out runs.
    *  Returns `{ plane, mat, tex }` so the caller can fade + dispose it. */
-  _spawnPersistentStepFloater(standee, centreY, step, sideColor) {
+  _spawnPersistentStepFloater(standee, centreY, step, sideColor, axisOffset) {
     if (!this._scene || !this._babylon) return null;
     const BABYLON = this._babylon;
     const sign = step.delta < 0 ? '−' : '+';
@@ -10747,9 +10761,12 @@ export class Renderer3D {
     plane.material = mat;
 
     plane.parent = standee.plane;
-    // Persistent: parked directly above the icon at the assigned slot Y.
-    // No horizontal offset — vertical stack only.
-    plane.position.set(0, centreY, 0);
+    // Persistent: parked at the assigned slot Y, pushed outward along the
+    // attack axis so atk-side floaters sit on the attacker's outer side and
+    // def-side floaters on the defender's. No-op {0,0} for non-combat callers.
+    const dx = (axisOffset && Number.isFinite(axisOffset.x)) ? axisOffset.x : 0;
+    const dz = (axisOffset && Number.isFinite(axisOffset.z)) ? axisOffset.z : 0;
+    plane.position.set(dx, centreY, dz);
     plane.visibility = 1;
     return { plane, mat, tex };
   }
@@ -15941,6 +15958,11 @@ export const COMBAT_READOUT_FADE_MS       = 500;
  *  floater starts (extra clearance so the floater doesn't overlap the icon
  *  number while ticking up). */
 export const COMBAT_READOUT_FLOATER_Y_OFFSET = 0.02;
+/** Horizontal push (along the attack axis, in world units) for the floater
+ *  stack so the attacker's floaters sit further LEFT and the defender's
+ *  further RIGHT of their respective icons. Keeps the two stacks from
+ *  visually overlapping in the centre of the screen. */
+export const COMBAT_READOUT_FLOATER_AXIS_OFFSET = 0.55;
 /** Gap (world units) between adjacent persistent floater slots. */
 export const COMBAT_READOUT_FLOATER_SLOT_GAP = 0.04;
 /** Result label billboard sits above ALL floater slots. Bigger + bolder than

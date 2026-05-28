@@ -53,7 +53,7 @@
  *
  * Visible for tests via the named export.
  */
-export const CONTINUE_COUNTDOWN_SEC = 5;
+export const CONTINUE_COUNTDOWN_SEC = 3;
 export const CONTINUE_BTN_BASE_LABEL = 'Continue';
 
 export function startContinueCountdown(button, onAutoClick, opts = {}) {
