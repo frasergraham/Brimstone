@@ -47,7 +47,6 @@ import {
 import {
   hexSplatWeights, hexFogWeights, splatChannelForTile,
   worldToHex, neighborDeltas, DEFAULT_TERRAIN_TINTS,
-  hexGridAlphaForZoom,
 } from './terrain-splat.js';
 import { makeTerrainSplatPlugin, SPLAT_UNIFORM_DEFAULTS } from './terrain-splat-plugin.js';
 
@@ -6167,8 +6166,12 @@ export class Renderer3D {
   }
 
   /** Mid-grey wireframe overlay tracing every playable-hex perimeter, sitting
-   *  just above the splat ground (Y=0.003) so the player can read the hex grid
-   *  through the blended terrain. Single merged LinesMesh — one draw call.
+   *  just above the splat ground (Y=0.003). One draw call (merged LinesMesh).
+   *  Each fragment fades by world-distance from the camera target so only the
+   *  hexes the player is actually looking at carry visible grid lines — the
+   *  whole map full of lines would smear into a noise band. The fade band
+   *  (HEX_GRID_FADE_START_W → HEX_GRID_FADE_END_W) is ~3 → ~5 hex-pitches; the
+   *  camera target's XZ is fed to the shader each frame in `_onBeforeRender`.
    *  Toggle via `setHexGridVisible(bool)`. */
   _buildHexGrid(parent) {
     const BABYLON = this._babylon;
@@ -6188,15 +6191,67 @@ export class Renderer3D {
     }
     const mesh = BABYLON.MeshBuilder.CreateLineSystem(
       'hexGrid', { lines, updatable: false }, this._scene);
-    if (BABYLON.Color3) mesh.color = new BABYLON.Color3(0.55, 0.55, 0.55);
-    if (mesh.material) {
-      if (mesh.material.alpha !== undefined) mesh.material.alpha = 0.5;
-      // Lines paint over the ground but mustn't occlude props above them.
-      mesh.material.disableDepthWrite = true;
-    }
     mesh.parent     = parent;
     mesh.metadata   = { kind: 'hexGrid' };
     mesh.isPickable = false;
+
+    // Custom ShaderMaterial — uniform-driven radial fade around the camera
+    // target. Falls back to a plain mid-grey LineMaterial when ShaderMaterial
+    // isn't available (e.g. test mock), so the mesh still renders.
+    if (BABYLON.ShaderMaterial && BABYLON.Effect?.ShadersStore) {
+      const KEY = 'hexGridFade';
+      const store = BABYLON.Effect.ShadersStore;
+      if (!store[`${KEY}VertexShader`]) {
+        store[`${KEY}VertexShader`] = `
+          precision highp float;
+          attribute vec3 position;
+          uniform mat4 worldViewProjection;
+          varying vec2 vWorldXZ;
+          void main() {
+            vWorldXZ = position.xz;
+            gl_Position = worldViewProjection * vec4(position, 1.0);
+          }`;
+        store[`${KEY}FragmentShader`] = `
+          precision highp float;
+          varying vec2 vWorldXZ;
+          uniform vec2 uTargetXZ;
+          uniform vec3 uColor;
+          uniform float uFadeStart;
+          uniform float uFadeEnd;
+          uniform float uPeak;
+          void main() {
+            float d = length(vWorldXZ - uTargetXZ);
+            float a = uPeak * (1.0 - smoothstep(uFadeStart, uFadeEnd, d));
+            if (a <= 0.001) discard;
+            gl_FragColor = vec4(uColor, a);
+          }`;
+      }
+      const mat = new BABYLON.ShaderMaterial(KEY, this._scene,
+        { vertex: KEY, fragment: KEY },
+        {
+          attributes: ['position'],
+          uniforms: ['worldViewProjection', 'uTargetXZ', 'uColor',
+                     'uFadeStart', 'uFadeEnd', 'uPeak'],
+          needAlphaBlending: true,
+        });
+      if (BABYLON.Color3) mat.setColor3('uColor', new BABYLON.Color3(0.55, 0.55, 0.55));
+      if (BABYLON.Vector2) mat.setVector2('uTargetXZ', new BABYLON.Vector2(0, 0));
+      mat.setFloat('uFadeStart', HEX_GRID_FADE_START_W);
+      mat.setFloat('uFadeEnd',   HEX_GRID_FADE_END_W);
+      mat.setFloat('uPeak',      HEX_GRID_PEAK_ALPHA);
+      mat.disableDepthWrite = true;
+      mesh.material = mat;
+      this._hexGridMat = mat;
+      if (BABYLON.Vector2) this._hexGridTargetVec = new BABYLON.Vector2(0, 0);
+    } else {
+      // Test/fallback path — flat mid-grey at peak alpha, no distance fade.
+      if (BABYLON.Color3) mesh.color = new BABYLON.Color3(0.55, 0.55, 0.55);
+      if (mesh.material) {
+        if (mesh.material.alpha !== undefined) mesh.material.alpha = HEX_GRID_PEAK_ALPHA;
+        mesh.material.disableDepthWrite = true;
+      }
+    }
+
     this._hexGridMesh = mesh;
     return mesh;
   }
@@ -11153,14 +11208,13 @@ export class Renderer3D {
 
   _onBeforeRender() {
     const now = this._nowMs();
-    // Hex wireframe distance fade — fully visible at the close-in zoom,
-    // eases off toward fully transparent at max zoom-out so the grid doesn't
-    // smear into a flat noise band when the whole map is on screen.
-    if (this._hexGridMesh && this._hexGridMesh.material && this._camera) {
-      const minR = this._camera.lowerRadiusLimit ?? 4;
-      const maxR = this._camera.upperRadiusLimit ?? 30;
-      this._hexGridMesh.material.alpha =
-        hexGridAlphaForZoom(this._camera.radius, minR, maxR, { peak: 0.5 });
+    // Hex wireframe radial fade — push the live camera target's XZ into the
+    // grid shader so each line fragment fades by world-distance from the
+    // focus point (fully visible within ~3 hexes, transparent past ~5 hexes).
+    if (this._hexGridMat && this._hexGridTargetVec && this._camera?.target) {
+      this._hexGridTargetVec.x = this._camera.target.x;
+      this._hexGridTargetVec.y = this._camera.target.z;
+      this._hexGridMat.setVector2('uTargetXZ', this._hexGridTargetVec);
     }
     // Lock the camera target to the ground plane (Y=0). Babylon's
     // ArcRotateCamera pan moves the target along the screen-aligned plane
@@ -13753,6 +13807,14 @@ export const FOG_TILE_DARKEN = 0.20;
 // (PHASE_LIGHT_CONFIG dawn/dusk values around 0.6-0.7 would otherwise feel
 // like a thin atmospheric haze, not occluded vision).
 export const FOG_HIDDEN_DARKEN = 0.25;
+
+// Hex wireframe radial fade — world units (1 = hex radius; a hex's flat-to-flat
+// pitch is √3 ≈ 1.73). Lines fully visible inside HEX_GRID_FADE_START_W around
+// the camera target, smoothstep to zero by HEX_GRID_FADE_END_W. Tuned so the
+// grid disappears within roughly five hexes of the camera focus point.
+export const HEX_GRID_FADE_START_W = 5.0;  // ≈ 3 hex-pitches
+export const HEX_GRID_FADE_END_W   = 8.7;  // ≈ 5 hex-pitches
+export const HEX_GRID_PEAK_ALPHA   = 0.5;
 
 /** Cubic ease-in-out — interpolates 0→1 smoothly with no jolt at endpoints. */
 export function easeInOutCubic(u) {
