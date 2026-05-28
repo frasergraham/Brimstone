@@ -4615,16 +4615,52 @@ export class Renderer3D {
    *  `entityId`) in `mesh.metadata`. Standees are raised above tiles so the
    *  closest-hit picker prefers them, which means clicking a unit returns
    *  the unit's hex even when its base partially overlaps a neighbour. */
+  /** Intersect the screen ray (canvas-LOCAL pixel x,y) with the Y=0 ground
+   *  plane → world { x, z }, or null on a miss (sky / parallel ray / no scene).
+   *  Shared by the drag-pan grab and splat-terrain picking. mapRoot carries no
+   *  transform, so world XZ == tile-local XZ (worldToHex inverts directly). */
+  _screenToGround(localX, localY) {
+    const camera = this._camera;
+    if (!this._scene || !camera) return null;
+    if (typeof this._scene.createPickingRay !== 'function') return null;
+    const BABYLON = this._babylon;
+    const idMat = BABYLON && BABYLON.Matrix && typeof BABYLON.Matrix.Identity === 'function'
+      ? BABYLON.Matrix.Identity() : null;
+    const ray = this._scene.createPickingRay(localX, localY, idMat, camera);
+    if (!ray || !ray.direction) return null;
+    // Ray going up or parallel → no hit. Camera looks down: direction.y < 0.
+    if (ray.direction.y >= -1e-6) return null;
+    const t = -ray.origin.y / ray.direction.y;
+    if (t <= 0) return null;
+    return {
+      x: ray.origin.x + ray.direction.x * t,
+      z: ray.origin.z + ray.direction.z * t,
+    };
+  }
+
   canvasToHex(x, y) {
     if (!this._scene) return { col: -1, row: -1 };
+    // Entity pick first — units float above the ground and must win the click.
+    // Legacy path also picks the per-tile 'tile' meshes; the splat path has no
+    // per-tile meshes (one merged ground), so it falls through to the ground
+    // ray below.
     const pick = this._scene.pick(x, y, (mesh) => {
       const k = mesh.metadata?.kind;
-      return k === 'tile' || k === 'entity';
+      return k === 'entity' || (!this._useSplatTerrain && k === 'tile');
     });
     if (pick?.hit && pick.pickedMesh?.metadata) {
       const md = pick.pickedMesh.metadata;
       if (typeof md.col === 'number' && typeof md.row === 'number') {
         return { col: md.col, row: md.row };
+      }
+    }
+    // Splat terrain: invert the ground-plane hit to a hex, validated against
+    // the playable tiles (off-map / border-forest hits → the miss sentinel).
+    if (this._useSplatTerrain) {
+      const g = this._screenToGround(x, y);
+      if (g) {
+        const { col, row } = worldToHex(g.x, g.z, HEX_RADIUS_WORLD);
+        if (this.state?.tiles?.has(hexKey(col, row))) return { col, row };
       }
     }
     return { col: -1, row: -1 };
@@ -4703,6 +4739,10 @@ export class Renderer3D {
   setFogTint(value) {
     const v = Math.max(0, Math.min(1, Number(value) || 0));
     this._fogTileDarken = v;
+    // Splat ground: the plugin's uFogDarken uniform multiplies the texel
+    // (CUSTOM_FRAGMENT_UPDATE_DIFFUSE), surviving the lighting clamp. Set it
+    // directly; per-tile prop darken still flows through _applyFogVeil below.
+    if (this._splatPlugin) this._splatPlugin.uFogDarken = v;
     // Terrain fog materials: diffuseColor = (v, v, v) regardless of original.
     for (const [, mat] of this._terrainFogMaterialCache) {
       if (mat?.diffuseColor) {
@@ -5264,26 +5304,12 @@ export class Renderer3D {
     // delivers the "grab the world and pull it" feel the operator asked for
     // and replaces the old screen-space inertial-pan path which moved at a
     // fixed pixels-per-world rate regardless of zoom or camera angle.
+    // Pan grab uses CLIENT coords (from pointer events); convert to canvas-local
+    // and delegate to the shared `_screenToGround` ray→Y=0 intersection (the
+    // same math `canvasToHex` uses for splat-terrain picking).
     const groundPointFromScreen = (clientX, clientY) => {
-      if (!this._scene || !camera) return null;
       const rect = this.canvas.getBoundingClientRect ? this.canvas.getBoundingClientRect() : { left: 0, top: 0 };
-      const localX = clientX - (rect.left || 0);
-      const localY = clientY - (rect.top  || 0);
-      if (typeof this._scene.createPickingRay !== 'function') return null;
-      const BABYLON = this._babylon;
-      const idMat = BABYLON && BABYLON.Matrix && typeof BABYLON.Matrix.Identity === 'function'
-        ? BABYLON.Matrix.Identity() : null;
-      const ray = this._scene.createPickingRay(localX, localY, idMat, camera);
-      if (!ray || !ray.direction) return null;
-      // Ray going up or parallel to ground → no hit. Camera looking down has
-      // direction.y < 0.
-      if (ray.direction.y >= -1e-6) return null;
-      const t = -ray.origin.y / ray.direction.y;
-      if (t <= 0) return null;
-      return {
-        x: ray.origin.x + ray.direction.x * t,
-        z: ray.origin.z + ray.direction.z * t,
-      };
+      return this._screenToGround(clientX - (rect.left || 0), clientY - (rect.top || 0));
     };
 
     const applySinglePan = (entry, _dx, _dy) => {
@@ -11624,7 +11650,12 @@ export class Renderer3D {
     const state = this.state;
     const fogActive = state?.fogOfWar && state.fogOfWar !== 'none';
     const observerOwner = this._observerOwner();
-    const allKeys = [...this._tileMeshByKey.keys()];
+    // Splat terrain has no per-tile base meshes — the playable key set is the
+    // state tiles (mirrored by `_hexVertexRange`). Legacy path keys off the
+    // per-hex mesh registry.
+    const allKeys = this._useSplatTerrain
+      ? [...(state?.tiles?.keys() || [])]
+      : [...this._tileMeshByKey.keys()];
 
     // Real fogged set per game state + observer (the `normal`/`debug` source of
     // truth, independent of the display override).
@@ -11652,13 +11683,25 @@ export class Renderer3D {
 
     // Diff against the currently-fogged set: clear any previously-fogged tile
     // that is now visible, then fog any tile that should now be dark.
-    for (const [k, mesh] of this._tileMeshByKey) {
-      const shouldBeFogged = fogged.has(k);
-      const isFogged = this._fogActiveSet.has(k);
-      if (shouldBeFogged && !isFogged) {
-        this._setTileFogged(k, mesh, true);
-      } else if (!shouldBeFogged && isFogged) {
-        this._setTileFogged(k, mesh, false);
+    if (this._useSplatTerrain) {
+      // One vertex-buffer rewrite covers the whole ground's soft veil; props
+      // (standees/discs/labels) still flip per-hex via _setTilePropsFogged.
+      this._writeFogWeights(fogged);
+      for (const k of allKeys) {
+        const shouldBeFogged = fogged.has(k);
+        const isFogged = this._fogActiveSet.has(k);
+        if (shouldBeFogged && !isFogged) this._setTilePropsFogged(k, true);
+        else if (!shouldBeFogged && isFogged) this._setTilePropsFogged(k, false);
+      }
+    } else {
+      for (const [k, mesh] of this._tileMeshByKey) {
+        const shouldBeFogged = fogged.has(k);
+        const isFogged = this._fogActiveSet.has(k);
+        if (shouldBeFogged && !isFogged) {
+          this._setTileFogged(k, mesh, true);
+        } else if (!shouldBeFogged && isFogged) {
+          this._setTileFogged(k, mesh, false);
+        }
       }
     }
 
@@ -11798,15 +11841,37 @@ export class Renderer3D {
     this._fogDebugMarkers.clear();
   }
 
-  _setTileFogged(hexK, tileMesh, fogged) {
-    const md = tileMesh.metadata;
-    if (!md?.baseColor) return;
-    const tile = this.state?.tiles?.get(hexK);
-    // When we have the tile in state we can pick a textured fog material;
-    // otherwise (shouldn't happen for playable hexes) fall back to colour-only.
-    tileMesh.material = tile
-      ? this._tileMaterialFor(tile, { fogged })
-      : (fogged ? this._fogMaterialFor(md.baseColor) : this._materialFor(md.baseColor));
+  /** Rewrite the merged ground's `aFog` vertex attribute from the fogged-hex
+   *  set (splat path). Per-hex vertex weights come from `hexFogWeights` (soft
+   *  veil edge averaged across neighbours), written into the slice located via
+   *  `_hexVertexRange`, then pushed as ONE `updateVerticesData('aFog', …)`.
+   *  No-op when the ground / buffer isn't built (node-test, flag off). */
+  _writeFogWeights(fogged) {
+    const buf = this._splatFogBuf;
+    const ground = this._splatGround;
+    if (!buf || !ground || typeof ground.updateVerticesData !== 'function') return;
+    const tiles = this.state?.tiles;
+    for (const [key, baseV] of this._hexVertexRange) {
+      const [colS, rowS] = key.split(',');
+      const col = +colS, row = +rowS;
+      const neighborKeys = neighborDeltas(row).map(([dc, dr]) => {
+        const nk = hexKey(col + dc, row + dr);
+        // Only count hexes that exist in the playable set (off-map → null), so
+        // the veil edge doesn't average against non-existent tiles.
+        return tiles && tiles.has(nk) ? nk : null;
+      });
+      const w = hexFogWeights(key, neighborKeys, fogged);
+      buf.set(w, baseV);
+    }
+    ground.updateVerticesData('aFog', buf);
+  }
+
+  /** Props/labels half of fogging a hex — hide tactical props (standees, discs,
+   *  HP bars), darken 'darken'-policy props (roads/rivers), dim building labels,
+   *  hide node labels, and maintain `_fogActiveSet`. Shared by both the legacy
+   *  base-mesh path (`_setTileFogged`) and the splat path (`_applyFogVeil`),
+   *  which handles the ground veil separately via `_writeFogWeights`. */
+  _setTilePropsFogged(hexK, fogged) {
     const props = this._tilePropsByKey.get(hexK);
     if (props) for (const p of props) {
       // Three fog policies per-prop, set via `metadata.respectsFog`:
@@ -11860,6 +11925,19 @@ export class Renderer3D {
     }
     if (fogged) this._fogActiveSet.add(hexK);
     else this._fogActiveSet.delete(hexK);
+  }
+
+  _setTileFogged(hexK, tileMesh, fogged) {
+    const md = tileMesh.metadata;
+    if (!md?.baseColor) return;
+    const tile = this.state?.tiles?.get(hexK);
+    // When we have the tile in state we can pick a textured fog material;
+    // otherwise (shouldn't happen for playable hexes) fall back to colour-only.
+    tileMesh.material = tile
+      ? this._tileMaterialFor(tile, { fogged })
+      : (fogged ? this._fogMaterialFor(md.baseColor) : this._materialFor(md.baseColor));
+    // Props/labels + _fogActiveSet handled by the shared helper.
+    this._setTilePropsFogged(hexK, fogged);
   }
 
   _fogMaterialFor(baseHex) {
