@@ -44,6 +44,10 @@ export const UNIT_FACTORIES = Object.freeze({
 // crowd the centre. Centre at (4,4), defender one east at (5,4).
 const DEFAULT_SIZE = 9;
 
+// Cap allies per side. Matches src/entities.js ADVANTAGE_CAP=3: adding a 4th
+// ally would only crowd the ring without growing the dice pool.
+export const MAX_ALLIES_PER_SIDE = 3;
+
 // Ally placement: BOTH sides must be hex-adjacent to the defender (the TARGET
 // hex) — that's the gang-up rule in executeBattle (`atkAllies` and `defAllies`
 // are both filtered by `targetHexes`). Visually we split the defender's
@@ -221,10 +225,14 @@ export function createCombatTester(opts = {}) {
     _rebuild();
   }
   function addAlly(side, unitType) {
-    if (!unitType) return;
+    if (!unitType) return false;
     const list = side === 'attacker' ? slots.atkAllies : slots.defAllies;
+    // Hard-cap allies at MAX_ALLIES_PER_SIDE — matches ADVANTAGE_CAP=3 so the
+    // tester can't stack allies beyond what the gang-up math actually counts.
+    if (list.length >= MAX_ALLIES_PER_SIDE) return false;
     list.push(unitType);
     _rebuild();
+    return true;
   }
   function removeAlly(side, idx) {
     const list = side === 'attacker' ? slots.atkAllies : slots.defAllies;

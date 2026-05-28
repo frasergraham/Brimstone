@@ -313,7 +313,7 @@ Each round uses **simultaneous planning** instead of sequential turns:
 Move, Explore, Battle, Fortify (hero), Summon (witch), Use Item, Equip Weapon, Use Ability. Costs and rules are defined in `src/actions.js` — refer to the code for current values as they are frequently tuned.
 
 ### Combat
-Dice-based with attack/defense rolls. Each side rolls a pool of 1+K d6 (K = net advantage, capped at `ADVANTAGE_CAP=4`) and takes best (advantage) or worst (disadvantage). Gang-up allies grant +1 advantage die *and* +1 flat per ally (capped at `ADVANTAGE_CAP`). Phase bonus (witch at night), silver weapon, and fortification stay flat. Staff vs undead/minions/golems grants attacker advantage. See `Entity.resolveCombat()` in `src/entities.js` for the formula. Key outcomes: hit (1 damage), crush (2 damage), counter (1 damage to attacker).
+Dice-based with attack/defense rolls. Each side rolls a pool of 1+K d6 (K = net advantage, capped at `ADVANTAGE_CAP=3`) and takes best (advantage) or worst (disadvantage). Gang-up allies grant +1 advantage die *and* +1 flat per ally (capped at `ADVANTAGE_CAP`). Phase bonus (witch at night), silver weapon, and fortification stay flat. Staff vs undead/minions/golems grants attacker advantage. See `Entity.resolveCombat()` in `src/entities.js` for the formula. Key outcomes: hit (1 damage), crush (2 damage), counter (1 damage to attacker).
 
 ### Entity Types
 Hero, Witch, Survivor (recruited by hero), Zombie (encountered), Minion/Wood Golem/Iron Golem (summoned by witch). Stats are defined in `src/entities.js` factory functions — check the code for current values.

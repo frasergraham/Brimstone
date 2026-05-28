@@ -3,7 +3,7 @@
 // resolveCombat builds separate attack and defense dice pools. Each side's net
 // advantage = (advantage sources) − (disadvantage sources). Positive net rolls
 // 1+net d6 and picks the highest; negative rolls 1+|net| d6 and picks the
-// lowest; zero rolls a single d6. Total per side capped at ADVANTAGE_CAP (4).
+// lowest; zero rolls a single d6. Total per side capped at ADVANTAGE_CAP (3).
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -84,13 +84,13 @@ describe('net advantage/disadvantage', () => {
 
 describe('advantage cap', () => {
   test(`cap is ${ADVANTAGE_CAP} total dice per side`, () => {
-    assert.equal(ADVANTAGE_CAP, 4);
+    assert.equal(ADVANTAGE_CAP, 3);
   });
 
   test('sources beyond the cap do not grow the pool', () => {
     const hero = createHero(0, 0);
     const witch = createWitch(0, 0);
-    // 8 advantage sources → clamped to 4 → pool of 5
+    // 8 advantage sources → clamped to ADVANTAGE_CAP → pool of 1+CAP
     const r = withRNG(Array(9).fill(0.5),
       () => Entity.resolveCombat(hero, witch,
         { atkAdvantageDice: 8 }));
@@ -115,9 +115,9 @@ describe('expected value lookup', () => {
   test('expectedDieValue returns correct lookup for each net advantage', () => {
     assert.equal(expectedDieValue(0), 3.5);
     assert.equal(expectedDieValue(1), BEST_OF_K_EV[1]);
-    assert.equal(expectedDieValue(4), BEST_OF_K_EV[4]);
+    assert.equal(expectedDieValue(ADVANTAGE_CAP), BEST_OF_K_EV[ADVANTAGE_CAP]);
     assert.equal(expectedDieValue(-1), WORST_OF_K_EV[1]);
-    assert.equal(expectedDieValue(-4), WORST_OF_K_EV[4]);
+    assert.equal(expectedDieValue(-ADVANTAGE_CAP), WORST_OF_K_EV[ADVANTAGE_CAP]);
   });
 
 });

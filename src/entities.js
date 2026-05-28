@@ -424,7 +424,9 @@ export function rangeOf(e) {
 // ── Advantage-dice math ─────────────────────────────────────────────────────
 
 // Cap total advantage/disadvantage dice each side can accumulate.
-export const ADVANTAGE_CAP = 4;
+// Lowered from 4 to 3 so the game cap matches the combat-tester's visual
+// capacity (defender's 6-hex neighbour ring splits into 3 atk + 3 def slots).
+export const ADVANTAGE_CAP = 3;
 
 // E[best-of-(1+K)] and E[worst-of-(1+K)] for K advantage/disadvantage dice.
 // Index by the advantage level K ∈ {0, 1, 2, 3, 4}. K=0 is a plain d6 (E=3.5).

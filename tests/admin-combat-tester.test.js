@@ -14,8 +14,9 @@ import { fileURLToPath } from 'node:url';
 
 import {
   buildClearingMap, newClearingState, createCombatTester,
-  ATK_SIDE_ID, DEF_SIDE_ID, UNIT_FACTORIES,
+  ATK_SIDE_ID, DEF_SIDE_ID, UNIT_FACTORIES, MAX_ALLIES_PER_SIDE,
 } from '../src/tools/combat-tester.js';
+import { ADVANTAGE_CAP } from '../src/entities.js';
 import { hexKey, hexDistance } from '../src/hex.js';
 import { KNOWN_TOOLS } from '../src/tools/url-state.js';
 
@@ -221,6 +222,47 @@ describe('combat-tester — ally placement triggers REAL gang-up code path', () 
     t.addAlly('defender', 'minion');
     const out = t.runBattle();
     assert.equal(out.result.defenderAllies, 1);
+  });
+});
+
+describe('combat-tester — ally cap', () => {
+  test(`MAX_ALLIES_PER_SIDE matches ADVANTAGE_CAP (${ADVANTAGE_CAP})`, () => {
+    // The visual ring around the defender splits into 3 atk + 3 def slots,
+    // and the gang-up math caps at ADVANTAGE_CAP per side. The tester cap
+    // must track the game cap so we can't add allies that produce no effect.
+    assert.equal(MAX_ALLIES_PER_SIDE, ADVANTAGE_CAP);
+    assert.equal(MAX_ALLIES_PER_SIDE, 3);
+  });
+
+  test('addAlly refuses to push beyond MAX_ALLIES_PER_SIDE on each side', () => {
+    const t = createCombatTester();
+    t.setAttacker('paladin');
+    t.setDefender('witch');
+    for (let i = 0; i < MAX_ALLIES_PER_SIDE; i++) {
+      assert.equal(t.addAlly('attacker', 'survivor'), true,
+        `ally ${i + 1} should be accepted`);
+      assert.equal(t.addAlly('defender', 'minion'), true,
+        `ally ${i + 1} should be accepted`);
+    }
+    assert.equal(t.slots.atkAllies.length, MAX_ALLIES_PER_SIDE);
+    assert.equal(t.slots.defAllies.length, MAX_ALLIES_PER_SIDE);
+    // The (MAX+1)-th add must be rejected and leave the list unchanged.
+    assert.equal(t.addAlly('attacker', 'survivor'), false);
+    assert.equal(t.addAlly('defender', 'minion'), false);
+    assert.equal(t.slots.atkAllies.length, MAX_ALLIES_PER_SIDE);
+    assert.equal(t.slots.defAllies.length, MAX_ALLIES_PER_SIDE);
+  });
+
+  test('removeAlly re-opens a slot so a subsequent addAlly succeeds', () => {
+    const t = createCombatTester();
+    t.setAttacker('paladin');
+    t.setDefender('witch');
+    for (let i = 0; i < MAX_ALLIES_PER_SIDE; i++) t.addAlly('attacker', 'survivor');
+    assert.equal(t.addAlly('attacker', 'soldier'), false, 'cap reached');
+    t.removeAlly('attacker', 0);
+    assert.equal(t.addAlly('attacker', 'soldier'), true,
+      'slot re-opened by removeAlly');
+    assert.equal(t.slots.atkAllies.length, MAX_ALLIES_PER_SIDE);
   });
 });
 
