@@ -300,7 +300,7 @@ export class Faction {
    * @param {boolean} hasScout - whether the unit has SCOUT ability
    * @returns {number}
    */
-  getSightRange(_phase, _hasScout) { return 2; }
+  getSightRange(_phase, _hasScout) { return 5; }
 
   // ── Entity Registry ──
 
@@ -501,13 +501,14 @@ export class HeroFaction extends Faction {
     return `Found ${_lootType}! Added to shared supplies.`;
   }
 
-  // Visibility — phase-dependent, scout bonus
+  // Visibility — phase-dependent base range (LOS-blocked by buildings/forests
+  // in computeLineOfSight). Day 6, Dawn/Dusk 4, Night 3. Scout adds +1.
   getSightRange(phase, hasScout = false) {
     let base;
     switch (phase) {
-      case Phase.DAY:   base = 3; break;
-      case Phase.NIGHT: base = 1; break;
-      default:          base = 2; break; // DAWN, DUSK
+      case Phase.DAY:   base = 6; break;
+      case Phase.NIGHT: base = 3; break;
+      default:          base = 4; break; // DAWN, DUSK
     }
     return base + (hasScout ? 1 : 0);
   }
@@ -595,8 +596,8 @@ export class WitchFaction extends Faction {
     return `${actor.displayName} secures ${lootType} for dark rituals.`;
   }
 
-  // Visibility — fixed 2 hex range, no phase dependency
-  getSightRange(_phase, _hasScout) { return 2; }
+  // Visibility — fixed 5 hex range, no phase dependency (LOS-blocked).
+  getSightRange(_phase, _hasScout) { return 5; }
 
   // Entity Registry
   getUnitTypes() {

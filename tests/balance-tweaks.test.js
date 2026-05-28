@@ -143,12 +143,12 @@ describe('Witch action cap', () => {
 // ── Change 3: Witch vision at night ─────────────────────────────────────────
 
 describe('Witch vision distance', () => {
-  test('Witch faction sight range is 2 in all phases', () => {
+  test('Witch faction sight range is 5 in all phases', () => {
     const witch = getFaction('witch');
-    assert.equal(witch.getSightRange(Phase.DAY), 2);
-    assert.equal(witch.getSightRange(Phase.DAWN), 2);
-    assert.equal(witch.getSightRange(Phase.DUSK), 2);
-    assert.equal(witch.getSightRange(Phase.NIGHT), 2);
+    assert.equal(witch.getSightRange(Phase.DAY), 5);
+    assert.equal(witch.getSightRange(Phase.DAWN), 5);
+    assert.equal(witch.getSightRange(Phase.DUSK), 5);
+    assert.equal(witch.getSightRange(Phase.NIGHT), 5);
   });
 });
 

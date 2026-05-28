@@ -50,7 +50,8 @@ import { Renderer } from './renderer.js';
 import { getFactionTheme } from './theme.js';
 import { hexKey, hexDistance, getNeighbors } from './hex.js';
 import { nodeController, Phase } from './game.js';
-import { sightRangeForEntity, findFaction } from './factions.js';
+import { findFaction } from './factions.js';
+import { computeLineOfSight } from './actions.js';
 import { Side } from './sides.js';
 import { MAP_SIZES, NODE_COLORS } from './map.js';
 import {
@@ -14626,28 +14627,18 @@ export function resolveFogObserver(state) {
 }
 
 /**
- * Pure-functional fog-of-war visibility set. Returns the union of all hex
- * keys within sight range of every alive entity owned by `observerOwner`.
+ * Pure-functional fog-of-war visibility set. Delegates to the centralised
+ * line-of-sight helper in `src/actions.js` so the math stays consistent
+ * across the 2D and 3D renderers, the game state's explored-hex memory,
+ * and AI fog awareness. LOS is blocked by buildings and forest cover; the
+ * blocking tile itself is visible, hexes beyond it are not.
  *
- * Iterates `state.entities` and `state.tiles` (cheap — even a Campaign-size
- * map is ~300 tiles); does NOT include attacker-reveal hints (those live in
- * the animation layer and are layered on top by the 3D renderer separately).
- * Always returns a Set, never null — caller decides whether to apply it via
- * the fogOfWar state field gate.
+ * Does NOT include attacker-reveal hints (those live in the animation
+ * layer and are layered on top by the 3D renderer separately).
+ * Always returns a Set, never null.
  */
 export function buildFogVisibleSet(state, observerOwner) {
-  const visible = new Set();
-  if (!state?.entities || !state?.tiles || !observerOwner) return visible;
-  for (const e of state.entities) {
-    if (!e || !e.alive || e.owner !== observerOwner) continue;
-    const range = sightRangeForEntity(e, state.phase);
-    for (const tile of state.tiles.values()) {
-      if (hexDistance(tile.col, tile.row, e.col, e.row) <= range) {
-        visible.add(hexKey(tile.col, tile.row));
-      }
-    }
-  }
-  return visible;
+  return computeLineOfSight(state, observerOwner);
 }
 
 // ─── X-ray occlusion outline — pure helpers (see `_pumpXrayOcclusion`) ──────

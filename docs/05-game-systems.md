@@ -218,14 +218,19 @@ A horse doubles movement range (2 hexes instead of 1).
 ### Visibility & Fog of War
 
 ```
-sightRange(phase, isScout):
-  DAY   → 3 hexes (+1 if scout)
-  DAWN  → 2 hexes (+1 if scout)
-  DUSK  → 2 hexes (+1 if scout)
-  NIGHT → 1 hex   (+1 if scout)
+Hero sightRange(phase, isScout):
+  DAY   → 6 hexes (+1 if scout)
+  DAWN  → 4 hexes (+1 if scout)
+  DUSK  → 4 hexes (+1 if scout)
+  NIGHT → 3 hexes (+1 if scout)
+
+Witch sightRange:
+  always → 5 hexes
 ```
 
-Fog of war is active when any side is AI-controlled. Each faction sees only hexes within sight range of their units. AI log messages are replaced with atmospheric fog messages.
+Vision is **line-of-sight**: each unit's view is gated by `computeLineOfSight` (`src/actions.js`), which walks a hex line from the unit to each candidate hex inside its base range. Buildings (`hasBuilding`) and forest tiles (`isForestCover` — base material is forest, regardless of any path/structure on top) BLOCK vision past themselves; the blocker itself is visible, hexes beyond it are not. The 2D renderer (`renderer._buildFogVisibleHexes`), 3D renderer (`buildFogVisibleSet`), explored-hex memory (`GameState.updateExploredHexes`), and Hero-AI fog awareness all delegate to this single helper.
+
+Fog of war is active when any side is AI-controlled. Each faction sees only hexes within line of sight of their units. AI log messages are replaced with atmospheric fog messages.
 
 ### Survivor Discovery
 

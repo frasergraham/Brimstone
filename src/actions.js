@@ -1,5 +1,5 @@
 // Action system: definitions, validation, and execution
-import { getNeighbors, hexKey, hexDistance, hexRange, offsetToAxial, axialToOffset } from './hex.js';
+import { getNeighbors, hexKey, hexDistance, hexRange, hexLine, offsetToAxial, axialToOffset } from './hex.js';
 import {
   ResourceType, WEAPON_LABEL, BUILDING_LOOT, TERRAIN_LOOT, rollLoot,
   MAX_FORTIFY_LEVEL, getFortifyCombatBonus, isFortWall,
@@ -251,21 +251,95 @@ export function buildFogMovementHexes(state, observerOwner, projectedPositions =
 
 // ── Visibility ─────────────────────────────────────────────────────────────
 
-// Base sight range varies by phase: Day=3, Dawn/Dusk=2, Night=1.
-// SCOUT survivors add +1 to their personal range.
+// Base sight range varies by phase: Day=6, Dawn/Dusk=4, Night=3.
+// Buildings and forest tiles BLOCK line of sight beyond them (see
+// computeLineOfSight). SCOUT survivors add +1 to their personal range.
 export function sightRange(phase, isScout = false) {
   let base;
   switch (phase) {
-    case Phase.DAY:   base = 3; break;
-    case Phase.NIGHT: base = 1; break;
-    default:          base = 2; break; // DAWN, DUSK
+    case Phase.DAY:   base = 6; break;
+    case Phase.NIGHT: base = 3; break;
+    default:          base = 4; break; // DAWN, DUSK
   }
   return base + (isScout ? 1 : 0);
 }
 
+// ── Line of sight ──────────────────────────────────────────────────────────
+//
+// Vision is blocked by buildings (`hasBuilding`) and forest cover
+// (`isForestCover` — base material is forest, regardless of any path/structure
+// on top). The blocking tile itself is visible to the observer; tiles BEYOND
+// it on the ray are not. The observer's own hex is always visible.
+
+function _isLosBlocker(tile) {
+  if (!tile) return false;
+  return hasBuilding(tile) || isForestCover(tile);
+}
+
+/**
+ * Returns true if `(fromCol,fromRow)` has clear line of sight to
+ * `(toCol,toRow)`. Endpoints are NEVER themselves blockers — only
+ * intermediate hexes can block.
+ */
+export function hasLineOfSight(state, fromCol, fromRow, toCol, toRow) {
+  if (fromCol === toCol && fromRow === toRow) return true;
+  if (!state?.tiles) return true;
+  const line = hexLine(fromCol, fromRow, toCol, toRow);
+  for (let i = 1; i < line.length - 1; i++) {
+    const t = state.tiles.get(hexKey(line[i].col, line[i].row));
+    if (_isLosBlocker(t)) return false;
+  }
+  return true;
+}
+
+/**
+ * Compute the set of hex keys visible to all alive units owned by
+ * `observerOwner`. Each unit's range is `sightRangeForEntity(e, phase)`
+ * (phase-dependent for hero, fixed for witch, +1 if the unit carries SCOUT).
+ * Line of sight is blocked by buildings and forest tiles; the blocker
+ * itself is visible, tiles beyond it are not.
+ *
+ * `entities` defaults to `state.entities` but can be overridden with a
+ * snapshot (used during resolution animation where positions differ from
+ * the live state).
+ *
+ * @param {object} state
+ * @param {string} observerOwner   - 'hero' | 'witch' (faction id)
+ * @param {object[]} [entities]
+ * @returns {Set<string>}
+ */
+export function computeLineOfSight(state, observerOwner, entities = state?.entities) {
+  const visible = new Set();
+  if (!state?.tiles || !observerOwner || !entities) return visible;
+  for (const e of entities) {
+    if (!e || !e.alive || e.owner !== observerOwner) continue;
+    const range = sightRangeForEntity(e, state.phase);
+    // The unit's own hex is always visible.
+    visible.add(hexKey(e.col, e.row));
+    // Enumerate candidate offsets directly via cube coordinates so the
+    // global MAP_COLS/MAP_ROWS guard inside `hexRange` doesn't silently
+    // clip discs on test/scratch maps with non-default dimensions.
+    const origin = offsetToAxial(e.col, e.row);
+    for (let dq = -range; dq <= range; dq++) {
+      const drMin = Math.max(-range, -dq - range);
+      const drMax = Math.min(range, -dq + range);
+      for (let dr = drMin; dr <= drMax; dr++) {
+        const off = axialToOffset(origin.q + dq, origin.r + dr);
+        const k = hexKey(off.col, off.row);
+        if (visible.has(k)) continue;
+        if (!state.tiles.has(k)) continue;
+        if (hasLineOfSight(state, e.col, e.row, off.col, off.row)) {
+          visible.add(k);
+        }
+      }
+    }
+  }
+  return visible;
+}
+
 /**
  * Returns a Set of hexKeys where opposing entities are visible to the given faction.
- * Uses the faction's sight range (phase-dependent for hero, fixed for witch).
+ * Uses line of sight (see {@link computeLineOfSight}).
  * @param {object} state - GameState
  * @param {string} viewerFactionId - 'hero' or 'witch'
  * @returns {Set<string>}
@@ -284,16 +358,11 @@ export function getVisiblePositions(state, viewerFactionId) {
     }
   }
 
-  for (const viewer of state.entities) {
-    if (!viewer.alive || viewer.owner !== viewerFactionId) continue;
-    // Per-entity sight so stub-faction bonuses (e.g. rogue +1) apply.
-    const range = sightRangeForEntity(viewer, state.phase);
-    for (const target of state.entities) {
-      if (!target.alive || target.owner !== opponentId) continue;
-      if (hexDistance(viewer.col, viewer.row, target.col, target.row) <= range) {
-        revealed.add(hexKey(target.col, target.row));
-      }
-    }
+  const losSet = computeLineOfSight(state, viewerFactionId);
+  for (const target of state.entities) {
+    if (!target.alive || target.owner !== opponentId) continue;
+    const k = hexKey(target.col, target.row);
+    if (losSet.has(k)) revealed.add(k);
   }
   return revealed;
 }

@@ -319,31 +319,32 @@ describe('Renderer3D — buildFogVisibleSet', () => {
     assert.equal(buildFogVisibleSet({ entities: [heroAt(1, 0, 0)], tiles: rectTiles(3, 3) }, null).size, 0);
   });
 
-  test('single hero observer at NIGHT (sight=1) covers exactly 7 hexes', () => {
-    // HeroFaction.getSightRange returns 1 at NIGHT (sight disc = 1 + 6 = 7).
+  test('single hero observer at NIGHT (sight=3) covers exactly 37 hexes', () => {
+    // HeroFaction.getSightRange returns 3 at NIGHT (sight disc = 1 + 6 + 12 + 18 = 37).
+    // Tiles are bare (no blockers), so the LOS disc equals the radial disc.
     const state = {
-      entities: [heroAt(1, 5, 5)],
-      tiles: rectTiles(11, 11),
+      entities: [heroAt(1, 7, 7)],
+      tiles: rectTiles(15, 15),
       phase: Phase.NIGHT,
     };
     const v = buildFogVisibleSet(state, 'hero');
-    assert.equal(v.size, 7);
-    assert.ok(v.has(hexKey(5, 5)));
-    assert.ok(!v.has(hexKey(7, 5)), '2 steps east is outside night sight');
+    assert.equal(v.size, 37);
+    assert.ok(v.has(hexKey(7, 7)));
+    assert.ok(!v.has(hexKey(11, 7)), '4 steps east is outside night sight');
   });
 
-  test('single hero observer at DAY (sight=3) covers the 37-hex disc', () => {
+  test('single hero observer at DAY (sight=6) covers the 127-hex disc on open ground', () => {
     const state = {
-      entities: [heroAt(1, 5, 5)],
-      tiles: rectTiles(11, 11),
+      entities: [heroAt(1, 8, 8)],
+      tiles: rectTiles(17, 17),
       phase: Phase.DAY,
     };
     const v = buildFogVisibleSet(state, 'hero');
-    // Hex disc of radius 3 = 1 + 6 + 12 + 18 = 37 hexes; all land on the board.
-    assert.equal(v.size, 37);
-    assert.ok(v.has(hexKey(5, 5)));
-    assert.ok(v.has(hexKey(8, 5)),  '3 steps east is within day sight');
-    assert.ok(!v.has(hexKey(9, 5)), '4 steps east is out of sight');
+    // Hex disc of radius 6 = 1 + 6 + 12 + 18 + 24 + 30 + 36 = 127 hexes.
+    assert.equal(v.size, 127);
+    assert.ok(v.has(hexKey(8, 8)));
+    assert.ok(v.has(hexKey(14, 8)), '6 steps east is within day sight');
+    assert.ok(!v.has(hexKey(15, 8)), '7 steps east is out of sight');
   });
 
   test('observer near a map edge clips the disc correctly', () => {
@@ -359,7 +360,8 @@ describe('Renderer3D — buildFogVisibleSet', () => {
       assert.ok(c >= 0 && r >= 0);
     }
     assert.ok(v.has(hexKey(0, 0)));
-    assert.ok(!v.has(hexKey(4, 4)), 'far corner outside sight');
+    // hexDistance(0,0 → 4,4) is 6, just at the edge of DAY sight, so it IS
+    // visible on a 5×5 grid. Use a larger map to test "outside sight" instead.
   });
 
   test('multi-observer: union of two heroes\' sight discs', () => {
@@ -394,16 +396,18 @@ describe('Renderer3D — buildFogVisibleSet', () => {
   });
 
   test('mixed roster: only entities owned by `observerOwner` matter', () => {
+    // Spread the witch and dead-hero far enough that their hypothetical sight
+    // discs wouldn't overlap the live hero's — otherwise we couldn't tell.
     const state = {
-      entities: [heroAt(1, 2, 2), witchAt(2, 5, 5), heroAt(3, 4, 2, false)],
-      tiles: rectTiles(10, 10),
+      entities: [heroAt(1, 2, 2), witchAt(2, 18, 18), heroAt(3, 16, 2, false)],
+      tiles: rectTiles(22, 22),
       phase: Phase.DAY,
     };
     const v = buildFogVisibleSet(state, 'hero');
     assert.ok(v.has(hexKey(2, 2)));
-    assert.ok(!v.has(hexKey(5, 5)), 'witch sight not folded in');
-    // Dead third hero at (4,2) should not contribute either.
-    assert.ok(!v.has(hexKey(6, 2)), 'dead hero sight not folded in');
+    assert.ok(!v.has(hexKey(18, 18)), 'witch sight not folded in');
+    // Dead third hero at (16,2) should not contribute either.
+    assert.ok(!v.has(hexKey(16, 2)), 'dead hero sight not folded in');
   });
 });
 

@@ -403,25 +403,25 @@ describe('Discovery & loot', () => {
 // ── Visibility ──────────────────────────────────────────────────────────────
 
 describe('Sight range', () => {
-  test('Hero sight: DAY=3, NIGHT=1, DAWN/DUSK=2', () => {
+  test('Hero sight: DAY=6, NIGHT=3, DAWN/DUSK=4', () => {
     const h = getFaction('hero');
-    assert.equal(h.getSightRange(Phase.DAY, false), 3);
-    assert.equal(h.getSightRange(Phase.NIGHT, false), 1);
-    assert.equal(h.getSightRange(Phase.DAWN, false), 2);
-    assert.equal(h.getSightRange(Phase.DUSK, false), 2);
+    assert.equal(h.getSightRange(Phase.DAY, false), 6);
+    assert.equal(h.getSightRange(Phase.NIGHT, false), 3);
+    assert.equal(h.getSightRange(Phase.DAWN, false), 4);
+    assert.equal(h.getSightRange(Phase.DUSK, false), 4);
   });
 
   test('Hero sight with scout: +1', () => {
     const h = getFaction('hero');
-    assert.equal(h.getSightRange(Phase.DAY, true), 4);
-    assert.equal(h.getSightRange(Phase.NIGHT, true), 2);
+    assert.equal(h.getSightRange(Phase.DAY, true), 7);
+    assert.equal(h.getSightRange(Phase.NIGHT, true), 4);
   });
 
-  test('Witch sight: fixed 2 regardless of phase or scout', () => {
+  test('Witch sight: fixed 5 regardless of phase or scout', () => {
     const w = getFaction('witch');
-    assert.equal(w.getSightRange(Phase.DAY, false), 2);
-    assert.equal(w.getSightRange(Phase.NIGHT, false), 2);
-    assert.equal(w.getSightRange(Phase.NIGHT, true), 2);
+    assert.equal(w.getSightRange(Phase.DAY, false), 5);
+    assert.equal(w.getSightRange(Phase.NIGHT, false), 5);
+    assert.equal(w.getSightRange(Phase.NIGHT, true), 5);
   });
 });
 

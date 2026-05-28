@@ -9,8 +9,8 @@ import {
   PathType, baseOf, pathOf, hasBuilding, isRiver, isBridge,
 } from './tiles.js';
 import { ENTITY_COLOR, EntityType, SurvivorAbility, isLeaderType } from './entities.js';
-import { getVisiblePositions, sightRange, buildFogMovementHexes } from './actions.js';
-import { getFaction, sightRangeForEntity } from './factions.js';
+import { getVisiblePositions, sightRange, buildFogMovementHexes, computeLineOfSight } from './actions.js';
+import { getFaction } from './factions.js';
 import { getFactionTheme, NEUTRAL_NODE_FILL } from './theme.js';
 import { nodeController, Phase } from './game.js';
 import { installOverlayShims, OVERLAY_METHODS } from './overlays.js';
@@ -1847,25 +1847,7 @@ export class Renderer {
   // sight range. observerOwner is 'hero' or 'witch'.
   /** Returns the Set of hexKeys visible to observerOwner's units (used for fog culling). */
   _buildFogVisibleHexes(observerOwner) {
-    const state = this.state;
-    const visibleSet = new Set();
-    for (const e of state.entities) {
-      if (!e.alive || e.owner !== observerOwner) continue;
-      // Per-entity sight so stub-faction bonuses (rogue +1) apply.
-      const range = sightRangeForEntity(e, state.phase);
-      // Only iterate hexes within sight range of this entity (not entire map)
-      const rMin = Math.max(0, e.row - range);
-      const rMax = Math.min(MAP_ROWS - 1, e.row + range);
-      const cMin = Math.max(0, e.col - range);
-      const cMax = Math.min(MAP_COLS - 1, e.col + range);
-      for (let row = rMin; row <= rMax; row++) {
-        for (let col = cMin; col <= cMax; col++) {
-          if (hexDistance(col, row, e.col, e.row) <= range) {
-            visibleSet.add(hexKey(col, row));
-          }
-        }
-      }
-    }
+    const visibleSet = computeLineOfSight(this.state, observerOwner);
     // Fold in any short-lived reveals from in-flight ranged attacks. This
     // is a render-only hint — game state (state.seenHexes, fog mode) is
     // not touched. Prune expired entries eagerly so the list stays small.

@@ -193,54 +193,53 @@ describe('exploredHexes memory', () => {
 describe('updateExploredHexes', () => {
   test('marks hexes within sight range of hero entities as explored', () => {
     const state = new GameState(true, false);
-    state.phase = Phase.DAY; // sight range 3
-    // Clear generated entities/tiles and build a small controlled map
+    state.phase = Phase.DAY; // hero sight range 6
+    // Clear generated entities/tiles and build an open controlled map.
     state.entities = [];
     state.tiles = new Map();
     state.exploredHexes = { hero: new Set(), witch: new Set() };
-    for (let row = 0; row < 8; row++) {
-      for (let col = 0; col < 8; col++) {
+    for (let row = 0; row < 16; row++) {
+      for (let col = 0; col < 16; col++) {
         state.tiles.set(hexKey(col, row), mkTile(TileType.GRASS));
       }
     }
-    const hero = createHero(4, 4, 'hero');
+    const hero = createHero(8, 8, 'hero');
     state.entities.push(hero);
     state.hero = hero;
 
     state.updateExploredHexes();
 
-    // Hero at (4,4) with DAY sight range 3 — should see (4,4) and neighbors within 3
-    assert.ok(state.exploredHexes.hero.has(hexKey(4, 4)), 'hero position explored');
-    assert.ok(state.exploredHexes.hero.has(hexKey(4, 3)), 'adjacent hex explored');
-    // (4,7) is distance 3 — should be visible
-    assert.ok(state.exploredHexes.hero.has(hexKey(4, 7)), 'hex at range 3 explored');
-    // Far corner (0,0) — distance > 3, should NOT be explored
+    assert.ok(state.exploredHexes.hero.has(hexKey(8, 8)), 'hero position explored');
+    assert.ok(state.exploredHexes.hero.has(hexKey(8, 7)), 'adjacent hex explored');
+    // (8,14) is distance 6 — visible at DAY
+    assert.ok(state.exploredHexes.hero.has(hexKey(8, 14)), 'hex at range 6 explored');
+    // (0,0) is distance > 6 — not explored
     assert.ok(!state.exploredHexes.hero.has(hexKey(0, 0)), 'far hex not explored');
   });
 
-  test('witch uses fixed 2-hex sight range regardless of phase', () => {
+  test('witch uses fixed 5-hex sight range regardless of phase', () => {
     const state = new GameState(true, false);
-    state.phase = Phase.DAY; // hero gets 3, witch should still get 2
+    state.phase = Phase.DAY; // witch should get 5 in every phase
     state.entities = [];
     state.tiles = new Map();
     state.exploredHexes = { hero: new Set(), witch: new Set() };
-    for (let row = 0; row < 8; row++) {
-      for (let col = 0; col < 8; col++) {
+    for (let row = 0; row < 16; row++) {
+      for (let col = 0; col < 16; col++) {
         state.tiles.set(hexKey(col, row), mkTile(TileType.GRASS));
       }
     }
-    const witch = createWitch(4, 4, 'witch');
+    const witch = createWitch(8, 8, 'witch');
     state.entities.push(witch);
     state.witch = witch;
 
     state.updateExploredHexes();
 
-    assert.ok(state.exploredHexes.witch.has(hexKey(4, 4)), 'witch position explored');
-    assert.ok(state.exploredHexes.witch.has(hexKey(4, 3)), 'adjacent hex explored');
-    // (4,2) is distance 2 — should be visible
-    assert.ok(state.exploredHexes.witch.has(hexKey(4, 2)), 'hex at range 2 explored');
-    // (4,1) is distance 3 — should NOT be visible for witch
-    assert.ok(!state.exploredHexes.witch.has(hexKey(4, 1)), 'hex at range 3 not explored for witch');
+    assert.ok(state.exploredHexes.witch.has(hexKey(8, 8)), 'witch position explored');
+    assert.ok(state.exploredHexes.witch.has(hexKey(8, 7)), 'adjacent hex explored');
+    // (8,13) is distance 5 — visible
+    assert.ok(state.exploredHexes.witch.has(hexKey(8, 13)), 'hex at range 5 explored');
+    // (8,14) is distance 6 — NOT visible for witch
+    assert.ok(!state.exploredHexes.witch.has(hexKey(8, 14)), 'hex at range 6 not explored for witch');
   });
 
   test('accumulates across multiple calls (does not reset)', () => {

@@ -16,7 +16,8 @@ import { Phase, nodeController } from './game.js';
 import { EntityType, ADVANTAGE_CAP, expectedDieValue, isLeaderType, attackOf, defenseOf, SurvivorAbility } from './entities.js';
 import { ResourceType, hasBuilding, isRiver } from './tiles.js';
 import { ITEMS } from './items.js';
-import { concreteFactionOf, sightRangeForEntity } from './factions.js';
+import { concreteFactionOf } from './factions.js';
+import { computeLineOfSight } from './actions.js';
 import { PlanActionType, MAX_PLAN_LENGTH } from './planner.js';
 
 // ── Goal names ───────────────────────────────────────────────────────────────
@@ -137,14 +138,12 @@ export function assessHeroBoard(sim) {
   );
   const survivorCount = survivors.length;
 
-  // Fog-of-war awareness — per-entity sight so stub-faction bonuses
-  // (rogue +1) apply.
-  const heroSideUnits = sim.entities.filter(e => e.alive && e.owner === 'hero');
+  // Fog-of-war awareness — line-of-sight aware (forests/buildings block
+  // vision past them). Per-entity sight so stub-faction bonuses (rogue +1)
+  // and SCOUT survivors apply.
+  const heroLosSet = computeLineOfSight(sim, 'hero');
   function _heroCanSee(target) {
-    return heroSideUnits.some(viewer => {
-      const range = sightRangeForEntity(viewer, phase);
-      return hexDistance(viewer.col, viewer.row, target.col, target.row) <= range;
-    });
+    return heroLosSet.has(hexKey(target.col, target.row));
   }
 
   // Any night-side leader (Witch / Necromancer / Brute) is the "witch" for

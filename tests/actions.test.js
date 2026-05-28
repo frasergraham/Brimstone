@@ -39,21 +39,23 @@ function emptyPassableNeighbor(state, entity) {
 }
 
 // ── sightRange ────────────────────────────────────────────────────────────────
-// Design: DAY=3, DAWN/DUSK=2, NIGHT=1; SCOUT adds +1
+// Design: DAY=6, DAWN/DUSK=4, NIGHT=3; SCOUT adds +1.
+// LOS gating (forests/buildings block vision past them) is exercised by
+// tests/los-fog.test.js and the renderer fog tests.
 
 describe('sightRange', () => {
-  test('DAY sight is 3', () => assert.equal(sightRange(Phase.DAY), 3));
-  test('DAWN sight is 2', () => assert.equal(sightRange(Phase.DAWN), 2));
-  test('DUSK sight is 2', () => assert.equal(sightRange(Phase.DUSK), 2));
-  test('NIGHT sight is 1', () => assert.equal(sightRange(Phase.NIGHT), 1));
+  test('DAY sight is 6', () => assert.equal(sightRange(Phase.DAY), 6));
+  test('DAWN sight is 4', () => assert.equal(sightRange(Phase.DAWN), 4));
+  test('DUSK sight is 4', () => assert.equal(sightRange(Phase.DUSK), 4));
+  test('NIGHT sight is 3', () => assert.equal(sightRange(Phase.NIGHT), 3));
   test('SCOUT adds +1 to sight in every phase', () => {
-    assert.equal(sightRange(Phase.DAY,   true), 4);
-    assert.equal(sightRange(Phase.DAWN,  true), 3);
-    assert.equal(sightRange(Phase.DUSK,  true), 3);
-    assert.equal(sightRange(Phase.NIGHT, true), 2);
+    assert.equal(sightRange(Phase.DAY,   true), 7);
+    assert.equal(sightRange(Phase.DAWN,  true), 5);
+    assert.equal(sightRange(Phase.DUSK,  true), 5);
+    assert.equal(sightRange(Phase.NIGHT, true), 4);
   });
   test('non-scout gives no bonus', () => {
-    assert.equal(sightRange(Phase.DAY, false), 3);
+    assert.equal(sightRange(Phase.DAY, false), 6);
   });
 });
 

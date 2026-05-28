@@ -66,9 +66,9 @@ describe('RogueFaction — sight range', () => {
 
   test('scout bonus stacks on top of the +1', () => {
     const rogue = getFaction('rogue');
-    assert.equal(rogue.getSightRange(Phase.DAY,   true),  5); // 3 + 1 + 1
-    assert.equal(rogue.getSightRange(Phase.DAWN,  true),  4); // 2 + 1 + 1
-    assert.equal(rogue.getSightRange(Phase.NIGHT, true),  3); // 1 + 1 + 1
+    assert.equal(rogue.getSightRange(Phase.DAY,   true),  8); // 6 + 1 + 1
+    assert.equal(rogue.getSightRange(Phase.DAWN,  true),  6); // 4 + 1 + 1
+    assert.equal(rogue.getSightRange(Phase.NIGHT, true),  5); // 3 + 1 + 1
   });
 });
 
@@ -376,6 +376,7 @@ describe('RogueFaction — onAfterMoveStep auto-detects survivors in buildings',
 describe('RogueFaction — ranged crossbow attack', () => {
   test('rogue can attack a target 3 hexes away (BATTLE targets list includes it)', () => {
     const { state, rogue } = rogueState(5, 5);
+    state.fogOfWar = 'none'; // isolate from LOS gating — this tests range, not visibility
     const target = createMinion(8, 5);  // distance 3 along a row
     target.owner = 'witch';
     state.entities.push(target);

@@ -33,7 +33,7 @@ import { PlanActionType, groupPlanByEntity } from './planner.js';
 import { hexDistance, getNeighbors, hexKey } from './hex.js';
 import { planCombatFrames } from './combat-presentation.js';
 import { MAX_FORTIFY_LEVEL, FORT_IMPASSABLE_THRESHOLD } from './tiles.js';
-import { sightRange } from './actions.js';
+import { sightRange, computeLineOfSight, hasLineOfSight } from './actions.js';
 import { UNIT_TYPES } from './unit-types.js';
 import { getFaction, findFaction, allFactions, getFactionsForSide, sightRangeForEntity } from './factions.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
@@ -1081,19 +1081,33 @@ function _getBattleAllyEntities(actorSnap, targetSnap, entities) {
  */
 
 /**
- * Check whether a hex (col, row) is within sight range of any friendly entity
- * in the current step's entity snapshot.  Used during resolution animation to
- * decide whether an opponent action should be visible under fog of war.
+ * Check whether a hex (col, row) is within line of sight of any friendly
+ * entity in the current step's entity snapshot. Used during resolution
+ * animation to decide whether an opponent action should be visible under
+ * fog of war.
+ *
+ * The LOS set is cached on the entity snapshot (via a WeakMap) so this is
+ * O(1) on the second and subsequent calls for the same snapshot, even
+ * though the underlying LOS pass is O(units × hexes_in_range).
  */
+const _losCacheBySnapshot = new WeakMap();
 function _isFogVisible(col, row, humanFaction, entities, phase) {
   if (!humanFaction || state.fogOfWar === 'none') return true;
-  for (const e of entities) {
-    if (!e.alive || e.owner !== humanFaction) continue;
-    // Per-entity sight so stub-faction bonuses (rogue +1) apply.
-    const range = sightRangeForEntity(e, phase);
-    if (hexDistance(e.col, e.row, col, row) <= range) return true;
+  let perFaction = _losCacheBySnapshot.get(entities);
+  if (!perFaction) {
+    perFaction = new Map();
+    _losCacheBySnapshot.set(entities, perFaction);
   }
-  return false;
+  let set = perFaction.get(humanFaction);
+  if (!set) {
+    set = computeLineOfSight(
+      { entities, tiles: state.tiles, phase },
+      humanFaction,
+      entities,
+    );
+    perFaction.set(humanFaction, set);
+  }
+  return set.has(hexKey(col, row));
 }
 
 /**
@@ -1111,7 +1125,10 @@ function _updateNodeDiscoveryDuringStep(gs, humanFaction, rend) {
       const nowSeen = gs.entities.some(e => {
         if (!e.alive || e.owner !== fac.id) return false;
         const range = sightRangeForEntity(e, gs.phase);
-        return obj.hexes.some(h => hexDistance(e.col, e.row, h.col, h.row) <= range);
+        return obj.hexes.some(h =>
+          hexDistance(e.col, e.row, h.col, h.row) <= range
+          && hasLineOfSight(gs, e.col, e.row, h.col, h.row)
+        );
       });
       if (!nowSeen) continue;
       obj[seenKey] = true;
@@ -1133,7 +1150,8 @@ function _updateNodeDiscoveryDuringStep(gs, humanFaction, rend) {
       const nowSeen = gs.entities.some(e => {
         if (!e.alive || e.owner !== 'hero') return false;
         const range = sightRangeForEntity(e, gs.phase);
-        return hexDistance(e.col, e.row, mt.col, mt.row) <= range;
+        return hexDistance(e.col, e.row, mt.col, mt.row) <= range
+          && hasLineOfSight(gs, e.col, e.row, mt.col, mt.row);
       });
       if (nowSeen) {
         mt.seen = true;

@@ -4,7 +4,7 @@ import { createHero, createWitch, createMinion, createSurvivor, resetRoster, sur
 import { BuildingType, ResourceType, hasBuilding, isRiver } from './tiles.js';
 import { hexKey, hexDistance, getNeighbors, setMapDimensions, MAP_COLS, MAP_ROWS } from './hex.js';
 import { applyPostRoundEffects, attritionForCycle } from './post-round-effects.js';
-import { sightRange } from './actions.js';
+import { sightRange, computeLineOfSight, hasLineOfSight } from './actions.js';
 import { getFaction, allFactions, getFactionsForSide, sightRangeForEntity } from './factions.js';
 import { allSides } from './sides.js';
 
@@ -1146,7 +1146,10 @@ export class GameState {
         obj[key] = this.entities.some(e => {
           if (!e.alive || e.owner !== fac.id) return false;
           const range = sightRangeForEntity(e, this.phase);
-          return obj.hexes.some(h => hexDistance(e.col, e.row, h.col, h.row) <= range);
+          return obj.hexes.some(h =>
+            hexDistance(e.col, e.row, h.col, h.row) <= range
+            && hasLineOfSight(this, e.col, e.row, h.col, h.row)
+          );
         });
       }
     }
@@ -1168,22 +1171,7 @@ export class GameState {
   updateExploredHexes() {
     for (const factionObj of allFactions()) {
       const factionId = factionObj.id;
-      const visible = new Set();
-      for (const e of this.entities) {
-        if (!e.alive || e.owner !== factionId) continue;
-        const range = sightRangeForEntity(e, this.phase);
-        const rMin = Math.max(0, e.row - range);
-        const rMax = Math.min(MAP_ROWS - 1, e.row + range);
-        const cMin = Math.max(0, e.col - range);
-        const cMax = Math.min(MAP_COLS - 1, e.col + range);
-        for (let row = rMin; row <= rMax; row++) {
-          for (let col = cMin; col <= cMax; col++) {
-            if (hexDistance(col, row, e.col, e.row) <= range) {
-              visible.add(hexKey(col, row));
-            }
-          }
-        }
-      }
+      const visible = computeLineOfSight(this, factionId);
       this.markExplored(factionId, visible);
     }
   }
