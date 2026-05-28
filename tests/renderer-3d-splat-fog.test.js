@@ -136,14 +136,22 @@ describe('Renderer3D splat fog — _applyFogVeil integration', () => {
     assert.ok(!r._fogActiveSet.has('1,1'));
   });
 
-  test('setFogTint drives the plugin uFogDarken uniform', () => {
+  test('setFogTint drives the plugin uFogDarken, capped at FOG_HIDDEN_DARKEN', async () => {
+    // The splat plugin's uFogDarken is clamped to FOG_HIDDEN_DARKEN so fogged
+    // hexes always read as occluded vision, never a mild atmospheric tint.
+    // setFogTint still records the raw phase value in _fogTileDarken for the
+    // legacy / prop-fog paths.
+    const { FOG_HIDDEN_DARKEN } = await import('../src/renderer-3d.js');
     const r = makeRenderer();
     r._useSplatTerrain = true;
     r._splatPlugin = { uFogDarken: 1.0 };
-    // _applyFogVeil is called at the end — stub scene to make it a cheap no-op.
     r._scene = null; // setFogTint guards _applyFogVeil on _scene
-    r.setFogTint(0.4);
-    assert.equal(r._splatPlugin.uFogDarken, 0.4);
-    assert.equal(r._fogTileDarken, 0.4);
+    // High phase value (golden-hour mild fog) clamps to the strong cap.
+    r.setFogTint(0.7);
+    assert.equal(r._splatPlugin.uFogDarken, FOG_HIDDEN_DARKEN);
+    assert.equal(r._fogTileDarken, 0.7, 'raw phase value preserved for other paths');
+    // Below the cap, the phase value passes through unchanged.
+    r.setFogTint(0.1);
+    assert.equal(r._splatPlugin.uFogDarken, 0.1);
   });
 });

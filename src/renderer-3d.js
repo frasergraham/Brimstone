@@ -47,6 +47,7 @@ import {
 import {
   hexSplatWeights, hexFogWeights, splatChannelForTile,
   worldToHex, neighborDeltas, DEFAULT_TERRAIN_TINTS,
+  hexGridAlphaForZoom,
 } from './terrain-splat.js';
 import { makeTerrainSplatPlugin, SPLAT_UNIFORM_DEFAULTS } from './terrain-splat-plugin.js';
 
@@ -2102,6 +2103,11 @@ export class Renderer3D {
     const buildingsP = afterInit(() => this._loadBuildingModels(basePath));
     const paladinP   = afterInit(() => this._loadPaladinModel(basePath));
     const treesP     = afterInit(() => this._loadTreePackManifest(basePath));
+    // Splat-terrain detail textures — these were previously lazy on the first
+    // gameplay frames, causing a visible framerate hitch right after the
+    // loading screen drops. Loading them inside the bundle takes the cost
+    // before whenReady() resolves so gameplay starts smooth.
+    const terrainP   = afterInit(() => this._preloadTerrainDetailTextures());
 
     this._assetBundle = [
       { id: 'engine',    label: 'engine',    promise: babylonP,   progress: 0 },
@@ -2109,6 +2115,7 @@ export class Renderer3D {
       { id: 'buildings', label: 'buildings', promise: buildingsP, progress: 0 },
       { id: 'paladin',   label: 'paladin',   promise: paladinP,   progress: 0 },
       { id: 'forest',    label: 'forest',    promise: treesP,     progress: 0 },
+      { id: 'terrain',   label: 'terrain',   promise: terrainP,   progress: 0 },
     ];
 
     for (const item of this._assetBundle) {
@@ -4740,9 +4747,12 @@ export class Renderer3D {
     const v = Math.max(0, Math.min(1, Number(value) || 0));
     this._fogTileDarken = v;
     // Splat ground: the plugin's uFogDarken uniform multiplies the texel
-    // (CUSTOM_FRAGMENT_UPDATE_DIFFUSE), surviving the lighting clamp. Set it
-    // directly; per-tile prop darken still flows through _applyFogVeil below.
-    if (this._splatPlugin) this._splatPlugin.uFogDarken = v;
+    // (CUSTOM_FRAGMENT_UPDATE_DIFFUSE), surviving the lighting clamp. We clamp
+    // it to FOG_HIDDEN_DARKEN so even at bright phases (where phase fogTint
+    // tops out at ~0.70) fogged hexes still read as a clear "can't see this"
+    // signal, not a mild shade. Per-tile prop darken still flows through
+    // _applyFogVeil below using the phase value.
+    if (this._splatPlugin) this._splatPlugin.uFogDarken = Math.min(v, FOG_HIDDEN_DARKEN);
     // Terrain fog materials: diffuseColor = (v, v, v) regardless of original.
     for (const [, mat] of this._terrainFogMaterialCache) {
       if (mat?.diffuseColor) {
@@ -6213,11 +6223,32 @@ export class Renderer3D {
       plugin.detailDirt   = this._terrainDetailTexture('dirt');
       plugin.detailForest = this._terrainDetailTexture('forest');
       plugin.tints      = DEFAULT_TERRAIN_TINTS.map((t) => t.slice());
-      plugin.uFogDarken = this._fogTileDarken ?? 1.0;
+      // Cap fog darken at FOG_HIDDEN_DARKEN so the splat ground signals "you
+      // cannot see this hex" clearly, even at bright phases. See setFogTint.
+      plugin.uFogDarken = Math.min(this._fogTileDarken ?? 1.0, FOG_HIDDEN_DARKEN);
       plugin.isEnabled  = true;
       this._splatPlugin = plugin;
     }
     return mat;
+  }
+
+  /** Eager-preload the three greyscale terrain detail textures so the splat
+   *  shader has them ready by the time gameplay starts. Returns a Promise
+   *  that resolves when all three are GPU-uploaded (or instantly if Babylon
+   *  isn't ready). Folded into the loading-screen bundle via beginLoad(). */
+  _preloadTerrainDetailTextures() {
+    const BABYLON = this._babylon;
+    if (!BABYLON?.Texture || !this._scene) return Promise.resolve();
+    const wait = (tex) => new Promise((resolve) => {
+      if (!tex) return resolve();
+      if (typeof tex.isReady === 'function' && tex.isReady()) return resolve();
+      const obs = tex.onLoadObservable;
+      if (obs && typeof obs.addOnce === 'function') obs.addOnce(() => resolve());
+      else resolve();
+    });
+    return Promise.all(
+      ['grass', 'dirt', 'forest'].map((n) => wait(this._terrainDetailTexture(n))),
+    );
   }
 
   /** Lazily load + cache a tiling greyscale detail texture, WRAP-addressed so
@@ -11122,6 +11153,15 @@ export class Renderer3D {
 
   _onBeforeRender() {
     const now = this._nowMs();
+    // Hex wireframe distance fade — fully visible at the close-in zoom,
+    // eases off toward fully transparent at max zoom-out so the grid doesn't
+    // smear into a flat noise band when the whole map is on screen.
+    if (this._hexGridMesh && this._hexGridMesh.material && this._camera) {
+      const minR = this._camera.lowerRadiusLimit ?? 4;
+      const maxR = this._camera.upperRadiusLimit ?? 30;
+      this._hexGridMesh.material.alpha =
+        hexGridAlphaForZoom(this._camera.radius, minR, maxR, { peak: 0.5 });
+    }
     // Lock the camera target to the ground plane (Y=0). Babylon's
     // ArcRotateCamera pan moves the target along the screen-aligned plane
     // (perpendicular to look direction), so panning vertically on screen
@@ -13708,6 +13748,11 @@ export const NODE_DISC_ALPHA = 0.88;
 // 0.55 the bright sun would still flood-light the surface and the fog would
 // look like a mild tint rather than a tactical signal.
 export const FOG_TILE_DARKEN = 0.20;
+// Strong-cap on the splat-ground fog darken so fogged hexes always read as a
+// clear "you cannot see this" signal — even when the phase fogTint runs mild
+// (PHASE_LIGHT_CONFIG dawn/dusk values around 0.6-0.7 would otherwise feel
+// like a thin atmospheric haze, not occluded vision).
+export const FOG_HIDDEN_DARKEN = 0.25;
 
 /** Cubic ease-in-out — interpolates 0→1 smoothly with no jolt at endpoints. */
 export function easeInOutCubic(u) {

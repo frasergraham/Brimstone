@@ -227,12 +227,33 @@ export function proceduralTerrainColor(channel, worldX, worldZ, opts = {}) {
  *  `neighborKeys` is a 6-entry array of hexKey strings (or null for off-map),
  *  index-aligned with the odd-r DIRS arrays. `foggedSet` is the Set of fogged
  *  hexKeys. */
-export function hexFogWeights(tileKey, neighborKeys, foggedSet) {
+/** Map an ArcRotate camera radius to the hex-wireframe overlay alpha. Pure for
+ *  testability — the renderer calls this each frame and assigns the result to
+ *  `_hexGridMesh.material.alpha`. At the close-in zoom (`radius ≤ minR`) the
+ *  grid sits at full `peak` alpha; at max zoom-out it eases toward
+ *  `minVisible`. Smoothstep on `(radius-minR)/(maxR-minR)` keeps the fade
+ *  perceptually even across the zoom range. */
+export function hexGridAlphaForZoom(radius, minR, maxR, opts = {}) {
+  const peak = opts.peak ?? 0.5;
+  const minVisible = opts.minVisible ?? 0;
+  if (!(maxR > minR)) return peak;
+  const t = Math.max(0, Math.min(1, (radius - minR) / (maxR - minR)));
+  const eased = t * t * (3 - 2 * t); // smoothstep
+  return minVisible + (peak - minVisible) * (1 - eased);
+}
+
+export function hexFogWeights(tileKey, neighborKeys, foggedSet, opts = {}) {
+  // softness=0 (default) → rim verts carry the OWN value, producing a uniform
+  // fog state per hex with a crisp jump at the boundary — reads as a clear
+  // "you cannot see this hex" signal. softness=1 → original rim-averages-with-
+  // neighbour behaviour, giving a soft fade across the boundary.
+  const softness = Math.max(0, Math.min(1, opts.softness ?? 0));
   const out = new Float32Array(7);
   const fogOf = (k) => (k != null && foggedSet.has(k) ? 1 : 0);
   const own = fogOf(tileKey);
   out[0] = own;
   for (let i = 0; i < 6; i++) {
+    if (softness === 0) { out[i + 1] = own; continue; }
     const [da, db] = CORNER_NEIGHBOR_DIRS[i];
     let sum = own;
     let count = 1;
@@ -240,7 +261,8 @@ export function hexFogWeights(tileKey, neighborKeys, foggedSet) {
     const kb = neighborKeys ? neighborKeys[db] : null;
     if (ka != null) { sum += fogOf(ka); count++; }
     if (kb != null) { sum += fogOf(kb); count++; }
-    out[i + 1] = sum / count;
+    const avg = sum / count;
+    out[i + 1] = own + (avg - own) * softness;
   }
   return out;
 }

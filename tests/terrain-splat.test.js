@@ -20,6 +20,7 @@ import {
   hexFogWeights,
   neighborDeltas,
   DEFAULT_TERRAIN_TINTS,
+  hexGridAlphaForZoom,
 } from '../src/terrain-splat.js';
 import { hexToWorld } from '../src/renderer-3d.js';
 import { Tile, TileType, PathType, StructureType } from '../src/tiles.js';
@@ -254,10 +255,20 @@ describe('terrain-splat — hexFogWeights', () => {
     for (let i = 0; i < 7; i++) assert.equal(clear[i], 0, `vertex ${i}`);
   });
 
-  test('soft veil edge: rim vertex toward a clear neighbour is partial', () => {
-    // 3,3 fogged; nothing else.
+  test('crisp default (softness=0): rim equals own → uniform fog per hex', () => {
+    // 3,3 fogged; nothing else. Crisp default sets all 7 verts to own — the
+    // GPU then has no in-hex gradient and the boundary jumps sharply to the
+    // neighbour's value, producing a clear "you cannot see this hex" signal.
     const fogged = new Set(['3,3']);
     const w = hexFogWeights('3,3', neighborKeys(3, 3), fogged);
+    for (let i = 0; i < 7; i++) assert.equal(w[i], 1, `vertex ${i} = own`);
+    const clear = hexFogWeights('4,3', neighborKeys(4, 3), fogged);
+    for (let i = 0; i < 7; i++) assert.equal(clear[i], 0, `vertex ${i} = own`);
+  });
+
+  test('soft veil edge (softness=1, opt-in): rim toward a clear neighbour is partial', () => {
+    const fogged = new Set(['3,3']);
+    const w = hexFogWeights('3,3', neighborKeys(3, 3), fogged, { softness: 1 });
     assert.equal(w[0], 1, 'centre fully fogged');
     let hasPartial = false;
     for (let i = 1; i < 7; i++) {
@@ -267,14 +278,17 @@ describe('terrain-splat — hexFogWeights', () => {
     assert.ok(hasPartial);
   });
 
-  test('coincident fog verts match across adjacent hexes', () => {
-    // Patch of hexes; one fogged. Check shared rim verts agree.
+  test('softness=1 preserves coincident-vertex symmetry across adjacent hexes', () => {
+    // The old soft-edge contract: coincident rim verts on adjacent hexes carry
+    // the same averaged value so the GPU interpolation matches across the
+    // shared edge. Crisp default deliberately breaks this at the fog boundary
+    // (that IS the visible jump); softness=1 still preserves it.
     const fogged = new Set(['2,2']);
     const cells = [];
     for (let r = 1; r <= 3; r++) for (let c = 1; c <= 3; c++) cells.push([c, r]);
     const seen = new Map();
     for (const [c, r] of cells) {
-      const w = hexFogWeights(`${c},${r}`, neighborKeys(c, r), fogged);
+      const w = hexFogWeights(`${c},${r}`, neighborKeys(c, r), fogged, { softness: 1 });
       const verts = fanWorldVerts(c, r);
       for (let v = 0; v < 7; v++) {
         const k = posKey(verts[v]);
@@ -286,5 +300,26 @@ describe('terrain-splat — hexFogWeights', () => {
         }
       }
     }
+  });
+});
+
+describe('hexGridAlphaForZoom (hex wireframe distance fade)', () => {
+  test('peaks at the close-in zoom (radius = minR)', () => {
+    assert.equal(hexGridAlphaForZoom(4, 4, 30, { peak: 0.5 }), 0.5);
+  });
+  test('drops to minVisible at the far zoom (radius = maxR)', () => {
+    assert.equal(hexGridAlphaForZoom(30, 4, 30, { peak: 0.5, minVisible: 0 }), 0);
+  });
+  test('mid-range is between the two extremes (smoothstep, monotonic)', () => {
+    const a = hexGridAlphaForZoom(10, 4, 30, { peak: 0.5 });
+    const b = hexGridAlphaForZoom(20, 4, 30, { peak: 0.5 });
+    assert.ok(a > b && a < 0.5 && b > 0, `expected close > far > 0, got ${a} > ${b}`);
+  });
+  test('clamps outside [minR, maxR]', () => {
+    assert.equal(hexGridAlphaForZoom(1,  4, 30, { peak: 0.5 }), 0.5);
+    assert.equal(hexGridAlphaForZoom(99, 4, 30, { peak: 0.5 }), 0);
+  });
+  test('degenerate range returns peak', () => {
+    assert.equal(hexGridAlphaForZoom(5, 10, 10, { peak: 0.3 }), 0.3);
   });
 });
