@@ -24,6 +24,8 @@ import {
   computeLungeTarget,
   computeCombatCardAxisOffset,
   combatCardFrameExtent,
+  iconBillboardYRelativeToCone,
+  headTopRelativeToCone,
   LUNGE_FRACTION,
   CARD_AXIS_OFFSET_WORLD,
   COMBAT_CARD_ATK_COLOR,
@@ -31,11 +33,15 @@ import {
   COMBAT_READOUT_WIN_COLOR,
   COMBAT_READOUT_LOSE_COLOR,
   COMBAT_READOUT_NUM_TEX_SIZE,
+  COMBAT_READOUT_NUM_PLANE_WIDTH,
+  COMBAT_READOUT_NUM_PLANE_HEIGHT,
   COMBAT_READOUT_FLOATER_TEX_WIDTH,
   COMBAT_READOUT_FLOATER_TEX_HEIGHT,
   COMBAT_READOUT_BASE_HOLD_MS,
   COMBAT_READOUT_STEP_MS,
   COMBAT_READOUT_FINAL_HOLD_MS,
+  READOUT_GAP_ABOVE_ICON,
+  UNIT_ICON_PLANE_SIZE,
 } from '../src/renderer-3d.js';
 
 // ─── Pure model + painters ──────────────────────────────────────────────────
@@ -503,6 +509,92 @@ describe('G1 — addCombatReadout lifecycle', () => {
     const floaterTex = texArgs[1];
     assert.equal(floaterTex.width,  COMBAT_READOUT_FLOATER_TEX_WIDTH);
     assert.equal(floaterTex.height, COMBAT_READOUT_FLOATER_TEX_HEIGHT);
+  });
+
+  test('main-number plane is sized to match the unit-icon badge', () => {
+    assert.equal(COMBAT_READOUT_NUM_PLANE_WIDTH,  UNIT_ICON_PLANE_SIZE,
+      'width matches UNIT_ICON_PLANE_SIZE so the readout reads at icon scale');
+    assert.equal(COMBAT_READOUT_NUM_PLANE_HEIGHT, UNIT_ICON_PLANE_SIZE,
+      'height matches UNIT_ICON_PLANE_SIZE so the readout reads at icon scale');
+  });
+
+  test('readout stacks directly above the icon (Y derived from iconTop + gap, no axis offset)', () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInst({ ids: ['e1'] });
+    const B = inst._babylon;
+    // Capture every plane created during the readout so we can read positions.
+    const planes = [];
+    const OrigMeshBuilder = B.MeshBuilder;
+    B.MeshBuilder = {
+      CreatePlane(name, opts, scene) {
+        const p = OrigMeshBuilder.CreatePlane(name, opts, scene);
+        p.createOpts = opts;
+        planes.push(p);
+        return p;
+      },
+    };
+    const sched = fakeScheduler();
+    // Use opts that would have given a non-zero axis offset under the old
+    // behaviour — the new placement must zero it out anyway.
+    inst.addCombatReadout('e1', 'attacker',
+      { hit: true, attackRoll: 6, defenseRoll: 3,
+        breakdown: { atkPool: [6], atkBaseDie: 6, defPool: [3], defBaseDie: 3,
+                     atkGangupFlat: 1 } },
+      { setTimeoutFn: sched,
+        attackerCol: 5, attackerRow: 5, targetCol: 6, targetRow: 5 },
+    );
+    sched.runUntil(COMBAT_READOUT_BASE_HOLD_MS + 1);
+
+    // First plane = main number readout.
+    const numPlane = planes[0];
+    assert.ok(numPlane, 'main number plane created');
+
+    // Expected Y: iconCenter + UNIT_ICON_PLANE_SIZE/2 + gap + planeHeight/2.
+    const leader = false; // makeInst standees are non-leader.
+    const expectedY = iconBillboardYRelativeToCone(leader)
+      + UNIT_ICON_PLANE_SIZE / 2
+      + READOUT_GAP_ABOVE_ICON
+      + COMBAT_READOUT_NUM_PLANE_HEIGHT / 2;
+    assert.ok(Math.abs(numPlane.position.y - expectedY) < 1e-6,
+      `main number Y derives from iconTop+gap (got ${numPlane.position.y}, expected ${expectedY})`);
+
+    // Strictly above the legacy head-anchored placement.
+    const legacyHeadAnchoredY = headTopRelativeToCone(leader)
+      + 0.18 + COMBAT_READOUT_NUM_PLANE_HEIGHT / 2;
+    assert.ok(numPlane.position.y > legacyHeadAnchoredY,
+      'readout sits above the legacy head-anchored placement (now icon-anchored)');
+
+    // No horizontal axis offset — directly above the icon.
+    assert.equal(numPlane.position.x, 0, 'no X offset along attack axis');
+    assert.equal(numPlane.position.z, 0, 'no Z offset along attack axis');
+
+    // Step floater plane is also centred (X/Z = 0).
+    const floaterPlane = planes[1];
+    assert.ok(floaterPlane, 'step floater plane created');
+    assert.equal(floaterPlane.position.x, 0, 'floater has no X offset');
+    assert.equal(floaterPlane.position.z, 0, 'floater has no Z offset');
+  });
+
+  test('plane dimensions passed to CreatePlane match COMBAT_READOUT_NUM_PLANE_{WIDTH,HEIGHT}', () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInst({ ids: ['e1'] });
+    const B = inst._babylon;
+    const planeOpts = [];
+    const OrigMeshBuilder = B.MeshBuilder;
+    B.MeshBuilder = {
+      CreatePlane(name, opts, scene) {
+        planeOpts.push(opts);
+        return OrigMeshBuilder.CreatePlane(name, opts, scene);
+      },
+    };
+    const sched = fakeScheduler();
+    inst.addCombatReadout('e1', 'attacker',
+      { hit: true, attackRoll: 6, defenseRoll: 3,
+        breakdown: { atkPool: [6], atkBaseDie: 6, defPool: [3], defBaseDie: 3 } },
+      { setTimeoutFn: sched },
+    );
+    assert.equal(planeOpts[0].width,  COMBAT_READOUT_NUM_PLANE_WIDTH);
+    assert.equal(planeOpts[0].height, COMBAT_READOUT_NUM_PLANE_HEIGHT);
   });
 });
 

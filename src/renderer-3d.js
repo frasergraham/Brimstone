@@ -1503,8 +1503,11 @@ export function compassRotationDegFromCameraAlpha(alpha) {
  *  screen. Uses the leader (taller) geometry by default so leader readouts
  *  never clip; pure and exported for tests. */
 export function combatCardFrameExtent(leader = true) {
-  return headTopRelativeToCone(leader)
-    + COMBAT_READOUT_Y_GAP
+  // Readout now anchors to the icon-badge top (icon centre + size/2), with
+  // a small gap above the icon, then the number plane, then the floater rise.
+  return iconBillboardYRelativeToCone(leader)
+    + UNIT_ICON_PLANE_SIZE / 2
+    + READOUT_GAP_ABOVE_ICON
     + COMBAT_READOUT_NUM_PLANE_HEIGHT
     + COMBAT_READOUT_FLOATER_Y_OFFSET
     + COMBAT_READOUT_FLOATER_PLANE_HEIGHT
@@ -10383,14 +10386,13 @@ export class Renderer3D {
     applyFlatUnitIconMaterial(BABYLON, numMat);
     numPlane.material = numMat;
 
-    // Parent to the standee so the readout tracks the lunge. Push the number
-    // BEHIND the combatant along the attack axis so attacker and defender
-    // numbers don't overlap in screen space when adjacent.
+    // Parent to the standee so the readout tracks the lunge. Stack the
+    // number directly above the unit-icon badge (no horizontal axis offset).
     numPlane.parent = standee.plane;
-    const headTopRel = headTopRelativeToCone(standee.leader);
-    const axisOffset = computeCombatCardAxisOffset(side, opts);
-    const numCenterY = headTopRel + COMBAT_READOUT_Y_GAP + COMBAT_READOUT_NUM_PLANE_HEIGHT / 2;
-    numPlane.position.set(axisOffset.x, numCenterY, axisOffset.z);
+    const iconCenterY = iconBillboardYRelativeToCone(standee.leader);
+    const iconTopY = iconCenterY + UNIT_ICON_PLANE_SIZE / 2;
+    const numCenterY = iconTopY + READOUT_GAP_ABOVE_ICON + COMBAT_READOUT_NUM_PLANE_HEIGHT / 2;
+    numPlane.position.set(0, numCenterY, 0);
     numPlane.visibility = 1;
 
     // Hide this unit's icon badge while the readout is up — keep the
@@ -10438,7 +10440,7 @@ export class Renderer3D {
           this._pulseReadoutPlane(numPlane, COMBAT_READOUT_PULSE_PEAK, pulseMs);
           // Spawn the "+N reason" floater beside the main number.
           const fd = this._spawnReadoutStepFloater(
-            standee, axisOffset, headTopRel, step, model, floaterRiseMs,
+            standee, numCenterY, step, model, floaterRiseMs,
           );
           if (fd) stepDisposables.push(fd);
         }, at);
@@ -10505,7 +10507,7 @@ export class Renderer3D {
   /** Internal — spawn a "+N reason" floater plane beside the main readout
    *  number, drift it up + fade it out. Returns `{ plane, mat, tex }` so
    *  the parent readout can dispose it if the sequence aborts early. */
-  _spawnReadoutStepFloater(standee, axisOffset, headTopRel, step, model, riseMs) {
+  _spawnReadoutStepFloater(standee, numCenterY, step, model, riseMs) {
     if (!this._scene || !this._babylon) return null;
     const BABYLON = this._babylon;
     const sign = step.delta < 0 ? '−' : '+';
@@ -10546,13 +10548,13 @@ export class Renderer3D {
     plane.material = mat;
 
     plane.parent = standee.plane;
-    const startY = headTopRel
-      + COMBAT_READOUT_Y_GAP
-      + COMBAT_READOUT_NUM_PLANE_HEIGHT
+    // Floater starts just above the readout-number plane's TOP and drifts up.
+    const numTopY = numCenterY + COMBAT_READOUT_NUM_PLANE_HEIGHT / 2;
+    const startY = numTopY
       + COMBAT_READOUT_FLOATER_Y_OFFSET
       + COMBAT_READOUT_FLOATER_PLANE_HEIGHT / 2;
     const endY = startY + COMBAT_READOUT_FLOATER_RISE_WU;
-    plane.position.set(axisOffset.x, startY, axisOffset.z);
+    plane.position.set(0, startY, 0);
     plane.visibility = 1;
 
     const fps = 60;
@@ -15669,18 +15671,26 @@ export const FLOAT_TEXT_TEX_HEIGHT = 192;
 /** Combat readout (G1 redesign — replaces the old dice-card). A single big
  *  number floats above each combatant's head; per-bonus floaters animate up
  *  as the main number ticks to the new total. World-space plane dimensions
- *  are a square so the number reads cleanly at zoom-out. */
-export const COMBAT_READOUT_NUM_PLANE_WIDTH  = 1.2;
-export const COMBAT_READOUT_NUM_PLANE_HEIGHT = 1.2;
+ *  are a square sized to match the unit-icon badge (UNIT_ICON_PLANE_SIZE)
+ *  so the readout sits visually flush above the icon. Kept as a literal so
+ *  this declaration can sit above UNIT_ICON_PLANE_SIZE in module order. */
+export const COMBAT_READOUT_NUM_PLANE_WIDTH  = 1.144;
+export const COMBAT_READOUT_NUM_PLANE_HEIGHT = 1.144;
 export const COMBAT_READOUT_NUM_TEX_SIZE     = 256;
-/** Per-bonus "+N reason" floater that drifts up beside the main number. */
-export const COMBAT_READOUT_FLOATER_PLANE_WIDTH  = 1.8;
-export const COMBAT_READOUT_FLOATER_PLANE_HEIGHT = 0.45;
+/** Per-bonus "+N reason" floater that drifts up beside the main number.
+ *  Scaled down to ~0.7× the previous size so it stays in proportion to the
+ *  smaller (icon-sized) main number plane. */
+export const COMBAT_READOUT_FLOATER_PLANE_WIDTH  = 1.26;
+export const COMBAT_READOUT_FLOATER_PLANE_HEIGHT = 0.315;
 export const COMBAT_READOUT_FLOATER_TEX_WIDTH    = 384;
 export const COMBAT_READOUT_FLOATER_TEX_HEIGHT   = 96;
 /** Clearance (world units) between the head top and the BOTTOM of the
- *  readout number plane, so the number sits just above the head. */
+ *  readout number plane. Retained for combatCardFrameExtent's worst-case
+ *  framing math; the runtime now anchors to the icon top instead. */
 export const COMBAT_READOUT_Y_GAP = 0.18;
+/** Clearance (world units) between the icon-badge TOP and the BOTTOM of
+ *  the readout number plane — the readout stacks directly above the icon. */
+export const READOUT_GAP_ABOVE_ICON = 0.05;
 /** Sequence timing (ms, before speedFactor scaling).
  *  - BASE_HOLD_MS: hold the picked-die value so the player registers the base roll.
  *  - STEP_MS: time per bonus — floater spawns AND main number ticks at this beat.
