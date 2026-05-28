@@ -24,6 +24,10 @@ export function makeRoadEdgePlugin(BABYLON) {
       this.uEdgeJitter = 0.22; // ±22% of the fade band wiggle
       this.uFadeStart  = 0.55; // lateral position where alpha starts dropping
       this.uFadeEnd    = 0.95; // lateral position where alpha hits zero
+      // Slow colour variation along the road — lighter/darker patches like
+      // real dirt path, breaks up the uniform tinted ribbon.
+      this.uColorFreq  = 0.18; // ≈ one cell per ~5-6 world units
+      this.uColorAmp   = 0.20; // ±20% brightness modulation
     }
 
     get isEnabled() { return this._enabled; }
@@ -50,12 +54,16 @@ export function makeRoadEdgePlugin(BABYLON) {
           { name: 'uEdgeJitter', size: 1, type: 'float' },
           { name: 'uFadeStart',  size: 1, type: 'float' },
           { name: 'uFadeEnd',    size: 1, type: 'float' },
+          { name: 'uColorFreq',  size: 1, type: 'float' },
+          { name: 'uColorAmp',   size: 1, type: 'float' },
         ],
         fragment: `#ifdef ROAD_EDGE
           uniform float uNoiseFreq;
           uniform float uEdgeJitter;
           uniform float uFadeStart;
           uniform float uFadeEnd;
+          uniform float uColorFreq;
+          uniform float uColorAmp;
         #endif`,
       };
     }
@@ -66,6 +74,8 @@ export function makeRoadEdgePlugin(BABYLON) {
       uniformBuffer.updateFloat('uEdgeJitter', this.uEdgeJitter);
       uniformBuffer.updateFloat('uFadeStart',  this.uFadeStart);
       uniformBuffer.updateFloat('uFadeEnd',    this.uFadeEnd);
+      uniformBuffer.updateFloat('uColorFreq',  this.uColorFreq);
+      uniformBuffer.updateFloat('uColorAmp',   this.uColorAmp);
     }
 
     getCustomCode(shaderType) {
@@ -105,6 +115,11 @@ export function makeRoadEdgePlugin(BABYLON) {
             float fade = 1.0 - smoothstep(uFadeStart + jitter,
                                           uFadeEnd   + jitter, lateral);
             gl_FragColor.a *= fade;
+            // Slow lighter/darker patches along the road's length — gives the
+            // ribbon a worn-dirt feel instead of a uniform tint.
+            float cN = re_noise(vRoadWorldXZ.xz * uColorFreq);
+            float cMod = 1.0 + (cN - 0.5) * 2.0 * uColorAmp;
+            gl_FragColor.rgb *= cMod;
           #endif`,
         };
       }
