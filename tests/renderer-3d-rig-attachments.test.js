@@ -18,6 +18,8 @@ import {
   classifyLegBone,
   ridingLegPose,
   WEAPON_BONE_NAME_RE,
+  WEAPON_STANDIN_WORLD_LENGTH,
+  WEAPON_STANDIN_WORLD_DIAMETER,
   HORSE_ITEM_KEY,
   MOUNTED_RIDER_LIFT,
 } from '../src/renderer-3d.js';
@@ -79,6 +81,34 @@ describe('weaponStandInTransform', () => {
   });
   test('tilts the blade forward (negative X rotation)', () => {
     assert.ok(weaponStandInTransform().rotation.x < 0);
+  });
+  test('no scale → world dims are used verbatim (fallback)', () => {
+    const t = weaponStandInTransform();
+    assert.equal(t.height, WEAPON_STANDIN_WORLD_LENGTH);
+    assert.equal(t.diameter, WEAPON_STANDIN_WORLD_DIAMETER);
+  });
+  test('divides world size by the per-standee scale so attachToBone restores it', () => {
+    // attachToBone composes blade.world ≈ localDim × paladinScale (hand bone
+    // final matrix is ~unit-scale). Dividing here means the on-screen blade
+    // lands back at the WORLD_LENGTH regardless of how small the rig is scaled.
+    const scale = 0.34928; // real paladin-idle.glb: 0.69 / naturalHeight(1.975)
+    const t = weaponStandInTransform(scale);
+    assert.ok(Math.abs(t.height * scale - WEAPON_STANDIN_WORLD_LENGTH) < 1e-9,
+      'local height × scale recovers the world length');
+    assert.ok(Math.abs(t.diameter * scale - WEAPON_STANDIN_WORLD_DIAMETER) < 1e-9,
+      'local diameter × scale recovers the world diameter');
+    assert.equal(t.offset.y, t.height / 2, 'grip stays at the fist after rescale');
+  });
+  test('world blade stays smaller than the paladin (no giant-sword regression)', () => {
+    // The bug: a 32-unit local cylinder × 0.349 scale ≈ 11 world units ≈ 16×
+    // the 0.69-tall paladin. The world length must stay under the paladin's
+    // height so it reads as a held sword, not a flagpole at the origin.
+    const TARGET_PALADIN_WORLD_HEIGHT = 0.69;
+    assert.ok(WEAPON_STANDIN_WORLD_LENGTH < TARGET_PALADIN_WORLD_HEIGHT,
+      'stand-in blade is shorter than the paladin is tall');
+  });
+  test('larger scale → smaller local cylinder (inverse relationship)', () => {
+    assert.ok(weaponStandInTransform(0.5).height < weaponStandInTransform(0.25).height);
   });
 });
 

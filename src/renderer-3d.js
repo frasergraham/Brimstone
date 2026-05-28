@@ -526,12 +526,19 @@ export const WEAPON_BONE_NAME_RE = /RightHand(\.\d+)?$/i;
 export const HORSE_ITEM_KEY = 'horse';
 
 /** Weapon stand-in geometry (no weapon GLBs yet): a long thin cylinder posed
- *  as a sword gripped in the fist. Lengths are in the rig's UNSCALED local
- *  units — attachToBone folds in the per-standee scale via the affector mesh's
- *  world matrix, so these are model-space numbers, not world units. Operator-
- *  tunable. */
-export const WEAPON_STANDIN_LENGTH    = 32;   // blade + grip, hand-local units
-export const WEAPON_STANDIN_DIAMETER  = 2.2;  // skinny — a stand-in blade
+ *  as a sword gripped in the fist. These are WORLD-space sizes (metres on the
+ *  board, same units as TARGET_PALADIN_WORLD_HEIGHT): a blade a touch shorter
+ *  than the paladin is tall. `weaponStandInTransform(paladinScale)` converts
+ *  them to the rig-LOCAL cylinder dims the geometry must use, because
+ *  attachToBone composes the blade as `localDim × handBoneMatrix ×
+ *  affectorWorldMatrix` — and the affector's world matrix already carries the
+ *  per-standee scale. The hand bone's final matrix is ~unit-scale, so a raw
+ *  32-unit cylinder came out at 32×paladinScale ≈ 11 world units (≈16× the
+ *  paladin) — the giant-sword bug. Dividing the world size by the scale yields
+ *  a constant on-screen blade regardless of the rig's natural model height.
+ *  Operator-tunable. */
+export const WEAPON_STANDIN_WORLD_LENGTH   = 0.62;   // blade + grip, world units (~0.9× paladin height)
+export const WEAPON_STANDIN_WORLD_DIAMETER = 0.045;  // skinny — a stand-in blade, world units
 
 /** Horse placeholder geometry, in the rig's UNSCALED clone-root-local space
  *  (the clone root carries the paladin scale). The body's centre Y sits at
@@ -572,17 +579,29 @@ export function entityIsMounted(entity) {
  *  default `CreateCylinder` runs along local +Y centred on the origin; we
  *  push the cylinder out of the fist (so the grip — not the midpoint — sits at
  *  the bone) and tilt it forward so it reads as a held blade rather than a
- *  flagpole. Pure; exported for tests. */
-export function weaponStandInTransform() {
+ *  flagpole.
+ *
+ *  `paladinScale` is the per-standee uniform scale (`Renderer3D._paladinScale`)
+ *  that attachToBone folds in via the affector mesh's world matrix. The
+ *  WORLD-space size constants are divided by it so the cylinder's rig-LOCAL
+ *  height/diameter come back out at the intended world size after the matrix
+ *  compose (blade.world ≈ localDim × paladinScale, since the hand bone's final
+ *  matrix is ~unit-scale). Falls back to scale 1 (i.e. world == local) when no
+ *  usable scale is supplied, keeping the helper pure & test-friendly.
+ *  Exported for tests. */
+export function weaponStandInTransform(paladinScale) {
+  const s = (typeof paladinScale === 'number' && paladinScale > 0) ? paladinScale : 1;
+  const height   = WEAPON_STANDIN_WORLD_LENGTH   / s;
+  const diameter = WEAPON_STANDIN_WORLD_DIAMETER / s;
   return {
-    height:   WEAPON_STANDIN_LENGTH,
-    diameter: WEAPON_STANDIN_DIAMETER,
+    height,
+    diameter,
     // Tilt the blade forward (~25°) from straight-up so it angles ahead of the
     // fist instead of standing vertical.
     rotation: { x: -Math.PI * 0.14, y: 0, z: 0 },
     // Slide half the length up the blade's local axis so the grip end lands at
     // the hand bone rather than the cylinder's centre.
-    offset:   { x: 0, y: WEAPON_STANDIN_LENGTH / 2, z: 0 },
+    offset:   { x: 0, y: height / 2, z: 0 },
   };
 }
 
@@ -4775,7 +4794,12 @@ export class Renderer3D {
     const handBone = findBoneByName(src.skeleton, WEAPON_BONE_NAME_RE);
     if (!handBone) return;
 
-    const t = weaponStandInTransform();
+    // World-size blade → rig-LOCAL cylinder dims. The per-standee scale lives
+    // on the clone root; attachToBone folds it in via the affector's world
+    // matrix, so we divide it back out here to land a constant on-screen size.
+    const paladinScale = (typeof this._paladinScale === 'number' && this._paladinScale > 0)
+      ? this._paladinScale : PALADIN_BASE_SCALE;
+    const t = weaponStandInTransform(paladinScale);
     let blade;
     try {
       blade = BABYLON.MeshBuilder.CreateCylinder(
