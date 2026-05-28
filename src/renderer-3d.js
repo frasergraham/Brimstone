@@ -10539,7 +10539,14 @@ export class Renderer3D {
         if (side === 'defender' || side === 'def') {
           const labelText = resultLabel(result, side);
           const labelY = resultSlotY(model.steps.length);
-          const fd = this._spawnResultLabel(standee, labelY, labelText, outcomeColor);
+          // "Blocked" / "dodged" / "parried" / etc. are no-impact outcomes;
+          // muted grey matches fast-mode's addFlash colour so both speed
+          // modes communicate the same visual cue. HIT / CRUSHED / COUNTER
+          // stay on the winner-green / loser-red flash colour.
+          const labelColor = isBlockWord(labelText)
+            ? COMBAT_READOUT_BLOCK_COLOR
+            : outcomeColor;
+          const fd = this._spawnResultLabel(standee, labelY, labelText, labelColor);
           if (fd) persistents.push(fd);
         }
 
@@ -17031,6 +17038,40 @@ export function paintIconCombatReadout(ctx, opts) {
  * Entity.resolveCombat output without damage/counterDmg) by falling back
  * to the basic HIT/BLOCK/COUNTER outcome.
  */
+/** Flavour set for "the attack didn't land" outcomes. Shared with fast-mode
+ *  combat (src/main.js imports this constant) so the cinematic result label
+ *  and the fast-mode addFlash word agree on the vocabulary. Lowercase to
+ *  match fast mode's visual style; cinematic uppercases on use. */
+export const BLOCK_WORD_VARIANTS = Object.freeze([
+  'miss', 'dodged', 'blocked', 'parried', 'deflected',
+]);
+
+/** Colour used by both fast-mode addFlash and the cinematic result label
+ *  whenever the outcome word is one of the BLOCK_WORD_VARIANTS — these are
+ *  "the attack didn't connect" cases, so a muted grey reads better than
+ *  win-green or lose-red. */
+export const COMBAT_READOUT_BLOCK_COLOR = '#888';
+
+/** Deterministic pick from BLOCK_WORD_VARIANTS so the same combat result
+ *  always renders the same flavour word. Falls back to the first variant
+ *  when rolls aren't finite (e.g. tests passing partial results). */
+function pickBlockWordUpper(result) {
+  const a = Number.isFinite(result?.attackRoll)  ? result.attackRoll  : 0;
+  const d = Number.isFinite(result?.defenseRoll) ? result.defenseRoll : 0;
+  const idx = Math.abs((a * 31 + d * 7)) % BLOCK_WORD_VARIANTS.length;
+  return BLOCK_WORD_VARIANTS[idx].toUpperCase();
+}
+
+/** True iff `labelUpper` is one of the BLOCK_WORD_VARIANTS — used to pick
+ *  the grey "muted" colour for the result label. */
+export function isBlockWord(labelUpper) {
+  if (typeof labelUpper !== 'string') return false;
+  for (let i = 0; i < BLOCK_WORD_VARIANTS.length; i++) {
+    if (BLOCK_WORD_VARIANTS[i].toUpperCase() === labelUpper) return true;
+  }
+  return false;
+}
+
 export function resultLabel(result, side) {
   const r = result || {};
   const isAtk = side === 'attacker' || side === 'atk';
@@ -17039,10 +17080,10 @@ export function resultLabel(result, side) {
   const counter = Number.isFinite(r.counterDmg) ? r.counterDmg : 0;
   if (isAtk) {
     if (won) return dmg >= 2 ? 'CRUSH' : 'HIT';
-    return counter > 0 ? 'COUNTERED' : 'BLOCKED';
+    return counter > 0 ? 'COUNTERED' : pickBlockWordUpper(r);
   }
   // Defender side.
-  if (won) return counter > 0 ? 'COUNTER' : 'BLOCK';
+  if (won) return counter > 0 ? 'COUNTER' : pickBlockWordUpper(r);
   return dmg >= 2 ? 'CRUSHED' : 'HIT';
 }
 

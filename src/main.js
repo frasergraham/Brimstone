@@ -3,7 +3,7 @@ import { onInactiveChange, tryGameCenterAuth, isNativeMobile, refreshPushToken, 
 import { AppMode, getMode, setMode, isInGame, isAnimating, shouldBufferMessages, onModeChange } from './app-mode.js';
 import { initServerSelector } from './server-selector.js';
 import { GameState, phaseForRound } from './game.js';
-import { Renderer3D }        from './renderer-3d.js';
+import { Renderer3D, BLOCK_WORD_VARIANTS } from './renderer-3d.js';
 
 // The in-game renderer is always 3D. The 2D `Renderer` is still exported from
 // `./renderer.js` for the mission editor and admin-lighting tool.
@@ -1696,8 +1696,9 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
               // Toast + floater only — no dialog.
               // On a miss show a randomised flavour word; hits communicate via HP floater.
               if (!result.hit) {
-                const _MISS_TEXT = ['miss', 'dodged', 'blocked', 'parried', 'deflected'];
-                const missText = _MISS_TEXT[Math.floor(Math.random() * _MISS_TEXT.length)];
+                // Shared with the cinematic result label so fast + vfast +
+                // cinematic all communicate "didn't connect" with the same set.
+                const missText = BLOCK_WORD_VARIANTS[Math.floor(Math.random() * BLOCK_WORD_VARIANTS.length)];
                 renderer.addFlash(targetSnap.col, targetSnap.row, missText, 'rgba(100,100,100,0.1)', 1000, 0.65, '#888');
               }
               _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
@@ -1954,8 +1955,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
           }
         } else {
           if (!result.hit) {
-            const _MISS_TEXT = ['miss', 'dodged', 'blocked', 'parried', 'deflected'];
-            const missText = _MISS_TEXT[Math.floor(Math.random() * _MISS_TEXT.length)];
+            const missText = BLOCK_WORD_VARIANTS[Math.floor(Math.random() * BLOCK_WORD_VARIANTS.length)];
             renderer.addFlash(targetSnap.col, targetSnap.row, missText, 'rgba(100,100,100,0.1)', 1000, 0.65, '#888');
           }
           _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);

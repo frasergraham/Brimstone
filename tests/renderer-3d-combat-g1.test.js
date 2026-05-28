@@ -25,6 +25,7 @@ import {
   paintReadoutFloater,
   paintIconCombatReadout,
   resultLabel,
+  BLOCK_WORD_VARIANTS,
   computeLungeTarget,
   computeCombatCardAxisOffset,
   combatCardFrameExtent,
@@ -1232,14 +1233,26 @@ describe('G1 v2 — resultLabel', () => {
     assert.equal(resultLabel({ hit: true }, 'attacker'), 'HIT'); // damage falls back to 1
   });
 
-  test('attacker side: lost + counterDmg>0 → COUNTERED; lost no counter → BLOCKED', () => {
+  test('attacker side: lost + counterDmg>0 → COUNTERED; lost no counter → a block-word variant', () => {
     assert.equal(resultLabel({ hit: false, counterDmg: 1 }, 'attacker'), 'COUNTERED');
-    assert.equal(resultLabel({ hit: false }, 'attacker'), 'BLOCKED');
+    // Block-side outcome picks deterministically from BLOCK_WORD_VARIANTS
+    // (miss / dodged / blocked / parried / deflected, uppercased).
+    const blockSet = new Set(BLOCK_WORD_VARIANTS.map(w => w.toUpperCase()));
+    assert.ok(blockSet.has(resultLabel({ hit: false }, 'attacker')));
+    assert.ok(blockSet.has(resultLabel({ hit: false, attackRoll: 2, defenseRoll: 5 }, 'attacker')));
   });
 
-  test('defender side: won + counterDmg>0 → COUNTER; won no counter → BLOCK', () => {
+  test('defender side: won + counterDmg>0 → COUNTER; won no counter → a block-word variant', () => {
     assert.equal(resultLabel({ hit: false, counterDmg: 1 }, 'defender'), 'COUNTER');
-    assert.equal(resultLabel({ hit: false }, 'defender'), 'BLOCK');
+    const blockSet = new Set(BLOCK_WORD_VARIANTS.map(w => w.toUpperCase()));
+    assert.ok(blockSet.has(resultLabel({ hit: false }, 'defender')));
+    assert.ok(blockSet.has(resultLabel({ hit: false, attackRoll: 3, defenseRoll: 6 }, 'defender')));
+  });
+
+  test('block-word pick is deterministic per roll combination', () => {
+    const a = resultLabel({ hit: false, attackRoll: 2, defenseRoll: 5 }, 'defender');
+    const b = resultLabel({ hit: false, attackRoll: 2, defenseRoll: 5 }, 'defender');
+    assert.equal(a, b, 'same rolls → same word');
   });
 
   test('defender side: lost (took hit) + damage>=2 → CRUSHED; lost damage<2 → HIT', () => {
@@ -1251,8 +1264,9 @@ describe('G1 v2 — resultLabel', () => {
     assert.equal(resultLabel({ hit: true, damage: 1 }, 'atk'), 'HIT');
   });
 
-  test('null result tolerated', () => {
-    assert.equal(resultLabel(null, 'attacker'), 'BLOCKED');
+  test('null result tolerated — defaults to a block-word variant on attacker side', () => {
+    const blockSet = new Set(BLOCK_WORD_VARIANTS.map(w => w.toUpperCase()));
+    assert.ok(blockSet.has(resultLabel(null, 'attacker')));
   });
 });
 
