@@ -226,12 +226,12 @@ describe('combat-tester — ally placement triggers REAL gang-up code path', () 
 });
 
 describe('combat-tester — ally cap', () => {
-  test(`MAX_ALLIES_PER_SIDE matches ADVANTAGE_CAP (${ADVANTAGE_CAP})`, () => {
-    // The visual ring around the defender splits into 3 atk + 3 def slots,
-    // and the gang-up math caps at ADVANTAGE_CAP per side. The tester cap
-    // must track the game cap so we can't add allies that produce no effect.
-    assert.equal(MAX_ALLIES_PER_SIDE, ADVANTAGE_CAP);
-    assert.equal(MAX_ALLIES_PER_SIDE, 3);
+  test('MAX_ALLIES_PER_SIDE is ADVANTAGE_CAP+1 so the cap is visually demonstrable', () => {
+    // The tester intentionally allows one MORE ally than the game's gang-up
+    // cap so the operator can place a 4th ally and verify the cap is
+    // enforced (4 standees on screen, but only 3 contribute to the dice).
+    assert.equal(MAX_ALLIES_PER_SIDE, ADVANTAGE_CAP + 1);
+    assert.equal(MAX_ALLIES_PER_SIDE, 4);
   });
 
   test('addAlly refuses to push beyond MAX_ALLIES_PER_SIDE on each side', () => {

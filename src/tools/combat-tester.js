@@ -46,7 +46,10 @@ const DEFAULT_SIZE = 9;
 
 // Cap allies per side. Matches src/entities.js ADVANTAGE_CAP=3: adding a 4th
 // ally would only crowd the ring without growing the dice pool.
-export const MAX_ALLIES_PER_SIDE = 3;
+// Allow placing one MORE ally than ADVANTAGE_CAP=3 so the operator can
+// visually verify the cap is working — 4 allies are physically around
+// the combatant but only 3 contribute to the gang-up math.
+export const MAX_ALLIES_PER_SIDE = 4;
 
 // Ally placement: BOTH sides must be hex-adjacent to the defender (the TARGET
 // hex) — that's the gang-up rule in executeBattle (`atkAllies` and `defAllies`
@@ -158,8 +161,26 @@ function _layoutCombatants(state, slots, size) {
   }
 
   const { atkSlots, defSlots } = _allySlots(centre, adjacent, size);
-  for (let i = 0; i < slots.atkAllies.length && i < atkSlots.length; i++) {
-    const slot = atkSlots[i];
+  // Prefer side-natural slots, then overflow into the other half if the
+  // operator has placed more allies than the front/back partition has room
+  // for (MAX_ALLIES_PER_SIDE=4 vs typically 2 atkSlots + 3 defSlots). All
+  // overflow slots are still adjacent to the defender, so executeBattle's
+  // gang-up filter still counts them.
+  const atkPool = [...atkSlots, ...defSlots];
+  const defPool = [...defSlots, ...atkSlots];
+  const usedKeys = new Set();
+  const takeNext = (pool) => {
+    for (const s of pool) {
+      const k = hexKey(s.col, s.row);
+      if (usedKeys.has(k)) continue;
+      usedKeys.add(k);
+      return s;
+    }
+    return null;
+  };
+  for (let i = 0; i < slots.atkAllies.length; i++) {
+    const slot = takeNext(atkPool);
+    if (!slot) break;
     const ally = _placeUnit(state, slots.atkAllies[i], slot.col, slot.row, ATK_SIDE_ID);
     // Force the ally's faction to match the attacker so executeBattle's
     // gang-up filter (e.owner === actor.owner) actually counts them. The
@@ -169,8 +190,9 @@ function _layoutCombatants(state, slots, size) {
     if (attackerEntity) ally.owner = attackerEntity.owner;
     atkAllyEntities.push(ally);
   }
-  for (let i = 0; i < slots.defAllies.length && i < defSlots.length; i++) {
-    const slot = defSlots[i];
+  for (let i = 0; i < slots.defAllies.length; i++) {
+    const slot = takeNext(defPool);
+    if (!slot) break;
     const ally = _placeUnit(state, slots.defAllies[i], slot.col, slot.row, DEF_SIDE_ID);
     if (defenderEntity) ally.owner = defenderEntity.owner;
     defAllyEntities.push(ally);
