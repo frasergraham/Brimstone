@@ -13229,38 +13229,38 @@ export const PHASE_LIGHT_CONFIG = Object.freeze({
   // fog when the sun is brightest, since contrast against lit hexes is
   // highest).
   dawn:  {
-    intensity: 0.25, color: { r: 1.00, g: 0.82, b: 0.62 }, clear: { r: 0.84, g: 0.65, b: 0.38 },
-    ambient: { r: 0.42, g: 0.35, b: 0.30 },
-    fogTint: 0.55,
+    intensity: 0.73, color: { r: 1.00, g: 0.82, b: 0.62 }, clear: { r: 0.84, g: 0.65, b: 0.38 },
+    ambient: { r: 0.89, g: 0.74, b: 0.64 },
+    fogTint: 0.70,
     // Low sun close to the horizon — long shadows raked across the map east-to-west.
-    sun: { dir: { x: -0.85, y: -0.40, z: 0.10 }, intensity: 1.20 },
+    sun: { dir: { x: -0.85, y: -0.40, z: 0.10 }, intensity: 2.10 },
   },
   day:   {
     intensity: 0.43, color: { r: 1.00, g: 1.00, b: 0.97 }, clear: { r: 0.78, g: 0.93, b: 0.93 },
     ambient: { r: 0.22, g: 0.22, b: 0.24 },
-    fogTint: 0.26,
+    fogTint: 0.48,
     // Tilt the day sun off vertical so shadows actually project a visible
     // footprint. A near-vertical sun (e.g. 0,-1,0) projects a near-zero
     // offset and shadows disappear into the caster itself.
     sun: { dir: { x:  0.35, y: -0.85, z: 0.40 }, intensity: 2.00 },
   },
   dusk:  {
-    intensity: 0.25, color: { r: 1.00, g: 0.62, b: 0.48 }, clear: { r: 1.00, g: 0.81, b: 0.73 },
-    ambient: { r: 0.45, g: 0.30, b: 0.28 },
-    fogTint: 0.65,
+    intensity: 0.77, color: { r: 1.00, g: 0.62, b: 0.48 }, clear: { r: 1.00, g: 0.81, b: 0.73 },
+    ambient: { r: 0.57, g: 0.38, b: 0.35 },
+    fogTint: 0.60,
     // Low sun mirrored from dawn — long shadows raked west-to-east.
-    sun: { dir: { x:  0.85, y: -0.40, z: 0.10 }, intensity: 1.20 },
+    sun: { dir: { x:  0.85, y: -0.40, z: 0.10 }, intensity: 2.09 },
   },
   night: {
-    intensity: 1.16, color: { r: 0.68, g: 0.73, b: 0.86 }, clear: { r: 0.00, g: 0.05, b: 0.15 },
+    intensity: 1.33, color: { r: 0.68, g: 0.73, b: 0.86 }, clear: { r: 0.00, g: 0.21, b: 0.29 },
     // Night ambient + hemi carry general visibility; the directional
     // light here acts as moonlight — kept at a modest intensity (was 0.08
     // = effectively off, which meant zero cast shadows at night) so
     // standees / buildings / trees still throw shadows onto the ground
     // under a near-overhead moon. Cool blue-violet ambient preserves the
     // moonlit mood.
-    ambient: { r: 0.58, g: 0.66, b: 0.91 },
-    fogTint: 0.36,
+    ambient: { r: 0.00, g: 0.55, b: 0.72 },
+    fogTint: 0.50,
     // Moon peak direction — clearly tilted off vertical so cast shadows
     // still project. `sunDirectionForRound` overrides for default cycles to
     // sweep east → peak → west across the three night rounds; this value
