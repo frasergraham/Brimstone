@@ -10505,11 +10505,17 @@ export class Renderer3D {
         // Outcome flash on the icon's overlay number.
         const outcomeColor = model.won ? COMBAT_READOUT_WIN_COLOR : COMBAT_READOUT_LOSE_COLOR;
         repaintIcon(model.total, outcomeColor);
-        // Spawn the persistent result label in the topmost slot.
-        const labelText = resultLabel(result, side);
-        const labelY = resultSlotY(model.steps.length);
-        const fd = this._spawnResultLabel(standee, labelY, labelText, outcomeColor);
-        if (fd) persistents.push(fd);
+        // Spawn the persistent result label in the topmost slot — DEFENDER
+        // SIDE ONLY. The defender's label tells the story of what happened
+        // to the target (HIT / BLOCKED / CRUSHED / COUNTERED / BLOCK / COUNTER).
+        // Both sides showing a label was visual noise; one label per combat
+        // reads cleanly.
+        if (side === 'defender' || side === 'def') {
+          const labelText = resultLabel(result, side);
+          const labelY = resultSlotY(model.steps.length);
+          const fd = this._spawnResultLabel(standee, labelY, labelText, outcomeColor);
+          if (fd) persistents.push(fd);
+        }
 
         resolveFinal();
 
@@ -16635,11 +16641,29 @@ export function combatReadoutModel(result, side) {
     steps.push({ icon, label, delta, value: running });
   };
   if (isAtk) {
+    // Intrinsic unit stat contributions (always the biggest delta — e.g. a
+    // paladin's attack=3 alone outweighs every situational bonus). Decomposed
+    // so the readout shows weapon/ability/effect/silver as distinct floaters
+    // rather than rolling everything into one opaque "atk +N".
+    //
+    // NOTE: `atkStaffBonus` (count of advantage dice from weapon combatTriggers,
+    // e.g. staff vs undead) is intentionally NOT surfaced as a flat step — it
+    // grows the dice pool, so its effect is already baked into the picked die.
+    // Adding it as a flat would break the sum invariant (picked + Σ steps ≡ total).
+    if (bd.atkBaseStat > 0)       addStep('💪', 'atk',    bd.atkBaseStat);
+    if (bd.atkWeaponMod > 0)      addStep('🗡', 'weapon', bd.atkWeaponMod);
+    if (bd.atkAbilityMod > 0)     addStep('✨', 'ability', bd.atkAbilityMod);
+    if (bd.atkEffectMod > 0)      addStep('💫', 'effect', bd.atkEffectMod);
+    if (bd.atkAttackBonus > 0)    addStep('🥈', 'silver', bd.atkAttackBonus);
     if (bd.phaseBonus > 0)        addStep('🌙', 'phase',  bd.phaseBonus);
-    if (bd.atkStaffBonus > 0)     addStep('🪄', 'staff',  bd.atkStaffBonus);
     if (bd.atkGangupFlat > 0)     addStep('⚔',  'allies', bd.atkGangupFlat);
     if (bd.atkFortAtkBonus > 0)   addStep('🏰', 'fort',   bd.atkFortAtkBonus);
   } else {
+    if (bd.defBaseStat > 0)       addStep('🛡', 'def',    bd.defBaseStat);
+    if (bd.defWeaponMod > 0)      addStep('🗡', 'weapon', bd.defWeaponMod);
+    if (bd.defAbilityMod > 0)     addStep('✨', 'ability', bd.defAbilityMod);
+    if (bd.defEffectMod > 0)      addStep('💫', 'effect', bd.defEffectMod);
+    if (bd.defDefenseBonus > 0)   addStep('🥈', 'bonus',  bd.defDefenseBonus);
     if (bd.fortBonus > 0)         addStep('🏰', 'fort',   bd.fortBonus);
     if (bd.defGangupFlat > 0)     addStep('🛡', 'guard',  bd.defGangupFlat);
     if (bd.forestCoverBonus > 0)  addStep('🌲', 'cover',  bd.forestCoverBonus);
@@ -16777,8 +16801,12 @@ export function paintIconCombatReadout(ctx, opts) {
   ctx.fillStyle = `rgba(0,0,0,${dimAlpha})`;
   ctx.fillRect(0, 0, size, size);
 
-  // Big bold number with side-glyph prefix, outlined for contrast.
-  const text = icon ? `${icon} ${value}` : String(value);
+  // Big bold number, outlined for contrast. The side-icon prefix is
+  // intentionally dropped — the readout overlays the unit's own icon, which
+  // already carries the side identity (faction tint + portrait). Painting
+  // "⚔ 7" over the portrait reads as visual noise; just "7" reads clean.
+  const text = String(value);
+  void icon;
   let fontPx = Math.round(size * COMBAT_READOUT_ICON_NUMBER_FONT_FRAC);
   ctx.font = `900 ${fontPx}px sans-serif`;
   const maxTextWidth = size * 0.82;

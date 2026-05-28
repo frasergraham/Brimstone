@@ -876,6 +876,60 @@ describe('executeBattle', () => {
     assert.ok(r.attackRoll >= 1 + hero.attack + 1,
       `attackRoll (${r.attackRoll}) should include silver bonus`);
   });
+
+  // The 3D combat readout's sum invariant: the breakdown must decompose the
+  // attackRoll / defenseRoll into picked-die + Σ(flat bonuses). If a future
+  // change adds a flat ATK/DEF contribution to resolveCombat but doesn't
+  // surface it in the breakdown, this test fails — that's the exact bug the
+  // operator reported (icon ticks higher than the dice roll with no floater).
+  test('breakdown decomposes attackRoll and defenseRoll into picked die + Σ(flat bonuses)', () => {
+    const state = freshState();
+    const hero = state.hero;
+    // Silver-coat for an attackBonus contribution (needs inventory stocked).
+    state.inventory.hero[ResourceType.SILVER] = 1;
+    const useResult = executeUseItem(state, hero, ResourceType.SILVER);
+    assert.equal(useResult.success, true);
+    assert.equal(hero.attackBonus, 1);
+    // Equip a sword so atkWeaponMod is nonzero.
+    hero.equipWeapon(WeaponType.SWORD);
+
+    const minion = createMinion(hero.col, hero.row);
+    state.entities.push(minion);
+
+    setForcedDice(4, 3); // attacker rolls 4, defender rolls 3
+    const r = executeBattle(state, hero, minion);
+    const bd = r.breakdown;
+
+    // Sanity: every decomposed field is captured.
+    for (const k of ['atkBaseStat', 'atkWeaponMod', 'atkAbilityMod', 'atkEffectMod', 'atkAttackBonus',
+                     'defBaseStat', 'defWeaponMod', 'defAbilityMod', 'defEffectMod', 'defDefenseBonus']) {
+      assert.ok(typeof bd[k] === 'number', `breakdown.${k} should be a number`);
+    }
+
+    // Attacker sum invariant: picked + every nonzero atk flat field === attackRoll.
+    const atkSum = bd.atkBaseDie
+      + bd.atkBaseStat + bd.atkWeaponMod + bd.atkAbilityMod + bd.atkEffectMod + bd.atkAttackBonus
+      + bd.phaseBonus + bd.atkGangupFlat + bd.atkFortAtkBonus;
+    assert.equal(atkSum, r.attackRoll,
+      `picked(${bd.atkBaseDie}) + Σ(atk flats) (${atkSum - bd.atkBaseDie}) must equal attackRoll(${r.attackRoll}). ` +
+      `breakdown: ${JSON.stringify({ atkBaseStat: bd.atkBaseStat, atkWeaponMod: bd.atkWeaponMod,
+        atkAbilityMod: bd.atkAbilityMod, atkEffectMod: bd.atkEffectMod, atkAttackBonus: bd.atkAttackBonus,
+        phaseBonus: bd.phaseBonus, atkGangupFlat: bd.atkGangupFlat, atkFortAtkBonus: bd.atkFortAtkBonus })}`);
+
+    // Defender sum invariant: picked + every nonzero def flat field − fatigue === defenseRoll.
+    const defSum = bd.defBaseDie
+      + bd.defBaseStat + bd.defWeaponMod + bd.defAbilityMod + bd.defEffectMod + bd.defDefenseBonus
+      + bd.fortBonus + bd.defGangupFlat + bd.forestCoverBonus - bd.fatiguePenalty;
+    assert.equal(defSum, r.defenseRoll,
+      `picked(${bd.defBaseDie}) + Σ(def flats) must equal defenseRoll(${r.defenseRoll})`);
+
+    // Silver coating set attackBonus=1 → must surface in atkAttackBonus.
+    assert.equal(bd.atkAttackBonus, 1, 'silver shows up in atkAttackBonus');
+    // Sword has statMods.attack=2 → must surface in atkWeaponMod.
+    assert.equal(bd.atkWeaponMod, 2, 'sword shows up in atkWeaponMod');
+    // Hero's intrinsic attack stat (NOT including weapon) is atkBaseStat.
+    assert.equal(bd.atkBaseStat, hero.attack, 'atkBaseStat is the raw stat');
+  });
 });
 
 // ── Splash damage on stacked units ───────────────────────────────────────────

@@ -18,11 +18,11 @@ import {
   EntityType, SurvivorAbility, Entity,
   createZombie, createMinion, createSurvivor,
   createWoodGolem, createIronGolem,
-  nextDie, ADVANTAGE_CAP, isLeaderType,
+  nextDie, ADVANTAGE_CAP, isLeaderType, abilityStatMod,
 } from './entities.js';
 import { Phase } from './game.js';
 import { getFaction, concreteFactionOf, sightRangeForEntity } from './factions.js';
-import { dispatchTrigger, applyEffect } from './effects.js';
+import { dispatchTrigger, applyEffect, effectStatMod } from './effects.js';
 import { triggerSurvivorEncounter } from './survivor-discovery.js';
 
 export const ActionType = Object.freeze({
@@ -1156,6 +1156,23 @@ export function executeBattle(state, actor, target) {
     }
   }
 
+  // Decomposed intrinsic stat contributions — surfaced as discrete floaters
+  // in the 3D combat readout (so the player sees their weapon / silver /
+  // ability bonuses, not just one opaque sum). The sum below MUST equal
+  // attackOf(actor) + actor.attackBonus, which is exactly what
+  // Entity.resolveCombat folds into attackRoll. Same for defender. Tests
+  // assert picked + Σ(all flat breakdown bonuses) ≡ attackRoll/defenseRoll.
+  const atkBaseStat    = actor.attack || 0;
+  const atkWeaponMod   = actor.weapon ? (ITEMS[actor.weapon]?.statMods?.attack ?? 0) : 0;
+  const atkAbilityMod  = abilityStatMod(actor.abilities, 'attack');
+  const atkEffectMod   = effectStatMod(actor, 'attack');
+  const atkAttackBonus = actor.attackBonus || 0;
+  const defBaseStat     = target.defense || 0;
+  const defWeaponMod    = target.weapon ? (ITEMS[target.weapon]?.statMods?.defense ?? 0) : 0;
+  const defAbilityMod   = abilityStatMod(target.abilities, 'defense');
+  const defEffectMod    = effectStatMod(target, 'defense');
+  const defDefenseBonus = target.defenseBonus || 0;
+
   return {
     success: true, log, cost: 1,
     attackRoll, defenseRoll, hit, killed,
@@ -1172,6 +1189,8 @@ export function executeBattle(state, actor, target) {
       atkGangupFlat, defGangupFlat,
       atkAdvantageDice, defAdvantageDice, atkDisadvantageDice,
       forestCoverBonus,
+      atkBaseStat, atkWeaponMod, atkAbilityMod, atkEffectMod, atkAttackBonus,
+      defBaseStat, defWeaponMod, defAbilityMod, defEffectMod, defDefenseBonus,
       ranged: isRanged, closeRanged: isCloseRanged,
       atkAllyNames: isRanged ? [] : atkAllies.map(e => e.displayName),
       defAllyNames: isRanged ? [] : defAllies.map(e => e.displayName),
@@ -1620,6 +1639,18 @@ export function executeGuardStrike(state, guardian, target) {
     // No counter-attack on guard strikes
   }
 
+  // Decomposed unit stats — silver is stripped on guard strike (attackBonus
+  // saved/restored above) so atkAttackBonus is always 0 here.
+  const atkBaseStat    = guardian.attack || 0;
+  const atkWeaponMod   = guardian.weapon ? (ITEMS[guardian.weapon]?.statMods?.attack ?? 0) : 0;
+  const atkAbilityMod  = abilityStatMod(guardian.abilities, 'attack');
+  const atkEffectMod   = effectStatMod(guardian, 'attack');
+  const defBaseStat     = target.defense || 0;
+  const defWeaponMod    = target.weapon ? (ITEMS[target.weapon]?.statMods?.defense ?? 0) : 0;
+  const defAbilityMod   = abilityStatMod(target.abilities, 'defense');
+  const defEffectMod    = effectStatMod(target, 'defense');
+  const defDefenseBonus = target.defenseBonus || 0;
+
   return {
     success: true, log, cost: 0, guardStrike: true,
     attackRoll, defenseRoll, hit, killed, margin, damage, splashKills, splashHits,
@@ -1632,6 +1663,8 @@ export function executeGuardStrike(state, guardian, target) {
       atkAdvantageDice: 0, defAdvantageDice: 0,
       atkStaffBonus, phaseBonus, fortBonus, atkFortAtkBonus,
       fatiguePenalty: 0,
+      atkBaseStat, atkWeaponMod, atkAbilityMod, atkEffectMod, atkAttackBonus: 0,
+      defBaseStat, defWeaponMod, defAbilityMod, defEffectMod, defDefenseBonus,
     },
   };
 }

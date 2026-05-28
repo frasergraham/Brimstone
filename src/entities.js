@@ -13,6 +13,9 @@ let _nextId = 1;
 // Sum the statMod contribution of all passive abilities on a unit.
 // Phase 4 handles brawler (+1 attack) and sturdy (+1 defense); future
 // entries only need to add a statMods field to the ABILITIES registry.
+export function abilityStatMod(abilities, field) {
+  return _abilityStatMod(abilities, field);
+}
 function _abilityStatMod(abilities, field) {
   if (!Array.isArray(abilities) || abilities.length === 0) return 0;
   let sum = 0;

@@ -51,13 +51,21 @@ import {
 
 describe('G1 — combatReadoutModel', () => {
   test('attacker side: start=picked die, one step per nonzero attacker bonus, total=attackRoll', () => {
+    // atkStaffBonus is intentionally NOT surfaced as a flat step (it grows
+    // the advantage pool, baked into the picked die). atkBaseStat etc. are
+    // explicit decomposed unit-stat bonuses set by executeBattle.
     const result = {
       hit: true, attackRoll: 11, defenseRoll: 4,
       breakdown: {
         atkPool: [6, 4], atkBaseDie: 6, defPool: [3], defBaseDie: 3,
         phaseBonus: 1, atkStaffBonus: 1, atkGangupFlat: 2, atkFortAtkBonus: 1,
+        // Stat decomposition: picked 6 + phase 1 + allies 2 + fort 1 = 10
+        // (1 short of the 11 attackRoll), so the 1 missing point comes from
+        // a base stat contribution.
+        atkBaseStat: 1,
         // Defender-side bonuses are intentionally ignored by attacker model.
         fortBonus: 9, defGangupFlat: 9, forestCoverBonus: 9, fatiguePenalty: 9,
+        defBaseStat: 9,
       },
     };
     const m = combatReadoutModel(result, 'attacker');
@@ -67,9 +75,10 @@ describe('G1 — combatReadoutModel', () => {
     assert.equal(m.sideColor, COMBAT_CARD_ATK_COLOR);
     assert.equal(m.sideIcon, '⚔');
     assert.equal(m.won, true);
-    // 4 attacker bonuses → 4 steps, each carries a running total.
+    // 4 attacker bonuses (atk, phase, allies, fort) → 4 steps. staff is NOT
+    // a step (advantage-die, not flat).
     assert.equal(m.steps.length, 4);
-    assert.deepEqual(m.steps.map(s => s.label), ['phase', 'staff', 'allies', 'fort']);
+    assert.deepEqual(m.steps.map(s => s.label), ['atk', 'phase', 'allies', 'fort']);
     assert.deepEqual(m.steps.map(s => s.delta), [1, 1, 2, 1]);
     assert.deepEqual(m.steps.map(s => s.value), [7, 8, 10, 11]);
   });
@@ -82,6 +91,7 @@ describe('G1 — combatReadoutModel', () => {
         fortBonus: 2, defGangupFlat: 1, forestCoverBonus: 1, fatiguePenalty: 1,
         // Attacker-side bonuses ignored.
         phaseBonus: 9, atkStaffBonus: 9, atkGangupFlat: 9, atkFortAtkBonus: 9,
+        atkBaseStat: 9,
       },
     };
     const m = combatReadoutModel(result, 'defender');
@@ -115,6 +125,83 @@ describe('G1 — combatReadoutModel', () => {
     assert.equal(bare.total, 0);
     assert.deepEqual(bare.steps, []);
     assert.equal(bare.won, true);
+  });
+
+  // The sum-invariant audit: picked + Σ(step deltas) MUST equal total.
+  // If a new flat bonus is added to actions.js#executeBattle's breakdown
+  // but combatReadoutModel forgets to surface it, this test fails — i.e.
+  // the readout would tick higher than the dice roll with no floater to
+  // explain the extra points. (atkStaffBonus is exempt because it grows
+  // the dice pool rather than adding flat — it's already baked into the
+  // picked die.)
+  test('sum invariant — every flat attacker bonus surfaces as a step', () => {
+    const result = {
+      hit: true, attackRoll: 0, defenseRoll: 0,  // total computed below
+      breakdown: {
+        atkPool: [6], atkBaseDie: 6, defPool: [3], defBaseDie: 3,
+        // Decomposed unit stats (the silent killers — the operator-reported
+        // bug was that these were missing from the model and the readout
+        // ticked higher than the picked die with no +N explanation).
+        atkBaseStat: 3, atkWeaponMod: 1, atkAbilityMod: 1, atkEffectMod: 1,
+        atkAttackBonus: 1,
+        // Situational atk bonuses.
+        phaseBonus: 1, atkGangupFlat: 2, atkFortAtkBonus: 1,
+        // Advantage-dice variant — NOT counted in sum (it's baked into the
+        // picked die). If a future change starts adding it as flat, this
+        // invariant will catch it.
+        atkStaffBonus: 1,
+        // Defender side ignored.
+        defBaseStat: 9,
+      },
+    };
+    // Compute attackRoll from sum so the assertion is the model, not the fixture.
+    result.attackRoll =
+      result.breakdown.atkBaseDie
+      + result.breakdown.atkBaseStat
+      + result.breakdown.atkWeaponMod
+      + result.breakdown.atkAbilityMod
+      + result.breakdown.atkEffectMod
+      + result.breakdown.atkAttackBonus
+      + result.breakdown.phaseBonus
+      + result.breakdown.atkGangupFlat
+      + result.breakdown.atkFortAtkBonus;
+    const m = combatReadoutModel(result, 'attacker');
+    const sumOfDeltas = m.steps.reduce((acc, s) => acc + s.delta, 0);
+    assert.equal(m.start + sumOfDeltas, m.total,
+      `picked (${m.start}) + Σ(deltas) (${sumOfDeltas}) must equal total (${m.total}) — ` +
+      `if not, the readout ticks higher than the dice roll without a +N floater. ` +
+      `Labels surfaced: ${m.steps.map(s => `${s.label}+${s.delta}`).join(', ')}`);
+    // And the last step's running value lands on total.
+    assert.equal(m.steps[m.steps.length - 1].value, m.total);
+  });
+
+  test('sum invariant — every flat defender bonus surfaces as a step', () => {
+    const result = {
+      hit: false, attackRoll: 0, defenseRoll: 0,
+      breakdown: {
+        atkPool: [3], atkBaseDie: 3, defPool: [5], defBaseDie: 5,
+        defBaseStat: 2, defWeaponMod: 1, defAbilityMod: 1, defEffectMod: 1,
+        defDefenseBonus: 1,
+        fortBonus: 2, defGangupFlat: 1, forestCoverBonus: 1, fatiguePenalty: 1,
+        atkBaseStat: 9,
+      },
+    };
+    result.defenseRoll =
+      result.breakdown.defBaseDie
+      + result.breakdown.defBaseStat
+      + result.breakdown.defWeaponMod
+      + result.breakdown.defAbilityMod
+      + result.breakdown.defEffectMod
+      + result.breakdown.defDefenseBonus
+      + result.breakdown.fortBonus
+      + result.breakdown.defGangupFlat
+      + result.breakdown.forestCoverBonus
+      - result.breakdown.fatiguePenalty;
+    const m = combatReadoutModel(result, 'defender');
+    const sumOfDeltas = m.steps.reduce((acc, s) => acc + s.delta, 0);
+    assert.equal(m.start + sumOfDeltas, m.total,
+      `picked (${m.start}) + Σ(deltas) (${sumOfDeltas}) must equal total (${m.total}). ` +
+      `Labels surfaced: ${m.steps.map(s => `${s.label}${s.delta >= 0 ? '+' : ''}${s.delta}`).join(', ')}`);
   });
 });
 
@@ -568,7 +655,7 @@ describe('G1 — addCombatReadout lifecycle', () => {
       'side colour (atk red) used during stack-up');
   });
 
-  test('result label billboard spawns at final-state, parented to the standee', async () => {
+  test('result label billboard spawns on the DEFENDER side at final-state', async () => {
     if (!('document' in globalThis)) globalThis.document = {};
     const inst = makeInst({ ids: ['e1'] });
     const B = inst._babylon;
@@ -584,21 +671,48 @@ describe('G1 — addCombatReadout lifecycle', () => {
       },
     };
     const sched = fakeScheduler();
+    // G1 v3 — only the defender's readout spawns a result label (HIT /
+    // BLOCKED / CRUSHED / etc). The attacker's number speaks for itself; one
+    // label per combat tells the story cleanly.
+    const p = inst.addCombatReadout('e1', 'defender',
+      { hit: true, damage: 1, attackRoll: 7, defenseRoll: 3,
+        breakdown: { atkPool: [6], atkBaseDie: 6, defPool: [3], defBaseDie: 3,
+                     defGangupFlat: 1 } },
+      { setTimeoutFn: sched });
+    sched.runUntil(COMBAT_READOUT_BASE_HOLD_MS + COMBAT_READOUT_STEP_MS + COMBAT_READOUT_FINAL_HOLD_MS + 1);
+    const resultPlane = planes.find(pl => /readoutResult_/.test(pl.createName));
+    assert.ok(resultPlane, 'result label plane was created at final-state on defender');
+    assert.equal(resultPlane.createOpts.width,  COMBAT_READOUT_RESULT_LABEL_PLANE_WIDTH);
+    assert.equal(resultPlane.createOpts.height, COMBAT_READOUT_RESULT_LABEL_PLANE_HEIGHT);
+    sched.runAll();
+    await p;
+  });
+
+  test('attacker side does NOT spawn a result label (defender-only)', async () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInst({ ids: ['e1'] });
+    const B = inst._babylon;
+    const planes = [];
+    const OrigMeshBuilder = B.MeshBuilder;
+    B.MeshBuilder = {
+      CreatePlane(name, opts, scene) {
+        const p = OrigMeshBuilder.CreatePlane(name, opts, scene);
+        p.createName = name;
+        planes.push(p);
+        return p;
+      },
+    };
+    const sched = fakeScheduler();
     const p = inst.addCombatReadout('e1', 'attacker',
       { hit: true, damage: 1, attackRoll: 7, defenseRoll: 3,
         breakdown: { atkPool: [6], atkBaseDie: 6, defPool: [3], defBaseDie: 3,
                      atkGangupFlat: 1 } },
       { setTimeoutFn: sched });
-    // Run only to final-state — the result label spawns here.
-    sched.runUntil(COMBAT_READOUT_BASE_HOLD_MS + COMBAT_READOUT_STEP_MS + COMBAT_READOUT_FINAL_HOLD_MS + 1);
-    // First plane = step floater. Last plane created in this window = result label.
-    const resultPlane = planes.find(pl => /readoutResult_/.test(pl.createName));
-    assert.ok(resultPlane, 'result label plane was created at final-state');
-    assert.equal(resultPlane.createOpts.width,  COMBAT_READOUT_RESULT_LABEL_PLANE_WIDTH);
-    assert.equal(resultPlane.createOpts.height, COMBAT_READOUT_RESULT_LABEL_PLANE_HEIGHT);
-    // Drain the gate so the readout completes.
     sched.runAll();
     await p;
+    const resultPlanes = planes.filter(pl => /readoutResult_/.test(pl.createName));
+    assert.equal(resultPlanes.length, 0,
+      'attacker-side readout never spawns a result label — defender owns the story');
   });
 
   test('result label sits ABOVE all step floaters (topmost slot)', () => {
@@ -616,10 +730,11 @@ describe('G1 — addCombatReadout lifecycle', () => {
       },
     };
     const sched = fakeScheduler();
-    inst.addCombatReadout('e1', 'attacker',
+    // Defender side — result label only spawns on defender now.
+    inst.addCombatReadout('e1', 'defender',
       { hit: true, damage: 1, attackRoll: 9, defenseRoll: 3,
         breakdown: { atkPool: [6], atkBaseDie: 6, defPool: [3], defBaseDie: 3,
-                     atkGangupFlat: 2, phaseBonus: 1 } },
+                     defGangupFlat: 2, fortBonus: 1 } },
       { setTimeoutFn: sched });
     sched.runUntil(COMBAT_READOUT_BASE_HOLD_MS
       + 2 * COMBAT_READOUT_STEP_MS
@@ -627,7 +742,7 @@ describe('G1 — addCombatReadout lifecycle', () => {
     const floaters = planes.filter(p => /readoutFloater_/.test(p.createName));
     const resultPlane = planes.find(p => /readoutResult_/.test(p.createName));
     assert.ok(floaters.length >= 1, 'at least one floater spawned');
-    assert.ok(resultPlane, 'result label spawned');
+    assert.ok(resultPlane, 'result label spawned (defender side)');
     const topFloaterY = Math.max(...floaters.map(p => p.position.y));
     assert.ok(resultPlane.position.y > topFloaterY,
       `result label Y (${resultPlane.position.y}) sits above topmost floater (${topFloaterY})`);
@@ -648,10 +763,12 @@ describe('G1 — addCombatReadout lifecycle', () => {
       },
     };
     const sched = fakeScheduler();
+    // atkStaffBonus is intentionally NOT a flat step (advantage-dice only),
+    // so use three flat bonuses to get three step floaters.
     inst.addCombatReadout('e1', 'attacker',
       { hit: true, damage: 1, attackRoll: 9, defenseRoll: 3,
         breakdown: { atkPool: [6], atkBaseDie: 6, defPool: [3], defBaseDie: 3,
-                     phaseBonus: 1, atkStaffBonus: 1, atkGangupFlat: 1 } },
+                     atkBaseStat: 1, phaseBonus: 1, atkGangupFlat: 1 } },
       { setTimeoutFn: sched });
     sched.runUntil(COMBAT_READOUT_BASE_HOLD_MS
       + 3 * COMBAT_READOUT_STEP_MS + 1);
@@ -684,10 +801,11 @@ describe('G1 — addCombatReadout lifecycle', () => {
       },
     };
     const sched = fakeScheduler();
-    const h = inst.addCombatReadout('e1', 'attacker',
+    // Defender side — gets BOTH a floater AND the result label.
+    const h = inst.addCombatReadout('e1', 'defender',
       { hit: true, damage: 1, attackRoll: 7, defenseRoll: 3,
         breakdown: { atkPool: [6], atkBaseDie: 6, defPool: [3], defBaseDie: 3,
-                     atkGangupFlat: 1 } },
+                     defGangupFlat: 1 } },
       { setTimeoutFn: sched });
     sched.runAll();
     await h.promise;
@@ -963,7 +1081,7 @@ describe('G1 v2 — paintIconCombatReadout', () => {
     assert.ok(fillRects.length >= 1, 'dim overlay rect was filled');
   });
 
-  test('paints icon + value with side colour, outlined for legibility', () => {
+  test('paints just the value (no side-glyph prefix) with side colour, outlined for legibility', () => {
     const ctx = makeCtx();
     paintIconCombatReadout(ctx, {
       size: UNIT_ICON_TEX_SIZE,
@@ -974,8 +1092,13 @@ describe('G1 v2 — paintIconCombatReadout', () => {
     });
     const fills = ctx.calls.filter(c => c[0] === 'fillText').map(c => c[1]);
     const strokes = ctx.calls.filter(c => c[0] === 'strokeText').map(c => c[1]);
-    assert.ok(fills.includes('⚔ 7'), 'value drawn with side glyph prefix');
-    assert.ok(strokes.includes('⚔ 7'), 'value outlined too');
+    // G1 v3 — the side glyph is dropped from the icon-painted score. The
+    // readout overlays the unit's own portrait, which already carries side
+    // identity; "⚔ 7" over the portrait reads as visual noise.
+    assert.ok(fills.includes('7'), 'value drawn as a bare number');
+    assert.ok(strokes.includes('7'), 'value outlined too');
+    assert.ok(!fills.some(s => /⚔|🛡/.test(s)),
+      'no side glyph prefix on the icon-painted number');
     const fillStyles = ctx.calls.filter(c => c[0] === 'fillStyle').map(c => c[1]);
     assert.ok(fillStyles.includes(COMBAT_CARD_ATK_COLOR),
       'side colour applied to the overlay number');
