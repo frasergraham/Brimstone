@@ -949,15 +949,58 @@ function _playAttackIntroAnim(actorSnap, targetSnap, fromCol, fromRow, toCol, to
 //   5. play the result floaters and drain them.
 // The caller still owns the lunge return (returnAllLungeAnims) afterwards.
 async function _run3DCombatCardHold(actorSnap, targetSnap, result, redrawFn) {
+  // G1 — fire ally half-lunges so gang-up participants visibly join the
+  // strike before the punch freezes. Allies read from result.breakdown
+  // (set by executeBattle); ranged attacks intentionally have empty arrays.
+  // Skip allies that are the attacker/defender themselves (defensive — the
+  // ID arrays should already exclude them).
+  const bd = result?.breakdown || {};
+  const atkAllyIds = Array.isArray(bd.atkAllyIds) ? bd.atkAllyIds : [];
+  const defAllyIds = Array.isArray(bd.defAllyIds) ? bd.defAllyIds : [];
+  if (typeof renderer.addAllyHalfLunge === 'function') {
+    for (const id of atkAllyIds) {
+      if (id === actorSnap.id || id === targetSnap.id) continue;
+      const ally = state?.entities?.find(e => e.id === id && e.alive);
+      if (!ally) continue;
+      renderer.addAllyHalfLunge(id, ally.col, ally.row, targetSnap.col, targetSnap.row);
+    }
+    for (const id of defAllyIds) {
+      if (id === actorSnap.id || id === targetSnap.id) continue;
+      const ally = state?.entities?.find(e => e.id === id && e.alive);
+      if (!ally) continue;
+      // Defender's allies "brace" toward the attacker — same half-distance
+      // visual but oriented to face the threat.
+      renderer.addAllyHalfLunge(id, ally.col, ally.row, actorSnap.col, actorSnap.row);
+    }
+  }
   renderer.holdPunchAtImpact?.();
   if (typeof renderer.addCombatCard === 'function') {
     renderer.addCombatCard(actorSnap.id,  'attacker', result);
     renderer.addCombatCard(targetSnap.id, 'defender', result);
   }
-  // Hold while the cards are up — the punch stays paused at impact.
+  // Hold while the cards are up — the punch stays paused at impact, allies
+  // stay parked at their half-lunge position. waitForAnimations drains the
+  // card hold/fade and any ally lunge promises (already resolved by now).
   await renderer.waitForAnimations();
+  // G1: punch up winner/loser with a quick scale pop on the standees right as
+  // the cards fade out. The cue plays in parallel with `resumePunch` so the
+  // strike continues to follow through while the outcome reads.
+  if (typeof renderer.addCombatOutcomeCue === 'function') {
+    const winnerId = result?.hit ? actorSnap.id  : targetSnap.id;
+    const loserId  = result?.hit ? targetSnap.id : actorSnap.id;
+    renderer.addCombatOutcomeCue(winnerId, loserId);
+  }
   // Resume the strike to completion (no-op resolve if nothing was frozen).
   await (renderer.resumePunch?.() ?? Promise.resolve());
+  // G1: play the reaction clip on the shared skeleton AFTER the punch
+  // resolves so the two clips don't fight. `hit` when damage landed,
+  // `block` when the defender shrugged it off. The Promise resolves when
+  // the clip ends (or immediately when not yet loaded — graceful fallback,
+  // and the call kicks off the lazy import so the next combat has it).
+  if (typeof renderer.playReactionAnim === 'function') {
+    const kind = result?.hit ? 'hit' : 'block';
+    await renderer.playReactionAnim(kind);
+  }
   _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
   await renderer.waitForAnimations();
 }

@@ -277,6 +277,13 @@ export const IDLE_MODEL_FILE    = 'paladin-idle.glb';
 // lunge. Loaded lazily (off the beginLoad critical path) — see
 // `_ensurePunchAnimation`.
 export const PUNCH_MODEL_FILE   = 'punch.glb';
+// G1 reaction clips — animation-only Mixamo exports loaded the same way as
+// punch.glb. `hit.glb` plays on the loser when damage lands; `block.glb`
+// plays on the defender when the attack whiffs. Same shared-skeleton tradeoff
+// as punch: only one clip plays at a time on the paladin rig, so the strike
+// must have resolved (punch follow-through complete) before a reaction fires.
+export const HIT_MODEL_FILE     = 'hit.glb';
+export const BLOCK_MODEL_FILE   = 'block.glb';
 
 // Crossfade rate between idle and walking, in 1/seconds. 5.0 = full transition
 // in 200ms. Slow enough to read as a deliberate state change, fast enough that
@@ -3844,6 +3851,163 @@ export class Renderer3D {
     // Dispose punch.glb's imported mesh + skeleton — only the keyframes are kept.
     this._disposeWalkingImport(result);
     return src.punchGroup;
+  }
+
+  /** G1: lazy-load a one-shot reaction clip (hit.glb or block.glb) and
+   *  retarget it onto the shared paladin skeleton, mirroring the punch
+   *  pipeline (clone → name-remap → strip root motion → dispose mesh, keep
+   *  keyframes). The retargeted group is stashed on `_paladinSource[slot]`
+   *  ('hitGroup' / 'blockGroup') so subsequent reactions reuse it.
+   *
+   *  Idempotent — repeat calls for the same `slot` return the in-flight (or
+   *  settled) promise. Off the loading critical path: reactions only fire
+   *  AFTER the first combat, so the ~few-tens-of-kB clip downloads only on
+   *  demand. Returns the AnimationGroup (or null if the import or retarget
+   *  failed; the reaction then no-ops gracefully). */
+  _ensureReactionAnimation(slot, file, basePath = 'assets') {
+    if (!this._paladinSource) return null;
+    const src = this._paladinSource;
+    if (src[slot]) return Promise.resolve(src[slot]);
+    const promiseKey = `_${slot}LoadPromise`;
+    if (this[promiseKey]) return this[promiseKey];
+    this[promiseKey] = Promise.resolve()
+      .then(() => this._loadReactionAnimation(slot, file, basePath))
+      .catch(err => {
+        console.warn(`[Renderer3D] ${file} load failed; reaction no-ops.`, err);
+        return null;
+      });
+    return this[promiseKey];
+  }
+
+  async _loadReactionAnimation(slot, file, basePath = 'assets') {
+    if (!this._babylon || !this._scene || !this._paladinSource) return null;
+    const BABYLON = this._babylon;
+    const src = this._paladinSource;
+    if (src[slot]) return src[slot];
+    if (!BABYLON.SceneLoader || typeof BABYLON.SceneLoader.ImportMeshAsync !== 'function') {
+      return null;
+    }
+    let result;
+    try {
+      result = await BABYLON.SceneLoader.ImportMeshAsync(
+        null,
+        `${basePath}/${PALADIN_MODEL_DIR}`,
+        file,
+        this._scene,
+        this._glbProgressHandler('paladin'),
+      );
+    } catch (err) {
+      console.warn(`[Renderer3D] ${file} import failed`, err);
+      return null;
+    }
+    const native = (result.animationGroups || []).find(g => g) || null;
+    if (!native) {
+      console.warn(`[Renderer3D] ${file} contained no animation group`);
+      this._disposeWalkingImport(result);
+      return null;
+    }
+    const nameMap = new Map();
+    const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
+    const addEntry = (name, target) => {
+      if (!name || !target) return;
+      if (!nameMap.has(name)) nameMap.set(name, target);
+      const stripped = stripDup(name);
+      if (stripped !== name && !nameMap.has(stripped)) nameMap.set(stripped, target);
+    };
+    for (const tn of src.transformNodes || []) {
+      if (tn && tn.name) addEntry(tn.name, tn);
+    }
+    if (src.skeleton && Array.isArray(src.skeleton.bones)) {
+      for (const bone of src.skeleton.bones) {
+        if (!bone) continue;
+        const tn = bone._linkedTransformNode
+          || (typeof bone.getTransformNode === 'function' && bone.getTransformNode());
+        if (tn && tn.name) addEntry(tn.name, tn);
+        if (bone.name) addEntry(bone.name, tn || bone);
+      }
+    }
+    let retargeted = null;
+    let remapped = 0;
+    let missed = 0;
+    if (typeof native.clone === 'function') {
+      retargeted = native.clone(`paladin${slot}Retargeted`, (oldTarget) => {
+        if (!oldTarget || !oldTarget.name) { missed++; return oldTarget; }
+        const match = nameMap.get(oldTarget.name) || nameMap.get(stripDup(oldTarget.name));
+        if (match) { remapped++; return match; }
+        missed++;
+        return oldTarget;
+      });
+    }
+    console.info(`[Renderer3D] ${file} → paladin retarget: ${remapped} hit, ${missed} miss`);
+    if (retargeted && remapped > 0) {
+      stripRootBoneTranslation(retargeted);
+      src[`${slot}DurationSec`] = animDurationSeconds(native);
+      if (typeof retargeted.start === 'function') retargeted.start(false, 1.0);
+      if (typeof retargeted.stop  === 'function') retargeted.stop();
+      src[slot] = retargeted;
+    } else {
+      console.warn(`[Renderer3D] ${file} retarget produced 0 hits — reaction no-ops.`);
+      try { retargeted?.dispose?.(); } catch { /* ignore */ }
+      src[slot] = null;
+    }
+    this._disposeWalkingImport(result);
+    return src[slot];
+  }
+
+  /** G1: play hit.glb or block.glb once on the shared paladin skeleton. Used
+   *  AFTER the punch follow-through completes (see _run3DCombatCardHold) so
+   *  the strike and the reaction don't fight over the single skeleton.
+   *
+   *  Single-skeleton constraint: every paladin clone shares the same rig, so
+   *  visually every paladin on screen plays the clip in unison — accepted
+   *  per the operator brief. Cone-token units have no clone and animate
+   *  via position/floater only.
+   *
+   *  Returns a Promise that resolves when the clip ends (or immediately if
+   *  the clip isn't loaded yet / no rig is present). The caller can use it to
+   *  time the damage floater with the impact pose. */
+  playReactionAnim(kind) {
+    if (kind !== 'hit' && kind !== 'block') return Promise.resolve();
+    const slot = kind === 'hit' ? 'hitGroup' : 'blockGroup';
+    const src = this._paladinSource;
+    if (!src || !src[slot]) {
+      // Lazy load (idempotent) so the next reaction has the clip ready.
+      const file = kind === 'hit' ? HIT_MODEL_FILE : BLOCK_MODEL_FILE;
+      this._ensureReactionAnimation(slot, file, this._assetsBasePath || 'assets');
+      return Promise.resolve();
+    }
+    const group = src[slot];
+    // Stop punch/idle/walk so the reaction owns the skeleton.
+    if (src.idleGroup && typeof src.idleGroup.stop === 'function') src.idleGroup.stop();
+    if (src.walkGroup && typeof src.walkGroup.stop === 'function') src.walkGroup.stop();
+    if (src.punchGroup && typeof src.punchGroup.stop === 'function') src.punchGroup.stop();
+    src.punchPlaying = false;
+    src.reactionPlaying = true;
+    src.activeGroup = kind;
+    const speedMul = this._playbackSpeedMul ?? 1.0;
+    // Compress to ~500ms regardless of source clip length so the reaction
+    // doesn't overstay its welcome in the ~6s sequence budget.
+    const dur = Number.isFinite(src[`${slot}DurationSec`]) ? src[`${slot}DurationSec`] : 1.0;
+    const ratio = (dur * 1000) / (500 * speedMul);
+    if (typeof group.stop === 'function') group.stop();
+    return new Promise(resolve => {
+      const done = () => {
+        src.reactionPlaying = false;
+        src.activeGroup = null;
+        resolve();
+      };
+      const obs = group.onAnimationGroupEndObservable;
+      if (obs && typeof obs.addOnce === 'function') {
+        obs.addOnce(done);
+      } else if (obs && typeof obs.add === 'function') {
+        obs.add(done);
+      }
+      if (typeof group.start === 'function') {
+        group.start(false, Math.max(0.25, ratio));
+      } else {
+        done();
+      }
+    });
   }
 
   /** Play the retargeted punch clip once on the shared paladin skeleton,
@@ -9323,6 +9487,53 @@ export class Renderer3D {
     this._trackAnim(promise);
   }
 
+  /** G1: ally half-lunge — a gang-up participant slides HALF the distance of
+   *  a normal attacker lunge (so the attacker still reads as the primary
+   *  striker) and holds until `returnAllLungeAnims()` brings everyone back.
+   *
+   *  Mirrors `addLungeAnim` but: (a) deliberately skips the camera-framing
+   *  short-circuit (the attacker already framed the cluster, an ally chiming
+   *  in shouldn't re-target the camera), (b) does NOT trigger the shared
+   *  paladin punch animation (single skeleton — only the primary attacker
+   *  plays the strike; allies just slide and hold), and (c) uses
+   *  LUNGE_FRACTION * 0.5 so the visual hierarchy stays attacker > ally. */
+  addAllyHalfLunge(entityId, fromCol, fromRow, toCol, toRow) {
+    if (!this._scene || !this._babylon) return;
+    const standee = this._entityStandees.get(entityId);
+    if (!standee || !standee.plane) return;
+    const BABYLON = this._babylon;
+    const { x: toX, z: toZ } = hexToWorld(toCol, toRow);
+    const lungeSpeedMul = this._playbackSpeedMul ?? 1.0;
+    const FRAMES_LUNGE = Math.max(1, Math.round(LUNGE_ANIM_MS * lungeSpeedMul * 60 / 1000));
+
+    this._scene.stopAnimation(standee.plane);
+    this._activeLungeIds.add(entityId);
+    const startX = standee.plane.position.x;
+    const startZ = standee.plane.position.z;
+    const { x: lungeX, z: lungeZ } = computeLungeTarget(
+      { x: startX, z: startZ }, { x: toX, z: toZ },
+      LUNGE_FRACTION * 0.5, // ally lunges half-distance — primary attacker is still the striker
+    );
+    if (standee.paladinClone?.mesh && (lungeX !== startX || lungeZ !== startZ)) {
+      standee.paladinClone.mesh.rotation.y = Math.atan2(lungeX - startX, lungeZ - startZ);
+    }
+    const ease = new BABYLON.CubicEase();
+    ease.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEOUT);
+    const animX = new BABYLON.Animation('algX', 'position.x', 60,
+      BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+    animX.setKeys([{ frame: 0, value: startX }, { frame: FRAMES_LUNGE, value: lungeX }]);
+    animX.setEasingFunction(ease);
+    const animZ = new BABYLON.Animation('algZ', 'position.z', 60,
+      BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+    animZ.setKeys([{ frame: 0, value: startZ }, { frame: FRAMES_LUNGE, value: lungeZ }]);
+    animZ.setEasingFunction(ease);
+    standee.lungeHome = { homeX: startX, homeZ: startZ };
+    const promise = new Promise(resolve => {
+      this._scene.beginDirectAnimation(standee.plane, [animX, animZ], 0, FRAMES_LUNGE, false, 1, resolve);
+    });
+    this._trackAnim(promise);
+  }
+
   /** Reverse every active lunge: slide each standee back to its home hex.
    *  Releases the entity id from `_activeLungeIds` once the return completes
    *  so `_syncEntityStandees` resumes snapping the standee to state. */
@@ -9698,6 +9909,69 @@ export class Renderer3D {
       });
     });
     this._trackAnim(promise);
+  }
+
+  // ─── Combat outcome: winner/loser visual cue ─────────────────────────────
+
+  /** G1: punch up the outcome of a combat by scaling the winner standee up
+   *  briefly (a "triumph" pop) and the loser down (a "stagger" shrink) at
+   *  the moment the dice resolve. Pure visual — no state mutation, no
+   *  position changes (lunge stays parked at its impact pose). Each standee
+   *  scale animates from current → target → 1.0 over `holdMs + restoreMs`
+   *  so the cue is read by the player without leaving the unit at the wrong
+   *  size if the next animation hasn't started yet.
+   *
+   *  Skips silently when either standee is missing (e.g. a fatal hit already
+   *  triggered fade/dispose). Caller may pass either id as null/undefined
+   *  to do only one side. */
+  addCombatOutcomeCue(winnerId, loserId, opts = {}) {
+    if (!this._scene || !this._babylon) return Promise.resolve();
+    const BABYLON = this._babylon;
+    const holdMs    = Number.isFinite(opts.holdMs)    ? opts.holdMs    : 380;
+    const restoreMs = Number.isFinite(opts.restoreMs) ? opts.restoreMs : 220;
+    const winnerScale = Number.isFinite(opts.winnerScale) ? opts.winnerScale : 1.25;
+    const loserScale  = Number.isFinite(opts.loserScale)  ? opts.loserScale  : 0.75;
+
+    const promises = [];
+    const animateStandee = (id, peakScale) => {
+      if (id == null) return;
+      const standee = this._entityStandees.get(id);
+      if (!standee || !standee.plane) return;
+      const plane = standee.plane;
+      const fps = 60;
+      const holdFrames    = Math.max(1, Math.round(holdMs    / 1000 * fps));
+      const restoreFrames = Math.max(1, Math.round(restoreMs / 1000 * fps));
+      const total = holdFrames + restoreFrames;
+      const baseX = plane.scaling.x;
+      const baseY = plane.scaling.y;
+      const baseZ = plane.scaling.z;
+      const animScale = new BABYLON.Animation(
+        'combatOutcomeScale', 'scaling', fps,
+        BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
+        BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT,
+      );
+      animScale.setKeys([
+        { frame: 0, value: new BABYLON.Vector3(baseX, baseY, baseZ) },
+        { frame: holdFrames, value: new BABYLON.Vector3(baseX * peakScale, baseY * peakScale, baseZ * peakScale) },
+        { frame: total, value: new BABYLON.Vector3(baseX, baseY, baseZ) },
+      ]);
+      const ease = new BABYLON.CubicEase();
+      ease.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEOUT);
+      animScale.setEasingFunction(ease);
+      const p = new Promise(resolve => {
+        this._scene.beginDirectAnimation(plane, [animScale], 0, total, false, 1, () => {
+          plane.scaling.x = baseX;
+          plane.scaling.y = baseY;
+          plane.scaling.z = baseZ;
+          resolve();
+        });
+      });
+      this._trackAnim(p);
+      promises.push(p);
+    };
+    animateStandee(winnerId, winnerScale);
+    animateStandee(loserId,  loserScale);
+    return Promise.all(promises);
   }
 
   // ─── Reaction effects: Sound Horn ring + Power-Node-Discovered burst ────
@@ -15306,7 +15580,24 @@ export function combatCardModel(result, side) {
   }
   const total = Number.isFinite(rawTotal) ? rawTotal : picked;
   const won = isAtk ? !!result?.hit : !result?.hit;
-  return { poolFaces, picked, total, won };
+  // Modifier chips that contributed to this side's post-die total. Order
+  // matters — chips paint in this order under the picked die so the running
+  // sum reads as picked → +chip1 → +chip2 → total. Only nonzero contributions
+  // appear (defender gets phase/staff omitted; attacker gets defender-side
+  // fortification/cover omitted) so the chip strip stays compact.
+  const modifiers = [];
+  if (isAtk) {
+    if (bd.phaseBonus > 0)        modifiers.push({ icon: '🌙', label: 'phase',  value: bd.phaseBonus });
+    if (bd.atkStaffBonus > 0)     modifiers.push({ icon: '🪄', label: 'staff',  value: bd.atkStaffBonus });
+    if (bd.atkGangupFlat > 0)     modifiers.push({ icon: '⚔',  label: 'gang',   value: bd.atkGangupFlat });
+    if (bd.atkFortAtkBonus > 0)   modifiers.push({ icon: '🏰', label: 'fort',   value: bd.atkFortAtkBonus });
+  } else {
+    if (bd.fortBonus > 0)         modifiers.push({ icon: '🏰', label: 'fort',   value: bd.fortBonus });
+    if (bd.defGangupFlat > 0)     modifiers.push({ icon: '🛡', label: 'guard',  value: bd.defGangupFlat });
+    if (bd.forestCoverBonus > 0)  modifiers.push({ icon: '🌲', label: 'cover',  value: bd.forestCoverBonus });
+    if (bd.fatiguePenalty > 0)    modifiers.push({ icon: '💤', label: 'tired', value: -bd.fatiguePenalty });
+  }
+  return { poolFaces, picked, total, won, modifiers };
 }
 
 /**
@@ -15398,11 +15689,74 @@ export function paintCombatCard(ctx, model, opts) {
     dx += die + gap;
   }
 
+  // ── Modifier chips ────────────────────────────────────────────────────
+  // Stack the contributing modifiers (phase, gang-up, fort, staff, cover,
+  // fatigue …) as a small strip below the dice so the player can read WHY
+  // the total landed where it did. The chips paint in left-to-right order;
+  // values prefix with their sign.
+  const modifiers = Array.isArray(opts?.modifiers)
+    ? opts.modifiers
+    : (Array.isArray(model?.modifiers) ? model.modifiers : []);
+  const chipBandTop = cardY + diceBandH;
+  const chipBandH   = Math.round(cardH * 0.18);
+  if (modifiers.length > 0) {
+    const chipFont = Math.max(10, Math.round(chipBandH * 0.55));
+    ctx.font = `700 ${chipFont}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    // Measure first so the row centres in the card; pad each chip uniformly.
+    const padX = Math.round(chipFont * 0.45);
+    const chipH = Math.round(chipFont * 1.6);
+    const chipR = Math.round(chipH * 0.35);
+    const chipGap = Math.round(chipFont * 0.35);
+    const labels = modifiers.map(m => {
+      const sign = m.value < 0 ? '−' : '+';
+      const mag = Math.abs(m.value | 0);
+      return `${m.icon ?? ''} ${sign}${mag}`.trim();
+    });
+    const widths = labels.map(s => Math.max(chipFont * 1.6, ctx.measureText(s).width + padX * 2));
+    const rowW = widths.reduce((a, b) => a + b, 0) + chipGap * (modifiers.length - 1);
+    let cx = (width - rowW) / 2;
+    const cyChip = chipBandTop + (chipBandH - chipH) / 2 + chipH / 2;
+    for (let i = 0; i < modifiers.length; i++) {
+      const cw = widths[i];
+      // Chip background — translucent dark with accent-tinted rim.
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.beginPath();
+      ctx.moveTo(cx + chipR, cyChip - chipH / 2);
+      ctx.lineTo(cx + cw - chipR, cyChip - chipH / 2);
+      ctx.arcTo(cx + cw, cyChip - chipH / 2, cx + cw, cyChip - chipH / 2 + chipR, chipR);
+      ctx.lineTo(cx + cw, cyChip + chipH / 2 - chipR);
+      ctx.arcTo(cx + cw, cyChip + chipH / 2, cx + cw - chipR, cyChip + chipH / 2, chipR);
+      ctx.lineTo(cx + chipR, cyChip + chipH / 2);
+      ctx.arcTo(cx, cyChip + chipH / 2, cx, cyChip + chipH / 2 - chipR, chipR);
+      ctx.lineTo(cx, cyChip - chipH / 2 + chipR);
+      ctx.arcTo(cx, cyChip - chipH / 2, cx + chipR, cyChip - chipH / 2, chipR);
+      ctx.closePath();
+      ctx.fill();
+      ctx.lineWidth = Math.max(1, Math.round(chipH * 0.06));
+      ctx.strokeStyle = accent;
+      ctx.stroke();
+      ctx.fillStyle = '#fff';
+      ctx.fillText(labels[i], cx + cw / 2, cyChip);
+      cx += cw + chipGap;
+    }
+  }
+
   // ── Total ─────────────────────────────────────────────────────────────
-  const totalY = cardY + diceBandH + (cardH - diceBandH) / 2;
-  ctx.font = `900 ${Math.round(cardH * 0.26)}px sans-serif`;
+  // Push the total below the chip strip if there is one, otherwise it
+  // floats in the lower band as before.
+  const totalY = (modifiers.length > 0)
+    ? chipBandTop + chipBandH + (cardH - diceBandH - chipBandH) / 2
+    : cardY + diceBandH + (cardH - diceBandH) / 2;
+  const totalFontPx = (modifiers.length > 0)
+    ? Math.round(cardH * 0.22)
+    : Math.round(cardH * 0.26);
+  ctx.font = `900 ${totalFontPx}px sans-serif`;
   ctx.lineWidth = Math.max(4, Math.round(cardH * 0.03));
   ctx.lineJoin = 'round';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
   ctx.strokeStyle = '#000';
   const totalStr = String(total);
   ctx.strokeText(totalStr, width / 2, totalY);

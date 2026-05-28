@@ -1081,6 +1081,11 @@ export function executeBattle(state, actor, target) {
       ranged: isRanged, closeRanged: isCloseRanged,
       atkAllyNames: isRanged ? [] : atkAllies.map(e => e.displayName),
       defAllyNames: isRanged ? [] : defAllies.map(e => e.displayName),
+      // Ally IDs — the 3D combat renderer uses these to lunge gang-up
+      // participants half-distance toward the target alongside the attacker.
+      // Ranged battles don't get gang-up so these stay empty.
+      atkAllyIds: isRanged ? [] : atkAllies.map(e => e.id),
+      defAllyIds: isRanged ? [] : defAllies.map(e => e.id),
     },
   };
 }
