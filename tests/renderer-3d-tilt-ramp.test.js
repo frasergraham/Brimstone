@@ -27,10 +27,12 @@ const RAMP = CAMERA_TILT_RAMP_START; // 0.4
 const rAt = (t) => MIN + t * (MAX - MIN);
 
 describe('betaForRadius — constants sanity', () => {
-  test('topdown tilt is steeper than locked, both below 90°', () => {
-    assert.ok(TOP > BASE, 'topdown should be a larger beta than locked');
-    assert.ok(TOP < Math.PI / 2, 'topdown should stay short of fully overhead');
-    assert.ok(BASE > 0);
+  test('topdown tilt is closer to overhead than locked, both above 0', () => {
+    // ArcRotate beta is measured FROM +Y: 0 = directly overhead, π/2 = horizon.
+    // Top-down view means a SMALLER beta than the isometric base.
+    assert.ok(TOP < BASE, 'topdown should be a smaller beta than locked');
+    assert.ok(TOP > 0, 'topdown should stay off the +Y pole singularity');
+    assert.ok(BASE < Math.PI / 2, 'locked should stay short of pure horizon');
   });
 
   test('ramp start fraction is in (0, 1)', () => {
@@ -61,8 +63,9 @@ describe('betaForRadius — anchors', () => {
 describe('betaForRadius — curve shape (not linear)', () => {
   test('r at 0.7 frac → strictly between base and topdown', () => {
     const b = betaForRadius(rAt(0.7), MIN, MAX, BASE, TOP);
-    assert.ok(b > BASE, 'should have started rising');
-    assert.ok(b < TOP, 'should not yet have reached topdown');
+    // TOPDOWN < BASE: beta descends from BASE toward TOPDOWN as radius grows.
+    assert.ok(b < BASE, 'should have started descending');
+    assert.ok(b > TOP, 'should not yet have reached topdown');
   });
 
   test('r at 0.7 frac → NOT the naive full-range linear value', () => {
@@ -74,21 +77,24 @@ describe('betaForRadius — curve shape (not linear)', () => {
     assert.ok(Math.abs(b - naiveLinear) > 1e-6, 'ramped beta must differ from full-range linear');
   });
 
-  test('smoothstep ease-in: below the within-ramp linear value early in the ramp', () => {
+  test('smoothstep ease-in: closer to BASE than the within-ramp linear value early in the ramp', () => {
     // At t = 0.55 the renormalized ramp fraction s = (0.55-0.4)/0.6 = 0.25.
-    // smoothstep(0.25) = 0.15625 < 0.25, so beta sits BELOW the straight-line
-    // ramp value — an unmistakable signature of the S-curve.
+    // smoothstep(0.25) = 0.15625 < 0.25, so beta sits CLOSER TO BASE than the
+    // straight-line ramp value — an unmistakable signature of the S-curve.
+    // Because TOPDOWN < BASE, "closer to BASE" means a LARGER beta than the
+    // linear interpolant at the same s.
     const b = betaForRadius(rAt(0.55), MIN, MAX, BASE, TOP);
     const sLinear = 0.25; // within-ramp linear fraction at t=0.55
     const linearWithinRamp = BASE + sLinear * (TOP - BASE);
-    assert.ok(b > BASE && b < linearWithinRamp, 'ease-in should undershoot the linear ramp');
+    assert.ok(b < BASE && b > linearWithinRamp, 'ease-in should undershoot toward BASE');
   });
 
-  test('monotonic non-decreasing across the zoom range', () => {
-    let prev = -Infinity;
+  test('monotonic non-increasing across the zoom range', () => {
+    // beta DESCENDS (toward overhead) as the radius grows.
+    let prev = Infinity;
     for (let t = 0; t <= 1.0001; t += 0.05) {
       const b = betaForRadius(rAt(Math.min(t, 1)), MIN, MAX, BASE, TOP);
-      assert.ok(b >= prev - 1e-12, `beta should not decrease as radius grows (t=${t})`);
+      assert.ok(b <= prev + 1e-12, `beta should not increase as radius grows (t=${t})`);
       prev = b;
     }
   });
@@ -112,8 +118,8 @@ describe('betaForRadius — clamping & edge cases', () => {
     // With rampStart 0.6, t=0.5 is still flat; with default 0.4 it has risen.
     const flat = betaForRadius(rAt(0.5), MIN, MAX, BASE, TOP, 0.6);
     assert.equal(flat, BASE);
-    const risen = betaForRadius(rAt(0.5), MIN, MAX, BASE, TOP, 0.4);
-    assert.ok(risen > BASE);
+    const moved = betaForRadius(rAt(0.5), MIN, MAX, BASE, TOP, 0.4);
+    assert.ok(moved < BASE, 'with default ramp start, beta has descended toward topdown');
   });
 
   test('works with the real camera radius bounds', () => {

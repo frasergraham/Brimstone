@@ -902,20 +902,20 @@ export const ENTITY_FRAME_PADDING = 1.5;
  *  tilt-lock task) so the board always reads as a fixed isometric. The
  *  camera's lowerBetaLimit and upperBetaLimit are both pinned to π/4 in
  *  _initBabylon, so any stray beta mutation is immediately re-clamped. */
-// Locked tilt angle for the ArcRotateCamera (radians from +Y). Higher = more
-// top-down; π/2 would be a flat-on horizon view. 35° → camera sits higher in
-// the sky and looks down more sharply, which reads the texture-rich top faces
-// and standee silhouettes clearly without going pure top-down.
+// Locked tilt angle for the ArcRotateCamera (radians from +Y). LOWER = more
+// top-down (beta = 0 is straight overhead; π/2 is flat-on horizon). 35° from
+// +Y reads as a high isometric — looking down from a steep angle, with the
+// texture-rich top faces and standee silhouettes both legible.
 export const CAMERA_BETA_LOCKED = Math.PI * 35 / 180;
 
 /** Top-down tilt (beta) reached at maximum zoom-out. The camera "rises" as the
  *  operator zooms out: it holds the locked isometric (`CAMERA_BETA_LOCKED`) for
- *  the first part of the zoom range, then eases toward this near-overhead angle
- *  so by max zoom you're looking mostly straight down (units read as their
- *  billboard icons). 80° from +Y is close to top-down without going fully flat
- *  (π/2 = 90° = exactly overhead, which flattens the standee silhouettes and
- *  kills all sense of relief). Tune by eye. See `betaForRadius`. */
-export const CAMERA_BETA_TOPDOWN = Math.PI * 80 / 180;
+ *  the first part of the zoom range, then eases DOWN (toward 0 = directly
+ *  overhead) so by max zoom you're looking mostly straight down (units read as
+ *  their billboard icons obscuring the bodies entirely). 5° from +Y is close
+ *  to overhead without going fully flat (beta=0 sits on the ArcRotateCamera
+ *  pole singularity). Tune by eye. See `betaForRadius`. */
+export const CAMERA_BETA_TOPDOWN = Math.PI * 5 / 180;
 
 /** Fraction of the zoom range (`radius` from min→max) over which the camera
  *  keeps the locked isometric tilt before it starts rising toward top-down.
@@ -5487,8 +5487,11 @@ export class Renderer3D {
     camera.lowerAlphaLimit = null;
     camera.upperAlphaLimit = null;
     camera.beta            = CAMERA_BETA_LOCKED;
-    camera.lowerBetaLimit  = CAMERA_BETA_LOCKED;
-    camera.upperBetaLimit  = CAMERA_BETA_TOPDOWN;
+    // CAMERA_BETA_TOPDOWN (≈ 5°) is smaller than CAMERA_BETA_LOCKED (35°)
+    // — beta DECREASES as the camera tilts toward overhead. The lower limit
+    // is the more-overhead end, the upper limit is the isometric base.
+    camera.lowerBetaLimit  = CAMERA_BETA_TOPDOWN;
+    camera.upperBetaLimit  = CAMERA_BETA_LOCKED;
 
     // Zoom limits — both are provisional and get replaced by
     // Operator-fixed bounds (CAMERA_MIN_ZOOM_RADIUS / CAMERA_MAX_ZOOM_RADIUS).
