@@ -95,21 +95,33 @@ describe('Renderer3D splat fog — _setTilePropsFogged', () => {
     assert.ok(!r._fogActiveSet.has(hexK));
   });
 
-  test("'darken' props tint by _fogTileDarken without hiding", () => {
+  test("'darken' props tint to FOG_HIDDEN_DARKEN cap on both texture level + colour", async () => {
+    // Fog darken on roads/rivers must hit the TEXTURE level (outside the
+    // lighting clamp) so it survives bright phases — same fix the terrain
+    // fog veil relies on. And it clamps to FOG_HIDDEN_DARKEN so the ribbon
+    // reads as "occluded" not "lightly tinted".
+    const { FOG_HIDDEN_DARKEN } = await import('../src/renderer-3d.js');
     const r = makeRenderer();
-    r._fogTileDarken = 0.5;
+    r._fogTileDarken = 0.7; // mild phase value — should clamp down to the cap
     const hexK = '5,5';
     const road = {
       isVisible: true,
-      material: { diffuseColor: { r: 1, g: 1, b: 1 } },
+      material: {
+        diffuseColor: { r: 1, g: 1, b: 1 },
+        diffuseTexture: { level: 1 },
+      },
       metadata: { respectsFog: 'darken', baseDiffuse: { r: 1, g: 1, b: 1 } },
     };
     r._tilePropsByKey.set(hexK, [road]);
     r._setTilePropsFogged(hexK, true);
     assert.equal(road.isVisible, true, 'road stays visible under fog');
-    assert.equal(road.material.diffuseColor.r, 0.5, 'road diffuse darkened');
+    assert.equal(road.material.diffuseTexture.level, FOG_HIDDEN_DARKEN,
+      'texture level darkened past the lighting clamp');
+    assert.equal(road.material.diffuseColor.r, FOG_HIDDEN_DARKEN,
+      'diffuse colour darkened too (belt-and-braces for texture-less mats)');
     r._setTilePropsFogged(hexK, false);
-    assert.equal(road.material.diffuseColor.r, 1.0, 'restored on un-fog');
+    assert.equal(road.material.diffuseTexture.level, 1, 'level restored on un-fog');
+    assert.equal(road.material.diffuseColor.r, 1.0, 'colour restored on un-fog');
   });
 });
 

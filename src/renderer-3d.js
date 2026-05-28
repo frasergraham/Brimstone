@@ -12022,21 +12022,36 @@ export class Renderer3D {
       if (policy === false) continue;
       if (policy === 'darken') {
         // Per-tile material darkening: the ribbon stays at full opacity but
-        // its colour is multiplied by FOG_TILE_DARKEN so it matches the
-        // fogged ground beneath it. Anchor colours are stashed in metadata
-        // at build time so re-revealing a hex restores the exact unfogged
-        // tint (avoids accumulating darken multipliers across fog flickers).
+        // its colour is multiplied so it matches the fogged ground beneath
+        // it. Anchor colours are stashed in metadata at build time so
+        // re-revealing restores the exact unfogged tint (avoids accumulating
+        // darken multipliers across fog flickers).
+        //
+        // CRITICAL: roads / rivers carry a `diffuseTexture`, and the lit
+        // colour composes as `clamp(lightAccum * diffuseColor) * texel`. At
+        // bright phases the clamp saturates to 1.0 and the diffuseColor
+        // multiply is swallowed — the road appears at full brightness even
+        // over a fogged tile (exactly the bug we already fixed for the
+        // terrain). Darken the TEXTURE level instead, which is outside the
+        // clamp and always survives. Also still darken diffuseColor as
+        // belt-and-braces for any material without a texture, AND clamp to
+        // FOG_HIDDEN_DARKEN so the road reads the same "occluded" strength
+        // as the splat ground beneath it.
+        const k = fogged
+          ? Math.min(this._fogTileDarken, FOG_HIDDEN_DARKEN)
+          : 1.0;
         const mat = p.material;
         const bd  = p.metadata?.baseDiffuse;
         const be  = p.metadata?.baseEmissive;
+        if (mat?.diffuseTexture && typeof mat.diffuseTexture.level === 'number') {
+          mat.diffuseTexture.level = k;
+        }
         if (mat?.diffuseColor && bd) {
-          const k = fogged ? this._fogTileDarken : 1.0;
           mat.diffuseColor.r  = bd.r * k;
           mat.diffuseColor.g  = bd.g * k;
           mat.diffuseColor.b  = bd.b * k;
         }
         if (mat?.emissiveColor && be) {
-          const k = fogged ? this._fogTileDarken : 1.0;
           mat.emissiveColor.r = be.r * k;
           mat.emissiveColor.g = be.g * k;
           mat.emissiveColor.b = be.b * k;
