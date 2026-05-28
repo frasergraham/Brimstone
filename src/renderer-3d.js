@@ -7751,6 +7751,7 @@ export class Renderer3D {
     const baseMat = this._buildRiverBankMaterial();
     if (!baseMat) return;
     const baseDiff = baseMat.diffuseColor ? baseMat.diffuseColor.clone() : null;
+    const baseEmis = baseMat.emissiveColor ? baseMat.emissiveColor.clone() : null;
     for (const [tkey, list] of banksByTileKey) {
       const merged = BABYLON.Mesh.MergeMeshes(list, true, true, undefined, false, false);
       if (!merged) continue;
@@ -7763,6 +7764,11 @@ export class Renderer3D {
         mat.diffuseColor.g = baseDiff.g;
         mat.diffuseColor.b = baseDiff.b;
       }
+      if (baseEmis && mat.emissiveColor) {
+        mat.emissiveColor.r = baseEmis.r;
+        mat.emissiveColor.g = baseEmis.g;
+        mat.emissiveColor.b = baseEmis.b;
+      }
       merged.material   = mat;
       merged.hasVertexAlpha = true;
       // Sit just BELOW the water in the transparency sort so the water reads
@@ -7774,7 +7780,7 @@ export class Renderer3D {
         respectsFog: 'darken',
         kind: 'river-bank',
         baseDiffuse:  baseDiff ? { r: baseDiff.r, g: baseDiff.g, b: baseDiff.b } : { r: 1, g: 1, b: 1 },
-        baseEmissive: { r: 0, g: 0, b: 0 },
+        baseEmissive: baseEmis ? { r: baseEmis.r, g: baseEmis.g, b: baseEmis.b } : { r: 0, g: 0, b: 0 },
       };
       const props = this._tilePropsByKey.get(tkey);
       if (props) props.push(merged);
@@ -7909,7 +7915,15 @@ export class Renderer3D {
     if (this._riverBankBaseMat) return this._riverBankBaseMat;
     const mat = new BABYLON.StandardMaterial('river_bank_base_mat', scene);
     mat.diffuseColor    = new BABYLON.Color3(0.62, 0.50, 0.38); // warm dirt tint
-    mat.emissiveColor   = new BABYLON.Color3(0, 0, 0);
+    // The bank ribbon's cross-section is a U-trench, so the slope walls face
+    // mostly sideways/downward. At 45° camera tilt under the directional sun
+    // the slope normals catch almost no diffuse and the dirt reads near-black.
+    // A modest warm emissive gives the dirt a baseline colour regardless of
+    // lighting angle, lifting the slope faces into the readable brown range
+    // without making the well-lit top faces glow. Fog parity: `baseEmissive`
+    // is snapshotted in `_buildRiverBankMeshes` so `_setTilePropsFogged` darkens
+    // the emissive alongside the diffuse when the tile is fogged.
+    mat.emissiveColor   = new BABYLON.Color3(0.25, 0.20, 0.15);
     mat.specularColor   = new BABYLON.Color3(0.04, 0.04, 0.04);
     mat.backFaceCulling = false;
     mat.disableLighting = false;

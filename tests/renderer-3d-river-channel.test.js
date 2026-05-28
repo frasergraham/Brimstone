@@ -306,6 +306,35 @@ describe('R5 — _buildRiverBankMeshes integration', () => {
       'bank mesh must accept unit shadows like the water + ground around it');
   });
 
+  test('bank material has a non-zero emissive so U-trench slope walls do not read black', () => {
+    // The bank cross-section is a U-trench; the slope walls face mostly
+    // sideways/downward and receive little diffuse contribution under the
+    // directional sun. A baseline emissive lifts them into a readable warm
+    // dirt tone regardless of lighting angle. Without it the playable river
+    // banks rendered near-black under normal phase lighting.
+    const inst = setupInst();
+    const stroke = [{ x: 0, z: 0 }, { x: 0.5, z: 0 }, { x: 1, z: 0 }];
+    const segments = [{ tile: { col: 2, row: 2 }, strokes: [stroke] }];
+    inst._buildNetworkMesh('river', segments, RIVER_RIBBON_WIDTH, RIVER_RIBBON_Y, '#1a3d5c');
+    const props = inst._tilePropsByKey.get('2,2');
+    const bank  = props.find(p => p.metadata?.kind === 'river-bank');
+    assert.ok(bank, 'expected a river-bank prop');
+    assert.ok(bank.material, 'bank prop must carry its cloned material');
+    const e = bank.material.emissiveColor;
+    assert.ok(e, 'bank material must expose emissiveColor');
+    assert.ok(e.r > 0 || e.g > 0 || e.b > 0,
+      `bank emissive should be non-zero (got r=${e.r} g=${e.g} b=${e.b})`);
+    // Fog parity: `baseEmissive` metadata must mirror the live material so
+    // `_setTilePropsFogged` darkens the emissive alongside the diffuse when
+    // the tile is fogged. Otherwise fogged banks would self-glow.
+    const be = bank.metadata?.baseEmissive;
+    assert.ok(be && (be.r > 0 || be.g > 0 || be.b > 0),
+      `baseEmissive metadata must mirror the non-zero material emissive (got ${JSON.stringify(be)})`);
+    assert.equal(be.r, e.r);
+    assert.equal(be.g, e.g);
+    assert.equal(be.b, e.b);
+  });
+
   test('road build does NOT trigger the bank pass (no extra meshes)', () => {
     const inst = setupInst();
     const stroke = [{ x: 0, z: 0 }, { x: 0.5, z: 0 }, { x: 1, z: 0 }];
