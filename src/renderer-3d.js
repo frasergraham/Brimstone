@@ -50,6 +50,7 @@ import {
 } from './terrain-splat.js';
 import { makeTerrainSplatPlugin, SPLAT_UNIFORM_DEFAULTS } from './terrain-splat-plugin.js';
 import { attachFogDarkenToMaterial } from './fog-darken-plugin.js';
+import { attachRoadEdgeToMaterial } from './road-edge-plugin.js';
 
 // Babylon core + glTF loaders are served from the packaged `assets/vendor/`
 // directory rather than any CDN — the Electron / iOS bundles must run with zero
@@ -7049,6 +7050,10 @@ export class Renderer3D {
       const mat = baseMat.clone(`${networkName}_${tkey}_mat`);
       mat.diffuseColor  = baseDiff.clone();
       mat.emissiveColor = baseEmis.clone();
+      // Road edges get organic noise-modulated alpha so the boundary into the
+      // terrain reads wavy/dirt-path rather than two clean parallel lines.
+      // River keeps its tight straight banks (a river edge IS sharp).
+      if (networkName === 'road') attachRoadEdgeToMaterial(BABYLON, mat);
       merged.material        = mat;
       // Register this tile clone's diffuse texture for per-frame flow scroll.
       // (Babylon's StandardMaterial.clone() deep-clones textures, so each tile
