@@ -125,6 +125,30 @@ describe('Renderer3D splat fog — _setTilePropsFogged', () => {
     assert.equal(bldgA.instancedBuffers.fogDarken, 1.0, 'restored on un-fog');
   });
 
+  test("'building-hide' props hide under fog and reveal when visible again", () => {
+    // Fogged buildings read as "100% in shadow" by hiding — a hardware
+    // InstancedMesh can't carry a per-instance darkened material, so the GLB
+    // instance + the procedural box/roof fallback both flip isVisible.
+    const r = makeRenderer();
+    const hexK = '7,3';
+    const glbInst = { isVisible: true, metadata: { respectsFog: 'building-hide', kind: 'building-glb' } };
+    const box     = { isVisible: true, metadata: { respectsFog: 'building-hide' } };
+    const roof    = { isVisible: true, metadata: { respectsFog: 'building-hide' } };
+    r._tilePropsByKey.set(hexK, [glbInst, box, roof]);
+
+    r._setTilePropsFogged(hexK, true);
+    assert.equal(glbInst.isVisible, false, 'GLB building hidden under fog');
+    assert.equal(box.isVisible, false, 'procedural box hidden under fog');
+    assert.equal(roof.isVisible, false, 'procedural roof hidden under fog');
+    assert.ok(r._fogActiveSet.has(hexK));
+
+    r._setTilePropsFogged(hexK, false);
+    assert.equal(glbInst.isVisible, true, 'GLB building revealed when visible');
+    assert.equal(box.isVisible, true, 'procedural box revealed when visible');
+    assert.equal(roof.isVisible, true, 'procedural roof revealed when visible');
+    assert.ok(!r._fogActiveSet.has(hexK));
+  });
+
   test("'darken' props tint to FOG_HIDDEN_DARKEN cap on both texture level + colour", async () => {
     // Fog darken on roads/rivers must hit the TEXTURE level (outside the
     // lighting clamp) so it survives bright phases — same fix the terrain

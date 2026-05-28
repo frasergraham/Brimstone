@@ -2721,14 +2721,18 @@ export class Renderer3D {
 
       this._buildingTemplates.set(relPath, { mesh: source, scale });
 
-      // NOTE: building fog-darken via per-instance fogDarken attribute was
+      // NOTE: building fog-DARKEN via per-instance fogDarken attribute was
       // attempted (registerInstancedBuffer + FogDarkenPlugin) but the
       // attribute binding doesn't reliably propagate through Babylon's
       // hardware-instancing pipeline on glTF-imported (often PBR + multi-
-      // submesh) materials, producing all-black buildings. Disabled for now;
-      // buildings render at full brightness regardless of fog. The plugin
-      // and helper stay in the file for a future attempt with better
-      // diagnostics. See src/fog-darken-plugin.js.
+      // submesh) materials, producing all-black buildings. The plugin and
+      // helper stay in src/fog-darken-plugin.js for a future attempt.
+      // Current approach: fogged buildings HIDE (`isVisible = false`, the
+      // 'building-hide' fog policy) so they read as "100% in shadow". Hiding
+      // sidesteps the per-instance-material limitation entirely — a hardware
+      // InstancedMesh shares its template material, but `isVisible` is a
+      // supported per-instance signal. See `buildingVisibleUnderFog` and
+      // `_buildBuildingInstance`.
 
       // If the map's already built (the common case — GLB load is slow,
       // _buildMap runs synchronously right after Babylon init), retrofit the
@@ -2779,15 +2783,29 @@ export class Renderer3D {
       inst.rotation = new BABYLON.Vector3(0, houseYawForHex(tile.col, tile.row), 0);
     }
     inst.isPickable = false;
-    // Buildings render at full brightness regardless of fog (the per-instance
-    // fogDarken attribute attempt didn't propagate reliably through Babylon's
-    // PBR-multi-submesh instancing pipeline — see _loadBuildingModel note).
+    // Fogged buildings read as "100% in shadow" by HIDING the instance
+    // (`isVisible = false` in _setTilePropsFogged), not by darkening a material.
+    // A Babylon hardware InstancedMesh (createInstance) cannot carry a
+    // per-instance material — every instance of a source mesh renders in one
+    // draw call with the SHARED template material, so `inst.material = …` is
+    // ignored, and darkening the shared PBR multi-submesh template would dim
+    // EVERY instance (including unfogged ones). Reliable PBR darkening across
+    // all lighting phases is the exact rabbit hole that sank the prior
+    // fogDarken-attribute attempt (see _loadBuildingModel note). Per-instance
+    // visibility IS a supported hardware-instance signal, so we hide instead.
     inst.metadata = {
-      respectsFog: false,
+      respectsFog: 'building-hide',
       kind: 'building-glb',
       col: tile.col,
       row: tile.row,
     };
+    // Instances can be created AFTER a tile is already fogged — the async GLB
+    // load resolves post-_buildMap and _upgradeBuildingsToGlbModel retrofits
+    // instances onto already-fogged tiles. _applyFogVeil only diffs fog-state
+    // CHANGES, so a freshly-minted instance on a fogged tile would stay bright
+    // until the next flip. Apply current fog immediately (mirrors the road/
+    // river-ribbon lazy-create fog re-apply at the end of the network build).
+    if (this._fogActiveSet?.has(hexKey(tile.col, tile.row))) inst.isVisible = false;
     // Belt-and-suspenders: the template already carries receiveShadows (so the
     // instance inherits it), but set it explicitly too — mirrors the tree path.
     if ('receiveShadows' in inst) inst.receiveShadows = true;
@@ -7290,9 +7308,11 @@ export class Renderer3D {
         box.isPickable = false;
         box.receiveShadows = true;
         this._addShadowCaster(box);
-        // Buildings stay visible under fog of war — permanent terrain, not
-        // tactical info. See `_setTileFogged`.
-        box.metadata   = { respectsFog: false };
+        // Fogged buildings hide entirely ("100% in shadow") — matches the GLB
+        // instance path so the procedural fallback reads identically under fog.
+        // These are built before the initial _applyFogVeil pass, which hides
+        // them on fogged tiles. See `buildingVisibleUnderFog` / `_setTilePropsFogged`.
+        box.metadata   = { respectsFog: 'building-hide' };
         trackProp(box);
 
         // Tiny roof block to add silhouette variety. Sits flush on top of the box.
@@ -7309,7 +7329,7 @@ export class Renderer3D {
         roof.isPickable = false;
         roof.receiveShadows = true;
         this._addShadowCaster(roof);
-        roof.metadata   = { respectsFog: false };
+        roof.metadata   = { respectsFog: 'building-hide' };
         trackProp(roof);
       }
 
@@ -13804,14 +13824,30 @@ export class Renderer3D {
   _setTilePropsFogged(hexK, fogged) {
     const props = this._tilePropsByKey.get(hexK);
     if (props) for (const p of props) {
-      // Four fog policies per-prop, set via `metadata.respectsFog`:
+      // Five fog policies per-prop, set via `metadata.respectsFog`:
       //   • undefined / true     → hide on fog (standees, HP bars, node discs)
       //   • false                → permanent geometry, ignore fog (trees)
       //   • 'darken'             → tint dimmer (roads, rivers) — per-tile material
+      //   • 'building-hide'      → hide on fog (buildings: GLB instances +
+      //                            procedural box/roof) — reads as "in shadow";
+      //                            hardware instances can't take a per-instance
+      //                            darkened material so we hide instead.
       //   • 'building-instance'  → tint dimmer (GLB buildings) — per-instance
-      //                            attribute (template-shared material).
+      //                            attribute (template-shared material). Legacy
+      //                            (FogDarkenPlugin) path, no longer emitted by
+      //                            building creation; kept for the existing test.
       const policy = p.metadata?.respectsFog;
       if (policy === false) continue;
+      if (policy === 'building-hide') {
+        // Buildings (GLB instances + procedural box/roof) hide entirely under
+        // fog so the tile reads as "100% in shadow". Hiding (not darkening) is
+        // forced by Babylon: a hardware InstancedMesh shares its source
+        // template's material and can't take a per-instance darkened twin (see
+        // _buildBuildingInstance). The darkened splat ground + the dimmed (not
+        // hidden) building label still read the hex as an obscured building.
+        p.isVisible = buildingVisibleUnderFog(fogged);
+        continue;
+      }
       if (policy === 'building-instance') {
         // Hardware-instance fog darken: write the `fogDarken` instanced buffer
         // slot on this one building, leaving sibling instances on other tiles
@@ -15844,6 +15880,17 @@ export const FOG_TILE_DARKEN = 0.20;
 // (PHASE_LIGHT_CONFIG dawn/dusk values around 0.6-0.7 would otherwise feel
 // like a thin atmospheric haze, not occluded vision).
 export const FOG_HIDDEN_DARKEN = 0.40;
+
+/** Fog policy for buildings: returns the `isVisible` a building prop (GLB
+ *  instance or procedural box/roof) should carry for the given fog state.
+ *  Fogged → hidden, so the tile reads as "100% in shadow". Buildings hide
+ *  rather than darken because a Babylon hardware InstancedMesh shares its
+ *  source template's material and cannot take a per-instance darkened twin
+ *  (and darkening the shared PBR multi-submesh template would dim every
+ *  instance, fogged or not). Pure — used by `_setTilePropsFogged`. */
+export function buildingVisibleUnderFog(fogged) {
+  return !fogged;
+}
 
 // Hex wireframe radial fade — world units (1 = hex radius; a hex's flat-to-flat
 // pitch is √3 ≈ 1.73). Lines fully visible inside HEX_GRID_FADE_START_W around

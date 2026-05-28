@@ -29,10 +29,12 @@ import {
   buildingUsesGlbModel,
   buildingUsesHouseModel,
   buildingGlbVariantForHex,
+  buildingVisibleUnderFog,
   _bakeOriginToBottom,
 } from '../src/renderer-3d.js';
 
 import { TileType, BuildingType, StructureType, Tile } from '../src/tiles.js';
+import { hexKey } from '../src/hex.js';
 
 function newInst() {
   const fakeCanvas = {
@@ -402,18 +404,44 @@ describe('_buildBuildingInstance — positioning + jitter + metadata', () => {
     assert.ok(Math.abs(inst.rotation.y - houseYawForHex(4, 9)) < 1e-9);
   });
 
-  test('instance is unpickable, fog-immune, and on world-geometry render group', () => {
+  test('instance is unpickable, hides under fog, and on world-geometry render group', () => {
     const r = newInst();
     r._babylon = makeFakeBabylon();
     stubTemplate(r, BUILDING_GLB_BY_TYPE[BuildingType.CHURCH][0]);
     const inst = r._buildBuildingInstance({ building: BuildingType.CHURCH, col: 0, row: 0 }, 0, 0, null);
     assert.equal(inst.isPickable, false);
-    // Buildings ignore fog (render full-brightness regardless) until the
-    // per-instance fog-darken path can be made robust against Babylon's
-    // PBR-multi-submesh instancing pipeline — see _loadBuildingModel.
-    assert.equal(inst.metadata.respectsFog, false);
+    // Fogged buildings hide ("100% in shadow") — a hardware InstancedMesh can't
+    // take a per-instance darkened material, so the fog policy hides instead.
+    assert.equal(inst.metadata.respectsFog, 'building-hide');
     assert.equal(inst.metadata.kind, 'building-glb');
     assert.equal(inst.renderingGroupId, 0);
+  });
+
+  test('buildingVisibleUnderFog: fogged → hidden, visible → shown', () => {
+    assert.equal(buildingVisibleUnderFog(true), false);
+    assert.equal(buildingVisibleUnderFog(false), true);
+  });
+
+  test('instance created on an already-fogged tile starts hidden (retrofit/async-load path)', () => {
+    // _upgradeBuildingsToGlbModel / a late async GLB load can mint an instance
+    // AFTER a tile is already in _fogActiveSet. _applyFogVeil only diffs fog
+    // CHANGES, so the new instance must hide itself immediately or it stays
+    // bright until the next flip (the road/river lazy-create fog bug class).
+    const r = newInst();
+    r._babylon = makeFakeBabylon();
+    stubTemplate(r, BUILDING_GLB_BY_TYPE[BuildingType.BARN][0]);
+    r._fogActiveSet.add(hexKey(3, 5));
+    const inst = r._buildBuildingInstance({ building: BuildingType.BARN, col: 3, row: 5 }, 0, 0, null);
+    assert.equal(inst.isVisible, false, 'instance on a fogged tile starts hidden');
+  });
+
+  test('instance created on a visible tile is not force-hidden', () => {
+    const r = newInst();
+    r._babylon = makeFakeBabylon();
+    stubTemplate(r, BUILDING_GLB_BY_TYPE[BuildingType.BARN][0]);
+    // _fogActiveSet empty → tile not fogged.
+    const inst = r._buildBuildingInstance({ building: BuildingType.BARN, col: 3, row: 5 }, 0, 0, null);
+    assert.notEqual(inst.isVisible, false, 'instance on a visible tile is not hidden');
   });
 
   test('HOUSE picks the right template for its hashed variant', () => {
