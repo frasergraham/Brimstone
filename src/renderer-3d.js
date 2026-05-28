@@ -2936,26 +2936,43 @@ export class Renderer3D {
    *  every material in it. Returns the plain opaque template when `alpha` ≥ 1,
    *  or null when the file has no template. Cached in `_fadedTreeTemplates`
    *  (null results are cached too, so a failed clone isn't retried per tree). */
-  _fadedTreeTemplateFor(file, alpha) {
-    if (!(alpha < 1)) return this._treeTemplates.get(file) || null;
+  _fadedTreeTemplateFor(file, alpha, opts = {}) {
+    const fogged = !!opts.fogged;
+    // Original opaque template when no variant is needed.
+    if (!(alpha < 1) && !fogged) return this._treeTemplates.get(file) || null;
     const BABYLON = this._babylon;
-    const key = `${file}@a${alpha}`;
+    const key = `${file}@a${alpha}@f${fogged ? 1 : 0}`;
     if (this._fadedTreeTemplates.has(key)) return this._fadedTreeTemplates.get(key);
     const src = this._treeTemplates.get(file);
     if (!src || typeof src.clone !== 'function') {
       this._fadedTreeTemplates.set(key, null);
       return null;
     }
-    const clone = src.clone(`tree_faded_${key}`);
+    const clone = src.clone(`tree_var_${key}`);
     if (!clone) { this._fadedTreeTemplates.set(key, null); return null; }
     const meshes = [clone];
     if (typeof clone.getChildMeshes === 'function') {
       for (const c of clone.getChildMeshes()) meshes.push(c);
     }
+    // Mild fog tint factor — matches the procedural tree fog palette (~65%
+    // of unfogged) so border GLB trees read as "in shadow" instead of
+    // crushed black. Applied to whichever colour drives the material:
+    // StandardMaterial.diffuseColor or PBRMaterial.albedoColor.
+    const FOG_K = 0.65;
+    const tintMaterial = (mat) => {
+      if (!mat) return;
+      if (mat.diffuseColor && typeof mat.diffuseColor.scaleInPlace === 'function') {
+        mat.diffuseColor.scaleInPlace(FOG_K);
+      }
+      if (mat.albedoColor && typeof mat.albedoColor.scaleInPlace === 'function') {
+        mat.albedoColor.scaleInPlace(FOG_K);
+      }
+    };
     for (const m of meshes) {
       if (m.material && typeof m.material.clone === 'function') {
-        const fm = m.material.clone(`${m.material.name || 'treemat'}_a${alpha}`);
-        this._applyAlphaBlend(fm, alpha);
+        const fm = m.material.clone(`${m.material.name || 'treemat'}_a${alpha}_f${fogged ? 1 : 0}`);
+        if (alpha < 1) this._applyAlphaBlend(fm, alpha);
+        if (fogged) tintMaterial(fm);
         // ROOT CAUSE of "border trees stay opaque": a merged GLB tree's material
         // is a MultiMaterial. Its own `alpha` / `transparencyMode` are IGNORED
         // at draw time — each sub-mesh renders with its corresponding
@@ -2967,8 +2984,9 @@ export class Renderer3D {
         if (Array.isArray(fm.subMaterials) && fm.subMaterials.length > 0) {
           fm.subMaterials = fm.subMaterials.map((sub) => {
             if (!sub || typeof sub.clone !== 'function') return sub;
-            const fsub = sub.clone(`${sub.name || 'submat'}_a${alpha}`);
-            this._applyAlphaBlend(fsub, alpha);
+            const fsub = sub.clone(`${sub.name || 'submat'}_a${alpha}_f${fogged ? 1 : 0}`);
+            if (alpha < 1) this._applyAlphaBlend(fsub, alpha);
+            if (fogged) tintMaterial(fsub);
             // Re-bake INSTANCES (+ SHADOWS) defines on the faded submaterial so
             // its hardware instances compile the alpha path (see below).
             if (typeof fsub.forceCompilation === 'function') {
@@ -2988,7 +3006,7 @@ export class Renderer3D {
     }
     if (typeof clone.setEnabled === 'function') clone.setEnabled(false);
     clone.isPickable = false;
-    clone.metadata = Object.assign(clone.metadata || {}, { kind: 'tree-template-faded', file, alpha });
+    clone.metadata = Object.assign(clone.metadata || {}, { kind: 'tree-template-faded', file, alpha, fogged });
     this._fadedTreeTemplates.set(key, clone);
     return clone;
   }
@@ -3005,7 +3023,14 @@ export class Renderer3D {
     if (!file) return null;
     // Faded border-forest tiles instance off a translucent template clone; all
     // other trees (and fully-opaque inner band tiles) use the shared opaque one.
-    const template = alpha < 1 ? this._fadedTreeTemplateFor(file, alpha) : this._treeTemplates.get(file);
+    // When `fogged: true` is passed (border forest), we also clone the template
+    // and mildly darken its materials so border GLB trees match the fogged
+    // ground beneath them. Variant-cache key includes both alpha and fogged.
+    const fogged  = !!opts.fogged;
+    const needVar = alpha < 1 || fogged;
+    const template = needVar
+      ? this._fadedTreeTemplateFor(file, alpha, { fogged })
+      : this._treeTemplates.get(file);
     if (!template) return null;
 
     const instName = `${namePrefix}_t${treeIdx}_real`;
@@ -3168,7 +3193,11 @@ export class Renderer3D {
       if (trees.length === 0) continue;
       const namePrefix = `border_forest_${col}_${row}`;
       const insts = this._buildRealForestTreesForHex(
-        this._mapRoot, col, row, x, z, trees, namePrefix, { season: this._season, alpha },
+        this._mapRoot, col, row, x, z, trees, namePrefix,
+        // Border trees use the fogged template variant (mild tint) to match
+        // the permanently-fogged splat border ground. Same as the initial
+        // build path in _buildMapBorderForest.
+        { season: this._season, alpha, fogged: true },
       );
       for (const m of insts) newBorderInsts.push(m);
     }
@@ -5882,9 +5911,12 @@ export class Renderer3D {
     let bandTreeMeshes = [];
     if (this._useRealTrees) {
       for (const job of treeJobs) {
+        // fogged:true → _fadedTreeTemplateFor returns a tinted template
+        // clone (per-(file, alpha, fogged) variant cache) so border GLB
+        // trees read as "in shadow" matching their fogged ground.
         const insts = this._buildRealForestTreesForHex(
           parent, job.col, job.row, job.cx, job.cz, job.trees, job.namePrefix,
-          { season: this._season, alpha: job.alpha },
+          { season: this._season, alpha: job.alpha, fogged: true },
         );
         for (const m of insts) bandTreeMeshes.push(m);
       }
