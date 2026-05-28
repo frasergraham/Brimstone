@@ -277,3 +277,41 @@ describe('admin-tools.html — Combat tab wiring', () => {
     assert.match(html, /id="combat-panel"/, 'expected the Combat panel section');
   });
 });
+
+// ─── Tester despawn protection — pass entityId to addHpChangeFlash ────────
+//
+// The renderer's `addHpChangeFlash` accepts `{ entityId }` which activates
+// the protectEntityId path: the matching standee is flagged
+// `_pendingDespawn=true` for the floater's lifetime, the next
+// _syncEntityStandees pass skips its dispose, and the floater's completion
+// callback disposes the standee once the "-N" finishes. Without entityId,
+// the dying standee vanishes mid-rise and the floater orphans in air.
+//
+// Source-level pin: the tester's _playBattleResultAnims MUST pass entityId
+// for both the damage and counter-damage floaters.
+
+describe('combat-tester — damage floater protects the dying standee', () => {
+  const TESTER_UI_SRC = readFileSync(
+    resolve(__dirname, '..', 'src', 'tools', 'combat-tester-ui.js'), 'utf8',
+  );
+
+  test('addHpChangeFlash(target) is called with { entityId: targetSnap.id }', () => {
+    // The damage floater for the defender must protect the defender's standee
+    // so it survives until the "-N" finishes rising/fading.
+    assert.match(
+      TESTER_UI_SRC,
+      /addHpChangeFlash\(\s*targetSnap\.col,\s*targetSnap\.row,\s*-\(result\.damage\),\s*\{\s*entityId:\s*targetSnap\.id\s*\}\s*\)/,
+      'damage floater on the defender must pass { entityId: targetSnap.id }',
+    );
+  });
+
+  test('addHpChangeFlash(actor) for counter-damage is called with { entityId: actorSnap.id }', () => {
+    // Counter-damage floaters live above the attacker — if the attacker
+    // died to a counter, its standee must also stay through the floater.
+    assert.match(
+      TESTER_UI_SRC,
+      /addHpChangeFlash\(\s*actorSnap\.col,\s*actorSnap\.row,\s*-\(result\.counterDmg\),\s*\{\s*entityId:\s*actorSnap\.id\s*\}\s*\)/,
+      'counter-damage floater on the attacker must pass { entityId: actorSnap.id }',
+    );
+  });
+});

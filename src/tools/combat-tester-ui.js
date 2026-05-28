@@ -88,11 +88,17 @@ function _playBattleResultAnims(renderer, actorSnap, targetSnap, result, redrawF
   if (typeof renderer.addAttackAnim === 'function') {
     renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
   }
+  // entityId opt activates the renderer's protectEntityId path: the standee
+  // is flagged `_pendingDespawn=true` for the floater's lifetime, the next
+  // _syncEntityStandees pass (triggered by redrawFn) skips its dispose, and
+  // the floater's completion callback disposes the standee once the "-N"
+  // finishes. Without this, the dying standee vanishes mid-rise and the
+  // floater orphans in empty air.
   if (result?.damage && typeof renderer.addHpChangeFlash === 'function') {
-    renderer.addHpChangeFlash(targetSnap.col, targetSnap.row, -(result.damage));
+    renderer.addHpChangeFlash(targetSnap.col, targetSnap.row, -(result.damage), { entityId: targetSnap.id });
   }
   if (result?.counterDmg && typeof renderer.addHpChangeFlash === 'function') {
-    renderer.addHpChangeFlash(actorSnap.col, actorSnap.row, -(result.counterDmg));
+    renderer.addHpChangeFlash(actorSnap.col, actorSnap.row, -(result.counterDmg), { entityId: actorSnap.id });
   }
   if (result?.killed) {
     const deadColor = targetSnap.owner === 'hero' ? '#d4a72c' : '#9b59b6';

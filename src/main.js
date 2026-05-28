@@ -979,8 +979,12 @@ async function _run3DCombatCardHold(actorSnap, targetSnap, result, redrawFn) {
 
 function _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn) {
   renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
-  if (result?.damage)      renderer.addHpChangeFlash(targetSnap.col, targetSnap.row, -(result.damage));
-  if (result?.counterDmg)  renderer.addHpChangeFlash(actorSnap.col,  actorSnap.row,  -(result.counterDmg));
+  // Pass entityId so the renderer flags the affected standee with
+  // `_pendingDespawn`. _syncEntityStandees skips disposal until the "-N"
+  // floater finishes rising/fading, so the number reads as floating off a
+  // visible unit rather than orphaned in space.
+  if (result?.damage)      renderer.addHpChangeFlash(targetSnap.col, targetSnap.row, -(result.damage),    { entityId: targetSnap.id });
+  if (result?.counterDmg)  renderer.addHpChangeFlash(actorSnap.col,  actorSnap.row,  -(result.counterDmg), { entityId: actorSnap.id });
   if (result?.fortDamaged) {
     renderer.addFlash(targetSnap.col, targetSnap.row, '🏰-1',
       'rgba(120,120,140,0.15)', 1600, 0.65, 'rgba(180,180,200,1)');
@@ -1006,7 +1010,7 @@ function _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn) {
   }
   // Splash damage floaters
   for (const sh of result?.splashHits ?? []) {
-    renderer.addHpChangeFlash(sh.col, sh.row, -1);
+    renderer.addHpChangeFlash(sh.col, sh.row, -1, { entityId: sh.id });
     if (sh.killed) {
       const deadColor = sh.owner === 'hero' ? '#d4a72c' : '#9b59b6';
       renderer.addDeathAnim(sh.col, sh.row, deadColor);

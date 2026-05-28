@@ -39,6 +39,7 @@ import {
   FLOAT_TEXT_PLANE_HEIGHT,
   FLOAT_TEXT_TEX_WIDTH,
   FLOAT_TEXT_TEX_HEIGHT,
+  FLOAT_TEXT_DAMAGE_SIZE_MUL,
   paintFloaterText,
   HP_BAR_Y_ABOVE_BASE,
   HP_RED_BELOW,
@@ -164,22 +165,121 @@ describe('Renderer3D — paintFloaterText (pure helper)', () => {
     assert.deepEqual(ops, ['clearRect']);
   });
 
-  test('paints pill background, then black outline stroke, then fill', () => {
+  test('no pill backdrop in any variant — just outline + fill', () => {
+    // Operator brief: drop the pill backdrop globally. The chrome was reading
+    // sticker-y across every caller (damage, loot, fortify, miss). Outlined
+    // text alone carries the label against any terrain.
     const ctx = makeMockCtx();
     paintFloaterText(ctx, {
       width: 512, height: 192, text: 'CRUSH 3', fillColor: '#ff5050',
     });
     const ops = ctx.calls.map(c => c[0]);
-    const fillIdx     = ops.indexOf('fill');             // pill
-    const strokeIdx   = ops.indexOf('strokeText');       // outline
-    const fillTextIdx = ops.indexOf('fillText');         // text
-    assert.ok(fillIdx     >= 0, 'expected pill background fill()');
-    assert.ok(strokeIdx   >  fillIdx,     'outline stroke must come after pill');
-    assert.ok(fillTextIdx >  strokeIdx,   'text fill must come after outline');
+    assert.equal(ops.indexOf('fill'), -1,
+      'no backdrop pill — fill() must not be called');
+    assert.equal(ops.indexOf('beginPath'), -1,
+      'no backdrop pill — the rounded-rect path must not be built');
+    assert.equal(ops.indexOf('arcTo'), -1,
+      'no backdrop pill — no rounded-pill arcs');
+    // Only the text fillStyle is set (no semi-opaque pill fillStyle).
+    const fillStyles = ctx.calls.filter(c => c[0] === 'fillStyle').map(c => c[1]);
+    assert.deepEqual(fillStyles, ['#ff5050'],
+      'exactly one fillStyle — the text colour, no backdrop');
+    // Outlined text + filled text still present so the number reads against
+    // any terrain even without the pill.
+    assert.ok(ops.indexOf('strokeText') >= 0, 'still strokes the text outline');
+    assert.ok(ops.indexOf('fillText')   >  ops.indexOf('strokeText'),
+      'still fills the text after stroke');
     const strokeStyles = ctx.calls.filter(c => c[0] === 'strokeStyle').map(c => c[1]);
     assert.ok(strokeStyles.includes('#000'), 'text outline should be black');
-    const fillStyles = ctx.calls.filter(c => c[0] === 'fillStyle').map(c => c[1]);
-    assert.ok(fillStyles.includes('#ff5050'), 'fillColor should be applied to the text');
+  });
+
+  test('damage variant also skips the pill backdrop', () => {
+    const ctx = makeMockCtx();
+    paintFloaterText(ctx, {
+      width: 512, height: 192, text: '-2', fillColor: '#ff5050',
+      variant: 'damage',
+    });
+    const ops = ctx.calls.map(c => c[0]);
+    assert.equal(ops.indexOf('fill'), -1, 'damage variant should not paint a backdrop');
+    assert.equal(ops.indexOf('beginPath'), -1, 'no pill path');
+    assert.equal(ops.indexOf('arcTo'), -1, 'no rounded pill arcs');
+    assert.ok(ops.indexOf('strokeText') >= 0, 'damage variant still strokes the text outline');
+    assert.ok(ops.indexOf('fillText')   >  ops.indexOf('strokeText'),
+      'damage variant still fills the text after stroke');
+  });
+
+  test('default variant (omitted variant) also drops the pill', () => {
+    const ctx = makeMockCtx();
+    paintFloaterText(ctx, { width: 512, height: 192, text: '+1' });
+    const ops = ctx.calls.map(c => c[0]);
+    assert.equal(ops.indexOf('fill'), -1,
+      'omitted variant should also have no pill backdrop (global drop)');
+  });
+});
+
+// ─── Standee despawn protection — death floater rises before dispose ──────
+
+describe('Renderer3D — _syncEntityStandees honours _pendingDespawn', () => {
+  // Lightweight harness: pull just the source body of _syncEntityStandees's
+  // dispose loop into a regex so we don't need a live Babylon context.
+  // Pairs with the unit-style _entityStandees Map test below which exercises
+  // the real method on a stubbed Renderer3D instance.
+
+  test('source: dispose loop has a _pendingDespawn early-continue', () => {
+    const start = _renderer3dSrc.indexOf('_syncEntityStandees() {');
+    assert.ok(start > 0, 'expected _syncEntityStandees to be defined in source');
+    // The next sibling method banner ends our slice — keep it narrow so a
+    // _pendingDespawn check inserted in an UNRELATED method does not pass
+    // this test.
+    const end = _renderer3dSrc.indexOf('_resyncTileSlotsForStandees(', start);
+    const body = _renderer3dSrc.slice(start, end);
+    assert.match(body, /_pendingDespawn/,
+      '_syncEntityStandees should consult the _pendingDespawn flag');
+    // The guard MUST be in the disposal branch (after `if (!seen.has(id))`),
+    // not in the live-entity branch — the operator brief is about deferring
+    // standee disposal, not gating live-state updates.
+    const idxSeen   = body.indexOf('if (!seen.has(id))');
+    const idxGuard  = body.indexOf('_pendingDespawn');
+    assert.ok(idxSeen > 0,  'expected `if (!seen.has(id))` dispose branch');
+    assert.ok(idxGuard > idxSeen,
+      '_pendingDespawn guard should live inside the !seen disposal branch');
+  });
+
+  test('source: protectEntityId path flags the standee + dispose-on-finish', () => {
+    const start = _renderer3dSrc.indexOf('_spawnFloatingText(col, row, text');
+    assert.ok(start > 0, 'expected _spawnFloatingText to be defined in source');
+    const end = _renderer3dSrc.indexOf('addCombatReadout', start);
+    const body = _renderer3dSrc.slice(start, end);
+    // Flag set on the standee while the floater is in flight.
+    assert.match(body, /_pendingDespawn\s*=\s*true/,
+      '_spawnFloatingText should set _pendingDespawn=true when protecting a standee');
+    // Cleared in the animation completion callback so a later sync can dispose.
+    assert.match(body, /_pendingDespawn\s*=\s*false/,
+      '_spawnFloatingText should clear _pendingDespawn after the floater finishes');
+    // Eager dispose-on-finish for entities that did not survive — otherwise
+    // a tab without subsequent redraws would leave the standee orphaned.
+    assert.match(body, /_entityStandees\.delete/,
+      '_spawnFloatingText should dispose the now-unflagged standee for dead entities');
+  });
+});
+
+// ─── Damage floater plane size — operator brief: 25–30% smaller ────────────
+
+describe('Renderer3D — FLOAT_TEXT_DAMAGE_SIZE_MUL', () => {
+  test('damage size multiplier is within the 25–30% reduction window', () => {
+    // Operator brief: drop backdrop + shrink ~25–30%. 0.70 lands inside that
+    // band. Locks the knob so a casual edit can't silently push it back to 1.
+    assert.ok(FLOAT_TEXT_DAMAGE_SIZE_MUL >= 0.70 && FLOAT_TEXT_DAMAGE_SIZE_MUL <= 0.75,
+      `expected damage size multiplier in [0.70, 0.75] (got ${FLOAT_TEXT_DAMAGE_SIZE_MUL})`);
+  });
+
+  test('damage plane is noticeably smaller than the default chrome plane', () => {
+    const dmgW = FLOAT_TEXT_PLANE_WIDTH  * FLOAT_TEXT_DAMAGE_SIZE_MUL;
+    const dmgH = FLOAT_TEXT_PLANE_HEIGHT * FLOAT_TEXT_DAMAGE_SIZE_MUL;
+    assert.ok(dmgW < FLOAT_TEXT_PLANE_WIDTH,
+      'damage plane width should be smaller than default');
+    assert.ok(dmgH < FLOAT_TEXT_PLANE_HEIGHT,
+      'damage plane height should be smaller than default');
   });
 });
 

@@ -9029,6 +9029,11 @@ export class Renderer3D {
     // pass — it cleans up its meshes from the same seen-set logic.
     for (const [id, standee] of this._entityStandees) {
       if (!seen.has(id)) {
+        // Death floater is mid-rise above this standee — keep the token on
+        // screen so the "-N" reads as floating off the unit, not orphaned in
+        // space. The floater's completion callback clears the flag and
+        // disposes the standee itself.
+        if (standee?._pendingDespawn) continue;
         // Paladin clones (skeleton + animation group) must be torn down
         // explicitly — they don't cascade off the cone's dispose() call
         // because the animation group lives in scene.animationGroups, not
@@ -10237,12 +10242,27 @@ export class Renderer3D {
 
   // ─── HP-change flash + floating text ─────────────────────────────────────
 
-  /** Floating "-2" / "+1" text above a hex when an entity gains/loses HP. */
-  addHpChangeFlash(col, row, delta) {
-    if (!this._scene || !this._babylon || !delta) return;
+  /** Floating "-2" / "+1" text above a hex when an entity gains/loses HP.
+   *  The damage variant skips the backdrop pill and uses a smaller plane so
+   *  the number reads as a clean floating digit rather than a chunky chrome
+   *  sticker. When `opts.entityId` is supplied (post-battle death paths),
+   *  the matching standee is flagged `_pendingDespawn` so
+   *  `_syncEntityStandees` will not dispose it until the floater finishes
+   *  rising and fading. Returns a Promise that resolves when the floater
+   *  animation completes — also tracked via `_trackAnim` so
+   *  `waitForAnimations()` drains it inside the resolution loop. */
+  addHpChangeFlash(col, row, delta, opts = {}) {
+    if (!this._scene || !this._babylon || !delta) return Promise.resolve();
     const label = delta < 0 ? `${delta}` : `+${delta}`;
     const colour = delta < 0 ? '#ff5050' : '#60ff70';
-    this._spawnFloatingText(col, row, label, colour, 900);
+    // Operator brief: damage floater shrinks ~30% — fontScale matches the
+    // FLOAT_TEXT_DAMAGE_SIZE_MUL plane multiplier so font + plane shrink
+    // together (uniform read, no oversized text in an undersized plane).
+    return this._spawnFloatingText(col, row, label, colour, 900,
+      FLOAT_TEXT_DAMAGE_SIZE_MUL, {
+        variant: 'damage',
+        protectEntityId: opts.entityId ?? null,
+      });
   }
 
   /** Generic hex flash — used for combat result text ("HIT 2", "CRUSH 3",
@@ -10263,10 +10283,18 @@ export class Renderer3D {
     // floaters expire on their own ~700ms after spawn and they're cosmetic.
   }
 
-  _spawnFloatingText(col, row, text, hexColor = '#ffe0a0', durationMs = 700, fontScale = 1) {
-    if (typeof document === 'undefined') return;
+  _spawnFloatingText(col, row, text, hexColor = '#ffe0a0', durationMs = 700, fontScale = 1, opts = {}) {
+    if (typeof document === 'undefined') return Promise.resolve();
     const BABYLON = this._babylon;
     const { x, z } = hexToWorld(col, row);
+    const variant         = opts.variant ?? 'default';
+    const protectEntityId = opts.protectEntityId ?? null;
+    // Damage variant: ~70% plane size (operator brief — 25-30% smaller) and
+    // a backdrop-less paint. Default variant keeps the legacy chrome look
+    // used by `addFlash` (loot, fortify, ability flashes).
+    const sizeMul = variant === 'damage' ? FLOAT_TEXT_DAMAGE_SIZE_MUL : 1;
+    const planeW  = FLOAT_TEXT_PLANE_WIDTH  * sizeMul;
+    const planeH  = FLOAT_TEXT_PLANE_HEIGHT * sizeMul;
 
     const tex = new BABYLON.DynamicTexture(
       `floatTex_${Date.now()}`,
@@ -10281,11 +10309,12 @@ export class Renderer3D {
       text,
       fillColor: hexColor,
       fontScale,
+      variant,
     });
     tex.update();
 
     const plane = BABYLON.MeshBuilder.CreatePlane(`float_${col}_${row}_${Date.now()}`,
-      { width: FLOAT_TEXT_PLANE_WIDTH, height: FLOAT_TEXT_PLANE_HEIGHT }, this._scene);
+      { width: planeW, height: planeH }, this._scene);
     plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
     plane.isPickable    = false;
     // Render above all world geometry so floaters never hide behind terrain
@@ -10323,15 +10352,39 @@ export class Renderer3D {
       { frame: FRAMES_FLOAT,            value: 0 },
     ]);
 
+    // Despawn protection — if a death floater is firing for this entity,
+    // flag its standee so _syncEntityStandees defers disposal until the
+    // floater finishes rising/fading. Without this, redrawFn() called by
+    // the orchestrator right after spawning the floater would dispose the
+    // standee on the next sync and the "-N" would orphan in mid-air.
+    let protectedStandee = null;
+    if (protectEntityId != null) {
+      protectedStandee = this._entityStandees.get(protectEntityId) ?? null;
+      if (protectedStandee) protectedStandee._pendingDespawn = true;
+    }
+
     const promise = new Promise(resolve => {
       this._scene.beginDirectAnimation(plane, [animPos, animFade], 0, FRAMES_FLOAT, false, 1, () => {
         plane.dispose();
         mat.dispose();
         tex.dispose();
+        if (protectedStandee) {
+          protectedStandee._pendingDespawn = false;
+          // If the entity is no longer alive (or no longer in state), dispose
+          // the standee now — _syncEntityStandees deferred its cleanup while
+          // the floater rose. Mirrors the dispose path in _syncEntityStandees.
+          const stillAlive = this.state?.entities?.some(e => e.id === protectEntityId && e.alive);
+          if (!stillAlive && this._entityStandees.get(protectEntityId) === protectedStandee) {
+            this._clearXrayGhostFor?.(protectEntityId, protectedStandee);
+            this._disposePaladinClone?.(protectedStandee);
+            protectedStandee.plane?.dispose?.();
+            this._entityStandees.delete(protectEntityId);
+          }
+        }
         resolve();
       });
     });
-    this._trackAnim(promise);
+    return this._trackAnim(promise);
   }
 
   /** G1 redesign — spawn a single big-number "combat readout" above a
@@ -15923,6 +15976,12 @@ export const FLOAT_TEXT_PLANE_HEIGHT = 1.2;
  *  there's room for the outlined text + background pill. */
 export const FLOAT_TEXT_TEX_WIDTH  = 512;
 export const FLOAT_TEXT_TEX_HEIGHT = 192;
+/** Scale applied to the floater plane (world units) for the post-battle
+ *  damage variant. 0.70 ≈ 30% smaller than the default chrome-floater used
+ *  by loot / fortify / etc. The operator brief asks for the "-N" number
+ *  above a dying unit to read as a quick, low-chrome flick rather than a
+ *  chunky sticker. */
+export const FLOAT_TEXT_DAMAGE_SIZE_MUL = 0.70;
 
 /** Combat readout (G1 redesign — replaces the old dice-card). A single big
  *  number floats above each combatant's head; per-bonus floaters animate up
@@ -16742,30 +16801,9 @@ export function paintFloaterText(ctx, opts) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
-  const metrics = ctx.measureText(text);
-  const padX = Math.round(fontPx * 0.45);
-  const padY = Math.round(fontPx * 0.20);
-  const pillW = Math.min(width - 8, Math.ceil(metrics.width) + padX * 2);
-  const pillH = Math.min(height - 8, fontPx + padY * 2);
-  const pillX = (width - pillW) / 2;
-  const pillY = (height - pillH) / 2;
-  const radius = Math.round(pillH / 2);
-
-  // Background pill — semi-opaque dark fill so the text reads against any
-  // tile colour. Rounded with the half-height radius for a pill silhouette.
-  ctx.fillStyle = 'rgba(0,0,0,0.65)';
-  ctx.beginPath();
-  ctx.moveTo(pillX + radius, pillY);
-  ctx.lineTo(pillX + pillW - radius, pillY);
-  ctx.arcTo(pillX + pillW, pillY, pillX + pillW, pillY + radius, radius);
-  ctx.lineTo(pillX + pillW, pillY + pillH - radius);
-  ctx.arcTo(pillX + pillW, pillY + pillH, pillX + pillW - radius, pillY + pillH, radius);
-  ctx.lineTo(pillX + radius, pillY + pillH);
-  ctx.arcTo(pillX, pillY + pillH, pillX, pillY + pillH - radius, radius);
-  ctx.lineTo(pillX, pillY + radius);
-  ctx.arcTo(pillX, pillY, pillX + radius, pillY, radius);
-  ctx.closePath();
-  ctx.fill();
+  // Operator brief: drop the pill backdrop globally — outlined text alone
+  // reads cleanly against any terrain and the chrome was reading as
+  // sticker-y across every caller (damage, loot, fortify, miss).
 
   // Outline: chunky black stroke drawn BEFORE the fill so the fill paints
   // over its inner half — gives a crisp halo with no ghosting.
