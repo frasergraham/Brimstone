@@ -7659,6 +7659,22 @@ export class Renderer3D {
       // terrain reads wavy/dirt-path rather than two clean parallel lines.
       // River keeps its tight straight banks (a river edge IS sharp).
       if (networkName === 'road') attachRoadEdgeToMaterial(BABYLON, mat);
+      // R5 — playable river only: the splat ground beneath each water hex is a
+      // displaced cone (centre at RIVER_BED_Y - eps, corners at -0.06 to -0.18
+      // by riverCornerY/waterCount). It's OPAQUE and WRITES depth, so the water
+      // ribbon at RIVER_BED_Y depth-fails everywhere except a tiny circle near
+      // each tile centre — producing the "~3 isolated arrow patches in a wide
+      // dirt channel" bug. The BORDER river extension renders fine because the
+      // border splat material runs in alpha-blend mode with depthWrite OFF, so
+      // its Y=0 ground doesn't push the depth buffer. We can't change that
+      // here (the playable splat's opaque depth write is load-bearing for unit
+      // shadows + standee z-sort), so instead force the water material to skip
+      // the depth test entirely — water "stamps" through whatever sits above
+      // it in the depth buffer, matching the border's effective behaviour.
+      // Constant 519 = WebGL ALWAYS (mirrors `BABYLON.Engine.ALWAYS`).
+      if (networkName === 'river') {
+        mat.depthFunction = (BABYLON.Engine?.ALWAYS ?? 519);
+      }
       merged.material        = mat;
       // Register this tile clone's diffuse texture for per-frame flow scroll.
       // (Babylon's StandardMaterial.clone() deep-clones textures, so each tile
@@ -7964,6 +7980,11 @@ export class Renderer3D {
         tex.wrapU = 1; // WRAP
         tex.wrapV = 0; // CLAMP
         tex.hasAlpha = true;
+        // River flow reads as continuous current rather than one arrow per
+        // tile-segment: tile the texture N× along U so the arrow pattern
+        // repeats inside each segment. Road keeps its 1× mapping because its
+        // texture has no directional pattern that needs repeating.
+        if (networkName === 'river') tex.uScale = RIVER_RIBBON_U_SCALE;
         mat.diffuseTexture = tex;
         // road-ribbon.png is 21% alpha=0 / 78% opaque — designed with
         // transparent cut-outs for the road shoulder. Without this flag
@@ -14015,18 +14036,26 @@ export function riverCornerY(waterCount) {
  *  as the legacy RIVER_RIBBON_Y so existing positive-depth-bias tests still
  *  hold. */
 export const RIVER_BANK_TOP_Y    = 0.005;
-/** R5 — water-surface half-width on a STRAIGHT river segment (low curvature).
- *  ~0.21 × hex-width; reads as a narrow meander rather than a uniform canal. */
-export const RIVER_HALF_WIDTH_MIN = 0.18;
-/** R5 — water-surface half-width at the apex of a CORNER (high curvature). */
-export const RIVER_HALF_WIDTH_MAX = 0.32;
-/** R5 — dirt bank width on EACH side, from the waterline outward to the outer
- *  rim of the bank top. Total channel cross-section width =
- *  `2 × halfWaterWidth + 2 × RIVER_BANK_WIDTH`. The outer rim is kept fixed
- *  (`halfWaterWidth + RIVER_BANK_WIDTH ≤ RIVER_RIBBON_WIDTH/2 + RIVER_BANK_WIDTH`)
- *  so the river footprint roughly matches the legacy flat ribbon's, keeping
- *  neighbouring ground tiles flush against the channel's outer edge. */
-export const RIVER_BANK_WIDTH     = 0.10;
+/** R5 polish 2 — water-surface half-width on a STRAIGHT river segment.
+ *  Widened from 0.18 so the water dominates the channel cross-section instead
+ *  of looking like a creek with arrow-shaped puddles in a brown channel. */
+export const RIVER_HALF_WIDTH_MIN = 0.30;
+/** R5 polish 2 — water-surface half-width at the apex of a CORNER. Widened
+ *  from 0.32 in lockstep with MIN. */
+export const RIVER_HALF_WIDTH_MAX = 0.45;
+/** R5 polish 2 — dirt bank width on EACH side, from the waterline outward to
+ *  the outer rim of the bank top. Trimmed from 0.10 so the bank reads as a
+ *  thin shoreline trim rather than a brown channel that swallows the water. */
+export const RIVER_BANK_WIDTH     = 0.05;
+/** R5 polish 2 — texture-repeat multiplier along the flow axis (U) of the
+ *  river ribbon. The river-ribbon.png mapping was 1 sample per tile-segment,
+ *  which printed exactly one arrow per segment and read as floating puddles
+ *  between dirt bands. Scaling U by this factor tiles the arrow pattern
+ *  ~N times per segment so the current reads as continuous flow. Set on the
+ *  base material's diffuseTexture in `_buildRibbonMaterial`; per-tile material
+ *  clones inherit it via StandardMaterial.clone() (which deep-clones the
+ *  texture). `_pumpRiverFlow` only mutates uOffset, leaving uScale intact. */
+export const RIVER_RIBBON_U_SCALE = 4;
 /** Road sits clearly above the river so the road tube paints OVER the water at
  *  river crossings — the bridge plank is disabled (`_renderBridges = false`),
  *  so the road ribbon is the only thing carrying the visual at the crossing.

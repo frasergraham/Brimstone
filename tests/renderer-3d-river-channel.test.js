@@ -15,6 +15,7 @@ import {
   RIVER_BANK_WIDTH,
   RIVER_RIBBON_Y,
   RIVER_RIBBON_WIDTH,
+  RIVER_RIBBON_U_SCALE,
   RIVER_ALPHA_INDEX,
   SPLAT_RIVER_CENTRE_EPS,
   Renderer3D,
@@ -47,10 +48,81 @@ describe('R5 — channel constants', () => {
       `MAX ${RIVER_HALF_WIDTH_MAX} should exceed MIN ${RIVER_HALF_WIDTH_MIN}`);
   });
 
-  test('total channel outer half (water MAX + bank) stays within a sane envelope', () => {
+  test('R5 polish 2 — water dominates the channel cross-section (water ≫ bank)', () => {
+    // After widening the water and trimming the bank, water half-width on a
+    // straight reach must be several times the per-side bank width — otherwise
+    // we're back to "creek with arrow-shaped puddles in a brown channel".
+    assert.ok(RIVER_HALF_WIDTH_MIN >= 4 * RIVER_BANK_WIDTH,
+      `water MIN ${RIVER_HALF_WIDTH_MIN} should be ≥4× bank ${RIVER_BANK_WIDTH}`);
+  });
+
+  test('total channel outer half stays within a hex half-width and pan-clamp envelope', () => {
+    // Pointy-top hex world half-width = HEX_RADIUS_WORLD × √3/2 ≈ 0.866 with
+    // the renderer's HEX_RADIUS_WORLD = 1. The widened channel must still fit
+    // inside the hex it threads through.
     const outerHalf = RIVER_HALF_WIDTH_MAX + RIVER_BANK_WIDTH;
-    assert.ok(outerHalf <= RIVER_RIBBON_WIDTH / 2 + RIVER_BANK_WIDTH + 1e-9,
-      `channel outer extent ${outerHalf} should fit inside the legacy footprint+bank`);
+    const hexHalfWidth = Math.sqrt(3) / 2;
+    assert.ok(outerHalf < hexHalfWidth,
+      `channel outer extent ${outerHalf} must fit inside a hex (${hexHalfWidth})`);
+    // The pan-clamp uses RIVER_RIBBON_WIDTH/2 + 0.20 as the river half-width;
+    // keep the channel inside that bound so the camera-clamp envelope stays
+    // honest.
+    const clampHalf = RIVER_RIBBON_WIDTH / 2 + 0.20;
+    assert.ok(outerHalf <= clampHalf + 1e-9,
+      `channel outer extent ${outerHalf} should sit inside pan-clamp envelope ${clampHalf}`);
+  });
+});
+
+describe('R5 polish 2 — river ribbon U-axis tile rate', () => {
+  test('RIVER_RIBBON_U_SCALE > 1 so the flow texture repeats inside each tile-segment', () => {
+    // Without uScale>1 the river-ribbon.png maps exactly one arrow per
+    // tile-segment and the current reads as floating arrows. The repeat is
+    // what makes the flow look continuous.
+    assert.ok(RIVER_RIBBON_U_SCALE > 1,
+      `RIVER_RIBBON_U_SCALE ${RIVER_RIBBON_U_SCALE} should tile the flow texture`);
+  });
+
+  test('_buildRibbonMaterial("river", …) sets uScale on the diffuse texture; road does not', () => {
+    function makeBabylonStub() {
+      class Color3 {
+        constructor(r = 0, g = 0, b = 0) { this.r = r; this.g = g; this.b = b; }
+        clone() { return new Color3(this.r, this.g, this.b); }
+      }
+      const StandardMaterial = function (name) {
+        this.name = name;
+        this.diffuseColor  = new Color3(1, 1, 1);
+        this.emissiveColor = new Color3(0, 0, 0);
+        this.specularColor = new Color3(0, 0, 0);
+        this.diffuseTexture = null;
+        this.useAlphaFromDiffuseTexture = false;
+        this.backFaceCulling = true;
+        this.disableLighting = false;
+      };
+      const Texture = function (url) {
+        this.url = url;
+        this.wrapU = 0;
+        this.wrapV = 0;
+        this.hasAlpha = false;
+        this.uScale = 1;
+        this.uOffset = 0;
+        this.level = 1;
+      };
+      return { Color3, StandardMaterial, Texture };
+    }
+    const inst = Object.create(Renderer3D.prototype);
+    inst._babylon = makeBabylonStub();
+    inst._scene = {};
+    inst._assetsBasePath = 'assets';
+    const riverMat = inst._buildRibbonMaterial('river', '#1a3d5c');
+    assert.ok(riverMat.diffuseTexture, 'expected river material to carry a diffuse texture');
+    assert.equal(riverMat.diffuseTexture.uScale, RIVER_RIBBON_U_SCALE,
+      `river ribbon texture uScale should equal RIVER_RIBBON_U_SCALE (${RIVER_RIBBON_U_SCALE})`);
+    assert.equal(riverMat.diffuseTexture.wrapU, 1,
+      'river ribbon texture must wrap along U so uScale tiles cleanly');
+    const roadMat = inst._buildRibbonMaterial('road', '#6b5a3e');
+    assert.ok(roadMat.diffuseTexture, 'expected road material to carry a diffuse texture');
+    assert.equal(roadMat.diffuseTexture.uScale, 1,
+      'road texture should NOT pick up the river uScale tile rate');
   });
 });
 
@@ -242,6 +314,37 @@ describe('R5 — _buildRiverBankMeshes integration', () => {
     const props = inst._tilePropsByKey.get('7,7');
     assert.ok(props && props.length === 1, 'road tile should have exactly one prop (no bank)');
     assert.equal(props[0].metadata?.kind, 'road');
+  });
+
+  // R5 polish 2 — water material must skip the depth test so the displaced
+  // splat ground beneath each river tile (centre at RIVER_BED_Y-eps, corners
+  // up to -0.06) doesn't depth-occlude the water ribbon. Without this, the
+  // playable river degenerates into ~3 isolated arrow patches near each tile
+  // centre (the only spots where splat Y < water Y); the border extension
+  // doesn't have the bug because its splat ground runs alpha-blend with depth
+  // write off. WebGL ALWAYS = 519.
+  test('water material uses depthFunction=ALWAYS so splat-cone displacement does not occlude the river', () => {
+    const inst = setupInst();
+    const stroke = [{ x: 0, z: 0 }, { x: 0.5, z: 0 }, { x: 1, z: 0 }];
+    const segments = [{ tile: { col: 5, row: 5 }, strokes: [stroke] }];
+    inst._buildNetworkMesh('river', segments, RIVER_RIBBON_WIDTH, RIVER_RIBBON_Y, '#1a3d5c');
+    const water = inst._tilePropsByKey.get('5,5')?.find(p => p.metadata?.kind === 'river');
+    assert.ok(water, 'water mesh must exist');
+    assert.equal(water.material.depthFunction, 519,
+      `playable river water material must set depthFunction=ALWAYS (519) to render through the splat-ground cone — got ${water.material.depthFunction}`);
+  });
+
+  test('road material does NOT touch depthFunction (road has no splat-cone occlusion)', () => {
+    const inst = setupInst();
+    const stroke = [{ x: 0, z: 0 }, { x: 0.5, z: 0 }, { x: 1, z: 0 }];
+    const segments = [{ tile: { col: 8, row: 8 }, strokes: [stroke] }];
+    inst._buildNetworkMesh('road', segments, 0.6, 0.025, '#6b5a3e');
+    const road = inst._tilePropsByKey.get('8,8')?.find(p => p.metadata?.kind === 'road');
+    assert.ok(road, 'road mesh must exist');
+    // Either undefined (default LESS_EQUAL) or explicitly 0 — anything other
+    // than ALWAYS (519) means we kept the normal depth test for roads.
+    assert.notEqual(road.material.depthFunction, 519,
+      'road material should not force depthFunction=ALWAYS — only the river ribbon needs the override');
   });
 });
 
