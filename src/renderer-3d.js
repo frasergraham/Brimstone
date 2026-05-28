@@ -10530,13 +10530,31 @@ export class Renderer3D {
         ]);
         gate.then(() => {
           if (disposed) { resolve(); return; }
-          // Fade out the plane.
+          // Fade out the plane. While alpha goes 1→0, also scale the number
+          // — winner grows 1.0→1.5×, loser shrinks 1.0→0.5×. Ease-out so the
+          // scale change is most visible at the start of the fade (the moment
+          // the player taps Continue).
           const fps = 60;
           const fadeFrames = Math.max(1, Math.round(fadeMs / 1000 * fps));
           const animFade = new BABYLON.Animation('readoutFade', 'visibility', fps,
             BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
           animFade.setKeys([{ frame: 0, value: 1 }, { frame: fadeFrames, value: 0 }]);
-          this._scene.beginDirectAnimation(numPlane, [animFade], 0, fadeFrames, false, 1, () => {
+
+          const peakScale = model.won ? 1.5 : 0.5;
+          const baseSX = numPlane.scaling.x;
+          const baseSY = numPlane.scaling.y;
+          const baseSZ = numPlane.scaling.z;
+          const animScale = new BABYLON.Animation('readoutFadeScale', 'scaling', fps,
+            BABYLON.Animation.ANIMATIONTYPE_VECTOR3, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+          animScale.setKeys([
+            { frame: 0,          value: new BABYLON.Vector3(baseSX, baseSY, baseSZ) },
+            { frame: fadeFrames, value: new BABYLON.Vector3(baseSX * peakScale, baseSY * peakScale, baseSZ * peakScale) },
+          ]);
+          const scaleEase = new BABYLON.CubicEase();
+          scaleEase.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEOUT);
+          animScale.setEasingFunction(scaleEase);
+
+          this._scene.beginDirectAnimation(numPlane, [animFade, animScale], 0, fadeFrames, false, 1, () => {
             disposeAll();
             resolve();
           });

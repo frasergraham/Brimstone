@@ -8,7 +8,9 @@
 //  - per-step floater is spawned alongside (extra DynamicTexture + plane)
 //  - outcome flash uses green for winner / red for loser before fade
 //  - waitForAnimations drains the returned Promise (it's _trackAnim'd)
-//  - addAllyHalfLunge / addCombatOutcomeCue / playReactionAnim still wired
+//  - readout NUMBER scales up (winner) or down (loser) during the fade
+//  - standee scale is NOT touched at combat resolution
+//  - addAllyHalfLunge / playReactionAnim still wired
 //
 // Other regions kept intact and tested here:
 //  - computeCombatCardAxisOffset (still used for positioning)
@@ -784,11 +786,115 @@ describe('G1 — addAllyHalfLunge (unchanged)', () => {
   });
 });
 
-describe('G1 — addCombatOutcomeCue (unchanged)', () => {
-  test('animates both winner up and loser down', () => {
+describe('G1 — readout NUMBER scale-during-fade (winner grows, loser shrinks)', () => {
+  // Capture the planes targeted by beginDirectAnimation and the animations'
+  // keyframe target scale (last keyframe) for each call, so we can verify
+  // the scale animation runs on the readout number plane with the correct
+  // peak based on `won`.
+  function makeInstWithCapture(ids = ['e1']) {
+    const inst = makeInst({ ids });
+    const captured = [];
+    inst._scene = {
+      stopAnimation() {},
+      beginDirectAnimation(target, anims, _f, _to, _loop, _spd, onEnd) {
+        captured.push({ target, anims });
+        if (onEnd) onEnd();
+      },
+    };
+    inst._capturedAnims = captured;
+    return inst;
+  }
+
+  test('winner (hit=true) scales the readout number 1.0 → 1.5 during fade', async () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInstWithCapture(['e1']);
+    const sched = fakeScheduler();
+    const h = inst.addCombatReadout('e1', 'attacker',
+      { hit: true, attackRoll: 6, defenseRoll: 3,
+        breakdown: { atkPool: [6], atkBaseDie: 6, defPool: [3], defBaseDie: 3 } },
+      { setTimeoutFn: sched });
+    sched.runAll();
+    await h.promise;
+
+    // Find the scale animation track on a beginDirectAnimation call.
+    const scaleAnims = inst._capturedAnims.flatMap(c =>
+      (c.anims || []).filter(a => a.prop === 'scaling' && a.name === 'readoutFadeScale')
+    );
+    assert.equal(scaleAnims.length, 1, 'scale animation queued during fade');
+    const keys = scaleAnims[0].keys;
+    assert.equal(keys[0].value.x, 1, 'starts at base scale 1.0');
+    assert.ok(Math.abs(keys[keys.length - 1].value.x - 1.5) < 1e-6,
+      `winner final scale is 1.5 (got ${keys[keys.length - 1].value.x})`);
+  });
+
+  test('loser (hit=false) scales the readout number 1.0 → 0.5 during fade', async () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInstWithCapture(['e1']);
+    const sched = fakeScheduler();
+    const h = inst.addCombatReadout('e1', 'attacker',
+      // hit=false → attacker is the LOSER on the attacker side.
+      { hit: false, attackRoll: 3, defenseRoll: 6,
+        breakdown: { atkPool: [3], atkBaseDie: 3, defPool: [6], defBaseDie: 6 } },
+      { setTimeoutFn: sched });
+    sched.runAll();
+    await h.promise;
+
+    const scaleAnims = inst._capturedAnims.flatMap(c =>
+      (c.anims || []).filter(a => a.prop === 'scaling' && a.name === 'readoutFadeScale')
+    );
+    assert.equal(scaleAnims.length, 1, 'scale animation queued during fade');
+    const keys = scaleAnims[0].keys;
+    assert.equal(keys[0].value.x, 1, 'starts at base scale 1.0');
+    assert.ok(Math.abs(keys[keys.length - 1].value.x - 0.5) < 1e-6,
+      `loser final scale is 0.5 (got ${keys[keys.length - 1].value.x})`);
+  });
+
+  test('the fade-scale animation targets the readout number plane (not the standee)', async () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInstWithCapture(['e1']);
+    const standeePlane = inst._entityStandees.get('e1').plane;
+    const sched = fakeScheduler();
+    const h = inst.addCombatReadout('e1', 'attacker',
+      { hit: true, attackRoll: 6, defenseRoll: 3,
+        breakdown: { atkPool: [6], atkBaseDie: 6, defPool: [3], defBaseDie: 3 } },
+      { setTimeoutFn: sched });
+    sched.runAll();
+    await h.promise;
+
+    // Find the call carrying the readoutFadeScale animation.
+    const fadeCall = inst._capturedAnims.find(c =>
+      (c.anims || []).some(a => a.name === 'readoutFadeScale'));
+    assert.ok(fadeCall, 'fade animation was scheduled');
+    assert.notEqual(fadeCall.target, standeePlane,
+      'fade-scale targets the readout NUMBER plane, not the standee');
+  });
+
+  test('standee scale is left untouched by the readout fade (no scale-pop on the unit)', async () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInstWithCapture(['e1']);
+    const standeePlane = inst._entityStandees.get('e1').plane;
+    const sched = fakeScheduler();
+    const h = inst.addCombatReadout('e1', 'attacker',
+      { hit: true, attackRoll: 6, defenseRoll: 3,
+        breakdown: { atkPool: [6], atkBaseDie: 6, defPool: [3], defBaseDie: 3 } },
+      { setTimeoutFn: sched });
+    sched.runAll();
+    await h.promise;
+
+    // No call in the readout lifecycle should animate the standee's scale.
+    const standeeScaleCalls = inst._capturedAnims.filter(c =>
+      c.target === standeePlane
+      && (c.anims || []).some(a => a.prop === 'scaling'));
+    assert.equal(standeeScaleCalls.length, 0,
+      'standee should not receive a scale animation during the readout');
+  });
+});
+
+describe('G1 — addCombatOutcomeCue method still exists (kept as dead code)', () => {
+  test('callable directly without throwing', () => {
+    if (!('document' in globalThis)) globalThis.document = {};
     const inst = makeInst({ ids: ['w', 'l'] });
-    inst.addCombatOutcomeCue('w', 'l');
-    assert.equal(inst._tracked.length, 2);
+    assert.doesNotThrow(() => inst.addCombatOutcomeCue('w', 'l'));
   });
 });
 

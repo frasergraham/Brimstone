@@ -100,14 +100,6 @@ export async function run3DCombatCardHold({
   // readout stack-up/hold/fade and any ally lunge promises (already resolved).
   await renderer.waitForAnimations();
   if (continueBtn) continueBtn.hidden = true;
-  // G1: punch up winner/loser with a quick scale pop on the standees right as
-  // the cards fade out. The cue plays in parallel with `resumePunch` so the
-  // strike continues to follow through while the outcome reads.
-  if (typeof renderer.addCombatOutcomeCue === 'function') {
-    const winnerId = result?.hit ? actorSnap.id  : targetSnap.id;
-    const loserId  = result?.hit ? targetSnap.id : actorSnap.id;
-    renderer.addCombatOutcomeCue(winnerId, loserId);
-  }
   // Resume the strike to completion (no-op resolve if nothing was frozen).
   await (renderer.resumePunch?.() ?? Promise.resolve());
   // G1: play the reaction clip on the shared skeleton AFTER the punch
