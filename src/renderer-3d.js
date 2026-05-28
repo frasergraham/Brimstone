@@ -1737,7 +1737,7 @@ export class Renderer3D {
     // instead of one flat hex per tile. Picking → ray/ground inverse; fog →
     // per-vertex `aFog` rewrite. 1-line rollback: flip to false to restore the
     // legacy per-hex path untouched.
-    this._useSplatTerrain = false; // flipped on by default in stage D
+    this._useSplatTerrain = true; // 1-line rollback: set false for legacy per-hex path
     this._splatGround   = null;  // the single merged ground mesh (flag on)
     this._splatPlugin   = null;  // TerrainSplatPlugin instance on the ground material
     this._hexVertexRange = new Map(); // hexKey → base vertex index (×7 per tile)

@@ -26,6 +26,10 @@ import { Renderer3D } from '../src/renderer-3d.js';
 function makeRenderer() {
   const fakeCanvas = { parentElement: null, width: 800, height: 600, addEventListener() {} };
   const r = new Renderer3D(fakeCanvas, {});
+  // These tests exercise the legacy per-hex flash + material-swap fog path
+  // (which lives behind the splat-terrain flag). Pin it off so the assertions
+  // about per-tile material tags hold regardless of the default flag value.
+  r._useSplatTerrain = false;
   r._scene = {};
   // Material lookups return a tagged plain object so we can assert which
   // variant a tile ended up displaying without touching Babylon.

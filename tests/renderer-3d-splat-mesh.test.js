@@ -70,9 +70,22 @@ function rectState(cols, rows, typeFn) {
 }
 
 describe('Renderer3D splat ground — geometry', () => {
-  test('flag OFF (default) builds no splat ground', () => {
+  test('flag is ON by default (stage D); 1-line rollback flips it off', () => {
     const r = makeRenderer();
-    assert.equal(r._useSplatTerrain, false, 'default flag must be off (1-line rollback)');
+    assert.equal(r._useSplatTerrain, true, 'default flag on after stage D');
+    assert.equal(r._splatGround, null, 'no ground until _buildSplatGround runs');
+  });
+
+  test('explicit flag OFF builds no splat ground (legacy per-hex path)', () => {
+    const r = makeRenderer();
+    r._useSplatTerrain = false;
+    r._buildTileMesh = () => {};
+    r._buildRoadRiverNetworks = () => {};
+    r._buildMapBorderForest = () => {};
+    r._syncBorderForestVisibility = () => {};
+    r._freezeStaticMeshes = () => {};
+    r.state = rectState(2, 2);
+    r._buildMap();
     assert.equal(r._splatGround, null);
   });
 

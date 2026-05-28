@@ -90,8 +90,20 @@ export function makeTerrainSplatPlugin(BABYLON) {
       const b = !!v;
       if (b === this._enabled) return;
       this._enabled = b;
-      this.markAllDefinesAsDirty();
+      // _enable registers/unregisters the plugin with the material's plugin
+      // manager so getCustomCode/getUniforms/etc. are invoked on (re)compile.
       this._enable(b);
+      // Force a define recompile when toggled after first compile. The method
+      // name varies across Babylon builds (this vendored one lacks
+      // `markAllDefinesAsDirty`), so probe both and fall back to the material's
+      // dirty flag. Harmless at build time (first compile runs prepareDefines
+      // anyway) — load-bearing only for a live toggle.
+      if (typeof this.markAllDefinesAsDirty === 'function') {
+        this.markAllDefinesAsDirty();
+      } else if (this._material && typeof this._material.markAsDirty === 'function'
+                 && BABYLON.Material) {
+        this._material.markAsDirty(BABYLON.Material.AllDirtyFlag ?? 0x7fffffff);
+      }
     }
 
     prepareDefines(defines /* , scene, mesh */) {
@@ -178,6 +190,9 @@ export function makeTerrainSplatPlugin(BABYLON) {
             varying vec3 vSplat;
             varying float vFog;
             varying vec3 vWorldXZ;
+            uniform sampler2D detailGrass;
+            uniform sampler2D detailDirt;
+            uniform sampler2D detailForest;
             ${PROC_COLOR_GLSL}
           #endif`,
           CUSTOM_FRAGMENT_UPDATE_DIFFUSE: `#ifdef TERRAIN_SPLAT
