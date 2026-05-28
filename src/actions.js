@@ -929,10 +929,11 @@ export function executeBattle(state, actor, target) {
   //     afar, and allies don't flank a shot).
   //   - No crushing blows; damage is always 1 per hit.
   //   - No splash on kill (clean single-target).
+  //   - No counter-attack (defender can't reach the ranged attacker to
+  //     strike back — see the `!isRanged` guard on the counter branch).
   //   - Defender in forest gets +1 DEF (cover).
   //   - Attacker at close range (dist == 1) fires at disadvantage (1 die).
-  // Phase bonus, fortification, weapon triggers, and counter-attack all
-  // still apply — see plan file for rationale.
+  // Phase bonus, fortification, and weapon triggers still apply.
   const atkRange = (typeof actor.getRange === 'function' ? actor.getRange() : (actor.range ?? 1));
   const distToTarget = hexDistance(actor.col, actor.row, target.col, target.row);
   const isRanged = atkRange > 1;
@@ -1110,8 +1111,11 @@ export function executeBattle(state, actor, target) {
   } else {
     log.push(`${target.displayName} defends successfully.`);
 
-    // Counter-attack: defender's roll is at least double the attacker's roll
-    if (defenseRoll >= 2 * attackRoll && actor.alive) {
+    // Counter-attack: defender's roll is at least double the attacker's roll.
+    // Ranged attacks don't trigger counters — the defender can't reach the
+    // attacker to strike back (narratively nonsensical, and the operator
+    // explicitly removed this rule).
+    if (defenseRoll >= 2 * attackRoll && actor.alive && !isRanged) {
       counterDmg = actor.applyIncomingDamage(1);
       const counterKilled = actor.takeDamage(counterDmg);
       log.push(`⚔ ${target.displayName} counter-attacks! ${actor.displayName} takes ${counterDmg} damage.`);

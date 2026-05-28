@@ -86,6 +86,27 @@ describe('ranged attack — no gang-up, no ally-def', () => {
   });
 });
 
+describe('ranged attack — no counter', () => {
+  test('defender with double the attacker\'s roll does NOT counter-attack a ranged shooter', () => {
+    const state = freshState();
+    const witch = state.witch;
+    const hero  = state.hero;
+    placeAt(witch, 5, 5);
+    placeAt(hero,  7, 5);
+
+    // Force atk=1 (miss) and def=6 → defenseRoll >= 2*attackRoll, would
+    // counter if melee. Ranged should NOT counter — attacker unscathed.
+    state.setForcedDice(1, 6);
+    const witchHpBefore = witch.hp;
+    const r = executeBattle(state, witch, hero);
+
+    assert.equal(r.hit, false, 'attack missed');
+    assert.equal(r.counterDmg, 0, 'ranged attack does NOT trigger a counter');
+    assert.equal(witch.hp, witchHpBefore, 'ranged attacker takes no counter damage');
+    assert.equal(r.defenseRoll >= 2 * r.attackRoll, true, 'margin would counter if melee');
+  });
+});
+
 describe('ranged attack — no crush, no splash', () => {
   test('huge margin on a ranged hit still deals only 1 damage', () => {
     const state = freshState();
