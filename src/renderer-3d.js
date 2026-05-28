@@ -6295,26 +6295,22 @@ export class Renderer3D {
       // `[rightOuter, rightInner, center, leftInner, leftOuter]`; first triangle
       // winding produces a +Y face normal so the hemispheric light hits the
       // camera-visible top face (see the contract comment on `_buildNetworkMesh`).
-      // Same world-space width modulation as the playable river so the
-      // ribbon widths at the playable→wilderness seam are continuous (both
-      // sample the same world (x,z) at the shared exit point). Wavelength
-      // and amplitude must match _buildNetworkMesh's modulator.
-      const WIDTH_NOISE_WAVELENGTH = 8.0;
-      const WIDTH_AMP = 0.075;
-      const widthModAt = (x, z) => {
-        const u = (x / WIDTH_NOISE_WAVELENGTH + z / WIDTH_NOISE_WAVELENGTH * 0.7) * Math.PI * 2;
-        return 1 + WIDTH_AMP * Math.sin(u);
-      };
+      // R5 — match the playable river's curvature-based width helper so the
+      // wilderness ribbon widens through its sway apex and narrows on the
+      // straights, blending continuously with the in-map river at the seam.
+      const halfWaterExt = riverHalfWidthsByCurvature(pts);
       const outerWidths = new Array(pts.length);
       const innerWidths = new Array(pts.length);
       for (let p = 0; p < pts.length; p++) {
-        const mod = widthModAt(pts[p].x, pts[p].z);
-        outerWidths[p] = RIVER_RIBBON_WIDTH * mod;
-        innerWidths[p] = RIVER_RIBBON_WIDTH * OPAQUE_FRAC * mod;
+        outerWidths[p] = halfWaterExt[p] * 2;
+        innerWidths[p] = halfWaterExt[p] * 2 * OPAQUE_FRAC;
       }
       const { left: outerLeft,  right: outerRight  } = ribbonOffsetPaths(pts, outerWidths);
       const { left: innerLeft,  right: innerRight  } = ribbonOffsetPaths(pts, innerWidths);
-      const toV3 = (arr) => arr.map(p => new BABYLON.Vector3(p.x, RIVER_RIBBON_Y, p.z));
+      // R5 — water surface sits at RIVER_BED_Y (sunken), matching the in-map
+      // river. The bank ribbon built below carries the dirt rim back up to
+      // ground level.
+      const toV3 = (arr) => arr.map(p => new BABYLON.Vector3(p.x, RIVER_BED_Y, p.z));
       const ribbon = BABYLON.MeshBuilder.CreateRibbon(
         `river_extension_${exit.tile.col}_${exit.tile.row}`,
         {
@@ -6411,7 +6407,106 @@ export class Renderer3D {
       const list = this._borderPropsByKey.get(key) || [];
       list.push(ribbon);
       this._borderPropsByKey.set(key, list);
+      // R5 — sibling DIRT bank ribbon flanking the wilderness water. Same
+      // 7-path U-trench cross-section as the in-map banks; layered alpha
+      // combines the lateral feather (paths 0/6 → 0) with the per-ring fade
+      // (`riverExtensionRingAlphas`) so the bank dissolves into the border
+      // wilderness on the same schedule as the water. Material is the shared
+      // dirt-textured one with `_fogTileDarken` baked in so the wilderness
+      // bank reads "beyond sight" like the rest of the border band.
+      const bankRibbon = this._buildRiverBankRibbon({
+        tkey: key,
+        tileCol: exit.tile.col,
+        tileRow: exit.tile.row,
+        strokeIdx: 0,
+        pts,
+        halfWidths: halfWaterExt,
+      });
+      if (bankRibbon) {
+        bankRibbon.parent     = this._mapRoot;
+        bankRibbon.isPickable = false;
+        // Layer the per-ring fade onto the bank's lateral alpha (which the
+        // builder already wrote — paths 0/6 → 0, everything else → 1). Each
+        // vertex's existing alpha is multiplied by the ringAlpha at its
+        // point index, matching the water ribbon's compound taper above.
+        const bankVerts = bankRibbon.getTotalVertices();
+        const Nb = pts.length;
+        const existingColors = bankRibbon.getVerticesData
+          ? bankRibbon.getVerticesData(BABYLON.VertexBuffer.ColorKind)
+          : null;
+        if (existingColors) {
+          const cols = new Float32Array(existingColors);
+          for (let v = 0; v < bankVerts; v++) {
+            const pointIdx = v % Nb;
+            const ringA    = ringAlphas[pointIdx] ?? 1.0;
+            cols[v * 4 + 3] = cols[v * 4 + 3] * ringA;
+          }
+          bankRibbon.setVerticesData(BABYLON.VertexBuffer.ColorKind, cols);
+        }
+        // Material: shared fog-tinted dirt mat (built lazily, one per scene).
+        const bankBaseMat = this._buildRiverBankExtensionMaterial();
+        if (bankBaseMat) bankRibbon.material = bankBaseMat;
+        bankRibbon.hasVertexAlpha = true;
+        // Same ordering as in-map banks — just below RIVER_ALPHA_INDEX so the
+        // water reads ON TOP of the bed where they overlap.
+        bankRibbon.alphaIndex = Math.max(0, RIVER_ALPHA_INDEX - 5);
+        this._setShadowReceiver(bankRibbon);
+        bankRibbon.metadata = {
+          kind: 'river-bank-extension',
+          col: exit.tile.col, row: exit.tile.row,
+        };
+        list.push(bankRibbon);
+      }
     }
+  }
+
+  /** R5 — shared dirt material for the river BANK EXTENSIONS (wilderness side
+   *  of the playable map). Same recipe as `_buildRiverBankMaterial` but the
+   *  diffuseColor (and texture level) is darkened by `_fogTileDarken` so the
+   *  wilderness bank reads "beyond sight" like the surrounding border ground
+   *  + foliage. One shared material across every extension — no per-tile
+   *  fog-darken needed because the whole band is permanently fogged. */
+  _buildRiverBankExtensionMaterial() {
+    const BABYLON = this._babylon;
+    const scene   = this._scene;
+    if (!BABYLON || !scene) return null;
+    if (this._riverBankExtMat) return this._riverBankExtMat;
+    const mat = new BABYLON.StandardMaterial('river_bank_ext_mat', scene);
+    const base = new BABYLON.Color3(0.62, 0.50, 0.38);
+    const k = Math.min(this._fogTileDarken ?? 1.0, FOG_HIDDEN_DARKEN);
+    mat.diffuseColor    = new BABYLON.Color3(base.r * k, base.g * k, base.b * k);
+    mat.emissiveColor   = new BABYLON.Color3(0, 0, 0);
+    mat.specularColor   = new BABYLON.Color3(0.04, 0.04, 0.04);
+    mat.backFaceCulling = false;
+    mat.disableLighting = false;
+    const tex = this._terrainDetailTexture('dirt');
+    if (tex) {
+      mat.diffuseTexture = tex;
+      mat.useAlphaFromDiffuseTexture = false;
+      // Same lighting-clamp trap as the river extension diffuse — multiplying
+      // diffuseColor alone is swallowed at bright phases. Darken the texture
+      // level too. tex is shared with the splat plugin, so adjusting `level`
+      // would corrupt the splat ground; clone the texture first.
+      if (typeof BABYLON.Texture === 'function' && tex.url) {
+        try {
+          const dimmed = new BABYLON.Texture(tex.url, scene);
+          if (BABYLON.Texture.WRAP_ADDRESSMODE != null) {
+            dimmed.wrapU = BABYLON.Texture.WRAP_ADDRESSMODE;
+            dimmed.wrapV = BABYLON.Texture.WRAP_ADDRESSMODE;
+          }
+          dimmed.level = k;
+          mat.diffuseTexture = dimmed;
+        } catch (err) {
+          // Fall back to the shared texture (slightly lighter than ideal)
+          console.warn('[Renderer3D] river bank ext texture clone failed:', err);
+        }
+      }
+    }
+    if (BABYLON.Material && BABYLON.Material.MATERIAL_ALPHABLEND != null) {
+      mat.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
+    }
+    this._riverBankExtMat = mat;
+    return mat;
   }
 
   /** Set of TILE_SLOTS indices a road deck crosses on a forest tile, so the
@@ -6526,6 +6621,58 @@ export class Renderer3D {
       const tile = playable[ti];
       this._emitSplatHex(buffers, ti, tile.col, tile.row,
         hexSplatWeights(tile, channelAt), 1.0);
+    }
+    // R5 — river / bridge hexes get a Y-DISPLACED centre so the splat ground
+    // forms a bowl that lets the sunken water (at RIVER_BED_Y) be visible
+    // instead of occluded by a flat Y=0 plane. Perimeter vertices shared with
+    // an ADJACENT river hex also drop to RIVER_BED_Y so the channel runs
+    // continuously from one tile to the next instead of bouncing back up to
+    // ground level at every hex boundary. Vertices shared with a NON-river
+    // neighbour stay at Y=0 so the grass/dirt around the channel keeps a
+    // flush rim.
+    //
+    // Each river hex's vertex layout (`_emitSplatHex`):
+    //   baseV + 0       = centre
+    //   baseV + 1..6    = perimeter corners (j=0..5, angle π/6 + j·π/3)
+    //
+    // The 6 hex neighbour DIRS are addressed by `(tile.row & 1) ? DIRS_ODD :
+    // DIRS_EVEN` (same logic that drives `hexSplatWeights`). Each corner is
+    // shared by TWO adjacent neighbour-direction slots (CORNER_NEIGHBOR_DIRS);
+    // pulling the corner down only when one of those two neighbours is also
+    // water keeps the rim flush with grass tiles.
+    {
+      const isWater = (col, row) => {
+        const t = this.state.tiles.get(hexKey(col, row));
+        return t && (isRiver(t) || isBridge(t));
+      };
+      const range = buffers.range;
+      // Local copies of the splat-builder's neighbour DIRS + corner→edge map
+      // (private to terrain-splat.js). Same algebra as `hexSplatWeights` so
+      // the corner-incident neighbours match exactly.
+      const HEX_DIRS_EVEN = [[-1, 0], [-1, -1], [0, -1], [1, 0], [0, 1], [-1, 1]];
+      const HEX_DIRS_ODD  = [[-1, 0], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1]];
+      const CORNER_DIRS   = [[3, 4], [4, 5], [5, 0], [0, 1], [1, 2], [2, 3]];
+      for (const tile of playable) {
+        if (!isRiver(tile) && !isBridge(tile)) continue;
+        const baseV = range.get(hexKey(tile.col, tile.row));
+        if (baseV == null) continue;
+        // Centre drops to bed.
+        buffers.positions[baseV * 3 + 1] = RIVER_BED_Y;
+        const dirs = (tile.row & 1) ? HEX_DIRS_ODD : HEX_DIRS_EVEN;
+        for (let j = 0; j < 6; j++) {
+          const [da, db] = CORNER_DIRS[j];
+          const naCol = tile.col + dirs[da][0], naRow = tile.row + dirs[da][1];
+          const nbCol = tile.col + dirs[db][0], nbRow = tile.row + dirs[db][1];
+          if (isWater(naCol, naRow) || isWater(nbCol, nbRow)) {
+            // Corner sits between this tile and an adjacent water neighbour
+            // → drop to the bed so the channel runs continuously across the
+            // shared edge. Slightly shallower than the centre (HALF bed depth)
+            // so the cross-section reads as a soft V instead of a hard flat
+            // bottom that hides every contour change.
+            buffers.positions[(baseV + 1 + j) * 3 + 1] = RIVER_BED_Y * 0.5;
+          }
+        }
+      }
     }
     const mesh = new BABYLON.Mesh('splatGround', scene);
     const vd = new BABYLON.VertexData();
@@ -7230,6 +7377,11 @@ export class Renderer3D {
     // because the network spans many tiles and is built after `_buildTileMesh`.
     const ribbonsByTileKey = new Map();      // tkey → mesh[]
     const ribbons = [];
+    // R5 — collect bank-build jobs PER STROKE so a sibling pass can build the
+    // dirt-textured channel walls + bed alongside the water mesh. Reset every
+    // `_buildNetworkMesh('river',…)` rebuild (idempotent — road rebuilds leave
+    // any river jobs from the previous river build untouched).
+    if (networkName === 'river') this._riverBankJobs = [];
 
     // (River strokes arrive already oriented in the canonical world flow
     // direction — see `buildRiverNetworkStrokes`. No per-consumer flip
@@ -7285,7 +7437,11 @@ export class Renderer3D {
         // + stroke index so a given hex looks the same across reloads.
         let perPointOuterWidth = tileWidth;
         let perPointInnerWidth = tileWidth * OPAQUE_FRAC;
-        if (networkName === 'road' || networkName === 'river') {
+        // Per-point WATER half-widths (river only); used by the sibling bank
+        // build pass below so the bank's water edge tracks the water mesh
+        // exactly. `null` for road or for the sine-modulated width fallback.
+        let riverHalfWidthsForStroke = null;
+        if (networkName === 'road') {
           // Width modulates as a function of WORLD position so adjacent tiles
           // produce the SAME width at shared seam points — no visible width
           // jump where one tile's stroke ends and the next begins. The 2D
@@ -7312,10 +7468,38 @@ export class Renderer3D {
           }
           perPointOuterWidth = outerArr;
           perPointInnerWidth = innerArr;
+        } else if (networkName === 'river') {
+          // R5 — river water-surface width varies by LOCAL CURVATURE: narrower
+          // on straight reaches, wider through corners so the river reads as a
+          // natural meander instead of a constant-width canal. `tileWidth` is
+          // ignored for the river; the absolute MIN/MAX half-widths come from
+          // the exported constants so the seam between adjacent tiles is
+          // continuous (each stroke's endpoint widths are determined by the
+          // bezier's tangent geometry there, not the tile identity).
+          const halfWidths = riverHalfWidthsByCurvature(pts);
+          // The original 5-path ribbon maps "outer half-width" to the ribbon's
+          // outermost lateral path and "inner half-width" to the next path in,
+          // giving a feathered shoulder. For the river the OPAQUE region IS the
+          // water surface (paths 1..3 in the 5-path layout); we keep the same
+          // 80% inner shrink so the water has a small alpha-soft edge that
+          // tucks under the dirt bank's inner lip and hides any sub-pixel seam.
+          const outerArr = new Array(pts.length);
+          const innerArr = new Array(pts.length);
+          for (let p = 0; p < pts.length; p++) {
+            outerArr[p] = halfWidths[p] * 2;             // full water width
+            innerArr[p] = halfWidths[p] * 2 * OPAQUE_FRAC;
+          }
+          perPointOuterWidth = outerArr;
+          perPointInnerWidth = innerArr;
+          riverHalfWidthsForStroke = halfWidths;
         }
         const { left: outerLeft,  right: outerRight  } = ribbonOffsetPaths(pts, perPointOuterWidth);
         const { left: innerLeft,  right: innerRight  } = ribbonOffsetPaths(pts, perPointInnerWidth);
-        const toV3 = (arr) => arr.map(p => new BABYLON.Vector3(p.x, yPos, p.z));
+        // R5 — river water surface sits at RIVER_BED_Y (below ground); road
+        // keeps its passed-in `yPos`. The bank ribbon (built in the sibling
+        // pass below) handles the sloped transition back up to ground level.
+        const waterY = networkName === 'river' ? RIVER_BED_Y : yPos;
+        const toV3 = (arr) => arr.map(p => new BABYLON.Vector3(p.x, waterY, p.z));
         const rightOuterV3 = toV3(outerRight);
         const rightInnerV3 = toV3(innerRight);
         const centerV3     = toV3(pts);
@@ -7410,6 +7594,21 @@ export class Renderer3D {
         const list = ribbonsByTileKey.get(tkey) || [];
         list.push(ribbon);
         ribbonsByTileKey.set(tkey, list);
+        // R5 — accumulate bank-build data for river strokes so the sibling
+        // bank ribbon pass below has everything it needs (centreline + per-point
+        // water half-widths). The bank is built AFTER the water-merge loop so
+        // each pass can merge per-tile cleanly with its own material.
+        if (networkName === 'river' && riverHalfWidthsForStroke) {
+          if (!this._riverBankJobs) this._riverBankJobs = [];
+          this._riverBankJobs.push({
+            tkey,
+            tileCol: tile.col,
+            tileRow: tile.row,
+            strokeIdx: i,
+            pts,
+            halfWidths: riverHalfWidthsForStroke,
+          });
+        }
       }
     }
     if (ribbons.length === 0) return null;
@@ -7479,7 +7678,222 @@ export class Renderer3D {
       else this._tilePropsByKey.set(tkey, [merged]);
       if (!primary) primary = merged;
     }
+    // R5 — build the dirt-textured bank channel ribbons alongside the water.
+    // Runs ONCE per `_buildNetworkMesh('river',…)` so the per-tile merge has
+    // the same connectivity as the water meshes above. Reads the jobs the
+    // per-stroke loop accumulated into `_riverBankJobs`.
+    if (networkName === 'river' && this._riverBankJobs && this._riverBankJobs.length > 0) {
+      this._buildRiverBankMeshes(this._riverBankJobs);
+    }
     return primary;
+  }
+
+  /** R5 — Build the dirt-textured BANK channel meshes that wrap the sunken
+   *  water ribbons. Each job carries one stroke's centreline + per-point water
+   *  half-widths; we emit one 7-path ribbon per stroke (outer-left rim →
+   *  bank-top-left → water-edge-left → bed-centre → water-edge-right →
+   *  bank-top-right → outer-right rim) so the cross-section reads as a real
+   *  trench with sloped dirt sides and a slightly-deeper dirt bed. Banks merge
+   *  per-tile (separate from the water merge — different material) and
+   *  register with `_tilePropsByKey` so the fog veil walks them.
+   *
+   *  The ribbon's per-vertex alpha tapers paths 0 and 6 (the outermost rims)
+   *  to 0 so the dirt deck dissolves into the surrounding ground. Per-vertex
+   *  UVs tile the dirt detail texture along the river's length so each bank
+   *  reads as continuous dirt rather than a single-pixel smear. */
+  _buildRiverBankMeshes(jobs) {
+    const BABYLON = this._babylon;
+    const scene   = this._scene;
+    if (!BABYLON || !scene || !jobs || jobs.length === 0) return;
+    // Group jobs by tile so each tile gets a single merged bank prop.
+    const banksByTileKey = new Map(); // tkey → mesh[]
+    for (const job of jobs) {
+      const ribbon = this._buildRiverBankRibbon(job);
+      if (!ribbon) continue;
+      const list = banksByTileKey.get(job.tkey) || [];
+      list.push(ribbon);
+      banksByTileKey.set(job.tkey, list);
+    }
+    // One shared base material — clones per tile so fog veil can darken
+    // individual tiles without affecting the rest.
+    const baseMat = this._buildRiverBankMaterial();
+    if (!baseMat) return;
+    const baseDiff = baseMat.diffuseColor ? baseMat.diffuseColor.clone() : null;
+    for (const [tkey, list] of banksByTileKey) {
+      const merged = BABYLON.Mesh.MergeMeshes(list, true, true, undefined, false, false);
+      if (!merged) continue;
+      this._setShadowReceiver(merged);
+      merged.parent     = this._mapRoot;
+      merged.isPickable = false;
+      const mat = baseMat.clone(`river_bank_${tkey}_mat`);
+      if (baseDiff && mat.diffuseColor) {
+        mat.diffuseColor.r = baseDiff.r;
+        mat.diffuseColor.g = baseDiff.g;
+        mat.diffuseColor.b = baseDiff.b;
+      }
+      merged.material   = mat;
+      merged.hasVertexAlpha = true;
+      // Sit just BELOW the water in the transparency sort so the water reads
+      // as drawn ON TOP of the bed (the bank rim above water is opaque, no
+      // ordering issue; only the bed under-water section overlaps the water).
+      merged.alphaIndex = Math.max(0, RIVER_ALPHA_INDEX - 5);
+      merged.name       = `river_bank_${tkey}`;
+      merged.metadata   = {
+        respectsFog: 'darken',
+        kind: 'river-bank',
+        baseDiffuse:  baseDiff ? { r: baseDiff.r, g: baseDiff.g, b: baseDiff.b } : { r: 1, g: 1, b: 1 },
+        baseEmissive: { r: 0, g: 0, b: 0 },
+      };
+      const props = this._tilePropsByKey.get(tkey);
+      if (props) props.push(merged);
+      else this._tilePropsByKey.set(tkey, [merged]);
+    }
+  }
+
+  /** R5 — Build ONE 7-path bank ribbon for a single river stroke. Returns the
+   *  raw ribbon mesh (no material assigned yet — the caller merges per-tile
+   *  and assigns a tile-cloned dirt material). Paths:
+   *
+   *    0  outer-left  rim (Y=RIVER_BANK_TOP_Y, alpha 0, feather into ground)
+   *    1  bank-left   top (Y=RIVER_BANK_TOP_Y, alpha 1)
+   *    2  water-edge  left  (Y=RIVER_BED_Y, alpha 1)
+   *    3  bed-centre        (Y=RIVER_BED_Y - epsilon, alpha 1; dirt below the water)
+   *    4  water-edge  right (Y=RIVER_BED_Y, alpha 1)
+   *    5  bank-right  top (Y=RIVER_BANK_TOP_Y, alpha 1)
+   *    6  outer-right rim (Y=RIVER_BANK_TOP_Y, alpha 0)
+   *
+   *  Half-widths per path index:
+   *    0/6 → waterHalf + RIVER_BANK_WIDTH        (outer rim)
+   *    1/5 → waterHalf + RIVER_BANK_WIDTH * 0.5  (inset slightly so the alpha
+   *           feather lives between paths 0–1 only, keeping the dirt top opaque
+   *           across most of its width)
+   *    2/4 → waterHalf                            (water edge — exact)
+   *    3   → 0                                    (centreline)
+   */
+  _buildRiverBankRibbon(job) {
+    const BABYLON = this._babylon;
+    const scene   = this._scene;
+    if (!BABYLON || !scene) return null;
+    const { pts, halfWidths, tileCol, tileRow, strokeIdx } = job;
+    if (!pts || pts.length < 2 || !halfWidths || halfWidths.length !== pts.length) return null;
+    const N = pts.length;
+    // Per-point lateral offsets (5 distinct half-widths per point; we'll mirror
+    // them across path indices 0..6 below).
+    const offsetRim    = new Array(N);
+    const offsetBank   = new Array(N);
+    const offsetWater  = new Array(N);
+    for (let p = 0; p < N; p++) {
+      const w = halfWidths[p];
+      offsetRim[p]   = w + RIVER_BANK_WIDTH;
+      offsetBank[p]  = w + RIVER_BANK_WIDTH * 0.5;
+      offsetWater[p] = w;
+    }
+    // Six lateral offset path-pairs are needed; we get them from
+    // `ribbonOffsetPaths(pts, width)` which returns `{left, right}` for a
+    // given symmetric width. Pass each width array as a 2× full width
+    // (ribbonOffsetPaths treats `width` as the FULL width, splitting into
+    // half on each side).
+    const widthRim   = offsetRim.map(o => o * 2);
+    const widthBank  = offsetBank.map(o => o * 2);
+    const widthWater = offsetWater.map(o => o * 2);
+    const { left: leftRim,   right: rightRim   } = ribbonOffsetPaths(pts, widthRim);
+    const { left: leftBank,  right: rightBank  } = ribbonOffsetPaths(pts, widthBank);
+    const { left: leftWater, right: rightWater } = ribbonOffsetPaths(pts, widthWater);
+    const BED_EPS = 0.01; // bed sits just below water so any alpha-blend ties resolve toward dirt
+    const yBank = RIVER_BANK_TOP_Y;
+    const yWater = RIVER_BED_Y;
+    const yBed = RIVER_BED_Y - BED_EPS;
+    const toV3 = (arr, y) => arr.map(p => new BABYLON.Vector3(p.x, y, p.z));
+    const pathArray = [
+      toV3(rightRim,   yBank),  // 0 outer-right rim
+      toV3(rightBank,  yBank),  // 1 bank-right top
+      toV3(rightWater, yWater), // 2 water-edge right
+      toV3(pts,        yBed),   // 3 bed centre
+      toV3(leftWater,  yWater), // 4 water-edge left
+      toV3(leftBank,   yBank),  // 5 bank-left top
+      toV3(leftRim,    yBank),  // 6 outer-left rim
+    ];
+    const ribbon = BABYLON.MeshBuilder.CreateRibbon(
+      `river_bank_${tileCol}_${tileRow}_${strokeIdx}`,
+      {
+        pathArray,
+        sideOrientation: BABYLON.Mesh.DOUBLESIDE,
+        closeArray: false,
+        closePath: false,
+        updatable: false,
+      },
+      scene,
+    );
+    ribbon.isPickable = false;
+    const totalVerts = ribbon.getTotalVertices();
+    // Per-vertex alpha: paths 0 and 6 fade to 0 so the rim dissolves into the
+    // surrounding ground; everything else opaque.
+    const alphaByPath = [0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0];
+    const colors = new Float32Array(totalVerts * 4);
+    for (let v = 0; v < totalVerts; v++) {
+      const pathIdx = Math.min(alphaByPath.length - 1, Math.floor(v / N));
+      colors[v * 4 + 0] = 1;
+      colors[v * 4 + 1] = 1;
+      colors[v * 4 + 2] = 1;
+      colors[v * 4 + 3] = alphaByPath[pathIdx];
+    }
+    ribbon.setVerticesData(BABYLON.VertexBuffer.ColorKind, colors);
+    // Per-vertex UVs — tile dirt detail texture along the river's length.
+    // U = cumulative XZ distance along the centreline (path 3) scaled by
+    // BANK_TILE_PERIOD so the dirt detail repeats every world unit. V across
+    // the width keyed off path index so the texture spans the channel
+    // cross-section once.
+    const periods = new Array(N);
+    periods[0] = 0;
+    for (let p = 1; p < N; p++) {
+      const dx = pts[p].x - pts[p - 1].x;
+      const dz = pts[p].z - pts[p - 1].z;
+      periods[p] = periods[p - 1] + Math.sqrt(dx * dx + dz * dz);
+    }
+    const BANK_TILE_PERIOD = 0.6; // dirt detail tiles more tightly than river
+    const vByPath = [0.0, 0.15, 0.4, 0.5, 0.6, 0.85, 1.0];
+    const uvs = new Float32Array(totalVerts * 2);
+    for (let v = 0; v < totalVerts; v++) {
+      const pathIdx  = Math.min(vByPath.length - 1, Math.floor(v / N));
+      const pointIdx = v % N;
+      uvs[v * 2 + 0] = periods[pointIdx] / BANK_TILE_PERIOD;
+      uvs[v * 2 + 1] = vByPath[pathIdx];
+    }
+    ribbon.setVerticesData(BABYLON.VertexBuffer.UVKind, uvs);
+    return ribbon;
+  }
+
+  /** R5 — StandardMaterial for the river BANK channel ribbons. Same recipe
+   *  as the terrain detail-textured material, but standalone (not a splat
+   *  blend) so the dirt detail tiles cleanly across the bank's curved
+   *  geometry. Lazy-built on first call and cached on the renderer instance.
+   *  Disposed by the next `_buildNetworkMesh('river',…)` rebuild via the
+   *  per-tile mat clones taking ownership; the BASE material persists for the
+   *  lifetime of the renderer (one extra material is a rounding error). */
+  _buildRiverBankMaterial() {
+    const BABYLON = this._babylon;
+    const scene   = this._scene;
+    if (!BABYLON || !scene) return null;
+    if (this._riverBankBaseMat) return this._riverBankBaseMat;
+    const mat = new BABYLON.StandardMaterial('river_bank_base_mat', scene);
+    mat.diffuseColor    = new BABYLON.Color3(0.62, 0.50, 0.38); // warm dirt tint
+    mat.emissiveColor   = new BABYLON.Color3(0, 0, 0);
+    mat.specularColor   = new BABYLON.Color3(0.04, 0.04, 0.04);
+    mat.backFaceCulling = false;
+    mat.disableLighting = false;
+    // Dirt detail (greyscale → tinted by diffuseColor); the same texture used
+    // by the splat ground plugin. Re-use the loader so the GPU texture cache
+    // hits and we don't re-upload.
+    const tex = this._terrainDetailTexture('dirt');
+    if (tex) {
+      mat.diffuseTexture = tex;
+      // White-ish diffuse plus the textured RGB. The detail JPG has no alpha,
+      // so disable useAlphaFromDiffuseTexture — the per-vertex alpha written
+      // by the ribbon builder carries the rim feather instead.
+      mat.useAlphaFromDiffuseTexture = false;
+    }
+    this._riverBankBaseMat = mat;
+    return mat;
   }
 
   /** Dedicated StandardMaterial for the ribbon networks. Unlike the cached
@@ -13374,8 +13788,38 @@ export const ROAD_RIBBON_WIDTH  = 0.6;
  *  per-tile in `_buildNetworkMesh` (see the forest→grass seam note there).
  *  Operator-tunable. */
 export const FOREST_ROAD_WIDTH_FACTOR = 0.8;
-/** Y above tile prism top (0.075) and disc top (0.084) — ribbon hugs the terrain. */
+/** Y for the river-ribbon mesh in the LEGACY flat-ribbon path (still used by the
+ *  road ribbon at the same general epsilon and by callers/tests that pass this
+ *  in as `yPos`). For the river, R5 introduced a real recessed channel:
+ *  `_buildNetworkMesh('river', …)` ignores this `yPos` and uses
+ *  `RIVER_BED_Y` for the water surface and `RIVER_BANK_TOP_Y` for the dirt
+ *  bank top instead. Kept positive and < 0.05 so the historic tests
+ *  (`renderer-3d-networks.test.js` — "river Y should be a small positive
+ *  depth-bias") still pin a sane value for the road-ribbon-style epsilon. */
 export const RIVER_RIBBON_Y     = 0.005;
+/** R5 — actual river bed depth (NEGATIVE Y). The water surface sits BELOW the
+ *  ground plane so the channel reads as a real 3D depression instead of a
+ *  painted ribbon. Operator-tunable; -0.18 is enough to read clearly at the
+ *  default camera tilt without making bridges/road crossings feel too high. */
+export const RIVER_BED_Y         = -0.18;
+/** R5 — bank top Y. Sits a hair ABOVE the ground (Y=0) so the dirt-textured
+ *  bank deck wins the depth fight against the underlying terrain disc at the
+ *  river hex (same trick the road ribbon uses at ROAD_RIBBON_Y). Same value
+ *  as the legacy RIVER_RIBBON_Y so existing positive-depth-bias tests still
+ *  hold. */
+export const RIVER_BANK_TOP_Y    = 0.005;
+/** R5 — water-surface half-width on a STRAIGHT river segment (low curvature).
+ *  ~0.21 × hex-width; reads as a narrow meander rather than a uniform canal. */
+export const RIVER_HALF_WIDTH_MIN = 0.18;
+/** R5 — water-surface half-width at the apex of a CORNER (high curvature). */
+export const RIVER_HALF_WIDTH_MAX = 0.32;
+/** R5 — dirt bank width on EACH side, from the waterline outward to the outer
+ *  rim of the bank top. Total channel cross-section width =
+ *  `2 × halfWaterWidth + 2 × RIVER_BANK_WIDTH`. The outer rim is kept fixed
+ *  (`halfWaterWidth + RIVER_BANK_WIDTH ≤ RIVER_RIBBON_WIDTH/2 + RIVER_BANK_WIDTH`)
+ *  so the river footprint roughly matches the legacy flat ribbon's, keeping
+ *  neighbouring ground tiles flush against the channel's outer edge. */
+export const RIVER_BANK_WIDTH     = 0.10;
 /** Road sits clearly above the river so the road tube paints OVER the water at
  *  river crossings — the bridge plank is disabled (`_renderBridges = false`),
  *  so the road ribbon is the only thing carrying the visual at the crossing.
@@ -13748,6 +14192,68 @@ export function networkStrokesForTile(tile, neighbours, opts = {}) {
     strokes.push([{ x: here.x, z: here.z }, { x: edges[i].mx, z: edges[i].mz }]);
   }
   return strokes;
+}
+
+/** R5 — Curvature-based water half-widths along a river stroke. Returns one
+ *  half-width per sample point so the consumer can feed it as a per-point
+ *  `width` array to `ribbonOffsetPaths`. Pure (no Babylon). Used by both the
+ *  in-map river ribbon and the border extensions so the seam at the playable
+ *  edge stays continuous.
+ *
+ *  Curvature at point i = absolute turn angle between incoming chord
+ *  (p_{i-1} → p_i) and outgoing chord (p_i → p_{i+1}). Endpoints inherit
+ *  their inner neighbour's value (so the seam at a junction or extension
+ *  matches the adjacent stroke). Normalised against `cornerCurvatureRef`
+ *  (≈ the per-segment angle change at a typical hex corner: ~π/N for an
+ *  N-segment bezier through a 60° turn) and clamped to [0,1] before
+ *  lerping between `minHalf` (straight) and `maxHalf` (corner apex).
+ *
+ *  A small running average smooths the per-segment turn-angle noise so the
+ *  width doesn't pulse vertex-by-vertex along an otherwise smooth bezier. */
+export function riverHalfWidthsByCurvature(
+  pts,
+  minHalf = RIVER_HALF_WIDTH_MIN,
+  maxHalf = RIVER_HALF_WIDTH_MAX,
+  cornerCurvatureRef = Math.PI / 6, // ~30° turn between adjacent segments → apex
+) {
+  if (!Array.isArray(pts) || pts.length < 2) return [];
+  const N = pts.length;
+  const out = new Array(N);
+  if (N === 2) {
+    // Straight stub — uniform min width.
+    out[0] = minHalf;
+    out[1] = minHalf;
+    return out;
+  }
+  const raw = new Array(N);
+  for (let i = 1; i < N - 1; i++) {
+    const ax = pts[i].x - pts[i - 1].x;
+    const az = pts[i].z - pts[i - 1].z;
+    const bx = pts[i + 1].x - pts[i].x;
+    const bz = pts[i + 1].z - pts[i].z;
+    const ma = Math.hypot(ax, az);
+    const mb = Math.hypot(bx, bz);
+    if (ma < 1e-9 || mb < 1e-9) { raw[i] = 0; continue; }
+    let cos = (ax * bx + az * bz) / (ma * mb);
+    if (cos > 1) cos = 1; if (cos < -1) cos = -1;
+    raw[i] = Math.acos(cos);
+  }
+  raw[0] = raw[1] ?? 0;
+  raw[N - 1] = raw[N - 2] ?? 0;
+  // 3-tap running mean to take the edge off vertex-by-vertex pulsing.
+  const smooth = new Array(N);
+  for (let i = 0; i < N; i++) {
+    const a = raw[i - 1] ?? raw[i];
+    const b = raw[i];
+    const c = raw[i + 1] ?? raw[i];
+    smooth[i] = (a + b + c) / 3;
+  }
+  const ref = cornerCurvatureRef > 1e-9 ? cornerCurvatureRef : 1;
+  for (let i = 0; i < N; i++) {
+    const k = Math.max(0, Math.min(1, smooth[i] / ref));
+    out[i] = minHalf + (maxHalf - minHalf) * k;
+  }
+  return out;
 }
 
 /**
