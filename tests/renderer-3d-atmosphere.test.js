@@ -462,6 +462,85 @@ describe('Renderer3D — resolveFogObserver (fog info-leak regression)', () => {
   });
 });
 
+// ── Standard LOCAL "vs AI" fog contract (distinct from the campaign case) ────
+//
+// The campaign regression above pins the both-flags-false path. This block
+// pins the ORDINARY single-player path: human hero vs AI witch, the default
+// `init(witchIsAI=true, heroIsAI=false)` config with the setup screen's
+// default `fogOfWar='partial'`. The whole-map-visible failure mode would show
+// up here as either (a) the observer resolving to something other than 'hero',
+// (b) fog silently flipping to 'none' across the dawn→day round boundary, or
+// (c) the visibility set ballooning to cover the enemy leader's hex. We drive
+// a REAL GameState through a round-1 zero-action endRound and assert none of
+// those happen — exercising the exact layer (state flags + pure veil helpers)
+// the 3D `_applyFogVeil` reads each draw.
+describe('Renderer3D — standard local vs-AI fog contract', () => {
+  // Lazily import the heavy GameState only for this block.
+  const freshVsAi = async () => {
+    const { GameState } = await import('../src/game.js');
+    // Mirrors src/main.js init(witchIsAI=true, heroIsAI=false) for the Quick
+    // Play "vs AI" (human plays the day side / hero), standard 13×13, 3 nodes.
+    const state = new GameState(/*witchIsAI*/ true, /*heroIsAI*/ false, 'standard', 3);
+    // The setup-screen fog selector defaults to 'partial'; the GameState
+    // constructor already sets that whenever a side is AI, but pin it so the
+    // test documents the assumed default explicitly.
+    state.fogOfWar = 'partial';
+    return state;
+  };
+
+  test('observer is the human hero, fog stays active (not null / not none)', async () => {
+    const state = await freshVsAi();
+    assert.equal(state.witchIsAI, true);
+    assert.equal(state.heroIsAI, false);
+    assert.equal(state.fogOfWar, 'partial');
+    assert.equal(resolveFogObserver(state), 'hero');
+    // The _applyFogVeil reveal-all gate must stay closed.
+    const fogActive = state.fogOfWar && state.fogOfWar !== 'none';
+    assert.equal(!fogActive || !resolveFogObserver(state), false,
+      'standard vs-AI must not reveal the whole map');
+  });
+
+  test('the enemy witch hex is hidden — visible set excludes it', async () => {
+    const state = await freshVsAi();
+    const hero  = state.entities.find(e => e.owner === 'hero'  && e.alive);
+    const witch = state.entities.find(e => e.owner === 'witch' && e.alive);
+    assert.ok(hero && witch, 'fresh vs-AI game has one hero and one witch');
+
+    const vis = buildFogVisibleSet(state, resolveFogObserver(state));
+    // Far less than the whole board — the leak symptom is `vis.size === tiles`.
+    assert.ok(vis.size > 0 && vis.size < state.tiles.size,
+      `visible (${vis.size}) should be a strict subset of ${state.tiles.size} tiles`);
+    assert.ok(vis.has(hexKey(hero.col, hero.row)), 'hero stands on a visible hex');
+    // The witch starts in the opposite corner, well outside dawn sight.
+    assert.ok(!vis.has(hexKey(witch.col, witch.row)),
+      'enemy witch hex must NOT be in the hero observer\'s visible set');
+  });
+
+  test('fog survives a round-1 zero-action endRound (dawn → day)', async () => {
+    const state = await freshVsAi();
+    assert.equal(state.phase, Phase.DAWN);
+
+    // Submit nothing and advance the round, exactly like resolving an empty
+    // plan: phase rolls dawn → day, round 1 → 2.
+    state.startPlanning();
+    state.endRound();
+
+    assert.equal(state.phase, Phase.DAY, 'phase advanced to day');
+    assert.equal(state.fogOfWar, 'partial', 'fog must NOT flip to none on resolution');
+    assert.equal(resolveFogObserver(state), 'hero', 'observer unchanged after round');
+
+    const vis = buildFogVisibleSet(state, resolveFogObserver(state));
+    const witch = state.entities.find(e => e.owner === 'witch' && e.alive);
+    // Day sight is wider than dawn, but still nowhere near the full board, and
+    // the witch is in the far corner.
+    assert.ok(vis.size < state.tiles.size, 'still a strict subset after dawn→day');
+    if (witch) {
+      assert.ok(!vis.has(hexKey(witch.col, witch.row)),
+        'enemy witch still hidden after the round resolves');
+    }
+  });
+});
+
 // ── Lantern subsystem removal ────────────────────────────────────────────────
 //
 // The per-unit lantern PointLights were dropped (operator decision: subtle
