@@ -1458,6 +1458,12 @@ export function combatCardFrameExtent(leader = true) {
 // and lets the camera get within a hex-width of its target before the radius
 // limit kicks in.
 export const MIN_VISIBLE_HEXES = 1.5;
+/** Operator-fixed camera radius bounds (world units = distance from camera
+ *  target to camera position). MIN = closest the player can zoom in; MAX =
+ *  furthest they can zoom out. Replaces the previous map-fit-derived
+ *  dynamic cap — a single consistent range across every map size. */
+export const CAMERA_MIN_ZOOM_RADIUS = 5.5;
+export const CAMERA_MAX_ZOOM_RADIUS = 17;
 
 /**
  * Per-side depth (in hexes) the forest border band must cover so that, when
@@ -5012,16 +5018,10 @@ export class Renderer3D {
     camera.upperBetaLimit  = CAMERA_BETA_LOCKED;
 
     // Zoom limits — both are provisional and get replaced by
-    // _recomputeMaxZoomCap once the engine reports its actual aspect. The cap
-    // is radiusForStandardFit (so larger maps must be panned to view in full)
-    // and the floor is radiusForCloseFit(MIN_VISIBLE_HEXES) (so the camera
-    // can't dive inside meshes at max zoom-in).
-    // Lower radius capped at 6 wu — at ~radius 6 the camera frame holds
-    // roughly 3-4 hex tiles which is the closest sensible inspection zoom
-    // without the camera diving inside meshes. Previous value (1.5) let
-    // the operator zoom in until the camera sat inside a single hex.
-    camera.lowerRadiusLimit = 6;
-    camera.upperRadiusLimit = 80;
+    // Operator-fixed bounds (CAMERA_MIN_ZOOM_RADIUS / CAMERA_MAX_ZOOM_RADIUS).
+    // _recomputeMaxZoomCap below pins the same values regardless of map size.
+    camera.lowerRadiusLimit = CAMERA_MIN_ZOOM_RADIUS;
+    camera.upperRadiusLimit = CAMERA_MAX_ZOOM_RADIUS;
     camera.wheelDeltaPercentage = 0.02; // smoother wheel zoom (legacy default — wheel handled by custom input)
     camera.pinchDeltaPercentage = 0.005;
 
@@ -7982,25 +7982,14 @@ export class Renderer3D {
    *
    *  No-op when the engine or camera hasn't initialised yet. */
   _recomputeMaxZoomCap() {
-    if (!this._engine || !this._camera) return;
-    const aspect = this._engine.getRenderWidth() / Math.max(1, this._engine.getRenderHeight());
-    const fov = this._camera.fov || 0.8;
-    // Cap fits THIS map's playable tiles — not a hardcoded standard 13×13.
-    // Campaign / battle maps with bigger footprints get a larger upper radius
-    // so the operator can zoom out far enough to see the whole map.
-    const upper = radiusForMapFit(this.state, aspect, fov);
-    const lower = radiusForCloseFit(MIN_VISIBLE_HEXES, aspect, fov);
-    if (Number.isFinite(upper) && upper > 0) {
-      // Guarantee lower < upper even on pathological aspects (shouldn't be
-      // possible — standard-fit always exceeds 5-hex-fit — but cheap to defend).
-      const safeLower = Number.isFinite(lower) && lower > 0
-        ? Math.min(lower, upper * 0.99)
-        : this._camera.lowerRadiusLimit;
-      this._camera.lowerRadiusLimit = safeLower;
-      this._camera.upperRadiusLimit = upper;
-      if (this._camera.radius > upper) this._camera.radius = upper;
-      if (this._camera.radius < safeLower) this._camera.radius = safeLower;
-    }
+    if (!this._camera) return;
+    // Operator-fixed bounds — same range across every map size, no map-fit
+    // derivation. Clamp the current radius if a previous map's limits left it
+    // outside the new (tighter) window.
+    this._camera.lowerRadiusLimit = CAMERA_MIN_ZOOM_RADIUS;
+    this._camera.upperRadiusLimit = CAMERA_MAX_ZOOM_RADIUS;
+    if (this._camera.radius > CAMERA_MAX_ZOOM_RADIUS) this._camera.radius = CAMERA_MAX_ZOOM_RADIUS;
+    if (this._camera.radius < CAMERA_MIN_ZOOM_RADIUS) this._camera.radius = CAMERA_MIN_ZOOM_RADIUS;
   }
 
   /** Wraps `radiusForFitDepth` with this camera's FOV/aspect and clamps to the
