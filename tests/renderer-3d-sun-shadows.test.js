@@ -78,12 +78,15 @@ describe('Renderer3D — sunIntensityForPhase', () => {
     assert.ok(day >= 1.5, `day intensity ${day} should be ≥ 1.5`);
   });
 
-  test('dawn and dusk are mid-intensity (matching golden-hour feel)', () => {
+  test('dawn and dusk are golden-hour low raking sun (≥ midday, long shadows)', () => {
     const dawn = sunIntensityForPhase(Phase.DAWN);
     const dusk = sunIntensityForPhase(Phase.DUSK);
-    assert.equal(dawn, dusk);
-    assert.ok(dawn > 0.5 && dawn < sunIntensityForPhase(Phase.DAY),
-      `dawn/dusk intensity ${dawn} should sit between night and day`);
+    // Operator-tuned (PHASE_LIGHT_CONFIG): dawn/dusk run a touch hotter than
+    // midday so the low-angle raking sun throws long, strong shadows. They
+    // sit close to each other but are no longer pinned exactly equal.
+    assert.ok(Math.abs(dawn - dusk) < 0.2, `dawn ${dawn} ≈ dusk ${dusk}`);
+    assert.ok(dawn >= sunIntensityForPhase(Phase.DAY),
+      `dawn/dusk intensity ${dawn} should be at least as strong as midday`);
   });
 
   test('night sun acts as moonlight — dimmer than day but bright enough to cast shadows', () => {
@@ -93,14 +96,14 @@ describe('Renderer3D — sunIntensityForPhase', () => {
     assert.ok(night < day, `night ${night} should be dimmer than day ${day}`);
   });
 
-  test('day > dawn = dusk > night ordering', () => {
+  test('dawn ≈ dusk ≥ day > night ordering (golden-hour raking sun, moonlit night)', () => {
     const day   = sunIntensityForPhase(Phase.DAY);
     const dawn  = sunIntensityForPhase(Phase.DAWN);
     const dusk  = sunIntensityForPhase(Phase.DUSK);
     const night = sunIntensityForPhase(Phase.NIGHT);
-    assert.ok(day > dawn, 'day brighter than dawn');
-    assert.equal(dawn, dusk, 'dawn matches dusk');
-    assert.ok(dusk > night, 'dusk brighter than night');
+    assert.ok(dawn >= day, 'dawn at least as strong as day (low raking sun)');
+    assert.ok(Math.abs(dawn - dusk) < 0.2, 'dawn ≈ dusk');
+    assert.ok(day > night, 'day brighter than moonlit night');
   });
 
   test('unknown phase falls back to day intensity (defensive)', () => {
