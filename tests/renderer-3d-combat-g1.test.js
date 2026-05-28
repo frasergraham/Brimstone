@@ -1000,6 +1000,229 @@ describe('G1 — playReactionAnim (unchanged)', () => {
   });
 });
 
+// ─── G1 — per-ally dice ─────────────────────────────────────────────────────
+
+describe('G1 — combatReadoutModel exposes per-ally dice + pickedAllyId', () => {
+  test('attacker side: allies array zips atkAllyDice; picked detected when ally die beat own', () => {
+    // The attacker's own d6 was 4; the gang-up ally rolled a 6. The picked
+    // die is 6 (max), so pickedAllyId === the ally whose die===6.
+    const m = combatReadoutModel({
+      hit: true, attackRoll: 10, defenseRoll: 3,
+      breakdown: {
+        atkPool: [4, 6], atkBaseDie: 6,
+        defPool: [3], defBaseDie: 3,
+        atkAllyDice: [{ allyId: 'ally-a', die: 6 }],
+        defAllyDice: [],
+        atkGangupFlat: 1, atkBaseStat: 3,
+      },
+    }, 'attacker');
+    assert.deepEqual(m.allies, [{ entityId: 'ally-a', die: 6 }]);
+    assert.equal(m.pickedAllyId, 'ally-a');
+  });
+
+  test('attacker side: pickedAllyId is NULL when the combatant\'s own die already maxed', () => {
+    const m = combatReadoutModel({
+      hit: true, attackRoll: 9, defenseRoll: 3,
+      breakdown: {
+        atkPool: [6, 3], atkBaseDie: 6,
+        defPool: [3], defBaseDie: 3,
+        atkAllyDice: [{ allyId: 'ally-a', die: 3 }],
+        atkGangupFlat: 1, atkBaseStat: 2,
+      },
+    }, 'attacker');
+    assert.deepEqual(m.allies, [{ entityId: 'ally-a', die: 3 }]);
+    assert.equal(m.pickedAllyId, null);
+  });
+
+  test('defender side reads defAllyDice and detects picked defender ally', () => {
+    const m = combatReadoutModel({
+      hit: false, attackRoll: 4, defenseRoll: 9,
+      breakdown: {
+        atkPool: [3], atkBaseDie: 3,
+        defPool: [4, 6], defBaseDie: 6,
+        atkAllyDice: [],
+        defAllyDice: [{ allyId: 'ally-d', die: 6 }],
+        defGangupFlat: 1, defBaseStat: 2,
+      },
+    }, 'defender');
+    assert.deepEqual(m.allies, [{ entityId: 'ally-d', die: 6 }]);
+    assert.equal(m.pickedAllyId, 'ally-d');
+  });
+
+  test('empty ally dice → allies=[], pickedAllyId=null', () => {
+    const m = combatReadoutModel({
+      hit: true, attackRoll: 6, defenseRoll: 3,
+      breakdown: { atkPool: [6], atkBaseDie: 6, defPool: [3], defBaseDie: 3 },
+    }, 'attacker');
+    assert.deepEqual(m.allies, []);
+    assert.equal(m.pickedAllyId, null);
+  });
+});
+
+describe('G1 — addAllyDieReadout', () => {
+  test('paints the ally icon with the d6 face value and registers combat-mode', () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInst({ ids: ['ally1'] });
+    const iconTex = inst._unitIconBadges.get('ally1').tex;
+    const h = inst.addAllyDieReadout('ally1', 'attacker', 6, {});
+    assert.ok(h && typeof h.then === 'function');
+    assert.ok(iconTex.drawnValues.some(v => v.includes('6')),
+      'ally icon painted with assigned die value (6)');
+    assert.equal(inst._iconCombatMode.has('ally1'), true,
+      'ally registered in combat-mode set so icon-sync skips it');
+  });
+
+  test('no-ops when the ally icon entry is missing', () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInst({ ids: ['e1'], withIcons: false });
+    const h = inst.addAllyDieReadout('e1', 'attacker', 5, {});
+    assert.ok(h && typeof h.then === 'function');
+    assert.equal(inst._tracked.length, 0, 'no animation tracked when icon is absent');
+  });
+
+  test('restores the icon when the awaitContinueFn gate resolves', async () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInst({ ids: ['ally1'] });
+    let releaseGate;
+    const gate = new Promise(r => { releaseGate = r; });
+    const h = inst.addAllyDieReadout('ally1', 'attacker', 5, { awaitContinueFn: () => gate });
+    // While the gate is unresolved, the ally remains combat-mode.
+    await Promise.resolve();
+    assert.equal(inst._iconCombatMode.has('ally1'), true);
+    releaseGate();
+    await h.promise;
+    assert.equal(inst._iconCombatMode.has('ally1'), false,
+      'combat-mode cleared once the gate resolves');
+  });
+});
+
+describe('G1 — pulseAllyIcon + pickedAllyId integration', () => {
+  test('addCombatReadout pulses the picked ally\'s icon at start of tick-up', async () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    // Two ids: e1 is the combatant; a1 is the gang-up ally whose die was picked.
+    const inst = makeInst({ ids: ['e1', 'a1'] });
+    // Augment the ally icon plane with scaling so the pulse can attach.
+    const allyIconPlane = {
+      visibility: 1,
+      scaling: { x: 1, y: 1, z: 1, set(x, y, z) { this.x = x; this.y = y; this.z = z; } },
+    };
+    inst._unitIconBadges.set('a1', {
+      ...inst._unitIconBadges.get('a1'),
+      plane: allyIconPlane,
+    });
+    const sched = fakeScheduler();
+    // Ally die = 6 (picked), combatant own die = 4. Total = 6 + flat 3 = 9.
+    inst.addCombatReadout('e1', 'attacker',
+      { hit: true, attackRoll: 9, defenseRoll: 3,
+        breakdown: {
+          atkPool: [4, 6], atkBaseDie: 6,
+          defPool: [3], defBaseDie: 3,
+          atkAllyDice: [{ allyId: 'a1', die: 6 }],
+          atkBaseStat: 3,
+        },
+      },
+      { setTimeoutFn: sched });
+    // Pulse scheduled at baseHoldMs — fire it.
+    sched.runUntil(COMBAT_READOUT_BASE_HOLD_MS + 1);
+    // A scale Animation should have been queued on the ally icon plane.
+    const allyAnims = inst._capturedAnims.filter(c => c.target === allyIconPlane);
+    assert.ok(allyAnims.length >= 1,
+      'a scale animation fired against the picked ally icon plane');
+    const animProps = allyAnims.flatMap(c => (c.anims || []).map(a => a.prop));
+    assert.ok(animProps.includes('scaling'), 'animation prop is scaling (pulse)');
+    sched.runAll();
+  });
+
+  test('addCombatReadout does NOT pulse when pickedAllyId is null', () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInst({ ids: ['e1', 'a1'] });
+    const allyIconPlane = {
+      visibility: 1,
+      scaling: { x: 1, y: 1, z: 1, set(x, y, z) { this.x = x; this.y = y; this.z = z; } },
+    };
+    inst._unitIconBadges.set('a1', {
+      ...inst._unitIconBadges.get('a1'),
+      plane: allyIconPlane,
+    });
+    const sched = fakeScheduler();
+    // Combatant rolled the max — no ally pulse should fire.
+    inst.addCombatReadout('e1', 'attacker',
+      { hit: true, attackRoll: 7, defenseRoll: 3,
+        breakdown: {
+          atkPool: [6, 3], atkBaseDie: 6,
+          defPool: [3], defBaseDie: 3,
+          atkAllyDice: [{ allyId: 'a1', die: 3 }],
+          atkBaseStat: 1,
+        },
+      },
+      { setTimeoutFn: sched });
+    sched.runUntil(COMBAT_READOUT_BASE_HOLD_MS + 1);
+    const allyAnims = inst._capturedAnims.filter(c => c.target === allyIconPlane);
+    assert.equal(allyAnims.length, 0,
+      'no pulse on the ally when combatant\'s own die was already max');
+    sched.runAll();
+  });
+});
+
+describe('G1 — modifier floater labels have NO emoji glyphs', () => {
+  test('per-bonus floater text is plain "+N reason" — no leading emoji icon', () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInst({ ids: ['e1'] });
+    const B = inst._babylon;
+    const dynamicTexCalls = [];
+    const OrigDyn = B.DynamicTexture;
+    B.DynamicTexture = class extends OrigDyn {
+      constructor(name, ...rest) {
+        super(name, ...rest);
+        dynamicTexCalls.push(this);
+      }
+    };
+    const sched = fakeScheduler();
+    // Use a mix of bonuses that previously carried emoji icons (atk, phase, allies, fort).
+    inst.addCombatReadout('e1', 'attacker',
+      { hit: true, attackRoll: 12, defenseRoll: 3,
+        breakdown: {
+          atkPool: [5], atkBaseDie: 5,
+          defPool: [3], defBaseDie: 3,
+          atkBaseStat: 2, phaseBonus: 1, atkGangupFlat: 3, atkFortAtkBonus: 1,
+        },
+      },
+      { setTimeoutFn: sched });
+    sched.runUntil(COMBAT_READOUT_BASE_HOLD_MS + 4 * COMBAT_READOUT_STEP_MS + 1);
+
+    // Every text painted into a floater texture must be emoji-free. Emoji
+    // glyphs commonly used by the legacy labels: ⚔ 🛡 🌙 🏰 🌲 💤 🥈 🩸
+    // 🗡 ✨ 💫 💪 — we scan for ANY surrogate-pair or known glyph.
+    const EMOJI_RE = /[☀-⟿\uD800-\uDFFF️]|⚔|🛡|🌙|🏰|🌲|💤|🥈|🩸|🗡|✨|💫|💪/;
+    const floaterTexts = dynamicTexCalls
+      .filter(t => /readoutFloaterTex_/.test(t.name))
+      .flatMap(t => t._calls.filter(c => c[0] === 'fillText').map(c => c[1]));
+    assert.ok(floaterTexts.length >= 4, 'floaters painted (got ' + floaterTexts.length + ')');
+    for (const label of floaterTexts) {
+      assert.ok(!EMOJI_RE.test(label),
+        `floater label "${label}" must contain no emoji glyphs`);
+      assert.match(label, /^[+−-]\d+ \w+/,
+        `floater label "${label}" should match "+N reason" plain text`);
+    }
+    sched.runAll();
+  });
+
+  test('combatReadoutModel steps no longer carry an `icon` field', () => {
+    const m = combatReadoutModel({
+      hit: true, attackRoll: 9, defenseRoll: 3,
+      breakdown: {
+        atkPool: [5], atkBaseDie: 5,
+        defPool: [3], defBaseDie: 3,
+        atkBaseStat: 2, phaseBonus: 1, atkGangupFlat: 1,
+      },
+    }, 'attacker');
+    for (const s of m.steps) {
+      assert.equal(s.icon, undefined,
+        `step "${s.label}" must not carry an emoji icon — drop the field, paint plain text`);
+    }
+  });
+});
+
 // ─── G1 v2 — resultLabel pure helper ────────────────────────────────────────
 
 describe('G1 v2 — resultLabel', () => {

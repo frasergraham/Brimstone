@@ -851,6 +851,27 @@ describe('executeBattle', () => {
     assert.ok(r.attackerAllies >= placed.length, `Expected at least ${placed.length} allies, got ${r.attackerAllies}`);
     assert.equal(r.breakdown.atkExtraDice.length, Math.min(r.attackerAllies, 3),
       'Each ally (up to 3) should contribute a d3 die');
+
+    // G1 — breakdown also carries per-ally dice (one entry per gang-up ally,
+    // zipped with atkPool[1..]) so the 3D readout can show each ally's
+    // contribution on its own icon.
+    assert.ok(Array.isArray(r.breakdown.atkAllyDice),
+      'breakdown.atkAllyDice should be an array');
+    assert.equal(r.breakdown.atkAllyDice.length, Math.min(r.attackerAllies, 3),
+      'one atkAllyDice entry per gang-up ally (capped at ADVANTAGE_CAP)');
+    for (const entry of r.breakdown.atkAllyDice) {
+      assert.ok(typeof entry.allyId !== 'undefined',
+        'each atkAllyDice entry carries an allyId');
+      assert.ok(Number.isInteger(entry.die) && entry.die >= 1 && entry.die <= 6,
+        'each atkAllyDice die is a valid d6 face');
+    }
+    // Each ally die corresponds to a real ally in atkAllyIds (same order).
+    const atkAllyIds = r.breakdown.atkAllyIds.slice(0, r.breakdown.atkAllyDice.length);
+    assert.deepEqual(
+      r.breakdown.atkAllyDice.map(d => d.allyId),
+      atkAllyIds,
+      'atkAllyDice entries are zipped with atkAllyIds in order',
+    );
   });
 
   test('silver attackBonus is included in combat attack roll', () => {

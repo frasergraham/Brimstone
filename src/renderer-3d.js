@@ -10483,6 +10483,18 @@ export class Renderer3D {
 
     // ── Sequence ────────────────────────────────────────────────────────────
     const promise = new Promise(resolve => {
+      // Picked-ally pulse — if the picked die came from a gang-up ally (their
+      // d6 beat the combatant's own), flash that ally's icon at the start of
+      // tick-up so the player can see the die "flow up" into the running total.
+      // Fires even if there are zero flat steps (the picked value alone is the
+      // entire roll).
+      if (model.pickedAllyId != null) {
+        setTimeoutFn(() => {
+          if (disposed) return;
+          try { this.pulseAllyIcon(model.pickedAllyId); } catch {}
+        }, baseHoldMs);
+      }
+
       // Schedule each bonus step: repaint icon with running total + spawn
       // the persistent floater at slot i (bottom-up stack order).
       for (let i = 0; i < model.steps.length; i++) {
@@ -10565,6 +10577,131 @@ export class Renderer3D {
     };
   }
 
+  /** Paint a gang-up ally's icon with the single d6 face value it contributed
+   *  to its side's advantage pool. The ally portrait is dimmed and the big
+   *  side-tinted die value is overlaid — same idiom as `paintIconCombatReadout`,
+   *  but with no result label, no floaters, and no outcome flash. The painted
+   *  state persists until the caller fires `triggerFade()` (or the optional
+   *  `awaitContinueFn` resolves), which restores the normal portrait.
+   *
+   *  Returns the same `{ promise, awaitFinal, triggerFade }` handle shape as
+   *  `addCombatReadout` so callers (combat-cinematic) can gate all readouts on
+   *  one shared Continue Promise. `awaitFinal` resolves immediately — the
+   *  ally's die value is on screen from spawn.
+   *
+   *  Pure-renderer; no game-state mutation. Safe to call with a missing icon
+   *  entry / standee — returns an inert handle. */
+  addAllyDieReadout(allyId, side, die, opts = {}) {
+    const noop = () => {};
+    const inertHandle = () => ({
+      promise: Promise.resolve(),
+      awaitFinal: () => Promise.resolve(),
+      triggerFade: noop,
+      then(onFulfilled, onRejected) { return Promise.resolve().then(onFulfilled, onRejected); },
+    });
+    if (!this._scene || !this._babylon) return inertHandle();
+    if (typeof document === 'undefined') return inertHandle();
+    if (!Number.isFinite(die)) return inertHandle();
+    const standee = this._entityStandees.get(allyId);
+    if (!standee || !standee.plane) return inertHandle();
+    const iconEntry = this._unitIconBadges?.get(allyId) ?? null;
+    if (!iconEntry) return inertHandle();
+
+    if (!this._iconCombatMode) this._iconCombatMode = new Set();
+    this._iconCombatMode.add(allyId);
+
+    const isAtk = side === 'attacker' || side === 'atk';
+    const sideColor = isAtk ? COMBAT_CARD_ATK_COLOR : COMBAT_CARD_DEF_COLOR;
+    const sideIcon  = isAtk ? '⚔' : '🛡';
+
+    const entity = (this.state?.entities ?? []).find(e => e && e.id === allyId) ?? null;
+    const portraitSource = (entity && this._tilemapImg && this._spriteRects)
+      ? resolveUnitIconPortrait(this._tilemapImg, this._spriteRects, this._assetIdFor(entity))
+      : { img: null, rect: null, hasPortrait: false };
+    const hp    = entity?.hp ?? 0;
+    const maxHp = entity?.maxHp ?? 1;
+    const basePaint = (ctx) => paintUnitIconBadge(ctx, {
+      size: UNIT_ICON_TEX_SIZE,
+      portraitImg:  portraitSource.hasPortrait ? portraitSource.img  : null,
+      portraitRect: portraitSource.hasPortrait ? portraitSource.rect : null,
+      hp, maxHp,
+    });
+    paintIconCombatReadout(iconEntry.tex.getContext(), {
+      size: UNIT_ICON_TEX_SIZE,
+      basePaint,
+      value: die,
+      color: sideColor,
+      icon: sideIcon,
+    });
+    iconEntry.tex.update();
+
+    let resolveContinue;
+    const continueSignal = new Promise(r => { resolveContinue = r; });
+    const triggerFade = () => {
+      if (resolveContinue) { resolveContinue(); resolveContinue = null; }
+    };
+    const awaitContinueFn = typeof opts.awaitContinueFn === 'function'
+      ? opts.awaitContinueFn
+      : () => Promise.resolve();
+
+    const promise = new Promise(resolve => {
+      const gate = Promise.race([
+        continueSignal,
+        Promise.resolve().then(awaitContinueFn),
+      ]);
+      gate.then(() => {
+        try {
+          if (this._iconCombatMode) this._iconCombatMode.delete(allyId);
+          basePaint(iconEntry.tex.getContext());
+          iconEntry.tex.update();
+        } catch {}
+        resolve();
+      });
+    });
+    this._trackAnim(promise);
+
+    return {
+      promise,
+      awaitFinal: () => Promise.resolve(),
+      triggerFade,
+      then(onFulfilled, onRejected) { return promise.then(onFulfilled, onRejected); },
+      catch(onRejected) { return promise.catch(onRejected); },
+      finally(onFinally) { return promise.finally(onFinally); },
+    };
+  }
+
+  /** Briefly scale-pulse a unit-icon plane (1 → peak → 1) to signal that the
+   *  die showing on this ally is the one the combatant's running total just
+   *  inherited. Pure visual; no state mutation. Skips silently when the icon
+   *  badge isn't materialised (e.g. a fatal hit already disposed it). */
+  pulseAllyIcon(allyId, opts = {}) {
+    if (!this._scene || !this._babylon) return Promise.resolve();
+    const BABYLON = this._babylon;
+    const iconEntry = this._unitIconBadges?.get(allyId) ?? null;
+    if (!iconEntry || !iconEntry.plane) return Promise.resolve();
+    const plane = iconEntry.plane;
+    if (!plane.scaling || typeof plane.scaling.set !== 'function') return Promise.resolve();
+    const peak     = Number.isFinite(opts.peak)      ? opts.peak      : COMBAT_ALLY_PULSE_PEAK;
+    const durMs    = Number.isFinite(opts.durationMs) ? opts.durationMs : COMBAT_ALLY_PULSE_MS;
+    const fps      = 60;
+    const halfFrames = Math.max(1, Math.round((durMs / 2) / 1000 * fps));
+    const total      = halfFrames * 2;
+    const baseX = plane.scaling.x, baseY = plane.scaling.y, baseZ = plane.scaling.z;
+    const animScale = new BABYLON.Animation(
+      'allyIconPulse', 'scaling', fps,
+      BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
+      BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT,
+    );
+    animScale.setKeys([
+      { frame: 0,           value: new BABYLON.Vector3(baseX, baseY, baseZ) },
+      { frame: halfFrames,  value: new BABYLON.Vector3(baseX * peak, baseY * peak, baseZ * peak) },
+      { frame: total,       value: new BABYLON.Vector3(baseX, baseY, baseZ) },
+    ]);
+    return new Promise(resolve => {
+      this._scene.beginDirectAnimation(plane, [animScale], 0, total, false, 1, () => resolve());
+    });
+  }
+
   /** G1 v2 — spawn a persistent "+N reason" floater that parks at a fixed
    *  slot above the icon and stays visible until the parent fade-out runs.
    *  Returns `{ plane, mat, tex }` so the caller can fade + dispose it. */
@@ -10573,7 +10710,9 @@ export class Renderer3D {
     const BABYLON = this._babylon;
     const sign = step.delta < 0 ? '−' : '+';
     const mag = Math.abs(step.delta | 0);
-    const label = `${sign}${mag} ${step.icon ?? ''} ${step.label ?? ''}`.trim();
+    // Plain-text reason label — no emoji glyphs. The floater is small and
+    // already side-tinted; piling icons on top read as noise.
+    const label = `${sign}${mag} ${step.label ?? ''}`.trim();
     const color = step.delta < 0 ? COMBAT_READOUT_LOSE_COLOR : COMBAT_READOUT_WIN_COLOR;
 
     const tex = new BABYLON.DynamicTexture(
@@ -15821,6 +15960,11 @@ export const COMBAT_READOUT_PORTRAIT_DIM_ALPHA = 0.55;
 export const COMBAT_READOUT_ICON_NUMBER_FONT_FRAC = 0.62;
 /** Continue button countdown — auto-click after this many seconds. */
 export const COMBAT_CONTINUE_COUNTDOWN_SEC = 5;
+/** Picked-ally pulse — when the combat readout's picked die came from a gang-up
+ *  ally (their d6 beat the combatant's own), pulse that ally's icon at the
+ *  start of tick-up to visually flow the die UP into the combatant's total. */
+export const COMBAT_ALLY_PULSE_MS    = 320;
+export const COMBAT_ALLY_PULSE_PEAK  = 1.35;
 /** Horizontal offset (world units) applied to each combat readout along the
  *  attack axis so the attacker's and defender's numbers spread to opposite
  *  outer sides instead of stacking in screen space when combatants are
@@ -16635,10 +16779,10 @@ export function combatReadoutModel(result, side) {
   const start = Number.isFinite(rawPicked) ? rawPicked : 0;
   const steps = [];
   let running = start;
-  const addStep = (icon, label, delta) => {
+  const addStep = (label, delta) => {
     if (!delta) return;
     running += delta;
-    steps.push({ icon, label, delta, value: running });
+    steps.push({ label, delta, value: running });
   };
   if (isAtk) {
     // Intrinsic unit stat contributions (always the biggest delta — e.g. a
@@ -16650,31 +16794,52 @@ export function combatReadoutModel(result, side) {
     // e.g. staff vs undead) is intentionally NOT surfaced as a flat step — it
     // grows the dice pool, so its effect is already baked into the picked die.
     // Adding it as a flat would break the sum invariant (picked + Σ steps ≡ total).
-    if (bd.atkBaseStat > 0)       addStep('💪', 'atk',    bd.atkBaseStat);
-    if (bd.atkWeaponMod > 0)      addStep('🗡', 'weapon', bd.atkWeaponMod);
-    if (bd.atkAbilityMod > 0)     addStep('✨', 'ability', bd.atkAbilityMod);
-    if (bd.atkEffectMod > 0)      addStep('💫', 'effect', bd.atkEffectMod);
-    if (bd.atkAttackBonus > 0)    addStep('🥈', 'silver', bd.atkAttackBonus);
-    if (bd.phaseBonus > 0)        addStep('🌙', 'phase',  bd.phaseBonus);
-    if (bd.atkGangupFlat > 0)     addStep('⚔',  'allies', bd.atkGangupFlat);
-    if (bd.atkFortAtkBonus > 0)   addStep('🏰', 'fort',   bd.atkFortAtkBonus);
+    if (bd.atkBaseStat > 0)       addStep('atk',    bd.atkBaseStat);
+    if (bd.atkWeaponMod > 0)      addStep('weapon', bd.atkWeaponMod);
+    if (bd.atkAbilityMod > 0)     addStep('ability', bd.atkAbilityMod);
+    if (bd.atkEffectMod > 0)      addStep('effect', bd.atkEffectMod);
+    if (bd.atkAttackBonus > 0)    addStep('silver', bd.atkAttackBonus);
+    if (bd.phaseBonus > 0)        addStep('phase',  bd.phaseBonus);
+    if (bd.atkGangupFlat > 0)     addStep('allies', bd.atkGangupFlat);
+    if (bd.atkFortAtkBonus > 0)   addStep('fort',   bd.atkFortAtkBonus);
   } else {
-    if (bd.defBaseStat > 0)       addStep('🛡', 'def',    bd.defBaseStat);
-    if (bd.defWeaponMod > 0)      addStep('🗡', 'weapon', bd.defWeaponMod);
-    if (bd.defAbilityMod > 0)     addStep('✨', 'ability', bd.defAbilityMod);
-    if (bd.defEffectMod > 0)      addStep('💫', 'effect', bd.defEffectMod);
-    if (bd.defDefenseBonus > 0)   addStep('🥈', 'bonus',  bd.defDefenseBonus);
-    if (bd.fortBonus > 0)         addStep('🏰', 'fort',   bd.fortBonus);
-    if (bd.defGangupFlat > 0)     addStep('🛡', 'guard',  bd.defGangupFlat);
-    if (bd.forestCoverBonus > 0)  addStep('🌲', 'cover',  bd.forestCoverBonus);
-    if (bd.fatiguePenalty > 0)    addStep('💤', 'tired', -bd.fatiguePenalty);
+    if (bd.defBaseStat > 0)       addStep('def',    bd.defBaseStat);
+    if (bd.defWeaponMod > 0)      addStep('weapon', bd.defWeaponMod);
+    if (bd.defAbilityMod > 0)     addStep('ability', bd.defAbilityMod);
+    if (bd.defEffectMod > 0)      addStep('effect', bd.defEffectMod);
+    if (bd.defDefenseBonus > 0)   addStep('bonus',  bd.defDefenseBonus);
+    if (bd.fortBonus > 0)         addStep('fort',   bd.fortBonus);
+    if (bd.defGangupFlat > 0)     addStep('guard',  bd.defGangupFlat);
+    if (bd.forestCoverBonus > 0)  addStep('cover',  bd.forestCoverBonus);
+    if (bd.fatiguePenalty > 0)    addStep('tired', -bd.fatiguePenalty);
   }
   const total = Number.isFinite(rawTotal) ? rawTotal : running;
   const won = isAtk ? !!result?.hit : !result?.hit;
   const sideKey = isAtk ? 'atk' : 'def';
   const sideColor = isAtk ? COMBAT_CARD_ATK_COLOR : COMBAT_CARD_DEF_COLOR;
   const sideIcon  = isAtk ? '⚔' : '🛡';
-  return { start, steps, total, won, side: sideKey, sideColor, sideIcon };
+
+  // Per-ally dice from the side's gang-up pool. The first die in atkPool /
+  // defPool is the combatant's own; subsequent dice belong to allies in the
+  // order they appeared in atkAllies/defAllies (executeBattle zips them).
+  // The "picked" ally is the first one whose face equals the picked die AND
+  // beat the combatant's own die — i.e. the die that flowed UP into the
+  // attacker's running total. If the combatant's own die was already the max,
+  // pickedAllyId stays null (no pulse fires).
+  const ownDie = isAtk ? (bd.atkPool?.[0] ?? null) : (bd.defPool?.[0] ?? null);
+  const allyDice = isAtk ? (bd.atkAllyDice ?? []) : (bd.defAllyDice ?? []);
+  const allies = allyDice.map(d => ({ entityId: d.allyId, die: d.die }));
+  let pickedAllyId = null;
+  if (Number.isFinite(ownDie) && start > ownDie) {
+    const winner = allies.find(a => a.die === start);
+    if (winner) pickedAllyId = winner.entityId;
+  }
+
+  return {
+    start, steps, total, won,
+    side: sideKey, sideColor, sideIcon,
+    allies, pickedAllyId,
+  };
 }
 
 /**

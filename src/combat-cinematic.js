@@ -180,6 +180,25 @@ export async function run3DCombatCardHold({
     const readoutOpts = { ...axis, awaitContinueFn: () => continueGate };
     const atkH = renderer.addCombatReadout(actorSnap.id,  'attacker', result, readoutOpts);
     const defH = renderer.addCombatReadout(targetSnap.id, 'defender', result, readoutOpts);
+
+    // G1 — paint each gang-up ally's icon with the d6 face value they
+    // contributed. Each die corresponds to a single ally in the same order
+    // as atkAllyIds / defAllyIds (executeBattle zips them). Each ally
+    // readout fades along with the main readouts when the Continue gate
+    // resolves.
+    if (typeof renderer.addAllyDieReadout === 'function') {
+      const atkAllyDice = Array.isArray(bd.atkAllyDice) ? bd.atkAllyDice : [];
+      const defAllyDice = Array.isArray(bd.defAllyDice) ? bd.defAllyDice : [];
+      for (const { allyId, die } of atkAllyDice) {
+        if (allyId === actorSnap.id || allyId === targetSnap.id) continue;
+        renderer.addAllyDieReadout(allyId, 'attacker', die, { awaitContinueFn: () => continueGate });
+      }
+      for (const { allyId, die } of defAllyDice) {
+        if (allyId === actorSnap.id || allyId === targetSnap.id) continue;
+        renderer.addAllyDieReadout(allyId, 'defender', die, { awaitContinueFn: () => continueGate });
+      }
+    }
+
     // Show the Continue button the moment BOTH readouts reach final state.
     Promise.all([
       typeof atkH?.awaitFinal === 'function' ? atkH.awaitFinal() : Promise.resolve(),

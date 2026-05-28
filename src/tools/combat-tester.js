@@ -9,7 +9,7 @@
 // a clearing map and observes the result. No parallel combat math.
 
 import { GameState } from '../game.js';
-import { hexKey } from '../hex.js';
+import { hexKey, getNeighbors } from '../hex.js';
 import { buildMissionMap } from '../campaign/mission-map.js';
 import { executeBattle } from '../actions.js';
 import {
@@ -40,29 +40,33 @@ export const UNIT_FACTORIES = Object.freeze({
   iron_golem:  createIronGolem,
 });
 
-// Default clearing size. Centre at (3,3), defender one east at (4,3).
-const DEFAULT_SIZE = 7;
+// Default clearing size. Grown from 7→9 so allies + main combatants don't
+// crowd the centre. Centre at (4,4), defender one east at (5,4).
+const DEFAULT_SIZE = 9;
 
-// Ring of hexes around the centre/adjacent pair used for ally placement.
-// Picked in odd-r offset coords so each ring slot is hex-adjacent to its
-// own combatant — gang-up rules in executeBattle hinge on this.
-//
-// Centre is (3,3); defender is (4,3). On odd-r row 3 (odd), the neighbour
-// deltas are [[-1,0],[0,-1],[1,-1],[1,0],[1,1],[0,1]]. We pick a few that
-// don't collide with the other combatant.
-function _ringHexes(center, exclude, size) {
-  // odd-r neighbour deltas
-  const dirs = center.row % 2 === 0
-    ? [[-1,0],[-1,-1],[0,-1],[1,0],[0,1],[-1,1]]
-    : [[-1,0],[0,-1],[1,-1],[1,0],[1,1],[0,1]];
-  const out = [];
-  for (const [dc, dr] of dirs) {
-    const c = center.col + dc, r = center.row + dr;
-    if (c < 0 || r < 0 || c >= size || r >= size) continue;
-    if (c === exclude.col && r === exclude.row) continue;
-    out.push({ col: c, row: r });
+// Ally placement: BOTH sides must be hex-adjacent to the defender (the TARGET
+// hex) — that's the gang-up rule in executeBattle (`atkAllies` and `defAllies`
+// are both filtered by `targetHexes`). Visually we split the defender's
+// neighbour ring into two groups:
+//   - "atkSlots" = hexes adjacent to BOTH attacker and defender. These sit
+//     alongside the attacker, which reads visually as "the attacker's posse"
+//     while still satisfying the adjacent-to-target requirement.
+//   - "defSlots" = hexes adjacent ONLY to defender (the back half of the
+//     ring). These read as defenders bracing behind the target.
+// Both groups exclude the attacker hex itself.
+function _allySlots(centre, adjacent, size) {
+  const centreNbrSet = new Set(
+    getNeighbors(centre.col, centre.row).map(n => hexKey(n.col, n.row))
+  );
+  const atkSlots = [];
+  const defSlots = [];
+  for (const n of getNeighbors(adjacent.col, adjacent.row)) {
+    if (n.col === centre.col && n.row === centre.row) continue;
+    if (n.col < 0 || n.row < 0 || n.col >= size || n.row >= size) continue;
+    if (centreNbrSet.has(hexKey(n.col, n.row))) atkSlots.push(n);
+    else defSlots.push(n);
   }
-  return out;
+  return { atkSlots, defSlots };
 }
 
 /**
@@ -149,15 +153,23 @@ function _layoutCombatants(state, slots, size) {
     defenderEntity = _placeUnit(state, slots.defender, adjacent.col, adjacent.row, DEF_SIDE_ID);
   }
 
-  const atkRing = _ringHexes(centre, adjacent, size);
-  const defRing = _ringHexes(adjacent, centre, size);
-  for (let i = 0; i < slots.atkAllies.length && i < atkRing.length; i++) {
-    const slot = atkRing[i];
-    atkAllyEntities.push(_placeUnit(state, slots.atkAllies[i], slot.col, slot.row, ATK_SIDE_ID));
+  const { atkSlots, defSlots } = _allySlots(centre, adjacent, size);
+  for (let i = 0; i < slots.atkAllies.length && i < atkSlots.length; i++) {
+    const slot = atkSlots[i];
+    const ally = _placeUnit(state, slots.atkAllies[i], slot.col, slot.row, ATK_SIDE_ID);
+    // Force the ally's faction to match the attacker so executeBattle's
+    // gang-up filter (e.owner === actor.owner) actually counts them. The
+    // factories set sensible defaults (hero/witch), but survivors spawn with
+    // owner=null until recruited — in the tester there's no recruit step,
+    // so we pin it here. Skips if there's no attacker (defensive).
+    if (attackerEntity) ally.owner = attackerEntity.owner;
+    atkAllyEntities.push(ally);
   }
-  for (let i = 0; i < slots.defAllies.length && i < defRing.length; i++) {
-    const slot = defRing[i];
-    defAllyEntities.push(_placeUnit(state, slots.defAllies[i], slot.col, slot.row, DEF_SIDE_ID));
+  for (let i = 0; i < slots.defAllies.length && i < defSlots.length; i++) {
+    const slot = defSlots[i];
+    const ally = _placeUnit(state, slots.defAllies[i], slot.col, slot.row, DEF_SIDE_ID);
+    if (defenderEntity) ally.owner = defenderEntity.owner;
+    defAllyEntities.push(ally);
   }
   return { attackerEntity, defenderEntity, atkAllyEntities, defAllyEntities, centre, adjacent };
 }

@@ -1199,6 +1199,18 @@ export function executeBattle(state, actor, target) {
       // Ranged battles don't get gang-up so these stay empty.
       atkAllyIds: isRanged ? [] : atkAllies.map(e => e.id),
       defAllyIds: isRanged ? [] : defAllies.map(e => e.id),
+      // Per-ally advantage dice. Each gang-up ally adds 1 die to its side's
+      // pool; pool[0] is the combatant's own die, pool[1..N] are the ally
+      // dice in the same order as atkAllies/defAllies. Capped at the number
+      // of advantage dice actually granted (gang-up flat caps at ADVANTAGE_CAP).
+      // The 3D readout paints each ally's icon with its assigned face value,
+      // and pulses the ally whose die became the picked (best) die.
+      atkAllyDice: isRanged ? [] : atkAllies.slice(0, atkAdvantageDice).map((e, i) => ({
+        allyId: e.id, die: atkPool[1 + i],
+      })),
+      defAllyDice: isRanged ? [] : defAllies.slice(0, defAdvantageDice).map((e, i) => ({
+        allyId: e.id, die: defPool[1 + i],
+      })),
     },
   };
 }

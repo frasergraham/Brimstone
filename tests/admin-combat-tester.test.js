@@ -24,37 +24,37 @@ const ADMIN_TOOLS_HTML = resolve(__dirname, '..', 'admin-tools.html');
 
 describe('combat-tester — buildClearingMap', () => {
   test('produces a handmade map of the requested side length', () => {
-    const m = buildClearingMap(7);
+    const m = buildClearingMap(9);
     assert.equal(m.mode, 'handmade');
-    assert.equal(m.cols, 7);
-    assert.equal(m.rows, 7);
-    assert.equal(m.tiles.length, 49);
+    assert.equal(m.cols, 9);
+    assert.equal(m.rows, 9);
+    assert.equal(m.tiles.length, 81);
   });
 
   test('border tiles are FOREST, interior is GRASS', () => {
-    const m = buildClearingMap(7);
+    const m = buildClearingMap(9);
     const at = (col, row) => m.tiles.find(t => t.col === col && t.row === row);
     assert.equal(at(0, 0).base, 'FOREST');
-    assert.equal(at(6, 6).base, 'FOREST');
-    assert.equal(at(0, 3).base, 'FOREST');
-    assert.equal(at(3, 3).base, 'GRASS');
-    assert.equal(at(4, 3).base, 'GRASS');
+    assert.equal(at(8, 8).base, 'FOREST');
+    assert.equal(at(0, 4).base, 'FOREST');
+    assert.equal(at(4, 4).base, 'GRASS');
+    assert.equal(at(5, 4).base, 'GRASS');
   });
 
   test('heroStart sits at the centre hex', () => {
-    const m = buildClearingMap(7);
-    assert.deepEqual(m.heroStart, { col: 3, row: 3 });
+    const m = buildClearingMap(9);
+    assert.deepEqual(m.heroStart, { col: 4, row: 4 });
   });
 
   test('clearing GameState boots with no entities and no fog', () => {
-    const s = newClearingState(7);
+    const s = newClearingState();
     assert.equal(s.entities.length, 0);
     assert.equal(s.hero, null);
     assert.equal(s.witch, null);
     assert.equal(s.fogOfWar, 'none');
-    // Tile map is the full 7×7 grid keyed by hexKey.
+    // Tile map is the full 9×9 grid keyed by hexKey.
     assert.ok(s.tiles.get(hexKey(0, 0)));
-    assert.ok(s.tiles.get(hexKey(6, 6)));
+    assert.ok(s.tiles.get(hexKey(8, 8)));
   });
 });
 
@@ -64,27 +64,32 @@ describe('combat-tester — controller placement', () => {
     t.setAttacker('paladin');
     const e = t.layout.attackerEntity;
     assert.ok(e, 'attacker entity should exist');
-    assert.equal(e.col, 3);
-    assert.equal(e.row, 3);
+    assert.equal(e.col, 4);
+    assert.equal(e.row, 4);
     assert.equal(e.ownerId, ATK_SIDE_ID);
     assert.equal(e.type, 'paladin');
     // The state's entity list now holds exactly this combatant.
     assert.equal(t.state.entities.length, 1);
   });
 
-  test('setDefender places the unit on the adjacent hex (4,3)', () => {
+  test('setDefender places the unit on the adjacent hex (5,4)', () => {
     const t = createCombatTester();
     t.setAttacker('paladin');
     t.setDefender('witch');
     const def = t.layout.defenderEntity;
-    assert.equal(def.col, 4);
-    assert.equal(def.row, 3);
+    assert.equal(def.col, 5);
+    assert.equal(def.row, 4);
     assert.equal(def.ownerId, DEF_SIDE_ID);
     // Centre and adjacent are hex-distance 1 — gang-up math depends on it.
-    assert.equal(hexDistance(3, 3, 4, 3), 1);
+    assert.equal(hexDistance(4, 4, 5, 4), 1);
   });
 
-  test('addAlly drops the unit on a ring slot adjacent to its combatant', () => {
+  test('ATTACKER ally is placed hex-adjacent to the DEFENDER (so gang-up applies)', () => {
+    // The gang-up rule in executeBattle requires attacker-side allies to be
+    // adjacent to the TARGET hex. Placing them next to the attacker hex
+    // (the previous behaviour) silently skipped them. We now park atk allies
+    // on hexes that are adjacent to BOTH attacker and defender — they
+    // contribute their d6 to the attacker's pool.
     const t = createCombatTester();
     t.setAttacker('paladin');
     t.setDefender('witch');
@@ -92,13 +97,25 @@ describe('combat-tester — controller placement', () => {
     const ally = t.layout.atkAllyEntities[0];
     assert.ok(ally);
     assert.equal(ally.ownerId, ATK_SIDE_ID);
-    assert.equal(hexDistance(3, 3, ally.col, ally.row), 1,
-      'attacker ally must be hex-adjacent to attacker for gang-up math');
-    // Defender side too — same hex-adjacent invariant.
+    const def = t.layout.defenderEntity;
+    assert.equal(hexDistance(def.col, def.row, ally.col, ally.row), 1,
+      'attacker ally must be hex-adjacent to DEFENDER for gang-up math');
+    // Also still hex-adjacent to the attacker — keeps the visual posse read.
+    const atk = t.layout.attackerEntity;
+    assert.equal(hexDistance(atk.col, atk.row, ally.col, ally.row), 1,
+      'attacker ally sits on a hex shared between the attacker and defender rings');
+  });
+
+  test('DEFENDER ally is placed hex-adjacent to the defender (gang-up against the incoming attack)', () => {
+    const t = createCombatTester();
+    t.setAttacker('paladin');
+    t.setDefender('witch');
     t.addAlly('defender', 'minion');
-    const dAlly = t.layout.defAllyEntities[0];
-    assert.equal(dAlly.ownerId, DEF_SIDE_ID);
-    assert.equal(hexDistance(4, 3, dAlly.col, dAlly.row), 1);
+    const ally = t.layout.defAllyEntities[0];
+    assert.ok(ally);
+    assert.equal(ally.ownerId, DEF_SIDE_ID);
+    const def = t.layout.defenderEntity;
+    assert.equal(hexDistance(def.col, def.row, ally.col, ally.row), 1);
   });
 
   test('removeAlly clears the slot and shifts later allies down', () => {
@@ -128,10 +145,10 @@ describe('combat-tester — swap roles', () => {
     assert.deepEqual(t.slots.defAllies, ['survivor']);
     // Layout reflects the swap — witch is now at centre.
     assert.equal(t.layout.attackerEntity.type, 'witch');
-    assert.equal(t.layout.attackerEntity.col, 3);
-    assert.equal(t.layout.attackerEntity.row, 3);
+    assert.equal(t.layout.attackerEntity.col, 4);
+    assert.equal(t.layout.attackerEntity.row, 4);
     assert.equal(t.layout.defenderEntity.type, 'paladin');
-    assert.equal(t.layout.defenderEntity.col, 4);
+    assert.equal(t.layout.defenderEntity.col, 5);
   });
 });
 
@@ -161,7 +178,7 @@ describe('combat-tester — runBattle', () => {
     assert.deepEqual(out.result.log, ['stub']);
     // Snapshots carry the identity the cinematic needs.
     assert.equal(out.attackerSnap.id, t.layout.attackerEntity.id);
-    assert.equal(out.defenderSnap.col, 4);
+    assert.equal(out.defenderSnap.col, 5);
   });
 
   test('runs the REAL executeBattle end-to-end (paladin vs zombie)', () => {
@@ -176,6 +193,34 @@ describe('combat-tester — runBattle', () => {
     assert.equal(typeof out.result.attackRoll, 'number');
     assert.equal(typeof out.result.defenseRoll, 'number');
     assert.ok(Array.isArray(out.result.log));
+  });
+});
+
+describe('combat-tester — ally placement triggers REAL gang-up code path', () => {
+  test('an attacker ally bumps attackerAllies on the executeBattle result', () => {
+    // The old layout placed atk allies next to the ATTACKER hex, which is
+    // not where gang-up math reads from (executeBattle filters by hexes
+    // adjacent to the TARGET). The result: tester allies were visually
+    // present but contributed 0 dice. The fix is verified end-to-end here.
+    const t = createCombatTester();
+    t.setAttacker('paladin');
+    t.setDefender('zombie');
+    const baseline = t.runBattle();
+    assert.equal(baseline.result.attackerAllies, 0,
+      'baseline: no allies → attackerAllies=0');
+    t.addAlly('attacker', 'survivor');
+    const withAlly = t.runBattle();
+    assert.equal(withAlly.result.attackerAllies, 1,
+      'placing one attacker ally bumps attackerAllies to 1 (the real gang-up code path)');
+  });
+
+  test('a defender ally bumps defenderAllies on the executeBattle result', () => {
+    const t = createCombatTester();
+    t.setAttacker('paladin');
+    t.setDefender('zombie');
+    t.addAlly('defender', 'minion');
+    const out = t.runBattle();
+    assert.equal(out.result.defenderAllies, 1);
   });
 });
 
