@@ -10187,14 +10187,22 @@ export class Renderer3D {
     const BABYLON = this._babylon;
     const scene   = this._scene;
     if (!BABYLON || !scene || typeof document === 'undefined') return null;
+    // Mipmaps + trilinear + anisotropic filtering kills the aliasing/shimmer
+    // the badge had at far zoom (R3). UNIT_ICON_TEX_SIZE is now power-of-two
+    // (256²) so the mipmap chain is clean.
     const tex = new BABYLON.DynamicTexture(
       `unitIconTex_${entity.id}`,
       { width: UNIT_ICON_TEX_SIZE, height: UNIT_ICON_TEX_SIZE },
       scene,
-      /* generateMipMaps */ false,
+      /* generateMipMaps */ true,
+      BABYLON.Texture.TRILINEAR_SAMPLINGMODE,
     );
     tex.hasAlpha = true;
-    tex.updateSamplingMode(BABYLON.Texture.BILINEAR_SAMPLINGMODE);
+    tex.updateSamplingMode(BABYLON.Texture.TRILINEAR_SAMPLINGMODE);
+    if (typeof tex.anisotropicFilteringLevel === 'number'
+        || 'anisotropicFilteringLevel' in tex) {
+      tex.anisotropicFilteringLevel = 4;
+    }
     const mat = new BABYLON.StandardMaterial(`unitIconMat_${entity.id}`, scene);
     mat.diffuseTexture = tex;
     mat.opacityTexture = tex;
@@ -14886,8 +14894,14 @@ export const HP_BAR_Y_ABOVE_BASE = 0.2;
  *  Sized so the ring around the icon reads cleanly at typical zoom — 2×
  *  the original 0.55 so the portrait + HP ring is legible even when the
  *  camera is fully zoomed out. The badge intentionally now dominates the
- *  silhouette of the token below it; that's the desired readout. */
-export const UNIT_ICON_PLANE_SIZE = 0.88;
+ *  silhouette of the token below it; that's the desired readout.
+ *
+ *  Bumped 1.3× from 0.88 → 1.144 (R3) so badges read clearly at typical
+ *  combat-camera framing without leaning on max zoom-in. Bottom-anchor math
+ *  (`iconBillboardYForScale`) keeps the plane bottom fixed, so the larger
+ *  badge grows upward and still clears the cone+sphere head with the same
+ *  ~0.13wu margin that the 0.88 size had. */
+export const UNIT_ICON_PLANE_SIZE = 1.144;
 /** Proximity-aware icon scaling. The badge sits at scale=1 (full size) for
  *  radius ≥ UNIT_ICON_SCALE_FAR; shrinks linearly to UNIT_ICON_MIN_SCALE
  *  by radius = UNIT_ICON_SCALE_NEAR. At max zoom-in the badge reads as
@@ -14951,10 +14965,11 @@ export function headTopRelativeToCone(leader = false) {
  *  model's head — close enough to feel anchored to it without occluding.
  *  Tuned so the plane bottom edge clears the model top by a small margin. */
 export const UNIT_ICON_Y_GAP      = 0.70;
-/** DynamicTexture pixel size for the icon+ring composite. 192² keeps the
- *  portrait crisp at any zoom and the arc rim smooth without burning extra
- *  GPU memory per entity. */
-export const UNIT_ICON_TEX_SIZE   = 192;
+/** DynamicTexture pixel size for the icon+ring composite. Bumped 192 → 256
+ *  (R3) so the texture is power-of-two, which lets Babylon's DynamicTexture
+ *  generate a clean mipmap chain. The mipmaps + trilinear sampling kill the
+ *  shimmer / aliasing the 192² non-pow2 texture exhibited at far zoom. */
+export const UNIT_ICON_TEX_SIZE   = 256;
 /** Arc rim thickness as a fraction of the texture half-size — thin enough
  *  to read as a clean line at the icon edge without crowding the portrait.
  *  Halved from the old 0.14 per operator request for a thinner HP border. */

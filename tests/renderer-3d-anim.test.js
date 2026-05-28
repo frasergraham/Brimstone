@@ -818,12 +818,35 @@ describe('Renderer3D — paintUnitIconBadge', () => {
     assert.ok(UNIT_ICON_TEX_SIZE   > 0);
   });
 
-  // Pin the current billboard size. Bumped 2× from 0.55 to 1.10, then
-  // trimmed 20% to 0.88 after the badge felt too bulky over the paladin
-  // model. Locks against silent re-shrinking back to the old 0.55 era.
-  test('UNIT_ICON_PLANE_SIZE is in the post-trim band [0.7, 1.0]', () => {
-    assert.ok(UNIT_ICON_PLANE_SIZE > 0.7 && UNIT_ICON_PLANE_SIZE < 1.0,
-      `expected 0.7 < size < 1.0, got ${UNIT_ICON_PLANE_SIZE}`);
+  // Pin the current billboard size. Bumped 2× from 0.55 to 1.10, trimmed to
+  // 0.88 after the badge felt too bulky over the paladin model, then bumped
+  // 1.3× to 1.144 (R3) for readability at default combat-camera framing.
+  // Locks against silent re-shrinking back to the trimmed 0.88 era and
+  // against an accidental further bump that would overlap the ATTACK_BADGE.
+  test('UNIT_ICON_PLANE_SIZE is in the post-R3 band [1.10, 1.20]', () => {
+    assert.ok(UNIT_ICON_PLANE_SIZE > 1.10 && UNIT_ICON_PLANE_SIZE < 1.20,
+      `expected 1.10 < size < 1.20, got ${UNIT_ICON_PLANE_SIZE}`);
+  });
+
+  // R3 — explicit cross-check that the bumped plane bottom (after the 1.3×
+  // size increase) still clears the cone+sphere head top. The bottom-anchor
+  // math in `iconBillboardYForScale` keeps the larger plane growing upward,
+  // so the gap should be the same as the pre-bump 0.88 size.
+  test('UNIT_ICON_PLANE_SIZE bottom edge (leader) still clears the head top', () => {
+    const iconBottom = iconBillboardYRelativeToCone(true) - UNIT_ICON_PLANE_SIZE / 2;
+    const headTop    = headTopRelativeToCone(true);
+    assert.ok(
+      iconBottom > headTop,
+      `icon bottom ${iconBottom} should be above head top ${headTop}`,
+    );
+  });
+  test('UNIT_ICON_PLANE_SIZE bottom edge (non-leader) still clears the head top', () => {
+    const iconBottom = iconBillboardYRelativeToCone(false) - UNIT_ICON_PLANE_SIZE / 2;
+    const headTop    = headTopRelativeToCone(false);
+    assert.ok(
+      iconBottom > headTop,
+      `icon bottom ${iconBottom} should be above head top ${headTop}`,
+    );
   });
 
   // Relationship invariant: the icon billboard's top edge must stay below
