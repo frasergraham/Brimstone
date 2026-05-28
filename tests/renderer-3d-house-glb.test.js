@@ -402,15 +402,16 @@ describe('_buildBuildingInstance — positioning + jitter + metadata', () => {
     assert.ok(Math.abs(inst.rotation.y - houseYawForHex(4, 9)) < 1e-9);
   });
 
-  test('instance is unpickable, fog-darken-policy, and on world-geometry render group', () => {
+  test('instance is unpickable, fog-immune, and on world-geometry render group', () => {
     const r = newInst();
     r._babylon = makeFakeBabylon();
     stubTemplate(r, BUILDING_GLB_BY_TYPE[BuildingType.CHURCH][0]);
     const inst = r._buildBuildingInstance({ building: BuildingType.CHURCH, col: 0, row: 0 }, 0, 0, null);
     assert.equal(inst.isPickable, false);
-    // Buildings carry the per-instance darken policy so each one fog-dims
-    // independently via its `fogDarken` instanced buffer (see fog-darken-plugin).
-    assert.equal(inst.metadata.respectsFog, 'building-instance');
+    // Buildings ignore fog (render full-brightness regardless) until the
+    // per-instance fog-darken path can be made robust against Babylon's
+    // PBR-multi-submesh instancing pipeline — see _loadBuildingModel.
+    assert.equal(inst.metadata.respectsFog, false);
     assert.equal(inst.metadata.kind, 'building-glb');
     assert.equal(inst.renderingGroupId, 0);
   });

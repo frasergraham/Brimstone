@@ -20,10 +20,12 @@ export function makeRoadEdgePlugin(BABYLON) {
     constructor(material) {
       super(material, 'RoadEdge', 260, { ROAD_EDGE: false });
       this._enabled = false;
-      this.uNoiseFreq  = 0.6;  // ≈ one noise cell per ~1.7 world units (hex pitch)
-      this.uEdgeJitter = 0.22; // ±22% of the fade band wiggle
-      this.uFadeStart  = 0.55; // lateral position where alpha starts dropping
-      this.uFadeEnd    = 0.95; // lateral position where alpha hits zero
+      this.uNoiseFreq  = 1.2;  // ≈ one noise cell per ~0.9 world units (finer wiggle)
+      this.uEdgeJitter = 0.50; // ±50% of the fade band wiggle — visibly wavy
+      // Fade band moved inward so the noise actually affects the visible road
+      // boundary rather than the texture's already-transparent shoulder.
+      this.uFadeStart  = 0.30;
+      this.uFadeEnd    = 0.65;
       // Slow colour variation along the road — lighter/darker patches like
       // real dirt path, breaks up the uniform tinted ribbon.
       this.uColorFreq  = 0.18; // ≈ one cell per ~5-6 world units

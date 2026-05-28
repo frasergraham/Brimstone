@@ -2536,24 +2536,14 @@ export class Renderer3D {
 
       this._buildingTemplates.set(relPath, { mesh: source, scale });
 
-      // Per-instance fog darken: register a 1-stride instanced buffer on the
-      // template so each building instance can carry its own `fogDarken` value
-      // (1.0 = unfogged, FOG_HIDDEN_DARKEN = fogged), and attach the
-      // FogDarkenPlugin to the template's material (incl. multi-material
-      // sub-materials) so the value lands in the shader. Without this,
-      // hardware instances share the material and would all flip together.
-      try {
-        if (typeof source.registerInstancedBuffer === 'function') {
-          source.registerInstancedBuffer('fogDarken', 1);
-          // CRITICAL: also set a default value on the SOURCE's buffer slot.
-          // Without this, Babylon allocates each instance's slot with
-          // uninitialised memory (typically 0), and the plugin then renders
-          // every building black (gl_FragColor.rgb *= 0). The default
-          // propagates as the initial value for every createInstance.
-          if (source.instancedBuffers) source.instancedBuffers.fogDarken = 1.0;
-        }
-      } catch { /* test stub may lack the API */ }
-      attachFogDarkenToMaterial(BABYLON, source.material);
+      // NOTE: building fog-darken via per-instance fogDarken attribute was
+      // attempted (registerInstancedBuffer + FogDarkenPlugin) but the
+      // attribute binding doesn't reliably propagate through Babylon's
+      // hardware-instancing pipeline on glTF-imported (often PBR + multi-
+      // submesh) materials, producing all-black buildings. Disabled for now;
+      // buildings render at full brightness regardless of fog. The plugin
+      // and helper stay in the file for a future attempt with better
+      // diagnostics. See src/fog-darken-plugin.js.
 
       // If the map's already built (the common case — GLB load is slow,
       // _buildMap runs synchronously right after Babylon init), retrofit the
@@ -2604,13 +2594,11 @@ export class Renderer3D {
       inst.rotation = new BABYLON.Vector3(0, houseYawForHex(tile.col, tile.row), 0);
     }
     inst.isPickable = false;
-    // Buildings stay visible under fog of war but darken to read as occluded
-    // (matches the splat ground beneath). Per-instance via the `fogDarken`
-    // instanced buffer registered on the template — `_setTilePropsFogged`
-    // flips it per-tile. 1.0 = unfogged baseline.
-    if (inst.instancedBuffers) inst.instancedBuffers.fogDarken = 1.0;
+    // Buildings render at full brightness regardless of fog (the per-instance
+    // fogDarken attribute attempt didn't propagate reliably through Babylon's
+    // PBR-multi-submesh instancing pipeline — see _loadBuildingModel note).
     inst.metadata = {
-      respectsFog: 'building-instance',
+      respectsFog: false,
       kind: 'building-glb',
       col: tile.col,
       row: tile.row,
