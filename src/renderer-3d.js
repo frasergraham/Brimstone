@@ -5780,39 +5780,47 @@ export class Renderer3D {
     // dissolves most). See `borderForestAlphaForTile`.
     const ext = tilesExtent(this.state.tiles);
     const treeJobs = [];
+    // Splat path renders the band ground inside `_buildSplatGround` (same
+    // detail-textured material as the playable ground, per-vertex aEdgeAlpha
+    // for the dissolve). Skip the legacy per-hex floor build here; cones and
+    // river extensions below still run so the wilderness still has trees and
+    // continues the river off-map.
+    const skipLegacyBorderGround = !!this._useSplatTerrain;
     for (const pos of borderTilePositions(this.state.tiles, bandDepth)) {
       const { x, z } = hexToWorld(pos.col, pos.row);
       const alpha = borderForestAlphaForTile(pos.col, pos.row, ext, bandDepth);
 
-      // Flat hex polygon — identical recipe to _buildTileMesh's flat tile.
-      const hex = this._buildFlatHexMesh(`border_tile_${pos.col}_${pos.row}`, parent, x, z);
-      // Border-forest hex tiles ALWAYS render with the fog-of-war tint —
-      // they sit outside the playable area, never observable by any player,
-      // so they consistently read as wilderness ground beyond sight. The
-      // trees on top stay in their normal (unfogged) colours so the
-      // wilderness silhouette doesn't go too dark to read against the sky.
-      const syntheticTile = { type: TileType.FOREST, base: TileType.FOREST, col: pos.col, row: pos.row };
-      // Fade the ground hex with the SAME per-ring alpha as the trees on this
-      // tile (`alpha`), so the band's ground and foliage dissolve together at
-      // the map edge. `_borderGroundMaterialFor` clones the shared fogged
-      // terrain material per alpha tier — the playable map's ground material
-      // is never touched.
-      const borderMat = this._borderGroundMaterialFor(
-        terrainSpriteIdFor(syntheticTile, pos.col, pos.row),
-        baseColor,
-        alpha,
-      );
-      hex.material   = borderMat || this._fogMaterialFor(baseColor);
-      hex.isPickable = false;
-      hex.metadata   = { kind: 'map-border-forest', col: pos.col, row: pos.row };
-      this._setShadowReceiver(hex);
-      // Faded outer-ring ground discs are alpha-blended — pin a stable
-      // alphaIndex so they stop reshuffling under the per-frame distance sort
-      // (see BORDER_GROUND_ALPHA_INDEX). Opaque inner-band discs render in the
-      // opaque pass where alphaIndex is ignored, so only tag the faded ones.
-      if (alpha < 1) hex.alphaIndex = BORDER_GROUND_ALPHA_INDEX;
-      this._borderForestHexesByKey.set(hexKey(pos.col, pos.row), hex);
-      this._borderPropsByKey.set(hexKey(pos.col, pos.row), [hex]);
+      if (!skipLegacyBorderGround) {
+        // Flat hex polygon — identical recipe to _buildTileMesh's flat tile.
+        const hex = this._buildFlatHexMesh(`border_tile_${pos.col}_${pos.row}`, parent, x, z);
+        // Border-forest hex tiles ALWAYS render with the fog-of-war tint —
+        // they sit outside the playable area, never observable by any player,
+        // so they consistently read as wilderness ground beyond sight. The
+        // trees on top stay in their normal (unfogged) colours so the
+        // wilderness silhouette doesn't go too dark to read against the sky.
+        const syntheticTile = { type: TileType.FOREST, base: TileType.FOREST, col: pos.col, row: pos.row };
+        // Fade the ground hex with the SAME per-ring alpha as the trees on this
+        // tile (`alpha`), so the band's ground and foliage dissolve together at
+        // the map edge. `_borderGroundMaterialFor` clones the shared fogged
+        // terrain material per alpha tier — the playable map's ground material
+        // is never touched.
+        const borderMat = this._borderGroundMaterialFor(
+          terrainSpriteIdFor(syntheticTile, pos.col, pos.row),
+          baseColor,
+          alpha,
+        );
+        hex.material   = borderMat || this._fogMaterialFor(baseColor);
+        hex.isPickable = false;
+        hex.metadata   = { kind: 'map-border-forest', col: pos.col, row: pos.row };
+        this._setShadowReceiver(hex);
+        // Faded outer-ring ground discs are alpha-blended — pin a stable
+        // alphaIndex so they stop reshuffling under the per-frame distance sort
+        // (see BORDER_GROUND_ALPHA_INDEX). Opaque inner-band discs render in the
+        // opaque pass where alphaIndex is ignored, so only tag the faded ones.
+        if (alpha < 1) hex.alphaIndex = BORDER_GROUND_ALPHA_INDEX;
+        this._borderForestHexesByKey.set(hexKey(pos.col, pos.row), hex);
+        this._borderPropsByKey.set(hexKey(pos.col, pos.row), [hex]);
+      }
 
       // Pine trees use the SAME layout as in-map FOREST tiles so the band
       // reads as a continuous extension of the map (operator: "the forest
@@ -6125,45 +6133,76 @@ export class Renderer3D {
     const scene   = this._scene;
     if (!BABYLON || !this.state?.tiles) return null;
     const R = HEX_RADIUS_WORLD;
-    const tiles = [...this.state.tiles.values()];
+    const playable = [...this.state.tiles.values()];
     const channelAt = (col, row) => {
       const t = this.state.tiles.get(hexKey(col, row));
       return t ? splatChannelForTile(t) : null;
     };
+
+    // Border-forest band — same source-of-truth helpers the legacy per-hex
+    // builder uses. The splat path renders the band as forest-channel verts
+    // with a per-vertex edge alpha so the wilderness dissolves at the map's
+    // outer rings (operator: "use the same render system, retain the fade").
+    const bandDepth = this._splatBorderBandDepth();
+    const ext = tilesExtent(this.state.tiles);
+    const borderPositions = borderTilePositions(this.state.tiles, bandDepth);
+    const borderAlphaByKey = new Map();
+    for (const pos of borderPositions) {
+      borderAlphaByKey.set(hexKey(pos.col, pos.row),
+        borderForestAlphaForTile(pos.col, pos.row, ext, bandDepth));
+    }
+
     const VPT = 7; // vertices per tile (centre + 6 rim corners)
-    const n = tiles.length;
-    const positions = new Float32Array(n * VPT * 3);
-    const normals   = new Float32Array(n * VPT * 3);
-    const splat     = new Float32Array(n * VPT * 3);
-    const fog       = new Float32Array(n * VPT); // 0 = unfogged
-    const indices   = new Uint32Array(n * 6 * 3);
+    const tileCount = playable.length + borderPositions.length;
+    const positions = new Float32Array(tileCount * VPT * 3);
+    const normals   = new Float32Array(tileCount * VPT * 3);
+    const splat     = new Float32Array(tileCount * VPT * 3);
+    const fog       = new Float32Array(tileCount * VPT); // 0 = unfogged
+    const edgeA     = new Float32Array(tileCount * VPT); // 1 inner, fades at border rim
+    const indices   = new Uint32Array(tileCount * 6 * 3);
     const range = new Map();
 
-    for (let ti = 0; ti < n; ti++) {
-      const tile = tiles[ti];
-      const { x, z } = hexToWorld(tile.col, tile.row, R);
+    // Emit one hex fan into the shared buffers. `tileLike` only needs col/row
+    // and the per-fan splat-weight Float32Array (7×3).
+    const emitHex = (ti, col, row, splatWeights, edgeAlpha) => {
+      const { x, z } = hexToWorld(col, row, R);
       const baseV = ti * VPT;
-      range.set(hexKey(tile.col, tile.row), baseV);
-      // centre
+      range.set(hexKey(col, row), baseV);
       positions[baseV * 3] = x; positions[baseV * 3 + 2] = z;
-      // rim corners at angle (π/6 + j·π/3) — matches _buildFlatHexMesh
       for (let j = 0; j < 6; j++) {
         const a = Math.PI / 6 + j * Math.PI / 3;
         const vi = baseV + 1 + j;
         positions[vi * 3]     = x + R * Math.cos(a);
         positions[vi * 3 + 2] = z + R * Math.sin(a);
       }
-      // flat-up normals for all 7 verts
-      for (let v = 0; v < VPT; v++) normals[(baseV + v) * 3 + 1] = 1;
-      // per-vertex splat weights (row-major 7×3) → shared buffer
-      splat.set(hexSplatWeights(tile, channelAt), baseV * 3);
-      // fan triangles
+      for (let v = 0; v < VPT; v++) {
+        normals[(baseV + v) * 3 + 1] = 1;
+        edgeA[baseV + v] = edgeAlpha;
+      }
+      splat.set(splatWeights, baseV * 3);
       const baseI = ti * 6 * 3;
       for (let j = 0; j < 6; j++) {
         indices[baseI + j * 3]     = baseV;
         indices[baseI + j * 3 + 1] = baseV + 1 + j;
         indices[baseI + j * 3 + 2] = baseV + 1 + ((j + 1) % 6);
       }
+    };
+
+    // Playable hexes — fully opaque, real per-vertex splat weights, fog-able.
+    for (let ti = 0; ti < playable.length; ti++) {
+      const tile = playable[ti];
+      emitHex(ti, tile.col, tile.row, hexSplatWeights(tile, channelAt), 1.0);
+    }
+    // Border-forest band — uniform forest channel (no blend with playable;
+    // visually it IS the forest wilderness), per-ring edge alpha, fog stays 0.
+    const FOREST_ONLY = new Float32Array([
+      0, 0, 1,  0, 0, 1,  0, 0, 1,  0, 0, 1,
+      0, 0, 1,  0, 0, 1,  0, 0, 1,
+    ]);
+    for (let bi = 0; bi < borderPositions.length; bi++) {
+      const pos = borderPositions[bi];
+      const a   = borderAlphaByKey.get(hexKey(pos.col, pos.row)) ?? 1.0;
+      emitHex(playable.length + bi, pos.col, pos.row, FOREST_ONLY, a);
     }
 
     const mesh = new BABYLON.Mesh('splatGround', scene);
@@ -6172,9 +6211,10 @@ export class Renderer3D {
     vd.indices   = indices;
     vd.normals   = normals;
     vd.applyToMesh(mesh, false);
-    // aSplat is static; aFog is updatable (rewritten by _writeFogWeights).
+    // aSplat + aEdgeAlpha are static; aFog is updatable (rewritten by _writeFogWeights).
     mesh.setVerticesData('aSplat', splat, false, 3);
     mesh.setVerticesData('aFog', fog, true, 1);
+    mesh.setVerticesData('aEdgeAlpha', edgeA, false, 1);
     mesh.parent = parent;
     if (mesh.position?.set) mesh.position.set(0, 0, 0);
     mesh.metadata = { kind: 'splatGround' };
@@ -6185,6 +6225,20 @@ export class Renderer3D {
     this._splatFogBuf    = fog;
     this._hexVertexRange = range;
     return mesh;
+  }
+
+  /** Border-forest band depth in hexes — mirrors the legacy
+   *  `_buildMapBorderForest` sizing so the splat-extended band matches the old
+   *  layout (and the cones/extensions that still build per the legacy path).
+   *  Caps at 6 deep regardless of camera distance. */
+  _splatBorderBandDepth() {
+    const aspect = this._engine
+      ? this._engine.getRenderWidth() / Math.max(1, this._engine.getRenderHeight())
+      : 16 / 9;
+    const fov = this._camera?.fov || 0.8;
+    const cap = this._camera?.upperRadiusLimit ?? radiusForStandardFit(aspect, fov);
+    return Math.min(6, Math.max(BORDER_BAND_DEPTH,
+      forestBandDepthForView(cap, aspect, fov)));
   }
 
   /** Mid-grey wireframe overlay tracing every playable-hex perimeter, sitting
@@ -6293,6 +6347,18 @@ export class Renderer3D {
     if (mat.specularColor && BABYLON.Color3) {
       mat.specularColor = new BABYLON.Color3(0.04, 0.04, 0.04); // matte
     }
+    // Per-vertex edge-alpha drives the border-forest dissolve at the map's
+    // outer rings (playable verts always carry alpha=1, so they paint as
+    // perfectly opaque). MATERIAL_ALPHABLEND (=2) + forceDepthWrite keeps the
+    // depth buffer authoritative so props above the ground still occlude
+    // correctly, while the alpha=1 majority avoids meaningful blend cost.
+    if (BABYLON.Material && BABYLON.Material.MATERIAL_ALPHABLEND != null) {
+      mat.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
+    } else {
+      mat.transparencyMode = 2; // numeric fallback
+    }
+    mat.forceDepthWrite = true;
+    mat.backFaceCulling = true;
     const PluginClass = makeTerrainSplatPlugin(BABYLON);
     if (PluginClass) {
       const plugin = new PluginClass(mat);

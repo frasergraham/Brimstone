@@ -56,6 +56,10 @@ function makeRenderer() {
   r._babylon = makeFakeBabylon();
   r._scene = {};
   r._setShadowReceiver = () => {};
+  // Most tests below assert PLAYABLE-only geometry — stub the border band to
+  // zero hexes so the splat ground only contains state.tiles verts. The
+  // border-forest extension is exercised by its own dedicated test.
+  r._splatBorderBandDepth = () => 0;
   return r;
 }
 
@@ -188,5 +192,50 @@ describe('Renderer3D splat ground — geometry', () => {
     const frozen = r._freezeStaticMeshes();
     assert.ok(r._splatGround.isWorldMatrixFrozen, 'world matrix frozen');
     assert.ok(frozen >= 1);
+  });
+});
+
+describe('Renderer3D splat ground — border-forest extension', () => {
+  test('extends the mesh with border-band verts, all forest-channel + edge alpha', () => {
+    const r = makeRenderer();
+    r._useSplatTerrain = true;
+    // Override the stub to add one ring of border hexes around a 2×2 playable area.
+    r._splatBorderBandDepth = () => 1;
+    r.state = rectState(2, 2);
+
+    const mesh = r._buildSplatGround({ name: 'mapRoot' });
+    assert.ok(mesh, 'ground mesh built');
+
+    const playableCount = 4; // 2×2
+    const totalVerts = mesh._vdata.positions.length / 3;
+    assert.ok(totalVerts > playableCount * 7,
+      `border verts added: got ${totalVerts}, expected > ${playableCount * 7}`);
+    assert.ok(totalVerts % 7 === 0, 'still 7 verts per hex');
+
+    // aEdgeAlpha attribute is present and stride-1; playable verts = 1.0.
+    const edge = mesh._custom.aEdgeAlpha;
+    assert.ok(edge, 'aEdgeAlpha attribute set');
+    assert.equal(edge.stride, 1);
+    assert.equal(edge.updatable, false, 'aEdgeAlpha is static');
+    assert.equal(edge.data.length, totalVerts);
+
+    // Every playable vert (the first 4×7 = 28) carries alpha=1.
+    for (let v = 0; v < playableCount * 7; v++) {
+      assert.equal(edge.data[v], 1.0, `playable vert ${v} should be opaque`);
+    }
+    // At least one border vert has alpha < 1 (the dissolve).
+    let foundFade = false;
+    for (let v = playableCount * 7; v < totalVerts; v++) {
+      if (edge.data[v] < 1) { foundFade = true; break; }
+    }
+    assert.ok(foundFade, 'at least one border vert has alpha < 1');
+
+    // Border splat weights are uniformly forest channel (0, 0, 1).
+    const splat = mesh._custom.aSplat.data;
+    for (let v = playableCount * 7; v < totalVerts; v++) {
+      assert.equal(splat[v * 3 + 0], 0, `border vert ${v} grass weight = 0`);
+      assert.equal(splat[v * 3 + 1], 0, `border vert ${v} dirt  weight = 0`);
+      assert.equal(splat[v * 3 + 2], 1, `border vert ${v} forest weight = 1`);
+    }
   });
 });

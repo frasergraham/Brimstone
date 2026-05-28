@@ -123,6 +123,7 @@ export function makeTerrainSplatPlugin(BABYLON) {
       if (!this._enabled) return;
       attributes.push('aSplat');
       attributes.push('aFog');
+      attributes.push('aEdgeAlpha');
     }
 
     getSamplers(samplers) {
@@ -183,13 +184,16 @@ export function makeTerrainSplatPlugin(BABYLON) {
           CUSTOM_VERTEX_DEFINITIONS: `#ifdef TERRAIN_SPLAT
             attribute vec3 aSplat;
             attribute float aFog;
+            attribute float aEdgeAlpha;
             varying vec3 vSplat;
             varying float vFog;
+            varying float vEdgeAlpha;
             varying vec3 vWorldXZ;
           #endif`,
           CUSTOM_VERTEX_MAIN_END: `#ifdef TERRAIN_SPLAT
             vSplat = aSplat;
             vFog = aFog;
+            vEdgeAlpha = aEdgeAlpha;
             vWorldXZ = worldPos.xyz;
           #endif`,
         };
@@ -199,6 +203,7 @@ export function makeTerrainSplatPlugin(BABYLON) {
           CUSTOM_FRAGMENT_DEFINITIONS: `#ifdef TERRAIN_SPLAT
             varying vec3 vSplat;
             varying float vFog;
+            varying float vEdgeAlpha;
             varying vec3 vWorldXZ;
             uniform sampler2D detailGrass;
             uniform sampler2D detailDirt;
@@ -228,7 +233,11 @@ export function makeTerrainSplatPlugin(BABYLON) {
             vec3 col = clamp(tintBlend * varM, 0.0, 1.0);
             vec3 texel = col * detail;
             texel *= mix(1.0, uFogDarken, vFog);
-            baseColor = vec4(texel, 1.0);
+            // Per-vertex edge alpha drives the border-forest dissolve at the
+            // map's outer rings (playable verts pass 1.0 = fully opaque).
+            // Discard near-zero so faded-out fragments don't write to depth.
+            if (vEdgeAlpha <= 0.005) discard;
+            baseColor = vec4(texel, vEdgeAlpha);
           #endif`,
         };
       }
