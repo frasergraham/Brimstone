@@ -1753,6 +1753,15 @@ export class Renderer3D {
     this._terrainTextureCache    = new Map();
     this._terrainMaterialCache   = new Map();
     this._terrainFogMaterialCache = new Map(); // darkened variants for fog-of-war
+    // Darkened CLONES of each terrain sprite's Texture, used only by the fogged
+    // material variant. The fog tint MUST be applied at the texture LEVEL (not
+    // just diffuseColor): the diffuse LIGHTING term saturates to 1.0 at bright
+    // phases, so a ×0.55 on diffuseColor is clamped away and the fogged hex
+    // renders identically to a lit one. The texture sample is applied OUTSIDE
+    // that clamp, so darkening `texture.level` is what actually dims the hex on
+    // screen. Cloned (never mutated in place) so the shared bright texture in
+    // `_terrainTextureCache` keeps its full brightness for visible tiles.
+    this._terrainFogTextureCache = new Map();
     // Per-(base-material, alpha) translucent CLONES of the fogged terrain (or
     // colour-fog fallback) material, used by the border-forest GROUND edge fade
     // so the band's ground dissolves in lockstep with its trees. Kept separate
@@ -4686,6 +4695,12 @@ export class Renderer3D {
         mat.diffuseColor.b = v;
       }
     }
+    // Terrain fog TEXTURE clones: their `level` carries the tint past the
+    // diffuse-lighting clamp (see `_terrainMaterialFor`). Reset each clone's
+    // level to the new factor so a fogged textured hex re-dims live too.
+    for (const [, tex] of this._terrainFogTextureCache) {
+      if (tex) tex.level = v;
+    }
     // Colour fog materials are keyed by base hex — recompute each one's
     // diffuseColor from its anchor.
     for (const [baseHex, mat] of this._fogMaterialCache) {
@@ -6969,14 +6984,43 @@ export class Renderer3D {
     const BABYLON = this._babylon;
     const name = fogged ? `terrainFog_${spriteId}` : `terrain_${spriteId}`;
     const mat = new BABYLON.StandardMaterial(name, this._scene);
-    mat.diffuseTexture = tex;
     mat.specularColor  = new BABYLON.Color3(0.04, 0.04, 0.04); // matte, picks up phase light
     if (fogged) {
       const d = this._fogTileDarken;
+      // diffuseColor darkening alone is INVISIBLE at bright phases: the diffuse
+      // lighting term (day sun ≈ 2.0 + hemi) saturates past 1.0, so
+      // clamp(lit × 0.55) still clamps to 1.0 — the ×0.55 vanishes and the
+      // fogged hex reads as bright as a lit one. The texture sample is applied
+      // OUTSIDE that clamp (finalDiffuse = clamp(lit × diffuseColor) × texel),
+      // so the tint MUST also hit the texture LEVEL to survive saturation.
+      // emissiveColor stays the StandardMaterial default (0,0,0) — terrain is
+      // not self-lit, so there's nothing emissive to darken here.
       mat.diffuseColor = new BABYLON.Color3(d, d, d);
+      mat.diffuseTexture = this._fogTerrainTextureFor(spriteId, tex) || tex;
+    } else {
+      mat.diffuseTexture = tex;
     }
     cache.set(spriteId, mat);
     return mat;
+  }
+
+  /** Darkened clone of a terrain sprite's bright Texture for use by the fogged
+   *  material variant. The clone's `level` is multiplied by `_fogTileDarken` so
+   *  the sampled texel is dimmed AFTER the diffuse-lighting clamp (see
+   *  `_terrainMaterialFor`). Never mutates the shared bright texture. Returns
+   *  null when the source texture or clone is unavailable (node-test env). */
+  _fogTerrainTextureFor(spriteId, brightTex) {
+    if (!brightTex) return null;
+    if (this._terrainFogTextureCache.has(spriteId)) {
+      return this._terrainFogTextureCache.get(spriteId);
+    }
+    const clone = typeof brightTex.clone === 'function' ? brightTex.clone() : null;
+    if (clone) {
+      const baseLevel = typeof brightTex.level === 'number' ? brightTex.level : 1;
+      clone.level = baseLevel * this._fogTileDarken;
+    }
+    this._terrainFogTextureCache.set(spriteId, clone);
+    return clone;
   }
 
   /** Pick the right material for a tile cylinder — textured terrain material
