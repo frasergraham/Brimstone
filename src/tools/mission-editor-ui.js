@@ -451,18 +451,26 @@ export function initEditor(doc = document, initOpts = {}) {
     );
     edgeButtonHits = targets;
     ctx.save();
-    ctx.font = `${Math.round(EDGE_BTN_RADIUS * 1.5)}px sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.lineWidth = 1.5;
     for (const t of targets) {
+      // Pointy-top hex (corner-at-top), matching game hex orientation via the
+      // same 60°·i − 30° angle scheme used by renderer.js's hexCorners().
       ctx.beginPath();
-      ctx.arc(t.x, t.y, t.r, 0, Math.PI * 2);
+      for (let i = 0; i < 6; i++) {
+        const a = Math.PI / 180 * (60 * i - 30);
+        const px = t.x + t.size * Math.cos(a);
+        const py = t.y + t.size * Math.sin(a);
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
       ctx.fillStyle = 'rgba(26,22,16,0.88)';
       ctx.fill();
       ctx.strokeStyle = '#c4a04a';
       ctx.stroke();
       ctx.fillStyle = '#ffd680';
+      ctx.font = `${Math.max(9, Math.round(t.size * 1.1))}px sans-serif`;
       ctx.fillText(t.glyph, t.x, t.y + 1);
     }
     ctx.restore();
@@ -1269,32 +1277,48 @@ function buildMapAreaControls(doc, pane, editor, { onFit }) {
 }
 
 // ── In-map per-edge resize buttons (item 1) — canvas-drawn ──────────────────────
-// On-screen radius (canvas backing-store px) of each round −/+ resize button.
-// Fixed in screen space so the buttons stay legible at any zoom.
-export const EDGE_BTN_RADIUS = 15;
+// Pointy-top hex polygons (same proportions as game hexes), in-world sized so
+// they pan/zoom WITH the map. EDGE_BTN_HEX_SCALE is the button hex's circumradius
+// as a fraction of the on-screen game-hex circumradius (`hexPx`): 0.7× → button
+// "tile width" (sqrt(3)·size) is 0.7× the game tile width.
+export const EDGE_BTN_HEX_SCALE = 0.7;
+// Margin between the outermost playable hex's edge and the near edge of the
+// −/+ pair, expressed in game-hex tile-widths (sqrt(3)·hexPx). Operator wants
+// more breathing room than the previous tight-against-grid layout.
+export const EDGE_BTN_MARGIN_TILES = 1.5;
 
 /**
  * Compute the canvas-pixel hit targets for the in-map per-edge resize buttons.
- * One −/+ pair per edge, placed just OUTSIDE the middle hex of that edge so each
- * pair tracks the map as it pans / zooms / resizes. Pure & testable: `anchor(col,
- * row)` returns the canvas-pixel centre of a hex (renderer.hexToCanvasPos) and
- * `hexPx` is the on-screen hex radius (hexSize × zoom). Returns
- * `[{ edge, delta, glyph, x, y, r }]` in draw + hit-test order. The −/+ semantics
- * are unchanged — each entry feeds editor.resizeEdge(edge, delta) verbatim.
+ * One −/+ pair per edge, placed OUTSIDE the middle hex of that edge with a
+ * `EDGE_BTN_MARGIN_TILES` tile-width gap so each pair tracks the map as it
+ * pans / zooms / resizes. Pure & testable: `anchor(col, row)` returns the
+ * canvas-pixel centre of a hex (renderer.hexToCanvasPos) and `hexPx` is the
+ * on-screen hex circumradius (hexSize × zoom). Returns
+ * `[{ edge, delta, glyph, x, y, size }]` in draw + hit-test order — `size` is
+ * the button hex's circumradius (canvas px). The −/+ semantics are unchanged.
  */
-export function edgeButtonTargets(dims, anchor, hexPx, R = EDGE_BTN_RADIUS) {
+export function edgeButtonTargets(dims, anchor, hexPx, scale = EDGE_BTN_HEX_SCALE) {
   const { cols, rows } = dims;
   const midCol = Math.floor((cols - 1) / 2);
   const midRow = Math.floor((rows - 1) / 2);
-  const gap = R + 4;               // centre-to-centre half-distance of the pair
-  const off = hexPx * 1.15 + R;    // how far outside the edge hex the pair sits
+  const size = hexPx * scale;                 // button hex circumradius
+  const ROOT3 = Math.sqrt(3);
+  // Distance from the outer hex centre to the pair's *baseline* (centre of the
+  // pair). Half-tile-width for the game hex's own half-extent, the operator
+  // margin, plus half the button's flat-to-flat for its own half-extent.
+  const off = (0.5 + EDGE_BTN_MARGIN_TILES) * ROOT3 * hexPx + 0.5 * ROOT3 * size;
+  // Centre-to-centre spacing of the pair. Vertical (left/right edges) stacks
+  // along Y → use 2·size (point-to-point height); horizontal (top/bottom) uses
+  // ROOT3·size (flat-to-flat width). Tiny gap added so the hexes don't touch.
+  const gapV = 2 * size + 0.15 * hexPx;
+  const gapH = ROOT3 * size + 0.15 * hexPx;
   const out = [];
-  // axis 'v' → stack the pair vertically (left/right edges); 'h' → side by side.
   const place = (edge, baseX, baseY, axis) => {
-    const minus = axis === 'v' ? { x: baseX, y: baseY - gap } : { x: baseX - gap, y: baseY };
-    const plus  = axis === 'v' ? { x: baseX, y: baseY + gap } : { x: baseX + gap, y: baseY };
-    out.push({ edge, delta: -1, glyph: '−', x: minus.x, y: minus.y, r: R });
-    out.push({ edge, delta: 1,  glyph: '+', x: plus.x,  y: plus.y,  r: R });
+    const half = (axis === 'v' ? gapV : gapH) / 2;
+    const minus = axis === 'v' ? { x: baseX, y: baseY - half } : { x: baseX - half, y: baseY };
+    const plus  = axis === 'v' ? { x: baseX, y: baseY + half } : { x: baseX + half, y: baseY };
+    out.push({ edge, delta: -1, glyph: '−', x: minus.x, y: minus.y, size });
+    out.push({ edge, delta: 1,  glyph: '+', x: plus.x,  y: plus.y,  size });
   };
   const right = anchor(cols - 1, midRow);
   place('right', right.x + off, right.y, 'v');
@@ -1309,12 +1333,15 @@ export function edgeButtonTargets(dims, anchor, hexPx, R = EDGE_BTN_RADIUS) {
 
 /**
  * Hit-test a click (canvas backing-store px) against resize-button targets from
- * edgeButtonTargets(). Returns the matched `{ edge, delta, … }` (first circle
- * containing the point) or null. Pure — exported for unit-testing the wiring.
+ * edgeButtonTargets(). Returns the matched `{ edge, delta, … }` (first hex
+ * containing the point) or null. Uses distance-to-centre < inradius, which
+ * stays inside the pointy-top hex everywhere — the small slivers between
+ * inradius and circumradius aren't worth special-casing for a button this size.
  */
 export function hitTestEdgeButton(targets, px, py) {
   for (const t of targets) {
-    if (Math.hypot(px - t.x, py - t.y) <= t.r) return t;
+    const inradius = t.size * Math.sqrt(3) / 2;
+    if (Math.hypot(px - t.x, py - t.y) <= inradius) return t;
   }
   return null;
 }

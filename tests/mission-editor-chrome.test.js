@@ -18,7 +18,7 @@ import {
   buildMapControls,
   edgeButtonTargets,
   hitTestEdgeButton,
-  EDGE_BTN_RADIUS,
+  EDGE_BTN_HEX_SCALE,
 } from '../src/tools/mission-editor-ui.js';
 import { mapSizePreset, MAP_EDGES } from '../src/tools/mission-editor.js';
 import { MAP_SIZES } from '../src/map.js';
@@ -166,11 +166,39 @@ describe('edgeButtonTargets', () => {
     }
   });
 
-  test('hitTestEdgeButton respects the button radius (just inside hits, just outside misses)', () => {
+  test('hitTestEdgeButton respects the hex inradius (just inside hits, just outside misses)', () => {
     const targets = edgeButtonTargets({ cols: 9, rows: 9 }, anchor, HEX_PX);
     const t = targets[0];
-    assert.ok(hitTestEdgeButton(targets, t.x + EDGE_BTN_RADIUS - 0.5, t.y), 'just inside the rim');
-    assert.equal(hitTestEdgeButton(targets, t.x + EDGE_BTN_RADIUS + 2, t.y - 1000), null, 'far outside any button');
+    const inradius = t.size * Math.sqrt(3) / 2;
+    assert.ok(hitTestEdgeButton(targets, t.x + inradius - 0.5, t.y), 'just inside the inradius');
+    assert.equal(hitTestEdgeButton(targets, t.x + inradius + 2, t.y), null, 'just outside the inradius');
+    assert.equal(hitTestEdgeButton(targets, t.x + 1000, t.y), null, 'far outside any button');
+  });
+
+  test('targets are in-world sized hexes (size scales with hexPx)', () => {
+    const small = edgeButtonTargets({ cols: 9, rows: 9 }, anchor, HEX_PX);
+    const large = edgeButtonTargets({ cols: 9, rows: 9 }, anchor, HEX_PX * 2);
+    // Same scale factor → button size scales linearly with the on-screen hexPx.
+    assert.equal(small[0].size, HEX_PX * EDGE_BTN_HEX_SCALE);
+    assert.equal(large[0].size, HEX_PX * 2 * EDGE_BTN_HEX_SCALE);
+  });
+
+  test('buttons sit ~1.5 tile-widths beyond the outermost playable hex edge', () => {
+    const targets = edgeButtonTargets({ cols: 9, rows: 9 }, anchor, HEX_PX);
+    const maxX = 8 * 10; // rightmost col centre under the test anchor
+    // Outer hex's right edge sits at maxX + sqrt(3)/2 * HEX_PX; the button's
+    // near edge should sit at least 1.5 * tile-widths beyond that.
+    const ROOT3 = Math.sqrt(3);
+    const outerEdge = maxX + 0.5 * ROOT3 * HEX_PX;
+    const buttonNearEdge = (() => {
+      const right = targets.filter(t => t.edge === 'right');
+      const minX = Math.min(...right.map(t => t.x - 0.5 * ROOT3 * t.size));
+      return minX;
+    })();
+    assert.ok(
+      buttonNearEdge - outerEdge >= 1.5 * ROOT3 * HEX_PX - 1e-6,
+      `breathing room is at least 1.5 tile-widths (got ${(buttonNearEdge - outerEdge).toFixed(2)})`,
+    );
   });
 });
 
