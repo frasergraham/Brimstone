@@ -19,10 +19,7 @@
 // in node tests (no global BABYLON); the class is only constructed when a real
 // Babylon namespace is handed in.
 
-import {
-  DEFAULT_TERRAIN_TINTS,
-  DEFAULT_COLOR_VARIATION,
-} from './terrain-splat.js';
+import { DEFAULT_TERRAIN_TINTS } from './terrain-splat.js';
 
 // Default starting uniform values — tuned in stage D against the detail maps
 // (greyscale means ~0.4, so detail strength/brightness keep the colour from
@@ -32,12 +29,20 @@ export const SPLAT_UNIFORM_DEFAULTS = Object.freeze({
   // ~2 world units (a hex radius is 1), so the grain reads at the default zoom.
   uDetailUvScale: 0.5,
   // Contrast on the (mean-centred) detail texel before it modulates colour.
-  uDetailStrength: 1.35,
-  // Floor brightness the darkest detail texel maps to (so detail darkens but
-  // never crushes the colour to black).
-  uDetailBright: 0.62,
-  uColVarAmp: DEFAULT_COLOR_VARIATION.amp,
-  uColVarFreq: DEFAULT_COLOR_VARIATION.freq,
+  // Bumped from 1.35 → 2.0 so the photographic grain bites visibly.
+  uDetailStrength: 2.0,
+  // Floor brightness the darkest detail texel maps to. 0.35 lets detail darken
+  // colour to ~35% (up from 0.62's near-mild 38% wash) — much more visible bite.
+  uDetailBright: 0.35,
+  // Splat weight sharpening: pow(w, k) then renormalize before the per-channel
+  // blend. k=1 = pure interpolation (full-hex soft blend); k=3 keeps the rim
+  // midpoint at [0.5,0.5] (edge-symmetric, no seams) but pushes most of the
+  // transition close to the boundary so terrain edges read crisper.
+  uSplatSharpness: 3.0,
+  // Procedural-colour variation: ±40% lightness wobble, cells ~4 world-units
+  // wide. Tuned to break up the "all-green grass" / "all-brown dirt" flatness.
+  uColVarAmp: 0.40,
+  uColVarFreq: 0.25,
 });
 
 // GLSL value-noise + procedural-colour helper, mirroring `valueNoise2D` /
@@ -54,10 +59,11 @@ float ts_noise(vec2 p){
   float d = ts_hash2(i + vec2(1.0, 1.0));
   return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
-vec3 ts_procColor(vec3 tint, vec2 xz){
+// Variation multiplier — noise depends only on world XZ (not tint), so compute
+// once per fragment instead of once per channel.
+float ts_variation(vec2 xz){
   float n = ts_noise(xz * uColVarFreq);
-  float m = 1.0 + (n - 0.5) * 2.0 * uColVarAmp;
-  return clamp(tint * m, 0.0, 1.0);
+  return 1.0 + (n - 0.5) * 2.0 * uColVarAmp;
 }
 `;
 
@@ -80,6 +86,7 @@ export function makeTerrainSplatPlugin(BABYLON) {
       this.uDetailUvScale = SPLAT_UNIFORM_DEFAULTS.uDetailUvScale;
       this.uDetailStrength = SPLAT_UNIFORM_DEFAULTS.uDetailStrength;
       this.uDetailBright = SPLAT_UNIFORM_DEFAULTS.uDetailBright;
+      this.uSplatSharpness = SPLAT_UNIFORM_DEFAULTS.uSplatSharpness;
       this.uFogDarken = 1.0; // 1 = no fog dim; renderer lowers per phase
       this.uColVarAmp = SPLAT_UNIFORM_DEFAULTS.uColVarAmp;
       this.uColVarFreq = SPLAT_UNIFORM_DEFAULTS.uColVarFreq;
@@ -129,6 +136,7 @@ export function makeTerrainSplatPlugin(BABYLON) {
           { name: 'uDetailUvScale', size: 1, type: 'float' },
           { name: 'uDetailStrength', size: 1, type: 'float' },
           { name: 'uDetailBright', size: 1, type: 'float' },
+          { name: 'uSplatSharpness', size: 1, type: 'float' },
           { name: 'uFogDarken', size: 1, type: 'float' },
           { name: 'uColVarAmp', size: 1, type: 'float' },
           { name: 'uColVarFreq', size: 1, type: 'float' },
@@ -140,6 +148,7 @@ export function makeTerrainSplatPlugin(BABYLON) {
           uniform float uDetailUvScale;
           uniform float uDetailStrength;
           uniform float uDetailBright;
+          uniform float uSplatSharpness;
           uniform float uFogDarken;
           uniform float uColVarAmp;
           uniform float uColVarFreq;
@@ -155,6 +164,7 @@ export function makeTerrainSplatPlugin(BABYLON) {
       uniformBuffer.updateFloat('uDetailUvScale', this.uDetailUvScale);
       uniformBuffer.updateFloat('uDetailStrength', this.uDetailStrength);
       uniformBuffer.updateFloat('uDetailBright', this.uDetailBright);
+      uniformBuffer.updateFloat('uSplatSharpness', this.uSplatSharpness);
       uniformBuffer.updateFloat('uFogDarken', this.uFogDarken);
       uniformBuffer.updateFloat('uColVarAmp', this.uColVarAmp);
       uniformBuffer.updateFloat('uColVarFreq', this.uColVarFreq);
@@ -196,16 +206,26 @@ export function makeTerrainSplatPlugin(BABYLON) {
             ${PROC_COLOR_GLSL}
           #endif`,
           CUSTOM_FRAGMENT_UPDATE_DIFFUSE: `#ifdef TERRAIN_SPLAT
+            // Normalize the interpolated weights, then sharpen with pow(w, k)
+            // so transitions stay edge-symmetric (rim midpoints unchanged) but
+            // the dominant channel takes more of the hex interior — visibly
+            // narrower bleed than pure linear interpolation.
             vec3 w = vSplat / max(dot(vSplat, vec3(1.0)), 1e-4);
+            w = pow(max(w, vec3(0.0)), vec3(uSplatSharpness));
+            w = w / max(dot(w, vec3(1.0)), 1e-4);
             vec2 duv = vWorldXZ.xz * uDetailUvScale;
             float detail = w.x * texture2D(detailGrass, duv).r
                          + w.y * texture2D(detailDirt, duv).r
                          + w.z * texture2D(detailForest, duv).r;
             detail = mix(uDetailBright, 1.0,
                          clamp((detail - 0.5) * uDetailStrength + 0.5, 0.0, 1.0));
-            vec3 col = w.x * ts_procColor(uColTint0, vWorldXZ.xz)
-                     + w.y * ts_procColor(uColTint1, vWorldXZ.xz)
-                     + w.z * ts_procColor(uColTint2, vWorldXZ.xz);
+            // Blend the three tints, then apply the single per-fragment
+            // variation multiplier — collapses three value-noise calls into one
+            // (4 vs 12 sin-based hashes per fragment). Saves serious GPU on the
+            // ground mesh, which covers most of the screen.
+            float varM = ts_variation(vWorldXZ.xz);
+            vec3 tintBlend = w.x * uColTint0 + w.y * uColTint1 + w.z * uColTint2;
+            vec3 col = clamp(tintBlend * varM, 0.0, 1.0);
             vec3 texel = col * detail;
             texel *= mix(1.0, uFogDarken, vFog);
             baseColor = vec4(texel, 1.0);

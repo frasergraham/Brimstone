@@ -5576,6 +5576,10 @@ export class Renderer3D {
     // is skipped under the flag). Legacy path: one flat hex per tile inside
     // _buildTileMesh.
     if (this._useSplatTerrain) this._buildSplatGround(mapRoot);
+    // Hex wireframe overlay — always on; toggleable via setHexGridVisible().
+    // Lays directly on the splat ground so the player can read hex boundaries
+    // through the blended terrain.
+    this._buildHexGrid(mapRoot);
     for (const tile of this.state.tiles.values()) {
       this._buildTileMesh(tile, mapRoot);
     }
@@ -5675,6 +5679,8 @@ export class Renderer3D {
     if (this._nodeGlowMeshes) {
       for (const ng of this._nodeGlowMeshes) freeze(ng?.disc);
     }
+    // Hex wireframe overlay (static — perimeters never move).
+    if (this._hexGridMesh) freeze(this._hexGridMesh);
     return frozen;
   }
 
@@ -6148,6 +6154,46 @@ export class Renderer3D {
     this._splatFogBuf    = fog;
     this._hexVertexRange = range;
     return mesh;
+  }
+
+  /** Mid-grey wireframe overlay tracing every playable-hex perimeter, sitting
+   *  just above the splat ground (Y=0.003) so the player can read the hex grid
+   *  through the blended terrain. Single merged LinesMesh — one draw call.
+   *  Toggle via `setHexGridVisible(bool)`. */
+  _buildHexGrid(parent) {
+    const BABYLON = this._babylon;
+    if (!BABYLON?.MeshBuilder?.CreateLineSystem || !this.state?.tiles) return null;
+    if (!BABYLON.Vector3) return null;
+    const R = HEX_RADIUS_WORLD;
+    const Y = 0.003; // above splat ground (Y=0); below road ribbons (~0.008+).
+    const lines = [];
+    for (const tile of this.state.tiles.values()) {
+      const { x, z } = hexToWorld(tile.col, tile.row, R);
+      const loop = [];
+      for (let j = 0; j <= 6; j++) {
+        const a = Math.PI / 6 + j * Math.PI / 3;
+        loop.push(new BABYLON.Vector3(x + R * Math.cos(a), Y, z + R * Math.sin(a)));
+      }
+      lines.push(loop);
+    }
+    const mesh = BABYLON.MeshBuilder.CreateLineSystem(
+      'hexGrid', { lines, updatable: false }, this._scene);
+    if (BABYLON.Color3) mesh.color = new BABYLON.Color3(0.55, 0.55, 0.55);
+    if (mesh.material) {
+      if (mesh.material.alpha !== undefined) mesh.material.alpha = 0.5;
+      // Lines paint over the ground but mustn't occlude props above them.
+      mesh.material.disableDepthWrite = true;
+    }
+    mesh.parent     = parent;
+    mesh.metadata   = { kind: 'hexGrid' };
+    mesh.isPickable = false;
+    this._hexGridMesh = mesh;
+    return mesh;
+  }
+
+  /** Show/hide the hex wireframe overlay. */
+  setHexGridVisible(v) {
+    if (this._hexGridMesh) this._hexGridMesh.isVisible = !!v;
   }
 
   /** StandardMaterial for the merged ground, with the terrain-splat plugin
