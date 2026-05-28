@@ -2545,6 +2545,12 @@ export class Renderer3D {
       try {
         if (typeof source.registerInstancedBuffer === 'function') {
           source.registerInstancedBuffer('fogDarken', 1);
+          // CRITICAL: also set a default value on the SOURCE's buffer slot.
+          // Without this, Babylon allocates each instance's slot with
+          // uninitialised memory (typically 0), and the plugin then renders
+          // every building black (gl_FragColor.rgb *= 0). The default
+          // propagates as the initial value for every createInstance.
+          if (source.instancedBuffers) source.instancedBuffers.fogDarken = 1.0;
         }
       } catch { /* test stub may lack the API */ }
       attachFogDarkenToMaterial(BABYLON, source.material);
@@ -3109,22 +3115,39 @@ export class Renderer3D {
     // guard a season without a populated template bucket (anything but
     // summer in the current manifest) would dispose the procedural cones
     // and leave the border empty.
-    // Re-derive the band depth + extent so the edge-fade alpha matches the
-    // original procedural build (see `_buildMapBorderForest`). The band is keyed
-    // to the current `_borderForestHexesByKey`, so depth comes straight off each
-    // tile's Chebyshev distance from the playable extent.
+    //
+    // Iteration source: under the splat-terrain flag `_borderForestHexesByKey`
+    // is empty (the splat ground owns the floor), so derive the tile list
+    // straight from `borderTilePositions` over state.tiles at the same depth
+    // the splat extension used. Legacy path still walks the per-hex floor map.
     const ext = tilesExtent(this.state.tiles);
     let bandDepth = 0;
-    for (const [, hex] of this._borderForestHexesByKey) {
-      const md = hex?.metadata;
-      if (!md) continue;
-      bandDepth = Math.max(bandDepth, borderTileDepthFromPlayable(md.col, md.row, ext));
+    let borderHexCoords = [];
+    if (this._useSplatTerrain) {
+      // Idempotency guard: if the border-batch already holds real-tree meshes
+      // (we've retrofitted before), there's nothing to do. Legacy path's
+      // per-hex `tree-glb` check is unavailable under splat because the floor
+      // map is empty, so we check the batch list directly.
+      const alreadyReal = Array.isArray(this._borderForestBatchMeshes)
+        && this._borderForestBatchMeshes.some(m => m?.metadata?.kind === 'tree-glb');
+      if (alreadyReal) {
+        // Nothing left to retrofit on the border side; the in-map upgrade
+        // pass above already ran.
+        borderHexCoords = [];
+      } else {
+        bandDepth = this._splatBorderBandDepth();
+        borderHexCoords = borderTilePositions(this.state.tiles, bandDepth);
+      }
+    } else {
+      for (const [, hex] of this._borderForestHexesByKey) {
+        const md = hex?.metadata;
+        if (!md) continue;
+        bandDepth = Math.max(bandDepth, borderTileDepthFromPlayable(md.col, md.row, ext));
+        borderHexCoords.push({ col: md.col, row: md.row });
+      }
     }
     const newBorderInsts = [];
-    for (const [, hex] of this._borderForestHexesByKey) {
-      const md = hex?.metadata;
-      if (!md) continue;
-      const { col, row } = md;
+    for (const { col, row } of borderHexCoords) {
       const { x, z } = hexToWorld(col, row);
       const alpha = borderForestAlphaForTile(col, row, ext, bandDepth);
       const trees = forestTreesForHex(col, row, this._season).filter(t =>
@@ -4774,7 +4797,12 @@ export class Renderer3D {
     // tops out at ~0.70) fogged hexes still read as a clear "can't see this"
     // signal, not a mild shade. Per-tile prop darken still flows through
     // _applyFogVeil below using the phase value.
-    if (this._splatPlugin) this._splatPlugin.uFogDarken = Math.min(v, FOG_HIDDEN_DARKEN);
+    // Guard against `value=0` (or any nullish input) collapsing splat fog to
+    // pure black. Floor at FOG_HIDDEN_DARKEN — a strong but readable veil.
+    if (this._splatPlugin) {
+      const splatFog = v > 0 ? Math.min(v, FOG_HIDDEN_DARKEN) : FOG_HIDDEN_DARKEN;
+      this._splatPlugin.uFogDarken = splatFog;
+    }
     // Terrain fog materials: diffuseColor = (v, v, v) regardless of original.
     for (const [, mat] of this._terrainFogMaterialCache) {
       if (mat?.diffuseColor) {
@@ -6214,7 +6242,11 @@ export class Renderer3D {
       emitHex(ti, tile.col, tile.row, hexSplatWeights(tile, channelAt), 1.0);
     }
     // Border-forest band — uniform forest channel (no blend with playable;
-    // visually it IS the forest wilderness), per-ring edge alpha, fog stays 0.
+    // visually it IS the forest wilderness), per-ring edge alpha. Permanently
+    // FOGGED (aFog=1) so the wilderness reads as "beyond sight" — matches the
+    // legacy `_borderGroundMaterialFor` which always rendered with the fog-of-
+    // war tint, AND keeps the border consistent in tone with fogged playable
+    // hexes the operator can already see.
     const FOREST_ONLY = new Float32Array([
       0, 0, 1,  0, 0, 1,  0, 0, 1,  0, 0, 1,
       0, 0, 1,  0, 0, 1,  0, 0, 1,
@@ -6222,7 +6254,10 @@ export class Renderer3D {
     for (let bi = 0; bi < borderPositions.length; bi++) {
       const pos = borderPositions[bi];
       const a   = borderAlphaByKey.get(hexKey(pos.col, pos.row)) ?? 1.0;
-      emitHex(playable.length + bi, pos.col, pos.row, FOREST_ONLY, a);
+      const ti  = playable.length + bi;
+      emitHex(ti, pos.col, pos.row, FOREST_ONLY, a);
+      const baseV = ti * VPT;
+      for (let v = 0; v < VPT; v++) fog[baseV + v] = 1.0;
     }
 
     const mesh = new BABYLON.Mesh('splatGround', scene);
@@ -6368,16 +6403,17 @@ export class Renderer3D {
       mat.specularColor = new BABYLON.Color3(0.04, 0.04, 0.04); // matte
     }
     // Per-vertex edge-alpha drives the border-forest dissolve at the map's
-    // outer rings (playable verts always carry alpha=1, so they paint as
-    // perfectly opaque). MATERIAL_ALPHABLEND (=2) + forceDepthWrite keeps the
-    // depth buffer authoritative so props above the ground still occlude
-    // correctly, while the alpha=1 majority avoids meaningful blend cost.
-    if (BABYLON.Material && BABYLON.Material.MATERIAL_ALPHABLEND != null) {
-      mat.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
+    // outer rings. Use ALPHATEST (binary discard) instead of ALPHABLEND so
+    // the splat ground stays in the OPAQUE pass — alpha-blending put it in
+    // the transparent pass which raced the road/river ribbons (also
+    // transparent), and the resulting render-order issues made the ribbons
+    // disappear. Hard cutoff at the band edge instead of a smooth dissolve,
+    // but every other prop stays visible.
+    if (BABYLON.Material && BABYLON.Material.MATERIAL_ALPHATEST != null) {
+      mat.transparencyMode = BABYLON.Material.MATERIAL_ALPHATEST;
     } else {
-      mat.transparencyMode = 2; // numeric fallback
+      mat.transparencyMode = 1; // numeric fallback (1 = ALPHATEST)
     }
-    mat.forceDepthWrite = true;
     mat.backFaceCulling = true;
     const PluginClass = makeTerrainSplatPlugin(BABYLON);
     if (PluginClass) {
@@ -13995,7 +14031,7 @@ export const FOG_TILE_DARKEN = 0.20;
 // clear "you cannot see this" signal — even when the phase fogTint runs mild
 // (PHASE_LIGHT_CONFIG dawn/dusk values around 0.6-0.7 would otherwise feel
 // like a thin atmospheric haze, not occluded vision).
-export const FOG_HIDDEN_DARKEN = 0.25;
+export const FOG_HIDDEN_DARKEN = 0.40;
 
 // Hex wireframe radial fade — world units (1 = hex radius; a hex's flat-to-flat
 // pitch is √3 ≈ 1.73). Lines fully visible inside HEX_GRID_FADE_START_W around

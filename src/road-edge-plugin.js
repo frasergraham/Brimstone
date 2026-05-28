@@ -80,12 +80,20 @@ export function makeRoadEdgePlugin(BABYLON) {
 
     getCustomCode(shaderType) {
       if (shaderType === 'vertex') {
+        // Carry our OWN uv varying (`vRoadUv`) rather than relying on
+        // Babylon's `vDiffuseUV` — that's only declared when the standard
+        // material's `MATERIAL_DIFFUSE_TEXTURE` define is on, which races
+        // async texture loads. The `uv` attribute is declared file-scope by
+        // Babylon whenever a UV vertex buffer is bound (road ribbons always
+        // set one), so reading it in MAIN_END is safe.
         return {
           CUSTOM_VERTEX_DEFINITIONS: `#ifdef ROAD_EDGE
             varying vec3 vRoadWorldXZ;
+            varying vec2 vRoadUv;
           #endif`,
           CUSTOM_VERTEX_MAIN_END: `#ifdef ROAD_EDGE
             vRoadWorldXZ = worldPos.xyz;
+            vRoadUv = uv;
           #endif`,
         };
       }
@@ -93,6 +101,7 @@ export function makeRoadEdgePlugin(BABYLON) {
         return {
           CUSTOM_FRAGMENT_DEFINITIONS: `#ifdef ROAD_EDGE
             varying vec3 vRoadWorldXZ;
+            varying vec2 vRoadUv;
             float re_hash2(vec2 p){ return fract(sin(p.x*127.1 + p.y*311.7) * 43758.5453); }
             float re_noise(vec2 p){
               vec2 i = floor(p); vec2 f = fract(p);
@@ -104,12 +113,12 @@ export function makeRoadEdgePlugin(BABYLON) {
               return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
             }
           #endif`,
-          // vDiffuseUV.y is the ribbon's lateral coordinate (0/1 = outer rim,
+          // vRoadUv.y is the ribbon's lateral coordinate (0/1 = outer rim,
           // 0.5 = centre). |y-0.5|*2 = "distance from centre line", 0..1.
           // World-XZ noise jitters the fade thresholds along the road's length
           // so the boundary wavers instead of running clean and parallel.
           CUSTOM_FRAGMENT_MAIN_END: `#ifdef ROAD_EDGE
-            float lateral = abs(vDiffuseUV.y - 0.5) * 2.0;
+            float lateral = abs(vRoadUv.y - 0.5) * 2.0;
             float n = re_noise(vRoadWorldXZ.xz * uNoiseFreq);
             float jitter = (n - 0.5) * uEdgeJitter;
             float fade = 1.0 - smoothstep(uFadeStart + jitter,

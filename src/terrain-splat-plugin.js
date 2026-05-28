@@ -233,11 +233,15 @@ export function makeTerrainSplatPlugin(BABYLON) {
             vec3 col = clamp(tintBlend * varM, 0.0, 1.0);
             vec3 texel = col * detail;
             texel *= mix(1.0, uFogDarken, vFog);
-            // Per-vertex edge alpha drives the border-forest dissolve at the
-            // map's outer rings (playable verts pass 1.0 = fully opaque).
-            // Discard near-zero so faded-out fragments don't write to depth.
-            if (vEdgeAlpha <= 0.005) discard;
-            baseColor = vec4(texel, vEdgeAlpha);
+            // Per-vertex edge alpha: binary cutoff for the outermost border
+            // ring (so the wilderness has a defined outer edge instead of
+            // running to the map's extent). Playable verts always carry
+            // alpha=1.0. ALPHATEST keeps the splat ground in the opaque pass
+            // so the road/river ribbons (also transparent) don't lose their
+            // render order. Threshold 0.4 discards the outermost ring (alpha
+            // 0.2) and keeps the next ring (0.5) onward.
+            if (vEdgeAlpha < 0.4) discard;
+            baseColor = vec4(texel, 1.0);
           #endif`,
         };
       }
