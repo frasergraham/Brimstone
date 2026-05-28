@@ -6910,6 +6910,17 @@ export class Renderer3D {
         TILE_COLOR[TileType.ROAD],
       );
     }
+    // Road/river ribbons may be built AFTER the initial _applyFogVeil pass
+    // (the splat ground builds + fog-apply runs first). For tiles already in
+    // `_fogActiveSet` the diff in _applyFogVeil reads `should===is===true` and
+    // skips _setTilePropsFogged, so the freshly-added ribbon material stays at
+    // full color until the next fog-state change. Force a per-tile re-apply
+    // for every currently-fogged tile so newly-registered 'darken' props pick
+    // up the right level immediately. Idempotent — the 'darken' policy uses
+    // absolute `baseDiffuse × k` assignment, not multiplicative accumulation.
+    if (this._fogActiveSet && this._fogActiveSet.size > 0) {
+      for (const tkey of this._fogActiveSet) this._setTilePropsFogged(tkey, true);
+    }
   }
 
   /** Build a single merged flat-ribbon mesh for one network (river OR road).
