@@ -16565,13 +16565,24 @@ export function paintReadoutNumber(ctx, opts) {
   const { width, height, value, color, icon = '' } = opts;
   ctx.clearRect(0, 0, width, height);
   const text = icon ? `${icon} ${value}` : String(value);
-  const fontPx = Math.round(height * 0.55);
+  // Paint the digit at ~40% of the canvas so the rendered number sits
+  // comfortably inside its plane (≈15-20% padding all round) and never
+  // clips at the texture edge for wide combinations like "⚔ 12".
+  let fontPx = Math.round(height * 0.40);
   ctx.font = `900 ${fontPx}px sans-serif`;
+  // Defensive width fit — emoji + 2-digit values can still overflow on
+  // narrow canvases, so shrink to fit within 82% of texture width.
+  const maxTextWidth = width * 0.82;
+  const measured = ctx.measureText ? ctx.measureText(text).width : 0;
+  if (measured > maxTextWidth && measured > 0) {
+    fontPx = Math.max(1, Math.floor(fontPx * (maxTextWidth / measured)));
+    ctx.font = `900 ${fontPx}px sans-serif`;
+  }
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.lineJoin = 'round';
   ctx.miterLimit = 2;
-  ctx.lineWidth = Math.max(6, Math.round(fontPx * 0.20));
+  ctx.lineWidth = Math.max(4, Math.round(fontPx * 0.18));
   ctx.strokeStyle = '#000';
   ctx.strokeText(text, width / 2, height / 2);
   ctx.fillStyle = color;
@@ -16586,13 +16597,23 @@ export function paintReadoutNumber(ctx, opts) {
 export function paintReadoutFloater(ctx, opts) {
   const { width, height, label, color = '#fff' } = opts;
   ctx.clearRect(0, 0, width, height);
-  const fontPx = Math.round(height * 0.62);
+  // Match the proportions of the main readout — ~45% of canvas height
+  // keeps the floater readable without dominating the small plane.
+  let fontPx = Math.round(height * 0.45);
   ctx.font = `800 ${fontPx}px sans-serif`;
+  // Defensive width fit — long labels ("+2 ⚔ allies") shouldn't clip the
+  // wide floater canvas either.
+  const maxTextWidth = width * 0.90;
+  const measured = ctx.measureText ? ctx.measureText(label).width : 0;
+  if (measured > maxTextWidth && measured > 0) {
+    fontPx = Math.max(1, Math.floor(fontPx * (maxTextWidth / measured)));
+    ctx.font = `800 ${fontPx}px sans-serif`;
+  }
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.lineJoin = 'round';
   ctx.miterLimit = 2;
-  ctx.lineWidth = Math.max(4, Math.round(fontPx * 0.20));
+  ctx.lineWidth = Math.max(3, Math.round(fontPx * 0.18));
   ctx.strokeStyle = '#000';
   ctx.strokeText(label, width / 2, height / 2);
   ctx.fillStyle = color;

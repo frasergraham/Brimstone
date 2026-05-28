@@ -157,6 +157,22 @@ describe('G1 — paintReadoutNumber', () => {
     const fills = ctx.calls.filter(c => c[0] === 'fillText').map(c => c[1]);
     assert.ok(fills.includes('10'));
   });
+
+  test('font size is < 60% of texture canvas dim (no edge clipping)', () => {
+    const ctx = makeFakeCtx();
+    paintReadoutNumber(ctx, {
+      width: 256, height: 256, value: 12, color: '#cc3939', icon: '⚔',
+    });
+    const fontEntries = ctx.calls.filter(c => c[0] === 'font').map(c => c[1]);
+    assert.ok(fontEntries.length > 0, 'font was set');
+    for (const fontStr of fontEntries) {
+      const m = /(\d+)px/.exec(fontStr);
+      assert.ok(m, `font string parses: "${fontStr}"`);
+      const px = Number(m[1]);
+      assert.ok(px < 256 * 0.60,
+        `painted font ${px}px is < 60% of 256 canvas (got ${px / 256})`);
+    }
+  });
 });
 
 describe('G1 — paintReadoutFloater', () => {
@@ -170,6 +186,22 @@ describe('G1 — paintReadoutFloater', () => {
     const fills   = ctx.calls.filter(c => c[0] === 'fillText').map(c => c[1]);
     assert.ok(strokes.includes('+2 allies'));
     assert.ok(fills.includes('+2 allies'));
+  });
+
+  test('font size is < 60% of texture canvas height', () => {
+    const ctx = makeFakeCtx();
+    paintReadoutFloater(ctx, {
+      width: 384, height: 96, label: '+2 ⚔ allies', color: COMBAT_READOUT_WIN_COLOR,
+    });
+    const fontEntries = ctx.calls.filter(c => c[0] === 'font').map(c => c[1]);
+    assert.ok(fontEntries.length > 0, 'font was set');
+    for (const fontStr of fontEntries) {
+      const m = /(\d+)px/.exec(fontStr);
+      assert.ok(m, `font string parses: "${fontStr}"`);
+      const px = Number(m[1]);
+      assert.ok(px < 96 * 0.60,
+        `painted font ${px}px is < 60% of 96 canvas height (got ${px / 96})`);
+    }
   });
 });
 
