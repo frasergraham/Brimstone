@@ -10,6 +10,7 @@ import { createCombatTester, UNIT_FACTORIES } from './combat-tester.js';
 import { UNIT_TYPES } from '../unit-types.js';
 import { Renderer3D } from '../renderer-3d.js';
 import { run3DCombatCardHold } from '../combat-cinematic.js';
+import { parseCombatParams, withCombatParams } from './url-state.js';
 
 // Picker options — leader / minion / construct / survivor types from the
 // UNIT_TYPES registry, in display order. The labels match the in-game
@@ -287,6 +288,43 @@ export async function initCombat(doc = document) {
 
   tester.onChange(refreshAll);
   refreshAll();
+
+  // ── URL ⇄ slots sync ──────────────────────────────────────────────────
+  // Every slot change writes the current config to `location.search` via
+  // history.replaceState so the URL stays bookmarkable. On first load we
+  // pull the URL into the controller (unknown unit keys are dropped).
+  let applyingFromUrl = false;
+  function writeUrl() {
+    if (applyingFromUrl) return;
+    if (typeof location === 'undefined' || typeof history === 'undefined') return;
+    const slots = tester.slots;
+    const patch = {
+      atk:       slots.attacker || null,
+      def:       slots.defender || null,
+      atkAllies: slots.atkAllies.slice(),
+      defAllies: slots.defAllies.slice(),
+    };
+    const next = withCombatParams(location.search, patch);
+    const url = `${location.pathname}${next}${location.hash || ''}`;
+    try { history.replaceState(null, '', url); } catch {}
+  }
+  tester.onChange(writeUrl);
+
+  if (typeof location !== 'undefined') {
+    applyingFromUrl = true;
+    try {
+      const cfg = parseCombatParams(location.search, (k) => k in UNIT_FACTORIES);
+      if (cfg.atk) tester.setAttacker(cfg.atk);
+      if (cfg.def) tester.setDefender(cfg.def);
+      for (const a of cfg.atkAllies) tester.addAlly('attacker', a);
+      for (const a of cfg.defAllies) tester.addAlly('defender', a);
+    } finally {
+      applyingFromUrl = false;
+    }
+    // Normalise the URL: if the original carried stale unit keys, this writes
+    // back the cleaned-up form.
+    writeUrl();
+  }
 
   // ── Action buttons ────────────────────────────────────────────────────
   let battleInFlight = false;
