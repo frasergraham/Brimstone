@@ -1495,14 +1495,20 @@ export function compassRotationDegFromCameraAlpha(alpha) {
   return Math.atan2(-Math.cos(alpha), Math.sin(alpha)) * 180 / Math.PI;
 }
 
-/** World height the combat dice-card TOP reaches above a standee's anchor —
+/** World height the combat readout's TOP reaches above a standee's anchor —
  *  the head top (cone+sphere stack, cone-relative) plus the gap above the head
- *  plus the full card height. Feeds `framingForEntities`' `cardExtent` so the
- *  combat frame loosens just enough to keep the floating card on screen. Uses
- *  the leader (taller) geometry by default so leader cards never clip; pure and
- *  exported for tests. */
+ *  plus the main number plane height plus the step-floater rise distance (so
+ *  the floaters stay framed too). Feeds `framingForEntities`' `cardExtent` so
+ *  the combat frame loosens just enough to keep the floating readout on
+ *  screen. Uses the leader (taller) geometry by default so leader readouts
+ *  never clip; pure and exported for tests. */
 export function combatCardFrameExtent(leader = true) {
-  return headTopRelativeToCone(leader) + COMBAT_CARD_Y_GAP + COMBAT_CARD_PLANE_HEIGHT;
+  return headTopRelativeToCone(leader)
+    + COMBAT_READOUT_Y_GAP
+    + COMBAT_READOUT_NUM_PLANE_HEIGHT
+    + COMBAT_READOUT_FLOATER_Y_OFFSET
+    + COMBAT_READOUT_FLOATER_PLANE_HEIGHT
+    + COMBAT_READOUT_FLOATER_RISE_WU;
 }
 
 /** Minimum hex span we want visible at max zoom-in. 5 reads as a comfortable
@@ -10283,116 +10289,271 @@ export class Renderer3D {
     this._trackAnim(promise);
   }
 
-  /** G4 Phase 2 — spawn a billboarded combat card (rolled dice + total) above
-   *  a combatant's head during a 3D cinematic battle, alongside the legacy
-   *  modal. `side` is 'attacker' | 'defender'; the model is derived from the
-   *  battle `result` via `combatCardModel`.
+  /** G1 redesign — spawn a single big-number "combat readout" above a
+   *  combatant's head during a 3D cinematic battle. Replaces the old dice
+   *  card with a simpler, more legible primitive:
    *
-   *  The plane is parented to the combatant's standee so it tracks the lunge,
-   *  positioned just above the unit-icon badge, billboarded, flat-lit, and on
-   *  renderingGroupId 2 (above all world geometry, like the badge/floaters).
-   *  Each spawn owns a fresh DynamicTexture + StandardMaterial (never shared)
-   *  and disposes both — plus the plane — when the hold+fade completes. The
-   *  animation promise is registered with `_trackAnim` so `waitForAnimations`
-   *  drains it before the next battle in the resolution loop. */
-  addCombatCard(entityId, side, result, opts = {}) {
-    if (!this._scene || !this._babylon) return;
-    if (typeof document === 'undefined') return;
+   *    1. spawn the picked die value (e.g. "4") above the head, tinted by
+   *       side (red attacker / blue defender) with an ATK/DEF icon prefix.
+   *    2. hold ~200ms so the player registers the base roll.
+   *    3. for each contributing bonus, spawn a "+N reason" floater that
+   *       drifts up + fades while the main number ticks UP to the new
+   *       total with a brief scale pulse.
+   *    4. hold the final total ~600ms.
+   *    5. flash the winner's number GREEN and the loser's RED as both fade.
+   *
+   *  Returns a Promise that resolves when the whole sequence completes,
+   *  so callers can `Promise.all([atk, def])` for parallel attacker/defender
+   *  readouts. Also registered with `_trackAnim` so `waitForAnimations()`
+   *  drains it inside the resolution loop.
+   *
+   *  Opts:
+   *    - speedFactor:   multiplies all timings (default 1)
+   *    - attackerCol/Row, targetCol/Row: drives axis offset spreading
+   *    - setTimeoutFn:  injectable scheduler for tests
+   *    - baseHoldMs/stepMs/finalHoldMs/fadeMs: override defaults */
+  addCombatReadout(entityId, side, result, opts = {}) {
+    if (!this._scene || !this._babylon) return Promise.resolve();
+    if (typeof document === 'undefined') return Promise.resolve();
     const standee = this._entityStandees.get(entityId);
-    if (!standee || !standee.plane) return; // standee gone (e.g. killed) — skip
+    if (!standee || !standee.plane) return Promise.resolve();
     const BABYLON = this._babylon;
 
-    const model = combatCardModel(result, side);
+    const model = combatReadoutModel(result, side);
     const speedFactor = Number.isFinite(opts.speedFactor) && opts.speedFactor > 0
       ? opts.speedFactor : 1;
-    const holdMs = (opts.holdMs ?? COMBAT_CARD_HOLD_MS) * speedFactor;
-    const fadeMs = (opts.fadeMs ?? COMBAT_CARD_FADE_MS) * speedFactor;
+    const baseHoldMs  = (opts.baseHoldMs  ?? COMBAT_READOUT_BASE_HOLD_MS)  * speedFactor;
+    const stepMs      = (opts.stepMs      ?? COMBAT_READOUT_STEP_MS)       * speedFactor;
+    const finalHoldMs = (opts.finalHoldMs ?? COMBAT_READOUT_FINAL_HOLD_MS) * speedFactor;
+    const fadeMs      = (opts.fadeMs      ?? COMBAT_READOUT_FADE_MS)       * speedFactor;
+    const pulseMs     = COMBAT_READOUT_PULSE_MS * speedFactor;
+    const floaterRiseMs = COMBAT_READOUT_FLOATER_RISE_MS * speedFactor;
+    const setTimeoutFn = opts.setTimeoutFn || ((fn, ms) => setTimeout(fn, ms));
 
-    const tex = new BABYLON.DynamicTexture(
-      `combatCardTex_${entityId}_${side}_${Date.now()}`,
-      { width: COMBAT_CARD_TEX_WIDTH, height: COMBAT_CARD_TEX_HEIGHT },
+    // ── Main number plane ───────────────────────────────────────────────────
+    const numTex = new BABYLON.DynamicTexture(
+      `readoutNumTex_${entityId}_${side}_${Date.now()}`,
+      { width: COMBAT_READOUT_NUM_TEX_SIZE, height: COMBAT_READOUT_NUM_TEX_SIZE },
       this._scene,
       false,
     );
-    tex.hasAlpha = true;
-    paintCombatCard(tex.getContext(), model, {
-      width:  COMBAT_CARD_TEX_WIDTH,
-      height: COMBAT_CARD_TEX_HEIGHT,
+    numTex.hasAlpha = true;
+    paintReadoutNumber(numTex.getContext(), {
+      width:  COMBAT_READOUT_NUM_TEX_SIZE,
+      height: COMBAT_READOUT_NUM_TEX_SIZE,
+      value:  model.start,
+      color:  model.sideColor,
+      icon:   model.sideIcon,
     });
-    tex.update();
+    numTex.update();
 
-    const plane = BABYLON.MeshBuilder.CreatePlane(
-      `combatCard_${entityId}_${side}_${Date.now()}`,
-      { width: COMBAT_CARD_PLANE_WIDTH, height: COMBAT_CARD_PLANE_HEIGHT },
+    const numPlane = BABYLON.MeshBuilder.CreatePlane(
+      `readoutNum_${entityId}_${side}_${Date.now()}`,
+      { width: COMBAT_READOUT_NUM_PLANE_WIDTH, height: COMBAT_READOUT_NUM_PLANE_HEIGHT },
       this._scene,
     );
-    plane.billboardMode    = BABYLON.Mesh.BILLBOARDMODE_ALL;
-    plane.isPickable       = false;
-    plane.renderingGroupId = 2; // on top of world geometry + standees
+    numPlane.billboardMode    = BABYLON.Mesh.BILLBOARDMODE_ALL;
+    numPlane.isPickable       = false;
+    numPlane.renderingGroupId = 2;
 
-    const mat = new BABYLON.StandardMaterial(`combatCardMat_${plane.uniqueId}`, this._scene);
-    mat.diffuseTexture = tex;
-    mat.opacityTexture = tex;
-    applyFlatUnitIconMaterial(BABYLON, mat); // flat-lit UI sticker
-    plane.material = mat;
+    const numMat = new BABYLON.StandardMaterial(`readoutNumMat_${numPlane.uniqueId}`, this._scene);
+    numMat.diffuseTexture = numTex;
+    numMat.opacityTexture = numTex;
+    applyFlatUnitIconMaterial(BABYLON, numMat);
+    numPlane.material = numMat;
 
-    // Parent to the standee so the card tracks the lunge slide. Sit JUST ABOVE
-    // THE HEAD with a small gap — not stacked above the unit-icon badge. The
-    // old badge-stacked offset pushed the card off the top of the screen at the
-    // tight combat-frame zoom (operator feedback). Anchoring to the head top
-    // (cone-relative) + small gap + half the card height keeps it inside the
-    // viewport. The unit-icon badge is hidden for the card's lifetime (below)
-    // so the two billboards never overlap.
-    plane.parent = standee.plane;
+    // Parent to the standee so the readout tracks the lunge. Push the number
+    // BEHIND the combatant along the attack axis so attacker and defender
+    // numbers don't overlap in screen space when adjacent.
+    numPlane.parent = standee.plane;
     const headTopRel = headTopRelativeToCone(standee.leader);
-    // G1-polish: push the card BEHIND its combatant along the attack axis so
-    // attacker and defender cards don't overlap in screen space when the
-    // combatants are adjacent. Attacker → −axis (behind attacker, away from
-    // target); defender → +axis (behind defender, away from attacker). The
-    // offset is applied in the standee's local XZ — the standee carries no
-    // world rotation, so local XZ matches world XZ. The plane's billboard
-    // mode rotates around its origin AFTER the parent translation, so the
-    // card still faces the camera.
     const axisOffset = computeCombatCardAxisOffset(side, opts);
-    plane.position.set(
-      axisOffset.x,
-      headTopRel + COMBAT_CARD_Y_GAP + COMBAT_CARD_PLANE_HEIGHT / 2,
-      axisOffset.z,
-    );
-    plane.visibility = 1;
+    const numCenterY = headTopRel + COMBAT_READOUT_Y_GAP + COMBAT_READOUT_NUM_PLANE_HEIGHT / 2;
+    numPlane.position.set(axisOffset.x, numCenterY, axisOffset.z);
+    numPlane.visibility = 1;
 
-    // Hide this unit's icon badge while the card is up. The card carries the
-    // dice/total readout and sits where the icon would; hiding the icon keeps
-    // the above-head stack clean (no overlap) and is restored on dispose.
+    // Hide this unit's icon badge while the readout is up — keep the
+    // above-head stack clean.
     const iconEntry  = this._unitIconBadges?.get(entityId);
     const iconPlane  = iconEntry?.plane ?? null;
     const iconVisRestore = iconPlane ? iconPlane.visibility : null;
     if (iconPlane) iconPlane.visibility = 0;
 
-    const fps = 60;
-    const holdFrames = Math.max(1, Math.round(holdMs / 1000 * fps));
-    const fadeFrames = Math.max(1, Math.round(fadeMs / 1000 * fps));
-    const totalFrames = holdFrames + fadeFrames;
+    // Track everything that needs disposing if we abort early.
+    let disposed = false;
+    const stepDisposables = [];
+    const disposeAll = () => {
+      if (disposed) return;
+      disposed = true;
+      try { numPlane.dispose(); } catch {}
+      try { numMat.dispose(); } catch {}
+      try { numTex.dispose(); } catch {}
+      for (const d of stepDisposables) {
+        try { d.plane?.dispose(); } catch {}
+        try { d.mat?.dispose();   } catch {}
+        try { d.tex?.dispose();   } catch {}
+      }
+      if (iconPlane && iconVisRestore != null) iconPlane.visibility = iconVisRestore;
+    };
 
-    const animFade = new BABYLON.Animation('combatCardA', 'visibility', fps,
-      BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
-    animFade.setKeys([
-      { frame: 0,           value: 1 },
-      { frame: holdFrames,  value: 1 },
-      { frame: totalFrames, value: 0 },
-    ]);
-
+    // ── Sequence ────────────────────────────────────────────────────────────
     const promise = new Promise(resolve => {
-      this._scene.beginDirectAnimation(plane, [animFade], 0, totalFrames, false, 1, () => {
-        plane.dispose();
-        mat.dispose();
-        tex.dispose();
-        // Restore the icon badge we hid for the card's lifetime.
-        if (iconPlane && iconVisRestore != null) iconPlane.visibility = iconVisRestore;
-        resolve();
-      });
+      // Schedule each bonus step: repaint the number + scale pulse + spawn floater.
+      for (let i = 0; i < model.steps.length; i++) {
+        const step = model.steps[i];
+        const at = baseHoldMs + i * stepMs;
+        setTimeoutFn(() => {
+          if (disposed) return;
+          // Repaint the main number with the new running total.
+          paintReadoutNumber(numTex.getContext(), {
+            width:  COMBAT_READOUT_NUM_TEX_SIZE,
+            height: COMBAT_READOUT_NUM_TEX_SIZE,
+            value:  step.value,
+            color:  model.sideColor,
+            icon:   model.sideIcon,
+          });
+          numTex.update();
+          // Scale pulse 1 → peak → 1 over pulseMs.
+          this._pulseReadoutPlane(numPlane, COMBAT_READOUT_PULSE_PEAK, pulseMs);
+          // Spawn the "+N reason" floater beside the main number.
+          const fd = this._spawnReadoutStepFloater(
+            standee, axisOffset, headTopRel, step, model, floaterRiseMs,
+          );
+          if (fd) stepDisposables.push(fd);
+        }, at);
+      }
+
+      // Final phase: hold the total, then flash outcome colour + fade.
+      const stepsEnd = baseHoldMs + model.steps.length * stepMs;
+      const fadeStartAt = stepsEnd + finalHoldMs;
+
+      setTimeoutFn(() => {
+        if (disposed) { resolve(); return; }
+        // Outcome flash — repaint the number in green (winner) or red (loser).
+        const outcomeColor = model.won ? COMBAT_READOUT_WIN_COLOR : COMBAT_READOUT_LOSE_COLOR;
+        paintReadoutNumber(numTex.getContext(), {
+          width:  COMBAT_READOUT_NUM_TEX_SIZE,
+          height: COMBAT_READOUT_NUM_TEX_SIZE,
+          value:  model.total,
+          color:  outcomeColor,
+          icon:   model.sideIcon,
+        });
+        numTex.update();
+        // Fade out the plane.
+        const fps = 60;
+        const fadeFrames = Math.max(1, Math.round(fadeMs / 1000 * fps));
+        const animFade = new BABYLON.Animation('readoutFade', 'visibility', fps,
+          BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+        animFade.setKeys([{ frame: 0, value: 1 }, { frame: fadeFrames, value: 0 }]);
+        this._scene.beginDirectAnimation(numPlane, [animFade], 0, fadeFrames, false, 1, () => {
+          disposeAll();
+          resolve();
+        });
+      }, fadeStartAt);
     });
     this._trackAnim(promise);
+    return promise;
+  }
+
+  /** Internal — scale pulse on the readout number plane (1 → peak → 1).
+   *  Used on each bonus tick to reinforce the bump. Doesn't track the
+   *  pulse promise (the parent readout fade controls overall lifetime). */
+  _pulseReadoutPlane(plane, peak, durationMs) {
+    if (!this._scene || !this._babylon || !plane) return;
+    const BABYLON = this._babylon;
+    const fps = 60;
+    const halfFrames = Math.max(1, Math.round((durationMs / 2) / 1000 * fps));
+    const totalFrames = halfFrames * 2;
+    const baseX = plane.scaling.x;
+    const baseY = plane.scaling.y;
+    const baseZ = plane.scaling.z;
+    const anim = new BABYLON.Animation('readoutPulse', 'scaling', fps,
+      BABYLON.Animation.ANIMATIONTYPE_VECTOR3, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+    anim.setKeys([
+      { frame: 0,           value: new BABYLON.Vector3(baseX, baseY, baseZ) },
+      { frame: halfFrames,  value: new BABYLON.Vector3(baseX * peak, baseY * peak, baseZ * peak) },
+      { frame: totalFrames, value: new BABYLON.Vector3(baseX, baseY, baseZ) },
+    ]);
+    this._scene.beginDirectAnimation(plane, [anim], 0, totalFrames, false, 1, () => {
+      plane.scaling.x = baseX;
+      plane.scaling.y = baseY;
+      plane.scaling.z = baseZ;
+    });
+  }
+
+  /** Internal — spawn a "+N reason" floater plane beside the main readout
+   *  number, drift it up + fade it out. Returns `{ plane, mat, tex }` so
+   *  the parent readout can dispose it if the sequence aborts early. */
+  _spawnReadoutStepFloater(standee, axisOffset, headTopRel, step, model, riseMs) {
+    if (!this._scene || !this._babylon) return null;
+    const BABYLON = this._babylon;
+    const sign = step.delta < 0 ? '−' : '+';
+    const mag = Math.abs(step.delta | 0);
+    const label = `${sign}${mag} ${step.icon ?? ''} ${step.label ?? ''}`.trim();
+    // Positive deltas → green-ish, negative → red-ish. Keeps the readout
+    // legible at a glance without depending on side colour.
+    const color = step.delta < 0 ? COMBAT_READOUT_LOSE_COLOR : COMBAT_READOUT_WIN_COLOR;
+
+    const tex = new BABYLON.DynamicTexture(
+      `readoutFloaterTex_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      { width: COMBAT_READOUT_FLOATER_TEX_WIDTH, height: COMBAT_READOUT_FLOATER_TEX_HEIGHT },
+      this._scene,
+      false,
+    );
+    tex.hasAlpha = true;
+    paintReadoutFloater(tex.getContext(), {
+      width:  COMBAT_READOUT_FLOATER_TEX_WIDTH,
+      height: COMBAT_READOUT_FLOATER_TEX_HEIGHT,
+      label,
+      color,
+    });
+    tex.update();
+
+    const plane = BABYLON.MeshBuilder.CreatePlane(
+      `readoutFloater_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      { width: COMBAT_READOUT_FLOATER_PLANE_WIDTH, height: COMBAT_READOUT_FLOATER_PLANE_HEIGHT },
+      this._scene,
+    );
+    plane.billboardMode    = BABYLON.Mesh.BILLBOARDMODE_ALL;
+    plane.isPickable       = false;
+    plane.renderingGroupId = 2;
+
+    const mat = new BABYLON.StandardMaterial(`readoutFloaterMat_${plane.uniqueId}`, this._scene);
+    mat.diffuseTexture = tex;
+    mat.opacityTexture = tex;
+    applyFlatUnitIconMaterial(BABYLON, mat);
+    plane.material = mat;
+
+    plane.parent = standee.plane;
+    const startY = headTopRel
+      + COMBAT_READOUT_Y_GAP
+      + COMBAT_READOUT_NUM_PLANE_HEIGHT
+      + COMBAT_READOUT_FLOATER_Y_OFFSET
+      + COMBAT_READOUT_FLOATER_PLANE_HEIGHT / 2;
+    const endY = startY + COMBAT_READOUT_FLOATER_RISE_WU;
+    plane.position.set(axisOffset.x, startY, axisOffset.z);
+    plane.visibility = 1;
+
+    const fps = 60;
+    const frames = Math.max(6, Math.round(riseMs / 1000 * fps));
+    const animPos = new BABYLON.Animation('readoutFloaterY', 'position.y', fps,
+      BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+    animPos.setKeys([{ frame: 0, value: startY }, { frame: frames, value: endY }]);
+
+    const animFade = new BABYLON.Animation('readoutFloaterA', 'visibility', fps,
+      BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+    animFade.setKeys([
+      { frame: 0,                        value: 1 },
+      { frame: Math.floor(frames * 0.4), value: 1 },
+      { frame: frames,                   value: 0 },
+    ]);
+
+    this._scene.beginDirectAnimation(plane, [animPos, animFade], 0, frames, false, 1, () => {
+      try { plane.dispose(); } catch {}
+      try { mat.dispose();   } catch {}
+      try { tex.dispose();   } catch {}
+    });
+    return { plane, mat, tex };
   }
 
   // ─── Combat outcome: winner/loser visual cue ─────────────────────────────
@@ -15476,34 +15637,55 @@ export const FLOAT_TEXT_PLANE_HEIGHT = 1.2;
 export const FLOAT_TEXT_TEX_WIDTH  = 512;
 export const FLOAT_TEXT_TEX_HEIGHT = 192;
 
-/** Combat card (G4 Phase 2) — billboarded dice/total readout that floats
- *  above a combatant's head during a 3D cinematic battle, alongside the
- *  legacy modal. World-space plane dimensions (a wide rounded card) and the
- *  backing DynamicTexture pixel size. The card is wider than the floater
- *  pill so the dice row + total read cleanly even at zoom-out. */
-export const COMBAT_CARD_PLANE_WIDTH  = 2.2;
-export const COMBAT_CARD_PLANE_HEIGHT = 1.1;
-export const COMBAT_CARD_TEX_WIDTH    = 384;
-export const COMBAT_CARD_TEX_HEIGHT   = 192;
-/** Clearance (world units) between the unit-icon badge top and the bottom
- *  edge of the combat card, so the card stacks above the badge/HP ring. */
-export const COMBAT_CARD_Y_GAP = 0.18;
-/** Default hold time (ms) at full opacity before the card fades. Scaled by
- *  the caller's speed factor. */
-export const COMBAT_CARD_HOLD_MS = 1100;
-/** Fade-out time (ms) after the hold. */
-export const COMBAT_CARD_FADE_MS = 350;
-/** Horizontal offset (world units) applied to each combat card along the
- *  attack axis so the attacker's and defender's cards spread to opposite
+/** Combat readout (G1 redesign — replaces the old dice-card). A single big
+ *  number floats above each combatant's head; per-bonus floaters animate up
+ *  as the main number ticks to the new total. World-space plane dimensions
+ *  are a square so the number reads cleanly at zoom-out. */
+export const COMBAT_READOUT_NUM_PLANE_WIDTH  = 1.2;
+export const COMBAT_READOUT_NUM_PLANE_HEIGHT = 1.2;
+export const COMBAT_READOUT_NUM_TEX_SIZE     = 256;
+/** Per-bonus "+N reason" floater that drifts up beside the main number. */
+export const COMBAT_READOUT_FLOATER_PLANE_WIDTH  = 1.8;
+export const COMBAT_READOUT_FLOATER_PLANE_HEIGHT = 0.45;
+export const COMBAT_READOUT_FLOATER_TEX_WIDTH    = 384;
+export const COMBAT_READOUT_FLOATER_TEX_HEIGHT   = 96;
+/** Clearance (world units) between the head top and the BOTTOM of the
+ *  readout number plane, so the number sits just above the head. */
+export const COMBAT_READOUT_Y_GAP = 0.18;
+/** Sequence timing (ms, before speedFactor scaling).
+ *  - BASE_HOLD_MS: hold the picked-die value so the player registers the base roll.
+ *  - STEP_MS: time per bonus — floater spawns AND main number ticks at this beat.
+ *  - FINAL_HOLD_MS: hold the final total before the outcome flash + fade.
+ *  - FADE_MS: outcome-tinted (green/red) fade-out.
+ *  - PULSE_MS / PULSE_PEAK: scale pulse of the main number on each tick. */
+export const COMBAT_READOUT_BASE_HOLD_MS  = 200;
+export const COMBAT_READOUT_STEP_MS       = 400;
+export const COMBAT_READOUT_FINAL_HOLD_MS = 600;
+export const COMBAT_READOUT_FADE_MS       = 400;
+export const COMBAT_READOUT_PULSE_MS      = 200;
+export const COMBAT_READOUT_PULSE_PEAK    = 1.2;
+/** Per-bonus floater rise + fade. Rises above the main number and fades. */
+export const COMBAT_READOUT_FLOATER_RISE_MS = 500;
+export const COMBAT_READOUT_FLOATER_RISE_WU = 0.7;
+/** Vertical offset above the main-number plane TOP at which a step floater
+ *  starts (extra clearance above the readout so the floater doesn't overlap
+ *  the number while ticking). */
+export const COMBAT_READOUT_FLOATER_Y_OFFSET = 0.05;
+/** Horizontal offset (world units) applied to each combat readout along the
+ *  attack axis so the attacker's and defender's numbers spread to opposite
  *  outer sides instead of stacking in screen space when combatants are
- *  adjacent. Attacker card sits BEHIND the attacker (−axis direction); the
- *  defender card sits BEHIND the defender (+axis direction). */
+ *  adjacent. Attacker number sits BEHIND the attacker (−axis direction); the
+ *  defender number sits BEHIND the defender (+axis direction). */
 export const CARD_AXIS_OFFSET_WORLD = 0.8;
-/** Side-tinted colours for the combat card (attacker = red, defender =
- *  blue). Used by both the header strip and the card border so the
- *  player can tell at a glance which card belongs to which combatant. */
+/** Side-tinted colours (attacker = red, defender = blue) — the main number
+ *  is tinted with these so the player can tell at a glance which combatant
+ *  the number belongs to. */
 export const COMBAT_CARD_ATK_COLOR = '#cc3939';
 export const COMBAT_CARD_DEF_COLOR = '#3a6ab8';
+/** Outcome-flash colours — at the end of the sequence the winner's number
+ *  flashes green and the loser's number flashes red as both fade out. */
+export const COMBAT_READOUT_WIN_COLOR  = '#3ee013';
+export const COMBAT_READOUT_LOSE_COLOR = '#ff7a7a';
 
 /** Compute the local-space XZ offset for a combat card so attacker and
  *  defender cards sit on opposite outer sides of the standees along the
@@ -16276,271 +16458,99 @@ export function paintFloaterText(ctx, opts) {
 }
 
 /**
- * Pure: derive a combat-card view-model for one side of a battle `result`.
+ * Pure: derive a combat-readout view-model for one side of a battle `result`.
+ *
+ * The G1 readout drops the dice-card and shows a single big number above
+ * the combatant's head. The number starts at the picked die value (`start`)
+ * and ticks up once per contributing bonus until it reaches `total`. The
+ * `steps` array describes each tick: per-step `delta` (+/− N), the running
+ * total `value` after this step, and an `icon` + `label` for the "+N reason"
+ * floater that spawns alongside.
  *
  * Reads `result.breakdown` (set by `executeBattle` in actions.js): `atkPool`
  * / `defPool` are the rolled d6 faces, `atkBaseDie` / `defBaseDie` are the
  * picked die (best-of for advantage, worst-of for disadvantage), and the
  * top-level `attackRoll` / `defenseRoll` are the post-modifier totals.
  *
- * Returns `{ poolFaces:number[], picked:number, total:number, won:boolean }`
- * for `side` ('attacker' | 'defender'). The attacker "won" when the result
- * hit; the defender "won" when it didn't. Falls back gracefully when the
- * breakdown is missing (e.g. legacy snapshots): poolFaces collapses to the
- * picked die when there's no pool, and total falls back to the picked die.
+ * Returns `{ start, steps, total, won, side, sideColor, sideIcon }`. Falls
+ * back gracefully when the breakdown is missing (start collapses to 0 and
+ * total falls back to the picked die / 0).
  */
-export function combatCardModel(result, side) {
+export function combatReadoutModel(result, side) {
   const isAtk = side === 'attacker';
   const bd = (result && result.breakdown) || {};
-  const rawPool = isAtk ? bd.atkPool : bd.defPool;
   const rawPicked = isAtk ? bd.atkBaseDie : bd.defBaseDie;
-  const rawTotal = isAtk ? result?.attackRoll : result?.defenseRoll;
+  const rawTotal  = isAtk ? result?.attackRoll : result?.defenseRoll;
 
-  let poolFaces = Array.isArray(rawPool)
-    ? rawPool.filter(n => Number.isFinite(n))
-    : [];
-  let picked = Number.isFinite(rawPicked)
-    ? rawPicked
-    : (poolFaces.length ? poolFaces[0] : 0);
-  // No pool but we have a picked die → show a single-die pool.
-  if (poolFaces.length === 0 && Number.isFinite(picked) && picked > 0) {
-    poolFaces = [picked];
-  }
-  const total = Number.isFinite(rawTotal) ? rawTotal : picked;
-  const won = isAtk ? !!result?.hit : !result?.hit;
-  // Modifier chips that contributed to this side's post-die total. Order
-  // matters — chips paint in this order under the picked die so the running
-  // sum reads as picked → +chip1 → +chip2 → total. Only nonzero contributions
-  // appear (defender gets phase/staff omitted; attacker gets defender-side
-  // fortification/cover omitted) so the chip strip stays compact.
-  const modifiers = [];
+  const start = Number.isFinite(rawPicked) ? rawPicked : 0;
+  const steps = [];
+  let running = start;
+  const addStep = (icon, label, delta) => {
+    if (!delta) return;
+    running += delta;
+    steps.push({ icon, label, delta, value: running });
+  };
   if (isAtk) {
-    if (bd.phaseBonus > 0)        modifiers.push({ icon: '🌙', label: 'phase',  value: bd.phaseBonus });
-    if (bd.atkStaffBonus > 0)     modifiers.push({ icon: '🪄', label: 'staff',  value: bd.atkStaffBonus });
-    if (bd.atkGangupFlat > 0)     modifiers.push({ icon: '⚔',  label: 'gang',   value: bd.atkGangupFlat });
-    if (bd.atkFortAtkBonus > 0)   modifiers.push({ icon: '🏰', label: 'fort',   value: bd.atkFortAtkBonus });
+    if (bd.phaseBonus > 0)        addStep('🌙', 'phase',  bd.phaseBonus);
+    if (bd.atkStaffBonus > 0)     addStep('🪄', 'staff',  bd.atkStaffBonus);
+    if (bd.atkGangupFlat > 0)     addStep('⚔',  'allies', bd.atkGangupFlat);
+    if (bd.atkFortAtkBonus > 0)   addStep('🏰', 'fort',   bd.atkFortAtkBonus);
   } else {
-    if (bd.fortBonus > 0)         modifiers.push({ icon: '🏰', label: 'fort',   value: bd.fortBonus });
-    if (bd.defGangupFlat > 0)     modifiers.push({ icon: '🛡', label: 'guard',  value: bd.defGangupFlat });
-    if (bd.forestCoverBonus > 0)  modifiers.push({ icon: '🌲', label: 'cover',  value: bd.forestCoverBonus });
-    if (bd.fatiguePenalty > 0)    modifiers.push({ icon: '💤', label: 'tired', value: -bd.fatiguePenalty });
+    if (bd.fortBonus > 0)         addStep('🏰', 'fort',   bd.fortBonus);
+    if (bd.defGangupFlat > 0)     addStep('🛡', 'guard',  bd.defGangupFlat);
+    if (bd.forestCoverBonus > 0)  addStep('🌲', 'cover',  bd.forestCoverBonus);
+    if (bd.fatiguePenalty > 0)    addStep('💤', 'tired', -bd.fatiguePenalty);
   }
-  // G1-polish: carry the side tag through to the painter so it can draw an
-  // ATK/DEF header strip + tinted border. 'atk' / 'def' are the short keys
-  // (the input `side` is the longer 'attacker' / 'defender' alias).
+  const total = Number.isFinite(rawTotal) ? rawTotal : running;
+  const won = isAtk ? !!result?.hit : !result?.hit;
   const sideKey = isAtk ? 'atk' : 'def';
   const sideColor = isAtk ? COMBAT_CARD_ATK_COLOR : COMBAT_CARD_DEF_COLOR;
-  const sideLabel = isAtk ? '⚔ ATK' : '🛡 DEF';
-  return { poolFaces, picked, total, won, modifiers, side: sideKey, sideColor, sideLabel };
+  const sideIcon  = isAtk ? '⚔' : '🛡';
+  return { start, steps, total, won, side: sideKey, sideColor, sideIcon };
 }
 
 /**
- * Pure canvas painter for a combat card (sibling of `paintFloaterText`):
- * draws the rolled dice as a row of rounded squares — the picked die rimmed
- * in the accent colour — then the post-modifier total beneath them. The whole
- * card is tinted by `won` (gold) vs lost (red). No Babylon, no canvas
- * creation; the Babylon-side `addCombatCard` is the thin wrapper.
+ * Pure canvas painter for the readout's single-number plane. No background;
+ * just the side-icon + value with a chunky black outline so it reads at any
+ * zoom. `color` is the fill (side tint at the start, then the outcome
+ * green/red at the end).
  */
-export function paintCombatCard(ctx, model, opts) {
-  const { width, height } = opts;
-  const { poolFaces = [], picked, total, won, side, sideColor, sideLabel } = model || {};
+export function paintReadoutNumber(ctx, opts) {
+  const { width, height, value, color, icon = '' } = opts;
   ctx.clearRect(0, 0, width, height);
-
-  const accent  = won ? '#ffd24a' : '#ff7a7a';
-  const dieFill = won ? '#2a3a20' : '#3a2020';
-  // Side tint (red for attacker, blue for defender) — used for the header
-  // strip background and the card outline so the reader can tell at a glance
-  // which card belongs to which combatant.
-  const hasSide = side === 'atk' || side === 'def';
-  const sideTint = hasSide ? sideColor : null;
-
-  // Background card — semi-opaque dark rounded rect.
-  const margin = Math.round(width * 0.03);
-  const cardX = margin;
-  const cardY = margin;
-  const cardW = width - margin * 2;
-  const cardH = height - margin * 2;
-  const cardR = Math.round(Math.min(cardW, cardH) * 0.12);
-  ctx.fillStyle = 'rgba(0,0,0,0.72)';
-  ctx.beginPath();
-  ctx.moveTo(cardX + cardR, cardY);
-  ctx.lineTo(cardX + cardW - cardR, cardY);
-  ctx.arcTo(cardX + cardW, cardY, cardX + cardW, cardY + cardR, cardR);
-  ctx.lineTo(cardX + cardW, cardY + cardH - cardR);
-  ctx.arcTo(cardX + cardW, cardY + cardH, cardX + cardW - cardR, cardY + cardH, cardR);
-  ctx.lineTo(cardX + cardR, cardY + cardH);
-  ctx.arcTo(cardX, cardY + cardH, cardX, cardY + cardH - cardR, cardR);
-  ctx.lineTo(cardX, cardY + cardR);
-  ctx.arcTo(cardX, cardY, cardX + cardR, cardY, cardR);
-  ctx.closePath();
-  ctx.fill();
-  // Outline rim — tinted with the side colour (attacker = red, defender =
-  // blue) so the rim reinforces the side label at a glance. Falls back to
-  // the win/lose accent for legacy callers that don't pass a side.
-  ctx.lineWidth = Math.max(3, Math.round(width * 0.012));
-  ctx.strokeStyle = sideTint || accent;
-  ctx.stroke();
-
-  // ── Side header strip ────────────────────────────────────────────────
-  // A short coloured band across the top of the card with "⚔ ATK" /
-  // "🛡 DEF" so the player can tell instantly which card belongs to the
-  // attacker vs defender, even when the cards are spread to opposite
-  // sides of the standees. Skip the header (and keep the legacy full-card
-  // layout) for callers that don't pass a side — keeps back-compat for
-  // tests/snapshots.
-  const headerH = hasSide ? Math.round(cardH * 0.14) : 0;
-  if (hasSide) {
-    // Filled rounded "tab" matching the top rounded corners; the bottom
-    // edge is a flat line that meets the dice band cleanly.
-    ctx.fillStyle = sideTint;
-    ctx.beginPath();
-    ctx.moveTo(cardX + cardR, cardY);
-    ctx.lineTo(cardX + cardW - cardR, cardY);
-    ctx.arcTo(cardX + cardW, cardY, cardX + cardW, cardY + cardR, cardR);
-    ctx.lineTo(cardX + cardW, cardY + headerH);
-    ctx.lineTo(cardX, cardY + headerH);
-    ctx.lineTo(cardX, cardY + cardR);
-    ctx.arcTo(cardX, cardY, cardX + cardR, cardY, cardR);
-    ctx.closePath();
-    ctx.fill();
-    // Label text — bold, white, centred in the strip.
-    const labelFont = Math.max(10, Math.round(headerH * 0.62));
-    ctx.font = `900 ${labelFont}px sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#fff';
-    ctx.fillText(sideLabel || '', cardX + cardW / 2, cardY + headerH / 2);
-  }
-
-  // ── Dice row ──────────────────────────────────────────────────────────
-  // Content area starts BELOW the header strip; if there's no header (legacy
-  // model) we use the full card. All vertical bands (dice / chips / total)
-  // measure off `contentY` and `contentH` so the header can grow/shrink
-  // without re-tuning the layout.
-  const contentY = cardY + headerH;
-  const contentH = cardH - headerH;
-  const n = Math.max(1, poolFaces.length);
-  // Reserve the top ~58% of the content area for the dice, the rest for
-  // the total / chip strip.
-  const diceBandH = contentH * 0.56;
-  const gap = Math.round(width * 0.02);
-  const die = Math.min(
-    Math.round(diceBandH * 0.9),
-    Math.floor((cardW - gap * (n + 1)) / n),
-  );
-  const dieR = Math.max(2, Math.round(die * 0.16));
-  const rowW = die * n + gap * (n - 1);
-  let dx = (width - rowW) / 2;
-  const dy = contentY + Math.round((diceBandH - die) / 2) + Math.round(contentH * 0.06);
-  ctx.font = `900 ${Math.round(die * 0.62)}px sans-serif`;
+  const text = icon ? `${icon} ${value}` : String(value);
+  const fontPx = Math.round(height * 0.55);
+  ctx.font = `900 ${fontPx}px sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-
-  let pickedDrawn = false;
-  for (let i = 0; i < poolFaces.length; i++) {
-    const face = poolFaces[i];
-    // Highlight the FIRST face that equals the picked die.
-    const isPicked = !pickedDrawn && face === picked;
-    if (isPicked) pickedDrawn = true;
-
-    ctx.fillStyle = isPicked ? dieFill : '#1a1a1f';
-    ctx.beginPath();
-    ctx.moveTo(dx + dieR, dy);
-    ctx.lineTo(dx + die - dieR, dy);
-    ctx.arcTo(dx + die, dy, dx + die, dy + dieR, dieR);
-    ctx.lineTo(dx + die, dy + die - dieR);
-    ctx.arcTo(dx + die, dy + die, dx + die - dieR, dy + die, dieR);
-    ctx.lineTo(dx + dieR, dy + die);
-    ctx.arcTo(dx, dy + die, dx, dy + die - dieR, dieR);
-    ctx.lineTo(dx, dy + dieR);
-    ctx.arcTo(dx, dy, dx + dieR, dy, dieR);
-    ctx.closePath();
-    ctx.fill();
-    ctx.lineWidth = isPicked
-      ? Math.max(3, Math.round(die * 0.10))
-      : Math.max(1, Math.round(die * 0.04));
-    ctx.strokeStyle = isPicked ? accent : '#555';
-    ctx.stroke();
-
-    ctx.fillStyle = isPicked ? '#fff' : '#bbb';
-    ctx.fillText(String(face), dx + die / 2, dy + die / 2);
-
-    dx += die + gap;
-  }
-
-  // ── Modifier chips ────────────────────────────────────────────────────
-  // Stack the contributing modifiers (phase, gang-up, fort, staff, cover,
-  // fatigue …) as a small strip below the dice so the player can read WHY
-  // the total landed where it did. The chips paint in left-to-right order;
-  // values prefix with their sign.
-  const modifiers = Array.isArray(opts?.modifiers)
-    ? opts.modifiers
-    : (Array.isArray(model?.modifiers) ? model.modifiers : []);
-  const chipBandTop = contentY + diceBandH;
-  const chipBandH   = Math.round(contentH * 0.18);
-  if (modifiers.length > 0) {
-    const chipFont = Math.max(10, Math.round(chipBandH * 0.55));
-    ctx.font = `700 ${chipFont}px sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    // Measure first so the row centres in the card; pad each chip uniformly.
-    const padX = Math.round(chipFont * 0.45);
-    const chipH = Math.round(chipFont * 1.6);
-    const chipR = Math.round(chipH * 0.35);
-    const chipGap = Math.round(chipFont * 0.35);
-    const labels = modifiers.map(m => {
-      const sign = m.value < 0 ? '−' : '+';
-      const mag = Math.abs(m.value | 0);
-      return `${m.icon ?? ''} ${sign}${mag}`.trim();
-    });
-    const widths = labels.map(s => Math.max(chipFont * 1.6, ctx.measureText(s).width + padX * 2));
-    const rowW = widths.reduce((a, b) => a + b, 0) + chipGap * (modifiers.length - 1);
-    let cx = (width - rowW) / 2;
-    const cyChip = chipBandTop + (chipBandH - chipH) / 2 + chipH / 2;
-    for (let i = 0; i < modifiers.length; i++) {
-      const cw = widths[i];
-      // Chip background — translucent dark with accent-tinted rim.
-      ctx.fillStyle = 'rgba(0,0,0,0.55)';
-      ctx.beginPath();
-      ctx.moveTo(cx + chipR, cyChip - chipH / 2);
-      ctx.lineTo(cx + cw - chipR, cyChip - chipH / 2);
-      ctx.arcTo(cx + cw, cyChip - chipH / 2, cx + cw, cyChip - chipH / 2 + chipR, chipR);
-      ctx.lineTo(cx + cw, cyChip + chipH / 2 - chipR);
-      ctx.arcTo(cx + cw, cyChip + chipH / 2, cx + cw - chipR, cyChip + chipH / 2, chipR);
-      ctx.lineTo(cx + chipR, cyChip + chipH / 2);
-      ctx.arcTo(cx, cyChip + chipH / 2, cx, cyChip + chipH / 2 - chipR, chipR);
-      ctx.lineTo(cx, cyChip - chipH / 2 + chipR);
-      ctx.arcTo(cx, cyChip - chipH / 2, cx + chipR, cyChip - chipH / 2, chipR);
-      ctx.closePath();
-      ctx.fill();
-      ctx.lineWidth = Math.max(1, Math.round(chipH * 0.06));
-      ctx.strokeStyle = accent;
-      ctx.stroke();
-      ctx.fillStyle = '#fff';
-      ctx.fillText(labels[i], cx + cw / 2, cyChip);
-      cx += cw + chipGap;
-    }
-  }
-
-  // ── Total ─────────────────────────────────────────────────────────────
-  // Push the total below the chip strip if there is one, otherwise it
-  // floats in the lower band as before.
-  const totalY = (modifiers.length > 0)
-    ? chipBandTop + chipBandH + (contentH - diceBandH - chipBandH) / 2
-    : contentY + diceBandH + (contentH - diceBandH) / 2;
-  const totalFontPx = (modifiers.length > 0)
-    ? Math.round(contentH * 0.22)
-    : Math.round(contentH * 0.26);
-  ctx.font = `900 ${totalFontPx}px sans-serif`;
-  ctx.lineWidth = Math.max(4, Math.round(cardH * 0.03));
   ctx.lineJoin = 'round';
+  ctx.miterLimit = 2;
+  ctx.lineWidth = Math.max(6, Math.round(fontPx * 0.20));
+  ctx.strokeStyle = '#000';
+  ctx.strokeText(text, width / 2, height / 2);
+  ctx.fillStyle = color;
+  ctx.fillText(text, width / 2, height / 2);
+}
+
+/**
+ * Pure canvas painter for a per-bonus "+N reason" floater. Outlined text on
+ * a transparent background; `color` controls the fill (defaults to white,
+ * caller can pass green for positive deltas / red for negative).
+ */
+export function paintReadoutFloater(ctx, opts) {
+  const { width, height, label, color = '#fff' } = opts;
+  ctx.clearRect(0, 0, width, height);
+  const fontPx = Math.round(height * 0.62);
+  ctx.font = `800 ${fontPx}px sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round';
+  ctx.miterLimit = 2;
+  ctx.lineWidth = Math.max(4, Math.round(fontPx * 0.20));
   ctx.strokeStyle = '#000';
-  const totalStr = String(total);
-  ctx.strokeText(totalStr, width / 2, totalY);
-  ctx.fillStyle = accent;
-  ctx.fillText(totalStr, width / 2, totalY);
+  ctx.strokeText(label, width / 2, height / 2);
+  ctx.fillStyle = color;
+  ctx.fillText(label, width / 2, height / 2);
 }
 
 /**

@@ -984,20 +984,22 @@ async function _run3DCombatCardHold(actorSnap, targetSnap, result, redrawFn) {
     }
   }
   renderer.holdPunchAtImpact?.();
-  if (typeof renderer.addCombatCard === 'function') {
-    // G1-polish: pass attacker/target hex coords so the renderer can push
-    // each card to the OUTER side of its combatant along the attack axis,
-    // preventing the two cards from stacking in screen space at melee range.
-    const cardAxis = {
+  if (typeof renderer.addCombatReadout === 'function') {
+    // G1 redesign — the combat card was replaced by a single big-number
+    // readout per combatant. Pass attacker/target hex coords so the renderer
+    // can push each number to the OUTER side of its combatant along the
+    // attack axis (prevents the two readouts from stacking in screen space
+    // at melee range).
+    const axis = {
       attackerCol: actorSnap.col,  attackerRow: actorSnap.row,
       targetCol:   targetSnap.col, targetRow:   targetSnap.row,
     };
-    renderer.addCombatCard(actorSnap.id,  'attacker', result, cardAxis);
-    renderer.addCombatCard(targetSnap.id, 'defender', result, cardAxis);
+    renderer.addCombatReadout(actorSnap.id,  'attacker', result, axis);
+    renderer.addCombatReadout(targetSnap.id, 'defender', result, axis);
   }
-  // Hold while the cards are up — the punch stays paused at impact, allies
+  // Hold while the readout is up — the punch stays paused at impact, allies
   // stay parked at their half-lunge position. waitForAnimations drains the
-  // card hold/fade and any ally lunge promises (already resolved by now).
+  // readout stack-up/hold/fade and any ally lunge promises (already resolved).
   await renderer.waitForAnimations();
   // G1: punch up winner/loser with a quick scale pop on the standees right as
   // the cards fade out. The cue plays in parallel with `resumePunch` so the
