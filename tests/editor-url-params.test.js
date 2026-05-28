@@ -40,8 +40,8 @@ describe('parseToolParams', () => {
     );
   });
 
-  test('KNOWN_TOOLS lists exactly the three admin-tools tabs', () => {
-    assert.deepEqual([...KNOWN_TOOLS].sort(), ['assets', 'editor', 'lighting']);
+  test('KNOWN_TOOLS lists the admin-tools tabs', () => {
+    assert.deepEqual([...KNOWN_TOOLS].sort(), ['assets', 'combat', 'editor', 'lighting']);
   });
 });
 

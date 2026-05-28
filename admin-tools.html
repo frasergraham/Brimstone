@@ -59,7 +59,8 @@
        (columns/height) but never an unconditional `display`. */
     #assets-panel.active,
     #lighting-panel.active,
-    #editor-panel.active { display: grid; }
+    #editor-panel.active,
+    #combat-panel.active { display: grid; }
 
     /* ── Editor sidebar tabs (Map / Mission / Events / Units) ──────────────── */
     #editor-panel .e-tabbar { display: flex; gap: 2px; margin: -12px -14px 10px -14px; padding: 8px 10px 0 10px;
@@ -421,6 +422,65 @@
     #editor-panel .e-launch-row:hover { background: #2c2418; border-color: #c4a04a; }
     #editor-panel .e-launch-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #editor-panel .e-launch-time { font-size: 10px; color: #8a7a5a; flex: none; }
+
+    /* ════════════════════════════════════════════════════════════════════
+       COMBAT TAB — admin combat tester. Drives a Renderer3D mounted in the
+       canvas pane on the left; the right rail holds unit pickers, ally
+       chips, the three control buttons (Run Battle / Swap Roles / Reset),
+       and a scrolling combat log. All selectors scoped under #combat-panel.
+       ════════════════════════════════════════════════════════════════════ */
+    #combat-panel { grid-template-columns: 1fr 320px; height: 100%; }
+    #combat-panel #c-stage { position: relative; overflow: hidden; background: #050505; }
+    #combat-panel #c-render-canvas { width: 100%; height: 100%; display: block; touch-action: none; }
+    #combat-panel #c-controls { padding: 12px 14px; overflow-y: auto; border-left: 1px solid #2c2620; background: #14110d; }
+    #combat-panel h2 { font-size: 12px; color: #c4a04a; letter-spacing: 1.5px; text-transform: uppercase; margin: 0 0 8px 0; }
+    #combat-panel .c-section { margin: 10px 0; padding: 10px 12px; border: 1px solid #2c2620; background: #1a1610; }
+    #combat-panel .c-section h3 { margin: 0 0 6px 0; font-size: 11px; color: #c4a04a; letter-spacing: 1.2px; text-transform: uppercase; }
+    #combat-panel .c-row { display: grid; grid-template-columns: 70px 1fr; gap: 8px; align-items: center; margin: 4px 0; font-size: 12px; }
+    #combat-panel .c-row label { color: #a08858; }
+    #combat-panel select, #combat-panel button {
+      padding: 5px 8px; background: #211c16; color: #d4cba0;
+      border: 1px solid #443a2a; font-family: inherit; font-size: 12px; cursor: pointer;
+    }
+    #combat-panel select { width: 100%; }
+    #combat-panel button:hover, #combat-panel select:hover { background: #2a241c; }
+    #combat-panel .c-action {
+      width: 100%; margin: 4px 0; padding: 8px 10px; background: #5a4a30; color: #ffd680;
+      border: 1px solid #c4a04a; font-family: inherit; font-size: 12px; cursor: pointer; letter-spacing: 1px;
+    }
+    #combat-panel .c-action:hover { background: #6a5a3a; }
+    #combat-panel .c-allies { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 6px; }
+    #combat-panel .c-chip {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 3px 7px; background: #221c14; color: #d4cba0;
+      border: 1px solid #3a3022; font-size: 11px; border-radius: 4px;
+    }
+    #combat-panel .c-chip .c-chip-x {
+      background: none; border: none; color: #d4cba0; font-size: 12px;
+      cursor: pointer; padding: 0 0 0 2px; line-height: 1;
+    }
+    #combat-panel .c-chip .c-chip-x:hover { color: #ffd680; }
+    #combat-panel .c-empty { font-size: 11px; color: #6a6050; font-style: italic; }
+    #combat-panel #c-log {
+      max-height: 220px; overflow-y: auto;
+      padding: 8px 10px; background: #0a0805;
+      border: 1px solid #2c2620;
+      font-family: ui-monospace, Menlo, monospace; font-size: 11px;
+      color: #a0a4b8; white-space: pre-wrap;
+    }
+    #combat-panel #c-log .c-log-entry { padding: 3px 0; border-bottom: 1px dashed #1a1a1a; }
+    #combat-panel #c-log .c-log-entry:last-child { border-bottom: none; }
+    #combat-panel #c-log .c-log-head { color: #c4a04a; font-weight: bold; }
+    #combat-panel .c-add-row { display: grid; grid-template-columns: 1fr auto; gap: 4px; margin-top: 4px; }
+    #combat-panel .c-add-row button { padding: 5px 10px; }
+    #combat-panel .c-side-label { font-size: 11px; color: #c4a04a; letter-spacing: 1px; text-transform: uppercase; margin-top: 6px; }
+    #combat-panel #c-continue-btn {
+      position: absolute; left: 50%; bottom: 24px; transform: translateX(-50%);
+      z-index: 4; padding: 10px 22px; background: #5a4a30; color: #ffd680;
+      border: 1px solid #c4a04a; font-family: inherit; font-size: 14px;
+      letter-spacing: 1px; cursor: pointer;
+    }
+    #combat-panel #c-continue-btn:hover { background: #6a5a3a; }
   </style>
 </head>
 <body>
@@ -435,6 +495,7 @@
           <button class="menu-item" data-tab="assets" title="Browse 3D models + tree assets">Assets</button>
           <button class="menu-item" data-tab="lighting" title="Tune the per-phase 3D lighting">Lighting</button>
           <button class="menu-item" data-tab="editor" title="Author campaign mission maps">Mission Editor</button>
+          <button class="menu-item" data-tab="combat" title="Place units on a clearing map and play real combats">Combat</button>
         </div>
       </div>
       <span class="brand">Caleb's Hollow Tools</span>
@@ -618,6 +679,18 @@
         </div>
         <aside id="e-palette"><!-- tool palette built by initEditor() --></aside>
       </section>
+
+      <!-- ── COMBAT TESTER PANEL ────────────────────────────────────────── -->
+      <section id="combat-panel" class="tab-panel">
+        <div id="c-stage">
+          <canvas id="c-render-canvas" tabindex="0"></canvas>
+          <!-- Reuses the Continue-button contract from src/combat-cinematic.js.
+               The cinematic shows/hides this between the readout's final-state
+               and the fade — same trigger as the live game's #combat-continue-btn. -->
+          <button id="c-continue-btn" type="button" hidden>Continue ▶</button>
+        </div>
+        <div id="c-controls"><!-- side panel built by initCombat() --></div>
+      </section>
     </div>
   </div>
 
@@ -640,6 +713,8 @@
     // Mission Editor tab. The 2D Renderer + palette boot only when initEditor()
     // runs (first activation of that tab) — nothing heavy at module load.
     import { initEditor } from '/src/tools/mission-editor-ui.js';
+    // Combat tester tab. DOM-free controller + 3D mount, both lazy-imported.
+    import { initCombat } from '/src/tools/combat-tester-ui.js';
     // Bundled-mission catalog for the File ▸ "Load existing mission…" picker.
     // Dependency-free shared list (also imported by campaign-registry.js).
     import { MIGRATED_MISSIONS } from '/src/campaign/mission-catalog.js';
@@ -1311,7 +1386,7 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
     //  TAB SHELL — lazy-init + pause/resume. Only the active tab's renderer
     //  is left running; the others init on first activation then pause.
     // ════════════════════════════════════════════════════════════════════
-    const TABS = ['assets', 'lighting', 'editor'];
+    const TABS = ['assets', 'lighting', 'editor', 'combat'];
     // Per-tab lifecycle handles ({pause, resume}) once a tab has been booted.
     const handles = {};
     // Lighting init is async; track its promise so resume() can await it.
@@ -1322,6 +1397,11 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
         handles.assets = initAssets();
       } else if (id === 'lighting') {
         initPromises.lighting = initLighting().then((h) => { handles.lighting = h; return h; });
+      } else if (id === 'combat') {
+        // Async boot — the 3D mount inside the Combat tester needs the
+        // Renderer3D's lazy Babylon import to resolve before resume() can
+        // run the scene loop. Mirrors the lighting tab's async pattern.
+        initPromises.combat = initCombat(document).then((h) => { handles.combat = h; return h; });
       } else if (id === 'editor') {
         // E7 — pass any URL-supplied mission/wip id so initEditor can skip the
         // creation modal and load directly. Only honoured on the FIRST boot
@@ -1364,7 +1444,7 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
       }
     }
 
-    const TAB_LABELS = { assets: 'Assets', lighting: 'Lighting', editor: 'Mission Editor' };
+    const TAB_LABELS = { assets: 'Assets', lighting: 'Lighting', editor: 'Mission Editor', combat: 'Combat' };
 
     function showPanel(id) {
       // E7 — keep ?tool=<id> in sync with the active tab. Switching off the

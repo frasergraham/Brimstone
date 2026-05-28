@@ -5,7 +5,7 @@
 // Editor's initial load. All helpers are pure so they're unit-testable without
 // a real `location`/`history`.
 
-export const KNOWN_TOOLS = Object.freeze(['assets', 'lighting', 'editor']);
+export const KNOWN_TOOLS = Object.freeze(['assets', 'lighting', 'editor', 'combat']);
 
 /**
  * Parse the admin-tools query string. Unknown `tool` values resolve to null

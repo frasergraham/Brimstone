@@ -50,6 +50,7 @@ import { Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves, reconci
 import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
 import { processStoryTriggers } from './campaign/missions.js';
 import { buildMissionMap } from './campaign/mission-map.js';
+import { run3DCombatCardHold } from './combat-cinematic.js';
 import {
   campaignMissionSaveKey, loadCampaignMissionSave, deleteCampaignMissionSave,
   RESOURCE_ICONS as _RESOURCE_ICONS, hpColor as _hpColor,
@@ -946,28 +947,12 @@ function _playAttackIntroAnim(actorSnap, targetSnap, fromCol, fromRow, toCol, to
 }
 
 // 3D cinematic combat Continue button — gates the readout fade on a click
-// so the player controls how long the totals stay on screen. Tied into
-// `_run3DCombatCardHold` via the `awaitContinueFn` opt on addCombatReadout.
-// Lives in main.js (rather than ui.js) so it sits next to the only call
-// site that uses it. The button itself is defined in index.html.
+// so the player controls how long the totals stay on screen. Passed into
+// run3DCombatCardHold (src/combat-cinematic.js) as the button resolver; the
+// shared helper owns the show/hide/await-click plumbing.
 function _combatContinueBtn() {
   if (typeof document === 'undefined') return null;
   return document.getElementById('combat-continue-btn');
-}
-function showCombatContinueButton() {
-  const btn = _combatContinueBtn();
-  if (btn) btn.hidden = false;
-}
-function hideCombatContinueButton() {
-  const btn = _combatContinueBtn();
-  if (btn) btn.hidden = true;
-}
-function waitForCombatContinueClick() {
-  const btn = _combatContinueBtn();
-  if (!btn) return Promise.resolve();
-  return new Promise(resolve => {
-    btn.addEventListener('click', () => resolve(), { once: true });
-  });
 }
 
 // 3D cinematic combat resolution (G4 Phase 2+3): NO modal dialog in 3D — the
@@ -984,79 +969,12 @@ function waitForCombatContinueClick() {
 //   5. play the result floaters and drain them.
 // The caller still owns the lunge return (returnAllLungeAnims) afterwards.
 async function _run3DCombatCardHold(actorSnap, targetSnap, result, redrawFn) {
-  // G1 — fire ally half-lunges so gang-up participants visibly join the
-  // strike before the punch freezes. Allies read from result.breakdown
-  // (set by executeBattle); ranged attacks intentionally have empty arrays.
-  // Skip allies that are the attacker/defender themselves (defensive — the
-  // ID arrays should already exclude them).
-  const bd = result?.breakdown || {};
-  const atkAllyIds = Array.isArray(bd.atkAllyIds) ? bd.atkAllyIds : [];
-  const defAllyIds = Array.isArray(bd.defAllyIds) ? bd.defAllyIds : [];
-  if (typeof renderer.addAllyHalfLunge === 'function') {
-    for (const id of atkAllyIds) {
-      if (id === actorSnap.id || id === targetSnap.id) continue;
-      const ally = state?.entities?.find(e => e.id === id && e.alive);
-      if (!ally) continue;
-      renderer.addAllyHalfLunge(id, ally.col, ally.row, targetSnap.col, targetSnap.row);
-    }
-    for (const id of defAllyIds) {
-      if (id === actorSnap.id || id === targetSnap.id) continue;
-      const ally = state?.entities?.find(e => e.id === id && e.alive);
-      if (!ally) continue;
-      // Defender's allies "brace" toward the attacker — same half-distance
-      // visual but oriented to face the threat.
-      renderer.addAllyHalfLunge(id, ally.col, ally.row, actorSnap.col, actorSnap.row);
-    }
-  }
-  renderer.holdPunchAtImpact?.();
-  if (typeof renderer.addCombatReadout === 'function') {
-    // G1 redesign — the combat card was replaced by a single big-number
-    // readout per combatant. Pass attacker/target hex coords so the renderer
-    // can push each number to the OUTER side of its combatant along the
-    // attack axis (prevents the two readouts from stacking in screen space
-    // at melee range).
-    const axis = {
-      attackerCol: actorSnap.col,  attackerRow: actorSnap.row,
-      targetCol:   targetSnap.col, targetRow:   targetSnap.row,
-    };
-    // Gate the fade on a Continue-button click — both readouts share the
-    // same gate so the click advances attacker AND defender in lockstep.
-    const continueGate = waitForCombatContinueClick();
-    const readoutOpts = { ...axis, awaitContinueFn: () => continueGate };
-    const atkH = renderer.addCombatReadout(actorSnap.id,  'attacker', result, readoutOpts);
-    const defH = renderer.addCombatReadout(targetSnap.id, 'defender', result, readoutOpts);
-    // Show the Continue button the moment BOTH readouts reach final state.
-    Promise.all([
-      typeof atkH?.awaitFinal === 'function' ? atkH.awaitFinal() : Promise.resolve(),
-      typeof defH?.awaitFinal === 'function' ? defH.awaitFinal() : Promise.resolve(),
-    ]).then(() => { showCombatContinueButton(); });
-  }
-  // Hold while the readout is up — the punch stays paused at impact, allies
-  // stay parked at their half-lunge position. waitForAnimations drains the
-  // readout stack-up/hold/fade and any ally lunge promises (already resolved).
-  await renderer.waitForAnimations();
-  hideCombatContinueButton();
-  // G1: punch up winner/loser with a quick scale pop on the standees right as
-  // the cards fade out. The cue plays in parallel with `resumePunch` so the
-  // strike continues to follow through while the outcome reads.
-  if (typeof renderer.addCombatOutcomeCue === 'function') {
-    const winnerId = result?.hit ? actorSnap.id  : targetSnap.id;
-    const loserId  = result?.hit ? targetSnap.id : actorSnap.id;
-    renderer.addCombatOutcomeCue(winnerId, loserId);
-  }
-  // Resume the strike to completion (no-op resolve if nothing was frozen).
-  await (renderer.resumePunch?.() ?? Promise.resolve());
-  // G1: play the reaction clip on the shared skeleton AFTER the punch
-  // resolves so the two clips don't fight. `hit` when damage landed,
-  // `block` when the defender shrugged it off. The Promise resolves when
-  // the clip ends (or immediately when not yet loaded — graceful fallback,
-  // and the call kicks off the lazy import so the next combat has it).
-  if (typeof renderer.playReactionAnim === 'function') {
-    const kind = result?.hit ? 'hit' : 'block';
-    await renderer.playReactionAnim(kind);
-  }
-  _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
-  await renderer.waitForAnimations();
+  return run3DCombatCardHold({
+    renderer, state,
+    actorSnap, targetSnap, result, redrawFn,
+    getContinueButton: _combatContinueBtn,
+    playBattleResultAnims: _playBattleResultAnims,
+  });
 }
 
 function _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn) {
