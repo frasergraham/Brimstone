@@ -5,6 +5,7 @@ import {
   MAX_FORTIFY_LEVEL, getFortifyCombatBonus, isFortWall,
   FORT_IMPASSABLE_THRESHOLD,
   isRiver, isPathRoadLike, hasBuilding, isForestCover, baseOf,
+  tileCapacityRemaining,
 } from './tiles.js';
 import { ITEMS } from './items.js';
 import { ABILITIES } from './abilities.js';
@@ -61,6 +62,19 @@ export function isFortBlocking(tile, actorOwner) {
   return isFortWall(tile) && getFaction(actorOwner).isBlockedByWalls();
 }
 
+// Hex-capacity gate: is the target tile full (no slots remaining) for a
+// move by `actor`? Capacity = TILE_CAPACITY - structures - other units on
+// the tile (the moving actor itself is excluded so the destination check
+// matches what the actor will look like once it has stepped in).
+export function isTileFullForMove(state, actor, col, row) {
+  const t = state.tiles.get(hexKey(col, row));
+  if (!t) return false;
+  const others = state.entities.filter(e =>
+    e.alive && e.id !== actor.id && e.col === col && e.row === row
+  ).length;
+  return tileCapacityRemaining(t, others) <= 0;
+}
+
 // Cost-based movement: road/bridge/building tiles cost 1, all other passable
 // tiles cost 2.  Budget = range * 2, so:
 //   range 1 (no horse) → 1 off-road tile  OR  2 road tiles per action
@@ -86,6 +100,9 @@ export function getReachableHexes(state, actor, range, posOverride = null, visib
       if (!nt || isRiver(nt)) continue;
       if (hasVisibleEnemy(state, actor, n.col, n.row, visibleEnemyHexes)) continue;
       if (isFortBlocking(nt, actor.owner)) continue;
+      // Hex-capacity gate — a full hex (no slots remaining) blocks movement
+      // into it AND through it, just like an enemy-occupied hex.
+      if (isTileFullForMove(state, actor, n.col, n.row)) continue;
       const isRoadLike = isPathRoadLike(nt);
       const nc = c + (isRoadLike ? 1 : 2);
       if (nc <= budget && nc < (dist.get(nk) ?? Infinity)) {
@@ -132,6 +149,10 @@ function findShortestPath(state, actor, toCol, toRow, posOverride = null) {
       if (!nt || isRiver(nt)) continue;
       if (hasEnemy(state, actor, n.col, n.row) && nk !== goalK) continue;
       if (isFortBlocking(nt, actor.owner) && nk !== goalK) continue;
+      // Hex-capacity gate — full mid-path hexes block traversal. The goal
+      // hex itself is allowed through here so executeMove can report the
+      // partial walk + the blocking reason at the step boundary.
+      if (isTileFullForMove(state, actor, n.col, n.row) && nk !== goalK) continue;
       const isRoadLike = isPathRoadLike(nt);
       const nc = c + (isRoadLike ? 1 : 2);
       if (nc < (dist.get(nk) ?? Infinity)) {
@@ -197,6 +218,8 @@ export function getFogReachableHexes(state, actor, posOverride = null) {
       if (!nt || isRiver(nt)) continue;
       // No enemy blocking — this is theoretical reachability for fog visibility
       if (isFortBlocking(nt, actor.owner)) continue;
+      // Full hexes (terrain capacity exhausted) are also unreachable.
+      if (isTileFullForMove(state, actor, n.col, n.row)) continue;
       const isRoadLike = isPathRoadLike(nt);
       const nc = c + (isRoadLike ? 1 : 2);
       if (nc <= budget && nc < (dist.get(nk) ?? Infinity)) {
@@ -517,6 +540,8 @@ export function executeMove(state, actor, targetCol, targetRow) {
     const st = tile(state, step.col, step.row);
     if (!st || isRiver(st)) break;
     if (isFortBlocking(st, actor.owner)) break;
+    // Full hex (capacity exhausted) — refuse to enter, same as enemy blocking.
+    if (isTileFullForMove(state, actor, step.col, step.row)) break;
 
     actor.col = step.col;
     actor.row = step.row;

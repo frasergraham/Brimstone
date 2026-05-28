@@ -2,15 +2,30 @@
 // Hero AI: hero-ai-engine.js (HeroAIEngine)
 // Witch AI: ai-engine.js (WitchAIEngine)
 import { getNeighbors, hexDistance, hexKey } from './hex.js';
-import { hasBuilding, isRiver } from './tiles.js';
+import { hasBuilding, isRiver, tileCapacityRemaining } from './tiles.js';
 import { Entity, EntityType, isLeaderType } from './entities.js';
 import { Phase, computeActions, computeActionsForPlayer, nodeController, countHeldNodes } from './game.js';
 import { getReachableHexes, isFortBlocking } from './actions.js';
+
+// Hex-capacity check for AI pathfinders. Same gate as actions.isTileFullForMove
+// but inlined here so ai.js doesn't pull in the rest of actions.js machinery
+// for stepToward / stepAwayFrom. Excludes the moving actor from the unit
+// count on the target tile.
+function _isFullForMove(state, actor, col, row) {
+  const t = state.tiles.get(hexKey(col, row));
+  if (!t) return false;
+  let others = 0;
+  for (const e of state.entities) {
+    if (e.alive && e.id !== actor.id && e.col === col && e.row === row) others++;
+  }
+  return tileCapacityRemaining(t, others) <= 0;
+}
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
 export function stepToward(state, actor, target) {
   if (!target) return null;
+  const targetK = hexKey(target.col, target.row);
   const visited = new Set([hexKey(actor.col, actor.row)]);
   const queue   = [{ col: actor.col, row: actor.row, first: null }];
 
@@ -23,6 +38,11 @@ export function stepToward(state, actor, target) {
       if (visited.has(k)) continue;
       const t = state.tiles.get(k);
       if (!t || isRiver(t)) continue;
+      // Hex-capacity gate — a full hex is impassable for movement. The
+      // target itself is allowed through so callers (e.g. melee approach)
+      // can still discover a path that ends at a full hex; the actual move
+      // execution then refuses the final step.
+      if (k !== targetK && _isFullForMove(state, actor, n.col, n.row)) continue;
       visited.add(k);
       queue.push({ col: n.col, row: n.row, first: first || n });
     }
@@ -82,7 +102,8 @@ export function stepAwayFrom(state, actor, threat) {
   const neighbors = getNeighbors(actor.col, actor.row).filter(n => {
     const t = state.tiles.get(hexKey(n.col, n.row));
     return t && !isRiver(t) &&
-      !state.entities.some(e => e.alive && e.owner === 'hero' && e.col === n.col && e.row === n.row);
+      !state.entities.some(e => e.alive && e.owner === 'hero' && e.col === n.col && e.row === n.row) &&
+      !_isFullForMove(state, actor, n.col, n.row);
   });
   if (!neighbors.length) return null;
   neighbors.sort((a, b) =>

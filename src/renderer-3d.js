@@ -31,7 +31,20 @@ import {
   hasBuilding,
   isRiver,
   isBridge,
+  treeCountForTile,
+  FOREST_TREES_MIN as _FOREST_TREES_MIN,
+  FOREST_TREES_MAX as _FOREST_TREES_MAX,
+  FOREST_DENSITY_SCALE as _FOREST_DENSITY_SCALE,
+  scaledForestTreeCount as _scaledForestTreeCount,
 } from './tiles.js';
+
+// Re-export the tree-count knobs that now live in tiles.js. Existing tests
+// import these from src/renderer-3d.js; preserving the public name keeps
+// them green without churn.
+export const FOREST_TREES_MIN     = _FOREST_TREES_MIN;
+export const FOREST_TREES_MAX     = _FOREST_TREES_MAX;
+export const FOREST_DENSITY_SCALE = _FOREST_DENSITY_SCALE;
+export const scaledForestTreeCount = _scaledForestTreeCount;
 import { EntityType, isLeaderType } from './entities.js';
 import { Renderer } from './renderer.js';
 import { getFactionTheme } from './theme.js';
@@ -13857,24 +13870,9 @@ export const FOREST_OUTER_RADIUS = 0.85;
  *  same across runs but the cluster reads as visually varied. */
 export const FOREST_SCALE_MIN = 0.5;
 export const FOREST_SCALE_MAX = 1.2;
-/** Cluster size range (inclusive). */
-export const FOREST_TREES_MIN = 3;
-export const FOREST_TREES_MAX = 5;
-
-/** Density multiplier applied to the raw per-hex playable-map forest tree
- *  count (see `scaledForestTreeCount`). 0.6 = 40% fewer trees than the raw
- *  3–5 range, opening up the playable map while keeping the hash-seeded
- *  placement identical. Tunable. */
-export const FOREST_DENSITY_SCALE = 0.6;
-
-/** Scale a raw hash-derived per-hex tree count by a density multiplier,
- *  rounding to the nearest whole tree and clamping to ≥1 so a forest hex is
- *  never left empty. Pure + deterministic: identical (rawCount, scale) →
- *  identical result, so the same map seed stays stable — only the count
- *  changes, never the placement. */
-export function scaledForestTreeCount(rawCount, densityScale) {
-  return Math.max(1, Math.round(rawCount * densityScale));
-}
+/** Cluster size range (inclusive) — owned in src/tiles.js so the game-side
+ *  hex-capacity gate and the renderer cluster always read the same number.
+ *  Re-exported above for back-compat with existing test imports. */
 
 /** Half-width of the (narrowed) road deck through a forest tile, world units. */
 export const FOREST_ROAD_HALF_WIDTH = (ROAD_RIBBON_WIDTH * FOREST_ROAD_WIDTH_FACTOR) / 2;
@@ -13920,11 +13918,10 @@ function _forestHash(col, row, salt) {
  *  slots are dropped. Empty / omitted on a roadless forest tile. */
 export function forestTreesForHex(col, row, season = null, opts = {}) {
   const reserveBuildingSlot = !!opts.reserveBuildingSlot;
-  const span = FOREST_TREES_MAX - FOREST_TREES_MIN + 1;
-  const rawN = FOREST_TREES_MIN + Math.floor(_forestHash(col, row, 0) * span);
-  // _forestHash returns < 1, so floor(<span) ∈ [0, span-1]; rawN ∈ [MIN, MAX].
-  // Scale down to FOREST_DENSITY_SCALE of the raw count (placement unchanged).
-  const n    = scaledForestTreeCount(rawN, FOREST_DENSITY_SCALE);
+  // The tree count is owned by src/tiles.js's `treeCountForTile` so the
+  // game-side capacity gate and the renderer's cluster agree exactly. Pass
+  // a synthetic forest tile — the helper only reads (col,row,base).
+  const n = treeCountForTile({ col, row, base: TileType.FOREST });
   const scaleSpan = FOREST_SCALE_MAX - FOREST_SCALE_MIN;
   // Rotate the slot order per-hex so neighbouring forest hexes don't all
   // start at the same NE slot — keeps the visual variety the ring layout had.

@@ -387,3 +387,74 @@ export function getFortifyCombatBonus(fortifyLevel) {
   const lvl = Math.max(0, Math.min(MAX_FORTIFY_LEVEL, fortifyLevel | 0));
   return FORTIFY_BONUS_TABLE[lvl];
 }
+
+// ── Hex capacity (slot model) ──────────────────────────────────────────────
+// Each hex has 7 placement points (centre + 6 outer ring) — mirrors
+// TILE_SLOTS in src/renderer-3d.js. Structures and trees consume slots; a
+// hex with no remaining capacity cannot be moved INTO. The game-side
+// movement gate uses these helpers; the renderer's slot allocator
+// (assignTileSlotIndices) reads the same world.
+//
+// Slot weights:
+//   building = 3 slots  (BUILDING_SLOT_COST)
+//   tree     = 1 slot   (TREE_SLOT_COST)
+//   unit     = 1 slot   (UNIT_SLOT_COST)
+
+export const TILE_CAPACITY      = 7;
+export const BUILDING_SLOT_COST = 3;
+export const TREE_SLOT_COST     = 1;
+export const UNIT_SLOT_COST     = 1;
+
+// Forest-tile tree-count knobs. Owned here (rather than in renderer-3d.js)
+// so the game-side capacity gate and the renderer's tree placement agree
+// exactly — both read these constants and call `treeCountForTile`.
+export const FOREST_TREES_MIN     = 3;
+export const FOREST_TREES_MAX     = 5;
+export const FOREST_DENSITY_SCALE = 0.6;
+
+// Stable hash on (col,row,salt). Matches the renderer's `_forestHash`
+// formula bit-for-bit so the same hex always yields the same numbers
+// regardless of which module asked. Pure + deterministic.
+function _hexHash(col, row, salt) {
+  let h = ((col | 0) * 73856093) ^ ((row | 0) * 19349663) ^ ((salt | 0) * 83492791);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  h = (h ^ (h >>> 16)) >>> 0;
+  return h / 0x100000000;
+}
+
+// Scale a raw hash-derived per-hex tree count by a density multiplier,
+// rounding to the nearest whole tree and clamping to ≥1 so a forest hex
+// is never left empty. Pure + deterministic.
+export function scaledForestTreeCount(rawCount, densityScale) {
+  return Math.max(1, Math.round(rawCount * densityScale));
+}
+
+// Tree count on this tile. Forest base → seeded count in
+// [FOREST_TREES_MIN, FOREST_TREES_MAX], then scaled by FOREST_DENSITY_SCALE.
+// Non-forest → 0. The renderer's `forestTreesForHex` calls this so the
+// game's capacity gate and the visual cluster always agree.
+export function treeCountForTile(tile) {
+  if (!tile || baseOf(tile) !== TileType.FOREST) return 0;
+  const span = FOREST_TREES_MAX - FOREST_TREES_MIN + 1;
+  const rawN = FOREST_TREES_MIN + Math.floor(_hexHash(tile.col, tile.row, 0) * span);
+  return scaledForestTreeCount(rawN, FOREST_DENSITY_SCALE);
+}
+
+// Slots consumed by static structures on this tile (building + trees).
+// Units are NOT counted here — callers add them via tileCapacityRemaining.
+export function tileOccupancyCount(tile) {
+  if (!tile) return 0;
+  const building = hasBuilding(tile) ? BUILDING_SLOT_COST : 0;
+  const trees    = treeCountForTile(tile) * TREE_SLOT_COST;
+  return building + trees;
+}
+
+// Capacity remaining on this tile given a list (or count) of occupying
+// units. Pass the units already present on the tile EXCLUDING any unit
+// about to move in. A return value ≤ 0 means the tile is full.
+//   tileCapacityRemaining(tile, units)   — units is array
+//   tileCapacityRemaining(tile, n)       — units is a count
+export function tileCapacityRemaining(tile, occupyingUnits = 0) {
+  const n = Array.isArray(occupyingUnits) ? occupyingUnits.length : (occupyingUnits | 0);
+  return TILE_CAPACITY - tileOccupancyCount(tile) - n * UNIT_SLOT_COST;
+}
