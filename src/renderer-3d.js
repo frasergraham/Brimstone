@@ -5903,8 +5903,13 @@ export class Renderer3D {
       }
       for (const [a, jobs] of jobsByAlpha) {
         const prefix = a < 1 ? `border_forest_a${Math.round(a * 100)}` : 'border_forest';
+        // Border ground is permanently fog-tinted (aFog=1 on the splat
+        // border mesh); apply the same mild fog tint to border trees so the
+        // wilderness reads as one cohesive shaded mass instead of
+        // bright trees on dark ground.
         const mergedTreeMeshes = this._buildBorderForestTreesBatched(
-          parent, jobs, { season: this._season, alpha: a, namePrefix: prefix },
+          parent, jobs,
+          { season: this._season, alpha: a, namePrefix: prefix, fogged: true },
         );
         for (const m of mergedTreeMeshes) {
           this._addShadowCaster(m);
@@ -7639,7 +7644,8 @@ export class Renderer3D {
     const { trunks, leavesByColor } = this._buildTreeClusterMeshes(
       namePrefix, cx, cz, trees, { fogged, season },
     );
-    const trunkCss = fogged ? '#241710' : '#5a3a20';
+    // Trunk: mild fog tint at ~65% of unfogged (matches TREE_LEAF_PALETTE_FOG).
+    const trunkCss = fogged ? '#3a2516' : '#5a3a20';
     const trunkMat = this._materialFor(trunkCss);
     return this._mergeTreeBuckets(trunks, leavesByColor, parent, namePrefix, trunkMat);
   }
@@ -7844,7 +7850,8 @@ export class Renderer3D {
         for (const m of list) bucket.push(m);
       }
     }
-    const trunkCss = fogged ? '#241710' : '#5a3a20';
+    // Trunk: mild fog tint at ~65% of unfogged (matches TREE_LEAF_PALETTE_FOG).
+    const trunkCss = fogged ? '#3a2516' : '#5a3a20';
     const trunkMat = this._alphaMaterialFor(trunkCss, alpha);
     return this._mergeTreeBuckets(allTrunks, allLeavesByColor, parent, namePrefix, trunkMat, { alpha });
   }
@@ -13678,13 +13685,14 @@ export const TREE_LEAF_PALETTE = Object.freeze({
   spruce: Object.freeze(['#1b3b2a', '#234a32', '#163528']),
 });
 
-/** Leaf-colour palette per species, pre-multiplied by the border-forest fog
- *  tint. Matches the historical `#0e1f0c` (the old uniform fogged leaf colour)
- *  in average tone but spreads across three shades per species. Summer-default. */
+/** Leaf-colour palette per species, mildly darkened for fogged areas. Tuned
+ *  to ~65% of the unfogged values so trees in fogged hexes read as "in
+ *  shadow" without being crushed — operator: "lessen the impact, don't
+ *  want it too dark since the border forest is all trees." */
 export const TREE_LEAF_PALETTE_FOG = Object.freeze({
-  pine:   Object.freeze(['#0e1f0c', '#11240e', '#0c1a0a']),
-  oak:    Object.freeze(['#162a10', '#1a3214', '#13240d']),
-  spruce: Object.freeze(['#0c1a12', '#0f2017', '#091410']),
+  pine:   Object.freeze(['#173115', '#1d3b17', '#122c12']),
+  oak:    Object.freeze(['#28451a', '#304f1f', '#223e17']),
+  spruce: Object.freeze(['#11261b', '#173021', '#0e2219']),
 });
 
 /** Per-season leaf-colour palettes. Each season provides the same shape as
