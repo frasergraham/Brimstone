@@ -216,11 +216,13 @@ describe('roadTileRibbonWidth — PART 2 forest road narrowing', () => {
     assert.equal(FOREST_ROAD_WIDTH_FACTOR, 0.8);
   });
 
-  test('road on a forest tile is 0.8× the normal road width', () => {
+  test('road on a forest tile keeps full width (per-tile narrowing dropped for seam consistency)', () => {
+    // Was: 0.8× to avoid crowding flanking trees. That created visible width
+    // steps at every grass/forest seam — operator wants continuous width.
     const forest = new Tile(0, 0, TileType.FOREST);
     forest.path = PathType.ROAD;
     const w = roadTileRibbonWidth('road', forest, ROAD_RIBBON_WIDTH);
-    assert.ok(Math.abs(w - ROAD_RIBBON_WIDTH * 0.8) < 1e-9);
+    assert.equal(w, ROAD_RIBBON_WIDTH);
   });
 
   test('road on a non-forest (grass) tile keeps full width', () => {
@@ -241,13 +243,12 @@ describe('roadTileRibbonWidth — PART 2 forest road narrowing', () => {
     assert.equal(roadTileRibbonWidth('river', forest, ROAD_RIBBON_WIDTH), ROAD_RIBBON_WIDTH);
   });
 
-  test('forest→grass road: each tile keeps its own width (per-tile rule)', () => {
+  test('forest→grass road: widths match at the seam (no per-tile narrowing)', () => {
     const forest = new Tile(0, 0, TileType.FOREST); forest.path = PathType.ROAD;
     const grass  = new Tile(1, 0, TileType.GRASS);  grass.path  = PathType.ROAD;
     const wf = roadTileRibbonWidth('road', forest, ROAD_RIBBON_WIDTH);
     const wg = roadTileRibbonWidth('road', grass,  ROAD_RIBBON_WIDTH);
-    assert.ok(wf < wg, 'forest stroke should be narrower than the grass stroke');
+    assert.equal(wf, wg, 'forest and grass strokes must be the same base width');
     assert.equal(wg, ROAD_RIBBON_WIDTH);
-    assert.equal(wf, ROAD_RIBBON_WIDTH * FOREST_ROAD_WIDTH_FACTOR);
   });
 });

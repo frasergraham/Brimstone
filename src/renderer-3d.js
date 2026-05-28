@@ -259,7 +259,7 @@ export const PALADIN_BASE_SCALE = 0.4;
 // the source bounding box at load time and scale to hit this target. Picked
 // so the paladin reads slightly taller than the ~0.55-tall cone+sphere it
 // replaces but still fits within one hex's footprint.
-export const TARGET_PALADIN_WORLD_HEIGHT = 0.92;
+export const TARGET_PALADIN_WORLD_HEIGHT = 0.69;
 // Forward-facing yaw applied to clones (radians). Rotates the imported mesh
 // 180° so the paladin's front reads toward the camera rather than away.
 export const PALADIN_YAW        = Math.PI;
@@ -1892,6 +1892,7 @@ export class Renderer3D {
     // FPS counter throttle state — see _pumpFpsCounter / FPS_COUNTER_UPDATE_MS.
     this._fpsCounterEl       = null;
     this._polyCounterEl      = null;
+    this._camCounterEl       = null;
     this._fpsCounterLastMs   = 0;
 
     // ── Phase 3: standees + selection ───────────────────────────────────────
@@ -8459,6 +8460,8 @@ export class Renderer3D {
     mat.specularColor  = new BABYLON.Color3(0, 0, 0);
     const e = UNIT_HEX_OUTLINE_THIN_EMISSIVE_MUL;
     mat.emissiveColor  = new BABYLON.Color3(r * e, g * e, b * e);
+    // Hex outline highlights render at 50% opacity per operator.
+    mat.alpha = HIGHLIGHT_OVERLAY_ALPHA;
     this._thinOutlineMatCache.set(ownerKey, mat);
     return mat;
   }
@@ -8477,6 +8480,8 @@ export class Renderer3D {
     mat.specularColor  = new BABYLON.Color3(0, 0, 0);
     const e = UNIT_HEX_OUTLINE_GLOW_EMISSIVE_MUL;
     mat.emissiveColor  = new BABYLON.Color3(r * e, g * e, b * e);
+    // Hex outline highlights render at 50% opacity per operator.
+    mat.alpha = HIGHLIGHT_OVERLAY_ALPHA;
     this._thickOutlineMatCache.set(ownerKey, mat);
     return mat;
   }
@@ -11591,6 +11596,20 @@ export class Renderer3D {
       }
     }
     polyEl.textContent = formatPolyLabel(totalPolys, activePolys);
+    this._pumpCamDistanceCounter();
+  }
+
+  /** Camera distance from focus — ArcRotate radius is the world-space
+   *  distance from camera target (the focus point on the ground) to the
+   *  camera position, so it reads directly as "how far back am I." */
+  _pumpCamDistanceCounter() {
+    if (!this._camCounterEl && typeof document !== 'undefined') {
+      this._camCounterEl = document.getElementById('cam-counter');
+    }
+    const camEl = this._camCounterEl;
+    if (!camEl || !this._camera) return;
+    const r = this._camera.radius;
+    camEl.textContent = `cam ${Number.isFinite(r) ? r.toFixed(1) : '--'} wu`;
   }
 
   _setNodeGlowIntensity(ng, k) {
@@ -11702,48 +11721,21 @@ export class Renderer3D {
     const BABYLON = this._babylon;
     if (!BABYLON || !this._scene) return;
     const SQRT3 = Math.sqrt(3);
-    const ringR = HEX_RADIUS_WORLD * 0.96;
     for (const obj of this.state.witchObjectives) {
-      // Hex outline ring tinted with the controller colour — replaces the
-      // pulsing disc. CreateTube around a closed hex loop so the ring stays
-      // visible at any zoom (LinesMesh aliases hard at zoomed-out distances).
+      // Ownership-tinted controller ring REMOVED per operator — node
+      // ownership is already conveyed by the HUD score track. The outer
+      // identifier ring below (palette colour = which node) stays. Empty
+      // _nodeGlowMeshes entry kept so consumers' optional chaining is happy
+      // and `_pumpNodeLabelFade` / fog state still has the per-hex key.
       for (const h of obj.hexes) {
         const { x, z } = hexToWorld(h.col, h.row);
-        const path = [];
-        for (let i = 0; i <= 6; i++) {
-          const a = Math.PI / 6 + i * Math.PI / 3;
-          path.push(new BABYLON.Vector3(ringR * Math.cos(a), 0.03, ringR * Math.sin(a)));
-        }
-        const disc = BABYLON.MeshBuilder.CreateTube(
-          `node_ring_${obj.label.replace(/\W+/g, '_')}_${h.col}_${h.row}`,
-          { path, radius: 0.06, tessellation: 6, sideOrientation: BABYLON.Mesh.DOUBLESIDE },
-          this._scene,
-        );
-        disc.parent = this._mapRoot;
-        disc.position.x = x;
-        disc.position.z = z;
-        disc.isPickable = false;
-        const discMat = new BABYLON.StandardMaterial(`nodeRingMat_${h.col}_${h.row}`, this._scene);
-        discMat.diffuseColor  = new BABYLON.Color3(0.05, 0.05, 0.05);
-        discMat.specularColor = new BABYLON.Color3(0, 0, 0);
-        discMat.emissiveColor = new BABYLON.Color3(0.8, 0.8, 0.8);
-        disc.material = discMat;
-
         this._nodeGlowMeshes.push({
-          obj, disc,
+          obj, disc: null,
           col: h.col, row: h.row,
           glowColor: { r: 1, g: 1, b: 1 },
         });
-
-        // Track in the per-hex prop list so `_applyFogVeil` hides the disc on
-        // fogged tiles alongside the rest of the tile's silhouette. A node
-        // disc that stayed lit through fog gave the controller away even when
-        // every other prop on the hex was hidden.
         const tkey = hexKey(h.col, h.row);
-        const props = this._tilePropsByKey.get(tkey);
-        if (props) props.push(disc);
-        else this._tilePropsByKey.set(tkey, [disc]);
-        if (this._fogActiveSet.has(tkey)) disc.isVisible = false;
+        if (!this._tilePropsByKey.has(tkey)) this._tilePropsByKey.set(tkey, []);
 
         // Outer identifier ring: a second, slightly larger hex outline
         // painted in the node's identifying palette colour (matches the
@@ -12840,9 +12832,13 @@ export function roadBlockedTreeSlots(strokes, center, reach = FOREST_ROAD_TREE_R
  *  per-tile, so a road spanning a forest tile and a grass tile narrows only on
  *  the forest tile's stroke. Pure; exported for tests. */
 export function roadTileRibbonWidth(networkName, tile, baseWidth) {
-  if (networkName === 'road' && baseOf(tile) === TileType.FOREST) {
-    return baseWidth * FOREST_ROAD_WIDTH_FACTOR;
-  }
+  // Was: narrow road through forest tiles by FOREST_ROAD_WIDTH_FACTOR to
+  // avoid crowding the flanking trees. That made the road width step at
+  // every grass/forest seam — operator wants seams to read continuous.
+  // Now every tile uses the full network width regardless of underlying
+  // terrain; per-point world-space sine modulation (in `_buildNetworkMesh`)
+  // still provides natural ±5% width variation that's seam-consistent
+  // (neighbouring tiles compute the same modulation at the shared point).
   return baseWidth;
 }
 
@@ -15404,7 +15400,7 @@ export const HIGHLIGHT_DISC_Y      = yForLayer('highlight-disc', 0);
  *  source rgba alpha (which can be as low as 0.14 in ui.js for ally hexes, or
  *  as high as 0.85 for the default movement target) with this constant so the
  *  ring's translucency is consistent regardless of the caller's colour string. */
-export const HIGHLIGHT_OVERLAY_ALPHA = 0.65;
+export const HIGHLIGHT_OVERLAY_ALPHA = 0.5;
 /** @deprecated retained for tests that import the old name — same value as
  *  HIGHLIGHT_OVERLAY_ALPHA, semantics changed from "clamp floor" to
  *  "applied alpha". */
