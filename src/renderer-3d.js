@@ -44,6 +44,11 @@ import {
   installOverlayShims, OVERLAY_METHODS, yForLayer, overlaySignature,
   makeOverlay, overlayMaterialKey,
 } from './overlays.js';
+import {
+  hexSplatWeights, hexFogWeights, splatChannelForTile,
+  worldToHex, neighborDeltas, DEFAULT_TERRAIN_TINTS,
+} from './terrain-splat.js';
+import { makeTerrainSplatPlugin, SPLAT_UNIFORM_DEFAULTS } from './terrain-splat-plugin.js';
 
 // Babylon core + glTF loaders are served from the packaged `assets/vendor/`
 // directory rather than any CDN — the Electron / iOS bundles must run with zero
@@ -1726,6 +1731,17 @@ export class Renderer3D {
     this._materialCache = new Map(); // hex string → BABYLON.StandardMaterial
     this._tileMeshes    = [];   // for picking + future incremental rebuild
     this._mapBuilt      = false;
+    // ── Splat-terrain feature flag ───────────────────────────────────────
+    // When true, the playable ground is ONE merged mesh whose fragments blend
+    // three greyscale detail textures by per-vertex weights (`_buildSplatGround`)
+    // instead of one flat hex per tile. Picking → ray/ground inverse; fog →
+    // per-vertex `aFog` rewrite. 1-line rollback: flip to false to restore the
+    // legacy per-hex path untouched.
+    this._useSplatTerrain = false; // flipped on by default in stage D
+    this._splatGround   = null;  // the single merged ground mesh (flag on)
+    this._splatPlugin   = null;  // TerrainSplatPlugin instance on the ground material
+    this._hexVertexRange = new Map(); // hexKey → base vertex index (×7 per tile)
+    this._splatFogBuf    = null; // Float32Array(tiles×7) backing the aFog attribute
     // Per-map deterministic season tag — picked in `_buildMap` from a hash of
     // the tile layout (or `state.mapSeed` if exposed later). Drives seasonal
     // tree palettes + geometry. Null until the map is built.
@@ -5529,6 +5545,11 @@ export class Renderer3D {
     // Reusable shared geometry — clone for each instance, all parented to mapRoot.
     // (We do not yet use Babylon InstancedMesh; one mesh per tile keeps picking
     // trivially correct and Phase 2 maps are well under 1000 tiles.)
+    // Splat path: build the single merged ground first, then the per-tile
+    // props (cones/buildings/roads) via _buildTileMesh (whose base-hex block
+    // is skipped under the flag). Legacy path: one flat hex per tile inside
+    // _buildTileMesh.
+    if (this._useSplatTerrain) this._buildSplatGround(mapRoot);
     for (const tile of this.state.tiles.values()) {
       this._buildTileMesh(tile, mapRoot);
     }
@@ -5594,7 +5615,11 @@ export class Renderer3D {
       mesh.doNotSyncBoundingInfo = true;
       frozen++;
     };
-    // Playable tile cylinders.
+    // Merged splat ground (flag on) — freeze the WORLD MATRIX only; its aFog
+    // vertex buffer stays dynamic (rewritten by _writeFogWeights), which
+    // freezeWorldMatrix does not touch.
+    if (this._splatGround) freeze(this._splatGround);
+    // Playable tile cylinders (legacy per-hex path).
     if (this._tileMeshes) for (const m of this._tileMeshes) freeze(m);
     // Per-tile props (trees, buildings, roofs, bridges, road/river per-tile
     // merged ribbons, node-disc rings registered into the tile prop list).
@@ -6021,24 +6046,149 @@ export class Renderer3D {
     return roadBlockedTreeSlots(strokes, center);
   }
 
+  // ─── Splat terrain: one merged ground mesh ───────────────────────────────
+  //
+  // Build a single mesh whose geometry is the playable-hex fans (7 verts each,
+  // identical layout to `_buildFlatHexMesh`) concatenated into shared buffers,
+  // in WORLD coordinates. Two custom vertex attributes drive the shader:
+  //   • `aSplat` (vec3, static)  — per-vertex grass/dirt/forest blend weights.
+  //   • `aFog`   (float, dynamic) — per-vertex fog veil 0..1, rewritten by
+  //                                 `_writeFogWeights` as visibility changes.
+  // The detail-blend + procedural colour + fog dimming happen in the plugin's
+  // fragment shader (`terrain-splat-plugin.js`). Picking + fog target this mesh
+  // via `_hexVertexRange` (hexKey → base vertex index). Returns the mesh.
+  _buildSplatGround(parent) {
+    const BABYLON = this._babylon;
+    const scene   = this._scene;
+    if (!BABYLON || !this.state?.tiles) return null;
+    const R = HEX_RADIUS_WORLD;
+    const tiles = [...this.state.tiles.values()];
+    const channelAt = (col, row) => {
+      const t = this.state.tiles.get(hexKey(col, row));
+      return t ? splatChannelForTile(t) : null;
+    };
+    const VPT = 7; // vertices per tile (centre + 6 rim corners)
+    const n = tiles.length;
+    const positions = new Float32Array(n * VPT * 3);
+    const normals   = new Float32Array(n * VPT * 3);
+    const splat     = new Float32Array(n * VPT * 3);
+    const fog       = new Float32Array(n * VPT); // 0 = unfogged
+    const indices   = new Uint32Array(n * 6 * 3);
+    const range = new Map();
+
+    for (let ti = 0; ti < n; ti++) {
+      const tile = tiles[ti];
+      const { x, z } = hexToWorld(tile.col, tile.row, R);
+      const baseV = ti * VPT;
+      range.set(hexKey(tile.col, tile.row), baseV);
+      // centre
+      positions[baseV * 3] = x; positions[baseV * 3 + 2] = z;
+      // rim corners at angle (π/6 + j·π/3) — matches _buildFlatHexMesh
+      for (let j = 0; j < 6; j++) {
+        const a = Math.PI / 6 + j * Math.PI / 3;
+        const vi = baseV + 1 + j;
+        positions[vi * 3]     = x + R * Math.cos(a);
+        positions[vi * 3 + 2] = z + R * Math.sin(a);
+      }
+      // flat-up normals for all 7 verts
+      for (let v = 0; v < VPT; v++) normals[(baseV + v) * 3 + 1] = 1;
+      // per-vertex splat weights (row-major 7×3) → shared buffer
+      splat.set(hexSplatWeights(tile, channelAt), baseV * 3);
+      // fan triangles
+      const baseI = ti * 6 * 3;
+      for (let j = 0; j < 6; j++) {
+        indices[baseI + j * 3]     = baseV;
+        indices[baseI + j * 3 + 1] = baseV + 1 + j;
+        indices[baseI + j * 3 + 2] = baseV + 1 + ((j + 1) % 6);
+      }
+    }
+
+    const mesh = new BABYLON.Mesh('splatGround', scene);
+    const vd = new BABYLON.VertexData();
+    vd.positions = positions;
+    vd.indices   = indices;
+    vd.normals   = normals;
+    vd.applyToMesh(mesh, false);
+    // aSplat is static; aFog is updatable (rewritten by _writeFogWeights).
+    mesh.setVerticesData('aSplat', splat, false, 3);
+    mesh.setVerticesData('aFog', fog, true, 1);
+    mesh.parent = parent;
+    if (mesh.position?.set) mesh.position.set(0, 0, 0);
+    mesh.metadata = { kind: 'splatGround' };
+    mesh.material = this._buildSplatMaterial();
+    this._setShadowReceiver(mesh);
+
+    this._splatGround    = mesh;
+    this._splatFogBuf    = fog;
+    this._hexVertexRange = range;
+    return mesh;
+  }
+
+  /** StandardMaterial for the merged ground, with the terrain-splat plugin
+   *  attached. No diffuseTexture — the plugin overwrites `baseColor` in
+   *  CUSTOM_FRAGMENT_UPDATE_DIFFUSE so detail blend + procedural colour + fog
+   *  dimming all land OUTSIDE the diffuse-lighting clamp. */
+  _buildSplatMaterial() {
+    const BABYLON = this._babylon;
+    const mat = new BABYLON.StandardMaterial('splatGround', this._scene);
+    if (mat.specularColor && BABYLON.Color3) {
+      mat.specularColor = new BABYLON.Color3(0.04, 0.04, 0.04); // matte
+    }
+    const PluginClass = makeTerrainSplatPlugin(BABYLON);
+    if (PluginClass) {
+      const plugin = new PluginClass(mat);
+      plugin.detailGrass  = this._terrainDetailTexture('grass');
+      plugin.detailDirt   = this._terrainDetailTexture('dirt');
+      plugin.detailForest = this._terrainDetailTexture('forest');
+      plugin.tints      = DEFAULT_TERRAIN_TINTS.map((t) => t.slice());
+      plugin.uFogDarken = this._fogTileDarken ?? 1.0;
+      plugin.isEnabled  = true;
+      this._splatPlugin = plugin;
+    }
+    return mat;
+  }
+
+  /** Lazily load + cache a tiling greyscale detail texture, WRAP-addressed so
+   *  it repeats seamlessly across the merged ground (world-XZ UV). */
+  _terrainDetailTexture(name) {
+    const BABYLON = this._babylon;
+    if (!BABYLON?.Texture) return null;
+    if (!this._detailTexCache) this._detailTexCache = new Map();
+    if (this._detailTexCache.has(name)) return this._detailTexCache.get(name);
+    const tex = new BABYLON.Texture(`assets/textures/terrain/${name}-detail.jpg`, this._scene);
+    if (BABYLON.Texture.WRAP_ADDRESSMODE != null) {
+      tex.wrapU = BABYLON.Texture.WRAP_ADDRESSMODE;
+      tex.wrapV = BABYLON.Texture.WRAP_ADDRESSMODE;
+    }
+    this._detailTexCache.set(name, tex);
+    return tex;
+  }
+
   _buildTileMesh(tile, parent) {
     const BABYLON = this._babylon;
     const scene   = this._scene;
     const { x, z } = hexToWorld(tile.col, tile.row);
 
+    const tkey = hexKey(tile.col, tile.row);
     // ── Base hex tile (flat, single face, no side walls) ─────────────────
     // Open-faced pointy-top hex polygon at Y=0, tightly tileable with no
     // cylinder rim to produce dark seams at the perimeter.
-    const baseColor = tileColorFor(tile);
-    const hex = this._buildFlatHexMesh(`tile_${tile.col}_${tile.row}`, parent, x, z);
-    hex.material   = this._tileMaterialFor(tile);
-    hex.metadata   = { kind: 'tile', col: tile.col, row: tile.row, baseColor };
-    // Terrain cylinder receives shadows from standees / trees / buildings /
-    // bridges (cast registrations below).
-    this._setShadowReceiver(hex);
-    this._tileMeshes.push(hex);
-    const tkey = hexKey(tile.col, tile.row);
-    this._tileMeshByKey.set(tkey, hex);
+    //
+    // Under the splat-terrain flag the playable ground is ONE merged mesh
+    // (`_buildSplatGround`), so per-tile base hexes aren't built here — only
+    // the props below (forest cones, buildings, roads/rivers, etc.) stay
+    // per-tile. The merged ground owns picking + fog instead of `hex`.
+    if (!this._useSplatTerrain) {
+      const baseColor = tileColorFor(tile);
+      const hex = this._buildFlatHexMesh(`tile_${tile.col}_${tile.row}`, parent, x, z);
+      hex.material   = this._tileMaterialFor(tile);
+      hex.metadata   = { kind: 'tile', col: tile.col, row: tile.row, baseColor };
+      // Terrain cylinder receives shadows from standees / trees / buildings /
+      // bridges (cast registrations below).
+      this._setShadowReceiver(hex);
+      this._tileMeshes.push(hex);
+      this._tileMeshByKey.set(tkey, hex);
+    }
     const props = [];
     const trackProp = (m) => { props.push(m); };
 
