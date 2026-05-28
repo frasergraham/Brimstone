@@ -2954,11 +2954,14 @@ export class Renderer3D {
     if (typeof clone.getChildMeshes === 'function') {
       for (const c of clone.getChildMeshes()) meshes.push(c);
     }
-    // Mild fog tint factor — matches the procedural tree fog palette (~65%
-    // of unfogged) so border GLB trees read as "in shadow" instead of
-    // crushed black. Applied to whichever colour drives the material:
-    // StandardMaterial.diffuseColor or PBRMaterial.albedoColor.
-    const FOG_K = 0.65;
+    // Fog tint factor for border-forest GLB trees — darken to ~50% of the
+    // unfogged colour so the shading actually reads against bright lit
+    // terrain. Earlier 0.65 was too subtle to notice. Apply to whichever
+    // colour drives the material (StandardMaterial.diffuseColor or
+    // PBRMaterial.albedoColor), and also scale any emissive contribution
+    // (leaf textures often carry baked emissive that would otherwise wash
+    // out the tint).
+    const FOG_K = 0.50;
     const tintMaterial = (mat) => {
       if (!mat) return;
       if (mat.diffuseColor && typeof mat.diffuseColor.scaleInPlace === 'function') {
@@ -2966,6 +2969,16 @@ export class Renderer3D {
       }
       if (mat.albedoColor && typeof mat.albedoColor.scaleInPlace === 'function') {
         mat.albedoColor.scaleInPlace(FOG_K);
+      }
+      if (mat.emissiveColor && typeof mat.emissiveColor.scaleInPlace === 'function') {
+        mat.emissiveColor.scaleInPlace(FOG_K);
+      }
+      // PBR: the diffuse/albedo TEXTURE often dominates over the colour
+      // multiplier. Darkening the texture's `level` survives the lighting
+      // clamp the same way the fog texel-darken does on terrain.
+      const tex = mat.albedoTexture || mat.diffuseTexture;
+      if (tex && typeof tex.level === 'number') {
+        tex.level = tex.level * FOG_K;
       }
     };
     for (const m of meshes) {
@@ -5992,11 +6005,20 @@ export class Renderer3D {
     // texture.rgb × diffuseColor.rgb, so this darkens the entire extension
     // ribbon by FOG_TILE_DARKEN regardless of the actual fog veil state.
     const extMat = this._buildRibbonMaterial('river', TILE_COLOR[TileType.RIVER]);
-    const k = this._fogTileDarken;
+    // Border river always reads as wilderness-beyond-sight. Same lighting-
+    // clamp trap as the terrain/road fog veil — multiplying diffuseColor
+    // alone is swallowed at bright phases because the standard pipeline
+    // does `clamp(lightAccum * diffuseColor) * texel`. Darken the texture
+    // LEVEL too (outside the clamp), clamped to FOG_HIDDEN_DARKEN so it
+    // matches the splat border ground's strength.
+    const k = Math.min(this._fogTileDarken, FOG_HIDDEN_DARKEN);
     if (extMat.diffuseColor) {
       extMat.diffuseColor.r *= k;
       extMat.diffuseColor.g *= k;
       extMat.diffuseColor.b *= k;
+    }
+    if (extMat.diffuseTexture && typeof extMat.diffuseTexture.level === 'number') {
+      extMat.diffuseTexture.level = k;
     }
     // Mark the (private, freshly-built) extension material for explicit
     // alpha-blending so the per-ring edge fade baked into the ribbon's vertex
