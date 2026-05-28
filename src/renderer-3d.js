@@ -5697,6 +5697,7 @@ export class Renderer3D {
     // vertex buffer stays dynamic (rewritten by _writeFogWeights), which
     // freezeWorldMatrix does not touch.
     if (this._splatGround) freeze(this._splatGround);
+    if (this._splatBorderGround) freeze(this._splatBorderGround);
     // Playable tile cylinders (legacy per-hex path).
     if (this._tileMeshes) for (const m of this._tileMeshes) freeze(m);
     // Per-tile props (trees, buildings, roofs, bridges, road/river per-tile
@@ -6166,107 +6167,135 @@ export class Renderer3D {
   // via `_hexVertexRange` (hexKey → base vertex index). Returns the mesh.
   _buildSplatGround(parent) {
     const BABYLON = this._babylon;
-    const scene   = this._scene;
     if (!BABYLON || !this.state?.tiles) return null;
+    // Two meshes: playable (opaque) and border (alpha-blended). Splitting
+    // them lets the playable ground stay in the OPAQUE pass — keeps the
+    // road/river transparent ribbons rendering correctly — while the border
+    // mesh can do a real smooth alpha dissolve at its outer rings.
+    const playableMesh = this._buildSplatPlayableMesh(parent);
+    this._buildSplatBorderMesh(parent);
+    return playableMesh;
+  }
+
+  /** Per-vertex hex fan emit shared between playable + border splat builds.
+   *  Writes one hex's 7 verts into the supplied buffers at `baseV`. */
+  _emitSplatHex(buffers, ti, col, row, splatWeights, edgeAlpha) {
     const R = HEX_RADIUS_WORLD;
+    const VPT = 7;
+    const { x, z } = hexToWorld(col, row, R);
+    const baseV = ti * VPT;
+    buffers.range.set(hexKey(col, row), baseV);
+    buffers.positions[baseV * 3] = x;
+    buffers.positions[baseV * 3 + 2] = z;
+    for (let j = 0; j < 6; j++) {
+      const a = Math.PI / 6 + j * Math.PI / 3;
+      const vi = baseV + 1 + j;
+      buffers.positions[vi * 3]     = x + R * Math.cos(a);
+      buffers.positions[vi * 3 + 2] = z + R * Math.sin(a);
+    }
+    for (let v = 0; v < VPT; v++) {
+      buffers.normals[(baseV + v) * 3 + 1] = 1;
+      buffers.edgeA[baseV + v] = edgeAlpha;
+    }
+    buffers.splat.set(splatWeights, baseV * 3);
+    const baseI = ti * 6 * 3;
+    for (let j = 0; j < 6; j++) {
+      buffers.indices[baseI + j * 3]     = baseV;
+      buffers.indices[baseI + j * 3 + 1] = baseV + 1 + j;
+      buffers.indices[baseI + j * 3 + 2] = baseV + 1 + ((j + 1) % 6);
+    }
+  }
+
+  _allocateSplatBuffers(tileCount) {
+    const VPT = 7;
+    return {
+      positions: new Float32Array(tileCount * VPT * 3),
+      normals:   new Float32Array(tileCount * VPT * 3),
+      splat:     new Float32Array(tileCount * VPT * 3),
+      fog:       new Float32Array(tileCount * VPT),
+      edgeA:     new Float32Array(tileCount * VPT),
+      indices:   new Uint32Array(tileCount * 6 * 3),
+      range:     new Map(),
+    };
+  }
+
+  /** Playable splat ground — one merged mesh, opaque material, real per-tile
+   *  splat weights, dynamic fog buffer. Picking + fog target this mesh. */
+  _buildSplatPlayableMesh(parent) {
+    const BABYLON = this._babylon;
+    const scene   = this._scene;
     const playable = [...this.state.tiles.values()];
     const channelAt = (col, row) => {
       const t = this.state.tiles.get(hexKey(col, row));
       return t ? splatChannelForTile(t) : null;
     };
+    const buffers = this._allocateSplatBuffers(playable.length);
+    for (let ti = 0; ti < playable.length; ti++) {
+      const tile = playable[ti];
+      this._emitSplatHex(buffers, ti, tile.col, tile.row,
+        hexSplatWeights(tile, channelAt), 1.0);
+    }
+    const mesh = new BABYLON.Mesh('splatGround', scene);
+    const vd = new BABYLON.VertexData();
+    vd.positions = buffers.positions;
+    vd.indices   = buffers.indices;
+    vd.normals   = buffers.normals;
+    vd.applyToMesh(mesh, false);
+    mesh.setVerticesData('aSplat', buffers.splat, false, 3);
+    mesh.setVerticesData('aFog', buffers.fog, true, 1);
+    mesh.setVerticesData('aEdgeAlpha', buffers.edgeA, false, 1);
+    mesh.parent = parent;
+    if (mesh.position?.set) mesh.position.set(0, 0, 0);
+    mesh.metadata = { kind: 'splatGround' };
+    mesh.material = this._buildSplatMaterial({ alphaBlend: false });
+    this._setShadowReceiver(mesh);
+    this._splatGround    = mesh;
+    this._splatFogBuf    = buffers.fog;
+    this._hexVertexRange = buffers.range;
+    return mesh;
+  }
 
-    // Border-forest band — same source-of-truth helpers the legacy per-hex
-    // builder uses. The splat path renders the band as forest-channel verts
-    // with a per-vertex edge alpha so the wilderness dissolves at the map's
-    // outer rings (operator: "use the same render system, retain the fade").
+  /** Border-forest splat mesh — separate mesh with ALPHA-BLEND material so
+   *  the per-ring edge alpha produces a real smooth dissolve. Permanently
+   *  fogged (aFog=1) so the wilderness reads as "beyond sight". */
+  _buildSplatBorderMesh(parent) {
+    const BABYLON = this._babylon;
+    const scene   = this._scene;
     const bandDepth = this._splatBorderBandDepth();
     const ext = tilesExtent(this.state.tiles);
     const borderPositions = borderTilePositions(this.state.tiles, bandDepth);
-    const borderAlphaByKey = new Map();
-    for (const pos of borderPositions) {
-      borderAlphaByKey.set(hexKey(pos.col, pos.row),
-        borderForestAlphaForTile(pos.col, pos.row, ext, bandDepth));
-    }
-
-    const VPT = 7; // vertices per tile (centre + 6 rim corners)
-    const tileCount = playable.length + borderPositions.length;
-    const positions = new Float32Array(tileCount * VPT * 3);
-    const normals   = new Float32Array(tileCount * VPT * 3);
-    const splat     = new Float32Array(tileCount * VPT * 3);
-    const fog       = new Float32Array(tileCount * VPT); // 0 = unfogged
-    const edgeA     = new Float32Array(tileCount * VPT); // 1 inner, fades at border rim
-    const indices   = new Uint32Array(tileCount * 6 * 3);
-    const range = new Map();
-
-    // Emit one hex fan into the shared buffers. `tileLike` only needs col/row
-    // and the per-fan splat-weight Float32Array (7×3).
-    const emitHex = (ti, col, row, splatWeights, edgeAlpha) => {
-      const { x, z } = hexToWorld(col, row, R);
-      const baseV = ti * VPT;
-      range.set(hexKey(col, row), baseV);
-      positions[baseV * 3] = x; positions[baseV * 3 + 2] = z;
-      for (let j = 0; j < 6; j++) {
-        const a = Math.PI / 6 + j * Math.PI / 3;
-        const vi = baseV + 1 + j;
-        positions[vi * 3]     = x + R * Math.cos(a);
-        positions[vi * 3 + 2] = z + R * Math.sin(a);
-      }
-      for (let v = 0; v < VPT; v++) {
-        normals[(baseV + v) * 3 + 1] = 1;
-        edgeA[baseV + v] = edgeAlpha;
-      }
-      splat.set(splatWeights, baseV * 3);
-      const baseI = ti * 6 * 3;
-      for (let j = 0; j < 6; j++) {
-        indices[baseI + j * 3]     = baseV;
-        indices[baseI + j * 3 + 1] = baseV + 1 + j;
-        indices[baseI + j * 3 + 2] = baseV + 1 + ((j + 1) % 6);
-      }
-    };
-
-    // Playable hexes — fully opaque, real per-vertex splat weights, fog-able.
-    for (let ti = 0; ti < playable.length; ti++) {
-      const tile = playable[ti];
-      emitHex(ti, tile.col, tile.row, hexSplatWeights(tile, channelAt), 1.0);
-    }
-    // Border-forest band — uniform forest channel (no blend with playable;
-    // visually it IS the forest wilderness), per-ring edge alpha. Permanently
-    // FOGGED (aFog=1) so the wilderness reads as "beyond sight" — matches the
-    // legacy `_borderGroundMaterialFor` which always rendered with the fog-of-
-    // war tint, AND keeps the border consistent in tone with fogged playable
-    // hexes the operator can already see.
+    if (borderPositions.length === 0) { this._splatBorderGround = null; return null; }
     const FOREST_ONLY = new Float32Array([
       0, 0, 1,  0, 0, 1,  0, 0, 1,  0, 0, 1,
       0, 0, 1,  0, 0, 1,  0, 0, 1,
     ]);
+    const buffers = this._allocateSplatBuffers(borderPositions.length);
     for (let bi = 0; bi < borderPositions.length; bi++) {
       const pos = borderPositions[bi];
-      const a   = borderAlphaByKey.get(hexKey(pos.col, pos.row)) ?? 1.0;
-      const ti  = playable.length + bi;
-      emitHex(ti, pos.col, pos.row, FOREST_ONLY, a);
-      const baseV = ti * VPT;
-      for (let v = 0; v < VPT; v++) fog[baseV + v] = 1.0;
+      const a   = borderForestAlphaForTile(pos.col, pos.row, ext, bandDepth);
+      this._emitSplatHex(buffers, bi, pos.col, pos.row, FOREST_ONLY, a);
+      const baseV = bi * 7;
+      for (let v = 0; v < 7; v++) buffers.fog[baseV + v] = 1.0;
     }
-
-    const mesh = new BABYLON.Mesh('splatGround', scene);
+    const mesh = new BABYLON.Mesh('splatBorderGround', scene);
     const vd = new BABYLON.VertexData();
-    vd.positions = positions;
-    vd.indices   = indices;
-    vd.normals   = normals;
+    vd.positions = buffers.positions;
+    vd.indices   = buffers.indices;
+    vd.normals   = buffers.normals;
     vd.applyToMesh(mesh, false);
-    // aSplat + aEdgeAlpha are static; aFog is updatable (rewritten by _writeFogWeights).
-    mesh.setVerticesData('aSplat', splat, false, 3);
-    mesh.setVerticesData('aFog', fog, true, 1);
-    mesh.setVerticesData('aEdgeAlpha', edgeA, false, 1);
+    mesh.setVerticesData('aSplat', buffers.splat, false, 3);
+    mesh.setVerticesData('aFog',   buffers.fog,   false, 1);
+    mesh.setVerticesData('aEdgeAlpha', buffers.edgeA, false, 1);
     mesh.parent = parent;
     if (mesh.position?.set) mesh.position.set(0, 0, 0);
-    mesh.metadata = { kind: 'splatGround' };
-    mesh.material = this._buildSplatMaterial();
+    mesh.metadata = { kind: 'splatBorderGround' };
+    mesh.material = this._buildSplatMaterial({ alphaBlend: true });
+    // Render BEFORE road/river ribbons (they have higher alphaIndex) so the
+    // ribbons paint on top — no transparent z-fight at the playable seam.
+    mesh.alphaIndex = 0;
+    mesh.isPickable = false;
     this._setShadowReceiver(mesh);
-
-    this._splatGround    = mesh;
-    this._splatFogBuf    = fog;
-    this._hexVertexRange = range;
+    this._splatBorderGround = mesh;
     return mesh;
   }
 
@@ -6384,23 +6413,28 @@ export class Renderer3D {
    *  attached. No diffuseTexture — the plugin overwrites `baseColor` in
    *  CUSTOM_FRAGMENT_UPDATE_DIFFUSE so detail blend + procedural colour + fog
    *  dimming all land OUTSIDE the diffuse-lighting clamp. */
-  _buildSplatMaterial() {
+  _buildSplatMaterial({ alphaBlend = false } = {}) {
     const BABYLON = this._babylon;
-    const mat = new BABYLON.StandardMaterial('splatGround', this._scene);
+    const mat = new BABYLON.StandardMaterial(
+      alphaBlend ? 'splatBorderGround' : 'splatGround', this._scene);
     if (mat.specularColor && BABYLON.Color3) {
       mat.specularColor = new BABYLON.Color3(0.04, 0.04, 0.04); // matte
     }
-    // Per-vertex edge-alpha drives the border-forest dissolve at the map's
-    // outer rings. Use ALPHATEST (binary discard) instead of ALPHABLEND so
-    // the splat ground stays in the OPAQUE pass — alpha-blending put it in
-    // the transparent pass which raced the road/river ribbons (also
-    // transparent), and the resulting render-order issues made the ribbons
-    // disappear. Hard cutoff at the band edge instead of a smooth dissolve,
-    // but every other prop stays visible.
-    if (BABYLON.Material && BABYLON.Material.MATERIAL_ALPHATEST != null) {
-      mat.transparencyMode = BABYLON.Material.MATERIAL_ALPHATEST;
-    } else {
-      mat.transparencyMode = 1; // numeric fallback (1 = ALPHATEST)
+    // Two flavours of splat material:
+    //  • Opaque (playable) — no alpha pipeline, renders normally in the
+    //    opaque pass. Road/river ribbons in the transparent pass paint on
+    //    top without render-order trouble.
+    //  • Alpha-blend (border) — transparencyMode = ALPHABLEND so the splat
+    //    plugin's `gl_FragColor.a *= vEdgeAlpha` MAIN_END write produces a
+    //    real smooth dissolve at the outer band rings. depth-write off so
+    //    transparency composites cleanly behind props above.
+    if (alphaBlend) {
+      if (BABYLON.Material && BABYLON.Material.MATERIAL_ALPHABLEND != null) {
+        mat.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
+      } else {
+        mat.transparencyMode = 2; // numeric fallback (2 = ALPHABLEND)
+      }
+      mat.disableDepthWrite = true;
     }
     mat.backFaceCulling = true;
     const PluginClass = makeTerrainSplatPlugin(BABYLON);

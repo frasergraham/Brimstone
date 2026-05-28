@@ -196,46 +196,47 @@ describe('Renderer3D splat ground — geometry', () => {
 });
 
 describe('Renderer3D splat ground — border-forest extension', () => {
-  test('extends the mesh with border-band verts, all forest-channel + edge alpha', () => {
+  test('border verts live in a SEPARATE mesh (alpha-blend) so playable stays opaque', () => {
     const r = makeRenderer();
     r._useSplatTerrain = true;
     // Override the stub to add one ring of border hexes around a 2×2 playable area.
     r._splatBorderBandDepth = () => 1;
     r.state = rectState(2, 2);
 
-    const mesh = r._buildSplatGround({ name: 'mapRoot' });
-    assert.ok(mesh, 'ground mesh built');
+    r._buildSplatGround({ name: 'mapRoot' });
+    const playable = r._splatGround;
+    const border   = r._splatBorderGround;
+    assert.ok(playable, 'playable mesh built');
+    assert.ok(border,   'border mesh built (separate)');
 
-    const playableCount = 4; // 2×2
-    const totalVerts = mesh._vdata.positions.length / 3;
-    assert.ok(totalVerts > playableCount * 7,
-      `border verts added: got ${totalVerts}, expected > ${playableCount * 7}`);
-    assert.ok(totalVerts % 7 === 0, 'still 7 verts per hex');
-
-    // aEdgeAlpha attribute is present and stride-1; playable verts = 1.0.
-    const edge = mesh._custom.aEdgeAlpha;
-    assert.ok(edge, 'aEdgeAlpha attribute set');
-    assert.equal(edge.stride, 1);
-    assert.equal(edge.updatable, false, 'aEdgeAlpha is static');
-    assert.equal(edge.data.length, totalVerts);
-
-    // Every playable vert (the first 4×7 = 28) carries alpha=1.
-    for (let v = 0; v < playableCount * 7; v++) {
-      assert.equal(edge.data[v], 1.0, `playable vert ${v} should be opaque`);
+    // Playable mesh = 4×7 verts, alpha=1 everywhere (opaque path).
+    const playableVerts = playable._vdata.positions.length / 3;
+    assert.equal(playableVerts, 4 * 7, 'playable has exactly 7 verts × 4 tiles');
+    const playableEdge = playable._custom.aEdgeAlpha.data;
+    for (let v = 0; v < playableVerts; v++) {
+      assert.equal(playableEdge[v], 1.0, `playable vert ${v} opaque`);
     }
-    // At least one border vert has alpha < 1 (the dissolve).
+
+    // Border mesh = some N×7 verts, all forest channel, at least one alpha<1.
+    const borderVerts = border._vdata.positions.length / 3;
+    assert.ok(borderVerts > 0 && borderVerts % 7 === 0, 'border has whole hex fans');
+    const borderEdge = border._custom.aEdgeAlpha.data;
     let foundFade = false;
-    for (let v = playableCount * 7; v < totalVerts; v++) {
-      if (edge.data[v] < 1) { foundFade = true; break; }
+    for (let v = 0; v < borderVerts; v++) {
+      if (borderEdge[v] < 1) { foundFade = true; break; }
     }
     assert.ok(foundFade, 'at least one border vert has alpha < 1');
 
-    // Border splat weights are uniformly forest channel (0, 0, 1).
-    const splat = mesh._custom.aSplat.data;
-    for (let v = playableCount * 7; v < totalVerts; v++) {
-      assert.equal(splat[v * 3 + 0], 0, `border vert ${v} grass weight = 0`);
-      assert.equal(splat[v * 3 + 1], 0, `border vert ${v} dirt  weight = 0`);
-      assert.equal(splat[v * 3 + 2], 1, `border vert ${v} forest weight = 1`);
+    const borderSplat = border._custom.aSplat.data;
+    for (let v = 0; v < borderVerts; v++) {
+      assert.equal(borderSplat[v * 3 + 0], 0, `border vert ${v} grass=0`);
+      assert.equal(borderSplat[v * 3 + 1], 0, `border vert ${v} dirt=0`);
+      assert.equal(borderSplat[v * 3 + 2], 1, `border vert ${v} forest=1`);
+    }
+    // Border is permanently fogged so the wilderness reads as "beyond sight".
+    const borderFog = border._custom.aFog.data;
+    for (let v = 0; v < borderVerts; v++) {
+      assert.equal(borderFog[v], 1, `border vert ${v} fog=1`);
     }
   });
 });
