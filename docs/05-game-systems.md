@@ -209,9 +209,12 @@ The caller then calls `state.spendAction(result.cost)` to deduct from the budget
 | Terrain | Movement cost |
 |---------|--------------|
 | Road / Bridge | 1 |
-| Grass / Dirt / Building | 2 |
+| Grass / Dirt / Building entrance | 2 |
 | Forest | 2 |
 | River | Impassable |
+| Building footprint | Impassable (capacity 0) |
+
+A building occupies two hexes: a passable **entrance** (cost 2, like grass) and an impassable **footprint** (`tileTotalCapacity()` returns 0). See [Building Footprints](#building-footprints).
 
 A horse doubles movement range (2 hexes instead of 1).
 
@@ -228,7 +231,7 @@ Witch sightRange:
   always → 5 hexes
 ```
 
-Vision is **line-of-sight**: each unit's view is gated by `computeLineOfSight` (`src/actions.js`), which walks a hex line from the unit to each candidate hex inside its base range. Buildings (`hasBuilding`) and forest tiles (`isForestCover` — base material is forest, regardless of any path/structure on top) BLOCK vision past themselves; the blocker itself is visible, hexes beyond it are not. The 2D renderer (`renderer._buildFogVisibleHexes`), 3D renderer (`buildFogVisibleSet`), explored-hex memory (`GameState.updateExploredHexes`), and Hero-AI fog awareness all delegate to this single helper.
+Vision is **line-of-sight**: each unit's view is gated by `computeLineOfSight` (`src/actions.js`), which walks a hex line from the unit to each candidate hex inside its base range. The single blocker rule is `blocksLineOfSight(tile)` in `src/tiles.js`, which returns true for **building footprint** hexes (`isBuildingFootprint`) and **forest** tiles (`isForestCover` — base material is forest, regardless of any path/structure on top). The blocker itself is visible; hexes beyond it are not. Note the footprint/entrance asymmetry: the impassable footprint hex blocks vision (it carries the rendered model — the "wall"), while the **building entrance is transparent** to LOS (you can see across a doorway). The 2D renderer (`renderer._buildFogVisibleHexes`), 3D renderer (`buildFogVisibleSet`), explored-hex memory (`GameState.updateExploredHexes`), and Hero-AI fog awareness all delegate to this single helper via `_isLosBlocker` (`src/actions.js`).
 
 Fog of war is active when any side is AI-controlled. Each faction sees only hexes within line of sight of their units. AI log messages are replaced with atmospheric fog messages.
 
@@ -266,6 +269,45 @@ Diminishing returns:  chance × (1 - 0.10 × activeSurvivors)
 Town Hall, Church, Inn, Blacksmith, Graveyard, Mill, Dock, House, Barn, Watchtower, Apothecary, Storehouse, Stable
 
 Each building type has different loot tables when explored (weighted random from `loot.config.js`).
+
+### Building Footprints
+
+A building is a **two-hex compound**, not a single tile:
+
+| Role | Passable? | LOS | Carries the model? | Actions target it? |
+|------|-----------|-----|--------------------|--------------------|
+| **Entrance** | yes (cost 2) | transparent | no | yes — explore, battle, fortify, loot, hidden-survivor, and road-through (`roadDirs`) all live here |
+| **Footprint** | no — `tileTotalCapacity()` returns 0 | blocks (`blocksLineOfSight`) | yes — the rendered building sits here | no |
+
+The entrance hex is the canonical "building tile": it keeps the `building` enum, the loot/explore/fortify behaviour, the hidden survivor, and any `roadDirs` connectivity. The footprint hex is a pure obstacle — impassable, sight-blocking, and where the artwork is drawn.
+
+**Tile fields** (`src/tiles.js`, on every `Tile`):
+
+- `footprintHexes: string[]` — on the **entrance** tile; `"col,row"` keys of its footprint hex(es). `[]` means legacy/unmigrated (still a valid 1-hex building).
+- `buildingFootprintOf: "col,row" | null` — on each **footprint** tile, the back-pointer to its entrance. `null` everywhere else.
+
+MVP places **one** footprint per building, but the schema is `string[]` and the predicates iterate, so N-hex buildings are already supported.
+
+**Predicates** (all in `src/tiles.js`, the single source of truth):
+
+| Predicate | True when |
+|-----------|-----------|
+| `isBuildingEntrance(tile)` | `hasBuilding(tile)` **and** non-empty `footprintHexes` |
+| `isBuildingFootprint(tile)` | `buildingFootprintOf != null` |
+| `isBuildingTile(tile)` | entrance **or** footprint |
+| `blocksLineOfSight(tile)` | footprint **or** forest cover (entrance does **not** block) |
+
+**Eligibility helper** (`src/building-footprint.js`) — shared by procgen, the auto-migration in `state-sync`, the one-shot mission migration, and the editor:
+
+- `eligibleFootprintNeighbors(state, col, row, opts)` — neighbours of the entrance in odd-r direction order `0..5` that may become a footprint. Excludes: off-map hexes, river (base or path), bridge and **road** paths (a road footprint would sever the MST road network), hexes already carrying a building, hexes already claimed as a footprint, and power-node hexes.
+- `pickFootprintNeighbor(state, col, row, rand, opts)` — picks one. With no `rand` it is **deterministic** (the first eligible neighbour in direction order); with a `rand()` function it picks a random eligible neighbour.
+
+**Renderer relocation** (shared constants/helpers in `src/building-render.js`, consumed by both `src/renderer.js` and `src/renderer-3d.js`):
+
+- The building art is drawn on the **footprint** hex, then nudged `BUILDING_ENTRANCE_NUDGE = 0.15` of the way back toward the entrance (`buildingNudgedPosition`) so it visibly leans toward its door.
+- It is rotated to **face the entrance** (`buildingFacingYaw`).
+- An implicit **door-stub road** is drawn from the entrance toward the footprint edge (`doorStubDirection`) **regardless of `roadDirs`** — render-only, the tile's `roadDirs` are never modified.
+- 3D models are normalized to roughly one hex of ground via `TARGET_BUILDING_GROUND_SPAN = 1.0` (operator-dialable).
 
 ### Resources
 
@@ -313,6 +355,7 @@ Defined in `src/map.js`. Seeded procedural generation.
        │
 3. BUILDINGS           Place INN + GRAVEYARD in opposite corners
        │                Cluster remaining buildings nearby
+       │                Two-pass footprint materialization (see below)
        │
 4. ROAD NETWORK        MST connecting all buildings (src/road-network.js)
        │                Add bridges where roads cross river
@@ -328,6 +371,15 @@ Defined in `src/map.js`. Seeded procedural generation.
        │
 9. HIDDEN SURVIVORS    Place discoverable survivors in buildings
 ```
+
+### Two-Pass Building Materialization (`src/map.js`)
+
+Because every building now needs an adjacent impassable footprint (see [Building Footprints](#building-footprints)), step 3 materializes buildings in two passes with rollback:
+
+- **Pass 1** — materialize each entrance on cleared ground (GRASS or DIRT, `BUILDING_GRASS_CHANCE = 0.4`), snapshotting the prior tile state (`base`, `structure`, `path`, `building`, `fortifyLevel`, `footprintHexes`, `buildingFootprintOf`) for possible rollback.
+- **Pass 2** — claim one footprint per entrance via `pickFootprintNeighbor()` and write the `buildingFootprintOf` back-pointer. If a building is wedged with **no eligible neighbour** (river/edge/other buildings on all sides), the whole placement is **rolled back** from its snapshot and dropped — rolled-back placements are filtered out (and removed from their village group) **before** the road network is generated, so roads never route to a building that no longer exists.
+
+The MST router treats footprints as a soft obstacle (`FOOTPRINT_ROAD_PENALTY = 50` in `bfsPath`) rather than a hard block, so roads detour around building footprints when a cheaper path exists but can still cross one if forced.
 
 ### Shared Road Builder (`src/road-network.js`)
 

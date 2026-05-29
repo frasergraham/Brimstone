@@ -233,7 +233,9 @@ GameState (live)                    Snapshot (JSON)
 state.tiles (Map)           →       tiles: [{ key, col, row, type,
                                       building, road, explored,
                                       resource, fortifyLevel,
-                                      roadDirs: [...] }, ...]
+                                      roadDirs: [...],
+                                      footprintHexes: [...],
+                                      buildingFootprintOf }, ...]
 
 state.entities (Entity[])   →       entities: [{ id, type, owner,
                                       ownerId, col, row, hp, maxHp,
@@ -249,12 +251,16 @@ state.players (Map)         →       players: [{ id, faction, ... }]
 
 ### Deserialize (`deserializeState`)
 
-Reconstructs a full `GameState` with proper prototypes. Includes back-compat migrations for older save formats — currently the only active migration rewrites pre-`SAVE_VERSION=2` entity types of `'hero'` to `'paladin'` (the entity-type rename in the faction-expansion work; see `docs/design/faction-expansion.md`).
+Reconstructs a full `GameState` with proper prototypes. The current `SAVE_VERSION` is **6** (`src/version.js`). Includes back-compat migrations for older save formats:
+
+- **pre-`SAVE_VERSION=2`** — rewrites entity types of `'hero'` to `'paladin'` (the entity-type rename in the faction-expansion work; see `docs/design/faction-expansion.md`).
+- **pre-`SAVE_VERSION=6` building footprints** — any tile that carries a `building` but has an empty/missing `footprintHexes` is auto-migrated to the two-hex compound (see [05-game-systems.md → Building Footprints](05-game-systems.md#building-footprints)). Buildings are processed in **sorted-key order** (row, then col) and each picks an eligible adjacent footprint via `pickFootprintNeighbor()` with **no `rand`** — i.e. the first eligible neighbour in odd-r direction order `0..5`. This is fully deterministic, so every client/server reconstructs the same footprints from the same legacy save. **Orphans** (a building with no eligible adjacent hex — wedged against river/edge/other buildings) are warned once and left as a valid 1-hex building (`footprintHexes: []`).
 
 ```
 1. Create throwaway GameState (for prototype chain)
 2. Restore tiles as Map<key, Tile>
-   └── Convert roadDirs arrays back to Sets
+   ├── Convert roadDirs arrays back to Sets
+   └── Auto-migrate legacy buildings → footprints (pre-v6)
 3. Restore entities as real Entity instances
    └── Attach methods: takeDamage(), heal(), etc.
 4. Set leader references (state.hero, state.witch)
@@ -423,6 +429,10 @@ A mission JSON mirrors the runtime mission-def shape verbatim for every field *e
 | `conductor.scriptKey` | **string key** into the conductor-script registry (`src/campaign/conductor-scripts.js`), resolved to `{ steps, config }` |
 
 `src/campaign/missions/long_watch.json` is the canonical example (a `handmade` map with a `notHoldingAllNodes` condition); `tutorial.json` is the canonical conducted example (`conductor.scriptKey: "tutorial"`). See [docs/design/campaign-mission-editor.md](design/campaign-mission-editor.md) for the full schema.
+
+**Building footprints in mission tiles.** A tile def that carries a `building` is an **entrance** and lists its impassable footprint hex(es) in `footprintHexes: ["col,row", ...]`; the footprint tile def carries the `buildingFootprintOf: "col,row"` back-pointer (see [05-game-systems.md → Building Footprints](05-game-systems.md#building-footprints)). The loader (`_applyTileDef`, `src/campaign/mission-map.js`) copies both fields **verbatim** — it never auto-derives them. A building with no `footprintHexes` falls back to the Tile-constructor defaults (`[]` / `null`) and stays a valid 1-hex building, so pre-footprint missions still load. Runtime `validateMissionJSON` deliberately does **not** check footprints (backward compat); the stricter editor-only `validateBuildingFootprints` does.
+
+**One-shot migration of bundled missions.** `scripts/migrate-building-footprints.js` rewrote the 8 bundled mission JSONs to add footprints. It is **one-shot/idempotent** (skips any mission whose tiles already carry `footprintHexes`), **deterministic** (uses the shared `pickFootprintNeighbor()` with no `rand` → first eligible neighbour in odd-r dir `0..5`), and **self-verifying** (re-runs each rewritten mission through `validateMissionJSON` → `loadMissionJSON` → `mapBuilderFn()` and aborts loudly on any failure). Orphan buildings are left 1-hex (`footprintHexes: []`). All 8 missions migrated; **3** then needed a post-migration hand-rotation off resource hexes (the deterministic picker had landed a footprint on a resource, making it unreachable once the footprint became impassable — commit `dc1b757`).
 
 ### Loader (`src/campaign/json-mission.js`)
 

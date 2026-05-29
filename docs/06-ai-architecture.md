@@ -311,6 +311,15 @@ Round N+1: previousPositions[unit] = A
 
 ---
 
+## Terrain-Aware Pathing & Sight
+
+Buildings are two-hex compounds — a passable entrance plus an **impassable footprint** hex (`isBuildingFootprint`, capacity 0; see [05-game-systems.md → Building Footprints](05-game-systems.md#building-footprints)). The AI handles them the same way it handles rivers:
+
+- **Goal/transit filtering** — gap-fill exploration drops footprint hexes from the candidate set alongside rivers (`if (isRiver(t) || isBuildingFootprint(t)) continue;` in `src/ai-engine.js` and `src/hero-ai-engine.js`). Step-toward pathing additionally never lands on a footprint because capacity-0 hexes fail the move gate.
+- **Sight** — Hero-AI board assessment calls the shared `computeLineOfSight` (`src/actions.js`), which uses `blocksLineOfSight` — footprint hexes block vision, **building entrances do not** (the doorway is transparent). Same rule as the renderers and fog.
+
+---
+
 ## Scoring Awareness
 
 Both AIs track `roundsUntilScoring()` and adjust behavior near dawn/dusk:
