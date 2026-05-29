@@ -137,7 +137,15 @@ export function makeFogDarkenPlugin(BABYLON) {
       }
       if (shaderType === 'fragment') {
         return {
+          // The MAX_FOG_TILES #define must live HERE (CUSTOM_FRAGMENT_DEFINITIONS,
+          // at the very top of fragment) rather than in getUniforms().fragment:
+          // Safari WebKit's WebGL2 shader assembler injects getUniforms's fragment
+          // block AFTER custom-code MAIN_END, so the loop in MAIN_END sees
+          // `MAX_FOG_TILES` as undeclared on Safari. (Chrome happens to interleave
+          // them in the right order — both are spec-conformant.) Duplicate
+          // `#define MAX_FOG_TILES 32` in two scopes is identical & legal GLSL.
           CUSTOM_FRAGMENT_DEFINITIONS: `#ifdef FOG_DARKEN
+            #define MAX_FOG_TILES ${MAX_FOG_TILES}
             varying vec2 vFogWorldXZ;
           #endif`,
           // Final post-lighting multiply. For each fogged tile, a soft circular
