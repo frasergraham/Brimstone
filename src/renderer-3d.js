@@ -2784,7 +2784,10 @@ export class Renderer3D {
       // uniform — pushed by `_updateBuildingFogUniform` — darkens whichever
       // instances stand on a fogged hex, keyed by the fragment's own world XZ.
       // This deliberately replaces the failed per-instance-attribute path.
-      this._attachBuildingFogPlugin(source);
+      // NB: we attach to the MATERIAL, not the mesh. Passing a mesh trips
+      // `MaterialPluginBase._enable` against a non-material and throws inside
+      // the load promise — silently leaving the procedural fallback in place.
+      this._attachBuildingFogPlugin(source.material);
 
       // If the map's already built (the common case — GLB load is slow,
       // _buildMap runs synchronously right after Babylon init), retrofit the

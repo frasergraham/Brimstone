@@ -479,6 +479,24 @@ describe('_loadBuildingModel — async load + retrofit + fallback', () => {
     assert.equal(tpl.scale, HOUSE_INSTANCE_BASE_SCALE);
   });
 
+  test('passes the source MATERIAL (not the mesh) to the fog plugin attach', async () => {
+    // Regression: a prior wiring bug passed `source` (the merged mesh) to
+    // `_attachBuildingFogPlugin`, which crashed inside MaterialPluginBase's
+    // _enable — silently aborting the load promise and leaving the procedural
+    // box+roof in place. The attach must receive the mesh's material.
+    const r = newInst();
+    r._scene = {};
+    const fakeMaterial = { name: 'inn_mat', subMaterials: null, pluginManager: null };
+    const fakeMesh = makeFakeMesh('imported', { vertices: 100, indices: 90 });
+    fakeMesh.material = fakeMaterial;
+    r._babylon = makeFakeBabylon({ importImpl: async () => ({ meshes: [fakeMesh] }) });
+    let attachedArg = 'unset';
+    r._attachBuildingFogPlugin = (arg) => { attachedArg = arg; };
+    await r._loadBuildingModel('models/buildings/inn.glb', 'assets');
+    assert.equal(attachedArg, fakeMaterial, 'should receive source.material, not source');
+    assert.notEqual(attachedArg, fakeMesh, 'must NOT be the mesh itself');
+  });
+
   test('computes a bbox-derived scale so the template lands at the target height', async () => {
     const r = newInst();
     r._scene = {};
