@@ -11694,7 +11694,17 @@ export class Renderer3D {
     if (!this._scene || !this._babylon) return null;
     if (typeof document === 'undefined') return null;
     if (!entity || entity.id == null) return null;
-    const standee = this._entityStandees.get(entity.id);
+    // A just-discovered survivor / raised zombie is added to state.entities
+    // immediately, but its STANDEE mesh isn't built until the next draw cycle's
+    // _syncEntityStandees sweep. Discovery fires before that sweep, so the
+    // lookup would miss and the orchestrator would fall back to the modal.
+    // Sync the standees on demand so the new entity gets its anchor before we
+    // look it up. Safe to call here — it's the same call draw() makes.
+    let standee = this._entityStandees.get(entity.id);
+    if (!standee || !standee.plane) {
+      try { this._syncEntityStandees(); } catch { /* defensive */ }
+      standee = this._entityStandees.get(entity.id);
+    }
     if (!standee || !standee.plane) return null;
     const BABYLON = this._babylon;
 
