@@ -22,6 +22,16 @@ function freshState() {
   return new GameState(true, true);
 }
 
+// Procedural maps can drop an impassable building footprint (cap-0) on any hex.
+// Fixtures that move onto / build on a fixed coordinate must neutralize any
+// footprint markers a random map happened to place there.
+function clearFootprint(tile) {
+  if (!tile) return tile;
+  tile.buildingFootprintOf = null;
+  tile.footprintHexes = [];
+  return tile;
+}
+
 // Spawn a rogue leader at (col, row) by swapping the day-side default.
 // Returns the state and the rogue entity.
 function rogueState(col = 5, row = 5) {
@@ -296,6 +306,7 @@ describe('RogueFaction — onAfterMoveStep auto-detects survivors in buildings',
     t.building = BuildingType.INN;
     t.hiddenSurvivor = true;
     t.explored = false;
+    clearFootprint(t);
 
     const result = executeMove(state, rogue, 4, 3);
     assert.equal(result.success, true);
@@ -311,11 +322,13 @@ describe('RogueFaction — onAfterMoveStep auto-detects survivors in buildings',
     adj.building = BuildingType.CHURCH;
     adj.hiddenSurvivor = true;
     adj.explored = false;
+    clearFootprint(adj);
     // Make sure the rogue's destination tile (4, 3) is empty terrain.
     const dest = state.tiles.get(hexKey(4, 3));
     decomposeTileType(dest, TileType.GRASS);
     dest.building = null;
     dest.hiddenSurvivor = false;
+    clearFootprint(dest);
 
     const result = executeMove(state, rogue, 4, 3);
     assert.equal(result.success, true);
@@ -357,11 +370,13 @@ describe('RogueFaction — onAfterMoveStep auto-detects survivors in buildings',
     adj.building = BuildingType.INN;
     adj.hiddenSurvivor = true;
     adj.explored = false;
+    clearFootprint(adj);
     // Make sure the destination tile is plain grass (no random reveal).
     const dest = state.tiles.get(hexKey(4, 3));
     decomposeTileType(dest, TileType.GRASS);
     dest.building = null;
     dest.hiddenSurvivor = false;
+    clearFootprint(dest);
 
     executeMove(state, state.hero, 4, 3);
     // The paladin's only chance to find the survivor is the existing

@@ -7,7 +7,7 @@ import {
   TileType, BuildingType, Tile,
   TILE_CAPACITY, BUILDING_SLOT_COST, TREE_SLOT_COST,
   treeCountForTile, tileOccupancyCount, tileCapacityRemaining,
-  decomposeTileType,
+  decomposeTileType, isBuildingFootprint,
 } from '../src/tiles.js';
 import { getReachableHexes, executeMove, isTileFullForMove } from '../src/actions.js';
 import { hexKey, getNeighbors } from '../src/hex.js';
@@ -18,10 +18,14 @@ function freshState() {
   return new GameState(true, true);
 }
 
-// Force a tile to a specific type/base.
+// Force a tile to a specific type/base. Also clears any building-footprint
+// marker a random procedural map may have placed here — otherwise the cell
+// stays cap-0 (impassable) and the forced type is meaningless.
 function setTile(state, col, row, type) {
   const t = state.tiles.get(hexKey(col, row));
   decomposeTileType(t, type);
+  t.buildingFootprintOf = null;
+  t.footprintHexes = [];
   return t;
 }
 
@@ -81,7 +85,8 @@ describe('isTileFullForMove', () => {
     const n = getNeighbors(state.hero.col, state.hero.row)
       .find(({ col, row }) => {
         const t = state.tiles.get(hexKey(col, row));
-        return t && t.base === TileType.GRASS && t.path == null && t.building == null;
+        return t && t.base === TileType.GRASS && t.path == null && t.building == null
+          && !isBuildingFootprint(t);
       });
     if (!n) return; // map-dependent; if not found this round, skip
     assert.equal(isTileFullForMove(state, state.hero, n.col, n.row), false);

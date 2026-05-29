@@ -16,12 +16,22 @@ import {
   createHero, createWitch, createMinion, createZombie, createSurvivor,
   createIronGolem, resetRoster, setForcedDice,
 } from '../src/entities.js';
-import { TileType, BuildingType, ResourceType, WeaponType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus, FORT_IMPASSABLE_THRESHOLD, legacyTileType, decomposeTileType } from '../src/tiles.js';
+import { TileType, BuildingType, ResourceType, WeaponType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus, FORT_IMPASSABLE_THRESHOLD, legacyTileType, decomposeTileType, isBuildingFootprint } from '../src/tiles.js';
 import { hexKey, getNeighbors, hexDistance } from '../src/hex.js';
 import { applyPostRoundEffects } from '../src/post-round-effects.js';
 
 function freshState() {
   return new GameState(true, true);
+}
+
+// Procedural maps can drop an impassable building footprint (cap-0) on any hex.
+// Test fixtures that carve out passable terrain must neutralize any footprint
+// markers a random map happened to place there, or the tile stays impassable.
+function clearFootprint(tile) {
+  if (!tile) return tile;
+  tile.buildingFootprintOf = null;
+  tile.footprintHexes = [];
+  return tile;
 }
 
 // Pick a reachable non-blocked neighbor for a given entity
@@ -33,7 +43,7 @@ function firstReachable(state, entity) {
 function emptyPassableNeighbor(state, entity) {
   return getNeighbors(entity.col, entity.row).find(n => {
     const t = state.tiles.get(hexKey(n.col, n.row));
-    if (!t || legacyTileType(t) === TileType.RIVER) return false;
+    if (!t || legacyTileType(t) === TileType.RIVER || isBuildingFootprint(t)) return false;
     return !state.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
   }) ?? null;
 }
@@ -285,7 +295,7 @@ describe('executeMove — blockedBy field', () => {
     // Place a minion directly adjacent — no room to walk before the enemy
     const neighbor = getNeighbors(hero.col, hero.row).find(n => {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      return t && legacyTileType(t) !== TileType.RIVER;
+      return t && legacyTileType(t) !== TileType.RIVER && !isBuildingFootprint(t);
     });
     if (!neighbor) return;
     const minion = createMinion(neighbor.col, neighbor.row);
@@ -314,7 +324,7 @@ describe('executeMove — blockedBy field', () => {
     // Make all three hexes roads so they're within movement budget
     for (const h of [heroPos, n1, n2]) {
       const t = state.tiles.get(hexKey(h.col, h.row));
-      if (t) { decomposeTileType(t, TileType.ROAD); t.building = null; t.hiddenSurvivor = false; }
+      if (t) { decomposeTileType(t, TileType.ROAD); t.building = null; t.hiddenSurvivor = false; clearFootprint(t); }
     }
 
     // Place hero at known position
@@ -458,6 +468,7 @@ describe('executeExplore', () => {
       decomposeTileType(t, TileType.GRASS);
       t.building = null;
       t.hiddenSurvivor = false;
+      clearFootprint(t);
       const r = executeExplore(state, hero);
       const found = r.lootItems.filter(l => l.startsWith('+'));
       assert.ok(found.length <= 1,
@@ -474,6 +485,7 @@ describe('executeExplore', () => {
     t.building = null;
     t.hiddenSurvivor = false;
     t.explored = false;
+    clearFootprint(t);
     return t;
   }
 
@@ -836,7 +848,7 @@ describe('executeBattle', () => {
     // Place 2 survivors adjacent to the target (on target's hex neighbors)
     const targetNeighbors = getNeighbors(targetHex.col, targetHex.row).filter(n => {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      return t && legacyTileType(t) !== TileType.RIVER;
+      return t && legacyTileType(t) !== TileType.RIVER && !isBuildingFootprint(t);
     });
     const placed = [];
     for (let i = 0; i < Math.min(2, targetNeighbors.length); i++) {
@@ -1482,7 +1494,7 @@ describe('executeSummon', () => {
     const neighbors = getNeighbors(state.witch.col, state.witch.row);
     for (const n of neighbors) {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      if (t && legacyTileType(t) !== TileType.RIVER) {
+      if (t && legacyTileType(t) !== TileType.RIVER && !isBuildingFootprint(t)) {
         const m = createMinion(n.col, n.row, null);
         state.entities.push(m);
       }
@@ -2245,7 +2257,7 @@ describe('fortifications as impassable walls', () => {
     // Make all immediate neighbors plain grass first
     for (const n of getNeighbors(witch.col, witch.row)) {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      if (t) { decomposeTileType(t, TileType.GRASS); t.building = null; t.hiddenSurvivor = false; t.fortifyLevel = 0; }
+      if (t) { decomposeTileType(t, TileType.GRASS); t.building = null; t.hiddenSurvivor = false; t.fortifyLevel = 0; clearFootprint(t); }
     }
     const nbrs = getNeighbors(witch.col, witch.row);
     const wallNbr = nbrs[0];
@@ -2270,7 +2282,7 @@ describe('fortifications as impassable walls', () => {
     const hero = state.hero;
     for (const n of getNeighbors(hero.col, hero.row)) {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      if (t) { decomposeTileType(t, TileType.GRASS); t.building = null; t.hiddenSurvivor = false; t.fortifyLevel = 0; }
+      if (t) { decomposeTileType(t, TileType.GRASS); t.building = null; t.hiddenSurvivor = false; t.fortifyLevel = 0; clearFootprint(t); }
     }
     // Clear enemies from adjacent hexes so they don't block pathing
     state.entities = state.entities.filter(e => e.id === hero.id || e.id === state.witch.id);
@@ -2292,7 +2304,7 @@ describe('fortifications as impassable walls', () => {
     // Normalize neighbours
     for (const n of getNeighbors(witch.col, witch.row)) {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      if (t) { decomposeTileType(t, TileType.GRASS); t.building = null; t.hiddenSurvivor = false; t.fortifyLevel = 0; }
+      if (t) { decomposeTileType(t, TileType.GRASS); t.building = null; t.hiddenSurvivor = false; t.fortifyLevel = 0; clearFootprint(t); }
     }
     const wallNbr = getNeighbors(witch.col, witch.row)[0];
     const wallTile = state.tiles.get(hexKey(wallNbr.col, wallNbr.row));
@@ -2316,7 +2328,7 @@ describe('fortifications as impassable walls', () => {
     const witch = state.witch;
     for (const n of getNeighbors(witch.col, witch.row)) {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      if (t) { decomposeTileType(t, TileType.GRASS); t.building = null; t.hiddenSurvivor = false; t.fortifyLevel = 0; }
+      if (t) { decomposeTileType(t, TileType.GRASS); t.building = null; t.hiddenSurvivor = false; t.fortifyLevel = 0; clearFootprint(t); }
     }
     const nbr = getNeighbors(witch.col, witch.row)[0];
     const nbrTile = state.tiles.get(hexKey(nbr.col, nbr.row));
@@ -2342,8 +2354,8 @@ describe('executeFortAssault', () => {
     const fortPos = { col: 6, row: 5 };
     const atkTile = state.tiles.get(hexKey(atkPos.col, atkPos.row));
     const fortTile = state.tiles.get(hexKey(fortPos.col, fortPos.row));
-    if (atkTile) { decomposeTileType(atkTile, TileType.GRASS); atkTile.building = null; atkTile.hiddenSurvivor = false; atkTile.fortifyLevel = 0; }
-    if (fortTile) { decomposeTileType(fortTile, TileType.GRASS); fortTile.building = null; fortTile.hiddenSurvivor = false; fortTile.fortifyLevel = fortLevel; }
+    if (atkTile) { decomposeTileType(atkTile, TileType.GRASS); atkTile.building = null; atkTile.hiddenSurvivor = false; atkTile.fortifyLevel = 0; clearFootprint(atkTile); }
+    if (fortTile) { decomposeTileType(fortTile, TileType.GRASS); fortTile.building = null; fortTile.hiddenSurvivor = false; fortTile.fortifyLevel = fortLevel; clearFootprint(fortTile); }
 
     let unit;
     if (attacker === 'iron_golem') unit = createIronGolem(atkPos.col, atkPos.row);
@@ -2397,7 +2409,7 @@ describe('executeFortAssault', () => {
     const hero = state.hero;
     const fortPos = getNeighbors(hero.col, hero.row).find(n => {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      return t && legacyTileType(t) !== TileType.RIVER;
+      return t && legacyTileType(t) !== TileType.RIVER && !isBuildingFootprint(t);
     });
     if (!fortPos) return;
     const t = state.tiles.get(hexKey(fortPos.col, fortPos.row));
@@ -2440,6 +2452,7 @@ describe('executeFortAssault', () => {
     // Clear out other stuff that might live there
     fortTile.building = null;
     decomposeTileType(fortTile, TileType.GRASS);
+    clearFootprint(fortTile);
 
     const r2 = executeMove(state, unit, fortPos.col, fortPos.row);
     assert.equal(r2.success, true, 'Witch should now walk onto the breached wall hex');

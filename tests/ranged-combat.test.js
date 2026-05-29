@@ -20,8 +20,8 @@ import {
   Entity, EntityType,
   createHero, createWitch, createMinion,
 } from '../src/entities.js';
-import { TileType, PathType, StructureType, legacyTileType, decomposeTileType } from '../src/tiles.js';
-import { hexKey, hexDistance } from '../src/hex.js';
+import { TileType, PathType, StructureType, legacyTileType, decomposeTileType, isBuildingFootprint } from '../src/tiles.js';
+import { hexKey, hexDistance, hexRange } from '../src/hex.js';
 import { PlanActionType, snapEntity } from '../src/planner.js';
 import { resolvePlans } from '../server/resolver.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
@@ -34,6 +34,21 @@ function freshState() {
 function placeAt(entity, col, row) {
   entity.col = col;
   entity.row = row;
+}
+
+// For ranged-visibility fixtures that rely on a clear sightline to an in-range
+// target, scrub every line-of-sight blocker within `radius` of the observer:
+// building footprints (a footprint cap-0 cell — new with the footprint rework)
+// AND forest cover (a pre-existing LOS blocker). A random map can drop either
+// between the observer and the target and silently hide it from fog visibility.
+function clearSightlineAround(state, col, row, radius) {
+  for (const h of hexRange(col, row, radius)) {
+    const t = state.tiles.get(hexKey(h.col, h.row));
+    if (!t) continue;
+    t.buildingFootprintOf = null;
+    t.footprintHexes = [];
+    if (t.base === TileType.FOREST) t.base = TileType.GRASS; // clear forest LOS cover
+  }
 }
 
 describe('unit range registry', () => {
@@ -282,6 +297,8 @@ describe('getValidActions — ranged targeting', () => {
     const hero = state.hero;
     placeAt(hero, 7, 5);
     assert.equal(hexDistance(witch.col, witch.row, hero.col, hero.row), 2);
+    // Guarantee a clear sightline (fog visibility filters BATTLE targets by LOS).
+    clearSightlineAround(state, witch.col, witch.row, 2);
 
     const actions = getValidActions(state, witch);
     const battle = actions.find(a => a.type === ActionType.BATTLE);

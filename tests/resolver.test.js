@@ -10,7 +10,7 @@ import { PlanActionType } from '../src/planner.js';
 import {
   Entity, EntityType, createMinion, createZombie, createSurvivor,
 } from '../src/entities.js';
-import { TileType, ResourceType, legacyTileType, decomposeTileType } from '../src/tiles.js';
+import { TileType, ResourceType, legacyTileType, decomposeTileType, isBuildingFootprint } from '../src/tiles.js';
 import { hexKey, getNeighbors, hexDistance } from '../src/hex.js';
 import { getReachableHexes, executeMove } from '../src/actions.js';
 
@@ -18,10 +18,20 @@ function freshState() {
   return new GameState(true, true);
 }
 
+// Procedural maps can drop an impassable building footprint (cap-0) on any hex.
+// Test fixtures that carve out passable terrain must neutralize any footprint
+// markers a random map happened to place there, or the tile stays impassable.
+function clearFootprint(tile) {
+  if (!tile) return tile;
+  tile.buildingFootprintOf = null;
+  tile.footprintHexes = [];
+  return tile;
+}
+
 function emptyPassableNeighbor(state, entity) {
   return getNeighbors(entity.col, entity.row).find(n => {
     const t = state.tiles.get(hexKey(n.col, n.row));
-    if (!t || legacyTileType(t) === 'river') return false;
+    if (!t || legacyTileType(t) === 'river' || isBuildingFootprint(t)) return false;
     return !state.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
   }) ?? null;
 }
@@ -548,6 +558,7 @@ function roadChainState(startCol, length) {
       t.building = null;
       t.fortifyLevel = 0;
       t.hiddenSurvivor = false;
+      clearFootprint(t);
     }
   }
   return state;
@@ -943,7 +954,7 @@ describe('movement interrupted by enemy during resolution', () => {
     for (let c = 2; c <= 7; c++) {
       const k = hexKey(c, 2);
       const t = state.tiles.get(k);
-      if (t) { decomposeTileType(t, TileType.ROAD); t.building = null; t.fortifyLevel = 0; t.hiddenSurvivor = false; }
+      if (t) { decomposeTileType(t, TileType.ROAD); t.building = null; t.fortifyLevel = 0; t.hiddenSurvivor = false; clearFootprint(t); }
     }
 
     // Place hero at col 3 (one step from col 4)
@@ -1003,7 +1014,8 @@ describe('movement interrupted by enemy during resolution', () => {
 
     const neighbor = getNeighbors(hero.col, hero.row).find(n => {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      return t && legacyTileType(t) !== TileType.RIVER && legacyTileType(t) !== 'river';
+      return t && legacyTileType(t) !== TileType.RIVER && legacyTileType(t) !== 'river'
+        && !isBuildingFootprint(t);
     });
     assert.ok(neighbor, 'Need an adjacent passable hex');
     const minion = createMinion(neighbor.col, neighbor.row);
@@ -1040,7 +1052,7 @@ describe('movement interrupted by enemy during resolution', () => {
     // Make hexes roads so they're within movement budget
     for (const h of [heroPos, n1, n2]) {
       const t = state.tiles.get(hexKey(h.col, h.row));
-      if (t) { decomposeTileType(t, TileType.ROAD); t.building = null; t.hiddenSurvivor = false; }
+      if (t) { decomposeTileType(t, TileType.ROAD); t.building = null; t.hiddenSurvivor = false; clearFootprint(t); }
     }
 
     // Place hero at known position
@@ -1084,7 +1096,7 @@ describe('resolvePlans — Agility ordering', () => {
     const results = [];
     for (const n of getNeighbors(entity.col, entity.row)) {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      if (!t || legacyTileType(t) === 'river') continue;
+      if (!t || legacyTileType(t) === 'river' || isBuildingFootprint(t)) continue;
       if (state.entities.some(e => e.alive && e.col === n.col && e.row === n.row)) continue;
       results.push(n);
       if (results.length === 2) break;

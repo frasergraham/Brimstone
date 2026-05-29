@@ -16,12 +16,22 @@ import {
   EntityType,
   createHero, createWitch, createMinion, createIronGolem, createWoodGolem, createZombie,
 } from '../src/entities.js';
-import { ResourceType, TileType, decomposeTileType } from '../src/tiles.js';
+import { ResourceType, TileType, decomposeTileType, isBuildingFootprint } from '../src/tiles.js';
 import { hexKey } from '../src/hex.js';
 import { getFaction } from '../src/factions.js';
 
 function freshState() {
   return new GameState(true, true);
+}
+
+// Procedural maps can drop an impassable building footprint (cap-0) on any hex;
+// getValidActions withholds EXPLORE/FORTIFY on a footprint. Positive-availability
+// fixtures must neutralize any footprint a random map placed under the unit.
+function clearFootprint(tile) {
+  if (!tile) return tile;
+  tile.buildingFootprintOf = null;
+  tile.footprintHexes = [];
+  return tile;
 }
 
 // ── Change 1: Witch minions cannot explore or summon ────────────────────────
@@ -81,7 +91,7 @@ describe('Witch minions cannot explore or summon', () => {
     const witch = createWitch(3, 3);
     state.entities.push(witch);
     const t = state.tiles.get(hexKey(3, 3));
-    if (t) t.explored = false;
+    if (t) { t.explored = false; clearFootprint(t); }
 
     const actions = getValidActions(state, witch);
     assert.ok(actions.some(a => a.type === ActionType.EXPLORE),
@@ -116,7 +126,7 @@ describe('Witch minions cannot explore or summon', () => {
     const hero = createHero(3, 3);
     state.entities.push(hero);
     const t = state.tiles.get(hexKey(3, 3));
-    if (t) t.explored = false;
+    if (t) { t.explored = false; clearFootprint(t); }
 
     const actions = getValidActions(state, hero);
     assert.ok(actions.some(a => a.type === ActionType.EXPLORE),
