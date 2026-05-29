@@ -2051,6 +2051,7 @@ export class Renderer3D {
     // map topology is immutable once the game starts.
     this._buildingLabelsByKey  = new Map(); // hexKey → { plane, mat, tex }
     this._fogMaterialCache = new Map();  // base hex color → darker StandardMaterial
+    this._fogBuildingMaterialCache = new Map(); // base hex color → dark fogged-building material
     this._fogActiveSet     = new Set();  // hexKeys currently rendered as fogged
     // Renderer-level fog DISPLAY override, cycled with the `T` hotkey for
     // debugging. Independent of the game's actual fogOfWar state — see
@@ -2746,12 +2747,13 @@ export class Renderer3D {
       // hardware-instancing pipeline on glTF-imported (often PBR + multi-
       // submesh) materials, producing all-black buildings. The plugin and
       // helper stay in src/fog-darken-plugin.js for a future attempt.
-      // Current approach: fogged buildings HIDE (`isVisible = false`, the
-      // 'building-hide' fog policy) so they read as "100% in shadow". Hiding
-      // sidesteps the per-instance-material limitation entirely — a hardware
-      // InstancedMesh shares its template material, but `isVisible` is a
-      // supported per-instance signal. See `buildingVisibleUnderFog` and
-      // `_buildBuildingInstance`.
+      // Current approach: fogged buildings SWAP to a dark procedural box+roof
+      // (`_swapBuildingForFog`). The GLB instance is only shown on a revealed
+      // tile; on fog-enter it's disposed and replaced with the procedural
+      // fallback carrying a dark (FOG_HIDDEN_DARKEN) per-mesh material, which
+      // reads as "obscured building in shadow" instead of vanishing. This
+      // sidesteps the per-instance-material limitation entirely — the procedural
+      // mesh owns its own material. See `buildingFogRepresentation`.
 
       // If the map's already built (the common case — GLB load is slow,
       // _buildMap runs synchronously right after Babylon init), retrofit the
@@ -2802,29 +2804,23 @@ export class Renderer3D {
       inst.rotation = new BABYLON.Vector3(0, houseYawForHex(tile.col, tile.row), 0);
     }
     inst.isPickable = false;
-    // Fogged buildings read as "100% in shadow" by HIDING the instance
-    // (`isVisible = false` in _setTilePropsFogged), not by darkening a material.
-    // A Babylon hardware InstancedMesh (createInstance) cannot carry a
-    // per-instance material — every instance of a source mesh renders in one
-    // draw call with the SHARED template material, so `inst.material = …` is
-    // ignored, and darkening the shared PBR multi-submesh template would dim
-    // EVERY instance (including unfogged ones). Reliable PBR darkening across
-    // all lighting phases is the exact rabbit hole that sank the prior
-    // fogDarken-attribute attempt (see _loadBuildingModel note). Per-instance
-    // visibility IS a supported hardware-instance signal, so we hide instead.
+    // The GLB instance is the REVEALED (unfogged) representation only. A Babylon
+    // hardware InstancedMesh (createInstance) cannot carry a per-instance
+    // material — every instance of a source mesh renders in one draw call with
+    // the SHARED template material, so `inst.material = …` is ignored and
+    // darkening the shared PBR multi-submesh template would dim EVERY instance.
+    // Rather than hide a fogged building outright (which read as "gone", not
+    // "in shadow"), `_swapBuildingForFog` disposes this instance on fog-enter
+    // and stands up a dark procedural box+roof in its place (the procedural mesh
+    // owns its own material so the FOG_HIDDEN_DARKEN tint survives the lighting
+    // clamp the same way the splat ground's fog veil does). The `'building'` fog
+    // policy below tells `_setTilePropsFogged` the swap owns this mesh's fog.
     inst.metadata = {
-      respectsFog: 'building-hide',
+      respectsFog: 'building',
       kind: 'building-glb',
       col: tile.col,
       row: tile.row,
     };
-    // Instances can be created AFTER a tile is already fogged — the async GLB
-    // load resolves post-_buildMap and _upgradeBuildingsToGlbModel retrofits
-    // instances onto already-fogged tiles. _applyFogVeil only diffs fog-state
-    // CHANGES, so a freshly-minted instance on a fogged tile would stay bright
-    // until the next flip. Apply current fog immediately (mirrors the road/
-    // river-ribbon lazy-create fog re-apply at the end of the network build).
-    if (this._fogActiveSet?.has(hexKey(tile.col, tile.row))) inst.isVisible = false;
     // Belt-and-suspenders: the template already carries receiveShadows (so the
     // instance inherits it), but set it explicitly too — mirrors the tree path.
     if ('receiveShadows' in inst) inst.receiveShadows = true;
@@ -2835,6 +2831,152 @@ export class Renderer3D {
     return inst;
   }
 
+  /** Build the procedural box+roof fallback for a building tile and return the
+   *  meshes (caller tracks them). Used both at map-build time (the revealed
+   *  fallback when a tile's GLB template hasn't loaded) and by
+   *  `_swapBuildingForFog` (the `dark: true` variant — a fogged building's
+   *  legible-but-shadowed silhouette). The `dark` flag swaps each mesh's
+   *  material for the dedicated `_fogBuildingMaterialFor` dark twin. Meshes are
+   *  tagged `respectsFog: 'building'` so `_setTilePropsFogged`'s per-prop loop
+   *  leaves them to the swap, and `kind: 'building-proc'` + `fogDark` so the
+   *  swap can classify the current representation. */
+  _buildProceduralBuilding(tile, x, z, parent, { dark = false } = {}) {
+    if (!this._babylon || !this._scene) return [];
+    const BABYLON = this._babylon;
+    const scene   = this._scene;
+    const slot    = TILE_SLOTS[BUILDING_SLOT_INDEX];
+    // Per-tile dimension jitter so buildings show silhouette variety instead of
+    // an army of identical boxes. Deterministic per (col, row), so a fog swap
+    // rebuilds the same silhouette. See `buildingDimensionsForHex`.
+    const dims = buildingDimensionsForHex(tile.col, tile.row);
+    // Box base sits at Y = TILE_PRISM_TOP (the "0.43 - 0.7/2" anchor); centre
+    // the box at (top + height/2) so the floor stays planted.
+    const tileTopY  = 0.43 - 0.7 / 2;
+    const boxColor  = BUILDING_COLOR[tile.building] || '#8a7a5a';
+    const roofColor = '#2c2520';
+    const boxMat  = dark ? this._fogBuildingMaterialFor(boxColor)  : this._materialFor(boxColor);
+    const roofMat = dark ? this._fogBuildingMaterialFor(roofColor) : this._materialFor(roofColor);
+    const meta = (extra) => ({ respectsFog: 'building', kind: 'building-proc', fogDark: dark, col: tile.col, row: tile.row, ...extra });
+
+    const box = BABYLON.MeshBuilder.CreateBox(
+      `bldg_${tile.col}_${tile.row}`,
+      { width: dims.box.width, height: dims.box.height, depth: dims.box.depth },
+      scene,
+    );
+    box.parent     = parent;
+    box.position.x = x + slot.x;
+    box.position.z = z + slot.z;
+    box.position.y = tileTopY + dims.box.height / 2;
+    box.material   = boxMat;
+    box.isPickable = false;
+    box.receiveShadows = true;
+    this._addShadowCaster(box);
+    box.metadata   = meta();
+
+    // Tiny roof block to add silhouette variety. Sits flush on top of the box.
+    const roof = BABYLON.MeshBuilder.CreateBox(
+      `roof_${tile.col}_${tile.row}`,
+      { width: dims.roof.width, height: dims.roof.height, depth: dims.roof.depth },
+      scene,
+    );
+    roof.parent     = parent;
+    roof.position.x = x + slot.x;
+    roof.position.z = z + slot.z;
+    roof.position.y = tileTopY + dims.box.height + dims.roof.height / 2;
+    roof.material   = roofMat;
+    roof.isPickable = false;
+    roof.receiveShadows = true;
+    this._addShadowCaster(roof);
+    roof.metadata   = meta();
+
+    return [box, roof];
+  }
+
+  /** Cached dark material for a fogged procedural building. Mirrors the splat
+   *  ground's fog veil (FOG_HIDDEN_DARKEN of the base colour) so a fogged
+   *  building reads as a dark silhouette standing on the darker fogged ground —
+   *  legible as an obstacle, not vanished. Lit diffuse (so the box keeps its
+   *  form) but heavily darkened, plus no specular and zero emissive so the tone
+   *  never blooms back toward full brightness; the small effective diffuse
+   *  (≈0.4×) won't saturate even at the brightest day phase. Same recipe as
+   *  `_fogMaterialFor` (the legacy per-tile terrain fog material) but keyed off
+   *  the building palette and the slightly-brighter FOG_HIDDEN_DARKEN cap so
+   *  the building stays a touch lighter than the ground beneath it. */
+  _fogBuildingMaterialFor(hexColor) {
+    if (this._fogBuildingMaterialCache.has(hexColor)) return this._fogBuildingMaterialCache.get(hexColor);
+    const BABYLON = this._babylon;
+    const [r, g, b] = cssHexToRgb01(hexColor);
+    const d = FOG_HIDDEN_DARKEN;
+    const mat = new BABYLON.StandardMaterial(`fogbldg_${hexColor}`, this._scene);
+    mat.diffuseColor  = new BABYLON.Color3(r * d, g * d, b * d);
+    mat.specularColor = new BABYLON.Color3(0, 0, 0);
+    mat.emissiveColor = new BABYLON.Color3(0, 0, 0);
+    this._fogBuildingMaterialCache.set(hexColor, mat);
+    return mat;
+  }
+
+  /** Swap a building tile's mesh representation to match its fog state. A
+   *  Babylon hardware InstancedMesh (the GLB building) shares its template's
+   *  material and can't be darkened per-instance — so a fogged GLB building
+   *  can't simply tint, and HIDING it read as "gone" rather than "in shadow".
+   *  Instead: on fog-enter, dispose the building's current mesh(es) and stand up
+   *  the dark procedural box+roof (`_buildProceduralBuilding({dark:true})`); on
+   *  reveal, dispose the dark procedural and re-instance the GLB (or restore a
+   *  normal-material procedural box for types with no GLB / a not-yet-loaded
+   *  template). The procedural mesh owns its own material, so the darken survives
+   *  the lighting clamp the way the splat ground's fog veil does. Fog flips are
+   *  rare, so the dispose/rebuild churn is acceptable. Sets `_buildingFogSwapped`
+   *  so `_applyFogVeil` runs ONE freeze pass per flip rather than per tile.
+   *  No-op without a scene/babylon (node test without a stubbed MeshBuilder),
+   *  for non-building tiles, or when the current representation already matches.
+   *  Returns true if it swapped. */
+  _swapBuildingForFog(hexK, fogged) {
+    if (!this._babylon || !this._scene) return false;
+    const tile = this.state?.tiles?.get(hexK);
+    if (!tile || !hasBuilding(tile) || !tile.building) return false;
+    const props = this._tilePropsByKey.get(hexK);
+    if (!props) return false;
+
+    const isBuildingMesh = (m) => {
+      const k = m?.metadata?.kind;
+      return k === 'building-glb' || k === 'building-proc';
+    };
+    const current = props.filter(isBuildingMesh);
+    // Classify the current representation against what we want.
+    const curGlb      = current.some(m => m.metadata?.kind === 'building-glb');
+    const curProcDark = current.some(m => m.metadata?.kind === 'building-proc' && m.metadata?.fogDark);
+    const curProcLit  = current.some(m => m.metadata?.kind === 'building-proc' && !m.metadata?.fogDark);
+    const want = buildingFogRepresentation(fogged, buildingUsesGlbModel(tile));
+    // Already correct? Fogged wants the dark procedural; revealed wants either
+    // the GLB or a normal-material procedural (both are valid "revealed", since
+    // the GLB may simply not have finished loading yet).
+    if (want === 'proc-dark' && curProcDark) return false;
+    if (want !== 'proc-dark' && (curGlb || curProcLit)) return false;
+
+    const { x, z } = hexToWorld(tile.col, tile.row);
+    const parent = this._mapRoot;
+
+    // Build the new representation FIRST (so a failed GLB build can fall back to
+    // a procedural box without first tearing down the old meshes).
+    let built;
+    if (want === 'proc-dark') {
+      built = this._buildProceduralBuilding(tile, x, z, parent, { dark: true });
+    } else if (want === 'glb') {
+      const inst = this._buildBuildingInstance(tile, x, z, parent);
+      built = inst ? [inst] : this._buildProceduralBuilding(tile, x, z, parent, { dark: false });
+    } else { // 'proc-normal'
+      built = this._buildProceduralBuilding(tile, x, z, parent, { dark: false });
+    }
+    if (!built.length) return false;
+
+    // Dispose the old building meshes; keep everything else (hover label, etc.).
+    for (const m of current) { if (typeof m.dispose === 'function') m.dispose(); }
+    const remaining = props.filter(m => !isBuildingMesh(m));
+    this._tilePropsByKey.set(hexK, [...remaining, ...built]);
+    this._buildingFogSwapped = true;
+    return true;
+  }
+
   /** Sweep `_tilePropsByKey` for every building tile, dispose the procedural
    *  box + roof meshes (`bldg_…` / `roof_…`), and replace them with a GLB
    *  instance of the tile's chosen variant. Called after each
@@ -2842,6 +2984,9 @@ export class Renderer3D {
    *  variant template hasn't loaded (or failed) is left on its procedural
    *  box+roof — so a missing GLB for one type doesn't strip other buildings.
    *  Idempotent: tiles already carrying a `building-glb` instance are skipped.
+   *  Fogged tiles are skipped too — they're showing the dark procedural box
+   *  (`_swapBuildingForFog`) and must stay procedural until revealed, at which
+   *  point the reveal swap re-instances the GLB.
    *  Re-runs `_freezeStaticMeshes` so new instances get world-matrix-locked. */
   _upgradeBuildingsToGlbModel() {
     if (!this._mapBuilt || this._buildingTemplates.size === 0 || !this.state?.tiles) return 0;
@@ -2849,6 +2994,9 @@ export class Renderer3D {
     for (const tile of this.state.tiles.values()) {
       if (!buildingUsesGlbModel(tile)) continue;
       const tkey  = hexKey(tile.col, tile.row);
+      // A fogged tile is intentionally on its dark procedural box — leave it;
+      // the reveal swap (`_swapBuildingForFog`) will instance the GLB later.
+      if (this._fogActiveSet.has(tkey)) continue;
       const props = this._tilePropsByKey.get(tkey) || [];
       // Skip if this tile already holds a GLB building instance.
       if (props.some(m => m?.metadata?.kind === 'building-glb')) continue;
@@ -7307,57 +7455,19 @@ export class Renderer3D {
     if (hasBuilding(tile) && tile.building) {
       // Every building type renders an imported GLB once its template loads;
       // until then (or on a per-type load failure) it keeps the procedural
-      // box+roof. See BUILDING_GLB_BY_TYPE.
+      // box+roof. See BUILDING_GLB_BY_TYPE. The map is built BEFORE the initial
+      // `_applyFogVeil` pass, so we always build the REVEALED representation
+      // here (GLB if loaded, else normal procedural); the fog pass swaps fogged
+      // tiles to the dark procedural box via `_swapBuildingForFog`.
       const glbInst = buildingUsesGlbModel(tile)
         ? this._buildBuildingInstance(tile, x, z, parent)
         : null;
       if (glbInst) {
         trackProp(glbInst);
       } else {
-        const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
-        // Per-tile dimension jitter so buildings show silhouette variety
-        // instead of an army of identical boxes. See `buildingDimensionsForHex`.
-        const dims = buildingDimensionsForHex(tile.col, tile.row);
-        // Box sits on top of the tile prism with its base at Y = TILE_PRISM_TOP
-        // (historically 0.08, the "0.43 - 0.7/2" anchor before jitter). Y the
-        // box centre to (TILE_PRISM_TOP + height/2) so the floor stays planted.
-        const tileTopY = 0.43 - 0.7 / 2;
-        const box = BABYLON.MeshBuilder.CreateBox(
-          `bldg_${tile.col}_${tile.row}`,
-          { width: dims.box.width, height: dims.box.height, depth: dims.box.depth },
-          scene,
-        );
-        box.parent     = parent;
-        box.position.x = x + slot.x;
-        box.position.z = z + slot.z;
-        box.position.y = tileTopY + dims.box.height / 2;
-        box.material   = this._materialFor(BUILDING_COLOR[tile.building] || '#8a7a5a');
-        box.isPickable = false;
-        box.receiveShadows = true;
-        this._addShadowCaster(box);
-        // Fogged buildings hide entirely ("100% in shadow") — matches the GLB
-        // instance path so the procedural fallback reads identically under fog.
-        // These are built before the initial _applyFogVeil pass, which hides
-        // them on fogged tiles. See `buildingVisibleUnderFog` / `_setTilePropsFogged`.
-        box.metadata   = { respectsFog: 'building-hide' };
-        trackProp(box);
-
-        // Tiny roof block to add silhouette variety. Sits flush on top of the box.
-        const roof = BABYLON.MeshBuilder.CreateBox(
-          `roof_${tile.col}_${tile.row}`,
-          { width: dims.roof.width, height: dims.roof.height, depth: dims.roof.depth },
-          scene,
-        );
-        roof.parent     = parent;
-        roof.position.x = x + slot.x;
-        roof.position.z = z + slot.z;
-        roof.position.y = tileTopY + dims.box.height + dims.roof.height / 2;
-        roof.material   = this._materialFor('#2c2520');
-        roof.isPickable = false;
-        roof.receiveShadows = true;
-        this._addShadowCaster(roof);
-        roof.metadata   = { respectsFog: 'building-hide' };
-        trackProp(roof);
+        for (const m of this._buildProceduralBuilding(tile, x, z, parent, { dark: false })) {
+          trackProp(m);
+        }
       }
 
       // Hover label — floating billboarded plane above the roof, painted with
@@ -13722,6 +13832,14 @@ export class Renderer3D {
       }
     }
 
+    // Building fog swaps (`_swapBuildingForFog`) created fresh procedural/GLB
+    // meshes this pass — lock their world matrices in ONE freeze sweep rather
+    // than per tile (the sweep is idempotent and skips already-frozen meshes).
+    if (this._buildingFogSwapped) {
+      this._buildingFogSwapped = false;
+      this._freezeStaticMeshes();
+    }
+
     // Debug overlay: in `debug` mode paint a billboarded "F" over every fogged
     // hex; in every other mode the overlay is cleared. The sync diffs against
     // the current marker registry so it rebuilds naturally when the fogged set
@@ -13849,32 +13967,28 @@ export class Renderer3D {
    *  base-mesh path (`_setTileFogged`) and the splat path (`_applyFogVeil`),
    *  which handles the ground veil separately via `_writeFogWeights`. */
   _setTilePropsFogged(hexK, fogged) {
+    // Buildings can't tint per-instance (hardware-instanced GLB shares its
+    // template material), so they SWAP representation: revealed → GLB / normal
+    // procedural, fogged → dark procedural box. Do this first — it disposes the
+    // old building meshes and rebuilds `_tilePropsByKey`, so fetch props AFTER.
+    // The swapped-in meshes carry `respectsFog: 'building'` and are already in
+    // the correct fog state, so the per-prop loop below leaves them alone.
+    this._swapBuildingForFog(hexK, fogged);
     const props = this._tilePropsByKey.get(hexK);
     if (props) for (const p of props) {
       // Five fog policies per-prop, set via `metadata.respectsFog`:
       //   • undefined / true     → hide on fog (standees, HP bars, node discs)
       //   • false                → permanent geometry, ignore fog (trees)
       //   • 'darken'             → tint dimmer (roads, rivers) — per-tile material
-      //   • 'building-hide'      → hide on fog (buildings: GLB instances +
-      //                            procedural box/roof) — reads as "in shadow";
-      //                            hardware instances can't take a per-instance
-      //                            darkened material so we hide instead.
+      //   • 'building'           → buildings; fog handled by `_swapBuildingForFog`
+      //                            (GLB↔dark-procedural swap), not this loop.
       //   • 'building-instance'  → tint dimmer (GLB buildings) — per-instance
       //                            attribute (template-shared material). Legacy
       //                            (FogDarkenPlugin) path, no longer emitted by
       //                            building creation; kept for the existing test.
       const policy = p.metadata?.respectsFog;
       if (policy === false) continue;
-      if (policy === 'building-hide') {
-        // Buildings (GLB instances + procedural box/roof) hide entirely under
-        // fog so the tile reads as "100% in shadow". Hiding (not darkening) is
-        // forced by Babylon: a hardware InstancedMesh shares its source
-        // template's material and can't take a per-instance darkened twin (see
-        // _buildBuildingInstance). The darkened splat ground + the dimmed (not
-        // hidden) building label still read the hex as an obscured building.
-        p.isVisible = buildingVisibleUnderFog(fogged);
-        continue;
-      }
+      if (policy === 'building') continue; // owned by _swapBuildingForFog
       if (policy === 'building-instance') {
         // Hardware-instance fog darken: write the `fogDarken` instanced buffer
         // slot on this one building, leaving sibling instances on other tiles
@@ -15908,15 +16022,18 @@ export const FOG_TILE_DARKEN = 0.20;
 // like a thin atmospheric haze, not occluded vision).
 export const FOG_HIDDEN_DARKEN = 0.40;
 
-/** Fog policy for buildings: returns the `isVisible` a building prop (GLB
- *  instance or procedural box/roof) should carry for the given fog state.
- *  Fogged → hidden, so the tile reads as "100% in shadow". Buildings hide
- *  rather than darken because a Babylon hardware InstancedMesh shares its
- *  source template's material and cannot take a per-instance darkened twin
- *  (and darkening the shared PBR multi-submesh template would dim every
- *  instance, fogged or not). Pure — used by `_setTilePropsFogged`. */
-export function buildingVisibleUnderFog(fogged) {
-  return !fogged;
+/** Which mesh representation a building tile should show for a given fog state.
+ *  Fogged buildings always use the procedural box+roof with a dark material
+ *  (`'proc-dark'`) — a Babylon hardware InstancedMesh shares its source
+ *  template's material and can't take a per-instance darkened twin, so a fogged
+ *  building can't tint in place; the procedural mesh owns its own material and
+ *  reads as a dark silhouette ("obscured building in shadow") rather than
+ *  vanishing. Revealed buildings prefer the GLB instance (`'glb'`) when its
+ *  template has loaded and fall back to a normal-material procedural box
+ *  (`'proc-normal'`). Pure — drives `_swapBuildingForFog`. */
+export function buildingFogRepresentation(fogged, glbAvailable) {
+  if (fogged) return 'proc-dark';
+  return glbAvailable ? 'glb' : 'proc-normal';
 }
 
 // Hex wireframe radial fade — world units (1 = hex radius; a hex's flat-to-flat
