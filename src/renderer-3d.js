@@ -314,6 +314,12 @@ export const PALADIN_YAW        = Math.PI;
 // back-compat with existing call sites; UNIT_RIG_BANK is the architectural
 // source of truth going forward (UNIT_RIG_BANK[type].animations.{idle,walking}).
 export const WALKING_MODEL_FILE = 'walking.glb';
+// Running clip — animation-only Mixamo export, retargeted onto the SHARED
+// paladin skeleton exactly like walking. Played in place of walking when a
+// move step traverses 2+ hexes in one go (a road dash), so a long move reads
+// as a run rather than a double-speed walk. Loaded lazily / pre-warmed off
+// the critical path (see `_ensureRunningAnimation`).
+export const RUNNING_MODEL_FILE = 'running.glb';
 // IDLE_MODEL_FILE matches PALADIN_MODEL_FILE — paladin-idle.glb ships the
 // idle clip embedded, so the loader picks it up at model-load time and
 // _loadIdleAnimation skips (avoids a duplicate import).
@@ -471,6 +477,22 @@ export function stripRootBoneTranslation(animGroup, rootName = 'mixamorig:Hips')
 // still letting idle resume between different units' sequences in
 // resolution playback (which typically have longer pauses).
 export const PALADIN_WALK_SUSTAIN_MS = 700;
+
+// Minimum waypoint-path length (origin hex + every destination hex) at which
+// a single move step plays the RUNNING clip instead of WALKING. The waypoint
+// list always begins with the starting hex, so length ≥ 3 means the unit
+// crosses 2+ destination hexes in one plan step (e.g. a road dash) — long
+// enough to read as a run. Tunable in one place.
+export const RUN_MIN_PATH_LEN = 3;
+
+/** Choose the move-animation clip for a path of `pathLen` waypoints (the
+ *  origin hex plus each destination hex traversed in one move step). Returns
+ *  'running' for a multi-hop move (pathLen ≥ RUN_MIN_PATH_LEN, i.e. 2+ hexes
+ *  crossed) and 'walking' for a single-hop move. Pure; exported for tests. */
+export function selectMoveAnimKind(pathLen) {
+  return (typeof pathLen === 'number' && pathLen >= RUN_MIN_PATH_LEN)
+    ? 'running' : 'walking';
+}
 
 /** Predicate: does this entity belong to the day-side hero faction (and thus
  *  render as the paladin GLB when available)? Routes through `sideFactionOf`
@@ -2195,6 +2217,10 @@ export class Renderer3D {
     // lunge animation; _syncEntityStandees skips _positionStandee for these
     // so the animation isn't snapped back to the state position every frame.
     this._activeMoveIds   = new Set();
+    // Subset of _activeMoveIds whose move step is a multi-hop run (2+ hexes in
+    // one plan step). When non-empty the paladin anim tick plays the RUNNING
+    // clip instead of walking. Cleared in addMoveAnim's completion callback.
+    this._activeRunMoveIds = new Set();
     this._activeLungeIds  = new Set();
     // X-ray occlusion ghost (see `_pumpXrayOcclusion` + `_buildXrayGhost`). When
     // an alive, fog-visible unit is hidden behind a tree/building from the
@@ -3702,6 +3728,10 @@ export class Renderer3D {
       if (typeof setTimeout === 'function') {
         const t = setTimeout(() => { this._ensurePunchAnimation(basePath); }, 1200);
         if (t && typeof t.unref === 'function') t.unref();
+        // Pre-warm the running clip too (animation-only, ~29k) so the first
+        // multi-hex move dashes rather than walking until the lazy load lands.
+        const tr = setTimeout(() => { this._ensureRunningAnimation(basePath); }, 1400);
+        if (tr && typeof tr.unref === 'function') tr.unref();
       }
 
       // If standees were built before the GLB landed (the common case —
@@ -3961,6 +3991,146 @@ export class Renderer3D {
     src.activeGroup = 'idle';
     this._paladinAnimObserver = this._installPaladinAnimBlendTick();
     return walkGroupNative;
+  }
+
+  /** Kick the lazy running.glb load exactly once. Idempotent — returns the
+   *  in-flight (or settled) promise on repeat calls. Off the beginLoad
+   *  critical path (pre-warmed a beat after the rig + walk/idle, and lazily
+   *  triggered by the first multi-hex move). Safe before the rig loads
+   *  (no-ops until `_paladinSource` exists) and without a real SceneLoader. */
+  _ensureRunningAnimation(basePath = 'assets') {
+    if (this._runningLoadPromise) return this._runningLoadPromise;
+    if (!this._paladinSource) return null;
+    if (this._paladinSource.runGroup) return Promise.resolve(this._paladinSource.runGroup);
+    this._runningLoadPromise = Promise.resolve()
+      .then(() => this._loadRunningAnimation(basePath))
+      .catch(err => {
+        console.warn('[Renderer3D] running.glb load failed; multi-hex moves walk instead.', err);
+        return null;
+      });
+    return this._runningLoadPromise;
+  }
+
+  /** Load running.glb and retarget its AnimationGroup onto the SHARED paladin
+   *  skeleton by bone/TransformNode name — the same pipeline as walking
+   *  (clone the native group with a target remapper, strip root motion,
+   *  dispose the imported geometry, keep only the keyframes). The retargeted
+   *  group is stashed on `_paladinSource.runGroup`, started once to
+   *  instantiate animatables then paused so `_maybeTogglePaladinAnimation`
+   *  can play()/pause() it from its current frame.
+   *
+   *  Same shared-skeleton tradeoff as walking/idle/punch: every visible
+   *  paladin runs in unison off the one rig (per-standee skeletons caused the
+   *  historical T-pose/giant-head bugs, so we never clone the skeleton).
+   *
+   *  Also computes the run clip's own stride/cycle → a speedRatio that makes
+   *  one running stride cover one hex's world-distance in MOVE_ANIM_MS, stored
+   *  on `_runningSource.speedRatio` for addMoveAnim to scale by hop count.
+   *  Returns the retargeted group, or null if import/retarget failed (the move
+   *  then falls back to the walking clip). */
+  async _loadRunningAnimation(basePath = 'assets') {
+    if (!this._babylon || !this._scene || !this._paladinSource) return null;
+    const BABYLON = this._babylon;
+    const src = this._paladinSource;
+    if (src.runGroup) return src.runGroup;
+    if (!BABYLON.SceneLoader || typeof BABYLON.SceneLoader.ImportMeshAsync !== 'function') {
+      return null;
+    }
+
+    let result;
+    try {
+      result = await BABYLON.SceneLoader.ImportMeshAsync(
+        null,
+        `${basePath}/${PALADIN_MODEL_DIR}`,
+        RUNNING_MODEL_FILE,
+        this._scene,
+        this._glbProgressHandler('paladin'),
+      );
+    } catch (err) {
+      console.warn('[Renderer3D] running.glb import failed', err);
+      return null;
+    }
+
+    const runNative = (result.animationGroups || []).find(g => g) || null;
+    if (!runNative) {
+      console.warn('[Renderer3D] running.glb contained no animation group');
+      this._disposeWalkingImport(result);
+      return null;
+    }
+
+    // Compute stride + natural cycle BEFORE stripping root motion (which zeros
+    // the keyframes), then back-calc a speedRatio that makes one running
+    // stride cover one hex's world-distance in MOVE_ANIM_MS — exactly like
+    // walking, just measured against running's own (longer) stride.
+    const strideSrcUnits = computeRootStrideLength(runNative);
+    const natCycleSec    = animDurationSeconds(runNative);
+    const paladinScale   = this._paladinScale > 0 ? this._paladinScale : PALADIN_BASE_SCALE;
+    const hexStepWU      = HEX_RADIUS_WORLD * Math.sqrt(3);
+    const runSpeedRatio  = computeAnimSpeedRatioForStride(
+      strideSrcUnits, natCycleSec, paladinScale, hexStepWU, MOVE_ANIM_MS, /*fallback*/ 2.0,
+    );
+    this._runningSource = { speedRatio: runSpeedRatio };
+    console.info(
+      `[Renderer3D] running speed ratio = ${runSpeedRatio.toFixed(2)} `
+      + `(stride=${strideSrcUnits.toFixed(2)} src-units, cycle=${natCycleSec.toFixed(2)}s, `
+      + `scale=${paladinScale.toFixed(3)}, hex=${hexStepWU.toFixed(2)}wu, anim=${MOVE_ANIM_MS}ms)`,
+    );
+
+    const nameMap = new Map();
+    const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
+    const addEntry = (name, target) => {
+      if (!name || !target) return;
+      if (!nameMap.has(name)) nameMap.set(name, target);
+      const stripped = stripDup(name);
+      if (stripped !== name && !nameMap.has(stripped)) nameMap.set(stripped, target);
+    };
+    for (const tn of src.transformNodes || []) {
+      if (tn && tn.name) addEntry(tn.name, tn);
+    }
+    if (src.skeleton && Array.isArray(src.skeleton.bones)) {
+      for (const bone of src.skeleton.bones) {
+        if (!bone) continue;
+        const tn = bone._linkedTransformNode
+          || (typeof bone.getTransformNode === 'function' && bone.getTransformNode());
+        if (tn && tn.name) addEntry(tn.name, tn);
+        if (bone.name) addEntry(bone.name, tn || bone);
+      }
+    }
+
+    let runForPaladin = null;
+    let remapped = 0;
+    let missed = 0;
+    if (typeof runNative.clone === 'function') {
+      runForPaladin = runNative.clone('paladinRunRetargeted', (oldTarget) => {
+        if (!oldTarget || !oldTarget.name) { missed++; return oldTarget; }
+        const match = nameMap.get(oldTarget.name) || nameMap.get(stripDup(oldTarget.name));
+        if (match) { remapped++; return match; }
+        missed++;
+        return oldTarget;
+      });
+    }
+    console.info(`[Renderer3D] running → paladin retarget: ${remapped} hit, ${missed} miss`);
+
+    if (runForPaladin && remapped > 0) {
+      // Strip root motion so the run animates the rig in place — the cone
+      // slide already handles world-space translation across the polyline.
+      stripRootBoneTranslation(runForPaladin);
+      // Kick the animatables into existence then pause, so the anim tick can
+      // play()/pause() from the current frame instead of restarting at 0.
+      if (typeof runForPaladin.start === 'function') runForPaladin.start(true, runSpeedRatio);
+      if (typeof runForPaladin.pause === 'function') runForPaladin.pause();
+      src.runGroup = runForPaladin;
+    } else {
+      console.warn('[Renderer3D] running retarget produced 0 hits — multi-hex moves walk instead.');
+      try { runForPaladin?.dispose?.(); } catch { /* ignore */ }
+      src.runGroup = null;
+    }
+
+    // Dispose running.glb's imported mesh + skeleton — only the keyframes are
+    // kept (retargeted onto paladin's rig). Running has no ghost-preview path,
+    // so unlike walking we don't retain its skeleton.
+    this._disposeWalkingImport(result);
+    return src.runGroup;
   }
 
   /** Dispose every mesh + skeleton brought in by the walking.glb import.
@@ -4298,9 +4468,10 @@ export class Renderer3D {
       return Promise.resolve();
     }
     const group = src[slot];
-    // Stop punch/idle/walk so the reaction owns the skeleton.
+    // Stop punch/idle/walk/run so the reaction owns the skeleton.
     if (src.idleGroup && typeof src.idleGroup.stop === 'function') src.idleGroup.stop();
     if (src.walkGroup && typeof src.walkGroup.stop === 'function') src.walkGroup.stop();
+    if (src.runGroup && typeof src.runGroup.stop === 'function') src.runGroup.stop();
     if (src.punchGroup && typeof src.punchGroup.stop === 'function') src.punchGroup.stop();
     src.punchPlaying = false;
     src.reactionPlaying = true;
@@ -4343,9 +4514,10 @@ export class Renderer3D {
     const punch = src.punchGroup;
     const speedMul = this._playbackSpeedMul ?? 1.0;
     const ratio = computePunchSpeedRatio(src.punchDurationSec, PUNCH_TARGET_MS * speedMul);
-    // Hand the skeleton to punch: silence idle + walk so they don't fight it.
+    // Hand the skeleton to punch: silence idle + walk + run so none fight it.
     if (src.idleGroup && typeof src.idleGroup.stop === 'function') src.idleGroup.stop();
     if (src.walkGroup && typeof src.walkGroup.stop === 'function') src.walkGroup.stop();
+    if (src.runGroup && typeof src.runGroup.stop === 'function') src.runGroup.stop();
     src.punchPlaying = true;
     src.activeGroup = 'punch';
 
@@ -4525,22 +4697,22 @@ export class Renderer3D {
     // don't yank the rig back into idle/walk mid-strike. _startPaladinPunch's
     // end handler clears punchPlaying and the next tick resumes normally.
     if (src.punchPlaying) return;
-    // Three states: 'walk' (motion active), 'paused' (mid-chain freeze
-    // — walking is paused at its current frame, idle does NOT run), and
-    // 'idle' (no motion for SUSTAIN_MS). 'paused' is the new state that
-    // lets a multi-hex move chain read as "walk → freeze → walk → freeze
-    // → walk → idle" instead of dipping back into idle pose between
-    // every hop.
-    const wantWalk = paladinAnimTargetWeight(
+    // Four motion states: 'walk' / 'run' (motion active — run when the active
+    // move step is a multi-hop dash), 'paused' (mid-chain freeze — the motion
+    // clip is paused at its current frame, idle does NOT run), and 'idle' (no
+    // motion for SUSTAIN_MS). 'paused' lets a multi-hex move chain read as
+    // "run → freeze → run → idle" instead of dipping into idle between hops.
+    const wantMotion = paladinAnimTargetWeight(
       this._activeMoveIds, this._activeLungeIds,
       this.state?.entities, unitUsesPaladinModel,
     ) === 0;
     const now = performance.now();
-    if (wantWalk) this._paladinLastWalkTs = now;
+    if (wantMotion) this._paladinLastWalkTs = now;
 
+    const { group: motionGroup, kind: motionKind } = this._activeMotionGroup();
     let desired;
-    if (wantWalk) {
-      desired = 'walk';
+    if (wantMotion) {
+      desired = motionKind; // 'walk' or 'run'
     } else if (typeof this._paladinLastWalkTs === 'number'
       && (now - this._paladinLastWalkTs) < PALADIN_WALK_SUSTAIN_MS) {
       desired = 'paused';
@@ -4550,29 +4722,48 @@ export class Renderer3D {
     if (src.activeGroup === desired) return;
 
     const walk = src.walkGroup;
+    const run  = src.runGroup;
     const idle = src.idleGroup;
-    if (desired === 'walk') {
+    if (desired === 'walk' || desired === 'run') {
       if (idle && typeof idle.stop === 'function') idle.stop();
-      if (walk) {
-        if (typeof walk.play === 'function') walk.play(true);
-        else if (typeof walk.start === 'function') walk.start(true, 1.0);
+      // Silence the OTHER motion clip so two clips don't both drive the rig.
+      const other = desired === 'run' ? walk : run;
+      if (other && typeof other.stop === 'function') other.stop();
+      if (motionGroup) {
+        if (typeof motionGroup.play === 'function') motionGroup.play(true);
+        else if (typeof motionGroup.start === 'function') motionGroup.start(true, 1.0);
       }
     } else if (desired === 'paused') {
-      // Freeze walking mid-stride. Crucially we do NOT start idle —
-      // idle would immediately drive the bones away from walking's
-      // current frame. Walking stays paused at its last keyframe until
-      // the next motion event resumes it (walk.play() resumes from
-      // the paused frame) or the sustain window expires and we
-      // transition to 'idle' below.
+      // Freeze the motion clip mid-stride. Crucially we do NOT start idle —
+      // idle would immediately drive the bones away from the motion clip's
+      // current frame. The clip stays paused at its last keyframe until the
+      // next motion event resumes it (play() resumes from the paused frame)
+      // or the sustain window expires and we transition to 'idle' below.
       if (walk && typeof walk.pause === 'function') walk.pause();
+      if (run && typeof run.pause === 'function') run.pause();
     } else { // 'idle'
       if (walk && typeof walk.stop === 'function') walk.stop();
+      if (run && typeof run.stop === 'function') run.stop();
       if (idle) {
         if (typeof idle.play === 'function') idle.play(true);
         else if (typeof idle.start === 'function') idle.start(true, 1.0);
       }
     }
     src.activeGroup = desired;
+  }
+
+  /** Pick the paladin motion clip + kind for the current frame: the RUNNING
+   *  group ('run') when any active move step is a multi-hop dash and the run
+   *  clip has loaded, otherwise the WALKING group ('walk'). Falls back to walk
+   *  whenever running isn't available yet, so a multi-hex move that fires
+   *  before running.glb lands simply walks until the clip is ready. */
+  _activeMotionGroup() {
+    const src = this._paladinSource;
+    if (!src) return { group: null, kind: 'walk' };
+    const running = this._activeRunMoveIds instanceof Set
+      && this._activeRunMoveIds.size > 0;
+    if (running && src.runGroup) return { group: src.runGroup, kind: 'run' };
+    return { group: src.walkGroup, kind: 'walk' };
   }
 
   /** Resume or pause the NATIVE walking AnimationGroup (the one playing
@@ -4644,14 +4835,26 @@ export class Renderer3D {
         && (now - this._paladinLastWalkTs) < PALADIN_WALK_SUSTAIN_MS) {
         wantWalk = true;
       }
-      const desired = wantWalk ? 'walk' : 'idle';
+      // Run-aware: a multi-hop move plays the running clip, not walking.
+      // Selecting the motion group here (rather than hard-coding walk) keeps
+      // this legacy swap from clobbering a running paladin by starting walk
+      // on top of it.
+      const { group: motionGroup, kind: motionKind } = this._activeMotionGroup();
+      const desired = wantWalk ? motionKind : 'idle';
       if (src.activeGroup === desired) return;
-      const walkSpeed = this._walkingSource?.speedRatio ?? 1.0;
-      if (desired === 'walk') {
+      if (desired === 'walk' || desired === 'run') {
+        const motionSpeed = desired === 'run'
+          ? (this._runningSource?.speedRatio ?? 1.0)
+          : (this._walkingSource?.speedRatio ?? 1.0);
+        const other = desired === 'run' ? src.walkGroup : src.runGroup;
         if (typeof src.idleGroup.stop === 'function') src.idleGroup.stop();
-        if (typeof src.walkGroup.start === 'function') src.walkGroup.start(true, walkSpeed);
+        if (other && typeof other.stop === 'function') other.stop();
+        if (motionGroup && typeof motionGroup.start === 'function') {
+          motionGroup.start(true, motionSpeed);
+        }
       } else {
         if (typeof src.walkGroup.stop === 'function') src.walkGroup.stop();
+        if (src.runGroup && typeof src.runGroup.stop === 'function') src.runGroup.stop();
         if (typeof src.idleGroup.start === 'function') src.idleGroup.start(true, 1.0);
       }
       src.activeGroup = desired;
@@ -10457,6 +10660,20 @@ export class Renderer3D {
     this._scene.stopAnimation(standee.plane);
     this._activeMoveIds.add(entityId);
 
+    // Pick walking vs running by hop count: a move crossing 2+ destination
+    // hexes in one plan step (waypoints includes the origin, so length ≥ 3)
+    // reads as a run. Track the entity in _activeRunMoveIds so the paladin
+    // anim tick plays the running clip, and kick the lazy running.glb load if
+    // it hasn't pre-warmed yet (the move walks until it lands — see
+    // _activeMotionGroup's fallback).
+    const isRunMove = selectMoveAnimKind(waypoints.length) === 'running';
+    if (isRunMove) {
+      this._activeRunMoveIds.add(entityId);
+      this._ensureRunningAnimation(this._assetsBasePath || 'assets');
+    } else {
+      this._activeRunMoveIds.delete(entityId);
+    }
+
     // Face the direction of motion: rotate the paladin clone around Y so
     // the model walks forward into its destination rather than sliding
     // sideways/backwards. Witch/zombie cone tokens are rotationally
@@ -10480,13 +10697,23 @@ export class Renderer3D {
     const hexStepWU = HEX_RADIUS_WORLD * Math.sqrt(3);
     if (totalLenWU > 0 && hexStepWU > 0) {
       const distMul = totalLenWU / hexStepWU;
-      const walkGroup = this._paladinSource?.walkGroup;
-      const baseRatio = this._walkingSource?.speedRatio ?? 1.0;
-      if (walkGroup && 'speedRatio' in walkGroup) {
-        // Dividing by speedMul makes a faster (smaller) speedMul produce
-        // a higher walking speedRatio — i.e. a faster cycle that matches
-        // the shorter cone-slide duration.
-        walkGroup.speedRatio = (baseRatio * distMul) / Math.max(0.05, speedMul);
+      // Scale whichever motion clip will actually play (running for a multi-hop
+      // dash, else walking). The per-hex base ratio comes from that clip's own
+      // stride measurement, multiplied by distMul so a multi-hex move (still
+      // MOVE_ANIM_MS total) cycles faster and keeps feet planted across the
+      // whole polyline. Fall back to the walk group if running hasn't loaded.
+      const useRun = isRunMove && this._paladinSource?.runGroup;
+      const motionGroup = useRun
+        ? this._paladinSource?.runGroup
+        : this._paladinSource?.walkGroup;
+      const baseRatio = useRun
+        ? (this._runningSource?.speedRatio ?? 1.0)
+        : (this._walkingSource?.speedRatio ?? 1.0);
+      if (motionGroup && 'speedRatio' in motionGroup) {
+        // Dividing by speedMul makes a faster (smaller) speedMul produce a
+        // higher playback speedRatio — i.e. a faster cycle that matches the
+        // shorter cone-slide duration.
+        motionGroup.speedRatio = (baseRatio * distMul) / Math.max(0.05, speedMul);
       }
     }
 
@@ -10519,6 +10746,7 @@ export class Renderer3D {
     const promise = new Promise(resolve => {
       this._scene.beginDirectAnimation(standee.plane, [animX, animZ], 0, FRAMES_MOVE, false, 1, () => {
         this._activeMoveIds.delete(entityId);
+        this._activeRunMoveIds.delete(entityId);
         resolve();
       });
     });
