@@ -410,7 +410,13 @@ export function computeAnimSpeedRatioForStride(
   targetTimeMs,
   fallback = 1.0,
 ) {
-  if (!(strideSourceUnits > 0)) return fallback;
+  // Mixamo "without skin" exports occasionally bake in a near-zero residual
+  // translation on the root track instead of a real stride (running.glb is the
+  // current offender — stride=0.001 source units). A tiny strideSourceUnits
+  // here explodes the ratio to absurd values and clamps to 6.0 — visually a
+  // 4x-too-fast scramble. The threshold rejects strides below 1 source unit
+  // (well under any real Mixamo stride) and lets the caller's `fallback` ride.
+  if (!(strideSourceUnits > 1.0)) return fallback;
   if (!(natCycleSec > 0)) return fallback;
   if (!(scale > 0)) return fallback;
   if (!(targetDistanceWU > 0)) return fallback;
@@ -4067,8 +4073,12 @@ export class Renderer3D {
     const natCycleSec    = animDurationSeconds(runNative);
     const paladinScale   = this._paladinScale > 0 ? this._paladinScale : PALADIN_BASE_SCALE;
     const hexStepWU      = HEX_RADIUS_WORLD * Math.sqrt(3);
+    // Fallback 1.25 picked empirically against Mixamo's "running" clip which
+    // has no usable root track: that's natural cycle speed plus a small bias
+    // so the legs visibly cycle faster than walking. If we ever get a running
+    // glb with real root motion, the solved ratio takes over automatically.
     const runSpeedRatio  = computeAnimSpeedRatioForStride(
-      strideSrcUnits, natCycleSec, paladinScale, hexStepWU, RUN_HEX_MS, /*fallback*/ 2.0,
+      strideSrcUnits, natCycleSec, paladinScale, hexStepWU, RUN_HEX_MS, /*fallback*/ 1.25,
     );
     this._runningSource = { speedRatio: runSpeedRatio };
     console.info(
