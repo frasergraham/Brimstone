@@ -104,7 +104,7 @@ describe('makeFogDarkenPlugin', () => {
     assert.equal(defines.FOG_DARKEN, true);
   });
 
-  test('getUniforms declares the vec2 array + scalars in BOTH vertex and fragment', () => {
+  test('getUniforms declares all four scalars/arrays in the UBO block', () => {
     const Plugin = makeFogDarkenPlugin(FakeBABYLON);
     const u = new Plugin({}).getUniforms();
     const arr = u.ubo.find((e) => e.name === 'fogTiles');
@@ -113,16 +113,31 @@ describe('makeFogDarkenPlugin', () => {
     assert.ok(u.ubo.some((e) => e.name === 'fogCount'));
     assert.ok(u.ubo.some((e) => e.name === 'fogDarkenAmount'));
     assert.ok(u.ubo.some((e) => e.name === 'fogTileRadius'));
-    // The vertex shader runs the per-instance fog test, so the uniforms must be
-    // declared there too — a vertex-only `fragment:` block leaves them as
-    // undeclared identifiers in CUSTOM_VERTEX_MAIN_END's loop (the bug that
-    // surfaced in-browser as a shader compile failure).
-    for (const stage of ['vertex', 'fragment']) {
-      assert.match(u[stage], /uniform vec2 fogTiles\[MAX_FOG_TILES\]/, `${stage} stage missing fogTiles`);
-      assert.match(u[stage], /uniform float fogCount/, `${stage} stage missing fogCount`);
-      assert.match(u[stage], /uniform float fogTileRadius/, `${stage} stage missing fogTileRadius`);
-      assert.match(u[stage], new RegExp(`#define MAX_FOG_TILES ${MAX_FOG_TILES}`), `${stage} stage missing MAX_FOG_TILES`);
-    }
+    // No inline vertex/fragment GLSL — declarations live in the
+    // CUSTOM_VERTEX_DEFINITIONS / CUSTOM_FRAGMENT_DEFINITIONS blocks below,
+    // because getUniforms().vertex/fragment is injected AFTER the
+    // custom-code MAIN_END use sites on some browsers (Safari WebKit).
+    assert.equal(u.vertex, undefined);
+    assert.equal(u.fragment, undefined);
+  });
+
+  test('uniforms are declared at the TOP of both vertex and fragment shaders', () => {
+    const Plugin = makeFogDarkenPlugin(FakeBABYLON);
+    const p = new Plugin({});
+    const v = p.getCustomCode('vertex');
+    // Vertex stage uses fogTiles + fogCount + fogTileRadius in MAIN_END's loop
+    // (the per-instance verdict). Those must be declared in DEFINITIONS, not
+    // in getUniforms().vertex (which can land AFTER the use site).
+    assert.match(v.CUSTOM_VERTEX_DEFINITIONS, /uniform vec2 fogTiles\[MAX_FOG_TILES\]/);
+    assert.match(v.CUSTOM_VERTEX_DEFINITIONS, /uniform float fogCount/);
+    assert.match(v.CUSTOM_VERTEX_DEFINITIONS, /uniform float fogTileRadius/);
+    assert.match(v.CUSTOM_VERTEX_DEFINITIONS, new RegExp(`#define MAX_FOG_TILES ${MAX_FOG_TILES}`));
+    assert.match(v.CUSTOM_VERTEX_DEFINITIONS, /varying float vFogDk/);
+    const f = p.getCustomCode('fragment');
+    // Fragment stage uses fogDarkenAmount in MAIN_END's mix() — same trap.
+    assert.match(f.CUSTOM_FRAGMENT_DEFINITIONS, /uniform float fogDarkenAmount/);
+    assert.match(f.CUSTOM_FRAGMENT_DEFINITIONS, /varying float vFogDk/);
+    assert.match(f.CUSTOM_FRAGMENT_DEFINITIONS, new RegExp(`#define MAX_FOG_TILES ${MAX_FOG_TILES}`));
   });
 
   test('getCustomCode runs the fog test per-INSTANCE in vertex, fragment just multiplies', () => {

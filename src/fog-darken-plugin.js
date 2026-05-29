@@ -95,19 +95,6 @@ export function makeFogDarkenPlugin(BABYLON) {
     getClassName() { return 'FogDarkenPlugin'; }
 
     getUniforms() {
-      // The fog test runs in the VERTEX shader (per-instance verdict via
-      // finalWorld[3].xz, varying'd to fragment for uniform darken). That means
-      // fogTiles / fogCount / fogTileRadius must be declared in BOTH stages —
-      // missing the `vertex:` block would leave them undeclared identifiers in
-      // CUSTOM_VERTEX_MAIN_END's loop. `fogDarkenAmount` is fragment-only
-      // (the final post-lighting multiply) but it's cheap to declare twice.
-      const decls = `#ifdef FOG_DARKEN
-          #define MAX_FOG_TILES ${MAX_FOG_TILES}
-          uniform vec2 fogTiles[MAX_FOG_TILES];
-          uniform float fogCount;
-          uniform float fogDarkenAmount;
-          uniform float fogTileRadius;
-        #endif`;
       return {
         ubo: [
           // vec2[N] array: stride 2, arraySize MAX_FOG_TILES. Babylon lays it
@@ -117,8 +104,13 @@ export function makeFogDarkenPlugin(BABYLON) {
           { name: 'fogDarkenAmount', size: 1, type: 'float' },
           { name: 'fogTileRadius', size: 1, type: 'float' },
         ],
-        vertex: decls,
-        fragment: decls,
+        // Inline uniform declarations live with the custom-code DEFINITIONS
+        // blocks below (CUSTOM_VERTEX_DEFINITIONS / CUSTOM_FRAGMENT_DEFINITIONS)
+        // rather than here — `getUniforms()`'s vertex/fragment strings get
+        // injected AFTER the custom-code MAIN_END use sites on some browsers
+        // (Safari WebKit notably, see comment further down). Keeping the
+        // declarations at the top of each stage's shader source guarantees
+        // declaration-before-use on every spec-conformant assembler.
       };
     }
 
@@ -138,8 +130,20 @@ export function makeFogDarkenPlugin(BABYLON) {
           // of the same building gets the same value → the varying is uniform
           // across the building, producing a flat darken instead of a circular
           // spotlight at the building's centre.
+          //
+          // Uniforms are declared HERE (top of vertex shader) rather than in
+          // getUniforms().vertex because that block injects AFTER the
+          // CUSTOM_VERTEX_MAIN_END use site on Safari (and order isn't
+          // guaranteed on other browsers either — Babylon's assembler doesn't
+          // promise injection order across the two slots). The Standard +
+          // PBR vertex shaders both emit CUSTOM_VERTEX_DEFINITIONS near the
+          // top, well before main(), so the uniform handles resolve when the
+          // loop in CUSTOM_VERTEX_MAIN_END references them.
           CUSTOM_VERTEX_DEFINITIONS: `#ifdef FOG_DARKEN
             #define MAX_FOG_TILES ${MAX_FOG_TILES}
+            uniform vec2 fogTiles[MAX_FOG_TILES];
+            uniform float fogCount;
+            uniform float fogTileRadius;
             varying float vFogDk;
           #endif`,
           // `finalWorld` is declared unconditionally in Babylon's vertex main
@@ -162,16 +166,17 @@ export function makeFogDarkenPlugin(BABYLON) {
       }
       if (shaderType === 'fragment') {
         return {
-          // The MAX_FOG_TILES #define must live HERE (CUSTOM_FRAGMENT_DEFINITIONS,
-          // at the very top of fragment) rather than in getUniforms().fragment:
-          // Safari WebKit's WebGL2 shader assembler injects getUniforms's fragment
-          // block AFTER custom-code MAIN_END, so a use site in MAIN_END would see
-          // `MAX_FOG_TILES` as undeclared on Safari. (Chrome happens to interleave
-          // them in the right order — both are spec-conformant.) Kept here even
-          // though no fragment code currently references the macro, so the next
-          // refactor doesn't have to re-learn the lesson.
+          // Uniforms + #define live HERE (CUSTOM_FRAGMENT_DEFINITIONS,
+          // top of fragment) rather than in getUniforms().fragment: Safari
+          // WebKit's WebGL2 shader assembler injects getUniforms's fragment
+          // block AFTER custom-code MAIN_END, so a use site in MAIN_END
+          // would see `fogDarkenAmount` as undeclared on Safari. (Chrome
+          // happens to interleave them in the right order — both are
+          // spec-conformant.) `varying float vFogDk` declares the verdict
+          // produced in the vertex stage.
           CUSTOM_FRAGMENT_DEFINITIONS: `#ifdef FOG_DARKEN
             #define MAX_FOG_TILES ${MAX_FOG_TILES}
+            uniform float fogDarkenAmount;
             varying float vFogDk;
           #endif`,
           // Final post-lighting multiply. `vFogDk` is constant per building
