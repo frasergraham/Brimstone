@@ -1056,9 +1056,12 @@ export function labelAlphaForZoom(
 
 /** Returns the human-readable label string for a tile, or null if the tile
  *  doesn't get a label (anything other than a BUILDING tile with a building
- *  field). Pure helper — single source of truth for label text + visibility. */
+ *  field, OR a generic HOUSE — houses are the background village fabric and
+ *  don't earn a signpost). Pure helper — single source of truth for label
+ *  text + visibility. */
 export function labelTextForTile(tile) {
   if (!tile || !hasBuilding(tile) || !tile.building) return null;
+  if (tile.building === 'house') return null;
   return BUILDING_LABEL[tile.building] || tile.building;
 }
 
