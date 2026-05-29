@@ -11624,6 +11624,140 @@ export class Renderer3D {
     };
   }
 
+  /**
+   * Discovery readout — the survivor/zombie analogue of `addCombatReadout`.
+   * Paints a billboarded card above the freshly-discovered unit showing its
+   * portrait, name/title, stats, optional ability, and the discovery sentence,
+   * then holds it until the continue gate resolves and fades it out.
+   *
+   * Lifecycle mirrors `addCombatReadout`:
+   *   1. paint the card immediately,
+   *   2. after `revealMs`, resolve `awaitFinal()` (orchestrator reveals the
+   *      Continue button + starts its countdown),
+   *   3. race the local `triggerFade` signal against `opts.awaitContinueFn`,
+   *   4. fade the card out and dispose.
+   *
+   * Returns the `{ promise, awaitFinal, triggerFade, then/catch/finally }`
+   * thenable handle — OR `null` when it cannot anchor the card (no scene /
+   * no standee / DOM-less). Returning null (rather than the combat method's
+   * inert thenable) lets the orchestrator fall back to the 2D modal instead of
+   * silently presenting nothing.
+   */
+  addDiscoveryReadout(entity, opts = {}) {
+    if (!this._scene || !this._babylon) return null;
+    if (typeof document === 'undefined') return null;
+    if (!entity || entity.id == null) return null;
+    const standee = this._entityStandees.get(entity.id);
+    if (!standee || !standee.plane) return null;
+    const BABYLON = this._babylon;
+
+    const model = discoveryReadoutModel(entity, opts);
+    const speedFactor = Number.isFinite(opts.speedFactor) && opts.speedFactor > 0
+      ? opts.speedFactor : 1;
+    const revealMs = (opts.revealMs ?? DISCOVERY_READOUT_REVEAL_MS) * speedFactor;
+    const fadeMs   = (opts.fadeMs   ?? DISCOVERY_READOUT_FADE_MS)   * speedFactor;
+    const setTimeoutFn = opts.setTimeoutFn || ((fn, ms) => setTimeout(fn, ms));
+
+    const portraitSource = (this._tilemapImg && this._spriteRects)
+      ? resolveUnitIconPortrait(this._tilemapImg, this._spriteRects, this._assetIdFor(entity))
+      : { img: null, rect: null, hasPortrait: false };
+
+    const tex = new BABYLON.DynamicTexture(
+      `discoveryCardTex_${entity.id}`,
+      { width: DISCOVERY_CARD_TEX_WIDTH, height: DISCOVERY_CARD_TEX_HEIGHT },
+      this._scene,
+      false,
+    );
+    tex.hasAlpha = true;
+    paintDiscoveryCard(tex.getContext(), {
+      width:  DISCOVERY_CARD_TEX_WIDTH,
+      height: DISCOVERY_CARD_TEX_HEIGHT,
+      name: model.name, title: model.title, glyph: model.glyph,
+      accentColor: model.accentColor,
+      hp: model.hp, maxHp: model.maxHp,
+      statLine: model.statLine, abilityLabel: model.abilityLabel, text: model.text,
+      portraitImg:  portraitSource.hasPortrait ? portraitSource.img  : null,
+      portraitRect: portraitSource.hasPortrait ? portraitSource.rect : null,
+    });
+    tex.update();
+
+    const plane = BABYLON.MeshBuilder.CreatePlane(
+      `discoveryCard_${entity.id}`,
+      { width: DISCOVERY_CARD_PLANE_WIDTH, height: DISCOVERY_CARD_PLANE_HEIGHT },
+      this._scene,
+    );
+    plane.billboardMode    = BABYLON.Mesh.BILLBOARDMODE_ALL;
+    plane.isPickable       = false;
+    plane.renderingGroupId = 2;
+
+    const mat = new BABYLON.StandardMaterial(`discoveryCardMat_${plane.uniqueId}`, this._scene);
+    mat.diffuseTexture = tex;
+    mat.opacityTexture = tex;
+    applyFlatUnitIconMaterial(BABYLON, mat);
+    plane.material = mat;
+
+    plane.parent = standee.plane;
+    const iconTopY = iconBillboardYRelativeToCone(standee.leader) + UNIT_ICON_PLANE_SIZE / 2;
+    plane.position.set(
+      0,
+      iconTopY + DISCOVERY_CARD_Y_GAP + DISCOVERY_CARD_PLANE_HEIGHT / 2,
+      0,
+    );
+    plane.visibility = 1;
+
+    let disposed = false;
+    const disposeAll = () => {
+      if (disposed) return;
+      disposed = true;
+      try { plane.dispose(); } catch {}
+      try { mat.dispose();   } catch {}
+      try { tex.dispose();   } catch {}
+    };
+
+    let resolveFinal;
+    const finalReached = new Promise(r => { resolveFinal = r; });
+    let resolveContinue;
+    const continueSignal = new Promise(r => { resolveContinue = r; });
+    const triggerFade = () => { if (resolveContinue) { resolveContinue(); resolveContinue = null; } };
+    const awaitContinueFn = typeof opts.awaitContinueFn === 'function'
+      ? opts.awaitContinueFn
+      : () => Promise.resolve();
+
+    const promise = new Promise(resolve => {
+      setTimeoutFn(() => {
+        if (disposed) { resolveFinal(); triggerFade(); resolve(); return; }
+        resolveFinal();
+        const gate = Promise.race([
+          continueSignal,
+          Promise.resolve().then(awaitContinueFn),
+        ]);
+        gate.then(() => {
+          if (disposed) { resolve(); return; }
+          const fps = 60;
+          const fadeFrames = Math.max(1, Math.round(fadeMs / 1000 * fps));
+          const animFade = new BABYLON.Animation('discoveryFade', 'visibility', fps,
+            BABYLON.Animation.ANIMATIONTYPE_FLOAT,
+            BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+          animFade.setKeys([{ frame: 0, value: 1 }, { frame: fadeFrames, value: 0 }]);
+          this._scene.beginDirectAnimation(plane, [animFade], 0, fadeFrames, false, 1, () => {
+            disposeAll();
+            resolve();
+          });
+        });
+      }, revealMs);
+    });
+    this._trackAnim(promise);
+
+    return {
+      promise,
+      awaitFinal: () => finalReached,
+      triggerFade,
+      then(onFulfilled, onRejected) { return promise.then(onFulfilled, onRejected); },
+      catch(onRejected) { return promise.catch(onRejected); },
+      finally(onFinally) { return promise.finally(onFinally); },
+    };
+  }
+
   /** Briefly scale-pulse a unit-icon plane (1 → peak → 1) to signal that the
    *  die showing on this ally is the one the combatant's running total just
    *  inherited. Pure visual; no state mutation. Skips silently when the icon
@@ -16808,6 +16942,35 @@ export const COMBAT_CARD_DEF_COLOR = '#3a6ab8';
 export const COMBAT_READOUT_WIN_COLOR  = '#3ee013';
 export const COMBAT_READOUT_LOSE_COLOR = '#ff7a7a';
 
+// ─── Discovery readout (survivor / zombie encounters) ────────────────────────
+// Mirrors the combat-readout pattern (src/combat-cinematic.js + addCombatReadout)
+// but for the survivor/zombie discovery moment: a billboarded card floats above
+// the freshly-revealed unit showing its portrait, stats and the discovery
+// sentence, held until the player taps Continue (or a 5s countdown fires).
+/** Minimum hold before the card is considered "settled" — when this fires the
+ *  orchestrator reveals the Continue button and starts its countdown. The card
+ *  itself stays up until the continue gate resolves. */
+export const DISCOVERY_READOUT_REVEAL_MS = 350;
+/** Fade-out duration once the continue gate resolves. */
+export const DISCOVERY_READOUT_FADE_MS   = 500;
+/** Card plane size (world units) — wider/taller than the combat number card so
+ *  the portrait + stat lines + discovery sentence all read. */
+export const DISCOVERY_CARD_PLANE_WIDTH  = 2.7;
+export const DISCOVERY_CARD_PLANE_HEIGHT = 2.0;
+export const DISCOVERY_CARD_TEX_WIDTH    = 640;
+export const DISCOVERY_CARD_TEX_HEIGHT   = 474;
+/** Gap (world units) between the unit-icon top and the card bottom. */
+export const DISCOVERY_CARD_Y_GAP        = 0.18;
+/** Background fill alpha — ~70% opaque so the scene reads faintly through the
+ *  card while the text stays fully opaque. */
+export const DISCOVERY_CARD_BG_ALPHA     = 0.72;
+/** Side glyphs keyed by entity type — mirrors the GLYPHS map the 2D Encounter
+ *  Dialog uses (src/ui.js `_showEncounterDialog`) so 3D and 2D agree. */
+export const DISCOVERY_GLYPHS = Object.freeze({
+  hero: '⚔', witch: '✦', survivor: '☺', soldier: '♟',
+  zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙',
+});
+
 /** Compute the local-space XZ offset for a combat card so attacker and
  *  defender cards sit on opposite outer sides of the standees along the
  *  attack axis. The card is parented to its combatant's standee (unrotated),
@@ -17938,6 +18101,185 @@ export function paintUnitIconBadge(ctx, opts) {
     ctx.drawImage(portraitImg, cx - innerR, cy - innerR, innerR * 2, innerR * 2);
   }
   ctx.restore();
+}
+
+// ─── Discovery readout helpers (exported for tests) ──────────────────────────
+
+/**
+ * Build the display model for a survivor/zombie discovery card from a live
+ * entity (or the encounterSurvivor data object the resolver hands main.js —
+ * both expose `name/title/hp/maxHp/type/color`, and a live Entity also exposes
+ * `getAttack()/getDefense()`). Pure — no Babylon / DOM. Mirrors
+ * `combatReadoutModel` so the renderer method and the tests share one source
+ * of truth for the strings painted onto the card.
+ *
+ * `opts.text` is the discovery sentence (computed by the orchestrator from the
+ * discovery method — explore / horn / power_node / zombie).
+ */
+export function discoveryReadoutModel(entity, opts = {}) {
+  const e = entity || {};
+  const attack  = typeof e.getAttack  === 'function' ? e.getAttack()  : (e.attack  ?? 0);
+  const defense = typeof e.getDefense === 'function' ? e.getDefense() : (e.defense ?? 0);
+  const hp    = Number.isFinite(e.hp)    ? e.hp    : 0;
+  const maxHp = Number.isFinite(e.maxHp) ? e.maxHp : 1;
+  const name  = e.name || (e.type === 'zombie' ? 'Zombie' : 'Survivor');
+  const title = e.title || '';
+  const abilityLabel = e.abilityLabel || '';
+  const glyph = DISCOVERY_GLYPHS[e.type] ?? '?';
+  const accentColor = e.color || '#d4c9b0';
+  const statLine = `HP ${hp}/${maxHp} · ATK ${attack} · DEF ${defense}`;
+  const text = typeof opts.text === 'string' ? opts.text : '';
+  return { name, title, glyph, accentColor, hp, maxHp, attack, defense, abilityLabel, statLine, text };
+}
+
+/** Greedy word-wrap. Pure (uses only `ctx.measureText`). Exported for tests. */
+export function wrapDiscoveryText(ctx, text, maxWidth) {
+  const words = String(text || '').split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+  const lines = [];
+  let line = words[0];
+  for (let i = 1; i < words.length; i++) {
+    const candidate = `${line} ${words[i]}`;
+    const w = ctx.measureText ? ctx.measureText(candidate).width : candidate.length * 10;
+    if (w > maxWidth && line) {
+      lines.push(line);
+      line = words[i];
+    } else {
+      line = candidate;
+    }
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+/**
+ * Paint the discovery card into a 2D canvas context: a ~70%-opaque rounded
+ * panel with an accent border, a portrait disc (or glyph fallback) at the top,
+ * the unit name + title, a stat line, an optional ability label, and the
+ * wrapped discovery sentence. Text is painted fully opaque over the
+ * semi-transparent background.
+ *
+ * Pure with respect to its inputs (no Babylon, no canvas creation) — the
+ * Babylon-side `addDiscoveryReadout` creates the DynamicTexture and calls here.
+ */
+export function paintDiscoveryCard(ctx, opts) {
+  const {
+    width, height,
+    name, title, glyph, accentColor = '#d4c9b0',
+    hp = 0, maxHp = 1,
+    statLine = '', abilityLabel = '', text = '',
+    portraitImg = null, portraitRect = null,
+    bgAlpha = DISCOVERY_CARD_BG_ALPHA,
+  } = opts;
+  const W = width;
+  const H = height;
+  const pad = Math.round(W * 0.06);
+
+  ctx.clearRect(0, 0, W, H);
+
+  // ~70%-opaque rounded panel.
+  const radius = Math.round(W * 0.05);
+  ctx.fillStyle = `rgba(18,15,24,${bgAlpha})`;
+  roundedRectPath(ctx, 2, 2, W - 4, H - 4, radius);
+  ctx.fill();
+  // Accent border (entity tint).
+  ctx.lineWidth = Math.max(3, Math.round(W * 0.008));
+  ctx.strokeStyle = accentColor;
+  roundedRectPath(ctx, 2, 2, W - 4, H - 4, radius);
+  ctx.stroke();
+
+  // Portrait disc (or glyph fallback) — centred near the top.
+  const discR = Math.round(W * 0.13);
+  const discCx = W / 2;
+  const discCy = pad + discR;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(discCx, discCy, discR, 0, Math.PI * 2);
+  ctx.closePath();
+  ctx.clip();
+  ctx.fillStyle = 'rgba(225,220,210,1)';
+  ctx.fillRect(discCx - discR, discCy - discR, discR * 2, discR * 2);
+  if (portraitImg && portraitRect) {
+    ctx.drawImage(
+      portraitImg,
+      portraitRect.x, portraitRect.y, portraitRect.size, portraitRect.size,
+      discCx - discR, discCy - discR, discR * 2, discR * 2,
+    );
+  } else if (portraitImg) {
+    ctx.drawImage(portraitImg, discCx - discR, discCy - discR, discR * 2, discR * 2);
+  } else {
+    ctx.fillStyle = accentColor;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = `${Math.round(discR * 1.3)}px sans-serif`;
+    ctx.fillText(glyph ?? '?', discCx, discCy + discR * 0.05);
+  }
+  ctx.restore();
+  // Accent ring around the disc.
+  ctx.lineWidth = Math.max(2, Math.round(W * 0.007));
+  ctx.strokeStyle = accentColor;
+  ctx.beginPath();
+  ctx.arc(discCx, discCy, discR, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  let y = discCy + discR + Math.round(H * 0.10);
+
+  // Name (glyph + name), accent-tinted.
+  ctx.fillStyle = accentColor;
+  ctx.font = `bold ${Math.round(H * 0.075)}px sans-serif`;
+  ctx.fillText(`${glyph} ${name}`.trim(), W / 2, y);
+  y += Math.round(H * 0.06);
+
+  // Title (italic, muted).
+  if (title) {
+    ctx.fillStyle = '#9a8a7a';
+    ctx.font = `italic ${Math.round(H * 0.048)}px sans-serif`;
+    ctx.fillText(title, W / 2, y);
+    y += Math.round(H * 0.055);
+  }
+
+  // Stat line.
+  ctx.fillStyle = '#c8b89a';
+  ctx.font = `${Math.round(H * 0.052)}px sans-serif`;
+  ctx.fillText(statLine, W / 2, y);
+  y += Math.round(H * 0.06);
+
+  // Ability label (cyan), if any.
+  if (abilityLabel) {
+    ctx.fillStyle = '#88eeff';
+    ctx.font = `${Math.round(H * 0.045)}px sans-serif`;
+    ctx.fillText(`✦ ${abilityLabel}`, W / 2, y);
+    y += Math.round(H * 0.055);
+  }
+
+  // Discovery sentence — wrapped, muted parchment colour.
+  ctx.fillStyle = '#b8a88a';
+  ctx.font = `${Math.round(H * 0.05)}px sans-serif`;
+  const lines = wrapDiscoveryText(ctx, text, W - pad * 2);
+  const lineH = Math.round(H * 0.062);
+  y += Math.round(H * 0.02);
+  for (const line of lines) {
+    ctx.fillText(line, W / 2, y);
+    y += lineH;
+  }
+}
+
+/** Trace a rounded-rect path (no fill/stroke). Shared by the discovery card. */
+function roundedRectPath(ctx, x, y, w, h, r) {
+  const radius = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.lineTo(x + w - radius, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
+  ctx.lineTo(x + w, y + h - radius);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
+  ctx.lineTo(x + radius, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
+  ctx.lineTo(x, y + radius);
+  ctx.quadraticCurveTo(x, y, x + radius, y);
+  ctx.closePath();
 }
 
 /**
