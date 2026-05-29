@@ -117,16 +117,21 @@ describe('makeFogDarkenPlugin', () => {
     assert.match(u.fragment, new RegExp(`#define MAX_FOG_TILES ${MAX_FOG_TILES}`));
   });
 
-  test('getCustomCode injects worldXZ varying (vertex) + final-color multiply (fragment)', () => {
+  test('getCustomCode runs the fog test per-INSTANCE in vertex, fragment just multiplies', () => {
     const Plugin = makeFogDarkenPlugin(FakeBABYLON);
     const p = new Plugin({});
     const v = p.getCustomCode('vertex');
-    assert.match(v.CUSTOM_VERTEX_MAIN_END, /vFogWorldXZ\s*=\s*worldPos\.xz/);
+    // The per-instance translation comes from finalWorld[3].xz. Every vertex of
+    // the same building yields the same vFogDk → uniform darken (no circle).
+    assert.match(v.CUSTOM_VERTEX_MAIN_END, /vec2\s+instCentre\s*=\s*vec2\(finalWorld\[3\]\.x,\s*finalWorld\[3\]\.z\)/);
+    assert.match(v.CUSTOM_VERTEX_MAIN_END, /for \(int i = 0; i < MAX_FOG_TILES/);
+    assert.match(v.CUSTOM_VERTEX_MAIN_END, /vFogDk\s*=\s*dk/);
     const f = p.getCustomCode('fragment');
     // Final post-lighting hook — outside the lighting clamp, universal to
     // Standard + PBR (the reason the dim survives bright phases).
-    assert.match(f.CUSTOM_FRAGMENT_MAIN_END, /gl_FragColor\.rgb\s*\*=\s*mix\(1\.0,\s*fogDarkenAmount/);
-    assert.match(f.CUSTOM_FRAGMENT_MAIN_END, /for \(int i = 0; i < MAX_FOG_TILES/);
+    assert.match(f.CUSTOM_FRAGMENT_MAIN_END, /gl_FragColor\.rgb\s*\*=\s*mix\(1\.0,\s*fogDarkenAmount,\s*vFogDk\)/);
+    // Loop is in vertex now, NOT fragment.
+    assert.doesNotMatch(f.CUSTOM_FRAGMENT_MAIN_END, /for \(int i/);
   });
 
   test('bindForSubMesh writes all uniforms when enabled, nothing when disabled', () => {
