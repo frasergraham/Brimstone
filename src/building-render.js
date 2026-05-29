@@ -117,6 +117,10 @@ export const SIGNPOST_POST_DIAMETER = 0.05;
 export const SIGNPOST_PLANK_WIDTH = 0.90;
 /** Height (world units) of the signpost PLANK. */
 export const SIGNPOST_PLANK_HEIGHT = 0.32;
+/** Depth (world units) of the signpost PLANK — gives the board real thickness
+ *  when seen from any angle, so it reads as carved wood instead of a paper
+ *  billboard sticker. */
+export const SIGNPOST_PLANK_DEPTH = 0.06;
 /** How far the signpost is pushed OFF the road centreline, perpendicular to
  *  the entrance→footprint axis. 0 = on the road; positive = side of the road.
  *  The "side" is biased deterministically (sin of the hex position) so a

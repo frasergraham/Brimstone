@@ -94,7 +94,7 @@ describe('_syncFortifications — build + adjacency', () => {
     const r = harness([{ col: 5, row: 5, fort: 1 }]);
     r._syncFortifications();
     const entry = r._fortByKey.get('5,5');
-    const posts = entry.meshes.filter(m => /_p[\-0-9.]+$/.test(m.name));
+    const posts = entry.meshes.filter(m => /_p\d+$/.test(m.name));
     const rails = entry.meshes.filter(m => /_rail/.test(m.name));
     // 4 posts × 6 edges = 24 posts; 2 rails × 6 edges = 12 rails.
     assert.equal(posts.length, 24, '4-post fence × 6 edges');
@@ -102,25 +102,20 @@ describe('_syncFortifications — build + adjacency', () => {
     assert.ok(entry.meshes.every(m => m.name.startsWith('fort_')));
   });
 
-  test('level 1 fence: road exit drops inner posts + splits rails for a gap', () => {
+  test('level 1 fence: road-exit edge gets NO fence at all (clean gap)', () => {
     // Hex (5,5) is fortified AND has a road exiting east to (6,5). The east
-    // edge must drop its 2 inner posts (only outer pair remain) and split
-    // each of its 2 rails into 2 side segments — leaving the road's centre
-    // line bare. The other 5 edges keep the full 4-post + 2-rail fence.
+    // edge skips fence rendering ENTIRELY — no posts, no rails on that edge.
+    // The other 5 edges keep their full 4-post + 2-rail fence.
     const r = harness([{
       col: 5, row: 5, fort: 1,
       roadDirs: ['6,5'],
     }]);
     r._syncFortifications();
     const entry = r._fortByKey.get('5,5');
-    // The east-edge dir index is the one whose neighbour matches (6,5). The
-    // mesh names embed the dir as `fort_5_5_<d>_...`, so we don't need to
-    // recover d explicitly — we count by behaviour: total posts must drop by
-    // (4-2=2) and rails must double (each whole rail becomes 2 segments).
-    const posts = entry.meshes.filter(m => /_p[\-0-9.]+$/.test(m.name));
+    const posts = entry.meshes.filter(m => /_p\d+$/.test(m.name));
     const rails = entry.meshes.filter(m => /_rail/.test(m.name));
-    assert.equal(posts.length, 4 * 5 + 2, '5 full-fence edges + 1 road edge with 2 outer posts');
-    assert.equal(rails.length, 2 * 5 + 2 * 2, '5 full-fence rails + 1 road edge split rails (2x)');
+    assert.equal(posts.length, 4 * 5, '5 full-fence edges × 4 posts (road edge skipped)');
+    assert.equal(rails.length, 2 * 5, '5 full-fence edges × 2 rails (road edge skipped)');
   });
 });
 

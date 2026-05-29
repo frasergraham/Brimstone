@@ -63,6 +63,7 @@ import {
   SIGNPOST_POST_DIAMETER,
   SIGNPOST_PLANK_WIDTH,
   SIGNPOST_PLANK_HEIGHT,
+  SIGNPOST_PLANK_DEPTH,
   SIGNPOST_ROAD_OFFSET,
 } from './building-render.js';
 // Re-export so 3D-renderer consumers/tests can import the ground-span knob
@@ -74,6 +75,7 @@ export {
   SIGNPOST_POST_DIAMETER,
   SIGNPOST_PLANK_WIDTH,
   SIGNPOST_PLANK_HEIGHT,
+  SIGNPOST_PLANK_DEPTH,
   SIGNPOST_ROAD_OFFSET,
 };
 import { Renderer } from './renderer.js';
@@ -7653,6 +7655,10 @@ export class Renderer3D {
       m.position.x  = wx;
       m.position.y  = wy;
       m.position.z  = wz;
+      // Fences/walls both CAST shadows (so adjacent terrain darkens under
+      // them) AND RECEIVE shadows (so units, building roofs, and the
+      // building model itself cast onto the fence).
+      if ('receiveShadows' in m) m.receiveShadows = true;
       this._addShadowCaster(m);
       meshes.push(m);
     };
@@ -7682,54 +7688,65 @@ export class Renderer3D {
       );
 
       if (style.kind === 'stakes') {
-        // Level-1 fortification: a low wooden FENCE — four corner posts joined
-        // by two horizontal rails (cross beams). Reads as a defensible
-        // pasture-fence rather than a sparse row of stakes. When a road crosses
-        // this edge, the two inner posts and the centre of each rail drop out
-        // to leave a clean gap for the road to pass through.
-        const postOffsets = hasRoadHere
-          ? [-0.45, 0.45]                  // road: just the outer corner posts
-          : [-0.45, -0.15, 0.15, 0.45];    // no road: 4-post fence, no centre post
-        for (const tu of postOffsets) {
-          const t = tu * side;
+        // Level-1 fortification: a makeshift wooden FARM FENCE — four corner
+        // posts joined by two horizontal cross-rails. Reads as something a
+        // farmer slapped together rather than a regimented defensive line.
+        //
+        // Road-aware: if a road exits through this edge, skip the ENTIRE edge
+        // (no posts, no rails). The road needs an unobstructed gap.
+        if (hasRoadHere) continue;
+        // Deterministic per-edge jitter so the fence looks hand-built, not
+        // machined. Same seed → same wobble every frame, so the fence is
+        // stable across draws but reads as imperfect.
+        const seed = (tile.col * 73856093) ^ (tile.row * 19349663) ^ (d * 83492791);
+        const jit = (n) => {
+          // xor-shift cheap PRNG, 32-bit, returns [-1, +1)
+          let s = (seed + n * 2654435761) | 0;
+          s ^= s << 13; s ^= s >>> 17; s ^= s << 5;
+          return ((s >>> 0) / 0x80000000) - 1;
+        };
+        const postOffsets = [-0.45, -0.15, 0.15, 0.45];
+        for (let pi = 0; pi < postOffsets.length; pi++) {
+          const tu = postOffsets[pi] + jit(pi * 7 + 1) * 0.025;     // ±2.5% along edge
+          const t  = tu * side;
+          const hScale = 1 + jit(pi * 7 + 2) * 0.18;                // ±18% height
+          const lean  = jit(pi * 7 + 3) * 0.12;                     // ±0.12 rad ≈ 7°
+          const postH = style.height * hScale;
           const post = BABYLON.MeshBuilder.CreateCylinder(
-            `fort_${tile.col}_${tile.row}_${d}_p${tu}`,
-            { diameterTop: style.thickness * 0.7, diameterBottom: style.thickness,
-              height: style.height, tessellation: 6 },
+            `fort_${tile.col}_${tile.row}_${d}_p${pi}`,
+            { diameterTop: style.thickness * 0.65, diameterBottom: style.thickness * 1.05,
+              height: postH, tessellation: 6 },
             scene,
           );
-          place(post, midX + perpX * t, tileTopY + style.height / 2, midZ + perpZ * t);
+          // Lean tilts the post along the edge direction (perp axis). Yaw the
+          // post by a small random amount around vertical too, so the
+          // hex-prism cross-section doesn't all face the same way.
+          post.rotation.z = lean;
+          post.rotation.y = jit(pi * 7 + 4) * 0.6;
+          const px = midX + perpX * t + perpX * jit(pi * 7 + 5) * 0.018;
+          const pz = midZ + perpZ * t + perpZ * jit(pi * 7 + 6) * 0.018;
+          place(post, px, tileTopY + postH / 2, pz);
         }
-        // Two horizontal rails — low and high — running the length of the
-        // edge. When the road crosses, each rail splits into two short
-        // segments leaving the road gap bare.
-        const RAIL_HEIGHTS = [0.45, 0.85];      // fractions of style.height
-        const RAIL_CROSS   = style.thickness * 0.65; // x/y rail cross-section
-        for (const hf of RAIL_HEIGHTS) {
-          const railY = tileTopY + style.height * hf;
-          if (hasRoadHere) {
-            const gapHalf = side * 0.18;           // half-width of the road gap
-            const outer   = side * 0.45;           // outer post offset
-            const segLen  = outer - gapHalf;       // each side-segment length
-            const segCtr  = (outer + gapHalf) / 2; // offset from edge midpoint
-            for (const sign of [-1, 1]) {
-              const seg = BABYLON.MeshBuilder.CreateBox(
-                `fort_${tile.col}_${tile.row}_${d}_rail${hf}_${sign}`,
-                { width: RAIL_CROSS, height: RAIL_CROSS, depth: segLen },
-                scene,
-              );
-              seg.rotation.y = yaw;
-              place(seg, midX + perpX * sign * segCtr, railY, midZ + perpZ * sign * segCtr);
-            }
-          } else {
-            const rail = BABYLON.MeshBuilder.CreateBox(
-              `fort_${tile.col}_${tile.row}_${d}_rail${hf}`,
-              { width: RAIL_CROSS, height: RAIL_CROSS, depth: side * 0.9 },
-              scene,
-            );
-            rail.rotation.y = yaw;
-            place(rail, midX, railY, midZ);
-          }
+        // Two cross-rails — low and high — running ~90% of the edge with a
+        // small height wobble and a slight sag at the centre (cheaply
+        // approximated by a tiny downward y offset at the midpoint via a thin
+        // box; we keep it a single segment per rail for cheap rendering).
+        const RAIL_HEIGHTS = [0.42, 0.82];           // fractions of style.height
+        const RAIL_CROSS   = style.thickness * 0.55; // box cross-section
+        for (let ri = 0; ri < RAIL_HEIGHTS.length; ri++) {
+          const hf = RAIL_HEIGHTS[ri];
+          const sag = jit(ri * 11 + 50) * 0.025;     // ±0.025 wu vertical wobble
+          const railY = tileTopY + style.height * hf + sag;
+          const rail = BABYLON.MeshBuilder.CreateBox(
+            `fort_${tile.col}_${tile.row}_${d}_rail${ri}`,
+            { width: RAIL_CROSS * (1 + jit(ri + 70) * 0.18),
+              height: RAIL_CROSS * (1 + jit(ri + 71) * 0.18),
+              depth:  side * (0.86 + jit(ri + 72) * 0.04) },
+            scene,
+          );
+          rail.rotation.y = yaw;
+          rail.rotation.z = jit(ri + 73) * 0.05;     // tiny tilt along the rail
+          place(rail, midX, railY, midZ);
         }
       } else {
         // Continuous wall slab spanning the edge. Depth (local Z) = the hex side,
@@ -9829,13 +9846,18 @@ export class Renderer3D {
     plankMat.backFaceCulling  = false;
     plankMat.alpha = 1;
 
-    const plank = BABYLON.MeshBuilder.CreatePlane(
+    // 3D plank: a box, not a plane. Default Babylon box UVs put the same
+    // texture on all 6 faces, so the parchment + name read from any angle —
+    // and the sides/top/bottom carry the parchment colour because the same
+    // texture is mostly background. Operator wanted "real depth", not a paper
+    // sticker. Still billboards on Y so the front faces the camera.
+    const plank = BABYLON.MeshBuilder.CreateBox(
       `bldgSignPlank_${tkey}`,
-      { width: SIGNPOST_PLANK_WIDTH, height: SIGNPOST_PLANK_HEIGHT },
+      { width: SIGNPOST_PLANK_WIDTH, height: SIGNPOST_PLANK_HEIGHT, depth: SIGNPOST_PLANK_DEPTH },
       scene,
     );
     plank.parent        = parent;
-    // BILLBOARDMODE_Y: the plank rotates around the vertical axis to face the
+    // BILLBOARDMODE_Y: the box rotates around the vertical axis to face the
     // camera, but the post below it stays bolt upright (no billboard).
     plank.billboardMode = BABYLON.Mesh.BILLBOARDMODE_Y;
     plank.isPickable    = false;
@@ -9875,7 +9897,9 @@ export class Renderer3D {
   }
 
   /** Paint a signpost plank DynamicTexture: a parchment/wood board with the
-   *  building name in a clean serif/uncial face, dark-brown ink. Idempotent. */
+   *  building name in a clean serif/uncial face, dark-brown ink. Font size
+   *  auto-shrinks for long names so the text always fits within the board
+   *  margin — no clipping on "Graveyard", "Blacksmith", etc. Idempotent. */
   _paintSignpostPlank(tex, text) {
     if (!tex || typeof tex.getContext !== 'function') return;
     const W = BUILDING_LABEL_TEX_W;
@@ -9890,11 +9914,28 @@ export class Renderer3D {
     ctx.strokeRect(5, 5, W - 10, H - 10);
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
-    // Cinzel / Trajan read as an engraved-stone serif; plain serif is the
-    // fallback when the webfont isn't loaded (e.g. Electron / first paint).
-    ctx.font = 'bold 96px "Cinzel", "Trajan Pro", Georgia, serif';
     ctx.fillStyle = '#3a2410';
-    ctx.fillText(text, W / 2, H / 2 + 4);
+    // Auto-fit: start at the preferred size, measure, and step down by a
+    // simple proportional ratio if the text overflows the board's inner
+    // width (leaving a margin equal to the lineWidth + a bit of padding).
+    const MAX_PX  = 96;
+    const MIN_PX  = 40;                  // floor so 1-2 word names don't go tiny
+    const MARGIN  = 32;                  // padding inside the dark frame
+    const INNER_W = W - MARGIN * 2;
+    const fontFor = (px) => `bold ${px}px "Cinzel", "Trajan Pro", Georgia, serif`;
+    let px = MAX_PX;
+    ctx.font = fontFor(px);
+    // Test stubs may not implement measureText — skip auto-fit there. In a
+    // real browser it always exists.
+    if (typeof ctx.measureText === 'function') {
+      const metrics = ctx.measureText(text);
+      if (metrics?.width > INNER_W) {
+        // Scale by ratio (floor to nearest int), clamped to MIN_PX.
+        px = Math.max(MIN_PX, Math.floor(MAX_PX * (INNER_W / metrics.width)));
+        ctx.font = fontFor(px);
+      }
+    }
+    ctx.fillText(text, W / 2, H / 2 + Math.round(px * 0.04));
     if (typeof tex.update === 'function') tex.update();
   }
 

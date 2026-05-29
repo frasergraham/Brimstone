@@ -568,6 +568,7 @@ function makeSignBabylon(created) {
     StandardMaterial: class { constructor(name) { this.name = name; this.alpha = 1; } },
     MeshBuilder: {
       CreatePlane(name) { return make(name); },
+      CreateBox(name) { return make(name); },
       CreateCylinder(name) { return make(name); },
       CreateTube(name) { return make(name); },
     },
