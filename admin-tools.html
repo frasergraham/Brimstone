@@ -1579,6 +1579,12 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
       // Let native undo work inside text fields (briefing, JSON blobs, etc.).
       const tag = (e.target?.tagName || '').toLowerCase();
       if (tag === 'input' || tag === 'textarea' || e.target?.isContentEditable) return;
+      // R (no modifier) — rotate the active building's footprint (P6).
+      if (!e.metaKey && !e.ctrlKey && !e.altKey && (e.key === 'r' || e.key === 'R')) {
+        e.preventDefault();
+        handles.editor.rotateFootprint?.();
+        return;
+      }
       if (!(e.metaKey || e.ctrlKey)) return;
       if (e.key === 'z' || e.key === 'Z') {
         e.preventDefault();

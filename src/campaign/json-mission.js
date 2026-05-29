@@ -193,6 +193,44 @@ export function validateMissionJSON(m) {
 }
 
 /**
+ * Validate the building-footprint pairing of a parsed mission (P6, item 5):
+ * every tile carrying a `building` MUST have a non-empty `footprintHexes`, and
+ * each footprint key MUST point to a tile whose `buildingFootprintOf` back-points
+ * to the entrance. Throws {@link MissionValidationError} on the first break;
+ * returns the (unmodified) input on success.
+ *
+ * Kept SEPARATE from {@link validateMissionJSON} (and so out of the runtime
+ * `loadMissionJSON` path) deliberately: the shipped JSON missions predate the
+ * footprint model and have buildings without footprints, so the runtime loader
+ * must stay backward-compatible. The mission EDITOR runs this extra check before
+ * download/save so newly-authored / re-saved missions are always well-formed.
+ * Once the legacy missions are migrated (P5) this can fold into validateMissionJSON.
+ */
+export function validateBuildingFootprints(m) {
+  const map = m && m.map;
+  if (!map || typeof map !== 'object') return m; // validateMissionJSON owns this error
+  const tileList = map.mode === 'handmade' ? (map.tiles ?? []) : (map.overlay?.tiles ?? []);
+  const byKey = new Map();
+  for (const t of tileList) byKey.set(`${t.col},${t.row}`, t);
+  for (const t of tileList) {
+    if (t.building == null) continue;
+    const entranceKey = `${t.col},${t.row}`;
+    const fps = t.footprintHexes;
+    if (!Array.isArray(fps) || fps.length === 0) {
+      _fail(`building at (${t.col},${t.row}) has no footprintHexes — every building needs a footprint`);
+    }
+    for (const fk of fps) {
+      const ft = byKey.get(fk);
+      if (!ft) _fail(`building at (${t.col},${t.row}) footprint "${fk}" points at no tile`);
+      if (ft.buildingFootprintOf !== entranceKey) {
+        _fail(`building at (${t.col},${t.row}) footprint "${fk}" does not back-point to its entrance (broken pair)`);
+      }
+    }
+  }
+  return m;
+}
+
+/**
  * Validate and resolve a parsed JSON mission into a runtime mission def.
  *
  * Validates first (throws {@link MissionValidationError} on any failure), then
