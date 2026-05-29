@@ -52,9 +52,12 @@ function harness(tileSpecs) {
   r._scene = {};
   r._mapRoot = { name: 'mapRoot' };
   const tiles = new Map();
-  for (const { col, row, fort } of tileSpecs) {
+  for (const { col, row, fort, roadDirs } of tileSpecs) {
     const t = new Tile(col, row, TileType.GRASS);
     t.fortifyLevel = fort;
+    if (Array.isArray(roadDirs)) {
+      t.roadDirs = new Set(roadDirs);
+    }
     tiles.set(`${col},${row}`, t);
   }
   r.state = { tiles };
@@ -87,13 +90,37 @@ describe('_syncFortifications — build + adjacency', () => {
     assert.equal(r._fortByKey.get('6,4').meshes.length, 5);
   });
 
-  test('level 1 stakes build multiple posts per edge (cylinders)', () => {
+  test('level 1 fence: 4 posts + 2 rails per road-free edge', () => {
     const r = harness([{ col: 5, row: 5, fort: 1 }]);
     r._syncFortifications();
     const entry = r._fortByKey.get('5,5');
-    // 3 posts × 6 edges = 18 cylinders.
-    assert.equal(entry.meshes.length, 18);
+    const posts = entry.meshes.filter(m => /_p[\-0-9.]+$/.test(m.name));
+    const rails = entry.meshes.filter(m => /_rail/.test(m.name));
+    // 4 posts × 6 edges = 24 posts; 2 rails × 6 edges = 12 rails.
+    assert.equal(posts.length, 24, '4-post fence × 6 edges');
+    assert.equal(rails.length, 12, '2 cross-rails × 6 edges');
     assert.ok(entry.meshes.every(m => m.name.startsWith('fort_')));
+  });
+
+  test('level 1 fence: road exit drops inner posts + splits rails for a gap', () => {
+    // Hex (5,5) is fortified AND has a road exiting east to (6,5). The east
+    // edge must drop its 2 inner posts (only outer pair remain) and split
+    // each of its 2 rails into 2 side segments — leaving the road's centre
+    // line bare. The other 5 edges keep the full 4-post + 2-rail fence.
+    const r = harness([{
+      col: 5, row: 5, fort: 1,
+      roadDirs: ['6,5'],
+    }]);
+    r._syncFortifications();
+    const entry = r._fortByKey.get('5,5');
+    // The east-edge dir index is the one whose neighbour matches (6,5). The
+    // mesh names embed the dir as `fort_5_5_<d>_...`, so we don't need to
+    // recover d explicitly — we count by behaviour: total posts must drop by
+    // (4-2=2) and rails must double (each whole rail becomes 2 segments).
+    const posts = entry.meshes.filter(m => /_p[\-0-9.]+$/.test(m.name));
+    const rails = entry.meshes.filter(m => /_rail/.test(m.name));
+    assert.equal(posts.length, 4 * 5 + 2, '5 full-fence edges + 1 road edge with 2 outer posts');
+    assert.equal(rails.length, 2 * 5 + 2 * 2, '5 full-fence rails + 1 road edge split rails (2x)');
   });
 });
 

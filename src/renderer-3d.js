@@ -7670,18 +7670,66 @@ export class Renderer3D {
       // rotation.y aligns a mesh's local +Z axis to (perpX, perpZ).
       const yaw = Math.atan2(perpX, perpZ);
 
+      // Road-aware: if this edge has a road exit (tile.roadDirs lists this
+      // neighbour) the fence leaves a gap at its midpoint so the road can pass
+      // through cleanly — no post or rail blocks the road's centre line.
+      const neighbourKey = `${nb.col},${nb.row}`;
+      const hasRoadHere = !!(
+        tile.roadDirs && (
+          (typeof tile.roadDirs.has === 'function' && tile.roadDirs.has(neighbourKey)) ||
+          (Array.isArray(tile.roadDirs) && tile.roadDirs.includes(neighbourKey))
+        )
+      );
+
       if (style.kind === 'stakes') {
-        // Sparse low posts spread along the edge (passable level-1 marker).
-        const POSTS = 3;
-        for (let i = 0; i < POSTS; i++) {
-          const t = (i / (POSTS - 1) - 0.5) * side * 0.8; // -0.4..+0.4 of the side
+        // Level-1 fortification: a low wooden FENCE — four corner posts joined
+        // by two horizontal rails (cross beams). Reads as a defensible
+        // pasture-fence rather than a sparse row of stakes. When a road crosses
+        // this edge, the two inner posts and the centre of each rail drop out
+        // to leave a clean gap for the road to pass through.
+        const postOffsets = hasRoadHere
+          ? [-0.45, 0.45]                  // road: just the outer corner posts
+          : [-0.45, -0.15, 0.15, 0.45];    // no road: 4-post fence, no centre post
+        for (const tu of postOffsets) {
+          const t = tu * side;
           const post = BABYLON.MeshBuilder.CreateCylinder(
-            `fort_${tile.col}_${tile.row}_${d}_${i}`,
+            `fort_${tile.col}_${tile.row}_${d}_p${tu}`,
             { diameterTop: style.thickness * 0.7, diameterBottom: style.thickness,
               height: style.height, tessellation: 6 },
             scene,
           );
           place(post, midX + perpX * t, tileTopY + style.height / 2, midZ + perpZ * t);
+        }
+        // Two horizontal rails — low and high — running the length of the
+        // edge. When the road crosses, each rail splits into two short
+        // segments leaving the road gap bare.
+        const RAIL_HEIGHTS = [0.45, 0.85];      // fractions of style.height
+        const RAIL_CROSS   = style.thickness * 0.65; // x/y rail cross-section
+        for (const hf of RAIL_HEIGHTS) {
+          const railY = tileTopY + style.height * hf;
+          if (hasRoadHere) {
+            const gapHalf = side * 0.18;           // half-width of the road gap
+            const outer   = side * 0.45;           // outer post offset
+            const segLen  = outer - gapHalf;       // each side-segment length
+            const segCtr  = (outer + gapHalf) / 2; // offset from edge midpoint
+            for (const sign of [-1, 1]) {
+              const seg = BABYLON.MeshBuilder.CreateBox(
+                `fort_${tile.col}_${tile.row}_${d}_rail${hf}_${sign}`,
+                { width: RAIL_CROSS, height: RAIL_CROSS, depth: segLen },
+                scene,
+              );
+              seg.rotation.y = yaw;
+              place(seg, midX + perpX * sign * segCtr, railY, midZ + perpZ * sign * segCtr);
+            }
+          } else {
+            const rail = BABYLON.MeshBuilder.CreateBox(
+              `fort_${tile.col}_${tile.row}_${d}_rail${hf}`,
+              { width: RAIL_CROSS, height: RAIL_CROSS, depth: side * 0.9 },
+              scene,
+            );
+            rail.rotation.y = yaw;
+            place(rail, midX, railY, midZ);
+          }
         }
       } else {
         // Continuous wall slab spanning the edge. Depth (local Z) = the hex side,
