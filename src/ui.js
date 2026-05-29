@@ -229,7 +229,7 @@ export class UIController {
     // pointerdown / pointerup (with pointerleave fallback) so touch and mouse
     // drive the same repeater. Tilt is locked at π/4 — see CAMERA_BETA_LOCKED
     // in renderer-3d.js — so there are no tilt buttons.
-    const ROT_STEP  = Math.PI / 90;           // ≈2° per tick — finer than the click-step rotate buttons
+    const ROT_STEP  = Math.PI / 60;           // ≈3° per tick — finer than the click-step rotate buttons
     const REPEAT_MS = 50;
     const bindHoldToRepeat = (id, tickFn) => {
       const el = this._el(id);

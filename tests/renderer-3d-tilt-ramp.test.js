@@ -35,24 +35,15 @@ describe('betaForRadius — constants sanity', () => {
     assert.ok(BASE < Math.PI / 2, 'locked should stay short of pure horizon');
   });
 
-  test('ramp start fraction is in (0, 1)', () => {
-    assert.ok(RAMP > 0 && RAMP < 1);
+  test('ramp start fraction is in [0, 1)', () => {
+    // 0 = smoothstep covers the whole zoom range with no flat hold.
+    assert.ok(RAMP >= 0 && RAMP < 1);
   });
 });
 
 describe('betaForRadius — anchors', () => {
   test('r = min → betaBase', () => {
     assert.equal(betaForRadius(MIN, MIN, MAX, BASE, TOP), BASE);
-  });
-
-  test('r at exactly the ramp-start fraction → still betaBase', () => {
-    // t === RAMP is the last point of the flat hold (inclusive).
-    assert.equal(betaForRadius(rAt(RAMP), MIN, MAX, BASE, TOP), BASE);
-  });
-
-  test('r anywhere in the flat region (t < ramp) → betaBase', () => {
-    assert.equal(betaForRadius(rAt(0.1), MIN, MAX, BASE, TOP), BASE);
-    assert.equal(betaForRadius(rAt(0.39), MIN, MAX, BASE, TOP), BASE);
   });
 
   test('r = max → betaTopDown', () => {
@@ -77,16 +68,16 @@ describe('betaForRadius — curve shape (not linear)', () => {
     assert.ok(Math.abs(b - naiveLinear) > 1e-6, 'ramped beta must differ from full-range linear');
   });
 
-  test('smoothstep ease-in: closer to BASE than the within-ramp linear value early in the ramp', () => {
-    // At t = 0.55 the renormalized ramp fraction s = (0.55-0.4)/0.6 = 0.25.
-    // smoothstep(0.25) = 0.15625 < 0.25, so beta sits CLOSER TO BASE than the
-    // straight-line ramp value — an unmistakable signature of the S-curve.
+  test('smoothstep ease-in: closer to BASE than the linear value early in the ramp', () => {
+    // With rampStart=0 (default) the ramp spans the entire zoom range, so the
+    // renormalized fraction equals t. At t=0.2 smoothstep(0.2) = 0.104 < 0.2,
+    // so beta sits CLOSER TO BASE than a linear interpolant at the same t —
+    // an unmistakable signature of the S-curve.
     // Because TOPDOWN < BASE, "closer to BASE" means a LARGER beta than the
-    // linear interpolant at the same s.
-    const b = betaForRadius(rAt(0.55), MIN, MAX, BASE, TOP);
-    const sLinear = 0.25; // within-ramp linear fraction at t=0.55
-    const linearWithinRamp = BASE + sLinear * (TOP - BASE);
-    assert.ok(b < BASE && b > linearWithinRamp, 'ease-in should undershoot toward BASE');
+    // straight-line value at the same t.
+    const b = betaForRadius(rAt(0.2), MIN, MAX, BASE, TOP);
+    const linear = BASE + 0.2 * (TOP - BASE);
+    assert.ok(b < BASE && b > linear, 'ease-in should undershoot toward BASE');
   });
 
   test('monotonic non-increasing across the zoom range', () => {
@@ -119,7 +110,7 @@ describe('betaForRadius — clamping & edge cases', () => {
     const flat = betaForRadius(rAt(0.5), MIN, MAX, BASE, TOP, 0.6);
     assert.equal(flat, BASE);
     const moved = betaForRadius(rAt(0.5), MIN, MAX, BASE, TOP, 0.4);
-    assert.ok(moved < BASE, 'with default ramp start, beta has descended toward topdown');
+    assert.ok(moved < BASE, 'with explicit rampStart=0.4, beta has descended toward topdown');
   });
 
   test('works with the real camera radius bounds', () => {

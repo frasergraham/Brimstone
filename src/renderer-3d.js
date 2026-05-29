@@ -902,11 +902,13 @@ export const ENTITY_FRAME_PADDING = 1.5;
  *  tilt-lock task) so the board always reads as a fixed isometric. The
  *  camera's lowerBetaLimit and upperBetaLimit are both pinned to π/4 in
  *  _initBabylon, so any stray beta mutation is immediately re-clamped. */
-// Locked tilt angle for the ArcRotateCamera (radians from +Y). LOWER = more
-// top-down (beta = 0 is straight overhead; π/2 is flat-on horizon). 35° from
-// +Y reads as a high isometric — looking down from a steep angle, with the
-// texture-rich top faces and standee silhouettes both legible.
-export const CAMERA_BETA_LOCKED = Math.PI * 35 / 180;
+// Tilt angle (radians from +Y) at MINIMUM zoom radius — the closest the
+// player can zoom in. LOWER beta = more top-down (beta = 0 is straight
+// overhead; π/2 is flat-on horizon). 30° from +Y reads as a high isometric —
+// looking down from a steep angle, with top faces and standee silhouettes
+// both legible. The camera rises continuously from here toward
+// `CAMERA_BETA_TOPDOWN` as the player zooms out (see `betaForRadius`).
+export const CAMERA_BETA_LOCKED = Math.PI * 30 / 180;
 
 /** Top-down tilt (beta) reached at maximum zoom-out. The camera "rises" as the
  *  operator zooms out: it holds the locked isometric (`CAMERA_BETA_LOCKED`) for
@@ -919,9 +921,10 @@ export const CAMERA_BETA_TOPDOWN = Math.PI * 5 / 180;
 
 /** Fraction of the zoom range (`radius` from min→max) over which the camera
  *  keeps the locked isometric tilt before it starts rising toward top-down.
- *  0 .. RAMP_START → flat at `CAMERA_BETA_LOCKED`; RAMP_START .. 1 → smoothstep
- *  ease up to `CAMERA_BETA_TOPDOWN`. */
-export const CAMERA_TILT_RAMP_START = 0.4;
+ *  0 = smoothstep covers the whole range (no flat hold); the camera begins
+ *  rising the moment the player starts zooming out, eliminating the slope
+ *  discontinuity at the boundary. Values > 0 introduce a flat hold. */
+export const CAMERA_TILT_RAMP_START = 0;
 
 /**
  * Camera tilt (beta) as a function of the current zoom radius — the "rise as
