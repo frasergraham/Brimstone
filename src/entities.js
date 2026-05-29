@@ -13,6 +13,9 @@ let _nextId = 1;
 // Sum the statMod contribution of all passive abilities on a unit.
 // Phase 4 handles brawler (+1 attack) and sturdy (+1 defense); future
 // entries only need to add a statMods field to the ABILITIES registry.
+export function abilityStatMod(abilities, field) {
+  return _abilityStatMod(abilities, field);
+}
 function _abilityStatMod(abilities, field) {
   if (!Array.isArray(abilities) || abilities.length === 0) return 0;
   let sum = 0;
@@ -421,7 +424,9 @@ export function rangeOf(e) {
 // ── Advantage-dice math ─────────────────────────────────────────────────────
 
 // Cap total advantage/disadvantage dice each side can accumulate.
-export const ADVANTAGE_CAP = 4;
+// Lowered from 4 to 3 so the game cap matches the combat-tester's visual
+// capacity (defender's 6-hex neighbour ring splits into 3 atk + 3 def slots).
+export const ADVANTAGE_CAP = 3;
 
 // E[best-of-(1+K)] and E[worst-of-(1+K)] for K advantage/disadvantage dice.
 // Index by the advantage level K ∈ {0, 1, 2, 3, 4}. K=0 is a plain d6 (E=3.5).
@@ -565,21 +570,32 @@ export function defaultDisplayName(type) {
   return _DEFAULT_DISPLAY_NAMES[type] ?? type;
 }
 
-export function createSurvivor(col, row, ownerId = null, state = null) {
+export function createSurvivor(col, row, ownerId = null, state = null, forcedName = null) {
   const e = new Entity(EntityType.SURVIVOR, null, col, row, ownerId, state);
 
   // Roster de-dup tracker lives on the GameState when one is provided;
   // otherwise fall back to the module-level set (editor previews / raw tests).
   const usedIndices = state ? state.usedRosterIndices : _usedRosterIndices;
 
-  // Pick a random unused character from the roster
-  const available = SURVIVOR_ROSTER
-    .map((c, i) => ({ c, i }))
-    .filter(({ i }) => !usedIndices.has(i));
+  // Forced pick: when an authored mission tile names a specific survivor,
+  // spawn THAT roster character. Unknown / null names fall through to the
+  // existing random pick (back-compat).
+  let pick = null;
+  if (forcedName != null) {
+    const fi = SURVIVOR_ROSTER.findIndex(c => c.name === forcedName);
+    if (fi >= 0) pick = { c: SURVIVOR_ROSTER[fi], i: fi };
+  }
 
-  const pick = available.length > 0
-    ? available[Math.floor(Math.random() * available.length)]
-    : { c: SURVIVOR_ROSTER[Math.floor(Math.random() * SURVIVOR_ROSTER.length)], i: -1 };
+  if (!pick) {
+    // Pick a random unused character from the roster
+    const available = SURVIVOR_ROSTER
+      .map((c, i) => ({ c, i }))
+      .filter(({ i }) => !usedIndices.has(i));
+
+    pick = available.length > 0
+      ? available[Math.floor(Math.random() * available.length)]
+      : { c: SURVIVOR_ROSTER[Math.floor(Math.random() * SURVIVOR_ROSTER.length)], i: -1 };
+  }
 
   if (pick.i >= 0) usedIndices.add(pick.i);
 

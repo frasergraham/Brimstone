@@ -1,6 +1,6 @@
 // UI controller: handles canvas clicks, sidepanel updates, action buttons
 import { hexKey, hexToPixel, MAP_COLS, MAP_ROWS } from './hex.js';
-import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus } from './tiles.js';
+import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus, legacyTileType } from './tiles.js';
 import { ITEMS } from './items.js';
 import { EFFECTS } from './effects.js';
 import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, attackOf, defenseOf } from './entities.js';
@@ -16,7 +16,7 @@ import { PlanActionType, actionCosts, computeGhostState, computeProjectedInvento
 import { compileTurnBattleSummary } from './battle-utils.js';
 import { ResEventType } from '../server/resolver.js';
 import { collectUIElements } from './ui-elements.js';
-import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml } from './ui-render.js';
+import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml, buildNodeBadgeHtml } from './ui-render.js';
 import {
   hideActionPopup, getEntityScreenPos, computeArcPositions,
   positionArcPopup, startArcTracking, positionPopup,
@@ -223,14 +223,14 @@ export class UIController {
       this.onRedraw();
     }, sig);
     // ── 3D camera-controls cluster (#camera-controls-3d) ────────────────────
-    // Shown only on body.renderer-3d (CSS-driven). Each button hold-to-repeats
-    // at CAMERA_BUTTON_REPEAT_MS so zoom + rotate feel continuous. The bind
-    // helper attaches pointerdown / pointerup (with pointerleave fallback) so
-    // touch and mouse drive the same repeater. Tilt is locked at π/4 — see
-    // CAMERA_BETA_LOCKED in renderer-3d.js — so there are no tilt buttons.
-    const ROT_STEP  = Math.PI / 90;           // ≈2° per tick — finer than the click-step rotate buttons
+    // Shown only on body.renderer-3d (CSS-driven), mobile-only: rotate
+    // left/right buttons (pinch-to-zoom covers zoom on touch). Each button
+    // hold-to-repeats so rotation feels continuous. The bind helper attaches
+    // pointerdown / pointerup (with pointerleave fallback) so touch and mouse
+    // drive the same repeater. Tilt is locked at π/4 — see CAMERA_BETA_LOCKED
+    // in renderer-3d.js — so there are no tilt buttons.
+    const ROT_STEP  = Math.PI / 60;           // ≈3° per tick — finer than the click-step rotate buttons
     const REPEAT_MS = 50;
-    const zoomFactorPerTick = Math.pow(zoomStep, 0.25); // ~5%/tick → 1.25 in ~5 ticks
     const bindHoldToRepeat = (id, tickFn) => {
       const el = this._el(id);
       if (!el) return;
@@ -249,14 +249,6 @@ export class UIController {
       el.addEventListener('pointercancel', stop, sig);
       el.addEventListener('pointerleave',  stop, sig);
     };
-    bindHoldToRepeat('cam3d-zoom-in',  () => {
-      const cx = this.canvas.width / 2, cy = this.canvas.height / 2;
-      this.renderer.setZoom(this.renderer.zoomLevel * zoomFactorPerTick, cx, cy);
-    });
-    bindHoldToRepeat('cam3d-zoom-out', () => {
-      const cx = this.canvas.width / 2, cy = this.canvas.height / 2;
-      this.renderer.setZoom(this.renderer.zoomLevel / zoomFactorPerTick, cx, cy);
-    });
     bindHoldToRepeat('cam3d-rotate-left',  () => this.renderer.rotateBy(-ROT_STEP, 0));
     bindHoldToRepeat('cam3d-rotate-right', () => this.renderer.rotateBy( ROT_STEP, 0));
     // 3D camera mode toggle — swaps drag between pan and rotate. Wheel /
@@ -282,19 +274,22 @@ export class UIController {
       const isDoubleTap = (now - this._lastFitTapTime) < 400;
       this._lastFitTapTime = now;
       if (isDoubleTap) {
-        // Double-tap: toggle view lock; fit map first if locking
-        this.renderer.viewLocked = !this.renderer.viewLocked;
-        if (this.renderer.viewLocked) {
-          this.renderer.resize();
-          this.renderer.resetView();
-          this.renderer._zoomAnim = null;
+        // Double-tap (second tap within 400ms): orient the camera so map
+        // north is pointing up. 2D renderer's stub is a no-op. Target +
+        // radius are preserved — only yaw eases to north.
+        if (typeof this.renderer.orientNorthUp === 'function') {
+          this.renderer.orientNorthUp();
+          this.onRedraw();
         }
-        this._updateFitBtnLockState();
-        this.onRedraw();
       } else if (!this.renderer.viewLocked) {
-        // Single-tap when unlocked: fit map
+        // Single-tap when unlocked. 3D: rise to max zoom-out (near top-down)
+        // centred on the player's own units. 2D: classic fit-whole-map.
         this.renderer.resize();
-        this.renderer.resetView();
+        if (this.renderer.is3D && typeof this.renderer.zoomOutToOwnedUnits === 'function') {
+          this.renderer.zoomOutToOwnedUnits();
+        } else {
+          this.renderer.resetView();
+        }
         this.onRedraw();
       }
     }, sig);
@@ -2458,13 +2453,14 @@ export class UIController {
     if (!entity && tileSelection) {
       const tile = this.state.tiles.get(hexKey(tileSelection.col, tileSelection.row));
       if (!tile) { bar.style.display = 'none'; return; }
-      const terrainBadge = _buildTerrainBadge(tile);
+      const nodeBadge = buildNodeBadgeHtml(this.state.witchObjectives, this.state.entities, tileSelection.col, tileSelection.row);
+      const terrainBadge = _buildTerrainBadge(tile, nodeBadge);
       const TERRAIN_ICON = {
         [TileType.GRASS]: '🌿', [TileType.FOREST]: '🌲', [TileType.DIRT]: '🪨',
         [TileType.ROAD]: '🛤', [TileType.RIVER]: '💧', [TileType.BRIDGE]: '🌉',
       };
-      const icon = tile.building ? (BUILDING_ICON[tile.building] ?? '🏠') : (TERRAIN_ICON[tile.type] ?? '🌿');
-      const label = tile.building ? (BUILDING_LABEL[tile.building] ?? 'Building') : (tile.type ?? 'terrain');
+      const icon = tile.building ? (BUILDING_ICON[tile.building] ?? '🏠') : (TERRAIN_ICON[legacyTileType(tile)] ?? '🌿');
+      const label = tile.building ? (BUILDING_LABEL[tile.building] ?? 'Building') : (legacyTileType(tile) ?? 'terrain');
       const tileSrc = this.renderer.getTileDataURL(tile, tileSelection.col, tileSelection.row, 56);
       const tileImgHtml = tileSrc
         ? `<img class="usb-terrain-hex" src="${tileSrc}" alt="">`
@@ -2541,7 +2537,8 @@ export class UIController {
     if (tile) {
       const tileSrc = this.renderer.getTileDataURL(tile, entCol, entRow, 56);
       const tileImgHtml = tileSrc ? `<img class="usb-terrain-hex" src="${tileSrc}" alt="">` : '';
-      terrainBoxHtml = `<div class="usb-terrain-box">${tileImgHtml}${_buildTerrainBadge(tile)}</div>`;
+      const nodeBadge = buildNodeBadgeHtml(this.state.witchObjectives, this.state.entities, entCol, entRow);
+      terrainBoxHtml = `<div class="usb-terrain-box">${tileImgHtml}${_buildTerrainBadge(tile, nodeBadge)}</div>`;
     }
 
     // Expanded block: ATK, DEF, and any ability description — toggled by the (i) glyph
@@ -3890,12 +3887,12 @@ export class UIController {
     const fortEl = this._el('tile-zoom-fort');
     const iconEl = this._el('tile-zoom-icon');
 
-    const fillColor = TILE_COLOR_MAP[tile.type] ?? '#3a5430';
+    const fillColor = TILE_COLOR_MAP[legacyTileType(tile)] ?? '#3a5430';
     if (polyEl) polyEl.setAttribute('fill', fillColor);
 
     // Icon: building emoji or terrain fallback
     const icon = tile.building ? (BUILDING_ICON[tile.building] ?? '🏠')
-                                : (TERRAIN_ICON[tile.type] ?? '');
+                                : (TERRAIN_ICON[legacyTileType(tile)] ?? '');
     if (iconEl) iconEl.textContent = icon;
 
     // Fortification glow ring
@@ -3914,8 +3911,8 @@ export class UIController {
     const linesEl = this._el('tile-zoom-info-lines');
 
     if (nameEl) {
-      nameEl.textContent = tile.building ? (BUILDING_LABEL[tile.building] ?? tile.type)
-                                         : tile.type;
+      nameEl.textContent = tile.building ? (BUILDING_LABEL[tile.building] ?? legacyTileType(tile))
+                                         : legacyTileType(tile);
     }
 
     const obj       = state.witchObjectives.find(o =>
@@ -4730,9 +4727,9 @@ export class UIController {
 // ── Module-level helpers ───────────────────────────────────────────────────
 
 /** Build HTML for a terrain badge (used in unit stats bar). */
-function _buildTerrainBadge(tile) {
+function _buildTerrainBadge(tile, nodeBadge = '') {
   const parts = [];
-  const label = tile.building ? (BUILDING_LABEL[tile.building] ?? 'Building') : (tile.type ?? '');
+  const label = tile.building ? (BUILDING_LABEL[tile.building] ?? 'Building') : (legacyTileType(tile) ?? '');
   parts.push(label);
   if (tile.explored) {
     parts.push('<span class="usb-terrain-explored">Explored</span>');
@@ -4740,8 +4737,8 @@ function _buildTerrainBadge(tile) {
   if (tile.fortifyLevel) {
     parts.push(`<span class="usb-terrain-fort">⚙ Fort lvl ${tile.fortifyLevel}</span>`);
   }
-  if (tile.powerNode) {
-    parts.push(`<span class="usb-terrain-node">⬡ Power Node</span>`);
+  if (nodeBadge) {
+    parts.push(nodeBadge);
   }
   return parts.join(' · ');
 }

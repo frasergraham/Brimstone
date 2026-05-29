@@ -13,7 +13,7 @@ import {
 import {
   EntityType, createMinion, createSurvivor,
 } from '../src/entities.js';
-import { TileType, ResourceType, BuildingType } from '../src/tiles.js';
+import { TileType, ResourceType, BuildingType, decomposeTileType } from '../src/tiles.js';
 import { hexKey } from '../src/hex.js';
 import { getFaction, RogueFaction, HeroFaction } from '../src/factions.js';
 import { ITEMS } from '../src/items.js';
@@ -66,9 +66,9 @@ describe('RogueFaction — sight range', () => {
 
   test('scout bonus stacks on top of the +1', () => {
     const rogue = getFaction('rogue');
-    assert.equal(rogue.getSightRange(Phase.DAY,   true),  5); // 3 + 1 + 1
-    assert.equal(rogue.getSightRange(Phase.DAWN,  true),  4); // 2 + 1 + 1
-    assert.equal(rogue.getSightRange(Phase.NIGHT, true),  3); // 1 + 1 + 1
+    assert.equal(rogue.getSightRange(Phase.DAY,   true),  8); // 6 + 1 + 1
+    assert.equal(rogue.getSightRange(Phase.DAWN,  true),  6); // 4 + 1 + 1
+    assert.equal(rogue.getSightRange(Phase.NIGHT, true),  5); // 3 + 1 + 1
   });
 });
 
@@ -292,7 +292,7 @@ describe('RogueFaction — onAfterMoveStep auto-detects survivors in buildings',
     const { state, rogue } = rogueState(3, 3);
     // Place a building tile at (4, 3) with a hidden survivor.
     const t = state.tiles.get(hexKey(4, 3));
-    t.type = TileType.BUILDING;
+    decomposeTileType(t, TileType.BUILDING);
     t.building = BuildingType.INN;
     t.hiddenSurvivor = true;
     t.explored = false;
@@ -307,13 +307,13 @@ describe('RogueFaction — onAfterMoveStep auto-detects survivors in buildings',
     const { state, rogue } = rogueState(3, 3);
     // Place a building with a hidden survivor at (5, 3) — neighbour of (4, 3).
     const adj = state.tiles.get(hexKey(5, 3));
-    adj.type = TileType.BUILDING;
+    decomposeTileType(adj, TileType.BUILDING);
     adj.building = BuildingType.CHURCH;
     adj.hiddenSurvivor = true;
     adj.explored = false;
     // Make sure the rogue's destination tile (4, 3) is empty terrain.
     const dest = state.tiles.get(hexKey(4, 3));
-    dest.type = TileType.GRASS;
+    decomposeTileType(dest, TileType.GRASS);
     dest.building = null;
     dest.hiddenSurvivor = false;
 
@@ -327,7 +327,7 @@ describe('RogueFaction — onAfterMoveStep auto-detects survivors in buildings',
     const { state, rogue } = rogueState(3, 3);
     // Hidden survivor on a grass tile next to the destination.
     const adj = state.tiles.get(hexKey(5, 3));
-    adj.type = TileType.GRASS;
+    decomposeTileType(adj, TileType.GRASS);
     adj.building = null;
     adj.hiddenSurvivor = true;
     // Clear hidden-survivor flags from every tile on the rogue's path
@@ -353,13 +353,13 @@ describe('RogueFaction — onAfterMoveStep auto-detects survivors in buildings',
     state.hero.row = 3;
     // Hidden survivor in adjacent building.
     const adj = state.tiles.get(hexKey(5, 3));
-    adj.type = TileType.BUILDING;
+    decomposeTileType(adj, TileType.BUILDING);
     adj.building = BuildingType.INN;
     adj.hiddenSurvivor = true;
     adj.explored = false;
     // Make sure the destination tile is plain grass (no random reveal).
     const dest = state.tiles.get(hexKey(4, 3));
-    dest.type = TileType.GRASS;
+    decomposeTileType(dest, TileType.GRASS);
     dest.building = null;
     dest.hiddenSurvivor = false;
 
@@ -376,6 +376,7 @@ describe('RogueFaction — onAfterMoveStep auto-detects survivors in buildings',
 describe('RogueFaction — ranged crossbow attack', () => {
   test('rogue can attack a target 3 hexes away (BATTLE targets list includes it)', () => {
     const { state, rogue } = rogueState(5, 5);
+    state.fogOfWar = 'none'; // isolate from LOS gating — this tests range, not visibility
     const target = createMinion(8, 5);  // distance 3 along a row
     target.owner = 'witch';
     state.entities.push(target);

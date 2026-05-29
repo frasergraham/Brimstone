@@ -29,7 +29,7 @@ import {
   Renderer3D,
   RIVER_ALPHA_INDEX,
 } from '../src/renderer-3d.js';
-import { TileType, TILE_COLOR } from '../src/tiles.js';
+import { TileType, TILE_COLOR, Tile } from '../src/tiles.js';
 import { hexKey } from '../src/hex.js';
 
 // ── Stubbed Babylon for the river-extension build path ────────────────────────
@@ -101,7 +101,10 @@ function makeStubBabylon() {
 function makeRiverAcross(cols = 5, row = 2) {
   const tiles = new Map();
   for (let c = 0; c < cols; c++) {
-    tiles.set(hexKey(c, row), { col: c, row, type: TileType.RIVER, roadDirs: new Set() });
+    // Real layered Tile so isRiver()/isBridge() resolve from the path layer.
+    const t = new Tile(c, row, TileType.RIVER);
+    t.roadDirs = new Set();
+    tiles.set(hexKey(c, row), t);
   }
   return tiles;
 }
@@ -233,10 +236,25 @@ describe('Renderer3D — river extension uses the same textured river material a
         `extension ${m.name} should have a Float32Array color buffer set`);
       assert.equal(colors.length, n * 4);
       const N = n / 5;
-      // Spot-check alpha at path 0 (outer right) = 0 and path 2 (center) = 1.
+      // Spot-check the lateral feather: path 0 (outer right) and path 4 (outer
+      // left) are always 0 so the ribbon edges fade into the ground. The
+      // center path (2) carries the body alpha = lateral(1.0) × per-ring EDGE
+      // FADE — so it's > 0 and ≤ 1 (the exact value depends on which border
+      // ring the sample sits over; see `riverExtensionRingAlphas`). It used to
+      // be pinned at exactly 1 (river ran opaque to the band edge); the river
+      // now dissolves outward in lockstep with the ground + trees.
       assert.equal(colors[3], 0, 'outer-right path alpha should be 0');
-      assert.equal(colors[2 * N * 4 + 3], 1, 'center path alpha should be 1');
+      const centerA = colors[2 * N * 4 + 3];
+      assert.ok(centerA > 0 && centerA <= 1,
+        `center path alpha should be in (0, 1] (per-ring fade), got ${centerA}`);
       assert.equal(colors[4 * N * 4 + 3], 0, 'outer-left path alpha should be 0');
+      // At least one centreline sample must be FADED (< 1) — proves the
+      // per-ring edge fade is actually applied, not a no-op opaque ribbon.
+      let anyFaded = false;
+      for (let i = 0; i < N; i++) {
+        if (colors[(2 * N + i) * 4 + 3] < 1) { anyFaded = true; break; }
+      }
+      assert.ok(anyFaded, `extension ${m.name} centreline must fade (< 1) on at least one ring`);
     }
   });
 

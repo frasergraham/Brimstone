@@ -16,7 +16,7 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { generateMap, generateMultipleStarts, MAP_SIZES } from '../src/map.js';
-import { TileType, BuildingType } from '../src/tiles.js';
+import { TileType, BuildingType, PathType, StructureType, baseOf, pathOf, legacyTileType } from '../src/tiles.js';
 import { hexKey, hexDistance } from '../src/hex.js';
 
 const SIZES = ['skirmish', 'standard', 'regional'];
@@ -63,12 +63,32 @@ describe('Spawn buildings (INN & GRAVEYARD)', () => {
         const { tiles } = generateMap(seed, size);
         let innCount = 0, gravCount = 0;
         for (const t of tiles.values()) {
-          if (t.type !== TileType.BUILDING) continue;
+          if (legacyTileType(t) !== TileType.BUILDING) continue;
           if (t.building === BuildingType.INN) innCount++;
           else if (t.building === BuildingType.GRAVEYARD) gravCount++;
         }
         assert.equal(innCount, 1, `${size} seed=${seed}: expected 1 INN, got ${innCount}`);
         assert.equal(gravCount, 1, `${size} seed=${seed}: expected 1 GRAVEYARD, got ${gravCount}`);
+      }
+    }
+  });
+
+  test('procedural map gen never places DOCK or MILL', () => {
+    // Water buildings (DOCK, MILL) are no longer placed by procedural gen.
+    // They remain valid enum values for the Mission Editor / explicit placement,
+    // but the random pool ignores them. Iterate broadly to confirm the harbor
+    // template (which still lists them, as a record of intent) silently drops
+    // them.
+    for (const size of ['standard', 'regional', 'campaign']) {
+      for (let seed = 0; seed < 12; seed++) {
+        const { tiles } = generateMap(seed, size);
+        for (const t of tiles.values()) {
+          if (legacyTileType(t) !== TileType.BUILDING) continue;
+          assert.ok(
+            t.building !== BuildingType.DOCK && t.building !== BuildingType.MILL,
+            `${size} seed=${seed}: unexpected ${t.building} placed by procedural gen at ${t.col},${t.row}`,
+          );
+        }
       }
     }
   });
@@ -112,9 +132,9 @@ describe('Starting positions are walkable', () => {
         const { tiles, heroStart, witchStart } = generateMap(seed, size);
         const hT = tiles.get(hexKey(heroStart.col, heroStart.row));
         const wT = tiles.get(hexKey(witchStart.col, witchStart.row));
-        assert.notEqual(hT.type, TileType.RIVER,
+        assert.notEqual(legacyTileType(hT), TileType.RIVER,
           `${size} seed=${seed}: heroStart is on RIVER`);
-        assert.notEqual(wT.type, TileType.RIVER,
+        assert.notEqual(legacyTileType(wT), TileType.RIVER,
           `${size} seed=${seed}: witchStart is on RIVER`);
       }
     }
@@ -131,7 +151,7 @@ describe('Bridge counts respect preset bounds', () => {
         const { tiles } = generateMap(seed, size);
         let bridges = 0;
         for (const t of tiles.values()) {
-          if (t.type === TileType.BRIDGE) bridges++;
+          if (legacyTileType(t) === TileType.BRIDGE) bridges++;
         }
         assert.ok(bridges >= cfg.minBridges,
           `${size} seed=${seed}: ${bridges} bridges < min ${cfg.minBridges}`);
@@ -139,6 +159,122 @@ describe('Bridge counts respect preset bounds', () => {
           `${size} seed=${seed}: ${bridges} bridges > max ${cfg.bridgeMax}`);
       }
     }
+  });
+});
+
+// ── Layered tile model (P2: generation writes base/structure/path) ───────────
+// Generation now sets the explicit (base, structure, path) layers rather than
+// overwriting the single `type`. These invariants pin the layer semantics:
+//   - base is always one of grass/forest/dirt
+//   - rivers/bridges are PATH overlays that preserve their base material
+//   - buildings are a STRUCTURE with NO path (road-through lives in roadDirs)
+
+describe('Layered tile model', () => {
+  test('every tile has a valid base material and consistent derived type', () => {
+    for (const size of SIZES) {
+      for (let seed = 0; seed < 4; seed++) {
+        const { tiles } = generateMap(seed, size);
+        for (const t of tiles.values()) {
+          assert.ok([TileType.GRASS, TileType.FOREST, TileType.DIRT].includes(baseOf(t)),
+            `${size} seed=${seed}: tile (${t.col},${t.row}) has invalid base "${baseOf(t)}"`);
+          // The derived legacy type must follow the documented precedence.
+          if (pathOf(t) === PathType.RIVER)       assert.equal(legacyTileType(t), TileType.RIVER);
+          else if (pathOf(t) === PathType.BRIDGE) assert.equal(legacyTileType(t), TileType.BRIDGE);
+          else if (pathOf(t) === PathType.ROAD)   assert.equal(legacyTileType(t), TileType.ROAD);
+          else if (t.structure === StructureType.BUILDING) assert.equal(legacyTileType(t), TileType.BUILDING);
+          else assert.equal(legacyTileType(t), baseOf(t));
+        }
+      }
+    }
+  });
+
+  test('river tiles are a path overlay over a base (base preserved under water)', () => {
+    for (const size of SIZES) {
+      for (let seed = 0; seed < 4; seed++) {
+        const { tiles } = generateMap(seed, size);
+        for (const t of tiles.values()) {
+          if (legacyTileType(t) !== TileType.RIVER) continue;
+          assert.equal(pathOf(t), PathType.RIVER);
+          // River was carved onto the grass fill before anything else.
+          assert.equal(baseOf(t), TileType.GRASS,
+            `${size} seed=${seed}: river (${t.col},${t.row}) base "${baseOf(t)}" not grass`);
+        }
+      }
+    }
+  });
+
+  test('building tiles carry structure + path=none; sit on cleared dirt/grass (never forest)', () => {
+    for (const size of SIZES) {
+      for (let seed = 0; seed < 6; seed++) {
+        const { tiles } = generateMap(seed, size);
+        let connectedBuildings = 0;
+        let dirtBases = 0, grassBases = 0;
+        for (const t of tiles.values()) {
+          if (legacyTileType(t) !== TileType.BUILDING) continue;
+          assert.equal(t.structure, StructureType.BUILDING,
+            `${size} seed=${seed}: building (${t.col},${t.row}) missing structure marker`);
+          // P0 semantics: a building never carries a path; road-through is roadDirs.
+          assert.equal(pathOf(t), null,
+            `${size} seed=${seed}: building (${t.col},${t.row}) must not have a path layer`);
+          // Operator-locked: a building clears its tile, so the base is dirt or
+          // grass — NEVER forest (and never a river/bridge, which would be a path).
+          assert.ok([TileType.DIRT, TileType.GRASS].includes(baseOf(t)),
+            `${size} seed=${seed}: building (${t.col},${t.row}) base "${baseOf(t)}" not dirt/grass`);
+          assert.notEqual(baseOf(t), TileType.FOREST,
+            `${size} seed=${seed}: building (${t.col},${t.row}) must never sit on forest`);
+          if (baseOf(t) === TileType.DIRT) dirtBases++;
+          else grassBases++;
+          if (t.roadDirs.size > 0) connectedBuildings++;
+        }
+        // The road MST connects buildings, so at least some are road-linked.
+        assert.ok(connectedBuildings > 0,
+          `${size} seed=${seed}: expected some buildings to be road-connected via roadDirs`);
+        // Sanity: there ARE buildings (so the never-forest assertions ran).
+        assert.ok(dirtBases + grassBases > 0,
+          `${size} seed=${seed}: no buildings found`);
+      }
+    }
+  });
+
+  test('building bases vary between dirt and grass across maps (not always dirt)', () => {
+    // Aggregate across seeds: the variety knob should produce BOTH dirt-based and
+    // grass-based building tiles somewhere in the population.
+    let dirt = 0, grass = 0;
+    for (const size of SIZES) {
+      for (let seed = 0; seed < 8; seed++) {
+        const { tiles } = generateMap(seed, size);
+        for (const t of tiles.values()) {
+          if (legacyTileType(t) !== TileType.BUILDING) continue;
+          if (baseOf(t) === TileType.DIRT) dirt++;
+          else if (baseOf(t) === TileType.GRASS) grass++;
+        }
+      }
+    }
+    assert.ok(dirt > 0, 'expected some buildings on a dirt base');
+    assert.ok(grass > 0, 'expected some buildings on a grass base');
+  });
+
+  test('road tiles are a path overlay that preserves their crossed base material', () => {
+    // Roads now grow AFTER forest/dirt, so a road preserves whatever terrain it
+    // crosses: grass, forest, or dirt (operator-locked: roads preserve terrain).
+    const baseHistogram = { [TileType.GRASS]: 0, [TileType.FOREST]: 0, [TileType.DIRT]: 0 };
+    for (const size of SIZES) {
+      for (let seed = 0; seed < 4; seed++) {
+        const { tiles } = generateMap(seed, size);
+        for (const t of tiles.values()) {
+          if (legacyTileType(t) !== TileType.ROAD) continue;
+          assert.equal(pathOf(t), PathType.ROAD);
+          const b = baseOf(t);
+          assert.ok([TileType.GRASS, TileType.FOREST, TileType.DIRT].includes(b),
+            `${size} seed=${seed}: road (${t.col},${t.row}) has invalid base "${b}"`);
+          baseHistogram[b]++;
+        }
+      }
+    }
+    // Roads should land on more than just grass now — at least one road over a
+    // non-grass base must exist across the sampled maps.
+    assert.ok(baseHistogram[TileType.FOREST] + baseHistogram[TileType.DIRT] > 0,
+      `expected some roads over forest/dirt, got ${JSON.stringify(baseHistogram)}`);
   });
 });
 
@@ -175,7 +311,7 @@ describe('generateMultipleStarts', () => {
       for (const p of out) {
         const t = tiles.get(hexKey(p.col, p.row));
         assert.ok(t, `count=${n}: position (${p.col},${p.row}) has no tile`);
-        assert.notEqual(t.type, TileType.RIVER,
+        assert.notEqual(legacyTileType(t), TileType.RIVER,
           `count=${n}: position (${p.col},${p.row}) is on RIVER`);
       }
     }

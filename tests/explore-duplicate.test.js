@@ -9,7 +9,7 @@ import { GameState } from '../src/game.js';
 import { PlanActionType } from '../src/planner.js';
 import { hexKey, getNeighbors } from '../src/hex.js';
 import { createSurvivor } from '../src/entities.js';
-import { TileType, BuildingType } from '../src/tiles.js';
+import { TileType, BuildingType, legacyTileType, decomposeTileType } from '../src/tiles.js';
 
 function freshState() {
   return new GameState(true, true);
@@ -39,7 +39,7 @@ describe('explore — no duplicate results across multiple explores', () => {
     let survivorHex = null;
     for (const n of neighbors) {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      if (t && t.type !== TileType.RIVER &&
+      if (t && legacyTileType(t) !== TileType.RIVER &&
           !state.entities.some(e => e.alive && e.col === n.col && e.row === n.row)) {
         survivorHex = n;
         break;
@@ -54,12 +54,12 @@ describe('explore — no duplicate results across multiple explores', () => {
 
     const heroTile = state.tiles.get(hexKey(hero.col, hero.row));
     heroTile.explored = false;
-    heroTile.type = TileType.BUILDING;
+    decomposeTileType(heroTile, TileType.BUILDING);
     heroTile.building = BuildingType.INN;
 
     const survTile = state.tiles.get(hexKey(survivorHex.col, survivorHex.row));
     survTile.explored = false;
-    survTile.type = TileType.BUILDING;
+    decomposeTileType(survTile, TileType.BUILDING);
     survTile.building = BuildingType.BLACKSMITH;
 
     const heroPlan = [
@@ -89,7 +89,7 @@ describe('explore — no duplicate results across multiple explores', () => {
     let tile1 = null, tile2 = null;
     for (const n of neighbors) {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      if (!t || t.type === TileType.RIVER) continue;
+      if (!t || legacyTileType(t) === TileType.RIVER) continue;
       if (state.entities.some(e => e.alive && e.col === n.col && e.row === n.row && e.id !== hero.id)) continue;
       if (!tile1) { tile1 = n; continue; }
       // tile2 must be a neighbor of tile1 for the second move
@@ -103,9 +103,9 @@ describe('explore — no duplicate results across multiple explores', () => {
 
     // Set both tiles as unexplored buildings
     const t1 = state.tiles.get(hexKey(tile1.col, tile1.row));
-    t1.explored = false; t1.type = TileType.BUILDING; t1.building = BuildingType.INN;
+    t1.explored = false; decomposeTileType(t1, TileType.BUILDING); t1.building = BuildingType.INN;
     const t2 = state.tiles.get(hexKey(tile2.col, tile2.row));
-    t2.explored = false; t2.type = TileType.BUILDING; t2.building = BuildingType.BLACKSMITH;
+    t2.explored = false; decomposeTileType(t2, TileType.BUILDING); t2.building = BuildingType.BLACKSMITH;
 
     const heroPlan = [
       { type: PlanActionType.MOVE, entityId: hero.id, toCol: tile1.col, toRow: tile1.row },

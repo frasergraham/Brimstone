@@ -14,6 +14,8 @@ import {
   FOREST_SCALE_MAX,
   FOREST_TREES_MIN,
   FOREST_TREES_MAX,
+  FOREST_DENSITY_SCALE,
+  scaledForestTreeCount,
   // Power-node constants
   NODE_GLOW_COLORS,
   NODE_DISC_EMISSIVE_MUL,
@@ -22,13 +24,16 @@ import {
 } from '../src/renderer-3d.js';
 
 describe('Renderer3D — forestTreesForHex layout', () => {
-  test('returns FOREST_TREES_MIN..MAX trees for every probed hex', () => {
+  test('returns density-scaled FOREST_TREES_MIN..MAX trees for every probed hex', () => {
+    // Raw 3–5 range is scaled by FOREST_DENSITY_SCALE (40% fewer trees).
+    const lo = scaledForestTreeCount(FOREST_TREES_MIN, FOREST_DENSITY_SCALE);
+    const hi = scaledForestTreeCount(FOREST_TREES_MAX, FOREST_DENSITY_SCALE);
     for (let col = -5; col <= 5; col++) {
       for (let row = -5; row <= 5; row++) {
         const t = forestTreesForHex(col, row);
         assert.ok(
-          t.length >= FOREST_TREES_MIN && t.length <= FOREST_TREES_MAX,
-          `(${col},${row}) got ${t.length} trees, expected ${FOREST_TREES_MIN}..${FOREST_TREES_MAX}`,
+          t.length >= lo && t.length <= hi,
+          `(${col},${row}) got ${t.length} trees, expected ${lo}..${hi}`,
         );
       }
     }

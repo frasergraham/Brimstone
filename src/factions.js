@@ -8,7 +8,7 @@
 
 import { Phase } from './game.js';
 import { EntityType, SurvivorAbility, createHero, createWitch, createSurvivor, createZombie, createMinion, createWoodGolem, createIronGolem, createRogue, createCaptain, createNecromancer, createBrute, isLeaderType } from './entities.js';
-import { ResourceType, TileType, BuildingType, rollLoot } from './tiles.js';
+import { ResourceType, BuildingType, rollLoot, hasBuilding, isRiver } from './tiles.js';
 import { hexKey, getNeighbors } from './hex.js';
 import { AI_HERO_NAMES, AI_WITCH_NAMES } from './ai-names.js';
 import { Side, getOpposingSide as _opposingSide } from './sides.js';
@@ -160,7 +160,7 @@ export class Faction {
    * Create the entity discovered when this faction explores a hidden survivor tile.
    * @returns {object} entity
    */
-  createDiscoveryEntity(_col, _row, _ownerId, _state) {
+  createDiscoveryEntity(_col, _row, _ownerId, _state, _forcedSurvivorId) {
     throw new Error('Subclass must implement createDiscoveryEntity');
   }
 
@@ -300,7 +300,7 @@ export class Faction {
    * @param {boolean} hasScout - whether the unit has SCOUT ability
    * @returns {number}
    */
-  getSightRange(_phase, _hasScout) { return 2; }
+  getSightRange(_phase, _hasScout) { return 5; }
 
   // ── Entity Registry ──
 
@@ -386,7 +386,7 @@ export class HeroFaction extends Faction {
     );
     for (const hero of heroLeaders) {
       const heroTile = state.tiles.get(hexKey(hero.col, hero.row));
-      if (heroTile?.type === TileType.BUILDING && hero.hp < hero.maxHp) {
+      if (hasBuilding(heroTile) && hero.hp < hero.maxHp) {
         const b = heroTile.building;
         if (b === BuildingType.INN) {
           hero.heal(3);
@@ -431,7 +431,7 @@ export class HeroFaction extends Faction {
         for (const clusterHex of obj.hexes) {
           const n = getNeighbors(clusterHex.col, clusterHex.row).find(nb => {
             const t = state.tiles.get(hexKey(nb.col, nb.row));
-            return t && t.type !== TileType.RIVER &&
+            return t && !isRiver(t) &&
               !state.entities.some(e => e.alive && e.col === nb.col && e.row === nb.row);
           });
           if (n) return n;
@@ -468,8 +468,8 @@ export class HeroFaction extends Faction {
   }
 
   // Discovery & Loot
-  createDiscoveryEntity(col, row, ownerId, state = null) {
-    const s = createSurvivor(col, row, ownerId, state);
+  createDiscoveryEntity(col, row, ownerId, state = null, forcedSurvivorId = null) {
+    const s = createSurvivor(col, row, ownerId, state, forcedSurvivorId);
     s.owner = 'hero';
     return s;
   }
@@ -501,13 +501,14 @@ export class HeroFaction extends Faction {
     return `Found ${_lootType}! Added to shared supplies.`;
   }
 
-  // Visibility — phase-dependent, scout bonus
+  // Visibility — phase-dependent base range (LOS-blocked by buildings/forests
+  // in computeLineOfSight). Day 6, Dawn/Dusk 4, Night 3. Scout adds +1.
   getSightRange(phase, hasScout = false) {
     let base;
     switch (phase) {
-      case Phase.DAY:   base = 3; break;
-      case Phase.NIGHT: base = 1; break;
-      default:          base = 2; break; // DAWN, DUSK
+      case Phase.DAY:   base = 6; break;
+      case Phase.NIGHT: base = 3; break;
+      default:          base = 4; break; // DAWN, DUSK
     }
     return base + (hasScout ? 1 : 0);
   }
@@ -595,8 +596,8 @@ export class WitchFaction extends Faction {
     return `${actor.displayName} secures ${lootType} for dark rituals.`;
   }
 
-  // Visibility — fixed 2 hex range, no phase dependency
-  getSightRange(_phase, _hasScout) { return 2; }
+  // Visibility — fixed 5 hex range, no phase dependency (LOS-blocked).
+  getSightRange(_phase, _hasScout) { return 5; }
 
   // Entity Registry
   getUnitTypes() {
@@ -670,12 +671,12 @@ export class RogueFaction extends HeroFaction {
   onAfterMoveStep(state, actor, col, row) {
     const hits = [];
     const here = state.tiles.get(hexKey(col, row));
-    if (here?.type === TileType.BUILDING && here.hiddenSurvivor) {
+    if (hasBuilding(here) && here.hiddenSurvivor) {
       hits.push({ col, row });
     }
     for (const n of getNeighbors(col, row)) {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      if (t?.type === TileType.BUILDING && t.hiddenSurvivor) {
+      if (hasBuilding(t) && t.hiddenSurvivor) {
         hits.push({ col: n.col, row: n.row });
       }
     }
@@ -761,12 +762,12 @@ export class BruteFaction extends WitchFaction {
   onAfterMoveStep(state, actor, col, row) {
     const hits = [];
     const here = state.tiles.get(hexKey(col, row));
-    if (here?.type === TileType.BUILDING && here.hiddenSurvivor) {
+    if (hasBuilding(here) && here.hiddenSurvivor) {
       hits.push({ col, row });
     }
     for (const n of getNeighbors(col, row)) {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      if (t?.type === TileType.BUILDING && t.hiddenSurvivor) {
+      if (hasBuilding(t) && t.hiddenSurvivor) {
         hits.push({ col: n.col, row: n.row });
       }
     }

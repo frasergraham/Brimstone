@@ -1,6 +1,7 @@
 // Tests for reusing the unit-selection popup for defender picking and enemy info.
 
 import { describe, test } from 'node:test';
+import { legacyTileType } from '../src/tiles.js';
 import assert from 'node:assert/strict';
 import { GameState } from '../src/game.js';
 import { EntityType, createMinion, createSurvivor } from '../src/entities.js';
@@ -17,7 +18,7 @@ describe('defender picker reuses unit-selection popup', () => {
     const heroNeighbors = getNeighbors(state.hero.col, state.hero.row);
     const targetHex = heroNeighbors.find(n => {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      return t && t.type !== 'river';
+      return t && legacyTileType(t) !== 'river';
     });
     assert.ok(targetHex, 'need a passable hex near the hero');
 
@@ -45,7 +46,7 @@ describe('enemy info disambiguation', () => {
     const neighbors = getNeighbors(hero.col, hero.row);
     const targetHex = neighbors.find(n => {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      return t && t.type !== 'river' &&
+      return t && legacyTileType(t) !== 'river' &&
         !state.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
     });
     assert.ok(targetHex, 'need an empty passable hex near hero');
@@ -74,7 +75,7 @@ describe('enemy info disambiguation', () => {
     const neighbors = getNeighbors(hero.col, hero.row);
     const targetHex = neighbors.find(n => {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      return t && t.type !== 'river' &&
+      return t && legacyTileType(t) !== 'river' &&
         !state.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
     });
     assert.ok(targetHex, 'need an empty passable hex near hero');

@@ -21,41 +21,42 @@ import {
   SUN_SHADOW_BIAS,
   SUN_SHADOW_DARKNESS,
   lerpLightConfig,
+  resolveSunDirPair,
+  sunDirectionForRound,
+  phaseProgressForRound,
 } from '../src/renderer-3d.js';
 import { Phase } from '../src/game.js';
 
 describe('Renderer3D — sunDirectionForPhase', () => {
-  test('dawn shines from the east at a low angle', () => {
+  test('dawn dir reads as the dawn-side rising-sun fallback (low east sun)', () => {
+    // sunDirectionForPhase returns the phase's dirStart in isolation; for
+    // dawn that's the legacy `sun.dir` fallback used on custom cycle configs.
     const d = sunDirectionForPhase(Phase.DAWN);
-    assert.ok(d.x < 0, 'dawn x negative (sun east of map)');
+    assert.ok(d.x < 0, 'dawn fallback x negative (sun east of map)');
     assert.ok(d.y < 0, 'dawn y < 0 (light travels downward)');
-    // Low sun: the horizontal component must dominate the vertical so we get
-    // long, raked shadows rather than near-overhead noon shadows.
     assert.ok(Math.abs(d.x) > Math.abs(d.y),
       `dawn |x|=${Math.abs(d.x)} should exceed |y|=${Math.abs(d.y)} (low sun, near horizon)`);
   });
 
-  test('day sun is dominantly downward but tilted enough to cast visible shadows', () => {
+  test('day dirStart is a tilted-from-vertical rising-side sun', () => {
     const d = sunDirectionForPhase(Phase.DAY);
-    // -Y must dominate so noon reads as "from above"...
-    assert.ok(d.y < -0.7, `day y=${d.y} must be predominantly downward (< -0.7)`);
-    // ...but not be a perfect (0,-1,0) vector — a perfectly vertical sun
-    // projects a near-zero shadow offset and shadows disappear into the
-    // caster itself. Require a meaningful lateral component on at least one
-    // horizontal axis so the operator sees a visible shadow footprint.
+    // -Y must dominate so noon reads as "from above"…
+    assert.ok(d.y < -0.5, `day dirStart y=${d.y} must be predominantly downward (< -0.5)`);
+    // …but with a meaningful lateral component on at least one axis so
+    // cast shadows actually project.
     const lateral = Math.hypot(d.x, d.z);
-    assert.ok(lateral > 0.2, `day sun lateral ${lateral.toFixed(2)} must be > 0.2 so shadows actually project`);
+    assert.ok(lateral > 0.2, `day dirStart lateral ${lateral.toFixed(2)} must be > 0.2 so shadows actually project`);
   });
 
-  test('dusk mirrors dawn — shines from the west', () => {
+  test('dusk dir reads as the dusk-side setting-sun fallback (low west sun)', () => {
     const dawn = sunDirectionForPhase(Phase.DAWN);
     const dusk = sunDirectionForPhase(Phase.DUSK);
-    assert.ok(dusk.x > 0, 'dusk x positive (sun west of map)');
-    assert.equal(dusk.x, -dawn.x, 'dusk x is the mirror of dawn x');
+    assert.ok(dusk.x > 0, 'dusk fallback x positive (sun west of map)');
+    assert.equal(dusk.x, -dawn.x, 'dusk fallback x is the mirror of dawn');
     assert.equal(dusk.y, dawn.y, 'dusk and dawn share the same low pitch');
   });
 
-  test('night direction is defined (intensity 0 makes it irrelevant)', () => {
+  test('night direction is defined (intensity low makes it moonlight)', () => {
     const d = sunDirectionForPhase(Phase.NIGHT);
     assert.ok(typeof d.x === 'number' && Number.isFinite(d.x));
     assert.ok(typeof d.y === 'number' && Number.isFinite(d.y));
@@ -63,10 +64,100 @@ describe('Renderer3D — sunDirectionForPhase', () => {
   });
 
   test('unknown phase falls back to day direction (defensive)', () => {
-    assert.deepEqual(sunDirectionForPhase('starlight-aurora'),
-      PHASE_LIGHT_CONFIG.day.sun.dir);
-    assert.deepEqual(sunDirectionForPhase(undefined), PHASE_LIGHT_CONFIG.day.sun.dir);
-    assert.deepEqual(sunDirectionForPhase(null),      PHASE_LIGHT_CONFIG.day.sun.dir);
+    const day = sunDirectionForPhase(Phase.DAY);
+    assert.deepEqual(sunDirectionForPhase('starlight-aurora'), day);
+    assert.deepEqual(sunDirectionForPhase(undefined), day);
+    assert.deepEqual(sunDirectionForPhase(null),      day);
+  });
+});
+
+describe('Renderer3D — resolveSunDirPair (schema migration)', () => {
+  test('day / night carry explicit dirStart + dirEnd', () => {
+    const day = resolveSunDirPair('day');
+    const night = resolveSunDirPair('night');
+    // Day sweeps east → west: dirStart.x < dirEnd.x.
+    assert.ok(day.dirStart.x < day.dirEnd.x,
+      `day dirStart.x=${day.dirStart.x} should be < dirEnd.x=${day.dirEnd.x} (sun rises east, sets west)`);
+    assert.ok(night.dirStart.x < night.dirEnd.x,
+      `night dirStart.x=${night.dirStart.x} should be < dirEnd.x=${night.dirEnd.x}`);
+  });
+
+  test('legacy single-`dir` phase resolves to both start and end', () => {
+    // Dawn / dusk carry only `sun.dir` (transitional fallback). The pair
+    // must collapse to that single direction for callers that don't apply
+    // neighbour-bridging.
+    for (const phase of ['dawn', 'dusk']) {
+      const pair = resolveSunDirPair(phase);
+      const dir = PHASE_LIGHT_CONFIG[phase].sun.dir;
+      assert.deepEqual(pair.dirStart, dir);
+      assert.deepEqual(pair.dirEnd, dir);
+    }
+  });
+});
+
+describe('Renderer3D — phaseProgressForRound', () => {
+  test('default cycle: dawn(1) → t=0.5, day(2,3,4) → 0/0.5/1, dusk(5) → 0.5, night(6,7,8) → 0/0.5/1', () => {
+    assert.deepEqual(phaseProgressForRound(1), { phase: 'dawn',  t: 0.5 });
+    assert.deepEqual(phaseProgressForRound(2), { phase: 'day',   t: 0 });
+    assert.deepEqual(phaseProgressForRound(3), { phase: 'day',   t: 0.5 });
+    assert.deepEqual(phaseProgressForRound(4), { phase: 'day',   t: 1 });
+    assert.deepEqual(phaseProgressForRound(5), { phase: 'dusk',  t: 0.5 });
+    assert.deepEqual(phaseProgressForRound(6), { phase: 'night', t: 0 });
+    assert.deepEqual(phaseProgressForRound(7), { phase: 'night', t: 0.5 });
+    assert.deepEqual(phaseProgressForRound(8), { phase: 'night', t: 1 });
+  });
+
+  test('cycle wraps at round 9 → dawn again', () => {
+    assert.deepEqual(phaseProgressForRound(9), { phase: 'dawn', t: 0.5 });
+    assert.deepEqual(phaseProgressForRound(10), { phase: 'day', t: 0 });
+  });
+
+  test('custom cycleConfig with single-element phase run', () => {
+    const cc = { phases: ['day', 'night'], loop: true };
+    assert.deepEqual(phaseProgressForRound(1, cc), { phase: 'day',   t: 0.5 });
+    assert.deepEqual(phaseProgressForRound(2, cc), { phase: 'night', t: 0.5 });
+  });
+});
+
+describe('Renderer3D — sunDirectionForRound (start→end sweep)', () => {
+  test('default cycle DAY rounds sweep from dirStart to dirEnd', () => {
+    const day = resolveSunDirPair('day');
+    const r2 = sunDirectionForRound(2); // t=0
+    const r3 = sunDirectionForRound(3); // t=0.5
+    const r4 = sunDirectionForRound(4); // t=1
+    assert.deepEqual(r2, day.dirStart);
+    assert.deepEqual(r4, day.dirEnd);
+    assert.ok(Math.abs(r3.x - (day.dirStart.x + day.dirEnd.x) / 2) < 1e-9);
+  });
+
+  test('default cycle NIGHT rounds sweep from dirStart to dirEnd', () => {
+    const night = resolveSunDirPair('night');
+    assert.deepEqual(sunDirectionForRound(6), night.dirStart);
+    assert.deepEqual(sunDirectionForRound(8), night.dirEnd);
+  });
+
+  test('default cycle dawn bridges NIGHT.dirEnd → DAY.dirStart at midpoint', () => {
+    const night = resolveSunDirPair('night');
+    const day   = resolveSunDirPair('day');
+    const r1 = sunDirectionForRound(1); // dawn, t=0.5
+    assert.ok(Math.abs(r1.x - (night.dirEnd.x + day.dirStart.x) / 2) < 1e-9);
+    assert.ok(Math.abs(r1.y - (night.dirEnd.y + day.dirStart.y) / 2) < 1e-9);
+    assert.ok(Math.abs(r1.z - (night.dirEnd.z + day.dirStart.z) / 2) < 1e-9);
+  });
+
+  test('default cycle dusk bridges DAY.dirEnd → NIGHT.dirStart at midpoint', () => {
+    const day   = resolveSunDirPair('day');
+    const night = resolveSunDirPair('night');
+    const r5 = sunDirectionForRound(5); // dusk, t=0.5
+    assert.ok(Math.abs(r5.x - (day.dirEnd.x + night.dirStart.x) / 2) < 1e-9);
+  });
+
+  test('custom cycleConfig disables neighbour-bridging — dawn uses its own pair', () => {
+    const cc = { phases: ['dawn', 'day'], loop: true };
+    const dawnPair = resolveSunDirPair('dawn');
+    // Round 1 = dawn, single-element phase run → t=0.5 → midpoint of own pair
+    // (which is dir-as-both for dawn, so x equals dir.x exactly).
+    assert.equal(sunDirectionForRound(1, cc).x, dawnPair.dirStart.x);
   });
 });
 
@@ -78,12 +169,15 @@ describe('Renderer3D — sunIntensityForPhase', () => {
     assert.ok(day >= 1.5, `day intensity ${day} should be ≥ 1.5`);
   });
 
-  test('dawn and dusk are mid-intensity (matching golden-hour feel)', () => {
+  test('dawn and dusk are golden-hour low raking sun (≥ midday, long shadows)', () => {
     const dawn = sunIntensityForPhase(Phase.DAWN);
     const dusk = sunIntensityForPhase(Phase.DUSK);
-    assert.equal(dawn, dusk);
-    assert.ok(dawn > 0.5 && dawn < sunIntensityForPhase(Phase.DAY),
-      `dawn/dusk intensity ${dawn} should sit between night and day`);
+    // Operator-tuned (PHASE_LIGHT_CONFIG): dawn/dusk run a touch hotter than
+    // midday so the low-angle raking sun throws long, strong shadows. They
+    // sit close to each other but are no longer pinned exactly equal.
+    assert.ok(Math.abs(dawn - dusk) < 0.2, `dawn ${dawn} ≈ dusk ${dusk}`);
+    assert.ok(dawn >= sunIntensityForPhase(Phase.DAY),
+      `dawn/dusk intensity ${dawn} should be at least as strong as midday`);
   });
 
   test('night sun acts as moonlight — dimmer than day but bright enough to cast shadows', () => {
@@ -93,14 +187,14 @@ describe('Renderer3D — sunIntensityForPhase', () => {
     assert.ok(night < day, `night ${night} should be dimmer than day ${day}`);
   });
 
-  test('day > dawn = dusk > night ordering', () => {
+  test('dawn ≈ dusk ≥ day > night ordering (golden-hour raking sun, moonlit night)', () => {
     const day   = sunIntensityForPhase(Phase.DAY);
     const dawn  = sunIntensityForPhase(Phase.DAWN);
     const dusk  = sunIntensityForPhase(Phase.DUSK);
     const night = sunIntensityForPhase(Phase.NIGHT);
-    assert.ok(day > dawn, 'day brighter than dawn');
-    assert.equal(dawn, dusk, 'dawn matches dusk');
-    assert.ok(dusk > night, 'dusk brighter than night');
+    assert.ok(dawn >= day, 'dawn at least as strong as day (low raking sun)');
+    assert.ok(Math.abs(dawn - dusk) < 0.2, 'dawn ≈ dusk');
+    assert.ok(day > night, 'day brighter than moonlit night');
   });
 
   test('unknown phase falls back to day intensity (defensive)', () => {
@@ -144,6 +238,16 @@ describe('Renderer3D — shadow generator constants', () => {
 describe('Renderer3D — lerpLightConfig with sun', () => {
   const dawn = PHASE_LIGHT_CONFIG.dawn;
   const day  = PHASE_LIGHT_CONFIG.day;
+  // `dawn` carries a legacy `sun.dir`; `day` carries a `sun.dirStart` pair.
+  // The lerp picks a representative `dir` (legacy if present, else
+  // dirStart/dirEnd midpoint) so transitions degrade gracefully across both
+  // schemas — the renderer overrides sun.dir per-frame from
+  // sunDirectionForRound anyway, so this is only consumed by snapshot callers.
+  const dayDirRep = {
+    x: (day.sun.dirStart.x + day.sun.dirEnd.x) / 2,
+    y: (day.sun.dirStart.y + day.sun.dirEnd.y) / 2,
+    z: (day.sun.dirStart.z + day.sun.dirEnd.z) / 2,
+  };
 
   test('t=0 returns the from snapshot, including sun', () => {
     const r = lerpLightConfig(dawn, day, 0);
@@ -156,16 +260,16 @@ describe('Renderer3D — lerpLightConfig with sun', () => {
 
   test('t=1 returns the to snapshot, including sun', () => {
     const r = lerpLightConfig(dawn, day, 1);
-    assert.equal(r.sun.dir.x, day.sun.dir.x);
-    assert.equal(r.sun.dir.y, day.sun.dir.y);
+    assert.ok(Math.abs(r.sun.dir.x - dayDirRep.x) < 1e-9);
+    assert.ok(Math.abs(r.sun.dir.y - dayDirRep.y) < 1e-9);
     assert.equal(r.sun.intensity, day.sun.intensity);
   });
 
   test('t=0.5 sits at the midpoint of sun fields', () => {
     const r = lerpLightConfig(dawn, day, 0.5);
     const mid = (a, b) => (a + b) / 2;
-    assert.ok(Math.abs(r.sun.dir.x - mid(dawn.sun.dir.x, day.sun.dir.x)) < 1e-9);
-    assert.ok(Math.abs(r.sun.dir.y - mid(dawn.sun.dir.y, day.sun.dir.y)) < 1e-9);
+    assert.ok(Math.abs(r.sun.dir.x - mid(dawn.sun.dir.x, dayDirRep.x)) < 1e-9);
+    assert.ok(Math.abs(r.sun.dir.y - mid(dawn.sun.dir.y, dayDirRep.y)) < 1e-9);
     assert.ok(Math.abs(r.sun.intensity - mid(dawn.sun.intensity, day.sun.intensity)) < 1e-9);
   });
 
@@ -179,14 +283,19 @@ describe('Renderer3D — lerpLightConfig with sun', () => {
     assert.equal(r.sun, undefined, 'no sun on output when input missing');
   });
 
-  test('every phase config carries a sun sub-config', () => {
+  test('every phase config carries a sun sub-config with intensity + a direction', () => {
     for (const p of ['dawn', 'day', 'dusk', 'night']) {
       const cfg = PHASE_LIGHT_CONFIG[p];
       assert.ok(cfg.sun, `${p} should have a sun sub-config`);
       assert.equal(typeof cfg.sun.intensity, 'number', `${p} sun.intensity is numeric`);
-      assert.equal(typeof cfg.sun.dir.x, 'number');
-      assert.equal(typeof cfg.sun.dir.y, 'number');
-      assert.equal(typeof cfg.sun.dir.z, 'number');
+      // Either schema is valid: legacy `dir` (dawn/dusk) or new `dirStart/dirEnd` (day/night).
+      const hasLegacy = cfg.sun.dir
+        && typeof cfg.sun.dir.x === 'number'
+        && typeof cfg.sun.dir.y === 'number'
+        && typeof cfg.sun.dir.z === 'number';
+      const hasPair = cfg.sun.dirStart && cfg.sun.dirEnd
+        && typeof cfg.sun.dirStart.x === 'number' && typeof cfg.sun.dirEnd.x === 'number';
+      assert.ok(hasLegacy || hasPair, `${p}: sun must carry either dir or {dirStart,dirEnd}`);
     }
   });
 });

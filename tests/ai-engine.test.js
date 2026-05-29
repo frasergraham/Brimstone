@@ -6,7 +6,7 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Phase } from '../src/game.js';
 import { EntityType } from '../src/entities.js';
-import { TileType, ResourceType } from '../src/tiles.js';
+import { TileType, ResourceType, StructureType } from '../src/tiles.js';
 import { hexKey } from '../src/hex.js';
 import { PlanSimState } from '../src/ai.js';
 import {
@@ -229,8 +229,8 @@ describe('assessBoard', () => {
   test('unexploredBuildings only includes unexplored BUILDING tiles', () => {
     const tiles = new Map();
     tiles.set(hexKey(0, 0), { col: 0, row: 0, type: TileType.GRASS, explored: true });
-    tiles.set(hexKey(1, 0), { col: 1, row: 0, type: TileType.BUILDING, explored: false });
-    tiles.set(hexKey(2, 0), { col: 2, row: 0, type: TileType.BUILDING, explored: true });
+    tiles.set(hexKey(1, 0), { col: 1, row: 0, type: TileType.BUILDING, structure: StructureType.BUILDING, explored: false });
+    tiles.set(hexKey(2, 0), { col: 2, row: 0, type: TileType.BUILDING, structure: StructureType.BUILDING, explored: true });
     tiles.set(hexKey(3, 0), { col: 3, row: 0, type: TileType.GRASS, explored: false });
     const sim = makeSim({ tiles });
     const board = assessBoard(sim);

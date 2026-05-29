@@ -21,6 +21,12 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
+const _here = dirname(fileURLToPath(import.meta.url));
+const _renderer3dSrc = readFileSync(join(_here, '..', 'src', 'renderer-3d.js'), 'utf8');
 
 import {
   hexToWorld,
@@ -33,6 +39,7 @@ import {
   FLOAT_TEXT_PLANE_HEIGHT,
   FLOAT_TEXT_TEX_WIDTH,
   FLOAT_TEXT_TEX_HEIGHT,
+  FLOAT_TEXT_DAMAGE_SIZE_MUL,
   paintFloaterText,
   HP_BAR_Y_ABOVE_BASE,
   HP_RED_BELOW,
@@ -48,6 +55,9 @@ import {
   hpRingFraction,
     iconBillboardY,
   iconBillboardYRelativeToCone,
+  iconBillboardYForScale,
+  headTopRelativeToCone,
+  UNIT_ICON_MIN_SCALE,
   paintUnitIconBadge,
   resolveUnitIconPortrait,
   applyFlatUnitIconMaterial,
@@ -70,6 +80,30 @@ describe('Renderer3D Phase 5 — anim duration constants', () => {
   test('LUNGE_ANIM_MS < MOVE_ANIM_MS (sharper, snappier feel)', () => {
     assert.ok(LUNGE_ANIM_MS < MOVE_ANIM_MS,
       `expected LUNGE_ANIM_MS (${LUNGE_ANIM_MS}) < MOVE_ANIM_MS (${MOVE_ANIM_MS})`);
+  });
+
+  test('LUNGE_ANIM_MS is ~2× faster than the legacy 800ms (operator feel)', () => {
+    // Operator: the lunge "takes a little too long — about twice as fast".
+    // Halved from 800 → 400. Pin to a tight band so it can't silently
+    // regress back toward the old sluggish glide.
+    assert.ok(LUNGE_ANIM_MS >= 350 && LUNGE_ANIM_MS <= 450,
+      `expected LUNGE_ANIM_MS in [350, 450] (≈half of legacy 800), got ${LUNGE_ANIM_MS}`);
+  });
+
+  test('addLungeAnim attaches an ease-OUT easing to the lunge X/Z slide', () => {
+    // Babylon mesh wiring can't run under node:test, so guard the contract
+    // at the source level: the lunge animations must build a CubicEase set
+    // to EASINGMODE_EASEOUT and attach it to both position tracks (fast
+    // launch → decelerate into the strike, not the old ramp-up feel).
+    const start = _renderer3dSrc.indexOf('addLungeAnim(entityId');
+    const body = _renderer3dSrc.slice(
+      start,
+      _renderer3dSrc.indexOf('returnAllLungeAnims() {', start),
+    );
+    assert.match(body, /new BABYLON\.CubicEase\(\)/, 'lunge should build a CubicEase');
+    assert.match(body, /EASINGMODE_EASEOUT/, 'lunge easing mode should be EASEOUT');
+    assert.match(body, /animX\.setEasingFunction\(/, 'ease must attach to animX');
+    assert.match(body, /animZ\.setEasingFunction\(/, 'ease must attach to animZ');
   });
 
   test('PROJECTILE_ANIM_MS matches the 2D renderer default (≈320ms)', () => {
@@ -131,22 +165,121 @@ describe('Renderer3D — paintFloaterText (pure helper)', () => {
     assert.deepEqual(ops, ['clearRect']);
   });
 
-  test('paints pill background, then black outline stroke, then fill', () => {
+  test('no pill backdrop in any variant — just outline + fill', () => {
+    // Operator brief: drop the pill backdrop globally. The chrome was reading
+    // sticker-y across every caller (damage, loot, fortify, miss). Outlined
+    // text alone carries the label against any terrain.
     const ctx = makeMockCtx();
     paintFloaterText(ctx, {
       width: 512, height: 192, text: 'CRUSH 3', fillColor: '#ff5050',
     });
     const ops = ctx.calls.map(c => c[0]);
-    const fillIdx     = ops.indexOf('fill');             // pill
-    const strokeIdx   = ops.indexOf('strokeText');       // outline
-    const fillTextIdx = ops.indexOf('fillText');         // text
-    assert.ok(fillIdx     >= 0, 'expected pill background fill()');
-    assert.ok(strokeIdx   >  fillIdx,     'outline stroke must come after pill');
-    assert.ok(fillTextIdx >  strokeIdx,   'text fill must come after outline');
+    assert.equal(ops.indexOf('fill'), -1,
+      'no backdrop pill — fill() must not be called');
+    assert.equal(ops.indexOf('beginPath'), -1,
+      'no backdrop pill — the rounded-rect path must not be built');
+    assert.equal(ops.indexOf('arcTo'), -1,
+      'no backdrop pill — no rounded-pill arcs');
+    // Only the text fillStyle is set (no semi-opaque pill fillStyle).
+    const fillStyles = ctx.calls.filter(c => c[0] === 'fillStyle').map(c => c[1]);
+    assert.deepEqual(fillStyles, ['#ff5050'],
+      'exactly one fillStyle — the text colour, no backdrop');
+    // Outlined text + filled text still present so the number reads against
+    // any terrain even without the pill.
+    assert.ok(ops.indexOf('strokeText') >= 0, 'still strokes the text outline');
+    assert.ok(ops.indexOf('fillText')   >  ops.indexOf('strokeText'),
+      'still fills the text after stroke');
     const strokeStyles = ctx.calls.filter(c => c[0] === 'strokeStyle').map(c => c[1]);
     assert.ok(strokeStyles.includes('#000'), 'text outline should be black');
-    const fillStyles = ctx.calls.filter(c => c[0] === 'fillStyle').map(c => c[1]);
-    assert.ok(fillStyles.includes('#ff5050'), 'fillColor should be applied to the text');
+  });
+
+  test('damage variant also skips the pill backdrop', () => {
+    const ctx = makeMockCtx();
+    paintFloaterText(ctx, {
+      width: 512, height: 192, text: '-2', fillColor: '#ff5050',
+      variant: 'damage',
+    });
+    const ops = ctx.calls.map(c => c[0]);
+    assert.equal(ops.indexOf('fill'), -1, 'damage variant should not paint a backdrop');
+    assert.equal(ops.indexOf('beginPath'), -1, 'no pill path');
+    assert.equal(ops.indexOf('arcTo'), -1, 'no rounded pill arcs');
+    assert.ok(ops.indexOf('strokeText') >= 0, 'damage variant still strokes the text outline');
+    assert.ok(ops.indexOf('fillText')   >  ops.indexOf('strokeText'),
+      'damage variant still fills the text after stroke');
+  });
+
+  test('default variant (omitted variant) also drops the pill', () => {
+    const ctx = makeMockCtx();
+    paintFloaterText(ctx, { width: 512, height: 192, text: '+1' });
+    const ops = ctx.calls.map(c => c[0]);
+    assert.equal(ops.indexOf('fill'), -1,
+      'omitted variant should also have no pill backdrop (global drop)');
+  });
+});
+
+// ─── Standee despawn protection — death floater rises before dispose ──────
+
+describe('Renderer3D — _syncEntityStandees honours _pendingDespawn', () => {
+  // Lightweight harness: pull just the source body of _syncEntityStandees's
+  // dispose loop into a regex so we don't need a live Babylon context.
+  // Pairs with the unit-style _entityStandees Map test below which exercises
+  // the real method on a stubbed Renderer3D instance.
+
+  test('source: dispose loop has a _pendingDespawn early-continue', () => {
+    const start = _renderer3dSrc.indexOf('_syncEntityStandees() {');
+    assert.ok(start > 0, 'expected _syncEntityStandees to be defined in source');
+    // The next sibling method banner ends our slice — keep it narrow so a
+    // _pendingDespawn check inserted in an UNRELATED method does not pass
+    // this test.
+    const end = _renderer3dSrc.indexOf('_resyncTileSlotsForStandees(', start);
+    const body = _renderer3dSrc.slice(start, end);
+    assert.match(body, /_pendingDespawn/,
+      '_syncEntityStandees should consult the _pendingDespawn flag');
+    // The guard MUST be in the disposal branch (after `if (!seen.has(id))`),
+    // not in the live-entity branch — the operator brief is about deferring
+    // standee disposal, not gating live-state updates.
+    const idxSeen   = body.indexOf('if (!seen.has(id))');
+    const idxGuard  = body.indexOf('_pendingDespawn');
+    assert.ok(idxSeen > 0,  'expected `if (!seen.has(id))` dispose branch');
+    assert.ok(idxGuard > idxSeen,
+      '_pendingDespawn guard should live inside the !seen disposal branch');
+  });
+
+  test('source: protectEntityId path flags the standee + dispose-on-finish', () => {
+    const start = _renderer3dSrc.indexOf('_spawnFloatingText(col, row, text');
+    assert.ok(start > 0, 'expected _spawnFloatingText to be defined in source');
+    const end = _renderer3dSrc.indexOf('addCombatReadout', start);
+    const body = _renderer3dSrc.slice(start, end);
+    // Flag set on the standee while the floater is in flight.
+    assert.match(body, /_pendingDespawn\s*=\s*true/,
+      '_spawnFloatingText should set _pendingDespawn=true when protecting a standee');
+    // Cleared in the animation completion callback so a later sync can dispose.
+    assert.match(body, /_pendingDespawn\s*=\s*false/,
+      '_spawnFloatingText should clear _pendingDespawn after the floater finishes');
+    // Eager dispose-on-finish for entities that did not survive — otherwise
+    // a tab without subsequent redraws would leave the standee orphaned.
+    assert.match(body, /_entityStandees\.delete/,
+      '_spawnFloatingText should dispose the now-unflagged standee for dead entities');
+  });
+});
+
+// ─── Damage floater plane size — operator brief: 25–30% smaller ────────────
+
+describe('Renderer3D — FLOAT_TEXT_DAMAGE_SIZE_MUL', () => {
+  test('damage size multiplier is within the 25–30% reduction window', () => {
+    // Operator brief: drop backdrop + shrink ~25–30%. 0.70 lands inside that
+    // band. Locks the knob so a casual edit can't silently push it back to 1.
+    assert.ok(FLOAT_TEXT_DAMAGE_SIZE_MUL >= 0.70 && FLOAT_TEXT_DAMAGE_SIZE_MUL <= 0.75,
+      `expected damage size multiplier in [0.70, 0.75] (got ${FLOAT_TEXT_DAMAGE_SIZE_MUL})`);
+  });
+
+  test('damage plane is noticeably smaller than the default chrome plane', () => {
+    const dmgW = FLOAT_TEXT_PLANE_WIDTH  * FLOAT_TEXT_DAMAGE_SIZE_MUL;
+    const dmgH = FLOAT_TEXT_PLANE_HEIGHT * FLOAT_TEXT_DAMAGE_SIZE_MUL;
+    assert.ok(dmgW < FLOAT_TEXT_PLANE_WIDTH,
+      'damage plane width should be smaller than default');
+    assert.ok(dmgH < FLOAT_TEXT_PLANE_HEIGHT,
+      'damage plane height should be smaller than default');
   });
 });
 
@@ -452,6 +585,52 @@ describe('Renderer3D — iconBillboardYRelativeToCone', () => {
   });
 });
 
+// ─── iconBillboardYForScale — the per-frame proximity-scale placement must
+//     reconcile with the gap-0.70 create-time placement (icon-overlap fix) ───
+
+describe('Renderer3D — iconBillboardYForScale reconciliation', () => {
+  test('at scale=1 it EXACTLY matches iconBillboardYRelativeToCone (no per-frame drop)', () => {
+    for (const leader of [false, true]) {
+      assert.ok(
+        Math.abs(iconBillboardYForScale(leader, 1) - iconBillboardYRelativeToCone(leader)) < 1e-9,
+        `scale=1 placement should equal the create-time gap-0.70 value for leader=${leader}`,
+      );
+    }
+  });
+
+  test('the icon BOTTOM stays fixed (clears the paladin head) as the icon shrinks', () => {
+    for (const leader of [false, true]) {
+      const bottomFull = iconBillboardYForScale(leader, 1)               - UNIT_ICON_PLANE_SIZE / 2;
+      const bottomMin  = iconBillboardYForScale(leader, UNIT_ICON_MIN_SCALE) - (UNIT_ICON_PLANE_SIZE * UNIT_ICON_MIN_SCALE) / 2;
+      assert.ok(Math.abs(bottomFull - bottomMin) < 1e-9,
+        `icon bottom should be scale-invariant for leader=${leader}`);
+    }
+  });
+
+  test('shrinking the icon LOWERS its centre (drops toward the fixed bottom)', () => {
+    assert.ok(iconBillboardYForScale(false, UNIT_ICON_MIN_SCALE) < iconBillboardYForScale(false, 1));
+  });
+});
+
+// ─── headTopRelativeToCone — the combat-card anchor (just above the head) ────
+
+describe('Renderer3D — headTopRelativeToCone', () => {
+  test('sits below the icon billboard (head < icon, cone-relative)', () => {
+    for (const leader of [false, true]) {
+      assert.ok(headTopRelativeToCone(leader) < iconBillboardYRelativeToCone(leader),
+        `head top should be below the icon centre for leader=${leader}`);
+    }
+  });
+
+  test('leader head is taller than a regular head', () => {
+    assert.ok(headTopRelativeToCone(true) > headTopRelativeToCone(false));
+  });
+
+  test('default arg matches leader=false', () => {
+    assert.equal(headTopRelativeToCone(), headTopRelativeToCone(false));
+  });
+});
+
 // ─── paintUnitIconBadge (canvas composition: portrait + HP ring) ────────────
 //
 // We exercise the painter against a stub 2D context that records the calls
@@ -591,12 +770,35 @@ describe('Renderer3D — paintUnitIconBadge', () => {
     assert.ok(UNIT_ICON_TEX_SIZE   > 0);
   });
 
-  // Pin the current billboard size. Bumped 2× from 0.55 to 1.10, then
-  // trimmed 20% to 0.88 after the badge felt too bulky over the paladin
-  // model. Locks against silent re-shrinking back to the old 0.55 era.
-  test('UNIT_ICON_PLANE_SIZE is in the post-trim band [0.7, 1.0]', () => {
-    assert.ok(UNIT_ICON_PLANE_SIZE > 0.7 && UNIT_ICON_PLANE_SIZE < 1.0,
-      `expected 0.7 < size < 1.0, got ${UNIT_ICON_PLANE_SIZE}`);
+  // Pin the current billboard size. Bumped 2× from 0.55 to 1.10, trimmed to
+  // 0.88 after the badge felt too bulky over the paladin model, then bumped
+  // 1.3× to 1.144 (R3) for readability at default combat-camera framing.
+  // Locks against silent re-shrinking back to the trimmed 0.88 era and
+  // against an accidental further bump that would overlap the ATTACK_BADGE.
+  test('UNIT_ICON_PLANE_SIZE is in the post-R3 band [1.10, 1.20]', () => {
+    assert.ok(UNIT_ICON_PLANE_SIZE > 1.10 && UNIT_ICON_PLANE_SIZE < 1.20,
+      `expected 1.10 < size < 1.20, got ${UNIT_ICON_PLANE_SIZE}`);
+  });
+
+  // R3 — explicit cross-check that the bumped plane bottom (after the 1.3×
+  // size increase) still clears the cone+sphere head top. The bottom-anchor
+  // math in `iconBillboardYForScale` keeps the larger plane growing upward,
+  // so the gap should be the same as the pre-bump 0.88 size.
+  test('UNIT_ICON_PLANE_SIZE bottom edge (leader) still clears the head top', () => {
+    const iconBottom = iconBillboardYRelativeToCone(true) - UNIT_ICON_PLANE_SIZE / 2;
+    const headTop    = headTopRelativeToCone(true);
+    assert.ok(
+      iconBottom > headTop,
+      `icon bottom ${iconBottom} should be above head top ${headTop}`,
+    );
+  });
+  test('UNIT_ICON_PLANE_SIZE bottom edge (non-leader) still clears the head top', () => {
+    const iconBottom = iconBillboardYRelativeToCone(false) - UNIT_ICON_PLANE_SIZE / 2;
+    const headTop    = headTopRelativeToCone(false);
+    assert.ok(
+      iconBottom > headTop,
+      `icon bottom ${iconBottom} should be above head top ${headTop}`,
+    );
   });
 
   // Relationship invariant: the icon billboard's top edge must stay below

@@ -14,9 +14,10 @@ import { EnginePlanSimState, BaseAIEngine, allocateBudget, assemblePlan, clamp01
 import { hexDistance, hexKey, getNeighbors } from './hex.js';
 import { Phase, nodeController } from './game.js';
 import { EntityType, ADVANTAGE_CAP, expectedDieValue, isLeaderType, attackOf, defenseOf, SurvivorAbility } from './entities.js';
-import { TileType, ResourceType } from './tiles.js';
+import { ResourceType, hasBuilding, isRiver } from './tiles.js';
 import { ITEMS } from './items.js';
-import { concreteFactionOf, sightRangeForEntity } from './factions.js';
+import { concreteFactionOf } from './factions.js';
+import { computeLineOfSight } from './actions.js';
 import { PlanActionType, MAX_PLAN_LENGTH } from './planner.js';
 
 // ── Goal names ───────────────────────────────────────────────────────────────
@@ -137,14 +138,12 @@ export function assessHeroBoard(sim) {
   );
   const survivorCount = survivors.length;
 
-  // Fog-of-war awareness — per-entity sight so stub-faction bonuses
-  // (rogue +1) apply.
-  const heroSideUnits = sim.entities.filter(e => e.alive && e.owner === 'hero');
+  // Fog-of-war awareness — line-of-sight aware (forests/buildings block
+  // vision past them). Per-entity sight so stub-faction bonuses (rogue +1)
+  // and SCOUT survivors apply.
+  const heroLosSet = computeLineOfSight(sim, 'hero');
   function _heroCanSee(target) {
-    return heroSideUnits.some(viewer => {
-      const range = sightRangeForEntity(viewer, phase);
-      return hexDistance(viewer.col, viewer.row, target.col, target.row) <= range;
-    });
+    return heroLosSet.has(hexKey(target.col, target.row));
   }
 
   // Any night-side leader (Witch / Necromancer / Brute) is the "witch" for
@@ -221,7 +220,7 @@ export function assessHeroBoard(sim) {
 
   const unexploredBuildings = [];
   for (const [, t] of sim.tiles) {
-    if (t.type === TileType.BUILDING) {
+    if (hasBuilding(t)) {
       const explored = sim.isExplored ? sim.isExplored(t.col, t.row) : t.explored;
       if (!explored) unexploredBuildings.push(t);
     }
@@ -435,7 +434,7 @@ function _closestUncommittedHero(sim, board, target, preferSurvivors = false) {
 function _nearestUnexploredBuilding(sim, actor) {
   let best = null, bestDist = Infinity;
   for (const [, t] of sim.tiles) {
-    if (t.type !== TileType.BUILDING) continue;
+    if (!hasBuilding(t)) continue;
     const explored = sim.isExplored ? sim.isExplored(t.col, t.row) : t.explored;
     if (explored) continue;
     const d = hexDistance(actor.col, actor.row, t.col, t.row);
@@ -598,7 +597,7 @@ export function genExplore(sim, board, budget, config = null) {
   // Explore current building if unexplored
   if (!sim.isExplored(heroEntity.col, heroEntity.row) && !sim.unitCommitments.has(board.hero.id)) {
     const tile = sim.tiles.get(hexKey(heroEntity.col, heroEntity.row));
-    if (tile && tile.type === TileType.BUILDING) {
+    if (tile && hasBuilding(tile)) {
       actions.push({
         type: PlanActionType.EXPLORE, entityId: board.hero.id,
         _priority: 4, _goal: HeroGoal.EXPLORE,
@@ -688,7 +687,7 @@ export function genExplore(sim, board, budget, config = null) {
       n.obj.hexes?.some(h => h.col === heroEntity.col && h.row === heroEntity.row)
     );
 
-    if (heroTile && heroTile.type !== TileType.RIVER && (heroTile.type === TileType.BUILDING || onNode)) {
+    if (heroTile && !isRiver(heroTile) && (hasBuilding(heroTile) || onNode)) {
       const ledger = sim.resourceLedger;
       while (remaining > 0 && (heroTile.fortifyLevel || 0) < fortifyCap) {
         const hasWood = (ledger[ResourceType.WOOD] || 0) > 0;
@@ -807,7 +806,7 @@ export function genControlNodes(sim, board, budget, config = null) {
           const fortifyCap = (board.isNight || board.isDawnOrDusk)
             ? (config?.fortifyCapNight ?? 3)
             : (config?.fortifyCapDay ?? 1);
-          if (nodeTile && nodeTile.type !== TileType.RIVER) {
+          if (nodeTile && !isRiver(nodeTile)) {
             const ledger = sim.resourceLedger;
             while (remaining > 0 && (nodeTile.fortifyLevel || 0) < fortifyCap) {
               const hasWood = (ledger[ResourceType.WOOD] || 0) > 0;
@@ -1209,9 +1208,9 @@ export function fillGapsHero(plan, sim, board, heroEntity, remaining, prevPositi
     let bestAnyHex = null, bestAnyDist = Infinity;
     for (const [, t] of sim.tiles) {
       if (sim.isExplored(t.col, t.row)) continue;
-      if (t.terrain === 'river') continue;
+      if (isRiver(t)) continue;
       const d = hexDistance(heroEntity.col, heroEntity.row, t.col, t.row);
-      if (t.type === TileType.BUILDING && d < bestDist) { bestDist = d; bestHex = t; }
+      if (hasBuilding(t) && d < bestDist) { bestDist = d; bestHex = t; }
       if (d < bestAnyDist) { bestAnyDist = d; bestAnyHex = t; }
     }
     const target = bestHex || bestAnyHex;

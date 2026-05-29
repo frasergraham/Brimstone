@@ -1,6 +1,7 @@
 // Procedural map generator for the Caleb's Hollow hex map
 import { MAP_COLS, MAP_ROWS, setMapDimensions, getNeighbors, hexKey, hexDistance } from './hex.js';
-import { Tile, TileType, BuildingType } from './tiles.js';
+import { Tile, TileType, BuildingType, PathType, StructureType, legacyTileType, isRiver, isBridge, hasBuilding, pathOf } from './tiles.js';
+import { buildMST, placeRoadPath } from './road-network.js';
 
 // Flavor labels for the witch power nodes (extra labels for larger maps)
 const WITCH_OBJECTIVE_LABELS = [
@@ -175,6 +176,11 @@ export function shuffle(arr, rand) {
 const MAX_ROAD_DEG = 3;
 const ROAD_DEG_PENALTY = 10; // extra cost per degree above the cap
 
+// Chance a building's cleared-ground base is GRASS rather than DIRT. Buildings
+// never sit on forest (the tile is cleared); this just adds dirt/grass variety
+// so settlements aren't a uniform dirt patch. Tunable.
+const BUILDING_GRASS_CHANCE = 0.4;
+
 export function bfsPath(tiles, startCol, startRow, endCol, endRow, rand, roadTiles = new Set(), blockRiver = false) {
   const key = (c, r) => `${c},${r}`;
   const start = key(startCol, startRow);
@@ -203,7 +209,7 @@ export function bfsPath(tiles, startCol, startRow, endCol, endRow, rand, roadTil
       const nk = key(n.col, n.row);
       const nTile = tiles.get(nk);
       if (!nTile) continue;
-      if (blockRiver && nTile.type === TileType.RIVER) continue;
+      if (blockRiver && isRiver(nTile)) continue;
       const deg = roadDeg(n.col, n.row);
       const step = 1 + Math.max(0, deg - (MAX_ROAD_DEG - 1)) * ROAD_DEG_PENALTY;
       const nc = cost + step;
@@ -232,7 +238,7 @@ export function bfsPath(tiles, startCol, startRow, endCol, endRow, rand, roadTil
 function _pickSpread(rand, tiles, count, minDist, forbiddenKeys = new Set()) {
   const candidates = [];
   for (const [k, t] of tiles) {
-    if (t.type !== TileType.GRASS) continue;
+    if (legacyTileType(t) !== TileType.GRASS) continue;
     if (forbiddenKeys.has(k)) continue;
     if (t.col < 1 || t.col > MAP_COLS - 2 || t.row < 1 || t.row > MAP_ROWS - 2) continue;
     candidates.push({ col: t.col, row: t.row });
@@ -263,12 +269,12 @@ function _pickCornerBuildings(rand, tiles) {
   const gravZone  = innZone === zA ? zB : zA;
 
   const hasRiverNeighbor = (col, row) =>
-    getNeighbors(col, row).some(n => tiles.get(hexKey(n.col, n.row))?.type === TileType.RIVER);
+    getNeighbors(col, row).some(n => isRiver(tiles.get(hexKey(n.col, n.row))));
 
   const pickFrom = zone => {
     const cs = [];
     for (const [, t] of tiles) {
-      if (t.type !== TileType.GRASS) continue;
+      if (legacyTileType(t) !== TileType.GRASS) continue;
       if (t.col < zone.minCol || t.col > zone.maxCol) continue;
       if (t.row < zone.minRow || t.row > zone.maxRow) continue;
       if (hasRiverNeighbor(t.col, t.row)) continue;
@@ -294,13 +300,13 @@ function _placeBattleSpawnBuildings(rand, tiles, riverMap, riverEW) {
 
   const EDGE_MARGIN = 3;
   const hasRiverNeighbor = (col, row) =>
-    getNeighbors(col, row).some(n => tiles.get(hexKey(n.col, n.row))?.type === TileType.RIVER);
+    getNeighbors(col, row).some(n => isRiver(tiles.get(hexKey(n.col, n.row))));
 
   // Collect candidates on each side — exclude edges and center third of map
   const collectCandidates = (side) => {
     const cands = [];
     for (const [, t] of tiles) {
-      if (t.type !== TileType.GRASS) continue;
+      if (legacyTileType(t) !== TileType.GRASS) continue;
       if (t.col < EDGE_MARGIN || t.col > MAP_COLS - 1 - EDGE_MARGIN) continue;
       if (t.row < EDGE_MARGIN || t.row > MAP_ROWS - 1 - EDGE_MARGIN) continue;
       if (hasRiverNeighbor(t.col, t.row)) continue;
@@ -387,7 +393,7 @@ function _pickNodesAcrossRiver(rand, tiles, count, minDist, forbiddenKeys, river
   const colMax = nodeColRange?.max ?? (MAP_COLS - 2);
   const left = [], right = [];
   for (const [k, t] of tiles) {
-    if (t.type === TileType.RIVER || t.type === TileType.BRIDGE || t.type === TileType.BUILDING) continue;
+    if (isRiver(t) || isBridge(t) || hasBuilding(t)) continue;
     if (forbiddenKeys.has(k)) continue;
     if (t.col < colMin || t.col > colMax || t.row < 1 || t.row > MAP_ROWS - 2) continue;
     if (startPositions.some(sp => hexDistance(sp.col, sp.row, t.col, t.row) <= 3)) continue;
@@ -420,7 +426,7 @@ function _pickNodeCluster(rand, tiles, center, forbiddenKeys, startPositions = [
   const neighbors = shuffle(
     getNeighbors(center.col, center.row).filter(n => {
       const t = tiles.get(hexKey(n.col, n.row));
-      if (!t || t.type === TileType.RIVER) return false;
+      if (!t || isRiver(t)) return false;
       if (forbiddenKeys.has(hexKey(n.col, n.row))) return false;
       if (startPositions.some(sp => hexDistance(sp.col, sp.row, n.col, n.row) <= 3)) return false;
       return true;
@@ -443,7 +449,7 @@ function _pickNodeCluster(rand, tiles, center, forbiddenKeys, startPositions = [
     const ring2 = getNeighbors(n0.col, n0.row).filter(n2 => {
       if (n2.col === center.col && n2.row === center.row) return false;
       const t = tiles.get(hexKey(n2.col, n2.row));
-      if (!t || t.type === TileType.RIVER) return false;
+      if (!t || isRiver(t)) return false;
       if (forbiddenKeys.has(hexKey(n2.col, n2.row))) return false;
       return hexDistance(center.col, center.row, n2.col, n2.row) === 1;
     });
@@ -467,7 +473,7 @@ function _pickRiverCrossings(rand, tiles, riverPath, riverMap, riverEW, keyPoint
     const t = tiles.get(hexKey(n.col, n.row));
     if (!t) return 999;
     let typeRank;
-    switch (t.type) {
+    switch (legacyTileType(t)) {
       case TileType.ROAD:
       case TileType.BRIDGE:
       case TileType.BUILDING: typeRank = 0; break;
@@ -488,11 +494,11 @@ function _pickRiverCrossings(rand, tiles, riverPath, riverMap, riverEW, keyPoint
     const neighbors = getNeighbors(col, row);
     const leftNbrs = neighbors.filter(n => {
       const t = tiles.get(hexKey(n.col, n.row));
-      return t && t.type !== TileType.RIVER && riverSide(n.col, n.row, riverMap, riverEW) === 'left';
+      return t && !isRiver(t) && riverSide(n.col, n.row, riverMap, riverEW) === 'left';
     });
     const rightNbrs = neighbors.filter(n => {
       const t = tiles.get(hexKey(n.col, n.row));
-      return t && t.type !== TileType.RIVER && riverSide(n.col, n.row, riverMap, riverEW) === 'right';
+      return t && !isRiver(t) && riverSide(n.col, n.row, riverMap, riverEW) === 'right';
     });
     if (leftNbrs.length === 0 || rightNbrs.length === 0) continue;
 
@@ -548,32 +554,37 @@ function _pickRiverCrossings(rand, tiles, riverPath, riverMap, riverEW, keyPoint
   return picked;
 }
 
+// Water buildings (the mill's water wheel, the dock's berths) are no longer
+// placed by procedural map generation. They remain valid `BuildingType` enum
+// values and can still be placed by the Mission Editor — the runtime just
+// won't randomly pick them.
+const WATER_BUILDINGS = new Set([BuildingType.DOCK, BuildingType.MILL]);
+
 // Place one village's buildings in a compact cluster around a center hex.
 // Buildings are sorted closest-first (with seeded random tiebreaking) and
 // placed with MIN_SEP gaps so the result reads as a dense but walkable hamlet.
+// Any water building requested by the template is silently skipped.
 function _placeVillageBuildings(rand, tiles, centerCol, centerRow, buildings, usedKeys) {
   const RADIUS  = 4; // max hex distance from village center
   const MIN_SEP = 3; // min separation between any two buildings in this village
 
-  const hasRiverNeighbor = (col, row) =>
-    getNeighbors(col, row).some(n => tiles.get(hexKey(n.col, n.row))?.type === TileType.RIVER);
-
-  const candidates = [];
+  const landCandidates = [];
   for (const [, t] of tiles) {
-    if (t.type !== TileType.GRASS) continue;
+    if (legacyTileType(t) !== TileType.GRASS) continue;
     const k = hexKey(t.col, t.row);
     if (usedKeys.has(k)) continue;
-    if (hasRiverNeighbor(t.col, t.row)) continue;
     const dist = hexDistance(centerCol, centerRow, t.col, t.row);
-    if (dist >= 0 && dist <= RADIUS) candidates.push({ col: t.col, row: t.row, dist });
+    if (dist < 0 || dist > RADIUS) continue;
+    landCandidates.push({ col: t.col, row: t.row, dist });
   }
   // Shuffle first so equal-distance tiles are randomly ordered, then stable-sort by distance
-  shuffle(candidates, rand);
-  candidates.sort((a, b) => a.dist - b.dist);
+  shuffle(landCandidates, rand);
+  landCandidates.sort((a, b) => a.dist - b.dist);
 
   const placed = [];
   for (const building of buildings) {
-    for (const c of candidates) {
+    if (WATER_BUILDINGS.has(building)) continue;
+    for (const c of landCandidates) {
       const k = hexKey(c.col, c.row);
       if (usedKeys.has(k)) continue;
       if (placed.some(p => hexDistance(p.col, p.row, c.col, c.row) < MIN_SEP)) continue;
@@ -600,7 +611,7 @@ function _generateVillages(rand, tiles, villageNames, minVillageDist, reservedKe
   // Collect eligible center candidates away from map edges
   const centerCandidates = [];
   for (const [, t] of tiles) {
-    if (t.type !== TileType.GRASS) continue;
+    if (legacyTileType(t) !== TileType.GRASS) continue;
     if (t.col < 2 || t.col > MAP_COLS - 3 || t.row < 2 || t.row > MAP_ROWS - 3) continue;
     centerCandidates.push({ col: t.col, row: t.row });
   }
@@ -777,7 +788,8 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
   const riverMap  = buildRiverMap(riverPath, riverEW);
   for (const { col, row } of riverPath) {
     const t = tiles.get(hexKey(col, row));
-    if (t) t.type = TileType.RIVER;
+    // River is a PATH overlay — set path, leave base material (grass) intact.
+    if (t) t.path = PathType.RIVER;
   }
 
   // 3. Place INN and GRAVEYARD — battle maps get 5+5 faction buildings on opposite
@@ -792,12 +804,70 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
   for (const { col, row, building } of buildingPlacements) {
     const t = tiles.get(hexKey(col, row));
     if (!t) continue;
-    t.type = TileType.BUILDING;
+    // Building is a STRUCTURE layer on CLEARED ground. Operator-locked design:
+    // a building clears the trees on its tile, so the base is always dirt or
+    // grass — NEVER forest. Give the base some variety (not always dirt) so a
+    // settlement doesn't read as a uniform dirt patch. The pick is seeded, so
+    // same-seed maps stay reproducible. Clear any path — road-through-building
+    // is carried by `roadDirs` only, never the path layer (P0 semantics).
+    t.base = rand() < BUILDING_GRASS_CHANCE ? TileType.GRASS : TileType.DIRT;
+    t.structure = StructureType.BUILDING;
+    t.path = null;
     t.building = building;
     t.fortifyLevel = 1;
   }
 
-  // 4. Two-tier road network — avoids the dense web produced by running MST on
+  // 4. Grow forest clusters and scatter dirt patches BEFORE the road network.
+  //    This is the payoff of the layered tile model: because `placeRoadPath`
+  //    preserves the base material (P2), routing the MST over forest/dirt now
+  //    yields roads that keep base=FOREST / base=DIRT under the road deck
+  //    (operator-locked: roads PRESERVE whatever terrain they cross). Forest
+  //    and dirt grow only on plain grass — building tiles report BUILDING and
+  //    river tiles report RIVER, so both are skipped automatically and no
+  //    building ever ends up on a forest base.
+
+  // 4a. Grow forest clusters from seeds
+  for (const seed of cfg.forestSeeds) {
+    const neighbors = getNeighbors(seed.col, seed.row);
+    const candidates = [seed, ...neighbors];
+    for (const { col, row } of candidates) {
+      const t = tiles.get(hexKey(col, row));
+      if (t && legacyTileType(t) === TileType.GRASS && rand() < 0.70) {
+        // Forest is a BASE material change (no path/structure on these grass tiles).
+        t.base = TileType.FOREST;
+        for (const n of getNeighbors(col, row)) {
+          const t2 = tiles.get(hexKey(n.col, n.row));
+          if (t2 && legacyTileType(t2) === TileType.GRASS && rand() < 0.40) {
+            t2.base = TileType.FOREST;
+          }
+        }
+      }
+    }
+  }
+
+  // 4b. Scatter small dirt/gravel patches for visual texture
+  for (let i = 0; i < 10; i++) {
+    const grassTiles = [];
+    for (const [, t] of tiles) {
+      if (legacyTileType(t) === TileType.GRASS && t.col >= 1 && t.col <= MAP_COLS - 2) grassTiles.push(t);
+    }
+    shuffle(grassTiles, rand);
+    if (grassTiles.length === 0) break;
+    const seedTile = grassTiles[0];
+    // Dirt patches are a BASE material change on grass tiles.
+    seedTile.base = TileType.DIRT;
+    const spreadNeighbors = shuffle(
+      getNeighbors(seedTile.col, seedTile.row)
+        .map(n => tiles.get(hexKey(n.col, n.row)))
+        .filter(t => t && legacyTileType(t) === TileType.GRASS),
+      rand
+    );
+    for (const n of spreadNeighbors.slice(0, Math.floor(rand() * 3))) {
+      n.base = TileType.DIRT;
+    }
+  }
+
+  // 5. Two-tier road network — avoids the dense web produced by running MST on
   //    every building when many are clustered tightly in the same village.
   //
   //    Tier 1 — intra-village spokes: each building connects to its village's root
@@ -826,33 +896,17 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
   const crossings = _pickRiverCrossings(rand, tiles, riverPath, riverMap, riverEW, keyPoints, cfg.minBridges ?? 1, cfg.bridgeMax);
   for (const c of crossings) {
     const t = tiles.get(hexKey(c.col, c.row));
-    if (t) t.type = TileType.BRIDGE;
+    // Pre-place a bridge over the river crossing — path overlay only, the
+    // (grass) base under the water is preserved.
+    if (t) t.path = PathType.BRIDGE;
   }
 
   for (const c of crossings) {
     keyPoints.push(c.leftBank, c.rightBank);
   }
 
-  const nk = keyPoints.length;
-  const interEdges = [];
-  if (nk > 1) {
-    const allEdges = [];
-    for (let i = 0; i < nk; i++) {
-      for (let j = i + 1; j < nk; j++) {
-        allEdges.push({ i, j, d: hexDistance(keyPoints[i].col, keyPoints[i].row, keyPoints[j].col, keyPoints[j].row) });
-      }
-    }
-    allEdges.sort((a, b) => a.d - b.d);
-    const parent = Array.from({ length: nk }, (_, i) => i);
-    const find = i => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
-    for (const { i, j } of allEdges) {
-      if (find(i) !== find(j)) {
-        parent[find(i)] = find(j);
-        interEdges.push({ from: keyPoints[i], to: keyPoints[j] });
-        if (interEdges.length === nk - 1) break;
-      }
-    }
-  }
+  // Inter-village trunk: Kruskal's MST over the key points + river-crossing banks.
+  const interEdges = buildMST(keyPoints);
 
   // Prepend bank-to-bank edges so each bridge is routed through first while
   // the road grid is still empty (giving BFS a clean shortest path).
@@ -866,29 +920,6 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
   const roadTiles = new Set();
   // Seed roadTiles with pre-placed bridges so BFS considers them connected
   for (const c of crossings) roadTiles.add(hexKey(c.col, c.row));
-  const placeRoad = path => {
-    for (let i = 0; i < path.length; i++) {
-      const { col, row } = path[i];
-      const t = tiles.get(hexKey(col, row));
-      if (!t) continue;
-      if (t.type === TileType.GRASS || t.type === TileType.DIRT || t.type === TileType.FOREST) {
-        t.type = TileType.ROAD;
-        roadTiles.add(hexKey(col, row));
-      } else if (t.type === TileType.BRIDGE) {
-        roadTiles.add(hexKey(col, row));
-      }
-      // Record bidirectional connectivity so the renderer and floodConnected
-      // can use exact road topology rather than inferring from tile types.
-      if (i > 0) {
-        const prev = path[i - 1];
-        const prevTile = tiles.get(hexKey(prev.col, prev.row));
-        if (prevTile) {
-          t.roadDirs.add(hexKey(prev.col, prev.row));
-          prevTile.roadDirs.add(hexKey(col, row));
-        }
-      }
-    }
-  };
 
   // Returns true if 'to' is already reachable from 'from' via roadDirs links.
   // Used to skip edges that are already satisfied by previously-placed roads.
@@ -911,10 +942,13 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
 
   for (const { from, to } of roadEdges) {
     if (floodConnected(from, to)) continue;
-    placeRoad(bfsPath(tiles, from.col, from.row, to.col, to.row, rand, roadTiles, true));
+    const path = bfsPath(tiles, from.col, from.row, to.col, to.row, rand, roadTiles, true);
+    // Pre-placed-bridge mode: BFS routed with blockRiver, so bridges already
+    // exist at crossings — placeRoadPath just records connectivity over them.
+    placeRoadPath(tiles, path, roadTiles, { convertRiverToBridge: false });
   }
 
-  // 4b. Bridge audit & stub-road cleanup.
+  // 5b. Bridge audit & stub-road cleanup.
   // Iteratively (a) prune ROAD tiles that became dead-ends (degree ≤ 1 and
   // not adjacent to a building), and (b) revert BRIDGE tiles to RIVER if
   // their roadDirs no longer reach both river banks.  Both steps can cascade
@@ -923,7 +957,7 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
   const isAdjacentToBuilding = (col, row) => {
     for (const n of getNeighbors(col, row)) {
       const nt = tiles.get(hexKey(n.col, n.row));
-      if (nt && nt.type === TileType.BUILDING) return true;
+      if (nt && hasBuilding(nt)) return true;
     }
     return false;
   };
@@ -935,11 +969,15 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
 
     // Prune stub roads (degree ≤ 1, not next to a building).
     for (const t of tiles.values()) {
-      if (t.type !== TileType.ROAD) continue;
+      if (pathOf(t) !== PathType.ROAD) continue;
       if (t.roadDirs.size > 1) continue;
       if (isAdjacentToBuilding(t.col, t.row)) continue;
       const nextKey = [...t.roadDirs][0];
-      t.type = TileType.GRASS;
+      // Strip the road path. Forest/dirt now grow BEFORE roads, so the tile's
+      // base may be grass, forest, or dirt — clearing the path correctly
+      // reverts it to whatever terrain the road was laid over (the base layer
+      // was never touched when the road was placed).
+      t.path = null;
       t.roadDirs.clear();
       roadTiles.delete(hexKey(t.col, t.row));
       if (nextKey) tiles.get(nextKey)?.roadDirs.delete(hexKey(t.col, t.row));
@@ -949,7 +987,7 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
     // Revert one-sided or unreached bridges back to river.
     for (const c of crossings) {
       const t = tiles.get(hexKey(c.col, c.row));
-      if (!t || t.type !== TileType.BRIDGE) continue;
+      if (!t || !isBridge(t)) continue;
       let leftSide = false, rightSide = false;
       for (const nk of t.roadDirs) {
         const [nc, nr] = nk.split(',').map(Number);
@@ -958,50 +996,12 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
       }
       if (leftSide && rightSide) continue;
       const stubStarts = [...t.roadDirs];
-      t.type = TileType.RIVER;
+      // Revert the bridge back to plain river — path overlay only, base intact.
+      t.path = PathType.RIVER;
       t.roadDirs.clear();
       roadTiles.delete(hexKey(c.col, c.row));
       for (const nk of stubStarts) tiles.get(nk)?.roadDirs.delete(hexKey(c.col, c.row));
       changed = true;
-    }
-  }
-
-  // 5. Grow forest clusters from seeds
-  for (const seed of cfg.forestSeeds) {
-    const neighbors = getNeighbors(seed.col, seed.row);
-    const candidates = [seed, ...neighbors];
-    for (const { col, row } of candidates) {
-      const t = tiles.get(hexKey(col, row));
-      if (t && t.type === TileType.GRASS && rand() < 0.70) {
-        t.type = TileType.FOREST;
-        for (const n of getNeighbors(col, row)) {
-          const t2 = tiles.get(hexKey(n.col, n.row));
-          if (t2 && t2.type === TileType.GRASS && rand() < 0.40) {
-            t2.type = TileType.FOREST;
-          }
-        }
-      }
-    }
-  }
-
-  // 5.5 Scatter small dirt/gravel patches for visual texture
-  for (let i = 0; i < 10; i++) {
-    const grassTiles = [];
-    for (const [, t] of tiles) {
-      if (t.type === TileType.GRASS && t.col >= 1 && t.col <= MAP_COLS - 2) grassTiles.push(t);
-    }
-    shuffle(grassTiles, rand);
-    if (grassTiles.length === 0) break;
-    const seedTile = grassTiles[0];
-    seedTile.type = TileType.DIRT;
-    const spreadNeighbors = shuffle(
-      getNeighbors(seedTile.col, seedTile.row)
-        .map(n => tiles.get(hexKey(n.col, n.row)))
-        .filter(t => t && t.type === TileType.GRASS),
-      rand
-    );
-    for (const n of spreadNeighbors.slice(0, Math.floor(rand() * 3))) {
-      n.type = TileType.DIRT;
     }
   }
 
@@ -1062,7 +1062,7 @@ export function generateMultipleStarts(tiles, primaryStart, count, minSep = 2, s
       if (visited.has(k)) continue;
       visited.add(k);
       const t = tiles.get(k);
-      if (!t || t.type === TileType.RIVER) continue;
+      if (!t || isRiver(t)) continue;
       candidates.push({ col: n.col, row: n.row });
       queue.push({ col: n.col, row: n.row, dist: cur.dist + 1 });
     }
@@ -1098,7 +1098,7 @@ export function generateBattleStarts(tiles, faction, count, minSep = 2) {
   // Find all faction buildings on the map
   const buildings = [];
   for (const [, t] of tiles) {
-    if (t.type === TileType.BUILDING && t.building === targetBuilding) {
+    if (hasBuilding(t) && t.building === targetBuilding) {
       buildings.push({ col: t.col, row: t.row });
     }
   }
@@ -1109,7 +1109,7 @@ export function generateBattleStarts(tiles, faction, count, minSep = 2) {
     const candidates = [];
     for (const [, t] of tiles) {
       if (!cols.includes(t.col)) continue;
-      if (t.type === TileType.RIVER) continue;
+      if (isRiver(t)) continue;
       candidates.push({ col: t.col, row: t.row });
     }
     for (let i = candidates.length - 1; i > 0; i--) {
@@ -1143,7 +1143,7 @@ export function generateBattleStarts(tiles, faction, count, minSep = 2) {
         const k = hexKey(n.col, n.row);
         if (usedKeys.has(k)) continue;
         const t = tiles.get(k);
-        if (!t || t.type === TileType.RIVER) continue;
+        if (!t || isRiver(t)) continue;
         placed.push({ col: n.col, row: n.row });
         usedKeys.add(k);
         found = true;

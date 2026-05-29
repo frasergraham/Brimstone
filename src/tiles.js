@@ -170,17 +170,180 @@ export function rollLoot(table) {
   return table[table.length - 1].type;
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Layered tile model (P0 of the tile-model refactor)
+//
+// A tile is split into THREE independent layers so that a road/river/building
+// can sit on ANY base material (e.g. a road through forest):
+//
+//   base      ∈ {grass, forest, dirt}            — the terrain material
+//   structure ∈ {none(null), 'building'}         — is there a building or not
+//   path      ∈ {none(null), road, river, bridge}— overlaid path/water feature
+//
+// `building` (BuildingType) and `roadDirs` (Set of connected neighbours) stay
+// as their own fields. The codebase reads/writes the explicit layers directly
+// via the predicates below (baseOf / pathOf / structureOf / isRiver / isBridge /
+// hasBuilding / …). The legacy single `tile.type` (TileType) is no longer a
+// property of the Tile — the P0 get/set shim was removed in P7 once every reader
+// had migrated. The two explicit helpers `decomposeTileType()` (write a legacy
+// type → layers) and `legacyTileType()` (derive the legacy type ← layers) cover
+// the remaining spots that genuinely need a single categorical value (legacy
+// save/JSON reconstruction, display maps keyed by TileType).
+//
+// REPRESENTATION CHOICE: `structure` is a coarse marker — either null (none) or
+// the string 'building'. The actual BuildingType lives in `building`, exactly
+// as before. `structureOf()` treats a tile as having a building when EITHER
+// `structure === 'building'` OR `building != null`, so existing code that sets
+// `tile.building = X` directly (without touching `structure`) still reports a
+// building. This keeps the layer accessors robust to both the new explicit
+// writes and legacy direct-field writes.
+// ─────────────────────────────────────────────────────────────────────────
+
+// Path-layer values (in addition to null = none).
+export const PathType = Object.freeze({
+  ROAD:   'road',
+  RIVER:  'river',
+  BRIDGE: 'bridge',
+});
+
+// Structure-layer marker (in addition to null = none).
+export const StructureType = Object.freeze({
+  BUILDING: 'building',
+});
+
 export class Tile {
   constructor(col, row, type = TileType.GRASS) {
     this.col = col;
     this.row = row;
-    this.type = type;
-    this.building = null;   // BuildingType or null
+    // Explicit layers. Defaults are set before `type` is decomposed below.
+    this.base = TileType.GRASS;   // 'grass' | 'forest' | 'dirt'
+    this.structure = null;        // null (none) | 'building'
+    this.path = null;             // null (none) | 'road' | 'river' | 'bridge'
+    this.building = null;         // BuildingType or null
+    // Decompose the legacy TileType arg into (base, structure, path). This is
+    // the canonical way tiles are constructed (`new Tile(col, row, TileType.X)`)
+    // throughout map-gen, missions, and tests — the explicit-layer fields above
+    // stay as their authored defaults for the ROAD/RIVER/BRIDGE cases.
+    decomposeTileType(this, type);
     this.explored = false;
     this.resource = null;   // ResourceType or null (on open tiles)
     this.fortifyLevel = 0;  // 0=none, 1..6=fortified (see getFortifyCombatBonus)
     this.roadDirs = new Set(); // hexKeys of road-connected neighbours (set at map gen time)
   }
+}
+
+// Decompose a legacy TileType value into the three explicit layers, in place.
+// This is the WRITE-side inverse of `legacyTileType()` and the canonical way to
+// import a single-`type` value (the Tile constructor, legacy save/mission JSON
+// reconstruction). Replaces the old `set type()` shim — callers set layers
+// explicitly via this named helper rather than through a hidden property setter.
+export function decomposeTileType(tile, v) {
+  switch (v) {
+    case TileType.GRASS:
+    case TileType.FOREST:
+    case TileType.DIRT:
+      tile.base = v;
+      tile.structure = null;
+      tile.path = null;
+      break;
+    case TileType.ROAD:
+      tile.path = PathType.ROAD;     // base unchanged (defaults to grass)
+      break;
+    case TileType.RIVER:
+      tile.path = PathType.RIVER;
+      break;
+    case TileType.BRIDGE:
+      tile.path = PathType.BRIDGE;
+      break;
+    case TileType.BUILDING:
+      // Buildings render on dirt today; default the base to match. Legacy
+      // `type` is single-valued, so importing BUILDING must make the tile REPORT
+      // building — clear the `path` layer (it sits above building in the
+      // precedence). Road-through-building is carried by the separate `roadDirs`
+      // Set (untouched here), which is how the renderer has always drawn it —
+      // NOT by the `path` layer. So clearing `path` loses no road-through info.
+      tile.base = TileType.DIRT;
+      tile.structure = StructureType.BUILDING;
+      tile.path = null;
+      break;
+    default:
+      // Unknown value: store as base so nothing silently breaks.
+      tile.base = v;
+      tile.structure = null;
+      tile.path = null;
+  }
+  return tile;
+}
+
+// ── Layer accessors ────────────────────────────────────────────────────────
+// Tolerant of plain (non-Tile) serialized tile objects: fall back to defaults.
+
+export function baseOf(tile) {
+  return tile?.base ?? TileType.GRASS;
+}
+
+export function pathOf(tile) {
+  return tile?.path ?? null;
+}
+
+export function structureOf(tile) {
+  if (!tile) return null;
+  // Either the explicit marker or a legacy direct `building` write counts.
+  if (tile.structure === StructureType.BUILDING || tile.building != null) {
+    return StructureType.BUILDING;
+  }
+  return null;
+}
+
+// Derive the single legacy TileType from the three layers — the READ-side
+// inverse of `decomposeTileType()`. Replaces the old `get type()` shim for the
+// few call sites that genuinely need one categorical value (display maps keyed
+// by TileType, the back-compat `type` field in the serialized snapshot / JSON
+// export). Precedence matches the old getter exactly: a path (river/bridge/road)
+// wins over a building, which wins over the base material. Note PathType values
+// are identical to the TileType ROAD/RIVER/BRIDGE values, so the path can be
+// returned directly.
+export function legacyTileType(tile) {
+  const p = pathOf(tile);
+  if (p) return p;
+  if (hasBuilding(tile)) return TileType.BUILDING;
+  return baseOf(tile);
+}
+
+// ── Predicate helpers ────────────────────────────────────────────────────────
+// Later phases use these instead of comparing `tile.type` directly.
+
+// A river is impassable water (no bridge).
+export function isRiver(tile) {
+  return pathOf(tile) === PathType.RIVER;
+}
+
+// A bridge crosses water and is passable.
+export function isBridge(tile) {
+  return pathOf(tile) === PathType.BRIDGE;
+}
+
+// Is there a building on this tile?
+export function hasBuilding(tile) {
+  return structureOf(tile) === StructureType.BUILDING;
+}
+
+// "Road-like" for movement cost (1 instead of 2): a road, a bridge, or any
+// building tile. Mirrors the old inline `type === ROAD || BRIDGE || BUILDING`.
+export function isPathRoadLike(tile) {
+  const p = pathOf(tile);
+  return p === PathType.ROAD || p === PathType.BRIDGE || hasBuilding(tile);
+}
+
+// Does this tile provide forest cover (defender +1 DEF vs ranged)?
+//
+// LOCKED operator decision: cover is granted whenever the BASE material is
+// forest, REGARDLESS of any path or structure on top — i.e. a road or building
+// over forest STILL gives cover. This differs from today's behaviour (where
+// laying a road cleared the forest type); the gameplay change is adopted in a
+// later phase (P4). Readers should switch to this predicate now.
+export function isForestCover(tile) {
+  return baseOf(tile) === TileType.FOREST;
 }
 
 // Hard cap on fortification level.
@@ -223,4 +386,75 @@ const FORTIFY_BONUS_TABLE = [
 export function getFortifyCombatBonus(fortifyLevel) {
   const lvl = Math.max(0, Math.min(MAX_FORTIFY_LEVEL, fortifyLevel | 0));
   return FORTIFY_BONUS_TABLE[lvl];
+}
+
+// ── Hex capacity (slot model) ──────────────────────────────────────────────
+// Each hex has 7 placement points (centre + 6 outer ring) — mirrors
+// TILE_SLOTS in src/renderer-3d.js. Structures and trees consume slots; a
+// hex with no remaining capacity cannot be moved INTO. The game-side
+// movement gate uses these helpers; the renderer's slot allocator
+// (assignTileSlotIndices) reads the same world.
+//
+// Slot weights:
+//   building = 3 slots  (BUILDING_SLOT_COST)
+//   tree     = 1 slot   (TREE_SLOT_COST)
+//   unit     = 1 slot   (UNIT_SLOT_COST)
+
+export const TILE_CAPACITY      = 7;
+export const BUILDING_SLOT_COST = 3;
+export const TREE_SLOT_COST     = 1;
+export const UNIT_SLOT_COST     = 1;
+
+// Forest-tile tree-count knobs. Owned here (rather than in renderer-3d.js)
+// so the game-side capacity gate and the renderer's tree placement agree
+// exactly — both read these constants and call `treeCountForTile`.
+export const FOREST_TREES_MIN     = 3;
+export const FOREST_TREES_MAX     = 5;
+export const FOREST_DENSITY_SCALE = 0.6;
+
+// Stable hash on (col,row,salt). Matches the renderer's `_forestHash`
+// formula bit-for-bit so the same hex always yields the same numbers
+// regardless of which module asked. Pure + deterministic.
+function _hexHash(col, row, salt) {
+  let h = ((col | 0) * 73856093) ^ ((row | 0) * 19349663) ^ ((salt | 0) * 83492791);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  h = (h ^ (h >>> 16)) >>> 0;
+  return h / 0x100000000;
+}
+
+// Scale a raw hash-derived per-hex tree count by a density multiplier,
+// rounding to the nearest whole tree and clamping to ≥1 so a forest hex
+// is never left empty. Pure + deterministic.
+export function scaledForestTreeCount(rawCount, densityScale) {
+  return Math.max(1, Math.round(rawCount * densityScale));
+}
+
+// Tree count on this tile. Forest base → seeded count in
+// [FOREST_TREES_MIN, FOREST_TREES_MAX], then scaled by FOREST_DENSITY_SCALE.
+// Non-forest → 0. The renderer's `forestTreesForHex` calls this so the
+// game's capacity gate and the visual cluster always agree.
+export function treeCountForTile(tile) {
+  if (!tile || baseOf(tile) !== TileType.FOREST) return 0;
+  const span = FOREST_TREES_MAX - FOREST_TREES_MIN + 1;
+  const rawN = FOREST_TREES_MIN + Math.floor(_hexHash(tile.col, tile.row, 0) * span);
+  return scaledForestTreeCount(rawN, FOREST_DENSITY_SCALE);
+}
+
+// Slots consumed by static structures on this tile (building + trees).
+// Units are NOT counted here — callers add them via tileCapacityRemaining.
+export function tileOccupancyCount(tile) {
+  if (!tile) return 0;
+  const building = hasBuilding(tile) ? BUILDING_SLOT_COST : 0;
+  const trees    = treeCountForTile(tile) * TREE_SLOT_COST;
+  return building + trees;
+}
+
+// Capacity remaining on this tile given a list (or count) of occupying
+// units. Pass the units already present on the tile EXCLUDING any unit
+// about to move in. A return value ≤ 0 means the tile is full.
+//   tileCapacityRemaining(tile, units)   — units is array
+//   tileCapacityRemaining(tile, n)       — units is a count
+export function tileCapacityRemaining(tile, occupyingUnits = 0) {
+  const n = Array.isArray(occupyingUnits) ? occupyingUnits.length : (occupyingUnits | 0);
+  return TILE_CAPACITY - tileOccupancyCount(tile) - n * UNIT_SLOT_COST;
 }

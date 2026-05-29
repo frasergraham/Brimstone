@@ -22,7 +22,7 @@ import {
   PHASE_LIGHT_CONFIG,
   getPhaseLightConfig,
 } from '../src/renderer-3d.js';
-import { TileType } from '../src/tiles.js';
+import { TileType, Tile } from '../src/tiles.js';
 import { hexKey } from '../src/hex.js';
 import { Phase } from '../src/game.js';
 
@@ -30,10 +30,17 @@ import { Phase } from '../src/game.js';
 
 describe('Renderer3D polish — bridgeRotationY', () => {
   // Helper: build a Map<hexKey, Tile> from a flat list of {col,row,type} tiles
-  // so the helper can look up water neighbours.
+  // so the helper can look up water neighbours. Each descriptor is promoted to
+  // a real layered Tile so the isRiver()/isBridge() predicates resolve from the
+  // path layer (plain {type} objects carry no path layer).
   function buildTileMap(tiles) {
     const m = new Map();
-    for (const t of tiles) m.set(hexKey(t.col, t.row), t);
+    for (const t of tiles) {
+      const tile = new Tile(t.col, t.row, t.type);
+      if (t.roadDirs) tile.roadDirs = t.roadDirs;
+      if (t.building != null) tile.building = t.building;
+      m.set(hexKey(t.col, t.row), tile);
+    }
     return m;
   }
 

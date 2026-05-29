@@ -6,13 +6,26 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { TileType } from '../src/tiles.js';
+import { TileType, Tile, legacyTileType } from '../src/tiles.js';
 import { hexKey } from '../src/hex.js';
+
+// Build a real layered Tile so the network builders' baseOf/pathOf/isBridge/
+// hasBuilding predicates resolve correctly (plain `{type}` objects carry no
+// path/structure layers). `new Tile(col,row,type)` decomposes the legacy type
+// into the (base, structure, path) layers via the shim setter.
+function mkTile(col, row, type, { roadDirs = [], building = null } = {}) {
+  const t = new Tile(col, row, type);
+  t.roadDirs = new Set(roadDirs);
+  if (building != null) t.building = building;
+  return t;
+}
 import {
   sampleQuadBezier,
   networkStrokesForTile,
   buildRiverNetworkStrokes,
   buildRoadNetworkStrokes,
+  terminusCapSamples,
+  TERMINUS_CAP_SEGMENTS,
   RIVER_RIBBON_WIDTH,
   ROAD_RIBBON_WIDTH,
   RIVER_RIBBON_Y,
@@ -131,6 +144,21 @@ describe('networkStrokesForTile — per-tile geometry', () => {
     assert.ok(Math.abs(pts[1].x - (centre.x + apo)) < 1e-9,
       `road 1-neighbour endpoint x ${pts[1].x} should sit on east edge ${centre.x + apo}`);
     assert.ok(Math.abs(pts[1].z - centre.z) < 1e-9);
+    // The centre end is a genuine dead-end → tagged so the ribbon builder
+    // rounds + fades it into a terminus cap.
+    assert.equal(pts.terminusStart, true, 'road dead-end stub tags its centre terminus');
+  });
+
+  test('river 1-neighbour stub is NOT tagged as a terminus (flows off-map)', () => {
+    const strokes = networkStrokesForTile(
+      { col: 0, row: 0 }, [{ col: 1, row: 0 }], { kind: 'river' });
+    assert.notEqual(strokes[0].terminusStart, true);
+  });
+
+  test('multi-neighbour road strokes are not terminus-tagged', () => {
+    const strokes = networkStrokesForTile({ col: 1, row: 0 },
+      [{ col: 0, row: 0 }, { col: 2, row: 0 }], { kind: 'road' });
+    for (const s of strokes) assert.notEqual(s.terminusStart, true);
   });
 
   test('two-neighbour tile emits one smooth through-bezier between edges', () => {
@@ -156,6 +184,19 @@ describe('networkStrokesForTile — per-tile geometry', () => {
     const byLen = [...strokes].sort((a, b) => a.length - b.length);
     assert.equal(byLen[0].length, 2);
     assert.ok(byLen[1].length > 2);
+  });
+
+  test('four-neighbour junction emits a through-bezier plus 2 spokes', () => {
+    // A full + junction: E/W opposed as the through-channel, N/S as spokes.
+    const strokes = networkStrokesForTile({ col: 2, row: 2 }, [
+      { col: 1, row: 2 }, { col: 3, row: 2 }, // W + E
+      { col: 2, row: 1 }, { col: 2, row: 3 }, // N + S branches
+    ]);
+    assert.equal(strokes.length, 3, 'expected through-bezier + 2 spokes');
+    const spokes = strokes.filter(s => s.length === 2);
+    const bezier = strokes.filter(s => s.length > 2);
+    assert.equal(spokes.length, 2, 'two straight spokes for the N/S branches');
+    assert.equal(bezier.length, 1, 'one smooth through-bezier for the main channel');
   });
 
   test('multi-neighbour through-bezier picks the most-opposing pair', () => {
@@ -198,7 +239,7 @@ describe('buildRiverNetworkStrokes', () => {
   function makeTiles() {
     const tiles = new Map();
     const add = (col, row, type) => {
-      tiles.set(hexKey(col, row), { col, row, type, roadDirs: new Set() });
+      tiles.set(hexKey(col, row), mkTile(col, row, type));
     };
     add(0, 1, TileType.RIVER);
     add(1, 1, TileType.BRIDGE);
@@ -222,16 +263,41 @@ describe('buildRiverNetworkStrokes', () => {
 
   test('isolated water tile (no water neighbours) is skipped', () => {
     const tiles = new Map();
-    tiles.set(hexKey(5, 5),
-      { col: 5, row: 5, type: TileType.RIVER, roadDirs: new Set() });
+    tiles.set(hexKey(5, 5), mkTile(5, 5, TileType.RIVER));
     assert.equal(buildRiverNetworkStrokes(tiles).length, 0);
   });
 
   test('grass tiles are not part of the river network', () => {
     const tiles = new Map();
-    tiles.set(hexKey(0, 0),
-      { col: 0, row: 0, type: TileType.GRASS, roadDirs: new Set() });
+    tiles.set(hexKey(0, 0), mkTile(0, 0, TileType.GRASS));
     assert.equal(buildRiverNetworkStrokes(tiles).length, 0);
+  });
+
+  test('forked river (3 branches meeting at a junction tile) renders every branch', () => {
+    // Human-edited fork: a central RIVER junction at (1,1) with three RIVER
+    // arms — W (0,1), E (2,1), N (1,0). The procedural generator never makes
+    // this, but the renderer must connect all three branches at the junction.
+    const tiles = new Map();
+    const add = (c, r) => tiles.set(hexKey(c, r), mkTile(c, r, TileType.RIVER));
+    add(1, 1); // junction
+    add(0, 1); // W arm
+    add(2, 1); // E arm
+    add(1, 0); // N arm
+    const segs = buildRiverNetworkStrokes(tiles);
+    assert.equal(segs.length, 4, 'junction + 3 arms all emit segments');
+
+    const junction = segs.find(s => s.tile.col === 1 && s.tile.row === 1);
+    assert.ok(junction, 'junction tile emits a segment');
+    // 3 water neighbours → through-bezier (1 stroke) + 1 spoke for the 3rd arm.
+    assert.equal(junction.strokes.length, 2,
+      'junction draws a through-bezier plus a spoke (not a single through-stroke)');
+    const spoke = junction.strokes.find(s => s.length === 2);
+    assert.ok(spoke, 'the third arm is drawn as a centre→edge spoke');
+
+    // Each arm is a 2-neighbour-or-fewer tile → no spokes, just its own stroke.
+    for (const arm of segs.filter(s => s !== junction)) {
+      assert.ok(arm.strokes.length >= 1, 'each arm draws toward the junction');
+    }
   });
 });
 
@@ -240,8 +306,7 @@ describe('buildRoadNetworkStrokes', () => {
   function makeTiles() {
     const tiles = new Map();
     const add = (col, row, type, roadDirs = []) => {
-      tiles.set(hexKey(col, row),
-        { col, row, type, roadDirs: new Set(roadDirs) });
+      tiles.set(hexKey(col, row), mkTile(col, row, type, { roadDirs }));
     };
     add(0, 1, TileType.ROAD, [hexKey(1, 1)]);
     add(1, 1, TileType.ROAD, [hexKey(0, 1), hexKey(2, 1)]);
@@ -275,8 +340,7 @@ describe('buildRoadNetworkStrokes', () => {
 
   test('tiles without roadDirs are skipped (no phantom junctions)', () => {
     const tiles = new Map();
-    tiles.set(hexKey(0, 0),
-      { col: 0, row: 0, type: TileType.ROAD, roadDirs: new Set() });
+    tiles.set(hexKey(0, 0), mkTile(0, 0, TileType.ROAD));
     assert.equal(buildRoadNetworkStrokes(tiles).length, 0);
   });
 
@@ -285,18 +349,14 @@ describe('buildRoadNetworkStrokes', () => {
     // sits on the MST, so its roadDirs are populated at gen time. The 3D
     // ribbon must pass through it so the road reads as contiguous.
     const tiles = new Map();
-    tiles.set(hexKey(0, 0),
-      { col: 0, row: 0, type: TileType.ROAD,     roadDirs: new Set([hexKey(1, 0)]) });
-    tiles.set(hexKey(1, 0),
-      { col: 1, row: 0, type: TileType.BUILDING, building: 'INN',
-        roadDirs: new Set([hexKey(0, 0), hexKey(2, 0)]) });
-    tiles.set(hexKey(2, 0),
-      { col: 2, row: 0, type: TileType.ROAD,     roadDirs: new Set([hexKey(1, 0)]) });
+    tiles.set(hexKey(0, 0), mkTile(0, 0, TileType.ROAD,     { roadDirs: [hexKey(1, 0)] }));
+    tiles.set(hexKey(1, 0), mkTile(1, 0, TileType.BUILDING, { building: 'INN', roadDirs: [hexKey(0, 0), hexKey(2, 0)] }));
+    tiles.set(hexKey(2, 0), mkTile(2, 0, TileType.ROAD,     { roadDirs: [hexKey(1, 0)] }));
 
     const segs = buildRoadNetworkStrokes(tiles);
     assert.equal(segs.length, 3, 'all three tiles (road–building–road) should emit strokes');
 
-    const building = segs.find(s => s.tile.type === TileType.BUILDING);
+    const building = segs.find(s => legacyTileType(s.tile) === TileType.BUILDING);
     assert.ok(building, 'building tile with roadDirs must emit a road segment');
     // Two roadDirs neighbours → one through-bezier across the tile centre.
     assert.equal(building.strokes.length, 1, 'transit building emits one through-bezier');
@@ -305,14 +365,11 @@ describe('buildRoadNetworkStrokes', () => {
 
   test('BUILDING tile with one roadDir (spoke endpoint) emits a stub into the building', () => {
     const tiles = new Map();
-    tiles.set(hexKey(0, 0),
-      { col: 0, row: 0, type: TileType.ROAD,     roadDirs: new Set([hexKey(1, 0)]) });
-    tiles.set(hexKey(1, 0),
-      { col: 1, row: 0, type: TileType.BUILDING, building: 'INN',
-        roadDirs: new Set([hexKey(0, 0)]) });
+    tiles.set(hexKey(0, 0), mkTile(0, 0, TileType.ROAD,     { roadDirs: [hexKey(1, 0)] }));
+    tiles.set(hexKey(1, 0), mkTile(1, 0, TileType.BUILDING, { building: 'INN', roadDirs: [hexKey(0, 0)] }));
 
     const segs = buildRoadNetworkStrokes(tiles);
-    const building = segs.find(s => s.tile.type === TileType.BUILDING);
+    const building = segs.find(s => legacyTileType(s.tile) === TileType.BUILDING);
     assert.ok(building, 'spoke-endpoint building still emits a road segment');
     assert.equal(building.strokes.length, 1);
     assert.equal(building.strokes[0].length, 2, 'spoke endpoint is a 2-point stub');
@@ -320,20 +377,16 @@ describe('buildRoadNetworkStrokes', () => {
 
   test('BUILDING tile without roadDirs (off the network) emits no strokes', () => {
     const tiles = new Map();
-    tiles.set(hexKey(0, 0),
-      { col: 0, row: 0, type: TileType.BUILDING, building: 'INN', roadDirs: new Set() });
+    tiles.set(hexKey(0, 0), mkTile(0, 0, TileType.BUILDING, { building: 'INN' }));
     assert.equal(buildRoadNetworkStrokes(tiles).length, 0,
       'unconnected building must not draw road ribbon');
   });
 
   test('BRIDGE tiles with roadDirs participate in the road network', () => {
     const tiles = new Map();
-    tiles.set(hexKey(0, 0),
-      { col: 0, row: 0, type: TileType.ROAD, roadDirs: new Set([hexKey(1, 0)]) });
-    tiles.set(hexKey(1, 0),
-      { col: 1, row: 0, type: TileType.BRIDGE, roadDirs: new Set([hexKey(0, 0), hexKey(2, 0)]) });
-    tiles.set(hexKey(2, 0),
-      { col: 2, row: 0, type: TileType.ROAD, roadDirs: new Set([hexKey(1, 0)]) });
+    tiles.set(hexKey(0, 0), mkTile(0, 0, TileType.ROAD,   { roadDirs: [hexKey(1, 0)] }));
+    tiles.set(hexKey(1, 0), mkTile(1, 0, TileType.BRIDGE, { roadDirs: [hexKey(0, 0), hexKey(2, 0)] }));
+    tiles.set(hexKey(2, 0), mkTile(2, 0, TileType.ROAD,   { roadDirs: [hexKey(1, 0)] }));
     const segs = buildRoadNetworkStrokes(tiles);
     assert.equal(segs.length, 3);
     // The bridge segment should contribute one through-bezier
@@ -344,5 +397,63 @@ describe('buildRoadNetworkStrokes', () => {
   test('null or empty tiles input returns []', () => {
     assert.deepEqual(buildRoadNetworkStrokes(null), []);
     assert.deepEqual(buildRoadNetworkStrokes(new Map()), []);
+  });
+});
+
+describe('terminusCapSamples — rounded fading road dead-end cap', () => {
+  const tip = { x: 0, z: 0 };
+  const inward = { x: 1, z: 0 }; // road body runs east; cap bulges west
+
+  test('returns TERMINUS_CAP_SEGMENTS samples by default', () => {
+    const caps = terminusCapSamples(tip, inward, 0.3);
+    assert.equal(caps.length, TERMINUS_CAP_SEGMENTS);
+  });
+
+  test('outermost sample is the tip: zero width and zero alpha, full radius out', () => {
+    const r = 0.3;
+    const caps = terminusCapSamples(tip, inward, r);
+    const outer = caps[0];
+    assert.ok(Math.abs(outer.widthScale) < 1e-9, 'tip half-width collapses to 0 (semicircle point)');
+    assert.ok(Math.abs(outer.alpha) < 1e-9, 'tip fully transparent');
+    // Tip sits a full radius OUTWARD (−inward) from the dead-end point.
+    assert.ok(Math.abs(outer.x - (-r)) < 1e-9, `tip x ${outer.x} should be ${-r}`);
+    assert.ok(Math.abs(outer.z) < 1e-9);
+  });
+
+  test('width and alpha rise monotonically from tip toward the base', () => {
+    const caps = terminusCapSamples(tip, inward, 0.3);
+    for (let i = 1; i < caps.length; i++) {
+      assert.ok(caps[i].widthScale > caps[i - 1].widthScale, 'widthScale increases inward');
+      assert.ok(caps[i].alpha >= caps[i - 1].alpha, 'alpha increases inward');
+    }
+    // Base sample is near (but below) full width/alpha — it blends into the
+    // full-width opaque road body that follows it.
+    const base = caps[caps.length - 1];
+    assert.ok(base.widthScale > 0.9 && base.widthScale <= 1.0);
+    assert.ok(base.alpha > 0.9 && base.alpha <= 1.0);
+  });
+
+  test('samples trace a quarter-circle: axisDist² + halfWidth² == radius²', () => {
+    const r = 0.42;
+    const caps = terminusCapSamples(tip, inward, r);
+    for (const c of caps) {
+      const axisDist = Math.hypot(c.x - tip.x, c.z - tip.z); // outward distance
+      const halfWidth = c.widthScale * r;
+      assert.ok(Math.abs(axisDist * axisDist + halfWidth * halfWidth - r * r) < 1e-9,
+        `sample should lie on the circle of radius ${r}`);
+    }
+  });
+
+  test('cap extends along −inward (away from the road body)', () => {
+    // inward points +x, so all cap samples sit at x ≤ 0 (west of the dead-end).
+    const caps = terminusCapSamples(tip, inward, 0.3);
+    for (const c of caps) assert.ok(c.x <= 1e-9, `cap sample x ${c.x} should be ≤ 0`);
+  });
+
+  test('guards: bad inputs return []', () => {
+    assert.deepEqual(terminusCapSamples(null, inward, 0.3), []);
+    assert.deepEqual(terminusCapSamples(tip, null, 0.3), []);
+    assert.deepEqual(terminusCapSamples(tip, inward, 0), []);
+    assert.deepEqual(terminusCapSamples(tip, inward, -1), []);
   });
 });

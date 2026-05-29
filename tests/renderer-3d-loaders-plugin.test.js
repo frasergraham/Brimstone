@@ -10,7 +10,7 @@
 //   • idempotent — never injects a duplicate script
 //   • resolves true on script load, false on error
 //   • returns false (no throw) when there's no DOM
-//   • _loadHouseModel awaits this helper before calling ImportMeshAsync
+//   • _loadBuildingModel awaits this helper before calling ImportMeshAsync
 //
 // Task: t-87dced06. Consumers: t-cfee95e5 (house), t-6bf7942e (paladin).
 
@@ -217,7 +217,7 @@ describe('_ensureBabylonLoaders — script injection', () => {
   });
 });
 
-describe('_loadHouseModel — invokes the loaders helper', () => {
+describe('_loadBuildingModel — invokes the loaders helper', () => {
   test('awaits _ensureBabylonLoaders BEFORE calling ImportMeshAsync', async () => {
     const r = newInst();
     r._scene = {};
@@ -247,7 +247,7 @@ describe('_loadHouseModel — invokes the loaders helper', () => {
     const originalWarn = console.warn;
     console.warn = () => {};
     try {
-      await r._loadHouseModel('assets');
+      await r._loadBuildingModel('models/house.glb', 'assets');
     } finally {
       console.warn = originalWarn;
     }
@@ -274,7 +274,7 @@ describe('_loadHouseModel — invokes the loaders helper', () => {
       Mesh: { MergeMeshes: () => null },
       SceneLoader: { ImportMeshAsync: async () => ({ meshes: [fakeMesh] }) },
     };
-    const loaded = await r._loadHouseModel('assets');
-    assert.equal(loaded, fakeMesh, 'house loads against the test stub even without a real loaders plugin');
+    const loaded = await r._loadBuildingModel('models/house.glb', 'assets');
+    assert.equal(loaded, fakeMesh, 'building loads against the test stub even without a real loaders plugin');
   });
 });

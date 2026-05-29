@@ -13,7 +13,7 @@ import {
 import { validatePlanAction, PlanActionType } from '../src/planner.js';
 import { Phase } from '../src/game.js';
 import { createHero, createWitch, createMinion } from '../src/entities.js';
-import { TileType } from '../src/tiles.js';
+import { TileType, PathType } from '../src/tiles.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -153,19 +153,24 @@ describe('getValidActions does not leak enemy positions in fog', () => {
 
     // Fresh setup: hero with horse at (0,0), enemy at (0,2), NIGHT phase
     const s = makeTinyState('partial');
-    s.phase = Phase.NIGHT; // sight=1
+    s.phase = Phase.NIGHT; // hero sight=3 — radial would see (0,2)
     const h = createHero(0, 0, 'hero');
     h.items = { horse: 1 };
     placeEntity(s, h);
     const m = createMinion(0, 2, 'witch');
     placeEntity(s, m);
 
-    // Make road path to extend range: (0,0)->(0,1)->(0,2) all roads
+    // Make road path to extend range: (0,0)->(0,1)->(0,2) all roads.
+    // Put a forest base under the (0,1) road so LOS is blocked there — the
+    // hidden enemy at (0,2) can't be seen by the hero even though they're
+    // within radial sight range. Road movement still works on the same hex.
     s.tiles.set(hexKey(0, 1), {
-      type: TileType.ROAD, building: null, fortifyLevel: 0, explored: false,
+      type: TileType.ROAD, base: TileType.FOREST, path: PathType.ROAD,
+      building: null, fortifyLevel: 0, explored: false,
     });
     s.tiles.set(hexKey(0, 2), {
-      type: TileType.ROAD, building: null, fortifyLevel: 0, explored: false,
+      type: TileType.ROAD, base: TileType.GRASS, path: PathType.ROAD,
+      building: null, fortifyLevel: 0, explored: false,
     });
 
     const actions = getValidActions(s, h);
@@ -229,11 +234,15 @@ describe('validatePlanAction MOVE respects fog', () => {
     const m = createMinion(0, 2, 'witch');
     placeEntity(s, m);
 
+    // Forest base on (0,1) blocks LOS — the enemy at (0,2) is hidden even
+    // though it's within radial NIGHT sight (3).
     s.tiles.set(hexKey(0, 1), {
-      type: TileType.ROAD, building: null, fortifyLevel: 0, explored: false,
+      type: TileType.ROAD, base: TileType.FOREST, path: PathType.ROAD,
+      building: null, fortifyLevel: 0, explored: false,
     });
     s.tiles.set(hexKey(0, 2), {
-      type: TileType.ROAD, building: null, fortifyLevel: 0, explored: false,
+      type: TileType.ROAD, base: TileType.GRASS, path: PathType.ROAD,
+      building: null, fortifyLevel: 0, explored: false,
     });
 
     const result = validatePlanAction(s, {

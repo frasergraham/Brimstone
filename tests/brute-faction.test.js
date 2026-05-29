@@ -12,7 +12,7 @@ import {
 import {
   EntityType, createMinion, createZombie,
 } from '../src/entities.js';
-import { TileType, ResourceType, BuildingType } from '../src/tiles.js';
+import { TileType, ResourceType, BuildingType, legacyTileType, decomposeTileType } from '../src/tiles.js';
 import { hexKey, getNeighbors, hexDistance } from '../src/hex.js';
 import { getFaction, BruteFaction, WitchFaction } from '../src/factions.js';
 
@@ -153,7 +153,7 @@ describe('BruteFaction — onAfterMoveStep auto-zombifies survivors in buildings
   test('moving onto a building tile with a hidden survivor auto-raises a zombie', () => {
     const { state, brute } = bruteState(3, 3);
     const t = state.tiles.get(hexKey(4, 3));
-    t.type = TileType.BUILDING;
+    decomposeTileType(t, TileType.BUILDING);
     t.building = BuildingType.INN;
     t.hiddenSurvivor = true;
     t.explored = false;
@@ -173,12 +173,12 @@ describe('BruteFaction — onAfterMoveStep auto-zombifies survivors in buildings
   test('moving adjacent to a building with a hidden survivor auto-zombifies', () => {
     const { state, brute } = bruteState(3, 3);
     const adj = state.tiles.get(hexKey(5, 3));
-    adj.type = TileType.BUILDING;
+    decomposeTileType(adj, TileType.BUILDING);
     adj.building = BuildingType.CHURCH;
     adj.hiddenSurvivor = true;
     adj.explored = false;
     const dest = state.tiles.get(hexKey(4, 3));
-    dest.type = TileType.GRASS;
+    decomposeTileType(dest, TileType.GRASS);
     dest.building = null;
     dest.hiddenSurvivor = false;
 
@@ -192,7 +192,7 @@ describe('BruteFaction — onAfterMoveStep auto-zombifies survivors in buildings
   test('auto-zombify does NOT trigger for non-building tiles, even adjacent', () => {
     const { state, brute } = bruteState(3, 3);
     const adj = state.tiles.get(hexKey(5, 3));
-    adj.type = TileType.GRASS;
+    decomposeTileType(adj, TileType.GRASS);
     adj.building = null;
     adj.hiddenSurvivor = true;
     // Clear hidden-survivor flags on the path so the phase-random
@@ -212,12 +212,12 @@ describe('BruteFaction — onAfterMoveStep auto-zombifies survivors in buildings
     state.witch.col = 3;
     state.witch.row = 3;
     const adj = state.tiles.get(hexKey(5, 3));
-    adj.type = TileType.BUILDING;
+    decomposeTileType(adj, TileType.BUILDING);
     adj.building = BuildingType.INN;
     adj.hiddenSurvivor = true;
     adj.explored = false;
     const dest = state.tiles.get(hexKey(4, 3));
-    dest.type = TileType.GRASS;
+    decomposeTileType(dest, TileType.GRASS);
     dest.building = null;
     dest.hiddenSurvivor = false;
 
@@ -256,7 +256,7 @@ function placeNeutralBystander(state, targetPos, actor, hp = 99) {
   const candidate = getNeighbors(targetPos.col, targetPos.row).find(n => {
     if (n.col === actor.col && n.row === actor.row) return false;
     const t = state.tiles.get(hexKey(n.col, n.row));
-    if (!t || t.type === TileType.RIVER) return false;
+    if (!t || legacyTileType(t) === TileType.RIVER) return false;
     return state.entities.every(e => !e.alive || e.col !== n.col || e.row !== n.row);
   });
   if (!candidate) return null;
@@ -303,7 +303,7 @@ describe('BruteFaction — splash splashes on every hit, not just crushes', () =
     const bystanderPos = getNeighbors(targetPos.col, targetPos.row).find(n => {
       if (n.col === witch.col && n.row === witch.row) return false;
       const t = state.tiles.get(hexKey(n.col, n.row));
-      return t && t.type !== TileType.RIVER;
+      return t && legacyTileType(t) !== TileType.RIVER;
     });
     const bystander = createMinion(bystanderPos.col, bystanderPos.row);
     bystander.owner = 'witch';
@@ -376,7 +376,7 @@ describe('BruteFaction — splash spares allies (friendly-fire off)', () => {
     const allyPos = getNeighbors(targetPos.col, targetPos.row).find(n => {
       if (n.col === brute.col && n.row === brute.row) return false;
       const t = state.tiles.get(hexKey(n.col, n.row));
-      return t && t.type !== TileType.RIVER;
+      return t && legacyTileType(t) !== TileType.RIVER;
     });
     const ally = createMinion(allyPos.col, allyPos.row);
     ally.owner = 'witch'; // attacker's side
@@ -402,7 +402,7 @@ describe('BruteFaction — splash knocks bystanders outward', () => {
     state.entities = state.entities.filter(e => e === brute);
     for (const [, t] of state.tiles) {
       if (hexDistance(t.col, t.row, brute.col, brute.row) <= 4) {
-        t.type = TileType.GRASS;
+        decomposeTileType(t, TileType.GRASS);
         t.building = null;
         t.fortifyLevel = 0;
       }

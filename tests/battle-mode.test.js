@@ -7,7 +7,7 @@ import { createHero, createWitch, createMinion, createZombie,
          createSurvivor, resetRoster, EntityType,
          HERO_PLAYER_COLORS, WITCH_PLAYER_COLORS } from '../src/entities.js';
 import { hexKey, getNeighbors, hexDistance, MAP_COLS, MAP_ROWS } from '../src/hex.js';
-import { TileType, BuildingType } from '../src/tiles.js';
+import { TileType, BuildingType, legacyTileType } from '../src/tiles.js';
 import { generateBattleStarts } from '../src/map.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import { buildObjectivesHtml } from '../src/ui-render.js';
@@ -183,7 +183,7 @@ describe('Battle mode death/scatter', () => {
     const neighbors = getNeighbors(buildingTile.col, buildingTile.row);
     const passable = neighbors.find(n => {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      return t && t.type !== TileType.RIVER;
+      return t && legacyTileType(t) !== TileType.RIVER;
     });
     assert.ok(passable, 'should have a passable neighbor');
     const surv = createSurvivor(passable.col, passable.row, 'hero');
@@ -306,8 +306,8 @@ describe('Battle map building placement', () => {
     const inns = [];
     const graveyards = [];
     for (const [, t] of state.tiles) {
-      if (t.type === TileType.BUILDING && t.building === BuildingType.INN) inns.push(t);
-      if (t.type === TileType.BUILDING && t.building === BuildingType.GRAVEYARD) graveyards.push(t);
+      if (legacyTileType(t) === TileType.BUILDING && t.building === BuildingType.INN) inns.push(t);
+      if (legacyTileType(t) === TileType.BUILDING && t.building === BuildingType.GRAVEYARD) graveyards.push(t);
     }
     assert.equal(inns.length, 5, `expected 5 INNs, got ${inns.length}`);
     assert.equal(graveyards.length, 5, `expected 5 GRAVEYARDs, got ${graveyards.length}`);
@@ -319,8 +319,8 @@ describe('Battle map building placement', () => {
     const inns = [];
     const graveyards = [];
     for (const [, t] of state.tiles) {
-      if (t.type === TileType.BUILDING && t.building === BuildingType.INN) inns.push(t);
-      if (t.type === TileType.BUILDING && t.building === BuildingType.GRAVEYARD) graveyards.push(t);
+      if (legacyTileType(t) === TileType.BUILDING && t.building === BuildingType.INN) inns.push(t);
+      if (legacyTileType(t) === TileType.BUILDING && t.building === BuildingType.GRAVEYARD) graveyards.push(t);
     }
     const avgCol = arr => arr.reduce((s, t) => s + t.col, 0) / arr.length;
     const avgRow = arr => arr.reduce((s, t) => s + t.row, 0) / arr.length;

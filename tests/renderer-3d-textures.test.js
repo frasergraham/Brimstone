@@ -19,13 +19,25 @@ import {
   TERRAIN_DISC_Y_OFFSET,
   terrainSpriteIdFor,
 } from '../src/renderer-3d.js';
-import { TileType } from '../src/tiles.js';
+import { TileType, PathType, StructureType, Tile } from '../src/tiles.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+// Helper: build a Tile with explicit layers (base / path / structure) so the
+// tests exercise the layered model directly rather than the legacy `type`
+// shim. The ground-texture picker now reads `baseOf(tile)`.
+function layered({ base = TileType.GRASS, path = null, structure = null, building = null }, col = 0, row = 0) {
+  const t = new Tile(col, row, TileType.GRASS);
+  t.base = base;
+  t.path = path;
+  t.structure = structure;
+  t.building = building;
+  return t;
+}
+
 describe('Renderer3D — terrainSpriteIdFor', () => {
   test('grass tile picks a grass_N variant', () => {
-    const id = terrainSpriteIdFor({ type: TileType.GRASS }, 0, 0);
+    const id = terrainSpriteIdFor(layered({ base: TileType.GRASS }, 0, 0), 0, 0);
     assert.match(id, /^grass_[1-5]$/);
   });
 
@@ -33,31 +45,51 @@ describe('Renderer3D — terrainSpriteIdFor', () => {
     // FOREST sprite atlas variants are obsolete now — we render trees as
     // actual cone meshes on the tile, so the ground underneath is plain
     // grass. Same pattern BUILDING uses (dirt underlay + building box on top).
-    const id = terrainSpriteIdFor({ type: TileType.FOREST }, 1, 2);
+    const id = terrainSpriteIdFor(layered({ base: TileType.FOREST }, 1, 2), 1, 2);
     assert.match(id, /^grass_[1-5]$/);
   });
 
   test('dirt tile picks a dirt_N variant', () => {
-    const id = terrainSpriteIdFor({ type: TileType.DIRT }, 3, 4);
+    const id = terrainSpriteIdFor(layered({ base: TileType.DIRT }, 3, 4), 3, 4);
     assert.match(id, /^dirt_[1-5]$/);
   });
 
-  test('building tile uses a dirt base variant (matches 2D renderer)', () => {
-    const id = terrainSpriteIdFor({ type: TileType.BUILDING, building: 'inn' }, 5, 6);
-    assert.match(id, /^dirt_[1-5]$/);
+  test('building tile uses its REAL base material (P3: not forced to dirt)', () => {
+    // A building laid on dirt textures the disc as dirt; a building on grass
+    // textures it as grass. The building box/roof prop is layered on top.
+    const onDirt = terrainSpriteIdFor(
+      layered({ base: TileType.DIRT, structure: StructureType.BUILDING, building: 'inn' }, 5, 6), 5, 6);
+    assert.match(onDirt, /^dirt_[1-5]$/);
+    const onGrass = terrainSpriteIdFor(
+      layered({ base: TileType.GRASS, structure: StructureType.BUILDING, building: 'inn' }, 5, 6), 5, 6);
+    assert.match(onGrass, /^grass_[1-5]$/);
   });
 
-  test('road / river / bridge tiles use a grass underlay sprite', () => {
-    // Item 2: ROAD/RIVER/BRIDGE tiles render with grass underneath; the
-    // bezier network tube provides the path visual on top. Top-disc texture
-    // therefore needs to be a grass variant so the underlay reads correctly.
-    assert.match(terrainSpriteIdFor({ type: TileType.ROAD   }, 0, 0), /^grass_[1-5]$/);
-    assert.match(terrainSpriteIdFor({ type: TileType.RIVER  }, 0, 0), /^grass_[1-5]$/);
-    assert.match(terrainSpriteIdFor({ type: TileType.BRIDGE }, 0, 0), /^grass_[1-5]$/);
+  test('P3 payoff: a road/river over its REAL base textures from that base', () => {
+    // The implicit-grass assumption is gone — a road over dirt shows dirt, a
+    // river over dirt shows dirt. (A road over forest still shows the grass
+    // underlay because forest grounds are grass with cones on top.)
+    assert.match(
+      terrainSpriteIdFor(layered({ base: TileType.DIRT, path: PathType.ROAD }, 0, 0), 0, 0),
+      /^dirt_[1-5]$/);
+    assert.match(
+      terrainSpriteIdFor(layered({ base: TileType.DIRT, path: PathType.RIVER }, 0, 0), 0, 0),
+      /^dirt_[1-5]$/);
+    // road / river / bridge over GRASS → grass underlay (unchanged from before).
+    assert.match(
+      terrainSpriteIdFor(layered({ base: TileType.GRASS, path: PathType.ROAD }, 0, 0), 0, 0),
+      /^grass_[1-5]$/);
+    assert.match(
+      terrainSpriteIdFor(layered({ base: TileType.GRASS, path: PathType.BRIDGE }, 0, 0), 0, 0),
+      /^grass_[1-5]$/);
+    // road over FOREST → grass underlay (cones render on top via forestTreesForHex).
+    assert.match(
+      terrainSpriteIdFor(layered({ base: TileType.FOREST, path: PathType.ROAD }, 0, 0), 0, 0),
+      /^grass_[1-5]$/);
   });
 
-  test('unknown tile type returns null', () => {
-    assert.equal(terrainSpriteIdFor({ type: 'lava' }, 0, 0), null);
+  test('unknown base material returns null', () => {
+    assert.equal(terrainSpriteIdFor(layered({ base: 'lava' }, 0, 0), 0, 0), null);
   });
 
   test('null / undefined tile returns null safely', () => {
@@ -66,8 +98,8 @@ describe('Renderer3D — terrainSpriteIdFor', () => {
   });
 
   test('same hex deterministically picks the same variant across calls', () => {
-    const a = terrainSpriteIdFor({ type: TileType.GRASS }, 7, 11);
-    const b = terrainSpriteIdFor({ type: TileType.GRASS }, 7, 11);
+    const a = terrainSpriteIdFor(layered({ base: TileType.GRASS }, 7, 11), 7, 11);
+    const b = terrainSpriteIdFor(layered({ base: TileType.GRASS }, 7, 11), 7, 11);
     assert.equal(a, b);
   });
 
@@ -75,7 +107,7 @@ describe('Renderer3D — terrainSpriteIdFor', () => {
     const ids = new Set();
     for (let c = 0; c < 6; c++) {
       for (let r = 0; r < 6; r++) {
-        ids.add(terrainSpriteIdFor({ type: TileType.GRASS }, c, r));
+        ids.add(terrainSpriteIdFor(layered({ base: TileType.GRASS }, c, r), c, r));
       }
     }
     // A pool of 5 variants should produce more than one distinct id across
@@ -88,7 +120,7 @@ describe('Renderer3D — terrainSpriteIdFor', () => {
     // be one of grass_1..grass_5 — never grass_0 or grass_-1.
     for (let c = -3; c <= 0; c++) {
       for (let r = -3; r <= 0; r++) {
-        const id = terrainSpriteIdFor({ type: TileType.GRASS }, c, r);
+        const id = terrainSpriteIdFor(layered({ base: TileType.GRASS }, c, r), c, r);
         assert.match(id, /^grass_[1-5]$/, `bad id at (${c},${r}): ${id}`);
       }
     }
@@ -101,22 +133,23 @@ describe('Renderer3D — material-cache key uniqueness', () => {
   // We verify the key-distinction property the cache relies on without
   // exercising the actual Babylon material constructor.
   test('two tiles of the same terrain & coords resolve to the same id', () => {
-    const a = terrainSpriteIdFor({ type: TileType.GRASS }, 4, 7);
-    const b = terrainSpriteIdFor({ type: TileType.GRASS }, 4, 7);
+    const a = terrainSpriteIdFor(layered({ base: TileType.GRASS }, 4, 7), 4, 7);
+    const b = terrainSpriteIdFor(layered({ base: TileType.GRASS }, 4, 7), 4, 7);
     assert.equal(a, b);
   });
 
   test('different terrains never collide on sprite id', () => {
     const ids = new Set();
-    for (const t of [TileType.GRASS, TileType.FOREST, TileType.DIRT]) {
+    for (const base of [TileType.GRASS, TileType.FOREST, TileType.DIRT]) {
       for (let c = 0; c < 5; c++) {
         for (let r = 0; r < 5; r++) {
-          const id = terrainSpriteIdFor({ type: t }, c, r);
+          const id = terrainSpriteIdFor(layered({ base }, c, r), c, r);
           if (id) ids.add(id);
         }
       }
     }
-    // Every id begins with its terrain name — no cross-terrain reuse.
+    // Every id begins with its terrain name — no cross-terrain reuse. (Forest
+    // base resolves to a grass underlay, so only grass_/dirt_ ids appear.)
     for (const id of ids) {
       assert.ok(
         id.startsWith('grass_') || id.startsWith('forest_') || id.startsWith('dirt_'),
@@ -127,11 +160,10 @@ describe('Renderer3D — material-cache key uniqueness', () => {
 
   test('null sprite-id is the renderer signal for "use solid colour fallback"', () => {
     // _terrainMaterialFor(null) returns null in the renderer; that is the
-    // explicit fallback gate. Item 2 made road/river/bridge return a grass
-    // sprite (so the underlay matches the surrounding terrain), so the only
-    // null cases left are tiles with unrecognised types — locked here.
-    assert.equal(terrainSpriteIdFor({ type: 'mystery' }, 0, 0), null);
-    assert.equal(terrainSpriteIdFor(null,                 0, 0), null);
+    // explicit fallback gate. With the layered model the only null cases are
+    // tiles whose BASE material has no sprite pool — locked here.
+    assert.equal(terrainSpriteIdFor(layered({ base: 'mystery' }, 0, 0), 0, 0), null);
+    assert.equal(terrainSpriteIdFor(null,                              0, 0), null);
   });
 });
 
@@ -291,15 +323,32 @@ describe('Renderer3D consumers — must call loadImages() to populate the atlas'
     );
   });
 
-  test('src/main.js calls renderer.loadImages() after constructing the renderer', () => {
+  test('the game flow drives the atlas load via renderer.beginLoad()', () => {
     // Sibling check — locks in the main game flow too, so a future refactor
     // that moves the renderer construction can't silently drop the call.
-    const path = resolve(__dirname, '../src/main.js');
-    const src = readFileSync(path, 'utf8');
+    //
+    // The loading-screen work (feat/loading-screen) moved the direct
+    // loadImages() call into the renderer: the active game now calls
+    // beginLoad(), and beginLoad() loads the tilemap atlas (alongside the GLB
+    // bundle). So the contract that "the active game populates its tilemap
+    // atlas" is now satisfied by the beginLoad() call rather than a bare
+    // loadImages().
+    //
+    // The reveal logic was further extracted out of main.js into the
+    // loading-reveal coordinator (fix/loading-screen-second-pass), so the
+    // beginLoad() call now lives there; main.js wires that coordinator up.
+    const revealSrc = readFileSync(resolve(__dirname, '../src/loading-reveal.js'), 'utf8');
     assert.ok(
-      /renderer\.loadImages\s*\(/.test(src),
-      'src/main.js must call renderer.loadImages() so the active game has a ' +
-      'populated tilemap atlas',
+      /renderer\.beginLoad\s*\(/.test(revealSrc),
+      'src/loading-reveal.js must call renderer.beginLoad() so the active game ' +
+      'has a populated tilemap atlas (beginLoad() loads the atlas internally)',
+    );
+
+    const mainSrc = readFileSync(resolve(__dirname, '../src/main.js'), 'utf8');
+    assert.ok(
+      /makeShowLoadingAndReveal\s*\(/.test(mainSrc),
+      'src/main.js must wire up the loading-reveal coordinator so the game ' +
+      'flow still drives beginLoad() through it',
     );
   });
 

@@ -73,6 +73,33 @@ export function hexKey(col, row) {
   return `${col},${row}`;
 }
 
+// Hex linedraw — returns offset hexes along the line from (c1,r1) to (c2,r2),
+// inclusive of both endpoints. Uses cube linear interpolation with rounding
+// (the standard "Red Blob Games" algorithm). Used for line-of-sight checks
+// where intermediate hexes block vision.
+export function hexLine(c1, r1, c2, r2) {
+  const N = hexDistance(c1, r1, c2, r2);
+  if (N === 0) return [{ col: c1, row: r1 }];
+  const a = offsetToAxial(c1, r1);
+  const b = offsetToAxial(c2, r2);
+  const ax = a.q, az = a.r, ay = -ax - az;
+  const bx = b.q, bz = b.r, by = -bx - bz;
+  const out = [];
+  for (let i = 0; i <= N; i++) {
+    const t = i / N;
+    const x = ax + (bx - ax) * t;
+    const y = ay + (by - ay) * t;
+    const z = az + (bz - az) * t;
+    let rx = Math.round(x), ry = Math.round(y), rz = Math.round(z);
+    const dx = Math.abs(rx - x), dy = Math.abs(ry - y), dz = Math.abs(rz - z);
+    if (dx > dy && dx > dz) rx = -ry - rz;
+    else if (dy > dz)       ry = -rx - rz;
+    else                    rz = -rx - ry;
+    out.push(axialToOffset(rx, rz));
+  }
+  return out;
+}
+
 // All hexes within `radius` steps (offset coords), filtered to map bounds
 export function hexRange(col, row, radius) {
   const a = offsetToAxial(col, row);

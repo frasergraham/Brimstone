@@ -202,6 +202,18 @@ describe('Renderer3D — interface conformance with 2D Renderer', () => {
     ]);
   });
 
+  test('both renderers expose the loading-screen API (beginLoad/whenReady/onProgress)', () => {
+    const fakeCanvas = { parentElement: null, width: 800, height: 600, getContext: () => null };
+    for (const Cls of [Renderer, Renderer3D]) {
+      const inst = new Cls(fakeCanvas, {});
+      assert.equal(typeof inst.beginLoad, 'function', `${Cls.name} missing beginLoad()`);
+      assert.equal(typeof inst.whenReady, 'function', `${Cls.name} missing whenReady()`);
+      assert.ok('onProgress' in inst, `${Cls.name} missing onProgress slot`);
+      // whenReady() before beginLoad() resolves immediately (a settled promise).
+      assert.ok(inst.whenReady() instanceof Promise, `${Cls.name}.whenReady() must return a Promise`);
+    }
+  });
+
   test('getEntity*/getPortrait*/getTile* return null/empty before Babylon loads', () => {
     const fakeCanvas = { parentElement: null, width: 800, height: 600 };
     const inst = new Renderer3D(fakeCanvas, {});

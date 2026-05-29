@@ -16,7 +16,7 @@ import {
   createHero, createWitch, createMinion, createZombie, createSurvivor,
   createIronGolem, resetRoster, setForcedDice,
 } from '../src/entities.js';
-import { TileType, BuildingType, ResourceType, WeaponType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus, FORT_IMPASSABLE_THRESHOLD } from '../src/tiles.js';
+import { TileType, BuildingType, ResourceType, WeaponType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus, FORT_IMPASSABLE_THRESHOLD, legacyTileType, decomposeTileType } from '../src/tiles.js';
 import { hexKey, getNeighbors, hexDistance } from '../src/hex.js';
 import { applyPostRoundEffects } from '../src/post-round-effects.js';
 
@@ -33,27 +33,29 @@ function firstReachable(state, entity) {
 function emptyPassableNeighbor(state, entity) {
   return getNeighbors(entity.col, entity.row).find(n => {
     const t = state.tiles.get(hexKey(n.col, n.row));
-    if (!t || t.type === TileType.RIVER) return false;
+    if (!t || legacyTileType(t) === TileType.RIVER) return false;
     return !state.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
   }) ?? null;
 }
 
 // ── sightRange ────────────────────────────────────────────────────────────────
-// Design: DAY=3, DAWN/DUSK=2, NIGHT=1; SCOUT adds +1
+// Design: DAY=6, DAWN/DUSK=4, NIGHT=3; SCOUT adds +1.
+// LOS gating (forests/buildings block vision past them) is exercised by
+// tests/los-fog.test.js and the renderer fog tests.
 
 describe('sightRange', () => {
-  test('DAY sight is 3', () => assert.equal(sightRange(Phase.DAY), 3));
-  test('DAWN sight is 2', () => assert.equal(sightRange(Phase.DAWN), 2));
-  test('DUSK sight is 2', () => assert.equal(sightRange(Phase.DUSK), 2));
-  test('NIGHT sight is 1', () => assert.equal(sightRange(Phase.NIGHT), 1));
+  test('DAY sight is 6', () => assert.equal(sightRange(Phase.DAY), 6));
+  test('DAWN sight is 4', () => assert.equal(sightRange(Phase.DAWN), 4));
+  test('DUSK sight is 4', () => assert.equal(sightRange(Phase.DUSK), 4));
+  test('NIGHT sight is 3', () => assert.equal(sightRange(Phase.NIGHT), 3));
   test('SCOUT adds +1 to sight in every phase', () => {
-    assert.equal(sightRange(Phase.DAY,   true), 4);
-    assert.equal(sightRange(Phase.DAWN,  true), 3);
-    assert.equal(sightRange(Phase.DUSK,  true), 3);
-    assert.equal(sightRange(Phase.NIGHT, true), 2);
+    assert.equal(sightRange(Phase.DAY,   true), 7);
+    assert.equal(sightRange(Phase.DAWN,  true), 5);
+    assert.equal(sightRange(Phase.DUSK,  true), 5);
+    assert.equal(sightRange(Phase.NIGHT, true), 4);
   });
   test('non-scout gives no bonus', () => {
-    assert.equal(sightRange(Phase.DAY, false), 3);
+    assert.equal(sightRange(Phase.DAY, false), 6);
   });
 });
 
@@ -71,7 +73,7 @@ describe('getReachableHexes', () => {
     const reachable = getReachableHexes(state, state.hero, 2);
     for (const h of reachable) {
       const t = state.tiles.get(hexKey(h.col, h.row));
-      assert.notEqual(t?.type, TileType.RIVER, `River tile (${h.col},${h.row}) should not be reachable`);
+      assert.notEqual(legacyTileType(t), TileType.RIVER, `River tile (${h.col},${h.row}) should not be reachable`);
     }
   });
 
@@ -157,7 +159,7 @@ describe('executeMove', () => {
     let riverNeighbor = null;
     for (const n of getNeighbors(hero.col, hero.row)) {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      if (t?.type === TileType.RIVER) { riverNeighbor = n; break; }
+      if (legacyTileType(t) === TileType.RIVER) { riverNeighbor = n; break; }
     }
     if (!riverNeighbor) return; // hero not next to river in this map seed
 
@@ -283,7 +285,7 @@ describe('executeMove — blockedBy field', () => {
     // Place a minion directly adjacent — no room to walk before the enemy
     const neighbor = getNeighbors(hero.col, hero.row).find(n => {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      return t && t.type !== TileType.RIVER;
+      return t && legacyTileType(t) !== TileType.RIVER;
     });
     if (!neighbor) return;
     const minion = createMinion(neighbor.col, neighbor.row);
@@ -312,7 +314,7 @@ describe('executeMove — blockedBy field', () => {
     // Make all three hexes roads so they're within movement budget
     for (const h of [heroPos, n1, n2]) {
       const t = state.tiles.get(hexKey(h.col, h.row));
-      if (t) { t.type = TileType.ROAD; t.building = null; t.hiddenSurvivor = false; }
+      if (t) { decomposeTileType(t, TileType.ROAD); t.building = null; t.hiddenSurvivor = false; }
     }
 
     // Place hero at known position
@@ -453,7 +455,7 @@ describe('executeExplore', () => {
       state.tiles.get(hexKey(hero.col, hero.row)).explored = false;
       // Ensure tile is not a building so only terrain loot applies (single roll)
       const t = state.tiles.get(hexKey(hero.col, hero.row));
-      t.type = TileType.GRASS;
+      decomposeTileType(t, TileType.GRASS);
       t.building = null;
       t.hiddenSurvivor = false;
       const r = executeExplore(state, hero);
@@ -461,6 +463,96 @@ describe('executeExplore', () => {
       assert.ok(found.length <= 1,
         `Expected at most 1 loot entry but got ${found.length}: ${JSON.stringify(r.lootItems)}`);
     }
+  });
+
+  // ── exploreOverride: editor-authored fixed loot (offline/campaign only) ──────
+  // Set up a deterministic grass tile under the hero so only the override (or,
+  // when absent, the terrain roll) decides the result.
+  function plainTileUnder(state, ent) {
+    const t = state.tiles.get(hexKey(ent.col, ent.row));
+    decomposeTileType(t, TileType.GRASS);
+    t.building = null;
+    t.hiddenSurvivor = false;
+    t.explored = false;
+    return t;
+  }
+
+  test('exploreOverride resource yields exactly amount, no random roll', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const t = plainTileUnder(state, hero);
+    t.exploreOverride = { kind: 'resource', id: ResourceType.WOOD, amount: 3 };
+    const before = state.inventory.hero[ResourceType.WOOD] ?? 0;
+    const r = executeExplore(state, hero);
+    assert.equal(r.success, true);
+    assert.equal((state.inventory.hero[ResourceType.WOOD] ?? 0) - before, 3,
+      'should add exactly the authored amount of wood');
+  });
+
+  test('exploreOverride resource without amount yields 1', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const t = plainTileUnder(state, hero);
+    t.exploreOverride = { kind: 'resource', id: ResourceType.METAL };
+    const before = state.inventory.hero[ResourceType.METAL] ?? 0;
+    executeExplore(state, hero);
+    assert.equal((state.inventory.hero[ResourceType.METAL] ?? 0) - before, 1);
+  });
+
+  test('exploreOverride weapon equips the authored weapon', () => {
+    const state = freshState();
+    const hero = state.hero;
+    hero.weapon = null;
+    const t = plainTileUnder(state, hero);
+    t.exploreOverride = { kind: 'weapon', id: WeaponType.SWORD };
+    executeExplore(state, hero);
+    assert.equal(hero.weapon, WeaponType.SWORD);
+  });
+
+  test('exploreOverride horse grants a horse', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const t = plainTileUnder(state, hero);
+    t.exploreOverride = { kind: 'horse', id: 'horse' };
+    executeExplore(state, hero);
+    assert.equal(hero.items['horse'], 1);
+  });
+
+  test('exploreOverride nothing finds nothing (no inventory change)', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const t = plainTileUnder(state, hero);
+    t.exploreOverride = { kind: 'nothing', id: null };
+    const invBefore = JSON.stringify(state.inventory.hero);
+    const itemsBefore = JSON.stringify(hero.items);
+    const r = executeExplore(state, hero);
+    assert.equal(r.success, true);
+    assert.equal(JSON.stringify(state.inventory.hero), invBefore);
+    assert.equal(JSON.stringify(hero.items), itemsBefore);
+    assert.ok(r.log.some(l => /nothing useful/.test(l)));
+  });
+
+  test('exploreOverride is one-shot: re-explore fails like normal explore', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const t = plainTileUnder(state, hero);
+    t.exploreOverride = { kind: 'resource', id: ResourceType.WOOD, amount: 2 };
+    const r1 = executeExplore(state, hero);
+    assert.equal(r1.success, true);
+    const r2 = executeExplore(state, hero);
+    assert.equal(r2.success, false, 'already-explored hex does not re-yield the override');
+  });
+
+  test('no exploreOverride → random roll path is unchanged', () => {
+    // A plain hex with no override carries no exploreOverride field and still
+    // rolls (success + lootItems array), exactly as before.
+    const state = freshState();
+    const hero = state.hero;
+    const t = plainTileUnder(state, hero);
+    assert.equal(t.exploreOverride, undefined);
+    const r = executeExplore(state, hero);
+    assert.equal(r.success, true);
+    assert.ok(Array.isArray(r.lootItems));
   });
 });
 
@@ -744,7 +836,7 @@ describe('executeBattle', () => {
     // Place 2 survivors adjacent to the target (on target's hex neighbors)
     const targetNeighbors = getNeighbors(targetHex.col, targetHex.row).filter(n => {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      return t && t.type !== TileType.RIVER;
+      return t && legacyTileType(t) !== TileType.RIVER;
     });
     const placed = [];
     for (let i = 0; i < Math.min(2, targetNeighbors.length); i++) {
@@ -759,6 +851,27 @@ describe('executeBattle', () => {
     assert.ok(r.attackerAllies >= placed.length, `Expected at least ${placed.length} allies, got ${r.attackerAllies}`);
     assert.equal(r.breakdown.atkExtraDice.length, Math.min(r.attackerAllies, 3),
       'Each ally (up to 3) should contribute a d3 die');
+
+    // G1 — breakdown also carries per-ally dice (one entry per gang-up ally,
+    // zipped with atkPool[1..]) so the 3D readout can show each ally's
+    // contribution on its own icon.
+    assert.ok(Array.isArray(r.breakdown.atkAllyDice),
+      'breakdown.atkAllyDice should be an array');
+    assert.equal(r.breakdown.atkAllyDice.length, Math.min(r.attackerAllies, 3),
+      'one atkAllyDice entry per gang-up ally (capped at ADVANTAGE_CAP)');
+    for (const entry of r.breakdown.atkAllyDice) {
+      assert.ok(typeof entry.allyId !== 'undefined',
+        'each atkAllyDice entry carries an allyId');
+      assert.ok(Number.isInteger(entry.die) && entry.die >= 1 && entry.die <= 6,
+        'each atkAllyDice die is a valid d6 face');
+    }
+    // Each ally die corresponds to a real ally in atkAllyIds (same order).
+    const atkAllyIds = r.breakdown.atkAllyIds.slice(0, r.breakdown.atkAllyDice.length);
+    assert.deepEqual(
+      r.breakdown.atkAllyDice.map(d => d.allyId),
+      atkAllyIds,
+      'atkAllyDice entries are zipped with atkAllyIds in order',
+    );
   });
 
   test('silver attackBonus is included in combat attack roll', () => {
@@ -783,6 +896,60 @@ describe('executeBattle', () => {
     // baseDie(1) + attack + 1(silver)
     assert.ok(r.attackRoll >= 1 + hero.attack + 1,
       `attackRoll (${r.attackRoll}) should include silver bonus`);
+  });
+
+  // The 3D combat readout's sum invariant: the breakdown must decompose the
+  // attackRoll / defenseRoll into picked-die + Σ(flat bonuses). If a future
+  // change adds a flat ATK/DEF contribution to resolveCombat but doesn't
+  // surface it in the breakdown, this test fails — that's the exact bug the
+  // operator reported (icon ticks higher than the dice roll with no floater).
+  test('breakdown decomposes attackRoll and defenseRoll into picked die + Σ(flat bonuses)', () => {
+    const state = freshState();
+    const hero = state.hero;
+    // Silver-coat for an attackBonus contribution (needs inventory stocked).
+    state.inventory.hero[ResourceType.SILVER] = 1;
+    const useResult = executeUseItem(state, hero, ResourceType.SILVER);
+    assert.equal(useResult.success, true);
+    assert.equal(hero.attackBonus, 1);
+    // Equip a sword so atkWeaponMod is nonzero.
+    hero.equipWeapon(WeaponType.SWORD);
+
+    const minion = createMinion(hero.col, hero.row);
+    state.entities.push(minion);
+
+    setForcedDice(4, 3); // attacker rolls 4, defender rolls 3
+    const r = executeBattle(state, hero, minion);
+    const bd = r.breakdown;
+
+    // Sanity: every decomposed field is captured.
+    for (const k of ['atkBaseStat', 'atkWeaponMod', 'atkAbilityMod', 'atkEffectMod', 'atkAttackBonus',
+                     'defBaseStat', 'defWeaponMod', 'defAbilityMod', 'defEffectMod', 'defDefenseBonus']) {
+      assert.ok(typeof bd[k] === 'number', `breakdown.${k} should be a number`);
+    }
+
+    // Attacker sum invariant: picked + every nonzero atk flat field === attackRoll.
+    const atkSum = bd.atkBaseDie
+      + bd.atkBaseStat + bd.atkWeaponMod + bd.atkAbilityMod + bd.atkEffectMod + bd.atkAttackBonus
+      + bd.phaseBonus + bd.atkGangupFlat + bd.atkFortAtkBonus;
+    assert.equal(atkSum, r.attackRoll,
+      `picked(${bd.atkBaseDie}) + Σ(atk flats) (${atkSum - bd.atkBaseDie}) must equal attackRoll(${r.attackRoll}). ` +
+      `breakdown: ${JSON.stringify({ atkBaseStat: bd.atkBaseStat, atkWeaponMod: bd.atkWeaponMod,
+        atkAbilityMod: bd.atkAbilityMod, atkEffectMod: bd.atkEffectMod, atkAttackBonus: bd.atkAttackBonus,
+        phaseBonus: bd.phaseBonus, atkGangupFlat: bd.atkGangupFlat, atkFortAtkBonus: bd.atkFortAtkBonus })}`);
+
+    // Defender sum invariant: picked + every nonzero def flat field − fatigue === defenseRoll.
+    const defSum = bd.defBaseDie
+      + bd.defBaseStat + bd.defWeaponMod + bd.defAbilityMod + bd.defEffectMod + bd.defDefenseBonus
+      + bd.fortBonus + bd.defGangupFlat + bd.forestCoverBonus - bd.fatiguePenalty;
+    assert.equal(defSum, r.defenseRoll,
+      `picked(${bd.defBaseDie}) + Σ(def flats) must equal defenseRoll(${r.defenseRoll})`);
+
+    // Silver coating set attackBonus=1 → must surface in atkAttackBonus.
+    assert.equal(bd.atkAttackBonus, 1, 'silver shows up in atkAttackBonus');
+    // Sword has statMods.attack=2 → must surface in atkWeaponMod.
+    assert.equal(bd.atkWeaponMod, 2, 'sword shows up in atkWeaponMod');
+    // Hero's intrinsic attack stat (NOT including weapon) is atkBaseStat.
+    assert.equal(bd.atkBaseStat, hero.attack, 'atkBaseStat is the raw stat');
   });
 });
 
@@ -1255,7 +1422,7 @@ describe('executeSummon', () => {
     const r = executeSummon(state, state.witch);
     assert.equal(r.success, true);
     const summoned = state.entities.find(e => e !== state.witch && e.col === col && e.row === row);
-    assert.equal(summoned?.type, EntityType.WOOD_GOLEM, 'Wood should summon Wood Golem');
+    assert.equal(summoned.type, EntityType.WOOD_GOLEM, 'Wood should summon Wood Golem');
     assert.equal(state.inventory.witch[ResourceType.WOOD], 0, '2 wood should be consumed');
   });
 
@@ -1269,7 +1436,7 @@ describe('executeSummon', () => {
     const r = executeSummon(state, state.witch);
     assert.equal(r.success, true);
     const summoned = state.entities.find(e => e !== state.witch && e.col === col && e.row === row);
-    assert.equal(summoned?.type, EntityType.MINION, 'Non-metal/wood resource should summon Minion');
+    assert.equal(summoned.type, EntityType.MINION, 'Non-metal/wood resource should summon Minion');
     assert.equal(state.inventory.witch[ResourceType.FOOD], 0, '2 food should be consumed');
   });
 
@@ -1315,7 +1482,7 @@ describe('executeSummon', () => {
     const neighbors = getNeighbors(state.witch.col, state.witch.row);
     for (const n of neighbors) {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      if (t && t.type !== TileType.RIVER) {
+      if (t && legacyTileType(t) !== TileType.RIVER) {
         const m = createMinion(n.col, n.row, null);
         state.entities.push(m);
       }
@@ -1470,7 +1637,7 @@ describe('auto-equip weapon on loot find', () => {
     const state = freshState();
     const hero = state.hero;
     const t = state.tiles.get(hexKey(hero.col, hero.row));
-    t.type = TileType.BUILDING;
+    decomposeTileType(t, TileType.BUILDING);
     t.building = BuildingType.BLACKSMITH;
     t.explored = false;
     t.hiddenSurvivor = false; // prevent survivor encounter from consuming Math.random calls
@@ -2078,7 +2245,7 @@ describe('fortifications as impassable walls', () => {
     // Make all immediate neighbors plain grass first
     for (const n of getNeighbors(witch.col, witch.row)) {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      if (t) { t.type = TileType.GRASS; t.building = null; t.hiddenSurvivor = false; t.fortifyLevel = 0; }
+      if (t) { decomposeTileType(t, TileType.GRASS); t.building = null; t.hiddenSurvivor = false; t.fortifyLevel = 0; }
     }
     const nbrs = getNeighbors(witch.col, witch.row);
     const wallNbr = nbrs[0];
@@ -2103,7 +2270,7 @@ describe('fortifications as impassable walls', () => {
     const hero = state.hero;
     for (const n of getNeighbors(hero.col, hero.row)) {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      if (t) { t.type = TileType.GRASS; t.building = null; t.hiddenSurvivor = false; t.fortifyLevel = 0; }
+      if (t) { decomposeTileType(t, TileType.GRASS); t.building = null; t.hiddenSurvivor = false; t.fortifyLevel = 0; }
     }
     // Clear enemies from adjacent hexes so they don't block pathing
     state.entities = state.entities.filter(e => e.id === hero.id || e.id === state.witch.id);
@@ -2125,7 +2292,7 @@ describe('fortifications as impassable walls', () => {
     // Normalize neighbours
     for (const n of getNeighbors(witch.col, witch.row)) {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      if (t) { t.type = TileType.GRASS; t.building = null; t.hiddenSurvivor = false; t.fortifyLevel = 0; }
+      if (t) { decomposeTileType(t, TileType.GRASS); t.building = null; t.hiddenSurvivor = false; t.fortifyLevel = 0; }
     }
     const wallNbr = getNeighbors(witch.col, witch.row)[0];
     const wallTile = state.tiles.get(hexKey(wallNbr.col, wallNbr.row));
@@ -2149,7 +2316,7 @@ describe('fortifications as impassable walls', () => {
     const witch = state.witch;
     for (const n of getNeighbors(witch.col, witch.row)) {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      if (t) { t.type = TileType.GRASS; t.building = null; t.hiddenSurvivor = false; t.fortifyLevel = 0; }
+      if (t) { decomposeTileType(t, TileType.GRASS); t.building = null; t.hiddenSurvivor = false; t.fortifyLevel = 0; }
     }
     const nbr = getNeighbors(witch.col, witch.row)[0];
     const nbrTile = state.tiles.get(hexKey(nbr.col, nbr.row));
@@ -2175,8 +2342,8 @@ describe('executeFortAssault', () => {
     const fortPos = { col: 6, row: 5 };
     const atkTile = state.tiles.get(hexKey(atkPos.col, atkPos.row));
     const fortTile = state.tiles.get(hexKey(fortPos.col, fortPos.row));
-    if (atkTile) { atkTile.type = TileType.GRASS; atkTile.building = null; atkTile.hiddenSurvivor = false; atkTile.fortifyLevel = 0; }
-    if (fortTile) { fortTile.type = TileType.GRASS; fortTile.building = null; fortTile.hiddenSurvivor = false; fortTile.fortifyLevel = fortLevel; }
+    if (atkTile) { decomposeTileType(atkTile, TileType.GRASS); atkTile.building = null; atkTile.hiddenSurvivor = false; atkTile.fortifyLevel = 0; }
+    if (fortTile) { decomposeTileType(fortTile, TileType.GRASS); fortTile.building = null; fortTile.hiddenSurvivor = false; fortTile.fortifyLevel = fortLevel; }
 
     let unit;
     if (attacker === 'iron_golem') unit = createIronGolem(atkPos.col, atkPos.row);
@@ -2230,7 +2397,7 @@ describe('executeFortAssault', () => {
     const hero = state.hero;
     const fortPos = getNeighbors(hero.col, hero.row).find(n => {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      return t && t.type !== TileType.RIVER;
+      return t && legacyTileType(t) !== TileType.RIVER;
     });
     if (!fortPos) return;
     const t = state.tiles.get(hexKey(fortPos.col, fortPos.row));
@@ -2272,7 +2439,7 @@ describe('executeFortAssault', () => {
 
     // Clear out other stuff that might live there
     fortTile.building = null;
-    fortTile.type = TileType.GRASS;
+    decomposeTileType(fortTile, TileType.GRASS);
 
     const r2 = executeMove(state, unit, fortPos.col, fortPos.row);
     assert.equal(r2.success, true, 'Witch should now walk onto the breached wall hex');

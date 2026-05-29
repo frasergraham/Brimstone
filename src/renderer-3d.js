@@ -25,19 +25,46 @@ import {
   BUILDING_COLOR,
   BUILDING_LABEL,
   BuildingType,
+  PathType,
+  baseOf,
+  pathOf,
+  hasBuilding,
+  isRiver,
+  isBridge,
+  treeCountForTile,
+  FOREST_TREES_MIN as _FOREST_TREES_MIN,
+  FOREST_TREES_MAX as _FOREST_TREES_MAX,
+  FOREST_DENSITY_SCALE as _FOREST_DENSITY_SCALE,
+  scaledForestTreeCount as _scaledForestTreeCount,
 } from './tiles.js';
-import { EntityType, isLeaderType } from './entities.js';
+
+// Re-export the tree-count knobs that now live in tiles.js. Existing tests
+// import these from src/renderer-3d.js; preserving the public name keeps
+// them green without churn.
+export const FOREST_TREES_MIN     = _FOREST_TREES_MIN;
+export const FOREST_TREES_MAX     = _FOREST_TREES_MAX;
+export const FOREST_DENSITY_SCALE = _FOREST_DENSITY_SCALE;
+export const scaledForestTreeCount = _scaledForestTreeCount;
+import { EntityType, isLeaderType, ADVANTAGE_CAP } from './entities.js';
 import { Renderer } from './renderer.js';
 import { getFactionTheme } from './theme.js';
 import { hexKey, hexDistance, getNeighbors } from './hex.js';
 import { nodeController, Phase } from './game.js';
-import { sightRangeForEntity, findFaction } from './factions.js';
+import { findFaction } from './factions.js';
+import { computeLineOfSight } from './actions.js';
 import { Side } from './sides.js';
 import { MAP_SIZES, NODE_COLORS } from './map.js';
 import {
   installOverlayShims, OVERLAY_METHODS, yForLayer, overlaySignature,
   makeOverlay, overlayMaterialKey,
 } from './overlays.js';
+import {
+  hexSplatWeights, hexFogWeights, hexTintWeights, splatChannelForTile,
+  worldToHex, neighborDeltas, DEFAULT_TERRAIN_TINTS,
+} from './terrain-splat.js';
+import { makeTerrainSplatPlugin, SPLAT_UNIFORM_DEFAULTS } from './terrain-splat-plugin.js';
+import { attachFogDarkenToMaterial, MAX_FOG_TILES } from './fog-darken-plugin.js';
+import { attachRoadEdgeToMaterial } from './road-edge-plugin.js';
 
 // Babylon core + glTF loaders are served from the packaged `assets/vendor/`
 // directory rather than any CDN — the Electron / iOS bundles must run with zero
@@ -59,23 +86,62 @@ const BABYLON_LOADERS_LOCAL = '/assets/vendor/babylonjs/babylonjs.loaders.min.js
 // existing procedural box+roof, so gameplay never blocks on a 404.
 export const HOUSE_MODEL_DIR  = 'models/';
 export const HOUSE_MODEL_FILE = 'house.glb';
+// The legacy hand-authored house model — kept as ONE of the two HOUSE
+// variants (see BUILDING_GLB_BY_TYPE) so a village shows a mix of it and the
+// newer scenario-generated house.
+export const LEGACY_HOUSE_PATH = `${HOUSE_MODEL_DIR}${HOUSE_MODEL_FILE}`;
 
-// Building-type → GLB asset map. Only listed types swap the procedural
-// box+roof for an imported model; everything else (INN, GRAVEYARD, etc.) keeps
-// the existing procedural rendering until a model is authored for it. Extend
-// by adding entries here; the conditional load + retrofit machinery already
-// keys off this table via `buildingUsesHouseModel()`.
-export const BUILDING_GLB_BY_TYPE = Object.freeze({
-  [BuildingType.HOUSE]: `${HOUSE_MODEL_DIR}${HOUSE_MODEL_FILE}`,
-});
+// Directory holding the per-building-type GLBs generated via Scenario. Each
+// file is named after the lowercase BuildingType value (e.g. `church.glb`,
+// `town_hall.glb`), so the path map below is derived directly from the enum.
+export const BUILDINGS_MODEL_DIR = 'models/buildings/';
 
-/** Predicate: does this tile's specific building type render as the shared
- *  house GLB? Pure; exported for tests. Returns false for any building type
- *  that isn't in `BUILDING_GLB_BY_TYPE` so non-HOUSE buildings keep their
- *  procedural box+roof. */
-export function buildingUsesHouseModel(tile) {
-  if (!tile || tile.type !== TileType.BUILDING) return false;
-  return tile.building === BuildingType.HOUSE;
+// Building-type → ordered list of GLB variant paths (relative to the assets
+// base). EVERY building type now renders an imported model; the loader fetches
+// each unique path once as a hidden template and instances it per tile. A type
+// with >1 variant hash-picks one deterministically per (col,row) — currently
+// only HOUSE, which keeps the legacy hand-made model AND the scenario model so
+// the same village can show both. Any per-type load failure falls back to the
+// procedural box+roof for tiles of that type only (other types are unaffected).
+//
+// Derived programmatically from BuildingType so it can never drift out of sync
+// with the enum — all 13 values are guaranteed covered.
+export const BUILDING_GLB_BY_TYPE = Object.freeze(
+  Object.fromEntries(
+    Object.values(BuildingType).map((key) => {
+      const variants = key === BuildingType.HOUSE
+        ? [LEGACY_HOUSE_PATH, `${BUILDINGS_MODEL_DIR}${key}.glb`]
+        : [`${BUILDINGS_MODEL_DIR}${key}.glb`];
+      return [key, Object.freeze(variants)];
+    }),
+  ),
+);
+
+/** Predicate: does this tile carry a building that renders as an imported GLB?
+ *  Pure; exported for tests. True for any tile with a building type present in
+ *  `BUILDING_GLB_BY_TYPE` (all 13 types). Keyed on the building/structure, not
+ *  the base material, so a HOUSE on a forest base still counts. */
+export function buildingUsesGlbModel(tile) {
+  if (!tile || !hasBuilding(tile)) return false;
+  return Object.prototype.hasOwnProperty.call(BUILDING_GLB_BY_TYPE, tile.building);
+}
+
+// Back-compat alias: the pipeline used to handle HOUSE only, so callers/tests
+// referenced `buildingUsesHouseModel`. Now generalized to every type.
+export const buildingUsesHouseModel = buildingUsesGlbModel;
+
+/** Deterministic per-tile pick of which GLB variant a building renders. For
+ *  single-variant types this is just that path; for multi-variant types
+ *  (HOUSE) it hash-picks across the variants by (col,row) so the choice is
+ *  stable across sessions but varies tile-to-tile. Returns null when the tile
+ *  has no building or no variant list. Pure; exported for tests. */
+export function buildingGlbVariantForHex(tile) {
+  if (!tile || tile.building == null) return null;
+  const variants = BUILDING_GLB_BY_TYPE[tile.building];
+  if (!Array.isArray(variants) || variants.length === 0) return null;
+  if (variants.length === 1) return variants[0];
+  const h = _treePackHash(tile.col, tile.row, 269);
+  return variants[Math.floor(h * variants.length) % variants.length];
 }
 
 /** Bake a translation into the given source mesh so its bounding-box bottom
@@ -107,12 +173,21 @@ export function _bakeOriginToBottom(source, BABYLON) {
   if (typeof source.refreshBoundingInfo === 'function') source.refreshBoundingInfo();
 }
 
-// Default world-space scale for the imported model. The GLB's intrinsic unit
-// system is unknown until the file lands; this value sits the model at
-// roughly the same footprint as the procedural BUILDING_BASE_DIM (≈0.55 wide).
-// Operator can retune by adjusting this constant or running a one-off
-// `gltf-transform` resize pass — see PR body for the offline recipe.
+// Fallback world-space scale for an imported building when its natural
+// bounding box can't be measured (test stubs, malformed GLB). In real-browser
+// use the load step computes a bbox-derived scale instead (see
+// TARGET_BUILDING_WORLD_HEIGHT) so each generated model — whose intrinsic unit
+// system varies per export — lands at a consistent on-tile size. This value
+// sits the model at roughly the procedural BUILDING_BASE_DIM footprint (≈0.55).
 export const HOUSE_INSTANCE_BASE_SCALE = 0.55;
+
+// Target world-space height for an instanced building (before the per-hex
+// jitter ratio). The scenario-generated GLBs export at wildly different
+// intrinsic scales, so each template is uniformly scaled at load time so its
+// bbox height lands here — the same bbox-normalize trick the tree + paladin
+// pipelines use. Roughly matches the procedural box+roof stack (0.70 + 0.15).
+// Operator can retune by adjusting this constant.
+export const TARGET_BUILDING_WORLD_HEIGHT = 1.28; // ~50% larger — buildings taller than units (paladin ≈0.92), bigger footprint may overlap tiles a bit
 
 // ─── Tree pack (real GLB trees from `assets/models/trees/`) ────────────────
 // Phase 1 (PR #381) extracted `tree_pack.glb` into per-model GLBs + a manifest
@@ -198,7 +273,7 @@ export const PALADIN_BASE_SCALE = 0.4;
 // the source bounding box at load time and scale to hit this target. Picked
 // so the paladin reads slightly taller than the ~0.55-tall cone+sphere it
 // replaces but still fits within one hex's footprint.
-export const TARGET_PALADIN_WORLD_HEIGHT = 0.92;
+export const TARGET_PALADIN_WORLD_HEIGHT = 0.69;
 // Forward-facing yaw applied to clones (radians). Rotates the imported mesh
 // 180° so the paladin's front reads toward the camera rather than away.
 export const PALADIN_YAW        = Math.PI;
@@ -211,6 +286,18 @@ export const WALKING_MODEL_FILE = 'walking.glb';
 // idle clip embedded, so the loader picks it up at model-load time and
 // _loadIdleAnimation skips (avoids a duplicate import).
 export const IDLE_MODEL_FILE    = 'paladin-idle.glb';
+// Combat strike clip — animation-only Mixamo export (~47k). Retargeted onto
+// the shared paladin skeleton exactly like walking/idle and played during a
+// lunge. Loaded lazily (off the beginLoad critical path) — see
+// `_ensurePunchAnimation`.
+export const PUNCH_MODEL_FILE   = 'punch.glb';
+// G1 reaction clips — animation-only Mixamo exports loaded the same way as
+// punch.glb. `hit.glb` plays on the loser when damage lands; `block.glb`
+// plays on the defender when the attack whiffs. Same shared-skeleton tradeoff
+// as punch: only one clip plays at a time on the paladin rig, so the strike
+// must have resolved (punch follow-through complete) before a reaction fires.
+export const HIT_MODEL_FILE     = 'hit.glb';
+export const BLOCK_MODEL_FILE   = 'block.glb';
 
 // Crossfade rate between idle and walking, in 1/seconds. 5.0 = full transition
 // in 200ms. Slow enough to read as a deliberate state change, fast enough that
@@ -295,6 +382,21 @@ export function computeAnimSpeedRatioForStride(
   return Math.max(0.25, Math.min(6.0, ratio));
 }
 
+/** Solve for the speedRatio that compresses a clip of natural duration
+ *  `natCycleSec` into `targetMs` of real time. A Mixamo punch clip is ~1–2s;
+ *  the lunge it accompanies is only ~LUNGE_ANIM_MS, so we speed the clip up
+ *  to read as a sharp strike rather than slow-mo. speedRatio scales playback
+ *  rate, so ratio = natCycleSec / (targetMs/1000). Returns `fallback` when the
+ *  natural duration is unknown (clip not measured yet). Clamped to [0.5, 8.0]
+ *  so a malformed/zero-length clip can't produce a pathological rate. Pure;
+ *  exported for tests. */
+export function computePunchSpeedRatio(natCycleSec, targetMs, fallback = 2.0) {
+  if (!(natCycleSec > 0)) return fallback;
+  if (!(targetMs > 0)) return fallback;
+  const ratio = natCycleSec / (targetMs / 1000);
+  return Math.max(0.5, Math.min(8.0, ratio));
+}
+
 /** Zero out the root-bone's translation keyframes so the animation drives
  *  the rig in place. Mixamo's walk/run/idle clips bake root motion into
  *  mixamorig:Hips's position channel — without stripping, the model
@@ -356,6 +458,12 @@ export const ANIMATION_BANK = Object.freeze({
   idle:    'paladin-idle.glb', // mesh + idle in one file; doubles as the rig source
   walking: 'walking.glb',
   running: 'running.glb',
+  // Combat clips (Mixamo, animation-only — see scripts/convert-mixamo-anim.js).
+  // Registered here + on the paladin rig so the asset viewer auto-retargets
+  // and plays them; combat playback wiring is a separate follow-up task.
+  punch:   'punch.glb',
+  hit:     'hit.glb',
+  block:   'block.glb',
 });
 
 /** Renderer-side bank of available unit rigs. Each entry pairs a model
@@ -373,6 +481,9 @@ export const UNIT_RIG_BANK = Object.freeze({
     animations: Object.freeze({
       walking: ANIMATION_BANK.walking,
       running: ANIMATION_BANK.running,
+      punch:   ANIMATION_BANK.punch,
+      hit:     ANIMATION_BANK.hit,
+      block:   ANIMATION_BANK.block,
     }),
   }),
   // Future:
@@ -393,6 +504,136 @@ export function getUnitRigConfig(entity) {
  *  in UNIT_RIG_BANK. */
 export function unitUsesPaladinModel(entity) {
   return getUnitRigConfig(entity) != null;
+}
+
+// ─── Bone attachment (G5 horse + G6 weapon) ─────────────────────────────────
+// The paladin rig uses Mixamo bone names (`mixamorig:Hips`, `mixamorig:RightHand`,
+// `mixamorig:LeftUpLeg`, …). The skeleton is SHARED across every hero standee
+// (see _buildPaladinClone), so anything attached to a bone via the bone's WORLD
+// matrix alone would land on every paladin at once. Babylon's
+// `mesh.attachToBone(bone, affectorMesh)` instead positions the mesh by the
+// bone's LOCAL matrix composed with the affectorMesh's world matrix — pass each
+// standee's own clone root as the affector and the attachment is per-unit even
+// though the bone is shared. That's the trick G6 (weapon-in-hand) leans on.
+
+/** Mixamo bone the weapon stand-in attaches to. Suffix-anchored so it matches
+ *  whether or not the `mixamorig:` namespace prefix (or a `.001` dedup suffix)
+ *  is present. */
+export const WEAPON_BONE_NAME_RE = /RightHand(\.\d+)?$/i;
+
+/** Item key marking a unit as mounted — mirrors Entity.getMoveRange()'s
+ *  `items['horse']` check in src/entities.js. */
+export const HORSE_ITEM_KEY = 'horse';
+
+/** Weapon stand-in geometry (no weapon GLBs yet): a long thin cylinder posed
+ *  as a sword gripped in the fist. These are WORLD-space sizes (metres on the
+ *  board, same units as TARGET_PALADIN_WORLD_HEIGHT): a blade a touch shorter
+ *  than the paladin is tall. `weaponStandInTransform(paladinScale)` converts
+ *  them to the rig-LOCAL cylinder dims the geometry must use, because
+ *  attachToBone composes the blade as `localDim × handBoneMatrix ×
+ *  affectorWorldMatrix` — and the affector's world matrix already carries the
+ *  per-standee scale. The hand bone's final matrix is ~unit-scale, so a raw
+ *  32-unit cylinder came out at 32×paladinScale ≈ 11 world units (≈16× the
+ *  paladin) — the giant-sword bug. Dividing the world size by the scale yields
+ *  a constant on-screen blade regardless of the rig's natural model height.
+ *  Operator-tunable. */
+export const WEAPON_STANDIN_WORLD_LENGTH   = 0.62;   // blade + grip, world units (~0.9× paladin height)
+export const WEAPON_STANDIN_WORLD_DIAMETER = 0.045;  // skinny — a stand-in blade, world units
+
+/** Horse placeholder geometry, in the rig's UNSCALED clone-root-local space
+ *  (the clone root carries the paladin scale). The body's centre Y sits at
+ *  HORSE_PLACEHOLDER_BACK_Y below the rider's feet origin so the rider appears
+ *  to sit astride it. MOUNTED_RIDER_LIFT raises the whole rider clone onto the
+ *  horse's back. Both operator-tunable. */
+export const HORSE_PLACEHOLDER_BACK_Y = -0.55;
+// World-space lift for the rider when mounted. Empirically tied to the
+// paladin's world height: lift ≈ 0.456 × TARGET_PALADIN_WORLD_HEIGHT lands
+// the (locally-scaled) horse's leg-bottoms cleanly on the ground. When the
+// paladin shrinks, the lift shrinks with it — otherwise the horse hangs in
+// the air because its (also-scaled) legs no longer reach Y=0.
+export const MOUNTED_RIDER_LIFT       = 0.456 * TARGET_PALADIN_WORLD_HEIGHT;
+
+/** Find the first bone in `skeleton.bones` whose name matches `re`. Pure;
+ *  null-safe against missing skeleton / bones array. Exported for tests. */
+export function findBoneByName(skeleton, re) {
+  if (!skeleton || !Array.isArray(skeleton.bones) || !re) return null;
+  for (const bone of skeleton.bones) {
+    if (bone && typeof bone.name === 'string' && re.test(bone.name)) return bone;
+  }
+  return null;
+}
+
+/** Does this entity have a weapon equipped? Mirrors Entity.weapon (a truthy
+ *  item-id string like 'sword'). Pure; exported for tests. */
+export function entityHasWeapon(entity) {
+  return !!(entity && typeof entity.weapon === 'string' && entity.weapon.length > 0);
+}
+
+/** Is this entity mounted? Mirrors Entity.getMoveRange()'s horse check —
+ *  `items['horse'] > 0`. Pure; exported for tests. */
+export function entityIsMounted(entity) {
+  return !!(entity && entity.items && (entity.items[HORSE_ITEM_KEY] || 0) > 0);
+}
+
+/** Local transform for the weapon stand-in relative to its hand bone. A
+ *  default `CreateCylinder` runs along local +Y centred on the origin; we
+ *  push the cylinder out of the fist (so the grip — not the midpoint — sits at
+ *  the bone) and tilt it forward so it reads as a held blade rather than a
+ *  flagpole.
+ *
+ *  `paladinScale` is the per-standee uniform scale (`Renderer3D._paladinScale`)
+ *  that attachToBone folds in via the affector mesh's world matrix. The
+ *  WORLD-space size constants are divided by it so the cylinder's rig-LOCAL
+ *  height/diameter come back out at the intended world size after the matrix
+ *  compose (blade.world ≈ localDim × paladinScale, since the hand bone's final
+ *  matrix is ~unit-scale). Falls back to scale 1 (i.e. world == local) when no
+ *  usable scale is supplied, keeping the helper pure & test-friendly.
+ *  Exported for tests. */
+export function weaponStandInTransform(paladinScale) {
+  const s = (typeof paladinScale === 'number' && paladinScale > 0) ? paladinScale : 1;
+  const height   = WEAPON_STANDIN_WORLD_LENGTH   / s;
+  const diameter = WEAPON_STANDIN_WORLD_DIAMETER / s;
+  return {
+    height,
+    diameter,
+    // Tilt the blade forward (~25°) from straight-up so it angles ahead of the
+    // fist instead of standing vertical.
+    rotation: { x: -Math.PI * 0.14, y: 0, z: 0 },
+    // Slide half the length up the blade's local axis so the grip end lands at
+    // the hand bone rather than the cylinder's centre.
+    offset:   { x: 0, y: height / 2, z: 0 },
+  };
+}
+
+/** Classify a Mixamo leg bone by name → 'thigh' | 'shin' | 'foot' | null.
+ *  Mixamo names: `…UpLeg` (thigh), `…Leg` (shin/knee), `…Foot` (ankle),
+ *  `…ToeBase` (toes). Suffix-anchored and prefix-agnostic. Pure; exported. */
+export function classifyLegBone(name) {
+  if (typeof name !== 'string') return null;
+  const n = name.replace(/(\.\d+)?$/, '');
+  if (/(Left|Right)UpLeg$/i.test(n)) return 'thigh';
+  if (/(Left|Right)Leg$/i.test(n))  return 'shin';
+  if (/(Left|Right)Foot$/i.test(n)) return 'foot';
+  return null;
+}
+
+/** Euler rotation (radians) to force a leg bone into a riding pose: thighs
+ *  splayed out and forward to straddle the horse, shins bent back at the knee,
+ *  feet levelled. Side ('Left'|'Right' from the bone name) mirrors the Z
+ *  (splay) component. Returns null for non-leg bones. Pure; exported for tests.
+ *
+ *  NOTE: applying these on the SHARED paladin skeleton poses every paladin at
+ *  once — see _applyRidingPose for why this is not auto-wired per-unit yet. */
+export function ridingLegPose(name) {
+  const kind = classifyLegBone(name);
+  if (!kind) return null;
+  const side = /Right/i.test(name) ? -1 : 1;
+  switch (kind) {
+    case 'thigh': return { x: -1.15, y: 0, z: side * 0.32 };
+    case 'shin':  return { x: 1.35,  y: 0, z: 0 };
+    case 'foot':  return { x: -0.2,  y: 0, z: 0 };
+    default:      return null;
+  }
 }
 
 // ─── Standee constants (Phase 3) ────────────────────────────────────────────
@@ -419,11 +660,77 @@ export const STANDEE_LEADER_HEIGHT_MUL = 1.3;
 // Cone body dimensions (centred on Y axis; bottom rim wider than top to read
 // as a traditional "meeple" / board-game pawn). Bottom rim sits flush on the
 // top face of the base disc — no extra Y offset beyond the disc's thickness.
-export const STANDEE_CONE_HEIGHT          = 0.55;
-export const STANDEE_CONE_DIAMETER_BOTTOM = 0.55;
-export const STANDEE_CONE_DIAMETER_TOP    = 0.18;
+// All four dimensions scaled ×0.75 from the original (0.55/0.55/0.18/0.32)
+// so the cone+sphere pawn matches the proportionally-smaller paladin model
+// (TARGET_PALADIN_WORLD_HEIGHT also dropped to 0.69 = 0.75×0.92).
+export const STANDEE_CONE_HEIGHT          = 0.41;
+export const STANDEE_CONE_DIAMETER_BOTTOM = 0.41;
+export const STANDEE_CONE_DIAMETER_TOP    = 0.135;
 // Sphere "head" diameter — sits centred on the cone's flat top.
-export const STANDEE_SPHERE_DIAMETER      = 0.32;
+export const STANDEE_SPHERE_DIAMETER      = 0.24;
+// X-ray occlusion sweep cadence — only ray-pick every Nth frame (and only when
+// the camera or a unit actually moved). Higher = cheaper, laggier; 4 keeps the
+// outline membership feeling instant at 60fps without picking every frame.
+export const XRAY_SWEEP_EVERY_N           = 4;
+// X-ray occluded units are drawn as a faction-colour OUTLINE — a hollow ring,
+// not a fill — STRICTLY confined to the part of the unit hidden behind an
+// occluder, with ZERO pixels over its visible body. Built from TWO cloned,
+// per-ghost layers (see `_buildXrayGhost`), both in the WORLD rendering group
+// (0) and routed to the transparent sub-pass (alpha < 1) so they draw AFTER all
+// opaque world geometry — the occluder depth is present when the depth test runs:
+//
+//   1. MASK layer (`disableColorWrite`, depthFunction ALWAYS) — stamps the
+//      unit's full 2D footprint into the STENCIL buffer (bit XRAY_STENCIL_REF).
+//      Drawn first (lower alphaIndex). Writes no colour; it exists only so the
+//      ring can subtract the body interior.
+//   2. RING layer — an expanded hull (scaled by XRAY_OUTLINE_SCALE) in flat
+//      emissive faction colour, depthFunction GREATER (draws only where the hull
+//      is BEHIND scene geometry = occluded) AND stencil func NOTEQUAL ref (draws
+//      only OUTSIDE the mask footprint). The intersection is a hollow ring that
+//      hugs the unit's silhouette ONLY where it meets the occluder — the
+//      occluder shows through the middle, and no ring pixel lands on the body.
+//
+// Why stencil + an expanded hull rather than the prior single GREATER-tested
+// fill: a non-convex skinned mesh self-occludes, so GREATER alone passed ghost
+// fragments wherever a far body part sat behind a near one — bleeding the ghost
+// over the VISIBLE body (operator artifact "B"). Masking the entire footprint
+// out of the ring kills that bleed deterministically, and the expanded-hull rim
+// turns the fill into an edge (operator artifact "A"). HighlightLayer (drew
+// behind, read as a filled glow) and renderOutline + group-promotion (exploded
+// the skinned paladin and dragged its textured body forward) were both rejected.
+export const XRAY_GHOST_GROUP             = 0;
+// WebGL `GREATER` depth comparison (=== BABYLON.Constants.GREATER). A ring
+// fragment passes only where its depth is GREATER (farther) than the stored
+// scene depth — i.e. behind the already-drawn occluder.
+export const XRAY_GHOST_DEPTH_FUNC        = 516;
+// WebGL `ALWAYS` depth comparison (=== BABYLON.Constants.ALWAYS). The mask layer
+// stamps the unit's full footprint into the stencil regardless of depth.
+export const XRAY_MASK_DEPTH_FUNC         = 519;
+// Ghost alpha. Held just under 1 so Babylon routes BOTH layers into the
+// transparent sub-pass (drawn AFTER all opaque world geometry, so the occluders'
+// depth is guaranteed present when the GREATER test runs), while the ring still
+// reads as a near-solid faction edge.
+export const XRAY_GHOST_ALPHA             = 0.92;
+// Uniform scale of the RING hull above the unit's real size. The annulus between
+// the hull silhouette and the real silhouette is the visible outline thickness —
+// operator-tunable: larger = thicker outline.
+export const XRAY_OUTLINE_SCALE           = 1.13;
+// Fade duration (ms) for the ring appearing/disappearing as a unit becomes
+// occluded / un-occluded. Instead of flicking the ghost on/off the instant the
+// occlusion-state changes, the RING layer's emissive + alpha ramp 0→full
+// (fade-in) or full→0 (fade-out, then the meshes are disabled). The MASK layer
+// is held at full alpha for the whole transition so the hollow-ring stencil
+// keeps working while the ring fades. Operator-tunable.
+export const XRAY_FADE_MS                 = 200;
+// Stencil bit the MASK layer writes and the RING layer tests against. Any free
+// bit works; 0x01 is simple (no other stencil consumer in the scene).
+export const XRAY_STENCIL_REF             = 0x01;
+// Transparent-pass draw order (lower draws first): the MASK must stamp the
+// stencil before the RING tests it. Babylon sorts the transparent sub-pass by
+// mesh alphaIndex ascending, so MASK < RING guarantees the ordering globally
+// (all masks before all rings, even across multiple ghosts).
+export const XRAY_MASK_ALPHA_INDEX        = 100;
+export const XRAY_RING_ALPHA_INDEX        = 200;
 // Y-offset for the base disc centre so it sits clear of the tile prism top
 // (which is at y=0.075). The cone/sphere are positioned relative to this disc.
 // Was 0.18 when the ground disc sat 0.105 clear of the tile prism top (0.075).
@@ -463,7 +770,7 @@ export const BUILDING_LABEL_TEX_H = 64;
 // ─── Power-node tint overlay + name label ───────────────────────────────────
 // A faint faction-tinted hex sits over every power-node tile (just above the
 // terrain disc, below highlight / plan layers), and a single billboarded name
-// label floats above the cluster's centre hex. Both retint when the
+// label floats above the cluster's centroid. Both retint when the
 // controller flips (hero / witch / neutral / contested) and hide under fog
 // alongside the existing node ring discs.
 //
@@ -511,6 +818,16 @@ export function nodeOverlayColor(controller) {
   return getNodeGlowColor(controller);
 }
 
+/** Whether the controller-coloured ring (the per-hex node outline) should be
+ *  drawn for a node with the given controller. Only a node actually held by a
+ *  side — or contested by occupying units — gets the ring; an unoccupied /
+ *  neutral node drops the pale-white outline entirely so the map reads
+ *  quieter. (`nodeController` returns `'neutral'` for an empty node,
+ *  `'contested'` for a tie, or a faction id otherwise.) Pure helper. */
+export function nodeControllerRingVisible(controller) {
+  return controller != null && controller !== 'neutral';
+}
+
 /** Resolve a node's *identifying* colour — the per-node palette entry that
  *  matches the 2D score-dot HUD, independent of who currently controls the
  *  node. Accepts either a witchObjective (uses its baked-in `.color`) or a
@@ -539,6 +856,11 @@ export function nodeIdentifyingColor(objOrIndex) {
  *  Sits just outside the controller-coloured ring (radius ≈ 0.96) so both
  *  reads as a concentric pair without overlap. */
 export const NODE_IDENTIFIER_RING_RADIUS = 1.04;
+/** Pulse range for the node identifier-edge outline alpha — 30% → 50% → 30%
+ *  over NODE_OUTLINE_PULSE_PERIOD_MS. Subtle, never aggressive. */
+export const NODE_OUTLINE_PULSE_MIN       = 0.30;
+export const NODE_OUTLINE_PULSE_MAX       = 0.50;
+export const NODE_OUTLINE_PULSE_PERIOD_MS = 2400;
 /** Tube radius of the identifier ring. Thinner than the controller ring
  *  (0.06) so the controller signal stays dominant; the identifier just
  *  adds a quiet outline of palette colour. */
@@ -561,17 +883,86 @@ export const FOCUS_EPSILON = 1e-3;
  *  Picked to frame ~3-tile diameter around the unit on a standard map. */
 export const SELECTION_FOCUS_RADIUS = 14;
 
+/** Camera radius the combat-framing ease zooms IN to when an attack starts.
+ *  Tighter than SELECTION_FOCUS_RADIUS (14) so the exchange reads as a
+ *  deliberate "lean in" on the two combatants. Normal play restores the
+ *  prior framing on the next selection/draw — no manual restore needed. */
+export const COMBAT_FOCUS_RADIUS = 12;
+
+/** Breathing room (world units) added around an entity-framing bounding box so
+ *  standees aren't flush against the viewport edge when `frameEntities` fits a
+ *  cluster. ~1 hex of slack on every side. The actual zoom-in is still floored
+ *  at the camera's `lowerRadiusLimit`, so a single entity frames at the tightest
+ *  allowed zoom regardless of this pad. */
+export const ENTITY_FRAME_PADDING = 1.5;
+
 /** Camera tilt (beta) is permanently locked at π/4 (45°). Earlier rounds
  *  allowed a clamped tilt range with Tilt-up/Tilt-down buttons and a
  *  right-drag dy → beta branch; both were removed (operator decision —
  *  tilt-lock task) so the board always reads as a fixed isometric. The
  *  camera's lowerBetaLimit and upperBetaLimit are both pinned to π/4 in
  *  _initBabylon, so any stray beta mutation is immediately re-clamped. */
-// Locked tilt angle for the ArcRotateCamera (radians from +Y). Higher = more
-// top-down; π/2 would be a flat-on horizon view. 35° → camera sits higher in
-// the sky and looks down more sharply, which reads the texture-rich top faces
-// and standee silhouettes clearly without going pure top-down.
-export const CAMERA_BETA_LOCKED = Math.PI * 35 / 180;
+// Tilt angle (radians from +Y) at MINIMUM zoom radius — the closest the
+// player can zoom in. LOWER beta = more top-down (beta = 0 is straight
+// overhead; π/2 is flat-on horizon). 30° from +Y reads as a high isometric —
+// looking down from a steep angle, with top faces and standee silhouettes
+// both legible. The camera rises continuously from here toward
+// `CAMERA_BETA_TOPDOWN` as the player zooms out (see `betaForRadius`).
+export const CAMERA_BETA_LOCKED = Math.PI * 30 / 180;
+
+/** Top-down tilt (beta) reached at maximum zoom-out. The camera "rises" as the
+ *  operator zooms out: it holds the locked isometric (`CAMERA_BETA_LOCKED`) for
+ *  the first part of the zoom range, then eases DOWN (toward 0 = directly
+ *  overhead) so by max zoom you're looking mostly straight down (units read as
+ *  their billboard icons obscuring the bodies entirely). 5° from +Y is close
+ *  to overhead without going fully flat (beta=0 sits on the ArcRotateCamera
+ *  pole singularity). Tune by eye. See `betaForRadius`. */
+export const CAMERA_BETA_TOPDOWN = Math.PI * 5 / 180;
+
+/** Fraction of the zoom range (`radius` from min→max) over which the camera
+ *  keeps the locked isometric tilt before it starts rising toward top-down.
+ *  0 = smoothstep covers the whole range (no flat hold); the camera begins
+ *  rising the moment the player starts zooming out, eliminating the slope
+ *  discontinuity at the boundary. Values > 0 introduce a flat hold. */
+export const CAMERA_TILT_RAMP_START = 0;
+
+/**
+ * Camera tilt (beta) as a function of the current zoom radius — the "rise as
+ * you zoom out" ramp. Pure helper (no Babylon), exported for tests.
+ *
+ *   t = clamp01((radius - minR) / (maxR - minR))
+ *     0 .. RAMP_START         → betaBase (locked isometric)
+ *     RAMP_START .. 1.0        → inverse-log (exponential) ease betaBase → betaTopDown
+ *
+ * The ease is `(eˢ − 1) / (e − 1)` on the renormalised fraction
+ * s = (t - RAMP_START) / (1 - RAMP_START). Maps s ∈ [0,1] → [0,1] but stays
+ * near betaBase through most of the zoom range and only descends sharply
+ * near max zoom-out — the tilt change happens late in the ramp, so most of
+ * the playable zoom stays at the isometric heading and only the deep
+ * zoom-out reads as "looking straight down."
+ *
+ * Degenerate `maxR <= minR` returns betaBase (avoids divide-by-zero / NaN).
+ *
+ * @param {number} radius     current camera radius
+ * @param {number} minR       camera lowerRadiusLimit (closest zoom-in)
+ * @param {number} maxR       camera upperRadiusLimit (furthest zoom-out)
+ * @param {number} betaBase   tilt held through the flat region (e.g. CAMERA_BETA_LOCKED)
+ * @param {number} betaTopDown tilt reached at radius === maxR (e.g. CAMERA_BETA_TOPDOWN)
+ * @param {number} rampStart  fraction at which the rise begins (default CAMERA_TILT_RAMP_START)
+ * @returns {number} beta in radians
+ */
+export function betaForRadius(radius, minR, maxR, betaBase, betaTopDown, rampStart = CAMERA_TILT_RAMP_START) {
+  if (!(maxR > minR)) return betaBase;
+  const t = clamp01((radius - minR) / (maxR - minR));
+  if (t <= rampStart) return betaBase;
+  const span = 1 - rampStart;
+  // span is > 0 here because rampStart < t <= 1 ⇒ rampStart < 1.
+  const s = (t - rampStart) / span;
+  // Inverse-log (exponential) curve: (eˢ − 1)/(e − 1). s=0→0, s=1→1.
+  // Stays flat early, descends sharply only near s=1 — tilt happens late.
+  const eased = (Math.exp(s) - 1) / (Math.E - 1);
+  return betaBase + (betaTopDown - betaBase) * eased;
+}
 
 /** Repeat cadence for hold-to-repeat rotate buttons (ms). */
 export const CAMERA_BUTTON_REPEAT_MS = 50;
@@ -649,7 +1040,7 @@ export function labelAlphaForZoom(
  *  doesn't get a label (anything other than a BUILDING tile with a building
  *  field). Pure helper — single source of truth for label text + visibility. */
 export function labelTextForTile(tile) {
-  if (!tile || tile.type !== TileType.BUILDING || !tile.building) return null;
+  if (!tile || !hasBuilding(tile) || !tile.building) return null;
   return BUILDING_LABEL[tile.building] || tile.building;
 }
 
@@ -810,6 +1201,31 @@ export function gestureModeForTwoFingerStart(pointerTypes) {
   return 'sampling';
 }
 
+/** Pose-change threshold for invalidating a world-space pan grab. A grab is
+ *  the ground point under the cursor sampled at a SPECIFIC camera pose
+ *  (radius/alpha/beta). Radius is world units (≈4–80) and the angles are
+ *  radians, so a single small epsilon serves both: 0.01 world unit is smaller
+ *  than any deliberate zoom, and 0.01 rad (~0.57°) is below input noise but
+ *  well under a deliberate rotate. */
+export const GRAB_POSE_EPSILON = 0.01;
+
+/** True when the camera pose has shifted enough since a world-space pan grab
+ *  was captured that the grab is stale and must be re-sampled before the next
+ *  pan diff. Applying `(grab − current)` across a pose change snaps
+ *  `camera.target` by metres — this is the guard that prevents the
+ *  zoom-during-drag / pinch-then-drag target jump.
+ *
+ *  Radius drives the tilt-on-zoom beta ramp, so a zoom shows up in both
+ *  `radius` and `beta`; `alpha` catches twist/right-drag rotate. Missing
+ *  either pose ⇒ recapture. Pure — both poses are plain `{radius, alpha, beta}`
+ *  reads, so it's unit-testable without Babylon. */
+export function shouldRecaptureGrab(oldPose, newPose, epsilon = GRAB_POSE_EPSILON) {
+  if (!oldPose || !newPose) return true;
+  return Math.abs(newPose.radius - oldPose.radius) > epsilon
+      || Math.abs(newPose.alpha  - oldPose.alpha)  > epsilon
+      || Math.abs(newPose.beta   - oldPose.beta)   > epsilon;
+}
+
 /** Compute pan-clamp bounds for the camera target from the playable map's
  *  visual extent. The clamp keeps the target inside the playable bbox, so
  *  the playable map is always the visible subject (rather than sliding off
@@ -871,6 +1287,72 @@ export function hexToWorld(col, row, radius = HEX_RADIUS_WORLD) {
 }
 
 /**
+ * G2 combat positioning — plan target world (x,z) for the defender + each ally.
+ *
+ * Geometry: on a pointy-top hex grid, the midpoint of the segment connecting
+ * two adjacent hex centres IS the midpoint of the edge they share (the centres
+ * lie on the perpendicular bisector of that edge). So an ally "moving to the
+ * closest edge of the defender's hex" is simply the midpoint between the
+ * ally's hex centre and the defender's hex centre.
+ *
+ * Rules:
+ *   - defender re-centres on its hex.
+ *   - first `advantageCap` allies per side (in dice / executeBattle order)
+ *     move to the shared-edge midpoint.
+ *   - allies BEYOND the cap stay put: returned with `moves: false` and the
+ *     ally's own hex centre as `toX/toZ` (caller can skip them entirely).
+ *
+ * Pure helper — takes hex coords, returns world coords. No renderer / scene
+ * state touched. Visible for tests.
+ *
+ * @param {object} opts
+ * @param {{id:any, col:number, row:number}} opts.defender
+ * @param {Array<{id:any, col:number, row:number}>} [opts.attackAllies]
+ * @param {Array<{id:any, col:number, row:number}>} [opts.defenseAllies]
+ * @param {number} [opts.advantageCap=ADVANTAGE_CAP]
+ */
+export function planCombatPositions({
+  defender, attackAllies = [], defenseAllies = [], advantageCap = ADVANTAGE_CAP,
+} = {}) {
+  const defCentre = hexToWorld(defender.col, defender.row);
+  const project = (ally, i) => {
+    const allyCentre = hexToWorld(ally.col, ally.row);
+    if (i >= advantageCap) {
+      return { id: ally.id, toX: allyCentre.x, toZ: allyCentre.z, moves: false };
+    }
+    return {
+      id: ally.id,
+      toX: (allyCentre.x + defCentre.x) * 0.5,
+      toZ: (allyCentre.z + defCentre.z) * 0.5,
+      moves: true,
+    };
+  };
+  return {
+    defender: defCentre,
+    attackerAllies: attackAllies.map(project),
+    defenderAllies: defenseAllies.map(project),
+  };
+}
+
+/**
+ * World-space centroid of a hex cluster — the mean of each member hex's world
+ * position. Used to anchor a power node's floating name label in the middle of
+ * its hex cluster rather than over the first ("head") hex. Pure helper for
+ * tests. Returns null for an empty / invalid cluster.
+ */
+export function clusterCentroidWorld(hexes, radius = HEX_RADIUS_WORLD) {
+  if (!Array.isArray(hexes) || hexes.length === 0) return null;
+  let sx = 0;
+  let sz = 0;
+  for (const h of hexes) {
+    const { x, z } = hexToWorld(h.col, h.row, radius);
+    sx += x;
+    sz += z;
+  }
+  return { x: sx / hexes.length, z: sz / hexes.length };
+}
+
+/**
  * Bounding box (in world units) for a set of hex positions.
  * Pads by the hex's footprint so the box covers the whole rendered tiles,
  * not just their centres. Returns null for an empty set.
@@ -896,6 +1378,63 @@ export function computeMapBounds(hexes, radius = HEX_RADIUS_WORLD) {
     width:   (maxX - minX) + 2 * padX,
     depth:   (maxZ - minZ) + 2 * padZ,
   };
+}
+
+// ─── Fortifications (3D) — pure helpers ──────────────────────────────────────
+// The hero "fortify" action raises a tile's `fortifyLevel` (0..MAX_FORTIFY_LEVEL
+// = 6; see tiles.js). The 3D renderer draws a low wall/fence around a fortified
+// hex's outer perimeter as a VISUAL INDICATOR — not a full enclosing barrier.
+// These two helpers are Babylon-free so they unit-test directly.
+
+// Neighbour direction deltas, odd-r offset — a verbatim copy of hex.js's
+// DIRS_EVEN / DIRS_ODD. We replicate them (rather than call getNeighbors)
+// because getNeighbors filters out negative-coord neighbours, which would drop
+// the perimeter wall on a fortified hex sitting against the col 0 / row 0 edge.
+// Index order is W, NW, NE, E, SE, SW and is consistent across parities.
+const FORT_DIRS_EVEN = [[-1, 0], [-1, -1], [0, -1], [1, 0], [0, 1], [-1, 1]];
+const FORT_DIRS_ODD  = [[-1, 0], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1]];
+
+/** Offset (col,row) of the neighbour across edge-direction `d` (0..5). Pure;
+ *  may return negative coords for off-map neighbours (callers treat those as
+ *  unfortified, so the perimeter edge is drawn). */
+export function fortNeighborOffset(col, row, d) {
+  const dirs = (row & 1) ? FORT_DIRS_ODD : FORT_DIRS_EVEN;
+  const [dc, dr] = dirs[d];
+  return { col: col + dc, row: row + dr };
+}
+
+/** Wall style for a fortify level. Three tiers keyed off the gameplay-meaningful
+ *  thresholds in tiles.js (level 1 = passable, level 2 = FORT_IMPASSABLE_THRESHOLD
+ *  wall, 4+ = high rampart):
+ *    1     → 'stakes' — sparse low wooden posts (passable terrain)
+ *    2–3   → 'low'    — continuous low wooden wall
+ *    4–6   → 'tall'   — taller stone rampart
+ *  Returns null for level ≤ 0 (no fortification). Heights/thickness are world
+ *  units (HEX_RADIUS_WORLD = 1); colours are wood tones for stakes/low and a
+ *  grey stone tone for tall. */
+export function fortifyWallStyle(level) {
+  const lvl = level | 0;
+  if (lvl <= 0) return null;
+  if (lvl === 1) return { kind: 'stakes', height: 0.20, thickness: 0.07, color: '#6b4f2a' };
+  if (lvl <= 3)  return { kind: 'low',    height: 0.30, thickness: 0.12, color: '#7a5a30' };
+  return             { kind: 'tall',   height: 0.50, thickness: 0.16, color: '#8d8a82' };
+}
+
+/** Which of a hex's 6 edges should carry a wall segment. ADJACENCY RULE: an
+ *  edge is drawn only when the neighbour ACROSS it is NOT also fortified — so a
+ *  cluster of fortified hexes reads as ONE compound walled on its outer
+ *  perimeter, with no doubled interior walls. Off-map neighbours count as
+ *  "not fortified" → that perimeter edge is drawn. `fortLevelAt(col,row)`
+ *  returns a hex's level (0 if unfortified / off-map). Returns an array of
+ *  direction indices (0..5); empty when this hex itself is unfortified. Pure. */
+export function fortifyEdgeDirs(col, row, fortLevelAt) {
+  if ((fortLevelAt(col, row) | 0) <= 0) return [];
+  const dirs = [];
+  for (let d = 0; d < 6; d++) {
+    const nb = fortNeighborOffset(col, row, d);
+    if ((fortLevelAt(nb.col, nb.row) | 0) <= 0) dirs.push(d);
+  }
+  return dirs;
 }
 
 /**
@@ -994,6 +1533,135 @@ export function radiusForCloseFit(minVisibleHexes, aspect, fov = 0.8, margin = 1
   return radiusForFit(fitWidth, fitDepth, aspect, fov, margin);
 }
 
+/**
+ * Compute the camera framing (target centre + radius) that fits a set of world
+ * positions into the viewport at the locked isometric tilt. Pure helper for
+ * `Renderer3D.frameEntities` — unit-testable with no Babylon/DOM.
+ *
+ * `positions` is an array of `{ x, z }` world anchors (entity standee feet).
+ * `viewport` carries `{ aspect, fov, margin, padding }` (all optional with
+ * sensible defaults). `maxZoomRadius` is the tightest radius the camera is
+ * allowed to reach (the camera's `lowerRadiusLimit`) — the returned radius is
+ * floored at it so a tight cluster (or a single entity) never dives closer
+ * than the engine allows.
+ *
+ * Returns `{ centerX, centerZ, radius }`, or `null` when no finite position is
+ * supplied. The centre is the bounding-box centre of the positions (so the
+ * whole cluster fits symmetrically); for a single entity that is just its
+ * anchor, framed at `maxZoomRadius`.
+ */
+export function framingForEntities(positions, viewport = {}, maxZoomRadius = 0) {
+  if (!positions || positions.length === 0) return null;
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (const p of positions) {
+    if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.z)) continue;
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.z < minZ) minZ = p.z;
+    if (p.z > maxZ) maxZ = p.z;
+  }
+  if (!Number.isFinite(minX)) return null;
+
+  const aspect  = Number.isFinite(viewport.aspect) ? viewport.aspect : 16 / 9;
+  const fov     = Number.isFinite(viewport.fov)     ? viewport.fov     : 0.8;
+  const margin  = Number.isFinite(viewport.margin)  ? viewport.margin  : 1.05;
+  const padding = Number.isFinite(viewport.padding) ? viewport.padding : 0;
+  // Card-aware extension: combat dice cards float ABOVE the standee heads, so
+  // fitting only the unit footprint pushes the cards off the top of the screen
+  // at the tight combat zoom. `cardExtent` is the world height the card top
+  // reaches above the unit; at the locked 45° isometric tilt a vertical offset
+  // of `h` projects to the same screen position as a ground point ~`h` units
+  // further back (tan(45°) = 1), so we add it to the depth (screen-vertical)
+  // span. This loosens the radius just enough that the card sits in frame
+  // while the combatants still fill a good portion. Default 0 → non-combat
+  // callers (selection, dialog) are unaffected.
+  const cardExtent = Number.isFinite(viewport.cardExtent) ? Math.max(0, viewport.cardExtent) : 0;
+
+  const centerX  = (minX + maxX) / 2;
+  const centerZ  = (minZ + maxZ) / 2;
+  const fitWidth = (maxX - minX) + 2 * padding;
+  const fitDepth = (maxZ - minZ) + 2 * padding + cardExtent;
+
+  const fitRadius = radiusForFit(fitWidth, fitDepth, aspect, fov, margin);
+  const radius    = Math.max(maxZoomRadius || 0, fitRadius);
+  return { centerX, centerZ, radius };
+}
+
+/**
+ * Camera azimuth (`alpha`) that orients a world-XZ axis HORIZONTALLY across the
+ * screen at the locked isometric tilt — used to frame two combatants side by
+ * side (attacker-left / target-right) rather than one behind the other.
+ *
+ * For an `ArcRotateCamera`, the camera sits at
+ *   pos.xz − target.xz = radius·sin(beta)·(cos α, sin α),
+ * so the horizontal view direction (target→camera) is ∝ (cos α, sin α) and the
+ * on-screen RIGHT vector is its in-plane perpendicular. The axis (dx, dz) reads
+ * horizontal exactly when it is perpendicular to the view direction:
+ *   dx·cos α + dz·sin α = 0  ⟹  α = atan2(−dx, dz).
+ *
+ * Of the two perpendicular solutions (α and α+π) this branch is the one that
+ * places the axis tail (attacker) on screen-left and its head (target) on
+ * screen-right — verified against Babylon's frame in headless. Returns a finite
+ * alpha in radians, or `null` for a degenerate (zero-length / non-finite) axis,
+ * so the caller can leave the current alpha untouched for a single-combatant
+ * frame.
+ *
+ * Pure — no Babylon/DOM — so the perpendicularity property is unit-testable.
+ */
+export function alphaForAxis(dx, dz) {
+  if (!Number.isFinite(dx) || !Number.isFinite(dz)) return null;
+  if (dx === 0 && dz === 0) return null;
+  return Math.atan2(-dx, dz);
+}
+
+/**
+ * Compass-rose rotation (deg, CW from screen-up) needed for a needle whose
+ * default art points up to actually point toward MAP NORTH given the current
+ * ArcRotateCamera azimuth `alpha`.
+ *
+ * Derivation: for an ArcRotateCamera the camera position relative to its target
+ * (in XZ) is ∝ (cos α, sin α). View direction (camera→target) projected onto XZ
+ * is (-cos α, -sin α) — this maps to "up on screen". Screen-right axis (in XZ)
+ * is the in-plane perpendicular that yields screen_right · world_X > 0 at the
+ * canonical horizontal-axis frame (verified against `alphaForAxis(1,0) = -π/2`,
+ * which places +X on screen-right): screen_right_XZ = (-sin α, cos α).
+ *
+ * Map north = world -Z (hexToWorld: row 0 → z 0, increasing row → +Z). Project
+ * the unit north vector (0, -1) onto the screen frame:
+ *   screen_x   = (0)(-sin α) + (-1)(cos α) = -cos α
+ *   screen_y_up = (0)(-cos α) + (-1)(-sin α) = sin α
+ *
+ * CSS `transform: rotate(θdeg)` is CW positive in screen space; the needle
+ * (default pointing up) reaches the (screen_x, screen_y_up) direction at
+ *   θ_CW_from_up = atan2(screen_x, screen_y_up) = atan2(-cos α, sin α).
+ *
+ * Returns 0 for null / non-finite alpha so the 2D renderer (which has no
+ * azimuth) gets north-up. Pure — no Babylon/DOM — so unit-testable.
+ */
+export function compassRotationDegFromCameraAlpha(alpha) {
+  if (alpha == null || !Number.isFinite(alpha)) return 0;
+  return Math.atan2(-Math.cos(alpha), Math.sin(alpha)) * 180 / Math.PI;
+}
+
+/** World height the combat readout's TOP reaches above a standee's anchor —
+ *  the icon top (badge centre + size/2) plus the persistent floater stack
+ *  plus the result-label slot. Sized for the worst case (~4 attacker
+ *  bonuses → 4 stacked floaters + 1 result label), which guarantees the
+ *  combat-camera framing leaves room for every readout we can produce.
+ *  Pure and exported for tests. */
+export function combatCardFrameExtent(leader = true) {
+  // Persistent floaters stack at fixed slots above the icon; the result label
+  // sits in the topmost slot. Reserve enough room for 4 floaters + label so
+  // the framing doesn't clip the longest readout the model can emit.
+  const MAX_FLOATERS = 4;
+  return iconBillboardYRelativeToCone(leader)
+    + UNIT_ICON_PLANE_SIZE / 2
+    + COMBAT_READOUT_FLOATER_Y_OFFSET
+    + MAX_FLOATERS * (COMBAT_READOUT_FLOATER_PLANE_HEIGHT + COMBAT_READOUT_FLOATER_SLOT_GAP)
+    + COMBAT_READOUT_RESULT_LABEL_GAP
+    + COMBAT_READOUT_RESULT_LABEL_PLANE_HEIGHT;
+}
+
 /** Minimum hex span we want visible at max zoom-in. 5 reads as a comfortable
  *  close-up: the focused tile plus its full ring of neighbours, with a touch
  *  of context past them. Closer than that and we start clipping into meshes. */
@@ -1002,6 +1670,17 @@ export function radiusForCloseFit(minVisibleHexes, aspect, fov = 0.8, margin = 1
 // and lets the camera get within a hex-width of its target before the radius
 // limit kicks in.
 export const MIN_VISIBLE_HEXES = 1.5;
+/** Operator-fixed camera radius bounds (world units = distance from camera
+ *  target to camera position). MIN = closest the player can zoom in; MAX =
+ *  furthest they can zoom out. Replaces the previous map-fit-derived
+ *  dynamic cap — a single consistent range across every map size. */
+export const CAMERA_MIN_ZOOM_RADIUS = 5.5;
+// Bumped 17 → 28 so most of a Standard 13×13 map fits in frame at max zoom-out
+// (radiusForStandardFit ≈ 29 fits the whole board depth-wise with the default
+// 1-hex frame padding; 28 shows nearly all of it). This is also the radius at
+// which the tilt ramp (`betaForRadius`) reaches CAMERA_BETA_TOPDOWN, so the
+// "rise toward top-down" completes exactly at max zoom-out. Tune by eye.
+export const CAMERA_MAX_ZOOM_RADIUS = 32;
 
 /**
  * Per-side depth (in hexes) the forest border band must cover so that, when
@@ -1042,6 +1721,22 @@ export function shouldAnimateFocus(curTarget, curRadius, newTarget, newRadius, e
   const dy = (curTarget?.y ?? 0) - (newTarget?.y ?? 0);
   const dz = (curTarget?.z ?? 0) - (newTarget?.z ?? 0);
   return (dx * dx + dy * dy + dz * dz) > epsilon * epsilon;
+}
+
+/** Lunge end-point: slide from the standee's CURRENT world position a
+ *  `fraction` of the way toward the target hex's world position. Stopping
+ *  short of the target (fraction < 1) closes the gap for an "attack" pose
+ *  without overlapping the target token. Returns `{ x, z }`.
+ *
+ *  Note this starts from `current`, not the attacker's hex centre — so a
+ *  unit that's mid-slide (or off-centre) lunges from where it actually is,
+ *  with no pre-snap "pop" to the hex centre. */
+export function computeLungeTarget(current, target, fraction = LUNGE_FRACTION) {
+  const f = Number.isFinite(fraction) ? fraction : LUNGE_FRACTION;
+  return {
+    x: current.x + f * (target.x - current.x),
+    z: current.z + f * (target.z - current.z),
+  };
 }
 
 /** Set `receiveShadows = true` on every (non-null) mesh in the iterable.
@@ -1102,19 +1797,12 @@ export function cssHexToRgb01(hex) {
  */
 export function tileColorFor(tile) {
   if (!tile) return TILE_COLOR[TileType.GRASS];
-  if (tile.type === TileType.BUILDING) {
-    return BUILDING_COLOR[tile.building] || '#8a7a5a';
-  }
-  // Road / river / bridge tiles now render with a grass base — the network
-  // pass draws smooth bezier tubes overlaying the grass, mirroring the 2D
-  // renderer's _drawRiverLayer / _drawRoadLayer (which also keep the grass
-  // background intact and lay the path on top).
-  if (tile.type === TileType.ROAD
-      || tile.type === TileType.RIVER
-      || tile.type === TileType.BRIDGE) {
-    return TILE_COLOR[TileType.GRASS];
-  }
-  return TILE_COLOR[tile.type] || TILE_COLOR[TileType.GRASS];
+  // The disc/prism colour is the tile's REAL base material (grass/forest/dirt).
+  // Roads, rivers and bridges no longer collapse to grass — the bezier network
+  // pass overlays the path on top of the honest base. Buildings show their base
+  // material under the box/roof props (BUILDING_COLOR is the prop colour, set in
+  // _buildTileMesh, not the disc colour).
+  return TILE_COLOR[baseOf(tile)] || TILE_COLOR[TileType.GRASS];
 }
 
 // ─── 2D thumbnail helpers (UI portrait + terrain icons) ─────────────────────
@@ -1144,13 +1832,13 @@ function _traceHexPath2D(ctx, cx, cy, r) {
  *  renderer but we don't replicate those for thumbnails). */
 function _tileFillColor(tile) {
   if (!tile) return TILE_COLOR[TileType.GRASS];
-  if (tile.type === TileType.BUILDING) {
+  // Building thumbnails show the building's colour as the informative cue;
+  // everything else fills from the real base material so a road-over-forest
+  // thumbnail reads as forest rather than collapsing to grass.
+  if (hasBuilding(tile)) {
     return BUILDING_COLOR[tile.building] || '#8a7a5a';
   }
-  if (tile.type === 'road' || tile.type === 'river' || tile.type === 'bridge') {
-    return TILE_COLOR[TileType.GRASS];
-  }
-  return TILE_COLOR[tile.type] || TILE_COLOR[TileType.GRASS];
+  return TILE_COLOR[baseOf(tile)] || TILE_COLOR[TileType.GRASS];
 }
 
 /** Choose a representative sprite id (e.g. 'grass_3') for a tile, hashed
@@ -1159,11 +1847,9 @@ function _tileFillColor(tile) {
  *  cover the variant pools that exist in the atlas (grass/forest/dirt). */
 export function _terrainThumbSpriteId(tile, col, row) {
   if (!tile) return null;
-  let base = tile.type;
-  if (tile.type === TileType.BUILDING) base = TileType.DIRT;
-  else if (tile.type === 'road' || tile.type === 'river' || tile.type === 'bridge') {
-    base = TileType.GRASS;
-  }
+  // Real base material — a road/river/building thumbnail picks the sprite for
+  // its true base (e.g. forest under a road) rather than collapsing to grass.
+  const base = baseOf(tile);
   const variants = { grass: 5, forest: 5, dirt: 5 };
   const count = variants[base];
   if (!count) return null;
@@ -1210,13 +1896,26 @@ export class Renderer3D {
 
     // ── Babylon state — populated by _initBabylon() on first draw ───────────
     this._babylon       = null; // module namespace once loaded
-    // ── House GLB model state (see `_loadHouseModel`) ─────────────────────
-    // _houseSourceMesh is the (merged) imported BABYLON.Mesh used as the
-    // template for `mesh.createInstance(...)`. Null until the GLB load
-    // resolves; null forever if the file is missing or fails to parse —
-    // building tiles fall back to the procedural box+roof in that case.
-    this._houseSourceMesh = null;
-    this._houseLoadPromise = null; // de-dupes concurrent load attempts
+    // ── Building GLB model state (see `_loadBuildingModels`) ──────────────
+    // `_buildingTemplates`   : Map<relPath, { mesh, scale }> — one hidden
+    //                          source mesh per unique GLB variant path across
+    //                          BUILDING_GLB_BY_TYPE. Building tiles render
+    //                          `mesh.createInstance(...)` so all instances of
+    //                          a type share one vertex buffer / material.
+    //                          `scale` is the bbox-derived uniform scale that
+    //                          lands the template at TARGET_BUILDING_WORLD_HEIGHT.
+    // `_buildingLoadPromises`: Map<relPath, Promise> — de-dupes concurrent
+    //                          loads of the same path. A failed load leaves the
+    //                          path absent from `_buildingTemplates`, so tiles
+    //                          of that type keep the procedural box+roof.
+    this._buildingTemplates   = new Map();
+    this._buildingLoadPromises = new Map();
+    // FogDarkenPlugin instances attached to building template materials. All
+    // share one global fogged-tile uniform list (no per-instance attribute —
+    // see src/fog-darken-plugin.js for why the May per-instance attempt failed).
+    // `_updateBuildingFogUniform` pushes the current fogged-building XZ centres
+    // into every plugin whenever the fog veil changes.
+    this._buildingFogPlugins = new Set();
     this._assetsBasePath   = null; // captured by loadImages()
     // ── Tree-pack GLB state (see `_loadTreePackManifest`) ─────────────────
     // `_treeTemplates`     : Map<filename, mesh>   — hidden source meshes,
@@ -1235,6 +1934,12 @@ export class Renderer3D {
     this._treeGroupsByName   = new Map();
     this._treePackLoadPromise = null;
     this._useRealTrees       = false;
+    // Translucent template clones for the border-forest edge fade, keyed by
+    // `file@a<alpha>`. Cloned once per (file, alpha) so faded border trees can
+    // still hardware-instance off a shared (faded) template instead of forcing
+    // per-instance alpha. The opaque `_treeTemplates` are never mutated, so the
+    // in-map forest stays fully opaque. See `_fadedTreeTemplateFor`.
+    this._fadedTreeTemplates  = new Map();
     // ── Paladin GLB model state (see `_loadPaladinModel`) ─────────────────
     // _paladinSource: { mesh, skeleton, idleGroup } — the imported source
     // skinned mesh, its skeleton, and the idle AnimationGroup. Each hero
@@ -1244,6 +1949,8 @@ export class Renderer3D {
     // cone+sphere fallback in that case.
     this._paladinSource     = null;
     this._paladinLoadPromise = null; // de-dupes concurrent load attempts
+    this._punchLoadPromise   = null; // de-dupes the lazy punch.glb load
+    this._frozenPunchImpactFrame = null; // set while a punch is held mid-strike
     // Uniform scale applied to cloned paladin meshes. Computed once at load
     // time from the source mesh's natural bbox height so the visible model
     // lands at TARGET_PALADIN_WORLD_HEIGHT regardless of FBX export units
@@ -1263,11 +1970,36 @@ export class Renderer3D {
     this._materialCache = new Map(); // hex string → BABYLON.StandardMaterial
     this._tileMeshes    = [];   // for picking + future incremental rebuild
     this._mapBuilt      = false;
+    // ── Splat-terrain feature flag ───────────────────────────────────────
+    // When true, the playable ground is ONE merged mesh whose fragments blend
+    // three greyscale detail textures by per-vertex weights (`_buildSplatGround`)
+    // instead of one flat hex per tile. Picking → ray/ground inverse; fog →
+    // per-vertex `aFog` rewrite. 1-line rollback: flip to false to restore the
+    // legacy per-hex path untouched.
+    this._useSplatTerrain = true; // 1-line rollback: set false for legacy per-hex path
+    this._splatGround   = null;  // the single merged ground mesh (flag on)
+    this._splatPlugin   = null;  // TerrainSplatPlugin instance on the ground material
+    this._hexVertexRange = new Map(); // hexKey → base vertex index (×7 per tile)
+    this._splatFogBuf    = null; // Float32Array(tiles×7) backing the aFog attribute
     // Per-map deterministic season tag — picked in `_buildMap` from a hash of
     // the tile layout (or `state.mapSeed` if exposed later). Drives seasonal
     // tree palettes + geometry. Null until the map is built.
     this._season        = null;
     this._babylonInit   = null; // pending init promise (de-dupes draw() calls)
+
+    // ── Loading-screen asset bundle (see beginLoad / whenReady / onProgress) ─
+    // beginLoad() populates `_assetBundle` with one item per major load
+    // (engine, atlas, houses, paladin, forest). Each item carries a smoothed
+    // `progress: 0..1` — bumped by byte-level ImportMeshAsync callbacks while
+    // the GLB streams, then pinned to 1 on settle. `onProgress(progress01,
+    // label)` fires with the aggregate (mean of all item fractions) every time
+    // any item advances. whenReady() resolves once every item settles. The
+    // scene stays hidden behind the loading overlay (main.js) until whenReady
+    // resolves, then fades in.
+    this._assetBundle   = null;  // [{ id, label, promise, progress, settled }]
+    this._loadStarted   = false; // beginLoad idempotency guard
+    this.onProgress     = null;  // (progress01, label?) => void, set by main.js
+    this._loadTimeoutMs = 30000; // whenReady safety timeout (overridable in tests)
 
     // Tile top-face textures (see "Tile top-face textures" banner below).
     // Both keyed by sprite id ('grass_3', 'dirt_1', 'road', …) so every tile of
@@ -1276,6 +2008,21 @@ export class Renderer3D {
     this._terrainTextureCache    = new Map();
     this._terrainMaterialCache   = new Map();
     this._terrainFogMaterialCache = new Map(); // darkened variants for fog-of-war
+    // Darkened CLONES of each terrain sprite's Texture, used only by the fogged
+    // material variant. The fog tint MUST be applied at the texture LEVEL (not
+    // just diffuseColor): the diffuse LIGHTING term saturates to 1.0 at bright
+    // phases, so a ×0.55 on diffuseColor is clamped away and the fogged hex
+    // renders identically to a lit one. The texture sample is applied OUTSIDE
+    // that clamp, so darkening `texture.level` is what actually dims the hex on
+    // screen. Cloned (never mutated in place) so the shared bright texture in
+    // `_terrainTextureCache` keeps its full brightness for visible tiles.
+    this._terrainFogTextureCache = new Map();
+    // Per-(base-material, alpha) translucent CLONES of the fogged terrain (or
+    // colour-fog fallback) material, used by the border-forest GROUND edge fade
+    // so the band's ground dissolves in lockstep with its trees. Kept separate
+    // from the shared terrain caches so the playable map's opaque ground
+    // materials are never mutated. See `_borderGroundMaterialFor`.
+    this._borderGroundAlphaMatCache = new Map();
     // Per-instance fog-tint multiplier — initialised from the FOG_TILE_DARKEN
     // export but tunable at runtime via `setFogTint` (and per-phase via the
     // optional `cfg.fogTint` field consumed by `_applyLightConfig`).
@@ -1310,6 +2057,13 @@ export class Renderer3D {
     // gameplay-coupled passes (fog veil, slot reassignment) never pick these
     // up — they live in a parallel namespace that just renders.
     this._borderPropsByKey = new Map(); // hexKey → Array<Mesh>
+    // Fortification wall segments, in their OWN registry (not _tilePropsByKey)
+    // so the building/tree GLB-upgrade sweeps and the static-mesh freeze pass
+    // never touch them — they're dynamic, rebuilt by `_syncFortifications` when
+    // a tile's fortifyLevel changes. hexKey → { sig, meshes:Mesh[], mat,
+    // baseDiffuse:{r,g,b} }. Fog darkening is applied here directly (mirroring
+    // the 'darken' policy) since these never live in the fog-veil prop walk.
+    this._fortByKey = new Map();
     // Cross-tile merged tree meshes for the border-forest band. One trunk
     // mesh + one mesh per leaf-colour bucket (≤10 total) instead of 2–4 per
     // tile (≈240–900 meshes at max zoom-out). Lives in its own registry so
@@ -1322,6 +2076,10 @@ export class Renderer3D {
     // Item 8 — static (build-time) per-tile occupant registry consumed by the
     // per-draw standee re-slot pass.
     this._staticOccupantsByKey = new Map(); // hexKey → [{id, kind: 'building'|'tree'}]
+    // Per-tile Set of TILE_SLOTS indices a road deck crosses on a forest tile
+    // (from `roadBlockedTreeSlots`). Computed at build time so the per-draw
+    // standee re-slot reserves the same slots the forest trees skipped.
+    this._roadBlockedSlotsByKey = new Map(); // hexKey → Set<slotIdx>
     // Item 8 — overflow "+N" badges keyed by hexKey; created lazily when a
     // tile has more standees than free slots, disposed when overflow drops to 0.
     this._overflowBadges       = new Map(); // hexKey → { plane, mat, tex, lastN }
@@ -1332,8 +2090,24 @@ export class Renderer3D {
     this._buildingLabelsByKey  = new Map(); // hexKey → { plane, mat, tex }
     this._fogMaterialCache = new Map();  // base hex color → darker StandardMaterial
     this._fogActiveSet     = new Set();  // hexKeys currently rendered as fogged
+    // Renderer-level fog DISPLAY override, cycled with the `T` hotkey for
+    // debugging. Independent of the game's actual fogOfWar state — see
+    // `_applyFogVeil` / `nextFogDebugMode`. One of:
+    //   'normal' → veil per game state + observer (default; no divergence)
+    //   'off'    → suppress the veil entirely (everything visible)
+    //   'full'   → treat ALL hexes as fogged (whole map darkened)
+    //   'debug'  → normal veil PLUS a billboarded "F" over every fogged hex
+    this._fogDebugMode    = 'normal';
+    // "F" markers spawned in debug mode, keyed by hexKey → { plane, mat, tex }.
+    // Diffed against the fogged set each veil pass; disposed on map rebuild and
+    // when leaving debug mode.
+    this._fogDebugMarkers = new Map();
     // Power-node glow meshes: { obj, disc, col, row, glowColor } per node hex.
     this._nodeGlowMeshes   = [];
+    // Per-node identifier-outline materials — alpha is pulsed in
+    // _pumpNodeOutlinePulse so the outer edges breathe between
+    // NODE_OUTLINE_PULSE_MIN and NODE_OUTLINE_PULSE_MAX.
+    this._nodeOutlinePulseMats = [];
     this._nodeGlowBuilt    = false;
     // Power-node tint discs: one translucent faction-tinted hex per node hex.
     // Recoloured each draw alongside the glow ring; hidden via the per-tile
@@ -1341,7 +2115,8 @@ export class Renderer3D {
     // the node ring tubes in `_buildNodeGlowMeshes`.
     this._nodeTintMeshes   = [];           // [{ obj, mesh, mat, col, row }]
     // Power-node floating name labels: one billboarded plane per node, anchored
-    // above the cluster's centre hex. Keyed by centre-hex key so the per-tile
+    // above the cluster's centroid. Keyed by centre-hex key (hexes[0]) for fog
+    // tracking even though the plane sits at the centroid. Keyed so the per-tile
     // fog veil can hide them in `_setTileFogged` without freezing the world
     // matrix (billboarding requires per-frame matrix sync — registering in
     // `_tilePropsByKey` would freeze the plane and lock its rotation).
@@ -1353,9 +2128,12 @@ export class Renderer3D {
     this._lastPhase  = null;
     this._phaseTransition = null;       // { from, to, startMs, durMs } or null
     this._onBeforeRenderObs = null;     // observer handle so we can dispose it
+    this._riverFlowTextures = [];       // per-tile river diffuse textures to scroll
+    this._riverExtensionMat = null;     // shared border river-extension material
     // FPS counter throttle state — see _pumpFpsCounter / FPS_COUNTER_UPDATE_MS.
     this._fpsCounterEl       = null;
     this._polyCounterEl      = null;
+    this._camCounterEl       = null;
     this._fpsCounterLastMs   = 0;
 
     // ── Phase 3: standees + selection ───────────────────────────────────────
@@ -1400,6 +2178,18 @@ export class Renderer3D {
     // so the animation isn't snapped back to the state position every frame.
     this._activeMoveIds   = new Set();
     this._activeLungeIds  = new Set();
+    // X-ray occlusion ghost (see `_pumpXrayOcclusion` + `_buildXrayGhost`). When
+    // an alive, fog-visible unit is hidden behind a tree/building from the
+    // current camera, a flat faction-colour duplicate of its meshes (the
+    // "ghost") is enabled. The ghost depth-tests with GREATER against the
+    // already-drawn scene, so it shows ONLY over the occluding object — the
+    // part of the unit hidden behind it — and vanishes where the unit is clear.
+    this._xrayOutlinedIds = new Set();  // entity ids whose ghost is currently enabled
+    this._xrayColorCache  = new Map();  // owner-css-hex → BABYLON.Color3
+    this._xrayRay         = null;       // reused BABYLON.Ray for the per-unit picks
+    this._xrayFrame       = 0;          // frame counter driving the sweep throttle
+    this._xrayLastCamKey  = '';         // quantized camera transform at last sweep
+    this._xrayFading      = new Map();  // entityId → standee, ghosts with an in-flight ring fade
     // Map<entityId, { mesh, texture, lastHp, lastMax }> — billboarded HP bar
     // parented to the standee base, redrawn only when ratio changes.
     // Retained as a no-op compatibility hook; the floating-icon badge below
@@ -1477,13 +2267,11 @@ export class Renderer3D {
    *  via main.js's onRedraw, so this is where the standee diff and camera
    *  focus updates happen. */
   draw() {
-    if (!this._engine && !this._babylonInit) {
-      this._babylonInit = this._initBabylon().catch(err => {
-        console.error('[Renderer3D] Babylon init failed:', err);
-      });
-      return;
-    }
-    if (!this._scene) return; // init in flight
+    // Render-only by contract. `beginLoad()` is the sole entry point that
+    // boots Babylon and populates the asset bundle — draw() never triggers
+    // init anymore. It still no-ops while the scene is in flight so any
+    // state-change redraw fired before whenReady() resolves is harmless.
+    if (!this._scene) return; // not ready yet — beginLoad() drives init
     this._syncEntityStandees();
     this._syncEntityIconBillboards();
     this._syncEntityHexOutlines();
@@ -1502,6 +2290,150 @@ export class Renderer3D {
     // sync above so newly-built standees are tagged correctly.
     this._notePhaseChange();
     this._applyFogVeil();
+    // Fortification walls — built/refreshed/disposed against the live
+    // fortifyLevel of every tile. Runs AFTER _applyFogVeil so `_fogActiveSet`
+    // is current when we tint fogged segments.
+    this._syncFortifications();
+  }
+
+  // ─── Loading-screen API ──────────────────────────────────────────────────
+  //
+  // The 3D renderer fires several heavy loads (Babylon engine, tilemap atlas,
+  // house GLB, paladin GLB, tree pack). Historically these ran fire-and-forget
+  // from `_initBabylon` and the scene rendered procedural fallbacks that
+  // visibly morphed into the real assets over a few seconds. main.js now hides
+  // the canvas behind a loading overlay until `whenReady()` resolves, ticking a
+  // progress bar from `onProgress`.
+
+  /** Kick off Babylon init + every tracked asset load and populate
+   *  `_assetBundle`. Idempotent — calling twice does nothing the second time.
+   *  Each scene-dependent loader (house/paladin/trees) is chained behind the
+   *  engine promise; the loaders themselves de-dupe (they cache their in-flight
+   *  promise), so `_initBabylon`'s own fire-and-forget kickoff and the bundle's
+   *  re-invocation share a single network load. Per-item `.catch(() => null)`
+   *  means an individual GLB failure never rejects `whenReady` — the renderer
+   *  keeps its procedural fallback.
+   *
+   *  @param {string} [basePath] - absolute or relative asset root. Pass an
+   *    ABSOLUTE base (e.g. '/assets') when the host page is served from a
+   *    sub-path URL (such as `/admin/tools`); otherwise the relative default
+   *    'assets' resolves against the page's directory and 404s. Supplied
+   *    synchronously here because `loadImages()` only pins `_assetsBasePath`
+   *    after its async image load — too late for this call to read. Omit it to
+   *    keep the relative default (correct for the root-served live game). */
+  beginLoad(basePath) {
+    if (this._loadStarted) return;
+    this._loadStarted = true;
+
+    if (typeof basePath === 'string' && basePath) this._assetsBasePath = basePath;
+    basePath = this._assetsBasePath || 'assets';
+
+    // Engine + scene. This is the existing init path (no longer triggered by
+    // draw()). It also kicks off the scene-dependent loaders fire-and-forget;
+    // we re-await their cached promises below so the bundle tracks them.
+    const babylonP = this._babylonInit
+      || (this._babylonInit = this._initBabylon().catch(err => {
+        console.error('[Renderer3D] Babylon init failed:', err);
+      }));
+
+    // tilemap atlas — independent of the scene.
+    const atlasP = this.loadImages(basePath);
+
+    // Scene-dependent GLB loaders. Wait for init, then (re-)invoke each loader.
+    // The loaders return their cached in-flight promise (or the loaded source
+    // if already resolved), so this never starts a duplicate network load.
+    const afterInit = (fn) => babylonP.then(() => (this._scene ? fn() : null));
+    const buildingsP = afterInit(() => this._loadBuildingModels(basePath));
+    const paladinP   = afterInit(() => this._loadPaladinModel(basePath));
+    const treesP     = afterInit(() => this._loadTreePackManifest(basePath));
+    // Splat-terrain detail textures — these were previously lazy on the first
+    // gameplay frames, causing a visible framerate hitch right after the
+    // loading screen drops. Loading them inside the bundle takes the cost
+    // before whenReady() resolves so gameplay starts smooth.
+    const terrainP   = afterInit(() => this._preloadTerrainDetailTextures());
+
+    this._assetBundle = [
+      { id: 'engine',    label: 'engine',    promise: babylonP,   progress: 0 },
+      { id: 'sprites',   label: 'sprites',   promise: atlasP,     progress: 0 },
+      { id: 'buildings', label: 'buildings', promise: buildingsP, progress: 0 },
+      { id: 'paladin',   label: 'paladin',   promise: paladinP,   progress: 0 },
+      { id: 'forest',    label: 'forest',    promise: treesP,     progress: 0 },
+      { id: 'terrain',   label: 'terrain',   promise: terrainP,   progress: 0 },
+    ];
+
+    for (const item of this._assetBundle) {
+      // `.catch` so a single failed GLB never rejects whenReady; `.finally`
+      // pins the item to 100% regardless of resolve/reject order (byte-level
+      // ticks may not reach 1 if the server sent no Content-Length).
+      item.settled = Promise.resolve(item.promise)
+        .catch(() => null)
+        .finally(() => {
+          item.progress = 1;
+          this._emitProgress(item.label);
+        });
+    }
+  }
+
+  /** Advance one bundle item's byte-level progress and re-emit the aggregate.
+   *  Monotonic — a regressing or already-settled fraction is ignored, so a
+   *  late/duplicate ProgressEvent never drags the bar backwards. No-op before
+   *  `beginLoad()` populates the bundle or for an unknown id. */
+  _setItemProgress(id, frac) {
+    if (!this._assetBundle) return;
+    const item = this._assetBundle.find(b => b.id === id);
+    if (!item) return;
+    const f = Math.max(0, Math.min(1, frac));
+    if (!(f > (item.progress || 0))) return;
+    item.progress = f;
+    this._emitProgress(item.label);
+  }
+
+  /** Build an ImportMeshAsync `onProgress` handler bound to one bundle item.
+   *  Babylon hands it a ProgressEvent-like `{ lengthComputable, loaded, total }`
+   *  per network tick; when the server sent no Content-Length the event isn't
+   *  computable and we skip the tick (the item's `.finally` still pins it to 1
+   *  on completion, and the shimmer keeps the bar alive in the meantime). */
+  _glbProgressHandler(id) {
+    return (evt) => {
+      if (!evt || !evt.lengthComputable || !(evt.total > 0)) return;
+      this._setItemProgress(id, evt.loaded / evt.total);
+    };
+  }
+
+  /** Re-emit aggregate load progress (mean of every item's 0..1 fraction).
+   *  `label` is the item that just advanced, surfaced as the overlay caption. */
+  _emitProgress(label) {
+    if (typeof this.onProgress !== 'function') return;
+    const items = this._assetBundle;
+    if (!items || items.length === 0) return;
+    let sum = 0;
+    for (const b of items) sum += (b.progress || 0);
+    const progress01 = sum / items.length;
+    try {
+      this.onProgress(progress01, label);
+    } catch (err) {
+      console.warn('[Renderer3D] onProgress handler threw:', err);
+    }
+  }
+
+  /** Resolve once every bundle item has settled (resolved OR rejected). A
+   *  safety timeout (`_loadTimeoutMs`, default 30s) resolves anyway with a
+   *  console.warn so a hung load never traps the player behind the overlay.
+   *  Returns immediately if `beginLoad()` was never called. */
+  whenReady() {
+    if (!this._assetBundle) return Promise.resolve();
+    const all = Promise.all(this._assetBundle.map(b => b.settled)).then(() => undefined);
+    const ms = this._loadTimeoutMs;
+    if (!(ms > 0)) return all;
+    const safety = new Promise(resolve => {
+      const t = setTimeout(() => {
+        console.warn(`[Renderer3D] whenReady safety timeout (${ms}ms) — revealing scene anyway`);
+        resolve();
+      }, ms);
+      // Don't keep a node test process alive waiting on the timer.
+      if (t && typeof t.unref === 'function') t.unref();
+    });
+    return Promise.race([all, safety]);
   }
 
   resize() {
@@ -1554,8 +2486,8 @@ export class Renderer3D {
       // portrait sprite before the next draw cycle.
       this._syncEntityIconBillboards();
     }
-    // Remember the basePath so `_loadHouseModel` (kicked off from
-    // `_initBabylon` once the scene exists) can fetch the GLB from the same
+    // Remember the basePath so `_loadBuildingModels` (kicked off from
+    // `_initBabylon` once the scene exists) can fetch the GLBs from the same
     // root the tilemap came from.
     this._assetsBasePath = basePath;
     if (this.onImagesLoaded) this.onImagesLoaded();
@@ -1697,66 +2629,92 @@ export class Renderer3D {
     return true;
   }
 
-  /** Lazy-load `<basePath>/models/house.glb` and stash it as `_houseSourceMesh`.
-   *  Subsequent building tiles (and any already-built tiles, via the retrofit
-   *  pass) render `mesh.createInstance(...)` of this source so all houses on
-   *  the map share one vertex buffer / material. The GLB is intentionally
-   *  optional: if the loader plugin import, the ImportMeshAsync call, or the
-   *  merge step fails, the renderer silently falls back to the procedural
-   *  box+roof so a missing file never blocks gameplay.
+  /** Kick off the load of every unique building-GLB variant path across
+   *  `BUILDING_GLB_BY_TYPE` (lazily, in parallel) and retrofit the map once
+   *  any of them resolves. Fire-and-forget from `beginLoad`; each individual
+   *  load is de-duped + fault-isolated so a missing/broken GLB for one type
+   *  never blocks the others or the game. Returns a promise that settles once
+   *  all variant loads have settled (used by the loading-screen bundle). */
+  async _loadBuildingModels(basePath = 'assets') {
+    if (!this._babylon || !this._scene) return null;
+    // Collect the unique relative paths (HOUSE contributes two).
+    const paths = new Set();
+    for (const variants of Object.values(BUILDING_GLB_BY_TYPE)) {
+      for (const p of variants) paths.add(p);
+    }
+    const results = await Promise.all(
+      Array.from(paths).map(p => this._loadBuildingModel(p, basePath)),
+    );
+    // A final retrofit sweep in case the map finished building between the last
+    // per-load retrofit and now (per-load retrofits already handle the common
+    // case where each GLB resolves after _buildMap).
+    if (this._mapBuilt) this._upgradeBuildingsToGlbModel();
+    return results;
+  }
+
+  /** Lazy-load one building GLB variant (`<basePath>/<relPath>`) and stash it
+   *  as a hidden template in `_buildingTemplates` keyed by `relPath`. Building
+   *  tiles whose variant resolves to this path render
+   *  `mesh.createInstance(...)` of the template so all instances share one
+   *  vertex buffer / material. The GLB is intentionally optional: any loader /
+   *  import / merge failure leaves the path absent from `_buildingTemplates`,
+   *  so tiles of that type keep the procedural box+roof. De-duped per path via
+   *  `_buildingLoadPromises`.
    *
    *  Loading the @babylonjs/loaders package has the side-effect of registering
-   *  the .glb / .gltf plugins on BABYLON.SceneLoader. Without that import,
-   *  ImportMeshAsync rejects .glb files with "Unable to find a plugin for file
-   *  extension .glb". */
-  async _loadHouseModel(basePath = 'assets') {
-    if (!this._babylon || !this._scene) return null;
-    if (this._houseSourceMesh) return this._houseSourceMesh;
-    if (this._houseLoadPromise) return this._houseLoadPromise;
+   *  the .glb / .gltf plugins on BABYLON.SceneLoader — without it,
+   *  ImportMeshAsync rejects .glb with "Unable to find a plugin". */
+  async _loadBuildingModel(relPath, basePath = 'assets') {
+    if (!this._babylon || !this._scene || !relPath) return null;
+    const existing = this._buildingTemplates.get(relPath);
+    if (existing && existing.mesh) return existing.mesh;
+    if (this._buildingLoadPromises.has(relPath)) return this._buildingLoadPromises.get(relPath);
     const BABYLON = this._babylon;
 
+    // Split the relative path into rootUrl + fileName for ImportMeshAsync
+    // (e.g. 'models/buildings/church.glb' → dir 'models/buildings/', file
+    // 'church.glb'). Mirrors how the house path used to be split.
+    const slash    = relPath.lastIndexOf('/');
+    const dir      = slash >= 0 ? relPath.slice(0, slash + 1) : '';
+    const fileName = slash >= 0 ? relPath.slice(slash + 1) : relPath;
+
     const promise = (async () => {
-      // Step 1: register glTF loader plugin via the UMD bundle. Best-effort —
-      // if SceneLoader.ImportMeshAsync is already wired (tests stub it
-      // directly on the fake BABYLON), we don't need the loaders script at
-      // all. Real-browser path: the bundle attaches to window.BABYLON and
-      // populates the .glb / .gltf plugin entries on BABYLON.SceneLoader.
+      // Best-effort loaders plugin registration (no-op if the fake BABYLON in
+      // tests already wires SceneLoader.ImportMeshAsync directly).
       await this._ensureBabylonLoaders();
 
       if (!BABYLON.SceneLoader || typeof BABYLON.SceneLoader.ImportMeshAsync !== 'function') {
-        console.warn('[Renderer3D] BABYLON.SceneLoader.ImportMeshAsync unavailable; skipping house model.');
+        console.warn('[Renderer3D] BABYLON.SceneLoader.ImportMeshAsync unavailable; skipping building model.');
         return null;
       }
 
-      // Step 2: import the GLB. `null` for meshNames pulls everything in.
+      // Import. `null` for meshNames pulls everything in.
       let result;
       try {
         result = await BABYLON.SceneLoader.ImportMeshAsync(
           null,
-          `${basePath}/${HOUSE_MODEL_DIR}`,
-          HOUSE_MODEL_FILE,
+          `${basePath}/${dir}`,
+          fileName,
           this._scene,
+          this._glbProgressHandler('buildings'),
         );
       } catch (err) {
-        console.warn('[Renderer3D] house.glb load failed; using procedural buildings.', err);
+        console.warn(`[Renderer3D] ${relPath} load failed; using procedural box for that type.`, err);
         return null;
       }
 
-      // Step 3: filter to meshes carrying real geometry. glTF imports often
-      //         return a `__root__` TransformNode plus N sub-meshes — we only
-      //         want the ones with vertex data.
+      // Filter to meshes carrying real geometry (glTF imports include an empty
+      // `__root__` TransformNode + N sub-meshes).
       const realMeshes = (result.meshes || []).filter(m =>
         m && typeof m.getTotalVertices === 'function' && m.getTotalVertices() > 0,
       );
       if (realMeshes.length === 0) {
-        console.warn('[Renderer3D] house.glb contained no geometry; using procedural buildings.');
+        console.warn(`[Renderer3D] ${relPath} contained no geometry; using procedural box.`);
         return null;
       }
 
-      // Step 4: collapse to ONE source mesh so instances share a single
-      //         vertex buffer + material. `multiMultiMaterials=true` keeps the
-      //         per-submesh materials (textures) intact across the merge so
-      //         the imported visual still renders correctly.
+      // Collapse to ONE source mesh so instances share a single vertex buffer
+      // + material. `multiMultiMaterials=true` keeps per-submesh textures.
       let source = realMeshes[0];
       if (realMeshes.length > 1 && typeof BABYLON.Mesh?.MergeMeshes === 'function') {
         try {
@@ -1770,64 +2728,98 @@ export class Renderer3D {
           );
           if (merged) source = merged;
         } catch (err) {
-          console.warn('[Renderer3D] house.glb merge failed; falling back to first sub-mesh.', err);
+          console.warn(`[Renderer3D] ${relPath} merge failed; falling back to first sub-mesh.`, err);
           source = realMeshes[0];
         }
       }
       if (!source) return null;
 
-      // Pivot fix: GLB authoring tools commonly export with the mesh pivot at
-      // the centre of the bounding box, which means an instance placed at
-      // tile-top (y ≈ 0.08) renders with its bottom half sunk into the tile
-      // prism. Bake a one-shot translation into the source's vertex buffer so
-      // the model's minimum-Y sits at local 0 — every instance inherits the
-      // adjusted origin and sits *on* the ground rather than in it.
+      // Pivot fix: drop the source's bounding-box bottom to local Y = 0 so an
+      // instance placed at tile-top sits *on* the ground rather than half-sunk.
       _bakeOriginToBottom(source, BABYLON);
 
-      // Hide the source from the scene — instances render geometry on its
-      // behalf, but the template itself is never drawn directly.
+      // Hide the template — instances render geometry on its behalf.
       if (typeof source.setEnabled === 'function') source.setEnabled(false);
       source.isPickable = false;
       // World-geometry render group so depth-tests against units/buildings
-      // behave the same way as the existing terrain props (see PR #361).
+      // behave like the other terrain props (see PR #361).
       if (typeof source.renderingGroupId !== 'undefined') source.renderingGroupId = 0;
+      // Receive shadows from neighbouring buildings / trees / standees as well
+      // as cast them. InstancedMesh inherits receiveShadows from its source
+      // template, so setting it here means every building instance inherits it
+      // — the durable fix (mirrors the tree template path). Cover any retained
+      // sub-meshes too in the single-mesh (un-merged) case.
+      applyShadowReceiving([source, ...(typeof source.getChildMeshes === 'function' ? source.getChildMeshes() : [])]);
 
-      // Diagnostic: log tri count so the operator can see whether geometry or
-      // textures dominate the file size before reaching for gltf-transform.
+      // Compute a bbox-derived uniform scale so this template's height lands at
+      // TARGET_BUILDING_WORLD_HEIGHT regardless of the GLB's intrinsic units —
+      // this is what makes every building type the same world height. Falls
+      // back to HOUSE_INSTANCE_BASE_SCALE when bbox is unmeasurable (test
+      // stubs); instances then multiply by the small uniform per-hex jitter.
+      let scale = HOUSE_INSTANCE_BASE_SCALE;
+      try {
+        const info = typeof source.getBoundingInfo === 'function' ? source.getBoundingInfo() : null;
+        const bb   = info?.boundingBox;
+        if (bb) {
+          const minY = bb.minimumWorld?.y ?? bb.minimum?.y ?? 0;
+          const maxY = bb.maximumWorld?.y ?? bb.maximum?.y ?? 0;
+          const h    = maxY - minY;
+          if (h > 1e-3) scale = TARGET_BUILDING_WORLD_HEIGHT / h;
+        }
+      } catch { /* keep fallback scale */ }
+
       const triCount = typeof source.getTotalIndices === 'function'
         ? Math.floor((source.getTotalIndices() || 0) / 3) : null;
       console.log(
-        `[Renderer3D] house.glb loaded (${realMeshes.length} sub-mesh${realMeshes.length === 1 ? '' : 'es'}`
+        `[Renderer3D] ${relPath} loaded (${realMeshes.length} sub-mesh${realMeshes.length === 1 ? '' : 'es'}`
         + (triCount != null ? `, ${triCount} tris` : '')
         + `).`,
       );
 
-      this._houseSourceMesh = source;
+      this._buildingTemplates.set(relPath, { mesh: source, scale });
 
-      // If the map's already been built (the common case — GLB load is slow,
-      // _buildMap runs synchronously right after Babylon init), retrofit
-      // existing procedural buildings with instances of the new source.
-      if (this._mapBuilt) this._upgradeBuildingsToHouseModel();
+      // Fog darken: attach the FogDarkenPlugin to this template's material(s)
+      // (recursing into a MultiMaterial's submaterials). Every instance of this
+      // variant shares the template material, so the plugin's global fogged-tile
+      // uniform — pushed by `_updateBuildingFogUniform` — darkens whichever
+      // instances stand on a fogged hex, keyed by the fragment's own world XZ.
+      // This deliberately replaces the failed per-instance-attribute path.
+      // NB: we attach to the MATERIAL, not the mesh. Passing a mesh trips
+      // `MaterialPluginBase._enable` against a non-material and throws inside
+      // the load promise — silently leaving the procedural fallback in place.
+      this._attachBuildingFogPlugin(source.material);
+
+      // If the map's already built (the common case — GLB load is slow,
+      // _buildMap runs synchronously right after Babylon init), retrofit the
+      // procedural buildings that use this variant.
+      if (this._mapBuilt) this._upgradeBuildingsToGlbModel();
       return source;
     })();
 
-    this._houseLoadPromise = promise;
+    this._buildingLoadPromises.set(relPath, promise);
     return promise;
   }
 
-  /** Create one BABYLON.InstancedMesh from `_houseSourceMesh` for the given
-   *  building tile, position it at the tile's NE building slot, and apply the
-   *  hash-seeded scale + yaw jitter so neighbouring houses don't look stamped
-   *  out of a single mould. Returns the instance, or null if the source mesh
-   *  isn't loaded yet (caller's responsibility to fall back to procedural). */
-  _buildHouseInstance(tile, x, z, parent) {
-    if (!this._houseSourceMesh || !this._babylon) return null;
+  /** Create one BABYLON.InstancedMesh of the building tile's chosen GLB variant
+   *  template, positioned at the tile's NE building slot. Scale is the
+   *  template's bbox-derived base (every type lands at the same world height)
+   *  times a small *uniform* per-hex jitter so a cluster doesn't look stamped;
+   *  yaw faces the hex centre (`houseYawForHex`) for a consistent inward facing.
+   *  Returns the instance, or null if no template for this tile's variant is
+   *  loaded yet (caller falls back to procedural box+roof). */
+  _buildBuildingInstance(tile, x, z, parent) {
+    if (!this._babylon) return null;
+    const variant = buildingGlbVariantForHex(tile);
+    if (!variant) return null;
+    const tpl = this._buildingTemplates.get(variant);
+    if (!tpl || !tpl.mesh) return null;
     const BABYLON = this._babylon;
-    const source  = this._houseSourceMesh;
+    const source  = tpl.mesh;
     if (typeof source.createInstance !== 'function') return null;
     const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
     // Tile-top anchor — matches the procedural building's base Y (0.43 - 0.7/2).
     const tileTopY = 0.43 - 0.7 / 2;
+    const baseScale = tpl.scale != null ? tpl.scale : HOUSE_INSTANCE_BASE_SCALE;
 
     const inst = source.createInstance(`bldgInst_${tile.col}_${tile.row}`);
     if (parent && 'parent' in inst) inst.parent = parent;
@@ -1839,16 +2831,26 @@ export class Renderer3D {
     const sc = houseInstanceScalingForHex(tile.col, tile.row);
     if (BABYLON.Vector3) {
       inst.scaling = new BABYLON.Vector3(
-        HOUSE_INSTANCE_BASE_SCALE * sc.x,
-        HOUSE_INSTANCE_BASE_SCALE * sc.y,
-        HOUSE_INSTANCE_BASE_SCALE * sc.z,
+        baseScale * sc.x,
+        baseScale * sc.y,
+        baseScale * sc.z,
       );
       inst.rotation = new BABYLON.Vector3(0, houseYawForHex(tile.col, tile.row), 0);
     }
     inst.isPickable = false;
-    // Buildings stay visible under fog of war — permanent terrain, not
-    // tactical info. Mirrors the procedural box+roof metadata.
-    inst.metadata = { respectsFog: false, kind: 'building-house', col: tile.col, row: tile.row };
+    // `respectsFog: false` keeps the per-prop veil loop (`_setTilePropsFogged`)
+    // from touching the building — its fog darkening is handled globally by the
+    // FogDarkenPlugin uniform (`_updateBuildingFogUniform`), which dims the
+    // template material's fragments wherever they land on a fogged hex.
+    inst.metadata = {
+      respectsFog: false,
+      kind: 'building-glb',
+      col: tile.col,
+      row: tile.row,
+    };
+    // Belt-and-suspenders: the template already carries receiveShadows (so the
+    // instance inherits it), but set it explicitly too — mirrors the tree path.
+    if ('receiveShadows' in inst) inst.receiveShadows = true;
     this._addShadowCaster(inst);
     // World-geometry render group, same as the procedural box+roof + tile
     // cylinders — keeps the depth buffer consistent for unit/building overlap.
@@ -1856,24 +2858,29 @@ export class Renderer3D {
     return inst;
   }
 
-  /** Sweep `_tilePropsByKey` for every BUILDING tile, dispose the procedural
-   *  box + roof meshes (`bldg_…` / `roof_…`), and replace them with a house
-   *  instance. Called after `_loadHouseModel` resolves on an already-built
-   *  map. Idempotent: tiles that already hold a house instance are skipped.
-   *  Re-runs `_freezeStaticMeshes` so the freshly created instances are picked
-   *  up by the per-frame world-matrix lock pass. */
-  _upgradeBuildingsToHouseModel() {
-    if (!this._mapBuilt || !this._houseSourceMesh || !this.state?.tiles) return 0;
+  /** Sweep `_tilePropsByKey` for every building tile, dispose the procedural
+   *  box + roof meshes (`bldg_…` / `roof_…`), and replace them with a GLB
+   *  instance of the tile's chosen variant. Called after each
+   *  `_loadBuildingModel` resolves on an already-built map. A tile whose
+   *  variant template hasn't loaded (or failed) is left on its procedural
+   *  box+roof — so a missing GLB for one type doesn't strip other buildings.
+   *  Idempotent: tiles already carrying a `building-glb` instance are skipped.
+   *  Re-runs `_freezeStaticMeshes` so new instances get world-matrix-locked. */
+  _upgradeBuildingsToGlbModel() {
+    if (!this._mapBuilt || this._buildingTemplates.size === 0 || !this.state?.tiles) return 0;
     let upgraded = 0;
     for (const tile of this.state.tiles.values()) {
-      if (tile.type !== TileType.BUILDING || !tile.building) continue;
-      // Only HOUSE-type buildings swap to the GLB; everything else keeps the
-      // procedural box+roof built by `_buildTileMesh`.
-      if (!buildingUsesHouseModel(tile)) continue;
+      if (!buildingUsesGlbModel(tile)) continue;
       const tkey  = hexKey(tile.col, tile.row);
       const props = this._tilePropsByKey.get(tkey) || [];
-      // Skip if this tile already holds a building-house instance.
-      if (props.some(m => m?.metadata?.kind === 'building-house')) continue;
+      // Skip if this tile already holds a GLB building instance.
+      if (props.some(m => m?.metadata?.kind === 'building-glb')) continue;
+
+      // Build the instance FIRST — if the tile's variant template isn't loaded
+      // yet, bail without touching the procedural meshes so they stay visible.
+      const { x, z } = hexToWorld(tile.col, tile.row);
+      const inst = this._buildBuildingInstance(tile, x, z, this._mapRoot);
+      if (!inst) continue;
 
       const remaining = [];
       for (const m of props) {
@@ -1884,21 +2891,65 @@ export class Renderer3D {
         }
         remaining.push(m);
       }
-      const { x, z } = hexToWorld(tile.col, tile.row);
-      const inst = this._buildHouseInstance(tile, x, z, this._mapRoot);
-      if (inst) {
-        remaining.push(inst);
-        upgraded++;
-      }
-      if (remaining.length > 0) this._tilePropsByKey.set(tkey, remaining);
-      else this._tilePropsByKey.delete(tkey);
+      remaining.push(inst);
+      upgraded++;
+      this._tilePropsByKey.set(tkey, remaining);
     }
     // Freeze pass picks up the new instances. The procedural meshes were
-    // already frozen on initial build; disposing unfreezes nothing the GPU
-    // still cares about, but the new instances need their world matrices
-    // locked too.
+    // already frozen on initial build; the new instances need their world
+    // matrices locked too.
     if (upgraded > 0) this._freezeStaticMeshes();
     return upgraded;
+  }
+
+  /** Attach the FogDarkenPlugin to a building template's material(s) and track
+   *  the resulting plugin instances so `_updateBuildingFogUniform` can feed them
+   *  the fogged-tile list. Seeds the per-plugin darken/radius from the current
+   *  fog floor, then primes the uniform with whatever is fogged right now (so a
+   *  template that loads AFTER the first fog pass dims immediately). No-op
+   *  without Babylon (node tests can still drive the uniform helper directly). */
+  _attachBuildingFogPlugin(material) {
+    if (!this._babylon || !material) return;
+    const plugins = attachFogDarkenToMaterial(this._babylon, material) || [];
+    for (const p of plugins) {
+      // Match the terrain/road "occluded read" floor so a fogged building reads
+      // the same darkness as the ground beneath it.
+      p.fogDarkenAmount = FOG_HIDDEN_DARKEN;
+      this._buildingFogPlugins.add(p);
+    }
+    if (plugins.length) this._updateBuildingFogUniform();
+  }
+
+  /** Recompute the fogged-building XZ-centre list and push it into every
+   *  attached FogDarkenPlugin. Called from `_applyFogVeil` after the fogged set
+   *  is resolved. Cheap: walks `_fogActiveSet` (already the diffed fogged keys),
+   *  keeps only building tiles, and writes a flat Float32Array the shader reads
+   *  per fragment. Caps at MAX_FOG_TILES — surplus fogged buildings render
+   *  un-dimmed and are logged once per overflow. */
+  _updateBuildingFogUniform() {
+    if (this._buildingFogPlugins.size === 0) return;
+    const centres = buildFoggedBuildingTileList(this.state, this._fogActiveSet);
+    const n = Math.min(centres.length, MAX_FOG_TILES);
+    if (centres.length > MAX_FOG_TILES && !this._fogTileOverflowWarned) {
+      console.warn(
+        `[Renderer3D] ${centres.length} fogged building tiles exceed MAX_FOG_TILES=`
+        + `${MAX_FOG_TILES}; extras render un-dimmed.`,
+      );
+      this._fogTileOverflowWarned = true;
+    }
+    for (const p of this._buildingFogPlugins) {
+      const buf = p.fogTiles;
+      for (let i = 0; i < n; i++) {
+        buf[i * 2]     = centres[i].x;
+        buf[i * 2 + 1] = centres[i].z;
+      }
+      // Park unused slots at the far sentinel so a stale value can't match.
+      for (let i = n; i < MAX_FOG_TILES; i++) {
+        buf[i * 2]     = 1e8;
+        buf[i * 2 + 1] = 1e8;
+      }
+      p.fogCount = n;
+    }
   }
 
   /** Lazy-load the tree-pack manifest at `<basePath>/<TREE_PACK_DIR>manifest.json`
@@ -1909,7 +2960,7 @@ export class Renderer3D {
    *  has to dispatch.
    *
    *  Single-mesh GLBs are used directly. Multi-mesh / multi-material GLBs
-   *  collapse via MergeMeshes (mirrors `_loadHouseModel`'s recipe). A
+   *  collapse via MergeMeshes (mirrors `_loadBuildingModel`'s recipe). A
    *  per-template uniform scale is computed at load time so the template's
    *  bbox-height lands at TARGET_TREE_WORLD_HEIGHT — instances then apply
    *  the per-tree FOREST_SCALE_MIN..MAX multiplier on top of that.
@@ -2009,16 +3060,36 @@ export class Renderer3D {
       // directly; multi-submesh imports merge first). Failures are isolated
       // per-file so one bad GLB doesn't kill the whole pack.
       const baseUrl = `${basePath}/${TREE_PACK_DIR}`;
+      // Byte-level progress for the 'forest' bundle item is the mean fraction
+      // across every tree GLB. Each file's per-tick fraction feeds this map;
+      // the item climbs smoothly toward 1 as files stream and settle (a
+      // settled file pins to 1 so a missing Content-Length never stalls it).
+      const fileCount = uniqueFiles.size;
+      const fileFractions = new Map();
+      const reportForest = () => {
+        let s = 0;
+        for (const v of fileFractions.values()) s += v;
+        this._setItemProgress('forest', fileCount > 0 ? s / fileCount : 0);
+      };
       const loadOne = async (file) => {
         let result;
         try {
           result = await BABYLON.SceneLoader.ImportMeshAsync(
             null, baseUrl, file, this._scene,
+            (evt) => {
+              if (!evt || !evt.lengthComputable || !(evt.total > 0)) return;
+              fileFractions.set(file, evt.loaded / evt.total);
+              reportForest();
+            },
           );
         } catch (err) {
           console.warn(`[Renderer3D] tree GLB load failed (${file}); skipping.`, err);
+          fileFractions.set(file, 1); // settled (failed) — count it as done
+          reportForest();
           return null;
         }
+        fileFractions.set(file, 1); // file fully streamed
+        reportForest();
         const realMeshes = (result?.meshes || []).filter(m =>
           m && typeof m.getTotalVertices === 'function' && m.getTotalVertices() > 0,
         );
@@ -2065,7 +3136,11 @@ export class Renderer3D {
             // INSTANCES and SHADOWS{N} defines from the start.
             if (typeof m.material.forceCompilation === 'function') {
               try {
-                m.material.forceCompilation(m, { useInstances: true });
+                // Babylon signature: forceCompilation(mesh, onCompiled?, options?, onError?).
+                // Passing the options object as the 2nd arg makes Babylon try to
+                // call it as a function once compile finishes — TypeError per
+                // material, repeating through every PBR fallback pass.
+                m.material.forceCompilation(m, undefined, { useInstances: true });
               } catch (_err) { /* compilation may fail in headless tests */ }
             }
           }
@@ -2129,16 +3204,123 @@ export class Renderer3D {
    *  back to a clone if `createInstance` isn't supported on the test stub.
    *  Returns null when no template is available (caller falls back to the
    *  procedural cone+sphere path for that slot). */
+  /** Return a translucent clone of a loaded tree template at `alpha` < 1, so the
+   *  border-forest edge fade can hardware-instance faded trees without mutating
+   *  the shared opaque template (which the in-map forest also instances off).
+   *  Clones the template hierarchy once per (file, alpha), then clones+fades
+   *  every material in it. Returns the plain opaque template when `alpha` ≥ 1,
+   *  or null when the file has no template. Cached in `_fadedTreeTemplates`
+   *  (null results are cached too, so a failed clone isn't retried per tree). */
+  _fadedTreeTemplateFor(file, alpha, opts = {}) {
+    const fogged = !!opts.fogged;
+    // Original opaque template when no variant is needed.
+    if (!(alpha < 1) && !fogged) return this._treeTemplates.get(file) || null;
+    const BABYLON = this._babylon;
+    const key = `${file}@a${alpha}@f${fogged ? 1 : 0}`;
+    if (this._fadedTreeTemplates.has(key)) return this._fadedTreeTemplates.get(key);
+    const src = this._treeTemplates.get(file);
+    if (!src || typeof src.clone !== 'function') {
+      this._fadedTreeTemplates.set(key, null);
+      return null;
+    }
+    const clone = src.clone(`tree_var_${key}`);
+    if (!clone) { this._fadedTreeTemplates.set(key, null); return null; }
+    const meshes = [clone];
+    if (typeof clone.getChildMeshes === 'function') {
+      for (const c of clone.getChildMeshes()) meshes.push(c);
+    }
+    // Fog tint factor for border-forest GLB trees — darken to ~50% of the
+    // unfogged colour so the shading actually reads against bright lit
+    // terrain. Earlier 0.65 was too subtle to notice. Apply to whichever
+    // colour drives the material (StandardMaterial.diffuseColor or
+    // PBRMaterial.albedoColor), and also scale any emissive contribution
+    // (leaf textures often carry baked emissive that would otherwise wash
+    // out the tint).
+    const FOG_K = 0.50;
+    const tintMaterial = (mat) => {
+      if (!mat) return;
+      if (mat.diffuseColor && typeof mat.diffuseColor.scaleInPlace === 'function') {
+        mat.diffuseColor.scaleInPlace(FOG_K);
+      }
+      if (mat.albedoColor && typeof mat.albedoColor.scaleInPlace === 'function') {
+        mat.albedoColor.scaleInPlace(FOG_K);
+      }
+      if (mat.emissiveColor && typeof mat.emissiveColor.scaleInPlace === 'function') {
+        mat.emissiveColor.scaleInPlace(FOG_K);
+      }
+      // PBR: the diffuse/albedo TEXTURE often dominates over the colour
+      // multiplier. Darkening the texture's `level` survives the lighting
+      // clamp the same way the fog texel-darken does on terrain.
+      const tex = mat.albedoTexture || mat.diffuseTexture;
+      if (tex && typeof tex.level === 'number') {
+        tex.level = tex.level * FOG_K;
+      }
+    };
+    for (const m of meshes) {
+      if (m.material && typeof m.material.clone === 'function') {
+        const fm = m.material.clone(`${m.material.name || 'treemat'}_a${alpha}_f${fogged ? 1 : 0}`);
+        if (alpha < 1) this._applyAlphaBlend(fm, alpha);
+        if (fogged) tintMaterial(fm);
+        // ROOT CAUSE of "border trees stay opaque": a merged GLB tree's material
+        // is a MultiMaterial. Its own `alpha` / `transparencyMode` are IGNORED
+        // at draw time — each sub-mesh renders with its corresponding
+        // SUBMATERIAL (here a trunk PBR + a leaf PBR), so fading only the
+        // container left the actual foliage fully opaque. `MultiMaterial.clone()`
+        // also shares the original subMaterials by reference, so we must clone
+        // each one before fading (otherwise the shared opaque originals the
+        // in-map forest instances off would go translucent too), then rebind.
+        if (Array.isArray(fm.subMaterials) && fm.subMaterials.length > 0) {
+          fm.subMaterials = fm.subMaterials.map((sub) => {
+            if (!sub || typeof sub.clone !== 'function') return sub;
+            const fsub = sub.clone(`${sub.name || 'submat'}_a${alpha}_f${fogged ? 1 : 0}`);
+            if (alpha < 1) this._applyAlphaBlend(fsub, alpha);
+            if (fogged) tintMaterial(fsub);
+            // Re-bake INSTANCES (+ SHADOWS) defines on the faded submaterial so
+            // its hardware instances compile the alpha path (see below).
+            if (typeof fsub.forceCompilation === 'function') {
+              // 2nd arg is onCompiled — pass undefined; options go in 3rd.
+              try { fsub.forceCompilation(m, undefined, { useInstances: true }); } catch (_e) { /* headless */ }
+            }
+            return fsub;
+          });
+        }
+        m.material = fm;
+        // Re-bake the INSTANCES (+ SHADOWS) shader defines on the faded
+        // material so its hardware instances render with shadow sampling,
+        // matching the opaque template's pre-compile (see `_loadTreePackManifest`).
+        if (typeof fm.forceCompilation === 'function') {
+          // 2nd arg is onCompiled — pass undefined; options go in 3rd.
+          try { fm.forceCompilation(m, undefined, { useInstances: true }); } catch (_e) { /* headless */ }
+        }
+      }
+    }
+    if (typeof clone.setEnabled === 'function') clone.setEnabled(false);
+    clone.isPickable = false;
+    clone.metadata = Object.assign(clone.metadata || {}, { kind: 'tree-template-faded', file, alpha, fogged });
+    this._fadedTreeTemplates.set(key, clone);
+    return clone;
+  }
+
   _buildRealTreeInstance(parent, col, row, tree, treeIdx, namePrefix, opts = {}) {
     if (!this._useRealTrees || !this._babylon) return null;
     const BABYLON = this._babylon;
     const season  = opts.season ?? this._season;
+    const alpha   = opts.alpha ?? 1;
     const group   = treeGroupsForSeason(season);
     const files   = this._treeGroupsByName.get(group);
     if (!files || files.length === 0) return null;
     const file = pickTreeFileForSlot(files, col, row, treeIdx);
     if (!file) return null;
-    const template = this._treeTemplates.get(file);
+    // Faded border-forest tiles instance off a translucent template clone; all
+    // other trees (and fully-opaque inner band tiles) use the shared opaque one.
+    // When `fogged: true` is passed (border forest), we also clone the template
+    // and mildly darken its materials so border GLB trees match the fogged
+    // ground beneath them. Variant-cache key includes both alpha and fogged.
+    const fogged  = !!opts.fogged;
+    const needVar = alpha < 1 || fogged;
+    const template = needVar
+      ? this._fadedTreeTemplateFor(file, alpha, { fogged })
+      : this._treeTemplates.get(file);
     if (!template) return null;
 
     const instName = `${namePrefix}_t${treeIdx}_real`;
@@ -2188,11 +3370,18 @@ export class Renderer3D {
   _buildRealForestTreesForHex(parent, col, row, cx, cz, trees, namePrefix, opts = {}) {
     if (!trees || trees.length === 0) return [];
     const out = [];
+    const faded = opts.alpha != null && opts.alpha < 1; // border-band edge fade
     for (let i = 0; i < trees.length; i++) {
       const inst = this._buildRealTreeInstance(
         parent, col, row, trees[i], i, namePrefix, { ...opts, cx, cz },
       );
-      if (inst) out.push(inst);
+      if (inst) {
+        // Faded border-band trees are alpha-blended — pin the same stable
+        // alphaIndex as the merged-cone band path so they don't reshuffle
+        // under the per-frame distance sort (see BORDER_TREE_ALPHA_INDEX).
+        if (faded) inst.alphaIndex = BORDER_TREE_ALPHA_INDEX;
+        out.push(inst);
+      }
     }
     return out;
   }
@@ -2202,7 +3391,7 @@ export class Renderer3D {
    *  map-border band, disposes the procedural cone+sphere merged meshes,
    *  and rebuilds them as real-tree instances. Idempotent — tiles that
    *  already hold a real-tree instance are skipped. Mirrors
-   *  `_upgradeBuildingsToHouseModel`. */
+   *  `_upgradeBuildingsToGlbModel`. */
   _upgradeForestToRealTrees() {
     if (!this._mapBuilt || !this._useRealTrees || !this.state?.tiles) return 0;
     let upgraded = 0;
@@ -2210,7 +3399,7 @@ export class Renderer3D {
     // In-map FOREST tiles — props key is hexKey, identifies the cluster by
     // the `forest_${col}_${row}_*` name prefix the procedural builder uses.
     for (const tile of this.state.tiles.values()) {
-      if (tile.type !== TileType.FOREST) continue;
+      if (baseOf(tile) !== TileType.FOREST) continue;
       const tkey  = hexKey(tile.col, tile.row);
       const props = this._tilePropsByKey.get(tkey) || [];
       // Skip if this tile already holds a real-tree instance.
@@ -2222,7 +3411,14 @@ export class Renderer3D {
       }
       if (procIdx.length === 0) continue;
       const { x, z } = hexToWorld(tile.col, tile.row);
-      const trees = forestTreesForHex(tile.col, tile.row, this._season);
+      // Same building-slot AND road-deck reservation as the BUILD pass so the
+      // real-tree upgrade keeps cones off BUILDING_SLOT_INDEX on
+      // building-on-forest tiles and off the road deck on road-through-forest
+      // tiles.
+      const trees = forestTreesForHex(tile.col, tile.row, this._season, {
+        reserveBuildingSlot: hasBuilding(tile),
+        blockedSlots: this._roadBlockedSlotsByKey.get(tkey),
+      });
       const namePrefix = `forest_${tile.col}_${tile.row}`;
       const insts = this._buildRealForestTreesForHex(
         this._mapRoot, tile.col, tile.row, x, z, trees, namePrefix,
@@ -2246,19 +3442,52 @@ export class Renderer3D {
     // guard a season without a populated template bucket (anything but
     // summer in the current manifest) would dispose the procedural cones
     // and leave the border empty.
+    //
+    // Iteration source: under the splat-terrain flag `_borderForestHexesByKey`
+    // is empty (the splat ground owns the floor), so derive the tile list
+    // straight from `borderTilePositions` over state.tiles at the same depth
+    // the splat extension used. Legacy path still walks the per-hex floor map.
+    const ext = tilesExtent(this.state.tiles);
+    let bandDepth = 0;
+    let borderHexCoords = [];
+    if (this._useSplatTerrain) {
+      // Idempotency guard: if the border-batch already holds real-tree meshes
+      // (we've retrofitted before), there's nothing to do. Legacy path's
+      // per-hex `tree-glb` check is unavailable under splat because the floor
+      // map is empty, so we check the batch list directly.
+      const alreadyReal = Array.isArray(this._borderForestBatchMeshes)
+        && this._borderForestBatchMeshes.some(m => m?.metadata?.kind === 'tree-glb');
+      if (alreadyReal) {
+        // Nothing left to retrofit on the border side; the in-map upgrade
+        // pass above already ran.
+        borderHexCoords = [];
+      } else {
+        bandDepth = this._splatBorderBandDepth();
+        borderHexCoords = borderTilePositions(this.state.tiles, bandDepth);
+      }
+    } else {
+      for (const [, hex] of this._borderForestHexesByKey) {
+        const md = hex?.metadata;
+        if (!md) continue;
+        bandDepth = Math.max(bandDepth, borderTileDepthFromPlayable(md.col, md.row, ext));
+        borderHexCoords.push({ col: md.col, row: md.row });
+      }
+    }
     const newBorderInsts = [];
-    for (const [, hex] of this._borderForestHexesByKey) {
-      const md = hex?.metadata;
-      if (!md) continue;
-      const { col, row } = md;
+    for (const { col, row } of borderHexCoords) {
       const { x, z } = hexToWorld(col, row);
+      const alpha = borderForestAlphaForTile(col, row, ext, bandDepth);
       const trees = forestTreesForHex(col, row, this._season).filter(t =>
         !this._borderTreeBlockedByRiver(x + t.x, z + t.z),
       );
       if (trees.length === 0) continue;
       const namePrefix = `border_forest_${col}_${row}`;
       const insts = this._buildRealForestTreesForHex(
-        this._mapRoot, col, row, x, z, trees, namePrefix, { season: this._season },
+        this._mapRoot, col, row, x, z, trees, namePrefix,
+        // Border trees use the fogged template variant (mild tint) to match
+        // the permanently-fogged splat border ground. Same as the initial
+        // build path in _buildMapBorderForest.
+        { season: this._season, alpha, fogged: true },
       );
       for (const m of insts) newBorderInsts.push(m);
     }
@@ -2316,6 +3545,7 @@ export class Renderer3D {
           `${basePath}/${PALADIN_MODEL_DIR}`,
           PALADIN_MODEL_FILE,
           this._scene,
+          this._glbProgressHandler('paladin'),
         );
       } catch (err) {
         console.warn('[Renderer3D] paladin.glb load failed; using cone+sphere bodies.', err);
@@ -2411,6 +3641,16 @@ export class Renderer3D {
         this._loadIdleAnimation(basePath).catch(err => {
           console.warn('[Renderer3D] idle.glb load failed; paladins will stay at bind pose when not moving.', err);
         });
+      }
+
+      // Pre-warm the combat punch clip a beat after the rig + walk/idle have
+      // a head start, so the FIRST paladin attack usually has its strike clip
+      // ready. Deferred (not awaited, not in the loading-screen bundle) so the
+      // ~47k never delays first paint; addLungeAnim also lazy-loads it as a
+      // safety net. The timer is unref'd so it can't keep a node process alive.
+      if (typeof setTimeout === 'function') {
+        const t = setTimeout(() => { this._ensurePunchAnimation(basePath); }, 1200);
+        if (t && typeof t.unref === 'function') t.unref();
       }
 
       // If standees were built before the GLB landed (the common case —
@@ -2513,6 +3753,7 @@ export class Renderer3D {
         `${basePath}/${PALADIN_MODEL_DIR}`,
         WALKING_MODEL_FILE,
         this._scene,
+        this._glbProgressHandler('paladin'),
       );
     } catch (err) {
       console.warn('[Renderer3D] walking.glb import failed', err);
@@ -2694,6 +3935,7 @@ export class Renderer3D {
         `${basePath}/${PALADIN_MODEL_DIR}`,
         IDLE_MODEL_FILE,
         this._scene,
+        this._glbProgressHandler('paladin'),
       );
     } catch (err) {
       console.warn('[Renderer3D] idle.glb import failed', err);
@@ -2758,6 +4000,405 @@ export class Renderer3D {
     // animation keyframes (cloned + retargeted onto paladin's rig).
     this._disposeWalkingImport(result);
     return idleForPaladin;
+  }
+
+  /** Kick the lazy punch.glb load exactly once. Idempotent — returns the
+   *  in-flight (or settled) promise on repeat calls. Kept OFF the beginLoad
+   *  critical path / loading-screen bundle: the ~47k clip only fetches once
+   *  the paladin rig is loaded and combat is imminent, so it never gates
+   *  first paint. Safe to call before the rig loads (no-ops until
+   *  `_paladinSource` exists) and from environments without a real
+   *  SceneLoader (the loader itself early-returns). */
+  _ensurePunchAnimation(basePath = 'assets') {
+    if (this._punchLoadPromise) return this._punchLoadPromise;
+    if (!this._paladinSource) return null;
+    if (this._paladinSource.punchGroup) return Promise.resolve(this._paladinSource.punchGroup);
+    this._punchLoadPromise = Promise.resolve()
+      .then(() => this._loadPunchAnimation(basePath))
+      .catch(err => {
+        console.warn('[Renderer3D] punch.glb load failed; paladins lunge without a strike clip.', err);
+        return null;
+      });
+    return this._punchLoadPromise;
+  }
+
+  /** Load punch.glb and retarget its AnimationGroup onto the shared paladin
+   *  skeleton by bone/TransformNode name — the exact pattern of
+   *  `_loadIdleAnimation` (clone the native group with a target remapper,
+   *  strip root motion, dispose the imported geometry, keep only the
+   *  keyframes). The retargeted group is stored INERT on
+   *  `_paladinSource.punchGroup` (started once to instantiate animatables,
+   *  then stopped) so `_startPaladinPunch` can play it once per lunge.
+   *
+   *  Like idle/walk, the punch group drives the SHARED source skeleton, so it
+   *  plays on every visible paladin in unison — the same board-game-token
+   *  tradeoff documented on `_buildPaladinClone` (per-standee skeletons caused
+   *  the historical T-pose/giant-head bugs, so we never clone the skeleton).
+   *  Returns the retargeted group, or null if the import/retarget failed (the
+   *  lunge then falls back to the pure position-slide). */
+  async _loadPunchAnimation(basePath = 'assets') {
+    if (!this._babylon || !this._scene || !this._paladinSource) return null;
+    const BABYLON = this._babylon;
+    const src = this._paladinSource;
+    if (src.punchGroup) return src.punchGroup;
+    if (!BABYLON.SceneLoader || typeof BABYLON.SceneLoader.ImportMeshAsync !== 'function') {
+      return null;
+    }
+
+    let result;
+    try {
+      result = await BABYLON.SceneLoader.ImportMeshAsync(
+        null,
+        `${basePath}/${PALADIN_MODEL_DIR}`,
+        PUNCH_MODEL_FILE,
+        this._scene,
+        this._glbProgressHandler('paladin'),
+      );
+    } catch (err) {
+      console.warn('[Renderer3D] punch.glb import failed', err);
+      return null;
+    }
+
+    const punchNative = (result.animationGroups || []).find(g => g) || null;
+    if (!punchNative) {
+      console.warn('[Renderer3D] punch.glb contained no animation group');
+      this._disposeWalkingImport(result);
+      return null;
+    }
+
+    const nameMap = new Map();
+    const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
+    const addEntry = (name, target) => {
+      if (!name || !target) return;
+      if (!nameMap.has(name)) nameMap.set(name, target);
+      const stripped = stripDup(name);
+      if (stripped !== name && !nameMap.has(stripped)) nameMap.set(stripped, target);
+    };
+    for (const tn of src.transformNodes || []) {
+      if (tn && tn.name) addEntry(tn.name, tn);
+    }
+    if (src.skeleton && Array.isArray(src.skeleton.bones)) {
+      for (const bone of src.skeleton.bones) {
+        if (!bone) continue;
+        const tn = bone._linkedTransformNode
+          || (typeof bone.getTransformNode === 'function' && bone.getTransformNode());
+        if (tn && tn.name) addEntry(tn.name, tn);
+        if (bone.name) addEntry(bone.name, tn || bone);
+      }
+    }
+
+    let punchForPaladin = null;
+    let remapped = 0;
+    let missed = 0;
+    if (typeof punchNative.clone === 'function') {
+      punchForPaladin = punchNative.clone('paladinPunchRetargeted', (oldTarget) => {
+        if (!oldTarget || !oldTarget.name) { missed++; return oldTarget; }
+        const match = nameMap.get(oldTarget.name) || nameMap.get(stripDup(oldTarget.name));
+        if (match) { remapped++; return match; }
+        missed++;
+        return oldTarget;
+      });
+    }
+    console.info(`[Renderer3D] punch → paladin retarget: ${remapped} hit, ${missed} miss`);
+
+    if (punchForPaladin && remapped > 0) {
+      // Strip root motion so the strike animates in place — the cone lunge
+      // slide already handles world-space displacement.
+      stripRootBoneTranslation(punchForPaladin);
+      src.punchDurationSec = animDurationSeconds(punchNative);
+      // Instantiate the animatables, then stop so it sits inert at frame 0
+      // until _startPaladinPunch plays it. (Idle/walk pause(); punch is a
+      // one-shot, so stop() is the cleaner resting state.)
+      if (typeof punchForPaladin.start === 'function') punchForPaladin.start(false, 1.0);
+      if (typeof punchForPaladin.stop === 'function') punchForPaladin.stop();
+      src.punchGroup = punchForPaladin;
+    } else {
+      console.warn('[Renderer3D] punch retarget produced 0 hits — lunge falls back to slide-only.');
+      try { punchForPaladin?.dispose?.(); } catch { /* ignore */ }
+      src.punchGroup = null;
+    }
+
+    // Dispose punch.glb's imported mesh + skeleton — only the keyframes are kept.
+    this._disposeWalkingImport(result);
+    return src.punchGroup;
+  }
+
+  /** G1: lazy-load a one-shot reaction clip (hit.glb or block.glb) and
+   *  retarget it onto the shared paladin skeleton, mirroring the punch
+   *  pipeline (clone → name-remap → strip root motion → dispose mesh, keep
+   *  keyframes). The retargeted group is stashed on `_paladinSource[slot]`
+   *  ('hitGroup' / 'blockGroup') so subsequent reactions reuse it.
+   *
+   *  Idempotent — repeat calls for the same `slot` return the in-flight (or
+   *  settled) promise. Off the loading critical path: reactions only fire
+   *  AFTER the first combat, so the ~few-tens-of-kB clip downloads only on
+   *  demand. Returns the AnimationGroup (or null if the import or retarget
+   *  failed; the reaction then no-ops gracefully). */
+  _ensureReactionAnimation(slot, file, basePath = 'assets') {
+    if (!this._paladinSource) return null;
+    const src = this._paladinSource;
+    if (src[slot]) return Promise.resolve(src[slot]);
+    const promiseKey = `_${slot}LoadPromise`;
+    if (this[promiseKey]) return this[promiseKey];
+    this[promiseKey] = Promise.resolve()
+      .then(() => this._loadReactionAnimation(slot, file, basePath))
+      .catch(err => {
+        console.warn(`[Renderer3D] ${file} load failed; reaction no-ops.`, err);
+        return null;
+      });
+    return this[promiseKey];
+  }
+
+  async _loadReactionAnimation(slot, file, basePath = 'assets') {
+    if (!this._babylon || !this._scene || !this._paladinSource) return null;
+    const BABYLON = this._babylon;
+    const src = this._paladinSource;
+    if (src[slot]) return src[slot];
+    if (!BABYLON.SceneLoader || typeof BABYLON.SceneLoader.ImportMeshAsync !== 'function') {
+      return null;
+    }
+    let result;
+    try {
+      result = await BABYLON.SceneLoader.ImportMeshAsync(
+        null,
+        `${basePath}/${PALADIN_MODEL_DIR}`,
+        file,
+        this._scene,
+        this._glbProgressHandler('paladin'),
+      );
+    } catch (err) {
+      console.warn(`[Renderer3D] ${file} import failed`, err);
+      return null;
+    }
+    const native = (result.animationGroups || []).find(g => g) || null;
+    if (!native) {
+      console.warn(`[Renderer3D] ${file} contained no animation group`);
+      this._disposeWalkingImport(result);
+      return null;
+    }
+    const nameMap = new Map();
+    const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
+    const addEntry = (name, target) => {
+      if (!name || !target) return;
+      if (!nameMap.has(name)) nameMap.set(name, target);
+      const stripped = stripDup(name);
+      if (stripped !== name && !nameMap.has(stripped)) nameMap.set(stripped, target);
+    };
+    for (const tn of src.transformNodes || []) {
+      if (tn && tn.name) addEntry(tn.name, tn);
+    }
+    if (src.skeleton && Array.isArray(src.skeleton.bones)) {
+      for (const bone of src.skeleton.bones) {
+        if (!bone) continue;
+        const tn = bone._linkedTransformNode
+          || (typeof bone.getTransformNode === 'function' && bone.getTransformNode());
+        if (tn && tn.name) addEntry(tn.name, tn);
+        if (bone.name) addEntry(bone.name, tn || bone);
+      }
+    }
+    let retargeted = null;
+    let remapped = 0;
+    let missed = 0;
+    if (typeof native.clone === 'function') {
+      retargeted = native.clone(`paladin${slot}Retargeted`, (oldTarget) => {
+        if (!oldTarget || !oldTarget.name) { missed++; return oldTarget; }
+        const match = nameMap.get(oldTarget.name) || nameMap.get(stripDup(oldTarget.name));
+        if (match) { remapped++; return match; }
+        missed++;
+        return oldTarget;
+      });
+    }
+    console.info(`[Renderer3D] ${file} → paladin retarget: ${remapped} hit, ${missed} miss`);
+    if (retargeted && remapped > 0) {
+      stripRootBoneTranslation(retargeted);
+      src[`${slot}DurationSec`] = animDurationSeconds(native);
+      if (typeof retargeted.start === 'function') retargeted.start(false, 1.0);
+      if (typeof retargeted.stop  === 'function') retargeted.stop();
+      src[slot] = retargeted;
+    } else {
+      console.warn(`[Renderer3D] ${file} retarget produced 0 hits — reaction no-ops.`);
+      try { retargeted?.dispose?.(); } catch { /* ignore */ }
+      src[slot] = null;
+    }
+    this._disposeWalkingImport(result);
+    return src[slot];
+  }
+
+  /** G1: play hit.glb or block.glb once on the shared paladin skeleton. Used
+   *  AFTER the punch follow-through completes (see _run3DCombatCardHold) so
+   *  the strike and the reaction don't fight over the single skeleton.
+   *
+   *  Single-skeleton constraint: every paladin clone shares the same rig, so
+   *  visually every paladin on screen plays the clip in unison — accepted
+   *  per the operator brief. Cone-token units have no clone and animate
+   *  via position/floater only.
+   *
+   *  Returns a Promise that resolves when the clip ends (or immediately if
+   *  the clip isn't loaded yet / no rig is present). The caller can use it to
+   *  time the damage floater with the impact pose. */
+  playReactionAnim(kind) {
+    if (kind !== 'hit' && kind !== 'block') return Promise.resolve();
+    const slot = kind === 'hit' ? 'hitGroup' : 'blockGroup';
+    const src = this._paladinSource;
+    if (!src || !src[slot]) {
+      // Lazy load (idempotent) so the next reaction has the clip ready.
+      const file = kind === 'hit' ? HIT_MODEL_FILE : BLOCK_MODEL_FILE;
+      this._ensureReactionAnimation(slot, file, this._assetsBasePath || 'assets');
+      return Promise.resolve();
+    }
+    const group = src[slot];
+    // Stop punch/idle/walk so the reaction owns the skeleton.
+    if (src.idleGroup && typeof src.idleGroup.stop === 'function') src.idleGroup.stop();
+    if (src.walkGroup && typeof src.walkGroup.stop === 'function') src.walkGroup.stop();
+    if (src.punchGroup && typeof src.punchGroup.stop === 'function') src.punchGroup.stop();
+    src.punchPlaying = false;
+    src.reactionPlaying = true;
+    src.activeGroup = kind;
+    const speedMul = this._playbackSpeedMul ?? 1.0;
+    // Compress to ~500ms regardless of source clip length so the reaction
+    // doesn't overstay its welcome in the ~6s sequence budget.
+    const dur = Number.isFinite(src[`${slot}DurationSec`]) ? src[`${slot}DurationSec`] : 1.0;
+    const ratio = (dur * 1000) / (500 * speedMul);
+    if (typeof group.stop === 'function') group.stop();
+    return new Promise(resolve => {
+      const done = () => {
+        src.reactionPlaying = false;
+        src.activeGroup = null;
+        resolve();
+      };
+      const obs = group.onAnimationGroupEndObservable;
+      if (obs && typeof obs.addOnce === 'function') {
+        obs.addOnce(done);
+      } else if (obs && typeof obs.add === 'function') {
+        obs.add(done);
+      }
+      if (typeof group.start === 'function') {
+        group.start(false, Math.max(0.25, ratio));
+      } else {
+        done();
+      }
+    });
+  }
+
+  /** Play the retargeted punch clip once on the shared paladin skeleton,
+   *  compressed to read as a sharp strike across the lunge window. Sets
+   *  `src.punchPlaying` so the idle/walk toggles yield the skeleton for the
+   *  duration; clears it (and lets the toggles resume idle/walk) when the
+   *  one-shot ends. No-op if the punch clip never loaded — the caller's
+   *  position-slide is then the whole animation (graceful fallback). */
+  _startPaladinPunch() {
+    const src = this._paladinSource;
+    if (!src || !src.punchGroup) return false;
+    const punch = src.punchGroup;
+    const speedMul = this._playbackSpeedMul ?? 1.0;
+    const ratio = computePunchSpeedRatio(src.punchDurationSec, PUNCH_TARGET_MS * speedMul);
+    // Hand the skeleton to punch: silence idle + walk so they don't fight it.
+    if (src.idleGroup && typeof src.idleGroup.stop === 'function') src.idleGroup.stop();
+    if (src.walkGroup && typeof src.walkGroup.stop === 'function') src.walkGroup.stop();
+    src.punchPlaying = true;
+    src.activeGroup = 'punch';
+
+    // Resume the idle/walk toggle once the strike completes. Babylon fires
+    // onAnimationGroupEndObservable for a non-looping group; guard for stubs.
+    const onEnd = () => {
+      src.punchPlaying = false;
+      // Force the next toggle tick to re-resolve idle/walk from scratch.
+      src.activeGroup = null;
+    };
+    if (punch.onAnimationGroupEndObservable
+      && typeof punch.onAnimationGroupEndObservable.addOnce === 'function') {
+      punch.onAnimationGroupEndObservable.addOnce(onEnd);
+    } else if (punch.onAnimationGroupEndObservable
+      && typeof punch.onAnimationGroupEndObservable.add === 'function') {
+      punch.onAnimationGroupEndObservable.add(onEnd);
+    }
+
+    if (typeof punch.stop === 'function') punch.stop();
+    if (typeof punch.start === 'function') punch.start(false, ratio);
+    return true;
+  }
+
+  /** Force-stop any in-flight punch and release the skeleton back to the
+   *  idle/walk toggle. Used when a lunge is hard-cleared (round snap) so the
+   *  rig doesn't freeze mid-strike. Safe when no punch is playing. */
+  _stopPaladinPunch() {
+    const src = this._paladinSource;
+    if (!src) return;
+    if (src.punchGroup && typeof src.punchGroup.stop === 'function') {
+      try { src.punchGroup.stop(); } catch { /* ignore */ }
+    }
+    if (src.punchPlaying) {
+      src.punchPlaying = false;
+      src.activeGroup = null;
+    }
+  }
+
+  /** Frame range [from, to] of the shared retargeted punch clip, or null when
+   *  the clip hasn't loaded / has a degenerate range. */
+  _punchFrameRange() {
+    const punch = this._paladinSource?.punchGroup;
+    if (!punch) return null;
+    const from = Number.isFinite(punch.from) ? punch.from : 0;
+    const to   = Number.isFinite(punch.to)   ? punch.to   : 0;
+    if (!(to > from)) return null;
+    return { from, to };
+  }
+
+  /** Freeze an IN-FLIGHT punch on its mid/impact frame and hold it there.
+   *
+   *  Used by the 3D cinematic battle arm: the attacker lunges in and the punch
+   *  starts (via `addLungeAnim` → `_startPaladinPunch`), then this pauses the
+   *  strike at the impact pose while the dice cards read out, after which
+   *  `resumePunch()` carries it through to completion. `punchPlaying` stays set
+   *  so the idle/walk toggle won't grab the shared skeleton mid-freeze.
+   *
+   *  No-op (returns false) unless a punch is actually playing — so a ranged or
+   *  cone-token attacker (which never started the shared punch) doesn't freeze
+   *  every idle paladin in the scene. The frozen frame is stashed for resume. */
+  holdPunchAtImpact() {
+    const src = this._paladinSource;
+    const punch = src?.punchGroup;
+    if (!src || !punch || !src.punchPlaying) return false;
+    const range = this._punchFrameRange();
+    if (!range) return false;
+    const impact = range.from + (range.to - range.from) * PUNCH_IMPACT_FRAC;
+    this._frozenPunchImpactFrame = impact;
+    if (typeof punch.goToFrame === 'function') punch.goToFrame(impact);
+    if (typeof punch.pause === 'function') punch.pause();
+    return true;
+  }
+
+  /** Resume a punch frozen by `holdPunchAtImpact()` from its impact frame
+   *  through to the end of the clip. Returns a promise that resolves when the
+   *  strike completes (so the cinematic arm can await it before the lunge
+   *  return). Clears `punchPlaying` on completion so idle/walk resume. No-op
+   *  resolve when nothing is frozen. */
+  resumePunch() {
+    const src = this._paladinSource;
+    const punch = src?.punchGroup;
+    if (!src || !punch || this._frozenPunchImpactFrame == null) return Promise.resolve();
+    this._frozenPunchImpactFrame = null;
+    return new Promise(resolve => {
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        src.punchPlaying = false;
+        src.activeGroup = null;
+        resolve();
+      };
+      const obs = punch.onAnimationGroupEndObservable;
+      if (obs && typeof obs.addOnce === 'function') {
+        obs.addOnce(done);
+        // Unpause: resume the paused group from the impact frame to its end.
+        if (typeof punch.play === 'function') punch.play(false);
+        else done();
+      } else {
+        // Stub / no end observable — just unpause and resolve.
+        if (typeof punch.play === 'function') punch.play(false);
+        done();
+      }
+    });
   }
 
   /** Clone the paladin source skeleton and re-link each cloned bone's
@@ -2829,6 +4470,10 @@ export class Renderer3D {
   _maybeTogglePaladinAnimation() {
     const src = this._paladinSource;
     if (!src) return;
+    // A one-shot punch owns the shared skeleton while it plays — yield so we
+    // don't yank the rig back into idle/walk mid-strike. _startPaladinPunch's
+    // end handler clears punchPlaying and the next tick resumes normally.
+    if (src.punchPlaying) return;
     // Three states: 'walk' (motion active), 'paused' (mid-chain freeze
     // — walking is paused at its current frame, idle does NOT run), and
     // 'idle' (no motion for SUSTAIN_MS). 'paused' is the new state that
@@ -2931,6 +4576,8 @@ export class Renderer3D {
       // this branch is a no-op (walkGroup remains null).
       const src = this._paladinSource;
       if (!src || !src.idleGroup || !src.walkGroup) return;
+      // Yield the shared skeleton to an in-flight punch one-shot.
+      if (src.punchPlaying) return;
       // Main standees only enter walking during ACTUAL resolution motion
       // (_activeMoveIds / _activeLungeIds). Plan-ghosts don't trigger this
       // because they animate on their OWN skeleton (walking source), so
@@ -3189,6 +4836,240 @@ export class Renderer3D {
       c.mesh.dispose();
     }
     standee.paladinClone = null;
+    // Weapon + horse attachments hang off the clone — tear them down too so a
+    // re-clone (retrofit) or entity death doesn't leak a floating sword/horse.
+    this._disposeStandeeWeapon(standee);
+    this._disposeStandeeHorse(standee);
+  }
+
+  /** ─── G6: weapon-in-hand ────────────────────────────────────────────────
+   *  Attach a per-standee weapon stand-in to the paladin's right-hand bone
+   *  when the entity has a weapon equipped; dispose it when the weapon is
+   *  dropped. Idempotent — safe to call every sync pass.
+   *
+   *  Per-unit attachment on the SHARED skeleton works because Babylon's
+   *  `attachToBone(bone, affectorMesh)` positions the mesh from the bone's
+   *  LOCAL pose composed with the affector mesh's WORLD matrix. We pass the
+   *  standee's own skinned clone as the affector, so each unit's sword tracks
+   *  that unit's hand — not a single shared hand. */
+  _syncStandeeWeapon(standee, entity) {
+    if (!standee) return;
+    const want = entityHasWeapon(entity) && !!standee.paladinClone;
+    if (want === !!standee.weaponMesh) return;  // already in the right state
+    if (!want) { this._disposeStandeeWeapon(standee); return; }
+
+    const BABYLON = this._babylon;
+    const src = this._paladinSource;
+    if (!BABYLON?.MeshBuilder || !src?.skeleton) return;
+    const clone = standee.paladinClone;
+    const affector = clone.skinnedMesh || clone.mesh;
+    if (!affector || typeof affector.attachToBone !== 'function') return;
+    const handBone = findBoneByName(src.skeleton, WEAPON_BONE_NAME_RE);
+    if (!handBone) return;
+
+    // World-size blade → rig-LOCAL cylinder dims. The per-standee scale lives
+    // on the clone root; attachToBone folds it in via the affector's world
+    // matrix, so we divide it back out here to land a constant on-screen size.
+    const paladinScale = (typeof this._paladinScale === 'number' && this._paladinScale > 0)
+      ? this._paladinScale : PALADIN_BASE_SCALE;
+    const t = weaponStandInTransform(paladinScale);
+    let blade;
+    try {
+      blade = BABYLON.MeshBuilder.CreateCylinder(
+        `weapon_${entity?.id ?? 'x'}`,
+        { height: t.height, diameter: t.diameter, tessellation: 6 },
+        this._scene,
+      );
+    } catch { return; }
+    blade.isPickable = false;
+    if (typeof blade.renderingGroupId !== 'undefined') blade.renderingGroupId = 0;
+    blade.alwaysSelectAsActiveMesh = true;
+    // Steel-grey stand-in material (freshly created — never a shared material).
+    if (BABYLON.StandardMaterial) {
+      const mat = new BABYLON.StandardMaterial(`weapon_mat_${entity?.id ?? 'x'}`, this._scene);
+      if (BABYLON.Color3) {
+        mat.diffuseColor  = new BABYLON.Color3(0.72, 0.74, 0.8);
+        mat.specularColor = new BABYLON.Color3(0.9, 0.9, 0.95);
+        mat.emissiveColor = new BABYLON.Color3(0.18, 0.18, 0.22);
+      }
+      blade.material = mat;
+      standee.weaponMat = mat;
+    }
+    // Local pose relative to the hand bone (grip at the fist, blade tilted
+    // forward). Set BEFORE attachToBone so the first frame is already posed.
+    if (BABYLON.Vector3) {
+      blade.position = new BABYLON.Vector3(t.offset.x, t.offset.y, t.offset.z);
+      blade.rotation = new BABYLON.Vector3(t.rotation.x, t.rotation.y, t.rotation.z);
+    }
+    blade.attachToBone(handBone, affector);
+    this._addShadowCaster(blade);
+    standee.weaponMesh = blade;
+  }
+
+  _disposeStandeeWeapon(standee) {
+    if (!standee || !standee.weaponMesh) return;
+    const m = standee.weaponMesh;
+    if (typeof m.detachFromBone === 'function') { try { m.detachFromBone(); } catch { /* ignore */ } }
+    this._removeShadowCaster(m);
+    if (typeof m.dispose === 'function') m.dispose();
+    if (standee.weaponMat && typeof standee.weaponMat.dispose === 'function') {
+      standee.weaponMat.dispose();
+    }
+    standee.weaponMesh = null;
+    standee.weaponMat = null;
+  }
+
+  /** ─── G5: mounted / horse ───────────────────────────────────────────────
+   *  When a unit is mounted (`items['horse'] > 0`), append a placeholder horse
+   *  beneath the rider and lift the rider onto its back. Both are per-standee
+   *  (parented under the clone root) so they're fully per-unit. Idempotent.
+   *
+   *  CHECKPOINT — riding leg-pose is NOT applied here. Forcing the leg bones
+   *  into ridingLegPose() mutates the SHARED paladin skeleton (every standee
+   *  references it), so it would splay the legs of every paladin — mounted or
+   *  not. The pure pose math (ridingLegPose / classifyLegBone) and the global
+   *  applier (_applyRidingPose) are implemented + tested, but auto-wiring a
+   *  per-unit riding pose needs a per-mounted-unit skeleton clone, which the
+   *  rig's animation-retarget machinery actively fights (see _buildPaladinClone
+   *  T-pose history). Deferred to a follow-up. The placeholder + rider lift
+   *  below are the shippable per-unit slice. */
+  _syncStandeeHorse(standee, entity) {
+    if (!standee) return;
+    const want = entityIsMounted(entity) && !!standee.paladinClone;
+    if (want === !!standee.horseMesh) return;
+    const riderRoot = standee.paladinClone?.mesh;
+    if (!want) {
+      this._disposeStandeeHorse(standee);
+      // Lower the rider back to the ground (undo the mount lift).
+      if (riderRoot?.position && typeof riderRoot.position.y === 'number') {
+        riderRoot.position.y -= MOUNTED_RIDER_LIFT;
+      }
+      return;
+    }
+    const horse = this._buildHorsePlaceholder(entity, riderRoot);
+    if (!horse) return;
+    standee.horseMesh = horse;
+    // Lift the rider onto the horse's back.
+    if (riderRoot?.position && typeof riderRoot.position.y === 'number') {
+      riderRoot.position.y += MOUNTED_RIDER_LIFT;
+    }
+  }
+
+  /** Build a simple cylinder horse (body + 4 legs + neck + head) parented
+   *  under the rider's clone root. Dimensions are in the rig's UNSCALED local
+   *  space (the clone root carries the paladin scale), so the horse scales
+   *  with the rider. Returns the root TransformNode (or the body mesh as a
+   *  fallback when TransformNode is unavailable). */
+  _buildHorsePlaceholder(entity, parent) {
+    const BABYLON = this._babylon;
+    if (!BABYLON?.MeshBuilder) return null;
+    const id = entity?.id ?? 'x';
+    let root = null;
+    if (typeof BABYLON.TransformNode === 'function') {
+      try { root = new BABYLON.TransformNode(`horse_${id}`, this._scene || null); } catch { root = null; }
+    }
+    // Horse sits in clone-root-local space. The clone root's origin is at the
+    // cone's feet (y = coneFeetY); the rider model rises from there. We keep
+    // the horse just below the feet and lift the rider in _syncEntityStandees.
+    const HORSE_BACK_Y = HORSE_PLACEHOLDER_BACK_Y;
+    const parts = [];
+    const mkMat = () => {
+      if (!BABYLON.StandardMaterial) return null;
+      const mat = new BABYLON.StandardMaterial(`horse_mat_${id}`, this._scene);
+      if (BABYLON.Color3) {
+        mat.diffuseColor  = new BABYLON.Color3(0.34, 0.24, 0.16);
+        mat.specularColor = new BABYLON.Color3(0.1, 0.1, 0.1);
+      }
+      return mat;
+    };
+    const sharedMat = mkMat();
+    const place = (mesh, x, y, z, rotZ = 0, rotX = 0) => {
+      if (!mesh) return;
+      mesh.isPickable = false;
+      if (typeof mesh.renderingGroupId !== 'undefined') mesh.renderingGroupId = 0;
+      mesh.alwaysSelectAsActiveMesh = true;
+      if (sharedMat) mesh.material = sharedMat;
+      if (BABYLON.Vector3) {
+        mesh.position = new BABYLON.Vector3(x, y, z);
+        if (rotZ || rotX) mesh.rotation = new BABYLON.Vector3(rotX, 0, rotZ);
+      }
+      if (root && 'parent' in mesh) mesh.parent = root;
+      this._addShadowCaster(mesh);
+      parts.push(mesh);
+    };
+    try {
+      // Body: a horizontal cylinder along Z (rotated 90° about X).
+      place(BABYLON.MeshBuilder.CreateCylinder(`horse_${id}_body`,
+        { height: 1.0, diameter: 0.42, tessellation: 8 }, this._scene),
+        0, HORSE_BACK_Y, 0, 0, Math.PI / 2);
+      // 4 legs (short vertical cylinders) at the body corners.
+      const legY = HORSE_BACK_Y - 0.36;
+      for (const [lx, lz] of [[0.16, 0.38], [-0.16, 0.38], [0.16, -0.38], [-0.16, -0.38]]) {
+        place(BABYLON.MeshBuilder.CreateCylinder(`horse_${id}_leg`,
+          { height: 0.5, diameter: 0.1, tessellation: 6 }, this._scene),
+          lx, legY, lz);
+      }
+      // Neck (tilted forward) + head block at the front (+Z).
+      place(BABYLON.MeshBuilder.CreateCylinder(`horse_${id}_neck`,
+        { height: 0.5, diameter: 0.16, tessellation: 6 }, this._scene),
+        0, HORSE_BACK_Y + 0.18, 0.5, 0, -0.5);
+      place(BABYLON.MeshBuilder.CreateBox(`horse_${id}_head`,
+        { width: 0.16, height: 0.16, depth: 0.3 }, this._scene),
+        0, HORSE_BACK_Y + 0.34, 0.68);
+    } catch { /* partial build — dispose what we made */ }
+    if (parts.length === 0) {
+      if (root && typeof root.dispose === 'function') root.dispose();
+      if (sharedMat && typeof sharedMat.dispose === 'function') sharedMat.dispose();
+      return null;
+    }
+    // With a TransformNode root, parent it under the rider clone so the whole
+    // horse follows the standee. Without one (test stubs), the first part IS
+    // the root and was already parented in place().
+    if (!root) root = parts[0];
+    else if (parent && 'parent' in root) root.parent = parent;
+    root._horseParts = parts;
+    root._horseMat = sharedMat;
+    return root;
+  }
+
+  _disposeStandeeHorse(standee) {
+    if (!standee || !standee.horseMesh) return;
+    const root = standee.horseMesh;
+    const parts = root._horseParts || [];
+    for (const m of parts) {
+      this._removeShadowCaster(m);
+      if (m && typeof m.dispose === 'function') m.dispose();
+    }
+    if (root._horseMat && typeof root._horseMat.dispose === 'function') root._horseMat.dispose();
+    if (!parts.includes(root) && typeof root.dispose === 'function') root.dispose();
+    standee.horseMesh = null;
+  }
+
+  /** Force every leg bone of `skeleton` into the riding pose (ridingLegPose).
+   *  GLOBAL by construction — the paladin skeleton is shared, so this poses
+   *  ALL paladins. Returns the count of bones posed. Implemented + tested but
+   *  intentionally NOT auto-called from the per-unit sync (see the checkpoint
+   *  note on _syncStandeeHorse); exposed for an all-mounted scenario or a
+   *  future per-unit-skeleton path. */
+  _applyRidingPose(skeleton) {
+    if (!skeleton || !Array.isArray(skeleton.bones)) return 0;
+    const BABYLON = this._babylon;
+    let posed = 0;
+    for (const bone of skeleton.bones) {
+      if (!bone || typeof bone.name !== 'string') continue;
+      const pose = ridingLegPose(bone.name);
+      if (!pose) continue;
+      const tn = bone._linkedTransformNode
+        || (typeof bone.getTransformNode === 'function' && bone.getTransformNode());
+      const target = tn || bone;
+      if (BABYLON?.Vector3) {
+        target.rotation = new BABYLON.Vector3(pose.x, pose.y, pose.z);
+      } else if (typeof bone.setRotation === 'function') {
+        bone.setRotation(pose);
+      }
+      posed++;
+    }
+    return posed;
   }
 
   /** Retrofit existing hero standees with a paladin clone after the GLB
@@ -3220,6 +5101,9 @@ export class Renderer3D {
       if (standee.sphere) this._removeShadowCaster(standee.sphere);
       for (const m of clone.childMeshes || []) this._addShadowCaster(m);
       standee.paladinClone = clone;
+      // Attach weapon / horse now that the rig (and its bones) exist.
+      this._syncStandeeWeapon(standee, ent);
+      this._syncStandeeHorse(standee, ent);
       upgraded++;
     }
     return upgraded;
@@ -3276,16 +5160,52 @@ export class Renderer3D {
    *  `entityId`) in `mesh.metadata`. Standees are raised above tiles so the
    *  closest-hit picker prefers them, which means clicking a unit returns
    *  the unit's hex even when its base partially overlaps a neighbour. */
+  /** Intersect the screen ray (canvas-LOCAL pixel x,y) with the Y=0 ground
+   *  plane → world { x, z }, or null on a miss (sky / parallel ray / no scene).
+   *  Shared by the drag-pan grab and splat-terrain picking. mapRoot carries no
+   *  transform, so world XZ == tile-local XZ (worldToHex inverts directly). */
+  _screenToGround(localX, localY) {
+    const camera = this._camera;
+    if (!this._scene || !camera) return null;
+    if (typeof this._scene.createPickingRay !== 'function') return null;
+    const BABYLON = this._babylon;
+    const idMat = BABYLON && BABYLON.Matrix && typeof BABYLON.Matrix.Identity === 'function'
+      ? BABYLON.Matrix.Identity() : null;
+    const ray = this._scene.createPickingRay(localX, localY, idMat, camera);
+    if (!ray || !ray.direction) return null;
+    // Ray going up or parallel → no hit. Camera looks down: direction.y < 0.
+    if (ray.direction.y >= -1e-6) return null;
+    const t = -ray.origin.y / ray.direction.y;
+    if (t <= 0) return null;
+    return {
+      x: ray.origin.x + ray.direction.x * t,
+      z: ray.origin.z + ray.direction.z * t,
+    };
+  }
+
   canvasToHex(x, y) {
     if (!this._scene) return { col: -1, row: -1 };
+    // Entity pick first — units float above the ground and must win the click.
+    // Legacy path also picks the per-tile 'tile' meshes; the splat path has no
+    // per-tile meshes (one merged ground), so it falls through to the ground
+    // ray below.
     const pick = this._scene.pick(x, y, (mesh) => {
       const k = mesh.metadata?.kind;
-      return k === 'tile' || k === 'entity';
+      return k === 'entity' || (!this._useSplatTerrain && k === 'tile');
     });
     if (pick?.hit && pick.pickedMesh?.metadata) {
       const md = pick.pickedMesh.metadata;
       if (typeof md.col === 'number' && typeof md.row === 'number') {
         return { col: md.col, row: md.row };
+      }
+    }
+    // Splat terrain: invert the ground-plane hit to a hex, validated against
+    // the playable tiles (off-map / border-forest hits → the miss sentinel).
+    if (this._useSplatTerrain) {
+      const g = this._screenToGround(x, y);
+      if (g) {
+        const { col, row } = worldToHex(g.x, g.z, HEX_RADIUS_WORLD);
+        if (this.state?.tiles?.has(hexKey(col, row))) return { col, row };
       }
     }
     return { col: -1, row: -1 };
@@ -3337,6 +5257,13 @@ export class Renderer3D {
     this._focusCamera(camera.target.clone(), radius, { forceAnimate: true });
   }
 
+  /** Current camera azimuth in radians, or null if Babylon hasn't initialised.
+   *  Read by the compass-rose UI overlay; the 2D `Renderer.getCameraAlpha()`
+   *  stub returns null. */
+  getCameraAlpha() {
+    return this._camera ? this._camera.alpha : null;
+  }
+
   /** Rotate the camera by an alpha (yaw) delta. The signature accepts a
    *  second `_betaDelta` arg for interface parity with the 2D Renderer's
    *  no-op `rotateBy(alpha, beta)`, but tilt is permanently locked at
@@ -3364,6 +5291,15 @@ export class Renderer3D {
   setFogTint(value) {
     const v = Math.max(0, Math.min(1, Number(value) || 0));
     this._fogTileDarken = v;
+    // Splat ground: the plugin's uFogDarken uniform multiplies the texel
+    // (CUSTOM_FRAGMENT_UPDATE_DIFFUSE), surviving the lighting clamp. We
+    // pass `v` through faithfully — the in-game "occluded-read" floor at
+    // FOG_HIDDEN_DARKEN lives in `_applyLightConfig` (the caller that
+    // applies PHASE_LIGHT_CONFIG values), not here, so the admin lighting
+    // tuner can preview the full 0..1 range on the slider.
+    if (this._splatPlugin) {
+      this._splatPlugin.uFogDarken = v;
+    }
     // Terrain fog materials: diffuseColor = (v, v, v) regardless of original.
     for (const [, mat] of this._terrainFogMaterialCache) {
       if (mat?.diffuseColor) {
@@ -3371,6 +5307,12 @@ export class Renderer3D {
         mat.diffuseColor.g = v;
         mat.diffuseColor.b = v;
       }
+    }
+    // Terrain fog TEXTURE clones: their `level` carries the tint past the
+    // diffuse-lighting clamp (see `_terrainMaterialFor`). Reset each clone's
+    // level to the new factor so a fogged textured hex re-dims live too.
+    for (const [, tex] of this._terrainFogTextureCache) {
+      if (tex) tex.level = v;
     }
     // Colour fog materials are keyed by base hex — recompute each one's
     // diffuseColor from its anchor.
@@ -3402,6 +5344,71 @@ export class Renderer3D {
     for (const tile of this.state.tiles.values()) all.push({ col: tile.col, row: tile.row });
     this.frameHexes(all, { paddingHexes: 1 });
   }
+
+  /** Zoom-to-fit (⛶) single-tap action in 3D. Eases the camera all the way out
+   *  to `upperRadiusLimit` (max zoom-out → near top-down via the tilt ramp) and
+   *  centres on the OBSERVER'S own units rather than the whole map: collect all
+   *  alive entities owned by the fog observer, take their world centroid, and
+   *  focus there at max radius. Current yaw (alpha) is preserved — this only
+   *  changes target + zoom, never rotation.
+   *
+   *  Fallbacks (no human observer in AI-vs-AI, or the observer owns no live
+   *  units): centre on the map centroid at max zoom — i.e. the classic
+   *  `resetView`-at-max-zoom-out behaviour. Returns a Promise for the ease. */
+  zoomOutToOwnedUnits() {
+    const BABYLON = this._babylon;
+    const camera  = this._camera;
+    if (!BABYLON || !camera) return Promise.resolve(false);
+
+    const radius = camera.upperRadiusLimit ?? CAMERA_MAX_ZOOM_RADIUS;
+    const observerOwner = this._observerOwner();
+
+    // Collect live positions of the observer's own units (live standee pos
+    // preferred, hex centre fallback — same resolution as combat framing).
+    const positions = [];
+    if (observerOwner && Array.isArray(this.state?.entities)) {
+      for (const e of this.state.entities) {
+        if (!e || !e.alive || e.owner !== observerOwner) continue;
+        const p = this._entityWorldPos(e.id);
+        if (p) positions.push(p);
+      }
+    }
+
+    let target;
+    if (positions.length > 0) {
+      let sx = 0, sz = 0;
+      for (const p of positions) { sx += p.x; sz += p.z; }
+      target = new BABYLON.Vector3(sx / positions.length, 0, sz / positions.length);
+    } else {
+      // No observer (AI-vs-AI) or no owned units → map centroid at max zoom.
+      const hexes = [];
+      if (this.state?.tiles) {
+        for (const tile of this.state.tiles.values()) hexes.push({ col: tile.col, row: tile.row });
+      }
+      const c = clusterCentroidWorld(hexes);
+      target = c
+        ? new BABYLON.Vector3(c.x, 0, c.z)
+        : camera.target.clone(); // no tiles loaded — hold current target
+    }
+
+    // Keep current alpha (no `alpha` opt) — don't change yaw.
+    return this._focusCamera(target, radius, { forceAnimate: true }).then(() => true);
+  }
+
+  /** Orient the camera so map north (row 0, world -Z) is pointing up on screen.
+   *  Per `compassRotationDegFromCameraAlpha` (atan2(-cos α, sin α) = 0 at α=π/2),
+   *  north-up is camera alpha = π/2. Eases target/radius-stable to that alpha;
+   *  `_focusCamera` picks the nearest-wrap arc so the rotation is the short way.
+   *  Returns a Promise for the ease. */
+  orientNorthUp() {
+    const camera = this._camera;
+    if (!camera) return Promise.resolve(false);
+    return this._focusCamera(camera.target.clone(), camera.radius, {
+      alpha: Math.PI / 2,
+      forceAnimate: true,
+    }).then(() => true);
+  }
+
   _clampPan()                                         { /* camera panning is bounded via panning limits in _initBabylon */ }
   // Phase 6: real fog visibility. Sums sight ranges across all alive entities
   // owned by `observerOwner` (same logic as 2D `_buildFogVisibleHexes`).
@@ -3472,7 +5479,7 @@ export class Renderer3D {
   getTileDataURL(tile, col, row, size = 28) {
     if (!tile || typeof document === 'undefined') return null;
     if (!this._tileDataURLCache) this._tileDataURLCache = new Map();
-    const cacheKey = `${tile.type}_${tile.building || ''}_${tile.fortifyLevel || 0}@${size}`;
+    const cacheKey = `${baseOf(tile)}_${pathOf(tile) ?? ''}_${tile.building || ''}_${tile.fortifyLevel || 0}@${size}`;
     if (this._tileDataURLCache.has(cacheKey)) {
       return this._tileDataURLCache.get(cacheKey);
     }
@@ -3496,7 +5503,7 @@ export class Renderer3D {
         ctx.restore();
       }
       // Building overlay sprite on top of dirt.
-      if (tile.type === TileType.BUILDING && tile.building) {
+      if (hasBuilding(tile) && tile.building) {
         const bldgRect = this._spriteRects.get(tile.building);
         if (bldgRect) {
           ctx.save();
@@ -3556,30 +5563,29 @@ export class Renderer3D {
     // pointer input), and right-mouse-drag → rotate alpha on desktop.
 
     // Yaw (alpha) is unbounded — right-mouse / button-driven rotation spins
-    // the camera around the vertical axis. Tilt (beta) is permanently
-    // locked at CAMERA_BETA_LOCKED (π/4); both beta limits are pinned to
-    // the same value so anything that mutates camera.beta — Babylon's own
-    // inertia accumulators, a stray plugin, future code — is re-clamped
-    // back to π/4 on the next render tick. We rotate the *camera*, not
-    // `mapRoot`, so world-space stays stable for picking + `hexToCanvasPos`
-    // projection (see the note on hexToCanvasPos).
+    // the camera around the vertical axis. Tilt (beta) is NOT user-driven, but
+    // it is no longer pinned to a single angle: it RISES with zoom-out. Each
+    // frame `_onBeforeRender` sets `camera.beta = betaForRadius(...)`, holding
+    // CAMERA_BETA_LOCKED (isometric) through the near-zoom range and easing up
+    // to CAMERA_BETA_TOPDOWN (near-overhead) at max zoom-out. The beta limits
+    // are relaxed to span [LOCKED, TOPDOWN] so Babylon's per-frame clamp does
+    // not snap our ramped beta back. `tiltBy()` stays a no-op — no right-drag
+    // dy → beta and no Tilt buttons. We rotate the *camera*, not `mapRoot`, so
+    // world-space stays stable for picking + `hexToCanvasPos` projection.
     camera.lowerAlphaLimit = null;
     camera.upperAlphaLimit = null;
     camera.beta            = CAMERA_BETA_LOCKED;
-    camera.lowerBetaLimit  = CAMERA_BETA_LOCKED;
+    // CAMERA_BETA_TOPDOWN (≈ 5°) is smaller than CAMERA_BETA_LOCKED (35°)
+    // — beta DECREASES as the camera tilts toward overhead. The lower limit
+    // is the more-overhead end, the upper limit is the isometric base.
+    camera.lowerBetaLimit  = CAMERA_BETA_TOPDOWN;
     camera.upperBetaLimit  = CAMERA_BETA_LOCKED;
 
     // Zoom limits — both are provisional and get replaced by
-    // _recomputeMaxZoomCap once the engine reports its actual aspect. The cap
-    // is radiusForStandardFit (so larger maps must be panned to view in full)
-    // and the floor is radiusForCloseFit(MIN_VISIBLE_HEXES) (so the camera
-    // can't dive inside meshes at max zoom-in).
-    // Lower radius capped at 6 wu — at ~radius 6 the camera frame holds
-    // roughly 3-4 hex tiles which is the closest sensible inspection zoom
-    // without the camera diving inside meshes. Previous value (1.5) let
-    // the operator zoom in until the camera sat inside a single hex.
-    camera.lowerRadiusLimit = 6;
-    camera.upperRadiusLimit = 80;
+    // Operator-fixed bounds (CAMERA_MIN_ZOOM_RADIUS / CAMERA_MAX_ZOOM_RADIUS).
+    // _recomputeMaxZoomCap below pins the same values regardless of map size.
+    camera.lowerRadiusLimit = CAMERA_MIN_ZOOM_RADIUS;
+    camera.upperRadiusLimit = CAMERA_MAX_ZOOM_RADIUS;
     camera.wheelDeltaPercentage = 0.02; // smoother wheel zoom (legacy default — wheel handled by custom input)
     camera.pinchDeltaPercentage = 0.005;
 
@@ -3653,6 +5659,17 @@ export class Renderer3D {
     this._sunLight          = sunLight;
     this._shadowGenerator   = shadowGenerator;
 
+    // X-ray occlusion: handled in `_pumpXrayOcclusion` via a stencil-masked
+    // faction-colour OUTLINE (a hollow ring) over each occluded unit (see
+    // `_buildXrayGhost`): a stencil MASK layer stamps the body footprint, then an
+    // expanded RING hull draws (depthFunction GREATER + stencil NOTEQUAL) only
+    // where the unit is behind scene geometry AND outside the body — a hollow
+    // edge confined to the occluded region, no fill, nothing over the visible
+    // body. Three prior mechanisms were rejected: HighlightLayer (drew behind,
+    // read as a filled glow), renderOutline + group-promotion (exploded the
+    // skinned paladin), and a single GREATER-tested fill (a non-convex mesh
+    // self-occludes → bled the ghost over the visible body).
+
     // Per-unit hex outlines are built lazily by `_syncEntityHexOutlines`
     // (one thin + one thick mesh per alive entity). The old golden singleton
     // hex outline that only showed on the selected unit has been generalised
@@ -3677,13 +5694,13 @@ export class Renderer3D {
     // limit) and BEFORE _buildMap (whose forest band depth is sized off it).
     this._recomputeMaxZoomCap();
 
-    // Kick off the house GLB load asynchronously. We deliberately don't
-    // await it here — `_buildMap` below is synchronous and the model is
-    // heavy (~7 MB). Building tiles render with the procedural box+roof
-    // fallback; when the GLB resolves, `_upgradeBuildingsToHouseModel`
-    // retrofits each building tile with an instance of the loaded source.
-    // Fire-and-forget — errors are caught inside `_loadHouseModel`.
-    this._loadHouseModel(this._assetsBasePath || 'assets');
+    // Kick off the building GLB loads asynchronously (one template per unique
+    // variant path across all 13 building types). We deliberately don't await
+    // here — `_buildMap` below is synchronous and the models are heavy.
+    // Building tiles render with the procedural box+roof fallback; as each GLB
+    // resolves, `_upgradeBuildingsToGlbModel` retrofits the matching tiles with
+    // instances. Fire-and-forget — errors are caught inside `_loadBuildingModel`.
+    this._loadBuildingModels(this._assetsBasePath || 'assets');
 
     // Kick off the paladin GLB load asynchronously. Fire-and-forget —
     // `_buildMap` + `_syncEntityStandees` run synchronously right after and
@@ -3726,7 +5743,7 @@ export class Renderer3D {
     // Diagnostic handle: lets the operator run `__brimstone3dDebug.ribbons()`
     // from the browser console to inspect the runtime material/light state of
     // the road and river ribbons. `inspector()` toggles the Babylon Inspector
-    // (also bound to the `I` hotkey). No-op when `window` is undefined (tests).
+    // (also bound to the `D` hotkey). No-op when `window` is undefined (tests).
     if (typeof window !== 'undefined') {
       window.__brimstone3dDebug = {
         ribbons: () => this.dumpRibbonDebug(),
@@ -3740,12 +5757,15 @@ export class Renderer3D {
           const t = e.target;
           const tag = (t?.tagName || '').toUpperCase();
           if (tag === 'INPUT' || tag === 'TEXTAREA' || t?.isContentEditable) return;
-          if (e.key === 'i' || e.key === 'I') {
+          if (e.key === 'd' || e.key === 'D') {
             e.preventDefault();
             this._toggleInspector();
           } else if (e.key === 'f' || e.key === 'F') {
             e.preventDefault();
             this._toggleBorderForest();
+          } else if (e.key === 't' || e.key === 'T') {
+            e.preventDefault();
+            this._cycleFogDebugMode();
           }
         });
       }
@@ -3773,12 +5793,26 @@ export class Renderer3D {
     console.log(`[Renderer3D] border forest ${this._borderForestHidden ? 'hidden' : 'visible'}`);
   }
 
+  /** Cycle the renderer-level fog DISPLAY override (normal → off → full →
+   *  debug → normal) and re-apply the veil. Bound to the `T` hotkey. This is a
+   *  pure display override that does NOT touch the game's `fogOfWar` state — it
+   *  only changes which hexes the renderer veils/darkens. The `debug` mode adds
+   *  a billboarded "F" over every fogged hex so the operator can SEE exactly
+   *  which hexes the renderer considers hidden. */
+  _cycleFogDebugMode() {
+    this._fogDebugMode = nextFogDebugMode(this._fogDebugMode);
+    console.log(`[Renderer3D] fog display mode → ${this._fogDebugMode}`);
+    // Re-apply the veil so the new override takes effect immediately. The veil
+    // pass also (re)builds or clears the debug "F" markers based on the mode.
+    this._applyFogVeil();
+  }
+
   /** Lazy-load the Babylon Inspector ESM bundle (pinned to the same version as
    *  core) and toggle it on the current scene. The Inspector exposes the full
    *  scene tree, per-mesh material/shadow panels, texture previews, and
    *  ShadowGenerator caster/receiver lists — invaluable for diagnosing
    *  "tile renders but is untextured / why aren't shadows painting" without
-   *  guessing. Triggered by the `I` hotkey or `__brimstone3dDebug.inspector()`. */
+   *  guessing. Triggered by the `D` hotkey or `__brimstone3dDebug.inspector()`. */
   async _toggleInspector() {
     if (!this._scene) return;
     const layer = this._scene.debugLayer;
@@ -3891,32 +5925,33 @@ export class Renderer3D {
     // delivers the "grab the world and pull it" feel the operator asked for
     // and replaces the old screen-space inertial-pan path which moved at a
     // fixed pixels-per-world rate regardless of zoom or camera angle.
+    // Pan grab uses CLIENT coords (from pointer events); convert to canvas-local
+    // and delegate to the shared `_screenToGround` ray→Y=0 intersection (the
+    // same math `canvasToHex` uses for splat-terrain picking).
     const groundPointFromScreen = (clientX, clientY) => {
-      if (!this._scene || !camera) return null;
       const rect = this.canvas.getBoundingClientRect ? this.canvas.getBoundingClientRect() : { left: 0, top: 0 };
-      const localX = clientX - (rect.left || 0);
-      const localY = clientY - (rect.top  || 0);
-      if (typeof this._scene.createPickingRay !== 'function') return null;
-      const BABYLON = this._babylon;
-      const idMat = BABYLON && BABYLON.Matrix && typeof BABYLON.Matrix.Identity === 'function'
-        ? BABYLON.Matrix.Identity() : null;
-      const ray = this._scene.createPickingRay(localX, localY, idMat, camera);
-      if (!ray || !ray.direction) return null;
-      // Ray going up or parallel to ground → no hit. Camera looking down has
-      // direction.y < 0.
-      if (ray.direction.y >= -1e-6) return null;
-      const t = -ray.origin.y / ray.direction.y;
-      if (t <= 0) return null;
-      return {
-        x: ray.origin.x + ray.direction.x * t,
-        z: ray.origin.z + ray.direction.z * t,
-      };
+      return this._screenToGround(clientX - (rect.left || 0), clientY - (rect.top || 0));
     };
+
+    // Snapshot the orbit pose the pan grab is anchored to. The world-grab math
+    // is only valid while the camera pose is stable between grab-capture and
+    // the move; `shouldRecaptureGrab` detects zoom/rotate that invalidates it.
+    const cameraPose = () => ({ radius: camera.radius, alpha: camera.alpha, beta: camera.beta });
 
     const applySinglePan = (entry, _dx, _dy) => {
       if (this.viewLocked) return;
-      if (!entry.grab) entry.grab = groundPointFromScreen(entry.x, entry.y);
-      if (!entry.grab) return; // ray missed (sky / parallel) — can't pan
+      const pose = cameraPose();
+      // Re-anchor the grab whenever the camera pose has shifted since it was
+      // captured (wheel/pinch zoom, twist-rotate, or the tilt-on-zoom beta
+      // ramp). The grab is the ground point under the cursor at one specific
+      // pose; diffing it against a projection at a new pose snaps the target by
+      // metres (the zoom-during-drag / pinch-then-drag jump). Re-sample to the
+      // current pose and skip this frame's shift — the next move pans cleanly.
+      if (!entry.grab || !entry.grabPose || shouldRecaptureGrab(entry.grabPose, pose)) {
+        entry.grab = groundPointFromScreen(entry.x, entry.y);
+        entry.grabPose = entry.grab ? pose : null;
+        return;
+      }
       const current = groundPointFromScreen(entry.x, entry.y);
       if (!current) return;
       const ddx = entry.grab.x - current.x;
@@ -4005,12 +6040,16 @@ export class Renderer3D {
         prevY: e.clientY,
         type: e.pointerType,
         button: e.button,
-        grab: null, // ground point under cursor at first drag-move
+        grab: null,     // ground point under cursor at first drag-move
+        grabPose: null, // camera pose the grab was sampled at (radius/alpha/beta)
       };
       // World-space drag pan needs the ground point at touchdown so the same
       // terrain feature stays under the cursor for the rest of the gesture.
       // Compute now while camera state is stable (no in-flight motion).
-      if (pointers.size === 0) entry.grab = groundPointFromScreen(e.clientX, e.clientY);
+      if (pointers.size === 0) {
+        entry.grab = groundPointFromScreen(e.clientX, e.clientY);
+        if (entry.grab) entry.grabPose = cameraPose();
+      }
       pointers.set(e.pointerId, entry);
       // Reset two-finger state when the second finger lands so the first
       // frame's deltas don't snap-rotate the camera. Also enter the
@@ -4172,6 +6211,15 @@ export class Renderer3D {
     // Reusable shared geometry — clone for each instance, all parented to mapRoot.
     // (We do not yet use Babylon InstancedMesh; one mesh per tile keeps picking
     // trivially correct and Phase 2 maps are well under 1000 tiles.)
+    // Splat path: build the single merged ground first, then the per-tile
+    // props (cones/buildings/roads) via _buildTileMesh (whose base-hex block
+    // is skipped under the flag). Legacy path: one flat hex per tile inside
+    // _buildTileMesh.
+    if (this._useSplatTerrain) this._buildSplatGround(mapRoot);
+    // Hex wireframe overlay — always on; toggleable via setHexGridVisible().
+    // Lays directly on the splat ground so the player can read hex boundaries
+    // through the blended terrain.
+    this._buildHexGrid(mapRoot);
     for (const tile of this.state.tiles.values()) {
       this._buildTileMesh(tile, mapRoot);
     }
@@ -4237,7 +6285,12 @@ export class Renderer3D {
       mesh.doNotSyncBoundingInfo = true;
       frozen++;
     };
-    // Playable tile cylinders.
+    // Merged splat ground (flag on) — freeze the WORLD MATRIX only; its aFog
+    // vertex buffer stays dynamic (rewritten by _writeFogWeights), which
+    // freezeWorldMatrix does not touch.
+    if (this._splatGround) freeze(this._splatGround);
+    if (this._splatBorderGround) freeze(this._splatBorderGround);
+    // Playable tile cylinders (legacy per-hex path).
     if (this._tileMeshes) for (const m of this._tileMeshes) freeze(m);
     // Per-tile props (trees, buildings, roofs, bridges, road/river per-tile
     // merged ribbons, node-disc rings registered into the tile prop list).
@@ -4267,6 +6320,8 @@ export class Renderer3D {
     if (this._nodeGlowMeshes) {
       for (const ng of this._nodeGlowMeshes) freeze(ng?.disc);
     }
+    // Hex wireframe overlay (static — perimeters never move).
+    if (this._hexGridMesh) freeze(this._hexGridMesh);
     return frozen;
   }
 
@@ -4330,28 +6385,52 @@ export class Renderer3D {
     // across the whole band — see `_buildBorderForestTreesBatched`. The result
     // is ≤10 merged meshes regardless of `bandDepth`, instead of 2–4 per tile
     // (≈240–900 meshes at max zoom-out).
+    // Playable extent drives the edge-fade: each border tile's alpha is keyed
+    // to how many rings it sits from the OUTER edge of the band (outermost ring
+    // dissolves most). See `borderForestAlphaForTile`.
+    const ext = tilesExtent(this.state.tiles);
     const treeJobs = [];
+    // Splat path renders the band ground inside `_buildSplatGround` (same
+    // detail-textured material as the playable ground, per-vertex aEdgeAlpha
+    // for the dissolve). Skip the legacy per-hex floor build here; cones and
+    // river extensions below still run so the wilderness still has trees and
+    // continues the river off-map.
+    const skipLegacyBorderGround = !!this._useSplatTerrain;
     for (const pos of borderTilePositions(this.state.tiles, bandDepth)) {
       const { x, z } = hexToWorld(pos.col, pos.row);
+      const alpha = borderForestAlphaForTile(pos.col, pos.row, ext, bandDepth);
 
-      // Flat hex polygon — identical recipe to _buildTileMesh's flat tile.
-      const hex = this._buildFlatHexMesh(`border_tile_${pos.col}_${pos.row}`, parent, x, z);
-      // Border-forest hex tiles ALWAYS render with the fog-of-war tint —
-      // they sit outside the playable area, never observable by any player,
-      // so they consistently read as wilderness ground beyond sight. The
-      // trees on top stay in their normal (unfogged) colours so the
-      // wilderness silhouette doesn't go too dark to read against the sky.
-      const syntheticTile = { type: TileType.FOREST, col: pos.col, row: pos.row };
-      const borderMat = this._terrainMaterialFor(
-        terrainSpriteIdFor(syntheticTile, pos.col, pos.row),
-        { fogged: true },
-      );
-      hex.material   = borderMat || this._fogMaterialFor(baseColor);
-      hex.isPickable = false;
-      hex.metadata   = { kind: 'map-border-forest', col: pos.col, row: pos.row };
-      this._setShadowReceiver(hex);
-      this._borderForestHexesByKey.set(hexKey(pos.col, pos.row), hex);
-      this._borderPropsByKey.set(hexKey(pos.col, pos.row), [hex]);
+      if (!skipLegacyBorderGround) {
+        // Flat hex polygon — identical recipe to _buildTileMesh's flat tile.
+        const hex = this._buildFlatHexMesh(`border_tile_${pos.col}_${pos.row}`, parent, x, z);
+        // Border-forest hex tiles ALWAYS render with the fog-of-war tint —
+        // they sit outside the playable area, never observable by any player,
+        // so they consistently read as wilderness ground beyond sight. The
+        // trees on top stay in their normal (unfogged) colours so the
+        // wilderness silhouette doesn't go too dark to read against the sky.
+        const syntheticTile = { type: TileType.FOREST, base: TileType.FOREST, col: pos.col, row: pos.row };
+        // Fade the ground hex with the SAME per-ring alpha as the trees on this
+        // tile (`alpha`), so the band's ground and foliage dissolve together at
+        // the map edge. `_borderGroundMaterialFor` clones the shared fogged
+        // terrain material per alpha tier — the playable map's ground material
+        // is never touched.
+        const borderMat = this._borderGroundMaterialFor(
+          terrainSpriteIdFor(syntheticTile, pos.col, pos.row),
+          baseColor,
+          alpha,
+        );
+        hex.material   = borderMat || this._fogMaterialFor(baseColor);
+        hex.isPickable = false;
+        hex.metadata   = { kind: 'map-border-forest', col: pos.col, row: pos.row };
+        this._setShadowReceiver(hex);
+        // Faded outer-ring ground discs are alpha-blended — pin a stable
+        // alphaIndex so they stop reshuffling under the per-frame distance sort
+        // (see BORDER_GROUND_ALPHA_INDEX). Opaque inner-band discs render in the
+        // opaque pass where alphaIndex is ignored, so only tag the faded ones.
+        if (alpha < 1) hex.alphaIndex = BORDER_GROUND_ALPHA_INDEX;
+        this._borderForestHexesByKey.set(hexKey(pos.col, pos.row), hex);
+        this._borderPropsByKey.set(hexKey(pos.col, pos.row), [hex]);
+      }
 
       // Pine trees use the SAME layout as in-map FOREST tiles so the band
       // reads as a continuous extension of the map (operator: "the forest
@@ -4365,7 +6444,7 @@ export class Renderer3D {
       if (trees.length > 0) {
         treeJobs.push({
           namePrefix: `border_forest_${pos.col}_${pos.row}`,
-          cx: x, cz: z, trees, col: pos.col, row: pos.row,
+          cx: x, cz: z, trees, col: pos.col, row: pos.row, alpha,
         });
       }
     }
@@ -4377,17 +6456,47 @@ export class Renderer3D {
     let bandTreeMeshes = [];
     if (this._useRealTrees) {
       for (const job of treeJobs) {
+        // fogged:true → _fadedTreeTemplateFor returns a tinted template
+        // clone (per-(file, alpha, fogged) variant cache) so border GLB
+        // trees read as "in shadow" matching their fogged ground.
         const insts = this._buildRealForestTreesForHex(
           parent, job.col, job.row, job.cx, job.cz, job.trees, job.namePrefix,
-          { season: this._season },
+          { season: this._season, alpha: job.alpha, fogged: true },
         );
         for (const m of insts) bandTreeMeshes.push(m);
       }
     }
     if (bandTreeMeshes.length === 0) {
-      const mergedTreeMeshes = this._buildBorderForestTreesBatched(parent, treeJobs, { season: this._season });
-      for (const m of mergedTreeMeshes) this._addShadowCaster(m);
-      bandTreeMeshes = mergedTreeMeshes;
+      // Bucket jobs by alpha tier: Babylon can't do per-instance alpha on a
+      // shared merged mesh, so each tier merges into its own translucent
+      // material. ≤4 tiers (1.0 / 0.8 / 0.5 / 0.2) → ≤4× the (≤10) merged
+      // meshes, still O(1) in band depth and far below the per-tile path.
+      const jobsByAlpha = new Map();
+      for (const job of treeJobs) {
+        const a = job.alpha ?? 1;
+        let bucket = jobsByAlpha.get(a);
+        if (!bucket) { bucket = []; jobsByAlpha.set(a, bucket); }
+        bucket.push(job);
+      }
+      for (const [a, jobs] of jobsByAlpha) {
+        const prefix = a < 1 ? `border_forest_a${Math.round(a * 100)}` : 'border_forest';
+        // Border ground is permanently fog-tinted (aFog=1 on the splat
+        // border mesh); apply the same mild fog tint to border trees so the
+        // wilderness reads as one cohesive shaded mass instead of
+        // bright trees on dark ground.
+        const mergedTreeMeshes = this._buildBorderForestTreesBatched(
+          parent, jobs,
+          { season: this._season, alpha: a, namePrefix: prefix, fogged: true },
+        );
+        for (const m of mergedTreeMeshes) {
+          this._addShadowCaster(m);
+          // Faded foliage tiers are alpha-blended — pin a stable alphaIndex
+          // (above the ground discs, below the river) so the band's draw order
+          // no longer flips per-frame under the distance sort.
+          if (a < 1) m.alphaIndex = BORDER_TREE_ALPHA_INDEX;
+          bandTreeMeshes.push(m);
+        }
+      }
     }
     this._borderForestBatchMeshes = bandTreeMeshes;
     // After the band is in place, extend any river that exits the playable
@@ -4428,12 +6537,47 @@ export class Renderer3D {
     // texture.rgb × diffuseColor.rgb, so this darkens the entire extension
     // ribbon by FOG_TILE_DARKEN regardless of the actual fog veil state.
     const extMat = this._buildRibbonMaterial('river', TILE_COLOR[TileType.RIVER]);
-    const k = this._fogTileDarken;
+    // Border river always reads as wilderness-beyond-sight. Same lighting-
+    // clamp trap as the terrain/road fog veil — multiplying diffuseColor
+    // alone is swallowed at bright phases because the standard pipeline
+    // does `clamp(lightAccum * diffuseColor) * texel`. Darken the texture
+    // LEVEL too (outside the clamp), clamped to FOG_HIDDEN_DARKEN so it
+    // matches the splat border ground's strength.
+    const k = Math.min(this._fogTileDarken, FOG_HIDDEN_DARKEN);
     if (extMat.diffuseColor) {
       extMat.diffuseColor.r *= k;
       extMat.diffuseColor.g *= k;
       extMat.diffuseColor.b *= k;
     }
+    if (extMat.diffuseTexture && typeof extMat.diffuseTexture.level === 'number') {
+      extMat.diffuseTexture.level = k;
+    }
+    // Mark the (private, freshly-built) extension material for explicit
+    // alpha-blending so the per-ring edge fade baked into the ribbon's vertex
+    // alpha below actually composites against the scene — matching the ground
+    // + tree fade recipe (`_applyAlphaBlend`). `_buildRibbonMaterial` returns a
+    // NEW StandardMaterial each call, so this never touches the in-map river's
+    // material. The playable river ribbon stays fully opaque.
+    if (this._babylon?.Material) {
+      extMat.transparencyMode = this._babylon.Material.MATERIAL_ALPHABLEND;
+    }
+    // Hold the (river-only, freshly-built) extension material so `_pumpRiverFlow`
+    // can scroll its diffuse texture's uOffset in lockstep with the in-map
+    // river — one shared extMat backs every exit ribbon, so the whole
+    // wilderness river flows downstream too. Reassigned each rebuild; the old
+    // material is disposed with its meshes via `_borderPropsByKey` teardown.
+    this._riverExtensionMat = extMat;
+    // Playable-map extent — used to map each ribbon sample to its border ring
+    // so the river fades in lockstep with the ground + trees on that ring.
+    const ringExt = tilesExtent(this.state.tiles);
+    // Canonical river flow direction (same source-of-truth helper used by
+    // `buildRiverNetworkStrokes`). Each extension's geometry runs OUTWARD
+    // along exit.tangent — the alpha taper depends on that orientation, so
+    // we can't reverse the geometry. Flip U instead on the upstream-side
+    // extension so the shared diffuseTexture's uOffset scrolls water in the
+    // same world direction across both the playable river and the
+    // wilderness ribbons.
+    const extFlowRef = canonicalRiverFlowDir(null, exits);
     // Extend one hex past the outermost band tile so the ribbon's far end
     // clearly carries past the band's silhouette instead of fading inside it.
     // Centre-to-centre spacing in any axial direction is SQRT3 world units.
@@ -4472,26 +6616,22 @@ export class Renderer3D {
       // `[rightOuter, rightInner, center, leftInner, leftOuter]`; first triangle
       // winding produces a +Y face normal so the hemispheric light hits the
       // camera-visible top face (see the contract comment on `_buildNetworkMesh`).
-      // Same world-space width modulation as the playable river so the
-      // ribbon widths at the playable→wilderness seam are continuous (both
-      // sample the same world (x,z) at the shared exit point). Wavelength
-      // and amplitude must match _buildNetworkMesh's modulator.
-      const WIDTH_NOISE_WAVELENGTH = 8.0;
-      const WIDTH_AMP = 0.075;
-      const widthModAt = (x, z) => {
-        const u = (x / WIDTH_NOISE_WAVELENGTH + z / WIDTH_NOISE_WAVELENGTH * 0.7) * Math.PI * 2;
-        return 1 + WIDTH_AMP * Math.sin(u);
-      };
+      // R5 — match the playable river's curvature-based width helper so the
+      // wilderness ribbon widens through its sway apex and narrows on the
+      // straights, blending continuously with the in-map river at the seam.
+      const halfWaterExt = riverHalfWidthsByCurvature(pts);
       const outerWidths = new Array(pts.length);
       const innerWidths = new Array(pts.length);
       for (let p = 0; p < pts.length; p++) {
-        const mod = widthModAt(pts[p].x, pts[p].z);
-        outerWidths[p] = RIVER_RIBBON_WIDTH * mod;
-        innerWidths[p] = RIVER_RIBBON_WIDTH * OPAQUE_FRAC * mod;
+        outerWidths[p] = halfWaterExt[p] * 2;
+        innerWidths[p] = halfWaterExt[p] * 2 * OPAQUE_FRAC;
       }
       const { left: outerLeft,  right: outerRight  } = ribbonOffsetPaths(pts, outerWidths);
       const { left: innerLeft,  right: innerRight  } = ribbonOffsetPaths(pts, innerWidths);
-      const toV3 = (arr) => arr.map(p => new BABYLON.Vector3(p.x, RIVER_RIBBON_Y, p.z));
+      // R5 — water surface sits at RIVER_BED_Y (sunken), matching the in-map
+      // river. The bank ribbon built below carries the dirt rim back up to
+      // ground level.
+      const toV3 = (arr) => arr.map(p => new BABYLON.Vector3(p.x, RIVER_BED_Y, p.z));
       const ribbon = BABYLON.MeshBuilder.CreateRibbon(
         `river_extension_${exit.tile.col}_${exit.tile.row}`,
         {
@@ -4506,14 +6646,24 @@ export class Renderer3D {
       ribbon.parent     = this._mapRoot;
       ribbon.isPickable = false;
       ribbon.material   = extMat;
-      // Per-vertex alpha keyed off path index (5 paths × N points).
+      // Per-vertex alpha = lateral feather (path index) × per-ring EDGE FADE
+      // (point index). The lateral term tapers the ribbon's left/right edges
+      // into the ground (paths 0 and 4 → 0); the per-ring term dissolves the
+      // ribbon outward so it fades in lockstep with the border ground + trees
+      // it threads through (outermost ring → 0.2, next → 0.5, …). Without the
+      // per-ring term the centreline ran at full opacity all the way to the
+      // band's outer edge and then hard-stopped (operator: the river isn't
+      // fading either).
       const totalVerts = ribbon.getTotalVertices();
       const N = pts.length;
       const alphaByPath = [0.0, 1.0, 1.0, 1.0, 0.0];
+      const ringAlphas  = riverExtensionRingAlphas(pts, ringExt, bandDepth);
       const colors = new Float32Array(totalVerts * 4);
       for (let v = 0; v < totalVerts; v++) {
-        const pathIdx = Math.min(alphaByPath.length - 1, Math.floor(v / N));
-        const a = alphaByPath[pathIdx];
+        const pathIdx  = Math.min(alphaByPath.length - 1, Math.floor(v / N));
+        const pointIdx = v % N;
+        const ringA    = ringAlphas[pointIdx] ?? 1.0;
+        const a = alphaByPath[pathIdx] * ringA;
         colors[v * 4 + 0] = 1;
         colors[v * 4 + 1] = 1;
         colors[v * 4 + 2] = 1;
@@ -4535,11 +6685,22 @@ export class Renderer3D {
         periods[p] = periods[p - 1] + Math.sqrt(dx * dx + dz * dz);
       }
       const RIVER_TILE_PERIOD = 1.0;
+      // Extension runs outward along exit.tangent. If that points opposite to
+      // the canonical flow direction (extension on the upstream side), reverse
+      // U so it scrolls in the same world direction as everyone else under the
+      // shared uOffset.
+      let reverseU = false;
+      if (extFlowRef) {
+        reverseU = (exit.tangent.x * extFlowRef.x
+                  + exit.tangent.z * extFlowRef.z) < 0;
+      }
+      const totalU = periods[N - 1] / RIVER_TILE_PERIOD;
       const uvs = new Float32Array(totalVerts * 2);
       for (let v = 0; v < totalVerts; v++) {
         const pathIdx  = Math.min(vByPath.length - 1, Math.floor(v / N));
         const pointIdx = v % N;
-        uvs[v * 2 + 0] = periods[pointIdx] / RIVER_TILE_PERIOD;
+        const u = periods[pointIdx] / RIVER_TILE_PERIOD;
+        uvs[v * 2 + 0] = reverseU ? (totalU - u) : u;
         uvs[v * 2 + 1] = vByPath[pathIdx];
       }
       ribbon.setVerticesData(BABYLON.VertexBuffer.UVKind, uvs);
@@ -4567,7 +6728,549 @@ export class Renderer3D {
       const list = this._borderPropsByKey.get(key) || [];
       list.push(ribbon);
       this._borderPropsByKey.set(key, list);
+      // R5 — sibling DIRT bank ribbon flanking the wilderness water. Same
+      // 7-path U-trench cross-section as the in-map banks; layered alpha
+      // combines the lateral feather (paths 0/6 → 0) with the per-ring fade
+      // (`riverExtensionRingAlphas`) so the bank dissolves into the border
+      // wilderness on the same schedule as the water. Material is the shared
+      // dirt-textured one with `_fogTileDarken` baked in so the wilderness
+      // bank reads "beyond sight" like the rest of the border band.
+      const bankRibbon = this._buildRiverBankRibbon({
+        tkey: key,
+        tileCol: exit.tile.col,
+        tileRow: exit.tile.row,
+        strokeIdx: 0,
+        pts,
+        halfWidths: halfWaterExt,
+      });
+      if (bankRibbon) {
+        bankRibbon.parent     = this._mapRoot;
+        bankRibbon.isPickable = false;
+        // Layer the per-ring fade onto the bank's lateral alpha (which the
+        // builder already wrote — paths 0/6 → 0, everything else → 1). Each
+        // vertex's existing alpha is multiplied by the ringAlpha at its
+        // point index, matching the water ribbon's compound taper above.
+        const bankVerts = bankRibbon.getTotalVertices();
+        const Nb = pts.length;
+        const existingColors = bankRibbon.getVerticesData
+          ? bankRibbon.getVerticesData(BABYLON.VertexBuffer.ColorKind)
+          : null;
+        if (existingColors) {
+          const cols = new Float32Array(existingColors);
+          for (let v = 0; v < bankVerts; v++) {
+            const pointIdx = v % Nb;
+            const ringA    = ringAlphas[pointIdx] ?? 1.0;
+            cols[v * 4 + 3] = cols[v * 4 + 3] * ringA;
+          }
+          bankRibbon.setVerticesData(BABYLON.VertexBuffer.ColorKind, cols);
+        }
+        // Material: shared fog-tinted dirt mat (built lazily, one per scene).
+        const bankBaseMat = this._buildRiverBankExtensionMaterial();
+        if (bankBaseMat) bankRibbon.material = bankBaseMat;
+        bankRibbon.hasVertexAlpha = true;
+        // Same ordering as in-map banks — just below RIVER_ALPHA_INDEX so the
+        // water reads ON TOP of the bed where they overlap.
+        bankRibbon.alphaIndex = Math.max(0, RIVER_ALPHA_INDEX - 5);
+        this._setShadowReceiver(bankRibbon);
+        bankRibbon.metadata = {
+          kind: 'river-bank-extension',
+          col: exit.tile.col, row: exit.tile.row,
+        };
+        list.push(bankRibbon);
+      }
     }
+  }
+
+  /** R5 — shared dirt material for the river BANK EXTENSIONS (wilderness side
+   *  of the playable map). Same recipe as `_buildRiverBankMaterial` but the
+   *  diffuseColor (and texture level) is darkened by `_fogTileDarken` so the
+   *  wilderness bank reads "beyond sight" like the surrounding border ground
+   *  + foliage. One shared material across every extension — no per-tile
+   *  fog-darken needed because the whole band is permanently fogged. */
+  _buildRiverBankExtensionMaterial() {
+    const BABYLON = this._babylon;
+    const scene   = this._scene;
+    if (!BABYLON || !scene) return null;
+    if (this._riverBankExtMat) return this._riverBankExtMat;
+    const mat = new BABYLON.StandardMaterial('river_bank_ext_mat', scene);
+    const base = new BABYLON.Color3(0.62, 0.50, 0.38);
+    const k = Math.min(this._fogTileDarken ?? 1.0, FOG_HIDDEN_DARKEN);
+    mat.diffuseColor    = new BABYLON.Color3(base.r * k, base.g * k, base.b * k);
+    mat.emissiveColor   = new BABYLON.Color3(0, 0, 0);
+    mat.specularColor   = new BABYLON.Color3(0.04, 0.04, 0.04);
+    mat.backFaceCulling = false;
+    mat.disableLighting = false;
+    const tex = this._terrainDetailTexture('dirt');
+    if (tex) {
+      mat.diffuseTexture = tex;
+      mat.useAlphaFromDiffuseTexture = false;
+      // Same lighting-clamp trap as the river extension diffuse — multiplying
+      // diffuseColor alone is swallowed at bright phases. Darken the texture
+      // level too. tex is shared with the splat plugin, so adjusting `level`
+      // would corrupt the splat ground; clone the texture first.
+      if (typeof BABYLON.Texture === 'function' && tex.url) {
+        try {
+          const dimmed = new BABYLON.Texture(tex.url, scene);
+          if (BABYLON.Texture.WRAP_ADDRESSMODE != null) {
+            dimmed.wrapU = BABYLON.Texture.WRAP_ADDRESSMODE;
+            dimmed.wrapV = BABYLON.Texture.WRAP_ADDRESSMODE;
+          }
+          dimmed.level = k;
+          mat.diffuseTexture = dimmed;
+        } catch (err) {
+          // Fall back to the shared texture (slightly lighter than ideal)
+          console.warn('[Renderer3D] river bank ext texture clone failed:', err);
+        }
+      }
+    }
+    if (BABYLON.Material && BABYLON.Material.MATERIAL_ALPHABLEND != null) {
+      mat.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
+    }
+    this._riverBankExtMat = mat;
+    return mat;
+  }
+
+  /** Set of TILE_SLOTS indices a road deck crosses on a forest tile, so the
+   *  forest cones skip them (and the standee re-slot reserves them). Returns an
+   *  empty Set for a forest tile with no road, or when the tile carries no road
+   *  metadata. The road centreline geometry is the SAME `networkStrokesForTile`
+   *  the merged road mesh is built from, so the exclusion matches the deck the
+   *  player sees. */
+  _forestRoadBlockedSlots(tile) {
+    const empty = new Set();
+    if (!tile) return empty;
+    const hasRoad = pathOf(tile) === PathType.ROAD
+      || (tile.roadDirs && tile.roadDirs.size > 0);
+    if (!hasRoad) return empty;
+    const tiles = this.state?.tiles;
+    if (!tiles) return empty;
+    const nbrs = [];
+    if (tile.roadDirs && typeof tile.roadDirs[Symbol.iterator] === 'function') {
+      for (const k of tile.roadDirs) {
+        const nt = tiles.get(k);
+        if (nt) nbrs.push({ col: nt.col, row: nt.row });
+      }
+    }
+    if (nbrs.length === 0) return empty;
+    const strokes = networkStrokesForTile(tile, nbrs, { kind: 'road' });
+    if (!strokes.length) return empty;
+    const center = hexToWorld(tile.col, tile.row);
+    return roadBlockedTreeSlots(strokes, center);
+  }
+
+  // ─── Splat terrain: one merged ground mesh ───────────────────────────────
+  //
+  // Build a single mesh whose geometry is the playable-hex fans (7 verts each,
+  // identical layout to `_buildFlatHexMesh`) concatenated into shared buffers,
+  // in WORLD coordinates. Two custom vertex attributes drive the shader:
+  //   • `aSplat` (vec3, static)  — per-vertex grass/dirt/forest blend weights.
+  //   • `aFog`   (float, dynamic) — per-vertex fog veil 0..1, rewritten by
+  //                                 `_writeFogWeights` as visibility changes.
+  // The detail-blend + procedural colour + fog dimming happen in the plugin's
+  // fragment shader (`terrain-splat-plugin.js`). Picking + fog target this mesh
+  // via `_hexVertexRange` (hexKey → base vertex index). Returns the mesh.
+  _buildSplatGround(parent) {
+    const BABYLON = this._babylon;
+    if (!BABYLON || !this.state?.tiles) return null;
+    // Two meshes: playable (opaque) and border (alpha-blended). Splitting
+    // them lets the playable ground stay in the OPAQUE pass — keeps the
+    // road/river transparent ribbons rendering correctly — while the border
+    // mesh can do a real smooth alpha dissolve at its outer rings.
+    const playableMesh = this._buildSplatPlayableMesh(parent);
+    this._buildSplatBorderMesh(parent);
+    return playableMesh;
+  }
+
+  /** Per-vertex hex fan emit shared between playable + border splat builds.
+   *  Writes one hex's 7 verts into the supplied buffers at `baseV`. */
+  _emitSplatHex(buffers, ti, col, row, splatWeights, edgeAlpha) {
+    const R = HEX_RADIUS_WORLD;
+    const VPT = 7;
+    const { x, z } = hexToWorld(col, row, R);
+    const baseV = ti * VPT;
+    buffers.range.set(hexKey(col, row), baseV);
+    buffers.positions[baseV * 3] = x;
+    buffers.positions[baseV * 3 + 2] = z;
+    for (let j = 0; j < 6; j++) {
+      const a = Math.PI / 6 + j * Math.PI / 3;
+      const vi = baseV + 1 + j;
+      buffers.positions[vi * 3]     = x + R * Math.cos(a);
+      buffers.positions[vi * 3 + 2] = z + R * Math.sin(a);
+    }
+    for (let v = 0; v < VPT; v++) {
+      buffers.normals[(baseV + v) * 3 + 1] = 1;
+      buffers.edgeA[baseV + v] = edgeAlpha;
+    }
+    buffers.splat.set(splatWeights, baseV * 3);
+    // Per-vertex tint — hashed purely by world XZ so coincident corners on
+    // adjacent hexes get identical tints (no boundary seam).
+    buffers.tint.set(hexTintWeights(col, row, { radius: R }), baseV * 3);
+    const baseI = ti * 6 * 3;
+    for (let j = 0; j < 6; j++) {
+      buffers.indices[baseI + j * 3]     = baseV;
+      buffers.indices[baseI + j * 3 + 1] = baseV + 1 + j;
+      buffers.indices[baseI + j * 3 + 2] = baseV + 1 + ((j + 1) % 6);
+    }
+  }
+
+  _allocateSplatBuffers(tileCount) {
+    const VPT = 7;
+    return {
+      positions: new Float32Array(tileCount * VPT * 3),
+      normals:   new Float32Array(tileCount * VPT * 3),
+      splat:     new Float32Array(tileCount * VPT * 3),
+      fog:       new Float32Array(tileCount * VPT),
+      edgeA:     new Float32Array(tileCount * VPT),
+      tint:      new Float32Array(tileCount * VPT * 3),
+      indices:   new Uint32Array(tileCount * 6 * 3),
+      range:     new Map(),
+    };
+  }
+
+  /** Playable splat ground — one merged mesh, opaque material, real per-tile
+   *  splat weights, dynamic fog buffer. Picking + fog target this mesh. */
+  _buildSplatPlayableMesh(parent) {
+    const BABYLON = this._babylon;
+    const scene   = this._scene;
+    const playable = [...this.state.tiles.values()];
+    const channelAt = (col, row) => {
+      const t = this.state.tiles.get(hexKey(col, row));
+      return t ? splatChannelForTile(t) : null;
+    };
+    const buffers = this._allocateSplatBuffers(playable.length);
+    for (let ti = 0; ti < playable.length; ti++) {
+      const tile = playable[ti];
+      this._emitSplatHex(buffers, ti, tile.col, tile.row,
+        hexSplatWeights(tile, channelAt), 1.0);
+    }
+    // R5 — sink the splat ground into a real channel under each river/bridge
+    // hex so the water ribbon at `RIVER_BED_Y` is actually visible instead of
+    // occluded by a flat Y=0 plane.
+    //
+    // Per river/bridge tile:
+    //   • CENTRE vertex drops to `RIVER_BED_Y - SPLAT_RIVER_CENTRE_EPS` —
+    //     1 cm BELOW the water ribbon. Without this extra epsilon the splat
+    //     centre is coplanar with the water at `RIVER_BED_Y` and z-fights
+    //     against it; the opaque splat (sampling grass for the surrounding
+    //     hex) wins the depth test and hides the animated water entirely.
+    //
+    // Per corner (ALL tiles, river OR not — symmetric):
+    //   • Each corner of `tile` is touched by THREE tiles total: `tile` plus
+    //     its two corner-adjacent neighbours (`CORNER_DIRS[j]` indexes into
+    //     the row-parity-aware neighbour DIRS, same algebra as
+    //     `hexSplatWeights`). Count how many of those THREE are water and
+    //     map the count through `riverCornerY()` to a Y. All three tiles
+    //     touching the same physical corner compute the SAME waterCount, so
+    //     all three emit the corner at the SAME Y → no seam gap.
+    //
+    // The vertex layout from `_emitSplatHex`:
+    //   baseV + 0       = centre
+    //   baseV + 1..6    = perimeter corners (j=0..5, angle π/6 + j·π/3)
+    {
+      const isWater = (col, row) => {
+        const t = this.state.tiles.get(hexKey(col, row));
+        return t && (isRiver(t) || isBridge(t));
+      };
+      const range = buffers.range;
+      // Local copies of the splat-builder's neighbour DIRS + corner→edge map
+      // (private to terrain-splat.js). Same algebra as `hexSplatWeights` so
+      // the corner-incident neighbours match exactly.
+      const HEX_DIRS_EVEN = [[-1, 0], [-1, -1], [0, -1], [1, 0], [0, 1], [-1, 1]];
+      const HEX_DIRS_ODD  = [[-1, 0], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1]];
+      const CORNER_DIRS   = [[3, 4], [4, 5], [5, 0], [0, 1], [1, 2], [2, 3]];
+      for (const tile of playable) {
+        const baseV = range.get(hexKey(tile.col, tile.row));
+        if (baseV == null) continue;
+        const tileIsWater = isWater(tile.col, tile.row);
+        // Centre — only river/bridge hexes get their centre pushed below the
+        // water ribbon. Non-water hexes keep their centre at Y=0.
+        if (tileIsWater) {
+          buffers.positions[baseV * 3 + 1] = RIVER_BED_Y - SPLAT_RIVER_CENTRE_EPS;
+        }
+        const dirs = (tile.row & 1) ? HEX_DIRS_ODD : HEX_DIRS_EVEN;
+        for (let j = 0; j < 6; j++) {
+          const [da, db] = CORNER_DIRS[j];
+          const naCol = tile.col + dirs[da][0], naRow = tile.row + dirs[da][1];
+          const nbCol = tile.col + dirs[db][0], nbRow = tile.row + dirs[db][1];
+          const waterCount =
+            (tileIsWater ? 1 : 0)
+            + (isWater(naCol, naRow) ? 1 : 0)
+            + (isWater(nbCol, nbRow) ? 1 : 0);
+          if (waterCount === 0) continue; // pure-ground corner — leave at Y=0
+          buffers.positions[(baseV + 1 + j) * 3 + 1] = riverCornerY(waterCount);
+        }
+      }
+    }
+    const mesh = new BABYLON.Mesh('splatGround', scene);
+    const vd = new BABYLON.VertexData();
+    vd.positions = buffers.positions;
+    vd.indices   = buffers.indices;
+    vd.normals   = buffers.normals;
+    vd.applyToMesh(mesh, false);
+    mesh.setVerticesData('aSplat', buffers.splat, false, 3);
+    mesh.setVerticesData('aFog', buffers.fog, true, 1);
+    mesh.setVerticesData('aEdgeAlpha', buffers.edgeA, false, 1);
+    mesh.setVerticesData('aTint', buffers.tint, false, 3);
+    mesh.parent = parent;
+    if (mesh.position?.set) mesh.position.set(0, 0, 0);
+    mesh.metadata = { kind: 'splatGround' };
+    mesh.material = this._buildSplatMaterial({ alphaBlend: false });
+    this._setShadowReceiver(mesh);
+    this._splatGround    = mesh;
+    this._splatFogBuf    = buffers.fog;
+    this._hexVertexRange = buffers.range;
+    return mesh;
+  }
+
+  /** Border-forest splat mesh — separate mesh with ALPHA-BLEND material so
+   *  the per-ring edge alpha produces a real smooth dissolve. Permanently
+   *  fogged (aFog=1) so the wilderness reads as "beyond sight". */
+  _buildSplatBorderMesh(parent) {
+    const BABYLON = this._babylon;
+    const scene   = this._scene;
+    const bandDepth = this._splatBorderBandDepth();
+    const ext = tilesExtent(this.state.tiles);
+    const borderPositions = borderTilePositions(this.state.tiles, bandDepth);
+    if (borderPositions.length === 0) { this._splatBorderGround = null; return null; }
+    const FOREST_ONLY = new Float32Array([
+      0, 0, 1,  0, 0, 1,  0, 0, 1,  0, 0, 1,
+      0, 0, 1,  0, 0, 1,  0, 0, 1,
+    ]);
+    const buffers = this._allocateSplatBuffers(borderPositions.length);
+    for (let bi = 0; bi < borderPositions.length; bi++) {
+      const pos = borderPositions[bi];
+      const a   = borderForestAlphaForTile(pos.col, pos.row, ext, bandDepth);
+      this._emitSplatHex(buffers, bi, pos.col, pos.row, FOREST_ONLY, a);
+      const baseV = bi * 7;
+      for (let v = 0; v < 7; v++) buffers.fog[baseV + v] = 1.0;
+    }
+    const mesh = new BABYLON.Mesh('splatBorderGround', scene);
+    const vd = new BABYLON.VertexData();
+    vd.positions = buffers.positions;
+    vd.indices   = buffers.indices;
+    vd.normals   = buffers.normals;
+    vd.applyToMesh(mesh, false);
+    mesh.setVerticesData('aSplat', buffers.splat, false, 3);
+    mesh.setVerticesData('aFog',   buffers.fog,   false, 1);
+    mesh.setVerticesData('aEdgeAlpha', buffers.edgeA, false, 1);
+    mesh.setVerticesData('aTint',  buffers.tint,  false, 3);
+    mesh.parent = parent;
+    if (mesh.position?.set) mesh.position.set(0, 0, 0);
+    mesh.metadata = { kind: 'splatBorderGround' };
+    mesh.material = this._buildSplatMaterial({ alphaBlend: true });
+    // Render BEFORE road/river ribbons (they have higher alphaIndex) so the
+    // ribbons paint on top — no transparent z-fight at the playable seam.
+    mesh.alphaIndex = 0;
+    mesh.isPickable = false;
+    this._setShadowReceiver(mesh);
+    this._splatBorderGround = mesh;
+    return mesh;
+  }
+
+  /** Border-forest band depth in hexes — mirrors the legacy
+   *  `_buildMapBorderForest` sizing so the splat-extended band matches the old
+   *  layout (and the cones/extensions that still build per the legacy path).
+   *  Caps at 6 deep regardless of camera distance. */
+  _splatBorderBandDepth() {
+    const aspect = this._engine
+      ? this._engine.getRenderWidth() / Math.max(1, this._engine.getRenderHeight())
+      : 16 / 9;
+    const fov = this._camera?.fov || 0.8;
+    const cap = this._camera?.upperRadiusLimit ?? radiusForStandardFit(aspect, fov);
+    return Math.min(6, Math.max(BORDER_BAND_DEPTH,
+      forestBandDepthForView(cap, aspect, fov)));
+  }
+
+  /** Mid-grey wireframe overlay tracing every playable-hex perimeter, sitting
+   *  just above the splat ground (Y=0.003). One draw call (merged LinesMesh).
+   *  Each fragment fades by world-distance from the camera target so only the
+   *  hexes the player is actually looking at carry visible grid lines — the
+   *  whole map full of lines would smear into a noise band. The fade band
+   *  (HEX_GRID_FADE_START_W → HEX_GRID_FADE_END_W) is ~3 → ~5 hex-pitches; the
+   *  camera target's XZ is fed to the shader each frame in `_onBeforeRender`.
+   *  Toggle via `setHexGridVisible(bool)`. */
+  _buildHexGrid(parent) {
+    const BABYLON = this._babylon;
+    if (!BABYLON?.MeshBuilder?.CreateLineSystem || !this.state?.tiles) return null;
+    if (!BABYLON.Vector3) return null;
+    const R = HEX_RADIUS_WORLD;
+    const Y = 0.003; // above splat ground (Y=0); below road ribbons (~0.008+).
+    const lines = [];
+    for (const tile of this.state.tiles.values()) {
+      const { x, z } = hexToWorld(tile.col, tile.row, R);
+      const loop = [];
+      for (let j = 0; j <= 6; j++) {
+        const a = Math.PI / 6 + j * Math.PI / 3;
+        loop.push(new BABYLON.Vector3(x + R * Math.cos(a), Y, z + R * Math.sin(a)));
+      }
+      lines.push(loop);
+    }
+    const mesh = BABYLON.MeshBuilder.CreateLineSystem(
+      'hexGrid', { lines, updatable: false }, this._scene);
+    mesh.parent     = parent;
+    mesh.metadata   = { kind: 'hexGrid' };
+    mesh.isPickable = false;
+
+    // Custom ShaderMaterial — uniform-driven radial fade around the camera
+    // target. Falls back to a plain mid-grey LineMaterial when ShaderMaterial
+    // isn't available (e.g. test mock), so the mesh still renders.
+    if (BABYLON.ShaderMaterial && BABYLON.Effect?.ShadersStore) {
+      const KEY = 'hexGridFade';
+      const store = BABYLON.Effect.ShadersStore;
+      if (!store[`${KEY}VertexShader`]) {
+        store[`${KEY}VertexShader`] = `
+          precision highp float;
+          attribute vec3 position;
+          uniform mat4 worldViewProjection;
+          varying vec2 vWorldXZ;
+          void main() {
+            vWorldXZ = position.xz;
+            gl_Position = worldViewProjection * vec4(position, 1.0);
+          }`;
+        store[`${KEY}FragmentShader`] = `
+          precision highp float;
+          varying vec2 vWorldXZ;
+          uniform vec2 uTargetXZ;
+          uniform vec3 uColor;
+          uniform float uFadeStart;
+          uniform float uFadeEnd;
+          uniform float uPeak;
+          void main() {
+            float d = length(vWorldXZ - uTargetXZ);
+            float a = uPeak * (1.0 - smoothstep(uFadeStart, uFadeEnd, d));
+            if (a <= 0.001) discard;
+            gl_FragColor = vec4(uColor, a);
+          }`;
+      }
+      const mat = new BABYLON.ShaderMaterial(KEY, this._scene,
+        { vertex: KEY, fragment: KEY },
+        {
+          attributes: ['position'],
+          uniforms: ['worldViewProjection', 'uTargetXZ', 'uColor',
+                     'uFadeStart', 'uFadeEnd', 'uPeak'],
+          needAlphaBlending: true,
+        });
+      if (BABYLON.Color3) mat.setColor3('uColor', new BABYLON.Color3(0.55, 0.55, 0.55));
+      if (BABYLON.Vector2) mat.setVector2('uTargetXZ', new BABYLON.Vector2(0, 0));
+      mat.setFloat('uFadeStart', HEX_GRID_FADE_START_W);
+      mat.setFloat('uFadeEnd',   HEX_GRID_FADE_END_W);
+      mat.setFloat('uPeak',      HEX_GRID_PEAK_ALPHA);
+      mat.disableDepthWrite = true;
+      mesh.material = mat;
+      this._hexGridMat = mat;
+      if (BABYLON.Vector2) this._hexGridTargetVec = new BABYLON.Vector2(0, 0);
+    } else {
+      // Test/fallback path — flat mid-grey at peak alpha, no distance fade.
+      if (BABYLON.Color3) mesh.color = new BABYLON.Color3(0.55, 0.55, 0.55);
+      if (mesh.material) {
+        if (mesh.material.alpha !== undefined) mesh.material.alpha = HEX_GRID_PEAK_ALPHA;
+        mesh.material.disableDepthWrite = true;
+      }
+    }
+
+    this._hexGridMesh = mesh;
+    return mesh;
+  }
+
+  /** Show/hide the hex wireframe overlay. */
+  setHexGridVisible(v) {
+    if (this._hexGridMesh) this._hexGridMesh.isVisible = !!v;
+  }
+
+  /** StandardMaterial for the merged ground, with the terrain-splat plugin
+   *  attached. No diffuseTexture — the plugin overwrites `baseColor` in
+   *  CUSTOM_FRAGMENT_UPDATE_DIFFUSE so detail blend + procedural colour + fog
+   *  dimming all land OUTSIDE the diffuse-lighting clamp. */
+  _buildSplatMaterial({ alphaBlend = false } = {}) {
+    const BABYLON = this._babylon;
+    const mat = new BABYLON.StandardMaterial(
+      alphaBlend ? 'splatBorderGround' : 'splatGround', this._scene);
+    if (mat.specularColor && BABYLON.Color3) {
+      mat.specularColor = new BABYLON.Color3(0.04, 0.04, 0.04); // matte
+    }
+    // Two flavours of splat material:
+    //  • Opaque (playable) — no alpha pipeline, renders normally in the
+    //    opaque pass. Road/river ribbons in the transparent pass paint on
+    //    top without render-order trouble.
+    //  • Alpha-blend (border) — transparencyMode = ALPHABLEND so the splat
+    //    plugin's `gl_FragColor.a *= vEdgeAlpha` MAIN_END write produces a
+    //    real smooth dissolve at the outer band rings. depth-write off so
+    //    transparency composites cleanly behind props above.
+    if (alphaBlend) {
+      if (BABYLON.Material && BABYLON.Material.MATERIAL_ALPHABLEND != null) {
+        mat.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
+      } else {
+        mat.transparencyMode = 2; // numeric fallback (2 = ALPHABLEND)
+      }
+      mat.disableDepthWrite = true;
+    } else {
+      // R5 polish 3 — the playable splat carries a sunken hex centre + tilted
+      // corner displacement on river hexes (riverCornerY → -0.06..-0.18). At
+      // RIVER_BED_Y=-0.18 the water ribbon depth-fails against the splat cone
+      // everywhere except a tiny circle at each tile centre — producing the
+      // "~3 isolated arrow patches in a wide dirt channel" bug. Mirror the
+      // border splat: render the splat colours normally but skip the depth
+      // write so the water ribbon at -0.18 wins everywhere along the channel.
+      // Trees, buildings, and other props still write depth normally and
+      // continue to occlude the river where they sit on top.
+      mat.disableDepthWrite = true;
+    }
+    mat.backFaceCulling = true;
+    const PluginClass = makeTerrainSplatPlugin(BABYLON);
+    if (PluginClass) {
+      const plugin = new PluginClass(mat);
+      plugin.detailGrass  = this._terrainDetailTexture('grass');
+      plugin.detailDirt   = this._terrainDetailTexture('dirt');
+      plugin.detailForest = this._terrainDetailTexture('forest');
+      plugin.tints      = DEFAULT_TERRAIN_TINTS.map((t) => t.slice());
+      // Initial fog darken: use the currently-stored value (already
+      // normalized by `_applyLightConfig` or `setFogTint`); the in-game
+      // FOG_HIDDEN_DARKEN floor is applied by `_applyLightConfig` so we just
+      // pass the stored value through.
+      plugin.uFogDarken = this._fogTileDarken ?? 1.0;
+      plugin.isEnabled  = true;
+      this._splatPlugin = plugin;
+    }
+    return mat;
+  }
+
+  /** Eager-preload the three greyscale terrain detail textures so the splat
+   *  shader has them ready by the time gameplay starts. Returns a Promise
+   *  that resolves when all three are GPU-uploaded (or instantly if Babylon
+   *  isn't ready). Folded into the loading-screen bundle via beginLoad(). */
+  _preloadTerrainDetailTextures() {
+    const BABYLON = this._babylon;
+    if (!BABYLON?.Texture || !this._scene) return Promise.resolve();
+    const wait = (tex) => new Promise((resolve) => {
+      if (!tex) return resolve();
+      if (typeof tex.isReady === 'function' && tex.isReady()) return resolve();
+      const obs = tex.onLoadObservable;
+      if (obs && typeof obs.addOnce === 'function') obs.addOnce(() => resolve());
+      else resolve();
+    });
+    return Promise.all(
+      ['grass', 'dirt', 'forest'].map((n) => wait(this._terrainDetailTexture(n))),
+    );
+  }
+
+  /** Lazily load + cache a tiling greyscale detail texture, WRAP-addressed so
+   *  it repeats seamlessly across the merged ground (world-XZ UV). Honours
+   *  `this._assetsBasePath` (set by `beginLoad`) so consumers served from a
+   *  non-root URL — admin-lighting at /admin/lighting, the preview tool, etc.
+   *  — resolve the texture against the correct absolute path. */
+  _terrainDetailTexture(name) {
+    const BABYLON = this._babylon;
+    if (!BABYLON?.Texture) return null;
+    if (!this._detailTexCache) this._detailTexCache = new Map();
+    if (this._detailTexCache.has(name)) return this._detailTexCache.get(name);
+    const base = this._assetsBasePath || 'assets';
+    const tex = new BABYLON.Texture(`${base}/textures/terrain/${name}-detail.jpg`, this._scene);
+    if (BABYLON.Texture.WRAP_ADDRESSMODE != null) {
+      tex.wrapU = BABYLON.Texture.WRAP_ADDRESSMODE;
+      tex.wrapV = BABYLON.Texture.WRAP_ADDRESSMODE;
+    }
+    this._detailTexCache.set(name, tex);
+    return tex;
   }
 
   _buildTileMesh(tile, parent) {
@@ -4575,19 +7278,26 @@ export class Renderer3D {
     const scene   = this._scene;
     const { x, z } = hexToWorld(tile.col, tile.row);
 
+    const tkey = hexKey(tile.col, tile.row);
     // ── Base hex tile (flat, single face, no side walls) ─────────────────
     // Open-faced pointy-top hex polygon at Y=0, tightly tileable with no
     // cylinder rim to produce dark seams at the perimeter.
-    const baseColor = tileColorFor(tile);
-    const hex = this._buildFlatHexMesh(`tile_${tile.col}_${tile.row}`, parent, x, z);
-    hex.material   = this._tileMaterialFor(tile);
-    hex.metadata   = { kind: 'tile', col: tile.col, row: tile.row, baseColor };
-    // Terrain cylinder receives shadows from standees / trees / buildings /
-    // bridges (cast registrations below).
-    this._setShadowReceiver(hex);
-    this._tileMeshes.push(hex);
-    const tkey = hexKey(tile.col, tile.row);
-    this._tileMeshByKey.set(tkey, hex);
+    //
+    // Under the splat-terrain flag the playable ground is ONE merged mesh
+    // (`_buildSplatGround`), so per-tile base hexes aren't built here — only
+    // the props below (forest cones, buildings, roads/rivers, etc.) stay
+    // per-tile. The merged ground owns picking + fog instead of `hex`.
+    if (!this._useSplatTerrain) {
+      const baseColor = tileColorFor(tile);
+      const hex = this._buildFlatHexMesh(`tile_${tile.col}_${tile.row}`, parent, x, z);
+      hex.material   = this._tileMaterialFor(tile);
+      hex.metadata   = { kind: 'tile', col: tile.col, row: tile.row, baseColor };
+      // Terrain cylinder receives shadows from standees / trees / buildings /
+      // bridges (cast registrations below).
+      this._setShadowReceiver(hex);
+      this._tileMeshes.push(hex);
+      this._tileMeshByKey.set(tkey, hex);
+    }
     const props = [];
     const trackProp = (m) => { props.push(m); };
 
@@ -4595,8 +7305,22 @@ export class Renderer3D {
     // positions, leaving the centre slot clear for an entity standee.
     // Layout is deterministic per (col, row) so the same hex always shows the
     // same cluster across runs. See forestTreesForHex / TILE_SLOTS.
-    if (tile.type === TileType.FOREST) {
-      const trees = forestTreesForHex(tile.col, tile.row, this._season);
+    // Forest cones are gated on the BASE material, NOT tile.type — so a road
+    // laid through a forest (or a building on a forest tile) still shows trees
+    // alongside the path/structure, instead of the forest vanishing the moment
+    // a path was painted over it.
+    if (baseOf(tile) === TileType.FOREST) {
+      // On a building-on-forest tile, reserve the building slot so the forest
+      // cones skip BUILDING_SLOT_INDEX (where the procedural box below sits).
+      // On a road-through-forest tile, also skip the slots the road deck
+      // crosses so cones never land on the road mesh. Cached so the per-draw
+      // standee re-slot reserves the same slots.
+      const blockedSlots = this._forestRoadBlockedSlots(tile);
+      if (blockedSlots.size > 0) this._roadBlockedSlotsByKey.set(tkey, blockedSlots);
+      const trees = forestTreesForHex(tile.col, tile.row, this._season, {
+        reserveBuildingSlot: hasBuilding(tile),
+        blockedSlots,
+      });
       // Prefer the real GLB-tree path when the tree-pack manifest has
       // resolved AND has a template for the current season. Falls back to
       // the procedural cone+sphere stack on any miss (empty group, missing
@@ -4634,7 +7358,7 @@ export class Renderer3D {
     // and lands on the road at either end. Width / endpoint height tuned to
     // line up visually with the road ribbon (ROAD_RIBBON_WIDTH = 0.6, sitting
     // at Y = ROAD_RIBBON_Y ≈ 0.008).
-    if (this._renderBridges && tile.type === TileType.BRIDGE) {
+    if (this._renderBridges && isBridge(tile)) {
       const yaw       = bridgeRotationY(tile, this.state.tiles);
       const span      = 1.8;                     // bridge length along the road
       const thickness = 0.10;                    // slab thickness
@@ -4680,20 +7404,22 @@ export class Renderer3D {
       trackProp(plank);
     }
 
-    // ── Building: either a glTF house instance (if `_loadHouseModel` has
-    // resolved by now) or the procedural box + roof fallback. Both paths
+    // ── Building: either a glTF model instance (if the tile's variant template
+    // has loaded by now) or the procedural box + roof fallback. Both paths
     // anchor the building at the NE outer slot (BUILDING_SLOT_INDEX); a
     // standee on the same hex takes the centre slot so silhouettes don't
-    // overlap. The GLB load runs async from `_initBabylon` — when it resolves
-    // after `_buildMap` completes, `_upgradeBuildingsToHouseModel` swaps the
+    // overlap. The GLB loads run async from `_initBabylon` — as each resolves
+    // after `_buildMap` completes, `_upgradeBuildingsToGlbModel` swaps the
     // procedural meshes here for instances.
-    if (tile.type === TileType.BUILDING && tile.building) {
-      // Only HOUSE-type buildings render as the imported GLB; every other
-      // building type (INN, GRAVEYARD, CHURCH, etc.) keeps the procedural
-      // box+roof until a model is authored for it. See BUILDING_GLB_BY_TYPE.
-      if (this._houseSourceMesh && buildingUsesHouseModel(tile)) {
-        const inst = this._buildHouseInstance(tile, x, z, parent);
-        if (inst) trackProp(inst);
+    if (hasBuilding(tile) && tile.building) {
+      // Every building type renders an imported GLB once its template loads;
+      // until then (or on a per-type load failure) it keeps the procedural
+      // box+roof. See BUILDING_GLB_BY_TYPE.
+      const glbInst = buildingUsesGlbModel(tile)
+        ? this._buildBuildingInstance(tile, x, z, parent)
+        : null;
+      if (glbInst) {
+        trackProp(glbInst);
       } else {
         const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
         // Per-tile dimension jitter so buildings show silhouette variety
@@ -4714,6 +7440,7 @@ export class Renderer3D {
         box.position.y = tileTopY + dims.box.height / 2;
         box.material   = this._materialFor(BUILDING_COLOR[tile.building] || '#8a7a5a');
         box.isPickable = false;
+        box.receiveShadows = true;
         this._addShadowCaster(box);
         // Buildings stay visible under fog of war — permanent terrain, not
         // tactical info. See `_setTileFogged`.
@@ -4732,6 +7459,7 @@ export class Renderer3D {
         roof.position.y = tileTopY + dims.box.height + dims.roof.height / 2;
         roof.material   = this._materialFor('#2c2520');
         roof.isPickable = false;
+        roof.receiveShadows = true;
         this._addShadowCaster(roof);
         roof.metadata   = { respectsFog: false };
         trackProp(roof);
@@ -4747,16 +7475,170 @@ export class Renderer3D {
 
     // Register this tile's static occupants (building + forest trees) so the
     // per-draw standee re-slot pass knows which slots are already consumed.
-    // Tile types are mutually exclusive — at most one of {building, trees}
-    // exists per tile, never both.
+    // With the layered tile model a building and a forest base CAN coexist on
+    // one tile (a building on forest), so the occupants are additive rather
+    // than mutually exclusive.
     const staticOcc = [];
-    if (tile.type === TileType.BUILDING && tile.building) {
+    if (hasBuilding(tile) && tile.building) {
       staticOcc.push({ id: 'building', kind: 'building' });
-    } else if (tile.type === TileType.FOREST) {
-      const trees = forestTreesForHex(tile.col, tile.row, this._season);
+    }
+    if (baseOf(tile) === TileType.FOREST) {
+      // Match the rendered cluster: the building occupant is added separately
+      // above, so only blockedSlots (road deck) need to be re-applied here so a
+      // tree dropped from the deck isn't listed as a phantom occupant.
+      const trees = forestTreesForHex(tile.col, tile.row, this._season, {
+        blockedSlots: this._roadBlockedSlotsByKey.get(tkey),
+      });
       for (const t of trees) staticOcc.push({ id: t.id, kind: 'tree' });
     }
     if (staticOcc.length > 0) this._staticOccupantsByKey.set(tkey, staticOcc);
+  }
+
+  // ─── Fortifications: perimeter wall segments ─────────────────────────────
+  //
+  // Hero fortify raises `tile.fortifyLevel` (0..6). We draw a low wall around
+  // the OUTER perimeter of each fortified hex — only on edges whose neighbour
+  // isn't also fortified (see `fortifyEdgeDirs`), so a cluster reads as one
+  // walled compound. Wall style scales with level (`fortifyWallStyle`).
+  //
+  // Lifecycle: `_syncFortifications` runs every draw(). Per fortified hex it
+  // computes a signature (style kind + drawn-edge set); if unchanged it just
+  // re-applies fog tint, otherwise it disposes and rebuilds. Hexes that drop to
+  // level 0 are disposed. Meshes live in `_fortByKey` (their own registry), so
+  // the GLB-upgrade sweeps and the static-mesh freeze never disturb them.
+
+  _syncFortifications() {
+    if (!this._scene || !this._mapRoot || !this.state?.tiles) return;
+    const tiles = this.state.tiles;
+    const fortLevelAt = (col, row) => tiles.get(hexKey(col, row))?.fortifyLevel || 0;
+
+    const seen = new Set();
+    for (const tile of tiles.values()) {
+      const lvl = tile.fortifyLevel || 0;
+      if (lvl <= 0) continue;
+      const tkey = hexKey(tile.col, tile.row);
+      seen.add(tkey);
+
+      const style = fortifyWallStyle(lvl);
+      const dirs  = fortifyEdgeDirs(tile.col, tile.row, fortLevelAt);
+      const sig   = `${style.kind}|${dirs.join(',')}`;
+
+      const existing = this._fortByKey.get(tkey);
+      if (!existing || existing.sig !== sig) {
+        if (existing) this._disposeFortHex(tkey);
+        const entry = this._buildFortMeshesForHex(tile, dirs, style);
+        entry.sig = sig;
+        this._fortByKey.set(tkey, entry);
+      }
+      // Re-apply fog tint every draw (fog can change without the wall changing).
+      this._applyFortFog(tkey);
+    }
+
+    // Dispose walls on hexes that are no longer fortified (e.g. siege/combat
+    // knocked the level back to 0, or a save was swapped in).
+    for (const tkey of [...this._fortByKey.keys()]) {
+      if (!seen.has(tkey)) this._disposeFortHex(tkey);
+    }
+  }
+
+  /** Build the wall/stake meshes for one fortified hex. Returns
+   *  `{ meshes, mat, baseDiffuse }` (sig is set by the caller). */
+  _buildFortMeshesForHex(tile, dirs, style) {
+    const BABYLON = this._babylon;
+    const scene   = this._scene;
+    const { x, z } = hexToWorld(tile.col, tile.row);
+    const R = HEX_RADIUS_WORLD;
+    const apothem = R * SQRT3 / 2;       // hex centre → edge-midpoint distance
+    const side    = R;                   // hex edge (side) length
+    // Sit the wall base on the tile-prism top, the same anchor buildings use.
+    const tileTopY = 0.43 - 0.7 / 2;
+
+    // Per-hex material clone so the fog-darken tint (which mutates diffuseColor
+    // in place) never bleeds onto another hex's walls or a shared cache entry.
+    const [cr, cg, cb] = cssHexToRgb01(style.color);
+    const mat = new BABYLON.StandardMaterial(`fortmat_${tile.col}_${tile.row}`, scene);
+    mat.diffuseColor  = new BABYLON.Color3(cr, cg, cb);
+    mat.specularColor = new BABYLON.Color3(0.04, 0.04, 0.04); // matte, like terrain
+
+    const meshes = [];
+    const place = (m, wx, wy, wz) => {
+      m.parent     = this._mapRoot;
+      m.material    = mat;
+      m.isPickable  = false;
+      m.position.x  = wx;
+      m.position.y  = wy;
+      m.position.z  = wz;
+      this._addShadowCaster(m);
+      meshes.push(m);
+    };
+
+    for (const d of dirs) {
+      const nb = fortNeighborOffset(tile.col, tile.row, d);
+      const np = hexToWorld(nb.col, nb.row);
+      let ux = np.x - x, uz = np.z - z;
+      const len = Math.hypot(ux, uz) || 1;
+      ux /= len; uz /= len;
+      const midX = x + ux * apothem;
+      const midZ = z + uz * apothem;
+      // Edge runs perpendicular to the centre→neighbour direction.
+      const perpX = -uz, perpZ = ux;
+      // rotation.y aligns a mesh's local +Z axis to (perpX, perpZ).
+      const yaw = Math.atan2(perpX, perpZ);
+
+      if (style.kind === 'stakes') {
+        // Sparse low posts spread along the edge (passable level-1 marker).
+        const POSTS = 3;
+        for (let i = 0; i < POSTS; i++) {
+          const t = (i / (POSTS - 1) - 0.5) * side * 0.8; // -0.4..+0.4 of the side
+          const post = BABYLON.MeshBuilder.CreateCylinder(
+            `fort_${tile.col}_${tile.row}_${d}_${i}`,
+            { diameterTop: style.thickness * 0.7, diameterBottom: style.thickness,
+              height: style.height, tessellation: 6 },
+            scene,
+          );
+          place(post, midX + perpX * t, tileTopY + style.height / 2, midZ + perpZ * t);
+        }
+      } else {
+        // Continuous wall slab spanning the edge. Depth (local Z) = the hex side,
+        // slightly overlapped at the corners so adjacent segments read as one
+        // unbroken rampart.
+        const wall = BABYLON.MeshBuilder.CreateBox(
+          `fort_${tile.col}_${tile.row}_${d}`,
+          { width: style.thickness, height: style.height, depth: side * 1.04 },
+          scene,
+        );
+        wall.rotation.y = yaw;
+        place(wall, midX, tileTopY + style.height / 2, midZ);
+      }
+    }
+
+    return { meshes, mat, baseDiffuse: { r: cr, g: cg, b: cb } };
+  }
+
+  /** Tint one hex's fort walls for the current fog state — mirrors the 'darken'
+   *  fog policy used by roads (multiply diffuse by `_fogTileDarken` when the hex
+   *  is fogged, restore to the anchor colour otherwise). */
+  _applyFortFog(tkey) {
+    const entry = this._fortByKey.get(tkey);
+    if (!entry?.mat?.diffuseColor) return;
+    const fogged = this._fogActiveSet?.has(tkey) || false;
+    const k  = fogged ? this._fogTileDarken : 1.0;
+    const bd = entry.baseDiffuse;
+    entry.mat.diffuseColor.r = bd.r * k;
+    entry.mat.diffuseColor.g = bd.g * k;
+    entry.mat.diffuseColor.b = bd.b * k;
+  }
+
+  /** Dispose a hex's fort meshes + its material clone and forget the entry. */
+  _disposeFortHex(tkey) {
+    const entry = this._fortByKey.get(tkey);
+    if (!entry) return;
+    for (const m of entry.meshes) {
+      try { if (m && typeof m.dispose === 'function') m.dispose(); } catch { /* gone */ }
+    }
+    try { if (entry.mat && typeof entry.mat.dispose === 'function') entry.mat.dispose(); }
+    catch { /* gone */ }
+    this._fortByKey.delete(tkey);
   }
 
   // ─── Item 2: bezier road + river networks ────────────────────────────────
@@ -4791,6 +7673,17 @@ export class Renderer3D {
         TILE_COLOR[TileType.ROAD],
       );
     }
+    // Road/river ribbons may be built AFTER the initial _applyFogVeil pass
+    // (the splat ground builds + fog-apply runs first). For tiles already in
+    // `_fogActiveSet` the diff in _applyFogVeil reads `should===is===true` and
+    // skips _setTilePropsFogged, so the freshly-added ribbon material stays at
+    // full color until the next fog-state change. Force a per-tile re-apply
+    // for every currently-fogged tile so newly-registered 'darken' props pick
+    // up the right level immediately. Idempotent — the 'darken' policy uses
+    // absolute `baseDiffuse × k` assignment, not multiplicative accumulation.
+    if (this._fogActiveSet && this._fogActiveSet.size > 0) {
+      for (const tkey of this._fogActiveSet) this._setTilePropsFogged(tkey, true);
+    }
   }
 
   /** Build a single merged flat-ribbon mesh for one network (river OR road).
@@ -4822,12 +7715,52 @@ export class Renderer3D {
     // because the network spans many tiles and is built after `_buildTileMesh`.
     const ribbonsByTileKey = new Map();      // tkey → mesh[]
     const ribbons = [];
+    // R5 — collect bank-build jobs PER STROKE so a sibling pass can build the
+    // dirt-textured channel walls + bed alongside the water mesh. Reset every
+    // `_buildNetworkMesh('river',…)` rebuild (idempotent — road rebuilds leave
+    // any river jobs from the previous river build untouched).
+    if (networkName === 'river') this._riverBankJobs = [];
+
+    // (River strokes arrive already oriented in the canonical world flow
+    // direction — see `buildRiverNetworkStrokes`. No per-consumer flip
+    // needed here for the playable river. Extensions handle their own
+    // direction inside `_buildRiverExtensions` because geometry there is
+    // inherently outward and the alpha taper depends on it.)
     for (let s = 0; s < segments.length; s++) {
       const { tile, strokes } = segments[s];
       const tkey = hexKey(tile.col, tile.row);
+      // A road laid through a FOREST-base tile renders 20% narrower so the
+      // flanking trees aren't crowded. Width is decided PER TILE: each tile
+      // contributes its own stroke(s), so a road spanning a forest tile and a
+      // grass tile narrows only on the forest half — the two strokes meet at
+      // the shared edge midpoint with a small width step (both centred on the
+      // same centreline, so the narrow forest deck sits flush inside the wider
+      // grass deck — no lateral gap). Per-tile is simpler than a taper and the
+      // alpha-faded ribbon edges hide the seam. River never narrows.
+      const tileWidth = roadTileRibbonWidth(networkName, tile, width);
       for (let i = 0; i < strokes.length; i++) {
-        const pts = strokes[i];
-        if (!pts || pts.length < 2) continue;
+        const rawPts = strokes[i];
+        if (!rawPts || rawPts.length < 2) continue;
+        // Rounded terminus cap. A 1-neighbour ROAD stub dead-ends at its tile
+        // centre (rawPts[0]); round that end into a fading semicircle so the
+        // road dissolves into the ground instead of stopping in a hard
+        // rectangle. River termini flow off-map (border extension) and keep a
+        // square end, so this only fires for `road`. `widthScaleByPoint`
+        // narrows the ribbon's half-width to 0 at the tip (semicircle); the
+        // matching `alphaScaleByPoint` is folded into the per-vertex alpha so
+        // the cap fades to transparent.
+        let pts = rawPts;
+        let widthScaleByPoint = null;
+        let alphaScaleByPoint = null;
+        if (networkName === 'road' && rawPts.terminusStart) {
+          const dirInward = { x: rawPts[1].x - rawPts[0].x, z: rawPts[1].z - rawPts[0].z };
+          const caps = terminusCapSamples(rawPts[0], dirInward, tileWidth / 2);
+          if (caps.length > 0) {
+            pts = [...caps.map(c => ({ x: c.x, z: c.z })), ...rawPts];
+            widthScaleByPoint = [...caps.map(c => c.widthScale), ...rawPts.map(() => 1)];
+            alphaScaleByPoint = [...caps.map(c => c.alpha), ...rawPts.map(() => 1)];
+          }
+        }
         // Five-path ribbon so the alpha fade only affects the outer 10% of
         // the ribbon width on each side. Paths laid out as:
         //   right edge (alpha 0) → right inner (alpha 1) → centre (alpha 1)
@@ -4840,9 +7773,13 @@ export class Renderer3D {
         // their length so each strand reads as hand-laid / natural rather
         // than uniform-machined. The sine wave is seeded off the tile col/row
         // + stroke index so a given hex looks the same across reloads.
-        let perPointOuterWidth = width;
-        let perPointInnerWidth = width * OPAQUE_FRAC;
-        if (networkName === 'road' || networkName === 'river') {
+        let perPointOuterWidth = tileWidth;
+        let perPointInnerWidth = tileWidth * OPAQUE_FRAC;
+        // Per-point WATER half-widths (river only); used by the sibling bank
+        // build pass below so the bank's water edge tracks the water mesh
+        // exactly. `null` for road or for the sine-modulated width fallback.
+        let riverHalfWidthsForStroke = null;
+        if (networkName === 'road') {
           // Width modulates as a function of WORLD position so adjacent tiles
           // produce the SAME width at shared seam points — no visible width
           // jump where one tile's stroke ends and the next begins. The 2D
@@ -4861,15 +7798,46 @@ export class Renderer3D {
           const innerArr = new Array(pts.length);
           for (let p = 0; p < pts.length; p++) {
             const mod = widthModAt(pts[p].x, pts[p].z);
-            outerArr[p] = width * mod;
-            innerArr[p] = width * OPAQUE_FRAC * mod;
+            // Cap samples shrink the half-width to 0 at the tip (semicircle);
+            // body points keep widthScale 1.
+            const wScale = widthScaleByPoint ? widthScaleByPoint[p] : 1;
+            outerArr[p] = tileWidth * mod * wScale;
+            innerArr[p] = tileWidth * OPAQUE_FRAC * mod * wScale;
           }
           perPointOuterWidth = outerArr;
           perPointInnerWidth = innerArr;
+        } else if (networkName === 'river') {
+          // R5 — river water-surface width varies by LOCAL CURVATURE: narrower
+          // on straight reaches, wider through corners so the river reads as a
+          // natural meander instead of a constant-width canal. `tileWidth` is
+          // ignored for the river; the absolute MIN/MAX half-widths come from
+          // the exported constants so the seam between adjacent tiles is
+          // continuous (each stroke's endpoint widths are determined by the
+          // bezier's tangent geometry there, not the tile identity).
+          const halfWidths = riverHalfWidthsByCurvature(pts);
+          // The original 5-path ribbon maps "outer half-width" to the ribbon's
+          // outermost lateral path and "inner half-width" to the next path in,
+          // giving a feathered shoulder. For the river the OPAQUE region IS the
+          // water surface (paths 1..3 in the 5-path layout); we keep the same
+          // 80% inner shrink so the water has a small alpha-soft edge that
+          // tucks under the dirt bank's inner lip and hides any sub-pixel seam.
+          const outerArr = new Array(pts.length);
+          const innerArr = new Array(pts.length);
+          for (let p = 0; p < pts.length; p++) {
+            outerArr[p] = halfWidths[p] * 2;             // full water width
+            innerArr[p] = halfWidths[p] * 2 * OPAQUE_FRAC;
+          }
+          perPointOuterWidth = outerArr;
+          perPointInnerWidth = innerArr;
+          riverHalfWidthsForStroke = halfWidths;
         }
         const { left: outerLeft,  right: outerRight  } = ribbonOffsetPaths(pts, perPointOuterWidth);
         const { left: innerLeft,  right: innerRight  } = ribbonOffsetPaths(pts, perPointInnerWidth);
-        const toV3 = (arr) => arr.map(p => new BABYLON.Vector3(p.x, yPos, p.z));
+        // R5 — river water surface sits at RIVER_BED_Y (below ground); road
+        // keeps its passed-in `yPos`. The bank ribbon (built in the sibling
+        // pass below) handles the sloped transition back up to ground level.
+        const waterY = networkName === 'river' ? RIVER_BED_Y : yPos;
+        const toV3 = (arr) => arr.map(p => new BABYLON.Vector3(p.x, waterY, p.z));
         const rightOuterV3 = toV3(outerRight);
         const rightInnerV3 = toV3(innerRight);
         const centerV3     = toV3(pts);
@@ -4894,7 +7862,11 @@ export class Renderer3D {
         const colors = new Float32Array(totalVerts * 4);
         for (let v = 0; v < totalVerts; v++) {
           const pathIdx = Math.min(alphaByPath.length - 1, Math.floor(v / N));
-          const a = alphaByPath[pathIdx];
+          // Length-wise cap fade multiplies the per-path edge fade so the
+          // terminus dissolves to fully transparent at its rounded tip.
+          const pointIdx = v % N;
+          const aScale = alphaScaleByPoint ? alphaScaleByPoint[pointIdx] : 1;
+          const a = alphaByPath[pathIdx] * aScale;
           colors[v * 4 + 0] = 1;
           colors[v * 4 + 1] = 1;
           colors[v * 4 + 2] = 1;
@@ -4960,6 +7932,21 @@ export class Renderer3D {
         const list = ribbonsByTileKey.get(tkey) || [];
         list.push(ribbon);
         ribbonsByTileKey.set(tkey, list);
+        // R5 — accumulate bank-build data for river strokes so the sibling
+        // bank ribbon pass below has everything it needs (centreline + per-point
+        // water half-widths). The bank is built AFTER the water-merge loop so
+        // each pass can merge per-tile cleanly with its own material.
+        if (networkName === 'river' && riverHalfWidthsForStroke) {
+          if (!this._riverBankJobs) this._riverBankJobs = [];
+          this._riverBankJobs.push({
+            tkey,
+            tileCol: tile.col,
+            tileRow: tile.row,
+            strokeIdx: i,
+            pts,
+            halfWidths: riverHalfWidthsForStroke,
+          });
+        }
       }
     }
     if (ribbons.length === 0) return null;
@@ -4973,6 +7960,9 @@ export class Renderer3D {
     const baseMat  = this._buildRibbonMaterial(networkName, cssColor);
     const baseDiff = baseMat.diffuseColor.clone();
     const baseEmis = baseMat.emissiveColor.clone();
+    // Reset the river-flow texture registry on each river rebuild so
+    // `_pumpRiverFlow` only scrolls live (non-disposed) per-tile clones.
+    if (networkName === 'river') this._riverFlowTextures = [];
     let primary = null;
     for (const [tkey, list] of ribbonsByTileKey) {
       const merged = BABYLON.Mesh.MergeMeshes(list, true, true, undefined, false, false);
@@ -4991,7 +7981,23 @@ export class Renderer3D {
       const mat = baseMat.clone(`${networkName}_${tkey}_mat`);
       mat.diffuseColor  = baseDiff.clone();
       mat.emissiveColor = baseEmis.clone();
+      // Road edges get organic noise-modulated alpha so the boundary into the
+      // terrain reads wavy/dirt-path rather than two clean parallel lines.
+      // River keeps its tight straight banks (a river edge IS sharp).
+      if (networkName === 'road') attachRoadEdgeToMaterial(BABYLON, mat);
+      // R5 polish 3 — water renders with the NORMAL depth test now that the
+      // playable splat material runs `disableDepthWrite = true` (see
+      // `_buildSplatMaterial`). Trees + buildings continue to write depth and
+      // correctly occlude the water where they sit on top, instead of the
+      // previous `depthFunction = ALWAYS` workaround that let the river paint
+      // over everything in the scene.
       merged.material        = mat;
+      // Register this tile clone's diffuse texture for per-frame flow scroll.
+      // (Babylon's StandardMaterial.clone() deep-clones textures, so each tile
+      // has its own — all must advance together for one continuous current.)
+      if (networkName === 'river' && mat.diffuseTexture) {
+        this._riverFlowTextures.push(mat.diffuseTexture);
+      }
       merged.hasVertexAlpha  = true;
       // Force road > river in the transparency sort so the road ribbon paints
       // OVER the water at every river / road crossing (bridge planks are
@@ -5016,7 +8022,236 @@ export class Renderer3D {
       else this._tilePropsByKey.set(tkey, [merged]);
       if (!primary) primary = merged;
     }
+    // R5 — build the dirt-textured bank channel ribbons alongside the water.
+    // Runs ONCE per `_buildNetworkMesh('river',…)` so the per-tile merge has
+    // the same connectivity as the water meshes above. Reads the jobs the
+    // per-stroke loop accumulated into `_riverBankJobs`.
+    if (networkName === 'river' && this._riverBankJobs && this._riverBankJobs.length > 0) {
+      this._buildRiverBankMeshes(this._riverBankJobs);
+    }
     return primary;
+  }
+
+  /** R5 — Build the dirt-textured BANK channel meshes that wrap the sunken
+   *  water ribbons. Each job carries one stroke's centreline + per-point water
+   *  half-widths; we emit one 7-path ribbon per stroke (outer-left rim →
+   *  bank-top-left → water-edge-left → bed-centre → water-edge-right →
+   *  bank-top-right → outer-right rim) so the cross-section reads as a real
+   *  trench with sloped dirt sides and a slightly-deeper dirt bed. Banks merge
+   *  per-tile (separate from the water merge — different material) and
+   *  register with `_tilePropsByKey` so the fog veil walks them.
+   *
+   *  The ribbon's per-vertex alpha tapers paths 0 and 6 (the outermost rims)
+   *  to 0 so the dirt deck dissolves into the surrounding ground. Per-vertex
+   *  UVs tile the dirt detail texture along the river's length so each bank
+   *  reads as continuous dirt rather than a single-pixel smear. */
+  _buildRiverBankMeshes(jobs) {
+    const BABYLON = this._babylon;
+    const scene   = this._scene;
+    if (!BABYLON || !scene || !jobs || jobs.length === 0) return;
+    // Group jobs by tile so each tile gets a single merged bank prop.
+    const banksByTileKey = new Map(); // tkey → mesh[]
+    for (const job of jobs) {
+      const ribbon = this._buildRiverBankRibbon(job);
+      if (!ribbon) continue;
+      const list = banksByTileKey.get(job.tkey) || [];
+      list.push(ribbon);
+      banksByTileKey.set(job.tkey, list);
+    }
+    // One shared base material — clones per tile so fog veil can darken
+    // individual tiles without affecting the rest.
+    const baseMat = this._buildRiverBankMaterial();
+    if (!baseMat) return;
+    const baseDiff = baseMat.diffuseColor ? baseMat.diffuseColor.clone() : null;
+    const baseEmis = baseMat.emissiveColor ? baseMat.emissiveColor.clone() : null;
+    for (const [tkey, list] of banksByTileKey) {
+      const merged = BABYLON.Mesh.MergeMeshes(list, true, true, undefined, false, false);
+      if (!merged) continue;
+      this._setShadowReceiver(merged);
+      merged.parent     = this._mapRoot;
+      merged.isPickable = false;
+      const mat = baseMat.clone(`river_bank_${tkey}_mat`);
+      if (baseDiff && mat.diffuseColor) {
+        mat.diffuseColor.r = baseDiff.r;
+        mat.diffuseColor.g = baseDiff.g;
+        mat.diffuseColor.b = baseDiff.b;
+      }
+      if (baseEmis && mat.emissiveColor) {
+        mat.emissiveColor.r = baseEmis.r;
+        mat.emissiveColor.g = baseEmis.g;
+        mat.emissiveColor.b = baseEmis.b;
+      }
+      merged.material   = mat;
+      merged.hasVertexAlpha = true;
+      // Sit just BELOW the water in the transparency sort so the water reads
+      // as drawn ON TOP of the bed (the bank rim above water is opaque, no
+      // ordering issue; only the bed under-water section overlaps the water).
+      merged.alphaIndex = Math.max(0, RIVER_ALPHA_INDEX - 5);
+      merged.name       = `river_bank_${tkey}`;
+      merged.metadata   = {
+        respectsFog: 'darken',
+        kind: 'river-bank',
+        baseDiffuse:  baseDiff ? { r: baseDiff.r, g: baseDiff.g, b: baseDiff.b } : { r: 1, g: 1, b: 1 },
+        baseEmissive: baseEmis ? { r: baseEmis.r, g: baseEmis.g, b: baseEmis.b } : { r: 0, g: 0, b: 0 },
+      };
+      const props = this._tilePropsByKey.get(tkey);
+      if (props) props.push(merged);
+      else this._tilePropsByKey.set(tkey, [merged]);
+    }
+  }
+
+  /** R5 — Build ONE 7-path bank ribbon for a single river stroke. Returns the
+   *  raw ribbon mesh (no material assigned yet — the caller merges per-tile
+   *  and assigns a tile-cloned dirt material). Paths:
+   *
+   *    0  outer-left  rim (Y=RIVER_BANK_TOP_Y, alpha 0, feather into ground)
+   *    1  bank-left   top (Y=RIVER_BANK_TOP_Y, alpha 1)
+   *    2  water-edge  left  (Y=RIVER_BED_Y, alpha 1)
+   *    3  bed-centre        (Y=RIVER_BED_Y - epsilon, alpha 1; dirt below the water)
+   *    4  water-edge  right (Y=RIVER_BED_Y, alpha 1)
+   *    5  bank-right  top (Y=RIVER_BANK_TOP_Y, alpha 1)
+   *    6  outer-right rim (Y=RIVER_BANK_TOP_Y, alpha 0)
+   *
+   *  Half-widths per path index:
+   *    0/6 → waterHalf + RIVER_BANK_WIDTH        (outer rim)
+   *    1/5 → waterHalf + RIVER_BANK_WIDTH * 0.5  (inset slightly so the alpha
+   *           feather lives between paths 0–1 only, keeping the dirt top opaque
+   *           across most of its width)
+   *    2/4 → waterHalf                            (water edge — exact)
+   *    3   → 0                                    (centreline)
+   */
+  _buildRiverBankRibbon(job) {
+    const BABYLON = this._babylon;
+    const scene   = this._scene;
+    if (!BABYLON || !scene) return null;
+    const { pts, halfWidths, tileCol, tileRow, strokeIdx } = job;
+    if (!pts || pts.length < 2 || !halfWidths || halfWidths.length !== pts.length) return null;
+    const N = pts.length;
+    // Per-point lateral offsets (5 distinct half-widths per point; we'll mirror
+    // them across path indices 0..6 below).
+    const offsetRim    = new Array(N);
+    const offsetBank   = new Array(N);
+    const offsetWater  = new Array(N);
+    for (let p = 0; p < N; p++) {
+      const w = halfWidths[p];
+      offsetRim[p]   = w + RIVER_BANK_WIDTH;
+      offsetBank[p]  = w + RIVER_BANK_WIDTH * 0.5;
+      offsetWater[p] = w;
+    }
+    // Six lateral offset path-pairs are needed; we get them from
+    // `ribbonOffsetPaths(pts, width)` which returns `{left, right}` for a
+    // given symmetric width. Pass each width array as a 2× full width
+    // (ribbonOffsetPaths treats `width` as the FULL width, splitting into
+    // half on each side).
+    const widthRim   = offsetRim.map(o => o * 2);
+    const widthBank  = offsetBank.map(o => o * 2);
+    const widthWater = offsetWater.map(o => o * 2);
+    const { left: leftRim,   right: rightRim   } = ribbonOffsetPaths(pts, widthRim);
+    const { left: leftBank,  right: rightBank  } = ribbonOffsetPaths(pts, widthBank);
+    const { left: leftWater, right: rightWater } = ribbonOffsetPaths(pts, widthWater);
+    const BED_EPS = 0.01; // bed sits just below water so any alpha-blend ties resolve toward dirt
+    const yBank = RIVER_BANK_TOP_Y;
+    const yWater = RIVER_BED_Y;
+    const yBed = RIVER_BED_Y - BED_EPS;
+    const toV3 = (arr, y) => arr.map(p => new BABYLON.Vector3(p.x, y, p.z));
+    const pathArray = [
+      toV3(rightRim,   yBank),  // 0 outer-right rim
+      toV3(rightBank,  yBank),  // 1 bank-right top
+      toV3(rightWater, yWater), // 2 water-edge right
+      toV3(pts,        yBed),   // 3 bed centre
+      toV3(leftWater,  yWater), // 4 water-edge left
+      toV3(leftBank,   yBank),  // 5 bank-left top
+      toV3(leftRim,    yBank),  // 6 outer-left rim
+    ];
+    const ribbon = BABYLON.MeshBuilder.CreateRibbon(
+      `river_bank_${tileCol}_${tileRow}_${strokeIdx}`,
+      {
+        pathArray,
+        sideOrientation: BABYLON.Mesh.DOUBLESIDE,
+        closeArray: false,
+        closePath: false,
+        updatable: false,
+      },
+      scene,
+    );
+    ribbon.isPickable = false;
+    const totalVerts = ribbon.getTotalVertices();
+    // Per-vertex alpha: paths 0 and 6 fade to 0 so the rim dissolves into the
+    // surrounding ground; everything else opaque.
+    const alphaByPath = [0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0];
+    const colors = new Float32Array(totalVerts * 4);
+    for (let v = 0; v < totalVerts; v++) {
+      const pathIdx = Math.min(alphaByPath.length - 1, Math.floor(v / N));
+      colors[v * 4 + 0] = 1;
+      colors[v * 4 + 1] = 1;
+      colors[v * 4 + 2] = 1;
+      colors[v * 4 + 3] = alphaByPath[pathIdx];
+    }
+    ribbon.setVerticesData(BABYLON.VertexBuffer.ColorKind, colors);
+    // Per-vertex UVs — tile dirt detail texture along the river's length.
+    // U = cumulative XZ distance along the centreline (path 3) scaled by
+    // BANK_TILE_PERIOD so the dirt detail repeats every world unit. V across
+    // the width keyed off path index so the texture spans the channel
+    // cross-section once.
+    const periods = new Array(N);
+    periods[0] = 0;
+    for (let p = 1; p < N; p++) {
+      const dx = pts[p].x - pts[p - 1].x;
+      const dz = pts[p].z - pts[p - 1].z;
+      periods[p] = periods[p - 1] + Math.sqrt(dx * dx + dz * dz);
+    }
+    const BANK_TILE_PERIOD = 0.6; // dirt detail tiles more tightly than river
+    const vByPath = [0.0, 0.15, 0.4, 0.5, 0.6, 0.85, 1.0];
+    const uvs = new Float32Array(totalVerts * 2);
+    for (let v = 0; v < totalVerts; v++) {
+      const pathIdx  = Math.min(vByPath.length - 1, Math.floor(v / N));
+      const pointIdx = v % N;
+      uvs[v * 2 + 0] = periods[pointIdx] / BANK_TILE_PERIOD;
+      uvs[v * 2 + 1] = vByPath[pathIdx];
+    }
+    ribbon.setVerticesData(BABYLON.VertexBuffer.UVKind, uvs);
+    return ribbon;
+  }
+
+  /** R5 — StandardMaterial for the river BANK channel ribbons. Same recipe
+   *  as the terrain detail-textured material, but standalone (not a splat
+   *  blend) so the dirt detail tiles cleanly across the bank's curved
+   *  geometry. Lazy-built on first call and cached on the renderer instance.
+   *  Disposed by the next `_buildNetworkMesh('river',…)` rebuild via the
+   *  per-tile mat clones taking ownership; the BASE material persists for the
+   *  lifetime of the renderer (one extra material is a rounding error). */
+  _buildRiverBankMaterial() {
+    const BABYLON = this._babylon;
+    const scene   = this._scene;
+    if (!BABYLON || !scene) return null;
+    if (this._riverBankBaseMat) return this._riverBankBaseMat;
+    const mat = new BABYLON.StandardMaterial('river_bank_base_mat', scene);
+    mat.diffuseColor    = new BABYLON.Color3(0.62, 0.50, 0.38); // warm dirt tint
+    // The bank ribbon's cross-section is a U-trench, so the slope walls face
+    // mostly sideways/downward. At 45° camera tilt under the directional sun
+    // the slope normals catch almost no diffuse and the dirt reads near-black.
+    // A modest warm emissive gives the dirt a baseline colour regardless of
+    // lighting angle, lifting the slope faces into the readable brown range
+    // without making the well-lit top faces glow. Fog parity: `baseEmissive`
+    // is snapshotted in `_buildRiverBankMeshes` so `_setTilePropsFogged` darkens
+    // the emissive alongside the diffuse when the tile is fogged.
+    mat.emissiveColor   = new BABYLON.Color3(0.25, 0.20, 0.15);
+    mat.specularColor   = new BABYLON.Color3(0.04, 0.04, 0.04);
+    mat.backFaceCulling = false;
+    mat.disableLighting = false;
+    // Dirt detail (greyscale → tinted by diffuseColor); the same texture used
+    // by the splat ground plugin. Re-use the loader so the GPU texture cache
+    // hits and we don't re-upload.
+    const tex = this._terrainDetailTexture('dirt');
+    if (tex) {
+      mat.diffuseTexture = tex;
+      // White-ish diffuse plus the textured RGB. The detail JPG has no alpha,
+      // so disable useAlphaFromDiffuseTexture — the per-vertex alpha written
+      // by the ribbon builder carries the rim feather instead.
+      mat.useAlphaFromDiffuseTexture = false;
+    }
+    this._riverBankBaseMat = mat;
+    return mat;
   }
 
   /** Dedicated StandardMaterial for the ribbon networks. Unlike the cached
@@ -5075,6 +8310,11 @@ export class Renderer3D {
         tex.wrapU = 1; // WRAP
         tex.wrapV = 0; // CLAMP
         tex.hasAlpha = true;
+        // River flow reads as continuous current rather than one arrow per
+        // tile-segment: tile the texture N× along U so the arrow pattern
+        // repeats inside each segment. Road keeps its 1× mapping because its
+        // texture has no directional pattern that needs repeating.
+        if (networkName === 'river') tex.uScale = RIVER_RIBBON_U_SCALE;
         mat.diffuseTexture = tex;
         // road-ribbon.png is 21% alpha=0 / 78% opaque — designed with
         // transparent cut-outs for the road shoulder. Without this flag
@@ -5153,6 +8393,77 @@ export class Renderer3D {
     mat.diffuseColor  = new BABYLON.Color3(r, g, b);
     mat.specularColor = new BABYLON.Color3(0.04, 0.04, 0.04); // matte
     this._materialCache.set(hexColor, mat);
+    return mat;
+  }
+
+  /** Flag a material for standard alpha-blending at `alpha`, plus a per-mesh
+   *  depth pre-pass — the same recipe `_alphaMaterialFor` /
+   *  `_borderGroundMaterialFor` apply, factored out so the faded GLB tree
+   *  template can fade BOTH its MultiMaterial container AND each PBR
+   *  submaterial identically (ground, trees, and river all blend + sort the
+   *  same way). Mutates `mat` in place — callers pass a CLONE so shared opaque
+   *  materials are never touched. */
+  _applyAlphaBlend(mat, alpha) {
+    if (!mat) return mat;
+    const BABYLON = this._babylon;
+    mat.alpha = alpha;
+    if (BABYLON?.Material) mat.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
+    mat.needDepthPrePass = true;
+    return mat;
+  }
+
+  /** Like `_materialFor`, but returns a translucent variant at `alpha` < 1 with
+   *  standard alpha-blending enabled. Cached separately (keyed `color@a<alpha>`)
+   *  so the opaque shared materials used by the in-map forest are never mutated.
+   *  Returns the plain opaque material when `alpha` ≥ 1. Used by the
+   *  border-forest edge fade — see `borderForestAlphaForTile`. */
+  _alphaMaterialFor(hexColor, alpha) {
+    if (!(alpha < 1)) return this._materialFor(hexColor);
+    const BABYLON = this._babylon;
+    const key = `${hexColor}@a${alpha}`;
+    if (this._materialCache.has(key)) return this._materialCache.get(key);
+    const base = this._materialFor(hexColor);
+    const mat = typeof base.clone === 'function' ? base.clone(`mat_${key}`) : base;
+    mat.alpha = alpha;
+    // Standard alpha blending. A per-mesh depth pre-pass writes depth first so
+    // overlapping translucent foliage within a tier sorts sanely instead of
+    // flickering, and keeps backface culling honest (no double-blended cone
+    // backsides). Inner tiers are more opaque and sit behind the outer ones, so
+    // back-to-front transparent sorting across tiers reads correctly.
+    if (BABYLON?.Material) mat.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
+    mat.needDepthPrePass = true;
+    this._materialCache.set(key, mat);
+    return mat;
+  }
+
+  /** Material for a border-forest GROUND hex at edge-fade `alpha`. The band's
+   *  ground dissolves in lockstep with its trees — same per-ring alpha from
+   *  `borderForestAlphaForTile` — so the whole map edge reads as one fading
+   *  layer (operator: fade the ground, not just the trees).
+   *
+   *  The base is the SHARED fogged terrain material for the tile's sprite
+   *  (border ground always renders fogged), or the colour-fog fallback when
+   *  the atlas hasn't loaded. At `alpha` ≥ 1 that shared material is returned
+   *  as-is. At `alpha` < 1 a translucent CLONE is returned instead — bucketed
+   *  per (base material, alpha) tier in a dedicated cache so the playable
+   *  map's terrain materials are never mutated and the clone count stays
+   *  bounded (≤ sprite-variants × 3 tiers). Alpha-blend + depth pre-pass match
+   *  the tree fade (`_alphaMaterialFor`) so ground and trees sort together. */
+  _borderGroundMaterialFor(spriteId, baseColor, alpha) {
+    const base = this._terrainMaterialFor(spriteId, { fogged: true })
+              || this._fogMaterialFor(baseColor);
+    if (!base || !(alpha < 1)) return base;
+    const BABYLON = this._babylon;
+    const key = `${base.name}@a${alpha}`;
+    if (this._borderGroundAlphaMatCache.has(key)) return this._borderGroundAlphaMatCache.get(key);
+    const mat = typeof base.clone === 'function' ? base.clone(`mat_${key}`) : base;
+    mat.alpha = alpha;
+    // Standard alpha blending + per-mesh depth pre-pass — identical recipe to
+    // `_alphaMaterialFor` (the tree fade) so a ring's ground and trees blend
+    // and sort as a single translucent layer instead of z-fighting.
+    if (BABYLON?.Material) mat.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
+    mat.needDepthPrePass = true;
+    this._borderGroundAlphaMatCache.set(key, mat);
     return mat;
   }
 
@@ -5245,14 +8556,43 @@ export class Renderer3D {
     const BABYLON = this._babylon;
     const name = fogged ? `terrainFog_${spriteId}` : `terrain_${spriteId}`;
     const mat = new BABYLON.StandardMaterial(name, this._scene);
-    mat.diffuseTexture = tex;
     mat.specularColor  = new BABYLON.Color3(0.04, 0.04, 0.04); // matte, picks up phase light
     if (fogged) {
       const d = this._fogTileDarken;
+      // diffuseColor darkening alone is INVISIBLE at bright phases: the diffuse
+      // lighting term (day sun ≈ 2.0 + hemi) saturates past 1.0, so
+      // clamp(lit × 0.55) still clamps to 1.0 — the ×0.55 vanishes and the
+      // fogged hex reads as bright as a lit one. The texture sample is applied
+      // OUTSIDE that clamp (finalDiffuse = clamp(lit × diffuseColor) × texel),
+      // so the tint MUST also hit the texture LEVEL to survive saturation.
+      // emissiveColor stays the StandardMaterial default (0,0,0) — terrain is
+      // not self-lit, so there's nothing emissive to darken here.
       mat.diffuseColor = new BABYLON.Color3(d, d, d);
+      mat.diffuseTexture = this._fogTerrainTextureFor(spriteId, tex) || tex;
+    } else {
+      mat.diffuseTexture = tex;
     }
     cache.set(spriteId, mat);
     return mat;
+  }
+
+  /** Darkened clone of a terrain sprite's bright Texture for use by the fogged
+   *  material variant. The clone's `level` is multiplied by `_fogTileDarken` so
+   *  the sampled texel is dimmed AFTER the diffuse-lighting clamp (see
+   *  `_terrainMaterialFor`). Never mutates the shared bright texture. Returns
+   *  null when the source texture or clone is unavailable (node-test env). */
+  _fogTerrainTextureFor(spriteId, brightTex) {
+    if (!brightTex) return null;
+    if (this._terrainFogTextureCache.has(spriteId)) {
+      return this._terrainFogTextureCache.get(spriteId);
+    }
+    const clone = typeof brightTex.clone === 'function' ? brightTex.clone() : null;
+    if (clone) {
+      const baseLevel = typeof brightTex.level === 'number' ? brightTex.level : 1;
+      clone.level = baseLevel * this._fogTileDarken;
+    }
+    this._terrainFogTextureCache.set(spriteId, clone);
+    return clone;
   }
 
   /** Pick the right material for a tile cylinder — textured terrain material
@@ -5354,7 +8694,8 @@ export class Renderer3D {
     const { trunks, leavesByColor } = this._buildTreeClusterMeshes(
       namePrefix, cx, cz, trees, { fogged, season },
     );
-    const trunkCss = fogged ? '#241710' : '#5a3a20';
+    // Trunk: mild fog tint at ~65% of unfogged (matches TREE_LEAF_PALETTE_FOG).
+    const trunkCss = fogged ? '#3a2516' : '#5a3a20';
     const trunkMat = this._materialFor(trunkCss);
     return this._mergeTreeBuckets(trunks, leavesByColor, parent, namePrefix, trunkMat);
   }
@@ -5494,7 +8835,7 @@ export class Renderer3D {
    *  trees feeds the input arrays. Returns the merged meshes in emission order
    *  ([trunk, ...leafBuckets]) so callers can register them with the shadow
    *  generator in one pass. */
-  _mergeTreeBuckets(trunks, leavesByColor, parent, namePrefix, trunkMat) {
+  _mergeTreeBuckets(trunks, leavesByColor, parent, namePrefix, trunkMat, { alpha = 1 } = {}) {
     const BABYLON = this._babylon;
     const out = [];
     if (!BABYLON) return out;
@@ -5514,7 +8855,7 @@ export class Renderer3D {
       const merged = BABYLON.Mesh.MergeMeshes(bucket, true, true, undefined, false, false);
       if (!merged) { bucketIdx++; continue; }
       merged.name       = `${namePrefix}_leaves_${bucketIdx}`;
-      merged.material   = this._materialFor(color);
+      merged.material   = this._alphaMaterialFor(color, alpha);
       merged.parent     = parent;
       merged.isPickable = false;
       out.push(merged);
@@ -5539,7 +8880,10 @@ export class Renderer3D {
    *
    *  `treeJobs` is `[{ namePrefix, cx, cz, trees }, ...]` — one entry per
    *  border tile that has any trees. */
-  _buildBorderForestTreesBatched(parent, treeJobs, { fogged = false, season = null } = {}) {
+  _buildBorderForestTreesBatched(
+    parent, treeJobs,
+    { fogged = false, season = null, alpha = 1, namePrefix = 'border_forest' } = {},
+  ) {
     const BABYLON = this._babylon;
     const scene   = this._scene;
     if (!BABYLON || !scene || !treeJobs || treeJobs.length === 0) return [];
@@ -5556,9 +8900,10 @@ export class Renderer3D {
         for (const m of list) bucket.push(m);
       }
     }
-    const trunkCss = fogged ? '#241710' : '#5a3a20';
-    const trunkMat = this._materialFor(trunkCss);
-    return this._mergeTreeBuckets(allTrunks, allLeavesByColor, parent, 'border_forest', trunkMat);
+    // Trunk: mild fog tint at ~65% of unfogged (matches TREE_LEAF_PALETTE_FOG).
+    const trunkCss = fogged ? '#3a2516' : '#5a3a20';
+    const trunkMat = this._alphaMaterialFor(trunkCss, alpha);
+    return this._mergeTreeBuckets(allTrunks, allLeavesByColor, parent, namePrefix, trunkMat, { alpha });
   }
 
   _buildFlatHexMesh(name, parent, x, z) {
@@ -5661,15 +9006,33 @@ export class Renderer3D {
     }
     // Border-forest cylinders share the FOREST sprite pool but live in a
     // separate map — upgrade them too so the texture appears around the edge.
+    // CRITICAL: route through `_borderGroundMaterialFor` (NOT the plain
+    // `_terrainMaterialFor`) so the per-ring EDGE FADE is preserved. A plain
+    // terrain material is fully opaque, so swapping it in when the atlas
+    // arrives would silently un-fade the band's outer rings — the ground would
+    // snap back to a hard opaque wall while the trees + river stayed
+    // translucent. Re-derive ext + bandDepth exactly as `_buildMapBorderForest`
+    // does so the alpha matches the original build tier-for-tier.
+    const ext = tilesExtent(this.state.tiles);
+    let bandDepth = 0;
+    for (const [, hex] of this._borderForestHexesByKey) {
+      const md = hex?.metadata;
+      if (!md) continue;
+      bandDepth = Math.max(bandDepth, borderTileDepthFromPlayable(md.col, md.row, ext));
+    }
+    const borderBaseColor = TILE_COLOR[TileType.FOREST] || TILE_COLOR[TileType.GRASS];
     for (const [, hex] of this._borderForestHexesByKey) {
       const md = hex.metadata;
       if (!md) continue;
-      const syntheticTile = { type: TileType.FOREST, col: md.col, row: md.row };
+      const syntheticTile = { type: TileType.FOREST, base: TileType.FOREST, col: md.col, row: md.row };
       // Always use the fogged variant — border tiles are permanently
-      // out-of-sight wilderness (see `_buildMapBorderForest`).
-      const mat = this._terrainMaterialFor(
+      // out-of-sight wilderness (see `_buildMapBorderForest`) — at this ring's
+      // edge-fade alpha so ground keeps dissolving in lockstep with the trees.
+      const alpha = borderForestAlphaForTile(md.col, md.row, ext, bandDepth);
+      const mat = this._borderGroundMaterialFor(
         terrainSpriteIdFor(syntheticTile, md.col, md.row),
-        { fogged: true },
+        borderBaseColor,
+        alpha,
       );
       if (mat) hex.material = mat;
     }
@@ -5696,25 +9059,14 @@ export class Renderer3D {
    *
    *  No-op when the engine or camera hasn't initialised yet. */
   _recomputeMaxZoomCap() {
-    if (!this._engine || !this._camera) return;
-    const aspect = this._engine.getRenderWidth() / Math.max(1, this._engine.getRenderHeight());
-    const fov = this._camera.fov || 0.8;
-    // Cap fits THIS map's playable tiles — not a hardcoded standard 13×13.
-    // Campaign / battle maps with bigger footprints get a larger upper radius
-    // so the operator can zoom out far enough to see the whole map.
-    const upper = radiusForMapFit(this.state, aspect, fov);
-    const lower = radiusForCloseFit(MIN_VISIBLE_HEXES, aspect, fov);
-    if (Number.isFinite(upper) && upper > 0) {
-      // Guarantee lower < upper even on pathological aspects (shouldn't be
-      // possible — standard-fit always exceeds 5-hex-fit — but cheap to defend).
-      const safeLower = Number.isFinite(lower) && lower > 0
-        ? Math.min(lower, upper * 0.99)
-        : this._camera.lowerRadiusLimit;
-      this._camera.lowerRadiusLimit = safeLower;
-      this._camera.upperRadiusLimit = upper;
-      if (this._camera.radius > upper) this._camera.radius = upper;
-      if (this._camera.radius < safeLower) this._camera.radius = safeLower;
-    }
+    if (!this._camera) return;
+    // Operator-fixed bounds — same range across every map size, no map-fit
+    // derivation. Clamp the current radius if a previous map's limits left it
+    // outside the new (tighter) window.
+    this._camera.lowerRadiusLimit = CAMERA_MIN_ZOOM_RADIUS;
+    this._camera.upperRadiusLimit = CAMERA_MAX_ZOOM_RADIUS;
+    if (this._camera.radius > CAMERA_MAX_ZOOM_RADIUS) this._camera.radius = CAMERA_MAX_ZOOM_RADIUS;
+    if (this._camera.radius < CAMERA_MIN_ZOOM_RADIUS) this._camera.radius = CAMERA_MIN_ZOOM_RADIUS;
   }
 
   /** Wraps `radiusForFitDepth` with this camera's FOV/aspect and clamps to the
@@ -5969,6 +9321,11 @@ export class Renderer3D {
         standee.plane.metadata.col = e.col;
         standee.plane.metadata.row = e.row;
       }
+      // Weapon-in-hand (G6) and mount (G5) follow the entity's equipment /
+      // items each pass. Both no-op until the paladin clone exists (GLB load)
+      // and short-circuit when already in the desired state, so this is cheap.
+      this._syncStandeeWeapon(standee, e);
+      this._syncStandeeHorse(standee, e);
       // HP indicator: drawn as a circular arc rim around the floating unit
       // icon billboard (see _syncEntityIconBillboards), not the rectangular
       // bar that used to live here.
@@ -5978,11 +9335,21 @@ export class Renderer3D {
     // pass — it cleans up its meshes from the same seen-set logic.
     for (const [id, standee] of this._entityStandees) {
       if (!seen.has(id)) {
+        // Death floater is mid-rise above this standee — keep the token on
+        // screen so the "-N" reads as floating off the unit, not orphaned in
+        // space. The floater's completion callback clears the flag and
+        // disposes the standee itself.
+        if (standee?._pendingDespawn) continue;
         // Paladin clones (skeleton + animation group) must be torn down
         // explicitly — they don't cascade off the cone's dispose() call
         // because the animation group lives in scene.animationGroups, not
         // mesh.children. Dispose them first so the per-frame bone update
         // stops before the cone is gone.
+        // Dispose any x-ray ghost (meshes + cloned material) BEFORE disposing
+        // the standee meshes — the ghost is parented under the cone/cloneRoot,
+        // so the cone's dispose() would cascade-dispose the ghost meshes out
+        // from under us; tear it down explicitly + clear tracking first.
+        this._clearXrayGhostFor(id, standee);
         this._disposePaladinClone(standee);
         standee.plane.dispose();
         this._entityStandees.delete(id);
@@ -6029,7 +9396,8 @@ export class Renderer3D {
       }
       const { col, row } = hexCenter.get(k);
       const { positionByOccupantId, overflow } = tileSlotWorldPositions(
-        col, row, [...staticOcc, ...standeeOccs],
+        col, row, [...staticOcc, ...standeeOccs], HEX_RADIUS_WORLD,
+        { reservedSlots: this._roadBlockedSlotsByKey.get(k) },
       );
       for (const occ of standeeOccs) {
         const pos = positionByOccupantId.get(occ.id);
@@ -6171,6 +9539,8 @@ export class Renderer3D {
     mat.specularColor  = new BABYLON.Color3(0, 0, 0);
     const e = UNIT_HEX_OUTLINE_THIN_EMISSIVE_MUL;
     mat.emissiveColor  = new BABYLON.Color3(r * e, g * e, b * e);
+    // Hex outline highlights render at 50% opacity per operator.
+    mat.alpha = HIGHLIGHT_OVERLAY_ALPHA;
     this._thinOutlineMatCache.set(ownerKey, mat);
     return mat;
   }
@@ -6189,6 +9559,8 @@ export class Renderer3D {
     mat.specularColor  = new BABYLON.Color3(0, 0, 0);
     const e = UNIT_HEX_OUTLINE_GLOW_EMISSIVE_MUL;
     mat.emissiveColor  = new BABYLON.Color3(r * e, g * e, b * e);
+    // Hex outline highlights render at 50% opacity per operator.
+    mat.alpha = HIGHLIGHT_OVERLAY_ALPHA;
     this._thickOutlineMatCache.set(ownerKey, mat);
     return mat;
   }
@@ -6316,6 +9688,10 @@ export class Renderer3D {
     plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
     plane.isPickable    = false;
     plane.material      = mat;
+    // R7: render above all world geometry (group 2, same as the floating
+    // unit-icon billboards) so the hover label is never occluded by trees or
+    // taller buildings. Babylon clears depth between rendering groups.
+    plane.renderingGroupId = 2;
     // Sit above the building's NE-slot roof, not over the hex centre, so the
     // label visually anchors to the building rather than floating off-axis.
     const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
@@ -6340,6 +9716,27 @@ export class Renderer3D {
       // Skip the draw call entirely when fully faded — Babylon still uploads
       // the geometry for alpha=0 alpha-blended meshes, so isVisible is the
       // cheap path. setEnabled() is overkill (parent toggling overhead).
+      if (entry.plane) entry.plane.isVisible = a > 0;
+    }
+  }
+
+  /** Per-frame: fade every power-node name label by camera distance, reusing
+   *  the building-label ramp (`labelAlphaForZoom` with the same fade radii) so
+   *  node names disappear at the same zoom-out as house labels. Visibility is
+   *  the zoom alpha ANDed with the label's fog state so a fogged node never
+   *  shows its name just because the camera zoomed in. */
+  _pumpNodeLabelFade() {
+    if (!this._camera) return;
+    if (!this._nodeNameLabels || this._nodeNameLabels.length === 0) return;
+    const a = labelAlphaForZoom(
+      this._camera.radius,
+      BUILDING_LABEL_FADE_RADIUS_CLOSE,
+      BUILDING_LABEL_FADE_RADIUS_FAR,
+    );
+    for (const entry of this._nodeNameLabels) {
+      if (entry.mat) entry.mat.alpha = a;
+      // Node labels ignore fog (operator: always-visible). The label fades
+      // with zoom only.
       if (entry.plane) entry.plane.isVisible = a > 0;
     }
   }
@@ -6411,24 +9808,43 @@ export class Renderer3D {
    *  ease-in-out over FOCUS_ANIM_FRAMES (≈300ms at 60fps). Skips the
    *  animation if the shift is below FOCUS_EPSILON, or if `opts.instant`
    *  is set (used on first frame). */
+  /** Ease the camera target + radius (and optionally azimuth `alpha`) to a new
+   *  framing. Returns a Promise that RESOLVES when the ease completes (or
+   *  immediately on the instant / no-op paths) so callers can sequence work
+   *  AFTER the camera is in place — e.g. the combat arm awaits arrival before
+   *  starting the lunge so the attack never begins mid-pan. `opts.alpha` (when
+   *  finite) eases the azimuth alongside target+radius, choosing the nearest
+   *  wrap so the camera never spins the long way around; beta/tilt is left
+   *  untouched (locked at ~45°). */
   _focusCamera(newTarget, newRadius, opts = {}) {
     const BABYLON = this._babylon;
     const camera  = this._camera;
-    if (!BABYLON || !camera) return;
+    if (!BABYLON || !camera) return Promise.resolve();
+
+    const wantAlpha = Number.isFinite(opts.alpha);
+    // Nearest-wrap alpha delta so a ~180° reframe doesn't take the long arc.
+    const alphaDelta = wantAlpha
+      ? (((opts.alpha - camera.alpha + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI) - Math.PI
+      : 0;
+    const alphaTarget = camera.alpha + alphaDelta;
 
     if (opts.instant) {
       camera.target = newTarget;
       camera.radius = newRadius;
-      return;
+      if (wantAlpha) camera.alpha = alphaTarget;
+      return Promise.resolve();
     }
     // `forceAnimate` overrides the small-shift early-out — callers that drive
     // user-facing focus changes (e.g. unit selection) want the animation even
     // when the delta is tiny, so the player gets a clear visual confirmation.
+    const alphaShift = wantAlpha && Math.abs(alphaDelta) > FOCUS_EPSILON;
     if (!opts.forceAnimate
+        && !alphaShift
         && !shouldAnimateFocus(camera.target, camera.radius, newTarget, newRadius)) {
       camera.target = newTarget;
       camera.radius = newRadius;
-      return;
+      if (wantAlpha) camera.alpha = alphaTarget;
+      return Promise.resolve();
     }
 
     const ease = new BABYLON.CubicEase();
@@ -6456,8 +9872,150 @@ export class Renderer3D {
     ]);
     radiusAnim.setEasingFunction(ease);
 
+    const anims = [targetAnim, radiusAnim];
+
+    if (wantAlpha) {
+      const alphaAnim = new BABYLON.Animation(
+        'focusAlpha', 'alpha', 60,
+        BABYLON.Animation.ANIMATIONTYPE_FLOAT,
+        BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT,
+      );
+      alphaAnim.setKeys([
+        { frame: 0,                 value: camera.alpha },
+        { frame: FOCUS_ANIM_FRAMES, value: alphaTarget },
+      ]);
+      alphaAnim.setEasingFunction(ease);
+      anims.push(alphaAnim);
+    }
+
     this._scene.stopAnimation(camera);
-    this._scene.beginDirectAnimation(camera, [targetAnim, radiusAnim], 0, FOCUS_ANIM_FRAMES, false);
+    return new Promise((resolve) => {
+      this._scene.beginDirectAnimation(
+        camera, anims, 0, FOCUS_ANIM_FRAMES, false, 1, () => resolve(),
+      );
+    });
+  }
+
+  /** Resolve an entity id to its current world anchor `{ x, z }`. Prefers the
+   *  live standee position (so it tracks mid-move/lunge slides), falling back
+   *  to the entity's hex centre from game state. Returns null when neither is
+   *  available (unknown id). */
+  _entityWorldPos(id) {
+    const standee = this._entityStandees?.get(id);
+    const pos = standee?.plane?.position;
+    if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.z)) {
+      return { x: pos.x, z: pos.z };
+    }
+    const e = this.state?.entities?.find?.(en => en && en.id === id);
+    if (e && Number.isFinite(e.col) && Number.isFinite(e.row)) {
+      return hexToWorld(e.col, e.row);
+    }
+    return null;
+  }
+
+  /** Ease the camera to FRAME one or more entities — fit their collective
+   *  bounds to the viewport at the HIGHEST allowed zoom-in (closest the camera
+   *  is permitted to get, i.e. `lowerRadiusLimit`). A single entity frames at
+   *  that tightest zoom; multiple entities fit all of them with a little
+   *  padding. General-purpose mechanism reused by combat (G4) and dialog.
+   *
+   *  This is the shared, additive counterpart to the bespoke selection-focus
+   *  (`_applySelectionAndFocus`) and combat-lunge framing (`addLungeAnim`):
+   *  it reuses `_focusCamera` for the eased move and `framingForEntities` for
+   *  the centroid + fit-radius + max-zoom-clamp math, but unlike those two it
+   *  takes an explicit id list so any caller can drive it.
+   *
+   *  PERSIST / RELEASE (for G4): this method does NOT stash or auto-restore the
+   *  prior framing — once eased, the frame simply HOLDS until something else
+   *  moves the camera (a selection, a `_frameFullMap`, the next combat frame, a
+   *  manual pan/zoom). So a caller that wants the frame to persist across
+   *  consecutive combats holds it by NOT re-issuing camera moves between them,
+   *  and releases it by calling another camera op (e.g. re-select or fit-map).
+   *
+   *  `opts`:
+   *    - `forceAnimate` (default true) — animate even on a tiny shift, so the
+   *      reframe always reads as deliberate. Set false to allow the no-op
+   *      early-out.
+   *    - `instant` — snap with no animation (first-frame / test use).
+   *    - `maxZoomRadius` — override the tightest zoom (defaults to the camera's
+   *      `lowerRadiusLimit`).
+   *    - `padding` / `margin` — override the framing slack.
+   *    - `cardExtent` — extra world height to fit ABOVE the units (combat dice
+   *      cards float above the heads); loosens the radius so the card stays on
+   *      screen. See `framingForEntities`.
+   *    - `axisIds` — `[tailId, headId]` (attacker, target). When both resolve,
+   *      the camera azimuth is rotated so this world-XZ axis reads horizontal
+   *      (tail-left / head-right). Omit (or supply <2 resolvable ids) to leave
+   *      the current alpha untouched (single-combatant frame).
+   *
+   *  Returns a Promise that resolves to `true` when the frame was issued (after
+   *  the camera ease completes) or `false` when no entity resolved to a
+   *  position (so the caller can fall back). Awaiting it lets callers sequence
+   *  work — e.g. the combat lunge — only AFTER the camera is in place. */
+  frameEntities(entityIds, opts = {}) {
+    const BABYLON = this._babylon;
+    const camera  = this._camera;
+    if (!BABYLON || !camera) return Promise.resolve(false);
+
+    const ids = Array.isArray(entityIds) ? entityIds : [entityIds];
+    const positions = [];
+    for (const id of ids) {
+      const p = this._entityWorldPos(id);
+      if (p) positions.push(p);
+    }
+    if (positions.length === 0) return Promise.resolve(false);
+
+    const aspect = this._engine
+      ? this._engine.getRenderWidth() / Math.max(1, this._engine.getRenderHeight())
+      : 16 / 9;
+    const fov = camera.fov || 0.8;
+    const maxZoom = Number.isFinite(opts.maxZoomRadius)
+      ? opts.maxZoomRadius
+      : (camera.lowerRadiusLimit ?? 4);
+
+    const framing = framingForEntities(positions, {
+      aspect, fov,
+      margin:     Number.isFinite(opts.margin)     ? opts.margin     : 1.05,
+      padding:    Number.isFinite(opts.padding)    ? opts.padding    : ENTITY_FRAME_PADDING,
+      cardExtent: Number.isFinite(opts.cardExtent) ? opts.cardExtent : 0,
+    }, maxZoom);
+    if (!framing) return Promise.resolve(false);
+
+    // Rotate the camera so the attacker→target axis runs left-to-right across
+    // the screen. Only when both endpoints resolve to live positions and the
+    // axis is non-degenerate; otherwise leave alpha alone.
+    let alpha;
+    if (Array.isArray(opts.axisIds) && opts.axisIds.length >= 2) {
+      const tail = this._entityWorldPos(opts.axisIds[0]);
+      const head = this._entityWorldPos(opts.axisIds[1]);
+      if (tail && head) {
+        const a = alphaForAxis(head.x - tail.x, head.z - tail.z);
+        if (a != null) alpha = a;
+      }
+    }
+
+    // Never zoom out past the camera's max-zoom-out cap.
+    const radius = Math.min(framing.radius, camera.upperRadiusLimit ?? 200);
+    const target = new BABYLON.Vector3(framing.centerX, 0, framing.centerZ);
+    return this._focusCamera(target, radius, {
+      forceAnimate: opts.forceAnimate !== false,
+      instant:      opts.instant === true,
+      alpha,
+    }).then(() => true);
+  }
+
+  /** Frame two combatants side-by-side: fit both (plus any extra cluster ids in
+   *  `opts.extraIds`), rotate the azimuth so attacker→target reads horizontal,
+   *  and loosen the radius for the floating dice card. Thin convenience over
+   *  `frameEntities` — returns the same awaitable Promise<boolean>. */
+  frameCombatants(attackerId, targetId, opts = {}) {
+    const extra = Array.isArray(opts.extraIds) ? opts.extraIds : [];
+    const ids = [attackerId, targetId, ...extra];
+    return this.frameEntities(ids, {
+      ...opts,
+      axisIds:    [attackerId, targetId],
+      cardExtent: Number.isFinite(opts.cardExtent) ? opts.cardExtent : combatCardFrameExtent(true),
+    });
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -6667,9 +10225,21 @@ export class Renderer3D {
     this._playbackSpeedMul = mul;
   }
 
-  /** Slide the attacker's standee to the midpoint between attacker and target
-   *  hexes and hold there until `returnAllLungeAnims()` is called. Mirrors
-   *  the 2D contract: an "attack-in-progress" pose, not a one-shot. */
+  /** Slide the attacker's standee from its CURRENT position toward the target
+   *  hex, stopping LUNGE_FRACTION (~75%) of the way, and hold there until
+   *  `returnAllLungeAnims()` is called. Mirrors the 2D contract: an
+   *  "attack-in-progress" pose, not a one-shot.
+   *
+   *  Also eases the camera to the midpoint of the two hexes at a tighter
+   *  combat radius so the exchange is framed — only on the FIRST lunge of a
+   *  step (when no other lunge is in flight) to avoid camera thrash when
+   *  several lunges fire together.
+   *
+   *  When the attacker is a paladin clone, the retargeted punch clip plays
+   *  ON TOP of the position-slide (the slide closes the gap; the punch is the
+   *  strike). The slide is ALSO the standalone fallback for cone-token units
+   *  (no `paladinClone`) and for the window before punch.glb has lazily
+   *  loaded — in both cases the pure slide plays with no clip and no crash. */
   addLungeAnim(entityId, fromCol, fromRow, toCol, toRow, _type, _owner, _title) {
     if (!this._scene || !this._babylon) return;
     const standee = this._entityStandees.get(entityId);
@@ -6677,37 +10247,164 @@ export class Renderer3D {
     const BABYLON = this._babylon;
     const { x: fromX, z: fromZ } = hexToWorld(fromCol, fromRow);
     const { x: toX,   z: toZ   } = hexToWorld(toCol,   toRow);
-    const midX = (fromX + toX) * 0.5;
-    const midZ = (fromZ + toZ) * 0.5;
+
+    // Frame the combat: only when this is the first lunge of the step (the
+    // active-lunge set is still empty), so simultaneous lunges don't re-issue
+    // the focus and yoyo the camera. Eases to the world midpoint of the two
+    // hexes; the default _focusCamera early-out skips the animation when the
+    // camera already sits there (consecutive battles at the same spot).
+    // `_suppressLungeFraming` is set by the 3D cinematic combat arm, which
+    // frames the cluster itself (rotated + card-aware) and AWAITS the camera
+    // before starting the lunge — so the lunge must NOT re-issue its own
+    // midpoint/zoom focus and undo that. Fast/vfast/autoplay leave the flag
+    // false and keep this built-in lean-in.
+    const shouldFrameCombat = this._activeLungeIds.size === 0 && !this._suppressLungeFraming;
+
     const lungeSpeedMul = this._playbackSpeedMul ?? 1.0;
     const FRAMES_LUNGE = Math.max(1, Math.round(LUNGE_ANIM_MS * lungeSpeedMul * 60 / 1000));
 
     this._scene.stopAnimation(standee.plane);
     this._activeLungeIds.add(entityId);
 
-    // Face the lunge direction (same model-yaw logic as MOVE).
-    if (standee.paladinClone?.mesh && (toX !== fromX || toZ !== fromZ)) {
-      standee.paladinClone.mesh.rotation.y = Math.atan2(toX - fromX, toZ - fromZ);
+    if (shouldFrameCombat && this._camera) {
+      const midTarget = new BABYLON.Vector3((fromX + toX) * 0.5, 0, (fromZ + toZ) * 0.5);
+      const combatRadius = Math.min(
+        this._camera.radius,
+        Math.max(this._camera.lowerRadiusLimit ?? 4, COMBAT_FOCUS_RADIUS),
+      );
+      this._focusCamera(midTarget, combatRadius);
     }
 
-    standee.plane.position.x = fromX; standee.plane.position.z = fromZ;
+    // Start from the standee's CURRENT position — no pre-snap to the hex
+    // centre (that snap was the "pop" bug). Slide LUNGE_FRACTION toward the
+    // target hex world position so we close the gap without overlapping it.
+    const startX = standee.plane.position.x;
+    const startZ = standee.plane.position.z;
+    const { x: lungeX, z: lungeZ } = computeLungeTarget(
+      { x: startX, z: startZ }, { x: toX, z: toZ },
+    );
+
+    // Face the lunge direction (same model-yaw logic as MOVE) — yaw toward
+    // the actual motion vector (current → lunge end), not the hex centres.
+    if (standee.paladinClone?.mesh && (lungeX !== startX || lungeZ !== startZ)) {
+      standee.paladinClone.mesh.rotation.y = Math.atan2(lungeX - startX, lungeZ - startZ);
+    }
+
+    // Paladin attacker: throw the punch clip on top of the slide so the
+    // strike reads as a strike. Lazily kick the punch.glb load (idempotent,
+    // off the critical path) — already-resolved → plays now; first-ever
+    // combat may still be downloading, in which case this lunge is slide-only
+    // and the next one punches. Cone-token attackers (no clone) just slide.
+    if (standee.paladinClone) {
+      if (this._paladinSource?.punchGroup) this._startPaladinPunch();
+      else this._ensurePunchAnimation(this._assetsBasePath || 'assets');
+    }
+
+    // Ease-OUT: the lunge launches fast and decelerates into the strike
+    // (operator feel note — the old default linear/ease-in felt like it
+    // ramped up, which reads backwards for an attack).
+    const ease = new BABYLON.CubicEase();
+    ease.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEOUT);
 
     const animX = new BABYLON.Animation('lgX', 'position.x', 60,
       BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
-    animX.setKeys([{ frame: 0, value: fromX }, { frame: FRAMES_LUNGE, value: midX }]);
+    animX.setKeys([{ frame: 0, value: startX }, { frame: FRAMES_LUNGE, value: lungeX }]);
+    animX.setEasingFunction(ease);
     const animZ = new BABYLON.Animation('lgZ', 'position.z', 60,
       BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
-    animZ.setKeys([{ frame: 0, value: fromZ }, { frame: FRAMES_LUNGE, value: midZ }]);
+    animZ.setKeys([{ frame: 0, value: startZ }, { frame: FRAMES_LUNGE, value: lungeZ }]);
+    animZ.setEasingFunction(ease);
 
-    // Stash the "home" position on the standee so returnAllLungeAnims() knows
-    // where to slide back to without consulting the state (which may have
-    // changed by then — e.g. a follow-up move).
-    standee.lungeHome = { fromX, fromZ, midX, midZ };
+    // Stash the true pre-lunge position as "home" so returnAllLungeAnims()
+    // slides back to where the standee actually started — not a recomputed
+    // hex centre (which may be stale if the entity also moved this step).
+    standee.lungeHome = { homeX: startX, homeZ: startZ };
 
     const promise = new Promise(resolve => {
       this._scene.beginDirectAnimation(standee.plane, [animX, animZ], 0, FRAMES_LUNGE, false, 1, resolve);
     });
     this._trackAnim(promise);
+  }
+
+  /** Internal: slide a standee from its CURRENT world position to an absolute
+   *  (toX, toZ) over `durMs`, ease-out, and register the move with the active-
+   *  lunge set so `waitForAnimations()` drains it and `returnAllLungeAnims()`
+   *  slides it back. No-ops when the target is the standee's current position
+   *  (within an epsilon) — used by the defender re-centre when the defender
+   *  is already at its hex centre. */
+  _animateStandeeTo(entityId, toX, toZ, durMs = LUNGE_ANIM_MS) {
+    if (!this._scene || !this._babylon) return;
+    const standee = this._entityStandees.get(entityId);
+    if (!standee || !standee.plane) return;
+    const startX = standee.plane.position.x;
+    const startZ = standee.plane.position.z;
+    if (Math.abs(toX - startX) < 1e-4 && Math.abs(toZ - startZ) < 1e-4) return;
+    const BABYLON = this._babylon;
+    this._scene.stopAnimation(standee.plane);
+    this._activeLungeIds.add(entityId);
+    if (standee.paladinClone?.mesh) {
+      standee.paladinClone.mesh.rotation.y = Math.atan2(toX - startX, toZ - startZ);
+    }
+    const speedMul = this._playbackSpeedMul ?? 1.0;
+    const FRAMES = Math.max(1, Math.round(durMs * speedMul * 60 / 1000));
+    const ease = new BABYLON.CubicEase();
+    ease.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEOUT);
+    const animX = new BABYLON.Animation('cpX', 'position.x', 60,
+      BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+    animX.setKeys([{ frame: 0, value: startX }, { frame: FRAMES, value: toX }]);
+    animX.setEasingFunction(ease);
+    const animZ = new BABYLON.Animation('cpZ', 'position.z', 60,
+      BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+    animZ.setKeys([{ frame: 0, value: startZ }, { frame: FRAMES, value: toZ }]);
+    animZ.setEasingFunction(ease);
+    standee.lungeHome = { homeX: startX, homeZ: startZ };
+    const promise = new Promise(resolve => {
+      this._scene.beginDirectAnimation(standee.plane, [animX, animZ], 0, FRAMES, false, 1, resolve);
+    });
+    this._trackAnim(promise);
+  }
+
+  /** G2 combat positioning — place every visible participant of a battle into
+   *  a clean cluster around the defender's hex before the readout/strike
+   *  resolves. Spec (operator):
+   *    • Defender slides to its hex centre (no-op if already centred).
+   *    • The first ADVANTAGE_CAP=3 allies per side slide to the midpoint of
+   *      the edge shared with the defender's hex (= midpoint between their
+   *      hex centre and the defender's hex centre on a hex grid).
+   *    • Allies BEYOND ADVANTAGE_CAP stay put — they don't contribute dice
+   *      and shouldn't crowd the cluster.
+   *  Attacker is excluded — the caller already fired `addLungeAnim` for it.
+   *  All standee homes are stashed so `returnAllLungeAnims()` slides everyone
+   *  back to their starting hex. Used by BOTH cinematic and fast/vfast — the
+   *  readout/floater presentation differs by speed; the spatial choreography
+   *  is identical, with `durMs` compressed in the faster modes. */
+  applyCombatPositioning({ defender, attackAllies = [], defenseAllies = [] } = {}, opts = {}) {
+    if (!this._scene || !this._babylon || !defender) return;
+    const durMs = Number.isFinite(opts.durMs) ? opts.durMs : LUNGE_ANIM_MS;
+    const plan = planCombatPositions({ defender, attackAllies, defenseAllies });
+    this._animateStandeeTo(defender.id, plan.defender.x, plan.defender.z, durMs);
+    for (const a of plan.attackerAllies) {
+      if (a.moves) this._animateStandeeTo(a.id, a.toX, a.toZ, durMs);
+    }
+    for (const a of plan.defenderAllies) {
+      if (a.moves) this._animateStandeeTo(a.id, a.toX, a.toZ, durMs);
+    }
+  }
+
+  /** G1 back-compat shim — slides a single gang-up ally toward the target hex.
+   *  Now delegates to the shared positioning machinery (slides to the edge
+   *  midpoint between ally hex and target hex). Kept so legacy callers and
+   *  tests keep working; new code should call `applyCombatPositioning`. */
+  addAllyHalfLunge(entityId, _fromCol, _fromRow, toCol, toRow) {
+    if (!this._scene || !this._babylon) return;
+    const standee = this._entityStandees.get(entityId);
+    if (!standee || !standee.plane) return;
+    const startX = standee.plane.position.x;
+    const startZ = standee.plane.position.z;
+    const { x: toX, z: toZ } = hexToWorld(toCol, toRow);
+    const midX = (startX + toX) * 0.5;
+    const midZ = (startZ + toZ) * 0.5;
+    this._animateStandeeTo(entityId, midX, midZ, LUNGE_ANIM_MS);
   }
 
   /** Reverse every active lunge: slide each standee back to its home hex.
@@ -6716,17 +10413,22 @@ export class Renderer3D {
   returnAllLungeAnims() {
     if (!this._scene || !this._babylon) return;
     const BABYLON = this._babylon;
-    const FRAMES_RET = 10; // ≈170ms
+    const FRAMES_RET = 8; // ≈133ms — tightened to stay snappy vs the faster lunge
     for (const [id, standee] of this._entityStandees) {
       if (!standee.lungeHome) continue;
-      const { fromX, fromZ, midX, midZ } = standee.lungeHome;
+      const { homeX, homeZ } = standee.lungeHome;
+      // Slide back from wherever the standee currently is (the lunge end) to
+      // its true pre-lunge home — read live so a stopped/partial lunge still
+      // returns smoothly rather than jumping.
+      const curX = standee.plane.position.x;
+      const curZ = standee.plane.position.z;
       this._scene.stopAnimation(standee.plane);
       const animX = new BABYLON.Animation('lrX', 'position.x', 60,
         BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
-      animX.setKeys([{ frame: 0, value: midX }, { frame: FRAMES_RET, value: fromX }]);
+      animX.setKeys([{ frame: 0, value: curX }, { frame: FRAMES_RET, value: homeX }]);
       const animZ = new BABYLON.Animation('lrZ', 'position.z', 60,
         BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
-      animZ.setKeys([{ frame: 0, value: midZ }, { frame: FRAMES_RET, value: fromZ }]);
+      animZ.setKeys([{ frame: 0, value: curZ }, { frame: FRAMES_RET, value: homeZ }]);
       const promise = new Promise(resolve => {
         this._scene.beginDirectAnimation(standee.plane, [animX, animZ], 0, FRAMES_RET, false, 1, () => {
           standee.lungeHome = null;
@@ -6741,6 +10443,9 @@ export class Renderer3D {
   /** Immediately snap all lunging entities back home and clear lunge state.
    *  Used between rounds when we don't want the return animation to play. */
   clearAllLungeAnims(skipResolve = false) {
+    // Release the shared skeleton if a strike was mid-swing — otherwise the
+    // idle/walk toggle stays parked behind punchPlaying and the rig freezes.
+    this._stopPaladinPunch();
     if (!this._scene) {
       this._activeLungeIds.clear();
       return;
@@ -6748,8 +10453,8 @@ export class Renderer3D {
     for (const [id, standee] of this._entityStandees) {
       if (!standee.lungeHome) continue;
       this._scene.stopAnimation(standee.plane);
-      const { fromX, fromZ } = standee.lungeHome;
-      standee.plane.position.x = fromX; standee.plane.position.z = fromZ;
+      const { homeX, homeZ } = standee.lungeHome;
+      standee.plane.position.x = homeX; standee.plane.position.z = homeZ;
       standee.lungeHome = null;
       this._activeLungeIds.delete(id);
     }
@@ -6815,14 +10520,14 @@ export class Renderer3D {
 
   // ─── Attack hex flash ────────────────────────────────────────────────────
 
-  /** Briefly tint the attacker and target tiles' emissive colour red.
-   *  Restores the original material when the timeout fires so the tiles
-   *  return to their normal hue. */
-  addAttackAnim(actorCol, actorRow, targetCol, targetRow) {
-    if (!this._scene || !this._babylon) return;
-    this._flashTile(actorCol,  actorRow,  [0.45, 0.20, 0.05]); // amber actor
-    this._flashTile(targetCol, targetRow, [0.55, 0.10, 0.10]); // red target
-  }
+  /** No-op in 3D. The shared resolution loop calls addAttackAnim on both
+   *  renderers; the 2D renderer keeps its own actor/target hex tint, but the
+   *  3D path deliberately drops the tile flash (operator decision) — combat
+   *  feedback now reads entirely through the lunge + result floaters, which
+   *  the hex tint used to compete with. Kept as an empty hook for API parity
+   *  with the 2D renderer. `_flashTile` stays defined (it has its own
+   *  fog-persistence tests) but nothing in the combat path calls it now. */
+  addAttackAnim(_actorCol, _actorRow, _targetCol, _targetRow) { /* no tile flash in 3D */ }
 
   _flashTile(col, row, emissive01) {
     if (!this._scene || !this._babylon) return;
@@ -6844,7 +10549,15 @@ export class Renderer3D {
         // Defensive: tile may have been disposed (map rebuild) — only restore
         // if the tile mesh is still in the scene.
         if (!tileMesh.isDisposed?.()) {
-          tileMesh.material = original;
+          // Don't blindly slam the pre-flash material back on: the fog veil is
+          // diff-based, so if this hex's fog state changed during the ~220ms
+          // flash window (e.g. the turn resolved and the hex fell out of /
+          // into sight) the captured `original` is now stale. Restoring it
+          // desyncs the mesh from `_fogActiveSet`, and the next veil pass — a
+          // no-op since the set already says "correct" — never repaints it,
+          // leaving the hex stuck. Recompute the material from the CURRENT fog
+          // state instead so the veil and the mesh can't drift apart.
+          tileMesh.material = this._currentTileMaterial(col, row, tileMesh, original);
         }
         flashMat.dispose();
         resolve();
@@ -6853,14 +10566,45 @@ export class Renderer3D {
     this._trackAnim(promise);
   }
 
+  /** Material a tile should currently display given the live fog state. Mirrors
+   *  `_setTileFogged`'s material selection so callers that touch a tile's
+   *  material outside the veil (e.g. `_flashTile`'s delayed restore) can hand
+   *  back a fog-consistent material rather than a stale captured one. Falls
+   *  back to `fallback` when the tile isn't in state and there's no baseColor
+   *  to synthesise a colour-only material from. */
+  _currentTileMaterial(col, row, tileMesh, fallback = null) {
+    const key    = hexKey(col, row);
+    const fogged = this._fogActiveSet.has(key);
+    const tile   = this.state?.tiles?.get(key);
+    if (tile) return this._tileMaterialFor(tile, { fogged });
+    const baseColor = tileMesh?.metadata?.baseColor;
+    if (!baseColor) return fallback;
+    return fogged ? this._fogMaterialFor(baseColor) : this._materialFor(baseColor);
+  }
+
   // ─── HP-change flash + floating text ─────────────────────────────────────
 
-  /** Floating "-2" / "+1" text above a hex when an entity gains/loses HP. */
-  addHpChangeFlash(col, row, delta) {
-    if (!this._scene || !this._babylon || !delta) return;
+  /** Floating "-2" / "+1" text above a hex when an entity gains/loses HP.
+   *  The damage variant skips the backdrop pill and uses a smaller plane so
+   *  the number reads as a clean floating digit rather than a chunky chrome
+   *  sticker. When `opts.entityId` is supplied (post-battle death paths),
+   *  the matching standee is flagged `_pendingDespawn` so
+   *  `_syncEntityStandees` will not dispose it until the floater finishes
+   *  rising and fading. Returns a Promise that resolves when the floater
+   *  animation completes — also tracked via `_trackAnim` so
+   *  `waitForAnimations()` drains it inside the resolution loop. */
+  addHpChangeFlash(col, row, delta, opts = {}) {
+    if (!this._scene || !this._babylon || !delta) return Promise.resolve();
     const label = delta < 0 ? `${delta}` : `+${delta}`;
     const colour = delta < 0 ? '#ff5050' : '#60ff70';
-    this._spawnFloatingText(col, row, label, colour, 900);
+    // Operator brief: damage floater shrinks ~30% — fontScale matches the
+    // FLOAT_TEXT_DAMAGE_SIZE_MUL plane multiplier so font + plane shrink
+    // together (uniform read, no oversized text in an undersized plane).
+    return this._spawnFloatingText(col, row, label, colour, 900,
+      FLOAT_TEXT_DAMAGE_SIZE_MUL, {
+        variant: 'damage',
+        protectEntityId: opts.entityId ?? null,
+      });
   }
 
   /** Generic hex flash — used for combat result text ("HIT 2", "CRUSH 3",
@@ -6881,10 +10625,18 @@ export class Renderer3D {
     // floaters expire on their own ~700ms after spawn and they're cosmetic.
   }
 
-  _spawnFloatingText(col, row, text, hexColor = '#ffe0a0', durationMs = 700, fontScale = 1) {
-    if (typeof document === 'undefined') return;
+  _spawnFloatingText(col, row, text, hexColor = '#ffe0a0', durationMs = 700, fontScale = 1, opts = {}) {
+    if (typeof document === 'undefined') return Promise.resolve();
     const BABYLON = this._babylon;
     const { x, z } = hexToWorld(col, row);
+    const variant         = opts.variant ?? 'default';
+    const protectEntityId = opts.protectEntityId ?? null;
+    // Damage variant: ~70% plane size (operator brief — 25-30% smaller) and
+    // a backdrop-less paint. Default variant keeps the legacy chrome look
+    // used by `addFlash` (loot, fortify, ability flashes).
+    const sizeMul = variant === 'damage' ? FLOAT_TEXT_DAMAGE_SIZE_MUL : 1;
+    const planeW  = FLOAT_TEXT_PLANE_WIDTH  * sizeMul;
+    const planeH  = FLOAT_TEXT_PLANE_HEIGHT * sizeMul;
 
     const tex = new BABYLON.DynamicTexture(
       `floatTex_${Date.now()}`,
@@ -6899,11 +10651,12 @@ export class Renderer3D {
       text,
       fillColor: hexColor,
       fontScale,
+      variant,
     });
     tex.update();
 
     const plane = BABYLON.MeshBuilder.CreatePlane(`float_${col}_${row}_${Date.now()}`,
-      { width: FLOAT_TEXT_PLANE_WIDTH, height: FLOAT_TEXT_PLANE_HEIGHT }, this._scene);
+      { width: planeW, height: planeH }, this._scene);
     plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
     plane.isPickable    = false;
     // Render above all world geometry so floaters never hide behind terrain
@@ -6941,15 +10694,588 @@ export class Renderer3D {
       { frame: FRAMES_FLOAT,            value: 0 },
     ]);
 
+    // Despawn protection — if a death floater is firing for this entity,
+    // flag its standee so _syncEntityStandees defers disposal until the
+    // floater finishes rising/fading. Without this, redrawFn() called by
+    // the orchestrator right after spawning the floater would dispose the
+    // standee on the next sync and the "-N" would orphan in mid-air.
+    let protectedStandee = null;
+    if (protectEntityId != null) {
+      protectedStandee = this._entityStandees.get(protectEntityId) ?? null;
+      if (protectedStandee) protectedStandee._pendingDespawn = true;
+    }
+
     const promise = new Promise(resolve => {
       this._scene.beginDirectAnimation(plane, [animPos, animFade], 0, FRAMES_FLOAT, false, 1, () => {
         plane.dispose();
         mat.dispose();
         tex.dispose();
+        if (protectedStandee) {
+          protectedStandee._pendingDespawn = false;
+          // If the entity is no longer alive (or no longer in state), dispose
+          // the standee now — _syncEntityStandees deferred its cleanup while
+          // the floater rose. Mirrors the dispose path in _syncEntityStandees.
+          const stillAlive = this.state?.entities?.some(e => e.id === protectEntityId && e.alive);
+          if (!stillAlive && this._entityStandees.get(protectEntityId) === protectedStandee) {
+            this._clearXrayGhostFor?.(protectEntityId, protectedStandee);
+            this._disposePaladinClone?.(protectedStandee);
+            protectedStandee.plane?.dispose?.();
+            this._entityStandees.delete(protectEntityId);
+          }
+        }
+        resolve();
+      });
+    });
+    return this._trackAnim(promise);
+  }
+
+  /** G1 redesign — spawn a single big-number "combat readout" above a
+   *  combatant's head during a 3D cinematic battle. Replaces the old dice
+   *  card with a simpler, more legible primitive:
+   *
+   *    1. spawn the picked die value (e.g. "4") above the head, tinted by
+   *       side (red attacker / blue defender) with an ATK/DEF icon prefix.
+   *    2. hold ~200ms so the player registers the base roll.
+   *    3. for each contributing bonus, spawn a "+N reason" floater that
+   *       drifts up + fades while the main number ticks UP to the new
+   *       total with a brief scale pulse.
+   *    4. hold the final total ~600ms.
+   *    5. flash the winner's number GREEN and the loser's RED as both fade.
+   *
+   *  Returns a Promise that resolves when the whole sequence completes,
+   *  so callers can `Promise.all([atk, def])` for parallel attacker/defender
+   *  readouts. Also registered with `_trackAnim` so `waitForAnimations()`
+   *  drains it inside the resolution loop.
+   *
+   *  Opts:
+   *    - speedFactor:   multiplies all timings (default 1)
+   *    - attackerCol/Row, targetCol/Row: drives axis offset spreading
+   *    - setTimeoutFn:  injectable scheduler for tests
+   *    - awaitContinueFn: () => Promise — resolved when the player taps the
+   *      "Continue ▶" button (production) or immediately (tests). The fade
+   *      does NOT start until this resolves, so the final number stays on
+   *      screen at full opacity for as long as the player wants.
+   *    - baseHoldMs/stepMs/finalHoldMs/fadeMs: override defaults
+   *
+   *  Returns `{ promise, awaitFinal, triggerFade }`:
+   *    - promise — resolves when the full sequence (including fade +
+   *      disposal) completes. The returned object is itself thenable
+   *      (delegates to `promise`) for back-compat with callers that
+   *      `await` the return value directly.
+   *    - awaitFinal() — Promise resolved the moment the readout has
+   *      ticked to its final value AND the floor `finalHoldMs` has
+   *      elapsed. Callers can use this to gate UI like a Continue
+   *      button.
+   *    - triggerFade() — start the fade now. No-op if already triggered.
+   *      The internal sequence awaits this signal (or `awaitContinueFn`)
+   *      between "final reached" and "fade". */
+  addCombatReadout(entityId, side, result, opts = {}) {
+    const noop = () => {};
+    const inertHandle = () => ({
+      promise: Promise.resolve(),
+      awaitFinal: () => Promise.resolve(),
+      triggerFade: noop,
+      then(onFulfilled, onRejected) { return Promise.resolve().then(onFulfilled, onRejected); },
+    });
+    if (!this._scene || !this._babylon) return inertHandle();
+    if (typeof document === 'undefined') return inertHandle();
+    const standee = this._entityStandees.get(entityId);
+    if (!standee || !standee.plane) return inertHandle();
+    const BABYLON = this._babylon;
+
+    const model = combatReadoutModel(result, side);
+    const speedFactor = Number.isFinite(opts.speedFactor) && opts.speedFactor > 0
+      ? opts.speedFactor : 1;
+    const baseHoldMs  = (opts.baseHoldMs  ?? COMBAT_READOUT_BASE_HOLD_MS)  * speedFactor;
+    const stepMs      = (opts.stepMs      ?? COMBAT_READOUT_STEP_MS)       * speedFactor;
+    const finalHoldMs = (opts.finalHoldMs ?? COMBAT_READOUT_FINAL_HOLD_MS) * speedFactor;
+    const fadeMs      = (opts.fadeMs      ?? COMBAT_READOUT_FADE_MS)       * speedFactor;
+    const setTimeoutFn = opts.setTimeoutFn || ((fn, ms) => setTimeout(fn, ms));
+
+    // ── G1 v2: paint the readout INTO the unit-icon DynamicTexture ─────────
+    // The icon stays visible during combat and serves as the readout surface.
+    // We grab the icon entry up-front, mark it as "combat-mode" so the per-
+    // frame icon-sync doesn't fight our paints, and snapshot the portrait
+    // source so we can restore on dispose.
+    if (!this._iconCombatMode) this._iconCombatMode = new Set();
+    const iconEntry = this._unitIconBadges?.get(entityId) ?? null;
+    if (iconEntry) this._iconCombatMode.add(entityId);
+
+    // Resolve the portrait source ONCE so the basePaint closure can re-draw
+    // the same portrait under every overlay refresh (start / steps / outcome).
+    const entity = (this.state?.entities ?? []).find(e => e && e.id === entityId) ?? null;
+    const portraitSource = (entity && this._tilemapImg && this._spriteRects)
+      ? resolveUnitIconPortrait(this._tilemapImg, this._spriteRects, this._assetIdFor(entity))
+      : { img: null, rect: null, hasPortrait: false };
+    const hp    = entity?.hp ?? 0;
+    const maxHp = entity?.maxHp ?? 1;
+    const basePaint = (ctx) => paintUnitIconBadge(ctx, {
+      size: UNIT_ICON_TEX_SIZE,
+      portraitImg:  portraitSource.hasPortrait ? portraitSource.img  : null,
+      portraitRect: portraitSource.hasPortrait ? portraitSource.rect : null,
+      hp, maxHp,
+    });
+    const repaintIcon = (value, color) => {
+      if (!iconEntry) return;
+      paintIconCombatReadout(iconEntry.tex.getContext(), {
+        size: UNIT_ICON_TEX_SIZE,
+        basePaint,
+        value,
+        color,
+        icon: model.sideIcon,
+      });
+      iconEntry.tex.update();
+    };
+    // Paint the start value into the icon immediately so the readout latches
+    // on the very first frame.
+    repaintIcon(model.start, model.sideColor);
+
+    // ── Persistent floaters + result label state ───────────────────────────
+    // Stacked vertically above the icon. Slot 0 = bottom-most. The result
+    // label sits in the topmost slot, ABOVE all step floaters. None of these
+    // rise + fade individually — they park at fixed Y and fade together when
+    // Continue is pressed.
+    const iconCenterY = iconBillboardYRelativeToCone(standee.leader);
+    const iconTopY = iconCenterY + UNIT_ICON_PLANE_SIZE / 2;
+    // Push the floater stack along the attack axis (atk → behind atk,
+    // def → behind def) so the two combatants' floaters separate in screen
+    // space instead of stacking on each other at the centre.
+    const axis = computeCombatCardAxisOffset(side, opts);
+    const axisScale = COMBAT_READOUT_FLOATER_AXIS_OFFSET / CARD_AXIS_OFFSET_WORLD;
+    const floaterAxis = { x: axis.x * axisScale, z: axis.z * axisScale };
+    const slotY = (slotIdx) => iconTopY
+      + COMBAT_READOUT_FLOATER_Y_OFFSET
+      + (slotIdx + 0.5) * COMBAT_READOUT_FLOATER_PLANE_HEIGHT
+      + slotIdx * COMBAT_READOUT_FLOATER_SLOT_GAP;
+    const resultSlotY = (numFloaters) => iconTopY
+      + COMBAT_READOUT_FLOATER_Y_OFFSET
+      + numFloaters * (COMBAT_READOUT_FLOATER_PLANE_HEIGHT + COMBAT_READOUT_FLOATER_SLOT_GAP)
+      + COMBAT_READOUT_RESULT_LABEL_GAP
+      + COMBAT_READOUT_RESULT_LABEL_PLANE_HEIGHT / 2;
+
+    // Track everything that needs disposing if we abort early.
+    let disposed = false;
+    const persistents = []; // { plane, mat, tex }
+    const disposePersistents = () => {
+      for (const d of persistents) {
+        try { d.plane?.dispose(); } catch {}
+        try { d.mat?.dispose();   } catch {}
+        try { d.tex?.dispose();   } catch {}
+      }
+      persistents.length = 0;
+    };
+    const restoreIcon = () => {
+      if (!iconEntry) return;
+      if (this._iconCombatMode) this._iconCombatMode.delete(entityId);
+      // Snap-restore the icon to its normal portrait + HP ring so the next
+      // _syncEntityIconBillboards tick reads the badge as up-to-date.
+      try { basePaint(iconEntry.tex.getContext()); iconEntry.tex.update(); } catch {}
+    };
+    const disposeAll = () => {
+      if (disposed) return;
+      disposed = true;
+      disposePersistents();
+      restoreIcon();
+    };
+
+    // ── Gate plumbing ───────────────────────────────────────────────────────
+    let resolveFinal;
+    const finalReached = new Promise(r => { resolveFinal = r; });
+    let resolveContinue;
+    const continueSignal = new Promise(r => { resolveContinue = r; });
+    const triggerFade = () => { if (resolveContinue) { resolveContinue(); resolveContinue = null; } };
+    const awaitContinueFn = typeof opts.awaitContinueFn === 'function'
+      ? opts.awaitContinueFn
+      : () => Promise.resolve();
+
+    // ── Sequence ────────────────────────────────────────────────────────────
+    const promise = new Promise(resolve => {
+      // Picked-ally pulse — if the picked die came from a gang-up ally (their
+      // d6 beat the combatant's own), flash that ally's icon at the start of
+      // tick-up so the player can see the die "flow up" into the running total.
+      // Fires even if there are zero flat steps (the picked value alone is the
+      // entire roll).
+      if (model.pickedAllyId != null) {
+        setTimeoutFn(() => {
+          if (disposed) return;
+          try { this.pulseAllyIcon(model.pickedAllyId); } catch {}
+        }, baseHoldMs);
+      }
+
+      // Schedule each bonus step: repaint icon with running total + spawn
+      // the persistent floater at slot i (bottom-up stack order).
+      for (let i = 0; i < model.steps.length; i++) {
+        const step = model.steps[i];
+        const at = baseHoldMs + i * stepMs;
+        setTimeoutFn(() => {
+          if (disposed) return;
+          repaintIcon(step.value, model.sideColor);
+          const fd = this._spawnPersistentStepFloater(
+            standee, slotY(i), step, model.sideColor, floaterAxis,
+          );
+          if (fd) persistents.push(fd);
+        }, at);
+      }
+
+      // Final phase: outcome flash on icon + spawn result label + gate fade.
+      const stepsEnd = baseHoldMs + model.steps.length * stepMs;
+      const finalReachedAt = stepsEnd + finalHoldMs;
+
+      setTimeoutFn(() => {
+        if (disposed) { resolveFinal(); triggerFade(); resolve(); return; }
+        // Outcome flash on the icon's overlay number.
+        const outcomeColor = model.won ? COMBAT_READOUT_WIN_COLOR : COMBAT_READOUT_LOSE_COLOR;
+        repaintIcon(model.total, outcomeColor);
+        // Spawn the persistent result label in the topmost slot — DEFENDER
+        // SIDE ONLY. The defender's label tells the story of what happened
+        // to the target (HIT / BLOCKED / CRUSHED / COUNTERED / BLOCK / COUNTER).
+        // Both sides showing a label was visual noise; one label per combat
+        // reads cleanly.
+        if (side === 'defender' || side === 'def') {
+          const labelText = resultLabel(result, side);
+          const labelY = resultSlotY(model.steps.length);
+          // "Blocked" / "dodged" / "parried" / etc. are no-impact outcomes;
+          // muted grey matches fast-mode's addFlash colour so both speed
+          // modes communicate the same visual cue. HIT / CRUSHED / COUNTER
+          // stay on the winner-green / loser-red flash colour.
+          const labelColor = isBlockWord(labelText)
+            ? COMBAT_READOUT_BLOCK_COLOR
+            : outcomeColor;
+          const fd = this._spawnResultLabel(standee, labelY, labelText, labelColor);
+          if (fd) persistents.push(fd);
+        }
+
+        resolveFinal();
+
+        const gate = Promise.race([
+          continueSignal,
+          Promise.resolve().then(awaitContinueFn),
+        ]);
+        gate.then(() => {
+          if (disposed) { resolve(); return; }
+          // Fade out all persistent billboards (floaters + result label) in
+          // parallel via Animation on `visibility`. The icon itself is NOT
+          // faded — it snap-restores to the normal portrait once the fade
+          // completes (the badge is a persistent UI element).
+          const fps = 60;
+          const fadeFrames = Math.max(1, Math.round(fadeMs / 1000 * fps));
+          if (persistents.length === 0) {
+            disposeAll();
+            resolve();
+            return;
+          }
+          let remaining = persistents.length;
+          for (const d of persistents) {
+            const animFade = new BABYLON.Animation('readoutFade', 'visibility', fps,
+              BABYLON.Animation.ANIMATIONTYPE_FLOAT,
+              BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+            animFade.setKeys([{ frame: 0, value: 1 }, { frame: fadeFrames, value: 0 }]);
+            this._scene.beginDirectAnimation(d.plane, [animFade], 0, fadeFrames, false, 1, () => {
+              remaining -= 1;
+              if (remaining === 0) {
+                disposeAll();
+                resolve();
+              }
+            });
+          }
+        });
+      }, finalReachedAt);
+    });
+    this._trackAnim(promise);
+
+    return {
+      promise,
+      awaitFinal: () => finalReached,
+      triggerFade,
+      then(onFulfilled, onRejected) { return promise.then(onFulfilled, onRejected); },
+      catch(onRejected) { return promise.catch(onRejected); },
+      finally(onFinally) { return promise.finally(onFinally); },
+    };
+  }
+
+  /** Paint a gang-up ally's icon with the single d6 face value it contributed
+   *  to its side's advantage pool. The ally portrait is dimmed and the big
+   *  side-tinted die value is overlaid — same idiom as `paintIconCombatReadout`,
+   *  but with no result label, no floaters, and no outcome flash. The painted
+   *  state persists until the caller fires `triggerFade()` (or the optional
+   *  `awaitContinueFn` resolves), which restores the normal portrait.
+   *
+   *  Returns the same `{ promise, awaitFinal, triggerFade }` handle shape as
+   *  `addCombatReadout` so callers (combat-cinematic) can gate all readouts on
+   *  one shared Continue Promise. `awaitFinal` resolves immediately — the
+   *  ally's die value is on screen from spawn.
+   *
+   *  Pure-renderer; no game-state mutation. Safe to call with a missing icon
+   *  entry / standee — returns an inert handle. */
+  addAllyDieReadout(allyId, side, die, opts = {}) {
+    const noop = () => {};
+    const inertHandle = () => ({
+      promise: Promise.resolve(),
+      awaitFinal: () => Promise.resolve(),
+      triggerFade: noop,
+      then(onFulfilled, onRejected) { return Promise.resolve().then(onFulfilled, onRejected); },
+    });
+    if (!this._scene || !this._babylon) return inertHandle();
+    if (typeof document === 'undefined') return inertHandle();
+    if (!Number.isFinite(die)) return inertHandle();
+    const standee = this._entityStandees.get(allyId);
+    if (!standee || !standee.plane) return inertHandle();
+    const iconEntry = this._unitIconBadges?.get(allyId) ?? null;
+    if (!iconEntry) return inertHandle();
+
+    if (!this._iconCombatMode) this._iconCombatMode = new Set();
+    this._iconCombatMode.add(allyId);
+
+    const isAtk = side === 'attacker' || side === 'atk';
+    const sideColor = isAtk ? COMBAT_CARD_ATK_COLOR : COMBAT_CARD_DEF_COLOR;
+    const sideIcon  = isAtk ? '⚔' : '🛡';
+
+    const entity = (this.state?.entities ?? []).find(e => e && e.id === allyId) ?? null;
+    const portraitSource = (entity && this._tilemapImg && this._spriteRects)
+      ? resolveUnitIconPortrait(this._tilemapImg, this._spriteRects, this._assetIdFor(entity))
+      : { img: null, rect: null, hasPortrait: false };
+    const hp    = entity?.hp ?? 0;
+    const maxHp = entity?.maxHp ?? 1;
+    const basePaint = (ctx) => paintUnitIconBadge(ctx, {
+      size: UNIT_ICON_TEX_SIZE,
+      portraitImg:  portraitSource.hasPortrait ? portraitSource.img  : null,
+      portraitRect: portraitSource.hasPortrait ? portraitSource.rect : null,
+      hp, maxHp,
+    });
+    paintIconCombatReadout(iconEntry.tex.getContext(), {
+      size: UNIT_ICON_TEX_SIZE,
+      basePaint,
+      value: die,
+      color: sideColor,
+      icon: sideIcon,
+    });
+    iconEntry.tex.update();
+
+    let resolveContinue;
+    const continueSignal = new Promise(r => { resolveContinue = r; });
+    const triggerFade = () => {
+      if (resolveContinue) { resolveContinue(); resolveContinue = null; }
+    };
+    const awaitContinueFn = typeof opts.awaitContinueFn === 'function'
+      ? opts.awaitContinueFn
+      : () => Promise.resolve();
+
+    const promise = new Promise(resolve => {
+      const gate = Promise.race([
+        continueSignal,
+        Promise.resolve().then(awaitContinueFn),
+      ]);
+      gate.then(() => {
+        try {
+          if (this._iconCombatMode) this._iconCombatMode.delete(allyId);
+          basePaint(iconEntry.tex.getContext());
+          iconEntry.tex.update();
+        } catch {}
         resolve();
       });
     });
     this._trackAnim(promise);
+
+    return {
+      promise,
+      awaitFinal: () => Promise.resolve(),
+      triggerFade,
+      then(onFulfilled, onRejected) { return promise.then(onFulfilled, onRejected); },
+      catch(onRejected) { return promise.catch(onRejected); },
+      finally(onFinally) { return promise.finally(onFinally); },
+    };
+  }
+
+  /** Briefly scale-pulse a unit-icon plane (1 → peak → 1) to signal that the
+   *  die showing on this ally is the one the combatant's running total just
+   *  inherited. Pure visual; no state mutation. Skips silently when the icon
+   *  badge isn't materialised (e.g. a fatal hit already disposed it). */
+  pulseAllyIcon(allyId, opts = {}) {
+    if (!this._scene || !this._babylon) return Promise.resolve();
+    const BABYLON = this._babylon;
+    const iconEntry = this._unitIconBadges?.get(allyId) ?? null;
+    if (!iconEntry || !iconEntry.plane) return Promise.resolve();
+    const plane = iconEntry.plane;
+    if (!plane.scaling || typeof plane.scaling.set !== 'function') return Promise.resolve();
+    const peak     = Number.isFinite(opts.peak)      ? opts.peak      : COMBAT_ALLY_PULSE_PEAK;
+    const durMs    = Number.isFinite(opts.durationMs) ? opts.durationMs : COMBAT_ALLY_PULSE_MS;
+    const fps      = 60;
+    const halfFrames = Math.max(1, Math.round((durMs / 2) / 1000 * fps));
+    const total      = halfFrames * 2;
+    const baseX = plane.scaling.x, baseY = plane.scaling.y, baseZ = plane.scaling.z;
+    const animScale = new BABYLON.Animation(
+      'allyIconPulse', 'scaling', fps,
+      BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
+      BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT,
+    );
+    animScale.setKeys([
+      { frame: 0,           value: new BABYLON.Vector3(baseX, baseY, baseZ) },
+      { frame: halfFrames,  value: new BABYLON.Vector3(baseX * peak, baseY * peak, baseZ * peak) },
+      { frame: total,       value: new BABYLON.Vector3(baseX, baseY, baseZ) },
+    ]);
+    return new Promise(resolve => {
+      this._scene.beginDirectAnimation(plane, [animScale], 0, total, false, 1, () => resolve());
+    });
+  }
+
+  /** G1 v2 — spawn a persistent "+N reason" floater that parks at a fixed
+   *  slot above the icon and stays visible until the parent fade-out runs.
+   *  Returns `{ plane, mat, tex }` so the caller can fade + dispose it. */
+  _spawnPersistentStepFloater(standee, centreY, step, sideColor, axisOffset) {
+    if (!this._scene || !this._babylon) return null;
+    const BABYLON = this._babylon;
+    const sign = step.delta < 0 ? '−' : '+';
+    const mag = Math.abs(step.delta | 0);
+    // Plain-text reason label — no emoji glyphs. Side tint (red attacker /
+    // blue defender) so the floater visually belongs to its combatant; a
+    // negative delta is communicated by the leading minus glyph.
+    const label = `${sign}${mag} ${step.label ?? ''}`.trim();
+    const color = sideColor || COMBAT_READOUT_WIN_COLOR;
+
+    const tex = new BABYLON.DynamicTexture(
+      `readoutFloaterTex_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      { width: COMBAT_READOUT_FLOATER_TEX_WIDTH, height: COMBAT_READOUT_FLOATER_TEX_HEIGHT },
+      this._scene,
+      false,
+    );
+    tex.hasAlpha = true;
+    paintReadoutFloater(tex.getContext(), {
+      width:  COMBAT_READOUT_FLOATER_TEX_WIDTH,
+      height: COMBAT_READOUT_FLOATER_TEX_HEIGHT,
+      label,
+      color,
+    });
+    tex.update();
+
+    const plane = BABYLON.MeshBuilder.CreatePlane(
+      `readoutFloater_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      { width: COMBAT_READOUT_FLOATER_PLANE_WIDTH, height: COMBAT_READOUT_FLOATER_PLANE_HEIGHT },
+      this._scene,
+    );
+    plane.billboardMode    = BABYLON.Mesh.BILLBOARDMODE_ALL;
+    plane.isPickable       = false;
+    plane.renderingGroupId = 2;
+
+    const mat = new BABYLON.StandardMaterial(`readoutFloaterMat_${plane.uniqueId}`, this._scene);
+    mat.diffuseTexture = tex;
+    mat.opacityTexture = tex;
+    applyFlatUnitIconMaterial(BABYLON, mat);
+    plane.material = mat;
+
+    plane.parent = standee.plane;
+    // Persistent: parked at the assigned slot Y, pushed outward along the
+    // attack axis so atk-side floaters sit on the attacker's outer side and
+    // def-side floaters on the defender's. No-op {0,0} for non-combat callers.
+    const dx = (axisOffset && Number.isFinite(axisOffset.x)) ? axisOffset.x : 0;
+    const dz = (axisOffset && Number.isFinite(axisOffset.z)) ? axisOffset.z : 0;
+    plane.position.set(dx, centreY, dz);
+    plane.visibility = 1;
+    return { plane, mat, tex };
+  }
+
+  /** G1 v2 — spawn the persistent RESULT label billboard (HIT / BLOCKED /
+   *  CRUSH / COUNTERED / …) at the topmost slot. Bigger + bolder than the
+   *  per-bonus floaters so the outcome word reads from across the screen. */
+  _spawnResultLabel(standee, centreY, label, color) {
+    if (!this._scene || !this._babylon) return null;
+    const BABYLON = this._babylon;
+    const tex = new BABYLON.DynamicTexture(
+      `readoutResultTex_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      { width: COMBAT_READOUT_RESULT_LABEL_TEX_WIDTH, height: COMBAT_READOUT_RESULT_LABEL_TEX_HEIGHT },
+      this._scene,
+      false,
+    );
+    tex.hasAlpha = true;
+    paintReadoutFloater(tex.getContext(), {
+      width:  COMBAT_READOUT_RESULT_LABEL_TEX_WIDTH,
+      height: COMBAT_READOUT_RESULT_LABEL_TEX_HEIGHT,
+      label,
+      color,
+    });
+    tex.update();
+
+    const plane = BABYLON.MeshBuilder.CreatePlane(
+      `readoutResult_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      { width: COMBAT_READOUT_RESULT_LABEL_PLANE_WIDTH, height: COMBAT_READOUT_RESULT_LABEL_PLANE_HEIGHT },
+      this._scene,
+    );
+    plane.billboardMode    = BABYLON.Mesh.BILLBOARDMODE_ALL;
+    plane.isPickable       = false;
+    plane.renderingGroupId = 2;
+
+    const mat = new BABYLON.StandardMaterial(`readoutResultMat_${plane.uniqueId}`, this._scene);
+    mat.diffuseTexture = tex;
+    mat.opacityTexture = tex;
+    applyFlatUnitIconMaterial(BABYLON, mat);
+    plane.material = mat;
+
+    plane.parent = standee.plane;
+    plane.position.set(0, centreY, 0);
+    plane.visibility = 1;
+    return { plane, mat, tex };
+  }
+
+  // ─── Combat outcome: winner/loser visual cue ─────────────────────────────
+
+  /** G1: punch up the outcome of a combat by scaling the winner standee up
+   *  briefly (a "triumph" pop) and the loser down (a "stagger" shrink) at
+   *  the moment the dice resolve. Pure visual — no state mutation, no
+   *  position changes (lunge stays parked at its impact pose). Each standee
+   *  scale animates from current → target → 1.0 over `holdMs + restoreMs`
+   *  so the cue is read by the player without leaving the unit at the wrong
+   *  size if the next animation hasn't started yet.
+   *
+   *  Skips silently when either standee is missing (e.g. a fatal hit already
+   *  triggered fade/dispose). Caller may pass either id as null/undefined
+   *  to do only one side. */
+  addCombatOutcomeCue(winnerId, loserId, opts = {}) {
+    if (!this._scene || !this._babylon) return Promise.resolve();
+    const BABYLON = this._babylon;
+    const holdMs    = Number.isFinite(opts.holdMs)    ? opts.holdMs    : 380;
+    const restoreMs = Number.isFinite(opts.restoreMs) ? opts.restoreMs : 220;
+    const winnerScale = Number.isFinite(opts.winnerScale) ? opts.winnerScale : 1.25;
+    const loserScale  = Number.isFinite(opts.loserScale)  ? opts.loserScale  : 0.75;
+
+    const promises = [];
+    const animateStandee = (id, peakScale) => {
+      if (id == null) return;
+      const standee = this._entityStandees.get(id);
+      if (!standee || !standee.plane) return;
+      const plane = standee.plane;
+      const fps = 60;
+      const holdFrames    = Math.max(1, Math.round(holdMs    / 1000 * fps));
+      const restoreFrames = Math.max(1, Math.round(restoreMs / 1000 * fps));
+      const total = holdFrames + restoreFrames;
+      const baseX = plane.scaling.x;
+      const baseY = plane.scaling.y;
+      const baseZ = plane.scaling.z;
+      const animScale = new BABYLON.Animation(
+        'combatOutcomeScale', 'scaling', fps,
+        BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
+        BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT,
+      );
+      animScale.setKeys([
+        { frame: 0, value: new BABYLON.Vector3(baseX, baseY, baseZ) },
+        { frame: holdFrames, value: new BABYLON.Vector3(baseX * peakScale, baseY * peakScale, baseZ * peakScale) },
+        { frame: total, value: new BABYLON.Vector3(baseX, baseY, baseZ) },
+      ]);
+      const ease = new BABYLON.CubicEase();
+      ease.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEOUT);
+      animScale.setEasingFunction(ease);
+      const p = new Promise(resolve => {
+        this._scene.beginDirectAnimation(plane, [animScale], 0, total, false, 1, () => {
+          plane.scaling.x = baseX;
+          plane.scaling.y = baseY;
+          plane.scaling.z = baseZ;
+          resolve();
+        });
+      });
+      this._trackAnim(p);
+      promises.push(p);
+    };
+    animateStandee(winnerId, winnerScale);
+    animateStandee(loserId,  loserScale);
+    return Promise.all(promises);
   }
 
   // ─── Reaction effects: Sound Horn ring + Power-Node-Discovered burst ────
@@ -7123,6 +11449,10 @@ export class Renderer3D {
       let entry = this._unitIconBadges.get(e.id);
       if (!entry) entry = this._createUnitIconBadge(standee, e);
       if (!entry) continue;
+      // G1 v2: skip repainting icons that addCombatReadout is actively driving
+      // (combat-mode overlay). The readout's own paint path owns the texture
+      // until it restores the portrait on fade.
+      if (this._iconCombatMode?.has(e.id)) continue;
       const assetId = this._assetIdFor(e);
       // Recompute portrait availability each tick so badges painted before
       // the tilemap finished loading get a real portrait the moment the
@@ -7144,8 +11474,13 @@ export class Renderer3D {
       entry.lastHadPortrait  = portraitSource.hasPortrait;
     }
     // Dispose badges for entities that no longer exist or just died.
+    // G1 v2: skip entities mid-combat-readout — the readout drives the icon
+    // texture and tracks lifetime itself. Disposing under it would leave the
+    // running fade animations pointing at a dead texture.
     for (const id of [...this._unitIconBadges.keys()]) {
-      if (!seen.has(id)) this._disposeUnitIconBadge(id);
+      if (seen.has(id)) continue;
+      if (this._iconCombatMode?.has(id)) continue;
+      this._disposeUnitIconBadge(id);
     }
   }
 
@@ -7153,14 +11488,22 @@ export class Renderer3D {
     const BABYLON = this._babylon;
     const scene   = this._scene;
     if (!BABYLON || !scene || typeof document === 'undefined') return null;
+    // Mipmaps + trilinear + anisotropic filtering kills the aliasing/shimmer
+    // the badge had at far zoom (R3). UNIT_ICON_TEX_SIZE is now power-of-two
+    // (256²) so the mipmap chain is clean.
     const tex = new BABYLON.DynamicTexture(
       `unitIconTex_${entity.id}`,
       { width: UNIT_ICON_TEX_SIZE, height: UNIT_ICON_TEX_SIZE },
       scene,
-      /* generateMipMaps */ false,
+      /* generateMipMaps */ true,
+      BABYLON.Texture.TRILINEAR_SAMPLINGMODE,
     );
     tex.hasAlpha = true;
-    tex.updateSamplingMode(BABYLON.Texture.BILINEAR_SAMPLINGMODE);
+    tex.updateSamplingMode(BABYLON.Texture.TRILINEAR_SAMPLINGMODE);
+    if (typeof tex.anisotropicFilteringLevel === 'number'
+        || 'anisotropicFilteringLevel' in tex) {
+      tex.anisotropicFilteringLevel = 4;
+    }
     const mat = new BABYLON.StandardMaterial(`unitIconMat_${entity.id}`, scene);
     mat.diffuseTexture = tex;
     mat.opacityTexture = tex;
@@ -7325,6 +11668,12 @@ export class Renderer3D {
         ribbon.parent     = this._mapRoot;
         ribbon.material   = this._highlightMaterialFor(ov.kind, color);
         ribbon.isPickable = false;
+        // Pin a stable transparent-sort index (these fills are always alpha-
+        // blended at HIGHLIGHT_OVERLAY_ALPHA). Base + nestedIndex so two fills
+        // stacked on one hex (e.g. a valid-move hex that is also a target) keep
+        // a fixed order instead of distance-sorting and popping as the combat
+        // camera pans. See OVERLAY_HIGHLIGHT_DISC_ALPHA_INDEX.
+        ribbon.alphaIndex = OVERLAY_HIGHLIGHT_DISC_ALPHA_INDEX + nestedIndex;
         this._highlightMeshes.push(ribbon);
       }
     });
@@ -7369,7 +11718,8 @@ export class Renderer3D {
         if (css.startsWith('#')) { rgb = cssHexToRgb01(css); alpha = 1; }
         else { const p = parseRgba01(css); rgb = [p[0], p[1], p[2]]; alpha = p[3]; }
       }
-      return { id, ov, glow, rgb, alpha, y: yForLayer('selection', i) };
+      return { id, ov, glow, rgb, alpha, y: yForLayer('selection', i),
+               aidx: OVERLAY_SELECTION_ALPHA_INDEX + i };
     });
 
     let sig = '';
@@ -7384,7 +11734,7 @@ export class Renderer3D {
     if (resolved.length === 0) return;
 
     const BABYLON = this._babylon;
-    for (const { id, ov, glow, rgb, alpha, y } of resolved) {
+    for (const { id, ov, glow, rgb, alpha, y, aidx } of resolved) {
       const tube = glow ? UNIT_HEX_OUTLINE_THICK_TUBE : UNIT_HEX_OUTLINE_THIN_TUBE;
       const emissiveMul = glow
         ? UNIT_HEX_OUTLINE_GLOW_EMISSIVE_MUL
@@ -7409,6 +11759,12 @@ export class Renderer3D {
         ring.material       = material;
         ring.isPickable     = false;
         ring.renderingGroupId = 0;
+        // Pin a stable transparent-sort index ONLY for the transparent rings
+        // (the hover ring at alpha < 1). The selected-unit ring is opaque
+        // (alpha 1) so the opaque pass ignores alphaIndex — leave it default.
+        // Without this the hover ring distance-sorts against the highlight /
+        // plan overlays and pops as the combat camera moves.
+        if (alpha < 1) ring.alphaIndex = aidx;
         this._selectionOverlayMeshes.push(ring);
       }
     }
@@ -7647,6 +12003,11 @@ export class Renderer3D {
       discMat.specularColor = new BABYLON.Color3(0, 0, 0);
       discMat.alpha = PLAN_DISC_ALPHA;
       disc.material = discMat;
+      // The puck is alpha-blended (PLAN_DISC_ALPHA < 1). Pin its transparent-
+      // sort index above the highlight fills so it keeps a fixed order over
+      // them rather than distance-sorting and popping as the combat camera
+      // pans. See OVERLAY_PLAN_ARROW_ALPHA_INDEX.
+      disc.alphaIndex = OVERLAY_PLAN_ARROW_ALPHA_INDEX;
 
       // Numbered badge above the puck — small billboarded plane.
       let badge = null, badgeMat = null, badgeTex = null;
@@ -7682,6 +12043,10 @@ export class Renderer3D {
         badge.isPickable    = false;
         badge.material      = badgeMat;
         badge.position.set(tx, 0.6, tz);
+        // Transparent (alpha texture). Pin just above the puck so the numbered
+        // badge stays layered over its own marker and the highlight fills,
+        // camera-angle-independent. See OVERLAY_PLAN_BADGE_ALPHA_INDEX.
+        badge.alphaIndex = OVERLAY_PLAN_BADGE_ALPHA_INDEX;
       }
 
       this._planArrowMeshes.push({ disc, discMat, badge, badgeMat, badgeTex });
@@ -8099,6 +12464,436 @@ export class Renderer3D {
     }
   }
 
+  /** Resolve (and cache) the faction-coloured `BABYLON.Color3` for an entity's
+   *  x-ray outline. Keyed by the css hex so two units of the same owner share
+   *  one Color3 — assigned to `mesh.outlineColor` (a per-mesh property), so
+   *  this is purely an allocation cache (no shared material is mutated). */
+  _xrayColorFor(entity) {
+    const key = factionOutlineColor(entity);
+    let c = this._xrayColorCache.get(key);
+    if (!c) {
+      const [r, g, b] = cssHexToRgb01(key);
+      c = new this._babylon.Color3(r, g, b);
+      this._xrayColorCache.set(key, c);
+    }
+    return c;
+  }
+
+  /** The meshes that carry a standee's visible silhouette — cloned by
+   *  `_buildXrayGhost` to build the ghost: the paladin clone's child meshes when
+   *  it's loaded (the cone+sphere are hidden at visibility 0 in that case),
+   *  otherwise the cone (`plane`) + sphere head. */
+  _xrayMeshesForStandee(standee) {
+    if (!standee) return [];
+    const clone = standee.paladinClone;
+    if (clone && Array.isArray(clone.childMeshes) && clone.childMeshes.length) {
+      return clone.childMeshes.filter(Boolean);
+    }
+    const out = [];
+    if (standee.plane)  out.push(standee.plane);
+    if (standee.sphere) out.push(standee.sphere);
+    return out;
+  }
+
+  /** Build a per-ghost StandardMaterial. `kind` is `'mask'` (stencil-only
+   *  footprint stamp — no colour, depthFunction ALWAYS, writes XRAY_STENCIL_REF)
+   *  or `'ring'` (flat emissive faction edge — depthFunction GREATER, stencil
+   *  func NOTEQUAL so it only draws OUTSIDE the masked body footprint). Returns
+   *  null if StandardMaterial isn't available (defensive — never on real
+   *  Babylon). Materials are CLONED per ghost, never a shared material mutated. */
+  _buildXrayMaterial(kind, id, color) {
+    const BABYLON = this._babylon;
+    if (!BABYLON || typeof BABYLON.StandardMaterial !== 'function') return null;
+    const C = BABYLON.Constants || {};
+    const FUNC_ALWAYS   = C.ALWAYS   ?? XRAY_MASK_DEPTH_FUNC;  // 519
+    const FUNC_GREATER  = C.GREATER  ?? XRAY_GHOST_DEPTH_FUNC; // 516
+    const FUNC_NOTEQUAL = C.NOTEQUAL ?? 517;
+    const OP_REPLACE    = C.REPLACE  ?? 7681;
+    const OP_KEEP       = C.KEEP     ?? 7680;
+
+    const mat = new BABYLON.StandardMaterial(`xray${kind === 'mask' ? 'Mask' : 'Ring'}_${id}`, this._scene || null);
+    mat.disableLighting = true;
+    if (BABYLON.Color3) {
+      mat.diffuseColor  = new BABYLON.Color3(0, 0, 0);
+      mat.specularColor = new BABYLON.Color3(0, 0, 0);
+    }
+    // Front faces only — the ring's silhouette is its front-face boundary; the
+    // mask's footprint is likewise its front-face coverage.
+    mat.backFaceCulling = true;
+    mat.fogEnabled = false;
+    // alpha < 1 → transparent sub-pass (drawn after opaque world geometry, so
+    // the occluder depth is present for the GREATER test).
+    mat.alpha = XRAY_GHOST_ALPHA;
+    mat.disableDepthWrite = true;
+
+    if (kind === 'mask') {
+      // Stencil-only: stamp the unit's full 2D footprint (depth ALWAYS) into the
+      // stencil so the ring can subtract the body interior. Writes no colour.
+      mat.disableColorWrite = true;
+      mat.depthFunction = FUNC_ALWAYS;
+      if (mat.stencil) {
+        mat.stencil.enabled  = true;
+        mat.stencil.func     = FUNC_ALWAYS;          // always pass → stamp everywhere covered
+        mat.stencil.funcRef  = XRAY_STENCIL_REF;
+        mat.stencil.mask     = XRAY_STENCIL_REF;     // WRITE mask — touch only our bit
+        mat.stencil.opStencilDepthPass = OP_REPLACE; // set the bit where drawn
+        mat.stencil.opStencilFail = OP_KEEP;
+        mat.stencil.opDepthFail   = OP_KEEP;
+      }
+    } else {
+      // Ring: flat faction colour, drawn only where BEHIND scene geometry
+      // (depth GREATER) AND outside the masked body footprint (stencil NOTEQUAL).
+      // Use an INDEPENDENT Color3 instance (not the shared cache entry) so the
+      // per-ghost fade can ramp this material's emissive 0→full without touching
+      // the cached colour or a sibling unit's ring.
+      if (color && BABYLON.Color3) mat.emissiveColor = new BABYLON.Color3(color.r, color.g, color.b);
+      else if (color) mat.emissiveColor = color;
+      mat.depthFunction = FUNC_GREATER;
+      if (mat.stencil) {
+        mat.stencil.enabled  = true;
+        mat.stencil.func     = FUNC_NOTEQUAL;        // draw where bit NOT set
+        mat.stencil.funcRef  = XRAY_STENCIL_REF;
+        mat.stencil.funcMask = XRAY_STENCIL_REF;     // READ mask — test only our bit
+        mat.stencil.opStencilDepthPass = OP_KEEP;    // read-only; never modify the buffer
+        mat.stencil.opStencilFail = OP_KEEP;
+        mat.stencil.opDepthFail   = OP_KEEP;
+      }
+    }
+    return mat;
+  }
+
+  /** Clone one x-ray layer (mask or ring) from a standee's source meshes,
+   *  applying `material`, `alphaIndex` (transparent draw order), and uniform
+   *  `scale` (ring hull expansion; 1 for the mask). Skinned-paladin safety is
+   *  the same proven path as the live clone: clone each child mesh and SHARE the
+   *  source skeleton (never clone it — that caused the historical T-pose /
+   *  giant-head bugs); the clone keeps the source's parent (cloneRoot) so the
+   *  transform tracks for free. The cone (`plane`) is moved directly via its
+   *  position, so its clone is re-parented under the live cone at identity (then
+   *  scaled) to track; the sphere is a child of the cone and tracks for free.
+   *  Every clone starts disabled — the pump enables it on occlusion. */
+  _cloneXrayLayer(srcMeshes, standee, { id, layer, material, alphaIndex, scale, usesPaladin, sharedSkeleton }) {
+    const BABYLON = this._babylon;
+    const out = [];
+    for (const src of srcMeshes) {
+      if (!src || typeof src.clone !== 'function') continue;
+      // doNotCloneChildren=true: the cone owns the sphere as a child, so a deep
+      // clone would duplicate the sphere (which we clone separately). Paladin
+      // child clones are flat siblings, so the flag is a harmless no-op there.
+      const ghost = src.clone(`xray${layer}_${id}_${src.name || 'm'}`, undefined, true);
+      if (!ghost) continue;
+      out.push(ghost);
+      if (material) ghost.material = material;
+      ghost.isPickable = false;
+      if ('renderingGroupId' in ghost) ghost.renderingGroupId = XRAY_GHOST_GROUP;
+      ghost.alphaIndex = alphaIndex;
+      // Skinning can push verts past the cached bbox — defeat bbox culling so
+      // the ghost silhouette never drops a limb (same fix as the live clone).
+      ghost.alwaysSelectAsActiveMesh = true;
+      if (usesPaladin) {
+        if (sharedSkeleton) ghost.skeleton = sharedSkeleton;
+        // clone() kept src's parent (cloneRoot) → transform tracks for free.
+      } else if (src === standee.plane) {
+        // Re-parent the cone clone under the live cone at identity so it tracks
+        // the cone's per-frame position.
+        if ('parent' in ghost) ghost.parent = standee.plane;
+        if (BABYLON.Vector3) {
+          ghost.position = BABYLON.Vector3.Zero();
+          ghost.rotation = BABYLON.Vector3.Zero();
+          ghost.scaling  = new BABYLON.Vector3(1, 1, 1);
+        }
+      }
+      // Expand the ring hull (scale > 1) so the annulus between it and the real
+      // silhouette is the visible outline. The mask layer uses scale 1.
+      if (scale !== 1 && ghost.scaling) {
+        ghost.scaling.x *= scale;
+        ghost.scaling.y *= scale;
+        ghost.scaling.z *= scale;
+      }
+      if (typeof ghost.setEnabled === 'function') ghost.setEnabled(false);
+    }
+    return out;
+  }
+
+  /** Lazily build (and cache on the standee as `standee.xrayGhost`) the x-ray
+   *  occlusion outline: TWO cloned layers of the unit's visible meshes —
+   *   • MASK (unexpanded, `_buildXrayMaterial('mask')`) — stamps the body
+   *     footprint into the stencil; drawn first (lower alphaIndex).
+   *   • RING (expanded by XRAY_OUTLINE_SCALE, `_buildXrayMaterial('ring')`) —
+   *     the flat faction-colour edge, drawn only where the hull is behind scene
+   *     geometry (depth GREATER) AND outside the masked footprint (stencil
+   *     NOTEQUAL) → a hollow ring confined to the occluded region.
+   *
+   *  Both materials are cloned per ghost (never a shared material mutated), and
+   *  both layers share the source skeleton so the outline tracks the unit's
+   *  pose. See the XRAY_* constants block for the full rationale. */
+  _buildXrayGhost(standee, entity) {
+    if (!standee) return null;
+    if (standee.xrayGhost) return standee.xrayGhost;
+    const BABYLON = this._babylon;
+    if (!BABYLON) return null;
+    const srcMeshes = this._xrayMeshesForStandee(standee);
+    if (!srcMeshes.length) return null;
+
+    const id = entity?.id ?? 'x';
+    const colorKey = factionOutlineColor(entity);
+    const color = this._xrayColorFor(entity);
+
+    const maskMat = this._buildXrayMaterial('mask', id, color);
+    const ringMat = this._buildXrayMaterial('ring', id, color);
+
+    const usesPaladin = !!(standee.paladinClone
+      && Array.isArray(standee.paladinClone.childMeshes)
+      && standee.paladinClone.childMeshes.length);
+    const sharedSkeleton = usesPaladin
+      ? (this._paladinSource?.skeleton || standee.paladinClone.skinnedMesh?.skeleton || null)
+      : null;
+
+    const maskMeshes = this._cloneXrayLayer(srcMeshes, standee, {
+      id, layer: 'Mask', material: maskMat, alphaIndex: XRAY_MASK_ALPHA_INDEX,
+      scale: 1, usesPaladin, sharedSkeleton,
+    });
+    const ringMeshes = this._cloneXrayLayer(srcMeshes, standee, {
+      id, layer: 'Ring', material: ringMat, alphaIndex: XRAY_RING_ALPHA_INDEX,
+      scale: XRAY_OUTLINE_SCALE, usesPaladin, sharedSkeleton,
+    });
+
+    const meshes = [...maskMeshes, ...ringMeshes];
+    if (!meshes.length) {
+      for (const m of [maskMat, ringMat]) {
+        if (m && typeof m.dispose === 'function') { try { m.dispose(); } catch { /* gone */ } }
+      }
+      return null;
+    }
+
+    standee.xrayGhost = {
+      meshes,
+      maskMeshes,
+      ringMeshes,
+      maskMaterial: maskMat,
+      ringMaterial: ringMat,
+      materials: [maskMat, ringMat].filter(Boolean),
+      colorKey,
+      // Fade state (see `_startXrayFade` / `_pumpXrayFades`). `ringBaseColor` is
+      // the full-strength emissive the ring fades toward; `fadeFactor` is the
+      // current 0..1 ramp; `fade` is the in-flight tween descriptor (null when
+      // steady). A freshly built ghost is fully off until the pump fades it in.
+      ringBaseColor: color ? { r: color.r, g: color.g, b: color.b } : { r: 1, g: 1, b: 1 },
+      fadeFactor: 0,
+      fade: null,
+    };
+    this._applyXrayRingFade(standee.xrayGhost, 0);
+    return standee.xrayGhost;
+  }
+
+  /** Enable a standee's x-ray ghost, building it lazily the first time the unit
+   *  becomes occluded. Recolours by rebuilding if the cached colour is stale
+   *  (owner change — rare). */
+  _enableXrayGhostFor(standee, entity) {
+    if (!standee) return;
+    if (standee.xrayGhost && standee.xrayGhost.colorKey !== factionOutlineColor(entity)) {
+      this._disposeXrayGhost(standee);
+    }
+    const ghost = standee.xrayGhost || this._buildXrayGhost(standee, entity);
+    if (!ghost) return;
+    for (const m of ghost.meshes) {
+      if (m && typeof m.setEnabled === 'function') m.setEnabled(true);
+    }
+  }
+
+  /** Toggle a standee's ghost meshes on/off (no build, no dispose). */
+  _setXrayGhostEnabled(standee, on) {
+    const ghost = standee?.xrayGhost;
+    if (!ghost) return;
+    for (const m of ghost.meshes) {
+      if (m && typeof m.setEnabled === 'function') m.setEnabled(!!on);
+    }
+  }
+
+  /** Apply a fade factor `f` (0..1) to a ghost's RING layer ONLY: ramp the
+   *  emissive 0→full and the alpha 0→XRAY_GHOST_ALPHA. The MASK layer is left
+   *  untouched (it writes no colour — `disableColorWrite` — and stays at full
+   *  alpha so the hollow-ring stencil keeps working through the whole fade). */
+  _applyXrayRingFade(ghost, f) {
+    if (!ghost) return;
+    const k = Math.min(1, Math.max(0, f));
+    ghost.fadeFactor = k;
+    const mat = ghost.ringMaterial;
+    if (!mat) return;
+    mat.alpha = XRAY_GHOST_ALPHA * k;
+    const base = ghost.ringBaseColor;
+    if (base && mat.emissiveColor) {
+      mat.emissiveColor.r = base.r * k;
+      mat.emissiveColor.g = base.g * k;
+      mat.emissiveColor.b = base.b * k;
+    }
+  }
+
+  /** Kick off a ring fade on a standee's ghost. `dir` is `'in'` (occluded —
+   *  ramp 0→full) or `'out'` (un-occluded / fog-hidden — ramp full→0, then the
+   *  pump disables the meshes). Ramps from the CURRENT factor so a fade that
+   *  reverses mid-flight (occlude→clear→occlude) glides smoothly instead of
+   *  snapping. Registers the ghost in `_xrayFading` so `_pumpXrayFades` ticks
+   *  it; steady-state ghosts aren't in the map (no per-frame churn). */
+  _startXrayFade(standee, id, dir) {
+    const ghost = standee?.xrayGhost;
+    if (!ghost) return;
+    const from = typeof ghost.fadeFactor === 'number' ? ghost.fadeFactor : (dir === 'in' ? 0 : 1);
+    ghost.fade = { dir, from, startMs: this._nowMs(), durMs: XRAY_FADE_MS };
+    this._applyXrayRingFade(ghost, from);
+    this._xrayFading.set(id, standee);
+  }
+
+  /** Per-frame: advance every in-flight ring fade. Cheap — iterates only ghosts
+   *  mid-transition (a handful), and the map empties once each fade settles. A
+   *  completed fade-out disables the ghost's meshes (mask + ring). */
+  _pumpXrayFades(now) {
+    if (!this._xrayFading || this._xrayFading.size === 0) return;
+    for (const [id, standee] of this._xrayFading) {
+      const ghost = standee?.xrayGhost;
+      const fade = ghost?.fade;
+      if (!ghost || !fade) { this._xrayFading.delete(id); continue; }
+      const f = xrayFadeFactor({ ...fade, now });
+      this._applyXrayRingFade(ghost, f);
+      const u = fade.durMs > 0 ? (now - fade.startMs) / fade.durMs : 1;
+      if (u >= 1) {
+        ghost.fade = null;
+        this._xrayFading.delete(id);
+        if (fade.dir === 'out') this._setXrayGhostEnabled(standee, false);
+      }
+    }
+  }
+
+  /** Dispose a standee's ghost meshes (mask + ring) + both cloned materials and
+   *  drop the cache. */
+  _disposeXrayGhost(standee) {
+    const ghost = standee?.xrayGhost;
+    if (!ghost) return;
+    for (const m of ghost.meshes || []) {
+      try { if (m && typeof m.dispose === 'function') m.dispose(); } catch { /* gone */ }
+    }
+    for (const mat of ghost.materials || []) {
+      try { if (mat && typeof mat.dispose === 'function') mat.dispose(); } catch { /* gone */ }
+    }
+    standee.xrayGhost = null;
+  }
+
+  /** Drop a single entity from the x-ray tracking set AND dispose its ghost.
+   *  Called from the standee-dispose loop BEFORE the cone is disposed (the cone
+   *  owns the ghost meshes as children, so its dispose() would cascade them out
+   *  from under us). */
+  _clearXrayGhostFor(id, standee) {
+    this._disposeXrayGhost(standee || this._entityStandees?.get(id));
+    this._xrayOutlinedIds.delete(id);
+    this._xrayFading?.delete(id);
+  }
+
+  /** Per-frame x-ray occlusion sweep (throttled). For each alive, fog-visible
+   *  standee, cast a ray from the camera to the unit's torso anchor and pick
+   *  against occluder geometry (trees / buildings / border forest). A unit is
+   *  occluded iff the nearest occluder hit is closer than the camera→anchor
+   *  distance. The occluded set is diffed against the previous one so we only
+   *  add/remove the changed meshes — no per-frame churn on a static scene. */
+  _pumpXrayOcclusion() {
+    const BABYLON = this._babylon;
+    if (!BABYLON || !this._scene || !this._camera || !this.state?.entities) return;
+
+    this._xrayFrame = (this._xrayFrame | 0) + 1;
+
+    // Camera-moved detection — quantize the ArcRotateCamera transform so tiny
+    // inertial jitter doesn't force a sweep every frame.
+    const cam = this._camera;
+    const q = (v, step) => Math.round((v ?? 0) / step);
+    const tgt = cam.target || { x: 0, z: 0 };
+    const camKey = [
+      q(cam.alpha, 0.01), q(cam.beta, 0.01), q(cam.radius, 0.1),
+      q(tgt.x, 0.1), q(tgt.z, 0.1),
+    ].join(',');
+    const camMoved = camKey !== this._xrayLastCamKey;
+    const unitsMoved = (this._activeMoveIds?.size > 0) || (this._activeLungeIds?.size > 0);
+
+    if (!shouldSweepXray({ frame: this._xrayFrame, N: XRAY_SWEEP_EVERY_N, camMoved, unitsMoved })) {
+      return;
+    }
+    this._xrayLastCamKey = camKey;
+
+    // Reused ray + reused predicate — avoid per-unit allocation.
+    let ray = this._xrayRay;
+    if (!ray) {
+      ray = this._xrayRay = new BABYLON.Ray(
+        BABYLON.Vector3.Zero(), new BABYLON.Vector3(0, 0, 1), 1,
+      );
+    }
+    const camPos = cam.position;
+
+    const next = new Set();
+    for (const [id, standee] of this._entityStandees) {
+      const plane = standee?.plane;
+      if (!plane || !plane.position) continue;
+      // NEVER ghost a fog-hidden unit (the standee is setEnabled(false)).
+      if (plane.isEnabled?.() === false) continue;
+      const p = plane.position;
+      // Torso anchor: the cone centre (plane.position.y is already mid-cone)
+      // lifted a touch toward the head so the ray aims inside the silhouette.
+      const anchor = new BABYLON.Vector3(p.x, p.y + STANDEE_CONE_HEIGHT * 0.25, p.z);
+      const dir = anchor.subtract(camPos);
+      const camDist = dir.length();
+      if (camDist <= 1e-4) continue;
+      dir.normalize();
+      ray.origin.copyFrom(camPos);
+      ray.direction.copyFrom(dir);
+      ray.length = camDist;
+      // fastCheck=true: we only need to know if ANY occluder is nearer than the
+      // anchor, not the nearest one — early-out on the first hit (many per-leaf
+      // border-forest candidates make this a meaningful pan/orbit perf win).
+      const pick = this._scene.pickWithRay(ray, xrayOccluderPredicate, true);
+      if (isOccluded(camDist, pick?.distance ?? Infinity, !!pick?.hit)) {
+        next.add(id);
+      }
+    }
+
+    // Membership diff — only enable/disable ghosts for ids that changed state.
+    const prev = this._xrayOutlinedIds;
+    const { added, removed } = diffOccludedSets(prev, next);
+    for (const id of removed) {
+      // Un-occluded (or gone fog-hidden) → fade the ring OUT, then the fade
+      // pump disables the meshes once it reaches 0 (no instant flick-off).
+      const standee = this._entityStandees.get(id);
+      if (standee?.xrayGhost) this._startXrayFade(standee, id, 'out');
+      prev.delete(id);
+    }
+    if (added.length) {
+      const byId = new Map();
+      for (const e of this.state.entities) if (e && e.id != null) byId.set(e.id, e);
+      for (const id of added) {
+        const standee = this._entityStandees.get(id);
+        if (!standee) continue;
+        // Enable the meshes (builds the ghost lazily the first time) then fade
+        // the ring IN from its current factor (0 on a fresh build, or wherever
+        // an interrupted fade-out left off).
+        this._enableXrayGhostFor(standee, byId.get(id));
+        this._startXrayFade(standee, id, 'in');
+        prev.add(id);
+      }
+    }
+  }
+
+  /** Tear down all x-ray ghost state: dispose every standee's ghost (meshes +
+   *  cloned material) and clear tracking. Safe to call when nothing was ever
+   *  ghosted (e.g. node-test with no Babylon scene). Currently has no caller —
+   *  intended for a future teardown path (scene rebuild / renderer dispose). */
+  _disposeXray() {
+    if (this._entityStandees) {
+      for (const standee of this._entityStandees.values()) {
+        this._disposeXrayGhost(standee);
+      }
+    }
+    this._xrayOutlinedIds.clear();
+    this._xrayColorCache.clear();
+    this._xrayFading?.clear();
+    this._xrayRay = null;
+  }
+
   // ─── Phase 6: atmosphere — lighting, node glow, fog veil, selection halo ──
   //
   // Scene-global concerns that make 3D mode feel alive: time-of-day lighting
@@ -8180,31 +12975,44 @@ export class Renderer3D {
     }
     // Per-phase fog-of-war tint — `setFogTint` walks all cached fog
     // materials and re-applies the fog veil so existing fogged tiles
-    // immediately match the new darken factor.
+    // immediately match the new darken factor. We floor the phase value at
+    // FOG_HIDDEN_DARKEN here (not inside setFogTint) so PHASE_LIGHT_CONFIG
+    // values like dawn 0.70 / dusk 0.60 always read as a clear "you cannot
+    // see this hex" signal, while the admin lighting tuner — which calls
+    // setFogTint directly — sees the full 0..1 range it sliders across.
     if (typeof cfg.fogTint === 'number') {
-      this.setFogTint(cfg.fogTint);
+      this.setFogTint(Math.min(cfg.fogTint, FOG_HIDDEN_DARKEN));
     }
     // Directional sun: drives shadow casting strength + angle. NIGHT
     // intensity≈0 effectively turns the sun off so lanterns / hemi carry the
     // look. Direction is set via Vector3, but only when a sun config exists
     // (defensive — older snapshots may not have one).
+    let snapshotDir = null;
     if (cfg.sun && this._sunLight) {
-      // Sun direction is round-based (sweeps across the day) rather than
-      // phase-locked — every DAY round shows the sun in a different
-      // position. _onBeforeRender re-applies the round direction each frame
-      // so this assignment is overridden as soon as state.round is known.
+      // Sun direction is round-based (sweeps across each phase via
+      // dirStart→dirEnd) rather than phase-locked. _onBeforeRender re-applies
+      // the round direction each frame so this assignment is overridden as
+      // soon as state.round is known.
       const round = this.state?.round ?? 1;
       const dir = sunDirectionForRound(round, this.state?.cycleConfig);
       this._sunLight.direction = new BABYLON.Vector3(dir.x, dir.y, dir.z);
       this._sunLight.intensity = cfg.sun.intensity;
+      snapshotDir = dir;
     }
     // Mirror into _lightState so transition snapshots see the new anchor.
     this._lightState.intensity = cfg.intensity;
     this._lightState.color = { r: cfg.color.r, g: cfg.color.g, b: cfg.color.b };
     this._lightState.clear = { r: cfg.clear.r, g: cfg.clear.g, b: cfg.clear.b };
     if (cfg.sun) {
+      // Prefer the live round-resolved direction (computed above); fall back
+      // to legacy `cfg.sun.dir` if no _sunLight yet, then to the dirStart of
+      // the new schema, then to a sane straight-down default.
+      const dirRec = snapshotDir
+        ?? cfg.sun.dir
+        ?? cfg.sun.dirStart
+        ?? { x: 0, y: -1, z: 0 };
       this._lightState.sun = {
-        dir: { x: cfg.sun.dir.x, y: cfg.sun.dir.y, z: cfg.sun.dir.z },
+        dir: { x: dirRec.x, y: dirRec.y, z: dirRec.z },
         intensity: cfg.sun.intensity,
       };
     }
@@ -8240,8 +13048,45 @@ export class Renderer3D {
    *  the selection halo + node-glow pulses. Cheap — runs every render frame
    *  regardless of whether draw() was called, so the pulses keep cycling
    *  even when game state is idle. */
+  /** Slide the river ribbon texture downstream so the water reads as flowing.
+   *  Advances `uOffset` (the U axis runs ALONG the centreline — see
+   *  `_buildNetworkMesh` UV recipe) on both the playable-map river material
+   *  and the border river-extension material. Pure, time-derived offset from
+   *  `riverFlowOffset` keeps it frame-rate independent. Only mutates the
+   *  river's own materials (each `_buildRibbonMaterial('river', …)` call
+   *  returns a fresh StandardMaterial), so nothing leaks onto road ribbons or
+   *  tile cylinders. The per-vertex edge-fade alpha and pinned
+   *  `RIVER_ALPHA_INDEX` are untouched — only the texture sampling offset
+   *  moves. No-op until the async texture load resolves (no diffuseTexture). */
+  _pumpRiverFlow(now) {
+    const off = riverFlowOffset(now);
+    // The playable river is built as one merged mesh PER TILE, each carrying
+    // its own `baseMat.clone()` (per-tile fog darkening) — so there is no
+    // single river material to scroll. `_riverFlowTextures` collects every
+    // per-tile clone's diffuse texture at build time; advance them all in
+    // lockstep so the whole river flows as one continuous current.
+    const list = this._riverFlowTextures;
+    if (list) {
+      for (let i = 0; i < list.length; i++) {
+        const tex = list[i];
+        if (tex) tex.uOffset = off;
+      }
+    }
+    // Border river-extension ribbons share one material across all exits.
+    const extTex = this._riverExtensionMat?.diffuseTexture;
+    if (extTex) extTex.uOffset = off;
+  }
+
   _onBeforeRender() {
     const now = this._nowMs();
+    // Hex wireframe radial fade — push the live camera target's XZ into the
+    // grid shader so each line fragment fades by world-distance from the
+    // focus point (fully visible within ~3 hexes, transparent past ~5 hexes).
+    if (this._hexGridMat && this._hexGridTargetVec && this._camera?.target) {
+      this._hexGridTargetVec.x = this._camera.target.x;
+      this._hexGridTargetVec.y = this._camera.target.z;
+      this._hexGridMat.setVector2('uTargetXZ', this._hexGridTargetVec);
+    }
     // Lock the camera target to the ground plane (Y=0). Babylon's
     // ArcRotateCamera pan moves the target along the screen-aligned plane
     // (perpendicular to look direction), so panning vertically on screen
@@ -8270,6 +13115,23 @@ export class Renderer3D {
         this._camera.inertialPanningX = 0;
         this._camera.inertialPanningY = 0;
       }
+    }
+    // Tilt-on-zoom ramp — the camera "rises" toward top-down as it zooms out.
+    // Runs every frame AFTER the custom wheel/pinch input has written the new
+    // radius (Babylon applies inertial radius/zoom in the camera update that
+    // precedes onBeforeRenderObservable). We recompute beta from the current
+    // radius and assign it directly; the relaxed [LOCKED, TOPDOWN] beta limits
+    // (see _initBabylon) keep Babylon from clamping it back. No user tilt input
+    // feeds this — radius is the sole driver.
+    if (this._camera) {
+      const cam = this._camera;
+      cam.beta = betaForRadius(
+        cam.radius,
+        cam.lowerRadiusLimit ?? CAMERA_MIN_ZOOM_RADIUS,
+        cam.upperRadiusLimit ?? CAMERA_MAX_ZOOM_RADIUS,
+        CAMERA_BETA_LOCKED,
+        CAMERA_BETA_TOPDOWN,
+      );
     }
     // Phase-light interpolation.
     const t = this._phaseTransition;
@@ -8326,8 +13188,14 @@ export class Renderer3D {
     // (task 7). Colour is set by `_buildObjectiveRings` (the ring-pulse
     // consumer in `_syncOverlays`) whenever the controller changes; no
     // per-frame mutation needed.
+    // River flow — scroll the river ribbon texture's uOffset downstream.
+    this._pumpRiverFlow(now);
     // Plan ghost walking previewer.
     this._pumpPlanGhosts(now);
+    // X-ray occlusion outline — silhouette units hidden behind trees/buildings.
+    this._pumpXrayOcclusion();
+    // Ring fade-in/out tween for ghosts whose occlusion state just changed.
+    this._pumpXrayFades(now);
     // Scene fog tracking — keep the start/end relative to the camera so the
     // band fades just past the playable map at every zoom level.
     this._pumpSceneFog();
@@ -8337,8 +13205,28 @@ export class Renderer3D {
     this._pumpUnitIconScale();
     // FPS chip — throttled DOM text update, 3D-only.
     this._pumpFpsCounter(now);
+    // Compass rose: rotate the top-left needle to keep pointing at map north
+    // as the camera orbits. Skips the DOM write when alpha hasn't moved.
+    this._pumpCompassRose();
     // Building hover labels: fade in/out based on camera zoom.
     this._pumpBuildingLabelFade();
+    // Power-node name labels: same zoom-driven fade as the building labels.
+    this._pumpNodeLabelFade();
+    // Power-node outer-edge identifier outlines breathe between
+    // NODE_OUTLINE_PULSE_MIN and NODE_OUTLINE_PULSE_MAX.
+    this._pumpNodeOutlinePulse(now);
+  }
+
+  /** Drive the alpha pulse on every node's identifier-edge outline material.
+   *  One shared phase across all nodes — synchronised gentle breathing. */
+  _pumpNodeOutlinePulse(now) {
+    const mats = this._nodeOutlinePulseMats;
+    if (!mats || mats.length === 0) return;
+    const phase = (now / NODE_OUTLINE_PULSE_PERIOD_MS) * Math.PI * 2;
+    const t     = Math.sin(phase) * 0.5 + 0.5; // 0..1
+    const alpha = NODE_OUTLINE_PULSE_MIN
+      + (NODE_OUTLINE_PULSE_MAX - NODE_OUTLINE_PULSE_MIN) * t;
+    for (const mat of mats) mat.alpha = alpha;
   }
 
   /** Update the on-canvas FPS / ms-per-frame chip. Throttled to
@@ -8429,6 +13317,42 @@ export class Renderer3D {
       }
     }
     polyEl.textContent = formatPolyLabel(totalPolys, activePolys);
+    this._pumpCamDistanceCounter();
+  }
+
+  /** Rotate the #compass-rose needle each frame to keep it pointing at MAP
+   *  NORTH (world -Z). DOM write is skipped while the rotation hasn't changed
+   *  to spare per-frame layout work; the element being hidden (display:none in
+   *  MENU) doesn't change that — it's a single style mutation either way. */
+  _pumpCompassRose() {
+    if (!this._compassRoseEl && typeof document !== 'undefined') {
+      this._compassRoseEl = document.getElementById('compass-rose');
+    }
+    const el = this._compassRoseEl;
+    if (!el || !this._camera) return;
+    const needle = el.querySelector('.compass-rose-needle');
+    if (!needle) return;
+    const deg = compassRotationDegFromCameraAlpha(this._camera.alpha);
+    if (this._compassLastDeg === deg) return;
+    this._compassLastDeg = deg;
+    // Use the SVG `transform` attribute (not CSS) so the rotation pivot is the
+    // SVG user-space origin (0,0) — i.e. the centre of the viewBox-32 -32 64 64
+    // — without depending on browser interpretation of CSS transform-origin
+    // on SVG <g> children.
+    needle.setAttribute('transform', `rotate(${deg.toFixed(2)})`);
+  }
+
+  /** Camera distance from focus — ArcRotate radius is the world-space
+   *  distance from camera target (the focus point on the ground) to the
+   *  camera position, so it reads directly as "how far back am I." */
+  _pumpCamDistanceCounter() {
+    if (!this._camCounterEl && typeof document !== 'undefined') {
+      this._camCounterEl = document.getElementById('cam-counter');
+    }
+    const camEl = this._camCounterEl;
+    if (!camEl || !this._camera) return;
+    const r = this._camera.radius;
+    camEl.textContent = `cam ${Number.isFinite(r) ? r.toFixed(1) : '--'} wu`;
   }
 
   _setNodeGlowIntensity(ng, k) {
@@ -8484,9 +13408,9 @@ export class Renderer3D {
     // holds a steady controller tint. Colour comes from the published
     // controller-ring overlay so the overlay map drives the visual.
     for (const ng of this._nodeGlowMeshes) {
+      const ctrl = nodeController(ng.obj, this.state.entities);
       const ov = this._overlays.get(`node-ctrl-${ng.col}-${ng.row}`);
-      const css = ov?.style?.color
-        ?? getNodeGlowColor(nodeController(ng.obj, this.state.entities));
+      const css = ov?.style?.color ?? getNodeGlowColor(ctrl);
       const [r, g, b] = cssHexToRgb01(css);
       ng.glowColor = { r, g, b };
       const mat = ng.disc?.material;
@@ -8499,6 +13423,13 @@ export class Renderer3D {
         mat.diffuseColor.r = r * 0.4;
         mat.diffuseColor.g = g * 0.4;
         mat.diffuseColor.b = b * 0.4;
+      }
+      // R5a: only show the controller-tint ring when a side actually holds (or
+      // contests) the node — an unoccupied / neutral node drops the pale-white
+      // outline entirely. Node highlights ignore fog (operator: "no fun
+      // hunting for nodes") so this is purely a controller-state gate.
+      if (ng.disc) {
+        ng.disc.isVisible = nodeControllerRingVisible(ctrl);
       }
     }
     // Tint discs: same controller-driven recolour, kept on its own loop so the
@@ -8530,87 +13461,91 @@ export class Renderer3D {
     const BABYLON = this._babylon;
     if (!BABYLON || !this._scene) return;
     const SQRT3 = Math.sqrt(3);
-    const ringR = HEX_RADIUS_WORLD * 0.96;
     for (const obj of this.state.witchObjectives) {
-      // Hex outline ring tinted with the controller colour — replaces the
-      // pulsing disc. CreateTube around a closed hex loop so the ring stays
-      // visible at any zoom (LinesMesh aliases hard at zoomed-out distances).
+      // Ownership-tinted controller ring REMOVED per operator — node
+      // ownership is already conveyed by the HUD score track. The outer
+      // identifier ring below (palette colour = which node) stays. Empty
+      // _nodeGlowMeshes entry kept so consumers' optional chaining is happy
+      // and `_pumpNodeLabelFade` / fog state still has the per-hex key.
       for (const h of obj.hexes) {
-        const { x, z } = hexToWorld(h.col, h.row);
-        const path = [];
-        for (let i = 0; i <= 6; i++) {
-          const a = Math.PI / 6 + i * Math.PI / 3;
-          path.push(new BABYLON.Vector3(ringR * Math.cos(a), 0.03, ringR * Math.sin(a)));
-        }
-        const disc = BABYLON.MeshBuilder.CreateTube(
-          `node_ring_${obj.label.replace(/\W+/g, '_')}_${h.col}_${h.row}`,
-          { path, radius: 0.06, tessellation: 6, sideOrientation: BABYLON.Mesh.DOUBLESIDE },
-          this._scene,
-        );
-        disc.parent = this._mapRoot;
-        disc.position.x = x;
-        disc.position.z = z;
-        disc.isPickable = false;
-        const discMat = new BABYLON.StandardMaterial(`nodeRingMat_${h.col}_${h.row}`, this._scene);
-        discMat.diffuseColor  = new BABYLON.Color3(0.05, 0.05, 0.05);
-        discMat.specularColor = new BABYLON.Color3(0, 0, 0);
-        discMat.emissiveColor = new BABYLON.Color3(0.8, 0.8, 0.8);
-        disc.material = discMat;
-
         this._nodeGlowMeshes.push({
-          obj, disc,
+          obj, disc: null,
           col: h.col, row: h.row,
           glowColor: { r: 1, g: 1, b: 1 },
         });
-
-        // Track in the per-hex prop list so `_applyFogVeil` hides the disc on
-        // fogged tiles alongside the rest of the tile's silhouette. A node
-        // disc that stayed lit through fog gave the controller away even when
-        // every other prop on the hex was hidden.
         const tkey = hexKey(h.col, h.row);
-        const props = this._tilePropsByKey.get(tkey);
-        if (props) props.push(disc);
-        else this._tilePropsByKey.set(tkey, [disc]);
-        if (this._fogActiveSet.has(tkey)) disc.isVisible = false;
+        if (!this._tilePropsByKey.has(tkey)) this._tilePropsByKey.set(tkey, []);
+      }
 
-        // Outer identifier ring: a second, slightly larger hex outline
-        // painted in the node's identifying palette colour (matches the
-        // HUD score dots). Static for the life of the game — set once,
-        // frozen below with the rest of the static map geometry. Sits
-        // *outside* the controller ring so the controller signal stays
-        // dominant and the identifier reads as a quiet edge.
-        const idCss = nodeIdentifyingColor(obj);
-        const [ir, ig, ib] = cssHexToRgb01(idCss);
-        const idPath = [];
-        for (let i = 0; i <= 6; i++) {
-          const a = Math.PI / 6 + i * Math.PI / 3;
-          idPath.push(new BABYLON.Vector3(
-            NODE_IDENTIFIER_RING_RADIUS * Math.cos(a),
-            0.028,
-            NODE_IDENTIFIER_RING_RADIUS * Math.sin(a),
-          ));
+      // ── Outer-edge identifier outline ──────────────────────────────────
+      // Only the OUTSIDE perimeter of the multi-hex node — edges whose
+      // other side is ALSO a node hex are internal and skipped (operator:
+      // "the edges that are touching"). The check is logical, not by world
+      // coordinates: the identifier-ring radius (1.04) pushes corners
+      // OUTWARD past the actual hex boundary, so two adjacent hexes' rim
+      // corners DO NOT coincide in world space — coord-dedup misses every
+      // internal edge. Instead, for each edge step √3 from the hex centre
+      // along the edge's outward direction and look up the resulting hex
+      // via worldToHex; if it belongs to the node set, that edge is shared.
+      const idCss = nodeIdentifyingColor(obj);
+      const [ir, ig, ib] = cssHexToRgb01(idCss);
+      // Per-node material so the alpha can pulse independently of other
+      // overlays (the shared _ringPulseMaterialFor cache won't survive
+      // per-instance alpha animation).
+      const nodeOutlineMat = new BABYLON.StandardMaterial(
+        `nodeOutlineMat_${obj.label.replace(/\W+/g, '_')}`, this._scene);
+      nodeOutlineMat.diffuseColor  = new BABYLON.Color3(ir * 0.4, ig * 0.4, ib * 0.4);
+      nodeOutlineMat.specularColor = new BABYLON.Color3(0, 0, 0);
+      nodeOutlineMat.emissiveColor = new BABYLON.Color3(ir, ig, ib);
+      nodeOutlineMat.alpha         = NODE_OUTLINE_PULSE_MIN;
+      this._nodeOutlinePulseMats.push(nodeOutlineMat);
+
+      const nodeSet = new Set(obj.hexes.map(hh => hexKey(hh.col, hh.row)));
+      const Y = 0.028;
+      const SQRT3_ = Math.sqrt(3);
+      for (const h of obj.hexes) {
+        const { x, z } = hexToWorld(h.col, h.row);
+        // Identifier-ring perimeter corners — six points at the ring radius.
+        const corners = [];
+        for (let j = 0; j < 6; j++) {
+          const ca = Math.PI / 6 + j * Math.PI / 3;
+          corners.push({
+            x: x + NODE_IDENTIFIER_RING_RADIUS * Math.cos(ca),
+            z: z + NODE_IDENTIFIER_RING_RADIUS * Math.sin(ca),
+          });
         }
-        const idRing = BABYLON.MeshBuilder.CreateTube(
-          `node_id_ring_${obj.label.replace(/\W+/g, '_')}_${h.col}_${h.row}`,
-          { path: idPath, radius: NODE_IDENTIFIER_RING_TUBE, tessellation: 6,
-            sideOrientation: BABYLON.Mesh.DOUBLESIDE },
-          this._scene,
-        );
-        idRing.parent = this._mapRoot;
-        idRing.position.x = x;
-        idRing.position.z = z;
-        idRing.isPickable = false;
-        // Identifier ring colour never changes, so share one cached material
-        // across every hex with the same identifying colour (overlayMaterialKey
-        // dedups). diffuse = id×0.4, emissive = id — same look as before, just
-        // no longer one fresh StandardMaterial per ring.
-        idRing.material = this._ringPulseMaterialFor([ir, ig, ib], 1, true);
-
-        // Same fog-veil registration as the controller ring. By this point
-        // the per-tile list exists (we just registered the controller disc
-        // a few lines above) so a fresh lookup always returns the array.
-        this._tilePropsByKey.get(tkey).push(idRing);
-        if (this._fogActiveSet.has(tkey)) idRing.isVisible = false;
+        for (let i = 0; i < 6; i++) {
+          // Edge i runs from corner i to corner (i+1)%6 and faces direction
+          // angle (i+1) * π/3 outward from the hex centre. The neighbour
+          // hex centre sits √3 (centre-to-centre) along that direction.
+          const dirA  = (i + 1) * Math.PI / 3;
+          const nx    = x + SQRT3_ * Math.cos(dirA);
+          const nz    = z + SQRT3_ * Math.sin(dirA);
+          const { col: ncol, row: nrow } = worldToHex(nx, nz);
+          if (nodeSet.has(hexKey(ncol, nrow))) continue; // internal — skip
+          const a = corners[i], b = corners[(i + 1) % 6];
+          const tube = BABYLON.MeshBuilder.CreateTube(
+            `node_edge_${obj.label.replace(/\W+/g, '_')}_${h.col}_${h.row}_${i}`,
+            {
+              path: [
+                new BABYLON.Vector3(a.x, Y, a.z),
+                new BABYLON.Vector3(b.x, Y, b.z),
+              ],
+              radius: NODE_IDENTIFIER_RING_TUBE,
+              tessellation: 6,
+              sideOrientation: BABYLON.Mesh.DOUBLESIDE,
+            },
+            this._scene,
+          );
+          tube.parent     = this._mapRoot;
+          tube.isPickable = false;
+          tube.material   = nodeOutlineMat;
+          // Node identifier rings ignore fog (operator: always-visible so the
+          // player can see node locations through the veil).
+          tube.metadata   = { respectsFog: false };
+          const tkey = hexKey(h.col, h.row);
+          this._tilePropsByKey.get(tkey).push(tube);
+        }
       }
     }
     // Build the matching 10%-alpha tint disc + one floating name label per
@@ -8662,24 +13597,30 @@ export class Renderer3D {
         mat.alpha = NODE_TINT_ALPHA;
         mat.backFaceCulling = false;
         disc.material = mat;
+        // Pin a stable alphaIndex so the transparent tint disc stops
+        // reshuffling under Babylon's per-frame distance sort as the camera
+        // moves (the same flicker fixed for overlays/road/river/border).
+        disc.alphaIndex = NODE_TINT_ALPHA_INDEX;
 
         this._nodeTintMeshes.push({
           obj, mesh: disc, mat,
           col: h.col, row: h.row,
         });
 
-        // Register on the per-tile fog list so `_setTileFogged` hides the
-        // tint alongside the ring tube. Same defensive pattern as the ring:
-        // create the list if missing.
+        // Node tint discs ignore fog (operator: always-visible). Still
+        // registered in `_tilePropsByKey` for freeze/disposal bookkeeping —
+        // the `respectsFog: false` metadata makes `_setTilePropsFogged` skip
+        // them.
+        disc.metadata = { respectsFog: false };
         const tkey = hexKey(h.col, h.row);
         const props = this._tilePropsByKey.get(tkey);
         if (props) props.push(disc);
         else this._tilePropsByKey.set(tkey, [disc]);
-        if (this._fogActiveSet.has(tkey)) disc.isVisible = false;
       }
 
-      // Floating name label — one per node, anchored above the centre hex
-      // (obj.hexes[0] per `_pickNodeCluster`). The label is the operator's
+      // Floating name label — one per node, anchored at the cluster centroid
+      // but fog-tracked by the centre hex (obj.hexes[0]). The label is the
+      // operator's
       // primary "this is Power Node X, controlled by Y" read, so it's a
       // single mesh rather than one per hex.
       const center = obj.hexes[0];
@@ -8726,26 +13667,30 @@ export class Renderer3D {
     plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
     plane.isPickable = false;
     plane.material = mat;
-    // Anchor over the centre hex (the cluster's "head"), not the centroid —
-    // the centre is where the ring discs of the three-hex cluster radiate
-    // from, so a label above it reads as belonging to the whole node.
-    const { x, z } = hexToWorld(center.col, center.row);
-    plane.position.set(x, NODE_LABEL_Y, z);
+    // R7: render above all world geometry (group 2, same as the floating
+    // unit-icon billboards) so the name is never occluded by trees/buildings.
+    plane.renderingGroupId = 2;
+    // R5b: anchor in the MIDDLE of the cluster (mean of every member hex's
+    // world position), not over the first ("head") hex — a multi-hex node now
+    // labels its centre of mass. Fall back to the centre hex for a degenerate
+    // single-hex cluster.
+    const c = clusterCentroidWorld(obj.hexes) ?? hexToWorld(center.col, center.row);
+    plane.position.set(c.x, NODE_LABEL_Y, c.z);
 
     const entry = {
       obj, plane, mat, tex,
       hexKey: tkey,
+      // Fog state of the centre (tracking) hex. Driven by `_setTileFogged`;
+      // the per-frame fade pump ANDs it with the zoom alpha so a fogged label
+      // never reappears just because the camera zoomed in.
+      fogged: this._fogActiveSet.has(tkey),
     };
     // The label colour is the node's identifying palette colour, which is
     // static for the life of the game — paint once at build time and never
     // repaint. (Earlier rounds painted in the controller colour and so
     // needed a per-controller-flip refresh; that's gone now.)
     this._paintNodeLabel(entry);
-    // Mirror the ring's initial fog state — start hidden if the centre hex
-    // is already fogged at build time.
-    if (this._fogActiveSet.has(tkey)) {
-      plane.isVisible = false;
-    }
+    // Node labels ignore fog (operator: always-visible) — no initial-fog hide.
     return entry;
   }
 
@@ -8785,23 +13730,58 @@ export class Renderer3D {
     const state = this.state;
     const fogActive = state?.fogOfWar && state.fogOfWar !== 'none';
     const observerOwner = this._observerOwner();
+    // Splat terrain has no per-tile base meshes — the playable key set is the
+    // state tiles (mirrored by `_hexVertexRange`). Legacy path keys off the
+    // per-hex mesh registry.
+    const allKeys = this._useSplatTerrain
+      ? [...(state?.tiles?.keys() || [])]
+      : [...this._tileMeshByKey.keys()];
 
-    let target;
+    // Real fogged set per game state + observer (the `normal`/`debug` source of
+    // truth, independent of the display override).
+    let realFogged;
     if (!fogActive || !observerOwner) {
-      target = null; // nothing fogged — unfog everything
+      realFogged = new Set(); // nothing fogged — unfog everything
     } else {
-      target = this._buildFogVisibleHexes(observerOwner);
+      const visible = this._buildFogVisibleHexes(observerOwner);
+      realFogged = new Set();
+      for (const k of allKeys) if (!visible.has(k)) realFogged.add(k);
+    }
+
+    // Apply the renderer-level display override (T-key): off→none, full→all,
+    // normal/debug→the real computed set.
+    const fogged = foggedSetForMode(this._fogDebugMode, realFogged, allKeys);
+
+    // Visible-set view consumed by `shouldRenderEntityAt` below: null means
+    // "nothing fogged" (matches the legacy no-fog path), otherwise the set of
+    // visible hex keys (complement of `fogged`).
+    let target = null;
+    if (fogged.size > 0) {
+      target = new Set();
+      for (const k of allKeys) if (!fogged.has(k)) target.add(k);
     }
 
     // Diff against the currently-fogged set: clear any previously-fogged tile
     // that is now visible, then fog any tile that should now be dark.
-    for (const [k, mesh] of this._tileMeshByKey) {
-      const shouldBeFogged = target ? !target.has(k) : false;
-      const isFogged = this._fogActiveSet.has(k);
-      if (shouldBeFogged && !isFogged) {
-        this._setTileFogged(k, mesh, true);
-      } else if (!shouldBeFogged && isFogged) {
-        this._setTileFogged(k, mesh, false);
+    if (this._useSplatTerrain) {
+      // One vertex-buffer rewrite covers the whole ground's soft veil; props
+      // (standees/discs/labels) still flip per-hex via _setTilePropsFogged.
+      this._writeFogWeights(fogged);
+      for (const k of allKeys) {
+        const shouldBeFogged = fogged.has(k);
+        const isFogged = this._fogActiveSet.has(k);
+        if (shouldBeFogged && !isFogged) this._setTilePropsFogged(k, true);
+        else if (!shouldBeFogged && isFogged) this._setTilePropsFogged(k, false);
+      }
+    } else {
+      for (const [k, mesh] of this._tileMeshByKey) {
+        const shouldBeFogged = fogged.has(k);
+        const isFogged = this._fogActiveSet.has(k);
+        if (shouldBeFogged && !isFogged) {
+          this._setTileFogged(k, mesh, true);
+        } else if (!shouldBeFogged && isFogged) {
+          this._setTileFogged(k, mesh, false);
+        }
       }
     }
 
@@ -8844,42 +13824,182 @@ export class Renderer3D {
         }
       }
     }
+
+    // Debug overlay: in `debug` mode paint a billboarded "F" over every fogged
+    // hex; in every other mode the overlay is cleared. The sync diffs against
+    // the current marker registry so it rebuilds naturally when the fogged set
+    // changes between passes.
+    if (this._fogDebugMode === 'debug') this._syncFogDebugMarkers(fogged);
+    else this._clearFogDebugMarkers();
+
+    // Push the fogged building-tile centres into the building shader plugins so
+    // GLB buildings on fogged hexes darken (global uniform, not per-instance —
+    // see `_updateBuildingFogUniform` / src/fog-darken-plugin.js).
+    this._updateBuildingFogUniform();
   }
 
-  _setTileFogged(hexK, tileMesh, fogged) {
-    const md = tileMesh.metadata;
-    if (!md?.baseColor) return;
-    const tile = this.state?.tiles?.get(hexK);
-    // When we have the tile in state we can pick a textured fog material;
-    // otherwise (shouldn't happen for playable hexes) fall back to colour-only.
-    tileMesh.material = tile
-      ? this._tileMaterialFor(tile, { fogged })
-      : (fogged ? this._fogMaterialFor(md.baseColor) : this._materialFor(md.baseColor));
+  /** Diff the debug "F"-marker registry against the given fogged-hex set:
+   *  spawn a marker for every newly-fogged hex, dispose markers whose hex is no
+   *  longer fogged. Each marker is a billboarded DynamicTexture plane on
+   *  renderingGroupId 2 (above world geometry) so it reads over terrain/props.
+   *  No-op in headless / node-test (no DOM). */
+  _syncFogDebugMarkers(fogged) {
+    if (!this._scene || !this._babylon || typeof document === 'undefined') return;
+    // Dispose markers no longer fogged.
+    for (const [k, m] of this._fogDebugMarkers) {
+      if (!fogged.has(k)) {
+        this._disposeFogDebugMarker(m);
+        this._fogDebugMarkers.delete(k);
+      }
+    }
+    // Spawn markers for newly-fogged hexes.
+    for (const k of fogged) {
+      if (this._fogDebugMarkers.has(k)) continue;
+      const marker = this._buildFogDebugMarker(k);
+      if (marker) this._fogDebugMarkers.set(k, marker);
+    }
+  }
+
+  /** Build one billboarded "F" marker over the given hex key. Mirrors the
+   *  node-label painter (own DynamicTexture + StandardMaterial, never shared)
+   *  so disposing it tears down both. Returns null when DOM is unavailable. */
+  _buildFogDebugMarker(hexK) {
+    const BABYLON = this._babylon;
+    const scene = this._scene;
+    if (!BABYLON || !scene || typeof document === 'undefined') return null;
+    const [col, row] = hexK.split(',').map(Number);
+    if (!Number.isFinite(col) || !Number.isFinite(row)) return null;
+
+    const tex = new BABYLON.DynamicTexture(
+      `fogDebugTex_${hexK}`,
+      { width: 128, height: 128 },
+      scene,
+      false,
+    );
+    tex.hasAlpha = true;
+    const ctx = tex.getContext();
+    ctx.clearRect(0, 0, 128, 128);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold 96px Georgia, serif';
+    ctx.fillStyle = 'rgba(0,0,0,0.85)';
+    ctx.fillText('F', 64 + 3, 64 + 3);
+    ctx.fillStyle = '#ff3b3b';
+    ctx.fillText('F', 64, 64);
+    tex.update();
+
+    const mat = new BABYLON.StandardMaterial(`fogDebugMat_${hexK}`, scene);
+    mat.diffuseTexture = tex;
+    mat.opacityTexture = tex;
+    mat.useAlphaFromDiffuseTexture = true;
+    mat.specularColor = new BABYLON.Color3(0, 0, 0);
+    mat.emissiveColor = new BABYLON.Color3(1, 1, 1);
+    mat.backFaceCulling = false;
+
+    const plane = BABYLON.MeshBuilder.CreatePlane(
+      `fogDebug_${hexK}`,
+      { width: 0.9, height: 0.9 },
+      scene,
+    );
+    if (this._mapRoot) plane.parent = this._mapRoot;
+    plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+    plane.isPickable = false;
+    plane.renderingGroupId = 2; // above world geometry + standees
+    const w = hexToWorld(col, row);
+    plane.position.set(w.x, 1.6, w.z);
+
+    return { plane, mat, tex };
+  }
+
+  _disposeFogDebugMarker(m) {
+    if (!m) return;
+    try { m.tex?.dispose?.(); } catch { /* gone */ }
+    try { m.mat?.dispose?.(); } catch { /* gone */ }
+    try { m.plane?.dispose?.(); } catch { /* gone */ }
+  }
+
+  /** Dispose all debug "F" markers and empty the registry. Called when leaving
+   *  debug mode and on map rebuild. */
+  _clearFogDebugMarkers() {
+    if (this._fogDebugMarkers.size === 0) return;
+    for (const [, m] of this._fogDebugMarkers) this._disposeFogDebugMarker(m);
+    this._fogDebugMarkers.clear();
+  }
+
+  /** Rewrite the merged ground's `aFog` vertex attribute from the fogged-hex
+   *  set (splat path). Per-hex vertex weights come from `hexFogWeights` (soft
+   *  veil edge averaged across neighbours), written into the slice located via
+   *  `_hexVertexRange`, then pushed as ONE `updateVerticesData('aFog', …)`.
+   *  No-op when the ground / buffer isn't built (node-test, flag off). */
+  _writeFogWeights(fogged) {
+    const buf = this._splatFogBuf;
+    const ground = this._splatGround;
+    if (!buf || !ground || typeof ground.updateVerticesData !== 'function') return;
+    const tiles = this.state?.tiles;
+    for (const [key, baseV] of this._hexVertexRange) {
+      const [colS, rowS] = key.split(',');
+      const col = +colS, row = +rowS;
+      const neighborKeys = neighborDeltas(row).map(([dc, dr]) => {
+        const nk = hexKey(col + dc, row + dr);
+        // Only count hexes that exist in the playable set (off-map → null), so
+        // the veil edge doesn't average against non-existent tiles.
+        return tiles && tiles.has(nk) ? nk : null;
+      });
+      const w = hexFogWeights(key, neighborKeys, fogged);
+      buf.set(w, baseV);
+    }
+    ground.updateVerticesData('aFog', buf);
+  }
+
+  /** Props/labels half of fogging a hex — hide tactical props (standees, discs,
+   *  HP bars), darken 'darken'-policy props (roads/rivers), dim building labels,
+   *  hide node labels, and maintain `_fogActiveSet`. Shared by both the legacy
+   *  base-mesh path (`_setTileFogged`) and the splat path (`_applyFogVeil`),
+   *  which handles the ground veil separately via `_writeFogWeights`. */
+  _setTilePropsFogged(hexK, fogged) {
     const props = this._tilePropsByKey.get(hexK);
     if (props) for (const p of props) {
       // Three fog policies per-prop, set via `metadata.respectsFog`:
-      //   • undefined / true → hide on fog (standees, HP bars, node discs)
-      //   • false             → permanent geometry, ignore fog (trees, buildings)
-      //   • 'darken'          → stay visible but tint dimmer (roads, rivers)
+      //   • undefined / true     → hide on fog (standees, HP bars, node discs)
+      //   • false                → ignore this loop (permanent geometry like
+      //                            trees; also GLB buildings, which darken via
+      //                            the global FogDarkenPlugin uniform instead —
+      //                            see `_updateBuildingFogUniform`)
+      //   • 'darken'             → tint dimmer (roads, rivers) — per-tile material
       const policy = p.metadata?.respectsFog;
       if (policy === false) continue;
       if (policy === 'darken') {
         // Per-tile material darkening: the ribbon stays at full opacity but
-        // its colour is multiplied by FOG_TILE_DARKEN so it matches the
-        // fogged ground beneath it. Anchor colours are stashed in metadata
-        // at build time so re-revealing a hex restores the exact unfogged
-        // tint (avoids accumulating darken multipliers across fog flickers).
+        // its colour is multiplied so it matches the fogged ground beneath
+        // it. Anchor colours are stashed in metadata at build time so
+        // re-revealing restores the exact unfogged tint (avoids accumulating
+        // darken multipliers across fog flickers).
+        //
+        // CRITICAL: roads / rivers carry a `diffuseTexture`, and the lit
+        // colour composes as `clamp(lightAccum * diffuseColor) * texel`. At
+        // bright phases the clamp saturates to 1.0 and the diffuseColor
+        // multiply is swallowed — the road appears at full brightness even
+        // over a fogged tile (exactly the bug we already fixed for the
+        // terrain). Darken the TEXTURE level instead, which is outside the
+        // clamp and always survives. Also still darken diffuseColor as
+        // belt-and-braces for any material without a texture, AND clamp to
+        // FOG_HIDDEN_DARKEN so the road reads the same "occluded" strength
+        // as the splat ground beneath it.
+        const k = fogged
+          ? Math.min(this._fogTileDarken, FOG_HIDDEN_DARKEN)
+          : 1.0;
         const mat = p.material;
         const bd  = p.metadata?.baseDiffuse;
         const be  = p.metadata?.baseEmissive;
+        if (mat?.diffuseTexture && typeof mat.diffuseTexture.level === 'number') {
+          mat.diffuseTexture.level = k;
+        }
         if (mat?.diffuseColor && bd) {
-          const k = fogged ? this._fogTileDarken : 1.0;
           mat.diffuseColor.r  = bd.r * k;
           mat.diffuseColor.g  = bd.g * k;
           mat.diffuseColor.b  = bd.b * k;
         }
         if (mat?.emissiveColor && be) {
-          const k = fogged ? this._fogTileDarken : 1.0;
           mat.emissiveColor.r = be.r * k;
           mat.emissiveColor.g = be.g * k;
           mat.emissiveColor.b = be.b * k;
@@ -8899,11 +14019,28 @@ export class Renderer3D {
     // visibility tracks that one hex's fog state. Hide fully on fog (unlike
     // building labels) — node ownership IS the tactical secret being hidden.
     const nodeLabelEntry = this._nodeLabelsByCenterHex?.get(hexK);
-    if (nodeLabelEntry?.plane) {
-      nodeLabelEntry.plane.isVisible = !fogged;
+    if (nodeLabelEntry) {
+      // Record fog so the zoom-fade pump (`_pumpNodeLabelFade`) keeps the label
+      // hidden under fog regardless of the camera-distance alpha. Set the
+      // immediate visibility too so a fog change reads on the same frame.
+      nodeLabelEntry.fogged = fogged;
+      if (nodeLabelEntry.plane) nodeLabelEntry.plane.isVisible = !fogged;
     }
     if (fogged) this._fogActiveSet.add(hexK);
     else this._fogActiveSet.delete(hexK);
+  }
+
+  _setTileFogged(hexK, tileMesh, fogged) {
+    const md = tileMesh.metadata;
+    if (!md?.baseColor) return;
+    const tile = this.state?.tiles?.get(hexK);
+    // When we have the tile in state we can pick a textured fog material;
+    // otherwise (shouldn't happen for playable hexes) fall back to colour-only.
+    tileMesh.material = tile
+      ? this._tileMaterialFor(tile, { fogged })
+      : (fogged ? this._fogMaterialFor(md.baseColor) : this._materialFor(md.baseColor));
+    // Props/labels + _fogActiveSet handled by the shared helper.
+    this._setTilePropsFogged(hexK, fogged);
   }
 
   _fogMaterialFor(baseHex) {
@@ -8924,14 +14061,7 @@ export class Renderer3D {
    *  inferred from `witchIsAI`/`heroIsAI`); returns null in AI-vs-AI runs
    *  and spectator mode, which suppresses the veil entirely. */
   _observerOwner() {
-    const state = this.state;
-    if (!state) return null;
-    // Prefer the explicit myFaction (set in online/PvP mode); fall back to
-    // the unique human side in local-AI games.
-    if (state.myFaction) return state.myFaction;
-    if (state.witchIsAI && !state.heroIsAI)  return 'hero';
-    if (state.heroIsAI  && !state.witchIsAI) return 'witch';
-    return null;
+    return resolveFogObserver(this.state);
   }
 }
 
@@ -8984,20 +14114,16 @@ export const TERRAIN_VARIANT_COUNTS = Object.freeze({
  */
 export function terrainSpriteIdFor(tile, col, row) {
   if (!tile) return null;
-  let baseType;
-  if (tile.type === TileType.BUILDING) baseType = TileType.DIRT;
-  // FOREST tiles now render trees as real 3D cones — the underlying ground
-  // is grass, not a "forest" sprite of painted-on trees that would clash with
-  // the cone silhouettes. Same trick BUILDING uses (dirt underlay).
-  else if (tile.type === TileType.GRASS || tile.type === TileType.DIRT) baseType = tile.type;
-  else if (tile.type === TileType.FOREST) baseType = TileType.GRASS;
-  // Road / river / bridge get a grass underlay sprite — the network pass
-  // overlays bezier tubes on top of the grass, so the grass texture is what
-  // shows on either side of the path.
-  else if (tile.type === TileType.ROAD || tile.type === TileType.RIVER || tile.type === TileType.BRIDGE) {
-    baseType = TileType.GRASS;
-  } else return null;
+  // Ground texture = the tile's REAL base material. Roads/rivers/bridges and
+  // buildings no longer force a grass/dirt underlay — they sit on whatever
+  // base they were laid over.
+  let baseType = baseOf(tile);
+  // FOREST base is the one exception: trees render as real 3D cones, so the
+  // ground beneath uses the grass sprite (a painted-forest sprite would clash
+  // with the cone silhouettes). Same trick buildings used for a dirt underlay.
+  if (baseType === TileType.FOREST) baseType = TileType.GRASS;
   const count = TERRAIN_VARIANT_COUNTS[baseType] ?? 0;
+  if (count <= 0) return null;  // base material has no sprite pool — solid colour
   if (count > 1) {
     const v = (((col * 7 + row * 13 + col * row) % count) + count) % count + 1;
     return `${baseType}_${v}`;
@@ -9046,6 +14172,12 @@ export const BORDER_BAND_DEPTH = 2;
 export const BORDER_FOREST_TREES_MIN = 5;
 export const BORDER_FOREST_TREES_MAX = 7;
 
+/** Density multiplier applied to the raw per-hex border-forest tree count
+ *  (see `scaledForestTreeCount`). 0.8 = 20% fewer trees in the border band
+ *  than the raw 5–7 range, thinning the wilderness wall while keeping the
+ *  hash-seeded placement identical. Tunable. */
+export const BORDER_FOREST_DENSITY_SCALE = 0.8;
+
 /** Returns the (col, row) positions for a `bandDepth`-hex band wrapping the
  *  rectangular playable map. Includes diagonal corner cells (i.e. fills the
  *  full surrounding rectangle minus the playable rectangle), so the formula
@@ -9066,13 +14198,90 @@ export function borderTilePositions(tilesMap, bandDepth = BORDER_BAND_DEPTH) {
   return out;
 }
 
+/** Alpha tiers for the fade-out at the OUTER edge of the border-forest band,
+ *  indexed by rings-from-the-outer-edge. The outermost ring (index 0) is the
+ *  most transparent; each ring inward is less so; rings deeper than this list
+ *  (closer to the playable map) stay fully opaque. Operator request: fade the
+ *  outer 3 rings so the map edge dissolves instead of ending at a hard wall. */
+export const BORDER_FOREST_EDGE_ALPHAS = Object.freeze([0.2, 0.5, 0.8]);
+
+/** Chebyshev depth of a tile from the playable rectangle's edge: 0 for tiles
+ *  inside the playable rectangle, 1 for the ring immediately outside it, and
+ *  growing outward. `ext` is a `{minCol, maxCol, minRow, maxRow}` extent (from
+ *  `tilesExtent`). Pure. */
+export function borderTileDepthFromPlayable(col, row, ext) {
+  if (!ext) return 0;
+  const dCol = col < ext.minCol ? ext.minCol - col
+             : col > ext.maxCol ? col - ext.maxCol : 0;
+  const dRow = row < ext.minRow ? ext.minRow - row
+             : row > ext.maxRow ? row - ext.maxRow : 0;
+  return Math.max(dCol, dRow);
+}
+
+/** Map a border tile's distance (in rings) from the OUTER edge of the band to
+ *  its leaf/trunk alpha. Outermost ring (0) → 0.2, next in (1) → 0.5, next (2)
+ *  → 0.8; any ring deeper in (≥3, i.e. closer to the playable map) → 1.0 (fully
+ *  opaque). Anchoring the fade to the outer edge makes it look identical
+ *  regardless of band depth — a 2-deep band still fades outer=0.2, next=0.5.
+ *
+ *  Rings BEYOND the outer edge (`ringsFromOuter < 0`) are NOT inner/opaque —
+ *  they sit past the band's silhouette. This happens for river-extension
+ *  centreline samples, which run one hex past the outermost band tile (see
+ *  `riverExtensionRingAlphas` / `_buildRiverExtensions`). Returning 1.0 there
+ *  snapped the river's far tip back to fully opaque, leaving a hard opaque stub
+ *  poking past the faded map edge. Instead we CONTINUE the fade outward at the
+ *  same per-ring slope (clamped to ≥ 0) so the water keeps dissolving toward
+ *  transparent off the edge — matching how the ground/trees simply end at the
+ *  outer ring. NaN is still treated as opaque (defensive). Pure. */
+export function borderForestAlphaForOuterRing(ringsFromOuter) {
+  if (Number.isNaN(ringsFromOuter)) return 1.0;
+  const tiers = BORDER_FOREST_EDGE_ALPHAS;
+  if (ringsFromOuter >= tiers.length) return 1.0;          // inner band → opaque
+  if (ringsFromOuter >= 0) return tiers[ringsFromOuter];    // within the fade band
+  // Beyond the outermost ring: extrapolate the fade toward 0 along the slope
+  // between the two outermost tiers (0.2 → 0.5 ⇒ −0.3 per ring outward), so a
+  // sample one ring past the edge lands at 0 (fully transparent) rather than
+  // snapping to opaque. Clamp so it never goes negative.
+  const slope = tiers.length >= 2 ? tiers[1] - tiers[0] : tiers[0];
+  return Math.max(0, tiers[0] + ringsFromOuter * slope);
+}
+
+/** Convenience: a border tile's leaf/trunk alpha given the playable extent and
+ *  the band depth. Computes rings-from-outer-edge = `bandDepth − depthFrom
+ *  playableEdge`, then maps to an alpha tier. Tiles inside the playable
+ *  rectangle (depth 0) return 1.0. Pure. */
+export function borderForestAlphaForTile(col, row, ext, bandDepth) {
+  const depth = borderTileDepthFromPlayable(col, row, ext);
+  if (depth <= 0) return 1.0;
+  return borderForestAlphaForOuterRing(bandDepth - depth);
+}
+
+/** Per-ring edge-fade alpha for each centreline sample of a river extension,
+ *  so the wilderness river dissolves in lockstep with the border ground +
+ *  trees it threads through (operator: the river must fade too). Each
+ *  world-space `{x, z}` sample is mapped back to its hex via the odd-r inverse
+ *  of `hexToWorld`, then looked up through `borderForestAlphaForTile` — the
+ *  SAME per-ring alpha curve the ground and trees use, so a sample sitting over
+ *  the outermost ring gets 0.2, the next 0.5, etc. Samples over (or inside) the
+ *  playable map return 1.0. Pure — same inputs, same output. */
+export function riverExtensionRingAlphas(pts, ext, bandDepth, radius = HEX_RADIUS_WORLD) {
+  if (!Array.isArray(pts)) return [];
+  return pts.map((p) => {
+    if (!p) return 1.0;
+    const row = Math.round(p.z / (1.5 * radius));
+    const col = Math.round(p.x / (SQRT3 * radius) - 0.5 * (row & 1));
+    return borderForestAlphaForTile(col, row, ext, bandDepth);
+  });
+}
+
 /** Deterministic cone layout for a border-forest hex. Same recipe as
  *  `forestTreesForHex` but with a bumped count range (BORDER_FOREST_TREES_*).
  *  Uses up to all 7 TILE_SLOTS so a denser hex fully covers the disc. Pure:
  *  same (col, row) → same trees. */
 export function borderForestTreesForHex(col, row, season = null) {
   const span = BORDER_FOREST_TREES_MAX - BORDER_FOREST_TREES_MIN + 1;
-  const n    = BORDER_FOREST_TREES_MIN + Math.floor(_forestHash(col, row, 0) * span);
+  const rawN = BORDER_FOREST_TREES_MIN + Math.floor(_forestHash(col, row, 0) * span);
+  const n    = scaledForestTreeCount(rawN, BORDER_FOREST_DENSITY_SCALE);
   const scaleSpan = FOREST_SCALE_MAX - FOREST_SCALE_MIN;
   const rotation = Math.floor(_forestHash(col, row, 99) * TILE_SLOTS.length);
   const trees = [];
@@ -9151,10 +14360,12 @@ export const UNIT_HEX_OUTLINE_Y = HEX_HIGHLIGHT_BAND_MIN_Y;
  *  fighting for the same pixels. */
 export const UNIT_HEX_OUTLINE_RING_R = HEX_RADIUS_WORLD * 0.88;
 
-/** Tube radius of the always-on thin outline. */
-export const UNIT_HEX_OUTLINE_THIN_TUBE  = 0.025;
-/** Tube radius of the thicker outline shown on the selected unit. */
-export const UNIT_HEX_OUTLINE_THICK_TUBE = 0.06;
+/** Tube radius of the always-on thin outline. Halved (0.025→0.012) per
+ *  operator so the ring reads as a thin pencil line, not a marker stroke. */
+export const UNIT_HEX_OUTLINE_THIN_TUBE  = 0.012;
+/** Tube radius of the thicker outline shown on the selected unit. Halved
+ *  alongside the thin tube to keep proportional. */
+export const UNIT_HEX_OUTLINE_THICK_TUBE = 0.03;
 
 /** Emissive cap (× diffuse) for the always-on thin outline material. Low
  *  enough that the ring reads as a tinted line, not a self-lit halo. */
@@ -9233,6 +14444,25 @@ export const CENTRE_SLOT_INDEX = 0;
 /** Index of the slot a building always occupies. */
 export const BUILDING_SLOT_INDEX = 1;
 
+/** Pure helper: the world XZ centres of every fogged building tile, used to feed
+ *  the FogDarkenPlugin uniform. A building instance sits at its hex centre plus
+ *  the NE building-slot offset (`TILE_SLOTS[BUILDING_SLOT_INDEX]`), and the GLB
+ *  geometry is XZ-centred on that pivot — so the building's footprint centre is
+ *  `hexToWorld(col,row) + slot`. Returns `[{x, z}, ...]` for tiles that both
+ *  carry a building AND are in `fogActiveSet`. No DOM/Babylon dependency. */
+export function buildFoggedBuildingTileList(state, fogActiveSet) {
+  const out = [];
+  if (!state?.tiles || !fogActiveSet || fogActiveSet.size === 0) return out;
+  const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
+  for (const tile of state.tiles.values()) {
+    if (!hasBuilding(tile)) continue;
+    if (!fogActiveSet.has(hexKey(tile.col, tile.row))) continue;
+    const { x, z } = hexToWorld(tile.col, tile.row);
+    out.push({ x: x + slot.x, z: z + slot.z });
+  }
+  return out;
+}
+
 /**
  * Pure slot assignment for a hex's occupants.
  *
@@ -9254,7 +14484,7 @@ export const BUILDING_SLOT_INDEX = 1;
  * Sort key is the string form of `id` so the function is stable across
  * runs regardless of insertion order in the caller.
  */
-export function assignTileSlotIndices(occupants) {
+export function assignTileSlotIndices(occupants, opts = {}) {
   const out = new Map();
   if (!Array.isArray(occupants) || occupants.length === 0) {
     return { slotByOccupantId: out, overflow: 0 };
@@ -9281,6 +14511,19 @@ export function assignTileSlotIndices(occupants) {
     used.add(BUILDING_SLOT_INDEX);
     for (let i = 1; i < buildings.length; i++) {
       out.set(buildings[i].id, CENTRE_SLOT_INDEX);
+    }
+  }
+  // Reserved slots (e.g. a road deck crossing a forest tile, via
+  // `roadBlockedTreeSlots`) are unavailable to trees and overflow standees.
+  // Applied AFTER the building anchor so a building keeps slot 1 even when the
+  // road footprint also covers it — buildings legitimately sit over the road
+  // through their own hex. The centre slot is never reserved here (it carries
+  // the standee, not a tree). No occupant is assigned to a reserved slot;
+  // surplus trees simply go unplaced (caller drops them).
+  const reserved = opts.reservedSlots;
+  if (reserved && typeof reserved[Symbol.iterator] === 'function') {
+    for (const s of reserved) {
+      if (typeof s === 'number' && s !== CENTRE_SLOT_INDEX) used.add(s);
     }
   }
   // Trees → outer slots (skip centre, skip building slot).
@@ -9312,8 +14555,8 @@ export function assignTileSlotIndices(occupants) {
  * renderer to place building/tree props at build time and to re-slot standees
  * every draw.
  */
-export function tileSlotWorldPositions(col, row, occupants, radius = HEX_RADIUS_WORLD) {
-  const { slotByOccupantId, overflow } = assignTileSlotIndices(occupants);
+export function tileSlotWorldPositions(col, row, occupants, radius = HEX_RADIUS_WORLD, opts = {}) {
+  const { slotByOccupantId, overflow } = assignTileSlotIndices(occupants, opts);
   const { x: cx, z: cz } = hexToWorld(col, row, radius);
   const positionByOccupantId = new Map();
   for (const [id, slotIdx] of slotByOccupantId) {
@@ -9321,6 +14564,69 @@ export function tileSlotWorldPositions(col, row, occupants, radius = HEX_RADIUS_
     positionByOccupantId.set(id, { x: cx + slot.x, z: cz + slot.z });
   }
   return { positionByOccupantId, overflow };
+}
+
+/** Shortest distance from point (px, pz) to the line segment (ax, az)–(bx, bz)
+ *  in the XZ plane. Pure. A degenerate (zero-length) segment reduces to the
+ *  point-to-endpoint distance. */
+export function _pointSegmentDistanceXZ(px, pz, ax, az, bx, bz) {
+  const vx = bx - ax, vz = bz - az;
+  const wx = px - ax, wz = pz - az;
+  const len2 = vx * vx + vz * vz;
+  let t = len2 > 0 ? (wx * vx + wz * vz) / len2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  const cx = ax + t * vx, cz = az + t * vz;
+  return Math.hypot(px - cx, pz - cz);
+}
+
+/** Which outer tile slots (indices 1..6 of TILE_SLOTS) sit on a road deck
+ *  crossing this tile — i.e. their world position is within `reach` of any road
+ *  stroke segment. A forest tree placed in such a slot would visibly overlap
+ *  the road, so `forestTreesForHex` excludes these slots (dropping surplus
+ *  trees rather than relocating them onto the deck).
+ *
+ *  `strokes` are world-XZ polylines exactly as `networkStrokesForTile` returns
+ *  them (`[{x,z}, …]` arrays). `center` is the hex centre `{x, z}` so the
+ *  local TILE_SLOTS offsets can be lifted into world space for the comparison.
+ *  The centre slot (0) is never returned — it is reserved for a standee and
+ *  never carries a tree. Pure; exported for tests. */
+export function roadBlockedTreeSlots(strokes, center, reach = FOREST_ROAD_TREE_REACH) {
+  const blocked = new Set();
+  if (!Array.isArray(strokes) || strokes.length === 0 || !center) return blocked;
+  for (let i = 1; i < TILE_SLOTS.length; i++) {
+    const px = center.x + TILE_SLOTS[i].x;
+    const pz = center.z + TILE_SLOTS[i].z;
+    for (const stroke of strokes) {
+      if (!Array.isArray(stroke) || stroke.length < 2) continue;
+      let hit = false;
+      for (let s = 0; s + 1 < stroke.length; s++) {
+        const a = stroke[s], b = stroke[s + 1];
+        if (_pointSegmentDistanceXZ(px, pz, a.x, a.z, b.x, b.z) <= reach) {
+          hit = true;
+          break;
+        }
+      }
+      if (hit) { blocked.add(i); break; }
+    }
+  }
+  return blocked;
+}
+
+/** Per-tile ribbon width for one network stroke. A ROAD segment on a
+ *  FOREST-base tile narrows by FOREST_ROAD_WIDTH_FACTOR (renders 20% thinner)
+ *  so the flanking trees have room and the deck doesn't crowd them. Rivers and
+ *  roads on any non-forest base keep the full `baseWidth`. Width is decided
+ *  per-tile, so a road spanning a forest tile and a grass tile narrows only on
+ *  the forest tile's stroke. Pure; exported for tests. */
+export function roadTileRibbonWidth(networkName, tile, baseWidth) {
+  // Was: narrow road through forest tiles by FOREST_ROAD_WIDTH_FACTOR to
+  // avoid crowding the flanking trees. That made the road width step at
+  // every grass/forest seam — operator wants seams to read continuous.
+  // Now every tile uses the full network width regardless of underlying
+  // terrain; per-point world-space sine modulation (in `_buildNetworkMesh`)
+  // still provides natural ±5% width variation that's seam-consistent
+  // (neighbouring tiles compute the same modulation at the shared point).
+  return baseWidth;
 }
 
 // ─── Road / river bezier networks (exported for tests) ─────────────────────
@@ -9350,8 +14656,89 @@ export const RIVER_RIBBON_WIDTH = 0.85;
 /** Road ribbon width — narrower than the river (matches the 2D path's strokeWidth
  *  ratio: rivers wider than roads). ~0.35 × hex-width. */
 export const ROAD_RIBBON_WIDTH  = 0.6;
-/** Y above tile prism top (0.075) and disc top (0.084) — ribbon hugs the terrain. */
+/** Road segments laid through a FOREST-base tile render this fraction of the
+ *  normal width (20% narrower) so the flanking trees have room and don't crowd
+ *  the deck. Non-forest road tiles keep the full ROAD_RIBBON_WIDTH. Applied
+ *  per-tile in `_buildNetworkMesh` (see the forest→grass seam note there).
+ *  Operator-tunable. */
+export const FOREST_ROAD_WIDTH_FACTOR = 0.8;
+/** Y for the river-ribbon mesh in the LEGACY flat-ribbon path (still used by the
+ *  road ribbon at the same general epsilon and by callers/tests that pass this
+ *  in as `yPos`). For the river, R5 introduced a real recessed channel:
+ *  `_buildNetworkMesh('river', …)` ignores this `yPos` and uses
+ *  `RIVER_BED_Y` for the water surface and `RIVER_BANK_TOP_Y` for the dirt
+ *  bank top instead. Kept positive and < 0.05 so the historic tests
+ *  (`renderer-3d-networks.test.js` — "river Y should be a small positive
+ *  depth-bias") still pin a sane value for the road-ribbon-style epsilon. */
 export const RIVER_RIBBON_Y     = 0.005;
+/** R5 — actual river bed depth (NEGATIVE Y). The water surface sits BELOW the
+ *  ground plane so the channel reads as a real 3D depression instead of a
+ *  painted ribbon. Operator-tunable; -0.18 is enough to read clearly at the
+ *  default camera tilt without making bridges/road crossings feel too high. */
+export const RIVER_BED_Y         = -0.18;
+/** R5 follow-up — extra depth pushed BELOW `RIVER_BED_Y` for the splat
+ *  ground's CENTRE vertex on each river/bridge hex. The river water ribbon
+ *  sits exactly at `RIVER_BED_Y`; if the splat centre also sits at
+ *  `RIVER_BED_Y` the two surfaces are coplanar and the opaque splat ground
+ *  (grass texture, since `splatChannelForTile(river) === SPLAT_DIRT` blends
+ *  but the surrounding hex centre splats to grass) wins the depth test,
+ *  hiding the animated water entirely. 1 cm is enough for Babylon's depth
+ *  buffer at the default near plane to consistently resolve "water above
+ *  bed". Operator-tunable. */
+export const SPLAT_RIVER_CENTRE_EPS = 0.01;
+/** R5 follow-up — pure helper computing the Y a splat-ground CORNER vertex
+ *  should sit at, given how many of the THREE tiles touching that corner
+ *  (`tile + 2 corner-neighbours`) are water (river or bridge). Symmetric:
+ *  all three tiles touching the corner compute the same `waterCount` and
+ *  therefore agree on the Y, eliminating the per-tile seam gap that the
+ *  river-only corner-drop loop used to produce.
+ *
+ *  Mapping:
+ *    0 → 0           (no drop — normal ground)
+ *    1 → -0.06       (shallow, bank slope start)
+ *    2 → -0.12       (mid bank)
+ *    3 → RIVER_BED_Y (full bed — corner is interior to the channel)
+ *
+ *  Linear in `waterCount` against `RIVER_BED_Y` so changing the bed depth
+ *  rescales the slope automatically. */
+export function riverCornerY(waterCount) {
+  const c = Math.max(0, Math.min(3, waterCount | 0));
+  // `|| 0` collapses the JS `-0` you'd otherwise get from `RIVER_BED_Y * 0`
+  // when waterCount is 0 — callers compare against `0` strictly.
+  return RIVER_BED_Y * (c / 3) || 0;
+}
+/** R5 — bank top Y. Sits a hair ABOVE the ground (Y=0) so the dirt-textured
+ *  bank deck wins the depth fight against the underlying terrain disc at the
+ *  river hex (same trick the road ribbon uses at ROAD_RIBBON_Y). Same value
+ *  as the legacy RIVER_RIBBON_Y so existing positive-depth-bias tests still
+ *  hold. */
+export const RIVER_BANK_TOP_Y    = 0.005;
+/** R5 polish 2 — water-surface half-width on a STRAIGHT river segment.
+ *  Widened from 0.18 so the water dominates the channel cross-section instead
+ *  of looking like a creek with arrow-shaped puddles in a brown channel. */
+export const RIVER_HALF_WIDTH_MIN = 0.30;
+/** R5 polish 2 — water-surface half-width at the apex of a CORNER. Widened
+ *  from 0.32 in lockstep with MIN. */
+export const RIVER_HALF_WIDTH_MAX = 0.45;
+/** R5 polish 2 — dirt bank width on EACH side, from the waterline outward to
+ *  the outer rim of the bank top. Trimmed from 0.10 so the bank reads as a
+ *  thin shoreline trim rather than a brown channel that swallows the water. */
+export const RIVER_BANK_WIDTH     = 0.05;
+/** R5 polish 3 — texture-repeat multiplier along the flow axis (U) of the
+ *  river ribbon. UVs already use cumulative WORLD-SPACE arclength
+ *  (periods/RIVER_TILE_PERIOD where PERIOD=1.0) so the period is constant in
+ *  world units regardless of stroke length. uScale only governs how many
+ *  texture repeats sit inside one world unit. Polish 2 set this to 4 (period
+ *  = 0.25 world units) which printed visibly tight per-stroke seams at every
+ *  tile boundary (each stroke restarts U=0, so a tight period makes the
+ *  texture-phase mismatch at the seam jarring). Dropping to 2 (period = 0.5
+ *  wu, ~3 repeats per tile-length crossing) keeps the arrow pattern reading
+ *  as flow while widening the period enough that the per-stroke phase reset
+ *  is much less obvious. Set on the base material's diffuseTexture in
+ *  `_buildRibbonMaterial`; per-tile material clones inherit it via
+ *  StandardMaterial.clone(). `_pumpRiverFlow` only mutates uOffset, leaving
+ *  uScale intact. */
+export const RIVER_RIBBON_U_SCALE = 2;
 /** Road sits clearly above the river so the road tube paints OVER the water at
  *  river crossings — the bridge plank is disabled (`_renderBridges = false`),
  *  so the road ribbon is the only thing carrying the visual at the crossing.
@@ -9372,6 +14759,84 @@ export const ROAD_RIBBON_Y      = 0.025;
  *  the alpha sort. */
 export const RIVER_ALPHA_INDEX = 100;
 export const ROAD_ALPHA_INDEX  = 200;
+/** River-flow scroll speed, in texture-tile widths advanced per second. The
+ *  river ribbon's diffuse texture (`river-ribbon.png`) wraps along U (the
+ *  flow axis — `_buildNetworkMesh`/`_buildRiverExtensions` write U =
+ *  cumulative centreline length, V across the ribbon width, and the material
+ *  sets `wrapU = 1` WRAP). Advancing `uOffset` each frame slides the tiled
+ *  texture downstream so the water reads as flowing. Kept deliberately slow
+ *  and subtle; operator-tunable. One full tile period scrolls every
+ *  `1 / RIVER_FLOW_SPEED` seconds. */
+export const RIVER_FLOW_SPEED = 0.06;
+/** Pure helper: river-flow texture `uOffset` for a given elapsed time.
+ *  Returns the scroll offset wrapped into [0, 1) so the float never grows
+ *  unbounded over a long session (precision loss → visible jitter); the
+ *  WRAP address mode makes the [0,1) wrap seamless. Deterministic and
+ *  frame-rate independent — derived from absolute elapsed time, not a
+ *  per-frame delta, so a dropped frame can't make the water stutter. */
+export function riverFlowOffset(elapsedMs, speed = RIVER_FLOW_SPEED) {
+  const tiles = (elapsedMs / 1000) * speed;
+  return tiles - Math.floor(tiles);
+}
+/** Stable `alphaIndex` for the transparent Power-Node tint discs — the faint
+ *  faction-tinted hex overlays laid flush over each Power Node hex
+ *  (`NODE_TINT_ALPHA = 0.1`). Like the border-forest band and combat overlays,
+ *  these alpha-blended discs otherwise sit at Babylon's default `alphaIndex`
+ *  (Number.MAX_VALUE), so the transparent pass tie-breaks them purely on
+ *  distance-to-camera and they reshuffle / pop as the camera moves. Pinned at
+ *  70 — the LOWEST in the band — so the tints draw first (behind everything):
+ *  below the border ground (80) and foliage (90), below the road/river ribbons
+ *  (100/200), and below the combat overlays (300+). That ordering reads right:
+ *  node tints are faint ground-level objective markers, so roads, water, and
+ *  interactive overlays all correctly draw on top of them. Only the transparent
+ *  tint discs are pinned here — the R5 controller ring (opaque tube, gated via
+ *  `nodeControllerRingVisible`) is untouched. */
+export const NODE_TINT_ALPHA_INDEX = 70;
+
+/** Stable `alphaIndex` values for the FADED (alpha < 1) border-forest band
+ *  meshes — the dissolving outer rings of ground discs and foliage. Without an
+ *  explicit index every faded band mesh sits at Babylon's default
+ *  `Number.MAX_VALUE`, so they all tie and the transparent pass falls back to
+ *  sorting them by distance-to-camera every frame. Across the ring of coplanar
+ *  ground discs and the foliage stacked on top, that distance order reshuffles
+ *  constantly as the camera moves (measured: the band's transparent draw order
+ *  changed in 59 of 60 frames over a slow yaw sweep), popping the alpha blend —
+ *  the same per-mesh-distance-sort flicker the road/river ribbons already pin
+ *  away via RIVER/ROAD_ALPHA_INDEX. Ground < trees < river keeps the natural
+ *  back-to-front layering (foliage in front of the ground it stands on, water
+ *  on top) stable regardless of camera angle. Kept below RIVER_ALPHA_INDEX so
+ *  the river extension still draws last. */
+export const BORDER_GROUND_ALPHA_INDEX = 80;
+export const BORDER_TREE_ALPHA_INDEX   = 90;
+
+/** Stable `alphaIndex` values for the transparent COMBAT OVERLAY discs —
+ *  movement / target highlight fills, the plan waypoint puck + numbered badge,
+ *  and the transparent hover ring. Like the border-forest band, every one of
+ *  these alpha-blended meshes sat at Babylon's default `alphaIndex`
+ *  (Number.MAX_VALUE), so the transparent pass tie-broke purely on
+ *  distance-to-camera. The combat camera pan (lunge framing + ease-back) moves
+ *  and rotates across these discs, and at grazing angles different-coloured
+ *  overlays that overlap in screen space reshuffle their draw order frame to
+ *  frame — popping the alpha blend (the "hexes flicker at the end of combat"
+ *  bug). Measured with Babylon's real `defaultTransparentSortCompare` over an
+ *  80-frame combat-camera sweep: cross-category overlay draw order changed in
+ *  24 of 79 frame transitions; pinning these indices drops it to 0.
+ *
+ *  Values ascend in the same order as the overlay Y bands (`Y_TABLE` in
+ *  src/overlays.js: selection 0.12 < highlight-disc 0.16 < plan-arrow 0.18),
+ *  so the alpha sort agrees with the intended back-to-front layering
+ *  regardless of camera angle. All sit ABOVE `ROAD_ALPHA_INDEX` (200) so the
+ *  overlays still draw over the road / river / border terrain ribbons. The
+ *  highlight-disc builder adds the overlay's nested index (move vs target vs
+ *  battle-hex) on top of the base so two fills stacked on one hex never tie;
+ *  the gap to the plan-arrow index leaves room for that. Opaque overlays (the
+ *  selected-unit ring at alpha 1, the opaque plan dashes/arrow shafts) are left
+ *  at the default — the opaque pass ignores `alphaIndex`. */
+export const OVERLAY_SELECTION_ALPHA_INDEX     = 300;
+export const OVERLAY_HIGHLIGHT_DISC_ALPHA_INDEX = 310;
+export const OVERLAY_PLAN_ARROW_ALPHA_INDEX    = 320;
+export const OVERLAY_PLAN_BADGE_ALPHA_INDEX    = 330;
+
 /** Number of bezier samples per stroke. 10 is smooth enough at this radius
  *  without bloating the tube vertex count on Campaign-size maps. */
 // Bumped from 10 → 22 — at tight bezier bends the old segment count produced
@@ -9470,6 +14935,55 @@ export function ribbonOffsetPaths(points, width) {
   return { left, right };
 }
 
+/** Number of extra centreline samples a rounded terminus cap prepends past the
+ *  dead-end tip. Higher = smoother semicircle. Tunable. */
+export const TERMINUS_CAP_SEGMENTS = 6;
+
+/** Pure helper: build the rounded semicircular cap samples for a ribbon
+ *  terminus (a road dead-end / map-edge stub). The flat end of a ribbon stops
+ *  in a hard rectangle; this rounds it into a half-disc of radius = the
+ *  ribbon's half-width and fades it out so the road dissolves into the ground
+ *  instead of butting up against it.
+ *
+ *  Given the terminus `tip` (`{x, z}`, the dead-end centreline endpoint) and
+ *  `inwardDir` (`{x, z}` pointing from the tip back along the road toward its
+ *  body), returns `count` extra centreline samples extending OUTWARD past the
+ *  tip, ordered from the OUTERMOST sample (the very tip of the semicircle)
+ *  inward toward — but not including — `tip`. Each sample carries:
+ *    • `x`, `z`        world position along the cap's central axis
+ *    • `widthScale`    half-width multiplier (0 at the tip → ~1 at the base),
+ *                      following `cos θ` so the two offset edges trace a
+ *                      quarter-circle and meet at the tip in a semicircle
+ *    • `alpha`         length-wise alpha multiplier (0 at the tip → ~1 at the
+ *                      base) so the cap fades to fully transparent at its point
+ *
+ *  Pure — no Babylon dependency, exported for unit tests. The caller prepends
+ *  these to the stroke's point list and threads `widthScale` into the per-point
+ *  ribbon width and `alpha` into the per-vertex colour buffer. */
+export function terminusCapSamples(tip, inwardDir, radius, count = TERMINUS_CAP_SEGMENTS) {
+  const out = [];
+  if (!tip || !inwardDir || !(radius > 0)) return out;
+  const len = Math.hypot(inwardDir.x, inwardDir.z) || 1;
+  const ox = -inwardDir.x / len; // outward unit (away from the road body)
+  const oz = -inwardDir.z / len;
+  const n = Math.max(1, count | 0);
+  for (let i = 0; i < n; i++) {
+    // θ runs from π/2 at the tip (i = 0) down toward 0 at the base. The base
+    // sample (i = n − 1) sits just shy of the tip point so it blends smoothly
+    // into the full-width, full-alpha road body that follows it.
+    const theta = (Math.PI / 2) * ((n - i) / n);
+    const a = radius * Math.sin(theta);   // outward distance along the axis
+    const widthScale = Math.cos(theta);   // half-width fraction at this sample
+    out.push({
+      x: tip.x + ox * a,
+      z: tip.z + oz * a,
+      widthScale,
+      alpha: widthScale,
+    });
+  }
+  return out;
+}
+
 /** Pure helper: face normal (unit vector) of the first triangle CreateRibbon
  *  emits for a `pathArray = [path0, path1]` ribbon. Babylon builds each rung
  *  of the strip as the triangle `(path0[i], path1[i], path0[i+1])`, so the
@@ -9559,8 +15073,13 @@ export function networkStrokesForTile(tile, neighbours, opts = {}) {
     const e = edges[0];
     if (kind === 'road') {
       // Dead-end stub: straight line from centre to the edge midpoint facing
-      // the lone neighbour (matches the 2D path at building entrances).
-      strokes.push([{ x: here.x, z: here.z }, { x: e.mx, z: e.mz }]);
+      // the lone neighbour (matches the 2D path at building entrances). The
+      // centre end (pts[0]) is a genuine terminus — nothing continues past it —
+      // so tag it for the rounded fading cap in `_buildNetworkMesh`. Rivers
+      // flow off-map (handled by the border extension) and keep a square end.
+      const stub = [{ x: here.x, z: here.z }, { x: e.mx, z: e.mz }];
+      stub.terminusStart = true;
+      strokes.push(stub);
       return strokes;
     }
     // River: extend off-tile in the opposite direction so endpoints fade past
@@ -9594,6 +15113,68 @@ export function networkStrokesForTile(tile, neighbours, opts = {}) {
   return strokes;
 }
 
+/** R5 — Curvature-based water half-widths along a river stroke. Returns one
+ *  half-width per sample point so the consumer can feed it as a per-point
+ *  `width` array to `ribbonOffsetPaths`. Pure (no Babylon). Used by both the
+ *  in-map river ribbon and the border extensions so the seam at the playable
+ *  edge stays continuous.
+ *
+ *  Curvature at point i = absolute turn angle between incoming chord
+ *  (p_{i-1} → p_i) and outgoing chord (p_i → p_{i+1}). Endpoints inherit
+ *  their inner neighbour's value (so the seam at a junction or extension
+ *  matches the adjacent stroke). Normalised against `cornerCurvatureRef`
+ *  (≈ the per-segment angle change at a typical hex corner: ~π/N for an
+ *  N-segment bezier through a 60° turn) and clamped to [0,1] before
+ *  lerping between `minHalf` (straight) and `maxHalf` (corner apex).
+ *
+ *  A small running average smooths the per-segment turn-angle noise so the
+ *  width doesn't pulse vertex-by-vertex along an otherwise smooth bezier. */
+export function riverHalfWidthsByCurvature(
+  pts,
+  minHalf = RIVER_HALF_WIDTH_MIN,
+  maxHalf = RIVER_HALF_WIDTH_MAX,
+  cornerCurvatureRef = Math.PI / 6, // ~30° turn between adjacent segments → apex
+) {
+  if (!Array.isArray(pts) || pts.length < 2) return [];
+  const N = pts.length;
+  const out = new Array(N);
+  if (N === 2) {
+    // Straight stub — uniform min width.
+    out[0] = minHalf;
+    out[1] = minHalf;
+    return out;
+  }
+  const raw = new Array(N);
+  for (let i = 1; i < N - 1; i++) {
+    const ax = pts[i].x - pts[i - 1].x;
+    const az = pts[i].z - pts[i - 1].z;
+    const bx = pts[i + 1].x - pts[i].x;
+    const bz = pts[i + 1].z - pts[i].z;
+    const ma = Math.hypot(ax, az);
+    const mb = Math.hypot(bx, bz);
+    if (ma < 1e-9 || mb < 1e-9) { raw[i] = 0; continue; }
+    let cos = (ax * bx + az * bz) / (ma * mb);
+    if (cos > 1) cos = 1; if (cos < -1) cos = -1;
+    raw[i] = Math.acos(cos);
+  }
+  raw[0] = raw[1] ?? 0;
+  raw[N - 1] = raw[N - 2] ?? 0;
+  // 3-tap running mean to take the edge off vertex-by-vertex pulsing.
+  const smooth = new Array(N);
+  for (let i = 0; i < N; i++) {
+    const a = raw[i - 1] ?? raw[i];
+    const b = raw[i];
+    const c = raw[i + 1] ?? raw[i];
+    smooth[i] = (a + b + c) / 3;
+  }
+  const ref = cornerCurvatureRef > 1e-9 ? cornerCurvatureRef : 1;
+  for (let i = 0; i < N; i++) {
+    const k = Math.max(0, Math.min(1, smooth[i] / ref));
+    out[i] = minHalf + (maxHalf - minHalf) * k;
+  }
+  return out;
+}
+
 /**
  * Walk the full map and build every river segment's bezier strokes.
  * Returns an array of `{ tile, strokes }`. Pure — takes the tile map by
@@ -9603,7 +15184,7 @@ export function networkStrokesForTile(tile, neighbours, opts = {}) {
  */
 export function buildRiverNetworkStrokes(tiles, hexKeyFn = hexKey, getNeighborsFn = getNeighbors) {
   if (!tiles || typeof tiles.values !== 'function') return [];
-  const isWater = t => t && (t.type === TileType.RIVER || t.type === TileType.BRIDGE);
+  const isWater = t => t && (isRiver(t) || isBridge(t));
   const out = [];
   for (const tile of tiles.values()) {
     if (!isWater(tile)) continue;
@@ -9613,7 +15194,53 @@ export function buildRiverNetworkStrokes(tiles, hexKeyFn = hexKey, getNeighborsF
     const strokes = networkStrokesForTile(tile, nbrs);
     if (strokes.length > 0) out.push({ tile, strokes });
   }
+  // Orient every stroke to run in the same canonical world-space flow
+  // direction, so consumers (UV scroll, particle emit, etc.) get a
+  // direction-consistent network for free instead of each re-deriving it.
+  // Network topology + tile-walk order produce strokes whose start→end
+  // chord can point either way; pick a single ref direction (chord between
+  // the two river exits; fall back to the vector sum of per-tile chords),
+  // then reverse any stroke whose chord opposes it.
+  const flowRef = canonicalRiverFlowDir(out, riverExitPoints(tiles));
+  if (flowRef) {
+    for (const seg of out) {
+      for (let i = 0; i < seg.strokes.length; i++) {
+        const s = seg.strokes[i];
+        if (!s || s.length < 2) continue;
+        const dx = s[s.length - 1].x - s[0].x;
+        const dz = s[s.length - 1].z - s[0].z;
+        if (dx * flowRef.x + dz * flowRef.z < 0) {
+          seg.strokes[i] = s.slice().reverse();
+        }
+      }
+    }
+  }
   return out;
+}
+
+/** Pure helper: pick a single canonical world-space direction for a river
+ *  network (used to orient strokes + extensions consistently). Prefers the
+ *  chord between the river's two map exits; falls back to the vector sum of
+ *  per-tile stroke chords. Returns `{x, z}` unit vector or `null`. */
+export function canonicalRiverFlowDir(segments, exits) {
+  if (exits && exits.length >= 2) {
+    const dx = exits[1].point.x - exits[0].point.x;
+    const dz = exits[1].point.z - exits[0].point.z;
+    const mag = Math.hypot(dx, dz);
+    if (mag > 1e-3) return { x: dx / mag, z: dz / mag };
+  }
+  let sx = 0, sz = 0;
+  for (const seg of (segments || [])) {
+    for (const s of (seg.strokes || [])) {
+      if (s && s.length >= 2) {
+        sx += s[s.length - 1].x - s[0].x;
+        sz += s[s.length - 1].z - s[0].z;
+      }
+    }
+  }
+  const mag = Math.hypot(sx, sz);
+  if (mag > 1e-3) return { x: sx / mag, z: sz / mag };
+  return null;
 }
 
 /**
@@ -9631,9 +15258,12 @@ export function buildRoadNetworkStrokes(tiles, hexKeyFn = hexKey) {
   const out = [];
   for (const tile of tiles.values()) {
     if (!tile) continue;
-    if (tile.type !== TileType.ROAD
-      && tile.type !== TileType.BRIDGE
-      && tile.type !== TileType.BUILDING) continue;
+    // Road network = road tiles, bridges, and building tiles. Buildings carry
+    // their road-through purely via `roadDirs` (their `path` layer is null), so
+    // they're included by hasBuilding(), NOT by a path===road test.
+    if (pathOf(tile) !== PathType.ROAD
+      && !isBridge(tile)
+      && !hasBuilding(tile)) continue;
     if (!tile.roadDirs || tile.roadDirs.size === 0) continue;
     const nbrs = [];
     for (const k of tile.roadDirs) {
@@ -9684,7 +15314,7 @@ export function riverExitPoints(
   radius = HEX_RADIUS_WORLD,
 ) {
   if (!tiles || typeof tiles.values !== 'function') return [];
-  const isWater = t => t && (t.type === TileType.RIVER || t.type === TileType.BRIDGE);
+  const isWater = t => t && (isRiver(t) || isBridge(t));
   const apo = HEX_APOTHEM * radius;
   const out = [];
   for (const tile of tiles.values()) {
@@ -9753,9 +15383,21 @@ export const FOREST_OUTER_RADIUS = 0.85;
  *  same across runs but the cluster reads as visually varied. */
 export const FOREST_SCALE_MIN = 0.5;
 export const FOREST_SCALE_MAX = 1.2;
-/** Cluster size range (inclusive). */
-export const FOREST_TREES_MIN = 3;
-export const FOREST_TREES_MAX = 5;
+/** Cluster size range (inclusive) — owned in src/tiles.js so the game-side
+ *  hex-capacity gate and the renderer cluster always read the same number.
+ *  Re-exported above for back-compat with existing test imports. */
+
+/** Half-width of the (narrowed) road deck through a forest tile, world units. */
+export const FOREST_ROAD_HALF_WIDTH = (ROAD_RIBBON_WIDTH * FOREST_ROAD_WIDTH_FACTOR) / 2;
+/** Extra clearance past the road half-width when deciding which forest tree
+ *  slots sit on the deck (≈ a tree-base radius). Bigger = trees kept further
+ *  off the road, but blocks more slots and thins the cluster. Tunable. */
+export const FOREST_ROAD_TREE_CLEARANCE = 0.12;
+/** A forest tree slot is dropped if its centre lies within this distance of any
+ *  road segment crossing the tile. = narrowed half-width + tree-base clearance.
+ *  Kept below the diagonal outer-slot distance (~0.42) so an axis-aligned road
+ *  only blocks the two in-line slots, leaving the corner slots for trees. */
+export const FOREST_ROAD_TREE_REACH = FOREST_ROAD_HALF_WIDTH + FOREST_ROAD_TREE_CLEARANCE;
 
 /** Deterministic [0, 1) hash from (col, row, salt). Tiny integer mixer — not
  *  cryptographic, just stable across runs and well-distributed enough for
@@ -9773,11 +15415,26 @@ function _forestHash(col, row, salt) {
  *  tile-slot system (outer ring only — the centre is reserved for standees).
  *  Per-tree scale, species, and leaf-shade index are all hex-stable so the
  *  same forest hex always paints the same cluster across sessions. Pure:
- *  same (col, row) → same trees. */
-export function forestTreesForHex(col, row, season = null) {
-  const span = FOREST_TREES_MAX - FOREST_TREES_MIN + 1;
-  const n    = FOREST_TREES_MIN + Math.floor(_forestHash(col, row, 0) * span);
-  // _forestHash returns < 1, so floor(<span) ∈ [0, span-1]; n ∈ [MIN, MAX].
+ *  same (col, row) → same trees.
+ *
+ *  `opts.reserveBuildingSlot` — set on a building-on-forest tile so the trees
+ *  SKIP BUILDING_SLOT_INDEX (the slot the procedural building box occupies).
+ *  Mirrors the additive staticOccupants the draw-time standee re-slot reserves
+ *  (see `_syncEntityStandees`): a building occupant is fed into the slot
+ *  assignment but excluded from the returned cluster — only trees are returned.
+ *  Without this, tree[0] would be baked at the building's slot and clip through
+ *  it. Plain (non-building) forest tiles leave it false and use the full ring.
+ *
+ *  `opts.blockedSlots` — a Set of TILE_SLOTS indices a road deck crosses on
+ *  this tile (computed via `roadBlockedTreeSlots`). Trees skip those slots so
+ *  cones never land on the road mesh; surplus trees beyond the remaining free
+ *  slots are dropped. Empty / omitted on a roadless forest tile. */
+export function forestTreesForHex(col, row, season = null, opts = {}) {
+  const reserveBuildingSlot = !!opts.reserveBuildingSlot;
+  // The tree count is owned by src/tiles.js's `treeCountForTile` so the
+  // game-side capacity gate and the renderer's cluster agree exactly. Pass
+  // a synthetic forest tile — the helper only reads (col,row,base).
+  const n = treeCountForTile({ col, row, base: TileType.FOREST });
   const scaleSpan = FOREST_SCALE_MAX - FOREST_SCALE_MIN;
   // Rotate the slot order per-hex so neighbouring forest hexes don't all
   // start at the same NE slot — keeps the visual variety the ring layout had.
@@ -9789,10 +15446,22 @@ export function forestTreesForHex(col, row, season = null) {
     const order = ((i + rotation) % 6).toString().padStart(2, '0');
     occupants.push({ id: `tree_${order}_${i}`, kind: 'tree', _idx: i });
   }
-  const { slotByOccupantId } = assignTileSlotIndices(occupants);
+  // On a building tile, hand a building occupant to the slot allocator so it
+  // claims BUILDING_SLOT_INDEX and trees fall into the remaining outer slots.
+  // It is NOT pushed onto `occupants`, so the returned cluster is trees only.
+  const slotInput = reserveBuildingSlot
+    ? [{ id: 'building', kind: 'building' }, ...occupants]
+    : occupants;
+  const { slotByOccupantId } = assignTileSlotIndices(slotInput, {
+    reservedSlots: opts.blockedSlots,
+  });
   const trees = [];
   for (const occ of occupants) {
-    const slotIdx = slotByOccupantId.get(occ.id) ?? CENTRE_SLOT_INDEX;
+    // A tree whose slot was taken by the building or a road deck (blockedSlots)
+    // gets no assignment — drop it rather than piling it on the centre (which
+    // sits on the road / is reserved for a standee).
+    const slotIdx = slotByOccupantId.get(occ.id);
+    if (slotIdx === undefined) continue;
     const slot = TILE_SLOTS[slotIdx];
     const scale = FOREST_SCALE_MIN + _forestHash(col, row, occ._idx * 3 + 3) * scaleSpan;
     trees.push({
@@ -9854,13 +15523,14 @@ export const TREE_LEAF_PALETTE = Object.freeze({
   spruce: Object.freeze(['#1b3b2a', '#234a32', '#163528']),
 });
 
-/** Leaf-colour palette per species, pre-multiplied by the border-forest fog
- *  tint. Matches the historical `#0e1f0c` (the old uniform fogged leaf colour)
- *  in average tone but spreads across three shades per species. Summer-default. */
+/** Leaf-colour palette per species, mildly darkened for fogged areas. Tuned
+ *  to ~65% of the unfogged values so trees in fogged hexes read as "in
+ *  shadow" without being crushed — operator: "lessen the impact, don't
+ *  want it too dark since the border forest is all trees." */
 export const TREE_LEAF_PALETTE_FOG = Object.freeze({
-  pine:   Object.freeze(['#0e1f0c', '#11240e', '#0c1a0a']),
-  oak:    Object.freeze(['#162a10', '#1a3214', '#13240d']),
-  spruce: Object.freeze(['#0c1a12', '#0f2017', '#091410']),
+  pine:   Object.freeze(['#173115', '#1d3b17', '#122c12']),
+  oak:    Object.freeze(['#28451a', '#304f1f', '#223e17']),
+  spruce: Object.freeze(['#11261b', '#173021', '#0e2219']),
 });
 
 /** Per-season leaf-colour palettes. Each season provides the same shape as
@@ -9994,6 +15664,13 @@ export function pickSeason(seedHash) {
  *  silhouette ambiguity threshold. */
 export const BUILDING_DIM_JITTER = 0.15;
 
+/** Uniform (isotropic) scale jitter applied to a GLB *building instance* on top
+ *  of its bbox-derived base scale — see `houseInstanceScalingForHex`. Kept
+ *  small and equal-on-all-axes so buildings stay a consistent size and never
+ *  distort; only the procedural box+roof fallback uses the larger anisotropic
+ *  `BUILDING_DIM_JITTER`. */
+export const HOUSE_INSTANCE_JITTER = 0.04;
+
 /** Base box dimensions before jitter (matches the historical fixed values). */
 export const BUILDING_BASE_DIM = Object.freeze({ width: 0.55, height: 0.70, depth: 0.55 });
 
@@ -10001,24 +15678,31 @@ export const BUILDING_BASE_DIM = Object.freeze({ width: 0.55, height: 0.70, dept
  *  with the box; roof height is constant so the lid silhouette stays crisp. */
 export const BUILDING_ROOF_DIM = Object.freeze({ width: 0.62, height: 0.15, depth: 0.62 });
 
-/** Deterministic yaw (radians, [0, 2π)) for the house instance on (col, row).
- *  Spins each building around its vertical axis so identical models read as a
- *  village rather than a regimented row. Uses a fresh hash seed so yaw doesn't
- *  correlate with the existing dimension jitter. */
-export function houseYawForHex(col, row) {
-  return _forestHash(col, row, 251) * Math.PI * 2;
+/** Yaw (radians, [0, 2π)) for a building instance — oriented so the model
+ *  faces the centre of its hex. Every building occupies the same NE building
+ *  slot (`BUILDING_SLOT_INDEX`), so the vector from the slot back to the tile
+ *  centre is `(-slot.x, -slot.z)`; turning the model to look down that vector
+ *  gives one consistent inward facing for all buildings. This replaces the
+ *  former hash-seeded arbitrary spin — the operator asked for a consistent
+ *  orientation rather than a randomly rotated village. `col`/`row` are retained
+ *  in the signature for call-site symmetry but no longer affect the result. */
+export function houseYawForHex(col, row) { // eslint-disable-line no-unused-vars
+  const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
+  const yaw  = Math.atan2(-slot.x, -slot.z);
+  return yaw < 0 ? yaw + Math.PI * 2 : yaw;
 }
 
-/** Per-hex anisotropic scaling factors for the house instance, derived from
- *  the existing `buildingDimensionsForHex` so the procedural-vs-instance paths
- *  share one source of jitter. Each axis ratio = jittered-box-axis / base. */
+/** Small *uniform* (isotropic) scale jitter for a building instance, applied on
+ *  top of the template's bbox-derived base scale. The base scale already lands
+ *  every template at `TARGET_BUILDING_WORLD_HEIGHT` (the real normalization), so
+ *  this only adds ≤±`HOUSE_INSTANCE_JITTER` of subtle size variety so a cluster
+ *  of identical GLBs doesn't read as stamped. The factor is identical on x/y/z
+ *  — buildings are never squashed or stretched. This replaces the former
+ *  per-axis ±15% jitter (derived from `buildingDimensionsForHex`) that made
+ *  buildings look "all slightly different" in both size and shape. */
 export function houseInstanceScalingForHex(col, row) {
-  const dims = buildingDimensionsForHex(col, row);
-  return {
-    x: dims.box.width  / BUILDING_BASE_DIM.width,
-    y: dims.box.height / BUILDING_BASE_DIM.height,
-    z: dims.box.depth  / BUILDING_BASE_DIM.depth,
-  };
+  const f = 1 + (_forestHash(col, row, 211) - 0.5) * 2 * HOUSE_INSTANCE_JITTER;
+  return { x: f, y: f, z: f };
 }
 
 /** Deterministic dimensions for the building on (col, row). Returns
@@ -10047,10 +15731,15 @@ export function buildingDimensionsForHex(col, row) {
 /** Hemispheric-light + clear-colour config per game phase.
  *  intensity → light.intensity; color → light.diffuse (warm at dawn/dusk,
  *  white at day, cool blue at night); clear → scene.clearColor (sky/horizon
- *  tint that shows through gaps and behind transparent props); sun.dir →
- *  DirectionalLight.direction (low-angle warm at dawn/dusk, near-overhead at
- *  day, irrelevant at night); sun.intensity → DirectionalLight.intensity
- *  (drives the strength of cast shadows). */
+ *  tint that shows through gaps and behind transparent props);
+ *  sun.dirStart / sun.dirEnd → DirectionalLight.direction sweep across the
+ *  phase's round run (day rises east→sets west; night moon east→west).
+ *  Dawn / dusk are 1-round transitions that auto-interpolate between
+ *  neighbour phases (NIGHT.dirEnd→DAY.dirStart and DAY.dirEnd→NIGHT.dirStart);
+ *  for them, `sun.dir` is a phase-locked fallback used when cycleConfig is
+ *  non-default. Old configs with a single `sun.dir` are honored as both
+ *  dirStart and dirEnd via `resolveSunDirPair`.
+ *  sun.intensity → DirectionalLight.intensity (drives cast-shadow strength). */
 // Hemi (ambient fill) is kept low so shadows from the directional sun read as
 // real dark patches rather than getting washed out — shadows only darken the
 // sun's contribution, so a strong hemi makes them invisible. Sun is boosted to
@@ -10069,102 +15758,145 @@ export const PHASE_LIGHT_CONFIG = Object.freeze({
   // fog when the sun is brightest, since contrast against lit hexes is
   // highest).
   dawn:  {
-    intensity: 0.25, color: { r: 1.00, g: 0.82, b: 0.62 }, clear: { r: 0.84, g: 0.65, b: 0.38 },
-    ambient: { r: 0.42, g: 0.35, b: 0.30 },
-    fogTint: 0.55,
-    // Low sun close to the horizon — long shadows raked across the map east-to-west.
-    sun: { dir: { x: -0.85, y: -0.40, z: 0.10 }, intensity: 1.20 },
+    intensity: 0.73, color: { r: 1.00, g: 0.82, b: 0.62 }, clear: { r: 0.84, g: 0.65, b: 0.38 },
+    ambient: { r: 0.89, g: 0.74, b: 0.64 },
+    fogTint: 0.70,
+    // Dawn is a 1-round transition phase — the sun direction auto-interpolates
+    // between NIGHT.dirEnd → DAY.dirStart at runtime (see resolveSunDirPair).
+    // `dir` here is the fallback used when a non-default cycleConfig prevents
+    // that auto-interpolation; chosen as the dawn-side endpoint so the look
+    // still reads as a low rising sun. Long shadows east-to-west.
+    sun: { dir: { x: -0.85, y: -0.40, z: 0.10 }, intensity: 2.10 },
   },
   day:   {
     intensity: 0.43, color: { r: 1.00, g: 1.00, b: 0.97 }, clear: { r: 0.78, g: 0.93, b: 0.93 },
     ambient: { r: 0.22, g: 0.22, b: 0.24 },
-    fogTint: 0.26,
-    // Tilt the day sun off vertical so shadows actually project a visible
-    // footprint. A near-vertical sun (e.g. 0,-1,0) projects a near-zero
-    // offset and shadows disappear into the caster itself.
-    sun: { dir: { x:  0.35, y: -0.85, z: 0.40 }, intensity: 2.00 },
+    fogTint: 0.48,
+    // Day sun sweeps across multiple rounds — `dirStart` is the rising-side
+    // position (just past dawn, sun low in the east); `dirEnd` is the setting
+    // side (heading toward dusk, sun low in the west). Tilted off vertical
+    // (non-zero z) so cast shadows always project a visible footprint — a
+    // near-vertical sun (0,-1,0) would collapse shadows into their casters.
+    sun: {
+      dirStart: { x: -0.43, y: -0.72, z: 0.31 },
+      dirEnd:   { x:  0.43, y: -0.72, z: 0.31 },
+      intensity: 2.00,
+    },
   },
   dusk:  {
-    intensity: 0.25, color: { r: 1.00, g: 0.62, b: 0.48 }, clear: { r: 1.00, g: 0.81, b: 0.73 },
-    ambient: { r: 0.45, g: 0.30, b: 0.28 },
-    fogTint: 0.65,
-    // Low sun mirrored from dawn — long shadows raked west-to-east.
-    sun: { dir: { x:  0.85, y: -0.40, z: 0.10 }, intensity: 1.20 },
+    intensity: 0.77, color: { r: 1.00, g: 0.62, b: 0.48 }, clear: { r: 1.00, g: 0.81, b: 0.73 },
+    ambient: { r: 0.57, g: 0.38, b: 0.35 },
+    fogTint: 0.60,
+    // Dusk mirrors dawn — a 1-round transition that auto-interpolates between
+    // DAY.dirEnd → NIGHT.dirStart at runtime. `dir` is the cycleConfig
+    // fallback (low setting-side sun, shadows raked west-to-east).
+    sun: { dir: { x:  0.85, y: -0.40, z: 0.10 }, intensity: 2.09 },
   },
   night: {
-    intensity: 1.16, color: { r: 0.68, g: 0.73, b: 0.86 }, clear: { r: 0.00, g: 0.05, b: 0.15 },
+    intensity: 1.33, color: { r: 0.68, g: 0.73, b: 0.86 }, clear: { r: 0.00, g: 0.21, b: 0.29 },
     // Night ambient + hemi carry general visibility; the directional
     // light here acts as moonlight — kept at a modest intensity (was 0.08
     // = effectively off, which meant zero cast shadows at night) so
     // standees / buildings / trees still throw shadows onto the ground
     // under a near-overhead moon. Cool blue-violet ambient preserves the
     // moonlit mood.
-    ambient: { r: 0.58, g: 0.66, b: 0.91 },
-    fogTint: 0.36,
-    // Moon peak direction — clearly tilted off vertical so cast shadows
-    // still project. `sunDirectionForRound` overrides for default cycles to
-    // sweep east → peak → west across the three night rounds; this value
-    // is the per-phase fallback used by custom cycleConfigs.
-    sun: { dir: { x:  0.00, y: -0.75, z: 0.35 }, intensity: 0.60 },
+    ambient: { r: 0.00, g: 0.55, b: 0.72 },
+    fogTint: 0.50,
+    // Moon rises east → sets west across the three night rounds. Endpoints
+    // kept clearly off vertical (non-zero z) so cast shadows still project.
+    sun: {
+      dirStart: { x: -0.85, y: -0.40, z: 0.35 },
+      dirEnd:   { x:  0.85, y: -0.40, z: 0.35 },
+      intensity: 0.60,
+    },
   },
 });
 
-/** Sun direction for a phase. Pure helper used both internally and by tests. */
-export function sunDirectionForPhase(phase) {
-  return getPhaseLightConfig(phase).sun.dir;
+/** Resolve a phase's effective {dirStart, dirEnd} pair from the schema. New
+ *  configs carry explicit dirStart + dirEnd (DAY/NIGHT); legacy configs with
+ *  just `dir` are honored as both start and end (a 1-round transitional
+ *  phase or a phase the operator hasn't yet tuned with a sweep). Pure helper
+ *  — does NOT do dawn/dusk neighbour-bridging; that lives in
+ *  `sunDirectionForRound` since it only applies on the default cycle. */
+export function resolveSunDirPair(phase) {
+  const sun = getPhaseLightConfig(phase).sun;
+  if (!sun) {
+    const fallback = { x: 0, y: -1, z: 0 };
+    return { dirStart: { ...fallback }, dirEnd: { ...fallback } };
+  }
+  const start = sun.dirStart ?? sun.dir ?? { x: 0, y: -1, z: 0 };
+  const end   = sun.dirEnd   ?? sun.dir ?? start;
+  return { dirStart: { ...start }, dirEnd: { ...end } };
 }
 
-/** Sun direction for a specific round in the day/night cycle. Where
- *  `sunDirectionForPhase` returns the same vector for every round in a phase
- *  (so all three DAY rounds share one overhead direction), this helper sweeps
- *  the sun across the sky as the day progresses — dawn → day1 → day2 → day3
- *  → dusk reads as a clean linear horizontal lerp with a sinusoidal arc on
- *  the vertical, so the sun rises, peaks at noon, and sets without snapping.
+/** Sun direction for a phase, in isolation (no cycle context). Returns the
+ *  phase's `dirStart` — the position at the start of the phase's run. Used
+ *  by snapshots and callers that need a single "characteristic" direction
+ *  per phase. Pure helper. */
+export function sunDirectionForPhase(phase) {
+  return resolveSunDirPair(phase).dirStart;
+}
+
+/** Compute (phase, t) for a given round and cycle config. `t` is the
+ *  normalized position within the phase's contiguous run (0 at the first
+ *  round of the run, 1 at the last; 0.5 for a 1-round phase). Pure helper
+ *  exported for tests. */
+export function phaseProgressForRound(round, cycleConfig = null) {
+  const cycle = cycleConfig?.phases ?? null;
+  if (cycle && cycle.length > 0) {
+    const len = cycle.length;
+    const loop = cycleConfig.loop !== false;
+    let idx = round - 1;
+    idx = loop ? ((idx % len) + len) % len : Math.min(Math.max(idx, 0), len - 1);
+    const phase = cycle[idx];
+    // Find the contiguous run that contains `idx`.
+    let start = idx, end = idx;
+    while (start > 0 && cycle[start - 1] === phase) start--;
+    while (end < len - 1 && cycle[end + 1] === phase) end++;
+    const runLen = end - start + 1;
+    const t = runLen > 1 ? (idx - start) / (runLen - 1) : 0.5;
+    return { phase, t };
+  }
+  // Default 8-step cycle: dawn(1), day(2,3,4), dusk(5), night(6,7,8).
+  const r = (((round - 1) % 8) + 8) % 8;
+  if (r === 0)              return { phase: 'dawn',  t: 0.5 };
+  if (r >= 1 && r <= 3)     return { phase: 'day',   t: (r - 1) / 2 };
+  if (r === 4)              return { phase: 'dusk',  t: 0.5 };
+  return { phase: 'night', t: (r - 5) / 2 };
+}
+
+/** Sun direction for a specific round in the day/night cycle. Locates the
+ *  round's phase + position-in-phase, then linearly interpolates between the
+ *  phase's dirStart and dirEnd.
  *
- *  Round indexing: this assumes the default 8-step cycle (dawn, day×3, dusk,
- *  night×3). For custom cycleConfigs, falls back to per-phase direction. */
+ *  On the default cycle, the 1-round transition phases (dawn/dusk) bridge
+ *  between their neighbours — NIGHT.dirEnd→DAY.dirStart during dawn, and
+ *  DAY.dirEnd→NIGHT.dirStart during dusk — so the sun glides smoothly across
+ *  the full 8-round cycle rather than snapping at phase boundaries. The dawn
+ *  / dusk `sun.dir` field is the fallback used on custom cycleConfigs where
+ *  neighbour-bridging isn't well-defined.
+ *
+ *  Works for both default and custom cycleConfigs. */
 export function sunDirectionForRound(round, cycleConfig = null) {
-  if (cycleConfig) {
-    // Custom cycle: fall back to the per-phase sun direction; sweeping across
-    // arbitrary cycle shapes isn't well-defined.
-    return getPhaseLightConfig(undefined).sun.dir;
+  const { phase, t } = phaseProgressForRound(round, cycleConfig);
+  // Default-cycle dawn / dusk: bridge between neighbour phases so the sweep
+  // is continuous across the whole 8-round cycle (no snap at phase boundary).
+  if (!cycleConfig && (phase === 'dawn' || phase === 'dusk')) {
+    const pair = phase === 'dawn'
+      ? { dirStart: resolveSunDirPair('night').dirEnd, dirEnd: resolveSunDirPair('day').dirStart }
+      : { dirStart: resolveSunDirPair('day').dirEnd,   dirEnd: resolveSunDirPair('night').dirStart };
+    return {
+      x: pair.dirStart.x + (pair.dirEnd.x - pair.dirStart.x) * t,
+      y: pair.dirStart.y + (pair.dirEnd.y - pair.dirStart.y) * t,
+      z: pair.dirStart.z + (pair.dirEnd.z - pair.dirStart.z) * t,
+    };
   }
-  const r = ((round - 1) % 8 + 8) % 8; // 0..7
-  const dawn  = getPhaseLightConfig('dawn').sun.dir;
-  const dusk  = getPhaseLightConfig('dusk').sun.dir;
-  const day   = getPhaseLightConfig('day').sun.dir;
-  // ── Daylight band (rounds 0..4 — dawn through dusk) ──────────────────────
-  // Linear horizontal lerp east-to-west, sinusoidal arc on Y (low at endpoints,
-  // peaking at noon) and on Z (so the noon sun has a meaningful tilt away from
-  // vertical — straight-down sun produces zero-offset shadows). Noon Y peaks
-  // at the day-phase config sun.dir.y; noon Z peaks at day.dir.z.
-  if (r <= 4) {
-    const t = r / 4; // 0 at dawn, 1 at dusk
-    const x = dawn.x + (dusk.x - dawn.x) * t;
-    const horizonY = (dawn.y + dusk.y) / 2;
-    const y        = horizonY + (day.y - horizonY) * Math.sin(Math.PI * t);
-    const horizonZ = (dawn.z + dusk.z) / 2;
-    const z        = horizonZ + (day.z - horizonZ) * Math.sin(Math.PI * t);
-    return { x, y, z };
-  }
-  // ── Night band (rounds 5..7 — moonlight arc) ─────────────────────────────
-  // A subtle mirror of the daytime sweep: moon rises in the east at start of
-  // night, peaks near (but never at) zenith, sets in the west by end of night.
-  // Less steep than day so shadows stay raked; non-zero Z always so the light
-  // is never straight down. Endpoints anchored at NIGHT_MOON_HORIZON_Y and
-  // peak at the night-phase config's sun.dir.y.
-  const night = getPhaseLightConfig('night').sun.dir;
-  const t = (r - 5) / 2; // 0 at first night round, 1 at last
-  const NIGHT_X_RANGE   = 0.85;
-  const NIGHT_HORIZON_Y = -0.40;
-  const NIGHT_PEAK_Z    = 0.40;
-  const x = -NIGHT_X_RANGE + 2 * NIGHT_X_RANGE * t;
-  const y = NIGHT_HORIZON_Y + (night.y - NIGHT_HORIZON_Y) * Math.sin(Math.PI * t);
-  // Z sweep — lower at moonrise/set (more horizontal), higher at peak so the
-  // angle stays clearly off-vertical throughout night.
-  const horizonZ = night.z;
-  const z = horizonZ + (NIGHT_PEAK_Z - horizonZ) * Math.sin(Math.PI * t);
-  return { x, y, z };
+  const { dirStart, dirEnd } = resolveSunDirPair(phase);
+  return {
+    x: dirStart.x + (dirEnd.x - dirStart.x) * t,
+    y: dirStart.y + (dirEnd.y - dirStart.y) * t,
+    z: dirStart.z + (dirEnd.z - dirStart.z) * t,
+  };
 }
 
 /** Sun intensity for a phase. Drives both light strength and shadow darkness
@@ -10274,6 +16006,19 @@ export const NODE_DISC_ALPHA = 0.88;
 // 0.55 the bright sun would still flood-light the surface and the fog would
 // look like a mild tint rather than a tactical signal.
 export const FOG_TILE_DARKEN = 0.20;
+// Strong-cap on the splat-ground fog darken so fogged hexes always read as a
+// clear "you cannot see this" signal — even when the phase fogTint runs mild
+// (PHASE_LIGHT_CONFIG dawn/dusk values around 0.6-0.7 would otherwise feel
+// like a thin atmospheric haze, not occluded vision).
+export const FOG_HIDDEN_DARKEN = 0.40;
+
+// Hex wireframe radial fade — world units (1 = hex radius; a hex's flat-to-flat
+// pitch is √3 ≈ 1.73). Lines fully visible inside HEX_GRID_FADE_START_W around
+// the camera target, smoothstep to zero by HEX_GRID_FADE_END_W. Tuned so the
+// grid disappears within roughly five hexes of the camera focus point.
+export const HEX_GRID_FADE_START_W = 5.0;  // ≈ 3 hex-pitches
+export const HEX_GRID_FADE_END_W   = 8.7;  // ≈ 5 hex-pitches
+export const HEX_GRID_PEAK_ALPHA   = 0.5;
 
 /** Cubic ease-in-out — interpolates 0→1 smoothly with no jolt at endpoints. */
 export function easeInOutCubic(u) {
@@ -10305,12 +16050,20 @@ export function lerpLightConfig(from, to, t) {
     },
   };
   if (from.sun && to.sun) {
+    // Sun direction is round-driven, not phase-locked — the renderer overrides
+    // sun.dir each frame from `sunDirectionForRound`, so we only need to lerp
+    // intensity here. The `dir` field is preserved (best-effort: legacy `dir`
+    // first, else dirStart midpoint) for callers that snapshot a config.
+    const pickDir = (s) => s.dir
+      ?? (s.dirStart && s.dirEnd
+          ? { x: (s.dirStart.x + s.dirEnd.x) / 2,
+              y: (s.dirStart.y + s.dirEnd.y) / 2,
+              z: (s.dirStart.z + s.dirEnd.z) / 2 }
+          : { x: 0, y: -1, z: 0 });
+    const fd = pickDir(from.sun);
+    const td = pickDir(to.sun);
     out.sun = {
-      dir: {
-        x: lerp(from.sun.dir.x, to.sun.dir.x),
-        y: lerp(from.sun.dir.y, to.sun.dir.y),
-        z: lerp(from.sun.dir.z, to.sun.dir.z),
-      },
+      dir: { x: lerp(fd.x, td.x), y: lerp(fd.y, td.y), z: lerp(fd.z, td.z) },
       intensity: lerp(from.sun.intensity, to.sun.intensity),
     };
   }
@@ -10332,28 +16085,142 @@ export function pulseFactor(nowMs, periodMs, min, max) {
 }
 
 /**
- * Pure-functional fog-of-war visibility set. Returns the union of all hex
- * keys within sight range of every alive entity owned by `observerOwner`.
+ * Determine which faction's perspective drives the fog veil, purely from the
+ * game-state flags. Exported (and Babylon-free) so the rule is unit-testable.
  *
- * Iterates `state.entities` and `state.tiles` (cheap — even a Campaign-size
- * map is ~300 tiles); does NOT include attacker-reveal hints (those live in
- * the animation layer and are layered on top by the 3D renderer separately).
- * Always returns a Set, never null — caller decides whether to apply it via
- * the fogOfWar state field gate.
+ * Mirrors the convention used by `main.js` / the 2D renderer
+ * (`!heroIsAI ? 'hero' : !witchIsAI ? 'witch' : null`): the human controls
+ * whichever side is NOT flagged AI. `myFaction` (online / PvP) wins outright.
+ *
+ * Returns `null` ONLY for a true AI-vs-AI game (both sides flagged AI) — there
+ * is no human to hide the board from, so the renderer suppresses the veil and
+ * shows everything (autoplay / spectator-style watching).
+ */
+export function resolveFogObserver(state) {
+  if (!state) return null;
+  if (state.myFaction) return state.myFaction;
+  // The human controls whichever side is NOT flagged AI. Checking heroIsAI
+  // first matches main.js's `!heroIsAI ? 'hero' : !witchIsAI ? 'witch' : null`
+  // convention. The both-flags-false case (campaign / conductor-scripted
+  // missions, where the witch's plans come from the conductor rather than the
+  // WitchAI) resolves to 'hero' — WITHOUT this the veil would treat it as
+  // observer-less and reveal the entire map (full info leak).
+  if (!state.heroIsAI)  return 'hero';
+  if (!state.witchIsAI) return 'witch';
+  // Both sides flagged AI → a true AI-vs-AI game; no human to hide from, so
+  // the renderer suppresses the veil (autoplay watches the whole board).
+  return null;
+}
+
+/**
+ * Pure-functional fog-of-war visibility set. Delegates to the centralised
+ * line-of-sight helper in `src/actions.js` so the math stays consistent
+ * across the 2D and 3D renderers, the game state's explored-hex memory,
+ * and AI fog awareness. LOS is blocked by buildings and forest cover; the
+ * blocking tile itself is visible, hexes beyond it are not.
+ *
+ * Does NOT include attacker-reveal hints (those live in the animation
+ * layer and are layered on top by the 3D renderer separately).
+ * Always returns a Set, never null.
  */
 export function buildFogVisibleSet(state, observerOwner) {
-  const visible = new Set();
-  if (!state?.entities || !state?.tiles || !observerOwner) return visible;
-  for (const e of state.entities) {
-    if (!e || !e.alive || e.owner !== observerOwner) continue;
-    const range = sightRangeForEntity(e, state.phase);
-    for (const tile of state.tiles.values()) {
-      if (hexDistance(tile.col, tile.row, e.col, e.row) <= range) {
-        visible.add(hexKey(tile.col, tile.row));
-      }
-    }
+  return computeLineOfSight(state, observerOwner);
+}
+
+// ─── X-ray occlusion outline — pure helpers (see `_pumpXrayOcclusion`) ──────
+
+/**
+ * The css hex colour for an entity's faction outline. Mirrors the
+ * `_ownerColorFor` resolution order (explicit entity colour → faction theme
+ * primary → neutral grey) but kept pure + Babylon-free so the colour rule is
+ * unit-testable. The renderer wraps the result in a cached `Color3`.
+ */
+export function factionOutlineColor(entity) {
+  if (entity?.color) return entity.color;
+  if (entity?.owner) {
+    const theme = getFactionTheme(entity.owner);
+    if (theme?.primary) return theme.primary;
   }
-  return visible;
+  return '#888888';
+}
+
+/**
+ * Predicate deciding whether a mesh counts as an x-ray occluder — trees,
+ * buildings, and the map-border forest, identified by `metadata.kind` or
+ * (for the procedural / merged variants that carry no kind) a name prefix.
+ * Returning `true` from a `scene.pickWithRay` predicate overrides the meshes'
+ * `isPickable = false`, so static world geometry stays unpickable for clicks
+ * yet still blocks the x-ray ray. Unit standees never match any of these
+ * kinds, so a unit's own meshes are naturally excluded.
+ */
+export function xrayOccluderPredicate(mesh) {
+  if (!mesh) return false;
+  // A supplied predicate REPLACES Babylon's default isPickable && isVisible &&
+  // isEnabled filter, so we must re-apply enable/visibility ourselves — else a
+  // border-forest mesh hidden at certain zooms (setEnabled(false)) would still
+  // match by name and falsely ghost a unit near the map edge.
+  if (mesh.isEnabled?.() === false) return false;
+  if (mesh.isVisible === false) return false;
+  const kind = mesh.metadata?.kind;
+  if (kind === 'tree-glb' || kind === 'building-glb' || kind === 'map-border-forest') {
+    return true;
+  }
+  const name = mesh.name || '';
+  return name.startsWith('bldg_')
+    || name.startsWith('roof_')
+    || name.startsWith('border_forest');
+}
+
+/**
+ * A unit is occluded iff a ray from the camera to its torso anchor hits an
+ * occluder strictly nearer than the anchor itself. The epsilon guards against
+ * an occluder co-planar with the anchor counting as a (false) block.
+ */
+export function isOccluded(camDist, hitDist, hasHit) {
+  if (!hasHit) return false;
+  return hitDist < camDist - 1e-3;
+}
+
+/**
+ * Diff two occluded-id sets into {added, removed} so the renderer only mutates
+ * HighlightLayer membership for ids that actually changed state this sweep.
+ */
+export function diffOccludedSets(prev, next) {
+  const prevSet = prev instanceof Set ? prev : new Set(prev);
+  const nextSet = next instanceof Set ? next : new Set(next);
+  const added = [];
+  const removed = [];
+  for (const id of nextSet) if (!prevSet.has(id)) added.push(id);
+  for (const id of prevSet) if (!nextSet.has(id)) removed.push(id);
+  return { added, removed };
+}
+
+/**
+ * Throttle gate for the x-ray sweep: only on every Nth frame, and only when
+ * the camera transform changed since the last sweep OR a unit is mid-move/
+ * lunge. A fully static scene never re-sweeps (the membership can't change),
+ * but the first frame always sweeps because the stored camera key starts empty
+ * (→ camMoved true).
+ */
+export function shouldSweepXray({ frame, N, camMoved, unitsMoved }) {
+  if (N > 0 && (frame % N) !== 0) return false;
+  return !!(camMoved || unitsMoved);
+}
+
+/**
+ * Pure ring-fade interpolation for the x-ray outline. Given a tween descriptor
+ * (`from` factor, `dir` 'in'|'out', `startMs`, `durMs`) and the current `now`,
+ * returns the 0..1 factor the ring's emissive/alpha should be scaled by this
+ * frame. Linear ramp from `from` toward the direction's target (1 for 'in', 0
+ * for 'out'), clamped to [0,1]; a zero/negative duration snaps straight to the
+ * target. Kept Babylon-free so the fade curve is unit-testable.
+ */
+export function xrayFadeFactor({ from = 0, dir = 'in', startMs = 0, durMs = 0, now = 0 }) {
+  const target = dir === 'out' ? 0 : 1;
+  if (!(durMs > 0)) return target;
+  const u = Math.min(1, Math.max(0, (now - startMs) / durMs));
+  const f = from + (target - from) * u;
+  return Math.min(1, Math.max(0, f));
 }
 
 /**
@@ -10365,6 +16232,32 @@ export function buildFogVisibleSet(state, observerOwner) {
 export function shouldRenderEntityAt(target, hexK) {
   if (!target) return true;
   return target.has(hexK);
+}
+
+/** Fog DISPLAY-mode cycle order, driven by the `T` hotkey:
+ *  normal → off → full → debug → normal. `normal` is the default and the only
+ *  mode that matches the game's true fogOfWar state; the others are renderer-
+ *  level display overrides for debugging. Unknown input falls back to the
+ *  start of the cycle. */
+export const FOG_DEBUG_MODES = Object.freeze(['normal', 'off', 'full', 'debug']);
+
+export function nextFogDebugMode(cur) {
+  const i = FOG_DEBUG_MODES.indexOf(cur);
+  if (i < 0) return FOG_DEBUG_MODES[0];
+  return FOG_DEBUG_MODES[(i + 1) % FOG_DEBUG_MODES.length];
+}
+
+/** Map a fog display mode + the real (game-driven) fogged-hex set to the set
+ *  the renderer should actually veil:
+ *    • 'off'             → empty set (suppress the veil; everything visible)
+ *    • 'full'            → ALL hexes (darken the whole map)
+ *    • 'normal'/'debug'  → the real computed set, unchanged
+ *  `allKeys` is the full list of playable hex keys (used only for 'full').
+ *  Pure — returns a Set; never mutates `realFogged`. */
+export function foggedSetForMode(mode, realFogged, allKeys) {
+  if (mode === 'off')  return new Set();
+  if (mode === 'full') return new Set(allKeys);
+  return realFogged; // 'normal' and 'debug' both veil the real set
 }
 
 /**
@@ -10402,10 +16295,29 @@ export function diffStandees(existingIds, entities) {
  *  stay in lockstep. */
 export const MOVE_ANIM_MS = 1000;
 
-/** Duration (ms) of an attack-lunge slide to the midpoint. Scaled
- *  alongside MOVE_ANIM_MS to keep the lunge feeling snappy relative
- *  to a normal move (~80% of one). */
-export const LUNGE_ANIM_MS = 800;
+/** Duration (ms) of an attack-lunge slide to the midpoint. The lunge
+ *  uses an ease-OUT curve (fast launch, decelerating into the strike)
+ *  and is kept short so the attack reads as a quick snap, not a glide. */
+export const LUNGE_ANIM_MS = 400;
+
+/** Real-time the punch clip is compressed to play across (ms) when it
+ *  accompanies a lunge. Picked a touch longer than LUNGE_ANIM_MS=400 so the
+ *  strike's contact frame lands near the end of the fast approach (~75% of
+ *  the lunge) and the follow-through carries into the return slide, reading
+ *  as a strike rather than slow-mo. Operator-tunable in one place. */
+export const PUNCH_TARGET_MS = 500;
+
+/** Fraction through the punch clip's frame range at which the strike "lands"
+ *  (the mid/impact pose). The 3D cinematic battle arm freezes the punch here
+ *  (`holdPunchAtImpact`) while the dice cards read out, then resumes from this
+ *  frame to the end (`resumePunch`). 0.55 ≈ just past the contact moment of a
+ *  Mixamo punch, so the held pose reads as "fist landed". Operator-tunable. */
+export const PUNCH_IMPACT_FRAC = 0.55;
+
+/** Fraction of the way from the attacker's current position toward the
+ *  target hex the lunge slides (operator decision). 0.75 closes the gap
+ *  for an "attack" pose without overlapping the target token. */
+export const LUNGE_FRACTION = 0.75;
 
 /** Per-speed-mode multipliers applied to MOVE_ANIM_MS and friends.
  *  setPlaybackSpeed('cinematic'|'fast'|'vfast') reads from here. Fast
@@ -10436,6 +16348,126 @@ export const FLOAT_TEXT_PLANE_HEIGHT = 1.2;
  *  there's room for the outlined text + background pill. */
 export const FLOAT_TEXT_TEX_WIDTH  = 512;
 export const FLOAT_TEXT_TEX_HEIGHT = 192;
+/** Scale applied to the floater plane (world units) for the post-battle
+ *  damage variant. 0.70 ≈ 30% smaller than the default chrome-floater used
+ *  by loot / fortify / etc. The operator brief asks for the "-N" number
+ *  above a dying unit to read as a quick, low-chrome flick rather than a
+ *  chunky sticker. */
+export const FLOAT_TEXT_DAMAGE_SIZE_MUL = 0.70;
+
+/** Combat readout (G1 redesign — replaces the old dice-card). A single big
+ *  number floats above each combatant's head; per-bonus floaters animate up
+ *  as the main number ticks to the new total. World-space plane dimensions
+ *  are a square sized to match the unit-icon badge (UNIT_ICON_PLANE_SIZE)
+ *  so the readout sits visually flush above the icon. Kept as a literal so
+ *  this declaration can sit above UNIT_ICON_PLANE_SIZE in module order. */
+export const COMBAT_READOUT_NUM_PLANE_WIDTH  = 1.144;
+export const COMBAT_READOUT_NUM_PLANE_HEIGHT = 1.144;
+export const COMBAT_READOUT_NUM_TEX_SIZE     = 256;
+/** Per-bonus "+N reason" floater that drifts up beside the main number.
+ *  Scaled down to ~0.7× the previous size so it stays in proportion to the
+ *  smaller (icon-sized) main number plane. */
+export const COMBAT_READOUT_FLOATER_PLANE_WIDTH  = 1.05;
+export const COMBAT_READOUT_FLOATER_PLANE_HEIGHT = 0.22;
+export const COMBAT_READOUT_FLOATER_TEX_WIDTH    = 384;
+export const COMBAT_READOUT_FLOATER_TEX_HEIGHT   = 96;
+/** Clearance (world units) between the head top and the BOTTOM of the
+ *  readout number plane. Retained for combatCardFrameExtent's worst-case
+ *  framing math; the runtime now anchors to the icon top instead. */
+export const COMBAT_READOUT_Y_GAP = 0.18;
+/** Clearance (world units) between the icon-badge TOP and the BOTTOM of
+ *  the readout number plane — the readout stacks directly above the icon. */
+export const READOUT_GAP_ABOVE_ICON = 0.05;
+/** Sequence timing (ms, before speedFactor scaling).
+ *  - BASE_HOLD_MS: hold the picked-die value so the player registers the base roll.
+ *  - STEP_MS: time per bonus — floater spawns AND main number ticks at this beat.
+ *  - FINAL_HOLD_MS: hold the final total before the outcome flash + fade.
+ *  - FADE_MS: outcome-tinted (green/red) fade-out.
+ *  - PULSE_MS / PULSE_PEAK: scale pulse of the main number on each tick. */
+export const COMBAT_READOUT_BASE_HOLD_MS  = 350;
+export const COMBAT_READOUT_STEP_MS       = 700;
+// Floor for the final-state hold before fade. The actual hold is gated by
+// `awaitContinueFn` (the player's "Continue ▶" click in production); this
+// constant only sets a minimum pause so the final total registers visibly
+// before the gate is checked.
+export const COMBAT_READOUT_FINAL_HOLD_MS = 600;
+export const COMBAT_READOUT_FADE_MS       = 500;
+/** Vertical offset above the icon TOP at which the bottom-most persistent
+ *  floater starts (extra clearance so the floater doesn't overlap the icon
+ *  number while ticking up). */
+export const COMBAT_READOUT_FLOATER_Y_OFFSET = 0.02;
+/** Horizontal push (along the attack axis, in world units) for the floater
+ *  stack so the attacker's floaters sit further LEFT and the defender's
+ *  further RIGHT of their respective icons. Keeps the two stacks from
+ *  visually overlapping in the centre of the screen. */
+export const COMBAT_READOUT_FLOATER_AXIS_OFFSET = 0.55;
+/** Gap (world units) between adjacent persistent floater slots. */
+export const COMBAT_READOUT_FLOATER_SLOT_GAP = 0.04;
+/** Result label billboard sits above ALL floater slots. Bigger + bolder than
+ *  the per-bonus floaters so the outcome word reads from across the screen. */
+export const COMBAT_READOUT_RESULT_LABEL_PLANE_WIDTH  = 1.7;
+export const COMBAT_READOUT_RESULT_LABEL_PLANE_HEIGHT = 0.45;
+export const COMBAT_READOUT_RESULT_LABEL_TEX_WIDTH    = 512;
+export const COMBAT_READOUT_RESULT_LABEL_TEX_HEIGHT   = 128;
+/** Extra Y gap above the topmost floater before the result label. */
+export const COMBAT_READOUT_RESULT_LABEL_GAP = 0.06;
+/** Portrait dim factor when the icon is in combat-readout mode — a dark
+ *  composite over the portrait so the big overlay number reads against it. */
+export const COMBAT_READOUT_PORTRAIT_DIM_ALPHA = 0.55;
+/** Font size as a fraction of the icon texture dim when painting the
+ *  combat readout NUMBER into the icon. Bigger than the bare-number plane
+ *  font (~40%) because the icon canvas has more room and the number is the
+ *  star of the show. */
+export const COMBAT_READOUT_ICON_NUMBER_FONT_FRAC = 0.62;
+/** Continue button countdown — auto-click after this many seconds. */
+export const COMBAT_CONTINUE_COUNTDOWN_SEC = 5;
+/** Picked-ally pulse — when the combat readout's picked die came from a gang-up
+ *  ally (their d6 beat the combatant's own), pulse that ally's icon at the
+ *  start of tick-up to visually flow the die UP into the combatant's total. */
+export const COMBAT_ALLY_PULSE_MS    = 320;
+export const COMBAT_ALLY_PULSE_PEAK  = 1.35;
+/** Horizontal offset (world units) applied to each combat readout along the
+ *  attack axis so the attacker's and defender's numbers spread to opposite
+ *  outer sides instead of stacking in screen space when combatants are
+ *  adjacent. Attacker number sits BEHIND the attacker (−axis direction); the
+ *  defender number sits BEHIND the defender (+axis direction). */
+export const CARD_AXIS_OFFSET_WORLD = 0.8;
+/** Side-tinted colours (attacker = red, defender = blue) — the main number
+ *  is tinted with these so the player can tell at a glance which combatant
+ *  the number belongs to. */
+export const COMBAT_CARD_ATK_COLOR = '#cc3939';
+export const COMBAT_CARD_DEF_COLOR = '#3a6ab8';
+/** Outcome-flash colours — at the end of the sequence the winner's number
+ *  flashes green and the loser's number flashes red as both fade out. */
+export const COMBAT_READOUT_WIN_COLOR  = '#3ee013';
+export const COMBAT_READOUT_LOSE_COLOR = '#ff7a7a';
+
+/** Compute the local-space XZ offset for a combat card so attacker and
+ *  defender cards sit on opposite outer sides of the standees along the
+ *  attack axis. The card is parented to its combatant's standee (unrotated),
+ *  so local XZ = world XZ.
+ *
+ *  Returns `{ x: 0, z: 0 }` (no offset) when the attacker/target hex coords
+ *  aren't provided OR the two combatants share a hex (degenerate axis) —
+ *  preserves legacy behaviour and avoids divide-by-zero. Pure helper; lives
+ *  outside the class so tests can pin behaviour without Babylon. */
+export function computeCombatCardAxisOffset(side, opts = {}) {
+  const { attackerCol, attackerRow, targetCol, targetRow } = opts;
+  const haveCoords = Number.isFinite(attackerCol) && Number.isFinite(attackerRow)
+    && Number.isFinite(targetCol) && Number.isFinite(targetRow);
+  if (!haveCoords) return { x: 0, z: 0 };
+  const a = hexToWorld(attackerCol, attackerRow);
+  const t = hexToWorld(targetCol, targetRow);
+  const dx = t.x - a.x;
+  const dz = t.z - a.z;
+  const len = Math.hypot(dx, dz);
+  if (!(len > 1e-6)) return { x: 0, z: 0 };
+  // Axis points attacker → target. Attacker card sits behind the attacker
+  // (−axis); defender card sits behind the defender (+axis).
+  const sign = (side === 'attacker' || side === 'atk') ? -1 : 1;
+  const k = (sign * CARD_AXIS_OFFSET_WORLD) / len;
+  return { x: dx * k, z: dz * k };
+}
 
 /** HP-bar height (world units) above the standee's base disc. */
 export const HP_BAR_Y_ABOVE_BASE = 0.2;
@@ -10447,8 +16479,14 @@ export const HP_BAR_Y_ABOVE_BASE = 0.2;
  *  Sized so the ring around the icon reads cleanly at typical zoom — 2×
  *  the original 0.55 so the portrait + HP ring is legible even when the
  *  camera is fully zoomed out. The badge intentionally now dominates the
- *  silhouette of the token below it; that's the desired readout. */
-export const UNIT_ICON_PLANE_SIZE = 0.88;
+ *  silhouette of the token below it; that's the desired readout.
+ *
+ *  Bumped 1.3× from 0.88 → 1.144 (R3) so badges read clearly at typical
+ *  combat-camera framing without leaning on max zoom-in. Bottom-anchor math
+ *  (`iconBillboardYForScale`) keeps the plane bottom fixed, so the larger
+ *  badge grows upward and still clears the cone+sphere head with the same
+ *  ~0.13wu margin that the 0.88 size had. */
+export const UNIT_ICON_PLANE_SIZE = 1.144;
 /** Proximity-aware icon scaling. The badge sits at scale=1 (full size) for
  *  radius ≥ UNIT_ICON_SCALE_FAR; shrinks linearly to UNIT_ICON_MIN_SCALE
  *  by radius = UNIT_ICON_SCALE_NEAR. At max zoom-in the badge reads as
@@ -10466,24 +16504,45 @@ export function unitIconScaleForRadius(radius) {
   return UNIT_ICON_MIN_SCALE + (1 - UNIT_ICON_MIN_SCALE) * t;
 }
 
-/** Clearance between the head (sphere top) and the bottom of the icon
- *  plane. Keeps the icon from ever touching the model regardless of
- *  scale. */
+/** Clearance between the cone+sphere head (sphere top) and the bottom of the
+ *  icon plane. LEGACY — `iconBillboardYForScale` no longer anchors to this; it
+ *  anchors to `iconBillboardYRelativeToCone` (the gap-0.70 placement that
+ *  clears the taller paladin GLB head) so the per-frame scale pump can't drop
+ *  the icon onto the model. Kept for back-compat of the export. */
 export const UNIT_ICON_HEAD_CLEARANCE = 0.05;
 
 /** Y position of the icon billboard, in cone-relative space, adjusted so
- *  the BOTTOM of the scaled icon plane is exactly UNIT_ICON_HEAD_CLEARANCE
- *  above the head (sphere top). As the icon shrinks toward
- *  UNIT_ICON_MIN_SCALE the centre drops closer to the head; at scale=1 it
- *  matches the legacy `iconBillboardYRelativeToCone` value (UNIT_ICON_Y_GAP
+ *  the BOTTOM of the scaled icon plane stays fixed at the gap-0.70 placement
+ *  bottom line (`iconBillboardYRelativeToCone` − size/2). As the icon shrinks
+ *  toward UNIT_ICON_MIN_SCALE the centre drops toward that fixed bottom; at
+ *  scale=1 it matches `iconBillboardYRelativeToCone` exactly (UNIT_ICON_Y_GAP
  *  was tuned to give scale=1 the same clearance + half-size offset). */
 export function iconBillboardYForScale(leader = false, scale = 1) {
+  const s = Number.isFinite(scale) ? scale : 1;
+  // Anchor the BOTTOM of the icon plane at the gap-0.70 placement
+  // (`iconBillboardYRelativeToCone`) — the value tuned to clear the paladin
+  // GLB head, NOT just the (shorter) cone+sphere head. Keeping that bottom
+  // line fixed as the icon shrinks means the badge never drops onto the model.
+  //
+  // Previously this anchored to the cone+sphere head top + UNIT_ICON_HEAD_CLEARANCE,
+  // which sat ~0.21wu LOWER than the create-time placement; the per-frame
+  // `_pumpUnitIconScale` then yanked the icon down onto the (taller) paladin
+  // head every frame — the overlap regression. At scale=1 this now matches
+  // `iconBillboardYRelativeToCone` exactly, so the pump is a no-op at full size.
+  const bottomAtScale1 = iconBillboardYRelativeToCone(leader) - UNIT_ICON_PLANE_SIZE / 2;
+  return bottomAtScale1 + (UNIT_ICON_PLANE_SIZE * s) / 2;
+}
+
+/** Head top (cone+sphere stack) expressed in cone-relative space — the local
+ *  Y above the cone centre at which the sphere head ends. Shared by the
+ *  combat-card anchor (`addCombatCard`) so the card sits just above the head.
+ *  Pure — exported so tests can pin the geometry without Babylon. */
+export function headTopRelativeToCone(leader = false) {
   const hMul = leader ? STANDEE_LEADER_HEIGHT_MUL : 1;
   const wMul = leader ? STANDEE_LEADER_WIDTH_MUL  : 1;
-  // Head top, expressed cone-relative (cone center at origin):
-  //   coneHeight/2 (top of cone) + sphereDiameter (top of sphere)
-  const headTopRel = (STANDEE_CONE_HEIGHT * hMul) / 2 + STANDEE_SPHERE_DIAMETER * wMul;
-  return headTopRel + UNIT_ICON_HEAD_CLEARANCE + (UNIT_ICON_PLANE_SIZE * scale) / 2;
+  // Cone centre at origin → top of cone is coneHeight/2, top of sphere adds
+  // the full sphere diameter.
+  return (STANDEE_CONE_HEIGHT * hMul) / 2 + STANDEE_SPHERE_DIAMETER * wMul;
 }
 /** Gap above the cone+sphere stack to the icon plane CENTRE, in world
  *  units. With the paladin model now ~0.92 wu tall (15% taller than the
@@ -10491,10 +16550,11 @@ export function iconBillboardYForScale(leader = false, scale = 1) {
  *  model's head — close enough to feel anchored to it without occluding.
  *  Tuned so the plane bottom edge clears the model top by a small margin. */
 export const UNIT_ICON_Y_GAP      = 0.70;
-/** DynamicTexture pixel size for the icon+ring composite. 192² keeps the
- *  portrait crisp at any zoom and the arc rim smooth without burning extra
- *  GPU memory per entity. */
-export const UNIT_ICON_TEX_SIZE   = 192;
+/** DynamicTexture pixel size for the icon+ring composite. Bumped 192 → 256
+ *  (R3) so the texture is power-of-two, which lets Babylon's DynamicTexture
+ *  generate a clean mipmap chain. The mipmaps + trilinear sampling kill the
+ *  shimmer / aliasing the 192² non-pow2 texture exhibited at far zoom. */
+export const UNIT_ICON_TEX_SIZE   = 256;
 /** Arc rim thickness as a fraction of the texture half-size — thin enough
  *  to read as a clean line at the icon edge without crowding the portrait.
  *  Halved from the old 0.14 per operator request for a thinner HP border. */
@@ -10577,13 +16637,20 @@ export const ATTACK_ARROW_HEAD_ANGLE = 0.4;
  *  `rgba(220,60,60,…)`. */
 export const ATTACK_ARROW_COLOR = '#dc3c3c';
 
-/** Floating ×N badge above the target hex. Sits above the move-badge
- *  layer (0.6), the unit body, and the floating unit-icon billboard.
- *  With the larger UNIT_ICON_Y_GAP (0.85) needed to clear the paladin GLB
- *  model, the leader icon's top edge sits at iconBillboardY(true) + 0.55
- *  ≈ 1.979 + 0.55 ≈ 2.53, so this constant was raised to 2.8 to stay
- *  above the entire unit token stack. */
-export const ATTACK_BADGE_Y = 2.8;
+/** Floating ×N badge (planning overlay) above the target hex, in WORLD-Y.
+ *  Sits just above the floating unit-icon billboard so the planning stack
+ *  reads head → icon → ×N badge.
+ *
+ *  Was 2.8 when the icon's runtime placement had drifted DOWN (the
+ *  `_pumpUnitIconScale` / `iconBillboardYForScale` bug — see that function),
+ *  leaving a big empty gap that read as "badge floating much too high"
+ *  (operator regression). With the icon restored to its gap-0.70 placement,
+ *  the leader icon's top edge sits at world-Y
+ *    coneCentreY(0.4415) + iconBillboardYRelativeToCone(true)(1.4415) + size/2(0.44)
+ *    ≈ 2.32,
+ *  so 2.65 clears it (badge bottom ≈ 2.375) with a small gap while sitting
+ *  noticeably lower than the old 2.8. */
+export const ATTACK_BADGE_Y = 2.65;
 
 /** Pixel size of the badge billboard plane (world units). Slightly
  *  larger than the move badge (0.45) so the ×N glyph reads cleanly. */
@@ -10882,7 +16949,7 @@ export function bridgeRotationY(tile, tilesByKey) {
   for (const n of getNeighbors(tile.col, tile.row)) {
     const nt = tilesByKey.get(hexKey(n.col, n.row));
     if (!nt) continue;
-    if (nt.type !== TileType.RIVER && nt.type !== TileType.BRIDGE) continue;
+    if (!isRiver(nt) && !isBridge(nt)) continue;
     const there = hexToWorld(n.col, n.row);
     waterDirs.push({ dx: there.x - here.x, dz: there.z - here.z });
   }
@@ -11106,30 +17173,9 @@ export function paintFloaterText(ctx, opts) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
-  const metrics = ctx.measureText(text);
-  const padX = Math.round(fontPx * 0.45);
-  const padY = Math.round(fontPx * 0.20);
-  const pillW = Math.min(width - 8, Math.ceil(metrics.width) + padX * 2);
-  const pillH = Math.min(height - 8, fontPx + padY * 2);
-  const pillX = (width - pillW) / 2;
-  const pillY = (height - pillH) / 2;
-  const radius = Math.round(pillH / 2);
-
-  // Background pill — semi-opaque dark fill so the text reads against any
-  // tile colour. Rounded with the half-height radius for a pill silhouette.
-  ctx.fillStyle = 'rgba(0,0,0,0.65)';
-  ctx.beginPath();
-  ctx.moveTo(pillX + radius, pillY);
-  ctx.lineTo(pillX + pillW - radius, pillY);
-  ctx.arcTo(pillX + pillW, pillY, pillX + pillW, pillY + radius, radius);
-  ctx.lineTo(pillX + pillW, pillY + pillH - radius);
-  ctx.arcTo(pillX + pillW, pillY + pillH, pillX + pillW - radius, pillY + pillH, radius);
-  ctx.lineTo(pillX + radius, pillY + pillH);
-  ctx.arcTo(pillX, pillY + pillH, pillX, pillY + pillH - radius, radius);
-  ctx.lineTo(pillX, pillY + radius);
-  ctx.arcTo(pillX, pillY, pillX + radius, pillY, radius);
-  ctx.closePath();
-  ctx.fill();
+  // Operator brief: drop the pill backdrop globally — outlined text alone
+  // reads cleanly against any terrain and the chrome was reading as
+  // sticker-y across every caller (damage, loot, fortify, miss).
 
   // Outline: chunky black stroke drawn BEFORE the fill so the fill paints
   // over its inner half — gives a crisp halo with no ghosting.
@@ -11143,6 +17189,312 @@ export function paintFloaterText(ctx, opts) {
 
   ctx.fillStyle = fillColor;
   ctx.fillText(text, cx, cy);
+}
+
+/**
+ * Pure: derive a combat-readout view-model for one side of a battle `result`.
+ *
+ * The G1 readout drops the dice-card and shows a single big number above
+ * the combatant's head. The number starts at the picked die value (`start`)
+ * and ticks up once per contributing bonus until it reaches `total`. The
+ * `steps` array describes each tick: per-step `delta` (+/− N), the running
+ * total `value` after this step, and an `icon` + `label` for the "+N reason"
+ * floater that spawns alongside.
+ *
+ * Reads `result.breakdown` (set by `executeBattle` in actions.js): `atkPool`
+ * / `defPool` are the rolled d6 faces, `atkBaseDie` / `defBaseDie` are the
+ * picked die (best-of for advantage, worst-of for disadvantage), and the
+ * top-level `attackRoll` / `defenseRoll` are the post-modifier totals.
+ *
+ * Returns `{ start, steps, total, won, side, sideColor, sideIcon }`. Falls
+ * back gracefully when the breakdown is missing (start collapses to 0 and
+ * total falls back to the picked die / 0).
+ */
+export function combatReadoutModel(result, side) {
+  const isAtk = side === 'attacker';
+  const bd = (result && result.breakdown) || {};
+  const rawPicked = isAtk ? bd.atkBaseDie : bd.defBaseDie;
+  const rawTotal  = isAtk ? result?.attackRoll : result?.defenseRoll;
+
+  const start = Number.isFinite(rawPicked) ? rawPicked : 0;
+  const steps = [];
+  let running = start;
+  const addStep = (label, delta) => {
+    if (!delta) return;
+    running += delta;
+    steps.push({ label, delta, value: running });
+  };
+  if (isAtk) {
+    // Intrinsic unit stat contributions (always the biggest delta — e.g. a
+    // paladin's attack=3 alone outweighs every situational bonus). Decomposed
+    // so the readout shows weapon/ability/effect/silver as distinct floaters
+    // rather than rolling everything into one opaque "atk +N".
+    //
+    // NOTE: `atkStaffBonus` (count of advantage dice from weapon combatTriggers,
+    // e.g. staff vs undead) is intentionally NOT surfaced as a flat step — it
+    // grows the dice pool, so its effect is already baked into the picked die.
+    // Adding it as a flat would break the sum invariant (picked + Σ steps ≡ total).
+    if (bd.atkBaseStat > 0)       addStep('atk',    bd.atkBaseStat);
+    if (bd.atkWeaponMod > 0)      addStep('weapon', bd.atkWeaponMod);
+    if (bd.atkAbilityMod > 0)     addStep('ability', bd.atkAbilityMod);
+    if (bd.atkEffectMod > 0)      addStep('effect', bd.atkEffectMod);
+    if (bd.atkAttackBonus > 0)    addStep('silver', bd.atkAttackBonus);
+    if (bd.phaseBonus > 0)        addStep('phase',  bd.phaseBonus);
+    if (bd.atkGangupFlat > 0)     addStep('allies', bd.atkGangupFlat);
+    if (bd.atkFortAtkBonus > 0)   addStep('fort',   bd.atkFortAtkBonus);
+  } else {
+    if (bd.defBaseStat > 0)       addStep('def',    bd.defBaseStat);
+    if (bd.defWeaponMod > 0)      addStep('weapon', bd.defWeaponMod);
+    if (bd.defAbilityMod > 0)     addStep('ability', bd.defAbilityMod);
+    if (bd.defEffectMod > 0)      addStep('effect', bd.defEffectMod);
+    if (bd.defDefenseBonus > 0)   addStep('bonus',  bd.defDefenseBonus);
+    if (bd.fortBonus > 0)         addStep('fort',   bd.fortBonus);
+    if (bd.defGangupFlat > 0)     addStep('guard',  bd.defGangupFlat);
+    if (bd.forestCoverBonus > 0)  addStep('cover',  bd.forestCoverBonus);
+    if (bd.fatiguePenalty > 0)    addStep('tired', -bd.fatiguePenalty);
+  }
+  const total = Number.isFinite(rawTotal) ? rawTotal : running;
+  const won = isAtk ? !!result?.hit : !result?.hit;
+  const sideKey = isAtk ? 'atk' : 'def';
+  const sideColor = isAtk ? COMBAT_CARD_ATK_COLOR : COMBAT_CARD_DEF_COLOR;
+  const sideIcon  = isAtk ? '⚔' : '🛡';
+
+  // Per-ally dice from the side's gang-up pool. The first die in atkPool /
+  // defPool is the combatant's own; subsequent dice belong to allies in the
+  // order they appeared in atkAllies/defAllies (executeBattle zips them).
+  // The "picked" ally is the first one whose face equals the picked die AND
+  // beat the combatant's own die — i.e. the die that flowed UP into the
+  // attacker's running total. If the combatant's own die was already the max,
+  // pickedAllyId stays null (no pulse fires).
+  const ownDie = isAtk ? (bd.atkPool?.[0] ?? null) : (bd.defPool?.[0] ?? null);
+  const allyDice = isAtk ? (bd.atkAllyDice ?? []) : (bd.defAllyDice ?? []);
+  const allies = allyDice.map(d => ({ entityId: d.allyId, die: d.die }));
+  let pickedAllyId = null;
+  if (Number.isFinite(ownDie) && start > ownDie) {
+    const winner = allies.find(a => a.die === start);
+    if (winner) pickedAllyId = winner.entityId;
+  }
+
+  return {
+    start, steps, total, won,
+    side: sideKey, sideColor, sideIcon,
+    allies, pickedAllyId,
+  };
+}
+
+/**
+ * Pure canvas painter for the readout's single-number plane. No background;
+ * just the side-icon + value with a chunky black outline so it reads at any
+ * zoom. `color` is the fill (side tint at the start, then the outcome
+ * green/red at the end).
+ */
+export function paintReadoutNumber(ctx, opts) {
+  const { width, height, value, color, icon = '' } = opts;
+  ctx.clearRect(0, 0, width, height);
+  const text = icon ? `${icon} ${value}` : String(value);
+  // Paint the digit at ~40% of the canvas so the rendered number sits
+  // comfortably inside its plane (≈15-20% padding all round) and never
+  // clips at the texture edge for wide combinations like "⚔ 12".
+  let fontPx = Math.round(height * 0.40);
+  ctx.font = `900 ${fontPx}px sans-serif`;
+  // Defensive width fit — emoji + 2-digit values can still overflow on
+  // narrow canvases, so shrink to fit within 82% of texture width.
+  const maxTextWidth = width * 0.82;
+  const measured = ctx.measureText ? ctx.measureText(text).width : 0;
+  if (measured > maxTextWidth && measured > 0) {
+    fontPx = Math.max(1, Math.floor(fontPx * (maxTextWidth / measured)));
+    ctx.font = `900 ${fontPx}px sans-serif`;
+  }
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round';
+  ctx.miterLimit = 2;
+  ctx.lineWidth = Math.max(4, Math.round(fontPx * 0.18));
+  ctx.strokeStyle = '#000';
+  ctx.strokeText(text, width / 2, height / 2);
+  ctx.fillStyle = color;
+  ctx.fillText(text, width / 2, height / 2);
+}
+
+/**
+ * Pure canvas painter for a per-bonus "+N reason" floater. Outlined text on
+ * a transparent background; `color` controls the fill (defaults to white,
+ * caller can pass green for positive deltas / red for negative).
+ */
+export function paintReadoutFloater(ctx, opts) {
+  const { width, height, label, color = '#fff' } = opts;
+  ctx.clearRect(0, 0, width, height);
+  // ~60% of canvas height keeps floaters legible against busy terrain.
+  let fontPx = Math.round(height * 0.60);
+  ctx.font = `800 ${fontPx}px sans-serif`;
+  // Defensive width fit — long labels ("+2 ⚔ allies") shouldn't clip the
+  // wide floater canvas either.
+  const maxTextWidth = width * 0.90;
+  let measured = ctx.measureText ? ctx.measureText(label).width : 0;
+  if (measured > maxTextWidth && measured > 0) {
+    fontPx = Math.max(1, Math.floor(fontPx * (maxTextWidth / measured)));
+    ctx.font = `800 ${fontPx}px sans-serif`;
+    measured = ctx.measureText ? ctx.measureText(label).width : measured;
+  }
+
+  // Dark backdrop pill — guarantees legibility against light terrain (snow,
+  // grass-in-sun). Sized to the text bounds + padding. We approximate the
+  // pill width from the measured text + font-derived padding; height tracks
+  // the font box.
+  const padX = Math.max(6, Math.round(fontPx * 0.45));
+  const padY = Math.max(4, Math.round(fontPx * 0.20));
+  const pillW = Math.min(width, (measured || width * 0.8) + padX * 2);
+  const pillH = Math.min(height, fontPx + padY * 2);
+  const pillX = (width - pillW) / 2;
+  const pillY = (height - pillH) / 2;
+  const radius = pillH / 2;
+  if (typeof ctx.beginPath === 'function') {
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.beginPath();
+    ctx.moveTo(pillX + radius, pillY);
+    ctx.lineTo(pillX + pillW - radius, pillY);
+    ctx.quadraticCurveTo(pillX + pillW, pillY, pillX + pillW, pillY + radius);
+    ctx.lineTo(pillX + pillW, pillY + pillH - radius);
+    ctx.quadraticCurveTo(pillX + pillW, pillY + pillH, pillX + pillW - radius, pillY + pillH);
+    ctx.lineTo(pillX + radius, pillY + pillH);
+    ctx.quadraticCurveTo(pillX, pillY + pillH, pillX, pillY + pillH - radius);
+    ctx.lineTo(pillX, pillY + radius);
+    ctx.quadraticCurveTo(pillX, pillY, pillX + radius, pillY);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round';
+  ctx.miterLimit = 2;
+  ctx.lineWidth = Math.max(3, Math.round(fontPx * 0.18));
+  ctx.strokeStyle = '#000';
+  ctx.strokeText(label, width / 2, height / 2);
+  ctx.fillStyle = color;
+  ctx.fillText(label, width / 2, height / 2);
+}
+
+/**
+ * G1 v2 — paint the combat-mode readout INTO the unit-icon DynamicTexture.
+ * The icon stays visible during combat (no separate number plane); instead
+ * the existing portrait is dimmed and the big running total is overlaid in
+ * its centre. The HP ring is preserved by `basePaint(ctx)` (the caller hands
+ * us the normal portrait painter so we share its disc + arc geometry).
+ *
+ * `value` is the running total; `color` is the fill colour for the number
+ * (side tint while ticking → win/lose colour at outcome flash). `icon` is
+ * the side glyph (⚔ / 🛡).
+ */
+export function paintIconCombatReadout(ctx, opts) {
+  const {
+    size,
+    basePaint,
+    value,
+    color,
+    icon = '',
+    dimAlpha = COMBAT_READOUT_PORTRAIT_DIM_ALPHA,
+  } = opts;
+  // Repaint the normal badge (HP ring + portrait) first — gives us the
+  // continuous HP arc + portrait beneath the dim overlay.
+  if (typeof basePaint === 'function') basePaint(ctx);
+
+  // Dark composite over the portrait disc — lets the bright overlay number
+  // read against ANY unit portrait. Drawn as a full-canvas dim rect; the
+  // ring at the edges absorbs the same dim, which is fine — the overlay
+  // is the focal point during combat.
+  ctx.fillStyle = `rgba(0,0,0,${dimAlpha})`;
+  ctx.fillRect(0, 0, size, size);
+
+  // Big bold number, outlined for contrast. The side-icon prefix is
+  // intentionally dropped — the readout overlays the unit's own icon, which
+  // already carries the side identity (faction tint + portrait). Painting
+  // "⚔ 7" over the portrait reads as visual noise; just "7" reads clean.
+  const text = String(value);
+  void icon;
+  let fontPx = Math.round(size * COMBAT_READOUT_ICON_NUMBER_FONT_FRAC);
+  ctx.font = `900 ${fontPx}px sans-serif`;
+  const maxTextWidth = size * 0.82;
+  const measured = ctx.measureText ? ctx.measureText(text).width : 0;
+  if (measured > maxTextWidth && measured > 0) {
+    fontPx = Math.max(1, Math.floor(fontPx * (maxTextWidth / measured)));
+    ctx.font = `900 ${fontPx}px sans-serif`;
+  }
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round';
+  ctx.miterLimit = 2;
+  ctx.lineWidth = Math.max(4, Math.round(fontPx * 0.20));
+  ctx.strokeStyle = '#000';
+  ctx.strokeText(text, size / 2, size / 2);
+  ctx.fillStyle = color;
+  ctx.fillText(text, size / 2, size / 2);
+}
+
+/**
+ * G1 v2 — map an executeBattle result + side to a human-readable outcome
+ * word that paints in the result label billboard above the readout.
+ *
+ *   • attacker side, won + damage>=2  → "CRUSH"
+ *   • attacker side, won              → "HIT"
+ *   • attacker side, lost + counterDmg→ "COUNTERED"
+ *   • attacker side, lost             → "BLOCKED"
+ *   • defender side, won + counterDmg → "COUNTER"
+ *   • defender side, won              → "BLOCK"
+ *   • defender side, lost + damage>=2 → "CRUSHED"
+ *   • defender side, lost             → "HIT"
+ *
+ * Pure helper — exported for tests. Tolerates partial results (e.g. raw
+ * Entity.resolveCombat output without damage/counterDmg) by falling back
+ * to the basic HIT/BLOCK/COUNTER outcome.
+ */
+/** Flavour set for "the attack didn't land" outcomes. Shared with fast-mode
+ *  combat (src/main.js imports this constant) so the cinematic result label
+ *  and the fast-mode addFlash word agree on the vocabulary. Lowercase to
+ *  match fast mode's visual style; cinematic uppercases on use. */
+export const BLOCK_WORD_VARIANTS = Object.freeze([
+  'miss', 'dodged', 'blocked', 'parried', 'deflected',
+]);
+
+/** Colour used by both fast-mode addFlash and the cinematic result label
+ *  whenever the outcome word is one of the BLOCK_WORD_VARIANTS — these are
+ *  "the attack didn't connect" cases, so a muted grey reads better than
+ *  win-green or lose-red. */
+export const COMBAT_READOUT_BLOCK_COLOR = '#888';
+
+/** Deterministic pick from BLOCK_WORD_VARIANTS so the same combat result
+ *  always renders the same flavour word. Falls back to the first variant
+ *  when rolls aren't finite (e.g. tests passing partial results). */
+function pickBlockWordUpper(result) {
+  const a = Number.isFinite(result?.attackRoll)  ? result.attackRoll  : 0;
+  const d = Number.isFinite(result?.defenseRoll) ? result.defenseRoll : 0;
+  const idx = Math.abs((a * 31 + d * 7)) % BLOCK_WORD_VARIANTS.length;
+  return BLOCK_WORD_VARIANTS[idx].toUpperCase();
+}
+
+/** True iff `labelUpper` is one of the BLOCK_WORD_VARIANTS — used to pick
+ *  the grey "muted" colour for the result label. */
+export function isBlockWord(labelUpper) {
+  if (typeof labelUpper !== 'string') return false;
+  for (let i = 0; i < BLOCK_WORD_VARIANTS.length; i++) {
+    if (BLOCK_WORD_VARIANTS[i].toUpperCase() === labelUpper) return true;
+  }
+  return false;
+}
+
+export function resultLabel(result, side) {
+  const r = result || {};
+  const isAtk = side === 'attacker' || side === 'atk';
+  const won = isAtk ? !!r.hit : !r.hit;
+  const dmg = Number.isFinite(r.damage) ? r.damage : (r.hit ? 1 : 0);
+  const counter = Number.isFinite(r.counterDmg) ? r.counterDmg : 0;
+  if (isAtk) {
+    if (won) return dmg >= 2 ? 'CRUSH' : 'HIT';
+    return counter > 0 ? 'COUNTERED' : pickBlockWordUpper(r);
+  }
+  // Defender side.
+  if (won) return counter > 0 ? 'COUNTER' : pickBlockWordUpper(r);
+  return dmg >= 2 ? 'CRUSHED' : 'HIT';
 }
 
 /**
@@ -11260,7 +17612,7 @@ export const HIGHLIGHT_DISC_Y      = yForLayer('highlight-disc', 0);
  *  source rgba alpha (which can be as low as 0.14 in ui.js for ally hexes, or
  *  as high as 0.85 for the default movement target) with this constant so the
  *  ring's translucency is consistent regardless of the caller's colour string. */
-export const HIGHLIGHT_OVERLAY_ALPHA = 0.65;
+export const HIGHLIGHT_OVERLAY_ALPHA = 0.3;
 /** @deprecated retained for tests that import the old name — same value as
  *  HIGHLIGHT_OVERLAY_ALPHA, semantics changed from "clamp floor" to
  *  "applied alpha". */

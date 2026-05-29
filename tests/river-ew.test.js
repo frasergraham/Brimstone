@@ -1,7 +1,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { generateMap } from '../src/map.js';
-import { TileType } from '../src/tiles.js';
+import { TileType, legacyTileType } from '../src/tiles.js';
 import { hexKey, getNeighbors, MAP_COLS, MAP_ROWS } from '../src/hex.js';
 
 // Extract river tiles from a generated map (BRIDGE tiles are river crossings,
@@ -9,7 +9,7 @@ import { hexKey, getNeighbors, MAP_COLS, MAP_ROWS } from '../src/hex.js';
 function getRiverTiles(tiles) {
   const river = [];
   for (const t of tiles.values()) {
-    if (t.type === TileType.RIVER || t.type === TileType.BRIDGE) river.push({ col: t.col, row: t.row });
+    if (legacyTileType(t) === TileType.RIVER || legacyTileType(t) === TileType.BRIDGE) river.push({ col: t.col, row: t.row });
   }
   return river;
 }

@@ -20,7 +20,7 @@ import {
   Entity, EntityType,
   createHero, createWitch, createMinion,
 } from '../src/entities.js';
-import { TileType } from '../src/tiles.js';
+import { TileType, PathType, StructureType, legacyTileType, decomposeTileType } from '../src/tiles.js';
 import { hexKey, hexDistance } from '../src/hex.js';
 import { PlanActionType, snapEntity } from '../src/planner.js';
 import { resolvePlans } from '../server/resolver.js';
@@ -86,6 +86,27 @@ describe('ranged attack — no gang-up, no ally-def', () => {
   });
 });
 
+describe('ranged attack — no counter', () => {
+  test('defender with double the attacker\'s roll does NOT counter-attack a ranged shooter', () => {
+    const state = freshState();
+    const witch = state.witch;
+    const hero  = state.hero;
+    placeAt(witch, 5, 5);
+    placeAt(hero,  7, 5);
+
+    // Force atk=1 (miss) and def=6 → defenseRoll >= 2*attackRoll, would
+    // counter if melee. Ranged should NOT counter — attacker unscathed.
+    state.setForcedDice(1, 6);
+    const witchHpBefore = witch.hp;
+    const r = executeBattle(state, witch, hero);
+
+    assert.equal(r.hit, false, 'attack missed');
+    assert.equal(r.counterDmg, 0, 'ranged attack does NOT trigger a counter');
+    assert.equal(witch.hp, witchHpBefore, 'ranged attacker takes no counter damage');
+    assert.equal(r.defenseRoll >= 2 * r.attackRoll, true, 'margin would counter if melee');
+  });
+});
+
 describe('ranged attack — no crush, no splash', () => {
   test('huge margin on a ranged hit still deals only 1 damage', () => {
     const state = freshState();
@@ -141,7 +162,7 @@ describe('ranged attack — forest cover', () => {
 
     // Paint the hero's hex as forest.
     const t = state.tiles.get(hexKey(hero.col, hero.row));
-    t.type = TileType.FOREST;
+    decomposeTileType(t, TileType.FOREST);
 
     state.setForcedDice(3, 3);
     const r = executeBattle(state, witch, hero);
@@ -154,13 +175,75 @@ describe('ranged attack — forest cover', () => {
     assert.equal(r.defenseRoll, expectedDef);
   });
 
+  // P4 locked behaviour change: forest cover is BASE-driven. A defender whose
+  // tile has base=forest gets +1 DEF vs ranged EVEN IF a road or building sits
+  // on top (previously laying a road cleared the forest type and removed cover).
+  test('road-over-forest STILL grants ranged forest cover (+1 DEF) — new base-driven rule', () => {
+    const state = freshState();
+    const witch = state.witch;
+    const hero  = state.hero;
+    placeAt(witch, 5, 5);
+    placeAt(hero,  7, 5);
+
+    // Forest base with a road laid on top — derived tile.type === ROAD, but the
+    // base material is still forest, so cover applies.
+    const t = state.tiles.get(hexKey(hero.col, hero.row));
+    t.base = TileType.FOREST;
+    t.path = PathType.ROAD;
+    assert.equal(legacyTileType(t), TileType.ROAD, 'derived type is road (path wins)');
+
+    state.setForcedDice(3, 3);
+    const r = executeBattle(state, witch, hero);
+
+    assert.equal(r.ranged, true);
+    assert.equal(r.breakdown.forestCoverBonus, 1, 'base=forest still grants cover');
+  });
+
+  test('building-over-forest STILL grants ranged forest cover (+1 DEF)', () => {
+    const state = freshState();
+    const witch = state.witch;
+    const hero  = state.hero;
+    placeAt(witch, 5, 5);
+    placeAt(hero,  7, 5);
+
+    const t = state.tiles.get(hexKey(hero.col, hero.row));
+    t.base = TileType.FOREST;
+    t.path = null;
+    t.structure = StructureType.BUILDING;
+    assert.equal(legacyTileType(t), TileType.BUILDING, 'derived type is building');
+
+    state.setForcedDice(3, 3);
+    const r = executeBattle(state, witch, hero);
+
+    assert.equal(r.ranged, true);
+    assert.equal(r.breakdown.forestCoverBonus, 1, 'base=forest under a building still grants cover');
+  });
+
+  test('non-forest base (road over grass) grants NO forest cover', () => {
+    const state = freshState();
+    const witch = state.witch;
+    const hero  = state.hero;
+    placeAt(witch, 5, 5);
+    placeAt(hero,  7, 5);
+
+    const t = state.tiles.get(hexKey(hero.col, hero.row));
+    t.base = TileType.GRASS;
+    t.path = PathType.ROAD;
+
+    state.setForcedDice(3, 3);
+    const r = executeBattle(state, witch, hero);
+
+    assert.equal(r.ranged, true);
+    assert.equal(r.breakdown.forestCoverBonus, 0, 'grass base = no cover');
+  });
+
   test('melee attacker gets no forest cover bonus (defender is already in the same trees)', () => {
     const state = freshState();
     const hero  = state.hero;
     const minion = createMinion(hero.col + 1, hero.row);
     state.entities.push(minion);
     const t = state.tiles.get(hexKey(hero.col, hero.row));
-    t.type = TileType.FOREST;
+    decomposeTileType(t, TileType.FOREST);
 
     state.setForcedDice(3, 3);
     const r = executeBattle(state, minion, hero);

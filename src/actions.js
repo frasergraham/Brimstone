@@ -1,9 +1,11 @@
 // Action system: definitions, validation, and execution
-import { getNeighbors, hexKey, hexDistance, hexRange, offsetToAxial, axialToOffset } from './hex.js';
+import { getNeighbors, hexKey, hexDistance, hexRange, hexLine, offsetToAxial, axialToOffset } from './hex.js';
 import {
-  TileType, ResourceType, WEAPON_LABEL, BUILDING_LOOT, TERRAIN_LOOT, rollLoot,
+  ResourceType, WEAPON_LABEL, BUILDING_LOOT, TERRAIN_LOOT, rollLoot,
   MAX_FORTIFY_LEVEL, getFortifyCombatBonus, isFortWall,
   FORT_IMPASSABLE_THRESHOLD,
+  isRiver, isPathRoadLike, hasBuilding, isForestCover, baseOf,
+  tileCapacityRemaining,
 } from './tiles.js';
 import { ITEMS } from './items.js';
 import { ABILITIES } from './abilities.js';
@@ -16,11 +18,11 @@ import {
   EntityType, SurvivorAbility, Entity,
   createZombie, createMinion, createSurvivor,
   createWoodGolem, createIronGolem,
-  nextDie, ADVANTAGE_CAP, isLeaderType,
+  nextDie, ADVANTAGE_CAP, isLeaderType, abilityStatMod,
 } from './entities.js';
 import { Phase } from './game.js';
 import { getFaction, concreteFactionOf, sightRangeForEntity } from './factions.js';
-import { dispatchTrigger, applyEffect } from './effects.js';
+import { dispatchTrigger, applyEffect, effectStatMod } from './effects.js';
 import { triggerSurvivorEncounter } from './survivor-discovery.js';
 
 export const ActionType = Object.freeze({
@@ -60,6 +62,19 @@ export function isFortBlocking(tile, actorOwner) {
   return isFortWall(tile) && getFaction(actorOwner).isBlockedByWalls();
 }
 
+// Hex-capacity gate: is the target tile full (no slots remaining) for a
+// move by `actor`? Capacity = TILE_CAPACITY - structures - other units on
+// the tile (the moving actor itself is excluded so the destination check
+// matches what the actor will look like once it has stepped in).
+export function isTileFullForMove(state, actor, col, row) {
+  const t = state.tiles.get(hexKey(col, row));
+  if (!t) return false;
+  const others = state.entities.filter(e =>
+    e.alive && e.id !== actor.id && e.col === col && e.row === row
+  ).length;
+  return tileCapacityRemaining(t, others) <= 0;
+}
+
 // Cost-based movement: road/bridge/building tiles cost 1, all other passable
 // tiles cost 2.  Budget = range * 2, so:
 //   range 1 (no horse) → 1 off-road tile  OR  2 road tiles per action
@@ -82,11 +97,13 @@ export function getReachableHexes(state, actor, range, posOverride = null, visib
     for (const n of getNeighbors(col, row)) {
       const nk = hexKey(n.col, n.row);
       const nt = tile(state, n.col, n.row);
-      if (!nt || nt.type === TileType.RIVER) continue;
+      if (!nt || isRiver(nt)) continue;
       if (hasVisibleEnemy(state, actor, n.col, n.row, visibleEnemyHexes)) continue;
       if (isFortBlocking(nt, actor.owner)) continue;
-      const isRoadLike = nt.type === TileType.ROAD || nt.type === TileType.BRIDGE ||
-                         nt.type === TileType.BUILDING;
+      // Hex-capacity gate — a full hex (no slots remaining) blocks movement
+      // into it AND through it, just like an enemy-occupied hex.
+      if (isTileFullForMove(state, actor, n.col, n.row)) continue;
+      const isRoadLike = isPathRoadLike(nt);
       const nc = c + (isRoadLike ? 1 : 2);
       if (nc <= budget && nc < (dist.get(nk) ?? Infinity)) {
         dist.set(nk, nc);
@@ -129,11 +146,14 @@ function findShortestPath(state, actor, toCol, toRow, posOverride = null) {
     for (const n of getNeighbors(col, row)) {
       const nk = hexKey(n.col, n.row);
       const nt = tile(state, n.col, n.row);
-      if (!nt || nt.type === TileType.RIVER) continue;
+      if (!nt || isRiver(nt)) continue;
       if (hasEnemy(state, actor, n.col, n.row) && nk !== goalK) continue;
       if (isFortBlocking(nt, actor.owner) && nk !== goalK) continue;
-      const isRoadLike = nt.type === TileType.ROAD || nt.type === TileType.BRIDGE ||
-                         nt.type === TileType.BUILDING;
+      // Hex-capacity gate — full mid-path hexes block traversal. The goal
+      // hex itself is allowed through here so executeMove can report the
+      // partial walk + the blocking reason at the step boundary.
+      if (isTileFullForMove(state, actor, n.col, n.row) && nk !== goalK) continue;
+      const isRoadLike = isPathRoadLike(nt);
       const nc = c + (isRoadLike ? 1 : 2);
       if (nc < (dist.get(nk) ?? Infinity)) {
         dist.set(nk, nc);
@@ -195,11 +215,12 @@ export function getFogReachableHexes(state, actor, posOverride = null) {
     for (const n of getNeighbors(col, row)) {
       const nk = hexKey(n.col, n.row);
       const nt = tile(state, n.col, n.row);
-      if (!nt || nt.type === TileType.RIVER) continue;
+      if (!nt || isRiver(nt)) continue;
       // No enemy blocking — this is theoretical reachability for fog visibility
       if (isFortBlocking(nt, actor.owner)) continue;
-      const isRoadLike = nt.type === TileType.ROAD || nt.type === TileType.BRIDGE ||
-                         nt.type === TileType.BUILDING;
+      // Full hexes (terrain capacity exhausted) are also unreachable.
+      if (isTileFullForMove(state, actor, n.col, n.row)) continue;
+      const isRoadLike = isPathRoadLike(nt);
       const nc = c + (isRoadLike ? 1 : 2);
       if (nc <= budget && nc < (dist.get(nk) ?? Infinity)) {
         dist.set(nk, nc);
@@ -230,21 +251,95 @@ export function buildFogMovementHexes(state, observerOwner, projectedPositions =
 
 // ── Visibility ─────────────────────────────────────────────────────────────
 
-// Base sight range varies by phase: Day=3, Dawn/Dusk=2, Night=1.
-// SCOUT survivors add +1 to their personal range.
+// Base sight range varies by phase: Day=6, Dawn/Dusk=4, Night=3.
+// Buildings and forest tiles BLOCK line of sight beyond them (see
+// computeLineOfSight). SCOUT survivors add +1 to their personal range.
 export function sightRange(phase, isScout = false) {
   let base;
   switch (phase) {
-    case Phase.DAY:   base = 3; break;
-    case Phase.NIGHT: base = 1; break;
-    default:          base = 2; break; // DAWN, DUSK
+    case Phase.DAY:   base = 6; break;
+    case Phase.NIGHT: base = 3; break;
+    default:          base = 4; break; // DAWN, DUSK
   }
   return base + (isScout ? 1 : 0);
 }
 
+// ── Line of sight ──────────────────────────────────────────────────────────
+//
+// Vision is blocked by buildings (`hasBuilding`) and forest cover
+// (`isForestCover` — base material is forest, regardless of any path/structure
+// on top). The blocking tile itself is visible to the observer; tiles BEYOND
+// it on the ray are not. The observer's own hex is always visible.
+
+function _isLosBlocker(tile) {
+  if (!tile) return false;
+  return hasBuilding(tile) || isForestCover(tile);
+}
+
+/**
+ * Returns true if `(fromCol,fromRow)` has clear line of sight to
+ * `(toCol,toRow)`. Endpoints are NEVER themselves blockers — only
+ * intermediate hexes can block.
+ */
+export function hasLineOfSight(state, fromCol, fromRow, toCol, toRow) {
+  if (fromCol === toCol && fromRow === toRow) return true;
+  if (!state?.tiles) return true;
+  const line = hexLine(fromCol, fromRow, toCol, toRow);
+  for (let i = 1; i < line.length - 1; i++) {
+    const t = state.tiles.get(hexKey(line[i].col, line[i].row));
+    if (_isLosBlocker(t)) return false;
+  }
+  return true;
+}
+
+/**
+ * Compute the set of hex keys visible to all alive units owned by
+ * `observerOwner`. Each unit's range is `sightRangeForEntity(e, phase)`
+ * (phase-dependent for hero, fixed for witch, +1 if the unit carries SCOUT).
+ * Line of sight is blocked by buildings and forest tiles; the blocker
+ * itself is visible, tiles beyond it are not.
+ *
+ * `entities` defaults to `state.entities` but can be overridden with a
+ * snapshot (used during resolution animation where positions differ from
+ * the live state).
+ *
+ * @param {object} state
+ * @param {string} observerOwner   - 'hero' | 'witch' (faction id)
+ * @param {object[]} [entities]
+ * @returns {Set<string>}
+ */
+export function computeLineOfSight(state, observerOwner, entities = state?.entities) {
+  const visible = new Set();
+  if (!state?.tiles || !observerOwner || !entities) return visible;
+  for (const e of entities) {
+    if (!e || !e.alive || e.owner !== observerOwner) continue;
+    const range = sightRangeForEntity(e, state.phase);
+    // The unit's own hex is always visible.
+    visible.add(hexKey(e.col, e.row));
+    // Enumerate candidate offsets directly via cube coordinates so the
+    // global MAP_COLS/MAP_ROWS guard inside `hexRange` doesn't silently
+    // clip discs on test/scratch maps with non-default dimensions.
+    const origin = offsetToAxial(e.col, e.row);
+    for (let dq = -range; dq <= range; dq++) {
+      const drMin = Math.max(-range, -dq - range);
+      const drMax = Math.min(range, -dq + range);
+      for (let dr = drMin; dr <= drMax; dr++) {
+        const off = axialToOffset(origin.q + dq, origin.r + dr);
+        const k = hexKey(off.col, off.row);
+        if (visible.has(k)) continue;
+        if (!state.tiles.has(k)) continue;
+        if (hasLineOfSight(state, e.col, e.row, off.col, off.row)) {
+          visible.add(k);
+        }
+      }
+    }
+  }
+  return visible;
+}
+
 /**
  * Returns a Set of hexKeys where opposing entities are visible to the given faction.
- * Uses the faction's sight range (phase-dependent for hero, fixed for witch).
+ * Uses line of sight (see {@link computeLineOfSight}).
  * @param {object} state - GameState
  * @param {string} viewerFactionId - 'hero' or 'witch'
  * @returns {Set<string>}
@@ -263,16 +358,11 @@ export function getVisiblePositions(state, viewerFactionId) {
     }
   }
 
-  for (const viewer of state.entities) {
-    if (!viewer.alive || viewer.owner !== viewerFactionId) continue;
-    // Per-entity sight so stub-faction bonuses (e.g. rogue +1) apply.
-    const range = sightRangeForEntity(viewer, state.phase);
-    for (const target of state.entities) {
-      if (!target.alive || target.owner !== opponentId) continue;
-      if (hexDistance(viewer.col, viewer.row, target.col, target.row) <= range) {
-        revealed.add(hexKey(target.col, target.row));
-      }
-    }
+  const losSet = computeLineOfSight(state, viewerFactionId);
+  for (const target of state.entities) {
+    if (!target.alive || target.owner !== opponentId) continue;
+    const k = hexKey(target.col, target.row);
+    if (losSet.has(k)) revealed.add(k);
   }
   return revealed;
 }
@@ -339,7 +429,7 @@ export function getValidActions(state, actor) {
     if (!nt) return false;
     // Melee: exclude rivers (can't wade/attack into one). Ranged: rivers are
     // fine as targets (you can shoot over water).
-    if (actorRange <= 1 && nt.type === TileType.RIVER) return false;
+    if (actorRange <= 1 && isRiver(nt)) return false;
     return true;
   });
   if (battleHexTargets.length) {
@@ -348,7 +438,7 @@ export function getValidActions(state, actor) {
 
   // Fortify — faction-gated; cap at MAX_FORTIFY_LEVEL, uses shared inventory.
   // Always included when contextually valid; affordable=false when no resources.
-  if (t && t.type !== TileType.RIVER && t.fortifyLevel < MAX_FORTIFY_LEVEL && faction.canFortify()) {
+  if (t && !isRiver(t) && t.fortifyLevel < MAX_FORTIFY_LEVEL && faction.canFortify()) {
     const inv        = faction.getInventory(state);
     const woodCount  = (inv[ResourceType.WOOD]  || 0);
     const metalCount = (inv[ResourceType.METAL] || 0);
@@ -517,8 +607,10 @@ export function executeMove(state, actor, targetCol, targetRow) {
     // Check if this hex is blocked by an enemy (could have moved here since plan was made)
     if (hasEnemy(state, actor, step.col, step.row)) break;
     const st = tile(state, step.col, step.row);
-    if (!st || st.type === TileType.RIVER) break;
+    if (!st || isRiver(st)) break;
     if (isFortBlocking(st, actor.owner)) break;
+    // Full hex (capacity exhausted) — refuse to enter, same as enemy blocking.
+    if (isTileFullForMove(state, actor, step.col, step.row)) break;
 
     actor.col = step.col;
     actor.row = step.row;
@@ -609,11 +701,14 @@ export function executeExplore(state, actor) {
 
   const runLoot = () => {
     let table;
-    if (t.type === TileType.BUILDING && t.building && BUILDING_LOOT[t.building]) {
+    if (hasBuilding(t) && t.building && BUILDING_LOOT[t.building]) {
       table = _effectiveLoot(state, 'buildings', t.building, BUILDING_LOOT[t.building]);
     } else {
-      const baseTable = TERRAIN_LOOT[t.type] || TERRAIN_LOOT['grass'];
-      table = _effectiveLoot(state, 'terrain', t.type, baseTable);
+      // Terrain loot rolls off the BASE material — a road-over-forest rolls
+      // forest loot, not road/grass loot.
+      const base = baseOf(t);
+      const baseTable = TERRAIN_LOOT[base] || TERRAIN_LOOT['grass'];
+      table = _effectiveLoot(state, 'terrain', base, baseTable);
     }
     const raw = rollLoot(table);
     const lootType = concreteFaction.modifyLootRoll(state, actor, table, raw);
@@ -631,18 +726,32 @@ export function executeExplore(state, actor) {
     const lootType = concreteFaction.modifyLootRoll(state, actor, table, raw);
     _applyLoot(state, actor, lootType, log, lootItems);
   };
-  runLoot();
+  // Editor-authored fixed-explore result (offline/campaign only): short-circuit
+  // the random roll (and NvN bonus rolls) and yield exactly the authored loot.
+  // `kind:'nothing'` or a null id finds nothing; resources apply `amount` (≥1)
+  // times. No override (procedural / unauthored hex) → unchanged random roll.
+  const ov = t.exploreOverride;
+  if (ov != null) {
+    if (ov.kind === 'nothing' || ov.id == null) {
+      _applyLoot(state, actor, 'nothing', log, lootItems);
+    } else {
+      const count = ov.kind === 'resource' ? Math.max(1, ov.amount ?? 1) : 1;
+      for (let i = 0; i < count; i++) _applyLoot(state, actor, ov.id, log, lootItems);
+    }
+  } else {
+    runLoot();
 
-  // NvN bonus rolls: larger teams field more units and need more resources.
-  // 1v1 → 1 roll; 2v2+ → one extra roll per additional player per side, with a
-  // half-step 30% bonus roll between integer steps. Skipped entirely in 1v1 so
-  // tests that mock Math.random() with fixed sequences aren't perturbed.
-  const sidePlayers = Math.max(1, Math.floor((state.players?.length || 2) / 2));
-  if (sidePlayers > 1) {
-    const extraRolls = Math.floor((sidePlayers - 1) / 2);
-    for (let i = 0; i < extraRolls; i++) runLoot();
-    const bonusProb = 0.3 * ((sidePlayers - 1) % 2);
-    if (bonusProb > 0 && Math.random() < bonusProb) runLoot();
+    // NvN bonus rolls: larger teams field more units and need more resources.
+    // 1v1 → 1 roll; 2v2+ → one extra roll per additional player per side, with a
+    // half-step 30% bonus roll between integer steps. Skipped entirely in 1v1 so
+    // tests that mock Math.random() with fixed sequences aren't perturbed.
+    const sidePlayers = Math.max(1, Math.floor((state.players?.length || 2) / 2));
+    if (sidePlayers > 1) {
+      const extraRolls = Math.floor((sidePlayers - 1) / 2);
+      for (let i = 0; i < extraRolls; i++) runLoot();
+      const bonusProb = 0.3 * ((sidePlayers - 1) % 2);
+      if (bonusProb > 0 && Math.random() < bonusProb) runLoot();
+    }
   }
 
   if (isHerbalist && getFaction(actor.owner).canDiscoverNPCs()) {
@@ -805,7 +914,7 @@ function _knockbackDestination(state, entity, centerCol, centerRow) {
   const dr = here.r - center.r;
   const push = axialToOffset(here.q + dq, here.r + dr);
   const t = state.tiles.get(hexKey(push.col, push.row));
-  if (!t || t.type === TileType.RIVER) return null;
+  if (!t || isRiver(t)) return null;
   if (isFortBlocking(t, entity.owner)) return null;
   if (state.entities.some(e => e.alive && e.id !== entity.id && e.col === push.col && e.row === push.row)) return null;
   return push;
@@ -820,10 +929,11 @@ export function executeBattle(state, actor, target) {
   //     afar, and allies don't flank a shot).
   //   - No crushing blows; damage is always 1 per hit.
   //   - No splash on kill (clean single-target).
+  //   - No counter-attack (defender can't reach the ranged attacker to
+  //     strike back — see the `!isRanged` guard on the counter branch).
   //   - Defender in forest gets +1 DEF (cover).
   //   - Attacker at close range (dist == 1) fires at disadvantage (1 die).
-  // Phase bonus, fortification, weapon triggers, and counter-attack all
-  // still apply — see plan file for rationale.
+  // Phase bonus, fortification, and weapon triggers still apply.
   const atkRange = (typeof actor.getRange === 'function' ? actor.getRange() : (actor.range ?? 1));
   const distToTarget = hexDistance(actor.col, actor.row, target.col, target.row);
   const isRanged = atkRange > 1;
@@ -858,7 +968,7 @@ export function executeBattle(state, actor, target) {
   // Forest-cover bonus — ranged-only. The defender blends into the trees
   // and gains +1 DEF against incoming projectiles. Melee attackers are
   // already in the same thicket, so cover does not apply.
-  const forestCoverBonus = (isRanged && defTile?.type === TileType.FOREST) ? 1 : 0;
+  const forestCoverBonus = (isRanged && isForestCover(defTile)) ? 1 : 0;
 
   // Gang-up: melee only. Ranged attacks explicitly ignore ally adjacency
   // for both attacker and defender.
@@ -1001,8 +1111,11 @@ export function executeBattle(state, actor, target) {
   } else {
     log.push(`${target.displayName} defends successfully.`);
 
-    // Counter-attack: defender's roll is at least double the attacker's roll
-    if (defenseRoll >= 2 * attackRoll && actor.alive) {
+    // Counter-attack: defender's roll is at least double the attacker's roll.
+    // Ranged attacks don't trigger counters — the defender can't reach the
+    // attacker to strike back (narratively nonsensical, and the operator
+    // explicitly removed this rule).
+    if (defenseRoll >= 2 * attackRoll && actor.alive && !isRanged) {
       counterDmg = actor.applyIncomingDamage(1);
       const counterKilled = actor.takeDamage(counterDmg);
       log.push(`⚔ ${target.displayName} counter-attacks! ${actor.displayName} takes ${counterDmg} damage.`);
@@ -1047,6 +1160,23 @@ export function executeBattle(state, actor, target) {
     }
   }
 
+  // Decomposed intrinsic stat contributions — surfaced as discrete floaters
+  // in the 3D combat readout (so the player sees their weapon / silver /
+  // ability bonuses, not just one opaque sum). The sum below MUST equal
+  // attackOf(actor) + actor.attackBonus, which is exactly what
+  // Entity.resolveCombat folds into attackRoll. Same for defender. Tests
+  // assert picked + Σ(all flat breakdown bonuses) ≡ attackRoll/defenseRoll.
+  const atkBaseStat    = actor.attack || 0;
+  const atkWeaponMod   = actor.weapon ? (ITEMS[actor.weapon]?.statMods?.attack ?? 0) : 0;
+  const atkAbilityMod  = abilityStatMod(actor.abilities, 'attack');
+  const atkEffectMod   = effectStatMod(actor, 'attack');
+  const atkAttackBonus = actor.attackBonus || 0;
+  const defBaseStat     = target.defense || 0;
+  const defWeaponMod    = target.weapon ? (ITEMS[target.weapon]?.statMods?.defense ?? 0) : 0;
+  const defAbilityMod   = abilityStatMod(target.abilities, 'defense');
+  const defEffectMod    = effectStatMod(target, 'defense');
+  const defDefenseBonus = target.defenseBonus || 0;
+
   return {
     success: true, log, cost: 1,
     attackRoll, defenseRoll, hit, killed,
@@ -1063,9 +1193,28 @@ export function executeBattle(state, actor, target) {
       atkGangupFlat, defGangupFlat,
       atkAdvantageDice, defAdvantageDice, atkDisadvantageDice,
       forestCoverBonus,
+      atkBaseStat, atkWeaponMod, atkAbilityMod, atkEffectMod, atkAttackBonus,
+      defBaseStat, defWeaponMod, defAbilityMod, defEffectMod, defDefenseBonus,
       ranged: isRanged, closeRanged: isCloseRanged,
       atkAllyNames: isRanged ? [] : atkAllies.map(e => e.displayName),
       defAllyNames: isRanged ? [] : defAllies.map(e => e.displayName),
+      // Ally IDs — the 3D combat renderer uses these to lunge gang-up
+      // participants half-distance toward the target alongside the attacker.
+      // Ranged battles don't get gang-up so these stay empty.
+      atkAllyIds: isRanged ? [] : atkAllies.map(e => e.id),
+      defAllyIds: isRanged ? [] : defAllies.map(e => e.id),
+      // Per-ally advantage dice. Each gang-up ally adds 1 die to its side's
+      // pool; pool[0] is the combatant's own die, pool[1..N] are the ally
+      // dice in the same order as atkAllies/defAllies. Capped at the number
+      // of advantage dice actually granted (gang-up flat caps at ADVANTAGE_CAP).
+      // The 3D readout paints each ally's icon with its assigned face value,
+      // and pulses the ally whose die became the picked (best) die.
+      atkAllyDice: isRanged ? [] : atkAllies.slice(0, atkAdvantageDice).map((e, i) => ({
+        allyId: e.id, die: atkPool[1 + i],
+      })),
+      defAllyDice: isRanged ? [] : defAllies.slice(0, defAdvantageDice).map((e, i) => ({
+        allyId: e.id, die: defPool[1 + i],
+      })),
     },
   };
 }
@@ -1160,7 +1309,7 @@ export function executeFortAssault(state, actor, targetCol, targetRow) {
 
 export function executeFortify(state, actor) {
   const t = tile(state, actor.col, actor.row);
-  if (!t || t.type === TileType.RIVER) return { success: false, log: ['Cannot fortify here.'] };
+  if (!t || isRiver(t)) return { success: false, log: ['Cannot fortify here.'] };
   if (t.fortifyLevel >= MAX_FORTIFY_LEVEL) return { success: false, log: ['Cannot fortify further.'] };
   const shared     = state.inventory.hero;
   const metalCount = (shared[ResourceType.METAL] || 0);
@@ -1506,6 +1655,18 @@ export function executeGuardStrike(state, guardian, target) {
     // No counter-attack on guard strikes
   }
 
+  // Decomposed unit stats — silver is stripped on guard strike (attackBonus
+  // saved/restored above) so atkAttackBonus is always 0 here.
+  const atkBaseStat    = guardian.attack || 0;
+  const atkWeaponMod   = guardian.weapon ? (ITEMS[guardian.weapon]?.statMods?.attack ?? 0) : 0;
+  const atkAbilityMod  = abilityStatMod(guardian.abilities, 'attack');
+  const atkEffectMod   = effectStatMod(guardian, 'attack');
+  const defBaseStat     = target.defense || 0;
+  const defWeaponMod    = target.weapon ? (ITEMS[target.weapon]?.statMods?.defense ?? 0) : 0;
+  const defAbilityMod   = abilityStatMod(target.abilities, 'defense');
+  const defEffectMod    = effectStatMod(target, 'defense');
+  const defDefenseBonus = target.defenseBonus || 0;
+
   return {
     success: true, log, cost: 0, guardStrike: true,
     attackRoll, defenseRoll, hit, killed, margin, damage, splashKills, splashHits,
@@ -1518,6 +1679,8 @@ export function executeGuardStrike(state, guardian, target) {
       atkAdvantageDice: 0, defAdvantageDice: 0,
       atkStaffBonus, phaseBonus, fortBonus, atkFortAtkBonus,
       fatiguePenalty: 0,
+      atkBaseStat, atkWeaponMod, atkAbilityMod, atkEffectMod, atkAttackBonus: 0,
+      defBaseStat, defWeaponMod, defAbilityMod, defEffectMod, defDefenseBonus,
     },
   };
 }

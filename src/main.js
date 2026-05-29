@@ -3,27 +3,15 @@ import { onInactiveChange, tryGameCenterAuth, isNativeMobile, refreshPushToken, 
 import { AppMode, getMode, setMode, isInGame, isAnimating, shouldBufferMessages, onModeChange } from './app-mode.js';
 import { initServerSelector } from './server-selector.js';
 import { GameState, phaseForRound } from './game.js';
-import { Renderer }          from './renderer.js';
-import { Renderer3D }        from './renderer-3d.js';
+import { Renderer3D, BLOCK_WORD_VARIANTS } from './renderer-3d.js';
 
-/**
- * Pick the renderer class based on the 'brimstone:renderer' localStorage
- * value. Returns the constructor (not an instance) so callers can `new` it
- * with the right (canvas, state) pair.
- */
+// The in-game renderer is always 3D. The 2D `Renderer` is still exported from
+// `./renderer.js` for the mission editor and admin-lighting tool.
 function _pickRenderer() {
-  // 3D is the default on feature/3d-renderer; users can opt back to 2D in Options.
-  let Cls = Renderer3D;
-  try {
-    if (localStorage.getItem('brimstone:renderer') === '2d') Cls = Renderer;
-  } catch { /* localStorage may be unavailable in some sandboxes */ }
-  // Tag the body so CSS can swap in the 3D camera-controls cluster (see
-  // `body.renderer-3d` rules in styles.css). Done once at startup — the
-  // renderer choice is fixed for the session.
   if (typeof document !== 'undefined' && document.body) {
-    document.body.classList.toggle('renderer-3d', Cls === Renderer3D);
+    document.body.classList.add('renderer-3d');
   }
-  return Cls;
+  return Renderer3D;
 }
 import { UIController, UIMode } from './ui.js';
 import { WITCH_PERSONALITIES }   from './ai.js';
@@ -43,14 +31,16 @@ import { buildPlayerStatusHtml } from './ui-render.js';
 import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { PlanActionType, groupPlanByEntity } from './planner.js';
 import { hexDistance, getNeighbors, hexKey } from './hex.js';
+import { planCombatFrames } from './combat-presentation.js';
 import { MAX_FORTIFY_LEVEL, FORT_IMPASSABLE_THRESHOLD } from './tiles.js';
-import { sightRange } from './actions.js';
+import { sightRange, computeLineOfSight, hasLineOfSight } from './actions.js';
 import { UNIT_TYPES } from './unit-types.js';
 import { getFaction, findFaction, allFactions, getFactionsForSide, sightRangeForEntity } from './factions.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import { playback, resetPlayback, replayFullGame, playbackDelay, swapState, patchAlive } from './playback.js';
 import { ReplayCache } from './replay-cache.js';
+import { makeShowLoadingAndReveal } from './loading-reveal.js';
 import { MAP_SIZES } from './map.js';
 import { nodeController } from './game.js';
 import { MissionConductor } from './mission-conductor.js';
@@ -59,6 +49,9 @@ import { hexKey as _hexKey } from './hex.js';
 import { Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves, reconcileRosterAfterMission } from './campaign/campaign.js';
 import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
 import { processStoryTriggers } from './campaign/missions.js';
+import { buildMissionMap } from './campaign/mission-map.js';
+import { run3DCombatCardHold } from './combat-cinematic.js';
+import { playFastCombatDisplay } from './combat-fast.js';
 import {
   campaignMissionSaveKey, loadCampaignMissionSave, deleteCampaignMissionSave,
   RESOURCE_ICONS as _RESOURCE_ICONS, hpColor as _hpColor,
@@ -203,6 +196,16 @@ function _handleReplayError(msg) {
 // Keep UIController.appMode in sync with the centralized mode.
 onModeChange((newMode) => { if (ui) ui.appMode = newMode; });
 
+// Compass rose visibility — show in every in-canvas mode (PLANNING / SUBMITTED
+// / RESOLVING / SUMMARY / PLAYBACK / SPECTATING). Hidden on MENU. The mission
+// editor / admin-tools pages load a different HTML shell, so the element isn't
+// present there at all and this listener is a no-op when run there.
+onModeChange(() => {
+  const el = document.getElementById('compass-rose');
+  if (!el) return;
+  el.hidden = getMode() === AppMode.MENU;
+});
+
 /** Return the correct base URL for shareable links (invite, join, etc.).
  *  Inside Capacitor, location.origin is "capacitor://localhost" — useless for
  *  links shared with other people. Use BRIMSTONE_SERVER when available. */
@@ -215,6 +218,29 @@ function _linkOrigin() {
 function _genSaveId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 }
+
+/**
+ * Show the loading overlay, drive its progress bar from the renderer's asset
+ * bundle, and fade the canvas in once everything is ready. Works against either
+ * renderer — the 2D path resolves almost immediately, the 3D path waits for the
+ * Babylon engine + every GLB/atlas load (or the renderer's 30s safety timeout).
+ *
+ * `beginLoad()` is the single entry point that boots the renderer; `draw()` no
+ * longer triggers init. We draw one full-quality frame while the overlay is
+ * still up, wait a frame so it paints, then cross-fade overlay → canvas.
+ *
+ * Fire-and-forget from the synchronous init paths — the game's planning setup
+ * runs in parallel; rendering simply catches up when the scene is ready.
+ *
+ * Reveals are serialized by a monotonic token inside the coordinator (see
+ * `src/loading-reveal.js`): all three init paths drive the SAME overlay, and a
+ * double-tapped "Start" (or any re-entry of an init path) starts two reveals at
+ * once. Without the token, the slower one re-shows the overlay over the scene
+ * the faster one already faded in ("the scene comes in and then goes back to
+ * the loading screen for forest"). The token lets only the latest reveal touch
+ * the shared overlay; superseded reveals become no-ops on it.
+ */
+const _showLoadingAndReveal = makeShowLoadingAndReveal();
 
 /**
  * Shared setup for all local (single-player) game starts.
@@ -234,7 +260,10 @@ function _setupLocalUI(canvas, localWitchAI, localHeroAI, autoplay) {
   renderer = new (_pickRenderer())(canvas, state);
   renderer.resize();
   renderer.onImagesLoaded = () => { if (ui) ui._renderTurnInfo(); };
-  renderer.loadImages();
+  // Show the loading overlay + drive the progress bar; reveals the canvas once
+  // the renderer's asset bundle is ready. Subsumes the old fire-and-forget
+  // loadImages() — beginLoad() (called inside) loads the atlas too.
+  _showLoadingAndReveal(renderer);
 
   ui = new UIController(canvas, state, renderer, localWitchAI, redraw, localHeroAI, autoplay);
   ui.onQuitToMenu = () => location.reload();
@@ -918,10 +947,45 @@ function _playAttackIntroAnim(actorSnap, targetSnap, fromCol, fromRow, toCol, to
   }
 }
 
+// 3D cinematic combat Continue button — gates the readout fade on a click
+// so the player controls how long the totals stay on screen. Passed into
+// run3DCombatCardHold (src/combat-cinematic.js) as the button resolver; the
+// shared helper owns the show/hide/await-click plumbing.
+function _combatContinueBtn() {
+  if (typeof document === 'undefined') return null;
+  return document.getElementById('combat-continue-btn');
+}
+
+// 3D cinematic combat resolution (G4 Phase 2+3): NO modal dialog in 3D — the
+// dice/total read out on billboarded cards above the combatants while the
+// attacker's punch is FROZEN mid-strike, then the strike resumes to completion
+// and the result floaters play. Mirrors what the modal used to gate, but driven
+// purely by the animation queue so resolution still advances.
+//
+// Sequence: lunge+punch already started by `_playAttackIntroAnim`. Here:
+//   1. freeze the punch on its impact frame (holds the strike pose),
+//   2. spawn the dice cards above both heads,
+//   3. await the card hold+fade (strike stays frozen the whole time),
+//   4. resume the punch through to completion,
+//   5. play the result floaters and drain them.
+// The caller still owns the lunge return (returnAllLungeAnims) afterwards.
+async function _run3DCombatCardHold(actorSnap, targetSnap, result, redrawFn) {
+  return run3DCombatCardHold({
+    renderer, state,
+    actorSnap, targetSnap, result, redrawFn,
+    getContinueButton: _combatContinueBtn,
+    playBattleResultAnims: _playBattleResultAnims,
+  });
+}
+
 function _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn) {
   renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
-  if (result?.damage)      renderer.addHpChangeFlash(targetSnap.col, targetSnap.row, -(result.damage));
-  if (result?.counterDmg)  renderer.addHpChangeFlash(actorSnap.col,  actorSnap.row,  -(result.counterDmg));
+  // Pass entityId so the renderer flags the affected standee with
+  // `_pendingDespawn`. _syncEntityStandees skips disposal until the "-N"
+  // floater finishes rising/fading, so the number reads as floating off a
+  // visible unit rather than orphaned in space.
+  if (result?.damage)      renderer.addHpChangeFlash(targetSnap.col, targetSnap.row, -(result.damage),    { entityId: targetSnap.id });
+  if (result?.counterDmg)  renderer.addHpChangeFlash(actorSnap.col,  actorSnap.row,  -(result.counterDmg), { entityId: actorSnap.id });
   if (result?.fortDamaged) {
     renderer.addFlash(targetSnap.col, targetSnap.row, '🏰-1',
       'rgba(120,120,140,0.15)', 1600, 0.65, 'rgba(180,180,200,1)');
@@ -947,7 +1011,7 @@ function _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn) {
   }
   // Splash damage floaters
   for (const sh of result?.splashHits ?? []) {
-    renderer.addHpChangeFlash(sh.col, sh.row, -1);
+    renderer.addHpChangeFlash(sh.col, sh.row, -1, { entityId: sh.id });
     if (sh.killed) {
       const deadColor = sh.owner === 'hero' ? '#d4a72c' : '#9b59b6';
       renderer.addDeathAnim(sh.col, sh.row, deadColor);
@@ -994,19 +1058,33 @@ function _getBattleAllyEntities(actorSnap, targetSnap, entities) {
  */
 
 /**
- * Check whether a hex (col, row) is within sight range of any friendly entity
- * in the current step's entity snapshot.  Used during resolution animation to
- * decide whether an opponent action should be visible under fog of war.
+ * Check whether a hex (col, row) is within line of sight of any friendly
+ * entity in the current step's entity snapshot. Used during resolution
+ * animation to decide whether an opponent action should be visible under
+ * fog of war.
+ *
+ * The LOS set is cached on the entity snapshot (via a WeakMap) so this is
+ * O(1) on the second and subsequent calls for the same snapshot, even
+ * though the underlying LOS pass is O(units × hexes_in_range).
  */
+const _losCacheBySnapshot = new WeakMap();
 function _isFogVisible(col, row, humanFaction, entities, phase) {
   if (!humanFaction || state.fogOfWar === 'none') return true;
-  for (const e of entities) {
-    if (!e.alive || e.owner !== humanFaction) continue;
-    // Per-entity sight so stub-faction bonuses (rogue +1) apply.
-    const range = sightRangeForEntity(e, phase);
-    if (hexDistance(e.col, e.row, col, row) <= range) return true;
+  let perFaction = _losCacheBySnapshot.get(entities);
+  if (!perFaction) {
+    perFaction = new Map();
+    _losCacheBySnapshot.set(entities, perFaction);
   }
-  return false;
+  let set = perFaction.get(humanFaction);
+  if (!set) {
+    set = computeLineOfSight(
+      { entities, tiles: state.tiles, phase },
+      humanFaction,
+      entities,
+    );
+    perFaction.set(humanFaction, set);
+  }
+  return set.has(hexKey(col, row));
 }
 
 /**
@@ -1024,7 +1102,10 @@ function _updateNodeDiscoveryDuringStep(gs, humanFaction, rend) {
       const nowSeen = gs.entities.some(e => {
         if (!e.alive || e.owner !== fac.id) return false;
         const range = sightRangeForEntity(e, gs.phase);
-        return obj.hexes.some(h => hexDistance(e.col, e.row, h.col, h.row) <= range);
+        return obj.hexes.some(h =>
+          hexDistance(e.col, e.row, h.col, h.row) <= range
+          && hasLineOfSight(gs, e.col, e.row, h.col, h.row)
+        );
       });
       if (!nowSeen) continue;
       obj[seenKey] = true;
@@ -1046,7 +1127,8 @@ function _updateNodeDiscoveryDuringStep(gs, humanFaction, rend) {
       const nowSeen = gs.entities.some(e => {
         if (!e.alive || e.owner !== 'hero') return false;
         const range = sightRangeForEntity(e, gs.phase);
-        return hexDistance(e.col, e.row, mt.col, mt.row) <= range;
+        return hexDistance(e.col, e.row, mt.col, mt.row) <= range
+          && hasLineOfSight(gs, e.col, e.row, mt.col, mt.row);
       });
       if (nowSeen) {
         mt.seen = true;
@@ -1126,6 +1208,13 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     if (t) t.fortifyLevel = Math.max(0, (postFortMap.get(k) ?? 0) - delta);
   }
 
+  // 3D combat-presentation (Phase 1): when a step's combat frame is held by
+  // `renderer.frameEntities` (non-restoring), this tracks that a hold is live
+  // so we can RELEASE it after the loop if the very last step was a battle and
+  // nothing else moved the camera before the SUMMARY transition. A non-combat
+  // step's own step-level frame releases it naturally (and clears this flag).
+  let _heldCombatFrame3D = false;
+
   for (let i = 0; i < steps.length; i++) {
     // During replay: if BACK or STOP was pressed, abort remaining steps immediately
     if (playback.goBack || playback.aborted || playback.jumpToEnd) break;
@@ -1190,8 +1279,54 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       && window.matchMedia?.('(min-width: 900px) and (min-aspect-ratio: 5/4)')?.matches) ?? false;
     const _battleInsetValue = _dialogDocksRight ? 500 : 0;
 
+    // ── 3D cinematic combat framing (Phase 1) ────────────────────────────────
+    // Cluster this step's visible battles by map proximity so the camera frames
+    // each cluster ONCE (via the non-restoring `frameEntities`) and HOLDS across
+    // every same-cluster battle. The 2D path is unchanged — gated on `is3D`.
+    const _cinematic = !_autoplay && (ui?.speedMode ?? 'cinematic') === 'cinematic';
+    const _is3DCinematic = !!(renderer?.is3D) && _cinematic;
+    // Default OFF for the move phase so move bump-back lunges keep their
+    // built-in framing; flipped ON just before the battle phases below (where
+    // main.js owns the rotated, card-aware, AWAITED cluster frame).
+    if (renderer) renderer._suppressLungeFraming = false;
+    // Same visibility predicate Phase 2 applies per battle (lines below) — so we
+    // only cluster battles that will actually be presented to this viewer.
+    const _battleShown = (ev) => {
+      const bs = ev.battleSnaps;
+      if (!bs) return false;
+      const myUnit = myPlayerId && (
+        bs.actorSnap?.ownerId === myPlayerId || bs.targetSnap?.ownerId === myPlayerId
+      );
+      return myPlayerId
+        ? myUnit
+        : (!humanFaction || state.fogOfWar === 'none' || ev.faction === humanFaction
+            || (bs.targetSnap?.owner === humanFaction || bs.actorSnap?.owner === humanFaction));
+    };
+    let _combatFrames = null;        // ordered frames from planCombatFrames
+    let _eventFrameIndex = null;     // Map<battleEvent, frameIndex>
+    let _heldFrameIndex = -1;        // which cluster the camera currently holds
+    if (_is3DCinematic) {
+      const battleEvents = events.filter(ev =>
+        (ev.action.type === PlanActionType.BATTLE_UNIT || ev.action.type === PlanActionType.BATTLE_HEX)
+        && ev.battleSnaps && !ev.result?.fortAssault && _battleShown(ev)
+      );
+      if (battleEvents.length) {
+        _combatFrames = planCombatFrames(battleEvents);
+        _eventFrameIndex = new Map();
+        for (let fi = 0; fi < _combatFrames.length; fi++) {
+          for (const ei of _combatFrames[fi].eventIndices) {
+            _eventFrameIndex.set(battleEvents[ei], fi);
+          }
+        }
+      }
+    }
+    // True when this 3D step presents battles — the step-level frame and the
+    // per-battle 2D frameHexes are suppressed for it so they don't stomp the
+    // held cluster frame.
+    const _stepHas3DCombat = !!(_combatFrames && _combatFrames.length);
+
     // ── Frame camera on this step's actors ──────────────────────────────────
-    if (!_autoplay) {
+    if (!_autoplay && !_stepHas3DCombat) {
       const _cspd = ui?.speedMode ?? 'cinematic';
       {
         // In cinematic mode, battles get per-battle dialog framing
@@ -1259,6 +1394,9 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             maxZoom:      2.0,
             duration:     250,
           });
+          // This step-level move releases any held 3D combat frame (Phase 1):
+          // the camera has just panned to a non-combat step's actors.
+          _heldCombatFrame3D = false;
           await playbackDelay(_cspd === 'vfast' ? 140 : 280);
         }
       }
@@ -1433,6 +1571,12 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     }
 
     // ── Phase 2: battles and summons ──────────────────────────────────────────
+    // From here on (battles + guard strikes) the 3D cinematic arm frames the
+    // combat cluster itself — rotated so the axis reads left-to-right, zoomed to
+    // a card-aware radius, and AWAITED before the lunge — so suppress the
+    // lunge's own midpoint reframe. Fast/vfast/autoplay keep their built-in
+    // lean-in (flag stays false).
+    if (renderer) renderer._suppressLungeFraming = _is3DCinematic;
     let hadBattle = false;
     for (const ev of events) {
       const { action, result, battleSnaps } = ev;
@@ -1471,6 +1615,26 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             const lungeFromRow = actorDisplay?.row  ?? actorSnap.row;
             const lungeToCol   = targetDisplay?.col ?? targetSnap.col;
             const lungeToRow   = targetDisplay?.row ?? targetSnap.row;
+
+            // ── Step 0 (3D): FRAME first, AWAIT camera arrival, THEN lunge ─────
+            // The camera rotates the attacker→target axis to read left-to-right,
+            // zooms to a card-aware radius, and pans to the cluster centroid —
+            // all BEFORE the strike, so the attack never starts mid-pan. Only
+            // re-frame on a NEW cluster; the non-restoring frame persists across
+            // same-cluster battles, so we await it only on the change.
+            if (speed === 'cinematic' && _stepHas3DCombat && _eventFrameIndex) {
+              const fi = _eventFrameIndex.get(ev);
+              if (fi != null && fi !== _heldFrameIndex) {
+                const cl = _combatFrames[fi];
+                await renderer.frameCombatants(cl.ids[0], cl.ids[1], {
+                  extraIds: cl.ids.slice(2),
+                  padding: 1.15,
+                });
+                _heldFrameIndex = fi;
+              }
+              _heldCombatFrame3D = true;
+            }
+
             _playAttackIntroAnim(
               actorSnap, targetSnap,
               lungeFromCol, lungeFromRow,
@@ -1497,44 +1661,56 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
               redrawFn();
             }
 
-            // ── Step 3: Dialog (cinematic) or toast+floater (fast/vfast) ─
+            // ── Step 3: Card-hold (3D) / Dialog (2D cinematic) or toast (fast) ─
             if (speed === 'cinematic') {
-              // Full dialog for every battle — no significance filter.
-              // Offset camera so the map is visible beside the docked dialog.
-              // Skip the reframe if the camera is already positioned for these
-              // same hex positions (avoids yoyo between consecutive battles at
-              // the same spot).
-              const frameKey = `${actorSnap.col},${actorSnap.row}|${targetSnap.col},${targetSnap.row}`;
-              const needsReframe = frameKey !== _lastBattleFrameKey || (_dialogDocksRight && !_battleInsetActive);
-              if (needsReframe) {
-                if (_dialogDocksRight) {
-                  renderer.insetRight = _battleInsetValue;
-                  _battleInsetActive = true;
+              if (_stepHas3DCombat && _eventFrameIndex) {
+                // 3D: the cluster frame was issued + AWAITED before the lunge
+                // (Step 0 above) and HOLDS across same-cluster battles. Here we
+                // just run the presentation: NO modal — freeze the strike
+                // mid-swing, read the dice cards above both heads, resume the
+                // strike, then play the result floaters, all via the anim queue.
+                await _run3DCombatCardHold(actorSnap, targetSnap, result, redrawFn);
+              } else {
+                // 2D: per-battle frameHexes with right-dock inset (unchanged).
+                // Offset camera so the map is visible beside the docked dialog.
+                // Skip the reframe if the camera is already positioned for these
+                // same hex positions (avoids yoyo between consecutive battles at
+                // the same spot).
+                const frameKey = `${actorSnap.col},${actorSnap.row}|${targetSnap.col},${targetSnap.row}`;
+                const needsReframe = frameKey !== _lastBattleFrameKey || (_dialogDocksRight && !_battleInsetActive);
+                if (needsReframe) {
+                  if (_dialogDocksRight) {
+                    renderer.insetRight = _battleInsetValue;
+                    _battleInsetActive = true;
+                  }
+                  renderer.frameHexes(
+                    [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
+                    { paddingHexes: 2.5, maxZoom: 2.0, duration: 200 },
+                  );
                 }
-                renderer.frameHexes(
-                  [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
-                  { paddingHexes: 2.5, maxZoom: 2.0, duration: 200 },
-                );
+                _lastBattleFrameKey = frameKey;
+                // 2D keeps the modal: wait for dismiss, THEN play floaters.
+                await new Promise(resolve => {
+                  ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
+                });
+                _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
+                // Drain all floaters (HP text 1800ms, death burst 600ms) before next battle.
+                await renderer.waitForAnimations();
               }
-              _lastBattleFrameKey = frameKey;
-              // Wait for dialog dismiss, THEN play floaters so nothing overlaps.
-              await new Promise(resolve => {
-                ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
-              });
-              _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
-              // Drain all floaters (HP text 1800ms, death burst 600ms) before next battle.
-              await renderer.waitForAnimations();
             } else if (speed === 'fast' || speed === 'vfast') {
-              // Toast + floater only — no dialog.
-              // On a miss show a randomised flavour word; hits communicate via HP floater.
-              if (!result.hit) {
-                const _MISS_TEXT = ['miss', 'dodged', 'blocked', 'parried', 'deflected'];
-                const missText = _MISS_TEXT[Math.floor(Math.random() * _MISS_TEXT.length)];
-                renderer.addFlash(targetSnap.col, targetSnap.row, missText, 'rgba(100,100,100,0.1)', 1000, 0.65, '#888');
-              }
-              _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
-              // Brief wait so floaters from different battles don't pile up.
-              await playbackDelay(speed === 'vfast' ? 200 : 400);
+              // Toast + floater only — no dialog. Shared with the tester via
+              // playFastCombatDisplay (src/combat-fast.js). The miss word is
+              // picked here (only when needed) so the Math.random() sequence
+              // matches the pre-refactor behaviour byte-for-byte.
+              const missText = !result.hit
+                ? BLOCK_WORD_VARIANTS[Math.floor(Math.random() * BLOCK_WORD_VARIANTS.length)]
+                : null;
+              await playFastCombatDisplay({
+                renderer, state, actorSnap, targetSnap, result,
+                playBattleResultAnims: (a, t, r) => _playBattleResultAnims(a, t, r, redrawFn),
+                speed, missText,
+                playbackDelay,
+              });
             }
 
             // ── Step 4: Clear highlights, animate lunge return ───────────────
@@ -1725,6 +1901,18 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         const lungeFromRow = guardDisplay?.row  ?? actorSnap.row;
         const lungeToCol   = targetDisplay?.col ?? targetSnap.col;
         const lungeToRow   = targetDisplay?.row ?? targetSnap.row;
+
+        // 3D cinematic: FRAME + AWAIT before the lunge (same as the regular
+        // battle arm). Only when this step had no clustered battles to frame —
+        // otherwise the held cluster frame already covers these hexes (guard
+        // strikes fire at the same positions). Stand-alone guard strikes orient
+        // their own attacker→target axis.
+        if (speed === 'cinematic' && _is3DCinematic
+            && !_stepHas3DCombat && !_heldCombatFrame3D) {
+          await renderer.frameCombatants(actorSnap.id, targetSnap.id, { padding: 1.15 });
+          _heldCombatFrame3D = true;
+        }
+
         _playAttackIntroAnim(
           actorSnap, targetSnap,
           lungeFromCol, lungeFromRow,
@@ -1742,34 +1930,48 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         redrawFn();
 
         if (speed === 'cinematic') {
-          // Reuse the same frame-key tracking from Phase 2 so guard strikes
-          // at the same position as a preceding regular battle skip reframing.
-          const frameKey = `${actorSnap.col},${actorSnap.row}|${targetSnap.col},${targetSnap.row}`;
-          const needsReframe = frameKey !== _lastBattleFrameKey || (_dialogDocksRight && !_battleInsetActive);
-          if (needsReframe) {
-            if (_dialogDocksRight) {
-              renderer.insetRight = _battleInsetValue;
-              _battleInsetActive = true;
+          if (_is3DCinematic) {
+            // 3D: the frame (held cluster frame, or the stand-alone frame issued
+            // + AWAITED before the lunge above) is already in place. No 2D inset
+            // docking. G4 Phase 3: NO modal — frozen strike + dice cards +
+            // resume + floaters, same as the regular battle arm.
+            _heldCombatFrame3D = true;
+            await _run3DCombatCardHold(actorSnap, targetSnap, result, redrawFn);
+          } else {
+            // 2D: reuse the same frame-key tracking from Phase 2 so guard strikes
+            // at the same position as a preceding regular battle skip reframing.
+            const frameKey = `${actorSnap.col},${actorSnap.row}|${targetSnap.col},${targetSnap.row}`;
+            const needsReframe = frameKey !== _lastBattleFrameKey || (_dialogDocksRight && !_battleInsetActive);
+            if (needsReframe) {
+              if (_dialogDocksRight) {
+                renderer.insetRight = _battleInsetValue;
+                _battleInsetActive = true;
+              }
+              renderer.frameHexes(
+                [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
+                { paddingHexes: 2.5, maxZoom: 2.0, duration: 200 },
+              );
             }
-            renderer.frameHexes(
-              [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
-              { paddingHexes: 2.5, maxZoom: 2.0, duration: 200 },
-            );
+            _lastBattleFrameKey = frameKey;
+            // 2D keeps the modal.
+            await new Promise(resolve => {
+              ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
+            });
+            _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
+            await renderer.waitForAnimations();
           }
-          _lastBattleFrameKey = frameKey;
-          await new Promise(resolve => {
-            ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
-          });
-          _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
-          await renderer.waitForAnimations();
         } else {
-          if (!result.hit) {
-            const _MISS_TEXT = ['miss', 'dodged', 'blocked', 'parried', 'deflected'];
-            const missText = _MISS_TEXT[Math.floor(Math.random() * _MISS_TEXT.length)];
-            renderer.addFlash(targetSnap.col, targetSnap.row, missText, 'rgba(100,100,100,0.1)', 1000, 0.65, '#888');
-          }
-          _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
-          await playbackDelay(speed === 'vfast' ? 200 : 400);
+          // fast / vfast guard-strike display — shared with the regular battle
+          // arm and the admin combat tester via playFastCombatDisplay.
+          const missText = !result.hit
+            ? BLOCK_WORD_VARIANTS[Math.floor(Math.random() * BLOCK_WORD_VARIANTS.length)]
+            : null;
+          await playFastCombatDisplay({
+            renderer, actorSnap, targetSnap, result,
+            playBattleResultAnims: (a, t, r) => _playBattleResultAnims(a, t, r, redrawFn),
+            speed, missText,
+            playbackDelay,
+          });
         }
 
         // Clear highlights, return lunge
@@ -1953,6 +2155,29 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     }
   }
 
+  // RELEASE the held 3D combat frame (Phase 1): if the LAST presented step was
+  // a battle (or guard strike) and nothing reframed the camera before the
+  // SUMMARY transition, pull back to this player's surviving units so the
+  // resolution doesn't end clamped on a single skirmish.
+  if (_heldCombatFrame3D && renderer?.is3D && !_autoplay
+      && !playback.goBack && !playback.aborted && !playback.jumpToEnd) {
+    const mine = (finalEntities || [])
+      .filter(e => e && e.alive && e.col != null && (
+        myPlayerId ? e.ownerId === myPlayerId
+                   : (!humanFaction || e.owner === humanFaction)
+      ))
+      .map(e => ({ col: e.col, row: e.row }));
+    if (mine.length) {
+      renderer.frameHexes(mine, { paddingHexes: 3, maxZoom: 1.8, duration: 400 });
+    } else {
+      renderer.frameHexes(
+        (finalEntities || []).filter(e => e && e.alive && e.col != null).map(e => ({ col: e.col, row: e.row })),
+        { paddingHexes: 3, maxZoom: 1.8, duration: 400 },
+      );
+    }
+    _heldCombatFrame3D = false;
+  }
+
   // Wait for any in-flight canvas animations (node reveals, flashes, etc.)
   // to finish before showing the end-of-turn summary dialog.
   if (!_autoplay && !playback.goBack && !playback.aborted && !playback.jumpToEnd) {
@@ -2043,7 +2268,8 @@ function initOnline(mirrorState, myFaction, mpClient) {
   renderer = new (_pickRenderer())(canvas, state);
   renderer.resize();
   renderer.onImagesLoaded = () => { if (ui) ui._renderTurnInfo(); };
-  renderer.loadImages();
+  // Loading overlay + progress bar; reveals the canvas when assets are ready.
+  _showLoadingAndReveal(renderer);
 
   // No local AI — all turns handled server-side
   ui = new UIController(canvas, state, renderer, null, redrawOnline, null, false);
@@ -2238,22 +2464,6 @@ document.getElementById('reconnect-back').addEventListener('click', () => locati
       b.classList.toggle('active', b.dataset.mode === btn.dataset.mode);
     });
   });
-}
-
-// ── Renderer toggle (2D / 3D experimental) ───────────────────────────────────
-{
-  const RENDERER_KEY = 'brimstone:renderer';
-  const select = document.getElementById('options-renderer-select');
-  const hint   = document.getElementById('options-renderer-hint');
-  if (select) {
-    const saved = localStorage.getItem(RENDERER_KEY) === '2d' ? '2d' : '3d';
-    select.value = saved;
-    select.addEventListener('change', () => {
-      const value = select.value === '2d' ? '2d' : '3d';
-      localStorage.setItem(RENDERER_KEY, value);
-      if (hint) hint.style.display = '';
-    });
-  }
 }
 
 // Initialize persistent session bar on page load
@@ -2846,10 +3056,20 @@ function _initCampaignMission(missionDef) {
   // Persist pre-mission campaign state so defeat can restore from it
   _activeCampaign.save();
 
-  // Build map
-  const builder = _activeCampaign.getMapBuilder(missionDef.mapBuilder);
-  if (!builder) { console.error('No map builder for', missionDef.mapBuilder); return; }
-  const mapData = builder();
+  // Build map. JSON missions carry a declarative `map` def (built via
+  // buildMissionMap); legacy JS missions reference a builder fn by string key in
+  // the campaign's mapBuilders registry. A resolved `mapBuilderFn` (attached by
+  // loadMissionJSON) is preferred when present so the call is uniform.
+  let mapData;
+  if (missionDef.mapBuilderFn) {
+    mapData = missionDef.mapBuilderFn();
+  } else if (missionDef.map) {
+    mapData = buildMissionMap(missionDef.map);
+  } else {
+    const builder = _activeCampaign.getMapBuilder(missionDef.mapBuilder);
+    if (!builder) { console.error('No map builder for', missionDef.mapBuilder); return; }
+    mapData = builder();
+  }
   mapData.noWitch = !missionDef.hasWitch;
   mapData.disableScoring  = !!missionDef.disableScoring;
   mapData.disableCycleBar = !!missionDef.disableCycleBar;
@@ -7549,12 +7769,13 @@ function initSpectator(roomId) {
     renderer = new (_pickRenderer())(canvas, mirrorState);
     renderer.resize();
     renderer.onImagesLoaded = () => { if (ui) ui._renderTurnInfo(); };
-    renderer.loadImages();
     ui = new UIController(canvas, mirrorState, renderer, null, () => renderer.draw(), null, false);
     ui.setMode(UIMode.SPECTATOR);
     ui.speedMode = 'fast';
     window.addEventListener('resize', () => { renderer.resize(); renderer.draw(); });
-    renderer.draw();
+    // Loading overlay + progress bar; reveals the canvas once assets are ready.
+    // (Also boots the renderer — draw() no longer triggers init.)
+    _showLoadingAndReveal(renderer);
   }
 }
 

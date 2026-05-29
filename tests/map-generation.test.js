@@ -6,7 +6,7 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { generateMap, bfsPath, rng, MAP_SIZES, buildRiverMap, riverSide } from '../src/map.js';
-import { TileType, Tile } from '../src/tiles.js';
+import { TileType, Tile, legacyTileType, decomposeTileType } from '../src/tiles.js';
 import { hexKey, hexDistance, getNeighbors, MAP_COLS, MAP_ROWS } from '../src/hex.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -14,7 +14,7 @@ import { hexKey, hexDistance, getNeighbors, MAP_COLS, MAP_ROWS } from '../src/he
 function allTilesOfType(tiles, type) {
   const result = [];
   for (const t of tiles.values()) {
-    if (t.type === type) result.push(t);
+    if (legacyTileType(t) === type) result.push(t);
   }
   return result;
 }
@@ -109,7 +109,7 @@ describe('River-side balance', () => {
         const { tiles } = generateMap(seed, size);
         const rp = [];
         for (const t of tiles.values()) {
-          if (t.type === TileType.RIVER || t.type === TileType.BRIDGE) rp.push({ col: t.col, row: t.row });
+          if (legacyTileType(t) === TileType.RIVER || legacyTileType(t) === TileType.BRIDGE) rp.push({ col: t.col, row: t.row });
         }
         const cols = new Set(rp.map(r => r.col));
         const rows = new Set(rp.map(r => r.row));
@@ -118,7 +118,7 @@ describe('River-side balance', () => {
 
         let bLeft = 0, bRight = 0;
         for (const t of tiles.values()) {
-          if (t.type === TileType.BUILDING) {
+          if (legacyTileType(t) === TileType.BUILDING) {
             (riverSide(t.col, t.row, rm, ew) === 'left') ? bLeft++ : bRight++;
           }
         }
@@ -138,7 +138,7 @@ describe('River-side balance', () => {
       if (witchObjectives.length < 2) continue;
       const rp = [];
       for (const t of tiles.values()) {
-        if (t.type === TileType.RIVER || t.type === TileType.BRIDGE) rp.push({ col: t.col, row: t.row });
+        if (legacyTileType(t) === TileType.RIVER || legacyTileType(t) === TileType.BRIDGE) rp.push({ col: t.col, row: t.row });
       }
       const cols = new Set(rp.map(r => r.col));
       const rows = new Set(rp.map(r => r.row));
@@ -197,7 +197,7 @@ describe('Bridge pre-placement', () => {
         const { tiles } = generateMap(seed, size);
         const rp = [];
         for (const t of tiles.values()) {
-          if (t.type === TileType.RIVER || t.type === TileType.BRIDGE) rp.push({ col: t.col, row: t.row });
+          if (legacyTileType(t) === TileType.RIVER || legacyTileType(t) === TileType.BRIDGE) rp.push({ col: t.col, row: t.row });
         }
         const cols = new Set(rp.map(r => r.col));
         const rows = new Set(rp.map(r => r.row));
@@ -208,7 +208,7 @@ describe('Bridge pre-placement', () => {
           let leftOk = false, rightOk = false;
           for (const n of getNeighbors(b.col, b.row)) {
             const nt = tiles.get(hexKey(n.col, n.row));
-            if (!nt || nt.type === TileType.RIVER) continue;
+            if (!nt || legacyTileType(nt) === TileType.RIVER) continue;
             if (riverSide(n.col, n.row, rm, ew) === 'left') leftOk = true;
             else rightOk = true;
           }
@@ -280,7 +280,7 @@ describe('Bridge pre-placement', () => {
     for (let seed = 0; seed < 20; seed++) {
       const { tiles } = generateMap(seed, 'standard');
       for (const t of tiles.values()) {
-        if (t.type === TileType.BUILDING && t.roadDirs.size >= 2) transitBuildings++;
+        if (legacyTileType(t) === TileType.BUILDING && t.roadDirs.size >= 2) transitBuildings++;
       }
     }
     assert.ok(transitBuildings > 0,
@@ -300,7 +300,7 @@ describe('Bridge pre-placement', () => {
           if (!nt) continue;
           // A road tile should not have a roadDirs connection to a RIVER tile
           if (road.roadDirs.has(hexKey(n.col, n.row))) {
-            assert.notEqual(nt.type, TileType.RIVER,
+            assert.notEqual(legacyTileType(nt), TileType.RIVER,
               `Seed ${seed}: road at (${road.col},${road.row}) connects to river at (${n.col},${n.row})`);
           }
         }
@@ -322,7 +322,7 @@ describe('bfsPath blockRiver', () => {
       }
     }
     // Place a bridge at (2,2) so there's a way across
-    tiles.get(hexKey(2, 2)).type = TileType.BRIDGE;
+    decomposeTileType(tiles.get(hexKey(2, 2)), TileType.BRIDGE);
 
     const rand = rng(42);
     const path = bfsPath(tiles, 0, 2, 4, 2, rand, new Set(), true);
@@ -331,7 +331,7 @@ describe('bfsPath blockRiver', () => {
     // No tile in the path should be RIVER
     for (const p of path) {
       const t = tiles.get(hexKey(p.col, p.row));
-      assert.notEqual(t.type, TileType.RIVER,
+      assert.notEqual(legacyTileType(t), TileType.RIVER,
         `Path contains RIVER tile at (${p.col},${p.row})`);
     }
   });
@@ -349,7 +349,7 @@ describe('bfsPath blockRiver', () => {
     // No bridge, blockRiver defaults to false — should path through river
     const path = bfsPath(tiles, 0, 2, 4, 2, rand);
     assert.ok(path.length > 0, 'Should find a path through river');
-    const hasRiver = path.some(p => tiles.get(hexKey(p.col, p.row)).type === TileType.RIVER);
+    const hasRiver = path.some(p => legacyTileType(tiles.get(hexKey(p.col, p.row))) === TileType.RIVER);
     assert.ok(hasRiver, 'Path should include RIVER tiles when blockRiver is false');
   });
 
@@ -366,7 +366,7 @@ describe('bfsPath blockRiver', () => {
     const path = bfsPath(tiles, 0, 2, 4, 2, rand, new Set(), true);
     // BFS should fail to find a path — it returns [end] when no path found
     // or an empty path. Check that no RIVER tile is in it.
-    const hasRiver = path.some(p => tiles.get(hexKey(p.col, p.row))?.type === TileType.RIVER);
+    const hasRiver = path.some(p => legacyTileType(tiles.get(hexKey(p.col, p.row))) === TileType.RIVER);
     assert.ok(!hasRiver, 'No river tiles should appear in the path');
   });
 });

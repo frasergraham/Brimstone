@@ -32,6 +32,7 @@ import {
   lerpLightConfig,
   pulseFactor,
   buildFogVisibleSet,
+  resolveFogObserver,
 } from '../src/renderer-3d.js';
 import { Phase } from '../src/game.js';
 import { hexKey } from '../src/hex.js';
@@ -318,31 +319,32 @@ describe('Renderer3D — buildFogVisibleSet', () => {
     assert.equal(buildFogVisibleSet({ entities: [heroAt(1, 0, 0)], tiles: rectTiles(3, 3) }, null).size, 0);
   });
 
-  test('single hero observer at NIGHT (sight=1) covers exactly 7 hexes', () => {
-    // HeroFaction.getSightRange returns 1 at NIGHT (sight disc = 1 + 6 = 7).
+  test('single hero observer at NIGHT (sight=3) covers exactly 37 hexes', () => {
+    // HeroFaction.getSightRange returns 3 at NIGHT (sight disc = 1 + 6 + 12 + 18 = 37).
+    // Tiles are bare (no blockers), so the LOS disc equals the radial disc.
     const state = {
-      entities: [heroAt(1, 5, 5)],
-      tiles: rectTiles(11, 11),
+      entities: [heroAt(1, 7, 7)],
+      tiles: rectTiles(15, 15),
       phase: Phase.NIGHT,
     };
     const v = buildFogVisibleSet(state, 'hero');
-    assert.equal(v.size, 7);
-    assert.ok(v.has(hexKey(5, 5)));
-    assert.ok(!v.has(hexKey(7, 5)), '2 steps east is outside night sight');
+    assert.equal(v.size, 37);
+    assert.ok(v.has(hexKey(7, 7)));
+    assert.ok(!v.has(hexKey(11, 7)), '4 steps east is outside night sight');
   });
 
-  test('single hero observer at DAY (sight=3) covers the 37-hex disc', () => {
+  test('single hero observer at DAY (sight=6) covers the 127-hex disc on open ground', () => {
     const state = {
-      entities: [heroAt(1, 5, 5)],
-      tiles: rectTiles(11, 11),
+      entities: [heroAt(1, 8, 8)],
+      tiles: rectTiles(17, 17),
       phase: Phase.DAY,
     };
     const v = buildFogVisibleSet(state, 'hero');
-    // Hex disc of radius 3 = 1 + 6 + 12 + 18 = 37 hexes; all land on the board.
-    assert.equal(v.size, 37);
-    assert.ok(v.has(hexKey(5, 5)));
-    assert.ok(v.has(hexKey(8, 5)),  '3 steps east is within day sight');
-    assert.ok(!v.has(hexKey(9, 5)), '4 steps east is out of sight');
+    // Hex disc of radius 6 = 1 + 6 + 12 + 18 + 24 + 30 + 36 = 127 hexes.
+    assert.equal(v.size, 127);
+    assert.ok(v.has(hexKey(8, 8)));
+    assert.ok(v.has(hexKey(14, 8)), '6 steps east is within day sight');
+    assert.ok(!v.has(hexKey(15, 8)), '7 steps east is out of sight');
   });
 
   test('observer near a map edge clips the disc correctly', () => {
@@ -358,7 +360,8 @@ describe('Renderer3D — buildFogVisibleSet', () => {
       assert.ok(c >= 0 && r >= 0);
     }
     assert.ok(v.has(hexKey(0, 0)));
-    assert.ok(!v.has(hexKey(4, 4)), 'far corner outside sight');
+    // hexDistance(0,0 → 4,4) is 6, just at the edge of DAY sight, so it IS
+    // visible on a 5×5 grid. Use a larger map to test "outside sight" instead.
   });
 
   test('multi-observer: union of two heroes\' sight discs', () => {
@@ -393,16 +396,152 @@ describe('Renderer3D — buildFogVisibleSet', () => {
   });
 
   test('mixed roster: only entities owned by `observerOwner` matter', () => {
+    // Spread the witch and dead-hero far enough that their hypothetical sight
+    // discs wouldn't overlap the live hero's — otherwise we couldn't tell.
     const state = {
-      entities: [heroAt(1, 2, 2), witchAt(2, 5, 5), heroAt(3, 4, 2, false)],
-      tiles: rectTiles(10, 10),
+      entities: [heroAt(1, 2, 2), witchAt(2, 18, 18), heroAt(3, 16, 2, false)],
+      tiles: rectTiles(22, 22),
       phase: Phase.DAY,
     };
     const v = buildFogVisibleSet(state, 'hero');
     assert.ok(v.has(hexKey(2, 2)));
-    assert.ok(!v.has(hexKey(5, 5)), 'witch sight not folded in');
-    // Dead third hero at (4,2) should not contribute either.
-    assert.ok(!v.has(hexKey(6, 2)), 'dead hero sight not folded in');
+    assert.ok(!v.has(hexKey(18, 18)), 'witch sight not folded in');
+    // Dead third hero at (16,2) should not contribute either.
+    assert.ok(!v.has(hexKey(16, 2)), 'dead hero sight not folded in');
+  });
+});
+
+// ── Fog observer resolution (info-leak regression) ──────────────────────────
+//
+// The 3D veil hides every hex / standee outside the OBSERVER's sight. If
+// `resolveFogObserver` returns null while fog is active, `_applyFogVeil` treats
+// it as "no observer → unfog the whole board", revealing every enemy unit — a
+// full-map info leak. The bug: a single-player game where the human's side is
+// not flagged `*IsAI` (campaign / conductor-scripted missions run with
+// `witchIsAI = false` because the conductor supplies the witch's plans, and
+// `heroIsAI = false`). The old logic returned null for that case; the 2D
+// renderer / main.js instead default the observer to the non-AI side
+// (`!heroIsAI ? 'hero' : !witchIsAI ? 'witch' : null`). These tests pin the 3D
+// observer to that same convention so the two renderers can't drift.
+describe('Renderer3D — resolveFogObserver (fog info-leak regression)', () => {
+  test('null state → null observer (defensive)', () => {
+    assert.equal(resolveFogObserver(null), null);
+    assert.equal(resolveFogObserver(undefined), null);
+  });
+
+  test('explicit myFaction (online / PvP) wins outright', () => {
+    assert.equal(resolveFogObserver({ myFaction: 'witch', witchIsAI: true, heroIsAI: false }), 'witch');
+    assert.equal(resolveFogObserver({ myFaction: 'hero',  witchIsAI: false, heroIsAI: true  }), 'hero');
+  });
+
+  test('standard human-hero vs AI-witch → hero observes', () => {
+    assert.equal(resolveFogObserver({ witchIsAI: true, heroIsAI: false }), 'hero');
+  });
+
+  test('human-witch vs AI-hero → witch observes', () => {
+    assert.equal(resolveFogObserver({ witchIsAI: false, heroIsAI: true }), 'witch');
+  });
+
+  test('true AI-vs-AI (both flagged) → null (autoplay reveals the board)', () => {
+    assert.equal(resolveFogObserver({ witchIsAI: true, heroIsAI: true }), null);
+  });
+
+  // THE BUG: conductor / campaign mission — neither side flagged AI, yet the
+  // human is the hero and fog is active. Must NOT resolve to null (that leaks
+  // the whole map). Defaults to the hero, matching main.js / the 2D renderer.
+  test('neither side flagged AI (conductor/campaign) → hero observes, NOT null', () => {
+    assert.equal(resolveFogObserver({ witchIsAI: false, heroIsAI: false }), 'hero');
+    // Regression guard: the observer must be a real side so the veil can apply.
+    assert.notEqual(resolveFogObserver({ witchIsAI: false, heroIsAI: false }), null);
+  });
+
+  test('with fog active, a derived observer means the veil is NOT suppressed', () => {
+    // Mirrors the _applyFogVeil gate: target=null (reveal-all) iff fog inactive
+    // OR observer null. A both-flags-false + fog=full game must keep the veil.
+    const state = { witchIsAI: false, heroIsAI: false, fogOfWar: 'full' };
+    const fogActive = state.fogOfWar && state.fogOfWar !== 'none';
+    const observer = resolveFogObserver(state);
+    const revealsWholeMap = !fogActive || !observer;
+    assert.equal(revealsWholeMap, false, 'campaign fog must not reveal the whole map');
+  });
+});
+
+// ── Standard LOCAL "vs AI" fog contract (distinct from the campaign case) ────
+//
+// The campaign regression above pins the both-flags-false path. This block
+// pins the ORDINARY single-player path: human hero vs AI witch, the default
+// `init(witchIsAI=true, heroIsAI=false)` config with the setup screen's
+// default `fogOfWar='partial'`. The whole-map-visible failure mode would show
+// up here as either (a) the observer resolving to something other than 'hero',
+// (b) fog silently flipping to 'none' across the dawn→day round boundary, or
+// (c) the visibility set ballooning to cover the enemy leader's hex. We drive
+// a REAL GameState through a round-1 zero-action endRound and assert none of
+// those happen — exercising the exact layer (state flags + pure veil helpers)
+// the 3D `_applyFogVeil` reads each draw.
+describe('Renderer3D — standard local vs-AI fog contract', () => {
+  // Lazily import the heavy GameState only for this block.
+  const freshVsAi = async () => {
+    const { GameState } = await import('../src/game.js');
+    // Mirrors src/main.js init(witchIsAI=true, heroIsAI=false) for the Quick
+    // Play "vs AI" (human plays the day side / hero), standard 13×13, 3 nodes.
+    const state = new GameState(/*witchIsAI*/ true, /*heroIsAI*/ false, 'standard', 3);
+    // The setup-screen fog selector defaults to 'partial'; the GameState
+    // constructor already sets that whenever a side is AI, but pin it so the
+    // test documents the assumed default explicitly.
+    state.fogOfWar = 'partial';
+    return state;
+  };
+
+  test('observer is the human hero, fog stays active (not null / not none)', async () => {
+    const state = await freshVsAi();
+    assert.equal(state.witchIsAI, true);
+    assert.equal(state.heroIsAI, false);
+    assert.equal(state.fogOfWar, 'partial');
+    assert.equal(resolveFogObserver(state), 'hero');
+    // The _applyFogVeil reveal-all gate must stay closed.
+    const fogActive = state.fogOfWar && state.fogOfWar !== 'none';
+    assert.equal(!fogActive || !resolveFogObserver(state), false,
+      'standard vs-AI must not reveal the whole map');
+  });
+
+  test('the enemy witch hex is hidden — visible set excludes it', async () => {
+    const state = await freshVsAi();
+    const hero  = state.entities.find(e => e.owner === 'hero'  && e.alive);
+    const witch = state.entities.find(e => e.owner === 'witch' && e.alive);
+    assert.ok(hero && witch, 'fresh vs-AI game has one hero and one witch');
+
+    const vis = buildFogVisibleSet(state, resolveFogObserver(state));
+    // Far less than the whole board — the leak symptom is `vis.size === tiles`.
+    assert.ok(vis.size > 0 && vis.size < state.tiles.size,
+      `visible (${vis.size}) should be a strict subset of ${state.tiles.size} tiles`);
+    assert.ok(vis.has(hexKey(hero.col, hero.row)), 'hero stands on a visible hex');
+    // The witch starts in the opposite corner, well outside dawn sight.
+    assert.ok(!vis.has(hexKey(witch.col, witch.row)),
+      'enemy witch hex must NOT be in the hero observer\'s visible set');
+  });
+
+  test('fog survives a round-1 zero-action endRound (dawn → day)', async () => {
+    const state = await freshVsAi();
+    assert.equal(state.phase, Phase.DAWN);
+
+    // Submit nothing and advance the round, exactly like resolving an empty
+    // plan: phase rolls dawn → day, round 1 → 2.
+    state.startPlanning();
+    state.endRound();
+
+    assert.equal(state.phase, Phase.DAY, 'phase advanced to day');
+    assert.equal(state.fogOfWar, 'partial', 'fog must NOT flip to none on resolution');
+    assert.equal(resolveFogObserver(state), 'hero', 'observer unchanged after round');
+
+    const vis = buildFogVisibleSet(state, resolveFogObserver(state));
+    const witch = state.entities.find(e => e.owner === 'witch' && e.alive);
+    // Day sight is wider than dawn, but still nowhere near the full board, and
+    // the witch is in the far corner.
+    assert.ok(vis.size < state.tiles.size, 'still a strict subset after dawn→day');
+    if (witch) {
+      assert.ok(!vis.has(hexKey(witch.col, witch.row)),
+        'enemy witch still hidden after the round resolves');
+    }
   });
 });
 

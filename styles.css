@@ -35,6 +35,23 @@ button, canvas { -webkit-tap-highlight-color: transparent; touch-action: manipul
 /* pan-x pan-y: browser handles scroll gestures; JS handles taps */
 canvas { touch-action: pan-x pan-y; }
 
+/* Disable text selection game-wide — on mobile, tapping buttons (e.g. the
+   rotate controls) was selecting adjacent label text. Text-entry elements
+   opt back in so the mission editor / name / search fields still work. */
+body {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+input, textarea, select, [contenteditable], [contenteditable] * {
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  -ms-user-select: text;
+  user-select: text;
+}
+
 /* ── Setup screen ──────────────────────────────────────────────────────── */
 
 #setup-screen {
@@ -1465,6 +1482,96 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   display: block;
   cursor: pointer;
   image-rendering: pixelated;
+  /* Hidden until the loading overlay reveals it — main.js adds .canvas-ready
+     once renderer.whenReady() resolves and the first full-quality frame is
+     drawn, fading the scene in instead of showing the procedural fallbacks. */
+  opacity: 0;
+  transition: opacity 400ms ease-in;
+}
+#game-canvas.canvas-ready { opacity: 1; }
+
+/* ── Loading overlay ────────────────────────────────────────────────────── */
+
+#loading-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  opacity: 1;
+  transition: opacity 300ms ease-out;
+}
+/* `display:flex` above is an ID selector (specificity 1,0,0) and would beat the
+   UA `[hidden] { display:none }` (0,1,0) — so without this rule, setting
+   `overlay.hidden = true` never actually hides the overlay. It would snap back
+   to full opacity the moment `.fading-out` is removed and cover the revealed
+   scene. This ID+attribute rule (1,1,0) restores the hidden contract. */
+#loading-overlay[hidden] { display: none; }
+#loading-overlay.fading-out { opacity: 0; }
+
+.loading-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.1rem;
+  padding: 2rem 2.5rem;
+  text-align: center;
+}
+
+.loading-bar {
+  width: min(60vw, 320px);
+  height: 8px;
+  background: var(--bg-section);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.loading-bar-fill {
+  position: relative;
+  width: 0%;
+  height: 100%;
+  background: linear-gradient(90deg, var(--witch), var(--hero));
+  /* Width is driven by inline style from the loading coordinator as byte-level
+     progress arrives. */
+  transition: width 200ms ease-out;
+  overflow: hidden;
+}
+
+/* Always-moving shimmer: a translucent highlight sweeps across the filled
+   portion on a continuous loop, independent of the fill width. So even between
+   byte-level progress ticks (or when a load reports no Content-Length) the bar
+   reads as alive rather than frozen. */
+.loading-bar-fill::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.35) 50%,
+    transparent 100%
+  );
+  transform: translateX(-100%);
+  animation: loading-shimmer 1.2s ease-in-out infinite;
+}
+
+@keyframes loading-shimmer {
+  to { transform: translateX(100%); }
+}
+
+/* Honour reduced-motion: drop the looping sweep for users who opt out. */
+@media (prefers-reduced-motion: reduce) {
+  .loading-bar-fill::after { animation: none; }
+}
+
+.loading-label {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  letter-spacing: 0.03em;
 }
 
 /* ── Zoom controls ──────────────────────────────────────────────────────── */
@@ -1540,6 +1647,41 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   }
 }
 
+/* 3D cinematic combat: Continue button. Sits bottom-centre over the canvas
+   while the combat readout is parked at its final state. Click advances
+   the readout into its fade-out. Dark gothic palette to match the HUD;
+   bigger touch target than .zoom-btn since this is a primary action. */
+.combat-continue-btn {
+  position: absolute;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  padding: 10px 22px;
+  background: rgba(20, 14, 30, 0.92);
+  border: 1px solid rgba(200, 168, 75, 0.75);
+  border-radius: 8px;
+  color: var(--gold, #c8a84b);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  user-select: none;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+  transition: background 0.15s, border-color 0.15s, transform 0.08s;
+}
+.combat-continue-btn:hover {
+  background: rgba(40, 28, 55, 0.96);
+  border-color: rgba(220, 188, 95, 0.95);
+}
+.combat-continue-btn:active {
+  background: rgba(200, 168, 75, 0.22);
+  transform: translateX(-50%) translateY(1px);
+}
+.combat-continue-btn[hidden] {
+  display: none;
+}
+
 /* ── 3D camera controls ──────────────────────────────────────────────────
    `body.renderer-3d` is set in main.js when the 3D renderer is selected.
    We swap the 3D cluster in and hide the duplicated 2D zoom/rotate buttons
@@ -1558,14 +1700,15 @@ body.renderer-3d #rotate-left,
 body.renderer-3d #rotate-right {
   display: none;
 }
-/* Touch devices: hide the desktop-only rotate buttons (twist gesture covers
-   rotation on mobile, per the camera-controls spec). */
+/* Touch devices: the cluster shows rotate left/right only (pinch-to-zoom
+   covers zoom; the twist gesture for rotation is harder to discover).
+   Anchored to the bottom-right corner — opposite the legacy fit/focus/speed
+   cluster on the bottom-left so the two thumb zones don't overlap. */
 @media (hover: none) and (pointer: coarse) {
-  .cam3d-desktop-only { display: none; }
   body.renderer-3d #camera-controls-3d {
-    /* 4 buttons × (42px+4px) ≈ 184px — sits comfortably above the legacy
-       cluster's remaining 3 buttons (fit, focus, speed). */
-    bottom: 195px;
+    left: auto;
+    right: 12px;
+    bottom: 12px;
   }
 }
 
@@ -1626,6 +1769,84 @@ body.renderer-3d #fps-counter { display: block; }
   user-select: none;
 }
 body.renderer-3d #poly-counter { display: block; }
+#cam-counter {
+  position: absolute;
+  top: 56px;
+  right: 8px;
+  z-index: 10;
+  display: none;
+  padding: 3px 7px;
+  background: rgba(20, 14, 30, 0.72);
+  border: 1px solid rgba(180, 150, 80, 0.35);
+  border-radius: 4px;
+  color: #fff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.2;
+  pointer-events: none;
+  user-select: none;
+}
+body.renderer-3d #cam-counter { display: block; }
+
+/* Compass rose — top-left of canvas, ~64px square. The outer wrapper plus the
+   cardinal letters stay world-fixed; `.compass-rose-needle` is the inner group
+   that `Renderer3D._pumpCompassRose` rotates each frame so the red tip points
+   at map north (-Z). Toggled visible by main.js via `hidden` attribute when in
+   game (MENU keeps it hidden). pointer-events:none so it never eats clicks. */
+#compass-rose {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  width: 64px;
+  height: 64px;
+  z-index: 10;
+  pointer-events: none;
+  user-select: none;
+  border-radius: 50%;
+  background: rgba(20, 14, 30, 0.55);
+  border: 1px solid rgba(180, 150, 80, 0.35);
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.4);
+}
+#compass-rose[hidden] { display: none; }
+.compass-rose-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.compass-rose-ring {
+  fill: none;
+  stroke: rgba(180, 150, 80, 0.55);
+  stroke-width: 1.2;
+}
+.compass-rose-letter {
+  font-family: var(--font-serif);
+  font-size: 11px;
+  font-weight: 700;
+  fill: var(--text-dim);
+}
+.compass-rose-letter-n {
+  fill: var(--gold, #c8a84b);
+}
+.compass-rose-needle {
+  /* Rotation applied via the SVG `transform` attribute by renderer-3d.js so the
+     pivot is the viewBox origin (0,0). No CSS transition: the per-frame pump
+     already updates smoothly while the camera animates. */
+}
+.compass-rose-needle-n {
+  fill: var(--red);
+  stroke: rgba(0, 0, 0, 0.6);
+  stroke-width: 0.5;
+  stroke-linejoin: round;
+}
+.compass-rose-needle-s {
+  fill: var(--text-bright);
+  stroke: rgba(0, 0, 0, 0.6);
+  stroke-width: 0.5;
+  stroke-linejoin: round;
+}
+.compass-rose-pivot {
+  fill: var(--gold, #c8a84b);
+}
 
 /* ── Chronicle sidebar (left-edge collapsible panel mirroring the plan panel) ── */
 

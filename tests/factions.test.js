@@ -3,9 +3,11 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Faction, HeroFaction, WitchFaction, RogueFaction, CaptainFaction, NecromancerFaction, BruteFaction, getFaction, allFactions, getFactionsForSide, sideOf } from '../src/factions.js';
 import { Side } from '../src/sides.js';
-import { Phase } from '../src/game.js';
-import { EntityType } from '../src/entities.js';
+import { Phase, GameState } from '../src/game.js';
+import { EntityType, SURVIVOR_ROSTER } from '../src/entities.js';
 import { ResourceType } from '../src/tiles.js';
+import { hexKey } from '../src/hex.js';
+import { triggerSurvivorEncounter } from '../src/survivor-discovery.js';
 
 // ── Registry ────────────────────────────────────────────────────────────────
 
@@ -333,6 +335,19 @@ describe('Discovery & loot', () => {
     assert.equal(entity.ownerId, 'player1');
   });
 
+  test('Hero discovery honours a forced survivor id (authored mission tile)', () => {
+    const target = SURVIVOR_ROSTER[3].name;
+    const entity = getFaction('hero').createDiscoveryEntity(3, 4, 'player1', null, target);
+    assert.equal(entity.name, target);
+    assert.equal(entity.owner, 'hero');
+    assert.equal(entity.type, EntityType.SURVIVOR);
+  });
+
+  test('Hero discovery falls back to random when forced id is null', () => {
+    const entity = getFaction('hero').createDiscoveryEntity(3, 4, 'player1', null, null);
+    assert.ok(SURVIVOR_ROSTER.some(r => r.name === entity.name));
+  });
+
   test('Hero discovery result includes survivor data', () => {
     const entity = getFaction('hero').createDiscoveryEntity(0, 0, null);
     const result = getFaction('hero').buildDiscoveryResult(entity);
@@ -354,6 +369,26 @@ describe('Discovery & loot', () => {
     assert.equal(result.encounterSurvivor.type, 'zombie');
   });
 
+  test('end-to-end: authored hiddenSurvivorId spawns THAT survivor on discovery', () => {
+    const state = new GameState(true, true);
+    const hero = state.entities.find(e => e.type === EntityType.HERO);
+    assert.ok(hero, 'expected a hero entity');
+
+    // Author a specific survivor on the hero's own tile.
+    const target = SURVIVOR_ROSTER[5].name;
+    const tile = state.tiles.get(hexKey(hero.col, hero.row));
+    tile.hiddenSurvivor = true;
+    tile.hiddenSurvivorId = target;
+
+    const result = triggerSurvivorEncounter(state, hero, hero.col, hero.row);
+    assert.ok(result, 'expected an encounter');
+    const spawned = state.entities.find(e => e.type === EntityType.SURVIVOR && e.name === target);
+    assert.ok(spawned, `expected spawned survivor named ${target}`);
+    // Tile flags cleared after discovery.
+    assert.equal(tile.hiddenSurvivor, false);
+    assert.equal(tile.hiddenSurvivorId, null);
+  });
+
   test('Hero can equip horse and weapon', () => {
     assert.equal(getFaction('hero').canEquipHorse(), true);
     assert.equal(getFaction('hero').canEquipWeapon(), true);
@@ -368,25 +403,25 @@ describe('Discovery & loot', () => {
 // ── Visibility ──────────────────────────────────────────────────────────────
 
 describe('Sight range', () => {
-  test('Hero sight: DAY=3, NIGHT=1, DAWN/DUSK=2', () => {
+  test('Hero sight: DAY=6, NIGHT=3, DAWN/DUSK=4', () => {
     const h = getFaction('hero');
-    assert.equal(h.getSightRange(Phase.DAY, false), 3);
-    assert.equal(h.getSightRange(Phase.NIGHT, false), 1);
-    assert.equal(h.getSightRange(Phase.DAWN, false), 2);
-    assert.equal(h.getSightRange(Phase.DUSK, false), 2);
+    assert.equal(h.getSightRange(Phase.DAY, false), 6);
+    assert.equal(h.getSightRange(Phase.NIGHT, false), 3);
+    assert.equal(h.getSightRange(Phase.DAWN, false), 4);
+    assert.equal(h.getSightRange(Phase.DUSK, false), 4);
   });
 
   test('Hero sight with scout: +1', () => {
     const h = getFaction('hero');
-    assert.equal(h.getSightRange(Phase.DAY, true), 4);
-    assert.equal(h.getSightRange(Phase.NIGHT, true), 2);
+    assert.equal(h.getSightRange(Phase.DAY, true), 7);
+    assert.equal(h.getSightRange(Phase.NIGHT, true), 4);
   });
 
-  test('Witch sight: fixed 2 regardless of phase or scout', () => {
+  test('Witch sight: fixed 5 regardless of phase or scout', () => {
     const w = getFaction('witch');
-    assert.equal(w.getSightRange(Phase.DAY, false), 2);
-    assert.equal(w.getSightRange(Phase.NIGHT, false), 2);
-    assert.equal(w.getSightRange(Phase.NIGHT, true), 2);
+    assert.equal(w.getSightRange(Phase.DAY, false), 5);
+    assert.equal(w.getSightRange(Phase.NIGHT, false), 5);
+    assert.equal(w.getSightRange(Phase.NIGHT, true), 5);
   });
 });
 

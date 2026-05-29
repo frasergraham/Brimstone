@@ -27,6 +27,8 @@ import {
   GESTURE_SAMPLING_WINDOW_MS,
   PINCH_RADIUS_PER_PX,
   pinchDeltaToRadiusDelta,
+  shouldRecaptureGrab,
+  GRAB_POSE_EPSILON,
 } from '../src/renderer-3d.js';
 import { Renderer }   from '../src/renderer.js';
 import { Renderer3D } from '../src/renderer-3d.js';
@@ -548,5 +550,67 @@ describe('gestureLockDecision — 2-finger pinch/twist intent-lock helper', () =
     // tie-break or none. Both axes are at 0.5 / 0.33 → both above 10%
     // negligible threshold → tie-break to zoom.
     assert.equal(d, 'zoom');
+  });
+});
+
+// shouldRecaptureGrab — guards the world-space pan grab against pose drift.
+// A pan grab is the ground point under the cursor sampled at a SPECIFIC camera
+// pose; if the pose changes (wheel/pinch zoom, twist-rotate, or the beta ramp)
+// while a pointer is held, diffing the stale grab against a new-pose projection
+// snaps camera.target by metres. This is the regression guard for that jump.
+describe('shouldRecaptureGrab — invalidate stale world-grab on pose change', () => {
+  const pose = (radius, alpha, beta) => ({ radius, alpha, beta });
+
+  test('identical pose → no recapture (stable single-finger pan stays locked)', () => {
+    const p = pose(12, -1.8, 0.45);
+    assert.equal(shouldRecaptureGrab(p, { ...p }), false);
+  });
+
+  test('zoom-in (radius shrinks past epsilon) → recapture', () => {
+    // The reproduced bug: grab @ radius 28, then wheel/pinch to radius 5.5.
+    assert.equal(shouldRecaptureGrab(pose(28, -1.8, 0.087), pose(5.5, -1.8, 0.524)), true);
+  });
+
+  test('zoom-out (radius grows past epsilon) → recapture', () => {
+    assert.equal(shouldRecaptureGrab(pose(8, -1.8, 0.45), pose(20, -1.8, 0.45)), true);
+  });
+
+  test('twist / right-drag rotate (alpha changes) → recapture', () => {
+    assert.equal(shouldRecaptureGrab(pose(12, -1.8, 0.45), pose(12, -1.6, 0.45)), true);
+  });
+
+  test('beta ramp alone (radius held, beta nudged past epsilon) → recapture', () => {
+    assert.equal(shouldRecaptureGrab(pose(12, -1.8, 0.45), pose(12, -1.8, 0.50)), true);
+  });
+
+  test('sub-epsilon float noise on every axis → no recapture', () => {
+    const half = GRAB_POSE_EPSILON / 2;
+    const a = pose(12, -1.8, 0.45);
+    const b = pose(12 + half, -1.8 + half, 0.45 + half);
+    assert.equal(shouldRecaptureGrab(a, b), false);
+  });
+
+  test('change exactly at epsilon is not "greater than" → no recapture', () => {
+    const a = pose(12, -1.8, 0.45);
+    const b = pose(12 + GRAB_POSE_EPSILON, -1.8, 0.45);
+    assert.equal(shouldRecaptureGrab(a, b), false);
+  });
+
+  test('missing either pose → recapture (defensive: first move / cleared grab)', () => {
+    const p = pose(12, -1.8, 0.45);
+    assert.equal(shouldRecaptureGrab(null, p), true);
+    assert.equal(shouldRecaptureGrab(p, null), true);
+    assert.equal(shouldRecaptureGrab(null, null), true);
+  });
+
+  test('custom epsilon widens the tolerance band', () => {
+    const a = pose(12, -1.8, 0.45);
+    const b = pose(12.5, -1.8, 0.45);
+    assert.equal(shouldRecaptureGrab(a, b), true);            // default 0.01
+    assert.equal(shouldRecaptureGrab(a, b, 1.0), false);      // 1.0 tolerates 0.5
+  });
+
+  test('GRAB_POSE_EPSILON is small but non-zero', () => {
+    assert.ok(GRAB_POSE_EPSILON > 0 && GRAB_POSE_EPSILON < 0.1);
   });
 });

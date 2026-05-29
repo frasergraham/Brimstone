@@ -538,22 +538,6 @@
         </div>
       </div>
 
-      <!-- Renderer (experimental) -->
-      <div class="acct-section" style="text-align:left">
-        <div class="acct-label">Renderer</div>
-        <p style="font-size:0.8rem;color:var(--muted);margin:0.25rem 0 0.5rem">
-          The 3D renderer is experimental and only shows a placeholder scene.
-          Changing this requires a reload.
-        </p>
-        <select id="options-renderer-select" class="setup-input" style="width:100%;box-sizing:border-box">
-          <option value="2d">2D (legacy)</option>
-          <option value="3d" selected>3D (default)</option>
-        </select>
-        <p id="options-renderer-hint" style="font-size:0.75rem;color:var(--muted);margin:0.4rem 0 0;display:none">
-          Reload the page to apply.
-        </p>
-      </div>
-
       <div id="options-empty-msg" class="setup-lore" style="display:none">
         <p>No options are available yet.<br>Check back in a future update.</p>
       </div>
@@ -892,6 +876,16 @@
   <!-- ── Game screen ───────────────────────────────────────────────── -->
   <div id="game-screen">
 
+    <!-- Loading overlay — covers the whole game screen until the 3D renderer's
+         asset bundle (engine, sprites, houses, paladin, forest) is ready, then
+         fades out as the canvas fades in. Hidden by default via [hidden]. -->
+    <div id="loading-overlay" hidden>
+      <div class="loading-card">
+        <div class="loading-bar"><div class="loading-bar-fill"></div></div>
+        <div class="loading-label">Loading…</div>
+      </div>
+    </div>
+
     <header id="game-header">
       <button id="menu-btn" class="header-icon-btn" title="Menu">☰</button>
       <div id="turn-info"></div>
@@ -928,12 +922,34 @@
       </div>
       <div id="canvas-wrapper">
         <canvas id="game-canvas"></canvas>
+        <!-- Compass rose — top-left of canvas, in-game only. Outer wrapper sits
+             fixed; the inner `.compass-rose-needle` is what `renderer-3d.js`
+             rotates each frame via `compassRotationDegFromCameraAlpha`. The 2D
+             renderer leaves it at the neutral north-up rotation. -->
+        <div id="compass-rose" hidden aria-hidden="true">
+          <svg class="compass-rose-svg" viewBox="-32 -32 64 64" xmlns="http://www.w3.org/2000/svg">
+            <!-- Outer ring -->
+            <circle cx="0" cy="0" r="29" class="compass-rose-ring" />
+            <!-- Cardinal letter ticks (fixed; do not rotate with needle) -->
+            <text class="compass-rose-letter compass-rose-letter-n" x="0" y="-21" text-anchor="middle" dominant-baseline="middle">N</text>
+            <text class="compass-rose-letter" x="21" y="0" text-anchor="middle" dominant-baseline="middle">E</text>
+            <text class="compass-rose-letter" x="0" y="21" text-anchor="middle" dominant-baseline="middle">S</text>
+            <text class="compass-rose-letter" x="-21" y="0" text-anchor="middle" dominant-baseline="middle">W</text>
+            <!-- Needle: red half (north tip up by default) + light half (south). -->
+            <g class="compass-rose-needle">
+              <polygon class="compass-rose-needle-n" points="0,-16 4,0 -4,0" />
+              <polygon class="compass-rose-needle-s" points="0,16 4,0 -4,0" />
+              <circle class="compass-rose-pivot" cx="0" cy="0" r="2" />
+            </g>
+          </svg>
+        </div>
         <!-- FPS / ms-per-frame counter — top-right of canvas. Shown only when
              the 3D renderer is active (CSS gates on `body.renderer-3d`).
              Text is pumped from renderer-3d.js's per-frame observer, throttled
              to ~100ms so the DOM write doesn't cost a frame. -->
         <div id="fps-counter">--</div>
         <div id="poly-counter">--</div>
+        <div id="cam-counter">--</div>
         <!-- Replay HUD: shown during full-game replay -->
         <div id="replay-hud" style="display:none">
           <div class="replay-controls">
@@ -948,18 +964,22 @@
         </div>
         <!-- Unit stats bar: shown during planning when a unit is selected -->
         <div id="unit-stats-bar" style="display:none"></div>
+        <!-- 3D cinematic combat: "Continue" button. Hidden by default;
+             shown by main.js between the readout's "final state" and the
+             fade so the player controls how long the totals stay on screen.
+             Never appears in 2D or outside combat. -->
+        <button id="combat-continue-btn" class="combat-continue-btn" hidden>Continue ▶</button>
         <!-- 3D camera controls — shown only when the 3D renderer is active
              (toggled by `body.renderer-3d` in main.js). Mirrors #zoom-controls
              placement (bottom-left) and inherits .zoom-btn styling. Mobile
-             shows the zoom +/− pair; desktop adds rotate left/right since
-             right-drag is harder to discover than a button. Tilt is locked
-             at π/4 (45°) — see CAMERA_BETA_LOCKED in renderer-3d.js — so
-             there are no tilt buttons. -->
+             shows rotate left/right — pinch-to-zoom already covers zoom on
+             touch, whereas the twist gesture for rotation is harder to
+             discover than a button. Tilt is locked at π/4 (45°) — see
+             CAMERA_BETA_LOCKED in renderer-3d.js — so there are no tilt
+             buttons. -->
         <div id="camera-controls-3d" class="zoom-controls" style="display:none">
-          <button id="cam3d-zoom-in"  class="zoom-btn" title="Zoom in">＋</button>
-          <button id="cam3d-zoom-out" class="zoom-btn" title="Zoom out">－</button>
-          <button id="cam3d-rotate-left"  class="zoom-btn cam3d-desktop-only" title="Rotate left">↶</button>
-          <button id="cam3d-rotate-right" class="zoom-btn cam3d-desktop-only" title="Rotate right">↷</button>
+          <button id="cam3d-rotate-left"  class="zoom-btn" title="Rotate left">↶</button>
+          <button id="cam3d-rotate-right" class="zoom-btn" title="Rotate right">↷</button>
         </div>
         <!-- Zoom controls — always visible on desktop, hidden on touch-only devices -->
         <div id="zoom-controls" class="zoom-controls">

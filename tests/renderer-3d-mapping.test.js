@@ -16,7 +16,18 @@ import {
   cssHexToRgb01,
   tileColorFor,
 } from '../src/renderer-3d.js';
-import { TileType, TILE_COLOR, BuildingType, BUILDING_COLOR } from '../src/tiles.js';
+import { TileType, TILE_COLOR, BuildingType, BUILDING_COLOR, PathType, StructureType, Tile } from '../src/tiles.js';
+
+// Build a Tile with explicit layers so the colour tests exercise the layered
+// model directly. tileColorFor() reads the tile's REAL base material.
+function layered({ base = TileType.GRASS, path = null, structure = null, building = null }) {
+  const t = new Tile(0, 0, TileType.GRASS);
+  t.base = base;
+  t.path = path;
+  t.structure = structure;
+  t.building = building;
+  return t;
+}
 
 describe('Renderer3D — hexToWorld', () => {
   test('origin tile sits at (0, 0)', () => {
@@ -119,35 +130,40 @@ describe('Renderer3D — cssHexToRgb01', () => {
 });
 
 describe('Renderer3D — tileColorFor', () => {
-  test('returns the tile-type colour for plain terrain', () => {
-    for (const type of [TileType.GRASS, TileType.FOREST, TileType.DIRT]) {
-      assert.equal(tileColorFor({ type }), TILE_COLOR[type]);
+  test('returns the base-material colour for plain terrain', () => {
+    for (const base of [TileType.GRASS, TileType.FOREST, TileType.DIRT]) {
+      assert.equal(tileColorFor(layered({ base })), TILE_COLOR[base]);
     }
   });
 
-  test('rivers, roads, and bridges render as grass underneath the network overlay', () => {
-    // Item 2: the per-tile cylinder colour for ROAD / RIVER / BRIDGE is now
-    // GRASS — the visual path is supplied by the bezier network mesh built
-    // by Renderer3D._buildRoadRiverNetworks. Locks the new behaviour so a
-    // regression to the old "river is a blue tile" approach is caught.
-    assert.equal(tileColorFor({ type: TileType.RIVER  }), TILE_COLOR[TileType.GRASS]);
-    assert.equal(tileColorFor({ type: TileType.ROAD   }), TILE_COLOR[TileType.GRASS]);
-    assert.equal(tileColorFor({ type: TileType.BRIDGE }), TILE_COLOR[TileType.GRASS]);
+  test('P3: roads / rivers / bridges show their REAL base, not always grass', () => {
+    // The disc/prism colour now comes from baseOf(tile). A road over grass is
+    // grass-coloured; a road over dirt is DIRT-coloured (the old code forced
+    // grass for every path tile). The visible path is supplied by the bezier
+    // network mesh built by Renderer3D._buildRoadRiverNetworks on top.
+    assert.equal(tileColorFor(layered({ base: TileType.GRASS, path: PathType.ROAD })),  TILE_COLOR[TileType.GRASS]);
+    assert.equal(tileColorFor(layered({ base: TileType.DIRT,  path: PathType.ROAD })),  TILE_COLOR[TileType.DIRT]);
+    assert.equal(tileColorFor(layered({ base: TileType.DIRT,  path: PathType.RIVER })), TILE_COLOR[TileType.DIRT]);
+    assert.equal(tileColorFor(layered({ base: TileType.FOREST, path: PathType.BRIDGE })), TILE_COLOR[TileType.FOREST]);
   });
 
-  test('buildings use BUILDING_COLOR (not the generic building tile colour)', () => {
+  test('P3: building disc shows the base material (BUILDING_COLOR is the prop, not the disc)', () => {
+    // The disc/prism under a building is its real base material; the building
+    // box/roof prop carries BUILDING_COLOR (set in _buildTileMesh), not the
+    // disc colour. So a building on dirt has a dirt disc, on grass a grass disc.
     assert.equal(
-      tileColorFor({ type: TileType.BUILDING, building: BuildingType.INN }),
-      BUILDING_COLOR[BuildingType.INN],
+      tileColorFor(layered({ base: TileType.DIRT, structure: StructureType.BUILDING, building: BuildingType.INN })),
+      TILE_COLOR[TileType.DIRT],
     );
     assert.equal(
-      tileColorFor({ type: TileType.BUILDING, building: BuildingType.GRAVEYARD }),
-      BUILDING_COLOR[BuildingType.GRAVEYARD],
+      tileColorFor(layered({ base: TileType.GRASS, structure: StructureType.BUILDING, building: BuildingType.GRAVEYARD })),
+      TILE_COLOR[TileType.GRASS],
     );
   });
 
   test('null / unknown tile falls back to grass', () => {
     assert.equal(tileColorFor(null), TILE_COLOR[TileType.GRASS]);
-    assert.equal(tileColorFor({ type: 'mystery' }), TILE_COLOR[TileType.GRASS]);
+    // A base material with no colour entry falls back to grass.
+    assert.equal(tileColorFor(layered({ base: 'mystery' })), TILE_COLOR[TileType.GRASS]);
   });
 });

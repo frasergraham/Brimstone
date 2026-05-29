@@ -526,6 +526,32 @@ describe('Survivor roster', () => {
     const s = createSurvivor(0, 0);
     assert.equal(s.hp, s.maxHp);
   });
+
+  test('createSurvivor forced-name spawns THAT roster character', () => {
+    resetRoster();
+    const target = SURVIVOR_ROSTER[7];
+    const s = createSurvivor(0, 0, null, null, target.name);
+    assert.equal(s.name, target.name);
+    assert.equal(s.maxHp, target.maxHp);
+    assert.equal(s.attack, target.attack);
+    assert.equal(s.defense, target.defense);
+  });
+
+  test('createSurvivor unknown forced-name falls back to random pick', () => {
+    resetRoster();
+    const s = createSurvivor(0, 0, null, null, 'Definitely Not A Real Survivor');
+    assert.ok(SURVIVOR_ROSTER.some(r => r.name === s.name), 'should pick a real roster member');
+  });
+
+  test('createSurvivor null forced-name behaves as today (random, drawn w/o replacement)', () => {
+    resetRoster();
+    const names = [];
+    for (let i = 0; i < 20; i++) {
+      const s = createSurvivor(0, 0, null, null, null);
+      assert.ok(!names.includes(s.name), `Duplicate survivor drawn: ${s.name}`);
+      names.push(s.name);
+    }
+  });
 });
 
 describe('Phase 4 — BRAWLER / STURDY passives un-baked from roster', () => {

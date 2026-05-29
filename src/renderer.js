@@ -6,10 +6,11 @@ import {
 } from './hex.js';
 import {
   TileType, TILE_COLOR, BUILDING_COLOR, BUILDING_LABEL, BUILDING_ICON,
+  PathType, baseOf, pathOf, hasBuilding, isRiver, isBridge,
 } from './tiles.js';
 import { ENTITY_COLOR, EntityType, SurvivorAbility, isLeaderType } from './entities.js';
-import { getVisiblePositions, sightRange, buildFogMovementHexes } from './actions.js';
-import { getFaction, sightRangeForEntity } from './factions.js';
+import { getVisiblePositions, sightRange, buildFogMovementHexes, computeLineOfSight } from './actions.js';
+import { getFaction } from './factions.js';
 import { getFactionTheme, NEUTRAL_NODE_FILL } from './theme.js';
 import { nodeController, Phase } from './game.js';
 import { installOverlayShims, OVERLAY_METHODS } from './overlays.js';
@@ -116,6 +117,55 @@ export function _parseColor(color) {
   return null;
 }
 
+/**
+ * Pure geometry planner for one water tile's branches, given its pixel centre
+ * `(cx, cy)`, the pixel centres of its water neighbours, and the hex apothem.
+ *
+ * Returns `{ edgeMids, through, spokes, endpoint }`:
+ *   - `edgeMids[i]`  — the shared-edge midpoint toward neighbour `i`
+ *   - `through`      — index pair `[a, b]` for the smooth through-bezier
+ *                      (centre between the two most-opposing edges), or `[a]`
+ *                      for a 1-neighbour endpoint, or `null` for 0 neighbours.
+ *   - `spokes`       — indices of the remaining branches drawn as straight
+ *                      centre→edge spokes (only populated for 3+ neighbours).
+ *   - `endpoint`     — off-tile extension origin for the 1-neighbour case, else
+ *                      `null`.
+ *
+ * This generalises the old "exactly 2 endpoints" assumption: a 2-exit tile
+ * still draws a single smooth bezier (visually unchanged), while a 3- or 4-way
+ * junction connects every branch at the tile centre (a fork).
+ */
+export function planRiverTileBranches(cx, cy, neighbourCenters, apothem) {
+  const edgeMids = [];
+  const dirs = [];
+  for (const nc of neighbourCenters) {
+    const dx = nc.x - cx, dy = nc.y - cy;
+    const d  = Math.sqrt(dx * dx + dy * dy) || 1;
+    const ux = dx / d, uy = dy / d;
+    dirs.push({ x: ux, y: uy });
+    edgeMids.push({ x: cx + ux * apothem, y: cy + uy * apothem });
+  }
+  const n = edgeMids.length;
+  if (n === 0) return { edgeMids, through: null, spokes: [], endpoint: null };
+  if (n === 1) {
+    // Endpoint tile: extend off-tile in the opposite direction so the river
+    // fades past the hex border instead of stopping dead at the centre.
+    const endpoint = { x: cx - dirs[0].x * apothem, y: cy - dirs[0].y * apothem };
+    return { edgeMids, through: [0], spokes: [], endpoint };
+  }
+  // Pick the most-opposing pair (lowest dot product) as the through-channel.
+  let pA = 0, pB = 1, minDot = Infinity;
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const dot = dirs[i].x * dirs[j].x + dirs[i].y * dirs[j].y;
+      if (dot < minDot) { minDot = dot; pA = i; pB = j; }
+    }
+  }
+  const spokes = [];
+  for (let i = 0; i < n; i++) if (i !== pA && i !== pB) spokes.push(i);
+  return { edgeMids, through: [pA, pB], spokes, endpoint: null };
+}
+
 export class Renderer {
   constructor(canvas, state) {
     this.canvas  = canvas;
@@ -125,6 +175,14 @@ export class Renderer {
     /** Parity flag with Renderer3D — false here so ui.js routes pan / pinch
      *  through the 2D-canvas pathway. */
     this.is3D    = false;
+
+    // ── Loading-screen API parity (see beginLoad / whenReady) ───────────────
+    // The 2D renderer loads only tilemap.png, so these are near no-ops, but the
+    // slots + methods mirror Renderer3D so main.js drives either without a branch.
+    this.onProgress    = null;  // (progress01, label?) => void, set by main.js
+    this._loadStarted  = false; // beginLoad idempotency guard
+    this._readyPromise = null;  // resolves when the atlas settles
+    this._assetsBasePath = null;
 
     // Unified overlay map + legacy `highlightHexes` getter. Initialises
     // `_overlays` / `_selection` / `_hover`; selection & hover now flow through
@@ -306,6 +364,34 @@ export class Renderer {
     if (this.onImagesLoaded) this.onImagesLoaded();
   }
 
+  // ─── Loading-screen API ──────────────────────────────────────────────────
+  //
+  // Mirrors the 3D renderer's beginLoad/whenReady/onProgress so main.js can
+  // drive the loading overlay without branching on which renderer is active.
+  // The 2D renderer loads only tilemap.png, so this is effectively a no-op:
+  // one bundle item that resolves as fast as the atlas decodes.
+
+  /** Kick off the (single) 2D asset load. Idempotent. */
+  beginLoad() {
+    if (this._loadStarted) return;
+    this._loadStarted = true;
+    const promise = this.loadImages(this._assetsBasePath || 'assets');
+    this._readyPromise = Promise.resolve(promise)
+      .catch(() => null)
+      .finally(() => {
+        if (typeof this.onProgress === 'function') {
+          try { this.onProgress(1, 'sprites'); }
+          catch (err) { console.warn('[Renderer] onProgress handler threw:', err); }
+        }
+      });
+  }
+
+  /** Resolve once the atlas has settled (or immediately if beginLoad wasn't
+   *  called). The 2D path never hangs, so no safety timeout is needed. */
+  whenReady() {
+    return this._readyPromise || Promise.resolve();
+  }
+
   /**
    * Compute screen-space positions and sizes for entities in a stack at a hex.
    * Used by the disambiguation menu to position DOM clones over canvas entities.
@@ -373,7 +459,9 @@ export class Renderer {
     if (!this._portraitCache) return null;
     const fortKey = tile.fortifyLevel || 0;
     const bldg = tile.building || '';
-    const cacheKey = `tile_${tile.type}_${bldg}_${fortKey}@${size}`;
+    // base + path together identify the visual: road/river/building render on
+    // the real base material (two tiles can share a base but differ by path).
+    const cacheKey = `tile_${pathOf(tile) ?? ''}_${baseOf(tile)}_${bldg}_${fortKey}@${size}`;
     if (this._portraitCache.has(cacheKey)) return this._portraitCache.get(cacheKey);
 
     const c = document.createElement('canvas');
@@ -381,22 +469,20 @@ export class Renderer {
     const ctx = c.getContext('2d');
     const hs = size / 2;
 
-    // Hex fill colour
-    const color = tile.type === TileType.BUILDING
-      ? (BUILDING_COLOR[tile.building] || '#8a7a5a')
-      : (tile.type === 'road' || tile.type === 'river' || tile.type === 'bridge')
-        ? TILE_COLOR[TileType.GRASS]
-        : (TILE_COLOR[tile.type] || TILE_COLOR[TileType.GRASS]);
+    // Hex fill colour — real base material, with the building block layered on
+    // top (matching _drawTile: roads/rivers/buildings sit on their true base).
     _traceHexPath(ctx, hs, hs, hs - 0.5);
-    ctx.fillStyle = color;
+    ctx.fillStyle = TILE_COLOR[baseOf(tile)] || TILE_COLOR[TileType.GRASS];
     ctx.fill();
+    if (hasBuilding(tile)) {
+      _traceHexPath(ctx, hs, hs, hs - 0.5);
+      ctx.fillStyle = BUILDING_COLOR[tile.building] || '#8a7a5a';
+      ctx.fill();
+    }
 
-    // Sprite texture (if tilemap available)
-    if (this._tilemapImg && this._spriteRects && TERRAIN_SPRITES[tile.type]) {
-      const baseType = tile.type === TileType.BUILDING ? TileType.DIRT
-        : (tile.type === 'road' || tile.type === 'river' || tile.type === 'bridge') ? TileType.GRASS
-        : tile.type;
-      const spriteId = this._pickVariant(baseType, col, row);
+    // Sprite texture (if tilemap available) — always the real base material.
+    if (this._tilemapImg && this._spriteRects && TERRAIN_SPRITES[baseOf(tile)]) {
+      const spriteId = this._pickVariant(baseOf(tile), col, row);
       const rect = this._spriteRects.get(spriteId);
       if (rect) {
         ctx.save();
@@ -408,7 +494,7 @@ export class Renderer {
     }
 
     // Building overlay
-    if (tile.type === TileType.BUILDING && this._tilemapImg) {
+    if (hasBuilding(tile) && this._tilemapImg) {
       const bldgRect = this._spriteRects?.get(tile.building);
       if (bldgRect) {
         ctx.save();
@@ -1071,6 +1157,12 @@ export class Renderer {
   // parity with Renderer3D so ui.js can wire rotate buttons unconditionally.
   rotateBy(_alphaDelta, _betaDelta) { /* no-op in 2D */ }
   tiltBy(_betaDelta) { /* no-op in 2D */ }
+  // The 2D top-down view is always north-up by construction.
+  orientNorthUp() { return Promise.resolve(true); }
+
+  // Interface parity with Renderer3D.getCameraAlpha(); 2D has no yaw, so the
+  // compass-rose overlay reads null and stays at the neutral north-up rotation.
+  getCameraAlpha() { return null; }
 
   _clampPan() {
     const wrapper = this.canvas.parentElement;
@@ -1221,7 +1313,7 @@ export class Renderer {
       for (let col = vr.minCol; col <= vr.maxCol; col++) {
         if (fogKnownHexes && !fogKnownHexes.has(hexKey(col, row))) continue;
         const t = state.tiles.get(hexKey(col, row));
-        if (t && t.type !== TileType.BUILDING) this._drawTile(col, row);
+        if (t && !hasBuilding(t)) this._drawTile(col, row);
       }
     }
 
@@ -1234,7 +1326,7 @@ export class Renderer {
       for (let col = vr.minCol; col <= vr.maxCol; col++) {
         if (fogKnownHexes && !fogKnownHexes.has(hexKey(col, row))) continue;
         const t = state.tiles.get(hexKey(col, row));
-        if (t && t.type === TileType.BUILDING) this._drawTile(col, row);
+        if (t && hasBuilding(t)) this._drawTile(col, row);
       }
     }
 
@@ -1624,19 +1716,25 @@ export class Renderer {
     const tileImgs = this.useTileImages && this._tilemapImg;
     const fillSize = tileImgs ? hs - 0.5 : hs - 1;
 
-    // Road and river tiles use a grass background — the actual road strips and
-    // water ribbons are drawn in dedicated layers on top.
-    const color = tile.type === TileType.BUILDING
-      ? (BUILDING_COLOR[tile.building] || '#8a7a5a')
-      : (tile.type === TileType.ROAD || tile.type === TileType.RIVER || tile.type === TileType.BRIDGE)
-        ? TILE_COLOR[TileType.GRASS]
-        : (TILE_COLOR[tile.type] || TILE_COLOR[TileType.GRASS]);
+    // Base material colour — drawn for EVERY tile. Roads, rivers, bridges and
+    // buildings now sit on their REAL base material (grass/forest/dirt) instead
+    // of an implicit grass/dirt background; their path ribbons / water beziers /
+    // building blocks are layered on top in dedicated passes.
+    const baseColor = TILE_COLOR[baseOf(tile)] || TILE_COLOR[TileType.GRASS];
 
-    // Color fill — always drawn as base; skipped for buildings when tile
-    // images are active (dirt sprite covers it).
-    if (!(tile.type === TileType.BUILDING && tileImgs)) {
+    // Base fill — skipped for buildings in tilemap mode (the base sprite +
+    // building image cover the hex).
+    if (!(hasBuilding(tile) && tileImgs)) {
       _traceHexPath(ctx, x, y, fillSize);
-      ctx.fillStyle = color;
+      ctx.fillStyle = baseColor;
+      ctx.fill();
+    }
+
+    // Building colour block layered on top of the base (classic colour-fill
+    // mode only; in tilemap mode the building image overlay below provides it).
+    if (hasBuilding(tile) && !tileImgs) {
+      _traceHexPath(ctx, x, y, fillSize);
+      ctx.fillStyle = BUILDING_COLOR[tile.building] || '#8a7a5a';
       ctx.fill();
     }
 
@@ -1649,13 +1747,11 @@ export class Renderer {
     }
 
     // ── Sprite image from tilemap (using pre-clipped cache) ──────────────
-    if (TERRAIN_SPRITES[tile.type] && tileImgs) {
-      const baseId = tile.type === TileType.BUILDING
-        ? this._pickVariant(TileType.DIRT, col, row)
-        : (tile.type === TileType.ROAD || tile.type === TileType.RIVER || tile.type === TileType.BRIDGE)
-          ? this._pickVariant(TileType.GRASS, col, row)
-          : this._pickVariant(tile.type, col, row);
-      const clipSize = tile.type === TileType.BUILDING ? hs : fillSize;
+    if (TERRAIN_SPRITES[baseOf(tile)] && tileImgs) {
+      // Always draw the REAL base material sprite — a road/river/building no
+      // longer forces a grass/dirt sprite underneath it.
+      const baseId = this._pickVariant(baseOf(tile), col, row);
+      const clipSize = hasBuilding(tile) ? hs : fillSize;
       const cached = this._getHexTileSprite(baseId, clipSize);
       if (cached) {
         // cached buffer is rendered at higher resolution; draw it at logical size
@@ -1665,7 +1761,7 @@ export class Renderer {
     }
 
     // Building image overlay — always drawn when tilemap is available
-    if (tile.type === TileType.BUILDING && this._tilemapImg) {
+    if (hasBuilding(tile) && this._tilemapImg) {
       const bldgRect = this._spriteRects?.get(tile.building);
       if (bldgRect) {
         ctx.drawImage(this._tilemapImg,
@@ -1717,11 +1813,11 @@ export class Renderer {
 
     // Bridge tiles: only the water background is drawn here.
     // The water bezier and road strip are layered on top in _drawRiverLayer / _drawRoadLayer.
-    if (tile.type === TileType.BRIDGE) return;
+    if (isBridge(tile)) return;
 
 
     // ── Building: icon + name ─────────────────────────────────────────────
-    if (tile.type === TileType.BUILDING && tile.building) {
+    if (hasBuilding(tile) && tile.building) {
       const hasBuildingImg = !!this._spriteRects?.get(tile.building) && !!this._tilemapImg;
 
       // Show emoji icon only when there is no image (image provides the visual)
@@ -1757,25 +1853,7 @@ export class Renderer {
   // sight range. observerOwner is 'hero' or 'witch'.
   /** Returns the Set of hexKeys visible to observerOwner's units (used for fog culling). */
   _buildFogVisibleHexes(observerOwner) {
-    const state = this.state;
-    const visibleSet = new Set();
-    for (const e of state.entities) {
-      if (!e.alive || e.owner !== observerOwner) continue;
-      // Per-entity sight so stub-faction bonuses (rogue +1) apply.
-      const range = sightRangeForEntity(e, state.phase);
-      // Only iterate hexes within sight range of this entity (not entire map)
-      const rMin = Math.max(0, e.row - range);
-      const rMax = Math.min(MAP_ROWS - 1, e.row + range);
-      const cMin = Math.max(0, e.col - range);
-      const cMax = Math.min(MAP_COLS - 1, e.col + range);
-      for (let row = rMin; row <= rMax; row++) {
-        for (let col = cMin; col <= cMax; col++) {
-          if (hexDistance(col, row, e.col, e.row) <= range) {
-            visibleSet.add(hexKey(col, row));
-          }
-        }
-      }
-    }
+    const visibleSet = computeLineOfSight(this.state, observerOwner);
     // Fold in any short-lived reveals from in-flight ranged attacks. This
     // is a render-only hint — game state (state.seenHexes, fog mode) is
     // not touched. Prune expired entries eagerly so the list stays small.
@@ -1879,7 +1957,7 @@ export class Renderer {
     const hs      = this.hexSize;
     const apothem = hs * SQRT3 / 2;
 
-    const isWater = t => t && (t.type === TileType.RIVER || t.type === TileType.BRIDGE);
+    const isWater = t => t && (isRiver(t) || isBridge(t));
 
     ctx.strokeStyle = TILE_COLOR[TileType.RIVER];
     ctx.lineWidth   = hs * 0.52;
@@ -1891,38 +1969,40 @@ export class Renderer {
         if (fogKnownHexes && !fogKnownHexes.has(hexKey(col, row))) continue;
         const tile = tiles.get(hexKey(col, row));
         // Bridges handle their own water+road layering in _drawRoadLayer
-        if (!tile || tile.type !== TileType.RIVER) continue;
+        if (!tile || !isRiver(tile)) continue;
 
         const { x, y } = this._toCanvas(col, row);
         const riverNbrs = getNeighbors(col, row).filter(n => isWater(tiles.get(hexKey(n.col, n.row))));
 
-        // Build edge midpoints toward each river/bridge neighbour
-        const edgeMids = riverNbrs.map(n => {
-          const { x: nx, y: ny } = this._toCanvas(n.col, n.row);
-          const dx = nx - x, dy = ny - y;
-          const d  = Math.sqrt(dx * dx + dy * dy);
-          return { x: x + dx / d * apothem, y: y + dy / d * apothem };
-        });
+        // Plan the branches: 2-way → smooth through-bezier (unchanged), 1-way →
+        // off-tile endpoint extension, 3+/junction → through-bezier on the main
+        // channel plus straight spokes so every fork branch connects at centre.
+        const plan = planRiverTileBranches(
+          x, y, riverNbrs.map(n => this._toCanvas(n.col, n.row)), apothem,
+        );
+        if (!plan.through) continue; // isolated water tile — skip
 
+        const { edgeMids } = plan;
         ctx.beginPath();
-        if (riverNbrs.length >= 2) {
-          // Two river neighbours: smooth bezier entry → center → exit
-          ctx.moveTo(edgeMids[0].x, edgeMids[0].y);
-          ctx.quadraticCurveTo(x, y, edgeMids[1].x, edgeMids[1].y);
-        } else if (riverNbrs.length === 1) {
+        if (plan.endpoint) {
           // Endpoint tile: extend bezier off-screen in the upstream/downstream direction
-          const { x: nx, y: ny } = this._toCanvas(riverNbrs[0].col, riverNbrs[0].row);
-          const dx = nx - x, dy = ny - y;
-          const d  = Math.sqrt(dx * dx + dy * dy);
-          // Cap at the far edge of this hex (don't extend beyond the map)
-          const offX = x - (dx / d) * apothem;
-          const offY = y - (dy / d) * apothem;
-          ctx.moveTo(offX, offY);
-          ctx.quadraticCurveTo(x, y, edgeMids[0].x, edgeMids[0].y);
+          ctx.moveTo(plan.endpoint.x, plan.endpoint.y);
+          ctx.quadraticCurveTo(x, y, edgeMids[plan.through[0]].x, edgeMids[plan.through[0]].y);
         } else {
-          continue; // isolated water tile — skip
+          // Main channel: smooth bezier entry → center → exit
+          const a = edgeMids[plan.through[0]], b = edgeMids[plan.through[1]];
+          ctx.moveTo(a.x, a.y);
+          ctx.quadraticCurveTo(x, y, b.x, b.y);
         }
         ctx.stroke();
+
+        // Junction spokes: connect any remaining fork branches to the centre.
+        for (const i of plan.spokes) {
+          ctx.beginPath();
+          ctx.moveTo(x, y);
+          ctx.lineTo(edgeMids[i].x, edgeMids[i].y);
+          ctx.stroke();
+        }
       }
     }
 
@@ -1939,8 +2019,10 @@ export class Renderer {
     const hs      = this.hexSize;
     const apothem = hs * SQRT3 / 2;
 
+    // "Road-like" connectable: a road, a bridge, or any building tile (buildings
+    // carry road-through via their roadDirs Set, not the `path` layer).
     const isRoadLike = t => t && (
-      t.type === TileType.ROAD || t.type === TileType.BRIDGE || t.type === TileType.BUILDING
+      pathOf(t) === PathType.ROAD || isBridge(t) || hasBuilding(t)
     );
 
     ctx.lineCap = 'round';
@@ -1949,7 +2031,7 @@ export class Renderer {
       for (let col = 0; col < MAP_COLS; col++) {
         if (fogKnownHexes && !fogKnownHexes.has(hexKey(col, row))) continue;
         const tile = tiles.get(hexKey(col, row));
-        if (!tile || (tile.type !== TileType.ROAD && tile.type !== TileType.BRIDGE)) continue;
+        if (!tile || !(pathOf(tile) === PathType.ROAD || isBridge(tile))) continue;
 
         // Reset per-tile so bridge water/railing state changes never bleed through
         ctx.lineWidth   = hs * 0.42;
@@ -1969,29 +2051,35 @@ export class Renderer {
         });
 
         // ── Bridge: draw water bezier first, then road on top ─────────────
-        if (tile.type === TileType.BRIDGE) {
-          const isWater = t => t && (t.type === TileType.RIVER || t.type === TileType.BRIDGE);
+        if (isBridge(tile)) {
+          const isWater = t => t && (isRiver(t) || isBridge(t));
           const waterNbrs = getNeighbors(col, row).filter(n => isWater(tiles.get(hexKey(n.col, n.row))));
           if (waterNbrs.length >= 1) {
-            const wEdge = waterNbrs.map(n => {
-              const { x: nx, y: ny } = this._toCanvas(n.col, n.row);
-              const dx = nx - x, dy = ny - y, d = Math.sqrt(dx * dx + dy * dy);
-              return { x: x + dx / d * apothem, y: y + dy / d * apothem };
-            });
+            const wPlan = planRiverTileBranches(
+              x, y, waterNbrs.map(n => this._toCanvas(n.col, n.row)), apothem,
+            );
+            const wEdge = wPlan.edgeMids;
             ctx.strokeStyle = TILE_COLOR[TileType.RIVER];
             ctx.lineWidth   = hs * 0.52;
             ctx.beginPath();
-            if (wEdge.length >= 2) {
-              ctx.moveTo(wEdge[0].x, wEdge[0].y);
-              ctx.quadraticCurveTo(x, y, wEdge[1].x, wEdge[1].y);
-            } else {
+            if (wPlan.endpoint) {
               // single water neighbour — extend bezier off-screen on the other side
               const { x: nx, y: ny } = this._toCanvas(waterNbrs[0].col, waterNbrs[0].row);
               const dx = nx - x, dy = ny - y, d = Math.sqrt(dx * dx + dy * dy);
               ctx.moveTo(x - (dx / d) * apothem * 2, y - (dy / d) * apothem * 2);
               ctx.quadraticCurveTo(x, y, wEdge[0].x, wEdge[0].y);
+            } else {
+              ctx.moveTo(wEdge[wPlan.through[0]].x, wEdge[wPlan.through[0]].y);
+              ctx.quadraticCurveTo(x, y, wEdge[wPlan.through[1]].x, wEdge[wPlan.through[1]].y);
             }
             ctx.stroke();
+            // Junction under a bridge: connect remaining water branches to centre.
+            for (const i of wPlan.spokes) {
+              ctx.beginPath();
+              ctx.moveTo(x, y);
+              ctx.lineTo(wEdge[i].x, wEdge[i].y);
+              ctx.stroke();
+            }
           }
           // Restore road colour + width after the water bezier
           ctx.strokeStyle = TILE_COLOR[TileType.ROAD];
@@ -2002,10 +2090,10 @@ export class Renderer {
         // The crossing pair is the road exits most perpendicular to the
         // river flow (inferred from water neighbour directions).
         let primaryA = 0, primaryB = Math.min(1, edgeMids.length - 1);
-        if (tile.type === TileType.BRIDGE && edgeMids.length >= 2) {
+        if (isBridge(tile) && edgeMids.length >= 2) {
           const bWaterNbrs = getNeighbors(col, row).filter(n => {
             const t = tiles.get(hexKey(n.col, n.row));
-            return t && (t.type === TileType.RIVER || t.type === TileType.BRIDGE);
+            return t && (isRiver(t) || isBridge(t));
           });
           const edgeDirs = edgeMids.map(em => {
             const dx = em.x - x, dy = em.y - y;
@@ -2042,7 +2130,7 @@ export class Renderer {
         }
 
         // ── Road strip ────────────────────────────────────────────────────
-        if (tile.type === TileType.BRIDGE && edgeMids.length >= 2) {
+        if (isBridge(tile) && edgeMids.length >= 2) {
           // Bridge: draw crossing bezier along the primary pair, spokes for branches
           ctx.beginPath();
           ctx.moveTo(edgeMids[primaryA].x, edgeMids[primaryA].y);
@@ -2094,7 +2182,7 @@ export class Renderer {
         }
 
         // ── Bridge railings (bezier curves matching the crossing pair) ─────
-        if (tile.type === TileType.BRIDGE && edgeMids.length >= 2) {
+        if (isBridge(tile) && edgeMids.length >= 2) {
           const em0 = edgeMids[primaryA], em1 = edgeMids[primaryB];
           // Perpendicular offset based on overall road direction
           const dx = em1.x - em0.x, dy = em1.y - em0.y;
