@@ -1,5 +1,36 @@
 [
   {
+    "version": "1.5.0",
+    "date": "2026-05-29",
+    "summary": "New features, and bug fixes",
+    "notes": [
+      "⛶ button — frame the map; click again at-rest orients north up",
+      "Power-node labels removed, building labels become door-side signposts (P4c)",
+      "Road extends into footprint + fortifications wrap compound (P4b)",
+      "Road-to-door stub + nudge building toward entrance (P4a)",
+      "Building-footprint loader + migrate 8 bundled JSONs (P5)",
+      "Building-footprint place/rotate/validate (P6)",
+      "Procedural building footprints + shared eligibility helper (P2)",
+      "Pathfinding + LOS respect entrance/footprint asymmetry (P3+P3a)",
+      "Draw building on footprint hex, facing entrance (P4)",
+      "Building-footprint data model + serialization (P0+P1)",
+      "Drop signposts on house buildings (generic village fabric)",
+      "Signposts stay opaque under fog (no back-face text bleed)",
+      "Compass rose appears on first load (apply visibility on register)",
+      "Makeshift fence (no road edge, jittered), 3D signpost, auto-fit text, forts receive shadows",
+      "Level-1 fortification renders as fence (posts + cross rails), road-aware",
+      "Clicking a building footprint hex shows the building in the stats bar",
+      "Signposts off the road, bigger plank, plank rests on top of post",
+      "Fog list emits the building's RENDER position, not entrance+slot",
+      "Move fog-plugin uniform declarations to DEFINITIONS blocks",
+      "Fog-darken plugin declares uniforms in vertex stage too",
+      "Hand-rotate 3 footprints off resource hexes (P5 follow-up)",
+      "Fog-darken plugin back to pre-67b95bd (circular spotlight) state",
+      "Building-footprint model — 05/06/07 + CLAUDE.md (P8)",
+      "Make footprint-naive fixtures footprint-aware (P3b)"
+    ]
+  },
+  {
     "version": "1.4.2",
     "date": "2026-05-29",
     "summary": "New features, bug fixes, improvements, and visual updates",

@@ -1,6 +1,6 @@
 // Single source of truth for the build version.
 // Bump this with every commit.
-export const VERSION = '1.4.2';
+export const VERSION = '1.5.0';
 
 // Save format version — only bump when state-sync schema changes break
 // compatibility with existing saves.  Unrelated patches/features keep the
