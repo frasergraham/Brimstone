@@ -95,6 +95,19 @@ export function makeFogDarkenPlugin(BABYLON) {
     getClassName() { return 'FogDarkenPlugin'; }
 
     getUniforms() {
+      // The fog test runs in the VERTEX shader (per-instance verdict via
+      // finalWorld[3].xz, varying'd to fragment for uniform darken). That means
+      // fogTiles / fogCount / fogTileRadius must be declared in BOTH stages —
+      // missing the `vertex:` block would leave them undeclared identifiers in
+      // CUSTOM_VERTEX_MAIN_END's loop. `fogDarkenAmount` is fragment-only
+      // (the final post-lighting multiply) but it's cheap to declare twice.
+      const decls = `#ifdef FOG_DARKEN
+          #define MAX_FOG_TILES ${MAX_FOG_TILES}
+          uniform vec2 fogTiles[MAX_FOG_TILES];
+          uniform float fogCount;
+          uniform float fogDarkenAmount;
+          uniform float fogTileRadius;
+        #endif`;
       return {
         ubo: [
           // vec2[N] array: stride 2, arraySize MAX_FOG_TILES. Babylon lays it
@@ -104,13 +117,8 @@ export function makeFogDarkenPlugin(BABYLON) {
           { name: 'fogDarkenAmount', size: 1, type: 'float' },
           { name: 'fogTileRadius', size: 1, type: 'float' },
         ],
-        fragment: `#ifdef FOG_DARKEN
-          #define MAX_FOG_TILES ${MAX_FOG_TILES}
-          uniform vec2 fogTiles[MAX_FOG_TILES];
-          uniform float fogCount;
-          uniform float fogDarkenAmount;
-          uniform float fogTileRadius;
-        #endif`,
+        vertex: decls,
+        fragment: decls,
       };
     }
 
