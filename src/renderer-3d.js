@@ -63,7 +63,7 @@ import {
   worldToHex, neighborDeltas, DEFAULT_TERRAIN_TINTS,
 } from './terrain-splat.js';
 import { makeTerrainSplatPlugin, SPLAT_UNIFORM_DEFAULTS } from './terrain-splat-plugin.js';
-import { attachFogDarkenToMaterial } from './fog-darken-plugin.js';
+import { attachFogDarkenToMaterial, MAX_FOG_TILES } from './fog-darken-plugin.js';
 import { attachRoadEdgeToMaterial } from './road-edge-plugin.js';
 
 // Babylon core + glTF loaders are served from the packaged `assets/vendor/`
@@ -1910,6 +1910,12 @@ export class Renderer3D {
     //                          of that type keep the procedural box+roof.
     this._buildingTemplates   = new Map();
     this._buildingLoadPromises = new Map();
+    // FogDarkenPlugin instances attached to building template materials. All
+    // share one global fogged-tile uniform list (no per-instance attribute —
+    // see src/fog-darken-plugin.js for why the May per-instance attempt failed).
+    // `_updateBuildingFogUniform` pushes the current fogged-building XZ centres
+    // into every plugin whenever the fog veil changes.
+    this._buildingFogPlugins = new Set();
     this._assetsBasePath   = null; // captured by loadImages()
     // ── Tree-pack GLB state (see `_loadTreePackManifest`) ─────────────────
     // `_treeTemplates`     : Map<filename, mesh>   — hidden source meshes,
@@ -2772,14 +2778,13 @@ export class Renderer3D {
 
       this._buildingTemplates.set(relPath, { mesh: source, scale });
 
-      // NOTE: building fog-darken via per-instance fogDarken attribute was
-      // attempted (registerInstancedBuffer + FogDarkenPlugin) but the
-      // attribute binding doesn't reliably propagate through Babylon's
-      // hardware-instancing pipeline on glTF-imported (often PBR + multi-
-      // submesh) materials, producing all-black buildings. Disabled for now;
-      // buildings render at full brightness regardless of fog. The plugin
-      // and helper stay in the file for a future attempt with better
-      // diagnostics. See src/fog-darken-plugin.js.
+      // Fog darken: attach the FogDarkenPlugin to this template's material(s)
+      // (recursing into a MultiMaterial's submaterials). Every instance of this
+      // variant shares the template material, so the plugin's global fogged-tile
+      // uniform — pushed by `_updateBuildingFogUniform` — darkens whichever
+      // instances stand on a fogged hex, keyed by the fragment's own world XZ.
+      // This deliberately replaces the failed per-instance-attribute path.
+      this._attachBuildingFogPlugin(source);
 
       // If the map's already built (the common case — GLB load is slow,
       // _buildMap runs synchronously right after Babylon init), retrofit the
@@ -2830,9 +2835,10 @@ export class Renderer3D {
       inst.rotation = new BABYLON.Vector3(0, houseYawForHex(tile.col, tile.row), 0);
     }
     inst.isPickable = false;
-    // Buildings render at full brightness regardless of fog (the per-instance
-    // fogDarken attribute attempt didn't propagate reliably through Babylon's
-    // PBR-multi-submesh instancing pipeline — see _loadBuildingModel note).
+    // `respectsFog: false` keeps the per-prop veil loop (`_setTilePropsFogged`)
+    // from touching the building — its fog darkening is handled globally by the
+    // FogDarkenPlugin uniform (`_updateBuildingFogUniform`), which dims the
+    // template material's fragments wherever they land on a fogged hex.
     inst.metadata = {
       respectsFog: false,
       kind: 'building-glb',
@@ -2891,6 +2897,56 @@ export class Renderer3D {
     // matrices locked too.
     if (upgraded > 0) this._freezeStaticMeshes();
     return upgraded;
+  }
+
+  /** Attach the FogDarkenPlugin to a building template's material(s) and track
+   *  the resulting plugin instances so `_updateBuildingFogUniform` can feed them
+   *  the fogged-tile list. Seeds the per-plugin darken/radius from the current
+   *  fog floor, then primes the uniform with whatever is fogged right now (so a
+   *  template that loads AFTER the first fog pass dims immediately). No-op
+   *  without Babylon (node tests can still drive the uniform helper directly). */
+  _attachBuildingFogPlugin(material) {
+    if (!this._babylon || !material) return;
+    const plugins = attachFogDarkenToMaterial(this._babylon, material) || [];
+    for (const p of plugins) {
+      // Match the terrain/road "occluded read" floor so a fogged building reads
+      // the same darkness as the ground beneath it.
+      p.fogDarkenAmount = FOG_HIDDEN_DARKEN;
+      this._buildingFogPlugins.add(p);
+    }
+    if (plugins.length) this._updateBuildingFogUniform();
+  }
+
+  /** Recompute the fogged-building XZ-centre list and push it into every
+   *  attached FogDarkenPlugin. Called from `_applyFogVeil` after the fogged set
+   *  is resolved. Cheap: walks `_fogActiveSet` (already the diffed fogged keys),
+   *  keeps only building tiles, and writes a flat Float32Array the shader reads
+   *  per fragment. Caps at MAX_FOG_TILES — surplus fogged buildings render
+   *  un-dimmed and are logged once per overflow. */
+  _updateBuildingFogUniform() {
+    if (this._buildingFogPlugins.size === 0) return;
+    const centres = buildFoggedBuildingTileList(this.state, this._fogActiveSet);
+    const n = Math.min(centres.length, MAX_FOG_TILES);
+    if (centres.length > MAX_FOG_TILES && !this._fogTileOverflowWarned) {
+      console.warn(
+        `[Renderer3D] ${centres.length} fogged building tiles exceed MAX_FOG_TILES=`
+        + `${MAX_FOG_TILES}; extras render un-dimmed.`,
+      );
+      this._fogTileOverflowWarned = true;
+    }
+    for (const p of this._buildingFogPlugins) {
+      const buf = p.fogTiles;
+      for (let i = 0; i < n; i++) {
+        buf[i * 2]     = centres[i].x;
+        buf[i * 2 + 1] = centres[i].z;
+      }
+      // Park unused slots at the far sentinel so a stale value can't match.
+      for (let i = n; i < MAX_FOG_TILES; i++) {
+        buf[i * 2]     = 1e8;
+        buf[i * 2 + 1] = 1e8;
+      }
+      p.fogCount = n;
+    }
   }
 
   /** Lazy-load the tree-pack manifest at `<basePath>/<TREE_PACK_DIR>manifest.json`
@@ -13774,6 +13830,11 @@ export class Renderer3D {
     // changes between passes.
     if (this._fogDebugMode === 'debug') this._syncFogDebugMarkers(fogged);
     else this._clearFogDebugMarkers();
+
+    // Push the fogged building-tile centres into the building shader plugins so
+    // GLB buildings on fogged hexes darken (global uniform, not per-instance —
+    // see `_updateBuildingFogUniform` / src/fog-darken-plugin.js).
+    this._updateBuildingFogUniform();
   }
 
   /** Diff the debug "F"-marker registry against the given fogged-hex set:
@@ -13897,22 +13958,15 @@ export class Renderer3D {
   _setTilePropsFogged(hexK, fogged) {
     const props = this._tilePropsByKey.get(hexK);
     if (props) for (const p of props) {
-      // Four fog policies per-prop, set via `metadata.respectsFog`:
+      // Three fog policies per-prop, set via `metadata.respectsFog`:
       //   • undefined / true     → hide on fog (standees, HP bars, node discs)
-      //   • false                → permanent geometry, ignore fog (trees)
+      //   • false                → ignore this loop (permanent geometry like
+      //                            trees; also GLB buildings, which darken via
+      //                            the global FogDarkenPlugin uniform instead —
+      //                            see `_updateBuildingFogUniform`)
       //   • 'darken'             → tint dimmer (roads, rivers) — per-tile material
-      //   • 'building-instance'  → tint dimmer (GLB buildings) — per-instance
-      //                            attribute (template-shared material).
       const policy = p.metadata?.respectsFog;
       if (policy === false) continue;
-      if (policy === 'building-instance') {
-        // Hardware-instance fog darken: write the `fogDarken` instanced buffer
-        // slot on this one building, leaving sibling instances on other tiles
-        // untouched. Plugin reads it in the shader and multiplies gl_FragColor.
-        const k = fogged ? FOG_HIDDEN_DARKEN : 1.0;
-        if (p.instancedBuffers) p.instancedBuffers.fogDarken = k;
-        continue;
-      }
       if (policy === 'darken') {
         // Per-tile material darkening: the ribbon stays at full opacity but
         // its colour is multiplied so it matches the fogged ground beneath
@@ -14388,6 +14442,25 @@ export const TILE_SLOTS = Object.freeze([
 export const CENTRE_SLOT_INDEX = 0;
 /** Index of the slot a building always occupies. */
 export const BUILDING_SLOT_INDEX = 1;
+
+/** Pure helper: the world XZ centres of every fogged building tile, used to feed
+ *  the FogDarkenPlugin uniform. A building instance sits at its hex centre plus
+ *  the NE building-slot offset (`TILE_SLOTS[BUILDING_SLOT_INDEX]`), and the GLB
+ *  geometry is XZ-centred on that pivot — so the building's footprint centre is
+ *  `hexToWorld(col,row) + slot`. Returns `[{x, z}, ...]` for tiles that both
+ *  carry a building AND are in `fogActiveSet`. No DOM/Babylon dependency. */
+export function buildFoggedBuildingTileList(state, fogActiveSet) {
+  const out = [];
+  if (!state?.tiles || !fogActiveSet || fogActiveSet.size === 0) return out;
+  const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
+  for (const tile of state.tiles.values()) {
+    if (!hasBuilding(tile)) continue;
+    if (!fogActiveSet.has(hexKey(tile.col, tile.row))) continue;
+    const { x, z } = hexToWorld(tile.col, tile.row);
+    out.push({ x: x + slot.x, z: z + slot.z });
+  }
+  return out;
+}
 
 /**
  * Pure slot assignment for a hex's occupants.

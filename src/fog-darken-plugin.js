@@ -1,25 +1,69 @@
-// Tiny reusable Babylon MaterialPluginBase that multiplies the final fragment
-// colour by a per-instance attribute (`fogDarken`, stride 1). Used by GLB
-// building instances so each instance can dim independently — hardware
-// instances share the template material, so we can't toggle the material's
-// diffuse without dimming every building at once; instanced buffers are the
-// per-instance escape hatch.
+// Babylon MaterialPluginBase that darkens GLB building fragments that fall on a
+// fogged hex — WITHOUT touching the per-instance data path that doomed the May
+// attempt.
 //
-// Why CUSTOM_FRAGMENT_MAIN_END rather than CUSTOM_FRAGMENT_UPDATE_DIFFUSE:
-// glTF-loaded materials are often PBRMaterial (not StandardMaterial), and the
-// `baseColor`-mid-pipeline hook used by the terrain splat plugin is
-// StandardMaterial-specific. CUSTOM_FRAGMENT_MAIN_END is the final hook
-// injected after lighting on BOTH material families — multiplying gl_FragColor
-// there is universal AND inherently outside the lighting clamp (the same
-// property that makes the fog veil read at bright phases).
+// ── Why this works where the old plugin didn't ───────────────────────────────
+// The previous FogDarkenPlugin carried the dim factor in a *per-instance vertex
+// attribute* (`registerInstancedBuffer` + `gl_FragColor.rgb *= vFogDarken`).
+// Hardware instances of a glTF-imported (PBR, multi-submesh) mesh did not
+// propagate that attribute reliably through Babylon's instancing pipeline, so
+// every building rendered the uninitialised value → all-black.
+//
+// This rewrite removes attributes entirely. The fog state travels as a GLOBAL
+// UNIFORM: a flat array of fogged-tile world XZ centres (`fogTiles`) plus a
+// count. Every fragment compares its own world XZ (`vFogWorldXZ`, derived in the
+// vertex shader from `worldPos`, which Babylon always computes in main) against
+// the list and darkens when it lands inside a fogged tile's radius. Uniforms are
+// shared by every instance of the template material, but the per-fragment world
+// position is genuinely per-instance, so each building dims based on WHERE it
+// stands — exactly the per-instance effect we wanted, via a data path
+// instancing can't break.
+//
+// Injection point: CUSTOM_FRAGMENT_MAIN_END — the final post-lighting hook,
+// present on BOTH StandardMaterial and PBRMaterial (both end with
+// `#include<customFragmentMainEnd>`). Multiplying `gl_FragColor.rgb` there is
+// inherently outside the lighting clamp (the same property the terrain fog veil
+// relies on), so the dimming reads even at bright phases when lightAccum
+// saturates to 1.0.
+//
+// `makeFogDarkenPlugin(BABYLON)` is a factory so this module imports cleanly in
+// node tests (no global BABYLON); the class is only constructed when a real
+// Babylon namespace is handed in.
 
+// Hard cap on simultaneously-fogged building tiles tracked by the shader. The
+// uniform array is sized to this; extra fogged buildings beyond the cap simply
+// render un-dimmed (logged by the renderer). 32 comfortably covers every map
+// size's building count on the fogged side.
+export const MAX_FOG_TILES = 32;
+
+// Default tuning — operator-dialable via the renderer (visual-iteration mode).
+//   • amount: final-colour multiplier at a fully-fogged fragment. 0.40 matches
+//     FOG_HIDDEN_DARKEN, the "occluded read" floor the terrain/road veil uses.
+//   • radius: world-units from a tile's building centre within which fragments
+//     darken. A hex radius is 1.0 world unit; 0.95 covers a building footprint
+//     centred on its NE slot without bleeding onto neighbouring hexes.
+export const FOG_BUILDING_DARKEN_DEFAULT = 0.40;
+export const FOG_BUILDING_RADIUS_DEFAULT = 0.95;
+
+/** Build (and return) the FogDarkenPlugin class bound to a Babylon namespace.
+ *  Returns null when no usable MaterialPluginBase is present. */
 export function makeFogDarkenPlugin(BABYLON) {
   if (!BABYLON || typeof BABYLON.MaterialPluginBase !== 'function') return null;
 
   class FogDarkenPlugin extends BABYLON.MaterialPluginBase {
     constructor(material) {
+      // priority 250 (after core + splat), define gate FOG_DARKEN.
       super(material, 'FogDarken', 250, { FOG_DARKEN: false });
       this._enabled = false;
+
+      // Flat XZ pairs (length 2*MAX_FOG_TILES). Unused slots park at a far
+      // sentinel so even when `fogCount` over-reports they never match a
+      // fragment. Babylon's updateUniformArray takes this tight layout and
+      // applies the std140 vec2→vec4 padding internally.
+      this.fogTiles = new Float32Array(MAX_FOG_TILES * 2).fill(1e8);
+      this.fogCount = 0;
+      this.fogDarkenAmount = FOG_BUILDING_DARKEN_DEFAULT;
+      this.fogTileRadius = FOG_BUILDING_RADIUS_DEFAULT;
     }
 
     get isEnabled() { return this._enabled; }
@@ -27,7 +71,13 @@ export function makeFogDarkenPlugin(BABYLON) {
       const b = !!v;
       if (b === this._enabled) return;
       this._enabled = b;
+      // _enable registers/unregisters the plugin with the material's plugin
+      // manager so getCustomCode/getUniforms/etc. fire on (re)compile.
       this._enable(b);
+      // Force a define recompile when toggled after first compile. The method
+      // name varies across Babylon builds (this vendored one lacks
+      // `markAllDefinesAsDirty`), so probe both and fall back to the material's
+      // dirty flag — mirrors the terrain splat plugin.
       if (typeof this.markAllDefinesAsDirty === 'function') {
         this.markAllDefinesAsDirty();
       } else if (this._material && typeof this._material.markAsDirty === 'function'
@@ -36,71 +86,103 @@ export function makeFogDarkenPlugin(BABYLON) {
       }
     }
 
-    prepareDefines(defines) { defines.FOG_DARKEN = this._enabled; }
-    getClassName() { return 'FogDarkenPlugin'; }
-
-    getAttributes(attributes) {
-      if (!this._enabled) return;
-      attributes.push('fogDarken');
+    prepareDefines(defines /* , scene, mesh */) {
+      defines.FOG_DARKEN = this._enabled;
     }
 
-    // No samplers; no uniforms (per-instance attribute carries the value).
-    getUniforms() { return null; }
+    getClassName() { return 'FogDarkenPlugin'; }
+
+    getUniforms() {
+      return {
+        ubo: [
+          // vec2[N] array: stride 2, arraySize MAX_FOG_TILES. Babylon lays it
+          // out std140 (each element padded to a vec4) automatically.
+          { name: 'fogTiles', size: 2, type: 'vec2', arraySize: MAX_FOG_TILES },
+          { name: 'fogCount', size: 1, type: 'float' },
+          { name: 'fogDarkenAmount', size: 1, type: 'float' },
+          { name: 'fogTileRadius', size: 1, type: 'float' },
+        ],
+        fragment: `#ifdef FOG_DARKEN
+          #define MAX_FOG_TILES ${MAX_FOG_TILES}
+          uniform vec2 fogTiles[MAX_FOG_TILES];
+          uniform float fogCount;
+          uniform float fogDarkenAmount;
+          uniform float fogTileRadius;
+        #endif`,
+      };
+    }
+
+    bindForSubMesh(uniformBuffer /* , scene, engine, subMesh */) {
+      if (!this._enabled) return;
+      uniformBuffer.updateArray('fogTiles', this.fogTiles);
+      uniformBuffer.updateFloat('fogCount', this.fogCount);
+      uniformBuffer.updateFloat('fogDarkenAmount', this.fogDarkenAmount);
+      uniformBuffer.updateFloat('fogTileRadius', this.fogTileRadius);
+    }
 
     getCustomCode(shaderType) {
       if (shaderType === 'vertex') {
         return {
           CUSTOM_VERTEX_DEFINITIONS: `#ifdef FOG_DARKEN
-            attribute float fogDarken;
-            varying float vFogDarken;
+            varying vec2 vFogWorldXZ;
           #endif`,
+          // `worldPos` is declared unconditionally in Babylon's vertex main
+          // (`vec4 worldPos = finalWorld * vec4(positionUpdated,1.0)`) for both
+          // Standard + PBR, and for instances `finalWorld` is the per-instance
+          // matrix — so this XZ is genuinely per-building.
           CUSTOM_VERTEX_MAIN_END: `#ifdef FOG_DARKEN
-            vFogDarken = fogDarken;
+            vFogWorldXZ = worldPos.xz;
           #endif`,
         };
       }
       if (shaderType === 'fragment') {
         return {
           CUSTOM_FRAGMENT_DEFINITIONS: `#ifdef FOG_DARKEN
-            varying float vFogDarken;
+            varying vec2 vFogWorldXZ;
           #endif`,
-          // Final-stage multiply: post-lighting, post-everything. Universal
-          // across StandardMaterial / PBRMaterial — both end with
-          // #include<customFragmentMainEnd>. Survives any lighting clamp by
-          // construction (clamp already happened upstream).
+          // Final post-lighting multiply. For each fogged tile, a soft circular
+          // skirt (full strength inside 70% of the radius, feathered to the
+          // edge) avoids an aliased cutoff while keeping the building body
+          // uniformly dark. `mix(1.0, fogDarkenAmount, dk)` => unfogged
+          // fragments are untouched (dk=0 → ×1.0).
           CUSTOM_FRAGMENT_MAIN_END: `#ifdef FOG_DARKEN
-            gl_FragColor.rgb *= vFogDarken;
+            float fogDk = 0.0;
+            for (int i = 0; i < MAX_FOG_TILES; i++) {
+              if (float(i) >= fogCount) break;
+              float dist = distance(vFogWorldXZ, fogTiles[i]);
+              fogDk = max(fogDk, smoothstep(fogTileRadius, fogTileRadius * 0.7, dist));
+            }
+            gl_FragColor.rgb *= mix(1.0, fogDarkenAmount, fogDk);
           #endif`,
         };
       }
       return null;
     }
   }
+
   return FogDarkenPlugin;
 }
 
-/** Attach the FogDarkenPlugin to one material in instance-attribute mode and
- *  return it (or null if Babylon's plugin base isn't available). Idempotent —
- *  re-attaching to a material that already carries the plugin is a no-op.
- *  Walks MultiMaterial.subMaterials so a glTF model with multiple submesh
- *  materials gets the plugin on each. */
+/** Attach the FogDarkenPlugin to a material (recursing into a MultiMaterial's
+ *  subMaterials so a glTF model with per-submesh materials gets it on each).
+ *  Returns a flat array of the attached plugin instances (empty if Babylon's
+ *  plugin base is unavailable). Idempotent — a material that already carries the
+ *  plugin returns its existing instance rather than double-attaching. */
 export function attachFogDarkenToMaterial(BABYLON, material) {
-  if (!material) return null;
-  // MultiMaterial → recurse into subMaterials.
+  if (!material) return [];
+  // MultiMaterial → recurse into subMaterials, flatten.
   if (Array.isArray(material.subMaterials)) {
-    const attached = [];
-    for (const sub of material.subMaterials) {
-      const p = attachFogDarkenToMaterial(BABYLON, sub);
-      if (p) attached.push(p);
-    }
-    return attached.length ? attached : null;
+    const out = [];
+    for (const sub of material.subMaterials) out.push(...attachFogDarkenToMaterial(BABYLON, sub));
+    return out;
   }
-  // Already attached?
-  if (material.pluginManager?._plugins?.some?.((p) =>
-    (p.name || p.getClassName?.())?.toLowerCase?.().includes('fogdarken'))) return null;
+  // Already attached? Return the live instance so the renderer keeps tracking it.
+  const existing = material.pluginManager?._plugins?.find?.((p) =>
+    (p.name || p.getClassName?.())?.toLowerCase?.().includes('fogdarken'));
+  if (existing) return [existing];
   const PluginClass = makeFogDarkenPlugin(BABYLON);
-  if (!PluginClass) return null;
+  if (!PluginClass) return [];
   const plugin = new PluginClass(material);
   plugin.isEnabled = true;
-  return plugin;
+  return [plugin];
 }

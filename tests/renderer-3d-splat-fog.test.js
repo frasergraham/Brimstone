@@ -95,34 +95,25 @@ describe('Renderer3D splat fog — _setTilePropsFogged', () => {
     assert.ok(!r._fogActiveSet.has(hexK));
   });
 
-  test("'building-instance' props darken via the per-instance `fogDarken` buffer", async () => {
-    // GLB buildings are hardware instances of a shared template — toggling
-    // the template material would dim every building at once, so each
-    // instance carries its own `fogDarken` value in an instanced buffer.
-    const { FOG_HIDDEN_DARKEN } = await import('../src/renderer-3d.js');
+  test('GLB building instances (respectsFog:false) are left untouched by the prop loop', () => {
+    // GLB buildings darken via a GLOBAL shader uniform (the fogged-tile XZ list
+    // fed by `_updateBuildingFogUniform` / FogDarkenPlugin), NOT the per-prop
+    // veil loop — the May per-instance-attribute path produced all-black
+    // buildings and was reverted. So building instances carry
+    // `respectsFog: false`, and `_setTilePropsFogged` must neither hide nor
+    // mutate them. (The darkening itself is covered in fog-darken-plugin.test.js.)
     const r = makeRenderer();
     const hexK = '6,2';
-    const bldgA = {
+    const bldg = {
       isVisible: true,
       instancedBuffers: { fogDarken: 1.0 },
-      metadata: { respectsFog: 'building-instance' },
+      metadata: { respectsFog: false, kind: 'building-glb' },
     };
-    const bldgB = {
-      isVisible: true,
-      instancedBuffers: { fogDarken: 1.0 },
-      metadata: { respectsFog: 'building-instance' },
-    };
-    // Both buildings share a template; only A is on the fogged tile.
-    r._tilePropsByKey.set(hexK,        [bldgA]);
-    r._tilePropsByKey.set('99,99',     [bldgB]);
+    r._tilePropsByKey.set(hexK, [bldg]);
     r._setTilePropsFogged(hexK, true);
-    assert.equal(bldgA.instancedBuffers.fogDarken, FOG_HIDDEN_DARKEN,
-      'fogged building darkens');
-    assert.equal(bldgB.instancedBuffers.fogDarken, 1.0,
-      'sibling building on a different tile is untouched');
-    assert.equal(bldgA.isVisible, true, 'building stays visible');
-    r._setTilePropsFogged(hexK, false);
-    assert.equal(bldgA.instancedBuffers.fogDarken, 1.0, 'restored on un-fog');
+    assert.equal(bldg.isVisible, true, 'building stays visible under fog');
+    assert.equal(bldg.instancedBuffers.fogDarken, 1.0, 'prop loop does not mutate it');
+    assert.ok(r._fogActiveSet.has(hexK), 'tile still tracked as fogged');
   });
 
   test("'darken' props tint to FOG_HIDDEN_DARKEN cap on both texture level + colour", async () => {
