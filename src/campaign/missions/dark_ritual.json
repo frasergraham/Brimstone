@@ -1578,7 +1578,8 @@
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
-        "roadDirs": []
+        "roadDirs": [],
+        "buildingFootprintOf": "1,10"
       },
       {
         "col": 1,
@@ -1592,6 +1593,9 @@
         "hiddenSurvivor": false,
         "roadDirs": [
           "1,9"
+        ],
+        "footprintHexes": [
+          "0,10"
         ]
       },
       {

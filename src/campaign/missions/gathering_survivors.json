@@ -268,6 +268,9 @@
         "hiddenSurvivor": false,
         "roadDirs": [
           "8,3"
+        ],
+        "footprintHexes": [
+          "8,2"
         ]
       },
       {
@@ -280,7 +283,8 @@
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
-        "roadDirs": []
+        "roadDirs": [],
+        "buildingFootprintOf": "3,3"
       },
       {
         "col": 3,
@@ -294,6 +298,9 @@
         "hiddenSurvivor": true,
         "roadDirs": [
           "4,4"
+        ],
+        "footprintHexes": [
+          "2,3"
         ]
       },
       {
@@ -306,7 +313,8 @@
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
-        "roadDirs": []
+        "roadDirs": [],
+        "buildingFootprintOf": "7,3"
       },
       {
         "col": 7,
@@ -321,6 +329,9 @@
         "roadDirs": [
           "7,4",
           "8,3"
+        ],
+        "footprintHexes": [
+          "6,3"
         ]
       },
       {
@@ -473,6 +484,9 @@
           "5,6",
           "6,4",
           "6,5"
+        ],
+        "footprintHexes": [
+          "4,5"
         ]
       },
       {
@@ -632,6 +646,9 @@
         "roadDirs": [
           "4,8",
           "5,6"
+        ],
+        "footprintHexes": [
+          "3,7"
         ]
       },
       {
@@ -670,6 +687,9 @@
         "hiddenSurvivor": true,
         "roadDirs": [
           "8,6"
+        ],
+        "footprintHexes": [
+          "7,7"
         ]
       },
       {
@@ -783,6 +803,9 @@
         "hiddenSurvivor": false,
         "roadDirs": [
           "2,9"
+        ],
+        "footprintHexes": [
+          "0,9"
         ]
       },
       {
@@ -910,6 +933,71 @@
         "resource": null,
         "hiddenSurvivor": false,
         "roadDirs": []
+      },
+      {
+        "col": 8,
+        "row": 2,
+        "base": "GRASS",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [],
+        "buildingFootprintOf": "9,2"
+      },
+      {
+        "col": 4,
+        "row": 5,
+        "base": "GRASS",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [],
+        "buildingFootprintOf": "5,5"
+      },
+      {
+        "col": 3,
+        "row": 7,
+        "base": "GRASS",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [],
+        "buildingFootprintOf": "4,7"
+      },
+      {
+        "col": 7,
+        "row": 7,
+        "base": "GRASS",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [],
+        "buildingFootprintOf": "8,7"
+      },
+      {
+        "col": 0,
+        "row": 9,
+        "base": "GRASS",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [],
+        "buildingFootprintOf": "1,9"
       }
     ]
   },
