@@ -29,12 +29,10 @@ import {
   buildingUsesGlbModel,
   buildingUsesHouseModel,
   buildingGlbVariantForHex,
-  buildingFogRepresentation,
   _bakeOriginToBottom,
 } from '../src/renderer-3d.js';
 
 import { TileType, BuildingType, StructureType, Tile } from '../src/tiles.js';
-import { hexKey } from '../src/hex.js';
 
 function newInst() {
   const fakeCanvas = {
@@ -404,37 +402,18 @@ describe('_buildBuildingInstance — positioning + jitter + metadata', () => {
     assert.ok(Math.abs(inst.rotation.y - houseYawForHex(4, 9)) < 1e-9);
   });
 
-  test('instance is unpickable, carries the building fog policy, and is on the world-geometry render group', () => {
+  test('instance is unpickable, fog-immune, and on world-geometry render group', () => {
     const r = newInst();
     r._babylon = makeFakeBabylon();
     stubTemplate(r, BUILDING_GLB_BY_TYPE[BuildingType.CHURCH][0]);
     const inst = r._buildBuildingInstance({ building: BuildingType.CHURCH, col: 0, row: 0 }, 0, 0, null);
     assert.equal(inst.isPickable, false);
-    // The GLB instance is the REVEALED representation only — fog is handled by
-    // `_swapBuildingForFog` (GLB↔dark-procedural swap), so the instance carries
-    // the `'building'` policy (the per-prop fog loop leaves it to the swap).
-    assert.equal(inst.metadata.respectsFog, 'building');
+    // Buildings ignore fog (render full-brightness regardless) until the
+    // per-instance fog-darken path can be made robust against Babylon's
+    // PBR-multi-submesh instancing pipeline — see _loadBuildingModel.
+    assert.equal(inst.metadata.respectsFog, false);
     assert.equal(inst.metadata.kind, 'building-glb');
     assert.equal(inst.renderingGroupId, 0);
-  });
-
-  test('buildingFogRepresentation: fogged → dark procedural; revealed → GLB if available else normal procedural', () => {
-    assert.equal(buildingFogRepresentation(true,  true),  'proc-dark');
-    assert.equal(buildingFogRepresentation(true,  false), 'proc-dark');
-    assert.equal(buildingFogRepresentation(false, true),  'glb');
-    assert.equal(buildingFogRepresentation(false, false), 'proc-normal');
-  });
-
-  test('the GLB instance is never force-hidden — fog is owned by the swap, not visibility', () => {
-    // The old "hide under fog" path set inst.isVisible=false on fogged tiles.
-    // That read as "building gone". Now the instance is only ever built for a
-    // REVEALED tile, so it must come back visible regardless of _fogActiveSet.
-    const r = newInst();
-    r._babylon = makeFakeBabylon();
-    stubTemplate(r, BUILDING_GLB_BY_TYPE[BuildingType.BARN][0]);
-    r._fogActiveSet.add(hexKey(3, 5));
-    const inst = r._buildBuildingInstance({ building: BuildingType.BARN, col: 3, row: 5 }, 0, 0, null);
-    assert.notEqual(inst.isVisible, false, 'GLB instance is not force-hidden by fog state');
   });
 
   test('HOUSE picks the right template for its hashed variant', () => {
@@ -694,28 +673,6 @@ describe('_upgradeBuildingsToGlbModel — retrofit after async load', () => {
     assert.ok(props.includes(labelPlane), 'hover label must survive');
   });
 
-  test('skips fogged tiles — they stay on the dark procedural box until revealed', () => {
-    // A fogged building shows the dark procedural box (`_swapBuildingForFog`).
-    // If an async GLB load fires the retrofit while the tile is still fogged,
-    // the upgrade must NOT instance the GLB (which can't be darkened) — it must
-    // leave the procedural box so the tile keeps reading as "in shadow".
-    const r = newInst();
-    r._babylon = makeFakeBabylon();
-    r._mapBuilt = true;
-    r._mapRoot  = { name: 'mapRoot' };
-    r.state     = makeState([{ col: 4, row: 6, building: BuildingType.INN }]);
-    stubTemplate(r, BUILDING_GLB_BY_TYPE[BuildingType.INN][0]);
-    r._fogActiveSet.add('4,6');
-    const box  = { name: 'bldg_4_6', metadata: { kind: 'building-proc', fogDark: true }, dispose() { this._disposed = true; } };
-    const roof = { name: 'roof_4_6', metadata: { kind: 'building-proc', fogDark: true }, dispose() { this._disposed = true; } };
-    r._tilePropsByKey.set('4,6', [box, roof]);
-
-    const upgraded = r._upgradeBuildingsToGlbModel();
-    assert.equal(upgraded, 0, 'fogged tile must not upgrade to GLB');
-    assert.notEqual(box._disposed, true, 'fogged dark procedural box must survive');
-    assert.equal(r._tilePropsByKey.get('4,6').some(p => p?.metadata?.kind === 'building-glb'), false);
-  });
-
   test('leaves procedural box+roof in place when the tile variant template is not loaded', () => {
     const r = newInst();
     r._babylon = makeFakeBabylon();
@@ -921,135 +878,5 @@ describe('_bakeOriginToBottom — pivot fix', () => {
     await r._loadBuildingModel('models/buildings/inn.glb', 'assets');
     assert.equal(baked.length, 1, 'pivot bake must run inside _loadBuildingModel');
     assert.ok(Math.abs(baked[0].y - 0.5) < 1e-9);
-  });
-});
-
-describe('_swapBuildingForFog — GLB↔dark-procedural fog swap', () => {
-  // Fuller BABYLON stub: the swap stands up procedural box/roof meshes via
-  // MeshBuilder + StandardMaterial, on top of the createInstance template the
-  // base makeFakeBabylon already provides.
-  function makeFakeBabylonWithBuilder() {
-    const base = makeFakeBabylon();
-    const Color3 = class { constructor(r = 0, g = 0, b = 0) { this.r = r; this.g = g; this.b = b; } };
-    const StandardMaterial = class {
-      constructor(name) { this.name = name; this.diffuseColor = null; this.specularColor = null; this.emissiveColor = null; }
-    };
-    const makeBox = (name) => ({
-      name,
-      metadata: null,
-      isPickable: true,
-      receiveShadows: false,
-      position: { x: 0, y: 0, z: 0 },
-      parent: null,
-      material: null,
-      isWorldMatrixFrozen: false,
-      freezeWorldMatrix() { this.isWorldMatrixFrozen = true; },
-      dispose() { this._disposed = true; },
-    });
-    return {
-      ...base,
-      Color3,
-      StandardMaterial,
-      MeshBuilder: { CreateBox: (name) => makeBox(name) },
-    };
-  }
-
-  function makeBuildingRenderer(building = BuildingType.INN, col = 2, row = 3) {
-    const r = newInst();
-    r._babylon = makeFakeBabylonWithBuilder();
-    r._scene   = {};
-    r._mapBuilt = true;
-    r._mapRoot  = { name: 'mapRoot' };
-    const tiles = new Map();
-    tiles.set(`${col},${row}`, { col, row, type: TileType.BUILDING, building });
-    r.state = { tiles };
-    return r;
-  }
-
-  test('fog-enter disposes the GLB instance and builds a dark procedural box+roof', async () => {
-    const { FOG_HIDDEN_DARKEN } = await import('../src/renderer-3d.js');
-    const r = makeBuildingRenderer(BuildingType.INN, 2, 3);
-    stubTemplate(r, BUILDING_GLB_BY_TYPE[BuildingType.INN][0]);
-    const inst = r._buildBuildingInstance({ building: BuildingType.INN, col: 2, row: 3 }, 0, 0, r._mapRoot);
-    const label = { name: 'bldgLabel_2_3', dispose() { this._disposed = true; } };
-    r._tilePropsByKey.set('2,3', [inst, label]);
-
-    const swapped = r._swapBuildingForFog('2,3', true);
-    assert.equal(swapped, true);
-    assert.equal(inst._disposed, true, 'GLB instance disposed on fog-enter');
-    const props = r._tilePropsByKey.get('2,3');
-    const proc = props.filter(p => p?.metadata?.kind === 'building-proc');
-    assert.equal(proc.length, 2, 'dark procedural box + roof built');
-    assert.ok(proc.every(p => p.metadata.fogDark === true), 'procedural meshes are dark');
-    assert.ok(proc.every(p => p.metadata.respectsFog === 'building'), 'carry the building fog policy');
-    assert.ok(props.includes(label), 'hover label survives the swap');
-    assert.equal(r._tilePropsByKey.get('2,3').some(p => p?.metadata?.kind === 'building-glb'), false);
-    // Dark material: emissive zero, diffuse darkened to FOG_HIDDEN_DARKEN of base.
-    const box = proc.find(p => p.name.startsWith('bldg_'));
-    assert.equal(box.material.emissiveColor.r, 0);
-    assert.ok(box.material.diffuseColor.r <= FOG_HIDDEN_DARKEN + 1e-9,
-      'diffuse darkened to (at most) the FOG_HIDDEN_DARKEN cap');
-  });
-
-  test('reveal disposes the dark procedural and re-instances the GLB', () => {
-    const r = makeBuildingRenderer(BuildingType.INN, 2, 3);
-    stubTemplate(r, BUILDING_GLB_BY_TYPE[BuildingType.INN][0]);
-    // Start fogged: dark procedural.
-    r._fogActiveSet.add('2,3');
-    const darkBox  = { name: 'bldg_2_3', metadata: { kind: 'building-proc', fogDark: true, respectsFog: 'building' }, dispose() { this._disposed = true; } };
-    const darkRoof = { name: 'roof_2_3', metadata: { kind: 'building-proc', fogDark: true, respectsFog: 'building' }, dispose() { this._disposed = true; } };
-    r._tilePropsByKey.set('2,3', [darkBox, darkRoof]);
-
-    const swapped = r._swapBuildingForFog('2,3', false);
-    assert.equal(swapped, true);
-    assert.equal(darkBox._disposed, true, 'dark box disposed on reveal');
-    assert.equal(darkRoof._disposed, true, 'dark roof disposed on reveal');
-    const props = r._tilePropsByKey.get('2,3');
-    assert.ok(props.some(p => p?.metadata?.kind === 'building-glb'), 'GLB re-instanced on reveal');
-    assert.equal(props.some(p => p?.metadata?.kind === 'building-proc'), false);
-  });
-
-  test('reveal falls back to a normal-material procedural box when the GLB template is not loaded', () => {
-    const r = makeBuildingRenderer(BuildingType.CHURCH, 5, 5);
-    // No template stubbed → _buildBuildingInstance returns null.
-    const darkBox = { name: 'bldg_5_5', metadata: { kind: 'building-proc', fogDark: true, respectsFog: 'building' }, dispose() {} };
-    r._tilePropsByKey.set('5,5', [darkBox]);
-
-    const swapped = r._swapBuildingForFog('5,5', false);
-    assert.equal(swapped, true);
-    const props = r._tilePropsByKey.get('5,5');
-    const proc = props.filter(p => p?.metadata?.kind === 'building-proc');
-    assert.equal(proc.length, 2, 'normal procedural box+roof built as the reveal fallback');
-    assert.ok(proc.every(p => p.metadata.fogDark === false), 'reveal fallback is NOT dark');
-    assert.equal(props.some(p => p?.metadata?.kind === 'building-glb'), false);
-  });
-
-  test('idempotent — no-op when the current representation already matches the fog state', () => {
-    const r = makeBuildingRenderer(BuildingType.INN, 2, 3);
-    stubTemplate(r, BUILDING_GLB_BY_TYPE[BuildingType.INN][0]);
-    const inst = r._buildBuildingInstance({ building: BuildingType.INN, col: 2, row: 3 }, 0, 0, r._mapRoot);
-    r._tilePropsByKey.set('2,3', [inst]);
-    // Revealed tile already on GLB → reveal swap is a no-op.
-    assert.equal(r._swapBuildingForFog('2,3', false), false);
-    assert.equal(inst._disposed, undefined, 'matching representation is left untouched');
-  });
-
-  test('no-op without a babylon/scene (node-test guard)', () => {
-    const r = newInst(); // no _babylon / _scene
-    const tiles = new Map();
-    tiles.set('2,3', { col: 2, row: 3, type: TileType.BUILDING, building: BuildingType.INN });
-    r.state = { tiles };
-    r._tilePropsByKey.set('2,3', [{ metadata: { kind: 'building-glb', respectsFog: 'building' } }]);
-    assert.equal(r._swapBuildingForFog('2,3', true), false);
-  });
-
-  test('sets _buildingFogSwapped so _applyFogVeil runs one freeze pass', () => {
-    const r = makeBuildingRenderer(BuildingType.INN, 2, 3);
-    stubTemplate(r, BUILDING_GLB_BY_TYPE[BuildingType.INN][0]);
-    const inst = r._buildBuildingInstance({ building: BuildingType.INN, col: 2, row: 3 }, 0, 0, r._mapRoot);
-    r._tilePropsByKey.set('2,3', [inst]);
-    assert.notEqual(r._buildingFogSwapped, true);
-    r._swapBuildingForFog('2,3', true);
-    assert.equal(r._buildingFogSwapped, true);
   });
 });

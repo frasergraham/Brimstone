@@ -125,29 +125,6 @@ describe('Renderer3D splat fog — _setTilePropsFogged', () => {
     assert.equal(bldgA.instancedBuffers.fogDarken, 1.0, 'restored on un-fog');
   });
 
-  test("'building'-policy props are left to the swap, not toggled by the per-prop loop", () => {
-    // Buildings can't tint per-instance, so they swap representation
-    // (GLB↔dark-procedural) via `_swapBuildingForFog` rather than flipping
-    // isVisible here. The per-prop loop must NOT touch `'building'`-policy
-    // meshes — otherwise it would hide them (the old "building gone" bug). With
-    // no `_babylon`/`_scene` here the swap itself no-ops, so the meshes stay put.
-    const r = makeRenderer();
-    const hexK = '7,3';
-    const glbInst = { isVisible: true, metadata: { respectsFog: 'building', kind: 'building-glb' } };
-    const box     = { isVisible: true, metadata: { respectsFog: 'building', kind: 'building-proc', fogDark: false } };
-    const roof    = { isVisible: true, metadata: { respectsFog: 'building', kind: 'building-proc', fogDark: false } };
-    r._tilePropsByKey.set(hexK, [glbInst, box, roof]);
-
-    r._setTilePropsFogged(hexK, true);
-    assert.equal(glbInst.isVisible, true, 'building mesh not hidden by the per-prop loop');
-    assert.equal(box.isVisible, true, 'procedural box not hidden by the per-prop loop');
-    assert.equal(roof.isVisible, true, 'procedural roof not hidden by the per-prop loop');
-    // _fogActiveSet still maintained for the hex.
-    assert.ok(r._fogActiveSet.has(hexK));
-    r._setTilePropsFogged(hexK, false);
-    assert.ok(!r._fogActiveSet.has(hexK));
-  });
-
   test("'darken' props tint to FOG_HIDDEN_DARKEN cap on both texture level + colour", async () => {
     // Fog darken on roads/rivers must hit the TEXTURE level (outside the
     // lighting clamp) so it survives bright phases — same fix the terrain
