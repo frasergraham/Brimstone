@@ -68,17 +68,17 @@ describe('betaForRadius — curve shape (not linear)', () => {
     assert.ok(Math.abs(b - naiveLinear) > 1e-6, 'ramped beta must differ from full-range linear');
   });
 
-  test('logarithmic curve: closer to TOPDOWN than the linear value early in the ramp', () => {
+  test('inverse-log curve: closer to BASE than the linear value mid-ramp', () => {
     // With rampStart=0 (default) the ramp spans the entire zoom range, so the
-    // renormalized fraction equals t. At t=0.2 the log curve evaluates to
-    // ln(1 + 0.2·(e−1)) ≈ 0.295 > 0.2, so beta has progressed FURTHER from
+    // renormalized fraction equals t. At t=0.5 the inverse-log curve evaluates
+    // to (e^0.5 − 1)/(e − 1) ≈ 0.378 < 0.5, so beta has progressed LESS from
     // BASE toward TOPDOWN than a linear interpolant at the same t —
-    // an unmistakable signature of the log curve (steep early, gentle late).
-    // Because TOPDOWN < BASE, "further toward TOPDOWN" means a SMALLER beta
-    // than the straight-line value at the same t.
-    const b = betaForRadius(rAt(0.2), MIN, MAX, BASE, TOP);
-    const linear = BASE + 0.2 * (TOP - BASE);
-    assert.ok(b < linear && b > TOP, 'log curve should overshoot the linear ramp toward TOPDOWN');
+    // an unmistakable signature of the flat-early-then-steep curve.
+    // Because TOPDOWN < BASE, "less toward TOPDOWN" means a LARGER beta than
+    // the straight-line value at the same t.
+    const b = betaForRadius(rAt(0.5), MIN, MAX, BASE, TOP);
+    const linear = BASE + 0.5 * (TOP - BASE);
+    assert.ok(b < BASE && b > linear, 'inverse-log should undershoot the linear ramp toward BASE');
   });
 
   test('monotonic non-increasing across the zoom range', () => {

@@ -932,15 +932,14 @@ export const CAMERA_TILT_RAMP_START = 0;
  *
  *   t = clamp01((radius - minR) / (maxR - minR))
  *     0 .. RAMP_START         → betaBase (locked isometric)
- *     RAMP_START .. 1.0        → logarithmic ease from betaBase → betaTopDown
+ *     RAMP_START .. 1.0        → inverse-log (exponential) ease betaBase → betaTopDown
  *
- * The ease is `ln(1 + s·(e − 1))` on the renormalised fraction
- * s = (t - RAMP_START) / (1 - RAMP_START). Maps s ∈ [0,1] → [0,1] but rises
- * sharply early and decelerates as it approaches betaTopDown — even a small
- * zoom-out from the start gives a visible tilt change, while the final
- * approach to "looking straight down" feels gentle. Distinct from both a
- * linear `lerp(betaBase, betaTopDown, t)` and the previous smoothstep curve
- * (which eased in slowly at the start).
+ * The ease is `(eˢ − 1) / (e − 1)` on the renormalised fraction
+ * s = (t - RAMP_START) / (1 - RAMP_START). Maps s ∈ [0,1] → [0,1] but stays
+ * near betaBase through most of the zoom range and only descends sharply
+ * near max zoom-out — the tilt change happens late in the ramp, so most of
+ * the playable zoom stays at the isometric heading and only the deep
+ * zoom-out reads as "looking straight down."
  *
  * Degenerate `maxR <= minR` returns betaBase (avoids divide-by-zero / NaN).
  *
@@ -959,8 +958,9 @@ export function betaForRadius(radius, minR, maxR, betaBase, betaTopDown, rampSta
   const span = 1 - rampStart;
   // span is > 0 here because rampStart < t <= 1 ⇒ rampStart < 1.
   const s = (t - rampStart) / span;
-  // Logarithmic curve: ln(1 + s·(e − 1)). s=0→0, s=1→ln(e)=1. Steeper start.
-  const eased = Math.log(1 + s * (Math.E - 1));
+  // Inverse-log (exponential) curve: (eˢ − 1)/(e − 1). s=0→0, s=1→1.
+  // Stays flat early, descends sharply only near s=1 — tilt happens late.
+  const eased = (Math.exp(s) - 1) / (Math.E - 1);
   return betaBase + (betaTopDown - betaBase) * eased;
 }
 
