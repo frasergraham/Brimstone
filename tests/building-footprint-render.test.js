@@ -14,6 +14,8 @@ import {
   buildingFitScale,
   buildingNudgedPosition,
   doorStubDirection,
+  compoundFortifyEdges,
+  extendDoorStub,
   BUILDING_ENTRANCE_NUDGE,
   TARGET_BUILDING_GROUND_SPAN,
 } from '../src/building-render.js';
@@ -23,6 +25,8 @@ import {
   hexToWorld,
   houseYawForHex,
   houseInstanceScalingForHex,
+  buildRoadNetworkStrokes,
+  _edgeTo,
   TILE_SLOTS,
   BUILDING_SLOT_INDEX,
   BUILDING_GLB_BY_TYPE,
@@ -333,5 +337,128 @@ describe('Renderer3D._buildBuildingInstance — footprint relocation', () => {
     assert.ok(Math.abs(inst.position.z - (20 + slot.z)) < 1e-9);
     assert.ok(Math.abs(inst.rotation.y - houseYawForHex(2, 3)) < 1e-9);
     assert.equal(buildingGlbVariantForHex(orphan), BUILDING_GLB_BY_TYPE[BuildingType.MILL][0]);
+  });
+});
+
+// ── P4b: compoundFortifyEdges — entrance + footprint walled as one enclosure ──
+
+describe('compoundFortifyEdges', () => {
+  // odd-r deltas (mirror building-render.js / fortNeighborOffset), indexed 0..5.
+  const DIRS_ODD = [[-1, 0], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1]];
+  const dirToward = (col, row, tcol, trow) => {
+    for (let d = 0; d < 6; d++) {
+      if (col + DIRS_ODD[d][0] === tcol && row + DIRS_ODD[d][1] === trow) return d;
+    }
+    return -1;
+  };
+
+  test('shared edge is bare on BOTH hexes; every OTHER edge gets a wall', () => {
+    // Entrance (5,5) + footprint (6,5) — the only fortified compound on the map.
+    const E = { col: 5, row: 5 };
+    const F = { col: 6, row: 5 };
+    const inCompound = (c, r) => (c === 5 && r === 5) || (c === 6 && r === 5);
+    const { entrance, footprint } = compoundFortifyEdges(E, F, inCompound);
+
+    const eShared = dirToward(5, 5, 6, 5); // entrance edge facing the footprint
+    const fShared = dirToward(6, 5, 5, 5); // footprint edge facing the entrance
+    assert.ok(eShared >= 0 && fShared >= 0);
+
+    // Shared (interior) edges are bare.
+    assert.ok(!entrance.includes(eShared), 'entrance shared edge bare');
+    assert.ok(!footprint.includes(fShared), 'footprint shared edge bare');
+
+    // All five OTHER edges of each hex carry a wall.
+    for (let d = 0; d < 6; d++) {
+      if (d !== eShared) assert.ok(entrance.includes(d), `entrance edge ${d} walled`);
+      if (d !== fShared) assert.ok(footprint.includes(d), `footprint edge ${d} walled`);
+    }
+    assert.equal(entrance.length, 5);
+    assert.equal(footprint.length, 5);
+  });
+
+  test('an edge touching ANOTHER fortified compound merges to bare', () => {
+    const E = { col: 5, row: 5 };
+    const F = { col: 6, row: 5 };
+    // A second fortified building sits to the west of the entrance (4,5).
+    const inCompound = (c, r) =>
+      (c === 5 && r === 5) || (c === 6 && r === 5) || (c === 4 && r === 5);
+    const { entrance } = compoundFortifyEdges(E, F, inCompound);
+
+    const eShared = dirToward(5, 5, 6, 5); // toward own footprint → bare
+    const eMerge  = dirToward(5, 5, 4, 5); // toward neighbour compound → bare
+    assert.ok(!entrance.includes(eShared), 'own shared edge bare');
+    assert.ok(!entrance.includes(eMerge), 'edge touching neighbour compound merges to bare');
+    assert.equal(entrance.length, 4, 'two interior edges, four walls');
+  });
+
+  test('no footprint → footprint mask empty, entrance is the plain perimeter rule', () => {
+    const E = { col: 5, row: 5 };
+    const inCompound = (c, r) => c === 5 && r === 5; // isolated fortified hex
+    const { entrance, footprint } = compoundFortifyEdges(E, null, inCompound);
+    assert.deepEqual(footprint, []);
+    assert.deepEqual(entrance, [0, 1, 2, 3, 4, 5], 'all six edges walled when isolated');
+  });
+});
+
+// ── P4b: extendDoorStub — door road continues into the footprint hex ──────────
+
+describe('extendDoorStub', () => {
+  test('appends the building point to the stroke ending at the edge midpoint', () => {
+    const edgeMid = { x: 1, z: 0 };
+    const bldg    = { x: 1.5, z: 0 };
+    const strokes = [[{ x: 0, z: 0 }, { x: 1, z: 0 }]]; // centre → edge mid
+    extendDoorStub(strokes, edgeMid, bldg);
+    assert.equal(strokes[0].length, 3, 'stroke gained the building terminus');
+    assert.deepEqual(strokes[0][2], { x: 1.5, z: 0 }, 'far end is the building point');
+  });
+
+  test('prepends when the stroke STARTS at the edge midpoint (bezier orientation)', () => {
+    const edgeMid = { x: 1, z: 0 };
+    const bldg    = { x: 1.5, z: 0 };
+    const strokes = [[{ x: 1, z: 0 }, { x: 0, z: 0 }, { x: -1, z: 0 }]]; // edge → through
+    extendDoorStub(strokes, edgeMid, bldg);
+    assert.equal(strokes[0].length, 4);
+    assert.deepEqual(strokes[0][0], { x: 1.5, z: 0 }, 'building point is the new start');
+  });
+
+  test('no-op when no endpoint matches the edge midpoint', () => {
+    const strokes = [[{ x: 0, z: 0 }, { x: 9, z: 9 }]];
+    extendDoorStub(strokes, { x: 1, z: 0 }, { x: 1.5, z: 0 });
+    assert.equal(strokes[0].length, 2, 'unchanged');
+  });
+});
+
+// ── P4b: buildRoadNetworkStrokes — door ribbon ends at the building, not edge ──
+
+describe('buildRoadNetworkStrokes — door stub reaches into the footprint', () => {
+  test('an isolated fortified-less entrance road stub terminates at the nudged building position', () => {
+    const tiles = new Map();
+    const entrance = makeEntrance(5, 5, 6, 5, BuildingType.INN); // footprint (6,5)
+    tiles.set(hexKey(5, 5), entrance);
+
+    const segs = buildRoadNetworkStrokes(tiles);
+    const seg  = segs.find(s => s.tile.col === 5 && s.tile.row === 5);
+    assert.ok(seg, 'entrance emits a road segment (the door stub)');
+    assert.equal(seg.strokes.length, 1, 'one door stub');
+
+    const stub = seg.strokes[0];
+    const here = hexToWorld(5, 5);
+    const fw   = hexToWorld(6, 5);
+    const edge = _edgeTo(here, fw);
+    const nudged = buildingNudgedPosition(
+      { x: fw.x, z: fw.z }, { x: here.x, z: here.z }, BUILDING_ENTRANCE_NUDGE,
+    );
+
+    // The stub starts at the entrance centre, passes the shared edge midpoint,
+    // and CONTINUES to the building's nudged draw position inside the footprint.
+    const tip = stub[stub.length - 1];
+    assert.ok(Math.abs(tip.x - nudged.x) < 1e-9 && Math.abs(tip.z - nudged.z) < 1e-9,
+      'stub tip is the nudged building position');
+    // It must NOT stop at the shared edge midpoint any more.
+    assert.ok(Math.abs(tip.x - edge.mx) > 1e-9 || Math.abs(tip.z - edge.mz) > 1e-9,
+      'stub no longer terminates at the A–B edge');
+    // The edge midpoint is still on the path (the road crosses the edge).
+    assert.ok(stub.some(p => Math.abs(p.x - edge.mx) < 1e-9 && Math.abs(p.z - edge.mz) < 1e-9),
+      'path still crosses the shared edge midpoint');
   });
 });

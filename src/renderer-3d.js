@@ -54,6 +54,8 @@ import {
   buildingFitScale,
   buildingNudgedPosition,
   doorStubDirection,
+  compoundFortifyEdges,
+  extendDoorStub,
   BUILDING_ENTRANCE_NUDGE,
   TARGET_BUILDING_GROUND_SPAN,
 } from './building-render.js';
@@ -7565,28 +7567,40 @@ export class Renderer3D {
   _syncFortifications() {
     if (!this._scene || !this._mapRoot || !this.state?.tiles) return;
     const tiles = this.state.tiles;
-    const fortLevelAt = (col, row) => tiles.get(hexKey(col, row))?.fortifyLevel || 0;
+
+    // P4b — fortifications enclose the whole building COMPOUND (passable entrance
+    // + impassable footprint). A hex belongs to a fortified compound when it's a
+    // fortified entrance OR a footprint hex of a fortified entrance; walls go on
+    // the compound's OUTER perimeter only, so the shared entrance↔footprint edge
+    // (and any edge touching another fortified compound) stays bare. Precompute
+    // the membership set once per sync. `fortifyLevel` still lives on the
+    // entrance only — the footprint inherits the wall visual, no data change.
+    const compoundKeys = new Set();
+    for (const tile of tiles.values()) {
+      if ((tile.fortifyLevel || 0) <= 0) continue;
+      compoundKeys.add(hexKey(tile.col, tile.row));
+      if (isBuildingEntrance(tile)) {
+        for (const fk of tile.footprintHexes) compoundKeys.add(fk);
+      }
+    }
+    const isFortifiedCompoundAt = (col, row) => compoundKeys.has(hexKey(col, row));
 
     const seen = new Set();
     for (const tile of tiles.values()) {
       const lvl = tile.fortifyLevel || 0;
       if (lvl <= 0) continue;
-      const tkey = hexKey(tile.col, tile.row);
-      seen.add(tkey);
 
-      const style = fortifyWallStyle(lvl);
-      const dirs  = fortifyEdgeDirs(tile.col, tile.row, fortLevelAt);
-      const sig   = `${style.kind}|${dirs.join(',')}`;
+      const style    = fortifyWallStyle(lvl);
+      const footTile = isBuildingEntrance(tile) ? tiles.get(tile.footprintHexes[0]) : null;
+      const masks    = compoundFortifyEdges(tile, footTile, isFortifiedCompoundAt);
 
-      const existing = this._fortByKey.get(tkey);
-      if (!existing || existing.sig !== sig) {
-        if (existing) this._disposeFortHex(tkey);
-        const entry = this._buildFortMeshesForHex(tile, dirs, style);
-        entry.sig = sig;
-        this._fortByKey.set(tkey, entry);
+      // Entrance hex walls (keyed at its own hex, as before).
+      this._syncFortHex(hexKey(tile.col, tile.row), tile, masks.entrance, style, seen);
+      // Footprint hex walls — inherits the entrance's style, drawn on the outer
+      // edges of the footprint (shared edge with the entrance comes back bare).
+      if (footTile) {
+        this._syncFortHex(hexKey(footTile.col, footTile.row), footTile, masks.footprint, style, seen);
       }
-      // Re-apply fog tint every draw (fog can change without the wall changing).
-      this._applyFortFog(tkey);
     }
 
     // Dispose walls on hexes that are no longer fortified (e.g. siege/combat
@@ -7594,6 +7608,25 @@ export class Renderer3D {
     for (const tkey of [...this._fortByKey.keys()]) {
       if (!seen.has(tkey)) this._disposeFortHex(tkey);
     }
+  }
+
+  /** Build / refresh one hex's fort wall meshes under `tkey`, recording it in
+   *  `seen`. Shared by the entrance hex and (P4b) its footprint hex. Empty
+   *  `dirs` (every edge interior to the compound) disposes any existing meshes
+   *  and registers nothing — the final dispose sweep then forgets the hex. */
+  _syncFortHex(tkey, tile, dirs, style, seen) {
+    if (!dirs.length) { this._disposeFortHex(tkey); return; }
+    seen.add(tkey);
+    const sig = `${style.kind}|${dirs.join(',')}`;
+    const existing = this._fortByKey.get(tkey);
+    if (!existing || existing.sig !== sig) {
+      if (existing) this._disposeFortHex(tkey);
+      const entry = this._buildFortMeshesForHex(tile, dirs, style);
+      entry.sig = sig;
+      this._fortByKey.set(tkey, entry);
+    }
+    // Re-apply fog tint every draw (fog can change without the wall changing).
+    this._applyFortFog(tkey);
   }
 
   /** Build the wall/stake meshes for one fortified hex. Returns
@@ -15336,6 +15369,20 @@ export function buildRoadNetworkStrokes(tiles, hexKeyFn = hexKey) {
     }
     if (nbrs.length === 0) continue;
     const strokes = networkStrokesForTile(tile, nbrs, { kind: 'road' });
+    // P4b: the door stub above terminates at the shared edge with the footprint.
+    // Extend it INTO the footprint hex so the ribbon meets the building's door —
+    // i.e. continue to the building's NUDGED world position (the same x/z the GLB
+    // is drawn at). Render-only; tile.roadDirs is still untouched.
+    if (isBuildingEntrance(tile) && doorStubDirection(tile) >= 0) {
+      const [fc, fr] = tile.footprintHexes[0].split(',').map(Number);
+      const here   = hexToWorld(tile.col, tile.row);
+      const fworld = hexToWorld(fc, fr);
+      const e      = _edgeTo(here, fworld);
+      const nudged = buildingNudgedPosition(
+        { x: fworld.x, z: fworld.z }, { x: here.x, z: here.z }, BUILDING_ENTRANCE_NUDGE,
+      );
+      extendDoorStub(strokes, { x: e.mx, z: e.mz }, nudged);
+    }
     if (strokes.length > 0) out.push({ tile, strokes });
   }
   return out;

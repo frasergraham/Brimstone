@@ -111,3 +111,60 @@ export function buildingFitScale(bboxXZ, target = TARGET_BUILDING_GROUND_SPAN) {
   if (!(span > 1e-6)) return null;
   return target / span;
 }
+
+/** P4b — fortification edge masks for a building COMPOUND, treating the
+ *  passable ENTRANCE hex and its impassable FOOTPRINT hex as ONE walled
+ *  enclosure. Returns `{ entrance, footprint }`, each an array of edge-direction
+ *  indices (0..5, odd-r W/NW/NE/E/SE/SW order — the SAME convention as
+ *  renderer-3d's `fortNeighborOffset`) that should carry a wall segment.
+ *
+ *  Rule (per hex): an edge gets a wall iff the neighbour ACROSS it is NOT part
+ *  of any fortified compound. `isFortifiedCompoundAt(col, row)` is the caller-
+ *  supplied predicate — true when that hex is a fortified entrance OR a footprint
+ *  hex of a fortified entrance. Because the partner hex of THIS compound is
+ *  itself "in the compound", the SHARED edge between entrance and footprint comes
+ *  back bare automatically (no special-casing). Adjacent fortified compounds
+ *  merge the same way — their touching edges stay bare. Off-map / unfortified
+ *  neighbours → wall.
+ *
+ *  `footprintTile` may be null — a fortified hex with no footprint (open ground
+ *  the hero fortified, or a legacy orphan building). Then `footprint` is `[]`
+ *  and `entrance` degenerates to the plain per-hex perimeter rule. Pure. */
+export function compoundFortifyEdges(entranceTile, footprintTile, isFortifiedCompoundAt) {
+  const edgesFor = (col, row) => {
+    const dirs = (row & 1) ? DIRS_ODD : DIRS_EVEN;
+    const out = [];
+    for (let d = 0; d < 6; d++) {
+      if (!isFortifiedCompoundAt(col + dirs[d][0], row + dirs[d][1])) out.push(d);
+    }
+    return out;
+  };
+  return {
+    entrance: entranceTile ? edgesFor(entranceTile.col ?? 0, entranceTile.row ?? 0) : [],
+    footprint: footprintTile ? edgesFor(footprintTile.col ?? 0, footprintTile.row ?? 0) : [],
+  };
+}
+
+/** P4b — continue the door-stub road INTO the footprint hex so the ribbon meets
+ *  the building's door. `strokes` are the world-XZ polylines that
+ *  `networkStrokesForTile` returned for a building entrance; the synthetic
+ *  footprint neighbour gives one stroke whose far end sits at the shared-edge
+ *  midpoint `edgeMid`. We extend THAT stroke past the edge to `buildingWorld`
+ *  (the nudged position the GLB/artwork is drawn at), so the road visibly enters
+ *  the footprint hex.
+ *
+ *  Matches the stroke whose START or END coincides with `edgeMid` and pushes /
+ *  unshifts `buildingWorld` onto the matching end (preserving travel order, so
+ *  the road runs entrance-centre → edge → into the footprint). Mutates and
+ *  returns `strokes`; no-op when no endpoint matches. Pure (no Babylon). */
+export function extendDoorStub(strokes, edgeMid, buildingWorld, eps = 1e-6) {
+  if (!Array.isArray(strokes) || !edgeMid || !buildingWorld) return strokes;
+  const near = (p) => p && Math.abs(p.x - edgeMid.x) < eps && Math.abs(p.z - edgeMid.z) < eps;
+  const end = { x: buildingWorld.x, z: buildingWorld.z };
+  for (const s of strokes) {
+    if (!Array.isArray(s) || s.length < 2) continue;
+    if (near(s[s.length - 1])) { s.push(end); return strokes; }
+    if (near(s[0]))            { s.unshift(end); return strokes; }
+  }
+  return strokes;
+}

@@ -1765,46 +1765,65 @@ export class Renderer {
     // Drawn before the bridge early-return so bridge tiles with fortifications
     // still show a ring around the hex perimeter. The water bezier and road
     // strip in _drawRiverLayer/_drawRoadLayer overlay the hex centre, not the
-    // outline, so the ring remains visible.
+    // outline, so the ring remains visible. P4b: for a fortified building
+    // entrance the COMPOUND ring also wraps the footprint hex — that second ring
+    // is drawn in `_drawBuildingArt` (Pass 2, after every tile's terrain fill) so
+    // the footprint hex's own fill can't overdraw it. fortifyLevel lives on the
+    // entrance only; the footprint inherits the ring visually.
     if (tile.fortifyLevel > 0) {
-      const lvl = tile.fortifyLevel;
-      const fortPalette = [
-        null,
-        [160, 100,  55],   // 1 — amber/wood palisade
-        [120, 135, 148],   // 2 — rough stone
-        [180, 196, 210],   // 3 — dressed silver steel
-        [205, 165,  35],   // 4 — iron-gilt ramparts
-        [230, 190,  55],   // 5 — gilded bulwark
-        [255, 220,  90],   // 6 — radiant bastion
-      ];
-      const [fr, fg, fb] = fortPalette[Math.min(lvl, 6)];
-      const alpha = Math.min(0.95, 0.5 + lvl * 0.08);
-      const lw    = Math.min(lvl * 2, 12);
-
-      _traceHexPath(ctx, x, y, fillSize);
-
-      // Outer diffuse glow
-      ctx.strokeStyle = `rgba(${fr},${fg},${fb},0.18)`;
-      ctx.lineWidth   = lw + 5;
-      ctx.stroke();
-
-      // Main fort ring
-      ctx.strokeStyle = `rgba(${fr},${fg},${fb},${alpha})`;
-      ctx.lineWidth   = lw;
-      ctx.stroke();
-
-      // Inner highlight rim for level 2+ (lighter edge for depth)
-      if (lvl >= 2) {
-        _traceHexPath(ctx, x, y, hs - 1 - lw * 0.6);
-        ctx.strokeStyle = `rgba(${Math.min(255, fr + 65)},${Math.min(255, fg + 65)},${Math.min(255, fb + 65)},0.45)`;
-        ctx.lineWidth   = 1;
-        ctx.stroke();
-      }
+      this._drawFortRing(x, y, tile.fortifyLevel);
     }
 
     // Bridge tiles: only the water background is drawn here.
     // The water bezier and road strip are layered on top in _drawRiverLayer / _drawRoadLayer.
     if (isBridge(tile)) return;
+  }
+
+  /** Draw the tiered fortification ring (outer glow + main ring + inner
+   *  highlight) centred at canvas `(cx, cy)` for fort `lvl` (1..6). Extracted so
+   *  the entrance hex (Pass 1) and — for a fortified building compound — its
+   *  footprint hex (Pass 2) render the identical indicator. The 2D ring is a
+   *  stylised perimeter GLOW, not literal per-edge walls, so the compound reads
+   *  as a ring on each of its two hexes (the precise "shared edge stays bare"
+   *  per-edge rule is realised in the 3D renderer's wall meshes via
+   *  `compoundFortifyEdges`). */
+  _drawFortRing(cx, cy, lvl) {
+    const ctx = this.ctx;
+    const hs  = this.hexSize;
+    const tileImgs = this.useTileImages && this._tilemapImg;
+    const fillSize = tileImgs ? hs - 0.5 : hs - 1;
+    const fortPalette = [
+      null,
+      [160, 100,  55],   // 1 — amber/wood palisade
+      [120, 135, 148],   // 2 — rough stone
+      [180, 196, 210],   // 3 — dressed silver steel
+      [205, 165,  35],   // 4 — iron-gilt ramparts
+      [230, 190,  55],   // 5 — gilded bulwark
+      [255, 220,  90],   // 6 — radiant bastion
+    ];
+    const [fr, fg, fb] = fortPalette[Math.min(lvl, 6)];
+    const alpha = Math.min(0.95, 0.5 + lvl * 0.08);
+    const lw    = Math.min(lvl * 2, 12);
+
+    _traceHexPath(ctx, cx, cy, fillSize);
+
+    // Outer diffuse glow
+    ctx.strokeStyle = `rgba(${fr},${fg},${fb},0.18)`;
+    ctx.lineWidth   = lw + 5;
+    ctx.stroke();
+
+    // Main fort ring
+    ctx.strokeStyle = `rgba(${fr},${fg},${fb},${alpha})`;
+    ctx.lineWidth   = lw;
+    ctx.stroke();
+
+    // Inner highlight rim for level 2+ (lighter edge for depth)
+    if (lvl >= 2) {
+      _traceHexPath(ctx, cx, cy, hs - 1 - lw * 0.6);
+      ctx.strokeStyle = `rgba(${Math.min(255, fr + 65)},${Math.min(255, fg + 65)},${Math.min(255, fb + 65)},0.45)`;
+      ctx.lineWidth   = 1;
+      ctx.stroke();
+    }
   }
 
   // ── Building artwork (Pass 2) ──────────────────────────────────────────
@@ -1819,6 +1838,17 @@ export class Renderer {
     const hs  = this.hexSize;
     const tileImgs = this.useTileImages && this._tilemapImg;
     const fillSize = tileImgs ? hs - 0.5 : hs - 1;
+
+    // P4b: extend the fortification ring across the whole COMPOUND. The entrance
+    // hex's ring is drawn in Pass 1 (`_drawTile`); here — after every tile's
+    // terrain fill — we add the matching ring on the footprint hex so a fortified
+    // building reads as one enclosed structure rather than a half-walled hex.
+    // Drawn before the building art so the art sits on top, matching the entrance.
+    if (isBuildingEntrance(entranceTile) && entranceTile.fortifyLevel > 0) {
+      const [fc, fr] = entranceTile.footprintHexes[0].split(',').map(Number);
+      const { x: ffx, y: ffy } = this._toCanvas(fc, fr);
+      this._drawFortRing(ffx, ffy, entranceTile.fortifyLevel);
+    }
 
     // Where the artwork lands — the footprint hex, or the entrance for an orphan.
     const renderKey = buildingRenderHex(entranceTile);
@@ -2260,11 +2290,16 @@ export class Renderer {
         const [fc, fr] = tile.footprintHexes[0].split(',').map(Number);
         const { x, y } = this._toCanvas(col, row);
         const { x: fx, y: fy } = this._toCanvas(fc, fr);
-        const dx = fx - x, dy = fy - y;
-        const d  = Math.sqrt(dx * dx + dy * dy) || 1;
+        // P4b: continue the stub PAST the shared edge INTO the footprint hex so
+        // the road visibly enters the building's hex, terminating at the nudged
+        // building draw position (the same x/y `_drawBuildingArt` uses). Render-
+        // only; roadDirs untouched.
+        const nudged = buildingNudgedPosition(
+          { x: fx, z: fy }, { x, z: y }, BUILDING_ENTRANCE_NUDGE,
+        );
         ctx.beginPath();
         ctx.moveTo(x, y);
-        ctx.lineTo(x + dx / d * apothem, y + dy / d * apothem);
+        ctx.lineTo(nudged.x, nudged.z);
         ctx.stroke();
       }
     }
