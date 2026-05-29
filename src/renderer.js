@@ -6,9 +6,12 @@ import {
 } from './hex.js';
 import {
   TileType, TILE_COLOR, BUILDING_COLOR, BUILDING_LABEL, BUILDING_ICON,
-  PathType, baseOf, pathOf, hasBuilding, isRiver, isBridge,
+  PathType, baseOf, pathOf, hasBuilding, isBuildingEntrance, isRiver, isBridge,
 } from './tiles.js';
-import { buildingRenderHex } from './building-render.js';
+import {
+  buildingRenderHex, buildingNudgedPosition, doorStubDirection,
+  BUILDING_ENTRANCE_NUDGE,
+} from './building-render.js';
 import { ENTITY_COLOR, EntityType, SurvivorAbility, isLeaderType } from './entities.js';
 import { getVisiblePositions, sightRange, buildFogMovementHexes, computeLineOfSight } from './actions.js';
 import { getFaction } from './factions.js';
@@ -1820,7 +1823,15 @@ export class Renderer {
     // Where the artwork lands — the footprint hex, or the entrance for an orphan.
     const renderKey = buildingRenderHex(entranceTile);
     const [rc, rr]  = renderKey.split(',').map(Number);
-    const { x, y }  = this._toCanvas(rc, rr);
+    let { x, y }    = this._toCanvas(rc, rr);
+    // P4a: nudge the art off the footprint centre toward the entrance hex so it
+    // leans toward its door. Footprinted buildings only — an orphan (no
+    // footprint) draws on its own hex, unchanged.
+    if (isBuildingEntrance(entranceTile)) {
+      const { x: ex, y: ey } = this._toCanvas(entranceTile.col, entranceTile.row);
+      const nudged = buildingNudgedPosition({ x, z: y }, { x: ex, z: ey }, BUILDING_ENTRANCE_NUDGE);
+      x = nudged.x; y = nudged.z;
+    }
 
     // Building colour block (classic colour-fill mode only — in tilemap mode
     // the image overlay below provides the visual). Re-stroke the hex outline
@@ -2227,6 +2238,34 @@ export class Renderer {
           // Restore road lineWidth for subsequent tiles
           ctx.lineWidth = hs * 0.42;
         }
+      }
+    }
+
+    // ── P4a: implicit door stubs ──────────────────────────────────────────
+    // Every building ENTRANCE draws a short road stub from its centre to the
+    // edge it shares with its FOOTPRINT hex — the visual "door". Render-only:
+    // the data layer's roadDirs is untouched. Drawn even when the entrance has
+    // no road connection (a deliberate visual lie so an isolated building still
+    // reads as having a door). The entrance tile is skipped by the main road
+    // loop above (it's a building, not a ROAD/bridge tile), so no double-draw.
+    ctx.strokeStyle = TILE_COLOR[TileType.ROAD];
+    ctx.lineWidth   = hs * 0.42;
+    for (let row = 0; row < MAP_ROWS; row++) {
+      for (let col = 0; col < MAP_COLS; col++) {
+        const key = hexKey(col, row);
+        if (fogKnownHexes && !fogKnownHexes.has(key)) continue;
+        const tile = tiles.get(key);
+        if (!isBuildingEntrance(tile)) continue;
+        if (doorStubDirection(tile) < 0) continue;
+        const [fc, fr] = tile.footprintHexes[0].split(',').map(Number);
+        const { x, y } = this._toCanvas(col, row);
+        const { x: fx, y: fy } = this._toCanvas(fc, fr);
+        const dx = fx - x, dy = fy - y;
+        const d  = Math.sqrt(dx * dx + dy * dy) || 1;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + dx / d * apothem, y + dy / d * apothem);
+        ctx.stroke();
       }
     }
 

@@ -12,6 +12,9 @@ import {
   buildingRenderHex,
   buildingFacingYaw,
   buildingFitScale,
+  buildingNudgedPosition,
+  doorStubDirection,
+  BUILDING_ENTRANCE_NUDGE,
   TARGET_BUILDING_GROUND_SPAN,
 } from '../src/building-render.js';
 
@@ -173,18 +176,101 @@ describe('buildingFitScale', () => {
   });
 });
 
+// ── buildingNudgedPosition (P4a) ─────────────────────────────────────────────
+
+describe('buildingNudgedPosition', () => {
+  test('lerps the default fraction from footprint toward entrance', () => {
+    const fp = { x: 10, z: 4 };
+    const en = { x: 20, z: 4 };
+    const p = buildingNudgedPosition(fp, en);
+    assert.ok(Math.abs(p.x - (10 + 10 * BUILDING_ENTRANCE_NUDGE)) < 1e-9);
+    assert.ok(Math.abs(p.z - 4) < 1e-9);
+  });
+
+  test('lerps correctly for several entrance/footprint pairs and a custom nudge', () => {
+    const cases = [
+      { fp: { x: 0, z: 0 },  en: { x: 4, z: 8 },  n: 0.25 },
+      { fp: { x: -3, z: 5 }, en: { x: 1, z: -1 }, n: 0.5 },
+      { fp: { x: 7, z: 7 },  en: { x: 7, z: 7 },  n: 0.15 }, // coincident → identity
+    ];
+    for (const { fp, en, n } of cases) {
+      const p = buildingNudgedPosition(fp, en, n);
+      assert.ok(Math.abs(p.x - (fp.x + (en.x - fp.x) * n)) < 1e-9);
+      assert.ok(Math.abs(p.z - (fp.z + (en.z - fp.z) * n)) < 1e-9);
+    }
+  });
+
+  test('nudge=0 is identity; nudge=1 lands on the entrance', () => {
+    const fp = { x: 2, z: 9 }, en = { x: 12, z: -3 };
+    const at0 = buildingNudgedPosition(fp, en, 0);
+    assert.ok(Math.abs(at0.x - fp.x) < 1e-9 && Math.abs(at0.z - fp.z) < 1e-9);
+    const at1 = buildingNudgedPosition(fp, en, 1);
+    assert.ok(Math.abs(at1.x - en.x) < 1e-9 && Math.abs(at1.z - en.z) < 1e-9);
+  });
+
+  test('identity (no shift) when there is no entrance world — orphan/no-footprint', () => {
+    const fp = { x: 5, z: -2 };
+    const p = buildingNudgedPosition(fp, null);
+    assert.ok(Math.abs(p.x - fp.x) < 1e-9 && Math.abs(p.z - fp.z) < 1e-9);
+  });
+});
+
+// ── doorStubDirection (P4a) ──────────────────────────────────────────────────
+
+describe('doorStubDirection', () => {
+  // odd-r deltas (mirror hex.js), indexed by dir 0..5.
+  const DIRS_EVEN = [[-1, 0], [-1, -1], [0, -1], [1, 0], [0, 1], [-1, 1]];
+  const DIRS_ODD  = [[-1, 0], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1]];
+
+  test('returns the correct dir for all 6 neighbours of an even-row entrance', () => {
+    const col = 5, row = 4; // even row → DIRS_EVEN
+    for (let d = 0; d < 6; d++) {
+      const fp = hexKey(col + DIRS_EVEN[d][0], row + DIRS_EVEN[d][1]);
+      const e = makeEntrance(col, row, col + DIRS_EVEN[d][0], row + DIRS_EVEN[d][1]);
+      assert.equal(doorStubDirection(e, fp), d, `even-row dir ${d}`);
+      assert.equal(doorStubDirection(e), d, `even-row dir ${d} (default footprint)`);
+    }
+  });
+
+  test('returns the correct dir for all 6 neighbours of an odd-row entrance', () => {
+    const col = 5, row = 5; // odd row → DIRS_ODD
+    for (let d = 0; d < 6; d++) {
+      const e = makeEntrance(col, row, col + DIRS_ODD[d][0], row + DIRS_ODD[d][1]);
+      assert.equal(doorStubDirection(e), d, `odd-row dir ${d}`);
+    }
+  });
+
+  test('returns -1 for a non-adjacent footprint (defensive)', () => {
+    const e = makeEntrance(5, 5, 6, 5);
+    assert.equal(doorStubDirection(e, hexKey(9, 9)), -1);
+  });
+
+  test('returns -1 for an orphan with empty footprintHexes (no door stub / no nudge)', () => {
+    const orphan = new Tile(3, 4, TileType.DIRT);
+    orphan.structure = StructureType.BUILDING;
+    orphan.building  = BuildingType.CHURCH;
+    assert.equal(orphan.footprintHexes.length, 0);
+    assert.equal(doorStubDirection(orphan), -1);
+  });
+});
+
 // ── _buildingPlacement — relocation + facing ─────────────────────────────────
 
 describe('Renderer3D._buildingPlacement', () => {
-  test('footprinted building → centred on the footprint hex, facing the entrance', () => {
+  test('footprinted building → on the footprint hex nudged toward the entrance, facing it', () => {
     const r = newRenderer();
     const entrance = makeEntrance(5, 5, 6, 5);
     const ew = hexToWorld(5, 5);
     const fw = hexToWorld(6, 5);
     const p = r._buildingPlacement(entrance, ew.x, ew.z);
     assert.equal(p.isFootprint, true);
-    assert.ok(Math.abs(p.bx - fw.x) < 1e-9, 'centred on footprint X (no slot offset)');
-    assert.ok(Math.abs(p.bz - fw.z) < 1e-9, 'centred on footprint Z (no slot offset)');
+    // P4a: nudged BUILDING_ENTRANCE_NUDGE of the way from footprint toward entrance.
+    const expect = buildingNudgedPosition(fw, ew, BUILDING_ENTRANCE_NUDGE);
+    assert.ok(Math.abs(p.bx - expect.x) < 1e-9, 'nudged toward entrance X');
+    assert.ok(Math.abs(p.bz - expect.z) < 1e-9, 'nudged toward entrance Z');
+    // Still off the footprint centre and not all the way to the entrance.
+    assert.ok(Math.abs(p.bx - fw.x) > 1e-9, 'shifted off footprint centre');
+    assert.ok(Math.abs(p.bx - ew.x) > 1e-9, 'not sitting on the entrance');
     assert.ok(Math.abs(p.yaw - buildingFacingYaw(ew, fw)) < 1e-9, 'yaw faces entrance');
   });
 
@@ -217,9 +303,10 @@ describe('Renderer3D._buildBuildingInstance — footprint relocation', () => {
     const inst = r._buildBuildingInstance(entrance, ew.x, ew.z, null);
     assert.ok(inst, 'instance built');
 
-    // Centred on the footprint hex (no NE slot offset applied).
-    assert.ok(Math.abs(inst.position.x - fw.x) < 1e-9, `x ${inst.position.x} != footprint ${fw.x}`);
-    assert.ok(Math.abs(inst.position.z - fw.z) < 1e-9, `z ${inst.position.z} != footprint ${fw.z}`);
+    // On the footprint hex, nudged toward the entrance (P4a) — no NE slot offset.
+    const expect = buildingNudgedPosition(fw, ew, BUILDING_ENTRANCE_NUDGE);
+    assert.ok(Math.abs(inst.position.x - expect.x) < 1e-9, `x ${inst.position.x} != nudged ${expect.x}`);
+    assert.ok(Math.abs(inst.position.z - expect.z) < 1e-9, `z ${inst.position.z} != nudged ${expect.z}`);
     // And NOT at the entrance hex centre.
     assert.ok(Math.abs(inst.position.x - ew.x) > 1e-6 || Math.abs(inst.position.z - ew.z) > 1e-6,
       'instance must not sit on the entrance hex');

@@ -13,6 +13,20 @@
 import { hexKey } from './hex.js';
 import { isBuildingEntrance } from './tiles.js';
 
+// odd-r offset neighbour deltas, dir index 0..5 (mirrors hex.js DIRS_*). We
+// replicate them here rather than calling getNeighbors() because getNeighbors
+// filters out negative-coord neighbours, which would shift the dir indices —
+// `doorStubDirection` must return the stable odd-r direction.
+const DIRS_EVEN = [[-1, 0], [-1, -1], [0, -1], [1, 0], [0, 1], [-1, 1]];
+const DIRS_ODD  = [[-1, 0], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1]];
+
+// P4a — how far (fraction of the footprint→entrance vector) to nudge a building
+// MODEL/ARTWORK off its footprint-hex centre toward the entrance hex, so the
+// building visibly leans toward its door rather than sitting dead-centre on the
+// footprint. 0 = no shift (centred on footprint), 1 = sit on the entrance.
+// Operator-dialable knob for the visual-iteration pass.
+export const BUILDING_ENTRANCE_NUDGE = 0.15;
+
 // Target ground span (world units) a building MODEL should fill in plan view.
 // In the 3D renderer one hex has radius HEX_RADIUS_WORLD = 1; we uniform-scale
 // a building so its larger XZ bbox axis lands at this span — filling roughly one
@@ -46,6 +60,44 @@ export function buildingFacingYaw(entranceWorld, footprintWorld) {
   if (dx === 0 && dz === 0) return 0;
   const yaw = Math.atan2(dx, dz);
   return yaw < 0 ? yaw + Math.PI * 2 : yaw;
+}
+
+/** P4a — Lerp a building's draw position from its FOOTPRINT-hex centre toward
+ *  its ENTRANCE-hex centre by `nudge` (0..1). Both inputs are world positions
+ *  `{x, z}` (the y/up component is ignored). Returns `{x, z}`.
+ *
+ *  When `entranceWorld` is null/undefined the result is the footprint position
+ *  unchanged — so an orphan building with no footprint (caller passes the
+ *  entrance world for both, or null for the second arg) draws exactly where it
+ *  did before, no shift. */
+export function buildingNudgedPosition(footprintWorld, entranceWorld, nudge = BUILDING_ENTRANCE_NUDGE) {
+  const fx = footprintWorld?.x ?? 0;
+  const fz = footprintWorld?.z ?? 0;
+  if (!entranceWorld) return { x: fx, z: fz };
+  const ex = entranceWorld.x ?? fx;
+  const ez = entranceWorld.z ?? fz;
+  return { x: fx + (ex - fx) * nudge, z: fz + (ez - fz) * nudge };
+}
+
+/** P4a — odd-r dir index (0..5) FROM a building entrance TOWARD its footprint
+ *  hex — i.e. which hex edge the "door" stub crosses. `footprintHex` is a
+ *  "col,row" hexKey; when omitted it falls back to the entrance's first
+ *  footprint hex. Returns -1 when there's no footprint or it isn't an adjacent
+ *  neighbour (defensive — a well-formed footprint is always adjacent). Both
+ *  renderers use this to locate the implicit door-direction neighbour they add
+ *  alongside the real `roadDirs` at render time (the data layer is untouched). */
+export function doorStubDirection(entranceTile, footprintHex) {
+  if (!entranceTile) return -1;
+  const fp = footprintHex
+    ?? (isBuildingEntrance(entranceTile) ? entranceTile.footprintHexes[0] : null);
+  if (!fp) return -1;
+  const col = entranceTile.col ?? 0;
+  const row = entranceTile.row ?? 0;
+  const dirs = (row & 1) ? DIRS_ODD : DIRS_EVEN;
+  for (let i = 0; i < 6; i++) {
+    if (hexKey(col + dirs[i][0], row + dirs[i][1]) === fp) return i;
+  }
+  return -1;
 }
 
 /** Uniform scale factor to fit a building's XZ footprint into ~1 hex of ground.

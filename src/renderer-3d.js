@@ -29,6 +29,7 @@ import {
   baseOf,
   pathOf,
   hasBuilding,
+  isBuildingEntrance,
   isBuildingFootprint,
   isRiver,
   isBridge,
@@ -51,6 +52,9 @@ import {
   buildingRenderHex,
   buildingFacingYaw,
   buildingFitScale,
+  buildingNudgedPosition,
+  doorStubDirection,
+  BUILDING_ENTRANCE_NUDGE,
   TARGET_BUILDING_GROUND_SPAN,
 } from './building-render.js';
 // Re-export so 3D-renderer consumers/tests can import the ground-span knob
@@ -2827,7 +2831,12 @@ export class Renderer3D {
     const isFootprint = !(rc === tile.col && rr === tile.row);
     if (isFootprint) {
       const fw = hexToWorld(rc, rr);
-      return { bx: fw.x, bz: fw.z, yaw: buildingFacingYaw({ x, z }, fw), isFootprint: true };
+      // P4a: nudge the model off the footprint centre toward the entrance hex so
+      // it visibly leans toward its door. Yaw still derives from the true
+      // footprint→entrance vector (the nudge is colinear, so direction is
+      // unchanged). Applies to both the GLB instance and the procedural fallback.
+      const nudged = buildingNudgedPosition(fw, { x, z }, BUILDING_ENTRANCE_NUDGE);
+      return { bx: nudged.x, bz: nudged.z, yaw: buildingFacingYaw({ x, z }, fw), isFootprint: true };
     }
     const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
     return {
@@ -15310,11 +15319,20 @@ export function buildRoadNetworkStrokes(tiles, hexKeyFn = hexKey) {
     if (pathOf(tile) !== PathType.ROAD
       && !isBridge(tile)
       && !hasBuilding(tile)) continue;
-    if (!tile.roadDirs || tile.roadDirs.size === 0) continue;
     const nbrs = [];
-    for (const k of tile.roadDirs) {
-      const nt = tiles.get(k);
-      if (nt) nbrs.push({ col: nt.col, row: nt.row });
+    if (tile.roadDirs) {
+      for (const k of tile.roadDirs) {
+        const nt = tiles.get(k);
+        if (nt) nbrs.push({ col: nt.col, row: nt.row });
+      }
+    }
+    // P4a: implicit door stub — a building entrance always draws a road toward
+    // its FOOTPRINT hex (the door), even with no real road connection (path ===
+    // null). Render-only: tile.roadDirs is NOT modified. Dedup against a real
+    // roadDir that already points at the footprint (rare last-resort BFS route).
+    if (isBuildingEntrance(tile) && doorStubDirection(tile) >= 0) {
+      const [fc, fr] = tile.footprintHexes[0].split(',').map(Number);
+      if (!nbrs.some(n => n.col === fc && n.row === fr)) nbrs.push({ col: fc, row: fr });
     }
     if (nbrs.length === 0) continue;
     const strokes = networkStrokesForTile(tile, nbrs, { kind: 'road' });
