@@ -43,24 +43,61 @@ const FakeBABYLON = {
   Material: { AllDirtyFlag: 0x7fffffff },
 };
 
-function buildingTile(col, row) {
-  return { col, row, building: 'inn', structure: 'building' };
+function buildingTile(col, row, footprintHexes = []) {
+  return { col, row, building: 'inn', structure: 'building', footprintHexes };
+}
+function footprintTile(col, row, entranceKey) {
+  return { col, row, building: null, buildingFootprintOf: entranceKey };
+}
+function orphanBuildingTile(col, row) {
+  return { col, row, building: 'inn', structure: 'building', footprintHexes: [] };
 }
 function plainTile(col, row) {
   return { col, row, building: null };
 }
 
 describe('buildFoggedBuildingTileList', () => {
-  test('returns building centres (hex + NE slot) only for fogged building tiles', () => {
+  test('modern compound: emits the nudged footprint→entrance midpoint when the FOOTPRINT hex is fogged', async () => {
+    const { buildingNudgedPosition, BUILDING_ENTRANCE_NUDGE } =
+      await import('../src/building-render.js');
     const tiles = new Map();
-    tiles.set(hexKey(2, 2), buildingTile(2, 2)); // fogged building → included
-    tiles.set(hexKey(3, 3), buildingTile(3, 3)); // unfogged building → excluded
-    tiles.set(hexKey(2, 4), plainTile(2, 4));     // fogged non-building → excluded
+    // Entrance at (2,2), footprint at (3,2). Footprint is fogged; the building
+    // should appear at the nudged position lerped 15% toward (2,2).
+    const fpKey = hexKey(3, 2);
+    tiles.set(hexKey(2, 2), buildingTile(2, 2, [fpKey]));
+    tiles.set(fpKey, footprintTile(3, 2, hexKey(2, 2)));
     const state = { tiles };
-    const fogged = new Set([hexKey(2, 2), hexKey(2, 4)]);
+    const fogged = new Set([fpKey]);
 
     const list = buildFoggedBuildingTileList(state, fogged);
-    assert.equal(list.length, 1, 'only the fogged building tile');
+    assert.equal(list.length, 1, 'one fogged building');
+
+    const eW = hexToWorld(2, 2);
+    const fW = hexToWorld(3, 2);
+    const expected = buildingNudgedPosition(fW, eW, BUILDING_ENTRANCE_NUDGE);
+    assert.ok(Math.abs(list[0].x - expected.x) < 1e-9, `x ${list[0].x} != ${expected.x}`);
+    assert.ok(Math.abs(list[0].z - expected.z) < 1e-9, `z ${list[0].z} != ${expected.z}`);
+  });
+
+  test('modern compound: entrance-fogged but FOOTPRINT not fogged → excluded (the building is visibly on the unfogged hex)', () => {
+    const tiles = new Map();
+    const fpKey = hexKey(3, 2);
+    tiles.set(hexKey(2, 2), buildingTile(2, 2, [fpKey]));
+    tiles.set(fpKey, footprintTile(3, 2, hexKey(2, 2)));
+    // Only the entrance is fogged. The building visual sits on (3,2) which is
+    // not fogged, so it shouldn't darken.
+    const fogged = new Set([hexKey(2, 2)]);
+    assert.deepEqual(buildFoggedBuildingTileList({ tiles }, fogged), []);
+  });
+
+  test('legacy orphan: still uses entrance + NE-slot position (prod-compatible)', () => {
+    const tiles = new Map();
+    tiles.set(hexKey(2, 2), orphanBuildingTile(2, 2));
+    tiles.set(hexKey(2, 4), plainTile(2, 4));
+    const fogged = new Set([hexKey(2, 2), hexKey(2, 4)]);
+
+    const list = buildFoggedBuildingTileList({ tiles }, fogged);
+    assert.equal(list.length, 1);
 
     const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
     const { x, z } = hexToWorld(2, 2);
@@ -69,7 +106,7 @@ describe('buildFoggedBuildingTileList', () => {
   });
 
   test('empty when nothing fogged or no state', () => {
-    const tiles = new Map([[hexKey(1, 1), buildingTile(1, 1)]]);
+    const tiles = new Map([[hexKey(1, 1), orphanBuildingTile(1, 1)]]);
     assert.deepEqual(buildFoggedBuildingTileList({ tiles }, new Set()), []);
     assert.deepEqual(buildFoggedBuildingTileList(null, new Set([hexKey(1, 1)])), []);
     assert.deepEqual(buildFoggedBuildingTileList({ tiles }, null), []);

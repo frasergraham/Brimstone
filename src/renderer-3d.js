@@ -14515,20 +14515,44 @@ export const CENTRE_SLOT_INDEX = 0;
 export const BUILDING_SLOT_INDEX = 1;
 
 /** Pure helper: the world XZ centres of every fogged building tile, used to feed
- *  the FogDarkenPlugin uniform. A building instance sits at its hex centre plus
- *  the NE building-slot offset (`TILE_SLOTS[BUILDING_SLOT_INDEX]`), and the GLB
- *  geometry is XZ-centred on that pivot — so the building's footprint centre is
- *  `hexToWorld(col,row) + slot`. Returns `[{x, z}, ...]` for tiles that both
- *  carry a building AND are in `fogActiveSet`. No DOM/Babylon dependency. */
+ *  the FogDarkenPlugin uniform. Returns `[{x, z}, ...]` for buildings whose
+ *  render hex is fogged. No DOM/Babylon dependency.
+ *
+ *  The building's render position depends on whether the building is a
+ *  modern footprint-bearing entrance or a legacy 1-hex orphan:
+ *  - footprint-bearing: the GLB sits at `buildingNudgedPosition(footprintWorld,
+ *    entranceWorld, BUILDING_ENTRANCE_NUDGE)` — the footprint hex centre
+ *    nudged ~15% toward the entrance (P4/P4a). The fog hex is the FOOTPRINT
+ *    (the visible building's hex), not the entrance — a building "reads as
+ *    in fog" when its visible geometry sits on a fogged hex.
+ *  - orphan (empty `footprintHexes`): the GLB sits at `entrance + slot`
+ *    (legacy NE-slot position) and the fog hex is the entrance. Matches the
+ *    pre-P4 behavior that shipped in prod.
+ */
 export function buildFoggedBuildingTileList(state, fogActiveSet) {
   const out = [];
   if (!state?.tiles || !fogActiveSet || fogActiveSet.size === 0) return out;
   const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
   for (const tile of state.tiles.values()) {
     if (!hasBuilding(tile)) continue;
-    if (!fogActiveSet.has(hexKey(tile.col, tile.row))) continue;
-    const { x, z } = hexToWorld(tile.col, tile.row);
-    out.push({ x: x + slot.x, z: z + slot.z });
+    const fpKey = Array.isArray(tile.footprintHexes) && tile.footprintHexes.length > 0
+      ? tile.footprintHexes[0] : null;
+    if (fpKey) {
+      // Modern compound building: fog test against the footprint hex, render
+      // position is the nudged footprint→entrance midpoint.
+      if (!fogActiveSet.has(fpKey)) continue;
+      const [fcStr, frStr] = fpKey.split(',');
+      const fc = +fcStr, fr = +frStr;
+      const fW = hexToWorld(fc, fr);
+      const eW = hexToWorld(tile.col, tile.row);
+      const p = buildingNudgedPosition(fW, eW, BUILDING_ENTRANCE_NUDGE);
+      out.push({ x: p.x, z: p.z });
+    } else {
+      // Legacy orphan: building still at entrance + slot offset.
+      if (!fogActiveSet.has(hexKey(tile.col, tile.row))) continue;
+      const { x, z } = hexToWorld(tile.col, tile.row);
+      out.push({ x: x + slot.x, z: z + slot.z });
+    }
   }
   return out;
 }
