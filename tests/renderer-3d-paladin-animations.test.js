@@ -23,6 +23,7 @@ import {
   Renderer3D,
   selectMoveAnimKind,
   RUN_MIN_PATH_LEN,
+  RUNNING_ANIM_ENABLED,
   RUNNING_MODEL_FILE,
   computeRootStrideLength,
 } from '../src/renderer-3d.js';
@@ -41,17 +42,29 @@ describe('selectMoveAnimKind', () => {
     assert.equal(RUNNING_MODEL_FILE, 'running.glb');
   });
 
+  // Flag-gate: when the running asset's root motion is unusable (e.g. the
+  // current Mixamo export with stride < 1 src-unit), RUNNING_ANIM_ENABLED is
+  // false and every move plays walking — so the next two test groups branch
+  // on the live flag rather than assuming it's flipped on.
+  if (RUNNING_ANIM_ENABLED) {
+    test('two-hop path (length 3: origin + 2 dests) selects running', () => {
+      assert.equal(selectMoveAnimKind(3), 'running');
+    });
+
+    test('longer multi-hop paths keep selecting running', () => {
+      assert.equal(selectMoveAnimKind(4), 'running');
+      assert.equal(selectMoveAnimKind(8), 'running');
+    });
+  } else {
+    test('feature flag disabled — every multi-hop selects walking', () => {
+      assert.equal(selectMoveAnimKind(3), 'walking');
+      assert.equal(selectMoveAnimKind(4), 'walking');
+      assert.equal(selectMoveAnimKind(8), 'walking');
+    });
+  }
+
   test('single-hop path (length 2: origin + 1 dest) selects walking', () => {
     assert.equal(selectMoveAnimKind(2), 'walking');
-  });
-
-  test('two-hop path (length 3: origin + 2 dests) selects running', () => {
-    assert.equal(selectMoveAnimKind(3), 'running');
-  });
-
-  test('longer multi-hop paths keep selecting running', () => {
-    assert.equal(selectMoveAnimKind(4), 'running');
-    assert.equal(selectMoveAnimKind(8), 'running');
   });
 
   test('degenerate / sub-2 path lengths fall back to walking (never run)', () => {
@@ -108,7 +121,10 @@ describe('Renderer3D.addMoveAnim — running vs walking by hop count', () => {
     assert.equal(inst._activeRunMoveIds.has('e1'), false);
   });
 
-  test('multi-hop move flags the run mid-flight and lazy-loads running.glb', () => {
+  test(
+    'multi-hop move flags the run mid-flight and lazy-loads running.glb',
+    { skip: !RUNNING_ANIM_ENABLED && 'running anim disabled; multi-hop plays walking' },
+    () => {
     const standee = makeStandee();
     const inst = makeMoveInst(standee);
     let ensured = 0;
@@ -142,7 +158,10 @@ describe('Renderer3D.addMoveAnim — running vs walking by hop count', () => {
       'single-hop move clears the run flag even before completion');
   });
 
-  test('multi-hop run sets the RUN group speedRatio to its CONSTANT base (distance-independent)', () => {
+  test(
+    'multi-hop run sets the RUN group speedRatio to its CONSTANT base (distance-independent)',
+    { skip: !RUNNING_ANIM_ENABLED && 'running anim disabled; multi-hop plays walking' },
+    () => {
     const inst = makeMoveInst(makeStandee());
     inst._ensureRunningAnimation = () => {};
     inst._scene.beginDirectAnimation = () => {}; // hold in flight
@@ -160,7 +179,10 @@ describe('Renderer3D.addMoveAnim — running vs walking by hop count', () => {
     assert.equal(walkGroup.speedRatio, 1.0, 'walk group untouched on a run move');
   });
 
-  test('run cone-slide DURATION scales with distance (speed matched to distance)', () => {
+  test(
+    'run cone-slide DURATION scales with distance (speed matched to distance)',
+    { skip: !RUNNING_ANIM_ENABLED && 'running anim disabled; multi-hop plays walking' },
+    () => {
     // Capture the end-frame (FRAMES_MOVE) handed to beginDirectAnimation — that
     // is the cone-slide window. A 4-hex run must take ~2× the frames of a 2-hex
     // run so ground-travel speed stays constant at a running pace (a longer run

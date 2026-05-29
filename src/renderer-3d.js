@@ -491,11 +491,22 @@ export const PALADIN_WALK_SUSTAIN_MS = 700;
 // enough to read as a run. Tunable in one place.
 export const RUN_MIN_PATH_LEN = 3;
 
+/** Feature flag: gates the run-on-multi-hex behavior. DISABLED today because
+ *  the current Mixamo running.glb ships with a flat root track ("In Place"
+ *  was on at export — stride < 1 src-unit, no usable foot-plant data). When
+ *  a running source with real root motion lands in assets/models/, flip this
+ *  to `true` and selectMoveAnimKind starts picking running for ≥2-hex moves
+ *  again. Walking handles every move in the meantime (clip plays at
+ *  `walking-base × distMul` so multi-hex moves visually fast-walk). */
+export const RUNNING_ANIM_ENABLED = false;
+
 /** Choose the move-animation clip for a path of `pathLen` waypoints (the
  *  origin hex plus each destination hex traversed in one move step). Returns
  *  'running' for a multi-hop move (pathLen ≥ RUN_MIN_PATH_LEN, i.e. 2+ hexes
- *  crossed) and 'walking' for a single-hop move. Pure; exported for tests. */
+ *  crossed) when RUNNING_ANIM_ENABLED, else 'walking'. Pure; exported for
+ *  tests. */
 export function selectMoveAnimKind(pathLen) {
+  if (!RUNNING_ANIM_ENABLED) return 'walking';
   return (typeof pathLen === 'number' && pathLen >= RUN_MIN_PATH_LEN)
     ? 'running' : 'walking';
 }
