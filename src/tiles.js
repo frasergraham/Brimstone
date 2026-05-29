@@ -229,6 +229,16 @@ export class Tile {
     this.resource = null;   // ResourceType or null (on open tiles)
     this.fortifyLevel = 0;  // 0=none, 1..6=fortified (see getFortifyCombatBonus)
     this.roadDirs = new Set(); // hexKeys of road-connected neighbours (set at map gen time)
+    // Building footprint (P0 of the building-footprint rework). A building is a
+    // compound object: its canonical "building tile" stays passable and is the
+    // ENTRANCE; one (schema allows N) adjacent hex becomes the FOOTPRINT — fully
+    // impassable, carries the rendered model. Both fields ALWAYS present.
+    //   footprintHexes:      set on the ENTRANCE tile → array of "col,row" keys
+    //                        of its footprint hexes. [] = legacy/unmigrated.
+    //   buildingFootprintOf: set on each FOOTPRINT tile → "col,row" of its
+    //                        entrance. null on every other tile.
+    this.footprintHexes = [];        // string[] of "col,row" keys
+    this.buildingFootprintOf = null; // "col,row" key or null
   }
 }
 
@@ -326,6 +336,32 @@ export function isBridge(tile) {
 // Is there a building on this tile?
 export function hasBuilding(tile) {
   return structureOf(tile) === StructureType.BUILDING;
+}
+
+// ── Building-footprint predicates (P0) ──────────────────────────────────────
+// A building is a 2-hex (schema: N-hex) compound: a passable ENTRANCE tile (the
+// one carrying `building`) plus its impassable FOOTPRINT hex(es). These three
+// predicates classify a tile's role. They DO NOT replace `hasBuilding` — that
+// keeps its existing semantics; later phases retrofit callers.
+
+// The passable entrance of a footprinted building. A building tile that carries
+// a non-empty `footprintHexes` list. A legacy/unmigrated building (empty list)
+// is NOT an entrance under this predicate.
+export function isBuildingEntrance(tile) {
+  return hasBuilding(tile)
+    && Array.isArray(tile?.footprintHexes)
+    && tile.footprintHexes.length > 0;
+}
+
+// An impassable footprint hex — points back at its entrance via the
+// `buildingFootprintOf` back-pointer.
+export function isBuildingFootprint(tile) {
+  return tile?.buildingFootprintOf != null;
+}
+
+// Any hex that is part of a building object — either its entrance or a footprint.
+export function isBuildingTile(tile) {
+  return isBuildingEntrance(tile) || isBuildingFootprint(tile);
 }
 
 // "Road-like" for movement cost (1 instead of 2): a road, a bridge, or any
