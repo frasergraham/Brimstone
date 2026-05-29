@@ -100,6 +100,41 @@ export function doorStubDirection(entranceTile, footprintHex) {
   return -1;
 }
 
+// ─── Building signpost (P4c — 3D) ───────────────────────────────────────────
+// Each building is marked by a small wooden SIGNPOST at the "door side" of its
+// footprint: a vertical POST (thin cylinder) topped by a billboarded PLANK that
+// shows the building name. The post stays planted; the plank rotates around the
+// vertical axis to face the camera. These dimensions are the operator-dialable
+// knobs — the 3D renderer (`src/renderer-3d.js`) reads them when it builds the
+// post + plank meshes. Tweak here in one place; nothing else hard-codes them.
+
+/** Height (world units) of the signpost POST cylinder. ~⅓ of a hex tall, so
+ *  the plank reads as a roadside marker rather than a billboard tower. */
+export const SIGNPOST_POST_HEIGHT = 0.35;
+/** Diameter (world units) of the signpost POST cylinder — a thin fencepost. */
+export const SIGNPOST_POST_DIAMETER = 0.04;
+/** Width (world units) of the signpost PLANK (the name board). */
+export const SIGNPOST_PLANK_WIDTH = 0.55;
+/** Height (world units) of the signpost PLANK. */
+export const SIGNPOST_PLANK_HEIGHT = 0.18;
+
+/** World-XZ position for a building signpost: the midpoint of the shared edge
+ *  between the ENTRANCE hex and the building's FOOTPRINT hex — the "door side"
+ *  where the road stub meets the model. Two adjacent hex centres' midpoint
+ *  coincides with their shared-edge midpoint, so a plain average is exact.
+ *  Both inputs are world `{x, z}` (the y/up component is ignored).
+ *
+ *  Returns null when either world position is missing — an orphan/legacy
+ *  building has no footprint and therefore no shared edge, so the caller falls
+ *  back to the old centred-above-the-building floating label. */
+export function signpostWorldPos(entranceWorld, footprintWorld) {
+  if (!entranceWorld || !footprintWorld) return null;
+  const ax = entranceWorld.x, az = entranceWorld.z;
+  const fx = footprintWorld.x, fz = footprintWorld.z;
+  if (ax == null || az == null || fx == null || fz == null) return null;
+  return { x: (ax + fx) / 2, z: (az + fz) / 2 };
+}
+
 /** Uniform scale factor to fit a building's XZ footprint into ~1 hex of ground.
  *  `bboxXZ` is the model's natural {x, z} extent (world units, pre-scale); the
  *  larger of the two axes is scaled to `target`. Returns null when the extent

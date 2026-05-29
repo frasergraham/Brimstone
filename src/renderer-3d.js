@@ -56,12 +56,24 @@ import {
   doorStubDirection,
   compoundFortifyEdges,
   extendDoorStub,
+  signpostWorldPos,
   BUILDING_ENTRANCE_NUDGE,
   TARGET_BUILDING_GROUND_SPAN,
+  SIGNPOST_POST_HEIGHT,
+  SIGNPOST_POST_DIAMETER,
+  SIGNPOST_PLANK_WIDTH,
+  SIGNPOST_PLANK_HEIGHT,
 } from './building-render.js';
 // Re-export so 3D-renderer consumers/tests can import the ground-span knob
-// from here too (mirrors the tree-count knob re-exports above).
-export { TARGET_BUILDING_GROUND_SPAN };
+// and signpost dimensions from here too (mirrors the tree-count knob
+// re-exports above). The signpost dimensions are the operator-dialable knobs.
+export {
+  TARGET_BUILDING_GROUND_SPAN,
+  SIGNPOST_POST_HEIGHT,
+  SIGNPOST_POST_DIAMETER,
+  SIGNPOST_PLANK_WIDTH,
+  SIGNPOST_PLANK_HEIGHT,
+};
 import { Renderer } from './renderer.js';
 import { getFactionTheme } from './theme.js';
 import { hexKey, hexDistance, getNeighbors } from './hex.js';
@@ -806,26 +818,10 @@ export const NODE_TINT_DIAMETER = 1.9;
  *  texture and ring tube still dominate. */
 export const NODE_TINT_ALPHA = 0.1;
 
-/** Y offset (world units) for the floating power-node name label. Slightly
- *  below building labels (1.55) so the two overlays don't collide on a tile
- *  that happens to be both a node hex and a building. */
-export const NODE_LABEL_Y = 1.4;
-/** Plane size (world units) of the floating name label. Wider than the
- *  building label since node names (e.g. "The Crooked Pine") can be long. */
-export const NODE_LABEL_WIDTH  = 2.4;
-export const NODE_LABEL_HEIGHT = 0.55;
-/** DynamicTexture canvas dimensions (px) for the node label. */
-export const NODE_LABEL_TEX_W = 384;
-export const NODE_LABEL_TEX_H = 96;
-
-/** Resolve the display text for a power-node label. Returns the objective's
- *  human-readable label, or a sensible fallback if missing. Pure helper for
- *  tests. */
-export function nodeLabelText(obj) {
-  if (!obj) return '';
-  if (typeof obj.label === 'string' && obj.label.length > 0) return obj.label;
-  return 'Power Node';
-}
+// P4c — the floating power-node NAME LABEL (constants NODE_LABEL_* and the
+// `nodeLabelText` helper) was removed. Node identity is carried by the colored
+// ring + tint + identifier outline on the map and by the HUD score dots; a
+// floating name plate was in the way during play.
 
 /** Resolve the tint / label colour for a controller. Thin alias over
  *  `getNodeGlowColor` so the two overlays share one source of truth — if the
@@ -2131,14 +2127,10 @@ export class Renderer3D {
     // fog veil (registered into `_tilePropsByKey`). Built lazily alongside
     // the node ring tubes in `_buildNodeGlowMeshes`.
     this._nodeTintMeshes   = [];           // [{ obj, mesh, mat, col, row }]
-    // Power-node floating name labels: one billboarded plane per node, anchored
-    // above the cluster's centroid. Keyed by centre-hex key (hexes[0]) for fog
-    // tracking even though the plane sits at the centroid. Keyed so the per-tile
-    // fog veil can hide them in `_setTileFogged` without freezing the world
-    // matrix (billboarding requires per-frame matrix sync — registering in
-    // `_tilePropsByKey` would freeze the plane and lock its rotation).
-    this._nodeNameLabels   = [];           // [{ obj, plane, mat, tex, hexKey, lastCtrl }]
-    this._nodeLabelsByCenterHex = new Map(); // hexKey → label entry (above)
+    // P4c — floating power-node NAME LABELS were removed (operator: in the way
+    // during play; node identity is already carried by the colored ring + tile
+    // glow + the HUD score dots). Only the ring + tint + identifier outline
+    // remain as the node's on-map signal.
     // Phase-driven lighting state. Pumped by _onBeforeRender each frame; draw()
     // notices state.phase changes and starts a new 3-second eased transition.
     this._lightState = null;            // populated on first draw after init
@@ -7520,10 +7512,11 @@ export class Renderer3D {
         trackProp(roof);
       }
 
-      // Hover label — floating billboarded plane above the roof, painted with
-      // the building's display name. Alpha is driven each frame by
-      // `_pumpBuildingLabelFade` so labels fade as the camera zooms back.
-      this._buildBuildingLabel(tile, x, z, parent);
+      // Signpost — a physical post + billboarded name plank at the door-side
+      // edge of the footprint (orphan buildings fall back to a floating label
+      // above the slot). Alpha is driven each frame by `_pumpBuildingLabelFade`
+      // so signs fade out as the camera zooms back.
+      this._buildBuildingSignpost(tile, x, z, parent);
     }
 
     if (props.length > 0) this._tilePropsByKey.set(tkey, props);
@@ -9720,11 +9713,133 @@ export class Renderer3D {
     badge.lastN = overflow;
   }
 
-  /** Build the floating hover label above a building tile. One DynamicTexture
-   *  per label (~256×64 px); painted once at build time and never repainted
-   *  because building names are immutable. Alpha is driven each frame from
-   *  `_pumpBuildingLabelFade`. Tracked in `_buildingLabelsByKey` so the
-   *  per-frame pump can iterate them without a scene walk. */
+  /** P4c — Build a building's SIGNPOST: a vertical wooden post topped by a
+   *  billboarded name plank, planted at the door-side edge of the footprint
+   *  (the entrance↔footprint shared-edge midpoint, where the road stub meets
+   *  the model). The post stays vertical; only the plank billboards (Y axis)
+   *  so it always faces the camera while reading as a physical roadside marker.
+   *
+   *  A legacy/orphan building (no footprint, hence no shared edge) falls back
+   *  to the OLD centred floating label via `_buildBuildingLabel`.
+   *
+   *  Both meshes are tracked in `_buildingLabelsByKey` under the entrance hex
+   *  key so the zoom-fade pump (`_pumpBuildingLabelFade`) and the fog veil
+   *  (`_setTilePropsFogged`) treat the post + plank as one unit. */
+  _buildBuildingSignpost(tile, hexX, hexZ, parent) {
+    const BABYLON = this._babylon;
+    const scene   = this._scene;
+    if (!BABYLON || !scene || typeof document === 'undefined') return;
+    const text = labelTextForTile(tile);
+    if (!text) return;
+
+    // Door-side edge midpoint: average of the entrance + footprint hex centres.
+    const renderKey   = buildingRenderHex(tile);
+    const [rc, rr]    = renderKey.split(',').map(Number);
+    const isFootprint = !(rc === tile.col && rr === tile.row);
+    const footprintWorld = isFootprint ? hexToWorld(rc, rr) : null;
+    const signPos = signpostWorldPos({ x: hexX, z: hexZ }, footprintWorld);
+    if (!signPos) {
+      // Orphan with no footprint → old floating-label behaviour (centred above
+      // the building slot). One extra branch keeps legacy saves rendering.
+      this._buildBuildingLabel(tile, hexX, hexZ, parent);
+      return;
+    }
+
+    const tkey = hexKey(tile.col, tile.row);
+    // Tile-top anchor — matches the procedural/GLB building base Y (0.43-0.7/2).
+    const tileTopY = 0.43 - 0.7 / 2;
+
+    // ── Name plank: dark serif text on a parchment board ──────────────────
+    const tex = new BABYLON.DynamicTexture(
+      `bldgSignTex_${tkey}`,
+      { width: BUILDING_LABEL_TEX_W, height: BUILDING_LABEL_TEX_H },
+      scene,
+      true, // generateMipMaps — keeps the plank legible when zoomed out
+    );
+    tex.hasAlpha = false; // fully-painted parchment; fade is via material alpha
+    if (typeof tex.updateSamplingMode === 'function' && BABYLON.Texture) {
+      tex.updateSamplingMode(BABYLON.Texture.TRILINEAR_SAMPLINGMODE);
+    }
+    this._paintSignpostPlank(tex, text);
+
+    const plankMat = new BABYLON.StandardMaterial(`bldgSignPlankMat_${tkey}`, scene);
+    plankMat.diffuseTexture  = tex;
+    plankMat.emissiveTexture = tex; // unlit so the name reads in any phase light
+    plankMat.specularColor   = new BABYLON.Color3(0, 0, 0);
+    plankMat.backFaceCulling  = false;
+    plankMat.alpha = 1;
+
+    const plank = BABYLON.MeshBuilder.CreatePlane(
+      `bldgSignPlank_${tkey}`,
+      { width: SIGNPOST_PLANK_WIDTH, height: SIGNPOST_PLANK_HEIGHT },
+      scene,
+    );
+    plank.parent        = parent;
+    // BILLBOARDMODE_Y: the plank rotates around the vertical axis to face the
+    // camera, but the post below it stays bolt upright (no billboard).
+    plank.billboardMode = BABYLON.Mesh.BILLBOARDMODE_Y;
+    plank.isPickable    = false;
+    plank.material      = plankMat;
+    plank.position.set(
+      signPos.x,
+      tileTopY + SIGNPOST_POST_HEIGHT - SIGNPOST_PLANK_HEIGHT / 2,
+      signPos.z,
+    );
+
+    // ── Post: a thin dark-wood cylinder rooted at the edge midpoint ───────
+    const postMat = new BABYLON.StandardMaterial(`bldgSignPostMat_${tkey}`, scene);
+    postMat.diffuseColor  = new BABYLON.Color3(0.29, 0.19, 0.11); // weathered wood
+    postMat.specularColor = new BABYLON.Color3(0, 0, 0);
+    postMat.alpha = 1;
+
+    const post = BABYLON.MeshBuilder.CreateCylinder(
+      `bldgSignPost_${tkey}`,
+      { height: SIGNPOST_POST_HEIGHT, diameter: SIGNPOST_POST_DIAMETER, tessellation: 6 },
+      scene,
+    );
+    post.parent     = parent;
+    post.isPickable = false;
+    post.material   = postMat;
+    post.position.set(signPos.x, tileTopY + SIGNPOST_POST_HEIGHT / 2, signPos.z);
+    this._addShadowCaster(post);
+
+    this._buildingLabelsByKey.set(tkey, {
+      meshes: [post, plank],
+      mats:   [postMat, plankMat],
+      tex,
+      fogged: false,
+    });
+  }
+
+  /** Paint a signpost plank DynamicTexture: a parchment/wood board with the
+   *  building name in a clean serif/uncial face, dark-brown ink. Idempotent. */
+  _paintSignpostPlank(tex, text) {
+    if (!tex || typeof tex.getContext !== 'function') return;
+    const W = BUILDING_LABEL_TEX_W;
+    const H = BUILDING_LABEL_TEX_H;
+    const ctx = tex.getContext();
+    // Parchment field with a thin darker frame so the board reads as carved wood.
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#d4b884';
+    ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = '#7a5a2e';
+    ctx.lineWidth = 6;
+    ctx.strokeRect(3, 3, W - 6, H - 6);
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    // Cinzel / Trajan read as an engraved-stone serif; plain serif is the
+    // fallback when the webfont isn't loaded (e.g. Electron / first paint).
+    ctx.font = 'bold 28px "Cinzel", "Trajan Pro", Georgia, serif';
+    ctx.fillStyle = '#3a2410';
+    ctx.fillText(text, W / 2, H / 2 + 2);
+    if (typeof tex.update === 'function') tex.update();
+  }
+
+  /** Build the OLD floating hover label above a building tile — the legacy
+   *  fallback for an orphan building that has no footprint (and thus no
+   *  signpost edge). One DynamicTexture per label (~256×64 px), painted once.
+   *  Tracked in `_buildingLabelsByKey` with the same `{ meshes, mats, tex }`
+   *  shape the signpost uses, so the pump + fog veil handle both uniformly. */
   _buildBuildingLabel(tile, hexX, hexZ, parent) {
     const BABYLON = this._babylon;
     const scene   = this._scene;
@@ -9785,12 +9900,17 @@ export class Renderer3D {
     const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
     plane.position.set(hexX + slot.x, BUILDING_LABEL_Y, hexZ + slot.z);
 
-    this._buildingLabelsByKey.set(tkey, { plane, mat, tex });
+    this._buildingLabelsByKey.set(tkey, {
+      meshes: [plane],
+      mats:   [mat],
+      tex,
+      fogged: false,
+    });
   }
 
-  /** Per-frame: walk every building label and set its material alpha from the
-   *  current camera radius using `labelAlphaForZoom`. Cheap — one Map walk
-   *  and a scalar assignment per label per frame. */
+  /** Per-frame: walk every building signpost/label and set its material alpha
+   *  from the current camera radius (`labelAlphaForZoom`), multiplied by a fog
+   *  dim factor. Post + plank fade together. Cheap — one Map walk per frame. */
   _pumpBuildingLabelFade() {
     if (!this._camera) return;
     if (this._buildingLabelsByKey.size === 0) return;
@@ -9800,32 +9920,14 @@ export class Renderer3D {
       BUILDING_LABEL_FADE_RADIUS_FAR,
     );
     for (const entry of this._buildingLabelsByKey.values()) {
-      if (entry.mat) entry.mat.alpha = a;
+      // Dim (not hide) under fog so the operator can still read "this hex has
+      // an Inn" through the veil — matches the pre-signpost behaviour.
+      const alpha = a * (entry.fogged ? 0.45 : 1);
+      if (entry.mats) for (const m of entry.mats) { if (m) m.alpha = alpha; }
       // Skip the draw call entirely when fully faded — Babylon still uploads
       // the geometry for alpha=0 alpha-blended meshes, so isVisible is the
-      // cheap path. setEnabled() is overkill (parent toggling overhead).
-      if (entry.plane) entry.plane.isVisible = a > 0;
-    }
-  }
-
-  /** Per-frame: fade every power-node name label by camera distance, reusing
-   *  the building-label ramp (`labelAlphaForZoom` with the same fade radii) so
-   *  node names disappear at the same zoom-out as house labels. Visibility is
-   *  the zoom alpha ANDed with the label's fog state so a fogged node never
-   *  shows its name just because the camera zoomed in. */
-  _pumpNodeLabelFade() {
-    if (!this._camera) return;
-    if (!this._nodeNameLabels || this._nodeNameLabels.length === 0) return;
-    const a = labelAlphaForZoom(
-      this._camera.radius,
-      BUILDING_LABEL_FADE_RADIUS_CLOSE,
-      BUILDING_LABEL_FADE_RADIUS_FAR,
-    );
-    for (const entry of this._nodeNameLabels) {
-      if (entry.mat) entry.mat.alpha = a;
-      // Node labels ignore fog (operator: always-visible). The label fades
-      // with zoom only.
-      if (entry.plane) entry.plane.isVisible = a > 0;
+      // cheap path.
+      if (entry.meshes) for (const mesh of entry.meshes) { if (mesh) mesh.isVisible = a > 0; }
     }
   }
 
@@ -13296,10 +13398,8 @@ export class Renderer3D {
     // Compass rose: rotate the top-left needle to keep pointing at map north
     // as the camera orbits. Skips the DOM write when alpha hasn't moved.
     this._pumpCompassRose();
-    // Building hover labels: fade in/out based on camera zoom.
+    // Building signposts: fade in/out based on camera zoom.
     this._pumpBuildingLabelFade();
-    // Power-node name labels: same zoom-driven fade as the building labels.
-    this._pumpNodeLabelFade();
     // Power-node outer-edge identifier outlines breathe between
     // NODE_OUTLINE_PULSE_MIN and NODE_OUTLINE_PULSE_MAX.
     this._pumpNodeOutlinePulse(now);
@@ -13539,10 +13639,8 @@ export class Renderer3D {
         mat.emissiveColor.b = b * 0.4;
       }
     }
-    // Labels are painted once at build time in the node's identifying
-    // colour (palette-matched to the HUD score dots) — that colour never
-    // changes, so there is no per-frame repaint loop here. Fog visibility
-    // still flips through `_setTileFogged` via `_nodeLabelsByCenterHex`.
+    // P4c — floating node name labels were removed; the only per-frame node
+    // work left is the tint recolour above and the identifier-outline pulse.
   }
 
   _buildNodeGlowMeshes() {
@@ -13554,7 +13652,7 @@ export class Renderer3D {
       // ownership is already conveyed by the HUD score track. The outer
       // identifier ring below (palette colour = which node) stays. Empty
       // _nodeGlowMeshes entry kept so consumers' optional chaining is happy
-      // and `_pumpNodeLabelFade` / fog state still has the per-hex key.
+      // and the per-hex fog state still has its key.
       for (const h of obj.hexes) {
         this._nodeGlowMeshes.push({
           obj, disc: null,
@@ -13636,26 +13734,22 @@ export class Renderer3D {
         }
       }
     }
-    // Build the matching 10%-alpha tint disc + one floating name label per
-    // node. Done in the same pass so the freeze sweep below sees both.
-    this._buildNodeTintAndLabels();
+    // Build the matching 10%-alpha tint disc per node hex (floating name
+    // labels were removed in P4c).
+    this._buildNodeTints();
     // Node rings are static for the rest of the game — fold them into the
     // freeze pass. _freezeStaticMeshes is idempotent; the previously-frozen
     // tile/prop meshes from `_buildMap` are skipped on this second call.
     this._freezeStaticMeshes();
   }
 
-  /** Build the translucent per-hex tint disc and one floating name label per
-   *  power node. Called from `_buildNodeGlowMeshes` after the ring tubes are
-   *  in place. Tint discs share the per-tile fog registry with the ring tubes;
-   *  labels live in their own map so the freeze pass skips them (billboard
-   *  rotation requires a per-frame world-matrix update — a frozen plane would
-   *  point the wrong way). */
-  _buildNodeTintAndLabels() {
+  /** Build the translucent per-hex tint disc for every power node. Called from
+   *  `_buildNodeGlowMeshes` after the ring tubes are in place. Tint discs share
+   *  the per-tile fog registry with the ring tubes. (P4c removed the floating
+   *  name labels that used to be built alongside them.) */
+  _buildNodeTints() {
     const BABYLON = this._babylon;
     if (!BABYLON || !this._scene) return;
-    const SQRT3 = Math.sqrt(3);
-    const tintR = (NODE_TINT_DIAMETER / 2) || HEX_RADIUS_WORLD;
     for (const obj of this.state.witchObjectives) {
       // Per-hex tint disc: flat hex prism sitting just above the terrain disc.
       // We build a CreateCylinder with tessellation 6 so the tint snaps to
@@ -13705,109 +13799,7 @@ export class Renderer3D {
         if (props) props.push(disc);
         else this._tilePropsByKey.set(tkey, [disc]);
       }
-
-      // Floating name label — one per node, anchored at the cluster centroid
-      // but fog-tracked by the centre hex (obj.hexes[0]). The label is the
-      // operator's
-      // primary "this is Power Node X, controlled by Y" read, so it's a
-      // single mesh rather than one per hex.
-      const center = obj.hexes[0];
-      if (!center) continue;
-      const label = this._buildNodeNameLabel(obj, center);
-      if (label) {
-        this._nodeNameLabels.push(label);
-        this._nodeLabelsByCenterHex.set(hexKey(center.col, center.row), label);
-      }
     }
-  }
-
-  /** Build one floating-name-label entry for a power node. Returns the entry
-   *  or null when no DOM is available (headless / node-test). The
-   *  DynamicTexture is painted on first build via `_paintNodeLabel`. */
-  _buildNodeNameLabel(obj, center) {
-    const BABYLON = this._babylon;
-    const scene = this._scene;
-    if (!BABYLON || !scene || typeof document === 'undefined') return null;
-    const tkey = hexKey(center.col, center.row);
-    const tex = new BABYLON.DynamicTexture(
-      `nodeLabelTex_${tkey}`,
-      { width: NODE_LABEL_TEX_W, height: NODE_LABEL_TEX_H },
-      scene,
-      false,
-    );
-    tex.hasAlpha = true;
-
-    const mat = new BABYLON.StandardMaterial(`nodeLabelMat_${tkey}`, scene);
-    mat.diffuseTexture = tex;
-    mat.opacityTexture = tex;
-    mat.useAlphaFromDiffuseTexture = true;
-    mat.specularColor  = new BABYLON.Color3(0, 0, 0);
-    mat.emissiveColor  = new BABYLON.Color3(1, 1, 1);
-    mat.backFaceCulling = false;
-    mat.alpha = 1;
-
-    const plane = BABYLON.MeshBuilder.CreatePlane(
-      `nodeLabel_${tkey}`,
-      { width: NODE_LABEL_WIDTH, height: NODE_LABEL_HEIGHT },
-      scene,
-    );
-    plane.parent = this._mapRoot;
-    plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
-    plane.isPickable = false;
-    plane.material = mat;
-    // R7: render above all world geometry (group 2, same as the floating
-    // unit-icon billboards) so the name is never occluded by trees/buildings.
-    plane.renderingGroupId = 2;
-    // R5b: anchor in the MIDDLE of the cluster (mean of every member hex's
-    // world position), not over the first ("head") hex — a multi-hex node now
-    // labels its centre of mass. Fall back to the centre hex for a degenerate
-    // single-hex cluster.
-    const c = clusterCentroidWorld(obj.hexes) ?? hexToWorld(center.col, center.row);
-    plane.position.set(c.x, NODE_LABEL_Y, c.z);
-
-    const entry = {
-      obj, plane, mat, tex,
-      hexKey: tkey,
-      // Fog state of the centre (tracking) hex. Driven by `_setTileFogged`;
-      // the per-frame fade pump ANDs it with the zoom alpha so a fogged label
-      // never reappears just because the camera zoomed in.
-      fogged: this._fogActiveSet.has(tkey),
-    };
-    // The label colour is the node's identifying palette colour, which is
-    // static for the life of the game — paint once at build time and never
-    // repaint. (Earlier rounds painted in the controller colour and so
-    // needed a per-controller-flip refresh; that's gone now.)
-    this._paintNodeLabel(entry);
-    // Node labels ignore fog (operator: always-visible) — no initial-fog hide.
-    return entry;
-  }
-
-  /** Paint a node-label DynamicTexture with the node's identifying palette
-   *  colour (matching the HUD score dots). Idempotent — safe to call again
-   *  if the texture is ever evicted. */
-  _paintNodeLabel(entry) {
-    const tex = entry?.tex;
-    if (!tex || typeof tex.getContext !== 'function') return;
-    const ctx = tex.getContext();
-    const W = NODE_LABEL_TEX_W;
-    const H = NODE_LABEL_TEX_H;
-    ctx.clearRect(0, 0, W, H);
-    ctx.textAlign    = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.font         = 'bold 44px Georgia, serif';
-    const cx = W / 2;
-    const cy = H / 2;
-    // Dark drop-shadow keeps the label legible against bright daytime sky
-    // / pale fog tiles. The identifying-colour fill sits on top: the label
-    // text matches the HUD score-dot palette so the player can tie a HUD
-    // dot to a node on the map at a glance. Controller signal is carried
-    // by the underlying tint disc, not the label colour.
-    ctx.fillStyle = 'rgba(0,0,0,0.85)';
-    const text = nodeLabelText(entry.obj);
-    ctx.fillText(text, cx + 2, cy + 2);
-    ctx.fillStyle = nodeIdentifyingColor(entry.obj);
-    ctx.fillText(text, cx, cy);
-    tex.update();
   }
 
   /** Apply the fog-of-war veil: swap fogged-tile materials to a darker variant
@@ -14096,24 +14088,14 @@ export class Renderer3D {
       }
       p.isVisible = !fogged;
     }
-    // Building labels are tracked separately — dim (not hide) under fog so the
-    // operator can still read "this hex has an Inn" even when the interior is
-    // unrevealed. Tilemap-driven texture so the tint goes via material alpha.
+    // Building signposts/labels are tracked separately — dim (not hide) under
+    // fog so the operator can still read "this hex has an Inn" even when the
+    // interior is unrevealed. Record the fog state; the per-frame pump
+    // (`_pumpBuildingLabelFade`) folds it into the zoom-fade alpha so the post
+    // + plank dim together. (P4c: floating node name labels were removed, so
+    // there is no node-label fog branch here anymore.)
     const labelEntry = this._buildingLabelsByKey?.get(hexK);
-    if (labelEntry?.mat) {
-      labelEntry.mat.alpha = fogged ? 0.45 : 1.0;
-    }
-    // Power-node name labels: anchored to the cluster centre hex only, so
-    // visibility tracks that one hex's fog state. Hide fully on fog (unlike
-    // building labels) — node ownership IS the tactical secret being hidden.
-    const nodeLabelEntry = this._nodeLabelsByCenterHex?.get(hexK);
-    if (nodeLabelEntry) {
-      // Record fog so the zoom-fade pump (`_pumpNodeLabelFade`) keeps the label
-      // hidden under fog regardless of the camera-distance alpha. Set the
-      // immediate visibility too so a fog change reads on the same frame.
-      nodeLabelEntry.fogged = fogged;
-      if (nodeLabelEntry.plane) nodeLabelEntry.plane.isVisible = !fogged;
-    }
+    if (labelEntry) labelEntry.fogged = fogged;
     if (fogged) this._fogActiveSet.add(hexK);
     else this._fogActiveSet.delete(hexK);
   }

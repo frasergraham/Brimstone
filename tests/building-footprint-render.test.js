@@ -16,8 +16,13 @@ import {
   doorStubDirection,
   compoundFortifyEdges,
   extendDoorStub,
+  signpostWorldPos,
   BUILDING_ENTRANCE_NUDGE,
   TARGET_BUILDING_GROUND_SPAN,
+  SIGNPOST_POST_HEIGHT,
+  SIGNPOST_POST_DIAMETER,
+  SIGNPOST_PLANK_WIDTH,
+  SIGNPOST_PLANK_HEIGHT,
 } from '../src/building-render.js';
 
 import {
@@ -460,5 +465,225 @@ describe('buildRoadNetworkStrokes — door stub reaches into the footprint', () 
     // The edge midpoint is still on the path (the road crosses the edge).
     assert.ok(stub.some(p => Math.abs(p.x - edge.mx) < 1e-9 && Math.abs(p.z - edge.mz) < 1e-9),
       'path still crosses the shared edge midpoint');
+  });
+});
+
+// ── signpostWorldPos (P4c) ───────────────────────────────────────────────────
+
+describe('signpostWorldPos', () => {
+  test('returns the midpoint of several entrance/footprint world pairs', () => {
+    const cases = [
+      { e: { x: 0,  z: 0 },  f: { x: 4,  z: 0 },  m: { x: 2,    z: 0 } },
+      { e: { x: 2,  z: 6 },  f: { x: -2, z: 2 },  m: { x: 0,    z: 4 } },
+      { e: { x: -5, z: -1 }, f: { x: 3,  z: 7 },  m: { x: -1,   z: 3 } },
+      { e: { x: 1.5, z: 2.5 }, f: { x: 0.5, z: -1.5 }, m: { x: 1, z: 0.5 } },
+    ];
+    for (const { e, f, m } of cases) {
+      const p = signpostWorldPos(e, f);
+      assert.ok(p, 'midpoint computed');
+      assert.ok(Math.abs(p.x - m.x) < 1e-9, `x ${p.x} != ${m.x}`);
+      assert.ok(Math.abs(p.z - m.z) < 1e-9, `z ${p.z} != ${m.z}`);
+    }
+  });
+
+  test('midpoint of two real adjacent hex centres lies on their shared edge', () => {
+    const ew = hexToWorld(5, 5);
+    const fw = hexToWorld(6, 5);
+    const p  = signpostWorldPos(ew, fw);
+    assert.ok(Math.abs(p.x - (ew.x + fw.x) / 2) < 1e-9);
+    assert.ok(Math.abs(p.z - (ew.z + fw.z) / 2) < 1e-9);
+    // The shared-edge midpoint sits strictly between the two centres.
+    assert.ok(p.x > Math.min(ew.x, fw.x) && p.x < Math.max(ew.x, fw.x));
+  });
+
+  test('orphan with no footprint world → null (signals the floating-label fallback)', () => {
+    const ew = hexToWorld(3, 4);
+    assert.equal(signpostWorldPos(ew, null), null);
+    assert.equal(signpostWorldPos(ew, undefined), null);
+    assert.equal(signpostWorldPos(null, ew), null);
+  });
+
+  test('missing x/z components → null (defensive)', () => {
+    assert.equal(signpostWorldPos({ x: 1 }, { x: 2, z: 3 }), null);
+    assert.equal(signpostWorldPos({ x: 1, z: 2 }, { z: 3 }), null);
+  });
+});
+
+describe('Signpost dimension constants — operator-dialable knobs', () => {
+  test('post is short and thin; plank is wider than it is tall', () => {
+    assert.ok(SIGNPOST_POST_HEIGHT > 0 && SIGNPOST_POST_HEIGHT < 1,
+      `POST_HEIGHT ${SIGNPOST_POST_HEIGHT} should be a fraction of a hex`);
+    assert.ok(SIGNPOST_POST_DIAMETER > 0 && SIGNPOST_POST_DIAMETER < SIGNPOST_PLANK_WIDTH,
+      'post diameter should be thinner than the plank is wide');
+    assert.ok(SIGNPOST_PLANK_WIDTH > SIGNPOST_PLANK_HEIGHT,
+      'plank should read as a landscape board (wider than tall)');
+  });
+
+  test('plank sits at the top of the post (plank fits within post height)', () => {
+    assert.ok(SIGNPOST_PLANK_HEIGHT < SIGNPOST_POST_HEIGHT,
+      'plank height should be less than the post height so it perches on top');
+  });
+});
+
+// ── Signpost / label / node-label sync — stub-driven Babylon ─────────────────
+
+/** A fake 2D canvas context: every painting call is a no-op, every style is a
+ *  plain settable property. Enough for `_paintSignpostPlank` / label painting. */
+function fakeCtx() {
+  return {
+    fillStyle: '', strokeStyle: '', lineWidth: 0,
+    font: '', textAlign: '', textBaseline: '',
+    clearRect() {}, fillRect() {}, strokeRect() {}, fillText() {},
+  };
+}
+
+function fakeSignMesh(name) {
+  return {
+    name, parent: null, isPickable: true, material: null,
+    billboardMode: null, isVisible: true, renderingGroupId: 0,
+    receiveShadows: false, metadata: null, alphaIndex: 0,
+    rotation: { x: 0, y: 0, z: 0 },
+    position: { x: 0, y: 0, z: 0, set(x, y, z) { this.x = x; this.y = y; this.z = z; } },
+  };
+}
+
+/** A Babylon stub broad enough to drive `_buildBuildingSignpost` and
+ *  `_buildNodeGlowMeshes`. Every created mesh is pushed to `created`. */
+function makeSignBabylon(created) {
+  const Color3 = class { constructor(r = 0, g = 0, b = 0) { this.r = r; this.g = g; this.b = b; } };
+  const Vector3 = class { constructor(x = 0, y = 0, z = 0) { this.x = x; this.y = y; this.z = z; } };
+  const make = (name) => { const m = fakeSignMesh(name); created.push(m); return m; };
+  return {
+    Color3,
+    Vector3,
+    Texture: { TRILINEAR_SAMPLINGMODE: 3 },
+    Mesh: { BILLBOARDMODE_Y: 2, BILLBOARDMODE_ALL: 7, DOUBLESIDE: 2 },
+    DynamicTexture: class {
+      constructor(name) { this.name = name; this.hasAlpha = false; }
+      getContext() { return fakeCtx(); }
+      update() {}
+      updateSamplingMode() {}
+    },
+    StandardMaterial: class { constructor(name) { this.name = name; this.alpha = 1; } },
+    MeshBuilder: {
+      CreatePlane(name) { return make(name); },
+      CreateCylinder(name) { return make(name); },
+      CreateTube(name) { return make(name); },
+    },
+  };
+}
+
+describe('Renderer3D._buildBuildingSignpost — footprinted building', () => {
+  test('builds a post + billboarded plank at the door-side edge, both tracked', () => {
+    globalThis.document = globalThis.document || {};
+    const r = newRenderer();
+    const created = [];
+    r._babylon = makeSignBabylon(created);
+    r._scene = {};
+
+    const entrance = makeEntrance(5, 5, 6, 5, BuildingType.INN);
+    const ew = hexToWorld(5, 5);
+    r._buildBuildingSignpost(entrance, ew.x, ew.z, { name: 'mapRoot' });
+
+    const post  = created.find(m => m.name === 'bldgSignPost_5,5');
+    const plank = created.find(m => m.name === 'bldgSignPlank_5,5');
+    assert.ok(post,  'post cylinder built');
+    assert.ok(plank, 'name plank built');
+
+    // Plank billboards on the vertical axis only; the post does not billboard.
+    assert.equal(plank.billboardMode, r._babylon.Mesh.BILLBOARDMODE_Y);
+    assert.equal(post.billboardMode, null, 'post stays vertical (no billboard)');
+
+    // Both stand at the entrance↔footprint shared-edge midpoint.
+    const mid = signpostWorldPos(ew, hexToWorld(6, 5));
+    assert.ok(Math.abs(post.position.x - mid.x) < 1e-9, 'post x at door edge');
+    assert.ok(Math.abs(post.position.z - mid.z) < 1e-9, 'post z at door edge');
+    assert.ok(Math.abs(plank.position.x - mid.x) < 1e-9, 'plank x at door edge');
+    assert.ok(Math.abs(plank.position.z - mid.z) < 1e-9, 'plank z at door edge');
+    // Plank perches above the post.
+    assert.ok(plank.position.y > post.position.y, 'plank sits above the post centre');
+
+    // Tracked as one unit so the fade pump + fog veil treat them together.
+    const entry = r._buildingLabelsByKey.get('5,5');
+    assert.ok(entry, 'entry registered under the entrance hex key');
+    assert.equal(entry.meshes.length, 2, 'post + plank tracked');
+    assert.equal(entry.mats.length, 2, 'post + plank materials tracked');
+    assert.ok(entry.tex, 'plank texture tracked');
+    assert.equal(entry.fogged, false);
+  });
+
+  test('orphan building (no footprint) falls back to the floating label (single plane)', () => {
+    globalThis.document = globalThis.document || {};
+    const r = newRenderer();
+    const created = [];
+    r._babylon = makeSignBabylon(created);
+    r._scene = {};
+
+    const orphan = new Tile(3, 4, TileType.DIRT);
+    orphan.structure = StructureType.BUILDING;
+    orphan.building  = BuildingType.CHURCH; // footprintHexes empty → orphan
+    const ow = hexToWorld(3, 4);
+    r._buildBuildingSignpost(orphan, ow.x, ow.z, { name: 'mapRoot' });
+
+    // No signpost meshes; one floating label plane, billboarded on all axes.
+    assert.ok(!created.some(m => m.name?.startsWith('bldgSignPost')), 'no post for orphan');
+    const plane = created.find(m => m.name === 'bldgLabel_3,4');
+    assert.ok(plane, 'orphan gets the old floating label plane');
+    assert.equal(plane.billboardMode, r._babylon.Mesh.BILLBOARDMODE_ALL);
+
+    const entry = r._buildingLabelsByKey.get('3,4');
+    assert.ok(entry, 'orphan label tracked');
+    assert.equal(entry.meshes.length, 1, 'just the floating plane');
+  });
+
+  test('no DOM (headless) → no-op (matches the document guard)', () => {
+    const saved = globalThis.document;
+    delete globalThis.document;
+    try {
+      const r = newRenderer();
+      const created = [];
+      r._babylon = makeSignBabylon(created);
+      r._scene = {};
+      r._buildBuildingSignpost(makeEntrance(5, 5, 6, 5), 0, 0, null);
+      assert.equal(created.length, 0, 'nothing built without a DOM');
+      assert.equal(r._buildingLabelsByKey.size, 0);
+    } finally {
+      if (saved !== undefined) globalThis.document = saved;
+    }
+  });
+});
+
+describe('Renderer3D — power-node labels removed (P4c)', () => {
+  test('the floating-name-label builders + pump are gone from the prototype', () => {
+    assert.equal(typeof Renderer3D.prototype._buildNodeNameLabel, 'undefined');
+    assert.equal(typeof Renderer3D.prototype._paintNodeLabel, 'undefined');
+    assert.equal(typeof Renderer3D.prototype._pumpNodeLabelFade, 'undefined');
+  });
+
+  test('_buildNodeGlowMeshes builds rings + tint discs but NO label meshes', () => {
+    globalThis.document = globalThis.document || {};
+    const r = newRenderer();
+    const created = [];
+    r._babylon = makeSignBabylon(created);
+    r._scene = {};
+    r._mapRoot = { name: 'mapRoot' };
+    r._freezeStaticMeshes = () => {}; // isolate from the freeze machinery
+    r.state = {
+      entities: [],
+      witchObjectives: [
+        { label: 'Power Node 1', hexes: [{ col: 5, row: 5 }, { col: 6, row: 5 }] },
+      ],
+    };
+
+    r._buildNodeGlowMeshes();
+
+    // Identifier outline tubes + tint discs were built…
+    assert.ok(created.some(m => m.name?.startsWith('node_edge_')), 'identifier ring tubes built');
+    assert.ok(created.some(m => m.name?.startsWith('node_tint_')), 'tint discs built');
+    assert.equal(r._nodeTintMeshes.length, 2, 'one tint disc per node hex');
+    // …but NO node name-label plane, and the old label registries are gone.
+    assert.ok(!created.some(m => m.name?.startsWith('nodeLabel')), 'no node name-label mesh');
+    assert.equal(r._nodeNameLabels, undefined, 'node-label registry removed');
+    assert.equal(r._nodeLabelsByCenterHex, undefined, 'node-label-by-hex map removed');
   });
 });
