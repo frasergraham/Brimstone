@@ -1197,6 +1197,31 @@ export function gestureModeForTwoFingerStart(pointerTypes) {
   return 'sampling';
 }
 
+/** Pose-change threshold for invalidating a world-space pan grab. A grab is
+ *  the ground point under the cursor sampled at a SPECIFIC camera pose
+ *  (radius/alpha/beta). Radius is world units (≈4–80) and the angles are
+ *  radians, so a single small epsilon serves both: 0.01 world unit is smaller
+ *  than any deliberate zoom, and 0.01 rad (~0.57°) is below input noise but
+ *  well under a deliberate rotate. */
+export const GRAB_POSE_EPSILON = 0.01;
+
+/** True when the camera pose has shifted enough since a world-space pan grab
+ *  was captured that the grab is stale and must be re-sampled before the next
+ *  pan diff. Applying `(grab − current)` across a pose change snaps
+ *  `camera.target` by metres — this is the guard that prevents the
+ *  zoom-during-drag / pinch-then-drag target jump.
+ *
+ *  Radius drives the tilt-on-zoom beta ramp, so a zoom shows up in both
+ *  `radius` and `beta`; `alpha` catches twist/right-drag rotate. Missing
+ *  either pose ⇒ recapture. Pure — both poses are plain `{radius, alpha, beta}`
+ *  reads, so it's unit-testable without Babylon. */
+export function shouldRecaptureGrab(oldPose, newPose, epsilon = GRAB_POSE_EPSILON) {
+  if (!oldPose || !newPose) return true;
+  return Math.abs(newPose.radius - oldPose.radius) > epsilon
+      || Math.abs(newPose.alpha  - oldPose.alpha)  > epsilon
+      || Math.abs(newPose.beta   - oldPose.beta)   > epsilon;
+}
+
 /** Compute pan-clamp bounds for the camera target from the playable map's
  *  visual extent. The clamp keeps the target inside the playable bbox, so
  *  the playable map is always the visible subject (rather than sliding off
@@ -5830,10 +5855,25 @@ export class Renderer3D {
       return this._screenToGround(clientX - (rect.left || 0), clientY - (rect.top || 0));
     };
 
+    // Snapshot the orbit pose the pan grab is anchored to. The world-grab math
+    // is only valid while the camera pose is stable between grab-capture and
+    // the move; `shouldRecaptureGrab` detects zoom/rotate that invalidates it.
+    const cameraPose = () => ({ radius: camera.radius, alpha: camera.alpha, beta: camera.beta });
+
     const applySinglePan = (entry, _dx, _dy) => {
       if (this.viewLocked) return;
-      if (!entry.grab) entry.grab = groundPointFromScreen(entry.x, entry.y);
-      if (!entry.grab) return; // ray missed (sky / parallel) — can't pan
+      const pose = cameraPose();
+      // Re-anchor the grab whenever the camera pose has shifted since it was
+      // captured (wheel/pinch zoom, twist-rotate, or the tilt-on-zoom beta
+      // ramp). The grab is the ground point under the cursor at one specific
+      // pose; diffing it against a projection at a new pose snaps the target by
+      // metres (the zoom-during-drag / pinch-then-drag jump). Re-sample to the
+      // current pose and skip this frame's shift — the next move pans cleanly.
+      if (!entry.grab || !entry.grabPose || shouldRecaptureGrab(entry.grabPose, pose)) {
+        entry.grab = groundPointFromScreen(entry.x, entry.y);
+        entry.grabPose = entry.grab ? pose : null;
+        return;
+      }
       const current = groundPointFromScreen(entry.x, entry.y);
       if (!current) return;
       const ddx = entry.grab.x - current.x;
@@ -5922,12 +5962,16 @@ export class Renderer3D {
         prevY: e.clientY,
         type: e.pointerType,
         button: e.button,
-        grab: null, // ground point under cursor at first drag-move
+        grab: null,     // ground point under cursor at first drag-move
+        grabPose: null, // camera pose the grab was sampled at (radius/alpha/beta)
       };
       // World-space drag pan needs the ground point at touchdown so the same
       // terrain feature stays under the cursor for the rest of the gesture.
       // Compute now while camera state is stable (no in-flight motion).
-      if (pointers.size === 0) entry.grab = groundPointFromScreen(e.clientX, e.clientY);
+      if (pointers.size === 0) {
+        entry.grab = groundPointFromScreen(e.clientX, e.clientY);
+        if (entry.grab) entry.grabPose = cameraPose();
+      }
       pointers.set(e.pointerId, entry);
       // Reset two-finger state when the second finger lands so the first
       // frame's deltas don't snap-rotate the camera. Also enter the
