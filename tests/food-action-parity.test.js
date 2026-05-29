@@ -14,7 +14,7 @@ import { buildUnitPlanBlocksHtml } from '../src/ui-render.js';
 import { GameState, Phase } from '../src/game.js';
 import { PlanActionType, groupPlanByEntity } from '../src/planner.js';
 import { createSurvivor, EntityType } from '../src/entities.js';
-import { ResourceType, legacyTileType } from '../src/tiles.js';
+import { ResourceType, legacyTileType, isBuildingFootprint } from '../src/tiles.js';
 import { hexKey, getNeighbors } from '../src/hex.js';
 import { getReachableHexes } from '../src/actions.js';
 
@@ -37,7 +37,7 @@ function heroBudget(state) {
 function emptyPassableNeighbor(state, col, row, excludeKeys) {
   return getNeighbors(col, row).find(n => {
     const t = state.tiles.get(hexKey(n.col, n.row));
-    if (!t || legacyTileType(t) === 'river') return false;
+    if (!t || legacyTileType(t) === 'river' || isBuildingFootprint(t)) return false;
     if (excludeKeys && excludeKeys.has(hexKey(n.col, n.row))) return false;
     return !state.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
   }) ?? null;

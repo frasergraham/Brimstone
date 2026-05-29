@@ -4,8 +4,9 @@
 import { VERSION }           from '../src/version.js';
 import { Entity, BASE_AGILITY, BASE_RANGE } from '../src/entities.js';
 import { GameState }         from '../src/game.js';
-import { setMapDimensions }  from '../src/hex.js';
+import { setMapDimensions, hexKey }  from '../src/hex.js';
 import { Tile, TileType, legacyTileType, decomposeTileType } from '../src/tiles.js';
+import { pickFootprintNeighbor } from '../src/building-footprint.js';
 
 export function serializeState(state) {
   const tiles = [];
@@ -34,6 +35,10 @@ export function serializeState(state) {
       explored:       tile.explored       ?? false,
       hiddenSurvivor: tile.hiddenSurvivor ?? false,
       roadDirs:       tile.roadDirs ? [...tile.roadDirs] : [],
+      // Building footprint (P1). Entrances carry footprintHexes; footprint hexes
+      // carry the buildingFootprintOf back-pointer. Both default to []/null.
+      footprintHexes:      Array.isArray(tile.footprintHexes) ? [...tile.footprintHexes] : [],
+      buildingFootprintOf: tile.buildingFootprintOf ?? null,
     });
   }
 
@@ -215,8 +220,18 @@ export function deserializeState(snap) {
     tile.explored       = t.explored       ?? false;
     tile.hiddenSurvivor = t.hiddenSurvivor ?? false;
     tile.roadDirs       = new Set(t.roadDirs || []);
+    // Building footprint (P1). Restore as real fields; legacy snapshots lack
+    // them → defaults, then the migration pass below populates them.
+    tile.footprintHexes      = Array.isArray(t.footprintHexes) ? [...t.footprintHexes] : [];
+    tile.buildingFootprintOf = t.buildingFootprintOf ?? null;
     state.tiles.set(t.key, tile);
   }
+
+  // ── Building-footprint auto-migration (P1) ────────────────────────────────
+  // Pre-v6 saves (and any building authored without a footprint) have a
+  // `building` but an empty `footprintHexes`. Assign each unmigrated entrance
+  // one eligible adjacent footprint hex, deterministically.
+  migrateBuildingFootprints(state.tiles, snap);
 
   // ── Entities — restore as real Entity instances so game-logic methods work ─
   state.entities = snap.entities.map(data => {
@@ -383,4 +398,78 @@ export function deserializeState(snap) {
   }
 
   return state;
+}
+
+/**
+ * Auto-migrate buildings that lack a footprint (P1).
+ *
+ * For each ENTRANCE tile (`building != null`) whose `footprintHexes` is empty,
+ * pick one eligible adjacent hex and wire both fields: the entrance's
+ * `footprintHexes` gets the chosen key, the chosen hex's `buildingFootprintOf`
+ * points back at the entrance.
+ *
+ * Eligibility for a neighbour to become a footprint hex is delegated to the
+ * shared `eligibleFootprintNeighbors`/`pickFootprintNeighbor` helper
+ * (`src/building-footprint.js`) so map-gen and migration apply identical rules:
+ *   • in map bounds (the tile exists in the map)
+ *   • base !== 'river' AND path !== 'river' AND path !== 'bridge' AND
+ *     path !== 'road'  (the road exclusion now applies to migration too — a road
+ *     can never be turned into an impassable footprint)
+ *   • not itself a building (`building == null`)
+ *   • not already claimed as another building's footprint
+ *   • not a power-node hex (derived from snap.witchObjectives, passed as
+ *     `opts.nodeKeySet`)
+ *   • (start-hex exclusion is skipped — start positions aren't in the snapshot,
+ *      so this is best-effort per the migration spec)
+ *
+ * Deterministic pick: the helper takes neighbours in odd-r direction order
+ * (0..5) and returns the FIRST eligible one (no `rand` passed). Buildings are
+ * processed in sorted-key order so the same snapshot loaded twice yields
+ * identical results.
+ *
+ * Orphans (no eligible neighbour) keep `footprintHexes: []` and emit a single
+ * console.warn — P3 treats them as regular 1-hex buildings.
+ *
+ * @param {Map<string, Tile>} tiles  the reconstructed tile map (mutated in place)
+ * @param {object} snap              the snapshot (for witchObjectives → node hexes)
+ */
+function migrateBuildingFootprints(tiles, snap) {
+  // Power-node hexes are excluded as footprint candidates.
+  const nodeKeySet = new Set();
+  for (const o of snap.witchObjectives ?? []) {
+    for (const h of o.hexes ?? [{ col: o.col, row: o.row }]) {
+      nodeKeySet.add(hexKey(h.col, h.row));
+    }
+  }
+
+  // Deterministic building order: sort entrance keys (row, then col).
+  const entranceKeys = [];
+  for (const [key, tile] of tiles) {
+    if (tile.building != null && (!Array.isArray(tile.footprintHexes) || tile.footprintHexes.length === 0)) {
+      entranceKeys.push(key);
+    }
+  }
+  entranceKeys.sort((a, b) => {
+    const [ac, ar] = a.split(',').map(Number);
+    const [bc, br] = b.split(',').map(Number);
+    return ar - br || ac - bc;
+  });
+
+  for (const key of entranceKeys) {
+    const entrance = tiles.get(key);
+    // First eligible neighbour (no rand → deterministic). The shared helper
+    // applies the full eligibility rules including the road exclusion; because
+    // we write `buildingFootprintOf` as we go, hexes claimed by an
+    // already-processed building are skipped automatically — no separate
+    // `claimed` set needed.
+    const chosen = pickFootprintNeighbor(tiles, entrance.col, entrance.row, null, { nodeKeySet });
+    if (chosen) {
+      const nk = hexKey(chosen.col, chosen.row);
+      entrance.footprintHexes = [nk];
+      tiles.get(nk).buildingFootprintOf = key;
+    } else {
+      // Orphan building — no eligible neighbour. Leave empty; warn once.
+      console.warn(`[state-sync] building at ${key} has no eligible footprint hex (orphan; treated as 1-hex)`);
+    }
+  }
 }

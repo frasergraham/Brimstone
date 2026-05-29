@@ -29,6 +29,8 @@ import {
   baseOf,
   pathOf,
   hasBuilding,
+  isBuildingEntrance,
+  isBuildingFootprint,
   isRiver,
   isBridge,
   treeCountForTile,
@@ -46,6 +48,36 @@ export const FOREST_TREES_MAX     = _FOREST_TREES_MAX;
 export const FOREST_DENSITY_SCALE = _FOREST_DENSITY_SCALE;
 export const scaledForestTreeCount = _scaledForestTreeCount;
 import { EntityType, isLeaderType, ADVANTAGE_CAP } from './entities.js';
+import {
+  buildingRenderHex,
+  buildingFacingYaw,
+  buildingFitScale,
+  buildingNudgedPosition,
+  doorStubDirection,
+  compoundFortifyEdges,
+  extendDoorStub,
+  signpostWorldPos,
+  BUILDING_ENTRANCE_NUDGE,
+  TARGET_BUILDING_GROUND_SPAN,
+  SIGNPOST_POST_HEIGHT,
+  SIGNPOST_POST_DIAMETER,
+  SIGNPOST_PLANK_WIDTH,
+  SIGNPOST_PLANK_HEIGHT,
+  SIGNPOST_PLANK_DEPTH,
+  SIGNPOST_ROAD_OFFSET,
+} from './building-render.js';
+// Re-export so 3D-renderer consumers/tests can import the ground-span knob
+// and signpost dimensions from here too (mirrors the tree-count knob
+// re-exports above). The signpost dimensions are the operator-dialable knobs.
+export {
+  TARGET_BUILDING_GROUND_SPAN,
+  SIGNPOST_POST_HEIGHT,
+  SIGNPOST_POST_DIAMETER,
+  SIGNPOST_PLANK_WIDTH,
+  SIGNPOST_PLANK_HEIGHT,
+  SIGNPOST_PLANK_DEPTH,
+  SIGNPOST_ROAD_OFFSET,
+};
 import { Renderer } from './renderer.js';
 import { getFactionTheme } from './theme.js';
 import { hexKey, hexDistance, getNeighbors } from './hex.js';
@@ -176,18 +208,18 @@ export function _bakeOriginToBottom(source, BABYLON) {
 // Fallback world-space scale for an imported building when its natural
 // bounding box can't be measured (test stubs, malformed GLB). In real-browser
 // use the load step computes a bbox-derived scale instead (see
-// TARGET_BUILDING_WORLD_HEIGHT) so each generated model — whose intrinsic unit
+// TARGET_BUILDING_GROUND_SPAN) so each generated model — whose intrinsic unit
 // system varies per export — lands at a consistent on-tile size. This value
 // sits the model at roughly the procedural BUILDING_BASE_DIM footprint (≈0.55).
 export const HOUSE_INSTANCE_BASE_SCALE = 0.55;
 
-// Target world-space height for an instanced building (before the per-hex
-// jitter ratio). The scenario-generated GLBs export at wildly different
-// intrinsic scales, so each template is uniformly scaled at load time so its
-// bbox height lands here — the same bbox-normalize trick the tree + paladin
-// pipelines use. Roughly matches the procedural box+roof stack (0.70 + 0.15).
-// Operator can retune by adjusting this constant.
-export const TARGET_BUILDING_WORLD_HEIGHT = 1.28; // ~50% larger — buildings taller than units (paladin ≈0.92), bigger footprint may overlap tiles a bit
+// Building scale is now driven by GROUND footprint, not height: each template
+// is uniform-scaled at load time so its larger XZ bbox axis fills ~1 hex of
+// ground (`TARGET_BUILDING_GROUND_SPAN`, defined in building-render.js), with
+// height DERIVED from the model's natural aspect ratio rather than capped. This
+// replaces the former height-normalised `TARGET_BUILDING_WORLD_HEIGHT` — see
+// `buildingFitScale` and `_loadBuildingModel`. The footprint-hex rework (P4)
+// also relocates each building onto its footprint hex, facing the entrance.
 
 // ─── Tree pack (real GLB trees from `assets/models/trees/`) ────────────────
 // Phase 1 (PR #381) extracted `tree_pack.glb` into per-model GLBs + a manifest
@@ -764,8 +796,10 @@ export const BUILDING_LABEL_Y = 1.55;
 export const BUILDING_LABEL_WIDTH  = 1.6;
 export const BUILDING_LABEL_HEIGHT = 0.4;
 /** Texture canvas dimensions (px). Power-of-two friendly. */
-export const BUILDING_LABEL_TEX_W = 256;
-export const BUILDING_LABEL_TEX_H = 64;
+// Plank texture: pow-2 sized for mipmap-friendly TRILINEAR. 512x192 is the
+// next pow-2 step that keeps the plank legible from base zoom out to ~3x.
+export const BUILDING_LABEL_TEX_W = 512;
+export const BUILDING_LABEL_TEX_H = 192;
 
 // ─── Power-node tint overlay + name label ───────────────────────────────────
 // A faint faction-tinted hex sits over every power-node tile (just above the
@@ -790,26 +824,10 @@ export const NODE_TINT_DIAMETER = 1.9;
  *  texture and ring tube still dominate. */
 export const NODE_TINT_ALPHA = 0.1;
 
-/** Y offset (world units) for the floating power-node name label. Slightly
- *  below building labels (1.55) so the two overlays don't collide on a tile
- *  that happens to be both a node hex and a building. */
-export const NODE_LABEL_Y = 1.4;
-/** Plane size (world units) of the floating name label. Wider than the
- *  building label since node names (e.g. "The Crooked Pine") can be long. */
-export const NODE_LABEL_WIDTH  = 2.4;
-export const NODE_LABEL_HEIGHT = 0.55;
-/** DynamicTexture canvas dimensions (px) for the node label. */
-export const NODE_LABEL_TEX_W = 384;
-export const NODE_LABEL_TEX_H = 96;
-
-/** Resolve the display text for a power-node label. Returns the objective's
- *  human-readable label, or a sensible fallback if missing. Pure helper for
- *  tests. */
-export function nodeLabelText(obj) {
-  if (!obj) return '';
-  if (typeof obj.label === 'string' && obj.label.length > 0) return obj.label;
-  return 'Power Node';
-}
+// P4c — the floating power-node NAME LABEL (constants NODE_LABEL_* and the
+// `nodeLabelText` helper) was removed. Node identity is carried by the colored
+// ring + tint + identifier outline on the map and by the HUD score dots; a
+// floating name plate was in the way during play.
 
 /** Resolve the tint / label colour for a controller. Thin alias over
  *  `getNodeGlowColor` so the two overlays share one source of truth — if the
@@ -1038,9 +1056,12 @@ export function labelAlphaForZoom(
 
 /** Returns the human-readable label string for a tile, or null if the tile
  *  doesn't get a label (anything other than a BUILDING tile with a building
- *  field). Pure helper — single source of truth for label text + visibility. */
+ *  field, OR a generic HOUSE — houses are the background village fabric and
+ *  don't earn a signpost). Pure helper — single source of truth for label
+ *  text + visibility. */
 export function labelTextForTile(tile) {
   if (!tile || !hasBuilding(tile) || !tile.building) return null;
+  if (tile.building === 'house') return null;
   return BUILDING_LABEL[tile.building] || tile.building;
 }
 
@@ -1903,7 +1924,8 @@ export class Renderer3D {
     //                          `mesh.createInstance(...)` so all instances of
     //                          a type share one vertex buffer / material.
     //                          `scale` is the bbox-derived uniform scale that
-    //                          lands the template at TARGET_BUILDING_WORLD_HEIGHT.
+    //                          fits the template into ~1 hex of ground
+    //                          (TARGET_BUILDING_GROUND_SPAN); height derived.
     // `_buildingLoadPromises`: Map<relPath, Promise> — de-dupes concurrent
     //                          loads of the same path. A failed load leaves the
     //                          path absent from `_buildingTemplates`, so tiles
@@ -2114,14 +2136,10 @@ export class Renderer3D {
     // fog veil (registered into `_tilePropsByKey`). Built lazily alongside
     // the node ring tubes in `_buildNodeGlowMeshes`.
     this._nodeTintMeshes   = [];           // [{ obj, mesh, mat, col, row }]
-    // Power-node floating name labels: one billboarded plane per node, anchored
-    // above the cluster's centroid. Keyed by centre-hex key (hexes[0]) for fog
-    // tracking even though the plane sits at the centroid. Keyed so the per-tile
-    // fog veil can hide them in `_setTileFogged` without freezing the world
-    // matrix (billboarding requires per-frame matrix sync — registering in
-    // `_tilePropsByKey` would freeze the plane and lock its rotation).
-    this._nodeNameLabels   = [];           // [{ obj, plane, mat, tex, hexKey, lastCtrl }]
-    this._nodeLabelsByCenterHex = new Map(); // hexKey → label entry (above)
+    // P4c — floating power-node NAME LABELS were removed (operator: in the way
+    // during play; node identity is already carried by the colored ring + tile
+    // glow + the HUD score dots). Only the ring + tint + identifier outline
+    // remain as the node's on-map signal.
     // Phase-driven lighting state. Pumped by _onBeforeRender each frame; draw()
     // notices state.phase changes and starts a new 3-second eased transition.
     this._lightState = null;            // populated on first draw after init
@@ -2751,20 +2769,22 @@ export class Renderer3D {
       // sub-meshes too in the single-mesh (un-merged) case.
       applyShadowReceiving([source, ...(typeof source.getChildMeshes === 'function' ? source.getChildMeshes() : [])]);
 
-      // Compute a bbox-derived uniform scale so this template's height lands at
-      // TARGET_BUILDING_WORLD_HEIGHT regardless of the GLB's intrinsic units —
-      // this is what makes every building type the same world height. Falls
-      // back to HOUSE_INSTANCE_BASE_SCALE when bbox is unmeasurable (test
-      // stubs); instances then multiply by the small uniform per-hex jitter.
+      // Compute a bbox-derived uniform scale so this template's GROUND footprint
+      // (larger XZ axis) fills ~1 hex regardless of the GLB's intrinsic units —
+      // height is then derived from the model's natural aspect ratio. Falls back
+      // to HOUSE_INSTANCE_BASE_SCALE when bbox is unmeasurable (test stubs);
+      // instances then multiply by the small uniform per-hex jitter.
       let scale = HOUSE_INSTANCE_BASE_SCALE;
       try {
         const info = typeof source.getBoundingInfo === 'function' ? source.getBoundingInfo() : null;
         const bb   = info?.boundingBox;
         if (bb) {
-          const minY = bb.minimumWorld?.y ?? bb.minimum?.y ?? 0;
-          const maxY = bb.maximumWorld?.y ?? bb.maximum?.y ?? 0;
-          const h    = maxY - minY;
-          if (h > 1e-3) scale = TARGET_BUILDING_WORLD_HEIGHT / h;
+          const min = bb.minimumWorld ?? bb.minimum ?? {};
+          const max = bb.maximumWorld ?? bb.maximum ?? {};
+          const bx  = (max.x ?? 0) - (min.x ?? 0);
+          const bz  = (max.z ?? 0) - (min.z ?? 0);
+          const fit = buildingFitScale({ x: bx, z: bz });
+          if (fit != null) scale = fit;
         }
       } catch { /* keep fallback scale */ }
 
@@ -2800,13 +2820,44 @@ export class Renderer3D {
     return promise;
   }
 
+  /** Resolve where a building should be DRAWN and how it should be oriented,
+   *  given its entrance tile and the entrance hex world centre (`x`, `z`).
+   *
+   *  Footprinted building → centred on the footprint hex, yaw facing the
+   *  entrance ("front door" toward the path). Legacy/orphan building (no
+   *  footprint) → keeps the historical NE building-slot offset + centre-facing
+   *  yaw, so old saves render exactly as before. Returns `{ bx, bz, yaw,
+   *  isFootprint }` (world XZ + radians). Pure aside from `hexToWorld`. */
+  _buildingPlacement(tile, x, z) {
+    const renderKey = buildingRenderHex(tile);
+    const [rc, rr]  = renderKey.split(',').map(Number);
+    const isFootprint = !(rc === tile.col && rr === tile.row);
+    if (isFootprint) {
+      const fw = hexToWorld(rc, rr);
+      // P4a: nudge the model off the footprint centre toward the entrance hex so
+      // it visibly leans toward its door. Yaw still derives from the true
+      // footprint→entrance vector (the nudge is colinear, so direction is
+      // unchanged). Applies to both the GLB instance and the procedural fallback.
+      const nudged = buildingNudgedPosition(fw, { x, z }, BUILDING_ENTRANCE_NUDGE);
+      return { bx: nudged.x, bz: nudged.z, yaw: buildingFacingYaw({ x, z }, fw), isFootprint: true };
+    }
+    const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
+    return {
+      bx: x + slot.x,
+      bz: z + slot.z,
+      yaw: houseYawForHex(tile.col, tile.row),
+      isFootprint: false,
+    };
+  }
+
   /** Create one BABYLON.InstancedMesh of the building tile's chosen GLB variant
-   *  template, positioned at the tile's NE building slot. Scale is the
-   *  template's bbox-derived base (every type lands at the same world height)
-   *  times a small *uniform* per-hex jitter so a cluster doesn't look stamped;
-   *  yaw faces the hex centre (`houseYawForHex`) for a consistent inward facing.
-   *  Returns the instance, or null if no template for this tile's variant is
-   *  loaded yet (caller falls back to procedural box+roof). */
+   *  template, positioned on the tile's FOOTPRINT hex (centred, facing the
+   *  entrance) — or the legacy NE building slot for an orphan building with no
+   *  footprint (see `_buildingPlacement`). Scale is the template's bbox-derived
+   *  base (every type fills ~1 hex of ground) times a small *uniform* per-hex
+   *  jitter so a cluster doesn't look stamped. Returns the instance, or null if
+   *  no template for this tile's variant is loaded yet (caller falls back to
+   *  procedural box+roof). */
   _buildBuildingInstance(tile, x, z, parent) {
     if (!this._babylon) return null;
     const variant = buildingGlbVariantForHex(tile);
@@ -2816,17 +2867,17 @@ export class Renderer3D {
     const BABYLON = this._babylon;
     const source  = tpl.mesh;
     if (typeof source.createInstance !== 'function') return null;
-    const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
     // Tile-top anchor — matches the procedural building's base Y (0.43 - 0.7/2).
     const tileTopY = 0.43 - 0.7 / 2;
     const baseScale = tpl.scale != null ? tpl.scale : HOUSE_INSTANCE_BASE_SCALE;
+    const { bx, bz, yaw } = this._buildingPlacement(tile, x, z);
 
     const inst = source.createInstance(`bldgInst_${tile.col}_${tile.row}`);
     if (parent && 'parent' in inst) inst.parent = parent;
     if (inst.position && typeof inst.position === 'object') {
-      inst.position.x = x + slot.x;
+      inst.position.x = bx;
       inst.position.y = tileTopY;
-      inst.position.z = z + slot.z;
+      inst.position.z = bz;
     }
     const sc = houseInstanceScalingForHex(tile.col, tile.row);
     if (BABYLON.Vector3) {
@@ -2835,7 +2886,7 @@ export class Renderer3D {
         baseScale * sc.y,
         baseScale * sc.z,
       );
-      inst.rotation = new BABYLON.Vector3(0, houseYawForHex(tile.col, tile.row), 0);
+      inst.rotation = new BABYLON.Vector3(0, yaw, 0);
     }
     inst.isPickable = false;
     // `respectsFog: false` keeps the per-prop veil loop (`_setTilePropsFogged`)
@@ -5359,12 +5410,21 @@ export class Renderer3D {
     const BABYLON = this._babylon;
     const camera  = this._camera;
     if (!BABYLON || !camera) return Promise.resolve(false);
+    const { target, radius } = this._fitToOwnedUnitsTarget();
+    // Keep current alpha (no `alpha` opt) — don't change yaw.
+    return this._focusCamera(target, radius, { forceAnimate: true }).then(() => true);
+  }
 
-    const radius = camera.upperRadiusLimit ?? CAMERA_MAX_ZOOM_RADIUS;
+  /** Pure-ish computation of the target the ⛶ fit button would ease the
+   *  camera to: world-XZ centroid of the observer's own live units (or the
+   *  map centroid if there's no observer / no live units), at
+   *  `upperRadiusLimit`. Used by the UI to decide whether a tap would move
+   *  the camera at all — if not, the same tap orients north-up instead. */
+  _fitToOwnedUnitsTarget() {
+    const BABYLON = this._babylon;
+    const camera  = this._camera;
+    const radius = camera?.upperRadiusLimit ?? CAMERA_MAX_ZOOM_RADIUS;
     const observerOwner = this._observerOwner();
-
-    // Collect live positions of the observer's own units (live standee pos
-    // preferred, hex centre fallback — same resolution as combat framing).
     const positions = [];
     if (observerOwner && Array.isArray(this.state?.entities)) {
       for (const e of this.state.entities) {
@@ -5373,14 +5433,12 @@ export class Renderer3D {
         if (p) positions.push(p);
       }
     }
-
     let target;
     if (positions.length > 0) {
       let sx = 0, sz = 0;
       for (const p of positions) { sx += p.x; sz += p.z; }
       target = new BABYLON.Vector3(sx / positions.length, 0, sz / positions.length);
     } else {
-      // No observer (AI-vs-AI) or no owned units → map centroid at max zoom.
       const hexes = [];
       if (this.state?.tiles) {
         for (const tile of this.state.tiles.values()) hexes.push({ col: tile.col, row: tile.row });
@@ -5388,11 +5446,25 @@ export class Renderer3D {
       const c = clusterCentroidWorld(hexes);
       target = c
         ? new BABYLON.Vector3(c.x, 0, c.z)
-        : camera.target.clone(); // no tiles loaded — hold current target
+        : (camera?.target?.clone?.() ?? new BABYLON.Vector3(0, 0, 0));
     }
+    return { target, radius };
+  }
 
-    // Keep current alpha (no `alpha` opt) — don't change yaw.
-    return this._focusCamera(target, radius, { forceAnimate: true }).then(() => true);
+  /** True if the camera is already at the fit-button's target state (within
+   *  small epsilons), so a single tap of ⛶ would be a visual no-op. The UI
+   *  uses this to decide between "frame the map" and "orient north up" — one
+   *  button, two actions, no double-tap timing window. */
+  isAtFitTarget(targetEpsilon = 0.5, radiusEpsilon = 0.6) {
+    const camera = this._camera;
+    if (!camera || !camera.target) return false;
+    const { target, radius } = this._fitToOwnedUnitsTarget();
+    if (!target) return false;
+    const dx = (camera.target.x ?? 0) - target.x;
+    const dz = (camera.target.z ?? 0) - target.z;
+    if (Math.hypot(dx, dz) > targetEpsilon) return false;
+    if (Math.abs((camera.radius ?? 0) - radius) > radiusEpsilon) return false;
+    return true;
   }
 
   /** Orient the camera so map north (row 0, world -Z) is pointing up on screen.
@@ -7309,7 +7381,10 @@ export class Renderer3D {
     // laid through a forest (or a building on a forest tile) still shows trees
     // alongside the path/structure, instead of the forest vanishing the moment
     // a path was painted over it.
-    if (baseOf(tile) === TileType.FOREST) {
+    // A building FOOTPRINT hex suppresses its forest entirely — the relocated
+    // building model fills the hex, so trees there would clip through it
+    // (parallel to how the build slot is reserved on a building's own tile).
+    if (baseOf(tile) === TileType.FOREST && !isBuildingFootprint(tile)) {
       // On a building-on-forest tile, reserve the building slot so the forest
       // cones skip BUILDING_SLOT_INDEX (where the procedural box below sits).
       // On a road-through-forest tile, also skip the slots the road deck
@@ -7405,11 +7480,11 @@ export class Renderer3D {
     }
 
     // ── Building: either a glTF model instance (if the tile's variant template
-    // has loaded by now) or the procedural box + roof fallback. Both paths
-    // anchor the building at the NE outer slot (BUILDING_SLOT_INDEX); a
-    // standee on the same hex takes the centre slot so silhouettes don't
-    // overlap. The GLB loads run async from `_initBabylon` — as each resolves
-    // after `_buildMap` completes, `_upgradeBuildingsToGlbModel` swaps the
+    // has loaded by now) or the procedural box + roof fallback. Both paths now
+    // place the building on its FOOTPRINT hex (centred, facing the entrance) —
+    // or the legacy NE building slot for an orphan with no footprint — via
+    // `_buildingPlacement`. The GLB loads run async from `_initBabylon`; as each
+    // resolves after `_buildMap`, `_upgradeBuildingsToGlbModel` swaps the
     // procedural meshes here for instances.
     if (hasBuilding(tile) && tile.building) {
       // Every building type renders an imported GLB once its template loads;
@@ -7421,7 +7496,7 @@ export class Renderer3D {
       if (glbInst) {
         trackProp(glbInst);
       } else {
-        const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
+        const { bx, bz, yaw } = this._buildingPlacement(tile, x, z);
         // Per-tile dimension jitter so buildings show silhouette variety
         // instead of an army of identical boxes. See `buildingDimensionsForHex`.
         const dims = buildingDimensionsForHex(tile.col, tile.row);
@@ -7435,9 +7510,10 @@ export class Renderer3D {
           scene,
         );
         box.parent     = parent;
-        box.position.x = x + slot.x;
-        box.position.z = z + slot.z;
+        box.position.x = bx;
+        box.position.z = bz;
         box.position.y = tileTopY + dims.box.height / 2;
+        if (BABYLON.Vector3) box.rotation = new BABYLON.Vector3(0, yaw, 0);
         box.material   = this._materialFor(BUILDING_COLOR[tile.building] || '#8a7a5a');
         box.isPickable = false;
         box.receiveShadows = true;
@@ -7454,9 +7530,10 @@ export class Renderer3D {
           scene,
         );
         roof.parent     = parent;
-        roof.position.x = x + slot.x;
-        roof.position.z = z + slot.z;
+        roof.position.x = bx;
+        roof.position.z = bz;
         roof.position.y = tileTopY + dims.box.height + dims.roof.height / 2;
+        if (BABYLON.Vector3) roof.rotation = new BABYLON.Vector3(0, yaw, 0);
         roof.material   = this._materialFor('#2c2520');
         roof.isPickable = false;
         roof.receiveShadows = true;
@@ -7465,10 +7542,11 @@ export class Renderer3D {
         trackProp(roof);
       }
 
-      // Hover label — floating billboarded plane above the roof, painted with
-      // the building's display name. Alpha is driven each frame by
-      // `_pumpBuildingLabelFade` so labels fade as the camera zooms back.
-      this._buildBuildingLabel(tile, x, z, parent);
+      // Signpost — a physical post + billboarded name plank at the door-side
+      // edge of the footprint (orphan buildings fall back to a floating label
+      // above the slot). Alpha is driven each frame by `_pumpBuildingLabelFade`
+      // so signs fade out as the camera zooms back.
+      this._buildBuildingSignpost(tile, x, z, parent);
     }
 
     if (props.length > 0) this._tilePropsByKey.set(tkey, props);
@@ -7482,10 +7560,12 @@ export class Renderer3D {
     if (hasBuilding(tile) && tile.building) {
       staticOcc.push({ id: 'building', kind: 'building' });
     }
-    if (baseOf(tile) === TileType.FOREST) {
+    if (baseOf(tile) === TileType.FOREST && !isBuildingFootprint(tile)) {
       // Match the rendered cluster: the building occupant is added separately
       // above, so only blockedSlots (road deck) need to be re-applied here so a
       // tree dropped from the deck isn't listed as a phantom occupant.
+      // Footprint hexes suppress trees (see the build pass above), so they list
+      // no tree occupants either.
       const trees = forestTreesForHex(tile.col, tile.row, this._season, {
         blockedSlots: this._roadBlockedSlotsByKey.get(tkey),
       });
@@ -7510,28 +7590,40 @@ export class Renderer3D {
   _syncFortifications() {
     if (!this._scene || !this._mapRoot || !this.state?.tiles) return;
     const tiles = this.state.tiles;
-    const fortLevelAt = (col, row) => tiles.get(hexKey(col, row))?.fortifyLevel || 0;
+
+    // P4b — fortifications enclose the whole building COMPOUND (passable entrance
+    // + impassable footprint). A hex belongs to a fortified compound when it's a
+    // fortified entrance OR a footprint hex of a fortified entrance; walls go on
+    // the compound's OUTER perimeter only, so the shared entrance↔footprint edge
+    // (and any edge touching another fortified compound) stays bare. Precompute
+    // the membership set once per sync. `fortifyLevel` still lives on the
+    // entrance only — the footprint inherits the wall visual, no data change.
+    const compoundKeys = new Set();
+    for (const tile of tiles.values()) {
+      if ((tile.fortifyLevel || 0) <= 0) continue;
+      compoundKeys.add(hexKey(tile.col, tile.row));
+      if (isBuildingEntrance(tile)) {
+        for (const fk of tile.footprintHexes) compoundKeys.add(fk);
+      }
+    }
+    const isFortifiedCompoundAt = (col, row) => compoundKeys.has(hexKey(col, row));
 
     const seen = new Set();
     for (const tile of tiles.values()) {
       const lvl = tile.fortifyLevel || 0;
       if (lvl <= 0) continue;
-      const tkey = hexKey(tile.col, tile.row);
-      seen.add(tkey);
 
-      const style = fortifyWallStyle(lvl);
-      const dirs  = fortifyEdgeDirs(tile.col, tile.row, fortLevelAt);
-      const sig   = `${style.kind}|${dirs.join(',')}`;
+      const style    = fortifyWallStyle(lvl);
+      const footTile = isBuildingEntrance(tile) ? tiles.get(tile.footprintHexes[0]) : null;
+      const masks    = compoundFortifyEdges(tile, footTile, isFortifiedCompoundAt);
 
-      const existing = this._fortByKey.get(tkey);
-      if (!existing || existing.sig !== sig) {
-        if (existing) this._disposeFortHex(tkey);
-        const entry = this._buildFortMeshesForHex(tile, dirs, style);
-        entry.sig = sig;
-        this._fortByKey.set(tkey, entry);
+      // Entrance hex walls (keyed at its own hex, as before).
+      this._syncFortHex(hexKey(tile.col, tile.row), tile, masks.entrance, style, seen);
+      // Footprint hex walls — inherits the entrance's style, drawn on the outer
+      // edges of the footprint (shared edge with the entrance comes back bare).
+      if (footTile) {
+        this._syncFortHex(hexKey(footTile.col, footTile.row), footTile, masks.footprint, style, seen);
       }
-      // Re-apply fog tint every draw (fog can change without the wall changing).
-      this._applyFortFog(tkey);
     }
 
     // Dispose walls on hexes that are no longer fortified (e.g. siege/combat
@@ -7539,6 +7631,25 @@ export class Renderer3D {
     for (const tkey of [...this._fortByKey.keys()]) {
       if (!seen.has(tkey)) this._disposeFortHex(tkey);
     }
+  }
+
+  /** Build / refresh one hex's fort wall meshes under `tkey`, recording it in
+   *  `seen`. Shared by the entrance hex and (P4b) its footprint hex. Empty
+   *  `dirs` (every edge interior to the compound) disposes any existing meshes
+   *  and registers nothing — the final dispose sweep then forgets the hex. */
+  _syncFortHex(tkey, tile, dirs, style, seen) {
+    if (!dirs.length) { this._disposeFortHex(tkey); return; }
+    seen.add(tkey);
+    const sig = `${style.kind}|${dirs.join(',')}`;
+    const existing = this._fortByKey.get(tkey);
+    if (!existing || existing.sig !== sig) {
+      if (existing) this._disposeFortHex(tkey);
+      const entry = this._buildFortMeshesForHex(tile, dirs, style);
+      entry.sig = sig;
+      this._fortByKey.set(tkey, entry);
+    }
+    // Re-apply fog tint every draw (fog can change without the wall changing).
+    this._applyFortFog(tkey);
   }
 
   /** Build the wall/stake meshes for one fortified hex. Returns
@@ -7568,6 +7679,10 @@ export class Renderer3D {
       m.position.x  = wx;
       m.position.y  = wy;
       m.position.z  = wz;
+      // Fences/walls both CAST shadows (so adjacent terrain darkens under
+      // them) AND RECEIVE shadows (so units, building roofs, and the
+      // building model itself cast onto the fence).
+      if ('receiveShadows' in m) m.receiveShadows = true;
       this._addShadowCaster(m);
       meshes.push(m);
     };
@@ -7585,18 +7700,77 @@ export class Renderer3D {
       // rotation.y aligns a mesh's local +Z axis to (perpX, perpZ).
       const yaw = Math.atan2(perpX, perpZ);
 
+      // Road-aware: if this edge has a road exit (tile.roadDirs lists this
+      // neighbour) the fence leaves a gap at its midpoint so the road can pass
+      // through cleanly — no post or rail blocks the road's centre line.
+      const neighbourKey = `${nb.col},${nb.row}`;
+      const hasRoadHere = !!(
+        tile.roadDirs && (
+          (typeof tile.roadDirs.has === 'function' && tile.roadDirs.has(neighbourKey)) ||
+          (Array.isArray(tile.roadDirs) && tile.roadDirs.includes(neighbourKey))
+        )
+      );
+
       if (style.kind === 'stakes') {
-        // Sparse low posts spread along the edge (passable level-1 marker).
-        const POSTS = 3;
-        for (let i = 0; i < POSTS; i++) {
-          const t = (i / (POSTS - 1) - 0.5) * side * 0.8; // -0.4..+0.4 of the side
+        // Level-1 fortification: a makeshift wooden FARM FENCE — four corner
+        // posts joined by two horizontal cross-rails. Reads as something a
+        // farmer slapped together rather than a regimented defensive line.
+        //
+        // Road-aware: if a road exits through this edge, skip the ENTIRE edge
+        // (no posts, no rails). The road needs an unobstructed gap.
+        if (hasRoadHere) continue;
+        // Deterministic per-edge jitter so the fence looks hand-built, not
+        // machined. Same seed → same wobble every frame, so the fence is
+        // stable across draws but reads as imperfect.
+        const seed = (tile.col * 73856093) ^ (tile.row * 19349663) ^ (d * 83492791);
+        const jit = (n) => {
+          // xor-shift cheap PRNG, 32-bit, returns [-1, +1)
+          let s = (seed + n * 2654435761) | 0;
+          s ^= s << 13; s ^= s >>> 17; s ^= s << 5;
+          return ((s >>> 0) / 0x80000000) - 1;
+        };
+        const postOffsets = [-0.45, -0.15, 0.15, 0.45];
+        for (let pi = 0; pi < postOffsets.length; pi++) {
+          const tu = postOffsets[pi] + jit(pi * 7 + 1) * 0.025;     // ±2.5% along edge
+          const t  = tu * side;
+          const hScale = 1 + jit(pi * 7 + 2) * 0.18;                // ±18% height
+          const lean  = jit(pi * 7 + 3) * 0.12;                     // ±0.12 rad ≈ 7°
+          const postH = style.height * hScale;
           const post = BABYLON.MeshBuilder.CreateCylinder(
-            `fort_${tile.col}_${tile.row}_${d}_${i}`,
-            { diameterTop: style.thickness * 0.7, diameterBottom: style.thickness,
-              height: style.height, tessellation: 6 },
+            `fort_${tile.col}_${tile.row}_${d}_p${pi}`,
+            { diameterTop: style.thickness * 0.65, diameterBottom: style.thickness * 1.05,
+              height: postH, tessellation: 6 },
             scene,
           );
-          place(post, midX + perpX * t, tileTopY + style.height / 2, midZ + perpZ * t);
+          // Lean tilts the post along the edge direction (perp axis). Yaw the
+          // post by a small random amount around vertical too, so the
+          // hex-prism cross-section doesn't all face the same way.
+          post.rotation.z = lean;
+          post.rotation.y = jit(pi * 7 + 4) * 0.6;
+          const px = midX + perpX * t + perpX * jit(pi * 7 + 5) * 0.018;
+          const pz = midZ + perpZ * t + perpZ * jit(pi * 7 + 6) * 0.018;
+          place(post, px, tileTopY + postH / 2, pz);
+        }
+        // Two cross-rails — low and high — running ~90% of the edge with a
+        // small height wobble and a slight sag at the centre (cheaply
+        // approximated by a tiny downward y offset at the midpoint via a thin
+        // box; we keep it a single segment per rail for cheap rendering).
+        const RAIL_HEIGHTS = [0.42, 0.82];           // fractions of style.height
+        const RAIL_CROSS   = style.thickness * 0.55; // box cross-section
+        for (let ri = 0; ri < RAIL_HEIGHTS.length; ri++) {
+          const hf = RAIL_HEIGHTS[ri];
+          const sag = jit(ri * 11 + 50) * 0.025;     // ±0.025 wu vertical wobble
+          const railY = tileTopY + style.height * hf + sag;
+          const rail = BABYLON.MeshBuilder.CreateBox(
+            `fort_${tile.col}_${tile.row}_${d}_rail${ri}`,
+            { width: RAIL_CROSS * (1 + jit(ri + 70) * 0.18),
+              height: RAIL_CROSS * (1 + jit(ri + 71) * 0.18),
+              depth:  side * (0.86 + jit(ri + 72) * 0.04) },
+            scene,
+          );
+          rail.rotation.y = yaw;
+          rail.rotation.z = jit(ri + 73) * 0.05;     // tiny tilt along the rail
+          place(rail, midX, railY, midZ);
         }
       } else {
         // Continuous wall slab spanning the edge. Depth (local Z) = the hex side,
@@ -9632,11 +9806,168 @@ export class Renderer3D {
     badge.lastN = overflow;
   }
 
-  /** Build the floating hover label above a building tile. One DynamicTexture
-   *  per label (~256×64 px); painted once at build time and never repainted
-   *  because building names are immutable. Alpha is driven each frame from
-   *  `_pumpBuildingLabelFade`. Tracked in `_buildingLabelsByKey` so the
-   *  per-frame pump can iterate them without a scene walk. */
+  /** P4c — Build a building's SIGNPOST: a vertical wooden post topped by a
+   *  billboarded name plank, planted at the door-side edge of the footprint
+   *  (the entrance↔footprint shared-edge midpoint, where the road stub meets
+   *  the model). The post stays vertical; only the plank billboards (Y axis)
+   *  so it always faces the camera while reading as a physical roadside marker.
+   *
+   *  A legacy/orphan building (no footprint, hence no shared edge) falls back
+   *  to the OLD centred floating label via `_buildBuildingLabel`.
+   *
+   *  Both meshes are tracked in `_buildingLabelsByKey` under the entrance hex
+   *  key so the zoom-fade pump (`_pumpBuildingLabelFade`) and the fog veil
+   *  (`_setTilePropsFogged`) treat the post + plank as one unit. */
+  _buildBuildingSignpost(tile, hexX, hexZ, parent) {
+    const BABYLON = this._babylon;
+    const scene   = this._scene;
+    if (!BABYLON || !scene || typeof document === 'undefined') return;
+    const text = labelTextForTile(tile);
+    if (!text) return;
+
+    // Door-side edge midpoint pushed OFF the road by SIGNPOST_ROAD_OFFSET so
+    // the post doesn't sit in the road tile. Side is biased deterministically
+    // on the hex position so adjacent buildings don't alternate-zigzag.
+    const renderKey   = buildingRenderHex(tile);
+    const [rc, rr]    = renderKey.split(',').map(Number);
+    const isFootprint = !(rc === tile.col && rr === tile.row);
+    const footprintWorld = isFootprint ? hexToWorld(rc, rr) : null;
+    const sideBias = (((tile.col * 73856093) ^ (tile.row * 19349663)) & 1) ? 1 : -1;
+    const signPos = signpostWorldPos(
+      { x: hexX, z: hexZ },
+      footprintWorld,
+      SIGNPOST_ROAD_OFFSET,
+      sideBias,
+    );
+    if (!signPos) {
+      // Orphan with no footprint → old floating-label behaviour (centred above
+      // the building slot). One extra branch keeps legacy saves rendering.
+      this._buildBuildingLabel(tile, hexX, hexZ, parent);
+      return;
+    }
+
+    const tkey = hexKey(tile.col, tile.row);
+    // Tile-top anchor — matches the procedural/GLB building base Y (0.43-0.7/2).
+    const tileTopY = 0.43 - 0.7 / 2;
+
+    // ── Name plank: dark serif text on a parchment board ──────────────────
+    const tex = new BABYLON.DynamicTexture(
+      `bldgSignTex_${tkey}`,
+      { width: BUILDING_LABEL_TEX_W, height: BUILDING_LABEL_TEX_H },
+      scene,
+      true, // generateMipMaps — keeps the plank legible when zoomed out
+    );
+    tex.hasAlpha = false; // fully-painted parchment; fade is via material alpha
+    if (typeof tex.updateSamplingMode === 'function' && BABYLON.Texture) {
+      tex.updateSamplingMode(BABYLON.Texture.TRILINEAR_SAMPLINGMODE);
+    }
+    this._paintSignpostPlank(tex, text);
+
+    const plankMat = new BABYLON.StandardMaterial(`bldgSignPlankMat_${tkey}`, scene);
+    plankMat.diffuseTexture  = tex;
+    plankMat.emissiveTexture = tex; // unlit so the name reads in any phase light
+    plankMat.specularColor   = new BABYLON.Color3(0, 0, 0);
+    plankMat.backFaceCulling  = false;
+    plankMat.alpha = 1;
+
+    // 3D plank: a box, not a plane. Default Babylon box UVs put the same
+    // texture on all 6 faces, so the parchment + name read from any angle —
+    // and the sides/top/bottom carry the parchment colour because the same
+    // texture is mostly background. Operator wanted "real depth", not a paper
+    // sticker. Still billboards on Y so the front faces the camera.
+    const plank = BABYLON.MeshBuilder.CreateBox(
+      `bldgSignPlank_${tkey}`,
+      { width: SIGNPOST_PLANK_WIDTH, height: SIGNPOST_PLANK_HEIGHT, depth: SIGNPOST_PLANK_DEPTH },
+      scene,
+    );
+    plank.parent        = parent;
+    // BILLBOARDMODE_Y: the box rotates around the vertical axis to face the
+    // camera, but the post below it stays bolt upright (no billboard).
+    plank.billboardMode = BABYLON.Mesh.BILLBOARDMODE_Y;
+    plank.isPickable    = false;
+    plank.material      = plankMat;
+    // Plank sits ABOVE the post — bottom edge of plank rests on the post tip —
+    // so the post never pierces through the text. Plank centre Y = post
+    // height + half-plank-height.
+    plank.position.set(
+      signPos.x,
+      tileTopY + SIGNPOST_POST_HEIGHT + SIGNPOST_PLANK_HEIGHT / 2,
+      signPos.z,
+    );
+
+    // ── Post: a thin dark-wood cylinder rooted at the edge midpoint ───────
+    const postMat = new BABYLON.StandardMaterial(`bldgSignPostMat_${tkey}`, scene);
+    postMat.diffuseColor  = new BABYLON.Color3(0.29, 0.19, 0.11); // weathered wood
+    postMat.specularColor = new BABYLON.Color3(0, 0, 0);
+    postMat.alpha = 1;
+
+    const post = BABYLON.MeshBuilder.CreateCylinder(
+      `bldgSignPost_${tkey}`,
+      { height: SIGNPOST_POST_HEIGHT, diameter: SIGNPOST_POST_DIAMETER, tessellation: 6 },
+      scene,
+    );
+    post.parent     = parent;
+    post.isPickable = false;
+    post.material   = postMat;
+    post.position.set(signPos.x, tileTopY + SIGNPOST_POST_HEIGHT / 2, signPos.z);
+    this._addShadowCaster(post);
+
+    this._buildingLabelsByKey.set(tkey, {
+      meshes: [post, plank],
+      mats:   [postMat, plankMat],
+      tex,
+      fogged: false,
+    });
+  }
+
+  /** Paint a signpost plank DynamicTexture: a parchment/wood board with the
+   *  building name in a clean serif/uncial face, dark-brown ink. Font size
+   *  auto-shrinks for long names so the text always fits within the board
+   *  margin — no clipping on "Graveyard", "Blacksmith", etc. Idempotent. */
+  _paintSignpostPlank(tex, text) {
+    if (!tex || typeof tex.getContext !== 'function') return;
+    const W = BUILDING_LABEL_TEX_W;
+    const H = BUILDING_LABEL_TEX_H;
+    const ctx = tex.getContext();
+    // Parchment field with a thin darker frame so the board reads as carved wood.
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#d4b884';
+    ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = '#7a5a2e';
+    ctx.lineWidth = 10;
+    ctx.strokeRect(5, 5, W - 10, H - 10);
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#3a2410';
+    // Auto-fit: start at the preferred size, measure, and step down by a
+    // simple proportional ratio if the text overflows the board's inner
+    // width (leaving a margin equal to the lineWidth + a bit of padding).
+    const MAX_PX  = 96;
+    const MIN_PX  = 40;                  // floor so 1-2 word names don't go tiny
+    const MARGIN  = 32;                  // padding inside the dark frame
+    const INNER_W = W - MARGIN * 2;
+    const fontFor = (px) => `bold ${px}px "Cinzel", "Trajan Pro", Georgia, serif`;
+    let px = MAX_PX;
+    ctx.font = fontFor(px);
+    // Test stubs may not implement measureText — skip auto-fit there. In a
+    // real browser it always exists.
+    if (typeof ctx.measureText === 'function') {
+      const metrics = ctx.measureText(text);
+      if (metrics?.width > INNER_W) {
+        // Scale by ratio (floor to nearest int), clamped to MIN_PX.
+        px = Math.max(MIN_PX, Math.floor(MAX_PX * (INNER_W / metrics.width)));
+        ctx.font = fontFor(px);
+      }
+    }
+    ctx.fillText(text, W / 2, H / 2 + Math.round(px * 0.04));
+    if (typeof tex.update === 'function') tex.update();
+  }
+
+  /** Build the OLD floating hover label above a building tile — the legacy
+   *  fallback for an orphan building that has no footprint (and thus no
+   *  signpost edge). One DynamicTexture per label (~256×64 px), painted once.
+   *  Tracked in `_buildingLabelsByKey` with the same `{ meshes, mats, tex }`
+   *  shape the signpost uses, so the pump + fog veil handle both uniformly. */
   _buildBuildingLabel(tile, hexX, hexZ, parent) {
     const BABYLON = this._babylon;
     const scene   = this._scene;
@@ -9697,12 +10028,17 @@ export class Renderer3D {
     const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
     plane.position.set(hexX + slot.x, BUILDING_LABEL_Y, hexZ + slot.z);
 
-    this._buildingLabelsByKey.set(tkey, { plane, mat, tex });
+    this._buildingLabelsByKey.set(tkey, {
+      meshes: [plane],
+      mats:   [mat],
+      tex,
+      fogged: false,
+    });
   }
 
-  /** Per-frame: walk every building label and set its material alpha from the
-   *  current camera radius using `labelAlphaForZoom`. Cheap — one Map walk
-   *  and a scalar assignment per label per frame. */
+  /** Per-frame: walk every building signpost/label and set its material alpha
+   *  from the current camera radius (`labelAlphaForZoom`), multiplied by a fog
+   *  dim factor. Post + plank fade together. Cheap — one Map walk per frame. */
   _pumpBuildingLabelFade() {
     if (!this._camera) return;
     if (this._buildingLabelsByKey.size === 0) return;
@@ -9712,32 +10048,15 @@ export class Renderer3D {
       BUILDING_LABEL_FADE_RADIUS_FAR,
     );
     for (const entry of this._buildingLabelsByKey.values()) {
-      if (entry.mat) entry.mat.alpha = a;
+      // Signposts stay fully opaque under fog — the plank is a 3D BOX (not a
+      // billboard plane), and any alpha<1 lets the parchment's back face show
+      // through with the text reading reversed. Zoom-fade alpha alone drives
+      // the material; fog state is conveyed by the building itself dimming.
+      if (entry.mats) for (const m of entry.mats) { if (m) m.alpha = a; }
       // Skip the draw call entirely when fully faded — Babylon still uploads
       // the geometry for alpha=0 alpha-blended meshes, so isVisible is the
-      // cheap path. setEnabled() is overkill (parent toggling overhead).
-      if (entry.plane) entry.plane.isVisible = a > 0;
-    }
-  }
-
-  /** Per-frame: fade every power-node name label by camera distance, reusing
-   *  the building-label ramp (`labelAlphaForZoom` with the same fade radii) so
-   *  node names disappear at the same zoom-out as house labels. Visibility is
-   *  the zoom alpha ANDed with the label's fog state so a fogged node never
-   *  shows its name just because the camera zoomed in. */
-  _pumpNodeLabelFade() {
-    if (!this._camera) return;
-    if (!this._nodeNameLabels || this._nodeNameLabels.length === 0) return;
-    const a = labelAlphaForZoom(
-      this._camera.radius,
-      BUILDING_LABEL_FADE_RADIUS_CLOSE,
-      BUILDING_LABEL_FADE_RADIUS_FAR,
-    );
-    for (const entry of this._nodeNameLabels) {
-      if (entry.mat) entry.mat.alpha = a;
-      // Node labels ignore fog (operator: always-visible). The label fades
-      // with zoom only.
-      if (entry.plane) entry.plane.isVisible = a > 0;
+      // cheap path.
+      if (entry.meshes) for (const mesh of entry.meshes) { if (mesh) mesh.isVisible = a > 0; }
     }
   }
 
@@ -13208,10 +13527,8 @@ export class Renderer3D {
     // Compass rose: rotate the top-left needle to keep pointing at map north
     // as the camera orbits. Skips the DOM write when alpha hasn't moved.
     this._pumpCompassRose();
-    // Building hover labels: fade in/out based on camera zoom.
+    // Building signposts: fade in/out based on camera zoom.
     this._pumpBuildingLabelFade();
-    // Power-node name labels: same zoom-driven fade as the building labels.
-    this._pumpNodeLabelFade();
     // Power-node outer-edge identifier outlines breathe between
     // NODE_OUTLINE_PULSE_MIN and NODE_OUTLINE_PULSE_MAX.
     this._pumpNodeOutlinePulse(now);
@@ -13451,10 +13768,8 @@ export class Renderer3D {
         mat.emissiveColor.b = b * 0.4;
       }
     }
-    // Labels are painted once at build time in the node's identifying
-    // colour (palette-matched to the HUD score dots) — that colour never
-    // changes, so there is no per-frame repaint loop here. Fog visibility
-    // still flips through `_setTileFogged` via `_nodeLabelsByCenterHex`.
+    // P4c — floating node name labels were removed; the only per-frame node
+    // work left is the tint recolour above and the identifier-outline pulse.
   }
 
   _buildNodeGlowMeshes() {
@@ -13466,7 +13781,7 @@ export class Renderer3D {
       // ownership is already conveyed by the HUD score track. The outer
       // identifier ring below (palette colour = which node) stays. Empty
       // _nodeGlowMeshes entry kept so consumers' optional chaining is happy
-      // and `_pumpNodeLabelFade` / fog state still has the per-hex key.
+      // and the per-hex fog state still has its key.
       for (const h of obj.hexes) {
         this._nodeGlowMeshes.push({
           obj, disc: null,
@@ -13548,26 +13863,22 @@ export class Renderer3D {
         }
       }
     }
-    // Build the matching 10%-alpha tint disc + one floating name label per
-    // node. Done in the same pass so the freeze sweep below sees both.
-    this._buildNodeTintAndLabels();
+    // Build the matching 10%-alpha tint disc per node hex (floating name
+    // labels were removed in P4c).
+    this._buildNodeTints();
     // Node rings are static for the rest of the game — fold them into the
     // freeze pass. _freezeStaticMeshes is idempotent; the previously-frozen
     // tile/prop meshes from `_buildMap` are skipped on this second call.
     this._freezeStaticMeshes();
   }
 
-  /** Build the translucent per-hex tint disc and one floating name label per
-   *  power node. Called from `_buildNodeGlowMeshes` after the ring tubes are
-   *  in place. Tint discs share the per-tile fog registry with the ring tubes;
-   *  labels live in their own map so the freeze pass skips them (billboard
-   *  rotation requires a per-frame world-matrix update — a frozen plane would
-   *  point the wrong way). */
-  _buildNodeTintAndLabels() {
+  /** Build the translucent per-hex tint disc for every power node. Called from
+   *  `_buildNodeGlowMeshes` after the ring tubes are in place. Tint discs share
+   *  the per-tile fog registry with the ring tubes. (P4c removed the floating
+   *  name labels that used to be built alongside them.) */
+  _buildNodeTints() {
     const BABYLON = this._babylon;
     if (!BABYLON || !this._scene) return;
-    const SQRT3 = Math.sqrt(3);
-    const tintR = (NODE_TINT_DIAMETER / 2) || HEX_RADIUS_WORLD;
     for (const obj of this.state.witchObjectives) {
       // Per-hex tint disc: flat hex prism sitting just above the terrain disc.
       // We build a CreateCylinder with tessellation 6 so the tint snaps to
@@ -13617,109 +13928,7 @@ export class Renderer3D {
         if (props) props.push(disc);
         else this._tilePropsByKey.set(tkey, [disc]);
       }
-
-      // Floating name label — one per node, anchored at the cluster centroid
-      // but fog-tracked by the centre hex (obj.hexes[0]). The label is the
-      // operator's
-      // primary "this is Power Node X, controlled by Y" read, so it's a
-      // single mesh rather than one per hex.
-      const center = obj.hexes[0];
-      if (!center) continue;
-      const label = this._buildNodeNameLabel(obj, center);
-      if (label) {
-        this._nodeNameLabels.push(label);
-        this._nodeLabelsByCenterHex.set(hexKey(center.col, center.row), label);
-      }
     }
-  }
-
-  /** Build one floating-name-label entry for a power node. Returns the entry
-   *  or null when no DOM is available (headless / node-test). The
-   *  DynamicTexture is painted on first build via `_paintNodeLabel`. */
-  _buildNodeNameLabel(obj, center) {
-    const BABYLON = this._babylon;
-    const scene = this._scene;
-    if (!BABYLON || !scene || typeof document === 'undefined') return null;
-    const tkey = hexKey(center.col, center.row);
-    const tex = new BABYLON.DynamicTexture(
-      `nodeLabelTex_${tkey}`,
-      { width: NODE_LABEL_TEX_W, height: NODE_LABEL_TEX_H },
-      scene,
-      false,
-    );
-    tex.hasAlpha = true;
-
-    const mat = new BABYLON.StandardMaterial(`nodeLabelMat_${tkey}`, scene);
-    mat.diffuseTexture = tex;
-    mat.opacityTexture = tex;
-    mat.useAlphaFromDiffuseTexture = true;
-    mat.specularColor  = new BABYLON.Color3(0, 0, 0);
-    mat.emissiveColor  = new BABYLON.Color3(1, 1, 1);
-    mat.backFaceCulling = false;
-    mat.alpha = 1;
-
-    const plane = BABYLON.MeshBuilder.CreatePlane(
-      `nodeLabel_${tkey}`,
-      { width: NODE_LABEL_WIDTH, height: NODE_LABEL_HEIGHT },
-      scene,
-    );
-    plane.parent = this._mapRoot;
-    plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
-    plane.isPickable = false;
-    plane.material = mat;
-    // R7: render above all world geometry (group 2, same as the floating
-    // unit-icon billboards) so the name is never occluded by trees/buildings.
-    plane.renderingGroupId = 2;
-    // R5b: anchor in the MIDDLE of the cluster (mean of every member hex's
-    // world position), not over the first ("head") hex — a multi-hex node now
-    // labels its centre of mass. Fall back to the centre hex for a degenerate
-    // single-hex cluster.
-    const c = clusterCentroidWorld(obj.hexes) ?? hexToWorld(center.col, center.row);
-    plane.position.set(c.x, NODE_LABEL_Y, c.z);
-
-    const entry = {
-      obj, plane, mat, tex,
-      hexKey: tkey,
-      // Fog state of the centre (tracking) hex. Driven by `_setTileFogged`;
-      // the per-frame fade pump ANDs it with the zoom alpha so a fogged label
-      // never reappears just because the camera zoomed in.
-      fogged: this._fogActiveSet.has(tkey),
-    };
-    // The label colour is the node's identifying palette colour, which is
-    // static for the life of the game — paint once at build time and never
-    // repaint. (Earlier rounds painted in the controller colour and so
-    // needed a per-controller-flip refresh; that's gone now.)
-    this._paintNodeLabel(entry);
-    // Node labels ignore fog (operator: always-visible) — no initial-fog hide.
-    return entry;
-  }
-
-  /** Paint a node-label DynamicTexture with the node's identifying palette
-   *  colour (matching the HUD score dots). Idempotent — safe to call again
-   *  if the texture is ever evicted. */
-  _paintNodeLabel(entry) {
-    const tex = entry?.tex;
-    if (!tex || typeof tex.getContext !== 'function') return;
-    const ctx = tex.getContext();
-    const W = NODE_LABEL_TEX_W;
-    const H = NODE_LABEL_TEX_H;
-    ctx.clearRect(0, 0, W, H);
-    ctx.textAlign    = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.font         = 'bold 44px Georgia, serif';
-    const cx = W / 2;
-    const cy = H / 2;
-    // Dark drop-shadow keeps the label legible against bright daytime sky
-    // / pale fog tiles. The identifying-colour fill sits on top: the label
-    // text matches the HUD score-dot palette so the player can tie a HUD
-    // dot to a node on the map at a glance. Controller signal is carried
-    // by the underlying tint disc, not the label colour.
-    ctx.fillStyle = 'rgba(0,0,0,0.85)';
-    const text = nodeLabelText(entry.obj);
-    ctx.fillText(text, cx + 2, cy + 2);
-    ctx.fillStyle = nodeIdentifyingColor(entry.obj);
-    ctx.fillText(text, cx, cy);
-    tex.update();
   }
 
   /** Apply the fog-of-war veil: swap fogged-tile materials to a darker variant
@@ -14008,24 +14217,14 @@ export class Renderer3D {
       }
       p.isVisible = !fogged;
     }
-    // Building labels are tracked separately — dim (not hide) under fog so the
-    // operator can still read "this hex has an Inn" even when the interior is
-    // unrevealed. Tilemap-driven texture so the tint goes via material alpha.
+    // Building signposts/labels are tracked separately — dim (not hide) under
+    // fog so the operator can still read "this hex has an Inn" even when the
+    // interior is unrevealed. Record the fog state; the per-frame pump
+    // (`_pumpBuildingLabelFade`) folds it into the zoom-fade alpha so the post
+    // + plank dim together. (P4c: floating node name labels were removed, so
+    // there is no node-label fog branch here anymore.)
     const labelEntry = this._buildingLabelsByKey?.get(hexK);
-    if (labelEntry?.mat) {
-      labelEntry.mat.alpha = fogged ? 0.45 : 1.0;
-    }
-    // Power-node name labels: anchored to the cluster centre hex only, so
-    // visibility tracks that one hex's fog state. Hide fully on fog (unlike
-    // building labels) — node ownership IS the tactical secret being hidden.
-    const nodeLabelEntry = this._nodeLabelsByCenterHex?.get(hexK);
-    if (nodeLabelEntry) {
-      // Record fog so the zoom-fade pump (`_pumpNodeLabelFade`) keeps the label
-      // hidden under fog regardless of the camera-distance alpha. Set the
-      // immediate visibility too so a fog change reads on the same frame.
-      nodeLabelEntry.fogged = fogged;
-      if (nodeLabelEntry.plane) nodeLabelEntry.plane.isVisible = !fogged;
-    }
+    if (labelEntry) labelEntry.fogged = fogged;
     if (fogged) this._fogActiveSet.add(hexK);
     else this._fogActiveSet.delete(hexK);
   }
@@ -14445,20 +14644,44 @@ export const CENTRE_SLOT_INDEX = 0;
 export const BUILDING_SLOT_INDEX = 1;
 
 /** Pure helper: the world XZ centres of every fogged building tile, used to feed
- *  the FogDarkenPlugin uniform. A building instance sits at its hex centre plus
- *  the NE building-slot offset (`TILE_SLOTS[BUILDING_SLOT_INDEX]`), and the GLB
- *  geometry is XZ-centred on that pivot — so the building's footprint centre is
- *  `hexToWorld(col,row) + slot`. Returns `[{x, z}, ...]` for tiles that both
- *  carry a building AND are in `fogActiveSet`. No DOM/Babylon dependency. */
+ *  the FogDarkenPlugin uniform. Returns `[{x, z}, ...]` for buildings whose
+ *  render hex is fogged. No DOM/Babylon dependency.
+ *
+ *  The building's render position depends on whether the building is a
+ *  modern footprint-bearing entrance or a legacy 1-hex orphan:
+ *  - footprint-bearing: the GLB sits at `buildingNudgedPosition(footprintWorld,
+ *    entranceWorld, BUILDING_ENTRANCE_NUDGE)` — the footprint hex centre
+ *    nudged ~15% toward the entrance (P4/P4a). The fog hex is the FOOTPRINT
+ *    (the visible building's hex), not the entrance — a building "reads as
+ *    in fog" when its visible geometry sits on a fogged hex.
+ *  - orphan (empty `footprintHexes`): the GLB sits at `entrance + slot`
+ *    (legacy NE-slot position) and the fog hex is the entrance. Matches the
+ *    pre-P4 behavior that shipped in prod.
+ */
 export function buildFoggedBuildingTileList(state, fogActiveSet) {
   const out = [];
   if (!state?.tiles || !fogActiveSet || fogActiveSet.size === 0) return out;
   const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
   for (const tile of state.tiles.values()) {
     if (!hasBuilding(tile)) continue;
-    if (!fogActiveSet.has(hexKey(tile.col, tile.row))) continue;
-    const { x, z } = hexToWorld(tile.col, tile.row);
-    out.push({ x: x + slot.x, z: z + slot.z });
+    const fpKey = Array.isArray(tile.footprintHexes) && tile.footprintHexes.length > 0
+      ? tile.footprintHexes[0] : null;
+    if (fpKey) {
+      // Modern compound building: fog test against the footprint hex, render
+      // position is the nudged footprint→entrance midpoint.
+      if (!fogActiveSet.has(fpKey)) continue;
+      const [fcStr, frStr] = fpKey.split(',');
+      const fc = +fcStr, fr = +frStr;
+      const fW = hexToWorld(fc, fr);
+      const eW = hexToWorld(tile.col, tile.row);
+      const p = buildingNudgedPosition(fW, eW, BUILDING_ENTRANCE_NUDGE);
+      out.push({ x: p.x, z: p.z });
+    } else {
+      // Legacy orphan: building still at entrance + slot offset.
+      if (!fogActiveSet.has(hexKey(tile.col, tile.row))) continue;
+      const { x, z } = hexToWorld(tile.col, tile.row);
+      out.push({ x: x + slot.x, z: z + slot.z });
+    }
   }
   return out;
 }
@@ -15264,14 +15487,37 @@ export function buildRoadNetworkStrokes(tiles, hexKeyFn = hexKey) {
     if (pathOf(tile) !== PathType.ROAD
       && !isBridge(tile)
       && !hasBuilding(tile)) continue;
-    if (!tile.roadDirs || tile.roadDirs.size === 0) continue;
     const nbrs = [];
-    for (const k of tile.roadDirs) {
-      const nt = tiles.get(k);
-      if (nt) nbrs.push({ col: nt.col, row: nt.row });
+    if (tile.roadDirs) {
+      for (const k of tile.roadDirs) {
+        const nt = tiles.get(k);
+        if (nt) nbrs.push({ col: nt.col, row: nt.row });
+      }
+    }
+    // P4a: implicit door stub — a building entrance always draws a road toward
+    // its FOOTPRINT hex (the door), even with no real road connection (path ===
+    // null). Render-only: tile.roadDirs is NOT modified. Dedup against a real
+    // roadDir that already points at the footprint (rare last-resort BFS route).
+    if (isBuildingEntrance(tile) && doorStubDirection(tile) >= 0) {
+      const [fc, fr] = tile.footprintHexes[0].split(',').map(Number);
+      if (!nbrs.some(n => n.col === fc && n.row === fr)) nbrs.push({ col: fc, row: fr });
     }
     if (nbrs.length === 0) continue;
     const strokes = networkStrokesForTile(tile, nbrs, { kind: 'road' });
+    // P4b: the door stub above terminates at the shared edge with the footprint.
+    // Extend it INTO the footprint hex so the ribbon meets the building's door —
+    // i.e. continue to the building's NUDGED world position (the same x/z the GLB
+    // is drawn at). Render-only; tile.roadDirs is still untouched.
+    if (isBuildingEntrance(tile) && doorStubDirection(tile) >= 0) {
+      const [fc, fr] = tile.footprintHexes[0].split(',').map(Number);
+      const here   = hexToWorld(tile.col, tile.row);
+      const fworld = hexToWorld(fc, fr);
+      const e      = _edgeTo(here, fworld);
+      const nudged = buildingNudgedPosition(
+        { x: fworld.x, z: fworld.z }, { x: here.x, z: here.z }, BUILDING_ENTRANCE_NUDGE,
+      );
+      extendDoorStub(strokes, { x: e.mx, z: e.mz }, nudged);
+    }
     if (strokes.length > 0) out.push({ tile, strokes });
   }
   return out;
@@ -15693,9 +15939,10 @@ export function houseYawForHex(col, row) { // eslint-disable-line no-unused-vars
 }
 
 /** Small *uniform* (isotropic) scale jitter for a building instance, applied on
- *  top of the template's bbox-derived base scale. The base scale already lands
- *  every template at `TARGET_BUILDING_WORLD_HEIGHT` (the real normalization), so
- *  this only adds ≤±`HOUSE_INSTANCE_JITTER` of subtle size variety so a cluster
+ *  top of the template's bbox-derived base scale. The base scale already fits
+ *  every template into ~1 hex of ground (`TARGET_BUILDING_GROUND_SPAN`, the real
+ *  normalization), so this only adds ≤±`HOUSE_INSTANCE_JITTER` of subtle size
+ *  variety so a cluster
  *  of identical GLBs doesn't read as stamped. The factor is identical on x/y/z
  *  — buildings are never squashed or stretched. This replaces the former
  *  per-axis ±15% jitter (derived from `buildingDimensionsForHex`) that made

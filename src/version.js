@@ -1,6 +1,6 @@
 // Single source of truth for the build version.
 // Bump this with every commit.
-export const VERSION = '1.4.2';
+export const VERSION = '1.5.0';
 
 // Save format version — only bump when state-sync schema changes break
 // compatibility with existing saves.  Unrelated patches/features keep the
@@ -33,7 +33,14 @@ export const VERSION = '1.4.2';
 //               layer fields; deserialize derives them from `type`, but per the
 //               locked operator decision old in-flight online games are dropped
 //               rather than shimmed, so the bump prunes them on boot.
-export const SAVE_VERSION = 5;
+// v6 (2026-05): P0/P1 of the building-footprint rework. Each tile snapshot now
+//               carries footprintHexes (on entrances) + buildingFootprintOf (on
+//               footprint hexes). Buildings become 2-hex compounds: a passable
+//               entrance plus one impassable footprint hex. deserialize
+//               auto-migrates pre-v6 saves (each building picks one eligible
+//               adjacent hex deterministically), so old saves still hydrate —
+//               the bump is a belt-and-braces signal for bypass consumers.
+export const SAVE_VERSION = 6;
 
 // Unique build identifier — appends Railway's commit SHA when deployed.
 // Falls back to plain VERSION in local dev and in-browser (where process is

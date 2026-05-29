@@ -65,6 +65,16 @@ function _applyTileDef(tile, def) {
   // Carry the editor-authored fixed-explore result so executeExplore yields
   // THAT instead of a random loot roll (offline/campaign only).
   if (def.exploreOverride != null) tile.exploreOverride = def.exploreOverride;
+  // Building-footprint linkage (P5). A footprinted building is a passable
+  // ENTRANCE tile carrying `building` plus one impassable FOOTPRINT hex; the
+  // entrance lists its footprint hex(es) in `footprintHexes` and the footprint
+  // hex back-references the entrance in `buildingFootprintOf`. Both are carried
+  // VERBATIM from the JSON — the loader never auto-derives them (legacy authored
+  // maps without footprints are rewritten once by scripts/migrate-building-
+  // footprints.js). Missing fields fall back to the Tile constructor defaults
+  // (empty array / null), so a building with no footprintHexes stays a 1-hex.
+  if (Array.isArray(def.footprintHexes)) tile.footprintHexes = [...def.footprintHexes];
+  if ('buildingFootprintOf' in def) tile.buildingFootprintOf = def.buildingFootprintOf;
   if (Array.isArray(def.roadDirs)) tile.roadDirs = new Set(def.roadDirs);
   return tile;
 }

@@ -6,8 +6,12 @@ import {
 } from './hex.js';
 import {
   TileType, TILE_COLOR, BUILDING_COLOR, BUILDING_LABEL, BUILDING_ICON,
-  PathType, baseOf, pathOf, hasBuilding, isRiver, isBridge,
+  PathType, baseOf, pathOf, hasBuilding, isBuildingEntrance, isRiver, isBridge,
 } from './tiles.js';
+import {
+  buildingRenderHex, buildingNudgedPosition, doorStubDirection,
+  BUILDING_ENTRANCE_NUDGE,
+} from './building-render.js';
 import { ENTITY_COLOR, EntityType, SurvivorAbility, isLeaderType } from './entities.js';
 import { getVisiblePositions, sightRange, buildFogMovementHexes, computeLineOfSight } from './actions.js';
 import { getFaction } from './factions.js';
@@ -1308,12 +1312,15 @@ export class Renderer {
       if (explored) for (const k of explored) fogKnownHexes.add(k);
     }
 
-    // Pass 1: terrain tiles (grass, forest, dirt, road bg, river bg, bridges)
+    // Pass 1: terrain tiles (grass, forest, dirt, road bg, river bg, bridges).
+    // Building ENTRANCES now draw only their base terrain here (the building
+    // artwork is relocated to the footprint hex in Pass 2) so a road can lead
+    // up to the door and the entrance reads as walkable ground.
     for (let row = vr.minRow; row <= vr.maxRow; row++) {
       for (let col = vr.minCol; col <= vr.maxCol; col++) {
         if (fogKnownHexes && !fogKnownHexes.has(hexKey(col, row))) continue;
         const t = state.tiles.get(hexKey(col, row));
-        if (t && !hasBuilding(t)) this._drawTile(col, row);
+        if (t) this._drawTile(col, row);
       }
     }
 
@@ -1321,12 +1328,17 @@ export class Renderer {
     this._drawRiverLayer(fogKnownHexes);
     this._drawRoadLayer(fogKnownHexes);
 
-    // Pass 2: building tiles drawn over roads/rivers so no bleed-through
+    // Pass 2: building artwork drawn over roads/rivers so no bleed-through.
+    // The art lands on the building's FOOTPRINT hex (or the entrance itself for
+    // a legacy orphan with no footprint); the name LABEL stays on the entrance.
+    // Fog-gated on the render (footprint) hex, since that's where the art lands.
     for (let row = vr.minRow; row <= vr.maxRow; row++) {
       for (let col = vr.minCol; col <= vr.maxCol; col++) {
-        if (fogKnownHexes && !fogKnownHexes.has(hexKey(col, row))) continue;
         const t = state.tiles.get(hexKey(col, row));
-        if (t && hasBuilding(t)) this._drawTile(col, row);
+        if (!t || !hasBuilding(t)) continue;
+        const renderKey = buildingRenderHex(t);
+        if (fogKnownHexes && !fogKnownHexes.has(renderKey)) continue;
+        this._drawBuildingArt(t);
       }
     }
 
@@ -1722,21 +1734,11 @@ export class Renderer {
     // building blocks are layered on top in dedicated passes.
     const baseColor = TILE_COLOR[baseOf(tile)] || TILE_COLOR[TileType.GRASS];
 
-    // Base fill — skipped for buildings in tilemap mode (the base sprite +
-    // building image cover the hex).
-    if (!(hasBuilding(tile) && tileImgs)) {
-      _traceHexPath(ctx, x, y, fillSize);
-      ctx.fillStyle = baseColor;
-      ctx.fill();
-    }
-
-    // Building colour block layered on top of the base (classic colour-fill
-    // mode only; in tilemap mode the building image overlay below provides it).
-    if (hasBuilding(tile) && !tileImgs) {
-      _traceHexPath(ctx, x, y, fillSize);
-      ctx.fillStyle = BUILDING_COLOR[tile.building] || '#8a7a5a';
-      ctx.fill();
-    }
+    // Base fill — drawn for EVERY tile, including building entrances (whose
+    // artwork is relocated to the footprint hex in `_drawBuildingArt`).
+    _traceHexPath(ctx, x, y, fillSize);
+    ctx.fillStyle = baseColor;
+    ctx.fill();
 
     // Hex outline — only in classic colour-fill mode
     if (!tileImgs) {
@@ -1751,21 +1753,10 @@ export class Renderer {
       // Always draw the REAL base material sprite — a road/river/building no
       // longer forces a grass/dirt sprite underneath it.
       const baseId = this._pickVariant(baseOf(tile), col, row);
-      const clipSize = hasBuilding(tile) ? hs : fillSize;
-      const cached = this._getHexTileSprite(baseId, clipSize);
+      const cached = this._getHexTileSprite(baseId, fillSize);
       if (cached) {
         // cached buffer is rendered at higher resolution; draw it at logical size
         ctx.drawImage(cached, 0, 0, cached.width, cached.height,
-          x - hs, y - hs, hs * 2, hs * 2);
-      }
-    }
-
-    // Building image overlay — always drawn when tilemap is available
-    if (hasBuilding(tile) && this._tilemapImg) {
-      const bldgRect = this._spriteRects?.get(tile.building);
-      if (bldgRect) {
-        ctx.drawImage(this._tilemapImg,
-          bldgRect.x, bldgRect.y, bldgRect.size, bldgRect.size,
           x - hs, y - hs, hs * 2, hs * 2);
       }
     }
@@ -1774,78 +1765,151 @@ export class Renderer {
     // Drawn before the bridge early-return so bridge tiles with fortifications
     // still show a ring around the hex perimeter. The water bezier and road
     // strip in _drawRiverLayer/_drawRoadLayer overlay the hex centre, not the
-    // outline, so the ring remains visible.
+    // outline, so the ring remains visible. P4b: for a fortified building
+    // entrance the COMPOUND ring also wraps the footprint hex — that second ring
+    // is drawn in `_drawBuildingArt` (Pass 2, after every tile's terrain fill) so
+    // the footprint hex's own fill can't overdraw it. fortifyLevel lives on the
+    // entrance only; the footprint inherits the ring visually.
     if (tile.fortifyLevel > 0) {
-      const lvl = tile.fortifyLevel;
-      const fortPalette = [
-        null,
-        [160, 100,  55],   // 1 — amber/wood palisade
-        [120, 135, 148],   // 2 — rough stone
-        [180, 196, 210],   // 3 — dressed silver steel
-        [205, 165,  35],   // 4 — iron-gilt ramparts
-        [230, 190,  55],   // 5 — gilded bulwark
-        [255, 220,  90],   // 6 — radiant bastion
-      ];
-      const [fr, fg, fb] = fortPalette[Math.min(lvl, 6)];
-      const alpha = Math.min(0.95, 0.5 + lvl * 0.08);
-      const lw    = Math.min(lvl * 2, 12);
-
-      _traceHexPath(ctx, x, y, fillSize);
-
-      // Outer diffuse glow
-      ctx.strokeStyle = `rgba(${fr},${fg},${fb},0.18)`;
-      ctx.lineWidth   = lw + 5;
-      ctx.stroke();
-
-      // Main fort ring
-      ctx.strokeStyle = `rgba(${fr},${fg},${fb},${alpha})`;
-      ctx.lineWidth   = lw;
-      ctx.stroke();
-
-      // Inner highlight rim for level 2+ (lighter edge for depth)
-      if (lvl >= 2) {
-        _traceHexPath(ctx, x, y, hs - 1 - lw * 0.6);
-        ctx.strokeStyle = `rgba(${Math.min(255, fr + 65)},${Math.min(255, fg + 65)},${Math.min(255, fb + 65)},0.45)`;
-        ctx.lineWidth   = 1;
-        ctx.stroke();
-      }
+      this._drawFortRing(x, y, tile.fortifyLevel);
     }
 
     // Bridge tiles: only the water background is drawn here.
     // The water bezier and road strip are layered on top in _drawRiverLayer / _drawRoadLayer.
     if (isBridge(tile)) return;
+  }
 
+  /** Draw the tiered fortification ring (outer glow + main ring + inner
+   *  highlight) centred at canvas `(cx, cy)` for fort `lvl` (1..6). Extracted so
+   *  the entrance hex (Pass 1) and — for a fortified building compound — its
+   *  footprint hex (Pass 2) render the identical indicator. The 2D ring is a
+   *  stylised perimeter GLOW, not literal per-edge walls, so the compound reads
+   *  as a ring on each of its two hexes (the precise "shared edge stays bare"
+   *  per-edge rule is realised in the 3D renderer's wall meshes via
+   *  `compoundFortifyEdges`). */
+  _drawFortRing(cx, cy, lvl) {
+    const ctx = this.ctx;
+    const hs  = this.hexSize;
+    const tileImgs = this.useTileImages && this._tilemapImg;
+    const fillSize = tileImgs ? hs - 0.5 : hs - 1;
+    const fortPalette = [
+      null,
+      [160, 100,  55],   // 1 — amber/wood palisade
+      [120, 135, 148],   // 2 — rough stone
+      [180, 196, 210],   // 3 — dressed silver steel
+      [205, 165,  35],   // 4 — iron-gilt ramparts
+      [230, 190,  55],   // 5 — gilded bulwark
+      [255, 220,  90],   // 6 — radiant bastion
+    ];
+    const [fr, fg, fb] = fortPalette[Math.min(lvl, 6)];
+    const alpha = Math.min(0.95, 0.5 + lvl * 0.08);
+    const lw    = Math.min(lvl * 2, 12);
 
-    // ── Building: icon + name ─────────────────────────────────────────────
-    if (hasBuilding(tile) && tile.building) {
-      const hasBuildingImg = !!this._spriteRects?.get(tile.building) && !!this._tilemapImg;
+    _traceHexPath(ctx, cx, cy, fillSize);
 
-      // Show emoji icon only when there is no image (image provides the visual)
-      if (!hasBuildingImg) {
-        ctx.font         = `${Math.floor(hs * 0.55)}px serif`;
-        ctx.textAlign    = 'center';
-        ctx.textBaseline = 'middle';
-        this._shadowText(BUILDING_ICON[tile.building] || '?', x, y - hs * 0.10);
-      }
+    // Outer diffuse glow
+    ctx.strokeStyle = `rgba(${fr},${fg},${fb},0.18)`;
+    ctx.lineWidth   = lw + 5;
+    ctx.stroke();
 
-      // Building names crowd neighbouring hexes at low zoom. Fade them in
-      // smoothly based on the effective on-screen hex size so they only
-      // appear once there's room to read them.
-      const effectiveHex = hs * this.zoomLevel;
-      const LABEL_FADE_START = 40;
-      const LABEL_FADE_END   = 60;
-      const labelAlpha = Math.max(0, Math.min(1,
-        (effectiveHex - LABEL_FADE_START) / (LABEL_FADE_END - LABEL_FADE_START)));
-      if (labelAlpha > 0) {
-        const prevAlpha = ctx.globalAlpha;
-        ctx.globalAlpha = prevAlpha * labelAlpha;
-        ctx.fillStyle    = 'rgba(255,248,230,0.92)';
-        ctx.font         = `bold ${Math.max(7, Math.floor(hs * 0.25))}px "Georgia", serif`;
-        ctx.textAlign    = 'center';
-        ctx.textBaseline = 'middle';
-        this._shadowText(BUILDING_LABEL[tile.building] || tile.building, x, y + hs * 0.58);
-        ctx.globalAlpha = prevAlpha;
-      }
+    // Main fort ring
+    ctx.strokeStyle = `rgba(${fr},${fg},${fb},${alpha})`;
+    ctx.lineWidth   = lw;
+    ctx.stroke();
+
+    // Inner highlight rim for level 2+ (lighter edge for depth)
+    if (lvl >= 2) {
+      _traceHexPath(ctx, cx, cy, hs - 1 - lw * 0.6);
+      ctx.strokeStyle = `rgba(${Math.min(255, fr + 65)},${Math.min(255, fg + 65)},${Math.min(255, fb + 65)},0.45)`;
+      ctx.lineWidth   = 1;
+      ctx.stroke();
+    }
+  }
+
+  // ── Building artwork (Pass 2) ──────────────────────────────────────────
+  // Draws a building's colour block / sprite image / fallback icon on its
+  // FOOTPRINT hex (looked up via buildingRenderHex — falls back to the
+  // entrance hex for a legacy orphan with no footprint), then the name LABEL
+  // anchored on the ENTRANCE hex. `entranceTile` is the tile carrying
+  // `building`. Called after the road/river layers so the building sits on top.
+  _drawBuildingArt(entranceTile) {
+    if (!entranceTile?.building) return;
+    const ctx = this.ctx;
+    const hs  = this.hexSize;
+    const tileImgs = this.useTileImages && this._tilemapImg;
+    const fillSize = tileImgs ? hs - 0.5 : hs - 1;
+
+    // P4b: extend the fortification ring across the whole COMPOUND. The entrance
+    // hex's ring is drawn in Pass 1 (`_drawTile`); here — after every tile's
+    // terrain fill — we add the matching ring on the footprint hex so a fortified
+    // building reads as one enclosed structure rather than a half-walled hex.
+    // Drawn before the building art so the art sits on top, matching the entrance.
+    if (isBuildingEntrance(entranceTile) && entranceTile.fortifyLevel > 0) {
+      const [fc, fr] = entranceTile.footprintHexes[0].split(',').map(Number);
+      const { x: ffx, y: ffy } = this._toCanvas(fc, fr);
+      this._drawFortRing(ffx, ffy, entranceTile.fortifyLevel);
+    }
+
+    // Where the artwork lands — the footprint hex, or the entrance for an orphan.
+    const renderKey = buildingRenderHex(entranceTile);
+    const [rc, rr]  = renderKey.split(',').map(Number);
+    let { x, y }    = this._toCanvas(rc, rr);
+    // P4a: nudge the art off the footprint centre toward the entrance hex so it
+    // leans toward its door. Footprinted buildings only — an orphan (no
+    // footprint) draws on its own hex, unchanged.
+    if (isBuildingEntrance(entranceTile)) {
+      const { x: ex, y: ey } = this._toCanvas(entranceTile.col, entranceTile.row);
+      const nudged = buildingNudgedPosition({ x, z: y }, { x: ex, z: ey }, BUILDING_ENTRANCE_NUDGE);
+      x = nudged.x; y = nudged.z;
+    }
+
+    // Building colour block (classic colour-fill mode only — in tilemap mode
+    // the image overlay below provides the visual). Re-stroke the hex outline
+    // so the block matches the surrounding terrain tiles.
+    if (!tileImgs) {
+      _traceHexPath(ctx, x, y, fillSize);
+      ctx.fillStyle = BUILDING_COLOR[entranceTile.building] || '#8a7a5a';
+      ctx.fill();
+      _traceHexPath(ctx, x, y, fillSize);
+      ctx.strokeStyle = '#111418';
+      ctx.lineWidth   = 0.8;
+      ctx.stroke();
+    }
+
+    // Building image overlay — drawn whenever the tilemap is available.
+    const bldgRect = this._spriteRects?.get(entranceTile.building);
+    const hasBuildingImg = !!bldgRect && !!this._tilemapImg;
+    if (hasBuildingImg) {
+      ctx.drawImage(this._tilemapImg,
+        bldgRect.x, bldgRect.y, bldgRect.size, bldgRect.size,
+        x - hs, y - hs, hs * 2, hs * 2);
+    } else {
+      // Emoji icon fallback when there's no sprite for this building type.
+      ctx.font         = `${Math.floor(hs * 0.55)}px serif`;
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'middle';
+      this._shadowText(BUILDING_ICON[entranceTile.building] || '?', x, y - hs * 0.10);
+    }
+
+    // ── Building name LABEL — anchored to the ENTRANCE hex (the canonical
+    // "building tile" for the player), NOT the footprint. Names crowd
+    // neighbouring hexes at low zoom, so fade them in based on effective
+    // on-screen hex size.
+    const { x: ex, y: ey } = this._toCanvas(entranceTile.col, entranceTile.row);
+    const effectiveHex = hs * this.zoomLevel;
+    const LABEL_FADE_START = 40;
+    const LABEL_FADE_END   = 60;
+    const labelAlpha = Math.max(0, Math.min(1,
+      (effectiveHex - LABEL_FADE_START) / (LABEL_FADE_END - LABEL_FADE_START)));
+    if (labelAlpha > 0) {
+      const prevAlpha = ctx.globalAlpha;
+      ctx.globalAlpha = prevAlpha * labelAlpha;
+      ctx.fillStyle    = 'rgba(255,248,230,0.92)';
+      ctx.font         = `bold ${Math.max(7, Math.floor(hs * 0.25))}px "Georgia", serif`;
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'middle';
+      this._shadowText(BUILDING_LABEL[entranceTile.building] || entranceTile.building, ex, ey + hs * 0.58);
+      ctx.globalAlpha = prevAlpha;
     }
   }
 
@@ -2204,6 +2268,39 @@ export class Renderer {
           // Restore road lineWidth for subsequent tiles
           ctx.lineWidth = hs * 0.42;
         }
+      }
+    }
+
+    // ── P4a: implicit door stubs ──────────────────────────────────────────
+    // Every building ENTRANCE draws a short road stub from its centre to the
+    // edge it shares with its FOOTPRINT hex — the visual "door". Render-only:
+    // the data layer's roadDirs is untouched. Drawn even when the entrance has
+    // no road connection (a deliberate visual lie so an isolated building still
+    // reads as having a door). The entrance tile is skipped by the main road
+    // loop above (it's a building, not a ROAD/bridge tile), so no double-draw.
+    ctx.strokeStyle = TILE_COLOR[TileType.ROAD];
+    ctx.lineWidth   = hs * 0.42;
+    for (let row = 0; row < MAP_ROWS; row++) {
+      for (let col = 0; col < MAP_COLS; col++) {
+        const key = hexKey(col, row);
+        if (fogKnownHexes && !fogKnownHexes.has(key)) continue;
+        const tile = tiles.get(key);
+        if (!isBuildingEntrance(tile)) continue;
+        if (doorStubDirection(tile) < 0) continue;
+        const [fc, fr] = tile.footprintHexes[0].split(',').map(Number);
+        const { x, y } = this._toCanvas(col, row);
+        const { x: fx, y: fy } = this._toCanvas(fc, fr);
+        // P4b: continue the stub PAST the shared edge INTO the footprint hex so
+        // the road visibly enters the building's hex, terminating at the nudged
+        // building draw position (the same x/y `_drawBuildingArt` uses). Render-
+        // only; roadDirs untouched.
+        const nudged = buildingNudgedPosition(
+          { x: fx, z: fy }, { x, z: y }, BUILDING_ENTRANCE_NUDGE,
+        );
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(nudged.x, nudged.z);
+        ctx.stroke();
       }
     }
 

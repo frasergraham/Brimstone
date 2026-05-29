@@ -31,6 +31,7 @@ import {
 import { hexKey, getNeighbors } from '../hex.js';
 import { rng, generateMap, MAP_SIZES, NODE_COLORS } from '../map.js';
 import { buildMissionMap, rederiveRoads } from '../campaign/mission-map.js';
+import { eligibleFootprintNeighbors, pickFootprintNeighbor } from '../building-footprint.js';
 import { SURVIVOR_ROSTER } from '../content/survivors.js';
 import { ITEMS } from '../items.js';
 
@@ -347,6 +348,11 @@ function _blankTileDef(col, row) {
     hiddenSurvivorId: null,
     exploreOverride: null,
     roadDirs: [],
+    // Building-footprint pair (P0+P1 data model): an ENTRANCE carries the keys
+    // of its impassable footprint hex(es); a FOOTPRINT hex carries the "col,row"
+    // key of its entrance. Both default empty/null on a blank tile.
+    footprintHexes: [],
+    buildingFootprintOf: null,
   };
 }
 
@@ -401,6 +407,166 @@ export function paintStructure(mapDef, { col, row }, buildingKey) {
   } else {
     def.structure = null;
     def.building = null;
+    // Clearing a building also dissolves its footprint relationship (item 4):
+    // the entrance's footprint hex(es) lose their impassable back-pointer.
+    clearFootprintPair(mapDef, col, row);
+  }
+  return mapDef;
+}
+
+// ── Building footprints (P6) ─────────────────────────────────────────────────
+// A footprinted building is a compound object: a passable ENTRANCE tile (carries
+// `building` + a `footprintHexes` list) plus one impassable FOOTPRINT hex
+// adjacent to it (carries `buildingFootprintOf` pointing back at the entrance).
+// The shared eligibility rules live in src/building-footprint.js — these editor
+// ops drive it against the current (built) map so a hand-placed footprint obeys
+// the SAME constraints as procedural generation.
+
+// Copy each def's footprint fields onto the matching built Tile. buildMissionMap
+// (P5/Vega) does not yet carry these fields through `_applyTileDef`, so without
+// this patch the eligibility check + road-regen snapshot would see a footprint-
+// free map and (a) treat already-claimed hexes as eligible and (b) drop the
+// footprint markers. Localised here so mission-map.js stays untouched.
+function _patchFootprintFields(mapDef, tilesMap) {
+  for (const def of _tileList(mapDef)) {
+    const t = tilesMap.get(hexKey(def.col, def.row));
+    if (!t) continue;
+    if (Array.isArray(def.footprintHexes)) t.footprintHexes = [...def.footprintHexes];
+    if ('buildingFootprintOf' in def) t.buildingFootprintOf = def.buildingFootprintOf ?? null;
+  }
+}
+
+// Build the `{ tiles, witchObjectives }` context the footprint helper consumes:
+// the fully-built map (so the generated base + every layer is known) with the
+// def-list footprint claims patched in. Returns an empty context if the map
+// can't build (malformed in-progress edit) so callers degrade to "no candidate".
+function _footprintContext(mapDef) {
+  let tiles;
+  let witchObjectives;
+  try {
+    const built = buildMissionMap(mapDef);
+    tiles = built.tiles;
+    witchObjectives = built.witchObjectives ?? [];
+  } catch {
+    return { tiles: new Map(), witchObjectives: [] };
+  }
+  _patchFootprintFields(mapDef, tiles);
+  return { tiles, witchObjectives };
+}
+
+/**
+ * The hex that WOULD become a building's footprint if one were placed on
+ * `(col,row)` right now — the first eligible neighbour in odd-r direction order
+ * 0..5 (deterministic; no `rand`). Returns `{ col, row }` or null when no
+ * adjacent hex is eligible. Pure read — used by both placement and the editor's
+ * hover ghost overlay.
+ */
+export function footprintCandidate(mapDef, { col, row }) {
+  return pickFootprintNeighbor(_footprintContext(mapDef), col, row);
+}
+
+/**
+ * PLACE a building WITH a footprint (P6, item 1). Stamps the building on the
+ * entrance (reusing {@link paintStructure}) AND claims the first eligible
+ * adjacent hex as its impassable footprint — `entrance.footprintHexes=[fpKey]`
+ * and `footprint.buildingFootprintOf=entranceKey`, mutually back-pointing.
+ *
+ * Returns `{ ok, warning }`:
+ *   • no eligible neighbour → `{ ok:false }` and the model is left UNTOUCHED
+ *     (the caller treats it as a no-op — no building placed).
+ *   • re-painting onto an existing entrance only swaps the building TYPE, keeping
+ *     the already-claimed footprint (so the type picker doesn't strand hexes).
+ */
+export function placeBuildingFootprint(mapDef, { col, row }, buildingKey) {
+  if (!buildingKey) return paintStructure(mapDef, { col, row }, null);
+  const existing = _tileList(mapDef).find(t => t.col === col && t.row === row);
+  if (existing && Array.isArray(existing.footprintHexes) && existing.footprintHexes.length > 0) {
+    // Already a footprinted entrance — just change the building type.
+    paintStructure(mapDef, { col, row }, buildingKey);
+    return { ok: true, warning: '' };
+  }
+  const fp = footprintCandidate(mapDef, { col, row });
+  if (!fp) {
+    return { ok: false, warning: 'No eligible adjacent hex for building footprint.' };
+  }
+  paintStructure(mapDef, { col, row }, buildingKey);
+  const entranceKey = hexKey(col, row);
+  const fpKey = hexKey(fp.col, fp.row);
+  _getOrCreateTileDef(mapDef, col, row).footprintHexes = [fpKey];
+  _getOrCreateTileDef(mapDef, fp.col, fp.row).buildingFootprintOf = entranceKey;
+  return { ok: true, warning: '' };
+}
+
+// The direction-ordered (0..5) ring of footprint hexes a placed building may
+// occupy: every currently-eligible neighbour PLUS its current footprint hex
+// (which eligibility excludes because it's already claimed). Keys are "col,row".
+function _footprintRing(mapDef, col, row, curKey) {
+  const ctx = _footprintContext(mapDef);
+  const eligible = new Set(
+    eligibleFootprintNeighbors(ctx, col, row).map(h => hexKey(h.col, h.row)));
+  if (curKey) eligible.add(curKey); // the current hex is a valid target to cycle through
+  return getNeighbors(col, row)
+    .map(n => hexKey(n.col, n.row))
+    .filter(k => eligible.has(k));
+}
+
+/**
+ * ROTATE a building's footprint to the NEXT eligible adjacent hex (P6, item 2),
+ * cycling the 6 odd-r directions 0..5 and skipping ineligible hexes. Clears the
+ * old footprint hex's back-pointer and sets the new one's. Returns `{ ok, warning }`:
+ *   • not a building / no entrance → `{ ok:false }`, model untouched.
+ *   • 0 or 1 eligible hex → `{ ok:false }` no-op (nothing to rotate to).
+ */
+export function rotateFootprint(mapDef, { col, row }) {
+  const entrance = _tileList(mapDef).find(t => t.col === col && t.row === row);
+  if (!entrance || !entrance.building) {
+    return { ok: false, warning: 'Select a building to rotate its footprint.' };
+  }
+  const curKey = (Array.isArray(entrance.footprintHexes) && entrance.footprintHexes[0]) || null;
+  const ring = _footprintRing(mapDef, col, row, curKey);
+  if (ring.length <= 1) {
+    return { ok: false, warning: 'No other eligible hex to rotate the footprint to.' };
+  }
+  const curIdx = curKey ? ring.indexOf(curKey) : -1;
+  const nextKey = ring[(curIdx + 1) % ring.length];
+  if (nextKey === curKey) {
+    return { ok: false, warning: 'No other eligible hex to rotate the footprint to.' };
+  }
+  // Release the old footprint hex, claim the new one (mutually back-pointing).
+  if (curKey) {
+    const oldDef = _tileList(mapDef).find(t => hexKey(t.col, t.row) === curKey);
+    if (oldDef) oldDef.buildingFootprintOf = null;
+  }
+  entrance.footprintHexes = [nextKey];
+  const [nc, nr] = String(nextKey).split(',').map(Number);
+  _getOrCreateTileDef(mapDef, nc, nr).buildingFootprintOf = hexKey(col, row);
+  return { ok: true, warning: '' };
+}
+
+/**
+ * Dissolve the footprint relationship anchored at `(col,row)`, whether it's an
+ * ENTRANCE (clear each footprint hex's back-pointer + empty its own list) or a
+ * FOOTPRINT hex (drop itself from its entrance's list + clear its own pointer).
+ * Mutates the def list in place; safe no-op on a tile with no footprint role.
+ */
+export function clearFootprintPair(mapDef, col, row) {
+  const list = _tileList(mapDef);
+  const self = list.find(t => t.col === col && t.row === row);
+  if (!self) return mapDef;
+  if (Array.isArray(self.footprintHexes) && self.footprintHexes.length) {
+    for (const fk of self.footprintHexes) {
+      const fd = list.find(t => hexKey(t.col, t.row) === fk);
+      if (fd) fd.buildingFootprintOf = null;
+    }
+    self.footprintHexes = [];
+  }
+  if (self.buildingFootprintOf != null) {
+    const selfKey = hexKey(col, row);
+    const ed = list.find(t => hexKey(t.col, t.row) === self.buildingFootprintOf);
+    if (ed && Array.isArray(ed.footprintHexes)) {
+      ed.footprintHexes = ed.footprintHexes.filter(k => k !== selfKey);
+    }
+    self.buildingFootprintOf = null;
   }
   return mapDef;
 }
@@ -503,6 +669,10 @@ function _unwireRoadConnections(mapDef, col, row) {
  * def still exists) so no segment dangles into the cleared/reverted hex.
  */
 export function deleteTile(mapDef, { col, row }) {
+  // Dissolve any building footprint relationship FIRST (item 4) so the partner
+  // hex's back-pointer is cleared atomically with the deletion, while both defs
+  // still exist in the list.
+  clearFootprintPair(mapDef, col, row);
   if (mapDef.mode === 'procedural') {
     // Unwire BEFORE dropping the def so neighbours lose their reference to it.
     _unwireRoadConnections(mapDef, col, row);
@@ -849,9 +1019,13 @@ export function snapshotTiles(tilesMap) {
     const structKey = structureOf(t) ? _BUILDING_STRUCT_KEY : null;
     const pathKey = _enumKey(PathType, pathOf(t)); // ROAD | RIVER | BRIDGE | null
     const roadDirs = t.roadDirs ? [...t.roadDirs] : [];
+    const footprintHexes = t.footprintHexes ? [...t.footprintHexes] : [];
+    // A footprint hex keeps its open base terrain (it's just impassable via the
+    // back-pointer), so include both footprint fields in the trivial guard or a
+    // footprint-only hex would be dropped and the pair would break on reload.
     const trivial = baseKey === 'GRASS' && !structKey && !pathKey && !t.building &&
       !t.resource && !t.fortifyLevel && !t.hiddenSurvivor && !t.exploreOverride &&
-      roadDirs.length === 0;
+      roadDirs.length === 0 && footprintHexes.length === 0 && !t.buildingFootprintOf;
     if (trivial) continue;
     out.push({
       col: t.col, row: t.row,
@@ -868,6 +1042,8 @@ export function snapshotTiles(tilesMap) {
       hiddenSurvivorId: t.hiddenSurvivorId ?? null,
       exploreOverride: t.exploreOverride ?? null,
       roadDirs,
+      footprintHexes,
+      buildingFootprintOf: t.buildingFootprintOf ?? null,
     });
   }
   return out;
@@ -901,6 +1077,9 @@ export function stripTileOverlays(tilesMap) {
 export function regenerateHandmadeRoads(mapDef) {
   if (mapDef.mode !== 'handmade') return mapDef;
   const built = buildMissionMap(mapDef); // tiles Map (also sets map dimensions)
+  // buildMissionMap doesn't carry footprint fields (P5/Vega); re-apply them from
+  // the def list so the regen→snapshot round-trip preserves placed footprints.
+  _patchFootprintFields(mapDef, built.tiles);
 
   const nodeKeys = new Set(mapDef.roadNodes ?? []);
   for (const t of built.tiles.values()) {
@@ -1777,7 +1956,10 @@ export function evictWip(storage, cap = WIP_MAX_SLOTS) {
 
 const _TOOL_DISPATCH = {
   [EditorTool.PAINT_BASE]: (m, hex, pv) => paintBase(m.mapDef, hex, pv.base),
-  [EditorTool.PAINT_STRUCTURE]: (m, hex, pv) => paintStructure(m.mapDef, hex, pv.structure),
+  // Placing a building auto-claims a footprint (item 1) — returns { ok, warning }
+  // so applyAt surfaces (and no-ops) the "no eligible adjacent hex" case. The
+  // "None" value (null) clears the building (+ dissolves its footprint pair).
+  [EditorTool.PAINT_STRUCTURE]: (m, hex, pv) => placeBuildingFootprint(m.mapDef, hex, pv.structure),
   // Road: any-junction wiring. River: unconditional paint (no topology gate) —
   // returns { ok:true, warning:'' } for the applyAt contract.
   [EditorTool.PAINT_ROAD]: (m, hex) => paintRoad(m.mapDef, hex),
@@ -1985,6 +2167,37 @@ export function createMissionEditor({ render } = {}) {
       snapshot();
       renamePowerNode(mapDef, index, name);
       emit();
+    },
+
+    // ── Building footprints (P6) ─────────────────────────────────────────
+    /**
+     * The hex that WOULD become the footprint if a building were placed on `hex`
+     * right now (first eligible neighbour, dir 0..5), or null. Read-only — drives
+     * the hover ghost overlay.
+     */
+    footprintCandidateAt(hex) {
+      if (!hex) return null;
+      return footprintCandidate(mapDef, { col: hex.col, row: hex.row });
+    },
+    /**
+     * Rotate the footprint of the building at `hex` to the next eligible adjacent
+     * hex (one undo step). Mirrors applyAt's blocked-edit contract: a no-op (no
+     * other eligible hex / not a building) leaves the model AND history untouched.
+     * Returns `{ ok, warning }`.
+     */
+    rotateFootprintAt(hex) {
+      if (!hex || !_inBounds(hex)) return { ok: false, warning: '' };
+      const redoBackup = redoStack.slice();
+      snapshot();
+      const res = rotateFootprint(mapDef, { col: hex.col, row: hex.row });
+      if (res && res.ok === false) {
+        undoStack.pop();
+        redoStack.length = 0;
+        for (const s of redoBackup) redoStack.push(s);
+        return res;
+      }
+      emit();
+      return res ?? { ok: true, warning: '' };
     },
 
     // ── Undo / Redo (item 5) ─────────────────────────────────────────────

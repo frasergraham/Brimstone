@@ -77,8 +77,9 @@ import { Tile, TileType, PathType, StructureType, BuildingType } from '../src/ti
 
 // The complete set of fields a canonical layered tile def carries.
 const LAYERED_FIELDS = [
-  'base', 'building', 'col', 'exploreOverride', 'fortifyLevel', 'hiddenSurvivor',
-  'hiddenSurvivorId', 'path', 'resource', 'roadDirs', 'row', 'structure',
+  'base', 'building', 'buildingFootprintOf', 'col', 'exploreOverride',
+  'footprintHexes', 'fortifyLevel', 'hiddenSurvivor', 'hiddenSurvivorId',
+  'path', 'resource', 'roadDirs', 'row', 'structure',
 ];
 
 // ── Pure tool functions: layer isolation (rules #1, #2, #3, #6) ───────────────

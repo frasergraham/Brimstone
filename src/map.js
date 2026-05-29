@@ -1,7 +1,8 @@
 // Procedural map generator for the Caleb's Hollow hex map
 import { MAP_COLS, MAP_ROWS, setMapDimensions, getNeighbors, hexKey, hexDistance } from './hex.js';
-import { Tile, TileType, BuildingType, PathType, StructureType, legacyTileType, isRiver, isBridge, hasBuilding, pathOf } from './tiles.js';
+import { Tile, TileType, BuildingType, PathType, StructureType, legacyTileType, isRiver, isBridge, hasBuilding, isBuildingFootprint, pathOf } from './tiles.js';
 import { buildMST, placeRoadPath } from './road-network.js';
+import { pickFootprintNeighbor } from './building-footprint.js';
 
 // Flavor labels for the witch power nodes (extra labels for larger maps)
 const WITCH_OBJECTIVE_LABELS = [
@@ -175,6 +176,18 @@ export function shuffle(arr, rand) {
 // rather than piling through the same hub.
 const MAX_ROAD_DEG = 3;
 const ROAD_DEG_PENALTY = 10; // extra cost per degree above the cap
+// Routing through an impassable building footprint is heavily penalised so the
+// MST road planner detours around footprints whenever any alternative exists —
+// a road over a footprint hex is visually wrong and (once footprints become
+// impassable, P3) would be a road the in-game pathfinder can't actually use.
+// It is a finite penalty rather than a hard block so a building wedged on a
+// tight map (where its footprint is the only approach) still gets connected and
+// bridge crossings are never starved below `minBridges`. The companion guard in
+// `placeRoadPath` (road-network.js) refuses to paint a ROAD deck onto a
+// footprint even on the rare last-resort path, so a footprint never carries a
+// road/bridge path — connectivity is recorded via roadDirs only, exactly like a
+// building tile.
+const FOOTPRINT_ROAD_PENALTY = 50;
 
 // Chance a building's cleared-ground base is GRASS rather than DIRT. Buildings
 // never sit on forest (the tile is cleared); this just adds dirt/grass variety
@@ -211,7 +224,10 @@ export function bfsPath(tiles, startCol, startRow, endCol, endRow, rand, roadTil
       if (!nTile) continue;
       if (blockRiver && isRiver(nTile)) continue;
       const deg = roadDeg(n.col, n.row);
-      const step = 1 + Math.max(0, deg - (MAX_ROAD_DEG - 1)) * ROAD_DEG_PENALTY;
+      let step = 1 + Math.max(0, deg - (MAX_ROAD_DEG - 1)) * ROAD_DEG_PENALTY;
+      // Strongly avoid routing through impassable building footprints (see
+      // FOOTPRINT_ROAD_PENALTY). Finite, so a wedged building still connects.
+      if (isBuildingFootprint(nTile)) step += FOOTPRINT_ROAD_PENALTY;
       const nc = cost + step;
       if (nc < (dist.get(nk) ?? Infinity)) {
         dist.set(nk, nc);
@@ -800,10 +816,28 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
   const cornerKeys       = new Set(cornerPlacements.map(b => hexKey(b.col, b.row)));
   const { allPlacements: villagePlacements, villageGroups } =
     _generateVillages(rand, tiles, cfg.villages, cfg.minVillageDist, cornerKeys, riverMap, riverEW);
-  const buildingPlacements = [...cornerPlacements, ...villagePlacements];
-  for (const { col, row, building } of buildingPlacements) {
+  // Materialize each building onto its entrance tile and claim one adjacent
+  // footprint hex (P2 of the building-footprint rework). Two passes, both in
+  // placement order: since `rand` is the seeded RNG and the placement order is
+  // deterministic for a given seed, the RNG stream — and the resulting layout —
+  // stay reproducible.
+  //
+  // Pass 1 materializes ALL entrances first so that, in pass 2, the footprint
+  // picker sees every entrance via `building != null` and never claims a hex
+  // that is itself another building's entrance (buildings can sit one hex apart
+  // on tight maps, so we cannot rely on spacing alone).
+  const allBuildingPlacements = [...cornerPlacements, ...villagePlacements];
+  for (const placement of allBuildingPlacements) {
+    const { col, row, building } = placement;
     const t = tiles.get(hexKey(col, row));
-    if (!t) continue;
+    if (!t) { placement.rolledBack = true; continue; }
+    // Snapshot the tile's prior terrain so a failed footprint claim (pass 2)
+    // can revert the entrance to whatever it was.
+    placement.prior = {
+      base: t.base, structure: t.structure, path: t.path,
+      building: t.building, fortifyLevel: t.fortifyLevel,
+      footprintHexes: t.footprintHexes, buildingFootprintOf: t.buildingFootprintOf,
+    };
     // Building is a STRUCTURE layer on CLEARED ground. Operator-locked design:
     // a building clears the trees on its tile, so the base is always dirt or
     // grass — NEVER forest. Give the base some variety (not always dirt) so a
@@ -815,6 +849,44 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
     t.path = null;
     t.building = building;
     t.fortifyLevel = 1;
+  }
+  // Pass 2: claim one impassable footprint hex per entrance. Power nodes aren't
+  // placed until step 6 and roads/forests don't exist yet, so the footprint
+  // always lands on open terrain. Writing `buildingFootprintOf` immediately
+  // means a later entrance's pick automatically skips this hex.
+  for (const placement of allBuildingPlacements) {
+    if (placement.rolledBack) continue;
+    const { col, row } = placement;
+    const fp = pickFootprintNeighbor(tiles, col, row, rand);
+    if (fp) {
+      const fpKey = hexKey(fp.col, fp.row);
+      tiles.get(hexKey(col, row)).footprintHexes = [fpKey];
+      tiles.get(fpKey).buildingFootprintOf = hexKey(col, row);
+    } else {
+      // No eligible neighbour (e.g. wedged against the river / map edge / other
+      // buildings). Roll back the placement — the map ends up one building
+      // fewer, which is expected and operator-accepted.
+      const t = tiles.get(hexKey(col, row));
+      const p = placement.prior;
+      t.base = p.base;
+      t.structure = p.structure;
+      t.path = p.path;
+      t.building = p.building;
+      t.fortifyLevel = p.fortifyLevel;
+      t.footprintHexes = p.footprintHexes;
+      t.buildingFootprintOf = p.buildingFootprintOf;
+      placement.rolledBack = true;
+    }
+  }
+
+  // Drop rolled-back placements everywhere downstream. The placement objects in
+  // `villageGroups` are the SAME references as in `villagePlacements`, so the
+  // `rolledBack` tag is visible there too — clean those groups up (re-rooting a
+  // village whose root was rolled back) before they drive the road network.
+  const buildingPlacements = allBuildingPlacements.filter(p => !p.rolledBack);
+  for (const g of villageGroups) {
+    g.members = g.members.filter(m => !m.rolledBack);
+    if (g.root && g.root.rolledBack) g.root = g.members.shift() ?? null;
   }
 
   // 4. Grow forest clusters and scatter dirt patches BEFORE the road network.
@@ -878,13 +950,18 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
   //    none of the short overlapping paths within them.
   const roadEdges = [];
 
-  // Tier 1: spoke per building → village root
+  // Tier 1: spoke per building → village root (skip villages emptied by rollback)
   for (const { root, members } of villageGroups) {
+    if (!root) continue;
     for (const m of members) roadEdges.push({ from: root, to: m });
   }
 
-  // Tier 2: MST on key points + pre-selected river crossings
-  const keyPoints = [...cornerPlacements, ...villageGroups.map(v => v.root)];
+  // Tier 2: MST on key points + pre-selected river crossings. Exclude any
+  // rolled-back corner building and any village emptied by rollback (null root).
+  const keyPoints = [
+    ...cornerPlacements.filter(p => !p.rolledBack),
+    ...villageGroups.map(v => v.root).filter(Boolean),
+  ];
 
   // Pre-select river crossing points and convert them to bridges.
   // Each crossing also carries a chosen leftBank/rightBank — passable land
@@ -1008,6 +1085,13 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
   // 6. Place witch objectives — well-spread, guaranteed across both sides of the river,
   //    with 3-hex clusters and minimum distance from starting positions.
   const buildingKeys = new Set(buildingPlacements.map(b => hexKey(b.col, b.row)));
+  // Also forbid building-footprint hexes as node centers/satellites. Footprints
+  // carry `buildingFootprintOf` (not `building`), so `hasBuilding()` is false for
+  // them — without this, a node could land on a footprint that becomes
+  // impassable (P3), leaving the node unreachable and uncontestable.
+  for (const [k, t] of tiles) {
+    if (isBuildingFootprint(t)) buildingKeys.add(k);
+  }
   // Extract start positions now (buildings are placed; INN = hero start, GRAVEYARD = witch start)
   const heroStart  = buildingPlacements.find(b => b.building === BuildingType.INN)
                   || buildingPlacements[0];

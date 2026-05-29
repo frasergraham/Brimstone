@@ -268,30 +268,28 @@ export class UIController {
         }
       }, sig);
     }
-    this._lastFitTapTime = 0;
     this._el('zoom-fit')?.addEventListener('click', () => {
-      const now = Date.now();
-      const isDoubleTap = (now - this._lastFitTapTime) < 400;
-      this._lastFitTapTime = now;
-      if (isDoubleTap) {
-        // Double-tap (second tap within 400ms): orient the camera so map
-        // north is pointing up. 2D renderer's stub is a no-op. Target +
-        // radius are preserved — only yaw eases to north.
+      if (this.renderer.viewLocked) return;
+      // One-button, two-action: tap frames the map; tapping again when the
+      // camera is already at the framed target (so framing would be a
+      // visual no-op) orients north up instead. No 400ms double-tap window.
+      const alreadyFramed = this.renderer.is3D
+        && typeof this.renderer.isAtFitTarget === 'function'
+        && this.renderer.isAtFitTarget();
+      if (alreadyFramed) {
         if (typeof this.renderer.orientNorthUp === 'function') {
           this.renderer.orientNorthUp();
           this.onRedraw();
         }
-      } else if (!this.renderer.viewLocked) {
-        // Single-tap when unlocked. 3D: rise to max zoom-out (near top-down)
-        // centred on the player's own units. 2D: classic fit-whole-map.
-        this.renderer.resize();
-        if (this.renderer.is3D && typeof this.renderer.zoomOutToOwnedUnits === 'function') {
-          this.renderer.zoomOutToOwnedUnits();
-        } else {
-          this.renderer.resetView();
-        }
-        this.onRedraw();
+        return;
       }
+      this.renderer.resize();
+      if (this.renderer.is3D && typeof this.renderer.zoomOutToOwnedUnits === 'function') {
+        this.renderer.zoomOutToOwnedUnits();
+      } else {
+        this.renderer.resetView();
+      }
+      this.onRedraw();
     }, sig);
     this._el('zoom-me')?.addEventListener('click', () => {
       if (this._selectedEntity && this._selectedEntity.alive) {
@@ -2451,9 +2449,24 @@ export class UIController {
 
     // Tile-only selection (no entity)
     if (!entity && tileSelection) {
-      const tile = this.state.tiles.get(hexKey(tileSelection.col, tileSelection.row));
-      if (!tile) { bar.style.display = 'none'; return; }
-      const nodeBadge = buildNodeBadgeHtml(this.state.witchObjectives, this.state.entities, tileSelection.col, tileSelection.row);
+      const clickedTile = this.state.tiles.get(hexKey(tileSelection.col, tileSelection.row));
+      if (!clickedTile) { bar.style.display = 'none'; return; }
+      // If the clicked tile is a building's footprint hex (the impassable cell
+      // that carries the visible model), resolve up to the entrance tile so
+      // the player sees the BUILDING they pointed at, not the bare ground
+      // underneath. The entrance is the canonical "building tile".
+      let tile = clickedTile;
+      let displayCol = tileSelection.col;
+      let displayRow = tileSelection.row;
+      if (clickedTile.buildingFootprintOf) {
+        const entranceTile = this.state.tiles.get(clickedTile.buildingFootprintOf);
+        if (entranceTile) {
+          tile = entranceTile;
+          displayCol = entranceTile.col;
+          displayRow = entranceTile.row;
+        }
+      }
+      const nodeBadge = buildNodeBadgeHtml(this.state.witchObjectives, this.state.entities, displayCol, displayRow);
       const terrainBadge = _buildTerrainBadge(tile, nodeBadge);
       const TERRAIN_ICON = {
         [TileType.GRASS]: '🌿', [TileType.FOREST]: '🌲', [TileType.DIRT]: '🪨',
@@ -2461,7 +2474,7 @@ export class UIController {
       };
       const icon = tile.building ? (BUILDING_ICON[tile.building] ?? '🏠') : (TERRAIN_ICON[legacyTileType(tile)] ?? '🌿');
       const label = tile.building ? (BUILDING_LABEL[tile.building] ?? 'Building') : (legacyTileType(tile) ?? 'terrain');
-      const tileSrc = this.renderer.getTileDataURL(tile, tileSelection.col, tileSelection.row, 56);
+      const tileSrc = this.renderer.getTileDataURL(tile, displayCol, displayRow, 56);
       const tileImgHtml = tileSrc
         ? `<img class="usb-terrain-hex" src="${tileSrc}" alt="">`
         : `<span class="usb-icon" style="background:#3a4a3a;font-size:1.1rem">${icon}</span>`;

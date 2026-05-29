@@ -72,7 +72,9 @@ function isDefaultTile(t) {
     && (t.fortifyLevel ?? 0) === 0
     && !t.resource
     && !t.hiddenSurvivor
-    && (t.roadDirs?.size ?? 0) === 0;
+    && (t.roadDirs?.size ?? 0) === 0
+    && !t.buildingFootprintOf
+    && ((t.footprintHexes?.length ?? 0) === 0);
 }
 
 // Re-snapshot a built map into a comparable shape, keyed by "col,row" for
@@ -96,6 +98,11 @@ function snapshotTiles(built) {
         resource: t.resource ? (RES_KEY[t.resource] ?? t.resource) : null,
         hiddenSurvivor: !!t.hiddenSurvivor,
         roadDirs: [...(t.roadDirs ?? [])].sort(),
+        // Building footprint (P5): the entrance lists its footprint hex(es); a
+        // footprint hex back-references its entrance. Both round-trip through
+        // the file, so the snapshot must reproduce them.
+        footprintHexes: [...(t.footprintHexes ?? [])].sort(),
+        buildingFootprintOf: t.buildingFootprintOf ?? null,
       });
     }
   }
@@ -126,6 +133,8 @@ function normFileTile(def) {
     resource: def.resource ?? null,
     hiddenSurvivor: !!def.hiddenSurvivor,
     roadDirs: [...(def.roadDirs ?? [])].sort(),
+    footprintHexes: [...(def.footprintHexes ?? [])].sort(),
+    buildingFootprintOf: def.buildingFootprintOf ?? null,
   };
 }
 

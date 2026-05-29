@@ -39,13 +39,11 @@ export const MAX_FOG_TILES = 32;
 // Default tuning — operator-dialable via the renderer (visual-iteration mode).
 //   • amount: final-colour multiplier at a fully-fogged fragment. 0.40 matches
 //     FOG_HIDDEN_DARKEN, the "occluded read" floor the terrain/road veil uses.
-//   • radius: tolerance for matching an instance's own world translation to
-//     a fogged-building entry. The values are emitted exactly equal from
-//     `buildFoggedBuildingTileList`, so 0.5 is generous slack for float
-//     precision while staying well under the ~1.5wu hex pitch (so a
-//     neighbouring building's centre can never match).
+//   • radius: world-units from a tile's building centre within which fragments
+//     darken. A hex radius is 1.0 world unit; 0.95 covers a building footprint
+//     centred on its NE slot without bleeding onto neighbouring hexes.
 export const FOG_BUILDING_DARKEN_DEFAULT = 0.40;
-export const FOG_BUILDING_RADIUS_DEFAULT = 0.5;
+export const FOG_BUILDING_RADIUS_DEFAULT = 0.95;
 
 /** Build (and return) the FogDarkenPlugin class bound to a Babylon namespace.
  *  Returns null when no usable MaterialPluginBase is present. */
@@ -125,30 +123,15 @@ export function makeFogDarkenPlugin(BABYLON) {
     getCustomCode(shaderType) {
       if (shaderType === 'vertex') {
         return {
-          // `vFogDk` is the building-level fog verdict (0 or 1), computed once
-          // per VERTEX from the instance's own world translation. Every vertex
-          // of the same building gets the same value → the varying is uniform
-          // across the building, producing a flat darken instead of a circular
-          // spotlight at the building's centre.
           CUSTOM_VERTEX_DEFINITIONS: `#ifdef FOG_DARKEN
-            #define MAX_FOG_TILES ${MAX_FOG_TILES}
-            varying float vFogDk;
+            varying vec2 vFogWorldXZ;
           #endif`,
-          // `finalWorld` is declared unconditionally in Babylon's vertex main
-          // (Standard + PBR; for hardware-instances it's the per-instance
-          // matrix). Column 3's xz IS the building's world XZ translation —
-          // the exact value `buildFoggedBuildingTileList` emits into the
-          // uniform — so a hit is essentially an equality test, not a "is the
-          // pixel near the building" smoothstep. Tight `fogTileRadius` (<<
-          // hex pitch) avoids false positives on neighbours.
+          // `worldPos` is declared unconditionally in Babylon's vertex main
+          // (`vec4 worldPos = finalWorld * vec4(positionUpdated,1.0)`) for both
+          // Standard + PBR, and for instances `finalWorld` is the per-instance
+          // matrix — so this XZ is genuinely per-building.
           CUSTOM_VERTEX_MAIN_END: `#ifdef FOG_DARKEN
-            vec2 instCentre = vec2(finalWorld[3].x, finalWorld[3].z);
-            float dk = 0.0;
-            for (int i = 0; i < MAX_FOG_TILES; i++) {
-              if (float(i) >= fogCount) break;
-              if (distance(instCentre, fogTiles[i]) < fogTileRadius) { dk = 1.0; break; }
-            }
-            vFogDk = dk;
+            vFogWorldXZ = worldPos.xz;
           #endif`,
         };
       }
@@ -157,21 +140,27 @@ export function makeFogDarkenPlugin(BABYLON) {
           // The MAX_FOG_TILES #define must live HERE (CUSTOM_FRAGMENT_DEFINITIONS,
           // at the very top of fragment) rather than in getUniforms().fragment:
           // Safari WebKit's WebGL2 shader assembler injects getUniforms's fragment
-          // block AFTER custom-code MAIN_END, so a use site in MAIN_END would see
+          // block AFTER custom-code MAIN_END, so the loop in MAIN_END sees
           // `MAX_FOG_TILES` as undeclared on Safari. (Chrome happens to interleave
-          // them in the right order — both are spec-conformant.) Kept here even
-          // though no fragment code currently references the macro, so the next
-          // refactor doesn't have to re-learn the lesson.
+          // them in the right order — both are spec-conformant.) Duplicate
+          // `#define MAX_FOG_TILES 32` in two scopes is identical & legal GLSL.
           CUSTOM_FRAGMENT_DEFINITIONS: `#ifdef FOG_DARKEN
             #define MAX_FOG_TILES ${MAX_FOG_TILES}
-            varying float vFogDk;
+            varying vec2 vFogWorldXZ;
           #endif`,
-          // Final post-lighting multiply. `vFogDk` is constant per building
-          // (vertex-shader verdict), so no spatial gradient — the whole
-          // building darkens uniformly. `mix(1.0, fogDarkenAmount, dk)` =>
-          // unfogged buildings are untouched (dk=0 → ×1.0).
+          // Final post-lighting multiply. For each fogged tile, a soft circular
+          // skirt (full strength inside 70% of the radius, feathered to the
+          // edge) avoids an aliased cutoff while keeping the building body
+          // uniformly dark. `mix(1.0, fogDarkenAmount, dk)` => unfogged
+          // fragments are untouched (dk=0 → ×1.0).
           CUSTOM_FRAGMENT_MAIN_END: `#ifdef FOG_DARKEN
-            gl_FragColor.rgb *= mix(1.0, fogDarkenAmount, vFogDk);
+            float fogDk = 0.0;
+            for (int i = 0; i < MAX_FOG_TILES; i++) {
+              if (float(i) >= fogCount) break;
+              float dist = distance(vFogWorldXZ, fogTiles[i]);
+              fogDk = max(fogDk, smoothstep(fogTileRadius, fogTileRadius * 0.7, dist));
+            }
+            gl_FragColor.rgb *= mix(1.0, fogDarkenAmount, fogDk);
           #endif`,
         };
       }

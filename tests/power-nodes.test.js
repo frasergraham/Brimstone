@@ -9,7 +9,7 @@ import { GameState, nodeController, Phase } from '../src/game.js';
 import { hexKey, hexDistance, getNeighbors, MAP_COLS, MAP_ROWS } from '../src/hex.js';
 import { TileType, legacyTileType } from '../src/tiles.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
-import { executeFortify, getValidActions, sightRange } from '../src/actions.js';
+import { executeFortify, getValidActions, sightRange, hasLineOfSight } from '../src/actions.js';
 import { generateMap } from '../src/map.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -300,9 +300,13 @@ describe('updateNodeDiscovery', () => {
     const range = sightRange(state.phase, false);
     state.updateNodeDiscovery();
     for (const obj of state.witchObjectives) {
-      const inRange = obj.hexes.some(h => hexDistance(0, 0, h.col, h.row) <= range);
-      assert.equal(obj.seenByHero, inRange,
-        `Node ${obj.label} discovery should match sight range from (0,0)`);
+      // Discovery requires distance AND line of sight — a building footprint or
+      // forest between (0,0) and the node blocks discovery even when in range.
+      const visible = obj.hexes.some(h =>
+        hexDistance(0, 0, h.col, h.row) <= range
+        && hasLineOfSight(state, 0, 0, h.col, h.row));
+      assert.equal(obj.seenByHero, visible,
+        `Node ${obj.label} discovery should match sight+LOS from (0,0)`);
     }
   });
 
@@ -340,10 +344,13 @@ describe('updateNodeDiscovery', () => {
     // Witch may or may not have discovered depending on starting distance and phase
     // but the key test is independence — hero discovery doesn't affect witch
     const witchRange = sightRange(state.phase, false);
-    const witchDist = Math.min(...obj.hexes.map(h => hexDistance(0, 0, h.col, h.row)));
-    const witchInRange = witchDist <= witchRange;
-    assert.equal(obj.seenByWitch, witchInRange,
-      'Witch discovery should only depend on witch sight range');
+    // Discovery requires distance AND line of sight — mirror the engine so a
+    // footprint/forest blocker between (0,0) and the node is accounted for.
+    const witchVisible = obj.hexes.some(h =>
+      hexDistance(0, 0, h.col, h.row) <= witchRange
+      && hasLineOfSight(state, 0, 0, h.col, h.row));
+    assert.equal(obj.seenByWitch, witchVisible,
+      'Witch discovery should depend on witch sight range and line of sight');
   });
 });
 

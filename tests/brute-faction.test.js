@@ -12,12 +12,22 @@ import {
 import {
   EntityType, createMinion, createZombie,
 } from '../src/entities.js';
-import { TileType, ResourceType, BuildingType, legacyTileType, decomposeTileType } from '../src/tiles.js';
+import { TileType, ResourceType, BuildingType, legacyTileType, decomposeTileType, isBuildingFootprint } from '../src/tiles.js';
 import { hexKey, getNeighbors, hexDistance } from '../src/hex.js';
 import { getFaction, BruteFaction, WitchFaction } from '../src/factions.js';
 
 function freshState() {
   return new GameState(true, true);
+}
+
+// Procedural maps can drop an impassable building footprint (cap-0) on any hex.
+// Fixtures that move onto / knock back into / build on a fixed coordinate must
+// neutralize any footprint markers a random map happened to place there.
+function clearFootprint(tile) {
+  if (!tile) return tile;
+  tile.buildingFootprintOf = null;
+  tile.footprintHexes = [];
+  return tile;
 }
 
 // Spawn a brute leader at (col, row) by swapping the night-side default.
@@ -157,6 +167,7 @@ describe('BruteFaction — onAfterMoveStep auto-zombifies survivors in buildings
     t.building = BuildingType.INN;
     t.hiddenSurvivor = true;
     t.explored = false;
+    clearFootprint(t);
 
     const result = executeMove(state, brute, 4, 3);
     assert.equal(result.success, true);
@@ -177,10 +188,12 @@ describe('BruteFaction — onAfterMoveStep auto-zombifies survivors in buildings
     adj.building = BuildingType.CHURCH;
     adj.hiddenSurvivor = true;
     adj.explored = false;
+    clearFootprint(adj);
     const dest = state.tiles.get(hexKey(4, 3));
     decomposeTileType(dest, TileType.GRASS);
     dest.building = null;
     dest.hiddenSurvivor = false;
+    clearFootprint(dest);
 
     const result = executeMove(state, brute, 4, 3);
     assert.equal(result.success, true);
@@ -216,10 +229,12 @@ describe('BruteFaction — onAfterMoveStep auto-zombifies survivors in buildings
     adj.building = BuildingType.INN;
     adj.hiddenSurvivor = true;
     adj.explored = false;
+    clearFootprint(adj);
     const dest = state.tiles.get(hexKey(4, 3));
     decomposeTileType(dest, TileType.GRASS);
     dest.building = null;
     dest.hiddenSurvivor = false;
+    clearFootprint(dest);
 
     executeMove(state, state.witch, 4, 3);
     // Witch's only chance to find the survivor is the existing
@@ -256,7 +271,7 @@ function placeNeutralBystander(state, targetPos, actor, hp = 99) {
   const candidate = getNeighbors(targetPos.col, targetPos.row).find(n => {
     if (n.col === actor.col && n.row === actor.row) return false;
     const t = state.tiles.get(hexKey(n.col, n.row));
-    if (!t || legacyTileType(t) === TileType.RIVER) return false;
+    if (!t || legacyTileType(t) === TileType.RIVER || isBuildingFootprint(t)) return false;
     return state.entities.every(e => !e.alive || e.col !== n.col || e.row !== n.row);
   });
   if (!candidate) return null;
@@ -303,7 +318,7 @@ describe('BruteFaction — splash splashes on every hit, not just crushes', () =
     const bystanderPos = getNeighbors(targetPos.col, targetPos.row).find(n => {
       if (n.col === witch.col && n.row === witch.row) return false;
       const t = state.tiles.get(hexKey(n.col, n.row));
-      return t && legacyTileType(t) !== TileType.RIVER;
+      return t && legacyTileType(t) !== TileType.RIVER && !isBuildingFootprint(t);
     });
     const bystander = createMinion(bystanderPos.col, bystanderPos.row);
     bystander.owner = 'witch';
@@ -376,7 +391,7 @@ describe('BruteFaction — splash spares allies (friendly-fire off)', () => {
     const allyPos = getNeighbors(targetPos.col, targetPos.row).find(n => {
       if (n.col === brute.col && n.row === brute.row) return false;
       const t = state.tiles.get(hexKey(n.col, n.row));
-      return t && legacyTileType(t) !== TileType.RIVER;
+      return t && legacyTileType(t) !== TileType.RIVER && !isBuildingFootprint(t);
     });
     const ally = createMinion(allyPos.col, allyPos.row);
     ally.owner = 'witch'; // attacker's side
@@ -405,6 +420,7 @@ describe('BruteFaction — splash knocks bystanders outward', () => {
         decomposeTileType(t, TileType.GRASS);
         t.building = null;
         t.fortifyLevel = 0;
+        clearFootprint(t);
       }
     }
 

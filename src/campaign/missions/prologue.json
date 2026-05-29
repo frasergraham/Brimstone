@@ -337,7 +337,8 @@
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
-        "roadDirs": []
+        "roadDirs": [],
+        "buildingFootprintOf": "3,3"
       },
       {
         "col": 3,
@@ -351,6 +352,9 @@
         "hiddenSurvivor": false,
         "roadDirs": [
           "4,4"
+        ],
+        "footprintHexes": [
+          "2,3"
         ]
       },
       {
@@ -441,6 +445,9 @@
         "roadDirs": [
           "5,5",
           "6,5"
+        ],
+        "footprintHexes": [
+          "5,4"
         ]
       },
       {
@@ -477,7 +484,8 @@
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
-        "roadDirs": []
+        "roadDirs": [],
+        "buildingFootprintOf": "4,5"
       },
       {
         "col": 4,
@@ -493,6 +501,9 @@
           "4,4",
           "4,6",
           "5,5"
+        ],
+        "footprintHexes": [
+          "3,5"
         ]
       },
       {
@@ -576,6 +587,9 @@
         "hiddenSurvivor": false,
         "roadDirs": [
           "6,5"
+        ],
+        "footprintHexes": [
+          "6,6"
         ]
       },
       {
@@ -590,6 +604,9 @@
         "hiddenSurvivor": false,
         "roadDirs": [
           "3,7"
+        ],
+        "footprintHexes": [
+          "1,7"
         ]
       },
       {
@@ -702,6 +719,45 @@
         "resource": null,
         "hiddenSurvivor": false,
         "roadDirs": []
+      },
+      {
+        "col": 5,
+        "row": 4,
+        "base": "GRASS",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [],
+        "buildingFootprintOf": "6,4"
+      },
+      {
+        "col": 6,
+        "row": 6,
+        "base": "GRASS",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [],
+        "buildingFootprintOf": "7,6"
+      },
+      {
+        "col": 1,
+        "row": 7,
+        "base": "GRASS",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [],
+        "buildingFootprintOf": "2,7"
       }
     ]
   },

@@ -199,12 +199,19 @@ onModeChange((newMode) => { if (ui) ui.appMode = newMode; });
 // Compass rose visibility — show in every in-canvas mode (PLANNING / SUBMITTED
 // / RESOLVING / SUMMARY / PLAYBACK / SPECTATING). Hidden on MENU. The mission
 // editor / admin-tools pages load a different HTML shell, so the element isn't
-// present there at all and this listener is a no-op when run there.
-onModeChange(() => {
+// present there at all and this is a no-op when run there.
+function _applyCompassRoseVisibility() {
   const el = document.getElementById('compass-rose');
   if (!el) return;
   el.hidden = getMode() === AppMode.MENU;
-});
+}
+onModeChange(_applyCompassRoseVisibility);
+// Apply once on registration — onModeChange listeners only fire on
+// transitions, so a page that's already in PLANNING (e.g. an auto-resume or
+// a fast-path entry that set the mode before main.js loaded) would otherwise
+// keep the compass hidden until the next mode transition. This catches the
+// initial state and matches it to whatever the mode currently is.
+_applyCompassRoseVisibility();
 
 /** Return the correct base URL for shareable links (invite, join, etc.).
  *  Inside Capacitor, location.origin is "capacitor://localhost" — useless for

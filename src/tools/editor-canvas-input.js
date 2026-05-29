@@ -73,10 +73,11 @@ export function isPanDrag(dx, dy, threshold = PAN_DRAG_THRESHOLD_PX) {
  * @param {() => void} [cb.onRedraw]                          redraw after pan/zoom
  * @returns {() => void} detach — removes every listener it added
  */
-export function attachEditorCanvasControls(canvas, renderer, { onPaint, onCanvasClick, onRedraw } = {}) {
+export function attachEditorCanvasControls(canvas, renderer, { onPaint, onCanvasClick, onHover, onRedraw } = {}) {
   const ac = new AbortController();
   const sig = { signal: ac.signal };
   const redraw = () => { try { onRedraw?.(); } catch { /* ignore */ } };
+  const hover = (hex) => { try { onHover?.(hex); } catch { /* ignore */ } };
 
   // ── Mouse: drag-to-pan, wheel-to-zoom, click-to-paint ───────────────────
   let down = null;        // { x, y } at mousedown (client coords)
@@ -90,7 +91,16 @@ export function attachEditorCanvasControls(canvas, renderer, { onPaint, onCanvas
   }, sig);
 
   canvas.addEventListener('mousemove', (e) => {
-    if (!down) return;
+    if (!down) {
+      // Not pressed → a plain hover. Report the hex under the cursor so the
+      // editor can preview (e.g. the building-footprint ghost overlay).
+      if (onHover) {
+        const rect = canvas.getBoundingClientRect();
+        const pt = pointerToCanvas(e.clientX, e.clientY, rect, canvas);
+        hover(pt ? renderer.canvasToHex(pt.x, pt.y) : null);
+      }
+      return;
+    }
     const dx = e.clientX - down.x;
     const dy = e.clientY - down.y;
     if (!isPanDrag(dx, dy)) return;
@@ -110,6 +120,9 @@ export function attachEditorCanvasControls(canvas, renderer, { onPaint, onCanvas
   document.addEventListener('mouseup', () => {
     if (down) { down = null; canvas.style.cursor = ''; }
   }, sig);
+
+  // Clear the hover preview when the cursor leaves the canvas.
+  canvas.addEventListener('mouseleave', () => hover(null), sig);
 
   canvas.addEventListener('click', (e) => {
     if (didDrag) { didDrag = false; return; } // a pan, not a paint

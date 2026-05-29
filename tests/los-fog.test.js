@@ -4,8 +4,9 @@
 // Spec:
 //   • Hero LOS distance: DAY=6, DAWN/DUSK=4, NIGHT=3
 //   • Witch LOS distance: 5 at all phases
-//   • Buildings and forest tiles BLOCK line of sight beyond them; the
-//     blocking tile itself IS visible.
+//   • Building FOOTPRINT (wall) and forest tiles BLOCK line of sight beyond
+//     them; the blocking tile itself IS visible. Building ENTRANCE hexes are
+//     TRANSPARENT (P3a) — they are just the threshold, not the wall.
 //   • Multiple units' LOS unions correctly.
 //   • Ability sight bonuses (SCOUT) stack additively per unit.
 
@@ -49,6 +50,32 @@ function roadOnForestTile(col, row) {
     base: TileType.FOREST,
     structure: null,
     path: PathType.ROAD,
+  };
+}
+// A building ENTRANCE (P3a) — carries `building` + a non-empty footprintHexes
+// list. Transparent to LOS: it is the threshold/front door, not the wall.
+function entranceTile(col, row, fpKey, b = BuildingType.INN) {
+  return {
+    col, row,
+    base: TileType.DIRT,
+    structure: StructureType.BUILDING,
+    building: b,
+    path: null,
+    footprintHexes: [fpKey],
+    buildingFootprintOf: null,
+  };
+}
+// A building FOOTPRINT (P3a) — the impassable wall hex, back-pointing at its
+// entrance. BLOCKS LOS.
+function footprintTile(col, row, entKey) {
+  return {
+    col, row,
+    base: TileType.GRASS,
+    structure: null,
+    path: null,
+    building: null,
+    footprintHexes: [],
+    buildingFootprintOf: entKey,
   };
 }
 
@@ -152,15 +179,16 @@ describe('LOS fog — base phase ranges', () => {
 // ── 2. Buildings and forests block LOS past themselves ──────────────────────
 
 describe('LOS fog — terrain blockers', () => {
-  test('a building between unit and target blocks vision past it', () => {
-    // Hero at (5,5), target at (5,2), distance 3. Place a building on the
-    // intermediate hex (along the column).
+  test('a building FOOTPRINT between unit and target blocks vision past it', () => {
+    // Hero at (5,5), target at (5,2), distance 3. Place a footprint (wall) on
+    // the intermediate hex (along the column).
     const tiles = rectGrass(13, 13);
     // Find the intermediate hex on the line so we don't guess.
     const line = hexLine(5, 5, 5, 2);
     assert.equal(line.length, 4, 'line should be 4 hexes inclusive');
     const blocker = line[1]; // first intermediate
-    tiles.set(hexKey(blocker.col, blocker.row), buildingTile(blocker.col, blocker.row));
+    tiles.set(hexKey(blocker.col, blocker.row),
+      footprintTile(blocker.col, blocker.row, hexKey(0, 0)));
 
     const state = {
       phase: Phase.DAY,
@@ -169,9 +197,29 @@ describe('LOS fog — terrain blockers', () => {
     };
     const set = computeLineOfSight(state, 'hero');
     assert.ok(set.has(hexKey(blocker.col, blocker.row)),
-      'blocking building IS visible');
+      'blocking footprint IS visible');
     assert.ok(!set.has(hexKey(5, 2)),
-      'hex past the blocker is NOT visible');
+      'hex past the footprint is NOT visible');
+  });
+
+  test('a building ENTRANCE between unit and target does NOT block vision (P3a)', () => {
+    // Same geometry, but the intermediate hex is the building's ENTRANCE
+    // (threshold) — transparent, so the hex beyond stays visible.
+    const tiles = rectGrass(13, 13);
+    const line = hexLine(5, 5, 5, 2);
+    const through = line[1];
+    tiles.set(hexKey(through.col, through.row),
+      entranceTile(through.col, through.row, hexKey(0, 0)));
+
+    const state = {
+      phase: Phase.DAY,
+      tiles,
+      entities: [entity(1, 'hero', 5, 5)],
+    };
+    const set = computeLineOfSight(state, 'hero');
+    assert.ok(set.has(hexKey(through.col, through.row)), 'entrance IS visible');
+    assert.ok(set.has(hexKey(5, 2)),
+      'hex past a transparent entrance IS still visible');
   });
 
   test('a forest tile between unit and target blocks vision past it', () => {

@@ -27,7 +27,7 @@
 // report for the full discrepancy notes.
 
 import { hexKey, hexDistance } from './hex.js';
-import { PathType, pathOf, hasBuilding } from './tiles.js';
+import { PathType, pathOf, hasBuilding, isBuildingFootprint } from './tiles.js';
 // bfsPath lives in map.js (the road/Dijkstra path finder). The resulting
 // import cycle (map.js ↔ road-network.js) is benign: both sides export hoisted
 // function declarations and only reference each other at call time.
@@ -106,7 +106,7 @@ export function placeRoadPath(tiles, path, roadTiles, opts = {}) {
     // GRASS/DIRT/FOREST exactly when it has no path AND no building, so that is
     // the condition for "plain base material we may pave over".
     const p = pathOf(t);
-    if (p === null && !hasBuilding(t)) {
+    if (p === null && !hasBuilding(t) && !isBuildingFootprint(t)) {
       t.path = PathType.ROAD;        // base preserved (grass/dirt/forest)
       roadTiles.add(k);
     } else if (convertRiverToBridge && p === PathType.RIVER && placed < maxBridges) {

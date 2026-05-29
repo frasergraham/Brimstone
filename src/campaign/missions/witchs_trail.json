@@ -440,6 +440,9 @@
         "roadDirs": [
           "11,2",
           "9,2"
+        ],
+        "footprintHexes": [
+          "9,1"
         ]
       },
       {
@@ -566,7 +569,8 @@
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
-        "roadDirs": []
+        "roadDirs": [],
+        "buildingFootprintOf": "11,3"
       },
       {
         "col": 11,
@@ -580,6 +584,9 @@
         "hiddenSurvivor": false,
         "roadDirs": [
           "11,2"
+        ],
+        "footprintHexes": [
+          "10,3"
         ]
       },
       {
@@ -604,7 +611,8 @@
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
-        "roadDirs": []
+        "roadDirs": [],
+        "buildingFootprintOf": "5,4"
       },
       {
         "col": 5,
@@ -618,6 +626,9 @@
         "hiddenSurvivor": false,
         "roadDirs": [
           "5,5"
+        ],
+        "footprintHexes": [
+          "4,4"
         ]
       },
       {
@@ -839,6 +850,9 @@
           "5,6",
           "6,5",
           "6,7"
+        ],
+        "footprintHexes": [
+          "7,6"
         ]
       },
       {
@@ -1058,7 +1072,8 @@
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
-        "roadDirs": []
+        "roadDirs": [],
+        "buildingFootprintOf": "8,8"
       },
       {
         "col": 8,
@@ -1072,6 +1087,9 @@
         "hiddenSurvivor": false,
         "roadDirs": [
           "7,7"
+        ],
+        "footprintHexes": [
+          "7,8"
         ]
       },
       {
@@ -1115,6 +1133,9 @@
           "1,9",
           "3,10",
           "3,8"
+        ],
+        "footprintHexes": [
+          "3,9"
         ]
       },
       {
@@ -1127,7 +1148,8 @@
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
-        "roadDirs": []
+        "roadDirs": [],
+        "buildingFootprintOf": "2,9"
       },
       {
         "col": 4,
@@ -1201,6 +1223,9 @@
         "hiddenSurvivor": false,
         "roadDirs": [
           "1,9"
+        ],
+        "footprintHexes": [
+          "0,10"
         ]
       },
       {
@@ -1213,7 +1238,8 @@
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
-        "roadDirs": []
+        "roadDirs": [],
+        "buildingFootprintOf": "3,10"
       },
       {
         "col": 3,
@@ -1227,6 +1253,9 @@
         "hiddenSurvivor": false,
         "roadDirs": [
           "2,9"
+        ],
+        "footprintHexes": [
+          "2,10"
         ]
       },
       {
@@ -1396,6 +1425,45 @@
         "resource": null,
         "hiddenSurvivor": false,
         "roadDirs": []
+      },
+      {
+        "col": 9,
+        "row": 1,
+        "base": "GRASS",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [],
+        "buildingFootprintOf": "10,2"
+      },
+      {
+        "col": 7,
+        "row": 6,
+        "base": "GRASS",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [],
+        "buildingFootprintOf": "6,6"
+      },
+      {
+        "col": 0,
+        "row": 10,
+        "base": "GRASS",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [],
+        "buildingFootprintOf": "1,10"
       }
     ]
   },

@@ -229,6 +229,16 @@ export class Tile {
     this.resource = null;   // ResourceType or null (on open tiles)
     this.fortifyLevel = 0;  // 0=none, 1..6=fortified (see getFortifyCombatBonus)
     this.roadDirs = new Set(); // hexKeys of road-connected neighbours (set at map gen time)
+    // Building footprint (P0 of the building-footprint rework). A building is a
+    // compound object: its canonical "building tile" stays passable and is the
+    // ENTRANCE; one (schema allows N) adjacent hex becomes the FOOTPRINT — fully
+    // impassable, carries the rendered model. Both fields ALWAYS present.
+    //   footprintHexes:      set on the ENTRANCE tile → array of "col,row" keys
+    //                        of its footprint hexes. [] = legacy/unmigrated.
+    //   buildingFootprintOf: set on each FOOTPRINT tile → "col,row" of its
+    //                        entrance. null on every other tile.
+    this.footprintHexes = [];        // string[] of "col,row" keys
+    this.buildingFootprintOf = null; // "col,row" key or null
   }
 }
 
@@ -328,6 +338,32 @@ export function hasBuilding(tile) {
   return structureOf(tile) === StructureType.BUILDING;
 }
 
+// ── Building-footprint predicates (P0) ──────────────────────────────────────
+// A building is a 2-hex (schema: N-hex) compound: a passable ENTRANCE tile (the
+// one carrying `building`) plus its impassable FOOTPRINT hex(es). These three
+// predicates classify a tile's role. They DO NOT replace `hasBuilding` — that
+// keeps its existing semantics; later phases retrofit callers.
+
+// The passable entrance of a footprinted building. A building tile that carries
+// a non-empty `footprintHexes` list. A legacy/unmigrated building (empty list)
+// is NOT an entrance under this predicate.
+export function isBuildingEntrance(tile) {
+  return hasBuilding(tile)
+    && Array.isArray(tile?.footprintHexes)
+    && tile.footprintHexes.length > 0;
+}
+
+// An impassable footprint hex — points back at its entrance via the
+// `buildingFootprintOf` back-pointer.
+export function isBuildingFootprint(tile) {
+  return tile?.buildingFootprintOf != null;
+}
+
+// Any hex that is part of a building object — either its entrance or a footprint.
+export function isBuildingTile(tile) {
+  return isBuildingEntrance(tile) || isBuildingFootprint(tile);
+}
+
 // "Road-like" for movement cost (1 instead of 2): a road, a bridge, or any
 // building tile. Mirrors the old inline `type === ROAD || BRIDGE || BUILDING`.
 export function isPathRoadLike(tile) {
@@ -344,6 +380,19 @@ export function isPathRoadLike(tile) {
 // later phase (P4). Readers should switch to this predicate now.
 export function isForestCover(tile) {
   return baseOf(tile) === TileType.FOREST;
+}
+
+// Does this tile block line of sight? (P3a)
+//
+// Mirrors the entrance/footprint asymmetry of movement: the building's WALL
+// (its impassable FOOTPRINT hex) obscures sight, while its ENTRANCE hex is just
+// the threshold/front door and is TRANSPARENT — a unit on or behind it is
+// visible. Forest cover blocks as it always has. The blocking tile itself is
+// still visible to the observer; only tiles BEYOND it on the ray are hidden
+// (the ray endpoints are exempted by the caller).
+export function blocksLineOfSight(tile) {
+  if (!tile) return false;
+  return isBuildingFootprint(tile) || isForestCover(tile);
 }
 
 // Hard cap on fortification level.
@@ -440,6 +489,16 @@ export function treeCountForTile(tile) {
   return scaledForestTreeCount(rawN, FOREST_DENSITY_SCALE);
 }
 
+// Total slot capacity of a tile. Almost all tiles get TILE_CAPACITY, but a
+// building-footprint hex is FULLY IMPASSABLE — no entity may end its turn
+// there and none may transit through. We model that as capacity 0, which
+// makes the unit-slot-cost check (in tileCapacityRemaining) fail for both
+// transit and end-of-turn without any special-casing in the movement gates.
+export function tileTotalCapacity(tile) {
+  if (isBuildingFootprint(tile)) return 0;
+  return TILE_CAPACITY;
+}
+
 // Slots consumed by static structures on this tile (building + trees).
 // Units are NOT counted here — callers add them via tileCapacityRemaining.
 export function tileOccupancyCount(tile) {
@@ -456,5 +515,5 @@ export function tileOccupancyCount(tile) {
 //   tileCapacityRemaining(tile, n)       — units is a count
 export function tileCapacityRemaining(tile, occupyingUnits = 0) {
   const n = Array.isArray(occupyingUnits) ? occupyingUnits.length : (occupyingUnits | 0);
-  return TILE_CAPACITY - tileOccupancyCount(tile) - n * UNIT_SLOT_COST;
+  return tileTotalCapacity(tile) - tileOccupancyCount(tile) - n * UNIT_SLOT_COST;
 }

@@ -62,7 +62,7 @@ import {
 import { MAP_SIZES } from '../map.js';
 import { createTabController } from './tab-controller.js';
 import { attachEditorCanvasControls } from './editor-canvas-input.js';
-import { loadMissionJSON, KNOWN_OBJECTIVE_TYPES } from '../campaign/json-mission.js';
+import { loadMissionJSON, validateBuildingFootprints, KNOWN_OBJECTIVE_TYPES } from '../campaign/json-mission.js';
 import { missionJSONUrl } from '../campaign/mission-catalog.js';
 import { CONDITIONS } from '../campaign/condition-registry.js';
 
@@ -268,6 +268,15 @@ export function initEditor(doc = document, initOpts = {}) {
   // a pure game renderer.
   const layers = createLayerVisibility();
 
+  // ── Building-footprint hover state (P6) ─────────────────────────────────────
+  // `hoverHex` tracks the hex under the cursor; `ghost` caches what the footprint
+  // overlay should draw (the candidate footprint hex, or a "no eligible hex" X).
+  // `lastBuildingHex` remembers the last building placed so the Rotate affordance
+  // has a target when the cursor isn't over a building.
+  let hoverHex = null;
+  let ghost = null; // { entrance:{col,row}, candidate:{col,row}|null } | null
+  let lastBuildingHex = null;
+
   // Notifies the top-bar Undo/Redo buttons after every history change. Wired by
   // the host page via the returned handle's onHistoryChange().
   let historyListener = null;
@@ -360,7 +369,86 @@ export function initEditor(doc = document, initOpts = {}) {
     drawHiddenSurvivorMarkers(ctx);
     drawExploreOverrideMarkers(ctx);
     drawRoadNodeMarkers(ctx);
+    drawBuildingGhost(ctx);
     drawEdgeResizeButtons(ctx);
+  }
+
+  // ── Building-footprint ghost (P6, item 3) ───────────────────────────────────
+  // While the Structure tool is active with a building selected, preview where
+  // its footprint would land: a dashed violet ghost on the candidate hex, or a
+  // red X on the cursor hex when no adjacent hex is eligible. Recomputed only on
+  // hover change (updateGhost) so the buildMissionMap eligibility probe isn't run
+  // per mousemove event.
+  function updateGhost() {
+    const active = editor.activeTool === EditorTool.PAINT_STRUCTURE
+      && !!editor.getPaintValue('structure') && !!hoverHex;
+    if (!active) {
+      if (ghost) { ghost = null; draw(); }
+      return;
+    }
+    const candidate = editor.footprintCandidateAt(hoverHex);
+    ghost = { entrance: { col: hoverHex.col, row: hoverHex.row }, candidate };
+    draw();
+  }
+
+  function _hexPath(ctx, x, y, rad) {
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const a = Math.PI / 180 * (60 * i - 30);
+      const px = x + rad * Math.cos(a);
+      const py = y + rad * Math.sin(a);
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+  }
+
+  function drawBuildingGhost(ctx) {
+    if (!ghost) return;
+    const r = renderer.hexSize * renderer.zoomLevel;
+    ctx.save();
+    if (ghost.candidate) {
+      const { x, y } = renderer.hexToCanvasPos(ghost.candidate.col, ghost.candidate.row);
+      _hexPath(ctx, x, y, r * 0.9);
+      ctx.fillStyle = 'rgba(150,110,225,0.28)';
+      ctx.fill();
+      ctx.setLineDash([5, 4]);
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = 'rgba(205,175,255,0.9)';
+      ctx.stroke();
+    } else {
+      // No eligible adjacent hex — the building can't be placed here.
+      const { x, y } = renderer.hexToCanvasPos(ghost.entrance.col, ghost.entrance.row);
+      const d = r * 0.5;
+      ctx.lineWidth = 3;
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = 'rgba(232,72,72,0.92)';
+      ctx.beginPath();
+      ctx.moveTo(x - d, y - d); ctx.lineTo(x + d, y + d);
+      ctx.moveTo(x + d, y - d); ctx.lineTo(x - d, y + d);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // ── Rotate the active building's footprint (P6, item 2) ─────────────────────
+  // Target: the building under the cursor if there is one, else the last building
+  // placed. Routed through editor.rotateFootprintAt (one undo step); a no-op
+  // surfaces a brief status toast.
+  function hoverBuildingHex() {
+    if (!hoverHex) return null;
+    const list = editor.getMapDef();
+    const tiles = list.mode === 'procedural' ? (list.overlay?.tiles ?? []) : (list.tiles ?? []);
+    const t = tiles.find(d => d.col === hoverHex.col && d.row === hoverHex.row);
+    return (t && t.building) ? { col: t.col, row: t.row } : null;
+  }
+  function rotateActiveFootprint() {
+    const hex = hoverBuildingHex() ?? lastBuildingHex;
+    if (!hex) {
+      toast.show('Place or hover a building to rotate its footprint.', { type: 'info' });
+      return;
+    }
+    const res = editor.rotateFootprintAt(hex);
+    if (res && res.ok === false && res.warning) toast.show(res.warning, { type: 'info' });
   }
 
   // ── Hidden-survivor markers ─────────────────────────────────────────────────
@@ -596,8 +684,21 @@ export function initEditor(doc = document, initOpts = {}) {
     onCanvasClick: (pt) => handleEdgeButtonClick(pt),
     onPaint: (hex) => {
       const res = editor.applyAt(hex);
-      // A blocked edit (e.g. the Power-Node 5-hex cap) surfaces its reason.
-      if (res && res.ok === false && res.warning) toast.show(res.warning, { type: 'err' });
+      // A blocked edit (e.g. the Power-Node 5-hex cap, or no eligible footprint
+      // hex when placing a building) surfaces its reason.
+      if (res && res.ok === false && res.warning) {
+        toast.show(res.warning, { type: 'err' });
+      } else if (editor.activeTool === EditorTool.PAINT_STRUCTURE && editor.getPaintValue('structure')) {
+        // Remember the last building placed so the Rotate button / R key know
+        // which footprint to cycle when the cursor isn't over a building.
+        lastBuildingHex = { col: hex.col, row: hex.row };
+      }
+      updateGhost(); // a placed/removed building changes the candidate
+    },
+    onHover: (hex) => {
+      const changed = (hex?.col !== hoverHex?.col) || (hex?.row !== hoverHex?.row);
+      hoverHex = hex ? { col: hex.col, row: hex.row } : null;
+      if (changed) updateGhost();
     },
     onRedraw: () => draw(),
   });
@@ -675,6 +776,8 @@ export function initEditor(doc = document, initOpts = {}) {
       // The Map palette owns the Power-Node list; capture its refresh so a node
       // toggle/rename (which goes through rerender) re-renders just that list.
       registerPowerNodeRefresh: (fn) => { refreshPowerNodes = fn; },
+      // Structure tool's value panel exposes a "Rotate footprint" button (P6).
+      onRotateFootprint: rotateActiveFootprint,
     });
     mapArea?.refresh();
   }
@@ -819,6 +922,7 @@ export function initEditor(doc = document, initOpts = {}) {
     const json = editor.assemble();
     try {
       loadMissionJSON(json); // block the download on any validation error
+      validateBuildingFootprints(json); // P6 — every building must have a footprint pair
     } catch (err) {
       return { ok: false, message: `Cannot save: ${err.message}` };
     }
@@ -975,6 +1079,8 @@ export function initEditor(doc = document, initOpts = {}) {
     // Undo / redo wiring for the top-bar buttons + keyboard shortcuts.
     undo,
     redo,
+    // P6 — rotate the active building's footprint (top-bar / 'R' key).
+    rotateFootprint: rotateActiveFootprint,
     canUndo: () => editor.canUndo(),
     canRedo: () => editor.canRedo(),
     isDirty: () => editor.isDirty(),
@@ -1481,7 +1587,8 @@ function buildMapPalette(doc, root, editor, rerender, onPreview3D, hooks = {}) {
 
   function renderValuePanel() {
     valHost.innerHTML = '';
-    buildValuePanel(doc, valHost, valuePanelKind(editor.activeTool), editor, renderValuePanel);
+    buildValuePanel(doc, valHost, valuePanelKind(editor.activeTool), editor, renderValuePanel,
+      { onRotateFootprint: hooks.onRotateFootprint });
   }
   renderValuePanel();
 
@@ -1518,7 +1625,7 @@ function buildMapPalette(doc, root, editor, rerender, onPreview3D, hooks = {}) {
 // Renders the value selector for the active tool's kind into `host`. Picking a
 // value updates the controller's paint value and re-renders the panel so the
 // active swatch highlight tracks the selection. Value-less tools show a hint.
-function buildValuePanel(doc, host, kind, editor, rerenderPanel) {
+function buildValuePanel(doc, host, kind, editor, rerenderPanel, hooks = {}) {
   switch (kind) {
     case ToolValueKind.BASE:
       host.append(swatchGrid(doc, BASE_ENTRIES.map(e => ({
@@ -1535,6 +1642,13 @@ function buildValuePanel(doc, host, kind, editor, rerenderPanel) {
       host.append(swatchGrid(doc, items, editor.getPaintValue('structure'), (key) => {
         editor.setPaintValue('structure', key); rerenderPanel();
       }));
+      // Footprint rotate (P6, item 2) — cycles the building's impassable footprint
+      // hex to the next eligible adjacent direction. Mirrors the 'R' shortcut.
+      if (hooks.onRotateFootprint) {
+        host.append(actionBtn(doc, '⟳ Rotate footprint (R)', () => hooks.onRotateFootprint(),
+          'Cycle the selected building’s footprint hex to the next eligible adjacent direction'));
+      }
+      host.append(hint(doc, 'Placing a building auto-claims an adjacent footprint hex. Hover to preview; press R (or the button) to rotate it.'));
       break;
     }
     case ToolValueKind.RESOURCE:
