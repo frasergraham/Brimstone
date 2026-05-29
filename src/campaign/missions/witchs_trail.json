@@ -1033,8 +1033,7 @@
         "fortifyLevel": 0,
         "resource": "WOOD",
         "hiddenSurvivor": false,
-        "roadDirs": [],
-        "buildingFootprintOf": "2,9"
+        "roadDirs": []
       },
       {
         "col": 3,
@@ -1136,7 +1135,7 @@
           "3,8"
         ],
         "footprintHexes": [
-          "2,8"
+          "3,9"
         ]
       },
       {
@@ -1149,7 +1148,8 @@
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
-        "roadDirs": []
+        "roadDirs": [],
+        "buildingFootprintOf": "2,9"
       },
       {
         "col": 4,

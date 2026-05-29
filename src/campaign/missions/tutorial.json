@@ -196,8 +196,7 @@
         "fortifyLevel": 0,
         "resource": "WOOD",
         "hiddenSurvivor": false,
-        "roadDirs": [],
-        "buildingFootprintOf": "6,3"
+        "roadDirs": []
       },
       {
         "col": 6,
@@ -213,8 +212,21 @@
           "6,4"
         ],
         "footprintHexes": [
-          "5,3"
+          "7,3"
         ]
+      },
+      {
+        "col": 7,
+        "row": 3,
+        "base": "GRASS",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [],
+        "buildingFootprintOf": "6,3"
       },
       {
         "col": 2,
@@ -256,8 +268,7 @@
         "fortifyLevel": 0,
         "resource": "HERBS",
         "hiddenSurvivor": false,
-        "roadDirs": [],
-        "buildingFootprintOf": "2,5"
+        "roadDirs": []
       },
       {
         "col": 2,
@@ -275,8 +286,21 @@
           "3,5"
         ],
         "footprintHexes": [
-          "1,5"
+          "3,6"
         ]
+      },
+      {
+        "col": 3,
+        "row": 6,
+        "base": "GRASS",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "roadDirs": [],
+        "buildingFootprintOf": "2,5"
       },
       {
         "col": 3,
