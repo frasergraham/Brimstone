@@ -457,8 +457,8 @@ describe('Renderer3D — resolveFogObserver (fog info-leak regression)', () => {
 
   test('with fog active, a derived observer means the veil is NOT suppressed', () => {
     // Mirrors the _applyFogVeil gate: target=null (reveal-all) iff fog inactive
-    // OR observer null. A both-flags-false + fog=full game must keep the veil.
-    const state = { witchIsAI: false, heroIsAI: false, fogOfWar: 'full' };
+    // OR observer null. A both-flags-false + fog=partial game must keep the veil.
+    const state = { witchIsAI: false, heroIsAI: false, fogOfWar: 'partial' };
     const fogActive = state.fogOfWar && state.fogOfWar !== 'none';
     const observer = resolveFogObserver(state);
     const revealsWholeMap = !fogActive || !observer;

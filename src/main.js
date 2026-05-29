@@ -315,9 +315,9 @@ function init(witchIsAI, heroIsAI, autoplay = false, humanFactionId = null) {
     const def = getFaction(humanFactionId);
     state.swapLeaderToFaction(def.side, humanFactionId);
   }
-  // Allow global fog-of-war override from the setup screen select.
-  const fogSel = document.getElementById('select-fog-of-war');
-  if (fogSel) state.fogOfWar = fogSel.value;
+  // Fog of war is always on for human-vs-AI (GameState defaults it to 'partial'
+  // when any side is AI, 'none' for two-human games). The AI-debug toggle below
+  // can still force it off for AI-vs-AI debugging.
 
   const thinkDelay = autoplay ? 0 : undefined;
   witchAI = witchIsAI ? new WitchAIEngine(state, redraw, thinkDelay) : null;
@@ -2737,7 +2737,7 @@ function _resumeCampaignMission(missionId) {
     existingState._waveProcessor = () =>
       processWaves(existingState, missionDef.waves, _createEnemyEntity);
   }
-  existingState.fogOfWar = existingState.fogOfWar || 'full';
+  existingState.fogOfWar = existingState.fogOfWar || 'partial';
   if (missionDef.lootOverrides) existingState.lootOverrides = missionDef.lootOverrides;
   if (missionDef.aiBudgetBonus) existingState.campaignAIBudgetBonus = missionDef.aiBudgetBonus;
 
@@ -3098,7 +3098,7 @@ function _initCampaignMission(missionDef) {
   // the conductor provides scripted witch plans directly.
   const witchIsAI = !missionDef.conductorSteps;
   state = new GameState(witchIsAI, false, missionDef.mapSize, null, mapData);
-  state.fogOfWar = missionDef.isTutorial ? 'none' : 'full';
+  state.fogOfWar = missionDef.isTutorial ? 'none' : 'partial';
 
   // Apply custom phase cycle from mission definition
   if (missionDef.phaseCycle) {
@@ -5590,10 +5590,6 @@ document.getElementById('btn-async-refresh')?.addEventListener('click', () => {
 document.getElementById('btn-cancel-wait').addEventListener('click', () => {
   _showOnlineScreen();
 });
-
-function _fogSelected() {
-  return document.getElementById('select-fog-of-war')?.value ?? 'partial';
-}
 
 // ── Node count selectors — populate options based on map size ─────────────────
 

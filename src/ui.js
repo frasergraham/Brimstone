@@ -10,7 +10,6 @@ import { makeOverlay } from './overlays.js';
 import { concreteFactionOf } from './factions.js';
 import {
   ActionType, getValidActions, getVisiblePositions,
-  buildFogMovementHexes,
 } from './actions.js';
 import { PlanActionType, actionCosts, computeGhostState, computeProjectedInventory, interleavePlan } from './planner.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
@@ -1472,9 +1471,6 @@ export class UIController {
     const { x, y } = this._canvasPos(e);
     const hex = this._canvasToHex(x, y);
     if (hex.col < 0 || hex.col >= MAP_COLS || hex.row < 0 || hex.row >= MAP_ROWS) return;
-
-    // Full fog: clicking a fully black (unexplored) hex does nothing.
-    if (this._isFullyFogged(hex.col, hex.row)) return;
 
     // Spectators: view tile/unit info only — no actions or planning
     if (this.spectator) {
@@ -4699,36 +4695,6 @@ export class UIController {
     this._renderLog();
     this._updateTurnInfo?.();
     this.onRedraw?.();
-  }
-
-  /** True when (col,row) is fully black under full fog-of-war. */
-  _isFullyFogged(col, row) {
-    const state = this.state;
-    if (state.fogOfWar !== 'full') return false;
-
-    const myFaction    = state.myFaction;
-    const humanIsHero  = myFaction ? myFaction === 'hero'  : (state.witchIsAI && !state.heroIsAI);
-    const humanIsWitch = myFaction ? myFaction === 'witch' : (state.heroIsAI  && !state.witchIsAI);
-    const observerOwner = humanIsHero ? 'hero' : (humanIsWitch ? 'witch' : null);
-    if (!observerOwner) return false;
-
-    const k = hexKey(col, row);
-
-    // In sight range?
-    const sightSet = this.renderer._buildFogVisibleHexes(observerOwner);
-    if (sightSet.has(k)) return false;
-
-    // In movement-reachable set?
-    const lastStep = this.renderer.planGhostSteps?.at(-1);
-    const projectedPositions = lastStep?.positions ?? null;
-    const moveSet = buildFogMovementHexes(state, observerOwner, projectedPositions);
-    if (moveSet.has(k)) return false;
-
-    // Previously explored?
-    const explored = state.exploredHexes?.[observerOwner];
-    if (explored?.has(k)) return false;
-
-    return true;
   }
 
   refresh() {

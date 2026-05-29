@@ -1,14 +1,12 @@
 // Fog DISPLAY-mode debug override (T-key).
 //
 // `_fogDebugMode` is a renderer-level override of how fog DISPLAYS, independent
-// of the game's actual fogOfWar state. The cycle is normal → off → full →
-// debug → normal:
+// of the game's actual fogOfWar state. It is a simple two-state toggle
+// normal ↔ off:
 //   • normal → veil the real (game-driven) fogged set
 //   • off    → suppress the veil entirely (everything visible)
-//   • full   → treat ALL hexes as fogged (whole map darkened)
-//   • debug  → normal veil PLUS a billboarded "F" over every fogged hex
 //
-// The pure helpers `nextFogDebugMode` (cycle) and `foggedSetForMode`
+// The pure helpers `nextFogDebugMode` (toggle) and `foggedSetForMode`
 // (override → fogged set) are unit-tested directly; the override wiring into
 // `_applyFogVeil` is exercised through a stubbed renderer (no Babylon context),
 // asserting `_fogActiveSet` membership per mode.
@@ -23,12 +21,14 @@ import {
   FOG_DEBUG_MODES,
 } from '../src/renderer-3d.js';
 
-describe('nextFogDebugMode — T-key cycle', () => {
-  test('cycles normal → off → full → debug → normal', () => {
+describe('nextFogDebugMode — T-key toggle', () => {
+  test('flips normal ↔ off', () => {
     assert.equal(nextFogDebugMode('normal'), 'off');
-    assert.equal(nextFogDebugMode('off'), 'full');
-    assert.equal(nextFogDebugMode('full'), 'debug');
-    assert.equal(nextFogDebugMode('debug'), 'normal');
+    assert.equal(nextFogDebugMode('off'), 'normal');
+  });
+
+  test('is a two-state toggle', () => {
+    assert.deepEqual([...FOG_DEBUG_MODES], ['normal', 'off']);
   });
 
   test('a full round-trip returns to the start', () => {
@@ -37,38 +37,29 @@ describe('nextFogDebugMode — T-key cycle', () => {
     assert.equal(m, 'normal');
   });
 
-  test('unknown input falls back to the first mode', () => {
-    assert.equal(nextFogDebugMode(undefined), 'normal');
-    assert.equal(nextFogDebugMode('bogus'), 'normal');
+  test('unknown input falls back to off → normal on the next flip', () => {
+    // Anything that isn't 'off' is treated as 'normal' and flips to 'off'.
+    assert.equal(nextFogDebugMode(undefined), 'off');
+    assert.equal(nextFogDebugMode('bogus'), 'off');
   });
 });
 
 describe('foggedSetForMode — override → fogged set mapping', () => {
   const real = new Set(['1,1', '2,2']);
-  const all = ['0,0', '1,1', '2,2', '3,3'];
 
   test('off → empty set (suppress the veil)', () => {
-    const got = foggedSetForMode('off', real, all);
+    const got = foggedSetForMode('off', real);
     assert.equal(got.size, 0);
   });
 
-  test('full → all hexes', () => {
-    const got = foggedSetForMode('full', real, all);
-    assert.deepEqual([...got].sort(), [...all].sort());
-  });
-
   test('normal → the real computed set (unchanged ref)', () => {
-    assert.equal(foggedSetForMode('normal', real, all), real);
-  });
-
-  test('debug → the real computed set (same as normal)', () => {
-    assert.equal(foggedSetForMode('debug', real, all), real);
+    assert.equal(foggedSetForMode('normal', real), real);
   });
 
   test('does not mutate the real set', () => {
     const r = new Set(['1,1']);
-    foggedSetForMode('off', r, all);
-    foggedSetForMode('full', r, all);
+    foggedSetForMode('off', r);
+    foggedSetForMode('normal', r);
     assert.deepEqual([...r], ['1,1']);
   });
 });
@@ -117,37 +108,12 @@ describe('Renderer3D._applyFogVeil — fog display-mode override', () => {
     assert.equal(r._fogActiveSet.has('2,2'), false);
   });
 
-  test('debug → same fogged set as normal (real)', () => {
-    const r = setup('debug');
-    assert.equal(r._fogActiveSet.has('3,3'), true);
-    assert.equal(r._fogActiveSet.has('2,2'), false);
-  });
-
   test('off → nothing fogged (everything visible)', () => {
     const r = setup('off');
     assert.equal(r._fogActiveSet.size, 0);
   });
 
-  test('full → every hex fogged', () => {
-    const r = setup('full');
-    assert.equal(r._fogActiveSet.has('2,2'), true);
-    assert.equal(r._fogActiveSet.has('3,3'), true);
-    assert.equal(r._fogActiveSet.size, 2);
-  });
-
-  test('full darkens even when the game has no observer / fog off', () => {
-    const r = makeRenderer();
-    r.state.fogOfWar = 'none';
-    r._observerOwner = () => null;
-    addTile(r, 5, 5);
-    addTile(r, 6, 6);
-    r._buildFogVisibleHexes = () => new Set();
-    r._fogDebugMode = 'full';
-    r._applyFogVeil();
-    assert.equal(r._fogActiveSet.size, 2);
-  });
-
-  test('cycling back to normal restores the real veil', () => {
+  test('toggling off then back to normal restores the real veil', () => {
     const r = makeRenderer();
     addTile(r, 2, 2);
     addTile(r, 3, 3);
@@ -157,23 +123,12 @@ describe('Renderer3D._applyFogVeil — fog display-mode override', () => {
     r._applyFogVeil();
     assert.equal(r._fogActiveSet.size, 0, 'off: nothing fogged');
 
-    r._fogDebugMode = 'full';
-    r._applyFogVeil();
-    assert.equal(r._fogActiveSet.size, 2, 'full: all fogged');
-
     r._fogDebugMode = 'normal';
     r._applyFogVeil();
     assert.deepEqual([...r._fogActiveSet], ['3,3'], 'normal: only the real fogged hex');
   });
 
-  test('debug-marker sync is a safe no-op without a DOM', () => {
-    // In node there is no `document`, so `_syncFogDebugMarkers` must not throw
-    // and must leave the registry empty.
-    const r = setup('debug');
-    assert.equal(r._fogDebugMarkers.size, 0);
-  });
-
-  test('_cycleFogDebugMode advances the mode and re-applies the veil', () => {
+  test('_cycleFogDebugMode toggles the mode and re-applies the veil', () => {
     const r = makeRenderer();
     addTile(r, 2, 2);
     addTile(r, 3, 3);
@@ -184,8 +139,8 @@ describe('Renderer3D._applyFogVeil — fog display-mode override', () => {
     assert.equal(r._fogDebugMode, 'off');
     assert.equal(r._fogActiveSet.size, 0);
 
-    r._cycleFogDebugMode(); // → full
-    assert.equal(r._fogDebugMode, 'full');
-    assert.equal(r._fogActiveSet.size, 2);
+    r._cycleFogDebugMode(); // → normal
+    assert.equal(r._fogDebugMode, 'normal');
+    assert.deepEqual([...r._fogActiveSet], ['3,3']);
   });
 });

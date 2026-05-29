@@ -52,7 +52,7 @@ export class MirrorState {
     s.heroIsAI             = snap.heroIsAI;
     s.fogOfWar             = typeof snap.fogOfWar === 'boolean'
       ? (snap.fogOfWar ? 'partial' : 'none')
-      : (snap.fogOfWar ?? 'none');
+      : (snap.fogOfWar === 'full' ? 'partial' : (snap.fogOfWar ?? 'none'));
     s.exploredHexes = {
       hero:  new Set(snap.exploredHexes?.hero  ?? []),
       witch: new Set(snap.exploredHexes?.witch ?? []),
