@@ -142,7 +142,7 @@ describe('Renderer3D.addMoveAnim — running vs walking by hop count', () => {
       'single-hop move clears the run flag even before completion');
   });
 
-  test('multi-hop run scales the RUN group speedRatio (not the walk group)', () => {
+  test('multi-hop run sets the RUN group speedRatio to its CONSTANT base (distance-independent)', () => {
     const inst = makeMoveInst(makeStandee());
     inst._ensureRunningAnimation = () => {};
     inst._scene.beginDirectAnimation = () => {}; // hold in flight
@@ -151,10 +151,42 @@ describe('Renderer3D.addMoveAnim — running vs walking by hop count', () => {
     inst._paladinSource = { runGroup, walkGroup };
     inst.addMoveAnim('e1', 0, 0, 2, 0, 'hero', 'hero', null,
       [{ col: 1, row: 0 }, { col: 2, row: 0 }]);
-    // Run group got scaled (base 3.0 × distMul of ~2), walk left untouched.
-    assert.ok(runGroup.speedRatio > 3.0,
-      `run speedRatio ${runGroup.speedRatio} should be scaled by the 2-hex distance`);
+    // Running matches speed-to-distance via the cone-slide WINDOW (it scales by
+    // hop count — see the duration test below), NOT the speedRatio. The run
+    // clip plays at its per-hex base ratio (3.0) regardless of distance, so feet
+    // stay planted without the multi-hop speed-up the old code produced.
+    assert.equal(runGroup.speedRatio, 3.0,
+      `run speedRatio ${runGroup.speedRatio} should equal the base ratio, not be scaled by distance`);
     assert.equal(walkGroup.speedRatio, 1.0, 'walk group untouched on a run move');
+  });
+
+  test('run cone-slide DURATION scales with distance (speed matched to distance)', () => {
+    // Capture the end-frame (FRAMES_MOVE) handed to beginDirectAnimation — that
+    // is the cone-slide window. A 4-hex run must take ~2× the frames of a 2-hex
+    // run so ground-travel speed stays constant at a running pace (a longer run
+    // takes longer in real time, it doesn't sprint faster). The run speedRatio
+    // stays constant across both — distance lives entirely in the window.
+    function runFramesFor(dests) {
+      const inst = makeMoveInst(makeStandee());
+      inst._ensureRunningAnimation = () => {};
+      let toFrame = null;
+      inst._scene.beginDirectAnimation = (_t, _a, _f, _to) => { toFrame = _to; };
+      const runGroup  = { speedRatio: 1.0 };
+      const walkGroup = { speedRatio: 1.0 };
+      inst._paladinSource = { runGroup, walkGroup };
+      const last = dests[dests.length - 1];
+      inst.addMoveAnim('e1', 0, 0, last.col, last.row, 'hero', 'hero', null, dests);
+      return { toFrame, runRatio: runGroup.speedRatio };
+    }
+    const twoHex  = runFramesFor([{ col: 1, row: 0 }, { col: 2, row: 0 }]);
+    const fourHex = runFramesFor(
+      [{ col: 1, row: 0 }, { col: 2, row: 0 }, { col: 3, row: 0 }, { col: 4, row: 0 }]);
+    assert.ok(twoHex.toFrame > 0 && fourHex.toFrame > 0, 'both runs got a frame window');
+    const ratio = fourHex.toFrame / twoHex.toFrame;
+    assert.ok(Math.abs(ratio - 2) < 0.05,
+      `4-hex run window (${fourHex.toFrame}f) should be ~2× the 2-hex window (${twoHex.toFrame}f); ratio=${ratio.toFixed(3)}`);
+    assert.equal(twoHex.runRatio, fourHex.runRatio,
+      'run speedRatio is distance-independent (constant base across both moves)');
   });
 
   test('single-hop walk scales the WALK group speedRatio (not the run group)', () => {

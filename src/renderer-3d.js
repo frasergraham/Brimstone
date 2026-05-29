@@ -4018,8 +4018,11 @@ export class Renderer3D {
    *  historical T-pose/giant-head bugs, so we never clone the skeleton).
    *
    *  Also computes the run clip's own stride/cycle → a speedRatio that makes
-   *  one running stride cover one hex's world-distance in MOVE_ANIM_MS, stored
-   *  on `_runningSource.speedRatio` for addMoveAnim to scale by hop count.
+   *  one running stride cover one hex's world-distance in RUN_HEX_MS (running's
+   *  per-hex pace, not the walk's MOVE_ANIM_MS), stored on
+   *  `_runningSource.speedRatio`. addMoveAnim then scales the cone-slide WINDOW
+   *  by hop count rather than the speedRatio, so multi-hex runs take longer in
+   *  real time instead of speeding up.
    *  Returns the retargeted group, or null if import/retarget failed (the move
    *  then falls back to the walking clip). */
   async _loadRunningAnimation(basePath = 'assets') {
@@ -4053,21 +4056,25 @@ export class Renderer3D {
     }
 
     // Compute stride + natural cycle BEFORE stripping root motion (which zeros
-    // the keyframes), then back-calc a speedRatio that makes one running
-    // stride cover one hex's world-distance in MOVE_ANIM_MS — exactly like
-    // walking, just measured against running's own (longer) stride.
+    // the keyframes), then back-calc a speedRatio that makes one running stride
+    // cover one hex's world-distance in RUN_HEX_MS — exactly like walking, but
+    // measured against running's own (longer) stride AND its own per-hex time.
+    // Using RUN_HEX_MS (not MOVE_ANIM_MS) is the key to matching speed to
+    // distance: the run cone-slide window scales with hop count (N×RUN_HEX_MS),
+    // so this base ratio already encodes the per-hex foot-plant pace and is
+    // applied WITHOUT a distMul factor in addMoveAnim.
     const strideSrcUnits = computeRootStrideLength(runNative);
     const natCycleSec    = animDurationSeconds(runNative);
     const paladinScale   = this._paladinScale > 0 ? this._paladinScale : PALADIN_BASE_SCALE;
     const hexStepWU      = HEX_RADIUS_WORLD * Math.sqrt(3);
     const runSpeedRatio  = computeAnimSpeedRatioForStride(
-      strideSrcUnits, natCycleSec, paladinScale, hexStepWU, MOVE_ANIM_MS, /*fallback*/ 2.0,
+      strideSrcUnits, natCycleSec, paladinScale, hexStepWU, RUN_HEX_MS, /*fallback*/ 2.0,
     );
     this._runningSource = { speedRatio: runSpeedRatio };
     console.info(
       `[Renderer3D] running speed ratio = ${runSpeedRatio.toFixed(2)} `
       + `(stride=${strideSrcUnits.toFixed(2)} src-units, cycle=${natCycleSec.toFixed(2)}s, `
-      + `scale=${paladinScale.toFixed(3)}, hex=${hexStepWU.toFixed(2)}wu, anim=${MOVE_ANIM_MS}ms)`,
+      + `scale=${paladinScale.toFixed(3)}, hex=${hexStepWU.toFixed(2)}wu, anim=${RUN_HEX_MS}ms)`,
     );
 
     const nameMap = new Map();
@@ -10637,14 +10644,12 @@ export class Renderer3D {
     const worldPts = waypoints.map(p => hexToWorld(p.col, p.row));
     const { x: fromX, z: fromZ } = worldPts[0];
     const { x: toX,   z: toZ   } = worldPts[worldPts.length - 1];
-    // Cone slide time tied to MOVE_ANIM_MS so the walking-speed-match
-    // calc in _loadWalkingAnimation actually corresponds to real cone
-    // motion. Scaled by the current playback speed multiplier so vfast
-    // mode produces a faster cone slide AND a proportionally faster
-    // walking cycle (next code block) → feet plant in every mode.
-    const speedMul   = this._playbackSpeedMul ?? 1.0;
-    const effMoveMs  = MOVE_ANIM_MS * speedMul;
-    const FRAMES_MOVE = Math.max(1, Math.round(effMoveMs * 60 / 1000));
+    // Playback-speed multiplier (cinematic/fast/vfast). Applied below to both
+    // the cone-slide duration and the motion-clip speedRatio so every speed
+    // mode keeps feet planted. The per-move DURATION itself depends on walk-vs-
+    // run and the polyline length, so it's computed further down (see effMoveMs)
+    // once those are known.
+    const speedMul = this._playbackSpeedMul ?? 1.0;
 
     // Cancel any in-flight move on this entity so plan-step "A→B→C" hops
     // don't queue up and play simultaneously.
@@ -10675,10 +10680,8 @@ export class Renderer3D {
 
     // Total polyline length in world units — for a 1-hex hop this is
     // one hexStep, for a road move tracing 2 hexes it's two hexSteps
-    // (or whatever the actual XZ sum is for the path). The walking
-    // animation playback rate scales by this length / one-hex so the
-    // walk cycle covers the polyline at the cone's actual ground speed
-    // and feet stay planted across the whole move.
+    // (or whatever the actual XZ sum is for the path). distMul is the move's
+    // length expressed in hexes.
     let totalLenWU = 0;
     for (let i = 1; i < worldPts.length; i++) {
       const dx = worldPts[i].x - worldPts[i - 1].x;
@@ -10686,14 +10689,31 @@ export class Renderer3D {
       totalLenWU += Math.sqrt(dx * dx + dz * dz);
     }
     const hexStepWU = HEX_RADIUS_WORLD * Math.sqrt(3);
+    const distMul = (totalLenWU > 0 && hexStepWU > 0) ? (totalLenWU / hexStepWU) : 1;
+
+    // Will the RUN clip actually drive this move? (Selected as a run AND the
+    // running.glb has finished its lazy load — otherwise we fall back to the
+    // walk clip + walk timing for this one move.)
+    const useRun = isRunMove && !!this._paladinSource?.runGroup;
+
+    // Per-move cone-slide DURATION. This is where speed is matched to distance:
+    //
+    // • Walking is always a single hop (selectMoveAnimKind → 'walking' only for
+    //   <2 hexes), so it covers its one hex in a FIXED MOVE_ANIM_MS window. Its
+    //   speedRatio is scaled by distMul (≈1) to keep one stride = one hex.
+    // • Running covers MULTIPLE hexes. We do NOT cram them into MOVE_ANIM_MS —
+    //   that's what made multi-hex runs read as fast-forward (ground speed rose
+    //   with hop count). Instead each running hex takes a fixed RUN_HEX_MS, so
+    //   the window grows to RUN_HEX_MS × distMul and ground-travel speed stays
+    //   constant at a running pace regardless of distance.
+    const perMoveMs  = useRun ? (RUN_HEX_MS * distMul) : MOVE_ANIM_MS;
+    const effMoveMs  = perMoveMs * speedMul;
+    const FRAMES_MOVE = Math.max(1, Math.round(effMoveMs * 60 / 1000));
+
     if (totalLenWU > 0 && hexStepWU > 0) {
-      const distMul = totalLenWU / hexStepWU;
       // Scale whichever motion clip will actually play (running for a multi-hop
       // dash, else walking). The per-hex base ratio comes from that clip's own
-      // stride measurement, multiplied by distMul so a multi-hex move (still
-      // MOVE_ANIM_MS total) cycles faster and keeps feet planted across the
-      // whole polyline. Fall back to the walk group if running hasn't loaded.
-      const useRun = isRunMove && this._paladinSource?.runGroup;
+      // stride measurement. Fall back to the walk group if running hasn't loaded.
       const motionGroup = useRun
         ? this._paladinSource?.runGroup
         : this._paladinSource?.walkGroup;
@@ -10701,10 +10721,16 @@ export class Renderer3D {
         ? (this._runningSource?.speedRatio ?? 1.0)
         : (this._walkingSource?.speedRatio ?? 1.0);
       if (motionGroup && 'speedRatio' in motionGroup) {
-        // Dividing by speedMul makes a faster (smaller) speedMul produce a
-        // higher playback speedRatio — i.e. a faster cycle that matches the
-        // shorter cone-slide duration.
-        motionGroup.speedRatio = (baseRatio * distMul) / Math.max(0.05, speedMul);
+        // Walking crams its single hop into MOVE_ANIM_MS, so its cycle is
+        // scaled by distMul to cover the polyline at the cone's actual ground
+        // speed. Running's WINDOW already scales with distance (perMoveMs =
+        // RUN_HEX_MS × distMul), so the base ratio — solved against RUN_HEX_MS —
+        // already matches the per-hex foot-plant pace; multiplying by distMul
+        // would re-introduce the speed-up. Dividing by speedMul makes a faster
+        // (smaller) speedMul produce a higher playback speedRatio to match the
+        // shorter cone-slide.
+        const clipDistFactor = useRun ? 1 : distMul;
+        motionGroup.speedRatio = (baseRatio * clipDistFactor) / Math.max(0.05, speedMul);
       }
     }
 
@@ -16794,6 +16820,19 @@ export function diffStandees(existingIds, entities) {
  *  from this constant so the cone slide and the cycle's speed-match
  *  stay in lockstep. */
 export const MOVE_ANIM_MS = 1000;
+
+/** Real-time (ms) a RUNNING step takes to cross ONE hex. The running clip is
+ *  used for multi-hex dashes; unlike walking — which crams its single hop into
+ *  a fixed MOVE_ANIM_MS window — a run's cone-slide duration scales with
+ *  distance: an N-hex run takes N × RUN_HEX_MS. That keeps the ground-travel
+ *  speed CONSTANT at a running pace no matter how many hexes are crossed (the
+ *  old code held the window at MOVE_ANIM_MS, so longer runs sped up — feet
+ *  still planted, but the whole motion read as fast-forward). 750ms < the
+ *  1000ms walk step, so running is visibly faster than walking (≈1.33× ground
+ *  speed) while a 2-hex run lands at ~1500ms of real motion. The running clip's
+ *  base speedRatio is solved against THIS per-hex time so feet stay planted.
+ *  Operator-tunable in one place. */
+export const RUN_HEX_MS = 750;
 
 /** Duration (ms) of an attack-lunge slide to the midpoint. The lunge
  *  uses an ease-OUT curve (fast launch, decelerating into the strike)
