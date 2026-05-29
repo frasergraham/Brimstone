@@ -5407,12 +5407,21 @@ export class Renderer3D {
     const BABYLON = this._babylon;
     const camera  = this._camera;
     if (!BABYLON || !camera) return Promise.resolve(false);
+    const { target, radius } = this._fitToOwnedUnitsTarget();
+    // Keep current alpha (no `alpha` opt) — don't change yaw.
+    return this._focusCamera(target, radius, { forceAnimate: true }).then(() => true);
+  }
 
-    const radius = camera.upperRadiusLimit ?? CAMERA_MAX_ZOOM_RADIUS;
+  /** Pure-ish computation of the target the ⛶ fit button would ease the
+   *  camera to: world-XZ centroid of the observer's own live units (or the
+   *  map centroid if there's no observer / no live units), at
+   *  `upperRadiusLimit`. Used by the UI to decide whether a tap would move
+   *  the camera at all — if not, the same tap orients north-up instead. */
+  _fitToOwnedUnitsTarget() {
+    const BABYLON = this._babylon;
+    const camera  = this._camera;
+    const radius = camera?.upperRadiusLimit ?? CAMERA_MAX_ZOOM_RADIUS;
     const observerOwner = this._observerOwner();
-
-    // Collect live positions of the observer's own units (live standee pos
-    // preferred, hex centre fallback — same resolution as combat framing).
     const positions = [];
     if (observerOwner && Array.isArray(this.state?.entities)) {
       for (const e of this.state.entities) {
@@ -5421,14 +5430,12 @@ export class Renderer3D {
         if (p) positions.push(p);
       }
     }
-
     let target;
     if (positions.length > 0) {
       let sx = 0, sz = 0;
       for (const p of positions) { sx += p.x; sz += p.z; }
       target = new BABYLON.Vector3(sx / positions.length, 0, sz / positions.length);
     } else {
-      // No observer (AI-vs-AI) or no owned units → map centroid at max zoom.
       const hexes = [];
       if (this.state?.tiles) {
         for (const tile of this.state.tiles.values()) hexes.push({ col: tile.col, row: tile.row });
@@ -5436,11 +5443,25 @@ export class Renderer3D {
       const c = clusterCentroidWorld(hexes);
       target = c
         ? new BABYLON.Vector3(c.x, 0, c.z)
-        : camera.target.clone(); // no tiles loaded — hold current target
+        : (camera?.target?.clone?.() ?? new BABYLON.Vector3(0, 0, 0));
     }
+    return { target, radius };
+  }
 
-    // Keep current alpha (no `alpha` opt) — don't change yaw.
-    return this._focusCamera(target, radius, { forceAnimate: true }).then(() => true);
+  /** True if the camera is already at the fit-button's target state (within
+   *  small epsilons), so a single tap of ⛶ would be a visual no-op. The UI
+   *  uses this to decide between "frame the map" and "orient north up" — one
+   *  button, two actions, no double-tap timing window. */
+  isAtFitTarget(targetEpsilon = 0.5, radiusEpsilon = 0.6) {
+    const camera = this._camera;
+    if (!camera || !camera.target) return false;
+    const { target, radius } = this._fitToOwnedUnitsTarget();
+    if (!target) return false;
+    const dx = (camera.target.x ?? 0) - target.x;
+    const dz = (camera.target.z ?? 0) - target.z;
+    if (Math.hypot(dx, dz) > targetEpsilon) return false;
+    if (Math.abs((camera.radius ?? 0) - radius) > radiusEpsilon) return false;
+    return true;
   }
 
   /** Orient the camera so map north (row 0, world -Z) is pointing up on screen.

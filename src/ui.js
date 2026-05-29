@@ -268,30 +268,28 @@ export class UIController {
         }
       }, sig);
     }
-    this._lastFitTapTime = 0;
     this._el('zoom-fit')?.addEventListener('click', () => {
-      const now = Date.now();
-      const isDoubleTap = (now - this._lastFitTapTime) < 400;
-      this._lastFitTapTime = now;
-      if (isDoubleTap) {
-        // Double-tap (second tap within 400ms): orient the camera so map
-        // north is pointing up. 2D renderer's stub is a no-op. Target +
-        // radius are preserved — only yaw eases to north.
+      if (this.renderer.viewLocked) return;
+      // One-button, two-action: tap frames the map; tapping again when the
+      // camera is already at the framed target (so framing would be a
+      // visual no-op) orients north up instead. No 400ms double-tap window.
+      const alreadyFramed = this.renderer.is3D
+        && typeof this.renderer.isAtFitTarget === 'function'
+        && this.renderer.isAtFitTarget();
+      if (alreadyFramed) {
         if (typeof this.renderer.orientNorthUp === 'function') {
           this.renderer.orientNorthUp();
           this.onRedraw();
         }
-      } else if (!this.renderer.viewLocked) {
-        // Single-tap when unlocked. 3D: rise to max zoom-out (near top-down)
-        // centred on the player's own units. 2D: classic fit-whole-map.
-        this.renderer.resize();
-        if (this.renderer.is3D && typeof this.renderer.zoomOutToOwnedUnits === 'function') {
-          this.renderer.zoomOutToOwnedUnits();
-        } else {
-          this.renderer.resetView();
-        }
-        this.onRedraw();
+        return;
       }
+      this.renderer.resize();
+      if (this.renderer.is3D && typeof this.renderer.zoomOutToOwnedUnits === 'function') {
+        this.renderer.zoomOutToOwnedUnits();
+      } else {
+        this.renderer.resetView();
+      }
+      this.onRedraw();
     }, sig);
     this._el('zoom-me')?.addEventListener('click', () => {
       if (this._selectedEntity && this._selectedEntity.alive) {
