@@ -63,6 +63,7 @@ import {
   SIGNPOST_POST_DIAMETER,
   SIGNPOST_PLANK_WIDTH,
   SIGNPOST_PLANK_HEIGHT,
+  SIGNPOST_ROAD_OFFSET,
 } from './building-render.js';
 // Re-export so 3D-renderer consumers/tests can import the ground-span knob
 // and signpost dimensions from here too (mirrors the tree-count knob
@@ -73,6 +74,7 @@ export {
   SIGNPOST_POST_DIAMETER,
   SIGNPOST_PLANK_WIDTH,
   SIGNPOST_PLANK_HEIGHT,
+  SIGNPOST_ROAD_OFFSET,
 };
 import { Renderer } from './renderer.js';
 import { getFactionTheme } from './theme.js';
@@ -792,8 +794,10 @@ export const BUILDING_LABEL_Y = 1.55;
 export const BUILDING_LABEL_WIDTH  = 1.6;
 export const BUILDING_LABEL_HEIGHT = 0.4;
 /** Texture canvas dimensions (px). Power-of-two friendly. */
-export const BUILDING_LABEL_TEX_W = 256;
-export const BUILDING_LABEL_TEX_H = 64;
+// Plank texture: pow-2 sized for mipmap-friendly TRILINEAR. 512x192 is the
+// next pow-2 step that keeps the plank legible from base zoom out to ~3x.
+export const BUILDING_LABEL_TEX_W = 512;
+export const BUILDING_LABEL_TEX_H = 192;
 
 // ─── Power-node tint overlay + name label ───────────────────────────────────
 // A faint faction-tinted hex sits over every power-node tile (just above the
@@ -9732,12 +9736,20 @@ export class Renderer3D {
     const text = labelTextForTile(tile);
     if (!text) return;
 
-    // Door-side edge midpoint: average of the entrance + footprint hex centres.
+    // Door-side edge midpoint pushed OFF the road by SIGNPOST_ROAD_OFFSET so
+    // the post doesn't sit in the road tile. Side is biased deterministically
+    // on the hex position so adjacent buildings don't alternate-zigzag.
     const renderKey   = buildingRenderHex(tile);
     const [rc, rr]    = renderKey.split(',').map(Number);
     const isFootprint = !(rc === tile.col && rr === tile.row);
     const footprintWorld = isFootprint ? hexToWorld(rc, rr) : null;
-    const signPos = signpostWorldPos({ x: hexX, z: hexZ }, footprintWorld);
+    const sideBias = (((tile.col * 73856093) ^ (tile.row * 19349663)) & 1) ? 1 : -1;
+    const signPos = signpostWorldPos(
+      { x: hexX, z: hexZ },
+      footprintWorld,
+      SIGNPOST_ROAD_OFFSET,
+      sideBias,
+    );
     if (!signPos) {
       // Orphan with no footprint → old floating-label behaviour (centred above
       // the building slot). One extra branch keeps legacy saves rendering.
@@ -9780,9 +9792,12 @@ export class Renderer3D {
     plank.billboardMode = BABYLON.Mesh.BILLBOARDMODE_Y;
     plank.isPickable    = false;
     plank.material      = plankMat;
+    // Plank sits ABOVE the post — bottom edge of plank rests on the post tip —
+    // so the post never pierces through the text. Plank centre Y = post
+    // height + half-plank-height.
     plank.position.set(
       signPos.x,
-      tileTopY + SIGNPOST_POST_HEIGHT - SIGNPOST_PLANK_HEIGHT / 2,
+      tileTopY + SIGNPOST_POST_HEIGHT + SIGNPOST_PLANK_HEIGHT / 2,
       signPos.z,
     );
 
@@ -9823,15 +9838,15 @@ export class Renderer3D {
     ctx.fillStyle = '#d4b884';
     ctx.fillRect(0, 0, W, H);
     ctx.strokeStyle = '#7a5a2e';
-    ctx.lineWidth = 6;
-    ctx.strokeRect(3, 3, W - 6, H - 6);
+    ctx.lineWidth = 10;
+    ctx.strokeRect(5, 5, W - 10, H - 10);
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
     // Cinzel / Trajan read as an engraved-stone serif; plain serif is the
     // fallback when the webfont isn't loaded (e.g. Electron / first paint).
-    ctx.font = 'bold 28px "Cinzel", "Trajan Pro", Georgia, serif';
+    ctx.font = 'bold 96px "Cinzel", "Trajan Pro", Georgia, serif';
     ctx.fillStyle = '#3a2410';
-    ctx.fillText(text, W / 2, H / 2 + 2);
+    ctx.fillText(text, W / 2, H / 2 + 4);
     if (typeof tex.update === 'function') tex.update();
   }
 

@@ -23,6 +23,7 @@ import {
   SIGNPOST_POST_DIAMETER,
   SIGNPOST_PLANK_WIDTH,
   SIGNPOST_PLANK_HEIGHT,
+  SIGNPOST_ROAD_OFFSET,
 } from '../src/building-render.js';
 
 import {
@@ -594,14 +595,24 @@ describe('Renderer3D._buildBuildingSignpost — footprinted building', () => {
     assert.equal(plank.billboardMode, r._babylon.Mesh.BILLBOARDMODE_Y);
     assert.equal(post.billboardMode, null, 'post stays vertical (no billboard)');
 
-    // Both stand at the entrance↔footprint shared-edge midpoint.
-    const mid = signpostWorldPos(ew, hexToWorld(6, 5));
-    assert.ok(Math.abs(post.position.x - mid.x) < 1e-9, 'post x at door edge');
-    assert.ok(Math.abs(post.position.z - mid.z) < 1e-9, 'post z at door edge');
-    assert.ok(Math.abs(plank.position.x - mid.x) < 1e-9, 'plank x at door edge');
-    assert.ok(Math.abs(plank.position.z - mid.z) < 1e-9, 'plank z at door edge');
-    // Plank perches above the post.
+    // Both stand at the entrance↔footprint shared-edge midpoint pushed off
+    // the road by SIGNPOST_ROAD_OFFSET (perpendicular to the entrance→
+    // footprint axis), with a deterministic per-hex side bias so adjacent
+    // buildings don't alternate-zigzag.
+    // Mirror the renderer's sideBias picker exactly.
+    const sideBias = (((entrance.col * 73856093) ^ (entrance.row * 19349663)) & 1) ? 1 : -1;
+    const off = signpostWorldPos(ew, hexToWorld(6, 5), SIGNPOST_ROAD_OFFSET, sideBias);
+    assert.ok(Math.abs(post.position.x - off.x) < 1e-9, 'post x at offset edge');
+    assert.ok(Math.abs(post.position.z - off.z) < 1e-9, 'post z at offset edge');
+    assert.ok(Math.abs(plank.position.x - off.x) < 1e-9, 'plank x at offset edge');
+    assert.ok(Math.abs(plank.position.z - off.z) < 1e-9, 'plank z at offset edge');
+    // Plank rests on top of the post — its bottom edge meets the post tip,
+    // so the post never pierces the text.
     assert.ok(plank.position.y > post.position.y, 'plank sits above the post centre');
+    // Off the road centreline (the shared-edge midpoint is at sideBias=0).
+    const onRoad = signpostWorldPos(ew, hexToWorld(6, 5));
+    const dist = Math.hypot(post.position.x - onRoad.x, post.position.z - onRoad.z);
+    assert.ok(Math.abs(dist - SIGNPOST_ROAD_OFFSET) < 1e-9, 'pushed off the road by the offset');
 
     // Tracked as one unit so the fade pump + fog veil treat them together.
     const entry = r._buildingLabelsByKey.get('5,5');
