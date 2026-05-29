@@ -10045,10 +10045,11 @@ export class Renderer3D {
       BUILDING_LABEL_FADE_RADIUS_FAR,
     );
     for (const entry of this._buildingLabelsByKey.values()) {
-      // Dim (not hide) under fog so the operator can still read "this hex has
-      // an Inn" through the veil — matches the pre-signpost behaviour.
-      const alpha = a * (entry.fogged ? 0.45 : 1);
-      if (entry.mats) for (const m of entry.mats) { if (m) m.alpha = alpha; }
+      // Signposts stay fully opaque under fog — the plank is a 3D BOX (not a
+      // billboard plane), and any alpha<1 lets the parchment's back face show
+      // through with the text reading reversed. Zoom-fade alpha alone drives
+      // the material; fog state is conveyed by the building itself dimming.
+      if (entry.mats) for (const m of entry.mats) { if (m) m.alpha = a; }
       // Skip the draw call entirely when fully faded — Babylon still uploads
       // the geometry for alpha=0 alpha-blended meshes, so isVisible is the
       // cheap path.
