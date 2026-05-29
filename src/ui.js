@@ -274,15 +274,13 @@ export class UIController {
       const isDoubleTap = (now - this._lastFitTapTime) < 400;
       this._lastFitTapTime = now;
       if (isDoubleTap) {
-        // Double-tap: toggle view lock; fit map first if locking
-        this.renderer.viewLocked = !this.renderer.viewLocked;
-        if (this.renderer.viewLocked) {
-          this.renderer.resize();
-          this.renderer.resetView();
-          this.renderer._zoomAnim = null;
+        // Double-tap (second tap within 400ms): orient the camera so map
+        // north is pointing up. 2D renderer's stub is a no-op. Target +
+        // radius are preserved — only yaw eases to north.
+        if (typeof this.renderer.orientNorthUp === 'function') {
+          this.renderer.orientNorthUp();
+          this.onRedraw();
         }
-        this._updateFitBtnLockState();
-        this.onRedraw();
       } else if (!this.renderer.viewLocked) {
         // Single-tap when unlocked. 3D: rise to max zoom-out (near top-down)
         // centred on the player's own units. 2D: classic fit-whole-map.

@@ -1157,6 +1157,8 @@ export class Renderer {
   // parity with Renderer3D so ui.js can wire rotate buttons unconditionally.
   rotateBy(_alphaDelta, _betaDelta) { /* no-op in 2D */ }
   tiltBy(_betaDelta) { /* no-op in 2D */ }
+  // The 2D top-down view is always north-up by construction.
+  orientNorthUp() { return Promise.resolve(true); }
 
   // Interface parity with Renderer3D.getCameraAlpha(); 2D has no yaw, so the
   // compass-rose overlay reads null and stays at the neutral north-up rotation.

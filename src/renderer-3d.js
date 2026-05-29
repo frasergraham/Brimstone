@@ -932,12 +932,15 @@ export const CAMERA_TILT_RAMP_START = 0;
  *
  *   t = clamp01((radius - minR) / (maxR - minR))
  *     0 .. RAMP_START         → betaBase (locked isometric)
- *     RAMP_START .. 1.0        → smoothstep ease from betaBase → betaTopDown
+ *     RAMP_START .. 1.0        → logarithmic ease from betaBase → betaTopDown
  *
- * The ease is a cubic smoothstep on the renormalised fraction
- * s = (t - RAMP_START) / (1 - RAMP_START): `s*s*(3 - 2s)`. This gives a flat
- * hold at the bottom of the zoom range, then an accelerating-then-decelerating
- * rise — distinct from a naive linear `lerp(betaBase, betaTopDown, t)`.
+ * The ease is `ln(1 + s·(e − 1))` on the renormalised fraction
+ * s = (t - RAMP_START) / (1 - RAMP_START). Maps s ∈ [0,1] → [0,1] but rises
+ * sharply early and decelerates as it approaches betaTopDown — even a small
+ * zoom-out from the start gives a visible tilt change, while the final
+ * approach to "looking straight down" feels gentle. Distinct from both a
+ * linear `lerp(betaBase, betaTopDown, t)` and the previous smoothstep curve
+ * (which eased in slowly at the start).
  *
  * Degenerate `maxR <= minR` returns betaBase (avoids divide-by-zero / NaN).
  *
@@ -956,8 +959,9 @@ export function betaForRadius(radius, minR, maxR, betaBase, betaTopDown, rampSta
   const span = 1 - rampStart;
   // span is > 0 here because rampStart < t <= 1 ⇒ rampStart < 1.
   const s = (t - rampStart) / span;
-  const smooth = s * s * (3 - 2 * s); // smoothstep
-  return betaBase + (betaTopDown - betaBase) * smooth;
+  // Logarithmic curve: ln(1 + s·(e − 1)). s=0→0, s=1→ln(e)=1. Steeper start.
+  const eased = Math.log(1 + s * (Math.E - 1));
+  return betaBase + (betaTopDown - betaBase) * eased;
 }
 
 /** Repeat cadence for hold-to-repeat rotate buttons (ms). */
@@ -1676,7 +1680,7 @@ export const CAMERA_MIN_ZOOM_RADIUS = 5.5;
 // 1-hex frame padding; 28 shows nearly all of it). This is also the radius at
 // which the tilt ramp (`betaForRadius`) reaches CAMERA_BETA_TOPDOWN, so the
 // "rise toward top-down" completes exactly at max zoom-out. Tune by eye.
-export const CAMERA_MAX_ZOOM_RADIUS = 28;
+export const CAMERA_MAX_ZOOM_RADIUS = 32;
 
 /**
  * Per-side depth (in hexes) the forest border band must cover so that, when
@@ -5331,6 +5335,21 @@ export class Renderer3D {
     // Keep current alpha (no `alpha` opt) — don't change yaw.
     return this._focusCamera(target, radius, { forceAnimate: true }).then(() => true);
   }
+
+  /** Orient the camera so map north (row 0, world -Z) is pointing up on screen.
+   *  Per `compassRotationDegFromCameraAlpha` (atan2(-cos α, sin α) = 0 at α=π/2),
+   *  north-up is camera alpha = π/2. Eases target/radius-stable to that alpha;
+   *  `_focusCamera` picks the nearest-wrap arc so the rotation is the short way.
+   *  Returns a Promise for the ease. */
+  orientNorthUp() {
+    const camera = this._camera;
+    if (!camera) return Promise.resolve(false);
+    return this._focusCamera(camera.target.clone(), camera.radius, {
+      alpha: Math.PI / 2,
+      forceAnimate: true,
+    }).then(() => true);
+  }
+
   _clampPan()                                         { /* camera panning is bounded via panning limits in _initBabylon */ }
   // Phase 6: real fog visibility. Sums sight ranges across all alive entities
   // owned by `observerOwner` (same logic as 2D `_buildFogVisibleHexes`).

@@ -68,16 +68,17 @@ describe('betaForRadius — curve shape (not linear)', () => {
     assert.ok(Math.abs(b - naiveLinear) > 1e-6, 'ramped beta must differ from full-range linear');
   });
 
-  test('smoothstep ease-in: closer to BASE than the linear value early in the ramp', () => {
+  test('logarithmic curve: closer to TOPDOWN than the linear value early in the ramp', () => {
     // With rampStart=0 (default) the ramp spans the entire zoom range, so the
-    // renormalized fraction equals t. At t=0.2 smoothstep(0.2) = 0.104 < 0.2,
-    // so beta sits CLOSER TO BASE than a linear interpolant at the same t —
-    // an unmistakable signature of the S-curve.
-    // Because TOPDOWN < BASE, "closer to BASE" means a LARGER beta than the
-    // straight-line value at the same t.
+    // renormalized fraction equals t. At t=0.2 the log curve evaluates to
+    // ln(1 + 0.2·(e−1)) ≈ 0.295 > 0.2, so beta has progressed FURTHER from
+    // BASE toward TOPDOWN than a linear interpolant at the same t —
+    // an unmistakable signature of the log curve (steep early, gentle late).
+    // Because TOPDOWN < BASE, "further toward TOPDOWN" means a SMALLER beta
+    // than the straight-line value at the same t.
     const b = betaForRadius(rAt(0.2), MIN, MAX, BASE, TOP);
     const linear = BASE + 0.2 * (TOP - BASE);
-    assert.ok(b < BASE && b > linear, 'ease-in should undershoot toward BASE');
+    assert.ok(b < linear && b > TOP, 'log curve should overshoot the linear ramp toward TOPDOWN');
   });
 
   test('monotonic non-increasing across the zoom range', () => {
