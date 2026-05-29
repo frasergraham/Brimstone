@@ -20,7 +20,7 @@ import {
   HOUSE_MODEL_FILE,
   HOUSE_INSTANCE_BASE_SCALE,
   HOUSE_INSTANCE_JITTER,
-  TARGET_BUILDING_WORLD_HEIGHT,
+  TARGET_BUILDING_GROUND_SPAN,
   LEGACY_HOUSE_PATH,
   BUILDINGS_MODEL_DIR,
   TILE_SLOTS,
@@ -197,9 +197,9 @@ describe('exported constants', () => {
     assert.ok(Math.abs(HOUSE_INSTANCE_BASE_SCALE - BUILDING_BASE_DIM.width) < 0.5,
       `scale ${HOUSE_INSTANCE_BASE_SCALE} drifted far from box width ${BUILDING_BASE_DIM.width}`);
   });
-  test('TARGET_BUILDING_WORLD_HEIGHT is a sane positive height', () => {
-    assert.ok(TARGET_BUILDING_WORLD_HEIGHT > 0 && TARGET_BUILDING_WORLD_HEIGHT < 3,
-      `target height ${TARGET_BUILDING_WORLD_HEIGHT} out of sane range`);
+  test('TARGET_BUILDING_GROUND_SPAN is a sane positive ground span (~1 hex)', () => {
+    assert.ok(TARGET_BUILDING_GROUND_SPAN > 0 && TARGET_BUILDING_GROUND_SPAN < 3,
+      `target span ${TARGET_BUILDING_GROUND_SPAN} out of sane range`);
   });
 });
 
@@ -497,21 +497,28 @@ describe('_loadBuildingModel — async load + retrofit + fallback', () => {
     assert.notEqual(attachedArg, fakeMesh, 'must NOT be the mesh itself');
   });
 
-  test('computes a bbox-derived scale so the template lands at the target height', async () => {
+  test('computes a bbox-derived scale so the template fills ~1 hex of ground (larger XZ axis)', async () => {
     const r = newInst();
     r._scene = {};
+    // XZ extent: 2 wide (x), 5 deep (z); height 4 is now IGNORED for scaling.
+    // minimumWorld.y = 0 so the pivot bake is skipped (no Matrix stub needed).
     const imported = {
-      name: 'tall_church', isPickable: true, isEnabled: true, renderingGroupId: 7,
+      name: 'wide_church', isPickable: true, isEnabled: true, renderingGroupId: 7,
       getTotalVertices: () => 100, getTotalIndices: () => 60,
       setEnabled(b) { this.isEnabled = b; },
-      getBoundingInfo() { return { boundingBox: { minimumWorld: { y: 0 }, maximumWorld: { y: 4 } } }; },
+      getBoundingInfo() {
+        return { boundingBox: {
+          minimumWorld: { x: -1, y: 0, z: -2.5 },
+          maximumWorld: { x:  1, y: 4, z:  2.5 },
+        } };
+      },
     };
     r._babylon = makeFakeBabylon({ importImpl: async () => ({ meshes: [imported] }) });
     await r._loadBuildingModel('models/buildings/church.glb', 'assets');
     const tpl = r._buildingTemplates.get('models/buildings/church.glb');
-    // height 4 → scale = TARGET / 4
-    assert.ok(Math.abs(tpl.scale - TARGET_BUILDING_WORLD_HEIGHT / 4) < 1e-9,
-      `bbox-derived scale ${tpl.scale} != ${TARGET_BUILDING_WORLD_HEIGHT / 4}`);
+    // larger XZ axis = 5 → scale = TARGET_BUILDING_GROUND_SPAN / 5 (height-independent)
+    assert.ok(Math.abs(tpl.scale - TARGET_BUILDING_GROUND_SPAN / 5) < 1e-9,
+      `bbox-derived scale ${tpl.scale} != ${TARGET_BUILDING_GROUND_SPAN / 5}`);
   });
 
   test('hides the source mesh and lands it on rendering group 0', async () => {

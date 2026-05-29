@@ -29,6 +29,7 @@ import {
   baseOf,
   pathOf,
   hasBuilding,
+  isBuildingFootprint,
   isRiver,
   isBridge,
   treeCountForTile,
@@ -46,6 +47,15 @@ export const FOREST_TREES_MAX     = _FOREST_TREES_MAX;
 export const FOREST_DENSITY_SCALE = _FOREST_DENSITY_SCALE;
 export const scaledForestTreeCount = _scaledForestTreeCount;
 import { EntityType, isLeaderType, ADVANTAGE_CAP } from './entities.js';
+import {
+  buildingRenderHex,
+  buildingFacingYaw,
+  buildingFitScale,
+  TARGET_BUILDING_GROUND_SPAN,
+} from './building-render.js';
+// Re-export so 3D-renderer consumers/tests can import the ground-span knob
+// from here too (mirrors the tree-count knob re-exports above).
+export { TARGET_BUILDING_GROUND_SPAN };
 import { Renderer } from './renderer.js';
 import { getFactionTheme } from './theme.js';
 import { hexKey, hexDistance, getNeighbors } from './hex.js';
@@ -176,18 +186,18 @@ export function _bakeOriginToBottom(source, BABYLON) {
 // Fallback world-space scale for an imported building when its natural
 // bounding box can't be measured (test stubs, malformed GLB). In real-browser
 // use the load step computes a bbox-derived scale instead (see
-// TARGET_BUILDING_WORLD_HEIGHT) so each generated model — whose intrinsic unit
+// TARGET_BUILDING_GROUND_SPAN) so each generated model — whose intrinsic unit
 // system varies per export — lands at a consistent on-tile size. This value
 // sits the model at roughly the procedural BUILDING_BASE_DIM footprint (≈0.55).
 export const HOUSE_INSTANCE_BASE_SCALE = 0.55;
 
-// Target world-space height for an instanced building (before the per-hex
-// jitter ratio). The scenario-generated GLBs export at wildly different
-// intrinsic scales, so each template is uniformly scaled at load time so its
-// bbox height lands here — the same bbox-normalize trick the tree + paladin
-// pipelines use. Roughly matches the procedural box+roof stack (0.70 + 0.15).
-// Operator can retune by adjusting this constant.
-export const TARGET_BUILDING_WORLD_HEIGHT = 1.28; // ~50% larger — buildings taller than units (paladin ≈0.92), bigger footprint may overlap tiles a bit
+// Building scale is now driven by GROUND footprint, not height: each template
+// is uniform-scaled at load time so its larger XZ bbox axis fills ~1 hex of
+// ground (`TARGET_BUILDING_GROUND_SPAN`, defined in building-render.js), with
+// height DERIVED from the model's natural aspect ratio rather than capped. This
+// replaces the former height-normalised `TARGET_BUILDING_WORLD_HEIGHT` — see
+// `buildingFitScale` and `_loadBuildingModel`. The footprint-hex rework (P4)
+// also relocates each building onto its footprint hex, facing the entrance.
 
 // ─── Tree pack (real GLB trees from `assets/models/trees/`) ────────────────
 // Phase 1 (PR #381) extracted `tree_pack.glb` into per-model GLBs + a manifest
@@ -1903,7 +1913,8 @@ export class Renderer3D {
     //                          `mesh.createInstance(...)` so all instances of
     //                          a type share one vertex buffer / material.
     //                          `scale` is the bbox-derived uniform scale that
-    //                          lands the template at TARGET_BUILDING_WORLD_HEIGHT.
+    //                          fits the template into ~1 hex of ground
+    //                          (TARGET_BUILDING_GROUND_SPAN); height derived.
     // `_buildingLoadPromises`: Map<relPath, Promise> — de-dupes concurrent
     //                          loads of the same path. A failed load leaves the
     //                          path absent from `_buildingTemplates`, so tiles
@@ -2751,20 +2762,22 @@ export class Renderer3D {
       // sub-meshes too in the single-mesh (un-merged) case.
       applyShadowReceiving([source, ...(typeof source.getChildMeshes === 'function' ? source.getChildMeshes() : [])]);
 
-      // Compute a bbox-derived uniform scale so this template's height lands at
-      // TARGET_BUILDING_WORLD_HEIGHT regardless of the GLB's intrinsic units —
-      // this is what makes every building type the same world height. Falls
-      // back to HOUSE_INSTANCE_BASE_SCALE when bbox is unmeasurable (test
-      // stubs); instances then multiply by the small uniform per-hex jitter.
+      // Compute a bbox-derived uniform scale so this template's GROUND footprint
+      // (larger XZ axis) fills ~1 hex regardless of the GLB's intrinsic units —
+      // height is then derived from the model's natural aspect ratio. Falls back
+      // to HOUSE_INSTANCE_BASE_SCALE when bbox is unmeasurable (test stubs);
+      // instances then multiply by the small uniform per-hex jitter.
       let scale = HOUSE_INSTANCE_BASE_SCALE;
       try {
         const info = typeof source.getBoundingInfo === 'function' ? source.getBoundingInfo() : null;
         const bb   = info?.boundingBox;
         if (bb) {
-          const minY = bb.minimumWorld?.y ?? bb.minimum?.y ?? 0;
-          const maxY = bb.maximumWorld?.y ?? bb.maximum?.y ?? 0;
-          const h    = maxY - minY;
-          if (h > 1e-3) scale = TARGET_BUILDING_WORLD_HEIGHT / h;
+          const min = bb.minimumWorld ?? bb.minimum ?? {};
+          const max = bb.maximumWorld ?? bb.maximum ?? {};
+          const bx  = (max.x ?? 0) - (min.x ?? 0);
+          const bz  = (max.z ?? 0) - (min.z ?? 0);
+          const fit = buildingFitScale({ x: bx, z: bz });
+          if (fit != null) scale = fit;
         }
       } catch { /* keep fallback scale */ }
 
@@ -2800,13 +2813,39 @@ export class Renderer3D {
     return promise;
   }
 
+  /** Resolve where a building should be DRAWN and how it should be oriented,
+   *  given its entrance tile and the entrance hex world centre (`x`, `z`).
+   *
+   *  Footprinted building → centred on the footprint hex, yaw facing the
+   *  entrance ("front door" toward the path). Legacy/orphan building (no
+   *  footprint) → keeps the historical NE building-slot offset + centre-facing
+   *  yaw, so old saves render exactly as before. Returns `{ bx, bz, yaw,
+   *  isFootprint }` (world XZ + radians). Pure aside from `hexToWorld`. */
+  _buildingPlacement(tile, x, z) {
+    const renderKey = buildingRenderHex(tile);
+    const [rc, rr]  = renderKey.split(',').map(Number);
+    const isFootprint = !(rc === tile.col && rr === tile.row);
+    if (isFootprint) {
+      const fw = hexToWorld(rc, rr);
+      return { bx: fw.x, bz: fw.z, yaw: buildingFacingYaw({ x, z }, fw), isFootprint: true };
+    }
+    const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
+    return {
+      bx: x + slot.x,
+      bz: z + slot.z,
+      yaw: houseYawForHex(tile.col, tile.row),
+      isFootprint: false,
+    };
+  }
+
   /** Create one BABYLON.InstancedMesh of the building tile's chosen GLB variant
-   *  template, positioned at the tile's NE building slot. Scale is the
-   *  template's bbox-derived base (every type lands at the same world height)
-   *  times a small *uniform* per-hex jitter so a cluster doesn't look stamped;
-   *  yaw faces the hex centre (`houseYawForHex`) for a consistent inward facing.
-   *  Returns the instance, or null if no template for this tile's variant is
-   *  loaded yet (caller falls back to procedural box+roof). */
+   *  template, positioned on the tile's FOOTPRINT hex (centred, facing the
+   *  entrance) — or the legacy NE building slot for an orphan building with no
+   *  footprint (see `_buildingPlacement`). Scale is the template's bbox-derived
+   *  base (every type fills ~1 hex of ground) times a small *uniform* per-hex
+   *  jitter so a cluster doesn't look stamped. Returns the instance, or null if
+   *  no template for this tile's variant is loaded yet (caller falls back to
+   *  procedural box+roof). */
   _buildBuildingInstance(tile, x, z, parent) {
     if (!this._babylon) return null;
     const variant = buildingGlbVariantForHex(tile);
@@ -2816,17 +2855,17 @@ export class Renderer3D {
     const BABYLON = this._babylon;
     const source  = tpl.mesh;
     if (typeof source.createInstance !== 'function') return null;
-    const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
     // Tile-top anchor — matches the procedural building's base Y (0.43 - 0.7/2).
     const tileTopY = 0.43 - 0.7 / 2;
     const baseScale = tpl.scale != null ? tpl.scale : HOUSE_INSTANCE_BASE_SCALE;
+    const { bx, bz, yaw } = this._buildingPlacement(tile, x, z);
 
     const inst = source.createInstance(`bldgInst_${tile.col}_${tile.row}`);
     if (parent && 'parent' in inst) inst.parent = parent;
     if (inst.position && typeof inst.position === 'object') {
-      inst.position.x = x + slot.x;
+      inst.position.x = bx;
       inst.position.y = tileTopY;
-      inst.position.z = z + slot.z;
+      inst.position.z = bz;
     }
     const sc = houseInstanceScalingForHex(tile.col, tile.row);
     if (BABYLON.Vector3) {
@@ -2835,7 +2874,7 @@ export class Renderer3D {
         baseScale * sc.y,
         baseScale * sc.z,
       );
-      inst.rotation = new BABYLON.Vector3(0, houseYawForHex(tile.col, tile.row), 0);
+      inst.rotation = new BABYLON.Vector3(0, yaw, 0);
     }
     inst.isPickable = false;
     // `respectsFog: false` keeps the per-prop veil loop (`_setTilePropsFogged`)
@@ -7309,7 +7348,10 @@ export class Renderer3D {
     // laid through a forest (or a building on a forest tile) still shows trees
     // alongside the path/structure, instead of the forest vanishing the moment
     // a path was painted over it.
-    if (baseOf(tile) === TileType.FOREST) {
+    // A building FOOTPRINT hex suppresses its forest entirely — the relocated
+    // building model fills the hex, so trees there would clip through it
+    // (parallel to how the build slot is reserved on a building's own tile).
+    if (baseOf(tile) === TileType.FOREST && !isBuildingFootprint(tile)) {
       // On a building-on-forest tile, reserve the building slot so the forest
       // cones skip BUILDING_SLOT_INDEX (where the procedural box below sits).
       // On a road-through-forest tile, also skip the slots the road deck
@@ -7405,11 +7447,11 @@ export class Renderer3D {
     }
 
     // ── Building: either a glTF model instance (if the tile's variant template
-    // has loaded by now) or the procedural box + roof fallback. Both paths
-    // anchor the building at the NE outer slot (BUILDING_SLOT_INDEX); a
-    // standee on the same hex takes the centre slot so silhouettes don't
-    // overlap. The GLB loads run async from `_initBabylon` — as each resolves
-    // after `_buildMap` completes, `_upgradeBuildingsToGlbModel` swaps the
+    // has loaded by now) or the procedural box + roof fallback. Both paths now
+    // place the building on its FOOTPRINT hex (centred, facing the entrance) —
+    // or the legacy NE building slot for an orphan with no footprint — via
+    // `_buildingPlacement`. The GLB loads run async from `_initBabylon`; as each
+    // resolves after `_buildMap`, `_upgradeBuildingsToGlbModel` swaps the
     // procedural meshes here for instances.
     if (hasBuilding(tile) && tile.building) {
       // Every building type renders an imported GLB once its template loads;
@@ -7421,7 +7463,7 @@ export class Renderer3D {
       if (glbInst) {
         trackProp(glbInst);
       } else {
-        const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
+        const { bx, bz, yaw } = this._buildingPlacement(tile, x, z);
         // Per-tile dimension jitter so buildings show silhouette variety
         // instead of an army of identical boxes. See `buildingDimensionsForHex`.
         const dims = buildingDimensionsForHex(tile.col, tile.row);
@@ -7435,9 +7477,10 @@ export class Renderer3D {
           scene,
         );
         box.parent     = parent;
-        box.position.x = x + slot.x;
-        box.position.z = z + slot.z;
+        box.position.x = bx;
+        box.position.z = bz;
         box.position.y = tileTopY + dims.box.height / 2;
+        if (BABYLON.Vector3) box.rotation = new BABYLON.Vector3(0, yaw, 0);
         box.material   = this._materialFor(BUILDING_COLOR[tile.building] || '#8a7a5a');
         box.isPickable = false;
         box.receiveShadows = true;
@@ -7454,9 +7497,10 @@ export class Renderer3D {
           scene,
         );
         roof.parent     = parent;
-        roof.position.x = x + slot.x;
-        roof.position.z = z + slot.z;
+        roof.position.x = bx;
+        roof.position.z = bz;
         roof.position.y = tileTopY + dims.box.height + dims.roof.height / 2;
+        if (BABYLON.Vector3) roof.rotation = new BABYLON.Vector3(0, yaw, 0);
         roof.material   = this._materialFor('#2c2520');
         roof.isPickable = false;
         roof.receiveShadows = true;
@@ -7482,10 +7526,12 @@ export class Renderer3D {
     if (hasBuilding(tile) && tile.building) {
       staticOcc.push({ id: 'building', kind: 'building' });
     }
-    if (baseOf(tile) === TileType.FOREST) {
+    if (baseOf(tile) === TileType.FOREST && !isBuildingFootprint(tile)) {
       // Match the rendered cluster: the building occupant is added separately
       // above, so only blockedSlots (road deck) need to be re-applied here so a
       // tree dropped from the deck isn't listed as a phantom occupant.
+      // Footprint hexes suppress trees (see the build pass above), so they list
+      // no tree occupants either.
       const trees = forestTreesForHex(tile.col, tile.row, this._season, {
         blockedSlots: this._roadBlockedSlotsByKey.get(tkey),
       });
@@ -15693,9 +15739,10 @@ export function houseYawForHex(col, row) { // eslint-disable-line no-unused-vars
 }
 
 /** Small *uniform* (isotropic) scale jitter for a building instance, applied on
- *  top of the template's bbox-derived base scale. The base scale already lands
- *  every template at `TARGET_BUILDING_WORLD_HEIGHT` (the real normalization), so
- *  this only adds ≤±`HOUSE_INSTANCE_JITTER` of subtle size variety so a cluster
+ *  top of the template's bbox-derived base scale. The base scale already fits
+ *  every template into ~1 hex of ground (`TARGET_BUILDING_GROUND_SPAN`, the real
+ *  normalization), so this only adds ≤±`HOUSE_INSTANCE_JITTER` of subtle size
+ *  variety so a cluster
  *  of identical GLBs doesn't read as stamped. The factor is identical on x/y/z
  *  — buildings are never squashed or stretched. This replaces the former
  *  per-axis ±15% jitter (derived from `buildingDimensionsForHex`) that made
