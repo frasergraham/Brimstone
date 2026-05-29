@@ -14,7 +14,7 @@ import { EnginePlanSimState, BaseAIEngine, allocateBudget, assemblePlan, clamp01
 import { hexDistance, hexKey, getNeighbors } from './hex.js';
 import { Phase, nodeController } from './game.js';
 import { EntityType, ADVANTAGE_CAP, expectedDieValue, isLeaderType, attackOf, defenseOf, SurvivorAbility } from './entities.js';
-import { ResourceType, hasBuilding, isRiver } from './tiles.js';
+import { ResourceType, hasBuilding, isRiver, isBuildingFootprint } from './tiles.js';
 import { ITEMS } from './items.js';
 import { concreteFactionOf } from './factions.js';
 import { computeLineOfSight } from './actions.js';
@@ -1208,7 +1208,7 @@ export function fillGapsHero(plan, sim, board, heroEntity, remaining, prevPositi
     let bestAnyHex = null, bestAnyDist = Infinity;
     for (const [, t] of sim.tiles) {
       if (sim.isExplored(t.col, t.row)) continue;
-      if (isRiver(t)) continue;
+      if (isRiver(t) || isBuildingFootprint(t)) continue;
       const d = hexDistance(heroEntity.col, heroEntity.row, t.col, t.row);
       if (hasBuilding(t) && d < bestDist) { bestDist = d; bestHex = t; }
       if (d < bestAnyDist) { bestAnyDist = d; bestAnyHex = t; }

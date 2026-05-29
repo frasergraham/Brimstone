@@ -382,6 +382,19 @@ export function isForestCover(tile) {
   return baseOf(tile) === TileType.FOREST;
 }
 
+// Does this tile block line of sight? (P3a)
+//
+// Mirrors the entrance/footprint asymmetry of movement: the building's WALL
+// (its impassable FOOTPRINT hex) obscures sight, while its ENTRANCE hex is just
+// the threshold/front door and is TRANSPARENT — a unit on or behind it is
+// visible. Forest cover blocks as it always has. The blocking tile itself is
+// still visible to the observer; only tiles BEYOND it on the ray are hidden
+// (the ray endpoints are exempted by the caller).
+export function blocksLineOfSight(tile) {
+  if (!tile) return false;
+  return isBuildingFootprint(tile) || isForestCover(tile);
+}
+
 // Hard cap on fortification level.
 export const MAX_FORTIFY_LEVEL = 6;
 
@@ -476,6 +489,16 @@ export function treeCountForTile(tile) {
   return scaledForestTreeCount(rawN, FOREST_DENSITY_SCALE);
 }
 
+// Total slot capacity of a tile. Almost all tiles get TILE_CAPACITY, but a
+// building-footprint hex is FULLY IMPASSABLE — no entity may end its turn
+// there and none may transit through. We model that as capacity 0, which
+// makes the unit-slot-cost check (in tileCapacityRemaining) fail for both
+// transit and end-of-turn without any special-casing in the movement gates.
+export function tileTotalCapacity(tile) {
+  if (isBuildingFootprint(tile)) return 0;
+  return TILE_CAPACITY;
+}
+
 // Slots consumed by static structures on this tile (building + trees).
 // Units are NOT counted here — callers add them via tileCapacityRemaining.
 export function tileOccupancyCount(tile) {
@@ -492,5 +515,5 @@ export function tileOccupancyCount(tile) {
 //   tileCapacityRemaining(tile, n)       — units is a count
 export function tileCapacityRemaining(tile, occupyingUnits = 0) {
   const n = Array.isArray(occupyingUnits) ? occupyingUnits.length : (occupyingUnits | 0);
-  return TILE_CAPACITY - tileOccupancyCount(tile) - n * UNIT_SLOT_COST;
+  return tileTotalCapacity(tile) - tileOccupancyCount(tile) - n * UNIT_SLOT_COST;
 }

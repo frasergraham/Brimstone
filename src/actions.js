@@ -5,7 +5,7 @@ import {
   MAX_FORTIFY_LEVEL, getFortifyCombatBonus, isFortWall,
   FORT_IMPASSABLE_THRESHOLD,
   isRiver, isPathRoadLike, hasBuilding, isForestCover, baseOf,
-  tileCapacityRemaining,
+  tileCapacityRemaining, isBuildingFootprint, blocksLineOfSight,
 } from './tiles.js';
 import { ITEMS } from './items.js';
 import { ABILITIES } from './abilities.js';
@@ -125,12 +125,17 @@ export function getReachableHexes(state, actor, range, posOverride = null, visib
 // Returns an array of {col, row} steps NOT including the start, up to the destination,
 // or null if no path exists within the movement budget.
 // posOverride allows querying from a projected position rather than actor's current pos.
-function findShortestPath(state, actor, toCol, toRow, posOverride = null) {
+export function findShortestPath(state, actor, toCol, toRow, posOverride = null) {
   const startCol = posOverride?.col ?? actor.col;
   const startRow = posOverride?.row ?? actor.row;
   const startK   = hexKey(startCol, startRow);
   const goalK    = hexKey(toCol, toRow);
   if (startK === goalK) return [];
+
+  // A building-footprint hex is fully impassable — never a valid goal. The
+  // capacity gate below exempts the goal hex (so executeMove can report a
+  // partial walk), so we must reject footprint goals explicitly up front.
+  if (isBuildingFootprint(tile(state, toCol, toRow))) return null;
 
   const dist   = new Map([[startK, 0]]);
   const parent = new Map([[startK, null]]);
@@ -252,8 +257,9 @@ export function buildFogMovementHexes(state, observerOwner, projectedPositions =
 // ── Visibility ─────────────────────────────────────────────────────────────
 
 // Base sight range varies by phase: Day=6, Dawn/Dusk=4, Night=3.
-// Buildings and forest tiles BLOCK line of sight beyond them (see
-// computeLineOfSight). SCOUT survivors add +1 to their personal range.
+// Building footprint (wall) and forest tiles BLOCK line of sight beyond them
+// (building entrances do NOT — see computeLineOfSight). SCOUT survivors add +1
+// to their personal range.
 export function sightRange(phase, isScout = false) {
   let base;
   switch (phase) {
@@ -266,14 +272,18 @@ export function sightRange(phase, isScout = false) {
 
 // ── Line of sight ──────────────────────────────────────────────────────────
 //
-// Vision is blocked by buildings (`hasBuilding`) and forest cover
-// (`isForestCover` — base material is forest, regardless of any path/structure
-// on top). The blocking tile itself is visible to the observer; tiles BEYOND
-// it on the ray are not. The observer's own hex is always visible.
+// Vision is blocked by a building's WALL (its impassable FOOTPRINT hex) and by
+// forest cover (`isForestCover` — base material is forest, regardless of any
+// path/structure on top). A building's ENTRANCE hex is TRANSPARENT — it is just
+// the threshold, so a unit on or behind it is visible (P3a). The blocking tile
+// itself is visible to the observer; tiles BEYOND it on the ray are not. The
+// observer's own hex is always visible.
+//
+// The blocker predicate lives in tiles.js (`blocksLineOfSight`) so every LOS
+// consumer — 2D/3D renderers, fog, AI sight — shares one rule.
 
 function _isLosBlocker(tile) {
-  if (!tile) return false;
-  return hasBuilding(tile) || isForestCover(tile);
+  return blocksLineOfSight(tile);
 }
 
 /**
@@ -296,8 +306,9 @@ export function hasLineOfSight(state, fromCol, fromRow, toCol, toRow) {
  * Compute the set of hex keys visible to all alive units owned by
  * `observerOwner`. Each unit's range is `sightRangeForEntity(e, phase)`
  * (phase-dependent for hero, fixed for witch, +1 if the unit carries SCOUT).
- * Line of sight is blocked by buildings and forest tiles; the blocker
- * itself is visible, tiles beyond it are not.
+ * Line of sight is blocked by building footprint (wall) and forest tiles —
+ * building entrances are transparent; the blocker itself is visible, tiles
+ * beyond it are not.
  *
  * `entities` defaults to `state.entities` but can be overridden with a
  * snapshot (used during resolution animation where positions differ from
@@ -382,8 +393,10 @@ export function getValidActions(state, actor) {
   const moveTargets = getReachableHexes(state, actor, hasHorse ? 2 : 1, null, visibleHexes);
   if (moveTargets.length) actions.push({ type: ActionType.MOVE, targets: moveTargets });
 
-  // Explore — available on any unexplored tile; faction determines eligibility
-  if (t && !t.explored && faction.canExplore(actor)) {
+  // Explore — available on any unexplored tile; faction determines eligibility.
+  // Building-footprint hexes are impassable (no entity can stand on one) and
+  // hold no building of their own — exploration belongs to the entrance.
+  if (t && !t.explored && !isBuildingFootprint(t) && faction.canExplore(actor)) {
     actions.push({ type: ActionType.EXPLORE, targets: [{ col: actor.col, row: actor.row }] });
   }
 
@@ -430,6 +443,9 @@ export function getValidActions(state, actor) {
     // Melee: exclude rivers (can't wade/attack into one). Ranged: rivers are
     // fine as targets (you can shoot over water).
     if (actorRange <= 1 && isRiver(nt)) return false;
+    // A building-footprint hex can never hold an entity — no point offering a
+    // blind attack against it.
+    if (isBuildingFootprint(nt)) return false;
     return true;
   });
   if (battleHexTargets.length) {
@@ -438,7 +454,7 @@ export function getValidActions(state, actor) {
 
   // Fortify — faction-gated; cap at MAX_FORTIFY_LEVEL, uses shared inventory.
   // Always included when contextually valid; affordable=false when no resources.
-  if (t && !isRiver(t) && t.fortifyLevel < MAX_FORTIFY_LEVEL && faction.canFortify()) {
+  if (t && !isRiver(t) && !isBuildingFootprint(t) && t.fortifyLevel < MAX_FORTIFY_LEVEL && faction.canFortify()) {
     const inv        = faction.getInventory(state);
     const woodCount  = (inv[ResourceType.WOOD]  || 0);
     const metalCount = (inv[ResourceType.METAL] || 0);
@@ -681,6 +697,9 @@ export function executeExplore(state, actor) {
   const log = [];
   const lootItems = [];
   const t = tile(state, actor.col, actor.row);
+  // Footprint hexes are impassable and carry no building of their own — they
+  // are never explorable (the entrance holds the building/loot).
+  if (isBuildingFootprint(t)) return { success: false, log: ['Nothing to explore here.'], lootItems };
   if (t.explored) return { success: false, log: ['Already explored.'], lootItems };
 
   t.explored = true;
@@ -1309,7 +1328,7 @@ export function executeFortAssault(state, actor, targetCol, targetRow) {
 
 export function executeFortify(state, actor) {
   const t = tile(state, actor.col, actor.row);
-  if (!t || isRiver(t)) return { success: false, log: ['Cannot fortify here.'] };
+  if (!t || isRiver(t) || isBuildingFootprint(t)) return { success: false, log: ['Cannot fortify here.'] };
   if (t.fortifyLevel >= MAX_FORTIFY_LEVEL) return { success: false, log: ['Cannot fortify further.'] };
   const shared     = state.inventory.hero;
   const metalCount = (shared[ResourceType.METAL] || 0);
