@@ -9735,7 +9735,9 @@ export class Renderer3D {
     );
     for (const entry of this._nodeNameLabels) {
       if (entry.mat) entry.mat.alpha = a;
-      if (entry.plane) entry.plane.isVisible = a > 0 && !entry.fogged;
+      // Node labels ignore fog (operator: always-visible). The label fades
+      // with zoom only.
+      if (entry.plane) entry.plane.isVisible = a > 0;
     }
   }
 
@@ -13424,13 +13426,10 @@ export class Renderer3D {
       }
       // R5a: only show the controller-tint ring when a side actually holds (or
       // contests) the node — an unoccupied / neutral node drops the pale-white
-      // outline entirely. Still respect fog: a controlled ring on a fogged hex
-      // stays hidden. `_buildObjectiveRings` runs every draw, so this gate is
-      // the steady-state authority even though `_setTileFogged` flips the same
-      // mesh's visibility on a fog *transition*.
+      // outline entirely. Node highlights ignore fog (operator: "no fun
+      // hunting for nodes") so this is purely a controller-state gate.
       if (ng.disc) {
-        const fogged = this._fogActiveSet.has(hexKey(ng.col, ng.row));
-        ng.disc.isVisible = nodeControllerRingVisible(ctrl) && !fogged;
+        ng.disc.isVisible = nodeControllerRingVisible(ctrl);
       }
     }
     // Tint discs: same controller-driven recolour, kept on its own loop so the
@@ -13541,9 +13540,11 @@ export class Renderer3D {
           tube.parent     = this._mapRoot;
           tube.isPickable = false;
           tube.material   = nodeOutlineMat;
+          // Node identifier rings ignore fog (operator: always-visible so the
+          // player can see node locations through the veil).
+          tube.metadata   = { respectsFog: false };
           const tkey = hexKey(h.col, h.row);
           this._tilePropsByKey.get(tkey).push(tube);
-          if (this._fogActiveSet.has(tkey)) tube.isVisible = false;
         }
       }
     }
@@ -13606,14 +13607,15 @@ export class Renderer3D {
           col: h.col, row: h.row,
         });
 
-        // Register on the per-tile fog list so `_setTileFogged` hides the
-        // tint alongside the ring tube. Same defensive pattern as the ring:
-        // create the list if missing.
+        // Node tint discs ignore fog (operator: always-visible). Still
+        // registered in `_tilePropsByKey` for freeze/disposal bookkeeping —
+        // the `respectsFog: false` metadata makes `_setTilePropsFogged` skip
+        // them.
+        disc.metadata = { respectsFog: false };
         const tkey = hexKey(h.col, h.row);
         const props = this._tilePropsByKey.get(tkey);
         if (props) props.push(disc);
         else this._tilePropsByKey.set(tkey, [disc]);
-        if (this._fogActiveSet.has(tkey)) disc.isVisible = false;
       }
 
       // Floating name label — one per node, anchored at the cluster centroid
@@ -13688,11 +13690,7 @@ export class Renderer3D {
     // repaint. (Earlier rounds painted in the controller colour and so
     // needed a per-controller-flip refresh; that's gone now.)
     this._paintNodeLabel(entry);
-    // Mirror the ring's initial fog state — start hidden if the centre hex
-    // is already fogged at build time.
-    if (this._fogActiveSet.has(tkey)) {
-      plane.isVisible = false;
-    }
+    // Node labels ignore fog (operator: always-visible) — no initial-fog hide.
     return entry;
   }
 
