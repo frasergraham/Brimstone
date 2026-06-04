@@ -33,6 +33,14 @@ files:
       # Editable source-art working files (Pixelmator .pxd etc.) — large and
       # never loaded at runtime; keep them out of the packaged app.
       - "!**/*.pxd"
+      # Mobile (Capacitor) projects, the Capacitor web copy, and iOS build
+      # output. Electron loads src/ + assets/ directly via the calebshollow://
+      # protocol and uses NONE of these — they were silently bundling multiple
+      # GB (build/ alone accumulates ~300MB iOS .xcarchives per release).
+      - "!ios/**"
+      - "!android/**"
+      - "!www/**"
+      - "!build/**"
   - "server/resolver.js"
   - "server/state-sync.js"
 
