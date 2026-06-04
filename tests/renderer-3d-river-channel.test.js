@@ -16,6 +16,7 @@ import {
   RIVER_RIBBON_Y,
   RIVER_RIBBON_WIDTH,
   RIVER_RIBBON_U_SCALE,
+  ROAD_RIBBON_U_SCALE,
   RIVER_ALPHA_INDEX,
   SPLAT_RIVER_CENTRE_EPS,
   Renderer3D,
@@ -82,7 +83,7 @@ describe('R5 polish 2 — river ribbon U-axis tile rate', () => {
       `RIVER_RIBBON_U_SCALE ${RIVER_RIBBON_U_SCALE} should tile the flow texture`);
   });
 
-  test('_buildRibbonMaterial("river", …) sets uScale on the diffuse texture; road does not', () => {
+  test('_buildRibbonMaterial sets the per-network uScale on the diffuse texture (river ≠ road)', () => {
     function makeBabylonStub() {
       class Color3 {
         constructor(r = 0, g = 0, b = 0) { this.r = r; this.g = g; this.b = b; }
@@ -121,8 +122,10 @@ describe('R5 polish 2 — river ribbon U-axis tile rate', () => {
       'river ribbon texture must wrap along U so uScale tiles cleanly');
     const roadMat = inst._buildRibbonMaterial('road', '#6b5a3e');
     assert.ok(roadMat.diffuseTexture, 'expected road material to carry a diffuse texture');
-    assert.equal(roadMat.diffuseTexture.uScale, 1,
-      'road texture should NOT pick up the river uScale tile rate');
+    assert.equal(roadMat.diffuseTexture.uScale, ROAD_RIBBON_U_SCALE,
+      `road ribbon texture uScale should equal ROAD_RIBBON_U_SCALE (${ROAD_RIBBON_U_SCALE}) — aspect-preserving cobble scale`);
+    assert.notEqual(roadMat.diffuseTexture.uScale, RIVER_RIBBON_U_SCALE,
+      'road texture must NOT pick up the river uScale tile rate');
   });
 });
 

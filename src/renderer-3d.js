@@ -8165,10 +8165,10 @@ export class Renderer3D {
         // opaque region covers the inner 80% of the ribbon and the outer 10%
         // on each side fades smoothly into the grass beneath.
         const OPAQUE_FRAC   = 0.80;
-        // Road + river get a smooth ±15% per-point width modulation along
-        // their length so each strand reads as hand-laid / natural rather
-        // than uniform-machined. The sine wave is seeded off the tile col/row
-        // + stroke index so a given hex looks the same across reloads.
+        // River gets a smooth per-point width modulation along its length (see
+        // the river branch below). The ROAD is deliberately UNIFORM width — no
+        // along-length variation — so the cobble ribbon reads as a constant-
+        // width path; the only per-point width change is the terminus cap taper.
         let perPointOuterWidth = tileWidth;
         let perPointInnerWidth = tileWidth * OPAQUE_FRAC;
         // Per-point WATER half-widths (river only); used by the sibling bank
@@ -8176,29 +8176,15 @@ export class Renderer3D {
         // exactly. `null` for road or for the sine-modulated width fallback.
         let riverHalfWidthsForStroke = null;
         if (networkName === 'road') {
-          // Width modulates as a function of WORLD position so adjacent tiles
-          // produce the SAME width at shared seam points — no visible width
-          // jump where one tile's stroke ends and the next begins. The 2D
-          // sine field uses a wavelength of WIDTH_NOISE_WAVELENGTH world
-          // units (~5 hexes) — long enough that neighbour points within a
-          // single stroke (≤0.2 wu apart) see ≤1% width delta, well under
-          // operator's 5% inter-vertex cap. Peak-to-peak swing is 15%
-          // (amp 0.075 → range [0.925, 1.075]).
-          const WIDTH_NOISE_WAVELENGTH = 8.0;
-          const amp = 0.075;
-          const widthModAt = (x, z) => {
-            const u = (x / WIDTH_NOISE_WAVELENGTH + z / WIDTH_NOISE_WAVELENGTH * 0.7) * Math.PI * 2;
-            return 1 + amp * Math.sin(u);
-          };
+          // Uniform width along the road. The only per-point width change is the
+          // terminus cap taper (widthScaleByPoint shrinks the half-width to 0 at
+          // a dead-end tip); body points keep full width.
           const outerArr = new Array(pts.length);
           const innerArr = new Array(pts.length);
           for (let p = 0; p < pts.length; p++) {
-            const mod = widthModAt(pts[p].x, pts[p].z);
-            // Cap samples shrink the half-width to 0 at the tip (semicircle);
-            // body points keep widthScale 1.
             const wScale = widthScaleByPoint ? widthScaleByPoint[p] : 1;
-            outerArr[p] = tileWidth * mod * wScale;
-            innerArr[p] = tileWidth * OPAQUE_FRAC * mod * wScale;
+            outerArr[p] = tileWidth * wScale;
+            innerArr[p] = tileWidth * OPAQUE_FRAC * wScale;
           }
           perPointOuterWidth = outerArr;
           perPointInnerWidth = innerArr;
@@ -8251,10 +8237,16 @@ export class Renderer3D {
           scene,
         );
         ribbon.isPickable = false;
-        // Per-vertex alpha keyed off path index (5 paths, N points each).
+        // Per-vertex alpha keyed off path index (5 paths, N points each). The
+        // river feathers its lateral edges geometrically (outer paths → alpha 0)
+        // because river-ribbon.png is opaque to its edges. The cobblestone road
+        // texture carries its OWN ragged transparent shoulders, so the road
+        // keeps full vertex alpha and lets the texture's alpha define the edge.
         const totalVerts = ribbon.getTotalVertices();
         const N = pts.length;
-        const alphaByPath = [0.0, 1.0, 1.0, 1.0, 0.0];
+        const alphaByPath = networkName === 'road'
+          ? [1.0, 1.0, 1.0, 1.0, 1.0]
+          : [0.0, 1.0, 1.0, 1.0, 0.0];
         const colors = new Float32Array(totalVerts * 4);
         for (let v = 0; v < totalVerts; v++) {
           const pathIdx = Math.min(alphaByPath.length - 1, Math.floor(v / N));
@@ -8275,15 +8267,16 @@ export class Renderer3D {
         // the texture repeats every ~1 world unit, roughly hex-sized).
         if (networkName === 'road' || networkName === 'river') {
           const uvs = new Float32Array(totalVerts * 2);
-          // V for each of the 5 paths. The OPAQUE band (inner-right → centre
-          // → inner-left) samples the texture's middle 40% (V 0.3–0.7) where
-          // the road artwork sits; the alpha-faded OUTER paths sample the
-          // texture's V edges (0 / 1) where the artist's dark/transparent
-          // shoulder lives. Previously this mapped inner paths to V=0 / V=1,
-          // which sampled the texture's dark edges and produced a black
-          // border around the road. Tightening the V window keeps the road
-          // bulk on the texture's road-colored region.
-          const vByPath = [0.0, 0.3, 0.5, 0.7, 1.0];
+          // V for each of the 5 paths. ROAD uses a STRAIGHT linear map: the
+          // texture's V 0→1 maps directly to the path width 0→1, edge to edge,
+          // making no assumption about what's inside the texture. The inner
+          // paths sit at 0.8×half-width, so V = (lateral+1)/2 gives 0.1 / 0.9
+          // there → exactly linear across the width. RIVER keeps its art in the
+          // texture's middle 40% (its V edges are dark and would read as a
+          // border), with a geometric vertex-alpha lateral fade.
+          const vByPath = networkName === 'road'
+            ? [0.0, 0.1, 0.5, 0.9, 1.0]
+            : [0.0, 0.3, 0.5, 0.7, 1.0];
           // U along the centreline (path index 2 = centre). All five paths
           // share the same U at each point index so vertices stay seam-aligned
           // across the width.
@@ -8688,15 +8681,21 @@ export class Renderer3D {
     // mesh.hasVertexAlpha, which the merged ribbon mesh sets.
     mat.disableLighting = false;
     // Road gets a tiled diffuse texture so shadow detail reads against the
-    // road surface (not just the flat coloured ribbon). The texture is
-    // 1024×1024 and tileable left-to-right; UVs are written per-vertex in
-    // `_buildNetworkMesh` so the texture U-axis runs along the ribbon's
-    // length and V across its width. Loaded with explicit success callback —
-    // if the load FAILS, we leave the original coloured diffuse alone (no
-    // black ribbon when the path 404s).
+    // road surface (not just the flat coloured ribbon). The road texture is
+    // `road-cobblestone.png` (4096×1024). The source cobblestone art tiled
+    // top↔bottom (road ran vertically); it was rotated 90° so the road length
+    // runs along the texture's U-axis, then made a horizontal mirror-pair
+    // ([A | flop(A)]) so its left edge equals its right edge — i.e. it tiles
+    // SEAMLESSLY left-to-right under WRAP addressing. This matters because the
+    // per-vertex UVs in `_buildNetworkMesh` repeat the texture every ~1 world
+    // unit along the ribbon (ROAD_TILE_PERIOD), so a non-wrapping edge would
+    // show a hard seam at every hex. U runs along the ribbon's length, V across
+    // its width (road art in the V middle, ragged transparent shoulders at the
+    // V edges). Loaded with explicit success callback — if the load FAILS, we
+    // leave the original coloured diffuse alone (no black ribbon when 404s).
     if ((networkName === 'road' || networkName === 'river') && this._scene && typeof BABYLON.Texture === 'function') {
       try {
-        const fileName = networkName === 'road' ? 'road-ribbon.png' : 'river-ribbon.png';
+        const fileName = networkName === 'road' ? 'road-cobblestone.png' : 'river-ribbon.png';
         const url = `${this._assetsBasePath || 'assets'}/${fileName}`;
         // 2-arg constructor only — anything more positional has broken with
         // Babylon 7.x's minified signature. Use numeric wrap mode constants
@@ -8711,9 +8710,14 @@ export class Renderer3D {
         // repeats inside each segment. Road keeps its 1× mapping because its
         // texture has no directional pattern that needs repeating.
         if (networkName === 'river') tex.uScale = RIVER_RIBBON_U_SCALE;
+        // ROAD_RIBBON_U_SCALE is derived to PRESERVE the texture's aspect ratio
+        // now that V spans the full path width: one U repeat covers width ×
+        // (texW/texH) world units so the cobbles stay square instead of stretched
+        // or crushed. Seamless at any scale because the texture wraps (mirror).
+        else if (networkName === 'road') tex.uScale = ROAD_RIBBON_U_SCALE;
         mat.diffuseTexture = tex;
-        // road-ribbon.png is 21% alpha=0 / 78% opaque — designed with
-        // transparent cut-outs for the road shoulder. Without this flag
+        // road-cobblestone.png is ~36% alpha=0 / ~64% opaque — designed with
+        // transparent cut-outs for the ragged road shoulder. Without this flag
         // Babylon ignores the texture's alpha and renders the cut-out
         // pixels as their RGB (≈ black), producing dark borders + dark
         // gaps. Combined with per-vertex alpha (path edges) the final
@@ -15277,6 +15281,19 @@ export const RIVER_BANK_WIDTH     = 0.05;
  *  StandardMaterial.clone(). `_pumpRiverFlow` only mutates uOffset, leaving
  *  uScale intact. */
 export const RIVER_RIBBON_U_SCALE = 2;
+/** Road cobblestone tile (`road-cobblestone.png`, 4096×1024 = 4:1) is a
+ *  horizontal mirror-pair holding a stretch of cobble road. Its V now spans the
+ *  full ROAD_RIBBON_WIDTH across the path, so to keep the cobbles SQUARE (not
+ *  stretched along the road) one U repeat must cover `width × texW/texH` world
+ *  units. uScale = 1 / that = (texH/texW) / ROAD_RIBBON_WIDTH. The texture wraps
+ *  seamlessly at any scale because its left edge mirrors its right, so this only
+ *  governs cobble size — raise the literal aspect term to enlarge the stones. */
+const ROAD_TEX_ASPECT_H_OVER_W = 1024 / 4096; // 0.25
+// Cobble-size tuning multiplier on top of the aspect-perfect scale. 1 = square
+// stones; >1 packs more repeats (smaller stones), <1 stretches them along the
+// road (larger stones). Set to 0.5 per art direction.
+const ROAD_U_SCALE_TUNE = 0.5;
+export const ROAD_RIBBON_U_SCALE = ROAD_U_SCALE_TUNE * ROAD_TEX_ASPECT_H_OVER_W / ROAD_RIBBON_WIDTH; // ≈ 0.833
 /** Road sits clearly above the river so the road tube paints OVER the water at
  *  river crossings — the bridge plank is disabled (`_renderBridges = false`),
  *  so the road ribbon is the only thing carrying the visual at the crossing.
