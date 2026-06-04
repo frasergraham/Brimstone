@@ -314,6 +314,12 @@ export const PALADIN_YAW        = Math.PI;
 // back-compat with existing call sites; UNIT_RIG_BANK is the architectural
 // source of truth going forward (UNIT_RIG_BANK[type].animations.{idle,walking}).
 export const WALKING_MODEL_FILE = 'walking.glb';
+// Running clip — animation-only Mixamo export, retargeted onto the SHARED
+// paladin skeleton exactly like walking. Played in place of walking when a
+// move step traverses 2+ hexes in one go (a road dash), so a long move reads
+// as a run rather than a double-speed walk. Loaded lazily / pre-warmed off
+// the critical path (see `_ensureRunningAnimation`).
+export const RUNNING_MODEL_FILE = 'running.glb';
 // IDLE_MODEL_FILE matches PALADIN_MODEL_FILE — paladin-idle.glb ships the
 // idle clip embedded, so the loader picks it up at model-load time and
 // _loadIdleAnimation skips (avoids a duplicate import).
@@ -404,7 +410,13 @@ export function computeAnimSpeedRatioForStride(
   targetTimeMs,
   fallback = 1.0,
 ) {
-  if (!(strideSourceUnits > 0)) return fallback;
+  // Mixamo "without skin" exports occasionally bake in a near-zero residual
+  // translation on the root track instead of a real stride (running.glb is the
+  // current offender — stride=0.001 source units). A tiny strideSourceUnits
+  // here explodes the ratio to absurd values and clamps to 6.0 — visually a
+  // 4x-too-fast scramble. The threshold rejects strides below 1 source unit
+  // (well under any real Mixamo stride) and lets the caller's `fallback` ride.
+  if (!(strideSourceUnits > 1.0)) return fallback;
   if (!(natCycleSec > 0)) return fallback;
   if (!(scale > 0)) return fallback;
   if (!(targetDistanceWU > 0)) return fallback;
@@ -471,6 +483,33 @@ export function stripRootBoneTranslation(animGroup, rootName = 'mixamorig:Hips')
 // still letting idle resume between different units' sequences in
 // resolution playback (which typically have longer pauses).
 export const PALADIN_WALK_SUSTAIN_MS = 700;
+
+// Minimum waypoint-path length (origin hex + every destination hex) at which
+// a single move step plays the RUNNING clip instead of WALKING. The waypoint
+// list always begins with the starting hex, so length ≥ 3 means the unit
+// crosses 2+ destination hexes in one plan step (e.g. a road dash) — long
+// enough to read as a run. Tunable in one place.
+export const RUN_MIN_PATH_LEN = 3;
+
+/** Feature flag: gates the run-on-multi-hex behavior. DISABLED today because
+ *  the current Mixamo running.glb ships with a flat root track ("In Place"
+ *  was on at export — stride < 1 src-unit, no usable foot-plant data). When
+ *  a running source with real root motion lands in assets/models/, flip this
+ *  to `true` and selectMoveAnimKind starts picking running for ≥2-hex moves
+ *  again. Walking handles every move in the meantime (clip plays at
+ *  `walking-base × distMul` so multi-hex moves visually fast-walk). */
+export const RUNNING_ANIM_ENABLED = false;
+
+/** Choose the move-animation clip for a path of `pathLen` waypoints (the
+ *  origin hex plus each destination hex traversed in one move step). Returns
+ *  'running' for a multi-hop move (pathLen ≥ RUN_MIN_PATH_LEN, i.e. 2+ hexes
+ *  crossed) when RUNNING_ANIM_ENABLED, else 'walking'. Pure; exported for
+ *  tests. */
+export function selectMoveAnimKind(pathLen) {
+  if (!RUNNING_ANIM_ENABLED) return 'walking';
+  return (typeof pathLen === 'number' && pathLen >= RUN_MIN_PATH_LEN)
+    ? 'running' : 'walking';
+}
 
 /** Predicate: does this entity belong to the day-side hero faction (and thus
  *  render as the paladin GLB when available)? Routes through `sideFactionOf`
@@ -2112,18 +2151,12 @@ export class Renderer3D {
     this._buildingLabelsByKey  = new Map(); // hexKey → { plane, mat, tex }
     this._fogMaterialCache = new Map();  // base hex color → darker StandardMaterial
     this._fogActiveSet     = new Set();  // hexKeys currently rendered as fogged
-    // Renderer-level fog DISPLAY override, cycled with the `T` hotkey for
+    // Renderer-level fog DISPLAY override, toggled with the `T` hotkey for
     // debugging. Independent of the game's actual fogOfWar state — see
     // `_applyFogVeil` / `nextFogDebugMode`. One of:
     //   'normal' → veil per game state + observer (default; no divergence)
     //   'off'    → suppress the veil entirely (everything visible)
-    //   'full'   → treat ALL hexes as fogged (whole map darkened)
-    //   'debug'  → normal veil PLUS a billboarded "F" over every fogged hex
     this._fogDebugMode    = 'normal';
-    // "F" markers spawned in debug mode, keyed by hexKey → { plane, mat, tex }.
-    // Diffed against the fogged set each veil pass; disposed on map rebuild and
-    // when leaving debug mode.
-    this._fogDebugMarkers = new Map();
     // Power-node glow meshes: { obj, disc, col, row, glowColor } per node hex.
     this._nodeGlowMeshes   = [];
     // Per-node identifier-outline materials — alpha is pulsed in
@@ -2195,6 +2228,10 @@ export class Renderer3D {
     // lunge animation; _syncEntityStandees skips _positionStandee for these
     // so the animation isn't snapped back to the state position every frame.
     this._activeMoveIds   = new Set();
+    // Subset of _activeMoveIds whose move step is a multi-hop run (2+ hexes in
+    // one plan step). When non-empty the paladin anim tick plays the RUNNING
+    // clip instead of walking. Cleared in addMoveAnim's completion callback.
+    this._activeRunMoveIds = new Set();
     this._activeLungeIds  = new Set();
     // X-ray occlusion ghost (see `_pumpXrayOcclusion` + `_buildXrayGhost`). When
     // an alive, fog-visible unit is hidden behind a tree/building from the
@@ -3702,6 +3739,10 @@ export class Renderer3D {
       if (typeof setTimeout === 'function') {
         const t = setTimeout(() => { this._ensurePunchAnimation(basePath); }, 1200);
         if (t && typeof t.unref === 'function') t.unref();
+        // Pre-warm the running clip too (animation-only, ~29k) so the first
+        // multi-hex move dashes rather than walking until the lazy load lands.
+        const tr = setTimeout(() => { this._ensureRunningAnimation(basePath); }, 1400);
+        if (tr && typeof tr.unref === 'function') tr.unref();
       }
 
       // If standees were built before the GLB landed (the common case —
@@ -3961,6 +4002,157 @@ export class Renderer3D {
     src.activeGroup = 'idle';
     this._paladinAnimObserver = this._installPaladinAnimBlendTick();
     return walkGroupNative;
+  }
+
+  /** Kick the lazy running.glb load exactly once. Idempotent — returns the
+   *  in-flight (or settled) promise on repeat calls. Off the beginLoad
+   *  critical path (pre-warmed a beat after the rig + walk/idle, and lazily
+   *  triggered by the first multi-hex move). Safe before the rig loads
+   *  (no-ops until `_paladinSource` exists) and without a real SceneLoader. */
+  _ensureRunningAnimation(basePath = 'assets') {
+    if (this._runningLoadPromise) return this._runningLoadPromise;
+    if (!this._paladinSource) return null;
+    if (this._paladinSource.runGroup) return Promise.resolve(this._paladinSource.runGroup);
+    this._runningLoadPromise = Promise.resolve()
+      .then(() => this._loadRunningAnimation(basePath))
+      .catch(err => {
+        console.warn('[Renderer3D] running.glb load failed; multi-hex moves walk instead.', err);
+        return null;
+      });
+    return this._runningLoadPromise;
+  }
+
+  /** Load running.glb and retarget its AnimationGroup onto the SHARED paladin
+   *  skeleton by bone/TransformNode name — the same pipeline as walking
+   *  (clone the native group with a target remapper, strip root motion,
+   *  dispose the imported geometry, keep only the keyframes). The retargeted
+   *  group is stashed on `_paladinSource.runGroup`, started once to
+   *  instantiate animatables then paused so `_maybeTogglePaladinAnimation`
+   *  can play()/pause() it from its current frame.
+   *
+   *  Same shared-skeleton tradeoff as walking/idle/punch: every visible
+   *  paladin runs in unison off the one rig (per-standee skeletons caused the
+   *  historical T-pose/giant-head bugs, so we never clone the skeleton).
+   *
+   *  Also computes the run clip's own stride/cycle → a speedRatio that makes
+   *  one running stride cover one hex's world-distance in RUN_HEX_MS (running's
+   *  per-hex pace, not the walk's MOVE_ANIM_MS), stored on
+   *  `_runningSource.speedRatio`. addMoveAnim then scales the cone-slide WINDOW
+   *  by hop count rather than the speedRatio, so multi-hex runs take longer in
+   *  real time instead of speeding up.
+   *  Returns the retargeted group, or null if import/retarget failed (the move
+   *  then falls back to the walking clip). */
+  async _loadRunningAnimation(basePath = 'assets') {
+    if (!this._babylon || !this._scene || !this._paladinSource) return null;
+    const BABYLON = this._babylon;
+    const src = this._paladinSource;
+    if (src.runGroup) return src.runGroup;
+    if (!BABYLON.SceneLoader || typeof BABYLON.SceneLoader.ImportMeshAsync !== 'function') {
+      return null;
+    }
+
+    let result;
+    try {
+      result = await BABYLON.SceneLoader.ImportMeshAsync(
+        null,
+        `${basePath}/${PALADIN_MODEL_DIR}`,
+        RUNNING_MODEL_FILE,
+        this._scene,
+        this._glbProgressHandler('paladin'),
+      );
+    } catch (err) {
+      console.warn('[Renderer3D] running.glb import failed', err);
+      return null;
+    }
+
+    const runNative = (result.animationGroups || []).find(g => g) || null;
+    if (!runNative) {
+      console.warn('[Renderer3D] running.glb contained no animation group');
+      this._disposeWalkingImport(result);
+      return null;
+    }
+
+    // Compute stride + natural cycle BEFORE stripping root motion (which zeros
+    // the keyframes), then back-calc a speedRatio that makes one running stride
+    // cover one hex's world-distance in RUN_HEX_MS — exactly like walking, but
+    // measured against running's own (longer) stride AND its own per-hex time.
+    // Using RUN_HEX_MS (not MOVE_ANIM_MS) is the key to matching speed to
+    // distance: the run cone-slide window scales with hop count (N×RUN_HEX_MS),
+    // so this base ratio already encodes the per-hex foot-plant pace and is
+    // applied WITHOUT a distMul factor in addMoveAnim.
+    const strideSrcUnits = computeRootStrideLength(runNative);
+    const natCycleSec    = animDurationSeconds(runNative);
+    const paladinScale   = this._paladinScale > 0 ? this._paladinScale : PALADIN_BASE_SCALE;
+    const hexStepWU      = HEX_RADIUS_WORLD * Math.sqrt(3);
+    // Fallback 1.25 picked empirically against Mixamo's "running" clip which
+    // has no usable root track: that's natural cycle speed plus a small bias
+    // so the legs visibly cycle faster than walking. If we ever get a running
+    // glb with real root motion, the solved ratio takes over automatically.
+    const runSpeedRatio  = computeAnimSpeedRatioForStride(
+      strideSrcUnits, natCycleSec, paladinScale, hexStepWU, RUN_HEX_MS, /*fallback*/ 1.25,
+    );
+    this._runningSource = { speedRatio: runSpeedRatio };
+    console.info(
+      `[Renderer3D] running speed ratio = ${runSpeedRatio.toFixed(2)} `
+      + `(stride=${strideSrcUnits.toFixed(2)} src-units, cycle=${natCycleSec.toFixed(2)}s, `
+      + `scale=${paladinScale.toFixed(3)}, hex=${hexStepWU.toFixed(2)}wu, anim=${RUN_HEX_MS}ms)`,
+    );
+
+    const nameMap = new Map();
+    const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
+    const addEntry = (name, target) => {
+      if (!name || !target) return;
+      if (!nameMap.has(name)) nameMap.set(name, target);
+      const stripped = stripDup(name);
+      if (stripped !== name && !nameMap.has(stripped)) nameMap.set(stripped, target);
+    };
+    for (const tn of src.transformNodes || []) {
+      if (tn && tn.name) addEntry(tn.name, tn);
+    }
+    if (src.skeleton && Array.isArray(src.skeleton.bones)) {
+      for (const bone of src.skeleton.bones) {
+        if (!bone) continue;
+        const tn = bone._linkedTransformNode
+          || (typeof bone.getTransformNode === 'function' && bone.getTransformNode());
+        if (tn && tn.name) addEntry(tn.name, tn);
+        if (bone.name) addEntry(bone.name, tn || bone);
+      }
+    }
+
+    let runForPaladin = null;
+    let remapped = 0;
+    let missed = 0;
+    if (typeof runNative.clone === 'function') {
+      runForPaladin = runNative.clone('paladinRunRetargeted', (oldTarget) => {
+        if (!oldTarget || !oldTarget.name) { missed++; return oldTarget; }
+        const match = nameMap.get(oldTarget.name) || nameMap.get(stripDup(oldTarget.name));
+        if (match) { remapped++; return match; }
+        missed++;
+        return oldTarget;
+      });
+    }
+    console.info(`[Renderer3D] running → paladin retarget: ${remapped} hit, ${missed} miss`);
+
+    if (runForPaladin && remapped > 0) {
+      // Strip root motion so the run animates the rig in place — the cone
+      // slide already handles world-space translation across the polyline.
+      stripRootBoneTranslation(runForPaladin);
+      // Kick the animatables into existence then pause, so the anim tick can
+      // play()/pause() from the current frame instead of restarting at 0.
+      if (typeof runForPaladin.start === 'function') runForPaladin.start(true, runSpeedRatio);
+      if (typeof runForPaladin.pause === 'function') runForPaladin.pause();
+      src.runGroup = runForPaladin;
+    } else {
+      console.warn('[Renderer3D] running retarget produced 0 hits — multi-hex moves walk instead.');
+      try { runForPaladin?.dispose?.(); } catch { /* ignore */ }
+      src.runGroup = null;
+    }
+
+    // Dispose running.glb's imported mesh + skeleton — only the keyframes are
+    // kept (retargeted onto paladin's rig). Running has no ghost-preview path,
+    // so unlike walking we don't retain its skeleton.
+    this._disposeWalkingImport(result);
+    return src.runGroup;
   }
 
   /** Dispose every mesh + skeleton brought in by the walking.glb import.
@@ -4298,9 +4490,10 @@ export class Renderer3D {
       return Promise.resolve();
     }
     const group = src[slot];
-    // Stop punch/idle/walk so the reaction owns the skeleton.
+    // Stop punch/idle/walk/run so the reaction owns the skeleton.
     if (src.idleGroup && typeof src.idleGroup.stop === 'function') src.idleGroup.stop();
     if (src.walkGroup && typeof src.walkGroup.stop === 'function') src.walkGroup.stop();
+    if (src.runGroup && typeof src.runGroup.stop === 'function') src.runGroup.stop();
     if (src.punchGroup && typeof src.punchGroup.stop === 'function') src.punchGroup.stop();
     src.punchPlaying = false;
     src.reactionPlaying = true;
@@ -4343,9 +4536,10 @@ export class Renderer3D {
     const punch = src.punchGroup;
     const speedMul = this._playbackSpeedMul ?? 1.0;
     const ratio = computePunchSpeedRatio(src.punchDurationSec, PUNCH_TARGET_MS * speedMul);
-    // Hand the skeleton to punch: silence idle + walk so they don't fight it.
+    // Hand the skeleton to punch: silence idle + walk + run so none fight it.
     if (src.idleGroup && typeof src.idleGroup.stop === 'function') src.idleGroup.stop();
     if (src.walkGroup && typeof src.walkGroup.stop === 'function') src.walkGroup.stop();
+    if (src.runGroup && typeof src.runGroup.stop === 'function') src.runGroup.stop();
     src.punchPlaying = true;
     src.activeGroup = 'punch';
 
@@ -4525,22 +4719,22 @@ export class Renderer3D {
     // don't yank the rig back into idle/walk mid-strike. _startPaladinPunch's
     // end handler clears punchPlaying and the next tick resumes normally.
     if (src.punchPlaying) return;
-    // Three states: 'walk' (motion active), 'paused' (mid-chain freeze
-    // — walking is paused at its current frame, idle does NOT run), and
-    // 'idle' (no motion for SUSTAIN_MS). 'paused' is the new state that
-    // lets a multi-hex move chain read as "walk → freeze → walk → freeze
-    // → walk → idle" instead of dipping back into idle pose between
-    // every hop.
-    const wantWalk = paladinAnimTargetWeight(
+    // Four motion states: 'walk' / 'run' (motion active — run when the active
+    // move step is a multi-hop dash), 'paused' (mid-chain freeze — the motion
+    // clip is paused at its current frame, idle does NOT run), and 'idle' (no
+    // motion for SUSTAIN_MS). 'paused' lets a multi-hex move chain read as
+    // "run → freeze → run → idle" instead of dipping into idle between hops.
+    const wantMotion = paladinAnimTargetWeight(
       this._activeMoveIds, this._activeLungeIds,
       this.state?.entities, unitUsesPaladinModel,
     ) === 0;
     const now = performance.now();
-    if (wantWalk) this._paladinLastWalkTs = now;
+    if (wantMotion) this._paladinLastWalkTs = now;
 
+    const { group: motionGroup, kind: motionKind } = this._activeMotionGroup();
     let desired;
-    if (wantWalk) {
-      desired = 'walk';
+    if (wantMotion) {
+      desired = motionKind; // 'walk' or 'run'
     } else if (typeof this._paladinLastWalkTs === 'number'
       && (now - this._paladinLastWalkTs) < PALADIN_WALK_SUSTAIN_MS) {
       desired = 'paused';
@@ -4550,29 +4744,48 @@ export class Renderer3D {
     if (src.activeGroup === desired) return;
 
     const walk = src.walkGroup;
+    const run  = src.runGroup;
     const idle = src.idleGroup;
-    if (desired === 'walk') {
+    if (desired === 'walk' || desired === 'run') {
       if (idle && typeof idle.stop === 'function') idle.stop();
-      if (walk) {
-        if (typeof walk.play === 'function') walk.play(true);
-        else if (typeof walk.start === 'function') walk.start(true, 1.0);
+      // Silence the OTHER motion clip so two clips don't both drive the rig.
+      const other = desired === 'run' ? walk : run;
+      if (other && typeof other.stop === 'function') other.stop();
+      if (motionGroup) {
+        if (typeof motionGroup.play === 'function') motionGroup.play(true);
+        else if (typeof motionGroup.start === 'function') motionGroup.start(true, 1.0);
       }
     } else if (desired === 'paused') {
-      // Freeze walking mid-stride. Crucially we do NOT start idle —
-      // idle would immediately drive the bones away from walking's
-      // current frame. Walking stays paused at its last keyframe until
-      // the next motion event resumes it (walk.play() resumes from
-      // the paused frame) or the sustain window expires and we
-      // transition to 'idle' below.
+      // Freeze the motion clip mid-stride. Crucially we do NOT start idle —
+      // idle would immediately drive the bones away from the motion clip's
+      // current frame. The clip stays paused at its last keyframe until the
+      // next motion event resumes it (play() resumes from the paused frame)
+      // or the sustain window expires and we transition to 'idle' below.
       if (walk && typeof walk.pause === 'function') walk.pause();
+      if (run && typeof run.pause === 'function') run.pause();
     } else { // 'idle'
       if (walk && typeof walk.stop === 'function') walk.stop();
+      if (run && typeof run.stop === 'function') run.stop();
       if (idle) {
         if (typeof idle.play === 'function') idle.play(true);
         else if (typeof idle.start === 'function') idle.start(true, 1.0);
       }
     }
     src.activeGroup = desired;
+  }
+
+  /** Pick the paladin motion clip + kind for the current frame: the RUNNING
+   *  group ('run') when any active move step is a multi-hop dash and the run
+   *  clip has loaded, otherwise the WALKING group ('walk'). Falls back to walk
+   *  whenever running isn't available yet, so a multi-hex move that fires
+   *  before running.glb lands simply walks until the clip is ready. */
+  _activeMotionGroup() {
+    const src = this._paladinSource;
+    if (!src) return { group: null, kind: 'walk' };
+    const running = this._activeRunMoveIds instanceof Set
+      && this._activeRunMoveIds.size > 0;
+    if (running && src.runGroup) return { group: src.runGroup, kind: 'run' };
+    return { group: src.walkGroup, kind: 'walk' };
   }
 
   /** Resume or pause the NATIVE walking AnimationGroup (the one playing
@@ -4644,14 +4857,26 @@ export class Renderer3D {
         && (now - this._paladinLastWalkTs) < PALADIN_WALK_SUSTAIN_MS) {
         wantWalk = true;
       }
-      const desired = wantWalk ? 'walk' : 'idle';
+      // Run-aware: a multi-hop move plays the running clip, not walking.
+      // Selecting the motion group here (rather than hard-coding walk) keeps
+      // this legacy swap from clobbering a running paladin by starting walk
+      // on top of it.
+      const { group: motionGroup, kind: motionKind } = this._activeMotionGroup();
+      const desired = wantWalk ? motionKind : 'idle';
       if (src.activeGroup === desired) return;
-      const walkSpeed = this._walkingSource?.speedRatio ?? 1.0;
-      if (desired === 'walk') {
+      if (desired === 'walk' || desired === 'run') {
+        const motionSpeed = desired === 'run'
+          ? (this._runningSource?.speedRatio ?? 1.0)
+          : (this._walkingSource?.speedRatio ?? 1.0);
+        const other = desired === 'run' ? src.walkGroup : src.runGroup;
         if (typeof src.idleGroup.stop === 'function') src.idleGroup.stop();
-        if (typeof src.walkGroup.start === 'function') src.walkGroup.start(true, walkSpeed);
+        if (other && typeof other.stop === 'function') other.stop();
+        if (motionGroup && typeof motionGroup.start === 'function') {
+          motionGroup.start(true, motionSpeed);
+        }
       } else {
         if (typeof src.walkGroup.stop === 'function') src.walkGroup.stop();
+        if (src.runGroup && typeof src.runGroup.stop === 'function') src.runGroup.stop();
         if (typeof src.idleGroup.start === 'function') src.idleGroup.start(true, 1.0);
       }
       src.activeGroup = desired;
@@ -5865,17 +6090,14 @@ export class Renderer3D {
     console.log(`[Renderer3D] border forest ${this._borderForestHidden ? 'hidden' : 'visible'}`);
   }
 
-  /** Cycle the renderer-level fog DISPLAY override (normal → off → full →
-   *  debug → normal) and re-apply the veil. Bound to the `T` hotkey. This is a
-   *  pure display override that does NOT touch the game's `fogOfWar` state — it
-   *  only changes which hexes the renderer veils/darkens. The `debug` mode adds
-   *  a billboarded "F" over every fogged hex so the operator can SEE exactly
-   *  which hexes the renderer considers hidden. */
+  /** Toggle the renderer-level fog DISPLAY override (normal ↔ off) and re-apply
+   *  the veil. Bound to the `T` hotkey. This is a pure display override that
+   *  does NOT touch the game's `fogOfWar` state — it only suppresses or restores
+   *  the veil so the operator can see the whole map while debugging. */
   _cycleFogDebugMode() {
     this._fogDebugMode = nextFogDebugMode(this._fogDebugMode);
     console.log(`[Renderer3D] fog display mode → ${this._fogDebugMode}`);
-    // Re-apply the veil so the new override takes effect immediately. The veil
-    // pass also (re)builds or clears the debug "F" markers based on the mode.
+    // Re-apply the veil so the new override takes effect immediately.
     this._applyFogVeil();
   }
 
@@ -7943,10 +8165,10 @@ export class Renderer3D {
         // opaque region covers the inner 80% of the ribbon and the outer 10%
         // on each side fades smoothly into the grass beneath.
         const OPAQUE_FRAC   = 0.80;
-        // Road + river get a smooth ±15% per-point width modulation along
-        // their length so each strand reads as hand-laid / natural rather
-        // than uniform-machined. The sine wave is seeded off the tile col/row
-        // + stroke index so a given hex looks the same across reloads.
+        // River gets a smooth per-point width modulation along its length (see
+        // the river branch below). The ROAD is deliberately UNIFORM width — no
+        // along-length variation — so the cobble ribbon reads as a constant-
+        // width path; the only per-point width change is the terminus cap taper.
         let perPointOuterWidth = tileWidth;
         let perPointInnerWidth = tileWidth * OPAQUE_FRAC;
         // Per-point WATER half-widths (river only); used by the sibling bank
@@ -7954,29 +8176,15 @@ export class Renderer3D {
         // exactly. `null` for road or for the sine-modulated width fallback.
         let riverHalfWidthsForStroke = null;
         if (networkName === 'road') {
-          // Width modulates as a function of WORLD position so adjacent tiles
-          // produce the SAME width at shared seam points — no visible width
-          // jump where one tile's stroke ends and the next begins. The 2D
-          // sine field uses a wavelength of WIDTH_NOISE_WAVELENGTH world
-          // units (~5 hexes) — long enough that neighbour points within a
-          // single stroke (≤0.2 wu apart) see ≤1% width delta, well under
-          // operator's 5% inter-vertex cap. Peak-to-peak swing is 15%
-          // (amp 0.075 → range [0.925, 1.075]).
-          const WIDTH_NOISE_WAVELENGTH = 8.0;
-          const amp = 0.075;
-          const widthModAt = (x, z) => {
-            const u = (x / WIDTH_NOISE_WAVELENGTH + z / WIDTH_NOISE_WAVELENGTH * 0.7) * Math.PI * 2;
-            return 1 + amp * Math.sin(u);
-          };
+          // Uniform width along the road. The only per-point width change is the
+          // terminus cap taper (widthScaleByPoint shrinks the half-width to 0 at
+          // a dead-end tip); body points keep full width.
           const outerArr = new Array(pts.length);
           const innerArr = new Array(pts.length);
           for (let p = 0; p < pts.length; p++) {
-            const mod = widthModAt(pts[p].x, pts[p].z);
-            // Cap samples shrink the half-width to 0 at the tip (semicircle);
-            // body points keep widthScale 1.
             const wScale = widthScaleByPoint ? widthScaleByPoint[p] : 1;
-            outerArr[p] = tileWidth * mod * wScale;
-            innerArr[p] = tileWidth * OPAQUE_FRAC * mod * wScale;
+            outerArr[p] = tileWidth * wScale;
+            innerArr[p] = tileWidth * OPAQUE_FRAC * wScale;
           }
           perPointOuterWidth = outerArr;
           perPointInnerWidth = innerArr;
@@ -8029,10 +8237,16 @@ export class Renderer3D {
           scene,
         );
         ribbon.isPickable = false;
-        // Per-vertex alpha keyed off path index (5 paths, N points each).
+        // Per-vertex alpha keyed off path index (5 paths, N points each). The
+        // river feathers its lateral edges geometrically (outer paths → alpha 0)
+        // because river-ribbon.png is opaque to its edges. The cobblestone road
+        // texture carries its OWN ragged transparent shoulders, so the road
+        // keeps full vertex alpha and lets the texture's alpha define the edge.
         const totalVerts = ribbon.getTotalVertices();
         const N = pts.length;
-        const alphaByPath = [0.0, 1.0, 1.0, 1.0, 0.0];
+        const alphaByPath = networkName === 'road'
+          ? [1.0, 1.0, 1.0, 1.0, 1.0]
+          : [0.0, 1.0, 1.0, 1.0, 0.0];
         const colors = new Float32Array(totalVerts * 4);
         for (let v = 0; v < totalVerts; v++) {
           const pathIdx = Math.min(alphaByPath.length - 1, Math.floor(v / N));
@@ -8053,15 +8267,16 @@ export class Renderer3D {
         // the texture repeats every ~1 world unit, roughly hex-sized).
         if (networkName === 'road' || networkName === 'river') {
           const uvs = new Float32Array(totalVerts * 2);
-          // V for each of the 5 paths. The OPAQUE band (inner-right → centre
-          // → inner-left) samples the texture's middle 40% (V 0.3–0.7) where
-          // the road artwork sits; the alpha-faded OUTER paths sample the
-          // texture's V edges (0 / 1) where the artist's dark/transparent
-          // shoulder lives. Previously this mapped inner paths to V=0 / V=1,
-          // which sampled the texture's dark edges and produced a black
-          // border around the road. Tightening the V window keeps the road
-          // bulk on the texture's road-colored region.
-          const vByPath = [0.0, 0.3, 0.5, 0.7, 1.0];
+          // V for each of the 5 paths. ROAD uses a STRAIGHT linear map: the
+          // texture's V 0→1 maps directly to the path width 0→1, edge to edge,
+          // making no assumption about what's inside the texture. The inner
+          // paths sit at 0.8×half-width, so V = (lateral+1)/2 gives 0.1 / 0.9
+          // there → exactly linear across the width. RIVER keeps its art in the
+          // texture's middle 40% (its V edges are dark and would read as a
+          // border), with a geometric vertex-alpha lateral fade.
+          const vByPath = networkName === 'road'
+            ? [0.0, 0.1, 0.5, 0.9, 1.0]
+            : [0.0, 0.3, 0.5, 0.7, 1.0];
           // U along the centreline (path index 2 = centre). All five paths
           // share the same U at each point index so vertices stay seam-aligned
           // across the width.
@@ -8466,15 +8681,21 @@ export class Renderer3D {
     // mesh.hasVertexAlpha, which the merged ribbon mesh sets.
     mat.disableLighting = false;
     // Road gets a tiled diffuse texture so shadow detail reads against the
-    // road surface (not just the flat coloured ribbon). The texture is
-    // 1024×1024 and tileable left-to-right; UVs are written per-vertex in
-    // `_buildNetworkMesh` so the texture U-axis runs along the ribbon's
-    // length and V across its width. Loaded with explicit success callback —
-    // if the load FAILS, we leave the original coloured diffuse alone (no
-    // black ribbon when the path 404s).
+    // road surface (not just the flat coloured ribbon). The road texture is
+    // `road-cobblestone.png` (4096×1024). The source cobblestone art tiled
+    // top↔bottom (road ran vertically); it was rotated 90° so the road length
+    // runs along the texture's U-axis, then made a horizontal mirror-pair
+    // ([A | flop(A)]) so its left edge equals its right edge — i.e. it tiles
+    // SEAMLESSLY left-to-right under WRAP addressing. This matters because the
+    // per-vertex UVs in `_buildNetworkMesh` repeat the texture every ~1 world
+    // unit along the ribbon (ROAD_TILE_PERIOD), so a non-wrapping edge would
+    // show a hard seam at every hex. U runs along the ribbon's length, V across
+    // its width (road art in the V middle, ragged transparent shoulders at the
+    // V edges). Loaded with explicit success callback — if the load FAILS, we
+    // leave the original coloured diffuse alone (no black ribbon when 404s).
     if ((networkName === 'road' || networkName === 'river') && this._scene && typeof BABYLON.Texture === 'function') {
       try {
-        const fileName = networkName === 'road' ? 'road-ribbon.png' : 'river-ribbon.png';
+        const fileName = networkName === 'road' ? 'road-cobblestone.png' : 'river-ribbon.png';
         const url = `${this._assetsBasePath || 'assets'}/${fileName}`;
         // 2-arg constructor only — anything more positional has broken with
         // Babylon 7.x's minified signature. Use numeric wrap mode constants
@@ -8489,9 +8710,14 @@ export class Renderer3D {
         // repeats inside each segment. Road keeps its 1× mapping because its
         // texture has no directional pattern that needs repeating.
         if (networkName === 'river') tex.uScale = RIVER_RIBBON_U_SCALE;
+        // ROAD_RIBBON_U_SCALE is derived to PRESERVE the texture's aspect ratio
+        // now that V spans the full path width: one U repeat covers width ×
+        // (texW/texH) world units so the cobbles stay square instead of stretched
+        // or crushed. Seamless at any scale because the texture wraps (mirror).
+        else if (networkName === 'road') tex.uScale = ROAD_RIBBON_U_SCALE;
         mat.diffuseTexture = tex;
-        // road-ribbon.png is 21% alpha=0 / 78% opaque — designed with
-        // transparent cut-outs for the road shoulder. Without this flag
+        // road-cobblestone.png is ~36% alpha=0 / ~64% opaque — designed with
+        // transparent cut-outs for the ragged road shoulder. Without this flag
         // Babylon ignores the texture's alpha and renders the cut-out
         // pixels as their RGB (≈ black), producing dark borders + dark
         // gaps. Combined with per-vertex alpha (path edges) the final
@@ -10443,19 +10669,31 @@ export class Renderer3D {
     const worldPts = waypoints.map(p => hexToWorld(p.col, p.row));
     const { x: fromX, z: fromZ } = worldPts[0];
     const { x: toX,   z: toZ   } = worldPts[worldPts.length - 1];
-    // Cone slide time tied to MOVE_ANIM_MS so the walking-speed-match
-    // calc in _loadWalkingAnimation actually corresponds to real cone
-    // motion. Scaled by the current playback speed multiplier so vfast
-    // mode produces a faster cone slide AND a proportionally faster
-    // walking cycle (next code block) → feet plant in every mode.
-    const speedMul   = this._playbackSpeedMul ?? 1.0;
-    const effMoveMs  = MOVE_ANIM_MS * speedMul;
-    const FRAMES_MOVE = Math.max(1, Math.round(effMoveMs * 60 / 1000));
+    // Playback-speed multiplier (cinematic/fast/vfast). Applied below to both
+    // the cone-slide duration and the motion-clip speedRatio so every speed
+    // mode keeps feet planted. The per-move DURATION itself depends on walk-vs-
+    // run and the polyline length, so it's computed further down (see effMoveMs)
+    // once those are known.
+    const speedMul = this._playbackSpeedMul ?? 1.0;
 
     // Cancel any in-flight move on this entity so plan-step "A→B→C" hops
     // don't queue up and play simultaneously.
     this._scene.stopAnimation(standee.plane);
     this._activeMoveIds.add(entityId);
+
+    // Pick walking vs running by hop count: a move crossing 2+ destination
+    // hexes in one plan step (waypoints includes the origin, so length ≥ 3)
+    // reads as a run. Track the entity in _activeRunMoveIds so the paladin
+    // anim tick plays the running clip, and kick the lazy running.glb load if
+    // it hasn't pre-warmed yet (the move walks until it lands — see
+    // _activeMotionGroup's fallback).
+    const isRunMove = selectMoveAnimKind(waypoints.length) === 'running';
+    if (isRunMove) {
+      this._activeRunMoveIds.add(entityId);
+      this._ensureRunningAnimation(this._assetsBasePath || 'assets');
+    } else {
+      this._activeRunMoveIds.delete(entityId);
+    }
 
     // Face the direction of motion: rotate the paladin clone around Y so
     // the model walks forward into its destination rather than sliding
@@ -10467,10 +10705,8 @@ export class Renderer3D {
 
     // Total polyline length in world units — for a 1-hex hop this is
     // one hexStep, for a road move tracing 2 hexes it's two hexSteps
-    // (or whatever the actual XZ sum is for the path). The walking
-    // animation playback rate scales by this length / one-hex so the
-    // walk cycle covers the polyline at the cone's actual ground speed
-    // and feet stay planted across the whole move.
+    // (or whatever the actual XZ sum is for the path). distMul is the move's
+    // length expressed in hexes.
     let totalLenWU = 0;
     for (let i = 1; i < worldPts.length; i++) {
       const dx = worldPts[i].x - worldPts[i - 1].x;
@@ -10478,15 +10714,48 @@ export class Renderer3D {
       totalLenWU += Math.sqrt(dx * dx + dz * dz);
     }
     const hexStepWU = HEX_RADIUS_WORLD * Math.sqrt(3);
+    const distMul = (totalLenWU > 0 && hexStepWU > 0) ? (totalLenWU / hexStepWU) : 1;
+
+    // Will the RUN clip actually drive this move? (Selected as a run AND the
+    // running.glb has finished its lazy load — otherwise we fall back to the
+    // walk clip + walk timing for this one move.)
+    const useRun = isRunMove && !!this._paladinSource?.runGroup;
+
+    // Per-move cone-slide DURATION. This is where speed is matched to distance:
+    //
+    // • Walking is always a single hop (selectMoveAnimKind → 'walking' only for
+    //   <2 hexes), so it covers its one hex in a FIXED MOVE_ANIM_MS window. Its
+    //   speedRatio is scaled by distMul (≈1) to keep one stride = one hex.
+    // • Running covers MULTIPLE hexes. We do NOT cram them into MOVE_ANIM_MS —
+    //   that's what made multi-hex runs read as fast-forward (ground speed rose
+    //   with hop count). Instead each running hex takes a fixed RUN_HEX_MS, so
+    //   the window grows to RUN_HEX_MS × distMul and ground-travel speed stays
+    //   constant at a running pace regardless of distance.
+    const perMoveMs  = useRun ? (RUN_HEX_MS * distMul) : MOVE_ANIM_MS;
+    const effMoveMs  = perMoveMs * speedMul;
+    const FRAMES_MOVE = Math.max(1, Math.round(effMoveMs * 60 / 1000));
+
     if (totalLenWU > 0 && hexStepWU > 0) {
-      const distMul = totalLenWU / hexStepWU;
-      const walkGroup = this._paladinSource?.walkGroup;
-      const baseRatio = this._walkingSource?.speedRatio ?? 1.0;
-      if (walkGroup && 'speedRatio' in walkGroup) {
-        // Dividing by speedMul makes a faster (smaller) speedMul produce
-        // a higher walking speedRatio — i.e. a faster cycle that matches
-        // the shorter cone-slide duration.
-        walkGroup.speedRatio = (baseRatio * distMul) / Math.max(0.05, speedMul);
+      // Scale whichever motion clip will actually play (running for a multi-hop
+      // dash, else walking). The per-hex base ratio comes from that clip's own
+      // stride measurement. Fall back to the walk group if running hasn't loaded.
+      const motionGroup = useRun
+        ? this._paladinSource?.runGroup
+        : this._paladinSource?.walkGroup;
+      const baseRatio = useRun
+        ? (this._runningSource?.speedRatio ?? 1.0)
+        : (this._walkingSource?.speedRatio ?? 1.0);
+      if (motionGroup && 'speedRatio' in motionGroup) {
+        // Walking crams its single hop into MOVE_ANIM_MS, so its cycle is
+        // scaled by distMul to cover the polyline at the cone's actual ground
+        // speed. Running's WINDOW already scales with distance (perMoveMs =
+        // RUN_HEX_MS × distMul), so the base ratio — solved against RUN_HEX_MS —
+        // already matches the per-hex foot-plant pace; multiplying by distMul
+        // would re-introduce the speed-up. Dividing by speedMul makes a faster
+        // (smaller) speedMul produce a higher playback speedRatio to match the
+        // shorter cone-slide.
+        const clipDistFactor = useRun ? 1 : distMul;
+        motionGroup.speedRatio = (baseRatio * clipDistFactor) / Math.max(0.05, speedMul);
       }
     }
 
@@ -10519,6 +10788,7 @@ export class Renderer3D {
     const promise = new Promise(resolve => {
       this._scene.beginDirectAnimation(standee.plane, [animX, animZ], 0, FRAMES_MOVE, false, 1, () => {
         this._activeMoveIds.delete(entityId);
+        this._activeRunMoveIds.delete(entityId);
         resolve();
       });
     });
@@ -11398,6 +11668,150 @@ export class Renderer3D {
     return {
       promise,
       awaitFinal: () => Promise.resolve(),
+      triggerFade,
+      then(onFulfilled, onRejected) { return promise.then(onFulfilled, onRejected); },
+      catch(onRejected) { return promise.catch(onRejected); },
+      finally(onFinally) { return promise.finally(onFinally); },
+    };
+  }
+
+  /**
+   * Discovery readout — the survivor/zombie analogue of `addCombatReadout`.
+   * Paints a billboarded card above the freshly-discovered unit showing its
+   * portrait, name/title, stats, optional ability, and the discovery sentence,
+   * then holds it until the continue gate resolves and fades it out.
+   *
+   * Lifecycle mirrors `addCombatReadout`:
+   *   1. paint the card immediately,
+   *   2. after `revealMs`, resolve `awaitFinal()` (orchestrator reveals the
+   *      Continue button + starts its countdown),
+   *   3. race the local `triggerFade` signal against `opts.awaitContinueFn`,
+   *   4. fade the card out and dispose.
+   *
+   * Returns the `{ promise, awaitFinal, triggerFade, then/catch/finally }`
+   * thenable handle — OR `null` when it cannot anchor the card (no scene /
+   * no standee / DOM-less). Returning null (rather than the combat method's
+   * inert thenable) lets the orchestrator fall back to the 2D modal instead of
+   * silently presenting nothing.
+   */
+  addDiscoveryReadout(entity, opts = {}) {
+    if (!this._scene || !this._babylon) return null;
+    if (typeof document === 'undefined') return null;
+    if (!entity || entity.id == null) return null;
+    // A just-discovered survivor / raised zombie is added to state.entities
+    // immediately, but its STANDEE mesh isn't built until the next draw cycle's
+    // _syncEntityStandees sweep. Discovery fires before that sweep, so the
+    // lookup would miss and the orchestrator would fall back to the modal.
+    // Sync the standees on demand so the new entity gets its anchor before we
+    // look it up. Safe to call here — it's the same call draw() makes.
+    let standee = this._entityStandees.get(entity.id);
+    if (!standee || !standee.plane) {
+      try { this._syncEntityStandees(); } catch { /* defensive */ }
+      standee = this._entityStandees.get(entity.id);
+    }
+    if (!standee || !standee.plane) return null;
+    const BABYLON = this._babylon;
+
+    const model = discoveryReadoutModel(entity, opts);
+    const speedFactor = Number.isFinite(opts.speedFactor) && opts.speedFactor > 0
+      ? opts.speedFactor : 1;
+    const revealMs = (opts.revealMs ?? DISCOVERY_READOUT_REVEAL_MS) * speedFactor;
+    const fadeMs   = (opts.fadeMs   ?? DISCOVERY_READOUT_FADE_MS)   * speedFactor;
+    const setTimeoutFn = opts.setTimeoutFn || ((fn, ms) => setTimeout(fn, ms));
+
+    const portraitSource = (this._tilemapImg && this._spriteRects)
+      ? resolveUnitIconPortrait(this._tilemapImg, this._spriteRects, this._assetIdFor(entity))
+      : { img: null, rect: null, hasPortrait: false };
+
+    const tex = new BABYLON.DynamicTexture(
+      `discoveryCardTex_${entity.id}`,
+      { width: DISCOVERY_CARD_TEX_WIDTH, height: DISCOVERY_CARD_TEX_HEIGHT },
+      this._scene,
+      false,
+    );
+    tex.hasAlpha = true;
+    paintDiscoveryCard(tex.getContext(), {
+      width:  DISCOVERY_CARD_TEX_WIDTH,
+      height: DISCOVERY_CARD_TEX_HEIGHT,
+      name: model.name, title: model.title, glyph: model.glyph,
+      accentColor: model.accentColor,
+      hp: model.hp, maxHp: model.maxHp,
+      statLine: model.statLine, abilityLabel: model.abilityLabel, text: model.text,
+      portraitImg:  portraitSource.hasPortrait ? portraitSource.img  : null,
+      portraitRect: portraitSource.hasPortrait ? portraitSource.rect : null,
+    });
+    tex.update();
+
+    const plane = BABYLON.MeshBuilder.CreatePlane(
+      `discoveryCard_${entity.id}`,
+      { width: DISCOVERY_CARD_PLANE_WIDTH, height: DISCOVERY_CARD_PLANE_HEIGHT },
+      this._scene,
+    );
+    plane.billboardMode    = BABYLON.Mesh.BILLBOARDMODE_ALL;
+    plane.isPickable       = false;
+    plane.renderingGroupId = 2;
+
+    const mat = new BABYLON.StandardMaterial(`discoveryCardMat_${plane.uniqueId}`, this._scene);
+    mat.diffuseTexture = tex;
+    mat.opacityTexture = tex;
+    applyFlatUnitIconMaterial(BABYLON, mat);
+    plane.material = mat;
+
+    plane.parent = standee.plane;
+    const iconTopY = iconBillboardYRelativeToCone(standee.leader) + UNIT_ICON_PLANE_SIZE / 2;
+    plane.position.set(
+      0,
+      iconTopY + DISCOVERY_CARD_Y_GAP + DISCOVERY_CARD_PLANE_HEIGHT / 2,
+      0,
+    );
+    plane.visibility = 1;
+
+    let disposed = false;
+    const disposeAll = () => {
+      if (disposed) return;
+      disposed = true;
+      try { plane.dispose(); } catch {}
+      try { mat.dispose();   } catch {}
+      try { tex.dispose();   } catch {}
+    };
+
+    let resolveFinal;
+    const finalReached = new Promise(r => { resolveFinal = r; });
+    let resolveContinue;
+    const continueSignal = new Promise(r => { resolveContinue = r; });
+    const triggerFade = () => { if (resolveContinue) { resolveContinue(); resolveContinue = null; } };
+    const awaitContinueFn = typeof opts.awaitContinueFn === 'function'
+      ? opts.awaitContinueFn
+      : () => Promise.resolve();
+
+    const promise = new Promise(resolve => {
+      setTimeoutFn(() => {
+        if (disposed) { resolveFinal(); triggerFade(); resolve(); return; }
+        resolveFinal();
+        const gate = Promise.race([
+          continueSignal,
+          Promise.resolve().then(awaitContinueFn),
+        ]);
+        gate.then(() => {
+          if (disposed) { resolve(); return; }
+          const fps = 60;
+          const fadeFrames = Math.max(1, Math.round(fadeMs / 1000 * fps));
+          const animFade = new BABYLON.Animation('discoveryFade', 'visibility', fps,
+            BABYLON.Animation.ANIMATIONTYPE_FLOAT,
+            BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+          animFade.setKeys([{ frame: 0, value: 1 }, { frame: fadeFrames, value: 0 }]);
+          this._scene.beginDirectAnimation(plane, [animFade], 0, fadeFrames, false, 1, () => {
+            disposeAll();
+            resolve();
+          });
+        });
+      }, revealMs);
+    });
+    this._trackAnim(promise);
+
+    return {
+      promise,
+      awaitFinal: () => finalReached,
       triggerFade,
       then(onFulfilled, onRejected) { return promise.then(onFulfilled, onRejected); },
       catch(onRejected) { return promise.catch(onRejected); },
@@ -13957,9 +14371,9 @@ export class Renderer3D {
       for (const k of allKeys) if (!visible.has(k)) realFogged.add(k);
     }
 
-    // Apply the renderer-level display override (T-key): off→none, full→all,
-    // normal/debug→the real computed set.
-    const fogged = foggedSetForMode(this._fogDebugMode, realFogged, allKeys);
+    // Apply the renderer-level display override (T-key): off→none,
+    // normal→the real computed set.
+    const fogged = foggedSetForMode(this._fogDebugMode, realFogged);
 
     // Visible-set view consumed by `shouldRenderEntityAt` below: null means
     // "nothing fogged" (matches the legacy no-fog path), otherwise the set of
@@ -14034,105 +14448,10 @@ export class Renderer3D {
       }
     }
 
-    // Debug overlay: in `debug` mode paint a billboarded "F" over every fogged
-    // hex; in every other mode the overlay is cleared. The sync diffs against
-    // the current marker registry so it rebuilds naturally when the fogged set
-    // changes between passes.
-    if (this._fogDebugMode === 'debug') this._syncFogDebugMarkers(fogged);
-    else this._clearFogDebugMarkers();
-
     // Push the fogged building-tile centres into the building shader plugins so
     // GLB buildings on fogged hexes darken (global uniform, not per-instance —
     // see `_updateBuildingFogUniform` / src/fog-darken-plugin.js).
     this._updateBuildingFogUniform();
-  }
-
-  /** Diff the debug "F"-marker registry against the given fogged-hex set:
-   *  spawn a marker for every newly-fogged hex, dispose markers whose hex is no
-   *  longer fogged. Each marker is a billboarded DynamicTexture plane on
-   *  renderingGroupId 2 (above world geometry) so it reads over terrain/props.
-   *  No-op in headless / node-test (no DOM). */
-  _syncFogDebugMarkers(fogged) {
-    if (!this._scene || !this._babylon || typeof document === 'undefined') return;
-    // Dispose markers no longer fogged.
-    for (const [k, m] of this._fogDebugMarkers) {
-      if (!fogged.has(k)) {
-        this._disposeFogDebugMarker(m);
-        this._fogDebugMarkers.delete(k);
-      }
-    }
-    // Spawn markers for newly-fogged hexes.
-    for (const k of fogged) {
-      if (this._fogDebugMarkers.has(k)) continue;
-      const marker = this._buildFogDebugMarker(k);
-      if (marker) this._fogDebugMarkers.set(k, marker);
-    }
-  }
-
-  /** Build one billboarded "F" marker over the given hex key. Mirrors the
-   *  node-label painter (own DynamicTexture + StandardMaterial, never shared)
-   *  so disposing it tears down both. Returns null when DOM is unavailable. */
-  _buildFogDebugMarker(hexK) {
-    const BABYLON = this._babylon;
-    const scene = this._scene;
-    if (!BABYLON || !scene || typeof document === 'undefined') return null;
-    const [col, row] = hexK.split(',').map(Number);
-    if (!Number.isFinite(col) || !Number.isFinite(row)) return null;
-
-    const tex = new BABYLON.DynamicTexture(
-      `fogDebugTex_${hexK}`,
-      { width: 128, height: 128 },
-      scene,
-      false,
-    );
-    tex.hasAlpha = true;
-    const ctx = tex.getContext();
-    ctx.clearRect(0, 0, 128, 128);
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.font = 'bold 96px Georgia, serif';
-    ctx.fillStyle = 'rgba(0,0,0,0.85)';
-    ctx.fillText('F', 64 + 3, 64 + 3);
-    ctx.fillStyle = '#ff3b3b';
-    ctx.fillText('F', 64, 64);
-    tex.update();
-
-    const mat = new BABYLON.StandardMaterial(`fogDebugMat_${hexK}`, scene);
-    mat.diffuseTexture = tex;
-    mat.opacityTexture = tex;
-    mat.useAlphaFromDiffuseTexture = true;
-    mat.specularColor = new BABYLON.Color3(0, 0, 0);
-    mat.emissiveColor = new BABYLON.Color3(1, 1, 1);
-    mat.backFaceCulling = false;
-
-    const plane = BABYLON.MeshBuilder.CreatePlane(
-      `fogDebug_${hexK}`,
-      { width: 0.9, height: 0.9 },
-      scene,
-    );
-    if (this._mapRoot) plane.parent = this._mapRoot;
-    plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
-    plane.isPickable = false;
-    plane.renderingGroupId = 2; // above world geometry + standees
-    const w = hexToWorld(col, row);
-    plane.position.set(w.x, 1.6, w.z);
-
-    return { plane, mat, tex };
-  }
-
-  _disposeFogDebugMarker(m) {
-    if (!m) return;
-    try { m.tex?.dispose?.(); } catch { /* gone */ }
-    try { m.mat?.dispose?.(); } catch { /* gone */ }
-    try { m.plane?.dispose?.(); } catch { /* gone */ }
-  }
-
-  /** Dispose all debug "F" markers and empty the registry. Called when leaving
-   *  debug mode and on map rebuild. */
-  _clearFogDebugMarkers() {
-    if (this._fogDebugMarkers.size === 0) return;
-    for (const [, m] of this._fogDebugMarkers) this._disposeFogDebugMarker(m);
-    this._fogDebugMarkers.clear();
   }
 
   /** Rewrite the merged ground's `aFog` vertex attribute from the fogged-hex
@@ -14962,6 +15281,19 @@ export const RIVER_BANK_WIDTH     = 0.05;
  *  StandardMaterial.clone(). `_pumpRiverFlow` only mutates uOffset, leaving
  *  uScale intact. */
 export const RIVER_RIBBON_U_SCALE = 2;
+/** Road cobblestone tile (`road-cobblestone.png`, 4096×1024 = 4:1) is a
+ *  horizontal mirror-pair holding a stretch of cobble road. Its V now spans the
+ *  full ROAD_RIBBON_WIDTH across the path, so to keep the cobbles SQUARE (not
+ *  stretched along the road) one U repeat must cover `width × texW/texH` world
+ *  units. uScale = 1 / that = (texH/texW) / ROAD_RIBBON_WIDTH. The texture wraps
+ *  seamlessly at any scale because its left edge mirrors its right, so this only
+ *  governs cobble size — raise the literal aspect term to enlarge the stones. */
+const ROAD_TEX_ASPECT_H_OVER_W = 1024 / 4096; // 0.25
+// Cobble-size tuning multiplier on top of the aspect-perfect scale. 1 = square
+// stones; >1 packs more repeats (smaller stones), <1 stretches them along the
+// road (larger stones). Set to 0.5 per art direction.
+const ROAD_U_SCALE_TUNE = 0.5;
+export const ROAD_RIBBON_U_SCALE = ROAD_U_SCALE_TUNE * ROAD_TEX_ASPECT_H_OVER_W / ROAD_RIBBON_WIDTH; // ≈ 0.833
 /** Road sits clearly above the river so the road tube paints OVER the water at
  *  river crossings — the bridge plank is disabled (`_renderBridges = false`),
  *  so the road ribbon is the only thing carrying the visual at the crossing.
@@ -16481,30 +16813,25 @@ export function shouldRenderEntityAt(target, hexK) {
   return target.has(hexK);
 }
 
-/** Fog DISPLAY-mode cycle order, driven by the `T` hotkey:
- *  normal → off → full → debug → normal. `normal` is the default and the only
- *  mode that matches the game's true fogOfWar state; the others are renderer-
- *  level display overrides for debugging. Unknown input falls back to the
+/** Fog DISPLAY-mode toggle, driven by the `T` hotkey: a simple two-state flip
+ *  normal ↔ off. `normal` is the default and matches the game's true fogOfWar
+ *  state; `off` is a renderer-level display override that suppresses the veil
+ *  entirely (everything visible) for debugging. Unknown input falls back to the
  *  start of the cycle. */
-export const FOG_DEBUG_MODES = Object.freeze(['normal', 'off', 'full', 'debug']);
+export const FOG_DEBUG_MODES = Object.freeze(['normal', 'off']);
 
 export function nextFogDebugMode(cur) {
-  const i = FOG_DEBUG_MODES.indexOf(cur);
-  if (i < 0) return FOG_DEBUG_MODES[0];
-  return FOG_DEBUG_MODES[(i + 1) % FOG_DEBUG_MODES.length];
+  return cur === 'off' ? 'normal' : 'off';
 }
 
 /** Map a fog display mode + the real (game-driven) fogged-hex set to the set
  *  the renderer should actually veil:
- *    • 'off'             → empty set (suppress the veil; everything visible)
- *    • 'full'            → ALL hexes (darken the whole map)
- *    • 'normal'/'debug'  → the real computed set, unchanged
- *  `allKeys` is the full list of playable hex keys (used only for 'full').
+ *    • 'off'      → empty set (suppress the veil; everything visible)
+ *    • 'normal'   → the real computed set, unchanged
  *  Pure — returns a Set; never mutates `realFogged`. */
-export function foggedSetForMode(mode, realFogged, allKeys) {
-  if (mode === 'off')  return new Set();
-  if (mode === 'full') return new Set(allKeys);
-  return realFogged; // 'normal' and 'debug' both veil the real set
+export function foggedSetForMode(mode, realFogged) {
+  if (mode === 'off') return new Set();
+  return realFogged; // 'normal' veils the real set
 }
 
 /**
@@ -16541,6 +16868,19 @@ export function diffStandees(existingIds, entities) {
  *  from this constant so the cone slide and the cycle's speed-match
  *  stay in lockstep. */
 export const MOVE_ANIM_MS = 1000;
+
+/** Real-time (ms) a RUNNING step takes to cross ONE hex. The running clip is
+ *  used for multi-hex dashes; unlike walking — which crams its single hop into
+ *  a fixed MOVE_ANIM_MS window — a run's cone-slide duration scales with
+ *  distance: an N-hex run takes N × RUN_HEX_MS. That keeps the ground-travel
+ *  speed CONSTANT at a running pace no matter how many hexes are crossed (the
+ *  old code held the window at MOVE_ANIM_MS, so longer runs sped up — feet
+ *  still planted, but the whole motion read as fast-forward). 750ms < the
+ *  1000ms walk step, so running is visibly faster than walking (≈1.33× ground
+ *  speed) while a 2-hex run lands at ~1500ms of real motion. The running clip's
+ *  base speedRatio is solved against THIS per-hex time so feet stay planted.
+ *  Operator-tunable in one place. */
+export const RUN_HEX_MS = 750;
 
 /** Duration (ms) of an attack-lunge slide to the midpoint. The lunge
  *  uses an ease-OUT curve (fast launch, decelerating into the strike)
@@ -16688,6 +17028,35 @@ export const COMBAT_CARD_DEF_COLOR = '#3a6ab8';
  *  flashes green and the loser's number flashes red as both fade out. */
 export const COMBAT_READOUT_WIN_COLOR  = '#3ee013';
 export const COMBAT_READOUT_LOSE_COLOR = '#ff7a7a';
+
+// ─── Discovery readout (survivor / zombie encounters) ────────────────────────
+// Mirrors the combat-readout pattern (src/combat-cinematic.js + addCombatReadout)
+// but for the survivor/zombie discovery moment: a billboarded card floats above
+// the freshly-revealed unit showing its portrait, stats and the discovery
+// sentence, held until the player taps Continue (or a 5s countdown fires).
+/** Minimum hold before the card is considered "settled" — when this fires the
+ *  orchestrator reveals the Continue button and starts its countdown. The card
+ *  itself stays up until the continue gate resolves. */
+export const DISCOVERY_READOUT_REVEAL_MS = 350;
+/** Fade-out duration once the continue gate resolves. */
+export const DISCOVERY_READOUT_FADE_MS   = 500;
+/** Card plane size (world units) — wider/taller than the combat number card so
+ *  the portrait + stat lines + discovery sentence all read. */
+export const DISCOVERY_CARD_PLANE_WIDTH  = 2.7;
+export const DISCOVERY_CARD_PLANE_HEIGHT = 2.0;
+export const DISCOVERY_CARD_TEX_WIDTH    = 640;
+export const DISCOVERY_CARD_TEX_HEIGHT   = 474;
+/** Gap (world units) between the unit-icon top and the card bottom. */
+export const DISCOVERY_CARD_Y_GAP        = 0.18;
+/** Background fill alpha — ~70% opaque so the scene reads faintly through the
+ *  card while the text stays fully opaque. */
+export const DISCOVERY_CARD_BG_ALPHA     = 0.72;
+/** Side glyphs keyed by entity type — mirrors the GLYPHS map the 2D Encounter
+ *  Dialog uses (src/ui.js `_showEncounterDialog`) so 3D and 2D agree. */
+export const DISCOVERY_GLYPHS = Object.freeze({
+  hero: '⚔', witch: '✦', survivor: '☺', soldier: '♟',
+  zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙',
+});
 
 /** Compute the local-space XZ offset for a combat card so attacker and
  *  defender cards sit on opposite outer sides of the standees along the
@@ -17819,6 +18188,185 @@ export function paintUnitIconBadge(ctx, opts) {
     ctx.drawImage(portraitImg, cx - innerR, cy - innerR, innerR * 2, innerR * 2);
   }
   ctx.restore();
+}
+
+// ─── Discovery readout helpers (exported for tests) ──────────────────────────
+
+/**
+ * Build the display model for a survivor/zombie discovery card from a live
+ * entity (or the encounterSurvivor data object the resolver hands main.js —
+ * both expose `name/title/hp/maxHp/type/color`, and a live Entity also exposes
+ * `getAttack()/getDefense()`). Pure — no Babylon / DOM. Mirrors
+ * `combatReadoutModel` so the renderer method and the tests share one source
+ * of truth for the strings painted onto the card.
+ *
+ * `opts.text` is the discovery sentence (computed by the orchestrator from the
+ * discovery method — explore / horn / power_node / zombie).
+ */
+export function discoveryReadoutModel(entity, opts = {}) {
+  const e = entity || {};
+  const attack  = typeof e.getAttack  === 'function' ? e.getAttack()  : (e.attack  ?? 0);
+  const defense = typeof e.getDefense === 'function' ? e.getDefense() : (e.defense ?? 0);
+  const hp    = Number.isFinite(e.hp)    ? e.hp    : 0;
+  const maxHp = Number.isFinite(e.maxHp) ? e.maxHp : 1;
+  const name  = e.name || (e.type === 'zombie' ? 'Zombie' : 'Survivor');
+  const title = e.title || '';
+  const abilityLabel = e.abilityLabel || '';
+  const glyph = DISCOVERY_GLYPHS[e.type] ?? '?';
+  const accentColor = e.color || '#d4c9b0';
+  const statLine = `HP ${hp}/${maxHp} · ATK ${attack} · DEF ${defense}`;
+  const text = typeof opts.text === 'string' ? opts.text : '';
+  return { name, title, glyph, accentColor, hp, maxHp, attack, defense, abilityLabel, statLine, text };
+}
+
+/** Greedy word-wrap. Pure (uses only `ctx.measureText`). Exported for tests. */
+export function wrapDiscoveryText(ctx, text, maxWidth) {
+  const words = String(text || '').split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+  const lines = [];
+  let line = words[0];
+  for (let i = 1; i < words.length; i++) {
+    const candidate = `${line} ${words[i]}`;
+    const w = ctx.measureText ? ctx.measureText(candidate).width : candidate.length * 10;
+    if (w > maxWidth && line) {
+      lines.push(line);
+      line = words[i];
+    } else {
+      line = candidate;
+    }
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+/**
+ * Paint the discovery card into a 2D canvas context: a ~70%-opaque rounded
+ * panel with an accent border, a portrait disc (or glyph fallback) at the top,
+ * the unit name + title, a stat line, an optional ability label, and the
+ * wrapped discovery sentence. Text is painted fully opaque over the
+ * semi-transparent background.
+ *
+ * Pure with respect to its inputs (no Babylon, no canvas creation) — the
+ * Babylon-side `addDiscoveryReadout` creates the DynamicTexture and calls here.
+ */
+export function paintDiscoveryCard(ctx, opts) {
+  const {
+    width, height,
+    name, title, glyph, accentColor = '#d4c9b0',
+    hp = 0, maxHp = 1,
+    statLine = '', abilityLabel = '', text = '',
+    portraitImg = null, portraitRect = null,
+    bgAlpha = DISCOVERY_CARD_BG_ALPHA,
+  } = opts;
+  const W = width;
+  const H = height;
+  const pad = Math.round(W * 0.06);
+
+  ctx.clearRect(0, 0, W, H);
+
+  // ~70%-opaque rounded panel.
+  const radius = Math.round(W * 0.05);
+  ctx.fillStyle = `rgba(18,15,24,${bgAlpha})`;
+  roundedRectPath(ctx, 2, 2, W - 4, H - 4, radius);
+  ctx.fill();
+  // Accent border (entity tint).
+  ctx.lineWidth = Math.max(3, Math.round(W * 0.008));
+  ctx.strokeStyle = accentColor;
+  roundedRectPath(ctx, 2, 2, W - 4, H - 4, radius);
+  ctx.stroke();
+
+  // Portrait disc (or glyph fallback) — centred near the top.
+  const discR = Math.round(W * 0.13);
+  const discCx = W / 2;
+  const discCy = pad + discR;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(discCx, discCy, discR, 0, Math.PI * 2);
+  ctx.closePath();
+  ctx.clip();
+  ctx.fillStyle = 'rgba(225,220,210,1)';
+  ctx.fillRect(discCx - discR, discCy - discR, discR * 2, discR * 2);
+  if (portraitImg && portraitRect) {
+    ctx.drawImage(
+      portraitImg,
+      portraitRect.x, portraitRect.y, portraitRect.size, portraitRect.size,
+      discCx - discR, discCy - discR, discR * 2, discR * 2,
+    );
+  } else if (portraitImg) {
+    ctx.drawImage(portraitImg, discCx - discR, discCy - discR, discR * 2, discR * 2);
+  } else {
+    ctx.fillStyle = accentColor;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = `${Math.round(discR * 1.3)}px sans-serif`;
+    ctx.fillText(glyph ?? '?', discCx, discCy + discR * 0.05);
+  }
+  ctx.restore();
+  // Accent ring around the disc.
+  ctx.lineWidth = Math.max(2, Math.round(W * 0.007));
+  ctx.strokeStyle = accentColor;
+  ctx.beginPath();
+  ctx.arc(discCx, discCy, discR, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  let y = discCy + discR + Math.round(H * 0.10);
+
+  // Name (glyph + name), accent-tinted.
+  ctx.fillStyle = accentColor;
+  ctx.font = `bold ${Math.round(H * 0.075)}px sans-serif`;
+  ctx.fillText(`${glyph} ${name}`.trim(), W / 2, y);
+  y += Math.round(H * 0.06);
+
+  // Title (italic, muted).
+  if (title) {
+    ctx.fillStyle = '#9a8a7a';
+    ctx.font = `italic ${Math.round(H * 0.048)}px sans-serif`;
+    ctx.fillText(title, W / 2, y);
+    y += Math.round(H * 0.055);
+  }
+
+  // Stat line.
+  ctx.fillStyle = '#c8b89a';
+  ctx.font = `${Math.round(H * 0.052)}px sans-serif`;
+  ctx.fillText(statLine, W / 2, y);
+  y += Math.round(H * 0.06);
+
+  // Ability label (cyan), if any.
+  if (abilityLabel) {
+    ctx.fillStyle = '#88eeff';
+    ctx.font = `${Math.round(H * 0.045)}px sans-serif`;
+    ctx.fillText(`✦ ${abilityLabel}`, W / 2, y);
+    y += Math.round(H * 0.055);
+  }
+
+  // Discovery sentence — wrapped, muted parchment colour.
+  ctx.fillStyle = '#b8a88a';
+  ctx.font = `${Math.round(H * 0.05)}px sans-serif`;
+  const lines = wrapDiscoveryText(ctx, text, W - pad * 2);
+  const lineH = Math.round(H * 0.062);
+  y += Math.round(H * 0.02);
+  for (const line of lines) {
+    ctx.fillText(line, W / 2, y);
+    y += lineH;
+  }
+}
+
+/** Trace a rounded-rect path (no fill/stroke). Shared by the discovery card. */
+function roundedRectPath(ctx, x, y, w, h, r) {
+  const radius = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.lineTo(x + w - radius, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
+  ctx.lineTo(x + w, y + h - radius);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
+  ctx.lineTo(x + radius, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
+  ctx.lineTo(x, y + radius);
+  ctx.quadraticCurveTo(x, y, x + radius, y);
+  ctx.closePath();
 }
 
 /**

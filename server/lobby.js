@@ -1868,7 +1868,8 @@ export function startGame(playerId, roomId) {
 
   // Initialize GameState
   const state      = new GameState(anyWitchAI, anyHeroAI, room.config.mapSize, room.config.nodeCount);
-  state.fogOfWar   = room.config.fog;
+  // Legacy 'full' fog (retired) degrades to 'partial'.
+  state.fogOfWar   = room.config.fog === 'full' ? 'partial' : room.config.fog;
   room.state       = state;
   room.status      = 'playing';
   room.phase       = RoomPhase.PLANNING;  // game starts in planning

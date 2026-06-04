@@ -339,10 +339,11 @@ export function deserializeState(snap) {
   }
   state.postRoundEvents      = [...(snap.postRoundEvents || [])];
   state.nodeSpawnedSurvivors = [...(snap.nodeSpawnedSurvivors || [])];
-  // Backward compat: old saves stored fogOfWar as boolean
+  // Backward compat: old saves stored fogOfWar as boolean; the retired 'full'
+  // mode degrades losslessly to 'partial'.
   state.fogOfWar             = typeof snap.fogOfWar === 'boolean'
     ? (snap.fogOfWar ? 'partial' : 'none')
-    : (snap.fogOfWar ?? 'none');
+    : (snap.fogOfWar === 'full' ? 'partial' : (snap.fogOfWar ?? 'none'));
   // Restore per-faction explored hex Sets. Backward compat: if missing, keep the
   // constructor's defaults (which initializes empty Sets for all registered factions).
   if (snap.exploredHexes) {

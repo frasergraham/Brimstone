@@ -90,6 +90,11 @@ const ALLOWLIST = Object.freeze({
   // Hardcoded tutorial scenarios (2-faction by design).
   'src/tutorial/tutorial-config.js': 1,
   'src/tutorial.js':                 1,
+
+  // Debug/admin tooling — cosmetic faction-keyed colour in the combat tester's
+  // death-flash (hero gold vs witch purple). Not shipped game logic; low value
+  // to abstract. Ratchet down opportunistically if the tool is reworked.
+  'src/tools/combat-tester-ui.js':   1,
 });
 
 function walkJs(dir, acc = []) {

@@ -1,5 +1,23 @@
 [
   {
+    "version": "1.5.1",
+    "date": "2026-06-04",
+    "summary": "New features, and bug fixes",
+    "notes": [
+      "Cobblestone road texture — uniform width, linear V map",
+      "Survivor/zombie discovery becomes camera-zoom cinematic readout",
+      "Drop \"full\" fog mode entirely + simplify T-key to on/off toggle",
+      "Paladin runs (running.glb) on multi-hex moves, walks single-hop",
+      "Drop horse from all weighted loot tables (animation deferred)",
+      "Discovery readout syncs standees on demand so a just-spawned survivor anchors",
+      "Disable running animation behind a feature flag (asset issue)",
+      "Running fallback ratio when stride track is unusable",
+      "Running speed scales with distance, not crammed into MOVE_ANIM_MS",
+      "Gitignore editable .pxd source-art files",
+      "Allowlist combat-tester-ui faction-colour check"
+    ]
+  },
+  {
     "version": "1.5.0",
     "date": "2026-05-29",
     "summary": "New features, and bug fixes",

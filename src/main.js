@@ -51,6 +51,7 @@ import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
 import { processStoryTriggers } from './campaign/missions.js';
 import { buildMissionMap } from './campaign/mission-map.js';
 import { run3DCombatCardHold } from './combat-cinematic.js';
+import { runDiscoveryReadout, discoveryText } from './discovery-cinematic.js';
 import { playFastCombatDisplay } from './combat-fast.js';
 import {
   campaignMissionSaveKey, loadCampaignMissionSave, deleteCampaignMissionSave,
@@ -315,9 +316,9 @@ function init(witchIsAI, heroIsAI, autoplay = false, humanFactionId = null) {
     const def = getFaction(humanFactionId);
     state.swapLeaderToFaction(def.side, humanFactionId);
   }
-  // Allow global fog-of-war override from the setup screen select.
-  const fogSel = document.getElementById('select-fog-of-war');
-  if (fogSel) state.fogOfWar = fogSel.value;
+  // Fog of war is always on for human-vs-AI (GameState defaults it to 'partial'
+  // when any side is AI, 'none' for two-human games). The AI-debug toggle below
+  // can still force it off for AI-vs-AI debugging.
 
   const thinkDelay = autoplay ? 0 : undefined;
   witchAI = witchIsAI ? new WitchAIEngine(state, redraw, thinkDelay) : null;
@@ -793,7 +794,7 @@ async function _runLocalResolution(skipSummary = false) {
   // Show encounter dialogs for survivors spawned at power nodes during endRound
   if (ui && !_autoplay && state.nodeSpawnedSurvivors?.length) {
     for (const s of state.nodeSpawnedSurvivors) {
-      await new Promise(resolve => ui._showEncounterDialog(s, resolve, 'power_node'));
+      await _showDiscovery(s, 'power_node');
     }
   }
 
@@ -961,6 +962,38 @@ function _playAttackIntroAnim(actorSnap, targetSnap, fromCol, fromRow, toCol, to
 function _combatContinueBtn() {
   if (typeof document === 'undefined') return null;
   return document.getElementById('combat-continue-btn');
+}
+
+// True when survivor/zombie discoveries should use the 3D cinematic discovery
+// readout (camera zoom + billboarded card + Continue gate) instead of the 2D
+// Encounter Dialog modal: only the 3D renderer, only at cinematic speed, and
+// never during autoplay. Matches the `_is3DCinematic && _cinematic` semantics
+// used for combat (defined locally inside _animateResolutionSteps), but reads
+// only module-level state so the discovery call sites in both
+// _runLocalResolution and _animateResolutionSteps can share it.
+function _is3DDiscoveryActive() {
+  const speed = ui?.speedMode ?? 'cinematic';
+  return !_autoplay && !!(renderer?.is3D) && speed === 'cinematic';
+}
+
+// Present a survivor/zombie discovery. In 3D cinematic mode this runs the
+// billboarded discovery readout; otherwise (2D, fast/vfast, autoplay, or when
+// the live entity / standee can't be resolved) it falls back to the legacy
+// Encounter Dialog modal. `unitData` is the resolver's encounterSurvivor data
+// object (carries `id` linking it to the live entity). Resolves when dismissed.
+async function _showDiscovery(unitData, method = 'explore') {
+  if (_is3DDiscoveryActive() && unitData?.id != null) {
+    const entity = state.entities.find(e => e && e.id === unitData.id) ?? null;
+    if (entity) {
+      const ran = await runDiscoveryReadout({
+        renderer, state, entity,
+        text: discoveryText(unitData, method),
+        getContinueButton: _combatContinueBtn,
+      });
+      if (ran) return;
+    }
+  }
+  await new Promise(resolve => ui._showEncounterDialog(unitData, resolve, method));
 }
 
 // 3D cinematic combat resolution (G4 Phase 2+3): NO modal dialog in 3D — the
@@ -1570,7 +1603,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       for (const entry of pendingDialogs) {
         redrawFn();
         if (entry.encounterUnit) {
-          await new Promise(resolve => ui._showEncounterDialog(entry.encounterUnit, resolve));
+          await _showDiscovery(entry.encounterUnit);
         } else {
           await new Promise(resolve => ui._showResultDialog(entry.log, resolve));
         }
@@ -2028,7 +2061,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       if (actor) { ui._showLootFlashes(actor, result.lootItems ?? []); hadExplore = true; }
       redrawFn();
       if (!_suppressDialogs && result.encounterSurvivor) {
-        await new Promise(resolve => ui._showEncounterDialog(result.encounterSurvivor, resolve, 'explore'));
+        await _showDiscovery(result.encounterSurvivor, 'explore');
       }
     }
     // Wait for loot flashes so they're fully visible before the next step
@@ -2074,7 +2107,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         if (survivors.length > 0) {
           // Show encounter card for each survivor found
           for (const s of survivors) {
-            await new Promise(resolve => ui._showEncounterDialog(s, resolve, 'horn'));
+            await _showDiscovery(s, 'horn');
           }
         } else if (result.log?.length) {
           // No survivor — show the "nothing found" result dialog
@@ -2737,7 +2770,7 @@ function _resumeCampaignMission(missionId) {
     existingState._waveProcessor = () =>
       processWaves(existingState, missionDef.waves, _createEnemyEntity);
   }
-  existingState.fogOfWar = existingState.fogOfWar || 'full';
+  existingState.fogOfWar = existingState.fogOfWar || 'partial';
   if (missionDef.lootOverrides) existingState.lootOverrides = missionDef.lootOverrides;
   if (missionDef.aiBudgetBonus) existingState.campaignAIBudgetBonus = missionDef.aiBudgetBonus;
 
@@ -3098,7 +3131,7 @@ function _initCampaignMission(missionDef) {
   // the conductor provides scripted witch plans directly.
   const witchIsAI = !missionDef.conductorSteps;
   state = new GameState(witchIsAI, false, missionDef.mapSize, null, mapData);
-  state.fogOfWar = missionDef.isTutorial ? 'none' : 'full';
+  state.fogOfWar = missionDef.isTutorial ? 'none' : 'partial';
 
   // Apply custom phase cycle from mission definition
   if (missionDef.phaseCycle) {
@@ -5590,10 +5623,6 @@ document.getElementById('btn-async-refresh')?.addEventListener('click', () => {
 document.getElementById('btn-cancel-wait').addEventListener('click', () => {
   _showOnlineScreen();
 });
-
-function _fogSelected() {
-  return document.getElementById('select-fog-of-war')?.value ?? 'partial';
-}
 
 // ── Node count selectors — populate options based on map size ─────────────────
 

@@ -54,7 +54,10 @@ const dirs = ['src', 'assets', 'server'];
 for (const dir of dirs) {
   cpSync(resolve(ROOT, dir), resolve(WWW, dir), {
     recursive: true,
-    filter: (src) => !src.includes('/assets/generated'),
+    // Skip generated output and editable source-art files (e.g. Pixelmator
+    // `.pxd` docs kept alongside their exported runtime textures) — they're
+    // large and never loaded at runtime, so they'd only bloat the app bundle.
+    filter: (src) => !src.includes('/assets/generated') && !src.endsWith('.pxd'),
   });
 }
 

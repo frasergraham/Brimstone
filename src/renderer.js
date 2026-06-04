@@ -13,7 +13,7 @@ import {
   BUILDING_ENTRANCE_NUDGE,
 } from './building-render.js';
 import { ENTITY_COLOR, EntityType, SurvivorAbility, isLeaderType } from './entities.js';
-import { getVisiblePositions, sightRange, buildFogMovementHexes, computeLineOfSight } from './actions.js';
+import { getVisiblePositions, sightRange, computeLineOfSight } from './actions.js';
 import { getFaction } from './factions.js';
 import { getFactionTheme, NEUTRAL_NODE_FILL } from './theme.js';
 import { nodeController, Phase } from './game.js';
@@ -1292,25 +1292,12 @@ export class Renderer {
       fogVisibleHexes = this._buildFogVisibleHexes(observerOwner);
     }
 
-    // For full fog, compute the set of "known" hexes (sight + movement + explored).
-    // Unseen hexes outside this set are not rendered at all — the dark canvas
-    // background shows through instead of painting an opaque black overlay.
-    let fogKnownHexes = null;
-    if (fogActive && state.fogOfWar === 'full' && fogVisibleHexes) {
-      const observerOwner = humanIsHero ? 'hero' : 'witch';
-      const lastStep = this.planGhostSteps?.at(-1);
-      const projectedPositions = lastStep?.positions ?? null;
-      const moveSet = buildFogMovementHexes(state, observerOwner, projectedPositions);
-      const explored = state.exploredHexes?.[observerOwner];
-      // Update explored hex memory with current sight + movement sets
-      if (explored) {
-        for (const k of fogVisibleHexes) explored.add(k);
-        for (const k of moveSet) explored.add(k);
-      }
-      fogKnownHexes = new Set(fogVisibleHexes);
-      for (const k of moveSet) fogKnownHexes.add(k);
-      if (explored) for (const k of explored) fogKnownHexes.add(k);
-    }
+    // Partial fog never culls whole hexes — every tile is drawn and the veil
+    // just dims those out of sight. `fogKnownHexes` stays null; the downstream
+    // `if (fogKnownHexes && …)` guards in the terrain/river/road passes are
+    // inert null-checks kept as generic culling hooks. (The old 'full' mode,
+    // which restricted rendering to a sight+movement+explored set, was removed.)
+    const fogKnownHexes = null;
 
     // Pass 1: terrain tiles (grass, forest, dirt, road bg, river bg, bridges).
     // Building ENTRANCES now draw only their base terrain here (the building
@@ -1346,7 +1333,7 @@ export class Renderer {
     if (fogActive) {
       const observerOwner = humanIsHero ? 'hero' : (humanIsWitch ? 'witch' : null);
       if (observerOwner) {
-        this._drawFogLayer(observerOwner, state.fogOfWar, fogVisibleHexes, vr, fogKnownHexes);
+        this._drawFogLayer(observerOwner, fogVisibleHexes, vr);
       }
     }
 
@@ -1929,31 +1916,12 @@ export class Renderer {
     return visibleSet;
   }
 
-  _drawFogLayer(observerOwner, mode, sightSet, vr, fogKnownHexes) {
-    const ctx   = this.ctx;
-    const hs    = this.hexSize;
-    const state = this.state;
-
-    if (mode === 'partial') {
-      // Original behavior: dim overlay outside sight range
-      for (let row = vr.minRow; row <= vr.maxRow; row++) {
-        for (let col = vr.minCol; col <= vr.maxCol; col++) {
-          if (sightSet.has(hexKey(col, row))) continue;
-          this._fillFogHex(col, row, hs, 'rgba(0,0,0,0.55)');
-        }
-      }
-      return;
-    }
-
-    // Full fog: two tiers — bright (no overlay) / dimmed.
-    // Unseen hexes are not rendered at all (terrain passes skip them),
-    // so the dark canvas background shows through naturally.
+  _drawFogLayer(observerOwner, sightSet, vr) {
+    const hs = this.hexSize;
+    // Partial fog: dim overlay on every hex outside the observer's sight range.
     for (let row = vr.minRow; row <= vr.maxRow; row++) {
       for (let col = vr.minCol; col <= vr.maxCol; col++) {
-        const k = hexKey(col, row);
-        if (sightSet.has(k)) continue; // bright — no overlay
-        if (fogKnownHexes && !fogKnownHexes.has(k)) continue; // unseen — not rendered
-        // Dimmed — terrain visible but darkened (explored / movement range)
+        if (sightSet.has(hexKey(col, row))) continue;
         this._fillFogHex(col, row, hs, 'rgba(0,0,0,0.55)');
       }
     }

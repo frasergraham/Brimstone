@@ -8,8 +8,13 @@
 //                | 'staff' | 'dagger'
 //                (weapon-vs-resource is determined via ITEMS[id].kind,
 //                 not a 'weapon:' prefix — see src/items.js)
-//    Special   : 'horse'     — found in the Stable (most likely), Inn, and some Houses
-//                'nothing'   — empty result
+//    Special   : 'nothing'   — empty result
+//
+//  NOTE: 'horse' is intentionally NOT rolled as procedural loot — horses are
+//  disabled as a drop until per-unit-skeleton animation support ships. The
+//  HORSE concept (movement range 2, riding pose, equip handling) still works
+//  for existing horses in older saves / authored missions; we just no longer
+//  roll new ones into any weighted table below.
 //
 //  Survivors are NOT found via loot — they are pre-placed on the map
 //  and encountered by stepping onto their tile.
@@ -41,7 +46,6 @@ export const LOOT_CONFIG = {
       { type: 'food',          weight: 40 },
       { type: 'herbs',         weight: 19 },
       { type: 'silver',        weight: 13 },
-      { type: 'horse',         weight: 22 },
       { type: 'nothing',       weight:  6 },
     ],
 
@@ -61,7 +65,6 @@ export const LOOT_CONFIG = {
     barn: [
       { type: 'food',          weight: 48 },
       { type: 'wood',          weight: 34 },
-      { type: 'horse',         weight: 12 },
       { type: 'nothing',       weight:  6 },
     ],
 
@@ -87,9 +90,9 @@ export const LOOT_CONFIG = {
       { type: 'nothing',       weight:  5 },
     ],
 
-    // Best chance for a horse (also found at inn, barn, and houses)
+    // Formerly the best source of horses; horse drops are disabled, so the
+    // stable now yields feed/supplies only until horses are re-enabled.
     stable: [
-      { type: 'horse',         weight: 65 },
       { type: 'food',          weight: 20 },
       { type: 'wood',          weight: 11 },
       { type: 'nothing',       weight:  4 },
@@ -107,7 +110,6 @@ export const LOOT_CONFIG = {
       { type: 'dagger', weight: 17 },
       { type: 'metal',         weight: 13 },
       { type: 'herbs',         weight:  8 },
-      { type: 'horse',         weight: 11 },
     ],
 
     graveyard: [
@@ -155,7 +157,6 @@ export const LOOT_CONFIG = {
       { type: 'metal',         weight: 20 },
       { type: 'wood',          weight: 11 },
       { type: 'herbs',         weight:  3 },
-      { type: 'horse',         weight:  4 },
     ],
 
   },

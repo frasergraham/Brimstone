@@ -450,6 +450,7 @@ export class HeroFaction extends Faction {
               const horseNote = s.items['horse'] ? ' (arrives on horseback!)' : '';
               state.addLog(`✨ The node calls to the living — a survivor emerges!${horseNote}`, 'hero', state.playerColorFor(hero));
               state.nodeSpawnedSurvivors.push({
+                id: s.id,
                 type: 'survivor',
                 name: s.name,
                 title: s.title,
@@ -481,6 +482,7 @@ export class HeroFaction extends Faction {
         `☺ ${entity.name} the ${entity.title} steps out of hiding and joins the party! (HP ${entity.hp}/${entity.maxHp} · ATK ${entity.getAttack()} · DEF ${entity.getDefense()}${abilityNote})`
       ],
       encounterSurvivor: {
+        id: entity.id,
         type: 'survivor',
         name: entity.name, title: entity.title,
         hp: entity.hp, maxHp: entity.maxHp,
@@ -581,6 +583,7 @@ export class WitchFaction extends Faction {
         `† A cowering survivor is found… raised as a zombie! (HP ${entity.hp}/${entity.maxHp} · ATK ${entity.getAttack()} · DEF ${entity.getDefense()})`
       ],
       encounterSurvivor: {
+        id: entity.id,
         type: 'zombie',
         name: 'Zombie',
         hp: entity.hp, maxHp: entity.maxHp,

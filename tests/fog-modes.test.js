@@ -1,15 +1,15 @@
-// Tests for three-mode fog of war: none / partial / full
+// Tests for two-mode fog of war: none / partial
 //   - fogOfWar string enum in GameState
 //   - getFogReachableHexes ignores enemies
 //   - buildFogMovementHexes unions all friendly entities
 //   - exploredHexes memory persists
-//   - state-sync backward compatibility for boolean fogOfWar
+//   - state-sync backward compatibility for boolean fogOfWar + retired 'full'
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { hexKey } from '../src/hex.js';
 import {
-  getFogReachableHexes, buildFogMovementHexes, sightRange,
+  getFogReachableHexes, buildFogMovementHexes,
 } from '../src/actions.js';
 import { GameState, Phase } from '../src/game.js';
 import { createHero, createWitch, createMinion } from '../src/entities.js';
@@ -29,7 +29,7 @@ function makeTinyState() {
     entities: [],
     tiles: new Map(),
     exploredHexes: { hero: new Set(), witch: new Set() },
-    fogOfWar: 'full',
+    fogOfWar: 'partial',
   };
   for (let row = 0; row < 5; row++) {
     for (let col = 0; col < 5; col++) {
@@ -307,84 +307,6 @@ describe('updateExploredHexes', () => {
   });
 });
 
-// ── Fully-fogged hex click guard ───────────────────────────────────────────
-// Tests the condition used by UIController._isFullyFogged: a hex is fully black
-// when it is NOT in sightSet, NOT in moveSet, and NOT in exploredHexes.
-
-describe('fully-fogged hex detection', () => {
-  test('hex far from any hero unit is fully fogged', () => {
-    const state = makeTinyState();
-    const hero = createHero(0, 0, 'hero');
-    placeEntity(state, hero);
-
-    // Day phase: sight range 3. On a 5x5 map, (4,4) is distance 4+ from (0,0)
-    state.phase = Phase.DAY;
-    const range = sightRange(state.phase, false); // 3
-
-    const moveSet = buildFogMovementHexes(state, 'hero');
-    const explored = state.exploredHexes?.hero;
-
-    const k = hexKey(4, 4);
-    // (4,4) should not be in sight, moveSet, or explored
-    assert.ok(!moveSet.has(k), 'far hex not in moveSet');
-    assert.ok(!explored?.has(k), 'far hex not explored');
-    // Check sight manually — hexDistance(0,0,4,4) > 3
-    // So this hex would be fully fogged
-  });
-
-  test('hex within sight range is NOT fully fogged', () => {
-    const state = makeTinyState();
-    const hero = createHero(2, 2, 'hero');
-    placeEntity(state, hero);
-    state.phase = Phase.DAY; // sight range 3
-
-    // (2,3) is distance 1 from hero — within sight
-    const moveSet = buildFogMovementHexes(state, 'hero');
-    const k = hexKey(2, 3);
-    // Should be in moveSet (reachable) since it's adjacent
-    assert.ok(moveSet.has(k), 'adjacent hex is in moveSet');
-  });
-
-  test('explored hex is NOT fully fogged even if out of sight', () => {
-    const state = makeTinyState();
-    const hero = createHero(0, 0, 'hero');
-    placeEntity(state, hero);
-    state.phase = Phase.NIGHT; // sight range 1
-
-    // Mark (4,4) as explored
-    state.exploredHexes.hero.add(hexKey(4, 4));
-
-    const moveSet = buildFogMovementHexes(state, 'hero');
-    const explored = state.exploredHexes.hero;
-    const k = hexKey(4, 4);
-
-    // May not be in moveSet or sight, but IS explored — not fully fogged
-    assert.ok(explored.has(k), 'explored hex is in explored set');
-  });
-
-  test('hex in moveSet is NOT fully fogged', () => {
-    const state = makeTinyState();
-    const hero = createHero(2, 2, 'hero');
-    placeEntity(state, hero);
-    state.phase = Phase.NIGHT; // sight range 1
-
-    const moveSet = buildFogMovementHexes(state, 'hero');
-    // Hero at (2,2) — adjacent hexes should be in moveSet
-    assert.ok(moveSet.has(hexKey(2, 1)), 'adjacent hex in moveSet');
-    assert.ok(moveSet.has(hexKey(2, 3)), 'adjacent hex in moveSet');
-  });
-
-  test('no fog or partial fog means hex is never fully fogged', () => {
-    // _isFullyFogged returns false immediately if fogOfWar !== 'full'
-    const state = makeTinyState();
-    state.fogOfWar = 'none';
-    assert.equal(state.fogOfWar, 'none');
-    state.fogOfWar = 'partial';
-    assert.equal(state.fogOfWar, 'partial');
-    // These modes never produce fully-black hexes — tested via the early return
-  });
-});
-
 // ── State serialization backward compat ─────────────────────────────────────
 
 describe('fogOfWar state-sync backward compatibility', () => {
@@ -412,9 +334,9 @@ describe('fogOfWar state-sync backward compatibility', () => {
     assert.equal(restored.fogOfWar, 'none');
   });
 
-  test('string values preserved through round-trip', async () => {
+  test('two-state values preserved through round-trip', async () => {
     const { serializeState, deserializeState } = await import('../server/state-sync.js');
-    for (const mode of ['none', 'partial', 'full']) {
+    for (const mode of ['none', 'partial']) {
       const state = new GameState(true, false);
       state.fogOfWar = mode;
       state.markExplored('hero', new Set([hexKey(3, 3)]));
@@ -423,5 +345,15 @@ describe('fogOfWar state-sync backward compatibility', () => {
       assert.equal(restored.fogOfWar, mode, `mode ${mode} preserved`);
       assert.ok(restored.exploredHexes.hero.has(hexKey(3, 3)), 'explored hex preserved');
     }
+  });
+
+  test('retired "full" mode degrades to partial on deserialize', async () => {
+    const { serializeState, deserializeState } = await import('../server/state-sync.js');
+    const state = new GameState(true, false);
+    state.fogOfWar = 'partial';
+    const snap = serializeState(state);
+    snap.fogOfWar = 'full'; // simulate a legacy save authored under the old mode
+    const restored = deserializeState(snap);
+    assert.equal(restored.fogOfWar, 'partial');
   });
 });

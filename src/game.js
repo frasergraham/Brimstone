@@ -184,10 +184,9 @@ export class GameState {
     this.witchIsAI = witchIsAI;
     this.heroIsAI  = heroIsAI;
 
-    // Fog of war mode: 'none' | 'partial' | 'full'
+    // Fog of war mode: 'none' | 'partial'
     //   none    — everything visible
     //   partial — terrain visible, enemies hidden outside sight range
-    //   full    — hexes outside movement+sight range are black; explored hexes dimmed
     this.fogOfWar = (witchIsAI || heroIsAI) ? 'partial' : 'none';
 
     // Hexes that have been seen at least once per faction (full fog memory).

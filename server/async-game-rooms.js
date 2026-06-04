@@ -64,7 +64,8 @@ export function createAsyncGameRoom(playerId, playerName, config) {
 
   // Generate the map immediately so the host can plan while waiting
   const state = new GameState(true, true, gameConfig.mapSize || 'standard');
-  state.fogOfWar = gameConfig.fog || 'partial';
+  // Legacy 'full' fog (retired) degrades to 'partial'.
+  state.fogOfWar = (!gameConfig.fog || gameConfig.fog === 'full') ? 'partial' : gameConfig.fog;
 
   // Patch the host's player record; opponent stays AI placeholder for now
   for (const p of state.players) {
