@@ -40,3 +40,7 @@ specs/.supervisor-state.json
 assets/textures/*
 !assets/textures/terrain/
 !assets/textures/terrain/**
+
+# Editable source-art working files (e.g. Pixelmator .pxd) — kept locally. Only
+# the exported runtime texture (e.g. assets/road-cobblestone.png) is tracked.
+*.pxd
