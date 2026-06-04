@@ -30,6 +30,9 @@ files:
       - "!node_modules/https-proxy-agent/**"
       - "!node_modules/sharp/**"
       - "!assets/generated/**"
+      # Editable source-art working files (Pixelmator .pxd etc.) — large and
+      # never loaded at runtime; keep them out of the packaged app.
+      - "!**/*.pxd"
   - "server/resolver.js"
   - "server/state-sync.js"
 
