@@ -63,7 +63,7 @@ import { MAP_SIZES } from '../map.js';
 import { createTabController } from './tab-controller.js';
 import { attachEditorCanvasControls } from './editor-canvas-input.js';
 import { loadMissionJSON, validateBuildingFootprints, KNOWN_OBJECTIVE_TYPES } from '../campaign/json-mission.js';
-import { missionJSONUrl } from '../campaign/mission-catalog.js';
+import { missionJSONUrl, missionFileName } from '../campaign/mission-catalog.js';
 import { CONDITIONS } from '../campaign/condition-registry.js';
 
 // Absolute asset root for both the 2D editor renderer AND the 3D preview.
@@ -926,9 +926,13 @@ export function initEditor(doc = document, initOpts = {}) {
     } catch (err) {
       return { ok: false, message: `Cannot save: ${err.message}` };
     }
-    downloadJSON(doc, json, `${json.id || 'mission'}.json`);
+    // Name the download after the bundled on-disk file (ChXMY.json for catalog
+    // missions, <id>.json otherwise) so an export drops straight into
+    // src/campaign/missions/ as a replacement.
+    const fname = missionFileName(json.id || 'mission');
+    downloadJSON(doc, json, fname);
     editor.markClean();
-    return { ok: true, message: `Validated — downloaded ${json.id}.json` };
+    return { ok: true, message: `Validated — downloaded ${fname}` };
   }
 
   // ── New… — the creation flow (item 4 + E1). Pick a LOCKED mode + size,

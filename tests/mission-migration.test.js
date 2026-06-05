@@ -32,6 +32,7 @@ import { buildMissionMap } from '../src/campaign/mission-map.js';
 import { TileType, BuildingType, ResourceType, PathType, StructureType, legacyTileType } from '../src/tiles.js';
 import { hexKey } from '../src/hex.js';
 import { resolveCondition } from '../src/campaign/condition-registry.js';
+import { missionFileName } from '../src/campaign/mission-catalog.js';
 import { resolveConductorScript } from '../src/campaign/conductor-scripts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -50,7 +51,7 @@ const MISSIONS = [
 ];
 
 function readMission(id) {
-  return JSON.parse(readFileSync(path.join(MISSIONS_DIR, `${id}.json`), 'utf8'));
+  return JSON.parse(readFileSync(path.join(MISSIONS_DIR, missionFileName(id)), 'utf8'));
 }
 
 // ── Snapshot helpers (mirror scripts/migrate-missions.js) ─────────────────────
@@ -249,10 +250,15 @@ for (const { id, campaignId } of MISSIONS) {
 // in the original JS builders/missions and must survive the snapshot.
 
 describe('migration spot-checks', () => {
-  test('prologue: 3 attack-1 zombies + 1 hero_kills golem wave, daytime cycle', () => {
+  test('prologue: 4 zombies (3 attack-1 + 1 full-strength) + 1 hero_kills golem wave, daytime cycle', () => {
     const m = readMission('prologue');
-    assert.equal(m.enemyUnits.length, 3);
-    assert.ok(m.enemyUnits.every((e) => e.type === 'zombie' && e.overrides.attack === 1));
+    assert.equal(m.enemyUnits.length, 4);
+    assert.ok(m.enemyUnits.every((e) => e.type === 'zombie'));
+    // Three zombies are weakened to attack 1; the fourth is deliberately
+    // full-strength (no attack override). Golem triggers after 3 kills, so it
+    // appears while the last zombie still stands.
+    assert.equal(m.enemyUnits.filter((e) => e.overrides?.attack === 1).length, 3);
+    assert.equal(m.enemyUnits.filter((e) => e.overrides?.attack === undefined).length, 1);
     assert.equal(m.waves.length, 1);
     assert.equal(m.waves[0].trigger, 'hero_kills');
     assert.equal(m.waves[0].count, 3);

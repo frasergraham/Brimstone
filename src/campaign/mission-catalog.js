@@ -13,32 +13,50 @@
 // `title` mirrors each mission JSON's top-level `title` for display. The
 // mission-catalog test asserts these stay in sync with the actual JSON files,
 // so drift is caught rather than silently shipped.
+//
+// `file` is the on-disk basename (no extension) under ./missions/. It follows
+// the ChXMY chapter/mission convention and is deliberately decoupled from the
+// mission `id`: ids are persisted in campaign saves and stats rows, so they
+// must stay stable even as files get renamed.
 
 /**
  * Bundled missions in canonical campaign order (drives the campaign mission
  * list and `firstMission === missions[0].id`).
  *
- * @type {ReadonlyArray<{ id: string, campaignId: string, title: string }>}
+ * @type {ReadonlyArray<{ id: string, campaignId: string, title: string, file: string }>}
  */
 export const MIGRATED_MISSIONS = Object.freeze([
-  { id: 'tutorial',            campaignId: 'prologue',                 title: "The Road to Caleb's Hollow" },
-  { id: 'prologue',            campaignId: 'calebs_hollow_prologue',   title: 'The Awakening' },
-  { id: 'gathering_survivors', campaignId: 'calebs_hollow_prologue',   title: 'Gathering Survivors' },
-  { id: 'first_night',         campaignId: 'calebs_hollow_prologue',   title: 'The First Night' },
-  { id: 'river_crossing',      campaignId: 'calebs_hollow_prologue',   title: 'The River Crossing' },
-  { id: 'dark_ritual',         campaignId: 'calebs_hollow_prologue',   title: 'Dark Ritual' },
-  { id: 'long_watch',          campaignId: 'calebs_hollow_prologue',   title: 'The Long Watch' },
-  { id: 'witchs_trail',        campaignId: 'calebs_hollow_prologue',   title: "The Witch's Trail" },
+  { id: 'tutorial',            campaignId: 'prologue',                 title: "The Road to Caleb's Hollow", file: 'tutorial' },
+  { id: 'prologue',            campaignId: 'calebs_hollow_prologue',   title: 'The Awakening',              file: 'Ch1M1' },
+  { id: 'gathering_survivors', campaignId: 'calebs_hollow_prologue',   title: 'Gathering Survivors',        file: 'Ch1M2' },
+  { id: 'first_night',         campaignId: 'calebs_hollow_prologue',   title: 'The First Night',            file: 'Ch1M3' },
+  { id: 'river_crossing',      campaignId: 'calebs_hollow_prologue',   title: 'The River Crossing',         file: 'Ch1M4' },
+  { id: 'dark_ritual',         campaignId: 'calebs_hollow_prologue',   title: 'Dark Ritual',                file: 'Ch1M5' },
+  { id: 'long_watch',          campaignId: 'calebs_hollow_prologue',   title: 'The Long Watch',             file: 'Ch1M6' },
+  { id: 'witchs_trail',        campaignId: 'calebs_hollow_prologue',   title: "The Witch's Trail",          file: 'Ch1M7' },
 ]);
+
+/**
+ * Resolve a mission id to its on-disk JSON filename. Falls back to `<id>.json`
+ * for missions not in the bundled catalog (e.g. a brand-new mission being
+ * exported from the editor for the first time).
+ *
+ * @param {string} id — mission id.
+ * @returns {string} basename with extension, e.g. "Ch1M3.json"
+ */
+export function missionFileName(id) {
+  const entry = MIGRATED_MISSIONS.find((m) => m.id === id);
+  return `${entry?.file ?? id}.json`;
+}
 
 /**
  * Resolve the same-origin URL of a bundled mission JSON. Built relative to this
  * module's own location so it resolves identically to campaign-registry.js's
  * loader (both live in src/campaign/, alongside ./missions/).
  *
- * @param {string} id — mission id (must match a file in ./missions/).
- * @returns {string} absolute URL to ./missions/<id>.json
+ * @param {string} id — mission id (must resolve to a file in ./missions/).
+ * @returns {string} absolute URL to ./missions/<file>.json
  */
 export function missionJSONUrl(id) {
-  return new URL(`./missions/${id}.json`, import.meta.url).href;
+  return new URL(`./missions/${missionFileName(id)}`, import.meta.url).href;
 }
