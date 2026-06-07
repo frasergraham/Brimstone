@@ -870,13 +870,11 @@ async function _runLocalResolution(skipSummary = false) {
   // Snapshot score BEFORE endRound so we can detect scoring changes
   const prevScore = { hero: state.nodeScore.hero, witch: state.nodeScore.witch };
 
-  state.updateNodeDiscovery();
-  state.checkAndLogNodeControlChanges();
-  state.updateExploredHexes();
-  // endRound() internally invokes state._waveProcessor (set during mission
-  // load) before checkVictory, so triggered wave spawns can pre-empt an
-  // otherwise-firing eliminate_all win.
-  state.endRound();
+  // Shared post-resolution finalization (node discovery → control-change log →
+  // explored-hex update → endRound). endRound() internally invokes
+  // state._waveProcessor (set during mission load) before checkVictory, so
+  // triggered wave spawns can pre-empt an otherwise-firing eliminate_all win.
+  state.finalizeRound();
 
   // Show encounter dialogs for survivors spawned at power nodes during endRound
   if (ui && !_autoplay && state.nodeSpawnedSurvivors?.length) {
