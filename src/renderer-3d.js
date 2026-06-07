@@ -10371,6 +10371,9 @@ export class Renderer3D {
     const BABYLON = this._babylon;
     const camera  = this._camera;
     if (!BABYLON || !camera) return Promise.resolve();
+    // suppressAutoFrame: replay "FIXED" camera mode — skip all programmatic
+    // camera moves so the user's chosen view is preserved.
+    if (this.suppressAutoFrame) return Promise.resolve();
 
     const wantAlpha = Number.isFinite(opts.alpha);
     // Nearest-wrap alpha delta so a ~180° reframe doesn't take the long arc.

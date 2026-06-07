@@ -14,17 +14,19 @@ import { Entity } from './entities.js';
 // Only meaningful when getMode() === AppMode.PLAYBACK.
 
 export const playback = {
-  aborted:      false,
-  paused:       false,
-  goBack:       false,   // false | 'curr' | 'prev'
-  atRoundStart: false,   // true while paused at the pre-animation point of a round
-  speedMult:    0.5,     // 0.5=play, 1.0=ff, 4.0=vff
-  jumpToEnd:    false,   // skip to final game state
+  aborted:       false,
+  paused:        false,  // manual-step mode: hold at each step boundary for NEXT
+  stepRequested: false,  // one-shot NEXT signal — releases a single step
+  goBack:        false,  // false | 'curr' | 'prev'
+  atRoundStart:  false,  // true while paused at the pre-animation point of a round
+  speedMult:     0.5,    // playback speed multiplier (full-game replay)
+  jumpToEnd:     false,  // skip to final game state
 };
 
 export function resetPlayback() {
   playback.aborted = false;
   playback.paused = false;
+  playback.stepRequested = false;
   playback.goBack = false;
   playback.atRoundStart = false;
   playback.speedMult = 0.5;
@@ -71,24 +73,27 @@ export function swapState(refs, newState) {
  */
 export function playbackDelay(ms) {
   const inPlayback = getMode() === AppMode.PLAYBACK;
-  if (!inPlayback && !playback.jumpToEnd && !playback.aborted) {
+  // `stepRequested` (a NEXT press) collapses the rest of the current step's
+  // delays so the animation jumps ahead immediately; the step-gate then consumes
+  // the flag and advances. jumpToEnd/aborted resolve instantly too.
+  const skip = playback.jumpToEnd || playback.aborted || playback.stepRequested;
+  // Fast path: not replaying and nothing wants to interrupt — plain delay.
+  // Pausing is handled at step boundaries (the manual-step gate), NOT mid-delay,
+  // so a step's animation otherwise plays through to completion once started.
+  if (!inPlayback && !skip) {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
-  // During replay: poll every ≤50 ms so pause/abort/back take effect immediately.
+  // During replay: poll every ≤50 ms so abort/back/jump/next take effect immediately.
   const effective = playback.speedMult > 0 ? ms / playback.speedMult : ms;
   return new Promise(resolve => {
     let remaining = effective;
     let last = Date.now();
     function tick() {
-      if (playback.aborted || playback.goBack || playback.jumpToEnd) { resolve(); return; }
-      if (!playback.paused) {
-        const now = Date.now();
-        remaining -= (now - last);
-        last = now;
-      } else {
-        last = Date.now(); // don't count paused time toward remaining
-      }
+      if (playback.aborted || playback.goBack || playback.jumpToEnd || playback.stepRequested) { resolve(); return; }
+      const now = Date.now();
+      remaining -= (now - last);
+      last = now;
       if (remaining <= 0) { resolve(); return; }
       setTimeout(tick, Math.min(50, remaining));
     }
@@ -123,39 +128,30 @@ export async function replayFullGame(refs, rounds, winner, winReason, heroName, 
   const savedSpeedMode = ui.speedMode;
   ui.speedMode = 'fast';
 
-  // Control callback wired to HUD buttons
+  // Control callback wired to HUD buttons. NEXT advances one step (manual mode);
+  // PLAY/PAUSE toggles auto-advance; BACK/STOP are full-game-only.
   ui.showReplayHUD(rounds.length, (action) => {
     switch (action) {
-      case 'play':
-        playback.speedMult = 0.5; playback.paused = false;
-        ui.setReplayPlayState('play');
+      case 'playpause':
+        playback.paused = !playback.paused;
+        if (!playback.paused) playback.stepRequested = false;
+        ui.setReplayTransport(playback.paused);
         break;
-      case 'ff':
-        playback.speedMult = 1.0; playback.paused = false;
-        ui.setReplayPlayState('ff');
-        break;
-      case 'vff':
-        playback.speedMult = 4.0; playback.paused = false;
-        ui.setReplayPlayState('vff');
-        break;
-      case 'pause':
-        playback.paused = true;
-        ui.setReplayPlayState('pause');
+      case 'next':
+        // Advance one step; also releases a round-start hold.
+        playback.stepRequested = true;
         break;
       case 'back':
         playback.paused = true;
         playback.goBack = playback.atRoundStart ? 'prev' : 'curr';
-        ui.setReplayPlayState('pause');
-        break;
-      case 'end':
-        playback.jumpToEnd = true; playback.paused = false;
+        ui.setReplayTransport(true);
         break;
       case 'stop':
         if (opts.stopLabel) {
           playback.aborted = true; playback.paused = false;
         } else {
           playback.paused = true;
-          ui.setReplayPlayState('pause');
+          ui.setReplayTransport(true);
           ui.showReplayExitDialog().then(choice => {
             if (choice === 'exit') {
               playback.aborted = true; playback.paused = false;
@@ -169,9 +165,7 @@ export async function replayFullGame(refs, rounds, winner, winReason, heroName, 
     const stopBtn = document.getElementById('replay-stop-btn');
     if (stopBtn) { stopBtn.textContent = opts.stopLabel; stopBtn.title = opts.stopLabel; }
   }
-  if (!opts.autoPlay) {
-    ui.setReplayPlayState('pause');
-  }
+  ui.setReplayTransport(playback.paused);
 
   let lastSteps    = null;
   let lastRoundNum = 0;
@@ -221,11 +215,14 @@ export async function replayFullGame(refs, rounds, winner, winReason, heroName, 
       if (!opts.stopLabel) refs.state.fogOfWar = 'none';
       draw();
 
-      // At round start: accept BACK / PAUSE before animation begins
+      // At round start: accept BACK / PLAY-PAUSE / NEXT before animation begins.
+      // In manual mode we hold until NEXT (or PLAY) releases this round.
       playback.atRoundStart = true;
-      while (playback.paused && !playback.aborted && !playback.goBack && !playback.jumpToEnd) {
+      while (playback.paused && !playback.stepRequested
+             && !playback.aborted && !playback.goBack && !playback.jumpToEnd) {
         await new Promise(r => setTimeout(r, 50));
       }
+      playback.stepRequested = false;
       playback.atRoundStart = false;
       if (playback.aborted) break;
       if (playback.jumpToEnd) continue;
@@ -293,7 +290,7 @@ export async function replayFullGame(refs, rounds, winner, winReason, heroName, 
     // End-of-replay hold: pause and wait for STOP or BACK
     playback.paused       = true;
     playback.atRoundStart = true;
-    ui.setReplayPlayState('pause');
+    ui.setReplayTransport(true);
 
     while (!playback.aborted && !playback.goBack) {
       await new Promise(r => setTimeout(r, 50));

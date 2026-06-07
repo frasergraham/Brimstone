@@ -1,0 +1,218 @@
+// Pure presentation digest for the replay timeline overlay — no DOM, no
+// renderer, no module state. Turns the resolved `steps` array (from
+// resolvePlans / resolvePlansMP) into a fog-filtered, left-to-right column
+// model the UI layer renders as the timeline.
+//
+// Mirrors the battle-utils.js convention: the ResEventType / PlanActionType
+// enums are injected (not imported) to keep this module free of the resolver's
+// dependency graph, so it stays trivially unit-testable.
+
+import { ENTITY_COLOR } from './entities.js';
+
+// Glyph fallback when no portrait sprite is available. Matches the maps used in
+// ui.js / ui-render.js (kept local to preserve this module's purity).
+const GLYPHS = Object.freeze({
+  hero: '⚔', witch: '✦', survivor: '☺', soldier: '♟',
+  zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙',
+});
+
+/** Presentation outcome kinds for a battle row. */
+export const OutcomeKind = Object.freeze({
+  HIT: 'hit', CRUSH: 'crush', MISS: 'miss', KILL: 'kill',
+});
+
+/** Display label per PlanActionType value. */
+const ACTION_LABEL = Object.freeze({
+  'move': 'MOVE', 'battle-unit': 'BATTLE', 'battle-hex': 'BATTLE',
+  'explore': 'EXPLORE', 'fortify': 'FORTIFY', 'summon': 'SUMMON',
+  'heal': 'HEAL', 'use-item': 'ITEM', 'equip-weapon': 'EQUIP',
+  'use-ability': 'ABILITY', 'guard': 'GUARD', 'sound-horn': 'HORN',
+});
+
+/**
+ * Rank entries by the order the animation actually plays them, so the card list
+ * matches playback. _animateResolutionSteps resolves in phases: moves first,
+ * then battles/summons, then explore, sound-horn, fortify, heal. (In queue
+ * order a horn can be listed first yet animate after the battles.)
+ */
+const PHASE_RANK = Object.freeze({
+  'move': 1,
+  'battle-unit': 2, 'battle-hex': 2, 'summon': 2,
+  'explore': 3, 'sound-horn': 4, 'fortify': 5, 'heal': 6,
+});
+const phaseRank = (t) => PHASE_RANK[t] ?? 7;
+
+/**
+ * Build a lightweight unit reference for the overlay. The UI layer resolves the
+ * actual portrait from `type`/`title` via its own `_entityPortraitId` +
+ * `getPortraitDataURL`, so this stays renderer-free.
+ */
+function unitRef(snap) {
+  if (!snap) return null;
+  const name = (snap.type === 'survivor' && snap.name)
+    ? snap.name
+    : (snap.title ?? snap.displayName ?? snap.type);
+  return {
+    entityId: snap.id ?? null,
+    type:     snap.type,
+    title:    snap.title ?? null,
+    name,
+    color:    snap.color || ENTITY_COLOR[snap.type] || '#888',
+    glyph:    GLYPHS[snap.type] ?? '?',
+  };
+}
+
+/** Classify a battle `result` for colour/labelling. */
+function battleKind(result) {
+  if (!result) return OutcomeKind.MISS;
+  if (result.killed)    return OutcomeKind.KILL;
+  if (result.crush)     return OutcomeKind.CRUSH;
+  if (result.hit)       return OutcomeKind.HIT;
+  return OutcomeKind.MISS;
+}
+
+/** Count meaningful loot from an explore result ('nothing' rolls excluded). */
+function lootCount(result) {
+  return (result?.lootItems ?? []).filter(x => x && x !== 'nothing').length;
+}
+
+/**
+ * Turn resolved steps into the timeline column model.
+ *
+ * @param {Array}    steps         — StepRecord[] from resolvePlans/resolvePlansMP.
+ * @param {Array}    finalEntities — post-resolution entities (reserved; not yet
+ *                                   needed since outcomes come from result).
+ * @param {Object}   deps
+ * @param {Function} deps.isVisible — (col, row, entities) => boolean. Fog test
+ *   against the step's own entitySnapshot, matching the canvas. When omitted,
+ *   everything is visible (fog off / AI-vs-AI / full replay with no viewer).
+ * @param {Object}   deps.PlanActionType — injected enum.
+ * @param {Object}   deps.ResEventType   — injected enum.
+ * @returns {Array<{ stepIndex, entries: Array }>} one column per step; a fully
+ *   fogged step yields an empty `entries` array so column count tracks the
+ *   animation's step count (keeps the slide aligned).
+ */
+export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionType, ResEventType } = {}) {
+  const vis = isVisible || (() => true);
+  const PA = PlanActionType;
+  const RE = ResEventType;
+  if (!Array.isArray(steps) || !PA || !RE) return [];
+
+  return steps.map((step, stepIndex) => {
+    const ents = step.entitySnapshot ?? [];
+    const allEvents = [
+      ...(step.heroEvents  ?? []),
+      ...(step.witchEvents ?? []),
+      ...(step.playerEvents ?? []).flatMap(pe => pe.events ?? []),
+    ];
+    const entries = [];
+
+    for (const ev of allEvents) {
+      const isBattleStrike = ev.type === RE.GUARD_STRIKE
+        || (ev.type === RE.ACTION_OK && ev.battleSnaps
+            && (ev.action?.type === PA.BATTLE_UNIT || ev.action?.type === PA.BATTLE_HEX));
+
+      // ── Battles (and reactive guard strikes) ──────────────────────────────
+      // Damage is carried per-unit: the target took `targetDmg` (and may have
+      // died), the attacker took `actorDmg` (counter). The UI renders each
+      // number beneath the unit that lost the HP.
+      if (isBattleStrike) {
+        const actorSnap  = ev.battleSnaps?.actorSnap;
+        const targetSnap = ev.battleSnaps?.targetSnap;
+        if (!actorSnap) continue;
+        const seen = vis(actorSnap.col, actorSnap.row, ents)
+          || (targetSnap && vis(targetSnap.col, targetSnap.row, ents));
+        if (!seen) continue;
+        // Gang-up allies that lent advantage to each side (visible ones only).
+        const bd = ev.result?.breakdown ?? {};
+        const allyRefs = (ids) => (ids ?? [])
+          .filter(id => id !== actorSnap.id && id !== targetSnap?.id)
+          .map(id => ents.find(e => e.id === id))
+          .filter(s => s && vis(s.col, s.row, ents))
+          .map(unitRef);
+        entries.push({
+          entityId:     actorSnap.id,
+          actor:        unitRef(actorSnap),
+          target:       unitRef(targetSnap),
+          actorAllies:  allyRefs(bd.atkAllyIds),
+          targetAllies: allyRefs(bd.defAllyIds),
+          actionType:   PA.BATTLE_UNIT,
+          label:        ev.type === RE.GUARD_STRIKE ? 'GUARD' : 'BATTLE',
+          outcomeKind:  battleKind(ev.result),
+          targetDmg:    ev.result?.damage ?? 0,
+          actorDmg:     ev.result?.counterDmg ?? 0,
+          killed:       !!ev.result?.killed,
+          note:         null,
+        });
+        continue;
+      }
+
+      // ── Blocked moves (ACTION_FAIL with a blocker) → "BLOCKED" note ────────
+      if (ev.type === RE.ACTION_FAIL && ev.action?.type === PA.MOVE
+          && (ev.blockedBy || ev.blockedByFort)) {
+        const actorSnap = ents.find(e => e.id === ev.action.entityId);
+        if (!actorSnap) continue;
+        const block = ev.blockedByFort || ev.blockedBy;
+        const seen = vis(actorSnap.col, actorSnap.row, ents)
+          || (block && vis(block.col, block.row, ents));
+        if (!seen) continue;
+        entries.push({
+          entityId: ev.action.entityId,
+          actor:    unitRef(actorSnap),
+          target:   null,
+          actionType: PA.MOVE,
+          label:    'MOVE',
+          outcomeKind: null,
+          targetDmg: 0, actorDmg: 0, killed: false,
+          note:     { text: 'BLOCKED', kind: 'blocked' },
+        });
+        continue;
+      }
+
+      // ── Non-battle successful actions ─────────────────────────────────────
+      if (ev.type !== RE.ACTION_OK || !ev.action) continue;
+      const a = ev.action;
+      const actorSnap = ents.find(e => e.id === a.entityId);
+      if (!actorSnap) continue;
+
+      // Visibility: a move shows if either origin or destination is in sight
+      // (matches the canvas rule); everything else keys off the actor's hex.
+      const seen = a.type === PA.MOVE
+        ? (vis(actorSnap.col, actorSnap.row, ents) || vis(a.toCol, a.toRow, ents))
+        : vis(actorSnap.col, actorSnap.row, ents);
+      if (!seen) continue;
+
+      // Summon shows the conjured unit as the "target" chip.
+      let target = null;
+      if (a.type === PA.SUMMON && a.summonType) {
+        target = unitRef({ type: a.summonType });
+      }
+
+      // Explore reports the loot gained (e.g. "+1 RESOURCE").
+      let note = null;
+      if (a.type === PA.EXPLORE) {
+        const n = lootCount(ev.result);
+        note = n > 0
+          ? { text: `+${n} RESOURCE`, kind: 'gain' }
+          : { text: 'EXPLORED', kind: 'info' };
+      }
+
+      entries.push({
+        entityId:    a.entityId,
+        actor:       unitRef(actorSnap),
+        target,
+        actionType:  a.type,
+        label:       ACTION_LABEL[a.type] ?? String(a.type ?? '').toUpperCase(),
+        outcomeKind: null,
+        targetDmg:   0, actorDmg: 0, killed: false,
+        note,
+      });
+    }
+
+    // Order entries to match the animation's phase order (stable within a
+    // phase) so the card reads top-to-bottom in the sequence they play out.
+    entries.sort((a, b) => phaseRank(a.actionType) - phaseRank(b.actionType));
+
+    return { stepIndex, entries };
+  });
+}

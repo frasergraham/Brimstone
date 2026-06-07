@@ -940,25 +940,33 @@
         <div id="fps-counter">--</div>
         <div id="poly-counter">--</div>
         <div id="cam-counter">--</div>
-        <!-- Replay HUD: shown during full-game replay -->
+        <!-- Replay timeline overlay: transparent step-by-step sequence of the
+             round being replayed. Slides left as steps advance. -->
+        <div id="replay-timeline">
+          <div id="replay-timeline-track"></div>
+        </div>
+        <!-- Unified replay control bar (bottom-center): used for both the
+             post-turn resolution replay and full-game replay. Back/Stop are
+             shown only in full-game replay. -->
         <div id="replay-hud" style="display:none">
-          <div class="replay-controls">
-            <button id="replay-back-btn"  class="replay-ctrl-btn" title="Previous round">⏮</button>
-            <button id="replay-play-btn"  class="replay-ctrl-btn active" title="Play (0.5×)">▶</button>
-            <button id="replay-pause-btn" class="replay-ctrl-btn" title="Pause">⏸</button>
-            <button id="replay-ff-btn"    class="replay-ctrl-btn" title="Fast (1×)">⏩</button>
-            <button id="replay-vff-btn"   class="replay-ctrl-btn" title="Very Fast (1.5×)">⏭</button>
-            <button id="replay-end-btn"   class="replay-ctrl-btn" title="Jump to end">⇥</button>
-            <button id="replay-stop-btn"  class="replay-ctrl-btn replay-stop" title="Stop">■</button>
+          <div class="replay-block">
+            <div class="replay-block-title">Controls</div>
+            <div class="replay-block-btns">
+              <button id="replay-back-btn"      class="replay-ctrl-btn" title="Previous round">Back</button>
+              <button id="replay-next-btn"      class="replay-ctrl-btn" title="Next step">Next</button>
+              <button id="replay-playpause-btn" class="replay-ctrl-btn" title="Auto-play (run every step)">AutoPlay</button>
+              <button id="replay-stop-btn"      class="replay-ctrl-btn replay-stop" title="Stop">Stop</button>
+            </div>
+          </div>
+          <div class="replay-block">
+            <div class="replay-block-title">Camera</div>
+            <div class="replay-block-btns">
+              <button id="replay-camera-btn" class="replay-ctrl-btn replay-camera" title="Camera: Follow the action">Follow</button>
+            </div>
           </div>
         </div>
         <!-- Unit stats bar: shown during planning when a unit is selected -->
         <div id="unit-stats-bar" style="display:none"></div>
-        <!-- 3D cinematic combat: "Continue" button. Hidden by default;
-             shown by main.js between the readout's "final state" and the
-             fade so the player controls how long the totals stay on screen.
-             Never appears in 2D or outside combat. -->
-        <button id="combat-continue-btn" class="combat-continue-btn" hidden>Continue ▶</button>
         <!-- 3D camera controls — shown only when the 3D renderer is active
              (toggled by `body.renderer-3d` in main.js). Mirrors #zoom-controls
              placement (bottom-left) and inherits .zoom-btn styling. Mobile

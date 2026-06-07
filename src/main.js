@@ -30,6 +30,7 @@ import { VERSION, BUILD_VERSION } from './version.js';
 import { buildPlayerStatusHtml } from './ui-render.js';
 import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { PlanActionType, groupPlanByEntity } from './planner.js';
+import { buildStepDigest } from './replay-timeline.js';
 import { hexDistance, getNeighbors, hexKey } from './hex.js';
 import { planCombatFrames } from './combat-presentation.js';
 import { MAX_FORTIFY_LEVEL, FORT_IMPASSABLE_THRESHOLD } from './tiles.js';
@@ -1192,13 +1193,40 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     flags: { goBack: playback.goBack, aborted: playback.aborted, jumpToEnd: playback.jumpToEnd, _autoplay },
   });
 
-  // Show the skip button whenever a replay is animating, EXCEPT during full
-  // PLAYBACK mode (which has its own HUD with its own skip control). We
-  // detect full PLAYBACK via ui._replayOnControl because the first step
-  // animation sets mode to RESOLVING, clobbering getMode()-based checks.
+  // Show the unified replay bar whenever a replay is animating, EXCEPT during
+  // full PLAYBACK mode (which shows its own bar via replayFullGame). We detect
+  // full PLAYBACK via ui._replayOnControl because the first step animation sets
+  // mode to RESOLVING, clobbering getMode()-based checks. In inline mode the bar
+  // offers Play(Normal)/Pause/Fast/Camera/Skip; pause/skip drive playback flags.
   const skipHudActive = !_autoplay && ui && !ui._replayOnControl;
   if (skipHudActive) {
-    ui.showInlineReplayHUD?.(() => { playback.jumpToEnd = true; });
+    playback.paused = true;            // inline replay starts in manual-step mode
+    playback.stepRequested = false;
+    ui.showInlineReplayHUD?.((action) => {
+      switch (action) {
+        case 'playpause':
+          playback.paused = !playback.paused;
+          if (!playback.paused) playback.stepRequested = false;
+          ui.setReplayTransport(playback.paused);
+          break;
+        case 'next':
+          playback.stepRequested = true;
+          break;
+      }
+    });
+    ui.setReplayTransport?.(playback.paused);
+  }
+
+  // Replay timeline overlay — built from the same resolved steps, fog-filtered
+  // to the viewing faction so it matches the canvas. Shown for both inline and
+  // full PLAYBACK replay (full PLAYBACK runs fog-off, so all steps are visible).
+  let stepDigest = null;
+  if (ui && steps.length) {
+    stepDigest = buildStepDigest(steps, finalEntities, {
+      isVisible: (col, row, ents) => _isFogVisible(col, row, humanFaction, ents, state.phase),
+      PlanActionType, ResEventType,
+    });
+    ui.showReplayTimeline?.(stepDigest);
   }
   setMode(AppMode.RESOLVING);
 
@@ -1259,6 +1287,8 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     // During replay: if BACK or STOP was pressed, abort remaining steps immediately
     if (playback.goBack || playback.aborted || playback.jumpToEnd) break;
     const step = steps[i];
+    // Advance the timeline overlay: slide this step into the leftmost slot.
+    ui?.setReplayTimelineStep?.(i);
     // Patch the CURRENT step's snapshot so any lookups against it resolve
     // to Entity methods (hasAbility / getAttack / hasTag). _isFogVisible
     // is the hot caller — it receives step.entitySnapshot directly and
@@ -1461,6 +1491,11 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 
     // ── Phase 1: animate moves for both factions simultaneously ──────────────
     // Multi-hex moves (horse or road chains) animate hop-by-hop using result.path.
+    // Moves play together, so highlight every move card in this step at once.
+    // _stepHasAction tests the digest so the highlight only fires (and clears
+    // the prior group) when this phase actually has visible cards to show.
+    const _stepHasAction = (t) => !!stepDigest?.[i]?.entries.some(e => e.actionType === t);
+    if (_stepHasAction(PlanActionType.MOVE)) ui?.highlightReplayActions?.(i, ['move']);
     let hadMove = false;
     const pendingDialogs = [];
 
@@ -1640,6 +1675,8 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         if (battleSnaps && showForPlayer) {
           const { actorSnap, targetSnap } = battleSnaps;
           const isKill = !!result?.killed;
+          // Highlight this battle's row on the timeline as it begins.
+          ui?.highlightReplayEntry?.(i, actorSnap.id);
 
           if (!_autoplay) {
             const speed = ui?.speedMode ?? 'cinematic';
@@ -1763,6 +1800,8 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             // Autoplay: fire all animations immediately without dialogs or lunge.
             _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
           }
+          // The battle has resolved — reveal its outcome on the timeline.
+          ui?.revealReplayEntryOutcome?.(i, actorSnap.id);
           hadBattle = true;
         }
       } else if (action.type === PlanActionType.SUMMON) {
@@ -1930,6 +1969,8 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             || targetSnap?.owner === humanFaction || actorSnap?.owner === humanFaction);
 
       if (!showForPlayer) continue;
+      // Highlight this guard strike's card as it fires.
+      ui?.highlightReplayEntry?.(i, actorSnap.id);
 
       if (!_autoplay) {
         const speed = ui?.speedMode ?? 'cinematic';
@@ -2024,6 +2065,8 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         // Autoplay: fire all animations immediately
         _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
       }
+      // Guard strike resolved — reveal its outcome on the timeline.
+      ui?.revealReplayEntryOutcome?.(i, actorSnap.id);
       hadBattle = true;
     }
     // Restore inset after all battles (regular + guard strikes) are done.
@@ -2043,6 +2086,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     let hadExplore = false;
     const hasExploreEvents = events.some(ev => ev.action?.type === PlanActionType.EXPLORE && ev.result?.log?.length);
     if (hasExploreEvents) renderer.clearFlashes();
+    if (_stepHasAction(PlanActionType.EXPLORE)) ui?.highlightReplayActions?.(i, ['explore']);
 
     for (const ev of events) {
       const { action, result } = ev;
@@ -2072,6 +2116,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     }
 
     // ── Phase 3b: Sound Horn — horn flash + survivor encounter ────────────
+    if (_stepHasAction(PlanActionType.SOUND_HORN)) ui?.highlightReplayActions?.(i, ['sound-horn']);
     for (const ev of events) {
       const { action, result } = ev;
       if (action.type !== PlanActionType.SOUND_HORN) continue;
@@ -2117,6 +2162,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     }
 
     // ── Phase 4: fortify/reinforce visual feedback ────────────────────────
+    if (_stepHasAction(PlanActionType.FORTIFY)) ui?.highlightReplayActions?.(i, ['fortify']);
     for (const ev of events) {
       const { action, result } = ev;
       if (action.type !== PlanActionType.FORTIFY || !result?.success) continue;
@@ -2136,6 +2182,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     }
 
     // ── Phase 5: heal animation — green glow + HP floater ─────────────
+    if (_stepHasAction(PlanActionType.HEAL)) ui?.highlightReplayActions?.(i, ['heal']);
     for (const ev of events) {
       const { action, result } = ev;
       if (action.type !== PlanActionType.HEAL || !result?.success) continue;
@@ -2193,6 +2240,34 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       const _spd3 = ui?.speedMode ?? 'cinematic';
       await playbackDelay(_spd3 === 'vfast' ? 75 : 150);
     }
+
+    // The step has played out — reveal any outcomes not already shown
+    // individually (guard strikes, splash, steps without a per-battle reveal).
+    ui?.revealReplayOutcome?.(i);
+
+    // Manual-step gate: in paused mode, hold at this step boundary until NEXT
+    // (or PLAY). For inline replay this also gates the final step, so the round
+    // summary only appears after a NEXT. For full-game replay the round loop
+    // owns the between-round boundary, so we don't double-gate its last step.
+    // Only gate on steps that actually rendered a card — fogged/empty steps
+    // have no card, so they shouldn't cost the player a NEXT click. In full-game
+    // replay the round loop owns the boundary after the last visible step, so we
+    // don't double-gate it there.
+    const stepHasCard = stepDigest?.[i]?.entries?.length > 0;
+    if (!_autoplay && ui && stepHasCard) {
+      const fullMode = !!ui._replayOnControl;
+      const laterHasCard = stepDigest.slice(i + 1).some(c => c.entries.length > 0);
+      if (!(fullMode && !laterHasCard)) {
+        // Step finished animating — prompt the player to press NEXT.
+        if (playback.paused) ui.setReplayNextReady?.(true);
+        while (playback.paused && !playback.stepRequested
+               && !playback.aborted && !playback.goBack && !playback.jumpToEnd) {
+          await new Promise(r => setTimeout(r, 50));
+        }
+        ui.setReplayNextReady?.(false);
+        playback.stepRequested = false;
+      }
+    }
   }
 
   // RELEASE the held 3D combat frame (Phase 1): if the LAST presented step was
@@ -2245,7 +2320,11 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
   if (skipHudActive) {
     ui?.hideInlineReplayHUD?.();
     playback.jumpToEnd = false;
+    playback.paused = false;          // clear the manual-step hold for next time
+    playback.stepRequested = false;
   }
+  // Hide the timeline overlay (rebuilt fresh on the next round's animation).
+  ui?.hideReplayTimeline?.();
   // Mode transition is caller's responsibility
 }
 

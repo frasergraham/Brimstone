@@ -1025,7 +1025,9 @@ export class Renderer {
    *   duration     – animation length in ms; 0 = instant (default 500)
    */
   frameHexes(positions, { paddingHexes = 2.0, maxZoom = 2.0, duration = 500 } = {}) {
-    if (this.viewLocked) return;
+    // suppressAutoFrame: replay "FIXED" camera mode — leave the view wherever
+    // the user parked it and ignore programmatic auto-framing.
+    if (this.viewLocked || this.suppressAutoFrame) return;
     const target = this._computeFrameView(positions, paddingHexes, maxZoom);
     if (!target) return;
 

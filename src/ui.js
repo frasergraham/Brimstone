@@ -98,6 +98,7 @@ export class UIController {
     this._battleInterval   = null; // dice animation interval — cleared on new dialog
     this._autoDismissTimer = null; // battle dialog auto-dismiss timer — cleared on new dialog
     this.speedMode         = this._loadDefaultSpeed(); // 'cinematic' | 'fast' | 'vfast'
+    this.replayCameraMode  = 'follow';  // 'follow' (auto-zoom to action) | 'fixed' — replay overlay camera toggle
     // Start with chronicle hidden by default; open = full sidebar, closed = pull-out tab only
     this._chronicleOpen    = false;
     // Unit stats bar: collapsed by default; clicking the (i) glyph expands to reveal ATK/DEF + abilities
@@ -4558,48 +4559,114 @@ export class UIController {
   /**
    * Show the replay progress HUD above the canvas.
    * @param {number}   totalRounds
-   * @param {Function} onControl  — called with action string: 'back'|'play'|'pause'|'ff'|'vff'|'stop'
+   * @param {Function} onControl  — called with action string: 'back'|'next'|'playpause'|'stop'
    */
   showReplayHUD(totalRounds, onControl) {
     const hud = this._el('replay-hud');
     if (!hud) return;
+    this._showReplayBar('full', onControl);
+  }
+
+  /**
+   * Shared implementation behind the full-game and inline replay bars — one
+   * unified bottom-center control bar (#replay-hud). Back/Stop appear only in
+   * full mode; the End button is relabelled "SKIP" in inline mode. The camera
+   * toggle is wired internally (not routed through onControl).
+   *
+   * @param {'full'|'inline'} mode
+   * @param {Function} onControl — 'back'|'play'|'pause'|'ff'|'end'|'stop'
+   */
+  _showReplayBar(mode, onControl) {
+    const hud = this._el('replay-hud');
+    if (!hud) return;
     hud.style.display = 'flex';
-    this._replayOnControl = onControl;
+    // _replayOnControl marks the FULL-game bar as active; main.js reads it to
+    // avoid stacking the inline bar over the full one.
+    this._replayOnControl = mode === 'full' ? onControl : null;
 
     // Disable the in-game speed toggle while replaying
     const speedToggle = document.getElementById('speed-toggle');
     if (speedToggle) speedToggle.disabled = true;
 
-    // Default to locked view for replay (fit map, no auto-zoom)
-    this._preReplayViewLocked = this.renderer?.viewLocked ?? false;
-    if (this.renderer && !this.renderer.viewLocked) {
-      this.renderer.resize();
-      this.renderer.resetView();
-      this.renderer._zoomAnim = null;
-      this.renderer.viewLocked = true;
+    // Back + Stop are full-game-only; NEXT + PLAY/PAUSE are shared.
+    for (const action of ['back', 'stop']) {
+      const btn = document.getElementById(`replay-${action}-btn`);
+      if (btn) btn.style.display = (mode === 'full') ? '' : 'none';
     }
-    this._updateFitBtnLockState();
 
-    // Wire up control buttons
-    const ids = ['back', 'play', 'pause', 'ff', 'vff', 'end', 'stop'];
-    for (const action of ids) {
+    // Wire control buttons -> onControl. Camera is handled internally.
+    for (const action of ['back', 'next', 'playpause', 'stop']) {
       const btn = document.getElementById(`replay-${action}-btn`);
       if (btn) btn.onclick = () => onControl?.(action);
     }
+    const camBtn = document.getElementById('replay-camera-btn');
+    if (camBtn) camBtn.onclick = () => this._toggleReplayCamera();
 
-    this.setReplayPlayState('play');
+    // Apply the current camera mode (FOLLOW by default) so auto-framing and
+    // manual-pan state are consistent the moment the bar appears.
+    this._preReplayViewLocked = this.renderer?.viewLocked ?? false;
+    this._applyReplayCameraMode();
+
+    this.setReplayTransport(true);   // start paused (manual stepping)
+  }
+
+  /** Toggle replay camera between FOLLOW (auto-zoom to action) and FIXED. */
+  _toggleReplayCamera() {
+    this.replayCameraMode = this.replayCameraMode === 'fixed' ? 'follow' : 'fixed';
+    this._applyReplayCameraMode();
   }
 
   /**
-   * Highlight the currently active replay control button.
-   * @param {string} activeAction — 'play'|'pause'|'ff'|'vff'|'back'|'end'|'stop'
+   * Sync renderer + button to the current replayCameraMode.
+   * FOLLOW - auto-framing drives the camera (suppress off, manual pan allowed).
+   * FIXED  - camera stays put; auto-framing suppressed, manual pan allowed.
    */
-  setReplayPlayState(activeAction) {
-    const ids = ['back', 'play', 'pause', 'ff', 'vff', 'end', 'stop'];
-    for (const action of ids) {
-      const btn = document.getElementById(`replay-${action}-btn`);
-      if (btn) btn.classList.toggle('active', action === activeAction);
+  _applyReplayCameraMode() {
+    if (!this.replayCameraMode) this.replayCameraMode = 'follow';
+    const fixed = this.replayCameraMode === 'fixed';
+    if (this.renderer) {
+      this.renderer.suppressAutoFrame = fixed;
+      // Both modes leave manual pan/zoom unlocked; FOLLOW just keeps re-framing.
+      this.renderer.viewLocked = false;
+      this._updateFitBtnLockState();
     }
+    const camBtn = document.getElementById('replay-camera-btn');
+    if (camBtn) {
+      camBtn.textContent = fixed ? 'Fixed' : 'Follow';
+      camBtn.title = fixed
+        ? 'Camera: Fixed - stays where you put it'
+        : 'Camera: Follow the action';
+      camBtn.classList.toggle('fixed', fixed);
+    }
+  }
+
+  /**
+   * Sync the transport buttons to the current play/pause state.
+   * @param {boolean} paused — true = manual stepping (NEXT enabled), false = auto-run.
+   */
+  setReplayTransport(paused) {
+    // AutoPlay is a toggle: highlighted (active) while auto-running.
+    const pp = document.getElementById('replay-playpause-btn');
+    if (pp) {
+      pp.title = paused ? 'Auto-play (run every step)' : 'Pause (step manually)';
+      pp.classList.toggle('active', !paused);
+    }
+    // NEXT only works while paused; grey it out during auto-play.
+    const next = document.getElementById('replay-next-btn');
+    if (next) {
+      next.disabled = !paused;
+      next.classList.toggle('disabled', !paused);
+      if (!paused) next.classList.remove('ready');   // drop the prompt when auto-playing
+    }
+  }
+
+  /**
+   * Pulse the NEXT button once a step has finished animating (manual mode) to
+   * prompt the player to advance. Cleared as soon as they do.
+   */
+  setReplayNextReady(ready) {
+    const next = document.getElementById('replay-next-btn');
+    if (next) next.classList.toggle('ready', !!ready && !next.disabled);
   }
 
   /**
@@ -4622,6 +4689,7 @@ export class UIController {
 
     // Restore view-lock state that existed before replay started
     if (this.renderer) {
+      this.renderer.suppressAutoFrame = false;
       this.renderer.viewLocked = this._preReplayViewLocked ?? false;
       this._updateFitBtnLockState();
     }
@@ -4634,39 +4702,23 @@ export class UIController {
    * the "jump to end" one, which is relabelled "SKIP".
    * @param {Function} onSkip — called when the skip button is pressed
    */
-  showInlineReplayHUD(onSkip) {
-    const hud = this._el('replay-hud');
-    if (!hud) return;
-    hud.style.display = 'flex';
-    hud.classList.add('replay-hud-skip-only');
-    for (const action of ['back', 'play', 'pause', 'ff', 'vff', 'stop']) {
-      const btn = document.getElementById(`replay-${action}-btn`);
-      if (btn) btn.style.display = 'none';
-    }
-    const endBtn = document.getElementById('replay-end-btn');
-    if (endBtn) {
-      endBtn.style.display = '';
-      // Remember the original glyph so hideInlineReplayHUD can restore it.
-      if (this._replayEndBtnOriginalText === undefined) {
-        this._replayEndBtnOriginalText = endBtn.textContent;
-      }
-      endBtn.textContent = 'SKIP';
-      endBtn.title = 'Skip replay';
-      endBtn.onclick = () => onSkip?.();
-    }
+  showInlineReplayHUD(onControl) {
+    this._showReplayBar('inline', onControl);
     this._inlineReplayActive = true;
   }
 
-  /** Hide the inline skip-only replay HUD and restore button visibility. */
+  /** Hide the inline replay bar and restore Back/Stop visibility. */
   hideInlineReplayHUD() {
     const hud = this._el('replay-hud');
-    if (hud) {
-      hud.style.display = 'none';
-      hud.classList.remove('replay-hud-skip-only');
-    }
-    for (const action of ['back', 'play', 'pause', 'ff', 'vff', 'end', 'stop']) {
+    if (hud) hud.style.display = 'none';
+    for (const action of ['back', 'next', 'playpause', 'stop']) {
       const btn = document.getElementById(`replay-${action}-btn`);
       if (btn) btn.style.display = '';
+    }
+    if (this.renderer) {
+      this.renderer.suppressAutoFrame = false;
+      this.renderer.viewLocked = this._preReplayViewLocked ?? false;
+      this._updateFitBtnLockState();
     }
     const endBtn = document.getElementById('replay-end-btn');
     if (endBtn) {
@@ -4677,6 +4729,207 @@ export class UIController {
     }
     this._replayEndBtnOriginalText = undefined;
     this._inlineReplayActive = false;
+  }
+
+  // ── Replay timeline overlay ──────────────────────────────────────────────
+  // Transparent left-to-right sequence of resolution-step columns built from
+  // buildStepDigest (src/replay-timeline.js). Driven by _animateResolutionSteps.
+
+  /** Render the timeline columns and reveal the overlay. */
+  showReplayTimeline(digest) {
+    const wrap  = this._el('replay-timeline');
+    const track = this._el('replay-timeline-track');
+    if (!wrap || !track || !Array.isArray(digest)) return;
+    this._replayDigest = digest;
+    this._replayTrackX = 0;
+    this._activeReplayOrd = 0;
+    track.style.transform = 'translateX(0)';
+    // Only render steps that have visible activity (fogged steps are dropped
+    // entirely). data-step keeps the ORIGINAL step index so highlight/centre
+    // calls (keyed on the animation step) still match; the "Step N" label is
+    // numbered sequentially among the visible cards.
+    const visible = digest.filter(col => col.entries.length > 0);
+    let n = 0;
+    track.innerHTML = visible.map(col => this._replayColHtml(col, ++n)).join('');
+    if (!visible.length) { wrap.classList.remove('visible'); return; }
+    wrap.classList.add('visible');
+    this.setReplayTimelineStep(visible[0].stepIndex);
+  }
+
+  /** Build one visible step column's HTML (icons, names, hidden outcomes). */
+  _replayColHtml(col, displayNum) {
+    const rows = col.entries.map((e, j) => this._replayRowHtml(e, j)).join('');
+    return `<div class="replay-step-col" data-step="${col.stepIndex}">`
+         + `<div class="replay-step-label">Step ${displayNum}</div>`
+         + rows
+         + `</div>`;
+  }
+
+  /**
+   * One actor entry, laid out as an aligned 3-column grid:
+   *   row 1:  [ UNIT ]   [ ACTION ]   [ TARGET ]
+   *   row 2:  [ actor HP ] [ OUTCOME ] [ target HP ]
+   * Each column lines up with its parent above it. Empty cells are emitted so
+   * the grid stays aligned. All outcome cells are `.replay-step-outcome` so they
+   * stay hidden until revealed as the action plays out.
+   */
+  _replayRowHtml(entry, entryIdx) {
+    const esc = (s) => String(s ?? '')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const iconImg = (u) => {
+      const assetId = _entityPortraitId({ type: u.type, title: u.title });
+      const src = (this.renderer && assetId) ? this.renderer.getPortraitDataURL(assetId, 56) : null;
+      return src
+        ? `<img class="replay-step-icon" src="${src}" style="border-color:${u.color}" alt="">`
+        : `<span class="replay-step-icon" style="background:${u.color}">${u.glyph}</span>`;
+    };
+    // Small gang-up ally icons shown beneath a combatant.
+    const miniIcon = (u) => {
+      const assetId = _entityPortraitId({ type: u.type, title: u.title });
+      const src = (this.renderer && assetId) ? this.renderer.getPortraitDataURL(assetId, 32) : null;
+      return src
+        ? `<img class="replay-ally-icon" src="${src}" style="border-color:${u.color}" alt="">`
+        : `<span class="replay-ally-icon" style="background:${u.color}">${u.glyph}</span>`;
+    };
+    const alliesHtml = (allies) => (allies && allies.length)
+      ? `<div class="replay-allies">${allies.map(miniIcon).join('')}</div>`
+      : '';
+    const unit = (u, allies) => u
+      ? `<div class="replay-unit">${iconImg(u)}<div class="replay-unit-name">${esc(u.name)}</div>`
+        + `${alliesHtml(allies)}</div>`
+      : `<span class="replay-cell"></span>`;
+    const out = (text, kind) => text
+      ? `<div class="replay-step-outcome ${kind}">${text}</div>`
+      : `<span class="replay-cell"></span>`;
+
+    let actorOut, centerOut, targetOut;
+    if (entry.outcomeKind) {
+      // Battle: outcome word centred, HP changes under each combatant.
+      const word = entry.killed ? 'KILL'
+        : entry.outcomeKind === 'crush' ? 'CRUSH'
+        : entry.outcomeKind === 'hit'   ? 'HIT'
+        : 'MISS';
+      const kind = entry.killed ? 'kill' : entry.outcomeKind;
+      actorOut  = out(entry.actorDmg > 0 ? `COUNTER −${entry.actorDmg}` : '', 'counter');
+      centerOut = out(word, kind);
+      targetOut = out(entry.targetDmg > 0 ? `−${entry.targetDmg}` : '', kind);
+    } else {
+      // Move / explore / etc.: the note (BLOCKED / "+1 RESOURCE") sits centred.
+      actorOut  = out('', '');
+      centerOut = entry.note ? out(entry.note.text, entry.note.kind) : out('', '');
+      targetOut = out('', '');
+    }
+
+    return `<div class="replay-step-entry" data-entity="${entry.entityId ?? ''}"`
+         + ` data-action="${entry.actionType}" data-entry="${entryIdx}">`
+         + unit(entry.actor, entry.actorAllies)
+         + `<div class="replay-step-action">${entry.label}</div>`
+         + unit(entry.target, entry.targetAllies)
+         + actorOut + centerOut + targetOut
+         + `</div>`;
+  }
+
+  /**
+   * Mark a single entry in `stepIndex` as the one being performed right now
+   * (used to walk through serialized battles). Clears any prior highlight in
+   * that column.
+   */
+  highlightReplayEntry(stepIndex, entityId) {
+    const col = this._replayCol(stepIndex);
+    if (!col) return;
+    col.querySelectorAll('.replay-step-entry').forEach(e => e.classList.remove('is-acting'));
+    col.querySelectorAll(`.replay-step-entry[data-entity="${entityId}"]`)
+      .forEach(e => e.classList.add('is-acting'));
+  }
+
+  /**
+   * Highlight every entry of the given action type(s) at once — used when a
+   * phase animates several actions simultaneously (e.g. all moves together).
+   * Clears any prior highlight in the column.
+   */
+  highlightReplayActions(stepIndex, types) {
+    const col = this._replayCol(stepIndex);
+    if (!col) return;
+    const set = new Set(types);
+    col.querySelectorAll('.replay-step-entry').forEach(e =>
+      e.classList.toggle('is-acting', set.has(e.getAttribute('data-action'))));
+  }
+
+  /** Reveal the outcome line for one entry once its battle has resolved. */
+  revealReplayEntryOutcome(stepIndex, entityId) {
+    const col = this._replayCol(stepIndex);
+    if (!col) return;
+    col.querySelectorAll(`.replay-step-entry[data-entity="${entityId}"] .replay-step-outcome`)
+      .forEach(o => o.classList.add('revealed'));
+  }
+
+  /** Look up a step column element by index. */
+  _replayCol(stepIndex) {
+    const track = this._el('replay-timeline-track');
+    return track ? track.querySelector(`.replay-step-col[data-step="${stepIndex}"]`) : null;
+  }
+
+  /**
+   * Mark the column for animation step `stepIndex` active. At most three cards
+   * show: the previous (just-finished) card peeking half-off the left edge, the
+   * active card opaque at the left of the screen, and the next card translucent
+   * to its right — everything else hidden. The track slides one card left as
+   * steps advance. If the step is hidden (fogged → no card), the previously-
+   * active card stays put.
+   */
+  setReplayTimelineStep(stepIndex) {
+    const track = this._el('replay-timeline-track');
+    if (!track) return;
+    const cols = Array.from(track.querySelectorAll('.replay-step-col'));
+    if (!cols.length) return;
+
+    let activeOrd = cols.findIndex(c => c.getAttribute('data-step') === String(stepIndex));
+    if (activeOrd < 0) activeOrd = this._activeReplayOrd ?? 0;
+    activeOrd = Math.max(0, Math.min(cols.length - 1, activeOrd));
+    this._activeReplayOrd = activeOrd;
+
+    cols.forEach((col, j) => {
+      col.classList.remove('is-current', 'is-prev', 'is-next');
+      const d = j - activeOrd;
+      if (d === 0)       col.classList.add('is-current');   // opaque, left of screen
+      else if (d === -1) col.classList.add('is-prev');      // half-off-left, translucent
+      else if (d === 1)  col.classList.add('is-next');      // translucent, to the right
+      // |d| >= 2 → hidden (base opacity 0)
+    });
+
+    // Anchor: the previous card's centre sits on the container's left edge (so
+    // it's half-visible), putting the active card just right of it near the
+    // left of the screen. The track is position:relative, so offsetLeft is
+    // transform-independent (no drift). Guarded for the headless fake DOM.
+    const active = cols[activeOrd];
+    if (typeof active.offsetLeft !== 'number') return;
+    let target;
+    if (activeOrd > 0) {
+      const prev = cols[activeOrd - 1];
+      target = -(prev.offsetLeft + prev.offsetWidth / 2);
+    } else {
+      target = -active.offsetLeft + 12;   // first card flush to the left
+    }
+    this._replayTrackX = target;
+    track.style.transform = `translateX(${target}px)`;
+  }
+
+  /** Reveal the outcome lines for a step once it has played out. */
+  revealReplayOutcome(stepIndex) {
+    const track = this._el('replay-timeline-track');
+    if (!track) return;
+    const col = track.querySelector(`.replay-step-col[data-step="${stepIndex}"]`);
+    if (!col) return;
+    col.querySelectorAll('.replay-step-outcome').forEach(o => o.classList.add('revealed'));
+  }
+
+  /** Hide and clear the timeline overlay. */
+  hideReplayTimeline() {
+    const wrap  = this._el('replay-timeline');
+    const track = this._el('replay-timeline-track');
+    if (wrap) wrap.classList.remove('visible');
+    if (track) track.innerHTML = '';
+    this._replayDigest = null;
   }
 
   /**
