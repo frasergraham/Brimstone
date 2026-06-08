@@ -5641,10 +5641,13 @@ export class Renderer3D {
         if (typeof m.setEnabled === 'function') m.setEnabled(false);
         m.isPickable = false;
       }
-      // keepY: these rigs are feet-at-origin (unlike the hip-centred paladin),
-      // so the Hips' vertical baseline is what keeps them standing — preserve it
-      // or the idle collapses the figure into the ground.
-      stripRootBoneTranslation(idleGroup, 'mixamorig:Hips', { keepY: true });
+      // Do NOT strip the embedded idle's root motion. A Mixamo idle is an
+      // in-place loop with no net travel — its Hips sway side-to-side as a
+      // weight-shift that the foot/ankle bones are authored to stay planted
+      // against. Zeroing the Hips X/Z (as we do for walking, which has real
+      // forward travel the cone-slide handles) unplants the feet and makes
+      // them skate; zeroing Y sinks the figure (these rigs are feet-at-origin).
+      // Keeping the full clip matches Mixamo's preview exactly.
       if (idleGroup && typeof idleGroup.start === 'function') {
         idleGroup.weight = 1.0;
         idleGroup.start(true, 1.0);
