@@ -168,9 +168,9 @@ describe('UIController replay timeline overlay', () => {
     const track = mocks._elements['replay-timeline-track'];
     assert.ok(mocks._elements['replay-timeline']._classList.has('visible'));
     // Two visible cards numbered sequentially (the fogged step is dropped).
-    assert.match(track.innerHTML, /Step 1/);
-    assert.match(track.innerHTML, /Step 2/);
-    assert.doesNotMatch(track.innerHTML, /Step 3/);
+    assert.match(track.innerHTML, /Turn 1/);
+    assert.match(track.innerHTML, /Turn 2/);
+    assert.doesNotMatch(track.innerHTML, /Turn 3/);
     // data-step keeps the original indices (0 and 2; index 1 dropped).
     assert.match(track.innerHTML, /data-step="0"/);
     assert.match(track.innerHTML, /data-step="2"/);

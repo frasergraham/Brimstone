@@ -945,11 +945,12 @@
         <div id="replay-timeline">
           <div id="replay-timeline-track"></div>
         </div>
-        <!-- End-of-turn review: prev/next arrows to scrub the cards (shown
-             after the turn's replay finishes; no re-animation). -->
-        <div id="replay-review" style="display:none">
-          <button id="replay-review-prev" class="replay-review-btn" title="Previous card">◀</button>
-          <button id="replay-review-next" class="replay-review-btn" title="Next card">▶</button>
+        <!-- Replay progress: one dot per card (active filled). The < > scrub
+             arrows flank the dots, appearing only in end-of-turn review. -->
+        <div id="replay-progress">
+          <button id="replay-review-prev" class="replay-arrow" title="Previous card">◀</button>
+          <div id="replay-dots"></div>
+          <button id="replay-review-next" class="replay-arrow" title="Next card">▶</button>
         </div>
         <!-- Unified replay control bar (bottom-center): used for both the
              post-turn resolution replay and full-game replay. Back/Stop are
@@ -959,6 +960,7 @@
             <div class="replay-block-title">Controls</div>
             <div class="replay-block-btns">
               <button id="replay-back-btn"      class="replay-ctrl-btn" title="Previous round">Back</button>
+              <button id="replay-redo-btn"      class="replay-ctrl-btn" title="Replay this turn">↺</button>
               <button id="replay-next-btn"      class="replay-ctrl-btn" title="Next step">Next</button>
               <button id="replay-playpause-btn" class="replay-ctrl-btn" title="Auto-play (run every step)">AutoPlay</button>
               <button id="replay-stop-btn"      class="replay-ctrl-btn replay-stop" title="Stop">Stop</button>
@@ -993,9 +995,6 @@
           <button id="rotate-right" class="zoom-btn" title="Rotate right (3D)">↷</button>
           <button id="zoom-fit" class="zoom-btn" title="Fit map">⛶</button>
           <button id="zoom-me"  class="zoom-btn" title="Focus on my units">⊙</button>
-          <!-- 3D camera mode toggle: pan (✋) ↔ rotate (↻). Drag does the
-               active action; pinch / wheel always zooms. -->
-          <button id="cam3d-mode-toggle" class="zoom-btn" title="Drag = pan / rotate (3D)" data-mode="pan">✋</button>
           <button id="speed-toggle" class="zoom-btn" title="Battle speed">⚡</button>
           <!-- Map options button hidden — kept for future debug use -->
           <button id="map-options-toggle" class="zoom-btn" title="Map options" style="display:none">⚙</button>

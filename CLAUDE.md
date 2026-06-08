@@ -58,6 +58,18 @@ Browser-based, turn-based hex-grid strategy game set in cursed colonial New Engl
 
 ---
 
+## Core Terminology (canonical)
+
+Use these terms consistently in code comments, UI, and discussion:
+
+- **ROUND** — the top-level unit: every player submits a plan, and those plans execute, within a single day-cycle slot. Advances the phase (dawn/day/dusk/night). ⇒ in code today this is **`state.round`** / `_roundHistory` / `endRound()`.
+- **TURN** — a single step within a ROUND: one lockstep slot of the resolution containing ACTIONS from multiple units across all factions (moves simultaneous, battles serialized). ⇒ in code today this is the resolver **"step"** (`stepIndex`, `steps[]`, `step.heroEvents/witchEvents/playerEvents`). The replay timeline shows one card per TURN.
+- **ACTION** — a single unit's action within a TURN (move, attack, summon, explore, fortify, heal, …). ⇒ in code today this is a **`PlanAction`** (`PlanActionType`) when queued, resolving to a sub-event (`ResEventType`).
+
+⚠️ The code's internal names predate this glossary and **collide** with it: the resolver/UI call a TURN a "step." When touching that code, prefer the canonical words above (or note the mapping); don't silently rename existing identifiers like `stepIndex` without a deliberate refactor.
+
+---
+
 ## Run Commands
 
 ```bash

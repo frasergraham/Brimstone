@@ -17,6 +17,8 @@ export const playback = {
   aborted:       false,
   paused:        false,  // manual-step mode: hold at each step boundary for NEXT
   stepRequested: false,  // one-shot NEXT signal — releases a single step
+  replayStep:    false,  // replay the CURRENT step (round) from its start
+  restart:       false,  // replay the current turn's animations from the start
   goBack:        false,  // false | 'curr' | 'prev'
   atRoundStart:  false,  // true while paused at the pre-animation point of a round
   speedMult:     0.5,    // playback speed multiplier (full-game replay)
@@ -27,6 +29,8 @@ export function resetPlayback() {
   playback.aborted = false;
   playback.paused = false;
   playback.stepRequested = false;
+  playback.replayStep = false;
+  playback.restart = false;
   playback.goBack = false;
   playback.atRoundStart = false;
   playback.speedMult = 0.5;
@@ -76,7 +80,7 @@ export function playbackDelay(ms) {
   // `stepRequested` (a NEXT press) collapses the rest of the current step's
   // delays so the animation jumps ahead immediately; the step-gate then consumes
   // the flag and advances. jumpToEnd/aborted resolve instantly too.
-  const skip = playback.jumpToEnd || playback.aborted || playback.stepRequested;
+  const skip = playback.jumpToEnd || playback.aborted || playback.stepRequested || playback.restart || playback.replayStep;
   // Fast path: not replaying and nothing wants to interrupt — plain delay.
   // Pausing is handled at step boundaries (the manual-step gate), NOT mid-delay,
   // so a step's animation otherwise plays through to completion once started.
@@ -90,7 +94,7 @@ export function playbackDelay(ms) {
     let remaining = effective;
     let last = Date.now();
     function tick() {
-      if (playback.aborted || playback.goBack || playback.jumpToEnd || playback.stepRequested) { resolve(); return; }
+      if (playback.aborted || playback.goBack || playback.jumpToEnd || playback.stepRequested || playback.restart || playback.replayStep) { resolve(); return; }
       const now = Date.now();
       remaining -= (now - last);
       last = now;
@@ -140,6 +144,10 @@ export async function replayFullGame(refs, rounds, winner, winReason, heroName, 
       case 'next':
         // Advance one step; also releases a round-start hold.
         playback.stepRequested = true;
+        break;
+      case 'redo':
+        // Replay the CURRENT round from its start.
+        playback.goBack = 'curr';
         break;
       case 'back':
         playback.paused = true;

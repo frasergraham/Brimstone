@@ -2,7 +2,7 @@
 import { onInactiveChange, tryGameCenterAuth, isNativeMobile, refreshPushToken, loadGameCenterFriends, shareInvite } from './platform.js'; // must be first — sets server globals for Capacitor builds
 import { AppMode, getMode, setMode, isInGame, isAnimating, shouldBufferMessages, onModeChange } from './app-mode.js';
 import { initServerSelector } from './server-selector.js';
-import { GameState, phaseForRound } from './game.js';
+import { GameState, phaseForRound, getCycleLength } from './game.js';
 import { Renderer3D, BLOCK_WORD_VARIANTS } from './renderer-3d.js';
 
 // The in-game renderer is always 3D. The 2D `Renderer` is still exported from
@@ -723,9 +723,13 @@ async function _runLocalAutoResolution() {
 // renders the icons + score dots from this.
 function _buildWrapUpContent(steps, roundNum) {
   const combats = compileTurnBattlePairs(steps, state.entities, ResEventType, PlanActionType);
-  const nextRound = (roundNum ?? 0) + 1;
-  const nextPhase = phaseForRound(nextRound, state.cycleConfig);
-  const title = `${nextPhase.charAt(0).toUpperCase()}${nextPhase.slice(1)} — Round ${nextRound}`;
+  // Title the completed turn as "Day X Round Y — SUMMARY" (cycle day + round in
+  // cycle, matching the cycle bar's "Day N · Round M" convention).
+  const round = roundNum ?? 0;
+  const cycleLen = getCycleLength(state.cycleConfig);
+  const day = Math.ceil(round / cycleLen);
+  const roundInCycle = ((round - 1) % cycleLen) + 1;
+  const title = `Day ${day} Round ${roundInCycle} — SUMMARY`;
   return { title, combats };
 }
 
@@ -774,7 +778,19 @@ async function _runLocalResolution(skipSummary = false) {
     owner: nodeController(obj, preResEntities),
   }));
 
-  await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
+  // Animate the turn. The Redo control sets playback.restart to replay the
+  // turn's animations from the start — reset to pre-resolution and re-run.
+  do {
+    playback.restart = false;
+    await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
+    if (playback.restart) {
+      state.entities = preReplayEntities;
+      for (const [k, t] of state.tiles) {
+        if (t.explored && !preExploredSet.has(k)) t.explored = false;
+      }
+      redraw();
+    }
+  } while (playback.restart);
 
   // Update AI debug panel with resolution outcomes so the user can see
   // which planned actions actually executed vs were skipped/failed
@@ -852,11 +868,16 @@ async function _runLocalResolution(skipSummary = false) {
 
   if (!_autoplay && !skipSummary && ui && humanFaction && !state.gameOver) {
     // Normal turn — wrap-up card review (replaces the end-of-turn modal).
+    // Fold the night-attrition escalation into the card and consume the flag so
+    // the standalone planning-phase popup doesn't also fire.
+    const attritionLevel = (state.attritionChanged && state.attritionLevel > 0) ? state.attritionLevel : 0;
+    if (attritionLevel) state.attritionChanged = false;
     let action;
     do {
       const wrap = _buildWrapUpContent(steps, state.round - 1);
       action = await ui.showReplayWrapUp({
-        titleHtml: wrap.title, combats: wrap.combats, canReplay: _roundHistory.length > 0,
+        titleHtml: wrap.title, combats: wrap.combats, attritionLevel,
+        canReplay: _roundHistory.length > 0,
       });
       if (action === 'replay') await _reReplay();
     } while (action === 'replay');
@@ -1249,6 +1270,10 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         case 'next':
           playback.stepRequested = true;
           break;
+        case 'redo':
+          // Replay the CURRENT step (round) from its start — not the whole turn.
+          playback.replayStep = true;
+          break;
       }
     });
     ui.setReplayTransport?.(playback.paused);
@@ -1320,12 +1345,30 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
   // step's own step-level frame releases it naturally (and clears this flag).
   let _heldCombatFrame3D = false;
 
+  // Settle in-flight canvas animations. A NEXT/Redo/skip press HALTS instead:
+  // clears all running animations so units snap to their resolved positions and
+  // playback jumps ahead immediately.
+  const _settleAnims = async () => {
+    if (playback.stepRequested || playback.replayStep || playback.restart || playback.jumpToEnd || playback.aborted) {
+      renderer.clearAnimations?.();
+      return;
+    }
+    await renderer.waitForAnimations();
+  };
+
   for (let i = 0; i < steps.length; i++) {
-    // During replay: if BACK or STOP was pressed, abort remaining steps immediately
-    if (playback.goBack || playback.aborted || playback.jumpToEnd) break;
+    // During replay: if BACK/STOP/REDO was pressed, abort remaining steps immediately
+    if (playback.goBack || playback.aborted || playback.jumpToEnd || playback.restart) break;
     const step = steps[i];
     // Advance the timeline overlay: slide this step into the leftmost slot.
     ui?.setReplayTimelineStep?.(i);
+    // Keep the camera-suppress flag on the renderer we actually frame with, so
+    // FIXED never moves regardless of any ui.renderer/renderer instance split.
+    if (renderer) {
+      const _fixedCam = ui?.replayCameraMode === 'fixed';
+      renderer.suppressAutoFrame = _fixedCam;
+      if (_fixedCam) renderer._zoomAnim = null;   // cancel any in-flight 2D camera ease
+    }
     // Patch the CURRENT step's snapshot so any lookups against it resolve
     // to Entity methods (hasAbility / getAttack / hasTag). _isFogVisible
     // is the hot caller — it receives step.entitySnapshot directly and
@@ -1830,14 +1873,17 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             // ── Step 4: Clear highlights, animate lunge return ───────────────
             renderer.clearBattleHighlights();
             renderer.returnAllLungeAnims(); // slide entity back rather than snap
-            if (speed === 'cinematic') await renderer.waitForAnimations();
+            // Let the strike fully settle BEFORE revealing the result (all
+            // speeds); a NEXT/Redo press halts and snaps instead of waiting.
+            await _settleAnims();
             redrawFn();
 
           } else {
             // Autoplay: fire all animations immediately without dialogs or lunge.
             _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
           }
-          // The battle has resolved — reveal its outcome on the timeline.
+          // Reveal THIS action's rolls + outcome now that its animation has
+          // settled (per-ACTION, not at the end of the TURN).
           ui?.revealReplayEntryOutcome?.(i, actorSnap.id);
           hadBattle = true;
         }
@@ -2102,7 +2148,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         // Autoplay: fire all animations immediately
         _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
       }
-      // Guard strike resolved — reveal its outcome on the timeline.
+      // Reveal this guard strike's rolls + outcome (per-ACTION).
       ui?.revealReplayEntryOutcome?.(i, actorSnap.id);
       hadBattle = true;
     }
@@ -2239,6 +2285,9 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       return holder?.owner ?? null;
     });
 
+    // NEXT/Redo halts: stop any in-flight animations so units snap straight to
+    // their resolved (end-of-step) positions instead of finishing the tween.
+    if (playback.stepRequested || playback.replayStep || playback.restart) renderer.clearAnimations?.();
     state.entities = postEntities;
     redrawFn();
 
@@ -2278,8 +2327,9 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       await playbackDelay(_spd3 === 'vfast' ? 75 : 150);
     }
 
-    // The step has played out — reveal any outcomes not already shown
-    // individually (guard strikes, splash, steps without a per-battle reveal).
+    // The step has fully played out — settle its animations, THEN reveal the
+    // dice rolls + outcomes together (hidden until now). NEXT/Redo halts instead.
+    if (!_autoplay) await _settleAnims();
     ui?.revealReplayOutcome?.(i);
 
     // Manual-step gate: in paused mode, hold at this step boundary until NEXT
@@ -2297,13 +2347,22 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       if (!(fullMode && !laterHasCard)) {
         // Step finished animating — prompt the player to press NEXT.
         if (playback.paused) ui.setReplayNextReady?.(true);
-        while (playback.paused && !playback.stepRequested
-               && !playback.aborted && !playback.goBack && !playback.jumpToEnd) {
+        while (playback.paused && !playback.stepRequested && !playback.replayStep
+               && !playback.restart && !playback.aborted && !playback.goBack && !playback.jumpToEnd) {
           await new Promise(r => setTimeout(r, 50));
         }
         ui.setReplayNextReady?.(false);
-        playback.stepRequested = false;
+        if (!playback.replayStep) playback.stepRequested = false;
       }
+    }
+
+    // Redo: replay the CURRENT step from its start. Re-hide its rolls/outcome so
+    // they reveal again at the end of the re-run.
+    if (playback.replayStep) {
+      playback.replayStep = false;
+      renderer.clearAnimations?.();
+      ui?.hideReplayOutcome?.(i);
+      i -= 1;   // the loop's i++ brings us back to this step
     }
   }
 
@@ -2354,7 +2413,8 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
   // in the inline case — full PLAYBACK's outer loop (src/playback.js)
   // relies on jumpToEnd persisting across the animation call to route
   // the viewer to the end-of-replay hold screen.
-  if (skipHudActive) {
+  // On a Redo, keep the bar up — the caller immediately re-animates the turn.
+  if (skipHudActive && !playback.restart) {
     ui?.hideInlineReplayHUD?.();
     playback.jumpToEnd = false;
     playback.paused = false;          // clear the manual-step hold for next time
