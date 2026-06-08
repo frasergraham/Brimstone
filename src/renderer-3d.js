@@ -2217,8 +2217,9 @@ export class Renderer3D {
 
     // Locked camera angles. Alpha (yaw) is the user's initial heading — the
     // right-drag / two-finger twist / rotate buttons spin freely from there.
-    // Beta (tilt) is permanently π/4 (45°) — see CAMERA_BETA_LOCKED.
-    this._lockedAlpha = -Math.PI / 4;
+    // Start north-up (α = π/2, map north pointing up — same as the "fit" button's
+    // second tap). Beta (tilt) is permanently π/4 (45°) — see CAMERA_BETA_LOCKED.
+    this._lockedAlpha = Math.PI / 2;
     this._lockedBeta  = CAMERA_BETA_LOCKED;
 
     // ── Phase 5: animations, plan arrows, HP bars ──────────────────────────
