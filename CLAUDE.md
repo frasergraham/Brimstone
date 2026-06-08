@@ -50,7 +50,7 @@ These directives apply to all code changes — follow them without exception.
 
 Browser-based, turn-based hex-grid strategy game set in cursed colonial New England (Caleb's Hollow). Two asymmetric factions — **Hero** vs **Witch** — fight across a procedurally-generated map.
 
-**Win conditions:** Hero — slay the Witch, or hold more Power Nodes at enough dawn/dusk scoring checkpoints. Witch — slay the Hero, seize all 3 Power Nodes, or win on node-score points.
+**Win conditions:** Hero — slay the Witch, or hold the majority of Power Nodes at enough dawn/dusk scoring checkpoints (first to 4 points). Witch — slay the Hero, or win on node-score points. (The old "hold all 3 nodes at dawn/dusk" instant win was removed — it was too easy to stumble into accidentally.)
 
 **Game modes:** Human vs AI, Two Players, AI vs AI auto-play, Online multiplayer (1–4 players per side), async correspondence games, and a single-player **Campaign** of data-driven JSON missions.
 

@@ -217,8 +217,8 @@ describe('Node scoring with cluster control', () => {
 
 // ── Dynamic node count win text ───────────────────────────────────────────────
 
-describe('Node sweep win with non-standard node count', () => {
-  test('witch sweeping 2 nodes (not 3) triggers instant win', () => {
+describe('Holding all nodes does not trigger an instant win', () => {
+  test('witch holding all 2 nodes scores but does not win', () => {
     const state = new GameState(true, true);
     // Override to only 2 nodes
     state.witchObjectives = state.witchObjectives.slice(0, 2);
@@ -241,14 +241,11 @@ describe('Node sweep win with non-standard node count', () => {
     }
 
     state._checkNodeObjectives(Phase.DAWN);
-    assert.equal(state.winner, 'witch', 'witch should win by sweeping all 2 nodes');
-    assert.ok(state.winReason.includes('all Power Nodes'),
-      `win reason should say "all Power Nodes", got: ${state.winReason}`);
-    assert.ok(!state.winReason.includes('three'),
-      'win reason should not contain "three"');
+    assert.equal(state.winner, null, 'holding all nodes should not instant-win');
+    assert.equal(state.nodeScore.witch, 1, 'witch should score the majority point');
   });
 
-  test('hero sweeping 4 nodes triggers instant win', () => {
+  test('hero holding all 4 nodes scores but does not win', () => {
     const state = new GameState(true, true);
     // Add a 4th node
     const extra = {
@@ -275,11 +272,8 @@ describe('Node sweep win with non-standard node count', () => {
     }
 
     state._checkNodeObjectives(Phase.DAWN);
-    assert.equal(state.winner, 'hero', 'hero should win by sweeping all 4 nodes');
-    assert.ok(state.winReason.includes('all Power Nodes'),
-      `win reason should say "all Power Nodes", got: ${state.winReason}`);
-    assert.ok(!state.winReason.includes('three'),
-      'win reason should not contain "three"');
+    assert.equal(state.winner, null, 'holding all nodes should not instant-win');
+    assert.equal(state.nodeScore.hero, 1, 'hero should score the majority point');
   });
 });
 

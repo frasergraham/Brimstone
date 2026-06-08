@@ -113,7 +113,6 @@ export function serializeState(state) {
     nodeScore:            { ...state.nodeScore },
     disableScoring:       !!state.disableScoring,
     disableCycleBar:      !!state.disableCycleBar,
-    disableNodeSweep:     !!state.disableNodeSweep,
     disableScoreWin:      !!state.disableScoreWin,
     nodeScoreThreshold:   state.nodeScoreThreshold ?? 4,
     noWitchMission:       !!state.noWitchMission,
@@ -309,7 +308,6 @@ export function deserializeState(snap) {
   state.nodeScore            = { ...snap.nodeScore };
   state.disableScoring       = !!snap.disableScoring;
   state.disableCycleBar      = !!snap.disableCycleBar;
-  state.disableNodeSweep     = !!snap.disableNodeSweep;
   state.disableScoreWin      = !!snap.disableScoreWin;
   state.nodeScoreThreshold   = snap.nodeScoreThreshold ?? 4;
   state.noWitchMission       = !!snap.noWitchMission;

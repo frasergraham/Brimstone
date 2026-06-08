@@ -204,10 +204,7 @@ function computeReckoningLine(prevScore, currentScore, heroCount, witchCount) {
   const heroDelta  = currentScore.hero  - prevScore.hero;
   const witchDelta = currentScore.witch - prevScore.witch;
 
-  if (witchCount === 3 || heroCount === 3) {
-    const who = witchCount === 3 ? 'Witch' : 'Hero';
-    return `${who} holds all 3 Power Nodes!`;
-  } else if (witchDelta > 0) {
+  if (witchDelta > 0) {
     return `Witch holds ${witchCount} Power Node${witchCount !== 1 ? 's' : ''} to Hero's ${heroCount}. Witch scores 1 victory point.`;
   } else if (heroDelta > 0) {
     return `Hero holds ${heroCount} Power Node${heroCount !== 1 ? 's' : ''} to Witch's ${witchCount}. Hero scores 1 victory point.`;
@@ -240,14 +237,14 @@ describe('reckoning scoring line', () => {
     assert.ok(line.includes('tied'));
   });
 
-  test('witch instant win with 3 nodes', () => {
+  test('holding all 3 nodes scores a point (no instant-win line)', () => {
     const line = computeReckoningLine({ hero: 0, witch: 0 }, { hero: 0, witch: 1 }, 0, 3);
-    assert.equal(line, 'Witch holds all 3 Power Nodes!');
+    assert.equal(line, "Witch holds 3 Power Nodes to Hero's 0. Witch scores 1 victory point.");
   });
 
-  test('hero instant win with 3 nodes', () => {
+  test('hero holding all 3 nodes scores a point (no instant-win line)', () => {
     const line = computeReckoningLine({ hero: 0, witch: 0 }, { hero: 1, witch: 0 }, 3, 0);
-    assert.equal(line, 'Hero holds all 3 Power Nodes!');
+    assert.equal(line, "Hero holds 3 Power Nodes to Witch's 0. Hero scores 1 victory point.");
   });
 
   test('singular Power Node for 1', () => {

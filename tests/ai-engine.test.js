@@ -302,7 +302,7 @@ function makeBoard(overrides = {}) {
     minions: [], minionCount: 0, armyStrength: 0,
     visibleHeroes: [{}], heroDistance: 5, heroHpRatio: 1.0, enemiesNearWitch: 0,
     heroLeader: null, heroSurvivors: [], visibleSurvivors: [], woundedEnemies: [],
-    witchArmyTotal: 1, minionsNearWitch: 0, canSweepNodes: false,
+    witchArmyTotal: 1, minionsNearWitch: 0,
     nodes: [], witchHeldCount: 0, heroHeldCount: 0,
     witchScore: 0, heroScore: 0,
     totalResources: 4, metalCount: 0, woodCount: 2, canAffordSummon: true, bestSummonType: EntityType.WOOD_GOLEM,

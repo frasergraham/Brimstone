@@ -66,10 +66,6 @@ export const GameMode = Object.freeze({
 export const WIN_REASON = {
   WITCH_SLAIN:      'The hero hunted down the witch and ended the curse!',
   HERO_SLAIN:       'The hero fell in battle. Caleb\'s Hollow is lost to darkness.',
-  NODES_WITCH:      'The witch seized all Power Nodes at dawn — the ritual is complete!',
-  NODES_HERO:       'The hero held all Power Nodes at dawn — the witch\'s ritual is broken!',
-  NODES_WITCH_DUSK: 'As dusk falls, the witch holds all Power Nodes — the ritual advances!',
-  NODES_HERO_DUSK:  'As dusk falls, the hero holds all Power Nodes — the witch\'s ritual is disrupted!',
   SCORE_WITCH:      'The witch dominates the Power Nodes across three cycles — the ritual is complete!',
   SCORE_HERO:       'The hero holds the Power Nodes through the darkness — the curse is broken!',
   BATTLE_HERO:      'The week-long Battle for Caleb\'s Hollow ends — the heroes prevail!',
@@ -272,7 +268,7 @@ export class GameState {
     this.witchSummonCount = 0; // total summons performed by witch side
     this.heroRevealedByHorn = false; // true when hero sounded horn this round
 
-    // Cumulative node scoring: each dawn/dusk majority scores 1 point; first to 3 wins.
+    // Cumulative node scoring: each dawn/dusk majority scores 1 point; first to 4 wins.
     this.nodeScore = { hero: 0, witch: 0 };
     // When true, skip dawn/dusk node scoring and hide the score track UI.
     this.disableScoring = !!mapDataOverride?.disableScoring;
@@ -280,11 +276,6 @@ export class GameState {
     // Independent of disableScoring so a mission can show the cycle without
     // exposing point-based scoring (campaign missions with phase-based wins).
     this.disableCycleBar = !!mapDataOverride?.disableCycleBar;
-    // When true, controlling all power nodes at dawn/dusk does NOT trigger
-    // an instant win — point-based scoring still runs. Used by campaign
-    // missions where the loss/win condition depends on accumulated score
-    // (e.g. Mission 7 — kill the witch before she scores 4 points).
-    this.disableNodeSweep = !!mapDataOverride?.disableNodeSweep;
     // Score threshold for the standard "first to N points wins" rule.
     // Defaults to 4 (multiplayer baseline); campaign missions can raise it.
     this.nodeScoreThreshold = mapDataOverride?.nodeScoreThreshold ?? 4;
@@ -1043,32 +1034,12 @@ export class GameState {
     const isBattle   = this.gameMode === GameMode.BATTLE;
     const isDawn     = phase === Phase.DAWN;
     const phaseLabel = isDawn ? 'dawn' : 'dusk';
-    const nodeCount  = this.witchObjectives.length;
 
     let witchCount = 0, heroCount = 0;
     for (const obj of this.witchObjectives) {
       const ctrl = nodeController(obj, this.entities);
       if (ctrl === 'witch') witchCount++;
       if (ctrl === 'hero')  heroCount++;
-    }
-
-    // Instant win: sweep all nodes (disabled in battle mode, and opt-out
-    // for campaign missions that drive loss from accumulated points only).
-    if (!isBattle && !this.disableNodeSweep && witchCount === nodeCount) {
-      this.winner    = 'witch';
-      this.winReason = isDawn ? WIN_REASON.NODES_WITCH : WIN_REASON.NODES_WITCH_DUSK;
-      this.addLog(isDawn
-        ? `🌙 As dawn breaks, ${this.factionName('witch')} holds all Power Nodes! Caleb's Hollow is lost…`
-        : `🌙 As dusk falls, ${this.factionName('witch')} holds all Power Nodes! The ritual advances!`);
-      return;
-    }
-    if (!isBattle && !this.disableNodeSweep && heroCount === nodeCount) {
-      this.winner    = 'hero';
-      this.winReason = isDawn ? WIN_REASON.NODES_HERO : WIN_REASON.NODES_HERO_DUSK;
-      this.addLog(isDawn
-        ? `☀ At dawn, ${this.factionName('hero')} holds all Power Nodes! ${this.factionName('witch')}'s ritual is broken!`
-        : `☀ As dusk falls, ${this.factionName('hero')} holds all Power Nodes! The ritual is disrupted!`);
-      return;
     }
 
     // Scoring: whoever controls more nodes scores 1 point (ties score nothing)

@@ -4372,11 +4372,7 @@ export class UIController {
           const phaseLabel = state.phase === 'dawn' ? '🌅 Dawn Reckoning' : '🌇 Dusk Reckoning';
 
           let reckoningLine;
-          const totalNodes = state.witchObjectives.length;
-          if (witchCount === totalNodes || heroCount === totalNodes) {
-            const who = witchCount === totalNodes ? 'Witch' : 'Hero';
-            reckoningLine = `${who} holds all Power Nodes!`;
-          } else if (witchDelta > 0) {
+          if (witchDelta > 0) {
             reckoningLine = `Witch holds ${witchCount} Power Node${witchCount !== 1 ? 's' : ''} to Hero's ${heroCount}. Witch scores 1 victory point.`;
           } else if (heroDelta > 0) {
             reckoningLine = `Hero holds ${heroCount} Power Node${heroCount !== 1 ? 's' : ''} to Witch's ${witchCount}. Hero scores 1 victory point.`;

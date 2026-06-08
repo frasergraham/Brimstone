@@ -359,7 +359,6 @@ delegates, wave processors, and pre-placed enemies.
   // ── Faction / AI ────────────────────────────────────────
   hasWitch:        true,              // false = no witch leader spawned
   disableScoring:  true,              // turn off dawn/dusk node scoring entirely
-  disableNodeSweep: true,             // 3-of-3 node sweep no longer auto-wins
   disableScoreWin:  true,             // first-to-N points win disabled
   isTutorial:      false,             // suppresses fog & some UI
   aiPersonality:   'aggressive',      // see §10

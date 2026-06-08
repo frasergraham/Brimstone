@@ -66,7 +66,6 @@ function buildMissionState(missionDef) {
   mapData.noWitch         = !missionDef.hasWitch;
   mapData.disableScoring  = !!missionDef.disableScoring;
   mapData.disableCycleBar = !!missionDef.disableCycleBar;
-  mapData.disableNodeSweep = !!missionDef.disableNodeSweep;
   mapData.disableScoreWin  = !!missionDef.disableScoreWin;
   if (missionDef.nodeScoreThreshold != null) {
     mapData.nodeScoreThreshold = missionDef.nodeScoreThreshold;
