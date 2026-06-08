@@ -173,6 +173,33 @@ describe('_maybeToggleFallbackRigAnimation', () => {
     assert.ok(idle.calls.some(c => c[0] === 'stop'), 'idle stopped');
   });
 
+  test('does NOT walk for a lunging unit — combat is a strike, not a walk', () => {
+    const r = newRenderer();
+    const idle = makeAnimGroup(), walk = makeAnimGroup();
+    const src = { cloneTag: 'zombie', idleGroup: idle, walkGroup: walk, activeGroup: 'idle' };
+    r._rigSources.set('zombie-idle.glb', src);
+    r._activeMoveIds = new Set();           // no real move
+    r._activeLungeIds = new Set(['z1']);    // mid-lunge (combat)
+    r.state = { entities: [{ id: 'z1', type: 'zombie' }] };
+    r._maybeToggleFallbackRigAnimation();
+    assert.equal(src.activeGroup, 'idle', 'stayed idle, did not walk');
+    assert.ok(!walk.calls.some(c => c[0] === 'play' || c[0] === 'start'), 'walk never started');
+  });
+
+  test('yields the rig while a punch is playing', () => {
+    const r = newRenderer();
+    const idle = makeAnimGroup(), walk = makeAnimGroup();
+    const src = { cloneTag: 'zombie', idleGroup: idle, walkGroup: walk,
+      activeGroup: 'punch', punchPlaying: true };
+    r._rigSources.set('zombie-idle.glb', src);
+    r._activeMoveIds = new Set(['z1']);
+    r._activeLungeIds = new Set();
+    r.state = { entities: [{ id: 'z1', type: 'zombie' }] };
+    r._maybeToggleFallbackRigAnimation();
+    assert.equal(src.activeGroup, 'punch', 'punch left untouched');
+    assert.ok(!walk.calls.length && !idle.calls.length, 'no group swapped mid-strike');
+  });
+
   test('returns to idle when nothing is moving', () => {
     const r = newRenderer();
     const idle = makeAnimGroup(), walk = makeAnimGroup();
