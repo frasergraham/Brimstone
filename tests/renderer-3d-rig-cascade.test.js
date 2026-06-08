@@ -95,6 +95,30 @@ function newRenderer() {
   return r;
 }
 
+describe('_ensureFallbackRig cascade', () => {
+  test('advances to the mannequin after the type-specific rig 404s', () => {
+    const r = newRenderer();
+    const calls = [];
+    r._loadFallbackRig = (file) => { calls.push(file); return Promise.resolve(null); };
+    // Reproduce the stuck state: witch-idle.glb was attempted and 404'd, so it
+    // sits in BOTH _rigFileMissing and (staler) _rigLoadPromises.
+    r._rigFileMissing.add('witch-idle.glb');
+    r._rigLoadPromises.set('witch-idle.glb', Promise.resolve(null));
+    r._ensureFallbackRig({ type: 'witch' });
+    // Must skip the dead type rig and kick the mannequin — not get blocked on
+    // the stale in-flight promise.
+    assert.deepEqual(calls, [MANNEQUIN_RIG_FILE]);
+  });
+
+  test('kicks the type-specific rig first when nothing is loaded yet', () => {
+    const r = newRenderer();
+    const calls = [];
+    r._loadFallbackRig = (file) => { calls.push(file); return Promise.resolve(null); };
+    r._ensureFallbackRig({ type: 'zombie' });
+    assert.deepEqual(calls, ['zombie-idle.glb']);
+  });
+});
+
 describe('_buildRigClone tint', () => {
   test('tints each clone to the owner colour when tintColor is given', () => {
     const r = newRenderer();

@@ -5484,13 +5484,17 @@ export class Renderer3D {
    *  known-missing; when a candidate 404s it's marked missing and the next
    *  call advances to the following candidate (the per-frame standee sync keeps
    *  calling until a rig lands or the cascade is exhausted → cone+sphere). */
-  _ensureFallbackRig(entity, basePath = 'assets') {
+  _ensureFallbackRig(entity, basePath = this._assetsBasePath || 'assets') {
     if (!this._babylon || !this._scene) return;
     if (this._loadedFallbackRigFor(entity)) return; // already have one
     for (const file of fallbackRigCandidates(entity)) {
+      // Order matters: a 404'd file must skip to the NEXT candidate even though
+      // its (now-resolved) promise still sits in _rigLoadPromises — otherwise
+      // the in-flight check below would return and the cascade would never
+      // reach the mannequin for any unit lacking a <type>-idle.glb.
+      if (this._rigFileMissing.has(file)) continue;  // 404'd — next candidate
       if (this._rigSources.has(file)) return;        // loaded — done
       if (this._rigLoadPromises.has(file)) return;   // in flight — wait
-      if (this._rigFileMissing.has(file)) continue;  // 404'd — next candidate
       this._loadFallbackRig(file, basePath);
       return;
     }
@@ -5500,7 +5504,7 @@ export class Renderer3D {
    *  to the standee target). Resolves to the source or null (404 / no geometry).
    *  Lighter than _loadPaladinModel by design: no walk/run/punch wiring — the
    *  cascade rigs play only their embedded idle for now. */
-  async _loadFallbackRig(file, basePath = 'assets') {
+  async _loadFallbackRig(file, basePath = this._assetsBasePath || 'assets') {
     if (this._rigLoadPromises.has(file)) return this._rigLoadPromises.get(file);
     const BABYLON = this._babylon;
     const promise = (async () => {
