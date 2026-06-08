@@ -5583,9 +5583,23 @@ export class Renderer3D {
     const len = Math.hypot(fx, fz) || 1;
     fx /= len; fz /= len;
     const rx = -fz, rz = fx; // right = forward rotated -90° on the ground
-    const step = Math.max(2, camera.radius * 0.18);
+    // dx/dy are view-extent fractions; scale by radius so a step covers a
+    // consistent share of the screen at any zoom.
+    const step = camera.radius;
     camera.target.x += (rx * dx - fx * dy) * step;
     camera.target.z += (rz * dx - fz * dy) * step;
+  }
+
+  /** Multiply the zoom by `factor` (>1 zooms in) with no animation — for the
+   *  per-frame keyboard zoom loop. Clamped to the camera's radius limits; the
+   *  beta-on-zoom ramp in _onBeforeRender follows automatically. Interface
+   *  parity with the 2D Renderer.zoomBy(). */
+  zoomBy(factor) {
+    const camera = this._camera;
+    if (!camera || this.viewLocked || !(factor > 0)) return;
+    const lower = camera.lowerRadiusLimit ?? CAMERA_MIN_ZOOM_RADIUS;
+    const upper = camera.upperRadiusLimit ?? CAMERA_MAX_ZOOM_RADIUS;
+    camera.radius = Math.max(lower, Math.min(upper, camera.radius / factor));
   }
 
   /** Set the 3D drag-mode toggle: 'pan' or 'rotate'. UI calls this when the

@@ -20,9 +20,12 @@
 // excluded — there is no map to drive there.
 const IN_GAME = new Set(['PLANNING', 'SUBMITTED', 'RESOLVING', 'SUMMARY', 'PLAYBACK', 'SPECTATING']);
 
-// Rotation step per Shift+Arrow press (radians) and zoom multiplier per press.
-const ROTATE_STEP = Math.PI / 12;
-const ZOOM_FACTOR = 1.18;
+// Continuous (held-key) camera rates, applied per 60fps frame and scaled by the
+// real frame delta so motion is smooth and frame-rate independent. Arrow keys
+// drive a requestAnimationFrame loop rather than one jump per keydown.
+const PAN_RATE  = 0.02;    // fraction of the view extent per frame
+const ROT_RATE  = 0.025;   // radians per frame
+const ZOOM_RATE = 1.02;    // zoom multiplier per frame
 
 /**
  * The canonical shortcut list — single source of truth for the `H` overlay so
@@ -37,7 +40,7 @@ export const SHORTCUTS = Object.freeze([
   { keys: 'Tab',              label: 'Cycle to the next unit' },
   { keys: 'Shift + Tab',      label: 'Cycle to the previous unit' },
   { keys: 'F',                label: 'Focus the camera on the selected unit' },
-  { keys: 'M',                label: 'Fit the whole map to the view' },
+  { keys: 'M',                label: 'Fit map to view (again: orient north-up)' },
   { keys: 'X',                label: 'Clear the selected unit’s actions' },
   { keys: 'Space',            label: 'Next step (replay)' },
   { keys: 'Shift + Enter',    label: 'Submit plan' },
@@ -190,6 +193,12 @@ class KeybindingManager {
     this._confirmEl = null;
     this._helpVisible = false;
     this._consoleVisible = false;
+    // Held-key camera motion (arrows): set of held arrow keys + live shift,
+    // driven by a requestAnimationFrame loop.
+    this._held = new Set();
+    this._shift = false;
+    this._rafId = null;
+    this._lastTs = 0;
   }
 
   get ui() { return this._getUi?.() ?? null; }
@@ -213,8 +222,13 @@ class KeybindingManager {
   install() {
     window.addEventListener('keydown', (e) => this._onKeyDown(e));
     window.addEventListener('keyup', (e) => this._onKeyUp(e));
-    // Releasing focus (alt-tab, etc.) should drop a held help overlay.
-    window.addEventListener('blur', () => this._hideHelp());
+    // Releasing focus (alt-tab, etc.) should drop a held help overlay and any
+    // in-progress camera motion (otherwise a key "sticks" if keyup is missed).
+    window.addEventListener('blur', () => { this._hideHelp(); this._stopMoveLoop(); });
+  }
+
+  _isArrow(key) {
+    return key === 'ArrowUp' || key === 'ArrowDown' || key === 'ArrowLeft' || key === 'ArrowRight';
   }
 
   _isEditableTarget(e) {
@@ -229,6 +243,9 @@ class KeybindingManager {
     // The console input swallows its own keys (Enter/Escape) via its handler.
     if (this._consoleVisible) return;
     if (this._isEditableTarget(e)) return;
+
+    // Track live shift so toggling it mid-hold switches pan ⇄ rotate/zoom.
+    this._shift = e.shiftKey;
 
     const ui = this.ui;
     const action = resolveKeyAction(e, {
@@ -254,12 +271,75 @@ class KeybindingManager {
       return;
     }
 
+    // Arrow keys (pan/rotate/zoom) drive a continuous held-key loop for smooth
+    // sliding instead of one jump per keydown. resolveKeyAction already gated
+    // them to in-game modes; we register the key and let the loop apply motion
+    // using the LIVE shift state (so toggling Shift mid-hold switches modes).
+    if (action.id === 'pan' || action.id === 'rotate' || action.id === 'zoom') {
+      e.preventDefault();
+      this._held.add(e.key);
+      this._startMoveLoop();
+      return;
+    }
+
     e.preventDefault();
     this._execute(action);
   }
 
   _onKeyUp(e) {
+    this._shift = e.shiftKey;
+    if (this._isArrow(e.key)) {
+      this._held.delete(e.key);
+      if (this._held.size === 0) this._stopMoveLoop();
+    }
     if (this._helpVisible && (e.key === 'h' || e.key === 'H')) this._hideHelp();
+  }
+
+  // ── Continuous camera motion (held arrow keys) ───────────────────────────
+
+  _startMoveLoop() {
+    if (this._rafId != null) return;
+    this._lastTs = 0;
+    this._rafId = requestAnimationFrame((ts) => this._moveTick(ts));
+  }
+
+  _stopMoveLoop() {
+    if (this._rafId != null) cancelAnimationFrame(this._rafId);
+    this._rafId = null;
+    this._held.clear();
+  }
+
+  _moveTick(ts) {
+    this._rafId = null;
+    const r = this.renderer;
+    // Bail (and clear) if we left an in-game mode or lost the renderer.
+    if (!r || !IN_GAME.has(this.ui?.appMode) || this._held.size === 0) {
+      this._held.clear();
+      return;
+    }
+    // Frame-delta factor: 1.0 at 60fps, clamped so a stutter can't lurch.
+    const f = this._lastTs ? Math.min(3, (ts - this._lastTs) / 16.67) : 1;
+    this._lastTs = ts;
+
+    let dx = 0, dy = 0;
+    if (this._held.has('ArrowLeft'))  dx -= 1;
+    if (this._held.has('ArrowRight')) dx += 1;
+    if (this._held.has('ArrowUp'))    dy -= 1;
+    if (this._held.has('ArrowDown'))  dy += 1;
+
+    this._camera(() => {
+      if (this._shift) {
+        // Shift: ←/→ rotate, ↑/↓ zoom.
+        if (dx) r.rotateBy?.(dx * ROT_RATE * f, 0);
+        if (dy) r.zoomBy?.(Math.pow(ZOOM_RATE, -dy * f)); // ↑ (dy<0) zooms in
+      } else if (dx || dy) {
+        // Plain: pan. Horizontal is flipped so ←/→ track the on-screen axis.
+        r.panByScreen?.(-dx * PAN_RATE * f, dy * PAN_RATE * f);
+      }
+    });
+    this.ui?.onRedraw?.();
+
+    this._rafId = requestAnimationFrame((t) => this._moveTick(t));
   }
 
   _blockingDialogOpen() {
@@ -280,24 +360,8 @@ class KeybindingManager {
 
   _execute(action) {
     const ui = this.ui;
-    const r = this.renderer;
+    // pan / rotate / zoom are handled by the held-key loop, not here.
     switch (action.id) {
-      case 'pan':
-        this._camera(() => r?.panByScreen?.(action.dx, action.dy));
-        ui?.onRedraw?.();
-        break;
-      case 'rotate':
-        this._camera(() => r?.rotateBy?.(action.dir * ROTATE_STEP, 0));
-        ui?.onRedraw?.();
-        break;
-      case 'zoom': {
-        const cx = (r?.canvas?.width ?? 0) / 2;
-        const cy = (r?.canvas?.height ?? 0) / 2;
-        const factor = action.dir > 0 ? ZOOM_FACTOR : 1 / ZOOM_FACTOR;
-        this._camera(() => r?.setZoom?.((r?.zoomLevel ?? 1) * factor, cx, cy));
-        ui?.onRedraw?.();
-        break;
-      }
       case 'cycle-unit':
         ui?._cycleSelection?.(action.dir);
         break;
@@ -307,8 +371,10 @@ class KeybindingManager {
         break;
       }
       case 'fit-map':
-        this._camera(() => r?.resetView?.());
-        ui?.onRedraw?.();
+        // Reuse the fit button so M matches it exactly: tap frames the map;
+        // tapping again when already framed orients north-up. The handler has
+        // no double-tap window, so repeated M presses are safe.
+        document.getElementById('zoom-fit')?.click();
         break;
       case 'clear-unit':
         this._clearSelectedUnit();
