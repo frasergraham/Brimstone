@@ -359,13 +359,21 @@ describe('submit button progress bar', () => {
       '--progress should be removed from floating button after stop');
   });
 
-  test('_doSubmitPlan resets progress bar', () => {
+  test('keeps the deadline timer running after submitting', () => {
     const { ui, els } = makeUI();
     ui.enterPlanningMode('hero', 3, 60000);
+    assert.ok(els['plan-submit-btn'].style._props['--progress'] !== undefined,
+      'progress active during planning');
+
     ui._doSubmitPlan();
 
-    assert.equal(els['plan-submit-btn'].style._props['--progress'], undefined,
-      '--progress should be removed after submitting');
+    // Submission no longer stops the countdown: the deadline timer keeps ticking
+    // while waiting for opponents (see markPlanSubmitted — "countdown will keep
+    // ticking"). The progress bar persists until _stopCountdown runs at round end.
+    assert.ok(els['plan-submit-btn'].style._props['--progress'] !== undefined,
+      'progress bar persists after submit (deadline timer keeps running)');
+
+    ui._stopCountdown();
   });
 });
 

@@ -63,9 +63,11 @@ describe('describePlanAction', () => {
   });
 
   test('SUMMON action', () => {
+    // Summons spawn on the summoner's own tile now (no chosen hex), so the
+    // description carries no coordinates.
     assert.equal(
-      describePlanAction({ type: PlanActionType.SUMMON, entityId: 'w1', toCol: 7, toRow: 2 }, entities),
-      'Witch summons at (7,2)',
+      describePlanAction({ type: PlanActionType.SUMMON, entityId: 'w1' }, entities),
+      'Witch summons',
     );
   });
 
