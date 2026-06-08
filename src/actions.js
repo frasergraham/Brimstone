@@ -957,6 +957,10 @@ export function executeBattle(state, actor, target) {
   const distToTarget = hexDistance(actor.col, actor.row, target.col, target.row);
   const isRanged = atkRange > 1;
   const isCloseRanged = isRanged && distToTarget <= 1;
+  // Distance falloff for ranged shots — floor((dist-1)/2) attack penalty.
+  // dist 1–2: 0, 3–4: -1, 5–6: -2. Melee unaffected. Composes with the
+  // point-blank disadvantage die below (penalty is 0 at dist 1, no double-dip).
+  const rangeDistancePenalty = isRanged ? Math.floor((distToTarget - 1) / 2) : 0;
 
   // Phase bonus — faction-specific (e.g. witch gets +2 ATK at night)
   const attackerFaction = getFaction(actor.owner);
@@ -1009,7 +1013,7 @@ export function executeBattle(state, actor, target) {
     Entity.resolveCombat(actor, target, {
       // Phase stays flat here — converting to advantage turned out too steep a
       // nerf to witch's night window; see CLAUDE.md §Tuning for the sweep.
-      extraAtkBonus: atkFortAtkBonus + phaseBonus + atkGangupFlat,
+      extraAtkBonus: atkFortAtkBonus + phaseBonus + atkGangupFlat - rangeDistancePenalty,
       atkAdvantageDice,
       atkDisadvantageDice,
       defAdvantageDice,
@@ -1023,8 +1027,9 @@ export function executeBattle(state, actor, target) {
   target.defendCount += 1;
 
   const phaseNote  = phaseBonus > 0 ? ' (🌙 night bonus)' : '';
+  const rangeFalloffNote = rangeDistancePenalty > 0 ? ` (−${rangeDistancePenalty} range)` : '';
   const rangedNote   = isRanged
-    ? (isCloseRanged ? ' 🎯 (point-blank, disadvantage)' : ' 🏹 (ranged)')
+    ? (isCloseRanged ? ' 🎯 (point-blank, disadvantage)' : ` 🏹 (ranged)${rangeFalloffNote}`)
     : '';
   const coverNote    = forestCoverBonus > 0 ? ' 🌲 (forest cover +1 DEF)' : '';
   const gangNote    = !isRanged && attackerAllies >= 1
@@ -1211,7 +1216,7 @@ export function executeBattle(state, actor, target) {
       phaseBonus, fortBonus, atkFortAtkBonus, fatiguePenalty,
       atkGangupFlat, defGangupFlat,
       atkAdvantageDice, defAdvantageDice, atkDisadvantageDice,
-      forestCoverBonus,
+      forestCoverBonus, rangeDistancePenalty,
       atkBaseStat, atkWeaponMod, atkAbilityMod, atkEffectMod, atkAttackBonus,
       defBaseStat, defWeaponMod, defAbilityMod, defEffectMod, defDefenseBonus,
       ranged: isRanged, closeRanged: isCloseRanged,
@@ -1603,28 +1608,44 @@ export function executeGuardStrike(state, guardian, target) {
   const atkFortAtkBonus = guardian.owner === 'witch' ? 0 : atkFortRaw.attack;
   const fortBonus       = target.owner === 'witch'   ? 0 : defFortRaw.defense;
 
+  // Ranged guard strike (opportunity shot) obeys the same rules as a ranged
+  // attack: no crush, no splash, no counter, forest cover for the target,
+  // distance falloff, and point-blank disadvantage. Melee guard strikes are
+  // unaffected (gRange == 1 → all the ranged flags are 0/false).
+  const gRange = (typeof guardian.getRange === 'function' ? guardian.getRange() : (guardian.range ?? 1));
+  const dist = hexDistance(guardian.col, guardian.row, target.col, target.row);
+  const isRanged = gRange > 1;
+  const isCloseRanged = isRanged && dist <= 1;
+  const rangeDistancePenalty = isRanged ? Math.floor((dist - 1) / 2) : 0;
+  const forestCoverBonus = (isRanged && isForestCover(defTile)) ? 1 : 0;
+  const atkDisadvantageDice = isCloseRanged ? 1 : 0;
+
   // No ally dice, no fatigue penalty; attacker fort ATT bonus still applies.
   const { attackRoll, defenseRoll, hit, margin,
           atkBaseDie, defBaseDie, atkStaffBonus } =
     Entity.resolveCombat(guardian, target, {
-      extraAtkBonus: atkFortAtkBonus + phaseBonus,
-      extraDefBonus: fortBonus,
+      extraAtkBonus: atkFortAtkBonus + phaseBonus - rangeDistancePenalty,
+      extraDefBonus: fortBonus + forestCoverBonus,
+      atkDisadvantageDice,
       state,
     });
 
   // Restore attackBonus
   guardian.attackBonus = savedAtkBonus;
 
-  log.push(
-    `🛡 ${guardian.displayName} strikes from guard! ` +
-    `[${attackRoll} vs ${defenseRoll}]`
-  );
+  const rangeFalloffNote = rangeDistancePenalty > 0 ? ` (−${rangeDistancePenalty} range)` : '';
+  const strikeVerb = isRanged
+    ? (isCloseRanged ? `🏹 ${guardian.displayName} looses a point-blank shot from cover!`
+                     : `🏹 ${guardian.displayName} looses an opportunity shot!${rangeFalloffNote}`)
+    : `🛡 ${guardian.displayName} strikes from guard!`;
+  log.push(`${strikeVerb} [${attackRoll} vs ${defenseRoll}]`);
 
   let killed = false;
   let damage = 0;
   let splashKills = [];
   let splashHits  = [];
-  const isCrush = hit && attackRoll >= 2 * defenseRoll;
+  // Ranged guard strikes never crush (mirrors ranged attacks).
+  const isCrush = !isRanged && hit && attackRoll >= 2 * defenseRoll;
 
   if (hit) {
     const totalDmg = isCrush ? 2 : 1;
@@ -1656,8 +1677,8 @@ export function executeGuardStrike(state, guardian, target) {
     }
     if (isCrush) log.push(`💥 Crushing blow from guard!`);
 
-    // Splash damage on crush or kill
-    if (isCrush || killed) {
+    // Splash damage on crush or kill — melee only. Ranged shots never splash.
+    if (!isRanged && (isCrush || killed)) {
       const splash = _applySplashDamage(state, target.col, target.row, [guardian.id, target.id], log);
       splashKills = splash.splashKills;
       splashHits  = splash.splashHits;
@@ -1689,15 +1710,18 @@ export function executeGuardStrike(state, guardian, target) {
   return {
     success: true, log, cost: 0, guardStrike: true,
     attackRoll, defenseRoll, hit, killed, margin, damage, splashKills, splashHits,
+    ranged: isRanged, closeRanged: isCloseRanged,
     breakdown: {
       atkBaseDie, defBaseDie,
       atkExtraDice: [], defExtraDice: [],
       atkPool: [atkBaseDie], defPool: [defBaseDie],
       atkAllyNames: [], defAllyNames: [],
       atkGangupFlat: 0, defGangupFlat: 0,
-      atkAdvantageDice: 0, defAdvantageDice: 0,
+      atkAdvantageDice: 0, defAdvantageDice: 0, atkDisadvantageDice,
       atkStaffBonus, phaseBonus, fortBonus, atkFortAtkBonus,
+      forestCoverBonus, rangeDistancePenalty,
       fatiguePenalty: 0,
+      ranged: isRanged, closeRanged: isCloseRanged,
       atkBaseStat, atkWeaponMod, atkAbilityMod, atkEffectMod, atkAttackBonus: 0,
       defBaseStat, defWeaponMod, defAbilityMod, defEffectMod, defDefenseBonus,
     },

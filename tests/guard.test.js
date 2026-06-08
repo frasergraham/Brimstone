@@ -246,6 +246,71 @@ describe('executeGuardStrike', () => {
     assert.equal(r.success, true);
     assert.equal(r.breakdown.phaseBonus, 2, 'Witch should get +2 phase bonus at night');
   });
+
+  // ── Ranged guard strikes (opportunity shots) ──────────────────────────────
+  test('ranged guard strike: huge margin still deals 1 dmg, no crush, no splash', () => {
+    const state = freshState();
+    const guard = state.hero;
+    guard.range = 3;            // ranged guard (reach 2)
+    guard.guarding = 1;
+    const target = state.witch;
+    guard.col = 5; guard.row = 5;
+    target.col = 7; target.row = 5;   // dist 2 — not point-blank
+    state.setForcedDice(6, 1);         // would crush if melee
+    const targetHpBefore = target.hp;
+    const r = executeGuardStrike(state, guard, target);
+    assert.equal(r.ranged, true);
+    assert.equal(r.closeRanged, false);
+    assert.equal(r.hit, true);
+    assert.equal(r.damage, 1, 'ranged guard strike caps at 1 damage');
+    assert.equal(target.hp, targetHpBefore - 1);
+    assert.equal(r.attackRoll >= 2 * r.defenseRoll, true, 'margin would crush if melee');
+    assert.equal(r.splashKills.length, 0);
+    assert.equal(r.splashHits.length, 0);
+  });
+
+  test('ranged guard strike honours forest cover (+1 DEF) on the target hex', () => {
+    const state = freshState();
+    const guard = state.hero;
+    guard.range = 3;
+    guard.guarding = 1;
+    const target = state.witch;
+    guard.col = 5; guard.row = 5;
+    target.col = 7; target.row = 5;
+    state.tiles.get(hexKey(7, 5)).base = TileType.FOREST;
+    state.setForcedDice(3, 3);
+    const r = executeGuardStrike(state, guard, target);
+    assert.equal(r.ranged, true);
+    assert.equal(r.breakdown.forestCoverBonus, 1, 'forest cover applies to ranged guard strikes');
+  });
+
+  test('ranged guard strike applies distance falloff at range 3+', () => {
+    const state = freshState();
+    const guard = state.hero;
+    guard.range = 5;
+    guard.guarding = 1;
+    const target = state.witch;
+    guard.col = 5; guard.row = 5;
+    target.col = 9; target.row = 5;   // dist 4 → penalty 1
+    state.setForcedDice(3, 3);
+    const r = executeGuardStrike(state, guard, target);
+    assert.equal(r.breakdown.rangeDistancePenalty, 1);
+  });
+
+  test('melee guard strike is unaffected — no ranged flags', () => {
+    const state = freshState();
+    const hero = state.hero;
+    hero.guarding = 1;
+    const adj = emptyPassableNeighbor(state, hero);
+    if (!adj) return;
+    const minion = createMinion(adj.col, adj.row);
+    minion.owner = 'witch';
+    state.entities.push(minion);
+    const r = executeGuardStrike(state, hero, minion);
+    assert.equal(r.ranged, false);
+    assert.equal(r.breakdown.rangeDistancePenalty, 0);
+    assert.equal(r.breakdown.forestCoverBonus, 0);
+  });
 });
 
 // ── Guard strikes via resolver ───────────────────────────────────────────────
@@ -387,6 +452,107 @@ describe('Guard strikes in resolver', () => {
     // the witch moves in step 1. The survivor guards in step 2 (after witch already moved).
     // So at least 1 guard strike should fire from the hero.
     assert.ok(guardStrikes.length >= 1, `Expected 1+ guard strikes, got ${guardStrikes.length}`);
+  });
+});
+
+// ── Ranged opportunity shots via resolver ────────────────────────────────────
+
+describe('ranged opportunity shots via resolver', () => {
+  function collectGuardStrikes(steps) {
+    const out = [];
+    for (const step of steps) {
+      for (const ev of (step.heroEvents ?? [])) if (ev.type === ResEventType.GUARD_STRIKE) out.push(ev);
+      for (const ev of (step.witchEvents ?? [])) if (ev.type === ResEventType.GUARD_STRIKE) out.push(ev);
+    }
+    return out;
+  }
+  // Carve a clean, passable, unobstructed grass band around row 5 so movement
+  // and line-of-sight are deterministic regardless of the generated map.
+  function clearBand(state) {
+    for (let c = 3; c <= 11; c++) {
+      for (let r = 3; r <= 7; r++) {
+        const t = state.tiles.get(hexKey(c, r));
+        if (!t) continue;
+        t.base = TileType.GRASS;
+        t.path = null;
+        t.structure = null;
+        t.buildingFootprintOf = null;
+        t.footprintHexes = [];
+        t.fortifyLevel = 0;
+      }
+    }
+  }
+
+  test('ranged guard fires when an enemy moves into reduced range with LOS', () => {
+    const state = freshState();
+    const guard = state.hero;
+    const mover = state.witch;
+    state.entities = state.entities.filter(e => e === guard || e === mover);
+    guard.range = 3;          // reach = range - 1 = 2
+    guard.guarding = 1;
+    guard.col = 5; guard.row = 5;
+    mover.col = 8; mover.row = 5;   // dist 3 — out of reach to start
+    clearBand(state);
+    state.setForcedDice(...Array(20).fill(3));
+
+    const steps = resolvePlans(state, [],
+      [{ type: PlanActionType.MOVE, entityId: mover.id, toCol: 7, toRow: 5 }]); // → dist 2
+    const gs = collectGuardStrikes(steps);
+    assert.ok(gs.length >= 1, 'ranged opportunity shot should fire at reach 2 with clear LOS');
+    assert.equal(gs[0].battleSnaps.ranged, true, 'tagged as a ranged guard strike');
+    assert.equal(gs[0].faction, 'hero');
+  });
+
+  test('ranged guard does NOT fire when line of sight is blocked', () => {
+    const state = freshState();
+    const guard = state.hero;
+    const mover = state.witch;
+    state.entities = state.entities.filter(e => e === guard || e === mover);
+    guard.range = 3;
+    guard.guarding = 1;
+    guard.col = 5; guard.row = 5;
+    mover.col = 8; mover.row = 5;
+    clearBand(state);
+    // Forest at the midpoint blocks the sightline from (5,5) to (7,5).
+    state.tiles.get(hexKey(6, 5)).base = TileType.FOREST;
+    state.setForcedDice(...Array(20).fill(3));
+
+    const steps = resolvePlans(state, [],
+      [{ type: PlanActionType.MOVE, entityId: mover.id, toCol: 7, toRow: 5 }]);
+    assert.equal(collectGuardStrikes(steps).length, 0, 'blocked LOS suppresses the opportunity shot');
+  });
+
+  test('ranged guard does NOT fire when the enemy stays beyond reduced range', () => {
+    const state = freshState();
+    const guard = state.hero;
+    const mover = state.witch;
+    state.entities = state.entities.filter(e => e === guard || e === mover);
+    guard.range = 3;          // reach 2
+    guard.guarding = 1;
+    guard.col = 5; guard.row = 5;
+    mover.col = 9; mover.row = 5;   // dist 4
+    clearBand(state);
+    state.setForcedDice(...Array(20).fill(3));
+
+    const steps = resolvePlans(state, [],
+      [{ type: PlanActionType.MOVE, entityId: mover.id, toCol: 8, toRow: 5 }]); // → dist 3, still out of reach
+    assert.equal(collectGuardStrikes(steps).length, 0, 'dist 3 is outside a range-3 guard\'s reach (2)');
+  });
+
+  test('melee guard still reacts only to adjacent movement (range 1 regression)', () => {
+    const state = freshState();
+    const guard = state.hero;   // default range 1
+    const mover = state.witch;
+    state.entities = state.entities.filter(e => e === guard || e === mover);
+    guard.guarding = 1;
+    guard.col = 5; guard.row = 5;
+    mover.col = 8; mover.row = 5;
+    clearBand(state);
+    state.setForcedDice(...Array(20).fill(3));
+
+    const steps = resolvePlans(state, [],
+      [{ type: PlanActionType.MOVE, entityId: mover.id, toCol: 7, toRow: 5 }]); // → dist 2
+    assert.equal(collectGuardStrikes(steps).length, 0, 'melee guard ignores dist-2 movement');
   });
 });
 

@@ -146,12 +146,19 @@ Defined in `Entity.resolveCombat()` in `src/entities.js`.
 | **Gang-up** | Multiple attackers on same hex | +1d3 per additional ally |
 | **Fortification** | Building fortified 1-4 | +1 DEF per level |
 | **Staff weapon** | Equipped staff | +2 ATK vs undead entities |
-| **Guard stance** | GUARD action | Reactive counter-attacks on adjacent moves |
+| **Guard stance** | GUARD action | Free reactive strike when an enemy acts in reach (ranged units shoot, see below) |
 | **Fatigue** | Multiple battles per round | -1 per additional battle |
+| **Range falloff** | Ranged attack at distance | -`floor((dist-1)/2)` ATK — 0 at dist 1-2, -1 at 3-4, -2 at 5-6 |
+
+Ranged attacks (`getRange() > 1`, e.g. witch range 2, rogue range 3) use a distinct
+rule set: no gang-up, no crushing blows, no splash, **no counter-attack**, the
+defender gains +1 DEF in forest cover, point-blank (dist ≤ 1) shots fire at
+disadvantage, and the range-falloff penalty above scales with distance.
 
 ### Guard Strikes
 
-When a unit moves adjacent to a guarding enemy, the guard gets a free reactive attack:
+When an enemy acts within a guarding unit's reach, the guard spends one charge on a
+free reactive attack (`_checkGuardStrikes` in `server/resolver.js`):
 
 ```
 Guard at hex A (charges: 2)
@@ -163,6 +170,18 @@ Guard at hex A (charges: 2)
                                     Free resolveCombat(guard, enemy)
                                     Remaining charges: 1
 ```
+
+**Reach by guard type:**
+- **Melee guard** (`getRange() <= 1`): reacts to enemies in the 6 adjacent hexes.
+- **Ranged guard / opportunity shot** (`getRange() > 1`): reacts out to `getRange() - 1`
+  hexes (reduced range), but only with a clear line of sight to the trigger hex.
+  The shot obeys the ranged rule set — no crush, no counter, forest cover for the
+  target, distance falloff, and point-blank disadvantage. So a guarding witch
+  (range 2 → reach 1) fires a point-blank shot at an adjacent foe; a guarding rogue
+  (range 3 → reach 2) shoots foes up to 2 hexes away if she can see them.
+
+The renderer paints the guard-area highlight using this same reach + LOS rule so the
+zone shown matches where shots actually fire.
 
 ---
 
@@ -192,7 +211,7 @@ The caller then calls `state.spendAction(result.cost)` to deduct from the budget
 │              │ BATTLE_HEX — blind attack in fog (1 AP)      │
 ├──────────────┼──────────────────────────────────────────────┤
 │ DEFENSE      │ FORTIFY — build defense (+1-2 DEF) (1 AP)    │
-│              │ GUARD — stance with counter-attacks (1 AP)    │
+│              │ GUARD — stance with reactive strikes (1 AP)   │
 ├──────────────┼──────────────────────────────────────────────┤
 │ ECONOMY      │ SUMMON — witch creates unit (1 AP)           │
 │              │ HEAL — use herbs (+2 HP) (1 AP)              │

@@ -2,7 +2,7 @@
 import {
   MAP_COLS, MAP_ROWS, SQRT3,
   getNeighbors,
-  hexToPixel, pixelToHex as _pixelToHex, hexKey, hexDistance,
+  hexToPixel, pixelToHex as _pixelToHex, hexKey, hexDistance, hexRange,
 } from './hex.js';
 import {
   TileType, TILE_COLOR, BUILDING_COLOR, BUILDING_LABEL, BUILDING_ICON,
@@ -13,7 +13,7 @@ import {
   BUILDING_ENTRANCE_NUDGE,
 } from './building-render.js';
 import { ENTITY_COLOR, EntityType, SurvivorAbility, isLeaderType } from './entities.js';
-import { getVisiblePositions, sightRange, computeLineOfSight } from './actions.js';
+import { getVisiblePositions, sightRange, computeLineOfSight, hasLineOfSight } from './actions.js';
 import { getFaction } from './factions.js';
 import { getFactionTheme, NEUTRAL_NODE_FILL } from './theme.js';
 import { nodeController, Phase } from './game.js';
@@ -1487,8 +1487,20 @@ export class Renderer {
       for (const e of state.entities) {
         if (!e.alive || !(e.guarding > 0)) continue;
         if (revealedHexes && e.owner === hiddenFaction && !revealedHexes.has(hexKey(e.col, e.row))) continue;
-        for (const n of getNeighbors(e.col, e.row)) {
-          guardZoneKeys.add(hexKey(n.col, n.row));
+        const gRange = (typeof e.getRange === 'function' ? e.getRange() : (e.range ?? 1));
+        if (gRange > 1) {
+          // Ranged guard: reach = range-1, LOS-gated (matches _checkGuardStrikes).
+          for (const h of hexRange(e.col, e.row, gRange - 1)) {
+            if (h.col === e.col && h.row === e.row) continue;
+            if (!state.tiles.has(hexKey(h.col, h.row))) continue;
+            if (hasLineOfSight(state, e.col, e.row, h.col, h.row)) {
+              guardZoneKeys.add(hexKey(h.col, h.row));
+            }
+          }
+        } else {
+          for (const n of getNeighbors(e.col, e.row)) {
+            guardZoneKeys.add(hexKey(n.col, n.row));
+          }
         }
       }
       for (const key of guardZoneKeys) {

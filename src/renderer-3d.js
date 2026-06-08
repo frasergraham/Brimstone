@@ -17545,6 +17545,7 @@ export function combatReadoutModel(result, side) {
     if (bd.phaseBonus > 0)        addStep('phase',  bd.phaseBonus);
     if (bd.atkGangupFlat > 0)     addStep('allies', bd.atkGangupFlat);
     if (bd.atkFortAtkBonus > 0)   addStep('fort',   bd.atkFortAtkBonus);
+    if (bd.rangeDistancePenalty > 0) addStep('range', -bd.rangeDistancePenalty);
   } else {
     if (bd.defBaseStat > 0)       addStep('def',    bd.defBaseStat);
     if (bd.defWeaponMod > 0)      addStep('weapon', bd.defWeaponMod);
