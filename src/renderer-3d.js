@@ -479,6 +479,44 @@ export function stripRootBoneTranslation(animGroup, rootName = 'mixamorig:Hips',
   return stripped;
 }
 
+/** Rebase a clip's root (Hips) translation so its VERTICAL baseline sits at the
+ *  rig's own rest height `restY`, while preserving the clip's bob and zeroing
+ *  horizontal drift. This is the asset-agnostic alternative to
+ *  stripRootBoneTranslation's all-or-nothing Y handling: animation clips encode
+ *  an ABSOLUTE hip height in their own export's units, so a rig's own idle, a
+ *  shared walk.glb, and a hip-centred export all disagree — keeping (keepY) or
+ *  zeroing the absolute value makes one rig float and another sink. Rebasing to
+ *  `restY` (the Hips' rest-pose Y, measured per rig at load) anchors every clip
+ *  at the same standing height regardless of which export it came from. When
+ *  `restY` is null (no rest measurement — test stubs) the Y is left untouched.
+ *  Pure; exported for tests. */
+export function rebaseRootBoneY(animGroup, restY, rootName = 'mixamorig:Hips') {
+  if (!animGroup || !Array.isArray(animGroup.targetedAnimations)) return 0;
+  const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
+  let done = 0;
+  for (const ta of animGroup.targetedAnimations) {
+    const tName = ta && ta.target && ta.target.name;
+    const prop  = ta && ta.animation && ta.animation.targetProperty;
+    if (!tName || !prop) continue;
+    if (tName !== rootName && stripDup(tName) !== rootName) continue;
+    if (!/position/i.test(prop)) continue;
+    const keys = ta.animation.getKeys ? ta.animation.getKeys() : null;
+    if (!keys || !keys.length) continue;
+    const firstY = (keys[0].value && typeof keys[0].value.y === 'number') ? keys[0].value.y : 0;
+    for (const k of keys) {
+      if (k.value && typeof k.value === 'object'
+        && 'x' in k.value && 'y' in k.value && 'z' in k.value) {
+        k.value.x = 0;
+        k.value.z = 0;
+        // Preserve the bob (k.y - firstY); anchor the baseline at restY.
+        if (typeof restY === 'number') k.value.y = restY + (k.value.y - firstY);
+      }
+    }
+    done++;
+  }
+  return done;
+}
+
 // Time (ms) after the last motion before the paladin returns to IDLE.
 // During this window the walking animation is PAUSED (frozen mid-stride)
 // rather than running idle — so a multi-hex chain reads as "walk → freeze
@@ -4683,7 +4721,9 @@ export class Renderer3D {
       try { clone?.dispose?.(); } catch { /* ignore */ }
       return null;
     }
-    stripRootBoneTranslation(clone, 'mixamorig:Hips', { keepY });
+    // Rebase the clip's hip baseline to THIS rig's rest height so a shared clip
+    // (walk/run) and the rig's own clips all sit at the same standing height.
+    rebaseRootBoneY(clone, src.restHipsY);
     if (typeof clone.start === 'function') clone.start(loop, speed);
     if (rest === 'stop') { if (typeof clone.stop === 'function') clone.stop(); }
     else if (typeof clone.pause === 'function') clone.pause();
@@ -4904,22 +4944,26 @@ export class Renderer3D {
         if (typeof m.setEnabled === 'function') m.setEnabled(false);
         m.isPickable = false;
       }
-      // Do NOT strip the embedded idle's root motion. A Mixamo idle is an
-      // in-place loop with no net travel — its Hips sway side-to-side as a
-      // weight-shift that the foot/ankle bones are authored to stay planted
-      // against. Zeroing the Hips X/Z (as we do for walking, which has real
-      // forward travel the cone-slide handles) unplants the feet and makes
-      // them skate; zeroing Y sinks the figure (these rigs are feet-at-origin).
-      // Keeping the full clip matches Mixamo's preview exactly.
+      const { scale, feetOffset, hipCentered } = this._normalisePaladinSource(meshes);
+      const transformNodes = Array.isArray(result.transformNodes) ? result.transformNodes.slice() : [];
+      // Measure the Hips' REST-pose Y *before* the idle starts animating — this
+      // is the rig's correct standing hip height, the anchor every clip rebases
+      // to (rebaseRootBoneY). Different exports (this idle, the shared walk.glb,
+      // a hip-centred paladin) carry different absolute hip heights, so without
+      // this one floats while another sinks.
+      const hipsTN = transformNodes.find(tn => tn && /(^|:)Hips$/.test(tn.name || ''));
+      const restHipsY = (hipsTN && hipsTN.position && typeof hipsTN.position.y === 'number')
+        ? hipsTN.position.y : null;
+      // Rebase the embedded idle to that rest height (preserves the weight-shift
+      // sway + bob, strips horizontal drift) so the rig stands on the ground.
+      rebaseRootBoneY(idleGroup, restHipsY);
       if (idleGroup && typeof idleGroup.start === 'function') {
         idleGroup.weight = 1.0;
         idleGroup.start(true, 1.0);
       }
-      const { scale, feetOffset, hipCentered } = this._normalisePaladinSource(meshes);
-      const transformNodes = Array.isArray(result.transformNodes) ? result.transformNodes.slice() : [];
       const src = {
         mesh: skinned, meshes, skeleton, idleGroup, transformNodes,
-        scale, feetOffset, hipCentered,
+        scale, feetOffset, hipCentered, restHipsY,
         cloneTag: file.replace(/-idle\.glb$|\.glb$/, '') || 'rig',
         tintable: file === MANNEQUIN_RIG_FILE,
       };

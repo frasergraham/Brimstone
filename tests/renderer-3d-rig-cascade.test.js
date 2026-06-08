@@ -14,6 +14,7 @@ import {
   entityTypeRigFile,
   fallbackRigCandidates,
   stripRootBoneTranslation,
+  rebaseRootBoneY,
   MANNEQUIN_RIG_FILE,
 } from '../src/renderer-3d.js';
 
@@ -27,6 +28,25 @@ function makeHipsGroup() {
     _keys: keys,
   };
 }
+
+describe('rebaseRootBoneY', () => {
+  test('anchors the hip baseline at restY, preserves the bob, strips x/z', () => {
+    const g = makeHipsGroup(); // keys: y 90 then 92, x/z non-zero
+    rebaseRootBoneY(g, 10);
+    // firstY=90 → key0 lands at restY (10); key1 keeps the +2 bob → 12.
+    assert.equal(g._keys[0].value.y, 10);
+    assert.equal(g._keys[1].value.y, 12);
+    for (const k of g._keys) { assert.equal(k.value.x, 0); assert.equal(k.value.z, 0); }
+  });
+
+  test('leaves Y untouched when restY is null (still strips x/z)', () => {
+    const g = makeHipsGroup();
+    rebaseRootBoneY(g, null);
+    assert.equal(g._keys[0].value.y, 90, 'Y unchanged');
+    assert.equal(g._keys[0].value.x, 0);
+    assert.equal(g._keys[0].value.z, 0);
+  });
+});
 
 describe('stripRootBoneTranslation keepY', () => {
   test('default strips all three axes (hip-centred paladin rig)', () => {
