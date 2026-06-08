@@ -13466,8 +13466,21 @@ export class Renderer3D {
       // per-ghost so the 50% alpha doesn't leak onto the source.
       let ghostClone = null;
       let ghostMats = null;
+      // Hero/paladin → walking-source ghost (decoupled skeleton so the live
+      // unit idles while the ghost walks). Non-paladin → a clone of its loaded
+      // fallback rig (mannequin / zombie / <type>) so the preview shows the
+      // model, not the cone+sphere pawn. Falls through to cone+sphere only when
+      // no rig is loaded yet.
       if (this._paladinSource && unitUsesPaladinModel(ent)) {
         ghostClone = this._buildWalkingGhostClone(ent, cone);
+      } else if (!unitUsesPaladinModel(ent)) {
+        const rigSrc = this._loadedFallbackRigFor(ent);
+        if (rigSrc) {
+          ghostClone = this._buildRigClone(ent, cone, rigSrc,
+            rigSrc.tintable ? { tintColor: this._ownerColorFor(ent) } : {});
+        }
+      }
+      {
         if (ghostClone) {
           cone.visibility = 0;
           sphere.visibility = 0;
@@ -13749,8 +13762,12 @@ export class Renderer3D {
     const usesPaladin = !!(standee.paladinClone
       && Array.isArray(standee.paladinClone.childMeshes)
       && standee.paladinClone.childMeshes.length);
+    // Use the clone's OWN skeleton — every rig (paladin, mannequin, zombie) has
+    // its own bone hierarchy. Binding a mannequin mesh to the paladin's skeleton
+    // (different bone count) explodes the skinning into stray geometry. For the
+    // paladin these are the same object, so its outline is unchanged.
     const sharedSkeleton = usesPaladin
-      ? (this._paladinSource?.skeleton || standee.paladinClone.skinnedMesh?.skeleton || null)
+      ? (standee.paladinClone.skinnedMesh?.skeleton || this._paladinSource?.skeleton || null)
       : null;
 
     const maskMeshes = this._cloneXrayLayer(srcMeshes, standee, {
