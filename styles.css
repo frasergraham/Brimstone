@@ -6544,3 +6544,118 @@ body.spectator-mode #game-screen   { display: flex !important; }
   color: var(--text-dim);
   white-space: nowrap;
 }
+
+/* ── Keyboard shortcuts: command console, help overlay, confirm prompt ─────── */
+
+.cmd-console,
+.kb-help,
+.kb-confirm { z-index: 9000; }
+
+.cmd-console.hidden,
+.kb-help.hidden,
+.kb-confirm.hidden { display: none; }
+
+/* Command console — slides down from the top, dims nothing but itself. */
+.cmd-console {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: 45vh;
+  background: rgba(13, 15, 22, 0.96);
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.6);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+.cmd-console-output {
+  overflow-y: auto;
+  padding: 8px 12px 4px;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+}
+.cmd-console-msg { line-height: 1.4; }
+.cmd-console-msg.cmd-cmd { color: var(--text-bright); }
+.cmd-console-msg.cmd-ok  { color: var(--green); }
+.cmd-console-msg.cmd-err { color: var(--red); }
+.cmd-console-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+}
+.cmd-console-prompt { color: var(--hero); }
+.cmd-console-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-bright);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+/* Shortcuts overlay — shown while the H key is held. */
+.kb-help {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+.kb-help-panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 18px 24px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.7);
+  max-width: 90vw;
+}
+.kb-help-title {
+  margin: 0 0 12px;
+  color: var(--hero);
+  font-size: 1.1rem;
+  text-align: center;
+}
+.kb-help-table { border-collapse: collapse; }
+.kb-help-table td { padding: 4px 14px; vertical-align: top; }
+.kb-help-keys {
+  font-family: var(--font-mono);
+  color: var(--text-bright);
+  white-space: nowrap;
+  text-align: right;
+}
+.kb-help-label { color: var(--text); }
+
+/* Confirm prompt — modal, used for destructive shortcuts (clear actions). */
+.kb-confirm {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+}
+.kb-confirm-panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px 24px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.7);
+  max-width: 360px;
+  text-align: center;
+}
+.kb-confirm-msg { color: var(--text-bright); margin-bottom: 16px; }
+.kb-confirm-btns { display: flex; gap: 12px; justify-content: center; }
+.kb-confirm-btns button {
+  padding: 7px 18px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  font-family: var(--font-serif);
+}
+.kb-confirm-yes { background: var(--red); color: #fff; border-color: var(--red); }
+.kb-confirm-cancel { background: var(--bg-section); color: var(--text); }

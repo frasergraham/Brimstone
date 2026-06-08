@@ -138,6 +138,8 @@ export function makeFakeRenderer() {
     resetView()       {},
     setZoom()         {},
     frameHexes()      {},
+    panByScreen()     {},
+    rotateBy()        {},
     _clampPan()       {},
     getPortraitDataURL() { return null; },
     getTileDataURL() { return null; },

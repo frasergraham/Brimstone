@@ -38,6 +38,7 @@ import { sightRange, computeLineOfSight, hasLineOfSight } from './actions.js';
 import { UNIT_TYPES } from './unit-types.js';
 import { getFaction, findFaction, allFactions, getFactionsForSide, sightRangeForEntity } from './factions.js';
 import { compileTurnBattleSummary, compileTurnBattlePairs, collectTurnFinds } from './battle-utils.js';
+import { installKeybindings } from './keybindings.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import { playback, resetPlayback, replayFullGame, playbackDelay, swapState, patchAlive } from './playback.js';
 import { ReplayCache } from './replay-cache.js';
@@ -110,6 +111,12 @@ if (!window.electronAPI) {
 }
 
 let state, renderer, ui, witchAI, heroAI;
+
+// Global in-game keyboard shortcuts + debug command console. Installed once;
+// reads the live UIController via the accessor so it survives ui/renderer
+// re-creation across new-game / online / spectator starts. (No-op in tests.)
+installKeybindings(() => ui);
+
 let _autoplay  = false;
 // _inGame and _resolving replaced by AppMode state machine (src/app-mode.js)
 let _pendingPlanningPhase = null; // buffered onPlanningPhase payload received during animation

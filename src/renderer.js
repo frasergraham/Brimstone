@@ -1170,6 +1170,20 @@ export class Renderer {
     this._panY = 0;
   }
 
+  // Keyboard pan: nudge the view by a screen-relative step. dx>0 reveals
+  // content to the right, dy>0 reveals content below. Magnitude is a fraction
+  // of the viewport so a keypress feels consistent at any size. Interface
+  // parity with Renderer3D.panByScreen().
+  panByScreen(dx, dy) {
+    if (this.viewLocked) return;
+    this._zoomAnim = null; // cancel any in-flight auto-framing
+    const stepX = (this.canvas?.width  || 800) * 0.12;
+    const stepY = (this.canvas?.height || 600) * 0.12;
+    this._panX -= dx * stepX;
+    this._panY -= dy * stepY;
+    this._clampPan();
+  }
+
   // 3D-only operation; 2D camera has no rotation axes. Defined for interface
   // parity with Renderer3D so ui.js can wire rotate buttons unconditionally.
   rotateBy(_alphaDelta, _betaDelta) { /* no-op in 2D */ }

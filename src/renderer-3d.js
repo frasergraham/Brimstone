@@ -5566,6 +5566,28 @@ export class Renderer3D {
     camera.alpha = camera.alpha + alphaDelta;
   }
 
+  /** Keyboard pan: nudge the camera target along the screen-relative ground
+   *  plane. dx>0 pans right, dy>0 pans down (toward the viewer), both relative
+   *  to the current yaw so arrow keys always track the on-screen axes. The step
+   *  scales with the zoom radius so it feels consistent at any zoom; the
+   *  per-frame clamp in _onBeforeRender keeps the target inside the map.
+   *  Interface parity with the 2D Renderer.panByScreen(). */
+  panByScreen(dx, dy) {
+    if (this.viewLocked) return;
+    const camera = this._camera;
+    if (!camera) return;
+    // Ground-projected forward (screen-up) vector from the camera yaw.
+    const fwd = camera.getForwardRay?.().direction;
+    let fx = fwd ? fwd.x : Math.cos(camera.alpha);
+    let fz = fwd ? fwd.z : Math.sin(camera.alpha);
+    const len = Math.hypot(fx, fz) || 1;
+    fx /= len; fz /= len;
+    const rx = -fz, rz = fx; // right = forward rotated -90° on the ground
+    const step = Math.max(2, camera.radius * 0.18);
+    camera.target.x += (rx * dx - fx * dy) * step;
+    camera.target.z += (rz * dx - fz * dy) * step;
+  }
+
   /** Set the 3D drag-mode toggle: 'pan' or 'rotate'. UI calls this when the
    *  operator taps the camera-mode button in #zoom-controls. Wheel / pinch
    *  always zooms regardless of mode. */
@@ -6053,33 +6075,16 @@ export class Renderer3D {
 
     // Diagnostic handle: lets the operator run `__brimstone3dDebug.ribbons()`
     // from the browser console to inspect the runtime material/light state of
-    // the road and river ribbons. `inspector()` toggles the Babylon Inspector
-    // (also bound to the `D` hotkey). No-op when `window` is undefined (tests).
+    // the road and river ribbons. `inspector()` toggles the Babylon Inspector.
+    // The inspector / border-forest / fog-debug toggles are also reachable
+    // in-game through the command console (Escape → /inspector, /forest, /fog);
+    // see src/keybindings.js. No-op when `window` is undefined (tests).
     if (typeof window !== 'undefined') {
       window.__brimstone3dDebug = {
         ribbons: () => this.dumpRibbonDebug(),
         renderer: this,
         inspector: () => this._toggleInspector(),
       };
-      if (typeof document !== 'undefined' && !this._inspectorKeyBound) {
-        this._inspectorKeyBound = true;
-        window.addEventListener('keydown', (e) => {
-          if (e.metaKey || e.ctrlKey || e.altKey) return;
-          const t = e.target;
-          const tag = (t?.tagName || '').toUpperCase();
-          if (tag === 'INPUT' || tag === 'TEXTAREA' || t?.isContentEditable) return;
-          if (e.key === 'd' || e.key === 'D') {
-            e.preventDefault();
-            this._toggleInspector();
-          } else if (e.key === 'f' || e.key === 'F') {
-            e.preventDefault();
-            this._toggleBorderForest();
-          } else if (e.key === 't' || e.key === 'T') {
-            e.preventDefault();
-            this._cycleFogDebugMode();
-          }
-        });
-      }
     }
   }
 
