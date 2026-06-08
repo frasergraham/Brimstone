@@ -3977,10 +3977,12 @@ export class Renderer3D {
       + `scale=${paladinScale.toFixed(3)}, hex=${hexStepWU.toFixed(2)}wu, anim=${MOVE_ANIM_MS}ms)`,
     );
     this._walkingSource.speedRatio = walkSpeedRatio;
-    // Strip root motion on the native walking group too — ghost clones
-    // riding walking's skeleton would otherwise translate through space
-    // on their own in addition to the cone slide along the planned path.
-    stripRootBoneTranslation(walkGroupNative);
+    // Strip horizontal root drift on the native walking group — ghost clones
+    // riding walking's skeleton would otherwise translate through space on
+    // their own in addition to the cone slide. keepY: preserve the Hips
+    // vertical baseline, or feet-at-origin rigs (mannequin/zombie) that clone
+    // THIS native group for their walk sink into the ground mid-stride.
+    stripRootBoneTranslation(walkGroupNative, 'mixamorig:Hips', { keepY: true });
     if (typeof walkGroupNative.start === 'function') {
       walkGroupNative.start(true, walkSpeedRatio);
     }
