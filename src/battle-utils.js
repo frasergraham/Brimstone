@@ -122,14 +122,14 @@ export function compileTurnBattlePairs(steps, finalEntities, ResEventType, PlanA
  * Collect a turn's survivor/zombie discoveries and explore-loot icons for the
  * end-of-turn wrap-up card.
  *
- * Loot is the PLAYER's only: each faction's explore resources go to its own
- * inventory, so counting the AI's loot here double-shows shared icons (both
- * sides finding wood reads as "🪵 ×2"). We gate loot on `humanFaction` to match
- * the old summary (`ev.faction === humanFaction`). Discoveries stay unfiltered —
- * survivors are hero-side / node-spawned regardless of who surfaced them.
+ * Both loot AND discoveries are the player's faction only. Each faction's
+ * explore resources go to its own inventory, so counting the AI's loot here
+ * double-shows shared icons (both sides finding wood reads as "🪵 ×2"); and a
+ * survivor the opponent surfaced is information the player shouldn't get. We
+ * gate both on `humanFaction` (`ev.faction === humanFaction`); null counts all.
  *
  * @param {Array}  steps        — StepRecord[] (heroEvents/witchEvents or playerEvents).
- * @param {string|null} humanFaction — 'hero' | 'witch' | null (null ⇒ count all loot).
+ * @param {string|null} humanFaction — 'hero' | 'witch' | null (null ⇒ count all).
  * @returns {{ discoveries: Array, loot: string[] }}
  */
 export function collectTurnFinds(steps, humanFaction = null) {
@@ -143,10 +143,11 @@ export function collectTurnFinds(steps, humanFaction = null) {
         (pe.events ?? []).map(e => (e.faction ? e : { ...e, faction: pe.faction }))),
     ];
     for (const ev of evs) {
+      // Faction-filter both finds: only surface the player's own survivors + loot.
+      if (humanFaction && ev.faction && ev.faction !== humanFaction) continue;
       const found = ev.result?.encounterSurvivors
         ?? (ev.result?.encounterSurvivor ? [ev.result.encounterSurvivor] : []);
       for (const f of found) discoveries.push(f);
-      if (humanFaction && ev.faction && ev.faction !== humanFaction) continue;
       for (const item of (ev.result?.lootItems ?? [])) {
         if (item && item !== 'nothing') loot.push(item);
       }

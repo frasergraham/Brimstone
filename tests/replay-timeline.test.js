@@ -5,7 +5,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildStepDigest, OutcomeKind } from '../src/replay-timeline.js';
+import { buildStepDigest, isEventVisible, OutcomeKind } from '../src/replay-timeline.js';
 import { ResEventType } from '../server/resolver.js';
 import { PlanActionType } from '../src/planner.js';
 
@@ -333,6 +333,62 @@ describe('buildStepDigest — fog filtering via injected isVisible', () => {
     const h = snap('h1', 'hero', 'hero', 5, 5);
     const d = buildStepDigest([step([moveEvent('h1', 'hero', 6, 5)], [h])], [], DEPS);
     assert.equal(d[0].entries.length, 1);
+  });
+});
+
+// ── Shared visibility predicate (cards ⟷ animation) ───────────────────────────
+
+describe('isEventVisible — union of source/target + public actions', () => {
+  // Sight only around (0,0).
+  const near = (col, row) => col <= 1 && row <= 1;
+
+  test('move: visible if origin OR destination is seen, hidden if neither', () => {
+    const h = snap('h1', 'hero', 'hero', 5, 5);
+    const ev = moveEvent('h1', 'hero', 6, 5);                 // origin & dest fogged
+    assert.equal(isEventVisible(ev, [h], near, DEPS), false);
+    const destSeen = (col, row) => col === 6 && row === 5;
+    assert.equal(isEventVisible(ev, [h], destSeen, DEPS), true);
+  });
+
+  test('battle: an attack out of an unseen hex still shows (target visible)', () => {
+    const atk = snap('a1', 'witch', 'witch', 9, 9);           // attacker fogged
+    const def = snap('d1', 'hero', 'hero', 0, 0);             // target seen
+    const ev = battleEvent(atk, def, { hit: true, damage: 1 });
+    assert.equal(isEventVisible(ev, [atk, def], near, DEPS), true);
+  });
+
+  test('battle: hidden when neither combatant hex is seen', () => {
+    const atk = snap('a1', 'witch', 'witch', 9, 9);
+    const def = snap('d1', 'hero', 'hero', 8, 8);
+    const ev = battleEvent(atk, def, { hit: true, damage: 1 });
+    assert.equal(isEventVisible(ev, [atk, def], near, DEPS), false);
+  });
+
+  test('summon happens on the summoner hex — gated by that hex', () => {
+    const w = snap('w1', 'witch', 'witch', 5, 5);
+    const ev = {
+      type: ResEventType.ACTION_OK, faction: 'witch',
+      action: { type: PlanActionType.SUMMON, entityId: 'w1', summonType: 'minion' },
+      result: { success: true },
+    };
+    assert.equal(isEventVisible(ev, [w], near, DEPS), false);
+    assert.equal(isEventVisible(ev, [w], () => true, DEPS), true);
+  });
+
+  test('sound-horn is public — visible even when the blower is fogged', () => {
+    const h = snap('h1', 'hero', 'hero', 9, 9);               // blower fogged
+    const ev = {
+      type: ResEventType.ACTION_OK, faction: 'hero',
+      action: { type: PlanActionType.SOUND_HORN, entityId: 'h1' },
+      result: { success: true },
+    };
+    assert.equal(isEventVisible(ev, [h], near, DEPS), true);
+  });
+
+  test('no isVisible / missing deps ⇒ visible (fog off)', () => {
+    const h = snap('h1', 'hero', 'hero', 9, 9);
+    assert.equal(isEventVisible(moveEvent('h1', 'hero', 9, 8), [h], null, DEPS), true);
+    assert.equal(isEventVisible(moveEvent('h1', 'hero', 9, 8), [h], near, {}), true);
   });
 });
 

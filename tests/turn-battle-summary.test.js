@@ -222,11 +222,25 @@ describe('collectTurnFinds', () => {
     assert.deepEqual(collectTurnFinds(steps, null).loot, ['+🪵', '+🪵']);
   });
 
-  test('collects discoveries regardless of faction', () => {
-    const surv  = { id: 's9', type: 'survivor', name: 'Mara' };
-    const steps = [makeStep([exploreEvent('hero', 'h1', [], surv)])];
+  test('collects only the human faction\'s discoveries', () => {
+    const mine   = { id: 's9', type: 'survivor', name: 'Mara' };
+    const theirs = { id: 's4', type: 'survivor', name: 'Goodman Pyke' };
+    const steps = [makeStep([
+      exploreEvent('hero',  'h1', [], mine),
+      exploreEvent('witch', 'w1', [], theirs),
+    ])];
     const { discoveries } = collectTurnFinds(steps, 'hero');
     assert.equal(discoveries.length, 1);
     assert.equal(discoveries[0].name, 'Mara');
+  });
+
+  test('counts discoveries from both sides when no humanFaction', () => {
+    const a = { id: 's9', type: 'survivor', name: 'Mara' };
+    const b = { id: 's4', type: 'survivor', name: 'Goodman Pyke' };
+    const steps = [makeStep([
+      exploreEvent('hero',  'h1', [], a),
+      exploreEvent('witch', 'w1', [], b),
+    ])];
+    assert.equal(collectTurnFinds(steps, null).discoveries.length, 2);
   });
 });
