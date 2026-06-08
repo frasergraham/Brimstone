@@ -220,6 +220,66 @@ describe('Bridge pre-placement', () => {
     }
   });
 
+  test('building footprints rarely sit on a river bank (placement scoring)', () => {
+    // The footprint placement scorer (src/building-footprint.js) heavily
+    // penalises walling a river bank, so a building only ends up river-adjacent
+    // when every eligible neighbour was a bank (wedged against the river). A
+    // random pick would land on banks far more often; this guards against
+    // regressing the scoring back to uniform-random.
+    for (const size of ['standard', 'regional', 'campaign']) {
+      let total = 0, riverAdj = 0;
+      for (let seed = 0; seed < 50; seed++) {
+        const { tiles } = generateMap(seed, size);
+        for (const t of tiles.values()) {
+          if (t.buildingFootprintOf == null) continue;  // footprint hexes only
+          total++;
+          const adj = getNeighbors(t.col, t.row).some(n => {
+            const nt = tiles.get(hexKey(n.col, n.row));
+            return nt && legacyTileType(nt) === TileType.RIVER;
+          });
+          if (adj) riverAdj++;
+        }
+      }
+      assert.ok(total > 0, `${size}: expected some footprints`);
+      const frac = riverAdj / total;
+      assert.ok(frac < 0.08,
+        `${size}: ${(frac * 100).toFixed(1)}% of footprints are river-adjacent ` +
+        `(${riverAdj}/${total}) — expected < 8% with placement scoring`);
+    }
+  });
+
+  test('no bridge has a building footprint on a bank it could cross to', () => {
+    // Defence-in-depth: _pickRiverCrossings excludes footprint hexes when
+    // choosing banks, and the scorer keeps footprints off banks, so a surviving
+    // bridge must always have a NON-footprint passable land neighbour on each
+    // side (a usable approach). Verifies crossings stay traversable.
+    for (const size of ['standard', 'regional', 'campaign']) {
+      for (let seed = 0; seed < 30; seed++) {
+        const { tiles } = generateMap(seed, size);
+        const rp = [];
+        for (const t of tiles.values()) {
+          if (legacyTileType(t) === TileType.RIVER || legacyTileType(t) === TileType.BRIDGE) rp.push({ col: t.col, row: t.row });
+        }
+        const cols = new Set(rp.map(r => r.col));
+        const rows = new Set(rp.map(r => r.row));
+        const ew = cols.size > rows.size;
+        const rm = buildRiverMap(rp, ew);
+        for (const b of allTilesOfType(tiles, TileType.BRIDGE)) {
+          let leftOk = false, rightOk = false;
+          for (const n of getNeighbors(b.col, b.row)) {
+            const nt = tiles.get(hexKey(n.col, n.row));
+            if (!nt || legacyTileType(nt) === TileType.RIVER || nt.buildingFootprintOf != null) continue;
+            if (riverSide(n.col, n.row, rm, ew) === 'left') leftOk = true;
+            else rightOk = true;
+          }
+          assert.ok(leftOk && rightOk,
+            `Seed ${seed}, ${size}: bridge at (${b.col},${b.row}) has no non-footprint ` +
+            `approach on a bank (left=${leftOk}, right=${rightOk})`);
+        }
+      }
+    }
+  });
+
   test('every bridge connects to a road/building on both banks', () => {
     // The bridge's roadDirs must reach at least two non-adjacent neighbours,
     // proving roads emerge from both sides of the river rather than dead-ending
