@@ -2480,15 +2480,21 @@ export class Renderer3D {
     const all = Promise.all(this._assetBundle.map(b => b.settled)).then(() => undefined);
     const ms = this._loadTimeoutMs;
     if (!(ms > 0)) return all;
+    let timer = null;
     const safety = new Promise(resolve => {
-      const t = setTimeout(() => {
+      timer = setTimeout(() => {
         console.warn(`[Renderer3D] whenReady safety timeout (${ms}ms) — revealing scene anyway`);
         resolve();
       }, ms);
-      // Don't keep a node test process alive waiting on the timer.
-      if (t && typeof t.unref === 'function') t.unref();
     });
-    return Promise.race([all, safety]);
+    // Clear the timer once the race settles: when the bundle finishes first this
+    // avoids leaving a lingering timeout that would keep a node process alive;
+    // when the timeout wins it's already a no-op. We must NOT unref() the timer —
+    // if the bundle hangs, this timeout is the only thing keeping the event loop
+    // alive long enough to release whenReady().
+    return Promise.race([all, safety]).finally(() => {
+      if (timer) clearTimeout(timer);
+    });
   }
 
   resize() {
