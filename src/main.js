@@ -747,6 +747,73 @@ function _buildWrapUpContent(steps, roundNum) {
   return { title, combats, discoveries, loot, attrition };
 }
 
+/**
+ * Shared end-of-round review for a human player, used by BOTH orchestration
+ * layers — offline (`_runLocalResolution`) and online (`onResolutionComplete`) —
+ * so the two stay in lockstep. Normal turns show the timeline wrap-up CARD;
+ * game-over shows the dedicated Victory/Defeat MODAL. Loops on Replay until the
+ * player dismisses it, hides the timeline, and returns the final action string.
+ *
+ * Path-specific behaviour is injected (this is the offline/online split that
+ * can't be merged — see CLAUDE.md guideline 5):
+ *   - reReplay():        re-run this round's animation. Redraw target, explored-
+ *                        flag handling, and app-mode buffering differ per path.
+ *   - replayFull(w, r):  run the full-game replay then restart. The winner/reason
+ *                        snapshot is passed in because an inline Replay clobbers
+ *                        state.winner/winReason. When the player picks it, the
+ *                        helper returns 'replay-full' so the caller bails out.
+ *   - roundHistory:      _roundHistory | _onlineRoundHistory — gates the Replay
+ *                        and full-replay buttons.
+ *   - isCampaign:        suppresses the full-replay button in campaign missions.
+ */
+async function _runEndOfRoundReview({
+  steps, roundNum, humanFaction, fogOfWar, prevScore, prevNodes,
+  isCampaign = false, roundHistory, reReplay, replayFull,
+}) {
+  if (!state.gameOver) {
+    // Normal turn — wrap-up CARD. Fold the night-attrition escalation in and
+    // consume the flag so the standalone planning-phase popup doesn't also fire.
+    const attritionLevel = (state.attritionChanged && state.attritionLevel > 0) ? state.attritionLevel : 0;
+    if (attritionLevel) state.attritionChanged = false;
+    let action;
+    do {
+      const wrap = _buildWrapUpContent(steps, roundNum);
+      action = await ui.showReplayWrapUp({
+        titleHtml: wrap.title, combats: wrap.combats, discoveries: wrap.discoveries,
+        loot: wrap.loot, attrition: wrap.attrition, attritionLevel,
+        canReplay: roundHistory.length > 0,
+      });
+      if (action === 'replay') await reReplay();
+    } while (action === 'replay');
+    _keepTimelineForReview = false;
+    ui.hideReplayTimeline?.();
+    return action;
+  }
+
+  // Game over — dedicated Victory/Defeat MODAL. Snapshot the outcome before the
+  // loop: an inline Replay re-animates intermediate rounds and would otherwise
+  // clobber state.winner / state.winReason mid-review.
+  _keepTimelineForReview = false;
+  ui.hideReplayTimeline?.();
+  const goWinner = state.winner, goWinReason = state.winReason;
+  let action;
+  do {
+    action = await ui._showResolutionSummary(steps, roundNum, {
+      prevScore, prevNodes, humanFaction, fogOfWar,
+      gameOver: true, winner: goWinner, winReason: goWinReason,
+      hasFullReplay: roundHistory.length > 0,
+      isCampaign,
+    });
+    if (action === 'replay') {
+      await reReplay();
+    } else if (action === 'replay-full') {
+      await replayFull(goWinner, goWinReason);
+      return 'replay-full';
+    }
+  } while (action === 'replay');
+  return action;
+}
+
 // Initial camera when first entering a level/mission: orient north-up and zoom
 // in on the player's main unit (its leader), with that unit selected — i.e. the
 // view you'd get from "fit twice" (frame + orient north) followed by
@@ -919,59 +986,28 @@ async function _runLocalResolution(skipSummary = false) {
     for (const [k, v] of postExplored) { const t = state.tiles.get(k); if (t) t.explored = v; }
   };
 
-  if (!_autoplay && !skipSummary && ui && humanFaction && !state.gameOver) {
-    // Normal turn — wrap-up card review (replaces the end-of-turn modal).
-    // Fold the night-attrition escalation into the card and consume the flag so
-    // the standalone planning-phase popup doesn't also fire.
-    const attritionLevel = (state.attritionChanged && state.attritionLevel > 0) ? state.attritionLevel : 0;
-    if (attritionLevel) state.attritionChanged = false;
-    let action;
-    do {
-      const wrap = _buildWrapUpContent(steps, state.round - 1);
-      action = await ui.showReplayWrapUp({
-        titleHtml: wrap.title, combats: wrap.combats, discoveries: wrap.discoveries,
-        loot: wrap.loot, attrition: wrap.attrition, attritionLevel,
-        canReplay: _roundHistory.length > 0,
-      });
-      if (action === 'replay') await _reReplay();
-    } while (action === 'replay');
-    _keepTimelineForReview = false;
-    ui.hideReplayTimeline?.();
-    ui._animateScoreBar(prevScore, prevNodes);
-  } else if (!_autoplay && !skipSummary && ui && humanFaction) {
-    // Game over — keep the dedicated Victory/Defeat modal.
-    _keepTimelineForReview = false;
-    ui.hideReplayTimeline?.();
-    // Finalize game-over immediately — cleanup survives any navigation away
-    if (state.gameOver) {
-      if (!_activeCampaign) {
-        _recordLocalGameStats();
-        if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
-        _saveCompletedSpGame(state.winner, state.winReason);
-      }
+  if (!_autoplay && !skipSummary && ui && humanFaction) {
+    // Finalize game-over immediately — cleanup survives any navigation away.
+    if (state.gameOver && !_activeCampaign) {
+      _recordLocalGameStats();
+      if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
+      _saveCompletedSpGame(state.winner, state.winReason);
     }
 
-    // Save game-over state — replay mutates `state` with intermediate round data
-    const _goState = { gameOver: state.gameOver, winner: state.winner, winReason: state.winReason };
-
-    let action;
-    do {
-      action = await ui._showResolutionSummary(steps, state.round - 1, {
-        prevScore, prevNodes, humanFaction, fogOfWar: state.fogOfWar,
-        gameOver: _goState.gameOver, winner: _goState.winner, winReason: _goState.winReason,
-        hasFullReplay: _roundHistory.length > 0,
-        isCampaign: !!(_activeCampaign && _activeMissionDef),
-      });
-      if (action === 'replay') {
-        await _reReplay();
-      } else if (action === 'replay-full') {
-        await _replayFullGame(_roundHistory, _goState.winner, _goState.winReason,
+    const action = await _runEndOfRoundReview({
+      steps, roundNum: state.round - 1, humanFaction, fogOfWar: state.fogOfWar,
+      prevScore, prevNodes, isCampaign: !!(_activeCampaign && _activeMissionDef),
+      roundHistory: _roundHistory,
+      reReplay: _reReplay,
+      replayFull: async (winner, winReason) => {
+        await _replayFullGame(_roundHistory, winner, winReason,
           state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch');
         _doRestart();
-        return;
-      }
-    } while (action === 'replay');
-    // Animate score bar changes after summary is dismissed
+      },
+    });
+    if (action === 'replay-full') return;
+
+    // Animate score bar changes after the review is dismissed.
     ui._animateScoreBar(prevScore, prevNodes);
 
     if (state.gameOver) {
@@ -7593,6 +7629,11 @@ function _createMpClient() {
       }));
       const prevScore = { hero: state.nodeScore?.hero ?? 0, witch: state.nodeScore?.witch ?? 0 };
 
+      // Keep the replay timeline up after the animation so the end-of-round
+      // wrap-up CARD can attach to it (parity with single-player). Game-over
+      // hides it and shows the dedicated Victory/Defeat modal instead.
+      _keepTimelineForReview = !!(ui && mp?.myFaction);
+
       _animateResolutionSteps(steps, finalEntities, redrawOnline, mp?.myFaction, mp?.myPlayerId ?? null).then(async () => {
         // Apply full final state (phase, round, score, tiles, etc.) BEFORE summary
         // so the reckoning section can show scoring results.
@@ -7613,54 +7654,59 @@ function _createMpClient() {
         await ui._triggerPostRoundEffects();
         redrawOnline();
 
-        // Show post-resolution summary modal for human players.
-        // Keep mode as SUMMARY for the whole summary+replay block so that any
+        // Show the post-resolution review for human players via the shared
+        // _runEndOfRoundReview helper (same card/modal split as offline).
+        // Keep mode as SUMMARY for the whole review+replay block so that any
         // incoming onPlanningPhase messages are buffered, not immediately applied.
         if (ui && mp?.myFaction) {
           setMode(AppMode.SUMMARY);
-          let action;
-          do {
-            action = await ui._showResolutionSummary(steps, (finalState.round ?? state.round) - 1, {
-              prevScore, prevNodes, humanFaction: mp.myFaction, fogOfWar: state.fogOfWar,
-              gameOver: state.gameOver, winner: state.winner, winReason: state.winReason,
-              hasFullReplay: _onlineRoundHistory.length > 0,
-            });
-            if (action === 'replay') {
-              state.entities = _preReplayEntitiesOnline;
-              // Reset explored flags newly set this round so they reveal progressively.
-              const preExpOnline = new Set();
-              for (const s of steps) {
-                for (const ev of [...(s.heroEvents ?? []), ...(s.witchEvents ?? []), ...(s.playerEvents ?? []).flatMap(pe => pe.events ?? [])]) {
-                  if (ev.type === ResEventType.ACTION_OK && ev.action?.type === PlanActionType.EXPLORE) {
-                    const actor = s.entitySnapshot?.find(e => e.id === ev.action.entityId);
-                    if (actor) { const tk = _hexKey(actor.col, actor.row); const t = state.tiles.get(tk); if (t) t.explored = false; }
-                  }
+
+          // Re-run this round's animation from the pre-resolution snapshot,
+          // toggling explored flags so newly-revealed hexes fade back in.
+          // Shared by both the wrap-up card and the game-over modal's Replay.
+          const _reReplayOnline = async () => {
+            state.entities = _preReplayEntitiesOnline;
+            for (const s of steps) {
+              for (const ev of [...(s.heroEvents ?? []), ...(s.witchEvents ?? []), ...(s.playerEvents ?? []).flatMap(pe => pe.events ?? [])]) {
+                if (ev.type === ResEventType.ACTION_OK && ev.action?.type === PlanActionType.EXPLORE) {
+                  const actor = s.entitySnapshot?.find(e => e.id === ev.action.entityId);
+                  if (actor) { const tk = _hexKey(actor.col, actor.row); const t = state.tiles.get(tk); if (t) t.explored = false; }
                 }
               }
-              redrawOnline();
-              await _animateResolutionSteps(steps, finalEntities, redrawOnline, mp.myFaction, mp.myPlayerId ?? null);
-              // Restore explored flags after replay.
-              for (const s of steps) {
-                for (const ev of [...(s.heroEvents ?? []), ...(s.witchEvents ?? []), ...(s.playerEvents ?? []).flatMap(pe => pe.events ?? [])]) {
-                  if (ev.type === ResEventType.ACTION_OK && ev.action?.type === PlanActionType.EXPLORE) {
-                    const actor = s.entitySnapshot?.find(e => e.id === ev.action.entityId);
-                    if (actor) { const tk = _hexKey(actor.col, actor.row); const t = state.tiles.get(tk); if (t) t.explored = true; }
-                  }
+            }
+            redrawOnline();
+            await _animateResolutionSteps(steps, finalEntities, redrawOnline, mp.myFaction, mp.myPlayerId ?? null);
+            // Restore explored flags after replay.
+            for (const s of steps) {
+              for (const ev of [...(s.heroEvents ?? []), ...(s.witchEvents ?? []), ...(s.playerEvents ?? []).flatMap(pe => pe.events ?? [])]) {
+                if (ev.type === ResEventType.ACTION_OK && ev.action?.type === PlanActionType.EXPLORE) {
+                  const actor = s.entitySnapshot?.find(e => e.id === ev.action.entityId);
+                  if (actor) { const tk = _hexKey(actor.col, actor.row); const t = state.tiles.get(tk); if (t) t.explored = true; }
                 }
               }
-              // setMode handles the transition; re-engage RESOLVING
-              // so onPlanningPhase stays buffered during the next summary show.
-              setMode(AppMode.RESOLVING);
-            } else if (action === 'replay-full') {
-              await _replayFullGame(_onlineRoundHistory, state.winner, state.winReason,
+            }
+            // Re-engage RESOLVING so onPlanningPhase stays buffered during the
+            // next review show.
+            setMode(AppMode.RESOLVING);
+          };
+
+          const action = await _runEndOfRoundReview({
+            steps, roundNum: (finalState.round ?? state.round) - 1,
+            humanFaction: mp.myFaction, fogOfWar: state.fogOfWar,
+            prevScore, prevNodes,
+            roundHistory: _onlineRoundHistory,
+            reReplay: _reReplayOnline,
+            replayFull: async (winner, winReason) => {
+              await _replayFullGame(_onlineRoundHistory, winner, winReason,
                 state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch',
                 redrawOnline);
               _doRestart();
-              return;
-            }
-          } while (action === 'replay');
+            },
+          });
+          if (action === 'replay-full') return;
+
           setMode(AppMode.PLANNING);
-          // Animate score bar changes after summary is dismissed
+          // Animate score bar changes after the review is dismissed
           ui._animateScoreBar(prevScore, prevNodes);
 
           if (state.gameOver) {

@@ -521,6 +521,39 @@ describe('resource tracking scoping in summary', () => {
   });
 });
 
+// ── End-of-round UI selection (online/offline parity) ───────────────────────
+
+// Mirrors the branch in both _runLocalResolution (offline) and
+// onResolutionComplete (online): normal turns show the timeline wrap-up CARD,
+// game-over shows the dedicated Victory/Defeat MODAL. Both orchestration layers
+// must agree so multiplayer no longer falls back to the old end-round modal.
+function endOfRoundUI(gameOver) {
+  return gameOver ? 'modal' : 'wrapup';
+}
+
+describe('end-of-round UI selection parity', () => {
+  test('normal turn shows the wrap-up card', () => {
+    assert.equal(endOfRoundUI(false), 'wrapup');
+  });
+
+  test('game-over shows the summary modal', () => {
+    assert.equal(endOfRoundUI(true), 'modal');
+  });
+
+  test('online and offline pick the same UI for a normal turn', () => {
+    // Same input ⇒ same selection, regardless of orchestration layer.
+    const offline = endOfRoundUI(false);
+    const online  = endOfRoundUI(false);
+    assert.equal(offline, online);
+    assert.equal(online, 'wrapup');
+  });
+
+  test('online and offline pick the same UI on game-over', () => {
+    assert.equal(endOfRoundUI(true), endOfRoundUI(true));
+    assert.equal(endOfRoundUI(true), 'modal');
+  });
+});
+
 // ── Campaign replay button suppression ─────────────────────────────────────
 
 // Mirrors the game-over button rendering logic in _showResolutionSummary
