@@ -5528,6 +5528,59 @@ export class Renderer3D {
     return clone;
   }
 
+  /** Ensure running.glb's native AnimationGroup is loaded once (independent of
+   *  any rig), kept alive so it can be cloned+retargeted onto each rig — the
+   *  run counterpart to `_walkingSource`. Stashes `{ runGroup, speedRatio }` on
+   *  `this._runningSource` (addMoveAnim reads speedRatio to size the run slide).
+   *  Currently dormant: RUNNING_ANIM_ENABLED is false, so nothing selects run. */
+  _ensureRunningSource(basePath = this._assetsBasePath || 'assets') {
+    if (this._runningSource?.runGroup) return Promise.resolve(this._runningSource);
+    if (this._runningSourceLoad) return this._runningSourceLoad;
+    this._runningSourceLoad = (async () => {
+      const BABYLON = this._babylon;
+      if (!BABYLON?.SceneLoader?.ImportMeshAsync) return null;
+      let result;
+      try {
+        result = await BABYLON.SceneLoader.ImportMeshAsync(
+          null, `${basePath}/${PALADIN_MODEL_DIR}`, RUNNING_MODEL_FILE, this._scene,
+          this._glbProgressHandler('rig'));
+      } catch (err) { console.warn('[Renderer3D] running.glb import failed', err); return null; }
+      const native = (result.animationGroups || []).find(g => g) || null;
+      if (!native) { this._disposeWalkingImport(result); return null; }
+      const strideSrcUnits = computeRootStrideLength(native);
+      const natCycleSec    = animDurationSeconds(native);
+      const scale = (this._paladinScale > 0) ? this._paladinScale : PALADIN_BASE_SCALE;
+      const hexStepWU = HEX_RADIUS_WORLD * Math.sqrt(3);
+      const speedRatio = computeAnimSpeedRatioForStride(
+        strideSrcUnits, natCycleSec, scale, hexStepWU, RUN_HEX_MS, /*fallback*/ 1.25);
+      // Hide the native run mesh; keep the group + skeleton alive as a clone
+      // source for per-rig retargets.
+      for (const m of (result.meshes || []).filter(m => m && m.getTotalVertices?.() > 0)) {
+        if (typeof m.setEnabled === 'function') m.setEnabled(false);
+        m.isPickable = false;
+      }
+      this._runningSource = { ...(this._runningSource || {}), runGroup: native, speedRatio };
+      return this._runningSource;
+    })();
+    return this._runningSourceLoad;
+  }
+
+  /** Retarget running.glb's native group onto a rig's skeleton → `src.runGroup`
+   *  (the run twin of `_retargetWalkOntoRig`). No-op until `_runningSource` exists. */
+  _retargetRunOntoRig(src) {
+    if (!src || src.runGroup) return src?.runGroup || null;
+    const rs = this._runningSource;
+    const native = rs && rs.runGroup;
+    if (!native) return null;
+    const ratio = (rs && rs.speedRatio) || 1.0;
+    const clone = this._retargetNativeClipOntoRig(
+      native, src, `${src.cloneTag}RunRetargeted`, { keepY: true, loop: true, speed: ratio });
+    if (!clone) return null;
+    src.runGroup = clone;
+    src.runSpeedRatio = ratio;
+    return clone;
+  }
+
   /** Lazily import punch.glb and retarget it onto a fallback rig (idempotent
    *  per rig). Pre-warmed when the rig loads so the first strike has its clip
    *  ready. */
@@ -5578,38 +5631,44 @@ export class Renderer3D {
     // Walk is driven by real MOVES only — NOT lunges. A lunge is a combat
     // strike: the punch clip owns the rig during it (see addLungeAnim), so a
     // lunging unit must not also walk.
-    const movingRigs = new Set();
+    const movingRigs = new Set();   // rig has a unit mid-MOVE → walk (or run)
+    const runningRigs = new Set();   // rig has a unit mid multi-hop dash → run
     const moveIds = this._activeMoveIds;
     if (moveIds && moveIds.size && this.state?.entities) {
       const byId = new Map();
       for (const e of this.state.entities) if (e && e.id) byId.set(e.id, e);
+      const runIds = (RUNNING_ANIM_ENABLED && this._activeRunMoveIds instanceof Set)
+        ? this._activeRunMoveIds : null;
       for (const id of moveIds) {
         const e = byId.get(id);
         if (!e || unitUsesPaladinModel(e)) continue;
         const src = this._loadedFallbackRigFor(e);
-        if (src) movingRigs.add(src);
+        if (!src) continue;
+        movingRigs.add(src);
+        if (runIds && runIds.has(id)) runningRigs.add(src);
       }
     }
+    const playGroup = (g, loop, speed) => {
+      if (!g) return;
+      if (typeof g.play === 'function') g.play(loop);
+      else if (typeof g.start === 'function') g.start(loop, speed);
+    };
     for (const src of this._rigSources.values()) {
       // A one-shot punch or hit/block reaction owns the rig while it plays —
       // yield so we don't yank it back to idle/walk mid-clip.
       if (src.punchPlaying || src.reactionPlaying) continue;
-      const desired = (movingRigs.has(src) && src.walkGroup) ? 'walk' : 'idle';
-      if (src.activeGroup === desired) continue;
-      const walk = src.walkGroup, idle = src.idleGroup;
-      if (desired === 'walk') {
-        if (idle && typeof idle.stop === 'function') idle.stop();
-        if (walk) {
-          if (typeof walk.play === 'function') walk.play(true);
-          else if (typeof walk.start === 'function') walk.start(true, src.walkSpeedRatio || 1.0);
-        }
-      } else {
-        if (walk && typeof walk.stop === 'function') walk.stop();
-        if (idle) {
-          if (typeof idle.play === 'function') idle.play(true);
-          else if (typeof idle.start === 'function') idle.start(true, 1.0);
-        }
+      let desired = 'idle';
+      if (movingRigs.has(src)) {
+        desired = (runningRigs.has(src) && src.runGroup) ? 'run'
+          : src.walkGroup ? 'walk' : 'idle';
       }
+      if (src.activeGroup === desired) continue;
+      const { idleGroup: idle, walkGroup: walk, runGroup: run } = src;
+      // Silence the three locomotion groups, then play the desired one.
+      for (const g of [idle, walk, run]) if (g && g !== src[`${desired}Group`] && typeof g.stop === 'function') g.stop();
+      if (desired === 'run')  playGroup(run,  true, src.runSpeedRatio  || 1.0);
+      else if (desired === 'walk') playGroup(walk, true, src.walkSpeedRatio || 1.0);
+      else playGroup(idle, true, 1.0);
       src.activeGroup = desired;
     }
   }
@@ -5711,6 +5770,12 @@ export class Renderer3D {
       Promise.resolve(this._loadWalkingAnimation())
         .then(() => this._retargetWalkOntoRig(src))
         .catch(err => console.warn(`[Renderer3D] walk retarget for ${file} failed.`, err));
+      // Running clip (dormant unless RUNNING_ANIM_ENABLED) — retarget for parity.
+      if (RUNNING_ANIM_ENABLED) {
+        Promise.resolve(this._ensureRunningSource())
+          .then(() => this._retargetRunOntoRig(src))
+          .catch(err => console.warn(`[Renderer3D] run retarget for ${file} failed.`, err));
+      }
       // Pre-warm the strike clip so the first combat lunge punches rather than
       // sliding in silently.
       this._ensureRigPunch(src);
