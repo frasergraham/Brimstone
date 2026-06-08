@@ -1082,10 +1082,9 @@ function _executeResolution(room) {
   const summaryLines = compileTurnBattleSummary(steps, state.entities, ResEventType, PlanActionType);
   for (const line of summaryLines) state.log.push(line);
 
-  state.updateNodeDiscovery();
-  state.checkAndLogNodeControlChanges();
-  state.updateExploredHexes();
-  state.endRound();
+  // Shared post-resolution finalization (see GameState.finalizeRound) — keeps
+  // the online path in lockstep with offline (src/main.js).
+  state.finalizeRound();
   checkAndHandleGameOver(room);
 
   const finalState = serializeState(state);

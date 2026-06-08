@@ -772,6 +772,20 @@ export class GameState {
   }
 
   /**
+   * Post-resolution finalization shared by the offline (`src/main.js`) and
+   * online (`server/lobby.js`) orchestrators so the two cannot drift. Runs the
+   * fixed sequence of node-discovery → control-change logging → explored-hex
+   * update → endRound. Both call sites previously inlined these four calls; if
+   * one path added a step the other would silently miss it.
+   */
+  finalizeRound() {
+    this.updateNodeDiscovery();
+    this.checkAndLogNodeControlChanges();
+    this.updateExploredHexes();
+    this.endRound(); // invokes _waveProcessor before checkVictory (see below)
+  }
+
+  /**
    * Apply end-of-round effects after resolution: rest healing, night/day node
    * spawns, phase advance, hazards, attrition, and node scoring.
    * Works for both 1v1 (offline) and N-vs-N (online multiplayer).

@@ -257,6 +257,17 @@ export class Renderer {
     // (and pruned) by _buildFogVisibleHexes.
     this._attackerReveals = [];
 
+    // ── Per-frame caches (render-only) ──────────────────────────────────────
+    // draw() runs on every hover/selection/state change; these avoid rebuilding
+    // unchanged derived structures each call. All keyed by a cheap version
+    // stamp so they invalidate the instant the underlying state changes.
+    /** ownerId → playerColor, rebuilt only when the leader colour set changes. */
+    this._playerColorMap    = new Map();
+    this._playerColorMapKey = null;
+    /** Memoized line-of-sight base sets, keyed by _fogVersion(observerOwner). */
+    this._fogBaseCache    = { key: null, set: null }; // computeLineOfSight result
+    this._revealedCache   = { key: null, set: null }; // getVisiblePositions result
+
     // Battle hex highlights: set during combat animation, cleared after
     this._battleCombatantHexes = []; // [{col, row}] — bright red
     this._battleAllyHexes      = []; // [{col, row}] — faint red
@@ -1227,11 +1238,17 @@ export class Renderer {
     // Build ownerId → playerColor from leader entities so hex outlines show
     // the owning player's colour regardless of entity type. All six leader
     // types count as leaders — isLeaderType() is the single source of truth.
-    this._playerColorMap = new Map();
-    for (const e of state.entities) {
-      if (e.color && e.ownerId && isLeaderType(e.type)) {
-        this._playerColorMap.set(e.ownerId, e.color);
+    // Cached: rebuilt only when the leader (ownerId, colour) set changes, since
+    // draw() fires on every hover/selection event during planning.
+    const colorKey = this._leaderColorVersion(state.entities);
+    if (colorKey !== this._playerColorMapKey) {
+      this._playerColorMap = new Map();
+      for (const e of state.entities) {
+        if (e.color && e.ownerId && isLeaderType(e.type)) {
+          this._playerColorMap.set(e.ownerId, e.color);
+        }
       }
+      this._playerColorMapKey = colorKey;
     }
 
     // Tick smooth zoom/pan animation
@@ -1282,7 +1299,7 @@ export class Renderer {
     let revealedHexes = null;
     if (fogActive) {
       const myFaction = humanIsHero ? 'hero' : humanIsWitch ? 'witch' : null;
-      if (myFaction) revealedHexes = getVisiblePositions(state, myFaction);
+      if (myFaction) revealedHexes = this._cachedVisiblePositions(myFaction);
     }
 
     // Full set of hexes the observer can see (used to cull animations in fog).
@@ -1904,17 +1921,82 @@ export class Renderer {
 
   // Fog of war: draw a dark grey overlay on every hex NOT within the observer's
   // sight range. observerOwner is 'hero' or 'witch'.
+  /**
+   * Stable version key for the leader (ownerId → colour) mapping. Changes iff
+   * a leader entity's ownerId or colour changes, so _playerColorMap only
+   * rebuilds when it must. Sorted so entity order can't perturb the key.
+   */
+  _leaderColorVersion(entities) {
+    const parts = [];
+    for (const e of entities) {
+      if (e.color && e.ownerId && isLeaderType(e.type)) {
+        parts.push(`${e.ownerId}=${e.color}`);
+      }
+    }
+    parts.sort();
+    return parts.join('|');
+  }
+
+  /**
+   * Cheap version stamp for line-of-sight memoization. Sight only changes when
+   * an entity moves/dies/spawns, the round advances, or the fog mode changes —
+   * so a rolling hash of (alive entity ownerId,col,row) plus round + fog mode +
+   * observer is sufficient to invalidate the cache exactly when needed.
+   */
+  _fogVersion(observerOwner) {
+    const s = this.state;
+    let h = 2166136261; // FNV-ish rolling hash over entity positions
+    for (const e of s.entities) {
+      if (!e.alive) continue;
+      h = (h ^ e.col) * 16777619;
+      h = (h ^ e.row) * 16777619;
+      // ownerId distinguishes units sharing a hex (rare, but keeps it exact).
+      const oid = e.ownerId;
+      if (oid) for (let i = 0; i < oid.length; i++) h = (h ^ oid.charCodeAt(i)) * 16777619;
+    }
+    return `${observerOwner}|${s.round}|${s.fogOfWar}|${h >>> 0}`;
+  }
+
+  /** Memoized computeLineOfSight base set (no attacker reveals folded in). */
+  _cachedLineOfSight(observerOwner) {
+    const key = this._fogVersion(observerOwner);
+    const cache = this._fogBaseCache;
+    if (cache.key !== key || cache.set === null) {
+      cache.set = computeLineOfSight(this.state, observerOwner);
+      cache.key = key;
+    }
+    return cache.set;
+  }
+
+  /** Memoized getVisiblePositions (enemy-presence hexes) for the viewer faction. */
+  _cachedVisiblePositions(viewerFactionId) {
+    const key = this._fogVersion(viewerFactionId);
+    const cache = this._revealedCache;
+    if (cache.key !== key || cache.set === null) {
+      cache.set = getVisiblePositions(this.state, viewerFactionId);
+      cache.key = key;
+    }
+    return cache.set;
+  }
+
   /** Returns the Set of hexKeys visible to observerOwner's units (used for fog culling). */
   _buildFogVisibleHexes(observerOwner) {
-    const visibleSet = computeLineOfSight(this.state, observerOwner);
-    // Fold in any short-lived reveals from in-flight ranged attacks. This
-    // is a render-only hint — game state (state.seenHexes, fog mode) is
-    // not touched. Prune expired entries eagerly so the list stays small.
+    const base = this._cachedLineOfSight(observerOwner);
+    // Fold in any short-lived reveals from in-flight ranged attacks. This is a
+    // render-only hint — game state (state.seenHexes, fog mode) is not touched.
+    // Prune expired entries eagerly so the list stays small.
     if (this._attackerReveals.length > 0) {
       const now = Date.now();
       this._attackerReveals = this._attackerReveals.filter(r => r.expiresAt > now);
-      for (const r of this._attackerReveals) visibleSet.add(r.key);
     }
+    if (this._attackerReveals.length === 0) {
+      // No transient reveals — hand back the cached base directly (read-only by
+      // all consumers, which only call `.has()`).
+      return base;
+    }
+    // Reveals present: clone so we never mutate the cached base set.
+    const visibleSet = new Set(base);
+    for (const r of this._attackerReveals) visibleSet.add(r.key);
     return visibleSet;
   }
 
