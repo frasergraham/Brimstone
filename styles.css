@@ -1750,7 +1750,7 @@ body.renderer-3d #rotate-right {
   pointer-events: none;
   user-select: none;
 }
-body.renderer-3d #fps-counter { display: block; }
+body.renderer-3d.debug-counters #fps-counter { display: block; }
 #poly-counter {
   position: absolute;
   top: 32px;
@@ -1768,7 +1768,7 @@ body.renderer-3d #fps-counter { display: block; }
   pointer-events: none;
   user-select: none;
 }
-body.renderer-3d #poly-counter { display: block; }
+body.renderer-3d.debug-counters #poly-counter { display: block; }
 #cam-counter {
   position: absolute;
   top: 56px;
@@ -1786,7 +1786,7 @@ body.renderer-3d #poly-counter { display: block; }
   pointer-events: none;
   user-select: none;
 }
-body.renderer-3d #cam-counter { display: block; }
+body.renderer-3d.debug-counters #cam-counter { display: block; }
 
 /* Compass rose — top-left of canvas, ~64px square. The outer wrapper plus the
    cardinal letters stay world-fixed; `.compass-rose-needle` is the inner group

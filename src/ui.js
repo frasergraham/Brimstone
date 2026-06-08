@@ -25,6 +25,19 @@ import {
 /** Enum of UI operating modes. */
 export const UIMode = Object.freeze({ LOCAL: 'local', ONLINE: 'online', SPECTATOR: 'spectator' });
 
+/** True when a click event is a triple-click on the title-bar "Actions" label —
+ *  the hidden gesture that toggles the on-canvas debug counters (FPS, polys,
+ *  camera). `detail` is the browser's consecutive-click counter; a triple-click
+ *  fires a final `click` with `detail === 3`. Pure so it can be unit-tested
+ *  without a real DOM. */
+export function isDebugToggleClick(e) {
+  if (!e || e.detail !== 3) return false;
+  const t = e.target;
+  if (!t) return false;
+  if (typeof t.closest === 'function') return !!t.closest('.actions-label');
+  return !!(t.classList && t.classList.contains('actions-label'));
+}
+
 export class UIController {
   /**
    * @param {HTMLCanvasElement} canvas
@@ -424,6 +437,13 @@ export class UIController {
     this._el('menu-btn')?.addEventListener('click', () => {
       const backdrop = this._el('game-menu-backdrop');
       if (backdrop) backdrop.style.display = backdrop.style.display === 'none' ? 'flex' : 'none';
+    }, sig);
+    // Hidden gesture: triple-click the title-bar "Actions" label to toggle the
+    // on-canvas debug counters (FPS / polys / camera). Delegated on the
+    // persistent turn-info container because the label is rebuilt via innerHTML.
+    // Off by default — CSS gates the counters on `body.debug-counters`.
+    this._el('turn-info')?.addEventListener('click', (e) => {
+      if (isDebugToggleClick(e)) document.body.classList.toggle('debug-counters');
     }, sig);
     this._el('menu-close-btn')?.addEventListener('click', closeMenu, sig);
     this._el('menu-replay-turn-btn')?.addEventListener('click', () => {
