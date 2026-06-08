@@ -689,8 +689,10 @@ app.delete('/api/device-token', (req, res) => {
 app.get('/admin',               (_req, res) => res.sendFile(join(__dirname, 'admin.html')));
 app.get('/admin/stats',         (_req, res) => res.redirect('/admin'));
 app.get('/admin/campaign-stats',(_req, res) => res.redirect('/admin'));
-app.get('/admin/lighting',      (_req, res) => res.sendFile(join(__dirname, 'admin-lighting.html')));
-app.get('/admin/assets',        (_req, res) => res.sendFile(join(__dirname, 'admin-assets.html')));
+// The standalone Lighting Tuner / Asset Viewer pages were folded into the
+// tabbed admin-tools.html — redirect old bookmarks to the matching tab.
+app.get('/admin/lighting',      (_req, res) => res.redirect('/admin/tools?tool=lighting'));
+app.get('/admin/assets',        (_req, res) => res.redirect('/admin/tools?tool=assets'));
 app.get('/admin/tools',         (_req, res) => res.sendFile(join(__dirname, 'admin-tools.html')));
 app.get('/spectate', (_req, res) => res.sendFile(join(__dirname, 'index.html')));
 app.get('/replay',   (_req, res) => res.sendFile(join(__dirname, 'index.html')));

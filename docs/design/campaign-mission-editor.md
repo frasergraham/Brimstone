@@ -10,9 +10,13 @@
 > It was produced after a full exploration of the existing tools, campaign
 > runtime, and map/tile systems.
 
+> **Status (2026-06):** Shipped — the standalone `admin-assets.html` and
+> `admin-lighting.html` pages have been removed; both now live as tabs in
+> `admin-tools.html` (`/admin/tools?tool=assets` / `?tool=lighting`).
+
 ## Context
 
-Brimstone has two standalone admin tools today — an **Asset Viewer** (`admin-assets.html`,
+Brimstone had two standalone admin tools — an **Asset Viewer** (`admin-assets.html`,
 Babylon 3D model browser) and a **Lighting Tuner** (`admin-lighting.html`, Renderer3D +
 GameState). We want to merge them into a single tabbed **Caleb's Hollow Tools** page and
 add a third, much larger tab: a **Campaign Mission Editor**.
