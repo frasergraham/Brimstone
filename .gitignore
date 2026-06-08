@@ -10,6 +10,9 @@ assets/generated/
 # FBX source + FBX2glTF intermediate (we ship the .glb output only)
 assets/models/*.fbx
 assets/models/*.fbm/
+# Mixamo source FBX belongs in assets/source/animations/ — keep stray copies
+# (e.g. from a Finder drag) out of the repo root.
+/*.fbx
 scripts/map-renders/
 scripts/renders/
 dist/
