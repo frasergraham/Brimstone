@@ -514,18 +514,18 @@
         <div id="options-speed-buttons" style="display:flex;flex-direction:column;gap:0.25rem">
           <button class="speed-option" data-mode="cinematic">
             <span class="speed-option-icon">🎬</span>
-            <span class="speed-option-label">Cinematic</span>
-            <span class="speed-option-desc">Dialog for important battles (default)</span>
+            <span class="speed-option-label">Full</span>
+            <span class="speed-option-desc">All combat details, dialog for important battles (default)</span>
           </button>
           <button class="speed-option" data-mode="fast">
             <span class="speed-option-icon">⏩</span>
-            <span class="speed-option-label">Fast</span>
+            <span class="speed-option-label">Summary</span>
             <span class="speed-option-desc">Cinematic pace, no popups</span>
           </button>
           <button class="speed-option" data-mode="vfast">
             <span class="speed-option-icon">⏭</span>
-            <span class="speed-option-label">Very Fast</span>
-            <span class="speed-option-desc">1.5× speed, no popups</span>
+            <span class="speed-option-label">Speedy</span>
+            <span class="speed-option-desc">Summary at 1.5× speed</span>
           </button>
         </div>
       </div>
@@ -972,6 +972,12 @@
               <button id="replay-camera-btn" class="replay-ctrl-btn replay-camera" title="Camera: Follow the action">Follow</button>
             </div>
           </div>
+          <div class="replay-block">
+            <div class="replay-block-title">Detail</div>
+            <div class="replay-block-btns">
+              <button id="replay-detail-btn" class="replay-ctrl-btn replay-detail" title="Combat detail: Full">Full</button>
+            </div>
+          </div>
         </div>
         <!-- Unit stats bar: shown during planning when a unit is selected -->
         <div id="unit-stats-bar" style="display:none"></div>
@@ -995,7 +1001,6 @@
           <button id="rotate-right" class="zoom-btn" title="Rotate right (3D)">↷</button>
           <button id="zoom-fit" class="zoom-btn" title="Fit map">⛶</button>
           <button id="zoom-me"  class="zoom-btn" title="Focus on my units">⊙</button>
-          <button id="speed-toggle" class="zoom-btn" title="Battle speed">⚡</button>
           <!-- Map options button hidden — kept for future debug use -->
           <button id="map-options-toggle" class="zoom-btn" title="Map options" style="display:none">⚙</button>
           <div id="map-options-popup" class="speed-popup" style="display:none">
@@ -1003,24 +1008,6 @@
               <input type="checkbox" id="opt-tile-images" checked>
               <span>Tile images</span>
             </label>
-          </div>
-          <!-- Speed mode picker popup -->
-          <div id="speed-popup" class="speed-popup" style="display:none">
-            <button class="speed-option" data-mode="cinematic">
-              <span class="speed-option-icon">🎬</span>
-              <span class="speed-option-label">Cinematic</span>
-              <span class="speed-option-desc">Dialog for important battles (default)</span>
-            </button>
-            <button class="speed-option" data-mode="fast">
-              <span class="speed-option-icon">⏩</span>
-              <span class="speed-option-label">Fast</span>
-              <span class="speed-option-desc">Cinematic pace, no popups</span>
-            </button>
-            <button class="speed-option" data-mode="vfast">
-              <span class="speed-option-icon">⏭</span>
-              <span class="speed-option-label">Very Fast</span>
-              <span class="speed-option-desc">1.5× speed, no popups</span>
-            </button>
           </div>
         </div>
       </div>

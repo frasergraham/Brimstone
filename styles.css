@@ -5048,28 +5048,6 @@ img.plan-step-avatar {
 .speed-option-label { font-size: 0.82rem; font-weight: 600; color: var(--text-bright); }
 .speed-option-desc { font-size: 0.7rem; color: var(--text-dim); }
 
-/* Speed toast — shown near zoom controls when speed is toggled */
-.speed-toast {
-  position: absolute;
-  bottom: 56px;
-  left: 8px;
-  background: rgba(13, 10, 22, 0.88);
-  border: 1px solid rgba(180, 150, 80, 0.4);
-  border-radius: 6px;
-  padding: 0.35rem 0.65rem;
-  font-size: 0.78rem;
-  color: #e8dcc8;
-  pointer-events: none;
-  z-index: 20;
-  animation: speed-toast-in 0.18s ease;
-  transition: opacity 0.3s ease;
-}
-.speed-toast.speed-toast-out { opacity: 0; }
-@keyframes speed-toast-in {
-  from { opacity: 0; transform: translateY(6px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
 /* Replay HUD — shown at top of canvas during full-game replay */
 #replay-hud {
   position: absolute;
@@ -5189,6 +5167,22 @@ img.plan-step-avatar {
   border-color: rgba(120, 200, 255, 0.55);
   color: #bfe6ff;
 }
+.replay-ctrl-btn.replay-detail {
+  letter-spacing: 0.02em;
+  min-width: 5.4rem;
+  text-align: center;
+}
+/* Summary / Speedy tint progressively warmer to signal "less detail, faster". */
+.replay-ctrl-btn.replay-detail.detail-fast {
+  background: rgba(255, 190, 110, 0.14);
+  border-color: rgba(255, 190, 110, 0.5);
+  color: #ffd9a8;
+}
+.replay-ctrl-btn.replay-detail.detail-vfast {
+  background: rgba(255, 140, 90, 0.18);
+  border-color: rgba(255, 140, 90, 0.6);
+  color: #ffc6a0;
+}
 
 /* ── Replay timeline overlay ───────────────────────────────────────────────
    Transparent sequence of resolution-step cards. The active card is centred on
@@ -5236,18 +5230,22 @@ img.plan-step-avatar {
 #replay-timeline.reviewing .replay-step-col { opacity: 0.7; }
 #replay-timeline.reviewing .replay-step-col.is-current { opacity: 1; }
 
-/* End-of-turn wrap-up card — same card frame, with a summary body + actions. */
+/* End-of-turn wrap-up card — same card frame, with a summary body + actions.
+   Wider than a normal step card, and the body scrolls if a busy round overflows. */
 .replay-step-col.replay-wrapup {
   border-color: rgba(200, 168, 75, 0.6);
-  min-width: 13rem;
+  min-width: 20rem;
+  max-width: 24rem;
 }
 .replay-wrapup-body {
-  font-size: 0.72rem;
+  font-size: 0.86rem;
   color: #d8c8f0;
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
-  margin: 0.35rem 0 0.5rem;
+  gap: 0.4rem;
+  margin: 0.4rem 0 0.5rem;
+  max-height: 56vh;
+  overflow-y: auto;
 }
 .wrapup-line.muted { color: var(--text-dim); font-style: italic; text-align: center; }
 /* Night-attrition escalation warning, folded in from its old modal. */
@@ -5276,21 +5274,105 @@ img.plan-step-avatar {
   gap: 0.1rem;
 }
 .wrapup-unit-icon {
-  width: 2rem;
-  height: 2rem;
+  width: 2.4rem;
+  height: 2.4rem;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 1rem;
+  font-size: 1.2rem;
   color: #fff;
   border: 2px solid rgba(255,255,255,0.3);
   object-fit: cover;
 }
-.wrapup-dmg { font-size: 0.72rem; font-weight: 700; color: #ff8a8a; }
-.wrapup-dmg.kill { color: #ff5b5b; font-size: 0.9rem; }
+.wrapup-dmg { font-size: 0.82rem; font-weight: 700; color: #ff8a8a; }
+.wrapup-dmg.kill { color: #ff5b5b; font-size: 1rem; }
 .wrapup-dmg.none { color: var(--text-dim); }
-.wrapup-vs { align-self: center; color: var(--text-dim); font-style: italic; padding-top: 0.4rem; }
+.wrapup-vs { align-self: center; color: var(--text-dim); font-style: italic; padding-top: 0.5rem; font-size: 0.82rem; }
+/* Condensed casualty list (used when >3 battles) — wrapping row of hurt units. */
+.wrapup-casualties {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem 0.8rem;
+}
+/* Found — survivors/zombies discovered this round (icon + name). */
+.wrapup-found {
+  margin-top: 0.2rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid rgba(200, 168, 75, 0.25);
+}
+.wrapup-found-label {
+  font-size: 0.74rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  text-align: center;
+  margin-bottom: 0.3rem;
+}
+.wrapup-found-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+}
+.wrapup-found-unit { display: flex; flex-direction: column; align-items: center; gap: 0.15rem; width: 3.4rem; }
+.wrapup-found-icon {
+  width: 2.6rem; height: 2.6rem;
+  border-radius: 50%;
+  border: 2px solid #888;
+  object-fit: cover;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.1rem; color: #fff;
+}
+.wrapup-found-name {
+  font-size: 0.68rem;
+  color: var(--text);
+  text-align: center;
+  line-height: 1.1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 3.4rem;
+}
+/* Looted — explore resource icons gained this round, with ×N counts. */
+.wrapup-loot {
+  margin-top: 0.2rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid rgba(200, 168, 75, 0.25);
+}
+.wrapup-loot-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+}
+.wrapup-loot-pip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  font-size: 1.1rem;
+}
+.wrapup-loot-x { font-size: 0.7rem; color: var(--text-dim); font-weight: 700; }
+/* Night attrition roll-call — exposed (hurt) vs sheltered (safe) survivors. */
+.wrapup-attr {
+  margin-top: 0.2rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid rgba(200, 168, 75, 0.25);
+}
+.wrapup-attr-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.wrapup-attr-row {
+  font-size: 0.84rem;
+  line-height: 1.35;
+  text-align: center;
+}
+.wrapup-attr-row.hurt { color: #d6a8ff; }
+.wrapup-attr-row.safe { color: var(--text-dim); }
+.wrapup-attr-dmg { color: #ff8a8a; font-weight: 700; }
+.wrapup-attr-note { color: var(--text-dim); font-size: 0.68rem; font-style: italic; }
 /* Score — the bottom score-bar dots/pips, reused. */
 .wrapup-score {
   display: flex;
@@ -5521,8 +5603,14 @@ img.plan-step-avatar {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 0.2rem;
+  gap: 0.25rem 0.35rem;
   max-width: 5rem;
+}
+.replay-disc-unit {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.1rem;
 }
 
 /* Outcome cells (row 2 of the grid) — centred under their column, hidden until

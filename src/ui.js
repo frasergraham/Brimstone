@@ -213,15 +213,19 @@ export class UIController {
     // Zoom control buttons (+, −, fit)
     const zoomStep = 1.25;
     this._el('zoom-in')?.addEventListener('click', () => {
-      const cx = this.canvas.width  / 2;
-      const cy = this.canvas.height / 2;
-      this.renderer.setZoom(this.renderer.zoomLevel * zoomStep, cx, cy);
+      this._replayManualCamera(() => {
+        const cx = this.canvas.width  / 2;
+        const cy = this.canvas.height / 2;
+        this.renderer.setZoom(this.renderer.zoomLevel * zoomStep, cx, cy);
+      });
       this.onRedraw();
     }, sig);
     this._el('zoom-out')?.addEventListener('click', () => {
-      const cx = this.canvas.width  / 2;
-      const cy = this.canvas.height / 2;
-      this.renderer.setZoom(this.renderer.zoomLevel / zoomStep, cx, cy);
+      this._replayManualCamera(() => {
+        const cx = this.canvas.width  / 2;
+        const cy = this.canvas.height / 2;
+        this.renderer.setZoom(this.renderer.zoomLevel / zoomStep, cx, cy);
+      });
       this.onRedraw();
     }, sig);
     // Rotate buttons — 3D only; 2D Renderer.rotateBy is a no-op stub.
@@ -267,53 +271,46 @@ export class UIController {
     bindHoldToRepeat('cam3d-rotate-right', () => this.renderer.rotateBy( ROT_STEP, 0));
     this._el('zoom-fit')?.addEventListener('click', () => {
       if (this.renderer.viewLocked) return;
-      // One-button, two-action: tap frames the map; tapping again when the
-      // camera is already at the framed target (so framing would be a
-      // visual no-op) orients north up instead. No 400ms double-tap window.
-      const alreadyFramed = this.renderer.is3D
-        && typeof this.renderer.isAtFitTarget === 'function'
-        && this.renderer.isAtFitTarget();
-      if (alreadyFramed) {
-        if (typeof this.renderer.orientNorthUp === 'function') {
-          this.renderer.orientNorthUp();
-          this.onRedraw();
+      this._replayManualCamera(() => {
+        // One-button, two-action: tap frames the map; tapping again when the
+        // camera is already at the framed target (so framing would be a
+        // visual no-op) orients north up instead. No 400ms double-tap window.
+        const alreadyFramed = this.renderer.is3D
+          && typeof this.renderer.isAtFitTarget === 'function'
+          && this.renderer.isAtFitTarget();
+        if (alreadyFramed) {
+          if (typeof this.renderer.orientNorthUp === 'function') this.renderer.orientNorthUp();
+          return;
         }
-        return;
-      }
-      this.renderer.resize();
-      if (this.renderer.is3D && typeof this.renderer.zoomOutToOwnedUnits === 'function') {
-        this.renderer.zoomOutToOwnedUnits();
-      } else {
-        this.renderer.resetView();
-      }
+        this.renderer.resize();
+        if (this.renderer.is3D && typeof this.renderer.zoomOutToOwnedUnits === 'function') {
+          this.renderer.zoomOutToOwnedUnits();
+        } else {
+          this.renderer.resetView();
+        }
+      });
       this.onRedraw();
     }, sig);
     this._el('zoom-me')?.addEventListener('click', () => {
-      if (this._selectedEntity && this._selectedEntity.alive) {
-        // Zoom to selected unit
-        const pos = this._planMode ? (this._getProjectedPos(this._selectedEntity.id) ?? this._selectedEntity) : this._selectedEntity;
-        this.renderer.frameHexes([pos], { maxZoom: 3.5, paddingHexes: 1.5, duration: 400 });
-      } else {
-        // No selection — frame all player's units
-        const faction = this._planFaction ?? (!this.state.heroIsAI ? 'hero' : 'witch');
-        const units   = this.state.entities.filter(e => e.alive && e.owner === faction);
-        if (units.length > 0) this.renderer.frameHexes(units, { maxZoom: 1.8, paddingHexes: 2.5, duration: 400 });
-      }
+      this._replayManualCamera(() => {
+        if (this._selectedEntity && this._selectedEntity.alive) {
+          // Zoom to selected unit
+          const pos = this._planMode ? (this._getProjectedPos(this._selectedEntity.id) ?? this._selectedEntity) : this._selectedEntity;
+          this.renderer.frameHexes([pos], { maxZoom: 3.5, paddingHexes: 1.5, duration: 400 });
+        } else {
+          // No selection — frame all player's units
+          const faction = this._planFaction ?? (!this.state.heroIsAI ? 'hero' : 'witch');
+          const units   = this.state.entities.filter(e => e.alive && e.owner === faction);
+          if (units.length > 0) this.renderer.frameHexes(units, { maxZoom: 1.8, paddingHexes: 2.5, duration: 400 });
+        }
+      });
       this.onRedraw();
     }, sig);
-    this._el('speed-toggle')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this._toggleSpeedPopup();
-    }, sig);
-    // Speed popup option clicks
-    this._el('speed-popup')?.addEventListener('click', (e) => {
-      const btn = e.target.closest('.speed-option');
-      if (btn) this._setSpeed(btn.dataset.mode);
-    }, sig);
+    // Combat-detail speed now lives in the playback "Detail" control
+    // (see _showReplayBar); the old map-control toggle was removed.
 
-    // Close speed popup on outside click
+    // Close map options popup on outside click
     document.addEventListener('click', () => {
-      this._closeSpeedPopup();
       this._closeMapOptionsPopup();
     }, sig);
 
@@ -605,12 +602,14 @@ export class UIController {
       const dy = e.clientY - this._mouseDown.clientY;
       if (Math.hypot(dx, dy) > 5) {
         this._didDragPan = true;
+        this._claimReplayCamera();      // 3D manual pan during replay → hold the view
       }
     } else if (this._mouseDown) {
       const dx = e.clientX - this._mouseDown.clientX;
       const dy = e.clientY - this._mouseDown.clientY;
       if (Math.hypot(dx, dy) > 5) {
         this._didDragPan = true;
+        this._claimReplayCamera();      // manual pan during replay → hold the view
         this.renderer._zoomAnim = null; // cancel auto-framing on manual pan
         const rect   = this.canvas.getBoundingClientRect();
         const scaleX = this.canvas.width  / rect.width;
@@ -3098,7 +3097,10 @@ export class UIController {
 
   // ── Speed popup ───────────────────────────────────────────────────────────
 
-  static SPEED_LABELS = { cinematic: 'Cinematic', fast: 'Fast', vfast: 'Very Fast' };
+  // Combat-detail modes. Internal keys (cinematic/fast/vfast) are unchanged so
+  // all pacing behaviour is preserved; only the player-facing labels differ.
+  static SPEED_LABELS = { cinematic: 'Full', fast: 'Summary', vfast: 'Speedy' };
+  static SPEED_ORDER = ['cinematic', 'fast', 'vfast'];
 
   _loadDefaultSpeed() {
     try {
@@ -3106,23 +3108,6 @@ export class UIController {
       if (saved && UIController.SPEED_LABELS[saved]) return saved;
     } catch (_) { /* localStorage unavailable */ }
     return 'cinematic';
-  }
-
-  _toggleSpeedPopup() {
-    const popup = this._el('speed-popup');
-    if (!popup) return;
-    const isOpen = popup.style.display !== 'none';
-    if (isOpen) { this._closeSpeedPopup(); return; }
-    // Mark active option
-    popup.querySelectorAll('.speed-option').forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.mode === this.speedMode);
-    });
-    popup.style.display = 'flex';
-  }
-
-  _closeSpeedPopup() {
-    const popup = this._el('speed-popup');
-    if (popup) popup.style.display = 'none';
   }
 
   _toggleMapOptionsPopup() {
@@ -3140,30 +3125,25 @@ export class UIController {
   _setSpeed(mode) {
     if (!UIController.SPEED_LABELS[mode]) return;
     this.speedMode = mode;
-    this._closeSpeedPopup();
-    const btn = this._el('speed-toggle');
-    if (btn) {
-      btn.title = `Battle speed: ${UIController.SPEED_LABELS[mode]}`;
-      btn.className = `zoom-btn speed-${mode}`;
-    }
-    this._showSpeedToast(`⚡ ${UIController.SPEED_LABELS[mode]}`);
+    // The Detail button itself shows the active mode now, so no toast.
+    this._applyReplayDetail();
   }
 
-  _showSpeedToast(text) {
-    let toast = document.getElementById('speed-toast');
-    if (!toast) {
-      toast = document.createElement('div');
-      toast.id = 'speed-toast';
-      toast.className = 'speed-toast';
-      const wrapper = this._el('canvas-wrapper');
-      if (wrapper) wrapper.appendChild(toast);
-    }
-    toast.textContent = text;
-    toast.classList.remove('speed-toast-out');
-    clearTimeout(this._speedToastTimer);
-    this._speedToastTimer = setTimeout(() => {
-      toast.classList.add('speed-toast-out');
-    }, 1500);
+  /** Cycle the combat-detail mode Full → Summary → Speedy → Full. */
+  _cycleReplayDetail() {
+    const order = UIController.SPEED_ORDER;
+    const idx = order.indexOf(this.speedMode);
+    this._setSpeed(order[(idx + 1) % order.length]);
+  }
+
+  /** Sync the playback "Detail" button label to the current speedMode. */
+  _applyReplayDetail() {
+    const btn = document.getElementById('replay-detail-btn');
+    if (!btn) return;
+    const label = UIController.SPEED_LABELS[this.speedMode] ?? 'Full';
+    btn.textContent = label;
+    btn.title = `Combat detail: ${label}`;
+    btn.className = `replay-ctrl-btn replay-detail detail-${this.speedMode}`;
   }
 
   /** Show a plan-related toast (food warning, plan full). */
@@ -4568,10 +4548,6 @@ export class UIController {
     // avoid stacking the inline bar over the full one.
     this._replayOnControl = mode === 'full' ? onControl : null;
 
-    // Disable the in-game speed toggle while replaying
-    const speedToggle = document.getElementById('speed-toggle');
-    if (speedToggle) speedToggle.disabled = true;
-
     // Back + Stop are full-game-only; NEXT + PLAY/PAUSE are shared.
     for (const action of ['back', 'stop']) {
       const btn = document.getElementById(`replay-${action}-btn`);
@@ -4590,6 +4566,11 @@ export class UIController {
     const camBtn = document.getElementById('replay-camera-btn');
     if (camBtn) camBtn.onclick = () => this._toggleReplayCamera();
 
+    // Detail (combat-speed) toggle — cycles Full → Summary → Speedy, internal.
+    const detailBtn = document.getElementById('replay-detail-btn');
+    if (detailBtn) detailBtn.onclick = () => this._cycleReplayDetail();
+    this._applyReplayDetail();
+
     // Apply the current camera mode (FOLLOW by default) so auto-framing and
     // manual-pan state are consistent the moment the bar appears.
     this._preReplayViewLocked = this.renderer?.viewLocked ?? false;
@@ -4602,6 +4583,46 @@ export class UIController {
   _toggleReplayCamera() {
     this.replayCameraMode = this.replayCameraMode === 'fixed' ? 'follow' : 'fixed';
     this._applyReplayCameraMode();
+  }
+
+  /** True while a replay/resolution control bar is on screen. */
+  _isReplayActive() {
+    const hud = this._el('replay-hud');
+    return !!hud && hud.style.display !== 'none';
+  }
+
+  /**
+   * Manual pan during replay takes camera control away from FOLLOW: flip to
+   * FIXED so the player's view sticks instead of the next step yanking it back.
+   * Pan mutates the view directly (not via frameHexes), so it isn't blocked by
+   * suppressAutoFrame — this only needs the mode flip. No-op when not replaying
+   * or already FIXED.
+   */
+  _claimReplayCamera() {
+    if (!this._isReplayActive() || this.replayCameraMode === 'fixed') return;
+    this.replayCameraMode = 'fixed';
+    this._applyReplayCameraMode();
+  }
+
+  /**
+   * Run a user-initiated camera move (zoom / fit / focus) that uses frameHexes
+   * or _focusCamera. Those early-return while `suppressAutoFrame` is set (the
+   * FIXED/FOLLOW auto-frame guard), so a manual move during replay would do
+   * nothing. We lift suppression for the move, then re-assert FIXED so the new
+   * view holds against the next step's auto-follow. Outside replay it just runs.
+   */
+  _replayManualCamera(fn) {
+    const replaying = this._isReplayActive();
+    const r = this.renderer;
+    const prevSuppress = r ? r.suppressAutoFrame : false;
+    if (replaying && r) r.suppressAutoFrame = false;
+    fn();
+    if (replaying) {
+      this.replayCameraMode = 'fixed';
+      this._applyReplayCameraMode();        // restores suppressAutoFrame = true
+    } else if (r) {
+      r.suppressAutoFrame = prevSuppress;
+    }
   }
 
   /**
@@ -4670,10 +4691,6 @@ export class UIController {
     const hud = this._el('replay-hud');
     if (hud) hud.style.display = 'none';
     this._replayOnControl = null;
-
-    // Re-enable the in-game speed toggle
-    const speedToggle = document.getElementById('speed-toggle');
-    if (speedToggle) speedToggle.disabled = false;
 
     // Restore view-lock state that existed before replay started
     if (this.renderer) {
@@ -4787,10 +4804,13 @@ export class UIController {
       ? `<div class="replay-unit">${iconImg(u)}<div class="replay-unit-name">${esc(u.name)}</div>`
         + `${alliesHtml(allies)}</div>`
       : `<span class="replay-cell"></span>`;
-    // Discovered units (1+) occupy the target cell, hidden until revealed.
+    // Discovered units (1+) occupy the target cell, hidden until revealed —
+    // each shown as an icon + name.
     const discoveredCell = (units) =>
       `<div class="replay-unit replay-discovered"><div class="replay-discovered-icons">`
-      + units.map(iconImg).join('') + `</div></div>`;
+      + units.map(u => `<div class="replay-disc-unit">${iconImg(u)}`
+          + `<div class="replay-unit-name">${esc(u.name)}</div></div>`).join('')
+      + `</div></div>`;
     const out = (text, kind) => text
       ? `<div class="replay-step-outcome ${kind}">${text}</div>`
       : `<span class="replay-cell"></span>`;
@@ -4954,7 +4974,7 @@ export class UIController {
    * @param {object} opts { titleHtml, bodyHtml, canReplay }
    * @returns {Promise<'next'|'replay'>}
    */
-  showReplayWrapUp({ titleHtml = 'Turn Complete', combats = [], attritionLevel = 0, canReplay = true } = {}) {
+  showReplayWrapUp({ titleHtml = 'Turn Complete', combats = [], discoveries = [], loot = [], attrition = [], attritionLevel = 0, canReplay = true } = {}) {
     const track = this._el('replay-timeline-track');
     const wrap  = this._el('replay-timeline');
     if (!track || !wrap) return Promise.resolve('next');
@@ -4967,7 +4987,7 @@ export class UIController {
     card.setAttribute('data-step', 'wrapup');
     card.innerHTML =
       `<div class="replay-step-label">${titleHtml}</div>`
-      + `<div class="replay-wrapup-body">${this._buildWrapUpBody(combats, attritionLevel)}</div>`
+      + `<div class="replay-wrapup-body">${this._buildWrapUpBody(combats, attritionLevel, discoveries, loot, attrition)}</div>`
       + `<div class="replay-wrapup-actions">${replayBtn}`
       + `<button class="replay-wrapup-btn primary" data-act="next">Continue ▸</button></div>`;
     track.appendChild(card);
@@ -4993,25 +5013,93 @@ export class UIController {
    * skull) beneath each unit, plus the node-score dots reused from the bottom
    * score bar.
    */
-  _buildWrapUpBody(combats, attritionLevel = 0) {
+  _buildWrapUpBody(combats, attritionLevel = 0, discoveries = [], loot = [], attrition = []) {
     const GLYPHS = { hero: '⚔', witch: '✦', survivor: '☺', soldier: '♟', zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙' };
-    const unitCell = (u) => {
+    const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const iconFor = (u, size, cls) => {
       const color = u.color || ENTITY_COLOR[u.type] || '#888';
       const assetId = _entityPortraitId({ type: u.type, title: u.title });
-      const src = (this.renderer && assetId) ? this.renderer.getPortraitDataURL(assetId, 56) : null;
-      const icon = src
-        ? `<img class="wrapup-unit-icon" src="${src}" style="border-color:${color}" alt="">`
-        : `<span class="wrapup-unit-icon" style="background:${color}">${GLYPHS[u.type] ?? '?'}</span>`;
+      const src = (this.renderer && assetId) ? this.renderer.getPortraitDataURL(assetId, size) : null;
+      return src
+        ? `<img class="${cls}" src="${src}" style="border-color:${color}" alt="">`
+        : `<span class="${cls}" style="background:${color}">${GLYPHS[u.type] ?? '?'}</span>`;
+    };
+    const unitCell = (u) => {
+      const icon = iconFor(u, 56, 'wrapup-unit-icon');
       const effect = u.killed
         ? `<div class="wrapup-dmg kill">☠</div>`
         : (u.hpLost > 0 ? `<div class="wrapup-dmg">−${u.hpLost}</div>` : `<div class="wrapup-dmg none">—</div>`);
       return `<div class="wrapup-unit">${icon}${effect}</div>`;
     };
     let combatHtml = '';
-    for (const { a, b } of combats) {
-      combatHtml += `<div class="wrapup-combat">${unitCell(a)}<span class="wrapup-vs">vs</span>${unitCell(b)}</div>`;
+    if (combats.length > 3) {
+      // Many fights ⇒ pairwise would be too tall. Condense to just the units
+      // that actually took damage (aggregated across all their fights).
+      const hurt = new Map();
+      for (const { a, b } of combats) {
+        for (const u of [a, b]) {
+          if (!(u.hpLost > 0 || u.killed)) continue;
+          const prev = hurt.get(u.id);
+          if (prev) { prev.hpLost += u.hpLost; prev.killed = prev.killed || u.killed; }
+          else hurt.set(u.id, { ...u });
+        }
+      }
+      combatHtml = hurt.size
+        ? `<div class="wrapup-casualties">${[...hurt.values()].map(unitCell).join('')}</div>`
+        : `<div class="wrapup-line muted">${combats.length} skirmishes — no casualties.</div>`;
+    } else {
+      for (const { a, b } of combats) {
+        combatHtml += `<div class="wrapup-combat">${unitCell(a)}<span class="wrapup-vs">vs</span>${unitCell(b)}</div>`;
+      }
     }
     if (!combatHtml) combatHtml = `<div class="wrapup-line muted">A quiet turn.</div>`;
+
+    // Survivors/zombies discovered this round — icon + name, reusing the old
+    // summary modal's "found" list.
+    let foundHtml = '';
+    if (discoveries.length) {
+      const cells = discoveries.map(u => {
+        const name = (u.type === 'survivor' && u.name) ? u.name : (u.title ?? u.displayName ?? u.type);
+        return `<div class="wrapup-found-unit">${iconFor(u, 48, 'wrapup-found-icon')}`
+          + `<div class="wrapup-found-name">${esc(String(name))}</div></div>`;
+      }).join('');
+      const zombies = discoveries.every(u => u.type === 'zombie');
+      const label = zombies ? 'Risen' : 'Found';
+      foundHtml = `<div class="wrapup-found"><div class="wrapup-found-label">${label}</div>`
+        + `<div class="wrapup-found-row">${cells}</div></div>`;
+    }
+
+    // Resources looted from exploration this round — tally identical icons so
+    // e.g. two wood reads "🪵 ×2".
+    let lootHtml = '';
+    if (loot.length) {
+      const tally = new Map();
+      for (const it of loot) tally.set(it, (tally.get(it) ?? 0) + 1);
+      const pips = [...tally.entries()].map(([icon, n]) =>
+        `<span class="wrapup-loot-pip">${esc(icon)}${n > 1 ? `<span class="wrapup-loot-x">×${n}</span>` : ''}</span>`
+      ).join('');
+      lootHtml = `<div class="wrapup-loot"><div class="wrapup-found-label">Looted</div>`
+        + `<div class="wrapup-loot-row">${pips}</div></div>`;
+    }
+
+    // Night attrition roll-call — who took hazard damage in the open and who
+    // was sheltered by a building / fortification this round.
+    let attritionListHtml = '';
+    if (attrition.length) {
+      const rows = attrition.map(a => {
+        if (a.kind === 'kill') {
+          return `<div class="wrapup-attr-row hurt">💀 ${esc(a.name)} <span class="wrapup-attr-note">consumed by the night</span></div>`;
+        }
+        if (a.kind === 'damage') {
+          return `<div class="wrapup-attr-row hurt">🌙 ${esc(a.name)} <span class="wrapup-attr-dmg">−${a.amount} HP</span> <span class="wrapup-attr-note">exposed</span></div>`;
+        }
+        const icon = a.shelter === 'building' ? '🏠' : '🏰';
+        const desc = a.shelter === 'building' ? 'sheltered in building' : 'sheltered by fort';
+        return `<div class="wrapup-attr-row safe">${icon} ${esc(a.name)} <span class="wrapup-attr-note">${desc}</span></div>`;
+      }).join('');
+      attritionListHtml = `<div class="wrapup-attr"><div class="wrapup-found-label">🌙 Night Attrition</div>`
+        + `<div class="wrapup-attr-rows">${rows}</div></div>`;
+    }
 
     let scoreHtml = '';
     if (this.state?.witchObjectives) {
@@ -5026,7 +5114,7 @@ export class UIController {
       attritionHtml = `<div class="wrapup-attrition">🌙 The curse deepens — exposed survivors `
         + `now take <b>${attritionLevel}</b> damage each night.</div>`;
     }
-    return attritionHtml + combatHtml + scoreHtml;
+    return attritionHtml + combatHtml + foundHtml + lootHtml + attritionListHtml + scoreHtml;
   }
 
   /** Show the prev/next scrub arrows above the active card. */

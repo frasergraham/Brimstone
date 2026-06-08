@@ -117,3 +117,40 @@ export function compileTurnBattlePairs(steps, finalEntities, ResEventType, PlanA
       a: unit(snapA, hpLostByA), b: unit(snapB, hpLostByB),
     }));
 }
+
+/**
+ * Collect a turn's survivor/zombie discoveries and explore-loot icons for the
+ * end-of-turn wrap-up card.
+ *
+ * Loot is the PLAYER's only: each faction's explore resources go to its own
+ * inventory, so counting the AI's loot here double-shows shared icons (both
+ * sides finding wood reads as "🪵 ×2"). We gate loot on `humanFaction` to match
+ * the old summary (`ev.faction === humanFaction`). Discoveries stay unfiltered —
+ * survivors are hero-side / node-spawned regardless of who surfaced them.
+ *
+ * @param {Array}  steps        — StepRecord[] (heroEvents/witchEvents or playerEvents).
+ * @param {string|null} humanFaction — 'hero' | 'witch' | null (null ⇒ count all loot).
+ * @returns {{ discoveries: Array, loot: string[] }}
+ */
+export function collectTurnFinds(steps, humanFaction = null) {
+  const discoveries = [];
+  const loot = [];
+  for (const step of steps ?? []) {
+    const evs = [
+      ...(step.heroEvents  ?? []),
+      ...(step.witchEvents ?? []),
+      ...(step.playerEvents ?? []).flatMap(pe =>
+        (pe.events ?? []).map(e => (e.faction ? e : { ...e, faction: pe.faction }))),
+    ];
+    for (const ev of evs) {
+      const found = ev.result?.encounterSurvivors
+        ?? (ev.result?.encounterSurvivor ? [ev.result.encounterSurvivor] : []);
+      for (const f of found) discoveries.push(f);
+      if (humanFaction && ev.faction && ev.faction !== humanFaction) continue;
+      for (const item of (ev.result?.lootItems ?? [])) {
+        if (item && item !== 'nothing') loot.push(item);
+      }
+    }
+  }
+  return { discoveries, loot };
+}

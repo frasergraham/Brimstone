@@ -37,7 +37,7 @@ import { MAX_FORTIFY_LEVEL, FORT_IMPASSABLE_THRESHOLD } from './tiles.js';
 import { sightRange, computeLineOfSight, hasLineOfSight } from './actions.js';
 import { UNIT_TYPES } from './unit-types.js';
 import { getFaction, findFaction, allFactions, getFactionsForSide, sightRangeForEntity } from './factions.js';
-import { compileTurnBattleSummary, compileTurnBattlePairs } from './battle-utils.js';
+import { compileTurnBattleSummary, compileTurnBattlePairs, collectTurnFinds } from './battle-utils.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import { playback, resetPlayback, replayFullGame, playbackDelay, swapState, patchAlive } from './playback.js';
 import { ReplayCache } from './replay-cache.js';
@@ -341,20 +341,8 @@ function init(witchIsAI, heroIsAI, autoplay = false, humanFactionId = null) {
 
   redraw();
 
-  requestAnimationFrame(() => {
-    // Resize now that game-screen layout is complete and the canvas has real dimensions.
-    renderer.resize();
-    // Re-frame starting units with correct dimensions (overrides the one queued in
-    // enterPlanningMode which fired before layout was resolved).
-    if (!_autoplay) {
-      const humanFaction = !state.heroIsAI ? 'hero' : 'witch';
-      const startUnits = state.entities.filter(e => e.alive && e.owner === humanFaction);
-      if (startUnits.length > 0) {
-        renderer.frameHexes(startUnits, { maxZoom: 1.8, paddingHexes: 2.5, duration: 550 });
-      }
-    }
-    redraw();
-  });
+  // Size the canvas (game-screen layout now complete) and frame the main unit.
+  _enterGameView();
 
   _startLocalPlanningPhase();
 }
@@ -723,6 +711,32 @@ async function _runLocalAutoResolution() {
 // renders the icons + score dots from this.
 function _buildWrapUpContent(steps, roundNum) {
   const combats = compileTurnBattlePairs(steps, state.entities, ResEventType, PlanActionType);
+  // Survivors/zombies found this round — move/explore/horn encounters plus any
+  // spawned at power nodes during endRound (matches the old summary modal).
+  // Also collect explored-loot icons so the card lists the actual resources.
+  // Loot is the PLAYER's only — see collectTurnFinds (AI loot goes to its own
+  // inventory, so counting it would double-show shared resource icons).
+  const humanFaction = !state.heroIsAI ? 'hero' : !state.witchIsAI ? 'witch' : null;
+  const { discoveries, loot } = collectTurnFinds(steps, humanFaction);
+  for (const s of (state.nodeSpawnedSurvivors ?? [])) discoveries.push(s);
+
+  // Night attrition roll-call — who suffered in the open and who was sheltered
+  // by a building or fortification this round (from the post-round effects).
+  // This restores the per-unit list the old end-of-turn modal showed.
+  const myId = ui?.myPlayerId ?? null;
+  const attrition = [];
+  for (const ev of (state.postRoundEvents ?? [])) {
+    if (myId && ev.ownerId && ev.ownerId !== myId) continue;
+    if (ev.type === 'damage' || ev.type === 'kill') {
+      attrition.push({ kind: ev.type, name: ev.entityName, amount: ev.amount });
+    } else if (ev.type === 'shelter') {
+      attrition.push({
+        kind: 'shelter', name: ev.entityName,
+        shelter: ev.text?.startsWith('🏠') ? 'building' : 'fort',
+      });
+    }
+  }
+
   // Title the completed turn as "Day X Round Y — SUMMARY" (cycle day + round in
   // cycle, matching the cycle bar's "Day N · Round M" convention).
   const round = roundNum ?? 0;
@@ -730,7 +744,48 @@ function _buildWrapUpContent(steps, roundNum) {
   const day = Math.ceil(round / cycleLen);
   const roundInCycle = ((round - 1) % cycleLen) + 1;
   const title = `Day ${day} Round ${roundInCycle} — SUMMARY`;
-  return { title, combats };
+  return { title, combats, discoveries, loot, attrition };
+}
+
+// Initial camera when first entering a level/mission: orient north-up and zoom
+// in on the player's main unit (its leader), with that unit selected — i.e. the
+// view you'd get from "fit twice" (frame + orient north) followed by
+// zoom-to-selection on the leader. North-up is the camera default and frameHexes
+// preserves azimuth, so a single zoom-to-unit lands the desired view.
+function _focusInitialView(humanFaction) {
+  if (!renderer || !state) return;
+  const apply = () => {
+    if (!renderer || !state) return;
+    // state.hero / state.witch keyed by faction id (avoids a faction string check).
+    const main = state[humanFaction]
+      ?? state.entities.find(e => e.alive && e.owner === humanFaction);
+    if (!main || !main.alive) return;
+    // Tutorial teaches unit selection itself, so don't pre-select there.
+    if (ui && !ui.tutorialMode) ui._selectEntity?.(main);
+    renderer.frameHexes([main], { maxZoom: 3.5, paddingHexes: 1.5, duration: 550, orientNorth: true });
+    redraw();
+  };
+  // Apply now (renderer usually ready), then again once the lazily-initialised
+  // 3D renderer signals ready — otherwise an early frame is dropped (camera not
+  // created yet) and the view stays at the default top-down whole-map shot.
+  apply();
+  if (typeof renderer.whenReady === 'function') renderer.whenReady().then(apply);
+}
+
+// Common post-setup view for every local game-entry path (new game, SP/campaign
+// resume, campaign mission). Sizes the canvas, then frames the player's main
+// unit north-up. Centralised so no entry path can forget the initial view —
+// that omission was why loading a game looked different from starting one.
+function _enterGameView() {
+  requestAnimationFrame(() => {
+    if (!renderer || !state) return;
+    renderer.resize();
+    if (!_autoplay) {
+      const humanFaction = !state.heroIsAI ? 'hero' : 'witch';
+      _focusInitialView(humanFaction);
+    }
+    redraw();
+  });
 }
 
 async function _runLocalResolution(skipSummary = false) {
@@ -876,7 +931,8 @@ async function _runLocalResolution(skipSummary = false) {
     do {
       const wrap = _buildWrapUpContent(steps, state.round - 1);
       action = await ui.showReplayWrapUp({
-        titleHtml: wrap.title, combats: wrap.combats, attritionLevel,
+        titleHtml: wrap.title, combats: wrap.combats, discoveries: wrap.discoveries,
+        loot: wrap.loot, attrition: wrap.attrition, attritionLevel,
         canReplay: _roundHistory.length > 0,
       });
       if (action === 'replay') await _reReplay();
@@ -2989,7 +3045,7 @@ function _resumeCampaignMission(missionId) {
   ui.onMissionInfo = () => _showMissionInfoModal();
 
   redraw();
-  requestAnimationFrame(() => { renderer.resize(); redraw(); });
+  _enterGameView();
   _startLocalPlanningPhase();
 }
 
@@ -3530,14 +3586,7 @@ function _initCampaignMission(missionDef) {
     );
 
     redraw();
-    requestAnimationFrame(() => {
-      renderer.resize();
-      const heroEntity = state.entities.find(e => e.type === EntityType.PALADIN);
-      if (heroEntity) {
-        renderer.frameHexes([heroEntity], { maxZoom: 2.2, paddingHexes: 3, duration: 500 });
-      }
-      redraw();
-    });
+    _enterGameView();
 
     _missionConductor.start();
     _startLocalPlanningPhase();
@@ -3556,6 +3605,7 @@ function _initCampaignMission(missionDef) {
   state.addLog(`💀 Defeat: ${loseDesc}`);
 
   redraw();
+  _enterGameView();
   _startLocalPlanningPhase();
 }
 
@@ -3849,11 +3899,7 @@ function _startFromState(existingState, mode, existingHistory) {
   _setupLocalUI(canvas, witchAI, heroAI, false);
 
   redraw();
-
-  requestAnimationFrame(() => {
-    renderer.resize();
-    redraw();
-  });
+  _enterGameView();
 
   _startLocalPlanningPhase();
 }

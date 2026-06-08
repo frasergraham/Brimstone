@@ -3,7 +3,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { compileTurnBattleSummary, compileTurnBattlePairs } from '../src/battle-utils.js';
+import { compileTurnBattleSummary, compileTurnBattlePairs, collectTurnFinds } from '../src/battle-utils.js';
 import { ResEventType } from '../server/resolver.js';
 import { PlanActionType } from '../src/planner.js';
 
@@ -187,5 +187,46 @@ describe('compileTurnBattlePairs (structured wrap-up data)', () => {
     assert.equal(pairs[0].a.hpLost, 0);
     assert.equal(pairs[0].b.hpLost, 0);
     assert.equal(pairs[0].a.killed, false);
+  });
+});
+
+describe('collectTurnFinds', () => {
+  const exploreEvent = (faction, entityId, lootItems, survivor = null) => ({
+    type:   ResEventType.ACTION_OK,
+    faction,
+    action: { type: PlanActionType.EXPLORE, entityId },
+    result: { success: true, cost: 1, log: [], lootItems, encounterSurvivor: survivor },
+  });
+
+  test('counts only the human faction\'s explore loot (AI loot excluded)', () => {
+    // Both sides find wood; the player's summary must show wood once, not twice.
+    const steps = [makeStep([
+      exploreEvent('hero',  'h1', ['+🪵']),
+      exploreEvent('witch', 'w1', ['+🪵']),
+    ])];
+    const { loot } = collectTurnFinds(steps, 'hero');
+    assert.deepEqual(loot, ['+🪵']);
+  });
+
+  test('aggregates the human\'s own multiple explores (wood then food)', () => {
+    const steps = [makeStep([
+      exploreEvent('hero', 'h1', ['+🪵']),
+      exploreEvent('hero', 'h2', ['+🍞']),
+    ])];
+    const { loot } = collectTurnFinds(steps, 'hero');
+    assert.deepEqual(loot, ['+🪵', '+🍞']);
+  });
+
+  test('drops "nothing" rolls and counts all loot when no humanFaction', () => {
+    const steps = [makeStep([exploreEvent('hero', 'h1', ['+🪵', 'nothing', '+🪵'])])];
+    assert.deepEqual(collectTurnFinds(steps, null).loot, ['+🪵', '+🪵']);
+  });
+
+  test('collects discoveries regardless of faction', () => {
+    const surv  = { id: 's9', type: 'survivor', name: 'Mara' };
+    const steps = [makeStep([exploreEvent('hero', 'h1', [], surv)])];
+    const { discoveries } = collectTurnFinds(steps, 'hero');
+    assert.equal(discoveries.length, 1);
+    assert.equal(discoveries[0].name, 'Mara');
   });
 });

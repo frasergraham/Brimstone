@@ -72,9 +72,9 @@ function battleKind(result) {
   return OutcomeKind.MISS;
 }
 
-/** Count meaningful loot from an explore result ('nothing' rolls excluded). */
-function lootCount(result) {
-  return (result?.lootItems ?? []).filter(x => x && x !== 'nothing').length;
+/** Meaningful loot icons from an explore result ('nothing' rolls excluded). */
+function lootIcons(result) {
+  return (result?.lootItems ?? []).filter(x => x && x !== 'nothing');
 }
 
 /**
@@ -157,6 +157,29 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
         continue;
       }
 
+      // ── Whiffed hex attacks (ACTION_SKIP, no enemy on the target hex) ──────
+      // The attack still lunges/fires at an empty hex, so it earns a card —
+      // labelled like a normal strike with a "NO TARGET" result.
+      if (ev.type === RE.ACTION_SKIP && ev.whiffTarget && ev.battleSnaps?.actorSnap) {
+        const actorSnap = ev.battleSnaps.actorSnap;
+        const wt = ev.whiffTarget;
+        const seen = vis(actorSnap.col, actorSnap.row, ents) || vis(wt.col, wt.row, ents);
+        if (!seen) continue;
+        const ranged = !!ev.battleSnaps.ranged;
+        entries.push({
+          entityId:   actorSnap.id,
+          actor:      unitRef(actorSnap),
+          target:     null,
+          actionType: PA.BATTLE_HEX,
+          label:      ranged ? 'RANGED ATTACK' : 'ATTACK',
+          ranged,
+          outcomeKind: null,
+          targetDmg: 0, actorDmg: 0, killed: false,
+          note:      { text: 'NO TARGET', kind: 'info' },
+        });
+        continue;
+      }
+
       // ── Blocked moves (ACTION_FAIL with a blocker) → "BLOCKED" note ────────
       if (ev.type === RE.ACTION_FAIL && ev.action?.type === PA.MOVE
           && (ev.blockedBy || ev.blockedByFort)) {
@@ -198,12 +221,13 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
         target = unitRef({ type: a.summonType });
       }
 
-      // Explore reports the loot gained (e.g. "+1 RESOURCE").
+      // Explore reports the loot gained as the actual resource icons (🌿 🪵 ⚙
+      // …), not a generic "+1 RESOURCE". Empty roll ⇒ "EXPLORED".
       let note = null;
       if (a.type === PA.EXPLORE) {
-        const n = lootCount(ev.result);
-        note = n > 0
-          ? { text: `+${n} RESOURCE`, kind: 'gain' }
+        const icons = lootIcons(ev.result);
+        note = icons.length
+          ? { text: icons.join(' '), kind: 'gain' }
           : { text: 'EXPLORED', kind: 'info' };
       }
 

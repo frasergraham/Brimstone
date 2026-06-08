@@ -169,15 +169,32 @@ describe('buildStepDigest — move/explore notes', () => {
     assert.deepEqual(d[0].entries[0].note, { text: 'BLOCKED', kind: 'blocked' });
   });
 
-  test('explore reports loot count as "+N RESOURCE"', () => {
+  test('whiffed hex attack (ACTION_SKIP, no enemy) still gets a "NO TARGET" card', () => {
+    const h = snap('h1', 'hero', 'hero', 1, 1);
+    const ev = {
+      type: ResEventType.ACTION_SKIP, faction: 'hero',
+      action: { type: PlanActionType.BATTLE_HEX, entityId: 'h1' },
+      reason: 'No enemy on target hex.',
+      battleSnaps: { actorSnap: { id: 'h1', type: 'hero', owner: 'hero', col: 1, row: 1 }, ranged: true },
+      whiffTarget: { col: 3, row: 1 },
+    };
+    const d = buildStepDigest([step([ev], [h])], [], DEPS);
+    const e = d[0].entries[0];
+    assert.equal(e.label, 'RANGED ATTACK');
+    assert.equal(e.target, null);
+    assert.equal(e.outcomeKind, null);
+    assert.deepEqual(e.note, { text: 'NO TARGET', kind: 'info' });
+  });
+
+  test('explore lists the actual loot icons (not "+N RESOURCE")', () => {
     const h = snap('h1', 'hero', 'hero', 1, 1);
     const ev = {
       type: ResEventType.ACTION_OK, faction: 'hero',
       action: { type: PlanActionType.EXPLORE, entityId: 'h1' },
-      result: { success: true, lootItems: ['axe', 'nothing', '+🌿'] },  // 'nothing' excluded
+      result: { success: true, lootItems: ['+🪵', 'nothing', '+🌿'] },  // 'nothing' excluded
     };
     const d = buildStepDigest([step([ev], [h])], [], DEPS);
-    assert.deepEqual(d[0].entries[0].note, { text: '+2 RESOURCE', kind: 'gain' });
+    assert.deepEqual(d[0].entries[0].note, { text: '+🪵 +🌿', kind: 'gain' });
   });
 
   test('discovery: explore that finds a survivor shows the unit + "FOUND SURVIVOR"', () => {

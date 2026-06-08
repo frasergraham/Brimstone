@@ -5437,7 +5437,12 @@ export class Renderer3D {
     const BABYLON = this._babylon;
     const newTarget = new BABYLON.Vector3(bounds.centerX, 0, bounds.centerZ);
     const newRadius = this._radiusForFit(fitWidth, fitDepth);
-    this._focusCamera(newTarget, newRadius, { instant: opts.instant === true });
+    // orientNorth: also rotate to map-north-up (alpha = _lockedAlpha) as part of
+    // the same move — used for the initial level/mission view so it lands
+    // isometric and north-up regardless of any prior camera azimuth.
+    const focusOpts = { instant: opts.instant === true };
+    if (opts.orientNorth) focusOpts.alpha = this._lockedAlpha;
+    this._focusCamera(newTarget, newRadius, focusOpts);
   }
 
   /** Project a canvas pixel onto the map by raycasting against tile and
