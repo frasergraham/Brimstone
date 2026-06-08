@@ -2,12 +2,12 @@ appId: com.calebshollow.game
 productName: "Caleb's Hollow"
 
 directories:
-  # Default output for every target (electron:package / :build / :win / :linux).
-  # The `electron:build:mac` npm script overrides this to /tmp/brimstone-electron-dist
-  # on purpose: the project dir carries iCloud/Finder extended attributes that
-  # break macOS codesigning, and building under /tmp sidesteps them. That
-  # override is mac-only — all other targets emit here under dist/.
-  output: dist
+  # Output to /tmp for every target (electron:package / :build / :win / :linux)
+  # so packaged builds don't clutter the project root. Building under /tmp also
+  # sidesteps the iCloud/Finder extended attributes on the project dir that break
+  # macOS codesigning. (The electron:build:mac npm script passes the same path
+  # explicitly; it's now redundant but harmless.)
+  output: /tmp/brimstone-electron-dist
 
 # Only include client-side game files — server code and native modules are
 # excluded since the Electron app is a pure client that connects to a remote

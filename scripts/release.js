@@ -329,7 +329,10 @@ console.log(`  git push origin ${DEV_BRANCH} ${PROD_BRANCH} --tags`);
 const iosVersion = iosBuild ? newVersion : pbxproj.match(/MARKETING_VERSION = ([^;]+);/)?.[1]?.trim() || currentVersion;
 
 {
-  const ARCHIVE_DIR  = resolve(ROOT, 'build');
+  // Archive output goes to /tmp, not the project dir: xcarchives are ~300MB
+  // each and would otherwise pile up in build/. (/tmp also sidesteps the
+  // iCloud/Finder xattrs on the project dir that break codesigning.)
+  const ARCHIVE_DIR  = '/tmp/brimstone-ios-archive';
   const ARCHIVE_PATH = resolve(ARCHIVE_DIR, `Brimstone-${tag}.xcarchive`);
   const EXPORT_PATH  = resolve(ARCHIVE_DIR, 'export');
   const EXPORT_OPTS  = resolve(ROOT, 'ios/ExportOptions.plist');
@@ -370,7 +373,8 @@ const iosVersion = iosBuild ? newVersion : pbxproj.match(/MARKETING_VERSION = ([
 // ── itch.io upload via butler ───────────────────────────────────────────────
 
 const ITCH_GAME = 'twistedweasel/calebs-hollow';
-const ITCH_ZIP  = resolve(ROOT, 'dist', 'calebs-hollow-itch.zip');
+// Must match build-itch.js's default output path.
+const ITCH_ZIP  = '/tmp/brimstone-itch/calebs-hollow-itch.zip';
 
 {
   function run(cmd) {

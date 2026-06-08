@@ -14,7 +14,9 @@ import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const WWW  = resolve(ROOT, 'www');
+// Staged web copy lives in /tmp (not the project root) to keep build artifacts
+// out of the way. Must match `webDir` in capacitor.config.ts.
+const WWW  = '/tmp/brimstone-www';
 
 // ── Environment config ──────────────────────────────────────────────────────
 
@@ -81,4 +83,4 @@ for (const file of files) {
 
 writeFileSync(resolve(WWW, 'build-config.json'), JSON.stringify(ENVS[env], null, 2));
 
-console.log(`✔ Web assets copied to www/ (env: ${env})`);
+console.log(`✔ Web assets copied to ${WWW} (env: ${env})`);

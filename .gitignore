@@ -16,7 +16,11 @@ assets/models/*.fbm/
 scripts/map-renders/
 scripts/renders/
 dist/
-build/
+# build/ is electron-builder's buildResources dir. Keep the committed app icons;
+# ignore any generated output that lands here (xcarchives/export now go to /tmp).
+build/*
+!build/icon.png
+!build/icon.icns
 
 # Capacitor build artifacts
 www/
