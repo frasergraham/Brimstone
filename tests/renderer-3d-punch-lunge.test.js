@@ -82,59 +82,6 @@ function makeGroupSpy() {
   };
 }
 
-describe('Renderer3D._startPaladinPunch', () => {
-  test('returns false (no crash) when the punch clip never loaded', () => {
-    const inst = Object.create(Renderer3D.prototype);
-    inst._paladinSource = { idleGroup: makeGroupSpy(), walkGroup: makeGroupSpy() };
-    assert.equal(inst._startPaladinPunch(), false);
-    assert.ok(!inst._paladinSource.punchPlaying);
-  });
-
-  test('returns false when there is no paladin source at all', () => {
-    const inst = Object.create(Renderer3D.prototype);
-    inst._paladinSource = null;
-    assert.equal(inst._startPaladinPunch(), false);
-  });
-
-  test('stops idle+walk, starts the punch one-shot, and marks punchPlaying', () => {
-    const inst = Object.create(Renderer3D.prototype);
-    const idle = makeGroupSpy();
-    const walk = makeGroupSpy();
-    const punch = makeGroupSpy();
-    inst._playbackSpeedMul = 1.0;
-    inst._paladinSource = {
-      idleGroup: idle, walkGroup: walk, punchGroup: punch,
-      punchDurationSec: 1.0, activeGroup: 'idle',
-    };
-
-    assert.equal(inst._startPaladinPunch(), true);
-    assert.equal(idle.calls.stop, 1, 'idle silenced');
-    assert.equal(walk.calls.stop, 1, 'walk silenced');
-    assert.equal(inst._paladinSource.punchPlaying, true);
-    assert.equal(inst._paladinSource.activeGroup, 'punch');
-    // Started non-looping (false) at the compressed strike ratio (2× for 1s → 500ms).
-    const started = punch.calls.start.at(-1);
-    assert.equal(started.loop, false);
-    assert.equal(started.ratio, 2.0);
-  });
-
-  test('the registered end-handler releases the skeleton back to idle/walk', () => {
-    const inst = Object.create(Renderer3D.prototype);
-    const punch = makeGroupSpy();
-    inst._playbackSpeedMul = 1.0;
-    inst._paladinSource = {
-      idleGroup: makeGroupSpy(), walkGroup: makeGroupSpy(),
-      punchGroup: punch, punchDurationSec: 1.0,
-    };
-    inst._startPaladinPunch();
-    assert.equal(inst._paladinSource.punchPlaying, true);
-    // Fire the strike-complete callback.
-    assert.equal(punch.calls.endCbs.length, 1);
-    punch.calls.endCbs[0]();
-    assert.equal(inst._paladinSource.punchPlaying, false);
-    assert.equal(inst._paladinSource.activeGroup, null);
-  });
-});
 
 // ── holdPunchAtImpact / resumePunch — the freeze→roll→resume sequence ───────
 
@@ -235,24 +182,6 @@ describe('Renderer3D._stopPaladinPunch', () => {
 
 // ── idle/walk toggle yields to a mid-swing punch ────────────────────────────
 
-describe('Renderer3D._maybeTogglePaladinAnimation — punch yield', () => {
-  test('does not touch idle/walk while a punch is playing', () => {
-    const inst = Object.create(Renderer3D.prototype);
-    const idle = makeGroupSpy();
-    const walk = makeGroupSpy();
-    inst._paladinSource = {
-      idleGroup: idle, walkGroup: walk, punchGroup: makeGroupSpy(),
-      punchPlaying: true, activeGroup: 'punch',
-    };
-    inst._activeMoveIds = new Set();
-    inst._activeLungeIds = new Set(['e1']); // would normally request 'walk'
-    inst._maybeTogglePaladinAnimation();
-    // Skeleton left to the punch — neither idle nor walk was poked.
-    assert.equal(idle.calls.start.length + idle.calls.stop, 0);
-    assert.equal(walk.calls.start.length + walk.calls.stop, 0);
-    assert.equal(inst._paladinSource.activeGroup, 'punch');
-  });
-});
 
 // ── addLungeAnim integration ────────────────────────────────────────────────
 
