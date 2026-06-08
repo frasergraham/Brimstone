@@ -5497,29 +5497,55 @@ export class Renderer3D {
     if (!src || src.walkGroup) return src?.walkGroup || null;
     const ws = this._walkingSource;
     const nativeGroup = ws && ws.walkGroup;
-    if (!nativeGroup || typeof nativeGroup.clone !== 'function') return null;
+    if (!nativeGroup) return null;
+    const ratio = (ws && ws.speedRatio) || 1.0;
+    const clone = this._retargetNativeClipOntoRig(
+      nativeGroup, src, `${src.cloneTag}WalkRetargeted`,
+      { keepY: true, loop: true, speed: ratio });
+    if (!clone) return null;
+    src.walkGroup = clone;
+    src.walkSpeedRatio = ratio;
+    src.activeGroup = src.activeGroup || 'idle';
+    return clone;
+  }
 
+  /** Build the bone-name → target-node lookup for retargeting a clip onto a
+   *  rig `src`. Indexes both the imported TransformNodes and the skeleton's
+   *  linked nodes, with the `.001` dedup suffix stripped so either spelling
+   *  matches. Shared by every per-rig clip retarget (walk / run / punch / …). */
+  _buildRigNameMap(src) {
     const nameMap = new Map();
     const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
-    const addEntry = (name, target) => {
+    const add = (name, target) => {
       if (!name || !target) return;
       if (!nameMap.has(name)) nameMap.set(name, target);
-      const stripped = stripDup(name);
-      if (stripped !== name && !nameMap.has(stripped)) nameMap.set(stripped, target);
+      const s = stripDup(name);
+      if (s !== name && !nameMap.has(s)) nameMap.set(s, target);
     };
-    for (const tn of src.transformNodes || []) if (tn && tn.name) addEntry(tn.name, tn);
+    for (const tn of src.transformNodes || []) if (tn && tn.name) add(tn.name, tn);
     if (src.skeleton && Array.isArray(src.skeleton.bones)) {
       for (const bone of src.skeleton.bones) {
         if (!bone) continue;
         const tn = bone._linkedTransformNode
           || (typeof bone.getTransformNode === 'function' && bone.getTransformNode());
-        if (tn && tn.name) addEntry(tn.name, tn);
-        if (bone.name) addEntry(bone.name, tn || bone);
+        if (tn && tn.name) add(tn.name, tn);
+        if (bone.name) add(bone.name, tn || bone);
       }
     }
+    return nameMap;
+  }
 
+  /** Clone a native AnimationGroup, retargeted onto `src`'s nodes by bone name,
+   *  and strip its root translation. Returns the clone (instantiated then
+   *  paused, or stopped for one-shots) or null when nothing remapped. The one
+   *  retarget primitive behind walk / run / punch / hit / block on a rig. */
+  _retargetNativeClipOntoRig(nativeGroup, src, cloneName,
+    { keepY = true, loop = true, speed = 1.0, rest = 'pause' } = {}) {
+    if (!nativeGroup || typeof nativeGroup.clone !== 'function' || !src) return null;
+    const nameMap = this._buildRigNameMap(src);
+    const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
     let remapped = 0;
-    const clone = nativeGroup.clone(`${src.cloneTag}WalkRetargeted`, (oldTarget) => {
+    const clone = nativeGroup.clone(cloneName, (oldTarget) => {
       if (!oldTarget || !oldTarget.name) return oldTarget;
       const match = nameMap.get(oldTarget.name) || nameMap.get(stripDup(oldTarget.name));
       if (match) { remapped++; return match; }
@@ -5529,16 +5555,10 @@ export class Renderer3D {
       try { clone?.dispose?.(); } catch { /* ignore */ }
       return null;
     }
-    // keepY like the idle — feet-origin rigs need the Hips vertical baseline so
-    // the walk cycles in place at standing height (the cone slide handles
-    // world-space translation across hexes).
-    stripRootBoneTranslation(clone, 'mixamorig:Hips', { keepY: true });
-    const ratio = (ws && ws.speedRatio) || 1.0;
-    if (typeof clone.start === 'function') clone.start(true, ratio);
-    if (typeof clone.pause === 'function') clone.pause();
-    src.walkGroup = clone;
-    src.walkSpeedRatio = ratio;
-    src.activeGroup = src.activeGroup || 'idle';
+    stripRootBoneTranslation(clone, 'mixamorig:Hips', { keepY });
+    if (typeof clone.start === 'function') clone.start(loop, speed);
+    if (rest === 'stop') { if (typeof clone.stop === 'function') clone.stop(); }
+    else if (typeof clone.pause === 'function') clone.pause();
     return clone;
   }
 
@@ -5571,42 +5591,13 @@ export class Renderer3D {
     const native = (result.animationGroups || []).find(g => g) || null;
     if (!native) { this._disposeWalkingImport(result); return null; }
 
-    const nameMap = new Map();
-    const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
-    const addEntry = (name, target) => {
-      if (!name || !target) return;
-      if (!nameMap.has(name)) nameMap.set(name, target);
-      const s = stripDup(name);
-      if (s !== name && !nameMap.has(s)) nameMap.set(s, target);
-    };
-    for (const tn of src.transformNodes || []) if (tn && tn.name) addEntry(tn.name, tn);
-    if (src.skeleton && Array.isArray(src.skeleton.bones)) {
-      for (const bone of src.skeleton.bones) {
-        if (!bone) continue;
-        const tn = bone._linkedTransformNode
-          || (typeof bone.getTransformNode === 'function' && bone.getTransformNode());
-        if (tn && tn.name) addEntry(tn.name, tn);
-        if (bone.name) addEntry(bone.name, tn || bone);
-      }
-    }
-
-    let remapped = 0;
-    const clone = typeof native.clone === 'function'
-      ? native.clone(`${src.cloneTag}PunchRetargeted`, (old) => {
-        if (!old || !old.name) return old;
-        const m = nameMap.get(old.name) || nameMap.get(stripDup(old.name));
-        if (m) { remapped++; return m; }
-        return old;
-      })
-      : null;
-    if (clone && remapped > 0) {
-      stripRootBoneTranslation(clone, 'mixamorig:Hips', { keepY: true });
+    // One-shot strike: loop=false, rest at frame 0 (stop) until played.
+    const clone = this._retargetNativeClipOntoRig(
+      native, src, `${src.cloneTag}PunchRetargeted`,
+      { keepY: true, loop: false, rest: 'stop' });
+    if (clone) {
       src.punchDurationSec = animDurationSeconds(native);
-      if (typeof clone.start === 'function') clone.start(false, 1.0);
-      if (typeof clone.stop === 'function') clone.stop();
       src.punchGroup = clone;
-    } else {
-      try { clone?.dispose?.(); } catch { /* ignore */ }
     }
     this._disposeWalkingImport(result);
     return src.punchGroup;
