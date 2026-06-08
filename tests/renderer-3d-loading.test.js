@@ -35,7 +35,8 @@ function makeStubbedRenderer() {
   r._initBabylon                  = () => defer('engine');
   r.loadImages                    = () => defer('sprites');
   r._loadBuildingModels           = () => defer('buildings');
-  r._loadPaladinModel             = () => defer('paladin');
+  // Hero rig is pre-warmed through the generic cascade now (paladin-idle.glb).
+  r._loadFallbackRig              = () => defer('paladin');
   r._loadTreePackManifest         = () => defer('forest');
   r._preloadTerrainDetailTextures = () => defer('terrain');
   return { r, settle };

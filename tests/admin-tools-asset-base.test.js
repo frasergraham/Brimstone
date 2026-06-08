@@ -50,7 +50,8 @@ describe('Renderer3D.beginLoad(basePath)', () => {
     r._initBabylon          = async () => {};
     r.loadImages            = async (b) => { bases.sprites = b; };
     r._loadBuildingModels   = async (b) => { bases.buildings = b; };
-    r._loadPaladinModel     = async (b) => { bases.paladin = b; };
+    // Hero rig now pre-warms through the cascade: _loadFallbackRig(file, base).
+    r._loadFallbackRig      = async (_file, b) => { bases.paladin = b; };
     r._loadTreePackManifest = async (b) => { bases.forest = b; };
     return { r, bases };
   }
