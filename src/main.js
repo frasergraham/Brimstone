@@ -30,7 +30,7 @@ import { VERSION, BUILD_VERSION } from './version.js';
 import { buildPlayerStatusHtml } from './ui-render.js';
 import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { PlanActionType, groupPlanByEntity } from './planner.js';
-import { buildStepDigest } from './replay-timeline.js';
+import { buildStepDigest, isEventVisible } from './replay-timeline.js';
 import { hexDistance, getNeighbors, hexKey } from './hex.js';
 import { planCombatFrames } from './combat-presentation.js';
 import { MAX_FORTIFY_LEVEL, FORT_IMPASSABLE_THRESHOLD } from './tiles.js';
@@ -1346,6 +1346,16 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
   }
   setMode(AppMode.RESOLVING);
 
+  // Shared visibility gate for the on-map animation — identical predicate to the
+  // one buildStepDigest used for the cards, so every card has a matching
+  // animation (and vice-versa). Union of source/target hex sight + public
+  // actions (the horn). `humanFaction` null (AI-vs-AI / fog off) ⇒ all visible.
+  const _evVisible = (ev, ents) => isEventVisible(
+    ev, ents,
+    (c, r, e) => _isFogVisible(c, r, humanFaction, e, state.phase),
+    { PlanActionType, ResEventType },
+  );
+
   // ── Fortification rewind ─────────────────────────────────────────────
   // state.tiles already carries the post-resolution fortifyLevel by the
   // time we animate.  Snapshot those values so we can restore them at the
@@ -1514,17 +1524,8 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     if (renderer) renderer._suppressLungeFraming = false;
     // Same visibility predicate Phase 2 applies per battle (lines below) — so we
     // only cluster battles that will actually be presented to this viewer.
-    const _battleShown = (ev) => {
-      const bs = ev.battleSnaps;
-      if (!bs) return false;
-      const myUnit = myPlayerId && (
-        bs.actorSnap?.ownerId === myPlayerId || bs.targetSnap?.ownerId === myPlayerId
-      );
-      return myPlayerId
-        ? myUnit
-        : (!humanFaction || state.fogOfWar === 'none' || ev.faction === humanFaction
-            || (bs.targetSnap?.owner === humanFaction || bs.actorSnap?.owner === humanFaction));
-    };
+    const _battleShown = (ev) =>
+      !!ev.battleSnaps && _evVisible(ev, step.entitySnapshot);
     let _combatFrames = null;        // ordered frames from planCombatFrames
     let _eventFrameIndex = null;     // Map<battleEvent, frameIndex>
     let _heldFrameIndex = -1;        // which cluster the camera currently holds
@@ -1565,14 +1566,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             if (ev.action.type !== PlanActionType.BATTLE_UNIT && ev.action.type !== PlanActionType.BATTLE_HEX) continue;
             if (!ev.battleSnaps) continue;
             const { actorSnap, targetSnap } = ev.battleSnaps;
-            const myUnit = myPlayerId && (
-              actorSnap?.ownerId === myPlayerId || targetSnap?.ownerId === myPlayerId
-            );
-            const showForPlayer = myPlayerId
-              ? myUnit
-              : (!humanFaction || state.fogOfWar === 'none' || ev.faction === humanFaction
-                  || (targetSnap?.owner === humanFaction || actorSnap?.owner === humanFaction));
-            if (showForPlayer && actorSnap && targetSnap) {
+            if (_evVisible(ev, step.entitySnapshot) && actorSnap && targetSnap) {
               firstBattleTargets = [
                 { col: actorSnap.col, row: actorSnap.row },
                 { col: targetSnap.col, row: targetSnap.row },
@@ -1596,8 +1590,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         } else {
           for (const ev of events) {
             const snap = step.entitySnapshot?.find(e => e.id === ev.action?.entityId);
-            const isOpponent = humanFaction && ev.faction !== humanFaction;
-            if (snap && (!isOpponent || _isFogVisible(snap.col, snap.row, humanFaction, step.entitySnapshot, state.phase))) {
+            if (snap && _evVisible(ev, step.entitySnapshot)) {
               // For moves, frame the destination; for others, frame the actor's current position
               if (ev.action.type === PlanActionType.MOVE) {
                 frameTargets.push({ col: ev.action.toCol, row: ev.action.toRow });
@@ -1659,11 +1652,8 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       if (action.type !== PlanActionType.MOVE) continue;
 
       const preSnap = step.entitySnapshot?.find(e => e.id === action.entityId);
-      const isOpponent = humanFaction && ev.faction !== humanFaction;
-      // Opponent moves are visible if origin or destination is within sight range
-      const visible = preSnap && (!isOpponent
-        || _isFogVisible(preSnap.col, preSnap.row, humanFaction, step.entitySnapshot, state.phase)
-        || _isFogVisible(action.toCol, action.toRow, humanFaction, step.entitySnapshot, state.phase));
+      // Moves are visible if origin or destination is within sight range.
+      const visible = preSnap && _evVisible(ev, step.entitySnapshot);
 
       // Use result.path if available (new path-following move); fall back to single hop
       const path = result?.path?.length > 0
@@ -1812,20 +1802,9 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         // Fort assault: BATTLE_HEX that hit a wall instead of a unit.  Handled
         // in its own pass below (no targetSnap → skip the normal battle path).
         if (result?.fortAssault) continue;
-        // Show animation/dialog if one of my own units is involved (team MP), or falling
-        // back to faction-level logic (offline / fog-off / standard 1v1).
-        const myUnit = myPlayerId && battleSnaps && (
-          battleSnaps.actorSnap?.ownerId  === myPlayerId ||
-          battleSnaps.targetSnap?.ownerId === myPlayerId
-        );
-        const showForPlayer = myPlayerId
-          ? myUnit
-          : (!humanFaction || state.fogOfWar === 'none' || ev.faction === humanFaction
-              || (battleSnaps && (
-                   battleSnaps.targetSnap?.owner === humanFaction ||
-                   battleSnaps.actorSnap?.owner  === humanFaction
-                 )));
-        if (battleSnaps && showForPlayer) {
+        // Show the battle if the viewer can see either combatant's hex — same
+        // positional rule the timeline card uses (so card ⟷ animation agree).
+        if (battleSnaps && _evVisible(ev, step.entitySnapshot)) {
           const { actorSnap, targetSnap } = battleSnaps;
           const isKill = !!result?.killed;
           // Highlight this battle's row on the timeline as it begins.
@@ -1962,8 +1941,12 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         }
       } else if (action.type === PlanActionType.SUMMON) {
         const actorSnap = step.entitySnapshot?.find(e => e.id === action.entityId);
-        if (actorSnap) renderer.addSpawnAnim(actorSnap.col, actorSnap.row, '#b39ddb');
-        hadBattle = true;
+        // Only animate the conjuring if the summoner's hex is in sight (the unit
+        // appears on the summoner's own hex) — matches the SUMMON card's gate.
+        if (actorSnap && _evVisible(ev, step.entitySnapshot)) {
+          renderer.addSpawnAnim(actorSnap.col, actorSnap.row, '#b39ddb');
+          hadBattle = true;
+        }
       }
     }
 
@@ -1980,12 +1963,8 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       for (const ev of failedMoves) {
         const preSnap = step.entitySnapshot?.find(e => e.id === ev.action.entityId);
         if (!preSnap) continue;
-        // Visibility gate — mirrors the move-anim rules
-        const isOpponent = humanFaction && ev.faction !== humanFaction;
-        const visible = !isOpponent
-          || _isFogVisible(preSnap.col, preSnap.row, humanFaction, step.entitySnapshot, state.phase)
-          || _isFogVisible(ev.action.toCol, ev.action.toRow, humanFaction, step.entitySnapshot, state.phase);
-        if (!visible) continue;
+        // Visibility gate — mirrors the move-anim rules (origin / dest / blocker).
+        if (!_evVisible(ev, step.entitySnapshot)) continue;
 
         const bumpTo = ev.blockedByFort
           ? { col: ev.blockedByFort.col, row: ev.blockedByFort.row }
@@ -2019,12 +1998,8 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       const { actorSnap } = ev.battleSnaps;
       const { col: tCol, row: tRow } = ev.whiffTarget;
 
-      // Visibility check — same logic as normal battles
-      const myUnit = myPlayerId && actorSnap.ownerId === myPlayerId;
-      const showForPlayer = myPlayerId
-        ? myUnit
-        : (!humanFaction || state.fogOfWar === 'none' || ev.faction === humanFaction);
-      if (!showForPlayer) continue;
+      // Visibility — actor's hex OR the empty target hex (same as the card).
+      if (!_evVisible(ev, step.entitySnapshot)) continue;
 
       if (!_autoplay) {
         const speed = ui?.speedMode ?? 'cinematic';
@@ -2069,12 +2044,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       const r = ev.result;
       const tCol = r.targetCol, tRow = r.targetRow;
 
-      const myUnit = myPlayerId && actorSnap.ownerId === myPlayerId;
-      const showForPlayer = myPlayerId
-        ? myUnit
-        : (!humanFaction || state.fogOfWar === 'none' || ev.faction === humanFaction);
-
-      if (showForPlayer && !_autoplay) {
+      if (_evVisible(ev, step.entitySnapshot) && !_autoplay) {
         const speed = ui?.speedMode ?? 'cinematic';
         const actorDisplay = state.entities.find(e => e.id === actorSnap.id);
         const lungeFromCol = actorDisplay?.col ?? actorSnap.col;
@@ -2119,12 +2089,8 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       if (!battleSnaps) continue;
       const { actorSnap, targetSnap } = battleSnaps;
 
-      const showForPlayer = myPlayerId
-        ? (actorSnap?.ownerId === myPlayerId || targetSnap?.ownerId === myPlayerId)
-        : (!humanFaction || state.fogOfWar === 'none' || ev.faction === humanFaction
-            || targetSnap?.owner === humanFaction || actorSnap?.owner === humanFaction);
-
-      if (!showForPlayer) continue;
+      // Positional visibility — actor's or target's hex in sight (same as card).
+      if (!_evVisible(ev, step.entitySnapshot)) continue;
       // Highlight this guard strike's card as it fires.
       ui?.highlightReplayEntry?.(i, actorSnap.id);
 
@@ -2255,12 +2221,15 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         if (tt) tt.explored = true;
       }
       if (!result?.log?.length) continue;
-      if (humanFaction && ev.faction !== humanFaction) continue;
+      // Loot flash shows to anyone who can see the explorer (matches the card);
+      // the discovery modal stays the finder's own (own faction / controlled unit).
+      if (!_evVisible(ev, step.entitySnapshot)) continue;
       const actor = explorer;
-      if (myPlayerId && actor?.ownerId !== myPlayerId) continue;
       if (actor) { ui._showLootFlashes(actor, result.lootItems ?? []); hadExplore = true; }
       redrawFn();
-      if (!_suppressDialogs && result.encounterSurvivor) {
+      const ownFind = (!humanFaction || ev.faction === humanFaction)
+        && (!myPlayerId || actor?.ownerId === myPlayerId);
+      if (ownFind && !_suppressDialogs && result.encounterSurvivor) {
         await _showDiscoveryOnCard(result.encounterSurvivor, i, action.entityId);
       }
     }
@@ -2329,9 +2298,8 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       const actorTile = state.tiles.get(hexKey(actor.col, actor.row));
       if (actorTile) actorTile.fortifyLevel = Math.min(MAX_FORTIFY_LEVEL,
         (actorTile.fortifyLevel || 0) + (result.defGain ?? 1));
-      // Only surface the +N floater to the owner faction/player.
-      if (humanFaction && ev.faction !== humanFaction) continue;
-      if (myPlayerId && actor.ownerId !== myPlayerId) continue;
+      // Surface the +N floater to anyone who can see the fortifying unit.
+      if (!_evVisible(ev, step.entitySnapshot)) continue;
       const gain = result.defGain ?? 1;
       renderer.addFlash(actor.col, actor.row, `🛡+${gain}`,
         'rgba(100,180,255,0.1)', 1800, 0.72, 'rgba(130,200,255,1)');
@@ -2343,7 +2311,8 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       const { action, result } = ev;
       if (action.type !== PlanActionType.HEAL || !result?.success) continue;
       const actor = step.entitySnapshot?.find(e => e.id === action.entityId);
-      if (actor) {
+      // Match the HEAL card — only animate when the healer's hex is in sight.
+      if (actor && _evVisible(ev, step.entitySnapshot)) {
         renderer.addNodeRevealAnim([{ col: actor.col, row: actor.row }], '#44cc66', { radiusMultiplier: 1.5, duration: 1000 });
         renderer.addHpChangeFlash(actor.col, actor.row, 2);
       }

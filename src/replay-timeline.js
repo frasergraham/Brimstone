@@ -77,6 +77,74 @@ function lootIcons(result) {
   return (result?.lootItems ?? []).filter(x => x && x !== 'nothing');
 }
 
+// Actions that are inherently public — visible to every faction regardless of
+// fog. The Sound Horn pulse reveals all hero units across the whole map, so the
+// opponent sees both the card and the on-map ring even when the horn-blower is
+// out of sight. Keyed by PlanActionType value so it stays data-driven.
+const PUBLIC_ACTION_TYPES = Object.freeze(new Set(['sound-horn']));
+
+/**
+ * Single source of truth for "can the viewer see this resolved event?" — used
+ * by BOTH the timeline digest (cards) and the on-map animation gates so a card
+ * always has a matching animation and vice-versa.
+ *
+ * Union rule: an event is visible if its SOURCE hex OR its TARGET/DESTINATION
+ * hex is in sight (so an attack out of an unseen hex still shows because the
+ * struck unit is visible), OR the action is inherently public (horn).
+ *
+ * @param {Object}   ev        — resolved sub-event (ACTION_OK / GUARD_STRIKE / …).
+ * @param {Array}    ents      — the step's entitySnapshot (for actor lookups).
+ * @param {Function} isVisible — (col,row,ents)=>boolean fog test; falsy ⇒ all visible.
+ * @param {Object}   deps      — { PlanActionType, ResEventType } injected enums.
+ * @returns {boolean}
+ */
+export function isEventVisible(ev, ents, isVisible, { PlanActionType: PA, ResEventType: RE } = {}) {
+  const vis = isVisible || (() => true);
+  if (!ev || !PA || !RE) return true;
+  const list = ents ?? [];
+  const at = (s) => !!s && vis(s.col, s.row, list);
+
+  // Inherently public actions short-circuit the fog test.
+  if (PUBLIC_ACTION_TYPES.has(ev.action?.type)) return true;
+
+  // Battles & reactive guard strikes — source OR target hex. Fort assaults are
+  // BATTLE_HEX strikes with no targetSnap; their besieged hex rides on result.
+  const isBattleStrike = ev.type === RE.GUARD_STRIKE
+    || (ev.type === RE.ACTION_OK && ev.battleSnaps
+        && (ev.action?.type === PA.BATTLE_UNIT || ev.action?.type === PA.BATTLE_HEX));
+  if (isBattleStrike) {
+    if (at(ev.battleSnaps?.actorSnap) || at(ev.battleSnaps?.targetSnap)) return true;
+    const tc = ev.result?.targetCol, tr = ev.result?.targetRow;
+    return tc != null && vis(tc, tr, list);
+  }
+
+  // Whiffed hex attack (no enemy on the target hex) — actor OR the empty hex.
+  if (ev.type === RE.ACTION_SKIP && ev.whiffTarget && ev.battleSnaps?.actorSnap) {
+    return at(ev.battleSnaps.actorSnap)
+      || vis(ev.whiffTarget.col, ev.whiffTarget.row, list);
+  }
+
+  // Blocked move — actor OR the blocker hex.
+  if (ev.type === RE.ACTION_FAIL && ev.action?.type === PA.MOVE
+      && (ev.blockedBy || ev.blockedByFort)) {
+    const a = list.find(e => e.id === ev.action.entityId);
+    const block = ev.blockedByFort || ev.blockedBy;
+    return at(a) || (!!block && vis(block.col, block.row, list));
+  }
+
+  // Remaining cards come from successful actions.
+  if (ev.type !== RE.ACTION_OK || !ev.action) return false;
+  const a = list.find(e => e.id === ev.action.entityId);
+  if (!a) return false;
+
+  // Move shows if origin OR destination is in sight; summon/explore/fortify/
+  // heal/… happen on the actor's own hex.
+  if (ev.action.type === PA.MOVE) {
+    return at(a) || vis(ev.action.toCol, ev.action.toRow, list);
+  }
+  return at(a);
+}
+
 /**
  * Turn resolved steps into the timeline column model.
  *
@@ -109,6 +177,10 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
     const entries = [];
 
     for (const ev of allEvents) {
+      // Single visibility gate — shared with the on-map animation so a card and
+      // its animation always agree (union of source/target hex + public actions).
+      if (!isEventVisible(ev, ents, vis, { PlanActionType: PA, ResEventType: RE })) continue;
+
       const isBattleStrike = ev.type === RE.GUARD_STRIKE
         || (ev.type === RE.ACTION_OK && ev.battleSnaps
             && (ev.action?.type === PA.BATTLE_UNIT || ev.action?.type === PA.BATTLE_HEX));
@@ -121,9 +193,6 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
         const actorSnap  = ev.battleSnaps?.actorSnap;
         const targetSnap = ev.battleSnaps?.targetSnap;
         if (!actorSnap) continue;
-        const seen = vis(actorSnap.col, actorSnap.row, ents)
-          || (targetSnap && vis(targetSnap.col, targetSnap.row, ents));
-        if (!seen) continue;
         // Gang-up allies that lent advantage to each side (visible ones only).
         const bd = ev.result?.breakdown ?? {};
         const allyRefs = (ids) => (ids ?? [])
@@ -162,9 +231,6 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
       // labelled like a normal strike with a "NO TARGET" result.
       if (ev.type === RE.ACTION_SKIP && ev.whiffTarget && ev.battleSnaps?.actorSnap) {
         const actorSnap = ev.battleSnaps.actorSnap;
-        const wt = ev.whiffTarget;
-        const seen = vis(actorSnap.col, actorSnap.row, ents) || vis(wt.col, wt.row, ents);
-        if (!seen) continue;
         const ranged = !!ev.battleSnaps.ranged;
         entries.push({
           entityId:   actorSnap.id,
@@ -185,10 +251,6 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
           && (ev.blockedBy || ev.blockedByFort)) {
         const actorSnap = ents.find(e => e.id === ev.action.entityId);
         if (!actorSnap) continue;
-        const block = ev.blockedByFort || ev.blockedBy;
-        const seen = vis(actorSnap.col, actorSnap.row, ents)
-          || (block && vis(block.col, block.row, ents));
-        if (!seen) continue;
         entries.push({
           entityId: ev.action.entityId,
           actor:    unitRef(actorSnap),
@@ -207,13 +269,6 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
       const a = ev.action;
       const actorSnap = ents.find(e => e.id === a.entityId);
       if (!actorSnap) continue;
-
-      // Visibility: a move shows if either origin or destination is in sight
-      // (matches the canvas rule); everything else keys off the actor's hex.
-      const seen = a.type === PA.MOVE
-        ? (vis(actorSnap.col, actorSnap.row, ents) || vis(a.toCol, a.toRow, ents))
-        : vis(actorSnap.col, actorSnap.row, ents);
-      if (!seen) continue;
 
       // Summon shows the conjured unit as the "target" chip.
       let target = null;
