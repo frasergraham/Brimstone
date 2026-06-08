@@ -304,7 +304,7 @@ describe('Renderer3D consumers — must call loadImages() to populate the atlas'
   // cylinder with no terrain sprite on top" — IDENTICAL to the bug that
   // PR #329 (invertY=false → defaults) tried to fix. PR #329 corrected the
   // texture constructor convention but the actual cause in the playtest
-  // path was this missing call: `tools/3d-preview.html` constructed
+  // path was this missing call: `scripts/3d-preview.html` constructed
   // Renderer3D and called `draw()` but never `loadImages()`, so the disc
   // path was dead before the Babylon Texture constructor was ever reached.
   //
@@ -312,12 +312,12 @@ describe('Renderer3D consumers — must call loadImages() to populate the atlas'
   // the live tilemap path must invoke loadImages(). Tests/scripts that
   // exercise pure helpers (no Babylon, no real DOM) are explicitly excluded.
 
-  test('tools/3d-preview.html calls renderer.loadImages() in rebuildScene', () => {
-    const path = resolve(__dirname, '../tools/3d-preview.html');
+  test('scripts/3d-preview.html calls renderer.loadImages() in rebuildScene', () => {
+    const path = resolve(__dirname, '../scripts/3d-preview.html');
     const src = readFileSync(path, 'utf8');
     assert.ok(
       /renderer\.loadImages\s*\(/.test(src),
-      'tools/3d-preview.html must call renderer.loadImages() — otherwise ' +
+      'scripts/3d-preview.html must call renderer.loadImages() — otherwise ' +
       '_tilemapImg stays null forever and tiles render as bare coloured ' +
       'cylinders with no terrain sprite (the symptom #t-44c10cd9 chased)',
     );
