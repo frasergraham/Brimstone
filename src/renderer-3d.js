@@ -502,14 +502,22 @@ export function rebaseRootBoneY(animGroup, restY, rootName = 'mixamorig:Hips') {
     if (!/position/i.test(prop)) continue;
     const keys = ta.animation.getKeys ? ta.animation.getKeys() : null;
     if (!keys || !keys.length) continue;
-    const firstY = (keys[0].value && typeof keys[0].value.y === 'number') ? keys[0].value.y : 0;
+    // Anchor to the clip's AVERAGE hip Y, not its first frame: a walk's frame 0
+    // is usually a foot-plant (low point), so rebasing on it would lift the
+    // whole cycle above rest (the "rises while walking" bug). The mean is the
+    // clip's true standing baseline, so the hip bobs around restY instead.
+    let sum = 0, n = 0;
+    for (const k of keys) {
+      if (k.value && typeof k.value.y === 'number') { sum += k.value.y; n++; }
+    }
+    const baseY = n > 0 ? sum / n : 0;
     for (const k of keys) {
       if (k.value && typeof k.value === 'object'
         && 'x' in k.value && 'y' in k.value && 'z' in k.value) {
         k.value.x = 0;
         k.value.z = 0;
-        // Preserve the bob (k.y - firstY); anchor the baseline at restY.
-        if (typeof restY === 'number') k.value.y = restY + (k.value.y - firstY);
+        // Preserve the bob (k.y - baseY); anchor the baseline at restY.
+        if (typeof restY === 'number') k.value.y = restY + (k.value.y - baseY);
       }
     }
     done++;

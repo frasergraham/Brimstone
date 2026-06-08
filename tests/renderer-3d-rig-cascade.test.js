@@ -30,12 +30,12 @@ function makeHipsGroup() {
 }
 
 describe('rebaseRootBoneY', () => {
-  test('anchors the hip baseline at restY, preserves the bob, strips x/z', () => {
+  test('centers the hip bob on restY (average baseline), strips x/z', () => {
     const g = makeHipsGroup(); // keys: y 90 then 92, x/z non-zero
     rebaseRootBoneY(g, 10);
-    // firstY=90 → key0 lands at restY (10); key1 keeps the +2 bob → 12.
-    assert.equal(g._keys[0].value.y, 10);
-    assert.equal(g._keys[1].value.y, 12);
+    // mean=91 → the cycle is centered on restY (10): 90→9, 92→11 (bob ±1).
+    assert.equal(g._keys[0].value.y, 9);
+    assert.equal(g._keys[1].value.y, 11);
     for (const k of g._keys) { assert.equal(k.value.x, 0); assert.equal(k.value.z, 0); }
   });
 
