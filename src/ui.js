@@ -4913,30 +4913,18 @@ export class UIController {
     cols.forEach((col, j) => col.classList.toggle('is-current', j === ord));
     this._renderReplayDots(cols.length, ord);
 
+    // Anchor the active card a sixth in from the left on desktop, centred on
+    // mobile — the SAME in playback and review. The track slides to keep the
+    // active card at that spot; in review (CSS .reviewing) the other cards stay
+    // visible, so scrubbing ◀ ▶ scrolls them in/out at the screen's width.
     const active = cols[ord];
     if (typeof active.offsetLeft !== 'number') return;
     const cw = container.clientWidth || 0;
-    const progress = this._el('replay-progress');
-
-    if (this._replayReviewMode) {
-      // Review: ALL cards visible at once (via CSS .reviewing); centre the whole
-      // row and just shift the emphasis as the player scrubs ◀ ▶.
-      const total = track.scrollWidth || 0;
-      const target = (cw - total) / 2;
-      this._replayTrackX = target;
-      track.style.transform = `translateX(${target}px)`;
-      if (progress && typeof container.offsetLeft === 'number') {
-        progress.style.left = `${container.offsetLeft + cw / 2}px`;
-      }
-      return;
-    }
-
-    // Playback: only the active card shows; the next fades in as it slides into
-    // place. Anchor it a sixth in from the left on desktop, centred on mobile.
     const anchorX = this._isMobileViewport() ? cw / 2 : cw / 6;
     const target = anchorX - (active.offsetLeft + active.offsetWidth / 2);
     this._replayTrackX = target;
     track.style.transform = `translateX(${target}px)`;
+    const progress = this._el('replay-progress');
     if (progress && typeof container.offsetLeft === 'number') {
       progress.style.left = `${container.offsetLeft + anchorX}px`;
     }
@@ -5048,8 +5036,6 @@ export class UIController {
     const next = document.getElementById('replay-review-next');
     if (prev) prev.onclick = () => this._setReplayActiveOrd((this._activeReplayOrd ?? 0) - 1);
     if (next) next.onclick = () => this._setReplayActiveOrd((this._activeReplayOrd ?? 0) + 1);
-    // Re-layout now that all cards are visible.
-    this._setReplayActiveOrd(this._activeReplayOrd ?? 0);
     // The manual-step control bar isn't relevant during review.
     const hud = this._el('replay-hud');
     if (hud) hud.style.display = 'none';

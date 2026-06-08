@@ -1349,7 +1349,11 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
   // clears all running animations so units snap to their resolved positions and
   // playback jumps ahead immediately.
   const _settleAnims = async () => {
-    if (playback.stepRequested || playback.replayStep || playback.restart || playback.jumpToEnd || playback.aborted) {
+    // Full-skip paths (jump-to-end / stop between rounds) clear outright — the
+    // existing safe pattern. NEXT/Redo merely collapse the delays (so the action
+    // finishes fast) and let it settle naturally; clearing an in-flight combat
+    // animation mid-strike dangles the lunge/punch state and hangs resolution.
+    if (playback.jumpToEnd || playback.aborted) {
       renderer.clearAnimations?.();
       return;
     }
@@ -2285,9 +2289,6 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       return holder?.owner ?? null;
     });
 
-    // NEXT/Redo halts: stop any in-flight animations so units snap straight to
-    // their resolved (end-of-step) positions instead of finishing the tween.
-    if (playback.stepRequested || playback.replayStep || playback.restart) renderer.clearAnimations?.();
     state.entities = postEntities;
     redrawFn();
 
