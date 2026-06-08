@@ -13,8 +13,37 @@ import {
   Renderer3D,
   entityTypeRigFile,
   fallbackRigCandidates,
+  stripRootBoneTranslation,
   MANNEQUIN_RIG_FILE,
 } from '../src/renderer-3d.js';
+
+function makeHipsGroup() {
+  const keys = [{ value: { x: 5, y: 90, z: 3 } }, { value: { x: 7, y: 92, z: 1 } }];
+  return {
+    targetedAnimations: [{
+      target: { name: 'mixamorig:Hips' },
+      animation: { targetProperty: 'position', getKeys: () => keys },
+    }],
+    _keys: keys,
+  };
+}
+
+describe('stripRootBoneTranslation keepY', () => {
+  test('default strips all three axes (hip-centred paladin rig)', () => {
+    const g = makeHipsGroup();
+    stripRootBoneTranslation(g);
+    for (const k of g._keys) { assert.equal(k.value.x, 0); assert.equal(k.value.y, 0); assert.equal(k.value.z, 0); }
+  });
+
+  test('keepY preserves the vertical baseline (feet-origin mannequin/zombie)', () => {
+    const g = makeHipsGroup();
+    stripRootBoneTranslation(g, 'mixamorig:Hips', { keepY: true });
+    assert.equal(g._keys[0].value.x, 0);
+    assert.equal(g._keys[0].value.z, 0);
+    assert.equal(g._keys[0].value.y, 90, 'standing height kept');
+    assert.equal(g._keys[1].value.y, 92);
+  });
+});
 
 describe('entityTypeRigFile', () => {
   test('derives <type>-idle.glb from the entity type', () => {

@@ -449,7 +449,7 @@ export function computePunchSpeedRatio(natCycleSec, targetMs, fallback = 2.0) {
  *  translates through space on top of whatever world-space animation the
  *  renderer is doing (cone slide, ghost path), producing double-displacement
  *  or float. Pure; exported for tests. */
-export function stripRootBoneTranslation(animGroup, rootName = 'mixamorig:Hips') {
+export function stripRootBoneTranslation(animGroup, rootName = 'mixamorig:Hips', { keepY = false } = {}) {
   if (!animGroup || !Array.isArray(animGroup.targetedAnimations)) return 0;
   const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
   let stripped = 0;
@@ -466,7 +466,11 @@ export function stripRootBoneTranslation(animGroup, rootName = 'mixamorig:Hips')
       if (k.value && typeof k.value === 'object'
         && 'x' in k.value && 'y' in k.value && 'z' in k.value) {
         k.value.x = 0;
-        k.value.y = 0;
+        // keepY preserves the Hips' vertical baseline so a rig whose geometry
+        // origin is at the FEET (mannequin/zombie) keeps standing at full
+        // height. Stripping Y only suits a hip-centred rig (paladin), where the
+        // baseline is ~0 — zeroing it on a feet-origin rig sinks it waist-deep.
+        if (!keepY) k.value.y = 0;
         k.value.z = 0;
       }
     }
@@ -5537,7 +5541,10 @@ export class Renderer3D {
         if (typeof m.setEnabled === 'function') m.setEnabled(false);
         m.isPickable = false;
       }
-      stripRootBoneTranslation(idleGroup);
+      // keepY: these rigs are feet-at-origin (unlike the hip-centred paladin),
+      // so the Hips' vertical baseline is what keeps them standing — preserve it
+      // or the idle collapses the figure into the ground.
+      stripRootBoneTranslation(idleGroup, 'mixamorig:Hips', { keepY: true });
       if (idleGroup && typeof idleGroup.start === 'function') {
         idleGroup.weight = 1.0;
         idleGroup.start(true, 1.0);
