@@ -5237,20 +5237,23 @@ export class Renderer3D {
     if (!want) { this._disposeStandeeWeapon(standee); return; }
 
     const BABYLON = this._babylon;
-    const src = this._paladinSource;
-    if (!BABYLON?.MeshBuilder || !src?.skeleton) return;
     const clone = standee.paladinClone;
+    // Use the clone's OWN skeleton (every rig has its own), not the paladin's.
+    const skeleton = clone.skinnedMesh?.skeleton || this._paladinSource?.skeleton || null;
+    if (!BABYLON?.MeshBuilder || !skeleton) return;
     const affector = clone.skinnedMesh || clone.mesh;
     if (!affector || typeof affector.attachToBone !== 'function') return;
-    const handBone = findBoneByName(src.skeleton, WEAPON_BONE_NAME_RE);
+    const handBone = findBoneByName(skeleton, WEAPON_BONE_NAME_RE);
     if (!handBone) return;
 
     // World-size blade → rig-LOCAL cylinder dims. The per-standee scale lives
     // on the clone root; attachToBone folds it in via the affector's world
     // matrix, so we divide it back out here to land a constant on-screen size.
-    const paladinScale = (typeof this._paladinScale === 'number' && this._paladinScale > 0)
-      ? this._paladinScale : PALADIN_BASE_SCALE;
-    const t = weaponStandInTransform(paladinScale);
+    // Read the clone root's actual scale so any rig (not just paladin) is right.
+    const rigScale = (clone.mesh?.scaling?.x > 0) ? clone.mesh.scaling.x
+      : (typeof this._paladinScale === 'number' && this._paladinScale > 0)
+        ? this._paladinScale : PALADIN_BASE_SCALE;
+    const t = weaponStandInTransform(rigScale);
     let blade;
     try {
       blade = BABYLON.MeshBuilder.CreateCylinder(
