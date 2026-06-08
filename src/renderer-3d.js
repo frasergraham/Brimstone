@@ -4436,91 +4436,48 @@ export class Renderer3D {
    *  AFTER the first combat, so the ~few-tens-of-kB clip downloads only on
    *  demand. Returns the AnimationGroup (or null if the import or retarget
    *  failed; the reaction then no-ops gracefully). */
-  _ensureReactionAnimation(slot, file, basePath = 'assets') {
-    if (!this._paladinSource) return null;
-    const src = this._paladinSource;
+  _ensureReactionAnimation(slot, file, basePath = this._assetsBasePath || 'assets',
+    src = this._paladinSource) {
+    if (!src) return null;
     if (src[slot]) return Promise.resolve(src[slot]);
     const promiseKey = `_${slot}LoadPromise`;
-    if (this[promiseKey]) return this[promiseKey];
-    this[promiseKey] = Promise.resolve()
-      .then(() => this._loadReactionAnimation(slot, file, basePath))
+    if (src[promiseKey]) return src[promiseKey];
+    src[promiseKey] = Promise.resolve()
+      .then(() => this._loadReactionAnimation(slot, file, basePath, src))
       .catch(err => {
         console.warn(`[Renderer3D] ${file} load failed; reaction no-ops.`, err);
         return null;
       });
-    return this[promiseKey];
+    return src[promiseKey];
   }
 
-  async _loadReactionAnimation(slot, file, basePath = 'assets') {
-    if (!this._babylon || !this._scene || !this._paladinSource) return null;
+  /** Load a reaction clip (hit/block) and retarget it onto `src`'s skeleton.
+   *  Works for any rig source (paladin or fallback) — the reaction slot +
+   *  duration are stashed on `src`. */
+  async _loadReactionAnimation(slot, file, basePath = this._assetsBasePath || 'assets',
+    src = this._paladinSource) {
+    if (!this._babylon || !this._scene || !src || src[slot]) return src?.[slot] || null;
     const BABYLON = this._babylon;
-    const src = this._paladinSource;
-    if (src[slot]) return src[slot];
     if (!BABYLON.SceneLoader || typeof BABYLON.SceneLoader.ImportMeshAsync !== 'function') {
       return null;
     }
     let result;
     try {
       result = await BABYLON.SceneLoader.ImportMeshAsync(
-        null,
-        `${basePath}/${PALADIN_MODEL_DIR}`,
-        file,
-        this._scene,
-        this._glbProgressHandler('paladin'),
-      );
+        null, `${basePath}/${PALADIN_MODEL_DIR}`, file, this._scene,
+        this._glbProgressHandler('rig'));
     } catch (err) {
       console.warn(`[Renderer3D] ${file} import failed`, err);
       return null;
     }
     const native = (result.animationGroups || []).find(g => g) || null;
-    if (!native) {
-      console.warn(`[Renderer3D] ${file} contained no animation group`);
-      this._disposeWalkingImport(result);
-      return null;
-    }
-    const nameMap = new Map();
-    const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
-    const addEntry = (name, target) => {
-      if (!name || !target) return;
-      if (!nameMap.has(name)) nameMap.set(name, target);
-      const stripped = stripDup(name);
-      if (stripped !== name && !nameMap.has(stripped)) nameMap.set(stripped, target);
-    };
-    for (const tn of src.transformNodes || []) {
-      if (tn && tn.name) addEntry(tn.name, tn);
-    }
-    if (src.skeleton && Array.isArray(src.skeleton.bones)) {
-      for (const bone of src.skeleton.bones) {
-        if (!bone) continue;
-        const tn = bone._linkedTransformNode
-          || (typeof bone.getTransformNode === 'function' && bone.getTransformNode());
-        if (tn && tn.name) addEntry(tn.name, tn);
-        if (bone.name) addEntry(bone.name, tn || bone);
-      }
-    }
-    let retargeted = null;
-    let remapped = 0;
-    let missed = 0;
-    if (typeof native.clone === 'function') {
-      retargeted = native.clone(`paladin${slot}Retargeted`, (oldTarget) => {
-        if (!oldTarget || !oldTarget.name) { missed++; return oldTarget; }
-        const match = nameMap.get(oldTarget.name) || nameMap.get(stripDup(oldTarget.name));
-        if (match) { remapped++; return match; }
-        missed++;
-        return oldTarget;
-      });
-    }
-    console.info(`[Renderer3D] ${file} → paladin retarget: ${remapped} hit, ${missed} miss`);
-    if (retargeted && remapped > 0) {
-      stripRootBoneTranslation(retargeted);
+    if (!native) { this._disposeWalkingImport(result); return null; }
+    const clone = this._retargetNativeClipOntoRig(
+      native, src, `${src.cloneTag || 'rig'}${slot}Retargeted`,
+      { keepY: true, loop: false, rest: 'stop' });
+    if (clone) {
       src[`${slot}DurationSec`] = animDurationSeconds(native);
-      if (typeof retargeted.start === 'function') retargeted.start(false, 1.0);
-      if (typeof retargeted.stop  === 'function') retargeted.stop();
-      src[slot] = retargeted;
-    } else {
-      console.warn(`[Renderer3D] ${file} retarget produced 0 hits — reaction no-ops.`);
-      try { retargeted?.dispose?.(); } catch { /* ignore */ }
-      src[slot] = null;
+      src[slot] = clone;
     }
     this._disposeWalkingImport(result);
     return src[slot];
@@ -4538,14 +4495,20 @@ export class Renderer3D {
    *  Returns a Promise that resolves when the clip ends (or immediately if
    *  the clip isn't loaded yet / no rig is present). The caller can use it to
    *  time the damage floater with the impact pose. */
-  playReactionAnim(kind) {
+  playReactionAnim(kind, entityId = null) {
     if (kind !== 'hit' && kind !== 'block') return Promise.resolve();
     const slot = kind === 'hit' ? 'hitGroup' : 'blockGroup';
-    const src = this._paladinSource;
+    const file = kind === 'hit' ? HIT_MODEL_FILE : BLOCK_MODEL_FILE;
+    // Play on the DEFENDER's own rig (paladin or fallback); default to the
+    // paladin source when no defender id is supplied (back-compat).
+    const ent = entityId != null && this.state?.entities
+      ? this.state.entities.find(e => e && e.id === entityId) : null;
+    const src = (ent && !unitUsesPaladinModel(ent))
+      ? this._loadedFallbackRigFor(ent)
+      : this._paladinSource;
     if (!src || !src[slot]) {
       // Lazy load (idempotent) so the next reaction has the clip ready.
-      const file = kind === 'hit' ? HIT_MODEL_FILE : BLOCK_MODEL_FILE;
-      this._ensureReactionAnimation(slot, file, this._assetsBasePath || 'assets');
+      this._ensureReactionAnimation(slot, file, this._assetsBasePath || 'assets', src);
       return Promise.resolve();
     }
     const group = src[slot];
@@ -5628,9 +5591,9 @@ export class Renderer3D {
       }
     }
     for (const src of this._rigSources.values()) {
-      // A one-shot punch owns the rig while it plays — yield so we don't yank
-      // it back to idle/walk mid-strike.
-      if (src.punchPlaying) continue;
+      // A one-shot punch or hit/block reaction owns the rig while it plays —
+      // yield so we don't yank it back to idle/walk mid-clip.
+      if (src.punchPlaying || src.reactionPlaying) continue;
       const desired = (movingRigs.has(src) && src.walkGroup) ? 'walk' : 'idle';
       if (src.activeGroup === desired) continue;
       const walk = src.walkGroup, idle = src.idleGroup;

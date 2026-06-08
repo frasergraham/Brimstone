@@ -223,7 +223,9 @@ export async function run3DCombatCardHold({
   // and the call kicks off the lazy import so the next combat has it).
   if (typeof renderer.playReactionAnim === 'function') {
     const kind = result?.hit ? 'hit' : 'block';
-    await renderer.playReactionAnim(kind);
+    // Pass the defender so the reaction plays on its OWN rig (paladin or
+    // fallback), not just the paladin source.
+    await renderer.playReactionAnim(kind, targetSnap?.id);
   }
   if (typeof playBattleResultAnims === 'function') {
     playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
