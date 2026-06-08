@@ -165,6 +165,28 @@ export function resolveKeyAction(e, { appMode } = {}) {
   return null;
 }
 
+/**
+ * Derive the effective shortcut mode from UIController runtime signals.
+ *
+ * The centralized AppMode machine (app-mode.js) is only driven by the online /
+ * async orchestration paths — offline single-player calls
+ * `ui.enterPlanningMode()` directly and never transitions AppMode, so
+ * `ui.appMode` is unreliable offline (stuck at MENU on round 1, RESOLVING
+ * thereafter). The UIController's own flags ARE reliable in both modes, so we
+ * derive from them and only fall back to `appMode` for the states they don't
+ * cover (RESOLVING / SPECTATING). Pure — unit-tested.
+ *
+ * @param {{planMode?:boolean, planSubmitted?:boolean, summaryVisible?:boolean,
+ *          replayActive?:boolean, appMode?:string}} signals
+ * @returns {string} an AppMode-compatible string
+ */
+export function deriveMode({ planMode, planSubmitted, summaryVisible, replayActive, appMode } = {}) {
+  if (planMode) return planSubmitted ? 'SUBMITTED' : 'PLANNING';
+  if (summaryVisible) return 'SUMMARY';
+  if (replayActive) return 'PLAYBACK';
+  return appMode || 'MENU';
+}
+
 // IDs of dialogs that own the keyboard while open; Escape must dismiss them
 // rather than opening the console behind them.
 const BLOCKING_DIALOG_IDS = ['result-dialog', 'battle-dialog', 'encounter-dialog', 'grace-dialog', 'phase-modal'];
@@ -189,6 +211,36 @@ class KeybindingManager {
   get ui() { return this._getUi?.() ?? null; }
   get renderer() { return this.ui?.renderer ?? null; }
 
+  /** Effective shortcut mode, derived from reliable UIController flags so it
+   *  works offline (where the AppMode machine isn't driven). See deriveMode. */
+  _mode() {
+    const ui = this.ui;
+    if (!ui) return 'MENU';
+    return deriveMode({
+      planMode:       !!ui._planMode,
+      planSubmitted:  !!ui._planSubmitted,
+      summaryVisible: !!this._summaryContinueBtn(),
+      replayActive:   !!ui._isReplayActive?.(),
+      appMode:        ui.appMode,
+    });
+  }
+
+  /** The on-screen round-summary "Continue" button, or null. Used both to
+   *  detect SUMMARY mode and to drive the Enter shortcut. */
+  _summaryContinueBtn() {
+    const a = document.querySelector('.replay-wrapup-btn[data-act="next"]');
+    if (a && this._isVisible(a)) return a;
+    const b = document.getElementById('round-summary-next');
+    if (b && this._isVisible(b)) return b;
+    return null;
+  }
+
+  _isVisible(el) {
+    if (!el) return false;
+    if (typeof el.offsetParent !== 'undefined') return el.offsetParent !== null;
+    return el.style ? el.style.display !== 'none' : true;
+  }
+
   install() {
     window.addEventListener('keydown', (e) => this._onKeyDown(e));
     window.addEventListener('keyup', (e) => this._onKeyUp(e));
@@ -209,7 +261,7 @@ class KeybindingManager {
     if (this._consoleVisible) return;
     if (this._isEditableTarget(e)) return;
 
-    const action = resolveKeyAction(e, { appMode: this.ui?.appMode });
+    const action = resolveKeyAction(e, { appMode: this._mode() });
     if (!action) return;
 
     if (action.id === 'console-toggle') {
@@ -296,12 +348,9 @@ class KeybindingManager {
       case 'submit-plan':
         ui?._doSubmitPlan?.();
         break;
-      case 'summary-continue': {
-        const btn = document.querySelector('.replay-wrapup-btn[data-act="next"]')
-          || document.getElementById('round-summary-next');
-        btn?.click();
+      case 'summary-continue':
+        this._summaryContinueBtn()?.click();
         break;
-      }
     }
   }
 
