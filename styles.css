@@ -5230,6 +5230,10 @@ img.plan-step-avatar {
   opacity: 1;                                     /* opaque active card (left of screen) */
   border-color: rgba(200, 160, 255, 0.7);
 }
+/* End-of-turn review: show EVERY card at once (active brightest), so ◀ ▶ scrubs
+   the emphasis across all the round's cards on screen together. */
+#replay-timeline.reviewing .replay-step-col { opacity: 0.5; }
+#replay-timeline.reviewing .replay-step-col.is-current { opacity: 1; }
 
 /* End-of-turn wrap-up card — same card frame, with a summary body + actions. */
 .replay-step-col.replay-wrapup {
