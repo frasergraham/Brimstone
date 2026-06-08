@@ -502,8 +502,8 @@ export function buildObjectivesHtml(witchObjectives, entities, nodeScore, gameMo
       `<span class="score-track witch-track" title="Witch score: ${score.witch}/4">${witchPips}</span>`;
   }
 
-  const title = witchCount === witchObjectives.length ? '⚠ Witch controls all nodes!'
-              : heroCount  === witchObjectives.length ? '★ Hero controls all nodes!'
+  const title = witchCount === witchObjectives.length ? '⚠ Witch holds all nodes'
+              : heroCount  === witchObjectives.length ? '★ Hero holds all nodes'
               : 'Power Nodes';
 
   return { html, title };

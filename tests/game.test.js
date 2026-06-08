@@ -257,13 +257,14 @@ describe('Victory — node scoring', () => {
     assert.equal(state.winReason, WIN_REASON.SCORE_WITCH);
   });
 
-  test('sweeping all 3 nodes at dawn is instant win (no score needed)', () => {
+  test('holding all 3 nodes at dawn scores a point but is NOT an instant win', () => {
     const state = new GameState(true, true);
     state.nodeScore.hero = 0;
     holdNodes(state, 'hero', 3);
     state._checkNodeObjectives(Phase.DAWN);
-    // Either instant sweep or scored a point, but should result in win
-    assert.equal(state.winner, 'hero');
+    // Sweep win condition removed — holding all nodes just scores the majority point.
+    assert.equal(state.nodeScore.hero, 1, 'should score 1 point for the majority');
+    assert.equal(state.winner, null, 'should NOT instant-win by holding all nodes');
   });
 
   test('majority (2 vs 0) scores 1 point', () => {

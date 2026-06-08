@@ -707,12 +707,8 @@ hdr('WIN REASON DETAIL');
 const winLabels = {
   [WIN_REASON.WITCH_SLAIN]:      'Hero kills witch         ',
   [WIN_REASON.HERO_SLAIN]:       'Witch kills hero         ',
-  [WIN_REASON.NODES_WITCH]:      'Witch sweeps nodes (dawn)',
-  [WIN_REASON.NODES_HERO]:       'Hero sweeps nodes (dawn) ',
-  [WIN_REASON.NODES_WITCH_DUSK]: 'Witch sweeps nodes (dusk)',
-  [WIN_REASON.NODES_HERO_DUSK]:  'Hero sweeps nodes (dusk) ',
-  [WIN_REASON.SCORE_WITCH]:      'Witch 3-point score      ',
-  [WIN_REASON.SCORE_HERO]:       'Hero 3-point score       ',
+  [WIN_REASON.SCORE_WITCH]:      'Witch 4-point score      ',
+  [WIN_REASON.SCORE_HERO]:       'Hero 4-point score       ',
 };
 for (const [reason, count] of Object.entries(conditionCounts).sort((a, b) => b[1] - a[1]).slice(0, 10)) {
   const rlabel = winLabels[reason] ?? reason.slice(0, 25).padEnd(25);

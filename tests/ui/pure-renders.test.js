@@ -302,7 +302,7 @@ describe('buildObjectivesHtml', () => {
     assert.equal(witchFilled, 1, 'witch should have 1 filled pip');
   });
 
-  test('witch sweeps all nodes → warning title', () => {
+  test('witch holds all nodes → warning title', () => {
     const entities = [
       { alive: true, owner: 'witch', col: 3, row: 3 },
       { alive: true, owner: 'witch', col: 7, row: 5 },
@@ -312,7 +312,7 @@ describe('buildObjectivesHtml', () => {
     assert.ok(title.includes('Witch holds all nodes'), `expected sweep warning, got: ${title}`);
   });
 
-  test('hero sweeps all nodes → star title', () => {
+  test('hero holds all nodes → star title', () => {
     const entities = [
       { alive: true, owner: 'hero', col: 3, row: 3 },
       { alive: true, owner: 'hero', col: 7, row: 5 },

@@ -228,10 +228,6 @@ export function assessBoard(sim) {
     hexDistance(m.col, m.row, witch.col, witch.row) <= 2
   ).length : 0;
 
-  // Sweep detection: can witch potentially hold all 3 nodes this scoring phase?
-  const canSweepNodes = roundsToScoring <= 2 && witchHeldCount >= 2 &&
-    nodes.some(n => n.controller !== 'witch' && n.distToNearest <= roundsToScoring + 1);
-
   return {
     phase, isNight, isDay, isDawnOrDusk,
     round, roundsToScoring,
@@ -242,7 +238,7 @@ export function assessBoard(sim) {
     minions, minionCount, armyStrength,
     visibleHeroes, heroDistance, heroHpRatio, enemiesNearWitch,
     heroLeader, heroSurvivors, visibleSurvivors, woundedEnemies,
-    witchArmyTotal, minionsNearWitch, canSweepNodes,
+    witchArmyTotal, minionsNearWitch,
     nodes, witchHeldCount, heroHeldCount, heroOnNodeCount,
     witchScore, heroScore,
     totalResources, metalCount, woodCount, canAffordSummon, bestSummonType,
@@ -314,15 +310,13 @@ export function scoreGoals(board, goalWeights = null) {
   if (board.roundsToScoring <= 3) control += 0.1;
   if (board.roundsToScoring <= 2) control += 0.15;
   if (board.roundsToScoring <= 1) control += 0.15;
-  // Sweep detection — go all-in for instant win
-  if (board.canSweepNodes) control = 1.0;
   // When ahead, press advantage; when behind, urgency is even higher
   if (board.witchScore > board.heroScore) control += 0.1;
   if (board.witchScore >= 3) control += 0.1; // one more point to win
   const controlMult = board.isDawnOrDusk ? 1.8 : 1.0;
   control = clamp01(clamp01(control) * controlMult);
 
-  if (allCovered && !board.canSweepNodes) {
+  if (allCovered) {
     control *= 0.8; // maintain defense, don't drop priority
   }
 
@@ -977,9 +971,8 @@ export function genControlNodes(sim, board, budget) {
   const scoringImminent = board.roundsToScoring <= 2;
   const witchTeamSize = board.witchPlayerCount || 1;
   const nvnBaseline = witchTeamSize >= 3 ? 3 : (isNvN ? 2 : 1);
-  const unitsPerNode = board.canSweepNodes ? 4 :
-                       (scoringImminent ? Math.max(3, nvnBaseline) :
-                       (board.roundsToScoring <= 4 ? Math.max(2, nvnBaseline) : nvnBaseline));
+  const unitsPerNode = scoringImminent ? Math.max(3, nvnBaseline) :
+                       (board.roundsToScoring <= 4 ? Math.max(2, nvnBaseline) : nvnBaseline);
   const maxStepsPerUnit = scoringImminent ? 4 : 3;
 
   for (const node of targetNodes) {

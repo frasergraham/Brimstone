@@ -262,9 +262,12 @@ Checked after each round in priority order:
 checkVictory():
   1. Custom delegate?     → Campaign mission-specific conditions
   2. Leader eliminated?   → Faction with dead leader loses
-  3. Node sweep?          → All 3 nodes held by one faction (DAWN/DUSK only)
-  4. Score threshold?     → First to 3 scoring points wins (DAWN/DUSK only)
+  3. Score threshold?     → First to 4 scoring points wins (DAWN/DUSK only)
 ```
+
+> **Note:** the legacy "node sweep" instant win (holding *all* Power Nodes at
+> dawn/dusk) was removed — it was too easy to stumble into accidentally.
+> Holding all nodes now simply scores the majority point like any other lead.
 
 ### Win Reasons
 
@@ -272,10 +275,8 @@ checkVictory():
 |--------|---------|
 | `HERO_SLAIN` | All hero leaders eliminated |
 | `WITCH_SLAIN` | All witch leaders eliminated |
-| `NODES_HERO` / `NODES_HERO_DUSK` | Hero controls all 3 nodes at dawn/dusk |
-| `NODES_WITCH` / `NODES_WITCH_DUSK` | Witch controls all 3 nodes at dawn/dusk |
-| `SCORE_HERO` | Hero reaches 3 scoring points |
-| `SCORE_WITCH` | Witch reaches 3 scoring points |
+| `SCORE_HERO` | Hero reaches 4 scoring points |
+| `SCORE_WITCH` | Witch reaches 4 scoring points |
 
 ---
 

@@ -10,7 +10,6 @@
   "mapSize": "standard",
   "hasWitch": true,
   "disableScoring": false,
-  "disableNodeSweep": true,
   "disableScoreWin": true,
   "phaseCycle": {
     "phases": [
