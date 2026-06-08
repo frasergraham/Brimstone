@@ -4751,57 +4751,9 @@ export class Renderer3D {
       // and nobody is mid-move. Resume otherwise. This keeps the rig from
       // moonwalking in place when nothing on screen needs it.
       this._maybeToggleNativeWalking();
-      this._maybeTogglePaladinAnimation();
-      // Drive walk↔idle on the cascade fallback rigs (mannequin / zombie /
-      // <type>) the same way — independent of the paladin's shared skeleton.
+      // Per-rig walk/run/idle for every unit, the hero included — each cascade
+      // rig owns its own skeleton (there's no shared paladin skeleton now).
       this._maybeToggleFallbackRigAnimation();
-      // The legacy idle↔walk swap below only fires when a SEPARATE
-      // retargeted walking group was loaded onto the paladin's skeleton.
-      // With NewPaladin shipping its own walking animation as the rig's
-      // sole group, _maybeTogglePaladinAnimation handles pause/play and
-      // this branch is a no-op (walkGroup remains null).
-      const src = this._paladinSource;
-      if (!src || !src.idleGroup || !src.walkGroup) return;
-      // Yield the shared skeleton to an in-flight punch one-shot.
-      if (src.punchPlaying) return;
-      // Main standees only enter walking during ACTUAL resolution motion
-      // (_activeMoveIds / _activeLungeIds). Plan-ghosts don't trigger this
-      // because they animate on their OWN skeleton (walking source), so
-      // during planning the live paladin stays in idle while the ghost
-      // walks the preview path.
-      let wantWalk = paladinAnimTargetWeight(
-        this._activeMoveIds, null, // lunges excluded — combat is the punch, not a walk
-        this.state?.entities, unitUsesPaladinModel,
-      ) === 0;
-      const now = performance.now();
-      if (wantWalk) this._paladinLastWalkTs = now;
-      else if (typeof this._paladinLastWalkTs === 'number'
-        && (now - this._paladinLastWalkTs) < PALADIN_WALK_SUSTAIN_MS) {
-        wantWalk = true;
-      }
-      // Run-aware: a multi-hop move plays the running clip, not walking.
-      // Selecting the motion group here (rather than hard-coding walk) keeps
-      // this legacy swap from clobbering a running paladin by starting walk
-      // on top of it.
-      const { group: motionGroup, kind: motionKind } = this._activeMotionGroup();
-      const desired = wantWalk ? motionKind : 'idle';
-      if (src.activeGroup === desired) return;
-      if (desired === 'walk' || desired === 'run') {
-        const motionSpeed = desired === 'run'
-          ? (this._runningSource?.speedRatio ?? 1.0)
-          : (this._walkingSource?.speedRatio ?? 1.0);
-        const other = desired === 'run' ? src.walkGroup : src.runGroup;
-        if (typeof src.idleGroup.stop === 'function') src.idleGroup.stop();
-        if (other && typeof other.stop === 'function') other.stop();
-        if (motionGroup && typeof motionGroup.start === 'function') {
-          motionGroup.start(true, motionSpeed);
-        }
-      } else {
-        if (typeof src.walkGroup.stop === 'function') src.walkGroup.stop();
-        if (src.runGroup && typeof src.runGroup.stop === 'function') src.runGroup.stop();
-        if (typeof src.idleGroup.start === 'function') src.idleGroup.start(true, 1.0);
-      }
-      src.activeGroup = desired;
     });
   }
 
@@ -6366,13 +6318,11 @@ export class Renderer3D {
     // instances. Fire-and-forget — errors are caught inside `_loadBuildingModel`.
     this._loadBuildingModels(this._assetsBasePath || 'assets');
 
-    // Kick off the paladin GLB load asynchronously. Fire-and-forget —
-    // `_buildMap` + `_syncEntityStandees` run synchronously right after and
-    // hero standees render with the cone+sphere fallback. Once the GLB
-    // resolves (heavy ~7 MB file), `_upgradeHeroStandeesToPaladin` retrofits
-    // every hero standee with a paladin clone. Errors are caught inside
-    // `_loadPaladinModel`.
-    this._loadPaladinModel(this._assetsBasePath || 'assets');
+    // Kick off the hero rig load asynchronously through the generic cascade
+    // (paladin-idle.glb). Fire-and-forget — standees render with the cone+sphere
+    // fallback until the GLB resolves, then _upgradeStandeesToFallbackRig
+    // retrofits every standee with its rig clone.
+    this._loadFallbackRig(PALADIN_MODEL_FILE, this._assetsBasePath || 'assets');
 
     // Kick off the tree-pack manifest + per-model GLB loads asynchronously.
     // Fire-and-forget — `_buildMap` runs synchronously right after and
@@ -9987,41 +9937,24 @@ export class Renderer3D {
 
     const standee = { plane: cone, sphere, leader, paladinClone: null };
 
-    // Hero-side standees swap the cone+sphere body for a clone of the
-    // paladin GLB model once it's loaded. The cone+sphere stay in-scene as
-    // anchor + picking target (their `.visibility` is dropped to 0 so they
-    // don't render). If the source isn't loaded yet, `_loadPaladinModel`
-    // resolves later and retrofits via `_upgradeHeroStandeesToPaladin`.
-    if (this._paladinSource && unitUsesPaladinModel(entity)) {
-      const clone = this._buildPaladinClone(entity, cone);
+    // Every unit cascades to a rig: <type>-idle.glb → mannequin → cone+sphere.
+    // Kick the async load; clone synchronously if a rig is already in hand,
+    // otherwise _upgradeStandeesToFallbackRig retrofits when it lands. The
+    // cone+sphere stay in-scene (visibility 0) as anchor + picking target.
+    this._ensureFallbackRig(entity);
+    const rig = this._loadedFallbackRigFor(entity);
+    if (rig) {
+      const clone = this._buildRigClone(entity, cone, rig,
+        rig.tintable ? { tintColor: ownerColor } : {});
       if (clone) {
         cone.visibility   = 0;
         sphere.visibility = 0;
-        // Cone+sphere are invisible but still on the shadow caster list
-        // — strip them so the floor shadow reflects the paladin silhouette,
-        // not the pawn shape.
+        // Strip the cone+sphere from the shadow casters so the floor shadow
+        // reflects the rig silhouette, not the pawn shape.
         this._removeShadowCaster(cone);
         this._removeShadowCaster(sphere);
         for (const m of clone.childMeshes || []) this._addShadowCaster(m);
         standee.paladinClone = clone;
-      }
-    } else if (!unitUsesPaladinModel(entity)) {
-      // Non-paladin unit: cascade <type>-idle.glb → mannequin → cone+sphere.
-      // Kick the async load; clone synchronously if a rig is already in hand,
-      // otherwise _upgradeStandeesToFallbackRig retrofits when it lands.
-      this._ensureFallbackRig(entity);
-      const rig = this._loadedFallbackRigFor(entity);
-      if (rig) {
-        const clone = this._buildRigClone(entity, cone, rig,
-          rig.tintable ? { tintColor: ownerColor } : {});
-        if (clone) {
-          cone.visibility   = 0;
-          sphere.visibility = 0;
-          this._removeShadowCaster(cone);
-          this._removeShadowCaster(sphere);
-          for (const m of clone.childMeshes || []) this._addShadowCaster(m);
-          standee.paladinClone = clone;
-        }
       }
     }
 
@@ -11066,7 +10999,7 @@ export class Renderer3D {
     const isRunMove = selectMoveAnimKind(waypoints.length) === 'running';
     if (isRunMove) {
       this._activeRunMoveIds.add(entityId);
-      this._ensureRunningAnimation(this._assetsBasePath || 'assets');
+      this._ensureRunningSource(); // shared native run clip (cascade rigs retarget it)
     } else {
       this._activeRunMoveIds.delete(entityId);
     }
@@ -11255,28 +11188,18 @@ export class Renderer3D {
       standee.paladinClone.mesh.rotation.y = Math.atan2(lungeX - startX, lungeZ - startZ);
     }
 
-    // Paladin attacker: throw the punch clip on top of the slide so the
-    // strike reads as a strike. Lazily kick the punch.glb load (idempotent,
-    // off the critical path) — already-resolved → plays now; first-ever
-    // combat may still be downloading, in which case this lunge is slide-only
-    // and the next one punches. Cone-token attackers (no clone) just slide.
+    // Throw the punch clip on top of the slide so the strike reads as a strike,
+    // on the ATTACKER's own rig. Remember it so the cinematic's
+    // holdPunchAtImpact()/resumePunch() freeze the right one. Lazily kick the
+    // punch.glb load (idempotent) — already-resolved → plays now; first-ever
+    // combat may still be downloading, so that lunge is slide-only and the next
+    // punches. Cone-token attackers (no clone) just slide.
     if (standee.paladinClone) {
-      // Punch the ATTACKER's own rig (paladin or fallback), and remember it so
-      // the cinematic's holdPunchAtImpact()/resumePunch() freeze the right one.
       const ent = this.state?.entities?.find(e => e && e.id === entityId) || null;
-      const rigSrc = (ent && !unitUsesPaladinModel(ent))
-        ? this._loadedFallbackRigFor(ent)
-        : this._paladinSource;
-      this._activePunchSrc = rigSrc || this._paladinSource;
-      if (!rigSrc || rigSrc === this._paladinSource) {
-        // Paladin path unchanged (_startPaladinPunch delegates to _startRigPunch).
-        if (this._paladinSource?.punchGroup) this._startPaladinPunch();
-        else this._ensurePunchAnimation(this._assetsBasePath || 'assets');
-      } else if (rigSrc.punchGroup) {
-        this._startRigPunch(rigSrc);
-      } else {
-        this._ensureRigPunch(rigSrc);
-      }
+      const rigSrc = ent ? this._loadedFallbackRigFor(ent) : null;
+      this._activePunchSrc = rigSrc;
+      if (rigSrc?.punchGroup) this._startRigPunch(rigSrc);
+      else if (rigSrc) this._ensureRigPunch(rigSrc);
     }
 
     // Ease-OUT: the lunge launches fast and decelerates into the strike

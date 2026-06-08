@@ -282,6 +282,7 @@ function makeLungeInst(standee) {
   inst._camera = null;
   inst._activeLungeIds = new Set();
   inst._entityStandees = new Map([['e1', standee]]);
+  inst._rigSources = new Map();
   inst._trackAnim = () => {};
   inst._playbackSpeedMul = 1.0;
   inst._assetsBasePath = 'assets';
@@ -289,25 +290,31 @@ function makeLungeInst(standee) {
 }
 
 describe('Renderer3D.addLungeAnim — punch wiring', () => {
-  test('plays the punch when the attacker is a paladin clone with a loaded clip', () => {
+  test('plays the punch on the attacker rig when its clip is loaded', () => {
     const standee = { plane: { position: { x: 0, z: 0 } }, paladinClone: { mesh: { rotation: { y: 0 } } } };
     const inst = makeLungeInst(standee);
-    inst._paladinSource = { punchGroup: {} };
-    let punched = 0, ensured = 0;
-    inst._startPaladinPunch = () => { punched += 1; };
-    inst._ensurePunchAnimation = () => { ensured += 1; };
+    // Hero flows through the cascade now: its rig (paladin-idle.glb) carries
+    // the punch clip.
+    const rig = { punchGroup: {} };
+    inst._rigSources.set('paladin-idle.glb', rig);
+    inst.state = { entities: [{ id: 'e1', type: 'paladin' }] };
+    let punched = null, ensured = 0;
+    inst._startRigPunch = (src) => { punched = src; };
+    inst._ensureRigPunch = () => { ensured += 1; };
     assert.doesNotThrow(() => inst.addLungeAnim('e1', 0, 0, 1, 0, 'hero', 'hero'));
-    assert.equal(punched, 1, 'punch played on the loaded clip');
+    assert.equal(punched, rig, 'punch played on the attacker rig');
     assert.equal(ensured, 0);
   });
 
   test('lazily loads the punch clip when not yet present (this lunge slides only)', () => {
     const standee = { plane: { position: { x: 0, z: 0 } }, paladinClone: { mesh: { rotation: { y: 0 } } } };
     const inst = makeLungeInst(standee);
-    inst._paladinSource = {}; // no punchGroup yet
+    const rig = {}; // no punchGroup yet
+    inst._rigSources.set('paladin-idle.glb', rig);
+    inst.state = { entities: [{ id: 'e1', type: 'paladin' }] };
     let punched = 0, ensured = 0;
-    inst._startPaladinPunch = () => { punched += 1; };
-    inst._ensurePunchAnimation = () => { ensured += 1; };
+    inst._startRigPunch = () => { punched += 1; };
+    inst._ensureRigPunch = () => { ensured += 1; };
     inst.addLungeAnim('e1', 0, 0, 1, 0, 'hero', 'hero');
     assert.equal(punched, 0, 'no clip → no punch this frame');
     assert.equal(ensured, 1, 'lazy load kicked');
