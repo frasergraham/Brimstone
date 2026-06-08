@@ -22,6 +22,11 @@ build/*
 !build/icon.png
 !build/icon.icns
 
+# Character source FBX (Mixamo mesh+rig exports) — large (tens–hundreds of MB);
+# only the converted, texture-stripped/-capped .glb under assets/models/ ships.
+# Regenerate via: npm install --no-save fbx2gltf && node scripts/convert-character-fbx.js
+assets/source/characters/*.fbx
+
 # Capacitor build artifacts
 www/
 ios/App/Pods/
