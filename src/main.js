@@ -600,6 +600,7 @@ function _startLocalPlanningPhase() {
     // no more planning rounds.  We still call onPlanningPhaseStart so the conductor
     // can advance to the explanation steps, but we don't enter planning mode.
     if (!_missionConductor.shouldPlan()) return;
+    setMode(AppMode.PLANNING);
     ui.enterPlanningMode('hero', state.heroActionsLeft);
     ui.onPlanSubmit = (heroPlan) => _onConductorPlanSubmit(heroPlan);
     return;
@@ -626,6 +627,7 @@ async function _showStorySequence(events) {
 
 /** Enter planning mode after any pre-planning modals (story, phase) are done. */
 function _enterLocalPlanningMode() {
+  setMode(AppMode.PLANNING);
   const humanFaction = !state.heroIsAI ? 'hero' : 'witch';
   const budget = getFaction(humanFaction).getActionsLeft(state);
 
@@ -994,6 +996,10 @@ async function _runLocalResolution(skipSummary = false) {
   };
 
   if (!_autoplay && !skipSummary && ui && humanFaction) {
+    // Reflect the round-summary phase in the app mode for normal turns (drives
+    // keybindings, compass, etc.); game over keeps its terminal Victory/Defeat
+    // modal and transitions onward from there.
+    if (!state.gameOver) setMode(AppMode.SUMMARY);
     // Finalize game-over immediately — cleanup survives any navigation away.
     if (state.gameOver && !_activeCampaign) {
       _recordLocalGameStats();

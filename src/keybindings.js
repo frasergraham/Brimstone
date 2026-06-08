@@ -97,13 +97,19 @@ export function executeConsoleCommand(raw, ctx = {}) {
 
 /**
  * Map a keydown event to an abstract action. Pure — no DOM, no side effects.
- * Returns null when the key is not bound in the current mode.
+ * Returns null when the key is not bound in the current context.
+ *
+ * `appMode` is the centralized AppMode (now driven in both online and offline
+ * play). `replayActive` is the one genuinely UI-transient signal: a manual
+ * replay/resolution step bar is on screen — true for BOTH the full-game replay
+ * (PLAYBACK) and the inline "replay last turn" (RESOLVING), which is why Space
+ * keys off it rather than a single mode.
  *
  * @param {{key:string, shiftKey?:boolean, ctrlKey?:boolean, metaKey?:boolean, altKey?:boolean}} e
- * @param {{appMode?:string}} ctx
+ * @param {{appMode?:string, replayActive?:boolean}} ctx
  * @returns {null | {id:string, [k:string]:any}}
  */
-export function resolveKeyAction(e, { appMode } = {}) {
+export function resolveKeyAction(e, { appMode, replayActive } = {}) {
   // Ctrl/Cmd/Alt combos belong to the browser/OS — never intercept them.
   if (e.ctrlKey || e.metaKey || e.altKey) return null;
 
@@ -150,9 +156,9 @@ export function resolveKeyAction(e, { appMode } = {}) {
     return appMode === 'PLANNING' ? { id: 'clear-unit' } : null;
   }
 
-  // Space — advance the replay one step.
+  // Space — advance the replay one step (whenever a manual step bar is up).
   if (key === ' ' || key === 'Spacebar') {
-    return appMode === 'PLAYBACK' ? { id: 'replay-next' } : null;
+    return replayActive ? { id: 'replay-next' } : null;
   }
 
   // Enter — Shift+Enter submits a plan; plain Enter confirms a round summary.
@@ -163,28 +169,6 @@ export function resolveKeyAction(e, { appMode } = {}) {
   }
 
   return null;
-}
-
-/**
- * Derive the effective shortcut mode from UIController runtime signals.
- *
- * The centralized AppMode machine (app-mode.js) is only driven by the online /
- * async orchestration paths — offline single-player calls
- * `ui.enterPlanningMode()` directly and never transitions AppMode, so
- * `ui.appMode` is unreliable offline (stuck at MENU on round 1, RESOLVING
- * thereafter). The UIController's own flags ARE reliable in both modes, so we
- * derive from them and only fall back to `appMode` for the states they don't
- * cover (RESOLVING / SPECTATING). Pure — unit-tested.
- *
- * @param {{planMode?:boolean, planSubmitted?:boolean, summaryVisible?:boolean,
- *          replayActive?:boolean, appMode?:string}} signals
- * @returns {string} an AppMode-compatible string
- */
-export function deriveMode({ planMode, planSubmitted, summaryVisible, replayActive, appMode } = {}) {
-  if (planMode) return planSubmitted ? 'SUBMITTED' : 'PLANNING';
-  if (summaryVisible) return 'SUMMARY';
-  if (replayActive) return 'PLAYBACK';
-  return appMode || 'MENU';
 }
 
 // IDs of dialogs that own the keyboard while open; Escape must dismiss them
@@ -211,22 +195,7 @@ class KeybindingManager {
   get ui() { return this._getUi?.() ?? null; }
   get renderer() { return this.ui?.renderer ?? null; }
 
-  /** Effective shortcut mode, derived from reliable UIController flags so it
-   *  works offline (where the AppMode machine isn't driven). See deriveMode. */
-  _mode() {
-    const ui = this.ui;
-    if (!ui) return 'MENU';
-    return deriveMode({
-      planMode:       !!ui._planMode,
-      planSubmitted:  !!ui._planSubmitted,
-      summaryVisible: !!this._summaryContinueBtn(),
-      replayActive:   !!ui._isReplayActive?.(),
-      appMode:        ui.appMode,
-    });
-  }
-
-  /** The on-screen round-summary "Continue" button, or null. Used both to
-   *  detect SUMMARY mode and to drive the Enter shortcut. */
+  /** The on-screen round-summary "Continue" button, or null — drives Enter. */
   _summaryContinueBtn() {
     const a = document.querySelector('.replay-wrapup-btn[data-act="next"]');
     if (a && this._isVisible(a)) return a;
@@ -261,7 +230,11 @@ class KeybindingManager {
     if (this._consoleVisible) return;
     if (this._isEditableTarget(e)) return;
 
-    const action = resolveKeyAction(e, { appMode: this._mode() });
+    const ui = this.ui;
+    const action = resolveKeyAction(e, {
+      appMode: ui?.appMode,
+      replayActive: !!ui?._isReplayActive?.(),
+    });
     if (!action) return;
 
     if (action.id === 'console-toggle') {

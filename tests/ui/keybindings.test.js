@@ -9,7 +9,6 @@ import assert from 'node:assert/strict';
 import {
   resolveKeyAction,
   executeConsoleCommand,
-  deriveMode,
   COMMANDS,
   SHORTCUTS,
 } from '../../src/keybindings.js';
@@ -78,8 +77,12 @@ describe('resolveKeyAction — unit + plan controls', () => {
     assert.equal(resolveKeyAction(ev('x'), { appMode: 'SUMMARY' }), null);
   });
 
-  test('Space advances replay only in playback', () => {
-    assert.deepEqual(resolveKeyAction(ev(' '), { appMode: 'PLAYBACK' }), { id: 'replay-next' });
+  test('Space advances replay only while a replay step bar is up', () => {
+    // Keys off replayActive, not a single mode — covers full PLAYBACK and the
+    // inline "replay last turn" (which runs in RESOLVING).
+    assert.deepEqual(resolveKeyAction(ev(' '), { appMode: 'PLAYBACK', replayActive: true }), { id: 'replay-next' });
+    assert.deepEqual(resolveKeyAction(ev(' '), { appMode: 'RESOLVING', replayActive: true }), { id: 'replay-next' });
+    assert.equal(resolveKeyAction(ev(' '), { appMode: 'PLAYBACK', replayActive: false }), null);
     assert.equal(resolveKeyAction(ev(' '), { appMode: 'PLANNING' }), null);
   });
 
@@ -146,30 +149,6 @@ describe('executeConsoleCommand', () => {
     const res = executeConsoleCommand('/inspector', { renderer });
     assert.equal(res.ok, false);
     assert.match(res.message, /boom/);
-  });
-});
-
-describe('deriveMode — robust to the offline AppMode gap', () => {
-  test('planning flags win regardless of stale appMode', () => {
-    // Offline round 1: appMode is still MENU but the UI is in planning.
-    assert.equal(deriveMode({ planMode: true, appMode: 'MENU' }), 'PLANNING');
-    // Offline later rounds: appMode stuck at RESOLVING, but planning again.
-    assert.equal(deriveMode({ planMode: true, appMode: 'RESOLVING' }), 'PLANNING');
-    assert.equal(deriveMode({ planMode: true, planSubmitted: true, appMode: 'MENU' }), 'SUBMITTED');
-  });
-
-  test('summary and replay are detected without appMode help', () => {
-    assert.equal(deriveMode({ summaryVisible: true, appMode: 'RESOLVING' }), 'SUMMARY');
-    assert.equal(deriveMode({ replayActive: true, appMode: 'MENU' }), 'PLAYBACK');
-    // Summary takes precedence over a lingering replay bar.
-    assert.equal(deriveMode({ summaryVisible: true, replayActive: true }), 'SUMMARY');
-  });
-
-  test('falls back to appMode, then MENU', () => {
-    assert.equal(deriveMode({ appMode: 'RESOLVING' }), 'RESOLVING');
-    assert.equal(deriveMode({ appMode: 'SPECTATING' }), 'SPECTATING');
-    assert.equal(deriveMode({}), 'MENU');
-    assert.equal(deriveMode(), 'MENU');
   });
 });
 
