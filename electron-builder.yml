@@ -2,6 +2,11 @@ appId: com.calebshollow.game
 productName: "Caleb's Hollow"
 
 directories:
+  # Default output for every target (electron:package / :build / :win / :linux).
+  # The `electron:build:mac` npm script overrides this to /tmp/brimstone-electron-dist
+  # on purpose: the project dir carries iCloud/Finder extended attributes that
+  # break macOS codesigning, and building under /tmp sidesteps them. That
+  # override is mac-only — all other targets emit here under dist/.
   output: dist
 
 # Only include client-side game files — server code and native modules are
@@ -56,7 +61,8 @@ mac:
 win:
   target:
     - nsis
-  icon: build/icon.ico
+  # No explicit icon: build/icon.ico was missing, which would fail packaging.
+  # electron-builder auto-derives the Windows .ico from build/icon.png (1024²).
 
 nsis:
   oneClick: true
