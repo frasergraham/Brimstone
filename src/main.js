@@ -37,7 +37,7 @@ import { MAX_FORTIFY_LEVEL, FORT_IMPASSABLE_THRESHOLD } from './tiles.js';
 import { sightRange, computeLineOfSight, hasLineOfSight } from './actions.js';
 import { UNIT_TYPES } from './unit-types.js';
 import { getFaction, findFaction, allFactions, getFactionsForSide, sightRangeForEntity } from './factions.js';
-import { compileTurnBattleSummary } from './battle-utils.js';
+import { compileTurnBattleSummary, compileTurnBattlePairs } from './battle-utils.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import { playback, resetPlayback, replayFullGame, playbackDelay, swapState, patchAlive } from './playback.js';
 import { ReplayCache } from './replay-cache.js';
@@ -120,6 +120,7 @@ let _gameStartTime = null;        // wall-clock timestamp for game duration trac
 // ── Round-history for full-game replay ───────────────────────────────────────
 // Accumulated during a session; reset each new/resumed game.
 let _roundHistory        = [];  // SP offline:  { roundNum, preState, steps }[]
+let _keepTimelineForReview = false;  // SP: keep the timeline up after animation for the end-of-turn review
 let _onlineRoundHistory  = [];  // MP online:   { roundNum, preState, steps }[]
 // Playback state imported from ./playback.js (playback, resetPlayback, etc.)
 
@@ -717,6 +718,17 @@ async function _runLocalAutoResolution() {
   await _runLocalResolution();
 }
 
+// Build the end-of-turn wrap-up card data: the upcoming phase/round title and
+// the structured combat pairs (icon-vs-icon with HP loss / kills). The UI layer
+// renders the icons + score dots from this.
+function _buildWrapUpContent(steps, roundNum) {
+  const combats = compileTurnBattlePairs(steps, state.entities, ResEventType, PlanActionType);
+  const nextRound = (roundNum ?? 0) + 1;
+  const nextPhase = phaseForRound(nextRound, state.cycleConfig);
+  const title = `${nextPhase.charAt(0).toUpperCase()}${nextPhase.slice(1)} — Round ${nextRound}`;
+  return { title, combats };
+}
+
 async function _runLocalResolution(skipSummary = false) {
   if (!state || state.gameOver) return;
 
@@ -750,6 +762,9 @@ async function _runLocalResolution(skipSummary = false) {
   }
 
   const humanFaction = !state.heroIsAI ? 'hero' : !state.witchIsAI ? 'witch' : null;
+  // Keep the timeline up after animation for the end-of-turn review (SP human
+  // turn, non-autoplay). Cleared once the review/summary is dismissed.
+  _keepTimelineForReview = !!(ui && humanFaction && !_autoplay && !skipSummary);
   const preReplayEntities = patchAlive(steps[0]?.entitySnapshot ?? finalEntities);
 
   // Snapshot node control BEFORE resolution so we can detect changes from unit movement
@@ -823,8 +838,35 @@ async function _runLocalResolution(skipSummary = false) {
     });
   }
 
-  // Show post-resolution summary modal (skip in autoplay or tutorial mode)
-  if (!_autoplay && !skipSummary && ui && humanFaction) {
+  // Post-resolution: normal turns end with a wrap-up CARD + review (the timeline
+  // stays up; arrows scrub the cards). Game-over keeps its dedicated modal.
+  const _reReplay = async () => {
+    state.entities = preReplayEntities;
+    for (const [k, t] of state.tiles) {
+      if (t.explored && !preExploredSet.has(k)) t.explored = false;
+    }
+    redraw();
+    await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
+    for (const [k, v] of postExplored) { const t = state.tiles.get(k); if (t) t.explored = v; }
+  };
+
+  if (!_autoplay && !skipSummary && ui && humanFaction && !state.gameOver) {
+    // Normal turn — wrap-up card review (replaces the end-of-turn modal).
+    let action;
+    do {
+      const wrap = _buildWrapUpContent(steps, state.round - 1);
+      action = await ui.showReplayWrapUp({
+        titleHtml: wrap.title, combats: wrap.combats, canReplay: _roundHistory.length > 0,
+      });
+      if (action === 'replay') await _reReplay();
+    } while (action === 'replay');
+    _keepTimelineForReview = false;
+    ui.hideReplayTimeline?.();
+    ui._animateScoreBar(prevScore, prevNodes);
+  } else if (!_autoplay && !skipSummary && ui && humanFaction) {
+    // Game over — keep the dedicated Victory/Defeat modal.
+    _keepTimelineForReview = false;
+    ui.hideReplayTimeline?.();
     // Finalize game-over immediately — cleanup survives any navigation away
     if (state.gameOver) {
       if (!_activeCampaign) {
@@ -846,14 +888,7 @@ async function _runLocalResolution(skipSummary = false) {
         isCampaign: !!(_activeCampaign && _activeMissionDef),
       });
       if (action === 'replay') {
-        state.entities = preReplayEntities;
-        // Reset explored flags so they reveal progressively during replay.
-        for (const [k, t] of state.tiles) {
-          if (t.explored && !preExploredSet.has(k)) t.explored = false;
-        }
-        redraw();
-        await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
-        for (const [k, v] of postExplored) { const t = state.tiles.get(k); if (t) t.explored = v; }
+        await _reReplay();
       } else if (action === 'replay-full') {
         await _replayFullGame(_roundHistory, _goState.winner, _goState.winReason,
           state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch');
@@ -1200,13 +1235,15 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
   // offers Play(Normal)/Pause/Fast/Camera/Skip; pause/skip drive playback flags.
   const skipHudActive = !_autoplay && ui && !ui._replayOnControl;
   if (skipHudActive) {
-    playback.paused = true;            // inline replay starts in manual-step mode
+    // Start in the player's remembered mode: AutoPlay (continuous) or manual.
+    playback.paused = !ui.replayAutoPlay;
     playback.stepRequested = false;
     ui.showInlineReplayHUD?.((action) => {
       switch (action) {
         case 'playpause':
           playback.paused = !playback.paused;
           if (!playback.paused) playback.stepRequested = false;
+          ui.replayAutoPlay = !playback.paused;   // remember for next turn
           ui.setReplayTransport(playback.paused);
           break;
         case 'next':
@@ -2323,8 +2360,9 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     playback.paused = false;          // clear the manual-step hold for next time
     playback.stepRequested = false;
   }
-  // Hide the timeline overlay (rebuilt fresh on the next round's animation).
-  ui?.hideReplayTimeline?.();
+  // Hide the timeline overlay (rebuilt fresh on the next round's animation),
+  // unless the caller is keeping it up for the end-of-turn review.
+  if (!_keepTimelineForReview) ui?.hideReplayTimeline?.();
   // Mode transition is caller's responsibility
 }
 

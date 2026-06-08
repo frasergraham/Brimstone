@@ -156,7 +156,8 @@ describe('UIController replay timeline overlay', () => {
     { stepIndex: 2, entries: [
       { entityId: 'h1', actor: unit('hero', 'Hero', '#d4a72c', '⚔'),
         target: unit('witch', 'Witch', '#9b59b6', '✦'),
-        actionType: 'battle-unit', label: 'BATTLE',
+        actionType: 'battle-unit', label: 'ATTACK',
+        atkRoll: 7, defRoll: 4, attackerWon: true,
         outcomeKind: 'hit', targetDmg: 1, actorDmg: 0, killed: false, note: null },
     ] },
   ];
@@ -176,12 +177,15 @@ describe('UIController replay timeline overlay', () => {
     assert.doesNotMatch(track.innerHTML, /data-step="1"/);
     // Labels, unit names, the move note, and the battle outcome word + damage.
     assert.match(track.innerHTML, /MOVE/);
-    assert.match(track.innerHTML, /BATTLE/);
+    assert.match(track.innerHTML, /ATTACK/);
     assert.match(track.innerHTML, /Hero/);
     assert.match(track.innerHTML, /Witch/);
     assert.match(track.innerHTML, /BLOCKED/);
     assert.match(track.innerHTML, /replay-step-outcome hit/);
     assert.match(track.innerHTML, />HIT</);
+    // Battle rolls flank the action word, winner highlighted.
+    assert.match(track.innerHTML, /replay-roll winner">7</);
+    assert.match(track.innerHTML, /replay-roll loser">4</);
     assert.match(track.innerHTML, /−1/);
   });
 

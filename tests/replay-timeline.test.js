@@ -85,7 +85,7 @@ describe('buildStepDigest — battle outcome kinds', () => {
     const d = buildStepDigest([step([battleEvent(atk, def, { hit: true, damage: 1 })], [atk, def])], [], DEPS);
     assert.equal(d[0].entries[0].outcomeKind, OutcomeKind.HIT);
     assert.equal(d[0].entries[0].targetDmg, 1);
-    assert.equal(d[0].entries[0].label, 'BATTLE');
+    assert.equal(d[0].entries[0].label, 'ATTACK');
     assert.equal(d[0].entries[0].target.entityId, 'd1');
   });
 
@@ -101,9 +101,28 @@ describe('buildStepDigest — battle outcome kinds', () => {
     assert.equal(d[0].entries[0].killed, true);
   });
 
-  test('miss when no hit', () => {
-    const d = buildStepDigest([step([battleEvent(atk, def, { hit: false, damage: 0 })], [atk, def])], [], DEPS);
+  test('miss when no hit — carries a deterministic flavour word', () => {
+    const d = buildStepDigest([step([battleEvent(atk, def, { hit: false, damage: 0, attackRoll: 3, defenseRoll: 5 })], [atk, def])], [], DEPS);
     assert.equal(d[0].entries[0].outcomeKind, OutcomeKind.MISS);
+    // One of the BLOCK_WORD_VARIANTS, upper-cased, and stable across builds.
+    assert.match(d[0].entries[0].missWord, /^(MISS|DODGED|BLOCKED|PARRIED|DEFLECTED)$/);
+    const d2 = buildStepDigest([step([battleEvent(atk, def, { hit: false, attackRoll: 3, defenseRoll: 5 })], [atk, def])], [], DEPS);
+    assert.equal(d2[0].entries[0].missWord, d[0].entries[0].missWord);
+  });
+
+  test('carries the final rolls + winner flag', () => {
+    const d = buildStepDigest([step([battleEvent(atk, def, { hit: true, damage: 1, attackRoll: 7, defenseRoll: 4 })], [atk, def])], [], DEPS);
+    const e = d[0].entries[0];
+    assert.equal(e.atkRoll, 7);
+    assert.equal(e.defRoll, 4);
+    assert.equal(e.attackerWon, true);
+    assert.equal(e.label, 'ATTACK');     // melee
+  });
+
+  test('ranged attack is labelled "RANGED ATTACK"', () => {
+    const d = buildStepDigest([step([battleEvent(atk, def, { hit: true, damage: 1, ranged: true })], [atk, def])], [], DEPS);
+    assert.equal(d[0].entries[0].label, 'RANGED ATTACK');
+    assert.equal(d[0].entries[0].ranged, true);
   });
 
   test('gang-up allies are resolved from the breakdown for each side', () => {
@@ -191,7 +210,7 @@ describe('buildStepDigest — entries ordered by animation phase', () => {
       [step([hornEv, battleEvent(atk, def, { hit: true, damage: 1 })], [h, atk, def])],
       [], DEPS,
     );
-    assert.deepEqual(d[0].entries.map(e => e.label), ['BATTLE', 'HORN']);
+    assert.deepEqual(d[0].entries.map(e => e.label), ['ATTACK', 'HORN']);
   });
 });
 

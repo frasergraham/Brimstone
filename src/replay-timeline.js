@@ -8,6 +8,7 @@
 // dependency graph, so it stays trivially unit-testable.
 
 import { ENTITY_COLOR } from './entities.js';
+import { pickBlockWord } from './combat-words.js';
 
 // Glyph fallback when no portrait sprite is available. Matches the maps used in
 // ui.js / ui-render.js (kept local to preserve this module's purity).
@@ -130,6 +131,8 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
           .map(id => ents.find(e => e.id === id))
           .filter(s => s && vis(s.col, s.row, ents))
           .map(unitRef);
+        const ranged = !!(ev.result?.ranged ?? ev.battleSnaps?.ranged);
+        const isGuard = ev.type === RE.GUARD_STRIKE;
         entries.push({
           entityId:     actorSnap.id,
           actor:        unitRef(actorSnap),
@@ -137,8 +140,15 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
           actorAllies:  allyRefs(bd.atkAllyIds),
           targetAllies: allyRefs(bd.defAllyIds),
           actionType:   PA.BATTLE_UNIT,
-          label:        ev.type === RE.GUARD_STRIKE ? 'GUARD' : 'BATTLE',
+          label:        isGuard ? 'GUARD' : (ranged ? 'RANGED ATTACK' : 'ATTACK'),
+          ranged,
+          atkRoll:      ev.result?.attackRoll ?? null,
+          defRoll:      ev.result?.defenseRoll ?? null,
+          attackerWon:  !!ev.result?.hit,        // hit ⇒ attacker's roll beat the defence
           outcomeKind:  battleKind(ev.result),
+          // Flavour word for a miss (miss/dodged/blocked/…), matching the
+          // floaters — deterministic from the rolls so it's stable.
+          missWord:     pickBlockWord(ev.result?.attackRoll, ev.result?.defenseRoll),
           targetDmg:    ev.result?.damage ?? 0,
           actorDmg:     ev.result?.counterDmg ?? 0,
           killed:       !!ev.result?.killed,

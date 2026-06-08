@@ -79,6 +79,8 @@ export {
   SIGNPOST_ROAD_OFFSET,
 };
 import { Renderer } from './renderer.js';
+import { BLOCK_WORD_VARIANTS, pickBlockWord } from './combat-words.js';
+export { BLOCK_WORD_VARIANTS };   // re-exported for existing importers (main.js)
 import { getFactionTheme } from './theme.js';
 import { hexKey, hexDistance, getNeighbors } from './hex.js';
 import { nodeController, Phase } from './game.js';
@@ -18077,10 +18079,6 @@ export function paintIconCombatReadout(ctx, opts) {
  *  combat (src/main.js imports this constant) so the cinematic result label
  *  and the fast-mode addFlash word agree on the vocabulary. Lowercase to
  *  match fast mode's visual style; cinematic uppercases on use. */
-export const BLOCK_WORD_VARIANTS = Object.freeze([
-  'miss', 'dodged', 'blocked', 'parried', 'deflected',
-]);
-
 /** Colour used by both fast-mode addFlash and the cinematic result label
  *  whenever the outcome word is one of the BLOCK_WORD_VARIANTS — these are
  *  "the attack didn't connect" cases, so a muted grey reads better than
@@ -18091,10 +18089,7 @@ export const COMBAT_READOUT_BLOCK_COLOR = '#888';
  *  always renders the same flavour word. Falls back to the first variant
  *  when rolls aren't finite (e.g. tests passing partial results). */
 function pickBlockWordUpper(result) {
-  const a = Number.isFinite(result?.attackRoll)  ? result.attackRoll  : 0;
-  const d = Number.isFinite(result?.defenseRoll) ? result.defenseRoll : 0;
-  const idx = Math.abs((a * 31 + d * 7)) % BLOCK_WORD_VARIANTS.length;
-  return BLOCK_WORD_VARIANTS[idx].toUpperCase();
+  return pickBlockWord(result?.attackRoll, result?.defenseRoll);
 }
 
 /** True iff `labelUpper` is one of the BLOCK_WORD_VARIANTS — used to pick

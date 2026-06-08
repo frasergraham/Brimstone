@@ -98,7 +98,8 @@ export class UIController {
     this._battleInterval   = null; // dice animation interval — cleared on new dialog
     this._autoDismissTimer = null; // battle dialog auto-dismiss timer — cleared on new dialog
     this.speedMode         = this._loadDefaultSpeed(); // 'cinematic' | 'fast' | 'vfast'
-    this.replayCameraMode  = 'follow';  // 'follow' (auto-zoom to action) | 'fixed' — replay overlay camera toggle
+    this.replayCameraMode  = 'follow';  // 'follow' (auto-zoom to action) | 'fixed' — replay overlay camera toggle (persists across turns)
+    this.replayAutoPlay    = false;     // remembered AutoPlay choice — applied at the start of each turn's replay
     // Start with chronicle hidden by default; open = full sidebar, closed = pull-out tab only
     this._chronicleOpen    = false;
     // Unit stats bar: collapsed by default; clicking the (i) glyph expands to reveal ATK/DEF + abilities
@@ -4808,7 +4809,7 @@ export class UIController {
       const word = entry.killed ? 'KILL'
         : entry.outcomeKind === 'crush' ? 'CRUSH'
         : entry.outcomeKind === 'hit'   ? 'HIT'
-        : 'MISS';
+        : (entry.missWord ?? 'MISS');
       const kind = entry.killed ? 'kill' : entry.outcomeKind;
       actorOut  = out(entry.actorDmg > 0 ? `COUNTER −${entry.actorDmg}` : '', 'counter');
       centerOut = out(word, kind);
@@ -4820,10 +4821,26 @@ export class UIController {
       targetOut = out('', '');
     }
 
+    // Battles flank the (two-line) action word with each side's final roll,
+    // the winner's roll highlighted.
+    let actionHtml;
+    if (entry.outcomeKind && entry.atkRoll != null && entry.defRoll != null) {
+      const word = esc(entry.label).replace(' ', '<br>');
+      const atkCls = entry.attackerWon ? 'winner' : 'loser';
+      const defCls = entry.attackerWon ? 'loser' : 'winner';
+      actionHtml = `<div class="replay-step-action battle">`
+        + `<span class="replay-roll ${atkCls}">${entry.atkRoll}</span>`
+        + `<span class="replay-action-word">${word}</span>`
+        + `<span class="replay-roll ${defCls}">${entry.defRoll}</span>`
+        + `</div>`;
+    } else {
+      actionHtml = `<div class="replay-step-action">${esc(entry.label).replace(' ', '<br>')}</div>`;
+    }
+
     return `<div class="replay-step-entry" data-entity="${entry.entityId ?? ''}"`
          + ` data-action="${entry.actionType}" data-entry="${entryIdx}">`
          + unit(entry.actor, entry.actorAllies)
-         + `<div class="replay-step-action">${entry.label}</div>`
+         + actionHtml
          + unit(entry.target, entry.targetAllies)
          + actorOut + centerOut + targetOut
          + `</div>`;
@@ -4878,19 +4895,36 @@ export class UIController {
    * active card stays put.
    */
   setReplayTimelineStep(stepIndex) {
+    const cols = this._replayCols();
+    if (!cols.length) return;
+    let ord = cols.findIndex(c => c.getAttribute('data-step') === String(stepIndex));
+    if (ord < 0) ord = this._activeReplayOrd ?? 0;
+    this._setReplayActiveOrd(ord);
+  }
+
+  /** All rendered timeline cards (step cards + the wrap-up card) in DOM order. */
+  _replayCols() {
+    const track = this._el('replay-timeline-track');
+    return track ? Array.from(track.querySelectorAll('.replay-step-col')) : [];
+  }
+
+  /**
+   * Activate the ord-th visible card. At most three cards show: the previous one
+   * peeking half-off the left edge, the active card opaque at the left, and the
+   * next card translucent to its right. The track slides one card left as the
+   * active ordinal advances. Shared by step playback and review scrubbing.
+   */
+  _setReplayActiveOrd(ord) {
     const track = this._el('replay-timeline-track');
     if (!track) return;
     const cols = Array.from(track.querySelectorAll('.replay-step-col'));
     if (!cols.length) return;
-
-    let activeOrd = cols.findIndex(c => c.getAttribute('data-step') === String(stepIndex));
-    if (activeOrd < 0) activeOrd = this._activeReplayOrd ?? 0;
-    activeOrd = Math.max(0, Math.min(cols.length - 1, activeOrd));
-    this._activeReplayOrd = activeOrd;
+    ord = Math.max(0, Math.min(cols.length - 1, ord));
+    this._activeReplayOrd = ord;
 
     cols.forEach((col, j) => {
       col.classList.remove('is-current', 'is-prev', 'is-next');
-      const d = j - activeOrd;
+      const d = j - ord;
       if (d === 0)       col.classList.add('is-current');   // opaque, left of screen
       else if (d === -1) col.classList.add('is-prev');      // half-off-left, translucent
       else if (d === 1)  col.classList.add('is-next');      // translucent, to the right
@@ -4901,17 +4935,117 @@ export class UIController {
     // it's half-visible), putting the active card just right of it near the
     // left of the screen. The track is position:relative, so offsetLeft is
     // transform-independent (no drift). Guarded for the headless fake DOM.
-    const active = cols[activeOrd];
+    const active = cols[ord];
     if (typeof active.offsetLeft !== 'number') return;
+    const INSET = 72;   // keep the active card clear of the left screen edge
     let target;
-    if (activeOrd > 0) {
-      const prev = cols[activeOrd - 1];
-      target = -(prev.offsetLeft + prev.offsetWidth / 2);
+    if (ord > 0) {
+      const prev = cols[ord - 1];
+      target = -(prev.offsetLeft + prev.offsetWidth / 2) + INSET;
     } else {
-      target = -active.offsetLeft + 12;   // first card flush to the left
+      target = -active.offsetLeft + INSET;
     }
     this._replayTrackX = target;
     track.style.transform = `translateX(${target}px)`;
+  }
+
+  // ── End-of-turn review: wrap-up card + scrub arrows ──────────────────────
+
+  /**
+   * Append the turn wrap-up card to the timeline (same card format) with a
+   * Continue button and an optional Replay button, then enter review mode:
+   * left/right arrows scrub through every card without re-animating. Resolves
+   * with 'next' (Continue) or 'replay' (Replay).
+   *
+   * @param {object} opts { titleHtml, bodyHtml, canReplay }
+   * @returns {Promise<'next'|'replay'>}
+   */
+  showReplayWrapUp({ titleHtml = 'Turn Complete', combats = [], canReplay = true } = {}) {
+    const track = this._el('replay-timeline-track');
+    const wrap  = this._el('replay-timeline');
+    if (!track || !wrap) return Promise.resolve('next');
+    wrap.classList.add('visible');
+
+    const replayBtn = canReplay
+      ? `<button class="replay-wrapup-btn" data-act="replay">↺ Replay turn</button>` : '';
+    const card = document.createElement('div');
+    card.className = 'replay-step-col replay-wrapup';
+    card.setAttribute('data-step', 'wrapup');
+    card.innerHTML =
+      `<div class="replay-step-label">${titleHtml}</div>`
+      + `<div class="replay-wrapup-body">${this._buildWrapUpBody(combats)}</div>`
+      + `<div class="replay-wrapup-actions">${replayBtn}`
+      + `<button class="replay-wrapup-btn primary" data-act="next">Continue ▸</button></div>`;
+    track.appendChild(card);
+
+    // Show scrub arrows and jump to the wrap-up card.
+    this._enterReplayReview();
+    this._setReplayActiveOrd(this._replayCols().length - 1);
+
+    return new Promise(resolve => {
+      const finish = (action) => {
+        card.querySelectorAll('.replay-wrapup-btn').forEach(b => { b.onclick = null; });
+        this._exitReplayReview();
+        resolve(action);
+      };
+      card.querySelectorAll('.replay-wrapup-btn').forEach(btn => {
+        btn.onclick = () => finish(btn.getAttribute('data-act'));
+      });
+    });
+  }
+
+  /**
+   * Build the wrap-up body: each combat as [icon] vs [icon] with HP loss (or a
+   * skull) beneath each unit, plus the node-score dots reused from the bottom
+   * score bar.
+   */
+  _buildWrapUpBody(combats) {
+    const GLYPHS = { hero: '⚔', witch: '✦', survivor: '☺', soldier: '♟', zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙' };
+    const unitCell = (u) => {
+      const color = u.color || ENTITY_COLOR[u.type] || '#888';
+      const assetId = _entityPortraitId({ type: u.type, title: u.title });
+      const src = (this.renderer && assetId) ? this.renderer.getPortraitDataURL(assetId, 56) : null;
+      const icon = src
+        ? `<img class="wrapup-unit-icon" src="${src}" style="border-color:${color}" alt="">`
+        : `<span class="wrapup-unit-icon" style="background:${color}">${GLYPHS[u.type] ?? '?'}</span>`;
+      const effect = u.killed
+        ? `<div class="wrapup-dmg kill">☠</div>`
+        : (u.hpLost > 0 ? `<div class="wrapup-dmg">−${u.hpLost}</div>` : `<div class="wrapup-dmg none">—</div>`);
+      return `<div class="wrapup-unit">${icon}${effect}</div>`;
+    };
+    let combatHtml = '';
+    for (const { a, b } of combats) {
+      combatHtml += `<div class="wrapup-combat">${unitCell(a)}<span class="wrapup-vs">vs</span>${unitCell(b)}</div>`;
+    }
+    if (!combatHtml) combatHtml = `<div class="wrapup-line muted">A quiet turn.</div>`;
+
+    let scoreHtml = '';
+    if (this.state?.witchObjectives) {
+      const { html } = buildObjectivesHtml(
+        this.state.witchObjectives, this.state.entities, this.state.nodeScore, this.state.gameMode);
+      scoreHtml = `<div class="wrapup-score">${html}</div>`;
+    }
+    return combatHtml + scoreHtml;
+  }
+
+  /** Show the prev/next scrub arrows above the active card. */
+  _enterReplayReview() {
+    const bar = this._el('replay-review');
+    if (!bar) return;
+    bar.style.display = 'flex';
+    const prev = document.getElementById('replay-review-prev');
+    const next = document.getElementById('replay-review-next');
+    if (prev) prev.onclick = () => this._setReplayActiveOrd((this._activeReplayOrd ?? 0) - 1);
+    if (next) next.onclick = () => this._setReplayActiveOrd((this._activeReplayOrd ?? 0) + 1);
+    // The manual-step control bar isn't relevant during review.
+    const hud = this._el('replay-hud');
+    if (hud) hud.style.display = 'none';
+  }
+
+  /** Hide the scrub arrows. */
+  _exitReplayReview() {
+    const bar = this._el('replay-review');
+    if (bar) bar.style.display = 'none';
   }
 
   /** Reveal the outcome lines for a step once it has played out. */

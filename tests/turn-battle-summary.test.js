@@ -3,7 +3,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { compileTurnBattleSummary } from '../src/battle-utils.js';
+import { compileTurnBattleSummary, compileTurnBattlePairs } from '../src/battle-utils.js';
 import { ResEventType } from '../server/resolver.js';
 import { PlanActionType } from '../src/planner.js';
 
@@ -157,5 +157,32 @@ describe('compileTurnBattleSummary', () => {
     const lines = compileTurnBattleSummary([step], aliveEntities(hero, witch), ResEventType, PlanActionType);
     assert.equal(lines.length, 1);
     assert.match(lines[0], /Witch \u22123HP/);
+  });
+});
+
+describe('compileTurnBattlePairs (structured wrap-up data)', () => {
+  test('returns per-pair units with HP loss and kill flags', () => {
+    const hero  = makeSnap('h1', 'Hero',  'hero',  14);
+    const witch = makeSnap('w1', 'Witch', 'witch', 2);
+    const ev    = makeBattleEvent(hero, witch, 2, 1, true);  // witch killed, hero counter 1
+    const steps = [makeStep([ev])];
+    const pairs = compileTurnBattlePairs(steps, killedEntities(witch, hero), ResEventType, PlanActionType);
+    assert.equal(pairs.length, 1);
+    const { a, b } = pairs[0];
+    // a is the lower id (h1) \u2014 the hero; b the witch.
+    assert.equal(a.name, 'Hero');
+    assert.equal(a.hpLost, 1);        // counter damage
+    assert.equal(a.killed, false);
+    assert.equal(b.name, 'Witch');
+    assert.equal(b.hpLost, 2);
+    assert.equal(b.killed, true);
+  });
+
+  test('omits pairs that exchanged no damage', () => {
+    const hero  = makeSnap('h1', 'Hero',  'hero',  14);
+    const witch = makeSnap('w1', 'Witch', 'witch', 10);
+    const ev    = makeBattleEvent(hero, witch, 0, 0, false);  // clean miss
+    const pairs = compileTurnBattlePairs([makeStep([ev])], aliveEntities(hero, witch), ResEventType, PlanActionType);
+    assert.deepEqual(pairs, []);
   });
 });
