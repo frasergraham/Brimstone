@@ -5513,6 +5513,17 @@ img.plan-step-avatar {
 .replay-roll.revealed { opacity: 1; }
 .replay-roll.winner { color: #7fd99a; }
 .replay-roll.loser  { color: #b87a7a; }
+/* Discovered survivor(s)/zombie(s) — hidden until the discovery is revealed.
+   Horn can find several, so the icons wrap in a small grid. */
+.replay-unit.replay-discovered { opacity: 0; transition: opacity 0.25s ease; }
+.replay-unit.replay-discovered.revealed { opacity: 1; }
+.replay-discovered-icons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.2rem;
+  max-width: 5rem;
+}
 
 /* Outcome cells (row 2 of the grid) — centred under their column, hidden until
    revealed as the action plays out. */

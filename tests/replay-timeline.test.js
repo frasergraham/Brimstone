@@ -180,6 +180,48 @@ describe('buildStepDigest — move/explore notes', () => {
     assert.deepEqual(d[0].entries[0].note, { text: '+2 RESOURCE', kind: 'gain' });
   });
 
+  test('discovery: explore that finds a survivor shows the unit + "FOUND SURVIVOR"', () => {
+    const h = snap('h1', 'hero', 'hero', 1, 1);
+    const ev = {
+      type: ResEventType.ACTION_OK, faction: 'hero',
+      action: { type: PlanActionType.EXPLORE, entityId: 'h1' },
+      result: { success: true, lootItems: [], encounterSurvivor: { id: 's9', type: 'survivor', name: 'Mara' } },
+    };
+    const d = buildStepDigest([step([ev], [h])], [], DEPS);
+    const e = d[0].entries[0];
+    assert.equal(e.discovered.length, 1);
+    assert.equal(e.discovered[0].name, 'Mara');
+    assert.deepEqual(e.note, { text: 'FOUND SURVIVOR', kind: 'gain' });
+  });
+
+  test('discovery: a raised zombie shows "FOUND ZOMBIE"', () => {
+    const h = snap('h1', 'hero', 'hero', 1, 1);
+    const ev = {
+      type: ResEventType.ACTION_OK, faction: 'hero',
+      action: { type: PlanActionType.EXPLORE, entityId: 'h1' },
+      result: { success: true, encounterSurvivor: { id: 'z9', type: 'zombie' } },
+    };
+    const d = buildStepDigest([step([ev], [h])], [], DEPS);
+    assert.equal(d[0].entries[0].note.text, 'FOUND ZOMBIE');
+    assert.equal(d[0].entries[0].discovered[0].type, 'zombie');
+  });
+
+  test('discovery: a horn that finds several survivors lists them all', () => {
+    const h = snap('h1', 'hero', 'hero', 1, 1);
+    const ev = {
+      type: ResEventType.ACTION_OK, faction: 'hero',
+      action: { type: PlanActionType.SOUND_HORN, entityId: 'h1' },
+      result: { success: true, encounterSurvivors: [
+        { id: 's1', type: 'survivor', name: 'A' },
+        { id: 's2', type: 'survivor', name: 'B' },
+        { id: 's3', type: 'survivor', name: 'C' },
+      ] },
+    };
+    const d = buildStepDigest([step([ev], [h])], [], DEPS);
+    assert.equal(d[0].entries[0].discovered.length, 3);
+    assert.equal(d[0].entries[0].note.text, 'FOUND 3 SURVIVORS');
+  });
+
   test('explore with no loot shows EXPLORED', () => {
     const h = snap('h1', 'hero', 'hero', 1, 1);
     const ev = {

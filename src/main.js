@@ -1360,6 +1360,21 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     await renderer.waitForAnimations();
   };
 
+  // A discovery (survivor/zombie found via move/explore/horn) is now shown on
+  // the timeline card; here we just focus the camera on the new unit (unless the
+  // camera is FIXED) and reveal that action's card entry.
+  const _showDiscoveryOnCard = async (unitData, stepIdx, actorId) => {
+    if (renderer && ui?.replayCameraMode !== 'fixed' && !renderer.suppressAutoFrame) {
+      const e = (finalEntities || state.entities)?.find(en => en && en.id === unitData?.id);
+      if (e && e.col != null) {
+        renderer.frameHexes([{ col: e.col, row: e.row }], { maxZoom: 2.0, paddingHexes: 2.5, duration: 450 });
+      }
+    }
+    ui?.revealReplayEntryOutcome?.(stepIdx, actorId);
+    redrawFn();
+    await playbackDelay(900);   // hold so the player registers the find
+  };
+
   for (let i = 0; i < steps.length; i++) {
     // During replay: if BACK/STOP/REDO was pressed, abort remaining steps immediately
     if (playback.goBack || playback.aborted || playback.jumpToEnd || playback.restart) break;
@@ -1605,7 +1620,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 
       if ((!humanFaction || ev.faction === humanFaction) && result?.encounterLog?.length) {
         if (!myPlayerId || preSnap?.ownerId === myPlayerId) {
-          pendingDialogs.push({ log: result.encounterLog, encounterUnit: result.encounterSurvivor ?? null });
+          pendingDialogs.push({ log: result.encounterLog, encounterUnit: result.encounterSurvivor ?? null, actorId: action.entityId });
         }
       }
     }
@@ -1722,7 +1737,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       for (const entry of pendingDialogs) {
         redrawFn();
         if (entry.encounterUnit) {
-          await _showDiscovery(entry.encounterUnit);
+          await _showDiscoveryOnCard(entry.encounterUnit, i, entry.actorId);
         } else {
           await new Promise(resolve => ui._showResultDialog(entry.log, resolve));
         }
@@ -2192,7 +2207,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       if (actor) { ui._showLootFlashes(actor, result.lootItems ?? []); hadExplore = true; }
       redrawFn();
       if (!_suppressDialogs && result.encounterSurvivor) {
-        await _showDiscovery(result.encounterSurvivor, 'explore');
+        await _showDiscoveryOnCard(result.encounterSurvivor, i, action.entityId);
       }
     }
     // Wait for loot flashes so they're fully visible before the next step
@@ -2237,9 +2252,9 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       if (!_suppressDialogs) {
         const survivors = result.encounterSurvivors || (result.encounterSurvivor ? [result.encounterSurvivor] : []);
         if (survivors.length > 0) {
-          // Show encounter card for each survivor found
+          // Reveal the horn card + pan to each survivor drawn by the call.
           for (const s of survivors) {
-            await _showDiscovery(s, 'horn');
+            await _showDiscoveryOnCard(s, i, action.entityId);
           }
         } else if (result.log?.length) {
           // No survivor — show the "nothing found" result dialog

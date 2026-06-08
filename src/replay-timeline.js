@@ -207,6 +207,21 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
           : { text: 'EXPLORED', kind: 'info' };
       }
 
+      // Discovered survivor(s)/zombie(s) — a move / explore / horn can surface
+      // one OR MORE hidden units. Show all their icons + a "FOUND …" note (these
+      // replace the old discovery modal). Horn in particular can find several.
+      let discovered = null;
+      const found = ev.result?.encounterSurvivors
+        ?? (ev.result?.encounterSurvivor ? [ev.result.encounterSurvivor] : []);
+      if (found.length) {
+        discovered = found.map(unitRef);
+        const kind = found[0].type === 'zombie' ? 'ZOMBIE' : 'SURVIVOR';
+        note = {
+          text: found.length > 1 ? `FOUND ${found.length} ${kind}S` : `FOUND ${kind}`,
+          kind: found[0].type === 'zombie' ? 'kill' : 'gain',
+        };
+      }
+
       entries.push({
         entityId:    a.entityId,
         actor:       unitRef(actorSnap),
@@ -216,6 +231,7 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
         outcomeKind: null,
         targetDmg:   0, actorDmg: 0, killed: false,
         note,
+        discovered,
       });
     }
 

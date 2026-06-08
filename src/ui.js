@@ -4787,6 +4787,10 @@ export class UIController {
       ? `<div class="replay-unit">${iconImg(u)}<div class="replay-unit-name">${esc(u.name)}</div>`
         + `${alliesHtml(allies)}</div>`
       : `<span class="replay-cell"></span>`;
+    // Discovered units (1+) occupy the target cell, hidden until revealed.
+    const discoveredCell = (units) =>
+      `<div class="replay-unit replay-discovered"><div class="replay-discovered-icons">`
+      + units.map(iconImg).join('') + `</div></div>`;
     const out = (text, kind) => text
       ? `<div class="replay-step-outcome ${kind}">${text}</div>`
       : `<span class="replay-cell"></span>`;
@@ -4829,7 +4833,7 @@ export class UIController {
          + ` data-action="${entry.actionType}" data-entry="${entryIdx}">`
          + unit(entry.actor, entry.actorAllies)
          + actionHtml
-         + unit(entry.target, entry.targetAllies)
+         + (entry.discovered?.length ? discoveredCell(entry.discovered) : unit(entry.target, entry.targetAllies))
          + actorOut + centerOut + targetOut
          + `</div>`;
   }
@@ -4865,7 +4869,7 @@ export class UIController {
     const col = this._replayCol(stepIndex);
     if (!col) return;
     col.querySelectorAll(`.replay-step-entry[data-entity="${entityId}"]`).forEach(entry =>
-      entry.querySelectorAll('.replay-step-outcome, .replay-roll').forEach(o => o.classList.add('revealed')));
+      entry.querySelectorAll('.replay-step-outcome, .replay-roll, .replay-discovered').forEach(o => o.classList.add('revealed')));
   }
 
   /** Look up a step column element by index. */
@@ -5054,8 +5058,8 @@ export class UIController {
     if (!track) return;
     const col = track.querySelector(`.replay-step-col[data-step="${stepIndex}"]`);
     if (!col) return;
-    // Reveal the dice rolls and outcome badges together (both hidden until now).
-    col.querySelectorAll('.replay-step-outcome, .replay-roll').forEach(o => o.classList.add('revealed'));
+    // Reveal the dice rolls, outcome badges, and discovered units together.
+    col.querySelectorAll('.replay-step-outcome, .replay-roll, .replay-discovered').forEach(o => o.classList.add('revealed'));
   }
 
   /** Re-hide a step's rolls/outcomes (used when a step is replayed). */
@@ -5064,7 +5068,7 @@ export class UIController {
     if (!track) return;
     const col = track.querySelector(`.replay-step-col[data-step="${stepIndex}"]`);
     if (!col) return;
-    col.querySelectorAll('.replay-step-outcome, .replay-roll').forEach(o => o.classList.remove('revealed'));
+    col.querySelectorAll('.replay-step-outcome, .replay-roll, .replay-discovered').forEach(o => o.classList.remove('revealed'));
   }
 
   /** Hide and clear the timeline overlay. */
