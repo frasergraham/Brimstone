@@ -100,7 +100,9 @@ export function compileTurnBattleSummary(steps, finalEntities, ResEventType, Pla
 /**
  * Structured per-pair combat report for the end-of-turn wrap-up card: each pair
  * as { a, b } where a/b = { id, type, title, name, color, hpLost, killed }.
- * Only pairs that actually exchanged damage are included.
+ * EVERY pair that fought is included — even clean misses with no damage (so the
+ * card shows the combat happened rather than calling it a "quiet turn"); the
+ * card renders "—" under a unit that took no damage.
  */
 export function compileTurnBattlePairs(steps, finalEntities, ResEventType, PlanActionType) {
   const unit = (snap, hpLost) => ({
@@ -110,10 +112,8 @@ export function compileTurnBattlePairs(steps, finalEntities, ResEventType, PlanA
     hpLost,
     killed: _wasKilled(snap, finalEntities),
   });
-  const out = [];
-  for (const { snapA, snapB, hpLostByA, hpLostByB } of _aggregateBattlePairs(steps, ResEventType, PlanActionType)) {
-    if (hpLostByA === 0 && hpLostByB === 0) continue;
-    out.push({ a: unit(snapA, hpLostByA), b: unit(snapB, hpLostByB) });
-  }
-  return out;
+  return _aggregateBattlePairs(steps, ResEventType, PlanActionType)
+    .map(({ snapA, snapB, hpLostByA, hpLostByB }) => ({
+      a: unit(snapA, hpLostByA), b: unit(snapB, hpLostByB),
+    }));
 }

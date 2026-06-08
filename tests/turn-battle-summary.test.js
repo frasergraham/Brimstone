@@ -178,11 +178,14 @@ describe('compileTurnBattlePairs (structured wrap-up data)', () => {
     assert.equal(b.killed, true);
   });
 
-  test('omits pairs that exchanged no damage', () => {
+  test('includes no-damage fights (clean miss) so the card still shows the combat', () => {
     const hero  = makeSnap('h1', 'Hero',  'hero',  14);
     const witch = makeSnap('w1', 'Witch', 'witch', 10);
     const ev    = makeBattleEvent(hero, witch, 0, 0, false);  // clean miss
     const pairs = compileTurnBattlePairs([makeStep([ev])], aliveEntities(hero, witch), ResEventType, PlanActionType);
-    assert.deepEqual(pairs, []);
+    assert.equal(pairs.length, 1);
+    assert.equal(pairs[0].a.hpLost, 0);
+    assert.equal(pairs[0].b.hpLost, 0);
+    assert.equal(pairs[0].a.killed, false);
   });
 });
