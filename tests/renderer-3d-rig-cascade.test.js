@@ -148,6 +148,46 @@ describe('_ensureFallbackRig cascade', () => {
   });
 });
 
+function makeAnimGroup() {
+  return {
+    calls: [],
+    play(loop) { this.calls.push(['play', loop]); },
+    start(loop, r) { this.calls.push(['start', loop, r]); },
+    stop() { this.calls.push(['stop']); },
+  };
+}
+
+describe('_maybeToggleFallbackRigAnimation', () => {
+  test('plays the walk group while a unit using the rig is moving', () => {
+    const r = newRenderer();
+    const idle = makeAnimGroup(), walk = makeAnimGroup();
+    const src = { cloneTag: 'zombie', idleGroup: idle, walkGroup: walk,
+      walkSpeedRatio: 2, activeGroup: 'idle' };
+    r._rigSources.set('zombie-idle.glb', src);
+    r._activeMoveIds = new Set(['z1']);
+    r._activeLungeIds = new Set();
+    r.state = { entities: [{ id: 'z1', type: 'zombie' }] };
+    r._maybeToggleFallbackRigAnimation();
+    assert.equal(src.activeGroup, 'walk');
+    assert.ok(walk.calls.some(c => c[0] === 'play' || c[0] === 'start'), 'walk started');
+    assert.ok(idle.calls.some(c => c[0] === 'stop'), 'idle stopped');
+  });
+
+  test('returns to idle when nothing is moving', () => {
+    const r = newRenderer();
+    const idle = makeAnimGroup(), walk = makeAnimGroup();
+    const src = { cloneTag: 'mannequin', idleGroup: idle, walkGroup: walk,
+      activeGroup: 'walk' };
+    r._rigSources.set('mannequin-idle.glb', src);
+    r._activeMoveIds = new Set();
+    r._activeLungeIds = new Set();
+    r.state = { entities: [{ id: 's1', type: 'survivor' }] };
+    r._maybeToggleFallbackRigAnimation();
+    assert.equal(src.activeGroup, 'idle');
+    assert.ok(walk.calls.some(c => c[0] === 'stop'), 'walk stopped');
+  });
+});
+
 describe('_buildRigClone tint', () => {
   test('tints each clone to the owner colour when tintColor is given', () => {
     const r = newRenderer();

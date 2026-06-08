@@ -4888,6 +4888,9 @@ export class Renderer3D {
       // moonwalking in place when nothing on screen needs it.
       this._maybeToggleNativeWalking();
       this._maybeTogglePaladinAnimation();
+      // Drive walk↔idle on the cascade fallback rigs (mannequin / zombie /
+      // <type>) the same way — independent of the paladin's shared skeleton.
+      this._maybeToggleFallbackRigAnimation();
       // The legacy idle↔walk swap below only fires when a SEPARATE
       // retargeted walking group was loaded onto the paladin's skeleton.
       // With NewPaladin shipping its own walking animation as the rig's
@@ -5472,6 +5475,103 @@ export class Renderer3D {
     return upgraded;
   }
 
+  /** Retarget walking.glb's native AnimationGroup onto a fallback rig's skeleton
+   *  by bone name (same technique the paladin uses), storing the result on
+   *  `src.walkGroup`. Idempotent (no-op once retargeted) and a no-op until the
+   *  shared `_walkingSource` native group exists. The rig shares its skeleton
+   *  across every standee, so all units of that rig walk in unison — fine for a
+   *  board token. */
+  _retargetWalkOntoRig(src) {
+    if (!src || src.walkGroup) return src?.walkGroup || null;
+    const ws = this._walkingSource;
+    const nativeGroup = ws && ws.walkGroup;
+    if (!nativeGroup || typeof nativeGroup.clone !== 'function') return null;
+
+    const nameMap = new Map();
+    const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
+    const addEntry = (name, target) => {
+      if (!name || !target) return;
+      if (!nameMap.has(name)) nameMap.set(name, target);
+      const stripped = stripDup(name);
+      if (stripped !== name && !nameMap.has(stripped)) nameMap.set(stripped, target);
+    };
+    for (const tn of src.transformNodes || []) if (tn && tn.name) addEntry(tn.name, tn);
+    if (src.skeleton && Array.isArray(src.skeleton.bones)) {
+      for (const bone of src.skeleton.bones) {
+        if (!bone) continue;
+        const tn = bone._linkedTransformNode
+          || (typeof bone.getTransformNode === 'function' && bone.getTransformNode());
+        if (tn && tn.name) addEntry(tn.name, tn);
+        if (bone.name) addEntry(bone.name, tn || bone);
+      }
+    }
+
+    let remapped = 0;
+    const clone = nativeGroup.clone(`${src.cloneTag}WalkRetargeted`, (oldTarget) => {
+      if (!oldTarget || !oldTarget.name) return oldTarget;
+      const match = nameMap.get(oldTarget.name) || nameMap.get(stripDup(oldTarget.name));
+      if (match) { remapped++; return match; }
+      return oldTarget;
+    });
+    if (!clone || remapped === 0) {
+      try { clone?.dispose?.(); } catch { /* ignore */ }
+      return null;
+    }
+    // keepY like the idle — feet-origin rigs need the Hips vertical baseline so
+    // the walk cycles in place at standing height (the cone slide handles
+    // world-space translation across hexes).
+    stripRootBoneTranslation(clone, 'mixamorig:Hips', { keepY: true });
+    const ratio = (ws && ws.speedRatio) || 1.0;
+    if (typeof clone.start === 'function') clone.start(true, ratio);
+    if (typeof clone.pause === 'function') clone.pause();
+    src.walkGroup = clone;
+    src.walkSpeedRatio = ratio;
+    src.activeGroup = src.activeGroup || 'idle';
+    return clone;
+  }
+
+  /** Per-frame walk↔idle swap for the cascade fallback rigs — mirrors
+   *  _maybeTogglePaladinAnimation but keyed per rig source: a rig walks while
+   *  any unit using it is mid-move/lunge, else idles. Shared-skeleton-per-rig,
+   *  so all units of a rig animate together. */
+  _maybeToggleFallbackRigAnimation() {
+    if (!this._rigSources || this._rigSources.size === 0) return;
+    const movingRigs = new Set();
+    const moveIds = this._activeMoveIds, lungeIds = this._activeLungeIds;
+    const anyMoving = (moveIds && moveIds.size) || (lungeIds && lungeIds.size);
+    if (anyMoving && this.state?.entities) {
+      const byId = new Map();
+      for (const e of this.state.entities) if (e && e.id) byId.set(e.id, e);
+      const mark = (id) => {
+        const e = byId.get(id);
+        if (!e || unitUsesPaladinModel(e)) return;
+        const src = this._loadedFallbackRigFor(e);
+        if (src) movingRigs.add(src);
+      };
+      if (moveIds) for (const id of moveIds) mark(id);
+      if (lungeIds) for (const id of lungeIds) mark(id);
+    }
+    for (const src of this._rigSources.values()) {
+      const desired = (movingRigs.has(src) && src.walkGroup) ? 'walk' : 'idle';
+      if (src.activeGroup === desired) continue;
+      const walk = src.walkGroup, idle = src.idleGroup;
+      if (desired === 'walk') {
+        if (idle && typeof idle.stop === 'function') idle.stop();
+        if (walk) {
+          if (typeof walk.play === 'function') walk.play(true);
+          else if (typeof walk.start === 'function') walk.start(true, src.walkSpeedRatio || 1.0);
+        }
+      } else {
+        if (walk && typeof walk.stop === 'function') walk.stop();
+        if (idle) {
+          if (typeof idle.play === 'function') idle.play(true);
+          else if (typeof idle.start === 'function') idle.start(true, 1.0);
+        }
+      }
+      src.activeGroup = desired;
+    }
+  }
+
   /** First loaded fallback-rig source for an entity (the earliest cascade
    *  candidate already in _rigSources), or null. Synchronous — does NOT trigger
    *  loads (that's _ensureFallbackRig). */
@@ -5560,6 +5660,12 @@ export class Renderer3D {
       this._rigSources.set(file, src);
       // Retrofit standees that were waiting on this rig.
       this._upgradeStandeesToFallbackRig();
+      // Wire walking onto this rig: ensure walking.glb's native group is loaded
+      // (shared with the paladin path / ghost preview), then retarget a clone
+      // onto this rig's skeleton. Fire-and-forget — the rig idles until it lands.
+      Promise.resolve(this._loadWalkingAnimation())
+        .then(() => this._retargetWalkOntoRig(src))
+        .catch(err => console.warn(`[Renderer3D] walk retarget for ${file} failed.`, err));
       return src;
     })();
     this._rigLoadPromises.set(file, promise);

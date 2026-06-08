@@ -70,7 +70,7 @@ The 3D renderer resolves each unit's mesh by convention — **no renderer edits*
 2. Otherwise the unit clones the shared **`mannequin-idle.glb`** — a blank humanoid the renderer tints to the owner's player colour.
 3. If neither loads, the cone+sphere **pawn** stands in.
 
-`EntityType.PALADIN` (the hero) keeps its dedicated `paladin-idle.glb` path (the only rig wired for walk/run/punch today); other rigs play their embedded idle. To add a character rig, drop the source FBX in `assets/source/characters/` and run `node scripts/convert-character-fbx.js` (see that script for texture-strip vs. -cap options). Cascade logic + tint live in `src/renderer-3d.js` (`fallbackRigCandidates`, `_loadFallbackRig`, `_buildRigClone`).
+Cascade rigs play their embedded **idle** and **walk** (the shared `walking.glb` clip retargets onto each rig by bone name, swapping in while the unit is mid-move); run/punch stay paladin-only for now. `EntityType.PALADIN` (the hero) keeps its dedicated `paladin-idle.glb` path. To add a character rig, drop the source FBX in `assets/source/characters/` and run `node scripts/convert-character-fbx.js` (see that script for texture-strip vs. -cap options) — it also normalises Mixamo bone names so the clip bank retargets cleanly. Cascade logic + tint + walk retarget live in `src/renderer-3d.js` (`fallbackRigCandidates`, `_loadFallbackRig`, `_buildRigClone`, `_retargetWalkOntoRig`, `_maybeToggleFallbackRigAnimation`).
 
 ## New faction
 
