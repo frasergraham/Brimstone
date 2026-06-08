@@ -62,6 +62,16 @@ Then reference the id from a roster entry's `ability:` field (or push it onto a 
 
 Combat, pathfinding, serialization, and plan-action validation flow through the generic machinery — no action/resolver/state-sync edits needed.
 
+### Giving a unit type a 3D model (rig cascade)
+
+The 3D renderer resolves each unit's mesh by convention — **no renderer edits**:
+
+1. `assets/models/<type>-idle.glb` — if present it's loaded as that type's rig (e.g. `zombie-idle.glb` for `EntityType.ZOMBIE`). Must be a Mixamo-rigged glb whose bones are named `mixamorig:*` so the shared walk/run/attack clip bank retargets onto it.
+2. Otherwise the unit clones the shared **`mannequin-idle.glb`** — a blank humanoid the renderer tints to the owner's player colour.
+3. If neither loads, the cone+sphere **pawn** stands in.
+
+`EntityType.PALADIN` (the hero) keeps its dedicated `paladin-idle.glb` path (the only rig wired for walk/run/punch today); other rigs play their embedded idle. To add a character rig, drop the source FBX in `assets/source/characters/` and run `node scripts/convert-character-fbx.js` (see that script for texture-strip vs. -cap options). Cascade logic + tint live in `src/renderer-3d.js` (`fallbackRigCandidates`, `_loadFallbackRig`, `_buildRigClone`).
+
 ## New faction
 
 Subclass `HeroFaction` or `WitchFaction` in `src/factions.js`, override `id` / `name` / `leaderType` / `_buildLeader`, register in the `FACTIONS` map, and add a leader factory in `src/entities.js`. If the faction has unique leader abilities, override `innateLeaderAbilities` to return the parent list plus the new ids — `Faction.createLeader()` pushes them onto the entity automatically. See `RogueFaction` / `CaptainFaction` in `factions.js` for the minimal stub pattern.

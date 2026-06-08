@@ -579,6 +579,35 @@ export function unitUsesPaladinModel(entity) {
   return getUnitRigConfig(entity) != null;
 }
 
+// ─── Generic unit-rig cascade (non-paladin units) ───────────────────────────
+// The shared fallback rig: a blank Mixamo mannequin the renderer tints per
+// owner. Loaded once and cloned for any unit that has no `<type>-idle.glb`.
+export const MANNEQUIN_RIG_FILE = 'mannequin-idle.glb';
+
+/** Convention model filename for an entity's own rig — `<type>-idle.glb`
+ *  (e.g. 'zombie-idle.glb'). Returns null when the entity has no usable type.
+ *  The slug mirrors EntityType values, which are already lowercase
+ *  underscore-safe ('zombie', 'wood_golem', …). Pure; exported for tests. */
+export function entityTypeRigFile(entity) {
+  if (!entity || typeof entity.type !== 'string') return null;
+  const slug = entity.type.toLowerCase().replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return slug ? `${slug}-idle.glb` : null;
+}
+
+/** Ordered rig-file cascade for a non-paladin unit: its own `<type>-idle.glb`
+ *  first, then the shared mannequin. The caller tries each in turn and uses the
+ *  first that loads; if none do, the cone+sphere pawn stands in. Paladin-typed
+ *  units never reach here — they keep the dedicated _paladinSource path. Pure;
+ *  exported for tests. */
+export function fallbackRigCandidates(entity) {
+  const out = [];
+  const typeFile = entityTypeRigFile(entity);
+  if (typeFile && typeFile !== MANNEQUIN_RIG_FILE) out.push(typeFile);
+  out.push(MANNEQUIN_RIG_FILE);
+  return out;
+}
+
 // ─── Bone attachment (G5 horse + G6 weapon) ─────────────────────────────────
 // The paladin rig uses Mixamo bone names (`mixamorig:Hips`, `mixamorig:RightHand`,
 // `mixamorig:LeftUpLeg`, …). The skeleton is SHARED across every hero standee
@@ -2025,6 +2054,16 @@ export class Renderer3D {
     // anchor — without it the Mixamo hip-pivot puts the feet below the
     // base disc. Defaults to 0 when bbox is unavailable.
     this._paladinFeetOffset = 0;
+    // ── Generic unit-rig cascade (non-paladin units) ──────────────────────
+    // Every non-paladin entity resolves a rig by convention: first
+    // `<type>-idle.glb` (e.g. zombie-idle.glb), else the shared
+    // mannequin-idle.glb, else the cone+sphere pawn. Unlike the dedicated
+    // _paladinSource (which carries the walk/run/punch wiring), these rigs
+    // play only their embedded idle for now. Each source mirrors the paladin
+    // shape plus its own { scale, feetOffset, tintable }.
+    this._rigSources      = new Map(); // model file → source
+    this._rigLoadPromises = new Map(); // model file → in-flight load (resolves src|null)
+    this._rigFileMissing  = new Set(); // files that 404'd — don't re-attempt
     this._engine        = null;
     this._scene         = null;
     this._camera        = null;
@@ -3722,6 +3761,9 @@ export class Renderer3D {
       this._paladinSource = {
         mesh: skinned, meshes, skeleton, idleGroup, walkGroup: null,
         transformNodes,
+        // Mirror scale/feetOffset onto the source so the generalized
+        // _buildRigClone reads them per-rig (paladin keeps the same values).
+        scale, feetOffset, cloneTag: 'paladin',
       };
 
       // Fire-and-forget the companion animation GLBs. Paladins start at
@@ -4990,9 +5032,21 @@ export class Renderer3D {
   }
 
   _buildPaladinClone(entity, parent) {
-    const src = this._paladinSource;
+    return this._buildRigClone(entity, parent, this._paladinSource);
+  }
+
+  /** Clone a loaded rig `src` for one standee. Generalises the paladin clone to
+   *  any rig in the cascade (mannequin / zombie / <type>). Reads the rig's own
+   *  `src.scale` / `src.feetOffset` (set at load) and `src.cloneTag` for mesh
+   *  names. When `opts.tintColor` (a CSS hex) is given each cloned child gets a
+   *  per-standee material instance tinted to that colour — that's how the blank
+   *  mannequin reads as the owner's colour. Returns the same shape as the
+   *  paladin clone ({ mesh, skinnedMesh, childMeshes, ownsRootNode, skeleton,
+   *  animationGroup }) or null. */
+  _buildRigClone(entity, parent, src, opts = {}) {
     if (!src || !this._babylon) return null;
     const BABYLON = this._babylon;
+    const tag = (src && src.cloneTag) || 'paladin';
     // Backward-compat with the pre-multi-mesh _paladinSource shape that
     // only stashed `mesh`. The retrofit + standee-build paths populate
     // `meshes` going forward.
@@ -5009,7 +5063,7 @@ export class Renderer3D {
     let cloneRoot = null;
     if (typeof BABYLON.TransformNode === 'function') {
       try {
-        cloneRoot = new BABYLON.TransformNode(`paladin_${id}`, this._scene || null);
+        cloneRoot = new BABYLON.TransformNode(`${tag}_${id}`, this._scene || null);
       } catch { cloneRoot = null; }
     }
     const ownsRootNode = !!cloneRoot;
@@ -5021,9 +5075,24 @@ export class Renderer3D {
     let primarySkinnedClone = null;
     for (const srcMesh of srcMeshes) {
       if (!srcMesh || typeof srcMesh.clone !== 'function') continue;
-      const name = `paladin_${id}_${srcMesh.name || 'mesh'}`;
+      const name = `${tag}_${id}_${srcMesh.name || 'mesh'}`;
       const childClone = srcMesh.clone(name);
       if (!childClone) continue;
+      // Per-standee colour tint (blank mannequin → owner colour). Clone the
+      // shared material first so tinting one standee doesn't recolour them all.
+      if (opts.tintColor && childClone.material
+        && typeof childClone.material.clone === 'function' && BABYLON.Color3) {
+        const tinted = childClone.material.clone(`${tag}_${id}_mat`);
+        if (tinted) {
+          const [r, g, b] = cssHexToRgb01(opts.tintColor);
+          const col = new BABYLON.Color3(r, g, b);
+          // glTF imports as PBRMaterial (albedoColor); StandardMaterial stubs
+          // use diffuseColor. Set whichever the material exposes.
+          if ('albedoColor' in tinted)  tinted.albedoColor  = col;
+          if ('diffuseColor' in tinted) tinted.diffuseColor = col;
+          childClone.material = tinted;
+        }
+      }
       if (typeof childClone.setEnabled === 'function') childClone.setEnabled(true);
       childClone.isPickable = false;
       if (typeof childClone.renderingGroupId !== 'undefined') childClone.renderingGroupId = 0;
@@ -5070,11 +5139,16 @@ export class Renderer3D {
     }
 
     // Scale + rotate + position on the root. Children inherit transforms.
-    const scale = (typeof this._paladinScale === 'number' && this._paladinScale > 0)
-      ? this._paladinScale : PALADIN_BASE_SCALE;
-    const feetOffsetLocal = (typeof this._paladinFeetOffset === 'number'
-      && Number.isFinite(this._paladinFeetOffset))
-      ? this._paladinFeetOffset : 0;
+    // Each rig carries its own scale/feetOffset (computed at load from its
+    // bbox); fall back to the paladin globals/base for older sources.
+    const srcScale = (typeof src.scale === 'number' && src.scale > 0) ? src.scale
+      : (typeof this._paladinScale === 'number' && this._paladinScale > 0)
+        ? this._paladinScale : PALADIN_BASE_SCALE;
+    const scale = srcScale;
+    const feetOffsetLocal = (typeof src.feetOffset === 'number' && Number.isFinite(src.feetOffset))
+      ? src.feetOffset
+      : (typeof this._paladinFeetOffset === 'number' && Number.isFinite(this._paladinFeetOffset))
+        ? this._paladinFeetOffset : 0;
     if (BABYLON.Vector3) {
       cloneRoot.scaling  = new BABYLON.Vector3(scale, scale, scale);
       cloneRoot.rotation = new BABYLON.Vector3(0, PALADIN_YAW, 0);
@@ -5387,6 +5461,124 @@ export class Renderer3D {
       for (const m of clone.childMeshes || []) this._addShadowCaster(m);
       standee.paladinClone = clone;
       // Attach weapon / horse now that the rig (and its bones) exist.
+      this._syncStandeeWeapon(standee, ent);
+      this._syncStandeeHorse(standee, ent);
+      upgraded++;
+    }
+    return upgraded;
+  }
+
+  /** First loaded fallback-rig source for an entity (the earliest cascade
+   *  candidate already in _rigSources), or null. Synchronous — does NOT trigger
+   *  loads (that's _ensureFallbackRig). */
+  _loadedFallbackRigFor(entity) {
+    for (const file of fallbackRigCandidates(entity)) {
+      const src = this._rigSources.get(file);
+      if (src) return src;
+    }
+    return null;
+  }
+
+  /** Kick the async load of an entity's fallback rig, one cascade step per
+   *  call. Loads the first candidate that isn't already loaded / in-flight /
+   *  known-missing; when a candidate 404s it's marked missing and the next
+   *  call advances to the following candidate (the per-frame standee sync keeps
+   *  calling until a rig lands or the cascade is exhausted → cone+sphere). */
+  _ensureFallbackRig(entity, basePath = 'assets') {
+    if (!this._babylon || !this._scene) return;
+    if (this._loadedFallbackRigFor(entity)) return; // already have one
+    for (const file of fallbackRigCandidates(entity)) {
+      if (this._rigSources.has(file)) return;        // loaded — done
+      if (this._rigLoadPromises.has(file)) return;   // in flight — wait
+      if (this._rigFileMissing.has(file)) continue;  // 404'd — next candidate
+      this._loadFallbackRig(file, basePath);
+      return;
+    }
+  }
+
+  /** Load one rig glb into _rigSources (mesh + skeleton + embedded idle, scaled
+   *  to the standee target). Resolves to the source or null (404 / no geometry).
+   *  Lighter than _loadPaladinModel by design: no walk/run/punch wiring — the
+   *  cascade rigs play only their embedded idle for now. */
+  async _loadFallbackRig(file, basePath = 'assets') {
+    if (this._rigLoadPromises.has(file)) return this._rigLoadPromises.get(file);
+    const BABYLON = this._babylon;
+    const promise = (async () => {
+      await this._ensureBabylonLoaders();
+      if (!BABYLON.SceneLoader || typeof BABYLON.SceneLoader.ImportMeshAsync !== 'function') {
+        return null;
+      }
+      let result;
+      try {
+        result = await BABYLON.SceneLoader.ImportMeshAsync(
+          null, `${basePath}/${PALADIN_MODEL_DIR}`, file, this._scene,
+          this._glbProgressHandler('rig'),
+        );
+      } catch (err) {
+        // Most commonly a 404 for a `<type>-idle.glb` that doesn't exist —
+        // expected; the cascade falls through to the mannequin.
+        console.info(`[Renderer3D] rig ${file} unavailable; cascading.`, err?.message || err);
+        this._rigFileMissing.add(file);
+        return null;
+      }
+      const meshes = (result.meshes || []).filter(m =>
+        m && typeof m.getTotalVertices === 'function' && m.getTotalVertices() > 0);
+      if (meshes.length === 0) { this._rigFileMissing.add(file); return null; }
+      const skinned = meshes.find(m => m.skeleton) || meshes[0];
+      const skeleton = skinned.skeleton
+        || (Array.isArray(result.skeletons) ? result.skeletons[0] : null) || null;
+      const groups = result.animationGroups || [];
+      const idleGroup = groups.find(g => g && /idle|mixamo/i.test(g.name || '')) || groups[0] || null;
+      for (const m of meshes) {
+        if (typeof m.setEnabled === 'function') m.setEnabled(false);
+        m.isPickable = false;
+      }
+      stripRootBoneTranslation(idleGroup);
+      if (idleGroup && typeof idleGroup.start === 'function') {
+        idleGroup.weight = 1.0;
+        idleGroup.start(true, 1.0);
+      }
+      const { scale, feetOffset } = this._normalisePaladinSource(meshes);
+      const transformNodes = Array.isArray(result.transformNodes) ? result.transformNodes.slice() : [];
+      const src = {
+        mesh: skinned, meshes, skeleton, idleGroup, transformNodes,
+        scale, feetOffset,
+        cloneTag: file.replace(/-idle\.glb$|\.glb$/, '') || 'rig',
+        tintable: file === MANNEQUIN_RIG_FILE,
+      };
+      this._rigSources.set(file, src);
+      // Retrofit standees that were waiting on this rig.
+      this._upgradeStandeesToFallbackRig();
+      return src;
+    })();
+    this._rigLoadPromises.set(file, promise);
+    return promise;
+  }
+
+  /** Retrofit standees whose entity should use a now-loaded fallback rig
+   *  (mirrors _upgradeHeroStandeesToPaladin for the cascade rigs). The clone is
+   *  stored in standee.paladinClone so the existing dispose / shadow / x-ray
+   *  paths handle it with no extra plumbing. */
+  _upgradeStandeesToFallbackRig() {
+    if (!this._entityStandees || !this.state?.entities) return 0;
+    const byId = new Map();
+    for (const e of this.state.entities) if (e && e.id) byId.set(e.id, e);
+    let upgraded = 0;
+    for (const [id, standee] of this._entityStandees) {
+      if (!standee || standee.paladinClone) continue;
+      const ent = byId.get(id);
+      if (!ent || unitUsesPaladinModel(ent)) continue; // paladins use their own path
+      const src = this._loadedFallbackRigFor(ent);
+      if (!src) continue;
+      const clone = this._buildRigClone(ent, standee.plane, src,
+        src.tintable ? { tintColor: this._ownerColorFor(ent) } : {});
+      if (!clone) continue;
+      if (standee.plane)  standee.plane.visibility  = 0;
+      if (standee.sphere) standee.sphere.visibility = 0;
+      if (standee.plane)  this._removeShadowCaster(standee.plane);
+      if (standee.sphere) this._removeShadowCaster(standee.sphere);
+      for (const m of clone.childMeshes || []) this._addShadowCaster(m);
+      standee.paladinClone = clone;
       this._syncStandeeWeapon(standee, ent);
       this._syncStandeeHorse(standee, ent);
       upgraded++;
@@ -9688,6 +9880,24 @@ export class Renderer3D {
         for (const m of clone.childMeshes || []) this._addShadowCaster(m);
         standee.paladinClone = clone;
       }
+    } else if (!unitUsesPaladinModel(entity)) {
+      // Non-paladin unit: cascade <type>-idle.glb → mannequin → cone+sphere.
+      // Kick the async load; clone synchronously if a rig is already in hand,
+      // otherwise _upgradeStandeesToFallbackRig retrofits when it lands.
+      this._ensureFallbackRig(entity);
+      const rig = this._loadedFallbackRigFor(entity);
+      if (rig) {
+        const clone = this._buildRigClone(entity, cone, rig,
+          rig.tintable ? { tintColor: ownerColor } : {});
+        if (clone) {
+          cone.visibility   = 0;
+          sphere.visibility = 0;
+          this._removeShadowCaster(cone);
+          this._removeShadowCaster(sphere);
+          for (const m of clone.childMeshes || []) this._addShadowCaster(m);
+          standee.paladinClone = clone;
+        }
+      }
     }
 
     this._positionStandee(standee, entity);
@@ -9754,6 +9964,11 @@ export class Renderer3D {
         standee.plane.metadata.col = e.col;
         standee.plane.metadata.row = e.row;
       }
+      // Non-paladin units cascade to a fallback rig (<type>-idle.glb →
+      // mannequin). Re-kick each pass so the cascade advances across frames
+      // (a missing type file 404s, then the mannequin loads); no-op once a rig
+      // is in hand. Cheap — early-returns the moment a rig is loaded.
+      if (!unitUsesPaladinModel(e) && !standee.paladinClone) this._ensureFallbackRig(e);
       // Weapon-in-hand (G6) and mount (G5) follow the entity's equipment /
       // items each pass. Both no-op until the paladin clone exists (GLB load)
       // and short-circuit when already in the desired state, so this is cheap.
