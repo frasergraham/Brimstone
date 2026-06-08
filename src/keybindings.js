@@ -39,7 +39,7 @@ export const SHORTCUTS = Object.freeze([
   { keys: 'Shift + ↑/↓', label: 'Zoom in / out' },
   { keys: 'Tab',              label: 'Cycle to the next unit' },
   { keys: 'Shift + Tab',      label: 'Cycle to the previous unit' },
-  { keys: 'F',                label: 'Focus the camera on the selected unit' },
+  { keys: 'F',                label: 'Focus: zoom to selection (or all your units)' },
   { keys: 'M',                label: 'Fit map to view (again: orient north-up)' },
   { keys: 'X',                label: 'Clear the selected unit’s actions' },
   { keys: 'Space',            label: 'Next step (replay)' },
@@ -365,11 +365,11 @@ class KeybindingManager {
       case 'cycle-unit':
         ui?._cycleSelection?.(action.dir);
         break;
-      case 'focus-unit': {
-        const sel = ui?._selectedEntity;
-        if (sel) this._camera(() => ui._centerOnEntity(sel));
+      case 'focus-unit':
+        // Reuse the "Focus" map control: zoom to the selected unit, or frame
+        // all of the player's units when nothing is selected.
+        document.getElementById('zoom-me')?.click();
         break;
-      }
       case 'fit-map':
         // Reuse the fit button so M matches it exactly: tap frames the map;
         // tapping again when already framed orients north-up. The handler has
