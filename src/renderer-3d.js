@@ -4923,27 +4923,30 @@ export class Renderer3D {
    *  `_disposePaladinClone`. The walking source's skeleton is SHARED
    *  across every ghost — they all march in step at the same animation
    *  frame, which reads fine for a planning preview. */
-  _buildWalkingGhostClone(entity, parent) {
-    // Ghost uses PALADIN's mesh (since walking.glb is animation-only with
-    // no embedded mesh) bound to WALKING's separate skeleton. Walking's
-    // skeleton is driven by the native walkGroup; the live paladin's
-    // skeleton runs idle. Two skeletons → ghost animates walking
-    // independently of the live paladin's idle. Mixamo bone ordering
-    // matches between paladin-idle.glb and walking.glb so the skinning
-    // indices map cleanly across the skeleton swap.
+  _buildWalkingGhostClone(entity, parent, rigSrc = this._paladinSource) {
+    // Decoupled ghost: clone THIS rig's mesh but bind it to a skeleton driven
+    // by walking.glb's animated TransformNodes, so the ghost walks the planned
+    // path while the live unit (which shares rigSrc.skeleton) stays idle. Works
+    // for any rig — paladin, mannequin, zombie — because the per-rig ghost
+    // skeleton is a clone of THAT rig's skeleton (preserving its skin indices),
+    // with each bone relinked to walking's matching TN by name.
     const walking = this._walkingSource;
-    const paladin = this._paladinSource;
-    if (!this._babylon || !paladin) return null;
+    const rig = rigSrc;
+    if (!this._babylon || !rig) return null;
     const BABYLON = this._babylon;
-    // Mesh always from paladin (the only one with geometry).
-    const srcMeshes = Array.isArray(paladin.meshes) && paladin.meshes.length > 0
-      ? paladin.meshes
-      : (paladin.mesh ? [paladin.mesh] : []);
+    const srcMeshes = Array.isArray(rig.meshes) && rig.meshes.length > 0
+      ? rig.meshes
+      : (rig.mesh ? [rig.mesh] : []);
     if (srcMeshes.length === 0) return null;
-    // Prefer walking's skeleton so the ghost animates independently.
-    // Fall back to paladin's if walking didn't export one (defensive).
-    const ghostSkeleton = (walking && walking.skeleton) || paladin.skeleton;
-    const src = { meshes: srcMeshes, mesh: paladin.mesh, skeleton: ghostSkeleton };
+    let ghostSkeleton = rig._ghostSkeleton;
+    if (!ghostSkeleton && rig.skeleton && walking
+      && Array.isArray(walking.transformNodes) && walking.transformNodes.length) {
+      ghostSkeleton = this._buildGhostSkeletonFromWalkingTNs(rig.skeleton, walking.transformNodes);
+      rig._ghostSkeleton = ghostSkeleton;
+    }
+    // Fall back to walking's own skeleton, then the rig's (defensive).
+    ghostSkeleton = ghostSkeleton || (walking && walking.skeleton) || rig.skeleton;
+    const src = { meshes: srcMeshes, mesh: rig.mesh, skeleton: ghostSkeleton };
     const id = entity?.id ?? 'unknown';
 
     let cloneRoot = null;
@@ -4986,13 +4989,16 @@ export class Renderer3D {
       primarySkinnedClone.skeleton = src.skeleton;
     }
 
-    // Match the live paladin's scale/yaw + feet-on-cone-bottom anchor so
-    // the ghost reads as the same character at the same height.
-    const scale = (typeof this._paladinScale === 'number' && this._paladinScale > 0)
-      ? this._paladinScale : PALADIN_BASE_SCALE;
-    const feetOffsetLocal = (typeof this._paladinFeetOffset === 'number'
-      && Number.isFinite(this._paladinFeetOffset))
-      ? this._paladinFeetOffset : 0;
+    // Match the live unit's scale/yaw + feet-on-cone-bottom anchor so the ghost
+    // reads as the same character at the same height. Each rig carries its own
+    // scale/feetOffset.
+    const scale = (typeof rig.scale === 'number' && rig.scale > 0) ? rig.scale
+      : (typeof this._paladinScale === 'number' && this._paladinScale > 0)
+        ? this._paladinScale : PALADIN_BASE_SCALE;
+    const feetOffsetLocal = (typeof rig.feetOffset === 'number' && Number.isFinite(rig.feetOffset))
+      ? rig.feetOffset
+      : (typeof this._paladinFeetOffset === 'number' && Number.isFinite(this._paladinFeetOffset))
+        ? this._paladinFeetOffset : 0;
     if (BABYLON.Vector3) {
       cloneRoot.scaling  = new BABYLON.Vector3(scale, scale, scale);
       cloneRoot.rotation = new BABYLON.Vector3(0, PALADIN_YAW, 0);
@@ -13599,10 +13605,8 @@ export class Renderer3D {
         ghostClone = this._buildWalkingGhostClone(ent, cone);
       } else if (!unitUsesPaladinModel(ent)) {
         const rigSrc = this._loadedFallbackRigFor(ent);
-        if (rigSrc) {
-          ghostClone = this._buildRigClone(ent, cone, rigSrc,
-            rigSrc.tintable ? { tintColor: this._ownerColorFor(ent) } : {});
-        }
+        // Decoupled walking ghost (walks the path while the live unit idles).
+        if (rigSrc) ghostClone = this._buildWalkingGhostClone(ent, cone, rigSrc);
       }
       {
         if (ghostClone) {
