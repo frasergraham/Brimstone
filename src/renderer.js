@@ -647,10 +647,15 @@ export class Renderer {
     this._startAnimLoop();
   }
 
-  /** Slide an entity icon from one hex to another (opponent move feedback). */
-  addMoveAnim(entityId, fromCol, fromRow, toCol, toRow, entityType, owner, title = null) {
+  /** Slide an entity icon from one hex to another (opponent move feedback).
+   *  fromSlot/toSlot anchor the slide on the unit's actual sub-hex slot at each
+   *  end, so the icon travels slot→slot rather than popping to the hex centre. */
+  addMoveAnim(entityId, fromCol, fromRow, toCol, toRow, entityType, owner, title = null, _path = null, fromSlot = 0, toSlot = 0) {
     const from = this._toCanvas(fromCol, fromRow);
     const to   = this._toCanvas(toCol,   toRow);
+    const hsScale = this.hexSize / 30;
+    const fOff = slotPixelOffset(fromSlot);
+    const tOff = slotPixelOffset(toSlot);
     const portraitId = entityType === EntityType.SURVIVOR
       ? Renderer.survivorAssetId(title)
       : entityType; // non-survivor type values match asset ids directly
@@ -659,8 +664,8 @@ export class Renderer {
       entityId,
       owner,
       fromCol, fromRow, toCol, toRow,
-      fromX: from.x, fromY: from.y,
-      toX:   to.x,   toY:   to.y,
+      fromX: from.x + fOff.x * hsScale, fromY: from.y + fOff.y * hsScale,
+      toX:   to.x   + tOff.x * hsScale, toY:   to.y   + tOff.y * hsScale,
       glyph: entityGlyph(entityType),
       color: ENTITY_COLOR[entityType],
       portraitId,
@@ -3626,6 +3631,14 @@ const SLOT_DIR_2D = Object.freeze([
   Object.freeze({ x:  1,    y:  0 }),          // 6 — E
 ]);
 const SLOT_RADIUS_PX = 9;
+
+// Pixel offset of a single sub-hex slot (at the hexSize=30 baseline; callers
+// scale by hexSize/30). Used to anchor a move animation's start/end on the
+// unit's actual slot instead of the hex centre.
+function slotPixelOffset(slot) {
+  const d = SLOT_DIR_2D[slot] ?? SLOT_DIR_2D[0];
+  return { x: d.x * SLOT_RADIUS_PX, y: d.y * SLOT_RADIUS_PX };
+}
 
 // Resolve each unit on a hex to a distinct pixel offset from the hex centre,
 // honoring its authoritative `slot` and falling back to the next free slot on

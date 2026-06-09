@@ -9,10 +9,10 @@ import {
   deriveBlockedSlots, decomposeTileType,
 } from '../src/tiles.js';
 import { OUTER_SLOTS, roadFaceSlots } from '../src/hex-slots.js';
-import { assignSlotOnTile } from '../src/actions.js';
+import { assignSlotOnTile, executeMove } from '../src/actions.js';
 import { createMinion } from '../src/entities.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
-import { hexKey } from '../src/hex.js';
+import { hexKey, getNeighbors } from '../src/hex.js';
 
 describe('deriveBlockedSlots — forests', () => {
   test('forest places treeCountForTile slots, none on a road face nor centre', () => {
@@ -112,6 +112,44 @@ describe('assignSlotOnTile — authoritative entity slots', () => {
     state.entities.push(u);
     assignSlotOnTile(state, u);
     assert.ok(!t.blockedSlots.includes(u.slot));
+  });
+});
+
+describe('executeMove surfaces the destination slot (move-animation contract)', () => {
+  // Clear an adjacent tile to plain grass so the hero can step onto it.
+  function clearGrass(state, col, row) {
+    const t = state.tiles.get(hexKey(col, row));
+    decomposeTileType(t, TileType.GRASS);
+    t.buildingFootprintOf = null; t.footprintHexes = []; t.blockedSlots = [];
+    return t;
+  }
+
+  test('result.slot matches the actor’s assigned slot after the move', () => {
+    const state = new GameState(true, true);
+    const hero = state.hero;
+    const n = getNeighbors(hero.col, hero.row).find(({ col, row }) =>
+      state.tiles.get(hexKey(col, row)));
+    clearGrass(state, n.col, n.row);
+    const r = executeMove(state, hero, n.col, n.row);
+    assert.equal(r.success, true);
+    assert.equal(typeof r.slot, 'number');
+    assert.equal(r.slot, hero.slot);
+    assert.equal(r.slot, 0, 'lone arrival lands on the centre slot');
+  });
+
+  test('moving onto an occupied tile reports a distinct destination slot', () => {
+    const state = new GameState(true, true);
+    const hero = state.hero;
+    const n = getNeighbors(hero.col, hero.row).find(({ col, row }) =>
+      state.tiles.get(hexKey(col, row)));
+    clearGrass(state, n.col, n.row);
+    const sitter = createMinion(n.col, n.row, hero.ownerId, state);
+    sitter.owner = hero.owner; sitter.slot = 0;
+    state.entities.push(sitter);
+    const r = executeMove(state, hero, n.col, n.row);
+    assert.equal(r.success, true);
+    assert.equal(r.slot, hero.slot);
+    assert.notEqual(r.slot, sitter.slot);
   });
 });
 

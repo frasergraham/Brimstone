@@ -1736,6 +1736,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         // accurate across every segment.
         for (const { ev, preSnap, path } of moveAnims) {
           const lastPos = path[path.length - 1];
+          const destSlot = ev.result?.slot ?? 0;
           renderer.addMoveAnim(
             ev.action.entityId,
             preSnap.col, preSnap.row,
@@ -1743,9 +1744,10 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             preSnap.type, preSnap.owner,
             preSnap.title ?? null,
             path, // full waypoint list
+            preSnap.slot ?? 0, destSlot, // source → destination sub-hex slot
           );
           const ent = displayEntities.find(e => e.id === ev.action.entityId);
-          if (ent) { ent.col = lastPos.col; ent.row = lastPos.row; }
+          if (ent) { ent.col = lastPos.col; ent.row = lastPos.row; ent.slot = destSlot; }
         }
         state.entities = displayEntities;
         redrawFn();
@@ -1758,15 +1760,23 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             if (hop >= path.length) continue;
             const fromPos = hop === 0 ? preSnap : path[hop - 1];
             const toPos   = path[hop];
+            const isLastHop = hop === path.length - 1;
+            const destSlot = ev.result?.slot ?? 0;
+            // Only the very first point uses the source slot and the very last
+            // the destination slot; intermediate hops pass through hex centres.
+            const fromSlot = hop === 0 ? (preSnap.slot ?? 0) : 0;
+            const toSlot   = isLastHop ? destSlot : 0;
             renderer.addMoveAnim(
               ev.action.entityId,
               fromPos.col, fromPos.row,
               toPos.col, toPos.row,
               preSnap.type, preSnap.owner,
               preSnap.title ?? null,
+              null, // no path — 2D animates hops externally
+              fromSlot, toSlot,
             );
             const ent = displayEntities.find(e => e.id === ev.action.entityId);
-            if (ent) { ent.col = toPos.col; ent.row = toPos.row; }
+            if (ent) { ent.col = toPos.col; ent.row = toPos.row; ent.slot = toSlot; }
           }
           state.entities = displayEntities;
           redrawFn();
@@ -7355,7 +7365,7 @@ function _createMpClient() {
 
       // Snapshot entity positions before update so we can animate moves
       const oldPos = new Map();
-      for (const e of state.entities) oldPos.set(e.id, { col: e.col, row: e.row });
+      for (const e of state.entities) oldPos.set(e.id, { col: e.col, row: e.row, slot: e.slot ?? 0 });
 
       Object.assign(state, mirrorState);
       state.hero      = mirrorState.hero;
@@ -7367,7 +7377,8 @@ function _createMpClient() {
         for (const e of state.entities) {
           const old = oldPos.get(e.id);
           if (old && (old.col !== e.col || old.row !== e.row)) {
-            renderer.addMoveAnim(e.id, old.col, old.row, e.col, e.row, e.type, e.owner, e.title ?? null);
+            renderer.addMoveAnim(e.id, old.col, old.row, e.col, e.row, e.type, e.owner, e.title ?? null,
+              null, old.slot ?? 0, e.slot ?? 0);
           }
         }
       }

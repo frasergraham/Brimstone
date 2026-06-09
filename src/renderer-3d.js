@@ -10552,7 +10552,7 @@ export class Renderer3D {
    *  standee — the next draw() will snap the entity to its destination
    *  position anyway via `_positionStandee`, so resolution can't get stuck
    *  on a missing animation. */
-  addMoveAnim(entityId, fromCol, fromRow, toCol, toRow, _type, _owner, _title, path = null) {
+  addMoveAnim(entityId, fromCol, fromRow, toCol, toRow, _type, _owner, _title, path = null, fromSlot = 0, toSlot = 0) {
     if (!this._scene || !this._babylon) return;
     const standee = this._entityStandees.get(entityId);
     if (!standee) return;
@@ -10572,6 +10572,15 @@ export class Renderer3D {
       waypoints.push({ col: toCol, row: toRow });
     }
     const worldPts = waypoints.map(p => hexToWorld(p.col, p.row));
+    // Anchor the polyline's first/last points on the unit's actual sub-hex slot
+    // so the cone slides slot→slot instead of popping to the hex centre at the
+    // ends. Intermediate waypoints stay centred (the unit passes through the
+    // middle of the hexes it transits).
+    const fOff = TILE_SLOTS[fromSlot] ?? TILE_SLOTS[CENTRE_SLOT_INDEX];
+    const tOff = TILE_SLOTS[toSlot]   ?? TILE_SLOTS[CENTRE_SLOT_INDEX];
+    worldPts[0] = { x: worldPts[0].x + fOff.x, z: worldPts[0].z + fOff.z };
+    const _li = worldPts.length - 1;
+    worldPts[_li] = { x: worldPts[_li].x + tOff.x, z: worldPts[_li].z + tOff.z };
     const { x: fromX, z: fromZ } = worldPts[0];
     const { x: toX,   z: toZ   } = worldPts[worldPts.length - 1];
     // Playback-speed multiplier (cinematic/fast/vfast). Applied below to both

@@ -705,10 +705,12 @@ export function executeMove(state, actor, targetCol, targetRow) {
   if (encounterLog.length) log.push(...encounterLog);
 
   // The actor arrived on a new tile — pick its sub-hex slot around the units and
-  // blocked slots already there. (walkedPath is non-empty here.)
+  // blocked slots already there. (walkedPath is non-empty here.) `slot` is
+  // surfaced on the result so the renderer can animate from the source slot to
+  // this destination slot instead of snapping through the hex centre.
   assignSlotOnTile(state, actor);
 
-  return { success: true, log, cost: 1, path: walkedPath, blockedBy, blockedByFort, encounterLog, encounterSurvivor };
+  return { success: true, log, cost: 1, path: walkedPath, slot: actor.slot, blockedBy, blockedByFort, encounterLog, encounterSurvivor };
 }
 
 export function executeExplore(state, actor) {
