@@ -14,7 +14,6 @@ import {
 } from './building-render.js';
 import { ENTITY_COLOR, EntityType, SurvivorAbility, isLeaderType } from './entities.js';
 import { getVisiblePositions, sightRange, computeLineOfSight, hasLineOfSight } from './actions.js';
-import { PlanActionType } from './planner.js';
 import { getFaction } from './factions.js';
 import { getFactionTheme, NEUTRAL_NODE_FILL } from './theme.js';
 import { nodeController, Phase } from './game.js';
@@ -1480,44 +1479,26 @@ export class Renderer {
       this._drawHighlight(h.col, h.row, 'rgba(200,80,80,0.14)');
     }
 
-    // Guard zone highlights — light orange on the hexes a guarding unit covers.
-    //   Playback: units actually in guard stance (guarding > 0) at their live hex.
-    //   Planning: units with a queued GUARD action, previewed at their projected
-    //     hex (after any planned moves) so you see the reach before submitting.
-    // Each source is { col, row, gRange }; the zone is drawn the same way for both.
-    const guardSources = [];
-    const hiddenFaction = humanIsHero ? 'witch' : (humanIsWitch ? 'hero' : null);
+    // Guard zone highlights — light orange on hexes adjacent to guarding units
+    // Only during resolution playback, not during planning
     if (!state.planningPhase) {
+      const guardZoneKeys = new Set();
+      const hiddenFaction = humanIsHero ? 'witch' : (humanIsWitch ? 'hero' : null);
       for (const e of state.entities) {
         if (!e.alive || !(e.guarding > 0)) continue;
         if (revealedHexes && e.owner === hiddenFaction && !revealedHexes.has(hexKey(e.col, e.row))) continue;
         const gRange = (typeof e.getRange === 'function' ? e.getRange() : (e.range ?? 1));
-        guardSources.push({ col: e.col, row: e.row, gRange });
-      }
-    } else if (this.planGhostSteps?.length) {
-      for (const step of this.planGhostSteps) {
-        if (step.action?.type !== PlanActionType.GUARD) continue;
-        const e = state.entities.find(x => x.id === step.action.entityId);
-        if (!e || !e.alive) continue;
-        const pos = step.positions?.get(e.id) ?? { col: e.col, row: e.row };
-        const gRange = (typeof e.getRange === 'function' ? e.getRange() : (e.range ?? 1));
-        guardSources.push({ col: pos.col, row: pos.row, gRange });
-      }
-    }
-    if (guardSources.length) {
-      const guardZoneKeys = new Set();
-      for (const src of guardSources) {
-        if (src.gRange > 1) {
+        if (gRange > 1) {
           // Ranged guard: reach = full attack range, LOS-gated (matches _checkGuardStrikes).
-          for (const h of hexRange(src.col, src.row, src.gRange)) {
-            if (h.col === src.col && h.row === src.row) continue;
+          for (const h of hexRange(e.col, e.row, gRange)) {
+            if (h.col === e.col && h.row === e.row) continue;
             if (!state.tiles.has(hexKey(h.col, h.row))) continue;
-            if (hasLineOfSight(state, src.col, src.row, h.col, h.row)) {
+            if (hasLineOfSight(state, e.col, e.row, h.col, h.row)) {
               guardZoneKeys.add(hexKey(h.col, h.row));
             }
           }
         } else {
-          for (const n of getNeighbors(src.col, src.row)) {
+          for (const n of getNeighbors(e.col, e.row)) {
             guardZoneKeys.add(hexKey(n.col, n.row));
           }
         }

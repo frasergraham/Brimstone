@@ -82,10 +82,11 @@ import { Renderer } from './renderer.js';
 import { BLOCK_WORD_VARIANTS, pickBlockWord } from './combat-words.js';
 export { BLOCK_WORD_VARIANTS };   // re-exported for existing importers (main.js)
 import { getFactionTheme } from './theme.js';
-import { hexKey, hexDistance, getNeighbors } from './hex.js';
+import { hexKey, hexDistance, getNeighbors, hexRange } from './hex.js';
 import { nodeController, Phase } from './game.js';
 import { findFaction } from './factions.js';
-import { computeLineOfSight } from './actions.js';
+import { computeLineOfSight, hasLineOfSight } from './actions.js';
+import { PlanActionType } from './planner.js';
 import { Side } from './sides.js';
 import { MAP_SIZES, NODE_COLORS } from './map.js';
 import {
@@ -12020,6 +12021,132 @@ export class Renderer3D {
     this._buildObjectiveRings();     // kind:'ring-pulse' layer:'objective-ring'
     this._buildPlanArrows();         // kind:'plan-arrow' layer:'plan-arrow' (move)
     this._buildPlanBattleArrows();   // kind:'plan-arrow' layer:'plan-arrow' (battle)
+    this._syncGuardZone();           // orange perimeter outline around guard coverage
+  }
+
+  /**
+   * Build the guard-zone outline: a single orange line tracing the EXTERIOR
+   * perimeter of the hexes a guarding unit covers (internal edges shared by two
+   * in-zone hexes are skipped), using the same outer-edge walk as the power-node
+   * identifier outline (`_buildNodeGlowMeshes`).
+   *
+   *   • Playback: units actually in guard stance (`guarding > 0`), at their live
+   *     hex — skipped if fogged so a hidden enemy guard isn't revealed.
+   *   • Planning: units with a queued GUARD action, previewed at their projected
+   *     hex (after any planned moves) read from `planGhostSteps`.
+   *
+   * Coverage matches `_checkGuardStrikes`: ranged guards reach their full attack
+   * range, LOS-gated; melee guards cover their six neighbours. Disposable meshes
+   * rebuilt only when the zone changes (signature early-out), like the fill
+   * overlays — cheap when nothing guard-related moved.
+   */
+  _syncGuardZone() {
+    if (!this._scene || !this._babylon) return;
+    const state = this.state;
+
+    // ── Collect { col, row, gRange } guard sources for the current mode. ──
+    const sources = [];
+    if (state?.entities) {
+      if (!state.planningPhase) {
+        for (const e of state.entities) {
+          if (!e?.alive || !(e.guarding > 0)) continue;
+          // Don't reveal a fogged (hidden) unit's coverage during playback.
+          if (this._fogActiveSet?.has(hexKey(e.col, e.row))) continue;
+          const gRange = typeof e.getRange === 'function' ? e.getRange() : (e.range ?? 1);
+          sources.push({ col: e.col, row: e.row, gRange });
+        }
+      } else if (this.planGhostSteps?.length) {
+        for (const step of this.planGhostSteps) {
+          if (step.action?.type !== PlanActionType.GUARD) continue;
+          const e = state.entities.find(x => x.id === step.action.entityId);
+          if (!e?.alive) continue;
+          const pos = step.positions?.get?.(e.id) ?? { col: e.col, row: e.row };
+          const gRange = typeof e.getRange === 'function' ? e.getRange() : (e.range ?? 1);
+          sources.push({ col: pos.col, row: pos.row, gRange });
+        }
+      }
+    }
+
+    // ── Resolve the covered hex set (LOS-gated for ranged guards). ──
+    const zone = new Set();
+    for (const src of sources) {
+      if (src.gRange > 1) {
+        for (const h of hexRange(src.col, src.row, src.gRange)) {
+          if (h.col === src.col && h.row === src.row) continue;
+          if (!state.tiles.has(hexKey(h.col, h.row))) continue;
+          if (hasLineOfSight(state, src.col, src.row, h.col, h.row)) {
+            zone.add(hexKey(h.col, h.row));
+          }
+        }
+      } else {
+        for (const n of getNeighbors(src.col, src.row)) {
+          if (!state.tiles.has(hexKey(n.col, n.row))) continue;
+          zone.add(hexKey(n.col, n.row));
+        }
+      }
+    }
+
+    // Signature early-out — rebuild only when the covered set changes.
+    const sig = Array.from(zone).sort().join('|');
+    if (sig === this._guardZoneSig) return;
+    this._guardZoneSig = sig;
+
+    for (const mesh of (this._guardZoneMeshes ?? [])) mesh.dispose();
+    this._guardZoneMeshes = [];
+    if (zone.size === 0) return;
+
+    const BABYLON = this._babylon;
+    const mat = this._guardZoneMaterial();
+    const Y = 0.03;
+    const SQRT3 = Math.sqrt(3);
+    for (const key of zone) {
+      const [col, row] = key.split(',').map(Number);
+      const { x, z } = hexToWorld(col, row);
+      // Perimeter corners at the true hex vertex radius (1.0) so adjacent
+      // in-zone hexes share vertices exactly and the outline reads as one shape.
+      const corners = [];
+      for (let j = 0; j < 6; j++) {
+        const ca = Math.PI / 6 + j * Math.PI / 3;
+        corners.push({ x: x + Math.cos(ca), z: z + Math.sin(ca) });
+      }
+      for (let i = 0; i < 6; i++) {
+        // Edge i faces outward direction (i+1)·π/3; the neighbour hex centre is
+        // √3 (centre-to-centre) along it. If that neighbour is also in the zone
+        // the edge is internal — skip it so only the exterior perimeter draws.
+        const dirA = (i + 1) * Math.PI / 3;
+        const { col: ncol, row: nrow } = worldToHex(x + SQRT3 * Math.cos(dirA), z + SQRT3 * Math.sin(dirA));
+        if (zone.has(hexKey(ncol, nrow))) continue;
+        const a = corners[i], b = corners[(i + 1) % 6];
+        const tube = BABYLON.MeshBuilder.CreateTube(
+          `guardZone_${col}_${row}_${i}`,
+          {
+            path: [new BABYLON.Vector3(a.x, Y, a.z), new BABYLON.Vector3(b.x, Y, b.z)],
+            radius: 0.045,
+            tessellation: 6,
+            sideOrientation: BABYLON.Mesh.DOUBLESIDE,
+          },
+          this._scene,
+        );
+        tube.parent     = this._mapRoot;
+        tube.isPickable = false;
+        tube.material   = mat;
+        tube.metadata   = { respectsFog: false };
+        this._guardZoneMeshes.push(tube);
+      }
+    }
+  }
+
+  /** Cached emissive-orange material for the guard-zone perimeter outline. */
+  _guardZoneMaterial() {
+    if (this._guardZoneMat) return this._guardZoneMat;
+    const BABYLON = this._babylon;
+    const mat = new BABYLON.StandardMaterial('guardZoneMat', this._scene);
+    mat.diffuseColor  = new BABYLON.Color3(0.92, 0.55, 0.12);
+    mat.emissiveColor = new BABYLON.Color3(0.92, 0.55, 0.12);
+    mat.specularColor = new BABYLON.Color3(0, 0, 0);
+    mat.backFaceCulling = false;
+    this._guardZoneMat = mat;
+    return mat;
   }
 
   /**
