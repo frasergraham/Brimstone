@@ -4754,16 +4754,60 @@ export class UIController {
     track.innerHTML = visible.map(col => this._replayColHtml(col, ++n)).join('');
     if (!visible.length) { wrap.classList.remove('visible'); return; }
     wrap.classList.add('visible');
+    // Mobile defaults to collapsed cards (they otherwise cover the board);
+    // desktop defaults to the full card. A manual toggle is remembered for the
+    // rest of the session. On mobile the body flag also hides the compass and
+    // lifts the cards up (see styles.css mobile block).
+    if (this._replayCollapsed === undefined) this._replayCollapsed = this._isMobileViewport();
+    this._bindReplayCollapse();
+    this._applyReplayCollapse(this._replayCollapsed);
+    if (typeof document !== 'undefined') document.body?.classList?.add('replay-timeline-up');
     this._el('replay-progress')?.classList.add('visible');
     this.setReplayTimelineStep(visible[0].stepIndex);
   }
 
-  /** Build one visible step column's HTML (icons, names, hidden outcomes). */
+  /** Wire the per-card +/- toggle once. Cards are re-rendered every round, so
+   *  the listener is delegated on the (persistent) timeline container. */
+  _bindReplayCollapse() {
+    if (this._replayCollapseBound) return;
+    const wrap = this._el('replay-timeline');
+    if (!wrap || typeof wrap.addEventListener !== 'function') return;
+    wrap.addEventListener('click', (e) => {
+      if (!e.target?.closest?.('.replay-collapse-btn')) return;
+      this._applyReplayCollapse(!this._replayCollapsed);
+    });
+    this._replayCollapseBound = true;
+  }
+
+  /** Collapse or expand every turn card. Collapsed cards show only the action
+   *  that's currently playing (the rest is hidden by CSS); the +/- glyph flips
+   *  to match. The choice is remembered across rounds in `_replayCollapsed`. */
+  _applyReplayCollapse(collapsed) {
+    this._replayCollapsed = !!collapsed;
+    const wrap = this._el('replay-timeline');
+    if (!wrap) return;
+    wrap.classList.toggle('collapsed', this._replayCollapsed);
+    const glyph = this._replayCollapsed ? '+' : '−';
+    const label = this._replayCollapsed ? 'Expand turn card' : 'Collapse turn card';
+    wrap.querySelectorAll?.('.replay-collapse-btn').forEach(b => {
+      b.textContent = glyph;
+      b.setAttribute('aria-label', label);
+    });
+  }
+
+  /** Build one visible step column's HTML (icons, names, hidden outcomes).
+   *  A +/- toggle in the header collapses the card down to just the action
+   *  currently playing (see `_applyReplayCollapse`); the trailing `.replay-more`
+   *  dots are revealed by CSS when several actions are active at once. */
   _replayColHtml(col, displayNum) {
     const rows = col.entries.map((e, j) => this._replayRowHtml(e, j)).join('');
     return `<div class="replay-step-col" data-step="${col.stepIndex}">`
-         + `<div class="replay-step-label">Turn ${displayNum}</div>`
+         + `<div class="replay-step-header">`
+         +   `<div class="replay-step-label">Turn ${displayNum}</div>`
+         +   `<button class="replay-collapse-btn" type="button" aria-label="Collapse turn card">−</button>`
+         + `</div>`
          + rows
+         + `<div class="replay-more" aria-hidden="true">…</div>`
          + `</div>`;
   }
 
@@ -5161,6 +5205,7 @@ export class UIController {
     const track = this._el('replay-timeline-track');
     if (wrap) wrap.classList.remove('visible', 'reviewing');
     if (track) track.innerHTML = '';
+    if (typeof document !== 'undefined') document.body?.classList?.remove('replay-timeline-up');
     this._el('replay-progress')?.classList.remove('visible', 'review');
     const dots = this._el('replay-dots');
     if (dots) dots.innerHTML = '';

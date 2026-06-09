@@ -5466,6 +5466,12 @@ img.plan-step-avatar {
   .replay-block + .replay-block { padding-left: 0.5rem; margin-left: 0.1rem; }
   .replay-ctrl-btn { font-size: 0.8rem; padding: 0.32rem 0.55rem; border-radius: 6px; }
   .replay-ctrl-btn.replay-camera { min-width: 3.8rem; }
+  /* In replay, hide the compass so the turn cards can sit higher and clear
+     more of the board. The body flag is set while the timeline is visible.
+     The progress dots/arrows stay anchored just above the cards. */
+  body.replay-timeline-up #compass-rose { display: none; }
+  body.replay-timeline-up #replay-progress { top: 12px; }
+  body.replay-timeline-up #replay-timeline { top: 36px; }
 }
 .replay-step-label {
   font-size: 0.62rem;
@@ -5476,6 +5482,53 @@ img.plan-step-avatar {
   margin-bottom: 0.35rem;
 }
 .replay-step-col.is-current .replay-step-label { color: var(--text-bright); }
+/* Header row: turn label on the left, +/- collapse toggle on the right. */
+.replay-step-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  margin-bottom: 0.35rem;
+}
+.replay-step-header .replay-step-label { margin-bottom: 0; }
+.replay-collapse-btn {
+  pointer-events: auto;                /* the timeline itself ignores pointers */
+  flex: 0 0 auto;
+  width: 1.3rem;
+  height: 1.3rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: rgba(40, 30, 60, 0.6);
+  border: 1px solid rgba(170, 130, 255, 0.4);
+  border-radius: 5px;
+  color: #d8c8f0;
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.replay-collapse-btn:hover { color: #fff; border-color: rgba(200, 160, 255, 0.7); }
+/* "…" hint shown (collapsed only) when several actions are active at once. */
+.replay-more {
+  display: none;
+  text-align: center;
+  color: var(--text-dim);
+  font-weight: 700;
+  line-height: 1;
+  padding-top: 0.15rem;
+}
+/* Collapsed card: show only the action that's currently playing. */
+#replay-timeline.collapsed .replay-step-entry { display: none; }
+#replay-timeline.collapsed .replay-step-entry.is-acting { display: grid; }
+/* If several actions are active simultaneously (e.g. all moves), keep just the
+   first on screen and let the … below stand in for the rest. */
+#replay-timeline.collapsed .replay-step-entry.is-acting ~ .replay-step-entry.is-acting { display: none; }
+#replay-timeline.collapsed .replay-step-entry.is-acting ~ .replay-step-entry.is-acting ~ .replay-more { display: block; }
+/* No divider/offset on a collapsed card's lone visible entry. */
+#replay-timeline.collapsed .replay-step-entry { border-top: none; margin-top: 0.2rem; padding-top: 0.2rem; }
 .replay-step-empty {
   font-size: 0.7rem;
   color: var(--text-dim);

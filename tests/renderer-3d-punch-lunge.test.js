@@ -129,6 +129,43 @@ describe('Renderer3D.holdPunchAtImpact', () => {
   });
 });
 
+describe('Renderer3D._startRigPunch', () => {
+  test('is a real method (regression: was deleted as "orphaned")', () => {
+    const inst = Object.create(Renderer3D.prototype);
+    assert.equal(typeof inst._startRigPunch, 'function');
+  });
+
+  test('silences locomotion, marks punchPlaying, and starts the one-shot', () => {
+    const inst = Object.create(Renderer3D.prototype);
+    inst._playbackSpeedMul = 1.0;
+    const punch = makeGroupSpy();
+    const idle = makeGroupSpy(), walk = makeGroupSpy(), run = makeGroupSpy();
+    const src = { punchGroup: punch, punchDurationSec: 1.0,
+      idleGroup: idle, walkGroup: walk, runGroup: run, activeGroup: 'idle' };
+
+    assert.equal(inst._startRigPunch(src), true);
+    assert.equal(src.punchPlaying, true);
+    assert.equal(src.activeGroup, 'punch');
+    assert.equal(idle.calls.stop, 1);
+    assert.equal(walk.calls.stop, 1);
+    assert.equal(run.calls.stop, 1);
+    assert.equal(punch.calls.start.length, 1);
+    assert.equal(punch.calls.start[0].loop, false, 'one-shot strike, no loop');
+
+    // The end callback releases the skeleton back to idle/walk.
+    assert.equal(punch.calls.endCbs.length, 1);
+    punch.calls.endCbs[0]();
+    assert.equal(src.punchPlaying, false);
+    assert.equal(src.activeGroup, null);
+  });
+
+  test('no-ops until the punch clip has loaded', () => {
+    const inst = Object.create(Renderer3D.prototype);
+    assert.equal(inst._startRigPunch({}), false);
+    assert.equal(inst._startRigPunch(null), false);
+  });
+});
+
 describe('Renderer3D.resumePunch', () => {
   test('unpauses a frozen punch and resolves when the strike ends', async () => {
     const inst = Object.create(Renderer3D.prototype);
