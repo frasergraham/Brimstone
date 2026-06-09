@@ -12104,7 +12104,9 @@ export class Renderer3D {
 
     const BABYLON = this._babylon;
     const mat = this._guardZoneMaterial();
-    const Y = 0.03;
+    // Sit in the highlight band (well above the road-network apex ~0.09) so the
+    // outline reads cleanly instead of being occluded by terrain/road geometry.
+    const Y = HIGHLIGHT_DISC_Y;
     const SQRT3 = Math.sqrt(3);
     for (const key of zone) {
       const [col, row] = key.split(',').map(Number);
