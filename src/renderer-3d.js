@@ -327,16 +327,17 @@ export const RUNNING_MODEL_FILE = 'running.glb';
 // idle clip embedded, so the loader picks it up at model-load time and
 // _loadIdleAnimation skips (avoids a duplicate import).
 export const IDLE_MODEL_FILE    = 'paladin-idle.glb';
-// Combat strike clip — animation-only Mixamo export (~47k). Retargeted onto
-// the shared paladin skeleton exactly like walking/idle and played during a
-// lunge. Loaded lazily (off the beginLoad critical path) — see
-// `_ensurePunchAnimation`.
+// Combat strike clip — animation-only Mixamo export (~47k). Retargeted onto a
+// rig's skeleton like walking/idle, then cloned per-standee and played during a
+// lunge on the attacker's own clone. Loaded lazily (off the beginLoad critical
+// path) — see `_ensureRigPunch`.
 export const PUNCH_MODEL_FILE   = 'punch.glb';
 // G1 reaction clips — animation-only Mixamo exports loaded the same way as
 // punch.glb. `hit.glb` plays on the loser when damage lands; `block.glb`
-// plays on the defender when the attack whiffs. Same shared-skeleton tradeoff
-// as punch: only one clip plays at a time on the paladin rig, so the strike
-// must have resolved (punch follow-through complete) before a reaction fires.
+// plays on the defender when the attack whiffs. Per-instance like punch: each
+// clip is cloned onto a standee and only one one-shot plays on that unit at a
+// time, so its strike must resolve (punch follow-through complete) before its
+// reaction fires.
 export const HIT_MODEL_FILE     = 'hit.glb';
 export const BLOCK_MODEL_FILE   = 'block.glb';
 
@@ -2124,10 +2125,11 @@ export class Renderer3D {
     this._rigSources      = new Map(); // model file → source
     this._rigLoadPromises = new Map(); // model file → in-flight load (resolves src|null)
     this._rigFileMissing  = new Set(); // files that 404'd — don't re-attempt
-    // The rig source whose punch is currently mid-strike (set by addLungeAnim,
-    // read by hold/resume so the cinematic freezes the ATTACKER's rig, not just
-    // the paladin). Falls back to _paladinSource when unset.
-    this._activePunchSrc  = null;
+    // The per-standee clones whose punch is currently mid-strike (set by
+    // addLungeAnim, read by hold/resume so the cinematic freezes the ATTACKER's
+    // own clone — every standee has its own skeleton + clip groups now). A set
+    // because gang-up combat can have several attackers strike at once.
+    this._activePunchClones = new Set();
     this._engine        = null;
     this._scene         = null;
     this._camera        = null;
@@ -3900,6 +3902,9 @@ export class Renderer3D {
     if (clone) {
       src[`${slot}DurationSec`] = animDurationSeconds(native);
       src[slot] = clone;
+      // slot is 'hitGroup' / 'blockGroup' → the per-clone group key is 'hit' /
+      // 'block'. Propagate onto every standee using this rig.
+      this._propagateClipToUnits(src, slot === 'hitGroup' ? 'hit' : 'block');
     }
     this._disposeWalkingImport(result);
     return src[slot];
@@ -3919,39 +3924,37 @@ export class Renderer3D {
    *  time the damage floater with the impact pose. */
   playReactionAnim(kind, entityId = null) {
     if (kind !== 'hit' && kind !== 'block') return Promise.resolve();
-    const slot = kind === 'hit' ? 'hitGroup' : 'blockGroup';
+    const cloneSlot = kind;                                    // clone.groups key
+    const srcSlot = kind === 'hit' ? 'hitGroup' : 'blockGroup'; // src cache key
     const file = kind === 'hit' ? HIT_MODEL_FILE : BLOCK_MODEL_FILE;
-    // Play on the DEFENDER's own rig (paladin or fallback); default to the
-    // paladin source when no defender id is supplied (back-compat).
+    // Play on the DEFENDER's OWN clone (its own skeleton + clip), so only the
+    // unit that was struck flinches — siblings keep idling.
+    const standee = entityId != null ? this._entityStandees?.get(entityId) : null;
+    const clone = standee && standee.paladinClone;
     const ent = entityId != null && this.state?.entities
       ? this.state.entities.find(e => e && e.id === entityId) : null;
-    const src = (ent && !unitUsesPaladinModel(ent))
-      ? this._loadedFallbackRigFor(ent)
-      : this._paladinSource;
-    if (!src || !src[slot]) {
-      // Lazy load (idempotent) so the next reaction has the clip ready.
-      this._ensureReactionAnimation(slot, file, this._assetsBasePath || 'assets', src);
+    const src = ent ? this._loadedFallbackRigFor(ent) : null;
+    const group = clone && clone.groups && clone.groups[cloneSlot];
+    if (!clone || !group) {
+      // Clip not cloned onto this unit yet — kick the (idempotent) src load so
+      // it propagates for next time, and skip the reaction this once.
+      if (src) this._ensureReactionAnimation(srcSlot, file, this._assetsBasePath || 'assets', src);
       return Promise.resolve();
     }
-    const group = src[slot];
-    // Stop punch/idle/walk/run so the reaction owns the skeleton.
-    if (src.idleGroup && typeof src.idleGroup.stop === 'function') src.idleGroup.stop();
-    if (src.walkGroup && typeof src.walkGroup.stop === 'function') src.walkGroup.stop();
-    if (src.runGroup && typeof src.runGroup.stop === 'function') src.runGroup.stop();
-    if (src.punchGroup && typeof src.punchGroup.stop === 'function') src.punchGroup.stop();
-    src.punchPlaying = false;
-    src.reactionPlaying = true;
-    src.activeGroup = kind;
+    // Stop this unit's punch/idle/walk/run so the reaction owns its skeleton.
+    for (const k of ['idle', 'walk', 'run', 'punch']) clone.groups[k]?.stop?.();
+    clone.oneShotPlaying = true;
+    clone.activeGroup = kind;
     const speedMul = this._playbackSpeedMul ?? 1.0;
     // Compress to ~500ms regardless of source clip length so the reaction
     // doesn't overstay its welcome in the ~6s sequence budget.
-    const dur = Number.isFinite(src[`${slot}DurationSec`]) ? src[`${slot}DurationSec`] : 1.0;
+    const dur = Number.isFinite(clone[`${cloneSlot}DurationSec`]) ? clone[`${cloneSlot}DurationSec`] : 1.0;
     const ratio = (dur * 1000) / (500 * speedMul);
     if (typeof group.stop === 'function') group.stop();
     return new Promise(resolve => {
       const done = () => {
-        src.reactionPlaying = false;
-        src.activeGroup = null;
+        clone.oneShotPlaying = false;
+        clone.activeGroup = null;
         resolve();
       };
       const obs = group.onAnimationGroupEndObservable;
@@ -3973,23 +3976,21 @@ export class Renderer3D {
    *  idle/walk toggle. Used when a lunge is hard-cleared (round snap) so the
    *  rig doesn't freeze mid-strike. Safe when no punch is playing. */
   _stopPaladinPunch() {
-    const src = this._activePunchSrc || this._paladinSource;
-    this._activePunchSrc = null;
-    if (!src) return;
-    if (src.punchGroup && typeof src.punchGroup.stop === 'function') {
-      try { src.punchGroup.stop(); } catch { /* ignore */ }
-    }
-    if (src.punchPlaying) {
-      src.punchPlaying = false;
-      src.activeGroup = null;
+    const clones = this._activePunchClones ? [...this._activePunchClones] : [];
+    if (this._activePunchClones) this._activePunchClones.clear();
+    for (const clone of clones) {
+      const punch = clone?.groups?.punch;
+      if (punch && typeof punch.stop === 'function') {
+        try { punch.stop(); } catch { /* ignore */ }
+      }
+      if (clone) { clone.oneShotPlaying = false; clone.activeGroup = null; }
     }
   }
 
-  /** Frame range [from, to] of a rig's retargeted punch clip, or null when the
-   *  clip hasn't loaded / has a degenerate range. Defaults to the active punch
-   *  rig (the attacker) so the cinematic freezes the right strike. */
-  _punchFrameRange(src = this._activePunchSrc || this._paladinSource) {
-    const punch = src?.punchGroup;
+  /** Frame range [from, to] of a standee clone's punch clip, or null when the
+   *  clip hasn't been cloned in / has a degenerate range. */
+  _clonePunchFrameRange(clone) {
+    const punch = clone?.groups?.punch;
     if (!punch) return null;
     const from = Number.isFinite(punch.from) ? punch.from : 0;
     const to   = Number.isFinite(punch.to)   ? punch.to   : 0;
@@ -3997,47 +3998,52 @@ export class Renderer3D {
     return { from, to };
   }
 
-  /** Freeze an IN-FLIGHT punch on its mid/impact frame and hold it there.
+  /** Freeze EVERY in-flight punch on its mid/impact frame and hold it there.
    *
-   *  Used by the 3D cinematic battle arm: the attacker lunges in and the punch
-   *  starts (via `addLungeAnim` → `_startPaladinPunch`), then this pauses the
-   *  strike at the impact pose while the dice cards read out, after which
-   *  `resumePunch()` carries it through to completion. `punchPlaying` stays set
-   *  so the idle/walk toggle won't grab the shared skeleton mid-freeze.
+   *  Used by the 3D cinematic battle arm: the attacker(s) lunge in and start
+   *  their own punch clip (via `addLungeAnim` → `_startClonePunch`), then this
+   *  pauses each strike at the impact pose while the dice cards read out, after
+   *  which `resumePunch()` carries them through to completion. `oneShotPlaying`
+   *  stays set on each so the locomotion toggle won't grab a unit mid-freeze.
    *
-   *  No-op (returns false) unless a punch is actually playing — so a ranged or
-   *  cone-token attacker (which never started the shared punch) doesn't freeze
-   *  every idle paladin in the scene. The frozen frame is stashed for resume. */
+   *  No-op (returns false) unless at least one punch is actually playing — so a
+   *  ranged or cone-token attacker (which never started a punch) doesn't freeze
+   *  anyone. The frozen frame is stashed for resume. */
   holdPunchAtImpact() {
-    const src = this._activePunchSrc || this._paladinSource;
-    const punch = src?.punchGroup;
-    if (!src || !punch || !src.punchPlaying) return false;
-    const range = this._punchFrameRange(src);
-    if (!range) return false;
-    const impact = range.from + (range.to - range.from) * PUNCH_IMPACT_FRAC;
-    this._frozenPunchImpactFrame = impact;
-    if (typeof punch.goToFrame === 'function') punch.goToFrame(impact);
-    if (typeof punch.pause === 'function') punch.pause();
-    return true;
+    const clones = this._activePunchClones ? [...this._activePunchClones] : [];
+    let held = false;
+    for (const clone of clones) {
+      const punch = clone?.groups?.punch;
+      if (!punch || !clone.oneShotPlaying) continue;
+      const range = this._clonePunchFrameRange(clone);
+      if (!range) continue;
+      const impact = range.from + (range.to - range.from) * PUNCH_IMPACT_FRAC;
+      this._frozenPunchImpactFrame = impact;
+      if (typeof punch.goToFrame === 'function') punch.goToFrame(impact);
+      if (typeof punch.pause === 'function') punch.pause();
+      held = true;
+    }
+    return held;
   }
 
-  /** Resume a punch frozen by `holdPunchAtImpact()` from its impact frame
-   *  through to the end of the clip. Returns a promise that resolves when the
-   *  strike completes (so the cinematic arm can await it before the lunge
-   *  return). Clears `punchPlaying` on completion so idle/walk resume. No-op
-   *  resolve when nothing is frozen. */
+  /** Resume every punch frozen by `holdPunchAtImpact()` from its impact frame
+   *  through to the end of the clip. Returns a promise that resolves when ALL
+   *  the strikes complete (so the cinematic arm can await before the lunge
+   *  return). Clears `oneShotPlaying` per clone on completion so idle/walk
+   *  resume. No-op resolve when nothing is frozen. */
   resumePunch() {
-    const src = this._activePunchSrc || this._paladinSource;
-    const punch = src?.punchGroup;
-    if (!src || !punch || this._frozenPunchImpactFrame == null) return Promise.resolve();
+    const clones = this._activePunchClones
+      ? [...this._activePunchClones].filter(c => c?.groups?.punch && c.oneShotPlaying) : [];
+    if (clones.length === 0 || this._frozenPunchImpactFrame == null) return Promise.resolve();
     this._frozenPunchImpactFrame = null;
-    return new Promise(resolve => {
+    return Promise.all(clones.map(clone => new Promise(resolve => {
+      const punch = clone.groups.punch;
       let settled = false;
       const done = () => {
         if (settled) return;
         settled = true;
-        src.punchPlaying = false;
-        src.activeGroup = null;
+        clone.oneShotPlaying = false;
+        clone.activeGroup = null;
         resolve();
       };
       const obs = punch.onAnimationGroupEndObservable;
@@ -4051,7 +4057,7 @@ export class Renderer3D {
         if (typeof punch.play === 'function') punch.play(false);
         done();
       }
-    });
+    }))).then(() => {});
   }
 
   /** Clone the paladin source skeleton and re-link each cloned bone's
@@ -4357,19 +4363,26 @@ export class Renderer3D {
       cloneRoot = primarySkinnedClone;
     }
 
-    // Share the source skeleton across every clone. Babylon's glTF loader
-    // makes the imported AnimationGroup target TransformNodes, and bones link
-    // to those TransformNodes via _linkedTransformNode. Cloning the skeleton
-    // per-standee leaves the cloned bones still pointing at source nodes —
-    // the bone-name AnimationGroup retarget converter (which looks for Bones,
-    // not TransformNodes) ends up with no matches, falls back to the source
-    // target, and every clone stays in T-pose. Sharing the source skeleton
-    // sidesteps the problem: the source idleGroup (started in _loadPaladinModel)
-    // animates the source skeleton's bones, and every clone that references
-    // that skeleton skins from the same bone matrices. All paladins idle in
-    // unison — fine for a board-game token, far better than T-pose.
-    if (src.skeleton && primarySkinnedClone) {
-      primarySkinnedClone.skeleton = src.skeleton;
+    // Per-INSTANCE skeleton. Each standee gets its own skeleton clone whose
+    // bones relink to its own cloned TransformNodes, plus its own clone of every
+    // animation clip (idle/walk/run/punch/hit/block) targeting those nodes — so
+    // each unit idles, walks, and strikes on its own timeline, never in unison.
+    // (Naively cloning a skeleton leaves the cloned bones pointing at the SOURCE
+    // nodes → every clone mirrors the source in T-pose; the relink in
+    // _cloneRigSkeleton is what makes it independent.) When the rig has no real
+    // skeleton — test stubs, or a TransformNode-less environment — fall back to
+    // sharing the source skeleton so the cone/mesh still renders.
+    let unitSkeleton = null, tnByName = null, groups = null;
+    if (primarySkinnedClone) {
+      const unit = this._cloneRigSkeleton(src, `${tag}_${id}`);
+      if (unit) {
+        unitSkeleton = unit.skeleton;
+        tnByName = unit.byName;
+        primarySkinnedClone.skeleton = unitSkeleton;
+        groups = {};
+      } else if (src.skeleton) {
+        primarySkinnedClone.skeleton = src.skeleton;
+      }
     }
 
     // Scale + rotate + position on the root. Children inherit transforms.
@@ -4399,27 +4412,60 @@ export class Renderer3D {
     }
     if (parent && 'parent' in cloneRoot) cloneRoot.parent = parent;
 
-    return {
+    const clone = {
       mesh: cloneRoot,
       skinnedMesh: primarySkinnedClone,
       childMeshes: childClones,
       ownsRootNode,
-      skeleton: null,
+      skeleton: unitSkeleton,
       animationGroup: null,
-      // Which rig source this clone came from — the per-unit anim toggle reads
-      // it to swap this mesh between the rig's idle / walk / run skeletons.
+      // Per-instance animation state. `groups` holds this standee's own clip
+      // clones (idle/walk/run/punch/hit/block); `activeGroup` is the current
+      // locomotion state; `oneShotPlaying` locks the toggle out while a punch /
+      // reaction owns the skeleton. `rigSrc` is the rig these were cloned from —
+      // async clip loads propagate onto `tnByName` keyed off it.
       rigSrc: src,
+      unitSkeleton,
+      tnByName,
+      groups,
+      activeGroup: null,
+      oneShotPlaying: false,
+      _unitId: id,
     };
+    // Clone whatever clips the rig has loaded so far onto this standee and start
+    // its idle. Only when it got its own skeleton (real Babylon path).
+    if (unitSkeleton && tnByName) this._cloneAllClipsOntoUnit(src, clone);
+    return clone;
   }
 
-  /** Dispose a previously-built paladin clone — every child mesh first
-   *  (cascades materials), then the root transform node if we own it.
-   *  Skeleton + animation group are owned by `_paladinSource` (shared
-   *  across all clones) and live for the renderer's lifetime; no per-
-   *  clone teardown of either. Safe to call when no clone is attached. */
+  /** Dispose a previously-built rig clone — its per-instance animation groups,
+   *  skeleton, and bone TransformNodes (all owned by THIS standee now), every
+   *  child mesh (cascades materials), then the root transform node if we own it.
+   *  Safe to call when no clone is attached. */
   _disposePaladinClone(standee) {
     if (!standee || !standee.paladinClone) return;
     const c = standee.paladinClone;
+    // A mid-strike clone must leave the active-punch set or hold/resume would
+    // dereference a disposed group.
+    if (this._activePunchClones) this._activePunchClones.delete(c);
+    // Per-instance animation teardown: stop + dispose this standee's own clip
+    // clones, its skeleton, and the bone TransformNodes those bones link to.
+    if (c.groups) {
+      for (const g of Object.values(c.groups)) {
+        if (!g) continue;
+        try { g.stop?.(); g.dispose?.(); } catch { /* ignore */ }
+      }
+      c.groups = null;
+    }
+    if (c.unitSkeleton && typeof c.unitSkeleton.dispose === 'function') {
+      try { c.unitSkeleton.dispose(); } catch { /* ignore */ }
+    }
+    if (c.tnByName) {
+      for (const tn of c.tnByName.values()) {
+        if (tn && typeof tn.dispose === 'function') { try { tn.dispose(); } catch { /* ignore */ } }
+      }
+      c.tnByName = null;
+    }
     if (Array.isArray(c.childMeshes)) {
       for (const m of c.childMeshes) {
         if (m && typeof m.dispose === 'function') m.dispose();
@@ -4690,11 +4736,10 @@ export class Renderer3D {
     if (!clone) return null;
     src.walkGroup = clone;
     src.walkSpeedRatio = ratio;
-    src.activeGroup = src.activeGroup || 'idle';
-    // Build a SEPARATE always-walking skeleton from this clip. Units that are
-    // moving swap their mesh onto it (idle units stay on src.skeleton), so a
-    // moving unit walks while its idle siblings don't walk in place.
-    this._buildStateSkeleton(src, clone, 'walkSkel', ratio);
+    // Propagate the walk clip onto every standee already using this rig so each
+    // gets its OWN paused walk clone; the per-unit toggle starts it when that
+    // unit moves (idle siblings keep idling).
+    this._propagateClipToUnits(src, 'walk');
     return clone;
   }
 
@@ -4725,19 +4770,22 @@ export class Renderer3D {
     return byName;
   }
 
-  /** Build a per-rig "state" skeleton that plays `srcGroup` continuously on its
-   *  own cloned TransformNodes — independent of the idle skeleton. A unit shows
-   *  this state by swapping its mesh.skeleton onto `src[slot].skeleton` (valid
-   *  because every state skeleton is a clone of the same source → same bone
-   *  order/indices). Mirrors the proven decoupled-ghost technique. */
-  _buildStateSkeleton(src, srcGroup, slot, speedRatio = 1.0) {
-    if (!src || src[slot] || !src.skeleton || !srcGroup) return src && src[slot];
-    if (typeof src.skeleton.clone !== 'function' || typeof srcGroup.clone !== 'function') return null;
-    const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
-    const byName = this._cloneTransformNodeSet(src.transformNodes, `${src.cloneTag}_${slot}`);
+  /** Clone a rig `src`'s skeleton + bone TransformNode hierarchy for ONE
+   *  standee, so that standee animates independently of every other unit of the
+   *  same rig. Returns `{ skeleton, byName }` (byName = name → cloned-TN Map) or
+   *  null when the rig has no real skeleton (test stubs). Each cloned bone is
+   *  relinked to the standee's OWN TransformNode — the technique proven by
+   *  `_buildGhostSkeletonFromWalkingTNs`. The clip groups the standee plays are
+   *  then cloned onto these same nodes via `_cloneClipOntoTNs`. */
+  _cloneRigSkeleton(src, tag) {
+    const BABYLON = this._babylon;
+    if (!src || !src.skeleton || typeof src.skeleton.clone !== 'function') return null;
+    if (!BABYLON || typeof BABYLON.TransformNode !== 'function') return null;
+    const byName = this._cloneTransformNodeSet(src.transformNodes, tag);
     if (!byName || byName.size === 0) return null;
-    const skel = src.skeleton.clone(`${src.cloneTag}_${slot}_skel`);
+    const skel = src.skeleton.clone(`${tag}_skel`);
     if (!skel || !Array.isArray(skel.bones)) return null;
+    const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
     let relinked = 0;
     for (const bone of skel.bones) {
       if (!bone || !bone.name) continue;
@@ -4748,13 +4796,110 @@ export class Renderer3D {
       relinked++;
     }
     if (relinked === 0) return null;
-    const group = srcGroup.clone(`${src.cloneTag}_${slot}_group`, (old) => {
+    return { skeleton: skel, byName };
+  }
+
+  /** Clone an already-retargeted+rebased rig clip (`srcGroup`) onto one
+   *  standee's cloned TransformNodes (`byName`), so the standee plays that clip
+   *  on its own skeleton without disturbing any sibling. The source group's
+   *  keyframes are copied verbatim (already at the rig's rest height); only the
+   *  target nodes are remapped by bone name. Returns the clone (started then
+   *  rested per `rest`) or null when nothing remapped. */
+  _cloneClipOntoTNs(srcGroup, byName, name, { loop = true, speed = 1.0, rest = 'pause' } = {}) {
+    if (!srcGroup || typeof srcGroup.clone !== 'function' || !byName) return null;
+    const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
+    let remapped = 0;
+    const clone = srcGroup.clone(name, (old) => {
       if (!old || !old.name) return old;
-      return byName.get(old.name) || byName.get(stripDup(old.name)) || old;
+      const m = byName.get(old.name) || byName.get(stripDup(old.name));
+      if (m) { remapped++; return m; }
+      return old;
     });
-    if (group && typeof group.start === 'function') group.start(true, speedRatio);
-    src[slot] = { skeleton: skel, group };
-    return src[slot];
+    if (!clone || remapped === 0) { try { clone?.dispose?.(); } catch { /* ignore */ } return null; }
+    clone._speedRatio = speed;
+    if (typeof clone.start === 'function') clone.start(loop, speed);
+    if (rest === 'stop') clone.stop?.();
+    else if (rest === 'pause') clone.pause?.();
+    // rest === 'play' leaves it running (used for the standee's idle).
+    return clone;
+  }
+
+  /** Slot map: which clone group key each rig-source clip feeds, plus its loop /
+   *  one-shot nature. The single source of truth for both build-time cloning
+   *  (`_cloneAllClipsOntoUnit`) and async propagation (`_propagateClipToUnits`). */
+  _rigClipSlots(src) {
+    return [
+      { slot: 'idle',  group: src.idleGroup,  loop: true,  speed: 1.0,                        oneShot: false },
+      { slot: 'walk',  group: src.walkGroup,  loop: true,  speed: src.walkSpeedRatio || 1.0,  oneShot: false },
+      { slot: 'run',   group: src.runGroup,   loop: true,  speed: src.runSpeedRatio  || 1.0,  oneShot: false },
+      { slot: 'punch', group: src.punchGroup, loop: false, speed: 1.0,                        oneShot: true, durKey: 'punchDurationSec' },
+      { slot: 'hit',   group: src.hitGroup,   loop: false, speed: 1.0,                        oneShot: true, durKey: 'hitGroupDurationSec' },
+      { slot: 'block', group: src.blockGroup, loop: false, speed: 1.0,                        oneShot: true, durKey: 'blockGroupDurationSec' },
+    ];
+  }
+
+  /** Clone every clip the rig `src` has loaded so far onto one standee `clone`'s
+   *  own TransformNodes, populating `clone.groups`. Locomotion clips rest paused;
+   *  one-shots rest stopped. Leaves the standee in its idle state. Clips that
+   *  haven't loaded yet are filled in later by `_propagateClipToUnits`. */
+  _cloneAllClipsOntoUnit(src, clone) {
+    if (!src || !clone || !clone.tnByName) return;
+    clone.groups = clone.groups || {};
+    const id = clone._unitId ?? 'u';
+    for (const { slot, group, loop, speed, oneShot, durKey } of this._rigClipSlots(src)) {
+      if (!group || clone.groups[slot]) continue;
+      const g = this._cloneClipOntoTNs(group, clone.tnByName, `${src.cloneTag}_${id}_${slot}`,
+        { loop, speed, rest: oneShot ? 'stop' : 'pause' });
+      if (!g) continue;
+      clone.groups[slot] = g;
+      if (durKey && Number.isFinite(src[durKey])) clone[`${slot}DurationSec`] = src[durKey];
+    }
+    // Settle into idle (starts the idle clip, stops walk/run).
+    clone.activeGroup = null;
+    this._setCloneAnimState(clone, 'idle');
+  }
+
+  /** Propagate a freshly-loaded rig clip onto every existing standee that uses
+   *  `src` — so units already on screen pick up walk / run / punch / hit / block
+   *  the moment the shared clip lands, each on its own skeleton. `slot` is the
+   *  clone-group key; the clip is read from `src` via `_rigClipSlots`. */
+  _propagateClipToUnits(src, slot) {
+    if (!src || !this._entityStandees) return;
+    const spec = this._rigClipSlots(src).find(s => s.slot === slot);
+    if (!spec || !spec.group) return;
+    for (const [id, standee] of this._entityStandees) {
+      const clone = standee.paladinClone;
+      if (!clone || clone.rigSrc !== src || !clone.tnByName || !clone.groups) continue;
+      if (clone.groups[slot]) continue;
+      const g = this._cloneClipOntoTNs(spec.group, clone.tnByName, `${src.cloneTag}_${id}_${slot}`,
+        { loop: spec.loop, speed: spec.speed, rest: spec.oneShot ? 'stop' : 'pause' });
+      if (!g) continue;
+      clone.groups[slot] = g;
+      if (spec.durKey && Number.isFinite(src[spec.durKey])) clone[`${slot}DurationSec`] = src[spec.durKey];
+    }
+  }
+
+  /** Drive one standee `clone` into a looping locomotion state ('idle' | 'walk'
+   *  | 'run') on its OWN groups: stop the other locomotion clips, (re)start the
+   *  target at its stored speed. No-op when already in that state or the target
+   *  clip hasn't loaded (falls back to idle). One-shots (punch/hit/block) are
+   *  driven separately and set `clone.oneShotPlaying` to lock this out. */
+  _setCloneAnimState(clone, want) {
+    if (!clone || !clone.groups) return;
+    const groups = clone.groups;
+    let target = want;
+    if (!groups[target]) target = 'idle';
+    if (clone.activeGroup === target) return;
+    for (const key of ['idle', 'walk', 'run']) {
+      if (key !== target && groups[key] && typeof groups[key].stop === 'function') groups[key].stop();
+    }
+    const g = groups[target];
+    if (g) {
+      const ratio = g._speedRatio ?? 1.0;
+      if (typeof g.play === 'function') g.play(true);
+      else if (typeof g.start === 'function') g.start(true, ratio);
+    }
+    clone.activeGroup = target;
   }
 
   /** Build the bone-name → target-node lookup for retargeting a clip onto a
@@ -4862,7 +5007,7 @@ export class Renderer3D {
     if (!clone) return null;
     src.runGroup = clone;
     src.runSpeedRatio = ratio;
-    this._buildStateSkeleton(src, clone, 'runSkel', ratio);
+    this._propagateClipToUnits(src, 'run');
     return clone;
   }
 
@@ -4902,93 +5047,63 @@ export class Renderer3D {
     if (clone) {
       src.punchDurationSec = animDurationSeconds(native);
       src.punchGroup = clone;
+      this._propagateClipToUnits(src, 'punch');
     }
     this._disposeWalkingImport(result);
     return src.punchGroup;
   }
 
-  /** Play the (already-loaded) punch clip on rig `src` for one strike: silence
-   *  idle/walk/run so none fight the shared skeleton, mark `punchPlaying` so the
-   *  locomotion toggle yields, and resume idle/walk when the one-shot ends.
-   *  No-op (returns false) until the rig's punch clip has loaded. */
-  _startRigPunch(src) {
-    if (!src || !src.punchGroup) return false;
-    const punch = src.punchGroup;
+  /** Play one standee `clone`'s OWN punch clip for a single strike: silence its
+   *  idle/walk/run so none fight its skeleton, mark `oneShotPlaying` so the
+   *  locomotion toggle yields, and re-resolve idle/walk when the one-shot ends.
+   *  No-op (returns false) until this clone's punch clip has been cloned in. */
+  _startClonePunch(clone) {
+    const punch = clone && clone.groups && clone.groups.punch;
+    if (!punch) return false;
     const speedMul = this._playbackSpeedMul ?? 1.0;
-    const ratio = computePunchSpeedRatio(src.punchDurationSec, PUNCH_TARGET_MS * speedMul);
-    // Hand the skeleton to punch: silence idle + walk + run so none fight it.
-    if (src.idleGroup && typeof src.idleGroup.stop === 'function') src.idleGroup.stop();
-    if (src.walkGroup && typeof src.walkGroup.stop === 'function') src.walkGroup.stop();
-    if (src.runGroup && typeof src.runGroup.stop === 'function') src.runGroup.stop();
-    src.punchPlaying = true;
-    src.activeGroup = 'punch';
+    const dur = Number.isFinite(clone.punchDurationSec) ? clone.punchDurationSec : undefined;
+    const ratio = computePunchSpeedRatio(dur, PUNCH_TARGET_MS * speedMul);
+    // Hand the skeleton to punch: silence this unit's idle + walk + run.
+    for (const k of ['idle', 'walk', 'run']) clone.groups[k]?.stop?.();
+    clone.oneShotPlaying = true;
+    clone.activeGroup = 'punch';
 
-    // Resume the idle/walk toggle once the strike completes. Babylon fires
-    // onAnimationGroupEndObservable for a non-looping group; guard for stubs.
+    // Re-resolve idle/walk once the strike completes (non-looping → fires
+    // onAnimationGroupEndObservable). Guard for stubs.
     const onEnd = () => {
-      src.punchPlaying = false;
-      // Force the next toggle tick to re-resolve idle/walk from scratch.
-      src.activeGroup = null;
+      clone.oneShotPlaying = false;
+      clone.activeGroup = null;
     };
-    if (punch.onAnimationGroupEndObservable
-      && typeof punch.onAnimationGroupEndObservable.addOnce === 'function') {
-      punch.onAnimationGroupEndObservable.addOnce(onEnd);
-    } else if (punch.onAnimationGroupEndObservable
-      && typeof punch.onAnimationGroupEndObservable.add === 'function') {
-      punch.onAnimationGroupEndObservable.add(onEnd);
-    }
+    const obs = punch.onAnimationGroupEndObservable;
+    if (obs && typeof obs.addOnce === 'function') obs.addOnce(onEnd);
+    else if (obs && typeof obs.add === 'function') obs.add(onEnd);
 
     if (typeof punch.stop === 'function') punch.stop();
     if (typeof punch.start === 'function') punch.start(false, ratio);
     return true;
   }
 
-  /** Per-frame walk↔idle swap for the cascade fallback rigs — mirrors
-   *  _maybeTogglePaladinAnimation but keyed per rig source: a rig walks while
-   *  any unit using it is mid-move/lunge, else idles. Shared-skeleton-per-rig,
-   *  so all units of a rig animate together. */
+  /** Per-frame locomotion tick for the cascade rigs — fully per-UNIT now. Each
+   *  standee plays its OWN idle/walk/run clip on its OWN skeleton: a moving unit
+   *  walks while its idle siblings keep idling, and one-shots (punch/reactions)
+   *  lock the unit out via `oneShotPlaying` until they finish. No shared rig
+   *  skeleton, so nothing animates in unison. */
   _maybeToggleFallbackRigAnimation() {
-    // ── Part A: keep the idle clip running on each rig's idle skeleton ──
-    // The idle/walk/run clips always play on their own skeletons; one-shot
-    // punch/reactions still borrow the idle skeleton, so restart idle once they
-    // release it. (Per-unit combat skeletons are a follow-up; for now combat
-    // still plays on the shared idle skeleton.)
-    if (this._rigSources && this._rigSources.size) {
-      for (const src of this._rigSources.values()) {
-        if (src.punchPlaying || src.reactionPlaying) continue;
-        if (src.idleGroup && src.activeGroup !== 'idle') {
-          if (typeof src.idleGroup.play === 'function') src.idleGroup.play(true);
-          else if (typeof src.idleGroup.start === 'function') src.idleGroup.start(true, 1.0);
-          src.activeGroup = 'idle';
-        }
-      }
-    }
-
-    // ── Part B: per-UNIT locomotion ──
-    // Each standee swaps its mesh between its rig's idle skeleton and its
-    // walk/run skeleton based on whether THIS unit is moving — so a moving unit
-    // walks while its idle siblings stand still (no more walking-in-place).
     if (!this._entityStandees || !this._entityStandees.size) return;
     const moveIds = this._activeMoveIds;
     const runIds = (RUNNING_ANIM_ENABLED && this._activeRunMoveIds instanceof Set)
       ? this._activeRunMoveIds : null;
     for (const [id, standee] of this._entityStandees) {
       const clone = standee.paladinClone;
-      const src = clone && clone.rigSrc;
-      const mesh = clone && clone.skinnedMesh;
-      if (!src || !mesh) continue;
-      // While the rig is mid-punch/reaction (shared idle skeleton), keep this
-      // mesh on the idle skeleton so the strike/flinch shows.
-      if (src.punchPlaying || src.reactionPlaying) {
-        if (mesh.skeleton !== src.skeleton) mesh.skeleton = src.skeleton;
-        continue;
-      }
-      let target = src.skeleton; // idle
+      if (!clone || !clone.groups) continue;
+      // A punch / hit / block owns this unit's skeleton — leave it be.
+      if (clone.oneShotPlaying) continue;
+      let want = 'idle';
       if (moveIds && moveIds.has(id)) {
-        if (runIds && runIds.has(id) && src.runSkel) target = src.runSkel.skeleton;
-        else if (src.walkSkel) target = src.walkSkel.skeleton;
+        if (runIds && runIds.has(id) && clone.groups.run) want = 'run';
+        else if (clone.groups.walk) want = 'walk';
       }
-      if (mesh.skeleton !== target) mesh.skeleton = target;
+      this._setCloneAnimState(clone, want);
     }
   }
 
@@ -10665,17 +10780,21 @@ export class Renderer3D {
     }
 
     // Throw the punch clip on top of the slide so the strike reads as a strike,
-    // on the ATTACKER's own rig. Remember it so the cinematic's
-    // holdPunchAtImpact()/resumePunch() freeze the right one. Lazily kick the
-    // punch.glb load (idempotent) — already-resolved → plays now; first-ever
-    // combat may still be downloading, so that lunge is slide-only and the next
-    // punches. Cone-token attackers (no clone) just slide.
+    // on THIS attacker's own clone. Remember the clone so the cinematic's
+    // holdPunchAtImpact()/resumePunch() freeze the right strike. Lazily kick the
+    // punch.glb load (idempotent) — already-loaded+propagated → plays now;
+    // first-ever combat may still be downloading, so that lunge is slide-only
+    // and the next punches. Cone-token attackers (no clone) just slide.
     if (standee.paladinClone) {
-      const ent = this.state?.entities?.find(e => e && e.id === entityId) || null;
-      const rigSrc = ent ? this._loadedFallbackRigFor(ent) : null;
-      this._activePunchSrc = rigSrc;
-      if (rigSrc?.punchGroup) this._startRigPunch(rigSrc);
-      else if (rigSrc) this._ensureRigPunch(rigSrc);
+      const clone = standee.paladinClone;
+      if (clone.groups && clone.groups.punch) {
+        this._startClonePunch(clone);
+        this._activePunchClones.add(clone);
+      } else {
+        const ent = this.state?.entities?.find(e => e && e.id === entityId) || null;
+        const rigSrc = ent ? this._loadedFallbackRigFor(ent) : null;
+        if (rigSrc) this._ensureRigPunch(rigSrc);
+      }
     }
 
     // Ease-OUT: the lunge launches fast and decelerates into the strike
@@ -10821,8 +10940,8 @@ export class Renderer3D {
   /** Immediately snap all lunging entities back home and clear lunge state.
    *  Used between rounds when we don't want the return animation to play. */
   clearAllLungeAnims(skipResolve = false) {
-    // Release the shared skeleton if a strike was mid-swing — otherwise the
-    // idle/walk toggle stays parked behind punchPlaying and the rig freezes.
+    // Release any clones mid-strike — otherwise their locomotion toggle stays
+    // parked behind oneShotPlaying and those units freeze mid-punch.
     this._stopPaladinPunch();
     if (!this._scene) {
       this._activeLungeIds.clear();

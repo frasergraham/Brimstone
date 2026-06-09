@@ -180,59 +180,92 @@ function makeAnimGroup() {
   };
 }
 
-// Per-unit skeleton swap: each standee's mesh swaps between its rig's idle and
-// walk skeletons based on whether THAT unit is moving.
-function makeStandee(src, skeleton) {
-  return { paladinClone: { skinnedMesh: { skeleton }, rigSrc: src } };
+// Per-INSTANCE animation: each standee owns its own clip groups
+// (idle/walk/run/punch/…) and plays them on its own skeleton — the toggle
+// drives each clone's own groups, never a shared skeleton, so a moving unit
+// walks while idle siblings keep idling.
+function makeCloneStandee(keys = ['idle', 'walk', 'run']) {
+  const groups = {};
+  for (const k of keys) groups[k] = makeAnimGroup();
+  return { paladinClone: { groups, activeGroup: null, oneShotPlaying: false } };
 }
+const played = (g) => g.calls.some(c => c[0] === 'play' || c[0] === 'start');
+const stopped = (g) => g.calls.some(c => c[0] === 'stop');
 
-describe('_maybeToggleFallbackRigAnimation — per-unit skeleton swap', () => {
+describe('_maybeToggleFallbackRigAnimation — per-instance clip groups', () => {
   function setup(moveIds = []) {
     const r = newRenderer();
-    const idleSkel = { tag: 'idle' }, walkSkel = { tag: 'walk' };
-    const src = { cloneTag: 'zombie', idleGroup: makeAnimGroup(),
-      skeleton: idleSkel, walkSkel: { skeleton: walkSkel } };
-    r._rigSources.set('zombie-idle.glb', src);
     r._activeMoveIds = new Set(moveIds);
     r._activeLungeIds = new Set();
-    return { r, src, idleSkel, walkSkel };
+    r._activeRunMoveIds = new Set();
+    return r;
   }
 
-  test('only the MOVING unit walks; idle siblings stay on the idle skeleton', () => {
-    const { r, src, idleSkel, walkSkel } = setup(['z1']);
-    const mover  = makeStandee(src, idleSkel);
-    const sitter = makeStandee(src, idleSkel);
+  test('only the MOVING unit walks; idle siblings keep idling', () => {
+    const r = setup(['z1']);
+    const mover = makeCloneStandee();
+    const sitter = makeCloneStandee();
     r._entityStandees = new Map([['z1', mover], ['z2', sitter]]);
     r._maybeToggleFallbackRigAnimation();
-    assert.equal(mover.paladinClone.skinnedMesh.skeleton, walkSkel, 'mover → walk skeleton');
-    assert.equal(sitter.paladinClone.skinnedMesh.skeleton, idleSkel, 'sitter stays on idle skeleton');
+    assert.equal(mover.paladinClone.activeGroup, 'walk', 'mover plays walk');
+    assert.ok(played(mover.paladinClone.groups.walk), 'mover walk started');
+    assert.equal(sitter.paladinClone.activeGroup, 'idle', 'sitter plays idle');
+    assert.ok(played(sitter.paladinClone.groups.idle), 'sitter idle started');
+    assert.ok(!played(sitter.paladinClone.groups.walk), 'sitter never walks');
   });
 
-  test('a moving unit reverts to the idle skeleton when it stops', () => {
-    const { r, src, idleSkel, walkSkel } = setup([]); // nothing moving
-    const standee = makeStandee(src, walkSkel);        // was walking
+  test('a moving unit reverts to idle when it stops', () => {
+    const r = setup([]); // nothing moving
+    const standee = makeCloneStandee();
+    standee.paladinClone.activeGroup = 'walk'; // was walking
     r._entityStandees = new Map([['z1', standee]]);
     r._maybeToggleFallbackRigAnimation();
-    assert.equal(standee.paladinClone.skinnedMesh.skeleton, idleSkel);
+    assert.equal(standee.paladinClone.activeGroup, 'idle');
+    assert.ok(played(standee.paladinClone.groups.idle), 'idle restarted');
+    assert.ok(stopped(standee.paladinClone.groups.walk), 'walk stopped');
   });
 
   test('a lunging (combat) unit does NOT walk — lunge is not a move', () => {
-    const { r, src, idleSkel } = setup([]);  // not in _activeMoveIds
+    const r = setup([]); // not in _activeMoveIds
     r._activeLungeIds = new Set(['z1']);
-    const standee = makeStandee(src, idleSkel);
+    const standee = makeCloneStandee();
     r._entityStandees = new Map([['z1', standee]]);
     r._maybeToggleFallbackRigAnimation();
-    assert.equal(standee.paladinClone.skinnedMesh.skeleton, idleSkel, 'stays on idle, not walk');
+    assert.equal(standee.paladinClone.activeGroup, 'idle', 'idles, does not walk');
   });
 
-  test('Part A restarts idle on the rig skeleton after a one-shot releases it', () => {
-    const { r, src } = setup([]);
-    src.activeGroup = 'punch';   // a punch had owned the idle skeleton
-    src.punchPlaying = false;    // now released
-    r._entityStandees = new Map();
+  test('a one-shot (punch/reaction) in flight locks the unit out of locomotion', () => {
+    const r = setup(['z1']); // would otherwise walk
+    const standee = makeCloneStandee();
+    standee.paladinClone.oneShotPlaying = true;
+    standee.paladinClone.activeGroup = 'punch';
+    r._entityStandees = new Map([['z1', standee]]);
     r._maybeToggleFallbackRigAnimation();
-    assert.equal(src.activeGroup, 'idle');
-    assert.ok(src.idleGroup.calls.some(c => c[0] === 'play' || c[0] === 'start'), 'idle restarted');
+    assert.equal(standee.paladinClone.activeGroup, 'punch', 'punch keeps the skeleton');
+    assert.ok(!played(standee.paladinClone.groups.walk), 'walk did not start');
+  });
+});
+
+describe('_startClonePunch — per-instance strike', () => {
+  test('plays the clone\'s own punch and silences its locomotion', () => {
+    const r = newRenderer();
+    const punch = makeAnimGroup();
+    const clone = { groups: { idle: makeAnimGroup(), walk: makeAnimGroup(), run: makeAnimGroup(), punch },
+      activeGroup: 'idle', oneShotPlaying: false, punchDurationSec: 1 };
+    const ok = r._startClonePunch(clone);
+    assert.equal(ok, true);
+    assert.equal(clone.oneShotPlaying, true);
+    assert.equal(clone.activeGroup, 'punch');
+    assert.ok(played(punch), 'punch started');
+    assert.ok(stopped(clone.groups.idle), 'idle stopped');
+    assert.ok(stopped(clone.groups.walk), 'walk stopped');
+  });
+
+  test('no-ops when the clone has no punch clip cloned in yet', () => {
+    const r = newRenderer();
+    const clone = { groups: { idle: makeAnimGroup() }, activeGroup: 'idle', oneShotPlaying: false };
+    assert.equal(r._startClonePunch(clone), false);
+    assert.equal(clone.oneShotPlaying, false);
   });
 });
 
