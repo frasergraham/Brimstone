@@ -355,3 +355,122 @@ Witch sorts by: priority (hero-held > neutral > threatened, then distance)
 ```
 
 When scoring is ≤2 rounds away and a node has feasibility ≥0.6, the hero AI can send 2 units to that node for a stronger claim.
+
+---
+
+## Balance Baseline & Tuning Methodology
+
+**Last updated:** 2026-04-24 (NvN balance pass — per-witch AI thresholds + hidden-survivor scaling)
+
+### Baseline Metrics (500 1v1 games, Standard 13×13)
+
+| Metric | Value | Target |
+|--------|-------|--------|
+| Hero win rate | 49.2% | 38–62% (±12%) |
+| Witch win rate | 50.8% | 38–62% (±12%) |
+| Draws | 0.0% | — |
+| Mean rounds | ~22 | 15–35 |
+
+### Combat & Economy Baseline
+
+| Metric | Value |
+|--------|-------|
+| Hero battles/game | 20.5 |
+| Hero kills/game | 3.9 |
+| Witch battles/game | 16.2 |
+| Witch kills/game | 1.6 |
+| Hero HP at end | 10.1 |
+| Witch HP at end | 7.1 |
+| Peak hero survivors | 3.8 |
+| Peak witch minions | 6.0 |
+| Witch summons/game | 8.1 |
+| Hero fortifies/game | 2.3 |
+
+### Action Mix Baseline
+
+| Action | % of all actions |
+|--------|-----------------|
+| move | 47.6% |
+| guard | 31.0% |
+| explore | 10.4% |
+| battle-unit | 6.0% |
+| summon | 2.7% |
+| sound-horn | 1.0% |
+| fortify | 0.8% |
+| use-item | 0.6% |
+
+### Win Reason Breakdown
+
+| Reason | % |
+|--------|---|
+| Witch 3-point score | 41.6% |
+| Hero kills witch | 31.8% |
+| Hero 3-point score | 14.8% |
+| Witch kills hero | 5.4% |
+| Witch sweeps nodes | 3.6% |
+| Hero sweeps nodes | 1.2% |
+
+### NvN Baseline (500 games each, Standard 13×13)
+
+| Mode | Hero win rate | Witch win rate | Peak hero force | Peak witch force |
+|------|---------------|----------------|------------------|-------------------|
+| 2v2  | 57.8% | 42.0% | ~6 units (1.3× 1v1) | ~13 units (1.75× 1v1) |
+| 3v3  | 57.0% | 42.6% | ~8 units (1.7× 1v1) | ~20 units (2.7× 1v1) |
+| 4v4  | 60.0% | 39.8% | ~9 units (1.9× 1v1) | ~25 units (3.5× 1v1) |
+
+NvN scales up unit density on both sides (so 4v4 doesn't feel sparse on the
+13×13 map) while keeping balance in the ±12% target band. All NvN scaling is
+gated on `playerCount > 1`, so 1v1 behavior is mathematically unchanged.
+
+- **Scaled witch minion cap** (`src/ai-engine.js:_trySummons`): `base + 4×(witchPlayerCount−1)` so a 3-witch team isn't rationed to the solo-witch 7/10 ceiling. 4v4 night cap = 22.
+- **Per-witch BUILD_ARMY / CONTROL_NODES scoring** (`scoreGoals`): thresholds divide `minionCount` by `witchPlayerCount`; node base bumped 0.45→0.60 so extra minions actually reach nodes rather than clustering near witches.
+- **Scaled witch `unitsPerNode`** (`genControlNodes`): 1v1→1, 2v2→2, 3v3+→3 baseline; ensures the expanded minion supply disperses across nodes instead of piling up.
+- **Hero concentration cap** (`hero-ai-engine.js:genControlNodes`): `unitsForNode` capped at 2 in NvN so hero teams don't over-commit to one contested node.
+- **NvN explore loot bonus** (`executeExplore`): extra loot rolls scale with side size — 2v2 +30% chance, 3v3 +1 roll, 4v4 +1 roll +30% chance. Raises resource inflow proportionally so both sides can actually spend on summons/equipment.
+- **Hero Sound Horn tightened** (`hero-ai-engine.js:genExplore`): survivor ceiling nodeCount→nodeCount when heroCount>1 (no growth beyond 1v1 pool).
+
+Do not remove these without re-running `node scripts/headless.js 500 standard --players N` for N ∈ {2, 3, 4}.
+
+### Tuning Methodology — How to Iterate on AI Balance
+
+Follow this process for any AI change. The goal is to stay within the balance targets while improving AI behavior.
+
+#### Step 1: Establish pre-change baseline
+```bash
+node scripts/headless.js 500 standard          # 1v1 baseline
+node scripts/headless.js 100 standard --players 2  # 2v2 baseline
+```
+Record Hero/Witch win rates, kill %, tiebreak %, mean rounds. Compare against the baseline table above.
+
+#### Step 2: Make changes and run quick validation
+```bash
+node scripts/headless.js 100 standard          # fast check — look for gross regressions
+```
+If win rate shifts >10% from baseline, investigate before scaling up.
+
+#### Step 3: Full validation
+```bash
+node scripts/headless.js 500 standard          # 1v1 — primary balance metric
+node scripts/headless.js 100 standard --players 2  # 2v2 — ally coordination check
+node scripts/ai-matrix.js 50                   # personality cross-balance
+```
+
+#### Step 4: Check balance targets
+| Metric | Target | Action if violated |
+|--------|--------|--------------------|
+| Win rate | 38–62% either side | Tune the stronger side down or weaker side up |
+| Tiebreaks | <10% | Games are stalling — check round cap, node contest logic |
+| Kill wins | ≥20% | Combat is too weak or nodes too dominant — check combat stats |
+| Mean rounds | 15–35 | Too short = snowball; too long = stalemate |
+| Round cap hits | <5% | Games aren't resolving — check AI aggression |
+
+#### Step 5: Asymmetric tuning
+Key lesson learned: applying the same improvement to both factions often helps one side more than the other due to asymmetric unit counts and playstyle.
+
+- **Witch has more units** → improvements to per-node force scoring or multi-unit assignment disproportionately help witch.
+- **Hero has stronger individuals** → improvements to combat targeting or kill-seeking help hero more.
+- **If witch is too strong:** remove/reduce witch-side bonuses first; add hero-side urgency bonuses; try asymmetric thresholds.
+- **If hero is too strong:** reduce hero urgency bonuses; give witch more scoring awareness; check if hero combat stats are too high.
+
+#### Step 6: Update this baseline
+After tuning is complete and balance is within targets, update the baseline tables above with new 500-game results. Include the date and a brief description of what changed.

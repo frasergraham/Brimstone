@@ -2,7 +2,12 @@ appId: com.calebshollow.game
 productName: "Caleb's Hollow"
 
 directories:
-  output: dist
+  # Output to /tmp for every target (electron:package / :build / :win / :linux)
+  # so packaged builds don't clutter the project root. Building under /tmp also
+  # sidesteps the iCloud/Finder extended attributes on the project dir that break
+  # macOS codesigning. (The electron:build:mac npm script passes the same path
+  # explicitly; it's now redundant but harmless.)
+  output: /tmp/brimstone-electron-dist
 
 # Only include client-side game files — server code and native modules are
 # excluded since the Electron app is a pure client that connects to a remote
@@ -30,6 +35,17 @@ files:
       - "!node_modules/https-proxy-agent/**"
       - "!node_modules/sharp/**"
       - "!assets/generated/**"
+      # Editable source-art working files (Pixelmator .pxd etc.) — large and
+      # never loaded at runtime; keep them out of the packaged app.
+      - "!**/*.pxd"
+      # Mobile (Capacitor) projects, the Capacitor web copy, and iOS build
+      # output. Electron loads src/ + assets/ directly via the calebshollow://
+      # protocol and uses NONE of these — they were silently bundling multiple
+      # GB (build/ alone accumulates ~300MB iOS .xcarchives per release).
+      - "!ios/**"
+      - "!android/**"
+      - "!www/**"
+      - "!build/**"
   - "server/resolver.js"
   - "server/state-sync.js"
 
@@ -45,7 +61,8 @@ mac:
 win:
   target:
     - nsis
-  icon: build/icon.ico
+  # No explicit icon: build/icon.ico was missing, which would fail packaging.
+  # electron-builder auto-derives the Windows .ico from build/icon.png (1024²).
 
 nsis:
   oneClick: true

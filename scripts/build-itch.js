@@ -19,8 +19,13 @@ import { execSync } from 'child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
-const outPath = process.argv[2] ?? path.join(ROOT, 'dist', 'calebs-hollow-itch.zip');
-const TEMP = path.join(ROOT, 'dist', '_itch-build');
+// Output to /tmp so build artifacts don't clutter the project root. The release
+// script (scripts/release.js, ITCH_ZIP) hardcodes this same default path.
+const OUT_DIR = '/tmp/brimstone-itch';
+const outPath = process.argv[2] ?? path.join(OUT_DIR, 'calebs-hollow-itch.zip');
+const TEMP = path.join(OUT_DIR, '_itch-build');
+
+fs.mkdirSync(path.dirname(outPath), { recursive: true });
 
 // ── Clean + create temp dir ─────────────────────────────────────────────────
 

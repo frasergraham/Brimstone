@@ -31,7 +31,10 @@ export function isBattleSignificant(actorSnap, targetSnap, result, humanFaction)
  *   "⚔ Hero vs Witch: Hero −2HP, Witch −4HP 💀"
  * Only pairs that actually dealt damage are included.
  */
-export function compileTurnBattleSummary(steps, finalEntities, ResEventType, PlanActionType) {
+// Shared aggregation: collect every battle/guard event and merge by entity pair
+// (A-attacks-B and B-attacks-A merge), summing HP lost by each side. Returns the
+// pairMap values: { snapA, snapB, hpLostByA, hpLostByB }.
+function _aggregateBattlePairs(steps, ResEventType, PlanActionType) {
   const battleEvents = [];
   for (const step of steps) {
     const allEvents = [
@@ -40,29 +43,17 @@ export function compileTurnBattleSummary(steps, finalEntities, ResEventType, Pla
       ...(step.playerEvents ?? []).flatMap(pe => pe.events ?? []),
     ];
     for (const ev of allEvents) {
-      // Normal battles
       if (ev.type === ResEventType.ACTION_OK &&
           (ev.action.type === PlanActionType.BATTLE_UNIT || ev.action.type === PlanActionType.BATTLE_HEX) &&
           ev.battleSnaps) {
-        battleEvents.push({
-          actorSnap:  ev.battleSnaps.actorSnap,
-          targetSnap: ev.battleSnaps.targetSnap,
-          result:     ev.result,
-        });
+        battleEvents.push({ actorSnap: ev.battleSnaps.actorSnap, targetSnap: ev.battleSnaps.targetSnap, result: ev.result });
       }
-      // Guard strike reactions
       if (ev.type === ResEventType.GUARD_STRIKE && ev.battleSnaps) {
-        battleEvents.push({
-          actorSnap:  ev.battleSnaps.actorSnap,
-          targetSnap: ev.battleSnaps.targetSnap,
-          result:     ev.result,
-        });
+        battleEvents.push({ actorSnap: ev.battleSnaps.actorSnap, targetSnap: ev.battleSnaps.targetSnap, result: ev.result });
       }
     }
   }
-  if (!battleEvents.length) return [];
 
-  // Group by sorted pair of entity IDs so A-attacks-B and B-attacks-A merge.
   const pairMap = new Map();
   for (const { actorSnap, targetSnap, result } of battleEvents) {
     const [idA, idB] = actorSnap.id < targetSnap.id
@@ -84,20 +75,83 @@ export function compileTurnBattleSummary(steps, finalEntities, ResEventType, Pla
       pair.hpLostByB += result.counterDmg ?? 0;
     }
   }
+  return [...pairMap.values()];
+}
 
+const _wasKilled = (snap, finalEntities) =>
+  !finalEntities.find(e => e.id === snap.id) || !!finalEntities.find(e => e.id === snap.id && !e.alive);
+
+export function compileTurnBattleSummary(steps, finalEntities, ResEventType, PlanActionType) {
   const lines = [];
-  for (const { snapA, snapB, hpLostByA, hpLostByB } of pairMap.values()) {
+  for (const { snapA, snapB, hpLostByA, hpLostByB } of _aggregateBattlePairs(steps, ResEventType, PlanActionType)) {
     if (hpLostByA === 0 && hpLostByB === 0) continue;
     const nameA  = snapA.title ?? snapA.displayName ?? 'Unit';
     const nameB  = snapB.title ?? snapB.displayName ?? 'Unit';
-    const aKilled = !finalEntities.find(e => e.id === snapA.id)
-                  || finalEntities.find(e => e.id === snapA.id && !e.alive);
-    const bKilled = !finalEntities.find(e => e.id === snapB.id)
-                  || finalEntities.find(e => e.id === snapB.id && !e.alive);
+    const aKilled = _wasKilled(snapA, finalEntities);
+    const bKilled = _wasKilled(snapB, finalEntities);
     const parts = [];
     if (hpLostByA > 0) parts.push(`${nameA} \u2212${hpLostByA}HP${aKilled ? ' \u{1F480}' : ''}`);
     if (hpLostByB > 0) parts.push(`${nameB} \u2212${hpLostByB}HP${bKilled ? ' \u{1F480}' : ''}`);
     lines.push(`\u2694 ${nameA} vs ${nameB}: ${parts.join(', ')}`);
   }
   return lines;
+}
+
+/**
+ * Structured per-pair combat report for the end-of-turn wrap-up card: each pair
+ * as { a, b } where a/b = { id, type, title, name, color, hpLost, killed }.
+ * EVERY pair that fought is included — even clean misses with no damage (so the
+ * card shows the combat happened rather than calling it a "quiet turn"); the
+ * card renders "—" under a unit that took no damage.
+ */
+export function compileTurnBattlePairs(steps, finalEntities, ResEventType, PlanActionType) {
+  const unit = (snap, hpLost) => ({
+    id: snap.id, type: snap.type, title: snap.title ?? null,
+    name: snap.title ?? snap.displayName ?? 'Unit',
+    color: snap.color ?? null,
+    hpLost,
+    killed: _wasKilled(snap, finalEntities),
+  });
+  return _aggregateBattlePairs(steps, ResEventType, PlanActionType)
+    .map(({ snapA, snapB, hpLostByA, hpLostByB }) => ({
+      a: unit(snapA, hpLostByA), b: unit(snapB, hpLostByB),
+    }));
+}
+
+/**
+ * Collect a turn's survivor/zombie discoveries and explore-loot icons for the
+ * end-of-turn wrap-up card.
+ *
+ * Both loot AND discoveries are the player's faction only. Each faction's
+ * explore resources go to its own inventory, so counting the AI's loot here
+ * double-shows shared icons (both sides finding wood reads as "🪵 ×2"); and a
+ * survivor the opponent surfaced is information the player shouldn't get. We
+ * gate both on `humanFaction` (`ev.faction === humanFaction`); null counts all.
+ *
+ * @param {Array}  steps        — StepRecord[] (heroEvents/witchEvents or playerEvents).
+ * @param {string|null} humanFaction — 'hero' | 'witch' | null (null ⇒ count all).
+ * @returns {{ discoveries: Array, loot: string[] }}
+ */
+export function collectTurnFinds(steps, humanFaction = null) {
+  const discoveries = [];
+  const loot = [];
+  for (const step of steps ?? []) {
+    const evs = [
+      ...(step.heroEvents  ?? []),
+      ...(step.witchEvents ?? []),
+      ...(step.playerEvents ?? []).flatMap(pe =>
+        (pe.events ?? []).map(e => (e.faction ? e : { ...e, faction: pe.faction }))),
+    ];
+    for (const ev of evs) {
+      // Faction-filter both finds: only surface the player's own survivors + loot.
+      if (humanFaction && ev.faction && ev.faction !== humanFaction) continue;
+      const found = ev.result?.encounterSurvivors
+        ?? (ev.result?.encounterSurvivor ? [ev.result.encounterSurvivor] : []);
+      for (const f of found) discoveries.push(f);
+      for (const item of (ev.result?.lootItems ?? [])) {
+        if (item && item !== 'nothing') loot.push(item);
+      }
+    }
+  }
+  return { discoveries, loot };
 }

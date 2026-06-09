@@ -146,12 +146,19 @@ Defined in `Entity.resolveCombat()` in `src/entities.js`.
 | **Gang-up** | Multiple attackers on same hex | +1d3 per additional ally |
 | **Fortification** | Building fortified 1-4 | +1 DEF per level |
 | **Staff weapon** | Equipped staff | +2 ATK vs undead entities |
-| **Guard stance** | GUARD action | Reactive counter-attacks on adjacent moves |
+| **Guard stance** | GUARD action | Free reactive strike when an enemy acts in reach (ranged units shoot, see below) |
 | **Fatigue** | Multiple battles per round | -1 per additional battle |
+| **Range falloff** | Ranged attack at distance | -`floor((dist-1)/2)` ATK — 0 at dist 1-2, -1 at 3-4, -2 at 5-6 |
+
+Ranged attacks (`getRange() > 1`, e.g. witch range 2, rogue range 3) use a distinct
+rule set: no gang-up, no crushing blows, no splash, **no counter-attack**, the
+defender gains +1 DEF in forest cover, point-blank (dist ≤ 1) shots fire at
+disadvantage, and the range-falloff penalty above scales with distance.
 
 ### Guard Strikes
 
-When a unit moves adjacent to a guarding enemy, the guard gets a free reactive attack:
+When an enemy acts within a guarding unit's reach, the guard spends one charge on a
+free reactive attack (`_checkGuardStrikes` in `server/resolver.js`):
 
 ```
 Guard at hex A (charges: 2)
@@ -163,6 +170,28 @@ Guard at hex A (charges: 2)
                                     Free resolveCombat(guard, enemy)
                                     Remaining charges: 1
 ```
+
+**Reach by guard type:**
+- **Melee guard** (`getRange() <= 1`): reacts to enemies in the 6 adjacent hexes.
+- **Ranged guard / opportunity shot** (`getRange() > 1`): a guard strike is a
+  DIRECT attack, so its reach is `min(attackRange, sightRange)` — capped by the
+  unit's own phase-dependent sight distance — **and** gated by a clear line of
+  sight to the trigger hex. A unit can only strike what it can see; it never
+  fires into fog. (The blind `BATTLE_HEX` action is the separate exception that
+  ignores LOS but still respects range.) The shot obeys the ranged rule set — no
+  crush, no counter, forest cover for the target, distance falloff, and
+  point-blank disadvantage. So a guarding witch (range 2, sight 5) fires up to 2
+  hexes away; a guarding rogue (range 3) reaches 3 hexes by day but only what her
+  night sight (3) allows after dark.
+
+The 3D renderer (`renderer-3d.js`, the in-game renderer — the 2D `renderer.js`
+backs only the editor/admin tools) paints the guard zone as an **orange exterior
+perimeter outline** around the covered hexes, reusing the power-node outer-edge
+walk (internal shared edges skipped). It uses the same `min(range, sight)` + LOS
+reach so the outline matches where shots actually fire, and is drawn both while
+planning — previewed at the unit's projected hex the moment a GUARD action is
+queued (from `planGhostSteps`) — and during resolution playback for units in
+guard stance (fogged units skipped so a hidden enemy guard isn't revealed).
 
 ---
 
@@ -192,7 +221,7 @@ The caller then calls `state.spendAction(result.cost)` to deduct from the budget
 │              │ BATTLE_HEX — blind attack in fog (1 AP)      │
 ├──────────────┼──────────────────────────────────────────────┤
 │ DEFENSE      │ FORTIFY — build defense (+1-2 DEF) (1 AP)    │
-│              │ GUARD — stance with counter-attacks (1 AP)    │
+│              │ GUARD — stance with reactive strikes (1 AP)   │
 ├──────────────┼──────────────────────────────────────────────┤
 │ ECONOMY      │ SUMMON — witch creates unit (1 AP)           │
 │              │ HEAL — use herbs (+2 HP) (1 AP)              │
@@ -300,7 +329,7 @@ MVP places **one** footprint per building, but the schema is `string[]` and the 
 **Eligibility helper** (`src/building-footprint.js`) — shared by procgen, the auto-migration in `state-sync`, the one-shot mission migration, and the editor:
 
 - `eligibleFootprintNeighbors(state, col, row, opts)` — neighbours of the entrance in odd-r direction order `0..5` that may become a footprint. Excludes: off-map hexes, river (base or path), bridge and **road** paths (a road footprint would sever the MST road network), hexes already carrying a building, hexes already claimed as a footprint, and power-node hexes.
-- `pickFootprintNeighbor(state, col, row, rand, opts)` — picks one. With no `rand` it is **deterministic** (the first eligible neighbour in direction order); with a `rand()` function it picks a random eligible neighbour.
+- `pickFootprintNeighbor(state, col, row, rand, opts)` — picks one, **scoring** the eligible candidates so the impassable hex lands where it does least harm (lower penalty = better): a heavy penalty for sitting on a **river bank** (would starve a future bridge approach), a penalty for being a **local cut-vertex** (pinching a movement corridor, via a bounded radius-2 connectivity check), and a mild penalty for **clustering** against other buildings/footprints (which tends to form walls). It then takes the lowest-penalty candidate(s): with no `rand` it is **deterministic** (the best candidate in direction order); with a `rand()` function it tie-breaks randomly within the best-scoring bucket (one `rand()` draw, so seeded maps stay reproducible). The clustering term also incidentally frees later buildings' neighbours, making placement rollbacks rare. As defence-in-depth, `_pickRiverCrossings` (`src/map.js`) excludes footprint hexes when choosing bridge banks so a crossing is never starved of a usable approach.
 
 **Renderer relocation** (shared constants/helpers in `src/building-render.js`, consumed by both `src/renderer.js` and `src/renderer-3d.js`):
 

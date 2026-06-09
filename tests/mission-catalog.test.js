@@ -21,7 +21,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-import { MIGRATED_MISSIONS, missionJSONUrl } from '../src/campaign/mission-catalog.js';
+import { MIGRATED_MISSIONS, missionJSONUrl, missionFileName } from '../src/campaign/mission-catalog.js';
 import { loadMissionJSON } from '../src/campaign/json-mission.js';
 import { populateFromMission } from '../src/tools/mission-editor.js';
 
@@ -29,25 +29,39 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MISSIONS_DIR = path.join(__dirname, '..', 'src', 'campaign', 'missions');
 
 const readMission = (id) =>
-  JSON.parse(readFileSync(path.join(MISSIONS_DIR, `${id}.json`), 'utf8'));
+  JSON.parse(readFileSync(path.join(MISSIONS_DIR, missionFileName(id)), 'utf8'));
 
 describe('mission-catalog — picker source of truth', () => {
-  test('catalog ids match exactly the JSON files in missions/', () => {
+  test('catalog files match exactly the JSON files in missions/', () => {
     const onDisk = readdirSync(MISSIONS_DIR)
       .filter((f) => f.endsWith('.json'))
-      .map((f) => f.replace(/\.json$/, ''))
       .sort();
-    const catalog = MIGRATED_MISSIONS.map((m) => m.id).sort();
+    const catalog = MIGRATED_MISSIONS.map((m) => missionFileName(m.id)).sort();
     assert.deepEqual(catalog, onDisk,
       'picker options must match the shipped mission set (no missing / no extra)');
   });
 
-  test('every entry carries id, campaignId and a non-empty title', () => {
+  test('every entry carries id, campaignId, file and a non-empty title', () => {
     for (const m of MIGRATED_MISSIONS) {
       assert.ok(m.id, 'id present');
       assert.ok(m.campaignId, `campaignId present for ${m.id}`);
       assert.ok(m.title && m.title.length > 0, `title present for ${m.id}`);
+      assert.ok(m.file, `file present for ${m.id}`);
     }
+  });
+
+  test('each JSON id round-trips through missionFileName back to its catalog id', () => {
+    // The loader fetches by `file` but registers by the JSON's own `id` — if a
+    // file's inner id drifts from its catalog entry, saves/stats would silently
+    // point at a mission that no longer loads.
+    for (const { id } of MIGRATED_MISSIONS) {
+      assert.equal(readMission(id).id, id,
+        `${missionFileName(id)} must contain mission id "${id}"`);
+    }
+  });
+
+  test('missionFileName falls back to <id>.json for unknown missions', () => {
+    assert.equal(missionFileName('my_new_mission'), 'my_new_mission.json');
   });
 
   test('catalog titles stay in sync with each JSON top-level title', () => {
@@ -59,10 +73,10 @@ describe('mission-catalog — picker source of truth', () => {
 });
 
 describe('mission-catalog — URL resolution', () => {
-  test('missionJSONUrl resolves to src/campaign/missions/<id>.json', () => {
+  test('missionJSONUrl resolves to src/campaign/missions/<file>.json', () => {
     for (const { id } of MIGRATED_MISSIONS) {
       const url = missionJSONUrl(id);
-      assert.ok(url.endsWith(`/src/campaign/missions/${id}.json`),
+      assert.ok(url.endsWith(`/src/campaign/missions/${missionFileName(id)}`),
         `resolved URL must point at the bundled mission file: got ${url}`);
     }
   });

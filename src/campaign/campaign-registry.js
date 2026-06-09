@@ -15,7 +15,7 @@
 import prologue from './campaigns/prologue.js';
 import calebsHollowPrologue from './campaigns/calebs-hollow-prologue.js';
 import { registerMissionJSON } from './json-mission.js';
-import { MIGRATED_MISSIONS } from './mission-catalog.js';
+import { MIGRATED_MISSIONS, missionFileName } from './mission-catalog.js';
 
 /**
  * All available campaigns. Each entry is a campaign definition object with:
@@ -115,7 +115,7 @@ export function registerJSONMissions(campaignId, parsedMissions) {
 const _isNode = typeof window === 'undefined';
 
 async function _readMissionJSON(id) {
-  const url = new URL(`./missions/${id}.json`, import.meta.url);
+  const url = new URL(`./missions/${missionFileName(id)}`, import.meta.url);
   if (_isNode) {
     const { readFileSync } = await import('node:fs');
     return JSON.parse(readFileSync(url, 'utf8'));

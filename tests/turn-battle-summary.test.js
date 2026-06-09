@@ -3,7 +3,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { compileTurnBattleSummary } from '../src/battle-utils.js';
+import { compileTurnBattleSummary, compileTurnBattlePairs, collectTurnFinds } from '../src/battle-utils.js';
 import { ResEventType } from '../server/resolver.js';
 import { PlanActionType } from '../src/planner.js';
 
@@ -157,5 +157,90 @@ describe('compileTurnBattleSummary', () => {
     const lines = compileTurnBattleSummary([step], aliveEntities(hero, witch), ResEventType, PlanActionType);
     assert.equal(lines.length, 1);
     assert.match(lines[0], /Witch \u22123HP/);
+  });
+});
+
+describe('compileTurnBattlePairs (structured wrap-up data)', () => {
+  test('returns per-pair units with HP loss and kill flags', () => {
+    const hero  = makeSnap('h1', 'Hero',  'hero',  14);
+    const witch = makeSnap('w1', 'Witch', 'witch', 2);
+    const ev    = makeBattleEvent(hero, witch, 2, 1, true);  // witch killed, hero counter 1
+    const steps = [makeStep([ev])];
+    const pairs = compileTurnBattlePairs(steps, killedEntities(witch, hero), ResEventType, PlanActionType);
+    assert.equal(pairs.length, 1);
+    const { a, b } = pairs[0];
+    // a is the lower id (h1) \u2014 the hero; b the witch.
+    assert.equal(a.name, 'Hero');
+    assert.equal(a.hpLost, 1);        // counter damage
+    assert.equal(a.killed, false);
+    assert.equal(b.name, 'Witch');
+    assert.equal(b.hpLost, 2);
+    assert.equal(b.killed, true);
+  });
+
+  test('includes no-damage fights (clean miss) so the card still shows the combat', () => {
+    const hero  = makeSnap('h1', 'Hero',  'hero',  14);
+    const witch = makeSnap('w1', 'Witch', 'witch', 10);
+    const ev    = makeBattleEvent(hero, witch, 0, 0, false);  // clean miss
+    const pairs = compileTurnBattlePairs([makeStep([ev])], aliveEntities(hero, witch), ResEventType, PlanActionType);
+    assert.equal(pairs.length, 1);
+    assert.equal(pairs[0].a.hpLost, 0);
+    assert.equal(pairs[0].b.hpLost, 0);
+    assert.equal(pairs[0].a.killed, false);
+  });
+});
+
+describe('collectTurnFinds', () => {
+  const exploreEvent = (faction, entityId, lootItems, survivor = null) => ({
+    type:   ResEventType.ACTION_OK,
+    faction,
+    action: { type: PlanActionType.EXPLORE, entityId },
+    result: { success: true, cost: 1, log: [], lootItems, encounterSurvivor: survivor },
+  });
+
+  test('counts only the human faction\'s explore loot (AI loot excluded)', () => {
+    // Both sides find wood; the player's summary must show wood once, not twice.
+    const steps = [makeStep([
+      exploreEvent('hero',  'h1', ['+🪵']),
+      exploreEvent('witch', 'w1', ['+🪵']),
+    ])];
+    const { loot } = collectTurnFinds(steps, 'hero');
+    assert.deepEqual(loot, ['+🪵']);
+  });
+
+  test('aggregates the human\'s own multiple explores (wood then food)', () => {
+    const steps = [makeStep([
+      exploreEvent('hero', 'h1', ['+🪵']),
+      exploreEvent('hero', 'h2', ['+🍞']),
+    ])];
+    const { loot } = collectTurnFinds(steps, 'hero');
+    assert.deepEqual(loot, ['+🪵', '+🍞']);
+  });
+
+  test('drops "nothing" rolls and counts all loot when no humanFaction', () => {
+    const steps = [makeStep([exploreEvent('hero', 'h1', ['+🪵', 'nothing', '+🪵'])])];
+    assert.deepEqual(collectTurnFinds(steps, null).loot, ['+🪵', '+🪵']);
+  });
+
+  test('collects only the human faction\'s discoveries', () => {
+    const mine   = { id: 's9', type: 'survivor', name: 'Mara' };
+    const theirs = { id: 's4', type: 'survivor', name: 'Goodman Pyke' };
+    const steps = [makeStep([
+      exploreEvent('hero',  'h1', [], mine),
+      exploreEvent('witch', 'w1', [], theirs),
+    ])];
+    const { discoveries } = collectTurnFinds(steps, 'hero');
+    assert.equal(discoveries.length, 1);
+    assert.equal(discoveries[0].name, 'Mara');
+  });
+
+  test('counts discoveries from both sides when no humanFaction', () => {
+    const a = { id: 's9', type: 'survivor', name: 'Mara' };
+    const b = { id: 's4', type: 'survivor', name: 'Goodman Pyke' };
+    const steps = [makeStep([
+      exploreEvent('hero',  'h1', [], a),
+      exploreEvent('witch', 'w1', [], b),
+    ])];
+    assert.equal(collectTurnFinds(steps, null).discoveries.length, 2);
   });
 });

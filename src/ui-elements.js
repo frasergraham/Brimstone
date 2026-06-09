@@ -3,7 +3,7 @@
 // testable without a real browser document — tests inject fake elements keyed
 // by the same IDs used here.
 //
-// Dynamic elements (score-toast, speed-toast) that are created and removed at
+// Dynamic elements (score-toast) that are created and removed at
 // runtime are NOT included; those are still queried inline via
 // document.getElementById each time they are needed.
 
@@ -15,8 +15,6 @@ export function collectUIElements(doc = document) {
     'zoom-out':                g('zoom-out'),
     'zoom-fit':                g('zoom-fit'),
     'zoom-me':                 g('zoom-me'),
-    'speed-toggle':            g('speed-toggle'),
-    'speed-popup':             g('speed-popup'),
     'canvas-wrapper':          g('canvas-wrapper'),
 
     // ── Header / menu ─────────────────────────────────────────────────────

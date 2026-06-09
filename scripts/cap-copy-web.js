@@ -14,7 +14,9 @@ import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const WWW  = resolve(ROOT, 'www');
+// Staged web copy lives in /tmp (not the project root) to keep build artifacts
+// out of the way. Must match `webDir` in capacitor.config.ts.
+const WWW  = '/tmp/brimstone-www';
 
 // ── Environment config ──────────────────────────────────────────────────────
 
@@ -50,7 +52,7 @@ if (existsSync(WWW)) rmSync(WWW, { recursive: true });
 mkdirSync(WWW, { recursive: true });
 
 // Directories to copy (relative to project root)
-const dirs = ['src', 'assets', 'server'];
+const dirs = ['src', 'assets'];
 for (const dir of dirs) {
   cpSync(resolve(ROOT, dir), resolve(WWW, dir), {
     recursive: true,
@@ -61,14 +63,24 @@ for (const dir of dirs) {
   });
 }
 
-// Individual files
-const files = ['index.html', 'styles.css'];
+// Individual files. The mobile client is a thin client — it only needs two
+// modules from server/ (resolver.js + state-sync.js, the DOM-free game logic
+// shared with main.js), not the full server tree (db, auth, lobby, push, …).
+// This mirrors the whitelist in electron-builder.yml and build-itch.js.
+const files = [
+  'index.html',
+  'styles.css',
+  'server/resolver.js',
+  'server/state-sync.js',
+];
 for (const file of files) {
-  cpSync(resolve(ROOT, file), resolve(WWW, file));
+  const dest = resolve(WWW, file);
+  mkdirSync(dirname(dest), { recursive: true });
+  cpSync(resolve(ROOT, file), dest);
 }
 
 // ── Write build config ──────────────────────────────────────────────────────
 
 writeFileSync(resolve(WWW, 'build-config.json'), JSON.stringify(ENVS[env], null, 2));
 
-console.log(`✔ Web assets copied to www/ (env: ${env})`);
+console.log(`✔ Web assets copied to ${WWW} (env: ${env})`);

@@ -35,7 +35,8 @@ function makeStubbedRenderer() {
   r._initBabylon                  = () => defer('engine');
   r.loadImages                    = () => defer('sprites');
   r._loadBuildingModels           = () => defer('buildings');
-  r._loadPaladinModel             = () => defer('paladin');
+  // Hero rig is pre-warmed through the generic cascade now (paladin-idle.glb).
+  r._loadFallbackRig              = () => defer('paladin');
   r._loadTreePackManifest         = () => defer('forest');
   r._preloadTerrainDetailTextures = () => defer('terrain');
   return { r, settle };
@@ -175,8 +176,19 @@ describe('Renderer3D loading bundle', () => {
     // loaders never even start. Only the safety timeout can release whenReady.
     settle.sprites.resolve();
 
+    // whenReady's safety timer is unref()'d so it never keeps a real process
+    // alive (correct for production, where Babylon's render loop holds the loop
+    // open). This test has no such loop, so without a ref'd keep-alive Node can
+    // drain the event loop before the unref'd 40ms timer fires and cancel the
+    // test ("Promise resolution is still pending but the event loop has already
+    // resolved"). Hold the loop open until whenReady settles, then release it.
+    const keepAlive = setInterval(() => {}, 10);
     const start = Date.now();
-    await r.whenReady(); // must resolve via the timeout, not hang the test
+    try {
+      await r.whenReady(); // must resolve via the timeout, not hang the test
+    } finally {
+      clearInterval(keepAlive);
+    }
     assert.ok(Date.now() - start >= 30, 'whenReady should have waited for the safety timeout');
   });
 

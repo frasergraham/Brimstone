@@ -10,10 +10,23 @@ assets/generated/
 # FBX source + FBX2glTF intermediate (we ship the .glb output only)
 assets/models/*.fbx
 assets/models/*.fbm/
+# Mixamo source FBX belongs in assets/source/animations/ — keep stray copies
+# (e.g. from a Finder drag) out of the repo root.
+/*.fbx
 scripts/map-renders/
 scripts/renders/
 dist/
-build/
+# build/ is electron-builder's buildResources dir. Keep the committed app icons;
+# ignore any generated output that lands here (xcarchives/export now go to /tmp).
+build/*
+!build/icon.png
+!build/icon.icns
+
+# Character source FBX (Mixamo mesh+rig exports) — large (tens–hundreds of MB);
+# only the converted, texture-stripped/-capped .glb under assets/models/ ships.
+# Regenerate via: npm install --no-save fbx2gltf && node scripts/convert-character-fbx.js
+assets/source/characters/*.fbx
+assets/source/characters/*.fbm/
 
 # Capacitor build artifacts
 www/

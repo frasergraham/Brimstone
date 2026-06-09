@@ -79,11 +79,14 @@ export {
   SIGNPOST_ROAD_OFFSET,
 };
 import { Renderer } from './renderer.js';
+import { BLOCK_WORD_VARIANTS, pickBlockWord } from './combat-words.js';
+export { BLOCK_WORD_VARIANTS };   // re-exported for existing importers (main.js)
 import { getFactionTheme } from './theme.js';
-import { hexKey, hexDistance, getNeighbors } from './hex.js';
+import { hexKey, hexDistance, getNeighbors, hexRange } from './hex.js';
 import { nodeController, Phase } from './game.js';
-import { findFaction } from './factions.js';
-import { computeLineOfSight } from './actions.js';
+import { findFaction, sightRangeForEntity } from './factions.js';
+import { computeLineOfSight, hasLineOfSight } from './actions.js';
+import { PlanActionType } from './planner.js';
 import { Side } from './sides.js';
 import { MAP_SIZES, NODE_COLORS } from './map.js';
 import {
@@ -447,7 +450,7 @@ export function computePunchSpeedRatio(natCycleSec, targetMs, fallback = 2.0) {
  *  translates through space on top of whatever world-space animation the
  *  renderer is doing (cone slide, ghost path), producing double-displacement
  *  or float. Pure; exported for tests. */
-export function stripRootBoneTranslation(animGroup, rootName = 'mixamorig:Hips') {
+export function stripRootBoneTranslation(animGroup, rootName = 'mixamorig:Hips', { keepY = false } = {}) {
   if (!animGroup || !Array.isArray(animGroup.targetedAnimations)) return 0;
   const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
   let stripped = 0;
@@ -464,13 +467,70 @@ export function stripRootBoneTranslation(animGroup, rootName = 'mixamorig:Hips')
       if (k.value && typeof k.value === 'object'
         && 'x' in k.value && 'y' in k.value && 'z' in k.value) {
         k.value.x = 0;
-        k.value.y = 0;
+        // keepY preserves the Hips' vertical baseline so a rig whose geometry
+        // origin is at the FEET (mannequin/zombie) keeps standing at full
+        // height. Stripping Y only suits a hip-centred rig (paladin), where the
+        // baseline is ~0 — zeroing it on a feet-origin rig sinks it waist-deep.
+        if (!keepY) k.value.y = 0;
         k.value.z = 0;
       }
     }
     stripped++;
   }
   return stripped;
+}
+
+/** Rebase a clip's root (Hips) translation so its VERTICAL baseline sits at the
+ *  rig's own rest height `restY`, while preserving the clip's bob and zeroing
+ *  horizontal drift. This is the asset-agnostic alternative to
+ *  stripRootBoneTranslation's all-or-nothing Y handling: animation clips encode
+ *  an ABSOLUTE hip height in their own export's units, so a rig's own idle, a
+ *  shared walk.glb, and a hip-centred export all disagree — keeping (keepY) or
+ *  zeroing the absolute value makes one rig float and another sink. Rebasing to
+ *  `restY` (the Hips' rest-pose Y, measured per rig at load) anchors every clip
+ *  at the same standing height regardless of which export it came from. When
+ *  `restY` is null (no rest measurement — test stubs) the Y is left untouched.
+ *  Pure; exported for tests. */
+export function rebaseRootBoneY(animGroup, restY, rootName = 'mixamorig:Hips') {
+  if (!animGroup || !Array.isArray(animGroup.targetedAnimations)) return 0;
+  const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
+  let done = 0;
+  for (const ta of animGroup.targetedAnimations) {
+    const tName = ta && ta.target && ta.target.name;
+    const prop  = ta && ta.animation && ta.animation.targetProperty;
+    if (!tName || !prop) continue;
+    if (tName !== rootName && stripDup(tName) !== rootName) continue;
+    if (!/position/i.test(prop)) continue;
+    const keys = ta.animation.getKeys ? ta.animation.getKeys() : null;
+    if (!keys || !keys.length) continue;
+    // Anchor to the clip's AVERAGE hip Y, not its first frame: a walk's frame 0
+    // is usually a foot-plant (low point), so rebasing on it would lift the
+    // whole cycle above rest (the "rises while walking" bug). The mean is the
+    // clip's true standing baseline, so the hip bobs around restY instead.
+    let sum = 0, n = 0;
+    for (const k of keys) {
+      if (k.value && typeof k.value.y === 'number') { sum += k.value.y; n++; }
+    }
+    const baseY = n > 0 ? sum / n : 0;
+    for (const k of keys) {
+      if (k.value && typeof k.value === 'object'
+        && 'x' in k.value && 'y' in k.value && 'z' in k.value) {
+        k.value.x = 0;
+        k.value.z = 0;
+        // SCALE the hip trajectory so its average lands on restY, rather than
+        // ADDING the raw bob: clips carry hip heights in their own export's
+        // units, but the rig's clone scale assumes the rig's units, so a raw
+        // bob is amplified by (rigScale) and over-pops on a rig with a large
+        // clone scale (the ×100 paladin). restY/baseY is the per-rig unit
+        // conversion (both are hip heights), so the bob scales with the rig.
+        if (typeof restY === 'number') {
+          k.value.y = Math.abs(baseY) > 1e-4 ? restY * (k.value.y / baseY) : restY;
+        }
+      }
+    }
+    done++;
+  }
+  return done;
 }
 
 // Time (ms) after the last motion before the paladin returns to IDLE.
@@ -570,11 +630,42 @@ export function getUnitRigConfig(entity) {
   return UNIT_RIG_BANK[entity.type] || null;
 }
 
-/** Should this entity render with a 3D model rig (vs. the generic pawn)?
- *  Thin predicate over getUnitRigConfig — true iff the entity's type is
- *  in UNIT_RIG_BANK. */
-export function unitUsesPaladinModel(entity) {
-  return getUnitRigConfig(entity) != null;
+/** DEPRECATED — every unit now flows through the generic rig cascade
+ *  (`_loadFallbackRig`), including the hero (type 'paladin' → paladin-idle.glb).
+ *  There is no longer a dedicated paladin render path, so this always returns
+ *  false; call sites fall through to the cascade. Retained as a no-op only
+ *  until the remaining references are removed. */
+export function unitUsesPaladinModel(_entity) {
+  return false;
+}
+
+// ─── Generic unit-rig cascade (non-paladin units) ───────────────────────────
+// The shared fallback rig: a blank Mixamo mannequin the renderer tints per
+// owner. Loaded once and cloned for any unit that has no `<type>-idle.glb`.
+export const MANNEQUIN_RIG_FILE = 'mannequin-idle.glb';
+
+/** Convention model filename for an entity's own rig — `<type>-idle.glb`
+ *  (e.g. 'zombie-idle.glb'). Returns null when the entity has no usable type.
+ *  The slug mirrors EntityType values, which are already lowercase
+ *  underscore-safe ('zombie', 'wood_golem', …). Pure; exported for tests. */
+export function entityTypeRigFile(entity) {
+  if (!entity || typeof entity.type !== 'string') return null;
+  const slug = entity.type.toLowerCase().replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return slug ? `${slug}-idle.glb` : null;
+}
+
+/** Ordered rig-file cascade for a non-paladin unit: its own `<type>-idle.glb`
+ *  first, then the shared mannequin. The caller tries each in turn and uses the
+ *  first that loads; if none do, the cone+sphere pawn stands in. Paladin-typed
+ *  units never reach here — they keep the dedicated _paladinSource path. Pure;
+ *  exported for tests. */
+export function fallbackRigCandidates(entity) {
+  const out = [];
+  const typeFile = entityTypeRigFile(entity);
+  if (typeFile && typeFile !== MANNEQUIN_RIG_FILE) out.push(typeFile);
+  out.push(MANNEQUIN_RIG_FILE);
+  return out;
 }
 
 // ─── Bone attachment (G5 horse + G6 weapon) ─────────────────────────────────
@@ -2023,6 +2114,20 @@ export class Renderer3D {
     // anchor — without it the Mixamo hip-pivot puts the feet below the
     // base disc. Defaults to 0 when bbox is unavailable.
     this._paladinFeetOffset = 0;
+    // ── Generic unit-rig cascade (non-paladin units) ──────────────────────
+    // Every non-paladin entity resolves a rig by convention: first
+    // `<type>-idle.glb` (e.g. zombie-idle.glb), else the shared
+    // mannequin-idle.glb, else the cone+sphere pawn. Unlike the dedicated
+    // _paladinSource (which carries the walk/run/punch wiring), these rigs
+    // play only their embedded idle for now. Each source mirrors the paladin
+    // shape plus its own { scale, feetOffset, tintable }.
+    this._rigSources      = new Map(); // model file → source
+    this._rigLoadPromises = new Map(); // model file → in-flight load (resolves src|null)
+    this._rigFileMissing  = new Set(); // files that 404'd — don't re-attempt
+    // The rig source whose punch is currently mid-strike (set by addLungeAnim,
+    // read by hold/resume so the cinematic freezes the ATTACKER's rig, not just
+    // the paladin). Falls back to _paladinSource when unset.
+    this._activePunchSrc  = null;
     this._engine        = null;
     this._scene         = null;
     this._camera        = null;
@@ -2215,8 +2320,9 @@ export class Renderer3D {
 
     // Locked camera angles. Alpha (yaw) is the user's initial heading — the
     // right-drag / two-finger twist / rotate buttons spin freely from there.
-    // Beta (tilt) is permanently π/4 (45°) — see CAMERA_BETA_LOCKED.
-    this._lockedAlpha = -Math.PI / 4;
+    // Start north-up (α = π/2, map north pointing up — same as the "fit" button's
+    // second tap). Beta (tilt) is permanently π/4 (45°) — see CAMERA_BETA_LOCKED.
+    this._lockedAlpha = Math.PI / 2;
     this._lockedBeta  = CAMERA_BETA_LOCKED;
 
     // ── Phase 5: animations, plan arrows, HP bars ──────────────────────────
@@ -2399,7 +2505,9 @@ export class Renderer3D {
     // if already resolved), so this never starts a duplicate network load.
     const afterInit = (fn) => babylonP.then(() => (this._scene ? fn() : null));
     const buildingsP = afterInit(() => this._loadBuildingModels(basePath));
-    const paladinP   = afterInit(() => this._loadPaladinModel(basePath));
+    // Pre-warm the hero rig (and, transitively, the shared walking source) via
+    // the generic cascade — the hero is just EntityType.PALADIN → paladin-idle.glb.
+    const paladinP   = afterInit(() => this._loadFallbackRig(PALADIN_MODEL_FILE, basePath));
     const treesP     = afterInit(() => this._loadTreePackManifest(basePath));
     // Splat-terrain detail textures — these were previously lazy on the first
     // gameplay frames, causing a visible framerate hitch right after the
@@ -2480,15 +2588,21 @@ export class Renderer3D {
     const all = Promise.all(this._assetBundle.map(b => b.settled)).then(() => undefined);
     const ms = this._loadTimeoutMs;
     if (!(ms > 0)) return all;
+    let timer = null;
     const safety = new Promise(resolve => {
-      const t = setTimeout(() => {
+      timer = setTimeout(() => {
         console.warn(`[Renderer3D] whenReady safety timeout (${ms}ms) — revealing scene anyway`);
         resolve();
       }, ms);
-      // Don't keep a node test process alive waiting on the timer.
-      if (t && typeof t.unref === 'function') t.unref();
     });
-    return Promise.race([all, safety]);
+    // Clear the timer once the race settles: when the bundle finishes first this
+    // avoids leaving a lingering timeout that would keep a node process alive;
+    // when the timeout wins it's already a no-op. We must NOT unref() the timer —
+    // if the bundle hangs, this timeout is the only thing keeping the event loop
+    // alive long enough to release whenReady().
+    return Promise.race([all, safety]).finally(() => {
+      if (timer) clearTimeout(timer);
+    });
   }
 
   resize() {
@@ -3595,167 +3709,6 @@ export class Renderer3D {
     return upgraded;
   }
 
-  /** Lazy-load `<basePath>/models/paladin.glb` and stash it as
-   *  `_paladinSource = { mesh, skeleton, idleGroup }`. Each hero standee
-   *  later clones all three so per-unit idle animations play independently.
-   *  The GLB is intentionally optional: if the loader plugin import, the
-   *  ImportMeshAsync call, or the skeleton-resolution step fails, the
-   *  renderer silently falls back to the cone+sphere body so a missing file
-   *  never blocks gameplay.
-   *
-   *  Loader registration is delegated to `_ensureBabylonLoaders` so the
-   *  house and paladin GLB consumers share a single UMD-script-tag path —
-   *  see #371 for why the ESM `+esm` wrapper can't be used. */
-  async _loadPaladinModel(basePath = 'assets') {
-    if (!this._babylon || !this._scene) return null;
-    if (this._paladinSource) return this._paladinSource;
-    if (this._paladinLoadPromise) return this._paladinLoadPromise;
-    const BABYLON = this._babylon;
-
-    const promise = (async () => {
-      // Step 1: register glTF loader plugin via the UMD bundle. Best-effort —
-      // if SceneLoader.ImportMeshAsync is already wired (tests stub it
-      // directly on the fake BABYLON), the script tag isn't required. Real-
-      // browser path: this attaches to window.BABYLON and populates the
-      // .glb / .gltf plugin entries on BABYLON.SceneLoader.
-      await this._ensureBabylonLoaders();
-
-      if (!BABYLON.SceneLoader || typeof BABYLON.SceneLoader.ImportMeshAsync !== 'function') {
-        console.warn('[Renderer3D] BABYLON.SceneLoader.ImportMeshAsync unavailable; skipping paladin model.');
-        return null;
-      }
-
-      // Step 2: import the GLB. `null` for meshNames pulls everything in.
-      let result;
-      try {
-        result = await BABYLON.SceneLoader.ImportMeshAsync(
-          null,
-          `${basePath}/${PALADIN_MODEL_DIR}`,
-          PALADIN_MODEL_FILE,
-          this._scene,
-          this._glbProgressHandler('paladin'),
-        );
-      } catch (err) {
-        console.warn('[Renderer3D] paladin.glb load failed; using cone+sphere bodies.', err);
-        return null;
-      }
-
-      // Step 3: collect every geometry mesh in the import. Mixamo paladin
-      // GLBs ship as a hierarchy (helmet + body + cape + …), and PR #375's
-      // single-mesh selection produced the "giant floating head" regression
-      // — only the helmet was cloned, and the scale derived from the
-      // helmet's bbox alone blew it up to fill the target height. Walk the
-      // full list, hide every source, and use the aggregated bbox below.
-      const meshes = (result.meshes || []).filter(m =>
-        m && typeof m.getTotalVertices === 'function' && m.getTotalVertices() > 0,
-      );
-      if (meshes.length === 0) {
-        console.warn('[Renderer3D] paladin.glb contained no geometry; using cone+sphere bodies.');
-        return null;
-      }
-      // The skinned mesh carries the skeleton + animation targets. Prefer
-      // the mesh with a skeleton attached (Mixamo's `Beta_Surface`); fall
-      // back to the first geometry mesh.
-      const skinned  = meshes.find(m => m.skeleton) || meshes[0];
-      const skeleton = skinned.skeleton
-        || (Array.isArray(result.skeletons) ? result.skeletons[0] : null)
-        || null;
-
-      // Idle animation group — Mixamo exports usually label this either by
-      // the source clip name ("mixamo.com") or with an explicit "Idle"
-      // string. Match either; fall back to the first group available.
-      const groups   = result.animationGroups || [];
-      const idleGroup = groups.find(g => g && /idle|mixamo/i.test(g.name || ''))
-        || groups[0] || null;
-
-      // Hide every source mesh — clones render geometry on their behalf,
-      // but the templates themselves must never draw. Hiding only the
-      // skinned mesh would leave the helmet / cape submeshes floating at
-      // world origin.
-      for (const m of meshes) {
-        if (typeof m.setEnabled === 'function') m.setEnabled(false);
-        m.isPickable = false;
-      }
-      // Strip root-bone X/Y/Z translation from idle's keyframes so the
-      // animation doesn't pull the model away from the cone anchor. Mixamo
-      // idle clips often have a Hips.position baseline that lifts the rig
-      // off the ground; without this strip the paladin floats. Y is
-      // included so the cone's feet-on-tile placement is the SOLE Y
-      // authority (no breathing bob, but solid ground contact).
-      stripRootBoneTranslation(idleGroup);
-      // Start the embedded idle animation immediately so the rig animates
-      // from load instead of sitting in bind-pose T-pose. The swap tick
-      // (_maybeTogglePaladinAnimation) will stop()/start() between idle and
-      // walking based on motion state from there on.
-      if (idleGroup && typeof idleGroup.start === 'function') {
-        idleGroup.weight = 1.0;
-        idleGroup.start(true, 1.0);
-      }
-
-      // Compute an aggregate hierarchy bbox + scale so the entire model
-      // (helmet to feet) lands at TARGET_PALADIN_WORLD_HEIGHT regardless of
-      // submesh count or FBX export units. Store the feet offset separately
-      // — applied at clone time via the root's position rather than baked
-      // into vertices, so it survives the hierarchical clone path.
-      const { scale, feetOffset } = this._normalisePaladinSource(meshes);
-      this._paladinScale      = scale;
-      this._paladinFeetOffset = feetOffset;
-
-      // Capture the imported TransformNode hierarchy so the walking anim
-      // retargeter has a comprehensive name → node map to look up against.
-      // Mixamo node names ("mixamorig:Hips", etc) line up between paladin
-      // and walking exports, but Babylon's glTF loader uses TransformNodes
-      // (not Bones) as the canonical animation targets, so we MUST include
-      // every imported TN in the lookup or retargeting silently drops
-      // targets and the model T-poses when blend weight flips to walking.
-      const transformNodes = Array.isArray(result.transformNodes)
-        ? result.transformNodes.slice() : [];
-      this._paladinSource = {
-        mesh: skinned, meshes, skeleton, idleGroup, walkGroup: null,
-        transformNodes,
-      };
-
-      // Fire-and-forget the companion animation GLBs. Paladins start at
-      // bind pose (or with the model's embedded idle if it has one); as
-      // each clip resolves, the blend tick picks it up.
-      this._loadWalkingAnimation(basePath).catch(err => {
-        console.warn('[Renderer3D] walking.glb load failed; paladins will idle only.', err);
-      });
-      // Only load a separate idle if the paladin model file isn't already
-      // idle.glb — when the model IS idle.glb its embedded animation was
-      // already picked up as src.idleGroup above, and loading it again
-      // would import duplicate meshes into the scene.
-      if (PALADIN_MODEL_FILE !== IDLE_MODEL_FILE) {
-        this._loadIdleAnimation(basePath).catch(err => {
-          console.warn('[Renderer3D] idle.glb load failed; paladins will stay at bind pose when not moving.', err);
-        });
-      }
-
-      // Pre-warm the combat punch clip a beat after the rig + walk/idle have
-      // a head start, so the FIRST paladin attack usually has its strike clip
-      // ready. Deferred (not awaited, not in the loading-screen bundle) so the
-      // ~47k never delays first paint; addLungeAnim also lazy-loads it as a
-      // safety net. The timer is unref'd so it can't keep a node process alive.
-      if (typeof setTimeout === 'function') {
-        const t = setTimeout(() => { this._ensurePunchAnimation(basePath); }, 1200);
-        if (t && typeof t.unref === 'function') t.unref();
-        // Pre-warm the running clip too (animation-only, ~29k) so the first
-        // multi-hex move dashes rather than walking until the lazy load lands.
-        const tr = setTimeout(() => { this._ensureRunningAnimation(basePath); }, 1400);
-        if (tr && typeof tr.unref === 'function') tr.unref();
-      }
-
-      // If standees were built before the GLB landed (the common case —
-      // _initBabylon kicks the load off async and `_syncEntityStandees`
-      // runs synchronously right after), retrofit each hero standee with
-      // a paladin clone.
-      this._upgradeHeroStandeesToPaladin();
-      return this._paladinSource;
-    })();
-
-    this._paladinLoadPromise = promise;
-    return promise;
-  }
 
   /** Measure the aggregated bounding box across all geometry meshes in the
    *  paladin hierarchy and return both the uniform scale needed to hit
@@ -3805,6 +3758,13 @@ export class Renderer3D {
       // sit. The clone root lifts by `scale * feetOffset` so feet land at
       // root-local y=0.
       feetOffset: -minY,
+      // Origin convention: a rig whose geometry origin sits near its vertical
+      // CENTRE (feet well below origin → -minY ≈ half-height) is "hip-centred"
+      // (the legacy paladin export); one with feet ≈ origin is "feet-origin"
+      // (mannequin/zombie). This drives the Hips-Y strip on locomotion clips:
+      // hip-centred wants Y zeroed, feet-origin wants the standing baseline
+      // kept (keepY). Threshold 0.25 cleanly separates ~0.5 from ~0.
+      hipCentered: (-minY) / naturalHeight > 0.25,
     };
   }
 
@@ -3822,549 +3782,70 @@ export class Renderer3D {
    *  primary skinned child so per-unit idles play independently —
    *  InstancedMesh doesn't support per-instance bone matrices, hence the
    *  deeper clone path. */
-  /** Load `walking.glb`, extract its animation group, and retarget every
-   *  targetedAnimation onto the paladin source skeleton's linked
-   *  TransformNodes by name. Disposes walking's meshes + skeleton — we
-   *  only want its keyframes. The retargeted group + a blend tick are
-   *  stashed on `_paladinSource.walkGroup` so the standee-move observer
-   *  can cross-fade between idle ↔ walking based on whether any hero
-   *  paladin is currently being slid between hexes by the resolver. */
-  async _loadWalkingAnimation(basePath = 'assets') {
-    if (!this._babylon || !this._scene || !this._paladinSource) return null;
+  async _loadWalkingAnimation(basePath = this._assetsBasePath || 'assets') {
+    // walking.glb's native AnimationGroup, loaded ONCE as the shared clip every
+    // rig retargets from (_retargetWalkOntoRig) and the decoupled plan-ghost
+    // rides. Paladin-independent; deduped via _walkingSourceLoad.
+    if (this._walkingSource) return this._walkingSource;
+    if (this._walkingSourceLoad) return this._walkingSourceLoad;
     const BABYLON = this._babylon;
-    const src = this._paladinSource;
-    if (src.walkGroup) return src.walkGroup;
-    if (!BABYLON.SceneLoader || typeof BABYLON.SceneLoader.ImportMeshAsync !== 'function') {
+    if (!this._babylon || !this._scene
+      || !BABYLON.SceneLoader || typeof BABYLON.SceneLoader.ImportMeshAsync !== 'function') {
       return null;
     }
-
-    let result;
-    try {
-      result = await BABYLON.SceneLoader.ImportMeshAsync(
-        null,
-        `${basePath}/${PALADIN_MODEL_DIR}`,
-        WALKING_MODEL_FILE,
-        this._scene,
-        this._glbProgressHandler('paladin'),
-      );
-    } catch (err) {
-      console.warn('[Renderer3D] walking.glb import failed', err);
-      return null;
-    }
-
-    const walkGroupNative = (result.animationGroups || []).find(g => g) || null;
-    if (!walkGroupNative) {
-      console.warn('[Renderer3D] walking.glb contained no animation group');
-      this._disposeWalkingImport(result);
-      return null;
-    }
-
-    // Keep walking's mesh + skeleton alive — they're the GHOST source.
-    // The native walkGroup drives walking's own skeleton natively (no
-    // retargeting), so ghost clones reading from walking's skeleton get a
-    // clean walk animation that's completely decoupled from the main
-    // paladin's skeleton. The walking source meshes themselves are hidden
-    // (setEnabled=false); ghosts clone them per-standee.
-    const walkingMeshes = (result.meshes || []).filter(m =>
-      m && typeof m.getTotalVertices === 'function' && m.getTotalVertices() > 0,
-    );
-    const walkingPrimary = walkingMeshes.find(m => m.skeleton) || walkingMeshes[0] || null;
-    const walkingSkeleton = walkingPrimary?.skeleton
-      || (Array.isArray(result.skeletons) ? result.skeletons[0] : null) || null;
-    for (const m of walkingMeshes) {
-      if (typeof m.setEnabled === 'function') m.setEnabled(false);
-      m.isPickable = false;
-    }
-    // If walking.glb shipped without a Skeleton (animation-only files
-    // typically don't, since fbx2gltf emits a glTF skin only when a mesh
-    // references the joints), synthesize one by cloning paladin's
-    // skeleton and re-linking each cloned bone's _linkedTransformNode to
-    // walking's matching TransformNode by name. The ghost mesh bound to
-    // this synthesized skeleton then skins from walking's animated TNs
-    // (which the native walkGroup drives), fully independent of paladin's
-    // idle skeleton.
-    const walkingTNs = Array.isArray(result.transformNodes) ? result.transformNodes.slice() : [];
-    let ghostSkeleton = walkingSkeleton;
-    if (!ghostSkeleton && this._paladinSource?.skeleton
-      && typeof this._paladinSource.skeleton.clone === 'function'
-      && walkingTNs.length > 0) {
-      ghostSkeleton = this._buildGhostSkeletonFromWalkingTNs(
-        this._paladinSource.skeleton, walkingTNs,
-      );
-    }
-    this._walkingSource = {
-      mesh: walkingPrimary,
-      meshes: walkingMeshes,
-      skeleton: ghostSkeleton,
-      walkGroup: walkGroupNative,
-      transformNodes: walkingTNs,
-    };
-    // Compute the source clip's stride length and natural cycle duration
-    // BEFORE stripping root motion — once stripped, the keyframes are
-    // zeroed and stride reads as 0. Then back-calc a speedRatio that
-    // makes one stride cover one hex's world-distance in MOVE_ANIM_MS.
-    // Hex spacing on the X axis = HEX_RADIUS_WORLD * sqrt(3) ≈ 1.732 wu
-    // for radius=1.
-    const strideSrcUnits = computeRootStrideLength(walkGroupNative);
-    const natCycleSec    = animDurationSeconds(walkGroupNative);
-    const paladinScale   = this._paladinScale > 0 ? this._paladinScale : PALADIN_BASE_SCALE;
-    const hexStepWU      = HEX_RADIUS_WORLD * Math.sqrt(3);
-    const walkSpeedRatio = computeAnimSpeedRatioForStride(
-      strideSrcUnits, natCycleSec, paladinScale, hexStepWU, MOVE_ANIM_MS, /*fallback*/ 2.0,
-    );
-    console.info(
-      `[Renderer3D] walking speed ratio = ${walkSpeedRatio.toFixed(2)} `
-      + `(stride=${strideSrcUnits.toFixed(2)} src-units, cycle=${natCycleSec.toFixed(2)}s, `
-      + `scale=${paladinScale.toFixed(3)}, hex=${hexStepWU.toFixed(2)}wu, anim=${MOVE_ANIM_MS}ms)`,
-    );
-    this._walkingSource.speedRatio = walkSpeedRatio;
-    // Strip root motion on the native walking group too — ghost clones
-    // riding walking's skeleton would otherwise translate through space
-    // on their own in addition to the cone slide along the planned path.
-    stripRootBoneTranslation(walkGroupNative);
-    if (typeof walkGroupNative.start === 'function') {
-      walkGroupNative.start(true, walkSpeedRatio);
-    }
-    if (typeof walkGroupNative.pause === 'function') {
-      walkGroupNative.pause();
-      this._walkingSource.playing = false;
-    }
-
-    // Clone walkGroupNative and retarget the CLONE onto paladin's
-    // TransformNodes (looked up by name — Mixamo bone names line up
-    // between the rigged paladin.glb and walking.glb exports). The
-    // original walkGroupNative keeps driving walking.glb's own skeleton
-    // for the ghost preview path; the clone is what _maybeTogglePaladin
-    // Animation pause/plays on the live paladin standees.
-    const nameMap = new Map();
-    const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
-    const addEntry = (name, target) => {
-      if (!name || !target) return;
-      if (!nameMap.has(name)) nameMap.set(name, target);
-      const stripped = stripDup(name);
-      if (stripped !== name && !nameMap.has(stripped)) nameMap.set(stripped, target);
-    };
-    for (const tn of src.transformNodes || []) {
-      if (tn && tn.name) addEntry(tn.name, tn);
-    }
-    if (src.skeleton && Array.isArray(src.skeleton.bones)) {
-      for (const bone of src.skeleton.bones) {
-        if (!bone) continue;
-        const tn = bone._linkedTransformNode
-          || (typeof bone.getTransformNode === 'function' && bone.getTransformNode());
-        if (tn && tn.name) addEntry(tn.name, tn);
-        if (bone.name) addEntry(bone.name, tn || bone);
-      }
-    }
-
-    let walkGroupForPaladin = null;
-    let remapped = 0;
-    let missed = 0;
-    const missingExamples = [];
-    if (typeof walkGroupNative.clone === 'function') {
-      walkGroupForPaladin = walkGroupNative.clone('paladinWalkRetargeted', (oldTarget) => {
-        if (!oldTarget || !oldTarget.name) { missed++; return oldTarget; }
-        const match = nameMap.get(oldTarget.name) || nameMap.get(stripDup(oldTarget.name));
-        if (match) { remapped++; return match; }
-        missed++;
-        if (missingExamples.length < 5) missingExamples.push(oldTarget.name);
-        return oldTarget;
-      });
-    }
-    console.info(
-      `[Renderer3D] walking → paladin retarget: ${remapped} hit, ${missed} miss`
-      + (missed > 0 ? ` (e.g. ${missingExamples.join(', ')})` : '')
-      + ` — nameMap size ${nameMap.size}`,
-    );
-
-    if (walkGroupForPaladin && remapped > 0) {
-      // Strip root motion so the walking clip animates the rig in place —
-      // the cone slide via Babylon Animation already handles world-space
-      // translation across hexes. Without this the walking model would
-      // also translate via its own root keyframes (double-displacement).
-      stripRootBoneTranslation(walkGroupForPaladin);
-      // Kick the animatables into existence then immediately pause, so
-      // _maybeTogglePaladinAnimation can use play()/pause() to resume from
-      // current frame instead of restarting from frame 0 each move.
-      if (typeof walkGroupForPaladin.start === 'function') {
-        walkGroupForPaladin.start(true, walkSpeedRatio);
-      }
-      if (typeof walkGroupForPaladin.pause === 'function') {
-        walkGroupForPaladin.pause();
-      }
-      src.walkGroup = walkGroupForPaladin;
-    } else {
-      // Retarget failed — fall back to whatever embedded animation the
-      // paladin GLB shipped with (or nothing if it has none).
-      console.warn('[Renderer3D] walking retarget produced 0 hits — main standees will not animate.');
-      src.walkGroup = null;
-    }
-    src.activeGroup = 'idle';
-    this._paladinAnimObserver = this._installPaladinAnimBlendTick();
-    return walkGroupNative;
-  }
-
-  /** Kick the lazy running.glb load exactly once. Idempotent — returns the
-   *  in-flight (or settled) promise on repeat calls. Off the beginLoad
-   *  critical path (pre-warmed a beat after the rig + walk/idle, and lazily
-   *  triggered by the first multi-hex move). Safe before the rig loads
-   *  (no-ops until `_paladinSource` exists) and without a real SceneLoader. */
-  _ensureRunningAnimation(basePath = 'assets') {
-    if (this._runningLoadPromise) return this._runningLoadPromise;
-    if (!this._paladinSource) return null;
-    if (this._paladinSource.runGroup) return Promise.resolve(this._paladinSource.runGroup);
-    this._runningLoadPromise = Promise.resolve()
-      .then(() => this._loadRunningAnimation(basePath))
-      .catch(err => {
-        console.warn('[Renderer3D] running.glb load failed; multi-hex moves walk instead.', err);
+    this._walkingSourceLoad = (async () => {
+      let result;
+      try {
+        result = await BABYLON.SceneLoader.ImportMeshAsync(
+          null, `${basePath}/${PALADIN_MODEL_DIR}`, WALKING_MODEL_FILE, this._scene,
+          this._glbProgressHandler('rig'));
+      } catch (err) {
+        console.warn('[Renderer3D] walking.glb import failed', err);
         return null;
-      });
-    return this._runningLoadPromise;
-  }
-
-  /** Load running.glb and retarget its AnimationGroup onto the SHARED paladin
-   *  skeleton by bone/TransformNode name — the same pipeline as walking
-   *  (clone the native group with a target remapper, strip root motion,
-   *  dispose the imported geometry, keep only the keyframes). The retargeted
-   *  group is stashed on `_paladinSource.runGroup`, started once to
-   *  instantiate animatables then paused so `_maybeTogglePaladinAnimation`
-   *  can play()/pause() it from its current frame.
-   *
-   *  Same shared-skeleton tradeoff as walking/idle/punch: every visible
-   *  paladin runs in unison off the one rig (per-standee skeletons caused the
-   *  historical T-pose/giant-head bugs, so we never clone the skeleton).
-   *
-   *  Also computes the run clip's own stride/cycle → a speedRatio that makes
-   *  one running stride cover one hex's world-distance in RUN_HEX_MS (running's
-   *  per-hex pace, not the walk's MOVE_ANIM_MS), stored on
-   *  `_runningSource.speedRatio`. addMoveAnim then scales the cone-slide WINDOW
-   *  by hop count rather than the speedRatio, so multi-hex runs take longer in
-   *  real time instead of speeding up.
-   *  Returns the retargeted group, or null if import/retarget failed (the move
-   *  then falls back to the walking clip). */
-  async _loadRunningAnimation(basePath = 'assets') {
-    if (!this._babylon || !this._scene || !this._paladinSource) return null;
-    const BABYLON = this._babylon;
-    const src = this._paladinSource;
-    if (src.runGroup) return src.runGroup;
-    if (!BABYLON.SceneLoader || typeof BABYLON.SceneLoader.ImportMeshAsync !== 'function') {
-      return null;
-    }
-
-    let result;
-    try {
-      result = await BABYLON.SceneLoader.ImportMeshAsync(
-        null,
-        `${basePath}/${PALADIN_MODEL_DIR}`,
-        RUNNING_MODEL_FILE,
-        this._scene,
-        this._glbProgressHandler('paladin'),
-      );
-    } catch (err) {
-      console.warn('[Renderer3D] running.glb import failed', err);
-      return null;
-    }
-
-    const runNative = (result.animationGroups || []).find(g => g) || null;
-    if (!runNative) {
-      console.warn('[Renderer3D] running.glb contained no animation group');
-      this._disposeWalkingImport(result);
-      return null;
-    }
-
-    // Compute stride + natural cycle BEFORE stripping root motion (which zeros
-    // the keyframes), then back-calc a speedRatio that makes one running stride
-    // cover one hex's world-distance in RUN_HEX_MS — exactly like walking, but
-    // measured against running's own (longer) stride AND its own per-hex time.
-    // Using RUN_HEX_MS (not MOVE_ANIM_MS) is the key to matching speed to
-    // distance: the run cone-slide window scales with hop count (N×RUN_HEX_MS),
-    // so this base ratio already encodes the per-hex foot-plant pace and is
-    // applied WITHOUT a distMul factor in addMoveAnim.
-    const strideSrcUnits = computeRootStrideLength(runNative);
-    const natCycleSec    = animDurationSeconds(runNative);
-    const paladinScale   = this._paladinScale > 0 ? this._paladinScale : PALADIN_BASE_SCALE;
-    const hexStepWU      = HEX_RADIUS_WORLD * Math.sqrt(3);
-    // Fallback 1.25 picked empirically against Mixamo's "running" clip which
-    // has no usable root track: that's natural cycle speed plus a small bias
-    // so the legs visibly cycle faster than walking. If we ever get a running
-    // glb with real root motion, the solved ratio takes over automatically.
-    const runSpeedRatio  = computeAnimSpeedRatioForStride(
-      strideSrcUnits, natCycleSec, paladinScale, hexStepWU, RUN_HEX_MS, /*fallback*/ 1.25,
-    );
-    this._runningSource = { speedRatio: runSpeedRatio };
-    console.info(
-      `[Renderer3D] running speed ratio = ${runSpeedRatio.toFixed(2)} `
-      + `(stride=${strideSrcUnits.toFixed(2)} src-units, cycle=${natCycleSec.toFixed(2)}s, `
-      + `scale=${paladinScale.toFixed(3)}, hex=${hexStepWU.toFixed(2)}wu, anim=${RUN_HEX_MS}ms)`,
-    );
-
-    const nameMap = new Map();
-    const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
-    const addEntry = (name, target) => {
-      if (!name || !target) return;
-      if (!nameMap.has(name)) nameMap.set(name, target);
-      const stripped = stripDup(name);
-      if (stripped !== name && !nameMap.has(stripped)) nameMap.set(stripped, target);
-    };
-    for (const tn of src.transformNodes || []) {
-      if (tn && tn.name) addEntry(tn.name, tn);
-    }
-    if (src.skeleton && Array.isArray(src.skeleton.bones)) {
-      for (const bone of src.skeleton.bones) {
-        if (!bone) continue;
-        const tn = bone._linkedTransformNode
-          || (typeof bone.getTransformNode === 'function' && bone.getTransformNode());
-        if (tn && tn.name) addEntry(tn.name, tn);
-        if (bone.name) addEntry(bone.name, tn || bone);
       }
-    }
-
-    let runForPaladin = null;
-    let remapped = 0;
-    let missed = 0;
-    if (typeof runNative.clone === 'function') {
-      runForPaladin = runNative.clone('paladinRunRetargeted', (oldTarget) => {
-        if (!oldTarget || !oldTarget.name) { missed++; return oldTarget; }
-        const match = nameMap.get(oldTarget.name) || nameMap.get(stripDup(oldTarget.name));
-        if (match) { remapped++; return match; }
-        missed++;
-        return oldTarget;
-      });
-    }
-    console.info(`[Renderer3D] running → paladin retarget: ${remapped} hit, ${missed} miss`);
-
-    if (runForPaladin && remapped > 0) {
-      // Strip root motion so the run animates the rig in place — the cone
-      // slide already handles world-space translation across the polyline.
-      stripRootBoneTranslation(runForPaladin);
-      // Kick the animatables into existence then pause, so the anim tick can
-      // play()/pause() from the current frame instead of restarting at 0.
-      if (typeof runForPaladin.start === 'function') runForPaladin.start(true, runSpeedRatio);
-      if (typeof runForPaladin.pause === 'function') runForPaladin.pause();
-      src.runGroup = runForPaladin;
-    } else {
-      console.warn('[Renderer3D] running retarget produced 0 hits — multi-hex moves walk instead.');
-      try { runForPaladin?.dispose?.(); } catch { /* ignore */ }
-      src.runGroup = null;
-    }
-
-    // Dispose running.glb's imported mesh + skeleton — only the keyframes are
-    // kept (retargeted onto paladin's rig). Running has no ghost-preview path,
-    // so unlike walking we don't retain its skeleton.
-    this._disposeWalkingImport(result);
-    return src.runGroup;
-  }
-
-  /** Dispose every mesh + skeleton brought in by the walking.glb import.
-   *  The animation group is intentionally preserved (handed back to the
-   *  caller). Safe against partial / missing fields. */
-  /** Load idle.glb and retarget its AnimationGroup onto the paladin
-   *  source skeleton by name (same pattern as walking). The retargeted
-   *  group replaces `src.idleGroup` so the blend tick plays it when the
-   *  paladin is not mid-move. Imported geometry is disposed — we only
-   *  want the keyframes. */
-  async _loadIdleAnimation(basePath = 'assets') {
-    if (!this._babylon || !this._scene || !this._paladinSource) return null;
-    const BABYLON = this._babylon;
-    const src = this._paladinSource;
-    if (!BABYLON.SceneLoader || typeof BABYLON.SceneLoader.ImportMeshAsync !== 'function') {
-      return null;
-    }
-
-    let result;
-    try {
-      result = await BABYLON.SceneLoader.ImportMeshAsync(
-        null,
-        `${basePath}/${PALADIN_MODEL_DIR}`,
-        IDLE_MODEL_FILE,
-        this._scene,
-        this._glbProgressHandler('paladin'),
-      );
-    } catch (err) {
-      console.warn('[Renderer3D] idle.glb import failed', err);
-      return null;
-    }
-
-    const idleNative = (result.animationGroups || []).find(g => g) || null;
-    if (!idleNative) {
-      console.warn('[Renderer3D] idle.glb contained no animation group');
-      this._disposeWalkingImport(result);
-      return null;
-    }
-
-    const nameMap = new Map();
-    const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
-    const addEntry = (name, target) => {
-      if (!name || !target) return;
-      if (!nameMap.has(name)) nameMap.set(name, target);
-      const stripped = stripDup(name);
-      if (stripped !== name && !nameMap.has(stripped)) nameMap.set(stripped, target);
-    };
-    for (const tn of src.transformNodes || []) {
-      if (tn && tn.name) addEntry(tn.name, tn);
-    }
-    if (src.skeleton && Array.isArray(src.skeleton.bones)) {
-      for (const bone of src.skeleton.bones) {
-        if (!bone) continue;
-        const tn = bone._linkedTransformNode
-          || (typeof bone.getTransformNode === 'function' && bone.getTransformNode());
-        if (tn && tn.name) addEntry(tn.name, tn);
-        if (bone.name) addEntry(bone.name, tn || bone);
-      }
-    }
-
-    let idleForPaladin = null;
-    let remapped = 0;
-    let missed = 0;
-    if (typeof idleNative.clone === 'function') {
-      idleForPaladin = idleNative.clone('paladinIdleRetargeted', (oldTarget) => {
-        if (!oldTarget || !oldTarget.name) { missed++; return oldTarget; }
-        const match = nameMap.get(oldTarget.name) || nameMap.get(stripDup(oldTarget.name));
-        if (match) { remapped++; return match; }
-        missed++;
-        return oldTarget;
-      });
-    }
-    console.info(`[Renderer3D] idle → paladin retarget: ${remapped} hit, ${missed} miss`);
-
-    if (idleForPaladin && remapped > 0) {
-      if (typeof idleForPaladin.start === 'function') {
-        idleForPaladin.start(true, 1.0);
-      }
-      src.idleGroup = idleForPaladin;
-      src._playing = true; // currently playing idle
-      src.activeGroup = 'idle';
-    } else {
-      console.warn('[Renderer3D] idle retarget produced 0 hits — paladin will sit at bind pose.');
-      try { idleForPaladin?.dispose?.(); } catch { /* ignore */ }
-    }
-
-    // Dispose idle.glb's imported mesh + skeleton — we only kept the
-    // animation keyframes (cloned + retargeted onto paladin's rig).
-    this._disposeWalkingImport(result);
-    return idleForPaladin;
-  }
-
-  /** Kick the lazy punch.glb load exactly once. Idempotent — returns the
-   *  in-flight (or settled) promise on repeat calls. Kept OFF the beginLoad
-   *  critical path / loading-screen bundle: the ~47k clip only fetches once
-   *  the paladin rig is loaded and combat is imminent, so it never gates
-   *  first paint. Safe to call before the rig loads (no-ops until
-   *  `_paladinSource` exists) and from environments without a real
-   *  SceneLoader (the loader itself early-returns). */
-  _ensurePunchAnimation(basePath = 'assets') {
-    if (this._punchLoadPromise) return this._punchLoadPromise;
-    if (!this._paladinSource) return null;
-    if (this._paladinSource.punchGroup) return Promise.resolve(this._paladinSource.punchGroup);
-    this._punchLoadPromise = Promise.resolve()
-      .then(() => this._loadPunchAnimation(basePath))
-      .catch(err => {
-        console.warn('[Renderer3D] punch.glb load failed; paladins lunge without a strike clip.', err);
+      const walkGroupNative = (result.animationGroups || []).find(g => g) || null;
+      if (!walkGroupNative) {
+        console.warn('[Renderer3D] walking.glb contained no animation group');
+        this._disposeWalkingImport(result);
         return null;
-      });
-    return this._punchLoadPromise;
-  }
-
-  /** Load punch.glb and retarget its AnimationGroup onto the shared paladin
-   *  skeleton by bone/TransformNode name — the exact pattern of
-   *  `_loadIdleAnimation` (clone the native group with a target remapper,
-   *  strip root motion, dispose the imported geometry, keep only the
-   *  keyframes). The retargeted group is stored INERT on
-   *  `_paladinSource.punchGroup` (started once to instantiate animatables,
-   *  then stopped) so `_startPaladinPunch` can play it once per lunge.
-   *
-   *  Like idle/walk, the punch group drives the SHARED source skeleton, so it
-   *  plays on every visible paladin in unison — the same board-game-token
-   *  tradeoff documented on `_buildPaladinClone` (per-standee skeletons caused
-   *  the historical T-pose/giant-head bugs, so we never clone the skeleton).
-   *  Returns the retargeted group, or null if the import/retarget failed (the
-   *  lunge then falls back to the pure position-slide). */
-  async _loadPunchAnimation(basePath = 'assets') {
-    if (!this._babylon || !this._scene || !this._paladinSource) return null;
-    const BABYLON = this._babylon;
-    const src = this._paladinSource;
-    if (src.punchGroup) return src.punchGroup;
-    if (!BABYLON.SceneLoader || typeof BABYLON.SceneLoader.ImportMeshAsync !== 'function') {
-      return null;
-    }
-
-    let result;
-    try {
-      result = await BABYLON.SceneLoader.ImportMeshAsync(
-        null,
-        `${basePath}/${PALADIN_MODEL_DIR}`,
-        PUNCH_MODEL_FILE,
-        this._scene,
-        this._glbProgressHandler('paladin'),
-      );
-    } catch (err) {
-      console.warn('[Renderer3D] punch.glb import failed', err);
-      return null;
-    }
-
-    const punchNative = (result.animationGroups || []).find(g => g) || null;
-    if (!punchNative) {
-      console.warn('[Renderer3D] punch.glb contained no animation group');
-      this._disposeWalkingImport(result);
-      return null;
-    }
-
-    const nameMap = new Map();
-    const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
-    const addEntry = (name, target) => {
-      if (!name || !target) return;
-      if (!nameMap.has(name)) nameMap.set(name, target);
-      const stripped = stripDup(name);
-      if (stripped !== name && !nameMap.has(stripped)) nameMap.set(stripped, target);
-    };
-    for (const tn of src.transformNodes || []) {
-      if (tn && tn.name) addEntry(tn.name, tn);
-    }
-    if (src.skeleton && Array.isArray(src.skeleton.bones)) {
-      for (const bone of src.skeleton.bones) {
-        if (!bone) continue;
-        const tn = bone._linkedTransformNode
-          || (typeof bone.getTransformNode === 'function' && bone.getTransformNode());
-        if (tn && tn.name) addEntry(tn.name, tn);
-        if (bone.name) addEntry(bone.name, tn || bone);
       }
-    }
-
-    let punchForPaladin = null;
-    let remapped = 0;
-    let missed = 0;
-    if (typeof punchNative.clone === 'function') {
-      punchForPaladin = punchNative.clone('paladinPunchRetargeted', (oldTarget) => {
-        if (!oldTarget || !oldTarget.name) { missed++; return oldTarget; }
-        const match = nameMap.get(oldTarget.name) || nameMap.get(stripDup(oldTarget.name));
-        if (match) { remapped++; return match; }
-        missed++;
-        return oldTarget;
-      });
-    }
-    console.info(`[Renderer3D] punch → paladin retarget: ${remapped} hit, ${missed} miss`);
-
-    if (punchForPaladin && remapped > 0) {
-      // Strip root motion so the strike animates in place — the cone lunge
-      // slide already handles world-space displacement.
-      stripRootBoneTranslation(punchForPaladin);
-      src.punchDurationSec = animDurationSeconds(punchNative);
-      // Instantiate the animatables, then stop so it sits inert at frame 0
-      // until _startPaladinPunch plays it. (Idle/walk pause(); punch is a
-      // one-shot, so stop() is the cleaner resting state.)
-      if (typeof punchForPaladin.start === 'function') punchForPaladin.start(false, 1.0);
-      if (typeof punchForPaladin.stop === 'function') punchForPaladin.stop();
-      src.punchGroup = punchForPaladin;
-    } else {
-      console.warn('[Renderer3D] punch retarget produced 0 hits — lunge falls back to slide-only.');
-      try { punchForPaladin?.dispose?.(); } catch { /* ignore */ }
-      src.punchGroup = null;
-    }
-
-    // Dispose punch.glb's imported mesh + skeleton — only the keyframes are kept.
-    this._disposeWalkingImport(result);
-    return src.punchGroup;
+      // Keep walking's mesh + skeleton alive (hidden) — per-rig ghost skeletons
+      // are cloned from each rig and relinked to these TransformNodes.
+      const walkingMeshes = (result.meshes || []).filter(m =>
+        m && typeof m.getTotalVertices === 'function' && m.getTotalVertices() > 0);
+      const walkingPrimary = walkingMeshes.find(m => m.skeleton) || walkingMeshes[0] || null;
+      const walkingSkeleton = walkingPrimary?.skeleton
+        || (Array.isArray(result.skeletons) ? result.skeletons[0] : null) || null;
+      for (const m of walkingMeshes) {
+        if (typeof m.setEnabled === 'function') m.setEnabled(false);
+        m.isPickable = false;
+      }
+      const walkingTNs = Array.isArray(result.transformNodes) ? result.transformNodes.slice() : [];
+      // Stride/speed BEFORE stripping root motion (which zeroes the keyframes).
+      const strideSrcUnits = computeRootStrideLength(walkGroupNative);
+      const natCycleSec    = animDurationSeconds(walkGroupNative);
+      const hexStepWU      = HEX_RADIUS_WORLD * Math.sqrt(3);
+      const walkSpeedRatio = computeAnimSpeedRatioForStride(
+        strideSrcUnits, natCycleSec, PALADIN_BASE_SCALE, hexStepWU, MOVE_ANIM_MS, /*fallback*/ 2.0);
+      stripRootBoneTranslation(walkGroupNative, 'mixamorig:Hips', { keepY: true });
+      if (typeof walkGroupNative.start === 'function') walkGroupNative.start(true, walkSpeedRatio);
+      if (typeof walkGroupNative.pause === 'function') walkGroupNative.pause();
+      this._walkingSource = {
+        mesh: walkingPrimary, meshes: walkingMeshes, skeleton: walkingSkeleton,
+        walkGroup: walkGroupNative, transformNodes: walkingTNs,
+        speedRatio: walkSpeedRatio, playing: false,
+      };
+      // Per-frame blend tick: native ghost walk + per-rig idle/walk/run toggles.
+      if (!this._paladinAnimObserver) this._paladinAnimObserver = this._installPaladinAnimBlendTick();
+      return this._walkingSource;
+    })();
+    return this._walkingSourceLoad;
   }
+
+
+
+
+
 
   /** G1: lazy-load a one-shot reaction clip (hit.glb or block.glb) and
    *  retarget it onto the shared paladin skeleton, mirroring the punch
@@ -4377,91 +3858,48 @@ export class Renderer3D {
    *  AFTER the first combat, so the ~few-tens-of-kB clip downloads only on
    *  demand. Returns the AnimationGroup (or null if the import or retarget
    *  failed; the reaction then no-ops gracefully). */
-  _ensureReactionAnimation(slot, file, basePath = 'assets') {
-    if (!this._paladinSource) return null;
-    const src = this._paladinSource;
+  _ensureReactionAnimation(slot, file, basePath = this._assetsBasePath || 'assets',
+    src = this._paladinSource) {
+    if (!src) return null;
     if (src[slot]) return Promise.resolve(src[slot]);
     const promiseKey = `_${slot}LoadPromise`;
-    if (this[promiseKey]) return this[promiseKey];
-    this[promiseKey] = Promise.resolve()
-      .then(() => this._loadReactionAnimation(slot, file, basePath))
+    if (src[promiseKey]) return src[promiseKey];
+    src[promiseKey] = Promise.resolve()
+      .then(() => this._loadReactionAnimation(slot, file, basePath, src))
       .catch(err => {
         console.warn(`[Renderer3D] ${file} load failed; reaction no-ops.`, err);
         return null;
       });
-    return this[promiseKey];
+    return src[promiseKey];
   }
 
-  async _loadReactionAnimation(slot, file, basePath = 'assets') {
-    if (!this._babylon || !this._scene || !this._paladinSource) return null;
+  /** Load a reaction clip (hit/block) and retarget it onto `src`'s skeleton.
+   *  Works for any rig source (paladin or fallback) — the reaction slot +
+   *  duration are stashed on `src`. */
+  async _loadReactionAnimation(slot, file, basePath = this._assetsBasePath || 'assets',
+    src = this._paladinSource) {
+    if (!this._babylon || !this._scene || !src || src[slot]) return src?.[slot] || null;
     const BABYLON = this._babylon;
-    const src = this._paladinSource;
-    if (src[slot]) return src[slot];
     if (!BABYLON.SceneLoader || typeof BABYLON.SceneLoader.ImportMeshAsync !== 'function') {
       return null;
     }
     let result;
     try {
       result = await BABYLON.SceneLoader.ImportMeshAsync(
-        null,
-        `${basePath}/${PALADIN_MODEL_DIR}`,
-        file,
-        this._scene,
-        this._glbProgressHandler('paladin'),
-      );
+        null, `${basePath}/${PALADIN_MODEL_DIR}`, file, this._scene,
+        this._glbProgressHandler('rig'));
     } catch (err) {
       console.warn(`[Renderer3D] ${file} import failed`, err);
       return null;
     }
     const native = (result.animationGroups || []).find(g => g) || null;
-    if (!native) {
-      console.warn(`[Renderer3D] ${file} contained no animation group`);
-      this._disposeWalkingImport(result);
-      return null;
-    }
-    const nameMap = new Map();
-    const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
-    const addEntry = (name, target) => {
-      if (!name || !target) return;
-      if (!nameMap.has(name)) nameMap.set(name, target);
-      const stripped = stripDup(name);
-      if (stripped !== name && !nameMap.has(stripped)) nameMap.set(stripped, target);
-    };
-    for (const tn of src.transformNodes || []) {
-      if (tn && tn.name) addEntry(tn.name, tn);
-    }
-    if (src.skeleton && Array.isArray(src.skeleton.bones)) {
-      for (const bone of src.skeleton.bones) {
-        if (!bone) continue;
-        const tn = bone._linkedTransformNode
-          || (typeof bone.getTransformNode === 'function' && bone.getTransformNode());
-        if (tn && tn.name) addEntry(tn.name, tn);
-        if (bone.name) addEntry(bone.name, tn || bone);
-      }
-    }
-    let retargeted = null;
-    let remapped = 0;
-    let missed = 0;
-    if (typeof native.clone === 'function') {
-      retargeted = native.clone(`paladin${slot}Retargeted`, (oldTarget) => {
-        if (!oldTarget || !oldTarget.name) { missed++; return oldTarget; }
-        const match = nameMap.get(oldTarget.name) || nameMap.get(stripDup(oldTarget.name));
-        if (match) { remapped++; return match; }
-        missed++;
-        return oldTarget;
-      });
-    }
-    console.info(`[Renderer3D] ${file} → paladin retarget: ${remapped} hit, ${missed} miss`);
-    if (retargeted && remapped > 0) {
-      stripRootBoneTranslation(retargeted);
+    if (!native) { this._disposeWalkingImport(result); return null; }
+    const clone = this._retargetNativeClipOntoRig(
+      native, src, `${src.cloneTag || 'rig'}${slot}Retargeted`,
+      { keepY: !src.hipCentered, loop: false, rest: 'stop' });
+    if (clone) {
       src[`${slot}DurationSec`] = animDurationSeconds(native);
-      if (typeof retargeted.start === 'function') retargeted.start(false, 1.0);
-      if (typeof retargeted.stop  === 'function') retargeted.stop();
-      src[slot] = retargeted;
-    } else {
-      console.warn(`[Renderer3D] ${file} retarget produced 0 hits — reaction no-ops.`);
-      try { retargeted?.dispose?.(); } catch { /* ignore */ }
-      src[slot] = null;
+      src[slot] = clone;
     }
     this._disposeWalkingImport(result);
     return src[slot];
@@ -4479,14 +3917,20 @@ export class Renderer3D {
    *  Returns a Promise that resolves when the clip ends (or immediately if
    *  the clip isn't loaded yet / no rig is present). The caller can use it to
    *  time the damage floater with the impact pose. */
-  playReactionAnim(kind) {
+  playReactionAnim(kind, entityId = null) {
     if (kind !== 'hit' && kind !== 'block') return Promise.resolve();
     const slot = kind === 'hit' ? 'hitGroup' : 'blockGroup';
-    const src = this._paladinSource;
+    const file = kind === 'hit' ? HIT_MODEL_FILE : BLOCK_MODEL_FILE;
+    // Play on the DEFENDER's own rig (paladin or fallback); default to the
+    // paladin source when no defender id is supplied (back-compat).
+    const ent = entityId != null && this.state?.entities
+      ? this.state.entities.find(e => e && e.id === entityId) : null;
+    const src = (ent && !unitUsesPaladinModel(ent))
+      ? this._loadedFallbackRigFor(ent)
+      : this._paladinSource;
     if (!src || !src[slot]) {
       // Lazy load (idempotent) so the next reaction has the clip ready.
-      const file = kind === 'hit' ? HIT_MODEL_FILE : BLOCK_MODEL_FILE;
-      this._ensureReactionAnimation(slot, file, this._assetsBasePath || 'assets');
+      this._ensureReactionAnimation(slot, file, this._assetsBasePath || 'assets', src);
       return Promise.resolve();
     }
     const group = src[slot];
@@ -4524,50 +3968,13 @@ export class Renderer3D {
     });
   }
 
-  /** Play the retargeted punch clip once on the shared paladin skeleton,
-   *  compressed to read as a sharp strike across the lunge window. Sets
-   *  `src.punchPlaying` so the idle/walk toggles yield the skeleton for the
-   *  duration; clears it (and lets the toggles resume idle/walk) when the
-   *  one-shot ends. No-op if the punch clip never loaded — the caller's
-   *  position-slide is then the whole animation (graceful fallback). */
-  _startPaladinPunch() {
-    const src = this._paladinSource;
-    if (!src || !src.punchGroup) return false;
-    const punch = src.punchGroup;
-    const speedMul = this._playbackSpeedMul ?? 1.0;
-    const ratio = computePunchSpeedRatio(src.punchDurationSec, PUNCH_TARGET_MS * speedMul);
-    // Hand the skeleton to punch: silence idle + walk + run so none fight it.
-    if (src.idleGroup && typeof src.idleGroup.stop === 'function') src.idleGroup.stop();
-    if (src.walkGroup && typeof src.walkGroup.stop === 'function') src.walkGroup.stop();
-    if (src.runGroup && typeof src.runGroup.stop === 'function') src.runGroup.stop();
-    src.punchPlaying = true;
-    src.activeGroup = 'punch';
-
-    // Resume the idle/walk toggle once the strike completes. Babylon fires
-    // onAnimationGroupEndObservable for a non-looping group; guard for stubs.
-    const onEnd = () => {
-      src.punchPlaying = false;
-      // Force the next toggle tick to re-resolve idle/walk from scratch.
-      src.activeGroup = null;
-    };
-    if (punch.onAnimationGroupEndObservable
-      && typeof punch.onAnimationGroupEndObservable.addOnce === 'function') {
-      punch.onAnimationGroupEndObservable.addOnce(onEnd);
-    } else if (punch.onAnimationGroupEndObservable
-      && typeof punch.onAnimationGroupEndObservable.add === 'function') {
-      punch.onAnimationGroupEndObservable.add(onEnd);
-    }
-
-    if (typeof punch.stop === 'function') punch.stop();
-    if (typeof punch.start === 'function') punch.start(false, ratio);
-    return true;
-  }
 
   /** Force-stop any in-flight punch and release the skeleton back to the
    *  idle/walk toggle. Used when a lunge is hard-cleared (round snap) so the
    *  rig doesn't freeze mid-strike. Safe when no punch is playing. */
   _stopPaladinPunch() {
-    const src = this._paladinSource;
+    const src = this._activePunchSrc || this._paladinSource;
+    this._activePunchSrc = null;
     if (!src) return;
     if (src.punchGroup && typeof src.punchGroup.stop === 'function') {
       try { src.punchGroup.stop(); } catch { /* ignore */ }
@@ -4578,10 +3985,11 @@ export class Renderer3D {
     }
   }
 
-  /** Frame range [from, to] of the shared retargeted punch clip, or null when
-   *  the clip hasn't loaded / has a degenerate range. */
-  _punchFrameRange() {
-    const punch = this._paladinSource?.punchGroup;
+  /** Frame range [from, to] of a rig's retargeted punch clip, or null when the
+   *  clip hasn't loaded / has a degenerate range. Defaults to the active punch
+   *  rig (the attacker) so the cinematic freezes the right strike. */
+  _punchFrameRange(src = this._activePunchSrc || this._paladinSource) {
+    const punch = src?.punchGroup;
     if (!punch) return null;
     const from = Number.isFinite(punch.from) ? punch.from : 0;
     const to   = Number.isFinite(punch.to)   ? punch.to   : 0;
@@ -4601,10 +4009,10 @@ export class Renderer3D {
    *  cone-token attacker (which never started the shared punch) doesn't freeze
    *  every idle paladin in the scene. The frozen frame is stashed for resume. */
   holdPunchAtImpact() {
-    const src = this._paladinSource;
+    const src = this._activePunchSrc || this._paladinSource;
     const punch = src?.punchGroup;
     if (!src || !punch || !src.punchPlaying) return false;
-    const range = this._punchFrameRange();
+    const range = this._punchFrameRange(src);
     if (!range) return false;
     const impact = range.from + (range.to - range.from) * PUNCH_IMPACT_FRAC;
     this._frozenPunchImpactFrame = impact;
@@ -4619,7 +4027,7 @@ export class Renderer3D {
    *  return). Clears `punchPlaying` on completion so idle/walk resume. No-op
    *  resolve when nothing is frozen. */
   resumePunch() {
-    const src = this._paladinSource;
+    const src = this._activePunchSrc || this._paladinSource;
     const punch = src?.punchGroup;
     if (!src || !punch || this._frozenPunchImpactFrame == null) return Promise.resolve();
     this._frozenPunchImpactFrame = null;
@@ -4705,88 +4113,7 @@ export class Renderer3D {
     }
   }
 
-  /** Resume or pause the paladin's BUILT-IN animation group (the one that
-   *  ships with the .glb — for NewPaladin this is the walking clip, treated
-   *  as the rig's default animation). Should play whenever any hero
-   *  paladin is mid-move/lunge; pause when nothing is moving so the model
-   *  freezes mid-stride between turns in playback. Uses pause()/play()
-   *  (not stop()/start()) so the animation resumes from its current frame
-   *  on each motion event instead of snapping back to frame 0. */
-  _maybeTogglePaladinAnimation() {
-    const src = this._paladinSource;
-    if (!src) return;
-    // A one-shot punch owns the shared skeleton while it plays — yield so we
-    // don't yank the rig back into idle/walk mid-strike. _startPaladinPunch's
-    // end handler clears punchPlaying and the next tick resumes normally.
-    if (src.punchPlaying) return;
-    // Four motion states: 'walk' / 'run' (motion active — run when the active
-    // move step is a multi-hop dash), 'paused' (mid-chain freeze — the motion
-    // clip is paused at its current frame, idle does NOT run), and 'idle' (no
-    // motion for SUSTAIN_MS). 'paused' lets a multi-hex move chain read as
-    // "run → freeze → run → idle" instead of dipping into idle between hops.
-    const wantMotion = paladinAnimTargetWeight(
-      this._activeMoveIds, this._activeLungeIds,
-      this.state?.entities, unitUsesPaladinModel,
-    ) === 0;
-    const now = performance.now();
-    if (wantMotion) this._paladinLastWalkTs = now;
 
-    const { group: motionGroup, kind: motionKind } = this._activeMotionGroup();
-    let desired;
-    if (wantMotion) {
-      desired = motionKind; // 'walk' or 'run'
-    } else if (typeof this._paladinLastWalkTs === 'number'
-      && (now - this._paladinLastWalkTs) < PALADIN_WALK_SUSTAIN_MS) {
-      desired = 'paused';
-    } else {
-      desired = 'idle';
-    }
-    if (src.activeGroup === desired) return;
-
-    const walk = src.walkGroup;
-    const run  = src.runGroup;
-    const idle = src.idleGroup;
-    if (desired === 'walk' || desired === 'run') {
-      if (idle && typeof idle.stop === 'function') idle.stop();
-      // Silence the OTHER motion clip so two clips don't both drive the rig.
-      const other = desired === 'run' ? walk : run;
-      if (other && typeof other.stop === 'function') other.stop();
-      if (motionGroup) {
-        if (typeof motionGroup.play === 'function') motionGroup.play(true);
-        else if (typeof motionGroup.start === 'function') motionGroup.start(true, 1.0);
-      }
-    } else if (desired === 'paused') {
-      // Freeze the motion clip mid-stride. Crucially we do NOT start idle —
-      // idle would immediately drive the bones away from the motion clip's
-      // current frame. The clip stays paused at its last keyframe until the
-      // next motion event resumes it (play() resumes from the paused frame)
-      // or the sustain window expires and we transition to 'idle' below.
-      if (walk && typeof walk.pause === 'function') walk.pause();
-      if (run && typeof run.pause === 'function') run.pause();
-    } else { // 'idle'
-      if (walk && typeof walk.stop === 'function') walk.stop();
-      if (run && typeof run.stop === 'function') run.stop();
-      if (idle) {
-        if (typeof idle.play === 'function') idle.play(true);
-        else if (typeof idle.start === 'function') idle.start(true, 1.0);
-      }
-    }
-    src.activeGroup = desired;
-  }
-
-  /** Pick the paladin motion clip + kind for the current frame: the RUNNING
-   *  group ('run') when any active move step is a multi-hop dash and the run
-   *  clip has loaded, otherwise the WALKING group ('walk'). Falls back to walk
-   *  whenever running isn't available yet, so a multi-hex move that fires
-   *  before running.glb lands simply walks until the clip is ready. */
-  _activeMotionGroup() {
-    const src = this._paladinSource;
-    if (!src) return { group: null, kind: 'walk' };
-    const running = this._activeRunMoveIds instanceof Set
-      && this._activeRunMoveIds.size > 0;
-    if (running && src.runGroup) return { group: src.runGroup, kind: 'run' };
-    return { group: src.walkGroup, kind: 'walk' };
-  }
 
   /** Resume or pause the NATIVE walking AnimationGroup (the one playing
    *  on walking.glb's own skeleton, used by ghost clones). It should play
@@ -4832,54 +4159,9 @@ export class Renderer3D {
       // and nobody is mid-move. Resume otherwise. This keeps the rig from
       // moonwalking in place when nothing on screen needs it.
       this._maybeToggleNativeWalking();
-      this._maybeTogglePaladinAnimation();
-      // The legacy idle↔walk swap below only fires when a SEPARATE
-      // retargeted walking group was loaded onto the paladin's skeleton.
-      // With NewPaladin shipping its own walking animation as the rig's
-      // sole group, _maybeTogglePaladinAnimation handles pause/play and
-      // this branch is a no-op (walkGroup remains null).
-      const src = this._paladinSource;
-      if (!src || !src.idleGroup || !src.walkGroup) return;
-      // Yield the shared skeleton to an in-flight punch one-shot.
-      if (src.punchPlaying) return;
-      // Main standees only enter walking during ACTUAL resolution motion
-      // (_activeMoveIds / _activeLungeIds). Plan-ghosts don't trigger this
-      // because they animate on their OWN skeleton (walking source), so
-      // during planning the live paladin stays in idle while the ghost
-      // walks the preview path.
-      let wantWalk = paladinAnimTargetWeight(
-        this._activeMoveIds, this._activeLungeIds,
-        this.state?.entities, unitUsesPaladinModel,
-      ) === 0;
-      const now = performance.now();
-      if (wantWalk) this._paladinLastWalkTs = now;
-      else if (typeof this._paladinLastWalkTs === 'number'
-        && (now - this._paladinLastWalkTs) < PALADIN_WALK_SUSTAIN_MS) {
-        wantWalk = true;
-      }
-      // Run-aware: a multi-hop move plays the running clip, not walking.
-      // Selecting the motion group here (rather than hard-coding walk) keeps
-      // this legacy swap from clobbering a running paladin by starting walk
-      // on top of it.
-      const { group: motionGroup, kind: motionKind } = this._activeMotionGroup();
-      const desired = wantWalk ? motionKind : 'idle';
-      if (src.activeGroup === desired) return;
-      if (desired === 'walk' || desired === 'run') {
-        const motionSpeed = desired === 'run'
-          ? (this._runningSource?.speedRatio ?? 1.0)
-          : (this._walkingSource?.speedRatio ?? 1.0);
-        const other = desired === 'run' ? src.walkGroup : src.runGroup;
-        if (typeof src.idleGroup.stop === 'function') src.idleGroup.stop();
-        if (other && typeof other.stop === 'function') other.stop();
-        if (motionGroup && typeof motionGroup.start === 'function') {
-          motionGroup.start(true, motionSpeed);
-        }
-      } else {
-        if (typeof src.walkGroup.stop === 'function') src.walkGroup.stop();
-        if (src.runGroup && typeof src.runGroup.stop === 'function') src.runGroup.stop();
-        if (typeof src.idleGroup.start === 'function') src.idleGroup.start(true, 1.0);
-      }
-      src.activeGroup = desired;
+      // Per-rig walk/run/idle for every unit, the hero included — each cascade
+      // rig owns its own skeleton (there's no shared paladin skeleton now).
+      this._maybeToggleFallbackRigAnimation();
     });
   }
 
@@ -4890,27 +4172,30 @@ export class Renderer3D {
    *  `_disposePaladinClone`. The walking source's skeleton is SHARED
    *  across every ghost — they all march in step at the same animation
    *  frame, which reads fine for a planning preview. */
-  _buildWalkingGhostClone(entity, parent) {
-    // Ghost uses PALADIN's mesh (since walking.glb is animation-only with
-    // no embedded mesh) bound to WALKING's separate skeleton. Walking's
-    // skeleton is driven by the native walkGroup; the live paladin's
-    // skeleton runs idle. Two skeletons → ghost animates walking
-    // independently of the live paladin's idle. Mixamo bone ordering
-    // matches between paladin-idle.glb and walking.glb so the skinning
-    // indices map cleanly across the skeleton swap.
+  _buildWalkingGhostClone(entity, parent, rigSrc = this._paladinSource) {
+    // Decoupled ghost: clone THIS rig's mesh but bind it to a skeleton driven
+    // by walking.glb's animated TransformNodes, so the ghost walks the planned
+    // path while the live unit (which shares rigSrc.skeleton) stays idle. Works
+    // for any rig — paladin, mannequin, zombie — because the per-rig ghost
+    // skeleton is a clone of THAT rig's skeleton (preserving its skin indices),
+    // with each bone relinked to walking's matching TN by name.
     const walking = this._walkingSource;
-    const paladin = this._paladinSource;
-    if (!this._babylon || !paladin) return null;
+    const rig = rigSrc;
+    if (!this._babylon || !rig) return null;
     const BABYLON = this._babylon;
-    // Mesh always from paladin (the only one with geometry).
-    const srcMeshes = Array.isArray(paladin.meshes) && paladin.meshes.length > 0
-      ? paladin.meshes
-      : (paladin.mesh ? [paladin.mesh] : []);
+    const srcMeshes = Array.isArray(rig.meshes) && rig.meshes.length > 0
+      ? rig.meshes
+      : (rig.mesh ? [rig.mesh] : []);
     if (srcMeshes.length === 0) return null;
-    // Prefer walking's skeleton so the ghost animates independently.
-    // Fall back to paladin's if walking didn't export one (defensive).
-    const ghostSkeleton = (walking && walking.skeleton) || paladin.skeleton;
-    const src = { meshes: srcMeshes, mesh: paladin.mesh, skeleton: ghostSkeleton };
+    let ghostSkeleton = rig._ghostSkeleton;
+    if (!ghostSkeleton && rig.skeleton && walking
+      && Array.isArray(walking.transformNodes) && walking.transformNodes.length) {
+      ghostSkeleton = this._buildGhostSkeletonFromWalkingTNs(rig.skeleton, walking.transformNodes);
+      rig._ghostSkeleton = ghostSkeleton;
+    }
+    // Fall back to walking's own skeleton, then the rig's (defensive).
+    ghostSkeleton = ghostSkeleton || (walking && walking.skeleton) || rig.skeleton;
+    const src = { meshes: srcMeshes, mesh: rig.mesh, skeleton: ghostSkeleton };
     const id = entity?.id ?? 'unknown';
 
     let cloneRoot = null;
@@ -4953,13 +4238,16 @@ export class Renderer3D {
       primarySkinnedClone.skeleton = src.skeleton;
     }
 
-    // Match the live paladin's scale/yaw + feet-on-cone-bottom anchor so
-    // the ghost reads as the same character at the same height.
-    const scale = (typeof this._paladinScale === 'number' && this._paladinScale > 0)
-      ? this._paladinScale : PALADIN_BASE_SCALE;
-    const feetOffsetLocal = (typeof this._paladinFeetOffset === 'number'
-      && Number.isFinite(this._paladinFeetOffset))
-      ? this._paladinFeetOffset : 0;
+    // Match the live unit's scale/yaw + feet-on-cone-bottom anchor so the ghost
+    // reads as the same character at the same height. Each rig carries its own
+    // scale/feetOffset.
+    const scale = (typeof rig.scale === 'number' && rig.scale > 0) ? rig.scale
+      : (typeof this._paladinScale === 'number' && this._paladinScale > 0)
+        ? this._paladinScale : PALADIN_BASE_SCALE;
+    const feetOffsetLocal = (typeof rig.feetOffset === 'number' && Number.isFinite(rig.feetOffset))
+      ? rig.feetOffset
+      : (typeof this._paladinFeetOffset === 'number' && Number.isFinite(this._paladinFeetOffset))
+        ? this._paladinFeetOffset : 0;
     if (BABYLON.Vector3) {
       cloneRoot.scaling  = new BABYLON.Vector3(scale, scale, scale);
       cloneRoot.rotation = new BABYLON.Vector3(0, PALADIN_YAW, 0);
@@ -4980,10 +4268,19 @@ export class Renderer3D {
     };
   }
 
-  _buildPaladinClone(entity, parent) {
-    const src = this._paladinSource;
+
+  /** Clone a loaded rig `src` for one standee. Generalises the paladin clone to
+   *  any rig in the cascade (mannequin / zombie / <type>). Reads the rig's own
+   *  `src.scale` / `src.feetOffset` (set at load) and `src.cloneTag` for mesh
+   *  names. When `opts.tintColor` (a CSS hex) is given each cloned child gets a
+   *  per-standee material instance tinted to that colour — that's how the blank
+   *  mannequin reads as the owner's colour. Returns the same shape as the
+   *  paladin clone ({ mesh, skinnedMesh, childMeshes, ownsRootNode, skeleton,
+   *  animationGroup }) or null. */
+  _buildRigClone(entity, parent, src, opts = {}) {
     if (!src || !this._babylon) return null;
     const BABYLON = this._babylon;
+    const tag = (src && src.cloneTag) || 'paladin';
     // Backward-compat with the pre-multi-mesh _paladinSource shape that
     // only stashed `mesh`. The retrofit + standee-build paths populate
     // `meshes` going forward.
@@ -5000,7 +4297,7 @@ export class Renderer3D {
     let cloneRoot = null;
     if (typeof BABYLON.TransformNode === 'function') {
       try {
-        cloneRoot = new BABYLON.TransformNode(`paladin_${id}`, this._scene || null);
+        cloneRoot = new BABYLON.TransformNode(`${tag}_${id}`, this._scene || null);
       } catch { cloneRoot = null; }
     }
     const ownsRootNode = !!cloneRoot;
@@ -5012,9 +4309,24 @@ export class Renderer3D {
     let primarySkinnedClone = null;
     for (const srcMesh of srcMeshes) {
       if (!srcMesh || typeof srcMesh.clone !== 'function') continue;
-      const name = `paladin_${id}_${srcMesh.name || 'mesh'}`;
+      const name = `${tag}_${id}_${srcMesh.name || 'mesh'}`;
       const childClone = srcMesh.clone(name);
       if (!childClone) continue;
+      // Per-standee colour tint (blank mannequin → owner colour). Clone the
+      // shared material first so tinting one standee doesn't recolour them all.
+      if (opts.tintColor && childClone.material
+        && typeof childClone.material.clone === 'function' && BABYLON.Color3) {
+        const tinted = childClone.material.clone(`${tag}_${id}_mat`);
+        if (tinted) {
+          const [r, g, b] = cssHexToRgb01(opts.tintColor);
+          const col = new BABYLON.Color3(r, g, b);
+          // glTF imports as PBRMaterial (albedoColor); StandardMaterial stubs
+          // use diffuseColor. Set whichever the material exposes.
+          if ('albedoColor' in tinted)  tinted.albedoColor  = col;
+          if ('diffuseColor' in tinted) tinted.diffuseColor = col;
+          childClone.material = tinted;
+        }
+      }
       if (typeof childClone.setEnabled === 'function') childClone.setEnabled(true);
       childClone.isPickable = false;
       if (typeof childClone.renderingGroupId !== 'undefined') childClone.renderingGroupId = 0;
@@ -5061,11 +4373,16 @@ export class Renderer3D {
     }
 
     // Scale + rotate + position on the root. Children inherit transforms.
-    const scale = (typeof this._paladinScale === 'number' && this._paladinScale > 0)
-      ? this._paladinScale : PALADIN_BASE_SCALE;
-    const feetOffsetLocal = (typeof this._paladinFeetOffset === 'number'
-      && Number.isFinite(this._paladinFeetOffset))
-      ? this._paladinFeetOffset : 0;
+    // Each rig carries its own scale/feetOffset (computed at load from its
+    // bbox); fall back to the paladin globals/base for older sources.
+    const srcScale = (typeof src.scale === 'number' && src.scale > 0) ? src.scale
+      : (typeof this._paladinScale === 'number' && this._paladinScale > 0)
+        ? this._paladinScale : PALADIN_BASE_SCALE;
+    const scale = srcScale;
+    const feetOffsetLocal = (typeof src.feetOffset === 'number' && Number.isFinite(src.feetOffset))
+      ? src.feetOffset
+      : (typeof this._paladinFeetOffset === 'number' && Number.isFinite(this._paladinFeetOffset))
+        ? this._paladinFeetOffset : 0;
     if (BABYLON.Vector3) {
       cloneRoot.scaling  = new BABYLON.Vector3(scale, scale, scale);
       cloneRoot.rotation = new BABYLON.Vector3(0, PALADIN_YAW, 0);
@@ -5135,20 +4452,23 @@ export class Renderer3D {
     if (!want) { this._disposeStandeeWeapon(standee); return; }
 
     const BABYLON = this._babylon;
-    const src = this._paladinSource;
-    if (!BABYLON?.MeshBuilder || !src?.skeleton) return;
     const clone = standee.paladinClone;
+    // Use the clone's OWN skeleton (every rig has its own), not the paladin's.
+    const skeleton = clone.skinnedMesh?.skeleton || this._paladinSource?.skeleton || null;
+    if (!BABYLON?.MeshBuilder || !skeleton) return;
     const affector = clone.skinnedMesh || clone.mesh;
     if (!affector || typeof affector.attachToBone !== 'function') return;
-    const handBone = findBoneByName(src.skeleton, WEAPON_BONE_NAME_RE);
+    const handBone = findBoneByName(skeleton, WEAPON_BONE_NAME_RE);
     if (!handBone) return;
 
     // World-size blade → rig-LOCAL cylinder dims. The per-standee scale lives
     // on the clone root; attachToBone folds it in via the affector's world
     // matrix, so we divide it back out here to land a constant on-screen size.
-    const paladinScale = (typeof this._paladinScale === 'number' && this._paladinScale > 0)
-      ? this._paladinScale : PALADIN_BASE_SCALE;
-    const t = weaponStandInTransform(paladinScale);
+    // Read the clone root's actual scale so any rig (not just paladin) is right.
+    const rigScale = (clone.mesh?.scaling?.x > 0) ? clone.mesh.scaling.x
+      : (typeof this._paladinScale === 'number' && this._paladinScale > 0)
+        ? this._paladinScale : PALADIN_BASE_SCALE;
+    const t = weaponStandInTransform(rigScale);
     let blade;
     try {
       blade = BABYLON.MeshBuilder.CreateCylinder(
@@ -5348,36 +4668,405 @@ export class Renderer3D {
     return posed;
   }
 
-  /** Retrofit existing hero standees with a paladin clone after the GLB
-   *  load resolves asynchronously. Idempotent: standees that already carry
-   *  a clone are skipped. Returns the number of standees upgraded. */
-  _upgradeHeroStandeesToPaladin() {
-    if (!this._paladinSource || !this._entityStandees || !this.state?.entities) return 0;
-    // Index entities by id so we can look up the owner field without a
-    // O(n) scan per standee. Cheap — entity counts top out at a few dozen.
-    const byId = new Map();
-    for (const e of this.state.entities) {
-      if (e && e.id) byId.set(e.id, e);
+
+  /** Retarget walking.glb's native AnimationGroup onto a fallback rig's skeleton
+   *  by bone name (same technique the paladin uses), storing the result on
+   *  `src.walkGroup`. Idempotent (no-op once retargeted) and a no-op until the
+   *  shared `_walkingSource` native group exists. The rig shares its skeleton
+   *  across every standee, so all units of that rig walk in unison — fine for a
+   *  board token. */
+  _retargetWalkOntoRig(src) {
+    if (!src || src.walkGroup) return src?.walkGroup || null;
+    const ws = this._walkingSource;
+    const nativeGroup = ws && ws.walkGroup;
+    if (!nativeGroup) return null;
+    const ratio = (ws && ws.speedRatio) || 1.0;
+    const clone = this._retargetNativeClipOntoRig(
+      nativeGroup, src, `${src.cloneTag}WalkRetargeted`,
+      { keepY: !src.hipCentered, loop: true, speed: ratio });
+    if (!clone) return null;
+    src.walkGroup = clone;
+    src.walkSpeedRatio = ratio;
+    src.activeGroup = src.activeGroup || 'idle';
+    return clone;
+  }
+
+  /** Build the bone-name → target-node lookup for retargeting a clip onto a
+   *  rig `src`. Indexes both the imported TransformNodes and the skeleton's
+   *  linked nodes, with the `.001` dedup suffix stripped so either spelling
+   *  matches. Shared by every per-rig clip retarget (walk / run / punch / …). */
+  _buildRigNameMap(src) {
+    const nameMap = new Map();
+    const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
+    const add = (name, target) => {
+      if (!name || !target) return;
+      if (!nameMap.has(name)) nameMap.set(name, target);
+      const s = stripDup(name);
+      if (s !== name && !nameMap.has(s)) nameMap.set(s, target);
+    };
+    for (const tn of src.transformNodes || []) if (tn && tn.name) add(tn.name, tn);
+    if (src.skeleton && Array.isArray(src.skeleton.bones)) {
+      for (const bone of src.skeleton.bones) {
+        if (!bone) continue;
+        const tn = bone._linkedTransformNode
+          || (typeof bone.getTransformNode === 'function' && bone.getTransformNode());
+        if (tn && tn.name) add(tn.name, tn);
+        if (bone.name) add(bone.name, tn || bone);
+      }
     }
+    return nameMap;
+  }
+
+  /** Clone a native AnimationGroup, retargeted onto `src`'s nodes by bone name,
+   *  and strip its root translation. Returns the clone (instantiated then
+   *  paused, or stopped for one-shots) or null when nothing remapped. The one
+   *  retarget primitive behind walk / run / punch / hit / block on a rig. */
+  _retargetNativeClipOntoRig(nativeGroup, src, cloneName,
+    { keepY = true, loop = true, speed = 1.0, rest = 'pause' } = {}) {
+    if (!nativeGroup || typeof nativeGroup.clone !== 'function' || !src) return null;
+    const nameMap = this._buildRigNameMap(src);
+    const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
+    let remapped = 0;
+    const clone = nativeGroup.clone(cloneName, (oldTarget) => {
+      if (!oldTarget || !oldTarget.name) return oldTarget;
+      const match = nameMap.get(oldTarget.name) || nameMap.get(stripDup(oldTarget.name));
+      if (match) { remapped++; return match; }
+      return oldTarget;
+    });
+    if (!clone || remapped === 0) {
+      try { clone?.dispose?.(); } catch { /* ignore */ }
+      return null;
+    }
+    // Rebase the clip's hip baseline to THIS rig's rest height so a shared clip
+    // (walk/run) and the rig's own clips all sit at the same standing height.
+    rebaseRootBoneY(clone, src.restHipsY);
+    if (typeof clone.start === 'function') clone.start(loop, speed);
+    if (rest === 'stop') { if (typeof clone.stop === 'function') clone.stop(); }
+    else if (typeof clone.pause === 'function') clone.pause();
+    return clone;
+  }
+
+  /** Ensure running.glb's native AnimationGroup is loaded once (independent of
+   *  any rig), kept alive so it can be cloned+retargeted onto each rig — the
+   *  run counterpart to `_walkingSource`. Stashes `{ runGroup, speedRatio }` on
+   *  `this._runningSource` (addMoveAnim reads speedRatio to size the run slide).
+   *  Currently dormant: RUNNING_ANIM_ENABLED is false, so nothing selects run. */
+  _ensureRunningSource(basePath = this._assetsBasePath || 'assets') {
+    if (this._runningSource?.runGroup) return Promise.resolve(this._runningSource);
+    if (this._runningSourceLoad) return this._runningSourceLoad;
+    this._runningSourceLoad = (async () => {
+      const BABYLON = this._babylon;
+      if (!BABYLON?.SceneLoader?.ImportMeshAsync) return null;
+      let result;
+      try {
+        result = await BABYLON.SceneLoader.ImportMeshAsync(
+          null, `${basePath}/${PALADIN_MODEL_DIR}`, RUNNING_MODEL_FILE, this._scene,
+          this._glbProgressHandler('rig'));
+      } catch (err) { console.warn('[Renderer3D] running.glb import failed', err); return null; }
+      const native = (result.animationGroups || []).find(g => g) || null;
+      if (!native) { this._disposeWalkingImport(result); return null; }
+      const strideSrcUnits = computeRootStrideLength(native);
+      const natCycleSec    = animDurationSeconds(native);
+      const scale = (this._paladinScale > 0) ? this._paladinScale : PALADIN_BASE_SCALE;
+      const hexStepWU = HEX_RADIUS_WORLD * Math.sqrt(3);
+      const speedRatio = computeAnimSpeedRatioForStride(
+        strideSrcUnits, natCycleSec, scale, hexStepWU, RUN_HEX_MS, /*fallback*/ 1.25);
+      // Hide the native run mesh; keep the group + skeleton alive as a clone
+      // source for per-rig retargets.
+      for (const m of (result.meshes || []).filter(m => m && m.getTotalVertices?.() > 0)) {
+        if (typeof m.setEnabled === 'function') m.setEnabled(false);
+        m.isPickable = false;
+      }
+      this._runningSource = { ...(this._runningSource || {}), runGroup: native, speedRatio };
+      return this._runningSource;
+    })();
+    return this._runningSourceLoad;
+  }
+
+  /** Retarget running.glb's native group onto a rig's skeleton → `src.runGroup`
+   *  (the run twin of `_retargetWalkOntoRig`). No-op until `_runningSource` exists. */
+  _retargetRunOntoRig(src) {
+    if (!src || src.runGroup) return src?.runGroup || null;
+    const rs = this._runningSource;
+    const native = rs && rs.runGroup;
+    if (!native) return null;
+    const ratio = (rs && rs.speedRatio) || 1.0;
+    const clone = this._retargetNativeClipOntoRig(
+      native, src, `${src.cloneTag}RunRetargeted`, { keepY: !src.hipCentered, loop: true, speed: ratio });
+    if (!clone) return null;
+    src.runGroup = clone;
+    src.runSpeedRatio = ratio;
+    return clone;
+  }
+
+  /** Lazily import punch.glb and retarget it onto a fallback rig (idempotent
+   *  per rig). Pre-warmed when the rig loads so the first strike has its clip
+   *  ready. */
+  _ensureRigPunch(src, basePath = this._assetsBasePath || 'assets') {
+    if (!src || src.punchGroup || src._punchLoadPromise) return;
+    src._punchLoadPromise = Promise.resolve()
+      .then(() => this._loadPunchForRig(src, basePath))
+      .catch(err => { console.warn('[Renderer3D] rig punch load failed.', err); return null; });
+  }
+
+  /** Import punch.glb and retarget its clip onto `src`'s skeleton by bone name
+   *  (mirrors _loadPunchAnimation, but for the cascade rigs). keepY so a
+   *  feet-origin rig strikes at standing height. */
+  async _loadPunchForRig(src, basePath = this._assetsBasePath || 'assets') {
+    if (!this._babylon || !this._scene || !src || src.punchGroup) return src?.punchGroup || null;
+    const BABYLON = this._babylon;
+    if (!BABYLON.SceneLoader || typeof BABYLON.SceneLoader.ImportMeshAsync !== 'function') return null;
+    let result;
+    try {
+      result = await BABYLON.SceneLoader.ImportMeshAsync(
+        null, `${basePath}/${PALADIN_MODEL_DIR}`, PUNCH_MODEL_FILE, this._scene,
+        this._glbProgressHandler('rig'));
+    } catch (err) {
+      console.warn(`[Renderer3D] punch.glb import for ${src.cloneTag} failed`, err);
+      return null;
+    }
+    const native = (result.animationGroups || []).find(g => g) || null;
+    if (!native) { this._disposeWalkingImport(result); return null; }
+
+    // One-shot strike: loop=false, rest at frame 0 (stop) until played.
+    const clone = this._retargetNativeClipOntoRig(
+      native, src, `${src.cloneTag}PunchRetargeted`,
+      { keepY: !src.hipCentered, loop: false, rest: 'stop' });
+    if (clone) {
+      src.punchDurationSec = animDurationSeconds(native);
+      src.punchGroup = clone;
+    }
+    this._disposeWalkingImport(result);
+    return src.punchGroup;
+  }
+
+  /** Play the (already-loaded) punch clip on rig `src` for one strike: silence
+   *  idle/walk/run so none fight the shared skeleton, mark `punchPlaying` so the
+   *  locomotion toggle yields, and resume idle/walk when the one-shot ends.
+   *  No-op (returns false) until the rig's punch clip has loaded. */
+  _startRigPunch(src) {
+    if (!src || !src.punchGroup) return false;
+    const punch = src.punchGroup;
+    const speedMul = this._playbackSpeedMul ?? 1.0;
+    const ratio = computePunchSpeedRatio(src.punchDurationSec, PUNCH_TARGET_MS * speedMul);
+    // Hand the skeleton to punch: silence idle + walk + run so none fight it.
+    if (src.idleGroup && typeof src.idleGroup.stop === 'function') src.idleGroup.stop();
+    if (src.walkGroup && typeof src.walkGroup.stop === 'function') src.walkGroup.stop();
+    if (src.runGroup && typeof src.runGroup.stop === 'function') src.runGroup.stop();
+    src.punchPlaying = true;
+    src.activeGroup = 'punch';
+
+    // Resume the idle/walk toggle once the strike completes. Babylon fires
+    // onAnimationGroupEndObservable for a non-looping group; guard for stubs.
+    const onEnd = () => {
+      src.punchPlaying = false;
+      // Force the next toggle tick to re-resolve idle/walk from scratch.
+      src.activeGroup = null;
+    };
+    if (punch.onAnimationGroupEndObservable
+      && typeof punch.onAnimationGroupEndObservable.addOnce === 'function') {
+      punch.onAnimationGroupEndObservable.addOnce(onEnd);
+    } else if (punch.onAnimationGroupEndObservable
+      && typeof punch.onAnimationGroupEndObservable.add === 'function') {
+      punch.onAnimationGroupEndObservable.add(onEnd);
+    }
+
+    if (typeof punch.stop === 'function') punch.stop();
+    if (typeof punch.start === 'function') punch.start(false, ratio);
+    return true;
+  }
+
+  /** Per-frame walk↔idle swap for the cascade fallback rigs — mirrors
+   *  _maybeTogglePaladinAnimation but keyed per rig source: a rig walks while
+   *  any unit using it is mid-move/lunge, else idles. Shared-skeleton-per-rig,
+   *  so all units of a rig animate together. */
+  _maybeToggleFallbackRigAnimation() {
+    if (!this._rigSources || this._rigSources.size === 0) return;
+    // Walk is driven by real MOVES only — NOT lunges. A lunge is a combat
+    // strike: the punch clip owns the rig during it (see addLungeAnim), so a
+    // lunging unit must not also walk.
+    const movingRigs = new Set();   // rig has a unit mid-MOVE → walk (or run)
+    const runningRigs = new Set();   // rig has a unit mid multi-hop dash → run
+    const moveIds = this._activeMoveIds;
+    if (moveIds && moveIds.size && this.state?.entities) {
+      const byId = new Map();
+      for (const e of this.state.entities) if (e && e.id) byId.set(e.id, e);
+      const runIds = (RUNNING_ANIM_ENABLED && this._activeRunMoveIds instanceof Set)
+        ? this._activeRunMoveIds : null;
+      for (const id of moveIds) {
+        const e = byId.get(id);
+        if (!e || unitUsesPaladinModel(e)) continue;
+        const src = this._loadedFallbackRigFor(e);
+        if (!src) continue;
+        movingRigs.add(src);
+        if (runIds && runIds.has(id)) runningRigs.add(src);
+      }
+    }
+    const playGroup = (g, loop, speed) => {
+      if (!g) return;
+      if (typeof g.play === 'function') g.play(loop);
+      else if (typeof g.start === 'function') g.start(loop, speed);
+    };
+    for (const src of this._rigSources.values()) {
+      // A one-shot punch or hit/block reaction owns the rig while it plays —
+      // yield so we don't yank it back to idle/walk mid-clip.
+      if (src.punchPlaying || src.reactionPlaying) continue;
+      let desired = 'idle';
+      if (movingRigs.has(src)) {
+        desired = (runningRigs.has(src) && src.runGroup) ? 'run'
+          : src.walkGroup ? 'walk' : 'idle';
+      }
+      if (src.activeGroup === desired) continue;
+      const { idleGroup: idle, walkGroup: walk, runGroup: run } = src;
+      // Silence the three locomotion groups, then play the desired one.
+      for (const g of [idle, walk, run]) if (g && g !== src[`${desired}Group`] && typeof g.stop === 'function') g.stop();
+      if (desired === 'run')  playGroup(run,  true, src.runSpeedRatio  || 1.0);
+      else if (desired === 'walk') playGroup(walk, true, src.walkSpeedRatio || 1.0);
+      else playGroup(idle, true, 1.0);
+      src.activeGroup = desired;
+    }
+  }
+
+  /** First loaded fallback-rig source for an entity (the earliest cascade
+   *  candidate already in _rigSources), or null. Synchronous — does NOT trigger
+   *  loads (that's _ensureFallbackRig). */
+  _loadedFallbackRigFor(entity) {
+    for (const file of fallbackRigCandidates(entity)) {
+      const src = this._rigSources.get(file);
+      if (src) return src;
+    }
+    return null;
+  }
+
+  /** Kick the async load of an entity's fallback rig, one cascade step per
+   *  call. Loads the first candidate that isn't already loaded / in-flight /
+   *  known-missing; when a candidate 404s it's marked missing and the next
+   *  call advances to the following candidate (the per-frame standee sync keeps
+   *  calling until a rig lands or the cascade is exhausted → cone+sphere). */
+  _ensureFallbackRig(entity, basePath = this._assetsBasePath || 'assets') {
+    if (!this._babylon || !this._scene) return;
+    if (this._loadedFallbackRigFor(entity)) return; // already have one
+    for (const file of fallbackRigCandidates(entity)) {
+      // Order matters: a 404'd file must skip to the NEXT candidate even though
+      // its (now-resolved) promise still sits in _rigLoadPromises — otherwise
+      // the in-flight check below would return and the cascade would never
+      // reach the mannequin for any unit lacking a <type>-idle.glb.
+      if (this._rigFileMissing.has(file)) continue;  // 404'd — next candidate
+      if (this._rigSources.has(file)) return;        // loaded — done
+      if (this._rigLoadPromises.has(file)) return;   // in flight — wait
+      this._loadFallbackRig(file, basePath);
+      return;
+    }
+  }
+
+  /** Load one rig glb into _rigSources (mesh + skeleton + embedded idle, scaled
+   *  to the standee target). Resolves to the source or null (404 / no geometry).
+   *  Lighter than _loadPaladinModel by design: no walk/run/punch wiring — the
+   *  cascade rigs play only their embedded idle for now. */
+  async _loadFallbackRig(file, basePath = this._assetsBasePath || 'assets') {
+    if (this._rigLoadPromises.has(file)) return this._rigLoadPromises.get(file);
+    const BABYLON = this._babylon;
+    const promise = (async () => {
+      await this._ensureBabylonLoaders();
+      if (!BABYLON.SceneLoader || typeof BABYLON.SceneLoader.ImportMeshAsync !== 'function') {
+        return null;
+      }
+      let result;
+      try {
+        result = await BABYLON.SceneLoader.ImportMeshAsync(
+          null, `${basePath}/${PALADIN_MODEL_DIR}`, file, this._scene,
+          this._glbProgressHandler('rig'),
+        );
+      } catch (err) {
+        // Most commonly a 404 for a `<type>-idle.glb` that doesn't exist —
+        // expected; the cascade falls through to the mannequin.
+        console.info(`[Renderer3D] rig ${file} unavailable; cascading.`, err?.message || err);
+        this._rigFileMissing.add(file);
+        return null;
+      }
+      const meshes = (result.meshes || []).filter(m =>
+        m && typeof m.getTotalVertices === 'function' && m.getTotalVertices() > 0);
+      if (meshes.length === 0) { this._rigFileMissing.add(file); return null; }
+      const skinned = meshes.find(m => m.skeleton) || meshes[0];
+      const skeleton = skinned.skeleton
+        || (Array.isArray(result.skeletons) ? result.skeletons[0] : null) || null;
+      const groups = result.animationGroups || [];
+      const idleGroup = groups.find(g => g && /idle|mixamo/i.test(g.name || '')) || groups[0] || null;
+      for (const m of meshes) {
+        if (typeof m.setEnabled === 'function') m.setEnabled(false);
+        m.isPickable = false;
+      }
+      const { scale, feetOffset, hipCentered } = this._normalisePaladinSource(meshes);
+      const transformNodes = Array.isArray(result.transformNodes) ? result.transformNodes.slice() : [];
+      // Measure the Hips' REST-pose Y *before* the idle starts animating — this
+      // is the rig's correct standing hip height, the anchor every clip rebases
+      // to (rebaseRootBoneY). Different exports (this idle, the shared walk.glb,
+      // a hip-centred paladin) carry different absolute hip heights, so without
+      // this one floats while another sinks.
+      const hipsTN = transformNodes.find(tn => tn && /(^|:)Hips$/.test(tn.name || ''));
+      const restHipsY = (hipsTN && hipsTN.position && typeof hipsTN.position.y === 'number')
+        ? hipsTN.position.y : null;
+      // Rebase the embedded idle to that rest height (preserves the weight-shift
+      // sway + bob, strips horizontal drift) so the rig stands on the ground.
+      rebaseRootBoneY(idleGroup, restHipsY);
+      if (idleGroup && typeof idleGroup.start === 'function') {
+        idleGroup.weight = 1.0;
+        idleGroup.start(true, 1.0);
+      }
+      const src = {
+        mesh: skinned, meshes, skeleton, idleGroup, transformNodes,
+        scale, feetOffset, hipCentered, restHipsY,
+        cloneTag: file.replace(/-idle\.glb$|\.glb$/, '') || 'rig',
+        tintable: file === MANNEQUIN_RIG_FILE,
+      };
+      this._rigSources.set(file, src);
+      // Retrofit standees that were waiting on this rig.
+      this._upgradeStandeesToFallbackRig();
+      // Wire walking onto this rig: ensure walking.glb's native group is loaded
+      // (shared with the paladin path / ghost preview), then retarget a clone
+      // onto this rig's skeleton. Fire-and-forget — the rig idles until it lands.
+      Promise.resolve(this._loadWalkingAnimation())
+        .then(() => this._retargetWalkOntoRig(src))
+        .catch(err => console.warn(`[Renderer3D] walk retarget for ${file} failed.`, err));
+      // Running clip (dormant unless RUNNING_ANIM_ENABLED) — retarget for parity.
+      if (RUNNING_ANIM_ENABLED) {
+        Promise.resolve(this._ensureRunningSource())
+          .then(() => this._retargetRunOntoRig(src))
+          .catch(err => console.warn(`[Renderer3D] run retarget for ${file} failed.`, err));
+      }
+      // Pre-warm the strike clip so the first combat lunge punches rather than
+      // sliding in silently.
+      this._ensureRigPunch(src);
+      return src;
+    })();
+    this._rigLoadPromises.set(file, promise);
+    return promise;
+  }
+
+  /** Retrofit standees whose entity should use a now-loaded fallback rig
+   *  (mirrors _upgradeHeroStandeesToPaladin for the cascade rigs). The clone is
+   *  stored in standee.paladinClone so the existing dispose / shadow / x-ray
+   *  paths handle it with no extra plumbing. */
+  _upgradeStandeesToFallbackRig() {
+    if (!this._entityStandees || !this.state?.entities) return 0;
+    const byId = new Map();
+    for (const e of this.state.entities) if (e && e.id) byId.set(e.id, e);
     let upgraded = 0;
     for (const [id, standee] of this._entityStandees) {
       if (!standee || standee.paladinClone) continue;
       const ent = byId.get(id);
-      if (!unitUsesPaladinModel(ent)) continue;
-      const clone = this._buildPaladinClone(ent, standee.plane);
+      if (!ent || unitUsesPaladinModel(ent)) continue; // paladins use their own path
+      const src = this._loadedFallbackRigFor(ent);
+      if (!src) continue;
+      const clone = this._buildRigClone(ent, standee.plane, src,
+        src.tintable ? { tintColor: this._ownerColorFor(ent) } : {});
       if (!clone) continue;
-      // Hide the cone+sphere body so the paladin reads on its own.
-      // .visibility is a 0..1 alpha multiplier in Babylon — leaving the
-      // meshes enabled keeps picking + the existing animation rig intact.
       if (standee.plane)  standee.plane.visibility  = 0;
       if (standee.sphere) standee.sphere.visibility = 0;
-      // Replace the pawn shape on the shadow caster list with the paladin
-      // hierarchy so the floor shadow reads as the actual model silhouette.
       if (standee.plane)  this._removeShadowCaster(standee.plane);
       if (standee.sphere) this._removeShadowCaster(standee.sphere);
       for (const m of clone.childMeshes || []) this._addShadowCaster(m);
       standee.paladinClone = clone;
-      // Attach weapon / horse now that the rig (and its bones) exist.
       this._syncStandeeWeapon(standee, ent);
       this._syncStandeeHorse(standee, ent);
       upgraded++;
@@ -5428,7 +5117,12 @@ export class Renderer3D {
     const BABYLON = this._babylon;
     const newTarget = new BABYLON.Vector3(bounds.centerX, 0, bounds.centerZ);
     const newRadius = this._radiusForFit(fitWidth, fitDepth);
-    this._focusCamera(newTarget, newRadius, { instant: opts.instant === true });
+    // orientNorth: also rotate to map-north-up (alpha = _lockedAlpha) as part of
+    // the same move — used for the initial level/mission view so it lands
+    // isometric and north-up regardless of any prior camera azimuth.
+    const focusOpts = { instant: opts.instant === true };
+    if (opts.orientNorth) focusOpts.alpha = this._lockedAlpha;
+    this._focusCamera(newTarget, newRadius, focusOpts);
   }
 
   /** Project a canvas pixel onto the map by raycasting against tile and
@@ -5550,6 +5244,42 @@ export class Renderer3D {
     const camera = this._camera;
     if (!camera) return;
     camera.alpha = camera.alpha + alphaDelta;
+  }
+
+  /** Keyboard pan: nudge the camera target along the screen-relative ground
+   *  plane. dx>0 pans right, dy>0 pans down (toward the viewer), both relative
+   *  to the current yaw so arrow keys always track the on-screen axes. The step
+   *  scales with the zoom radius so it feels consistent at any zoom; the
+   *  per-frame clamp in _onBeforeRender keeps the target inside the map.
+   *  Interface parity with the 2D Renderer.panByScreen(). */
+  panByScreen(dx, dy) {
+    if (this.viewLocked) return;
+    const camera = this._camera;
+    if (!camera) return;
+    // Ground-projected forward (screen-up) vector from the camera yaw.
+    const fwd = camera.getForwardRay?.().direction;
+    let fx = fwd ? fwd.x : Math.cos(camera.alpha);
+    let fz = fwd ? fwd.z : Math.sin(camera.alpha);
+    const len = Math.hypot(fx, fz) || 1;
+    fx /= len; fz /= len;
+    const rx = -fz, rz = fx; // right = forward rotated -90° on the ground
+    // dx/dy are view-extent fractions; scale by radius so a step covers a
+    // consistent share of the screen at any zoom.
+    const step = camera.radius;
+    camera.target.x += (rx * dx - fx * dy) * step;
+    camera.target.z += (rz * dx - fz * dy) * step;
+  }
+
+  /** Multiply the zoom by `factor` (>1 zooms in) with no animation — for the
+   *  per-frame keyboard zoom loop. Clamped to the camera's radius limits; the
+   *  beta-on-zoom ramp in _onBeforeRender follows automatically. Interface
+   *  parity with the 2D Renderer.zoomBy(). */
+  zoomBy(factor) {
+    const camera = this._camera;
+    if (!camera || this.viewLocked || !(factor > 0)) return;
+    const lower = camera.lowerRadiusLimit ?? CAMERA_MIN_ZOOM_RADIUS;
+    const upper = camera.upperRadiusLimit ?? CAMERA_MAX_ZOOM_RADIUS;
+    camera.radius = Math.max(lower, Math.min(upper, camera.radius / factor));
   }
 
   /** Set the 3D drag-mode toggle: 'pan' or 'rotate'. UI calls this when the
@@ -5999,13 +5729,11 @@ export class Renderer3D {
     // instances. Fire-and-forget — errors are caught inside `_loadBuildingModel`.
     this._loadBuildingModels(this._assetsBasePath || 'assets');
 
-    // Kick off the paladin GLB load asynchronously. Fire-and-forget —
-    // `_buildMap` + `_syncEntityStandees` run synchronously right after and
-    // hero standees render with the cone+sphere fallback. Once the GLB
-    // resolves (heavy ~7 MB file), `_upgradeHeroStandeesToPaladin` retrofits
-    // every hero standee with a paladin clone. Errors are caught inside
-    // `_loadPaladinModel`.
-    this._loadPaladinModel(this._assetsBasePath || 'assets');
+    // Kick off the hero rig load asynchronously through the generic cascade
+    // (paladin-idle.glb). Fire-and-forget — standees render with the cone+sphere
+    // fallback until the GLB resolves, then _upgradeStandeesToFallbackRig
+    // retrofits every standee with its rig clone.
+    this._loadFallbackRig(PALADIN_MODEL_FILE, this._assetsBasePath || 'assets');
 
     // Kick off the tree-pack manifest + per-model GLB loads asynchronously.
     // Fire-and-forget — `_buildMap` runs synchronously right after and
@@ -6039,33 +5767,16 @@ export class Renderer3D {
 
     // Diagnostic handle: lets the operator run `__brimstone3dDebug.ribbons()`
     // from the browser console to inspect the runtime material/light state of
-    // the road and river ribbons. `inspector()` toggles the Babylon Inspector
-    // (also bound to the `D` hotkey). No-op when `window` is undefined (tests).
+    // the road and river ribbons. `inspector()` toggles the Babylon Inspector.
+    // The inspector / border-forest / fog-debug toggles are also reachable
+    // in-game through the command console (Escape → /inspector, /forest, /fog);
+    // see src/keybindings.js. No-op when `window` is undefined (tests).
     if (typeof window !== 'undefined') {
       window.__brimstone3dDebug = {
         ribbons: () => this.dumpRibbonDebug(),
         renderer: this,
         inspector: () => this._toggleInspector(),
       };
-      if (typeof document !== 'undefined' && !this._inspectorKeyBound) {
-        this._inspectorKeyBound = true;
-        window.addEventListener('keydown', (e) => {
-          if (e.metaKey || e.ctrlKey || e.altKey) return;
-          const t = e.target;
-          const tag = (t?.tagName || '').toUpperCase();
-          if (tag === 'INPUT' || tag === 'TEXTAREA' || t?.isContentEditable) return;
-          if (e.key === 'd' || e.key === 'D') {
-            e.preventDefault();
-            this._toggleInspector();
-          } else if (e.key === 'f' || e.key === 'F') {
-            e.preventDefault();
-            this._toggleBorderForest();
-          } else if (e.key === 't' || e.key === 'T') {
-            e.preventDefault();
-            this._cycleFogDebugMode();
-          }
-        });
-      }
     }
   }
 
@@ -9637,19 +9348,20 @@ export class Renderer3D {
 
     const standee = { plane: cone, sphere, leader, paladinClone: null };
 
-    // Hero-side standees swap the cone+sphere body for a clone of the
-    // paladin GLB model once it's loaded. The cone+sphere stay in-scene as
-    // anchor + picking target (their `.visibility` is dropped to 0 so they
-    // don't render). If the source isn't loaded yet, `_loadPaladinModel`
-    // resolves later and retrofits via `_upgradeHeroStandeesToPaladin`.
-    if (this._paladinSource && unitUsesPaladinModel(entity)) {
-      const clone = this._buildPaladinClone(entity, cone);
+    // Every unit cascades to a rig: <type>-idle.glb → mannequin → cone+sphere.
+    // Kick the async load; clone synchronously if a rig is already in hand,
+    // otherwise _upgradeStandeesToFallbackRig retrofits when it lands. The
+    // cone+sphere stay in-scene (visibility 0) as anchor + picking target.
+    this._ensureFallbackRig(entity);
+    const rig = this._loadedFallbackRigFor(entity);
+    if (rig) {
+      const clone = this._buildRigClone(entity, cone, rig,
+        rig.tintable ? { tintColor: ownerColor } : {});
       if (clone) {
         cone.visibility   = 0;
         sphere.visibility = 0;
-        // Cone+sphere are invisible but still on the shadow caster list
-        // — strip them so the floor shadow reflects the paladin silhouette,
-        // not the pawn shape.
+        // Strip the cone+sphere from the shadow casters so the floor shadow
+        // reflects the rig silhouette, not the pawn shape.
         this._removeShadowCaster(cone);
         this._removeShadowCaster(sphere);
         for (const m of clone.childMeshes || []) this._addShadowCaster(m);
@@ -9721,6 +9433,11 @@ export class Renderer3D {
         standee.plane.metadata.col = e.col;
         standee.plane.metadata.row = e.row;
       }
+      // Non-paladin units cascade to a fallback rig (<type>-idle.glb →
+      // mannequin). Re-kick each pass so the cascade advances across frames
+      // (a missing type file 404s, then the mannequin loads); no-op once a rig
+      // is in hand. Cheap — early-returns the moment a rig is loaded.
+      if (!unitUsesPaladinModel(e) && !standee.paladinClone) this._ensureFallbackRig(e);
       // Weapon-in-hand (G6) and mount (G5) follow the entity's equipment /
       // items each pass. Both no-op until the paladin clone exists (GLB load)
       // and short-circuit when already in the desired state, so this is cheap.
@@ -10365,6 +10082,9 @@ export class Renderer3D {
     const BABYLON = this._babylon;
     const camera  = this._camera;
     if (!BABYLON || !camera) return Promise.resolve();
+    // suppressAutoFrame: replay "FIXED" camera mode — skip all programmatic
+    // camera moves so the user's chosen view is preserved.
+    if (this.suppressAutoFrame) return Promise.resolve();
 
     const wantAlpha = Number.isFinite(opts.alpha);
     // Nearest-wrap alpha delta so a ~180° reframe doesn't take the long arc.
@@ -10690,7 +10410,7 @@ export class Renderer3D {
     const isRunMove = selectMoveAnimKind(waypoints.length) === 'running';
     if (isRunMove) {
       this._activeRunMoveIds.add(entityId);
-      this._ensureRunningAnimation(this._assetsBasePath || 'assets');
+      this._ensureRunningSource(); // shared native run clip (cascade rigs retarget it)
     } else {
       this._activeRunMoveIds.delete(entityId);
     }
@@ -10879,14 +10599,18 @@ export class Renderer3D {
       standee.paladinClone.mesh.rotation.y = Math.atan2(lungeX - startX, lungeZ - startZ);
     }
 
-    // Paladin attacker: throw the punch clip on top of the slide so the
-    // strike reads as a strike. Lazily kick the punch.glb load (idempotent,
-    // off the critical path) — already-resolved → plays now; first-ever
-    // combat may still be downloading, in which case this lunge is slide-only
-    // and the next one punches. Cone-token attackers (no clone) just slide.
+    // Throw the punch clip on top of the slide so the strike reads as a strike,
+    // on the ATTACKER's own rig. Remember it so the cinematic's
+    // holdPunchAtImpact()/resumePunch() freeze the right one. Lazily kick the
+    // punch.glb load (idempotent) — already-resolved → plays now; first-ever
+    // combat may still be downloading, so that lunge is slide-only and the next
+    // punches. Cone-token attackers (no clone) just slide.
     if (standee.paladinClone) {
-      if (this._paladinSource?.punchGroup) this._startPaladinPunch();
-      else this._ensurePunchAnimation(this._assetsBasePath || 'assets');
+      const ent = this.state?.entities?.find(e => e && e.id === entityId) || null;
+      const rigSrc = ent ? this._loadedFallbackRigFor(ent) : null;
+      this._activePunchSrc = rigSrc;
+      if (rigSrc?.punchGroup) this._startRigPunch(rigSrc);
+      else if (rigSrc) this._ensureRigPunch(rigSrc);
     }
 
     // Ease-OUT: the lunge launches fast and decelerates into the strike
@@ -12348,6 +12072,148 @@ export class Renderer3D {
     this._buildObjectiveRings();     // kind:'ring-pulse' layer:'objective-ring'
     this._buildPlanArrows();         // kind:'plan-arrow' layer:'plan-arrow' (move)
     this._buildPlanBattleArrows();   // kind:'plan-arrow' layer:'plan-arrow' (battle)
+    this._syncGuardZone();           // orange perimeter outline around guard coverage
+  }
+
+  /**
+   * Build the guard-zone outline: a single orange line tracing the EXTERIOR
+   * perimeter of the hexes a guarding unit covers (internal edges shared by two
+   * in-zone hexes are skipped), using the same outer-edge walk as the power-node
+   * identifier outline (`_buildNodeGlowMeshes`).
+   *
+   *   • Playback: units actually in guard stance (`guarding > 0`), at their live
+   *     hex — skipped if fogged so a hidden enemy guard isn't revealed.
+   *   • Planning: units with a queued GUARD action, previewed at their projected
+   *     hex (after any planned moves) read from `planGhostSteps`.
+   *
+   * Coverage matches `_checkGuardStrikes`: ranged guards reach their full attack
+   * range, LOS-gated; melee guards cover their six neighbours. Disposable meshes
+   * rebuilt only when the zone changes (signature early-out), like the fill
+   * overlays — cheap when nothing guard-related moved.
+   */
+  _syncGuardZone() {
+    if (!this._scene || !this._babylon) return;
+    const state = this.state;
+
+    // Reach a guard actually covers: a ranged guard strike is a DIRECT attack,
+    // so it's capped by the unit's own (phase-dependent) sight distance as well
+    // as its attack range — mirrors the cap in `_checkGuardStrikes` so the
+    // drawn zone never extends into hexes the unit couldn't strike (no fog).
+    const reachFor = (e) => {
+      const gRange = typeof e.getRange === 'function' ? e.getRange() : (e.range ?? 1);
+      return gRange > 1 ? Math.min(gRange, sightRangeForEntity(e, state.phase)) : gRange;
+    };
+
+    // ── Collect { col, row, gRange } guard sources for the current mode. ──
+    const sources = [];
+    if (state?.entities) {
+      if (!state.planningPhase) {
+        for (const e of state.entities) {
+          if (!e?.alive || !(e.guarding > 0)) continue;
+          // Don't reveal a fogged (hidden) unit's coverage during playback.
+          if (this._fogActiveSet?.has(hexKey(e.col, e.row))) continue;
+          sources.push({ col: e.col, row: e.row, gRange: reachFor(e) });
+        }
+      } else if (this.planGhostSteps?.length) {
+        for (const step of this.planGhostSteps) {
+          if (step.action?.type !== PlanActionType.GUARD) continue;
+          const e = state.entities.find(x => x.id === step.action.entityId);
+          if (!e?.alive) continue;
+          const pos = step.positions?.get?.(e.id) ?? { col: e.col, row: e.row };
+          sources.push({ col: pos.col, row: pos.row, gRange: reachFor(e) });
+        }
+      }
+    }
+
+    // ── Resolve the covered hex set (LOS-gated for ranged guards). ──
+    const zone = new Set();
+    for (const src of sources) {
+      if (src.gRange > 1) {
+        for (const h of hexRange(src.col, src.row, src.gRange)) {
+          if (h.col === src.col && h.row === src.row) continue;
+          if (!state.tiles.has(hexKey(h.col, h.row))) continue;
+          if (hasLineOfSight(state, src.col, src.row, h.col, h.row)) {
+            zone.add(hexKey(h.col, h.row));
+          }
+        }
+      } else {
+        for (const n of getNeighbors(src.col, src.row)) {
+          if (!state.tiles.has(hexKey(n.col, n.row))) continue;
+          zone.add(hexKey(n.col, n.row));
+        }
+      }
+    }
+
+    // Signature early-out — rebuild only when the covered set changes.
+    const sig = Array.from(zone).sort().join('|');
+    if (sig === this._guardZoneSig) return;
+    this._guardZoneSig = sig;
+
+    for (const mesh of (this._guardZoneMeshes ?? [])) mesh.dispose();
+    this._guardZoneMeshes = [];
+    if (zone.size === 0) return;
+
+    const BABYLON = this._babylon;
+    const mat = this._guardZoneMaterial();
+    // Sit in the highlight band (well above the road-network apex ~0.09) so the
+    // outline reads cleanly instead of being occluded by terrain/road geometry.
+    const Y = HIGHLIGHT_DISC_Y;
+    const SQRT3 = Math.sqrt(3);
+    for (const key of zone) {
+      const [col, row] = key.split(',').map(Number);
+      const { x, z } = hexToWorld(col, row);
+      // Perimeter corners at the true hex vertex radius (1.0) so adjacent
+      // in-zone hexes share vertices exactly and the outline reads as one shape.
+      const corners = [];
+      for (let j = 0; j < 6; j++) {
+        const ca = Math.PI / 6 + j * Math.PI / 3;
+        corners.push({ x: x + Math.cos(ca), z: z + Math.sin(ca) });
+      }
+      for (let i = 0; i < 6; i++) {
+        // Edge i faces outward direction (i+1)·π/3; the neighbour hex centre is
+        // √3 (centre-to-centre) along it. If that neighbour is also in the zone
+        // the edge is internal — skip it so only the exterior perimeter draws.
+        const dirA = (i + 1) * Math.PI / 3;
+        const { col: ncol, row: nrow } = worldToHex(x + SQRT3 * Math.cos(dirA), z + SQRT3 * Math.sin(dirA));
+        if (zone.has(hexKey(ncol, nrow))) continue;
+        const a = corners[i], b = corners[(i + 1) % 6];
+        const tube = BABYLON.MeshBuilder.CreateTube(
+          `guardZone_${col}_${row}_${i}`,
+          {
+            path: [new BABYLON.Vector3(a.x, Y, a.z), new BABYLON.Vector3(b.x, Y, b.z)],
+            radius: 0.045,
+            tessellation: 6,
+            sideOrientation: BABYLON.Mesh.DOUBLESIDE,
+          },
+          this._scene,
+        );
+        tube.parent     = this._mapRoot;
+        tube.isPickable = false;
+        tube.material   = mat;
+        tube.metadata   = { respectsFog: false };
+        this._guardZoneMeshes.push(tube);
+      }
+    }
+  }
+
+  /** Cached emissive-orange material for the guard-zone perimeter outline. */
+  _guardZoneMaterial() {
+    if (this._guardZoneMat) return this._guardZoneMat;
+    const BABYLON = this._babylon;
+    const mat = new BABYLON.StandardMaterial('guardZoneMat', this._scene);
+    // Blood orange, drawn faint — present but not in-your-face.
+    const R = 0.78, G = 0.18, B = 0.05;
+    mat.diffuseColor  = new BABYLON.Color3(R, G, B);
+    mat.emissiveColor = new BABYLON.Color3(R * 0.6, G * 0.6, B * 0.6);
+    mat.specularColor = new BABYLON.Color3(0, 0, 0);
+    mat.backFaceCulling = false;
+    // Explicit alpha-blend + depth pre-pass: without these the tube auto-picks
+    // an unreliable transparency mode and double-blends its own front+back walls,
+    // so alpha 0.5 still reads as solid. The pre-pass writes depth first so only
+    // the nearest wall blends. Matches every other translucent overlay here.
+    this._applyAlphaBlend(mat, 0.2);
+    this._guardZoneMat = mat;
+    return mat;
   }
 
   /**
@@ -13095,8 +12961,19 @@ export class Renderer3D {
       // per-ghost so the 50% alpha doesn't leak onto the source.
       let ghostClone = null;
       let ghostMats = null;
+      // Hero/paladin → walking-source ghost (decoupled skeleton so the live
+      // unit idles while the ghost walks). Non-paladin → a clone of its loaded
+      // fallback rig (mannequin / zombie / <type>) so the preview shows the
+      // model, not the cone+sphere pawn. Falls through to cone+sphere only when
+      // no rig is loaded yet.
       if (this._paladinSource && unitUsesPaladinModel(ent)) {
         ghostClone = this._buildWalkingGhostClone(ent, cone);
+      } else if (!unitUsesPaladinModel(ent)) {
+        const rigSrc = this._loadedFallbackRigFor(ent);
+        // Decoupled walking ghost (walks the path while the live unit idles).
+        if (rigSrc) ghostClone = this._buildWalkingGhostClone(ent, cone, rigSrc);
+      }
+      {
         if (ghostClone) {
           cone.visibility = 0;
           sphere.visibility = 0;
@@ -13378,8 +13255,12 @@ export class Renderer3D {
     const usesPaladin = !!(standee.paladinClone
       && Array.isArray(standee.paladinClone.childMeshes)
       && standee.paladinClone.childMeshes.length);
+    // Use the clone's OWN skeleton — every rig (paladin, mannequin, zombie) has
+    // its own bone hierarchy. Binding a mannequin mesh to the paladin's skeleton
+    // (different bone count) explodes the skinning into stray geometry. For the
+    // paladin these are the same object, so its outline is unchanged.
     const sharedSkeleton = usesPaladin
-      ? (this._paladinSource?.skeleton || standee.paladinClone.skinnedMesh?.skeleton || null)
+      ? (standee.paladinClone.skinnedMesh?.skeleton || this._paladinSource?.skeleton || null)
       : null;
 
     const maskMeshes = this._cloneXrayLayer(srcMeshes, standee, {
@@ -17858,6 +17739,7 @@ export function combatReadoutModel(result, side) {
     if (bd.phaseBonus > 0)        addStep('phase',  bd.phaseBonus);
     if (bd.atkGangupFlat > 0)     addStep('allies', bd.atkGangupFlat);
     if (bd.atkFortAtkBonus > 0)   addStep('fort',   bd.atkFortAtkBonus);
+    if (bd.rangeDistancePenalty > 0) addStep('range', -bd.rangeDistancePenalty);
   } else {
     if (bd.defBaseStat > 0)       addStep('def',    bd.defBaseStat);
     if (bd.defWeaponMod > 0)      addStep('weapon', bd.defWeaponMod);
@@ -18068,10 +17950,6 @@ export function paintIconCombatReadout(ctx, opts) {
  *  combat (src/main.js imports this constant) so the cinematic result label
  *  and the fast-mode addFlash word agree on the vocabulary. Lowercase to
  *  match fast mode's visual style; cinematic uppercases on use. */
-export const BLOCK_WORD_VARIANTS = Object.freeze([
-  'miss', 'dodged', 'blocked', 'parried', 'deflected',
-]);
-
 /** Colour used by both fast-mode addFlash and the cinematic result label
  *  whenever the outcome word is one of the BLOCK_WORD_VARIANTS — these are
  *  "the attack didn't connect" cases, so a muted grey reads better than
@@ -18082,10 +17960,7 @@ export const COMBAT_READOUT_BLOCK_COLOR = '#888';
  *  always renders the same flavour word. Falls back to the first variant
  *  when rolls aren't finite (e.g. tests passing partial results). */
 function pickBlockWordUpper(result) {
-  const a = Number.isFinite(result?.attackRoll)  ? result.attackRoll  : 0;
-  const d = Number.isFinite(result?.defenseRoll) ? result.defenseRoll : 0;
-  const idx = Math.abs((a * 31 + d * 7)) % BLOCK_WORD_VARIANTS.length;
-  return BLOCK_WORD_VARIANTS[idx].toUpperCase();
+  return pickBlockWord(result?.attackRoll, result?.defenseRoll);
 }
 
 /** True iff `labelUpper` is one of the BLOCK_WORD_VARIANTS — used to pick

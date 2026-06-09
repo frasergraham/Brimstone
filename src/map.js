@@ -508,13 +508,17 @@ function _pickRiverCrossings(rand, tiles, riverPath, riverMap, riverEW, keyPoint
   for (let idx = 0; idx < riverPath.length; idx++) {
     const { col, row } = riverPath[idx];
     const neighbors = getNeighbors(col, row);
+    // A bank must be passable land: not river, and not an impassable building
+    // footprint (capacity 0). Excluding footprints here stops a building wall
+    // from starving a crossing of its only approach — defence in depth behind
+    // the footprint placement scoring.
     const leftNbrs = neighbors.filter(n => {
       const t = tiles.get(hexKey(n.col, n.row));
-      return t && !isRiver(t) && riverSide(n.col, n.row, riverMap, riverEW) === 'left';
+      return t && !isRiver(t) && !isBuildingFootprint(t) && riverSide(n.col, n.row, riverMap, riverEW) === 'left';
     });
     const rightNbrs = neighbors.filter(n => {
       const t = tiles.get(hexKey(n.col, n.row));
-      return t && !isRiver(t) && riverSide(n.col, n.row, riverMap, riverEW) === 'right';
+      return t && !isRiver(t) && !isBuildingFootprint(t) && riverSide(n.col, n.row, riverMap, riverEW) === 'right';
     });
     if (leftNbrs.length === 0 || rightNbrs.length === 0) continue;
 
@@ -884,6 +888,10 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
   // `rolledBack` tag is visible there too — clean those groups up (re-rooting a
   // village whose root was rolled back) before they drive the road network.
   const buildingPlacements = allBuildingPlacements.filter(p => !p.rolledBack);
+  // Number of placements dropped because no eligible footprint hex was found
+  // (building wedged against the river / map edge / other buildings). Surfaced
+  // on the return for test/diagnostic use; consumers ignore unknown fields.
+  const buildingRollbacks = allBuildingPlacements.length - buildingPlacements.length;
   for (const g of villageGroups) {
     g.members = g.members.filter(m => !m.rolledBack);
     if (g.root && g.root.rolledBack) g.root = g.members.shift() ?? null;
@@ -1119,7 +1127,7 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
 
   const season = SEASONS[Math.floor(rand() * SEASONS.length)];
 
-  return { tiles, witchObjectives, heroStart, witchStart, mapSize, season, survivorCounts: cfg.survivorCounts };
+  return { tiles, witchObjectives, heroStart, witchStart, mapSize, season, survivorCounts: cfg.survivorCounts, buildingRollbacks };
 }
 
 // ── Multiple start positions (multiplayer) ───────────────────────────────────

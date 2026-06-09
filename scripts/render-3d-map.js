@@ -34,7 +34,7 @@
 // visually meaningful preview that approximates the eventual 3D look —
 // hex prisms with side faces, soft shading, height variation. As later
 // phases of the 3D renderer come online and a real headless WebGL path
-// becomes viable (e.g. via Puppeteer driving tools/3d-preview.html), this
+// becomes viable (e.g. via Puppeteer driving scripts/3d-preview.html), this
 // script can be re-pointed at the real renderer.
 //
 // Until then, both this CLI and the live preview share the same map

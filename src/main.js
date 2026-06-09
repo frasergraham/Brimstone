@@ -2,7 +2,7 @@
 import { onInactiveChange, tryGameCenterAuth, isNativeMobile, refreshPushToken, loadGameCenterFriends, shareInvite } from './platform.js'; // must be first — sets server globals for Capacitor builds
 import { AppMode, getMode, setMode, isInGame, isAnimating, shouldBufferMessages, onModeChange } from './app-mode.js';
 import { initServerSelector } from './server-selector.js';
-import { GameState, phaseForRound } from './game.js';
+import { GameState, phaseForRound, getCycleLength } from './game.js';
 import { Renderer3D, BLOCK_WORD_VARIANTS } from './renderer-3d.js';
 
 // The in-game renderer is always 3D. The 2D `Renderer` is still exported from
@@ -30,13 +30,15 @@ import { VERSION, BUILD_VERSION } from './version.js';
 import { buildPlayerStatusHtml } from './ui-render.js';
 import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { PlanActionType, groupPlanByEntity } from './planner.js';
+import { buildStepDigest, isEventVisible } from './replay-timeline.js';
 import { hexDistance, getNeighbors, hexKey } from './hex.js';
 import { planCombatFrames } from './combat-presentation.js';
 import { MAX_FORTIFY_LEVEL, FORT_IMPASSABLE_THRESHOLD } from './tiles.js';
 import { sightRange, computeLineOfSight, hasLineOfSight } from './actions.js';
 import { UNIT_TYPES } from './unit-types.js';
 import { getFaction, findFaction, allFactions, getFactionsForSide, sightRangeForEntity } from './factions.js';
-import { compileTurnBattleSummary } from './battle-utils.js';
+import { compileTurnBattleSummary, compileTurnBattlePairs, collectTurnFinds } from './battle-utils.js';
+import { installKeybindings } from './keybindings.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import { playback, resetPlayback, replayFullGame, playbackDelay, swapState, patchAlive } from './playback.js';
 import { ReplayCache } from './replay-cache.js';
@@ -109,6 +111,12 @@ if (!window.electronAPI) {
 }
 
 let state, renderer, ui, witchAI, heroAI;
+
+// Global in-game keyboard shortcuts + debug command console. Installed once;
+// reads the live UIController via the accessor so it survives ui/renderer
+// re-creation across new-game / online / spectator starts. (No-op in tests.)
+installKeybindings(() => ui);
+
 let _autoplay  = false;
 // _inGame and _resolving replaced by AppMode state machine (src/app-mode.js)
 let _pendingPlanningPhase = null; // buffered onPlanningPhase payload received during animation
@@ -119,6 +127,7 @@ let _gameStartTime = null;        // wall-clock timestamp for game duration trac
 // ── Round-history for full-game replay ───────────────────────────────────────
 // Accumulated during a session; reset each new/resumed game.
 let _roundHistory        = [];  // SP offline:  { roundNum, preState, steps }[]
+let _keepTimelineForReview = false;  // SP: keep the timeline up after animation for the end-of-turn review
 let _onlineRoundHistory  = [];  // MP online:   { roundNum, preState, steps }[]
 // Playback state imported from ./playback.js (playback, resetPlayback, etc.)
 
@@ -339,20 +348,8 @@ function init(witchIsAI, heroIsAI, autoplay = false, humanFactionId = null) {
 
   redraw();
 
-  requestAnimationFrame(() => {
-    // Resize now that game-screen layout is complete and the canvas has real dimensions.
-    renderer.resize();
-    // Re-frame starting units with correct dimensions (overrides the one queued in
-    // enterPlanningMode which fired before layout was resolved).
-    if (!_autoplay) {
-      const humanFaction = !state.heroIsAI ? 'hero' : 'witch';
-      const startUnits = state.entities.filter(e => e.alive && e.owner === humanFaction);
-      if (startUnits.length > 0) {
-        renderer.frameHexes(startUnits, { maxZoom: 1.8, paddingHexes: 2.5, duration: 550 });
-      }
-    }
-    redraw();
-  });
+  // Size the canvas (game-screen layout now complete) and frame the main unit.
+  _enterGameView();
 
   _startLocalPlanningPhase();
 }
@@ -603,6 +600,7 @@ function _startLocalPlanningPhase() {
     // no more planning rounds.  We still call onPlanningPhaseStart so the conductor
     // can advance to the explanation steps, but we don't enter planning mode.
     if (!_missionConductor.shouldPlan()) return;
+    setMode(AppMode.PLANNING);
     ui.enterPlanningMode('hero', state.heroActionsLeft);
     ui.onPlanSubmit = (heroPlan) => _onConductorPlanSubmit(heroPlan);
     return;
@@ -629,6 +627,7 @@ async function _showStorySequence(events) {
 
 /** Enter planning mode after any pre-planning modals (story, phase) are done. */
 function _enterLocalPlanningMode() {
+  setMode(AppMode.PLANNING);
   const humanFaction = !state.heroIsAI ? 'hero' : 'witch';
   const budget = getFaction(humanFaction).getActionsLeft(state);
 
@@ -716,6 +715,155 @@ async function _runLocalAutoResolution() {
   await _runLocalResolution();
 }
 
+// Build the end-of-turn wrap-up card data: the upcoming phase/round title and
+// the structured combat pairs (icon-vs-icon with HP loss / kills). The UI layer
+// renders the icons + score dots from this.
+function _buildWrapUpContent(steps, roundNum) {
+  const combats = compileTurnBattlePairs(steps, state.entities, ResEventType, PlanActionType);
+  // Survivors/zombies found this round — move/explore/horn encounters plus any
+  // spawned at power nodes during endRound (matches the old summary modal).
+  // Also collect explored-loot icons so the card lists the actual resources.
+  // Loot is the PLAYER's only — see collectTurnFinds (AI loot goes to its own
+  // inventory, so counting it would double-show shared resource icons).
+  const humanFaction = !state.heroIsAI ? 'hero' : !state.witchIsAI ? 'witch' : null;
+  const { discoveries, loot } = collectTurnFinds(steps, humanFaction);
+  for (const s of (state.nodeSpawnedSurvivors ?? [])) discoveries.push(s);
+
+  // Night attrition roll-call — who suffered in the open and who was sheltered
+  // by a building or fortification this round (from the post-round effects).
+  // This restores the per-unit list the old end-of-turn modal showed.
+  const myId = ui?.myPlayerId ?? null;
+  const attrition = [];
+  for (const ev of (state.postRoundEvents ?? [])) {
+    if (myId && ev.ownerId && ev.ownerId !== myId) continue;
+    if (ev.type === 'damage' || ev.type === 'kill') {
+      attrition.push({ kind: ev.type, name: ev.entityName, amount: ev.amount });
+    } else if (ev.type === 'shelter') {
+      attrition.push({
+        kind: 'shelter', name: ev.entityName,
+        shelter: ev.text?.startsWith('🏠') ? 'building' : 'fort',
+      });
+    }
+  }
+
+  // Title the completed turn as "Day X Round Y — SUMMARY" (cycle day + round in
+  // cycle, matching the cycle bar's "Day N · Round M" convention).
+  const round = roundNum ?? 0;
+  const cycleLen = getCycleLength(state.cycleConfig);
+  const day = Math.ceil(round / cycleLen);
+  const roundInCycle = ((round - 1) % cycleLen) + 1;
+  const title = `Day ${day} Round ${roundInCycle} — SUMMARY`;
+  return { title, combats, discoveries, loot, attrition };
+}
+
+/**
+ * Shared end-of-round review for a human player, used by BOTH orchestration
+ * layers — offline (`_runLocalResolution`) and online (`onResolutionComplete`) —
+ * so the two stay in lockstep. Normal turns show the timeline wrap-up CARD;
+ * game-over shows the dedicated Victory/Defeat MODAL. Loops on Replay until the
+ * player dismisses it, hides the timeline, and returns the final action string.
+ *
+ * Path-specific behaviour is injected (this is the offline/online split that
+ * can't be merged — see CLAUDE.md guideline 5):
+ *   - reReplay():        re-run this round's animation. Redraw target, explored-
+ *                        flag handling, and app-mode buffering differ per path.
+ *   - replayFull(w, r):  run the full-game replay then restart. The winner/reason
+ *                        snapshot is passed in because an inline Replay clobbers
+ *                        state.winner/winReason. When the player picks it, the
+ *                        helper returns 'replay-full' so the caller bails out.
+ *   - roundHistory:      _roundHistory | _onlineRoundHistory — gates the Replay
+ *                        and full-replay buttons.
+ *   - isCampaign:        suppresses the full-replay button in campaign missions.
+ */
+async function _runEndOfRoundReview({
+  steps, roundNum, humanFaction, fogOfWar, prevScore, prevNodes,
+  isCampaign = false, roundHistory, reReplay, replayFull,
+}) {
+  if (!state.gameOver) {
+    // Normal turn — wrap-up CARD. Fold the night-attrition escalation in and
+    // consume the flag so the standalone planning-phase popup doesn't also fire.
+    const attritionLevel = (state.attritionChanged && state.attritionLevel > 0) ? state.attritionLevel : 0;
+    if (attritionLevel) state.attritionChanged = false;
+    let action;
+    do {
+      const wrap = _buildWrapUpContent(steps, roundNum);
+      action = await ui.showReplayWrapUp({
+        titleHtml: wrap.title, combats: wrap.combats, discoveries: wrap.discoveries,
+        loot: wrap.loot, attrition: wrap.attrition, attritionLevel,
+        canReplay: roundHistory.length > 0,
+      });
+      if (action === 'replay') await reReplay();
+    } while (action === 'replay');
+    _keepTimelineForReview = false;
+    ui.hideReplayTimeline?.();
+    return action;
+  }
+
+  // Game over — dedicated Victory/Defeat MODAL. Snapshot the outcome before the
+  // loop: an inline Replay re-animates intermediate rounds and would otherwise
+  // clobber state.winner / state.winReason mid-review.
+  _keepTimelineForReview = false;
+  ui.hideReplayTimeline?.();
+  const goWinner = state.winner, goWinReason = state.winReason;
+  let action;
+  do {
+    action = await ui._showResolutionSummary(steps, roundNum, {
+      prevScore, prevNodes, humanFaction, fogOfWar,
+      gameOver: true, winner: goWinner, winReason: goWinReason,
+      hasFullReplay: roundHistory.length > 0,
+      isCampaign,
+    });
+    if (action === 'replay') {
+      await reReplay();
+    } else if (action === 'replay-full') {
+      await replayFull(goWinner, goWinReason);
+      return 'replay-full';
+    }
+  } while (action === 'replay');
+  return action;
+}
+
+// Initial camera when first entering a level/mission: orient north-up and zoom
+// in on the player's main unit (its leader), with that unit selected — i.e. the
+// view you'd get from "fit twice" (frame + orient north) followed by
+// zoom-to-selection on the leader. North-up is the camera default and frameHexes
+// preserves azimuth, so a single zoom-to-unit lands the desired view.
+function _focusInitialView(humanFaction) {
+  if (!renderer || !state) return;
+  const apply = () => {
+    if (!renderer || !state) return;
+    // state.hero / state.witch keyed by faction id (avoids a faction string check).
+    const main = state[humanFaction]
+      ?? state.entities.find(e => e.alive && e.owner === humanFaction);
+    if (!main || !main.alive) return;
+    // Tutorial teaches unit selection itself, so don't pre-select there.
+    if (ui && !ui.tutorialMode) ui._selectEntity?.(main);
+    renderer.frameHexes([main], { maxZoom: 3.5, paddingHexes: 1.5, duration: 550, orientNorth: true });
+    redraw();
+  };
+  // Apply now (renderer usually ready), then again once the lazily-initialised
+  // 3D renderer signals ready — otherwise an early frame is dropped (camera not
+  // created yet) and the view stays at the default top-down whole-map shot.
+  apply();
+  if (typeof renderer.whenReady === 'function') renderer.whenReady().then(apply);
+}
+
+// Common post-setup view for every local game-entry path (new game, SP/campaign
+// resume, campaign mission). Sizes the canvas, then frames the player's main
+// unit north-up. Centralised so no entry path can forget the initial view —
+// that omission was why loading a game looked different from starting one.
+function _enterGameView() {
+  requestAnimationFrame(() => {
+    if (!renderer || !state) return;
+    renderer.resize();
+    if (!_autoplay) {
+      const humanFaction = !state.heroIsAI ? 'hero' : 'witch';
+      _focusInitialView(humanFaction);
+    }
+    redraw();
+  });
+}
+
 async function _runLocalResolution(skipSummary = false) {
   if (!state || state.gameOver) return;
 
@@ -749,6 +897,9 @@ async function _runLocalResolution(skipSummary = false) {
   }
 
   const humanFaction = !state.heroIsAI ? 'hero' : !state.witchIsAI ? 'witch' : null;
+  // Keep the timeline up after animation for the end-of-turn review (SP human
+  // turn, non-autoplay). Cleared once the review/summary is dismissed.
+  _keepTimelineForReview = !!(ui && humanFaction && !_autoplay && !skipSummary);
   const preReplayEntities = patchAlive(steps[0]?.entitySnapshot ?? finalEntities);
 
   // Snapshot node control BEFORE resolution so we can detect changes from unit movement
@@ -758,7 +909,19 @@ async function _runLocalResolution(skipSummary = false) {
     owner: nodeController(obj, preResEntities),
   }));
 
-  await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
+  // Animate the turn. The Redo control sets playback.restart to replay the
+  // turn's animations from the start — reset to pre-resolution and re-run.
+  do {
+    playback.restart = false;
+    await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
+    if (playback.restart) {
+      state.entities = preReplayEntities;
+      for (const [k, t] of state.tiles) {
+        if (t.explored && !preExploredSet.has(k)) t.explored = false;
+      }
+      redraw();
+    }
+  } while (playback.restart);
 
   // Update AI debug panel with resolution outcomes so the user can see
   // which planned actions actually executed vs were skipped/failed
@@ -783,13 +946,11 @@ async function _runLocalResolution(skipSummary = false) {
   // Snapshot score BEFORE endRound so we can detect scoring changes
   const prevScore = { hero: state.nodeScore.hero, witch: state.nodeScore.witch };
 
-  state.updateNodeDiscovery();
-  state.checkAndLogNodeControlChanges();
-  state.updateExploredHexes();
-  // endRound() internally invokes state._waveProcessor (set during mission
-  // load) before checkVictory, so triggered wave spawns can pre-empt an
-  // otherwise-firing eliminate_all win.
-  state.endRound();
+  // Shared post-resolution finalization (node discovery → control-change log →
+  // explored-hex update → endRound). endRound() internally invokes
+  // state._waveProcessor (set during mission load) before checkVictory, so
+  // triggered wave spawns can pre-empt an otherwise-firing eliminate_all win.
+  state.finalizeRound();
 
   // Show encounter dialogs for survivors spawned at power nodes during endRound
   if (ui && !_autoplay && state.nodeSpawnedSurvivors?.length) {
@@ -822,45 +983,44 @@ async function _runLocalResolution(skipSummary = false) {
     });
   }
 
-  // Show post-resolution summary modal (skip in autoplay or tutorial mode)
+  // Post-resolution: normal turns end with a wrap-up CARD + review (the timeline
+  // stays up; arrows scrub the cards). Game-over keeps its dedicated modal.
+  const _reReplay = async () => {
+    state.entities = preReplayEntities;
+    for (const [k, t] of state.tiles) {
+      if (t.explored && !preExploredSet.has(k)) t.explored = false;
+    }
+    redraw();
+    await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
+    for (const [k, v] of postExplored) { const t = state.tiles.get(k); if (t) t.explored = v; }
+  };
+
   if (!_autoplay && !skipSummary && ui && humanFaction) {
-    // Finalize game-over immediately — cleanup survives any navigation away
-    if (state.gameOver) {
-      if (!_activeCampaign) {
-        _recordLocalGameStats();
-        if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
-        _saveCompletedSpGame(state.winner, state.winReason);
-      }
+    // Reflect the round-summary phase in the app mode for normal turns (drives
+    // keybindings, compass, etc.); game over keeps its terminal Victory/Defeat
+    // modal and transitions onward from there.
+    if (!state.gameOver) setMode(AppMode.SUMMARY);
+    // Finalize game-over immediately — cleanup survives any navigation away.
+    if (state.gameOver && !_activeCampaign) {
+      _recordLocalGameStats();
+      if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
+      _saveCompletedSpGame(state.winner, state.winReason);
     }
 
-    // Save game-over state — replay mutates `state` with intermediate round data
-    const _goState = { gameOver: state.gameOver, winner: state.winner, winReason: state.winReason };
-
-    let action;
-    do {
-      action = await ui._showResolutionSummary(steps, state.round - 1, {
-        prevScore, prevNodes, humanFaction, fogOfWar: state.fogOfWar,
-        gameOver: _goState.gameOver, winner: _goState.winner, winReason: _goState.winReason,
-        hasFullReplay: _roundHistory.length > 0,
-        isCampaign: !!(_activeCampaign && _activeMissionDef),
-      });
-      if (action === 'replay') {
-        state.entities = preReplayEntities;
-        // Reset explored flags so they reveal progressively during replay.
-        for (const [k, t] of state.tiles) {
-          if (t.explored && !preExploredSet.has(k)) t.explored = false;
-        }
-        redraw();
-        await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
-        for (const [k, v] of postExplored) { const t = state.tiles.get(k); if (t) t.explored = v; }
-      } else if (action === 'replay-full') {
-        await _replayFullGame(_roundHistory, _goState.winner, _goState.winReason,
+    const action = await _runEndOfRoundReview({
+      steps, roundNum: state.round - 1, humanFaction, fogOfWar: state.fogOfWar,
+      prevScore, prevNodes, isCampaign: !!(_activeCampaign && _activeMissionDef),
+      roundHistory: _roundHistory,
+      reReplay: _reReplay,
+      replayFull: async (winner, winReason) => {
+        await _replayFullGame(_roundHistory, winner, winReason,
           state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch');
         _doRestart();
-        return;
-      }
-    } while (action === 'replay');
-    // Animate score bar changes after summary is dismissed
+      },
+    });
+    if (action === 'replay-full') return;
+
+    // Animate score bar changes after the review is dismissed.
     ui._animateScoreBar(prevScore, prevNodes);
 
     if (state.gameOver) {
@@ -1192,15 +1352,58 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     flags: { goBack: playback.goBack, aborted: playback.aborted, jumpToEnd: playback.jumpToEnd, _autoplay },
   });
 
-  // Show the skip button whenever a replay is animating, EXCEPT during full
-  // PLAYBACK mode (which has its own HUD with its own skip control). We
-  // detect full PLAYBACK via ui._replayOnControl because the first step
-  // animation sets mode to RESOLVING, clobbering getMode()-based checks.
+  // Show the unified replay bar whenever a replay is animating, EXCEPT during
+  // full PLAYBACK mode (which shows its own bar via replayFullGame). We detect
+  // full PLAYBACK via ui._replayOnControl because the first step animation sets
+  // mode to RESOLVING, clobbering getMode()-based checks. In inline mode the bar
+  // offers Play(Normal)/Pause/Fast/Camera/Skip; pause/skip drive playback flags.
   const skipHudActive = !_autoplay && ui && !ui._replayOnControl;
   if (skipHudActive) {
-    ui.showInlineReplayHUD?.(() => { playback.jumpToEnd = true; });
+    // Start in the player's remembered mode: AutoPlay (continuous) or manual.
+    playback.paused = !ui.replayAutoPlay;
+    playback.stepRequested = false;
+    ui.showInlineReplayHUD?.((action) => {
+      switch (action) {
+        case 'playpause':
+          playback.paused = !playback.paused;
+          if (!playback.paused) playback.stepRequested = false;
+          ui.replayAutoPlay = !playback.paused;   // remember for next turn
+          ui.setReplayTransport(playback.paused);
+          break;
+        case 'next':
+          playback.stepRequested = true;
+          break;
+        case 'redo':
+          // Replay the CURRENT step (round) from its start — not the whole turn.
+          playback.replayStep = true;
+          break;
+      }
+    });
+    ui.setReplayTransport?.(playback.paused);
+  }
+
+  // Replay timeline overlay — built from the same resolved steps, fog-filtered
+  // to the viewing faction so it matches the canvas. Shown for both inline and
+  // full PLAYBACK replay (full PLAYBACK runs fog-off, so all steps are visible).
+  let stepDigest = null;
+  if (ui && steps.length) {
+    stepDigest = buildStepDigest(steps, finalEntities, {
+      isVisible: (col, row, ents) => _isFogVisible(col, row, humanFaction, ents, state.phase),
+      PlanActionType, ResEventType,
+    });
+    ui.showReplayTimeline?.(stepDigest);
   }
   setMode(AppMode.RESOLVING);
+
+  // Shared visibility gate for the on-map animation — identical predicate to the
+  // one buildStepDigest used for the cards, so every card has a matching
+  // animation (and vice-versa). Union of source/target hex sight + public
+  // actions (the horn). `humanFaction` null (AI-vs-AI / fog off) ⇒ all visible.
+  const _evVisible = (ev, ents) => isEventVisible(
+    ev, ents,
+    (c, r, e) => _isFogVisible(c, r, humanFaction, e, state.phase),
+    { PlanActionType, ResEventType },
+  );
 
   // ── Fortification rewind ─────────────────────────────────────────────
   // state.tiles already carries the post-resolution fortifyLevel by the
@@ -1255,10 +1458,49 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
   // step's own step-level frame releases it naturally (and clears this flag).
   let _heldCombatFrame3D = false;
 
+  // Settle in-flight canvas animations. A NEXT/Redo/skip press HALTS instead:
+  // clears all running animations so units snap to their resolved positions and
+  // playback jumps ahead immediately.
+  const _settleAnims = async () => {
+    // Full-skip paths (jump-to-end / stop between rounds) clear outright — the
+    // existing safe pattern. NEXT/Redo merely collapse the delays (so the action
+    // finishes fast) and let it settle naturally; clearing an in-flight combat
+    // animation mid-strike dangles the lunge/punch state and hangs resolution.
+    if (playback.jumpToEnd || playback.aborted) {
+      renderer.clearAnimations?.();
+      return;
+    }
+    await renderer.waitForAnimations();
+  };
+
+  // A discovery (survivor/zombie found via move/explore/horn) is now shown on
+  // the timeline card; here we just focus the camera on the new unit (unless the
+  // camera is FIXED) and reveal that action's card entry.
+  const _showDiscoveryOnCard = async (unitData, stepIdx, actorId) => {
+    if (renderer && ui?.replayCameraMode !== 'fixed' && !renderer.suppressAutoFrame) {
+      const e = (finalEntities || state.entities)?.find(en => en && en.id === unitData?.id);
+      if (e && e.col != null) {
+        renderer.frameHexes([{ col: e.col, row: e.row }], { maxZoom: 2.0, paddingHexes: 2.5, duration: 450 });
+      }
+    }
+    ui?.revealReplayEntryOutcome?.(stepIdx, actorId);
+    redrawFn();
+    await playbackDelay(900);   // hold so the player registers the find
+  };
+
   for (let i = 0; i < steps.length; i++) {
-    // During replay: if BACK or STOP was pressed, abort remaining steps immediately
-    if (playback.goBack || playback.aborted || playback.jumpToEnd) break;
+    // During replay: if BACK/STOP/REDO was pressed, abort remaining steps immediately
+    if (playback.goBack || playback.aborted || playback.jumpToEnd || playback.restart) break;
     const step = steps[i];
+    // Advance the timeline overlay: slide this step into the leftmost slot.
+    ui?.setReplayTimelineStep?.(i);
+    // Keep the camera-suppress flag on the renderer we actually frame with, so
+    // FIXED never moves regardless of any ui.renderer/renderer instance split.
+    if (renderer) {
+      const _fixedCam = ui?.replayCameraMode === 'fixed';
+      renderer.suppressAutoFrame = _fixedCam;
+      if (_fixedCam) renderer._zoomAnim = null;   // cancel any in-flight 2D camera ease
+    }
     // Patch the CURRENT step's snapshot so any lookups against it resolve
     // to Entity methods (hasAbility / getAttack / hasTag). _isFogVisible
     // is the hot caller — it receives step.entitySnapshot directly and
@@ -1331,17 +1573,8 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     if (renderer) renderer._suppressLungeFraming = false;
     // Same visibility predicate Phase 2 applies per battle (lines below) — so we
     // only cluster battles that will actually be presented to this viewer.
-    const _battleShown = (ev) => {
-      const bs = ev.battleSnaps;
-      if (!bs) return false;
-      const myUnit = myPlayerId && (
-        bs.actorSnap?.ownerId === myPlayerId || bs.targetSnap?.ownerId === myPlayerId
-      );
-      return myPlayerId
-        ? myUnit
-        : (!humanFaction || state.fogOfWar === 'none' || ev.faction === humanFaction
-            || (bs.targetSnap?.owner === humanFaction || bs.actorSnap?.owner === humanFaction));
-    };
+    const _battleShown = (ev) =>
+      !!ev.battleSnaps && _evVisible(ev, step.entitySnapshot);
     let _combatFrames = null;        // ordered frames from planCombatFrames
     let _eventFrameIndex = null;     // Map<battleEvent, frameIndex>
     let _heldFrameIndex = -1;        // which cluster the camera currently holds
@@ -1382,14 +1615,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             if (ev.action.type !== PlanActionType.BATTLE_UNIT && ev.action.type !== PlanActionType.BATTLE_HEX) continue;
             if (!ev.battleSnaps) continue;
             const { actorSnap, targetSnap } = ev.battleSnaps;
-            const myUnit = myPlayerId && (
-              actorSnap?.ownerId === myPlayerId || targetSnap?.ownerId === myPlayerId
-            );
-            const showForPlayer = myPlayerId
-              ? myUnit
-              : (!humanFaction || state.fogOfWar === 'none' || ev.faction === humanFaction
-                  || (targetSnap?.owner === humanFaction || actorSnap?.owner === humanFaction));
-            if (showForPlayer && actorSnap && targetSnap) {
+            if (_evVisible(ev, step.entitySnapshot) && actorSnap && targetSnap) {
               firstBattleTargets = [
                 { col: actorSnap.col, row: actorSnap.row },
                 { col: targetSnap.col, row: targetSnap.row },
@@ -1413,8 +1639,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         } else {
           for (const ev of events) {
             const snap = step.entitySnapshot?.find(e => e.id === ev.action?.entityId);
-            const isOpponent = humanFaction && ev.faction !== humanFaction;
-            if (snap && (!isOpponent || _isFogVisible(snap.col, snap.row, humanFaction, step.entitySnapshot, state.phase))) {
+            if (snap && _evVisible(ev, step.entitySnapshot)) {
               // For moves, frame the destination; for others, frame the actor's current position
               if (ev.action.type === PlanActionType.MOVE) {
                 frameTargets.push({ col: ev.action.toCol, row: ev.action.toRow });
@@ -1461,6 +1686,11 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 
     // ── Phase 1: animate moves for both factions simultaneously ──────────────
     // Multi-hex moves (horse or road chains) animate hop-by-hop using result.path.
+    // Moves play together, so highlight every move card in this step at once.
+    // _stepHasAction tests the digest so the highlight only fires (and clears
+    // the prior group) when this phase actually has visible cards to show.
+    const _stepHasAction = (t) => !!stepDigest?.[i]?.entries.some(e => e.actionType === t);
+    if (_stepHasAction(PlanActionType.MOVE)) ui?.highlightReplayActions?.(i, ['move']);
     let hadMove = false;
     const pendingDialogs = [];
 
@@ -1471,11 +1701,8 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       if (action.type !== PlanActionType.MOVE) continue;
 
       const preSnap = step.entitySnapshot?.find(e => e.id === action.entityId);
-      const isOpponent = humanFaction && ev.faction !== humanFaction;
-      // Opponent moves are visible if origin or destination is within sight range
-      const visible = preSnap && (!isOpponent
-        || _isFogVisible(preSnap.col, preSnap.row, humanFaction, step.entitySnapshot, state.phase)
-        || _isFogVisible(action.toCol, action.toRow, humanFaction, step.entitySnapshot, state.phase));
+      // Moves are visible if origin or destination is within sight range.
+      const visible = preSnap && _evVisible(ev, step.entitySnapshot);
 
       // Use result.path if available (new path-following move); fall back to single hop
       const path = result?.path?.length > 0
@@ -1486,7 +1713,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 
       if ((!humanFaction || ev.faction === humanFaction) && result?.encounterLog?.length) {
         if (!myPlayerId || preSnap?.ownerId === myPlayerId) {
-          pendingDialogs.push({ log: result.encounterLog, encounterUnit: result.encounterSurvivor ?? null });
+          pendingDialogs.push({ log: result.encounterLog, encounterUnit: result.encounterSurvivor ?? null, actorId: action.entityId });
         }
       }
     }
@@ -1603,7 +1830,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       for (const entry of pendingDialogs) {
         redrawFn();
         if (entry.encounterUnit) {
-          await _showDiscovery(entry.encounterUnit);
+          await _showDiscoveryOnCard(entry.encounterUnit, i, entry.actorId);
         } else {
           await new Promise(resolve => ui._showResultDialog(entry.log, resolve));
         }
@@ -1624,22 +1851,13 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         // Fort assault: BATTLE_HEX that hit a wall instead of a unit.  Handled
         // in its own pass below (no targetSnap → skip the normal battle path).
         if (result?.fortAssault) continue;
-        // Show animation/dialog if one of my own units is involved (team MP), or falling
-        // back to faction-level logic (offline / fog-off / standard 1v1).
-        const myUnit = myPlayerId && battleSnaps && (
-          battleSnaps.actorSnap?.ownerId  === myPlayerId ||
-          battleSnaps.targetSnap?.ownerId === myPlayerId
-        );
-        const showForPlayer = myPlayerId
-          ? myUnit
-          : (!humanFaction || state.fogOfWar === 'none' || ev.faction === humanFaction
-              || (battleSnaps && (
-                   battleSnaps.targetSnap?.owner === humanFaction ||
-                   battleSnaps.actorSnap?.owner  === humanFaction
-                 )));
-        if (battleSnaps && showForPlayer) {
+        // Show the battle if the viewer can see either combatant's hex — same
+        // positional rule the timeline card uses (so card ⟷ animation agree).
+        if (battleSnaps && _evVisible(ev, step.entitySnapshot)) {
           const { actorSnap, targetSnap } = battleSnaps;
           const isKill = !!result?.killed;
+          // Highlight this battle's row on the timeline as it begins.
+          ui?.highlightReplayEntry?.(i, actorSnap.id);
 
           if (!_autoplay) {
             const speed = ui?.speedMode ?? 'cinematic';
@@ -1756,19 +1974,28 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             // ── Step 4: Clear highlights, animate lunge return ───────────────
             renderer.clearBattleHighlights();
             renderer.returnAllLungeAnims(); // slide entity back rather than snap
-            if (speed === 'cinematic') await renderer.waitForAnimations();
+            // Let the strike fully settle BEFORE revealing the result (all
+            // speeds); a NEXT/Redo press halts and snaps instead of waiting.
+            await _settleAnims();
             redrawFn();
 
           } else {
             // Autoplay: fire all animations immediately without dialogs or lunge.
             _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
           }
+          // Reveal THIS action's rolls + outcome now that its animation has
+          // settled (per-ACTION, not at the end of the TURN).
+          ui?.revealReplayEntryOutcome?.(i, actorSnap.id);
           hadBattle = true;
         }
       } else if (action.type === PlanActionType.SUMMON) {
         const actorSnap = step.entitySnapshot?.find(e => e.id === action.entityId);
-        if (actorSnap) renderer.addSpawnAnim(actorSnap.col, actorSnap.row, '#b39ddb');
-        hadBattle = true;
+        // Only animate the conjuring if the summoner's hex is in sight (the unit
+        // appears on the summoner's own hex) — matches the SUMMON card's gate.
+        if (actorSnap && _evVisible(ev, step.entitySnapshot)) {
+          renderer.addSpawnAnim(actorSnap.col, actorSnap.row, '#b39ddb');
+          hadBattle = true;
+        }
       }
     }
 
@@ -1785,12 +2012,8 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       for (const ev of failedMoves) {
         const preSnap = step.entitySnapshot?.find(e => e.id === ev.action.entityId);
         if (!preSnap) continue;
-        // Visibility gate — mirrors the move-anim rules
-        const isOpponent = humanFaction && ev.faction !== humanFaction;
-        const visible = !isOpponent
-          || _isFogVisible(preSnap.col, preSnap.row, humanFaction, step.entitySnapshot, state.phase)
-          || _isFogVisible(ev.action.toCol, ev.action.toRow, humanFaction, step.entitySnapshot, state.phase);
-        if (!visible) continue;
+        // Visibility gate — mirrors the move-anim rules (origin / dest / blocker).
+        if (!_evVisible(ev, step.entitySnapshot)) continue;
 
         const bumpTo = ev.blockedByFort
           ? { col: ev.blockedByFort.col, row: ev.blockedByFort.row }
@@ -1824,12 +2047,8 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       const { actorSnap } = ev.battleSnaps;
       const { col: tCol, row: tRow } = ev.whiffTarget;
 
-      // Visibility check — same logic as normal battles
-      const myUnit = myPlayerId && actorSnap.ownerId === myPlayerId;
-      const showForPlayer = myPlayerId
-        ? myUnit
-        : (!humanFaction || state.fogOfWar === 'none' || ev.faction === humanFaction);
-      if (!showForPlayer) continue;
+      // Visibility — actor's hex OR the empty target hex (same as the card).
+      if (!_evVisible(ev, step.entitySnapshot)) continue;
 
       if (!_autoplay) {
         const speed = ui?.speedMode ?? 'cinematic';
@@ -1874,12 +2093,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       const r = ev.result;
       const tCol = r.targetCol, tRow = r.targetRow;
 
-      const myUnit = myPlayerId && actorSnap.ownerId === myPlayerId;
-      const showForPlayer = myPlayerId
-        ? myUnit
-        : (!humanFaction || state.fogOfWar === 'none' || ev.faction === humanFaction);
-
-      if (showForPlayer && !_autoplay) {
+      if (_evVisible(ev, step.entitySnapshot) && !_autoplay) {
         const speed = ui?.speedMode ?? 'cinematic';
         const actorDisplay = state.entities.find(e => e.id === actorSnap.id);
         const lungeFromCol = actorDisplay?.col ?? actorSnap.col;
@@ -1924,12 +2138,10 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       if (!battleSnaps) continue;
       const { actorSnap, targetSnap } = battleSnaps;
 
-      const showForPlayer = myPlayerId
-        ? (actorSnap?.ownerId === myPlayerId || targetSnap?.ownerId === myPlayerId)
-        : (!humanFaction || state.fogOfWar === 'none' || ev.faction === humanFaction
-            || targetSnap?.owner === humanFaction || actorSnap?.owner === humanFaction);
-
-      if (!showForPlayer) continue;
+      // Positional visibility — actor's or target's hex in sight (same as card).
+      if (!_evVisible(ev, step.entitySnapshot)) continue;
+      // Highlight this guard strike's card as it fires.
+      ui?.highlightReplayEntry?.(i, actorSnap.id);
 
       if (!_autoplay) {
         const speed = ui?.speedMode ?? 'cinematic';
@@ -2024,6 +2236,8 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         // Autoplay: fire all animations immediately
         _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
       }
+      // Reveal this guard strike's rolls + outcome (per-ACTION).
+      ui?.revealReplayEntryOutcome?.(i, actorSnap.id);
       hadBattle = true;
     }
     // Restore inset after all battles (regular + guard strikes) are done.
@@ -2043,6 +2257,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     let hadExplore = false;
     const hasExploreEvents = events.some(ev => ev.action?.type === PlanActionType.EXPLORE && ev.result?.log?.length);
     if (hasExploreEvents) renderer.clearFlashes();
+    if (_stepHasAction(PlanActionType.EXPLORE)) ui?.highlightReplayActions?.(i, ['explore']);
 
     for (const ev of events) {
       const { action, result } = ev;
@@ -2055,13 +2270,16 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         if (tt) tt.explored = true;
       }
       if (!result?.log?.length) continue;
-      if (humanFaction && ev.faction !== humanFaction) continue;
+      // Loot flash shows to anyone who can see the explorer (matches the card);
+      // the discovery modal stays the finder's own (own faction / controlled unit).
+      if (!_evVisible(ev, step.entitySnapshot)) continue;
       const actor = explorer;
-      if (myPlayerId && actor?.ownerId !== myPlayerId) continue;
       if (actor) { ui._showLootFlashes(actor, result.lootItems ?? []); hadExplore = true; }
       redrawFn();
-      if (!_suppressDialogs && result.encounterSurvivor) {
-        await _showDiscovery(result.encounterSurvivor, 'explore');
+      const ownFind = (!humanFaction || ev.faction === humanFaction)
+        && (!myPlayerId || actor?.ownerId === myPlayerId);
+      if (ownFind && !_suppressDialogs && result.encounterSurvivor) {
+        await _showDiscoveryOnCard(result.encounterSurvivor, i, action.entityId);
       }
     }
     // Wait for loot flashes so they're fully visible before the next step
@@ -2072,6 +2290,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     }
 
     // ── Phase 3b: Sound Horn — horn flash + survivor encounter ────────────
+    if (_stepHasAction(PlanActionType.SOUND_HORN)) ui?.highlightReplayActions?.(i, ['sound-horn']);
     for (const ev of events) {
       const { action, result } = ev;
       if (action.type !== PlanActionType.SOUND_HORN) continue;
@@ -2105,9 +2324,9 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       if (!_suppressDialogs) {
         const survivors = result.encounterSurvivors || (result.encounterSurvivor ? [result.encounterSurvivor] : []);
         if (survivors.length > 0) {
-          // Show encounter card for each survivor found
+          // Reveal the horn card + pan to each survivor drawn by the call.
           for (const s of survivors) {
-            await _showDiscovery(s, 'horn');
+            await _showDiscoveryOnCard(s, i, action.entityId);
           }
         } else if (result.log?.length) {
           // No survivor — show the "nothing found" result dialog
@@ -2117,6 +2336,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     }
 
     // ── Phase 4: fortify/reinforce visual feedback ────────────────────────
+    if (_stepHasAction(PlanActionType.FORTIFY)) ui?.highlightReplayActions?.(i, ['fortify']);
     for (const ev of events) {
       const { action, result } = ev;
       if (action.type !== PlanActionType.FORTIFY || !result?.success) continue;
@@ -2127,20 +2347,21 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       const actorTile = state.tiles.get(hexKey(actor.col, actor.row));
       if (actorTile) actorTile.fortifyLevel = Math.min(MAX_FORTIFY_LEVEL,
         (actorTile.fortifyLevel || 0) + (result.defGain ?? 1));
-      // Only surface the +N floater to the owner faction/player.
-      if (humanFaction && ev.faction !== humanFaction) continue;
-      if (myPlayerId && actor.ownerId !== myPlayerId) continue;
+      // Surface the +N floater to anyone who can see the fortifying unit.
+      if (!_evVisible(ev, step.entitySnapshot)) continue;
       const gain = result.defGain ?? 1;
       renderer.addFlash(actor.col, actor.row, `🛡+${gain}`,
         'rgba(100,180,255,0.1)', 1800, 0.72, 'rgba(130,200,255,1)');
     }
 
     // ── Phase 5: heal animation — green glow + HP floater ─────────────
+    if (_stepHasAction(PlanActionType.HEAL)) ui?.highlightReplayActions?.(i, ['heal']);
     for (const ev of events) {
       const { action, result } = ev;
       if (action.type !== PlanActionType.HEAL || !result?.success) continue;
       const actor = step.entitySnapshot?.find(e => e.id === action.entityId);
-      if (actor) {
+      // Match the HEAL card — only animate when the healer's hex is in sight.
+      if (actor && _evVisible(ev, step.entitySnapshot)) {
         renderer.addNodeRevealAnim([{ col: actor.col, row: actor.row }], '#44cc66', { radiusMultiplier: 1.5, duration: 1000 });
         renderer.addHpChangeFlash(actor.col, actor.row, 2);
       }
@@ -2193,6 +2414,44 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       const _spd3 = ui?.speedMode ?? 'cinematic';
       await playbackDelay(_spd3 === 'vfast' ? 75 : 150);
     }
+
+    // The step has fully played out — settle its animations, THEN reveal the
+    // dice rolls + outcomes together (hidden until now). NEXT/Redo halts instead.
+    if (!_autoplay) await _settleAnims();
+    ui?.revealReplayOutcome?.(i);
+
+    // Manual-step gate: in paused mode, hold at this step boundary until NEXT
+    // (or PLAY). For inline replay this also gates the final step, so the round
+    // summary only appears after a NEXT. For full-game replay the round loop
+    // owns the between-round boundary, so we don't double-gate its last step.
+    // Only gate on steps that actually rendered a card — fogged/empty steps
+    // have no card, so they shouldn't cost the player a NEXT click. In full-game
+    // replay the round loop owns the boundary after the last visible step, so we
+    // don't double-gate it there.
+    const stepHasCard = stepDigest?.[i]?.entries?.length > 0;
+    if (!_autoplay && ui && stepHasCard) {
+      const fullMode = !!ui._replayOnControl;
+      const laterHasCard = stepDigest.slice(i + 1).some(c => c.entries.length > 0);
+      if (!(fullMode && !laterHasCard)) {
+        // Step finished animating — prompt the player to press NEXT.
+        if (playback.paused) ui.setReplayNextReady?.(true);
+        while (playback.paused && !playback.stepRequested && !playback.replayStep
+               && !playback.restart && !playback.aborted && !playback.goBack && !playback.jumpToEnd) {
+          await new Promise(r => setTimeout(r, 50));
+        }
+        ui.setReplayNextReady?.(false);
+        if (!playback.replayStep) playback.stepRequested = false;
+      }
+    }
+
+    // Redo: replay the CURRENT step from its start. Re-hide its rolls/outcome so
+    // they reveal again at the end of the re-run.
+    if (playback.replayStep) {
+      playback.replayStep = false;
+      renderer.clearAnimations?.();
+      ui?.hideReplayOutcome?.(i);
+      i -= 1;   // the loop's i++ brings us back to this step
+    }
   }
 
   // RELEASE the held 3D combat frame (Phase 1): if the LAST presented step was
@@ -2242,10 +2501,16 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
   // in the inline case — full PLAYBACK's outer loop (src/playback.js)
   // relies on jumpToEnd persisting across the animation call to route
   // the viewer to the end-of-replay hold screen.
-  if (skipHudActive) {
+  // On a Redo, keep the bar up — the caller immediately re-animates the turn.
+  if (skipHudActive && !playback.restart) {
     ui?.hideInlineReplayHUD?.();
     playback.jumpToEnd = false;
+    playback.paused = false;          // clear the manual-step hold for next time
+    playback.stepRequested = false;
   }
+  // Hide the timeline overlay (rebuilt fresh on the next round's animation),
+  // unless the caller is keeping it up for the end-of-turn review.
+  if (!_keepTimelineForReview) ui?.hideReplayTimeline?.();
   // Mode transition is caller's responsibility
 }
 
@@ -2796,7 +3061,7 @@ function _resumeCampaignMission(missionId) {
   ui.onMissionInfo = () => _showMissionInfoModal();
 
   redraw();
-  requestAnimationFrame(() => { renderer.resize(); redraw(); });
+  _enterGameView();
   _startLocalPlanningPhase();
 }
 
@@ -3113,7 +3378,6 @@ function _initCampaignMission(missionDef) {
   mapData.noWitch = !missionDef.hasWitch;
   mapData.disableScoring  = !!missionDef.disableScoring;
   mapData.disableCycleBar = !!missionDef.disableCycleBar;
-  mapData.disableNodeSweep = !!missionDef.disableNodeSweep;
   mapData.disableScoreWin  = !!missionDef.disableScoreWin;
   if (missionDef.nodeScoreThreshold != null) {
     mapData.nodeScoreThreshold = missionDef.nodeScoreThreshold;
@@ -3337,14 +3601,7 @@ function _initCampaignMission(missionDef) {
     );
 
     redraw();
-    requestAnimationFrame(() => {
-      renderer.resize();
-      const heroEntity = state.entities.find(e => e.type === EntityType.PALADIN);
-      if (heroEntity) {
-        renderer.frameHexes([heroEntity], { maxZoom: 2.2, paddingHexes: 3, duration: 500 });
-      }
-      redraw();
-    });
+    _enterGameView();
 
     _missionConductor.start();
     _startLocalPlanningPhase();
@@ -3363,6 +3620,7 @@ function _initCampaignMission(missionDef) {
   state.addLog(`💀 Defeat: ${loseDesc}`);
 
   redraw();
+  _enterGameView();
   _startLocalPlanningPhase();
 }
 
@@ -3656,11 +3914,7 @@ function _startFromState(existingState, mode, existingHistory) {
   _setupLocalUI(canvas, witchAI, heroAI, false);
 
   redraw();
-
-  requestAnimationFrame(() => {
-    renderer.resize();
-    redraw();
-  });
+  _enterGameView();
 
   _startLocalPlanningPhase();
 }
@@ -7388,6 +7642,11 @@ function _createMpClient() {
       }));
       const prevScore = { hero: state.nodeScore?.hero ?? 0, witch: state.nodeScore?.witch ?? 0 };
 
+      // Keep the replay timeline up after the animation so the end-of-round
+      // wrap-up CARD can attach to it (parity with single-player). Game-over
+      // hides it and shows the dedicated Victory/Defeat modal instead.
+      _keepTimelineForReview = !!(ui && mp?.myFaction);
+
       _animateResolutionSteps(steps, finalEntities, redrawOnline, mp?.myFaction, mp?.myPlayerId ?? null).then(async () => {
         // Apply full final state (phase, round, score, tiles, etc.) BEFORE summary
         // so the reckoning section can show scoring results.
@@ -7408,54 +7667,59 @@ function _createMpClient() {
         await ui._triggerPostRoundEffects();
         redrawOnline();
 
-        // Show post-resolution summary modal for human players.
-        // Keep mode as SUMMARY for the whole summary+replay block so that any
+        // Show the post-resolution review for human players via the shared
+        // _runEndOfRoundReview helper (same card/modal split as offline).
+        // Keep mode as SUMMARY for the whole review+replay block so that any
         // incoming onPlanningPhase messages are buffered, not immediately applied.
         if (ui && mp?.myFaction) {
           setMode(AppMode.SUMMARY);
-          let action;
-          do {
-            action = await ui._showResolutionSummary(steps, (finalState.round ?? state.round) - 1, {
-              prevScore, prevNodes, humanFaction: mp.myFaction, fogOfWar: state.fogOfWar,
-              gameOver: state.gameOver, winner: state.winner, winReason: state.winReason,
-              hasFullReplay: _onlineRoundHistory.length > 0,
-            });
-            if (action === 'replay') {
-              state.entities = _preReplayEntitiesOnline;
-              // Reset explored flags newly set this round so they reveal progressively.
-              const preExpOnline = new Set();
-              for (const s of steps) {
-                for (const ev of [...(s.heroEvents ?? []), ...(s.witchEvents ?? []), ...(s.playerEvents ?? []).flatMap(pe => pe.events ?? [])]) {
-                  if (ev.type === ResEventType.ACTION_OK && ev.action?.type === PlanActionType.EXPLORE) {
-                    const actor = s.entitySnapshot?.find(e => e.id === ev.action.entityId);
-                    if (actor) { const tk = _hexKey(actor.col, actor.row); const t = state.tiles.get(tk); if (t) t.explored = false; }
-                  }
+
+          // Re-run this round's animation from the pre-resolution snapshot,
+          // toggling explored flags so newly-revealed hexes fade back in.
+          // Shared by both the wrap-up card and the game-over modal's Replay.
+          const _reReplayOnline = async () => {
+            state.entities = _preReplayEntitiesOnline;
+            for (const s of steps) {
+              for (const ev of [...(s.heroEvents ?? []), ...(s.witchEvents ?? []), ...(s.playerEvents ?? []).flatMap(pe => pe.events ?? [])]) {
+                if (ev.type === ResEventType.ACTION_OK && ev.action?.type === PlanActionType.EXPLORE) {
+                  const actor = s.entitySnapshot?.find(e => e.id === ev.action.entityId);
+                  if (actor) { const tk = _hexKey(actor.col, actor.row); const t = state.tiles.get(tk); if (t) t.explored = false; }
                 }
               }
-              redrawOnline();
-              await _animateResolutionSteps(steps, finalEntities, redrawOnline, mp.myFaction, mp.myPlayerId ?? null);
-              // Restore explored flags after replay.
-              for (const s of steps) {
-                for (const ev of [...(s.heroEvents ?? []), ...(s.witchEvents ?? []), ...(s.playerEvents ?? []).flatMap(pe => pe.events ?? [])]) {
-                  if (ev.type === ResEventType.ACTION_OK && ev.action?.type === PlanActionType.EXPLORE) {
-                    const actor = s.entitySnapshot?.find(e => e.id === ev.action.entityId);
-                    if (actor) { const tk = _hexKey(actor.col, actor.row); const t = state.tiles.get(tk); if (t) t.explored = true; }
-                  }
+            }
+            redrawOnline();
+            await _animateResolutionSteps(steps, finalEntities, redrawOnline, mp.myFaction, mp.myPlayerId ?? null);
+            // Restore explored flags after replay.
+            for (const s of steps) {
+              for (const ev of [...(s.heroEvents ?? []), ...(s.witchEvents ?? []), ...(s.playerEvents ?? []).flatMap(pe => pe.events ?? [])]) {
+                if (ev.type === ResEventType.ACTION_OK && ev.action?.type === PlanActionType.EXPLORE) {
+                  const actor = s.entitySnapshot?.find(e => e.id === ev.action.entityId);
+                  if (actor) { const tk = _hexKey(actor.col, actor.row); const t = state.tiles.get(tk); if (t) t.explored = true; }
                 }
               }
-              // setMode handles the transition; re-engage RESOLVING
-              // so onPlanningPhase stays buffered during the next summary show.
-              setMode(AppMode.RESOLVING);
-            } else if (action === 'replay-full') {
-              await _replayFullGame(_onlineRoundHistory, state.winner, state.winReason,
+            }
+            // Re-engage RESOLVING so onPlanningPhase stays buffered during the
+            // next review show.
+            setMode(AppMode.RESOLVING);
+          };
+
+          const action = await _runEndOfRoundReview({
+            steps, roundNum: (finalState.round ?? state.round) - 1,
+            humanFaction: mp.myFaction, fogOfWar: state.fogOfWar,
+            prevScore, prevNodes,
+            roundHistory: _onlineRoundHistory,
+            reReplay: _reReplayOnline,
+            replayFull: async (winner, winReason) => {
+              await _replayFullGame(_onlineRoundHistory, winner, winReason,
                 state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch',
                 redrawOnline);
               _doRestart();
-              return;
-            }
-          } while (action === 'replay');
+            },
+          });
+          if (action === 'replay-full') return;
+
           setMode(AppMode.PLANNING);
-          // Animate score bar changes after summary is dismissed
+          // Animate score bar changes after the review is dismissed
           ui._animateScoreBar(prevScore, prevNodes);
 
           if (state.gameOver) {

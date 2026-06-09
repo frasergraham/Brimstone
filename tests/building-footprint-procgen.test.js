@@ -199,52 +199,50 @@ describe('building-footprint procgen — generated map invariants', () => {
     }
   });
 
-  test('rollback yields fewer buildings than the unconstrained (pre-P2) count', () => {
-    // These seeds were observed to surface a building wedged with no eligible
-    // footprint neighbour; the pre-P2 generator (no footprint constraint)
-    // produced the building counts below. P2 rolls each such building back, so
-    // the realized count must be strictly lower. (If P7 retunes placement
-    // density these baselines shift — update accordingly.)
-    const UNCONSTRAINED = [
-      { size: 'skirmish', seed: 62,  pre: 12 },
-      { size: 'skirmish', seed: 187, pre: 12 },
-      { size: 'regional', seed: 100, pre: 20 },
-      { size: 'campaign', seed: 74,  pre: 25 },
-    ];
-    let sawRollback = false;
+  test('a wedged building rolls back and fully restores its tile', () => {
+    // The footprint scorer steers footprints away from one another, which also
+    // frees later buildings' neighbours — so natural rollbacks are now rare. The
+    // rollback path must still fire and FULLY restore the tile when a building is
+    // wedged with no eligible footprint neighbour. These skirmish seeds were
+    // observed to surface exactly one such wedged building. (If placement density
+    // or the scorer is retuned these may shift — find new ones via
+    // `generateMap(seed, 'skirmish').buildingRollbacks > 0`.)
+    const ROLLBACK_SEEDS = [1812, 1871];
+    for (const seed of ROLLBACK_SEEDS) {
+      assert.ok(generateMap(seed, 'skirmish').buildingRollbacks > 0,
+        `skirmish/${seed}: expected at least one building rollback`);
+    }
+
+    // A rolled-back entrance must have its FULL pre-pass-1 terrain restored —
+    // base/structure/path AND building/footprint metadata reverted together, not
+    // merely `building` cleared. Assert the whole map stays internally consistent
+    // so a half-reverted tile (structure still BUILDING, a stale footprintHexes
+    // list, or an invalid base/path) is caught. Run on the rollback seeds (where
+    // the restore path actually executes) plus a wide range for general integrity.
     const TERRAIN_BASES = new Set([TileType.GRASS, TileType.DIRT, TileType.FOREST, TileType.RIVER]);
     const VALID_PATHS   = new Set([null, PathType.ROAD, PathType.BRIDGE, PathType.RIVER]);
-    for (const { size, seed, pre } of UNCONSTRAINED) {
+    const cases = [
+      ...ROLLBACK_SEEDS.map(seed => ({ size: 'skirmish', seed })),
+    ];
+    for (const size of ['skirmish', 'standard', 'regional', 'campaign']) {
+      for (let seed = 0; seed < 30; seed++) cases.push({ size, seed });
+    }
+    for (const { size, seed } of cases) {
       const { tiles } = generateMap(seed, size);
-      let count = 0;
-      for (const t of tiles.values()) if (hasBuilding(t)) count++;
-      assert.ok(count < pre,
-        `${size}/${seed}: expected < ${pre} buildings after rollback, got ${count}`);
-
-      // Strengthened: a rolled-back entrance must have its FULL pre-pass-1
-      // terrain restored — base/structure/path AND building/footprint metadata
-      // all reverted together, not merely `building` cleared. Assert the whole
-      // map is internally consistent so a half-reverted tile (e.g. structure
-      // still BUILDING, or a stale footprintHexes list, or an invalid base/path
-      // left behind by a partial rollback) is caught.
       for (const t of tiles.values()) {
         // structure===BUILDING and building!=null are set/reverted as a pair.
         assert.equal(t.structure === StructureType.BUILDING, t.building != null,
           `${size}/${seed}: tile ${t.col},${t.row} has mismatched structure/building (partial rollback)`);
         if (!hasBuilding(t)) {
-          // A non-building tile carries no leftover entrance metadata.
           assert.equal((t.footprintHexes ?? []).length, 0,
             `${size}/${seed}: non-building tile ${t.col},${t.row} kept stale footprintHexes`);
-          // …and its base/path are restored to genuine terrain values.
           assert.ok(TERRAIN_BASES.has(t.base),
             `${size}/${seed}: tile ${t.col},${t.row} left with invalid base ${t.base}`);
           assert.ok(VALID_PATHS.has(t.path),
             `${size}/${seed}: tile ${t.col},${t.row} left with invalid path ${t.path}`);
         }
       }
-      sawRollback = true;
     }
-    assert.ok(sawRollback, 'at least one rollback scenario exercised');
   });
 
   test('deterministic — same seed yields an identical building + footprint layout', () => {

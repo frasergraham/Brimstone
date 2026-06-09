@@ -30,6 +30,20 @@ function clearFootprint(tile) {
   return tile;
 }
 
+// Normalize a tile to plain open ground. A procedural map can drop a building
+// (and its fortifyLevel) on any hex; a fortified/building tile under the
+// defender grants a +1 combat defense bonus that silently shifts the combat
+// margin, so fixtures asserting exact margin/splash damage must neutralize it.
+function openTile(state, col, row) {
+  const t = state.tiles.get(hexKey(col, row));
+  if (!t) return t;
+  clearFootprint(t);
+  t.structure = null;   // hasBuilding() also keys off `structure`, not just `building`
+  t.building = null;
+  t.fortifyLevel = 0;
+  return t;
+}
+
 // Spawn a brute leader at (col, row) by swapping the night-side default.
 function bruteState(col = 5, row = 5) {
   const state = freshState();
@@ -286,6 +300,7 @@ describe('BruteFaction — splash splashes on every hit, not just crushes', () =
   test('a regular (non-crush) hit by the brute still splashes adjacent enemy hexes', () => {
     const { state, brute } = bruteState(5, 5);
     const targetPos = getNeighbors(brute.col, brute.row)[0];
+    openTile(state, targetPos.col, targetPos.row); // strip any random building/fort defense bonus
     const target = createMinion(targetPos.col, targetPos.row);
     target.owner = 'hero';
     target.maxHp = 5; target.hp = 5;
@@ -341,6 +356,7 @@ describe('BruteFaction — splash damage scales with margin', () => {
     const place = (atkDie, defDie) => {
       const { state, brute } = bruteState(5, 5);
       const targetPos = getNeighbors(brute.col, brute.row)[0];
+      openTile(state, targetPos.col, targetPos.row); // strip any random building/fort defense bonus
       const target = createMinion(targetPos.col, targetPos.row);
       target.owner = 'hero';
       target.maxHp = 99; target.hp = 99;

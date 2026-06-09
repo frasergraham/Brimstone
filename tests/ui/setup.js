@@ -138,6 +138,9 @@ export function makeFakeRenderer() {
     resetView()       {},
     setZoom()         {},
     frameHexes()      {},
+    panByScreen()     {},
+    rotateBy()        {},
+    zoomBy()          {},
     _clampPan()       {},
     getPortraitDataURL() { return null; },
     getTileDataURL() { return null; },
@@ -206,7 +209,7 @@ export function installGlobalMocks() {
 
 export function createElementsBag(overrides = {}) {
   const ids = [
-    'zoom-in','zoom-out','zoom-fit','zoom-me','speed-toggle','speed-popup','canvas-wrapper',
+    'zoom-in','zoom-out','zoom-fit','zoom-me','replay-detail-btn','canvas-wrapper',
     'menu-btn','menu-quit-btn','menu-close-btn','game-menu-backdrop','game-screen',
     'end-turn-btn','turn-info','cycle-bump','cycle-bump-icon','cycle-bump-label',
     'score-bar','score-bar-content',

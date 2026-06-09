@@ -1651,37 +1651,6 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
    while the combat readout is parked at its final state. Click advances
    the readout into its fade-out. Dark gothic palette to match the HUD;
    bigger touch target than .zoom-btn since this is a primary action. */
-.combat-continue-btn {
-  position: absolute;
-  bottom: 28px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 30;
-  padding: 10px 22px;
-  background: rgba(20, 14, 30, 0.92);
-  border: 1px solid rgba(200, 168, 75, 0.75);
-  border-radius: 8px;
-  color: var(--gold, #c8a84b);
-  font-size: 18px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  cursor: pointer;
-  user-select: none;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
-  transition: background 0.15s, border-color 0.15s, transform 0.08s;
-}
-.combat-continue-btn:hover {
-  background: rgba(40, 28, 55, 0.96);
-  border-color: rgba(220, 188, 95, 0.95);
-}
-.combat-continue-btn:active {
-  background: rgba(200, 168, 75, 0.22);
-  transform: translateX(-50%) translateY(1px);
-}
-.combat-continue-btn[hidden] {
-  display: none;
-}
-
 /* ── 3D camera controls ──────────────────────────────────────────────────
    `body.renderer-3d` is set in main.js when the 3D renderer is selected.
    We swap the 3D cluster in and hide the duplicated 2D zoom/rotate buttons
@@ -1750,7 +1719,7 @@ body.renderer-3d #rotate-right {
   pointer-events: none;
   user-select: none;
 }
-body.renderer-3d #fps-counter { display: block; }
+body.renderer-3d.debug-counters #fps-counter { display: block; }
 #poly-counter {
   position: absolute;
   top: 32px;
@@ -1768,7 +1737,7 @@ body.renderer-3d #fps-counter { display: block; }
   pointer-events: none;
   user-select: none;
 }
-body.renderer-3d #poly-counter { display: block; }
+body.renderer-3d.debug-counters #poly-counter { display: block; }
 #cam-counter {
   position: absolute;
   top: 56px;
@@ -1786,7 +1755,7 @@ body.renderer-3d #poly-counter { display: block; }
   pointer-events: none;
   user-select: none;
 }
-body.renderer-3d #cam-counter { display: block; }
+body.renderer-3d.debug-counters #cam-counter { display: block; }
 
 /* Compass rose — top-left of canvas, ~64px square. The outer wrapper plus the
    cardinal letters stay world-fixed; `.compass-rose-needle` is the inner group
@@ -1796,7 +1765,7 @@ body.renderer-3d #cam-counter { display: block; }
 #compass-rose {
   position: absolute;
   top: 8px;
-  left: 8px;
+  right: 8px;
   width: 64px;
   height: 64px;
   z-index: 10;
@@ -5079,46 +5048,25 @@ img.plan-step-avatar {
 .speed-option-label { font-size: 0.82rem; font-weight: 600; color: var(--text-bright); }
 .speed-option-desc { font-size: 0.7rem; color: var(--text-dim); }
 
-/* Speed toast — shown near zoom controls when speed is toggled */
-.speed-toast {
-  position: absolute;
-  bottom: 56px;
-  left: 8px;
-  background: rgba(13, 10, 22, 0.88);
-  border: 1px solid rgba(180, 150, 80, 0.4);
-  border-radius: 6px;
-  padding: 0.35rem 0.65rem;
-  font-size: 0.78rem;
-  color: #e8dcc8;
-  pointer-events: none;
-  z-index: 20;
-  animation: speed-toast-in 0.18s ease;
-  transition: opacity 0.3s ease;
-}
-.speed-toast.speed-toast-out { opacity: 0; }
-@keyframes speed-toast-in {
-  from { opacity: 0; transform: translateY(6px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
 /* Replay HUD — shown at top of canvas during full-game replay */
 #replay-hud {
   position: absolute;
-  top: 12px;
+  bottom: 64px;       /* clear of the bottom score bar */
   left: 50%;
   transform: translateX(-50%);
-  background: rgba(13, 10, 22, 0.92);
-  border: 1px solid rgba(170, 130, 255, 0.5);
-  border-radius: 20px;
-  padding: 0.4rem 1rem;
+  background: rgba(13, 10, 22, 0.9);
+  border: 1px solid rgba(200, 168, 75, 0.55);
+  border-radius: 12px;
+  padding: 0.5rem 0.8rem;
   font-size: 0.82rem;
   color: #c8b8e8;
-  z-index: 25;
+  z-index: 26;
   align-items: center;
   gap: 0.6rem;
   pointer-events: auto;
   user-select: none;
   white-space: nowrap;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
 }
 #replay-round-label {
   font-weight: 600;
@@ -5127,29 +5075,32 @@ img.plan-step-avatar {
 }
 .replay-controls {
   display: flex;
-  gap: 3px;
+  gap: 7px;
   align-items: center;
 }
 .replay-ctrl-btn {
-  background: rgba(255,255,255,0.06);
-  border: 1px solid rgba(170,130,255,0.3);
-  border-radius: 5px;
-  color: var(--text-dim);
+  background: rgba(20, 14, 30, 0.92);
+  border: 1px solid rgba(200, 168, 75, 0.6);
+  border-radius: 8px;
+  color: var(--gold, #c8a84b);
   font-family: inherit;
-  font-size: 0.88rem;
-  padding: 0.2rem 0.55rem;
+  font-size: 0.98rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  padding: 0.5rem 1.05rem;
   min-width: unset;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 .replay-ctrl-btn:hover {
-  background: rgba(170,130,255,0.18);
-  color: var(--text-bright);
+  background: rgba(40, 28, 55, 0.96);
+  border-color: rgba(220, 188, 95, 0.95);
+  color: #f0d878;
 }
 .replay-ctrl-btn.active {
-  background: rgba(170,130,255,0.28);
-  border-color: rgba(200,160,255,0.75);
-  color: var(--text-bright);
+  background: rgba(200, 168, 75, 0.22);
+  border-color: rgba(220, 188, 95, 0.95);
+  color: #f5e6a8;
 }
 .replay-ctrl-btn.replay-stop {
   color: #e07070;
@@ -5161,34 +5112,578 @@ img.plan-step-avatar {
   color: #ffaaaa;
 }
 
-/* Inline replay — single-button SKIP HUD.
-   Floats at the very top of the canvas, semi-transparent so it doesn't
-   obscure the action animation beneath it. */
-#replay-hud.replay-hud-skip-only {
-  top: 2px;
-  padding: 0.15rem 0.45rem;
-  background: rgba(13, 10, 22, 0.55);
-  border-color: rgba(170, 130, 255, 0.35);
-  opacity: 0.8;
-  transition: opacity 0.18s;
+/* Disabled transport button (e.g. NEXT while auto-playing). */
+.replay-ctrl-btn:disabled,
+.replay-ctrl-btn.disabled {
+  opacity: 0.35;
+  cursor: default;
+  pointer-events: none;
 }
-#replay-hud.replay-hud-skip-only:hover {
-  opacity: 1;
+
+/* NEXT prompt — pulses once a step has finished animating (manual mode). */
+.replay-ctrl-btn.ready {
+  background: rgba(200, 168, 75, 0.22);
+  border-color: rgba(220, 188, 95, 0.95);
+  color: #f5e6a8;
+  animation: replay-next-pulse 1.1s ease-in-out infinite;
 }
-#replay-hud.replay-hud-skip-only .replay-controls {
-  justify-content: center;
+@keyframes replay-next-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(220, 188, 95, 0.0); }
+  50%      { box-shadow: 0 0 0 4px rgba(220, 188, 95, 0.35); }
 }
-#replay-hud.replay-hud-skip-only #replay-end-btn {
-  font-size: 0.78rem;
+
+/* Titled control blocks (Controls | Camera) — a label above a row of buttons,
+   so the two groups align. A divider sits between adjacent blocks. */
+.replay-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+}
+.replay-block + .replay-block {
+  padding-left: 0.8rem;
+  margin-left: 0.2rem;
+  border-left: 1px solid rgba(200, 168, 75, 0.3);
+}
+.replay-block-title {
+  font-size: 0.62rem;
   font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.replay-block-btns {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+}
+.replay-ctrl-btn.replay-camera {
+  letter-spacing: 0.02em;
+  min-width: 5rem;
+  text-align: center;
+}
+.replay-ctrl-btn.replay-camera.fixed {
+  background: rgba(120, 200, 255, 0.16);
+  border-color: rgba(120, 200, 255, 0.55);
+  color: #bfe6ff;
+}
+.replay-ctrl-btn.replay-detail {
+  letter-spacing: 0.02em;
+  min-width: 5.4rem;
+  text-align: center;
+}
+/* Summary / Speedy tint progressively warmer to signal "less detail, faster". */
+.replay-ctrl-btn.replay-detail.detail-fast {
+  background: rgba(255, 190, 110, 0.14);
+  border-color: rgba(255, 190, 110, 0.5);
+  color: #ffd9a8;
+}
+.replay-ctrl-btn.replay-detail.detail-vfast {
+  background: rgba(255, 140, 90, 0.18);
+  border-color: rgba(255, 140, 90, 0.6);
+  color: #ffc6a0;
+}
+
+/* ── Replay timeline overlay ───────────────────────────────────────────────
+   Transparent sequence of resolution-step cards. The active card is centred on
+   screen; completed cards fade off to the left and future cards fade to the
+   right. The whole track slides as replay advances. */
+#replay-timeline {
+  position: absolute;
+  top: 76px;         /* below the top-right compass rose */
+  left: 8px;
+  right: 8px;
+  z-index: 24;
+  pointer-events: none;
+  overflow: hidden;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+#replay-timeline.visible { opacity: 1; }
+#replay-timeline-track {
+  position: relative;        /* so column offsetLeft is transform-independent */
+  display: flex;
+  align-items: flex-start;
+  gap: 1.6rem;
+  width: max-content;
+  transition: transform 0.35s ease;
+  will-change: transform;
+}
+.replay-step-col {
+  flex: 0 0 auto;
+  min-width: 17.6rem;
+  max-width: 19rem;
+  padding: 0.5rem 0.7rem;
+  background: rgba(13, 10, 22, 0.62);
+  border: 1px solid rgba(170, 130, 255, 0.25);
+  border-radius: 10px;
+  opacity: 0;                                     /* hidden outside the 3-card window */
+  transition: opacity 0.3s ease, border-color 0.3s ease;
+}
+.replay-step-col.is-current {
+  opacity: 1;                                     /* opaque active card (left of screen) */
+  border-color: rgba(200, 160, 255, 0.7);
+}
+/* End-of-turn review: the other cards stay visible (active brightest) instead
+   of being hidden, so scrubbing ◀ ▶ scrolls them in/out at the screen width
+   while the active card holds its spot. */
+#replay-timeline.reviewing .replay-step-col { opacity: 0.7; }
+#replay-timeline.reviewing .replay-step-col.is-current { opacity: 1; }
+
+/* End-of-turn wrap-up card — same card frame, with a summary body + actions.
+   Wider than a normal step card, and the body scrolls if a busy round overflows. */
+.replay-step-col.replay-wrapup {
+  border-color: rgba(200, 168, 75, 0.6);
+  min-width: 20rem;
+  max-width: 24rem;
+}
+.replay-wrapup-body {
+  font-size: 0.86rem;
+  color: #d8c8f0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0.4rem 0 0.5rem;
+  max-height: 56vh;
+  overflow-y: auto;
+}
+.wrapup-line.muted { color: var(--text-dim); font-style: italic; text-align: center; }
+/* Night-attrition escalation warning, folded in from its old modal. */
+.wrapup-attrition {
+  text-align: center;
+  font-size: 0.72rem;
+  color: #c9b3e8;
+  background: rgba(80, 50, 120, 0.3);
+  border: 1px solid rgba(160, 110, 220, 0.45);
+  border-radius: 7px;
+  padding: 0.35rem 0.5rem;
+  margin-bottom: 0.15rem;
+}
+.wrapup-attrition b { color: #ff9b9b; }
+/* Combat: [icon] vs [icon], HP loss / skull beneath each unit. */
+.wrapup-combat {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0.7rem;
+}
+.wrapup-unit {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.1rem;
+}
+.wrapup-unit-icon {
+  width: 2.4rem;
+  height: 2.4rem;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  color: #fff;
+  border: 2px solid rgba(255,255,255,0.3);
+  object-fit: cover;
+}
+.wrapup-dmg { font-size: 0.82rem; font-weight: 700; color: #ff8a8a; }
+.wrapup-dmg.kill { color: #ff5b5b; font-size: 1rem; }
+.wrapup-dmg.none { color: var(--text-dim); }
+.wrapup-vs { align-self: center; color: var(--text-dim); font-style: italic; padding-top: 0.5rem; font-size: 0.82rem; }
+/* Condensed casualty list (used when >3 battles) — wrapping row of hurt units. */
+.wrapup-casualties {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem 0.8rem;
+}
+/* Found — survivors/zombies discovered this round (icon + name). */
+.wrapup-found {
+  margin-top: 0.2rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid rgba(200, 168, 75, 0.25);
+}
+.wrapup-found-label {
+  font-size: 0.74rem;
   letter-spacing: 0.08em;
-  padding: 0.22rem 0.9rem;
-  background: rgba(170, 130, 255, 0.18);
-  color: var(--text-bright);
+  text-transform: uppercase;
+  color: var(--text-dim);
+  text-align: center;
+  margin-bottom: 0.3rem;
 }
-#replay-hud.replay-hud-skip-only #replay-end-btn:hover {
-  background: rgba(170, 130, 255, 0.35);
+.wrapup-found-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
 }
+.wrapup-found-unit { display: flex; flex-direction: column; align-items: center; gap: 0.15rem; width: 3.4rem; }
+.wrapup-found-icon {
+  width: 2.6rem; height: 2.6rem;
+  border-radius: 50%;
+  border: 2px solid #888;
+  object-fit: cover;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.1rem; color: #fff;
+}
+.wrapup-found-name {
+  font-size: 0.68rem;
+  color: var(--text);
+  text-align: center;
+  line-height: 1.1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 3.4rem;
+}
+/* Looted — explore resource icons gained this round, with ×N counts. */
+.wrapup-loot {
+  margin-top: 0.2rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid rgba(200, 168, 75, 0.25);
+}
+.wrapup-loot-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+}
+.wrapup-loot-pip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  font-size: 1.1rem;
+}
+.wrapup-loot-x { font-size: 0.7rem; color: var(--text-dim); font-weight: 700; }
+/* Night attrition roll-call — exposed (hurt) vs sheltered (safe) survivors. */
+.wrapup-attr {
+  margin-top: 0.2rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid rgba(200, 168, 75, 0.25);
+}
+.wrapup-attr-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.wrapup-attr-row {
+  font-size: 0.84rem;
+  line-height: 1.35;
+  text-align: center;
+}
+.wrapup-attr-row.hurt { color: #d6a8ff; }
+.wrapup-attr-row.safe { color: var(--text-dim); }
+.wrapup-attr-dmg { color: #ff8a8a; font-weight: 700; }
+.wrapup-attr-note { color: var(--text-dim); font-size: 0.68rem; font-style: italic; }
+/* Score — the bottom score-bar dots/pips, reused. */
+.wrapup-score {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 0.2rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid rgba(200, 168, 75, 0.25);
+}
+.replay-wrapup-actions {
+  display: flex;
+  gap: 0.4rem;
+  justify-content: flex-end;
+  pointer-events: auto;                           /* re-enable clicks inside the no-events overlay */
+}
+.replay-wrapup-btn {
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.35rem 0.7rem;
+  border-radius: 7px;
+  cursor: pointer;
+  background: rgba(20, 14, 30, 0.92);
+  border: 1px solid rgba(200, 168, 75, 0.55);
+  color: var(--gold, #c8a84b);
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.replay-wrapup-btn:hover { background: rgba(40, 28, 55, 0.96); color: #f0d878; }
+.replay-wrapup-btn.primary {
+  background: rgba(200, 168, 75, 0.22);
+  border-color: rgba(220, 188, 95, 0.95);
+  color: #f5e6a8;
+  /* Continue is the primary action — make it noticeably bigger. */
+  font-size: 1rem;
+  padding: 0.55rem 1.2rem;
+  border-radius: 9px;
+}
+
+/* Replay progress — dots (one per card, active filled) centred above the active
+   card, with bare scrub-arrow triangles flanking them during review. */
+#replay-progress {
+  position: absolute;
+  top: 50px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 27;
+  display: none;
+  align-items: center;
+  gap: 0.55rem;
+  pointer-events: none;
+}
+#replay-progress.visible { display: flex; }
+#replay-dots {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.replay-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.25);
+  transition: background 0.2s, box-shadow 0.2s;
+}
+.replay-dot.filled {
+  background: var(--gold, #c8a84b);
+  box-shadow: 0 0 6px rgba(200, 168, 75, 0.7);
+}
+/* Bare clickable triangles — only shown in review (#replay-progress.review). */
+.replay-arrow {
+  display: none;
+  background: none;
+  border: none;
+  padding: 0 0.15rem;
+  font-size: 1.25rem;
+  line-height: 1;
+  color: var(--gold, #c8a84b);
+  cursor: pointer;
+  pointer-events: auto;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+#replay-progress.review .replay-arrow { display: inline-block; }
+.replay-arrow:hover { color: #f0d878; }
+/* Mobile: shrink the replay control bar so it doesn't crowd the other HUD. */
+@media (max-width: 700px) {
+  #replay-hud { padding: 0.3rem 0.5rem; gap: 0.35rem; border-radius: 10px; }
+  .replay-block { gap: 0.2rem; }
+  .replay-block-title { font-size: 0.52rem; }
+  .replay-block-btns { gap: 5px; }
+  .replay-block + .replay-block { padding-left: 0.5rem; margin-left: 0.1rem; }
+  .replay-ctrl-btn { font-size: 0.8rem; padding: 0.32rem 0.55rem; border-radius: 6px; }
+  .replay-ctrl-btn.replay-camera { min-width: 3.8rem; }
+  /* In replay, hide the compass so the turn cards can sit higher and clear
+     more of the board. The body flag is set while the timeline is visible.
+     The progress dots/arrows stay anchored just above the cards. */
+  body.replay-timeline-up #compass-rose { display: none; }
+  body.replay-timeline-up #replay-progress { top: 12px; }
+  body.replay-timeline-up #replay-timeline { top: 36px; }
+}
+.replay-step-label {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 0.35rem;
+}
+.replay-step-col.is-current .replay-step-label { color: var(--text-bright); }
+/* Header row: turn label on the left, +/- collapse toggle on the right. */
+.replay-step-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  margin-bottom: 0.35rem;
+}
+.replay-step-header .replay-step-label { margin-bottom: 0; }
+.replay-collapse-btn {
+  pointer-events: auto;                /* the timeline itself ignores pointers */
+  flex: 0 0 auto;
+  width: 1.3rem;
+  height: 1.3rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: rgba(40, 30, 60, 0.6);
+  border: 1px solid rgba(170, 130, 255, 0.4);
+  border-radius: 5px;
+  color: #d8c8f0;
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.replay-collapse-btn:hover { color: #fff; border-color: rgba(200, 160, 255, 0.7); }
+/* "…" hint shown (collapsed only) when several actions are active at once. */
+.replay-more {
+  display: none;
+  text-align: center;
+  color: var(--text-dim);
+  font-weight: 700;
+  line-height: 1;
+  padding-top: 0.15rem;
+}
+/* Collapsed card: show only the action that's currently playing. */
+#replay-timeline.collapsed .replay-step-entry { display: none; }
+#replay-timeline.collapsed .replay-step-entry.is-acting { display: grid; }
+/* If several actions are active simultaneously (e.g. all moves), keep just the
+   first on screen and let the … below stand in for the rest. */
+#replay-timeline.collapsed .replay-step-entry.is-acting ~ .replay-step-entry.is-acting { display: none; }
+#replay-timeline.collapsed .replay-step-entry.is-acting ~ .replay-step-entry.is-acting ~ .replay-more { display: block; }
+/* No divider/offset on a collapsed card's lone visible entry. */
+#replay-timeline.collapsed .replay-step-entry { border-top: none; margin-top: 0.2rem; padding-top: 0.2rem; }
+.replay-step-empty {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  font-style: italic;
+  opacity: 0.7;
+}
+/* Each entry is an aligned 3-column grid: [UNIT] [ACTION] [TARGET] on top, and
+   [actor HP] [OUTCOME] [target HP] below. FIXED column widths (shared by every
+   entry) so the icons/outcomes line up down the whole card. */
+.replay-step-entry {
+  display: grid;
+  grid-template-columns: 4.8rem 6.6rem 4.8rem;
+  align-items: start;
+  justify-items: center;
+  column-gap: 0.3rem;
+  row-gap: 0.12rem;
+  margin: 0.25rem 0;
+  padding: 0.2rem 0.25rem;
+  border-radius: 6px;
+  font-size: 0.74rem;
+  color: #d8c8f0;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+/* The battle/action currently being performed in this step. */
+.replay-step-entry.is-acting {
+  background: rgba(200, 168, 75, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(220, 188, 95, 0.65);
+}
+/* Divider between actions so they don't bleed together once the highlight is gone. */
+.replay-step-entry + .replay-step-entry {
+  border-top: 1px solid rgba(170, 130, 255, 0.2);
+  margin-top: 0.4rem;
+  padding-top: 0.4rem;
+}
+.replay-cell { display: block; }
+/* A unit column: icon above its name (name wraps to two lines if long). */
+.replay-unit {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  width: 4.8rem;
+}
+.replay-unit-name {
+  font-size: 0.62rem;
+  color: #cdbce8;
+  text-align: center;
+  line-height: 1.05;
+  width: 4.8rem;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* Gang-up allies — a small row of mini icons beneath the combatant. */
+.replay-allies {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.12rem;
+  margin-top: 0.12rem;
+  max-width: 5rem;
+}
+.replay-ally-icon {
+  width: 1rem;
+  height: 1rem;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.55rem;
+  line-height: 1;
+  color: #fff;
+  border: 1px solid rgba(255,255,255,0.3);
+  object-fit: cover;
+}
+.replay-step-icon {
+  width: 2.2rem;
+  height: 2.2rem;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.05rem;
+  line-height: 1;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+  border: 2px solid rgba(255,255,255,0.3);
+  object-fit: cover;
+}
+/* Action label sits at the icon's vertical centre (icon is 2.2rem). */
+.replay-step-action {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  align-self: start;
+  padding-top: 0.45rem;
+  text-align: center;
+  line-height: 1.05;
+}
+/* Battle: each side's final roll flanks the action word, winner highlighted. */
+.replay-step-action.battle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.replay-action-word { font-weight: 700; }
+.replay-roll {
+  font-size: 1.1rem;
+  font-weight: 800;
+  line-height: 1;
+  opacity: 0;                    /* revealed with the outcome, after the step settles */
+  transition: opacity 0.2s ease;
+}
+.replay-roll.revealed { opacity: 1; }
+.replay-roll.winner { color: #7fd99a; }
+.replay-roll.loser  { color: #b87a7a; }
+/* Discovered survivor(s)/zombie(s) — hidden until the discovery is revealed.
+   Horn can find several, so the icons wrap in a small grid. */
+.replay-unit.replay-discovered { opacity: 0; transition: opacity 0.25s ease; }
+.replay-unit.replay-discovered.revealed { opacity: 1; }
+.replay-discovered-icons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.25rem 0.35rem;
+  max-width: 5rem;
+}
+.replay-disc-unit {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.1rem;
+}
+
+/* Outcome cells (row 2 of the grid) — centred under their column, hidden until
+   revealed as the action plays out. */
+.replay-step-outcome {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-align: center;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+.replay-step-outcome.revealed { opacity: 1; }
+.replay-step-outcome.hit     { color: #ff9b9b; }
+.replay-step-outcome.crush   { color: #ff7a4d; }
+.replay-step-outcome.kill    { color: #ff5b5b; }
+.replay-step-outcome.miss    { color: #f4f0ff; }   /* miss/dodge/etc — white for visibility */
+.replay-step-outcome.counter { color: #ffc14d; }
+.replay-step-outcome.blocked { color: #ff8a8a; }
+.replay-step-outcome.gain    { color: #8ee0a0; }
+.replay-step-outcome.info    { color: var(--text-dim); }
 
 /* Replay exit confirmation dialog */
 .replay-exit-overlay {
@@ -6102,3 +6597,118 @@ body.spectator-mode #game-screen   { display: flex !important; }
   color: var(--text-dim);
   white-space: nowrap;
 }
+
+/* ── Keyboard shortcuts: command console, help overlay, confirm prompt ─────── */
+
+.cmd-console,
+.kb-help,
+.kb-confirm { z-index: 9000; }
+
+.cmd-console.hidden,
+.kb-help.hidden,
+.kb-confirm.hidden { display: none; }
+
+/* Command console — slides down from the top, dims nothing but itself. */
+.cmd-console {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: 45vh;
+  background: rgba(13, 15, 22, 0.96);
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.6);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+.cmd-console-output {
+  overflow-y: auto;
+  padding: 8px 12px 4px;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+}
+.cmd-console-msg { line-height: 1.4; }
+.cmd-console-msg.cmd-cmd { color: var(--text-bright); }
+.cmd-console-msg.cmd-ok  { color: var(--green); }
+.cmd-console-msg.cmd-err { color: var(--red); }
+.cmd-console-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+}
+.cmd-console-prompt { color: var(--hero); }
+.cmd-console-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-bright);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+/* Shortcuts overlay — shown while the H key is held. */
+.kb-help {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+.kb-help-panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 18px 24px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.7);
+  max-width: 90vw;
+}
+.kb-help-title {
+  margin: 0 0 12px;
+  color: var(--hero);
+  font-size: 1.1rem;
+  text-align: center;
+}
+.kb-help-table { border-collapse: collapse; }
+.kb-help-table td { padding: 4px 14px; vertical-align: top; }
+.kb-help-keys {
+  font-family: var(--font-mono);
+  color: var(--text-bright);
+  white-space: nowrap;
+  text-align: right;
+}
+.kb-help-label { color: var(--text); }
+
+/* Confirm prompt — modal, used for destructive shortcuts (clear actions). */
+.kb-confirm {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+}
+.kb-confirm-panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px 24px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.7);
+  max-width: 360px;
+  text-align: center;
+}
+.kb-confirm-msg { color: var(--text-bright); margin-bottom: 16px; }
+.kb-confirm-btns { display: flex; gap: 12px; justify-content: center; }
+.kb-confirm-btns button {
+  padding: 7px 18px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  font-family: var(--font-serif);
+}
+.kb-confirm-yes { background: var(--red); color: #fff; border-color: var(--red); }
+.kb-confirm-cancel { background: var(--bg-section); color: var(--text); }

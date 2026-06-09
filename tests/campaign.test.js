@@ -1042,17 +1042,18 @@ describe('Wave spawner', () => {
 describe('Mission 1 (The Awakening) balance', () => {
   const mission1 = hollowDef.missions.find(m => m.id === 'prologue');
 
-  test('has 3 initial zombies (enough to trigger the golem)', () => {
-    assert.equal(mission1.enemyUnits.length, 3);
+  test('has 4 initial zombies (golem triggers after 3 kills, while one still stands)', () => {
+    assert.equal(mission1.enemyUnits.length, 4);
     for (const eu of mission1.enemyUnits) {
       assert.equal(eu.type, 'zombie');
     }
   });
 
-  test('initial zombies have attack override of 1', () => {
-    for (const eu of mission1.enemyUnits) {
-      assert.equal(eu.overrides?.attack, 1, `initial enemy at (${eu.col},${eu.row}) should have attack 1`);
-    }
+  test('three initial zombies are weakened to attack 1, the fourth is full-strength', () => {
+    const weakened     = mission1.enemyUnits.filter(eu => eu.overrides?.attack === 1);
+    const fullStrength = mission1.enemyUnits.filter(eu => eu.overrides?.attack === undefined);
+    assert.equal(weakened.length, 3, 'three zombies weakened to attack 1');
+    assert.equal(fullStrength.length, 1, 'one deliberately full-strength zombie (no attack override)');
   });
 
   test('single kill-triggered wave spawns a weakened wood golem after 3 kills', () => {

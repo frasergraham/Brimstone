@@ -3,7 +3,9 @@ import type { CapacitorConfig } from '@capacitor/cli';
 const config: CapacitorConfig = {
   appId: 'com.calebshollow.game',
   appName: "Caleb's Hollow",
-  webDir: 'www',
+  // Staged web copy lives in /tmp (written by scripts/cap-copy-web.js) to keep
+  // build artifacts out of the project root.
+  webDir: '/tmp/brimstone-www',
   server: {
     androidScheme: 'https',
   },

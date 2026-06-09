@@ -25,6 +25,19 @@ import {
 /** Enum of UI operating modes. */
 export const UIMode = Object.freeze({ LOCAL: 'local', ONLINE: 'online', SPECTATOR: 'spectator' });
 
+/** True when a click event is a triple-click on the title-bar "Actions" label —
+ *  the hidden gesture that toggles the on-canvas debug counters (FPS, polys,
+ *  camera). `detail` is the browser's consecutive-click counter; a triple-click
+ *  fires a final `click` with `detail === 3`. Pure so it can be unit-tested
+ *  without a real DOM. */
+export function isDebugToggleClick(e) {
+  if (!e || e.detail !== 3) return false;
+  const t = e.target;
+  if (!t) return false;
+  if (typeof t.closest === 'function') return !!t.closest('.actions-label');
+  return !!(t.classList && t.classList.contains('actions-label'));
+}
+
 export class UIController {
   /**
    * @param {HTMLCanvasElement} canvas
@@ -85,6 +98,8 @@ export class UIController {
     this._battleInterval   = null; // dice animation interval — cleared on new dialog
     this._autoDismissTimer = null; // battle dialog auto-dismiss timer — cleared on new dialog
     this.speedMode         = this._loadDefaultSpeed(); // 'cinematic' | 'fast' | 'vfast'
+    this.replayCameraMode  = 'follow';  // 'follow' (auto-zoom to action) | 'fixed' — replay overlay camera toggle (persists across turns)
+    this.replayAutoPlay    = false;     // remembered AutoPlay choice — applied at the start of each turn's replay
     // Start with chronicle hidden by default; open = full sidebar, closed = pull-out tab only
     this._chronicleOpen    = false;
     // Unit stats bar: collapsed by default; clicking the (i) glyph expands to reveal ATK/DEF + abilities
@@ -198,15 +213,19 @@ export class UIController {
     // Zoom control buttons (+, −, fit)
     const zoomStep = 1.25;
     this._el('zoom-in')?.addEventListener('click', () => {
-      const cx = this.canvas.width  / 2;
-      const cy = this.canvas.height / 2;
-      this.renderer.setZoom(this.renderer.zoomLevel * zoomStep, cx, cy);
+      this._replayManualCamera(() => {
+        const cx = this.canvas.width  / 2;
+        const cy = this.canvas.height / 2;
+        this.renderer.setZoom(this.renderer.zoomLevel * zoomStep, cx, cy);
+      });
       this.onRedraw();
     }, sig);
     this._el('zoom-out')?.addEventListener('click', () => {
-      const cx = this.canvas.width  / 2;
-      const cy = this.canvas.height / 2;
-      this.renderer.setZoom(this.renderer.zoomLevel / zoomStep, cx, cy);
+      this._replayManualCamera(() => {
+        const cx = this.canvas.width  / 2;
+        const cy = this.canvas.height / 2;
+        this.renderer.setZoom(this.renderer.zoomLevel / zoomStep, cx, cy);
+      });
       this.onRedraw();
     }, sig);
     // Rotate buttons — 3D only; 2D Renderer.rotateBy is a no-op stub.
@@ -250,72 +269,48 @@ export class UIController {
     };
     bindHoldToRepeat('cam3d-rotate-left',  () => this.renderer.rotateBy(-ROT_STEP, 0));
     bindHoldToRepeat('cam3d-rotate-right', () => this.renderer.rotateBy( ROT_STEP, 0));
-    // 3D camera mode toggle — swaps drag between pan and rotate. Wheel /
-    // pinch always zooms regardless of mode.
-    const modeBtn = this._el('cam3d-mode-toggle');
-    if (modeBtn) {
-      modeBtn.addEventListener('click', () => {
-        const cur  = modeBtn.dataset.mode === 'rotate' ? 'rotate' : 'pan';
-        const next = cur === 'pan' ? 'rotate' : 'pan';
-        modeBtn.dataset.mode    = next;
-        modeBtn.textContent     = next === 'pan' ? '✋' : '↻';
-        modeBtn.title           = next === 'pan'
-          ? 'Drag = pan (tap to switch to rotate)'
-          : 'Drag = rotate (tap to switch to pan)';
-        if (typeof this.renderer.setCameraDragMode === 'function') {
-          this.renderer.setCameraDragMode(next);
-        }
-      }, sig);
-    }
     this._el('zoom-fit')?.addEventListener('click', () => {
       if (this.renderer.viewLocked) return;
-      // One-button, two-action: tap frames the map; tapping again when the
-      // camera is already at the framed target (so framing would be a
-      // visual no-op) orients north up instead. No 400ms double-tap window.
-      const alreadyFramed = this.renderer.is3D
-        && typeof this.renderer.isAtFitTarget === 'function'
-        && this.renderer.isAtFitTarget();
-      if (alreadyFramed) {
-        if (typeof this.renderer.orientNorthUp === 'function') {
-          this.renderer.orientNorthUp();
-          this.onRedraw();
+      this._replayManualCamera(() => {
+        // One-button, two-action: tap frames the map; tapping again when the
+        // camera is already at the framed target (so framing would be a
+        // visual no-op) orients north up instead. No 400ms double-tap window.
+        const alreadyFramed = this.renderer.is3D
+          && typeof this.renderer.isAtFitTarget === 'function'
+          && this.renderer.isAtFitTarget();
+        if (alreadyFramed) {
+          if (typeof this.renderer.orientNorthUp === 'function') this.renderer.orientNorthUp();
+          return;
         }
-        return;
-      }
-      this.renderer.resize();
-      if (this.renderer.is3D && typeof this.renderer.zoomOutToOwnedUnits === 'function') {
-        this.renderer.zoomOutToOwnedUnits();
-      } else {
-        this.renderer.resetView();
-      }
+        this.renderer.resize();
+        if (this.renderer.is3D && typeof this.renderer.zoomOutToOwnedUnits === 'function') {
+          this.renderer.zoomOutToOwnedUnits();
+        } else {
+          this.renderer.resetView();
+        }
+      });
       this.onRedraw();
     }, sig);
     this._el('zoom-me')?.addEventListener('click', () => {
-      if (this._selectedEntity && this._selectedEntity.alive) {
-        // Zoom to selected unit
-        const pos = this._planMode ? (this._getProjectedPos(this._selectedEntity.id) ?? this._selectedEntity) : this._selectedEntity;
-        this.renderer.frameHexes([pos], { maxZoom: 3.5, paddingHexes: 1.5, duration: 400 });
-      } else {
-        // No selection — frame all player's units
-        const faction = this._planFaction ?? (!this.state.heroIsAI ? 'hero' : 'witch');
-        const units   = this.state.entities.filter(e => e.alive && e.owner === faction);
-        if (units.length > 0) this.renderer.frameHexes(units, { maxZoom: 1.8, paddingHexes: 2.5, duration: 400 });
-      }
+      this._replayManualCamera(() => {
+        if (this._selectedEntity && this._selectedEntity.alive) {
+          // Zoom to selected unit
+          const pos = this._planMode ? (this._getProjectedPos(this._selectedEntity.id) ?? this._selectedEntity) : this._selectedEntity;
+          this.renderer.frameHexes([pos], { maxZoom: 3.5, paddingHexes: 1.5, duration: 400 });
+        } else {
+          // No selection — frame all player's units
+          const faction = this._planFaction ?? (!this.state.heroIsAI ? 'hero' : 'witch');
+          const units   = this.state.entities.filter(e => e.alive && e.owner === faction);
+          if (units.length > 0) this.renderer.frameHexes(units, { maxZoom: 1.8, paddingHexes: 2.5, duration: 400 });
+        }
+      });
       this.onRedraw();
     }, sig);
-    this._el('speed-toggle')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this._toggleSpeedPopup();
-    }, sig);
-    // Speed popup option clicks
-    this._el('speed-popup')?.addEventListener('click', (e) => {
-      const btn = e.target.closest('.speed-option');
-      if (btn) this._setSpeed(btn.dataset.mode);
-    }, sig);
+    // Combat-detail speed now lives in the playback "Detail" control
+    // (see _showReplayBar); the old map-control toggle was removed.
 
-    // Close speed popup on outside click
+    // Close map options popup on outside click
     document.addEventListener('click', () => {
-      this._closeSpeedPopup();
       this._closeMapOptionsPopup();
     }, sig);
 
@@ -424,6 +419,13 @@ export class UIController {
     this._el('menu-btn')?.addEventListener('click', () => {
       const backdrop = this._el('game-menu-backdrop');
       if (backdrop) backdrop.style.display = backdrop.style.display === 'none' ? 'flex' : 'none';
+    }, sig);
+    // Hidden gesture: triple-click the title-bar "Actions" label to toggle the
+    // on-canvas debug counters (FPS / polys / camera). Delegated on the
+    // persistent turn-info container because the label is rebuilt via innerHTML.
+    // Off by default — CSS gates the counters on `body.debug-counters`.
+    this._el('turn-info')?.addEventListener('click', (e) => {
+      if (isDebugToggleClick(e)) document.body.classList.toggle('debug-counters');
     }, sig);
     this._el('menu-close-btn')?.addEventListener('click', closeMenu, sig);
     this._el('menu-replay-turn-btn')?.addEventListener('click', () => {
@@ -600,12 +602,14 @@ export class UIController {
       const dy = e.clientY - this._mouseDown.clientY;
       if (Math.hypot(dx, dy) > 5) {
         this._didDragPan = true;
+        this._claimReplayCamera();      // 3D manual pan during replay → hold the view
       }
     } else if (this._mouseDown) {
       const dx = e.clientX - this._mouseDown.clientX;
       const dy = e.clientY - this._mouseDown.clientY;
       if (Math.hypot(dx, dy) > 5) {
         this._didDragPan = true;
+        this._claimReplayCamera();      // manual pan during replay → hold the view
         this.renderer._zoomAnim = null; // cancel auto-framing on manual pan
         const rect   = this.canvas.getBoundingClientRect();
         const scaleX = this.canvas.width  / rect.width;
@@ -3093,7 +3097,10 @@ export class UIController {
 
   // ── Speed popup ───────────────────────────────────────────────────────────
 
-  static SPEED_LABELS = { cinematic: 'Cinematic', fast: 'Fast', vfast: 'Very Fast' };
+  // Combat-detail modes. Internal keys (cinematic/fast/vfast) are unchanged so
+  // all pacing behaviour is preserved; only the player-facing labels differ.
+  static SPEED_LABELS = { cinematic: 'Full', fast: 'Summary', vfast: 'Speedy' };
+  static SPEED_ORDER = ['cinematic', 'fast', 'vfast'];
 
   _loadDefaultSpeed() {
     try {
@@ -3101,23 +3108,6 @@ export class UIController {
       if (saved && UIController.SPEED_LABELS[saved]) return saved;
     } catch (_) { /* localStorage unavailable */ }
     return 'cinematic';
-  }
-
-  _toggleSpeedPopup() {
-    const popup = this._el('speed-popup');
-    if (!popup) return;
-    const isOpen = popup.style.display !== 'none';
-    if (isOpen) { this._closeSpeedPopup(); return; }
-    // Mark active option
-    popup.querySelectorAll('.speed-option').forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.mode === this.speedMode);
-    });
-    popup.style.display = 'flex';
-  }
-
-  _closeSpeedPopup() {
-    const popup = this._el('speed-popup');
-    if (popup) popup.style.display = 'none';
   }
 
   _toggleMapOptionsPopup() {
@@ -3135,30 +3125,25 @@ export class UIController {
   _setSpeed(mode) {
     if (!UIController.SPEED_LABELS[mode]) return;
     this.speedMode = mode;
-    this._closeSpeedPopup();
-    const btn = this._el('speed-toggle');
-    if (btn) {
-      btn.title = `Battle speed: ${UIController.SPEED_LABELS[mode]}`;
-      btn.className = `zoom-btn speed-${mode}`;
-    }
-    this._showSpeedToast(`⚡ ${UIController.SPEED_LABELS[mode]}`);
+    // The Detail button itself shows the active mode now, so no toast.
+    this._applyReplayDetail();
   }
 
-  _showSpeedToast(text) {
-    let toast = document.getElementById('speed-toast');
-    if (!toast) {
-      toast = document.createElement('div');
-      toast.id = 'speed-toast';
-      toast.className = 'speed-toast';
-      const wrapper = this._el('canvas-wrapper');
-      if (wrapper) wrapper.appendChild(toast);
-    }
-    toast.textContent = text;
-    toast.classList.remove('speed-toast-out');
-    clearTimeout(this._speedToastTimer);
-    this._speedToastTimer = setTimeout(() => {
-      toast.classList.add('speed-toast-out');
-    }, 1500);
+  /** Cycle the combat-detail mode Full → Summary → Speedy → Full. */
+  _cycleReplayDetail() {
+    const order = UIController.SPEED_ORDER;
+    const idx = order.indexOf(this.speedMode);
+    this._setSpeed(order[(idx + 1) % order.length]);
+  }
+
+  /** Sync the playback "Detail" button label to the current speedMode. */
+  _applyReplayDetail() {
+    const btn = document.getElementById('replay-detail-btn');
+    if (!btn) return;
+    const label = UIController.SPEED_LABELS[this.speedMode] ?? 'Full';
+    btn.textContent = label;
+    btn.title = `Combat detail: ${label}`;
+    btn.className = `replay-ctrl-btn replay-detail detail-${this.speedMode}`;
   }
 
   /** Show a plan-related toast (food warning, plan full). */
@@ -4387,11 +4372,7 @@ export class UIController {
           const phaseLabel = state.phase === 'dawn' ? '🌅 Dawn Reckoning' : '🌇 Dusk Reckoning';
 
           let reckoningLine;
-          const totalNodes = state.witchObjectives.length;
-          if (witchCount === totalNodes || heroCount === totalNodes) {
-            const who = witchCount === totalNodes ? 'Witch' : 'Hero';
-            reckoningLine = `${who} holds all Power Nodes!`;
-          } else if (witchDelta > 0) {
+          if (witchDelta > 0) {
             reckoningLine = `Witch holds ${witchCount} Power Node${witchCount !== 1 ? 's' : ''} to Hero's ${heroCount}. Witch scores 1 victory point.`;
           } else if (heroDelta > 0) {
             reckoningLine = `Hero holds ${heroCount} Power Node${heroCount !== 1 ? 's' : ''} to Witch's ${witchCount}. Hero scores 1 victory point.`;
@@ -4538,48 +4519,159 @@ export class UIController {
   /**
    * Show the replay progress HUD above the canvas.
    * @param {number}   totalRounds
-   * @param {Function} onControl  — called with action string: 'back'|'play'|'pause'|'ff'|'vff'|'stop'
+   * @param {Function} onControl  — called with action string: 'back'|'next'|'playpause'|'stop'
    */
   showReplayHUD(totalRounds, onControl) {
     const hud = this._el('replay-hud');
     if (!hud) return;
-    hud.style.display = 'flex';
-    this._replayOnControl = onControl;
-
-    // Disable the in-game speed toggle while replaying
-    const speedToggle = document.getElementById('speed-toggle');
-    if (speedToggle) speedToggle.disabled = true;
-
-    // Default to locked view for replay (fit map, no auto-zoom)
-    this._preReplayViewLocked = this.renderer?.viewLocked ?? false;
-    if (this.renderer && !this.renderer.viewLocked) {
-      this.renderer.resize();
-      this.renderer.resetView();
-      this.renderer._zoomAnim = null;
-      this.renderer.viewLocked = true;
-    }
-    this._updateFitBtnLockState();
-
-    // Wire up control buttons
-    const ids = ['back', 'play', 'pause', 'ff', 'vff', 'end', 'stop'];
-    for (const action of ids) {
-      const btn = document.getElementById(`replay-${action}-btn`);
-      if (btn) btn.onclick = () => onControl?.(action);
-    }
-
-    this.setReplayPlayState('play');
+    this._showReplayBar('full', onControl);
   }
 
   /**
-   * Highlight the currently active replay control button.
-   * @param {string} activeAction — 'play'|'pause'|'ff'|'vff'|'back'|'end'|'stop'
+   * Shared implementation behind the full-game and inline replay bars — one
+   * unified bottom-center control bar (#replay-hud). Back/Stop appear only in
+   * full mode; the End button is relabelled "SKIP" in inline mode. The camera
+   * toggle is wired internally (not routed through onControl).
+   *
+   * @param {'full'|'inline'} mode
+   * @param {Function} onControl — 'back'|'play'|'pause'|'ff'|'end'|'stop'
    */
-  setReplayPlayState(activeAction) {
-    const ids = ['back', 'play', 'pause', 'ff', 'vff', 'end', 'stop'];
-    for (const action of ids) {
+  _showReplayBar(mode, onControl) {
+    const hud = this._el('replay-hud');
+    if (!hud) return;
+    hud.style.display = 'flex';
+    // _replayOnControl marks the FULL-game bar as active; main.js reads it to
+    // avoid stacking the inline bar over the full one.
+    this._replayOnControl = mode === 'full' ? onControl : null;
+
+    // Back + Stop are full-game-only; NEXT + PLAY/PAUSE are shared.
+    for (const action of ['back', 'stop']) {
       const btn = document.getElementById(`replay-${action}-btn`);
-      if (btn) btn.classList.toggle('active', action === activeAction);
+      if (btn) btn.style.display = (mode === 'full') ? '' : 'none';
     }
+    // Redo (replay the current round/turn) is shown in both modes — distinct
+    // from Back (which steps to the previous round in full-game replay).
+    const redoBtn = document.getElementById('replay-redo-btn');
+    if (redoBtn) redoBtn.style.display = '';
+
+    // Wire control buttons -> onControl. Camera is handled internally.
+    for (const action of ['back', 'redo', 'next', 'playpause', 'stop']) {
+      const btn = document.getElementById(`replay-${action}-btn`);
+      if (btn) btn.onclick = () => onControl?.(action);
+    }
+    const camBtn = document.getElementById('replay-camera-btn');
+    if (camBtn) camBtn.onclick = () => this._toggleReplayCamera();
+
+    // Detail (combat-speed) toggle — cycles Full → Summary → Speedy, internal.
+    const detailBtn = document.getElementById('replay-detail-btn');
+    if (detailBtn) detailBtn.onclick = () => this._cycleReplayDetail();
+    this._applyReplayDetail();
+
+    // Apply the current camera mode (FOLLOW by default) so auto-framing and
+    // manual-pan state are consistent the moment the bar appears.
+    this._preReplayViewLocked = this.renderer?.viewLocked ?? false;
+    this._applyReplayCameraMode();
+
+    this.setReplayTransport(true);   // start paused (manual stepping)
+  }
+
+  /** Toggle replay camera between FOLLOW (auto-zoom to action) and FIXED. */
+  _toggleReplayCamera() {
+    this.replayCameraMode = this.replayCameraMode === 'fixed' ? 'follow' : 'fixed';
+    this._applyReplayCameraMode();
+  }
+
+  /** True while a replay/resolution control bar is on screen. */
+  _isReplayActive() {
+    const hud = this._el('replay-hud');
+    return !!hud && hud.style.display !== 'none';
+  }
+
+  /**
+   * Manual pan during replay takes camera control away from FOLLOW: flip to
+   * FIXED so the player's view sticks instead of the next step yanking it back.
+   * Pan mutates the view directly (not via frameHexes), so it isn't blocked by
+   * suppressAutoFrame — this only needs the mode flip. No-op when not replaying
+   * or already FIXED.
+   */
+  _claimReplayCamera() {
+    if (!this._isReplayActive() || this.replayCameraMode === 'fixed') return;
+    this.replayCameraMode = 'fixed';
+    this._applyReplayCameraMode();
+  }
+
+  /**
+   * Run a user-initiated camera move (zoom / fit / focus) that uses frameHexes
+   * or _focusCamera. Those early-return while `suppressAutoFrame` is set (the
+   * FIXED/FOLLOW auto-frame guard), so a manual move during replay would do
+   * nothing. We lift suppression for the move, then re-assert FIXED so the new
+   * view holds against the next step's auto-follow. Outside replay it just runs.
+   */
+  _replayManualCamera(fn) {
+    const replaying = this._isReplayActive();
+    const r = this.renderer;
+    const prevSuppress = r ? r.suppressAutoFrame : false;
+    if (replaying && r) r.suppressAutoFrame = false;
+    fn();
+    if (replaying) {
+      this.replayCameraMode = 'fixed';
+      this._applyReplayCameraMode();        // restores suppressAutoFrame = true
+    } else if (r) {
+      r.suppressAutoFrame = prevSuppress;
+    }
+  }
+
+  /**
+   * Sync renderer + button to the current replayCameraMode.
+   * FOLLOW - auto-framing drives the camera (suppress off, manual pan allowed).
+   * FIXED  - camera stays put; auto-framing suppressed, manual pan allowed.
+   */
+  _applyReplayCameraMode() {
+    if (!this.replayCameraMode) this.replayCameraMode = 'follow';
+    const fixed = this.replayCameraMode === 'fixed';
+    if (this.renderer) {
+      this.renderer.suppressAutoFrame = fixed;
+      // Both modes leave manual pan/zoom unlocked; FOLLOW just keeps re-framing.
+      this.renderer.viewLocked = false;
+      this._updateFitBtnLockState();
+    }
+    const camBtn = document.getElementById('replay-camera-btn');
+    if (camBtn) {
+      camBtn.textContent = fixed ? 'Fixed' : 'Follow';
+      camBtn.title = fixed
+        ? 'Camera: Fixed - stays where you put it'
+        : 'Camera: Follow the action';
+      camBtn.classList.toggle('fixed', fixed);
+    }
+  }
+
+  /**
+   * Sync the transport buttons to the current play/pause state.
+   * @param {boolean} paused — true = manual stepping (NEXT enabled), false = auto-run.
+   */
+  setReplayTransport(paused) {
+    // AutoPlay is a toggle: highlighted (active) while auto-running.
+    const pp = document.getElementById('replay-playpause-btn');
+    if (pp) {
+      pp.title = paused ? 'Auto-play (run every step)' : 'Pause (step manually)';
+      pp.classList.toggle('active', !paused);
+    }
+    // NEXT only works while paused; grey it out during auto-play.
+    const next = document.getElementById('replay-next-btn');
+    if (next) {
+      next.disabled = !paused;
+      next.classList.toggle('disabled', !paused);
+      if (!paused) next.classList.remove('ready');   // drop the prompt when auto-playing
+    }
+  }
+
+  /**
+   * Pulse the NEXT button once a step has finished animating (manual mode) to
+   * prompt the player to advance. Cleared as soon as they do.
+   */
+  setReplayNextReady(ready) {
+    const next = document.getElementById('replay-next-btn');
+    if (next) next.classList.toggle('ready', !!ready && !next.disabled);
   }
 
   /**
@@ -4596,12 +4688,9 @@ export class UIController {
     if (hud) hud.style.display = 'none';
     this._replayOnControl = null;
 
-    // Re-enable the in-game speed toggle
-    const speedToggle = document.getElementById('speed-toggle');
-    if (speedToggle) speedToggle.disabled = false;
-
     // Restore view-lock state that existed before replay started
     if (this.renderer) {
+      this.renderer.suppressAutoFrame = false;
       this.renderer.viewLocked = this._preReplayViewLocked ?? false;
       this._updateFitBtnLockState();
     }
@@ -4614,39 +4703,23 @@ export class UIController {
    * the "jump to end" one, which is relabelled "SKIP".
    * @param {Function} onSkip — called when the skip button is pressed
    */
-  showInlineReplayHUD(onSkip) {
-    const hud = this._el('replay-hud');
-    if (!hud) return;
-    hud.style.display = 'flex';
-    hud.classList.add('replay-hud-skip-only');
-    for (const action of ['back', 'play', 'pause', 'ff', 'vff', 'stop']) {
-      const btn = document.getElementById(`replay-${action}-btn`);
-      if (btn) btn.style.display = 'none';
-    }
-    const endBtn = document.getElementById('replay-end-btn');
-    if (endBtn) {
-      endBtn.style.display = '';
-      // Remember the original glyph so hideInlineReplayHUD can restore it.
-      if (this._replayEndBtnOriginalText === undefined) {
-        this._replayEndBtnOriginalText = endBtn.textContent;
-      }
-      endBtn.textContent = 'SKIP';
-      endBtn.title = 'Skip replay';
-      endBtn.onclick = () => onSkip?.();
-    }
+  showInlineReplayHUD(onControl) {
+    this._showReplayBar('inline', onControl);
     this._inlineReplayActive = true;
   }
 
-  /** Hide the inline skip-only replay HUD and restore button visibility. */
+  /** Hide the inline replay bar and restore Back/Stop visibility. */
   hideInlineReplayHUD() {
     const hud = this._el('replay-hud');
-    if (hud) {
-      hud.style.display = 'none';
-      hud.classList.remove('replay-hud-skip-only');
-    }
-    for (const action of ['back', 'play', 'pause', 'ff', 'vff', 'end', 'stop']) {
+    if (hud) hud.style.display = 'none';
+    for (const action of ['back', 'next', 'playpause', 'stop']) {
       const btn = document.getElementById(`replay-${action}-btn`);
       if (btn) btn.style.display = '';
+    }
+    if (this.renderer) {
+      this.renderer.suppressAutoFrame = false;
+      this.renderer.viewLocked = this._preReplayViewLocked ?? false;
+      this._updateFitBtnLockState();
     }
     const endBtn = document.getElementById('replay-end-btn');
     if (endBtn) {
@@ -4657,6 +4730,487 @@ export class UIController {
     }
     this._replayEndBtnOriginalText = undefined;
     this._inlineReplayActive = false;
+  }
+
+  // ── Replay timeline overlay ──────────────────────────────────────────────
+  // Transparent left-to-right sequence of resolution-step columns built from
+  // buildStepDigest (src/replay-timeline.js). Driven by _animateResolutionSteps.
+
+  /** Render the timeline columns and reveal the overlay. */
+  showReplayTimeline(digest) {
+    const wrap  = this._el('replay-timeline');
+    const track = this._el('replay-timeline-track');
+    if (!wrap || !track || !Array.isArray(digest)) return;
+    this._replayDigest = digest;
+    this._replayTrackX = 0;
+    this._activeReplayOrd = 0;
+    track.style.transform = 'translateX(0)';
+    // Only render steps that have visible activity (fogged steps are dropped
+    // entirely). data-step keeps the ORIGINAL step index so highlight/centre
+    // calls (keyed on the animation step) still match; the "Step N" label is
+    // numbered sequentially among the visible cards.
+    const visible = digest.filter(col => col.entries.length > 0);
+    let n = 0;
+    track.innerHTML = visible.map(col => this._replayColHtml(col, ++n)).join('');
+    if (!visible.length) { wrap.classList.remove('visible'); return; }
+    wrap.classList.add('visible');
+    // Mobile defaults to collapsed cards (they otherwise cover the board);
+    // desktop defaults to the full card. A manual toggle is remembered for the
+    // rest of the session. On mobile the body flag also hides the compass and
+    // lifts the cards up (see styles.css mobile block).
+    if (this._replayCollapsed === undefined) this._replayCollapsed = this._isMobileViewport();
+    this._bindReplayCollapse();
+    this._applyReplayCollapse(this._replayCollapsed);
+    if (typeof document !== 'undefined') document.body?.classList?.add('replay-timeline-up');
+    this._el('replay-progress')?.classList.add('visible');
+    this.setReplayTimelineStep(visible[0].stepIndex);
+  }
+
+  /** Wire the per-card +/- toggle once. Cards are re-rendered every round, so
+   *  the listener is delegated on the (persistent) timeline container. */
+  _bindReplayCollapse() {
+    if (this._replayCollapseBound) return;
+    const wrap = this._el('replay-timeline');
+    if (!wrap || typeof wrap.addEventListener !== 'function') return;
+    wrap.addEventListener('click', (e) => {
+      if (!e.target?.closest?.('.replay-collapse-btn')) return;
+      this._applyReplayCollapse(!this._replayCollapsed);
+    });
+    this._replayCollapseBound = true;
+  }
+
+  /** Collapse or expand every turn card. Collapsed cards show only the action
+   *  that's currently playing (the rest is hidden by CSS); the +/- glyph flips
+   *  to match. The choice is remembered across rounds in `_replayCollapsed`. */
+  _applyReplayCollapse(collapsed) {
+    this._replayCollapsed = !!collapsed;
+    const wrap = this._el('replay-timeline');
+    if (!wrap) return;
+    wrap.classList.toggle('collapsed', this._replayCollapsed);
+    const glyph = this._replayCollapsed ? '+' : '−';
+    const label = this._replayCollapsed ? 'Expand turn card' : 'Collapse turn card';
+    wrap.querySelectorAll?.('.replay-collapse-btn').forEach(b => {
+      b.textContent = glyph;
+      b.setAttribute('aria-label', label);
+    });
+  }
+
+  /** Build one visible step column's HTML (icons, names, hidden outcomes).
+   *  A +/- toggle in the header collapses the card down to just the action
+   *  currently playing (see `_applyReplayCollapse`); the trailing `.replay-more`
+   *  dots are revealed by CSS when several actions are active at once. */
+  _replayColHtml(col, displayNum) {
+    const rows = col.entries.map((e, j) => this._replayRowHtml(e, j)).join('');
+    return `<div class="replay-step-col" data-step="${col.stepIndex}">`
+         + `<div class="replay-step-header">`
+         +   `<div class="replay-step-label">Turn ${displayNum}</div>`
+         +   `<button class="replay-collapse-btn" type="button" aria-label="Collapse turn card">−</button>`
+         + `</div>`
+         + rows
+         + `<div class="replay-more" aria-hidden="true">…</div>`
+         + `</div>`;
+  }
+
+  /**
+   * One actor entry, laid out as an aligned 3-column grid:
+   *   row 1:  [ UNIT ]   [ ACTION ]   [ TARGET ]
+   *   row 2:  [ actor HP ] [ OUTCOME ] [ target HP ]
+   * Each column lines up with its parent above it. Empty cells are emitted so
+   * the grid stays aligned. All outcome cells are `.replay-step-outcome` so they
+   * stay hidden until revealed as the action plays out.
+   */
+  _replayRowHtml(entry, entryIdx) {
+    const esc = (s) => String(s ?? '')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const iconImg = (u) => {
+      const assetId = _entityPortraitId({ type: u.type, title: u.title });
+      const src = (this.renderer && assetId) ? this.renderer.getPortraitDataURL(assetId, 56) : null;
+      return src
+        ? `<img class="replay-step-icon" src="${src}" style="border-color:${u.color}" alt="">`
+        : `<span class="replay-step-icon" style="background:${u.color}">${u.glyph}</span>`;
+    };
+    // Small gang-up ally icons shown beneath a combatant.
+    const miniIcon = (u) => {
+      const assetId = _entityPortraitId({ type: u.type, title: u.title });
+      const src = (this.renderer && assetId) ? this.renderer.getPortraitDataURL(assetId, 32) : null;
+      return src
+        ? `<img class="replay-ally-icon" src="${src}" style="border-color:${u.color}" alt="">`
+        : `<span class="replay-ally-icon" style="background:${u.color}">${u.glyph}</span>`;
+    };
+    const alliesHtml = (allies) => (allies && allies.length)
+      ? `<div class="replay-allies">${allies.map(miniIcon).join('')}</div>`
+      : '';
+    const unit = (u, allies) => u
+      ? `<div class="replay-unit">${iconImg(u)}<div class="replay-unit-name">${esc(u.name)}</div>`
+        + `${alliesHtml(allies)}</div>`
+      : `<span class="replay-cell"></span>`;
+    // Discovered units (1+) occupy the target cell, hidden until revealed —
+    // each shown as an icon + name.
+    const discoveredCell = (units) =>
+      `<div class="replay-unit replay-discovered"><div class="replay-discovered-icons">`
+      + units.map(u => `<div class="replay-disc-unit">${iconImg(u)}`
+          + `<div class="replay-unit-name">${esc(u.name)}</div></div>`).join('')
+      + `</div></div>`;
+    const out = (text, kind) => text
+      ? `<div class="replay-step-outcome ${kind}">${text}</div>`
+      : `<span class="replay-cell"></span>`;
+
+    let actorOut, centerOut, targetOut;
+    if (entry.outcomeKind) {
+      // Battle: outcome word centred, HP changes under each combatant.
+      const word = entry.killed ? 'KILL'
+        : entry.outcomeKind === 'crush' ? 'CRUSH'
+        : entry.outcomeKind === 'hit'   ? 'HIT'
+        : (entry.missWord ?? 'MISS');
+      const kind = entry.killed ? 'kill' : entry.outcomeKind;
+      actorOut  = out(entry.actorDmg > 0 ? `COUNTER −${entry.actorDmg}` : '', 'counter');
+      centerOut = out(word, kind);
+      targetOut = out(entry.targetDmg > 0 ? `−${entry.targetDmg}` : '', kind);
+    } else {
+      // Move / explore / etc.: the note (BLOCKED / "+1 RESOURCE") sits centred.
+      actorOut  = out('', '');
+      centerOut = entry.note ? out(entry.note.text, entry.note.kind) : out('', '');
+      targetOut = out('', '');
+    }
+
+    // Battles flank the (two-line) action word with each side's final roll,
+    // the winner's roll highlighted.
+    let actionHtml;
+    if (entry.outcomeKind && entry.atkRoll != null && entry.defRoll != null) {
+      const word = esc(entry.label).replace(' ', '<br>');
+      const atkCls = entry.attackerWon ? 'winner' : 'loser';
+      const defCls = entry.attackerWon ? 'loser' : 'winner';
+      actionHtml = `<div class="replay-step-action battle">`
+        + `<span class="replay-roll ${atkCls}">${entry.atkRoll}</span>`
+        + `<span class="replay-action-word">${word}</span>`
+        + `<span class="replay-roll ${defCls}">${entry.defRoll}</span>`
+        + `</div>`;
+    } else {
+      actionHtml = `<div class="replay-step-action">${esc(entry.label).replace(' ', '<br>')}</div>`;
+    }
+
+    return `<div class="replay-step-entry" data-entity="${entry.entityId ?? ''}"`
+         + ` data-action="${entry.actionType}" data-entry="${entryIdx}">`
+         + unit(entry.actor, entry.actorAllies)
+         + actionHtml
+         + (entry.discovered?.length ? discoveredCell(entry.discovered) : unit(entry.target, entry.targetAllies))
+         + actorOut + centerOut + targetOut
+         + `</div>`;
+  }
+
+  /**
+   * Mark a single entry in `stepIndex` as the one being performed right now
+   * (used to walk through serialized battles). Clears any prior highlight in
+   * that column.
+   */
+  highlightReplayEntry(stepIndex, entityId) {
+    const col = this._replayCol(stepIndex);
+    if (!col) return;
+    col.querySelectorAll('.replay-step-entry').forEach(e => e.classList.remove('is-acting'));
+    col.querySelectorAll(`.replay-step-entry[data-entity="${entityId}"]`)
+      .forEach(e => e.classList.add('is-acting'));
+  }
+
+  /**
+   * Highlight every entry of the given action type(s) at once — used when a
+   * phase animates several actions simultaneously (e.g. all moves together).
+   * Clears any prior highlight in the column.
+   */
+  highlightReplayActions(stepIndex, types) {
+    const col = this._replayCol(stepIndex);
+    if (!col) return;
+    const set = new Set(types);
+    col.querySelectorAll('.replay-step-entry').forEach(e =>
+      e.classList.toggle('is-acting', set.has(e.getAttribute('data-action'))));
+  }
+
+  /** Reveal one ACTION's rolls + outcome once that action has resolved. */
+  revealReplayEntryOutcome(stepIndex, entityId) {
+    const col = this._replayCol(stepIndex);
+    if (!col) return;
+    col.querySelectorAll(`.replay-step-entry[data-entity="${entityId}"]`).forEach(entry =>
+      entry.querySelectorAll('.replay-step-outcome, .replay-roll, .replay-discovered').forEach(o => o.classList.add('revealed')));
+  }
+
+  /** Look up a step column element by index. */
+  _replayCol(stepIndex) {
+    const track = this._el('replay-timeline-track');
+    return track ? track.querySelector(`.replay-step-col[data-step="${stepIndex}"]`) : null;
+  }
+
+  /**
+   * Mark the column for animation step `stepIndex` active. At most three cards
+   * show: the previous (just-finished) card peeking half-off the left edge, the
+   * active card opaque at the left of the screen, and the next card translucent
+   * to its right — everything else hidden. The track slides one card left as
+   * steps advance. If the step is hidden (fogged → no card), the previously-
+   * active card stays put.
+   */
+  setReplayTimelineStep(stepIndex) {
+    const cols = this._replayCols();
+    if (!cols.length) return;
+    let ord = cols.findIndex(c => c.getAttribute('data-step') === String(stepIndex));
+    if (ord < 0) ord = this._activeReplayOrd ?? 0;
+    this._setReplayActiveOrd(ord);
+  }
+
+  /** All rendered timeline cards (step cards + the wrap-up card) in DOM order. */
+  _replayCols() {
+    const track = this._el('replay-timeline-track');
+    return track ? Array.from(track.querySelectorAll('.replay-step-col')) : [];
+  }
+
+  /**
+   * Activate the ord-th visible card. At most three cards show: the previous one
+   * peeking half-off the left edge, the active card opaque at the left, and the
+   * next card translucent to its right. The track slides one card left as the
+   * active ordinal advances. Shared by step playback and review scrubbing.
+   */
+  _setReplayActiveOrd(ord) {
+    const track = this._el('replay-timeline-track');
+    const container = this._el('replay-timeline');
+    if (!track || !container) return;
+    const cols = Array.from(track.querySelectorAll('.replay-step-col'));
+    if (!cols.length) return;
+    ord = Math.max(0, Math.min(cols.length - 1, ord));
+    this._activeReplayOrd = ord;
+    cols.forEach((col, j) => col.classList.toggle('is-current', j === ord));
+    this._renderReplayDots(cols.length, ord);
+
+    // Anchor the active card a sixth in from the left on desktop, centred on
+    // mobile — the SAME in playback and review. The track slides to keep the
+    // active card at that spot; in review (CSS .reviewing) the other cards stay
+    // visible, so scrubbing ◀ ▶ scrolls them in/out at the screen's width.
+    const active = cols[ord];
+    if (typeof active.offsetLeft !== 'number') return;
+    const cw = container.clientWidth || 0;
+    const anchorX = this._isMobileViewport() ? cw / 2 : cw / 6;
+    const target = anchorX - (active.offsetLeft + active.offsetWidth / 2);
+    this._replayTrackX = target;
+    track.style.transform = `translateX(${target}px)`;
+    const progress = this._el('replay-progress');
+    if (progress && typeof container.offsetLeft === 'number') {
+      progress.style.left = `${container.offsetLeft + anchorX}px`;
+    }
+  }
+
+  /** Render the round-progress dots (one per card, active filled). */
+  _renderReplayDots(count, active) {
+    const dots = this._el('replay-dots');
+    if (!dots) return;
+    let html = '';
+    for (let i = 0; i < count; i++) html += `<span class="replay-dot${i === active ? ' filled' : ''}"></span>`;
+    dots.innerHTML = html;
+  }
+
+  // ── End-of-turn review: wrap-up card + scrub arrows ──────────────────────
+
+  /**
+   * Append the turn wrap-up card to the timeline (same card format) with a
+   * Continue button and an optional Replay button, then enter review mode:
+   * left/right arrows scrub through every card without re-animating. Resolves
+   * with 'next' (Continue) or 'replay' (Replay).
+   *
+   * @param {object} opts { titleHtml, bodyHtml, canReplay }
+   * @returns {Promise<'next'|'replay'>}
+   */
+  showReplayWrapUp({ titleHtml = 'Turn Complete', combats = [], discoveries = [], loot = [], attrition = [], attritionLevel = 0, canReplay = true } = {}) {
+    const track = this._el('replay-timeline-track');
+    const wrap  = this._el('replay-timeline');
+    if (!track || !wrap) return Promise.resolve('next');
+    wrap.classList.add('visible');
+
+    const replayBtn = canReplay
+      ? `<button class="replay-wrapup-btn" data-act="replay">↺ Replay</button>` : '';
+    const card = document.createElement('div');
+    card.className = 'replay-step-col replay-wrapup';
+    card.setAttribute('data-step', 'wrapup');
+    card.innerHTML =
+      `<div class="replay-step-label">${titleHtml}</div>`
+      + `<div class="replay-wrapup-body">${this._buildWrapUpBody(combats, attritionLevel, discoveries, loot, attrition)}</div>`
+      + `<div class="replay-wrapup-actions">${replayBtn}`
+      + `<button class="replay-wrapup-btn primary" data-act="next">Continue ▸</button></div>`;
+    track.appendChild(card);
+
+    // Show scrub arrows and jump to the wrap-up card.
+    this._enterReplayReview();
+    this._setReplayActiveOrd(this._replayCols().length - 1);
+
+    return new Promise(resolve => {
+      const finish = (action) => {
+        card.querySelectorAll('.replay-wrapup-btn').forEach(b => { b.onclick = null; });
+        this._exitReplayReview();
+        resolve(action);
+      };
+      card.querySelectorAll('.replay-wrapup-btn').forEach(btn => {
+        btn.onclick = () => finish(btn.getAttribute('data-act'));
+      });
+    });
+  }
+
+  /**
+   * Build the wrap-up body: each combat as [icon] vs [icon] with HP loss (or a
+   * skull) beneath each unit, plus the node-score dots reused from the bottom
+   * score bar.
+   */
+  _buildWrapUpBody(combats, attritionLevel = 0, discoveries = [], loot = [], attrition = []) {
+    const GLYPHS = { hero: '⚔', witch: '✦', survivor: '☺', soldier: '♟', zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙' };
+    const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const iconFor = (u, size, cls) => {
+      const color = u.color || ENTITY_COLOR[u.type] || '#888';
+      const assetId = _entityPortraitId({ type: u.type, title: u.title });
+      const src = (this.renderer && assetId) ? this.renderer.getPortraitDataURL(assetId, size) : null;
+      return src
+        ? `<img class="${cls}" src="${src}" style="border-color:${color}" alt="">`
+        : `<span class="${cls}" style="background:${color}">${GLYPHS[u.type] ?? '?'}</span>`;
+    };
+    const unitCell = (u) => {
+      const icon = iconFor(u, 56, 'wrapup-unit-icon');
+      const effect = u.killed
+        ? `<div class="wrapup-dmg kill">☠</div>`
+        : (u.hpLost > 0 ? `<div class="wrapup-dmg">−${u.hpLost}</div>` : `<div class="wrapup-dmg none">—</div>`);
+      return `<div class="wrapup-unit">${icon}${effect}</div>`;
+    };
+    let combatHtml = '';
+    if (combats.length > 3) {
+      // Many fights ⇒ pairwise would be too tall. Condense to just the units
+      // that actually took damage (aggregated across all their fights).
+      const hurt = new Map();
+      for (const { a, b } of combats) {
+        for (const u of [a, b]) {
+          if (!(u.hpLost > 0 || u.killed)) continue;
+          const prev = hurt.get(u.id);
+          if (prev) { prev.hpLost += u.hpLost; prev.killed = prev.killed || u.killed; }
+          else hurt.set(u.id, { ...u });
+        }
+      }
+      combatHtml = hurt.size
+        ? `<div class="wrapup-casualties">${[...hurt.values()].map(unitCell).join('')}</div>`
+        : `<div class="wrapup-line muted">${combats.length} skirmishes — no casualties.</div>`;
+    } else {
+      for (const { a, b } of combats) {
+        combatHtml += `<div class="wrapup-combat">${unitCell(a)}<span class="wrapup-vs">vs</span>${unitCell(b)}</div>`;
+      }
+    }
+    if (!combatHtml) combatHtml = `<div class="wrapup-line muted">A quiet turn.</div>`;
+
+    // Survivors/zombies discovered this round — icon + name, reusing the old
+    // summary modal's "found" list.
+    let foundHtml = '';
+    if (discoveries.length) {
+      const cells = discoveries.map(u => {
+        const name = (u.type === 'survivor' && u.name) ? u.name : (u.title ?? u.displayName ?? u.type);
+        return `<div class="wrapup-found-unit">${iconFor(u, 48, 'wrapup-found-icon')}`
+          + `<div class="wrapup-found-name">${esc(String(name))}</div></div>`;
+      }).join('');
+      const zombies = discoveries.every(u => u.type === 'zombie');
+      const label = zombies ? 'Risen' : 'Found';
+      foundHtml = `<div class="wrapup-found"><div class="wrapup-found-label">${label}</div>`
+        + `<div class="wrapup-found-row">${cells}</div></div>`;
+    }
+
+    // Resources looted from exploration this round — tally identical icons so
+    // e.g. two wood reads "🪵 ×2".
+    let lootHtml = '';
+    if (loot.length) {
+      const tally = new Map();
+      for (const it of loot) tally.set(it, (tally.get(it) ?? 0) + 1);
+      const pips = [...tally.entries()].map(([icon, n]) =>
+        `<span class="wrapup-loot-pip">${esc(icon)}${n > 1 ? `<span class="wrapup-loot-x">×${n}</span>` : ''}</span>`
+      ).join('');
+      lootHtml = `<div class="wrapup-loot"><div class="wrapup-found-label">Looted</div>`
+        + `<div class="wrapup-loot-row">${pips}</div></div>`;
+    }
+
+    // Night attrition roll-call — who took hazard damage in the open and who
+    // was sheltered by a building / fortification this round.
+    let attritionListHtml = '';
+    if (attrition.length) {
+      const rows = attrition.map(a => {
+        if (a.kind === 'kill') {
+          return `<div class="wrapup-attr-row hurt">💀 ${esc(a.name)} <span class="wrapup-attr-note">consumed by the night</span></div>`;
+        }
+        if (a.kind === 'damage') {
+          return `<div class="wrapup-attr-row hurt">🌙 ${esc(a.name)} <span class="wrapup-attr-dmg">−${a.amount} HP</span> <span class="wrapup-attr-note">exposed</span></div>`;
+        }
+        const icon = a.shelter === 'building' ? '🏠' : '🏰';
+        const desc = a.shelter === 'building' ? 'sheltered in building' : 'sheltered by fort';
+        return `<div class="wrapup-attr-row safe">${icon} ${esc(a.name)} <span class="wrapup-attr-note">${desc}</span></div>`;
+      }).join('');
+      attritionListHtml = `<div class="wrapup-attr"><div class="wrapup-found-label">🌙 Night Attrition</div>`
+        + `<div class="wrapup-attr-rows">${rows}</div></div>`;
+    }
+
+    let scoreHtml = '';
+    if (this.state?.witchObjectives) {
+      const { html } = buildObjectivesHtml(
+        this.state.witchObjectives, this.state.entities, this.state.nodeScore, this.state.gameMode);
+      scoreHtml = `<div class="wrapup-score">${html}</div>`;
+    }
+
+    // Night-attrition escalation warning, folded in from its old modal.
+    let attritionHtml = '';
+    if (attritionLevel > 0) {
+      attritionHtml = `<div class="wrapup-attrition">🌙 The curse deepens — exposed survivors `
+        + `now take <b>${attritionLevel}</b> damage each night.</div>`;
+    }
+    return attritionHtml + combatHtml + foundHtml + lootHtml + attritionListHtml + scoreHtml;
+  }
+
+  /** Show the prev/next scrub arrows above the active card. */
+  _enterReplayReview() {
+    // Review mode: reveal ALL cards at once (CSS .reviewing) and show the scrub
+    // arrows flanking the dots. ◀ ▶ just shift which card is emphasised.
+    this._replayReviewMode = true;
+    this._el('replay-timeline')?.classList.add('reviewing');
+    this._el('replay-progress')?.classList.add('review');
+    const prev = document.getElementById('replay-review-prev');
+    const next = document.getElementById('replay-review-next');
+    if (prev) prev.onclick = () => this._setReplayActiveOrd((this._activeReplayOrd ?? 0) - 1);
+    if (next) next.onclick = () => this._setReplayActiveOrd((this._activeReplayOrd ?? 0) + 1);
+    // The manual-step control bar isn't relevant during review.
+    const hud = this._el('replay-hud');
+    if (hud) hud.style.display = 'none';
+  }
+
+  /** Leave review (hide arrows, back to single-card layout). */
+  _exitReplayReview() {
+    this._replayReviewMode = false;
+    this._el('replay-timeline')?.classList.remove('reviewing');
+    this._el('replay-progress')?.classList.remove('review');
+  }
+
+  /** Reveal the outcome lines for a step once it has played out. */
+  revealReplayOutcome(stepIndex) {
+    const track = this._el('replay-timeline-track');
+    if (!track) return;
+    const col = track.querySelector(`.replay-step-col[data-step="${stepIndex}"]`);
+    if (!col) return;
+    // Reveal the dice rolls, outcome badges, and discovered units together.
+    col.querySelectorAll('.replay-step-outcome, .replay-roll, .replay-discovered').forEach(o => o.classList.add('revealed'));
+  }
+
+  /** Re-hide a step's rolls/outcomes (used when a step is replayed). */
+  hideReplayOutcome(stepIndex) {
+    const track = this._el('replay-timeline-track');
+    if (!track) return;
+    const col = track.querySelector(`.replay-step-col[data-step="${stepIndex}"]`);
+    if (!col) return;
+    col.querySelectorAll('.replay-step-outcome, .replay-roll, .replay-discovered').forEach(o => o.classList.remove('revealed'));
+  }
+
+  /** Hide and clear the timeline overlay. */
+  hideReplayTimeline() {
+    const wrap  = this._el('replay-timeline');
+    const track = this._el('replay-timeline-track');
+    if (wrap) wrap.classList.remove('visible', 'reviewing');
+    if (track) track.innerHTML = '';
+    if (typeof document !== 'undefined') document.body?.classList?.remove('replay-timeline-up');
+    this._el('replay-progress')?.classList.remove('visible', 'review');
+    const dots = this._el('replay-dots');
+    if (dots) dots.innerHTML = '';
+    this._replayReviewMode = false;
+    this._replayDigest = null;
   }
 
   /**

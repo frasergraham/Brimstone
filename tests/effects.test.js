@@ -15,6 +15,7 @@ import {
   createHero, createWitch, createMinion, createZombie, createSurvivor,
 } from '../src/entities.js';
 import { GameState, Phase } from '../src/game.js';
+import { hexKey } from '../src/hex.js';
 import { applyPostRoundEffects } from '../src/post-round-effects.js';
 import { executeBattle } from '../src/actions.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
@@ -455,6 +456,14 @@ describe('Wounded amplifies DOTs and attrition', () => {
     gs.entities.push(surv);
     gs.phase = Phase.NIGHT;
     gs.attritionLevel = 1;
+    // The procedural map may drop a building (which shelters the survivor) or
+    // fortification on (5,5); normalize to open ground so attrition reliably
+    // applies — otherwise the survivor is intermittently sheltered (0 damage).
+    const tile = gs.tiles.get(hexKey(5, 5));
+    if (tile) {
+      tile.structure = null; tile.building = null; tile.fortifyLevel = 0;
+      tile.buildingFootprintOf = null; tile.footprintHexes = [];
+    }
     const startHp = surv.hp;
     applyPostRoundEffects(gs);
     assert.equal(surv.hp, startHp - 2, 'attrition (1) + wounded (+1) = 2 HP loss');

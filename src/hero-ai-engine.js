@@ -307,7 +307,7 @@ export function scoreHeroGoals(board, goalWeights = null) {
   const uncovered = board.nodes.filter(n => n.controller !== 'hero' && !n.heroPresent).length;
   control += uncovered * 0.12;
   if (board.survivorCount >= 1) control += 0.15;
-  // Witch holding 2+ nodes is an emergency — about to sweep
+  // Witch holding 2+ nodes is an emergency — she's taking the scoring majority
   if (board.witchHeldCount >= 2) control += 0.4;
   const scoreDiff = board.heroScore - board.witchScore;
   if (scoreDiff < 0) control += 0.25;

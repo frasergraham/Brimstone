@@ -69,7 +69,10 @@ main.js
  ├── hero-ai-engine.js
  ├── multiplayer.js
  ├── planner.js
+ ├── playback.js               ← full-game replay loop + playbackDelay
+ ├── replay-timeline.js        ← pure step-digest for the replay timeline overlay
  ├── app-mode.js
+ ├── keybindings.js            ← in-game keyboard shortcuts + debug command console
  ├── version.js
  └── server/resolver.js        ← cross-boundary import
 

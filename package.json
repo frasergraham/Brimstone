@@ -1,6 +1,6 @@
 {
   "name": "calebs-hollow",
-  "version": "1.5.1",
+  "version": "1.6.0",
   "description": "Caleb's Hollow hex turn-based game with multiplayer",
   "main": "electron/main.js",
   "type": "module",
@@ -20,6 +20,7 @@
     "test:mp-net": "node scripts/headless-mp-net.js",
     "render:3d-map": "node scripts/render-3d-map.js",
     "validate": "node scripts/validate.js",
+    "validate:rigs": "node scripts/check-rig.js",
     "release": "node scripts/release.js",
     "release:dry": "node scripts/release.js --dry-run",
     "extract-trees": "node scripts/extract-tree-pack.js",

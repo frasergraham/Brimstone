@@ -376,6 +376,7 @@ describe('_refreshUndoButtons DOM stability', () => {
     const kids = makeLayerSpy(els);
     installPositioning(renderer);
 
+    ui._selectedEntity = { id: 'h1' }; // UNDO only shows for the selected unit
     ui._unitPlans.set('h1', [{ type: PlanActionType.MOVE, entityId: 'h1' }]);
     setGhostPositions(renderer, { h1: { col: 3, row: 4 } });
 
@@ -399,6 +400,7 @@ describe('_refreshUndoButtons DOM stability', () => {
     let origin = { x: 100, y: 100 };
     renderer.hexToCanvasPos = () => ({ x: origin.x, y: origin.y });
 
+    ui._selectedEntity = { id: 'h1' }; // UNDO only shows for the selected unit
     ui._unitPlans.set('h1', [{ type: PlanActionType.MOVE, entityId: 'h1' }]);
     setGhostPositions(renderer, { h1: { col: 3, row: 4 } });
 
@@ -420,6 +422,7 @@ describe('_refreshUndoButtons DOM stability', () => {
     const kids = makeLayerSpy(els);
     installPositioning(renderer);
 
+    ui._selectedEntity = { id: 'h1' }; // UNDO only shows for the selected unit
     ui._unitPlans.set('h1', [{ type: PlanActionType.MOVE, entityId: 'h1' }]);
     setGhostPositions(renderer, { h1: { col: 3, row: 4 } });
     ui._refreshUndoButtons();
