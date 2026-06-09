@@ -30,12 +30,15 @@ function makeHipsGroup() {
 }
 
 describe('rebaseRootBoneY', () => {
-  test('centers the hip bob on restY (average baseline), strips x/z', () => {
-    const g = makeHipsGroup(); // keys: y 90 then 92, x/z non-zero
+  test('scales the hip trajectory so its average lands on restY, strips x/z', () => {
+    // keys y 80 & 120 → mean 100; scaling by restY/mean (10/100) lands the
+    // average on restY=10 and scales the bob with it (8 / 12).
+    const keys = [{ value: { x: 5, y: 80, z: 3 } }, { value: { x: 7, y: 120, z: 1 } }];
+    const g = { targetedAnimations: [{ target: { name: 'mixamorig:Hips' },
+      animation: { targetProperty: 'position', getKeys: () => keys } }], _keys: keys };
     rebaseRootBoneY(g, 10);
-    // mean=91 → the cycle is centered on restY (10): 90→9, 92→11 (bob ±1).
-    assert.equal(g._keys[0].value.y, 9);
-    assert.equal(g._keys[1].value.y, 11);
+    assert.equal(g._keys[0].value.y, 8);
+    assert.equal(g._keys[1].value.y, 12);
     for (const k of g._keys) { assert.equal(k.value.x, 0); assert.equal(k.value.z, 0); }
   });
 

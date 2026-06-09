@@ -516,8 +516,15 @@ export function rebaseRootBoneY(animGroup, restY, rootName = 'mixamorig:Hips') {
         && 'x' in k.value && 'y' in k.value && 'z' in k.value) {
         k.value.x = 0;
         k.value.z = 0;
-        // Preserve the bob (k.y - baseY); anchor the baseline at restY.
-        if (typeof restY === 'number') k.value.y = restY + (k.value.y - baseY);
+        // SCALE the hip trajectory so its average lands on restY, rather than
+        // ADDING the raw bob: clips carry hip heights in their own export's
+        // units, but the rig's clone scale assumes the rig's units, so a raw
+        // bob is amplified by (rigScale) and over-pops on a rig with a large
+        // clone scale (the ×100 paladin). restY/baseY is the per-rig unit
+        // conversion (both are hip heights), so the bob scales with the rig.
+        if (typeof restY === 'number') {
+          k.value.y = Math.abs(baseY) > 1e-4 ? restY * (k.value.y / baseY) : restY;
+        }
       }
     }
     done++;
