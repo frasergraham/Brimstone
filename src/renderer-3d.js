@@ -12150,7 +12150,7 @@ export class Renderer3D {
     if (this._guardZoneMat) return this._guardZoneMat;
     const BABYLON = this._babylon;
     const mat = new BABYLON.StandardMaterial('guardZoneMat', this._scene);
-    // Blood orange, drawn at half opacity — present but not in-your-face.
+    // Blood orange, drawn faint — present but not in-your-face.
     const R = 0.78, G = 0.18, B = 0.05;
     mat.diffuseColor  = new BABYLON.Color3(R, G, B);
     mat.emissiveColor = new BABYLON.Color3(R * 0.6, G * 0.6, B * 0.6);
@@ -12160,7 +12160,7 @@ export class Renderer3D {
     // an unreliable transparency mode and double-blends its own front+back walls,
     // so alpha 0.5 still reads as solid. The pre-pass writes depth first so only
     // the nearest wall blends. Matches every other translucent overlay here.
-    this._applyAlphaBlend(mat, 0.5);
+    this._applyAlphaBlend(mat, 0.2);
     this._guardZoneMat = mat;
     return mat;
   }
