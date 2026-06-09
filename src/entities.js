@@ -98,12 +98,8 @@ export const BASE_AGILITY = Object.freeze(
   Object.fromEntries(Object.entries(UNIT_TYPES).map(([k, v]) => [k, v.agility]))
 );
 
-// Attack range per entity type. 1 = melee only; >1 = ranged. Mirrors the
-// pattern of BASE_AGILITY / ENTITY_COLOR — derived from the UNIT_TYPES
-// registry so adding a ranged unit is a one-file change.
-export const BASE_RANGE = Object.freeze(
-  Object.fromEntries(Object.entries(UNIT_TYPES).map(([k, v]) => [k, v.range ?? 1]))
-);
+// (Removed BASE_RANGE — units no longer have an innate range. Range is
+// weapon-derived; see Entity.getRange()/equipWeapon().)
 
 export const ENTITY_COLOR = Object.freeze(
   Object.fromEntries(Object.entries(UNIT_TYPES).map(([k, v]) => [k, v.color]))
@@ -152,7 +148,9 @@ export class Entity {
     this.attack  = stats.attack;
     this.defense = stats.defense;
     this.agility = BASE_AGILITY[type] ?? 1;
-    this.range   = BASE_RANGE[type]   ?? 1;
+    // No innate unit range — range comes from the equipped weapon (set by
+    // equipWeapon). Default melee 1 until a weapon is equipped.
+    this.range   = 1;
 
     // Tag metadata from UNIT_TYPES (e.g. 'undead', 'construct', 'minion',
     // 'living', 'leader', 'day-leader'). Used by item combat triggers —
@@ -181,6 +179,8 @@ export class Entity {
     this.actedThisTurn = false;
     this.defendCount   = 0;
     this.guarding      = 0;
+    // Once-per-round free weapon equip gate; reset in resetTurn().
+    this.equippedThisRound = false;
 
     // Per-round counters consulted by ability/effect triggers (e.g. berserker
     // fires frenzy when killsThisRound >= 2). Reset in resetTurn().
@@ -234,11 +234,15 @@ export class Entity {
       + _abilityStatMod(this.abilities, 'agility')
       + effectStatMod(this, 'agility');
   }
-  // Attack range in hexes. 1 = melee only; >1 = ranged. Effects like
-  // eagle_eyed extend range via rangeMod; permanent abilities (eagle_eye)
+  // Attack range in hexes. 1 = melee only; >1 = ranged. Range is entirely
+  // weapon-derived — there is no innate unit range. The equipped weapon's
+  // `range` (default 1 for melee/unarmed) is the base; effects like
+  // eagle_eyed extend it via rangeMod and permanent abilities (eagle_eye)
   // compose via ABILITIES[id].statMods.range, mirroring attack/defense.
+  // `this.range` is a denormalized cache of the weapon range (kept in sync
+  // by equipWeapon) so AI sim copies that read `simUnit.range` stay correct.
   getRange() {
-    return (this.range ?? 1)
+    return (ITEMS[this.weapon]?.range ?? 1)
       + _abilityStatMod(this.abilities, 'range')
       + effectRangeMod(this);
   }
@@ -270,6 +274,10 @@ export class Entity {
     // stat stable across weapon swaps and makes equipped weapons a
     // true runtime-composed modifier.
     this.weapon = weaponType || null;
+    // Range is weapon-derived (no innate unit range). Keep the
+    // denormalized this.range cache in sync for AI sim copies that read
+    // `simUnit.range ?? 1` without going through getRange().
+    this.range = ITEMS[this.weapon]?.range ?? 1;
   }
 
   resetTurn() {
@@ -279,6 +287,7 @@ export class Entity {
     this.defendCount   = 0;
     this.guarding      = 0;
     this.killsThisRound = 0;
+    this.equippedThisRound = false;
   }
 
   takeDamage(amount) {
@@ -410,12 +419,13 @@ export function defenseOf(e) {
   const effectMod   = effectStatMod(e, 'defense');
   return base + weaponMod + abilityMod + effectMod;
 }
-// Attack range in hexes — tolerates plain-object fixtures. Falls back to
-// UNIT_TYPES[type].range so tests that skip the Entity constructor still
-// see the correct range for a given entity type.
+// Attack range in hexes — tolerates plain-object fixtures. Range is
+// weapon-derived: prefer the denormalized `range` cache, else read it from
+// the equipped weapon (default 1 for melee/unarmed). Units have no innate
+// per-type range.
 export function rangeOf(e) {
   if (typeof e?.getRange === 'function') return e.getRange();
-  const base       = e?.range ?? UNIT_TYPES[e?.type]?.range ?? 1;
+  const base       = e?.range ?? ITEMS[e?.weapon]?.range ?? 1;
   const abilityMod = _abilityStatMod(e?.abilities, 'range');
   const effectMod  = effectRangeMod(e);
   return base + abilityMod + effectMod;

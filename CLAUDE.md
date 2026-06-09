@@ -264,4 +264,4 @@ Both factions use a 5-stage pipeline — **EVALUATE → SCORE → ALLOCATE → G
 | Mean rounds | 15–35 |
 | Round cap hits | <5% |
 
-Baseline (2026-04-24): Hero 49.2% / Witch 50.8% at ~22 mean rounds (500 1v1 games, Standard); NvN modes within the ±12% band. Full baseline tables, NvN scaling notes, and the step-by-step tuning methodology live in `docs/06-ai-architecture.md` → "Balance Baseline & Tuning Methodology" — **update that baseline after any tuning pass**. NvN scaling is gated on `playerCount > 1`; don't remove it without re-running `node scripts/headless.js 500 standard --players N` for N ∈ {2, 3, 4}.
+Baseline (2026-06-09, post weapons-overhaul): Hero 51.6% / Witch 48.4% at ~22 mean rounds (500 1v1 games, Standard); NvN modes within the ±12% band (2v2 ~58%, 3v3 ~53%, 4v4 ~59%). Full baseline tables, NvN scaling notes, and the step-by-step tuning methodology live in `docs/06-ai-architecture.md` → "Balance Baseline & Tuning Methodology" — **update that baseline after any tuning pass**. NvN scaling is gated on `playerCount > 1`; don't remove it without re-running `node scripts/headless.js 500 standard --players N` for N ∈ {2, 3, 4}.

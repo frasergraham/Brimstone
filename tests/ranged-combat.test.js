@@ -53,7 +53,10 @@ function clearSightlineAround(state, col, row, radius) {
 
 describe('unit range registry', () => {
   test('witch has range 2', () => {
+    // Range is now weapon-derived: a raw witch is melee (range 1) until it
+    // equips its ranged weapon. magic_bolt restores the witch's reach-2 attack.
     const w = createWitch(0, 0);
+    w.equipWeapon('magic_bolt');
     assert.equal(w.getRange(), 2);
     assert.equal(w.range, 2);
   });
@@ -64,7 +67,10 @@ describe('unit range registry', () => {
   });
 
   test('snapEntity includes range', () => {
+    // Range is weapon-derived — equip a ranged weapon so range > 1, then
+    // confirm snapEntity carries the equipped weapon's range.
     const w = createWitch(3, 4);
+    w.equipWeapon('magic_bolt');
     const snap = snapEntity(w);
     assert.equal(snap.range, 2);
   });

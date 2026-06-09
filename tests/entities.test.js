@@ -20,17 +20,22 @@ import { WeaponType, WEAPON_STATS } from '../src/tiles.js';
 //   Iron Golem: HP=5,  ATK=3, DEF=4, owner='witch'
 
 describe('Base stats — Hero', () => {
-  test('HP=14, ATK=3, DEF=2, owner=hero, type=hero', () => {
+  test('HP=14, ATK=2, DEF=2, owner=hero, type=hero', () => {
+    // Base attack is 2; the Paladin's starting sword (+2) brings effective
+    // ATK to 4. Raw createHero() builds an unarmed leader (no faction
+    // createLeader), so base stats only.
     const hero = createHero(0, 0);
     assert.equal(hero.maxHp, 14);
     assert.equal(hero.hp, 14, 'starts at full HP');
-    assert.equal(hero.attack, 3);
+    assert.equal(hero.attack, 2);
     assert.equal(hero.defense, 2);
     assert.equal(hero.owner, 'hero');
     assert.equal(hero.type, EntityType.HERO);
   });
 
   test('starts alive with no weapon and no items', () => {
+    // Raw factory: starting weapons are issued via Faction.createLeader,
+    // which createHero() bypasses.
     const hero = createHero(0, 0);
     assert.equal(hero.alive, true);
     assert.equal(hero.weapon, null);
@@ -236,7 +241,7 @@ describe('equipWeapon', () => {
   test('sword gives +2 ATK, no DEF change', () => {
     const hero = createHero(0, 0);
     hero.equipWeapon(WeaponType.SWORD);
-    assert.equal(hero.getAttack(), 5);   // base 3 + sword +2
+    assert.equal(hero.getAttack(), 4);   // base 2 + sword +2
     assert.equal(hero.getDefense(), 2);  // unchanged
     assert.equal(hero.weapon, WeaponType.SWORD);
   });
@@ -244,21 +249,21 @@ describe('equipWeapon', () => {
   test('shield gives +2 DEF, no ATK change', () => {
     const hero = createHero(0, 0);
     hero.equipWeapon(WeaponType.SHIELD);
-    assert.equal(hero.getAttack(), 3);   // unchanged
+    assert.equal(hero.getAttack(), 2);   // unchanged
     assert.equal(hero.getDefense(), 4);  // base 2 + shield +2
   });
 
   test('axe gives +1 ATK and +1 DEF', () => {
     const hero = createHero(0, 0);
     hero.equipWeapon(WeaponType.AXE);
-    assert.equal(hero.getAttack(), 4);
+    assert.equal(hero.getAttack(), 3);
     assert.equal(hero.getDefense(), 3);
   });
 
   test('staff gives +1 ATK', () => {
     const hero = createHero(0, 0);
     hero.equipWeapon(WeaponType.STAFF);
-    assert.equal(hero.getAttack(), 4);
+    assert.equal(hero.getAttack(), 3);
     assert.equal(hero.getDefense(), 2);
   });
 
@@ -266,16 +271,16 @@ describe('equipWeapon', () => {
     const hero = createHero(0, 0);
     hero.equipWeapon(WeaponType.SWORD);
     hero.equipWeapon(WeaponType.SHIELD);
-    assert.equal(hero.getAttack(), 3, 'sword bonus should not persist');
+    assert.equal(hero.getAttack(), 2, 'sword bonus should not persist');
     assert.equal(hero.getDefense(), 4, 'shield bonus should apply');
   });
 
   test('equipping null (unequip) removes weapon bonus', () => {
     const hero = createHero(0, 0);
     hero.equipWeapon(WeaponType.SWORD);
-    assert.equal(hero.getAttack(), 5);
+    assert.equal(hero.getAttack(), 4);
     hero.equipWeapon(null);
-    assert.equal(hero.getAttack(), 3, 'effective attack returns to base after unequip');
+    assert.equal(hero.getAttack(), 2, 'effective attack returns to base after unequip');
     assert.equal(hero.weapon, null);
   });
 
@@ -283,7 +288,7 @@ describe('equipWeapon', () => {
     const hero = createHero(0, 0);
     hero.equipWeapon(WeaponType.SWORD);
     hero.equipWeapon(WeaponType.SWORD);
-    assert.equal(hero.getAttack(), 5, 'should not double-stack same weapon');
+    assert.equal(hero.getAttack(), 4, 'should not double-stack same weapon');
   });
 
   test('base stats stay stable across weapon swaps', () => {
@@ -320,7 +325,7 @@ describe('resetTurn', () => {
     hero.equipWeapon(WeaponType.SWORD);
     hero.resetTurn();
     assert.equal(hero.hp, 11, 'HP should not reset');
-    assert.equal(hero.getAttack(), 5, 'weapon bonus should not reset');
+    assert.equal(hero.getAttack(), 4, 'weapon bonus should not reset');
   });
 });
 
@@ -360,13 +365,11 @@ describe('Entity.resolveCombat', () => {
   });
 
   test('hit is false when defenseRoll equals attackRoll (tie = miss)', () => {
-    const hero = createHero(0, 0);   // ATK=3
+    const hero = createHero(0, 0);   // ATK=2 (unarmed base)
     const witch = createWitch(0, 0); // DEF=2
-    // Need attackRoll === defenseRoll: d6_atk + 3 = d6_def + 2 → d6_atk = d6_def - 1
-    // d6_atk=2: ceil(0.333*6) = ceil(1.998) = 2
-    // d6_def=3: ceil(0.5*6)   = ceil(3.0)   = 3
-    // attackRoll = 2+3=5, defenseRoll = 3+2=5 → tie → miss
-    const r = withRNG([0.333, 0.5], () => Entity.resolveCombat(hero, witch));
+    // Need attackRoll === defenseRoll: d6_atk + 2 = d6_def + 2 → d6_atk = d6_def
+    // Both dice = 3: ceil(0.5*6) = 3 → attackRoll = 5, defenseRoll = 5 → tie → miss
+    const r = withRNG([0.5, 0.5], () => Entity.resolveCombat(hero, witch));
     assert.equal(r.margin, 0);
     assert.equal(r.hit, false, 'tie should be a miss, not a hit');
   });

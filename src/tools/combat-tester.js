@@ -174,12 +174,14 @@ function _layoutCombatants(state, slots, size, attackMode = 'melee') {
 
   if (slots.attacker) {
     attackerEntity = _placeUnit(state, slots.attacker, centre.col, centre.row, ATK_SIDE_ID);
-    // In ranged mode, force the attacker's range so executeBattle treats the
-    // strike as ranged regardless of the picked unit type. Melee units
-    // (paladin etc.) gain no projectileType, so the renderer falls back to
-    // 'sparkle' — fine for the tester's "see what a ranged attack looks
-    // like" purpose.
-    if (attackMode === 'ranged') attackerEntity.range = RANGED_ATTACK_RANGE;
+    // In ranged mode, equip a bow so the attacker becomes ranged regardless
+    // of the picked unit type. Units have no innate range now — range is
+    // weapon-derived (Entity.getRange() reads ITEMS[weapon].range), and
+    // executeBattle routes through getRange(), so simply setting `.range`
+    // would be ignored. equipWeapon('bow') sets both this.weapon (range 3 =
+    // RANGED_ATTACK_RANGE, projectileType 'bolt') and the denormalized
+    // this.range cache — making the strike a true ranged attack.
+    if (attackMode === 'ranged') attackerEntity.equipWeapon('bow');
   }
   if (slots.defender) {
     defenderEntity = _placeUnit(state, slots.defender, adjacent.col, adjacent.row, DEF_SIDE_ID);

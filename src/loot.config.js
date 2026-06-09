@@ -5,9 +5,11 @@
 //  Valid type strings:
 //    Resources : 'wood' | 'metal' | 'herbs' | 'food' | 'silver' | 'scripture'
 //    Weapons   : 'sword' | 'axe' | 'shield' | 'bow' | 'crossbow'
-//                | 'staff' | 'dagger'
+//                | 'musket' | 'pistol' | 'sling' | 'staff' | 'dagger'
 //                (weapon-vs-resource is determined via ITEMS[id].kind,
 //                 not a 'weapon:' prefix — see src/items.js)
+//                'magic_bolt' is the Witch/Necromancer's innate weapon —
+//                issued as starting gear (noLoot) and never rolled here.
 //    Special   : 'nothing'   — empty result
 //
 //  NOTE: 'horse' is intentionally NOT rolled as procedural loot — horses are
@@ -34,10 +36,11 @@ export const LOOT_CONFIG = {
   buildings: {
 
     blacksmith: [
-      { type: 'sword',    weight: 20 },
-      { type: 'axe',      weight: 20 },
-      { type: 'shield',   weight: 16 },
-      { type: 'crossbow', weight:  8 },  // ranged-only — usable by Rogue
+      { type: 'sword',    weight: 18 },
+      { type: 'axe',      weight: 18 },
+      { type: 'shield',   weight: 14 },
+      { type: 'crossbow', weight:  8 },  // ranged — usable by Rogue
+      { type: 'musket',   weight:  6 },  // ranged, +2 ATK — the prize drop
       { type: 'metal',    weight: 26 },
       { type: 'wood',     weight: 10 },
     ],
@@ -77,9 +80,10 @@ export const LOOT_CONFIG = {
     ],
 
     watchtower: [
-      { type: 'bow',      weight: 35 },
+      { type: 'bow',      weight: 30 },
       { type: 'crossbow', weight: 12 },
-      { type: 'silver',   weight: 38 },
+      { type: 'musket',   weight:  8 },
+      { type: 'silver',   weight: 35 },
       { type: 'nothing',  weight: 15 },
     ],
 
@@ -105,10 +109,12 @@ export const LOOT_CONFIG = {
     ],
 
     house: [
-      { type: 'food',          weight: 27 },
-      { type: 'wood',          weight: 24 },
-      { type: 'dagger', weight: 17 },
-      { type: 'metal',         weight: 13 },
+      { type: 'food',          weight: 25 },
+      { type: 'wood',          weight: 22 },
+      { type: 'dagger',        weight: 15 },
+      { type: 'pistol',        weight: 10 },  // ranged sidearm
+      { type: 'sling',         weight:  8 },  // cheap ranged
+      { type: 'metal',         weight: 12 },
       { type: 'herbs',         weight:  8 },
     ],
 
@@ -121,9 +127,10 @@ export const LOOT_CONFIG = {
     ],
 
     town_hall: [
-      { type: 'silver',        weight: 28 },
-      { type: 'wood',          weight: 34 },
-      { type: 'food',          weight: 33 },
+      { type: 'silver',        weight: 26 },
+      { type: 'pistol',        weight: 10 },  // a magistrate's flintlock
+      { type: 'wood',          weight: 32 },
+      { type: 'food',          weight: 32 },
       { type: 'nothing',       weight:  5 },
     ],
 

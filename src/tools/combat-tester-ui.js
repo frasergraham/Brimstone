@@ -8,6 +8,7 @@
 
 import { createCombatTester, UNIT_FACTORIES, SPEED_MODES, ATTACK_MODES } from './combat-tester.js';
 import { UNIT_TYPES } from '../unit-types.js';
+import { ITEMS } from '../items.js';
 import { Renderer3D, BLOCK_WORD_VARIANTS } from '../renderer-3d.js';
 import { run3DCombatCardHold } from '../combat-cinematic.js';
 import { playFastCombatDisplay } from '../combat-fast.js';
@@ -119,7 +120,7 @@ function _playBattleResultAnims(renderer, actorSnap, targetSnap, result, redrawF
 function _playAttackIntro(renderer, actorSnap, targetSnap) {
   const isRanged = (actorSnap?.range ?? 1) > 1;
   if (isRanged && typeof renderer.addProjectileAnim === 'function') {
-    const projectileType = UNIT_TYPES[actorSnap.type]?.projectileType ?? 'sparkle';
+    const projectileType = ITEMS[actorSnap.weapon]?.projectileType ?? 'sparkle';
     renderer.addProjectileAnim(projectileType, actorSnap.col, actorSnap.row,
       targetSnap.col, targetSnap.row, { owner: actorSnap.owner });
   } else if (typeof renderer.addLungeAnim === 'function') {

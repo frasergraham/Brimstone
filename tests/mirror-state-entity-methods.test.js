@@ -25,6 +25,7 @@ const { MirrorState }          = await import('../src/multiplayer.js');
 const { GameState }            = await import('../src/game.js');
 const { serializeState }       = await import('../server/state-sync.js');
 const { Entity, SurvivorAbility } = await import('../src/entities.js');
+const { ITEMS }                   = await import('../src/items.js');
 
 test('MirrorState.fromSnapshot yields entities with Entity methods', () => {
   const gs   = new GameState(true, true, 'standard', 3);
@@ -51,9 +52,12 @@ test('MirrorState entities preserve numeric stats through method calls', () => {
   assert.ok(hero, 'hero present in mirror state');
   assert.equal(typeof hero.getAttack(),  'number');
   assert.equal(typeof hero.getDefense(), 'number');
-  // Unequipped → base stats.
-  assert.equal(hero.getAttack(),  hero.attack);
-  assert.equal(hero.getDefense(), hero.defense);
+  // Weapon stats are no longer baked into base attack/defense — getAttack()/
+  // getDefense() compose the equipped weapon's statMods at call time. The hero
+  // leader starts with a sword, so the composed stat = base + weapon mod.
+  const wmods = ITEMS[hero.weapon]?.statMods ?? {};
+  assert.equal(hero.getAttack(),  hero.attack  + (wmods.attack  ?? 0));
+  assert.equal(hero.getDefense(), hero.defense + (wmods.defense ?? 0));
 });
 
 test('MirrorState entities respond correctly to hasAbility/hasTag', () => {

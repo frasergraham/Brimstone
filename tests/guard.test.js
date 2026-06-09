@@ -23,6 +23,15 @@ function freshState() {
   return new GameState(true, true);
 }
 
+// Range is now weapon-derived (Entity.getRange()): a unit's reach comes from its
+// equipped weapon plus ability/effect range mods, NOT a writable `.range` field.
+// makeRanged equips a bow (range 3) and stacks the eagle_eye ability (+1 range
+// each) to reach an arbitrary attack range, so tests can build a ranged guard.
+function makeRanged(entity, range) {
+  entity.equipWeapon('bow');            // base reach 3
+  for (let i = 3; i < range; i++) entity.abilities.push('eagle_eye'); // +1 each
+}
+
 function emptyPassableNeighbor(state, entity) {
   return getNeighbors(entity.col, entity.row).find(n => {
     const t = state.tiles.get(hexKey(n.col, n.row));
@@ -251,7 +260,7 @@ describe('executeGuardStrike', () => {
   test('ranged guard strike: huge margin still deals 1 dmg, no crush, no splash', () => {
     const state = freshState();
     const guard = state.hero;
-    guard.range = 3;            // ranged guard (reach 2)
+    makeRanged(guard, 3);            // ranged guard (reach 2)
     guard.guarding = 1;
     const target = state.witch;
     guard.col = 5; guard.row = 5;
@@ -272,7 +281,7 @@ describe('executeGuardStrike', () => {
   test('ranged guard strike honours forest cover (+1 DEF) on the target hex', () => {
     const state = freshState();
     const guard = state.hero;
-    guard.range = 3;
+    makeRanged(guard, 3);
     guard.guarding = 1;
     const target = state.witch;
     guard.col = 5; guard.row = 5;
@@ -287,7 +296,7 @@ describe('executeGuardStrike', () => {
   test('ranged guard strike applies distance falloff at range 3+', () => {
     const state = freshState();
     const guard = state.hero;
-    guard.range = 5;
+    makeRanged(guard, 5);
     guard.guarding = 1;
     const target = state.witch;
     guard.col = 5; guard.row = 5;
@@ -488,7 +497,7 @@ describe('ranged opportunity shots via resolver', () => {
     const guard = state.hero;
     const mover = state.witch;
     state.entities = state.entities.filter(e => e === guard || e === mover);
-    guard.range = 3;          // reach = full attack range = 3
+    makeRanged(guard, 3);          // reach = full attack range = 3
     guard.guarding = 1;
     guard.col = 5; guard.row = 5;
     mover.col = 9; mover.row = 5;   // dist 4 — out of reach to start
@@ -508,7 +517,7 @@ describe('ranged opportunity shots via resolver', () => {
     const guard = state.hero;
     const mover = state.witch;
     state.entities = state.entities.filter(e => e === guard || e === mover);
-    guard.range = 3;
+    makeRanged(guard, 3);
     guard.guarding = 1;
     guard.col = 5; guard.row = 5;
     mover.col = 8; mover.row = 5;
@@ -527,7 +536,7 @@ describe('ranged opportunity shots via resolver', () => {
     const guard = state.hero;
     const mover = state.witch;
     state.entities = state.entities.filter(e => e === guard || e === mover);
-    guard.range = 3;          // reach 3
+    makeRanged(guard, 3);          // reach 3
     guard.guarding = 1;
     guard.col = 5; guard.row = 5;
     mover.col = 10; mover.row = 5;   // dist 5
@@ -548,7 +557,7 @@ describe('ranged opportunity shots via resolver', () => {
     const guard = state.hero;
     const mover = state.witch;
     state.entities = state.entities.filter(e => e === guard || e === mover);
-    guard.range = 5;                  // attack range 5, but sight caps reach to 3
+    makeRanged(guard, 5);                  // attack range 5, but sight caps reach to 3
     guard.guarding = 1;
     guard.col = 5; guard.row = 5;
     mover.col = 10; mover.row = 5;     // dist 5
@@ -569,7 +578,7 @@ describe('ranged opportunity shots via resolver', () => {
     const guard = state.hero;
     const mover = state.witch;
     state.entities = state.entities.filter(e => e === guard || e === mover);
-    guard.range = 5;
+    makeRanged(guard, 5);
     guard.guarding = 1;
     guard.col = 5; guard.row = 5;
     mover.col = 9; mover.row = 5;      // dist 4

@@ -35,7 +35,7 @@ import { hexDistance, getNeighbors, hexKey } from './hex.js';
 import { planCombatFrames } from './combat-presentation.js';
 import { MAX_FORTIFY_LEVEL, FORT_IMPASSABLE_THRESHOLD } from './tiles.js';
 import { sightRange, computeLineOfSight, hasLineOfSight } from './actions.js';
-import { UNIT_TYPES } from './unit-types.js';
+import { ITEMS } from './items.js';
 import { getFaction, findFaction, allFactions, getFactionsForSide, sightRangeForEntity } from './factions.js';
 import { compileTurnBattleSummary, compileTurnBattlePairs, collectTurnFinds } from './battle-utils.js';
 import { installKeybindings } from './keybindings.js';
@@ -1100,8 +1100,11 @@ async function _runLocalResolution(skipSummary = false) {
 function _playAttackIntroAnim(actorSnap, targetSnap, fromCol, fromRow, toCol, toRow, ranged) {
   const isRanged = !!ranged || (actorSnap?.range ?? 1) > 1;
   if (isRanged) {
+    // Range (and the projectile visual) is weapon-derived: the equipped
+    // weapon names its projectileType (bolt for bows/firearms, sparkle for
+    // the Magic Bolt). Fall back to sparkle for any legacy ranged source.
     const projectileType =
-      UNIT_TYPES[actorSnap.type]?.projectileType ?? 'sparkle';
+      ITEMS[actorSnap.weapon]?.projectileType ?? 'sparkle';
     renderer.addProjectileAnim(projectileType, fromCol, fromRow, toCol, toRow, {
       owner: actorSnap.owner,
     });

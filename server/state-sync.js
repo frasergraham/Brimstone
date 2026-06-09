@@ -2,7 +2,8 @@
 // serializeState  → plain JSON-safe snapshot (network transmission, save storage)
 // deserializeState ← reconstruct a live GameState from a saved snapshot (resume)
 import { VERSION }           from '../src/version.js';
-import { Entity, BASE_AGILITY, BASE_RANGE } from '../src/entities.js';
+import { Entity, BASE_AGILITY } from '../src/entities.js';
+import { ITEMS } from '../src/items.js';
 import { GameState }         from '../src/game.js';
 import { setMapDimensions, hexKey }  from '../src/hex.js';
 import { Tile, TileType, legacyTileType, decomposeTileType } from '../src/tiles.js';
@@ -55,7 +56,8 @@ export function serializeState(state) {
     attack:        e.attack,
     defense:       e.defense,
     agility:       e.agility ?? BASE_AGILITY[e.type] ?? 1,
-    range:         e.range   ?? BASE_RANGE[e.type]   ?? 1,
+    // Range is weapon-derived (denormalized cache of ITEMS[weapon].range).
+    range:         e.range   ?? 1,
     attackBonus:   e.attackBonus,
     defenseBonus:  e.defenseBonus,
     weapon:        e.weapon        ?? null,
@@ -74,6 +76,9 @@ export function serializeState(state) {
     defendCount:   e.defendCount   ?? 0,
     guarding:      e.guarding      ?? 0,
     killsThisRound: e.killsThisRound ?? 0,
+    // Once-per-round free-equip gate — must survive mid-round resync or a
+    // reconnect could let a unit equip twice in one round.
+    equippedThisRound: e.equippedThisRound ?? false,
     effects:       Array.isArray(e.effects)
       ? e.effects.map(rec => ({ ...rec }))
       : [],
@@ -250,10 +255,13 @@ export function deserializeState(snap) {
     if (e.type === 'hero') e.type = 'paladin';
     // Back-compat hydrate Agility for pre-002 saves.
     if (e.agility === undefined) e.agility = BASE_AGILITY[e.type] ?? 1;
-    // Back-compat hydrate Range for pre-ranged-attacks saves. New games
-    // set `range` in the Entity constructor; old snapshots default to the
-    // unit-type's registry value (1 for every existing unit except witch).
-    if (e.range === undefined) e.range = BASE_RANGE[e.type] ?? 1;
+    // Range is weapon-derived (no innate unit range). Restore it
+    // authoritatively from the equipped weapon — handles old saves that
+    // predate weapon-ranged attacks (no weapon → range 1) and keeps the
+    // denormalized cache in sync with `weapon`.
+    e.range = ITEMS[e.weapon]?.range ?? 1;
+    // Once-per-round equip gate — default false on saves that predate it.
+    if (e.equippedThisRound === undefined) e.equippedThisRound = false;
     // Back-compat: pre-PR factionId. Saves from before the rogue PR
     // don't carry factionId; fall back to null so factionOf(actor) →
     // getFaction(owner) — i.e. the side default. Saves that DO carry

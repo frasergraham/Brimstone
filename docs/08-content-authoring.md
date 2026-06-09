@@ -28,6 +28,7 @@ spear: {
   id: 'spear',
   kind: 'weapon',
   slot: 'weapon',
+  category: 'melee',          // 'melee' | 'ranged' — gates Faction.canEquipWeaponItem
   statMods: { attack: 1, defense: 1 },
   label: '🗡 Spear (+1 ATK, +1 DEF)',
   // optional conditional bonus via combatTriggers:
@@ -37,7 +38,13 @@ spear: {
 },
 ```
 
-Add the id to any loot tables in `src/loot.config.js` that should roll it.
+Optional weapon fields:
+- `range: N` — grants the wielder attack range N (default 1 = melee). **Range is weapon-derived** — units have no innate range, so a `range`-bearing weapon turns *any* equip-capable wielder into a ranged attacker (`Entity.getRange()`). Ranged attacks use a distinct rule set (no gang-up, no counter, forest cover, range falloff) — see docs/05.
+- `projectileType: 'bolt' | 'sparkle'` — replay animation for ranged shots.
+- `wielderFactions: ['witch','necromancer']` — restrict equipping to those faction ids (Magic Bolt). Omit for an unrestricted weapon.
+- `noLoot: true` — exclude from loot (issued as starting gear only); don't add it to any loot table.
+
+Add the id to any loot tables in `src/loot.config.js` that should roll it (skip for `noLoot` weapons). To make a faction leader **start** with the weapon, override `get innateLeaderWeapon()` on the `Faction` subclass in `src/factions.js`.
 
 ## New ability
 

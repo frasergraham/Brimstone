@@ -333,6 +333,10 @@ export function validatePlanAction(state, action, projectedPositions = null) {
 
     case PlanActionType.EQUIP_WEAPON: {
       if (!action.weapon) return { valid: false, reason: 'No weapon specified.' };
+      // Equipping is a free action capped at once per round per unit.
+      if (entity.equippedThisRound) {
+        return { valid: false, reason: `${entity.displayName ?? 'Unit'} already equipped a weapon this round.` };
+      }
       return { valid: true };
     }
 

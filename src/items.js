@@ -8,9 +8,16 @@
 //
 // `category` — 'melee' | 'ranged'. Factions gate equipping per-category
 // via Faction.canEquipWeaponItem (e.g. the rogue refuses melee weapons).
-// Unrelated to a unit's attack range (which lives on UNIT_TYPES) — a
-// melee unit can still equip a bow for its stat bonus, and a ranged
-// unit's effective range comes from the unit type, not the weapon.
+//
+// `range` — the attack-target distance the weapon grants its wielder, in
+// hexes. Omitted (melee weapons / unarmed) ⇒ range 1. A unit has NO innate
+// range any more — Entity.getRange() reads it from the equipped weapon, so
+// a bow turns any wielder into an archer (range 3) and an unarmed unit is
+// melee. `projectileType` names the replay animation for ranged shots.
+//
+// `wielderFactions` — if present, only those faction ids may equip the
+// weapon (e.g. Magic Bolt is witch/necromancer-only). `noLoot` marks
+// weapons that are issued as starting gear and never appear in loot tables.
 
 export const ITEMS = Object.freeze({
   sword: {
@@ -34,8 +41,10 @@ export const ITEMS = Object.freeze({
     kind: 'weapon',
     slot: 'weapon',
     category: 'ranged',
-    statMods: { attack: 1, defense: 0 },
-    label: '🏹 Bow (+1 ATK)',
+    statMods: { attack: 0, defense: 0 },
+    range: 3,
+    projectileType: 'bolt',
+    label: '🏹 Bow (range 3)',
   },
   crossbow: {
     id: 'crossbow',
@@ -43,7 +52,39 @@ export const ITEMS = Object.freeze({
     slot: 'weapon',
     category: 'ranged',
     statMods: { attack: 1, defense: 0 },
-    label: '🏹 Crossbow (+1 ATK)',
+    range: 2,
+    projectileType: 'bolt',
+    label: '🏹 Crossbow (+1 ATK, range 2)',
+  },
+  musket: {
+    id: 'musket',
+    kind: 'weapon',
+    slot: 'weapon',
+    category: 'ranged',
+    statMods: { attack: 2, defense: 0 },
+    range: 2,
+    projectileType: 'bolt',
+    label: '🔫 Musket (+2 ATK, range 2)',
+  },
+  pistol: {
+    id: 'pistol',
+    kind: 'weapon',
+    slot: 'weapon',
+    category: 'ranged',
+    statMods: { attack: 1, defense: 0 },
+    range: 2,
+    projectileType: 'bolt',
+    label: '🔫 Flintlock (+1 ATK, range 2)',
+  },
+  sling: {
+    id: 'sling',
+    kind: 'weapon',
+    slot: 'weapon',
+    category: 'ranged',
+    statMods: { attack: 0, defense: 0 },
+    range: 2,
+    projectileType: 'bolt',
+    label: '🪨 Sling (range 2)',
   },
   shield: {
     id: 'shield',
@@ -76,6 +117,24 @@ export const ITEMS = Object.freeze({
     category: 'melee',
     statMods: { attack: 1, defense: 0 },
     label: '🗡 Dagger (+1 ATK)',
+  },
+  // Witch / Necromancer innate ranged attack. Issued as starting gear via
+  // Faction.innateLeaderWeapon; never looted (noLoot) and equippable only
+  // by its wielderFactions.
+  magic_bolt: {
+    id: 'magic_bolt',
+    kind: 'weapon',
+    slot: 'weapon',
+    category: 'ranged',
+    // +1 ATK mirrors the Paladin's starting sword edge so the night side
+    // keeps pace (witch effective ATK 3 vs paladin 4 — the same +1 gap as
+    // the pre-overhaul baseline). Tuned via the balance sims.
+    statMods: { attack: 1, defense: 0 },
+    range: 2,
+    projectileType: 'sparkle',
+    wielderFactions: ['witch', 'necromancer'],
+    noLoot: true,
+    label: '✨ Magic Bolt (+1 ATK, range 2)',
   },
 });
 

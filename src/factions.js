@@ -180,10 +180,16 @@ export class Faction {
   /**
    * Per-item equip gate. Defaults to the blanket canEquipWeapon() check;
    * subclasses can refine by item category (e.g. rogue: ranged-only).
-   * Pass an unknown id and you get false.
+   * Weapons that name `wielderFactions` (e.g. Magic Bolt) are restricted to
+   * those factions regardless of the blanket check. Pass an unknown id and
+   * you get false.
    * @param {string} itemId — ITEMS registry id
    */
-  canEquipWeaponItem(_itemId) { return this.canEquipWeapon(); }
+  canEquipWeaponItem(itemId) {
+    const item = ITEMS[itemId];
+    if (item?.wielderFactions && !item.wielderFactions.includes(this.id)) return false;
+    return this.canEquipWeapon();
+  }
 
   /** Does this entity currently have a horse equipped? */
   hasHorse(entity) {
@@ -318,16 +324,26 @@ export class Faction {
   get innateLeaderAbilities() { return []; }
 
   /**
+   * Weapon every leader of this faction starts with equipped (ITEMS id),
+   * or null for an unarmed/melee leader. Range is weapon-derived, so this
+   * is also how a leader gets its innate reach (Rogue → bow = range 3,
+   * Witch/Necromancer → magic_bolt = range 2). Applied by createLeader();
+   * deserialize bypasses it and restores the saved weapon instead.
+   */
+  get innateLeaderWeapon() { return null; }
+
+  /**
    * Create the faction leader entity. Subclasses override `_buildLeader`
    * to pick the correct EntityType factory; the base class handles the
-   * faction-innate ability push so every leader gets the right abilities
-   * regardless of which concrete factory runs.
+   * faction-innate ability push and starting-weapon equip so every leader
+   * is born correctly regardless of which concrete factory runs.
    */
   createLeader(col, row, ownerId, state) {
     const e = this._buildLeader(col, row, ownerId, state);
     for (const id of this.innateLeaderAbilities) {
       if (!e.abilities.includes(id)) e.abilities.push(id);
     }
+    if (this.innateLeaderWeapon) e.equipWeapon(this.innateLeaderWeapon);
     return e;
   }
 
@@ -524,6 +540,9 @@ export class HeroFaction extends Faction {
   // reads actor.hasAbility('sound_horn').
   get innateLeaderAbilities() { return ['sound_horn']; }
 
+  // The Paladin starts with a sword (melee, +2 ATK over base 2).
+  get innateLeaderWeapon() { return 'sword'; }
+
   // AI Names
   getAINamePool() { return AI_HERO_NAMES; }
 }
@@ -538,7 +557,11 @@ export class WitchFaction extends Faction {
 
   // Action Budget
   get actionCap()    { return 8; }
-  get unitBonusCap() { return 3; }
+  // Raised 3 → 4 in the weapons overhaul: ranged weapons only benefit the
+  // hero's roster (summons/zombies/golems can't equip), so the witch needs
+  // to convert more of its swarm into actions to keep contesting nodes —
+  // the lever scales with unit count, recentring NvN without skewing 1v1.
+  get unitBonusCap() { return 4; }
 
   isFavorablePhase(phase) {
     return phase === Phase.NIGHT;
@@ -613,6 +636,16 @@ export class WitchFaction extends Faction {
   // reads actor.hasAbility('summon').
   get innateLeaderAbilities() { return ['summon']; }
 
+  // The Witch wields the Magic Bolt (her innate ranged attack, range 2).
+  get innateLeaderWeapon() { return 'magic_bolt'; }
+
+  // The Witch can equip only her faction-restricted weapon (Magic Bolt) —
+  // never looted swords/bows. canEquipWeapon() stays false so the generic
+  // equip flow doesn't surface mundane arms.
+  canEquipWeaponItem(itemId) {
+    return ITEMS[itemId]?.wielderFactions?.includes(this.id) === true;
+  }
+
   // AI Names
   getAINamePool() { return AI_WITCH_NAMES; }
 }
@@ -643,6 +676,9 @@ export class RogueFaction extends HeroFaction {
   // so returning [] actually strips the inherited ability.
   get innateLeaderAbilities() { return []; }
 
+  // The Rogue starts with a bow (range 3) instead of the Paladin's sword.
+  get innateLeaderWeapon() { return 'bow'; }
+
   // Sight: +1 hex over paladin in every phase, with the same scout bonus.
   // Calls super so future tweaks to HeroFaction's day/dawn/night base
   // values flow through automatically.
@@ -650,10 +686,13 @@ export class RogueFaction extends HeroFaction {
     return super.getSightRange(phase, hasScout) + 1;
   }
 
-  // Cannot wield melee weapons. Bow / crossbow are fine.
+  // Cannot wield melee weapons. Bow / crossbow / firearms are fine, but
+  // faction-restricted weapons (e.g. Magic Bolt) are still off-limits.
   canEquipWeaponItem(itemId) {
     if (!this.canEquipWeapon()) return false;
-    return ITEMS[itemId]?.category === 'ranged';
+    const item = ITEMS[itemId];
+    if (item?.wielderFactions && !item.wielderFactions.includes(this.id)) return false;
+    return item?.category === 'ranged';
   }
 
   // Exploration never turns up empty. On a 'nothing' roll, re-roll once;
@@ -703,6 +742,8 @@ export class CaptainFaction extends HeroFaction {
   get name()       { return 'Captain'; }
   get leaderType() { return EntityType.CAPTAIN; }
   isStub()         { return true; }
+  // Stub melee leader — no starting weapon (keeps base stats unchanged).
+  get innateLeaderWeapon() { return null; }
   _buildLeader(col, row, ownerId, state = null) {
     return createCaptain(col, row, ownerId, state);
   }
@@ -726,6 +767,9 @@ export class BruteFaction extends WitchFaction {
   // minion-only summons, building survivor auto-zombify, and a meaty
   // splash blast that fires on every melee hit (knocks enemies back,
   // skips friendlies).
+
+  // Melee bruiser — no Magic Bolt (overrides the WitchFaction default).
+  get innateLeaderWeapon() { return null; }
 
   _buildLeader(col, row, ownerId, state = null) {
     return createBrute(col, row, ownerId, state);

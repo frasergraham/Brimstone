@@ -144,13 +144,13 @@ describe('computeActions — Witch', () => {
     assert.equal(computeActions(Player.WITCH, Phase.DUSK, makeWitchEntities(3)), 6);
   });
 
-  test('witch unit bonus caps at +3', () => {
-    // 3 minions → +3 → total 6
+  test('witch unit bonus caps at +4', () => {
+    // 3 minions → +3 → total 6 (under the cap)
     assert.equal(computeActions(Player.WITCH, Phase.DUSK, makeWitchEntities(3)), 6);
-    // 5 minions → capped at +3 → total 6
-    assert.equal(computeActions(Player.WITCH, Phase.DUSK, makeWitchEntities(5)), 6);
-    // 20 minions → still capped at +3
-    assert.equal(computeActions(Player.WITCH, Phase.DUSK, makeWitchEntities(20)), 6);
+    // 5 minions → capped at +4 → total 7
+    assert.equal(computeActions(Player.WITCH, Phase.DUSK, makeWitchEntities(5)), 7);
+    // 20 minions → still capped at +4
+    assert.equal(computeActions(Player.WITCH, Phase.DUSK, makeWitchEntities(20)), 7);
   });
 });
 

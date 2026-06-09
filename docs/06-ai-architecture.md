@@ -360,16 +360,19 @@ When scoring is ≤2 rounds away and a node has feasibility ≥0.6, the hero AI 
 
 ## Balance Baseline & Tuning Methodology
 
-**Last updated:** 2026-04-24 (NvN balance pass — per-witch AI thresholds + hidden-survivor scaling)
+**Last updated:** 2026-06-09 (weapons overhaul — weapon-derived range, starting weapons, ranged-weapon attacks; recentred with Magic Bolt +1 ATK and witch `unitBonusCap` 3→4)
 
 ### Baseline Metrics (500 1v1 games, Standard 13×13)
 
 | Metric | Value | Target |
 |--------|-------|--------|
-| Hero win rate | 49.2% | 38–62% (±12%) |
-| Witch win rate | 50.8% | 38–62% (±12%) |
+| Hero win rate | 51.6% | 38–62% (±12%) |
+| Witch win rate | 48.4% | 38–62% (±12%) |
+| Kill wins | ~54% | ≥20% |
 | Draws | 0.0% | — |
 | Mean rounds | ~22 | 15–35 |
+
+> Weapons-overhaul note: ranged weapons only benefit the hero's roster (summons/zombies/golems can't equip), which skewed NvN toward the hero. The witch's `unitBonusCap` was raised 3→4 so its swarm converts to actions and keeps contesting nodes; Magic Bolt carries +1 ATK so the witch leader keeps the same ~1-ATK duel gap vs the now-sword-armed Paladin.
 
 ### Combat & Economy Baseline
 
@@ -414,9 +417,9 @@ When scoring is ≤2 rounds away and a node has feasibility ≥0.6, the hero AI 
 
 | Mode | Hero win rate | Witch win rate | Peak hero force | Peak witch force |
 |------|---------------|----------------|------------------|-------------------|
-| 2v2  | 57.8% | 42.0% | ~6 units (1.3× 1v1) | ~13 units (1.75× 1v1) |
-| 3v3  | 57.0% | 42.6% | ~8 units (1.7× 1v1) | ~20 units (2.7× 1v1) |
-| 4v4  | 60.0% | 39.8% | ~9 units (1.9× 1v1) | ~25 units (3.5× 1v1) |
+| 2v2  | 58.3% (400g) | 41.8% | ~6 units (1.3× 1v1) | ~13 units (1.75× 1v1) |
+| 3v3  | 53.0% (100g) | 47.0% | ~8 units (1.7× 1v1) | ~20 units (2.7× 1v1) |
+| 4v4  | 59.0% (100g) | 41.0% | ~9 units (1.9× 1v1) | ~25 units (3.5× 1v1) |
 
 NvN scales up unit density on both sides (so 4v4 doesn't feel sparse on the
 13×13 map) while keeping balance in the ±12% target band. All NvN scaling is

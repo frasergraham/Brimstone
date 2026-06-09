@@ -1459,10 +1459,16 @@ export function executeUseItem(state, actor, item) {
       const label = WEAPON_LABEL[item] || item;
       return { success: false, log: [`${actor.displayName} cannot wield ${label}.`] };
     }
+    // Free action, but only once per round per unit. A second equip queued
+    // in the same plan no-ops here (authoritative guard).
+    if (actor.equippedThisRound) {
+      return { success: false, log: [`${actor.displayName} already equipped a weapon this round.`] };
+    }
     const myItems = actor.items || {};
     if ((myItems[item] || 0) < 1) return { success: false, log: ['Item not available.'] };
     myItems[item]--;
     actor.equipWeapon(item);
+    actor.equippedThisRound = true;
     const label = WEAPON_LABEL[item] || item;
     return { success: true, log: [`${actor.displayName} equips ${label}!`], cost: 0 };
   }

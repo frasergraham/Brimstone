@@ -1995,6 +1995,15 @@ export class UIController {
     // In planning mode, always show actions (budget tracked separately)
     const hasAct  = this._planMode || state.actionsAvailable > 0;
 
+    // Equipping a weapon is free but capped at once per round per unit.
+    // Block it when the unit has already equipped this round or already has
+    // a weapon-equip queued in its plan (queued as USE_ITEM of a weapon, or
+    // an EQUIP_WEAPON action).
+    const queuedEquip = (this._unitPlans.get(entity.id) || []).some(a =>
+      a.type === PlanActionType.EQUIP_WEAPON ||
+      (a.type === PlanActionType.USE_ITEM && ITEMS[a.item]?.kind === 'weapon'));
+    const equipBlocked = entity.equippedThisRound || queuedEquip;
+
     // Build a flat list of arc action descriptors, grouped by category
     // Groups: scout, defense, summon, combat, items
     const arcItems = [];
@@ -2080,8 +2089,9 @@ export class UIController {
           break;
         case ActionType.EQUIP_WEAPON:
           for (const w of action.weapons) {
-            arcItems.push({ group: 'items', label: w.label, fullLabel: `Equip ${w.label}`,
-              color: '#b0b0b0', dis, free: true, cost: 0,
+            arcItems.push({ group: 'items', label: w.label,
+              fullLabel: equipBlocked ? 'Already equipped this round' : `Equip ${w.label}`,
+              color: '#b0b0b0', dis: dis || equipBlocked, free: true, cost: 0,
               attrs: `data-action="use_item" data-item="${w.key}"` });
           }
           break;
@@ -2516,9 +2526,12 @@ export class UIController {
     const color = entity.color ?? COLORS[entity.type] ?? '#d4c9b0';
     const hpPct = Math.max(0, Math.min(100, (entity.hp / entity.maxHp) * 100));
     const hpColor = hpPct > 60 ? '#4caf7d' : hpPct > 30 ? '#f5c842' : '#c0392b';
+    // Equipped weapon — use the registry label (carries icon + bonus + range,
+    // e.g. "🏹 Bow (range 3)"). Range is weapon-derived, so an unarmed unit
+    // is melee (range 1).
     const weaponLabel = entity.weapon
-      ? entity.weapon.charAt(0).toUpperCase() + entity.weapon.slice(1)
-      : null;
+      ? (WEAPON_LABEL[entity.weapon] || entity.weapon)
+      : '👊 Unarmed';
     const effectsHtml = _buildEffectsHtml(entity);
 
     // Portrait image with glyph fallback
@@ -2563,6 +2576,7 @@ export class UIController {
       ? `<span class="usb-extra">
            <span class="usb-stat">ATK <span class="usb-stat-val">${entity.getAttack()}</span></span>
            <span class="usb-stat">DEF <span class="usb-stat-val">${entity.getDefense()}</span></span>
+           <span class="usb-stat">RNG <span class="usb-stat-val">${entity.getRange()}</span></span>
            ${abilityHtml}
          </span>`
       : '';
@@ -2584,7 +2598,7 @@ export class UIController {
               </span>
               <span class="usb-stat-val">${entity.hp}/${entity.maxHp}</span>
             </span>
-            ${weaponLabel ? `<span class="usb-weapon">⚔ ${weaponLabel}</span>` : ''}
+            <span class="usb-weapon">${weaponLabel}</span>
             ${effectsHtml}
             <button class="usb-info-btn ${expanded ? 'usb-info-btn-active' : ''}" title="${expanded ? 'Hide stats' : 'Show stats & abilities'}">i</button>
           </span>
@@ -3040,7 +3054,19 @@ export class UIController {
       }
 
       case 'use_item': {
-        this._addToPlan({ type: PlanActionType.USE_ITEM, entityId: entity.id, item: button.dataset.item });
+        const item = button.dataset.item;
+        // Weapon equip is once-per-round per unit. Guard the click in case a
+        // disabled button is reached, and explain why.
+        if (ITEMS[item]?.kind === 'weapon') {
+          const alreadyQueued = (this._unitPlans.get(entity.id) || []).some(a =>
+            a.type === PlanActionType.EQUIP_WEAPON ||
+            (a.type === PlanActionType.USE_ITEM && ITEMS[a.item]?.kind === 'weapon'));
+          if (entity.equippedThisRound || alreadyQueued) {
+            this._showPlanToast(`${entity.displayName} can only equip a weapon once per round.`);
+            break;
+          }
+        }
+        this._addToPlan({ type: PlanActionType.USE_ITEM, entityId: entity.id, item });
         delayedHide();
         if (entity.alive) this._selectEntity(entity);
         else this._clearSelection();

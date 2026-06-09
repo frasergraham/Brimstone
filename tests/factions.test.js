@@ -196,8 +196,8 @@ describe('Action budget', () => {
     assert.equal(getFaction('hero').unitBonusCap, 5);
   });
 
-  test('Witch unit bonus cap is 3', () => {
-    assert.equal(getFaction('witch').unitBonusCap, 3);
+  test('Witch unit bonus cap is 4', () => {
+    assert.equal(getFaction('witch').unitBonusCap, 4);
   });
 
   test('Hero favorable phases are DAY and DAWN', () => {

@@ -1621,6 +1621,9 @@ describe('executeUseItem — weapon equip', () => {
   test('equipping a weapon applies its stats and costs 0', () => {
     const state = freshState();
     const hero = state.hero;
+    // The hero starts with a sword equipped; unequip so we measure the equip
+    // from the unarmed base (ATK 2) and can verify the sword's +2 stat applies.
+    hero.weapon = null;
     hero.items['sword'] = 1;
     const atkBefore = hero.getAttack();
 
@@ -1648,6 +1651,9 @@ describe('auto-equip weapon on loot find', () => {
   function blacksmithState() {
     const state = freshState();
     const hero = state.hero;
+    // Hero now starts with a sword equipped; strip it so these tests exercise
+    // the "hero has no weapon" auto-equip path from a clean unarmed state.
+    hero.weapon = null;
     const t = state.tiles.get(hexKey(hero.col, hero.row));
     decomposeTileType(t, TileType.BUILDING);
     t.building = BuildingType.BLACKSMITH;
