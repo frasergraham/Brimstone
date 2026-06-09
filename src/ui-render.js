@@ -5,10 +5,50 @@
 import { PlanActionType } from './planner.js';
 import { ITEMS } from './items.js';
 import { EntityType, ENTITY_COLOR } from './entities.js';
-import { ResourceType } from './tiles.js';
+import { ResourceType, WEAPON_LABEL, RESOURCE_LABEL } from './tiles.js';
 import { nodeController } from './game.js';
 import { hexKey } from './hex.js';
 import { getFactionTheme } from './theme.js';
+import { EFFECTS } from './effects.js';
+
+// Effects whose mods make a unit weaker (red pip), vs. those that strengthen
+// it (green pip). Anything not listed renders neutral.
+const _BAD_EFFECTS  = new Set(['wounded', 'poisoned', 'bleeding', 'stunned', 'slowed', 'marked', 'cursed']);
+const _GOOD_EFFECTS = new Set(['frenzied', 'inspired', 'fortified', 'eagle_eyed']);
+
+/**
+ * Render the active effects pip strip for an entity. Each pip shows the
+ * effect's icon and (for finite durations) a small remaining-rounds badge.
+ * The full label/description is exposed via the title attribute for
+ * desktop hover and mobile long-press. Pure — shared by the Unit Stats Bar
+ * (ui.js) and the plan-panel unit detail.
+ */
+export function buildEffectsHtml(entity) {
+  if (!entity || !Array.isArray(entity.effects) || entity.effects.length === 0) {
+    return '';
+  }
+  const pips = entity.effects.map(rec => {
+    const def = EFFECTS[rec.id];
+    if (!def) return '';
+    const kind = _BAD_EFFECTS.has(rec.id) ? 'bad'
+               : _GOOD_EFFECTS.has(rec.id) ? 'good'
+               : '';
+    const durLabel = typeof rec.duration === 'number'
+      ? `${rec.duration}`
+      : (rec.duration === 'mission' ? '∞' : '');
+    const stacksLabel = (rec.stacks ?? 1) > 1 ? `×${rec.stacks}` : '';
+    const tooltipBits = [def.label, def.description];
+    if (typeof rec.duration === 'number') tooltipBits.push(`${rec.duration} round${rec.duration === 1 ? '' : 's'} remaining`);
+    else if (rec.duration === 'mission') tooltipBits.push('Lasts the mission');
+    else if (rec.duration === 'permanent') tooltipBits.push('Permanent');
+    const tooltip = tooltipBits.join(' — ').replace(/"/g, '&quot;');
+    return `<span class="usb-effect-pip" data-kind="${kind}" title="${tooltip}">`
+         + `${def.icon ?? '●'}${stacksLabel}`
+         + (durLabel ? `<span class="usb-effect-pip-dur">${durLabel}</span>` : '')
+         + `</span>`;
+  }).join('');
+  return `<span class="usb-effects">${pips}</span>`;
+}
 
 // ── Plan action description ───────────────────────────────────────────────────
 
@@ -215,6 +255,73 @@ const UNIT_GLYPH = {
 };
 
 /**
+ * Read-only unit detail shown inside the selected unit's plan block — mirrors
+ * the Unit Stats Bar (ui.js _renderUnitStatsBar): HP, equipped weapon, ATK/DEF/
+ * RNG, ability + effects, plus the unit's personal pack. Pure (no DOM/`this`).
+ *
+ * @param {object} entity  Live Entity (getAttack/getDefense/getRange available).
+ * @param {object} [items] key→count pack map (projected); falls back to entity.items.
+ * @returns {string} HTML for the `.plan-unit-detail` block.
+ */
+export function buildUnitDetailHtml(entity, items) {
+  if (!entity) return '';
+  const pack = items ?? entity.items ?? {};
+
+  const hpPct   = Math.max(0, Math.min(100, (entity.hp / entity.maxHp) * 100));
+  const hpColor = hpPct > 60 ? '#4caf7d' : hpPct > 30 ? '#f5c842' : '#c0392b';
+  const atk = typeof entity.getAttack === 'function' ? entity.getAttack() : (entity.attack ?? 0);
+  const def = typeof entity.getDefense === 'function' ? entity.getDefense() : (entity.defense ?? 0);
+  const rng = typeof entity.getRange === 'function' ? entity.getRange() : (entity.range ?? 1);
+
+  const weaponLabel = entity.weapon
+    ? (WEAPON_LABEL[entity.weapon] || entity.weapon)
+    : '👊 Unarmed';
+  const abilityHtml = entity.abilityLabel
+    ? `<span class="usb-ability">✦ ${entity.abilityLabel}</span>`
+    : '';
+  const effectsHtml = buildEffectsHtml(entity);
+
+  // Pack rows: weapons via WEAPON_LABEL, everything else via RESOURCE_LABEL.
+  // The equipped weapon lives in the vitals line, not the pack (entity.items
+  // already excludes it).
+  const packRows = Object.entries(pack)
+    .filter(([, n]) => (n || 0) > 0)
+    .map(([k, n]) => {
+      const label = ITEMS[k]?.kind === 'weapon'
+        ? (WEAPON_LABEL[k] || k)
+        : (RESOURCE_LABEL[k] || k);
+      return `<div class="inv-resource-row">`
+           + `<span class="inv-resource-label">${label}</span>`
+           + `<span class="inv-resource-val">×${n}</span></div>`;
+    }).join('');
+
+  // Each group on its own line — a long weapon label wrapping next to the
+  // stats looks bad in the narrow side panel.
+  const hpHtml = `<span class="usb-hp-wrap"><span class="usb-stat">HP</span>`
+    + `<span class="usb-hp-track"><span class="usb-hp-fill" style="width:${hpPct}%;background:linear-gradient(to bottom,rgba(255,255,255,0.28) 0%,rgba(255,255,255,0) 55%),${hpColor}"></span></span>`
+    + `<span class="usb-stat-val">${entity.hp}/${entity.maxHp}</span></span>`;
+  const statsHtml = `<span class="usb-stat">ATK <span class="usb-stat-val">${atk}</span></span>`
+    + `<span class="usb-stat">DEF <span class="usb-stat-val">${def}</span></span>`
+    + `<span class="usb-stat">RNG <span class="usb-stat-val">${rng}</span></span>`;
+  const extraLine = (abilityHtml || effectsHtml)
+    ? `<div class="plan-unit-vline">${abilityHtml}${effectsHtml}</div>`
+    : '';
+
+  return `<div class="plan-unit-detail">`
+    + `<div class="plan-unit-vitals">`
+    +   `<div class="plan-unit-vline">${hpHtml}</div>`
+    +   `<div class="plan-unit-vline"><span class="usb-weapon">${weaponLabel}</span></div>`
+    +   `<div class="plan-unit-vline">${statsHtml}</div>`
+    +   extraLine
+    + `</div>`
+    + `<div class="plan-unit-pack">`
+    +   `<div class="plan-unit-pack-title">Pack (spare)</div>`
+    +   (packRows || `<div class="inv-empty">No spare items</div>`)
+    + `</div>`
+    + `</div>`;
+}
+
+/**
  * Build plan panel HTML with visually distinct blocks per unit.
  *
  * Renders a row for every controllable unit (even units with zero queued
@@ -228,9 +335,10 @@ const UNIT_GLYPH = {
  * @param {Array}   entities                   Live entity array (for name lookups).
  * @param {object}  [initialInv]               Starting inventory snapshot.
  * @param {Array}   [controllableUnits]        Every unit the local player controls, in display order.
- * @param {string}  [selectedEntityId]         Deprecated/unused — the selection highlight is now
- *                                             applied post-render by UIController._syncPlanSelectionClass.
- *                                             Kept as a positional slot so `portraitMap` stays aligned.
+ * @param {string}  [selectedEntityId]         The selected unit — its block renders an expanded
+ *                                             read-only detail (HP/weapon/stats + pack) and a ▾ chevron.
+ *                                             (The .plan-unit-selected highlight is still applied
+ *                                             post-render by UIController._syncPlanSelectionClass.)
  * @param {Map<string,string>} [portraitMap]   entityId → portrait data URL (optional; falls back to glyph).
  * @returns {string}  HTML string safe to assign to stepsEl.innerHTML.
  */
@@ -322,8 +430,11 @@ export function buildUnitPlanBlocksHtml(
     // The `.plan-unit-selected` highlight is applied post-render by
     // UIController._syncPlanSelectionClass (single subscriber to the renderer's
     // onSelectionChange hook), not baked into this HTML.
+    const isSelected = !!selectedEntityId && entityId === selectedEntityId;
+    const chevron = isSelected ? '▾' : '▸';
     html += `<div class="plan-unit-block" data-entity-id="${entityId}">`;
     html += `<div class="plan-unit-header">`;
+    html += `<span class="plan-unit-chevron">${chevron}</span>`;
     html += avatarHtml;
     html += `<span class="plan-unit-name">${name}</span>`;
     html += `<span class="plan-unit-count">${count} action${count !== 1 ? 's' : ''}</span>`;
@@ -353,7 +464,16 @@ export function buildUnitPlanBlocksHtml(
       });
     }
 
-    html += `</div></div>`;
+    html += `</div>`; // close .plan-unit-steps
+
+    // Read-only detail for the selected unit (HP/weapon/stats + pack). Uses the
+    // projected per-unit items so queued equips/uses are reflected.
+    if (isSelected && entity) {
+      const items = projEntityItems[entityId] ?? entity.items ?? {};
+      html += buildUnitDetailHtml(entity, items);
+    }
+
+    html += `</div>`; // close .plan-unit-block
   }
 
   return html;

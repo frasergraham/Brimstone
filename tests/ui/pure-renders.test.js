@@ -9,6 +9,7 @@ import {
   buildPlayerStatusHtml,
   buildObjectivesHtml,
   buildNodeBadgeHtml,
+  buildUnitDetailHtml,
 } from '../../src/ui-render.js';
 import { PlanActionType } from '../../src/planner.js';
 import { EntityType } from '../../src/entities.js';
@@ -385,5 +386,63 @@ describe('buildNodeBadgeHtml', () => {
     ];
     const html = buildNodeBadgeHtml(objectives, entities, 4, 3);
     assert.ok(html.includes('Contested'), 'shows Contested');
+  });
+});
+
+// ── buildUnitDetailHtml (plan-panel per-unit detail) ──────────────────────────
+
+describe('buildUnitDetailHtml', () => {
+  test('renders HP, equipped weapon, and ATK/DEF/RNG from fallback fields', () => {
+    const e = { hp: 14, maxHp: 14, attack: 4, defense: 2, range: 1, weapon: 'sword', items: {} };
+    const html = buildUnitDetailHtml(e, e.items);
+    assert.ok(html.includes('14/14'), 'shows HP');
+    assert.ok(html.includes('Sword'), 'shows equipped weapon label');
+    assert.ok(html.includes('<span class="usb-stat-val">4</span>'), 'ATK 4');
+    assert.ok(html.includes('<span class="usb-stat-val">2</span>'), 'DEF 2');
+    assert.ok(html.includes('<span class="usb-stat-val">1</span>'), 'RNG 1');
+  });
+
+  test('prefers getAttack/getDefense/getRange methods when present', () => {
+    const e = {
+      hp: 10, maxHp: 10, weapon: null, items: {},
+      getAttack: () => 9, getDefense: () => 5, getRange: () => 3,
+    };
+    const html = buildUnitDetailHtml(e, e.items);
+    assert.ok(html.includes('<span class="usb-stat-val">9</span>'), 'effective ATK 9');
+    assert.ok(html.includes('<span class="usb-stat-val">5</span>'), 'effective DEF 5');
+    assert.ok(html.includes('<span class="usb-stat-val">3</span>'), 'effective RNG 3');
+  });
+
+  test('lists carried pack items with counts (weapons and consumables)', () => {
+    const e = { hp: 10, maxHp: 10, attack: 3, defense: 1, range: 3, weapon: 'bow',
+                items: { dagger: 1, herbs: 2 } };
+    const html = buildUnitDetailHtml(e, e.items);
+    assert.ok(html.includes('Dagger'), 'weapon item labelled via WEAPON_LABEL');
+    assert.ok(html.includes('Herbs'),  'consumable labelled via RESOURCE_LABEL');
+    assert.ok(html.includes('×1'), 'dagger count');
+    assert.ok(html.includes('×2'), 'herbs count');
+    assert.ok(!html.includes('No spare items'), 'not empty');
+  });
+
+  test('falls back to entity.items when items arg omitted', () => {
+    const e = { hp: 10, maxHp: 10, attack: 3, defense: 1, range: 1, weapon: null,
+                items: { sword: 1 } };
+    const html = buildUnitDetailHtml(e);
+    assert.ok(html.includes('Sword'), 'reads entity.items');
+    assert.ok(html.includes('×1'));
+  });
+
+  test('shows "No spare items" when the unit carries no spare (unequipped) items', () => {
+    // The equipped sword lives in the vitals weapon line, not the pack — the
+    // pack lists only spare/unequipped items.
+    const e = { hp: 10, maxHp: 10, attack: 3, defense: 1, range: 1, weapon: 'sword', items: {} };
+    const html = buildUnitDetailHtml(e, {});
+    assert.ok(html.includes('No spare items'), 'pack empty state');
+    assert.ok(html.includes('Sword'), 'equipped weapon still shown in vitals');
+  });
+
+  test('shows Unarmed when no weapon is equipped', () => {
+    const e = { hp: 10, maxHp: 10, attack: 1, defense: 1, range: 1, weapon: null, items: {} };
+    assert.ok(buildUnitDetailHtml(e, {}).includes('👊 Unarmed'));
   });
 });

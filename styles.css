@@ -4633,6 +4633,50 @@ body.renderer-3d.debug-counters #cam-counter { display: block; }
   font-style: italic;
   font-size: 0.68rem;
 }
+
+/* Collapse/expand affordance on the unit header (▸ collapsed, ▾ when selected). */
+.plan-unit-chevron {
+  flex-shrink: 0;
+  width: 0.8rem;
+  text-align: center;
+  font-size: 0.6rem;
+  color: var(--muted);
+}
+
+/* Read-only detail for the selected unit — replicates the Unit Stats Bar data
+   (HP/weapon/ATK/DEF/RNG/abilities/effects) plus the unit's pack. */
+.plan-unit-detail {
+  padding: 0.4rem 0.6rem 0.5rem;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  background: rgba(255,255,255,0.015);
+  cursor: default;
+}
+.plan-unit-vitals {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
+  font-size: 0.68rem;
+  margin-bottom: 0.4rem;
+}
+/* One vitals group per line (HP / weapon / ATK·DEF·RNG / ability+effects) so a
+   long weapon label never wraps next to the stats. */
+.plan-unit-vline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.55rem;
+}
+.plan-unit-pack-title {
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin-bottom: 0.15rem;
+}
+.plan-unit-pack .inv-resource-row {
+  font-size: 0.7rem;
+}
 /* Portrait <img> variant of plan-step-avatar (glyph span uses the same class) */
 img.plan-step-avatar {
   border: 1px solid rgba(255,255,255,0.2);
