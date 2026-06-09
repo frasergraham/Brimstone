@@ -84,7 +84,7 @@ export { BLOCK_WORD_VARIANTS };   // re-exported for existing importers (main.js
 import { getFactionTheme } from './theme.js';
 import { hexKey, hexDistance, getNeighbors, hexRange } from './hex.js';
 import { nodeController, Phase } from './game.js';
-import { findFaction } from './factions.js';
+import { findFaction, sightRangeForEntity } from './factions.js';
 import { computeLineOfSight, hasLineOfSight } from './actions.js';
 import { PlanActionType } from './planner.js';
 import { Side } from './sides.js';
@@ -12044,6 +12044,15 @@ export class Renderer3D {
     if (!this._scene || !this._babylon) return;
     const state = this.state;
 
+    // Reach a guard actually covers: a ranged guard strike is a DIRECT attack,
+    // so it's capped by the unit's own (phase-dependent) sight distance as well
+    // as its attack range — mirrors the cap in `_checkGuardStrikes` so the
+    // drawn zone never extends into hexes the unit couldn't strike (no fog).
+    const reachFor = (e) => {
+      const gRange = typeof e.getRange === 'function' ? e.getRange() : (e.range ?? 1);
+      return gRange > 1 ? Math.min(gRange, sightRangeForEntity(e, state.phase)) : gRange;
+    };
+
     // ── Collect { col, row, gRange } guard sources for the current mode. ──
     const sources = [];
     if (state?.entities) {
@@ -12052,8 +12061,7 @@ export class Renderer3D {
           if (!e?.alive || !(e.guarding > 0)) continue;
           // Don't reveal a fogged (hidden) unit's coverage during playback.
           if (this._fogActiveSet?.has(hexKey(e.col, e.row))) continue;
-          const gRange = typeof e.getRange === 'function' ? e.getRange() : (e.range ?? 1);
-          sources.push({ col: e.col, row: e.row, gRange });
+          sources.push({ col: e.col, row: e.row, gRange: reachFor(e) });
         }
       } else if (this.planGhostSteps?.length) {
         for (const step of this.planGhostSteps) {
@@ -12061,8 +12069,7 @@ export class Renderer3D {
           const e = state.entities.find(x => x.id === step.action.entityId);
           if (!e?.alive) continue;
           const pos = step.positions?.get?.(e.id) ?? { col: e.col, row: e.row };
-          const gRange = typeof e.getRange === 'function' ? e.getRange() : (e.range ?? 1);
-          sources.push({ col: pos.col, row: pos.row, gRange });
+          sources.push({ col: pos.col, row: pos.row, gRange: reachFor(e) });
         }
       }
     }

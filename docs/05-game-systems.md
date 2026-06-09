@@ -173,17 +173,25 @@ Guard at hex A (charges: 2)
 
 **Reach by guard type:**
 - **Melee guard** (`getRange() <= 1`): reacts to enemies in the 6 adjacent hexes.
-- **Ranged guard / opportunity shot** (`getRange() > 1`): reacts out to its full
-  attack range, but only with a clear line of sight to the trigger hex. The shot
-  obeys the ranged rule set — no crush, no counter, forest cover for the target,
-  distance falloff, and point-blank disadvantage. So a guarding witch (range 2)
-  fires at foes up to 2 hexes away; a guarding rogue (range 3) reaches 3 hexes —
-  in both cases only if she can see the target.
+- **Ranged guard / opportunity shot** (`getRange() > 1`): a guard strike is a
+  DIRECT attack, so its reach is `min(attackRange, sightRange)` — capped by the
+  unit's own phase-dependent sight distance — **and** gated by a clear line of
+  sight to the trigger hex. A unit can only strike what it can see; it never
+  fires into fog. (The blind `BATTLE_HEX` action is the separate exception that
+  ignores LOS but still respects range.) The shot obeys the ranged rule set — no
+  crush, no counter, forest cover for the target, distance falloff, and
+  point-blank disadvantage. So a guarding witch (range 2, sight 5) fires up to 2
+  hexes away; a guarding rogue (range 3) reaches 3 hexes by day but only what her
+  night sight (3) allows after dark.
 
-The renderer paints the guard-area highlight using this same reach + LOS rule so the
-zone shown matches where shots actually fire. It is drawn both while planning — previewed
-at the unit's projected hex the moment a GUARD action is queued (from `planGhostSteps`) —
-and during resolution playback for units actually in guard stance.
+The 3D renderer (`renderer-3d.js`, the in-game renderer — the 2D `renderer.js`
+backs only the editor/admin tools) paints the guard zone as an **orange exterior
+perimeter outline** around the covered hexes, reusing the power-node outer-edge
+walk (internal shared edges skipped). It uses the same `min(range, sight)` + LOS
+reach so the outline matches where shots actually fire, and is drawn both while
+planning — previewed at the unit's projected hex the moment a GUARD action is
+queued (from `planGhostSteps`) — and during resolution playback for units in
+guard stance (fogged units skipped so a hidden enemy guard isn't revealed).
 
 ---
 

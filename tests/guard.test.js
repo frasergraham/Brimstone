@@ -539,6 +539,49 @@ describe('ranged opportunity shots via resolver', () => {
     assert.equal(collectGuardStrikes(steps).length, 0, 'dist 4 is outside a range-3 guard\'s reach');
   });
 
+  test('ranged guard does NOT fire beyond sight distance (no shooting into fog)', () => {
+    // A guard strike is a direct attack: reach is capped by the unit's sight
+    // distance as well as its attack range. At NIGHT the hero sees 3 hexes, so
+    // a range-5 guard still can't strike a target 4 away — it can't see it.
+    const state = freshState();
+    state.phase = Phase.NIGHT;        // hero sight range = 3
+    const guard = state.hero;
+    const mover = state.witch;
+    state.entities = state.entities.filter(e => e === guard || e === mover);
+    guard.range = 5;                  // attack range 5, but sight caps reach to 3
+    guard.guarding = 1;
+    guard.col = 5; guard.row = 5;
+    mover.col = 10; mover.row = 5;     // dist 5
+    clearBand(state);
+    state.setForcedDice(...Array(20).fill(3));
+
+    const steps = resolvePlans(state, [],
+      [{ type: PlanActionType.MOVE, entityId: mover.id, toCol: 9, toRow: 5 }]); // → dist 4, beyond sight 3
+    assert.equal(collectGuardStrikes(steps).length, 0,
+      'dist 4 is within attack range 5 but beyond sight 3 — must not fire');
+  });
+
+  test('ranged guard still fires inside sight distance at night', () => {
+    // Companion to the cap test: a target that moves within the sight-capped
+    // reach (3) is struck, so the cap doesn't over-suppress legitimate shots.
+    const state = freshState();
+    state.phase = Phase.NIGHT;        // hero sight range = 3
+    const guard = state.hero;
+    const mover = state.witch;
+    state.entities = state.entities.filter(e => e === guard || e === mover);
+    guard.range = 5;
+    guard.guarding = 1;
+    guard.col = 5; guard.row = 5;
+    mover.col = 9; mover.row = 5;      // dist 4
+    clearBand(state);
+    state.setForcedDice(...Array(20).fill(3));
+
+    const steps = resolvePlans(state, [],
+      [{ type: PlanActionType.MOVE, entityId: mover.id, toCol: 8, toRow: 5 }]); // → dist 3, within sight
+    assert.ok(collectGuardStrikes(steps).length >= 1,
+      'dist 3 is within both attack range and sight — should fire');
+  });
+
   test('playback entity snapshot carries range so the witch renders as a ranged guard', () => {
     // Regression: snapshotEntities dropped `range`, so the guard-zone renderer
     // mis-classified the witch as melee (adjacent-only) during playback.
