@@ -288,6 +288,56 @@ describe('ranged attack — close-range disadvantage', () => {
   });
 });
 
+describe('ranged attack — distance falloff', () => {
+  test('penalty is floor((dist-1)/2): 0 at 1–2, -1 at 3–4, -2 at 5–6', () => {
+    for (const [d, pen] of [[1, 0], [2, 0], [3, 1], [4, 1], [5, 2], [6, 2]]) {
+      const state = freshState();
+      const witch = state.witch;
+      witch.range = 6;            // bump reach so dist 3–6 are valid ranged shots
+      const hero  = state.hero;
+      placeAt(witch, 5, 5);
+      placeAt(hero,  5 + d, 5);
+      assert.equal(hexDistance(witch.col, witch.row, hero.col, hero.row), d,
+        `fixture is exactly ${d} hexes apart`);
+      // Enough forced dice to cover the close-range disadvantage pool at d=1.
+      state.setForcedDice(...Array(8).fill(3));
+      const r = executeBattle(state, witch, hero);
+      assert.equal(r.ranged, true);
+      assert.equal(r.breakdown.rangeDistancePenalty, pen, `dist ${d} → penalty ${pen}`);
+    }
+  });
+
+  test('distance penalty reduces the attack roll by the penalty amount', () => {
+    function rollAt(d) {
+      const state = freshState();
+      const witch = state.witch;
+      witch.range = 6;
+      const hero  = state.hero;
+      placeAt(witch, 5, 5);
+      placeAt(hero,  5 + d, 5);
+      state.setForcedDice(3, 3);   // same base dice on both sides for both runs
+      return executeBattle(state, witch, hero);
+    }
+    const near = rollAt(2);   // penalty 0
+    const far  = rollAt(4);   // penalty 1
+    assert.equal(near.breakdown.rangeDistancePenalty, 0);
+    assert.equal(far.breakdown.rangeDistancePenalty, 1);
+    assert.equal(near.breakdown.atkBaseDie, far.breakdown.atkBaseDie, 'same forced base die');
+    assert.equal(far.attackRoll, near.attackRoll - 1, 'attack roll reduced by the penalty');
+  });
+
+  test('melee attacks never incur a distance penalty', () => {
+    const state = freshState();
+    const hero  = state.hero;
+    const minion = createMinion(hero.col + 1, hero.row);
+    state.entities.push(minion);
+    state.setForcedDice(3, 3);
+    const r = executeBattle(state, minion, hero);
+    assert.equal(r.ranged, false);
+    assert.equal(r.breakdown.rangeDistancePenalty, 0);
+  });
+});
+
 describe('getValidActions — ranged targeting', () => {
   test('witch lists battle targets within range 2', () => {
     const state = freshState();
