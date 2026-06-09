@@ -12150,9 +12150,12 @@ export class Renderer3D {
     if (this._guardZoneMat) return this._guardZoneMat;
     const BABYLON = this._babylon;
     const mat = new BABYLON.StandardMaterial('guardZoneMat', this._scene);
-    mat.diffuseColor  = new BABYLON.Color3(0.92, 0.55, 0.12);
-    mat.emissiveColor = new BABYLON.Color3(0.92, 0.55, 0.12);
+    // Blood orange, drawn at half opacity — present but not in-your-face.
+    const R = 0.78, G = 0.18, B = 0.05;
+    mat.diffuseColor  = new BABYLON.Color3(R, G, B);
+    mat.emissiveColor = new BABYLON.Color3(R * 0.6, G * 0.6, B * 0.6);
     mat.specularColor = new BABYLON.Color3(0, 0, 0);
+    mat.alpha = 0.5;
     mat.backFaceCulling = false;
     this._guardZoneMat = mat;
     return mat;
