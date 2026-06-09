@@ -5,7 +5,7 @@ import { VERSION }           from '../src/version.js';
 import { Entity, BASE_AGILITY, BASE_RANGE } from '../src/entities.js';
 import { GameState }         from '../src/game.js';
 import { setMapDimensions, hexKey }  from '../src/hex.js';
-import { Tile, TileType, legacyTileType, decomposeTileType } from '../src/tiles.js';
+import { Tile, TileType, legacyTileType, decomposeTileType, deriveBlockedSlots } from '../src/tiles.js';
 import { pickFootprintNeighbor } from '../src/building-footprint.js';
 
 export function serializeState(state) {
@@ -35,6 +35,9 @@ export function serializeState(state) {
       explored:       tile.explored       ?? false,
       hiddenSurvivor: tile.hiddenSurvivor ?? false,
       roadDirs:       tile.roadDirs ? [...tile.roadDirs] : [],
+      // Sub-hex blocked slots (tree/bridge). Authoritative — drives the renderer
+      // and (for bridges) the capacity gate. See deriveBlockedSlots in tiles.js.
+      blockedSlots:   Array.isArray(tile.blockedSlots) ? [...tile.blockedSlots] : [],
       // Building footprint (P1). Entrances carry footprintHexes; footprint hexes
       // carry the buildingFootprintOf back-pointer. Both default to []/null.
       footprintHexes:      Array.isArray(tile.footprintHexes) ? [...tile.footprintHexes] : [],
@@ -50,6 +53,7 @@ export function serializeState(state) {
     color:         e.color         ?? null,   // per-player color override
     col:           e.col,
     row:           e.row,
+    slot:          e.slot ?? 0,   // sub-hex placement slot (0=centre, 1..6)
     hp:            e.hp,
     maxHp:         e.maxHp,
     attack:        e.attack,
@@ -223,6 +227,9 @@ export function deserializeState(snap) {
     // them → defaults, then the migration pass below populates them.
     tile.footprintHexes      = Array.isArray(t.footprintHexes) ? [...t.footprintHexes] : [];
     tile.buildingFootprintOf = t.buildingFootprintOf ?? null;
+    // Sub-hex blocked slots. Present on post-feature saves; legacy saves get []
+    // here and are populated by the migration pass below.
+    tile.blockedSlots        = Array.isArray(t.blockedSlots) ? [...t.blockedSlots] : null;
     state.tiles.set(t.key, tile);
   }
 
@@ -231,6 +238,15 @@ export function deserializeState(snap) {
   // `building` but an empty `footprintHexes`. Assign each unmigrated entrance
   // one eligible adjacent footprint hex, deterministically.
   migrateBuildingFootprints(state.tiles, snap);
+
+  // ── Sub-hex blocked-slot migration ───────────────────────────────────────
+  // Pre-feature saves carry no `blockedSlots`. Derive them now (after footprint
+  // migration, so footprint hexes are classified) using the same pure helper
+  // map-gen uses, so a resumed legacy game gates capacity identically to a
+  // freshly generated map (bridges in particular regain their reduced cap).
+  for (const tile of state.tiles.values()) {
+    if (tile.blockedSlots == null) tile.blockedSlots = deriveBlockedSlots(tile);
+  }
 
   // ── Entities — restore as real Entity instances so game-logic methods work ─
   state.entities = snap.entities.map(data => {
@@ -259,6 +275,8 @@ export function deserializeState(snap) {
     // getFaction(owner) — i.e. the side default. Saves that DO carry
     // factionId restore the concrete faction.
     if (e.factionId === undefined) e.factionId = null;
+    // Back-compat: pre-slot saves default to the centre slot.
+    if (e.slot === undefined) e.slot = 0;
     return e;
   });
 

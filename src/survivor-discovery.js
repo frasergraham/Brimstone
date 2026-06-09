@@ -10,6 +10,7 @@
 // hidden or the campaign discovery cap has been reached.
 
 import { hexKey } from './hex.js';
+import { pickUnitSlot } from './hex-slots.js';
 import { getFaction } from './factions.js';
 
 export function triggerSurvivorEncounter(state, actor, col, row) {
@@ -33,6 +34,12 @@ export function triggerSurvivorEncounter(state, actor, col, row) {
   st.hiddenSurvivorId = null;
 
   const entity = faction.createDiscoveryEntity(col, row, actor.ownerId, state, forcedSurvivorId);
+  // Pick a sub-hex slot around whoever is already on this tile (the discovering
+  // actor, at least) and the tile's blocked tree/bridge slots.
+  const occupied = state.entities
+    .filter(e => e.alive && e.col === col && e.row === row)
+    .map(e => e.slot ?? 0);
+  entity.slot = pickUnitSlot(st.blockedSlots ?? [], occupied);
   state.entities.push(entity);
   if (faction.canDiscoverNPCs()) {
     state.discoveredSurvivorCount = (state.discoveredSurvivorCount || 0) + 1;

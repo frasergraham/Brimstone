@@ -234,11 +234,12 @@ state.tiles (Map)           →       tiles: [{ key, col, row, type,
                                       building, road, explored,
                                       resource, fortifyLevel,
                                       roadDirs: [...],
+                                      blockedSlots: [...],
                                       footprintHexes: [...],
                                       buildingFootprintOf }, ...]
 
 state.entities (Entity[])   →       entities: [{ id, type, owner,
-                                      ownerId, col, row, hp, maxHp,
+                                      ownerId, col, row, slot, hp, maxHp,
                                       attack, defense, weapon,
                                       items, name, title, ... }, ...]
 
@@ -255,6 +256,7 @@ Reconstructs a full `GameState` with proper prototypes. The current `SAVE_VERSIO
 
 - **pre-`SAVE_VERSION=2`** — rewrites entity types of `'hero'` to `'paladin'` (the entity-type rename in the faction-expansion work; see `docs/design/faction-expansion.md`).
 - **pre-`SAVE_VERSION=6` building footprints** — any tile that carries a `building` but has an empty/missing `footprintHexes` is auto-migrated to the two-hex compound (see [05-game-systems.md → Building Footprints](05-game-systems.md#building-footprints)). Buildings are processed in **sorted-key order** (row, then col) and each picks an eligible adjacent footprint via `pickFootprintNeighbor()` with **no `rand`** — i.e. the first eligible neighbour in odd-r direction order `0..5`. This is fully deterministic, so every client/server reconstructs the same footprints from the same legacy save. **Orphans** (a building with no eligible adjacent hex — wedged against river/edge/other buildings) are warned once and left as a valid 1-hex building (`footprintHexes: []`).
+- **pre-sub-hex-slots** — saves with no `blockedSlots` on tiles have it derived after the footprint migration via the same `deriveBlockedSlots()` helper map-gen uses, so a resumed legacy game gates capacity identically to a fresh map (bridges in particular regain their reduced cap). Entities with no `slot` default to the centre (`0`). Both are deterministic — no `rand`.
 
 ```
 1. Create throwaway GameState (for prototype chain)

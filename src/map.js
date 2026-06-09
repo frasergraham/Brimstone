@@ -1,6 +1,6 @@
 // Procedural map generator for the Caleb's Hollow hex map
 import { MAP_COLS, MAP_ROWS, setMapDimensions, getNeighbors, hexKey, hexDistance } from './hex.js';
-import { Tile, TileType, BuildingType, PathType, StructureType, legacyTileType, isRiver, isBridge, hasBuilding, isBuildingFootprint, pathOf } from './tiles.js';
+import { Tile, TileType, BuildingType, PathType, StructureType, legacyTileType, isRiver, isBridge, hasBuilding, isBuildingFootprint, pathOf, deriveBlockedSlots } from './tiles.js';
 import { buildMST, placeRoadPath } from './road-network.js';
 import { pickFootprintNeighbor } from './building-footprint.js';
 
@@ -1088,6 +1088,14 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
       for (const nk of stubStarts) tiles.get(nk)?.roadDirs.delete(hexKey(c.col, c.row));
       changed = true;
     }
+  }
+
+  // 5b. Derive sub-hex blocked slots now that forests, bridges, and the road
+  //     network are final. Forest trees avoid the road faces; bridges block all
+  //     non-road slots. Runs before node/survivor placement so any capacity
+  //     check downstream sees the reduced bridge capacity.
+  for (const t of tiles.values()) {
+    t.blockedSlots = deriveBlockedSlots(t);
   }
 
   // 6. Place witch objectives — well-spread, guaranteed across both sides of the river,

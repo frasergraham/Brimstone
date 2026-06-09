@@ -906,7 +906,7 @@ export const STANDEE_BASE_Y_OFFSET    = 0.084;
 // "NE" outer slot) so building/tree/standee co-tenancy on the same hex shares
 // the unified slot layout. Frozen so callers can't mutate it accidentally.
 // Distance from centre comfortably clears the STANDEE_BASE_DIAMETER=0.75 disc.
-export const BUILDING_OFFSET = Object.freeze({ x: 0.42, z: -0.42 });
+export const BUILDING_OFFSET = Object.freeze({ x: 0.3, z: -0.5196152422706631 });
 
 // ─── Building labels (hover text above each building) ───────────────────────
 // Mirrors the 2D renderer's fade-on-zoom logic from src/renderer.js (~line
@@ -9678,7 +9678,7 @@ export class Renderer3D {
       if (!this._entityStandees.has(e.id)) continue;
       const k = hexKey(e.col, e.row);
       if (!byHex.has(k)) { byHex.set(k, []); hexCenter.set(k, { col: e.col, row: e.row }); }
-      byHex.get(k).push({ id: `standee_${e.id}`, kind: 'standee', entity: e });
+      byHex.get(k).push({ id: `standee_${e.id}`, kind: 'standee', entity: e, slot: e.slot ?? 0 });
     }
 
     const seenHexes = new Set();
@@ -9692,9 +9692,14 @@ export class Renderer3D {
         continue;
       }
       const { col, row } = hexCenter.get(k);
+      // Reserve the tile's authoritative blocked slots (trees + bridge non-road
+      // slots) so standees never stand on a tree or off the bridge deck. Falls
+      // back to the geometric road cache for tiles not in game state.
+      const reservedSlots = this.state.tiles.get(k)?.blockedSlots
+        ?? this._roadBlockedSlotsByKey.get(k);
       const { positionByOccupantId, overflow } = tileSlotWorldPositions(
         col, row, [...staticOcc, ...standeeOccs], HEX_RADIUS_WORLD,
-        { reservedSlots: this._roadBlockedSlotsByKey.get(k) },
+        { reservedSlots },
       );
       for (const occ of standeeOccs) {
         const pos = positionByOccupantId.get(occ.id);
@@ -15007,19 +15012,23 @@ export function tombstoneTokenColor(hex) {
 //   slot 0 — centre. Reserved for standees (the common case: one unit per hex).
 //   slot 1 — building anchor. Aligns with BUILDING_OFFSET for visual stability;
 //            a building always occupies this slot when present.
-//   slots 2–6 — outer ring at ~0.6 world units, used by trees and overflow
+//   slots 2–6 — outer ring at 0.6 world units, used by trees and overflow
 //            standees in deterministic id order.
 //
-// Outer-slot distance sits within [FOREST_INNER_RADIUS, FOREST_OUTER_RADIUS]
-// so existing forest invariants (trees stay out of the centre) still hold.
+// Outer slots sit on the TRUE hex FACE NORMALS (not the 45° corners) at radius
+// 0.6, so slot id i aligns to a face direction via hex-slots.js (slotToDir):
+// 1=NE, 2=NW, 3=W, 4=SW, 5=SE, 6=E. This lets the map keep trees off road
+// faces and (later) anchor unit movement to a face. Radius 0.6 stays within
+// [FOREST_INNER_RADIUS, FOREST_OUTER_RADIUS] so trees stay out of the centre.
+// 0.5196152422706631 = (√3/2) · 0.6.
 export const TILE_SLOTS = Object.freeze([
-  Object.freeze({ x:  0.00, z:  0.00 }), // 0 — centre
-  Object.freeze({ x:  0.42, z: -0.42 }), // 1 — NE (building anchor, BUILDING_OFFSET)
-  Object.freeze({ x: -0.42, z: -0.42 }), // 2 — NW
-  Object.freeze({ x: -0.60, z:  0.00 }), // 3 — W
-  Object.freeze({ x: -0.42, z:  0.42 }), // 4 — SW
-  Object.freeze({ x:  0.42, z:  0.42 }), // 5 — SE
-  Object.freeze({ x:  0.60, z:  0.00 }), // 6 — E
+  Object.freeze({ x:  0.00, z:  0.00 }),                 // 0 — centre
+  Object.freeze({ x:  0.30, z: -0.5196152422706631 }),   // 1 — NE (building anchor, BUILDING_OFFSET)
+  Object.freeze({ x: -0.30, z: -0.5196152422706631 }),   // 2 — NW
+  Object.freeze({ x: -0.60, z:  0.00 }),                 // 3 — W
+  Object.freeze({ x: -0.30, z:  0.5196152422706631 }),   // 4 — SW
+  Object.freeze({ x:  0.30, z:  0.5196152422706631 }),   // 5 — SE
+  Object.freeze({ x:  0.60, z:  0.00 }),                 // 6 — E
 ]);
 
 /** Index of the centre slot (always preferred for the first standee). */
@@ -15142,16 +15151,32 @@ export function assignTileSlotIndices(occupants, opts = {}) {
     out.set(trees[i].id, outerForTrees[i]);
     used.add(outerForTrees[i]);
   }
-  // Standees → centre first, then any remaining free slot, then overflow at centre.
+  // Standees first honor their authoritative `slot` (e.slot from game state)
+  // when that slot is free and not reserved — this is the consistent intra-hex
+  // position the slot system exists to preserve. Standees without a usable
+  // preference fall back to: centre first, then any remaining free slot, then
+  // overflow at centre. A missing/blocked `slot` simply routes to the fallback,
+  // so callers that don't pass `slot` (and the legacy all-centre case) behave
+  // exactly as before.
+  const pending = [];
+  for (const s of standees) {
+    const pref = s.slot;
+    if (typeof pref === 'number' && pref >= 0 && pref < TILE_SLOTS.length && !used.has(pref)) {
+      out.set(s.id, pref);
+      used.add(pref);
+    } else {
+      pending.push(s);
+    }
+  }
   const standeeSlots = [];
   if (!used.has(CENTRE_SLOT_INDEX)) standeeSlots.push(CENTRE_SLOT_INDEX);
   for (let i = 1; i < TILE_SLOTS.length; i++) {
     if (!used.has(i)) standeeSlots.push(i);
   }
   let overflow = 0;
-  for (let i = 0; i < standees.length; i++) {
-    if (i < standeeSlots.length) out.set(standees[i].id, standeeSlots[i]);
-    else { out.set(standees[i].id, CENTRE_SLOT_INDEX); overflow++; }
+  for (let i = 0; i < pending.length; i++) {
+    if (i < standeeSlots.length) out.set(pending[i].id, standeeSlots[i]);
+    else { out.set(pending[i].id, CENTRE_SLOT_INDEX); overflow++; }
   }
   return { slotByOccupantId: out, overflow };
 }
