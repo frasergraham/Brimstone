@@ -173,12 +173,12 @@ Guard at hex A (charges: 2)
 
 **Reach by guard type:**
 - **Melee guard** (`getRange() <= 1`): reacts to enemies in the 6 adjacent hexes.
-- **Ranged guard / opportunity shot** (`getRange() > 1`): reacts out to `getRange() - 1`
-  hexes (reduced range), but only with a clear line of sight to the trigger hex.
-  The shot obeys the ranged rule set — no crush, no counter, forest cover for the
-  target, distance falloff, and point-blank disadvantage. So a guarding witch
-  (range 2 → reach 1) fires a point-blank shot at an adjacent foe; a guarding rogue
-  (range 3 → reach 2) shoots foes up to 2 hexes away if she can see them.
+- **Ranged guard / opportunity shot** (`getRange() > 1`): reacts out to its full
+  attack range, but only with a clear line of sight to the trigger hex. The shot
+  obeys the ranged rule set — no crush, no counter, forest cover for the target,
+  distance falloff, and point-blank disadvantage. So a guarding witch (range 2)
+  fires at foes up to 2 hexes away; a guarding rogue (range 3) reaches 3 hexes —
+  in both cases only if she can see the target.
 
 The renderer paints the guard-area highlight using this same reach + LOS rule so the
 zone shown matches where shots actually fire.

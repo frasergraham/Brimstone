@@ -400,15 +400,15 @@ function _checkGuardStrikes(state, action, actor, faction, subEvents) {
 
   // Find enemy guarding entities within reach of the trigger hex (charges > 0).
   // Melee guards (range 1) react to adjacent hexes only. Ranged guards
-  // (getRange() > 1) react out to getRange()-1 hexes, but only with a clear
-  // line of sight to the trigger hex — matching the ranged opportunity-shot
-  // rule and the guard-area highlight in the renderer.
+  // (getRange() > 1) react out to their full attack range, but only with a
+  // clear line of sight to the trigger hex — matching the ranged
+  // opportunity-shot rule and the guard-area highlight in the renderer.
   const guardians = state.entities.filter(e => {
     if (!(e.alive && (e.guarding > 0) && e.owner !== faction)) return false;
     const gRange = (typeof e.getRange === 'function' ? e.getRange() : (e.range ?? 1));
     const dist = hexDistance(e.col, e.row, triggerCol, triggerRow);
     if (gRange > 1) {
-      return dist <= gRange - 1 &&
+      return dist <= gRange &&
         hasLineOfSight(state, e.col, e.row, triggerCol, triggerRow);
     }
     return dist <= 1;

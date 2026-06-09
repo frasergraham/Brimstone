@@ -483,22 +483,22 @@ describe('ranged opportunity shots via resolver', () => {
     }
   }
 
-  test('ranged guard fires when an enemy moves into reduced range with LOS', () => {
+  test('ranged guard fires when an enemy moves into range with LOS', () => {
     const state = freshState();
     const guard = state.hero;
     const mover = state.witch;
     state.entities = state.entities.filter(e => e === guard || e === mover);
-    guard.range = 3;          // reach = range - 1 = 2
+    guard.range = 3;          // reach = full attack range = 3
     guard.guarding = 1;
     guard.col = 5; guard.row = 5;
-    mover.col = 8; mover.row = 5;   // dist 3 — out of reach to start
+    mover.col = 9; mover.row = 5;   // dist 4 — out of reach to start
     clearBand(state);
     state.setForcedDice(...Array(20).fill(3));
 
     const steps = resolvePlans(state, [],
-      [{ type: PlanActionType.MOVE, entityId: mover.id, toCol: 7, toRow: 5 }]); // → dist 2
+      [{ type: PlanActionType.MOVE, entityId: mover.id, toCol: 8, toRow: 5 }]); // → dist 3
     const gs = collectGuardStrikes(steps);
-    assert.ok(gs.length >= 1, 'ranged opportunity shot should fire at reach 2 with clear LOS');
+    assert.ok(gs.length >= 1, 'ranged opportunity shot should fire at reach 3 with clear LOS');
     assert.equal(gs[0].battleSnaps.ranged, true, 'tagged as a ranged guard strike');
     assert.equal(gs[0].faction, 'hero');
   });
@@ -522,21 +522,21 @@ describe('ranged opportunity shots via resolver', () => {
     assert.equal(collectGuardStrikes(steps).length, 0, 'blocked LOS suppresses the opportunity shot');
   });
 
-  test('ranged guard does NOT fire when the enemy stays beyond reduced range', () => {
+  test('ranged guard does NOT fire when the enemy stays beyond attack range', () => {
     const state = freshState();
     const guard = state.hero;
     const mover = state.witch;
     state.entities = state.entities.filter(e => e === guard || e === mover);
-    guard.range = 3;          // reach 2
+    guard.range = 3;          // reach 3
     guard.guarding = 1;
     guard.col = 5; guard.row = 5;
-    mover.col = 9; mover.row = 5;   // dist 4
+    mover.col = 10; mover.row = 5;   // dist 5
     clearBand(state);
     state.setForcedDice(...Array(20).fill(3));
 
     const steps = resolvePlans(state, [],
-      [{ type: PlanActionType.MOVE, entityId: mover.id, toCol: 8, toRow: 5 }]); // → dist 3, still out of reach
-    assert.equal(collectGuardStrikes(steps).length, 0, 'dist 3 is outside a range-3 guard\'s reach (2)');
+      [{ type: PlanActionType.MOVE, entityId: mover.id, toCol: 9, toRow: 5 }]); // → dist 4, still out of reach
+    assert.equal(collectGuardStrikes(steps).length, 0, 'dist 4 is outside a range-3 guard\'s reach');
   });
 
   test('melee guard still reacts only to adjacent movement (range 1 regression)', () => {

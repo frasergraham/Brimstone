@@ -1489,8 +1489,8 @@ export class Renderer {
         if (revealedHexes && e.owner === hiddenFaction && !revealedHexes.has(hexKey(e.col, e.row))) continue;
         const gRange = (typeof e.getRange === 'function' ? e.getRange() : (e.range ?? 1));
         if (gRange > 1) {
-          // Ranged guard: reach = range-1, LOS-gated (matches _checkGuardStrikes).
-          for (const h of hexRange(e.col, e.row, gRange - 1)) {
+          // Ranged guard: reach = full attack range, LOS-gated (matches _checkGuardStrikes).
+          for (const h of hexRange(e.col, e.row, gRange)) {
             if (h.col === e.col && h.row === e.row) continue;
             if (!state.tiles.has(hexKey(h.col, h.row))) continue;
             if (hasLineOfSight(state, e.col, e.row, h.col, h.row)) {
