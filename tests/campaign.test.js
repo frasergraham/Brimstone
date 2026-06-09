@@ -8,8 +8,9 @@ import { EntityType, createMinion, createZombie, createWoodGolem, createSurvivor
 import { hexKey, getNeighbors, hexDistance } from '../src/hex.js';
 import {
   Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves,
-  reconcileRosterAfterMission,
+  reconcileRosterAfterMission, applyCarriedHeroLoadout,
 } from '../src/campaign/campaign.js';
+import { getFaction } from '../src/factions.js';
 import { ObjectiveType, processStoryTriggers } from '../src/campaign/missions.js';
 import { CAMPAIGNS, getCampaignById } from '../src/campaign/campaign-registry.js';
 import { roundsUntilScoring } from '../src/ai.js';
@@ -2473,5 +2474,34 @@ describe('processWaves near_hero spawn appears in view', () => {
     // If the fallback silently re-picked from 2-3, this would fail.
     assert.ok(d === 1 || d === 4,
       `fallback spawn distance ${d} should be 1 or 4 (2-3 ring is saturated)`);
+  });
+});
+
+// ── Hero starting loadout (weapons overhaul) ─────────────────────────────────
+
+describe('Campaign — hero starting loadout', () => {
+  test('a new campaign defaults to the Paladin loadout (sword, base ATK 2)', () => {
+    const c = new Campaign(hollowDef);
+    assert.equal(c.heroStats.weapon, 'sword');
+    assert.equal(c.heroStats.attack, 2);
+  });
+
+  test('applyCarriedHeroLoadout keeps the starting sword when no weapon is carried', () => {
+    // Reproduces the bug: pre-overhaul / default heroStats carry weapon:null,
+    // which must NOT strip the fresh starting sword on mission load.
+    const hero = getFaction('hero').createLeader(0, 0, 'hero');
+    assert.equal(hero.weapon, 'sword', 'precondition: freshly created Paladin holds a sword');
+    applyCarriedHeroLoadout(hero, { hp: 14, weapon: null, items: {} });
+    assert.equal(hero.weapon, 'sword', 'a null carried weapon must not disarm the hero');
+    assert.equal(hero.getRange(), 1);
+  });
+
+  test('applyCarriedHeroLoadout adopts a carried weapon and syncs range', () => {
+    const hero = getFaction('hero').createLeader(0, 0, 'hero');
+    applyCarriedHeroLoadout(hero, { hp: 10, weapon: 'musket', items: { sword: 1 } });
+    assert.equal(hero.weapon, 'musket');
+    assert.equal(hero.getRange(), 2, 'range tracks the carried ranged weapon');
+    assert.equal(hero.hp, 10);
+    assert.deepEqual(hero.items, { sword: 1 });
   });
 });

@@ -48,7 +48,7 @@ import { nodeController } from './game.js';
 import { MissionConductor } from './mission-conductor.js';
 import { Entity, createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, EntityType, ENTITY_COLOR } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
-import { Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves, reconcileRosterAfterMission } from './campaign/campaign.js';
+import { Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves, reconcileRosterAfterMission, applyCarriedHeroLoadout } from './campaign/campaign.js';
 import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
 import { processStoryTriggers } from './campaign/missions.js';
 import { buildMissionMap } from './campaign/mission-map.js';
@@ -3433,12 +3433,11 @@ function _initCampaignMission(missionDef) {
       processWaves(state, missionDef.waves, _createEnemyEntity);
   }
 
-  // Inject carried-over hero stats
+  // Inject carried-over hero loadout. A null/absent carried weapon keeps the
+  // faction starting weapon (the Paladin's sword) rather than disarming the
+  // hero — see applyCarriedHeroLoadout.
   if (_activeCampaign && _activeCampaign.heroStats) {
-    const hs = _activeCampaign.heroStats;
-    state.hero.hp      = Math.min(hs.hp, state.hero.maxHp);
-    state.hero.weapon  = hs.weapon;
-    state.hero.items   = { ...hs.items };
+    applyCarriedHeroLoadout(state.hero, _activeCampaign.heroStats);
   }
 
   // Inject carried-over resources (replaces faction defaults for campaign)

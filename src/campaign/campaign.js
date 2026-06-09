@@ -432,6 +432,29 @@ function resolveSpawnPosition(state, spawnAt) {
   return null;
 }
 
+// ── Carried hero loadout ─────────────────────────────────────────────────────
+
+/**
+ * Apply a campaign's carried-over hero loadout onto a freshly created leader.
+ *
+ * The leader is built via Faction.createLeader (so it already holds its
+ * faction starting weapon — the Paladin's sword). We only override the weapon
+ * when the campaign actually carries one: a null/absent carried weapon KEEPS
+ * the starting weapon rather than disarming the hero. (Pre-overhaul saves and
+ * the old default stored weapon:null, which would otherwise strip the new
+ * starting sword on every mission load.) Uses equipWeapon so the
+ * weapon-derived range stays in sync.
+ *
+ * @param {Entity} hero        the freshly created hero leader
+ * @param {object} heroStats   { hp, weapon, items } carried by the campaign
+ */
+export function applyCarriedHeroLoadout(hero, heroStats) {
+  if (!hero || !heroStats) return;
+  if (typeof heroStats.hp === 'number') hero.hp = Math.min(heroStats.hp, hero.maxHp);
+  if (heroStats.weapon) hero.equipWeapon(heroStats.weapon);
+  hero.items = { ...(heroStats.items || {}) };
+}
+
 // ── Campaign class ──────────────────────────────────────────────────────────
 
 export class Campaign {
@@ -448,7 +471,7 @@ export class Campaign {
     this.completedMissions = new Set();
     this.roster            = []; // Array of snapshotSurvivor() objects
     this.resources         = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0 };
-    this.heroStats         = { hp: 14, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {} };
+    this.heroStats         = { hp: 14, maxHp: 14, attack: 2, defense: 2, weapon: 'sword', items: {} };
     this.storyFlags        = {};
     this.updatedAt         = Date.now();
   }
@@ -488,7 +511,7 @@ export class Campaign {
     this.completedMissions = new Set(migrated.completedMissions ?? []);
     this.roster            = migrated.roster ?? [];
     this.resources         = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0, ...migrated.resources };
-    this.heroStats         = migrated.heroStats ?? { hp: 14, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {} };
+    this.heroStats         = migrated.heroStats ?? { hp: 14, maxHp: 14, attack: 2, defense: 2, weapon: 'sword', items: {} };
     this.storyFlags        = migrated.storyFlags ?? {};
     this.updatedAt         = migrated.updatedAt ?? Date.now();
     // Persist the migrated form so we don't re-migrate every load.
@@ -711,7 +734,7 @@ export class Campaign {
     this.completedMissions = new Set(migrated.completedMissions ?? []);
     this.roster            = migrated.roster ?? [];
     this.resources         = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0, ...migrated.resources };
-    this.heroStats         = migrated.heroStats ?? { hp: 14, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {} };
+    this.heroStats         = migrated.heroStats ?? { hp: 14, maxHp: 14, attack: 2, defense: 2, weapon: 'sword', items: {} };
     this.storyFlags        = migrated.storyFlags ?? {};
     this.updatedAt         = migrated.updatedAt ?? Date.now();
     this.save(); // persist to localStorage
