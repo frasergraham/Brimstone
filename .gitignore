@@ -26,6 +26,7 @@ build/*
 # only the converted, texture-stripped/-capped .glb under assets/models/ ships.
 # Regenerate via: npm install --no-save fbx2gltf && node scripts/convert-character-fbx.js
 assets/source/characters/*.fbx
+assets/source/characters/*.fbm/
 
 # Capacitor build artifacts
 www/
