@@ -27,6 +27,9 @@ build/*
 # Regenerate via: npm install --no-save fbx2gltf && node scripts/convert-character-fbx.js
 assets/source/characters/*.fbx
 assets/source/characters/*.fbm/
+# Exception: keep the Paladin's 40k source FBX tracked so its smooth .glb is
+# reproducible via scripts/fbx-to-glb-blender.py (weld → smooth → decimate).
+!assets/source/characters/Paladin-Idle.fbx
 
 # Capacitor build artifacts
 www/
