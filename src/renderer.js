@@ -679,9 +679,17 @@ export class Renderer {
    * Slide the attacker to the border of the target hex and hold it there.
    * The entity stays at the midpoint until clearAllLungeAnims() is called.
    */
-  addLungeAnim(entityId, fromCol, fromRow, toCol, toRow, entityType, owner, title = null) {
+  addLungeAnim(entityId, fromCol, fromRow, toCol, toRow, entityType, owner, title = null, fromSlot = 0, _stopAtBoundary = false) {
     const from = this._toCanvas(fromCol, fromRow);
     const to   = this._toCanvas(toCol,   toRow);
+    // Start at the unit's actual sub-hex slot, not the hex centre. (slot 0 →
+    // zero offset, so existing centre-start callers are unchanged.)
+    const hsScale = this.hexSize / 30;
+    const fOff = slotPixelOffset(fromSlot);
+    const startX = from.x + fOff.x * hsScale;
+    const startY = from.y + fOff.y * hsScale;
+    // The tip is the shared edge between the two hexes (midpoint of the two
+    // centres) — the lunge stops at the boundary and never overlaps the target.
     const midX = (from.x + to.x) * 0.5;
     const midY = (from.y + to.y) * 0.5;
     const portraitId = entityType === EntityType.SURVIVOR
@@ -693,7 +701,7 @@ export class Renderer {
       entityId,
       owner,
       fromCol, fromRow, toCol, toRow,
-      fromX: from.x, fromY: from.y,
+      fromX: startX, fromY: startY,
       midX, midY,
       glyph:     entityGlyph(entityType),
       color:     ENTITY_COLOR[entityType],

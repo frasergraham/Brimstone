@@ -1801,11 +1801,16 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
                 ? { col: ev.result.blockedBy.col, row: ev.result.blockedBy.row }
                 : null;
             if (!bumpTo) continue;
+            // Start the bump from the unit's actual slot (its current display
+            // slot after the partial move) and stop at the hex boundary.
+            const bumpEnt = displayEntities.find(e => e.id === ev.action.entityId);
+            const bumpSlot = bumpEnt?.slot ?? ev.result?.slot ?? preSnap.slot ?? 0;
             renderer.addLungeAnim(
               ev.action.entityId,
               bumpFrom.col, bumpFrom.row,
               bumpTo.col, bumpTo.row,
               preSnap.type, preSnap.owner, preSnap.title ?? null,
+              bumpSlot, true, // start in slot, stop at the hex boundary
             );
             if (ev.result.blockedByFort) {
               renderer.addFlash(bumpTo.col, bumpTo.row, '🏰',

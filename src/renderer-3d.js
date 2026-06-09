@@ -10743,7 +10743,7 @@ export class Renderer3D {
    *  strike). The slide is ALSO the standalone fallback for cone-token units
    *  (no `paladinClone`) and for the window before punch.glb has lazily
    *  loaded — in both cases the pure slide plays with no clip and no crash. */
-  addLungeAnim(entityId, fromCol, fromRow, toCol, toRow, _type, _owner, _title) {
+  addLungeAnim(entityId, fromCol, fromRow, toCol, toRow, _type, _owner, _title, _fromSlot = 0, stopAtBoundary = false) {
     if (!this._scene || !this._babylon) return;
     const standee = this._entityStandees.get(entityId);
     if (!standee) return;
@@ -10779,13 +10779,17 @@ export class Renderer3D {
     }
 
     // Start from the standee's CURRENT position — no pre-snap to the hex
-    // centre (that snap was the "pop" bug). Slide LUNGE_FRACTION toward the
-    // target hex world position so we close the gap without overlapping it.
+    // centre (that snap was the "pop" bug). The current position is already the
+    // unit's sub-hex slot, so `_fromSlot` is informational only here.
     const startX = standee.plane.position.x;
     const startZ = standee.plane.position.z;
-    const { x: lungeX, z: lungeZ } = computeLungeTarget(
-      { x: startX, z: startZ }, { x: toX, z: toZ },
-    );
+    // Combat lunge slides LUNGE_FRACTION toward the target hex to close the gap
+    // for the strike. A BUMP (blocked move) instead stops at the shared edge —
+    // the midpoint of the two hex centres — so the unit nudges the obstacle
+    // without crossing into its hex, which reads as far less jarring.
+    const { x: lungeX, z: lungeZ } = stopAtBoundary
+      ? { x: (fromX + toX) * 0.5, z: (fromZ + toZ) * 0.5 }
+      : computeLungeTarget({ x: startX, z: startZ }, { x: toX, z: toZ });
 
     // Face the lunge direction (same model-yaw logic as MOVE) — yaw toward
     // the actual motion vector (current → lunge end), not the hex centres.
