@@ -4406,6 +4406,9 @@ export class Renderer3D {
       ownsRootNode,
       skeleton: null,
       animationGroup: null,
+      // Which rig source this clone came from — the per-unit anim toggle reads
+      // it to swap this mesh between the rig's idle / walk / run skeletons.
+      rigSrc: src,
     };
   }
 
@@ -4688,7 +4691,70 @@ export class Renderer3D {
     src.walkGroup = clone;
     src.walkSpeedRatio = ratio;
     src.activeGroup = src.activeGroup || 'idle';
+    // Build a SEPARATE always-walking skeleton from this clip. Units that are
+    // moving swap their mesh onto it (idle units stay on src.skeleton), so a
+    // moving unit walks while its idle siblings don't walk in place.
+    this._buildStateSkeleton(src, clone, 'walkSkel', ratio);
     return clone;
+  }
+
+  /** Clone a rig's bone TransformNode hierarchy so a second skeleton can be
+   *  driven independently of the idle one. Returns a name → cloned-node Map.
+   *  (The bones link to these nodes; the clip targets them.) */
+  _cloneTransformNodeSet(srcTNs, tag) {
+    const BABYLON = this._babylon;
+    if (!BABYLON || typeof BABYLON.TransformNode !== 'function') return null;
+    const map = new Map();     // srcTN → cloneTN
+    const byName = new Map();
+    for (const tn of srcTNs || []) {
+      if (!tn || typeof tn.name !== 'string') continue;
+      let n;
+      try { n = new BABYLON.TransformNode(`${tag}_${tn.name}`, this._scene || null); } catch { continue; }
+      if (tn.position && n.position && n.position.copyFrom) n.position.copyFrom(tn.position);
+      if (tn.rotationQuaternion && tn.rotationQuaternion.clone) n.rotationQuaternion = tn.rotationQuaternion.clone();
+      else if (tn.rotation && n.rotation && n.rotation.copyFrom) n.rotation.copyFrom(tn.rotation);
+      if (tn.scaling && n.scaling && n.scaling.copyFrom) n.scaling.copyFrom(tn.scaling);
+      map.set(tn, n);
+      byName.set(tn.name, n);
+    }
+    // Reparent to mirror the source hierarchy.
+    for (const tn of srcTNs || []) {
+      const n = map.get(tn);
+      if (n && tn.parent && map.has(tn.parent) && 'parent' in n) n.parent = map.get(tn.parent);
+    }
+    return byName;
+  }
+
+  /** Build a per-rig "state" skeleton that plays `srcGroup` continuously on its
+   *  own cloned TransformNodes — independent of the idle skeleton. A unit shows
+   *  this state by swapping its mesh.skeleton onto `src[slot].skeleton` (valid
+   *  because every state skeleton is a clone of the same source → same bone
+   *  order/indices). Mirrors the proven decoupled-ghost technique. */
+  _buildStateSkeleton(src, srcGroup, slot, speedRatio = 1.0) {
+    if (!src || src[slot] || !src.skeleton || !srcGroup) return src && src[slot];
+    if (typeof src.skeleton.clone !== 'function' || typeof srcGroup.clone !== 'function') return null;
+    const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
+    const byName = this._cloneTransformNodeSet(src.transformNodes, `${src.cloneTag}_${slot}`);
+    if (!byName || byName.size === 0) return null;
+    const skel = src.skeleton.clone(`${src.cloneTag}_${slot}_skel`);
+    if (!skel || !Array.isArray(skel.bones)) return null;
+    let relinked = 0;
+    for (const bone of skel.bones) {
+      if (!bone || !bone.name) continue;
+      const tn = byName.get(bone.name) || byName.get(stripDup(bone.name));
+      if (!tn) continue;
+      if (typeof bone.linkTransformNode === 'function') bone.linkTransformNode(tn);
+      else bone._linkedTransformNode = tn;
+      relinked++;
+    }
+    if (relinked === 0) return null;
+    const group = srcGroup.clone(`${src.cloneTag}_${slot}_group`, (old) => {
+      if (!old || !old.name) return old;
+      return byName.get(old.name) || byName.get(stripDup(old.name)) || old;
+    });
+    if (group && typeof group.start === 'function') group.start(true, speedRatio);
+    src[slot] = { skeleton: skel, group };
+    return src[slot];
   }
 
   /** Build the bone-name → target-node lookup for retargeting a clip onto a
@@ -4796,6 +4862,7 @@ export class Renderer3D {
     if (!clone) return null;
     src.runGroup = clone;
     src.runSpeedRatio = ratio;
+    this._buildStateSkeleton(src, clone, 'runSkel', ratio);
     return clone;
   }
 
@@ -4881,49 +4948,47 @@ export class Renderer3D {
    *  any unit using it is mid-move/lunge, else idles. Shared-skeleton-per-rig,
    *  so all units of a rig animate together. */
   _maybeToggleFallbackRigAnimation() {
-    if (!this._rigSources || this._rigSources.size === 0) return;
-    // Walk is driven by real MOVES only — NOT lunges. A lunge is a combat
-    // strike: the punch clip owns the rig during it (see addLungeAnim), so a
-    // lunging unit must not also walk.
-    const movingRigs = new Set();   // rig has a unit mid-MOVE → walk (or run)
-    const runningRigs = new Set();   // rig has a unit mid multi-hop dash → run
-    const moveIds = this._activeMoveIds;
-    if (moveIds && moveIds.size && this.state?.entities) {
-      const byId = new Map();
-      for (const e of this.state.entities) if (e && e.id) byId.set(e.id, e);
-      const runIds = (RUNNING_ANIM_ENABLED && this._activeRunMoveIds instanceof Set)
-        ? this._activeRunMoveIds : null;
-      for (const id of moveIds) {
-        const e = byId.get(id);
-        if (!e || unitUsesPaladinModel(e)) continue;
-        const src = this._loadedFallbackRigFor(e);
-        if (!src) continue;
-        movingRigs.add(src);
-        if (runIds && runIds.has(id)) runningRigs.add(src);
+    // ── Part A: keep the idle clip running on each rig's idle skeleton ──
+    // The idle/walk/run clips always play on their own skeletons; one-shot
+    // punch/reactions still borrow the idle skeleton, so restart idle once they
+    // release it. (Per-unit combat skeletons are a follow-up; for now combat
+    // still plays on the shared idle skeleton.)
+    if (this._rigSources && this._rigSources.size) {
+      for (const src of this._rigSources.values()) {
+        if (src.punchPlaying || src.reactionPlaying) continue;
+        if (src.idleGroup && src.activeGroup !== 'idle') {
+          if (typeof src.idleGroup.play === 'function') src.idleGroup.play(true);
+          else if (typeof src.idleGroup.start === 'function') src.idleGroup.start(true, 1.0);
+          src.activeGroup = 'idle';
+        }
       }
     }
-    const playGroup = (g, loop, speed) => {
-      if (!g) return;
-      if (typeof g.play === 'function') g.play(loop);
-      else if (typeof g.start === 'function') g.start(loop, speed);
-    };
-    for (const src of this._rigSources.values()) {
-      // A one-shot punch or hit/block reaction owns the rig while it plays —
-      // yield so we don't yank it back to idle/walk mid-clip.
-      if (src.punchPlaying || src.reactionPlaying) continue;
-      let desired = 'idle';
-      if (movingRigs.has(src)) {
-        desired = (runningRigs.has(src) && src.runGroup) ? 'run'
-          : src.walkGroup ? 'walk' : 'idle';
+
+    // ── Part B: per-UNIT locomotion ──
+    // Each standee swaps its mesh between its rig's idle skeleton and its
+    // walk/run skeleton based on whether THIS unit is moving — so a moving unit
+    // walks while its idle siblings stand still (no more walking-in-place).
+    if (!this._entityStandees || !this._entityStandees.size) return;
+    const moveIds = this._activeMoveIds;
+    const runIds = (RUNNING_ANIM_ENABLED && this._activeRunMoveIds instanceof Set)
+      ? this._activeRunMoveIds : null;
+    for (const [id, standee] of this._entityStandees) {
+      const clone = standee.paladinClone;
+      const src = clone && clone.rigSrc;
+      const mesh = clone && clone.skinnedMesh;
+      if (!src || !mesh) continue;
+      // While the rig is mid-punch/reaction (shared idle skeleton), keep this
+      // mesh on the idle skeleton so the strike/flinch shows.
+      if (src.punchPlaying || src.reactionPlaying) {
+        if (mesh.skeleton !== src.skeleton) mesh.skeleton = src.skeleton;
+        continue;
       }
-      if (src.activeGroup === desired) continue;
-      const { idleGroup: idle, walkGroup: walk, runGroup: run } = src;
-      // Silence the three locomotion groups, then play the desired one.
-      for (const g of [idle, walk, run]) if (g && g !== src[`${desired}Group`] && typeof g.stop === 'function') g.stop();
-      if (desired === 'run')  playGroup(run,  true, src.runSpeedRatio  || 1.0);
-      else if (desired === 'walk') playGroup(walk, true, src.walkSpeedRatio || 1.0);
-      else playGroup(idle, true, 1.0);
-      src.activeGroup = desired;
+      let target = src.skeleton; // idle
+      if (moveIds && moveIds.has(id)) {
+        if (runIds && runIds.has(id) && src.runSkel) target = src.runSkel.skeleton;
+        else if (src.walkSkel) target = src.walkSkel.skeleton;
+      }
+      if (mesh.skeleton !== target) mesh.skeleton = target;
     }
   }
 

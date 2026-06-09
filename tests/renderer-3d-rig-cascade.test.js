@@ -180,61 +180,59 @@ function makeAnimGroup() {
   };
 }
 
-describe('_maybeToggleFallbackRigAnimation', () => {
-  test('plays the walk group while a unit using the rig is moving', () => {
+// Per-unit skeleton swap: each standee's mesh swaps between its rig's idle and
+// walk skeletons based on whether THAT unit is moving.
+function makeStandee(src, skeleton) {
+  return { paladinClone: { skinnedMesh: { skeleton }, rigSrc: src } };
+}
+
+describe('_maybeToggleFallbackRigAnimation — per-unit skeleton swap', () => {
+  function setup(moveIds = []) {
     const r = newRenderer();
-    const idle = makeAnimGroup(), walk = makeAnimGroup();
-    const src = { cloneTag: 'zombie', idleGroup: idle, walkGroup: walk,
-      walkSpeedRatio: 2, activeGroup: 'idle' };
+    const idleSkel = { tag: 'idle' }, walkSkel = { tag: 'walk' };
+    const src = { cloneTag: 'zombie', idleGroup: makeAnimGroup(),
+      skeleton: idleSkel, walkSkel: { skeleton: walkSkel } };
     r._rigSources.set('zombie-idle.glb', src);
-    r._activeMoveIds = new Set(['z1']);
+    r._activeMoveIds = new Set(moveIds);
     r._activeLungeIds = new Set();
-    r.state = { entities: [{ id: 'z1', type: 'zombie' }] };
+    return { r, src, idleSkel, walkSkel };
+  }
+
+  test('only the MOVING unit walks; idle siblings stay on the idle skeleton', () => {
+    const { r, src, idleSkel, walkSkel } = setup(['z1']);
+    const mover  = makeStandee(src, idleSkel);
+    const sitter = makeStandee(src, idleSkel);
+    r._entityStandees = new Map([['z1', mover], ['z2', sitter]]);
     r._maybeToggleFallbackRigAnimation();
-    assert.equal(src.activeGroup, 'walk');
-    assert.ok(walk.calls.some(c => c[0] === 'play' || c[0] === 'start'), 'walk started');
-    assert.ok(idle.calls.some(c => c[0] === 'stop'), 'idle stopped');
+    assert.equal(mover.paladinClone.skinnedMesh.skeleton, walkSkel, 'mover → walk skeleton');
+    assert.equal(sitter.paladinClone.skinnedMesh.skeleton, idleSkel, 'sitter stays on idle skeleton');
   });
 
-  test('does NOT walk for a lunging unit — combat is a strike, not a walk', () => {
-    const r = newRenderer();
-    const idle = makeAnimGroup(), walk = makeAnimGroup();
-    const src = { cloneTag: 'zombie', idleGroup: idle, walkGroup: walk, activeGroup: 'idle' };
-    r._rigSources.set('zombie-idle.glb', src);
-    r._activeMoveIds = new Set();           // no real move
-    r._activeLungeIds = new Set(['z1']);    // mid-lunge (combat)
-    r.state = { entities: [{ id: 'z1', type: 'zombie' }] };
+  test('a moving unit reverts to the idle skeleton when it stops', () => {
+    const { r, src, idleSkel, walkSkel } = setup([]); // nothing moving
+    const standee = makeStandee(src, walkSkel);        // was walking
+    r._entityStandees = new Map([['z1', standee]]);
     r._maybeToggleFallbackRigAnimation();
-    assert.equal(src.activeGroup, 'idle', 'stayed idle, did not walk');
-    assert.ok(!walk.calls.some(c => c[0] === 'play' || c[0] === 'start'), 'walk never started');
+    assert.equal(standee.paladinClone.skinnedMesh.skeleton, idleSkel);
   });
 
-  test('yields the rig while a punch is playing', () => {
-    const r = newRenderer();
-    const idle = makeAnimGroup(), walk = makeAnimGroup();
-    const src = { cloneTag: 'zombie', idleGroup: idle, walkGroup: walk,
-      activeGroup: 'punch', punchPlaying: true };
-    r._rigSources.set('zombie-idle.glb', src);
-    r._activeMoveIds = new Set(['z1']);
-    r._activeLungeIds = new Set();
-    r.state = { entities: [{ id: 'z1', type: 'zombie' }] };
+  test('a lunging (combat) unit does NOT walk — lunge is not a move', () => {
+    const { r, src, idleSkel } = setup([]);  // not in _activeMoveIds
+    r._activeLungeIds = new Set(['z1']);
+    const standee = makeStandee(src, idleSkel);
+    r._entityStandees = new Map([['z1', standee]]);
     r._maybeToggleFallbackRigAnimation();
-    assert.equal(src.activeGroup, 'punch', 'punch left untouched');
-    assert.ok(!walk.calls.length && !idle.calls.length, 'no group swapped mid-strike');
+    assert.equal(standee.paladinClone.skinnedMesh.skeleton, idleSkel, 'stays on idle, not walk');
   });
 
-  test('returns to idle when nothing is moving', () => {
-    const r = newRenderer();
-    const idle = makeAnimGroup(), walk = makeAnimGroup();
-    const src = { cloneTag: 'mannequin', idleGroup: idle, walkGroup: walk,
-      activeGroup: 'walk' };
-    r._rigSources.set('mannequin-idle.glb', src);
-    r._activeMoveIds = new Set();
-    r._activeLungeIds = new Set();
-    r.state = { entities: [{ id: 's1', type: 'survivor' }] };
+  test('Part A restarts idle on the rig skeleton after a one-shot releases it', () => {
+    const { r, src } = setup([]);
+    src.activeGroup = 'punch';   // a punch had owned the idle skeleton
+    src.punchPlaying = false;    // now released
+    r._entityStandees = new Map();
     r._maybeToggleFallbackRigAnimation();
     assert.equal(src.activeGroup, 'idle');
-    assert.ok(walk.calls.some(c => c[0] === 'stop'), 'walk stopped');
+    assert.ok(src.idleGroup.calls.some(c => c[0] === 'play' || c[0] === 'start'), 'idle restarted');
   });
 });
 
