@@ -5467,9 +5467,11 @@ img.plan-step-avatar {
   .replay-ctrl-btn { font-size: 0.8rem; padding: 0.32rem 0.55rem; border-radius: 6px; }
   .replay-ctrl-btn.replay-camera { min-width: 3.8rem; }
   /* In replay, hide the compass so the turn cards can sit higher and clear
-     more of the board. The body flag is set while the timeline is visible. */
+     more of the board. The body flag is set while the timeline is visible.
+     The progress dots/arrows stay anchored just above the cards. */
   body.replay-timeline-up #compass-rose { display: none; }
-  body.replay-timeline-up #replay-timeline { top: 16px; }
+  body.replay-timeline-up #replay-progress { top: 12px; }
+  body.replay-timeline-up #replay-timeline { top: 36px; }
 }
 .replay-step-label {
   font-size: 0.62rem;
