@@ -70,6 +70,8 @@ The 3D renderer resolves each unit's mesh by convention — **no renderer edits*
 2. Otherwise the unit clones the shared **`mannequin-idle.glb`** — a blank humanoid the renderer tints to the owner's player colour.
 3. If neither loads, the cone+sphere **pawn** stands in.
 
+**Validate a rig before adding it:** `npm run validate:rigs` (or `node scripts/check-rig.js <file>`) checks every character `.glb` in `assets/models/` against the Mixamo-standard convention — ×1 scale (no compensation node), feet at Y=0, Hips at standing height, `mixamorig:` bone names — and reports PASS/WARN/FAIL with the metric that's off. The converter runs it automatically after each conversion. A model that FAILs still renders (the renderer normalises per-rig), but off-convention exports force fudging and tend to pop/float/sink as animations play — fix the export, don't special-case the code.
+
 Cascade rigs play their embedded **idle** and **walk** (the shared `walking.glb` clip retargets onto each rig by bone name, swapping in while the unit is mid-move); run/punch stay paladin-only for now. `EntityType.PALADIN` (the hero) keeps its dedicated `paladin-idle.glb` path. To add a character rig, drop the source FBX in `assets/source/characters/` and run `node scripts/convert-character-fbx.js` (see that script for texture-strip vs. -cap options) — it also normalises Mixamo bone names so the clip bank retargets cleanly. Cascade logic + tint + walk retarget live in `src/renderer-3d.js` (`fallbackRigCandidates`, `_loadFallbackRig`, `_buildRigClone`, `_retargetWalkOntoRig`, `_maybeToggleFallbackRigAnimation`).
 
 ## New faction

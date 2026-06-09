@@ -136,6 +136,12 @@ async function main() {
     console.log(`[character] ${job.fbx} → ${job.glb}`);
     execFileSync(bin, ['-i', src, '-o', out, '--binary'], { stdio: 'inherit' });
     await postProcess(out, job);
+    // Validate the result against the Mixamo-standard targets (scale, feet
+    // origin, Hips height, …). Non-zero exit = a check failed; it's already
+    // printed, and we don't abort the batch on it.
+    try {
+      execFileSync('node', [path.join(__dirname, 'check-rig.js'), out], { stdio: 'inherit' });
+    } catch { /* a check FAILed — reported above, keep going */ }
   }
   console.log('[character] done.');
 }
