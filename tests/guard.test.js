@@ -539,6 +539,18 @@ describe('ranged opportunity shots via resolver', () => {
     assert.equal(collectGuardStrikes(steps).length, 0, 'dist 4 is outside a range-3 guard\'s reach');
   });
 
+  test('playback entity snapshot carries range so the witch renders as a ranged guard', () => {
+    // Regression: snapshotEntities dropped `range`, so the guard-zone renderer
+    // mis-classified the witch as melee (adjacent-only) during playback.
+    const state = freshState();
+    const witch = state.witch;
+    const steps = resolvePlans(state, [],
+      [{ type: PlanActionType.GUARD, entityId: witch.id }]);
+    const snap = steps.flatMap(s => s.entitySnapshot ?? []).find(e => e.id === witch.id);
+    assert.ok(snap, 'witch appears in a playback step snapshot');
+    assert.equal(snap.range, 2, 'range is preserved in the playback snapshot');
+  });
+
   test('melee guard still reacts only to adjacent movement (range 1 regression)', () => {
     const state = freshState();
     const guard = state.hero;   // default range 1

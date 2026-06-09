@@ -181,7 +181,9 @@ Guard at hex A (charges: 2)
   in both cases only if she can see the target.
 
 The renderer paints the guard-area highlight using this same reach + LOS rule so the
-zone shown matches where shots actually fire.
+zone shown matches where shots actually fire. It is drawn both while planning — previewed
+at the unit's projected hex the moment a GUARD action is queued (from `planGhostSteps`) —
+and during resolution playback for units actually in guard stance.
 
 ---
 

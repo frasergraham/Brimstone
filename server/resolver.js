@@ -464,6 +464,7 @@ function snapshotEntities(entities) {
     attack:        e.attack,
     defense:       e.defense,
     agility:       e.agility,
+    range:         e.range ?? 1,
     fortification: e.fortification,
     guarding:      e.guarding ?? 0,
     displayName:   e.displayName,
