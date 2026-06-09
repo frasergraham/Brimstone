@@ -58,6 +58,11 @@ const OUT_DIR = path.join(ROOT, 'assets', 'models');
 const JOBS = [
   { fbx: 'Mannequin-Idle.fbx', glb: 'mannequin-idle.glb', strip: true },
   { fbx: 'Zombie-Idle.fbx',    glb: 'zombie-idle.glb',    maxTexture: 1024 },
+  // NOTE: the paladin is NOT converted here — its custom-upload FBX carries a
+  // cm/m unit mismatch that FBX2glTF bakes into a ×100 node. It goes through
+  // scripts/fbx-to-glb-blender.py instead (Blender bakes the scale + axis
+  // correctly), then the skin is re-applied. Stock Mixamo characters like the
+  // two above don't hit this and convert cleanly here.
 ];
 
 function resolveBinary() {
