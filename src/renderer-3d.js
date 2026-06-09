@@ -4839,6 +4839,42 @@ export class Renderer3D {
     return src.punchGroup;
   }
 
+  /** Play the (already-loaded) punch clip on rig `src` for one strike: silence
+   *  idle/walk/run so none fight the shared skeleton, mark `punchPlaying` so the
+   *  locomotion toggle yields, and resume idle/walk when the one-shot ends.
+   *  No-op (returns false) until the rig's punch clip has loaded. */
+  _startRigPunch(src) {
+    if (!src || !src.punchGroup) return false;
+    const punch = src.punchGroup;
+    const speedMul = this._playbackSpeedMul ?? 1.0;
+    const ratio = computePunchSpeedRatio(src.punchDurationSec, PUNCH_TARGET_MS * speedMul);
+    // Hand the skeleton to punch: silence idle + walk + run so none fight it.
+    if (src.idleGroup && typeof src.idleGroup.stop === 'function') src.idleGroup.stop();
+    if (src.walkGroup && typeof src.walkGroup.stop === 'function') src.walkGroup.stop();
+    if (src.runGroup && typeof src.runGroup.stop === 'function') src.runGroup.stop();
+    src.punchPlaying = true;
+    src.activeGroup = 'punch';
+
+    // Resume the idle/walk toggle once the strike completes. Babylon fires
+    // onAnimationGroupEndObservable for a non-looping group; guard for stubs.
+    const onEnd = () => {
+      src.punchPlaying = false;
+      // Force the next toggle tick to re-resolve idle/walk from scratch.
+      src.activeGroup = null;
+    };
+    if (punch.onAnimationGroupEndObservable
+      && typeof punch.onAnimationGroupEndObservable.addOnce === 'function') {
+      punch.onAnimationGroupEndObservable.addOnce(onEnd);
+    } else if (punch.onAnimationGroupEndObservable
+      && typeof punch.onAnimationGroupEndObservable.add === 'function') {
+      punch.onAnimationGroupEndObservable.add(onEnd);
+    }
+
+    if (typeof punch.stop === 'function') punch.stop();
+    if (typeof punch.start === 'function') punch.start(false, ratio);
+    return true;
+  }
+
   /** Per-frame walk↔idle swap for the cascade fallback rigs — mirrors
    *  _maybeTogglePaladinAnimation but keyed per rig source: a rig walks while
    *  any unit using it is mid-move/lunge, else idles. Shared-skeleton-per-rig,
