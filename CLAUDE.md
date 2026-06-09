@@ -141,7 +141,7 @@ src/
   actions.js         # All action validation + execution — single source of truth for rules
   planner.js         # PlanActionType enum, computeGhostState(), validatePlanAction()
   map.js, hex.js     # Procedural map generator; pure hex math + MAP_SIZES
-  renderer.js        # Canvas 2D renderer
+  renderer.js        # Canvas 2D renderer — editor-only now; the 3D renderer is the game default, so 2D can be rough around the edges
   renderer-3d.js     # Babylon.js WebGL renderer (Babylon lazily imported on first draw)
   ui.js, ui-*.js     # UIController — the only DOM-touching layer
   ai.js              # WitchAI/HeroAI, personality registries, shared helpers, PlanSimState
@@ -175,6 +175,7 @@ tests/               # node --test suites: tests/*.test.js, tests/ui/*.test.js
 
 **Strict separation of concerns:**
 - `game.js` owns state — no rendering or DOM. `renderer.js`/`renderer-3d.js` read state, draw — zero mutations. `ui.js` is the sole DOM-touching layer.
+- **`renderer-3d.js` (Babylon) is the renderer the game ships with.** `renderer.js` (Canvas 2D) is now used **only by the editor/admin tools**, so it can be rough around the edges — prioritise the 3D renderer for gameplay polish, and don't block work on achieving 2D parity for player-facing visuals.
 - `actions.js` holds all game-logic mutations as pure functions `(state, actor, ...)` returning `{ success, log, cost }` — UI and AI call the same functions.
 - `server/resolver.js` is imported by both `server/lobby.js` (online) and `src/main.js` (local) — no DOM dependency. Headless scripts import `src/` directly; all game logic is DOM/Canvas-free.
 
