@@ -12155,8 +12155,12 @@ export class Renderer3D {
     mat.diffuseColor  = new BABYLON.Color3(R, G, B);
     mat.emissiveColor = new BABYLON.Color3(R * 0.6, G * 0.6, B * 0.6);
     mat.specularColor = new BABYLON.Color3(0, 0, 0);
-    mat.alpha = 0.5;
     mat.backFaceCulling = false;
+    // Explicit alpha-blend + depth pre-pass: without these the tube auto-picks
+    // an unreliable transparency mode and double-blends its own front+back walls,
+    // so alpha 0.5 still reads as solid. The pre-pass writes depth first so only
+    // the nearest wall blends. Matches every other translucent overlay here.
+    this._applyAlphaBlend(mat, 0.5);
     this._guardZoneMat = mat;
     return mat;
   }
