@@ -4381,6 +4381,14 @@ export class Renderer3D {
         primarySkinnedClone.skeleton = unitSkeleton;
         groups = {};
       } else if (src.skeleton) {
+        // Per-unit clone failed → this standee shares the source skeleton and
+        // gets NO per-unit clip groups (no walk/run/punch). Several such units
+        // can't animate independently — the "all zombies, no walk" symptom.
+        this._rigSharedSkelWarned ??= new Set();
+        if (!this._rigSharedSkelWarned.has(src.cloneTag)) {
+          this._rigSharedSkelWarned.add(src.cloneTag);
+          console.warn(`[Renderer3D][rigdiag] "${src.cloneTag}" standee fell back to the SHARED source skeleton — no per-unit walk clip. (entity type ${entity?.type})`);
+        }
         primarySkinnedClone.skeleton = src.skeleton;
       }
     }
@@ -4778,13 +4786,24 @@ export class Renderer3D {
    *  `_buildGhostSkeletonFromWalkingTNs`. The clip groups the standee plays are
    *  then cloned onto these same nodes via `_cloneClipOntoTNs`. */
   _cloneRigSkeleton(src, tag) {
+    // Diagnostic: log once per rig (cloneTag) so a per-unit clone FAILURE — the
+    // path that drops a rig back to the shared source skeleton with no per-unit
+    // walk clip — is visible without per-frame spam.
+    const _ct = src?.cloneTag || 'rig';
+    this._rigSkelDiag ??= new Set();
+    const _diag = (msg) => {
+      const key = _ct + '|' + msg;
+      if (this._rigSkelDiag.has(key)) return;
+      this._rigSkelDiag.add(key);
+      console.info(`[Renderer3D][rigdiag] cloneRigSkeleton(${_ct}): ${msg}`);
+    };
     const BABYLON = this._babylon;
-    if (!src || !src.skeleton || typeof src.skeleton.clone !== 'function') return null;
-    if (!BABYLON || typeof BABYLON.TransformNode !== 'function') return null;
+    if (!src || !src.skeleton || typeof src.skeleton.clone !== 'function') { _diag('NULL — src has no cloneable skeleton'); return null; }
+    if (!BABYLON || typeof BABYLON.TransformNode !== 'function') { _diag('NULL — no BABYLON.TransformNode'); return null; }
     const byName = this._cloneTransformNodeSet(src.transformNodes, tag);
-    if (!byName || byName.size === 0) return null;
+    if (!byName || byName.size === 0) { _diag(`NULL — cloned 0 transformNodes (src.transformNodes=${src.transformNodes?.length ?? 0})`); return null; }
     const skel = src.skeleton.clone(`${tag}_skel`);
-    if (!skel || !Array.isArray(skel.bones)) return null;
+    if (!skel || !Array.isArray(skel.bones)) { _diag('NULL — skeleton.clone() returned no bones'); return null; }
     const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
     let relinked = 0;
     for (const bone of skel.bones) {
@@ -4795,7 +4814,14 @@ export class Renderer3D {
       else bone._linkedTransformNode = tn;
       relinked++;
     }
-    if (relinked === 0) return null;
+    if (relinked === 0) {
+      // Sample a few names from each side so a naming mismatch is obvious.
+      const boneNames = skel.bones.slice(0, 4).map(b => b?.name).join(', ');
+      const tnNames = [...byName.keys()].slice(0, 4).join(', ');
+      _diag(`NULL — relinked 0/${skel.bones.length} bones. bone names: [${boneNames}] vs cloned TN names: [${tnNames}]`);
+      return null;
+    }
+    _diag(`OK — relinked ${relinked}/${skel.bones.length} bones, ${byName.size} TNs`);
     return { skeleton: skel, byName };
   }
 
@@ -5134,6 +5160,7 @@ export class Renderer3D {
       if (this._rigFileMissing.has(file)) continue;  // 404'd — next candidate
       if (this._rigSources.has(file)) return;        // loaded — done
       if (this._rigLoadPromises.has(file)) return;   // in flight — wait
+      console.info(`[Renderer3D][rigdiag] cascade: loading "${file}" for ${entity?.type} (candidates: ${fallbackRigCandidates(entity).join(' → ')})`);
       this._loadFallbackRig(file, basePath);
       return;
     }
@@ -5200,6 +5227,7 @@ export class Renderer3D {
         tintable: file === MANNEQUIN_RIG_FILE,
       };
       this._rigSources.set(file, src);
+      console.info(`[Renderer3D][rigdiag] rig "${file}" LOADED — bones=${skeleton?.bones?.length ?? 0}, transformNodes=${transformNodes.length}, animGroups=${groups.length}, idleGroup=${idleGroup?.name ?? 'none'}, cloneTag=${src.cloneTag}`);
       // Retrofit standees that were waiting on this rig.
       this._upgradeStandeesToFallbackRig();
       // Wire walking onto this rig: ensure walking.glb's native group is loaded
