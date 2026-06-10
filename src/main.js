@@ -608,6 +608,8 @@ function _startLocalPlanningPhase() {
     // can advance to the explanation steps, but we don't enter planning mode.
     if (!_missionConductor.shouldPlan()) return;
     setMode(AppMode.PLANNING);
+    // Scripted/tutorial missions don't offer the re-watch button.
+    ui._hasReplayHistory = false;
     ui.enterPlanningMode('hero', state.heroActionsLeft);
     ui.onPlanSubmit = (heroPlan) => _onConductorPlanSubmit(heroPlan);
     return;
@@ -637,6 +639,13 @@ function _enterLocalPlanningMode() {
   setMode(AppMode.PLANNING);
   const humanFaction = !state.heroIsAI ? 'hero' : 'witch';
   const budget = getFaction(humanFaction).getActionsLeft(state);
+
+  // Inline "replay last round" button — available whenever there's resolved
+  // history to re-watch. Most useful right after resuming a saved game (the
+  // history is restored from the save), but also works mid-game from round 2 on.
+  // Set BEFORE enterPlanningMode so it reads the flag for button visibility.
+  ui._hasReplayHistory = _roundHistory.length > 0;
+  ui.onReplayLastTurn = () => _replayLastRoundInlineLocal();
 
   if (!state.heroIsAI && !state.witchIsAI) {
     // Human vs Human: hero plans first, then witch
@@ -1092,6 +1101,98 @@ async function _runLocalResolution(skipSummary = false) {
     await playbackDelay(300);
   }
   _startLocalPlanningPhase();
+}
+
+/**
+ * Re-watch the most recently resolved round inline, mid-planning (offline SP /
+ * campaign / hot-seat). The online equivalent is `_replayLastTurnInline`; this
+ * is the offline twin (CLAUDE.md guideline 5 — both layers stay in lockstep).
+ *
+ * Preserves the in-progress plan: we snapshot `_unitPlans` (+ submitted flag and
+ * the planning faction/budget), play the stored round's animation, show the same
+ * end-of-round wrap-up CARD, then re-enter planning with the plan restored. The
+ * player can hit Replay to loop the animation or Continue to drop back into the
+ * planning they were in the middle of. Especially handy right after loading a
+ * save, where the player wants to see how the board got to its current state.
+ */
+async function _replayLastRoundInlineLocal() {
+  if (!ui || !state || !renderer || isAnimating() || _inlineReplayInFlight) return;
+  // Only from live planning — the button lingers through the post-round summary
+  // (where _planFaction is null), and re-watching from there would re-enter
+  // planning with a null faction.
+  if (getMode() !== AppMode.PLANNING || state.gameOver) return;
+  const entry = _roundHistory[_roundHistory.length - 1];
+  if (!entry) return;
+  const steps = typeof entry.steps === 'string' ? JSON.parse(entry.steps) : entry.steps;
+  if (!steps?.length) return;
+
+  _inlineReplayInFlight = true;
+  try {
+    const humanFaction = !state.heroIsAI ? 'hero' : !state.witchIsAI ? 'witch' : null;
+
+    // Preserve the in-progress plan + planning context so we can restore it.
+    const savedPlans   = new Map(ui._unitPlans);
+    const wasSubmitted = ui._planSubmitted;
+    const savedFaction = ui._planFaction;
+    const savedBudget  = ui._planBudget;
+
+    // Animate from the round's pre-resolution entities; the live (post-round)
+    // entities are the snap-to-final target — same approach as the online twin.
+    const liveEntities = state.entities;
+    const preData = typeof entry.preState === 'string' ? JSON.parse(entry.preState) : entry.preState;
+    const preEntities = patchAlive(steps[0]?.entitySnapshot ?? deserializeState(preData).entities ?? liveEntities);
+
+    ui.exitPlanningMode();
+    resetPlayback();
+    // Keep the scrub timeline up after the animation so the wrap-up card can be
+    // appended to the per-turn cards (matches the normal end-of-round review).
+    _keepTimelineForReview = true;
+
+    const playOnce = async () => {
+      state.entities = preEntities;
+      redraw();
+      await _animateResolutionSteps(steps, liveEntities, redraw, humanFaction, null);
+      state.entities = liveEntities;
+      redraw();
+    };
+
+    let skipped = false;
+    try {
+      await playOnce();
+      skipped = playback.jumpToEnd;
+    } finally {
+      resetPlayback();
+    }
+
+    // Re-watch wrap-up CARD — Replay loops the animation, Continue returns to
+    // planning. Skipped entirely if the player hit jump-to-end mid-animation.
+    if (!skipped) {
+      setMode(AppMode.SUMMARY);
+      const wrap = _buildWrapUpContent(steps, entry.roundNum);
+      let action;
+      do {
+        action = await ui.showReplayWrapUp({
+          titleHtml: wrap.title, combats: wrap.combats, discoveries: wrap.discoveries,
+          loot: wrap.loot, attrition: wrap.attrition, attritionLevel: 0,
+          canReplay: true,
+        });
+        if (action === 'replay') { resetPlayback(); await playOnce(); resetPlayback(); }
+      } while (action === 'replay');
+    }
+    _keepTimelineForReview = false;
+    ui.hideReplayTimeline?.();
+
+    // Drop back into the planning we interrupted, plan intact.
+    setMode(AppMode.PLANNING);
+    ui._hasReplayHistory = _roundHistory.length > 0;
+    ui.enterPlanningMode(savedFaction, savedBudget);
+    ui._unitPlans = savedPlans;
+    ui._refreshPlanOverlay();
+    ui._renderPlanPanel();
+    if (wasSubmitted) ui.markPlanSubmitted();
+  } finally {
+    _inlineReplayInFlight = false;
+  }
 }
 
 /**

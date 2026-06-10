@@ -962,6 +962,21 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 }
 .header-icon-btn:disabled { opacity: 0.3; cursor: default; }
 
+/* Replay last turn — circle-arrow icon, plus a "Last Turn" label on desktop */
+.replay-last-btn {
+  width: auto;
+  padding: 0 0.55rem;
+  gap: 0.35rem;
+  font-size: 0.82rem;
+  letter-spacing: 0.05em;
+}
+.replay-last-btn .rt-label { line-height: 1; }
+@media (max-width: 700px) {
+  /* Phone: collapse to the icon only */
+  .replay-last-btn { width: 32px; padding: 0; font-size: 1rem; }
+  .replay-last-btn .rt-label { display: none; }
+}
+
 /* End Turn: slightly wider to fit text, urgent pulse when no actions left */
 .end-turn-header {
   font-size: 0.82rem;
