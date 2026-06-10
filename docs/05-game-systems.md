@@ -269,6 +269,17 @@ A building occupies two hexes: a passable **entrance** (cost 2, like grass) and 
 
 A horse doubles movement range (2 hexes instead of 1).
 
+### Sub-hex slots & capacity
+
+Every hex has **7 placement slots** — `0` = centre, `1..6` = the spot adjacent to each of the 6 faces (aligned to `getNeighbors` direction order; mapping in `src/hex-slots.js`). Slots serve two purposes:
+
+- **Placement (rendering).** Each entity carries an authoritative `entity.slot` (game state, serialized). It is assigned at every placement seam — `executeMove`, `executeSummon`, survivor discovery — by `assignSlotOnTile()`, which calls `pickUnitSlot()` to take the lowest free, non-blocked slot (centre preferred). Both renderers read `entity.slot` for intra-hex placement, and move animations slide from the source slot to the destination slot (`executeMove` returns the new `slot`) instead of snapping through the hex centre.
+- **Capacity (gameplay).** A tile's `blockedSlots` (ids `1..6`) mark spots made unusable by static features. They are derived once at map-gen by `deriveBlockedSlots()`:
+  - **Forest** — `treeCountForTile` trees on outer slots, kept **off the road entry/exit faces** (and off the building slot on a building-on-forest tile). Forest capacity is unchanged from before (still sourced from `treeCountForTile`).
+  - **Bridge** — **all** non-road outer slots are blocked (only the centre + the road-axis faces stay usable), so a 2-road bridge caps at 3 units instead of 7.
+
+`tileCapacityRemaining()` subtracts building (3), trees, **and** bridge blocked-slots from `TILE_CAPACITY` (7); a tile with no remaining capacity blocks movement in and through it (`isTileFullForMove`).
+
 ### Visibility & Fog of War
 
 ```

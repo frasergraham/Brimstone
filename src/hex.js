@@ -26,6 +26,18 @@ export function getNeighbors(col, row) {
     .filter(({ col: c, row: r }) => c >= 0 && r >= 0);
 }
 
+// Direction index (0..5, matching getNeighbors order: 0=W,1=NW,2=NE,3=E,4=SE,
+// 5=SW — stable across even/odd rows) of the neighbour at (nCol,nRow) relative
+// to (col,row). Returns -1 when the two hexes are not adjacent. Pure.
+export function neighborDirIndex(col, row, nCol, nRow) {
+  const dirs = row % 2 === 0 ? DIRS_EVEN : DIRS_ODD;
+  const dc = nCol - col, dr = nRow - row;
+  for (let i = 0; i < dirs.length; i++) {
+    if (dirs[i][0] === dc && dirs[i][1] === dr) return i;
+  }
+  return -1;
+}
+
 export function offsetToAxial(col, row) {
   return { q: col - (row - (row & 1)) / 2, r: row };
 }

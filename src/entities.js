@@ -141,6 +141,11 @@ export class Entity {
 
     this.col = col;
     this.row = row;
+    // Sub-hex slot (0 = centre, 1..6 = adjacent to each face). Authoritative
+    // intra-hex position the renderer reads for placement. Assigned at
+    // placement time (spawn/move) via assignSlotOnTile() in actions.js — the
+    // constructor default is the centre.
+    this.slot = 0;
 
     const stats = BASE_STATS[type];
     this.maxHp   = stats.maxHp;

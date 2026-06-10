@@ -1491,6 +1491,31 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     await playbackDelay(900);   // hold so the player registers the find
   };
 
+  // Survivor meshes aren't preloaded (the roster is large — see LAZY_RIG_TYPES).
+  // We already know which survivors THIS round will reveal, so load their rigs
+  // now and await, before the discovery standees are built — that way each shows
+  // its own mesh instead of the mannequin stand-in. A 404 resolves harmlessly
+  // (the unit keeps the mannequin).
+  if (renderer?.preloadEntityRig) {
+    const reveals = new Map(); // id → survivor entity (dedupe across steps)
+    for (const step of steps) {
+      const evs = [
+        ...(step.heroEvents   ?? []),
+        ...(step.witchEvents  ?? []),
+        ...(step.playerEvents ?? []).flatMap(pe => pe.events ?? []),
+      ];
+      for (const ev of evs) {
+        const one  = ev.result?.encounterSurvivor;
+        if (one?.id) reveals.set(one.id, one);
+        const many = ev.result?.encounterSurvivors;
+        if (Array.isArray(many)) for (const m of many) if (m?.id) reveals.set(m.id, m);
+      }
+    }
+    if (reveals.size) {
+      await Promise.all([...reveals.values()].map(s => renderer.preloadEntityRig(s)));
+    }
+  }
+
   for (let i = 0; i < steps.length; i++) {
     // During replay: if BACK/STOP/REDO was pressed, abort remaining steps immediately
     if (playback.goBack || playback.aborted || playback.jumpToEnd || playback.restart) break;
@@ -1739,6 +1764,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         // accurate across every segment.
         for (const { ev, preSnap, path } of moveAnims) {
           const lastPos = path[path.length - 1];
+          const destSlot = ev.result?.slot ?? 0;
           renderer.addMoveAnim(
             ev.action.entityId,
             preSnap.col, preSnap.row,
@@ -1746,9 +1772,10 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             preSnap.type, preSnap.owner,
             preSnap.title ?? null,
             path, // full waypoint list
+            preSnap.slot ?? 0, destSlot, // source → destination sub-hex slot
           );
           const ent = displayEntities.find(e => e.id === ev.action.entityId);
-          if (ent) { ent.col = lastPos.col; ent.row = lastPos.row; }
+          if (ent) { ent.col = lastPos.col; ent.row = lastPos.row; ent.slot = destSlot; }
         }
         state.entities = displayEntities;
         redrawFn();
@@ -1761,15 +1788,23 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             if (hop >= path.length) continue;
             const fromPos = hop === 0 ? preSnap : path[hop - 1];
             const toPos   = path[hop];
+            const isLastHop = hop === path.length - 1;
+            const destSlot = ev.result?.slot ?? 0;
+            // Only the very first point uses the source slot and the very last
+            // the destination slot; intermediate hops pass through hex centres.
+            const fromSlot = hop === 0 ? (preSnap.slot ?? 0) : 0;
+            const toSlot   = isLastHop ? destSlot : 0;
             renderer.addMoveAnim(
               ev.action.entityId,
               fromPos.col, fromPos.row,
               toPos.col, toPos.row,
               preSnap.type, preSnap.owner,
               preSnap.title ?? null,
+              null, // no path — 2D animates hops externally
+              fromSlot, toSlot,
             );
             const ent = displayEntities.find(e => e.id === ev.action.entityId);
-            if (ent) { ent.col = toPos.col; ent.row = toPos.row; }
+            if (ent) { ent.col = toPos.col; ent.row = toPos.row; ent.slot = toSlot; }
           }
           state.entities = displayEntities;
           redrawFn();
@@ -1794,11 +1829,16 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
                 ? { col: ev.result.blockedBy.col, row: ev.result.blockedBy.row }
                 : null;
             if (!bumpTo) continue;
+            // Start the bump from the unit's actual slot (its current display
+            // slot after the partial move) and stop at the hex boundary.
+            const bumpEnt = displayEntities.find(e => e.id === ev.action.entityId);
+            const bumpSlot = bumpEnt?.slot ?? ev.result?.slot ?? preSnap.slot ?? 0;
             renderer.addLungeAnim(
               ev.action.entityId,
               bumpFrom.col, bumpFrom.row,
               bumpTo.col, bumpTo.row,
               preSnap.type, preSnap.owner, preSnap.title ?? null,
+              bumpSlot, true, // start in slot, stop at the hex boundary
             );
             if (ev.result.blockedByFort) {
               renderer.addFlash(bumpTo.col, bumpTo.row, '🏰',
@@ -7357,7 +7397,7 @@ function _createMpClient() {
 
       // Snapshot entity positions before update so we can animate moves
       const oldPos = new Map();
-      for (const e of state.entities) oldPos.set(e.id, { col: e.col, row: e.row });
+      for (const e of state.entities) oldPos.set(e.id, { col: e.col, row: e.row, slot: e.slot ?? 0 });
 
       Object.assign(state, mirrorState);
       state.hero      = mirrorState.hero;
@@ -7369,7 +7409,8 @@ function _createMpClient() {
         for (const e of state.entities) {
           const old = oldPos.get(e.id);
           if (old && (old.col !== e.col || old.row !== e.row)) {
-            renderer.addMoveAnim(e.id, old.col, old.row, e.col, e.row, e.type, e.owner, e.title ?? null);
+            renderer.addMoveAnim(e.id, old.col, old.row, e.col, e.row, e.type, e.owner, e.title ?? null,
+              null, old.slot ?? 0, e.slot ?? 0);
           }
         }
       }

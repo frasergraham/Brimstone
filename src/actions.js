@@ -7,6 +7,7 @@ import {
   isRiver, isPathRoadLike, hasBuilding, isForestCover, baseOf,
   tileCapacityRemaining, isBuildingFootprint, blocksLineOfSight,
 } from './tiles.js';
+import { pickUnitSlot } from './hex-slots.js';
 import { ITEMS } from './items.js';
 import { ABILITIES } from './abilities.js';
 
@@ -185,6 +186,19 @@ export function findShortestPath(state, actor, toCol, toRow, posOverride = null)
 
 function entitiesAt(state, col, row) {
   return state.entities.filter(e => e.alive && e.col === col && e.row === row);
+}
+
+// Assign `entity` a sub-hex slot on its current tile: the lowest free,
+// non-blocked slot (centre preferred). Other alive units already on the tile
+// hold their slots; the arriving unit picks around them and around the tile's
+// blocked (tree/bridge) slots. Called at every placement seam — move, summon,
+// survivor spawn — so online (resolver) and offline (main) stay in parity.
+export function assignSlotOnTile(state, entity) {
+  const t = state.tiles.get(hexKey(entity.col, entity.row));
+  const occupied = state.entities
+    .filter(e => e.alive && e.id !== entity.id && e.col === entity.col && e.row === entity.row)
+    .map(e => e.slot ?? 0);
+  entity.slot = pickUnitSlot(t?.blockedSlots ?? [], occupied);
 }
 
 function adjacentEnemies(state, entity) {
@@ -690,7 +704,13 @@ export function executeMove(state, actor, targetCol, targetRow) {
   }
   if (encounterLog.length) log.push(...encounterLog);
 
-  return { success: true, log, cost: 1, path: walkedPath, blockedBy, blockedByFort, encounterLog, encounterSurvivor };
+  // The actor arrived on a new tile — pick its sub-hex slot around the units and
+  // blocked slots already there. (walkedPath is non-empty here.) `slot` is
+  // surfaced on the result so the renderer can animate from the source slot to
+  // this destination slot instead of snapping through the hex centre.
+  assignSlotOnTile(state, actor);
+
+  return { success: true, log, cost: 1, path: walkedPath, slot: actor.slot, blockedBy, blockedByFort, encounterLog, encounterSurvivor };
 }
 
 export function executeExplore(state, actor) {
@@ -1427,6 +1447,7 @@ export function executeSummon(state, actor, requestedType = null) {
     summonedUnit = createMinion(actor.col, actor.row, ownerId, state);
     unitName = 'Minion';
     state.entities.push(summonedUnit);
+    assignSlotOnTile(state, summonedUnit);
     faction.trackSummon(state);
     return {
       success: true,
@@ -1437,6 +1458,7 @@ export function executeSummon(state, actor, requestedType = null) {
   }
 
   state.entities.push(summonedUnit);
+  assignSlotOnTile(state, summonedUnit);
   faction.trackSummon(state);
   return { success: true, log: [`The witch raises a ${unitName}!`], cost: 1, spent: [{ type: res, amount: 2 }] };
 }

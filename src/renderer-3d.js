@@ -656,11 +656,18 @@ export function entityTypeRigFile(entity) {
   return slug ? `${slug}-idle.glb` : null;
 }
 
+/** Entity types whose rig is loaded JUST-IN-TIME (during the round replay that
+ *  reveals them) rather than preloaded up front. The survivor roster is large
+ *  and most members never appear in a given game, so preloading every one would
+ *  bloat the loading screen — they're loaded via `preloadEntityRig()` when the
+ *  replay tells us one is about to be found. Leaders and summons stay in the
+ *  up-front preload (`_preloadCharacterRigs`). */
+export const LAZY_RIG_TYPES = Object.freeze(new Set([EntityType.SURVIVOR]));
+
 /** Ordered rig-file cascade for a non-paladin unit: its own `<type>-idle.glb`
  *  first, then the shared mannequin. The caller tries each in turn and uses the
- *  first that loads; if none do, the cone+sphere pawn stands in. Paladin-typed
- *  units never reach here — they keep the dedicated _paladinSource path. Pure;
- *  exported for tests. */
+ *  first that loads. Paladin-typed units never reach here — they keep the
+ *  dedicated _paladinSource path. Pure; exported for tests. */
 export function fallbackRigCandidates(entity) {
   const out = [];
   const typeFile = entityTypeRigFile(entity);
@@ -906,7 +913,7 @@ export const STANDEE_BASE_Y_OFFSET    = 0.084;
 // "NE" outer slot) so building/tree/standee co-tenancy on the same hex shares
 // the unified slot layout. Frozen so callers can't mutate it accidentally.
 // Distance from centre comfortably clears the STANDEE_BASE_DIAMETER=0.75 disc.
-export const BUILDING_OFFSET = Object.freeze({ x: 0.42, z: -0.42 });
+export const BUILDING_OFFSET = Object.freeze({ x: 0.3, z: -0.5196152422706631 });
 
 // ─── Building labels (hover text above each building) ───────────────────────
 // Mirrors the 2D renderer's fade-on-zoom logic from src/renderer.js (~line
@@ -2516,14 +2523,19 @@ export class Renderer3D {
     // loading screen drops. Loading them inside the bundle takes the cost
     // before whenReady() resolves so gameplay starts smooth.
     const terrainP   = afterInit(() => this._preloadTerrainDetailTextures());
+    // Every character mesh (mannequin + each type rig) is preloaded here so the
+    // scene never has to fall back to a pawn at runtime — the loading overlay
+    // stays up until they're all in hand.
+    const charactersP = afterInit(() => this._preloadCharacterRigs(basePath));
 
     this._assetBundle = [
-      { id: 'engine',    label: 'engine',    promise: babylonP,   progress: 0 },
-      { id: 'sprites',   label: 'sprites',   promise: atlasP,     progress: 0 },
-      { id: 'buildings', label: 'buildings', promise: buildingsP, progress: 0 },
-      { id: 'paladin',   label: 'paladin',   promise: paladinP,   progress: 0 },
-      { id: 'forest',    label: 'forest',    promise: treesP,     progress: 0 },
-      { id: 'terrain',   label: 'terrain',   promise: terrainP,   progress: 0 },
+      { id: 'engine',     label: 'engine',     promise: babylonP,    progress: 0 },
+      { id: 'sprites',    label: 'sprites',    promise: atlasP,      progress: 0 },
+      { id: 'buildings',  label: 'buildings',  promise: buildingsP,  progress: 0 },
+      { id: 'paladin',    label: 'paladin',    promise: paladinP,    progress: 0 },
+      { id: 'characters', label: 'characters', promise: charactersP, progress: 0 },
+      { id: 'forest',     label: 'forest',     promise: treesP,      progress: 0 },
+      { id: 'terrain',    label: 'terrain',    promise: terrainP,    progress: 0 },
     ];
 
     for (const item of this._assetBundle) {
@@ -2538,6 +2550,67 @@ export class Renderer3D {
         });
     }
   }
+
+  /** Preload the character meshes the game is sure (or likely) to show — the
+   *  mannequin plus every leader/summon rig — so the common case never falls
+   *  back to a placeholder. Run as a load-bundle item (see beginLoad) so the
+   *  loading overlay + progress bar stay up until they're in hand. There is no
+   *  cone/sphere pawn fallback any more.
+   *
+   *  Survivors are deliberately EXCLUDED (see LAZY_RIG_TYPES): the roster is
+   *  large and most members never appear, so each survivor's mesh is loaded
+   *  on demand via preloadEntityRig() at the start of the replay that reveals
+   *  it. Until then a survivor renders on the (preloaded) mannequin.
+   *
+   *  - The mannequin is the universal fallback and MUST load; a failure here
+   *    means some units would have no mesh at all, so we log a loud error.
+   *  - A leader/summon type with no rig file 404s and uses the mannequin —
+   *    expected, NOT an error.
+   *  - The shared walk clip is loaded and retargeted onto every rig so units
+   *    walk from their first move instead of sliding in their idle pose. */
+  async _preloadCharacterRigs(basePath = this._assetsBasePath || 'assets') {
+    const mannequin = await Promise.resolve(
+      this._loadFallbackRig(MANNEQUIN_RIG_FILE, basePath)).catch(() => null);
+    if (!mannequin) {
+      console.error(`[Renderer3D] Could not load the fallback character mesh "${MANNEQUIN_RIG_FILE}" — units without their own rig cannot render.`);
+    }
+    // Leaders + summons (every type except the lazily-loaded ones). Paladin is
+    // already a bundle item; _loadFallbackRig dedupes via _rigLoadPromises.
+    const files = new Set();
+    for (const type of Object.values(EntityType)) {
+      if (LAZY_RIG_TYPES.has(type)) continue;
+      const f = entityTypeRigFile({ type });
+      if (f && f !== MANNEQUIN_RIG_FILE) files.add(f);
+    }
+    const srcs = await Promise.all([...files].map(f =>
+      Promise.resolve(this._loadFallbackRig(f, basePath)).catch(() => null)));
+    // Walk clip: load the shared source, then retarget onto every loaded rig so
+    // the walk groups exist before the first move plays.
+    await Promise.resolve(this._loadWalkingAnimation(basePath)).catch(() => null);
+    for (const src of [mannequin, ...srcs]) {
+      if (src) { try { this._retargetWalkOntoRig(src); } catch { /* non-fatal */ } }
+    }
+  }
+
+  /** Just-in-time load of ONE entity's rig (used for survivors, which aren't in
+   *  the up-front preload). Resolves once the rig settles — a 404 resolves too,
+   *  in which case the unit uses the preloaded mannequin. Call this at the start
+   *  of a round replay that will reveal the entity, then await it before the
+   *  discovery standee is built so the unit shows its own mesh, not a stand-in.
+   *  No-op for paladin/mannequin types (already preloaded). */
+  async preloadEntityRig(entity, basePath = this._assetsBasePath || 'assets') {
+    const file = entityTypeRigFile(entity);
+    if (!file || file === MANNEQUIN_RIG_FILE) return;
+    await Promise.resolve(this._loadFallbackRig(file, basePath)).catch(() => null);
+    // Retarget the shared walk clip onto the freshly-loaded rig so it walks
+    // immediately (the up-front rigs get this in _preloadCharacterRigs).
+    const src = this._rigSources.get(file);
+    if (src) {
+      await Promise.resolve(this._loadWalkingAnimation(basePath)).catch(() => null);
+      try { this._retargetWalkOntoRig(src); } catch { /* non-fatal */ }
+    }
+  }
+
 
   /** Advance one bundle item's byte-level progress and re-emit the aggregate.
    *  Monotonic — a regressing or already-settled fraction is ignored, so a
@@ -4381,6 +4454,14 @@ export class Renderer3D {
         primarySkinnedClone.skeleton = unitSkeleton;
         groups = {};
       } else if (src.skeleton) {
+        // Per-unit clone failed → this standee shares the source skeleton and
+        // gets NO per-unit clip groups (no walk/run/punch). Several such units
+        // can't animate independently — the "all zombies, no walk" symptom.
+        this._rigSharedSkelWarned ??= new Set();
+        if (!this._rigSharedSkelWarned.has(src.cloneTag)) {
+          this._rigSharedSkelWarned.add(src.cloneTag);
+          console.warn(`[Renderer3D][rigdiag] "${src.cloneTag}" standee fell back to the SHARED source skeleton — no per-unit walk clip. (entity type ${entity?.type})`);
+        }
         primarySkinnedClone.skeleton = src.skeleton;
       }
     }
@@ -4778,13 +4859,24 @@ export class Renderer3D {
    *  `_buildGhostSkeletonFromWalkingTNs`. The clip groups the standee plays are
    *  then cloned onto these same nodes via `_cloneClipOntoTNs`. */
   _cloneRigSkeleton(src, tag) {
+    // Diagnostic: log once per rig (cloneTag) so a per-unit clone FAILURE — the
+    // path that drops a rig back to the shared source skeleton with no per-unit
+    // walk clip — is visible without per-frame spam.
+    const _ct = src?.cloneTag || 'rig';
+    this._rigSkelDiag ??= new Set();
+    const _diag = (msg) => {
+      const key = _ct + '|' + msg;
+      if (this._rigSkelDiag.has(key)) return;
+      this._rigSkelDiag.add(key);
+      console.info(`[Renderer3D][rigdiag] cloneRigSkeleton(${_ct}): ${msg}`);
+    };
     const BABYLON = this._babylon;
-    if (!src || !src.skeleton || typeof src.skeleton.clone !== 'function') return null;
-    if (!BABYLON || typeof BABYLON.TransformNode !== 'function') return null;
+    if (!src || !src.skeleton || typeof src.skeleton.clone !== 'function') { _diag('NULL — src has no cloneable skeleton'); return null; }
+    if (!BABYLON || typeof BABYLON.TransformNode !== 'function') { _diag('NULL — no BABYLON.TransformNode'); return null; }
     const byName = this._cloneTransformNodeSet(src.transformNodes, tag);
-    if (!byName || byName.size === 0) return null;
+    if (!byName || byName.size === 0) { _diag(`NULL — cloned 0 transformNodes (src.transformNodes=${src.transformNodes?.length ?? 0})`); return null; }
     const skel = src.skeleton.clone(`${tag}_skel`);
-    if (!skel || !Array.isArray(skel.bones)) return null;
+    if (!skel || !Array.isArray(skel.bones)) { _diag('NULL — skeleton.clone() returned no bones'); return null; }
     const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
     let relinked = 0;
     for (const bone of skel.bones) {
@@ -4795,7 +4887,14 @@ export class Renderer3D {
       else bone._linkedTransformNode = tn;
       relinked++;
     }
-    if (relinked === 0) return null;
+    if (relinked === 0) {
+      // Sample a few names from each side so a naming mismatch is obvious.
+      const boneNames = skel.bones.slice(0, 4).map(b => b?.name).join(', ');
+      const tnNames = [...byName.keys()].slice(0, 4).join(', ');
+      _diag(`NULL — relinked 0/${skel.bones.length} bones. bone names: [${boneNames}] vs cloned TN names: [${tnNames}]`);
+      return null;
+    }
+    _diag(`OK — relinked ${relinked}/${skel.bones.length} bones, ${byName.size} TNs`);
     return { skeleton: skel, byName };
   }
 
@@ -5107,13 +5206,22 @@ export class Renderer3D {
     }
   }
 
-  /** First loaded fallback-rig source for an entity (the earliest cascade
-   *  candidate already in _rigSources), or null. Synchronous — does NOT trigger
-   *  loads (that's _ensureFallbackRig). */
+  /** Best-available fallback-rig source for an entity, honouring cascade
+   *  PREFERENCE: the unit's own `<type>-idle.glb` wins, and we only fall through
+   *  to a later candidate (the shared mannequin) once an earlier one is
+   *  confirmed MISSING (404'd). While the preferred rig is still loading we
+   *  return null (render the cone placeholder and wait) rather than locking the
+   *  unit onto an already-loaded mannequin forever — that downgrade was why a
+   *  zombie in a game where the mannequin loaded first (e.g. survivors appear
+   *  before the witch summons) rendered as a mannequin and never upgraded.
+   *  Synchronous — does NOT trigger loads (that's _ensureFallbackRig). */
   _loadedFallbackRigFor(entity) {
     for (const file of fallbackRigCandidates(entity)) {
       const src = this._rigSources.get(file);
       if (src) return src;
+      // This candidate isn't loaded yet. If it's still loadable (not 404'd),
+      // wait for it instead of downgrading to a less-preferred rig.
+      if (!this._rigFileMissing.has(file)) return null;
     }
     return null;
   }
@@ -5134,6 +5242,7 @@ export class Renderer3D {
       if (this._rigFileMissing.has(file)) continue;  // 404'd — next candidate
       if (this._rigSources.has(file)) return;        // loaded — done
       if (this._rigLoadPromises.has(file)) return;   // in flight — wait
+      console.info(`[Renderer3D][rigdiag] cascade: loading "${file}" for ${entity?.type} (candidates: ${fallbackRigCandidates(entity).join(' → ')})`);
       this._loadFallbackRig(file, basePath);
       return;
     }
@@ -5200,6 +5309,7 @@ export class Renderer3D {
         tintable: file === MANNEQUIN_RIG_FILE,
       };
       this._rigSources.set(file, src);
+      console.info(`[Renderer3D][rigdiag] rig "${file}" LOADED — bones=${skeleton?.bones?.length ?? 0}, transformNodes=${transformNodes.length}, animGroups=${groups.length}, idleGroup=${idleGroup?.name ?? 'none'}, cloneTag=${src.cloneTag}`);
       // Retrofit standees that were waiting on this rig.
       this._upgradeStandeesToFallbackRig();
       // Wire walking onto this rig: ensure walking.glb's native group is loaded
@@ -9528,26 +9638,31 @@ export class Renderer3D {
 
     const standee = { plane: cone, sphere, leader, paladinClone: null };
 
-    // Every unit cascades to a rig: <type>-idle.glb → mannequin → cone+sphere.
-    // Kick the async load; clone synchronously if a rig is already in hand,
-    // otherwise _upgradeStandeesToFallbackRig retrofits when it lands. The
-    // cone+sphere stay in-scene (visibility 0) as anchor + picking target.
+    // Character meshes are preloaded behind the loading overlay
+    // (_preloadCharacterRigs), so a rig is in hand by the time any standee is
+    // built: the unit's own `<type>-idle.glb`, else the universal mannequin.
+    // The cone+sphere are NO LONGER a visible fallback — there is no pawn — they
+    // remain only as an invisible position anchor + picking target. If even the
+    // mannequin is unavailable we render nothing and log loudly.
     this._ensureFallbackRig(entity);
-    const rig = this._loadedFallbackRigFor(entity);
-    if (rig) {
-      const clone = this._buildRigClone(entity, cone, rig,
-        rig.tintable ? { tintColor: ownerColor } : {});
-      if (clone) {
-        cone.visibility   = 0;
-        sphere.visibility = 0;
-        // Strip the cone+sphere from the shadow casters so the floor shadow
-        // reflects the rig silhouette, not the pawn shape.
-        this._removeShadowCaster(cone);
-        this._removeShadowCaster(sphere);
-        for (const m of clone.childMeshes || []) this._addShadowCaster(m);
-        standee.paladinClone = clone;
-      }
+    const rig = this._loadedFallbackRigFor(entity)
+      || this._rigSources.get(MANNEQUIN_RIG_FILE)   // universal fallback (preloaded)
+      || null;
+    const clone = rig
+      ? this._buildRigClone(entity, cone, rig, rig.tintable ? { tintColor: ownerColor } : {})
+      : null;
+    if (clone) {
+      for (const m of clone.childMeshes || []) this._addShadowCaster(m);
+      standee.paladinClone = clone;
+    } else {
+      console.error(`[Renderer3D] No character mesh for ${entity.type} (${entity.id}) — fallback rig "${MANNEQUIN_RIG_FILE}" did not load; unit will be invisible.`);
     }
+    // Cone+sphere are an invisible anchor only — never the visible pawn. Hide
+    // them and drop them as shadow casters in every case (the rig casts).
+    cone.visibility   = 0;
+    sphere.visibility = 0;
+    this._removeShadowCaster(cone);
+    this._removeShadowCaster(sphere);
 
     this._positionStandee(standee, entity);
     return standee;
@@ -9678,7 +9793,7 @@ export class Renderer3D {
       if (!this._entityStandees.has(e.id)) continue;
       const k = hexKey(e.col, e.row);
       if (!byHex.has(k)) { byHex.set(k, []); hexCenter.set(k, { col: e.col, row: e.row }); }
-      byHex.get(k).push({ id: `standee_${e.id}`, kind: 'standee', entity: e });
+      byHex.get(k).push({ id: `standee_${e.id}`, kind: 'standee', entity: e, slot: e.slot ?? 0 });
     }
 
     const seenHexes = new Set();
@@ -9692,9 +9807,14 @@ export class Renderer3D {
         continue;
       }
       const { col, row } = hexCenter.get(k);
+      // Reserve the tile's authoritative blocked slots (trees + bridge non-road
+      // slots) so standees never stand on a tree or off the bridge deck. Falls
+      // back to the geometric road cache for tiles not in game state.
+      const reservedSlots = this.state.tiles.get(k)?.blockedSlots
+        ?? this._roadBlockedSlotsByKey.get(k);
       const { positionByOccupantId, overflow } = tileSlotWorldPositions(
         col, row, [...staticOcc, ...standeeOccs], HEX_RADIUS_WORLD,
-        { reservedSlots: this._roadBlockedSlotsByKey.get(k) },
+        { reservedSlots },
       );
       for (const occ of standeeOccs) {
         const pos = positionByOccupantId.get(occ.id);
@@ -10547,7 +10667,7 @@ export class Renderer3D {
    *  standee — the next draw() will snap the entity to its destination
    *  position anyway via `_positionStandee`, so resolution can't get stuck
    *  on a missing animation. */
-  addMoveAnim(entityId, fromCol, fromRow, toCol, toRow, _type, _owner, _title, path = null) {
+  addMoveAnim(entityId, fromCol, fromRow, toCol, toRow, _type, _owner, _title, path = null, fromSlot = 0, toSlot = 0) {
     if (!this._scene || !this._babylon) return;
     const standee = this._entityStandees.get(entityId);
     if (!standee) return;
@@ -10567,6 +10687,15 @@ export class Renderer3D {
       waypoints.push({ col: toCol, row: toRow });
     }
     const worldPts = waypoints.map(p => hexToWorld(p.col, p.row));
+    // Anchor the polyline's first/last points on the unit's actual sub-hex slot
+    // so the cone slides slot→slot instead of popping to the hex centre at the
+    // ends. Intermediate waypoints stay centred (the unit passes through the
+    // middle of the hexes it transits).
+    const fOff = TILE_SLOTS[fromSlot] ?? TILE_SLOTS[CENTRE_SLOT_INDEX];
+    const tOff = TILE_SLOTS[toSlot]   ?? TILE_SLOTS[CENTRE_SLOT_INDEX];
+    worldPts[0] = { x: worldPts[0].x + fOff.x, z: worldPts[0].z + fOff.z };
+    const _li = worldPts.length - 1;
+    worldPts[_li] = { x: worldPts[_li].x + tOff.x, z: worldPts[_li].z + tOff.z };
     const { x: fromX, z: fromZ } = worldPts[0];
     const { x: toX,   z: toZ   } = worldPts[worldPts.length - 1];
     // Playback-speed multiplier (cinematic/fast/vfast). Applied below to both
@@ -10729,7 +10858,7 @@ export class Renderer3D {
    *  strike). The slide is ALSO the standalone fallback for cone-token units
    *  (no `paladinClone`) and for the window before punch.glb has lazily
    *  loaded — in both cases the pure slide plays with no clip and no crash. */
-  addLungeAnim(entityId, fromCol, fromRow, toCol, toRow, _type, _owner, _title) {
+  addLungeAnim(entityId, fromCol, fromRow, toCol, toRow, _type, _owner, _title, _fromSlot = 0, stopAtBoundary = false) {
     if (!this._scene || !this._babylon) return;
     const standee = this._entityStandees.get(entityId);
     if (!standee) return;
@@ -10765,13 +10894,17 @@ export class Renderer3D {
     }
 
     // Start from the standee's CURRENT position — no pre-snap to the hex
-    // centre (that snap was the "pop" bug). Slide LUNGE_FRACTION toward the
-    // target hex world position so we close the gap without overlapping it.
+    // centre (that snap was the "pop" bug). The current position is already the
+    // unit's sub-hex slot, so `_fromSlot` is informational only here.
     const startX = standee.plane.position.x;
     const startZ = standee.plane.position.z;
-    const { x: lungeX, z: lungeZ } = computeLungeTarget(
-      { x: startX, z: startZ }, { x: toX, z: toZ },
-    );
+    // Combat lunge slides LUNGE_FRACTION toward the target hex to close the gap
+    // for the strike. A BUMP (blocked move) instead stops at the shared edge —
+    // the midpoint of the two hex centres — so the unit nudges the obstacle
+    // without crossing into its hex, which reads as far less jarring.
+    const { x: lungeX, z: lungeZ } = stopAtBoundary
+      ? { x: (fromX + toX) * 0.5, z: (fromZ + toZ) * 0.5 }
+      : computeLungeTarget({ x: startX, z: startZ }, { x: toX, z: toZ });
 
     // Face the lunge direction (same model-yaw logic as MOVE) — yaw toward
     // the actual motion vector (current → lunge end), not the hex centres.
@@ -15007,19 +15140,23 @@ export function tombstoneTokenColor(hex) {
 //   slot 0 — centre. Reserved for standees (the common case: one unit per hex).
 //   slot 1 — building anchor. Aligns with BUILDING_OFFSET for visual stability;
 //            a building always occupies this slot when present.
-//   slots 2–6 — outer ring at ~0.6 world units, used by trees and overflow
+//   slots 2–6 — outer ring at 0.6 world units, used by trees and overflow
 //            standees in deterministic id order.
 //
-// Outer-slot distance sits within [FOREST_INNER_RADIUS, FOREST_OUTER_RADIUS]
-// so existing forest invariants (trees stay out of the centre) still hold.
+// Outer slots sit on the TRUE hex FACE NORMALS (not the 45° corners) at radius
+// 0.6, so slot id i aligns to a face direction via hex-slots.js (slotToDir):
+// 1=NE, 2=NW, 3=W, 4=SW, 5=SE, 6=E. This lets the map keep trees off road
+// faces and (later) anchor unit movement to a face. Radius 0.6 stays within
+// [FOREST_INNER_RADIUS, FOREST_OUTER_RADIUS] so trees stay out of the centre.
+// 0.5196152422706631 = (√3/2) · 0.6.
 export const TILE_SLOTS = Object.freeze([
-  Object.freeze({ x:  0.00, z:  0.00 }), // 0 — centre
-  Object.freeze({ x:  0.42, z: -0.42 }), // 1 — NE (building anchor, BUILDING_OFFSET)
-  Object.freeze({ x: -0.42, z: -0.42 }), // 2 — NW
-  Object.freeze({ x: -0.60, z:  0.00 }), // 3 — W
-  Object.freeze({ x: -0.42, z:  0.42 }), // 4 — SW
-  Object.freeze({ x:  0.42, z:  0.42 }), // 5 — SE
-  Object.freeze({ x:  0.60, z:  0.00 }), // 6 — E
+  Object.freeze({ x:  0.00, z:  0.00 }),                 // 0 — centre
+  Object.freeze({ x:  0.30, z: -0.5196152422706631 }),   // 1 — NE (building anchor, BUILDING_OFFSET)
+  Object.freeze({ x: -0.30, z: -0.5196152422706631 }),   // 2 — NW
+  Object.freeze({ x: -0.60, z:  0.00 }),                 // 3 — W
+  Object.freeze({ x: -0.30, z:  0.5196152422706631 }),   // 4 — SW
+  Object.freeze({ x:  0.30, z:  0.5196152422706631 }),   // 5 — SE
+  Object.freeze({ x:  0.60, z:  0.00 }),                 // 6 — E
 ]);
 
 /** Index of the centre slot (always preferred for the first standee). */
@@ -15142,16 +15279,32 @@ export function assignTileSlotIndices(occupants, opts = {}) {
     out.set(trees[i].id, outerForTrees[i]);
     used.add(outerForTrees[i]);
   }
-  // Standees → centre first, then any remaining free slot, then overflow at centre.
+  // Standees first honor their authoritative `slot` (e.slot from game state)
+  // when that slot is free and not reserved — this is the consistent intra-hex
+  // position the slot system exists to preserve. Standees without a usable
+  // preference fall back to: centre first, then any remaining free slot, then
+  // overflow at centre. A missing/blocked `slot` simply routes to the fallback,
+  // so callers that don't pass `slot` (and the legacy all-centre case) behave
+  // exactly as before.
+  const pending = [];
+  for (const s of standees) {
+    const pref = s.slot;
+    if (typeof pref === 'number' && pref >= 0 && pref < TILE_SLOTS.length && !used.has(pref)) {
+      out.set(s.id, pref);
+      used.add(pref);
+    } else {
+      pending.push(s);
+    }
+  }
   const standeeSlots = [];
   if (!used.has(CENTRE_SLOT_INDEX)) standeeSlots.push(CENTRE_SLOT_INDEX);
   for (let i = 1; i < TILE_SLOTS.length; i++) {
     if (!used.has(i)) standeeSlots.push(i);
   }
   let overflow = 0;
-  for (let i = 0; i < standees.length; i++) {
-    if (i < standeeSlots.length) out.set(standees[i].id, standeeSlots[i]);
-    else { out.set(standees[i].id, CENTRE_SLOT_INDEX); overflow++; }
+  for (let i = 0; i < pending.length; i++) {
+    if (i < standeeSlots.length) out.set(pending[i].id, standeeSlots[i]);
+    else { out.set(pending[i].id, CENTRE_SLOT_INDEX); overflow++; }
   }
   return { slotByOccupantId: out, overflow };
 }

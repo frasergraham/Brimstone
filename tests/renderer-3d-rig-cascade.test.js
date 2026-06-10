@@ -16,7 +16,9 @@ import {
   stripRootBoneTranslation,
   rebaseRootBoneY,
   MANNEQUIN_RIG_FILE,
+  LAZY_RIG_TYPES,
 } from '../src/renderer-3d.js';
+import { EntityType } from '../src/entities.js';
 
 function makeHipsGroup() {
   const keys = [{ value: { x: 5, y: 90, z: 3 } }, { value: { x: 7, y: 92, z: 1 } }];
@@ -169,6 +171,43 @@ describe('_ensureFallbackRig cascade', () => {
     r._ensureFallbackRig({ type: 'zombie' });
     assert.deepEqual(calls, ['zombie-idle.glb']);
   });
+
+  test('still kicks the type-specific rig when the mannequin is ALREADY loaded', () => {
+    // Regression: a zombie in a game where the mannequin loaded first (survivors
+    // before the witch's summons) must still load its own rig — not glom onto
+    // the mannequin. Previously _ensureFallbackRig bailed because
+    // _loadedFallbackRigFor returned the already-loaded mannequin.
+    const r = newRenderer();
+    r._rigSources.set(MANNEQUIN_RIG_FILE, makeRigSource('mannequin', { tintable: true }));
+    const calls = [];
+    r._loadFallbackRig = (file) => { calls.push(file); return Promise.resolve(null); };
+    r._ensureFallbackRig({ type: 'zombie' });
+    assert.deepEqual(calls, ['zombie-idle.glb']);
+  });
+});
+
+describe('_loadedFallbackRigFor — cascade preference', () => {
+  test('returns the type-specific rig once it is loaded', () => {
+    const r = newRenderer();
+    const zsrc = makeRigSource('zombie', { tintable: false });
+    r._rigSources.set('zombie-idle.glb', zsrc);
+    assert.equal(r._loadedFallbackRigFor({ type: 'zombie' }), zsrc);
+  });
+
+  test('returns null (waits) when the preferred rig is still loading, even if the mannequin is loaded', () => {
+    const r = newRenderer();
+    r._rigSources.set(MANNEQUIN_RIG_FILE, makeRigSource('mannequin', { tintable: true }));
+    // zombie-idle.glb not loaded and not missing → still loadable → wait.
+    assert.equal(r._loadedFallbackRigFor({ type: 'zombie' }), null);
+  });
+
+  test('falls through to the mannequin only after the preferred rig is confirmed missing', () => {
+    const r = newRenderer();
+    const msrc = makeRigSource('mannequin', { tintable: true });
+    r._rigSources.set(MANNEQUIN_RIG_FILE, msrc);
+    r._rigFileMissing.add('zombie-idle.glb');
+    assert.equal(r._loadedFallbackRigFor({ type: 'zombie' }), msrc);
+  });
 });
 
 function makeAnimGroup() {
@@ -266,6 +305,42 @@ describe('_startClonePunch — per-instance strike', () => {
     const clone = { groups: { idle: makeAnimGroup() }, activeGroup: 'idle', oneShotPlaying: false };
     assert.equal(r._startClonePunch(clone), false);
     assert.equal(clone.oneShotPlaying, false);
+  });
+});
+
+describe('preload scope — survivors are lazy', () => {
+  test('LAZY_RIG_TYPES contains the survivor type', () => {
+    assert.ok(LAZY_RIG_TYPES.has(EntityType.SURVIVOR));
+  });
+
+  test('_preloadCharacterRigs loads the mannequin + leaders/summons but NOT survivors', async () => {
+    const r = newRenderer();
+    const calls = [];
+    r._loadFallbackRig      = (file) => { calls.push(file); return Promise.resolve(null); };
+    r._loadWalkingAnimation = () => Promise.resolve(null);
+    r._retargetWalkOntoRig  = () => null;
+    await r._preloadCharacterRigs('assets');
+    assert.ok(calls.includes(MANNEQUIN_RIG_FILE), 'mannequin preloaded');
+    assert.ok(calls.includes('zombie-idle.glb'),  'summon (zombie) preloaded');
+    assert.ok(!calls.includes('survivor-idle.glb'), 'survivor NOT preloaded up front');
+  });
+
+  test('preloadEntityRig loads a survivor rig on demand', async () => {
+    const r = newRenderer();
+    const calls = [];
+    r._loadFallbackRig      = (file) => { calls.push(file); return Promise.resolve(null); };
+    r._loadWalkingAnimation = () => Promise.resolve(null);
+    r._retargetWalkOntoRig  = () => null;
+    await r.preloadEntityRig({ type: 'survivor' });
+    assert.deepEqual(calls, ['survivor-idle.glb']);
+  });
+
+  test('preloadEntityRig is a no-op for mannequin-backed types', async () => {
+    const r = newRenderer();
+    const calls = [];
+    r._loadFallbackRig = (file) => { calls.push(file); return Promise.resolve(null); };
+    await r.preloadEntityRig({ type: 'mannequin' });
+    assert.deepEqual(calls, []);
   });
 });
 

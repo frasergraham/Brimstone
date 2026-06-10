@@ -457,6 +457,7 @@ function snapshotEntities(entities) {
     id:            e.id,
     col:           e.col,
     row:           e.row,
+    slot:          e.slot ?? 0,
     hp:            e.hp,
     maxHp:         e.maxHp,
     alive:         e.alive,

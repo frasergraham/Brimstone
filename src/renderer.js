@@ -407,6 +407,13 @@ export class Renderer {
     return this._readyPromise || Promise.resolve();
   }
 
+  /** 3D-renderer parity no-op: the 2D editor renderer has no character GLBs to
+   *  load, so just-in-time rig preloading (survivor reveals) is a resolved
+   *  promise here. */
+  preloadEntityRig() {
+    return Promise.resolve();
+  }
+
   /**
    * Compute screen-space positions and sizes for entities in a stack at a hex.
    * Used by the disambiguation menu to position DOM clones over canvas entities.
@@ -417,9 +424,10 @@ export class Renderer {
     const r  = entities.length === 1 ? hs * 0.42 : hs * 0.32;
     const scale = canvasRect.width / this.canvas.width;
     const max = Math.min(entities.length, 3);
+    const slotOffs = slotOffsetsForStack(entities);
 
     return entities.slice(0, max).map((entity, i) => {
-      const off = stackOffset(i, max);
+      const off = slotOffs.get(entity.id) ?? { x: 0, y: 0 };
       const ex = x + off.x * (hs / 30);
       const ey = y + off.y * (hs / 30);
       const screenX = canvasRect.left + (ex * this.zoomLevel + this._panX) * scale;
@@ -646,10 +654,15 @@ export class Renderer {
     this._startAnimLoop();
   }
 
-  /** Slide an entity icon from one hex to another (opponent move feedback). */
-  addMoveAnim(entityId, fromCol, fromRow, toCol, toRow, entityType, owner, title = null) {
+  /** Slide an entity icon from one hex to another (opponent move feedback).
+   *  fromSlot/toSlot anchor the slide on the unit's actual sub-hex slot at each
+   *  end, so the icon travels slot→slot rather than popping to the hex centre. */
+  addMoveAnim(entityId, fromCol, fromRow, toCol, toRow, entityType, owner, title = null, _path = null, fromSlot = 0, toSlot = 0) {
     const from = this._toCanvas(fromCol, fromRow);
     const to   = this._toCanvas(toCol,   toRow);
+    const hsScale = this.hexSize / 30;
+    const fOff = slotPixelOffset(fromSlot);
+    const tOff = slotPixelOffset(toSlot);
     const portraitId = entityType === EntityType.SURVIVOR
       ? Renderer.survivorAssetId(title)
       : entityType; // non-survivor type values match asset ids directly
@@ -658,8 +671,8 @@ export class Renderer {
       entityId,
       owner,
       fromCol, fromRow, toCol, toRow,
-      fromX: from.x, fromY: from.y,
-      toX:   to.x,   toY:   to.y,
+      fromX: from.x + fOff.x * hsScale, fromY: from.y + fOff.y * hsScale,
+      toX:   to.x   + tOff.x * hsScale, toY:   to.y   + tOff.y * hsScale,
       glyph: entityGlyph(entityType),
       color: ENTITY_COLOR[entityType],
       portraitId,
@@ -673,9 +686,17 @@ export class Renderer {
    * Slide the attacker to the border of the target hex and hold it there.
    * The entity stays at the midpoint until clearAllLungeAnims() is called.
    */
-  addLungeAnim(entityId, fromCol, fromRow, toCol, toRow, entityType, owner, title = null) {
+  addLungeAnim(entityId, fromCol, fromRow, toCol, toRow, entityType, owner, title = null, fromSlot = 0, _stopAtBoundary = false) {
     const from = this._toCanvas(fromCol, fromRow);
     const to   = this._toCanvas(toCol,   toRow);
+    // Start at the unit's actual sub-hex slot, not the hex centre. (slot 0 →
+    // zero offset, so existing centre-start callers are unchanged.)
+    const hsScale = this.hexSize / 30;
+    const fOff = slotPixelOffset(fromSlot);
+    const startX = from.x + fOff.x * hsScale;
+    const startY = from.y + fOff.y * hsScale;
+    // The tip is the shared edge between the two hexes (midpoint of the two
+    // centres) — the lunge stops at the boundary and never overlaps the target.
     const midX = (from.x + to.x) * 0.5;
     const midY = (from.y + to.y) * 0.5;
     const portraitId = entityType === EntityType.SURVIVOR
@@ -687,7 +708,7 @@ export class Renderer {
       entityId,
       owner,
       fromCol, fromRow, toCol, toRow,
-      fromX: from.x, fromY: from.y,
+      fromX: startX, fromY: startY,
       midX, midY,
       glyph:     entityGlyph(entityType),
       color:     ENTITY_COLOR[entityType],
@@ -2746,10 +2767,11 @@ export class Renderer {
     // Larger portrait radius when a single unit occupies the hex
     const r      = stack.length === 1 ? hs * 0.42 : hs * 0.32;
     const max    = Math.min(stack.length, 3);
+    const slotOffs = slotOffsetsForStack(stack);
 
     for (let i = 0; i < max; i++) {
       const entity  = stack[i];
-      const offsets = stackOffset(i, max);
+      const offsets = slotOffs.get(entity.id) ?? { x: 0, y: 0 };
       const ex = x + offsets.x * (hs / 30);
       const ey = y + offsets.y * (hs / 30);
 
@@ -3608,4 +3630,54 @@ function stackOffset(index, total) {
   if (total === 2) return index === 0 ? { x: -6, y: 0 } : { x: 6, y: 0 };
   const offsets = [{ x: -6, y: -4 }, { x: 6, y: -4 }, { x: 0, y: 6 }];
   return offsets[index] || { x: 0, y: 0 };
+}
+
+// Sub-hex slot → pixel direction (face normals; +y is screen-DOWN, so north is
+// negative y). Index 0 is the centre. Mirrors TILE_SLOTS in renderer-3d.js so
+// the 2D and 3D placements agree on which slot sits where. Magnitudes are at
+// the hexSize=30 baseline; callers scale by (hexSize / 30).
+const SLOT_DIR_2D = Object.freeze([
+  Object.freeze({ x:  0,    y:  0 }),          // 0 — centre
+  Object.freeze({ x:  0.5,  y: -0.8660254 }),  // 1 — NE
+  Object.freeze({ x: -0.5,  y: -0.8660254 }),  // 2 — NW
+  Object.freeze({ x: -1,    y:  0 }),          // 3 — W
+  Object.freeze({ x: -0.5,  y:  0.8660254 }),  // 4 — SW
+  Object.freeze({ x:  0.5,  y:  0.8660254 }),  // 5 — SE
+  Object.freeze({ x:  1,    y:  0 }),          // 6 — E
+]);
+const SLOT_RADIUS_PX = 9;
+
+// Pixel offset of a single sub-hex slot (at the hexSize=30 baseline; callers
+// scale by hexSize/30). Used to anchor a move animation's start/end on the
+// unit's actual slot instead of the hex centre.
+function slotPixelOffset(slot) {
+  const d = SLOT_DIR_2D[slot] ?? SLOT_DIR_2D[0];
+  return { x: d.x * SLOT_RADIUS_PX, y: d.y * SLOT_RADIUS_PX };
+}
+
+// Resolve each unit on a hex to a distinct pixel offset from the hex centre,
+// honoring its authoritative `slot` and falling back to the next free slot on
+// collision (e.g. several never-moved units that all default to the centre).
+// Resolution is id-sorted so it's stable and matches the 3D allocator, and so
+// the disambiguation overlay (getEntityScreenPositions) lands exactly on the
+// drawn sprites regardless of input order. Returns Map<entityId, {x, y}>.
+function slotOffsetsForStack(entities) {
+  const sorted = [...entities].sort((a, b) => {
+    const ka = String(a?.id), kb = String(b?.id);
+    return ka < kb ? -1 : ka > kb ? 1 : 0;
+  });
+  const used = new Set();
+  const byId = new Map();
+  for (const e of sorted) {
+    let s = e?.slot ?? 0;
+    if (used.has(s)) {
+      s = -1;
+      for (let c = 0; c < SLOT_DIR_2D.length; c++) { if (!used.has(c)) { s = c; break; } }
+      if (s < 0) s = 0;
+    }
+    used.add(s);
+    const d = SLOT_DIR_2D[s] ?? SLOT_DIR_2D[0];
+    byId.set(e?.id, { x: d.x * SLOT_RADIUS_PX, y: d.y * SLOT_RADIUS_PX });
+  }
+  return byId;
 }
