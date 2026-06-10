@@ -169,6 +169,43 @@ describe('_ensureFallbackRig cascade', () => {
     r._ensureFallbackRig({ type: 'zombie' });
     assert.deepEqual(calls, ['zombie-idle.glb']);
   });
+
+  test('still kicks the type-specific rig when the mannequin is ALREADY loaded', () => {
+    // Regression: a zombie in a game where the mannequin loaded first (survivors
+    // before the witch's summons) must still load its own rig — not glom onto
+    // the mannequin. Previously _ensureFallbackRig bailed because
+    // _loadedFallbackRigFor returned the already-loaded mannequin.
+    const r = newRenderer();
+    r._rigSources.set(MANNEQUIN_RIG_FILE, makeRigSource('mannequin', { tintable: true }));
+    const calls = [];
+    r._loadFallbackRig = (file) => { calls.push(file); return Promise.resolve(null); };
+    r._ensureFallbackRig({ type: 'zombie' });
+    assert.deepEqual(calls, ['zombie-idle.glb']);
+  });
+});
+
+describe('_loadedFallbackRigFor — cascade preference', () => {
+  test('returns the type-specific rig once it is loaded', () => {
+    const r = newRenderer();
+    const zsrc = makeRigSource('zombie', { tintable: false });
+    r._rigSources.set('zombie-idle.glb', zsrc);
+    assert.equal(r._loadedFallbackRigFor({ type: 'zombie' }), zsrc);
+  });
+
+  test('returns null (waits) when the preferred rig is still loading, even if the mannequin is loaded', () => {
+    const r = newRenderer();
+    r._rigSources.set(MANNEQUIN_RIG_FILE, makeRigSource('mannequin', { tintable: true }));
+    // zombie-idle.glb not loaded and not missing → still loadable → wait.
+    assert.equal(r._loadedFallbackRigFor({ type: 'zombie' }), null);
+  });
+
+  test('falls through to the mannequin only after the preferred rig is confirmed missing', () => {
+    const r = newRenderer();
+    const msrc = makeRigSource('mannequin', { tintable: true });
+    r._rigSources.set(MANNEQUIN_RIG_FILE, msrc);
+    r._rigFileMissing.add('zombie-idle.glb');
+    assert.equal(r._loadedFallbackRigFor({ type: 'zombie' }), msrc);
+  });
 });
 
 function makeAnimGroup() {

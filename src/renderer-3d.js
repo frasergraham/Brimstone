@@ -5133,13 +5133,22 @@ export class Renderer3D {
     }
   }
 
-  /** First loaded fallback-rig source for an entity (the earliest cascade
-   *  candidate already in _rigSources), or null. Synchronous — does NOT trigger
-   *  loads (that's _ensureFallbackRig). */
+  /** Best-available fallback-rig source for an entity, honouring cascade
+   *  PREFERENCE: the unit's own `<type>-idle.glb` wins, and we only fall through
+   *  to a later candidate (the shared mannequin) once an earlier one is
+   *  confirmed MISSING (404'd). While the preferred rig is still loading we
+   *  return null (render the cone placeholder and wait) rather than locking the
+   *  unit onto an already-loaded mannequin forever — that downgrade was why a
+   *  zombie in a game where the mannequin loaded first (e.g. survivors appear
+   *  before the witch summons) rendered as a mannequin and never upgraded.
+   *  Synchronous — does NOT trigger loads (that's _ensureFallbackRig). */
   _loadedFallbackRigFor(entity) {
     for (const file of fallbackRigCandidates(entity)) {
       const src = this._rigSources.get(file);
       if (src) return src;
+      // This candidate isn't loaded yet. If it's still loadable (not 404'd),
+      // wait for it instead of downgrading to a less-preferred rig.
+      if (!this._rigFileMissing.has(file)) return null;
     }
     return null;
   }
