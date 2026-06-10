@@ -2018,17 +2018,18 @@ export class UIController {
         case ActionType.BATTLE:
           break; // handled via hex clicks
         case ActionType.EXPLORE:
-          arcItems.push({ group: 'scout', label: 'Explore', fullLabel: 'Explore tile',
+          arcItems.push({ group: 'scout', label: 'Explore', fullLabel: 'Explore tile — search for resources, loot, or hidden survivors (1 action)',
             color: '#7eccd6', dis, cost: 1, attrs: 'data-action="explore"' });
           break;
         case ActionType.SOUND_HORN:
-          arcItems.push({ group: 'scout', label: 'Sound Horn', fullLabel: 'Sound Horn (1 food)',
+          arcItems.push({ group: 'scout', label: 'Sound Horn', fullLabel: 'Sound Horn — call hidden survivors within 4 hexes, but reveal your position this round (1 action, 1 food)',
             color: '#7eccd6', dis: !action.affordable || dis, cost: 1, resCost: '1🍞', attrs: 'data-action="sound_horn"' });
           break;
         case ActionType.GUARD: {
           const charges = action.currentCharges || 0;
           const lbl = charges > 0 ? `Guard +${charges + 1}` : 'Guard';
-          arcItems.push({ group: 'defense', label: lbl, fullLabel: lbl,
+          arcItems.push({ group: 'defense', label: lbl,
+            fullLabel: `${lbl} — strike the first enemy that comes into reach this round (1 action)`,
             color: '#8888cc', dis, cost: 1, attrs: 'data-action="guard"' });
           break;
         }
@@ -2658,12 +2659,15 @@ export class UIController {
 
     // Pill bump above the score bar: "[phase icon] Night — Day 1 · Round 2"
     const activeStep = CYCLE_STEPS[roundInCycle];
+    const nextStep   = CYCLE_STEPS[(roundInCycle + 1) % cycleLen];
     const bumpEl   = this._el('cycle-bump');
     const iconEl   = this._el('cycle-bump-icon');
     const labelEl  = this._el('cycle-bump-label');
     if (bumpEl && activeStep) {
       bumpEl.className = `phase-${activeStep.phase}`;
-      bumpEl.title = activeStep.desc;
+      bumpEl.title = nextStep && nextStep !== activeStep
+        ? `${activeStep.label}: ${activeStep.desc}\nNext — ${nextStep.label}: ${nextStep.desc}`
+        : `${activeStep.label}: ${activeStep.desc}`;
     }
     if (iconEl && activeStep) {
       const imgSrc = this.renderer?.getPortraitDataURL?.(activeStep.sprite, 64);
@@ -5470,35 +5474,49 @@ function _breakdownData(snap, bd, side, total) {
     ? (bd.atkAdvantageDice ?? 0)
     : (bd.defAdvantageDice ?? 0);
 
+  const GANGUP_TIP = 'Gang-up: each ally adjacent to the target adds +1 advantage die and +1 flat (max 3).';
   const rows = [];
-  const add = (label, val, sign) => rows.push({ label, val, sign });
+  const add = (label, val, sign, tip = null) => rows.push({ label, val, sign, tip });
   if (side === 'atk') {
-    add(`${snap.name} ATK`, snap.attack, 'base');
-    if (snap.attackBonus)    add('🪙 Silver',          snap.attackBonus,    'pos');
-    if (bd.phaseBonus)       add('🌙 Night',           bd.phaseBonus,       'pos');
-    if (bd.atkStaffBonus)    add('⚕ Staff (undead)',   bd.atkStaffBonus,    'pos');
-    if (bd.atkFortAtkBonus)  add('🏰 Fort ATT',        bd.atkFortAtkBonus,  'pos');
+    add(`${snap.name} ATK`, snap.attack, 'base', 'Base attack stat (including equipped weapon).');
+    if (snap.attackBonus)    add('🪙 Silver',          snap.attackBonus,    'pos', 'Silver weapon bonus.');
+    if (bd.phaseBonus)       add('🌙 Night',           bd.phaseBonus,       'pos', 'Phase bonus — the night favors the witch’s forces.');
+    if (bd.atkStaffBonus)    add('⚕ Staff (undead)',   bd.atkStaffBonus,    'pos', 'Weapon trigger — the staff is potent against undead defenders.');
+    if (bd.atkFortAtkBonus)  add('🏰 Fort ATT',        bd.atkFortAtkBonus,  'pos', 'Attacking from a fortified tile.');
     const atkAllyNames = bd.atkAllyNames ?? [];
     const atkAllyContrib = Math.min(atkAllyNames.length, bd.atkGangupFlat || 0);
     if (atkAllyContrib > 0) {
-      for (let i = 0; i < atkAllyContrib; i++) add(`👥 ${atkAllyNames[i]}`, 1, 'pos');
+      for (let i = 0; i < atkAllyContrib; i++) add(`👥 ${atkAllyNames[i]}`, 1, 'pos', GANGUP_TIP);
     } else if (bd.atkGangupFlat) {
-      add('👥 Gang-up flat', bd.atkGangupFlat, 'pos');
+      add('👥 Gang-up flat', bd.atkGangupFlat, 'pos', GANGUP_TIP);
     }
   } else {
-    add(`${snap.name} DEF`, snap.defense, 'base');
-    if (snap.defenseBonus)  add('🛡 Bonus DEF',   snap.defenseBonus,  'pos');
-    if (bd.fortBonus)       add('🏰 Fort DEF',    bd.fortBonus,       'pos');
-    if (bd.fatiguePenalty)  add('😓 Fatigue',     -bd.fatiguePenalty, 'neg');
+    add(`${snap.name} DEF`, snap.defense, 'base', 'Base defense stat (including equipped weapon).');
+    if (snap.defenseBonus)  add('🛡 Bonus DEF',   snap.defenseBonus,  'pos', 'Temporary defense bonus.');
+    if (bd.fortBonus)       add('🏰 Fort DEF',    bd.fortBonus,       'pos', 'Fortification — each fort level on the defender’s tile adds defense.');
+    if (bd.fatiguePenalty)  add('😓 Fatigue',     -bd.fatiguePenalty, 'neg', 'Fatigue — defending repeatedly in one round wears the defender down.');
     const defAllyNames = bd.defAllyNames ?? [];
     const defAllyContrib = Math.min(defAllyNames.length, bd.defGangupFlat || 0);
     if (defAllyContrib > 0) {
-      for (let i = 0; i < defAllyContrib; i++) add(`👥 ${defAllyNames[i]}`, 1, 'pos');
+      for (let i = 0; i < defAllyContrib; i++) add(`👥 ${defAllyNames[i]}`, 1, 'pos', GANGUP_TIP);
     } else if (bd.defGangupFlat) {
-      add('👥 Allies flat', bd.defGangupFlat, 'pos');
+      add('👥 Allies flat', bd.defGangupFlat, 'pos', GANGUP_TIP);
     }
   }
   return { pool, picked, advantage, rows, total };
+}
+
+// Tooltip for the dice-pool row — explains the advantage mechanic in place.
+function _poolTip(advantage) {
+  if (advantage > 0) {
+    return `Advantage ${advantage}: rolls ${1 + advantage} dice and keeps the BEST. ` +
+      'Gang-up allies adjacent to the target grant +1 die each (max 3); some weapons and effects add more.';
+  }
+  if (advantage < 0) {
+    return `Disadvantage ${-advantage}: rolls ${1 - advantage} dice and keeps the WORST ` +
+      '(e.g. a ranged unit firing point-blank).';
+  }
+  return 'A single d6 — no advantage on this roll.';
 }
 
 function _poolSign(advantage) {
@@ -5541,7 +5559,7 @@ function _buildBreakdownHTML(snap, bd, side, total, padTo = 0) {
     }
     const poolSign = _poolSign(d.advantage);
     parts.push(
-      `<div class="bkd-row bkd-pool-row"${_signAttr(poolSign)}>` +
+      `<div class="bkd-row bkd-pool-row"${_signAttr(poolSign)} title="${_poolTip(d.advantage)}">` +
         `<span class="bkd-label">${_poolLabel(d.advantage)}</span>` +
         `<span class="bkd-pool-discards">${discards.join('')}</span>` +
         `<span class="bkd-pool-picked-slot">${pickedHTML}</span>` +
@@ -5550,8 +5568,9 @@ function _buildBreakdownHTML(snap, bd, side, total, padTo = 0) {
   }
   for (const r of d.rows) {
     const v = r.val >= 0 ? '+' + r.val : r.val;
+    const tip = r.tip ? ` title="${r.tip}"` : '';
     parts.push(
-      `<div class="bkd-row"${_signAttr(r.sign)}><span class="bkd-label">${r.label}</span><span class="bkd-val">${v}</span></div>`
+      `<div class="bkd-row"${_signAttr(r.sign)}${tip}><span class="bkd-label">${r.label}</span><span class="bkd-val">${v}</span></div>`
     );
   }
   const spacerCount = Math.max(0, padTo - d.rows.length);
@@ -5622,6 +5641,7 @@ function _animateBreakdownSide(colEl, snap, bd, side, total, factor, anim, padTo
   // before the picked die is selected. The glow-in at settle still fires.
   const poolRow = document.createElement('div');
   poolRow.className = 'bkd-row bkd-pool-row';
+  poolRow.title = _poolTip(d.advantage);
   if (poolSign !== 'base') poolRow.setAttribute('data-sign', poolSign === 'pos' ? 'positive' : 'negative');
   poolRow.innerHTML =
     `<span class="bkd-label">${_poolLabel(d.advantage)}</span>` +
@@ -5646,6 +5666,7 @@ function _animateBreakdownSide(colEl, snap, bd, side, total, factor, anim, padTo
   const rowEls = d.rows.map(r => {
     const row = document.createElement('div');
     row.className = 'bkd-row bkd-row-muted';
+    if (r.tip) row.title = r.tip;
     if (r.sign !== 'base') row.setAttribute('data-sign', r.sign === 'pos' ? 'positive' : 'negative');
     const v = r.val >= 0 ? '+' + r.val : r.val;
     row.innerHTML =
