@@ -101,10 +101,17 @@ See `src/sides.js` for the Side enum and `src/factions.js` for the Faction regis
 | Necromancer (stub) | 10 | 1 | 2 | night | Game start (when picked) |
 | Brute        | 18 | 4 | 3 | night | Game start (when picked) |
 | Survivor | 4 | 1 | 1 | day (after recruit) | Exploration / Sound Horn |
-| Zombie | 2 | 2 | 0 | night (after raise) | Exploration (graveyard) |
+| Zombie | 2 | 2 | 0 | night (after raise) | Exploration / graveyard passive spawn |
 | Minion | 2 | 1 | 0 | night | Summon (no resource cost) |
 | Wood Golem | 3 | 2 | 3 | night | Summon (2 wood) |
 | Iron Golem | 5 | 3 | 2 | night | Summon (2 metal) |
+
+**Graveyard passive spawns** (standard games only): at the end of every full
+day-cycle (8 rounds), each graveyard raises one free witch-owned zombie,
+capped at 2 concurrent witch zombies. Implemented in
+`WitchFaction.applyEndOfRoundEffects` (`src/factions.js`); battle mode and
+campaign missions are exempt. Mirrors hero survivor income to soften the
+recruitment snowball.
 
 ### Survivor Abilities
 

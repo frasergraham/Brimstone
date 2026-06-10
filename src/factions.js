@@ -549,11 +549,75 @@ export class HeroFaction extends Faction {
 
 // ── Witch Faction ───────────────────────────────────────────────────────────
 
+// ── Graveyard passive spawns (June 2026 design pass) ─────────────────────────
+// The hero's income (survivor recruitment) compounds while every witch unit
+// costs an action to summon. Graveyards mirror that income: a free zombie
+// rises at the end of every full day-cycle, capped so the swarm stays small.
+// Standard games only — battle mode and campaign missions keep their own
+// tuned economies. Values validated by `node scripts/headless.js 500 standard`
+// (see the introducing commit for the balance delta).
+export const GRAVEYARD_SPAWN_INTERVAL = 8;  // rounds — one full dawn→night cycle
+export const GRAVEYARD_ZOMBIE_CAP     = 2;  // max concurrent witch zombies
+
 export class WitchFaction extends Faction {
   get id()         { return 'witch'; }
   get name()       { return 'Witch'; }
   get leaderType() { return EntityType.WITCH; }
   get side()       { return Side.NIGHT; }
+
+  applyEndOfRoundEffects(state) {
+    this._applyGraveyardSpawns(state);
+  }
+
+  _applyGraveyardSpawns(state) {
+    // endRound() fires effects BEFORE the round counter advances, so
+    // state.round is the round that just completed.
+    if (state.round <= 0 || state.round % GRAVEYARD_SPAWN_INTERVAL !== 0) return;
+    // Standard games only (battle/campaign economies are tuned separately).
+    if (state.gameMode !== 'standard' || state.victoryDelegate || state.noWitchMission) return;
+
+    // The rising dead serve the night side's leader.
+    const leaders = state.entities.filter(
+      e => e.alive && e.owner === this.id && isLeaderType(e.type)
+    );
+    if (leaders.length === 0) return;
+
+    for (const [, t] of state.tiles) {
+      if (t.building !== BuildingType.GRAVEYARD) continue;
+
+      const zombies = state.entities.filter(
+        e => e.alive && e.owner === this.id && e.type === EntityType.ZOMBIE
+      );
+      if (zombies.length >= GRAVEYARD_ZOMBIE_CAP) return;
+
+      const spawn = this._graveyardSpawnHex(state, t);
+      if (!spawn) continue;
+
+      // Nearest leader claims the zombie (matters for NvN budgets/colors).
+      const leader = leaders.reduce((best, l) => {
+        const d  = Math.abs(l.col - t.col) + Math.abs(l.row - t.row);
+        const bd = Math.abs(best.col - t.col) + Math.abs(best.row - t.row);
+        return d < bd ? l : best;
+      });
+      const zombie = createZombie(spawn.col, spawn.row, leader.ownerId, state);
+      state.entities.push(zombie);
+      state.addLog('🪦 The graveyard stirs — a zombie claws free of the earth!', 'witch');
+    }
+  }
+
+  /** Graveyard entrance if no enemy stands on it; else a free neighbour. */
+  _graveyardSpawnHex(state, tile) {
+    const enemyAt = (col, row) => state.entities.some(
+      e => e.alive && e.owner !== this.id && e.col === col && e.row === row
+    );
+    if (!enemyAt(tile.col, tile.row)) return { col: tile.col, row: tile.row };
+    for (const n of getNeighbors(tile.col, tile.row)) {
+      const nt = state.tiles.get(hexKey(n.col, n.row));
+      if (!nt || isRiver(nt) || nt.buildingFootprintOf || hasBuilding(nt)) continue;
+      if (!enemyAt(n.col, n.row)) return { col: n.col, row: n.row };
+    }
+    return null;
+  }
 
   // Action Budget
   get actionCap()    { return 8; }

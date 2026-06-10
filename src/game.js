@@ -193,6 +193,11 @@ export class GameState {
     // Shape: { remove?: string[], buildings?: {[key]: table}, terrain?: {[key]: table} }
     this.lootOverrides = null;
 
+    // Human-vs-AI difficulty tier: 'easy' | 'normal' | 'hard'. Scales how many
+    // actions AI engines plan per round (see AI_DIFFICULTY_BUDGET_DELTA in
+    // src/ai.js). 'normal' is the tuned balance baseline.
+    this.aiDifficulty = 'normal';
+
     // ── Player registry (multiplayer) ──────────────────────────────────────
     // Each entry: { id, name, faction, isAI, leaderId }
     // Populated by addPlayer() for online games; pre-populated here for offline.

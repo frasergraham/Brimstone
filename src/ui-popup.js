@@ -79,6 +79,9 @@ export function getEntityScreenPos(ui, entity) {
 export function computeArcPositions(popup, ui, hexScreenPx) {
   const items = ui._arcItems;
   if (!items?.length) return;
+  // Zoom-triggered recomputes start from a clean, un-expanded layout —
+  // otherwise the hover expansion's offsets would be baked into the new grid.
+  ui._collapseArcExpansion?.();
   const btns = popup.querySelectorAll('.arc-item');
   if (!btns.length) return;
   const openRight = ui._arcOpenRight;

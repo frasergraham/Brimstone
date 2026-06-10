@@ -40,6 +40,7 @@ import { getFaction, findFaction, allFactions, getFactionsForSide, sightRangeFor
 import { compileTurnBattleSummary, compileTurnBattlePairs, collectTurnFinds } from './battle-utils.js';
 import { installKeybindings } from './keybindings.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
+import * as audio from './audio.js';
 import { playback, resetPlayback, replayFullGame, playbackDelay, swapState, patchAlive } from './playback.js';
 import { ReplayCache } from './replay-cache.js';
 import { makeShowLoadingAndReveal } from './loading-reveal.js';
@@ -316,6 +317,12 @@ function init(witchIsAI, heroIsAI, autoplay = false, humanFactionId = null) {
   const mapSize   = document.getElementById('select-map-size')?.value ?? 'standard';
   const nodeCount = parseInt(document.getElementById('select-node-count')?.value ?? '3', 10);
   state    = new GameState(witchIsAI, heroIsAI, mapSize, nodeCount);
+
+  // Difficulty applies to human-vs-AI only — AI-vs-AI (autoplay/balance) and
+  // two-human games always run at the tuned 'normal' baseline.
+  if ((witchIsAI || heroIsAI) && !(witchIsAI && heroIsAI)) {
+    state.aiDifficulty = document.getElementById('select-ai-difficulty')?.value ?? 'normal';
+  }
 
   // Apply the player's faction pick by swapping the side's default
   // leader entity to the picked faction. swapLeaderToFaction is a no-op
@@ -1182,6 +1189,9 @@ async function _run3DCombatCardHold(actorSnap, targetSnap, result, redrawFn) {
 }
 
 function _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn) {
+  // Single audio hook for every combat display path (2D dialog, fast toast,
+  // 3D card-hold, autoplay, replay) — all of them funnel through here.
+  audio.playCombat(result);
   renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
   // Pass entityId so the renderer flags the affected standee with
   // `_pendingDespawn`. _syncEntityStandees skips disposal until the "-N"
@@ -2037,6 +2047,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         // appears on the summoner's own hex) — matches the SUMMON card's gate.
         if (actorSnap && _evVisible(ev, step.entitySnapshot)) {
           renderer.addSpawnAnim(actorSnap.col, actorSnap.row, '#b39ddb');
+          audio.play('summon');
           hadBattle = true;
         }
       }
@@ -2670,6 +2681,19 @@ window.addEventListener('resize', () => {
   renderer.resize();
   redraw();
 });
+
+// ── UI click sounds ───────────────────────────────────────────────────────────
+// Every button press and menu selection ticks. Delegated in the capture phase
+// so handlers that stopPropagation can't silence it; the same first gesture
+// also unlocks the AudioContext (audio.init).
+
+audio.init();
+document.addEventListener('click', (e) => {
+  if (e.target?.closest?.('button, select, [role="button"]')) audio.play('click');
+}, { capture: true, passive: true });
+document.addEventListener('change', (e) => {
+  if (e.target?.closest?.('select')) audio.play('click');
+}, { capture: true, passive: true });
 
 // ── Setup screen ──────────────────────────────────────────────────────────────
 
@@ -5976,6 +6000,7 @@ document.getElementById('btn-create-game-confirm').addEventListener('click', () 
       isPrivate:      document.getElementById('cg-private').checked,
       isAsync,
       turnIntervalMs: parseInt(timeoutEl?.value ?? '90000', 10),
+      aiDifficulty:   document.getElementById('cg-ai-difficulty')?.value ?? 'normal',
     };
     mp.createLobby(config);
     // Transition to lobby card happens in onLobbyJoined callback

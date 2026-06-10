@@ -170,6 +170,15 @@ export function inBuilding(state, entity) {
   return t && hasBuilding(t);
 }
 
+// ── AI difficulty ─────────────────────────────────────────────────────────────
+// Human-vs-AI difficulty tiers scale how many actions the AI *plans* each
+// round (the same lever campaign missions use via campaignAIBudgetBonus).
+// 'normal' is the tuned baseline; never let a tier change AI behaviour in
+// AI-vs-AI balance runs unless state.aiDifficulty is explicitly set.
+
+export const AI_DIFFICULTIES = Object.freeze(['easy', 'normal', 'hard']);
+export const AI_DIFFICULTY_BUDGET_DELTA = Object.freeze({ easy: -1, normal: 0, hard: 1 });
+
 // ── Plan simulation state ─────────────────────────────────────────────────────
 // A lightweight clone of GameState used for synchronous plan generation.
 // Only entity positions and action budget are tracked; combat outcomes are
@@ -238,6 +247,7 @@ export class PlanSimState {
     }
     this._faction = faction;
     this.campaignAIBudgetBonus = realState.campaignAIBudgetBonus ?? 0;
+    this.aiDifficultyDelta = AI_DIFFICULTY_BUDGET_DELTA[realState.aiDifficulty] ?? 0;
     this.noWitchMission = !!realState.noWitchMission;
 
     // Count active players per faction — used by NvN-aware tunings such as

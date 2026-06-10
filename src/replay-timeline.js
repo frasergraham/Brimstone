@@ -22,6 +22,105 @@ export const OutcomeKind = Object.freeze({
   HIT: 'hit', CRUSH: 'crush', MISS: 'miss', KILL: 'kill',
 });
 
+/**
+ * Structured breakdown of a battle roll — the single source for both the
+ * plain-text tip (buildRollTip) and the UI's styled hover panel. Pure;
+ * returns null when the result carries no breakdown (older replays).
+ *
+ * Shape:
+ *   {
+ *     atk: { roll, dice: {pool, picked, advantage}, terms: [{label, val}] },
+ *     def: { ... },
+ *     notes: string[],   // gang-up / point-blank explanations when relevant
+ *     rule:  string,     // hit/crush/counter thresholds (ranged variant)
+ *   }
+ */
+export function buildRollRows(result, ranged = false) {
+  const bd = result?.breakdown;
+  if (!bd || result?.attackRoll == null || result?.defenseRoll == null) return null;
+
+  const atkStat = (bd.atkBaseStat ?? 0) + (bd.atkWeaponMod ?? 0) + (bd.atkAbilityMod ?? 0) + (bd.atkEffectMod ?? 0);
+  const defStat = (bd.defBaseStat ?? 0) + (bd.defWeaponMod ?? 0) + (bd.defAbilityMod ?? 0) + (bd.defEffectMod ?? 0);
+  const terms = (pairs) => pairs.filter(([, v]) => v).map(([label, val]) => ({ label, val }));
+
+  const notes = [];
+  if ((bd.atkGangupFlat ?? 0) > 0 || (bd.defGangupFlat ?? 0) > 0) {
+    notes.push('Gang-up: each ally beside the target adds +1 advantage die and +1 flat (max 3).');
+  }
+  if ((bd.atkDisadvantageDice ?? 0) > 0) {
+    notes.push('Point-blank: ranged attackers roll at disadvantage against adjacent targets.');
+  }
+
+  return {
+    atk: {
+      roll: result.attackRoll,
+      dice: {
+        pool: Array.isArray(bd.atkPool) ? [...bd.atkPool] : [bd.atkBaseDie],
+        picked: bd.atkBaseDie,
+        advantage: (bd.atkAdvantageDice ?? 0) - (bd.atkDisadvantageDice ?? 0),
+      },
+      terms: terms([
+        ['ATK', atkStat],
+        ['silver', bd.atkAttackBonus],
+        ['gang-up', bd.atkGangupFlat],
+        ['night', bd.phaseBonus],
+        ['fort', bd.atkFortAtkBonus],
+        ['weapon trigger', bd.atkStaffBonus],
+        ['range falloff', -(bd.rangeDistancePenalty ?? 0)],
+      ]),
+    },
+    def: {
+      roll: result.defenseRoll,
+      dice: {
+        pool: Array.isArray(bd.defPool) ? [...bd.defPool] : [bd.defBaseDie],
+        picked: bd.defBaseDie,
+        advantage: bd.defAdvantageDice ?? 0,
+      },
+      terms: terms([
+        ['DEF', defStat],
+        ['bonus', bd.defDefenseBonus],
+        ['allies', bd.defGangupFlat],
+        ['fort', bd.fortBonus],
+        ['forest cover', bd.forestCoverBonus],
+        ['fatigue', -(bd.fatiguePenalty ?? 0)],
+      ]),
+    },
+    notes,
+    rule: ranged
+      ? 'Hit if attack > defense. Ranged shots never crush and are never countered.'
+      : 'Hit if attack > defense · crush (2 dmg) at double · counter when defense ≥ 2× attack.',
+  };
+}
+
+/**
+ * Multi-line plain-text breakdown of a battle roll — the accessible/legacy
+ * text form of buildRollRows. Pure; returns '' when not reconstructable.
+ *
+ * @param {object} result — executeBattle-style result (attackRoll/defenseRoll/breakdown)
+ * @param {boolean} ranged
+ * @returns {string} newline-separated lines, or '' when not reconstructable
+ */
+export function buildRollTip(result, ranged = false) {
+  const rows = buildRollRows(result, ranged);
+  if (!rows) return '';
+
+  const dicePart = ({ pool, picked, advantage }) => {
+    if (!Array.isArray(pool) || pool.length <= 1) return `die ${picked}`;
+    const kind = advantage >= 0 ? 'best' : 'worst';
+    return `die ${picked} (rolled ${pool.join('·')}, kept ${kind} of ${pool.length})`;
+  };
+  const termText = (t) => ` ${t.val > 0 ? '+' : '−'}${Math.abs(t.val)} ${t.label}`;
+  const sideLine = (name, side) =>
+    `${name} ${side.roll} = ` + dicePart(side.dice) + side.terms.map(termText).join('');
+
+  return [
+    sideLine('Attack', rows.atk),
+    sideLine('Defense', rows.def),
+    ...rows.notes,
+    rows.rule,
+  ].join('\n');
+}
+
 /** Display label per PlanActionType value. */
 const ACTION_LABEL = Object.freeze({
   'move': 'MOVE', 'battle-unit': 'BATTLE', 'battle-hex': 'BATTLE',
@@ -213,6 +312,8 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
           ranged,
           atkRoll:      ev.result?.attackRoll ?? null,
           defRoll:      ev.result?.defenseRoll ?? null,
+          rollTip:      buildRollTip(ev.result, ranged),
+          rollRows:     buildRollRows(ev.result, ranged),
           attackerWon:  !!ev.result?.hit,        // hit ⇒ attacker's roll beat the defence
           outcomeKind:  battleKind(ev.result),
           // Flavour word for a miss (miss/dodged/blocked/…), matching the
@@ -320,4 +421,55 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
 
     return { stepIndex, entries };
   });
+}
+
+/**
+ * Outcome summary for a battle entry — what happened, WHY (the roll
+ * comparison that triggered it), and who took how much damage. Feeds the
+ * turn card's breakdown panel. Pure; takes a buildStepDigest battle entry.
+ *
+ * @returns {{ kind, headline, reason, lines: string[] } | null}
+ */
+export function buildOutcomeSummary(entry) {
+  if (!entry || !entry.outcomeKind || entry.atkRoll == null || entry.defRoll == null) return null;
+  const atk = entry.atkRoll, def = entry.defRoll;
+  const target = entry.target?.name ?? 'The defender';
+  const actor  = entry.actor?.name  ?? 'The attacker';
+
+  // Kills carry outcomeKind 'kill' — re-derive the strike type from the rolls
+  // (mirrors executeBattle: crush at attack ≥ 2× defense, melee only).
+  const landed  = entry.outcomeKind !== OutcomeKind.MISS;
+  const isCrush = landed && !entry.ranged && atk >= 2 * def;
+  const baseDmg = isCrush ? 2 : 1;
+
+  let kind, headline, reason;
+  if (landed) {
+    kind = entry.killed ? 'kill' : (isCrush ? 'crush' : 'hit');
+    headline = entry.killed
+      ? (isCrush ? 'CRUSHED — SLAIN' : `HIT — SLAIN`)
+      : (isCrush ? `CRUSH — ${entry.targetDmg} damage` : `HIT — ${entry.targetDmg} damage`);
+    reason = isCrush
+      ? `Attack ${atk} is at least double defense ${def} — a crushing blow deals 2 damage.`
+      : `Attack ${atk} beats defense ${def} — the blow lands for 1 damage.`;
+  } else if (entry.actorDmg > 0) {
+    kind = 'counter';
+    headline = `COUNTERED — ${entry.actorDmg} damage`;
+    reason = `Defense ${def} is at least double attack ${atk} — the defender strikes back.`;
+  } else {
+    kind = 'miss';
+    headline = entry.missWord ? String(entry.missWord).toUpperCase() : 'MISS';
+    reason = `Attack ${atk} fails to beat defense ${def} — no damage.`;
+  }
+
+  const lines = [];
+  if (entry.targetDmg > 0) {
+    let line = `${target} takes ${entry.targetDmg}`;
+    if (landed && entry.targetDmg > baseDmg) line += ' (wounded units take +1)';
+    if (entry.killed) line += ' — slain!';
+    lines.push(line + (entry.killed ? '' : '.'));
+  }
+  if (entry.actorDmg > 0) {
+    lines.push(`${actor} takes ${entry.actorDmg} from the counter.`);
+  }
+  return { kind, headline, reason, lines };
 }

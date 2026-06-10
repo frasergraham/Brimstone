@@ -959,20 +959,23 @@ function _knockbackDestination(state, entity, centerCol, centerRow) {
   return push;
 }
 
-export function executeBattle(state, actor, target) {
-  actor.guarding = 0;  // Attacking breaks guard stance
-  const log = [];
-
-  // Ranged attacks have a different rule set than melee:
-  //   - No gang-up advantage on either side (the attacker is firing from
-  //     afar, and allies don't flank a shot).
-  //   - No crushing blows; damage is always 1 per hit.
-  //   - No splash on kill (clean single-target).
-  //   - No counter-attack (defender can't reach the ranged attacker to
-  //     strike back — see the `!isRanged` guard on the counter branch).
-  //   - Defender in forest gets +1 DEF (cover).
-  //   - Attacker at close range (dist == 1) fires at disadvantage (1 die).
-  // Phase bonus, fortification, and weapon triggers still apply.
+/**
+ * Situational combat context shared by executeBattle and computeCombatOdds —
+ * everything about an attack that is known BEFORE the dice are rolled.
+ * Pure: touches no entity or tile fields.
+ *
+ * Ranged attacks have a different rule set than melee:
+ *   - No gang-up advantage on either side (the attacker is firing from
+ *     afar, and allies don't flank a shot).
+ *   - No crushing blows; damage is always 1 per hit.
+ *   - No splash on kill (clean single-target).
+ *   - No counter-attack (defender can't reach the ranged attacker to
+ *     strike back — see the `!isRanged` guard on the counter branch).
+ *   - Defender in forest gets +1 DEF (cover).
+ *   - Attacker at close range (dist == 1) fires at disadvantage (1 die).
+ * Phase bonus, fortification, and weapon triggers still apply.
+ */
+export function computeBattleContext(state, actor, target) {
   const atkRange = (typeof actor.getRange === 'function' ? actor.getRange() : (actor.range ?? 1));
   const distToTarget = hexDistance(actor.col, actor.row, target.col, target.row);
   const isRanged = atkRange > 1;
@@ -1027,20 +1030,56 @@ export function executeBattle(state, actor, target) {
   const defenderFaction = getFaction(target.owner);
   const fatiguePenalty = defenderFaction.getDefenseFatigue(target.defendCount || 0);
 
-  const { attackRoll, defenseRoll, hit, margin,
-          atkBaseDie, defBaseDie, atkExtraDice, defExtraDice,
-          atkPool, defPool, atkStaffBonus } =
-    Entity.resolveCombat(actor, target, {
-      // Phase stays flat here — converting to advantage turned out too steep a
-      // nerf to witch's night window; see CLAUDE.md §Tuning for the sweep.
+  return {
+    isRanged, isCloseRanged, rangeDistancePenalty, phaseBonus,
+    atkAllies, defAllies, attackerAllies, defenderAllies,
+    atkTile, defTile, atkFortAtkBonus, fortBonus, forestCoverBonus,
+    atkAdvantageDice, defAdvantageDice, atkGangupFlat, defGangupFlat,
+    atkDisadvantageDice, fatiguePenalty,
+    // Assembled resolveCombat options — the single source of truth for both
+    // the live roll (executeBattle) and the odds preview (computeCombatOdds).
+    // Phase stays flat here — converting to advantage turned out too steep a
+    // nerf to witch's night window; see CLAUDE.md §Tuning for the sweep.
+    combatOptions: {
       extraAtkBonus: atkFortAtkBonus + phaseBonus + atkGangupFlat - rangeDistancePenalty,
       atkAdvantageDice,
       atkDisadvantageDice,
       defAdvantageDice,
       extraDefBonus: fortBonus + defGangupFlat + forestCoverBonus,
       fatiguePenalty,
-      state,
-    });
+    },
+  };
+}
+
+/**
+ * Exact hit/crush/counter probabilities for attacking `target` from the
+ * actor's CURRENT position — the planning-time odds preview shown in the UI.
+ * Pure (no state mutation, no dice). Returns { hit, crush, counter, miss }.
+ */
+export function computeCombatOdds(state, actor, target) {
+  const ctx = computeBattleContext(state, actor, target);
+  return Entity.computeCombatOdds(actor, target, {
+    ...ctx.combatOptions,
+    ranged: ctx.isRanged,
+  });
+}
+
+export function executeBattle(state, actor, target) {
+  actor.guarding = 0;  // Attacking breaks guard stance
+  const log = [];
+
+  const {
+    isRanged, isCloseRanged, rangeDistancePenalty, phaseBonus,
+    atkAllies, defAllies, attackerAllies, defenderAllies, defTile,
+    atkFortAtkBonus, fortBonus, forestCoverBonus,
+    atkAdvantageDice, defAdvantageDice, atkGangupFlat, defGangupFlat,
+    atkDisadvantageDice, fatiguePenalty, combatOptions,
+  } = computeBattleContext(state, actor, target);
+
+  const { attackRoll, defenseRoll, hit, margin,
+          atkBaseDie, defBaseDie, atkExtraDice, defExtraDice,
+          atkPool, defPool, atkStaffBonus } =
+    Entity.resolveCombat(actor, target, { ...combatOptions, state });
 
   // Increment the defender's defend count for fatigue tracking
   if (target.defendCount === undefined) target.defendCount = 0;

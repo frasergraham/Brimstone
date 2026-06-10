@@ -243,7 +243,8 @@ export function assessBoard(sim) {
     witchScore, heroScore,
     totalResources, metalCount, woodCount, canAffordSummon, bestSummonType,
     unexploredBuildings,
-    totalBudget: sim.actionsLeft + (sim.campaignAIBudgetBonus ?? 0),
+    // Difficulty delta floors at 1 so an Easy AI still acts every round.
+    totalBudget: Math.max(1, sim.actionsLeft + (sim.campaignAIBudgetBonus ?? 0) + (sim.aiDifficultyDelta ?? 0)),
     witchPlayerCount: (sim.playerCounts && sim.playerCounts.witch) || 1,
     heroPlayerCount:  (sim.playerCounts && sim.playerCounts.hero)  || 1,
   };

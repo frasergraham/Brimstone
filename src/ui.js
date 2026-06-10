@@ -1,20 +1,24 @@
 // UI controller: handles canvas clicks, sidepanel updates, action buttons
-import { hexKey, hexToPixel, MAP_COLS, MAP_ROWS } from './hex.js';
+import { hexKey, hexToPixel, hexDistance, MAP_COLS, MAP_ROWS } from './hex.js';
 import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus, legacyTileType } from './tiles.js';
 import { ITEMS } from './items.js';
-import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, attackOf, defenseOf } from './entities.js';
+import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, attackOf, defenseOf, rangeOf } from './entities.js';
 import { Phase, PHASE_ICON, phaseForRound, DEFAULT_CYCLE_PHASES, nodeController, countHeldNodes } from './game.js';
 import { PAD_X, PAD_Y, Renderer } from './renderer.js';
 import { makeOverlay } from './overlays.js';
 import { concreteFactionOf } from './factions.js';
 import {
-  ActionType, getValidActions, getVisiblePositions,
+  ActionType, getValidActions, getVisiblePositions, computeCombatOdds,
 } from './actions.js';
+import * as audio from './audio.js';
+
 import { PlanActionType, actionCosts, computeGhostState, computeProjectedInventory, interleavePlan } from './planner.js';
+import { ABILITIES } from './abilities.js';
+import { buildRollRows, buildOutcomeSummary } from './replay-timeline.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
 import { ResEventType } from '../server/resolver.js';
 import { collectUIElements } from './ui-elements.js';
-import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml, buildNodeBadgeHtml, buildEffectsHtml } from './ui-render.js';
+import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml, buildNodeBadgeHtml, buildEffectsHtml, buildCycleInfoHtml, PHASE_META } from './ui-render.js';
 import {
   hideActionPopup, getEntityScreenPos, computeArcPositions,
   positionArcPopup, startArcTracking, positionPopup,
@@ -68,6 +72,14 @@ export class UIController {
     // Injected element bag — tests supply fake elements keyed by DOM ID.
     // Falls back to document.getElementById at each call site when missing.
     this._els = els ?? {};
+
+    // Arm the one-shot user-gesture unlock for synthesized SFX (no-op in
+    // tests/node — see src/audio.js).
+    audio.init();
+    // Game-styled hover tooltips ([data-tip] / [data-tip-html]) — module-level
+    // singleton, hover-capable devices only.
+    initGameTooltips();
+    this._lastPhaseSoundKey = null;  // dedupe phase stings across summaries
 
     this._selectedEntity  = null;
     this._validActions    = [];
@@ -427,6 +439,26 @@ export class UIController {
       if (isDebugToggleClick(e)) document.body.classList.toggle('debug-counters');
     }, sig);
     this._el('menu-close-btn')?.addEventListener('click', closeMenu, sig);
+    // Bottom score bar / day-cycle pill → cycle & scoring info panel.
+    // The pill is a child of the bar, but bind it explicitly too (with the
+    // bubble stopped) so the protruding pill always toggles the panel even if
+    // the bar's hit area changes.
+    this._el('score-bar')?.addEventListener('click', () => this._showCycleInfoPopup(), sig);
+    this._el('cycle-bump')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._showCycleInfoPopup();
+    }, sig);
+    // Sound toggle — label reflects persisted mute state on first open.
+    const soundBtn = this._el('menu-sound-btn');
+    const _syncSoundLabel = () => {
+      if (soundBtn) soundBtn.textContent = audio.isMuted() ? '🔇 Sound: Off' : '🔊 Sound: On';
+    };
+    _syncSoundLabel();
+    soundBtn?.addEventListener('click', () => {
+      audio.toggleMuted();
+      _syncSoundLabel();
+      if (!audio.isMuted()) audio.play('score');  // audible confirmation
+    }, sig);
     this._el('menu-replay-turn-btn')?.addEventListener('click', () => {
       closeMenu();
       this.onReplayLastTurn?.();
@@ -734,6 +766,7 @@ export class UIController {
   exitPlanningMode() {
     this._stopUndoBtnTracking();
     this._planMode      = false;
+    this._pushUnitInfoCards();  // plan over — clear odds/attack markers
     // NOTE: _planSubmitted is intentionally NOT reset here. It guards against
     // a double-fire of the submit button (touchend + click on mobile, or a
     // fast double-click) — the offline/campaign plan-submit handler calls
@@ -1058,6 +1091,9 @@ export class UIController {
       step.overBudget = !isFree && runningCost > this._planBudget;
     }
     this.renderer.planGhostSteps = steps;
+    // Keep the unit info cards (planned-attack counts) in lockstep with the
+    // plan — the renderer's hex-badge fallback reads both in the same draw.
+    this._pushUnitInfoCards();
   }
 
   /**
@@ -1274,6 +1310,7 @@ export class UIController {
     if (this._planSubmitted) return;
     this._planSubmitted = true;
     this._stopUndoBtnTracking();
+    this._pushUnitInfoCards();  // clears the odds/attack markers (guard in compute)
     this._clearSelection();
 
     const panel = this._el('plan-panel');
@@ -1789,6 +1826,9 @@ export class UIController {
     this._unitStatsExpanded    = false;
     this.renderer.setSelection({ entityId: null, hex: null });
     this.renderer.clearOverlaysByLayer('highlight-disc');
+    // Republish the unit info cards — with no selection the odds vanish
+    // (planned-attack markers stay; they track the plan, not the selection).
+    this._pushUnitInfoCards();
     hideActionPopup(this);
     this._hideTileDetail();
     // Refresh plan panel so selection highlight clears from the unit rows.
@@ -1816,8 +1856,78 @@ export class UIController {
     this.renderer.clearOverlaysByLayer('highlight-disc');
   }
 
+  // ── Unit info cards (hit/crush % + planned-attack marker) ────────────────
+  //
+  // Per-unit planning info rendered by the 3D renderer INTO the unit icon
+  // billboard (now a 2:1 card — see paintUnitIconBadge): attack odds in the
+  // left margin, the planned-attack ⚔/×N marker in the right margin. Drawn
+  // as part of the billboard so it anchors and scales with the unit instead
+  // of swimming like a DOM overlay.
+
+  /**
+   * Desired per-entity card info:
+   *   - hit/crush odds for every enemy the SELECTED unit could attack
+   *     (the red-highlighted targets), per entity — defenders sharing a hex
+   *     each get their own numbers.
+   *   - planned-attack counts for every enemy targeted by a queued
+   *     BATTLE_UNIT anywhere in the plan (independent of selection).
+   * @returns {Map<entityId, {hitPct:number|null, crushPct:number|null, attackCount:number}>}
+   */
+  _computeUnitInfoCards() {
+    const cards = new Map();
+    if (!this._planMode || this._planSubmitted) return cards;
+
+    const actor = this._selectedEntity;
+    const { actionType } = this._awaitingTarget || {};
+    const oddsMode = !actionType || actionType === ActionType.MOVE || actionType === ActionType.BATTLE;
+    if (actor && !this._isEnemySelection && oddsMode) {
+      const b = this._validActions.find(a => a.type === ActionType.BATTLE);
+      let targets = b?.targets ?? [];
+      if (targets.length && this.state.fogOfWar !== 'none') {
+        const visHexes = getVisiblePositions(this.state, actor.owner);
+        targets = targets.filter(t => visHexes.has(hexKey(t.col, t.row)));
+      }
+      // Odds show only for enemies the unit could attack from where its plan
+      // LEAVES it — a queued move out of range hides the percentages (and a
+      // deselect clears them: no actor → this branch never runs).
+      const projPos = this._getProjectedPos(actor.id) ?? { col: actor.col, row: actor.row };
+      const range = rangeOf(actor);
+      targets = targets.filter(t =>
+        hexDistance(projPos.col, projPos.row, t.col, t.row) <= range);
+      for (const t of targets) {
+        const odds = this._attackOdds(actor, t);
+        if (!odds) continue;
+        cards.set(t.id, {
+          hitPct:   Math.round(odds.hit * 100),
+          crushPct: Math.round(odds.crush * 100),
+          attackCount: 0,
+        });
+      }
+    }
+
+    // Planned-attack counts across the whole plan (BATTLE_UNIT only —
+    // BATTLE_HEX has no unit to pin the marker on and keeps the renderer's
+    // per-hex fallback badge).
+    for (const [, queue] of this._unitPlans) {
+      for (const a of queue) {
+        if (a.type !== PlanActionType.BATTLE_UNIT || !a.targetId) continue;
+        let card = cards.get(a.targetId);
+        if (!card) { card = { hitPct: null, crushPct: null, attackCount: 0 }; cards.set(a.targetId, card); }
+        card.attackCount++;
+      }
+    }
+    return cards;
+  }
+
+  /** Publish the card info to the renderer (call on selection/plan changes). */
+  _pushUnitInfoCards() {
+    if (!this.renderer) return;
+    this.renderer.unitInfoCards = this._computeUnitInfoCards();
+  }
+
   _updateHighlights() {
     this._clearTargetOverlays();
+    this._pushUnitInfoCards();
     if (!this._selectedEntity) return;
 
     const { actionType } = this._awaitingTarget || {};
@@ -1913,7 +2023,7 @@ export class UIController {
 
       // If multiple defenders on the hex, show a picker dialog
       if (targetsAtHex.length > 1) {
-        this._showDefenderPickerDialog(targetsAtHex, executeFight);
+        this._showDefenderPickerDialog(targetsAtHex, executeFight, actor);
       } else {
         executeFight(targetsAtHex[0]);
       }
@@ -2014,17 +2124,21 @@ export class UIController {
         case ActionType.BATTLE:
           break; // handled via hex clicks
         case ActionType.EXPLORE:
-          arcItems.push({ group: 'scout', label: 'Explore', fullLabel: 'Explore tile',
+          arcItems.push({ group: 'scout', label: 'Explore', fullLabel: 'Explore tile — search for resources, loot, or hidden survivors (1 action)',
+            desc: 'Search this tile for resources, loot, or hidden survivors.',
             color: '#7eccd6', dis, cost: 1, attrs: 'data-action="explore"' });
           break;
         case ActionType.SOUND_HORN:
-          arcItems.push({ group: 'scout', label: 'Sound Horn', fullLabel: 'Sound Horn (1 food)',
+          arcItems.push({ group: 'scout', label: 'Sound Horn', fullLabel: 'Sound Horn — call hidden survivors within 4 hexes, but reveal your position this round (1 action, 1 food)',
+            desc: 'Calls hidden survivors within 4 hexes, but reveals your position this round.',
             color: '#7eccd6', dis: !action.affordable || dis, cost: 1, resCost: '1🍞', attrs: 'data-action="sound_horn"' });
           break;
         case ActionType.GUARD: {
           const charges = action.currentCharges || 0;
           const lbl = charges > 0 ? `Guard +${charges + 1}` : 'Guard';
-          arcItems.push({ group: 'defense', label: lbl, fullLabel: lbl,
+          arcItems.push({ group: 'defense', label: lbl,
+            fullLabel: `${lbl} — strike the first enemy that comes into reach this round (1 action)`,
+            desc: 'Hold position and strike the first enemy that comes into reach this round.',
             color: '#8888cc', dis, cost: 1, attrs: 'data-action="guard"' });
           break;
         }
@@ -2053,6 +2167,7 @@ export class UIController {
         case ActionType.BATTLE_HEX:
           if (this._planMode) {
             arcItems.push({ group: 'combat', label: 'Attack Hex', fullLabel: 'Attack Hex',
+              desc: 'Hits whatever enemy holds the hex when it resolves — works into fog, skips if empty.',
               color: '#c0392b', dis, cost: 1, attrs: 'data-action="attack_hex"' });
           }
           break;
@@ -2066,6 +2181,7 @@ export class UIController {
             if ((healPool[ResourceType.HERBS] || 0) < 1) healDis = true;
           }
           arcItems.push({ group: 'items', label: 'Heal', fullLabel: action.atFullHp ? 'Already at full HP' : 'Herbs (heal 2 HP)',
+            desc: action.atFullHp ? 'Already at full HP.' : 'Spend 1 herb to heal this unit 2 HP. (1 action)',
             color: '#55cc55', dis: healDis, cost: 1, resCost: '1🌿',
             attrs: 'data-action="heal"' });
           break;
@@ -2090,6 +2206,7 @@ export class UIController {
           for (const w of action.weapons) {
             arcItems.push({ group: 'items', label: w.label,
               fullLabel: equipBlocked ? 'Already equipped this round' : `Equip ${w.label}`,
+              desc: equipBlocked ? 'Already equipped a weapon this round.' : `Equip ${w.label}. Free, once per round.`,
               color: '#b0b0b0', dis: dis || equipBlocked, free: true, cost: 0,
               attrs: `data-action="use_item" data-item="${w.key}"` });
           }
@@ -2105,6 +2222,7 @@ export class UIController {
           arcItems.push({ group: 'items',
             label: abilityLabels[action.ability] || 'Ability',
             fullLabel: fullLabels[action.ability] || 'Use Ability',
+            desc: ABILITIES[action.ability]?.description ?? '',
             color: '#88eeff', dis: !isFree && dis, free: isFree, cost: isFree ? 0 : 1,
             attrs: `data-action="use_ability" data-ability="${action.ability}"` });
           break;
@@ -2176,9 +2294,15 @@ export class UIController {
       const costTag = item.free ? '<span class="arc-cost arc-cost-free">FREE</span>'
         : item.cost === 1 ? '<span class="arc-cost">◆</span>'
         : '';
-      html += `<button class="arc-item${freeCls}" title="${item.fullLabel}"
+      // Hover expansion: the description renders below the action name when
+      // the box is hovered (CSS .arc-item:hover .arc-item-desc). Falls back
+      // to the fullLabel when it says more than the label itself.
+      const desc = item.desc
+        ?? (item.fullLabel && item.fullLabel !== item.label ? item.fullLabel : '');
+      const descTag = desc ? `<span class="arc-item-desc">${desc}</span>` : '';
+      html += `<button class="arc-item${freeCls}"
         style="--arc-x:0px;--arc-y:0px;--arc-delay:${delay}ms;--arc-color:${item.color};--arc-hover:${item.color};--arc-glow:${item.color}33"
-        ${disAttr} ${item.attrs}>${item.label}${resTag}${costTag}</button>`;
+        ${disAttr} ${item.attrs}><span class="arc-item-main">${item.label}${resTag}${costTag}</span>${descTag}</button>`;
     }
 
     popup.innerHTML = html;
@@ -2213,6 +2337,7 @@ export class UIController {
     }
 
     attachPopupListeners(popup, this);
+    this._bindArcHoverExpansion(popup);
 
     // Trigger open animation on next frame — positions are already set, just animate
     requestAnimationFrame(() => {
@@ -2267,6 +2392,9 @@ export class UIController {
       }
     }
 
+    // Defender picker: per-target odds preview under each portrait.
+    const oddsActor = actionTag === 'pick_defender' ? this._pendingDefenderPick?.actor : null;
+
     for (const u of units) {
       const col        = ENTITY_COLOR[u.type] || '#888';
       const portraitId  = u.type === 'survivor' ? Renderer.survivorAssetId(u.title) : u.type;
@@ -2283,10 +2411,17 @@ export class UIController {
         ? `<span class="arc-portrait-badge">\u00d7${atkCount}</span>`
         : '';
 
+      const odds = oddsActor ? this._attackOdds(oddsActor, u) : null;
+      const oddsHtml = odds
+        ? `<span class="arc-portrait-odds">${Math.round(odds.hit * 100)}%</span>`
+        : '';
+
       arcItems.push({
         group: 'disambig',
-        label: `<div class="arc-portrait-img-wrap">${imgHtml}${badgeHtml}</div><div class="arc-portrait-hp"><div class="arc-portrait-hp-fill" style="width:${(pct * 100).toFixed(0)}%;background:${hpColor};"></div></div><span class="arc-portrait-name">${u.displayName}</span>`,
-        fullLabel: `${u.displayName} — HP ${u.hp}/${u.maxHp}`,
+        label: `<div class="arc-portrait-img-wrap">${imgHtml}${badgeHtml}</div><div class="arc-portrait-hp"><div class="arc-portrait-hp-fill" style="width:${(pct * 100).toFixed(0)}%;background:${hpColor};"></div></div><span class="arc-portrait-name">${u.displayName}</span>${oddsHtml}`,
+        fullLabel: odds
+          ? `${u.displayName} — HP ${u.hp}/${u.maxHp} — ${this._formatOddsText(odds)}`
+          : `${u.displayName} — HP ${u.hp}/${u.maxHp}`,
         color: col,
         dis: false,
         free: false,
@@ -2369,7 +2504,7 @@ export class UIController {
       const startScale = isCanvas ? ((item._startR * 2) / portraitSize).toFixed(3) : '0.3';
       const startX = isCanvas ? item._startX.toFixed(1) : '0';
       const startY = isCanvas ? item._startY.toFixed(1) : '0';
-      html += `<button class="arc-item${portraitCls}${canvasCls}" title="${item.fullLabel}"
+      html += `<button class="arc-item${portraitCls}${canvasCls}"
         style="--arc-x:0px;--arc-y:0px;--arc-delay:${delay}ms;--arc-color:${item.color};--arc-hover:${item.color};--arc-glow:${item.color}33;--start-x:${startX}px;--start-y:${startY}px;--start-scale:${startScale};--portrait-size:${portraitSize}px"
         ${item.attrs}>${item.label}</button>`;
     }
@@ -2626,12 +2761,6 @@ export class UIController {
     if (!el) return;
 
     // Derive cycle steps from custom cycleConfig or use the default 8-step cycle
-    const PHASE_META = {
-      dawn:  { sprite: 'cycle_dawn',  label: 'Dawn',  desc: 'Hero +1 action · node scoring · attrition rises' },
-      day:   { sprite: 'cycle_day',   label: 'Day',   desc: 'Witch undead in the open suffer' },
-      dusk:  { sprite: 'cycle_dusk',  label: 'Dusk',  desc: 'Node scoring · seek cover before night' },
-      night: { sprite: 'cycle_night', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
-    };
     const cyclePhases = state.cycleConfig?.phases ?? DEFAULT_CYCLE_PHASES;
     const CYCLE_STEPS = cyclePhases.map(p => ({ phase: p, ...PHASE_META[p] }));
 
@@ -2649,7 +2778,6 @@ export class UIController {
     const labelEl  = this._el('cycle-bump-label');
     if (bumpEl && activeStep) {
       bumpEl.className = `phase-${activeStep.phase}`;
-      bumpEl.title = activeStep.desc;
     }
     if (iconEl && activeStep) {
       const imgSrc = this.renderer?.getPortraitDataURL?.(activeStep.sprite, 64);
@@ -2763,18 +2891,59 @@ export class UIController {
       bar.style.display = '';
       bar.classList.toggle('cycle-only', !!state.disableScoring);
       if (state.disableScoring) {
-        bar.title = '';
         return;
       }
     }
 
     const el = this._el('score-bar-content');
     if (!el) return;
-    const { html, title } = buildObjectivesHtml(
+    const { html } = buildObjectivesHtml(
       state.witchObjectives, state.entities, state.nodeScore, state.gameMode,
     );
     el.innerHTML = html;
-    if (bar) bar.title = title;
+  }
+
+  // ── Cycle & scoring info panel ──────────────────────────────────────────
+  // Game-styled popup opened by tapping the bottom score bar / day-cycle
+  // pill (replaces the native title tooltips there). Toggles; dismisses on
+  // any outside tap.
+
+  _showCycleInfoPopup() {
+    if (typeof document === 'undefined') return;
+    if (document.getElementById('cycle-info-popup')) { this._dismissCycleInfoPopup(); return; }
+    if (!this.state) return;
+    const el = document.createElement('div');
+    el.id = 'cycle-info-popup';
+    // Use the game's cycle sprites for the phase icons (emoji is only the
+    // fallback while the tilemap is still loading).
+    const icons = {};
+    for (const [phase, meta] of Object.entries(PHASE_META)) {
+      const src = this.renderer?.getPortraitDataURL?.(meta.sprite, 64);
+      if (src) icons[phase] = src;
+    }
+    el.innerHTML = buildCycleInfoHtml(this.state, icons);
+    document.body.appendChild(el);
+    this._cycleInfoDismiss = (e) => {
+      if (el.contains(e.target)) return;
+      // Clicks on the bar/pill toggle via their own handlers — the capture-
+      // phase dismisser must not race them (it fired first and re-opened).
+      if (this._el('score-bar')?.contains?.(e.target)) return;
+      this._dismissCycleInfoPopup();
+    };
+    setTimeout(() => {
+      if (document.getElementById('cycle-info-popup')) {
+        document.addEventListener('click', this._cycleInfoDismiss, true);
+      }
+    }, 0);
+  }
+
+  _dismissCycleInfoPopup() {
+    if (typeof document === 'undefined') return;
+    document.getElementById('cycle-info-popup')?.remove();
+    if (this._cycleInfoDismiss) {
+      document.removeEventListener('click', this._cycleInfoDismiss, true);
+      this._cycleInfoDismiss = null;
+    }
   }
 
   /**
@@ -2870,7 +3039,7 @@ export class UIController {
       btn.disabled = state.gameOver;
       btn.classList.toggle('urgent', !state.gameOver);
       btn.classList.add('planning-active');
-      btn.title = 'Submit Plan';
+      btn.dataset.tip = 'Lock in your plan — it resolves alongside your opponent’s';
       if (!this._countdownTimer && !this._graceActive) {
         btn.textContent = '✓ Submit';
       }
@@ -3167,7 +3336,7 @@ export class UIController {
     if (!btn) return;
     const label = UIController.SPEED_LABELS[this.speedMode] ?? 'Full';
     btn.textContent = label;
-    btn.title = `Combat detail: ${label}`;
+    btn.dataset.tip = `Combat detail: ${label} — how much each battle pauses to show`;
     btn.className = `replay-ctrl-btn replay-detail detail-${this.speedMode}`;
   }
 
@@ -3515,13 +3684,132 @@ export class UIController {
     }
   }
 
-  _showDefenderPickerDialog(defenders, onPick) {
-    this._pendingDefenderPick = { defenders, onPick };
+  // ── Action-arc hover expansion ────────────────────────────────────────────
+  // Hovering an action expands its box in place (description under the name)
+  // with the box's TOP-LEFT anchored where it was, and shifts the entries
+  // below it down by the height delta so nothing overlaps. JS-driven because
+  // sibling re-layout can't be done in CSS: the buttons are individually
+  // positioned via --arc-x/--arc-y (centre-anchored transforms).
+
+  _bindArcHoverExpansion(popup) {
+    if (typeof window !== 'undefined' && window.matchMedia
+        && !window.matchMedia('(hover: hover)').matches) return;
+    const btns = [...popup.querySelectorAll('.arc-item:not(.arc-portrait)')];
+    // Provide a collapse hook so layout recomputes (zoom) start from a clean
+    // un-expanded state instead of clobbering the hover offsets.
+    this._collapseArcExpansion = () => {
+      for (const b of btns) this._collapseArcItem(b, btns);
+    };
+    for (const btn of btns) {
+      if (!btn.querySelector?.('.arc-item-desc')) continue; // nothing to show
+      btn.addEventListener('mouseenter', () => this._expandArcItem(btn, btns));
+      btn.addEventListener('mouseleave', () => this._collapseArcItem(btn, btns));
+    }
+  }
+
+  _expandArcItem(btn, btns) {
+    if (btn.classList.contains('arc-expanded')) return;
+    // Pre-expansion layout box (offsetWidth/Height ignore the centre transform).
+    const w0 = btn.offsetWidth, h0 = btn.offsetHeight;
+    const x0 = parseFloat(btn.style.getPropertyValue('--arc-x')) || 0;
+    const y0 = parseFloat(btn.style.getPropertyValue('--arc-y')) || 0;
+    btn._arcOrig = { x: x0, y: y0 };
+    // The size change is instant but the centre-transform would TRANSITION to
+    // its compensated position — reading as a jump to an origin point that
+    // glides back. Disable the transition so the class change and the centre
+    // offset land in the same frame: the top-left never moves, only the
+    // bottom and right edges grow.
+    btn.style.transition = 'none';
+    btn.classList.add('arc-expanded');
+    const w1 = btn.offsetWidth, h1 = btn.offsetHeight;
+    // Keep the top-left corner fixed: the centre moves by half the growth.
+    btn.style.setProperty('--arc-x', `${(x0 + (w1 - w0) / 2).toFixed(1)}px`);
+    btn.style.setProperty('--arc-y', `${(y0 + (h1 - h0) / 2).toFixed(1)}px`);
+    btn.offsetHeight; // commit class + vars together before re-enabling
+    btn.style.transition = '';
+    btn.style.transitionDelay = '0ms';
+    // Re-layout the entries below: shift down by the height delta.
+    const dh = h1 - h0;
+    const idx = btns.indexOf(btn);
+    for (let j = idx + 1; j < btns.length; j++) {
+      const b = btns[j];
+      if (b._arcShift == null) {
+        b._arcShift = parseFloat(b.style.getPropertyValue('--arc-y')) || 0;
+      }
+      b.style.transitionDelay = '0ms';
+      b.style.setProperty('--arc-y', `${(b._arcShift + dh).toFixed(1)}px`);
+    }
+  }
+
+  _collapseArcItem(btn, btns) {
+    if (!btn.classList.contains('arc-expanded')) return;
+    // Same frame-atomic treatment in reverse — shrink and restore the centre
+    // together so the top-left stays pinned on the way back too.
+    btn.style.transition = 'none';
+    btn.classList.remove('arc-expanded');
+    if (btn._arcOrig) {
+      btn.style.setProperty('--arc-x', `${btn._arcOrig.x.toFixed(1)}px`);
+      btn.style.setProperty('--arc-y', `${btn._arcOrig.y.toFixed(1)}px`);
+      btn._arcOrig = null;
+    }
+    btn.offsetHeight;
+    btn.style.transition = '';
+    const idx = btns.indexOf(btn);
+    for (let j = idx + 1; j < btns.length; j++) {
+      const b = btns[j];
+      if (b._arcShift != null) {
+        b.style.setProperty('--arc-y', `${b._arcShift.toFixed(1)}px`);
+        b._arcShift = null;
+      }
+    }
+  }
+
+  _showDefenderPickerDialog(defenders, onPick, actor = null) {
+    this._pendingDefenderPick = { defenders, onPick, actor };
     this._popupVisible = true;
     this._showActionPopup(null);
   }
 
+  /**
+   * Exact hit/crush/counter odds for `actor` attacking `target` from the
+   * actor's projected planning position. Best-effort: returns null when odds
+   * can't be computed (e.g. partial mirror data online) — the preview is
+   * advisory, never load-bearing.
+   */
+  _attackOdds(actor, target) {
+    try {
+      let effActor = actor;
+      if (this._planMode) {
+        const proj = this._getProjectedPos(actor.id);
+        if (proj && (proj.col !== actor.col || proj.row !== actor.row)) {
+          // Re-parent so getRange()/getAttack() still resolve on the clone.
+          effActor = Object.setPrototypeOf(
+            { ...actor, col: proj.col, row: proj.row },
+            Object.getPrototypeOf(actor)
+          );
+        }
+      }
+      return computeCombatOdds(this.state, effActor, target);
+    } catch (err) {
+      console.warn('[ui] odds preview unavailable:', err);
+      return null;
+    }
+  }
+
+  /** "72% hit (18% crush) · 9% counter risk" — omits zero-probability parts. */
+  _formatOddsText(odds) {
+    if (!odds) return null;
+    const pct = p => `${Math.round(p * 100)}%`;
+    let s = `${pct(odds.hit)} hit`;
+    if (odds.crush > 0.005) s += ` (${pct(odds.crush)} crush)`;
+    if (odds.counter > 0.005) s += ` · ${pct(odds.counter)} counter risk`;
+    return s;
+  }
+
   _showBattleDialog(actorSnap, targetSnap, result, onDismiss, onRematch = null) {
+    // Combat audio fires from _playBattleResultAnims (main.js) — the one
+    // point every display path (2D dialog, toast, 3D card-hold) funnels
+    // through — so no sound here.
     // Cancel any in-flight dice animation or auto-dismiss from a previous battle dialog
     if (this._battleInterval)  { clearInterval(this._battleInterval);  this._battleInterval  = null; }
     if (this._autoDismissTimer) { clearTimeout(this._autoDismissTimer); this._autoDismissTimer = null; }
@@ -4126,6 +4414,24 @@ export class UIController {
 
       const { prevScore, prevNodes, humanFaction, fogOfWar, gameOver, winner, winReason, hasFullReplay, isCampaign } = opts;
 
+      // One sting per summary, highest-priority event wins:
+      // game over > node scoring > phase change.
+      {
+        const score = this.state?.nodeScore;
+        const scored = prevScore && score &&
+          (score.hero !== prevScore.hero || score.witch !== prevScore.witch);
+        const phaseKey = this.state?.phase ?? null;
+        if (gameOver) {
+          audio.play(!humanFaction || winner === humanFaction ? 'victory' : 'defeat');
+        } else if (scored) {
+          audio.play('score');
+        } else if (phaseKey && this._lastPhaseSoundKey !== null && this._lastPhaseSoundKey !== phaseKey) {
+          // Sting only when the phase actually flips (not every round).
+          audio.play(phaseKey === 'night' || phaseKey === 'dusk' ? 'nightfall' : 'phase');
+        }
+        this._lastPhaseSoundKey = phaseKey;
+      }
+
       // Collect kills, survivors found, summons, and resource flows from steps.
       // Fog-of-war filtering: skip opponent-only events the player can't see.
       const kills      = [];
@@ -4663,9 +4969,9 @@ export class UIController {
     const camBtn = document.getElementById('replay-camera-btn');
     if (camBtn) {
       camBtn.textContent = fixed ? 'Fixed' : 'Follow';
-      camBtn.title = fixed
-        ? 'Camera: Fixed - stays where you put it'
-        : 'Camera: Follow the action';
+      camBtn.dataset.tip = fixed
+        ? 'Camera fixed — stays where you put it; tap to follow the action'
+        : 'Camera follows the action — tap to keep it fixed instead';
       camBtn.classList.toggle('fixed', fixed);
     }
   }
@@ -4678,7 +4984,7 @@ export class UIController {
     // AutoPlay is a toggle: highlighted (active) while auto-running.
     const pp = document.getElementById('replay-playpause-btn');
     if (pp) {
-      pp.title = paused ? 'Auto-play (run every step)' : 'Pause (step manually)';
+      pp.dataset.tip = paused ? 'Auto-play — run every step without stopping' : 'Pause — step through manually with Next';
       pp.classList.toggle('active', !paused);
     }
     // NEXT only works while paused; grey it out during auto-play.
@@ -4750,7 +5056,7 @@ export class UIController {
     if (endBtn) {
       // Restore the original glyph (defaults to ⇥ if we never saw one)
       endBtn.textContent = this._replayEndBtnOriginalText ?? '\u21E5';
-      endBtn.title = 'Jump to end';
+      endBtn.dataset.tip = 'Jump to the end of the replay';
       endBtn.onclick = null;
     }
     this._replayEndBtnOriginalText = undefined;
@@ -4899,13 +5205,20 @@ export class UIController {
     }
 
     // Battles flank the (two-line) action word with each side's final roll,
-    // the winner's roll highlighted.
+    // the winner's roll highlighted. The roll-breakdown tooltip is the
+    // in-game explanation of advantage/gang-up (battle dialog is retired).
+    // Rendered as a game-styled hover panel ([data-tip-html]) rather than a
+    // native title tooltip.
     let actionHtml;
     if (entry.outcomeKind && entry.atkRoll != null && entry.defRoll != null) {
       const word = esc(entry.label).replace(' ', '<br>');
       const atkCls = entry.attackerWon ? 'winner' : 'loser';
       const defCls = entry.attackerWon ? 'loser' : 'winner';
-      actionHtml = `<div class="replay-step-action battle">`
+      const bkdHtml = _rollRowsTipHtml(entry.rollRows, entry);
+      const tip = bkdHtml
+        ? ` data-tip-html="${encodeURIComponent(bkdHtml)}"`
+        : '';
+      actionHtml = `<div class="replay-step-action battle"${tip}>`
         + `<span class="replay-roll ${atkCls}">${entry.atkRoll}</span>`
         + `<span class="replay-action-word">${word}</span>`
         + `<span class="replay-roll ${defCls}">${entry.defRoll}</span>`
@@ -5420,35 +5733,49 @@ function _breakdownData(snap, bd, side, total) {
     ? (bd.atkAdvantageDice ?? 0)
     : (bd.defAdvantageDice ?? 0);
 
+  const GANGUP_TIP = 'Gang-up: each ally adjacent to the target adds +1 advantage die and +1 flat (max 3).';
   const rows = [];
-  const add = (label, val, sign) => rows.push({ label, val, sign });
+  const add = (label, val, sign, tip = null) => rows.push({ label, val, sign, tip });
   if (side === 'atk') {
-    add(`${snap.name} ATK`, snap.attack, 'base');
-    if (snap.attackBonus)    add('🪙 Silver',          snap.attackBonus,    'pos');
-    if (bd.phaseBonus)       add('🌙 Night',           bd.phaseBonus,       'pos');
-    if (bd.atkStaffBonus)    add('⚕ Staff (undead)',   bd.atkStaffBonus,    'pos');
-    if (bd.atkFortAtkBonus)  add('🏰 Fort ATT',        bd.atkFortAtkBonus,  'pos');
+    add(`${snap.name} ATK`, snap.attack, 'base', 'Base attack stat (including equipped weapon).');
+    if (snap.attackBonus)    add('🪙 Silver',          snap.attackBonus,    'pos', 'Silver weapon bonus.');
+    if (bd.phaseBonus)       add('🌙 Night',           bd.phaseBonus,       'pos', 'Phase bonus — the night favors the witch’s forces.');
+    if (bd.atkStaffBonus)    add('⚕ Staff (undead)',   bd.atkStaffBonus,    'pos', 'Weapon trigger — the staff is potent against undead defenders.');
+    if (bd.atkFortAtkBonus)  add('🏰 Fort ATT',        bd.atkFortAtkBonus,  'pos', 'Attacking from a fortified tile.');
     const atkAllyNames = bd.atkAllyNames ?? [];
     const atkAllyContrib = Math.min(atkAllyNames.length, bd.atkGangupFlat || 0);
     if (atkAllyContrib > 0) {
-      for (let i = 0; i < atkAllyContrib; i++) add(`👥 ${atkAllyNames[i]}`, 1, 'pos');
+      for (let i = 0; i < atkAllyContrib; i++) add(`👥 ${atkAllyNames[i]}`, 1, 'pos', GANGUP_TIP);
     } else if (bd.atkGangupFlat) {
-      add('👥 Gang-up flat', bd.atkGangupFlat, 'pos');
+      add('👥 Gang-up flat', bd.atkGangupFlat, 'pos', GANGUP_TIP);
     }
   } else {
-    add(`${snap.name} DEF`, snap.defense, 'base');
-    if (snap.defenseBonus)  add('🛡 Bonus DEF',   snap.defenseBonus,  'pos');
-    if (bd.fortBonus)       add('🏰 Fort DEF',    bd.fortBonus,       'pos');
-    if (bd.fatiguePenalty)  add('😓 Fatigue',     -bd.fatiguePenalty, 'neg');
+    add(`${snap.name} DEF`, snap.defense, 'base', 'Base defense stat (including equipped weapon).');
+    if (snap.defenseBonus)  add('🛡 Bonus DEF',   snap.defenseBonus,  'pos', 'Temporary defense bonus.');
+    if (bd.fortBonus)       add('🏰 Fort DEF',    bd.fortBonus,       'pos', 'Fortification — each fort level on the defender’s tile adds defense.');
+    if (bd.fatiguePenalty)  add('😓 Fatigue',     -bd.fatiguePenalty, 'neg', 'Fatigue — defending repeatedly in one round wears the defender down.');
     const defAllyNames = bd.defAllyNames ?? [];
     const defAllyContrib = Math.min(defAllyNames.length, bd.defGangupFlat || 0);
     if (defAllyContrib > 0) {
-      for (let i = 0; i < defAllyContrib; i++) add(`👥 ${defAllyNames[i]}`, 1, 'pos');
+      for (let i = 0; i < defAllyContrib; i++) add(`👥 ${defAllyNames[i]}`, 1, 'pos', GANGUP_TIP);
     } else if (bd.defGangupFlat) {
-      add('👥 Allies flat', bd.defGangupFlat, 'pos');
+      add('👥 Allies flat', bd.defGangupFlat, 'pos', GANGUP_TIP);
     }
   }
   return { pool, picked, advantage, rows, total };
+}
+
+// Tooltip for the dice-pool row — explains the advantage mechanic in place.
+function _poolTip(advantage) {
+  if (advantage > 0) {
+    return `Advantage ${advantage}: rolls ${1 + advantage} dice and keeps the BEST. ` +
+      'Gang-up allies adjacent to the target grant +1 die each (max 3); some weapons and effects add more.';
+  }
+  if (advantage < 0) {
+    return `Disadvantage ${-advantage}: rolls ${1 - advantage} dice and keeps the WORST ` +
+      '(e.g. a ranged unit firing point-blank).';
+  }
+  return 'A single d6 — no advantage on this roll.';
 }
 
 function _poolSign(advantage) {
@@ -5491,7 +5818,7 @@ function _buildBreakdownHTML(snap, bd, side, total, padTo = 0) {
     }
     const poolSign = _poolSign(d.advantage);
     parts.push(
-      `<div class="bkd-row bkd-pool-row"${_signAttr(poolSign)}>` +
+      `<div class="bkd-row bkd-pool-row"${_signAttr(poolSign)} title="${_poolTip(d.advantage)}">` +
         `<span class="bkd-label">${_poolLabel(d.advantage)}</span>` +
         `<span class="bkd-pool-discards">${discards.join('')}</span>` +
         `<span class="bkd-pool-picked-slot">${pickedHTML}</span>` +
@@ -5500,8 +5827,9 @@ function _buildBreakdownHTML(snap, bd, side, total, padTo = 0) {
   }
   for (const r of d.rows) {
     const v = r.val >= 0 ? '+' + r.val : r.val;
+    const tip = r.tip ? ` title="${r.tip}"` : '';
     parts.push(
-      `<div class="bkd-row"${_signAttr(r.sign)}><span class="bkd-label">${r.label}</span><span class="bkd-val">${v}</span></div>`
+      `<div class="bkd-row"${_signAttr(r.sign)}${tip}><span class="bkd-label">${r.label}</span><span class="bkd-val">${v}</span></div>`
     );
   }
   const spacerCount = Math.max(0, padTo - d.rows.length);
@@ -5572,6 +5900,7 @@ function _animateBreakdownSide(colEl, snap, bd, side, total, factor, anim, padTo
   // before the picked die is selected. The glow-in at settle still fires.
   const poolRow = document.createElement('div');
   poolRow.className = 'bkd-row bkd-pool-row';
+  poolRow.title = _poolTip(d.advantage);
   if (poolSign !== 'base') poolRow.setAttribute('data-sign', poolSign === 'pos' ? 'positive' : 'negative');
   poolRow.innerHTML =
     `<span class="bkd-label">${_poolLabel(d.advantage)}</span>` +
@@ -5596,6 +5925,7 @@ function _animateBreakdownSide(colEl, snap, bd, side, total, factor, anim, padTo
   const rowEls = d.rows.map(r => {
     const row = document.createElement('div');
     row.className = 'bkd-row bkd-row-muted';
+    if (r.tip) row.title = r.tip;
     if (r.sign !== 'base') row.setAttribute('data-sign', r.sign === 'pos' ? 'positive' : 'negative');
     const v = r.val >= 0 ? '+' + r.val : r.val;
     row.innerHTML =
@@ -5753,3 +6083,130 @@ function _makeAnimBag() {
   return bag;
 }
 
+
+// ── Game-styled tooltip (replaces native title tooltips) ────────────────────
+//
+// One shared floating element, shown on hover over any node carrying
+// `data-tip` (plain text) or `data-tip-html` (encodeURIComponent'd HTML —
+// used by the turn cards' roll breakdown). Hover-only: touch devices skip
+// the whole subsystem (they have their own tap affordances, e.g. the
+// cycle/score info panel). Module-level singleton so repeated UIController
+// constructions never stack document listeners.
+
+let _gttBound = false;
+let _gttEl = null;
+
+export function initGameTooltips() {
+  if (_gttBound || typeof document === 'undefined') return;
+  if (typeof window !== 'undefined' && window.matchMedia
+      && !window.matchMedia('(hover: hover)').matches) return;
+  _gttBound = true;
+
+  const hide = () => { _gttEl?.classList.remove('visible'); };
+  const show = (target) => {
+    const html = target.dataset.tipHtml;
+    const text = target.dataset.tip;
+    if (!html && !text) { hide(); return; }
+    if (!_gttEl) {
+      _gttEl = document.createElement('div');
+      _gttEl.id = 'game-tooltip';
+      document.body.appendChild(_gttEl);
+    }
+    if (html) _gttEl.innerHTML = decodeURIComponent(html);
+    else      _gttEl.textContent = text;
+    _gttEl.classList.add('visible');
+    // Position above the target, clamped to the viewport; flip below when
+    // there's no headroom.
+    const r  = target.getBoundingClientRect();
+    const tw = _gttEl.offsetWidth;
+    const th = _gttEl.offsetHeight;
+    let x = r.left + r.width / 2 - tw / 2;
+    x = Math.max(6, Math.min(x, window.innerWidth - tw - 6));
+    let y = r.top - th - 10;
+    if (y < 6) y = r.bottom + 10;
+    _gttEl.style.left = `${x}px`;
+    _gttEl.style.top  = `${y}px`;
+  };
+
+  document.addEventListener('mouseover', (e) => {
+    const t = e.target?.closest?.('[data-tip], [data-tip-html]');
+    if (t) show(t);
+    else hide();
+  }, { passive: true });
+  // Any press or scroll dismisses — the tooltip must never sit over a tap.
+  document.addEventListener('mousedown', hide, { passive: true, capture: true });
+  window.addEventListener('scroll', hide, { passive: true, capture: true });
+  document.addEventListener('mouseleave', hide, { passive: true });
+}
+
+// ── Turn-card roll breakdown panel (game-styled hover tooltip content) ──────
+//
+// Renders buildRollRows() as the old 2D battle dialog did: attack and
+// defense COLUMNS side by side, each building line by line — dice pool
+// (picked die highlighted against the discards), one row per modifier
+// (positive green / negative red), divider, Total — followed by the outcome
+// (what happened, why, and who took how much damage) and the rules notes.
+// Pure HTML string — no DOM.
+
+function _rollRowsTipHtml(rows, entry = {}) {
+  if (!rows) return '';
+  const esc = (s) => String(s ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  const diceRow = ({ pool, picked, advantage }) => {
+    let usedPick = false;
+    const discards = [];
+    let pickedHtml = '';
+    for (const v of (Array.isArray(pool) ? pool : [picked])) {
+      const isPick = !usedPick && v === picked;
+      if (isPick) { usedPick = true; pickedHtml = `<span class="gtt-die gtt-die-picked">${v}</span>`; }
+      else discards.push(`<span class="gtt-die gtt-die-discard">${v}</span>`);
+    }
+    const note = advantage > 0 ? `adv ${advantage}` : advantage < 0 ? `disadv ${-advantage}` : 'die';
+    return `<div class="gtt-row gtt-dice-row">`
+      + `<span class="gtt-label">${note}${discards.length ? ` ${discards.join('')}` : ''}</span>`
+      + `<span class="gtt-val">${pickedHtml}</span></div>`;
+  };
+
+  const column = (name, cls, side, padTo) => {
+    let html = `<div class="gtt-col ${cls}">`;
+    html += `<div class="gtt-col-head">${name}</div>`;
+    html += diceRow(side.dice);
+    for (const t of side.terms) {
+      const sign = t.val > 0 ? 'positive' : 'negative';
+      const v = t.val > 0 ? `+${t.val}` : `−${Math.abs(t.val)}`;
+      html += `<div class="gtt-row" data-sign="${sign}">`
+        + `<span class="gtt-label">${esc(t.label)}</span>`
+        + `<span class="gtt-val">${v}</span></div>`;
+    }
+    // Spacer rows so both Totals sit on the same baseline (old dialog padTo).
+    for (let i = side.terms.length; i < padTo; i++) {
+      html += `<div class="gtt-row gtt-row-spacer">&nbsp;</div>`;
+    }
+    html += `<div class="gtt-row gtt-total-row"><span class="gtt-label">Total</span>`
+      + `<span class="gtt-val">${side.roll}</span></div>`;
+    return html + `</div>`;
+  };
+
+  const padTo = Math.max(rows.atk.terms.length, rows.def.terms.length);
+  let html = `<div class="gtt-bkd">`;
+  html += `<div class="gtt-cols">`
+    + column('⚔ ATTACK', 'gtt-atk', rows.atk, padTo)
+    + column('🛡 DEFENSE', 'gtt-def', rows.def, padTo)
+    + `</div>`;
+
+  // Outcome: what happened, why, and the damage dealt.
+  const outcome = buildOutcomeSummary(entry);
+  if (outcome) {
+    html += `<div class="gtt-outcome" data-kind="${outcome.kind}">`
+      + `<div class="gtt-outcome-word">${esc(outcome.headline)}</div>`
+      + `<div class="gtt-outcome-reason">${esc(outcome.reason)}</div>`
+      + outcome.lines.map(l => `<div class="gtt-outcome-line">${esc(l)}</div>`).join('')
+      + `</div>`;
+  }
+
+  for (const n of rows.notes) html += `<div class="gtt-note">${esc(n)}</div>`;
+  html += `<div class="gtt-rule">${esc(rows.rule)}</div>`;
+  html += `</div>`;
+  return html;
+}

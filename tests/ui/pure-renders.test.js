@@ -10,6 +10,7 @@ import {
   buildObjectivesHtml,
   buildNodeBadgeHtml,
   buildUnitDetailHtml,
+  buildCycleInfoHtml,
 } from '../../src/ui-render.js';
 import { PlanActionType } from '../../src/planner.js';
 import { EntityType } from '../../src/entities.js';
@@ -305,29 +306,14 @@ describe('buildObjectivesHtml', () => {
     assert.equal(witchFilled, 1, 'witch should have 1 filled pip');
   });
 
-  test('witch holds all nodes → warning title', () => {
+  test('no native title tooltips — the cycle/score panel explains scoring instead', () => {
     const entities = [
       { alive: true, owner: 'witch', col: 3, row: 3 },
-      { alive: true, owner: 'witch', col: 7, row: 5 },
-      { alive: true, owner: 'witch', col: 5, row: 9 },
-    ];
-    const { title } = buildObjectivesHtml(objectives, entities, { hero: 0, witch: 0 });
-    assert.ok(title.includes('Witch holds all nodes'), `expected sweep warning, got: ${title}`);
-  });
-
-  test('hero holds all nodes → star title', () => {
-    const entities = [
-      { alive: true, owner: 'hero', col: 3, row: 3 },
       { alive: true, owner: 'hero', col: 7, row: 5 },
-      { alive: true, owner: 'hero', col: 5, row: 9 },
     ];
-    const { title } = buildObjectivesHtml(objectives, entities, { hero: 0, witch: 0 });
-    assert.ok(title.includes('Hero holds all nodes'), `expected hero sweep, got: ${title}`);
-  });
-
-  test('default title when no sweep', () => {
-    const { title } = buildObjectivesHtml(objectives, [], { hero: 0, witch: 0 });
-    assert.equal(title, 'Power Nodes');
+    const { html, title } = buildObjectivesHtml(objectives, entities, { hero: 1, witch: 2 });
+    assert.ok(!html.includes('title='), 'score bar HTML must carry no title attributes');
+    assert.equal(title, undefined, 'no title is returned — tapping the bar opens the info panel');
   });
 
   test('contested node gets contested class when both factions occupy equal hexes', () => {
@@ -444,5 +430,71 @@ describe('buildUnitDetailHtml', () => {
   test('shows Unarmed when no weapon is equipped', () => {
     const e = { hp: 10, maxHp: 10, attack: 1, defense: 1, range: 1, weapon: null, items: {} };
     assert.ok(buildUnitDetailHtml(e, {}).includes('👊 Unarmed'));
+  });
+});
+
+// ── buildCycleInfoHtml (cycle & scoring info panel) ───────────────────────────
+
+describe('buildCycleInfoHtml', () => {
+  const baseState = {
+    round: 6,            // round 6 of the default 8-round cycle → NIGHT
+    cycleConfig: null,
+    gameMode: 'standard',
+    nodeScore: { hero: 1, witch: 2 },
+    nodeScoreThreshold: 4,
+    entities: [{ alive: true, owner: 'witch', col: 3, row: 3 }],
+    witchObjectives: [
+      { col: 3, row: 3, label: 'Whispering Stone', color: '#22c55e', hexes: [{ col: 3, row: 3 }] },
+    ],
+  };
+
+  test('shows current and next phase with their effects', () => {
+    const html = buildCycleInfoHtml(baseState);
+    assert.ok(html.includes('Night'), 'current phase named');
+    assert.ok(html.includes('Witch +2 ATK'), 'current phase effects shown');
+    assert.ok(html.includes('Next:'), 'next phase preview present');
+  });
+
+  test('explains the scoring rule and the win threshold', () => {
+    const html = buildCycleInfoHtml(baseState);
+    assert.ok(html.includes('dawn'), 'mentions dawn scoring');
+    assert.ok(html.includes('dusk'), 'mentions dusk scoring');
+    assert.ok(html.includes('4 points'), 'states the win threshold');
+  });
+
+  test('lists each node with its current holder', () => {
+    const html = buildCycleInfoHtml(baseState);
+    assert.ok(html.includes('Whispering Stone'));
+    assert.ok(html.includes('Witch'), 'holder shown');
+  });
+
+  test('cycle strip highlights the current round chip', () => {
+    const html = buildCycleInfoHtml(baseState);
+    const chips = (html.match(/cip-chip/g) || []).length;
+    assert.equal(chips, 8, 'one chip per round of the default cycle');
+    assert.equal((html.match(/cip-chip[^"]*current/g) || []).length, 1, 'exactly one current chip');
+  });
+
+  test('battle mode swaps in the every-round scoring rule', () => {
+    const html = buildCycleInfoHtml({ ...baseState, gameMode: 'battle' });
+    assert.ok(html.includes('every round'));
+    assert.ok(!html.includes('4 points'));
+  });
+
+  test('score renders as pips matching the bar, not numbers', () => {
+    const html = buildCycleInfoHtml(baseState);
+    assert.equal((html.match(/score-pip hero filled/g) || []).length, 1);
+    assert.equal((html.match(/score-pip witch filled/g) || []).length, 2);
+    assert.equal((html.match(/score-pip hero/g) || []).length, 4, 'threshold pips per side');
+    assert.ok(!html.includes('1/4'), 'no numeric x/4 display');
+  });
+
+  test('uses the game cycle sprites when icon data URLs are supplied', () => {
+    const icons = { night: 'data:night', dawn: 'data:dawn', day: 'data:day', dusk: 'data:dusk' };
+    const html = buildCycleInfoHtml(baseState, icons);
+    assert.ok(html.includes('class="cip-icon" src="data:night"'), 'current phase uses its sprite');
+    assert.ok((html.match(/cip-icon/g) || []).length >= 10, 'strip chips use sprites too');
+    const plain = buildCycleInfoHtml(baseState);
+    assert.ok(!plain.includes('cip-icon'), 'emoji fallback without icons');
   });
 });

@@ -344,3 +344,46 @@ export function validatePlanAction(state, action, projectedPositions = null) {
       return { valid: false, reason: `Unknown action type: ${action.type}` };
   }
 }
+
+// ── Whole-plan validation (server-authoritative, structural) ─────────────────
+//
+// Validates a full submitted plan's structure: array shape, length cap, known
+// action types, and entity existence/ownership.  Deliberately does NOT check
+// per-action legality (move range, target validity, …) — that is the
+// resolver's job at execution time, where skips/fails are handled gracefully.
+// Checking legality here against the live state would falsely reject legal
+// chained plans (e.g. moving into a hex an ally vacates in the same round).
+//
+// playerId: owning player UUID for ownership checks, or null to skip them
+//   (offline mode validates by faction at resolution instead).
+//
+// Returns { valid: true } or { valid: false, index, reason }.
+
+const PLAN_ACTION_TYPES = new Set(Object.values(PlanActionType));
+
+export function validatePlan(state, playerId, plan) {
+  if (!Array.isArray(plan))
+    return { valid: false, index: -1, reason: 'Plan must be an array.' };
+  if (plan.length > MAX_PLAN_LENGTH)
+    return { valid: false, index: -1, reason: `Plan exceeds maximum length of ${MAX_PLAN_LENGTH}.` };
+
+  for (let i = 0; i < plan.length; i++) {
+    const action = plan[i];
+    if (action === null || typeof action !== 'object' || Array.isArray(action))
+      return { valid: false, index: i, reason: 'Plan action must be an object.' };
+    if (typeof action.entityId !== 'string')
+      return { valid: false, index: i, reason: 'Plan action is missing an entity id.' };
+    if (!PLAN_ACTION_TYPES.has(action.type))
+      return { valid: false, index: i, reason: `Unknown action type: ${action.type}` };
+
+    if (playerId !== null) {
+      const entity = state.entities.find(e => e.id === action.entityId && e.alive);
+      if (!entity)
+        return { valid: false, index: i, reason: 'Entity not found.' };
+      if (entity.ownerId !== playerId)
+        return { valid: false, index: i, reason: 'Entity belongs to another player.' };
+    }
+  }
+
+  return { valid: true };
+}

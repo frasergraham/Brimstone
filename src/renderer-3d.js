@@ -2044,6 +2044,9 @@ export class Renderer3D {
     // flips this via `setCameraDragMode`. Pinch / wheel always zooms.
     this.cameraDragMode     = 'pan';
     this.planGhostSteps     = null;
+    // Per-unit planning info painted into the unit info card margins
+    // (odds + planned-attack count) — published by ui.js.
+    this.unitInfoCards      = new Map();
     this.viewLocked         = false;
     this.zoomLevel          = 1.0;
     this.hexSize            = 30;
@@ -11440,7 +11443,8 @@ export class Renderer3D {
     const hp    = entity?.hp ?? 0;
     const maxHp = entity?.maxHp ?? 1;
     const basePaint = (ctx) => paintUnitIconBadge(ctx, {
-      size: UNIT_ICON_TEX_SIZE,
+      size:  UNIT_ICON_TEX_SIZE,
+      width: UNIT_ICON_TEX_SIZE * UNIT_ICON_CARD_WIDTH_MUL,
       portraitImg:  portraitSource.hasPortrait ? portraitSource.img  : null,
       portraitRect: portraitSource.hasPortrait ? portraitSource.rect : null,
       hp, maxHp,
@@ -11448,7 +11452,8 @@ export class Renderer3D {
     const repaintIcon = (value, color) => {
       if (!iconEntry) return;
       paintIconCombatReadout(iconEntry.tex.getContext(), {
-        size: UNIT_ICON_TEX_SIZE,
+        size:  UNIT_ICON_TEX_SIZE,
+        width: UNIT_ICON_TEX_SIZE * UNIT_ICON_CARD_WIDTH_MUL,
         basePaint,
         value,
         color,
@@ -11667,13 +11672,15 @@ export class Renderer3D {
     const hp    = entity?.hp ?? 0;
     const maxHp = entity?.maxHp ?? 1;
     const basePaint = (ctx) => paintUnitIconBadge(ctx, {
-      size: UNIT_ICON_TEX_SIZE,
+      size:  UNIT_ICON_TEX_SIZE,
+      width: UNIT_ICON_TEX_SIZE * UNIT_ICON_CARD_WIDTH_MUL,
       portraitImg:  portraitSource.hasPortrait ? portraitSource.img  : null,
       portraitRect: portraitSource.hasPortrait ? portraitSource.rect : null,
       hp, maxHp,
     });
     paintIconCombatReadout(iconEntry.tex.getContext(), {
-      size: UNIT_ICON_TEX_SIZE,
+      size:  UNIT_ICON_TEX_SIZE,
+      width: UNIT_ICON_TEX_SIZE * UNIT_ICON_CARD_WIDTH_MUL,
       basePaint,
       value: die,
       color: sideColor,
@@ -12235,17 +12242,25 @@ export class Renderer3D {
       const portraitSource = resolveUnitIconPortrait(
         this._tilemapImg, this._spriteRects, assetId,
       );
+      // Per-unit planning info (odds + planned-attack count) painted into the
+      // card margins — published by ui.js as `renderer.unitInfoCards`.
+      const info = this.unitInfoCards?.get(e.id) ?? null;
+      const infoSig = info
+        ? `${info.hitPct ?? ''}|${info.crushPct ?? ''}|${info.attackCount ?? 0}`
+        : '';
       if (entry.lastHp === e.hp
           && entry.lastMax === e.maxHp
           && entry.lastAssetId === assetId
-          && entry.lastHadPortrait === portraitSource.hasPortrait) {
+          && entry.lastHadPortrait === portraitSource.hasPortrait
+          && entry.lastInfoSig === infoSig) {
         continue;
       }
-      this._repaintUnitIconBadge(entry, e, portraitSource);
+      this._repaintUnitIconBadge(entry, e, portraitSource, info);
       entry.lastHp           = e.hp;
       entry.lastMax          = e.maxHp;
       entry.lastAssetId      = assetId;
       entry.lastHadPortrait  = portraitSource.hasPortrait;
+      entry.lastInfoSig      = infoSig;
     }
     // Dispose badges for entities that no longer exist or just died.
     // G1 v2: skip entities mid-combat-readout — the readout drives the icon
@@ -12267,7 +12282,9 @@ export class Renderer3D {
     // (256²) so the mipmap chain is clean.
     const tex = new BABYLON.DynamicTexture(
       `unitIconTex_${entity.id}`,
-      { width: UNIT_ICON_TEX_SIZE, height: UNIT_ICON_TEX_SIZE },
+      // 2:1 unit info card (512×256 — both power-of-two, clean mipmaps).
+      // The portrait disc stays centred; margins carry planning info.
+      { width: UNIT_ICON_TEX_SIZE * UNIT_ICON_CARD_WIDTH_MUL, height: UNIT_ICON_TEX_SIZE },
       scene,
       /* generateMipMaps */ true,
       BABYLON.Texture.TRILINEAR_SAMPLINGMODE,
@@ -12287,7 +12304,9 @@ export class Renderer3D {
 
     const plane = BABYLON.MeshBuilder.CreatePlane(
       `unitIcon_${entity.id}`,
-      { width: UNIT_ICON_PLANE_SIZE, height: UNIT_ICON_PLANE_SIZE },
+      // Width matches the 2:1 card texture; the disc remains centred above
+      // the unit so positioning/scaling rules are unchanged.
+      { width: UNIT_ICON_PLANE_SIZE * UNIT_ICON_CARD_WIDTH_MUL, height: UNIT_ICON_PLANE_SIZE },
       scene,
     );
     plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
@@ -12312,7 +12331,7 @@ export class Renderer3D {
     const entry = {
       plane, mat, tex,
       leader: !!standee.leader,
-      lastHp: -1, lastMax: -1, lastAssetId: '__pending__',
+      lastHp: -1, lastMax: -1, lastAssetId: '__pending__', lastInfoSig: '__pending__',
       // Track whether the last paint actually drew the portrait sprite. The
       // race we're guarding against: badge created before `loadImages()`
       // resolves → first paint goes out with `hasPortrait=false` (gray
@@ -12326,14 +12345,16 @@ export class Renderer3D {
     return entry;
   }
 
-  _repaintUnitIconBadge(entry, entity, portraitSource) {
+  _repaintUnitIconBadge(entry, entity, portraitSource, info = null) {
     const ctx = entry.tex.getContext();
     paintUnitIconBadge(ctx, {
-      size: UNIT_ICON_TEX_SIZE,
+      size:  UNIT_ICON_TEX_SIZE,
+      width: UNIT_ICON_TEX_SIZE * UNIT_ICON_CARD_WIDTH_MUL,
       portraitImg:  portraitSource.hasPortrait ? portraitSource.img  : null,
       portraitRect: portraitSource.hasPortrait ? portraitSource.rect : null,
       hp: entity.hp,
       maxHp: entity.maxHp,
+      info,
     });
     entry.tex.update();
   }
@@ -13121,16 +13142,30 @@ export class Renderer3D {
 
     // One ×N badge per unique target hex (⚔ glyph for single attacks). The
     // per-target count rides in each overlay's `meta.count`.
+    //
+    // Skip hexes whose occupant already carries the count on its unit info
+    // card (published by ui.js as `unitInfoCards`) — the floating hex badge
+    // is now only the fallback for targets with no card to host it (e.g. a
+    // BATTLE_HEX queued against an empty or fogged hex).
     if (typeof document === 'undefined') return;
+    const cardCarriesCount = (col, row) => {
+      const cards = this.unitInfoCards;
+      if (!cards || cards.size === 0) return false;
+      for (const e of this.state?.entities ?? []) {
+        if (e?.alive && e.col === col && e.row === row
+            && (cards.get(e.id)?.attackCount ?? 0) > 0) return true;
+      }
+      return false;
+    };
     const drawnTargets = new Set();
     for (const ov of battleOvs) {
       const key = ov.meta.toHex;
       if (drawnTargets.has(key)) continue;
       drawnTargets.add(key);
       const { col: toCol, row: toRow } = parseHex(key);
+      if (cardCarriesCount(toCol, toRow)) continue;
 
       const count = ov.meta.count ?? 1;
-      const label = attackBadgeLabel(count);
 
       const badgeTex = new BABYLON.DynamicTexture(
         `planAttackBadgeTex_${key}`,
@@ -13140,16 +13175,7 @@ export class Renderer3D {
       badgeTex.hasAlpha = true;
       const ctx = badgeTex.getContext();
       ctx.clearRect(0, 0, 96, 96);
-      ctx.fillStyle = 'rgba(180,30,30,0.92)';
-      ctx.beginPath(); ctx.arc(48, 48, 40, 0, Math.PI * 2); ctx.fill();
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 4;
-      ctx.beginPath(); ctx.arc(48, 48, 40, 0, Math.PI * 2); ctx.stroke();
-      ctx.fillStyle = '#ffffff';
-      ctx.font = `bold ${count > 1 ? 48 : 56}px sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(label, 48, 52);
+      paintAttackCountMarker(ctx, 48, 48, 40, count);
       badgeTex.update();
 
       const badgeMat = new BABYLON.StandardMaterial(`planAttackBadgeMat_${key}`, this._scene);
@@ -17321,6 +17347,13 @@ export const HP_BAR_Y_ABOVE_BASE = 0.2;
  *  badge grows upward and still clears the cone+sphere head with the same
  *  ~0.13wu margin that the 0.88 size had. */
 export const UNIT_ICON_PLANE_SIZE = 1.144;
+/** The icon billboard is a 2:1 "unit info card": the portrait disc stays
+ *  centred above the unit (exactly where the old square icon sat) and the
+ *  side margins carry per-unit planning info — hit/crush odds right-justified
+ *  to the LEFT of the disc, and the planned-attack ⚔/×N marker to the RIGHT.
+ *  Margins are transparent when there's no info, so the card is visually
+ *  identical to the old square icon outside planning. */
+export const UNIT_ICON_CARD_WIDTH_MUL = 2;
 /** Proximity-aware icon scaling. The badge sits at scale=1 (full size) for
  *  radius ≥ UNIT_ICON_SCALE_FAR; shrinks linearly to UNIT_ICON_MIN_SCALE
  *  by radius = UNIT_ICON_SCALE_NEAR. At max zoom-in the badge reads as
@@ -18224,6 +18257,7 @@ export function paintReadoutFloater(ctx, opts) {
 export function paintIconCombatReadout(ctx, opts) {
   const {
     size,
+    width = size,  // card width; the readout number stays centred on the disc
     basePaint,
     value,
     color,
@@ -18239,7 +18273,7 @@ export function paintIconCombatReadout(ctx, opts) {
   // ring at the edges absorbs the same dim, which is fine — the overlay
   // is the focal point during combat.
   ctx.fillStyle = `rgba(0,0,0,${dimAlpha})`;
-  ctx.fillRect(0, 0, size, size);
+  ctx.fillRect(0, 0, width, size);
 
   // Big bold number, outlined for contrast. The side-icon prefix is
   // intentionally dropped — the readout overlays the unit's own icon, which
@@ -18261,9 +18295,9 @@ export function paintIconCombatReadout(ctx, opts) {
   ctx.miterLimit = 2;
   ctx.lineWidth = Math.max(4, Math.round(fontPx * 0.20));
   ctx.strokeStyle = '#000';
-  ctx.strokeText(text, size / 2, size / 2);
+  ctx.strokeText(text, width / 2, size / 2);
   ctx.fillStyle = color;
-  ctx.fillText(text, size / 2, size / 2);
+  ctx.fillText(text, width / 2, size / 2);
 }
 
 /**
@@ -18342,19 +18376,26 @@ export function resultLabel(result, side) {
 export function paintUnitIconBadge(ctx, opts) {
   const {
     size,
+    width = size,        // card width; defaults to square for legacy callers
     portraitImg = null,
     portraitRect = null, // { x, y, size } when drawing from a tilemap
     hp,
     maxHp,
+    // Per-unit planning info (unit info card). All optional:
+    //   hitPct / crushPct — attack-odds percentages (0–100) drawn
+    //     right-justified in the left margin; crush omitted when 0/null.
+    //   attackCount — planned attacks targeting this unit; draws the ⚔/×N
+    //     marker in the right margin.
+    info = null,
   } = opts;
-  const W = size;
+  const W = width;
   const H = size;
   const cx = W / 2;
   const cy = H / 2;
-  const ringThickness = Math.max(2, Math.round(W * UNIT_ICON_RING_THICKNESS_FRAC));
+  const ringThickness = Math.max(2, Math.round(size * UNIT_ICON_RING_THICKNESS_FRAC));
   // Outer ring radius is just inside the plane edge; inner radius is the
   // icon disc radius. The icon image is clipped to the inner disc.
-  const outerR = (W / 2) - 2;
+  const outerR = (size / 2) - 2;
   const innerR = outerR - ringThickness;
 
   ctx.clearRect(0, 0, W, H);
@@ -18400,6 +18441,93 @@ export function paintUnitIconBadge(ctx, opts) {
     ctx.drawImage(portraitImg, cx - innerR, cy - innerR, innerR * 2, innerR * 2);
   }
   ctx.restore();
+
+  // ── Unit info card margins ─────────────────────────────────────────────
+  if (!info || W <= H) return;
+  const marginW = cx - outerR;  // pixels available either side of the disc
+
+  // Left margin: hit / crush odds, right-justified against the disc edge.
+  if (Number.isFinite(info.hitPct)) {
+    const rightX = cx - outerR - Math.round(size * 0.03);
+    const hasCrush = Number.isFinite(info.crushPct) && info.crushPct > 0;
+    ctx.textBaseline = 'middle';
+    ctx.lineJoin = 'round';
+
+    // Big number + small "%" suffix — the suffix at full size ate a third of
+    // the margin's width budget, which is what kept the digits small. Each
+    // glyph gets a solid black outline, then the colour fill, so the odds
+    // read against any terrain or portrait behind them.
+    const drawOddsLine = (pct, fontPx, color, y) => {
+      const numText = String(pct);
+      let f = fontPx;
+      const widthOf = (fpx) => {
+        if (!ctx.measureText) return 0;
+        ctx.font = `900 ${fpx}px sans-serif`;
+        const numW = ctx.measureText(numText).width;
+        ctx.font = `900 ${Math.round(fpx * UNIT_INFO_PCT_SUFFIX_FRAC)}px sans-serif`;
+        return numW + ctx.measureText('%').width;
+      };
+      const total = widthOf(f);
+      if (total > marginW - 4 && total > 0) {
+        f = Math.max(1, Math.floor(f * ((marginW - 4) / total)));
+      }
+      const suffixF = Math.round(f * UNIT_INFO_PCT_SUFFIX_FRAC);
+      ctx.font = `900 ${suffixF}px sans-serif`;
+      const suffixW = ctx.measureText ? ctx.measureText('%').width : 0;
+
+      const paintGlyph = (text, fpx, x) => {
+        ctx.font = `900 ${fpx}px sans-serif`;
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = Math.max(4, Math.round(fpx * 0.18));
+        ctx.strokeText(text, x, y);
+        ctx.fillStyle = color;
+        ctx.fillText(text, x, y);
+      };
+      ctx.textAlign = 'right';
+      paintGlyph('%', suffixF, rightX);
+      paintGlyph(numText, f, rightX - suffixW);
+    };
+
+    const hitFont   = Math.round(size * 0.34);
+    const crushFont = Math.round(size * 0.23);
+    if (hasCrush) {
+      drawOddsLine(info.hitPct,   hitFont,   UNIT_INFO_HIT_COLOR,   cy - size * 0.16);
+      drawOddsLine(info.crushPct, crushFont, UNIT_INFO_CRUSH_COLOR, cy + size * 0.185);
+    } else {
+      drawOddsLine(info.hitPct, hitFont, UNIT_INFO_HIT_COLOR, cy);
+    }
+  }
+
+  // Right margin: planned-attack marker (the per-hex ⚔/×N badge relocated
+  // onto the target's own card).
+  if ((info.attackCount ?? 0) > 0) {
+    const r = Math.min(marginW / 2 - 4, size * 0.2);
+    paintAttackCountMarker(ctx, cx + outerR + marginW / 2, cy, r, info.attackCount);
+  }
+}
+
+/** Odds text colours on the unit info card — red hit %, deep-red crush %. */
+export const UNIT_INFO_HIT_COLOR   = '#ff5346';
+export const UNIT_INFO_CRUSH_COLOR = '#c81f1f';
+/** The "%" suffix renders at this fraction of the number's font size. */
+export const UNIT_INFO_PCT_SUFFIX_FRAC = 0.5;
+
+/**
+ * Red ⚔/×N disc marking a unit (or hex) targeted by planned attacks.
+ * Shared by the unit info card and the per-hex fallback badge so the two
+ * read identically. Pure canvas.
+ */
+export function paintAttackCountMarker(ctx, cx, cy, r, count) {
+  ctx.fillStyle = 'rgba(180,30,30,0.92)';
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = Math.max(2, Math.round(r * 0.1));
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+  ctx.fillStyle = '#ffffff';
+  ctx.font = `bold ${Math.round(r * (count > 1 ? 1.0 : 1.16))}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(attackBadgeLabel(count), cx, cy + r * 0.08);
 }
 
 // ─── Discovery readout helpers (exported for tests) ──────────────────────────

@@ -5,7 +5,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildStepDigest, isEventVisible, OutcomeKind } from '../src/replay-timeline.js';
+import { buildStepDigest, buildRollTip, buildRollRows, buildOutcomeSummary, isEventVisible, OutcomeKind } from '../src/replay-timeline.js';
 import { ResEventType } from '../server/resolver.js';
 import { PlanActionType } from '../src/planner.js';
 
@@ -408,5 +408,172 @@ describe('buildStepDigest — playerEvents (online) format', () => {
     const d = buildStepDigest([s], [], DEPS);
     assert.equal(d[0].entries.length, 1);
     assert.equal(d[0].entries[0].targetDmg, 2);
+  });
+});
+
+// ── buildRollTip — the turn card's roll-breakdown tooltip ────────────────────
+
+describe('buildRollTip', () => {
+  const fullResult = {
+    attackRoll: 9, defenseRoll: 5, hit: true,
+    breakdown: {
+      atkPool: [4, 2, 1], atkBaseDie: 4, defPool: [3], defBaseDie: 3,
+      atkAdvantageDice: 2, atkDisadvantageDice: 0, defAdvantageDice: 0,
+      atkGangupFlat: 2, defGangupFlat: 0,
+      phaseBonus: 0, fortBonus: 1, atkFortAtkBonus: 0,
+      fatiguePenalty: 1, forestCoverBonus: 0, rangeDistancePenalty: 0,
+      atkStaffBonus: 0,
+      atkBaseStat: 3, atkWeaponMod: 0, atkAbilityMod: 0, atkEffectMod: 0, atkAttackBonus: 0,
+      defBaseStat: 2, defWeaponMod: 0, defAbilityMod: 0, defEffectMod: 0, defDefenseBonus: 0,
+    },
+  };
+
+  test('reconstructs both rolls with their modifiers', () => {
+    const tip = buildRollTip(fullResult, false);
+    assert.match(tip, /Attack 9 = die 4 \(rolled 4·2·1, kept best of 3\)/);
+    assert.match(tip, /\+3 ATK/);
+    assert.match(tip, /\+2 gang-up/);
+    assert.match(tip, /Defense 5 = die 3/);
+    assert.match(tip, /\+1 fort/);
+    assert.match(tip, /−1 fatigue/);
+  });
+
+  test('explains gang-up only when it applied; rules line always present', () => {
+    const tip = buildRollTip(fullResult, false);
+    assert.match(tip, /Gang-up: each ally beside the target adds \+1 advantage die and \+1 flat/);
+    assert.match(tip, /crush \(2 dmg\) at double/);
+
+    const solo = JSON.parse(JSON.stringify(fullResult));
+    solo.breakdown.atkGangupFlat = 0;
+    solo.breakdown.atkAdvantageDice = 0;
+    solo.breakdown.atkPool = [4];
+    assert.doesNotMatch(buildRollTip(solo, false), /Gang-up:/);
+  });
+
+  test('ranged rules line replaces crush/counter text', () => {
+    const tip = buildRollTip(fullResult, true);
+    assert.match(tip, /never crush and are never countered/);
+    assert.doesNotMatch(tip, /counter when defense/);
+  });
+
+  test('returns empty string without breakdown data (legacy replays)', () => {
+    assert.equal(buildRollTip({ attackRoll: 5, defenseRoll: 3 }), '');
+    assert.equal(buildRollTip(null), '');
+  });
+
+  test('battle entries from buildStepDigest carry the tooltip', () => {
+    const a = snap('h1', 'hero', 'hero', 1, 1);
+    const t = snap('m1', 'minion', 'witch', 1, 2);
+    const ev = battleEvent(a, t, fullResult);
+    const cols = buildStepDigest([step([ev], [a, t])], [], DEPS);
+    const entry = cols[0].entries[0];
+    assert.match(entry.rollTip, /Attack 9/);
+  });
+});
+
+// ── buildRollRows — structured model behind the turn-card breakdown panel ───
+
+describe('buildRollRows', () => {
+  const result = {
+    attackRoll: 9, defenseRoll: 5, hit: true,
+    breakdown: {
+      atkPool: [4, 2, 1], atkBaseDie: 4, defPool: [3], defBaseDie: 3,
+      atkAdvantageDice: 2, atkDisadvantageDice: 0, defAdvantageDice: 0,
+      atkGangupFlat: 2, defGangupFlat: 0,
+      phaseBonus: 0, fortBonus: 1, atkFortAtkBonus: 0,
+      fatiguePenalty: 1, forestCoverBonus: 0, rangeDistancePenalty: 0,
+      atkStaffBonus: 0,
+      atkBaseStat: 3, atkWeaponMod: 0, atkAbilityMod: 0, atkEffectMod: 0, atkAttackBonus: 0,
+      defBaseStat: 2, defWeaponMod: 0, defAbilityMod: 0, defEffectMod: 0, defDefenseBonus: 0,
+    },
+  };
+
+  test('structures both sides with dice and signed terms', () => {
+    const rows = buildRollRows(result, false);
+    assert.equal(rows.atk.roll, 9);
+    assert.deepEqual(rows.atk.dice, { pool: [4, 2, 1], picked: 4, advantage: 2 });
+    assert.deepEqual(rows.atk.terms, [{ label: 'ATK', val: 3 }, { label: 'gang-up', val: 2 }]);
+    assert.equal(rows.def.roll, 5);
+    assert.deepEqual(rows.def.terms, [{ label: 'DEF', val: 2 }, { label: 'fort', val: 1 }, { label: 'fatigue', val: -1 }]);
+    assert.equal(rows.notes.length, 1);
+    assert.match(rows.rule, /crush/);
+  });
+
+  test('matches the plain-text tip (both derive from the same model)', () => {
+    const tip = buildRollTip(result, false);
+    assert.match(tip, /Attack 9 = die 4 \(rolled 4·2·1, kept best of 3\) \+3 ATK \+2 gang-up/);
+  });
+
+  test('returns null without breakdown data', () => {
+    assert.equal(buildRollRows({ attackRoll: 5, defenseRoll: 3 }), null);
+    assert.equal(buildRollRows(null), null);
+  });
+
+  test('entries from buildStepDigest carry the model', () => {
+    const a = snap('h1', 'hero', 'hero', 1, 1);
+    const t = snap('m1', 'minion', 'witch', 1, 2);
+    const cols = buildStepDigest([step([battleEvent(a, t, result)], [a, t])], [], DEPS);
+    assert.equal(cols[0].entries[0].rollRows.atk.roll, 9);
+  });
+});
+
+// ── buildOutcomeSummary — what happened, why, and the damage dealt ───────────
+
+describe('buildOutcomeSummary', () => {
+  const base = {
+    actor: { name: 'Ishmael' }, target: { name: 'Zombie' },
+    ranged: false, missWord: 'blocked',
+  };
+
+  test('hit: states the roll comparison and the damage', () => {
+    const o = buildOutcomeSummary({ ...base, outcomeKind: 'hit', atkRoll: 7, defRoll: 5, targetDmg: 1, actorDmg: 0, killed: false });
+    assert.equal(o.kind, 'hit');
+    assert.equal(o.headline, 'HIT — 1 damage');
+    assert.match(o.reason, /Attack 7 beats defense 5/);
+    assert.deepEqual(o.lines, ['Zombie takes 1.']);
+  });
+
+  test('crush: explains the double-defense threshold', () => {
+    const o = buildOutcomeSummary({ ...base, outcomeKind: 'crush', atkRoll: 10, defRoll: 4, targetDmg: 2, actorDmg: 0, killed: false });
+    assert.equal(o.kind, 'crush');
+    assert.match(o.reason, /at least double defense 4/);
+    assert.match(o.headline, /CRUSH — 2 damage/);
+  });
+
+  test('kill re-derives the strike type from the rolls', () => {
+    const crushKill = buildOutcomeSummary({ ...base, outcomeKind: 'kill', atkRoll: 10, defRoll: 4, targetDmg: 2, actorDmg: 0, killed: true });
+    assert.equal(crushKill.kind, 'kill');
+    assert.equal(crushKill.headline, 'CRUSHED — SLAIN');
+    assert.match(crushKill.lines[0], /slain!/);
+
+    const plainKill = buildOutcomeSummary({ ...base, outcomeKind: 'kill', atkRoll: 7, defRoll: 5, targetDmg: 1, actorDmg: 0, killed: true });
+    assert.equal(plainKill.headline, 'HIT — SLAIN');
+  });
+
+  test('counter: defender strikes back with attacker damage line', () => {
+    const o = buildOutcomeSummary({ ...base, outcomeKind: 'miss', atkRoll: 3, defRoll: 8, targetDmg: 0, actorDmg: 1, killed: false });
+    assert.equal(o.kind, 'counter');
+    assert.match(o.reason, /at least double attack 3/);
+    assert.deepEqual(o.lines, ['Ishmael takes 1 from the counter.']);
+  });
+
+  test('plain miss uses the flavour word and explains no damage', () => {
+    const o = buildOutcomeSummary({ ...base, outcomeKind: 'miss', atkRoll: 4, defRoll: 5, targetDmg: 0, actorDmg: 0, killed: false });
+    assert.equal(o.kind, 'miss');
+    assert.equal(o.headline, 'BLOCKED');
+    assert.match(o.reason, /fails to beat defense 5/);
+  });
+
+  test('ranged kills never read as crush; wounded bonus damage is explained', () => {
+    const rangedKill = buildOutcomeSummary({ ...base, ranged: true, outcomeKind: 'kill', atkRoll: 10, defRoll: 4, targetDmg: 1, actorDmg: 0, killed: true });
+    assert.equal(rangedKill.headline, 'HIT — SLAIN');
+
+    const wounded = buildOutcomeSummary({ ...base, outcomeKind: 'hit', atkRoll: 7, defRoll: 5, targetDmg: 2, actorDmg: 0, killed: false });
+    assert.match(wounded.lines[0], /wounded units take \+1/);
+  });
+
+  test('returns null without rolls or outcome', () => {
+    assert.equal(buildOutcomeSummary(null), null);
+    assert.equal(buildOutcomeSummary({ outcomeKind: 'hit' }), null);
   });
 });
