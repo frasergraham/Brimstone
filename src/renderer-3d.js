@@ -5946,22 +5946,12 @@ export class Renderer3D {
       new BABYLON.Vector3(0.35, -0.85, 0.4),
       scene,
     );
-    // Lift the light's position so the shadow camera frustum sees the whole
-    // map from above even when autoUpdateExtends nudges it.
+    // Placeholder position — `_applySunShadowFit` (below, and again with the
+    // real map bounds in `_buildMap`) owns position + ortho bounds from here
+    // on, sizing the shadow frustum to the actual map instead of either a
+    // hard-coded footprint or Babylon's autoUpdateExtends caster re-fit.
     sunLight.position = new BABYLON.Vector3(0, 30, 0);
     sunLight.intensity = 1.0;
-    // Auto-compute the shadow camera's near/far so the frustum hugs the
-    // casters, then enlarge the orthographic shadow camera to cover a whole
-    // Campaign-size map plus the visual border ring. Without these, Babylon's
-    // default ortho size is ~10 world units — far smaller than our maps —
-    // and shadows just don't render outside that footprint.
-    sunLight.autoCalcShadowZBounds = true;
-    const SHADOW_HALF = 40;
-    sunLight.shadowOrthoScale = 0; // disable padding; rely on explicit ortho bounds
-    sunLight.orthoLeft   = -SHADOW_HALF;
-    sunLight.orthoRight  =  SHADOW_HALF;
-    sunLight.orthoTop    =  SHADOW_HALF;
-    sunLight.orthoBottom = -SHADOW_HALF;
 
     const shadowGenerator = new BABYLON.ShadowGenerator(SUN_SHADOW_MAP_SIZE, sunLight);
     shadowGenerator.usePercentageCloserFiltering = SUN_SHADOW_USE_PCF;
@@ -5978,6 +5968,9 @@ export class Renderer3D {
     this._light             = light;
     this._sunLight          = sunLight;
     this._shadowGenerator   = shadowGenerator;
+    // Default (pre-map) shadow fit — replaced with the real map bounds at the
+    // end of `_buildMap`.
+    this._applySunShadowFit(null);
 
     // X-ray occlusion: handled in `_pumpXrayOcclusion` via a stencil-masked
     // faction-colour OUTLINE (a hollow ring) over each occluded unit (see
@@ -6545,6 +6538,10 @@ export class Renderer3D {
     // at every zoom/tilt, instead of letting it slide out into the border
     // forest band. See `panBoundsForPlayableExtent` for the rationale.
     this._panClampBounds = panBoundsForPlayableExtent(this._mapPanBounds);
+    // Fit the sun's shadow frustum to this map's actual extent — small maps
+    // get a tighter frustum (sharper shadows from the same 2048² map), and
+    // battle-size maps are fully covered instead of clipping at the old ±40.
+    this._applySunShadowFit(this._mapPanBounds);
     this._mapBuilt = true;
     // Static meshes built above never move again — freeze their world matrices
     // so Babylon stops recomputing them every frame, and skip bounding-info
@@ -13900,6 +13897,46 @@ export class Renderer3D {
     };
   }
 
+  /** Size the sun's shadow camera to the given map bounds (or the pre-map
+   *  default when null) and pin it there: Babylon's autoUpdateExtends /
+   *  autoCalcShadowZBounds are switched OFF so the frustum stops re-fitting
+   *  to every caster each frame (which both wasted CPU walking caster bounds
+   *  and inflated the frustum to the border-forest band, blurring shadows on
+   *  big maps). Called once per `_buildMap`; cheap and idempotent. */
+  _applySunShadowFit(bounds) {
+    const sun = this._sunLight;
+    if (!sun) return;
+    const fit = computeSunShadowFit(bounds ?? DEFAULT_SUN_SHADOW_BOUNDS);
+    this._sunShadowFit = fit;
+    sun.autoUpdateExtends = false;
+    sun.autoCalcShadowZBounds = false;
+    sun.shadowOrthoScale = 0; // no padding; the fit radius is already padded
+    sun.orthoLeft   = -fit.radius;
+    sun.orthoRight  =  fit.radius;
+    sun.orthoTop    =  fit.radius;
+    sun.orthoBottom = -fit.radius;
+    sun.shadowMinZ = fit.minZ;
+    sun.shadowMaxZ = fit.maxZ;
+    this._updateSunShadowPosition();
+  }
+
+  /** Re-position the sun light from its CURRENT direction so the map center
+   *  stays exactly on the shadow camera's axis — the alignment the
+   *  bounding-sphere ortho extents in `_applySunShadowFit` rely on. Must run
+   *  whenever the sun direction changes (per-phase configs and the per-round
+   *  sweep in `_onBeforeRender`); a few flops, safe per-frame. */
+  _updateSunShadowPosition() {
+    const sun = this._sunLight;
+    const fit = this._sunShadowFit;
+    if (!sun || !fit) return;
+    const p = sunShadowLightPosition(fit, sun.direction);
+    if (sun.position) {
+      sun.position.x = p.x;
+      sun.position.y = p.y;
+      sun.position.z = p.z;
+    }
+  }
+
   /** Slam the light + clear colour to a target config with no animation.
    *
    *  `groundColor` (the under-side colour of the hemispheric light, defaults
@@ -13954,6 +13991,7 @@ export class Renderer3D {
       const dir = sunDirectionForRound(round, this.state?.cycleConfig);
       this._sunLight.direction = new BABYLON.Vector3(dir.x, dir.y, dir.z);
       this._sunLight.intensity = cfg.sun.intensity;
+      this._updateSunShadowPosition();
       snapshotDir = dir;
     }
     // Mirror into _lightState so transition snapshots see the new anchor.
@@ -14137,6 +14175,9 @@ export class Renderer3D {
         this._sunLight.direction.y = target.y;
         this._sunLight.direction.z = target.z;
       }
+      // Keep the map center on the shadow camera's axis as the sun glides —
+      // the fit's ortho bounds only cover the map under that alignment.
+      this._updateSunShadowPosition();
     }
     // Selection signal is the thick per-unit hex outline + its glow-layer
     // bloom (driven by `_applySelectionAndFocus`); no per-frame standee-
@@ -16746,6 +16787,78 @@ export const SUN_SHADOW_BIAS = 0.005;
 /** 0 = pitch-black shadow, 1 = no shadow. 0.4 gives a strong but not
  *  oppressive shadow — terrain underneath still reads. */
 export const SUN_SHADOW_DARKNESS = 0;
+
+// ── Shadow frustum fit-to-map ────────────────────────────────────────────────
+// The sun's orthographic shadow frustum is sized to the ACTUAL map at build
+// time instead of Babylon's autoUpdateExtends (which re-fits to every shadow
+// caster each frame — including the whole border-forest band — so the fixed
+// 2048² shadow map got spread thinner the bigger the map, and shadow quality
+// visibly degraded with map size). A skirmish map now gets ~4× the texel
+// density of a campaign map, and battle-size maps are fully covered.
+
+/** Pad (in hexes) added around the playable extent when fitting the shadow
+ *  frustum, so the first couple of border-forest rows still cast onto the
+ *  playable edge. Deeper border trees only ever shadow other border trees,
+ *  so excluding them costs nothing visible and keeps the frustum tight. */
+export const SUN_SHADOW_FIT_PAD_HEXES = 2;
+/** Height (world units) of the tallest shadow casters the frustum must
+ *  enclose — trees/buildings top out well under this. */
+export const SUN_SHADOW_CASTER_HEIGHT = 6;
+/** How far up-sun of the map center the light sits, as a multiple of the fit
+ *  radius. >1 keeps the near plane (minZ = distance − radius) positive. */
+export const SUN_SHADOW_LIGHT_DISTANCE_SCALE = 1.5;
+/** Pre-map fallback bounds — matches the legacy hard-coded ±40 footprint so
+ *  the light is usable before the first `_buildMap`. */
+const DEFAULT_SUN_SHADOW_BOUNDS = Object.freeze({ centerX: 0, centerZ: 0, width: 80, depth: 80 });
+
+/**
+ * Fit the sun's shadow camera to a map's world bounds (`computeMapBounds`
+ * output). Returns the bounding SPHERE of the padded map slab (ground level
+ * up to `casterHeight`): because a sphere is rotation-invariant, ortho bounds
+ * of ±radius cover the whole map for ANY sun direction in the day cycle —
+ * provided the light is positioned via `sunShadowLightPosition` so the sphere
+ * center sits exactly on the shadow camera's axis.
+ *
+ * Returns `{ center, radius, distance, minZ, maxZ }` or null for no bounds.
+ * `minZ`/`maxZ` bracket the sphere along the view axis so depth precision is
+ * spent only on the slab that actually contains casters.
+ */
+export function computeSunShadowFit(bounds, {
+  padWorld = SUN_SHADOW_FIT_PAD_HEXES * HEX_RADIUS_WORLD * SQRT3,
+  casterHeight = SUN_SHADOW_CASTER_HEIGHT,
+} = {}) {
+  if (!bounds) return null;
+  const halfW = bounds.width / 2 + padWorld;
+  const halfD = bounds.depth / 2 + padWorld;
+  const halfH = casterHeight / 2;
+  const radius = Math.hypot(halfW, halfD, halfH);
+  const distance = radius * SUN_SHADOW_LIGHT_DISTANCE_SCALE;
+  return {
+    center: { x: bounds.centerX, y: halfH, z: bounds.centerZ },
+    radius,
+    distance,
+    minZ: distance - radius,
+    maxZ: distance + radius,
+  };
+}
+
+/**
+ * World position for the sun light given a shadow fit and the current sun
+ * direction: `distance` up-sun of the fit center, so the map center projects
+ * to the shadow camera's view-space origin (the alignment the bounding-sphere
+ * ortho extents rely on). Degenerate/missing directions fall back to a
+ * straight-down sun. Pure.
+ */
+export function sunShadowLightPosition(fit, dir) {
+  let x = dir?.x ?? 0, y = dir?.y ?? 0, z = dir?.z ?? 0;
+  const len = Math.hypot(x, y, z);
+  if (len < 1e-9) { x = 0; y = -1; z = 0; } else { x /= len; y /= len; z /= len; }
+  return {
+    x: fit.center.x - x * fit.distance,
+    y: fit.center.y - y * fit.distance,
+    z: fit.center.z - z * fit.distance,
+  };
+}
 
 /** Easing duration for the directional-sun direction change when state.round
  *  advances. Keeps the sun gliding visibly across the sky as turns resolve
