@@ -6792,22 +6792,44 @@ body.spectator-mode #game-screen   { display: flex !important; }
 }
 #game-tooltip.visible { opacity: 1; }
 
-/* Roll-breakdown panel inside the tooltip (turn-card battles) */
-.gtt-bkd { min-width: 200px; }
-.gtt-side {
-  display: flex;
-  align-items: baseline;
-  gap: 0.35rem;
-  font-size: 0.72rem;
+/* Roll-breakdown panel inside the tooltip (turn-card battles).
+   Mirrors the old 2D battle dialog: attack/defense columns side by side,
+   building line by line to a Total, then the outcome + damage. */
+.gtt-bkd { min-width: 240px; }
+.gtt-cols { display: flex; gap: 0.9rem; }
+.gtt-col { flex: 1 1 0; min-width: 118px; }
+.gtt-col-head {
+  font-size: 0.7rem;
   letter-spacing: 0.08em;
   color: var(--text-dim);
-  margin-top: 0.35rem;
+  margin-bottom: 0.2rem;
 }
-.gtt-side:first-child { margin-top: 0; }
-.gtt-side-roll { font-size: 1.0rem; font-weight: 700; }
-.gtt-atk .gtt-side-roll { color: #e8b54a; }
-.gtt-def .gtt-side-roll { color: #8fb7e8; }
-.gtt-dice-row { display: flex; align-items: center; gap: 0.2rem; margin: 0.15rem 0; }
+.gtt-atk .gtt-col-head { color: #e8b54a; }
+.gtt-def .gtt-col-head { color: #8fb7e8; }
+.gtt-dice-row { align-items: center; margin: 0.1rem 0; }
+.gtt-row-spacer { visibility: hidden; }
+.gtt-total-row {
+  border-top: 1px solid rgba(255,255,255,0.18);
+  margin-top: 0.2rem;
+  padding-top: 0.15rem;
+  font-weight: 700;
+}
+.gtt-total-row .gtt-label { color: var(--text); }
+.gtt-atk .gtt-total-row .gtt-val { color: #e8b54a; }
+.gtt-def .gtt-total-row .gtt-val { color: #8fb7e8; }
+.gtt-outcome {
+  margin-top: 0.45rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid rgba(255,255,255,0.12);
+}
+.gtt-outcome-word { font-weight: 800; letter-spacing: 0.06em; font-size: 0.82rem; }
+.gtt-outcome[data-kind="kill"]    .gtt-outcome-word { color: #ff4d4d; }
+.gtt-outcome[data-kind="crush"]   .gtt-outcome-word { color: #ff7a45; }
+.gtt-outcome[data-kind="hit"]     .gtt-outcome-word { color: #e8b54a; }
+.gtt-outcome[data-kind="counter"] .gtt-outcome-word { color: #8fb7e8; }
+.gtt-outcome[data-kind="miss"]    .gtt-outcome-word { color: var(--text-dim); }
+.gtt-outcome-reason { font-size: 0.72rem; color: var(--text-dim); margin-top: 0.1rem; }
+.gtt-outcome-line   { font-size: 0.74rem; margin-top: 0.15rem; }
 .gtt-die {
   display: inline-flex;
   align-items: center;

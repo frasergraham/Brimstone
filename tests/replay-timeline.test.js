@@ -5,7 +5,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildStepDigest, buildRollTip, buildRollRows, isEventVisible, OutcomeKind } from '../src/replay-timeline.js';
+import { buildStepDigest, buildRollTip, buildRollRows, buildOutcomeSummary, isEventVisible, OutcomeKind } from '../src/replay-timeline.js';
 import { ResEventType } from '../server/resolver.js';
 import { PlanActionType } from '../src/planner.js';
 
@@ -514,5 +514,66 @@ describe('buildRollRows', () => {
     const t = snap('m1', 'minion', 'witch', 1, 2);
     const cols = buildStepDigest([step([battleEvent(a, t, result)], [a, t])], [], DEPS);
     assert.equal(cols[0].entries[0].rollRows.atk.roll, 9);
+  });
+});
+
+// ── buildOutcomeSummary — what happened, why, and the damage dealt ───────────
+
+describe('buildOutcomeSummary', () => {
+  const base = {
+    actor: { name: 'Ishmael' }, target: { name: 'Zombie' },
+    ranged: false, missWord: 'blocked',
+  };
+
+  test('hit: states the roll comparison and the damage', () => {
+    const o = buildOutcomeSummary({ ...base, outcomeKind: 'hit', atkRoll: 7, defRoll: 5, targetDmg: 1, actorDmg: 0, killed: false });
+    assert.equal(o.kind, 'hit');
+    assert.equal(o.headline, 'HIT — 1 damage');
+    assert.match(o.reason, /Attack 7 beats defense 5/);
+    assert.deepEqual(o.lines, ['Zombie takes 1.']);
+  });
+
+  test('crush: explains the double-defense threshold', () => {
+    const o = buildOutcomeSummary({ ...base, outcomeKind: 'crush', atkRoll: 10, defRoll: 4, targetDmg: 2, actorDmg: 0, killed: false });
+    assert.equal(o.kind, 'crush');
+    assert.match(o.reason, /at least double defense 4/);
+    assert.match(o.headline, /CRUSH — 2 damage/);
+  });
+
+  test('kill re-derives the strike type from the rolls', () => {
+    const crushKill = buildOutcomeSummary({ ...base, outcomeKind: 'kill', atkRoll: 10, defRoll: 4, targetDmg: 2, actorDmg: 0, killed: true });
+    assert.equal(crushKill.kind, 'kill');
+    assert.equal(crushKill.headline, 'CRUSHED — SLAIN');
+    assert.match(crushKill.lines[0], /slain!/);
+
+    const plainKill = buildOutcomeSummary({ ...base, outcomeKind: 'kill', atkRoll: 7, defRoll: 5, targetDmg: 1, actorDmg: 0, killed: true });
+    assert.equal(plainKill.headline, 'HIT — SLAIN');
+  });
+
+  test('counter: defender strikes back with attacker damage line', () => {
+    const o = buildOutcomeSummary({ ...base, outcomeKind: 'miss', atkRoll: 3, defRoll: 8, targetDmg: 0, actorDmg: 1, killed: false });
+    assert.equal(o.kind, 'counter');
+    assert.match(o.reason, /at least double attack 3/);
+    assert.deepEqual(o.lines, ['Ishmael takes 1 from the counter.']);
+  });
+
+  test('plain miss uses the flavour word and explains no damage', () => {
+    const o = buildOutcomeSummary({ ...base, outcomeKind: 'miss', atkRoll: 4, defRoll: 5, targetDmg: 0, actorDmg: 0, killed: false });
+    assert.equal(o.kind, 'miss');
+    assert.equal(o.headline, 'BLOCKED');
+    assert.match(o.reason, /fails to beat defense 5/);
+  });
+
+  test('ranged kills never read as crush; wounded bonus damage is explained', () => {
+    const rangedKill = buildOutcomeSummary({ ...base, ranged: true, outcomeKind: 'kill', atkRoll: 10, defRoll: 4, targetDmg: 1, actorDmg: 0, killed: true });
+    assert.equal(rangedKill.headline, 'HIT — SLAIN');
+
+    const wounded = buildOutcomeSummary({ ...base, outcomeKind: 'hit', atkRoll: 7, defRoll: 5, targetDmg: 2, actorDmg: 0, killed: false });
+    assert.match(wounded.lines[0], /wounded units take \+1/);
+  });
+
+  test('returns null without rolls or outcome', () => {
+    assert.equal(buildOutcomeSummary(null), null);
+    assert.equal(buildOutcomeSummary({ outcomeKind: 'hit' }), null);
   });
 });

@@ -422,3 +422,54 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
     return { stepIndex, entries };
   });
 }
+
+/**
+ * Outcome summary for a battle entry — what happened, WHY (the roll
+ * comparison that triggered it), and who took how much damage. Feeds the
+ * turn card's breakdown panel. Pure; takes a buildStepDigest battle entry.
+ *
+ * @returns {{ kind, headline, reason, lines: string[] } | null}
+ */
+export function buildOutcomeSummary(entry) {
+  if (!entry || !entry.outcomeKind || entry.atkRoll == null || entry.defRoll == null) return null;
+  const atk = entry.atkRoll, def = entry.defRoll;
+  const target = entry.target?.name ?? 'The defender';
+  const actor  = entry.actor?.name  ?? 'The attacker';
+
+  // Kills carry outcomeKind 'kill' — re-derive the strike type from the rolls
+  // (mirrors executeBattle: crush at attack ≥ 2× defense, melee only).
+  const landed  = entry.outcomeKind !== OutcomeKind.MISS;
+  const isCrush = landed && !entry.ranged && atk >= 2 * def;
+  const baseDmg = isCrush ? 2 : 1;
+
+  let kind, headline, reason;
+  if (landed) {
+    kind = entry.killed ? 'kill' : (isCrush ? 'crush' : 'hit');
+    headline = entry.killed
+      ? (isCrush ? 'CRUSHED — SLAIN' : `HIT — SLAIN`)
+      : (isCrush ? `CRUSH — ${entry.targetDmg} damage` : `HIT — ${entry.targetDmg} damage`);
+    reason = isCrush
+      ? `Attack ${atk} is at least double defense ${def} — a crushing blow deals 2 damage.`
+      : `Attack ${atk} beats defense ${def} — the blow lands for 1 damage.`;
+  } else if (entry.actorDmg > 0) {
+    kind = 'counter';
+    headline = `COUNTERED — ${entry.actorDmg} damage`;
+    reason = `Defense ${def} is at least double attack ${atk} — the defender strikes back.`;
+  } else {
+    kind = 'miss';
+    headline = entry.missWord ? String(entry.missWord).toUpperCase() : 'MISS';
+    reason = `Attack ${atk} fails to beat defense ${def} — no damage.`;
+  }
+
+  const lines = [];
+  if (entry.targetDmg > 0) {
+    let line = `${target} takes ${entry.targetDmg}`;
+    if (landed && entry.targetDmg > baseDmg) line += ' (wounded units take +1)';
+    if (entry.killed) line += ' — slain!';
+    lines.push(line + (entry.killed ? '' : '.'));
+  }
+  if (entry.actorDmg > 0) {
+    lines.push(`${actor} takes ${entry.actorDmg} from the counter.`);
+  }
+  return { kind, headline, reason, lines };
+}

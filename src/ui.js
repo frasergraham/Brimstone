@@ -14,7 +14,7 @@ import * as audio from './audio.js';
 
 import { PlanActionType, actionCosts, computeGhostState, computeProjectedInventory, interleavePlan } from './planner.js';
 import { ABILITIES } from './abilities.js';
-import { buildRollRows } from './replay-timeline.js';
+import { buildRollRows, buildOutcomeSummary } from './replay-timeline.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
 import { ResEventType } from '../server/resolver.js';
 import { collectUIElements } from './ui-elements.js';
@@ -6141,51 +6141,72 @@ export function initGameTooltips() {
 
 // ── Turn-card roll breakdown panel (game-styled hover tooltip content) ──────
 //
-// Renders buildRollRows() output as colour-coded rows: dice line (picked die
-// + discards with the kept-best/worst explanation), one row per modifier
-// (positive green / negative red), then the gang-up / point-blank notes and
-// the hit/crush/counter rule line. Pure HTML string — no DOM.
+// Renders buildRollRows() as the old 2D battle dialog did: attack and
+// defense COLUMNS side by side, each building line by line — dice pool
+// (picked die highlighted against the discards), one row per modifier
+// (positive green / negative red), divider, Total — followed by the outcome
+// (what happened, why, and who took how much damage) and the rules notes.
+// Pure HTML string — no DOM.
 
 function _rollRowsTipHtml(rows, entry = {}) {
   if (!rows) return '';
   const esc = (s) => String(s ?? '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-  const diceLine = ({ pool, picked, advantage }) => {
-    if (!Array.isArray(pool) || pool.length <= 1) {
-      return `<span class="gtt-die gtt-die-picked">${picked}</span>`;
-    }
+  const diceRow = ({ pool, picked, advantage }) => {
     let usedPick = false;
-    const dice = pool.map(v => {
+    const discards = [];
+    let pickedHtml = '';
+    for (const v of (Array.isArray(pool) ? pool : [picked])) {
       const isPick = !usedPick && v === picked;
-      if (isPick) usedPick = true;
-      return `<span class="gtt-die${isPick ? ' gtt-die-picked' : ' gtt-die-discard'}">${v}</span>`;
-    }).join('');
-    const kind = advantage >= 0 ? 'best' : 'worst';
-    const label = advantage > 0 ? `advantage ${advantage}`
-      : advantage < 0 ? `disadvantage ${-advantage}` : 'roll';
-    return `${dice}<span class="gtt-dice-note">${label} — kept ${kind}</span>`;
+      if (isPick) { usedPick = true; pickedHtml = `<span class="gtt-die gtt-die-picked">${v}</span>`; }
+      else discards.push(`<span class="gtt-die gtt-die-discard">${v}</span>`);
+    }
+    const note = advantage > 0 ? `adv ${advantage}` : advantage < 0 ? `disadv ${-advantage}` : 'die';
+    return `<div class="gtt-row gtt-dice-row">`
+      + `<span class="gtt-label">${note}${discards.length ? ` ${discards.join('')}` : ''}</span>`
+      + `<span class="gtt-val">${pickedHtml}</span></div>`;
   };
 
-  const side = (name, cls, s) => {
-    let html = `<div class="gtt-side ${cls}"><span class="gtt-side-roll">${s.roll}</span> ${name}</div>`;
-    html += `<div class="gtt-row gtt-dice-row">${diceLine(s.dice)}</div>`;
-    for (const t of s.terms) {
+  const column = (name, cls, side, padTo) => {
+    let html = `<div class="gtt-col ${cls}">`;
+    html += `<div class="gtt-col-head">${name}</div>`;
+    html += diceRow(side.dice);
+    for (const t of side.terms) {
       const sign = t.val > 0 ? 'positive' : 'negative';
       const v = t.val > 0 ? `+${t.val}` : `−${Math.abs(t.val)}`;
       html += `<div class="gtt-row" data-sign="${sign}">`
         + `<span class="gtt-label">${esc(t.label)}</span>`
         + `<span class="gtt-val">${v}</span></div>`;
     }
-    return html;
+    // Spacer rows so both Totals sit on the same baseline (old dialog padTo).
+    for (let i = side.terms.length; i < padTo; i++) {
+      html += `<div class="gtt-row gtt-row-spacer">&nbsp;</div>`;
+    }
+    html += `<div class="gtt-row gtt-total-row"><span class="gtt-label">Total</span>`
+      + `<span class="gtt-val">${side.roll}</span></div>`;
+    return html + `</div>`;
   };
 
+  const padTo = Math.max(rows.atk.terms.length, rows.def.terms.length);
   let html = `<div class="gtt-bkd">`;
-  html += side('ATTACK', 'gtt-atk', rows.atk);
-  html += side('DEFENSE', 'gtt-def', rows.def);
+  html += `<div class="gtt-cols">`
+    + column('⚔ ATTACK', 'gtt-atk', rows.atk, padTo)
+    + column('🛡 DEFENSE', 'gtt-def', rows.def, padTo)
+    + `</div>`;
+
+  // Outcome: what happened, why, and the damage dealt.
+  const outcome = buildOutcomeSummary(entry);
+  if (outcome) {
+    html += `<div class="gtt-outcome" data-kind="${outcome.kind}">`
+      + `<div class="gtt-outcome-word">${esc(outcome.headline)}</div>`
+      + `<div class="gtt-outcome-reason">${esc(outcome.reason)}</div>`
+      + outcome.lines.map(l => `<div class="gtt-outcome-line">${esc(l)}</div>`).join('')
+      + `</div>`;
+  }
+
   for (const n of rows.notes) html += `<div class="gtt-note">${esc(n)}</div>`;
   html += `<div class="gtt-rule">${esc(rows.rule)}</div>`;
   html += `</div>`;
-  void entry;
   return html;
 }
