@@ -166,6 +166,25 @@ CONTROL_NODES score:
 
 ---
 
+## Difficulty Tiers
+
+Human-vs-AI games carry `state.aiDifficulty` (`'easy' | 'normal' | 'hard'`,
+default `normal`; persisted via state-sync). The tier shifts how many actions
+the AI *plans* each round — the same lever campaign missions use via
+`campaignAIBudgetBonus`: easy −1, normal 0, hard +1, floored at 1
+(`AI_DIFFICULTY_BUDGET_DELTA` in `src/ai.js`, applied to `totalBudget` in both
+engines' assess stage via `PlanSimState.aiDifficultyDelta`). `normal` is the
+tuned balance baseline — AI-vs-AI balance runs never set the field, so all
+headless numbers in this doc are at normal.
+
+Online AI fill-in picks a random personality from the matrix-validated pool
+(`RANDOM_PERSONALITY_POOL` in `server/lobby.js`): hero
+balanced/aggressive/defensive/explorer, witch balanced/aggressive/swarm.
+`node_denier`, `witch_hunter`, and `evasive` are excluded from random rotation
+until they get an ai-matrix pass of their own.
+
+---
+
 ## Personality System
 
 Each side primary (Hero / Witch) has 3 personality variants that adjust goal weights and engagement thresholds. Stub factions (Rogue / Captain on day; Necromancer / Brute on night) inherit their parent side's personality registry for now — `Faction.getPersonalities()` returns the parent registry until a stub gets its own implementation. See `docs/design/faction-expansion.md`.
