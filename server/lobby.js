@@ -1026,6 +1026,45 @@ function _submitPlayerPlan(room, playerId, plan, isTimeout = false) {
   }
 }
 
+/**
+ * Roll a room back to its pre-resolution snapshot after resolvePlansMP threw.
+ * Restores the state, rebinds AI engines to the new state object, clears the
+ * round's submitted plans, and restarts the planning phase so players can
+ * resubmit. Returns true on success, false if the rollback itself failed.
+ */
+function _recoverFromResolutionError(room, preStateJson) {
+  let restored;
+  try {
+    restored = deserializeState(JSON.parse(preStateJson));
+  } catch (err) {
+    console.error(`[room ${room.id}] resolution rollback failed:`, err);
+    return false;
+  }
+
+  room.state = restored;
+  // AI engines hold a reference to the replaced state object — recreate them.
+  for (const seat of room.players) {
+    if (seat.isAI && seat.ai) {
+      seat.ai = _makeAI(room, seat.faction, seat.playerId, seat.personality ?? null);
+    }
+  }
+
+  // Drop the round's persisted plans — one of them caused the throw, and
+  // _startPlanningPhase re-inserts fresh empty status rows.
+  try { clearPlanStatus(room.id, room.state.round); } catch (err) {
+    console.error(`[room ${room.id}] clearPlanStatus during rollback error:`, err);
+  }
+
+  broadcast(room, {
+    type: 'error',
+    message: 'Round resolution failed on the server. The round has been reset — please resubmit your plan.',
+  });
+  console.warn(`[room ${room.id}] rolled back to pre-resolution state (round ${room.state.round}) after resolver error`);
+
+  _startPlanningPhase(room);
+  return true;
+}
+
 /** Run the N-player resolver, advance state, and broadcast the result. */
 function _executeResolution(room) {
   _clearTurnTimer(room);
@@ -1059,7 +1098,11 @@ function _executeResolution(room) {
     steps = resolvePlansMP(state, playerEntries);
   } catch (err) {
     console.error(`[room ${room.id}] resolvePlansMP error:`, err);
-    steps = [];
+    // The resolver may have half-mutated the state before throwing — roll
+    // back to the pre-resolution snapshot and replan instead of finalizing
+    // a corrupt round (which previously left the room hung).
+    if (_recoverFromResolutionError(room, preStateJson)) return;
+    steps = [];  // rollback itself failed — fall through with an empty round
   }
 
   if (room.config.isBattle) {
@@ -3679,6 +3722,7 @@ export function pruneAsyncGames() {
 /** Exported for testing only. */
 export { _serializeEvents as serializeEventsForTest };
 export { _checkTimeoutTakeovers as checkTimeoutTakeoversForTest };
+export { _recoverFromResolutionError as recoverFromResolutionErrorForTest };
 
 /** Get async games list for a player (for REST endpoint). */
 export { getAsyncGamesForPlayer };
