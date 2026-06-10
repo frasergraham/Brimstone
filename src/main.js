@@ -893,6 +893,10 @@ function _focusInitialView(humanFaction) {
   if (!renderer || !state) return;
   const apply = () => {
     if (!renderer || !state) return;
+    // A turn-0 conversation owns the screen at mission start (RESOLVING) —
+    // re-selecting the hero here would paint planning highlights and yank the
+    // camera off the conversation framing. Planning re-frames on entry anyway.
+    if (getMode() === AppMode.RESOLVING) return;
     // state.hero / state.witch keyed by faction id (avoids a faction string check).
     const main = state[humanFaction]
       ?? state.entities.find(e => e.alive && e.owner === humanFaction);

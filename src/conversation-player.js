@@ -80,6 +80,14 @@ export async function playConversation(opts) {
   // ── HUD (round-boundary only — mid-replay reuses the step loop's bar) ──────
   const prevStepRequested = playback.stepRequested;
   if (manageHud && ui) {
+    // Fresh presentation: stale flags from a previous replay (skip/abort/back)
+    // would otherwise blow through every line gate and dump the player into
+    // planning with the card still up.
+    playback.aborted = false;
+    playback.goBack = false;
+    playback.jumpToEnd = false;
+    playback.restart = false;
+    playback.replayStep = false;
     // Turn-0 resolution presentation: the conversation plays as a replay, not
     // over the planning chrome — drop any plan panel/selection and enter
     // RESOLVING before the first bubble appears.
@@ -113,6 +121,11 @@ export async function playConversation(opts) {
   }
 
   // ── Camera ─────────────────────────────────────────────────────────────────
+  // The 3D renderer boots lazily (Babylon + assets behind the loading
+  // overlay). showSpeechBubble silently no-ops until the scene exists, so a
+  // mission-intro conversation racing the load would lose its first line(s) —
+  // wait for the renderer before presenting anything.
+  if (renderer?.whenReady) await renderer.whenReady();
   const fixedCam = ui?.replayCameraMode === 'fixed' || !!renderer?.suppressAutoFrame;
   await _frameOrArrow({ renderer, ui, fixedCam, participantIds, centroid });
 
