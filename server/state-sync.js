@@ -4,6 +4,7 @@
 import { VERSION }           from '../src/version.js';
 import { Entity, BASE_AGILITY } from '../src/entities.js';
 import { ITEMS } from '../src/items.js';
+import { UNIT_TYPES } from '../src/unit-types.js';
 import { GameState }         from '../src/game.js';
 import { setMapDimensions, hexKey }  from '../src/hex.js';
 import { Tile, TileType, legacyTileType, decomposeTileType, deriveBlockedSlots } from '../src/tiles.js';
@@ -278,6 +279,10 @@ export function deserializeState(snap) {
     e.range = ITEMS[e.weapon]?.range ?? 1;
     // Once-per-round equip gate — default false on saves that predate it.
     if (e.equippedThisRound === undefined) e.equippedThisRound = false;
+    // tags is static per unit type, set by the Entity constructor (which this
+    // restore path bypasses). Hydrate from UNIT_TYPES so hasTag() — used by
+    // ability targeting and leader-death effects — works on restored entities.
+    if (!Array.isArray(e.tags)) e.tags = UNIT_TYPES[e.type]?.tags ?? [];
     // Back-compat: pre-PR factionId. Saves from before the rogue PR
     // don't carry factionId; fall back to null so factionOf(actor) →
     // getFaction(owner) — i.e. the side default. Saves that DO carry
