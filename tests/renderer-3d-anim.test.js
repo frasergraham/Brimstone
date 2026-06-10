@@ -991,12 +991,31 @@ describe('Renderer3D — paintUnitIconBadge unit info card', () => {
     });
     const align = ctx.calls.find(c => c.name === 'textAlign');
     assert.deepEqual(align.args, ['right']);
-    const text = ctx.calls.find(c => c.name === 'fillText' && c.args[0] === '72%');
-    assert.ok(text, 'expected the hit % to be drawn');
-    assert.ok(text.args[1] <= cx - outerR, 'anchored left of the disc edge');
+    // The number draws big with a small "%" suffix (separate glyph calls).
+    const num = ctx.calls.find(c => c.name === 'fillText' && c.args[0] === '72');
+    const pct = ctx.calls.find(c => c.name === 'fillText' && c.args[0] === '%');
+    assert.ok(num, 'expected the hit number to be drawn');
+    assert.ok(pct, 'expected the small % suffix to be drawn');
+    assert.ok(pct.args[1] <= cx - outerR, 'suffix anchored left of the disc edge');
+    assert.ok(num.args[1] < pct.args[1], 'number sits left of its % suffix');
     const colour = ctx.calls.filter(c => c.name === 'fillStyle')
       .some(c => c.args[0] === UNIT_INFO_HIT_COLOR);
     assert.ok(colour, 'hit % uses UNIT_INFO_HIT_COLOR');
+  });
+
+  test('odds glyphs get a white outline over a dark halo', () => {
+    const ctx = makeTextStubCtx();
+    paintUnitIconBadge(ctx, {
+      size: SIZE, width: WIDTH, hp: 5, maxHp: 10,
+      info: { hitPct: 72, crushPct: 0, attackCount: 0 },
+    });
+    const strokes = ctx.calls.filter(c => c.name === 'strokeStyle').map(c => c.args[0]);
+    assert.ok(strokes.includes('#ffffff'), 'white outline stroke present');
+    assert.ok(strokes.some(v => String(v).startsWith('rgba(0,0,0')), 'dark halo stroke present');
+    // Halo strokes before white strokes before the colour fill (per glyph).
+    const firstWhite = ctx.calls.findIndex(c => c.name === 'strokeStyle' && c.args[0] === '#ffffff');
+    const firstHalo  = ctx.calls.findIndex(c => c.name === 'strokeStyle' && String(c.args[0]).startsWith('rgba(0,0,0'));
+    assert.ok(firstHalo < firstWhite, 'dark halo painted beneath the white outline');
   });
 
   test('crush % gets its own deep-red line only when > 0', () => {
@@ -1005,7 +1024,7 @@ describe('Renderer3D — paintUnitIconBadge unit info card', () => {
       size: SIZE, width: WIDTH, hp: 5, maxHp: 10,
       info: { hitPct: 72, crushPct: 34, attackCount: 0 },
     });
-    const crushText = withCrush.calls.find(c => c.name === 'fillText' && c.args[0] === '34%');
+    const crushText = withCrush.calls.find(c => c.name === 'fillText' && c.args[0] === '34');
     assert.ok(crushText, 'expected the crush % line');
     assert.ok(withCrush.calls.filter(c => c.name === 'fillStyle')
       .some(c => c.args[0] === UNIT_INFO_CRUSH_COLOR));
@@ -1015,8 +1034,8 @@ describe('Renderer3D — paintUnitIconBadge unit info card', () => {
       size: SIZE, width: WIDTH, hp: 5, maxHp: 10,
       info: { hitPct: 72, crushPct: 0, attackCount: 0 },
     });
-    const texts = noCrush.calls.filter(c => c.name === 'fillText');
-    assert.equal(texts.length, 1, 'only the hit % line when crush is 0 (ranged)');
+    const numbers = noCrush.calls.filter(c => c.name === 'fillText' && c.args[0] !== '%');
+    assert.equal(numbers.length, 1, 'only the hit line when crush is 0 (ranged)');
   });
 
   test('planned-attack marker is drawn in the right margin', () => {

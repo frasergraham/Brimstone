@@ -18450,34 +18450,54 @@ export function paintUnitIconBadge(ctx, opts) {
   if (Number.isFinite(info.hitPct)) {
     const rightX = cx - outerR - Math.round(size * 0.03);
     const hasCrush = Number.isFinite(info.crushPct) && info.crushPct > 0;
-    ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
     ctx.lineJoin = 'round';
-    ctx.strokeStyle = 'rgba(0,0,0,0.9)';
 
-    const drawLine = (text, fontPx, color, y) => {
-      ctx.font = `900 ${fontPx}px sans-serif`;
-      // Shrink to fit the margin so "100%" never clips at the card edge.
-      const measured = ctx.measureText ? ctx.measureText(text).width : 0;
-      if (measured > marginW - 4 && measured > 0) {
-        const f = Math.max(1, Math.floor(fontPx * ((marginW - 4) / measured)));
-        ctx.font = `900 ${f}px sans-serif`;
-        ctx.lineWidth = Math.max(3, Math.round(f * 0.18));
-      } else {
-        ctx.lineWidth = Math.max(3, Math.round(fontPx * 0.18));
+    // Big number + small "%" suffix — the suffix at full size ate a third of
+    // the margin's width budget, which is what kept the digits small. Each
+    // glyph gets a dark halo, then a white outline, then the colour fill so
+    // the odds pop against any terrain or portrait behind them.
+    const drawOddsLine = (pct, fontPx, color, y) => {
+      const numText = String(pct);
+      let f = fontPx;
+      const widthOf = (fpx) => {
+        if (!ctx.measureText) return 0;
+        ctx.font = `900 ${fpx}px sans-serif`;
+        const numW = ctx.measureText(numText).width;
+        ctx.font = `900 ${Math.round(fpx * UNIT_INFO_PCT_SUFFIX_FRAC)}px sans-serif`;
+        return numW + ctx.measureText('%').width;
+      };
+      const total = widthOf(f);
+      if (total > marginW - 4 && total > 0) {
+        f = Math.max(1, Math.floor(f * ((marginW - 4) / total)));
       }
-      ctx.strokeText(text, rightX, y);
-      ctx.fillStyle = color;
-      ctx.fillText(text, rightX, y);
+      const suffixF = Math.round(f * UNIT_INFO_PCT_SUFFIX_FRAC);
+      ctx.font = `900 ${suffixF}px sans-serif`;
+      const suffixW = ctx.measureText ? ctx.measureText('%').width : 0;
+
+      const paintGlyph = (text, fpx, x) => {
+        ctx.font = `900 ${fpx}px sans-serif`;
+        ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+        ctx.lineWidth = Math.max(5, Math.round(fpx * 0.26));
+        ctx.strokeText(text, x, y);
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = Math.max(2, Math.round(fpx * 0.10));
+        ctx.strokeText(text, x, y);
+        ctx.fillStyle = color;
+        ctx.fillText(text, x, y);
+      };
+      ctx.textAlign = 'right';
+      paintGlyph('%', suffixF, rightX);
+      paintGlyph(numText, f, rightX - suffixW);
     };
 
-    const hitFont   = Math.round(size * 0.21);
-    const crushFont = Math.round(size * 0.155);
+    const hitFont   = Math.round(size * 0.30);
+    const crushFont = Math.round(size * 0.20);
     if (hasCrush) {
-      drawLine(`${info.hitPct}%`,   hitFont,   UNIT_INFO_HIT_COLOR,   cy - size * 0.115);
-      drawLine(`${info.crushPct}%`, crushFont, UNIT_INFO_CRUSH_COLOR, cy + size * 0.135);
+      drawOddsLine(info.hitPct,   hitFont,   UNIT_INFO_HIT_COLOR,   cy - size * 0.145);
+      drawOddsLine(info.crushPct, crushFont, UNIT_INFO_CRUSH_COLOR, cy + size * 0.165);
     } else {
-      drawLine(`${info.hitPct}%`, hitFont, UNIT_INFO_HIT_COLOR, cy);
+      drawOddsLine(info.hitPct, hitFont, UNIT_INFO_HIT_COLOR, cy);
     }
   }
 
@@ -18492,6 +18512,8 @@ export function paintUnitIconBadge(ctx, opts) {
 /** Odds text colours on the unit info card — red hit %, deep-red crush %. */
 export const UNIT_INFO_HIT_COLOR   = '#ff5346';
 export const UNIT_INFO_CRUSH_COLOR = '#c81f1f';
+/** The "%" suffix renders at this fraction of the number's font size. */
+export const UNIT_INFO_PCT_SUFFIX_FRAC = 0.5;
 
 /**
  * Red ⚔/×N disc marking a unit (or hex) targeted by planned attacks.
