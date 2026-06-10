@@ -9,7 +9,7 @@ import { recordResult }                    from './leaderboard.js';
 import { recordGameStats }                 from './game-stats.js';
 import { resolvePlansMP, ResEventType }    from './resolver.js';
 import { compileTurnBattleSummary }        from '../src/battle-utils.js';
-import { PlanActionType }                  from '../src/planner.js';
+import { PlanActionType, validatePlan }    from '../src/planner.js';
 import { upsertSave, deleteSave, getSave,
          createCompletedGame, appendSaveRound,
          getSaveRounds, getLastSaveRound, getSaveRound,
@@ -2324,6 +2324,18 @@ export function handlePlanSubmit(playerId, roomId, plan, round) {
     return;
   }
 
+  if (!Array.isArray(plan)) { send(seat.ws, { type: 'error', message: 'Invalid plan format.' }); return; }
+
+  // Server-authoritative validation: shape, length cap, ownership, legality.
+  // The resolver re-validates at execution time; this rejects bad plans early
+  // instead of persisting them and discovering the problem mid-resolution.
+  const check = validatePlan(state, playerId, plan);
+  if (!check.valid) {
+    console.warn(`[room ${roomId}] Rejected invalid plan from ${playerId} (action ${check.index}): ${check.reason}`);
+    send(seat.ws, { type: 'error', message: `Plan rejected: ${check.reason}` });
+    return;
+  }
+
   // Allow overwriting a previously submitted empty plan with a populated one
   if (state.playerReady.get(playerId)) {
     const existingPlan = state.playerPlans.get(playerId);
@@ -2336,8 +2348,6 @@ export function handlePlanSubmit(playerId, roomId, plan, round) {
     send(seat.ws, { type: 'error', message: 'Plan already submitted.' });
     return;
   }
-
-  if (!Array.isArray(plan)) { send(seat.ws, { type: 'error', message: 'Invalid plan format.' }); return; }
 
   _submitPlayerPlan(room, playerId, plan);
 }
@@ -3986,6 +3996,13 @@ export function submitRemoteAIPlan(roomId, playerId, plan) {
   const seat = room.players.find(s => s.playerId === playerId);
   if (!seat) return { ok: false, error: 'Player not found.' };
   if (!seat.adminControlled) return { ok: false, error: 'Player is not admin-controlled.' };
+
+  // Externally-generated plans (LLM/admin) get the same authoritative
+  // validation as client submissions.
+  const check = validatePlan(room.state, playerId, plan);
+  if (!check.valid) {
+    return { ok: false, error: `Plan rejected (action ${check.index}): ${check.reason}` };
+  }
 
   _submitPlayerPlan(room, playerId, plan);
   return { ok: true };
