@@ -24,7 +24,12 @@ import {
   resolveSunDirPair,
   sunDirectionForRound,
   phaseProgressForRound,
+  computeSunShadowFit,
+  sunShadowLightPosition,
+  computeMapBounds,
+  Renderer3D,
 } from '../src/renderer-3d.js';
+import { MAP_SIZES } from '../src/map.js';
 import { Phase } from '../src/game.js';
 
 describe('Renderer3D — sunDirectionForPhase', () => {
@@ -232,6 +237,177 @@ describe('Renderer3D — shadow generator constants', () => {
   test('darkness sits in [0, 0.5] — strong cast shadows', () => {
     assert.ok(SUN_SHADOW_DARKNESS >= 0 && SUN_SHADOW_DARKNESS <= 0.5,
       `darkness ${SUN_SHADOW_DARKNESS} out of [0, 0.5]`);
+  });
+});
+
+// ── Shadow frustum fit-to-map ────────────────────────────────────────────────
+// Regression: the sun's shadow frustum used to be a hard-coded ±40 with
+// Babylon's autoUpdateExtends left on, so the effective frustum auto-grew to
+// every caster (playable map + the whole border-forest band) — the fixed
+// 2048² shadow map got spread over more world area on bigger maps and shadow
+// quality degraded with map size. The fit helpers below size the frustum to
+// the actual map instead.
+
+function boundsForMapSize(sizeKey) {
+  const cfg = MAP_SIZES[sizeKey];
+  const hexes = [];
+  for (let c = 0; c < cfg.cols; c++) for (let r = 0; r < cfg.rows; r++) {
+    hexes.push({ col: c, row: r });
+  }
+  return computeMapBounds(hexes);
+}
+
+describe('Renderer3D — computeSunShadowFit', () => {
+  test('returns null for null/empty bounds', () => {
+    assert.equal(computeSunShadowFit(null), null);
+    assert.equal(computeSunShadowFit(undefined), null);
+  });
+
+  test('centers on the map and covers every padded map corner at caster height', () => {
+    const bounds = boundsForMapSize('campaign');
+    const fit = computeSunShadowFit(bounds);
+    assert.equal(fit.center.x, bounds.centerX);
+    assert.equal(fit.center.z, bounds.centerZ);
+    // Bounding-sphere property: every corner of the map slab (ground level
+    // and caster-height level) lies inside the sphere, so the ortho frustum
+    // covers the whole map for ANY sun direction.
+    for (const x of [bounds.minX, bounds.maxX]) {
+      for (const z of [bounds.minZ, bounds.maxZ]) {
+        for (const y of [0, fit.center.y * 2]) {
+          const d = Math.hypot(x - fit.center.x, y - fit.center.y, z - fit.center.z);
+          assert.ok(d <= fit.radius + 1e-9,
+            `corner (${x},${y},${z}) at distance ${d} must sit inside radius ${fit.radius}`);
+        }
+      }
+    }
+  });
+
+  test('frustum scales with map size — skirmish gets a tighter (sharper) fit than campaign', () => {
+    const skirmish = computeSunShadowFit(boundsForMapSize('skirmish'));
+    const campaign = computeSunShadowFit(boundsForMapSize('campaign'));
+    const battle   = computeSunShadowFit(boundsForMapSize('battle'));
+    assert.ok(skirmish.radius < campaign.radius,
+      `skirmish radius ${skirmish.radius} must be < campaign ${campaign.radius}`);
+    assert.ok(campaign.radius < battle.radius,
+      `campaign radius ${campaign.radius} must be < battle ${battle.radius}`);
+    // The old hard-coded half-extent was 40; battle maps (42×42, ~73×63
+    // world units) overflowed it. The fit must actually cover them.
+    assert.ok(battle.radius > 40, 'battle fit must exceed the old ±40 frustum');
+    // And skirmish should be meaningfully tighter than the old constant —
+    // that's the resolution win on small maps.
+    assert.ok(skirmish.radius < 40, `skirmish radius ${skirmish.radius} should beat the old ±40`);
+  });
+
+  test('depth range brackets the casters with a positive near plane', () => {
+    const fit = computeSunShadowFit(boundsForMapSize('standard'));
+    assert.ok(fit.minZ > 0, `minZ ${fit.minZ} must be positive (light sits outside the scene)`);
+    assert.ok(fit.maxZ > fit.minZ);
+    assert.ok(fit.maxZ - fit.minZ >= 2 * fit.radius - 1e-9,
+      'depth range must cover the full bounding sphere');
+  });
+});
+
+describe('Renderer3D — sunShadowLightPosition', () => {
+  const fit = computeSunShadowFit(boundsForMapSize('standard'));
+
+  test('places the light up-sun of the map center at the fit distance', () => {
+    for (const round of [1, 2, 3, 4, 5, 6, 7, 8]) {
+      const dir = sunDirectionForRound(round);
+      const p = sunShadowLightPosition(fit, dir);
+      const dist = Math.hypot(p.x - fit.center.x, p.y - fit.center.y, p.z - fit.center.z);
+      assert.ok(Math.abs(dist - fit.distance) < 1e-9,
+        `round ${round}: light distance ${dist} should equal fit.distance ${fit.distance}`);
+      // The map center must project to the view-space origin: the vector
+      // light→center is exactly the (normalized) sun direction. With that
+      // alignment the bounding-sphere radius bounds the view-space extents.
+      const len = Math.hypot(dir.x, dir.y, dir.z);
+      assert.ok(Math.abs((fit.center.x - p.x) / dist - dir.x / len) < 1e-9, `round ${round}: x aligned`);
+      assert.ok(Math.abs((fit.center.y - p.y) / dist - dir.y / len) < 1e-9, `round ${round}: y aligned`);
+      assert.ok(Math.abs((fit.center.z - p.z) / dist - dir.z / len) < 1e-9, `round ${round}: z aligned`);
+    }
+  });
+
+  test('degenerate direction falls back to straight-down sun', () => {
+    const p = sunShadowLightPosition(fit, { x: 0, y: 0, z: 0 });
+    assert.equal(p.x, fit.center.x);
+    assert.equal(p.z, fit.center.z);
+    assert.ok(p.y > fit.center.y, 'light sits above the map for a straight-down fallback');
+    const p2 = sunShadowLightPosition(fit, null);
+    assert.deepEqual(p2, p);
+  });
+});
+
+describe('Renderer3D — _applySunShadowFit wiring', () => {
+  function newInst() {
+    const fakeCanvas = {
+      parentElement: null, width: 800, height: 600, addEventListener() {},
+    };
+    return new Renderer3D(fakeCanvas, {});
+  }
+  function stubSun() {
+    return {
+      direction: { x: 0.35, y: -0.85, z: 0.4 },
+      position:  { x: 0, y: 30, z: 0 },
+      autoUpdateExtends: true,
+      autoCalcShadowZBounds: false,
+      shadowOrthoScale: 1,
+      orthoLeft: 0, orthoRight: 0, orthoTop: 0, orthoBottom: 0,
+      shadowMinZ: undefined, shadowMaxZ: undefined,
+    };
+  }
+
+  test('disables Babylon auto-extends and sets ortho bounds to the fit radius', () => {
+    const r = newInst();
+    r._sunLight = stubSun();
+    const bounds = boundsForMapSize('regional');
+    r._applySunShadowFit(bounds);
+    const fit = computeSunShadowFit(bounds);
+    const sun = r._sunLight;
+    assert.equal(sun.autoUpdateExtends, false,
+      'autoUpdateExtends must be off or Babylon re-fits to every caster each frame');
+    assert.equal(sun.autoCalcShadowZBounds, false);
+    assert.equal(sun.shadowOrthoScale, 0);
+    assert.equal(sun.orthoLeft,  -fit.radius);
+    assert.equal(sun.orthoRight,  fit.radius);
+    assert.equal(sun.orthoTop,    fit.radius);
+    assert.equal(sun.orthoBottom, -fit.radius);
+    assert.equal(sun.shadowMinZ, fit.minZ);
+    assert.equal(sun.shadowMaxZ, fit.maxZ);
+  });
+
+  test('positions the light from the current direction, and follows direction changes', () => {
+    const r = newInst();
+    r._sunLight = stubSun();
+    const bounds = boundsForMapSize('standard');
+    r._applySunShadowFit(bounds);
+    const fit = computeSunShadowFit(bounds);
+    let expect = sunShadowLightPosition(fit, r._sunLight.direction);
+    assert.ok(Math.abs(r._sunLight.position.x - expect.x) < 1e-9);
+    assert.ok(Math.abs(r._sunLight.position.y - expect.y) < 1e-9);
+    assert.ok(Math.abs(r._sunLight.position.z - expect.z) < 1e-9);
+    // Sun glides to a new direction (round advance) — the position must track
+    // so the map center stays on the shadow camera's axis.
+    r._sunLight.direction = { x: -0.5, y: -0.7, z: 0.1 };
+    r._updateSunShadowPosition();
+    expect = sunShadowLightPosition(fit, r._sunLight.direction);
+    assert.ok(Math.abs(r._sunLight.position.x - expect.x) < 1e-9);
+    assert.ok(Math.abs(r._sunLight.position.y - expect.y) < 1e-9);
+    assert.ok(Math.abs(r._sunLight.position.z - expect.z) < 1e-9);
+  });
+
+  test('null bounds fall back to a default fit (pre-map state) without throwing', () => {
+    const r = newInst();
+    r._sunLight = stubSun();
+    r._applySunShadowFit(null);
+    assert.ok(r._sunLight.orthoRight > 0, 'fallback fit still produces a usable frustum');
+    assert.equal(r._sunLight.autoUpdateExtends, false);
+  });
+
+  test('no sun light — safe no-op', () => {
+    const r = newInst();
+    r._sunLight = null;
+    r._applySunShadowFit(boundsForMapSize('standard'));
+    r._updateSunShadowPosition();
   });
 });
 
