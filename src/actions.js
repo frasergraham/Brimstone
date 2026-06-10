@@ -1292,6 +1292,10 @@ export function executeBattle(state, actor, target) {
       forestCoverBonus, rangeDistancePenalty,
       atkBaseStat, atkWeaponMod, atkAbilityMod, atkEffectMod, atkAttackBonus,
       defBaseStat, defWeaponMod, defAbilityMod, defEffectMod, defDefenseBonus,
+      // Weapon ids so the roll-breakdown tooltip can name the weapon behind
+      // each side's modifier ("sword +2" rather than an opaque stat sum).
+      atkWeaponId: actor.weapon ?? null,
+      defWeaponId: target.weapon ?? null,
       ranged: isRanged, closeRanged: isCloseRanged,
       atkAllyNames: isRanged ? [] : atkAllies.map(e => e.displayName),
       defAllyNames: isRanged ? [] : defAllies.map(e => e.displayName),
@@ -1809,6 +1813,8 @@ export function executeGuardStrike(state, guardian, target) {
       ranged: isRanged, closeRanged: isCloseRanged,
       atkBaseStat, atkWeaponMod, atkAbilityMod, atkEffectMod, atkAttackBonus: 0,
       defBaseStat, defWeaponMod, defAbilityMod, defEffectMod, defDefenseBonus,
+      atkWeaponId: guardian.weapon ?? null,
+      defWeaponId: target.weapon ?? null,
     },
   };
 }
