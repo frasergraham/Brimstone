@@ -5,7 +5,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildStepDigest, isEventVisible, OutcomeKind } from '../src/replay-timeline.js';
+import { buildStepDigest, buildRollTip, isEventVisible, OutcomeKind } from '../src/replay-timeline.js';
 import { ResEventType } from '../server/resolver.js';
 import { PlanActionType } from '../src/planner.js';
 
@@ -408,5 +408,65 @@ describe('buildStepDigest — playerEvents (online) format', () => {
     const d = buildStepDigest([s], [], DEPS);
     assert.equal(d[0].entries.length, 1);
     assert.equal(d[0].entries[0].targetDmg, 2);
+  });
+});
+
+// ── buildRollTip — the turn card's roll-breakdown tooltip ────────────────────
+
+describe('buildRollTip', () => {
+  const fullResult = {
+    attackRoll: 9, defenseRoll: 5, hit: true,
+    breakdown: {
+      atkPool: [4, 2, 1], atkBaseDie: 4, defPool: [3], defBaseDie: 3,
+      atkAdvantageDice: 2, atkDisadvantageDice: 0, defAdvantageDice: 0,
+      atkGangupFlat: 2, defGangupFlat: 0,
+      phaseBonus: 0, fortBonus: 1, atkFortAtkBonus: 0,
+      fatiguePenalty: 1, forestCoverBonus: 0, rangeDistancePenalty: 0,
+      atkStaffBonus: 0,
+      atkBaseStat: 3, atkWeaponMod: 0, atkAbilityMod: 0, atkEffectMod: 0, atkAttackBonus: 0,
+      defBaseStat: 2, defWeaponMod: 0, defAbilityMod: 0, defEffectMod: 0, defDefenseBonus: 0,
+    },
+  };
+
+  test('reconstructs both rolls with their modifiers', () => {
+    const tip = buildRollTip(fullResult, false);
+    assert.match(tip, /Attack 9 = die 4 \(rolled 4·2·1, kept best of 3\)/);
+    assert.match(tip, /\+3 ATK/);
+    assert.match(tip, /\+2 gang-up/);
+    assert.match(tip, /Defense 5 = die 3/);
+    assert.match(tip, /\+1 fort/);
+    assert.match(tip, /−1 fatigue/);
+  });
+
+  test('explains gang-up only when it applied; rules line always present', () => {
+    const tip = buildRollTip(fullResult, false);
+    assert.match(tip, /Gang-up: each ally beside the target adds \+1 advantage die and \+1 flat/);
+    assert.match(tip, /crush \(2 dmg\) at double/);
+
+    const solo = JSON.parse(JSON.stringify(fullResult));
+    solo.breakdown.atkGangupFlat = 0;
+    solo.breakdown.atkAdvantageDice = 0;
+    solo.breakdown.atkPool = [4];
+    assert.doesNotMatch(buildRollTip(solo, false), /Gang-up:/);
+  });
+
+  test('ranged rules line replaces crush/counter text', () => {
+    const tip = buildRollTip(fullResult, true);
+    assert.match(tip, /never crush and are never countered/);
+    assert.doesNotMatch(tip, /counter when defense/);
+  });
+
+  test('returns empty string without breakdown data (legacy replays)', () => {
+    assert.equal(buildRollTip({ attackRoll: 5, defenseRoll: 3 }), '');
+    assert.equal(buildRollTip(null), '');
+  });
+
+  test('battle entries from buildStepDigest carry the tooltip', () => {
+    const a = snap('h1', 'hero', 'hero', 1, 1);
+    const t = snap('m1', 'minion', 'witch', 1, 2);
+    const ev = battleEvent(a, t, fullResult);
+    const cols = buildStepDigest([step([ev], [a, t])], [], DEPS);
+    const entry = cols[0].entries[0];
+    assert.match(entry.rollTip, /Attack 9/);
   });
 });

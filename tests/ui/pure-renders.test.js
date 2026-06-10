@@ -325,9 +325,10 @@ describe('buildObjectivesHtml', () => {
     assert.ok(title.includes('Hero holds all nodes'), `expected hero sweep, got: ${title}`);
   });
 
-  test('default title when no sweep', () => {
+  test('default title when no sweep explains the scoring rule', () => {
     const { title } = buildObjectivesHtml(objectives, [], { hero: 0, witch: 0 });
-    assert.equal(title, 'Power Nodes');
+    assert.ok(title.startsWith('Power Nodes'), `expected default title, got: ${title}`);
+    assert.ok(title.includes('first to 4 points'), 'title should state the win condition');
   });
 
   test('contested node gets contested class when both factions occupy equal hexes', () => {

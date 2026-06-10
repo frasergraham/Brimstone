@@ -5107,13 +5107,17 @@ export class UIController {
     }
 
     // Battles flank the (two-line) action word with each side's final roll,
-    // the winner's roll highlighted.
+    // the winner's roll highlighted. The roll-breakdown tooltip is the
+    // in-game explanation of advantage/gang-up (battle dialog is retired).
     let actionHtml;
     if (entry.outcomeKind && entry.atkRoll != null && entry.defRoll != null) {
       const word = esc(entry.label).replace(' ', '<br>');
       const atkCls = entry.attackerWon ? 'winner' : 'loser';
       const defCls = entry.attackerWon ? 'loser' : 'winner';
-      actionHtml = `<div class="replay-step-action battle">`
+      const tip = entry.rollTip
+        ? ` title="${esc(entry.rollTip).replace(/"/g, '&quot;').replace(/\n/g, '&#10;')}"`
+        : '';
+      actionHtml = `<div class="replay-step-action battle"${tip}>`
         + `<span class="replay-roll ${atkCls}">${entry.atkRoll}</span>`
         + `<span class="replay-action-word">${word}</span>`
         + `<span class="replay-roll ${defCls}">${entry.defRoll}</span>`

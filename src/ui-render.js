@@ -585,6 +585,10 @@ export function buildObjectivesHtml(witchObjectives, entities, nodeScore, gameMo
   let nodeDots  = '';
   let witchCount = 0, heroCount = 0;
 
+  const CTRL_LABEL = {
+    witch: 'held by the Witch', hero: 'held by the Hero',
+    contested: 'contested', neutral: 'unclaimed',
+  };
   for (const obj of witchObjectives) {
     const ctrl = nodeController(obj, entities);
     let cls;
@@ -593,7 +597,9 @@ export function buildObjectivesHtml(witchObjectives, entities, nodeScore, gameMo
     else if (ctrl === 'contested') { cls = 'contested'; }
     else                           { cls = 'neutral';   }
     const nodeColor = obj.color ?? '#888';
-    nodeDots += `<span class="node-dot ${cls}" title="${obj.label ?? ''}" style="border-color:${nodeColor}"></span>`;
+    const dotTip = `${obj.label ?? 'Power Node'} — ${CTRL_LABEL[ctrl] ?? ctrl}. `
+      + `Stand units on a node to hold it; a node is contested while both sides are on it.`;
+    nodeDots += `<span class="node-dot ${cls}" title="${dotTip}" style="border-color:${nodeColor}"></span>`;
   }
 
   const score = nodeScore ?? { hero: 0, witch: 0 };
@@ -601,30 +607,32 @@ export function buildObjectivesHtml(witchObjectives, entities, nodeScore, gameMo
 
   if (gameMode === 'battle') {
     // Battle mode: numeric score display (unbounded)
+    const battleRule = 'Battle mode: points score every round; the faction leading when time runs out wins.';
     html =
-      `<span class="score-track hero-track battle-score" title="Hero score: ${score.hero}">` +
+      `<span class="score-track hero-track battle-score" title="Hero score: ${score.hero}. ${battleRule}">` +
         `<span class="score-num hero">${score.hero}</span>` +
       `</span>` +
       `<span class="node-dots-group">${nodeDots}</span>` +
-      `<span class="score-track witch-track battle-score" title="Witch score: ${score.witch}">` +
+      `<span class="score-track witch-track battle-score" title="Witch score: ${score.witch}. ${battleRule}">` +
         `<span class="score-num witch">${score.witch}</span>` +
       `</span>`;
   } else {
     // Standard mode: pip-based score display (max 4)
+    const scoreRule = 'Hold MORE nodes than your enemy at dawn and dusk to score a point — first to 4 wins.';
     const scoreMax = 4;
     const heroPips  = Array.from({ length: scoreMax }, (_, i) =>
       `<span class="score-pip hero${i < score.hero ? ' filled' : ''}"></span>`).join('');
     const witchPips = Array.from({ length: scoreMax }, (_, i) =>
       `<span class="score-pip witch${i < score.witch ? ' filled' : ''}"></span>`).join('');
     html =
-      `<span class="score-track hero-track" title="Hero score: ${score.hero}/4">${heroPips}</span>` +
+      `<span class="score-track hero-track" title="Hero score: ${score.hero}/4. ${scoreRule}">${heroPips}</span>` +
       `<span class="node-dots-group">${nodeDots}</span>` +
-      `<span class="score-track witch-track" title="Witch score: ${score.witch}/4">${witchPips}</span>`;
+      `<span class="score-track witch-track" title="Witch score: ${score.witch}/4. ${scoreRule}">${witchPips}</span>`;
   }
 
   const title = witchCount === witchObjectives.length ? '⚠ Witch holds all nodes'
               : heroCount  === witchObjectives.length ? '★ Hero holds all nodes'
-              : 'Power Nodes';
+              : 'Power Nodes — hold the majority at dawn/dusk to score; first to 4 points wins';
 
   return { html, title };
 }
