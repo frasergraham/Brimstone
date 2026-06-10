@@ -1488,6 +1488,31 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     await playbackDelay(900);   // hold so the player registers the find
   };
 
+  // Survivor meshes aren't preloaded (the roster is large — see LAZY_RIG_TYPES).
+  // We already know which survivors THIS round will reveal, so load their rigs
+  // now and await, before the discovery standees are built — that way each shows
+  // its own mesh instead of the mannequin stand-in. A 404 resolves harmlessly
+  // (the unit keeps the mannequin).
+  if (renderer?.preloadEntityRig) {
+    const reveals = new Map(); // id → survivor entity (dedupe across steps)
+    for (const step of steps) {
+      const evs = [
+        ...(step.heroEvents   ?? []),
+        ...(step.witchEvents  ?? []),
+        ...(step.playerEvents ?? []).flatMap(pe => pe.events ?? []),
+      ];
+      for (const ev of evs) {
+        const one  = ev.result?.encounterSurvivor;
+        if (one?.id) reveals.set(one.id, one);
+        const many = ev.result?.encounterSurvivors;
+        if (Array.isArray(many)) for (const m of many) if (m?.id) reveals.set(m.id, m);
+      }
+    }
+    if (reveals.size) {
+      await Promise.all([...reveals.values()].map(s => renderer.preloadEntityRig(s)));
+    }
+  }
+
   for (let i = 0; i < steps.length; i++) {
     // During replay: if BACK/STOP/REDO was pressed, abort remaining steps immediately
     if (playback.goBack || playback.aborted || playback.jumpToEnd || playback.restart) break;

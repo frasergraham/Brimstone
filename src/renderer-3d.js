@@ -656,11 +656,18 @@ export function entityTypeRigFile(entity) {
   return slug ? `${slug}-idle.glb` : null;
 }
 
+/** Entity types whose rig is loaded JUST-IN-TIME (during the round replay that
+ *  reveals them) rather than preloaded up front. The survivor roster is large
+ *  and most members never appear in a given game, so preloading every one would
+ *  bloat the loading screen — they're loaded via `preloadEntityRig()` when the
+ *  replay tells us one is about to be found. Leaders and summons stay in the
+ *  up-front preload (`_preloadCharacterRigs`). */
+export const LAZY_RIG_TYPES = Object.freeze(new Set([EntityType.SURVIVOR]));
+
 /** Ordered rig-file cascade for a non-paladin unit: its own `<type>-idle.glb`
  *  first, then the shared mannequin. The caller tries each in turn and uses the
- *  first that loads; if none do, the cone+sphere pawn stands in. Paladin-typed
- *  units never reach here — they keep the dedicated _paladinSource path. Pure;
- *  exported for tests. */
+ *  first that loads. Paladin-typed units never reach here — they keep the
+ *  dedicated _paladinSource path. Pure; exported for tests. */
 export function fallbackRigCandidates(entity) {
   const out = [];
   const typeFile = entityTypeRigFile(entity);
@@ -2544,16 +2551,21 @@ export class Renderer3D {
     }
   }
 
-  /** Preload every character mesh the game can show, so the scene never falls
-   *  back to a placeholder at runtime. Run as a load-bundle item (see
-   *  beginLoad) so the loading overlay + progress bar stay up until every rig
-   *  is in hand — there is no cone/sphere pawn fallback any more.
+  /** Preload the character meshes the game is sure (or likely) to show — the
+   *  mannequin plus every leader/summon rig — so the common case never falls
+   *  back to a placeholder. Run as a load-bundle item (see beginLoad) so the
+   *  loading overlay + progress bar stay up until they're in hand. There is no
+   *  cone/sphere pawn fallback any more.
+   *
+   *  Survivors are deliberately EXCLUDED (see LAZY_RIG_TYPES): the roster is
+   *  large and most members never appear, so each survivor's mesh is loaded
+   *  on demand via preloadEntityRig() at the start of the replay that reveals
+   *  it. Until then a survivor renders on the (preloaded) mannequin.
    *
    *  - The mannequin is the universal fallback and MUST load; a failure here
    *    means some units would have no mesh at all, so we log a loud error.
-   *  - Each `<type>-idle.glb` that exists is preloaded so the unit shows its own
-   *    mesh from the first frame. A type with no rig file 404s and uses the
-   *    mannequin — expected, NOT an error.
+   *  - A leader/summon type with no rig file 404s and uses the mannequin —
+   *    expected, NOT an error.
    *  - The shared walk clip is loaded and retargeted onto every rig so units
    *    walk from their first move instead of sliding in their idle pose. */
   async _preloadCharacterRigs(basePath = this._assetsBasePath || 'assets') {
@@ -2562,10 +2574,11 @@ export class Renderer3D {
     if (!mannequin) {
       console.error(`[Renderer3D] Could not load the fallback character mesh "${MANNEQUIN_RIG_FILE}" — units without their own rig cannot render.`);
     }
-    // Distinct type rigs for every entity type. Paladin is already a bundle
-    // item; _loadFallbackRig dedupes via _rigLoadPromises so it's a cache hit.
+    // Leaders + summons (every type except the lazily-loaded ones). Paladin is
+    // already a bundle item; _loadFallbackRig dedupes via _rigLoadPromises.
     const files = new Set();
     for (const type of Object.values(EntityType)) {
+      if (LAZY_RIG_TYPES.has(type)) continue;
       const f = entityTypeRigFile({ type });
       if (f && f !== MANNEQUIN_RIG_FILE) files.add(f);
     }
@@ -2576,6 +2589,25 @@ export class Renderer3D {
     await Promise.resolve(this._loadWalkingAnimation(basePath)).catch(() => null);
     for (const src of [mannequin, ...srcs]) {
       if (src) { try { this._retargetWalkOntoRig(src); } catch { /* non-fatal */ } }
+    }
+  }
+
+  /** Just-in-time load of ONE entity's rig (used for survivors, which aren't in
+   *  the up-front preload). Resolves once the rig settles — a 404 resolves too,
+   *  in which case the unit uses the preloaded mannequin. Call this at the start
+   *  of a round replay that will reveal the entity, then await it before the
+   *  discovery standee is built so the unit shows its own mesh, not a stand-in.
+   *  No-op for paladin/mannequin types (already preloaded). */
+  async preloadEntityRig(entity, basePath = this._assetsBasePath || 'assets') {
+    const file = entityTypeRigFile(entity);
+    if (!file || file === MANNEQUIN_RIG_FILE) return;
+    await Promise.resolve(this._loadFallbackRig(file, basePath)).catch(() => null);
+    // Retarget the shared walk clip onto the freshly-loaded rig so it walks
+    // immediately (the up-front rigs get this in _preloadCharacterRigs).
+    const src = this._rigSources.get(file);
+    if (src) {
+      await Promise.resolve(this._loadWalkingAnimation(basePath)).catch(() => null);
+      try { this._retargetWalkOntoRig(src); } catch { /* non-fatal */ }
     }
   }
 

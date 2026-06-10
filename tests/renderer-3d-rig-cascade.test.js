@@ -16,7 +16,9 @@ import {
   stripRootBoneTranslation,
   rebaseRootBoneY,
   MANNEQUIN_RIG_FILE,
+  LAZY_RIG_TYPES,
 } from '../src/renderer-3d.js';
+import { EntityType } from '../src/entities.js';
 
 function makeHipsGroup() {
   const keys = [{ value: { x: 5, y: 90, z: 3 } }, { value: { x: 7, y: 92, z: 1 } }];
@@ -303,6 +305,42 @@ describe('_startClonePunch — per-instance strike', () => {
     const clone = { groups: { idle: makeAnimGroup() }, activeGroup: 'idle', oneShotPlaying: false };
     assert.equal(r._startClonePunch(clone), false);
     assert.equal(clone.oneShotPlaying, false);
+  });
+});
+
+describe('preload scope — survivors are lazy', () => {
+  test('LAZY_RIG_TYPES contains the survivor type', () => {
+    assert.ok(LAZY_RIG_TYPES.has(EntityType.SURVIVOR));
+  });
+
+  test('_preloadCharacterRigs loads the mannequin + leaders/summons but NOT survivors', async () => {
+    const r = newRenderer();
+    const calls = [];
+    r._loadFallbackRig      = (file) => { calls.push(file); return Promise.resolve(null); };
+    r._loadWalkingAnimation = () => Promise.resolve(null);
+    r._retargetWalkOntoRig  = () => null;
+    await r._preloadCharacterRigs('assets');
+    assert.ok(calls.includes(MANNEQUIN_RIG_FILE), 'mannequin preloaded');
+    assert.ok(calls.includes('zombie-idle.glb'),  'summon (zombie) preloaded');
+    assert.ok(!calls.includes('survivor-idle.glb'), 'survivor NOT preloaded up front');
+  });
+
+  test('preloadEntityRig loads a survivor rig on demand', async () => {
+    const r = newRenderer();
+    const calls = [];
+    r._loadFallbackRig      = (file) => { calls.push(file); return Promise.resolve(null); };
+    r._loadWalkingAnimation = () => Promise.resolve(null);
+    r._retargetWalkOntoRig  = () => null;
+    await r.preloadEntityRig({ type: 'survivor' });
+    assert.deepEqual(calls, ['survivor-idle.glb']);
+  });
+
+  test('preloadEntityRig is a no-op for mannequin-backed types', async () => {
+    const r = newRenderer();
+    const calls = [];
+    r._loadFallbackRig = (file) => { calls.push(file); return Promise.resolve(null); };
+    await r.preloadEntityRig({ type: 'mannequin' });
+    assert.deepEqual(calls, []);
   });
 });
 

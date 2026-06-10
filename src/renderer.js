@@ -407,6 +407,13 @@ export class Renderer {
     return this._readyPromise || Promise.resolve();
   }
 
+  /** 3D-renderer parity no-op: the 2D editor renderer has no character GLBs to
+   *  load, so just-in-time rig preloading (survivor reveals) is a resolved
+   *  promise here. */
+  preloadEntityRig() {
+    return Promise.resolve();
+  }
+
   /**
    * Compute screen-space positions and sizes for entities in a stack at a hex.
    * Used by the disambiguation menu to position DOM clones over canvas entities.
