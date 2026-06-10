@@ -52,9 +52,44 @@ all in the online path.
   `GameState` field that isn't added there is silently lost in online games and
   resumes (acknowledged in CLAUDE.md Guideline 5). Nothing automated catches
   this.
-- **Postgres suite is not in CI** **[scheduled]** — `.github/workflows/test.yml`
-  runs `npm test` (SQLite) only; `tests/db-postgres.test.js` self-skips without
-  `PG_TEST_URL`, so the Guideline-6 parity rule is enforced only by review.
+- **Postgres suite is not in CI** **[manual step — see below]** —
+  `.github/workflows/test.yml` runs `npm test` (SQLite) only;
+  `tests/db-postgres.test.js` self-skips without `PG_TEST_URL`, so the
+  Guideline-6 parity rule is enforced only by review. Workflow files cannot be
+  pushed from this automation session (the OAuth token lacks the `workflow`
+  scope), so apply this by hand — add the following job to
+  `.github/workflows/test.yml`:
+
+  ```yaml
+  test-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: brimstone_test
+          POSTGRES_PASSWORD: brimstone_test
+          POSTGRES_DB: brimstone_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U brimstone_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      # pg-native (optionalDependency) needs libpq headers to build.
+      - run: sudo apt-get update && sudo apt-get install -y libpq-dev
+      - run: npm ci
+      - run: node --test tests/db-postgres.test.js
+        env:
+          PG_TEST_URL: postgresql://brimstone_test:brimstone_test@localhost:5432/brimstone_test
+  ```
 
 ### Medium priority (future work)
 
