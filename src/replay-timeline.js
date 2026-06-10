@@ -23,59 +23,102 @@ export const OutcomeKind = Object.freeze({
 });
 
 /**
- * Multi-line plain-text breakdown of a battle roll for the turn card's
- * tooltip — the in-game explanation of the advantage/gang-up system now that
- * the 2D battle dialog is retired. Pure; tolerates missing breakdown data
- * (e.g. older replays) by returning '' so callers can skip the attribute.
+ * Structured breakdown of a battle roll — the single source for both the
+ * plain-text tip (buildRollTip) and the UI's styled hover panel. Pure;
+ * returns null when the result carries no breakdown (older replays).
+ *
+ * Shape:
+ *   {
+ *     atk: { roll, dice: {pool, picked, advantage}, terms: [{label, val}] },
+ *     def: { ... },
+ *     notes: string[],   // gang-up / point-blank explanations when relevant
+ *     rule:  string,     // hit/crush/counter thresholds (ranged variant)
+ *   }
+ */
+export function buildRollRows(result, ranged = false) {
+  const bd = result?.breakdown;
+  if (!bd || result?.attackRoll == null || result?.defenseRoll == null) return null;
+
+  const atkStat = (bd.atkBaseStat ?? 0) + (bd.atkWeaponMod ?? 0) + (bd.atkAbilityMod ?? 0) + (bd.atkEffectMod ?? 0);
+  const defStat = (bd.defBaseStat ?? 0) + (bd.defWeaponMod ?? 0) + (bd.defAbilityMod ?? 0) + (bd.defEffectMod ?? 0);
+  const terms = (pairs) => pairs.filter(([, v]) => v).map(([label, val]) => ({ label, val }));
+
+  const notes = [];
+  if ((bd.atkGangupFlat ?? 0) > 0 || (bd.defGangupFlat ?? 0) > 0) {
+    notes.push('Gang-up: each ally beside the target adds +1 advantage die and +1 flat (max 3).');
+  }
+  if ((bd.atkDisadvantageDice ?? 0) > 0) {
+    notes.push('Point-blank: ranged attackers roll at disadvantage against adjacent targets.');
+  }
+
+  return {
+    atk: {
+      roll: result.attackRoll,
+      dice: {
+        pool: Array.isArray(bd.atkPool) ? [...bd.atkPool] : [bd.atkBaseDie],
+        picked: bd.atkBaseDie,
+        advantage: (bd.atkAdvantageDice ?? 0) - (bd.atkDisadvantageDice ?? 0),
+      },
+      terms: terms([
+        ['ATK', atkStat],
+        ['silver', bd.atkAttackBonus],
+        ['gang-up', bd.atkGangupFlat],
+        ['night', bd.phaseBonus],
+        ['fort', bd.atkFortAtkBonus],
+        ['weapon trigger', bd.atkStaffBonus],
+        ['range falloff', -(bd.rangeDistancePenalty ?? 0)],
+      ]),
+    },
+    def: {
+      roll: result.defenseRoll,
+      dice: {
+        pool: Array.isArray(bd.defPool) ? [...bd.defPool] : [bd.defBaseDie],
+        picked: bd.defBaseDie,
+        advantage: bd.defAdvantageDice ?? 0,
+      },
+      terms: terms([
+        ['DEF', defStat],
+        ['bonus', bd.defDefenseBonus],
+        ['allies', bd.defGangupFlat],
+        ['fort', bd.fortBonus],
+        ['forest cover', bd.forestCoverBonus],
+        ['fatigue', -(bd.fatiguePenalty ?? 0)],
+      ]),
+    },
+    notes,
+    rule: ranged
+      ? 'Hit if attack > defense. Ranged shots never crush and are never countered.'
+      : 'Hit if attack > defense · crush (2 dmg) at double · counter when defense ≥ 2× attack.',
+  };
+}
+
+/**
+ * Multi-line plain-text breakdown of a battle roll — the accessible/legacy
+ * text form of buildRollRows. Pure; returns '' when not reconstructable.
  *
  * @param {object} result — executeBattle-style result (attackRoll/defenseRoll/breakdown)
  * @param {boolean} ranged
  * @returns {string} newline-separated lines, or '' when not reconstructable
  */
 export function buildRollTip(result, ranged = false) {
-  const bd = result?.breakdown;
-  if (!bd || result?.attackRoll == null || result?.defenseRoll == null) return '';
+  const rows = buildRollRows(result, ranged);
+  if (!rows) return '';
 
-  const dicePart = (pool, picked, advantage) => {
+  const dicePart = ({ pool, picked, advantage }) => {
     if (!Array.isArray(pool) || pool.length <= 1) return `die ${picked}`;
     const kind = advantage >= 0 ? 'best' : 'worst';
     return `die ${picked} (rolled ${pool.join('·')}, kept ${kind} of ${pool.length})`;
   };
-  const term = (label, v) => (v ? ` ${v > 0 ? '+' : '−'}${Math.abs(v)} ${label}` : '');
+  const termText = (t) => ` ${t.val > 0 ? '+' : '−'}${Math.abs(t.val)} ${t.label}`;
+  const sideLine = (name, side) =>
+    `${name} ${side.roll} = ` + dicePart(side.dice) + side.terms.map(termText).join('');
 
-  const atkStat = (bd.atkBaseStat ?? 0) + (bd.atkWeaponMod ?? 0) + (bd.atkAbilityMod ?? 0) + (bd.atkEffectMod ?? 0);
-  const defStat = (bd.defBaseStat ?? 0) + (bd.defWeaponMod ?? 0) + (bd.defAbilityMod ?? 0) + (bd.defEffectMod ?? 0);
-
-  const atkLine = `Attack ${result.attackRoll} = `
-    + dicePart(bd.atkPool, bd.atkBaseDie, (bd.atkAdvantageDice ?? 0) - (bd.atkDisadvantageDice ?? 0))
-    + term('ATK', atkStat)
-    + term('silver', bd.atkAttackBonus)
-    + term('gang-up', bd.atkGangupFlat)
-    + term('night', bd.phaseBonus)
-    + term('fort', bd.atkFortAtkBonus)
-    + term('weapon trigger', bd.atkStaffBonus)
-    + term('range falloff', -(bd.rangeDistancePenalty ?? 0));
-
-  const defLine = `Defense ${result.defenseRoll} = `
-    + dicePart(bd.defPool, bd.defBaseDie, bd.defAdvantageDice ?? 0)
-    + term('DEF', defStat)
-    + term('bonus', bd.defDefenseBonus)
-    + term('allies', bd.defGangupFlat)
-    + term('fort', bd.fortBonus)
-    + term('forest cover', bd.forestCoverBonus)
-    + term('fatigue', -(bd.fatiguePenalty ?? 0));
-
-  const lines = [atkLine, defLine];
-  if ((bd.atkGangupFlat ?? 0) > 0 || (bd.defGangupFlat ?? 0) > 0) {
-    lines.push('Gang-up: each ally beside the target adds +1 advantage die and +1 flat (max 3).');
-  }
-  if ((bd.atkDisadvantageDice ?? 0) > 0) {
-    lines.push('Point-blank: ranged attackers roll at disadvantage against adjacent targets.');
-  }
-  lines.push(ranged
-    ? 'Hit if attack > defense. Ranged shots never crush and are never countered.'
-    : 'Hit if attack > defense · crush (2 dmg) at double · counter when defense ≥ 2× attack.');
-  return lines.join('\n');
+  return [
+    sideLine('Attack', rows.atk),
+    sideLine('Defense', rows.def),
+    ...rows.notes,
+    rows.rule,
+  ].join('\n');
 }
 
 /** Display label per PlanActionType value. */
@@ -270,6 +313,7 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
           atkRoll:      ev.result?.attackRoll ?? null,
           defRoll:      ev.result?.defenseRoll ?? null,
           rollTip:      buildRollTip(ev.result, ranged),
+          rollRows:     buildRollRows(ev.result, ranged),
           attackerWon:  !!ev.result?.hit,        // hit ⇒ attacker's roll beat the defence
           outcomeKind:  battleKind(ev.result),
           // Flavour word for a miss (miss/dodged/blocked/…), matching the

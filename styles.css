@@ -6764,3 +6764,138 @@ body.spectator-mode #game-screen   { display: flex !important; }
 }
 .kb-confirm-yes { background: var(--red); color: #fff; border-color: var(--red); }
 .kb-confirm-cancel { background: var(--bg-section); color: var(--text); }
+
+/* ── Game-styled tooltip ([data-tip] / [data-tip-html]) ───────────────────── */
+#game-tooltip {
+  position: fixed;
+  z-index: 200;
+  max-width: 290px;
+  padding: 0.45rem 0.65rem;
+  font-family: var(--font-serif);
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: var(--text);
+  background: rgba(20, 16, 32, 0.96);
+  border: 1px solid #3a2d58;
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.6);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 100ms ease-out;
+}
+#game-tooltip.visible { opacity: 1; }
+
+/* Roll-breakdown panel inside the tooltip (turn-card battles) */
+.gtt-bkd { min-width: 200px; }
+.gtt-side {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  margin-top: 0.35rem;
+}
+.gtt-side:first-child { margin-top: 0; }
+.gtt-side-roll { font-size: 1.0rem; font-weight: 700; }
+.gtt-atk .gtt-side-roll { color: #e8b54a; }
+.gtt-def .gtt-side-roll { color: #8fb7e8; }
+.gtt-dice-row { display: flex; align-items: center; gap: 0.2rem; margin: 0.15rem 0; }
+.gtt-die {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.15rem;
+  height: 1.15rem;
+  border-radius: 4px;
+  border: 1px solid #555;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #999;
+  background: rgba(0,0,0,0.4);
+}
+.gtt-die-picked { color: #fff; border-color: #cbb37a; background: rgba(90,70,30,0.55); }
+.gtt-dice-note { font-size: 0.68rem; color: var(--text-dim); margin-left: 0.25rem; }
+.gtt-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: 0.76rem;
+  padding: 0.02rem 0;
+}
+.gtt-row[data-sign="positive"] .gtt-val { color: #7ec06f; }
+.gtt-row[data-sign="negative"] .gtt-val { color: #e06a5a; }
+.gtt-label { color: var(--text-dim); }
+.gtt-note, .gtt-rule {
+  margin-top: 0.35rem;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  border-top: 1px solid rgba(255,255,255,0.08);
+  padding-top: 0.3rem;
+}
+
+/* ── Cycle & scoring info panel (tap the bottom score bar) ────────────────── */
+#cycle-info-popup {
+  position: fixed;
+  left: 50%;
+  bottom: 56px;
+  transform: translateX(-50%);
+  z-index: 120;
+  width: min(330px, calc(100vw - 24px));
+  padding: 0.7rem 0.85rem;
+  font-family: var(--font-serif);
+  color: var(--text);
+  background: rgba(20, 16, 32, 0.97);
+  border: 1px solid #3a2d58;
+  border-radius: 10px;
+  box-shadow: 0 6px 22px rgba(0,0,0,0.65);
+}
+.cip-title { font-size: 0.85rem; color: var(--text-dim); text-align: center; margin-bottom: 0.4rem; }
+.cip-strip { display: flex; justify-content: center; gap: 0.25rem; margin-bottom: 0.5rem; }
+.cip-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(0,0,0,0.35);
+  font-size: 0.8rem;
+  opacity: 0.55;
+}
+.cip-chip.current { opacity: 1; border-color: #cbb37a; box-shadow: 0 0 6px rgba(203,179,122,0.4); }
+.cip-phase { display: flex; flex-direction: column; margin-bottom: 0.35rem; }
+.cip-phase-name { font-size: 0.9rem; font-weight: 700; }
+.cip-next .cip-phase-name { font-weight: 400; color: var(--text-dim); }
+.cip-phase-desc { font-size: 0.74rem; color: var(--text-dim); }
+.cip-divider { border: none; border-top: 1px solid rgba(255,255,255,0.1); margin: 0.45rem 0; }
+.cip-rule { font-size: 0.78rem; line-height: 1.4; margin-bottom: 0.4rem; }
+.cip-nodes { display: flex; flex-direction: column; gap: 0.15rem; margin-bottom: 0.4rem; }
+.cip-node { display: flex; justify-content: space-between; font-size: 0.76rem; }
+.cip-node-ctrl.hero      { color: #d4a72c; }
+.cip-node-ctrl.witch     { color: #9b59b6; }
+.cip-node-ctrl.contested { color: #ffaa00; }
+.cip-node-ctrl.neutral   { color: #9a9488; }
+.cip-score { text-align: center; font-size: 0.8rem; color: var(--text-dim); }
+
+/* ── Action arc hover expansion (description below the action name) ──────── */
+.arc-item .arc-item-main { display: flex; align-items: center; white-space: nowrap; }
+.arc-item .arc-item-desc { display: none; }
+@media (hover: hover) {
+  .arc-item:hover .arc-item-desc {
+    display: block;
+    max-width: 230px;
+    margin-top: 0.25rem;
+    font-size: 0.74rem;
+    line-height: 1.3;
+    color: var(--text-dim);
+    white-space: normal;
+    text-align: left;
+  }
+  .arc-item:hover {
+    flex-direction: column;
+    align-items: flex-start;
+    z-index: 30;
+  }
+}

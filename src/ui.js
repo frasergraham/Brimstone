@@ -11,11 +11,14 @@ import {
   ActionType, getValidActions, getVisiblePositions, computeCombatOdds,
 } from './actions.js';
 import * as audio from './audio.js';
+
 import { PlanActionType, actionCosts, computeGhostState, computeProjectedInventory, interleavePlan } from './planner.js';
+import { ABILITIES } from './abilities.js';
+import { buildRollRows } from './replay-timeline.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
 import { ResEventType } from '../server/resolver.js';
 import { collectUIElements } from './ui-elements.js';
-import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml, buildNodeBadgeHtml, buildEffectsHtml } from './ui-render.js';
+import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml, buildNodeBadgeHtml, buildEffectsHtml, buildCycleInfoHtml, PHASE_META } from './ui-render.js';
 import {
   hideActionPopup, getEntityScreenPos, computeArcPositions,
   positionArcPopup, startArcTracking, positionPopup,
@@ -73,6 +76,9 @@ export class UIController {
     // Arm the one-shot user-gesture unlock for synthesized SFX (no-op in
     // tests/node — see src/audio.js).
     audio.init();
+    // Game-styled hover tooltips ([data-tip] / [data-tip-html]) — module-level
+    // singleton, hover-capable devices only.
+    initGameTooltips();
     this._lastPhaseSoundKey = null;  // dedupe phase stings across summaries
 
     this._selectedEntity  = null;
@@ -433,6 +439,8 @@ export class UIController {
       if (isDebugToggleClick(e)) document.body.classList.toggle('debug-counters');
     }, sig);
     this._el('menu-close-btn')?.addEventListener('click', closeMenu, sig);
+    // Bottom score bar / day-cycle pill → cycle & scoring info panel.
+    this._el('score-bar')?.addEventListener('click', () => this._showCycleInfoPopup(), sig);
     // Sound toggle — label reflects persisted mute state on first open.
     const soundBtn = this._el('menu-sound-btn');
     const _syncSoundLabel = () => {
@@ -2149,6 +2157,7 @@ export class UIController {
         case ActionType.BATTLE_HEX:
           if (this._planMode) {
             arcItems.push({ group: 'combat', label: 'Attack Hex', fullLabel: 'Attack Hex',
+              desc: 'Strike a chosen hex — hits whatever enemy stands there at resolution, even through fog. Skips harmlessly if the hex is empty. (1 action)',
               color: '#c0392b', dis, cost: 1, attrs: 'data-action="attack_hex"' });
           }
           break;
@@ -2162,6 +2171,7 @@ export class UIController {
             if ((healPool[ResourceType.HERBS] || 0) < 1) healDis = true;
           }
           arcItems.push({ group: 'items', label: 'Heal', fullLabel: action.atFullHp ? 'Already at full HP' : 'Herbs (heal 2 HP)',
+            desc: action.atFullHp ? 'Already at full HP.' : 'Spend 1 herb to heal this unit 2 HP. (1 action)',
             color: '#55cc55', dis: healDis, cost: 1, resCost: '1🌿',
             attrs: 'data-action="heal"' });
           break;
@@ -2186,6 +2196,7 @@ export class UIController {
           for (const w of action.weapons) {
             arcItems.push({ group: 'items', label: w.label,
               fullLabel: equipBlocked ? 'Already equipped this round' : `Equip ${w.label}`,
+              desc: equipBlocked ? 'Already equipped a weapon this round.' : `Equip ${w.label}. Free, once per round.`,
               color: '#b0b0b0', dis: dis || equipBlocked, free: true, cost: 0,
               attrs: `data-action="use_item" data-item="${w.key}"` });
           }
@@ -2201,6 +2212,7 @@ export class UIController {
           arcItems.push({ group: 'items',
             label: abilityLabels[action.ability] || 'Ability',
             fullLabel: fullLabels[action.ability] || 'Use Ability',
+            desc: ABILITIES[action.ability]?.description ?? '',
             color: '#88eeff', dis: !isFree && dis, free: isFree, cost: isFree ? 0 : 1,
             attrs: `data-action="use_ability" data-ability="${action.ability}"` });
           break;
@@ -2272,9 +2284,15 @@ export class UIController {
       const costTag = item.free ? '<span class="arc-cost arc-cost-free">FREE</span>'
         : item.cost === 1 ? '<span class="arc-cost">◆</span>'
         : '';
-      html += `<button class="arc-item${freeCls}" title="${item.fullLabel}"
+      // Hover expansion: the description renders below the action name when
+      // the box is hovered (CSS .arc-item:hover .arc-item-desc). Falls back
+      // to the fullLabel when it says more than the label itself.
+      const desc = item.desc
+        ?? (item.fullLabel && item.fullLabel !== item.label ? item.fullLabel : '');
+      const descTag = desc ? `<span class="arc-item-desc">${desc}</span>` : '';
+      html += `<button class="arc-item${freeCls}"
         style="--arc-x:0px;--arc-y:0px;--arc-delay:${delay}ms;--arc-color:${item.color};--arc-hover:${item.color};--arc-glow:${item.color}33"
-        ${disAttr} ${item.attrs}>${item.label}${resTag}${costTag}</button>`;
+        ${disAttr} ${item.attrs}><span class="arc-item-main">${item.label}${resTag}${costTag}</span>${descTag}</button>`;
     }
 
     popup.innerHTML = html;
@@ -2475,7 +2493,7 @@ export class UIController {
       const startScale = isCanvas ? ((item._startR * 2) / portraitSize).toFixed(3) : '0.3';
       const startX = isCanvas ? item._startX.toFixed(1) : '0';
       const startY = isCanvas ? item._startY.toFixed(1) : '0';
-      html += `<button class="arc-item${portraitCls}${canvasCls}" title="${item.fullLabel}"
+      html += `<button class="arc-item${portraitCls}${canvasCls}"
         style="--arc-x:0px;--arc-y:0px;--arc-delay:${delay}ms;--arc-color:${item.color};--arc-hover:${item.color};--arc-glow:${item.color}33;--start-x:${startX}px;--start-y:${startY}px;--start-scale:${startScale};--portrait-size:${portraitSize}px"
         ${item.attrs}>${item.label}</button>`;
     }
@@ -2732,12 +2750,6 @@ export class UIController {
     if (!el) return;
 
     // Derive cycle steps from custom cycleConfig or use the default 8-step cycle
-    const PHASE_META = {
-      dawn:  { sprite: 'cycle_dawn',  label: 'Dawn',  desc: 'Hero +1 action · node scoring · attrition rises' },
-      day:   { sprite: 'cycle_day',   label: 'Day',   desc: 'Witch undead in the open suffer' },
-      dusk:  { sprite: 'cycle_dusk',  label: 'Dusk',  desc: 'Node scoring · seek cover before night' },
-      night: { sprite: 'cycle_night', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
-    };
     const cyclePhases = state.cycleConfig?.phases ?? DEFAULT_CYCLE_PHASES;
     const CYCLE_STEPS = cyclePhases.map(p => ({ phase: p, ...PHASE_META[p] }));
 
@@ -2750,15 +2762,11 @@ export class UIController {
 
     // Pill bump above the score bar: "[phase icon] Night — Day 1 · Round 2"
     const activeStep = CYCLE_STEPS[roundInCycle];
-    const nextStep   = CYCLE_STEPS[(roundInCycle + 1) % cycleLen];
     const bumpEl   = this._el('cycle-bump');
     const iconEl   = this._el('cycle-bump-icon');
     const labelEl  = this._el('cycle-bump-label');
     if (bumpEl && activeStep) {
       bumpEl.className = `phase-${activeStep.phase}`;
-      bumpEl.title = nextStep && nextStep !== activeStep
-        ? `${activeStep.label}: ${activeStep.desc}\nNext — ${nextStep.label}: ${nextStep.desc}`
-        : `${activeStep.label}: ${activeStep.desc}`;
     }
     if (iconEl && activeStep) {
       const imgSrc = this.renderer?.getPortraitDataURL?.(activeStep.sprite, 64);
@@ -2872,18 +2880,49 @@ export class UIController {
       bar.style.display = '';
       bar.classList.toggle('cycle-only', !!state.disableScoring);
       if (state.disableScoring) {
-        bar.title = '';
         return;
       }
     }
 
     const el = this._el('score-bar-content');
     if (!el) return;
-    const { html, title } = buildObjectivesHtml(
+    const { html } = buildObjectivesHtml(
       state.witchObjectives, state.entities, state.nodeScore, state.gameMode,
     );
     el.innerHTML = html;
-    if (bar) bar.title = title;
+  }
+
+  // ── Cycle & scoring info panel ──────────────────────────────────────────
+  // Game-styled popup opened by tapping the bottom score bar / day-cycle
+  // pill (replaces the native title tooltips there). Toggles; dismisses on
+  // any outside tap.
+
+  _showCycleInfoPopup() {
+    if (typeof document === 'undefined') return;
+    if (document.getElementById('cycle-info-popup')) { this._dismissCycleInfoPopup(); return; }
+    if (!this.state) return;
+    const el = document.createElement('div');
+    el.id = 'cycle-info-popup';
+    el.innerHTML = buildCycleInfoHtml(this.state);
+    document.body.appendChild(el);
+    this._cycleInfoDismiss = (e) => {
+      if (el.contains(e.target)) return;
+      this._dismissCycleInfoPopup();
+    };
+    setTimeout(() => {
+      if (document.getElementById('cycle-info-popup')) {
+        document.addEventListener('click', this._cycleInfoDismiss, true);
+      }
+    }, 0);
+  }
+
+  _dismissCycleInfoPopup() {
+    if (typeof document === 'undefined') return;
+    document.getElementById('cycle-info-popup')?.remove();
+    if (this._cycleInfoDismiss) {
+      document.removeEventListener('click', this._cycleInfoDismiss, true);
+      this._cycleInfoDismiss = null;
+    }
   }
 
   /**
@@ -2979,7 +3018,7 @@ export class UIController {
       btn.disabled = state.gameOver;
       btn.classList.toggle('urgent', !state.gameOver);
       btn.classList.add('planning-active');
-      btn.title = 'Submit Plan';
+      btn.dataset.tip = 'Lock in your plan — it resolves alongside your opponent’s';
       if (!this._countdownTimer && !this._graceActive) {
         btn.textContent = '✓ Submit';
       }
@@ -3276,7 +3315,7 @@ export class UIController {
     if (!btn) return;
     const label = UIController.SPEED_LABELS[this.speedMode] ?? 'Full';
     btn.textContent = label;
-    btn.title = `Combat detail: ${label}`;
+    btn.dataset.tip = `Combat detail: ${label} — how much each battle pauses to show`;
     btn.className = `replay-ctrl-btn replay-detail detail-${this.speedMode}`;
   }
 
@@ -4829,9 +4868,9 @@ export class UIController {
     const camBtn = document.getElementById('replay-camera-btn');
     if (camBtn) {
       camBtn.textContent = fixed ? 'Fixed' : 'Follow';
-      camBtn.title = fixed
-        ? 'Camera: Fixed - stays where you put it'
-        : 'Camera: Follow the action';
+      camBtn.dataset.tip = fixed
+        ? 'Camera fixed — stays where you put it; tap to follow the action'
+        : 'Camera follows the action — tap to keep it fixed instead';
       camBtn.classList.toggle('fixed', fixed);
     }
   }
@@ -4844,7 +4883,7 @@ export class UIController {
     // AutoPlay is a toggle: highlighted (active) while auto-running.
     const pp = document.getElementById('replay-playpause-btn');
     if (pp) {
-      pp.title = paused ? 'Auto-play (run every step)' : 'Pause (step manually)';
+      pp.dataset.tip = paused ? 'Auto-play — run every step without stopping' : 'Pause — step through manually with Next';
       pp.classList.toggle('active', !paused);
     }
     // NEXT only works while paused; grey it out during auto-play.
@@ -4916,7 +4955,7 @@ export class UIController {
     if (endBtn) {
       // Restore the original glyph (defaults to ⇥ if we never saw one)
       endBtn.textContent = this._replayEndBtnOriginalText ?? '\u21E5';
-      endBtn.title = 'Jump to end';
+      endBtn.dataset.tip = 'Jump to the end of the replay';
       endBtn.onclick = null;
     }
     this._replayEndBtnOriginalText = undefined;
@@ -5067,13 +5106,16 @@ export class UIController {
     // Battles flank the (two-line) action word with each side's final roll,
     // the winner's roll highlighted. The roll-breakdown tooltip is the
     // in-game explanation of advantage/gang-up (battle dialog is retired).
+    // Rendered as a game-styled hover panel ([data-tip-html]) rather than a
+    // native title tooltip.
     let actionHtml;
     if (entry.outcomeKind && entry.atkRoll != null && entry.defRoll != null) {
       const word = esc(entry.label).replace(' ', '<br>');
       const atkCls = entry.attackerWon ? 'winner' : 'loser';
       const defCls = entry.attackerWon ? 'loser' : 'winner';
-      const tip = entry.rollTip
-        ? ` title="${esc(entry.rollTip).replace(/"/g, '&quot;').replace(/\n/g, '&#10;')}"`
+      const bkdHtml = _rollRowsTipHtml(entry.rollRows, entry);
+      const tip = bkdHtml
+        ? ` data-tip-html="${encodeURIComponent(bkdHtml)}"`
         : '';
       actionHtml = `<div class="replay-step-action battle"${tip}>`
         + `<span class="replay-roll ${atkCls}">${entry.atkRoll}</span>`
@@ -5940,3 +5982,109 @@ function _makeAnimBag() {
   return bag;
 }
 
+
+// ── Game-styled tooltip (replaces native title tooltips) ────────────────────
+//
+// One shared floating element, shown on hover over any node carrying
+// `data-tip` (plain text) or `data-tip-html` (encodeURIComponent'd HTML —
+// used by the turn cards' roll breakdown). Hover-only: touch devices skip
+// the whole subsystem (they have their own tap affordances, e.g. the
+// cycle/score info panel). Module-level singleton so repeated UIController
+// constructions never stack document listeners.
+
+let _gttBound = false;
+let _gttEl = null;
+
+export function initGameTooltips() {
+  if (_gttBound || typeof document === 'undefined') return;
+  if (typeof window !== 'undefined' && window.matchMedia
+      && !window.matchMedia('(hover: hover)').matches) return;
+  _gttBound = true;
+
+  const hide = () => { _gttEl?.classList.remove('visible'); };
+  const show = (target) => {
+    const html = target.dataset.tipHtml;
+    const text = target.dataset.tip;
+    if (!html && !text) { hide(); return; }
+    if (!_gttEl) {
+      _gttEl = document.createElement('div');
+      _gttEl.id = 'game-tooltip';
+      document.body.appendChild(_gttEl);
+    }
+    if (html) _gttEl.innerHTML = decodeURIComponent(html);
+    else      _gttEl.textContent = text;
+    _gttEl.classList.add('visible');
+    // Position above the target, clamped to the viewport; flip below when
+    // there's no headroom.
+    const r  = target.getBoundingClientRect();
+    const tw = _gttEl.offsetWidth;
+    const th = _gttEl.offsetHeight;
+    let x = r.left + r.width / 2 - tw / 2;
+    x = Math.max(6, Math.min(x, window.innerWidth - tw - 6));
+    let y = r.top - th - 10;
+    if (y < 6) y = r.bottom + 10;
+    _gttEl.style.left = `${x}px`;
+    _gttEl.style.top  = `${y}px`;
+  };
+
+  document.addEventListener('mouseover', (e) => {
+    const t = e.target?.closest?.('[data-tip], [data-tip-html]');
+    if (t) show(t);
+    else hide();
+  }, { passive: true });
+  // Any press or scroll dismisses — the tooltip must never sit over a tap.
+  document.addEventListener('mousedown', hide, { passive: true, capture: true });
+  window.addEventListener('scroll', hide, { passive: true, capture: true });
+  document.addEventListener('mouseleave', hide, { passive: true });
+}
+
+// ── Turn-card roll breakdown panel (game-styled hover tooltip content) ──────
+//
+// Renders buildRollRows() output as colour-coded rows: dice line (picked die
+// + discards with the kept-best/worst explanation), one row per modifier
+// (positive green / negative red), then the gang-up / point-blank notes and
+// the hit/crush/counter rule line. Pure HTML string — no DOM.
+
+function _rollRowsTipHtml(rows, entry = {}) {
+  if (!rows) return '';
+  const esc = (s) => String(s ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  const diceLine = ({ pool, picked, advantage }) => {
+    if (!Array.isArray(pool) || pool.length <= 1) {
+      return `<span class="gtt-die gtt-die-picked">${picked}</span>`;
+    }
+    let usedPick = false;
+    const dice = pool.map(v => {
+      const isPick = !usedPick && v === picked;
+      if (isPick) usedPick = true;
+      return `<span class="gtt-die${isPick ? ' gtt-die-picked' : ' gtt-die-discard'}">${v}</span>`;
+    }).join('');
+    const kind = advantage >= 0 ? 'best' : 'worst';
+    const label = advantage > 0 ? `advantage ${advantage}`
+      : advantage < 0 ? `disadvantage ${-advantage}` : 'roll';
+    return `${dice}<span class="gtt-dice-note">${label} — kept ${kind}</span>`;
+  };
+
+  const side = (name, cls, s) => {
+    let html = `<div class="gtt-side ${cls}"><span class="gtt-side-roll">${s.roll}</span> ${name}</div>`;
+    html += `<div class="gtt-row gtt-dice-row">${diceLine(s.dice)}</div>`;
+    for (const t of s.terms) {
+      const sign = t.val > 0 ? 'positive' : 'negative';
+      const v = t.val > 0 ? `+${t.val}` : `−${Math.abs(t.val)}`;
+      html += `<div class="gtt-row" data-sign="${sign}">`
+        + `<span class="gtt-label">${esc(t.label)}</span>`
+        + `<span class="gtt-val">${v}</span></div>`;
+    }
+    return html;
+  };
+
+  let html = `<div class="gtt-bkd">`;
+  html += side('ATTACK', 'gtt-atk', rows.atk);
+  html += side('DEFENSE', 'gtt-def', rows.def);
+  for (const n of rows.notes) html += `<div class="gtt-note">${esc(n)}</div>`;
+  html += `<div class="gtt-rule">${esc(rows.rule)}</div>`;
+  html += `</div>`;
+  void entry;
+  return html;
+}

@@ -898,7 +898,7 @@
       <div class="header-buttons">
         <button id="mission-info-btn" class="header-icon-btn" title="Mission Info" style="display:none">📜</button>
         <button id="replay-turn-btn" class="header-icon-btn" title="Replay last turn" style="display:none">▶</button>
-        <button id="end-turn-btn" class="header-icon-btn end-turn-header" title="Submit Plan">↩</button>
+        <button id="end-turn-btn" class="header-icon-btn end-turn-header" data-tip="Lock in your plan — it resolves alongside your opponent’s">↩</button>
         <button id="plan-return-btn" class="header-icon-btn end-turn-header" title="Return to menu" style="display:none">← Menu</button>
       </div>
     </header>
@@ -965,9 +965,9 @@
         <!-- Replay progress: one dot per card (active filled). The < > scrub
              arrows flank the dots, appearing only in end-of-turn review. -->
         <div id="replay-progress">
-          <button id="replay-review-prev" class="replay-arrow" title="Previous card">◀</button>
+          <button id="replay-review-prev" class="replay-arrow" data-tip="Previous turn card">◀</button>
           <div id="replay-dots"></div>
-          <button id="replay-review-next" class="replay-arrow" title="Next card">▶</button>
+          <button id="replay-review-next" class="replay-arrow" data-tip="Next turn card">▶</button>
         </div>
         <!-- Unified replay control bar (bottom-center): used for both the
              post-turn resolution replay and full-game replay. Back/Stop are
@@ -976,23 +976,23 @@
           <div class="replay-block">
             <div class="replay-block-title">Controls</div>
             <div class="replay-block-btns">
-              <button id="replay-back-btn"      class="replay-ctrl-btn" title="Previous round">Back</button>
-              <button id="replay-redo-btn"      class="replay-ctrl-btn" title="Replay this turn">↺</button>
-              <button id="replay-next-btn"      class="replay-ctrl-btn" title="Next step">Next</button>
-              <button id="replay-playpause-btn" class="replay-ctrl-btn" title="Auto-play (run every step)">AutoPlay</button>
-              <button id="replay-stop-btn"      class="replay-ctrl-btn replay-stop" title="Stop">Stop</button>
+              <button id="replay-back-btn"      class="replay-ctrl-btn" data-tip="Rewind to the previous round's replay">Back</button>
+              <button id="replay-redo-btn"      class="replay-ctrl-btn" data-tip="Replay this turn from the start">↺</button>
+              <button id="replay-next-btn"      class="replay-ctrl-btn" data-tip="Advance one step">Next</button>
+              <button id="replay-playpause-btn" class="replay-ctrl-btn" data-tip="Auto-play — run every step without stopping">AutoPlay</button>
+              <button id="replay-stop-btn"      class="replay-ctrl-btn replay-stop" data-tip="Skip to the end of the replay">Stop</button>
             </div>
           </div>
           <div class="replay-block">
             <div class="replay-block-title">Camera</div>
             <div class="replay-block-btns">
-              <button id="replay-camera-btn" class="replay-ctrl-btn replay-camera" title="Camera: Follow the action">Follow</button>
+              <button id="replay-camera-btn" class="replay-ctrl-btn replay-camera" data-tip="Camera follows the action — tap to keep it fixed instead">Follow</button>
             </div>
           </div>
           <div class="replay-block">
             <div class="replay-block-title">Detail</div>
             <div class="replay-block-btns">
-              <button id="replay-detail-btn" class="replay-ctrl-btn replay-detail" title="Combat detail: Full">Full</button>
+              <button id="replay-detail-btn" class="replay-ctrl-btn replay-detail" data-tip="Combat detail level — how much each battle pauses to show">Full</button>
             </div>
           </div>
         </div>
@@ -1064,8 +1064,8 @@
         <div id="plan-steps" class="plan-steps"></div>
         <div id="plan-food-row" class="plan-food-row"></div>
         <div class="plan-panel-footer">
-          <button id="plan-clear-btn" class="plan-btn secondary">✕ Clear</button>
-          <button id="plan-submit-btn" class="plan-btn primary">✓ Submit</button>
+          <button id="plan-clear-btn" class="plan-btn secondary" data-tip="Discard every queued action and plan this round again">✕ Clear</button>
+          <button id="plan-submit-btn" class="plan-btn primary" data-tip="Lock in your plan — it resolves alongside your opponent's">✓ Submit</button>
           <button id="plan-menu-btn" class="plan-btn secondary" style="display:none">← Return to Menu</button>
         </div>
         <div id="plan-players" class="plan-players" style="display:none"></div>

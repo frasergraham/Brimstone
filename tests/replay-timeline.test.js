@@ -5,7 +5,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildStepDigest, buildRollTip, isEventVisible, OutcomeKind } from '../src/replay-timeline.js';
+import { buildStepDigest, buildRollTip, buildRollRows, isEventVisible, OutcomeKind } from '../src/replay-timeline.js';
 import { ResEventType } from '../server/resolver.js';
 import { PlanActionType } from '../src/planner.js';
 
@@ -468,5 +468,51 @@ describe('buildRollTip', () => {
     const cols = buildStepDigest([step([ev], [a, t])], [], DEPS);
     const entry = cols[0].entries[0];
     assert.match(entry.rollTip, /Attack 9/);
+  });
+});
+
+// ── buildRollRows — structured model behind the turn-card breakdown panel ───
+
+describe('buildRollRows', () => {
+  const result = {
+    attackRoll: 9, defenseRoll: 5, hit: true,
+    breakdown: {
+      atkPool: [4, 2, 1], atkBaseDie: 4, defPool: [3], defBaseDie: 3,
+      atkAdvantageDice: 2, atkDisadvantageDice: 0, defAdvantageDice: 0,
+      atkGangupFlat: 2, defGangupFlat: 0,
+      phaseBonus: 0, fortBonus: 1, atkFortAtkBonus: 0,
+      fatiguePenalty: 1, forestCoverBonus: 0, rangeDistancePenalty: 0,
+      atkStaffBonus: 0,
+      atkBaseStat: 3, atkWeaponMod: 0, atkAbilityMod: 0, atkEffectMod: 0, atkAttackBonus: 0,
+      defBaseStat: 2, defWeaponMod: 0, defAbilityMod: 0, defEffectMod: 0, defDefenseBonus: 0,
+    },
+  };
+
+  test('structures both sides with dice and signed terms', () => {
+    const rows = buildRollRows(result, false);
+    assert.equal(rows.atk.roll, 9);
+    assert.deepEqual(rows.atk.dice, { pool: [4, 2, 1], picked: 4, advantage: 2 });
+    assert.deepEqual(rows.atk.terms, [{ label: 'ATK', val: 3 }, { label: 'gang-up', val: 2 }]);
+    assert.equal(rows.def.roll, 5);
+    assert.deepEqual(rows.def.terms, [{ label: 'DEF', val: 2 }, { label: 'fort', val: 1 }, { label: 'fatigue', val: -1 }]);
+    assert.equal(rows.notes.length, 1);
+    assert.match(rows.rule, /crush/);
+  });
+
+  test('matches the plain-text tip (both derive from the same model)', () => {
+    const tip = buildRollTip(result, false);
+    assert.match(tip, /Attack 9 = die 4 \(rolled 4·2·1, kept best of 3\) \+3 ATK \+2 gang-up/);
+  });
+
+  test('returns null without breakdown data', () => {
+    assert.equal(buildRollRows({ attackRoll: 5, defenseRoll: 3 }), null);
+    assert.equal(buildRollRows(null), null);
+  });
+
+  test('entries from buildStepDigest carry the model', () => {
+    const a = snap('h1', 'hero', 'hero', 1, 1);
+    const t = snap('m1', 'minion', 'witch', 1, 2);
+    const cols = buildStepDigest([step([battleEvent(a, t, result)], [a, t])], [], DEPS);
+    assert.equal(cols[0].entries[0].rollRows.atk.roll, 9);
   });
 });

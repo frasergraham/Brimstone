@@ -6,7 +6,7 @@ import { PlanActionType } from './planner.js';
 import { ITEMS } from './items.js';
 import { EntityType, ENTITY_COLOR } from './entities.js';
 import { ResourceType, WEAPON_LABEL, RESOURCE_LABEL } from './tiles.js';
-import { nodeController } from './game.js';
+import { nodeController, PHASE_ICON, DEFAULT_CYCLE_PHASES } from './game.js';
 import { hexKey } from './hex.js';
 import { getFactionTheme } from './theme.js';
 import { EFFECTS } from './effects.js';
@@ -583,58 +583,47 @@ export function buildPlayerStatusHtml(players, nudgeCtx) {
  */
 export function buildObjectivesHtml(witchObjectives, entities, nodeScore, gameMode = 'standard') {
   let nodeDots  = '';
-  let witchCount = 0, heroCount = 0;
 
-  const CTRL_LABEL = {
-    witch: 'held by the Witch', hero: 'held by the Hero',
-    contested: 'contested', neutral: 'unclaimed',
-  };
   for (const obj of witchObjectives) {
     const ctrl = nodeController(obj, entities);
     let cls;
-    if      (ctrl === 'witch')     { cls = 'witch';     witchCount++; }
-    else if (ctrl === 'hero')      { cls = 'hero';       heroCount++;  }
+    if      (ctrl === 'witch')     { cls = 'witch';     }
+    else if (ctrl === 'hero')      { cls = 'hero';      }
     else if (ctrl === 'contested') { cls = 'contested'; }
     else                           { cls = 'neutral';   }
     const nodeColor = obj.color ?? '#888';
-    const dotTip = `${obj.label ?? 'Power Node'} — ${CTRL_LABEL[ctrl] ?? ctrl}. `
-      + `Stand units on a node to hold it; a node is contested while both sides are on it.`;
-    nodeDots += `<span class="node-dot ${cls}" title="${dotTip}" style="border-color:${nodeColor}"></span>`;
+    nodeDots += `<span class="node-dot ${cls}" style="border-color:${nodeColor}"></span>`;
   }
 
   const score = nodeScore ?? { hero: 0, witch: 0 };
   let html;
 
+  // No native title tooltips here — tapping the bar opens the game-styled
+  // cycle & scoring info panel (buildCycleInfoHtml) instead.
   if (gameMode === 'battle') {
     // Battle mode: numeric score display (unbounded)
-    const battleRule = 'Battle mode: points score every round; the faction leading when time runs out wins.';
     html =
-      `<span class="score-track hero-track battle-score" title="Hero score: ${score.hero}. ${battleRule}">` +
+      `<span class="score-track hero-track battle-score">` +
         `<span class="score-num hero">${score.hero}</span>` +
       `</span>` +
       `<span class="node-dots-group">${nodeDots}</span>` +
-      `<span class="score-track witch-track battle-score" title="Witch score: ${score.witch}. ${battleRule}">` +
+      `<span class="score-track witch-track battle-score">` +
         `<span class="score-num witch">${score.witch}</span>` +
       `</span>`;
   } else {
     // Standard mode: pip-based score display (max 4)
-    const scoreRule = 'Hold MORE nodes than your enemy at dawn and dusk to score a point — first to 4 wins.';
     const scoreMax = 4;
     const heroPips  = Array.from({ length: scoreMax }, (_, i) =>
       `<span class="score-pip hero${i < score.hero ? ' filled' : ''}"></span>`).join('');
     const witchPips = Array.from({ length: scoreMax }, (_, i) =>
       `<span class="score-pip witch${i < score.witch ? ' filled' : ''}"></span>`).join('');
     html =
-      `<span class="score-track hero-track" title="Hero score: ${score.hero}/4. ${scoreRule}">${heroPips}</span>` +
+      `<span class="score-track hero-track">${heroPips}</span>` +
       `<span class="node-dots-group">${nodeDots}</span>` +
-      `<span class="score-track witch-track" title="Witch score: ${score.witch}/4. ${scoreRule}">${witchPips}</span>`;
+      `<span class="score-track witch-track">${witchPips}</span>`;
   }
 
-  const title = witchCount === witchObjectives.length ? '⚠ Witch holds all nodes'
-              : heroCount  === witchObjectives.length ? '★ Hero holds all nodes'
-              : 'Power Nodes — hold the majority at dawn/dusk to score; first to 4 points wins';
-
-  return { html, title };
+  return { html };
 }
 
 /**
@@ -662,4 +651,66 @@ export function buildNodeBadgeHtml(witchObjectives, entities, col, row) {
   const name = node.label ?? 'Power Node';
   return `<span class="usb-terrain-node" style="color:${nodeColor}">⬡ ${name}</span>` +
     ` · <span style="color:${disp.color}">${disp.label}</span>`;
+}
+
+// ── Cycle & scoring info panel ────────────────────────────────────────────────
+//
+// Content for the panel that opens when the player taps the bottom score bar
+// or the day-cycle pill. Replaces the native title tooltips with a
+// game-styled, touch-friendly explanation of the phase cycle and the node
+// scoring rules. Pure HTML string — no DOM.
+
+/** Per-phase display metadata — shared by the turn-info pill and this panel. */
+export const PHASE_META = Object.freeze({
+  dawn:  { sprite: 'cycle_dawn',  label: 'Dawn',  desc: 'Hero +1 action · node scoring · attrition rises' },
+  day:   { sprite: 'cycle_day',   label: 'Day',   desc: 'Witch undead in the open suffer' },
+  dusk:  { sprite: 'cycle_dusk',  label: 'Dusk',  desc: 'Node scoring · seek cover before night' },
+  night: { sprite: 'cycle_night', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
+});
+
+export function buildCycleInfoHtml(state) {
+  const phases   = state.cycleConfig?.phases ?? DEFAULT_CYCLE_PHASES;
+  const cycleLen = phases.length;
+  const idx      = (state.round - 1) % cycleLen;
+  const cycleNum = Math.ceil(state.round / cycleLen);
+  const cur      = phases[idx];
+  const next     = phases[(idx + 1) % cycleLen];
+  const meta     = (p) => PHASE_META[p] ?? { label: p, desc: '' };
+
+  // Cycle strip — one chip per round in the cycle, current highlighted.
+  const strip = phases.map((p, i) =>
+    `<span class="cip-chip phase-${p}${i === idx ? ' current' : ''}">${PHASE_ICON[p] ?? ''}</span>`
+  ).join('');
+
+  let html = `<div class="cip-title">Day ${cycleNum} · Round ${state.round}</div>`;
+  html += `<div class="cip-strip">${strip}</div>`;
+  html += `<div class="cip-phase"><span class="cip-phase-name">${PHASE_ICON[cur] ?? ''} ${meta(cur).label}</span>`
+        + `<span class="cip-phase-desc">${meta(cur).desc}</span></div>`;
+  html += `<div class="cip-phase cip-next"><span class="cip-phase-name">Next: ${PHASE_ICON[next] ?? ''} ${meta(next).label}</span>`
+        + `<span class="cip-phase-desc">${meta(next).desc}</span></div>`;
+
+  // Scoring rules + live node status.
+  const threshold = state.nodeScoreThreshold ?? 4;
+  html += `<hr class="cip-divider">`;
+  if (state.gameMode === 'battle') {
+    html += `<div class="cip-rule">Points score every round. The faction leading when time runs out wins.</div>`;
+  } else {
+    html += `<div class="cip-rule">At every <b>dawn</b> and <b>dusk</b>, the side holding <b>more Power Nodes</b> scores a point — ties score nothing. First to <b>${threshold} points</b> wins.</div>`;
+  }
+  const CTRL = {
+    hero:      { label: 'Hero',       cls: 'hero' },
+    witch:     { label: 'Witch',      cls: 'witch' },
+    contested: { label: 'Contested',  cls: 'contested' },
+    neutral:   { label: 'Unclaimed',  cls: 'neutral' },
+  };
+  const nodes = (state.witchObjectives ?? []).map(o => {
+    const c = CTRL[nodeController(o, state.entities ?? [])] ?? CTRL.neutral;
+    return `<div class="cip-node"><span class="cip-node-name" style="color:${o.color ?? '#c89dff'}">⬡ ${o.label ?? 'Power Node'}</span>`
+      + `<span class="cip-node-ctrl ${c.cls}">${c.label}</span></div>`;
+  }).join('');
+  if (nodes) html += `<div class="cip-nodes">${nodes}</div>`;
+  const score = state.nodeScore ?? { hero: 0, witch: 0 };
+  html += `<div class="cip-score">⚔ Hero ${score.hero}${state.gameMode === 'battle' ? '' : `/${threshold}`}`
+        + ` — ${score.witch}${state.gameMode === 'battle' ? '' : `/${threshold}`} Witch ✦</div>`;
+  return html;
 }
