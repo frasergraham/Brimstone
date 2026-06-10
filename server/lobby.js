@@ -1,7 +1,7 @@
 // Lobby: room lifecycle, server-side AI, action dispatch
 import { randomUUID } from 'crypto';
 import { GameState, Player, GameMode, computeActionsForPlayer, countHeldNodes } from '../src/game.js';
-import { HERO_PERSONALITIES, WITCH_PERSONALITIES } from '../src/ai.js';
+import { HERO_PERSONALITIES, WITCH_PERSONALITIES, AI_DIFFICULTIES } from '../src/ai.js';
 import { WitchAIEngine } from '../src/ai-engine.js';
 import { HeroAIEngine } from '../src/hero-ai-engine.js';
 import { serializeState, deserializeState } from './state-sync.js';
@@ -140,9 +140,20 @@ const PERSONALITY_LABELS = {
   swarm:      'Swarm',
 };
 
-function _randomPersonality(_faction) {
-  // Non-balanced personalities are temporarily disabled pending tuning.
-  return 'balanced';
+// Personality pools for random AI fill-in. Restricted to the combinations
+// validated by `node scripts/ai-matrix.js` (2026-06-10 run: every pairing
+// within 40–60% win rate, personality averages 45–52%). node_denier,
+// witch_hunter, and evasive stay out of random rotation until they get a
+// matrix pass of their own — they remain available where a personality is
+// chosen explicitly (admin tools, campaign missions).
+const RANDOM_PERSONALITY_POOL = Object.freeze({
+  hero:  ['balanced', 'aggressive', 'defensive', 'explorer'],
+  witch: ['balanced', 'aggressive', 'swarm'],
+});
+
+function _randomPersonality(faction) {
+  const pool = RANDOM_PERSONALITY_POOL[faction] ?? ['balanced'];
+  return pool[Math.floor(Math.random() * pool.length)];
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -493,6 +504,7 @@ function createRoom(config = {}) {
       turnIntervalMs:   Math.max(Math.min(TURN_TIMEOUT_MS, 30_000), Math.min(259_200_000, Number(config.turnIntervalMs) || TURN_TIMEOUT_MS)),
       isAsync:          !!config.isAsync,
       isBattle:         !!config.isBattle,
+      aiDifficulty:     AI_DIFFICULTIES.includes(config.aiDifficulty) ? config.aiDifficulty : 'normal',
     },
     consecutiveTimeouts: {},  // playerId → consecutive empty-plan timeout count
     slots:            [],
@@ -1631,6 +1643,7 @@ export function createLobby(playerId, playerName, ws, config = {}) {
     turnIntervalMs: config.turnIntervalMs,
     isAsync:        config.isAsync ?? false,
     isBattle,
+    aiDifficulty:   config.aiDifficulty,
   });
   room.isPrivate    = config.isPrivate ?? false;
   room.hostPlayerId = playerId;
@@ -1912,6 +1925,9 @@ export function startGame(playerId, roomId) {
   const state      = new GameState(anyWitchAI, anyHeroAI, room.config.mapSize, room.config.nodeCount);
   // Legacy 'full' fog (retired) degrades to 'partial'.
   state.fogOfWar   = room.config.fog === 'full' ? 'partial' : room.config.fog;
+  // AI difficulty (validated in createRoom) — persisted via state-sync so
+  // resumed games keep their tier.
+  state.aiDifficulty = room.config.aiDifficulty ?? 'normal';
   room.state       = state;
   room.status      = 'playing';
   room.phase       = RoomPhase.PLANNING;  // game starts in planning

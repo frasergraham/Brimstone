@@ -269,7 +269,8 @@ export function assessHeroBoard(sim) {
     unexploredBuildings, nearestUnexplored,
     heroOnNode, heroInBuilding, heroTileExplored, heroTileFortLevel,
     nearestEnemyDist,
-    totalBudget: sim.actionsLeft,
+    // Difficulty delta floors at 1 so an Easy AI still acts every round.
+    totalBudget: Math.max(1, sim.actionsLeft + (sim.aiDifficultyDelta ?? 0)),
     heroPlayerCount:  (sim.playerCounts && sim.playerCounts.hero)  || 1,
     witchPlayerCount: (sim.playerCounts && sim.playerCounts.witch) || 1,
   };

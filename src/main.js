@@ -317,6 +317,12 @@ function init(witchIsAI, heroIsAI, autoplay = false, humanFactionId = null) {
   const nodeCount = parseInt(document.getElementById('select-node-count')?.value ?? '3', 10);
   state    = new GameState(witchIsAI, heroIsAI, mapSize, nodeCount);
 
+  // Difficulty applies to human-vs-AI only — AI-vs-AI (autoplay/balance) and
+  // two-human games always run at the tuned 'normal' baseline.
+  if ((witchIsAI || heroIsAI) && !(witchIsAI && heroIsAI)) {
+    state.aiDifficulty = document.getElementById('select-ai-difficulty')?.value ?? 'normal';
+  }
+
   // Apply the player's faction pick by swapping the side's default
   // leader entity to the picked faction. swapLeaderToFaction is a no-op
   // when the picked faction is already the leader's faction (e.g. day
@@ -5976,6 +5982,7 @@ document.getElementById('btn-create-game-confirm').addEventListener('click', () 
       isPrivate:      document.getElementById('cg-private').checked,
       isAsync,
       turnIntervalMs: parseInt(timeoutEl?.value ?? '90000', 10),
+      aiDifficulty:   document.getElementById('cg-ai-difficulty')?.value ?? 'normal',
     };
     mp.createLobby(config);
     // Transition to lobby card happens in onLobbyJoined callback

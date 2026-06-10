@@ -168,6 +168,7 @@ export function serializeState(state) {
     mapSize:              state.mapSize ?? 'standard',
     season:               state.season ?? null,
     campaignAIBudgetBonus: state.campaignAIBudgetBonus ?? 0,
+    aiDifficulty:         state.aiDifficulty ?? 'normal',
     // Per-state entity/roster counters. Persisting `usedRosterIndices` prevents
     // duplicate survivor names when a mid-game save is resumed and new
     // survivors spawn from unexplored buildings. nextEntityId is informational;
@@ -389,6 +390,7 @@ export function deserializeState(snap) {
   state.witchSummonCount     = snap.witchSummonCount ?? 0;
   state.heroRevealedByHorn   = snap.heroRevealedByHorn ?? false;
   state.campaignAIBudgetBonus = snap.campaignAIBudgetBonus ?? 0;
+  state.aiDifficulty          = snap.aiDifficulty ?? 'normal';
   state.gameMode             = snap.gameMode ?? 'standard';
   state.battleConfig         = snap.battleConfig ? { ...snap.battleConfig } : null;
   state.cycleConfig          = snap.cycleConfig
