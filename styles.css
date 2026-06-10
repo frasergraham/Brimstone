@@ -1112,7 +1112,8 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   letter-spacing: 0.05em;
   line-height: 1;
   white-space: nowrap;
-  pointer-events: none;
+  pointer-events: auto;            /* clickable → toggles the cycle & scoring info panel */
+  cursor: pointer;
   z-index: 4;
 }
 #cycle-bump-icon {
