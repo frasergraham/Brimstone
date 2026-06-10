@@ -18455,8 +18455,8 @@ export function paintUnitIconBadge(ctx, opts) {
 
     // Big number + small "%" suffix — the suffix at full size ate a third of
     // the margin's width budget, which is what kept the digits small. Each
-    // glyph gets a dark halo, then a white outline, then the colour fill so
-    // the odds pop against any terrain or portrait behind them.
+    // glyph gets a solid black outline, then the colour fill, so the odds
+    // read against any terrain or portrait behind them.
     const drawOddsLine = (pct, fontPx, color, y) => {
       const numText = String(pct);
       let f = fontPx;
@@ -18477,11 +18477,8 @@ export function paintUnitIconBadge(ctx, opts) {
 
       const paintGlyph = (text, fpx, x) => {
         ctx.font = `900 ${fpx}px sans-serif`;
-        ctx.strokeStyle = 'rgba(0,0,0,0.85)';
-        ctx.lineWidth = Math.max(5, Math.round(fpx * 0.26));
-        ctx.strokeText(text, x, y);
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = Math.max(2, Math.round(fpx * 0.10));
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = Math.max(4, Math.round(fpx * 0.18));
         ctx.strokeText(text, x, y);
         ctx.fillStyle = color;
         ctx.fillText(text, x, y);
@@ -18491,11 +18488,11 @@ export function paintUnitIconBadge(ctx, opts) {
       paintGlyph(numText, f, rightX - suffixW);
     };
 
-    const hitFont   = Math.round(size * 0.30);
-    const crushFont = Math.round(size * 0.20);
+    const hitFont   = Math.round(size * 0.34);
+    const crushFont = Math.round(size * 0.23);
     if (hasCrush) {
-      drawOddsLine(info.hitPct,   hitFont,   UNIT_INFO_HIT_COLOR,   cy - size * 0.145);
-      drawOddsLine(info.crushPct, crushFont, UNIT_INFO_CRUSH_COLOR, cy + size * 0.165);
+      drawOddsLine(info.hitPct,   hitFont,   UNIT_INFO_HIT_COLOR,   cy - size * 0.16);
+      drawOddsLine(info.crushPct, crushFont, UNIT_INFO_CRUSH_COLOR, cy + size * 0.185);
     } else {
       drawOddsLine(info.hitPct, hitFont, UNIT_INFO_HIT_COLOR, cy);
     }

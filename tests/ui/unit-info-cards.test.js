@@ -187,3 +187,35 @@ describe('_pushUnitInfoCards', () => {
     assert.equal(renderer.unitInfoCards.size, 0, 'submit clears the cards');
   });
 });
+
+describe('_computeUnitInfoCards — projected range gating', () => {
+  test('a queued move out of range hides the odds', () => {
+    const { ui, state, renderer } = makeUI();
+    const hero   = createHero(3, 3, 'p1', state);
+    const minion = createMinion(3, 4, 'p2', state);
+    state.entities.push(hero, minion);
+    arm(ui, hero, [minion]);
+
+    // Plan leaves the hero far from the target (ghost projection).
+    renderer.planGhostSteps = [{ positions: new Map([[hero.id, { col: 7, row: 7 }]]), action: {} }];
+    assert.equal(ui._computeUnitInfoCards().size, 0,
+      'odds must vanish when the plan ends out of attack range');
+
+    // Plan ends back in range → odds return.
+    renderer.planGhostSteps = [{ positions: new Map([[hero.id, { col: 3, row: 3 }]]), action: {} }];
+    assert.equal(ui._computeUnitInfoCards().size, 1);
+  });
+
+  test('ranged units keep odds at their weapon range', () => {
+    const { ui, state, renderer } = makeUI();
+    const hero   = createHero(3, 1, 'p1', state);
+    hero.equipWeapon('bow');  // range 3
+    const minion = createMinion(3, 4, 'p2', state);
+    state.entities.push(hero, minion);
+    arm(ui, hero, [minion]);
+
+    renderer.planGhostSteps = null;
+    assert.equal(ui._computeUnitInfoCards().size, 1,
+      'distance 3 is in range for a bow');
+  });
+});

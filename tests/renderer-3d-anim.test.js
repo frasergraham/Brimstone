@@ -1003,19 +1003,17 @@ describe('Renderer3D — paintUnitIconBadge unit info card', () => {
     assert.ok(colour, 'hit % uses UNIT_INFO_HIT_COLOR');
   });
 
-  test('odds glyphs get a white outline over a dark halo', () => {
+  test('odds glyphs get a black outline beneath the colour fill', () => {
     const ctx = makeTextStubCtx();
     paintUnitIconBadge(ctx, {
       size: SIZE, width: WIDTH, hp: 5, maxHp: 10,
       info: { hitPct: 72, crushPct: 0, attackCount: 0 },
     });
     const strokes = ctx.calls.filter(c => c.name === 'strokeStyle').map(c => c.args[0]);
-    assert.ok(strokes.includes('#ffffff'), 'white outline stroke present');
-    assert.ok(strokes.some(v => String(v).startsWith('rgba(0,0,0')), 'dark halo stroke present');
-    // Halo strokes before white strokes before the colour fill (per glyph).
-    const firstWhite = ctx.calls.findIndex(c => c.name === 'strokeStyle' && c.args[0] === '#ffffff');
-    const firstHalo  = ctx.calls.findIndex(c => c.name === 'strokeStyle' && String(c.args[0]).startsWith('rgba(0,0,0'));
-    assert.ok(firstHalo < firstWhite, 'dark halo painted beneath the white outline');
+    assert.ok(strokes.includes('#000000'), 'black outline stroke present');
+    const strokeIdx = ctx.calls.findIndex(c => c.name === 'strokeText');
+    const fillIdx   = ctx.calls.findIndex(c => c.name === 'fillText');
+    assert.ok(strokeIdx >= 0 && strokeIdx < fillIdx, 'outline stroked beneath the fill');
   });
 
   test('crush % gets its own deep-red line only when > 0', () => {

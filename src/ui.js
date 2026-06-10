@@ -1,8 +1,8 @@
 // UI controller: handles canvas clicks, sidepanel updates, action buttons
-import { hexKey, hexToPixel, MAP_COLS, MAP_ROWS } from './hex.js';
+import { hexKey, hexToPixel, hexDistance, MAP_COLS, MAP_ROWS } from './hex.js';
 import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus, legacyTileType } from './tiles.js';
 import { ITEMS } from './items.js';
-import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, attackOf, defenseOf } from './entities.js';
+import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, attackOf, defenseOf, rangeOf } from './entities.js';
 import { Phase, PHASE_ICON, phaseForRound, DEFAULT_CYCLE_PHASES, nodeController, countHeldNodes } from './game.js';
 import { PAD_X, PAD_Y, Renderer } from './renderer.js';
 import { makeOverlay } from './overlays.js';
@@ -1869,6 +1869,13 @@ export class UIController {
         const visHexes = getVisiblePositions(this.state, actor.owner);
         targets = targets.filter(t => visHexes.has(hexKey(t.col, t.row)));
       }
+      // Odds show only for enemies the unit could attack from where its plan
+      // LEAVES it — a queued move out of range hides the percentages (and a
+      // deselect clears them: no actor → this branch never runs).
+      const projPos = this._getProjectedPos(actor.id) ?? { col: actor.col, row: actor.row };
+      const range = rangeOf(actor);
+      targets = targets.filter(t =>
+        hexDistance(projPos.col, projPos.row, t.col, t.row) <= range);
       for (const t of targets) {
         const odds = this._attackOdds(actor, t);
         if (!odds) continue;
