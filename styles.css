@@ -5563,6 +5563,13 @@ img.plan-step-avatar {
   transition: color 0.15s, border-color 0.15s;
 }
 .replay-collapse-btn:hover { color: #fff; border-color: rgba(200, 160, 255, 0.7); }
+
+/* Battle rows carrying the roll-breakdown tooltip must receive hover even
+   though the timeline itself ignores pointers (board stays interactive). */
+.replay-step-action.battle[data-tip-html] {
+  pointer-events: auto;
+  cursor: help;
+}
 /* "…" hint shown (collapsed only) when several actions are active at once. */
 .replay-more {
   display: none;
@@ -6877,25 +6884,45 @@ body.spectator-mode #game-screen   { display: flex !important; }
 .cip-node-ctrl.witch     { color: #9b59b6; }
 .cip-node-ctrl.contested { color: #ffaa00; }
 .cip-node-ctrl.neutral   { color: #9a9488; }
-.cip-score { text-align: center; font-size: 0.8rem; color: var(--text-dim); }
+.cip-score {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+.cip-score .score-pip { display: inline-block; width: 9px; height: 9px; }
+.cip-score-sep { margin: 0 0.25rem; }
+.cip-icon {
+  width: 1.15em;
+  height: 1.15em;
+  vertical-align: -0.2em;
+  image-rendering: auto;
+}
+.cip-chip .cip-icon { width: 1.1rem; height: 1.1rem; vertical-align: middle; }
 
 /* ── Action arc hover expansion (description below the action name) ──────── */
+/* JS-driven (ui.js _expandArcItem): the .arc-expanded class widens the box
+   with its top-left anchored in place and the entries below shifted down. */
 .arc-item .arc-item-main { display: flex; align-items: center; white-space: nowrap; }
 .arc-item .arc-item-desc { display: none; }
-@media (hover: hover) {
-  .arc-item:hover .arc-item-desc {
-    display: block;
-    max-width: 230px;
-    margin-top: 0.25rem;
-    font-size: 0.74rem;
-    line-height: 1.3;
-    color: var(--text-dim);
-    white-space: normal;
-    text-align: left;
-  }
-  .arc-item:hover {
-    flex-direction: column;
-    align-items: flex-start;
-    z-index: 30;
-  }
+.arc-item.arc-expanded {
+  flex-direction: column;
+  align-items: flex-start;
+  width: 250px;
+  white-space: normal;
+  z-index: 30;
+}
+.arc-item.arc-expanded .arc-item-desc {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;   /* descriptions are written to fit two lines */
+  line-clamp: 2;
+  overflow: hidden;
+  margin-top: 0.25rem;
+  font-size: 0.74rem;
+  line-height: 1.3;
+  color: var(--text-dim);
+  text-align: left;
 }

@@ -440,7 +440,14 @@ export class UIController {
     }, sig);
     this._el('menu-close-btn')?.addEventListener('click', closeMenu, sig);
     // Bottom score bar / day-cycle pill → cycle & scoring info panel.
+    // The pill is a child of the bar, but bind it explicitly too (with the
+    // bubble stopped) so the protruding pill always toggles the panel even if
+    // the bar's hit area changes.
     this._el('score-bar')?.addEventListener('click', () => this._showCycleInfoPopup(), sig);
+    this._el('cycle-bump')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._showCycleInfoPopup();
+    }, sig);
     // Sound toggle — label reflects persisted mute state on first open.
     const soundBtn = this._el('menu-sound-btn');
     const _syncSoundLabel = () => {
@@ -2118,10 +2125,12 @@ export class UIController {
           break; // handled via hex clicks
         case ActionType.EXPLORE:
           arcItems.push({ group: 'scout', label: 'Explore', fullLabel: 'Explore tile — search for resources, loot, or hidden survivors (1 action)',
+            desc: 'Search this tile for resources, loot, or hidden survivors.',
             color: '#7eccd6', dis, cost: 1, attrs: 'data-action="explore"' });
           break;
         case ActionType.SOUND_HORN:
           arcItems.push({ group: 'scout', label: 'Sound Horn', fullLabel: 'Sound Horn — call hidden survivors within 4 hexes, but reveal your position this round (1 action, 1 food)',
+            desc: 'Calls hidden survivors within 4 hexes, but reveals your position this round.',
             color: '#7eccd6', dis: !action.affordable || dis, cost: 1, resCost: '1🍞', attrs: 'data-action="sound_horn"' });
           break;
         case ActionType.GUARD: {
@@ -2129,6 +2138,7 @@ export class UIController {
           const lbl = charges > 0 ? `Guard +${charges + 1}` : 'Guard';
           arcItems.push({ group: 'defense', label: lbl,
             fullLabel: `${lbl} — strike the first enemy that comes into reach this round (1 action)`,
+            desc: 'Hold position and strike the first enemy that comes into reach this round.',
             color: '#8888cc', dis, cost: 1, attrs: 'data-action="guard"' });
           break;
         }
@@ -2157,7 +2167,7 @@ export class UIController {
         case ActionType.BATTLE_HEX:
           if (this._planMode) {
             arcItems.push({ group: 'combat', label: 'Attack Hex', fullLabel: 'Attack Hex',
-              desc: 'Strike a chosen hex — hits whatever enemy stands there at resolution, even through fog. Skips harmlessly if the hex is empty. (1 action)',
+              desc: 'Hits whatever enemy holds the hex when it resolves — works into fog, skips if empty.',
               color: '#c0392b', dis, cost: 1, attrs: 'data-action="attack_hex"' });
           }
           break;
@@ -2327,6 +2337,7 @@ export class UIController {
     }
 
     attachPopupListeners(popup, this);
+    this._bindArcHoverExpansion(popup);
 
     // Trigger open animation on next frame — positions are already set, just animate
     requestAnimationFrame(() => {
@@ -2903,10 +2914,20 @@ export class UIController {
     if (!this.state) return;
     const el = document.createElement('div');
     el.id = 'cycle-info-popup';
-    el.innerHTML = buildCycleInfoHtml(this.state);
+    // Use the game's cycle sprites for the phase icons (emoji is only the
+    // fallback while the tilemap is still loading).
+    const icons = {};
+    for (const [phase, meta] of Object.entries(PHASE_META)) {
+      const src = this.renderer?.getPortraitDataURL?.(meta.sprite, 64);
+      if (src) icons[phase] = src;
+    }
+    el.innerHTML = buildCycleInfoHtml(this.state, icons);
     document.body.appendChild(el);
     this._cycleInfoDismiss = (e) => {
       if (el.contains(e.target)) return;
+      // Clicks on the bar/pill toggle via their own handlers — the capture-
+      // phase dismisser must not race them (it fired first and re-opened).
+      if (this._el('score-bar')?.contains?.(e.target)) return;
       this._dismissCycleInfoPopup();
     };
     setTimeout(() => {
@@ -3660,6 +3681,73 @@ export class UIController {
       setTimeout(dismiss, 500);
     } else if (this.speedMode === 'fast') {
       setTimeout(dismiss, 4000);
+    }
+  }
+
+  // ── Action-arc hover expansion ────────────────────────────────────────────
+  // Hovering an action expands its box in place (description under the name)
+  // with the box's TOP-LEFT anchored where it was, and shifts the entries
+  // below it down by the height delta so nothing overlaps. JS-driven because
+  // sibling re-layout can't be done in CSS: the buttons are individually
+  // positioned via --arc-x/--arc-y (centre-anchored transforms).
+
+  _bindArcHoverExpansion(popup) {
+    if (typeof window !== 'undefined' && window.matchMedia
+        && !window.matchMedia('(hover: hover)').matches) return;
+    const btns = [...popup.querySelectorAll('.arc-item:not(.arc-portrait)')];
+    // Provide a collapse hook so layout recomputes (zoom) start from a clean
+    // un-expanded state instead of clobbering the hover offsets.
+    this._collapseArcExpansion = () => {
+      for (const b of btns) this._collapseArcItem(b, btns);
+    };
+    for (const btn of btns) {
+      if (!btn.querySelector?.('.arc-item-desc')) continue; // nothing to show
+      btn.addEventListener('mouseenter', () => this._expandArcItem(btn, btns));
+      btn.addEventListener('mouseleave', () => this._collapseArcItem(btn, btns));
+    }
+  }
+
+  _expandArcItem(btn, btns) {
+    if (btn.classList.contains('arc-expanded')) return;
+    // Pre-expansion layout box (offsetWidth/Height ignore the centre transform).
+    const w0 = btn.offsetWidth, h0 = btn.offsetHeight;
+    const x0 = parseFloat(btn.style.getPropertyValue('--arc-x')) || 0;
+    const y0 = parseFloat(btn.style.getPropertyValue('--arc-y')) || 0;
+    btn._arcOrig = { x: x0, y: y0 };
+    btn.classList.add('arc-expanded');
+    const w1 = btn.offsetWidth, h1 = btn.offsetHeight;
+    // Keep the top-left corner fixed: the centre moves by half the growth.
+    btn.style.setProperty('--arc-x', `${(x0 + (w1 - w0) / 2).toFixed(1)}px`);
+    btn.style.setProperty('--arc-y', `${(y0 + (h1 - h0) / 2).toFixed(1)}px`);
+    btn.style.transitionDelay = '0ms';
+    // Re-layout the entries below: shift down by the height delta.
+    const dh = h1 - h0;
+    const idx = btns.indexOf(btn);
+    for (let j = idx + 1; j < btns.length; j++) {
+      const b = btns[j];
+      if (b._arcShift == null) {
+        b._arcShift = parseFloat(b.style.getPropertyValue('--arc-y')) || 0;
+      }
+      b.style.transitionDelay = '0ms';
+      b.style.setProperty('--arc-y', `${(b._arcShift + dh).toFixed(1)}px`);
+    }
+  }
+
+  _collapseArcItem(btn, btns) {
+    if (!btn.classList.contains('arc-expanded')) return;
+    btn.classList.remove('arc-expanded');
+    if (btn._arcOrig) {
+      btn.style.setProperty('--arc-x', `${btn._arcOrig.x.toFixed(1)}px`);
+      btn.style.setProperty('--arc-y', `${btn._arcOrig.y.toFixed(1)}px`);
+      btn._arcOrig = null;
+    }
+    const idx = btns.indexOf(btn);
+    for (let j = idx + 1; j < btns.length; j++) {
+      const b = btns[j];
+      if (b._arcShift != null) {
+        b.style.setProperty('--arc-y', `${b._arcShift.toFixed(1)}px`);
+        b._arcShift = null;
+      }
     }
   }
 

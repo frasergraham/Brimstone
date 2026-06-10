@@ -668,7 +668,7 @@ export const PHASE_META = Object.freeze({
   night: { sprite: 'cycle_night', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
 });
 
-export function buildCycleInfoHtml(state) {
+export function buildCycleInfoHtml(state, icons = {}) {
   const phases   = state.cycleConfig?.phases ?? DEFAULT_CYCLE_PHASES;
   const cycleLen = phases.length;
   const idx      = (state.round - 1) % cycleLen;
@@ -676,17 +676,22 @@ export function buildCycleInfoHtml(state) {
   const cur      = phases[idx];
   const next     = phases[(idx + 1) % cycleLen];
   const meta     = (p) => PHASE_META[p] ?? { label: p, desc: '' };
+  // The caller passes the game's cycle sprites (renderer data URLs) keyed by
+  // phase; the emoji is only the headless/loading fallback.
+  const icon = (p) => icons[p]
+    ? `<img class="cip-icon" src="${icons[p]}" alt="${meta(p).label}">`
+    : `${PHASE_ICON[p] ?? ''}`;
 
   // Cycle strip — one chip per round in the cycle, current highlighted.
   const strip = phases.map((p, i) =>
-    `<span class="cip-chip phase-${p}${i === idx ? ' current' : ''}">${PHASE_ICON[p] ?? ''}</span>`
+    `<span class="cip-chip phase-${p}${i === idx ? ' current' : ''}">${icon(p)}</span>`
   ).join('');
 
   let html = `<div class="cip-title">Day ${cycleNum} · Round ${state.round}</div>`;
   html += `<div class="cip-strip">${strip}</div>`;
-  html += `<div class="cip-phase"><span class="cip-phase-name">${PHASE_ICON[cur] ?? ''} ${meta(cur).label}</span>`
+  html += `<div class="cip-phase"><span class="cip-phase-name">${icon(cur)} ${meta(cur).label}</span>`
         + `<span class="cip-phase-desc">${meta(cur).desc}</span></div>`;
-  html += `<div class="cip-phase cip-next"><span class="cip-phase-name">Next: ${PHASE_ICON[next] ?? ''} ${meta(next).label}</span>`
+  html += `<div class="cip-phase cip-next"><span class="cip-phase-name">Next: ${icon(next)} ${meta(next).label}</span>`
         + `<span class="cip-phase-desc">${meta(next).desc}</span></div>`;
 
   // Scoring rules + live node status.
@@ -709,8 +714,17 @@ export function buildCycleInfoHtml(state) {
       + `<span class="cip-node-ctrl ${c.cls}">${c.label}</span></div>`;
   }).join('');
   if (nodes) html += `<div class="cip-nodes">${nodes}</div>`;
+  // Score — the same pips as the bar (battle mode is unbounded → numeric).
   const score = state.nodeScore ?? { hero: 0, witch: 0 };
-  html += `<div class="cip-score">⚔ Hero ${score.hero}${state.gameMode === 'battle' ? '' : `/${threshold}`}`
-        + ` — ${score.witch}${state.gameMode === 'battle' ? '' : `/${threshold}`} Witch ✦</div>`;
+  if (state.gameMode === 'battle') {
+    html += `<div class="cip-score">⚔ ${score.hero} — ${score.witch} ✦</div>`;
+  } else {
+    const pips = (cls, n) => Array.from({ length: threshold }, (_, i) =>
+      `<span class="score-pip ${cls}${i < n ? ' filled' : ''}"></span>`).join('');
+    html += `<div class="cip-score">`
+      + `<span class="cip-score-glyph">⚔</span>${pips('hero', score.hero)}`
+      + `<span class="cip-score-sep">—</span>`
+      + `${pips('witch', score.witch)}<span class="cip-score-glyph">✦</span></div>`;
+  }
   return html;
 }

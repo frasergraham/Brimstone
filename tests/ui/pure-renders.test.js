@@ -480,4 +480,21 @@ describe('buildCycleInfoHtml', () => {
     assert.ok(html.includes('every round'));
     assert.ok(!html.includes('4 points'));
   });
+
+  test('score renders as pips matching the bar, not numbers', () => {
+    const html = buildCycleInfoHtml(baseState);
+    assert.equal((html.match(/score-pip hero filled/g) || []).length, 1);
+    assert.equal((html.match(/score-pip witch filled/g) || []).length, 2);
+    assert.equal((html.match(/score-pip hero/g) || []).length, 4, 'threshold pips per side');
+    assert.ok(!html.includes('1/4'), 'no numeric x/4 display');
+  });
+
+  test('uses the game cycle sprites when icon data URLs are supplied', () => {
+    const icons = { night: 'data:night', dawn: 'data:dawn', day: 'data:day', dusk: 'data:dusk' };
+    const html = buildCycleInfoHtml(baseState, icons);
+    assert.ok(html.includes('class="cip-icon" src="data:night"'), 'current phase uses its sprite');
+    assert.ok((html.match(/cip-icon/g) || []).length >= 10, 'strip chips use sprites too');
+    const plain = buildCycleInfoHtml(baseState);
+    assert.ok(!plain.includes('cip-icon'), 'emoji fallback without icons');
+  });
 });
