@@ -8,7 +8,7 @@ import { PAD_X, PAD_Y, Renderer } from './renderer.js';
 import { makeOverlay } from './overlays.js';
 import { concreteFactionOf } from './factions.js';
 import {
-  ActionType, getValidActions, getVisiblePositions,
+  ActionType, getValidActions, getVisiblePositions, computeCombatOdds,
 } from './actions.js';
 import { PlanActionType, actionCosts, computeGhostState, computeProjectedInventory, interleavePlan } from './planner.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
@@ -1902,6 +1902,10 @@ export class UIController {
       this.renderer.clearOverlaysByLayer('highlight-disc');
 
       const executeFight = (target) => {
+        // Odds preview toast — shown first so budget warnings from
+        // _addToPlan (plan full / over budget) take precedence over it.
+        const oddsText = this._formatOddsText(this._attackOdds(actor, target));
+        if (oddsText) this._showPlanToast(`⚔ ${target.displayName}: ${oddsText}`);
         // Add battle to plan, then re-select the actor so red
         // battle highlights refresh naturally — clicking the same enemy again stacks another attack.
         this._addToPlan({ type: PlanActionType.BATTLE_UNIT, entityId: actor.id, targetId: target.id, targetCol: target.col, targetRow: target.row });
@@ -1913,7 +1917,7 @@ export class UIController {
 
       // If multiple defenders on the hex, show a picker dialog
       if (targetsAtHex.length > 1) {
-        this._showDefenderPickerDialog(targetsAtHex, executeFight);
+        this._showDefenderPickerDialog(targetsAtHex, executeFight, actor);
       } else {
         executeFight(targetsAtHex[0]);
       }
@@ -2267,6 +2271,9 @@ export class UIController {
       }
     }
 
+    // Defender picker: per-target odds preview under each portrait.
+    const oddsActor = actionTag === 'pick_defender' ? this._pendingDefenderPick?.actor : null;
+
     for (const u of units) {
       const col        = ENTITY_COLOR[u.type] || '#888';
       const portraitId  = u.type === 'survivor' ? Renderer.survivorAssetId(u.title) : u.type;
@@ -2283,10 +2290,17 @@ export class UIController {
         ? `<span class="arc-portrait-badge">\u00d7${atkCount}</span>`
         : '';
 
+      const odds = oddsActor ? this._attackOdds(oddsActor, u) : null;
+      const oddsHtml = odds
+        ? `<span class="arc-portrait-odds">${Math.round(odds.hit * 100)}%</span>`
+        : '';
+
       arcItems.push({
         group: 'disambig',
-        label: `<div class="arc-portrait-img-wrap">${imgHtml}${badgeHtml}</div><div class="arc-portrait-hp"><div class="arc-portrait-hp-fill" style="width:${(pct * 100).toFixed(0)}%;background:${hpColor};"></div></div><span class="arc-portrait-name">${u.displayName}</span>`,
-        fullLabel: `${u.displayName} — HP ${u.hp}/${u.maxHp}`,
+        label: `<div class="arc-portrait-img-wrap">${imgHtml}${badgeHtml}</div><div class="arc-portrait-hp"><div class="arc-portrait-hp-fill" style="width:${(pct * 100).toFixed(0)}%;background:${hpColor};"></div></div><span class="arc-portrait-name">${u.displayName}</span>${oddsHtml}`,
+        fullLabel: odds
+          ? `${u.displayName} — HP ${u.hp}/${u.maxHp} — ${this._formatOddsText(odds)}`
+          : `${u.displayName} — HP ${u.hp}/${u.maxHp}`,
         color: col,
         dis: false,
         free: false,
@@ -3515,10 +3529,46 @@ export class UIController {
     }
   }
 
-  _showDefenderPickerDialog(defenders, onPick) {
-    this._pendingDefenderPick = { defenders, onPick };
+  _showDefenderPickerDialog(defenders, onPick, actor = null) {
+    this._pendingDefenderPick = { defenders, onPick, actor };
     this._popupVisible = true;
     this._showActionPopup(null);
+  }
+
+  /**
+   * Exact hit/crush/counter odds for `actor` attacking `target` from the
+   * actor's projected planning position. Best-effort: returns null when odds
+   * can't be computed (e.g. partial mirror data online) — the preview is
+   * advisory, never load-bearing.
+   */
+  _attackOdds(actor, target) {
+    try {
+      let effActor = actor;
+      if (this._planMode) {
+        const proj = this._getProjectedPos(actor.id);
+        if (proj && (proj.col !== actor.col || proj.row !== actor.row)) {
+          // Re-parent so getRange()/getAttack() still resolve on the clone.
+          effActor = Object.setPrototypeOf(
+            { ...actor, col: proj.col, row: proj.row },
+            Object.getPrototypeOf(actor)
+          );
+        }
+      }
+      return computeCombatOdds(this.state, effActor, target);
+    } catch (err) {
+      console.warn('[ui] odds preview unavailable:', err);
+      return null;
+    }
+  }
+
+  /** "72% hit (18% crush) · 9% counter risk" — omits zero-probability parts. */
+  _formatOddsText(odds) {
+    if (!odds) return null;
+    const pct = p => `${Math.round(p * 100)}%`;
+    let s = `${pct(odds.hit)} hit`;
+    if (odds.crush > 0.005) s += ` (${pct(odds.crush)} crush)`;
+    if (odds.counter > 0.005) s += ` · ${pct(odds.counter)} counter risk`;
+    return s;
   }
 
   _showBattleDialog(actorSnap, targetSnap, result, onDismiss, onRematch = null) {

@@ -331,7 +331,12 @@ export class Entity {
   //   extraDefBonus        — flat defense bonus (defender-side fortification)
   //   fatiguePenalty       — flat defender penalty from repeated defending
   //   state                — GameState for per-game forced-dice queue
-  static resolveCombat(attacker, defender, options = {}) {
+  /**
+   * Shared pre-roll computation for resolveCombat and computeCombatOdds:
+   * net advantage dice per side (including weapon triggers and marked
+   * effects) and the flat roll modifiers added to each side's die.
+   */
+  static _combatNets(attacker, defender, options = {}) {
     const {
       phaseAdvantage = 0,
       atkAdvantageDice = 0,
@@ -341,10 +346,7 @@ export class Entity {
       extraAtkBonus = 0,
       extraDefBonus = 0,
       fatiguePenalty = 0,
-      state = null,
     } = options;
-
-    const roll = state ? (s) => state.nextDie(s) : _nextDie;
 
     // Item combat triggers (e.g. staff vs undead defenders →
     // +1 attacker advantage die). Data-driven via ITEMS[weapon].combatTriggers
@@ -373,13 +375,27 @@ export class Entity {
     );
     const defNet = clampAdvantage(defAdvantageDice - defDisadvantageDice);
 
+    const atkFlat = attackOf(attacker)  + (attacker.attackBonus  || 0) + extraAtkBonus;
+    const defFlat = defenseOf(defender) + (defender.defenseBonus || 0) + extraDefBonus - fatiguePenalty;
+
+    return { atkNet, defNet, atkFlat, defFlat, atkStaffAdvantage };
+  }
+
+  static resolveCombat(attacker, defender, options = {}) {
+    const { state = null, fatiguePenalty = 0 } = options;
+
+    const roll = state ? (s) => state.nextDie(s) : _nextDie;
+
+    const { atkNet, defNet, atkFlat, defFlat, atkStaffAdvantage } =
+      Entity._combatNets(attacker, defender, options);
+
     const atkPool = _rollPool(roll, atkNet);
     const defPool = _rollPool(roll, defNet);
     const atkBaseDie = _pickFromPool(atkPool, atkNet);
     const defBaseDie = _pickFromPool(defPool, defNet);
 
-    const attackRoll  = atkBaseDie + attackOf(attacker)  + (attacker.attackBonus  || 0) + extraAtkBonus;
-    const defenseRoll = defBaseDie + defenseOf(defender) + (defender.defenseBonus || 0) + extraDefBonus - fatiguePenalty;
+    const attackRoll  = atkBaseDie + atkFlat;
+    const defenseRoll = defBaseDie + defFlat;
     const margin = attackRoll - defenseRoll;
 
     const atkExtraDice = atkPool.slice(1);
@@ -396,6 +412,50 @@ export class Entity {
       fatiguePenalty,
     };
   }
+
+  /**
+   * Exact outcome probabilities for a resolveCombat() roll — no sampling.
+   *
+   * Takes the SAME options object as resolveCombat plus a `ranged` flag
+   * (ranged attacks can neither crush nor be countered — mirrors
+   * executeBattle). Enumerates the 36 (chosen-die × chosen-die) outcomes
+   * using the exact best/worst-of-K die distribution.
+   *
+   * Returns { hit, crush, counter, miss } — `crush` is the subset of `hit`
+   * where attackRoll ≥ 2×defenseRoll; `counter` is the subset of `miss`
+   * where defenseRoll ≥ 2×attackRoll; hit + miss = 1.
+   */
+  static computeCombatOdds(attacker, defender, options = {}) {
+    const { ranged = false } = options;
+    const { atkNet, defNet, atkFlat, defFlat } =
+      Entity._combatNets(attacker, defender, options);
+
+    let hit = 0, crush = 0, counter = 0;
+    for (let v = 1; v <= 6; v++) {
+      const pa = _chosenDieProb(v, atkNet);
+      const attackRoll = v + atkFlat;
+      for (let w = 1; w <= 6; w++) {
+        const p = pa * _chosenDieProb(w, defNet);
+        const defenseRoll = w + defFlat;
+        if (attackRoll > defenseRoll) {
+          hit += p;
+          if (!ranged && attackRoll >= 2 * defenseRoll) crush += p;
+        } else if (!ranged && defenseRoll >= 2 * attackRoll) {
+          counter += p;
+        }
+      }
+    }
+    return { hit, crush, counter, miss: 1 - hit };
+  }
+}
+
+// P(chosen die = v) for net advantage `net`: best-of-(1+net) when positive,
+// worst-of-(1+|net|) when negative, a plain d6 at 0.
+function _chosenDieProb(v, net) {
+  const k = 1 + Math.abs(net);
+  if (net > 0) return Math.pow(v / 6, k) - Math.pow((v - 1) / 6, k);
+  if (net < 0) return Math.pow((7 - v) / 6, k) - Math.pow((6 - v) / 6, k);
+  return 1 / 6;
 }
 
 // Stat accessors that tolerate plain-object entity fixtures (used by unit

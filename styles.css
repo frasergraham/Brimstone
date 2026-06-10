@@ -2521,6 +2521,14 @@ body.renderer-3d.debug-counters #cam-counter { display: block; }
   pointer-events: none;
 }
 
+/* Hit-chance preview under defender-picker portraits */
+.arc-portrait-odds {
+  font-size: 0.62rem;
+  font-weight: 700;
+  color: #e8b54a;
+  pointer-events: none;
+}
+
 /* ── Canvas-origin animation (disambiguation icons lift off map) ── */
 
 /* Initial state: positioned at canvas entity location, visible as the icon */
