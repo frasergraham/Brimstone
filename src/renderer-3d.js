@@ -2516,14 +2516,19 @@ export class Renderer3D {
     // loading screen drops. Loading them inside the bundle takes the cost
     // before whenReady() resolves so gameplay starts smooth.
     const terrainP   = afterInit(() => this._preloadTerrainDetailTextures());
+    // Every character mesh (mannequin + each type rig) is preloaded here so the
+    // scene never has to fall back to a pawn at runtime — the loading overlay
+    // stays up until they're all in hand.
+    const charactersP = afterInit(() => this._preloadCharacterRigs(basePath));
 
     this._assetBundle = [
-      { id: 'engine',    label: 'engine',    promise: babylonP,   progress: 0 },
-      { id: 'sprites',   label: 'sprites',   promise: atlasP,     progress: 0 },
-      { id: 'buildings', label: 'buildings', promise: buildingsP, progress: 0 },
-      { id: 'paladin',   label: 'paladin',   promise: paladinP,   progress: 0 },
-      { id: 'forest',    label: 'forest',    promise: treesP,     progress: 0 },
-      { id: 'terrain',   label: 'terrain',   promise: terrainP,   progress: 0 },
+      { id: 'engine',     label: 'engine',     promise: babylonP,    progress: 0 },
+      { id: 'sprites',    label: 'sprites',    promise: atlasP,      progress: 0 },
+      { id: 'buildings',  label: 'buildings',  promise: buildingsP,  progress: 0 },
+      { id: 'paladin',    label: 'paladin',    promise: paladinP,    progress: 0 },
+      { id: 'characters', label: 'characters', promise: charactersP, progress: 0 },
+      { id: 'forest',     label: 'forest',     promise: treesP,      progress: 0 },
+      { id: 'terrain',    label: 'terrain',    promise: terrainP,    progress: 0 },
     ];
 
     for (const item of this._assetBundle) {
@@ -2538,6 +2543,42 @@ export class Renderer3D {
         });
     }
   }
+
+  /** Preload every character mesh the game can show, so the scene never falls
+   *  back to a placeholder at runtime. Run as a load-bundle item (see
+   *  beginLoad) so the loading overlay + progress bar stay up until every rig
+   *  is in hand — there is no cone/sphere pawn fallback any more.
+   *
+   *  - The mannequin is the universal fallback and MUST load; a failure here
+   *    means some units would have no mesh at all, so we log a loud error.
+   *  - Each `<type>-idle.glb` that exists is preloaded so the unit shows its own
+   *    mesh from the first frame. A type with no rig file 404s and uses the
+   *    mannequin — expected, NOT an error.
+   *  - The shared walk clip is loaded and retargeted onto every rig so units
+   *    walk from their first move instead of sliding in their idle pose. */
+  async _preloadCharacterRigs(basePath = this._assetsBasePath || 'assets') {
+    const mannequin = await Promise.resolve(
+      this._loadFallbackRig(MANNEQUIN_RIG_FILE, basePath)).catch(() => null);
+    if (!mannequin) {
+      console.error(`[Renderer3D] Could not load the fallback character mesh "${MANNEQUIN_RIG_FILE}" — units without their own rig cannot render.`);
+    }
+    // Distinct type rigs for every entity type. Paladin is already a bundle
+    // item; _loadFallbackRig dedupes via _rigLoadPromises so it's a cache hit.
+    const files = new Set();
+    for (const type of Object.values(EntityType)) {
+      const f = entityTypeRigFile({ type });
+      if (f && f !== MANNEQUIN_RIG_FILE) files.add(f);
+    }
+    const srcs = await Promise.all([...files].map(f =>
+      Promise.resolve(this._loadFallbackRig(f, basePath)).catch(() => null)));
+    // Walk clip: load the shared source, then retarget onto every loaded rig so
+    // the walk groups exist before the first move plays.
+    await Promise.resolve(this._loadWalkingAnimation(basePath)).catch(() => null);
+    for (const src of [mannequin, ...srcs]) {
+      if (src) { try { this._retargetWalkOntoRig(src); } catch { /* non-fatal */ } }
+    }
+  }
+
 
   /** Advance one bundle item's byte-level progress and re-emit the aggregate.
    *  Monotonic — a regressing or already-settled fraction is ignored, so a
@@ -9565,26 +9606,31 @@ export class Renderer3D {
 
     const standee = { plane: cone, sphere, leader, paladinClone: null };
 
-    // Every unit cascades to a rig: <type>-idle.glb → mannequin → cone+sphere.
-    // Kick the async load; clone synchronously if a rig is already in hand,
-    // otherwise _upgradeStandeesToFallbackRig retrofits when it lands. The
-    // cone+sphere stay in-scene (visibility 0) as anchor + picking target.
+    // Character meshes are preloaded behind the loading overlay
+    // (_preloadCharacterRigs), so a rig is in hand by the time any standee is
+    // built: the unit's own `<type>-idle.glb`, else the universal mannequin.
+    // The cone+sphere are NO LONGER a visible fallback — there is no pawn — they
+    // remain only as an invisible position anchor + picking target. If even the
+    // mannequin is unavailable we render nothing and log loudly.
     this._ensureFallbackRig(entity);
-    const rig = this._loadedFallbackRigFor(entity);
-    if (rig) {
-      const clone = this._buildRigClone(entity, cone, rig,
-        rig.tintable ? { tintColor: ownerColor } : {});
-      if (clone) {
-        cone.visibility   = 0;
-        sphere.visibility = 0;
-        // Strip the cone+sphere from the shadow casters so the floor shadow
-        // reflects the rig silhouette, not the pawn shape.
-        this._removeShadowCaster(cone);
-        this._removeShadowCaster(sphere);
-        for (const m of clone.childMeshes || []) this._addShadowCaster(m);
-        standee.paladinClone = clone;
-      }
+    const rig = this._loadedFallbackRigFor(entity)
+      || this._rigSources.get(MANNEQUIN_RIG_FILE)   // universal fallback (preloaded)
+      || null;
+    const clone = rig
+      ? this._buildRigClone(entity, cone, rig, rig.tintable ? { tintColor: ownerColor } : {})
+      : null;
+    if (clone) {
+      for (const m of clone.childMeshes || []) this._addShadowCaster(m);
+      standee.paladinClone = clone;
+    } else {
+      console.error(`[Renderer3D] No character mesh for ${entity.type} (${entity.id}) — fallback rig "${MANNEQUIN_RIG_FILE}" did not load; unit will be invisible.`);
     }
+    // Cone+sphere are an invisible anchor only — never the visible pawn. Hide
+    // them and drop them as shadow casters in every case (the rig casts).
+    cone.visibility   = 0;
+    sphere.visibility = 0;
+    this._removeShadowCaster(cone);
+    this._removeShadowCaster(sphere);
 
     this._positionStandee(standee, entity);
     return standee;
