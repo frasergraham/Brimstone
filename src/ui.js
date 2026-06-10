@@ -10,6 +10,7 @@ import { concreteFactionOf } from './factions.js';
 import {
   ActionType, getValidActions, getVisiblePositions, computeCombatOdds,
 } from './actions.js';
+import * as audio from './audio.js';
 import { PlanActionType, actionCosts, computeGhostState, computeProjectedInventory, interleavePlan } from './planner.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
 import { ResEventType } from '../server/resolver.js';
@@ -68,6 +69,11 @@ export class UIController {
     // Injected element bag — tests supply fake elements keyed by DOM ID.
     // Falls back to document.getElementById at each call site when missing.
     this._els = els ?? {};
+
+    // Arm the one-shot user-gesture unlock for synthesized SFX (no-op in
+    // tests/node — see src/audio.js).
+    audio.init();
+    this._lastPhaseSoundKey = null;  // dedupe phase stings across summaries
 
     this._selectedEntity  = null;
     this._validActions    = [];
@@ -427,6 +433,17 @@ export class UIController {
       if (isDebugToggleClick(e)) document.body.classList.toggle('debug-counters');
     }, sig);
     this._el('menu-close-btn')?.addEventListener('click', closeMenu, sig);
+    // Sound toggle — label reflects persisted mute state on first open.
+    const soundBtn = this._el('menu-sound-btn');
+    const _syncSoundLabel = () => {
+      if (soundBtn) soundBtn.textContent = audio.isMuted() ? '🔇 Sound: Off' : '🔊 Sound: On';
+    };
+    _syncSoundLabel();
+    soundBtn?.addEventListener('click', () => {
+      audio.toggleMuted();
+      _syncSoundLabel();
+      if (!audio.isMuted()) audio.play('score');  // audible confirmation
+    }, sig);
     this._el('menu-replay-turn-btn')?.addEventListener('click', () => {
       closeMenu();
       this.onReplayLastTurn?.();
@@ -3230,6 +3247,7 @@ export class UIController {
   _showBattleToast(actorSnap, targetSnap, result) {
     const container = this._el('battle-toast-container');
     if (!container) return;
+    audio.playCombat(result);
 
     const outcome = result.killed
       ? '💀 slain'
@@ -3576,6 +3594,7 @@ export class UIController {
   }
 
   _showBattleDialog(actorSnap, targetSnap, result, onDismiss, onRematch = null) {
+    audio.playCombat(result);
     // Cancel any in-flight dice animation or auto-dismiss from a previous battle dialog
     if (this._battleInterval)  { clearInterval(this._battleInterval);  this._battleInterval  = null; }
     if (this._autoDismissTimer) { clearTimeout(this._autoDismissTimer); this._autoDismissTimer = null; }
@@ -4179,6 +4198,24 @@ export class UIController {
       if (!el) { resolve('next'); return; }
 
       const { prevScore, prevNodes, humanFaction, fogOfWar, gameOver, winner, winReason, hasFullReplay, isCampaign } = opts;
+
+      // One sting per summary, highest-priority event wins:
+      // game over > node scoring > phase change.
+      {
+        const score = this.state?.nodeScore;
+        const scored = prevScore && score &&
+          (score.hero !== prevScore.hero || score.witch !== prevScore.witch);
+        const phaseKey = this.state?.phase ?? null;
+        if (gameOver) {
+          audio.play(!humanFaction || winner === humanFaction ? 'victory' : 'defeat');
+        } else if (scored) {
+          audio.play('score');
+        } else if (phaseKey && this._lastPhaseSoundKey !== null && this._lastPhaseSoundKey !== phaseKey) {
+          // Sting only when the phase actually flips (not every round).
+          audio.play(phaseKey === 'night' || phaseKey === 'dusk' ? 'nightfall' : 'phase');
+        }
+        this._lastPhaseSoundKey = phaseKey;
+      }
 
       // Collect kills, survivors found, summons, and resource flows from steps.
       // Fog-of-war filtering: skip opponent-only events the player can't see.

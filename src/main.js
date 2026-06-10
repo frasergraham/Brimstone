@@ -40,6 +40,7 @@ import { getFaction, findFaction, allFactions, getFactionsForSide, sightRangeFor
 import { compileTurnBattleSummary, compileTurnBattlePairs, collectTurnFinds } from './battle-utils.js';
 import { installKeybindings } from './keybindings.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
+import * as audio from './audio.js';
 import { playback, resetPlayback, replayFullGame, playbackDelay, swapState, patchAlive } from './playback.js';
 import { ReplayCache } from './replay-cache.js';
 import { makeShowLoadingAndReveal } from './loading-reveal.js';
@@ -2043,6 +2044,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         // appears on the summoner's own hex) — matches the SUMMON card's gate.
         if (actorSnap && _evVisible(ev, step.entitySnapshot)) {
           renderer.addSpawnAnim(actorSnap.col, actorSnap.row, '#b39ddb');
+          audio.play('summon');
           hadBattle = true;
         }
       }
