@@ -320,6 +320,7 @@
               <option value="standard" selected>Standard</option>
               <option value="regional">Regional</option>
               <option value="campaign">Campaign</option>
+              <option value="battle">Battle</option>
             </select>
           </div>
           <div class="qp-option-row">
@@ -668,10 +669,11 @@
         <div class="cg-option-row">
           <span class="cg-option-label">Map size</span>
           <select id="cg-map-size" class="setup-select">
-            <option value="skirmish">Skirmish (9×9)</option>
-            <option value="standard" selected>Standard (13×11)</option>
-            <option value="regional">Regional (17×13)</option>
-            <option value="campaign">Campaign (21×15)</option>
+            <option value="skirmish">Skirmish (10×10)</option>
+            <option value="standard" selected>Standard (14×14)</option>
+            <option value="regional">Regional (19×19)</option>
+            <option value="campaign">Campaign (23×23)</option>
+            <option value="battle">Battle (42×42)</option>
           </select>
         </div>
         <div class="cg-option-row">
@@ -782,9 +784,9 @@
       <div class="cg-option-row">
         <span class="cg-option-label">Map size</span>
         <select id="async-map-size" class="setup-select">
-          <option value="skirmish">Skirmish (9×9)</option>
-          <option value="standard" selected>Standard (13×11)</option>
-          <option value="regional">Regional (17×13)</option>
+          <option value="skirmish">Skirmish (10×10)</option>
+          <option value="standard" selected>Standard (14×14)</option>
+          <option value="regional">Regional (19×19)</option>
         </select>
       </div>
       <div class="cg-option-row">
@@ -1065,6 +1067,7 @@
         <div id="plan-food-row" class="plan-food-row"></div>
         <div class="plan-panel-footer">
           <button id="plan-clear-btn" class="plan-btn secondary" data-tip="Discard every queued action and plan this round again">✕ Clear</button>
+          <button id="plan-autoguard-btn" class="plan-btn secondary" data-tip="Fill the remaining action budget with Guard, leader first">🛡 Auto-Guard</button>
           <button id="plan-submit-btn" class="plan-btn primary" data-tip="Lock in your plan — it resolves alongside your opponent's">✓ Submit</button>
           <button id="plan-menu-btn" class="plan-btn secondary" style="display:none">← Return to Menu</button>
         </div>

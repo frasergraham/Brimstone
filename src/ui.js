@@ -12,7 +12,7 @@ import {
 } from './actions.js';
 import * as audio from './audio.js';
 
-import { PlanActionType, actionCosts, computeGhostState, computeProjectedInventory, interleavePlan } from './planner.js';
+import { PlanActionType, actionCosts, computeGhostState, computeProjectedInventory, interleavePlan, validatePlanAction, buildAutoGuardQueue } from './planner.js';
 import { ABILITIES } from './abilities.js';
 import { buildRollRows, buildOutcomeSummary } from './replay-timeline.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
@@ -595,6 +595,7 @@ export class UIController {
       if (this._selectedEntity) this._selectEntity(this._selectedEntity);
       this.onRedraw();
     });
+    _tap(this._el('plan-autoguard-btn'), () => this._autoFillGuard());
     _tap(this._el('plan-toggle-btn'), () => this._togglePlanPanel());
     _tap(this._el('plan-tab'),        () => this._togglePlanPanel());
 
@@ -1075,6 +1076,50 @@ export class UIController {
     this._renderPlanPanel();
     this._refreshUndoButtons();
     this._startUndoBtnTracking();
+  }
+
+  /**
+   * Auto-Guard: fill the remaining action budget with GUARD actions, the leader
+   * first then down the unit list in order, until the budget is used up. Never
+   * spends food — it stops at the true action budget. Guard charges stack, so a
+   * round-robin reinforces stances rather than wasting leftover budget.
+   */
+  _autoFillGuard() {
+    if (this._planSubmitted) return;
+
+    const used = interleavePlan(this._unitPlans).filter(a => actionCosts(a.type)).length;
+    let remaining = this._planBudget - used;
+    if (remaining <= 0) {
+      this._showPlanToast('No action budget left for Auto-Guard.');
+      return;
+    }
+
+    // Eligible units (skip stunned/blocked); the pure builder orders leader(s)
+    // first then round-robins to fill the budget.
+    const eligible = this._getControllableUnits()
+      .filter(u => validatePlanAction(this.state, { type: PlanActionType.GUARD, entityId: u.id }).valid)
+      .map(u => ({ id: u.id, isLeader: isLeaderType(u.type) }));
+    if (eligible.length === 0) {
+      this._showPlanToast('No units can guard right now.');
+      return;
+    }
+
+    const queue = buildAutoGuardQueue(eligible, remaining);
+    for (const id of queue) {
+      const action = { type: PlanActionType.GUARD, entityId: id };
+      if (!this._unitPlans.has(id)) this._unitPlans.set(id, []);
+      this._unitPlans.get(id).push(action);
+      this.onPlanActionAdded?.(action);
+    }
+    const added = queue.length;
+
+    this._refreshPlanOverlay();
+    this._renderPlanPanel();
+    this._refreshUndoButtons();
+    this._startUndoBtnTracking();
+    if (this._selectedEntity) this._selectEntity(this._selectedEntity);
+    this.onRedraw();
+    this._showPlanToast(`🛡 Auto-Guard: ${added} guard action${added === 1 ? '' : 's'} queued.`);
   }
 
   /** Recompute ghost overlay from the current plan and push to renderer. */

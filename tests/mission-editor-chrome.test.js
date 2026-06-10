@@ -112,8 +112,8 @@ describe('mapSizePreset', () => {
       assert.deepEqual(mapSizePreset(name), { cols: cfg.cols, rows: cfg.rows });
     }
   });
-  test('standard → 13×13', () => {
-    assert.deepEqual(mapSizePreset('standard'), { cols: 13, rows: 13 });
+  test('standard → 14×14', () => {
+    assert.deepEqual(mapSizePreset('standard'), { cols: 14, rows: 14 });
   });
   test('unknown / Custom → null (caller keeps manual X/Y)', () => {
     assert.equal(mapSizePreset('Custom'), null);

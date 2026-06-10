@@ -47,6 +47,16 @@ function tile(state, col, row) {
   return state.tiles.get(hexKey(col, row));
 }
 
+// Resolve the hex an entity occupies for COMBAT ADJACENCY (gang-up) purposes.
+// Within a TURN moves are simultaneous with battles, so the resolver publishes
+// each acting unit's end-of-turn position in `state._turnEndPositions`; an ally
+// that moves out of range this same turn must not flank. Falls back to the live
+// position outside the resolver (AI expected-value sims, raw tests).
+function combatHexKey(state, entity) {
+  const p = state?._turnEndPositions?.get?.(entity.id);
+  return p ? hexKey(p.col, p.row) : hexKey(entity.col, entity.row);
+}
+
 function hasEnemy(state, actor, col, row) {
   return state.entities.some(e => e.alive && e.owner !== actor.owner && e.col === col && e.row === row);
 }
@@ -996,10 +1006,10 @@ export function computeBattleContext(state, actor, target) {
   for (const n of getNeighbors(target.col, target.row)) targetHexes.add(hexKey(n.col, n.row));
 
   const atkAllies = state.entities.filter(e =>
-    e.alive && e.owner === actor.owner && e.id !== actor.id && targetHexes.has(hexKey(e.col, e.row))
+    e.alive && e.owner === actor.owner && e.id !== actor.id && targetHexes.has(combatHexKey(state, e))
   );
   const defAllies = state.entities.filter(e =>
-    e.alive && e.owner === target.owner && e.id !== target.id && targetHexes.has(hexKey(e.col, e.row))
+    e.alive && e.owner === target.owner && e.id !== target.id && targetHexes.has(combatHexKey(state, e))
   );
   const attackerAllies = atkAllies.length;
   const defenderAllies = defAllies.length;
@@ -1117,20 +1127,23 @@ export function executeBattle(state, actor, target) {
   const splashSpareSide  = attackerConcrete.splashSparesAllies() ? actor.owner : null;
   const splashKnockback  = attackerConcrete.splashKnockback();
   // Ranged attacks cannot crush — the rule set explicitly forbids it.
-  const isCrush  = !isRanged && hit && attackRoll >= 2 * defenseRoll;
+  // Damage tiers by roll ratio: great crush (≥3× defense roll) = 3, crush
+  // (≥2×) = 2, ordinary hit = 1. isGreatCrush implies isCrush.
+  const isCrush      = !isRanged && hit && attackRoll >= 2 * defenseRoll;
+  const isGreatCrush = !isRanged && hit && attackRoll >= 3 * defenseRoll;
 
   if (hit) {
-    // Crushing blow: attacker's roll is at least double the defender's roll
-    const totalDmg = isCrush ? 2 : 1;
+    const baseDmg = isGreatCrush ? 3 : isCrush ? 2 : 1;
 
-    // All damage goes directly to the defender. Effects on the defender
-    // (e.g. wounded → +1 damage taken) amplify each hit.
-    for (let d = 0; d < totalDmg; d++) {
-      const inc = target.applyIncomingDamage(1);
+    // Applied as a single blow so a defender's wounded (+1 damage taken) lifts
+    // the whole strike by +1 once — not once per point — capping a normal
+    // crush-on-wounded at 3 rather than 4.
+    {
+      const inc = target.applyIncomingDamage(baseDmg);
       damage += inc;
       const wasKilled = target.takeDamage(inc);
       dispatchTrigger('damaged', target, { state, amount: inc, source: actor });
-      if (wasKilled) { killed = true; break; }
+      if (wasKilled) killed = true;
     }
 
     // Fort takes -1 if the defender took any damage
@@ -1151,7 +1164,8 @@ export function executeBattle(state, actor, target) {
       const label = damage >= 2 ? `${damage} damage (crushing blow!)` : `${damage} damage`;
       log.push(`${target.displayName} takes ${label}. (${target.hp}/${target.maxHp} HP)`);
     }
-    if (isCrush) log.push(`💥 Crushing blow! (${attackRoll} vs ${defenseRoll})`);
+    if (isGreatCrush) log.push(`💥💥 Great crushing blow! (${attackRoll} vs ${defenseRoll})`);
+    else if (isCrush) log.push(`💥 Crushing blow! (${attackRoll} vs ${defenseRoll})`);
 
     // Crushing blows leave a wound on the target — +1 damage taken from
     // any source for the next 3 rounds. Universal (applies to all
@@ -1330,7 +1344,7 @@ export function executeFortAssault(state, actor, targetCol, targetRow) {
   const targetHexes = new Set([hexKey(targetCol, targetRow)]);
   for (const n of getNeighbors(targetCol, targetRow)) targetHexes.add(hexKey(n.col, n.row));
   const atkAllies = state.entities.filter(e =>
-    e.alive && e.owner === actor.owner && e.id !== actor.id && targetHexes.has(hexKey(e.col, e.row))
+    e.alive && e.owner === actor.owner && e.id !== actor.id && targetHexes.has(combatHexKey(state, e))
   );
   const atkAdvantage = Math.min(atkAllies.length, ADVANTAGE_CAP);
 
@@ -1711,18 +1725,21 @@ export function executeGuardStrike(state, guardian, target) {
   let damage = 0;
   let splashKills = [];
   let splashHits  = [];
-  // Ranged guard strikes never crush (mirrors ranged attacks).
-  const isCrush = !isRanged && hit && attackRoll >= 2 * defenseRoll;
+  // Ranged guard strikes never crush (mirrors ranged attacks). Damage tiers
+  // match the battle path: great crush (≥3×) = 3, crush (≥2×) = 2, hit = 1.
+  const isCrush      = !isRanged && hit && attackRoll >= 2 * defenseRoll;
+  const isGreatCrush = !isRanged && hit && attackRoll >= 3 * defenseRoll;
 
   if (hit) {
-    const totalDmg = isCrush ? 2 : 1;
+    const baseDmg = isGreatCrush ? 3 : isCrush ? 2 : 1;
 
-    for (let d = 0; d < totalDmg; d++) {
-      const inc = target.applyIncomingDamage(1);
+    // Single blow so a wounded defender takes +1 once (caps crush-on-wounded at 3).
+    {
+      const inc = target.applyIncomingDamage(baseDmg);
       damage += inc;
       const wasKilled = target.takeDamage(inc);
       dispatchTrigger('damaged', target, { state, amount: inc, source: guardian });
-      if (wasKilled) { killed = true; break; }
+      if (wasKilled) killed = true;
     }
 
     // Fort degradation on damage
@@ -1742,7 +1759,8 @@ export function executeGuardStrike(state, guardian, target) {
       const label = damage >= 2 ? `${damage} damage (crushing blow!)` : `${damage} damage`;
       log.push(`${target.displayName} takes ${label}. (${target.hp}/${target.maxHp} HP)`);
     }
-    if (isCrush) log.push(`💥 Crushing blow from guard!`);
+    if (isGreatCrush) log.push(`💥💥 Great crushing blow from guard!`);
+    else if (isCrush) log.push(`💥 Crushing blow from guard!`);
 
     // Splash damage on crush or kill — melee only. Ranged shots never splash.
     if (!isRanged && (isCrush || killed)) {

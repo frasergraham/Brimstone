@@ -44,6 +44,24 @@ function _sortCandidates(state, candidates) {
   return candidates;
 }
 
+// Project each acting unit's END-OF-TURN hex for this step: a unit whose next
+// action is a MOVE will stand on its destination; everyone else stays put.
+// executeBattle reads this (via `state._turnEndPositions`) so gang-up allies are
+// counted by where they end the TURN, not where they start it — moves are
+// simultaneous with battles, so an ally moving out of range this same turn no
+// longer flanks (and one moving into range does).
+function computeTurnEndPositions(candidates) {
+  const map = new Map();
+  for (const c of candidates) {
+    const front = c.queue[0];
+    if (front && front.type === PlanActionType.MOVE &&
+        Number.isInteger(front.toCol) && Number.isInteger(front.toRow)) {
+      map.set(c.entityId, { col: front.toCol, row: front.toRow });
+    }
+  }
+  return map;
+}
+
 // ── Event types ──────────────────────────────────────────────────────────────
 
 export const ResEventType = Object.freeze({
@@ -534,6 +552,7 @@ export function resolvePlansMP(state, playerEntries) {
       }
     }
     _sortCandidates(state, candidates);
+    state._turnEndPositions = computeTurnEndPositions(candidates);
 
     const eventsByPlayer = new Map();
     let anyAction = false;
@@ -563,6 +582,7 @@ export function resolvePlansMP(state, playerEntries) {
     stepIndex++;
   }
 
+  state._turnEndPositions = null;
   return steps;
 }
 
@@ -604,6 +624,7 @@ export function resolvePlans(state, heroPlan, witchPlan) {
       candidates.push({ budget: witchBudget, sink: witchEvents, entityId, queue });
     }
     _sortCandidates(state, candidates);
+    state._turnEndPositions = computeTurnEndPositions(candidates);
 
     for (const c of candidates) {
       const events = drainOneStep(state, c.queue, c.budget);
@@ -616,5 +637,6 @@ export function resolvePlans(state, heroPlan, witchPlan) {
     stepIndex++;
   }
 
+  state._turnEndPositions = null;
   return steps;
 }

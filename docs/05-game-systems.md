@@ -158,21 +158,28 @@ Defined in `Entity.resolveCombat()` in `src/entities.js`.
                                   │
                             compare totals
                                   │
-                    ┌─────────────┼──────────────┐
-                    │             │              │
-              ATK ≥ 2×DEF    ATK > DEF     DEF ≥ 2×ATK
-                    │             │              │
-              CRUSH (2 dmg)  HIT (1 dmg)   COUNTER (1 dmg
-              + splash       to defender    to attacker
-              to hex                        + splash)
+          ┌──────────┬────────┼────────┬──────────────┐
+          │          │        │        │              │
+    ATK ≥ 3×DEF  ATK ≥ 2×DEF  │   ATK > DEF      DEF ≥ 2×ATK
+          │          │        │        │              │
+   GREAT CRUSH    CRUSH       │    HIT (1 dmg)   COUNTER (1 dmg
+     (3 dmg)     (2 dmg)      │   to defender    to attacker
+   + splash      + splash     │                  + splash)
+   to hex        to hex
 ```
+
+Damage is applied as a **single blow**, so a defender's `wounded` (+1 damage
+taken) lifts the whole strike by +1 *once* — a normal crush on a wounded target
+is 3, not 4 (no per-point doubling). A great crush (ATK ≥ 3× DEF) deals 3, and
+both crush tiers apply `wounded` to a surviving target. Ranged attacks never
+crush.
 
 ### Modifiers
 
 | Modifier | Source | Effect |
 |----------|--------|--------|
 | **Phase bonus** | Night phase | Witch units +1 ATK |
-| **Gang-up** | Multiple attackers on same hex | +1d3 per additional ally |
+| **Gang-up** | Allies adjacent to the target | +1d3 per additional ally (capped at 3). Counted by each ally's **end-of-turn** position — an ally moving out of range this same turn no longer flanks; one moving into range does (`combatHexKey` + the resolver's `_turnEndPositions`) |
 | **Fortification** | Building fortified 1-4 | +1 DEF per level |
 | **Staff weapon** | Equipped staff | +2 ATK vs undead entities |
 | **Guard stance** | GUARD action | Free reactive strike when an enemy acts in reach (ranged units shoot, see below) |
@@ -410,10 +417,11 @@ Defined in `src/map.js`. Seeded procedural generation.
 
 | Size | Dimensions | Use case |
 |------|-----------|----------|
-| Skirmish | 9×7 | Quick games |
-| Standard | 13×11 | Default |
-| Regional | 17×15 | Large games |
-| Campaign | 21×19 | Epic games |
+| Skirmish | 10×10 | Quick games |
+| Standard | 14×14 | Default |
+| Regional | 19×19 | Large games |
+| Campaign | 23×23 | Epic games |
+| Battle | 42×42 | The Battle for Caleb's Hollow (also selectable) |
 
 ### Generation Pipeline
 

@@ -964,22 +964,23 @@ describe('mission-editor — edge resize guards & purity (item 3)', () => {
 
 describe('mission-editor — overlay map sizing (item 3)', () => {
   test('switching size updates dims and drops out-of-bounds overlay edits', () => {
-    const md = createOverlayMapDef({ seed: 1, mapSize: 'standard' }); // 13×13
-    // An overlay tile + enemy + survivor near the far corner.
-    md.overlay.tiles.push({ col: 11, row: 11, base: 'DIRT', structure: null, path: null, building: null, fortifyLevel: 0, resource: null, hiddenSurvivor: false, roadDirs: [] });
-    md.overlay.witchObjectives.push({ col: 12, row: 1, hexes: [{ col: 12, row: 1 }], label: 'N' });
+    const md = createOverlayMapDef({ seed: 1, mapSize: 'standard' }); // 14×14
+    // An overlay tile + enemy + survivor near the far corner — in-bounds on the
+    // 14×14 standard map but past the edge of the 10×10 skirmish map.
+    md.overlay.tiles.push({ col: 12, row: 12, base: 'DIRT', structure: null, path: null, building: null, fortifyLevel: 0, resource: null, hiddenSurvivor: false, roadDirs: [] });
+    md.overlay.witchObjectives.push({ col: 13, row: 1, hexes: [{ col: 13, row: 1 }], label: 'N' });
     const model = {
       mapDef: md,
-      enemyUnits: [{ type: 'zombie', col: 10, row: 10, overrides: {} }],
-      meta: { survivorStartPositions: [{ col: 12, row: 12 }] },
+      enemyUnits: [{ type: 'zombie', col: 11, row: 11, overrides: {} }],
+      meta: { survivorStartPositions: [{ col: 13, row: 13 }] },
     };
-    const res = setOverlayMapSize(model, 'skirmish'); // 9×9
+    const res = setOverlayMapSize(model, 'skirmish'); // 10×10
     assert.ok(res.ok);
     assert.equal(res.model.mapDef.mapSize, 'skirmish');
     assert.equal(res.model.mapDef.cols, MAP_SIZES.skirmish.cols);
-    assert.equal(res.model.mapDef.overlay.tiles.length, 0, 'col-11 tile dropped');
-    assert.equal(res.model.mapDef.overlay.witchObjectives.length, 0, 'col-12 node dropped');
-    assert.equal(res.model.enemyUnits.length, 0, 'col-10 enemy dropped');
+    assert.equal(res.model.mapDef.overlay.tiles.length, 0, 'col-12 tile dropped');
+    assert.equal(res.model.mapDef.overlay.witchObjectives.length, 0, 'col-13 node dropped');
+    assert.equal(res.model.enemyUnits.length, 0, 'col-11 enemy dropped');
     assert.equal(res.model.meta.survivorStartPositions.length, 0);
     assert.match(res.warning, /dropped/i);
   });

@@ -11,9 +11,9 @@
  *      renderer.
  *
  * The debug hotkeys that used to be bound globally in renderer-3d.js (D/F/T)
- * are gone — those toggles now live behind the `Escape` command console
- * (`/inspector`, `/forest`, `/fog`), freeing the rest of the keyboard for
- * gameplay controls.
+ * are gone — those toggles now live behind the backtick (`` ` ``) command
+ * console (`/inspector`, `/forest`, `/fog`), freeing the rest of the keyboard
+ * for gameplay controls. Escape deselects the current unit.
  */
 
 // AppModes during which the camera / unit controls are meaningful. MENU is
@@ -32,7 +32,8 @@ const ZOOM_RATE = 1.02;    // zoom multiplier per frame
  * the help stays in sync with what `resolveKeyAction` actually does.
  */
 export const SHORTCUTS = Object.freeze([
-  { keys: 'Esc',              label: 'Open the command console' },
+  { keys: '`',                label: 'Open the command console' },
+  { keys: 'Esc',              label: 'Deselect the current unit' },
   { keys: 'H (hold)',         label: 'Show this shortcuts overlay' },
   { keys: 'Arrow keys',       label: 'Pan the map' },
   { keys: 'Shift + ←/→', label: 'Rotate the camera' },
@@ -120,8 +121,11 @@ export function resolveKeyAction(e, { appMode, replayActive } = {}) {
   const key = e.key;
   const inGame = IN_GAME.has(appMode);
 
-  // Escape toggles the command console from anywhere.
-  if (key === 'Escape') return { id: 'console-toggle' };
+  // Backtick toggles the command console from anywhere.
+  if (key === '`') return { id: 'console-toggle' };
+
+  // Escape deselects the current unit (in-game only).
+  if (key === 'Escape') return inGame ? { id: 'deselect' } : null;
 
   // H (hold) shows the shortcuts overlay.
   if (!shift && (key === 'h' || key === 'H')) {
@@ -261,6 +265,14 @@ class KeybindingManager {
       if (this._blockingDialogOpen()) return;
       e.preventDefault();
       this._toggleConsole();
+      return;
+    }
+
+    if (action.id === 'deselect') {
+      // A blocking dialog owns the keyboard — don't deselect behind it.
+      if (this._blockingDialogOpen()) return;
+      e.preventDefault();
+      this.ui?._clearSelection?.();
       return;
     }
 
@@ -433,7 +445,7 @@ class KeybindingManager {
 
     this._consoleInput.addEventListener('keydown', (e) => {
       e.stopPropagation();
-      if (e.key === 'Escape') { e.preventDefault(); this._toggleConsole(); }
+      if (e.key === 'Escape' || e.key === '`') { e.preventDefault(); this._toggleConsole(); }
       else if (e.key === 'Enter') { e.preventDefault(); this._runConsoleLine(); }
     });
     el.addEventListener('mousedown', (e) => {

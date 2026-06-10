@@ -19,6 +19,7 @@ import {
 import { TileType, BuildingType, ResourceType, WeaponType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus, FORT_IMPASSABLE_THRESHOLD, legacyTileType, decomposeTileType, isBuildingFootprint } from '../src/tiles.js';
 import { hexKey, getNeighbors, hexDistance } from '../src/hex.js';
 import { applyPostRoundEffects } from '../src/post-round-effects.js';
+import { applyEffect } from '../src/effects.js';
 
 function freshState() {
   return new GameState(true, true);
@@ -583,6 +584,53 @@ describe('executeBattle', () => {
     assert.equal(r.cost, 1);
   });
 
+  // Damage tiers: hit=1, crush (atk ≥ 2× def)=2, great crush (atk ≥ 3× def)=3.
+  // A defender's `wounded` (+1 damage taken) lifts the whole blow by +1 ONCE —
+  // so a normal crush on a wounded target is 3, not 4 (no per-hit doubling).
+  function duel(atkDie, defDie, { wounded = false } = {}) {
+    const state = freshState();
+    // Neutralize the random-map tile so only the forced dice + stats decide the
+    // roll ratio (no stray fort/footprint/forest from procgen).
+    const t = state.tiles.get(hexKey(2, 2));
+    t.base = TileType.GRASS; t.fortifyLevel = 0; clearFootprint(t);
+    const attacker = createMinion(2, 2);
+    attacker.attack = 0; attacker.weapon = null; attacker.abilities = []; attacker.effects = [];
+    const defender = new Entity(EntityType.SURVIVOR, 'hero', 2, 2);
+    defender.defense = 0; defender.weapon = null; defender.abilities = []; defender.effects = [];
+    defender.maxHp = 30; defender.hp = 30;
+    if (wounded) applyEffect(defender, 'wounded');
+    state.entities = [attacker, defender];
+    state.phase = Phase.DAY;            // neutral — no phase bonus for either side
+    state.setForcedDice(atkDie, defDie);
+    return executeBattle(state, attacker, defender);
+  }
+
+  test('ordinary hit (atk just above def) deals 1', () => {
+    const r = duel(3, 2); // 3 vs 2 — hit, below the 2× crush line
+    assert.equal(r.hit, true);
+    assert.equal(r.damage, 1);
+  });
+
+  test('crush (atk ≥ 2× def) deals 2', () => {
+    const r = duel(2, 1); // 2 vs 1 — crush, below the 3× great line
+    assert.equal(r.damage, 2);
+  });
+
+  test('great crush (atk ≥ 3× def) deals 3', () => {
+    const r = duel(6, 2); // 6 vs 2 — exactly 3×
+    assert.equal(r.damage, 3);
+  });
+
+  test('crush on a WOUNDED target deals 3, not 4 (wounded bonus applied once)', () => {
+    const r = duel(2, 1, { wounded: true }); // base crush 2 + wounded +1 once
+    assert.equal(r.damage, 3);
+  });
+
+  test('great crush on a WOUNDED target deals 4 (3 base + wounded once)', () => {
+    const r = duel(6, 2, { wounded: true });
+    assert.equal(r.damage, 4);
+  });
+
   test('result includes attackRoll, defenseRoll, hit, margin', () => {
     const state = freshState();
     const minion = createMinion(state.hero.col, state.hero.row);
@@ -834,6 +882,38 @@ describe('executeBattle', () => {
     // This test verifies the breakdown field exists
     assert.ok(typeof r.attackerAllies === 'number');
     assert.ok(typeof r.defenderAllies === 'number');
+  });
+
+  test('gang-up counts allies by END-OF-TURN position — a fleeing ally does not flank', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const targetHex = emptyPassableNeighbor(state, hero);
+    if (!targetHex) return;
+    const minion = createMinion(targetHex.col, targetHex.row);
+    minion.maxHp = 50; minion.hp = 50; // survive two probe battles
+    state.entities.push(minion);
+
+    // An ally flanking the target (adjacent to the target, not on the hero's hex).
+    const allyHex = getNeighbors(targetHex.col, targetHex.row).find(n => {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      return t && legacyTileType(t) !== TileType.RIVER && !isBuildingFootprint(t)
+        && !(n.col === hero.col && n.row === hero.row);
+    });
+    if (!allyHex) return;
+    const ally = new Entity(EntityType.SURVIVOR, 'hero', allyHex.col, allyHex.row);
+    ally.items = {};
+    state.entities.push(ally);
+
+    // Baseline — the ally stands adjacent to the target, so it flanks.
+    const before = executeBattle(state, hero, minion);
+    assert.ok(before.attackerAllies >= 1, 'an adjacent ally should flank by default');
+
+    // The resolver projects the ally's END-OF-TURN hex out of range (it moves
+    // away this same turn). It must no longer be counted as a gang-up ally.
+    state._turnEndPositions = new Map([[ally.id, { col: minion.col + 4, row: minion.row }]]);
+    const after = executeBattle(state, hero, minion);
+    assert.equal(after.attackerAllies, before.attackerAllies - 1,
+      'an ally whose end-of-turn position is out of range must not flank');
   });
 
   test('multiple allies each add a d3 die (up to cap of 3)', () => {

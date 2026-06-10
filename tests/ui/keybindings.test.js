@@ -19,9 +19,14 @@ function ev(key, mods = {}) {
 }
 
 describe('resolveKeyAction — console + help', () => {
-  test('Escape toggles the console from any mode', () => {
-    assert.deepEqual(resolveKeyAction(ev('Escape'), { appMode: 'MENU' }), { id: 'console-toggle' });
-    assert.deepEqual(resolveKeyAction(ev('Escape'), { appMode: 'PLANNING' }), { id: 'console-toggle' });
+  test('Backtick toggles the console from any mode', () => {
+    assert.deepEqual(resolveKeyAction(ev('`'), { appMode: 'MENU' }), { id: 'console-toggle' });
+    assert.deepEqual(resolveKeyAction(ev('`'), { appMode: 'PLANNING' }), { id: 'console-toggle' });
+  });
+
+  test('Escape deselects in-game, no-ops in the menu', () => {
+    assert.deepEqual(resolveKeyAction(ev('Escape'), { appMode: 'PLANNING' }), { id: 'deselect' });
+    assert.equal(resolveKeyAction(ev('Escape'), { appMode: 'MENU' }), null);
   });
 
   test('H shows help only while in a game', () => {

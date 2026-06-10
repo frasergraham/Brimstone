@@ -39,6 +39,25 @@ export function actionCosts(type) {
   return type !== PlanActionType.USE_ITEM && type !== PlanActionType.EQUIP_WEAPON;
 }
 
+/**
+ * Auto-Guard queue builder (pure). Given the eligible units and the remaining
+ * action budget, returns the ordered list of entity ids to receive a GUARD —
+ * leader(s) first, then the rest in their given order, round-robin until the
+ * budget is used up (guard charges stack, so leftover budget reinforces).
+ *
+ * @param {Array<{id:*, isLeader?:boolean}>} units
+ * @param {number} remaining
+ * @returns {Array<*>} entity ids, one per guard action to queue (length = max(0, remaining))
+ */
+export function buildAutoGuardQueue(units, remaining) {
+  if (!Array.isArray(units) || units.length === 0 || remaining <= 0) return [];
+  // Stable sort keeps non-leaders in their given (caller) order.
+  const ordered = [...units].sort((a, b) => (b.isLeader ? 1 : 0) - (a.isLeader ? 1 : 0));
+  const out = [];
+  for (let i = 0; i < remaining; i++) out.push(ordered[i % ordered.length].id);
+  return out;
+}
+
 // ── Entity snapshot ──────────────────────────────────────────────────────────
 // Captures the fields needed by the battle dialog and resolution event stream.
 // Moved here from server/lobby.js so both the resolver and client code share it.

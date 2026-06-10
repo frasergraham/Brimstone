@@ -270,7 +270,7 @@ describe('json-mission — validation hardening', () => {
       mode: 'procedural', seed: 1, mapSize: 'skirmish', nodeCount: 1,
       overlay: { tiles: [{ col: 50, row: 0, type: 'GRASS' }] },
     };
-    assert.throws(() => validateMissionJSON(m), /outside the 9×9 map extent/);
+    assert.throws(() => validateMissionJSON(m), /outside the 10×10 map extent/);
   });
 
   test('#2 rejects an unknown win objective type', () => {

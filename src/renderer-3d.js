@@ -6062,7 +6062,7 @@ export class Renderer3D {
     // from the browser console to inspect the runtime material/light state of
     // the road and river ribbons. `inspector()` toggles the Babylon Inspector.
     // The inspector / border-forest / fog-debug toggles are also reachable
-    // in-game through the command console (Escape → /inspector, /forest, /fog);
+    // in-game through the command console (backtick → /inspector, /forest, /fog);
     // see src/keybindings.js. No-op when `window` is undefined (tests).
     if (typeof window !== 'undefined') {
       window.__brimstone3dDebug = {
