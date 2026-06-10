@@ -112,7 +112,7 @@ Campaign missions are **data-driven JSON** under `src/campaign/missions/*.json` 
 
 ## Conversations (campaign cutscenes)
 
-A conversation is an in-world dialog between two bound characters, presented through the replay machinery: the camera frames the participants (in FIXED camera mode it stays put — billboard bubbles still render in-world, with an edge arrow when off-screen), dialog appears as speech-bubble billboards above the speakers, a 💬 turn card joins the replay timeline (SKIP while playing → REPLAY when done), and the replay **NEXT** button steps dialog lines.
+A conversation is an in-world dialog between two bound characters, presented through the replay machinery: the camera frames the participants (in FIXED camera mode it stays put — billboard bubbles still render in-world, with an edge arrow when off-screen), dialog appears as speech-bubble billboards above the speakers, a 💬 turn card joins the replay timeline (SKIP while playing → REPLAY when done, plus a **CONTINUE** button on round-boundary/intro conversations that dismisses the card and opens planning), and the replay **NEXT** button steps dialog lines. Intro conversations present as a "turn 0 resolution" — planning chrome is hidden (`ui.exitPlanningMode`) and the app holds in RESOLVING until CONTINUE.
 
 **1. Write the markdown** in `src/campaign/conversations/<file>.md` (hand-authored — the editor only references the file id). Format (`src/campaign/conversation-parser.js`):
 

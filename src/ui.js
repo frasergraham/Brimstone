@@ -5233,7 +5233,10 @@ export class UIController {
            +   `<div class="replay-step-label">💬 ${esc(col.title)}</div>`
            + `</div>`
            + rows
-           + `<button class="replay-conv-btn" type="button">SKIP</button>`
+           + `<div class="replay-conv-btns">`
+           +   `<button class="replay-conv-btn" type="button">SKIP</button>`
+           +   `<button class="replay-conv-continue" type="button" style="display:none">CONTINUE ▶</button>`
+           + `</div>`
            + `</div>`;
     }
     return `<div class="replay-step-col" data-step="${col.stepIndex}">`
@@ -5248,20 +5251,29 @@ export class UIController {
 
   /**
    * Flip a conversation card between its live and finished states and (re)wire
-   * its footer button: 'playing' → SKIP (jump dialog to the end), 'done' →
-   * REPLAY (re-run the dialog presentation). Targets the card by conversation
-   * stepIndex key (`conv:<id>`).
+   * its footer buttons: 'playing' → SKIP (jump dialog to the end); 'done' →
+   * REPLAY (re-run the dialog presentation) plus, when an `onContinue` handler
+   * is supplied (mission-intro/turn-0 conversations), a CONTINUE button that
+   * dismisses the card and lets the game proceed to planning. Mid-replay
+   * conversations pass no onContinue — the round resumes on its own.
+   * Targets the card by conversation stepIndex key (`conv:<id>`).
    */
-  setConversationCardState(convoStepIndex, cardState, { onSkip, onReplay } = {}) {
+  setConversationCardState(convoStepIndex, cardState, { onSkip, onReplay, onContinue } = {}) {
     const col = this._replayCol(convoStepIndex);
     const btn = col?.querySelector?.('.replay-conv-btn');
+    const contBtn = col?.querySelector?.('.replay-conv-continue');
     if (!btn) return;
     if (cardState === 'done') {
       btn.textContent = 'REPLAY';
       btn.onclick = onReplay ?? null;
+      if (contBtn) {
+        contBtn.style.display = onContinue ? '' : 'none';
+        contBtn.onclick = onContinue ?? null;
+      }
     } else {
       btn.textContent = 'SKIP';
       btn.onclick = onSkip ?? null;
+      if (contBtn) contBtn.style.display = 'none';
     }
   }
 

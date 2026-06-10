@@ -5584,10 +5584,15 @@ img.plan-step-avatar {
    SKIP/REPLAY footer button (wired by ui.setConversationCardState). */
 .replay-step-col.replay-conv-col { border-color: rgba(201, 162, 39, 0.55); }
 .replay-step-col.replay-conv-col.is-current { border-color: rgba(232, 197, 88, 0.85); }
-.replay-conv-btn {
+.replay-conv-btns {
+  display: flex;
+  justify-content: center;
+  gap: 0.5rem;
+  margin: 0.45rem 0 0.1rem;
+}
+.replay-conv-btn,
+.replay-conv-continue {
   pointer-events: auto;                /* the timeline itself ignores pointers */
-  display: block;
-  margin: 0.45rem auto 0.1rem;
   padding: 0.25rem 1.1rem;
   background: rgba(60, 45, 20, 0.7);
   border: 1px solid rgba(201, 162, 39, 0.6);
@@ -5599,7 +5604,15 @@ img.plan-step-avatar {
   cursor: pointer;
   transition: color 0.15s, border-color 0.15s;
 }
-.replay-conv-btn:hover { color: #fff; border-color: rgba(232, 197, 88, 0.9); }
+.replay-conv-btn:hover,
+.replay-conv-continue:hover { color: #fff; border-color: rgba(232, 197, 88, 0.9); }
+/* CONTINUE is the primary affordance once the conversation ends — solid gold. */
+.replay-conv-continue {
+  background: rgba(201, 162, 39, 0.85);
+  color: #1a1208;
+  animation: offscreen-arrow-pulse 1.2s ease-in-out infinite;
+}
+.replay-conv-continue:hover { color: #000; background: rgba(232, 197, 88, 0.95); }
 
 /* Off-screen conversation arrow — edge-clamped glyph pointing at dialog
    happening outside the viewport (fixed-camera mode). Positioned/rotated

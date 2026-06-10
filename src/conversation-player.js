@@ -80,6 +80,10 @@ export async function playConversation(opts) {
   // ── HUD (round-boundary only — mid-replay reuses the step loop's bar) ──────
   const prevStepRequested = playback.stepRequested;
   if (manageHud && ui) {
+    // Turn-0 resolution presentation: the conversation plays as a replay, not
+    // over the planning chrome — drop any plan panel/selection and enter
+    // RESOLVING before the first bubble appears.
+    ui.exitPlanningMode?.();
     setMode(AppMode.RESOLVING);
     playback.paused = !ui.replayAutoPlay;
     playback.stepRequested = false;
@@ -122,9 +126,19 @@ export async function playConversation(opts) {
     ui?.hideOffscreenArrow?.();
   }
 
-  // ── Finished: flip the card to REPLAY ─────────────────────────────────────
+  // ── Finished: flip the card to REPLAY (+ CONTINUE for turn-0 intros) ──────
   let replaying = false;
-  const replayPresentation = async () => {
+  let continueRequested = false;
+  const showDone = () => {
+    ui?.setConversationCardState?.(cardKey, 'done', {
+      onReplay: replayPresentation,
+      // Turn-0/round-boundary conversations gate on an explicit CONTINUE so
+      // the player controls when the card dismisses and planning opens.
+      // Mid-replay conversations omit it — the round resumes on its own.
+      onContinue: manageHud ? () => { continueRequested = true; } : undefined,
+    });
+  };
+  async function replayPresentation() {
     if (replaying || presenting) return;
     replaying = true;
     let replaySkipped = false;
@@ -139,11 +153,11 @@ export async function playConversation(opts) {
     } finally {
       renderer?.clearSpeechBubbles?.();
       ui?.hideOffscreenArrow?.();
-      ui?.setConversationCardState?.(cardKey, 'done', { onReplay: replayPresentation });
+      showDone();
       replaying = false;
     }
-  };
-  ui?.setConversationCardState?.(cardKey, 'done', { onReplay: replayPresentation });
+  }
+  showDone();
 
   // ── onComplete scripted actions (e.g. the NPC walks away) ─────────────────
   if (runOnComplete && convDef?.onComplete?.length) {
@@ -154,6 +168,21 @@ export async function playConversation(opts) {
 
   // ── Cleanup ────────────────────────────────────────────────────────────────
   if (manageHud && ui) {
+    // Hold the finished card on screen until the player taps CONTINUE (NEXT
+    // works too). A SKIP carries the same intent — fall straight through.
+    if (!skipFlag()) {
+      ui.setReplayNextReady?.(true);
+      while (!continueRequested && !playback.stepRequested
+             && !playback.jumpToEnd && !playback.aborted) {
+        await _sleep(50);
+      }
+      ui.setReplayNextReady?.(false);
+      playback.stepRequested = false;
+      // A REPLAY re-run may still be presenting when CONTINUE lands — let it
+      // settle so its finally block doesn't repaint a dismissed card.
+      while (replaying) await _sleep(50);
+    }
+    ui.hideReplayTimeline?.();
     ui.hideInlineReplayHUD?.();
     playback.jumpToEnd = false;
     playback.paused = false;
