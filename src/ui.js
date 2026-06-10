@@ -3714,11 +3714,19 @@ export class UIController {
     const x0 = parseFloat(btn.style.getPropertyValue('--arc-x')) || 0;
     const y0 = parseFloat(btn.style.getPropertyValue('--arc-y')) || 0;
     btn._arcOrig = { x: x0, y: y0 };
+    // The size change is instant but the centre-transform would TRANSITION to
+    // its compensated position — reading as a jump to an origin point that
+    // glides back. Disable the transition so the class change and the centre
+    // offset land in the same frame: the top-left never moves, only the
+    // bottom and right edges grow.
+    btn.style.transition = 'none';
     btn.classList.add('arc-expanded');
     const w1 = btn.offsetWidth, h1 = btn.offsetHeight;
     // Keep the top-left corner fixed: the centre moves by half the growth.
     btn.style.setProperty('--arc-x', `${(x0 + (w1 - w0) / 2).toFixed(1)}px`);
     btn.style.setProperty('--arc-y', `${(y0 + (h1 - h0) / 2).toFixed(1)}px`);
+    btn.offsetHeight; // commit class + vars together before re-enabling
+    btn.style.transition = '';
     btn.style.transitionDelay = '0ms';
     // Re-layout the entries below: shift down by the height delta.
     const dh = h1 - h0;
@@ -3735,12 +3743,17 @@ export class UIController {
 
   _collapseArcItem(btn, btns) {
     if (!btn.classList.contains('arc-expanded')) return;
+    // Same frame-atomic treatment in reverse — shrink and restore the centre
+    // together so the top-left stays pinned on the way back too.
+    btn.style.transition = 'none';
     btn.classList.remove('arc-expanded');
     if (btn._arcOrig) {
       btn.style.setProperty('--arc-x', `${btn._arcOrig.x.toFixed(1)}px`);
       btn.style.setProperty('--arc-y', `${btn._arcOrig.y.toFixed(1)}px`);
       btn._arcOrig = null;
     }
+    btn.offsetHeight;
+    btn.style.transition = '';
     const idx = btns.indexOf(btn);
     for (let j = idx + 1; j < btns.length; j++) {
       const b = btns[j];
