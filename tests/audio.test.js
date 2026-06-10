@@ -40,6 +40,12 @@ describe('pickCombatSound outcome priority', () => {
   });
 });
 
+describe('sound registry', () => {
+  test('UI click sound exists', () => {
+    assert.ok(audio.SOUND_NAMES.includes('click'));
+  });
+});
+
 describe('mute state', () => {
   test('toggle flips and reads back', () => {
     const start = audio.isMuted();

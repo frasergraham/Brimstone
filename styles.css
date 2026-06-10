@@ -4501,6 +4501,30 @@ body.renderer-3d.debug-counters #cam-counter { display: block; }
   pointer-events: none;
   z-index: 55;
 }
+
+/* Hit/crush odds above attackable enemies while planning an attack.
+   Sits below the undo layer; never interactive. */
+#odds-badge-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 54;
+}
+.odds-badge {
+  position: fixed;
+  transform: translate(-50%, -100%);
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1.05;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.95), 0 0 4px rgba(0,0,0,0.8);
+  white-space: nowrap;
+}
+.odds-badge .odds-hit   { color: #ff5346; }
+.odds-badge .odds-crush { color: #b01313; font-size: 0.64rem; }
 .undo-float-btn {
   position: fixed;
   transform: translate(-50%, -100%);

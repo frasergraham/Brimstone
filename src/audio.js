@@ -50,8 +50,10 @@ function _ensureCtx() {
 }
 
 /** Arm a one-shot user-gesture listener so the context can start. */
+let _initDone = false;
 export function init() {
-  if (typeof window === 'undefined') return;
+  if (typeof window === 'undefined' || _initDone) return;
+  _initDone = true;
   const unlock = () => { if (!_muted) _ensureCtx(); };
   window.addEventListener('pointerdown', unlock, { once: true, passive: true });
   window.addEventListener('keydown', unlock, { once: true });
@@ -108,6 +110,11 @@ function _noise(ctx, { at = 0, dur = 0.1, gain = 0.2, filterFreq = 1200, filterT
 // Short gothic-flavored stings. Keep every sound under ~0.8s.
 
 const SOUNDS = {
+  click(ctx) {
+    // Soft UI tick — quiet and short so rapid taps never grate.
+    _noise(ctx, { dur: 0.025, gain: 0.10, filterFreq: 2600, filterType: 'bandpass' });
+    _tone(ctx, { freq: 1400, endFreq: 900, type: 'triangle', dur: 0.035, gain: 0.07 });
+  },
   hit(ctx) {
     _noise(ctx, { dur: 0.08, gain: 0.3, filterFreq: 900 });
     _tone(ctx, { freq: 180, endFreq: 110, type: 'square', dur: 0.09, gain: 0.18 });

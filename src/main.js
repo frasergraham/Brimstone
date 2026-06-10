@@ -1189,6 +1189,9 @@ async function _run3DCombatCardHold(actorSnap, targetSnap, result, redrawFn) {
 }
 
 function _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn) {
+  // Single audio hook for every combat display path (2D dialog, fast toast,
+  // 3D card-hold, autoplay, replay) — all of them funnel through here.
+  audio.playCombat(result);
   renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
   // Pass entityId so the renderer flags the affected standee with
   // `_pendingDespawn`. _syncEntityStandees skips disposal until the "-N"
@@ -2678,6 +2681,19 @@ window.addEventListener('resize', () => {
   renderer.resize();
   redraw();
 });
+
+// ── UI click sounds ───────────────────────────────────────────────────────────
+// Every button press and menu selection ticks. Delegated in the capture phase
+// so handlers that stopPropagation can't silence it; the same first gesture
+// also unlocks the AudioContext (audio.init).
+
+audio.init();
+document.addEventListener('click', (e) => {
+  if (e.target?.closest?.('button, select, [role="button"]')) audio.play('click');
+}, { capture: true, passive: true });
+document.addEventListener('change', (e) => {
+  if (e.target?.closest?.('select')) audio.play('click');
+}, { capture: true, passive: true });
 
 // ── Setup screen ──────────────────────────────────────────────────────────────
 

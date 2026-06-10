@@ -84,6 +84,8 @@ export class UIController {
     this._pendingEnemyPick   = null;  // { units[] } — enemy info disambiguation
     this._popupVisible    = false;   // tracks whether the action popup is shown
     this._selectedTile    = null;    // { col, row } — tile-only selection (no entity)
+    this._oddsBadges      = [];      // desired hit/crush badges over attackable enemies
+    this._oddsBadgeRaf    = null;    // RAF id for odds-badge tracking loop
     this._arcCloseTimer   = null;    // setTimeout id for arc close animation
     this._arcTrackingRaf  = null;    // rAF id for pan/zoom tracking loop
     this._arcItems        = null;    // current arc item descriptors (for line drawing)
@@ -1833,8 +1835,126 @@ export class UIController {
     this.renderer.clearOverlaysByLayer('highlight-disc');
   }
 
+  // ── Odds badges (hit/crush % above attackable enemies) ───────────────────
+  //
+  // Whenever an enemy hex is red-highlighted in plan mode, a small two-line
+  // badge floats above the enemy icon: hit % (red) and crush % (deep red).
+  // DOM labels pinned to hexes via hexToCanvasPos + RAF tracking — the same
+  // renderer-agnostic pattern as the floating UNDO buttons.
+
+  /**
+   * Desired badges for the current selection: one per red-highlighted hex.
+   * When several defenders share a hex, the badge shows the best (highest
+   * hit %) — the defender-picker arc shows exact per-target numbers on tap.
+   * @returns {Array<{key:string,col:number,row:number,hit:number,crush:number}>}
+   */
+  _computeOddsBadges() {
+    if (!this._planMode || this._planSubmitted) return [];
+    const actor = this._selectedEntity;
+    if (!actor || this._isEnemySelection) return [];
+    const { actionType } = this._awaitingTarget || {};
+    // Same modes that draw the red battle-target overlay.
+    if (actionType && actionType !== ActionType.MOVE && actionType !== ActionType.BATTLE) return [];
+    const b = this._validActions.find(a => a.type === ActionType.BATTLE);
+    if (!b?.targets?.length) return [];
+
+    const state = this.state;
+    let targets = b.targets;
+    if (state.fogOfWar !== 'none') {
+      const visHexes = getVisiblePositions(state, actor.owner);
+      targets = targets.filter(t => visHexes.has(hexKey(t.col, t.row)));
+    }
+
+    const byHex = new Map();
+    for (const t of targets) {
+      const odds = this._attackOdds(actor, t);
+      if (!odds) continue;
+      const key = hexKey(t.col, t.row);
+      const cur = byHex.get(key);
+      if (!cur || odds.hit > cur.hit) {
+        byHex.set(key, { key, col: t.col, row: t.row, hit: odds.hit, crush: odds.crush });
+      }
+    }
+    return [...byHex.values()];
+  }
+
+  /** Recompute desired badges (call when selection / plan / targets change). */
+  _updateOddsBadges() {
+    this._oddsBadges = this._computeOddsBadges();
+    this._refreshOddsBadges();
+    if (this._oddsBadges.length > 0) this._startOddsBadgeTracking();
+  }
+
+  /** Position the cached badges; reconciles DOM children like the undo layer. */
+  _refreshOddsBadges() {
+    const layer = this._el('odds-badge-layer');
+    if (!layer) return;
+
+    const badges = (this._planMode && !this._planSubmitted && this.renderer && this.canvas)
+      ? (this._oddsBadges ?? [])
+      : [];
+    if (badges.length === 0) {
+      if ((layer.childNodes?.length ?? 0)) layer.innerHTML = '';
+      return;
+    }
+
+    const canvasRect = this.canvas.getBoundingClientRect();
+    const scale = canvasRect.width / this.canvas.width;
+    const hexScreenPx = this.renderer.hexSize * scale * this.renderer.zoomLevel;
+    const pct = p => `${Math.round(p * 100)}%`;
+
+    const desired = new Map();
+    for (const bdg of badges) {
+      const { x, y } = this.renderer.hexToCanvasPos(bdg.col, bdg.row);
+      const sx = canvasRect.left + x * scale;
+      const sy = canvasRect.top  + y * scale - hexScreenPx * 0.95;
+      desired.set(bdg.key, { sx, sy, bdg });
+    }
+
+    const existing = new Map();
+    for (const child of Array.from(layer.children || [])) {
+      const k = child.dataset?.key;
+      if (k && desired.has(k)) existing.set(k, child);
+      else if (typeof child.remove === 'function') child.remove();
+    }
+    for (const [key, { sx, sy, bdg }] of desired) {
+      let el = existing.get(key);
+      if (!el) {
+        el = document.createElement('div');
+        el.className = 'odds-badge';
+        el.dataset.key = key;
+        const crushLine = bdg.crush > 0.005
+          ? `<span class="odds-crush">${pct(bdg.crush)}💥</span>` : '';
+        el.innerHTML = `<span class="odds-hit">${pct(bdg.hit)}</span>${crushLine}`;
+        layer.appendChild(el);
+      }
+      el.style.left = `${sx}px`;
+      el.style.top  = `${sy}px`;
+    }
+  }
+
+  /**
+   * RAF loop: keep badges pinned during pan/zoom and live against selection /
+   * plan changes (recomputes desired badges each frame — the math is a few
+   * dozen iterations per target). Self-terminates once no badges remain.
+   */
+  _startOddsBadgeTracking() {
+    if (this._oddsBadgeRaf) return;
+    const tick = () => {
+      this._oddsBadgeRaf = null;
+      this._oddsBadges = this._computeOddsBadges();
+      this._refreshOddsBadges();
+      const layer = this._el('odds-badge-layer');
+      if (layer && (layer.childNodes?.length ?? 0) > 0) {
+        this._oddsBadgeRaf = requestAnimationFrame(tick);
+      }
+    };
+    this._oddsBadgeRaf = requestAnimationFrame(tick);
+  }
+
   _updateHighlights() {
     this._clearTargetOverlays();
+    this._updateOddsBadges();
     if (!this._selectedEntity) return;
 
     const { actionType } = this._awaitingTarget || {};
@@ -1919,10 +2039,6 @@ export class UIController {
       this.renderer.clearOverlaysByLayer('highlight-disc');
 
       const executeFight = (target) => {
-        // Odds preview toast — shown first so budget warnings from
-        // _addToPlan (plan full / over budget) take precedence over it.
-        const oddsText = this._formatOddsText(this._attackOdds(actor, target));
-        if (oddsText) this._showPlanToast(`⚔ ${target.displayName}: ${oddsText}`);
         // Add battle to plan, then re-select the actor so red
         // battle highlights refresh naturally — clicking the same enemy again stacks another attack.
         this._addToPlan({ type: PlanActionType.BATTLE_UNIT, entityId: actor.id, targetId: target.id, targetCol: target.col, targetRow: target.row });
@@ -3247,7 +3363,6 @@ export class UIController {
   _showBattleToast(actorSnap, targetSnap, result) {
     const container = this._el('battle-toast-container');
     if (!container) return;
-    audio.playCombat(result);
 
     const outcome = result.killed
       ? '💀 slain'
@@ -3594,7 +3709,9 @@ export class UIController {
   }
 
   _showBattleDialog(actorSnap, targetSnap, result, onDismiss, onRematch = null) {
-    audio.playCombat(result);
+    // Combat audio fires from _playBattleResultAnims (main.js) — the one
+    // point every display path (2D dialog, toast, 3D card-hold) funnels
+    // through — so no sound here.
     // Cancel any in-flight dice animation or auto-dismiss from a previous battle dialog
     if (this._battleInterval)  { clearInterval(this._battleInterval);  this._battleInterval  = null; }
     if (this._autoDismissTimer) { clearTimeout(this._autoDismissTimer); this._autoDismissTimer = null; }
