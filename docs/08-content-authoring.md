@@ -110,4 +110,57 @@ Campaign missions are **data-driven JSON** under `src/campaign/missions/*.json` 
 
 **Difficulty check:** run `node scripts/headless-campaign.js <missionId> 50` to AI-play the mission and estimate win rates before shipping it.
 
+## Conversations (campaign cutscenes)
+
+A conversation is an in-world dialog between two bound characters, presented through the replay machinery: the camera frames the participants (in FIXED camera mode it stays put — billboard bubbles still render in-world, with an edge arrow when off-screen), dialog appears as speech-bubble billboards above the speakers, a 💬 turn card joins the replay timeline (SKIP while playing → REPLAY when done), and the replay **NEXT** button steps dialog lines.
+
+**1. Write the markdown** in `src/campaign/conversations/<file>.md` (hand-authored — the editor only references the file id). Format (`src/campaign/conversation-parser.js`):
+
+```markdown
+---
+id: ch1m1-intro
+title: A Voice at the Inn Door
+roles: hero, innkeeper
+---
+
+# comments and blank lines are ignored
+innkeeper: Dialog text. Indented or un-prefixed lines
+  continue the previous line.
+hero: A reply.
+```
+
+Roles are **slots** — the mission binds them to live entities at trigger time.
+
+**2. Declare it in the mission JSON** (all validated by `validateMissionJSON`):
+
+```json
+"npcs": [{ "id": "innkeeper_john", "survivorName": "John O'Connor", "displayTitle": "Innkeeper", "col": 3, "row": 6 }],
+"conversations": [{
+  "id": "ch1m1_intro", "file": "ch1m1-intro",
+  "bindings": { "hero": "hero", "innkeeper": "npc:innkeeper_john" },
+  "onComplete": [
+    { "action": "move", "npc": "innkeeper_john", "path": [{"col": 2, "row": 5}] },
+    { "action": "despawn", "npc": "innkeeper_john" }
+  ]
+}],
+"storyTriggers": [{ "type": "round", "round": 1, "conversation": "ch1m1_intro" }]
+```
+
+- **Bindings grammar** (`src/campaign/conversation-registry.js`): `"hero"` (the leader), `"npc:<npcId>"` (a scripted NPC from `npcs[]`), `"survivor:<Name>"` (a live roster survivor by name). If any role can't be bound at trigger time (e.g. the NPC died), the conversation is skipped with a console warning.
+- **Triggers** reuse the storyTrigger gating (`round`/`area`/`condition`). A trigger carries either a `conversation` id **or** `title`/`text` — never both. Round-boundary conversations play before planning opens; **area triggers interleave mid-replay** at the exact resolution step they're satisfied, inserting their card into the live timeline.
+- **Dedup:** a conversation trigger **without** a `flag` replays on every mission attempt (per-attempt `state._firedConversations`); add a `flag` to make it once-per-campaign via `storyFlags`.
+
+**Scripted NPC actions** (`src/campaign/scripted-actions.js`) drive cutscene behavior — usable in a conversation's `onComplete` list, run sequentially:
+
+| Action | Fields | Effect |
+|--------|--------|--------|
+| `spawn` | `npc`, `col`, `row` | Create the NPC (def from `npcs[]`) at a hex |
+| `move` | `npc`, `path: [{col,row},…]` | Walk the NPC along the path (animated) |
+| `despawn` | `npc` | Remove the NPC from the map |
+| `wait` | `ms` | Pause between actions |
+
+Scripted NPCs (`npcs[]`) spawn at mission init as hero-owned survivors tagged `isNpc` — view-only in game (not plannable, never join the roster, excluded from survivor-count objectives), and the tag survives save/resume via state-sync. Playback orchestration lives in `src/conversation-player.js`.
+
+The Mission Editor's Timeline tab has an **NPCs & Conversations** lane for the JSON side (NPC defs, conversation defs, and a Conversation select on trigger cards); the markdown itself stays hand-authored.
+
 > **Admin tooling:** `/admin/tools` (`admin-tools.html`) is the unified **Caleb's Hollow Tools** page — **Assets** (Babylon 3D model browser) | **Lighting** (Renderer3D tuner) | **Mission Editor** tabs, each lazy-initialised on first activation.

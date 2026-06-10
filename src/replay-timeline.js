@@ -260,6 +260,34 @@ export function isEventVisible(ev, ents, isVisible, { PlanActionType: PA, ResEve
  *   fogged step yields an empty `entries` array so column count tracks the
  *   animation's step count (keeps the slide aligned).
  */
+/**
+ * Build the single-column digest for a campaign conversation turn card. Same
+ * column shape as buildStepDigest output so ui.showReplayTimeline renders it
+ * unchanged; the `kind: 'conversation'` flag drives the special card chrome
+ * (💬 header + SKIP/REPLAY footer button). stepIndex is a string key so a
+ * mid-replay insert never collides with a numeric resolution step.
+ *
+ * @param {{ id, title, lines }} convo — parsed conversation (conversation-parser.js).
+ * @param {Map<string, object>|object[]} participants — bound role→entity map
+ *   (or a plain entity array); the first two become the card's actor/target.
+ */
+export function buildConversationDigest(convo, participants) {
+  const ents = participants instanceof Map ? [...participants.values()] : [...(participants ?? [])];
+  return [{
+    stepIndex: `conv:${convo.id}`,
+    kind:      'conversation',
+    title:     convo.title ?? convo.id,
+    entries: [{
+      entityId:   ents[0]?.id ?? null,
+      actor:      unitRef(ents[0] ?? null),
+      target:     unitRef(ents[1] ?? null),
+      actionType: 'conversation',
+      label:      'TALK',
+      lineCount:  convo.lines?.length ?? 0,
+    }],
+  }];
+}
+
 export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionType, ResEventType } = {}) {
   const vis = isVisible || (() => true);
   const PA = PlanActionType;

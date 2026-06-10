@@ -73,6 +73,7 @@ export function reconcileRosterAfterMission(preMissionRoster, entities) {
   const deployedSurvivors = [];
   for (const e of entities) {
     if (e.type !== 'survivor') continue;
+    if (e.isNpc) continue; // scripted conversation NPCs never join the roster
     const f = e.owner ? getFaction(e.owner) : null;
     if (!f?.canDiscoverNPCs()) continue;
     deployedNames.add(e.name);
@@ -121,6 +122,7 @@ const DEFERRED = Symbol('victory-deferred');
 function _heroSurvivorCount(state) {
   return state.entities.filter(e => {
     if (!e.alive || e.type !== 'survivor' || !e.owner) return false;
+    if (e.isNpc) return false; // scripted NPCs don't count toward objectives
     return getFaction(e.owner).canDiscoverNPCs();
   }).length;
 }
@@ -266,7 +268,7 @@ function _checkWinCondition(cond, state) {
       // on one of the listed target hexes.
       const partyFaction = cond.faction || 'hero';
       const party = state.entities.filter(e =>
-        e.alive && e.owner === partyFaction &&
+        e.alive && e.owner === partyFaction && !e.isNpc &&
         (e.type === EntityType.PALADIN || e.type === EntityType.SURVIVOR)
       );
       if (party.length === 0) return null;

@@ -5580,6 +5580,52 @@ img.plan-step-avatar {
 }
 .replay-collapse-btn:hover { color: #fff; border-color: rgba(200, 160, 255, 0.7); }
 
+/* Conversation turn card — gold framing to read as a story beat, with the
+   SKIP/REPLAY footer button (wired by ui.setConversationCardState). */
+.replay-step-col.replay-conv-col { border-color: rgba(201, 162, 39, 0.55); }
+.replay-step-col.replay-conv-col.is-current { border-color: rgba(232, 197, 88, 0.85); }
+.replay-conv-btn {
+  pointer-events: auto;                /* the timeline itself ignores pointers */
+  display: block;
+  margin: 0.45rem auto 0.1rem;
+  padding: 0.25rem 1.1rem;
+  background: rgba(60, 45, 20, 0.7);
+  border: 1px solid rgba(201, 162, 39, 0.6);
+  border-radius: 6px;
+  color: #e8c558;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.replay-conv-btn:hover { color: #fff; border-color: rgba(232, 197, 88, 0.9); }
+
+/* Off-screen conversation arrow — edge-clamped glyph pointing at dialog
+   happening outside the viewport (fixed-camera mode). Positioned/rotated
+   inline by ui.showOffscreenArrow(). */
+#offscreen-arrow {
+  position: absolute;
+  z-index: 18;
+  width: 2.4rem;
+  height: 2.4rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(16, 12, 10, 0.85);
+  border: 2px solid rgba(201, 162, 39, 0.8);
+  border-radius: 50%;
+  color: #e8c558;
+  font-size: 1.2rem;
+  pointer-events: none;
+  animation: offscreen-arrow-pulse 1.2s ease-in-out infinite;
+}
+#offscreen-arrow[hidden] { display: none; }
+@keyframes offscreen-arrow-pulse {
+  0%, 100% { opacity: 0.75; }
+  50%      { opacity: 1; }
+}
+
 /* Battle rows carrying the roll-breakdown tooltip must receive hover even
    though the timeline itself ignores pointers (board stays interactive). */
 .replay-step-action.battle[data-tip-html] {

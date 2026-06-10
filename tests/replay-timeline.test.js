@@ -5,7 +5,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildStepDigest, buildRollTip, buildRollRows, buildOutcomeSummary, isEventVisible, OutcomeKind } from '../src/replay-timeline.js';
+import { buildStepDigest, buildConversationDigest, buildRollTip, buildRollRows, buildOutcomeSummary, isEventVisible, OutcomeKind } from '../src/replay-timeline.js';
 import { ResEventType } from '../server/resolver.js';
 import { PlanActionType } from '../src/planner.js';
 
@@ -575,5 +575,39 @@ describe('buildOutcomeSummary', () => {
   test('returns null without rolls or outcome', () => {
     assert.equal(buildOutcomeSummary(null), null);
     assert.equal(buildOutcomeSummary({ outcomeKind: 'hit' }), null);
+  });
+});
+
+// ── buildConversationDigest (campaign conversation turn card) ────────────────
+
+describe('buildConversationDigest', () => {
+  const convo = {
+    id: 'intro',
+    title: 'A Voice at the Inn Door',
+    lines: [{ role: 'a', text: 'x' }, { role: 'b', text: 'y' }],
+  };
+  const hero = { id: 'e1', type: 'paladin', title: 'Paladin', color: '#d4a72c' };
+  const npc  = { id: 'e2', type: 'survivor', name: "John O'Connor", title: 'Innkeeper', color: '#8cf' };
+
+  test('builds a single conversation column from a participants Map', () => {
+    const digest = buildConversationDigest(convo, new Map([['a', hero], ['b', npc]]));
+    assert.equal(digest.length, 1);
+    const col = digest[0];
+    assert.equal(col.kind, 'conversation');
+    assert.equal(col.stepIndex, 'conv:intro');
+    assert.equal(col.title, 'A Voice at the Inn Door');
+    assert.equal(col.entries.length, 1);
+    const entry = col.entries[0];
+    assert.equal(entry.actionType, 'conversation');
+    assert.equal(entry.label, 'TALK');
+    assert.equal(entry.lineCount, 2);
+    assert.equal(entry.actor.entityId, 'e1');
+    assert.equal(entry.target.name, "John O'Connor");
+  });
+
+  test('accepts a plain entity array and tolerates a single participant', () => {
+    const digest = buildConversationDigest(convo, [hero]);
+    assert.equal(digest[0].entries[0].actor.entityId, 'e1');
+    assert.equal(digest[0].entries[0].target, null);
   });
 });
