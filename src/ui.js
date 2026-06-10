@@ -2756,6 +2756,7 @@ export class UIController {
            <span class="usb-stat">ATK <span class="usb-stat-val">${entity.getAttack()}</span></span>
            <span class="usb-stat">DEF <span class="usb-stat-val">${entity.getDefense()}</span></span>
            <span class="usb-stat">RNG <span class="usb-stat-val">${entity.getRange()}</span></span>
+           <span class="usb-stat" title="Agility — higher acts earlier each turn">AGI <span class="usb-stat-val">${entity.getAgility()}</span></span>
            ${abilityHtml}
          </span>`
       : '';

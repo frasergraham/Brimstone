@@ -342,7 +342,9 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
           ranged,
           outcomeKind: null,
           targetDmg: 0, actorDmg: 0, killed: false,
-          note:      { text: 'NO TARGET', kind: 'info' },
+          // A fled target (alive, moved out of reach) reads differently from
+          // an empty-hex whiff — the quarry escaped, not "nothing was there".
+          note:      { text: ev.targetFled ? 'TARGET FLED' : 'NO TARGET', kind: 'info' },
         });
         continue;
       }

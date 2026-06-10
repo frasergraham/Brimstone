@@ -13,22 +13,28 @@ const root = resolve(__dirname, '..');
 
 const stylesCSS = readFileSync(resolve(root, 'styles.css'), 'utf8');
 
-// Helper: extract all CSS inside a media query block by matching the @media line
-// and collecting balanced braces.
+// Helper: extract the CSS inside EVERY media block matching the @media line,
+// concatenated, by collecting balanced braces. A stylesheet may legitimately
+// declare the same breakpoint more than once (e.g. a component-local block
+// kept next to its component's desktop rules), so reading only the first
+// occurrence would miss rules that live in later blocks.
 function extractMediaBlock(css, mediaQuery) {
-  const idx = css.indexOf(mediaQuery);
-  if (idx === -1) return '';
-  // Find the opening brace of the media block
-  const start = css.indexOf('{', idx);
-  if (start === -1) return '';
-  let depth = 1;
-  let i = start + 1;
-  while (i < css.length && depth > 0) {
-    if (css[i] === '{') depth++;
-    else if (css[i] === '}') depth--;
-    i++;
+  let out = '';
+  let idx = css.indexOf(mediaQuery);
+  while (idx !== -1) {
+    const start = css.indexOf('{', idx);
+    if (start === -1) break;
+    let depth = 1;
+    let i = start + 1;
+    while (i < css.length && depth > 0) {
+      if (css[i] === '{') depth++;
+      else if (css[i] === '}') depth--;
+      i++;
+    }
+    out += css.slice(start + 1, i - 1) + '\n';
+    idx = css.indexOf(mediaQuery, i);
   }
-  return css.slice(start + 1, i - 1);
+  return out;
 }
 
 // ── styles.css — main game mobile rules ──────────────────────────────────────

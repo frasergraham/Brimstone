@@ -186,6 +186,23 @@ describe('buildStepDigest — move/explore notes', () => {
     assert.deepEqual(e.note, { text: 'NO TARGET', kind: 'info' });
   });
 
+  test('fled target (ACTION_SKIP with targetFled) gets a "TARGET FLED" card', () => {
+    const h = snap('h1', 'hero', 'hero', 1, 1);
+    const ev = {
+      type: ResEventType.ACTION_SKIP, faction: 'hero',
+      action: { type: PlanActionType.BATTLE_UNIT, entityId: 'h1', targetId: 'm1' },
+      reason: 'Zombie slipped away — out of reach.',
+      targetFled: true,
+      battleSnaps: { actorSnap: { id: 'h1', type: 'hero', owner: 'hero', col: 1, row: 1 }, ranged: false },
+      whiffTarget: { col: 2, row: 1 },
+    };
+    const d = buildStepDigest([step([ev], [h])], [], DEPS);
+    const e = d[0].entries[0];
+    assert.equal(e.label, 'ATTACK');
+    assert.equal(e.target, null);
+    assert.deepEqual(e.note, { text: 'TARGET FLED', kind: 'info' });
+  });
+
   test('explore lists the actual loot icons (not "+N RESOURCE")', () => {
     const h = snap('h1', 'hero', 'hero', 1, 1);
     const ev = {

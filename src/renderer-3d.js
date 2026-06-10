@@ -1889,13 +1889,24 @@ export function shouldAnimateFocus(curTarget, curRadius, newTarget, newRadius, e
  *
  *  Note this starts from `current`, not the attacker's hex centre — so a
  *  unit that's mid-slide (or off-centre) lunges from where it actually is,
- *  with no pre-snap "pop" to the hex centre. */
-export function computeLungeTarget(current, target, fraction = LUNGE_FRACTION) {
+ *  with no pre-snap "pop" to the hex centre.
+ *
+ *  The slide is capped at `maxDist` (default LUNGE_MAX_WORLD — what an
+ *  adjacent-hex strike travels) so a lunge at a distant hex (stale whiff
+ *  target, fled quarry) leans in the right direction instead of sliding the
+ *  attacker across multiple hexes the rules never moved it through. */
+export function computeLungeTarget(current, target, fraction = LUNGE_FRACTION, maxDist = LUNGE_MAX_WORLD) {
   const f = Number.isFinite(fraction) ? fraction : LUNGE_FRACTION;
-  return {
-    x: current.x + f * (target.x - current.x),
-    z: current.z + f * (target.z - current.z),
-  };
+  let dx = f * (target.x - current.x);
+  let dz = f * (target.z - current.z);
+  const cap = Number.isFinite(maxDist) ? maxDist : Infinity;
+  const d = Math.hypot(dx, dz);
+  if (d > cap) {
+    const s = cap / d;
+    dx *= s;
+    dz *= s;
+  }
+  return { x: current.x + dx, z: current.z + dz };
 }
 
 /** Set `receiveShadows = true` on every (non-null) mesh in the iterable.
@@ -17262,6 +17273,13 @@ export const PUNCH_IMPACT_FRAC = 0.55;
  *  target hex the lunge slides (operator decision). 0.75 closes the gap
  *  for an "attack" pose without overlapping the target token. */
 export const LUNGE_FRACTION = 0.75;
+
+/** Hard cap (world units) on how far a lunge slides — LUNGE_FRACTION of one
+ *  hex of separation (adjacent centres are SQRT3 * HEX_RADIUS_WORLD apart).
+ *  Combat is resolved at the attacker's range, so the standee should never
+ *  visually travel further than an adjacent-hex strike, even when the lunge
+ *  aims at a distant hex (fled target / stale whiff hex). */
+export const LUNGE_MAX_WORLD = LUNGE_FRACTION * Math.sqrt(3) * HEX_RADIUS_WORLD;
 
 /** Per-speed-mode multipliers applied to MOVE_ANIM_MS and friends.
  *  setPlaybackSpeed('cinematic'|'fast'|'vfast') reads from here. Fast

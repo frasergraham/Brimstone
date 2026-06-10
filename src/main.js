@@ -2222,8 +2222,10 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         redrawFn();
         await playbackDelay(speed === 'vfast' ? 140 : 280);
 
-        // "no enemy" floater on target hex
-        renderer.addFlash(tCol, tRow, 'no enemy', 'rgba(100,100,100,0.1)', 1000, 0.65, '#888');
+        // Floater on the target hex — "fled!" when the quarry escaped this
+        // turn (alive, out of reach), "no enemy" for a plain empty-hex whiff.
+        const whiffText = ev.targetFled ? 'fled!' : 'no enemy';
+        renderer.addFlash(tCol, tRow, whiffText, 'rgba(100,100,100,0.1)', 1000, 0.65, '#888');
         redrawFn();
         await playbackDelay(speed === 'vfast' ? 200 : 400);
 
