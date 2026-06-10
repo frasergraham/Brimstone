@@ -1811,6 +1811,9 @@ export class UIController {
     this._unitStatsExpanded    = false;
     this.renderer.setSelection({ entityId: null, hex: null });
     this.renderer.clearOverlaysByLayer('highlight-disc');
+    // Republish the unit info cards — with no selection the odds vanish
+    // (planned-attack markers stay; they track the plan, not the selection).
+    this._pushUnitInfoCards();
     hideActionPopup(this);
     this._hideTileDetail();
     // Refresh plan panel so selection highlight clears from the unit rows.

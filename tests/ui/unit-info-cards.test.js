@@ -186,6 +186,26 @@ describe('_pushUnitInfoCards', () => {
     ui.markPlanSubmitted();
     assert.equal(renderer.unitInfoCards.size, 0, 'submit clears the cards');
   });
+
+  test('deselecting republishes — odds vanish, planned-attack markers stay', () => {
+    const { ui, state, renderer } = makeUI();
+    const hero   = createHero(3, 3, 'p1', state);
+    const minion = createMinion(3, 4, 'p2', state);
+    const marked = createMinion(5, 5, 'p2', state);
+    state.entities.push(hero, minion, marked);
+    arm(ui, hero, [minion]);
+    ui._unitPlans.set(hero.id, [
+      { type: PlanActionType.BATTLE_UNIT, entityId: hero.id, targetId: marked.id },
+    ]);
+    ui._pushUnitInfoCards();
+    assert.ok(renderer.unitInfoCards.has(minion.id), 'odds card present while selected');
+
+    ui._clearSelection();
+    assert.ok(!renderer.unitInfoCards.has(minion.id),
+      'odds must clear when the unit is deselected');
+    assert.equal(renderer.unitInfoCards.get(marked.id)?.attackCount, 1,
+      'planned-attack marker survives deselection');
+  });
 });
 
 describe('_computeUnitInfoCards — projected range gating', () => {
