@@ -707,6 +707,58 @@ describe('resolvePlans — BATTLE_UNIT target fallback', () => {
     assert.ok(ok, 'Fallback should attack substitute when original moved away');
   });
 
+  test('target alive but fled out of range, no fallback — skip flagged targetFled with whiff', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const target = createMinion(hero.col, hero.row);
+    state.entities.push(target);
+
+    // Target moved far away this turn — still alive, just out of reach
+    target.col = hero.col + 5;
+    target.row = hero.row + 5;
+
+    const heroPlan = [{
+      type: PlanActionType.BATTLE_UNIT,
+      entityId: hero.id,
+      targetId: target.id,
+      targetCol: hero.col,
+      targetRow: hero.row,
+    }];
+
+    const steps = resolvePlans(state, heroPlan, []);
+    const allEvents = steps.flatMap(s => s.heroEvents);
+    const skip = allEvents.find(e => e.type === ResEventType.ACTION_SKIP);
+    assert.ok(skip, 'Should produce ACTION_SKIP when the target fled');
+    assert.equal(skip.targetFled, true, 'Skip must be flagged targetFled');
+    assert.match(skip.reason, /slipped away/i);
+    // Whiff payload lets the animation layer swing at the planned hex
+    assert.deepEqual(skip.whiffTarget, { col: hero.col, row: hero.row });
+    assert.ok(skip.battleSnaps?.actorSnap, 'Whiff needs the actor snapshot');
+  });
+
+  test('target dead — skip keeps the dead-or-gone reason, NOT targetFled', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const target = createMinion(hero.col, hero.row);
+    state.entities.push(target);
+    target.hp = 0;
+
+    const heroPlan = [{
+      type: PlanActionType.BATTLE_UNIT,
+      entityId: hero.id,
+      targetId: target.id,
+      targetCol: hero.col,
+      targetRow: hero.row,
+    }];
+
+    const steps = resolvePlans(state, heroPlan, []);
+    const allEvents = steps.flatMap(s => s.heroEvents);
+    const skip = allEvents.find(e => e.type === ResEventType.ACTION_SKIP);
+    assert.ok(skip, 'Should produce ACTION_SKIP when the target is dead');
+    assert.ok(!skip.targetFled, 'Dead target is not a fled target');
+    assert.equal(skip.reason, 'Target is dead or gone.');
+  });
+
   test('original target gone, no enemy on hex — skip', () => {
     const state = freshState();
     const hero = state.hero;

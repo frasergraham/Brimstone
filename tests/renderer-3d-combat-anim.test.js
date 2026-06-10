@@ -17,6 +17,8 @@ import {
   Renderer3D,
   computeLungeTarget,
   LUNGE_FRACTION,
+  LUNGE_MAX_WORLD,
+  HEX_RADIUS_WORLD,
   COMBAT_FOCUS_RADIUS,
   SELECTION_FOCUS_RADIUS,
 } from '../src/renderer-3d.js';
@@ -27,7 +29,7 @@ describe('Renderer3D combat — computeLungeTarget', () => {
   test('slides LUNGE_FRACTION of the way from current toward target', () => {
     const current = { x: 0, z: 0 };
     const target  = { x: 4, z: 8 };
-    const out = computeLungeTarget(current, target, 0.75);
+    const out = computeLungeTarget(current, target, 0.75, Infinity);
     assert.equal(out.x, 3);   // 0 + 0.75*4
     assert.equal(out.z, 6);   // 0 + 0.75*8
   });
@@ -37,7 +39,7 @@ describe('Renderer3D combat — computeLungeTarget', () => {
     // there, NOT jump to some hex centre first.
     const current = { x: 1.3, z: -0.4 };
     const target  = { x: 5.3, z: 3.6 };
-    const out = computeLungeTarget(current, target);
+    const out = computeLungeTarget(current, target, LUNGE_FRACTION, Infinity);
     // At fraction 0 the endpoint would equal current; here we confirm the
     // endpoint is offset from current by exactly fraction*delta (no snap term).
     assert.ok(Math.abs(out.x - (1.3 + LUNGE_FRACTION * 4)) < 1e-9);
@@ -46,12 +48,39 @@ describe('Renderer3D combat — computeLungeTarget', () => {
 
   test('stops SHORT of the target (does not overlap the token)', () => {
     const current = { x: 0, z: 0 };
-    const target  = { x: 10, z: 0 };
+    const target  = { x: 1, z: 0 };
     const out = computeLungeTarget(current, target);
     assert.ok(out.x < target.x, 'lunge endpoint must stop short of target x');
     assert.ok(out.x > current.x, 'lunge must move toward target');
     // Default fraction is the operator-chosen 0.75.
-    assert.equal(out.x, 7.5);
+    assert.equal(out.x, 0.75);
+  });
+
+  test('caps a distant lunge at LUNGE_MAX_WORLD — no multi-hex slides', () => {
+    // Target 10 world units away (~6 hexes) — the lunge must travel no further
+    // than an adjacent-hex strike would, so the attacker never crosses the map.
+    const out = computeLungeTarget({ x: 0, z: 0 }, { x: 10, z: 0 });
+    assert.ok(Math.abs(out.x - LUNGE_MAX_WORLD) < 1e-9, 'capped at one-hex lunge distance');
+    assert.equal(out.z, 0);
+  });
+
+  test('cap preserves the lunge direction', () => {
+    const out = computeLungeTarget({ x: 0, z: 0 }, { x: 6, z: 8 }); // dist 10
+    const d = Math.hypot(out.x, out.z);
+    assert.ok(Math.abs(d - LUNGE_MAX_WORLD) < 1e-9, 'displacement length equals the cap');
+    assert.ok(Math.abs(out.x / out.z - 6 / 8) < 1e-9, 'direction unchanged');
+  });
+
+  test('adjacent-hex lunge is unaffected by the cap', () => {
+    // One hex of separation is SQRT3 * HEX_RADIUS_WORLD; 75% of that is
+    // exactly the cap, so a normal adjacent strike keeps its full slide.
+    const oneHex = Math.sqrt(3) * HEX_RADIUS_WORLD;
+    const out = computeLungeTarget({ x: 0, z: 0 }, { x: oneHex, z: 0 });
+    assert.ok(Math.abs(out.x - LUNGE_FRACTION * oneHex) < 1e-9);
+  });
+
+  test('LUNGE_MAX_WORLD is LUNGE_FRACTION of one hex of separation', () => {
+    assert.ok(Math.abs(LUNGE_MAX_WORLD - LUNGE_FRACTION * Math.sqrt(3) * HEX_RADIUS_WORLD) < 1e-12);
   });
 
   test('defaults to LUNGE_FRACTION when fraction omitted / non-finite', () => {

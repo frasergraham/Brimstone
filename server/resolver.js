@@ -165,9 +165,10 @@ function runAction(state, action, faction, playerId = null) {
       const attackerRange = typeof entity.getRange === 'function' ? entity.getRange() : (entity.range ?? 1);
       let target = state.entities.find(e => e.id === action.targetId && e.alive);
 
+      let fledTarget = null; // alive but out of reach — distinct from dead/gone
       if (target) {
         const dist = hexDistance(entity.col, entity.row, target.col, target.row);
-        if (dist > attackerRange) target = null; // target moved out of range
+        if (dist > attackerRange) { fledTarget = target; target = null; }
       }
 
       // Fallback: original target gone/moved — attack another enemy on the planned hex
@@ -184,7 +185,24 @@ function runAction(state, action, faction, playerId = null) {
         }
       }
 
-      if (!target) return { kind: 'skip', reason: 'Target is dead or gone.' };
+      if (!target) {
+        // Target is alive but moved out of reach this turn — surface a
+        // distinct "fled" skip so the replay/animation layer can show the
+        // attacker swinging at the planned hex instead of a generic skip.
+        if (fledTarget) {
+          const name = fledTarget.displayName ?? fledTarget.name ?? 'Target';
+          const inReach = Number.isInteger(action.targetCol) && Number.isInteger(action.targetRow) &&
+            hexDistance(entity.col, entity.row, action.targetCol, action.targetRow) <= attackerRange;
+          return {
+            kind: 'skip',
+            reason: `${name} slipped away — out of reach.`,
+            targetFled: true,
+            battleSnaps: inReach ? { actorSnap: snapEntity(entity), ranged: attackerRange > 1 } : null,
+            whiffTarget: inReach ? { col: action.targetCol, row: action.targetRow } : null,
+          };
+        }
+        return { kind: 'skip', reason: 'Target is dead or gone.' };
+      }
 
       const actorSnap  = snapEntity(entity);
       const targetSnap = snapEntity(target);
@@ -373,6 +391,7 @@ function drainOneStep(state, queue, budget) {
         faction:     budget.faction,
         action,
         reason:      out.reason,
+        targetFled:  out.targetFled ?? false,
         battleSnaps: out.battleSnaps ?? null,
         whiffTarget: out.whiffTarget ?? null,
       });
