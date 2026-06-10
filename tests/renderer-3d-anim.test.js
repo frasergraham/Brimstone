@@ -59,6 +59,9 @@ import {
   headTopRelativeToCone,
   UNIT_ICON_MIN_SCALE,
   paintUnitIconBadge,
+  paintAttackCountMarker,
+  UNIT_INFO_HIT_COLOR,
+  UNIT_INFO_CRUSH_COLOR,
   resolveUnitIconPortrait,
   applyFlatUnitIconMaterial,
   floatingTextTransform,
@@ -923,5 +926,130 @@ describe('Renderer3D — applyFlatUnitIconMaterial', () => {
     applyFlatUnitIconMaterial(makeStubBabylon(), mat);
     assert.equal(mat.alpha, 1);
     assert.equal(mat.backFaceCulling, false);
+  });
+});
+
+// ─── paintUnitIconBadge — unit info card margins (odds + attack marker) ──────
+//
+// The icon billboard is a 2:1 card: the portrait disc stays centred (so all
+// legacy square-call behaviour above is unchanged) and the margins carry
+// planning info — hit/crush % right-justified LEFT of the disc, the planned-
+// attack ⚔/×N marker on the RIGHT.
+
+function makeTextStubCtx() {
+  const base = makeStubCtx();
+  base.fillText   = (...args) => { base.calls.push({ name: 'fillText',   args }); };
+  base.strokeText = (...args) => { base.calls.push({ name: 'strokeText', args }); };
+  base.measureText = (t) => ({ width: String(t).length * 10 });
+  let _font = '';
+  Object.defineProperty(base, 'font', {
+    get: () => _font,
+    set: (v) => { _font = v; base.calls.push({ name: 'font', args: [v] }); },
+  });
+  Object.defineProperty(base, 'textAlign', {
+    set: (v) => { base.calls.push({ name: 'textAlign', args: [v] }); },
+  });
+  Object.defineProperty(base, 'textBaseline', {
+    set: (v) => { base.calls.push({ name: 'textBaseline', args: [v] }); },
+  });
+  Object.defineProperty(base, 'lineJoin', {
+    set: (v) => { base.calls.push({ name: 'lineJoin', args: [v] }); },
+  });
+  return base;
+}
+
+describe('Renderer3D — paintUnitIconBadge unit info card', () => {
+  const SIZE = 64, WIDTH = 128;
+  const cx = WIDTH / 2;
+  const outerR = (SIZE / 2) - 2;
+
+  test('clears the full card width', () => {
+    const ctx = makeTextStubCtx();
+    paintUnitIconBadge(ctx, { size: SIZE, width: WIDTH, hp: 5, maxHp: 10 });
+    const clear = ctx.calls.find(c => c.name === 'clearRect');
+    assert.deepEqual(clear.args, [0, 0, WIDTH, SIZE]);
+  });
+
+  test('keeps the portrait disc centred on the card', () => {
+    const ctx = makeTextStubCtx();
+    paintUnitIconBadge(ctx, { size: SIZE, width: WIDTH, hp: 5, maxHp: 10 });
+    const ringArc = ctx.calls.find(c => c.name === 'arc');
+    assert.equal(ringArc.args[0], cx, 'ring arc centred at width/2');
+  });
+
+  test('no text is drawn without info (margins stay transparent)', () => {
+    const ctx = makeTextStubCtx();
+    paintUnitIconBadge(ctx, { size: SIZE, width: WIDTH, hp: 5, maxHp: 10 });
+    assert.equal(ctx.calls.find(c => c.name === 'fillText'), undefined);
+  });
+
+  test('hit % is right-justified against the disc in the hit colour', () => {
+    const ctx = makeTextStubCtx();
+    paintUnitIconBadge(ctx, {
+      size: SIZE, width: WIDTH, hp: 5, maxHp: 10,
+      info: { hitPct: 72, crushPct: 0, attackCount: 0 },
+    });
+    const align = ctx.calls.find(c => c.name === 'textAlign');
+    assert.deepEqual(align.args, ['right']);
+    const text = ctx.calls.find(c => c.name === 'fillText' && c.args[0] === '72%');
+    assert.ok(text, 'expected the hit % to be drawn');
+    assert.ok(text.args[1] <= cx - outerR, 'anchored left of the disc edge');
+    const colour = ctx.calls.filter(c => c.name === 'fillStyle')
+      .some(c => c.args[0] === UNIT_INFO_HIT_COLOR);
+    assert.ok(colour, 'hit % uses UNIT_INFO_HIT_COLOR');
+  });
+
+  test('crush % gets its own deep-red line only when > 0', () => {
+    const withCrush = makeTextStubCtx();
+    paintUnitIconBadge(withCrush, {
+      size: SIZE, width: WIDTH, hp: 5, maxHp: 10,
+      info: { hitPct: 72, crushPct: 34, attackCount: 0 },
+    });
+    const crushText = withCrush.calls.find(c => c.name === 'fillText' && c.args[0] === '34%');
+    assert.ok(crushText, 'expected the crush % line');
+    assert.ok(withCrush.calls.filter(c => c.name === 'fillStyle')
+      .some(c => c.args[0] === UNIT_INFO_CRUSH_COLOR));
+
+    const noCrush = makeTextStubCtx();
+    paintUnitIconBadge(noCrush, {
+      size: SIZE, width: WIDTH, hp: 5, maxHp: 10,
+      info: { hitPct: 72, crushPct: 0, attackCount: 0 },
+    });
+    const texts = noCrush.calls.filter(c => c.name === 'fillText');
+    assert.equal(texts.length, 1, 'only the hit % line when crush is 0 (ranged)');
+  });
+
+  test('planned-attack marker is drawn in the right margin', () => {
+    const ctx = makeTextStubCtx();
+    paintUnitIconBadge(ctx, {
+      size: SIZE, width: WIDTH, hp: 5, maxHp: 10,
+      info: { hitPct: null, crushPct: null, attackCount: 2 },
+    });
+    const marker = ctx.calls.find(c => c.name === 'arc' && c.args[0] > cx + outerR);
+    assert.ok(marker, 'marker disc centred right of the portrait disc');
+    const label = ctx.calls.find(c => c.name === 'fillText' && c.args[0] === '×2');
+    assert.ok(label, 'multi-attack marker shows ×N');
+  });
+
+  test('legacy square call (no width) never reaches the margin painter', () => {
+    const ctx = makeTextStubCtx();
+    paintUnitIconBadge(ctx, {
+      size: SIZE, hp: 5, maxHp: 10,
+      info: { hitPct: 72, crushPct: 10, attackCount: 1 },
+    });
+    assert.equal(ctx.calls.find(c => c.name === 'fillText'), undefined,
+      'square texture has no margins — info must be ignored');
+  });
+});
+
+describe('Renderer3D — paintAttackCountMarker', () => {
+  test('single attack shows the ⚔ glyph, stacks show ×N', () => {
+    const one = makeTextStubCtx();
+    paintAttackCountMarker(one, 48, 48, 40, 1);
+    assert.ok(one.calls.find(c => c.name === 'fillText' && c.args[0] === '⚔'));
+
+    const three = makeTextStubCtx();
+    paintAttackCountMarker(three, 48, 48, 40, 3);
+    assert.ok(three.calls.find(c => c.name === 'fillText' && c.args[0] === '×3'));
   });
 });

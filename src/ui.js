@@ -84,8 +84,6 @@ export class UIController {
     this._pendingEnemyPick   = null;  // { units[] } — enemy info disambiguation
     this._popupVisible    = false;   // tracks whether the action popup is shown
     this._selectedTile    = null;    // { col, row } — tile-only selection (no entity)
-    this._oddsBadges      = [];      // desired hit/crush badges over attackable enemies
-    this._oddsBadgeRaf    = null;    // RAF id for odds-badge tracking loop
     this._arcCloseTimer   = null;    // setTimeout id for arc close animation
     this._arcTrackingRaf  = null;    // rAF id for pan/zoom tracking loop
     this._arcItems        = null;    // current arc item descriptors (for line drawing)
@@ -753,6 +751,7 @@ export class UIController {
   exitPlanningMode() {
     this._stopUndoBtnTracking();
     this._planMode      = false;
+    this._pushUnitInfoCards();  // plan over — clear odds/attack markers
     // NOTE: _planSubmitted is intentionally NOT reset here. It guards against
     // a double-fire of the submit button (touchend + click on mobile, or a
     // fast double-click) — the offline/campaign plan-submit handler calls
@@ -1077,6 +1076,9 @@ export class UIController {
       step.overBudget = !isFree && runningCost > this._planBudget;
     }
     this.renderer.planGhostSteps = steps;
+    // Keep the unit info cards (planned-attack counts) in lockstep with the
+    // plan — the renderer's hex-badge fallback reads both in the same draw.
+    this._pushUnitInfoCards();
   }
 
   /**
@@ -1293,6 +1295,7 @@ export class UIController {
     if (this._planSubmitted) return;
     this._planSubmitted = true;
     this._stopUndoBtnTracking();
+    this._pushUnitInfoCards();  // clears the odds/attack markers (guard in compute)
     this._clearSelection();
 
     const panel = this._el('plan-panel');
@@ -1835,126 +1838,71 @@ export class UIController {
     this.renderer.clearOverlaysByLayer('highlight-disc');
   }
 
-  // ── Odds badges (hit/crush % above attackable enemies) ───────────────────
+  // ── Unit info cards (hit/crush % + planned-attack marker) ────────────────
   //
-  // Whenever an enemy hex is red-highlighted in plan mode, a small two-line
-  // badge floats above the enemy icon: hit % (red) and crush % (deep red).
-  // DOM labels pinned to hexes via hexToCanvasPos + RAF tracking — the same
-  // renderer-agnostic pattern as the floating UNDO buttons.
+  // Per-unit planning info rendered by the 3D renderer INTO the unit icon
+  // billboard (now a 2:1 card — see paintUnitIconBadge): attack odds in the
+  // left margin, the planned-attack ⚔/×N marker in the right margin. Drawn
+  // as part of the billboard so it anchors and scales with the unit instead
+  // of swimming like a DOM overlay.
 
   /**
-   * Desired badges for the current selection: one per red-highlighted hex.
-   * When several defenders share a hex, the badge shows the best (highest
-   * hit %) — the defender-picker arc shows exact per-target numbers on tap.
-   * @returns {Array<{key:string,col:number,row:number,hit:number,crush:number}>}
+   * Desired per-entity card info:
+   *   - hit/crush odds for every enemy the SELECTED unit could attack
+   *     (the red-highlighted targets), per entity — defenders sharing a hex
+   *     each get their own numbers.
+   *   - planned-attack counts for every enemy targeted by a queued
+   *     BATTLE_UNIT anywhere in the plan (independent of selection).
+   * @returns {Map<entityId, {hitPct:number|null, crushPct:number|null, attackCount:number}>}
    */
-  _computeOddsBadges() {
-    if (!this._planMode || this._planSubmitted) return [];
+  _computeUnitInfoCards() {
+    const cards = new Map();
+    if (!this._planMode || this._planSubmitted) return cards;
+
     const actor = this._selectedEntity;
-    if (!actor || this._isEnemySelection) return [];
     const { actionType } = this._awaitingTarget || {};
-    // Same modes that draw the red battle-target overlay.
-    if (actionType && actionType !== ActionType.MOVE && actionType !== ActionType.BATTLE) return [];
-    const b = this._validActions.find(a => a.type === ActionType.BATTLE);
-    if (!b?.targets?.length) return [];
-
-    const state = this.state;
-    let targets = b.targets;
-    if (state.fogOfWar !== 'none') {
-      const visHexes = getVisiblePositions(state, actor.owner);
-      targets = targets.filter(t => visHexes.has(hexKey(t.col, t.row)));
-    }
-
-    const byHex = new Map();
-    for (const t of targets) {
-      const odds = this._attackOdds(actor, t);
-      if (!odds) continue;
-      const key = hexKey(t.col, t.row);
-      const cur = byHex.get(key);
-      if (!cur || odds.hit > cur.hit) {
-        byHex.set(key, { key, col: t.col, row: t.row, hit: odds.hit, crush: odds.crush });
+    const oddsMode = !actionType || actionType === ActionType.MOVE || actionType === ActionType.BATTLE;
+    if (actor && !this._isEnemySelection && oddsMode) {
+      const b = this._validActions.find(a => a.type === ActionType.BATTLE);
+      let targets = b?.targets ?? [];
+      if (targets.length && this.state.fogOfWar !== 'none') {
+        const visHexes = getVisiblePositions(this.state, actor.owner);
+        targets = targets.filter(t => visHexes.has(hexKey(t.col, t.row)));
+      }
+      for (const t of targets) {
+        const odds = this._attackOdds(actor, t);
+        if (!odds) continue;
+        cards.set(t.id, {
+          hitPct:   Math.round(odds.hit * 100),
+          crushPct: Math.round(odds.crush * 100),
+          attackCount: 0,
+        });
       }
     }
-    return [...byHex.values()];
-  }
 
-  /** Recompute desired badges (call when selection / plan / targets change). */
-  _updateOddsBadges() {
-    this._oddsBadges = this._computeOddsBadges();
-    this._refreshOddsBadges();
-    if (this._oddsBadges.length > 0) this._startOddsBadgeTracking();
-  }
-
-  /** Position the cached badges; reconciles DOM children like the undo layer. */
-  _refreshOddsBadges() {
-    const layer = this._el('odds-badge-layer');
-    if (!layer) return;
-
-    const badges = (this._planMode && !this._planSubmitted && this.renderer && this.canvas)
-      ? (this._oddsBadges ?? [])
-      : [];
-    if (badges.length === 0) {
-      if ((layer.childNodes?.length ?? 0)) layer.innerHTML = '';
-      return;
-    }
-
-    const canvasRect = this.canvas.getBoundingClientRect();
-    const scale = canvasRect.width / this.canvas.width;
-    const hexScreenPx = this.renderer.hexSize * scale * this.renderer.zoomLevel;
-    const pct = p => `${Math.round(p * 100)}%`;
-
-    const desired = new Map();
-    for (const bdg of badges) {
-      const { x, y } = this.renderer.hexToCanvasPos(bdg.col, bdg.row);
-      const sx = canvasRect.left + x * scale;
-      const sy = canvasRect.top  + y * scale - hexScreenPx * 0.95;
-      desired.set(bdg.key, { sx, sy, bdg });
-    }
-
-    const existing = new Map();
-    for (const child of Array.from(layer.children || [])) {
-      const k = child.dataset?.key;
-      if (k && desired.has(k)) existing.set(k, child);
-      else if (typeof child.remove === 'function') child.remove();
-    }
-    for (const [key, { sx, sy, bdg }] of desired) {
-      let el = existing.get(key);
-      if (!el) {
-        el = document.createElement('div');
-        el.className = 'odds-badge';
-        el.dataset.key = key;
-        const crushLine = bdg.crush > 0.005
-          ? `<span class="odds-crush">${pct(bdg.crush)}💥</span>` : '';
-        el.innerHTML = `<span class="odds-hit">${pct(bdg.hit)}</span>${crushLine}`;
-        layer.appendChild(el);
+    // Planned-attack counts across the whole plan (BATTLE_UNIT only —
+    // BATTLE_HEX has no unit to pin the marker on and keeps the renderer's
+    // per-hex fallback badge).
+    for (const [, queue] of this._unitPlans) {
+      for (const a of queue) {
+        if (a.type !== PlanActionType.BATTLE_UNIT || !a.targetId) continue;
+        let card = cards.get(a.targetId);
+        if (!card) { card = { hitPct: null, crushPct: null, attackCount: 0 }; cards.set(a.targetId, card); }
+        card.attackCount++;
       }
-      el.style.left = `${sx}px`;
-      el.style.top  = `${sy}px`;
     }
+    return cards;
   }
 
-  /**
-   * RAF loop: keep badges pinned during pan/zoom and live against selection /
-   * plan changes (recomputes desired badges each frame — the math is a few
-   * dozen iterations per target). Self-terminates once no badges remain.
-   */
-  _startOddsBadgeTracking() {
-    if (this._oddsBadgeRaf) return;
-    const tick = () => {
-      this._oddsBadgeRaf = null;
-      this._oddsBadges = this._computeOddsBadges();
-      this._refreshOddsBadges();
-      const layer = this._el('odds-badge-layer');
-      if (layer && (layer.childNodes?.length ?? 0) > 0) {
-        this._oddsBadgeRaf = requestAnimationFrame(tick);
-      }
-    };
-    this._oddsBadgeRaf = requestAnimationFrame(tick);
+  /** Publish the card info to the renderer (call on selection/plan changes). */
+  _pushUnitInfoCards() {
+    if (!this.renderer) return;
+    this.renderer.unitInfoCards = this._computeUnitInfoCards();
   }
 
   _updateHighlights() {
     this._clearTargetOverlays();
-    this._updateOddsBadges();
+    this._pushUnitInfoCards();
     if (!this._selectedEntity) return;
 
     const { actionType } = this._awaitingTarget || {};
