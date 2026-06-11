@@ -7722,6 +7722,82 @@ export class Renderer3D {
       trackProp(plank);
     }
 
+    // ── Bridge structure: a solid deck slab UNDER the road + side railings ──
+    // The road ribbon already crosses the bridge hex; on its own it reads as a
+    // road floating over the river channel. So drop a solid brown rectangular
+    // slab just beneath the road (filling the gap down to the water) and run a
+    // wooden railing along each side of the road, built with the same
+    // post+rail vocabulary as the fortification fences. `bridgeRotationY` gives
+    // the road axis yaw; (ax,az) is along the road, (px,pz) is across it.
+    if (isBridge(tile)) {
+      const yaw = bridgeRotationY(tile, this.state.tiles);
+      const ax = Math.cos(yaw), az = Math.sin(yaw);     // along-road unit vector
+      const px = -Math.sin(yaw), pz = Math.cos(yaw);    // across-road (perp) unit
+      const alongYaw = Math.atan2(ax, az);              // aligns a box's local +Z to the road
+      const span = HEX_RADIUS_WORLD * SQRT3 * 1.06;     // edge-to-edge across the hex
+      const deckW = ROAD_RIBBON_WIDTH * 1.3;            // road width + shoulders
+
+      // Solid brown under-deck: top just below the road ribbon (so the road
+      // still shows on top), bottom just above the water bed.
+      const deckTopY    = ROAD_RIBBON_Y - 0.004;
+      const deckBottomY = RIVER_BED_Y + 0.02;
+      const deckH       = Math.max(0.08, deckTopY - deckBottomY);
+      const deck = BABYLON.MeshBuilder.CreateBox(
+        `bridgedeck_${tile.col}_${tile.row}`,
+        { width: deckW, height: deckH, depth: span }, scene,
+      );
+      deck.rotation.y = alongYaw;
+      deck.parent     = parent;
+      deck.material   = this._materialFor('#6b4a2b'); // solid timber brown
+      deck.isPickable = false;
+      deck.position.x = x; deck.position.y = deckBottomY + deckH / 2; deck.position.z = z;
+      this._addShadowCaster(deck);
+      this._setShadowReceiver(deck);
+      trackProp(deck);
+
+      // A railing down each side of the road: a top rail spanning the deck plus
+      // evenly-spaced posts (fence-style), sitting on the deck just outside the
+      // road shoulders.
+      const railMatHex  = '#7a5526';
+      const railLen     = span * 0.94;
+      const railThick   = 0.05;
+      const railTopY    = ROAD_RIBBON_Y + 0.17;          // rail height above the road
+      const postBaseY   = ROAD_RIBBON_Y;                 // posts rise from the deck/road
+      const postH       = railTopY - postBaseY;
+      const sideOffset  = deckW / 2 - railThick;         // just inside the deck edge
+      const NPOSTS      = 5;
+      for (const sgn of [-1, 1]) {
+        const cx = x + px * sgn * sideOffset;
+        const cz = z + pz * sgn * sideOffset;
+        const rail = BABYLON.MeshBuilder.CreateBox(
+          `bridgerail_${tile.col}_${tile.row}_${sgn < 0 ? 'a' : 'b'}`,
+          { width: railThick, height: railThick, depth: railLen }, scene,
+        );
+        rail.rotation.y = alongYaw;
+        rail.parent     = parent;
+        rail.material   = this._materialFor(railMatHex);
+        rail.isPickable = false;
+        rail.position.x = cx; rail.position.y = railTopY; rail.position.z = cz;
+        this._addShadowCaster(rail);
+        trackProp(rail);
+        for (let i = 0; i < NPOSTS; i++) {
+          const t = (i / (NPOSTS - 1) - 0.5) * railLen; // -railLen/2 .. +railLen/2 along road
+          const post = BABYLON.MeshBuilder.CreateBox(
+            `bridgepost_${tile.col}_${tile.row}_${sgn < 0 ? 'a' : 'b'}_${i}`,
+            { width: railThick, height: postH, depth: railThick }, scene,
+          );
+          post.parent     = parent;
+          post.material   = this._materialFor(railMatHex);
+          post.isPickable = false;
+          post.position.x = cx + ax * t;
+          post.position.y = postBaseY + postH / 2;
+          post.position.z = cz + az * t;
+          this._addShadowCaster(post);
+          trackProp(post);
+        }
+      }
+    }
+
     // ── Building: either a glTF model instance (if the tile's variant template
     // has loaded by now) or the procedural box + roof fallback. Both paths now
     // place the building on its FOOTPRINT hex (centred, facing the entrance) —
