@@ -39,6 +39,7 @@ import { ITEMS } from './items.js';
 import { getFaction, findFaction, allFactions, getFactionsForSide, sightRangeForEntity } from './factions.js';
 import { compileTurnBattleSummary, compileTurnBattlePairs, collectTurnFinds, deferredMoveEntityIds } from './battle-utils.js';
 import { collectWrapUpAttrition } from './post-round-effects.js';
+import { applyEffect } from './effects.js';
 import { installKeybindings } from './keybindings.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import * as audio from './audio.js';
@@ -3730,6 +3731,19 @@ function initScenario(def) {
   state = new GameState(true, true, 'skirmish', null, { ...mapData, noWitch: !def.witch });
   state.fogOfWar = def.fog ?? 'none';
 
+  // Visual-testing hook for the leaders (scenario `units` are witch-side or
+  // unrecruited survivors): heroEffects / witchEffects pre-apply status
+  // effects to the respective leader, e.g. heroEffects: ['wounded'].
+  for (const ef of def.heroEffects ?? []) {
+    if (typeof ef === 'string') applyEffect(state.hero, ef);
+    else if (ef?.id) applyEffect(state.hero, ef.id, ef);
+  }
+  for (const ef of def.witchEffects ?? []) {
+    if (!state.witch) break;
+    if (typeof ef === 'string') applyEffect(state.witch, ef);
+    else if (ef?.id) applyEffect(state.witch, ef.id, ef);
+  }
+
   // ref → entity map for plan targeting (leaders are pre-registered).
   const byRef = new Map([['hero', state.hero]]);
   if (state.witch) byRef.set('witch', state.witch);
@@ -3738,6 +3752,12 @@ function initScenario(def) {
     if (!e) continue;
     if (u.weapon) e.equipWeapon(u.weapon);
     if (u.level && u.level > 1) applyLevel(e, u.level);
+    // Visual-testing hook: pre-apply status effects, e.g. effects:['wounded']
+    // or [{ id:'poisoned', duration:2 }].
+    for (const ef of u.effects ?? []) {
+      if (typeof ef === 'string') applyEffect(e, ef);
+      else if (ef?.id) applyEffect(e, ef.id, ef);
+    }
     state.entities.push(e);
     assignSlotOnTile(state, e);
     if (u.ref) byRef.set(u.ref, e);
@@ -3745,6 +3765,10 @@ function initScenario(def) {
 
   _setupLocalUI(canvas, null, null, false);  // also drives the loading reveal
   redraw();
+
+  // Dev-loader probe: the browser-verification harness inspects live state
+  // (entities, effects, HP) through this handle. Scenario mode only.
+  if (typeof window !== 'undefined') window.__scenarioState = state;
 
   if (def.resolve) {
     state.heroPlan  = _scenarioPlan(def.heroPlan, byRef);

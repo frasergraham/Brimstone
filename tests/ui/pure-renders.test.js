@@ -498,3 +498,45 @@ describe('buildCycleInfoHtml', () => {
     assert.ok(!plain.includes('cip-icon'), 'emoji fallback without icons');
   });
 });
+
+// ── Effect letter badges + selected-unit panel parity ─────────────────────────
+
+describe('buildEffectsHtml — letter-in-circle badges', () => {
+  test('every effect renders its badge letter in a circle span', async () => {
+    const { buildEffectsHtml } = await import('../../src/ui-render.js');
+    const html = buildEffectsHtml({ effects: [{ id: 'wounded', duration: 1 }] });
+    assert.match(html, /usb-effect-letter/);
+    assert.match(html, />W</);
+    assert.match(html, /data-kind="bad"/);
+    assert.match(html, /usb-effect-pip-dur">1</);
+  });
+
+  test('good effects carry data-kind good; stacks render', async () => {
+    const { buildEffectsHtml } = await import('../../src/ui-render.js');
+    const html = buildEffectsHtml({ effects: [{ id: 'inspired', duration: 2, stacks: 2 }] });
+    assert.match(html, /data-kind="good"/);
+    assert.match(html, />I</);
+    assert.match(html, /×2/);
+  });
+
+  test('every EFFECTS entry has a UNIQUE single-letter badge', async () => {
+    const { EFFECTS } = await import('../../src/effects.js');
+    const badges = Object.values(EFFECTS).map(d => d.badge);
+    assert.ok(badges.every(b => typeof b === 'string' && b.length === 1),
+      'each effect declares a one-letter badge');
+    assert.equal(new Set(badges).size, badges.length, 'badges are unique');
+  });
+});
+
+describe('buildUnitDetailHtml — plan panel mirrors the Unit Stats Bar', () => {
+  test('includes AGI alongside ATK/DEF/RNG (USB expanded-stats parity)', async () => {
+    const { buildUnitDetailHtml } = await import('../../src/ui-render.js');
+    const entity = {
+      hp: 10, maxHp: 14, weapon: null, effects: [],
+      getAttack: () => 3, getDefense: () => 2, getRange: () => 1, getAgility: () => 4,
+    };
+    const html = buildUnitDetailHtml(entity, {});
+    assert.match(html, /AGI/);
+    assert.match(html, />4</);
+  });
+});
