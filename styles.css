@@ -1306,27 +1306,44 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   align-items: center;
   gap: 0.15rem;
   flex-shrink: 0;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;          /* 3+ badges flow to a second line, never clip */
   margin-left: 0.1rem;
 }
 .usb-effect-pip {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  min-width: 1.1rem;
-  height: 1.1rem;
-  padding: 0 0.25rem;
-  font-size: 0.85rem;
+  gap: 0.1rem;
   line-height: 1;
-  border-radius: 0.55rem;
-  background: rgba(255,255,255,0.08);
-  border: 1px solid rgba(255,255,255,0.22);
-  color: var(--text-bright);
   cursor: help;
   user-select: none;
 }
-.usb-effect-pip[data-kind="bad"]  { background: rgba(192,57,43,0.22); border-color: rgba(231,76,60,0.55); }
-.usb-effect-pip[data-kind="good"] { background: rgba(76,175,125,0.22); border-color: rgba(76,175,125,0.55); }
+/* Letter-in-a-circle status badge — one per effect (W wounded, P poisoned,
+   B bleeding, Z stunned, S slowed, M marked, C cursed, F frenzied,
+   I inspired, D fortified, E eagle-eyed). */
+.usb-effect-letter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.15rem;
+  height: 1.15rem;
+  border-radius: 50%;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  background: rgba(255,255,255,0.08);
+  border: 1.5px solid rgba(255,255,255,0.35);
+  color: var(--text-bright);
+}
+.usb-effect-pip[data-kind="bad"] .usb-effect-letter {
+  background: rgba(192,57,43,0.25);
+  border-color: rgba(231,76,60,0.7);
+  color: #ffb3a7;
+}
+.usb-effect-pip[data-kind="good"] .usb-effect-letter {
+  background: rgba(76,175,125,0.25);
+  border-color: rgba(76,175,125,0.7);
+  color: #a8e6c4;
+}
 .usb-effect-pip-dur {
   font-size: 0.65rem;
   color: var(--text-dim);

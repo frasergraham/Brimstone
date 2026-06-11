@@ -23,12 +23,16 @@
 import { ABILITIES } from './abilities.js';
 import { DAMAGE_SCALE } from './balance.js';
 
+// Every effect declares a one-letter `badge` (unique across the registry) —
+// rendered as a letter-in-a-circle status pip in the Unit Stats Bar and the
+// plan panel's selected-unit detail (see buildEffectsHtml in ui-render.js).
 export const EFFECTS = Object.freeze({
   // ── Negative ─────────────────────────────────────────────────────────────
   wounded: {
     id: 'wounded',
     label: 'Wounded',
     icon: '🩸',
+    badge: 'W',
     description: 'Takes +1D6 damage from any source this round',
     // A fresh 1D6 per incoming blow (rolled through the game's deterministic
     // die stream) — wounds make follow-up damage spikier rather than a flat
@@ -41,6 +45,7 @@ export const EFFECTS = Object.freeze({
     id: 'poisoned',
     label: 'Poisoned',
     icon: '☠',
+    badge: 'P',
     description: '−1 DEF; takes damage at end of round',
     statMods: { defense: -1 },
     onRoundEnd: 'damageOne',
@@ -50,6 +55,7 @@ export const EFFECTS = Object.freeze({
     id: 'bleeding',
     label: 'Bleeding',
     icon: '💧',
+    badge: 'B',
     description: 'Takes damage at end of round',
     onRoundEnd: 'damageOne',
     defaultDuration: 2,
@@ -58,6 +64,7 @@ export const EFFECTS = Object.freeze({
     id: 'stunned',
     label: 'Stunned',
     icon: '💫',
+    badge: 'Z',
     description: 'Cannot act this round',
     blocksActions: true,
     defaultDuration: 1,
@@ -66,6 +73,7 @@ export const EFFECTS = Object.freeze({
     id: 'slowed',
     label: 'Slowed',
     icon: '🐌',
+    badge: 'S',
     description: '−1 agility (resolves later in the lockstep order)',
     statMods: { agility: -1 },
     defaultDuration: 1,
@@ -74,6 +82,7 @@ export const EFFECTS = Object.freeze({
     id: 'marked',
     label: 'Marked',
     icon: '🎯',
+    badge: 'M',
     description: 'Attackers gain +1 advantage die against this target',
     combatMods: { incomingAtkAdvantage: 1 },
     defaultDuration: 2,
@@ -82,6 +91,7 @@ export const EFFECTS = Object.freeze({
     id: 'cursed',
     label: 'Cursed',
     icon: '🕯',
+    badge: 'C',
     description: 'Cannot heal or be healed',
     blocksHeal: true,
     defaultDuration: 'mission',
@@ -92,6 +102,7 @@ export const EFFECTS = Object.freeze({
     id: 'frenzied',
     label: 'Frenzied',
     icon: '🔥',
+    badge: 'F',
     description: '+1 ATK, −1 DEF',
     statMods: { attack: 1, defense: -1 },
     defaultDuration: 1,
@@ -100,6 +111,7 @@ export const EFFECTS = Object.freeze({
     id: 'inspired',
     label: 'Inspired',
     icon: '✨',
+    badge: 'I',
     description: '+1 ATK',
     statMods: { attack: 1 },
     defaultDuration: 1,
@@ -108,6 +120,7 @@ export const EFFECTS = Object.freeze({
     id: 'fortified',
     label: 'Fortified',
     icon: '🛡',
+    badge: 'D',
     description: '+1 DEF',
     statMods: { defense: 1 },
     defaultDuration: 2,
@@ -116,6 +129,7 @@ export const EFFECTS = Object.freeze({
     id: 'eagle_eyed',
     label: 'Eagle-Eyed',
     icon: '👁',
+    badge: 'E',
     description: '+1 attack range',
     rangeMod: 1,
     defaultDuration: 'mission',

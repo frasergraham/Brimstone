@@ -44,7 +44,7 @@ export function buildEffectsHtml(entity) {
     else if (rec.duration === 'permanent') tooltipBits.push('Permanent');
     const tooltip = tooltipBits.join(' — ').replace(/"/g, '&quot;');
     return `<span class="usb-effect-pip" data-kind="${kind}" title="${tooltip}">`
-         + `${def.icon ?? '●'}${stacksLabel}`
+         + `<span class="usb-effect-letter">${def.badge ?? '●'}</span>${stacksLabel}`
          + (durLabel ? `<span class="usb-effect-pip-dur">${durLabel}</span>` : '')
          + `</span>`;
   }).join('');
@@ -301,9 +301,11 @@ export function buildUnitDetailHtml(entity, items) {
   const hpHtml = `<span class="usb-hp-wrap"><span class="usb-stat">HP</span>`
     + `<span class="usb-hp-track"><span class="usb-hp-fill" style="width:${hpPct}%;background:linear-gradient(to bottom,rgba(255,255,255,0.28) 0%,rgba(255,255,255,0) 55%),${hpColor}"></span></span>`
     + `<span class="usb-stat-val">${entity.hp}/${entity.maxHp}</span></span>`;
+  const agi = typeof entity.getAgility === 'function' ? entity.getAgility() : (entity.agility ?? 0);
   const statsHtml = `<span class="usb-stat">ATK <span class="usb-stat-val">${atk}</span></span>`
     + `<span class="usb-stat">DEF <span class="usb-stat-val">${def}</span></span>`
-    + `<span class="usb-stat">RNG <span class="usb-stat-val">${rng}</span></span>`;
+    + `<span class="usb-stat">RNG <span class="usb-stat-val">${rng}</span></span>`
+    + `<span class="usb-stat" title="Agility — higher acts earlier each turn">AGI <span class="usb-stat-val">${agi}</span></span>`;
   const extraLine = (abilityHtml || effectsHtml)
     ? `<div class="plan-unit-vline">${abilityHtml}${effectsHtml}</div>`
     : '';
