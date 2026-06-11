@@ -79,6 +79,68 @@ describe('G2 — planCombatPositions geometry', () => {
     assert.ok(Math.abs(plan.attackerAllies[3].toZ - a4Centre.z) < 1e-9);
   });
 
+  test('every moving ally gets its OWN edge spot — no two allies share a target', () => {
+    // Worst case the operator hit in play: allies whose live positions project
+    // to overlapping spots. Each in-cap ally must claim a distinct edge of the
+    // defender's hex.
+    const plan = planCombatPositions({
+      defender: { id: 'd', col: 5, row: 5 },
+      attackAllies: [
+        { id: 'a1', col: 4, row: 5 },
+        { id: 'a2', col: 3, row: 5 }, // not adjacent — projects toward the same west edge as a1
+      ],
+      defenseAllies: [
+        { id: 'b1', col: 6, row: 5 },
+      ],
+    });
+    const movers = [...plan.attackerAllies, ...plan.defenderAllies].filter(a => a.moves);
+    assert.equal(movers.length, 3);
+    const spots = movers.map(a => `${a.toX.toFixed(6)},${a.toZ.toFixed(6)}`);
+    assert.equal(new Set(spots).size, spots.length, 'all edge spots distinct');
+    // Every mover stands ON an edge of the defender's hex (midpoint between the
+    // defender centre and one of its 6 neighbours) — not on some interior point.
+    const def = hexToWorld(5, 5);
+    const edgeSpots = [
+      [4, 5], [5, 4], [6, 4], [6, 5], [6, 6], [5, 6], // odd-row neighbours of (5,5)
+    ].map(([c, r]) => {
+      const n = hexToWorld(c, r);
+      return { x: (def.x + n.x) * 0.5, z: (def.z + n.z) * 0.5 };
+    });
+    for (const m of movers) {
+      const onEdge = edgeSpots.some(e => Math.hypot(e.x - m.toX, e.z - m.toZ) < 1e-6);
+      assert.ok(onEdge, `ally ${m.id} stands on a defender hex edge`);
+    }
+  });
+
+  test('attacker hex reserves its edge — allies never stand on the attacker’s lunge spot', () => {
+    const plan = planCombatPositions({
+      defender: { id: 'd', col: 5, row: 5 },
+      attacker: { id: 'atk', col: 4, row: 5 },
+      // Ally directly behind the attacker would naturally claim the same west
+      // edge — it must be pushed to the next-nearest free edge instead.
+      attackAllies: [{ id: 'a1', col: 3, row: 5 }],
+    });
+    const def = hexToWorld(5, 5);
+    const atk = hexToWorld(4, 5);
+    const attackerEdge = { x: (def.x + atk.x) * 0.5, z: (def.z + atk.z) * 0.5 };
+    const out = plan.attackerAllies[0];
+    assert.equal(out.moves, true);
+    const dist = Math.hypot(out.toX - attackerEdge.x, out.toZ - attackerEdge.z);
+    assert.ok(dist > 1e-6, 'ally does not land on the attacker’s reserved edge');
+  });
+
+  test('adjacent ally still lands on the shared-edge midpoint when no contention', () => {
+    const plan = planCombatPositions({
+      defender:     { id: 'd', col: 5, row: 5 },
+      attackAllies: [{ id: 'a1', col: 4, row: 5 }],
+    });
+    const def = hexToWorld(5, 5);
+    const ally = hexToWorld(4, 5);
+    const out = plan.attackerAllies[0];
+    assert.ok(Math.abs(out.toX - (def.x + ally.x) * 0.5) < 1e-9);
+    assert.ok(Math.abs(out.toZ - (def.z + ally.z) * 0.5) < 1e-9);
+  });
+
   test('advantageCap is respected per side independently (3 atk + 3 def all move; 4th of either stays)', () => {
     const plan = planCombatPositions({
       defender: { id: 'd', col: 5, row: 5 },

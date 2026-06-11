@@ -67,9 +67,13 @@ export async function playFastCombatDisplay({
     // pre-move battle snapshot — otherwise a unit that moved this turn warps
     // back to its turn-start hex for the readout, then slides back.
     const liveDef = state?.entities?.find(e => e.id === targetSnap.id && e.alive);
+    // The attacker's live hex reserves its edge of the defender's hex so no
+    // ally is assigned the spot the attacker's lunge freezes on.
+    const liveAtk = state?.entities?.find(e => e.id === actorSnap.id && e.alive);
     renderer.applyCombatPositioning(
       {
         defender: { id: targetSnap.id, col: liveDef?.col ?? targetSnap.col, row: liveDef?.row ?? targetSnap.row },
+        attacker: { id: actorSnap.id, col: liveAtk?.col ?? actorSnap.col, row: liveAtk?.row ?? actorSnap.row },
         attackAllies:  atkAllyIds.map(lookupAlly).filter(Boolean),
         defenseAllies: defAllyIds.map(lookupAlly).filter(Boolean),
       },
