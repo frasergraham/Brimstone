@@ -138,3 +138,20 @@ export function snapHud(page) {
     nextBtnDisabled: document.getElementById('replay-next-btn')?.disabled ?? null,
   }));
 }
+
+/**
+ * Boot a hand-defined board via the `?scenario=` dev loader (see initScenario in
+ * src/main.js) — a small map + unit placements + an optional scripted turn,
+ * skipping the menu/AI/conversation. Lets a visual change be verified at an
+ * exact board state deterministically (e.g. two units on a forest hex, or a
+ * blocked-move-then-attack) instead of grinding an AI game to that situation.
+ *
+ * @param {import('playwright').Page} page
+ * @param {string} baseUrl
+ * @param {object} def  scenario definition (see initScenario's doc comment):
+ *   { cols, rows, tiles[], hero, witch, units[], heroPlan[], witchPlan[], resolve, fog }
+ */
+export async function loadScenario(page, baseUrl, def) {
+  const url = `${baseUrl}/?scenario=${encodeURIComponent(JSON.stringify(def))}`;
+  await page.goto(url, { waitUntil: 'domcontentloaded' });
+}

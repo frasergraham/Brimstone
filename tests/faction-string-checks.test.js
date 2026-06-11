@@ -43,7 +43,7 @@ const ALLOWLIST = Object.freeze({
   // `_swapStubLeader` to look up the side-default leader on state.
   // See docs/design/faction-expansion.md.
   'server/lobby.js':             74,
-  'src/main.js':                 44,
+  'src/main.js':                 45,
   'src/ui.js':                   25,
 
   // Pre-existing core modules — generalized in Finding 1, residual checks

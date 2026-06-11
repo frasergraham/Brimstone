@@ -33,8 +33,8 @@ import { PlanActionType, groupPlanByEntity } from './planner.js';
 import { buildStepDigest, isEventVisible } from './replay-timeline.js';
 import { hexDistance, getNeighbors, hexKey } from './hex.js';
 import { planCombatFrames } from './combat-presentation.js';
-import { MAX_FORTIFY_LEVEL, FORT_IMPASSABLE_THRESHOLD } from './tiles.js';
-import { sightRange, computeLineOfSight, hasLineOfSight } from './actions.js';
+import { MAX_FORTIFY_LEVEL, FORT_IMPASSABLE_THRESHOLD, deriveBlockedSlots } from './tiles.js';
+import { sightRange, computeLineOfSight, hasLineOfSight, assignSlotOnTile } from './actions.js';
 import { ITEMS } from './items.js';
 import { getFaction, findFaction, allFactions, getFactionsForSide, sightRangeForEntity } from './factions.js';
 import { compileTurnBattleSummary, compileTurnBattlePairs, collectTurnFinds } from './battle-utils.js';
@@ -3603,6 +3603,89 @@ function _createEnemyEntity(type, col, row, state = null) {
     case 'wood_golem': return createWoodGolem(col, row, 'witch', state);
     case 'iron_golem': return createIronGolem(col, row, 'witch', state);
     default:           return createMinion(col, row, 'witch', state);
+  }
+}
+
+// ── Dev scenario loader (visual testing) ─────────────────────────────────────
+// Boot straight into a hand-defined board — small map + unit placements + an
+// optional scripted resolution — via `?scenario=<urlencoded-JSON>`, skipping the
+// menu, AI, and conversations. Lets a visual change (renderer / replay) be
+// verified at a specific board state without playing a whole game. Driven by
+// scripts/verify/browser-harness.mjs (`loadScenario`). Definition shape:
+//   {
+//     cols, rows,                                  // grid (default 9×9 grass)
+//     tiles: [{col,row,type:'FOREST'|'ROAD'|…, roadDirs?:['c,r',…]}],  // sparse
+//     hero: {col,row}, witch: {col,row}|null,      // leader starts (witch opt.)
+//     units: [{ref?, type, owner:'hero'|'witch', col, row, weapon?, level?}],
+//     heroPlan/witchPlan: [{ref, move:[c,r]} | {ref, attack:'<ref>'}],
+//     resolve: bool,                               // animate the scripted turn
+//     fog: 'none'|'partial',                       // default 'none'
+//   }
+function _createScenarioUnit(type, col, row, owner, state) {
+  if (owner === 'hero') return createSurvivor(col, row, 'hero', state);
+  return _createEnemyEntity(type, col, row, state);
+}
+
+function _scenarioPlan(planDefs, byRef) {
+  const out = [];
+  for (const p of planDefs ?? []) {
+    const actor = byRef.get(p.ref);
+    if (!actor) continue;
+    if (Array.isArray(p.move)) {
+      out.push({ type: PlanActionType.MOVE, entityId: actor.id, toCol: p.move[0], toRow: p.move[1] });
+    } else if (p.attack != null) {
+      const target = byRef.get(p.attack);
+      if (target) out.push({ type: PlanActionType.BATTLE_UNIT, entityId: actor.id, targetId: target.id });
+    }
+  }
+  return out;
+}
+
+function initScenario(def) {
+  _autoplay = false;
+  _roundHistory = [];
+  const canvas = document.getElementById('game-canvas');
+  document.getElementById('setup-screen').style.display = 'none';
+  document.getElementById('game-screen').style.display  = 'flex';
+
+  const cols = def.cols ?? 9, rows = def.rows ?? 9;
+  const mapData = buildMissionMap({
+    mode: 'handmade', cols, rows, mapSize: 'skirmish',
+    heroStart:  def.hero  ?? { col: 1, row: 1 },
+    witchStart: def.witch ?? { col: cols - 2, row: rows - 2 },
+    witchObjectives: [],
+    tiles: def.tiles ?? [],
+  });
+  // buildMissionMap doesn't derive forest/bridge blocked slots — do it here so
+  // the standee re-slot and capacity gate see the trees the renderer draws.
+  for (const t of mapData.tiles.values()) t.blockedSlots = deriveBlockedSlots(t);
+
+  state = new GameState(true, true, 'skirmish', null, { ...mapData, noWitch: !def.witch });
+  state.fogOfWar = def.fog ?? 'none';
+
+  // ref → entity map for plan targeting (leaders are pre-registered).
+  const byRef = new Map([['hero', state.hero]]);
+  if (state.witch) byRef.set('witch', state.witch);
+  for (const u of def.units ?? []) {
+    const e = _createScenarioUnit(u.type, u.col, u.row, u.owner ?? 'witch', state);
+    if (!e) continue;
+    if (u.weapon) e.equipWeapon(u.weapon);
+    if (u.level && u.level > 1) applyLevel(e, u.level);
+    state.entities.push(e);
+    assignSlotOnTile(state, e);
+    if (u.ref) byRef.set(u.ref, e);
+  }
+
+  _setupLocalUI(canvas, null, null, false);  // also drives the loading reveal
+  redraw();
+
+  if (def.resolve) {
+    state.heroPlan  = _scenarioPlan(def.heroPlan, byRef);
+    state.witchPlan = _scenarioPlan(def.witchPlan, byRef);
+    // Let the reveal settle, then animate the scripted turn.
+    setTimeout(() => {
+      _runLocalResolution(true).catch(e => console.error('scenario resolve error:', e));
+    }, 900);
   }
 }
 
@@ -8400,6 +8483,15 @@ function _renderSpectatorReadyList(players, submittedIds) {
 const _spectateParam = new URLSearchParams(location.search).get('spectate')
                     ?? new URLSearchParams(location.search).get('room');
 if (_spectateParam) initSpectator(_spectateParam);
+
+// Dev visual-testing harness: ?scenario=<urlencoded JSON> boots a hand-defined
+// board (small map + unit placements + optional scripted resolution), skipping
+// the menu/AI/conversation. See initScenario + scripts/verify.
+const _scenarioParam = new URLSearchParams(location.search).get('scenario');
+if (_scenarioParam) {
+  try { initScenario(JSON.parse(_scenarioParam)); }
+  catch (e) { console.error('Bad ?scenario= JSON:', e); }
+}
 
 // Auto-start admin replay when ?replayGame=<gameId>[&source=sp] is in the URL.
 // This allows /replay?replayGame=X (served as index.html) to work automatically.
