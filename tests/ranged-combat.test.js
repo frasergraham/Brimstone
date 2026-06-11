@@ -129,21 +129,22 @@ describe('ranged attack — no counter', () => {
 });
 
 describe('ranged attack — no crush, no splash', () => {
-  test('huge margin on a ranged hit still deals only 1 damage', () => {
+  test('huge margin on a ranged hit still deals only the 1× weapon roll', () => {
     const state = freshState();
     const witch = state.witch;
     const hero  = state.hero;
     placeAt(witch, 5, 5);
     placeAt(hero,  7, 5);
 
-    // Force atk=6 and def=1 → margin huge, would crush a melee attack.
-    state.setForcedDice(6, 1);
+    // Force atk=6 and def=1 → margin huge, would crush a melee attack. The two
+    // trailing dice are the witch's magic-bolt 2D6 damage roll (3+4=7).
+    state.setForcedDice(6, 1, 3, 4);
     const heroHpBefore = hero.hp;
     const r = executeBattle(state, witch, hero);
 
     assert.equal(r.hit, true);
-    assert.equal(r.damage, 1, 'ranged hit always deals exactly 1');
-    assert.equal(hero.hp, heroHpBefore - 1);
+    assert.equal(r.damage, 7, 'ranged hit is never multiplied by crush tier');
+    assert.equal(hero.hp, heroHpBefore - 7);
     // No crush flag, no splash list.
     assert.equal(r.attackRoll >= 2 * r.defenseRoll, true, 'margin would crush if melee');
     assert.equal(r.splashKills.length, 0);

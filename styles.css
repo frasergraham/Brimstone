@@ -1736,6 +1736,8 @@ body.renderer-3d #rotate-right {
   user-select: none;
 }
 body.renderer-3d.debug-counters #fps-counter { display: block; }
+/* /fps console command — show just the FPS chip, independent of debug-counters. */
+body.renderer-3d.show-fps #fps-counter { display: block; }
 #poly-counter {
   position: absolute;
   top: 32px;

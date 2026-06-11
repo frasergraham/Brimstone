@@ -584,10 +584,13 @@ describe('executeBattle', () => {
     assert.equal(r.cost, 1);
   });
 
-  // Damage tiers: hit=1, crush (atk ≥ 2× def)=2, great crush (atk ≥ 3× def)=3.
-  // A defender's `wounded` (+1 damage taken) lifts the whole blow by +1 ONCE —
-  // so a normal crush on a wounded target is 3, not 4 (no per-hit doubling).
-  function duel(atkDie, defDie, { wounded = false } = {}) {
+  // Damage = tier × rolled weapon damage: hit=1×, crush (atk ≥ 2× def)=2×,
+  // great crush (atk ≥ 3× def)=3×. The unarmed attacker rolls 2D6, forced to
+  // 3+4=7 here, so a hit=7, crush=14, great crush=21. Forced-dice order is
+  // [atkDie, defDie] (advantage pools) then the two damage dice. A defender's
+  // `wounded` (+DAMAGE_SCALE damage taken) lifts the whole blow ONCE — so a
+  // normal crush on a wounded target is 14+7=21, not doubled per point.
+  function duel(atkDie, defDie, { wounded = false, dmgDice = [3, 4] } = {}) {
     const state = freshState();
     // Neutralize the random-map tile so only the forced dice + stats decide the
     // roll ratio (no stray fort/footprint/forest from procgen).
@@ -597,38 +600,38 @@ describe('executeBattle', () => {
     attacker.attack = 0; attacker.weapon = null; attacker.abilities = []; attacker.effects = [];
     const defender = new Entity(EntityType.SURVIVOR, 'hero', 2, 2);
     defender.defense = 0; defender.weapon = null; defender.abilities = []; defender.effects = [];
-    defender.maxHp = 30; defender.hp = 30;
+    defender.maxHp = 300; defender.hp = 300;
     if (wounded) applyEffect(defender, 'wounded');
     state.entities = [attacker, defender];
     state.phase = Phase.DAY;            // neutral — no phase bonus for either side
-    state.setForcedDice(atkDie, defDie);
+    state.setForcedDice(atkDie, defDie, ...dmgDice);
     return executeBattle(state, attacker, defender);
   }
 
-  test('ordinary hit (atk just above def) deals 1', () => {
+  test('ordinary hit (atk just above def) deals 1× weapon roll', () => {
     const r = duel(3, 2); // 3 vs 2 — hit, below the 2× crush line
     assert.equal(r.hit, true);
-    assert.equal(r.damage, 1);
+    assert.equal(r.damage, 7); // 1× (3+4)
   });
 
-  test('crush (atk ≥ 2× def) deals 2', () => {
+  test('crush (atk ≥ 2× def) deals 2× weapon roll', () => {
     const r = duel(2, 1); // 2 vs 1 — crush, below the 3× great line
-    assert.equal(r.damage, 2);
+    assert.equal(r.damage, 14); // 2× (3+4)
   });
 
-  test('great crush (atk ≥ 3× def) deals 3', () => {
+  test('great crush (atk ≥ 3× def) deals 3× weapon roll', () => {
     const r = duel(6, 2); // 6 vs 2 — exactly 3×
-    assert.equal(r.damage, 3);
+    assert.equal(r.damage, 21); // 3× (3+4)
   });
 
-  test('crush on a WOUNDED target deals 3, not 4 (wounded bonus applied once)', () => {
-    const r = duel(2, 1, { wounded: true }); // base crush 2 + wounded +1 once
-    assert.equal(r.damage, 3);
+  test('crush on a WOUNDED target adds the surcharge once', () => {
+    const r = duel(2, 1, { wounded: true }); // base crush 14 + wounded +7 once
+    assert.equal(r.damage, 21);
   });
 
-  test('great crush on a WOUNDED target deals 4 (3 base + wounded once)', () => {
-    const r = duel(6, 2, { wounded: true });
-    assert.equal(r.damage, 4);
+  test('great crush on a WOUNDED target adds the surcharge once', () => {
+    const r = duel(6, 2, { wounded: true }); // base great crush 21 + wounded +7
+    assert.equal(r.damage, 28);
   });
 
   test('result includes attackRoll, defenseRoll, hit, margin', () => {
@@ -1238,6 +1241,43 @@ describe('executeBattle — splash damage', () => {
   });
 });
 
+// ── Premium-weapon loot tier gate ─────────────────────────────────────────────
+// greatsword/warhammer are gated to late rounds (LOOT_TIER_GATE). Exercise the
+// real explore→_effectiveLoot→rollLoot path: before the gate they can NEVER drop;
+// past it they can. Uses a blacksmith tile (their loot source).
+describe('loot tier gate', () => {
+  function exploreBlacksmith(state, hero) {
+    const t = state.tiles.get(hexKey(hero.col, hero.row));
+    t.structure = null; t.building = BuildingType.BLACKSMITH;
+    t.explored = false; t.hiddenSurvivor = false; clearFootprint(t);
+    hero.weapon = null; hero.items = {};      // unarmed → a found weapon equips
+    executeExplore(state, hero);
+    return hero.weapon ?? Object.keys(hero.items).find(k => k === 'greatsword' || k === 'warhammer');
+  }
+
+  test('premium weapons NEVER drop before their gate round', () => {
+    const state = freshState();
+    state.round = 1;
+    let premium = 0;
+    for (let i = 0; i < 400; i++) {
+      const got = exploreBlacksmith(state, state.hero);
+      if (got === 'greatsword' || got === 'warhammer') premium++;
+    }
+    assert.equal(premium, 0, 'no greatsword/warhammer before round 8');
+  });
+
+  test('premium weapons CAN drop once past the gate round', () => {
+    const state = freshState();
+    state.round = 12; // past greatsword(8) + warhammer(10) gates
+    let premium = 0;
+    for (let i = 0; i < 600; i++) {
+      const got = exploreBlacksmith(state, state.hero);
+      if (got === 'greatsword' || got === 'warhammer') premium++;
+    }
+    assert.ok(premium > 0, `expected at least one premium drop past the gate, got ${premium}`);
+  });
+});
+
 // ── executeFortify ────────────────────────────────────────────────────────────
 // Design: Metal → +2 levels; Wood → +1 level (or +2 with FORTIFY_DOUBLE); cap at 6
 
@@ -1591,13 +1631,13 @@ describe('executeHeal', () => {
     const state = freshState();
     const hero = state.hero;
     state.inventory.hero[ResourceType.HERBS] = 1;
-    hero.takeDamage(5);
+    hero.takeDamage(20);
     const hpBefore = hero.hp;
 
     const r = executeHeal(state, hero);
     assert.equal(r.success, true);
     assert.equal(r.cost, 1, 'Heal should cost 1 action');
-    assert.equal(hero.hp, hpBefore + 2);
+    assert.equal(hero.hp, hpBefore + 14); // herbs heal 2 × DAMAGE_SCALE
     assert.equal(state.inventory.hero[ResourceType.HERBS], 0, 'Herbs should be consumed from shared inventory');
   });
 
@@ -1605,13 +1645,13 @@ describe('executeHeal', () => {
     const state = freshState();
     const witch = state.witch;
     state.inventory.witch[ResourceType.HERBS] = 1;
-    witch.takeDamage(3);
+    witch.takeDamage(20);
     const hpBefore = witch.hp;
 
     const r = executeHeal(state, witch);
     assert.equal(r.success, true);
     assert.equal(r.cost, 1);
-    assert.equal(witch.hp, hpBefore + 2);
+    assert.equal(witch.hp, hpBefore + 14);
     assert.equal(state.inventory.witch[ResourceType.HERBS], 0, 'Herbs consumed from witch inventory');
   });
 
@@ -1645,13 +1685,13 @@ describe('executeHeal', () => {
     survivor.items = {};
     state.entities.push(survivor);
     state.inventory.hero[ResourceType.HERBS] = 1;
-    survivor.takeDamage(3);
+    survivor.takeDamage(20);
     const hpBefore = survivor.hp;
 
     const r = executeHeal(state, survivor);
     assert.equal(r.success, true);
     assert.equal(r.cost, 1);
-    assert.equal(survivor.hp, hpBefore + 2);
+    assert.equal(survivor.hp, hpBefore + 14);
     assert.equal(state.inventory.hero[ResourceType.HERBS], 0, 'Herbs consumed from shared inventory');
   });
 
@@ -1803,13 +1843,13 @@ describe('executeUseAbility — HEAL', () => {
     healer.abilities = [SurvivorAbility.HEAL];
     healer.items = {};
     state.entities.push(healer);
-    hero.takeDamage(5);
+    hero.takeDamage(20);
     const hpBefore = hero.hp;
 
     const r = executeUseAbility(state, healer, SurvivorAbility.HEAL);
     assert.equal(r.success, true);
     assert.equal(r.cost, 1, 'HEAL ability costs 1 action');
-    assert.equal(hero.hp, hpBefore + 1);
+    assert.equal(hero.hp, hpBefore + 7); // HEAL ability heals 1 × DAMAGE_SCALE
   });
 
   test('HEAL fails if hero not on same hex', () => {

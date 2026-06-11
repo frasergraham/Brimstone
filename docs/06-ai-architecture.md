@@ -379,17 +379,30 @@ When scoring is ≤2 rounds away and a node has feasibility ≥0.6, the hero AI 
 
 ## Balance Baseline & Tuning Methodology
 
-**Last updated:** 2026-06-09 (weapons overhaul — weapon-derived range, starting weapons, ranged-weapon attacks; recentred with Magic Bolt +1 ATK and witch `unitBonusCap` 3→4)
+**Last updated:** 2026-06-10 (damage-dice overhaul — weapons roll damage, HP ×7; see note below)
 
-### Baseline Metrics (500 1v1 games, Standard 13×13)
+### Baseline Metrics (500 1v1 games, Standard 14×14)
 
 | Metric | Value | Target |
 |--------|-------|--------|
-| Hero win rate | 51.6% | 38–62% (±12%) |
-| Witch win rate | 48.4% | 38–62% (±12%) |
-| Kill wins | ~54% | ≥20% |
-| Draws | 0.0% | — |
+| Hero win rate | ~43% | 38–62% (±12%) |
+| Witch win rate | ~57% | 38–62% (±12%) |
+| Kill wins | ~50% | ≥20% |
+| Tiebreaks | 0.2% | <10% |
+| Round-cap hits | 0.2% | <5% |
 | Mean rounds | ~22 | 15–35 |
+
+> Damage-dice overhaul note (2026-06-10): weapons now deal rolled damage (fixed
+> or dice; e.g. unarmed/sword 2D6, musket 2D8) and all HP is ×`DAMAGE_SCALE` (7),
+> chosen so average hits-to-kill matches the pre-dice era. Combat is markedly
+> more lethal — kill-wins rose to ~50% and the aggregate tilts ~6pts toward the
+> witch (1v1 ~57%, still in band). The **balanced-vs-balanced** matchup stays
+> centered at H50%/W50% in `ai-matrix`; the aggregate witch lean comes from the
+> aggressive-witch outlier (~61%) benefiting most from deadlier night crushes
+> (crush now *multiplies* the rolled damage, compounding the witch's night
+> advantage). Recentring levers if a tuning pass is wanted: trim the great-crush
+> multiplier, the witch phase bonus, or nudge a couple of witch-favorable weapon
+> dice down / hero HP up.
 
 > Weapons-overhaul note: ranged weapons only benefit the hero's roster (summons/zombies/golems can't equip), which skewed NvN toward the hero. The witch's `unitBonusCap` was raised 3→4 so its swarm converts to actions and keeps contesting nodes; Magic Bolt carries +1 ATK so the witch leader keeps the same ~1-ATK duel gap vs the now-sword-armed Paladin.
 

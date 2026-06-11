@@ -109,9 +109,9 @@ describe('RogueFaction — innate abilities', () => {
 // ── Stats — fragile + fast ──────────────────────────────────────────────────
 
 describe('RogueFaction — leader stats', () => {
-  test('rogue is fragile (HP 10, DEF 1) and fast (agility 8)', () => {
+  test('rogue is fragile (HP 70, DEF 1) and fast (agility 8)', () => {
     const r = getFaction('rogue').createLeader(0, 0, 'p1');
-    assert.equal(r.maxHp,   10);
+    assert.equal(r.maxHp,   70);
     assert.equal(r.attack,   3);
     assert.equal(r.defense,  1);
     assert.equal(r.agility,  8);

@@ -7,6 +7,7 @@ import {
   effectStatMod, effectRangeMod, effectIncomingAtkAdvantage,
   effectDamageTakenFlat, effectsBlockHeal,
 } from './effects.js';
+import { hpForLevel, atkBonusForLevel, defBonusForLevel } from './balance.js';
 
 let _nextId = 1;
 
@@ -40,6 +41,29 @@ export function nextDie(sides) {
   return Math.ceil(Math.random() * sides);
 }
 const _nextDie = nextDie;
+
+// ── Weapon damage rolls ──────────────────────────────────────────────────────
+// A damage spec is either a plain number (fixed damage) or an object
+// { count, sides, flat }: roll `count` dice of `sides` faces and add `flat`
+// (e.g. { count: 2, sides: 6 } is 2D6; { count: 1, sides: 12, flat: 1 } is
+// 1D12+1; the number 5 is a flat 5). normalizeDamage coerces either form into
+// the object shape; rollDamage routes every die through the supplied `roll`
+// fn — normally `s => state.nextDie(s)` — so damage is deterministic under
+// forced dice / replay / online resolution, exactly like the advantage pools.
+export function normalizeDamage(spec) {
+  if (typeof spec === 'number') return { count: 0, sides: 0, flat: spec };
+  return {
+    count: spec?.count ?? 0,
+    sides: spec?.sides ?? 0,
+    flat:  spec?.flat  ?? 0,
+  };
+}
+export function rollDamage(spec, roll) {
+  const s = normalizeDamage(spec);
+  let total = s.flat;
+  for (let i = 0; i < s.count; i++) total += roll(s.sides);
+  return Math.max(1, total);
+}
 
 // Entity type ids. Values are the wire/save format — be cautious renaming.
 //
@@ -196,6 +220,12 @@ export class Entity {
     // Stat composition runs in getAttack/getDefense/getRange/getAgility.
     this.effects = [];
 
+    // Unit level (≥1). Scales intrinsic HP/ATK/DEF, not weapon damage —
+    // applyLevel() (below) sets maxHp; getAttack/getDefense compose the
+    // ATK/DEF bonus. Persists across rounds (not reset in resetTurn).
+    // Used by campaign authoring to ramp difficulty (Zombie L1/L2/L3…).
+    this.level = 1;
+
     // Personal backpack — a flat key→count map. Weapons use their ITEMS
     // id directly (e.g. 'sword'); consumables and mounts use their
     // resource/item id (e.g. 'horse', 'herbs'). ITEMS[key].kind
@@ -206,7 +236,8 @@ export class Entity {
   get alive() { return this.hp > 0; }
 
   get displayName() {
-    return this.name ?? defaultDisplayName(this.type);
+    const base = this.name ?? defaultDisplayName(this.type);
+    return (this.level ?? 1) > 1 ? `${base} L${this.level}` : base;
   }
 
   // ── Stat accessors (Phase 2 of the units/items/abilities refactor) ──
@@ -224,12 +255,14 @@ export class Entity {
 
   getAttack()  {
     return this.attack
+      + atkBonusForLevel(this.level)
       + (ITEMS[this.weapon]?.statMods?.attack ?? 0)
       + _abilityStatMod(this.abilities, 'attack')
       + effectStatMod(this, 'attack');
   }
   getDefense() {
     return this.defense
+      + defBonusForLevel(this.level)
       + (ITEMS[this.weapon]?.statMods?.defense ?? 0)
       + _abilityStatMod(this.abilities, 'defense')
       + effectStatMod(this, 'defense');
@@ -471,18 +504,20 @@ function _chosenDieProb(v, net) {
 export function attackOf(e) {
   if (typeof e?.getAttack === 'function') return e.getAttack();
   const base        = e?.attack ?? 0;
+  const levelMod    = atkBonusForLevel(e?.level);
   const weaponMod   = e?.weapon ? (ITEMS[e.weapon]?.statMods?.attack ?? 0) : 0;
   const abilityMod  = _abilityStatMod(e?.abilities, 'attack');
   const effectMod   = effectStatMod(e, 'attack');
-  return base + weaponMod + abilityMod + effectMod;
+  return base + levelMod + weaponMod + abilityMod + effectMod;
 }
 export function defenseOf(e) {
   if (typeof e?.getDefense === 'function') return e.getDefense();
   const base        = e?.defense ?? 0;
+  const levelMod    = defBonusForLevel(e?.level);
   const weaponMod   = e?.weapon ? (ITEMS[e.weapon]?.statMods?.defense ?? 0) : 0;
   const abilityMod  = _abilityStatMod(e?.abilities, 'defense');
   const effectMod   = effectStatMod(e, 'defense');
-  return base + weaponMod + abilityMod + effectMod;
+  return base + levelMod + weaponMod + abilityMod + effectMod;
 }
 // Attack range in hexes — tolerates plain-object fixtures. Range is
 // weapon-derived: prefer the denormalized `range` cache, else read it from
@@ -553,6 +588,20 @@ export function expectedDieValue(net) {
   const n = clampAdvantage(net);
   if (n >= 0) return BEST_OF_K_EV[n];
   return WORST_OF_K_EV[-n];
+}
+
+// Set a unit's level and rescale its HP. ATK/DEF level bonuses compose live in
+// getAttack()/getDefense(), so this only needs to handle maxHp (a stored field,
+// not a getter). Idempotent: the level-1 base maxHp is snapshotted on the first
+// call, so a future re-level (e.g. regular-mode veterancy) won't compound the
+// scaling. Spawn units at full HP. Called once at spawn by campaign authoring.
+export function applyLevel(entity, level) {
+  const lvl = Math.max(1, Math.floor(level || 1));
+  if (entity._baseMaxHp == null) entity._baseMaxHp = entity.maxHp;
+  entity.level = lvl;
+  entity.maxHp = hpForLevel(entity._baseMaxHp, lvl);
+  entity.hp    = entity.maxHp;
+  return entity;
 }
 
 // Innate leader abilities are stamped onto each leader by

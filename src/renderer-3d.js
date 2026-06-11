@@ -6087,6 +6087,15 @@ export class Renderer3D {
     console.log(`[Renderer3D] border forest ${this._borderForestHidden ? 'hidden' : 'visible'}`);
   }
 
+  /** Show/hide the on-canvas FPS counter. Pure CSS toggle — the render loop
+   *  pumps the readout every frame regardless; `body.show-fps` just unhides it.
+   *  Driven by the `/fps` console command. Returns a status string to echo. */
+  _toggleFpsCounter() {
+    if (typeof document === 'undefined') return 'FPS counter unavailable (no DOM).';
+    const on = document.body.classList.toggle('show-fps');
+    return `FPS counter ${on ? 'shown' : 'hidden'}`;
+  }
+
   /** Toggle the renderer-level fog DISPLAY override (normal ↔ off) and re-apply
    *  the veil. Bound to the `T` hotkey. This is a pure display override that
    *  does NOT touch the game's `fogOfWar` state — it only suppresses or restores

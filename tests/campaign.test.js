@@ -846,6 +846,44 @@ describe('Wave spawner', () => {
     assert.equal(witchEntities.length, 1);
   });
 
+  test('processWaves applies a per-unit level (scaled HP/ATK/DEF)', () => {
+    const mapData = buildMap('prologue');
+    mapData.noWitch = true;
+    const state = new GameState(true, false, 'skirmish', null, mapData);
+    state.round = 2;
+
+    const waves = [
+      { round: 2, units: [{ type: 'zombie', spawnAt: { col: 4, row: 4 }, level: 3 }] },
+    ];
+    const createFn = (type, col, row) => createZombie(col, row, 'witch');
+    processWaves(state, waves, createFn);
+
+    const z = state.entities.find(e => e.owner === 'witch');
+    assert.ok(z, 'leveled zombie spawned');
+    assert.equal(z.level, 3);
+    assert.equal(z.maxHp, 28);          // zombie base 14 → L3 ×2.0
+    assert.equal(z.getAttack(), 4);     // base 2 + (3−1)
+    assert.equal(z.getDefense(), 1);    // base 0 + floor((3−1)/2)
+  });
+
+  test('explicit overrides still win over level scaling', () => {
+    const mapData = buildMap('prologue');
+    mapData.noWitch = true;
+    const state = new GameState(true, false, 'skirmish', null, mapData);
+    state.round = 2;
+
+    const waves = [
+      { round: 2, units: [{ type: 'zombie', spawnAt: { col: 4, row: 4 }, level: 3, overrides: { maxHp: 50, hp: 50 } }] },
+    ];
+    const createFn = (type, col, row) => createZombie(col, row, 'witch');
+    processWaves(state, waves, createFn);
+
+    const z = state.entities.find(e => e.owner === 'witch');
+    assert.equal(z.level, 3, 'level still recorded (drives ATK/DEF)');
+    assert.equal(z.maxHp, 50, 'explicit maxHp override wins over the level HP scale');
+    assert.equal(z.getAttack(), 4, 'level ATK bonus still composes');
+  });
+
   test('processWaves returns empty for null waves', () => {
     const mapData = buildMap('prologue');
     mapData.noWitch = true;
@@ -886,7 +924,7 @@ describe('Wave spawner', () => {
     const spawned = state.entities.filter(e => e.owner === 'witch');
     assert.equal(spawned.length, 1);
     assert.equal(spawned[0].attack, 1, 'zombie attack should be overridden to 1');
-    assert.equal(spawned[0].hp, 2, 'zombie HP should remain at default');
+    assert.equal(spawned[0].hp, 14, 'zombie HP should remain at default (2 × DAMAGE_SCALE)');
   });
 
   test('hero_kills trigger fires when heroKills >= count', () => {
@@ -1065,9 +1103,9 @@ describe('Mission 1 (The Awakening) balance', () => {
     assert.equal(wave.units.length, 1);
     const unit = wave.units[0];
     assert.equal(unit.type, 'wood_golem');
-    // Weaker than the standard wood golem (maxHp 3, attack 2, defense 3).
-    assert.equal(unit.overrides.maxHp, 2);
-    assert.equal(unit.overrides.hp, 2);
+    // Weaker than the standard wood golem (maxHp 21, attack 2, defense 3).
+    assert.equal(unit.overrides.maxHp, 14);
+    assert.equal(unit.overrides.hp, 14);
     assert.equal(unit.overrides.attack, 1);
     assert.equal(unit.overrides.defense, 1);
   });

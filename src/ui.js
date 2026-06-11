@@ -3,6 +3,7 @@ import { hexKey, hexToPixel, hexDistance, MAP_COLS, MAP_ROWS } from './hex.js';
 import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus, legacyTileType } from './tiles.js';
 import { ITEMS } from './items.js';
 import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, attackOf, defenseOf, rangeOf } from './entities.js';
+import { DAMAGE_SCALE } from './balance.js';
 import { Phase, PHASE_ICON, phaseForRound, DEFAULT_CYCLE_PHASES, nodeController, countHeldNodes } from './game.js';
 import { PAD_X, PAD_Y, Renderer } from './renderer.js';
 import { makeOverlay } from './overlays.js';
@@ -3982,15 +3983,17 @@ export class UIController {
         outcome.className   = 'battle-outcome kill';
       } else if (result.hit) {
         const fortNote = result.fortDamaged ? ` (-${result.fortDamaged} fortifications)` : '';
-        if (result.damage >= 2) {
-          outcome.textContent = `💥💥 Crushing hit! ${targetSnap.name} takes ${result.damage} damage!${fortNote}`;
+        const tier = result.breakdown?.dmgTier ?? 1;
+        if (tier >= 2) {
+          const word = tier >= 3 ? 'Great crushing hit!' : 'Crushing hit!';
+          outcome.textContent = `💥💥 ${word} ${targetSnap.name} takes ${result.damage} damage!${fortNote}`;
           outcome.className   = 'battle-outcome kill';
         } else {
-          outcome.textContent = `💥 Hit! ${targetSnap.name} takes 1 damage${fortNote}`;
+          outcome.textContent = `💥 Hit! ${targetSnap.name} takes ${result.damage} damage${fortNote}`;
           outcome.className   = 'battle-outcome hit';
         }
       } else if (result.counterDmg > 0) {
-        outcome.textContent = `⚔ Counter! ${actorSnap.name} takes 1 damage!`;
+        outcome.textContent = `⚔ Counter! ${actorSnap.name} takes ${result.counterDmg} damage!`;
         outcome.className   = 'battle-outcome kill';
       } else {
         outcome.textContent = `🛡 ${targetSnap.name} defends!`;
@@ -4003,7 +4006,7 @@ export class UIController {
         const splashEl = document.createElement('div');
         splashEl.className = 'battle-splash';
         const lines = result.splashHits.map(h =>
-          h.killed ? `💢 ${h.name} is slain by splash!` : `💢 ${h.name} takes −1 splash damage`
+          h.killed ? `💢 ${h.name} is slain by splash!` : `💢 ${h.name} takes −${h.damage ?? 1} splash damage`
         );
         splashEl.textContent = lines.join('  ·  ');
         outcome.insertAdjacentElement('afterend', splashEl);
@@ -5726,8 +5729,13 @@ function _unitCardHTML(entity, { renderer = null, selectable = false, showStats 
     ? `<img class="tile-unit-card-portrait" src="${src}" style="width:${portraitSize}px;height:${portraitSize}px;border-color:${color};" alt="">`
     : `<span class="tile-unit-card-icon" style="color:${color}">${glyph}</span>`;
 
-  // Stats line
-  const hearts = '♥'.repeat(entity.hp ?? 0) + '♡'.repeat(Math.max(0, (entity.maxHp ?? entity.hp ?? 0) - (entity.hp ?? 0)));
+  // Stats line — one heart per DAMAGE_SCALE HP chunk so scaled pools (e.g. a
+  // 98/70 HP hero) render at the same ~14/10 hearts they did pre-scaling.
+  const hpNow  = entity.hp ?? 0;
+  const hpMax  = entity.maxHp ?? entity.hp ?? 0;
+  const fullHearts  = Math.round(hpNow / DAMAGE_SCALE);
+  const totalHearts = Math.max(fullHearts, Math.round(hpMax / DAMAGE_SCALE));
+  const hearts = '♥'.repeat(fullHearts) + '♡'.repeat(Math.max(0, totalHearts - fullHearts));
   let statsHtml = hearts;
   if (showStats && entity.attack !== undefined) {
     const atk = attackOf(entity);

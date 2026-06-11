@@ -159,6 +159,17 @@ export function validateMissionJSON(m) {
     if (!_inBounds(u, ext)) {
       _fail(`enemyUnit at (${u.col},${u.row}) is outside the ${ext.cols}×${ext.rows} map extent`);
     }
+    if (u.level != null && !(_isInt(u.level) && u.level >= 1)) {
+      _fail(`enemyUnit at (${u.col},${u.row}) has invalid "level" — must be an integer ≥ 1`);
+    }
+  }
+  // Optional per-unit level on wave specs (scales HP/ATK/DEF — see applyLevel).
+  for (const w of m.waves ?? []) {
+    for (const u of w.units ?? []) {
+      if (u.level != null && !(_isInt(u.level) && u.level >= 1)) {
+        _fail(`wave "${w.id ?? '?'}" unit has invalid "level" — must be an integer ≥ 1`);
+      }
+    }
   }
   for (const s of m.survivorStartPositions ?? []) {
     if (!_inBounds(s, ext)) {

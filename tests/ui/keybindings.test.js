@@ -108,6 +108,7 @@ describe('executeConsoleCommand', () => {
       _toggleInspector:    () => calls.push('inspector'),
       _toggleBorderForest: () => calls.push('forest'),
       _cycleFogDebugMode:  () => calls.push('fog'),
+      _toggleFpsCounter:   () => { calls.push('fps'); return 'FPS counter shown'; },
     };
     return { renderer, calls };
   }
@@ -118,6 +119,20 @@ describe('executeConsoleCommand', () => {
     assert.equal(executeConsoleCommand('/forest', { renderer }).ok, true);
     assert.equal(executeConsoleCommand('/fog', { renderer }).ok, true);
     assert.deepEqual(calls, ['inspector', 'forest', 'fog']);
+  });
+
+  test('/fps toggles the FPS counter and echoes the renderer status', () => {
+    const { renderer, calls } = makeCtx();
+    const res = executeConsoleCommand('/fps', { renderer });
+    assert.equal(res.ok, true);
+    assert.equal(res.message, 'FPS counter shown');
+    assert.deepEqual(calls, ['fps']);
+  });
+
+  test('/help lists the fps command', () => {
+    const res = executeConsoleCommand('/help', {});
+    assert.equal(res.ok, true);
+    assert.match(res.message, /\/fps/);
   });
 
   test('leading slash is optional and names are case-insensitive', () => {

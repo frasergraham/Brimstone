@@ -44,7 +44,7 @@ describe('ABILITIES registry — passive statMods', () => {
 describe('ABILITIES registry — active dispatchers', () => {
   test('heal.execute heals the co-located leader and costs 1 action', () => {
     const { gs, hero } = _freshState();
-    hero.hp = hero.maxHp - 2;
+    hero.hp = hero.maxHp - 10;
     const healer = new Entity(EntityType.SURVIVOR, 'hero', hero.col, hero.row);
     healer.abilities = [SurvivorAbility.HEAL];
     gs.entities.push(healer);
@@ -52,7 +52,7 @@ describe('ABILITIES registry — active dispatchers', () => {
     const r = ABILITIES.heal.execute(gs, healer);
     assert.equal(r.success, true);
     assert.equal(r.cost, 1);
-    assert.equal(hero.hp, hero.maxHp - 1, 'hero healed 1 HP');
+    assert.equal(hero.hp, hero.maxHp - 3, 'hero healed 7 HP (1 × DAMAGE_SCALE)');
   });
 
   test('heal.validate returns false with no leader on the hex', () => {

@@ -14,6 +14,7 @@ import { Phase, nodeController } from './game.js';
 import { EntityType, ADVANTAGE_CAP, expectedDieValue, isLeaderType, attackOf, defenseOf } from './entities.js';
 import { ResourceType, hasBuilding, isRiver, isBuildingFootprint } from './tiles.js';
 import { PlanActionType, MAX_PLAN_LENGTH } from './planner.js';
+import { DAMAGE_SCALE } from './balance.js';
 
 // ── Goal names ───────────────────────────────────────────────────────────────
 
@@ -592,7 +593,7 @@ export function genHuntHeroes(sim, board, budget) {
     const isSurvivor = !isLeaderType(h.type);
     // Priority: wounded > survivors > hero leader
     let priority = 0;
-    if (h.hp <= 2) priority += 5; // can likely kill in one hit
+    if (h.hp <= DAMAGE_SCALE) priority += 5; // can likely kill in ~one hit
     if (hpRatio < 0.5) priority += 3; // wounded — finish off
     if (isSurvivor) priority += 2; // killing = removing hero action
     if (hpRatio < 0.3) priority += 2; // critically wounded

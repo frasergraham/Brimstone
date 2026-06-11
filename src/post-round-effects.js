@@ -10,6 +10,7 @@ import { hasBuilding } from './tiles.js';
 import { hexKey } from './hex.js';
 import { tickEffects, EFFECTS, dispatchTrigger } from './effects.js';
 import { getFaction } from './factions.js';
+import { DAMAGE_SCALE } from './balance.js';
 
 // ── Event types ─────────────────────────────────────────────────────────────
 
@@ -66,7 +67,9 @@ export function applyPostRoundEffects(state) {
 function nightAttritionEffect(state) {
   if (state.phase !== Phase.NIGHT) return [];
 
-  const dmg = state.attritionLevel;
+  // attritionLevel is a 1–3 tier (see attritionForCycle); actual HP damage is
+  // that tier × DAMAGE_SCALE so attrition stays proportional to scaled HP.
+  const dmg = state.attritionLevel * DAMAGE_SCALE;
   const events = [];
 
   // All living survivors, split by shelter status.

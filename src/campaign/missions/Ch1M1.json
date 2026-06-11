@@ -29,8 +29,8 @@
           "type": "wood_golem",
           "spawnAt": "near_hero",
           "overrides": {
-            "maxHp": 2,
-            "hp": 2,
+            "maxHp": 14,
+            "hp": 14,
             "attack": 1,
             "defense": 1
           },

@@ -257,22 +257,22 @@ describe('executeGuardStrike', () => {
   });
 
   // ── Ranged guard strikes (opportunity shots) ──────────────────────────────
-  test('ranged guard strike: huge margin still deals 1 dmg, no crush, no splash', () => {
+  test('ranged guard strike: huge margin deals the 1× weapon roll, no crush, no splash', () => {
     const state = freshState();
     const guard = state.hero;
-    makeRanged(guard, 3);            // ranged guard (reach 2)
+    makeRanged(guard, 3);            // ranged guard (reach 2) — bow, 2D4 damage
     guard.guarding = 1;
     const target = state.witch;
     guard.col = 5; guard.row = 5;
     target.col = 7; target.row = 5;   // dist 2 — not point-blank
-    state.setForcedDice(6, 1);         // would crush if melee
+    state.setForcedDice(6, 1, 2, 2);   // would crush if melee; bow 2D4 = 4
     const targetHpBefore = target.hp;
     const r = executeGuardStrike(state, guard, target);
     assert.equal(r.ranged, true);
     assert.equal(r.closeRanged, false);
     assert.equal(r.hit, true);
-    assert.equal(r.damage, 1, 'ranged guard strike caps at 1 damage');
-    assert.equal(target.hp, targetHpBefore - 1);
+    assert.equal(r.damage, 4, 'ranged guard strike is never multiplied by crush tier');
+    assert.equal(target.hp, targetHpBefore - 4);
     assert.equal(r.attackRoll >= 2 * r.defenseRoll, true, 'margin would crush if melee');
     assert.equal(r.splashKills.length, 0);
     assert.equal(r.splashHits.length, 0);

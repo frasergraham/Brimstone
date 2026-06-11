@@ -16,10 +16,12 @@
 //
 // See docs/design/units-items-abilities-refactor.md.
 //
-// Note: this module has no imports beyond stdlib. The validate/execute
-// helpers rely on `entity.hasTag('leader')` to identify the actor's
-// leader rather than importing factions.js, which would create a cycle
-// (factions.js → entities.js → abilities.js).
+// Note: this module imports only balance.js (itself import-free) for the
+// HP scale. The validate/execute helpers rely on `entity.hasTag('leader')`
+// to identify the actor's leader rather than importing factions.js, which
+// would create a cycle (factions.js → entities.js → abilities.js).
+
+import { DAMAGE_SCALE } from './balance.js';
 
 // Shared helper — find an alive leader on the actor's hex that belongs
 // to the same player (or the same faction, for legacy singleplayer plans
@@ -43,7 +45,7 @@ export const ABILITIES = Object.freeze({
     id: 'heal',
     kind: 'active',
     label: 'Heal',
-    description: 'Action (1): heals hero on same hex 1 HP',
+    description: 'Action (1): heals hero on same hex',
     validate(state, actor) {
       const leader = _coLocatedLeader(state, actor);
       return !!leader && leader.hp < leader.maxHp;
@@ -54,10 +56,11 @@ export const ABILITIES = Object.freeze({
         return { success: false, log: ['A leader must be on the same hex.'] };
       if (leader.hp >= leader.maxHp)
         return { success: false, log: ['Leader is already at full health.'] };
-      leader.heal(1);
+      const healed = 1 * DAMAGE_SCALE;
+      leader.heal(healed);
       return {
         success: true,
-        log: [`${actor.displayName} tends ${leader.displayName}'s wounds. (+1 HP, now ${leader.hp}/${leader.maxHp})`],
+        log: [`${actor.displayName} tends ${leader.displayName}'s wounds. (+${healed} HP, now ${leader.hp}/${leader.maxHp})`],
         cost: 1,
       };
     },

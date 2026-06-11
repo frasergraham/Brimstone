@@ -4,7 +4,7 @@
 import { countHeldNodes } from '../game.js';
 import { getFaction } from '../factions.js';
 import { hexDistance } from '../hex.js';
-import { EntityType } from '../entities.js';
+import { EntityType, applyLevel } from '../entities.js';
 import { isRiver, hasBuilding } from '../tiles.js';
 
 // v1: initial campaign save format.
@@ -358,6 +358,8 @@ export function processWaves(state, waves, createEnemyFn) {
       if (!pos) continue;
       const entity = createEnemyFn(unit.type, pos.col, pos.row, state);
       if (entity) {
+        // Level scaling first (HP/ATK/DEF), so explicit overrides still win.
+        if (unit.level) applyLevel(entity, unit.level);
         if (unit.overrides) Object.assign(entity, unit.overrides);
         state.entities.push(entity);
         logs.push(unit.spawnLog ?? `🌑 ${entity.displayName} emerges from the shadows!`);
