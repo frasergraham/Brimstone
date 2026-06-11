@@ -9918,19 +9918,22 @@ export class Renderer3D {
   _resyncTileSlotsForStandees() {
     if (!this._scene || !this._babylon || !this.state?.entities) return;
 
-    // Group live standees by hex. Skip entities whose standee is currently
-    // being driven by a move/lunge animation (their position is owned by the
-    // animation; let it land first, the next draw re-slots them).
-    const byHex = new Map(); // hexKey → [{id, kind:'standee', entity, ...}]
+    // Group live standees by hex. Entities whose standee is currently driven
+    // by a move/lunge animation still COUNT as occupants (so their hex-mates
+    // keep stable multi-occupant slot assignments — dropping them packed the
+    // first ally to land as the hex's sole occupant, snapping it to the bare
+    // centre until the mate's animation finished), but they are never
+    // repositioned here: the animation owns their transform until it lands.
+    const byHex = new Map(); // hexKey → [{id, kind:'standee', entity, animating, ...}]
     const hexCenter = new Map(); // hexKey → {col, row}
     for (const e of this.state.entities) {
       if (!e?.alive) continue;
       if (typeof e.col !== 'number' || typeof e.row !== 'number') continue;
-      if (this._activeMoveIds.has(e.id) || this._activeLungeIds.has(e.id)) continue;
       if (!this._entityStandees.has(e.id)) continue;
+      const animating = this._activeMoveIds.has(e.id) || this._activeLungeIds.has(e.id);
       const k = hexKey(e.col, e.row);
       if (!byHex.has(k)) { byHex.set(k, []); hexCenter.set(k, { col: e.col, row: e.row }); }
-      byHex.get(k).push({ id: `standee_${e.id}`, kind: 'standee', entity: e, slot: e.slot ?? 0 });
+      byHex.get(k).push({ id: `standee_${e.id}`, kind: 'standee', entity: e, slot: e.slot ?? 0, animating });
     }
 
     const seenHexes = new Set();
@@ -9953,9 +9956,10 @@ export class Renderer3D {
         if (o.kind === 'tree') { if (typeof o.slot === 'number') treeSlots.push(o.slot); }
         else staticOcc.push(o);
       }
-      // Single standee on an otherwise-empty hex → it already sits at the hex
-      // centre from _positionStandee's default path; nothing to re-slot.
-      if (standeeOccs.length === 1 && staticOcc.length === 0 && treeSlots.length === 0) {
+      // Single IDLE standee on an otherwise-empty hex → it already sits at the
+      // hex centre from _positionStandee's default path; nothing to re-slot.
+      if (standeeOccs.length === 1 && !standeeOccs[0].animating
+          && staticOcc.length === 0 && treeSlots.length === 0) {
         this._syncOverflowBadge(k, 0);
         continue;
       }
@@ -9971,6 +9975,7 @@ export class Renderer3D {
         { reservedSlots },
       );
       for (const occ of standeeOccs) {
+        if (occ.animating) continue; // the animation owns this standee's transform
         const pos = positionByOccupantId.get(occ.id);
         const standee = this._entityStandees.get(occ.entity.id);
         if (!pos || !standee) continue;
