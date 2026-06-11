@@ -4,9 +4,6 @@
 
 import { describe, test, before } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import {
   installGlobalMocks,
@@ -25,9 +22,6 @@ globalThis.localStorage = {
   removeItem: (k) => { delete _store[k]; },
   clear: () => { for (const k of Object.keys(_store)) delete _store[k]; },
 };
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const root      = join(__dirname, '..');
 
 let UIController, GameState;
 
@@ -131,29 +125,73 @@ describe('MultiplayerClient timerReset routing', () => {
   });
 });
 
-// ── Server-side broadcast (source inspection) ────────────────────────────────
+// ── Server-side behavior: plan submission must not reset the round timer ─────
 
-describe('server lobby.js handlePlanSubmit does not reset timer', () => {
-  const lobbyJs = readFileSync(join(root, 'server', 'lobby.js'), 'utf8');
+describe('server lobby.js — plan submission does not reset the planning timer', () => {
+  let lobby;
 
-  test('handlePlanSubmit does not broadcast timerReset', () => {
-    const fnStart = lobbyJs.indexOf('export function handlePlanSubmit');
-    assert.ok(fnStart !== -1, 'handlePlanSubmit must exist');
-    const section = lobbyJs.slice(fnStart, fnStart + 1200);
+  function mockWs() {
+    const ws = {
+      readyState: 1,
+      messages: [],
+      send(data) { ws.messages.push(JSON.parse(data)); },
+      msgsOf(type) { return ws.messages.filter(m => m.type === type); },
+      findMsg(type) { return ws.messages.find(m => m.type === type); },
+    };
+    return ws;
+  }
 
-    assert.ok(
-      !section.includes("type: 'timerReset'"),
-      'handlePlanSubmit must NOT broadcast timerReset — deadlines are fixed',
-    );
-  });
+  function cleanUpRooms() {
+    for (const r of lobby.getRooms()) {
+      const room = lobby.getRoom(r.id);
+      if (room) {
+        if (room.state) room.state.winner = 'hero';
+        if (room.turnTimer) clearTimeout(room.turnTimer);
+        if (room.allHumansGoneTimer) clearTimeout(room.allHumansGoneTimer);
+        for (const t of room.disconnectTimers?.values() ?? []) clearTimeout(t);
+        for (const t of room.takeoverTimers?.values() ?? []) clearTimeout(t);
+      }
+    }
+  }
 
-  test('handlePlanSubmit does not call _startPlanningTimer', () => {
-    const fnStart = lobbyJs.indexOf('export function handlePlanSubmit');
-    const section = lobbyJs.slice(fnStart, fnStart + 500);
+  /** 1v1 game with two humans so a single submission cannot trigger resolution. */
+  function createTwoHumanGame() {
+    const ws1 = mockWs();
+    const ws2 = mockWs();
+    const p1 = 'timer-reset-p1';
+    const p2 = 'timer-reset-p2';
+    lobby.createLobby(p1, 'TimerHero', ws1, {
+      playersPerSide: 1, mapSize: 'skirmish', fog: 'none',
+    });
+    const roomId = ws1.findMsg('lobbyJoined').lobby.id;
+    lobby.claimSlot(p1, roomId, 0);
+    lobby.joinLobby(p2, 'TimerWitch', ws2, roomId);
+    lobby.claimSlot(p2, roomId, 1);
+    lobby.startGame(p1, roomId);
+    return { roomId: ws1.findMsg('matchFound').roomId, ws1, ws2, p1, p2 };
+  }
 
-    assert.ok(
-      !section.includes('_startPlanningTimer'),
-      'handlePlanSubmit must NOT reset the planning timer on each submission',
-    );
+  before(async () => { lobby = await import('../server/lobby.js'); });
+
+  test('submitting a plan does not broadcast timerReset or restart the deadline', (t) => {
+    const { roomId, ws1, ws2, p1 } = createTwoHumanGame();
+    t.after(cleanUpRooms);
+
+    const room = lobby.getRoom(roomId);
+    const timerBefore    = room.turnTimer;
+    const deadlineBefore = room.turnDeadline;
+    assert.ok(timerBefore, 'planning timer should be running');
+
+    const unit = room.state.entities.find(e => e.alive && e.ownerId === p1);
+    lobby.handlePlanSubmit(p1, roomId, [{ type: 'explore', entityId: unit.id }], room.state.round);
+    assert.equal(room.state.playerReady.get(p1), true, 'plan must be accepted');
+
+    // Deadlines are fixed per round — nobody gets a timerReset and the
+    // original timer/deadline survive the submission untouched.
+    assert.equal(ws1.msgsOf('timerReset').length, 0, 'submitter must not receive timerReset');
+    assert.equal(ws2.msgsOf('timerReset').length, 0, 'other players must not receive timerReset');
+    assert.equal(room.turnTimer, timerBefore, 'planning timer handle must be unchanged');
+    assert.equal(room.turnDeadline, deadlineBefore, 'planning deadline must be unchanged');
+    assert.equal(room.phase, 'planning', 'room stays in planning until everyone submits');
   });
 });
