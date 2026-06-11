@@ -382,6 +382,7 @@ describe('resolvePlans — state integrity', () => {
     if (heroTile) heroTile.fortifyLevel = 0;
 
     const minion = createMinion(hero.col, hero.row);
+    minion.hp = 1; minion.maxHp = 1; // fragile so any landed hit is lethal
     state.entities.push(minion);
 
     const heroPlan = [{
@@ -393,7 +394,7 @@ describe('resolvePlans — state integrity', () => {
     resolvePlans(state, heroPlan, []);
 
     const minionStillAlive = state.entities.find(e => e.id === minion.id && e.alive);
-    // Minion had 2 HP, hero with +100 attackBonus should always kill
+    // 1 HP minion vs hero with +100 attackBonus should always die
     assert.ok(!minionStillAlive, 'Killed minion should be removed from entities');
   });
 

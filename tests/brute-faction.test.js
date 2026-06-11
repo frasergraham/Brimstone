@@ -75,7 +75,7 @@ describe('BruteFaction — class & registry', () => {
 describe('BruteFaction — leader stats', () => {
   test('brute is a heavy tank: high HP, ATK, DEF; low agility', () => {
     const b = getFaction('brute').createLeader(0, 0, 'p1');
-    assert.equal(b.maxHp,   18);
+    assert.equal(b.maxHp,   126);
     assert.equal(b.attack,   4);
     assert.equal(b.defense,  3);
     assert.equal(b.agility,  3);
@@ -368,27 +368,28 @@ describe('BruteFaction — splash damage scales with margin', () => {
       return { r, bystander };
     };
 
-    // Brute ATK=4, target DEF=0. Margin = atk + 4 - def.
-    // atk=2,def=5 → margin 1 → splash 1
+    // Brute ATK=4, target DEF=0. Margin = atk + 4 - def. Splash level (1–3)
+    // scales with margin, then ×DAMAGE_SCALE (7).
+    // atk=2,def=5 → margin 1 → level 1 → 7
     {
       const { r, bystander } = place(2, 5);
       assert.equal(r.hit, true);
       assert.equal(r.margin, 1);
-      assert.equal(99 - bystander.hp, 1, `margin ${r.margin}: expected 1 splash dmg`);
+      assert.equal(99 - bystander.hp, 7, `margin ${r.margin}: expected level 1 ×7 splash dmg`);
     }
-    // atk=4,def=1 → margin 7 → floor(7/3)=2
+    // atk=4,def=1 → margin 7 → floor(7/3)=2 → 14
     {
       const { r, bystander } = place(4, 1);
       assert.equal(r.hit, true);
       assert.equal(r.margin, 7);
-      assert.equal(99 - bystander.hp, 2, `margin ${r.margin}: expected 2 splash dmg`);
+      assert.equal(99 - bystander.hp, 14, `margin ${r.margin}: expected level 2 ×7 splash dmg`);
     }
-    // atk=6,def=1 → margin 9 → cap at 3
+    // atk=6,def=1 → margin 9 → cap at level 3 → 21
     {
       const { r, bystander } = place(6, 1);
       assert.equal(r.hit, true);
       assert.equal(r.margin, 9);
-      assert.equal(99 - bystander.hp, 3, `margin ${r.margin}: expected 3 splash dmg (cap)`);
+      assert.equal(99 - bystander.hp, 21, `margin ${r.margin}: expected level 3 ×7 splash dmg (cap)`);
     }
   });
 });
@@ -446,12 +447,13 @@ describe('BruteFaction — splash knocks bystanders outward', () => {
     target.maxHp = 99; target.hp = 99;
     state.entities.push(target);
 
-    // Neutral bystander — keeps gang-up math out of it.
-    const bystander = placeNeutralBystander(state, targetPos, brute, 5);
+    // Neutral bystander — keeps gang-up math out of it. High HP so it survives
+    // the scaled splash (7) and is knocked back rather than killed.
+    const bystander = placeNeutralBystander(state, targetPos, brute, 99);
     assert.ok(bystander, 'need an open neighbour hex of the target');
     const startCol = bystander.col, startRow = bystander.row;
 
-    // Regular hit. Margin 1 → splash dmg 1, bystander survives → knocked back.
+    // Regular hit. Margin 1 → splash level 1 ×7 = 7, bystander survives → knocked back.
     state.setForcedDice(2, 5);
 
     const r = executeBattle(state, brute, target);
@@ -524,10 +526,11 @@ describe('Crushing blows wound the target — universal', () => {
     const targetPos = getNeighbors(paladin.col, paladin.row)[0];
     const target = createMinion(targetPos.col, targetPos.row);
     target.owner = 'witch';
-    // hp=2 default — crush dishes 2 dmg → kill.
+    // Minion hp=14. Force a great crush with max damage dice (6,1 → crush;
+    // 6,6 → 2D6=12, ×3 tier = 36) so the blow is lethal.
     state.entities.push(target);
 
-    state.setForcedDice(6, 1);
+    state.setForcedDice(6, 1, 6, 6);
     const r = executeBattle(state, paladin, target);
     assert.equal(r.killed, true);
     assert.equal(target.alive, false);

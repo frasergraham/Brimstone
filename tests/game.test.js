@@ -478,7 +478,7 @@ describe('endRound rest healing', () => {
 
     state.hero.col = innTile.col;
     state.hero.row = innTile.row;
-    state.hero.takeDamage(10); // start at 4 HP
+    state.hero.takeDamage(30); // damage enough that the scaled heal doesn't cap
     const hpBefore = state.hero.hp;
 
     state.startPlanning();
@@ -486,8 +486,8 @@ describe('endRound rest healing', () => {
     state.submitPlan('witch', []);
     state.endRound();
 
-    assert.equal(state.hero.hp, Math.min(state.hero.maxHp, hpBefore + 3),
-      'Hero should heal 3 HP at the inn');
+    assert.equal(state.hero.hp, Math.min(state.hero.maxHp, hpBefore + 21),
+      'Hero should heal 3 × DAMAGE_SCALE HP at the inn');
   });
 
   test('hero heals 1 HP when resting in any other building', () => {
@@ -502,7 +502,7 @@ describe('endRound rest healing', () => {
 
     state.hero.col = otherBuilding.col;
     state.hero.row = otherBuilding.row;
-    state.hero.takeDamage(10);
+    state.hero.takeDamage(30);
     const hpBefore = state.hero.hp;
 
     state.startPlanning();
@@ -510,8 +510,8 @@ describe('endRound rest healing', () => {
     state.submitPlan('witch', []);
     state.endRound();
 
-    assert.equal(state.hero.hp, Math.min(state.hero.maxHp, hpBefore + 1),
-      'Hero should heal 1 HP in a non-inn/church building');
+    assert.equal(state.hero.hp, Math.min(state.hero.maxHp, hpBefore + 7),
+      'Hero should heal 1 × DAMAGE_SCALE HP in a non-inn/church building');
   });
 
   test('hero does not heal when already at full HP', () => {
@@ -971,7 +971,7 @@ describe('swapLeaderToFaction', () => {
     assert.equal(state.hero.row,     heroRow);
     // Stub stats applied.
     assert.equal(state.hero.type,      'rogue');
-    assert.equal(state.hero.maxHp,     10);
+    assert.equal(state.hero.maxHp,     70);
     assert.equal(state.hero.attack,    3);
     assert.equal(state.hero.defense,   1);
     assert.equal(state.hero.agility,   8);
@@ -1000,7 +1000,7 @@ describe('swapLeaderToFaction', () => {
     const state = new GameState(true, true);
     state.swapLeaderToFaction('night', 'brute');
     assert.equal(state.witch.type,    'brute');
-    assert.equal(state.witch.maxHp,   18);
+    assert.equal(state.witch.maxHp,   126);
     assert.equal(state.witch.attack,   4);
     assert.equal(state.witch.defense,  3);
     assert.equal(state.witch.agility,  3);

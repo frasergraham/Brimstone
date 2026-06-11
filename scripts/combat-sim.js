@@ -3,7 +3,17 @@
 // and generates a fairness / variability report.
 // Usage: node scripts/combat-sim.js [rounds=100]
 
-import { Entity, EntityType } from '../src/entities.js';
+import { Entity, EntityType, rollDamage } from '../src/entities.js';
+import { getWeaponDamage } from '../src/items.js';
+
+// Roll a hit's damage = crush tier × the attacker's weapon damage spec.
+// Ranged weapons can't crush, so they stay at tier 1. Uses Math.random via the
+// module-level nextDie (no GameState here) — fine for a Monte-Carlo sim.
+const _d = (sides) => Math.ceil(Math.random() * sides);
+function hitDamage(weapon, attackRoll, defenseRoll, ranged) {
+  const tier = ranged ? 1 : attackRoll >= 3 * defenseRoll ? 3 : attackRoll >= 2 * defenseRoll ? 2 : 1;
+  return rollDamage(getWeaponDamage(weapon), _d) * tier;
+}
 
 const N = parseInt(process.argv[2] ?? '100', 10);
 if (isNaN(N) || N < 1) { console.error('Usage: node scripts/combat-sim.js [rounds]'); process.exit(1); }
@@ -37,7 +47,7 @@ function analyseSwing(attDef, defDef, {
   phaseAdvantage = 0, atkAdvantageDice = 0, defAdvantageDice = 0,
   extraAtkBonus = 0, extraDefBonus = 0,
 } = {}, n = N) {
-  let hits = 0, crushes = 0, counters = 0;
+  let hits = 0, crushes = 0, counters = 0, totalDmg = 0;
   const margins = [];
 
   for (let i = 0; i < n; i++) {
@@ -48,14 +58,18 @@ function analyseSwing(attDef, defDef, {
       extraAtkBonus, extraDefBonus,
     });
     margins.push(margin);
-    if (margin > 0)  { hits++; if (attackRoll >= 2 * defenseRoll) crushes++; }
+    if (margin > 0)  {
+      hits++;
+      if (attackRoll >= 2 * defenseRoll) crushes++;
+      totalDmg += hitDamage(attDef.weapon, attackRoll, defenseRoll, false);
+    }
     if (defenseRoll >= 2 * attackRoll) counters++;
   }
 
   const hitRate     = hits / n;
   const crushRate   = crushes / n;
   const counterRate = counters / n;
-  const expDmg      = (hits - crushes) / n + (crushes * 2) / n; // crush = 2 dmg
+  const expDmg      = totalDmg / n; // average rolled damage per swing (incl. misses as 0)
   const avgMargin   = margins.reduce((s, m) => s + m, 0) / n;
 
   return { hitRate, crushRate, counterRate, expDmg, avgMargin };
@@ -90,14 +104,14 @@ function simulateDuel(attDef, defDef, {
       });
 
       if (am > 0) {
-        const dmg = ar >= 2 * dr ? 2 : 1;
+        const dmg = hitDamage(attDef.weapon, ar, dr, false);
         const fortAbsorb = Math.min(dFort, dmg);
         dFort  -= fortAbsorb;
         dHp    -= (dmg - fortAbsorb);
       } else if (am === 0 && dFort > 0) {
         dFort -= 1; // tie chips fortification by 1
       } else if (dr >= 2 * ar) {
-        aHp -= 1; // counter-attack (defender doubled attacker's roll)
+        aHp -= hitDamage(defDef.weapon, dr, ar, false); // counter — 1× defender weapon
       }
 
       if (aHp <= 0 || dHp <= 0) break;
@@ -106,10 +120,9 @@ function simulateDuel(attDef, defDef, {
       swings++;
       const { attackRoll: dr2, defenseRoll: ar2, margin: dm } = Entity.resolveCombat(clone(defDef), clone(attDef), {});
       if (dm > 0) {
-        const dmg = dr2 >= 2 * ar2 ? 2 : 1;
-        aHp -= dmg;
+        aHp -= hitDamage(defDef.weapon, dr2, ar2, false);
       } else if (ar2 >= 2 * dr2) {
-        dHp -= 1;
+        dHp -= hitDamage(attDef.weapon, ar2, dr2, false); // counter
       }
     }
 
@@ -130,18 +143,19 @@ function simulateDuel(attDef, defDef, {
 }
 
 // ── Scenario matrix ────────────────────────────────────────────────────────
-const HERO         = ent('Hero',         { type: EntityType.HERO,       attack: 3, defense: 2, maxHp: 10 });
-const WITCH        = ent('Witch',        { type: EntityType.WITCH,      attack: 2, defense: 2, maxHp: 10 });
-const ZOMBIE       = ent('Zombie',       { type: EntityType.ZOMBIE,     attack: 2, defense: 0, maxHp: 2  });
-const MINION       = ent('Minion',       { type: EntityType.MINION,     attack: 1, defense: 0, maxHp: 2  });
-const WOOD_GOLEM   = ent('Wood Golem',   { type: EntityType.WOOD_GOLEM, attack: 2, defense: 3, maxHp: 4  });
-const IRON_GOLEM   = ent('Iron Golem',   { type: EntityType.IRON_GOLEM, attack: 3, defense: 4, maxHp: 6  });
-const SURV_BRAWLER = ent('Brawler Surv', { type: EntityType.SURVIVOR,   attack: 3, defense: 2, maxHp: 3  }); // Thomas Putnam
-const SURV_TANK    = ent('Tank Surv',    { type: EntityType.SURVIVOR,   attack: 1, defense: 3, maxHp: 4  }); // Hannah Marsh
-const SURV_MID     = ent('Mid Surv',     { type: EntityType.SURVIVOR,   attack: 2, defense: 2, maxHp: 2  }); // typical survivor
-const HERO_SWORD   = ent('Hero+Sword',   { type: EntityType.HERO,       attack: 3, defense: 2, maxHp: 10, weapon: 'sword'  });
-const HERO_STAFF   = ent('Hero+Staff',   { type: EntityType.HERO,       attack: 3, defense: 2, maxHp: 10, weapon: 'staff'  });
-const HERO_SHIELD  = ent('Hero+Shield',  { type: EntityType.HERO,       attack: 3, defense: 2, maxHp: 10, weapon: 'shield' });
+// HP ×7 (DAMAGE_SCALE) to match the scaled pools; weapons now roll damage.
+const HERO         = ent('Hero',         { type: EntityType.HERO,       attack: 3, defense: 2, maxHp: 70 });
+const WITCH        = ent('Witch',        { type: EntityType.WITCH,      attack: 2, defense: 2, maxHp: 70 });
+const ZOMBIE       = ent('Zombie',       { type: EntityType.ZOMBIE,     attack: 2, defense: 0, maxHp: 14 });
+const MINION       = ent('Minion',       { type: EntityType.MINION,     attack: 1, defense: 0, maxHp: 14 });
+const WOOD_GOLEM   = ent('Wood Golem',   { type: EntityType.WOOD_GOLEM, attack: 2, defense: 3, maxHp: 28 });
+const IRON_GOLEM   = ent('Iron Golem',   { type: EntityType.IRON_GOLEM, attack: 3, defense: 4, maxHp: 42 });
+const SURV_BRAWLER = ent('Brawler Surv', { type: EntityType.SURVIVOR,   attack: 3, defense: 2, maxHp: 21 }); // Thomas Putnam
+const SURV_TANK    = ent('Tank Surv',    { type: EntityType.SURVIVOR,   attack: 1, defense: 3, maxHp: 28 }); // Hannah Marsh
+const SURV_MID     = ent('Mid Surv',     { type: EntityType.SURVIVOR,   attack: 2, defense: 2, maxHp: 14 }); // typical survivor
+const HERO_SWORD   = ent('Hero+Sword',   { type: EntityType.HERO,       attack: 3, defense: 2, maxHp: 70, weapon: 'sword'  });
+const HERO_STAFF   = ent('Hero+Staff',   { type: EntityType.HERO,       attack: 3, defense: 2, maxHp: 70, weapon: 'staff'  });
+const HERO_SHIELD  = ent('Hero+Shield',  { type: EntityType.HERO,       attack: 3, defense: 2, maxHp: 70, weapon: 'shield' });
 
 const SCENARIOS = [
   // ── Baseline: hero clearing enemies ─────────────────────────────────────

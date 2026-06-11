@@ -8,8 +8,10 @@ import {
   tileCapacityRemaining, isBuildingFootprint, blocksLineOfSight,
 } from './tiles.js';
 import { pickUnitSlot } from './hex-slots.js';
-import { ITEMS } from './items.js';
+import { ITEMS, getWeaponDamage } from './items.js';
 import { ABILITIES } from './abilities.js';
+import { DAMAGE_SCALE } from './balance.js';
+import { LOOT_TIER_GATE } from './loot.config.js';
 
 // Phase 3: items in an actor's bag are keyed by their ITEMS id (e.g.
 // 'sword') instead of the legacy 'weapon:sword' prefix. Weapon-vs-
@@ -19,7 +21,7 @@ import {
   EntityType, SurvivorAbility, Entity,
   createZombie, createMinion, createSurvivor,
   createWoodGolem, createIronGolem,
-  nextDie, ADVANTAGE_CAP, isLeaderType, abilityStatMod,
+  nextDie, ADVANTAGE_CAP, isLeaderType, abilityStatMod, rollDamage,
 } from './entities.js';
 import { Phase } from './game.js';
 import { getFaction, concreteFactionOf, sightRangeForEntity } from './factions.js';
@@ -817,12 +819,20 @@ export function executeExplore(state, actor) {
 /** Resolve the effective loot table, applying per-mission overrides if present. */
 function _effectiveLoot(state, category, key, defaultTable) {
   const ov = state.lootOverrides;
-  if (!ov) return defaultTable;
-  // Full table override for this specific building/terrain type
-  if (ov[category]?.[key]) return ov[category][key];
+  // Full table override for this specific building/terrain type — used verbatim,
+  // so a mission can deliberately force a premium weapon in early (author opt-in,
+  // bypasses the tier gate below).
+  if (ov?.[category]?.[key]) return ov[category][key];
+  let table = defaultTable;
   // Item removal filter
-  if (ov.remove) return defaultTable.filter(e => !ov.remove.includes(e.type));
-  return defaultTable;
+  if (ov?.remove) table = table.filter(e => !ov.remove.includes(e.type));
+  // Premium-weapon progression gate: drop entries whose unlock round is in the
+  // future so they simply can't roll yet (see LOOT_TIER_GATE in loot.config.js).
+  const round = state.round ?? 1;
+  if (table.some(e => LOOT_TIER_GATE[e.type] != null)) {
+    table = table.filter(e => (LOOT_TIER_GATE[e.type] ?? 0) <= round);
+  }
+  return table;
 }
 
 function _applyLoot(state, actor, lootType, log, lootItems) {
@@ -938,7 +948,7 @@ function _applySplashDamage(state, col, row, excludeIds, log, opts = {}) {
     }
     splashHits.push({
       id: b.id, name: b.displayName, owner: b.owner, type: b.type,
-      ownerId: b.ownerId, killed: !!wasKilled,
+      ownerId: b.ownerId, killed: !!wasKilled, damage: dmg,
       col: b.col, row: b.row,
       fromCol, fromRow,
       knockedBack: !!pushedTo,
@@ -1113,6 +1123,8 @@ export function executeBattle(state, actor, target) {
 
   let killed     = false;
   let damage     = 0;          // damage dealt to target
+  let dmgRoll    = 0;          // pre-tier weapon damage roll (for the breakdown popup)
+  let dmgTier    = 0;          // crush multiplier applied (1 hit / 2 crush / 3 great crush)
   let counterDmg = 0;          // damage dealt to attacker (counter)
   let fortDamaged = 0;         // fort levels lost this combat (1 if defender took any damage)
   let splashKills = [];         // entities killed by splash damage
@@ -1127,17 +1139,23 @@ export function executeBattle(state, actor, target) {
   const splashSpareSide  = attackerConcrete.splashSparesAllies() ? actor.owner : null;
   const splashKnockback  = attackerConcrete.splashKnockback();
   // Ranged attacks cannot crush — the rule set explicitly forbids it.
-  // Damage tiers by roll ratio: great crush (≥3× defense roll) = 3, crush
-  // (≥2×) = 2, ordinary hit = 1. isGreatCrush implies isCrush.
+  // Damage tiers by roll ratio multiply the rolled weapon damage: great crush
+  // (≥3× defense roll) = 3×, crush (≥2×) = 2×, ordinary hit = 1×. isGreatCrush
+  // implies isCrush. The weapon's damage spec is rolled through state.nextDie
+  // (after resolveCombat's advantage pools) so it stays deterministic under
+  // forced dice / replay; unarmed falls back to 2D6 (see getWeaponDamage).
   const isCrush      = !isRanged && hit && attackRoll >= 2 * defenseRoll;
   const isGreatCrush = !isRanged && hit && attackRoll >= 3 * defenseRoll;
 
   if (hit) {
-    const baseDmg = isGreatCrush ? 3 : isCrush ? 2 : 1;
+    const tier    = isGreatCrush ? 3 : isCrush ? 2 : 1;
+    dmgRoll       = rollDamage(getWeaponDamage(actor.weapon), s => state.nextDie(s));
+    dmgTier       = tier;
+    const baseDmg = dmgRoll * tier;
 
-    // Applied as a single blow so a defender's wounded (+1 damage taken) lifts
-    // the whole strike by +1 once — not once per point — capping a normal
-    // crush-on-wounded at 3 rather than 4.
+    // Applied as a single blow so a defender's wounded (+DAMAGE_SCALE damage
+    // taken) lifts the whole strike once — not once per point — keeping the
+    // wounded surcharge proportional to the scaled HP pools.
     {
       const inc = target.applyIncomingDamage(baseDmg);
       damage += inc;
@@ -1157,11 +1175,14 @@ export function executeBattle(state, actor, target) {
       log.push(`${target.displayName} is slain!`);
       getFaction(actor.owner).trackKill(state);
       actor.killsThisRound = (actor.killsThisRound ?? 0) + 1;
+      // TODO(veterancy): regular-mode level-up could hook here — award kill XP to
+      // `summoned`-tagged units + survivors (not leaders) and call applyLevel from
+      // a captured L1 base. Out of scope now (campaign sets levels at spawn).
       dispatchTrigger('damaged-fatal', target, { state, source: actor });
       dispatchTrigger('kill', actor, { state, target });
       state.entities = state.entities.filter(e => e.id !== target.id);
     } else if (damage > 0) {
-      const label = damage >= 2 ? `${damage} damage (crushing blow!)` : `${damage} damage`;
+      const label = isCrush ? `${damage} damage (crushing blow!)` : `${damage} damage`;
       log.push(`${target.displayName} takes ${label}. (${target.hp}/${target.maxHp} HP)`);
     }
     if (isGreatCrush) log.push(`💥💥 Great crushing blow! (${attackRoll} vs ${defenseRoll})`);
@@ -1184,7 +1205,9 @@ export function executeBattle(state, actor, target) {
     // and friendly units may be spared, both per concrete faction.
     // Ranged attacks never splash (no crush, no AOE).
     if (!isRanged && (isCrush || killed || splashEveryHit)) {
-      const splashBaseDamage = Math.max(1, Math.min(3, Math.floor(margin / 3)));
+      // Splash level (1–3) scales with the roll margin, then ×DAMAGE_SCALE so a
+      // blast stays proportional to a normal hit against the scaled HP pools.
+      const splashBaseDamage = Math.max(1, Math.min(3, Math.floor(margin / 3))) * DAMAGE_SCALE;
       const splash = _applySplashDamage(
         state, target.col, target.row, [actor.id, target.id], log,
         {
@@ -1213,7 +1236,11 @@ export function executeBattle(state, actor, target) {
     // attacker to strike back (narratively nonsensical, and the operator
     // explicitly removed this rule).
     if (defenseRoll >= 2 * attackRoll && actor.alive && !isRanged) {
-      counterDmg = actor.applyIncomingDamage(1);
+      // A counter lands as one ordinary (1×) hit with the defender's weapon —
+      // matching the pre-dice rule where a counter dealt the same as a hit.
+      counterDmg = actor.applyIncomingDamage(
+        rollDamage(getWeaponDamage(target.weapon), s => state.nextDie(s))
+      );
       const counterKilled = actor.takeDamage(counterDmg);
       log.push(`⚔ ${target.displayName} counter-attacks! ${actor.displayName} takes ${counterDmg} damage.`);
       dispatchTrigger('damaged', actor, { state, amount: counterDmg, source: target });
@@ -1234,7 +1261,7 @@ export function executeBattle(state, actor, target) {
           state, actor.col, actor.row, [target.id, actor.id], log,
           {
             extraRadius: defenderConcrete.crushSplashRadius(),
-            damage:      1, // counter-splash always 1 (no margin to scale on)
+            damage:      DAMAGE_SCALE, // counter-splash = one scaled point (no margin to scale on)
             sparesOwner: defenderConcrete.splashSparesAllies() ? target.owner : null,
             knockback:   defenderConcrete.splashKnockback(),
           }
@@ -1286,6 +1313,9 @@ export function executeBattle(state, actor, target) {
       atkExtraDice, defExtraDice,
       atkPool, defPool,
       atkStaffBonus,
+      // Weapon damage roll → explains the damage in the breakdown popup:
+      // final damage = dmgRoll × dmgTier (+ wounded surcharge if any).
+      atkWeapon: actor.weapon ?? null, dmgRoll, dmgTier,
       phaseBonus, fortBonus, atkFortAtkBonus, fatiguePenalty,
       atkGangupFlat, defGangupFlat,
       atkAdvantageDice, defAdvantageDice, atkDisadvantageDice,
@@ -1527,8 +1557,9 @@ export function executeHeal(state, actor) {
   if (actor.hp >= actor.maxHp)
     return { success: false, log: [`${actor.displayName} is already at full health.`] };
   inv[ResourceType.HERBS]--;
-  actor.heal(2);
-  return { success: true, log: [`${actor.displayName} uses herbs. (+2 HP, now ${actor.hp}/${actor.maxHp})`], cost: 1 };
+  const healed = 2 * DAMAGE_SCALE;
+  actor.heal(healed);
+  return { success: true, log: [`${actor.displayName} uses herbs. (+${healed} HP, now ${actor.hp}/${actor.maxHp})`], cost: 1 };
 }
 
 export function executeUseItem(state, actor, item) {
@@ -1735,9 +1766,11 @@ export function executeGuardStrike(state, guardian, target) {
   const isGreatCrush = !isRanged && hit && attackRoll >= 3 * defenseRoll;
 
   if (hit) {
-    const baseDmg = isGreatCrush ? 3 : isCrush ? 2 : 1;
+    // Tier × rolled weapon damage, mirroring executeBattle.
+    const tier    = isGreatCrush ? 3 : isCrush ? 2 : 1;
+    const baseDmg = rollDamage(getWeaponDamage(guardian.weapon), s => state.nextDie(s)) * tier;
 
-    // Single blow so a wounded defender takes +1 once (caps crush-on-wounded at 3).
+    // Single blow so a wounded defender takes the surcharge once.
     {
       const inc = target.applyIncomingDamage(baseDmg);
       damage += inc;
@@ -1760,7 +1793,7 @@ export function executeGuardStrike(state, guardian, target) {
       dispatchTrigger('kill', guardian, { state, target });
       state.entities = state.entities.filter(e => e.id !== target.id);
     } else {
-      const label = damage >= 2 ? `${damage} damage (crushing blow!)` : `${damage} damage`;
+      const label = isCrush ? `${damage} damage (crushing blow!)` : `${damage} damage`;
       log.push(`${target.displayName} takes ${label}. (${target.hp}/${target.maxHp} HP)`);
     }
     if (isGreatCrush) log.push(`💥💥 Great crushing blow from guard!`);
@@ -1768,7 +1801,7 @@ export function executeGuardStrike(state, guardian, target) {
 
     // Splash damage on crush or kill — melee only. Ranged shots never splash.
     if (!isRanged && (isCrush || killed)) {
-      const splash = _applySplashDamage(state, target.col, target.row, [guardian.id, target.id], log);
+      const splash = _applySplashDamage(state, target.col, target.row, [guardian.id, target.id], log, { damage: DAMAGE_SCALE });
       splashKills = splash.splashKills;
       splashHits  = splash.splashHits;
       for (const sk of splashKills) {

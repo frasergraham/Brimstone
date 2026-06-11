@@ -18,6 +18,16 @@
 // `wielderFactions` — if present, only those faction ids may equip the
 // weapon (e.g. Magic Bolt is witch/necromancer-only). `noLoot` marks
 // weapons that are issued as starting gear and never appear in loot tables.
+//
+// `damage` — per-hit damage spec, either a fixed number or a dice roll
+// `{ count, sides, flat }` (see normalizeDamage/rollDamage in entities.js).
+// A landed hit deals tier × this roll (hit 1×, crush 2×, great crush 3×).
+// Means are anchored near DAMAGE_SCALE (≈7) so weapons differ in feel/variance
+// without shifting the balance baseline; ranged weapons can't crush, so a
+// couple sit slightly higher to compensate. Unarmed has no entry and falls
+// back to DEFAULT_ATTACK_DAMAGE (2D6) — see getWeaponDamage below.
+
+import { DEFAULT_ATTACK_DAMAGE } from './balance.js';
 
 export const ITEMS = Object.freeze({
   sword: {
@@ -26,6 +36,7 @@ export const ITEMS = Object.freeze({
     slot: 'weapon',
     category: 'melee',
     statMods: { attack: 2, defense: 0 },
+    damage: { count: 2, sides: 6 },          // 2D6 (avg 7) — the workhorse blade
     label: '⚔ Sword (+2 ATK)',
   },
   axe: {
@@ -34,6 +45,7 @@ export const ITEMS = Object.freeze({
     slot: 'weapon',
     category: 'melee',
     statMods: { attack: 1, defense: 1 },
+    damage: { count: 1, sides: 12, flat: 1 }, // 1D12+1 (avg 7.5) — swingy
     label: '🪓 Axe (+1 ATK, +1 DEF)',
   },
   bow: {
@@ -42,6 +54,7 @@ export const ITEMS = Object.freeze({
     slot: 'weapon',
     category: 'ranged',
     statMods: { attack: 0, defense: 0 },
+    damage: { count: 2, sides: 4 },          // 2D4 (avg 5) — ranged, no crush
     range: 3,
     projectileType: 'bolt',
     label: '🏹 Bow (range 3)',
@@ -52,6 +65,7 @@ export const ITEMS = Object.freeze({
     slot: 'weapon',
     category: 'ranged',
     statMods: { attack: 1, defense: 0 },
+    damage: { count: 1, sides: 10 },         // 1D10 (avg 5.5)
     range: 2,
     projectileType: 'bolt',
     label: '🏹 Crossbow (+1 ATK, range 2)',
@@ -62,6 +76,7 @@ export const ITEMS = Object.freeze({
     slot: 'weapon',
     category: 'ranged',
     statMods: { attack: 2, defense: 0 },
+    damage: { count: 2, sides: 8 },          // 2D8 (avg 9) — premium, no crush
     range: 2,
     projectileType: 'bolt',
     label: '🔫 Musket (+2 ATK, range 2)',
@@ -72,6 +87,7 @@ export const ITEMS = Object.freeze({
     slot: 'weapon',
     category: 'ranged',
     statMods: { attack: 1, defense: 0 },
+    damage: { count: 1, sides: 10 },         // 1D10 (avg 5.5)
     range: 2,
     projectileType: 'bolt',
     label: '🔫 Flintlock (+1 ATK, range 2)',
@@ -82,6 +98,7 @@ export const ITEMS = Object.freeze({
     slot: 'weapon',
     category: 'ranged',
     statMods: { attack: 0, defense: 0 },
+    damage: { count: 2, sides: 4 },          // 2D4 (avg 5)
     range: 2,
     projectileType: 'bolt',
     label: '🪨 Sling (range 2)',
@@ -92,6 +109,7 @@ export const ITEMS = Object.freeze({
     slot: 'weapon',
     category: 'melee',
     statMods: { attack: 0, defense: 2 },
+    damage: { count: 2, sides: 6 },          // 2D6 (avg 7) — defensive, normal dmg
     label: '🛡 Shield (+2 DEF)',
   },
   staff: {
@@ -100,6 +118,7 @@ export const ITEMS = Object.freeze({
     slot: 'weapon',
     category: 'melee',
     statMods: { attack: 1, defense: 0 },
+    damage: { count: 2, sides: 6 },          // 2D6 (avg 7) — edge is the undead advantage
     label: '🪄 Staff (+1 ATK, advantage vs undead)',
     // Grants +1 attack advantage die vs undead defenders only (zombies).
     // Pre-refactor this also fired against minions and golems, but that
@@ -116,7 +135,42 @@ export const ITEMS = Object.freeze({
     slot: 'weapon',
     category: 'melee',
     statMods: { attack: 1, defense: 0 },
+    damage: { count: 1, sides: 10 },         // 1D10 (avg 5.5) — fast, light
     label: '🗡 Dagger (+1 ATK)',
+  },
+  // ── Premium tier ──────────────────────────────────────────────────────────
+  // Rarer, stronger weapons that only appear later in a game (gated by round
+  // via LOOT_TIER_GATE in src/loot.config.js, enforced in _effectiveLoot).
+  // Means sit ~10–11 vs the ~7 baseline. Melee premiums are hero-side by the
+  // usual faction gate (witch only equips wielderFactions; rogue only ranged).
+  greatsword: {
+    id: 'greatsword',
+    kind: 'weapon',
+    slot: 'weapon',
+    category: 'melee',
+    statMods: { attack: 3, defense: 0 },
+    damage: { count: 3, sides: 6 },          // 3D6 (avg 10.5) — heavy two-hander
+    label: '⚔ Great Sword (+3 ATK)',
+  },
+  warhammer: {
+    id: 'warhammer',
+    kind: 'weapon',
+    slot: 'weapon',
+    category: 'melee',
+    statMods: { attack: 2, defense: 1 },
+    damage: { count: 1, sides: 12, flat: 4 }, // 1D12+4 (avg 10.5) — swingy, crushes hard
+    label: '⚒ War Hammer (+2 ATK, +1 DEF)',
+  },
+  longrifle: {
+    id: 'longrifle',
+    kind: 'weapon',
+    slot: 'weapon',
+    category: 'ranged',
+    statMods: { attack: 3, defense: 0 },
+    damage: { count: 2, sides: 8, flat: 2 },  // 2D8+2 (avg 11) — premium marksman
+    range: 3,
+    projectileType: 'bolt',
+    label: '🔫 Long Rifle (+3 ATK, range 3)',
   },
   // Witch / Necromancer innate ranged attack. Issued as starting gear via
   // Faction.innateLeaderWeapon; never looted (noLoot) and equippable only
@@ -130,6 +184,7 @@ export const ITEMS = Object.freeze({
     // keeps pace (witch effective ATK 3 vs paladin 4 — the same +1 gap as
     // the pre-overhaul baseline). Tuned via the balance sims.
     statMods: { attack: 1, defense: 0 },
+    damage: { count: 2, sides: 6 },          // 2D6 (avg 7)
     range: 2,
     projectileType: 'sparkle',
     wielderFactions: ['witch', 'necromancer'],
@@ -140,4 +195,13 @@ export const ITEMS = Object.freeze({
 
 export function getItem(id) {
   return ITEMS[id];
+}
+
+/**
+ * The per-hit damage spec for an equipped weapon id. Unarmed units (null /
+ * unknown weapon) fall back to DEFAULT_ATTACK_DAMAGE (2D6). Pair with
+ * rollDamage(spec, s => state.nextDie(s)) in src/entities.js to roll a hit.
+ */
+export function getWeaponDamage(weaponId) {
+  return ITEMS[weaponId]?.damage ?? DEFAULT_ATTACK_DAMAGE;
 }

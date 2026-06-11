@@ -36,7 +36,7 @@ The Brute is also no longer a stub — `BruteFaction` overrides:
 - `splashSparesAllies` — `true`; witch-side units on splash hexes take no damage (and no knockback)
 - `splashKnockback` — `true`; surviving splashed bystanders are pushed one hex outward from the target when the destination is open
 
-Splash damage scales with the attacker's roll margin: `clamp(floor(margin / 3), 1, 3)`. Crushing blows additionally apply the **wounded** effect to surviving targets — that's a universal rule (any attacker), not a brute-only one.
+Splash damage scales with the attacker's roll margin: `clamp(floor(margin / 3), 1, 3) × DAMAGE_SCALE`. Crushing blows additionally apply the **wounded** effect to surviving targets — that's a universal rule (any attacker), not a brute-only one.
 
 `Faction` exposes the hooks (`canEquipWeaponItem`, `modifyLootRoll`, `applyExploreLootBonus`, `onAfterMoveStep`, `getSightRange`, `crushSplashRadius`, `splashesOnEveryHit`, `splashSparesAllies`, `splashKnockback`, `getMinionCost`) on the base class; future factions plug in by overriding only what they need.
 
@@ -106,12 +106,36 @@ See `src/sides.js` for the Side enum and `src/factions.js` for the Faction regis
 | Wood Golem | 3 | 2 | 3 | night | Summon (2 wood) |
 | Iron Golem | 5 | 3 | 2 | night | Summon (2 metal) |
 
+**HP note:** the HP values above are the *logical* base; actual `maxHp` in code
+is each value **× `DAMAGE_SCALE` (7)** (paladin 98, zombie 14…) — see the combat
+section. ATK/DEF are unscaled.
+
 **Graveyard passive spawns** (standard games only): at the end of every full
 day-cycle (8 rounds), each graveyard raises one free witch-owned zombie,
 capped at 2 concurrent witch zombies. Implemented in
 `WitchFaction.applyEndOfRoundEffects` (`src/factions.js`); battle mode and
 campaign missions are exempt. Mirrors hero survivor income to soften the
 recruitment snowball.
+
+### Unit Levels
+
+Every entity has a `level` (≥1, default 1) that scales its **intrinsic stats —
+HP, ATK, DEF — not its weapon damage** (damage stays weapon-driven; a higher
+level lands more/bigger crushes, which multiply the rolled weapon damage). Used
+by campaign authoring to ramp difficulty without new unit types (Zombie L1/L2/L3).
+"Standard" curve (constants in `src/balance.js`):
+
+| | formula | L1 | L2 | L3 |
+|---|---|---|---|---|
+| HP | `× (1 + 0.5·(L−1))` | ×1 | ×1.5 | ×2.0 |
+| ATK | `+ (L−1)` | +0 | +1 | +2 |
+| DEF | `+ floor((L−1)/2)` | +0 | +0 | +1 |
+
+`applyLevel(entity, level)` (`src/entities.js`) sets `level` and rescales `maxHp`
+(idempotent — snapshots the L1 base); the ATK/DEF bonus composes live in
+`getAttack()`/`getDefense()`. `level` serializes via `server/state-sync.js` and
+shows in the unit's `displayName` ("Zombie L2"). Authored on mission unit specs —
+see `docs/08`. (Regular-mode XP/veterancy is not wired yet; the API is ready for it.)
 
 ### Survivor Abilities
 
@@ -162,17 +186,29 @@ Defined in `Entity.resolveCombat()` in `src/entities.js`.
           │          │        │        │              │
     ATK ≥ 3×DEF  ATK ≥ 2×DEF  │   ATK > DEF      DEF ≥ 2×ATK
           │          │        │        │              │
-   GREAT CRUSH    CRUSH       │    HIT (1 dmg)   COUNTER (1 dmg
-     (3 dmg)     (2 dmg)      │   to defender    to attacker
-   + splash      + splash     │                  + splash)
-   to hex        to hex
+   GREAT CRUSH    CRUSH       │      HIT          COUNTER
+    (3× roll)    (2× roll)    │   (1× roll)     (1× roll to
+   + splash      + splash     │   to defender    attacker
+   to hex        to hex                          + splash)
 ```
 
-Damage is applied as a **single blow**, so a defender's `wounded` (+1 damage
-taken) lifts the whole strike by +1 *once* — a normal crush on a wounded target
-is 3, not 4 (no per-point doubling). A great crush (ATK ≥ 3× DEF) deals 3, and
-both crush tiers apply `wounded` to a surviving target. Ranged attacks never
-crush.
+**Weapon damage rolls.** A landed hit deals **crush tier × the attacker's
+weapon damage roll**. Each weapon carries a `damage` spec in `src/items.js` —
+either a fixed number or a dice roll `{ count, sides, flat }` (e.g. sword 2D6,
+musket 2D8, dagger 1D10); unarmed falls back to `DEFAULT_ATTACK_DAMAGE` (2D6).
+`rollDamage()` (`src/entities.js`) rolls it through `state.nextDie` so it's
+deterministic under forced dice / replay / online. Crush multiplies the rolled
+amount (hit 1×, crush 2×, great crush 3×); ranged attacks never crush (always
+1×). A counter is one 1× roll of the defender's weapon.
+
+**HP / damage scale.** All HP totals and every flat HP delta (heals, DOTs,
+night attrition, the `wounded` surcharge) are multiplied by `DAMAGE_SCALE` (=7,
+`src/balance.js`). 7 is the mean of the 2D6 baseline attack, so the average
+hits-to-kill is unchanged from the pre-dice era while combat gains roll
+variance. Damage is applied as a **single blow**, so a defender's `wounded`
+(+DAMAGE_SCALE damage taken) lifts the whole strike *once*. Splash damage is
+`clamp(floor(margin/3), 1, 3) × DAMAGE_SCALE`. Both crush tiers apply `wounded`
+to a surviving target.
 
 ### Modifiers
 
@@ -389,7 +425,7 @@ MVP places **one** footprint per building, but the schema is `string[]` and the 
 
 | Resource | Effect | Shared? |
 |----------|--------|---------|
-| **Herbs** | Heal 2 HP (1 action, personal) | No |
+| **Herbs** | Heal 2×`DAMAGE_SCALE` HP (1 action, personal) | No |
 | **Food** | +1 action point | Yes (faction pool) |
 | **Wood** | Fortify +1 DEF, or summon Wood Golem | Yes |
 | **Metal** | Reinforce +2 DEF, or summon Iron Golem | Yes |
@@ -398,14 +434,32 @@ MVP places **one** footprint per building, but the schema is `string[]` and the 
 
 ### Weapons
 
-| Weapon | ATK | DEF | Special |
-|--------|-----|-----|---------|
-| Sword | +2 | — | — |
-| Axe | +1 | +1 | — |
-| Bow | +1 | — | — |
-| Shield | — | +2 | — |
-| Staff | +1 | — | +2 vs undead |
-| Dagger | +1 | — | — |
+Each weapon carries a `damage` spec (fixed or dice) rolled per hit — see the
+Combat section. ATK/DEF are `statMods`. Full table in `src/items.js`.
+
+| Weapon | ATK | DEF | Damage | Special |
+|--------|-----|-----|--------|---------|
+| Sword | +2 | — | 2D6 | — |
+| Axe | +1 | +1 | 1D12+1 | swingy |
+| Dagger | +1 | — | 1D10 | fast |
+| Staff | +1 | — | 2D6 | +adv vs undead |
+| Shield | — | +2 | 2D6 | — |
+| Bow / Sling | +0/+0 | — | 2D4 | ranged (no crush) |
+| Crossbow / Pistol | +1 | — | 1D10 | ranged |
+| Musket | +2 | — | 2D8 | ranged, prize drop |
+
+**Premium tier** (rarer, gated to later rounds via `LOOT_TIER_GATE` in
+`src/loot.config.js`, enforced in `_effectiveLoot`, `src/actions.js`):
+
+| Weapon | ATK | DEF | Damage | Gate round |
+|--------|-----|-----|--------|-----------|
+| Great Sword | +3 | — | 3D6 (~10.5) | 8 |
+| Long Rifle | +3 | — | 2D8+2 (~11), range 3 | 9 |
+| War Hammer | +2 | +1 | 1D12+4 (~10.5) | 10 |
+
+Premiums sit on the blacksmith / watchtower tables at low weight; before their
+gate round `_effectiveLoot` filters them out so they can't roll. A mission can
+force one in earlier via a full-table `lootOverrides` entry (author opt-in).
 
 ---
 

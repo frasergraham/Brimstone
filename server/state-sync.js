@@ -60,6 +60,7 @@ export function serializeState(state) {
     maxHp:         e.maxHp,
     attack:        e.attack,
     defense:       e.defense,
+    level:         e.level ?? 1,
     agility:       e.agility ?? BASE_AGILITY[e.type] ?? 1,
     // Range is weapon-derived (denormalized cache of ITEMS[weapon].range).
     range:         e.range   ?? 1,
@@ -271,6 +272,10 @@ export function deserializeState(snap) {
     // Back-compat for pre-effects saves
     if (!Array.isArray(e.effects)) e.effects = [];
     if (e.killsThisRound === undefined) e.killsThisRound = 0;
+    // Unit level (campaign scaling). maxHp is stored directly; the ATK/DEF
+    // level bonus recomposes from `level` via getAttack/getDefense. Old saves
+    // default to 1.
+    if (e.level === undefined) e.level = 1;
     // Hero → Paladin entity-type rename. Pre-PR4 saves carry type='hero';
     // re-key them to 'paladin' so the new BASE_STATS/BASE_AGILITY tables
     // and `e.type === EntityType.PALADIN` checks all line up.

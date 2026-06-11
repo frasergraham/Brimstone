@@ -36,13 +36,15 @@ export const LOOT_CONFIG = {
   buildings: {
 
     blacksmith: [
-      { type: 'sword',    weight: 18 },
-      { type: 'axe',      weight: 18 },
-      { type: 'shield',   weight: 14 },
-      { type: 'crossbow', weight:  8 },  // ranged — usable by Rogue
-      { type: 'musket',   weight:  6 },  // ranged, +2 ATK — the prize drop
-      { type: 'metal',    weight: 26 },
-      { type: 'wood',     weight: 10 },
+      { type: 'sword',      weight: 18 },
+      { type: 'axe',        weight: 18 },
+      { type: 'shield',     weight: 14 },
+      { type: 'crossbow',   weight:  8 },  // ranged — usable by Rogue
+      { type: 'musket',     weight:  6 },  // ranged, +2 ATK — the prize drop
+      { type: 'greatsword', weight:  3 },  // premium — gated to late game (LOOT_TIER_GATE)
+      { type: 'warhammer',  weight:  2 },  // premium — gated to late game
+      { type: 'metal',      weight: 26 },
+      { type: 'wood',       weight: 10 },
     ],
 
     inn: [
@@ -83,6 +85,7 @@ export const LOOT_CONFIG = {
       { type: 'bow',      weight: 30 },
       { type: 'crossbow', weight: 12 },
       { type: 'musket',   weight:  8 },
+      { type: 'longrifle', weight: 3 },  // premium ranged — gated to late game (LOOT_TIER_GATE)
       { type: 'silver',   weight: 35 },
       { type: 'nothing',  weight: 15 },
     ],
@@ -169,3 +172,14 @@ export const LOOT_CONFIG = {
   },
 
 };
+
+// Premium-weapon progression gate: weaponId → earliest ROUND it may drop.
+// Enforced in _effectiveLoot() (src/actions.js), which filters gated entries out
+// of the weighted table when state.round is below the threshold — so these
+// weapons simply can't roll early. Tunable. Mission lootOverrides still compose
+// (a boss mission can override a table to force-include a premium sooner).
+export const LOOT_TIER_GATE = Object.freeze({
+  greatsword: 8,
+  longrifle:  9,
+  warhammer: 10,
+});

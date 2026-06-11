@@ -39,12 +39,15 @@ spear: {
 ```
 
 Optional weapon fields:
+- `damage: { count, sides, flat }` (or a plain number for fixed damage) — per-hit damage rolled each attack; tier × this roll (hit 1×, crush 2×, great crush 3×). Omit to inherit `DEFAULT_ATTACK_DAMAGE` (2D6). Anchor means near `DAMAGE_SCALE` (~7); premiums sit ~10–11. Rolled via `getWeaponDamage`/`rollDamage` — see docs/05.
 - `range: N` — grants the wielder attack range N (default 1 = melee). **Range is weapon-derived** — units have no innate range, so a `range`-bearing weapon turns *any* equip-capable wielder into a ranged attacker (`Entity.getRange()`). Ranged attacks use a distinct rule set (no gang-up, no counter, forest cover, range falloff) — see docs/05.
 - `projectileType: 'bolt' | 'sparkle'` — replay animation for ranged shots.
 - `wielderFactions: ['witch','necromancer']` — restrict equipping to those faction ids (Magic Bolt). Omit for an unrestricted weapon.
 - `noLoot: true` — exclude from loot (issued as starting gear only); don't add it to any loot table.
 
 Add the id to any loot tables in `src/loot.config.js` that should roll it (skip for `noLoot` weapons). To make a faction leader **start** with the weapon, override `get innateLeaderWeapon()` on the `Faction` subclass in `src/factions.js`.
+
+**Premium / late-game tier.** To gate a strong weapon so it only drops later, add it to a loot table at low weight *and* add `weaponId: minRound` to `LOOT_TIER_GATE` in `src/loot.config.js`. `_effectiveLoot` (`src/actions.js`) filters gated entries out until `state.round` reaches the threshold. A mission can still force one in early via a full-table `lootOverrides` entry (that path bypasses the gate).
 
 ## New ability
 
@@ -99,6 +102,15 @@ Campaign missions are **data-driven JSON** under `src/campaign/missions/*.json` 
 - **Preview in 3D** (hands the built `GameState` to `Renderer3D`), then **download** the JSON.
 
 **Schema & loader:** see `src/campaign/missions/Ch1M6.json` for the canonical example, `docs/design/campaign-mission-editor.md` for the full spec, and `docs/07-data-persistence.md` → "JSON Mission Format". The `map` sub-object (`mode: "handmade"` | `"procedural"`) is built by `buildMissionMap` (`src/campaign/mission-map.js`); everything else mirrors the runtime mission shape verbatim.
+
+**Enemy unit levels (difficulty ramp):** any `enemyUnits[]` or `waves[].units[]`
+spec accepts an optional `"level": N` (integer ≥1). At spawn, `applyLevel` scales
+the unit's HP/ATK/DEF by the Standard curve (HP ×(1+0.5·(L−1)), +1 ATK/level,
++1 DEF every 2 levels) — e.g. `{ "type": "zombie", "level": 3, ... }` is a 28-HP
+atk4/def1 "Zombie L3". Levels do **not** change weapon damage. Explicit
+`overrides` (e.g. a fixed `maxHp`) still win over the level scaling, and apply on
+top of it. Use levels to ramp difficulty without new unit types; use `overrides`
+for one-off tweaks (e.g. a deliberately *weakened* tutorial enemy).
 
 **Two fields are string keys, not data:**
 - `storyTriggers[].condition` → a named predicate in `src/campaign/condition-registry.js` (`CONDITIONS`). Add a new condition there (`(state) => boolean`, no mutation) before referencing it.

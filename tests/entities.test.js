@@ -11,22 +11,22 @@ import {
 import { WeaponType, WEAPON_STATS } from '../src/tiles.js';
 
 // ── Base stats ────────────────────────────────────────────────────────────────
-// Expected values from game design doc:
-//   Hero:       HP=14, ATK=3, DEF=2, owner='hero'
-//   Witch:      HP=10, ATK=2, DEF=2, owner='witch'
-//   Zombie:     HP=2,  ATK=2, DEF=0, owner='witch'
-//   Minion:     HP=2,  ATK=1, DEF=0, owner='witch'
-//   Wood Golem: HP=3,  ATK=2, DEF=3, owner='witch'
-//   Iron Golem: HP=5,  ATK=3, DEF=4, owner='witch'
+// Expected values (HP pre-multiplied by DAMAGE_SCALE=7; see src/balance.js):
+//   Hero:       HP=98, ATK=3, DEF=2, owner='hero'
+//   Witch:      HP=70, ATK=2, DEF=2, owner='witch'
+//   Zombie:     HP=14, ATK=2, DEF=0, owner='witch'
+//   Minion:     HP=14, ATK=1, DEF=0, owner='witch'
+//   Wood Golem: HP=21, ATK=2, DEF=3, owner='witch'
+//   Iron Golem: HP=35, ATK=3, DEF=4, owner='witch'
 
 describe('Base stats — Hero', () => {
-  test('HP=14, ATK=2, DEF=2, owner=hero, type=hero', () => {
+  test('HP=98, ATK=2, DEF=2, owner=hero, type=hero', () => {
     // Base attack is 2; the Paladin's starting sword (+2) brings effective
     // ATK to 4. Raw createHero() builds an unarmed leader (no faction
     // createLeader), so base stats only.
     const hero = createHero(0, 0);
-    assert.equal(hero.maxHp, 14);
-    assert.equal(hero.hp, 14, 'starts at full HP');
+    assert.equal(hero.maxHp, 98);
+    assert.equal(hero.hp, 98, 'starts at full HP');
     assert.equal(hero.attack, 2);
     assert.equal(hero.defense, 2);
     assert.equal(hero.owner, 'hero');
@@ -44,10 +44,10 @@ describe('Base stats — Hero', () => {
 });
 
 describe('Base stats — Witch', () => {
-  test('HP=10, ATK=2, DEF=2, owner=witch, type=witch', () => {
+  test('HP=70, ATK=2, DEF=2, owner=witch, type=witch', () => {
     const witch = createWitch(0, 0);
-    assert.equal(witch.maxHp, 10);
-    assert.equal(witch.hp, 10);
+    assert.equal(witch.maxHp, 70);
+    assert.equal(witch.hp, 70);
     assert.equal(witch.attack, 2);
     assert.equal(witch.defense, 2);
     assert.equal(witch.owner, 'witch');
@@ -56,9 +56,9 @@ describe('Base stats — Witch', () => {
 });
 
 describe('Base stats — Zombie', () => {
-  test('HP=2, ATK=2, DEF=0, owner=witch', () => {
+  test('HP=14, ATK=2, DEF=0, owner=witch', () => {
     const z = createZombie(0, 0);
-    assert.equal(z.maxHp, 2);
+    assert.equal(z.maxHp, 14);
     assert.equal(z.attack, 2);
     assert.equal(z.defense, 0);
     assert.equal(z.owner, 'witch');
@@ -67,9 +67,9 @@ describe('Base stats — Zombie', () => {
 });
 
 describe('Base stats — Minion', () => {
-  test('HP=2, ATK=1, DEF=0, owner=witch', () => {
+  test('HP=14, ATK=1, DEF=0, owner=witch', () => {
     const m = createMinion(0, 0);
-    assert.equal(m.maxHp, 2);
+    assert.equal(m.maxHp, 14);
     assert.equal(m.attack, 1);
     assert.equal(m.defense, 0);
     assert.equal(m.owner, 'witch');
@@ -77,9 +77,9 @@ describe('Base stats — Minion', () => {
 });
 
 describe('Base stats — Wood Golem', () => {
-  test('HP=3, ATK=2, DEF=3, owner=witch', () => {
+  test('HP=21, ATK=2, DEF=3, owner=witch', () => {
     const g = createWoodGolem(0, 0);
-    assert.equal(g.maxHp, 3);
+    assert.equal(g.maxHp, 21);
     assert.equal(g.attack, 2);
     assert.equal(g.defense, 3);
     assert.equal(g.owner, 'witch');
@@ -88,9 +88,9 @@ describe('Base stats — Wood Golem', () => {
 });
 
 describe('Base stats — Iron Golem', () => {
-  test('HP=5, ATK=3, DEF=2, owner=witch', () => {
+  test('HP=35, ATK=3, DEF=2, owner=witch', () => {
     const g = createIronGolem(0, 0);
-    assert.equal(g.maxHp, 5);
+    assert.equal(g.maxHp, 35);
     assert.equal(g.attack, 3);
     assert.equal(g.defense, 2);
     assert.equal(g.owner, 'witch');
@@ -99,9 +99,9 @@ describe('Base stats — Iron Golem', () => {
 });
 
 describe('Base stats — Soldier (day-side grunt)', () => {
-  test('HP=2, ATK=1, DEF=1, owner=hero, tagged living/soldier/summoned', () => {
+  test('HP=14, ATK=1, DEF=1, owner=hero, tagged living/soldier/summoned', () => {
     const s = createSoldier(0, 0);
-    assert.equal(s.maxHp, 2);
+    assert.equal(s.maxHp, 14);
     assert.equal(s.attack, 1);
     assert.equal(s.defense, 1);
     assert.equal(s.owner, 'hero');
@@ -161,7 +161,7 @@ describe('takeDamage', () => {
   test('reduces HP by the stated amount', () => {
     const hero = createHero(0, 0);
     hero.takeDamage(3);
-    assert.equal(hero.hp, 11);
+    assert.equal(hero.hp, 95); // 98 − 3
   });
 
   test('HP is clamped to 0 — never goes negative', () => {
@@ -171,21 +171,21 @@ describe('takeDamage', () => {
   });
 
   test('returns true (dead) when HP reaches 0', () => {
-    const minion = createMinion(0, 0); // HP=2
-    const dead = minion.takeDamage(2);
+    const minion = createMinion(0, 0); // HP=14
+    const dead = minion.takeDamage(minion.maxHp);
     assert.equal(dead, true);
     assert.equal(minion.alive, false);
   });
 
   test('returns false (alive) when HP remains above 0', () => {
-    const hero = createHero(0, 0); // HP=14
+    const hero = createHero(0, 0); // HP=98
     const dead = hero.takeDamage(5);
     assert.equal(dead, false);
     assert.equal(hero.alive, true);
   });
 
   test('exactly lethal damage kills entity', () => {
-    const zombie = createZombie(0, 0); // HP=2
+    const zombie = createZombie(0, 0); // HP=14
     const dead = zombie.takeDamage(zombie.maxHp);
     assert.equal(dead, true);
     assert.equal(zombie.hp, 0);
@@ -195,7 +195,7 @@ describe('takeDamage', () => {
     const hero = createHero(0, 0);
     const dead = hero.takeDamage(0);
     assert.equal(dead, false);
-    assert.equal(hero.hp, 14);
+    assert.equal(hero.hp, 98);
   });
 });
 
@@ -206,7 +206,7 @@ describe('heal', () => {
     const hero = createHero(0, 0);
     hero.takeDamage(5);
     hero.heal(3);
-    assert.equal(hero.hp, 12);
+    assert.equal(hero.hp, 96); // 98 − 5 + 3
   });
 
   test('clamps HP at maxHp', () => {
@@ -324,7 +324,7 @@ describe('resetTurn', () => {
     hero.takeDamage(3);
     hero.equipWeapon(WeaponType.SWORD);
     hero.resetTurn();
-    assert.equal(hero.hp, 11, 'HP should not reset');
+    assert.equal(hero.hp, 95, 'HP should not reset');
     assert.equal(hero.getAttack(), 4, 'weapon bonus should not reset');
   });
 });

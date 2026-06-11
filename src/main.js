@@ -47,7 +47,7 @@ import { makeShowLoadingAndReveal } from './loading-reveal.js';
 import { MAP_SIZES } from './map.js';
 import { nodeController } from './game.js';
 import { MissionConductor } from './mission-conductor.js';
-import { Entity, createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, EntityType, ENTITY_COLOR } from './entities.js';
+import { Entity, createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, EntityType, ENTITY_COLOR, applyLevel } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
 import { Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves, reconcileRosterAfterMission, applyCarriedHeroLoadout } from './campaign/campaign.js';
 import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
@@ -3782,6 +3782,8 @@ function _initCampaignMission(missionDef) {
     for (const enemy of missionDef.enemyUnits) {
       const e = _createEnemyEntity(enemy.type, enemy.col, enemy.row, state);
       if (e) {
+        // Level scaling first (HP/ATK/DEF), so explicit overrides still win.
+        if (enemy.level) applyLevel(e, enemy.level);
         if (enemy.overrides) Object.assign(e, enemy.overrides);
         state.entities.push(e);
       }

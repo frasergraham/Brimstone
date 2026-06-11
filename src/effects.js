@@ -21,6 +21,7 @@
 // edits are needed unless the effect introduces a brand-new mechanic class.
 
 import { ABILITIES } from './abilities.js';
+import { DAMAGE_SCALE } from './balance.js';
 
 export const EFFECTS = Object.freeze({
   // ── Negative ─────────────────────────────────────────────────────────────
@@ -28,15 +29,17 @@ export const EFFECTS = Object.freeze({
     id: 'wounded',
     label: 'Wounded',
     icon: '🩸',
-    description: 'Takes +1 damage from any source',
-    damageMods: { takenFlat: 1 },
+    description: 'Takes extra damage from any source',
+    // Flat surcharge scaled by DAMAGE_SCALE so a wound roughly doubles a
+    // normal hit (≈+7 on an avg-7 strike), as it did pre-scaling (+1 on a 1).
+    damageMods: { takenFlat: DAMAGE_SCALE },
     defaultDuration: 3,
   },
   poisoned: {
     id: 'poisoned',
     label: 'Poisoned',
     icon: '☠',
-    description: '−1 DEF; takes 1 damage at end of round',
+    description: '−1 DEF; takes damage at end of round',
     statMods: { defense: -1 },
     onRoundEnd: 'damageOne',
     defaultDuration: 3,
@@ -45,7 +48,7 @@ export const EFFECTS = Object.freeze({
     id: 'bleeding',
     label: 'Bleeding',
     icon: '💧',
-    description: 'Takes 1 damage at end of round',
+    description: 'Takes damage at end of round',
     onRoundEnd: 'damageOne',
     defaultDuration: 2,
   },
@@ -267,8 +270,9 @@ export function tickEffects(state) {
       if (!def?.onRoundEnd) continue;
       if (def.onRoundEnd === 'damageOne') {
         const stacks = rec.stacks ?? 1;
+        // One "tick" = DAMAGE_SCALE HP per stack (proportional to scaled pools).
         // Route through applyIncomingDamage so wounded etc. amplify DOTs.
-        const incoming = e.applyIncomingDamage(stacks);
+        const incoming = e.applyIncomingDamage(stacks * DAMAGE_SCALE);
         const killed = e.takeDamage(incoming);
         dotEvents.push({
           effectId: rec.id,

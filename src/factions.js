@@ -13,6 +13,7 @@ import { hexKey, getNeighbors } from './hex.js';
 import { AI_HERO_NAMES, AI_WITCH_NAMES } from './ai-names.js';
 import { Side, getOpposingSide as _opposingSide } from './sides.js';
 import { ITEMS } from './items.js';
+import { DAMAGE_SCALE } from './balance.js';
 import { triggerSurvivorEncounter } from './survivor-discovery.js';
 
 // ── Base Class ──────────────────────────────────────────────────────────────
@@ -405,14 +406,17 @@ export class HeroFaction extends Faction {
       if (hasBuilding(heroTile) && hero.hp < hero.maxHp) {
         const b = heroTile.building;
         if (b === BuildingType.INN) {
-          hero.heal(3);
-          state.addLog(`🏨 ${hero.displayName} rests at the inn. (+3 HP, now ${hero.hp}/${hero.maxHp})`, 'hero', state.playerColorFor(hero));
+          const amt = 3 * DAMAGE_SCALE;
+          hero.heal(amt);
+          state.addLog(`🏨 ${hero.displayName} rests at the inn. (+${amt} HP, now ${hero.hp}/${hero.maxHp})`, 'hero', state.playerColorFor(hero));
         } else if (b === BuildingType.CHURCH) {
-          hero.heal(3);
-          state.addLog(`⛪ ${hero.displayName} prays at the chapel. (+3 HP, now ${hero.hp}/${hero.maxHp})`, 'hero', state.playerColorFor(hero));
+          const amt = 3 * DAMAGE_SCALE;
+          hero.heal(amt);
+          state.addLog(`⛪ ${hero.displayName} prays at the chapel. (+${amt} HP, now ${hero.hp}/${hero.maxHp})`, 'hero', state.playerColorFor(hero));
         } else {
-          hero.heal(1);
-          state.addLog(`🏠 ${hero.displayName} rests in shelter. (+1 HP, now ${hero.hp}/${hero.maxHp})`, 'hero', state.playerColorFor(hero));
+          const amt = 1 * DAMAGE_SCALE;
+          hero.heal(amt);
+          state.addLog(`🏠 ${hero.displayName} rests in shelter. (+${amt} HP, now ${hero.hp}/${hero.maxHp})`, 'hero', state.playerColorFor(hero));
         }
       }
     }
@@ -428,8 +432,9 @@ export class HeroFaction extends Faction {
           obj => obj.hexes.some(h => h.col === hero.col && h.row === hero.row)
         );
         if (onNode) {
-          hero.heal(1);
-          state.addLog(`✨ ${hero.displayName} draws power from the node. (+1 HP, now ${hero.hp}/${hero.maxHp})`, 'hero', state.playerColorFor(hero));
+          const amt = 1 * DAMAGE_SCALE;
+          hero.heal(amt);
+          state.addLog(`✨ ${hero.displayName} draws power from the node. (+${amt} HP, now ${hero.hp}/${hero.maxHp})`, 'hero', state.playerColorFor(hero));
         }
       }
     }

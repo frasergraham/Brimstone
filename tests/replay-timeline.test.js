@@ -458,8 +458,7 @@ describe('buildRollTip', () => {
   test('explains gang-up only when it applied; rules line always present', () => {
     const tip = buildRollTip(fullResult, false);
     assert.match(tip, /Gang-up: each ally beside the target adds \+1 advantage die and \+1 flat/);
-    assert.match(tip, /crush \(2 dmg\) at 2×/);
-    assert.match(tip, /great crush \(3 dmg\) at 3×/);
+    assert.match(tip, /×2 on a crush/);
 
     const solo = JSON.parse(JSON.stringify(fullResult));
     solo.breakdown.atkGangupFlat = 0;
@@ -569,14 +568,24 @@ describe('buildOutcomeSummary', () => {
   test('crush: explains the double-defense threshold', () => {
     const o = buildOutcomeSummary({ ...base, outcomeKind: 'crush', atkRoll: 10, defRoll: 4, targetDmg: 2, actorDmg: 0, killed: false });
     assert.equal(o.kind, 'crush');
-    assert.match(o.reason, /at least double defense 4/);
+    assert.match(o.reason, /≥ 2× defense 4/);
     assert.match(o.headline, /CRUSH — 2 damage/);
+  });
+
+  test('great crush (≥3×) is called out and multiplies ×3', () => {
+    const o = buildOutcomeSummary({
+      ...base, outcomeKind: 'crush', atkRoll: 12, defRoll: 4,
+      atkWeapon: 'sword', dmgRoll: 6, dmgTier: 3, targetDmg: 18, actorDmg: 0, killed: false,
+    });
+    assert.match(o.headline, /GREAT CRUSH — 18 damage/);
+    assert.match(o.reason, /great crush/);
+    assert.match(o.reason, /Sword 2D6 rolled 6 ×3 = 18/);
   });
 
   test('kill re-derives the strike type from the rolls', () => {
     const crushKill = buildOutcomeSummary({ ...base, outcomeKind: 'kill', atkRoll: 10, defRoll: 4, targetDmg: 2, actorDmg: 0, killed: true });
     assert.equal(crushKill.kind, 'kill');
-    assert.equal(crushKill.headline, 'CRUSHED — SLAIN');
+    assert.equal(crushKill.headline, 'CRUSH — SLAIN');
     assert.match(crushKill.lines[0], /slain!/);
 
     const plainKill = buildOutcomeSummary({ ...base, outcomeKind: 'kill', atkRoll: 7, defRoll: 5, targetDmg: 1, actorDmg: 0, killed: true });
@@ -586,7 +595,7 @@ describe('buildOutcomeSummary', () => {
   test('counter: defender strikes back with attacker damage line', () => {
     const o = buildOutcomeSummary({ ...base, outcomeKind: 'miss', atkRoll: 3, defRoll: 8, targetDmg: 0, actorDmg: 1, killed: false });
     assert.equal(o.kind, 'counter');
-    assert.match(o.reason, /at least double attack 3/);
+    assert.match(o.reason, /≥ 2× attack 3/);
     assert.deepEqual(o.lines, ['Ishmael takes 1 from the counter.']);
   });
 
@@ -597,27 +606,26 @@ describe('buildOutcomeSummary', () => {
     assert.match(o.reason, /fails to beat defense 5/);
   });
 
-  test('ranged kills never read as crush; wounded bonus damage is explained', () => {
-    const rangedKill = buildOutcomeSummary({ ...base, ranged: true, outcomeKind: 'kill', atkRoll: 10, defRoll: 4, targetDmg: 1, actorDmg: 0, killed: true });
+  test('ranged kills never read as crush', () => {
+    const rangedKill = buildOutcomeSummary({ ...base, ranged: true, outcomeKind: 'kill', atkRoll: 10, defRoll: 4, dmgTier: 1, targetDmg: 1, actorDmg: 0, killed: true });
     assert.equal(rangedKill.headline, 'HIT — SLAIN');
-
-    const wounded = buildOutcomeSummary({ ...base, outcomeKind: 'hit', atkRoll: 7, defRoll: 5, targetDmg: 2, actorDmg: 0, killed: false });
-    assert.match(wounded.lines[0], /wounded units take \+1/);
   });
 
-  test('great crush: explains the triple-defense threshold and 3 base damage', () => {
-    const o = buildOutcomeSummary({ ...base, outcomeKind: 'crush', atkRoll: 12, defRoll: 4, targetDmg: 3, actorDmg: 0, killed: false });
-    assert.match(o.reason, /at least triple defense 4 — a great crushing blow deals 3 damage/);
-    assert.match(o.headline, /CRUSH — 3 damage/);
-    // 3 damage IS the great-crush base — must not be misread as the wounded +1.
-    assert.deepEqual(o.lines, ['Zombie takes 3.']);
-  });
+  test('explains the weapon damage roll, and surfaces a wounded surcharge', () => {
+    // Plain hit with a known weapon roll → reason names the weapon, dice and roll.
+    const o = buildOutcomeSummary({
+      ...base, outcomeKind: 'hit', atkRoll: 7, defRoll: 5,
+      atkWeapon: 'greatsword', dmgRoll: 9, dmgTier: 1, targetDmg: 9, actorDmg: 0, killed: false,
+    });
+    assert.match(o.reason, /Great Sword 3D6 rolled 9 = 9/);
+    assert.deepEqual(o.lines, ['Zombie takes 9.']);
 
-  test('hit reasons explain how the rolls map to damage', () => {
-    const melee = buildOutcomeSummary({ ...base, outcomeKind: 'hit', atkRoll: 7, defRoll: 5, targetDmg: 1, actorDmg: 0, killed: false });
-    assert.match(melee.reason, /under double — a normal hit deals 1 damage/);
-    const ranged = buildOutcomeSummary({ ...base, ranged: true, outcomeKind: 'hit', atkRoll: 12, defRoll: 4, targetDmg: 1, actorDmg: 0, killed: false });
-    assert.match(ranged.reason, /ranged shots never crush/);
+    // Final damage above roll×tier is reported as the wounded surcharge.
+    const w = buildOutcomeSummary({
+      ...base, outcomeKind: 'hit', atkRoll: 7, defRoll: 5,
+      atkWeapon: 'sword', dmgRoll: 5, dmgTier: 1, targetDmg: 12, actorDmg: 0, killed: false,
+    });
+    assert.match(w.lines[0], /\(incl\. \+7 wounded\)/);
   });
 
   test('returns null without rolls or outcome', () => {

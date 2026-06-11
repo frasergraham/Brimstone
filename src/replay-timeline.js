@@ -7,8 +7,27 @@
 // enums are injected (not imported) to keep this module free of the resolver's
 // dependency graph, so it stays trivially unit-testable.
 
-import { ENTITY_COLOR } from './entities.js';
+import { ENTITY_COLOR, normalizeDamage } from './entities.js';
+import { ITEMS, getWeaponDamage } from './items.js';
 import { pickBlockWord } from './combat-words.js';
+
+// Format a weapon damage spec for the breakdown popup: "2D6", "1D12+1", or a
+// flat number. Pure.
+function fmtDamageSpec(spec) {
+  const s = normalizeDamage(spec);
+  if (s.count <= 0) return `${s.flat}`;
+  let txt = `${s.count}D${s.sides}`;
+  if (s.flat) txt += s.flat > 0 ? `+${s.flat}` : `−${-s.flat}`;
+  return txt;
+}
+// Short weapon name from its ITEMS label ("⚔ Sword (+2 ATK)" → "Sword"); unarmed
+// reads as "fists".
+function weaponName(weaponId) {
+  if (!weaponId) return 'fists';
+  const label = ITEMS?.[weaponId]?.label;
+  if (label) return label.replace(/^[^A-Za-z]+/, '').split(' (')[0].trim() || weaponId;
+  return weaponId;
+}
 
 // Glyph fallback when no portrait sprite is available. Matches the maps used in
 // ui.js / ui-render.js (kept local to preserve this module's purity).
@@ -93,8 +112,8 @@ export function buildRollRows(result, ranged = false) {
     },
     notes,
     rule: ranged
-      ? 'Hit if attack > defense (always 1 dmg). Ranged shots never crush and are never countered.'
-      : 'Hit if attack > defense (1 dmg) · crush (2 dmg) at 2× · great crush (3 dmg) at 3× · counter when defense ≥ 2× attack.',
+      ? 'Hit if attack > defense. Damage = weapon roll. Ranged shots never crush and are never countered.'
+      : 'Hit if attack > defense · damage = weapon roll, ×2 on a crush (double) / ×3 great crush (triple) · counter when defense ≥ 2× attack.',
   };
 }
 
@@ -355,6 +374,10 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
           missWord:     pickBlockWord(ev.result?.attackRoll, ev.result?.defenseRoll),
           targetDmg:    ev.result?.damage ?? 0,
           actorDmg:     ev.result?.counterDmg ?? 0,
+          // Weapon damage roll for the breakdown popup (final = dmgRoll × dmgTier).
+          dmgRoll:      ev.result?.breakdown?.dmgRoll ?? 0,
+          dmgTier:      ev.result?.breakdown?.dmgTier ?? 0,
+          atkWeapon:    ev.result?.breakdown?.atkWeapon ?? null,
           killed:       !!ev.result?.killed,
           note:         null,
         });
@@ -472,31 +495,40 @@ export function buildOutcomeSummary(entry) {
   const target = entry.target?.name ?? 'The defender';
   const actor  = entry.actor?.name  ?? 'The attacker';
 
-  // Kills carry outcomeKind 'kill' — re-derive the strike tier from the rolls
-  // (mirrors executeBattle: damage scales with the roll ratio, melee only —
-  // hit = 1, crush at ≥ 2× defense = 2, great crush at ≥ 3× = 3).
-  const landed       = entry.outcomeKind !== OutcomeKind.MISS;
-  const isCrush      = landed && !entry.ranged && atk >= 2 * def;
-  const isGreatCrush = landed && !entry.ranged && atk >= 3 * def;
-  const baseDmg      = isGreatCrush ? 3 : isCrush ? 2 : 1;
+  const landed = entry.outcomeKind !== OutcomeKind.MISS;
+  // Crush tier multiplies the rolled weapon damage (hit 1× / crush 2× / great
+  // crush 3×). Prefer the recorded multiplier; fall back to re-deriving it from
+  // the rolls for older replays (mirrors executeBattle; melee only).
+  const tier = entry.dmgTier > 0
+    ? entry.dmgTier
+    : (landed ? (!entry.ranged && atk >= 3 * def ? 3 : !entry.ranged && atk >= 2 * def ? 2 : 1) : 0);
+  const isCrush = tier >= 2;
+  const isGreat = tier >= 3;
+
+  // Weapon damage roll string, e.g. "Sword 2D6 rolled 7".
+  const wName    = weaponName(entry.atkWeapon);
+  const diceStr  = fmtDamageSpec(getWeaponDamage(entry.atkWeapon));
+  const rolled   = entry.dmgRoll > 0
+    ? `${wName} ${diceStr} rolled ${entry.dmgRoll}`
+    : `${wName} ${diceStr}`;
+  const rolledTotal = entry.dmgRoll > 0 && tier > 0 ? entry.dmgRoll * tier : null;
+  const mult        = tier > 1 ? ` ×${tier}` : '';
+  const eq          = rolledTotal != null ? ` = ${rolledTotal}` : '';
 
   let kind, headline, reason;
   if (landed) {
+    const tierWord = isGreat ? 'GREAT CRUSH' : isCrush ? 'CRUSH' : 'HIT';
     kind = entry.killed ? 'kill' : (isCrush ? 'crush' : 'hit');
-    headline = entry.killed
-      ? (isCrush ? 'CRUSHED — SLAIN' : `HIT — SLAIN`)
-      : (isCrush ? `CRUSH — ${entry.targetDmg} damage` : `HIT — ${entry.targetDmg} damage`);
-    reason = isGreatCrush
-      ? `Attack ${atk} is at least triple defense ${def} — a great crushing blow deals 3 damage.`
+    headline = entry.killed ? `${tierWord} — SLAIN` : `${tierWord} — ${entry.targetDmg} damage`;
+    reason = isGreat
+      ? `Attack ${atk} ≥ 3× defense ${def} — a great crush. ${rolled}${mult}${eq}.`
       : isCrush
-        ? `Attack ${atk} is at least double defense ${def} — a crushing blow deals 2 damage.`
-        : entry.ranged
-          ? `Attack ${atk} beats defense ${def} — the shot lands for 1 damage (ranged shots never crush).`
-          : `Attack ${atk} beats defense ${def} but is under double — a normal hit deals 1 damage.`;
+        ? `Attack ${atk} ≥ 2× defense ${def} — a crushing blow. ${rolled}${mult}${eq}.`
+        : `Attack ${atk} beats defense ${def}. ${rolled}${eq}.`;
   } else if (entry.actorDmg > 0) {
     kind = 'counter';
     headline = `COUNTERED — ${entry.actorDmg} damage`;
-    reason = `Defense ${def} is at least double attack ${atk} — the defender strikes back.`;
+    reason = `Defense ${def} ≥ 2× attack ${atk} — the defender strikes back for one weapon roll.`;
   } else {
     kind = 'miss';
     headline = entry.missWord ? String(entry.missWord).toUpperCase() : 'MISS';
@@ -506,7 +538,10 @@ export function buildOutcomeSummary(entry) {
   const lines = [];
   if (entry.targetDmg > 0) {
     let line = `${target} takes ${entry.targetDmg}`;
-    if (landed && entry.targetDmg > baseDmg) line += ' (wounded units take +1)';
+    // Final damage above roll×tier is the defender's wounded surcharge.
+    if (rolledTotal != null && entry.targetDmg > rolledTotal) {
+      line += ` (incl. +${entry.targetDmg - rolledTotal} wounded)`;
+    }
     if (entry.killed) line += ' — slain!';
     lines.push(line + (entry.killed ? '' : '.'));
   }

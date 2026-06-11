@@ -293,6 +293,29 @@ describe('json-mission — validateMissionJSON happy path', () => {
   });
 });
 
+describe('json-mission — unit level field', () => {
+  test('accepts an integer level ≥ 1 on enemyUnits and wave units', () => {
+    const m = fixtureMission();
+    m.enemyUnits[0].level = 2;
+    m.waves[0].units[0].level = 3;
+    assert.doesNotThrow(() => validateMissionJSON(m));
+  });
+
+  test('rejects a non-positive / non-integer level on an enemyUnit', () => {
+    const m = fixtureMission();
+    m.enemyUnits[0].level = 0;
+    assert.throws(() => validateMissionJSON(m), /invalid "level"/);
+    m.enemyUnits[0].level = 1.5;
+    assert.throws(() => validateMissionJSON(m), /invalid "level"/);
+  });
+
+  test('rejects an invalid level on a wave unit', () => {
+    const m = fixtureMission();
+    m.waves[0].units[0].level = -2;
+    assert.throws(() => validateMissionJSON(m), /invalid "level"/);
+  });
+});
+
 describe('json-mission — validation hardening', () => {
   test('#1 rejects a tile outside the handmade extent', () => {
     const m = fixtureMission();

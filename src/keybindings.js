@@ -12,8 +12,8 @@
  *
  * The debug hotkeys that used to be bound globally in renderer-3d.js (D/F/T)
  * are gone — those toggles now live behind the backtick (`` ` ``) command
- * console (`/inspector`, `/forest`, `/fog`), freeing the rest of the keyboard
- * for gameplay controls. Escape deselects the current unit.
+ * console (`/inspector`, `/forest`, `/fog`, `/fps`), freeing the rest of the
+ * keyboard for gameplay controls. Escape deselects the current unit.
  */
 
 // AppModes during which the camera / unit controls are meaningful. MENU is
@@ -65,6 +65,10 @@ export const COMMANDS = Object.freeze({
   fog: {
     describe: 'Cycle the fog debug display mode',
     run: (ctx) => ctx.renderer?._cycleFogDebugMode?.(),
+  },
+  fps: {
+    describe: 'Show/hide the on-canvas FPS counter',
+    run: (ctx) => ctx.renderer?._toggleFpsCounter?.(),
   },
 });
 
