@@ -18837,15 +18837,25 @@ export function resultLabel(result, side) {
   const r = result || {};
   const isAtk = side === 'attacker' || side === 'atk';
   const won = isAtk ? !!r.hit : !r.hit;
-  const dmg = Number.isFinite(r.damage) ? r.damage : (r.hit ? 1 : 0);
   const counter = Number.isFinite(r.counterDmg) ? r.counterDmg : 0;
+  // A crush is a ROLL outcome (attackRoll ≥ 2× defenseRoll), not "≥2 damage" —
+  // a plain hit can roll 2+ damage off the weapon die, and ranged hits never
+  // crush. The authoritative signal is breakdown.dmgTier (1 hit / 2 crush /
+  // 3 great crush); fall back to the roll ratio when the breakdown is absent
+  // (e.g. tests passing a partial result).
+  const tier = Number.isFinite(r.breakdown?.dmgTier) ? r.breakdown.dmgTier : null;
+  const isCrush = tier != null
+    ? tier >= 2
+    : (!r.ranged && !!r.hit
+       && Number.isFinite(r.attackRoll) && Number.isFinite(r.defenseRoll)
+       && r.attackRoll >= 2 * r.defenseRoll);
   if (isAtk) {
-    if (won) return dmg >= 2 ? 'CRUSH' : 'HIT';
+    if (won) return isCrush ? 'CRUSH' : 'HIT';
     return counter > 0 ? 'COUNTERED' : pickBlockWordUpper(r);
   }
   // Defender side.
   if (won) return counter > 0 ? 'COUNTER' : pickBlockWordUpper(r);
-  return dmg >= 2 ? 'CRUSHED' : 'HIT';
+  return isCrush ? 'CRUSHED' : 'HIT';
 }
 
 /**

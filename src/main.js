@@ -37,7 +37,7 @@ import { MAX_FORTIFY_LEVEL, FORT_IMPASSABLE_THRESHOLD, deriveBlockedSlots } from
 import { sightRange, computeLineOfSight, hasLineOfSight, assignSlotOnTile } from './actions.js';
 import { ITEMS } from './items.js';
 import { getFaction, findFaction, allFactions, getFactionsForSide, sightRangeForEntity } from './factions.js';
-import { compileTurnBattleSummary, compileTurnBattlePairs, collectTurnFinds } from './battle-utils.js';
+import { compileTurnBattleSummary, compileTurnBattlePairs, collectTurnFinds, deferredMoveEntityIds } from './battle-utils.js';
 import { installKeybindings } from './keybindings.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import * as audio from './audio.js';
@@ -1342,25 +1342,35 @@ function _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn) {
   // Single audio hook for every combat display path (2D dialog, fast toast,
   // 3D card-hold, autoplay, replay) — all of them funnel through here.
   audio.playCombat(result);
-  renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
+  // Land every flash/floater on each combatant's LIVE display hex (mid-turn
+  // moves have already landed), not its pre-move battle snapshot — otherwise a
+  // unit that moved this turn before fighting would show its "-N" over its
+  // turn-start hex. Falls back to the snapshot when the entity is gone (a kill
+  // didn't move after dying, so the snapshot is its death hex). Matches the
+  // defender-cluster + lunge positioning, which also track the live hex.
+  const liveActor  = state?.entities?.find(e => e.id === actorSnap.id);
+  const liveTarget = state?.entities?.find(e => e.id === targetSnap.id);
+  const atkCol = liveActor?.col  ?? actorSnap.col,  atkRow = liveActor?.row  ?? actorSnap.row;
+  const tgtCol = liveTarget?.col ?? targetSnap.col, tgtRow = liveTarget?.row ?? targetSnap.row;
+  renderer.addAttackAnim(atkCol, atkRow, tgtCol, tgtRow);
   // Pass entityId so the renderer flags the affected standee with
   // `_pendingDespawn`. _syncEntityStandees skips disposal until the "-N"
   // floater finishes rising/fading, so the number reads as floating off a
   // visible unit rather than orphaned in space.
-  if (result?.damage)      renderer.addHpChangeFlash(targetSnap.col, targetSnap.row, -(result.damage),    { entityId: targetSnap.id });
-  if (result?.counterDmg)  renderer.addHpChangeFlash(actorSnap.col,  actorSnap.row,  -(result.counterDmg), { entityId: actorSnap.id });
+  if (result?.damage)      renderer.addHpChangeFlash(tgtCol, tgtRow, -(result.damage),    { entityId: targetSnap.id });
+  if (result?.counterDmg)  renderer.addHpChangeFlash(atkCol, atkRow, -(result.counterDmg), { entityId: actorSnap.id });
   if (result?.fortDamaged) {
-    renderer.addFlash(targetSnap.col, targetSnap.row, '🏰-1',
+    renderer.addFlash(tgtCol, tgtRow, '🏰-1',
       'rgba(120,120,140,0.15)', 1600, 0.65, 'rgba(180,180,200,1)');
     // Apply the fort-level delta now so the hex ring visibly thins out in
     // sync with the floater (fortifyLevel was rewound at the start of
     // _animateResolutionSteps so this step's damage hasn't landed yet).
-    const dTile = state.tiles.get(hexKey(targetSnap.col, targetSnap.row));
+    const dTile = state.tiles.get(hexKey(tgtCol, tgtRow));
     if (dTile && dTile.fortifyLevel > 0) dTile.fortifyLevel -= 1;
   }
   if (result?.killed) {
     const deadColor = targetSnap.owner === 'hero' ? '#d4a72c' : '#9b59b6';
-    renderer.addDeathAnim(targetSnap.col, targetSnap.row, deadColor);
+    renderer.addDeathAnim(tgtCol, tgtRow, deadColor);
     renderer.addFadeOutAnim(targetSnap.id, 600);
   }
   // Brute blast — expanding red ring covering the target hex + 6 neighbours.
@@ -1882,8 +1892,17 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     let hadMove = false;
     const pendingDialogs = [];
 
+    // Agility resolves the highest-Agility unit's action first within a step. When
+    // an attacker out-speeds a FLEEING target, the strike lands while the target
+    // is still on its start hex, then the target moves — so we must NOT animate
+    // that move first (it would warp the unit back to its start hex for the strike
+    // then zip it to its destination). These ids' moves are held until after the
+    // battle pass (Phase 1b below). See battle-utils.deferredMoveEntityIds.
+    const deferIds = deferredMoveEntityIds(events, step.entitySnapshot, PlanActionType);
+
     // Collect pre-step snapshots and paths for all move events
     const moveAnims = [];
+    const deferredMoveAnims = []; // attacker out-sped a fleeing mover — walk after the battle
     for (const ev of events) {
       const { action, result } = ev;
       if (action.type !== PlanActionType.MOVE) continue;
@@ -1897,7 +1916,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         ? result.path
         : [{ col: action.toCol, row: action.toRow }];
 
-      if (visible) moveAnims.push({ ev, preSnap, path });
+      if (visible) (deferIds.has(action.entityId) ? deferredMoveAnims : moveAnims).push({ ev, preSnap, path });
 
       if ((!humanFaction || ev.faction === humanFaction) && result?.encounterLog?.length) {
         if (!myPlayerId || preSnap?.ownerId === myPlayerId) {
@@ -2248,6 +2267,59 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     // (Fully-blocked moves now animate in the MOVE phase above, before battles —
     // see the addBumpWalkAnim pass there — so a blocked-then-attack unit shows
     // its thwarted step before its strike instead of after.)
+
+    // ── Phase 1b: deferred moves (a faster attacker struck before the flee) ───
+    // Held at their start hex through the battle pass (so the strike read on the
+    // pre-move hex); now walk them to their destination. Mirrors the MOVE phase's
+    // slide; dead units never produce a move so there's nothing to skip here.
+    if (deferredMoveAnims.length > 0) {
+      hadMove = true;
+      const _spd = ui?.speedMode ?? 'cinematic';
+      const hopDelay = _spd === 'vfast' ? 160 : 320;
+      if (renderer?.is3D) {
+        for (const { ev, preSnap, path } of deferredMoveAnims) {
+          const lastPos = path[path.length - 1];
+          const destSlot = ev.result?.slot ?? 0;
+          renderer.addMoveAnim(
+            ev.action.entityId,
+            preSnap.col, preSnap.row,
+            lastPos.col, lastPos.row,
+            preSnap.type, preSnap.owner, preSnap.title ?? null,
+            path, preSnap.slot ?? 0, destSlot,
+          );
+          const ent = displayEntities.find(e => e.id === ev.action.entityId);
+          if (ent) { ent.col = lastPos.col; ent.row = lastPos.row; ent.slot = destSlot; }
+        }
+        state.entities = displayEntities;
+        redrawFn();
+        if (!_autoplay && hopDelay > 0) await playbackDelay(hopDelay);
+      } else {
+        const maxHops = deferredMoveAnims.reduce((m, a) => Math.max(m, a.path.length), 0);
+        for (let hop = 0; hop < maxHops; hop++) {
+          for (const { ev, preSnap, path } of deferredMoveAnims) {
+            if (hop >= path.length) continue;
+            const fromPos = hop === 0 ? preSnap : path[hop - 1];
+            const toPos   = path[hop];
+            const isLastHop = hop === path.length - 1;
+            const destSlot = ev.result?.slot ?? 0;
+            const fromSlot = hop === 0 ? (preSnap.slot ?? 0) : 0;
+            const toSlot   = isLastHop ? destSlot : 0;
+            renderer.addMoveAnim(
+              ev.action.entityId,
+              fromPos.col, fromPos.row, toPos.col, toPos.row,
+              preSnap.type, preSnap.owner, preSnap.title ?? null,
+              null, fromSlot, toSlot,
+            );
+            const ent = displayEntities.find(e => e.id === ev.action.entityId);
+            if (ent) { ent.col = toPos.col; ent.row = toPos.row; ent.slot = toSlot; }
+          }
+          state.entities = displayEntities;
+          redrawFn();
+          if (!_autoplay && hopDelay > 0) await playbackDelay(hopDelay);
+        }
+      }
+      if (!_autoplay) { await _settleAnims(); redrawFn(); }
+    }
 
     // ── Phase 2a: empty-hex attack whiffs (lunge + "no enemy" floater) ───────
     const whiffEvents = allStepEvents.filter(

@@ -63,9 +63,13 @@ export async function playFastCombatDisplay({
       const ally = state?.entities?.find(e => e.id === id && e.alive);
       return ally ? { id, col: ally.col, row: ally.row } : null;
     };
+    // Centre on the defender's LIVE hex (mid-turn moves landed), not its
+    // pre-move battle snapshot — otherwise a unit that moved this turn warps
+    // back to its turn-start hex for the readout, then slides back.
+    const liveDef = state?.entities?.find(e => e.id === targetSnap.id && e.alive);
     renderer.applyCombatPositioning(
       {
-        defender: { id: targetSnap.id, col: targetSnap.col, row: targetSnap.row },
+        defender: { id: targetSnap.id, col: liveDef?.col ?? targetSnap.col, row: liveDef?.row ?? targetSnap.row },
         attackAllies:  atkAllyIds.map(lookupAlly).filter(Boolean),
         defenseAllies: defAllyIds.map(lookupAlly).filter(Boolean),
       },
