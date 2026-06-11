@@ -10864,6 +10864,10 @@ export class Renderer3D {
     // don't queue up and play simultaneously.
     this._scene.stopAnimation(standee.plane);
     this._activeMoveIds.add(entityId);
+    // Stash where this move LANDS (slot-anchored). A combat slide that
+    // interrupts the move mid-path uses this as the entity's true home —
+    // see addLungeAnim / _animateStandeeTo.
+    standee.moveDest = { x: toX, z: toZ };
 
     // Pick walking vs running by hop count: a move crossing 2+ destination
     // hexes in one plan step (waypoints includes the origin, so length ≥ 3)
@@ -11121,6 +11125,14 @@ export class Renderer3D {
     const lungeSpeedMul = this._playbackSpeedMul ?? 1.0;
     const FRAMES_LUNGE = Math.max(1, Math.round(LUNGE_ANIM_MS * lungeSpeedMul * 60 / 1000));
 
+    // Capture BEFORE stopAnimation — stopping the move fires its onEnd, which
+    // clears the in-flight bookkeeping. If this lunge interrupts a MOVE still
+    // animating, "home" is the move's landing point, not the transient
+    // mid-move position (a guard-reaction defender would otherwise be slid
+    // back toward its origin hex by returnAllLungeAnims, then snapped forward
+    // by the next sync — a visible flicker).
+    const interruptedMoveDest = this._activeMoveIds?.has(entityId)
+      ? (standee.moveDest ?? null) : null;
     this._scene.stopAnimation(standee.plane);
     this._activeLungeIds.add(entityId);
 
@@ -11188,7 +11200,11 @@ export class Renderer3D {
     // Stash the true pre-lunge position as "home" so returnAllLungeAnims()
     // slides back to where the standee actually started — not a recomputed
     // hex centre (which may be stale if the entity also moved this step).
-    standee.lungeHome = { homeX: startX, homeZ: startZ };
+    // Exception: if this lunge interrupted an in-flight MOVE, home is that
+    // move's landing point (the standee's transient mid-move spot is nowhere).
+    standee.lungeHome = interruptedMoveDest
+      ? { homeX: interruptedMoveDest.x, homeZ: interruptedMoveDest.z }
+      : { homeX: startX, homeZ: startZ };
 
     const promise = new Promise(resolve => {
       this._scene.beginDirectAnimation(standee.plane, [animX, animZ], 0, FRAMES_LUNGE, false, 1, resolve);
@@ -11210,6 +11226,13 @@ export class Renderer3D {
     const startZ = standee.plane.position.z;
     if (Math.abs(toX - startX) < 1e-4 && Math.abs(toZ - startZ) < 1e-4) return;
     const BABYLON = this._babylon;
+    // Capture BEFORE stopAnimation (stopping the move fires its onEnd, which
+    // clears the bookkeeping): a combat slide interrupting an in-flight MOVE
+    // must treat the move's landing point as home — not the transient
+    // mid-move position — or the return slide flicks the unit back toward
+    // its origin hex. See addLungeAnim for the same guard.
+    const interruptedMoveDest = this._activeMoveIds?.has(entityId)
+      ? (standee.moveDest ?? null) : null;
     this._scene.stopAnimation(standee.plane);
     this._activeLungeIds.add(entityId);
     if (standee.paladinClone?.mesh) {
@@ -11227,7 +11250,9 @@ export class Renderer3D {
       BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
     animZ.setKeys([{ frame: 0, value: startZ }, { frame: FRAMES, value: toZ }]);
     animZ.setEasingFunction(ease);
-    standee.lungeHome = { homeX: startX, homeZ: startZ };
+    standee.lungeHome = interruptedMoveDest
+      ? { homeX: interruptedMoveDest.x, homeZ: interruptedMoveDest.z }
+      : { homeX: startX, homeZ: startZ };
     const promise = new Promise(resolve => {
       this._scene.beginDirectAnimation(standee.plane, [animX, animZ], 0, FRAMES, false, 1, resolve);
     });

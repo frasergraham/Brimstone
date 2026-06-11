@@ -193,6 +193,8 @@ function makeInst({ ids = ['d', 'a1', 'a2', 'a3', 'a4'] } = {}) {
     },
   };
   inst._activeLungeIds = new Set();
+  inst._activeMoveIds = new Set();
+  inst._activeRunMoveIds = new Set();
   inst._tracked = [];
   inst._trackAnim = (p) => { inst._tracked.push(p); };
   inst._playbackSpeedMul = 1.0;
@@ -367,6 +369,108 @@ describe('G2 — Renderer3D.applyCombatPositioning lifecycle', () => {
     const xAnim = cap.anims.find(a => a.prop === 'position.x');
     const expected = Math.round(LUNGE_ANIM_MS * 60 / 1000);
     assert.equal(xAnim.keys[1].frame, expected);
+  });
+});
+
+// ─── Combat slide interrupting an in-flight MOVE ─────────────────────────────
+// A guard reaction fires while the defender's move animation is still running.
+// The combat slide stops the move mid-path; its "home" must be the move's
+// LANDING point (where the entity logically is), not the transient mid-move
+// position — otherwise returnAllLungeAnims slides the defender back toward its
+// origin hex for a few frames before the next sync snaps it forward again.
+
+function makeInflightInst({ ids = ['d'] } = {}) {
+  const inst = Object.create(Renderer3D.prototype);
+  inst._babylon = makeFakeBabylon();
+  const captured = [];
+  inst._capturedAnims = captured;
+  inst._scene = {
+    stopAnimation() {},
+    // In-flight variant: capture the animation but do NOT auto-complete it.
+    beginDirectAnimation(target, anims, _f, _to, _loop, _spd, onEnd) {
+      captured.push({ target, anims, onEnd });
+    },
+  };
+  inst._activeLungeIds = new Set();
+  inst._activeMoveIds = new Set();
+  inst._activeRunMoveIds = new Set();
+  inst._tracked = [];
+  inst._trackAnim = (p) => { inst._tracked.push(p); };
+  inst._playbackSpeedMul = 1.0;
+  inst._entityStandees = new Map();
+  for (const id of ids) {
+    inst._entityStandees.set(id, {
+      plane: {
+        position: { x: 0, y: 0, z: 0, set(x, y, z) { this.x = x; this.y = y; this.z = z; } },
+        scaling: { x: 1, y: 1, z: 1, set(x, y, z) { this.x = x; this.y = y; this.z = z; } },
+      },
+    });
+  }
+  return inst;
+}
+
+describe('G2 — combat slide interrupting an in-flight MOVE', () => {
+  test('addMoveAnim stashes the landing point on the standee', () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInflightInst();
+    inst.addMoveAnim('d', 4, 5, 5, 5, 'zombie', 'witch', null, null, 0, 0);
+    const dest = hexToWorld(5, 5);
+    assert.ok(inst._entityStandees.get('d').moveDest, 'moveDest stashed');
+    assert.ok(Math.abs(inst._entityStandees.get('d').moveDest.x - dest.x) < 1e-9);
+    assert.ok(Math.abs(inst._entityStandees.get('d').moveDest.z - dest.z) < 1e-9);
+    assert.ok(inst._activeMoveIds.has('d'));
+  });
+
+  test('_animateStandeeTo mid-move: lungeHome is the move landing, not the mid-move spot', () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInflightInst();
+    const standee = inst._entityStandees.get('d');
+    const from = hexToWorld(4, 5);
+    const dest = hexToWorld(5, 5);
+    // Move in flight: standee is halfway along the path.
+    inst._activeMoveIds.add('d');
+    standee.moveDest = { x: dest.x, z: dest.z };
+    standee.plane.position.x = (from.x + dest.x) * 0.5;
+    standee.plane.position.z = (from.z + dest.z) * 0.5;
+
+    inst._animateStandeeTo('d', dest.x + 1.0, dest.z); // slide to some cluster spot
+    const home = standee.lungeHome;
+    assert.ok(home, 'lungeHome stashed');
+    assert.ok(Math.abs(home.homeX - dest.x) < 1e-9, 'home X = move landing');
+    assert.ok(Math.abs(home.homeZ - dest.z) < 1e-9, 'home Z = move landing');
+  });
+
+  test('addLungeAnim mid-move: lungeHome is the move landing, not the mid-move spot', () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInflightInst();
+    const standee = inst._entityStandees.get('d');
+    const from = hexToWorld(4, 5);
+    const dest = hexToWorld(5, 5);
+    inst._activeMoveIds.add('d');
+    standee.moveDest = { x: dest.x, z: dest.z };
+    standee.plane.position.x = (from.x + dest.x) * 0.5;
+    standee.plane.position.z = (from.z + dest.z) * 0.5;
+
+    inst.addLungeAnim('d', 5, 5, 6, 5, 'zombie', 'witch', null, 0, false);
+    const home = standee.lungeHome;
+    assert.ok(home, 'lungeHome stashed');
+    assert.ok(Math.abs(home.homeX - dest.x) < 1e-9, 'home X = move landing');
+    assert.ok(Math.abs(home.homeZ - dest.z) < 1e-9, 'home Z = move landing');
+  });
+
+  test('no active move: lungeHome stays the standee\'s current position', () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInflightInst();
+    const standee = inst._entityStandees.get('d');
+    const dest = hexToWorld(5, 5);
+    // Stale moveDest from a FINISHED move must not hijack the home.
+    standee.moveDest = { x: dest.x + 9, z: dest.z + 9 };
+    standee.plane.position.x = dest.x;
+    standee.plane.position.z = dest.z;
+    inst._animateStandeeTo('d', dest.x + 1.0, dest.z);
+    const home = standee.lungeHome;
+    assert.ok(Math.abs(home.homeX - dest.x) < 1e-9);
+    assert.ok(Math.abs(home.homeZ - dest.z) < 1e-9);
   });
 });
 
