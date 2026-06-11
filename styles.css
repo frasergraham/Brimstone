@@ -6883,6 +6883,35 @@ body.spectator-mode #game-screen   { display: flex !important; }
 }
 .gtt-atk .gtt-col-head { color: #e8b54a; }
 .gtt-def .gtt-col-head { color: #8fb7e8; }
+/* Combatant header: icon + name at the top of each breakdown column so the
+   popup names the sides it explains. */
+.gtt-combatant {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 0.25rem;
+}
+.gtt-combatant-icon {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid #555;
+  object-fit: cover;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  color: #fff;
+}
+.gtt-combatant-name {
+  font-weight: 700;
+  font-size: 0.78rem;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .gtt-dice-row { align-items: center; margin: 0.1rem 0; }
 .gtt-row-spacer { visibility: hidden; }
 .gtt-total-row {
