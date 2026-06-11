@@ -52,6 +52,9 @@ import { hexKey as _hexKey } from './hex.js';
 import { Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves, reconcileRosterAfterMission, applyCarriedHeroLoadout } from './campaign/campaign.js';
 import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
 import { processStoryTriggers } from './campaign/missions.js';
+import { loadConversation, bindParticipants } from './campaign/conversation-registry.js';
+import { spawnNpcEntity, runScriptedActions } from './campaign/scripted-actions.js';
+import { playConversation } from './conversation-player.js';
 import { buildMissionMap } from './campaign/mission-map.js';
 import { run3DCombatCardHold } from './combat-cinematic.js';
 import { runDiscoveryReadout, discoveryText } from './discovery-cinematic.js';
@@ -627,10 +630,52 @@ function _startLocalPlanningPhase() {
   _enterLocalPlanningMode();
 }
 
-/** Show a sequence of story modals, resolving when all are dismissed. */
+/** Show a sequence of story events — text modals and/or conversations. */
 async function _showStorySequence(events) {
   for (const ev of events) {
-    await ui.showStoryModal(ev.title, ev.text);
+    if (ev.conversation) {
+      await _playMissionConversation(ev.conversation, { manageHud: true, runOnComplete: true });
+    } else {
+      await ui.showStoryModal(ev.title, ev.text);
+    }
+  }
+}
+
+// Mid-replay conversations defer their onComplete scripted actions until the
+// authoritative entities are restored at the end of _animateResolutionSteps
+// (the animation loop runs against display snapshots, so a despawn applied
+// mid-loop would be undone by the final-entity restore).
+let _pendingConvActions = [];
+
+/**
+ * Play one mission conversation by id: resolve its def + markdown, bind role
+ * slots to live entities, and run the conversation player. Unresolvable
+ * bindings (e.g. the NPC died) skip the conversation with a warning — the
+ * trigger's dedup mark is already consumed, so it won't re-fire.
+ */
+async function _playMissionConversation(convId, { manageHud = true, runOnComplete = true } = {}) {
+  const convDef = _activeMissionDef?.conversations?.find(c => c.id === convId);
+  if (!convDef) { console.warn(`[conversation] unknown conversation "${convId}"`); return; }
+  let convo;
+  try {
+    convo = await loadConversation(convDef.file);
+  } catch (err) {
+    console.warn(`[conversation] failed to load "${convDef.file}":`, err);
+    return;
+  }
+  const participants = bindParticipants(convo, convDef.bindings, state);
+  if (!participants) {
+    console.warn(`[conversation] "${convId}": could not bind all roles — skipping`);
+    return;
+  }
+  const result = await playConversation({
+    convo, participants, convDef,
+    npcDefs: _activeMissionDef?.npcs ?? [],
+    state, renderer, ui, redraw,
+    manageHud, runOnComplete,
+  });
+  if (!runOnComplete && convDef.onComplete?.length) {
+    _pendingConvActions.push({ convDef, skipped: result?.skipped ?? false });
   }
 }
 
@@ -848,6 +893,10 @@ function _focusInitialView(humanFaction) {
   if (!renderer || !state) return;
   const apply = () => {
     if (!renderer || !state) return;
+    // A turn-0 conversation owns the screen at mission start (RESOLVING) —
+    // re-selecting the hero here would paint planning highlights and yank the
+    // camera off the conversation framing. Planning re-frames on entry anyway.
+    if (getMode() === AppMode.RESOLVING) return;
     // state.hero / state.witch keyed by faction id (avoids a faction string check).
     const main = state[humanFaction]
       ?? state.entities.find(e => e.alive && e.owner === humanFaction);
@@ -2577,6 +2626,25 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     if (!_autoplay) await _settleAnims();
     ui?.revealReplayOutcome?.(i);
 
+    // ── Mid-replay conversation interleaving (campaign only) ────────────────
+    // Probe area/condition conversation triggers against the post-step entity
+    // positions so a conversation plays at the exact step it was earned, as an
+    // inserted turn card. The step loop blocks here while the conversation
+    // owns the shared NEXT/pause flags; onComplete scripted actions are
+    // deferred to the end of the round (state holds display snapshots now).
+    // Live resolution only — full PLAYBACK replays a deserialized copy.
+    if (_activeMissionDef?.storyTriggers && _activeCampaign
+        && !_autoplay && !ui?._replayOnControl
+        && !playback.goBack && !playback.aborted && !playback.jumpToEnd && !playback.restart) {
+      const convEvents = processStoryTriggers(
+        state, _activeMissionDef.storyTriggers, _activeCampaign.storyFlags,
+        { only: 'conversation' },
+      );
+      for (const ev of convEvents) {
+        await _playMissionConversation(ev.conversation, { manageHud: false, runOnComplete: false });
+      }
+    }
+
     // Manual-step gate: in paused mode, hold at this step boundary until NEXT
     // (or PLAY). For inline replay this also gates the final step, so the round
     // summary only appears after a NEXT. For full-game replay the round loop
@@ -2648,6 +2716,16 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
   for (const [k, v] of postFortMap) {
     const t = state.tiles.get(k);
     if (t && t.fortifyLevel !== v) t.fortifyLevel = v;
+  }
+  // Deferred mid-replay conversation actions — now that the authoritative
+  // entities are back, the scripted moves/despawns stick. These mutate real
+  // game state, so they run even on a skipped/aborted replay (instantly).
+  for (const { convDef, skipped } of _pendingConvActions.splice(0)) {
+    await runScriptedActions(convDef.onComplete, {
+      state, renderer, redraw: redrawFn,
+      npcDefs: _activeMissionDef?.npcs ?? [],
+      instant: skipped || playback.jumpToEnd || playback.aborted || playback.goBack || _autoplay,
+    });
   }
   // Skip the final redraw during replay navigation (caller will render the target preState).
   if (!playback.goBack && !playback.aborted && !playback.jumpToEnd) {
@@ -3708,6 +3786,20 @@ function _initCampaignMission(missionDef) {
         state.entities.push(e);
       }
     }
+  }
+
+  // Scripted NPCs (conversation participants etc.) — tagged isNpc so planning,
+  // the roster, and survivor-count objectives skip them.
+  if (missionDef.npcs) {
+    for (const npc of missionDef.npcs) spawnNpcEntity(npc, state);
+  }
+  // Conversation triggers without a `flag` dedupe per attempt via this set —
+  // fresh every mission init, so e.g. the intro replays on retry.
+  state._firedConversations = new Set();
+  // Prefetch conversation markdown so playback never awaits the network.
+  if (missionDef.conversations?.length) {
+    Promise.all(missionDef.conversations.map(c => loadConversation(c.file)))
+      .catch(err => console.warn('[conversation] prefetch failed:', err));
   }
 
   // Set up AI — conductor-driven missions don't use witch AI

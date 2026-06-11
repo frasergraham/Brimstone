@@ -16,6 +16,10 @@ import {
   moveStoryTrigger,
   addWave,
   removeWave,
+  addNpc,
+  removeNpc,
+  addConversation,
+  removeConversation,
   setObjective,
   assembleMission,
   populateFromMission,
@@ -139,6 +143,39 @@ describe('mission-editor forms — round-trip (populate → assemble)', () => {
     const original = fixtureMission();
     const rebuilt = assembleMission(populateFromMission(original));
     assert.equal(rebuilt.map.roadSeed, 4242);
+  });
+});
+
+// ── npcs / conversations round-trip + ops ─────────────────────────────────────
+
+describe('mission-editor forms — npcs & conversations', () => {
+  test('npcs + conversations survive the populate → assemble round-trip', () => {
+    const original = fixtureMission();
+    original.npcs = [{ id: 'john', survivorName: "John O'Connor", col: 3, row: 6 }];
+    original.conversations = [{
+      id: 'intro', file: 'ch1m1-intro',
+      bindings: { hero: 'hero', innkeeper: 'npc:john' },
+      onComplete: [{ action: 'despawn', npc: 'john' }],
+    }];
+    original.storyTriggers.push({ type: 'round', round: 1, conversation: 'intro' });
+    const rebuilt = assembleMission(populateFromMission(original));
+    assert.deepEqual(rebuilt, original);
+  });
+
+  test('addNpc / removeNpc and addConversation / removeConversation list ops', () => {
+    const meta = createDefaultMeta();
+    addNpc(meta, { id: 'john', col: 3, row: 6 });
+    addNpc(meta);
+    assert.equal(meta.npcs.length, 2);
+    assert.equal(meta.npcs[0].id, 'john');
+    removeNpc(meta, 1);
+    assert.equal(meta.npcs.length, 1);
+
+    addConversation(meta, { id: 'intro', file: 'ch1m1-intro' });
+    assert.equal(meta.conversations.length, 1);
+    assert.deepEqual(meta.conversations[0].bindings, {});
+    removeConversation(meta, 0);
+    assert.equal(meta.conversations.length, 0);
   });
 });
 

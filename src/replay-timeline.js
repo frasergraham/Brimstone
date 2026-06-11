@@ -39,8 +39,12 @@ export function buildRollRows(result, ranged = false) {
   const bd = result?.breakdown;
   if (!bd || result?.attackRoll == null || result?.defenseRoll == null) return null;
 
-  const atkStat = (bd.atkBaseStat ?? 0) + (bd.atkWeaponMod ?? 0) + (bd.atkAbilityMod ?? 0) + (bd.atkEffectMod ?? 0);
-  const defStat = (bd.defBaseStat ?? 0) + (bd.defWeaponMod ?? 0) + (bd.defAbilityMod ?? 0) + (bd.defEffectMod ?? 0);
+  // The weapon's contribution gets its own named row ("sword +2") so the
+  // player can see what their weapon added to the roll; the remaining
+  // intrinsic mods stay folded into the ATK/DEF stat row.
+  const atkStat = (bd.atkBaseStat ?? 0) + (bd.atkAbilityMod ?? 0) + (bd.atkEffectMod ?? 0);
+  const defStat = (bd.defBaseStat ?? 0) + (bd.defAbilityMod ?? 0) + (bd.defEffectMod ?? 0);
+  const weaponLabel = (id) => id ? String(id).replace(/_/g, ' ') : 'weapon';
   const terms = (pairs) => pairs.filter(([, v]) => v).map(([label, val]) => ({ label, val }));
 
   const notes = [];
@@ -61,6 +65,7 @@ export function buildRollRows(result, ranged = false) {
       },
       terms: terms([
         ['ATK', atkStat],
+        [weaponLabel(bd.atkWeaponId), bd.atkWeaponMod],
         ['silver', bd.atkAttackBonus],
         ['gang-up', bd.atkGangupFlat],
         ['night', bd.phaseBonus],
@@ -78,6 +83,7 @@ export function buildRollRows(result, ranged = false) {
       },
       terms: terms([
         ['DEF', defStat],
+        [weaponLabel(bd.defWeaponId), bd.defWeaponMod],
         ['bonus', bd.defDefenseBonus],
         ['allies', bd.defGangupFlat],
         ['fort', bd.fortBonus],
@@ -87,8 +93,8 @@ export function buildRollRows(result, ranged = false) {
     },
     notes,
     rule: ranged
-      ? 'Hit if attack > defense. Ranged shots never crush and are never countered.'
-      : 'Hit if attack > defense · crush (2 dmg) at double · counter when defense ≥ 2× attack.',
+      ? 'Hit if attack > defense (always 1 dmg). Ranged shots never crush and are never countered.'
+      : 'Hit if attack > defense (1 dmg) · crush (2 dmg) at 2× · great crush (3 dmg) at 3× · counter when defense ≥ 2× attack.',
   };
 }
 
@@ -260,6 +266,34 @@ export function isEventVisible(ev, ents, isVisible, { PlanActionType: PA, ResEve
  *   fogged step yields an empty `entries` array so column count tracks the
  *   animation's step count (keeps the slide aligned).
  */
+/**
+ * Build the single-column digest for a campaign conversation turn card. Same
+ * column shape as buildStepDigest output so ui.showReplayTimeline renders it
+ * unchanged; the `kind: 'conversation'` flag drives the special card chrome
+ * (💬 header + SKIP/REPLAY footer button). stepIndex is a string key so a
+ * mid-replay insert never collides with a numeric resolution step.
+ *
+ * @param {{ id, title, lines }} convo — parsed conversation (conversation-parser.js).
+ * @param {Map<string, object>|object[]} participants — bound role→entity map
+ *   (or a plain entity array); the first two become the card's actor/target.
+ */
+export function buildConversationDigest(convo, participants) {
+  const ents = participants instanceof Map ? [...participants.values()] : [...(participants ?? [])];
+  return [{
+    stepIndex: `conv:${convo.id}`,
+    kind:      'conversation',
+    title:     convo.title ?? convo.id,
+    entries: [{
+      entityId:   ents[0]?.id ?? null,
+      actor:      unitRef(ents[0] ?? null),
+      target:     unitRef(ents[1] ?? null),
+      actionType: 'conversation',
+      label:      'TALK',
+      lineCount:  convo.lines?.length ?? 0,
+    }],
+  }];
+}
+
 export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionType, ResEventType } = {}) {
   const vis = isVisible || (() => true);
   const PA = PlanActionType;
@@ -438,11 +472,13 @@ export function buildOutcomeSummary(entry) {
   const target = entry.target?.name ?? 'The defender';
   const actor  = entry.actor?.name  ?? 'The attacker';
 
-  // Kills carry outcomeKind 'kill' — re-derive the strike type from the rolls
-  // (mirrors executeBattle: crush at attack ≥ 2× defense, melee only).
-  const landed  = entry.outcomeKind !== OutcomeKind.MISS;
-  const isCrush = landed && !entry.ranged && atk >= 2 * def;
-  const baseDmg = isCrush ? 2 : 1;
+  // Kills carry outcomeKind 'kill' — re-derive the strike tier from the rolls
+  // (mirrors executeBattle: damage scales with the roll ratio, melee only —
+  // hit = 1, crush at ≥ 2× defense = 2, great crush at ≥ 3× = 3).
+  const landed       = entry.outcomeKind !== OutcomeKind.MISS;
+  const isCrush      = landed && !entry.ranged && atk >= 2 * def;
+  const isGreatCrush = landed && !entry.ranged && atk >= 3 * def;
+  const baseDmg      = isGreatCrush ? 3 : isCrush ? 2 : 1;
 
   let kind, headline, reason;
   if (landed) {
@@ -450,9 +486,13 @@ export function buildOutcomeSummary(entry) {
     headline = entry.killed
       ? (isCrush ? 'CRUSHED — SLAIN' : `HIT — SLAIN`)
       : (isCrush ? `CRUSH — ${entry.targetDmg} damage` : `HIT — ${entry.targetDmg} damage`);
-    reason = isCrush
-      ? `Attack ${atk} is at least double defense ${def} — a crushing blow deals 2 damage.`
-      : `Attack ${atk} beats defense ${def} — the blow lands for 1 damage.`;
+    reason = isGreatCrush
+      ? `Attack ${atk} is at least triple defense ${def} — a great crushing blow deals 3 damage.`
+      : isCrush
+        ? `Attack ${atk} is at least double defense ${def} — a crushing blow deals 2 damage.`
+        : entry.ranged
+          ? `Attack ${atk} beats defense ${def} — the shot lands for 1 damage (ranged shots never crush).`
+          : `Attack ${atk} beats defense ${def} but is under double — a normal hit deals 1 damage.`;
   } else if (entry.actorDmg > 0) {
     kind = 'counter';
     headline = `COUNTERED — ${entry.actorDmg} damage`;

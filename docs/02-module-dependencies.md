@@ -71,6 +71,10 @@ main.js
  ├── planner.js
  ├── playback.js               ← full-game replay loop + playbackDelay
  ├── replay-timeline.js        ← pure step-digest for the replay timeline overlay
+ ├── conversation-player.js    ← campaign conversation playback (bubbles, card, NEXT)
+ ├── campaign/conversation-registry.js  ← md loader + role→entity binding
+ │    └── campaign/conversation-parser.js  ← pure conversations/*.md parser
+ ├── campaign/scripted-actions.js       ← spawn/move/despawn/wait NPC actions
  ├── app-mode.js
  ├── keybindings.js            ← in-game keyboard shortcuts + debug command console
  ├── version.js

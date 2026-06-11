@@ -5,7 +5,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildStepDigest, buildRollTip, buildRollRows, buildOutcomeSummary, isEventVisible, OutcomeKind } from '../src/replay-timeline.js';
+import { buildStepDigest, buildConversationDigest, buildRollTip, buildRollRows, buildOutcomeSummary, isEventVisible, OutcomeKind } from '../src/replay-timeline.js';
 import { ResEventType } from '../server/resolver.js';
 import { PlanActionType } from '../src/planner.js';
 
@@ -458,7 +458,8 @@ describe('buildRollTip', () => {
   test('explains gang-up only when it applied; rules line always present', () => {
     const tip = buildRollTip(fullResult, false);
     assert.match(tip, /Gang-up: each ally beside the target adds \+1 advantage die and \+1 flat/);
-    assert.match(tip, /crush \(2 dmg\) at double/);
+    assert.match(tip, /crush \(2 dmg\) at 2×/);
+    assert.match(tip, /great crush \(3 dmg\) at 3×/);
 
     const solo = JSON.parse(JSON.stringify(fullResult));
     solo.breakdown.atkGangupFlat = 0;
@@ -519,6 +520,21 @@ describe('buildRollRows', () => {
   test('matches the plain-text tip (both derive from the same model)', () => {
     const tip = buildRollTip(result, false);
     assert.match(tip, /Attack 9 = die 4 \(rolled 4·2·1, kept best of 3\) \+3 ATK \+2 gang-up/);
+  });
+
+  test('weapon contribution is a named term, not folded into the stat sum', () => {
+    const armed = JSON.parse(JSON.stringify(result));
+    armed.breakdown.atkWeaponMod = 2;
+    armed.breakdown.atkWeaponId = 'sword';
+    armed.breakdown.defWeaponMod = 1;
+    armed.breakdown.defWeaponId = 'axe';
+    const rows = buildRollRows(armed, false);
+    assert.deepEqual(rows.atk.terms[1], { label: 'sword', val: 2 });
+    assert.equal(rows.atk.terms[0].val, 3); // base stat stays unfolded
+    assert.deepEqual(rows.def.terms[1], { label: 'axe', val: 1 });
+    // Legacy replays without the weapon id still label the row.
+    delete armed.breakdown.atkWeaponId;
+    assert.deepEqual(buildRollRows(armed, false).atk.terms[1], { label: 'weapon', val: 2 });
   });
 
   test('returns null without breakdown data', () => {
@@ -589,8 +605,57 @@ describe('buildOutcomeSummary', () => {
     assert.match(wounded.lines[0], /wounded units take \+1/);
   });
 
+  test('great crush: explains the triple-defense threshold and 3 base damage', () => {
+    const o = buildOutcomeSummary({ ...base, outcomeKind: 'crush', atkRoll: 12, defRoll: 4, targetDmg: 3, actorDmg: 0, killed: false });
+    assert.match(o.reason, /at least triple defense 4 — a great crushing blow deals 3 damage/);
+    assert.match(o.headline, /CRUSH — 3 damage/);
+    // 3 damage IS the great-crush base — must not be misread as the wounded +1.
+    assert.deepEqual(o.lines, ['Zombie takes 3.']);
+  });
+
+  test('hit reasons explain how the rolls map to damage', () => {
+    const melee = buildOutcomeSummary({ ...base, outcomeKind: 'hit', atkRoll: 7, defRoll: 5, targetDmg: 1, actorDmg: 0, killed: false });
+    assert.match(melee.reason, /under double — a normal hit deals 1 damage/);
+    const ranged = buildOutcomeSummary({ ...base, ranged: true, outcomeKind: 'hit', atkRoll: 12, defRoll: 4, targetDmg: 1, actorDmg: 0, killed: false });
+    assert.match(ranged.reason, /ranged shots never crush/);
+  });
+
   test('returns null without rolls or outcome', () => {
     assert.equal(buildOutcomeSummary(null), null);
     assert.equal(buildOutcomeSummary({ outcomeKind: 'hit' }), null);
+  });
+});
+
+// ── buildConversationDigest (campaign conversation turn card) ────────────────
+
+describe('buildConversationDigest', () => {
+  const convo = {
+    id: 'intro',
+    title: 'A Voice at the Inn Door',
+    lines: [{ role: 'a', text: 'x' }, { role: 'b', text: 'y' }],
+  };
+  const hero = { id: 'e1', type: 'paladin', title: 'Paladin', color: '#d4a72c' };
+  const npc  = { id: 'e2', type: 'survivor', name: "John O'Connor", title: 'Innkeeper', color: '#8cf' };
+
+  test('builds a single conversation column from a participants Map', () => {
+    const digest = buildConversationDigest(convo, new Map([['a', hero], ['b', npc]]));
+    assert.equal(digest.length, 1);
+    const col = digest[0];
+    assert.equal(col.kind, 'conversation');
+    assert.equal(col.stepIndex, 'conv:intro');
+    assert.equal(col.title, 'A Voice at the Inn Door');
+    assert.equal(col.entries.length, 1);
+    const entry = col.entries[0];
+    assert.equal(entry.actionType, 'conversation');
+    assert.equal(entry.label, 'TALK');
+    assert.equal(entry.lineCount, 2);
+    assert.equal(entry.actor.entityId, 'e1');
+    assert.equal(entry.target.name, "John O'Connor");
+  });
+
+  test('accepts a plain entity array and tolerates a single participant', () => {
+    const digest = buildConversationDigest(convo, [hero]);
+    assert.equal(digest[0].entries[0].actor.entityId, 'e1');
+    assert.equal(digest[0].entries[0].target, null);
   });
 });

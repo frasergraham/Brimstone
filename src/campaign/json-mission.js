@@ -42,6 +42,7 @@
 import { buildMissionMap } from './mission-map.js';
 import { resolveCondition, CONDITIONS } from './condition-registry.js';
 import { resolveConductorScript, CONDUCTOR_SCRIPTS } from './conductor-scripts.js';
+import { validateConversationDef } from './conversation-registry.js';
 import { ObjectiveType } from './missions.js';
 import { MAP_SIZES } from '../map.js';
 
@@ -171,8 +172,42 @@ export function validateMissionJSON(m) {
   _validateObjectiveSide(m.objectives.win, 'win');
   if (m.objectives.lose != null) _validateObjectiveSide(m.objectives.lose, 'lose');
 
+  // Scripted NPCs must have unique ids and sit on the map.
+  const npcIds = new Set();
+  for (const npc of m.npcs ?? []) {
+    if (typeof npc.id !== 'string' || !npc.id.trim()) _fail('npcs[] entry needs a string id');
+    if (npcIds.has(npc.id)) _fail(`duplicate npc id "${npc.id}"`);
+    npcIds.add(npc.id);
+    if (!_inBounds(npc, ext)) {
+      _fail(`npc "${npc.id}" at (${npc.col},${npc.row}) is outside the ${ext.cols}×${ext.rows} map extent`);
+    }
+    if (npc.survivorName != null && typeof npc.survivorName !== 'string') {
+      _fail(`npc "${npc.id}": survivorName must be a string`);
+    }
+  }
+
+  // Conversations: shape + binding/onComplete refs (the markdown file itself is
+  // a runtime concern — see conversation-registry.js).
+  const convIds = new Set();
+  for (const c of m.conversations ?? []) {
+    try {
+      validateConversationDef(c, { ext, npcIds });
+    } catch (err) {
+      _fail(err.message);
+    }
+    if (convIds.has(c.id)) _fail(`duplicate conversation id "${c.id}"`);
+    convIds.add(c.id);
+  }
+
   // Story-trigger conditions are STRING keys into the condition registry.
   for (const tr of m.storyTriggers ?? []) {
+    if (tr.conversation != null) {
+      if (!convIds.has(tr.conversation)) {
+        _fail(`storyTrigger references unknown conversation "${tr.conversation}"`);
+      }
+    } else if (tr.title == null && tr.text == null) {
+      _fail('storyTrigger needs either a "conversation" id or title/text');
+    }
     if (tr.condition == null) continue;
     if (typeof tr.condition !== 'string') _fail('storyTrigger.condition must be a string key');
     if (resolveCondition(tr.condition) == null) {

@@ -959,6 +959,10 @@
         <div id="fps-counter">--</div>
         <div id="poly-counter">--</div>
         <div id="cam-counter">--</div>
+        <!-- Off-screen conversation indicator: edge-clamped arrow pointing at
+             a conversation happening outside the viewport (fixed-camera mode
+             only). Positioned/rotated by ui.showOffscreenArrow(). -->
+        <div id="offscreen-arrow" hidden aria-hidden="true">➤</div>
         <!-- Replay timeline overlay: transparent step-by-step sequence of the
              round being replayed. Slides left as steps advance. -->
         <div id="replay-timeline">
