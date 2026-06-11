@@ -1,0 +1,69 @@
+# Build config for Caleb's Studio — the standalone macOS admin-tools binary.
+# Separate appId / product / config store from the game (electron-builder.yml).
+#
+# Studio serves files from the user-selected repository checkout at runtime (via
+# the calebshollow:// protocol → disk), so the packaged app bundles ONLY the
+# Electron entry + electron-store — none of the game/tool source. That keeps the
+# binary tiny and means it always edits the live working copy, never a stale
+# bundled snapshot.
+#
+# mac-only, signed with Developer ID but NOT notarized (it's a local dev tool).
+# Build:  npm run studio:build:mac
+
+appId: com.calebshollow.studio
+productName: "Caleb's Studio"
+
+# extraMetadata rewrites the packaged package.json: Studio's main entry +
+# product/name, without disturbing the game's `main: electron/main.js`.
+extraMetadata:
+  name: calebs-studio
+  productName: "Caleb's Studio"
+  main: electron/studio-main.js
+
+directories:
+  # In-repo output (gitignored) so the built app survives reboots, unlike /tmp.
+  # The afterPack hook strips macOS extended attributes before signing, so the
+  # iCloud/Finder xattrs on the project dir don't break codesigning here.
+  output: bin/calebs-studio
+
+# Studio bundles no native modules — skip the @electron/rebuild pass entirely.
+npmRebuild: false
+
+# Bundle only Studio's own code. node_modules production deps are added by
+# electron-builder automatically; exclude the heavy/native ones Studio never
+# loads (it only needs electron-store, which is pure JS).
+files:
+  - "electron/studio-main.js"
+  - "electron/studio-preload.cjs"
+  - "package.json"
+  - "!node_modules/better-sqlite3/**"
+  - "!node_modules/canvas/**"
+  - "!node_modules/sharp/**"
+  - "!node_modules/@anthropic-ai/**"
+  - "!node_modules/@capacitor/**"
+  - "!node_modules/@parse/**"
+  - "!node_modules/@gltf-transform/**"
+  - "!node_modules/meshoptimizer/**"
+  - "!node_modules/express/**"
+  - "!node_modules/ws/**"
+  - "!node_modules/undici/**"
+  - "!node_modules/https-proxy-agent/**"
+  - "!node_modules/pg-native/**"
+  - "!node_modules/gif-encoder-2/**"
+  - "!node_modules/electron-updater/**"
+
+# Strip macOS extended attributes so codesign succeeds (shared with the game).
+afterPack: ./scripts/electron-afterpack.js
+
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - dmg
+  # Signed with Developer ID, but deliberately NOT notarized — local dev tool.
+  # electron-builder wants the bare identity name (no "Developer ID Application:"
+  # prefix) and picks the matching cert from the keychain.
+  identity: "Fraser Graham (T495W5MP96)"
+  notarize: false
+  # A local, non-notarized tool doesn't need the hardened runtime / entitlements
+  # dance; keeping it off avoids JIT-entitlement codesign friction.
+  hardenedRuntime: false

@@ -126,6 +126,14 @@ xcrun devicectl device process launch --device <DEVICE_UDID> com.calebshollow.ga
 
 `npm run electron:dev` / `electron:dev:prod` to run; `electron:package:mac|win` to package; `electron:build:mac|win` for distributables (output in `/tmp/brimstone-electron-dist`).
 
+### Caleb's Studio (standalone admin-tools app)
+
+A **separate** macOS-only binary that wraps `admin-tools.html` (Assets | Lighting | Mission Editor | Combat) for fast local iteration. Unlike the game client it points at a working copy of this repo and serves its files straight off disk via the `calebshollow://` protocol, exposing a repo-confined filesystem bridge (`window.studioAPI`, see `electron/studio-preload.cjs`) so the tools READ assets and WRITE files directly into the repo — no Node server, no browser-download dance. The Mission Editor's **Save to repo** writes round-trip-faithful JSON straight into `src/campaign/missions/`.
+
+- Entry: `electron/studio-main.js` + `electron/studio-preload.cjs`; build config `electron-builder.studio.yml` (appId `com.calebshollow.studio`, Developer ID **signed but NOT notarized**, mac-only). Packaged app bundles only the Electron entry — it always edits the live checkout, never a stale snapshot.
+- Run/build: `npm run studio:dev` (defaults to the cwd repo) / `npm run studio:build:mac` (DMG → `/tmp/calebs-studio-dist`). On a packaged launch, **File ▸ Choose Repository…** picks/persists the checkout to operate on.
+- ⚠ The Lighting tab's Export is still a *lossy summary* (drops `day`/`night` `dirStart`/`dirEnd` and the authored comments), so Studio does **not** write `PHASE_LIGHT_CONFIG` back to `renderer-3d.js` — making that export faithful is the prerequisite for a future "Save lighting to repo".
+
 ---
 
 ## Directory Structure

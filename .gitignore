@@ -60,3 +60,6 @@ assets/textures/*
 # Editable source-art working files (e.g. Pixelmator .pxd) — kept locally. Only
 # the exported runtime texture (e.g. assets/road-cobblestone.png) is tracked.
 *.pxd
+
+# Caleb's Studio build output (npm run studio:build:mac → bin/calebs-studio/)
+bin/

@@ -1568,10 +1568,19 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
       if (!file || !handles.editor?.loadMissionFile) return;
       setFileStatus(await handles.editor.loadMissionFile(file));
     });
-    document.getElementById('file-save')?.addEventListener('click', (e) => {
+    document.getElementById('file-save')?.addEventListener('click', async (e) => {
       e.stopPropagation(); closeMenus();
-      if (handles.editor?.saveMission) setFileStatus(handles.editor.saveMission());
+      if (handles.editor?.saveMission) setFileStatus(await handles.editor.saveMission());
     });
+    // In Caleb's Studio (Electron) the bridge writes straight to the repo, so
+    // relabel the Save menu item to match what it actually does.
+    if (window.studioAPI?.writeFile) {
+      const saveBtn = document.getElementById('file-save');
+      if (saveBtn) {
+        saveBtn.textContent = 'Save to repo';
+        saveBtn.title = 'Validate and write the mission into src/campaign/missions/';
+      }
+    }
 
     // ── Undo / Redo (item 5) — top-bar buttons + keyboard shortcuts ─────────
     const tbUndoBtn = document.getElementById('tb-undo');

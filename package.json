@@ -37,6 +37,8 @@
     "electron:build": "electron-builder",
     "electron:build:mac": "electron-builder --mac --config.directories.output=/tmp/brimstone-electron-dist",
     "electron:build:win": "electron-builder --win",
+    "studio:dev": "electron electron/studio-main.js",
+    "studio:build:mac": "electron-builder --mac --config electron-builder.studio.yml --publish never",
     "cap:copy-web": "node scripts/cap-copy-web.js",
     "cap:sync": "node scripts/cap-copy-web.js && npx cap sync",
     "cap:sync:ios": "node scripts/cap-copy-web.js && npx cap sync ios",
