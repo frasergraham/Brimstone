@@ -10,6 +10,7 @@ import { nodeController, PHASE_ICON, DEFAULT_CYCLE_PHASES } from './game.js';
 import { hexKey } from './hex.js';
 import { getFactionTheme } from './theme.js';
 import { EFFECTS } from './effects.js';
+import { buildOutcomeSummary } from './replay-timeline.js';
 
 // Effects whose mods make a unit weaker (red pip), vs. those that strengthen
 // it (green pip). Anything not listed renders neutral.
@@ -727,4 +728,117 @@ export function buildCycleInfoHtml(state, icons = {}) {
       + `${pips('witch', score.witch)}<span class="cip-score-glyph">✦</span></div>`;
   }
   return html;
+}
+
+// ── Turn-card roll breakdown popup (game-styled hover tooltip content) ───────
+//
+// Renders buildRollRows() as the old 2D battle dialog did: attack and
+// defense COLUMNS side by side — each headed by its combatant's icon + name —
+// building line by line: dice pool (picked die highlighted against the
+// discards), one row per modifier (positive green / negative red), divider,
+// Total — followed by the outcome (what happened, why, and who took how much
+// damage) and the rules notes. Pure HTML string — no DOM.
+//
+// `opts.portraitFor(unitRef)` returns a portrait data-URL (or null) for the
+// combatant header icons; without it (or on a miss) the header falls back to
+// the unit's coloured glyph chip.
+export function buildRollRowsTipHtml(rows, entry = {}, { portraitFor = null } = {}) {
+  if (!rows) return '';
+  const esc = (s) => String(s ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  const combatantHead = (u) => {
+    if (!u) return '';
+    const src = portraitFor ? portraitFor(u) : null;
+    const icon = src
+      ? `<img class="gtt-combatant-icon" src="${src}" style="border-color:${u.color}" alt="">`
+      : `<span class="gtt-combatant-icon" style="background:${u.color}">${esc(u.glyph ?? '')}</span>`;
+    return `<div class="gtt-combatant">${icon}`
+      + `<span class="gtt-combatant-name">${esc(u.name)}</span></div>`;
+  };
+
+  const diceRow = ({ pool, picked, advantage }) => {
+    let usedPick = false;
+    const discards = [];
+    let pickedHtml = '';
+    for (const v of (Array.isArray(pool) ? pool : [picked])) {
+      const isPick = !usedPick && v === picked;
+      if (isPick) { usedPick = true; pickedHtml = `<span class="gtt-die gtt-die-picked">${v}</span>`; }
+      else discards.push(`<span class="gtt-die gtt-die-discard">${v}</span>`);
+    }
+    const note = advantage > 0 ? `adv ${advantage}` : advantage < 0 ? `disadv ${-advantage}` : 'die';
+    return `<div class="gtt-row gtt-dice-row">`
+      + `<span class="gtt-label">${note}${discards.length ? ` ${discards.join('')}` : ''}</span>`
+      + `<span class="gtt-val">${pickedHtml}</span></div>`;
+  };
+
+  const column = (name, cls, side, padTo, headHtml) => {
+    let html = `<div class="gtt-col ${cls}">`;
+    html += `<div class="gtt-col-head">${name}</div>`;
+    html += headHtml;
+    html += diceRow(side.dice);
+    for (const t of side.terms) {
+      const sign = t.val > 0 ? 'positive' : 'negative';
+      const v = t.val > 0 ? `+${t.val}` : `−${Math.abs(t.val)}`;
+      html += `<div class="gtt-row" data-sign="${sign}">`
+        + `<span class="gtt-label">${esc(t.label)}</span>`
+        + `<span class="gtt-val">${v}</span></div>`;
+    }
+    // Spacer rows so both Totals sit on the same baseline (old dialog padTo).
+    for (let i = side.terms.length; i < padTo; i++) {
+      html += `<div class="gtt-row gtt-row-spacer">&nbsp;</div>`;
+    }
+    html += `<div class="gtt-row gtt-total-row"><span class="gtt-label">Total</span>`
+      + `<span class="gtt-val">${side.roll}</span></div>`;
+    return html + `</div>`;
+  };
+
+  const padTo = Math.max(rows.atk.terms.length, rows.def.terms.length);
+  let html = `<div class="gtt-bkd">`;
+  html += `<div class="gtt-cols">`
+    + column('⚔ ATTACK', 'gtt-atk', rows.atk, padTo, combatantHead(entry.actor))
+    + column('🛡 DEFENSE', 'gtt-def', rows.def, padTo, combatantHead(entry.target))
+    + `</div>`;
+
+  // Outcome: what happened, why, and the damage dealt.
+  const outcome = buildOutcomeSummary(entry);
+  if (outcome) {
+    html += `<div class="gtt-outcome" data-kind="${outcome.kind}">`
+      + `<div class="gtt-outcome-word">${esc(outcome.headline)}</div>`
+      + `<div class="gtt-outcome-reason">${esc(outcome.reason)}</div>`
+      + outcome.lines.map(l => `<div class="gtt-outcome-line">${esc(l)}</div>`).join('')
+      + `</div>`;
+  }
+
+  for (const n of rows.notes) html += `<div class="gtt-note">${esc(n)}</div>`;
+  html += `<div class="gtt-rule">${esc(rows.rule)}</div>`;
+  html += `</div>`;
+  return html;
+}
+
+// ── Game-tooltip placement ────────────────────────────────────────────────────
+//
+// Pure geometry for initGameTooltips. Default placement: above the hovered
+// target, clamped to the viewport, flipping below when there's no headroom.
+// When the target lives inside a replay turn card (`cardRect` given), the
+// popup must never cover the card the player is reading: it goes BELOW the
+// whole card, or docks BESIDE it when there's no room below.
+export function computeGameTooltipPos({
+  targetRect: r, cardRect = null, tipW, tipH, viewportW, viewportH,
+}) {
+  let x = r.left + r.width / 2 - tipW / 2;
+  x = Math.max(6, Math.min(x, viewportW - tipW - 6));
+  if (cardRect) {
+    let y = cardRect.bottom + 10;
+    if (y + tipH > viewportH - 6) {
+      // No room below the card — dock beside it (right, else left).
+      x = cardRect.right + 10;
+      if (x + tipW > viewportW - 6) x = Math.max(6, cardRect.left - tipW - 10);
+      y = Math.max(6, Math.min(cardRect.top, viewportH - tipH - 6));
+    }
+    return { x, y };
+  }
+  let y = r.top - tipH - 10;
+  if (y < 6) y = r.bottom + 10;
+  return { x, y };
 }
