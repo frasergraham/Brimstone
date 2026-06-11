@@ -126,13 +126,14 @@ export async function playConversation(opts) {
   // mission-intro conversation racing the load would lose its first line(s) —
   // wait for the renderer before presenting anything.
   if (renderer?.whenReady) await renderer.whenReady();
-  const fixedCam = ui?.replayCameraMode === 'fixed' || !!renderer?.suppressAutoFrame;
-  await _frameOrArrow({ renderer, ui, fixedCam, participantIds, centroid });
+  // Framing happens per-line inside _presentLines (not once here) so the active
+  // bubble stays fully visible and close enough to read even if the camera
+  // drifts between lines — unless the player has taken FIXED camera control.
 
   // ── Dialog lines ───────────────────────────────────────────────────────────
   let presenting = true;
   try {
-    await _presentLines(lineRecords, { state, renderer, ui, skipFlag });
+    await _presentLines(lineRecords, { state, renderer, ui, skipFlag, participantIds, centroid });
   } finally {
     presenting = false;
     renderer?.clearSpeechBubbles?.();
@@ -157,11 +158,11 @@ export async function playConversation(opts) {
     let replaySkipped = false;
     ui?.setConversationCardState?.(cardKey, 'playing', { onSkip: () => { replaySkipped = true; } });
     try {
-      await _frameOrArrow({ renderer, ui, fixedCam: ui?.replayCameraMode === 'fixed', participantIds, centroid });
       await _presentLines(lineRecords, {
         state, renderer, ui,
         skipFlag: () => replaySkipped,
         autoOnly: true,   // no HUD guaranteed up — just timed auto-advance
+        participantIds, centroid,
       });
     } finally {
       renderer?.clearSpeechBubbles?.();
@@ -208,29 +209,43 @@ export async function playConversation(opts) {
   return { skipped: skipFlag() };
 }
 
-/** Frame the participants (follow cam) or point at them (fixed cam). */
-async function _frameOrArrow({ renderer, ui, fixedCam, participantIds, centroid }) {
+/**
+ * Frame THIS line so its bubble is fully visible and close enough to read —
+ * unless the player has taken FIXED camera control, in which case we leave the
+ * camera put and just point an off-screen arrow at the speaker. Re-reads the
+ * camera mode every line so a mid-conversation pan (which flips replay camera to
+ * FIXED) immediately stops the auto-framing.
+ *
+ * Follow cam frames the live SPEAKER (closest, follows who's talking), with
+ * headroom reserved for the bubble; it falls back to all participants, then to
+ * the speaker's recorded hex if that entity has despawned.
+ */
+async function _frameConversationStep(line, { renderer, ui, participantIds, centroid }) {
   if (!renderer) return;
-  if (!fixedCam) {
-    if (renderer.frameEntities) {
-      // Reserve headroom for the bubbles above the speakers (and a little
-      // extra width — bubbles are ~3 world units wide) so the dialog never
-      // clips off the edge of the screen.
-      await renderer.frameEntities(participantIds, {
-        padding: 1.8,
-        cardExtent: renderer.speechBubbleFrameExtent?.() ?? 0,
-      });
-    } else if (renderer.frameHexes && centroid) {
-      renderer.frameHexes([centroid], { paddingHexes: 3, maxZoom: 2.0, duration: 400 });
-    }
-  } else if (centroid) {
-    // Camera stays put — if the conversation is off-screen, show the edge arrow.
-    ui?.showOffscreenArrow?.(centroid.col, centroid.row);
+  const loc = (line?.col != null) ? { col: line.col, row: line.row } : centroid;
+  const fixedCam = ui?.replayCameraMode === 'fixed' || !!renderer.suppressAutoFrame;
+  if (fixedCam) {
+    if (loc) ui?.showOffscreenArrow?.(loc.col, loc.row);
+    return;
+  }
+  ui?.hideOffscreenArrow?.();
+  // Reserve headroom for the bubble above the speaker (bubbles are ~3 world
+  // units wide/tall) so the dialog never clips off the edge of the screen.
+  const cardExtent = renderer.speechBubbleFrameExtent?.() ?? 0;
+  let framed = false;
+  if (line?.entityId != null && renderer.frameEntities) {
+    framed = await renderer.frameEntities([line.entityId], { padding: 1.8, cardExtent });
+  }
+  if (!framed && renderer.frameEntities && participantIds?.length) {
+    framed = await renderer.frameEntities(participantIds, { padding: 1.8, cardExtent });
+  }
+  if (!framed && renderer.frameHexes && loc) {
+    renderer.frameHexes([loc], { paddingHexes: 3, maxZoom: 2.0, duration: 400 });
   }
 }
 
 /** Show each line as a persistent bubble; advance via NEXT / auto / skip. */
-async function _presentLines(lineRecords, { state, renderer, ui, skipFlag, autoOnly = false }) {
+async function _presentLines(lineRecords, { state, renderer, ui, skipFlag, autoOnly = false, participantIds = [], centroid = null }) {
   let bubble = null;
   try {
     for (const line of lineRecords) {
@@ -241,6 +256,9 @@ async function _presentLines(lineRecords, { state, renderer, ui, skipFlag, autoO
         await ui?.showStoryModal?.(line.name, line.text);
         continue;
       }
+      // Re-assert the camera frame for THIS line before the bubble appears, so a
+      // camera drift since the last line can't leave the bubble off-screen.
+      await _frameConversationStep(line, { renderer, ui, participantIds, centroid });
       bubble?.dispose();
       bubble = _showLine(line, { state, renderer });
       if (autoOnly) {
