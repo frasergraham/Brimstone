@@ -8,6 +8,7 @@
 // dependency graph, so it stays trivially unit-testable.
 
 import { ENTITY_COLOR, normalizeDamage } from './entities.js';
+import { makeOverlay } from './overlays.js';
 import { ITEMS, getWeaponDamage } from './items.js';
 import { pickBlockWord } from './combat-words.js';
 
@@ -382,6 +383,11 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
           atkWeapon:    ev.result?.breakdown?.atkWeapon ?? null,
           killed:       !!ev.result?.killed,
           note:         null,
+          // Hover highlight: both combatants' hexes (battleSnaps are captured
+          // at battle execution, so mid-step moves have already landed).
+          hexes: [actorSnap, targetSnap].filter(Boolean)
+            .map(sn => ({ col: sn.col, row: sn.row })),
+          movePath: null,
         });
         continue;
       }
@@ -404,6 +410,12 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
           // A fled target (alive, moved out of reach) reads differently from
           // an empty-hex whiff — the quarry escaped, not "nothing was there".
           note:      { text: ev.targetFled ? 'TARGET FLED' : 'NO TARGET', kind: 'info' },
+          hexes: [
+            { col: actorSnap.col, row: actorSnap.row },
+            ...(Number.isFinite(ev.whiffTarget?.col) && Number.isFinite(ev.whiffTarget?.row)
+              ? [{ col: ev.whiffTarget.col, row: ev.whiffTarget.row }] : []),
+          ],
+          movePath: null,
         });
         continue;
       }
@@ -422,6 +434,15 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
           outcomeKind: null,
           targetDmg: 0, actorDmg: 0, killed: false,
           note:     { text: 'BLOCKED', kind: 'blocked' },
+          hexes: (() => {
+            const blocker = ev.blockedByFort ?? ev.blockedBy;
+            return [
+              { col: actorSnap.col, row: actorSnap.row },
+              ...(Number.isFinite(blocker?.col) && Number.isFinite(blocker?.row)
+                ? [{ col: blocker.col, row: blocker.row }] : []),
+            ];
+          })(),
+          movePath: null,
         });
         continue;
       }
@@ -463,6 +484,28 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
         };
       }
 
+      // Hover highlight: the actor's hex, plus — for moves — every hex the
+      // unit crossed (movePath drives the ghost arrow on the map).
+      const hexes = [{ col: actorSnap.col, row: actorSnap.row }];
+      let movePath = null;
+      if (a.type === PA.MOVE) {
+        const waypoints = Array.isArray(ev.result?.path) && ev.result.path.length
+          ? ev.result.path
+          : (Number.isFinite(a.toCol) && Number.isFinite(a.toRow)
+            ? [{ col: a.toCol, row: a.toRow }] : []);
+        if (waypoints.length) {
+          movePath = [
+            { col: actorSnap.col, row: actorSnap.row },
+            ...waypoints.map(p => ({ col: p.col, row: p.row })),
+          ];
+          hexes.push(...movePath.slice(1));
+        }
+      } else {
+        for (const [c, r] of [[a.toCol, a.toRow], [a.col, a.row]]) {
+          if (Number.isFinite(c) && Number.isFinite(r)) hexes.push({ col: c, row: r });
+        }
+      }
+
       entries.push({
         entityId:    a.entityId,
         actor:       unitRef(actorSnap),
@@ -473,6 +516,8 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
         targetDmg:   0, actorDmg: 0, killed: false,
         note,
         discovered,
+        hexes,
+        movePath,
       });
     }
 
@@ -551,4 +596,38 @@ export function buildOutcomeSummary(entry) {
     lines.push(`${actor} takes ${entry.actorDmg} from the counter.`);
   }
   return { kind, headline, reason, lines };
+}
+
+// ── Turn-card hover highlights ───────────────────────────────────────────────
+//
+// Hovering an action entry on a turn card highlights the hexes that action
+// involved: a 15%-alpha blue flat fill over every involved hex, plus — for a
+// successful move — translucent "ghost" arrow segments tracing the path the
+// unit took. Pure: builds overlay descriptors from a buildStepDigest entry;
+// ui.js applies/removes them on the renderer by these ids.
+
+export const TURN_CARD_HOVER_FILL_ID = 'turn-card-hover-fill';
+export const TURN_CARD_HOVER_ARROW_PREFIX = 'turn-card-hover-arrow-';
+export const TURN_CARD_HOVER_COLOR = '#4d9fff';
+
+/** @returns {{ fill: object|null, arrows: object[] }} overlay descriptors */
+export function buildTurnCardHoverOverlays(entry) {
+  const valid = (h) => h && Number.isFinite(h.col) && Number.isFinite(h.row);
+  const hexes = (entry?.hexes ?? []).filter(valid);
+  const fill = hexes.length ? makeOverlay({
+    id: TURN_CARD_HOVER_FILL_ID, kind: 'fill', layer: 'fill',
+    hexes, style: { color: TURN_CARD_HOVER_COLOR, alpha: 0.15 },
+  }) : null;
+  const path = (entry?.movePath ?? []).filter(valid);
+  const arrows = path.length >= 2
+    ? path.slice(0, -1).map((from, i) => makeOverlay({
+        id: `${TURN_CARD_HOVER_ARROW_PREFIX}${i}`, kind: 'plan-arrow', layer: 'plan-arrow',
+        path: [from, path[i + 1]],
+        // Ghost variant: the plan-arrow consumer draws the dashed path but
+        // skips the waypoint puck + numbered badge, and renders translucent.
+        style: { color: TURN_CARD_HOVER_COLOR, alpha: 0.55 },
+        meta: { entityId: '__turn-card-hover__', stepIndex: i, variant: 'ghost' },
+      }))
+    : [];
+  return { fill, arrows };
 }

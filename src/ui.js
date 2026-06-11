@@ -15,7 +15,7 @@ import * as audio from './audio.js';
 
 import { PlanActionType, actionCosts, computeGhostState, computeProjectedInventory, interleavePlan, validatePlanAction, buildAutoGuardQueue } from './planner.js';
 import { ABILITIES } from './abilities.js';
-import { buildRollRows, buildOutcomeSummary } from './replay-timeline.js';
+import { buildRollRows, buildOutcomeSummary, buildTurnCardHoverOverlays } from './replay-timeline.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
 import { buildWrapupCombatsHtml, wrapupIconHtml } from './wrapup-summary.js';
 import { ResEventType } from '../server/resolver.js';
@@ -5197,6 +5197,7 @@ export class UIController {
     // lifts the cards up (see styles.css mobile block).
     if (this._replayCollapsed === undefined) this._replayCollapsed = this._isMobileViewport();
     this._bindReplayCollapse();
+    this._bindReplayHoverHighlights();
     this._applyReplayCollapse(this._replayCollapsed);
     if (typeof document !== 'undefined') document.body?.classList?.add('replay-timeline-up');
     this._el('replay-progress')?.classList.add('visible');
@@ -5214,6 +5215,48 @@ export class UIController {
       this._applyReplayCollapse(!this._replayCollapsed);
     });
     this._replayCollapseBound = true;
+  }
+
+  /** Hovering an action entry on a turn card highlights its involved hexes on
+   *  the map (15%-alpha blue fill) and, for a successful move, a translucent
+   *  ghost arrow tracing the path. Delegated on the persistent timeline
+   *  container (cards re-render every round); hover-capable pointers only. */
+  _bindReplayHoverHighlights() {
+    if (this._replayHoverBound) return;
+    const wrap = this._el('replay-timeline');
+    if (!wrap || typeof wrap.addEventListener !== 'function') return;
+    if (typeof window !== 'undefined' && window.matchMedia
+        && !window.matchMedia('(hover: hover)').matches) return;
+    wrap.addEventListener('mouseover', (e) => {
+      const row = e.target?.closest?.('.replay-step-entry');
+      if (!row) { this._clearReplayHoverHighlight(); return; }
+      const stepAttr = row.closest('.replay-step-col')?.getAttribute?.('data-step');
+      const col = (this._replayDigest ?? []).find(c => String(c.stepIndex) === String(stepAttr));
+      const entry = col?.entries?.[Number(row.getAttribute('data-entry'))] ?? null;
+      this._applyReplayHoverHighlight(entry);
+    });
+    wrap.addEventListener('mouseleave', () => this._clearReplayHoverHighlight());
+    this._replayHoverBound = true;
+  }
+
+  _applyReplayHoverHighlight(entry) {
+    if (typeof this.renderer?.setOverlay !== 'function') return;
+    const { fill, arrows } = buildTurnCardHoverOverlays(entry);
+    if (!fill && !arrows.length) { this._clearReplayHoverHighlight(); return; }
+    this._clearReplayHoverHighlight();
+    const ids = [];
+    if (fill) { this.renderer.setOverlay(fill.id, fill); ids.push(fill.id); }
+    for (const a of arrows) { this.renderer.setOverlay(a.id, a); ids.push(a.id); }
+    this._turnCardHoverIds = ids;
+    this.renderer.draw?.();
+  }
+
+  _clearReplayHoverHighlight() {
+    const ids = this._turnCardHoverIds;
+    if (!ids?.length || typeof this.renderer?.removeOverlay !== 'function') return;
+    for (const id of ids) this.renderer.removeOverlay(id);
+    this._turnCardHoverIds = [];
+    this.renderer.draw?.();
   }
 
   /** Collapse or expand every turn card. Collapsed cards show only the action
@@ -5689,6 +5732,7 @@ export class UIController {
 
   /** Hide and clear the timeline overlay. */
   hideReplayTimeline() {
+    this._clearReplayHoverHighlight();
     const wrap  = this._el('replay-timeline');
     const track = this._el('replay-timeline-track');
     if (wrap) wrap.classList.remove('visible', 'reviewing');
