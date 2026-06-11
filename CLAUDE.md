@@ -1,5 +1,7 @@
 # Brimstone — Claude Context
 
+> **⚠ Visual work MUST be validated with the `verifier-browser` skill** (`.claude/skills/verifier-browser/`): run the real game in headless Chromium, capture screenshots, and read them before pushing. Any change to the 3D renderer, UI overlays/HUD, replay/conversation presentation, `styles.css`, or `index.html` counts as visual work. See Guideline 7.
+
 ## Development Guidelines
 
 These directives apply to all code changes — follow them without exception.
