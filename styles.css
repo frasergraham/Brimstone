@@ -5668,6 +5668,14 @@ img.plan-step-avatar {
    tapping through the cards to the board. */
 @media (hover: hover) {
   .replay-step-entry { pointer-events: auto; }
+  /* The hovered row lights up in the same blue as its on-map hex highlight,
+     so the card section and the board read as one. The gold is-acting
+     highlight (the action currently playing) still wins. */
+  .replay-step-entry:hover:not(.is-acting) {
+    background: rgba(77, 159, 255, 0.12);
+    box-shadow: inset 0 0 0 1px rgba(77, 159, 255, 0.45);
+    cursor: default;
+  }
 }
 /* "…" hint shown (collapsed only) when several actions are active at once. */
 .replay-more {
