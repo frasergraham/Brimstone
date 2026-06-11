@@ -1084,17 +1084,40 @@ export function computeCombatOdds(state, actor, target) {
   });
 }
 
-export function executeBattle(state, actor, target) {
+export function executeBattle(state, actor, target, opts = {}) {
   actor.guarding = 0;  // Attacking breaks guard stance
   const log = [];
+  // Guard reactions (resolver inserts these inline) are normal attacks EXCEPT for
+  // these opt-out flags: no counter-attack, no crush, and no gang-up (neither
+  // side). They DO keep silver/phase/fort/weapon bonuses. This matches the
+  // pre-refactor guard strike so balance stays neutral; planned attacks pass none
+  // of these flags.
+  const noCounter = !!opts.noCounter;
+  const noCrush   = !!opts.noCrush;
+  const noAlly    = !!opts.noAlly;
 
+  const ctx = computeBattleContext(state, actor, target);
+  if (noAlly) {
+    // Guard reactions get NO gang-up (either side): the numerically-superior
+    // swarm shouldn't be able to stack a reactive attack. Strip both sides' ally
+    // advantage dice + flat so the reaction matches the pre-refactor guard strike
+    // and keeps overall balance neutral.
+    ctx.combatOptions.extraAtkBonus -= ctx.atkGangupFlat;
+    ctx.combatOptions.extraDefBonus -= ctx.defGangupFlat;
+    ctx.combatOptions.atkAdvantageDice = 0;
+    ctx.combatOptions.defAdvantageDice = 0;
+    ctx.atkAdvantageDice = 0; ctx.defAdvantageDice = 0;
+    ctx.atkGangupFlat = 0;    ctx.defGangupFlat = 0;
+    ctx.attackerAllies = 0;   ctx.defenderAllies = 0;
+    ctx.atkAllies = [];       ctx.defAllies = [];
+  }
   const {
     isRanged, isCloseRanged, rangeDistancePenalty, phaseBonus,
     atkAllies, defAllies, attackerAllies, defenderAllies, defTile,
     atkFortAtkBonus, fortBonus, forestCoverBonus,
     atkAdvantageDice, defAdvantageDice, atkGangupFlat, defGangupFlat,
     atkDisadvantageDice, fatiguePenalty, combatOptions,
-  } = computeBattleContext(state, actor, target);
+  } = ctx;
 
   const { attackRoll, defenseRoll, hit, margin,
           atkBaseDie, defBaseDie, atkExtraDice, defExtraDice,
@@ -1144,8 +1167,8 @@ export function executeBattle(state, actor, target) {
   // implies isCrush. The weapon's damage spec is rolled through state.nextDie
   // (after resolveCombat's advantage pools) so it stays deterministic under
   // forced dice / replay; unarmed falls back to 2D6 (see getWeaponDamage).
-  const isCrush      = !isRanged && hit && attackRoll >= 2 * defenseRoll;
-  const isGreatCrush = !isRanged && hit && attackRoll >= 3 * defenseRoll;
+  const isCrush      = !noCrush && !isRanged && hit && attackRoll >= 2 * defenseRoll;
+  const isGreatCrush = !noCrush && !isRanged && hit && attackRoll >= 3 * defenseRoll;
 
   if (hit) {
     const tier    = isGreatCrush ? 3 : isCrush ? 2 : 1;
@@ -1235,7 +1258,7 @@ export function executeBattle(state, actor, target) {
     // Ranged attacks don't trigger counters — the defender can't reach the
     // attacker to strike back (narratively nonsensical, and the operator
     // explicitly removed this rule).
-    if (defenseRoll >= 2 * attackRoll && actor.alive && !isRanged) {
+    if (defenseRoll >= 2 * attackRoll && actor.alive && !isRanged && !noCounter) {
       // A counter lands as one ordinary (1×) hit with the defender's weapon —
       // matching the pre-dice rule where a counter dealt the same as a hit.
       counterDmg = actor.applyIncomingDamage(
@@ -1701,153 +1724,4 @@ export function executeSoundHorn(state, actor) {
   // Return first survivor for backward compat, plus full list
   const encounterSurvivor = encounterSurvivors[0] || null;
   return { success: true, log, cost: 1, encounterLog, encounterSurvivor, encounterSurvivors };
-}
-
-// Weakened reactive attack from a guarding unit.
-// No ally bonus (extraAtkDice=0), no silver (attackBonus stripped),
-// no counter-attack. All other bonuses (phase, weapon/staff, fort) apply.
-export function executeGuardStrike(state, guardian, target) {
-  const log = [];
-
-  // Phase bonus applies normally
-  const phaseBonus = getFaction(guardian.owner).getPhaseCombatBonus(state.phase);
-
-  // Strip silver: temporarily zero attackBonus, restore after
-  const savedAtkBonus = guardian.attackBonus;
-  guardian.attackBonus = 0;
-
-  // Fortification bonuses — witch units never benefit.
-  const atkTile = tile(state, guardian.col, guardian.row);
-  const defTile = tile(state, target.col, target.row);
-  const atkFortRaw = getFortifyCombatBonus(atkTile?.fortifyLevel || 0);
-  const defFortRaw = getFortifyCombatBonus(defTile?.fortifyLevel || 0);
-  const atkFortAtkBonus = guardian.owner === 'witch' ? 0 : atkFortRaw.attack;
-  const fortBonus       = target.owner === 'witch'   ? 0 : defFortRaw.defense;
-
-  // Ranged guard strike (opportunity shot) obeys the same rules as a ranged
-  // attack: no crush, no splash, no counter, forest cover for the target,
-  // distance falloff, and point-blank disadvantage. Melee guard strikes are
-  // unaffected (gRange == 1 → all the ranged flags are 0/false).
-  const gRange = (typeof guardian.getRange === 'function' ? guardian.getRange() : (guardian.range ?? 1));
-  const dist = hexDistance(guardian.col, guardian.row, target.col, target.row);
-  const isRanged = gRange > 1;
-  const isCloseRanged = isRanged && dist <= 1;
-  const rangeDistancePenalty = isRanged ? Math.floor((dist - 1) / 2) : 0;
-  const forestCoverBonus = (isRanged && isForestCover(defTile)) ? 1 : 0;
-  const atkDisadvantageDice = isCloseRanged ? 1 : 0;
-
-  // No ally dice, no fatigue penalty; attacker fort ATT bonus still applies.
-  const { attackRoll, defenseRoll, hit, margin,
-          atkBaseDie, defBaseDie, atkStaffBonus } =
-    Entity.resolveCombat(guardian, target, {
-      extraAtkBonus: atkFortAtkBonus + phaseBonus - rangeDistancePenalty,
-      extraDefBonus: fortBonus + forestCoverBonus,
-      atkDisadvantageDice,
-      state,
-    });
-
-  // Restore attackBonus
-  guardian.attackBonus = savedAtkBonus;
-
-  const rangeFalloffNote = rangeDistancePenalty > 0 ? ` (−${rangeDistancePenalty} range)` : '';
-  const strikeVerb = isRanged
-    ? (isCloseRanged ? `🏹 ${guardian.displayName} looses a point-blank shot from cover!`
-                     : `🏹 ${guardian.displayName} looses an opportunity shot!${rangeFalloffNote}`)
-    : `🛡 ${guardian.displayName} strikes from guard!`;
-  log.push(`${strikeVerb} [${attackRoll} vs ${defenseRoll}]`);
-
-  let killed = false;
-  let damage = 0;
-  let splashKills = [];
-  let splashHits  = [];
-  // Ranged guard strikes never crush (mirrors ranged attacks). Damage tiers
-  // match the battle path: great crush (≥3×) = 3, crush (≥2×) = 2, hit = 1.
-  const isCrush      = !isRanged && hit && attackRoll >= 2 * defenseRoll;
-  const isGreatCrush = !isRanged && hit && attackRoll >= 3 * defenseRoll;
-
-  if (hit) {
-    // Tier × rolled weapon damage, mirroring executeBattle.
-    const tier    = isGreatCrush ? 3 : isCrush ? 2 : 1;
-    const baseDmg = rollDamage(getWeaponDamage(guardian.weapon), s => state.nextDie(s)) * tier;
-
-    // Single blow so a wounded defender takes the surcharge once.
-    {
-      const inc = target.applyIncomingDamage(baseDmg);
-      damage += inc;
-      const wasKilled = target.takeDamage(inc);
-      dispatchTrigger('damaged', target, { state, amount: inc, source: guardian });
-      if (wasKilled) killed = true;
-    }
-
-    // Fort degradation on damage
-    if (damage > 0 && defTile && defTile.fortifyLevel > 0) {
-      defTile.fortifyLevel -= 1;
-      log.push(`🏰 The fortifications are damaged! (now +${defTile.fortifyLevel} DEF)`);
-    }
-
-    if (killed) {
-      log.push(`${target.displayName} is slain by the guard strike!`);
-      getFaction(guardian.owner).trackKill(state);
-      guardian.killsThisRound = (guardian.killsThisRound ?? 0) + 1;
-      dispatchTrigger('damaged-fatal', target, { state, source: guardian });
-      dispatchTrigger('kill', guardian, { state, target });
-      state.entities = state.entities.filter(e => e.id !== target.id);
-    } else {
-      const label = isCrush ? `${damage} damage (crushing blow!)` : `${damage} damage`;
-      log.push(`${target.displayName} takes ${label}. (${target.hp}/${target.maxHp} HP)`);
-    }
-    if (isGreatCrush) log.push(`💥💥 Great crushing blow from guard!`);
-    else if (isCrush) log.push(`💥 Crushing blow from guard!`);
-
-    // Splash damage on crush or kill — melee only. Ranged shots never splash.
-    if (!isRanged && (isCrush || killed)) {
-      const splash = _applySplashDamage(state, target.col, target.row, [guardian.id, target.id], log, { damage: DAMAGE_SCALE });
-      splashKills = splash.splashKills;
-      splashHits  = splash.splashHits;
-      for (const sk of splashKills) {
-        if (sk.owner !== guardian.owner) {
-          getFaction(guardian.owner).trackKill(state);
-          guardian.killsThisRound = (guardian.killsThisRound ?? 0) + 1;
-          dispatchTrigger('kill', guardian, { state, target: sk });
-        }
-      }
-    }
-  } else {
-    log.push(`${target.displayName} evades the guard strike.`);
-    // No counter-attack on guard strikes
-  }
-
-  // Decomposed unit stats — silver is stripped on guard strike (attackBonus
-  // saved/restored above) so atkAttackBonus is always 0 here.
-  const atkBaseStat    = guardian.attack || 0;
-  const atkWeaponMod   = guardian.weapon ? (ITEMS[guardian.weapon]?.statMods?.attack ?? 0) : 0;
-  const atkAbilityMod  = abilityStatMod(guardian.abilities, 'attack');
-  const atkEffectMod   = effectStatMod(guardian, 'attack');
-  const defBaseStat     = target.defense || 0;
-  const defWeaponMod    = target.weapon ? (ITEMS[target.weapon]?.statMods?.defense ?? 0) : 0;
-  const defAbilityMod   = abilityStatMod(target.abilities, 'defense');
-  const defEffectMod    = effectStatMod(target, 'defense');
-  const defDefenseBonus = target.defenseBonus || 0;
-
-  return {
-    success: true, log, cost: 0, guardStrike: true,
-    attackRoll, defenseRoll, hit, killed, margin, damage, splashKills, splashHits,
-    ranged: isRanged, closeRanged: isCloseRanged,
-    breakdown: {
-      atkBaseDie, defBaseDie,
-      atkExtraDice: [], defExtraDice: [],
-      atkPool: [atkBaseDie], defPool: [defBaseDie],
-      atkAllyNames: [], defAllyNames: [],
-      atkGangupFlat: 0, defGangupFlat: 0,
-      atkAdvantageDice: 0, defAdvantageDice: 0, atkDisadvantageDice,
-      atkStaffBonus, phaseBonus, fortBonus, atkFortAtkBonus,
-      forestCoverBonus, rangeDistancePenalty,
-      fatiguePenalty: 0,
-      ranged: isRanged, closeRanged: isCloseRanged,
-      atkBaseStat, atkWeaponMod, atkAbilityMod, atkEffectMod, atkAttackBonus: 0,
-      defBaseStat, defWeaponMod, defAbilityMod, defEffectMod, defDefenseBonus,
-      atkWeaponId: guardian.weapon ?? null,
-      defWeaponId: target.weapon ?? null,
-    },
-  };
 }

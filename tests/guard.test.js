@@ -7,7 +7,7 @@ import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { GameState, Phase } from '../src/game.js';
 import { PlanActionType } from '../src/planner.js';
 import {
-  executeGuard, executeGuardStrike, executeMove, executeBattle,
+  executeGuard, executeMove, executeBattle,
   getValidActions, ActionType,
 } from '../src/actions.js';
 import {
@@ -146,182 +146,6 @@ describe('Guard in getValidActions', () => {
   });
 });
 
-// ── executeGuardStrike ───────────────────────────────────────────────────────
-
-describe('executeGuardStrike', () => {
-  test('performs a reactive attack with no ally dice', () => {
-    const state = freshState();
-    const hero = state.hero;
-    hero.guarding = 1;
-
-    // Place a minion on a neighbor hex
-    const adj = emptyPassableNeighbor(state, hero);
-    if (!adj) return;
-    const minion = createMinion(adj.col, adj.row);
-    minion.owner = 'witch';
-    state.entities.push(minion);
-
-    const r = executeGuardStrike(state, hero, minion);
-    assert.equal(r.success, true);
-    assert.equal(r.cost, 0, 'Guard strike should be free');
-    assert.equal(r.guardStrike, true);
-    // Verify no ally dice in breakdown
-    assert.equal(r.breakdown.atkStaffBonus !== undefined, true);
-  });
-
-  test('strips silver (attackBonus) during guard strike', () => {
-    const state = freshState();
-    const hero = state.hero;
-    hero.guarding = 1;
-    hero.attackBonus = 3; // simulating silver bonuses
-
-    const adj = emptyPassableNeighbor(state, hero);
-    if (!adj) return;
-    const minion = createMinion(adj.col, adj.row);
-    minion.owner = 'witch';
-    state.entities.push(minion);
-
-    const r = executeGuardStrike(state, hero, minion);
-    assert.equal(r.success, true);
-    // attackBonus should be restored after the strike
-    assert.equal(hero.attackBonus, 3, 'attackBonus should be restored after guard strike');
-  });
-
-  test('can kill the target', () => {
-    const state = freshState();
-    const hero = state.hero;
-    hero.guarding = 1;
-    hero.attack = 20; // guarantee a kill
-
-    const adj = emptyPassableNeighbor(state, hero);
-    if (!adj) return;
-    const minion = createMinion(adj.col, adj.row);
-    minion.owner = 'witch';
-    minion.hp = 1;
-    state.entities.push(minion);
-
-    const r = executeGuardStrike(state, hero, minion);
-    assert.equal(r.success, true);
-    // The minion should be dead (removed from entities)
-    if (r.hit) {
-      assert.equal(r.killed, true);
-      assert.ok(!state.entities.some(e => e.id === minion.id));
-    }
-  });
-
-  test('no counter-attack on guard strike', () => {
-    const state = freshState();
-    // Use a weak hero attacking a strong golem
-    const hero = state.hero;
-    hero.guarding = 1;
-    hero.attack = 0; // very weak
-
-    const adj = emptyPassableNeighbor(state, hero);
-    if (!adj) return;
-    const minion = createMinion(adj.col, adj.row);
-    minion.owner = 'witch';
-    minion.defense = 20; // very high defense
-    state.entities.push(minion);
-
-    // Run many trials — guard strike should never deal counter damage
-    const origHp = hero.hp;
-    for (let i = 0; i < 20; i++) {
-      hero.hp = origHp;
-      minion.hp = minion.maxHp;
-      executeGuardStrike(state, hero, minion);
-    }
-    // Hero should never have taken counter damage from any of these strikes
-    // (no counter-attack mechanism in guard strike)
-    // We can't guarantee no damage from other sources, but the function itself
-    // should never reduce hero HP
-    assert.equal(hero.hp, origHp);
-  });
-
-  test('phase bonus applies during guard strike at night for witch', () => {
-    const state = freshState();
-    state.phase = Phase.NIGHT;
-
-    const witch = state.witch;
-    witch.guarding = 1;
-
-    const adj = emptyPassableNeighbor(state, witch);
-    if (!adj) return;
-    const hero = state.hero;
-    // Move hero to adjacent position
-    hero.col = adj.col;
-    hero.row = adj.row;
-
-    const r = executeGuardStrike(state, witch, hero);
-    assert.equal(r.success, true);
-    assert.equal(r.breakdown.phaseBonus, 2, 'Witch should get +2 phase bonus at night');
-  });
-
-  // ── Ranged guard strikes (opportunity shots) ──────────────────────────────
-  test('ranged guard strike: huge margin deals the 1× weapon roll, no crush, no splash', () => {
-    const state = freshState();
-    const guard = state.hero;
-    makeRanged(guard, 3);            // ranged guard (reach 2) — bow, 2D4 damage
-    guard.guarding = 1;
-    const target = state.witch;
-    guard.col = 5; guard.row = 5;
-    target.col = 7; target.row = 5;   // dist 2 — not point-blank
-    state.setForcedDice(6, 1, 2, 2);   // would crush if melee; bow 2D4 = 4
-    const targetHpBefore = target.hp;
-    const r = executeGuardStrike(state, guard, target);
-    assert.equal(r.ranged, true);
-    assert.equal(r.closeRanged, false);
-    assert.equal(r.hit, true);
-    assert.equal(r.damage, 4, 'ranged guard strike is never multiplied by crush tier');
-    assert.equal(target.hp, targetHpBefore - 4);
-    assert.equal(r.attackRoll >= 2 * r.defenseRoll, true, 'margin would crush if melee');
-    assert.equal(r.splashKills.length, 0);
-    assert.equal(r.splashHits.length, 0);
-  });
-
-  test('ranged guard strike honours forest cover (+1 DEF) on the target hex', () => {
-    const state = freshState();
-    const guard = state.hero;
-    makeRanged(guard, 3);
-    guard.guarding = 1;
-    const target = state.witch;
-    guard.col = 5; guard.row = 5;
-    target.col = 7; target.row = 5;
-    state.tiles.get(hexKey(7, 5)).base = TileType.FOREST;
-    state.setForcedDice(3, 3);
-    const r = executeGuardStrike(state, guard, target);
-    assert.equal(r.ranged, true);
-    assert.equal(r.breakdown.forestCoverBonus, 1, 'forest cover applies to ranged guard strikes');
-  });
-
-  test('ranged guard strike applies distance falloff at range 3+', () => {
-    const state = freshState();
-    const guard = state.hero;
-    makeRanged(guard, 5);
-    guard.guarding = 1;
-    const target = state.witch;
-    guard.col = 5; guard.row = 5;
-    target.col = 9; target.row = 5;   // dist 4 → penalty 1
-    state.setForcedDice(3, 3);
-    const r = executeGuardStrike(state, guard, target);
-    assert.equal(r.breakdown.rangeDistancePenalty, 1);
-  });
-
-  test('melee guard strike is unaffected — no ranged flags', () => {
-    const state = freshState();
-    const hero = state.hero;
-    hero.guarding = 1;
-    const adj = emptyPassableNeighbor(state, hero);
-    if (!adj) return;
-    const minion = createMinion(adj.col, adj.row);
-    minion.owner = 'witch';
-    state.entities.push(minion);
-    const r = executeGuardStrike(state, hero, minion);
-    assert.equal(r.ranged, false);
-    assert.equal(r.breakdown.rangeDistancePenalty, 0);
-    assert.equal(r.breakdown.forestCoverBonus, 0);
-  });
-});
-
 // ── Guard strikes via resolver ───────────────────────────────────────────────
 
 describe('Guard strikes in resolver', () => {
@@ -359,14 +183,14 @@ describe('Guard strikes in resolver', () => {
 
     const steps = resolvePlans(state, heroPlan, witchPlan);
 
-    // Find GUARD_STRIKE events
+    // Find guard-reaction events (now normal inline BATTLE_UNIT attacks)
     const guardStrikes = [];
     for (const step of steps) {
       for (const ev of (step.heroEvents ?? [])) {
-        if (ev.type === ResEventType.GUARD_STRIKE) guardStrikes.push(ev);
+        if (ev.guardReaction === true) guardStrikes.push(ev);
       }
       for (const ev of (step.witchEvents ?? [])) {
-        if (ev.type === ResEventType.GUARD_STRIKE) guardStrikes.push(ev);
+        if (ev.guardReaction === true) guardStrikes.push(ev);
       }
     }
 
@@ -402,10 +226,10 @@ describe('Guard strikes in resolver', () => {
     const guardStrikes = [];
     for (const step of steps) {
       for (const ev of (step.heroEvents ?? [])) {
-        if (ev.type === ResEventType.GUARD_STRIKE) guardStrikes.push(ev);
+        if (ev.guardReaction === true) guardStrikes.push(ev);
       }
       for (const ev of (step.witchEvents ?? [])) {
-        if (ev.type === ResEventType.GUARD_STRIKE) guardStrikes.push(ev);
+        if (ev.guardReaction === true) guardStrikes.push(ev);
       }
     }
     assert.equal(guardStrikes.length, 0, 'Guard should not trigger on friendly movement');
@@ -450,10 +274,10 @@ describe('Guard strikes in resolver', () => {
     const guardStrikes = [];
     for (const step of steps) {
       for (const ev of (step.heroEvents ?? [])) {
-        if (ev.type === ResEventType.GUARD_STRIKE) guardStrikes.push(ev);
+        if (ev.guardReaction === true) guardStrikes.push(ev);
       }
       for (const ev of (step.witchEvents ?? [])) {
-        if (ev.type === ResEventType.GUARD_STRIKE) guardStrikes.push(ev);
+        if (ev.guardReaction === true) guardStrikes.push(ev);
       }
     }
 
@@ -461,6 +285,139 @@ describe('Guard strikes in resolver', () => {
     // the witch moves in step 1. The survivor guards in step 2 (after witch already moved).
     // So at least 1 guard strike should fire from the hero.
     assert.ok(guardStrikes.length >= 1, `Expected 1+ guard strikes, got ${guardStrikes.length}`);
+  });
+
+  // ── Guard reactions are NORMAL inline attacks (no special-casing) ──────────
+  test('a guard reaction is emitted as a normal BATTLE_UNIT ACTION_OK attack', () => {
+    const state = freshState();
+    const hero = state.hero, witch = state.witch;
+    const heroNeighbors = getNeighbors(hero.col, hero.row);
+    const adjHex = heroNeighbors.find(n => {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      return t && legacyTileType(t) !== TileType.RIVER && !isBuildingFootprint(t) &&
+        !state.entities.some(e => e.alive && e.id !== witch.id && e.col === n.col && e.row === n.row);
+    });
+    if (!adjHex) return;
+    const farHexes = getNeighbors(adjHex.col, adjHex.row).filter(n => {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      return t && legacyTileType(t) !== TileType.RIVER && !isBuildingFootprint(t) &&
+        n.col !== hero.col && n.row !== hero.row &&
+        !state.entities.some(e => e.alive && e.id !== witch.id && e.col === n.col && e.row === n.row);
+    });
+    if (!farHexes.length) return;
+    witch.col = farHexes[0].col; witch.row = farHexes[0].row;
+
+    const steps = resolvePlans(state,
+      [{ type: PlanActionType.GUARD, entityId: hero.id }],
+      [{ type: PlanActionType.MOVE, entityId: witch.id, toCol: adjHex.col, toRow: adjHex.row }]);
+
+    const ev = steps.flatMap(s => [...(s.heroEvents ?? []), ...(s.witchEvents ?? [])])
+      .find(e => e.guardReaction);
+    assert.ok(ev, 'a guard reaction event was emitted');
+    // Same shape as a planned attack — flows through the normal battle pipeline.
+    assert.equal(ev.type, ResEventType.ACTION_OK);
+    assert.equal(ev.action.type, PlanActionType.BATTLE_UNIT);
+    assert.equal(ev.action.entityId, hero.id, 'the guardian is the attacker');
+    assert.equal(ev.action.targetId, witch.id, 'the mover is the target');
+    assert.ok(ev.battleSnaps?.actorSnap && ev.battleSnaps?.targetSnap, 'carries battle snapshots');
+    assert.ok(Number.isFinite(ev.result?.attackRoll), 'resolved via full executeBattle (has rolls)');
+  });
+
+  test('a multi-charge guard keeps its remaining charges after one reaction', () => {
+    const state = freshState();
+    const hero = state.hero, witch = state.witch;
+    hero.guarding = 2; // two stored charges, no planned GUARD this round
+    const adjHex = getNeighbors(hero.col, hero.row).find(n => {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      return t && legacyTileType(t) !== TileType.RIVER && !isBuildingFootprint(t) &&
+        !state.entities.some(e => e.alive && e.id !== witch.id && e.col === n.col && e.row === n.row);
+    });
+    if (!adjHex) return;
+    const farHexes = getNeighbors(adjHex.col, adjHex.row).filter(n => {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      return t && legacyTileType(t) !== TileType.RIVER && !isBuildingFootprint(t) &&
+        n.col !== hero.col && n.row !== hero.row &&
+        !state.entities.some(e => e.alive && e.id !== witch.id && e.col === n.col && e.row === n.row);
+    });
+    if (!farHexes.length) return;
+    witch.col = farHexes[0].col; witch.row = farHexes[0].row;
+
+    resolvePlans(state, [],
+      [{ type: PlanActionType.MOVE, entityId: witch.id, toCol: adjHex.col, toRow: adjHex.row }]);
+    // executeBattle zeroes the stance; the resolver restores remaining charges.
+    assert.equal(hero.guarding, 1, 'one charge consumed, one preserved');
+  });
+});
+
+// ── executeBattle guard-reaction options (noCounter / noCrush, keep ally) ─────
+
+describe('executeBattle noCounter / noCrush options (guard reactions)', () => {
+  test('noCrush never crushes, while an uncapped attack does (proves the flag bites)', () => {
+    const state = freshState();
+    const guard = state.hero; guard.attack = 10; // strong → frequent crush rolls
+    const adj = emptyPassableNeighbor(state, guard);
+    if (!adj) return;
+    const minion = createMinion(adj.col, adj.row); minion.owner = 'witch'; minion.defense = 0;
+    state.entities.push(minion);
+
+    let cappedCrushed = false, uncappedCrushed = false;
+    for (let i = 0; i < 40; i++) {
+      minion.hp = minion.maxHp;
+      const r = executeBattle(state, guard, minion, { noCrush: true, noCounter: true });
+      if ((r.breakdown?.dmgTier ?? 1) >= 2) cappedCrushed = true;
+    }
+    for (let i = 0; i < 40; i++) {
+      minion.hp = minion.maxHp;
+      const r = executeBattle(state, guard, minion); // uncapped planned attack
+      if ((r.breakdown?.dmgTier ?? 1) >= 2) uncappedCrushed = true;
+    }
+    assert.equal(cappedCrushed, false, 'noCrush keeps dmgTier at 1');
+    assert.equal(uncappedCrushed, true, 'an uncapped attack DOES crush — the flag is what suppresses it');
+  });
+
+  test('noCounter prevents counter damage even against a strong defender', () => {
+    const state = freshState();
+    const guard = state.hero; guard.attack = 0; // weak → defender would counter
+    const adj = emptyPassableNeighbor(state, guard);
+    if (!adj) return;
+    const minion = createMinion(adj.col, adj.row); minion.owner = 'witch'; minion.defense = 20;
+    state.entities.push(minion);
+
+    const hp0 = guard.hp;
+    for (let i = 0; i < 30; i++) {
+      guard.hp = hp0; minion.hp = minion.maxHp;
+      const r = executeBattle(state, guard, minion, { noCounter: true, noCrush: true });
+      assert.equal(r.counterDmg ?? 0, 0, 'guard reactions never take a counter');
+    }
+    assert.equal(guard.hp, hp0, 'guard leader took no counter damage across trials');
+  });
+
+  test('noAlly drops gang-up (the swarm cannot stack a guard reaction)', () => {
+    const state = freshState();
+    const guard = state.hero;
+    const adj = emptyPassableNeighbor(state, guard);
+    if (!adj) return;
+    const minion = createMinion(adj.col, adj.row); minion.owner = 'witch';
+    state.entities.push(minion);
+    // A hero ally adjacent to the TARGET would normally lend gang-up dice.
+    const allyHex = getNeighbors(adj.col, adj.row).find(n => {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      return t && legacyTileType(t) !== TileType.RIVER && !isBuildingFootprint(t) &&
+        !(n.col === guard.col && n.row === guard.row) &&
+        !state.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
+    });
+    if (!allyHex) return;
+    const ally = createSurvivor(allyHex.col, allyHex.row); ally.owner = 'hero';
+    state.entities.push(ally);
+
+    // A planned attack DOES gang up; the guard-reaction flag suppresses it.
+    const planned = executeBattle(state, guard, minion);
+    assert.ok((planned.breakdown?.atkAllyIds ?? []).includes(ally.id),
+      'sanity: an adjacent ally gangs up on a normal attack');
+    minion.hp = minion.maxHp;
+    const reaction = executeBattle(state, guard, minion, { noCounter: true, noCrush: true, noAlly: true });
+    assert.equal((reaction.breakdown?.atkAllyIds ?? []).length, 0,
+      'noAlly strips gang-up from the guard reaction');
   });
 });
 
@@ -470,8 +427,8 @@ describe('ranged opportunity shots via resolver', () => {
   function collectGuardStrikes(steps) {
     const out = [];
     for (const step of steps) {
-      for (const ev of (step.heroEvents ?? [])) if (ev.type === ResEventType.GUARD_STRIKE) out.push(ev);
-      for (const ev of (step.witchEvents ?? [])) if (ev.type === ResEventType.GUARD_STRIKE) out.push(ev);
+      for (const ev of (step.heroEvents ?? [])) if (ev.guardReaction === true) out.push(ev);
+      for (const ev of (step.witchEvents ?? [])) if (ev.guardReaction === true) out.push(ev);
     }
     return out;
   }

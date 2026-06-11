@@ -7,7 +7,7 @@
 import {
   executeMove, executeExplore, executeBattle,
   executeFortify, executeSummon, executeHeal, executeUseItem, executeUseAbility,
-  executeGuard, executeGuardStrike, executeSoundHorn, executeFortAssault,
+  executeGuard, executeSoundHorn, executeFortAssault,
   hasLineOfSight,
 } from '../src/actions.js';
 import { FORT_IMPASSABLE_THRESHOLD } from '../src/tiles.js';
@@ -459,11 +459,25 @@ function _checkGuardStrikes(state, action, actor, faction, subEvents) {
     if (!actor.alive) break;  // stop if target was killed by a prior guard strike
     if (guardian.guarding <= 0) continue;  // charges exhausted by prior strike this step
 
-    guardian.guarding--;  // consume one guard charge
-
-    const guardSnap  = snapEntity(guardian);
+    // A guard reaction is just a regular attack the resolver inserts inline —
+    // NOT a special-cased "guard strike". It runs through executeBattle and is
+    // emitted as a normal ACTION_OK BATTLE_UNIT event, so it serializes, replays,
+    // and animates identically to a planned attack. Guard reactions take NO
+    // counter, NEVER crush, and get NO gang-up (noCounter/noCrush/noAlly) —
+    // matching the pre-refactor guard strike so balance stays neutral (a
+    // full-attack guard counter-killed the hero leader, and gang-up let the
+    // swarm stack reactions, both spiking witch win rate). `guardReaction` is a
+    // cosmetic label marker.
+    const chargesBefore = guardian.guarding;
+    const actorSnap  = snapEntity(guardian);
     const targetSnap = snapEntity(actor);
-    const r = executeGuardStrike(state, guardian, actor);
+    const r = executeBattle(state, guardian, actor, { noCounter: true, noCrush: true, noAlly: true });
+    if (!r.success) continue;
+
+    // executeBattle zeroes the attacker's guard stance (attacking breaks guard);
+    // restore the guardian's REMAINING charges (minus this one) so a multi-charge
+    // guard can still react to other movers this round.
+    guardian.guarding = Math.max(0, chargesBefore - 1);
 
     const gColor = (typeof state.playerColorFor === 'function')
       ? state.playerColorFor(guardian)
@@ -471,12 +485,12 @@ function _checkGuardStrikes(state, action, actor, faction, subEvents) {
     for (const msg of r.log ?? []) state.addLog(msg, guardian.owner, gColor);
 
     subEvents.push({
-      type:        ResEventType.GUARD_STRIKE,
-      faction:     guardian.owner,
-      guardianId:  guardian.id,
-      targetId:    actor.id,
-      result:      r,
-      battleSnaps: { actorSnap: guardSnap, targetSnap, ranged: !!r.ranged },
+      type:         ResEventType.ACTION_OK,
+      faction:      guardian.owner,
+      guardReaction: true,
+      action:       { type: PlanActionType.BATTLE_UNIT, entityId: guardian.id, targetId: actor.id },
+      result:       r,
+      battleSnaps:  { actorSnap, targetSnap, ranged: !!r.ranged },
     });
 
     if (r.killed) _handleLeaderDeath(state, actor);
