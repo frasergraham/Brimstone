@@ -16,7 +16,7 @@ import {
 } from '../src/entities.js';
 import { GameState, Phase } from '../src/game.js';
 import { hexKey } from '../src/hex.js';
-import { applyPostRoundEffects } from '../src/post-round-effects.js';
+import { applyPostRoundEffects, collectWrapUpAttrition } from '../src/post-round-effects.js';
 import { executeBattle } from '../src/actions.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import { snapshotSurvivor } from '../src/campaign/campaign.js';
@@ -631,5 +631,53 @@ describe('Campaign snapshotSurvivor', () => {
     applyEffect(e, 'eagle_eyed', { duration: 'permanent' });
     const snap = snapshotSurvivor(e);
     assert.deepEqual(snap.effects.map(x => x.id), ['eagle_eyed']);
+  });
+});
+
+// ── Post-round death visibility ─────────────────────────────────────────────
+// A unit that dies outside battle (DOT tick) must not silently vanish: the
+// KILL event needs an on-map flash, and the wrap-up summary must list the
+// death — for EITHER side — with its cause.
+
+describe('post-round death visibility', () => {
+  test('a lethal DOT emits a KILL event WITH an on-map flash', () => {
+    const z = createZombie(0, 0);
+    z.hp = 1;
+    applyEffect(z, 'bleeding', { duration: 5 });
+    const gs = new GameState(false, false);
+    gs.entities = [z];
+
+    const events = applyPostRoundEffects(gs);
+    const kill = events.find(e => e.type === 'kill');
+    assert.ok(kill, 'lethal DOT produces a kill event');
+    assert.ok(kill.flash, 'kill carries a flash so the vanish is explained on the map');
+    assert.match(kill.flash.label, /💀/);
+    assert.match(kill.text, /bleeding/i);
+  });
+
+  test('collectWrapUpAttrition: kills are listed for EITHER side, with cause text', () => {
+    const rows = collectWrapUpAttrition([
+      { type: 'kill',    ownerId: 'enemy', entityName: 'Zombie', amount: 1,
+        text: '🩸 Zombie succumbs to bleeding!' },
+      { type: 'damage',  ownerId: 'enemy', entityName: 'Minion', amount: 1, text: 'x' },
+      { type: 'damage',  ownerId: 'me',    entityName: 'Mary',   amount: 2, text: 'y' },
+      { type: 'shelter', ownerId: 'me',    entityName: 'Sam',    amount: 0, text: '🏠 Sam is sheltered.' },
+      { type: 'safe',    ownerId: null },
+    ], 'me');
+
+    const kill = rows.find(r => r.kind === 'kill');
+    assert.ok(kill, "enemy death is listed — the player watched the unit vanish");
+    assert.match(kill.text, /bleeding/);
+    assert.ok(!rows.some(r => r.kind === 'damage' && r.name === 'Minion'),
+      'enemy DAMAGE ticks stay private (noise)');
+    assert.ok(rows.some(r => r.kind === 'damage' && r.name === 'Mary'));
+    assert.equal(rows.find(r => r.kind === 'shelter')?.shelter, 'building');
+  });
+
+  test('collectWrapUpAttrition with no player id (offline) keeps everything', () => {
+    const rows = collectWrapUpAttrition([
+      { type: 'damage', ownerId: 'a', entityName: 'X', amount: 1, text: 't' },
+    ], null);
+    assert.equal(rows.length, 1);
   });
 });

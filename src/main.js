@@ -38,6 +38,7 @@ import { sightRange, computeLineOfSight, hasLineOfSight, assignSlotOnTile } from
 import { ITEMS } from './items.js';
 import { getFaction, findFaction, allFactions, getFactionsForSide, sightRangeForEntity } from './factions.js';
 import { compileTurnBattleSummary, compileTurnBattlePairs, collectTurnFinds, deferredMoveEntityIds } from './battle-utils.js';
+import { collectWrapUpAttrition } from './post-round-effects.js';
 import { installKeybindings } from './keybindings.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import * as audio from './audio.js';
@@ -793,19 +794,10 @@ function _buildWrapUpContent(steps, roundNum) {
   // Night attrition roll-call — who suffered in the open and who was sheltered
   // by a building or fortification this round (from the post-round effects).
   // This restores the per-unit list the old end-of-turn modal showed.
-  const myId = ui?.myPlayerId ?? null;
-  const attrition = [];
-  for (const ev of (state.postRoundEvents ?? [])) {
-    if (myId && ev.ownerId && ev.ownerId !== myId) continue;
-    if (ev.type === 'damage' || ev.type === 'kill') {
-      attrition.push({ kind: ev.type, name: ev.entityName, amount: ev.amount });
-    } else if (ev.type === 'shelter') {
-      attrition.push({
-        kind: 'shelter', name: ev.entityName,
-        shelter: ev.text?.startsWith('🏠') ? 'building' : 'fort',
-      });
-    }
-  }
+  // KILL events are listed for either side (the player watched that unit
+  // vanish — the summary must explain why); damage/shelter stay scoped to the
+  // player's own units. Shared pure helper — see post-round-effects.js.
+  const attrition = collectWrapUpAttrition(state.postRoundEvents, ui?.myPlayerId ?? null);
 
   // Title the completed turn as "Day X Round Y — SUMMARY" (cycle day + round in
   // cycle, matching the cycle bar's "Day N · Round M" convention).

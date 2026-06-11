@@ -226,12 +226,17 @@ function statusEffectsTick(state) {
       amount:     ev.amount,
       killed:     ev.killed,
       text:       ev.text,
-      flash: ev.killed ? null : {
+      // Kills flash too — without one the unit silently vanishes from the
+      // map with nothing to explain why (operator report: "both of them
+      // vanished, I don't know why").
+      flash: {
         color:     'rgba(160,40,80,0.5)',
         textColor: 'rgba(255,180,200,1)',
-        label:     `-${ev.amount} ${def?.icon ?? ''}`.trim(),
-        duration:  1800,
-        fontScale: 1.2,
+        label:     ev.killed
+          ? `-${ev.amount} ${def?.icon ?? ''} 💀`.replace(/\s+/g, ' ').trim()
+          : `-${ev.amount} ${def?.icon ?? ''}`.trim(),
+        duration:  ev.killed ? 2200 : 1800,
+        fontScale: ev.killed ? 1.4 : 1.2,
       },
     });
   }
@@ -253,3 +258,31 @@ function statusEffectsTick(state) {
 }
 
 registerPostRoundEffect('status-effects', statusEffectsTick);
+
+/**
+ * Wrap-up card rows from a round's post-round events. KILL events are listed
+ * for EITHER side — the player just watched that unit vanish from the map, so
+ * the summary must explain it (cause rides in `text`, e.g. "🩸 Zombie succumbs
+ * to bleeding!"). DAMAGE/SHELTER stay scoped to the viewing player's units
+ * (`myId`; null ⇒ offline, keep everything). Pure — shared by the offline and
+ * online wrap-up builders.
+ */
+export function collectWrapUpAttrition(postRoundEvents, myId = null) {
+  const rows = [];
+  for (const ev of postRoundEvents ?? []) {
+    if (ev.type === PostRoundEventType.KILL) {
+      rows.push({ kind: 'kill', name: ev.entityName, amount: ev.amount, text: ev.text ?? null });
+      continue;
+    }
+    if (myId && ev.ownerId && ev.ownerId !== myId) continue;
+    if (ev.type === PostRoundEventType.DAMAGE) {
+      rows.push({ kind: 'damage', name: ev.entityName, amount: ev.amount, text: ev.text ?? null });
+    } else if (ev.type === PostRoundEventType.SHELTER) {
+      rows.push({
+        kind: 'shelter', name: ev.entityName,
+        shelter: ev.text?.startsWith('🏠') ? 'building' : 'fort',
+      });
+    }
+  }
+  return rows;
+}
