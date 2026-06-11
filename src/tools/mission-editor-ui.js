@@ -919,21 +919,22 @@ export function initEditor(doc = document, initOpts = {}) {
     }
   }
 
-  function saveMission() {
+  async function saveMission() {
     const json = editor.assemble();
     try {
-      loadMissionJSON(json); // block the download on any validation error
+      loadMissionJSON(json); // block the save on any validation error
       validateBuildingFootprints(json); // P6 — every building must have a footprint pair
     } catch (err) {
       return { ok: false, message: `Cannot save: ${err.message}` };
     }
-    // Name the download after the bundled on-disk file (ChXMY.json for catalog
-    // missions, <id>.json otherwise) so an export drops straight into
-    // src/campaign/missions/ as a replacement.
+    // Name the file after the bundled on-disk mission (ChXMY.json for catalog
+    // missions, <id>.json otherwise) so it lands in src/campaign/missions/ as a
+    // drop-in replacement.
     const fname = missionFileName(json.id || 'mission');
-    downloadJSON(doc, json, fname);
-    editor.markClean();
-    return { ok: true, message: `Validated — downloaded ${fname}` };
+    const api = (doc.defaultView ?? globalThis).studioAPI;
+    const res = await persistMission(json, fname, { studioAPI: api, doc });
+    if (res.ok) editor.markClean();
+    return res;
   }
 
   // ── New… — the creation flow (item 4 + E1). Pick a LOCKED mode + size,
@@ -2175,6 +2176,24 @@ function twoCol(doc, label, input) {
   row.className = 'e-row';
   row.append(labelFor(doc, label), input);
   return row;
+}
+
+// ── Mission persistence — Studio bridge (disk) vs browser download ──────────
+// Caleb's Studio (Electron) injects a repo-confined filesystem bridge as
+// `window.studioAPI`. When present we write the validated mission JSON STRAIGHT
+// into the repo's src/campaign/missions/ folder; otherwise we fall back to a
+// browser download for manual drop-in. The serialised bytes are identical on
+// both paths (JSON.stringify(obj, null, 2)), so editing a bundled mission in
+// Studio is a faithful in-place round-trip. Exported for unit tests.
+export async function persistMission(json, fname, { studioAPI, doc } = {}) {
+  if (studioAPI?.writeFile) {
+    const rel = `src/campaign/missions/${fname}`;
+    const res = await studioAPI.writeFile(rel, JSON.stringify(json, null, 2));
+    if (!res?.ok) return { ok: false, message: `Save failed: ${res?.error || 'unknown error'}` };
+    return { ok: true, message: `Saved → ${res.path || rel}`, rel };
+  }
+  downloadJSON(doc, json, fname);
+  return { ok: true, message: `Validated — downloaded ${fname}` };
 }
 
 // ── Browser file download (Blob + transient anchor) ─────────────────────────
