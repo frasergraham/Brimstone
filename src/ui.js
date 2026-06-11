@@ -3772,10 +3772,18 @@ export class UIController {
     // offset land in the same frame: the top-left never moves, only the
     // bottom and right edges grow.
     btn.style.transition = 'none';
+    // When the whole arc menu opened to the LEFT of the unit (near the right
+    // screen edge), grow the item box leftward too — otherwise it expands off
+    // the right edge / over the unit. `arc-expand-left` right-anchors its
+    // content to match. Default to rightward when the side is unknown.
+    const openLeft = this._arcOpenRight === false;
+    btn.classList.toggle('arc-expand-left', openLeft);
     btn.classList.add('arc-expanded');
     const w1 = btn.offsetWidth, h1 = btn.offsetHeight;
-    // Keep the top-left corner fixed: the centre moves by half the growth.
-    btn.style.setProperty('--arc-x', `${(x0 + (w1 - w0) / 2).toFixed(1)}px`);
+    // Pin one top corner and grow from it: top-left when opening right (centre
+    // moves +half the width growth), top-right when opening left (−half).
+    const dx = (w1 - w0) / 2;
+    btn.style.setProperty('--arc-x', `${(x0 + (openLeft ? -dx : dx)).toFixed(1)}px`);
     btn.style.setProperty('--arc-y', `${(y0 + (h1 - h0) / 2).toFixed(1)}px`);
     btn.offsetHeight; // commit class + vars together before re-enabling
     btn.style.transition = '';
@@ -3798,7 +3806,7 @@ export class UIController {
     // Same frame-atomic treatment in reverse — shrink and restore the centre
     // together so the top-left stays pinned on the way back too.
     btn.style.transition = 'none';
-    btn.classList.remove('arc-expanded');
+    btn.classList.remove('arc-expanded', 'arc-expand-left');
     if (btn._arcOrig) {
       btn.style.setProperty('--arc-x', `${btn._arcOrig.x.toFixed(1)}px`);
       btn.style.setProperty('--arc-y', `${btn._arcOrig.y.toFixed(1)}px`);

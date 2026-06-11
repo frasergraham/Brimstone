@@ -14,10 +14,12 @@ describe('pickCombatSound outcome priority', () => {
   test('kill wins over everything', () => {
     assert.equal(audio.pickCombatSound({ hit: true, killed: true, damage: 2 }), 'death');
   });
-  test('crush on 2+ damage hits', () => {
-    assert.equal(audio.pickCombatSound({ hit: true, killed: false, damage: 2 }), 'crush');
+  test('crush on crush-tier hits (breakdown.dmgTier ≥ 2), not on damage amount', () => {
+    assert.equal(audio.pickCombatSound({ hit: true, killed: false, breakdown: { dmgTier: 2 } }), 'crush');
+    assert.equal(audio.pickCombatSound({ hit: true, killed: false, breakdown: { dmgTier: 3 } }), 'crush');
   });
-  test('plain hit on 1 damage', () => {
+  test('ordinary hit (tier 1) stays a hit even at 2+ damage', () => {
+    assert.equal(audio.pickCombatSound({ hit: true, killed: false, damage: 2, breakdown: { dmgTier: 1 } }), 'hit');
     assert.equal(audio.pickCombatSound({ hit: true, killed: false, damage: 1 }), 'hit');
   });
   test('counter on miss with counter damage', () => {

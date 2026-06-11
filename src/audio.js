@@ -181,7 +181,10 @@ export function play(name) {
 export function pickCombatSound(result) {
   if (!result) return null;
   if (result.killed) return 'death';
-  if (result.hit && result.damage >= 2) return 'crush';
+  // Crush is a roll outcome (breakdown.dmgTier ≥ 2), not "≥2 damage" — a plain
+  // hit can roll 2+ damage, and ranged hits never crush. Match the readout's
+  // resultLabel() so sound and on-screen word agree.
+  if (result.hit && result.breakdown?.dmgTier >= 2) return 'crush';
   if (!result.hit && result.counterDmg > 0) return 'counter';
   if (result.hit) return 'hit';
   return 'miss';

@@ -7013,6 +7013,10 @@ body.spectator-mode #game-screen   { display: flex !important; }
   white-space: normal;
   z-index: 30;
 }
+/* Menu opened to the LEFT of the unit → the box grows leftward (ui.js pins the
+   top-right corner), so anchor its content to the right edge to match. */
+.arc-item.arc-expanded.arc-expand-left { align-items: flex-end; }
+.arc-item.arc-expanded.arc-expand-left .arc-item-desc { text-align: right; }
 .arc-item.arc-expanded .arc-item-desc {
   display: -webkit-box;
   -webkit-box-orient: vertical;

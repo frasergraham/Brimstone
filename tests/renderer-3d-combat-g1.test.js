@@ -1227,10 +1227,20 @@ describe('G1 — modifier floater labels have NO emoji glyphs', () => {
 // ─── G1 v2 — resultLabel pure helper ────────────────────────────────────────
 
 describe('G1 v2 — resultLabel', () => {
-  test('attacker side: damage>=2 → CRUSH, hit+damage<2 → HIT', () => {
-    assert.equal(resultLabel({ hit: true, damage: 2 }, 'attacker'), 'CRUSH');
-    assert.equal(resultLabel({ hit: true, damage: 1 }, 'attacker'), 'HIT');
-    assert.equal(resultLabel({ hit: true }, 'attacker'), 'HIT'); // damage falls back to 1
+  test('attacker side: crush is a ROLL outcome (dmgTier/ratio), not "≥2 damage"', () => {
+    // dmgTier is authoritative: tier ≥ 2 → CRUSH regardless of damage amount.
+    assert.equal(resultLabel({ hit: true, breakdown: { dmgTier: 2 } }, 'attacker'), 'CRUSH');
+    assert.equal(resultLabel({ hit: true, breakdown: { dmgTier: 3 } }, 'attacker'), 'CRUSH');
+    // A plain hit (tier 1) that rolled 2+ damage is still just a HIT — this was
+    // the bug: "≥2 damage" mislabelled ordinary hits as CRUSH.
+    assert.equal(resultLabel({ hit: true, damage: 2, breakdown: { dmgTier: 1 } }, 'attacker'), 'HIT');
+    assert.equal(resultLabel({ hit: true, breakdown: { dmgTier: 1 } }, 'attacker'), 'HIT');
+    // No breakdown → fall back to the roll ratio (attackRoll ≥ 2× defenseRoll).
+    assert.equal(resultLabel({ hit: true, attackRoll: 6, defenseRoll: 3 }, 'attacker'), 'CRUSH');
+    assert.equal(resultLabel({ hit: true, attackRoll: 5, defenseRoll: 3 }, 'attacker'), 'HIT');
+    assert.equal(resultLabel({ hit: true }, 'attacker'), 'HIT'); // no rolls → HIT
+    // Ranged hits never crush, even at a 2× roll ratio.
+    assert.equal(resultLabel({ hit: true, ranged: true, attackRoll: 8, defenseRoll: 3 }, 'attacker'), 'HIT');
   });
 
   test('attacker side: lost + counterDmg>0 → COUNTERED; lost no counter → a block-word variant', () => {
@@ -1255,9 +1265,13 @@ describe('G1 v2 — resultLabel', () => {
     assert.equal(a, b, 'same rolls → same word');
   });
 
-  test('defender side: lost (took hit) + damage>=2 → CRUSHED; lost damage<2 → HIT', () => {
-    assert.equal(resultLabel({ hit: true, damage: 2 }, 'defender'), 'CRUSHED');
-    assert.equal(resultLabel({ hit: true, damage: 1 }, 'defender'), 'HIT');
+  test('defender side: crush tier → CRUSHED; ordinary hit (even 2+ dmg) → HIT', () => {
+    assert.equal(resultLabel({ hit: true, breakdown: { dmgTier: 2 } }, 'defender'), 'CRUSHED');
+    assert.equal(resultLabel({ hit: true, damage: 2, breakdown: { dmgTier: 1 } }, 'defender'), 'HIT');
+    assert.equal(resultLabel({ hit: true, breakdown: { dmgTier: 1 } }, 'defender'), 'HIT');
+    // Roll-ratio fallback when no breakdown.
+    assert.equal(resultLabel({ hit: true, attackRoll: 6, defenseRoll: 3 }, 'defender'), 'CRUSHED');
+    assert.equal(resultLabel({ hit: true, attackRoll: 5, defenseRoll: 3 }, 'defender'), 'HIT');
   });
 
   test('atk/attacker alias accepted', () => {
