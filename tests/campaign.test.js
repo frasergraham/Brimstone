@@ -1520,14 +1520,14 @@ describe('healBonus on mission victory', () => {
   });
 
   test('heals hero and survivors on victory', () => {
-    // Set up damaged hero and roster
-    campaign.heroStats = { hp: 5, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {} };
+    // Set up damaged hero and roster (HP on the scaled ×DAMAGE_SCALE pools)
+    campaign.heroStats = { hp: 50, maxHp: 98, attack: 2, defense: 2, weapon: null, items: {} };
     campaign.roster = [
-      { name: 'A', title: 'Test', bio: '', ability: 'BRAWLER', abilityLabel: 'Strong', color: '#fff', hp: 1, maxHp: 4, attack: 1, defense: 1, weapon: null, items: {} },
-      { name: 'B', title: 'Test', bio: '', ability: 'HEAL', abilityLabel: 'Healer', color: '#fff', hp: 3, maxHp: 5, attack: 1, defense: 1, weapon: null, items: {} },
+      { name: 'A', title: 'Test', bio: '', ability: 'BRAWLER', abilityLabel: 'Strong', color: '#fff', hp: 10, maxHp: 28, attack: 1, defense: 1, weapon: null, items: {} },
+      { name: 'B', title: 'Test', bio: '', ability: 'HEAL', abilityLabel: 'Healer', color: '#fff', hp: 25, maxHp: 35, attack: 1, defense: 1, weapon: null, items: {} },
     ];
 
-    // Prologue mission has healBonus: 2
+    // Prologue mission has healBonus: 14
     campaign.applyMissionResult('prologue', {
       won: true,
       survivors: campaign.roster,
@@ -1536,15 +1536,15 @@ describe('healBonus on mission victory', () => {
       flags: {},
     });
 
-    assert.equal(campaign.heroStats.hp, 7); // 5 + 2
-    assert.equal(campaign.roster[0].hp, 3); // 1 + 2
-    assert.equal(campaign.roster[1].hp, 5); // 3 + 2, capped at maxHp
+    assert.equal(campaign.heroStats.hp, 64); // 50 + 14
+    assert.equal(campaign.roster[0].hp, 24); // 10 + 14
+    assert.equal(campaign.roster[1].hp, 35); // 25 + 14, capped at maxHp 35
   });
 
   test('does not heal on defeat', () => {
-    campaign.heroStats = { hp: 5, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {} };
+    campaign.heroStats = { hp: 50, maxHp: 98, attack: 2, defense: 2, weapon: null, items: {} };
     campaign.roster = [
-      { name: 'A', title: 'Test', bio: '', ability: 'BRAWLER', abilityLabel: 'Strong', color: '#fff', hp: 1, maxHp: 4, attack: 1, defense: 1, weapon: null, items: {} },
+      { name: 'A', title: 'Test', bio: '', ability: 'BRAWLER', abilityLabel: 'Strong', color: '#fff', hp: 10, maxHp: 28, attack: 1, defense: 1, weapon: null, items: {} },
     ];
 
     campaign.applyMissionResult('prologue', {
@@ -1555,17 +1555,17 @@ describe('healBonus on mission victory', () => {
       flags: {},
     });
 
-    assert.equal(campaign.heroStats.hp, 5); // unchanged
-    assert.equal(campaign.roster[0].hp, 1); // unchanged
+    assert.equal(campaign.heroStats.hp, 50); // unchanged
+    assert.equal(campaign.roster[0].hp, 10); // unchanged
   });
 
   test('heal is capped at maxHp', () => {
-    // Use first_night which has healBonus: 3
+    // Use first_night which has healBonus: 21
     campaign.completedMissions.add('prologue');
     campaign.completedMissions.add('gathering_survivors');
-    campaign.heroStats = { hp: 13, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {} };
+    campaign.heroStats = { hp: 90, maxHp: 98, attack: 2, defense: 2, weapon: null, items: {} };
     campaign.roster = [
-      { name: 'A', title: 'Test', bio: '', ability: 'BRAWLER', abilityLabel: 'Strong', color: '#fff', hp: 4, maxHp: 4, attack: 1, defense: 1, weapon: null, items: {} },
+      { name: 'A', title: 'Test', bio: '', ability: 'BRAWLER', abilityLabel: 'Strong', color: '#fff', hp: 28, maxHp: 28, attack: 1, defense: 1, weapon: null, items: {} },
     ];
 
     campaign.applyMissionResult('first_night', {
@@ -1576,8 +1576,8 @@ describe('healBonus on mission victory', () => {
       flags: {},
     });
 
-    assert.equal(campaign.heroStats.hp, 14); // 13 + 3 capped at 14
-    assert.equal(campaign.roster[0].hp, 4); // already full, stays at 4
+    assert.equal(campaign.heroStats.hp, 98); // 90 + 21 capped at 98
+    assert.equal(campaign.roster[0].hp, 28); // already full, stays at 28
   });
 
   test('no healBonus field means no healing', () => {
@@ -1898,7 +1898,7 @@ describe('Mission failure preserves party state', () => {
       { name: 'Alice', title: 'Scout', bio: '', ability: null, abilityLabel: null, color: '#fff', hp: 3, maxHp: 3, attack: 1, defense: 1, weapon: null, items: {} },
       { name: 'Bob', title: 'Guard', bio: '', ability: null, abilityLabel: null, color: '#aaa', hp: 2, maxHp: 3, attack: 1, defense: 1, weapon: null, items: {} },
     ];
-    c.heroStats = { hp: 14, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {} };
+    c.heroStats = { hp: 98, maxHp: 98, attack: 2, defense: 2, weapon: null, items: {} };
     c.save();
 
     // Victory: only Alice survived
@@ -1906,12 +1906,12 @@ describe('Mission failure preserves party state', () => {
       won: true,
       survivors: [{ name: 'Alice', title: 'Scout', bio: '', ability: null, abilityLabel: null, color: '#fff', hp: 1, maxHp: 3, attack: 1, defense: 1, weapon: null, items: {} }],
       resources: { wood: 1 },
-      heroStats: { hp: 10, maxHp: 14, attack: 3, defense: 2, weapon: 'axe', items: {} },
+      heroStats: { hp: 80, maxHp: 98, attack: 2, defense: 2, weapon: 'axe', items: {} },
     });
 
     assert.equal(c.roster.length, 1, 'only surviving roster member on victory');
     assert.equal(c.roster[0].name, 'Alice');
-    assert.equal(c.heroStats.hp, 12, 'hero HP updated + healBonus (prologue healBonus=2)');
+    assert.equal(c.heroStats.hp, 94, 'hero HP updated + healBonus (prologue healBonus=14)');
     assert.equal(c.heroStats.weapon, 'axe', 'hero weapon updated on victory');
     assert.equal(c.resources.wood, 2, 'resources updated on victory (1 carry-forward + 1 reward)');
     assert.ok(c.completedMissions.has('prologue'), 'mission completed');
@@ -2550,5 +2550,22 @@ describe('Campaign — hero starting loadout', () => {
     assert.equal(hero.getRange(), 2, 'range tracks the carried ranged weapon');
     assert.equal(hero.hp, 10);
     assert.deepEqual(hero.items, { sword: 1 });
+  });
+
+  test('applyCarriedHeroLoadout carries the wounded fraction (scale-invariant)', () => {
+    // A save written before HP×DAMAGE_SCALE stores the old "14/14". It must
+    // resolve to the Paladin's full scaled pool, not clamp the hero down to 14.
+    const full = getFaction('hero').createLeader(0, 0, 'hero');
+    applyCarriedHeroLoadout(full, { hp: 14, maxHp: 14, weapon: 'sword', items: {} });
+    assert.equal(full.hp, full.maxHp, 'stale "full" save → full scaled HP');
+
+    const half = getFaction('hero').createLeader(0, 0, 'hero');
+    applyCarriedHeroLoadout(half, { hp: 7, maxHp: 14, weapon: 'sword', items: {} });
+    assert.equal(half.hp, Math.round(half.maxHp * 0.5), 'half-HP save → half the scaled pool');
+
+    // A current-scale save round-trips exactly.
+    const cur = getFaction('hero').createLeader(0, 0, 'hero');
+    applyCarriedHeroLoadout(cur, { hp: 70, maxHp: 98, weapon: 'sword', items: {} });
+    assert.equal(cur.hp, 70);
   });
 });

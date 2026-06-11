@@ -63,7 +63,7 @@
     "food": 1,
     "wood": 1
   },
-  "healBonus": 2,
+  "healBonus": 14,
   "lootOverrides": {
     "remove": [
       "horse"

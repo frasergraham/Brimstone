@@ -7812,7 +7812,12 @@ export class Renderer3D {
       const trees = forestTreesForHex(tile.col, tile.row, this._season, {
         blockedSlots: this._roadBlockedSlotsByKey.get(tkey),
       });
-      for (const t of trees) staticOcc.push({ id: t.id, kind: 'tree' });
+      // Carry the slot each tree was actually baked into. The standee re-slot
+      // reserves exactly these so a unit never stands on a rendered tree — the
+      // render-side road exclusion (geometric deck) and the game-side
+      // blockedSlots (road FACES) diverge on a forest+road hex, so reserving
+      // the game's blockedSlots alone is not enough.
+      for (const t of trees) staticOcc.push({ id: t.id, kind: 'tree', slot: t.slotIdx });
     }
     if (staticOcc.length > 0) this._staticOccupantsByKey.set(tkey, staticOcc);
   }
@@ -9819,19 +9824,36 @@ export class Renderer3D {
     const seenHexes = new Set();
     for (const [k, standeeOccs] of byHex) {
       seenHexes.add(k);
-      const staticOcc = this._staticOccupantsByKey.get(k) ?? [];
-      // Single standee on an empty hex → nothing to re-slot, the standee
-      // already sits at hex centre from _positionStandee's default path.
-      if (standeeOccs.length === 1 && staticOcc.length === 0) {
+      // Reserve the slots the trees were ACTUALLY baked into (forestTreesForHex
+      // → slotIdx, carried on the static tree occupants), NOT the game's
+      // blockedSlots: the two diverge on a forest+road hex (render reserves the
+      // geometric road deck; the game reserves the road FACES), so reserving
+      // blockedSlots could leave a standee standing on a rendered tree. Trees
+      // are NOT passed as occupants — their slots ARE the reservation; passing
+      // them too double-reserved the forest (tree occupants landed in the
+      // complement of the reservation), consuming every outer slot and forcing
+      // a second standee to overflow onto the centre (two units on slot 0 +
+      // a phantom +1 badge). Buildings still go through the packer to claim
+      // BUILDING_SLOT_INDEX.
+      const treeSlots = [];
+      const staticOcc = [];
+      for (const o of (this._staticOccupantsByKey.get(k) ?? [])) {
+        if (o.kind === 'tree') { if (typeof o.slot === 'number') treeSlots.push(o.slot); }
+        else staticOcc.push(o);
+      }
+      // Single standee on an otherwise-empty hex → it already sits at the hex
+      // centre from _positionStandee's default path; nothing to re-slot.
+      if (standeeOccs.length === 1 && staticOcc.length === 0 && treeSlots.length === 0) {
         this._syncOverflowBadge(k, 0);
         continue;
       }
       const { col, row } = hexCenter.get(k);
-      // Reserve the tile's authoritative blocked slots (trees + bridge non-road
-      // slots) so standees never stand on a tree or off the bridge deck. Falls
-      // back to the geometric road cache for tiles not in game state.
-      const reservedSlots = this.state.tiles.get(k)?.blockedSlots
-        ?? this._roadBlockedSlotsByKey.get(k);
+      // Reserve the rendered tree slots. Tiles not tracked in
+      // _staticOccupantsByKey (e.g. bridge decks, or tiles not yet built) fall
+      // back to the tile's authoritative blocked slots / geometric road cache.
+      const reservedSlots = treeSlots.length
+        ? treeSlots
+        : (this.state.tiles.get(k)?.blockedSlots ?? this._roadBlockedSlotsByKey.get(k));
       const { positionByOccupantId, overflow } = tileSlotWorldPositions(
         col, row, [...staticOcc, ...standeeOccs], HEX_RADIUS_WORLD,
         { reservedSlots },
@@ -10843,6 +10865,91 @@ export class Renderer3D {
       });
     });
     this._trackAnim(promise);
+  }
+
+  // ─── Blocked-move walk-and-return ────────────────────────────────────────
+
+  /** Fake/blocked-move feedback: the unit WALKS forward to the shared hex edge
+   *  toward the blocker, then WALKS BACKWARD to its starting slot — selling a
+   *  thwarted advance ("I tried to go there, couldn't, stepped back"). Unlike
+   *  the instant lunge slide, this drives the real walk clip by joining
+   *  `_activeMoveIds` (see `_maybeToggleFallbackRigAnimation`), and keeps the
+   *  model FACING the blocker for the whole trip so the return reads as a
+   *  backward retreat rather than a turn-and-leave. Self-contained round trip —
+   *  resolves once the unit is home; no `returnAllLungeAnims` needed.
+   *  Cone-token units (no walk clip) simply slide out and back. */
+  addBumpWalkAnim(entityId, fromCol, fromRow, toCol, toRow, _type, _owner, _title, _fromSlot = 0) {
+    if (!this._scene || !this._babylon) return Promise.resolve();
+    const standee = this._entityStandees.get(entityId);
+    if (!standee) return Promise.resolve();
+    const BABYLON = this._babylon;
+
+    const { x: fromX, z: fromZ } = hexToWorld(fromCol, fromRow);
+    const { x: toX,   z: toZ   } = hexToWorld(toCol,   toRow);
+    // Start from the standee's CURRENT world position (its sub-hex slot).
+    const startX = standee.plane.position.x;
+    const startZ = standee.plane.position.z;
+    // Edge = midpoint of the two hex centres (the shared face) — the unit walks
+    // up to the boundary without crossing into the blocked hex.
+    const edgeX = (fromX + toX) * 0.5;
+    const edgeZ = (fromZ + toZ) * 0.5;
+
+    const shouldFrame = this._activeMoveIds.size === 0 && !this._suppressLungeFraming;
+
+    this._scene.stopAnimation(standee.plane);
+    this._activeMoveIds.add(entityId);        // drives the walk clip (legs move)
+    this._activeRunMoveIds.delete(entityId);  // walk pace, never a run
+
+    if (shouldFrame && this._camera) {
+      const midTarget = new BABYLON.Vector3((startX + edgeX) * 0.5, 0, (startZ + edgeZ) * 0.5);
+      const combatRadius = Math.min(
+        this._camera.radius,
+        Math.max(this._camera.lowerRadiusLimit ?? 4, COMBAT_FOCUS_RADIUS),
+      );
+      this._focusCamera(midTarget, combatRadius);
+    }
+
+    // Face the blocker for the WHOLE trip — the model keeps facing the obstacle
+    // and retreats backward, instead of spinning around to walk home.
+    if (standee.paladinClone?.mesh && (edgeX !== startX || edgeZ !== startZ)) {
+      standee.paladinClone.mesh.rotation.y = Math.atan2(edgeX - startX, edgeZ - startZ);
+    }
+
+    // Match the walk clip's stride to ground speed (mirror addMoveAnim) so feet
+    // plant across the short bump. distMul is the one-way distance in hexes.
+    const speedMul  = this._playbackSpeedMul ?? 1.0;
+    const oneWayLen = Math.hypot(edgeX - startX, edgeZ - startZ);
+    const hexStepWU = HEX_RADIUS_WORLD * Math.sqrt(3);
+    const distMul   = (oneWayLen > 0 && hexStepWU > 0) ? (oneWayLen / hexStepWU) : 0.5;
+    const wg = this._paladinSource?.walkGroup;
+    const baseRatio = this._walkingSource?.speedRatio ?? 1.0;
+    if (wg && 'speedRatio' in wg) {
+      wg.speedRatio = (baseRatio * Math.max(0.25, distMul)) / Math.max(0.05, speedMul);
+    }
+
+    // One-way duration scales with the half-hex step; out-and-back = 2× frames.
+    const oneWayMs = MOVE_ANIM_MS * Math.max(0.4, distMul) * speedMul;
+    const F = Math.max(1, Math.round(oneWayMs * 60 / 1000));
+
+    const animX = new BABYLON.Animation('bumpX', 'position.x', 60,
+      BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+    animX.setKeys([{ frame: 0, value: startX }, { frame: F, value: edgeX }, { frame: 2 * F, value: startX }]);
+    const animZ = new BABYLON.Animation('bumpZ', 'position.z', 60,
+      BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+    animZ.setKeys([{ frame: 0, value: startZ }, { frame: F, value: edgeZ }, { frame: 2 * F, value: startZ }]);
+
+    standee.plane.position.x = startX; standee.plane.position.z = startZ;
+
+    const promise = new Promise(resolve => {
+      this._scene.beginDirectAnimation(standee.plane, [animX, animZ], 0, 2 * F, false, 1, () => {
+        this._activeMoveIds.delete(entityId);
+        // Snap exactly home so the next re-slot pass finds it where it started.
+        standee.plane.position.x = startX; standee.plane.position.z = startZ;
+        resolve();
+      });
+    });
+    this._trackAnim(promise);
+    return promise;
   }
 
   // ─── Lunge animation ─────────────────────────────────────────────────────

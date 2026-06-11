@@ -92,7 +92,7 @@
     "herbs": 1,
     "wood": 2
   },
-  "healBonus": 2,
+  "healBonus": 14,
   "requires": [
     "prologue"
   ],

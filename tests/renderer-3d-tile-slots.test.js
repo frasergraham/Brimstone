@@ -167,6 +167,64 @@ describe('assignTileSlotIndices — priority & determinism', () => {
     assert.equal(slotByOccupantId.has('x'), false);
     assert.equal(slotByOccupantId.get('s'), CENTRE_SLOT_INDEX);
   });
+
+  // Regression: forest standee re-slot must NOT double-reserve trees. The trees
+  // live in the tile's blockedSlots (passed as reservedSlots, and avoided by the
+  // game's own slot assignment). The renderer used to ALSO pass them as tree
+  // occupants — those landed in the COMPLEMENT of blockedSlots, so trees +
+  // reserved consumed every outer slot and a second standee overflowed onto the
+  // centre (two units on slot 0 + a phantom +1 badge).
+  describe('forest re-slot does not double-reserve trees (slot-0 collision bug)', () => {
+    // A 3-tree forest hex: game blocks outer slots 1,2,3; two units stand on it
+    // with the slots the game's assignSlotOnTile gives (centre + first free).
+    const RESERVED = [1, 2, 3];
+
+    test('CORRECT caller (reserved blockedSlots, no tree occupants) → distinct slots, no overflow', () => {
+      const { slotByOccupantId, overflow } = assignTileSlotIndices(
+        [{ id: 'standee_a', kind: 'standee', slot: 0 },
+         { id: 'standee_b', kind: 'standee', slot: 4 }],
+        { reservedSlots: RESERVED },
+      );
+      assert.equal(overflow, 0, 'no overflow when trees are only reserved, not duplicated');
+      assert.equal(slotByOccupantId.get('standee_a'), 0);
+      assert.equal(slotByOccupantId.get('standee_b'), 4);
+      assert.notEqual(slotByOccupantId.get('standee_a'), slotByOccupantId.get('standee_b'));
+    });
+
+    test('reserving the ACTUAL rendered tree slots keeps standees off trees, no overflow', () => {
+      // The re-slot reserves the slots forestTreesForHex actually baked trees
+      // into (its slotIdx), so a standee never lands on a rendered tree — even
+      // when both units prefer the centre.
+      const col = 4, row = 6;
+      const treeSlots = forestTreesForHex(col, row).map(t => t.slotIdx);
+      assert.ok(treeSlots.length >= 1, 'forest hex has at least one tree');
+      const { slotByOccupantId, overflow } = assignTileSlotIndices(
+        [{ id: 'standee_a', kind: 'standee', slot: 0 },
+         { id: 'standee_b', kind: 'standee', slot: 0 }],
+        { reservedSlots: treeSlots },
+      );
+      assert.equal(overflow, 0);
+      const a = slotByOccupantId.get('standee_a');
+      const b = slotByOccupantId.get('standee_b');
+      assert.notEqual(a, b, 'two standees never share a slot');
+      assert.ok(!treeSlots.includes(a) && !treeSlots.includes(b),
+        'no standee sits on a rendered tree slot');
+    });
+
+    test('the OLD double-reserve pattern (trees as occupants AND reserved) is what overflowed', () => {
+      // Documents the bug: tree occupants land in the complement of RESERVED
+      // (slots 4,5,6), so all outer slots fill and standee_b overflows to centre.
+      const { slotByOccupantId, overflow } = assignTileSlotIndices(
+        [{ id: 'tree_0', kind: 'tree' }, { id: 'tree_1', kind: 'tree' }, { id: 'tree_2', kind: 'tree' },
+         { id: 'standee_a', kind: 'standee', slot: 0 },
+         { id: 'standee_b', kind: 'standee', slot: 4 }],
+        { reservedSlots: RESERVED },
+      );
+      assert.equal(overflow, 1);
+      assert.equal(slotByOccupantId.get('standee_a'), CENTRE_SLOT_INDEX);
+      assert.equal(slotByOccupantId.get('standee_b'), CENTRE_SLOT_INDEX); // collision
+    });
+  });
 });
 
 describe('tileSlotWorldPositions', () => {

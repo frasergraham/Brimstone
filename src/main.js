@@ -2025,6 +2025,48 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       redrawFn();
     }
 
+    // ── Fully-blocked moves (ACTION_FAIL): walk to the blocked edge and back ──
+    // Animated HERE, as part of the move phase, rather than in a pass after the
+    // battles — so a unit that was blocked and then attacked shows its thwarted
+    // step BEFORE its strike (the natural plan order), not afterwards. Real
+    // moves fired above are still in flight, so awaiting here lets the bump-walk
+    // play concurrently with them and finish before the battle phase begins
+    // (important: the blocked unit is often the same one that then attacks).
+    // 3D only — the 2D editor renderer has no addBumpWalkAnim.
+    if (!_autoplay && typeof renderer?.addBumpWalkAnim === 'function') {
+      let bumped = false;
+      for (const ev of allStepEvents) {
+        if (ev.type !== ResEventType.ACTION_FAIL) continue;
+        if (ev.action?.type !== PlanActionType.MOVE) continue;
+        if (!(ev.blockedBy || ev.blockedByFort)) continue;
+        const preSnap = step.entitySnapshot?.find(e => e.id === ev.action.entityId);
+        if (!preSnap || !_evVisible(ev, step.entitySnapshot)) continue;
+        const bumpTo = ev.blockedByFort
+          ? { col: ev.blockedByFort.col, row: ev.blockedByFort.row }
+          : { col: ev.blockedBy.col, row: ev.blockedBy.row };
+        renderer.addBumpWalkAnim(
+          ev.action.entityId,
+          preSnap.col, preSnap.row,
+          bumpTo.col, bumpTo.row,
+          preSnap.type, preSnap.owner, preSnap.title ?? null,
+          preSnap.slot ?? 0,
+        );
+        if (ev.blockedByFort) {
+          renderer.addFlash(bumpTo.col, bumpTo.row, '🏰',
+            'rgba(170,170,175,0.15)', 900, 0.75, 'rgba(200,200,210,1)');
+        }
+        hadMove = true;
+        bumped = true;
+      }
+      // Await the bump-walks (and any still-in-flight real moves) so the move
+      // phase fully settles before battles animate.
+      if (bumped) {
+        redrawFn();
+        await renderer.waitForAnimations();
+        redrawFn();
+      }
+    }
+
     // Update node discovery after moves so nodes become visible mid-animation
     _updateNodeDiscoveryDuringStep(state, humanFaction, renderer);
 
@@ -2203,45 +2245,9 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       }
     }
 
-    // ── Phase 2a': fully-blocked moves (ACTION_FAIL with blockedBy/blockedByFort) ───
-    // Unit never moved at all — play a bounce-back from the actor's pre-step hex
-    // toward the blocker so the player sees why the move failed.
-    const failedMoves = allStepEvents.filter(ev =>
-      ev.type === ResEventType.ACTION_FAIL &&
-      ev.action?.type === PlanActionType.MOVE &&
-      (ev.blockedBy || ev.blockedByFort)
-    );
-    if (!_autoplay && failedMoves.length > 0) {
-      const _spd4 = ui?.speedMode ?? 'cinematic';
-      for (const ev of failedMoves) {
-        const preSnap = step.entitySnapshot?.find(e => e.id === ev.action.entityId);
-        if (!preSnap) continue;
-        // Visibility gate — mirrors the move-anim rules (origin / dest / blocker).
-        if (!_evVisible(ev, step.entitySnapshot)) continue;
-
-        const bumpTo = ev.blockedByFort
-          ? { col: ev.blockedByFort.col, row: ev.blockedByFort.row }
-          : { col: ev.blockedBy.col, row: ev.blockedBy.row };
-        renderer.addLungeAnim(
-          ev.action.entityId,
-          preSnap.col, preSnap.row,
-          bumpTo.col, bumpTo.row,
-          preSnap.type, preSnap.owner, preSnap.title ?? null,
-        );
-        if (ev.blockedByFort) {
-          renderer.addFlash(bumpTo.col, bumpTo.row, '🏰',
-            'rgba(170,170,175,0.15)', 900, 0.75, 'rgba(200,200,210,1)');
-        }
-        hadMove = true;
-      }
-      if (failedMoves.length > 0) {
-        redrawFn();
-        await playbackDelay(_spd4 === 'vfast' ? 140 : 240);
-        renderer.returnAllLungeAnims();
-        await renderer.waitForAnimations();
-        redrawFn();
-      }
-    }
+    // (Fully-blocked moves now animate in the MOVE phase above, before battles —
+    // see the addBumpWalkAnim pass there — so a blocked-then-attack unit shows
+    // its thwarted step before its strike instead of after.)
 
     // ── Phase 2a: empty-hex attack whiffs (lunge + "no enemy" floater) ───────
     const whiffEvents = allStepEvents.filter(

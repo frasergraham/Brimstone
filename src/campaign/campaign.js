@@ -454,7 +454,20 @@ function resolveSpawnPosition(state, spawnAt) {
  */
 export function applyCarriedHeroLoadout(hero, heroStats) {
   if (!hero || !heroStats) return;
-  if (typeof heroStats.hp === 'number') hero.hp = Math.min(heroStats.hp, hero.maxHp);
+  if (typeof heroStats.hp === 'number') {
+    if (typeof heroStats.maxHp === 'number' && heroStats.maxHp > 0) {
+      // Carry the wounded FRACTION, not the absolute HP. This is scale-
+      // invariant: a hero saved at half HP returns at half of the leader's
+      // (possibly rescaled) max, so a save written before the HP×DAMAGE_SCALE
+      // change resolves to the right amount instead of clamping a 98-HP Paladin
+      // down to a stale "14".
+      const frac = Math.max(0, Math.min(1, heroStats.hp / heroStats.maxHp));
+      hero.hp = Math.max(1, Math.round(hero.maxHp * frac));
+    } else {
+      // No carried maxHp (older/partial loadout) — treat hp as an absolute.
+      hero.hp = Math.min(heroStats.hp, hero.maxHp);
+    }
+  }
   if (heroStats.weapon) hero.equipWeapon(heroStats.weapon);
   hero.items = { ...(heroStats.items || {}) };
 }
@@ -475,7 +488,7 @@ export class Campaign {
     this.completedMissions = new Set();
     this.roster            = []; // Array of snapshotSurvivor() objects
     this.resources         = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0 };
-    this.heroStats         = { hp: 14, maxHp: 14, attack: 2, defense: 2, weapon: 'sword', items: {} };
+    this.heroStats         = { hp: 98, maxHp: 98, attack: 2, defense: 2, weapon: 'sword', items: {} };
     this.storyFlags        = {};
     this.updatedAt         = Date.now();
   }
@@ -515,7 +528,7 @@ export class Campaign {
     this.completedMissions = new Set(migrated.completedMissions ?? []);
     this.roster            = migrated.roster ?? [];
     this.resources         = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0, ...migrated.resources };
-    this.heroStats         = migrated.heroStats ?? { hp: 14, maxHp: 14, attack: 2, defense: 2, weapon: 'sword', items: {} };
+    this.heroStats         = migrated.heroStats ?? { hp: 98, maxHp: 98, attack: 2, defense: 2, weapon: 'sword', items: {} };
     this.storyFlags        = migrated.storyFlags ?? {};
     this.updatedAt         = migrated.updatedAt ?? Date.now();
     // Persist the migrated form so we don't re-migrate every load.
@@ -738,7 +751,7 @@ export class Campaign {
     this.completedMissions = new Set(migrated.completedMissions ?? []);
     this.roster            = migrated.roster ?? [];
     this.resources         = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0, ...migrated.resources };
-    this.heroStats         = migrated.heroStats ?? { hp: 14, maxHp: 14, attack: 2, defense: 2, weapon: 'sword', items: {} };
+    this.heroStats         = migrated.heroStats ?? { hp: 98, maxHp: 98, attack: 2, defense: 2, weapon: 'sword', items: {} };
     this.storyFlags        = migrated.storyFlags ?? {};
     this.updatedAt         = migrated.updatedAt ?? Date.now();
     this.save(); // persist to localStorage

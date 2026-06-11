@@ -291,7 +291,7 @@
     "metal": 1,
     "food": 2
   },
-  "healBonus": 3,
+  "healBonus": 21,
   "lootOverrides": {
     "remove": [
       "horse"

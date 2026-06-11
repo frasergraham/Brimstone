@@ -192,7 +192,7 @@
     "wood": 1,
     "herbs": 1
   },
-  "healBonus": 3,
+  "healBonus": 21,
   "lootOverrides": {
     "remove": [
       "horse"

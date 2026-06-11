@@ -118,7 +118,7 @@
     "scripture": 1,
     "food": 2
   },
-  "healBonus": 5,
+  "healBonus": 35,
   "requires": [
     "dark_ritual"
   ],
