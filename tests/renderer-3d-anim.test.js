@@ -21,14 +21,9 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
-
-const _here = dirname(fileURLToPath(import.meta.url));
-const _renderer3dSrc = readFileSync(join(_here, '..', 'src', 'renderer-3d.js'), 'utf8');
 
 import {
+  Renderer3D,
   hexToWorld,
   HEX_RADIUS_WORLD,
   MOVE_ANIM_MS,
@@ -68,6 +63,95 @@ import {
   projectileColor01,
 } from '../src/renderer-3d.js';
 
+// ─── Stubbed-Babylon harness (lunge easing + despawn-protection tests) ──────
+// Matches the fake-BABYLON pattern in renderer-3d-combat-g1.test.js: the real
+// Renderer3D prototype runs over hand-rolled scene/Babylon stubs so the actual
+// methods execute without WebGL. No real timers — animation completion is
+// driven by firing the captured beginDirectAnimation onEnd callbacks.
+
+function makeFakeBabylon() {
+  function Animation(name, targetProperty) {
+    this.name = name;
+    this.targetProperty = targetProperty;
+  }
+  Animation.ANIMATIONTYPE_FLOAT = 0;
+  Animation.ANIMATIONLOOPMODE_CONSTANT = 0;
+  Animation.prototype.setKeys = function (k) { this.keys = k; };
+  Animation.prototype.setEasingFunction = function (e) { this.easing = e; };
+
+  function CubicEase() {}
+  CubicEase.prototype.setEasingMode = function (m) { this.mode = m; };
+  const EasingFunction = { EASINGMODE_EASEOUT: Symbol('easeout') };
+
+  class Vector3 { constructor(x, y, z) { this.x = x; this.y = y; this.z = z; } }
+  class Color3  { constructor(r, g, b) { this.r = r; this.g = g; this.b = b; } }
+
+  class DynamicTexture {
+    constructor(name) {
+      this.name = name;
+      this.hasAlpha = false;
+      this.disposed = 0;
+      this._ctx = {
+        clearRect() {}, beginPath() {}, closePath() {}, moveTo() {}, lineTo() {},
+        arcTo() {}, fill() {}, strokeText() {}, fillText() {},
+        measureText: (s) => ({ width: String(s).length * 10 }),
+        set font(_v) {}, set textAlign(_v) {}, set textBaseline(_v) {},
+        set fillStyle(_v) {}, set strokeStyle(_v) {}, set lineWidth(_v) {},
+        set lineJoin(_v) {}, set miterLimit(_v) {},
+      };
+    }
+    getContext() { return this._ctx; }
+    update() {}
+    dispose() { this.disposed += 1; }
+  }
+
+  const Mesh = { BILLBOARDMODE_ALL: 7 };
+  const MeshBuilder = {
+    CreatePlane(name) {
+      return {
+        name,
+        billboardMode: 0,
+        isPickable: true,
+        renderingGroupId: 0,
+        visibility: 0,
+        uniqueId: 1,
+        disposed: 0,
+        position: { x: 0, y: 0, z: 0, set(x, y, z) { this.x = x; this.y = y; this.z = z; } },
+        dispose() { this.disposed += 1; },
+      };
+    },
+  };
+  class StandardMaterial { constructor() { this.disposed = 0; } dispose() { this.disposed += 1; } }
+
+  return {
+    Animation, CubicEase, EasingFunction, Vector3, Color3,
+    DynamicTexture, Mesh, MeshBuilder, StandardMaterial,
+  };
+}
+
+function makeLungeHarness() {
+  const fakes = makeFakeBabylon();
+  const captured = [];
+  const inst = Object.create(Renderer3D.prototype);
+  inst._babylon = fakes;
+  inst._scene = {
+    stopAnimation() {},
+    beginDirectAnimation(target, anims, _f, _to, _loop, _spd, onEnd) {
+      captured.push({ target, anims });
+      if (onEnd) onEnd();
+    },
+  };
+  inst._camera = null;                 // skip the combat-framing branch
+  inst._suppressLungeFraming = false;
+  inst._activeLungeIds = new Set();
+  inst._playbackSpeedMul = 1.0;
+  inst._trackAnim = (p) => p;
+  inst._entityStandees = new Map([
+    ['e1', { plane: { position: { x: 0, y: 0, z: 0 } }, paladinClone: null }],
+  ]);
+  return { inst, captured, fakes };
+}
+
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 describe('Renderer3D Phase 5 — anim duration constants', () => {
@@ -94,19 +178,23 @@ describe('Renderer3D Phase 5 — anim duration constants', () => {
   });
 
   test('addLungeAnim attaches an ease-OUT easing to the lunge X/Z slide', () => {
-    // Babylon mesh wiring can't run under node:test, so guard the contract
-    // at the source level: the lunge animations must build a CubicEase set
-    // to EASINGMODE_EASEOUT and attach it to both position tracks (fast
-    // launch → decelerate into the strike, not the old ramp-up feel).
-    const start = _renderer3dSrc.indexOf('addLungeAnim(entityId');
-    const body = _renderer3dSrc.slice(
-      start,
-      _renderer3dSrc.indexOf('returnAllLungeAnims() {', start),
-    );
-    assert.match(body, /new BABYLON\.CubicEase\(\)/, 'lunge should build a CubicEase');
-    assert.match(body, /EASINGMODE_EASEOUT/, 'lunge easing mode should be EASEOUT');
-    assert.match(body, /animX\.setEasingFunction\(/, 'ease must attach to animX');
-    assert.match(body, /animZ\.setEasingFunction\(/, 'ease must attach to animZ');
+    // Behavioural: drive the real addLungeAnim on a stubbed Renderer3D and
+    // assert both position tracks carry a CubicEase set to EASINGMODE_EASEOUT
+    // (fast launch → decelerate into the strike, not the old ramp-up feel).
+    const { inst, captured, fakes } = makeLungeHarness();
+    inst.addLungeAnim('e1', 0, 0, 1, 0, 'paladin', 'hero', null);
+
+    assert.equal(captured.length, 1, 'one beginDirectAnimation call for the slide');
+    const anims = captured[0].anims;
+    assert.equal(anims.length, 2, 'lunge animates exactly position.x + position.z');
+    const props = anims.map(a => a.targetProperty).sort();
+    assert.deepEqual(props, ['position.x', 'position.z']);
+    for (const a of anims) {
+      assert.ok(a.easing instanceof fakes.CubicEase,
+        `${a.targetProperty} track must carry a CubicEase`);
+      assert.equal(a.easing.mode, fakes.EasingFunction.EASINGMODE_EASEOUT,
+        `${a.targetProperty} easing mode must be EASEOUT`);
+    }
   });
 
   test('PROJECTILE_ANIM_MS matches the 2D renderer default (≈320ms)', () => {
@@ -223,46 +311,124 @@ describe('Renderer3D — paintFloaterText (pure helper)', () => {
 // ─── Standee despawn protection — death floater rises before dispose ──────
 
 describe('Renderer3D — _syncEntityStandees honours _pendingDespawn', () => {
-  // Lightweight harness: pull just the source body of _syncEntityStandees's
-  // dispose loop into a regex so we don't need a live Babylon context.
-  // Pairs with the unit-style _entityStandees Map test below which exercises
-  // the real method on a stubbed Renderer3D instance.
+  // Behavioural: run the REAL _syncEntityStandees over a stub standee map and
+  // an empty entity list (everything is dead), and assert the dispose loop
+  // defers standees flagged _pendingDespawn while disposing unflagged ones.
 
-  test('source: dispose loop has a _pendingDespawn early-continue', () => {
-    const start = _renderer3dSrc.indexOf('_syncEntityStandees() {');
-    assert.ok(start > 0, 'expected _syncEntityStandees to be defined in source');
-    // The next sibling method banner ends our slice — keep it narrow so a
-    // _pendingDespawn check inserted in an UNRELATED method does not pass
-    // this test.
-    const end = _renderer3dSrc.indexOf('_resyncTileSlotsForStandees(', start);
-    const body = _renderer3dSrc.slice(start, end);
-    assert.match(body, /_pendingDespawn/,
-      '_syncEntityStandees should consult the _pendingDespawn flag');
-    // The guard MUST be in the disposal branch (after `if (!seen.has(id))`),
-    // not in the live-entity branch — the operator brief is about deferring
-    // standee disposal, not gating live-state updates.
-    const idxSeen   = body.indexOf('if (!seen.has(id))');
-    const idxGuard  = body.indexOf('_pendingDespawn');
-    assert.ok(idxSeen > 0,  'expected `if (!seen.has(id))` dispose branch');
-    assert.ok(idxGuard > idxSeen,
-      '_pendingDespawn guard should live inside the !seen disposal branch');
+  function makeSyncHarness() {
+    const inst = Object.create(Renderer3D.prototype);
+    inst._scene = {};            // truthy — the sync only checks presence
+    inst._babylon = null;        // _resyncTileSlotsForStandees early-outs
+    inst.state = { entities: [] };
+    inst._entityStandees = new Map();
+    inst._clearXrayGhostFor = () => {};
+    inst._disposePaladinClone = () => {};
+    return inst;
+  }
+
+  function makeStandee() {
+    const s = { plane: { disposed: 0, metadata: {}, dispose() { this.disposed += 1; } } };
+    return s;
+  }
+
+  test('dispose loop skips a standee whose death floater is still in flight', () => {
+    const inst = makeSyncHarness();
+    const protectedStandee = makeStandee();
+    protectedStandee._pendingDespawn = true;     // floater mid-rise
+    const unprotected = makeStandee();
+    inst._entityStandees.set('protected', protectedStandee);
+    inst._entityStandees.set('gone', unprotected);
+
+    inst._syncEntityStandees();
+
+    assert.equal(protectedStandee.plane.disposed, 0,
+      'flagged standee must survive the sync (the "-N" floater still rides it)');
+    assert.ok(inst._entityStandees.has('protected'), 'flagged standee stays in the map');
+    assert.equal(unprotected.plane.disposed, 1, 'unflagged dead standee is disposed');
+    assert.ok(!inst._entityStandees.has('gone'), 'unflagged dead standee leaves the map');
   });
 
-  test('source: protectEntityId path flags the standee + dispose-on-finish', () => {
-    const start = _renderer3dSrc.indexOf('_spawnFloatingText(col, row, text');
-    assert.ok(start > 0, 'expected _spawnFloatingText to be defined in source');
-    const end = _renderer3dSrc.indexOf('addCombatReadout', start);
-    const body = _renderer3dSrc.slice(start, end);
-    // Flag set on the standee while the floater is in flight.
-    assert.match(body, /_pendingDespawn\s*=\s*true/,
-      '_spawnFloatingText should set _pendingDespawn=true when protecting a standee');
-    // Cleared in the animation completion callback so a later sync can dispose.
-    assert.match(body, /_pendingDespawn\s*=\s*false/,
-      '_spawnFloatingText should clear _pendingDespawn after the floater finishes');
-    // Eager dispose-on-finish for entities that did not survive — otherwise
-    // a tab without subsequent redraws would leave the standee orphaned.
-    assert.match(body, /_entityStandees\.delete/,
-      '_spawnFloatingText should dispose the now-unflagged standee for dead entities');
+  test('once the flag clears, the next sync disposes the standee normally', () => {
+    const inst = makeSyncHarness();
+    const standee = makeStandee();
+    standee._pendingDespawn = true;
+    inst._entityStandees.set('victim', standee);
+
+    inst._syncEntityStandees();
+    assert.equal(standee.plane.disposed, 0, 'deferred while flagged');
+
+    standee._pendingDespawn = false;             // floater finished
+    inst._syncEntityStandees();
+    assert.equal(standee.plane.disposed, 1, 'disposed once unflagged');
+    assert.ok(!inst._entityStandees.has('victim'));
+  });
+});
+
+// ─── _spawnFloatingText protectEntityId path — flag + dispose-on-finish ─────
+
+describe('Renderer3D — addHpChangeFlash protects the dying standee', () => {
+  // Behavioural: spawn a damage floater through the real addHpChangeFlash →
+  // _spawnFloatingText path and assert the protected standee is flagged for
+  // the floater's lifetime, then eagerly disposed when the entity died (or
+  // kept when it survived). Animation completion is driven manually.
+
+  function makeFloaterHarness({ aliveIds = [] } = {}) {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = Object.create(Renderer3D.prototype);
+    const pendingEnds = [];
+    inst._babylon = makeFakeBabylon();
+    inst._scene = {
+      stopAnimation() {},
+      // Park the completion callback — the test fires it to "finish" the rise.
+      beginDirectAnimation(_t, _a, _f, _to, _loop, _spd, onEnd) {
+        pendingEnds.push(onEnd);
+      },
+    };
+    inst._trackAnim = (p) => p;
+    inst.state = { entities: aliveIds.map(id => ({ id, alive: true })) };
+    const standee = {
+      plane: { disposed: 0, metadata: {}, dispose() { this.disposed += 1; } },
+    };
+    inst._entityStandees = new Map([['victim', standee]]);
+    inst._clearXrayGhostFor = () => {};
+    inst._disposePaladinClone = () => {};
+    return { inst, standee, pendingEnds };
+  }
+
+  test('flags the standee while the floater is in flight', () => {
+    const { inst, standee, pendingEnds } = makeFloaterHarness();
+    inst.addHpChangeFlash(2, 3, -2, { entityId: 'victim' });
+    assert.equal(standee._pendingDespawn, true,
+      'standee flagged so _syncEntityStandees defers its disposal');
+    assert.equal(pendingEnds.length, 1, 'floater animation started');
+    assert.equal(standee.plane.disposed, 0, 'standee untouched while the floater rises');
+  });
+
+  test('on finish: clears the flag and disposes the standee of a DEAD entity', () => {
+    const { inst, standee, pendingEnds } = makeFloaterHarness({ aliveIds: [] });
+    inst.addHpChangeFlash(2, 3, -2, { entityId: 'victim' });
+    pendingEnds[0]();                            // floater finished rising/fading
+    assert.equal(standee._pendingDespawn, false, 'flag cleared on completion');
+    assert.equal(standee.plane.disposed, 1,
+      'dead entity\'s standee disposed eagerly — no waiting on a later redraw');
+    assert.ok(!inst._entityStandees.has('victim'), 'standee removed from the map');
+  });
+
+  test('on finish: keeps the standee when the entity SURVIVED the hit', () => {
+    const { inst, standee, pendingEnds } = makeFloaterHarness({ aliveIds: ['victim'] });
+    inst.addHpChangeFlash(2, 3, -1, { entityId: 'victim' });
+    pendingEnds[0]();
+    assert.equal(standee._pendingDespawn, false, 'flag cleared on completion');
+    assert.equal(standee.plane.disposed, 0, 'live entity keeps its standee');
+    assert.ok(inst._entityStandees.has('victim'));
+  });
+
+  test('no entityId opt → no standee is flagged (legacy flash behaviour)', () => {
+    const { inst, standee, pendingEnds } = makeFloaterHarness();
+    inst.addHpChangeFlash(2, 3, -1);
+    assert.equal(standee._pendingDespawn, undefined, 'no protection without entityId');
+    pendingEnds[0]();
+    assert.equal(standee.plane.disposed, 0);
   });
 });
 

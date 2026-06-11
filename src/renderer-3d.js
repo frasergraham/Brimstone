@@ -868,7 +868,18 @@ export const XRAY_SWEEP_EVERY_N           = 4;
 // turns the fill into an edge (operator artifact "A"). HighlightLayer (drew
 // behind, read as a filled glow) and renderOutline + group-promotion (exploded
 // the skinned paladin and dragged its textured body forward) were both rejected.
-export const XRAY_GHOST_GROUP             = 0;
+// ─── Babylon rendering groups (z-order policy) ──────────────────────────────
+// Babylon renders higher `renderingGroupId`s unconditionally ON TOP of lower
+// ones, bypassing the depth buffer. Policy (task t-4d82b52e):
+//   • ALL world geometry (terrain, buildings, standees, hex outlines, ribbons)
+//     shares WORLD_GROUP 0 so the depth buffer owns unit-vs-building occlusion.
+//   • UI stickers that must never hide behind scenery (unit-icon billboards,
+//     floating combat text, speech bubbles) ride in UNIT_ICON_GROUP.
+//   • Planning-mode attack overlays sit above even those, in
+//     ATTACK_OVERLAY_GROUP (defined further below, near its painter helpers).
+export const WORLD_GROUP                  = 0;
+export const UNIT_ICON_GROUP              = 2;
+export const XRAY_GHOST_GROUP             = WORLD_GROUP;
 // WebGL `GREATER` depth comparison (=== BABYLON.Constants.GREATER). A ring
 // fragment passes only where its depth is GREATER (farther) than the stored
 // scene depth — i.e. behind the already-drawn occluder.
@@ -3001,7 +3012,7 @@ export class Renderer3D {
       source.isPickable = false;
       // World-geometry render group so depth-tests against units/buildings
       // behave like the other terrain props (see PR #361).
-      if (typeof source.renderingGroupId !== 'undefined') source.renderingGroupId = 0;
+      if (typeof source.renderingGroupId !== 'undefined') source.renderingGroupId = WORLD_GROUP;
       // Receive shadows from neighbouring buildings / trees / standees as well
       // as cast them. InstancedMesh inherits receiveShadows from its source
       // template, so setting it here means every building instance inherits it
@@ -3145,7 +3156,7 @@ export class Renderer3D {
     this._addShadowCaster(inst);
     // World-geometry render group, same as the procedural box+roof + tile
     // cylinders — keeps the depth buffer consistent for unit/building overlap.
-    if (typeof inst.renderingGroupId !== 'undefined') inst.renderingGroupId = 0;
+    if (typeof inst.renderingGroupId !== 'undefined') inst.renderingGroupId = WORLD_GROUP;
     return inst;
   }
 
@@ -3402,7 +3413,7 @@ export class Renderer3D {
         // Hide template — instances render geometry on its behalf.
         if (typeof source.setEnabled === 'function') source.setEnabled(false);
         source.isPickable = false;
-        if (typeof source.renderingGroupId !== 'undefined') source.renderingGroupId = 0;
+        if (typeof source.renderingGroupId !== 'undefined') source.renderingGroupId = WORLD_GROUP;
         // Receive shadows. Set on the source mesh AND every child mesh
         // (glTF imports usually put geometry on a child node). Force
         // shader compilation with `useInstances: true` immediately after
@@ -3425,15 +3436,7 @@ export class Renderer3D {
             // Pre-compile with instances + the current scene's shadow
             // generator set on the mesh so the shader includes both
             // INSTANCES and SHADOWS{N} defines from the start.
-            if (typeof m.material.forceCompilation === 'function') {
-              try {
-                // Babylon signature: forceCompilation(mesh, onCompiled?, options?, onError?).
-                // Passing the options object as the 2nd arg makes Babylon try to
-                // call it as a function once compile finishes — TypeError per
-                // material, repeating through every PBR fallback pass.
-                m.material.forceCompilation(m, undefined, { useInstances: true });
-              } catch (_err) { /* compilation may fail in headless tests */ }
-            }
+            forceCompileMaterial(m.material, m);
           }
         }
         // Stash a bbox-derived per-template uniform scale so callers don't
@@ -3568,10 +3571,7 @@ export class Renderer3D {
             if (fogged) tintMaterial(fsub);
             // Re-bake INSTANCES (+ SHADOWS) defines on the faded submaterial so
             // its hardware instances compile the alpha path (see below).
-            if (typeof fsub.forceCompilation === 'function') {
-              // 2nd arg is onCompiled — pass undefined; options go in 3rd.
-              try { fsub.forceCompilation(m, undefined, { useInstances: true }); } catch (_e) { /* headless */ }
-            }
+            forceCompileMaterial(fsub, m);
             return fsub;
           });
         }
@@ -3579,10 +3579,7 @@ export class Renderer3D {
         // Re-bake the INSTANCES (+ SHADOWS) shader defines on the faded
         // material so its hardware instances render with shadow sampling,
         // matching the opaque template's pre-compile (see `_loadTreePackManifest`).
-        if (typeof fm.forceCompilation === 'function') {
-          // 2nd arg is onCompiled — pass undefined; options go in 3rd.
-          try { fm.forceCompilation(m, undefined, { useInstances: true }); } catch (_e) { /* headless */ }
-        }
+        forceCompileMaterial(fm, m);
       }
     }
     if (typeof clone.setEnabled === 'function') clone.setEnabled(false);
@@ -3639,7 +3636,7 @@ export class Renderer3D {
       inst.position.z = (opts.cz ?? 0) + tree.z;
     }
     inst.isPickable = false;
-    if (typeof inst.renderingGroupId !== 'undefined') inst.renderingGroupId = 0;
+    if (typeof inst.renderingGroupId !== 'undefined') inst.renderingGroupId = WORLD_GROUP;
     // Receive shadows from neighbouring trees / buildings / standees as
     // well as cast them. InstancedMesh inherits receiveShadows from its
     // source mesh, so set it on the template too (idempotent — Babylon
@@ -4308,7 +4305,7 @@ export class Renderer3D {
       if (!childClone) continue;
       if (typeof childClone.setEnabled === 'function') childClone.setEnabled(true);
       childClone.isPickable = false;
-      if (typeof childClone.renderingGroupId !== 'undefined') childClone.renderingGroupId = 0;
+      if (typeof childClone.renderingGroupId !== 'undefined') childClone.renderingGroupId = WORLD_GROUP;
       childClone.alwaysSelectAsActiveMesh = true;
       childClones.push(childClone);
       if (srcMesh === src.mesh) primarySkinnedClone = childClone;
@@ -4422,7 +4419,7 @@ export class Renderer3D {
       }
       if (typeof childClone.setEnabled === 'function') childClone.setEnabled(true);
       childClone.isPickable = false;
-      if (typeof childClone.renderingGroupId !== 'undefined') childClone.renderingGroupId = 0;
+      if (typeof childClone.renderingGroupId !== 'undefined') childClone.renderingGroupId = WORLD_GROUP;
       // Defeat bbox-based culling on EVERY child. Babylon caches each
       // submesh's natural bbox; even with the root scaled correctly,
       // skinning can move verts outside that bbox (Mixamo bone-scale
@@ -4622,7 +4619,7 @@ export class Renderer3D {
       );
     } catch { return; }
     blade.isPickable = false;
-    if (typeof blade.renderingGroupId !== 'undefined') blade.renderingGroupId = 0;
+    if (typeof blade.renderingGroupId !== 'undefined') blade.renderingGroupId = WORLD_GROUP;
     blade.alwaysSelectAsActiveMesh = true;
     // Steel-grey stand-in material (freshly created — never a shared material).
     if (BABYLON.StandardMaterial) {
@@ -4726,7 +4723,7 @@ export class Renderer3D {
     const place = (mesh, x, y, z, rotZ = 0, rotX = 0) => {
       if (!mesh) return;
       mesh.isPickable = false;
-      if (typeof mesh.renderingGroupId !== 'undefined') mesh.renderingGroupId = 0;
+      if (typeof mesh.renderingGroupId !== 'undefined') mesh.renderingGroupId = WORLD_GROUP;
       mesh.alwaysSelectAsActiveMesh = true;
       if (sharedMat) mesh.material = sharedMat;
       if (BABYLON.Vector3) {
@@ -9731,8 +9728,8 @@ export class Renderer3D {
     // unit-vs-building occlusion. Babylon renders higher groups unconditionally
     // on top, which previously made standees draw over buildings regardless of
     // camera angle.
-    cone.renderingGroupId   = 0;
-    sphere.renderingGroupId = 0;
+    cone.renderingGroupId   = WORLD_GROUP;
+    sphere.renderingGroupId = WORLD_GROUP;
     // Sun throws a token-shaped shadow onto the terrain. Both meshes cast.
     this._addShadowCaster(cone);
     this._addShadowCaster(sphere);
@@ -10040,7 +10037,7 @@ export class Renderer3D {
     // World geometry group (0): the outline's Y placement sits above the road/
     // river ribbons but below buildings, so the depth buffer draws it in the
     // correct order without a group bump.
-    thin.renderingGroupId = 0;
+    thin.renderingGroupId = WORLD_GROUP;
     thin.isVisible        = !!isLocal;
 
     const thick = BABYLON.MeshBuilder.CreateTube(`unitOutlineThick_${entity.id}`, {
@@ -10051,7 +10048,7 @@ export class Renderer3D {
     }, scene);
     thick.material         = this._thickOutlineMaterialFor(ownerKey);
     thick.isPickable       = false;
-    thick.renderingGroupId = 0;
+    thick.renderingGroupId = WORLD_GROUP;
     thick.isVisible        = false; // _applySelectionAndFocus drives visibility
 
     const { x, z } = hexToWorld(entity.col, entity.row);
@@ -10383,7 +10380,7 @@ export class Renderer3D {
     // R7: render above all world geometry (group 2, same as the floating
     // unit-icon billboards) so the hover label is never occluded by trees or
     // taller buildings. Babylon clears depth between rendering groups.
-    plane.renderingGroupId = 2;
+    plane.renderingGroupId = UNIT_ICON_GROUP;
     // Sit above the building's NE-slot roof, not over the hex centre, so the
     // label visually anchors to the building rather than floating off-axis.
     const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
@@ -11495,7 +11492,7 @@ export class Renderer3D {
     plane.isPickable    = false;
     // Render above all world geometry so floaters never hide behind terrain
     // or standees — matches the unit-icon badge group (2).
-    plane.renderingGroupId = 2;
+    plane.renderingGroupId = UNIT_ICON_GROUP;
     const mat = new BABYLON.StandardMaterial(`floatMat_${plane.uniqueId}`, this._scene);
     mat.diffuseTexture = tex;
     mat.opacityTexture = tex;
@@ -11632,7 +11629,7 @@ export class Renderer3D {
     plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
     plane.isPickable = false;
     // Same group as floaters/unit badges — never hidden by terrain/standees.
-    plane.renderingGroupId = 2;
+    plane.renderingGroupId = UNIT_ICON_GROUP;
     const mat = new BABYLON.StandardMaterial(`speechMat_${plane.uniqueId}`, this._scene);
     mat.diffuseTexture = tex;
     mat.opacityTexture = tex;
@@ -12099,7 +12096,7 @@ export class Renderer3D {
     );
     plane.billboardMode    = BABYLON.Mesh.BILLBOARDMODE_ALL;
     plane.isPickable       = false;
-    plane.renderingGroupId = 2;
+    plane.renderingGroupId = UNIT_ICON_GROUP;
 
     const mat = new BABYLON.StandardMaterial(`discoveryCardMat_${plane.uniqueId}`, this._scene);
     mat.diffuseTexture = tex;
@@ -12237,7 +12234,7 @@ export class Renderer3D {
     );
     plane.billboardMode    = BABYLON.Mesh.BILLBOARDMODE_ALL;
     plane.isPickable       = false;
-    plane.renderingGroupId = 2;
+    plane.renderingGroupId = UNIT_ICON_GROUP;
 
     const mat = new BABYLON.StandardMaterial(`readoutFloaterMat_${plane.uniqueId}`, this._scene);
     mat.diffuseTexture = tex;
@@ -12284,7 +12281,7 @@ export class Renderer3D {
     );
     plane.billboardMode    = BABYLON.Mesh.BILLBOARDMODE_ALL;
     plane.isPickable       = false;
-    plane.renderingGroupId = 2;
+    plane.renderingGroupId = UNIT_ICON_GROUP;
 
     const mat = new BABYLON.StandardMaterial(`readoutResultMat_${plane.uniqueId}`, this._scene);
     mat.diffuseTexture = tex;
@@ -12621,7 +12618,7 @@ export class Renderer3D {
     plane.parent        = standee.plane;
     // Render above all world geometry (terrain, ribbons, buildings, standees,
     // hex outlines — all now in group 0). UI badge must never be occluded.
-    plane.renderingGroupId = 2;
+    plane.renderingGroupId = UNIT_ICON_GROUP;
     plane.position.set(0, iconBillboardYRelativeToCone(standee.leader), 0);
     // 80% alpha — lets the paladin model behind show through when camera
     // angles bring them close on screen. Plane scale stays at the natural
@@ -12997,7 +12994,7 @@ export class Renderer3D {
         ring.parent         = this._mapRoot;
         ring.material       = material;
         ring.isPickable     = false;
-        ring.renderingGroupId = 0;
+        ring.renderingGroupId = WORLD_GROUP;
         // Pin a stable transparent-sort index ONLY for the transparent rings
         // (the hover ring at alpha < 1). The selected-unit ring is opaque
         // (alpha 1) so the opaque pass ignores alphaIndex — leave it default.
@@ -13592,8 +13589,8 @@ export class Renderer3D {
       cone.isPickable = false;
       // Plan ghosts are standees too — share renderingGroupId 0 so they
       // depth-test against buildings the same as live units.
-      cone.renderingGroupId   = 0;
-      sphere.renderingGroupId = 0;
+      cone.renderingGroupId   = WORLD_GROUP;
+      sphere.renderingGroupId = WORLD_GROUP;
 
       // For hero entities with the walking GLB loaded, build the ghost
       // silhouette from the WALKING source (not paladin). Walking's native
@@ -19368,6 +19365,22 @@ export function planBattleOverlaySignature(steps) {
     out += `${fromCol},${fromRow}>${toCol},${toRow}|`;
   }
   return out;
+}
+
+/** Pre-compile a material's shader effects, swallowing headless failures.
+ *  Babylon's signature is `forceCompilation(mesh, onCompiled?, options?, onError?)`
+ *  — the 2nd slot MUST be the onCompiled callback (or undefined). Passing the
+ *  options object there makes Babylon invoke it as a function when compilation
+ *  finishes → `TypeError: t is not a function` per PBR effect fallback, which
+ *  cascades into dozens of console errors and "BJS — Unable to compile effect".
+ *  Every renderer call site routes through this helper so the argument shape
+ *  can't regress. Returns true when a compile was requested. */
+export function forceCompileMaterial(material, mesh, options = { useInstances: true }) {
+  if (!material || typeof material.forceCompilation !== 'function') return false;
+  try {
+    material.forceCompilation(mesh, undefined, options);
+  } catch (_err) { /* compilation may fail in headless tests */ }
+  return true;
 }
 
 /**

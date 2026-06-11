@@ -8,38 +8,82 @@
 // fallback, so a single misuse cascades into dozens of console errors AND a
 // "BJS — Unable to compile effect" downstream symptom.
 //
-// Lock the call shape with a source scan so this can't regress.
-import { test } from 'node:test';
+// The renderer now routes every pre-compile through the exported
+// `forceCompileMaterial(material, mesh, options)` helper, which is tested
+// behaviourally here against a spy material. A single trivial guard then
+// pins that no call site bypasses the helper.
+
+import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
-const here = dirname(fileURLToPath(import.meta.url));
-const src = readFileSync(resolve(here, '../src/renderer-3d.js'), 'utf8');
+import { forceCompileMaterial } from '../src/renderer-3d.js';
 
-test('every forceCompilation call passes a function (or undefined) as the 2nd arg, not an object', () => {
-  // Pull every `forceCompilation(... , ...)` invocation. Allow whitespace/newlines.
-  const calls = [...src.matchAll(/\bforceCompilation\s*\(([^)]*)\)/g)].map(m => m[1]);
-  assert.ok(calls.length > 0, 'expected at least one forceCompilation call in renderer-3d.js');
-  for (const inner of calls) {
-    // Find the 2nd top-level arg. Split on commas at depth 0.
-    const args = [];
-    let depth = 0, start = 0;
-    for (let i = 0; i < inner.length; i++) {
-      const ch = inner[i];
-      if (ch === '(' || ch === '{' || ch === '[') depth++;
-      else if (ch === ')' || ch === '}' || ch === ']') depth--;
-      else if (ch === ',' && depth === 0) {
-        args.push(inner.slice(start, i).trim());
-        start = i + 1;
-      }
-    }
-    args.push(inner.slice(start).trim());
-    const second = args[1] ?? '';
-    assert.ok(
-      !second.startsWith('{'),
-      `forceCompilation 2nd arg looks like an options object — should be the onCompiled callback (pass undefined and put options in slot 3). Got: forceCompilation(${inner})`,
-    );
-  }
+function makeSpyMaterial() {
+  const calls = [];
+  return {
+    calls,
+    forceCompilation(...args) { calls.push(args); },
+  };
+}
+
+describe('forceCompileMaterial — Babylon argument shape', () => {
+  test('passes the mesh 1st, the onCompiled slot 2nd (NOT the options object), options 3rd', () => {
+    const mat = makeSpyMaterial();
+    const mesh = { name: 'm' };
+    const ok = forceCompileMaterial(mat, mesh);
+    assert.equal(ok, true);
+    assert.equal(mat.calls.length, 1, 'one compile requested');
+    const [arg0, arg1, arg2] = mat.calls[0];
+    assert.strictEqual(arg0, mesh, '1st arg is the mesh');
+    assert.ok(arg1 === undefined || typeof arg1 === 'function',
+      `2nd arg must be the onCompiled callback (or undefined) — Babylon calls it ` +
+      `as a function when compile finishes. Got: ${typeof arg1}`);
+    assert.equal(typeof arg2, 'object', '3rd arg carries the options object');
+    assert.equal(arg2.useInstances, true,
+      'default options pre-bake the INSTANCES define for hardware instances');
+  });
+
+  test('custom options pass through in slot 3', () => {
+    const mat = makeSpyMaterial();
+    const mesh = {};
+    forceCompileMaterial(mat, mesh, { useInstances: false, clipPlane: true });
+    const [, arg1, arg2] = mat.calls[0];
+    assert.equal(arg1, undefined);
+    assert.deepEqual(arg2, { useInstances: false, clipPlane: true });
+  });
+
+  test('swallows compile errors (headless / SwiftShader can throw)', () => {
+    const mat = {
+      forceCompilation() { throw new Error('no GL context'); },
+    };
+    assert.doesNotThrow(() => forceCompileMaterial(mat, {}));
+    assert.equal(forceCompileMaterial(mat, {}), true,
+      'a throwing compile still counts as requested');
+  });
+
+  test('no-ops safely when the material has no forceCompilation (or is null)', () => {
+    assert.equal(forceCompileMaterial(null, {}), false);
+    assert.equal(forceCompileMaterial(undefined, {}), false);
+    assert.equal(forceCompileMaterial({}, {}), false);
+    assert.equal(forceCompileMaterial({ forceCompilation: 'not-a-fn' }, {}), false);
+  });
+});
+
+describe('renderer-3d call sites route through the helper', () => {
+  // Trivial guard: the behavioural contract above only protects callers that
+  // actually use forceCompileMaterial. The deep-scene call sites (tree-pack
+  // template pre-compile, faded-template rebake) can't run under node:test,
+  // so pin that raw `material.forceCompilation(...)` appears exactly once in
+  // the source — inside the helper itself.
+  test('raw .forceCompilation( is invoked only inside forceCompileMaterial', () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const src = readFileSync(resolve(here, '../src/renderer-3d.js'), 'utf8');
+    const rawCalls = [...src.matchAll(/\.forceCompilation\s*\(/g)];
+    assert.equal(rawCalls.length, 1,
+      `expected exactly one raw forceCompilation call (the helper's); ` +
+      `found ${rawCalls.length} — new call sites must use forceCompileMaterial()`);
+  });
 });

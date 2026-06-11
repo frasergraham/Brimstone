@@ -88,7 +88,8 @@ function _renderAllies(host, side, slots, onRemove) {
 // Mirror main.js `_playBattleResultAnims` — damage floaters, death burst,
 // fade-out. Splash effects intentionally omitted: the tester combatants
 // sit on a clearing, so brute splash adds clutter without a useful read.
-function _playBattleResultAnims(renderer, actorSnap, targetSnap, result, redrawFn) {
+// Exported for unit tests (driven against a spy renderer).
+export function playBattleResultAnims(renderer, actorSnap, targetSnap, result, redrawFn) {
   if (typeof renderer.addAttackAnim === 'function') {
     renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
   }
@@ -114,6 +115,41 @@ function _playBattleResultAnims(renderer, actorSnap, targetSnap, result, redrawF
     }
   }
   redrawFn?.();
+}
+
+// Speed-branched combat display: cinematic runs the readout + Continue gate
+// (run3DCombatCardHold); fast / vfast skip the readout entirely through the
+// shared playFastCombatDisplay helper the live game also uses. Extracted from
+// runBattle (and exported) so the branch is unit-testable with injected
+// display functions — `fastFn` / `cinematicFn` / `randomFn` / `delayFn`
+// default to the real implementations.
+export async function playCombatDisplay({
+  speed, renderer, state, actorSnap, targetSnap, result,
+  redrawFn, getContinueButton, playAnims,
+  fastFn = playFastCombatDisplay,
+  cinematicFn = run3DCombatCardHold,
+  randomFn = Math.random,
+  // Tester runs outside the live playback machinery — a plain setTimeout
+  // matches the in-game delay without depending on src/playback.js's
+  // mode gating.
+  delayFn = (ms) => new Promise(r => setTimeout(r, ms)),
+} = {}) {
+  if (speed === 'fast' || speed === 'vfast') {
+    const missText = !result.hit
+      ? BLOCK_WORD_VARIANTS[Math.floor(randomFn() * BLOCK_WORD_VARIANTS.length)]
+      : null;
+    return fastFn({
+      renderer, state, actorSnap, targetSnap, result,
+      playBattleResultAnims: (a, t, r) => playAnims(a, t, r, redrawFn),
+      speed, missText,
+      playbackDelay: delayFn,
+    });
+  }
+  return cinematicFn({
+    renderer, state, actorSnap, targetSnap, result,
+    redrawFn, getContinueButton,
+    playBattleResultAnims: (a, t, r, rd) => playAnims(a, t, r, rd),
+  });
 }
 
 // Fire the lunge / projectile intro animation against the snapshots. Same
@@ -476,36 +512,15 @@ export async function initCombat(doc = document) {
 
       // 3. Branch on speed: cinematic runs the readout + Continue gate;
       //    fast / vfast skip the readout entirely (shared with live game).
-      const speed = tester.speedMode;
-      if (speed === 'fast' || speed === 'vfast') {
-        const missText = !out.result.hit
-          ? BLOCK_WORD_VARIANTS[Math.floor(Math.random() * BLOCK_WORD_VARIANTS.length)]
-          : null;
-        await playFastCombatDisplay({
-          renderer,
-          state: tester.state,
-          actorSnap, targetSnap, result: out.result,
-          playBattleResultAnims: (a, t, r) =>
-            _playBattleResultAnims(renderer, a, t, r, redraw),
-          speed, missText,
-          // Tester runs outside the live playback machinery — a plain
-          // setTimeout matches the in-game delay without depending on
-          // src/playback.js's mode gating.
-          playbackDelay: (ms) => new Promise(r => setTimeout(r, ms)),
-        });
-      } else {
-        await run3DCombatCardHold({
-          renderer,
-          state: tester.state,
-          actorSnap,
-          targetSnap,
-          result: out.result,
-          redrawFn: redraw,
-          getContinueButton: () => continueBtn,
-          playBattleResultAnims: (a, t, r, rd) =>
-            _playBattleResultAnims(renderer, a, t, r, rd),
-        });
-      }
+      await playCombatDisplay({
+        speed: tester.speedMode,
+        renderer,
+        state: tester.state,
+        actorSnap, targetSnap, result: out.result,
+        redrawFn: redraw,
+        getContinueButton: () => continueBtn,
+        playAnims: (a, t, r, rd) => playBattleResultAnims(renderer, a, t, r, rd),
+      });
 
       // 4. Return any lunge anims to rest so the next battle starts clean.
       renderer.returnAllLungeAnims?.();
