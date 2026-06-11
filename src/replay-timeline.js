@@ -353,7 +353,9 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
           .filter(s => s && vis(s.col, s.row, ents))
           .map(unitRef);
         const ranged = !!(ev.result?.ranged ?? ev.battleSnaps?.ranged);
-        const isGuard = ev.type === RE.GUARD_STRIKE;
+        // `guardReaction` flags the new inline guard attack (a normal BATTLE_UNIT
+        // event); GUARD_STRIKE is the legacy event kind in pre-existing saves.
+        const isGuard = ev.guardReaction || ev.type === RE.GUARD_STRIKE;
         entries.push({
           entityId:     actorSnap.id,
           actor:        unitRef(actorSnap),

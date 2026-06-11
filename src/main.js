@@ -2413,9 +2413,10 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       hadBattle = true;
     }
 
-    // ── Phase 2b: guard strike reactions ─────────────────────────────────────
-    // Guard strikes are reactive attacks emitted as GUARD_STRIKE events.
-    // Animate them the same way as normal battles: lunge, highlights, dialog/toast.
+    // ── Phase 2b: guard strike reactions (LEGACY) ────────────────────────────
+    // New guard reactions are inserted by the resolver as normal BATTLE_UNIT
+    // events and animate in Phase 2 above. This branch only fires for the legacy
+    // GUARD_STRIKE event kind still present in pre-existing saved replays.
     const guardStrikeEvents = allStepEvents.filter(ev => ev.type === ResEventType.GUARD_STRIKE);
     for (const ev of guardStrikeEvents) {
       const { result, battleSnaps } = ev;
@@ -3708,6 +3709,8 @@ function _scenarioPlan(planDefs, byRef) {
     } else if (p.attack != null) {
       const target = byRef.get(p.attack);
       if (target) out.push({ type: PlanActionType.BATTLE_UNIT, entityId: actor.id, targetId: target.id });
+    } else if (p.guard) {
+      out.push({ type: PlanActionType.GUARD, entityId: actor.id });
     }
   }
   return out;
