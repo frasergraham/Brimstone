@@ -934,7 +934,7 @@ function _applySplashDamage(state, col, row, excludeIds, log, opts = {}) {
   const splashHits  = [];
   for (const b of bystanders) {
     const fromCol = b.col, fromRow = b.row;
-    const dmg = b.applyIncomingDamage(damage);
+    const dmg = b.applyIncomingDamage(damage, (sd) => state.nextDie(sd));
     const wasKilled = b.takeDamage(dmg);
     log.push(`💢 ${b.displayName} caught in the blast — takes ${dmg} splash damage! (${b.hp}/${b.maxHp} HP)`);
     let pushedTo = null;
@@ -1180,7 +1180,7 @@ export function executeBattle(state, actor, target, opts = {}) {
     // taken) lifts the whole strike once — not once per point — keeping the
     // wounded surcharge proportional to the scaled HP pools.
     {
-      const inc = target.applyIncomingDamage(baseDmg);
+      const inc = target.applyIncomingDamage(baseDmg, (sd) => state.nextDie(sd));
       damage += inc;
       const wasKilled = target.takeDamage(inc);
       dispatchTrigger('damaged', target, { state, amount: inc, source: actor });
@@ -1262,7 +1262,8 @@ export function executeBattle(state, actor, target, opts = {}) {
       // A counter lands as one ordinary (1×) hit with the defender's weapon —
       // matching the pre-dice rule where a counter dealt the same as a hit.
       counterDmg = actor.applyIncomingDamage(
-        rollDamage(getWeaponDamage(target.weapon), s => state.nextDie(s))
+        rollDamage(getWeaponDamage(target.weapon), s => state.nextDie(s)),
+        (sd) => state.nextDie(sd),
       );
       const counterKilled = actor.takeDamage(counterDmg);
       log.push(`⚔ ${target.displayName} counter-attacks! ${actor.displayName} takes ${counterDmg} damage.`);

@@ -202,13 +202,14 @@ amount (hit 1×, crush 2×, great crush 3×); ranged attacks never crush (always
 1×). A counter is one 1× roll of the defender's weapon.
 
 **HP / damage scale.** All HP totals and every flat HP delta (heals, DOTs,
-night attrition, the `wounded` surcharge) are multiplied by `DAMAGE_SCALE` (=7,
-`src/balance.js`). 7 is the mean of the 2D6 baseline attack, so the average
-hits-to-kill is unchanged from the pre-dice era while combat gains roll
-variance. Damage is applied as a **single blow**, so a defender's `wounded`
-(+DAMAGE_SCALE damage taken) lifts the whole strike *once*. Splash damage is
+night attrition) are multiplied by `DAMAGE_SCALE` (=7, `src/balance.js`). 7 is
+the mean of the 2D6 baseline attack, so the average hits-to-kill is unchanged
+from the pre-dice era while combat gains roll variance. Damage is applied as a
+**single blow**, so a defender's `wounded` (+1D6 damage taken, rolled through
+the deterministic die stream) lifts the whole strike *once*. Splash damage is
 `clamp(floor(margin/3), 1, 3) × DAMAGE_SCALE`. Both crush tiers apply `wounded`
-to a surviving target.
+to a surviving target — it lasts **one round**, so the follow-up tax must be
+cashed in immediately.
 
 ### Modifiers
 

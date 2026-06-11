@@ -127,7 +127,7 @@ function nightAttritionEffect(state) {
 
       // Route through applyIncomingDamage so wounded etc. amplify attrition
       // the same way they amplify combat / DOTs.
-      const incoming = e.applyIncomingDamage(dmg);
+      const incoming = e.applyIncomingDamage(dmg, (sd) => state.nextDie(sd));
       const killed = e.takeDamage(incoming);
       const text = killed
         ? `💀 ${e.displayName} is consumed by the night!`

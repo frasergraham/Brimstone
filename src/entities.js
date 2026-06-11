@@ -5,7 +5,7 @@ import { ITEMS } from './items.js';
 import { SurvivorAbility, ABILITIES } from './abilities.js';
 import {
   effectStatMod, effectRangeMod, effectIncomingAtkAdvantage,
-  effectDamageTakenFlat, effectsBlockHeal,
+  effectDamageTakenFlat, effectDamageTakenDice, effectsBlockHeal,
 } from './effects.js';
 import { hpForLevel, atkBonusForLevel, defBonusForLevel } from './balance.js';
 
@@ -335,13 +335,19 @@ export class Entity {
 
   /**
    * Compute the effective incoming damage for a base hit, after applying
-   * effect mods (e.g. wounded → +1). Currently only flat additions; the
-   * shape leaves room for resistances later. Damage never goes below 1
-   * once a hit lands — effects can amplify pain, not cancel it outright.
+   * effect mods: flat additions plus bonus damage DICE (wounded → +1D6 per
+   * stack). `rollDie(sides)` should be the game's deterministic die stream
+   * (`s => state.nextDie(s)`) so forced dice / replays stay byte-identical;
+   * without a roller each die falls back to a fixed 4 (average, rounded up)
+   * rather than reaching for Math.random. Damage never goes below 1 once a
+   * hit lands — effects can amplify pain, not cancel it outright.
    */
-  applyIncomingDamage(baseAmount) {
+  applyIncomingDamage(baseAmount, rollDie = null) {
     const flat = effectDamageTakenFlat(this);
-    return Math.max(1, baseAmount + flat);
+    let rolled = 0;
+    const dice = effectDamageTakenDice(this);
+    for (let i = 0; i < dice; i++) rolled += rollDie ? rollDie(6) : 4;
+    return Math.max(1, baseAmount + flat + rolled);
   }
 
   heal(amount) {

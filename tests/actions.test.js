@@ -587,9 +587,10 @@ describe('executeBattle', () => {
   // Damage = tier × rolled weapon damage: hit=1×, crush (atk ≥ 2× def)=2×,
   // great crush (atk ≥ 3× def)=3×. The unarmed attacker rolls 2D6, forced to
   // 3+4=7 here, so a hit=7, crush=14, great crush=21. Forced-dice order is
-  // [atkDie, defDie] (advantage pools) then the two damage dice. A defender's
-  // `wounded` (+DAMAGE_SCALE damage taken) lifts the whole blow ONCE — so a
-  // normal crush on a wounded target is 14+7=21, not doubled per point.
+  // [atkDie, defDie] (advantage pools), the two damage dice, then — when the
+  // defender is wounded — the wound's own 1D6 surcharge die. The surcharge is
+  // rolled ONCE per blow (not per point): a crush on a wounded target with a
+  // forced 5 is 14+5=19.
   function duel(atkDie, defDie, { wounded = false, dmgDice = [3, 4] } = {}) {
     const state = freshState();
     // Neutralize the random-map tile so only the forced dice + stats decide the
@@ -624,14 +625,22 @@ describe('executeBattle', () => {
     assert.equal(r.damage, 21); // 3× (3+4)
   });
 
-  test('crush on a WOUNDED target adds the surcharge once', () => {
-    const r = duel(2, 1, { wounded: true }); // base crush 14 + wounded +7 once
-    assert.equal(r.damage, 21);
+  test('crush on a WOUNDED target adds one rolled 1D6 surcharge', () => {
+    // Forced dice: atk 2, def 1, dmg 3+4, wounded d6 = 5.
+    const r = duel(2, 1, { wounded: true, dmgDice: [3, 4, 5] });
+    assert.equal(r.damage, 19); // crush 14 + 1D6(5) once
   });
 
-  test('great crush on a WOUNDED target adds the surcharge once', () => {
-    const r = duel(6, 2, { wounded: true }); // base great crush 21 + wounded +7
-    assert.equal(r.damage, 28);
+  test('great crush on a WOUNDED target adds one rolled 1D6 surcharge', () => {
+    const r = duel(6, 2, { wounded: true, dmgDice: [3, 4, 2] });
+    assert.equal(r.damage, 23); // great crush 21 + 1D6(2)
+  });
+
+  test('wounded surcharge consumes the deterministic die stream (replay-safe)', () => {
+    const a = duel(2, 1, { wounded: true, dmgDice: [3, 4, 6] });
+    const b = duel(2, 1, { wounded: true, dmgDice: [3, 4, 1] });
+    assert.equal(a.damage, 20);
+    assert.equal(b.damage, 15);
   });
 
   test('result includes attackRoll, defenseRoll, hit, margin', () => {
