@@ -437,6 +437,9 @@ export function createCombatTester(opts = {}) {
       result,
       attackerSnap: _snap(layout.attackerEntity),
       defenderSnap: _snap(layout.defenderEntity),
+      // result.killed only covers the defender; a counter-kill flips the
+      // attacker's alive flag (and drops it from state.entities) instead.
+      attackerKilled: !layout.attackerEntity.alive,
     };
   }
   function onChange(listener) {
@@ -462,6 +465,28 @@ export function createCombatTester(opts = {}) {
     onChange,
   };
   return api;
+}
+
+/**
+ * Shape one tester battle as a wrap-up combat pair — the { a, b } unit shape
+ * compileTurnBattlePairs produces — so the UI can render the game's wrap-up
+ * battle summary row for it. Attacker is `a`, defender `b`: the attacker's
+ * HP loss is the counter damage, the defender's the strike damage.
+ *
+ * @param {object} out — runBattle() output ({ result, attackerSnap,
+ *   defenderSnap, attackerKilled }).
+ * @returns {{a: object, b: object}}
+ */
+export function battleWrapupPair(out) {
+  const unit = (snap, hpLost, killed) => ({
+    id: snap.id, type: snap.type, title: snap.title ?? null,
+    name: snap.title ?? snap.type, color: null,
+    hpLost, killed,
+  });
+  return {
+    a: unit(out.attackerSnap, out.result.counterDmg ?? 0, !!out.attackerKilled),
+    b: unit(out.defenderSnap, out.result.damage ?? 0, !!out.result.killed),
+  };
 }
 
 // Snapshot the fields combat-cinematic needs to run. Kept tiny — the

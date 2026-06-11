@@ -6,10 +6,12 @@
 // resolves the dice, run3DCombatCardHold plays the cinematic readout, and
 // the renderer's animation queue handles the lunge / floaters / fade-out.
 
-import { createCombatTester, UNIT_FACTORIES, SPEED_MODES, ATTACK_MODES } from './combat-tester.js';
+import { createCombatTester, battleWrapupPair, UNIT_FACTORIES, SPEED_MODES, ATTACK_MODES } from './combat-tester.js';
 import { UNIT_TYPES } from '../unit-types.js';
 import { ITEMS } from '../items.js';
+import { Renderer } from '../renderer.js';
 import { Renderer3D, BLOCK_WORD_VARIANTS } from '../renderer-3d.js';
+import { buildWrapupCombatsHtml, wrapupIconHtml, wrapupUnitCellHtml } from '../wrapup-summary.js';
 import { run3DCombatCardHold } from '../combat-cinematic.js';
 import { playFastCombatDisplay } from '../combat-fast.js';
 import { parseCombatParams, withCombatParams } from './url-state.js';
@@ -290,9 +292,35 @@ export async function initCombat(doc = document) {
   logEl.id = 'c-log';
   sec4.appendChild(logEl);
 
+  // Portrait lookup for the wrap-up summary cells — same asset-id rule as
+  // ui.js (survivors resolve via their title, everything else maps 1:1).
+  function _summaryIconFor(u, size) {
+    const assetId = (u.type === 'survivor' && u.title)
+      ? Renderer.survivorAssetId(u.title) : u.type;
+    const src = assetId ? renderer.getPortraitDataURL(assetId, size) : null;
+    return wrapupIconHtml(u, { src });
+  }
+
   function appendLog(out) {
     const entry = doc.createElement('div');
     entry.className = 'c-log-entry';
+
+    // Wrap-up battle summary — the same [icon] vs [icon] element the game's
+    // end-of-turn card shows, with splash victims as extra skull cells.
+    const summary = doc.createElement('div');
+    summary.className = 'c-log-summary';
+    let summaryHtml = buildWrapupCombatsHtml([battleWrapupPair(out)], _summaryIconFor);
+    const splashKilled = out.result.splashKills ?? [];
+    if (splashKilled.length) {
+      const cells = splashKilled
+        .map(k => wrapupUnitCellHtml({ ...k, hpLost: 0, killed: true },
+          _summaryIconFor({ ...k, title: null }, 56)))
+        .join('');
+      summaryHtml += `<div class="wrapup-casualties">${cells}</div>`;
+    }
+    summary.innerHTML = summaryHtml;
+    entry.appendChild(summary);
+
     const head = doc.createElement('div');
     head.className = 'c-log-head';
     const atkName = UNIT_LABELS[out.attackerSnap.type] ?? out.attackerSnap.type;
