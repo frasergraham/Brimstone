@@ -188,13 +188,27 @@ function unitRef(snap) {
   };
 }
 
-/** Classify a battle `result` for colour/labelling. */
+/** Classify a battle `result` for colour/labelling. The crush tier lives in
+ *  breakdown.dmgTier since the weapons overhaul (hit 1× / crush 2× / great
+ *  crush 3×); the top-level `crush` flag only exists in older saved replays. */
 function battleKind(result) {
   if (!result) return OutcomeKind.MISS;
   if (result.killed)    return OutcomeKind.KILL;
-  if (result.crush)     return OutcomeKind.CRUSH;
+  if (result.crush || (result.breakdown?.dmgTier ?? 0) >= 2) return OutcomeKind.CRUSH;
   if (result.hit)       return OutcomeKind.HIT;
   return OutcomeKind.MISS;
+}
+
+/** Outcome word for the turn card's centre cell. KILL trumps everything;
+ *  crushes split into CRUSH / GREAT CRUSH by tier; misses use the entry's
+ *  deterministic flavour word. Pure — takes a buildStepDigest battle entry. */
+export function battleOutcomeWord(entry) {
+  if (entry.killed) return 'KILL';
+  if (entry.outcomeKind === OutcomeKind.CRUSH) {
+    return (entry.dmgTier ?? 0) >= 3 ? 'GREAT CRUSH' : 'CRUSH';
+  }
+  if (entry.outcomeKind === OutcomeKind.HIT) return 'HIT';
+  return entry.missWord ?? 'MISS';
 }
 
 /** Meaningful loot icons from an explore result ('nothing' rolls excluded). */
@@ -382,6 +396,11 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
           dmgTier:      ev.result?.breakdown?.dmgTier ?? 0,
           atkWeapon:    ev.result?.breakdown?.atkWeapon ?? null,
           killed:       !!ev.result?.killed,
+          // Splash victims (brute blast) — listed in the outcome summary.
+          splashHits:   (ev.result?.splashHits ?? []).map(sh => ({
+            id: sh.id, name: sh.name ?? sh.type ?? 'Unit', type: sh.type,
+            damage: sh.damage ?? 1, killed: !!sh.killed,
+          })),
           note:         null,
           // Hover highlight: both combatants' hexes (battleSnaps are captured
           // at battle execution, so mid-step moves have already landed).
@@ -594,6 +613,11 @@ export function buildOutcomeSummary(entry) {
   }
   if (entry.actorDmg > 0) {
     lines.push(`${actor} takes ${entry.actorDmg} from the counter.`);
+  }
+  for (const sh of entry.splashHits ?? []) {
+    lines.push(sh.killed
+      ? `\u{1F4A2} ${sh.name ?? 'A bystander'} takes ${sh.damage ?? 1} splash — slain!`
+      : `\u{1F4A2} ${sh.name ?? 'A bystander'} takes ${sh.damage ?? 1} splash.`);
   }
   return { kind, headline, reason, lines };
 }

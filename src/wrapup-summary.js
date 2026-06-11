@@ -60,8 +60,8 @@ export function buildWrapupCombatsHtml(combats, iconFor) {
   const cell = (u) => wrapupUnitCellHtml(u, iconFor(u, 56));
   if (combats.length > 3) {
     const hurt = new Map();
-    for (const { a, b } of combats) {
-      for (const u of [a, b]) {
+    for (const { a, b, splash } of combats) {
+      for (const u of [a, b, ...(splash ?? [])]) {
         if (!(u.hpLost > 0 || u.killed)) continue;
         const prev = hurt.get(u.id);
         if (prev) { prev.hpLost += u.hpLost; prev.killed = prev.killed || u.killed; }
@@ -73,8 +73,14 @@ export function buildWrapupCombatsHtml(combats, iconFor) {
       : `<div class="wrapup-line muted">${combats.length} skirmishes — no casualties.</div>`;
   }
   let html = '';
-  for (const { a, b } of combats) {
+  for (const { a, b, splash } of combats) {
     html += `<div class="wrapup-combat">${cell(a)}<span class="wrapup-vs">vs</span>${cell(b)}</div>`;
+    // Splash victims (brute blast) — smaller cells on a labelled sub-row so
+    // bystander damage is called out rather than silently absorbed.
+    if (splash?.length) {
+      const splashCells = splash.map(u => wrapupUnitCellHtml(u, iconFor(u, 36))).join('');
+      html += `<div class="wrapup-splash"><span class="wrapup-splash-label">\u{1F4A2} splash</span>${splashCells}</div>`;
+    }
   }
   return html;
 }

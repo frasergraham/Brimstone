@@ -15,7 +15,7 @@ import * as audio from './audio.js';
 
 import { PlanActionType, actionCosts, computeGhostState, computeProjectedInventory, interleavePlan, validatePlanAction, buildAutoGuardQueue } from './planner.js';
 import { ABILITIES } from './abilities.js';
-import { buildRollRows, buildOutcomeSummary, buildTurnCardHoverOverlays } from './replay-timeline.js';
+import { buildRollRows, buildOutcomeSummary, buildTurnCardHoverOverlays, battleOutcomeWord } from './replay-timeline.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
 import { buildWrapupCombatsHtml, wrapupIconHtml } from './wrapup-summary.js';
 import { ResEventType } from '../server/resolver.js';
@@ -5408,10 +5408,7 @@ export class UIController {
     let actorOut, centerOut, targetOut;
     if (entry.outcomeKind) {
       // Battle: outcome word centred, HP changes under each combatant.
-      const word = entry.killed ? 'KILL'
-        : entry.outcomeKind === 'crush' ? 'CRUSH'
-        : entry.outcomeKind === 'hit'   ? 'HIT'
-        : (entry.missWord ?? 'MISS');
+      const word = battleOutcomeWord(entry);
       const kind = entry.killed ? 'kill' : entry.outcomeKind;
       actorOut  = out(entry.actorDmg > 0 ? `COUNTER −${entry.actorDmg}` : '', 'counter');
       centerOut = out(word, kind);
