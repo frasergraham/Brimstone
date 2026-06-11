@@ -5,7 +5,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildStepDigest, buildConversationDigest, buildRollTip, buildRollRows, buildOutcomeSummary, isEventVisible, OutcomeKind } from '../src/replay-timeline.js';
+import { buildStepDigest, buildConversationDigest, buildRollTip, buildRollRows, buildOutcomeSummary, isEventVisible, OutcomeKind, buildTurnCardHoverOverlays, TURN_CARD_HOVER_COLOR } from '../src/replay-timeline.js';
 import { ResEventType } from '../server/resolver.js';
 import { PlanActionType } from '../src/planner.js';
 
@@ -665,5 +665,97 @@ describe('buildConversationDigest', () => {
     const digest = buildConversationDigest(convo, [hero]);
     assert.equal(digest[0].entries[0].actor.entityId, 'e1');
     assert.equal(digest[0].entries[0].target, null);
+  });
+});
+
+// ── Hover coordinates + overlay builder (turn-card hover highlights) ─────────
+
+describe('buildStepDigest — hover coordinates', () => {
+  test('successful move carries hexes + movePath (origin → waypoints)', () => {
+    const h = snap('h1', 'hero', 'hero', 1, 1);
+    const ev = moveEvent('h1', 'hero', 3, 1);
+    ev.result.path = [{ col: 2, row: 1 }, { col: 3, row: 1 }];
+    const e = buildStepDigest([step([ev], [h])], [], DEPS)[0].entries[0];
+    assert.deepEqual(e.movePath, [{ col: 1, row: 1 }, { col: 2, row: 1 }, { col: 3, row: 1 }]);
+    assert.deepEqual(e.hexes, [{ col: 1, row: 1 }, { col: 2, row: 1 }, { col: 3, row: 1 }]);
+  });
+
+  test('move without result.path falls back to the action target hex', () => {
+    const h = snap('h1', 'hero', 'hero', 1, 1);
+    const e = buildStepDigest([step([moveEvent('h1', 'hero', 2, 1)], [h])], [], DEPS)[0].entries[0];
+    assert.deepEqual(e.movePath, [{ col: 1, row: 1 }, { col: 2, row: 1 }]);
+  });
+
+  test('battle carries both combatant hexes and no movePath', () => {
+    const atk = snap('h1', 'hero', 'hero', 1, 1);
+    const def = snap('z1', 'zombie', 'witch', 2, 1);
+    const d = buildStepDigest([step([battleEvent(atk, def, { hit: true, damage: 1 })], [atk, def])], [], DEPS);
+    const e = d[0].entries[0];
+    assert.deepEqual(e.hexes, [{ col: 1, row: 1 }, { col: 2, row: 1 }]);
+    assert.equal(e.movePath, null);
+  });
+
+  test('blocked move highlights actor + blocker hexes, no movePath', () => {
+    const h = snap('h1', 'hero', 'hero', 1, 1);
+    const ev = {
+      type: ResEventType.ACTION_FAIL,
+      faction: 'hero',
+      action: { type: PlanActionType.MOVE, entityId: 'h1', toCol: 2, toRow: 1 },
+      blockedBy: { col: 2, row: 1 },
+    };
+    const e = buildStepDigest([step([ev], [h])], [], DEPS)[0].entries[0];
+    assert.deepEqual(e.hexes, [{ col: 1, row: 1 }, { col: 2, row: 1 }]);
+    assert.equal(e.movePath, null);
+  });
+
+  test('non-move action highlights the actor hex', () => {
+    const h = snap('h1', 'hero', 'hero', 4, 5);
+    const ev = {
+      type: ResEventType.ACTION_OK,
+      faction: 'hero',
+      action: { type: PlanActionType.FORTIFY, entityId: 'h1' },
+      result: { success: true },
+    };
+    const e = buildStepDigest([step([ev], [h])], [], DEPS)[0].entries[0];
+    assert.deepEqual(e.hexes, [{ col: 4, row: 5 }]);
+    assert.equal(e.movePath, null);
+  });
+});
+
+describe('buildTurnCardHoverOverlays', () => {
+  test('fill overlay: 15% blue flat fill over the involved hexes', () => {
+    const { fill } = buildTurnCardHoverOverlays({
+      hexes: [{ col: 1, row: 1 }, { col: 2, row: 1 }], movePath: null,
+    });
+    assert.equal(fill.kind, 'fill');
+    assert.equal(fill.layer, 'fill');
+    assert.equal(fill.style.alpha, 0.15);
+    assert.equal(fill.style.color, TURN_CARD_HOVER_COLOR);
+    assert.deepEqual(Array.from(fill.hexes).sort(), ['1,1', '2,1']);
+  });
+
+  test('successful move adds ghost arrow segments along the path', () => {
+    const { arrows } = buildTurnCardHoverOverlays({
+      hexes: [], movePath: [{ col: 1, row: 1 }, { col: 2, row: 1 }, { col: 3, row: 1 }],
+    });
+    assert.equal(arrows.length, 2);
+    assert.deepEqual(arrows[0].path, ['1,1', '2,1']);
+    assert.deepEqual(arrows[1].path, ['2,1', '3,1']);
+    for (const [i, a] of arrows.entries()) {
+      assert.equal(a.kind, 'plan-arrow');
+      assert.equal(a.meta.variant, 'ghost');
+      assert.equal(a.meta.stepIndex, i);
+      assert.equal(a.meta.entityId, '__turn-card-hover__');
+      assert.ok(a.style.alpha < 1, 'ghost arrows are translucent');
+    }
+  });
+
+  test('battle entry (no movePath) yields fill only; empty entry yields nothing', () => {
+    const battle = buildTurnCardHoverOverlays({ hexes: [{ col: 1, row: 1 }], movePath: null });
+    assert.ok(battle.fill);
+    assert.deepEqual(battle.arrows, []);
+    const none = buildTurnCardHoverOverlays(null);
+    assert.equal(none.fill, null);
+    assert.deepEqual(none.arrows, []);
   });
 });

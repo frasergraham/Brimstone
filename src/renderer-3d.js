@@ -12778,6 +12778,7 @@ export class Renderer3D {
     // the published overlay descriptors — never game state — so the overlay
     // map is the single source of truth for what gets drawn.
     this._syncSelectionOverlays();   // kind:'outline'    layer:'selection'
+    this._buildFlatFillOverlays();   // kind:'fill'       layer:'fill' (flat tint)
     this._buildFillOverlays();       // kind:'fill'       layer:'highlight-disc'
     this._buildObjectiveRings();     // kind:'ring-pulse' layer:'objective-ring'
     this._buildPlanArrows();         // kind:'plan-arrow' layer:'plan-arrow' (move)
@@ -12924,6 +12925,65 @@ export class Renderer3D {
     this._applyAlphaBlend(mat, 0.2);
     this._guardZoneMat = mat;
     return mat;
+  }
+
+  /**
+   * Build flat per-hex tint discs from `kind:'fill'` overlays in the `fill`
+   * layer — a true translucent fill over the tagged hexes (vs the
+   * highlight-disc layer's outline rings). Used by the turn-card hover
+   * highlight (15%-alpha blue over an action's involved hexes). Hex-aligned
+   * cylinder discs like the power-node tints; `style.alpha` is honoured.
+   * Signature-diffed each draw like the other consumers.
+   */
+  _buildFlatFillOverlays() {
+    if (!this._scene || !this._babylon) return;
+
+    const ids = [];
+    for (const [id, ov] of this._overlays) {
+      if (ov.kind === 'fill' && ov.layer === 'fill') ids.push(id);
+    }
+    ids.sort();
+
+    let sig = '';
+    ids.forEach((id, i) => { sig += `${id}@${i}:${overlaySignature(this._overlays.get(id))}|`; });
+    if (sig === this._flatFillSig) return;
+    this._flatFillSig = sig;
+
+    for (const m of (this._flatFillMeshes ?? [])) { m.mesh.dispose(); m.mat.dispose(); }
+    this._flatFillMeshes = [];
+    if (ids.length === 0) return;
+
+    const BABYLON = this._babylon;
+    ids.forEach((id, nestedIndex) => {
+      const ov = this._overlays.get(id);
+      const [r, g, b] = cssHexToRgb01(ov.style?.color || '#4d9fff');
+      const alpha = Number.isFinite(ov.style?.alpha) ? ov.style.alpha : 0.15;
+      const y = yForLayer('fill', nestedIndex);
+      const mat = new BABYLON.StandardMaterial(`flatFillMat_${id}`, this._scene);
+      mat.diffuseColor  = new BABYLON.Color3(r, g, b);
+      mat.emissiveColor = new BABYLON.Color3(r * 0.6, g * 0.6, b * 0.6);
+      mat.specularColor = new BABYLON.Color3(0, 0, 0);
+      mat.alpha = alpha;
+      mat.backFaceCulling = false;
+      for (const key of Array.from(ov.hexes).sort()) {
+        const [col, row] = key.split(',').map(Number);
+        if (!Number.isFinite(col) || !Number.isFinite(row)) continue;
+        const disc = BABYLON.MeshBuilder.CreateCylinder(
+          `flatFill_${id}_${col}_${row}`,
+          { diameter: HEX_RADIUS_WORLD * 2, height: 0.001, tessellation: 6 },
+          this._scene,
+        );
+        const { x, z } = hexToWorld(col, row);
+        disc.parent = this._mapRoot;
+        disc.position.set(x, y, z);
+        // Pointy-top alignment, matching the terrain discs / node tints.
+        disc.rotation.y = Math.PI / 6;
+        disc.isPickable = false;
+        disc.material = mat;
+        disc.alphaIndex = OVERLAY_FLAT_FILL_ALPHA_INDEX + nestedIndex;
+        this._flatFillMeshes.push({ mesh: disc, mat });
+      }
+    });
   }
 
   /**
@@ -13185,7 +13245,17 @@ export class Renderer3D {
     // it changes iff the published descriptors change — yet the geometry below
     // is built entirely from the overlay map. During plan editing draw() fires
     // on every hover / selection event, so this early-out saves GC + GPU churn.
-    const sig = planArrowsSignature(this.planGhostSteps, this.state?.entities);
+    // Hover ghost arrows (turn-card hover) are published outside
+    // planGhostSteps, so fold their signatures in — otherwise adding/removing
+    // a ghost overlay wouldn't trigger a rebuild.
+    let ghostSig = '';
+    for (const [id, ov] of this._overlays) {
+      if (ov.kind === 'plan-arrow' && ov.meta?.variant === 'ghost') {
+        ghostSig += `${id}:${overlaySignature(ov)}|`;
+      }
+    }
+    const sig = planArrowsSignature(this.planGhostSteps, this.state?.entities)
+      + (ghostSig ? `#${ghostSig}` : '');
     if (sig === this._planArrowSig) return;
     this._planArrowSig = sig;
 
@@ -13249,6 +13319,12 @@ export class Renderer3D {
       dashMat.diffuseColor  = new BABYLON.Color3(r, g, b);
       dashMat.emissiveColor = new BABYLON.Color3(r * 0.6, g * 0.6, b * 0.6);
       dashMat.specularColor = new BABYLON.Color3(0, 0, 0);
+      // Ghost (hover) arrows render translucent; pin the alpha sort like the
+      // waypoint pucks so they don't pop against the highlight fills.
+      const dashAlpha = e.steps[0]?.style?.alpha;
+      if (Number.isFinite(dashAlpha) && dashAlpha < 1) {
+        dashMat.alpha = dashAlpha;
+      }
 
       const dashes = [];
       for (let i = 0; i < path.length - 1; i++) {
@@ -13276,14 +13352,17 @@ export class Renderer3D {
           tube.parent = this._mapRoot;
           tube.isPickable = false;
           tube.material = dashMat;
+          if (dashMat.alpha < 1) tube.alphaIndex = OVERLAY_PLAN_ARROW_ALPHA_INDEX;
           dashes.push(tube);
         }
       }
       this._planArrowMeshes.push({ dashes, dashMat });
     }
 
-    // Waypoint puck + numbered badge per move step.
+    // Waypoint puck + numbered badge per move step. Ghost (hover) arrows are
+    // path-only — no puck, no badge.
     for (const ov of moveOvs) {
+      if (ov.meta?.variant === 'ghost') continue;
       const entityId   = ov.meta?.entityId;
       const stepNumber = ov.meta?.stepIndex ?? 0;
       const badgeLabel = ov.meta?.badge ?? String(stepNumber);
@@ -16047,6 +16126,7 @@ export const BORDER_TREE_ALPHA_INDEX   = 90;
  *  the gap to the plan-arrow index leaves room for that. Opaque overlays (the
  *  selected-unit ring at alpha 1, the opaque plan dashes/arrow shafts) are left
  *  at the default — the opaque pass ignores `alphaIndex`. */
+export const OVERLAY_FLAT_FILL_ALPHA_INDEX     = 290;
 export const OVERLAY_SELECTION_ALPHA_INDEX     = 300;
 export const OVERLAY_HIGHLIGHT_DISC_ALPHA_INDEX = 310;
 export const OVERLAY_PLAN_ARROW_ALPHA_INDEX    = 320;
