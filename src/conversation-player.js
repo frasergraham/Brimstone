@@ -173,13 +173,6 @@ export async function playConversation(opts) {
   }
   showDone();
 
-  // ── onComplete scripted actions (e.g. the NPC walks away) ─────────────────
-  if (runOnComplete && convDef?.onComplete?.length) {
-    await runScriptedActions(convDef.onComplete, {
-      state, renderer, redraw, npcDefs, instant: skipFlag(),
-    });
-  }
-
   // ── Cleanup ────────────────────────────────────────────────────────────────
   if (manageHud && ui) {
     // Hold the finished card on screen until the player taps CONTINUE (NEXT
@@ -205,6 +198,17 @@ export async function playConversation(opts) {
     // Mid-replay: don't leak a NEXT press consumed (or set) by the dialog into
     // the step loop's gate.
     playback.stepRequested = prevStepRequested;
+  }
+
+  // ── onComplete scripted actions (e.g. the NPC walks away) ─────────────────
+  // AFTER the CONTINUE gate and card teardown: the conversation card should
+  // only do the conversation — while it holds on REPLAY/CONTINUE the
+  // participants are all still on the map, so a REPLAY re-run looks right.
+  // The walk-off plays once the player releases the card.
+  if (runOnComplete && convDef?.onComplete?.length) {
+    await runScriptedActions(convDef.onComplete, {
+      state, renderer, redraw, npcDefs, instant: skipFlag(),
+    });
   }
   return { skipped: skipFlag() };
 }
