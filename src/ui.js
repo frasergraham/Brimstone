@@ -16,6 +16,7 @@ import { PlanActionType, actionCosts, computeGhostState, computeProjectedInvento
 import { ABILITIES } from './abilities.js';
 import { buildRollRows, buildOutcomeSummary } from './replay-timeline.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
+import { buildWrapupCombatsHtml, wrapupIconHtml } from './wrapup-summary.js';
 import { ResEventType } from '../server/resolver.js';
 import { collectUIElements } from './ui-elements.js';
 import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml, buildNodeBadgeHtml, buildEffectsHtml, buildCycleInfoHtml, PHASE_META } from './ui-render.js';
@@ -5556,44 +5557,13 @@ export class UIController {
    * score bar.
    */
   _buildWrapUpBody(combats, attritionLevel = 0, discoveries = [], loot = [], attrition = []) {
-    const GLYPHS = { hero: '⚔', witch: '✦', survivor: '☺', soldier: '♟', zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙' };
     const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const iconFor = (u, size, cls) => {
-      const color = u.color || ENTITY_COLOR[u.type] || '#888';
       const assetId = _entityPortraitId({ type: u.type, title: u.title });
       const src = (this.renderer && assetId) ? this.renderer.getPortraitDataURL(assetId, size) : null;
-      return src
-        ? `<img class="${cls}" src="${src}" style="border-color:${color}" alt="">`
-        : `<span class="${cls}" style="background:${color}">${GLYPHS[u.type] ?? '?'}</span>`;
+      return wrapupIconHtml(u, { src, cls });
     };
-    const unitCell = (u) => {
-      const icon = iconFor(u, 56, 'wrapup-unit-icon');
-      const effect = u.killed
-        ? `<div class="wrapup-dmg kill">☠</div>`
-        : (u.hpLost > 0 ? `<div class="wrapup-dmg">−${u.hpLost}</div>` : `<div class="wrapup-dmg none">—</div>`);
-      return `<div class="wrapup-unit">${icon}${effect}</div>`;
-    };
-    let combatHtml = '';
-    if (combats.length > 3) {
-      // Many fights ⇒ pairwise would be too tall. Condense to just the units
-      // that actually took damage (aggregated across all their fights).
-      const hurt = new Map();
-      for (const { a, b } of combats) {
-        for (const u of [a, b]) {
-          if (!(u.hpLost > 0 || u.killed)) continue;
-          const prev = hurt.get(u.id);
-          if (prev) { prev.hpLost += u.hpLost; prev.killed = prev.killed || u.killed; }
-          else hurt.set(u.id, { ...u });
-        }
-      }
-      combatHtml = hurt.size
-        ? `<div class="wrapup-casualties">${[...hurt.values()].map(unitCell).join('')}</div>`
-        : `<div class="wrapup-line muted">${combats.length} skirmishes — no casualties.</div>`;
-    } else {
-      for (const { a, b } of combats) {
-        combatHtml += `<div class="wrapup-combat">${unitCell(a)}<span class="wrapup-vs">vs</span>${unitCell(b)}</div>`;
-      }
-    }
+    let combatHtml = buildWrapupCombatsHtml(combats, (u, size) => iconFor(u, size, 'wrapup-unit-icon'));
     if (!combatHtml) combatHtml = `<div class="wrapup-line muted">A quiet turn.</div>`;
 
     // Survivors/zombies discovered this round — icon + name, reusing the old

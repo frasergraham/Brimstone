@@ -113,6 +113,7 @@ ui.js
  ├── actions.js
  ├── planner.js
  ├── battle-utils.js
+ ├── wrapup-summary.js         ← shared wrap-up combat-row HTML (also used by the admin Combat tester)
  ├── ui-elements.js
  ├── ui-render.js
  └── server/resolver.js        ← for ResEventType enum only

@@ -476,6 +476,14 @@
     #combat-panel #c-log .c-log-entry { padding: 3px 0; border-bottom: 1px dashed #1a1a1a; }
     #combat-panel #c-log .c-log-entry:last-child { border-bottom: none; }
     #combat-panel #c-log .c-log-head { color: #c4a04a; font-weight: bold; }
+    /* Wrap-up battle summary row (shared .wrapup-* classes from styles.css)
+       atop each log entry — pin the proportional font back on so the glyph
+       fallback and damage numbers aren't sized by the log's monospace 11px. */
+    #combat-panel #c-log .c-log-summary {
+      font-family: var(--font-ui, system-ui), sans-serif;
+      display: flex; flex-direction: column; gap: 4px;
+      margin: 2px 0 4px; white-space: normal;
+    }
     #combat-panel .c-add-row { display: grid; grid-template-columns: 1fr auto; gap: 4px; margin-top: 4px; }
     #combat-panel .c-add-row button { padding: 5px 10px; }
     #combat-panel .c-side-label { font-size: 11px; color: #c4a04a; letter-spacing: 1px; text-transform: uppercase; margin-top: 6px; }
