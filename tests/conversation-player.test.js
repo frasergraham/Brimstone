@@ -17,13 +17,15 @@ function stubRenderer() {
     is3D: true,
     suppressAutoFrame: false,
     bubbles: [],
+    frameCalls: [],
     showSpeechBubble(anchor, name, text) {
       const b = { anchor, name, text, disposed: false };
       this.bubbles.push(b);
       return { dispose: () => { b.disposed = true; } };
     },
     clearSpeechBubbles() { this.bubbles.forEach(b => { b.disposed = true; }); },
-    async frameEntities() { return true; },
+    speechBubbleFrameExtent() { return 2; },
+    async frameEntities(ids, opts) { this.frameCalls.push({ ids, opts }); return true; },
     addMoveAnim() {},
     async waitForAnimations() {},
   };
@@ -47,7 +49,8 @@ function stubUi() {
       this.cardStates.push(cardState);
       this.cardHandlers = handlers;
     },
-    showOffscreenArrow() {},
+    arrowCalls: [],
+    showOffscreenArrow(col, row) { this.arrowCalls.push({ col, row }); },
     hideOffscreenArrow() {},
   };
 }
@@ -148,6 +151,51 @@ describe('playConversation — turn-0 intro flow', () => {
     assert.ok(!ui.calls.includes('hideTimeline'), 'live timeline left for the step loop');
     assert.ok(!ui.calls.includes('showHUD'), 'reuses the step loop HUD');
     resetPlayback();
+  });
+});
+
+describe('playConversation — per-line camera framing', () => {
+  test('follow cam reframes the SPEAKER before every line (not once)', async () => {
+    resetPlayback();
+    setMode(AppMode.MENU);
+    const ui = stubUi();                 // replayCameraMode: 'follow'
+    const renderer = stubRenderer();
+    const { convo, participants, state } = fixture();
+
+    const done = playConversation({ convo, participants, state, renderer, ui, manageHud: true });
+    await pumpNext(() => ui.cardStates.includes('done'));
+    playback.stepRequested = false;
+
+    // One frame call per line, each focused on that line's speaker entity.
+    assert.equal(renderer.frameCalls.length, 2, 'reframed once per line, not once total');
+    assert.deepEqual(renderer.frameCalls[0].ids, ['e1'], 'line 1 frames the hero speaker');
+    assert.deepEqual(renderer.frameCalls[1].ids, ['e2'], 'line 2 frames the NPC speaker');
+    assert.ok(renderer.frameCalls[0].opts?.cardExtent >= 2, 'reserves bubble headroom');
+    assert.equal(ui.arrowCalls.length, 0, 'no off-screen arrow in follow mode');
+
+    ui.cardHandlers.onContinue?.();
+    await done;
+  });
+
+  test('fixed cam does NOT reframe — points an off-screen arrow at each speaker', async () => {
+    resetPlayback();
+    setMode(AppMode.MENU);
+    const ui = stubUi();
+    ui.replayCameraMode = 'fixed';       // player took camera control
+    const renderer = stubRenderer();
+    const { convo, participants, state } = fixture();
+
+    const done = playConversation({ convo, participants, state, renderer, ui, manageHud: true });
+    await pumpNext(() => ui.cardStates.includes('done'));
+    playback.stepRequested = false;
+
+    assert.equal(renderer.frameCalls.length, 0, 'fixed camera is never reframed');
+    assert.equal(ui.arrowCalls.length, 2, 'an arrow points at each line\'s speaker');
+    assert.deepEqual(ui.arrowCalls[0], { col: 2, row: 7 }, 'arrow at the hero');
+    assert.deepEqual(ui.arrowCalls[1], { col: 3, row: 6 }, 'arrow at the NPC');
+
+    ui.cardHandlers.onContinue?.();
+    await done;
   });
 });
 
