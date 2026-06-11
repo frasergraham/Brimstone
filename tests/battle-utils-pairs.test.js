@@ -66,3 +66,53 @@ describe('compileTurnBattlePairs — kill attribution', () => {
     assert.equal(skulls.length, 1, 'attacker counter-death credited to its (only) pair');
   });
 });
+
+describe('compileTurnBattlePairs — splash victims', () => {
+  test('splash victims ride on the pair that blasted them, damage aggregated', () => {
+    const steps = [{
+      witchEvents: [],
+      heroEvents: [
+        battle('h', 'm1', {
+          damage: 4, counterDmg: 0, killed: false,
+          splashHits: [
+            { id: 'm2', name: 'm2', type: 'minion', owner: 'witch', damage: 1, killed: false },
+            { id: 'm3', name: 'm3', type: 'minion', owner: 'witch', damage: 1, killed: true },
+          ],
+        }),
+      ],
+    }];
+    const pairs = compileTurnBattlePairs(steps, survivors('h', 'm1', 'm2'), RES, PLAN);
+    assert.equal(pairs.length, 1);
+    const splash = pairs[0].splash;
+    assert.equal(splash.length, 2);
+    const byId = Object.fromEntries(splash.map(u => [u.id, u]));
+    assert.equal(byId.m2.hpLost, 1);
+    assert.equal(byId.m2.killed, false);
+    assert.equal(byId.m3.killed, true, 'splash kill shows its skull');
+  });
+
+  test('splash victim that died in its OWN fight is not double-skulled in the splash list', () => {
+    const steps = [{
+      witchEvents: [],
+      heroEvents: [
+        battle('h', 'm1', { damage: 3, counterDmg: 0, killed: true }),   // m1 dies in its fight
+        battle('h2', 'm4', {
+          damage: 1, counterDmg: 0, killed: false,
+          splashHits: [{ id: 'm1', name: 'm1', type: 'minion', owner: 'witch', damage: 1, killed: false }],
+        }),
+      ],
+    }];
+    const pairs = compileTurnBattlePairs(steps, survivors('h', 'h2', 'm4'), RES, PLAN);
+    const skulls = [];
+    for (const p of pairs) {
+      for (const u of [p.a, p.b, ...(p.splash ?? [])]) if (u.id === 'm1' && u.killed) skulls.push(u);
+    }
+    assert.equal(skulls.length, 1, 'exactly one skull for m1 across cells + splash');
+  });
+
+  test('pairs without splash expose an empty array', () => {
+    const steps = [{ witchEvents: [battle('m1', 's', { damage: 1, killed: false })], heroEvents: [] }];
+    const pairs = compileTurnBattlePairs(steps, survivors('m1', 's'), RES, PLAN);
+    assert.deepEqual(pairs[0].splash, []);
+  });
+});

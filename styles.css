@@ -5337,6 +5337,21 @@ img.plan-step-avatar {
   justify-content: center;
   gap: 0.7rem;
 }
+/* Splash victims under a combat row — smaller cells, dim label. */
+.wrapup-splash {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0.45rem;
+  margin-top: 0.1rem;
+}
+.wrapup-splash-label {
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  align-self: center;
+}
+.wrapup-splash .wrapup-unit-icon { width: 36px; height: 36px; font-size: 0.95rem; }
+.wrapup-splash .wrapup-dmg { font-size: 0.72rem; }
 .wrapup-unit {
   display: flex;
   flex-direction: column;

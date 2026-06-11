@@ -5,7 +5,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildStepDigest, buildConversationDigest, buildRollTip, buildRollRows, buildOutcomeSummary, isEventVisible, OutcomeKind, buildTurnCardHoverOverlays, TURN_CARD_HOVER_COLOR } from '../src/replay-timeline.js';
+import { buildStepDigest, buildConversationDigest, buildRollTip, buildRollRows, buildOutcomeSummary, isEventVisible, OutcomeKind, buildTurnCardHoverOverlays, TURN_CARD_HOVER_COLOR, battleOutcomeWord } from '../src/replay-timeline.js';
 import { ResEventType } from '../server/resolver.js';
 import { PlanActionType } from '../src/planner.js';
 
@@ -757,5 +757,76 @@ describe('buildTurnCardHoverOverlays', () => {
     const none = buildTurnCardHoverOverlays(null);
     assert.equal(none.fill, null);
     assert.deepEqual(none.arrows, []);
+  });
+});
+
+// ── Crush tiers on the action card + splash in summaries ─────────────────────
+
+describe('buildStepDigest — crush tier drives the card outcome', () => {
+  const atk = () => snap('h1', 'hero', 'hero', 1, 1);
+  const def = () => snap('z1', 'zombie', 'witch', 2, 1);
+
+  test('dmgTier 2 → outcomeKind crush (results no longer carry a top-level crush flag)', () => {
+    const a = atk(), d = def();
+    const dig = buildStepDigest(
+      [step([battleEvent(a, d, { hit: true, damage: 4, breakdown: { dmgTier: 2, dmgRoll: 2 } })], [a, d])],
+      [], DEPS);
+    assert.equal(dig[0].entries[0].outcomeKind, OutcomeKind.CRUSH);
+  });
+
+  test('legacy result.crush (old saves) still maps to crush', () => {
+    const a = atk(), d = def();
+    const dig = buildStepDigest(
+      [step([battleEvent(a, d, { hit: true, crush: true, damage: 2 })], [a, d])], [], DEPS);
+    assert.equal(dig[0].entries[0].outcomeKind, OutcomeKind.CRUSH);
+  });
+
+  test('battleOutcomeWord: KILL > GREAT CRUSH > CRUSH > HIT > miss word', () => {
+    assert.equal(battleOutcomeWord({ killed: true, outcomeKind: 'crush', dmgTier: 3 }), 'KILL');
+    assert.equal(battleOutcomeWord({ outcomeKind: 'crush', dmgTier: 3 }), 'GREAT CRUSH');
+    assert.equal(battleOutcomeWord({ outcomeKind: 'crush', dmgTier: 2 }), 'CRUSH');
+    assert.equal(battleOutcomeWord({ outcomeKind: 'crush' }), 'CRUSH');
+    assert.equal(battleOutcomeWord({ outcomeKind: 'hit', dmgTier: 1 }), 'HIT');
+    assert.equal(battleOutcomeWord({ outcomeKind: 'miss', missWord: 'Parried' }), 'Parried');
+    assert.equal(battleOutcomeWord({ outcomeKind: 'miss' }), 'MISS');
+  });
+});
+
+describe('splash damage in summaries', () => {
+  const atk = () => snap('h1', 'hero', 'hero', 1, 1);
+  const def = () => snap('z1', 'zombie', 'witch', 2, 1);
+  const splash = [
+    { id: 'z2', name: 'Zombie', type: 'zombie', owner: 'witch', damage: 1, killed: false },
+    { id: 'm1', name: 'Minion', type: 'minion', owner: 'witch', damage: 1, killed: true },
+  ];
+
+  test('battle entry carries splashHits', () => {
+    const a = atk(), d = def();
+    const dig = buildStepDigest(
+      [step([battleEvent(a, d, { hit: true, damage: 2, splashHits: splash })], [a, d])], [], DEPS);
+    assert.equal(dig[0].entries[0].splashHits.length, 2);
+    assert.equal(dig[0].entries[0].splashHits[1].killed, true);
+  });
+
+  test('buildOutcomeSummary calls out each splash victim', () => {
+    const o = buildOutcomeSummary({
+      outcomeKind: 'hit', atkRoll: 8, defRoll: 3,
+      actor: { name: 'Brute' }, target: { name: 'Mary Reed' },
+      targetDmg: 2, actorDmg: 0, killed: false,
+      splashHits: splash,
+    });
+    const joined = o.lines.join(' | ');
+    assert.match(joined, /Zombie .*1 splash/);
+    assert.match(joined, /Minion/);
+    assert.match(joined, /slain/i);
+  });
+
+  test('no splash → no splash lines', () => {
+    const o = buildOutcomeSummary({
+      outcomeKind: 'hit', atkRoll: 8, defRoll: 3,
+      actor: { name: 'Brute' }, target: { name: 'Mary Reed' },
+      targetDmg: 2, actorDmg: 0, killed: false,
+    });
+    assert.ok(!o.lines.some(l => /splash/i.test(l)));
   });
 });

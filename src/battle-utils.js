@@ -120,7 +120,10 @@ function _aggregateBattlePairs(steps, ResEventType, PlanActionType) {
       // result.killed, which flags the target). Lets compileTurnBattlePairs
       // credit a death to the one fight that caused it, so a unit that fought
       // several opponents isn't shown dead in every pair (carry: double skull).
-      pairMap.set(key, { key, snapA, snapB, hpLostByA: 0, hpLostByB: 0, killedIds: new Set() });
+      pairMap.set(key, {
+        key, snapA, snapB, hpLostByA: 0, hpLostByB: 0, killedIds: new Set(),
+        splashById: new Map(),
+      });
     }
     const pair = pairMap.get(key);
     if (actorSnap.id === idA) {
@@ -131,6 +134,20 @@ function _aggregateBattlePairs(steps, ResEventType, PlanActionType) {
       pair.hpLostByB += result.counterDmg ?? 0;
     }
     if (result.killed) pair.killedIds.add(targetSnap.id);
+    // Splash victims (brute blast) ride on the pair whose battle blasted them.
+    for (const sh of result.splashHits ?? []) {
+      const prev = pair.splashById.get(sh.id);
+      if (prev) {
+        prev.hpLost += sh.damage ?? 1;
+        prev.diedInSplash = prev.diedInSplash || !!sh.killed;
+      } else {
+        pair.splashById.set(sh.id, {
+          id: sh.id, type: sh.type, title: null,
+          name: sh.name ?? sh.type ?? 'Unit', color: null,
+          hpLost: sh.damage ?? 1, diedInSplash: !!sh.killed,
+        });
+      }
+    }
   }
   return [...pairMap.values()];
 }
@@ -198,6 +215,14 @@ export function compileTurnBattlePairs(steps, finalEntities, ResEventType, PlanA
   return pairs.map((p) => ({
     a: unit(p.snapA, p.hpLostByA, killedHere(p.snapA, p)),
     b: unit(p.snapB, p.hpLostByB, killedHere(p.snapB, p)),
+    // Splash victims under the pair that blasted them. Skull dedup shares the
+    // pair members' `shown` set — a victim that died in (and was credited to)
+    // its own fight isn't double-skulled here.
+    splash: [...p.splashById.values()].map(({ diedInSplash, ...u }) => {
+      const killed = diedInSplash && !shown.has(u.id);
+      if (killed) shown.add(u.id);
+      return { ...u, killed };
+    }),
   }));
 }
 

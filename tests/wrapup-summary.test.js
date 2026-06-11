@@ -169,3 +169,42 @@ describe('combat-tester — battleWrapupPair', () => {
     assert.ok(html.includes('wrapup-combat'));
   });
 });
+
+describe('wrapup-summary — splash row', () => {
+  test('a pair with splash victims renders a splash sub-row with each victim', () => {
+    const combats = [{
+      a: unit({ id: 'h', name: 'Brute', hpLost: 0 }),
+      b: unit({ id: 'm1', name: 'minion', hpLost: 4 }),
+      splash: [
+        unit({ id: 'm2', name: 'minion2', hpLost: 1 }),
+        unit({ id: 'm3', name: 'minion3', hpLost: 1, killed: true }),
+      ],
+    }];
+    const html = buildWrapupCombatsHtml(combats, glyphIcon);
+    assert.ok(html.includes('wrapup-splash'), 'splash sub-row rendered');
+    assert.ok(html.includes('💢'), 'splash glyph present');
+    assert.ok(html.includes('☠'), 'splash kill skull shown');
+  });
+
+  test('no splash → no splash row', () => {
+    const combats = [{ a: unit({ id: 1 }), b: unit({ id: 2, hpLost: 1 }) }];
+    const html = buildWrapupCombatsHtml(combats, glyphIcon);
+    assert.ok(!html.includes('wrapup-splash'));
+  });
+
+  test('condensed (>3 combats) casualties fold splash victims in', () => {
+    const pair = (i, splash = []) => ({
+      a: unit({ id: `a${i}`, name: `a${i}` }),
+      b: unit({ id: `b${i}`, name: `b${i}`, hpLost: 1 }),
+      splash,
+    });
+    const combats = [
+      pair(1, [unit({ id: 'sv', name: 'sv', hpLost: 1 })]),
+      pair(2), pair(3), pair(4),
+    ];
+    const html = buildWrapupCombatsHtml(combats, glyphIcon);
+    assert.ok(html.includes('wrapup-casualties'));
+    // The splash victim is among the aggregated casualties.
+    assert.ok((html.match(/wrapup-unit\b/g) ?? []).length >= 5);
+  });
+});
