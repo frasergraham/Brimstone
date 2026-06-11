@@ -1889,13 +1889,24 @@ export function shouldAnimateFocus(curTarget, curRadius, newTarget, newRadius, e
  *
  *  Note this starts from `current`, not the attacker's hex centre — so a
  *  unit that's mid-slide (or off-centre) lunges from where it actually is,
- *  with no pre-snap "pop" to the hex centre. */
-export function computeLungeTarget(current, target, fraction = LUNGE_FRACTION) {
+ *  with no pre-snap "pop" to the hex centre.
+ *
+ *  The slide is capped at `maxDist` (default LUNGE_MAX_WORLD — what an
+ *  adjacent-hex strike travels) so a lunge at a distant hex (stale whiff
+ *  target, fled quarry) leans in the right direction instead of sliding the
+ *  attacker across multiple hexes the rules never moved it through. */
+export function computeLungeTarget(current, target, fraction = LUNGE_FRACTION, maxDist = LUNGE_MAX_WORLD) {
   const f = Number.isFinite(fraction) ? fraction : LUNGE_FRACTION;
-  return {
-    x: current.x + f * (target.x - current.x),
-    z: current.z + f * (target.z - current.z),
-  };
+  let dx = f * (target.x - current.x);
+  let dz = f * (target.z - current.z);
+  const cap = Number.isFinite(maxDist) ? maxDist : Infinity;
+  const d = Math.hypot(dx, dz);
+  if (d > cap) {
+    const s = cap / d;
+    dx *= s;
+    dz *= s;
+  }
+  return { x: current.x + dx, z: current.z + dz };
 }
 
 /** Set `receiveShadows = true` on every (non-null) mesh in the iterable.
@@ -10658,6 +10669,7 @@ export class Renderer3D {
     this.clearAllLungeAnims(true);
     this.clearAllProjectileAnims();
     this.clearFlashes();
+    this.clearSpeechBubbles();
     if (this._scene) {
       for (const standee of this._entityStandees.values()) {
         this._scene.stopAnimation(standee.plane);
@@ -11366,6 +11378,107 @@ export class Renderer3D {
       });
     });
     return this._trackAnim(promise);
+  }
+
+  // ─── Conversation speech bubbles ─────────────────────────────────────────
+
+  /** Bubble bottom sits just above the tallest token — shared by
+   *  showSpeechBubble (placement) and speechBubbleFrameExtent (framing). */
+  static _speechBubbleBaseY() {
+    return STANDEE_BASE_Y_OFFSET
+      + STANDEE_BASE_THICKNESS
+      + STANDEE_CONE_HEIGHT * STANDEE_LEADER_HEIGHT_MUL
+      + STANDEE_SPHERE_DIAMETER * STANDEE_LEADER_WIDTH_MUL
+      + 0.3;
+  }
+
+  /** World height a worst-case speech bubble's TOP reaches above a standee's
+   *  anchor — passed as `cardExtent` to frameEntities so conversation framing
+   *  reserves headroom and the dialog never clips off the top of the screen.
+   *  Mirrors combatCardFrameExtent for the dice readout. */
+  speechBubbleFrameExtent() {
+    const maxTexH = SPEECH_BUBBLE_PAD_PX * 2 + SPEECH_BUBBLE_NAME_PX
+      + SPEECH_BUBBLE_MAX_LINES * SPEECH_BUBBLE_LINE_PX + 12;
+    const maxPlaneH = SPEECH_BUBBLE_PLANE_WIDTH * (maxTexH / SPEECH_BUBBLE_TEX_WIDTH);
+    return Renderer3D._speechBubbleBaseY() + maxPlaneH;
+  }
+
+  /** Persistent dialog bubble above a speaking entity during a campaign
+   *  conversation. Unlike `_spawnFloatingText` it does NOT animate or
+   *  auto-fade — it stays until the returned handle's `dispose()` is called
+   *  (the conversation player disposes it when the line advances). Accepts an
+   *  entity id or a `{col,row}` hex (REPLAY after the speaker despawned).
+   *  Returns `{ dispose() }`; a no-op handle when Babylon isn't ready. */
+  showSpeechBubble(entityIdOrHex, speakerName, text) {
+    if (!this._scene || !this._babylon || typeof document === 'undefined') {
+      return { dispose() {} };
+    }
+    const BABYLON = this._babylon;
+
+    let pos = null;
+    if (entityIdOrHex && typeof entityIdOrHex === 'object') {
+      pos = hexToWorld(entityIdOrHex.col, entityIdOrHex.row);
+    } else {
+      pos = this._entityWorldPos(entityIdOrHex);
+    }
+    if (!pos) return { dispose() {} };
+
+    const lines = wrapSpeechText(String(text ?? ''), SPEECH_BUBBLE_WRAP_CHARS)
+      .slice(0, SPEECH_BUBBLE_MAX_LINES);
+    const texH = SPEECH_BUBBLE_PAD_PX * 2 + SPEECH_BUBBLE_NAME_PX
+      + lines.length * SPEECH_BUBBLE_LINE_PX + 12;
+    const tex = new BABYLON.DynamicTexture(
+      `speechTex_${Date.now()}`,
+      { width: SPEECH_BUBBLE_TEX_WIDTH, height: texH },
+      this._scene,
+      false,
+    );
+    tex.hasAlpha = true;
+    paintSpeechBubble(tex.getContext(), {
+      width: SPEECH_BUBBLE_TEX_WIDTH,
+      height: texH,
+      name: speakerName,
+      lines,
+    });
+    tex.update();
+
+    const planeW = SPEECH_BUBBLE_PLANE_WIDTH;
+    const planeH = planeW * (texH / SPEECH_BUBBLE_TEX_WIDTH);
+    const plane = BABYLON.MeshBuilder.CreatePlane(
+      `speech_${Date.now()}`, { width: planeW, height: planeH }, this._scene);
+    plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+    plane.isPickable = false;
+    // Same group as floaters/unit badges — never hidden by terrain/standees.
+    plane.renderingGroupId = 2;
+    const mat = new BABYLON.StandardMaterial(`speechMat_${plane.uniqueId}`, this._scene);
+    mat.diffuseTexture = tex;
+    mat.opacityTexture = tex;
+    applyFlatUnitIconMaterial(BABYLON, mat);
+    plane.material = mat;
+
+    // Bubble bottom sits just above the tallest token, same anchor as floaters.
+    const baseY = Renderer3D._speechBubbleBaseY();
+    plane.position.set(pos.x, baseY + planeH / 2, pos.z);
+
+    const handle = {
+      dispose: () => {
+        this._speechBubbles?.delete(handle);
+        plane.dispose();
+        mat.dispose();
+        tex.dispose();
+      },
+    };
+    (this._speechBubbles ??= new Set()).add(handle);
+    return handle;
+  }
+
+  /** Defensive sweep — dispose every live speech bubble (conversation player
+   *  calls this in its finally block; clearAnimations() also sweeps so an
+   *  aborted round never leaks a bubble). */
+  clearSpeechBubbles() {
+    if (!this._speechBubbles) return;
+    for (const h of [...this._speechBubbles]) h.dispose();
+    this._speechBubbles.clear();
   }
 
   /** G1 redesign — spawn a single big-number "combat readout" above a
@@ -17272,6 +17385,13 @@ export const PUNCH_IMPACT_FRAC = 0.55;
  *  for an "attack" pose without overlapping the target token. */
 export const LUNGE_FRACTION = 0.75;
 
+/** Hard cap (world units) on how far a lunge slides — LUNGE_FRACTION of one
+ *  hex of separation (adjacent centres are SQRT3 * HEX_RADIUS_WORLD apart).
+ *  Combat is resolved at the attacker's range, so the standee should never
+ *  visually travel further than an adjacent-hex strike, even when the lunge
+ *  aims at a distant hex (fled target / stale whiff hex). */
+export const LUNGE_MAX_WORLD = LUNGE_FRACTION * Math.sqrt(3) * HEX_RADIUS_WORLD;
+
 /** Per-speed-mode multipliers applied to MOVE_ANIM_MS and friends.
  *  setPlaybackSpeed('cinematic'|'fast'|'vfast') reads from here. Fast
  *  modes compress the cone-slide AND scale walkGroup.speedRatio in
@@ -18178,6 +18298,70 @@ export function paintFloaterText(ctx, opts) {
 
   ctx.fillStyle = fillColor;
   ctx.fillText(text, cx, cy);
+}
+
+// ─── Speech-bubble paint (conversation dialog billboards) ────────────────────
+
+export const SPEECH_BUBBLE_TEX_WIDTH   = 512;
+export const SPEECH_BUBBLE_WRAP_CHARS  = 30;
+export const SPEECH_BUBBLE_MAX_LINES   = 6;
+export const SPEECH_BUBBLE_NAME_PX     = 38;
+export const SPEECH_BUBBLE_LINE_PX     = 34;
+export const SPEECH_BUBBLE_PAD_PX      = 22;
+export const SPEECH_BUBBLE_PLANE_WIDTH = 3.2;
+
+/** Pure greedy word wrap by character budget (canvas-free so the conversation
+ *  player and tests can size bubbles without a DOM). Words longer than the
+ *  budget land on their own line rather than being split. */
+export function wrapSpeechText(text, maxChars = SPEECH_BUBBLE_WRAP_CHARS) {
+  const words = String(text ?? '').split(/\s+/).filter(Boolean);
+  const lines = [];
+  let cur = '';
+  for (const w of words) {
+    if (cur === '') cur = w;
+    else if (cur.length + 1 + w.length <= maxChars) cur += ` ${w}`;
+    else { lines.push(cur); cur = w; }
+  }
+  if (cur !== '') lines.push(cur);
+  return lines;
+}
+
+/** Paint a dialog bubble: rounded dark panel, gold border, accent speaker
+ *  name, pre-wrapped body lines. Exported for tests (canvas ctx injectable). */
+export function paintSpeechBubble(ctx, opts) {
+  const { width, height, name = '', lines = [] } = opts;
+  ctx.clearRect(0, 0, width, height);
+
+  const r = 18;
+  const x = 3, y = 3, w = width - 6, h = height - 6;
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(16, 12, 10, 0.88)';
+  ctx.fill();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = '#c9a227';
+  ctx.stroke();
+
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  let ty = SPEECH_BUBBLE_PAD_PX;
+  if (name) {
+    ctx.font = `700 ${SPEECH_BUBBLE_NAME_PX - 8}px Georgia, serif`;
+    ctx.fillStyle = '#e8c558';
+    ctx.fillText(name, SPEECH_BUBBLE_PAD_PX, ty);
+    ty += SPEECH_BUBBLE_NAME_PX;
+  }
+  ctx.font = `400 ${SPEECH_BUBBLE_LINE_PX - 8}px Georgia, serif`;
+  ctx.fillStyle = '#f2e8d8';
+  for (const line of lines) {
+    ctx.fillText(line, SPEECH_BUBBLE_PAD_PX, ty);
+    ty += SPEECH_BUBBLE_LINE_PX;
+  }
 }
 
 /**

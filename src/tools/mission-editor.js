@@ -1582,6 +1582,47 @@ export function moveStoryTrigger(meta, idx, dir) {
   return meta;
 }
 
+// ── npcs / conversations list ops (campaign conversation system) ─────────────
+// Scripted NPCs and conversations ride in `meta` (populateFromMission keeps
+// every non-map field there), so these are plain list ops like the
+// storyTrigger ones above. The conversation markdown files themselves are
+// hand-authored under src/campaign/conversations/ — the editor only
+// references them by file id.
+
+/** Append a scripted NPC def. `entry` overrides fields. */
+export function addNpc(meta, entry = {}) {
+  if (!Array.isArray(meta.npcs)) meta.npcs = [];
+  meta.npcs.push({ id: `npc_${meta.npcs.length + 1}`, survivorName: null, col: 0, row: 0, ...entry });
+  return meta;
+}
+
+export function removeNpc(meta, idx) {
+  if (Array.isArray(meta.npcs) && idx >= 0 && idx < meta.npcs.length) {
+    meta.npcs.splice(idx, 1);
+  }
+  return meta;
+}
+
+/** Append a conversation def. `entry` overrides fields. */
+export function addConversation(meta, entry = {}) {
+  if (!Array.isArray(meta.conversations)) meta.conversations = [];
+  meta.conversations.push({
+    id: `conversation_${meta.conversations.length + 1}`,
+    file: '',
+    bindings: {},
+    onComplete: [],
+    ...entry,
+  });
+  return meta;
+}
+
+export function removeConversation(meta, idx) {
+  if (Array.isArray(meta.conversations) && idx >= 0 && idx < meta.conversations.length) {
+    meta.conversations.splice(idx, 1);
+  }
+  return meta;
+}
+
 // ── waves list ops ────────────────────────────────────────────────────────────
 
 /** Append a wave (round-triggered by default). `wave` overrides fields. */

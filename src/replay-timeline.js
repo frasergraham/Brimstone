@@ -58,8 +58,12 @@ export function buildRollRows(result, ranged = false) {
   const bd = result?.breakdown;
   if (!bd || result?.attackRoll == null || result?.defenseRoll == null) return null;
 
-  const atkStat = (bd.atkBaseStat ?? 0) + (bd.atkWeaponMod ?? 0) + (bd.atkAbilityMod ?? 0) + (bd.atkEffectMod ?? 0);
-  const defStat = (bd.defBaseStat ?? 0) + (bd.defWeaponMod ?? 0) + (bd.defAbilityMod ?? 0) + (bd.defEffectMod ?? 0);
+  // The weapon's contribution gets its own named row ("sword +2") so the
+  // player can see what their weapon added to the roll; the remaining
+  // intrinsic mods stay folded into the ATK/DEF stat row.
+  const atkStat = (bd.atkBaseStat ?? 0) + (bd.atkAbilityMod ?? 0) + (bd.atkEffectMod ?? 0);
+  const defStat = (bd.defBaseStat ?? 0) + (bd.defAbilityMod ?? 0) + (bd.defEffectMod ?? 0);
+  const weaponLabel = (id) => id ? String(id).replace(/_/g, ' ') : 'weapon';
   const terms = (pairs) => pairs.filter(([, v]) => v).map(([label, val]) => ({ label, val }));
 
   const notes = [];
@@ -80,6 +84,7 @@ export function buildRollRows(result, ranged = false) {
       },
       terms: terms([
         ['ATK', atkStat],
+        [weaponLabel(bd.atkWeaponId), bd.atkWeaponMod],
         ['silver', bd.atkAttackBonus],
         ['gang-up', bd.atkGangupFlat],
         ['night', bd.phaseBonus],
@@ -97,6 +102,7 @@ export function buildRollRows(result, ranged = false) {
       },
       terms: terms([
         ['DEF', defStat],
+        [weaponLabel(bd.defWeaponId), bd.defWeaponMod],
         ['bonus', bd.defDefenseBonus],
         ['allies', bd.defGangupFlat],
         ['fort', bd.fortBonus],
@@ -279,6 +285,34 @@ export function isEventVisible(ev, ents, isVisible, { PlanActionType: PA, ResEve
  *   fogged step yields an empty `entries` array so column count tracks the
  *   animation's step count (keeps the slide aligned).
  */
+/**
+ * Build the single-column digest for a campaign conversation turn card. Same
+ * column shape as buildStepDigest output so ui.showReplayTimeline renders it
+ * unchanged; the `kind: 'conversation'` flag drives the special card chrome
+ * (💬 header + SKIP/REPLAY footer button). stepIndex is a string key so a
+ * mid-replay insert never collides with a numeric resolution step.
+ *
+ * @param {{ id, title, lines }} convo — parsed conversation (conversation-parser.js).
+ * @param {Map<string, object>|object[]} participants — bound role→entity map
+ *   (or a plain entity array); the first two become the card's actor/target.
+ */
+export function buildConversationDigest(convo, participants) {
+  const ents = participants instanceof Map ? [...participants.values()] : [...(participants ?? [])];
+  return [{
+    stepIndex: `conv:${convo.id}`,
+    kind:      'conversation',
+    title:     convo.title ?? convo.id,
+    entries: [{
+      entityId:   ents[0]?.id ?? null,
+      actor:      unitRef(ents[0] ?? null),
+      target:     unitRef(ents[1] ?? null),
+      actionType: 'conversation',
+      label:      'TALK',
+      lineCount:  convo.lines?.length ?? 0,
+    }],
+  }];
+}
+
 export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionType, ResEventType } = {}) {
   const vis = isVisible || (() => true);
   const PA = PlanActionType;
@@ -365,7 +399,9 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
           ranged,
           outcomeKind: null,
           targetDmg: 0, actorDmg: 0, killed: false,
-          note:      { text: 'NO TARGET', kind: 'info' },
+          // A fled target (alive, moved out of reach) reads differently from
+          // an empty-hex whiff — the quarry escaped, not "nothing was there".
+          note:      { text: ev.targetFled ? 'TARGET FLED' : 'NO TARGET', kind: 'info' },
         });
         continue;
       }

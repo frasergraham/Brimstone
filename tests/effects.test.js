@@ -353,7 +353,10 @@ describe('combat integration', () => {
     gs.entities.push(hero, m1, m2);
     gs.hero = hero;
 
-    gs.setForcedDice(6, 1, 6, 1);
+    // Per battle the dice queue is consumed as [atk die, def die, then the
+    // attacker's 2D6 weapon-damage roll]. 6 vs 1 crushes; the 1-HP minion dies
+    // on any damage, so the two damage dice can be anything.
+    gs.setForcedDice(6, 1, 3, 3, /* battle 2 */ 6, 1, 3, 3);
     executeBattle(gs, hero, m1);
     assert.equal(hasEffect(hero, 'frenzied'), false, 'no frenzy after first kill');
     hero.col = 8; hero.row = 8;

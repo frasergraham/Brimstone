@@ -1454,9 +1454,18 @@ describe('mission story triggers and loot overrides', () => {
       if (!m.storyTriggers) continue;
       for (const t of m.storyTriggers) {
         assert.ok(t.type === 'round' || t.type === 'area', `${m.id}: trigger must be round or area`);
-        assert.ok(t.title, `${m.id}: trigger must have title`);
-        assert.ok(t.text, `${m.id}: trigger must have text`);
-        assert.ok(t.flag, `${m.id}: trigger must have flag`);
+        if (t.conversation) {
+          // Conversation trigger: must reference a declared conversation; the
+          // flag is optional (no flag = replays every mission attempt).
+          assert.ok(
+            (m.conversations ?? []).some(c => c.id === t.conversation),
+            `${m.id}: trigger references unknown conversation "${t.conversation}"`,
+          );
+        } else {
+          assert.ok(t.title, `${m.id}: trigger must have title`);
+          assert.ok(t.text, `${m.id}: trigger must have text`);
+          assert.ok(t.flag, `${m.id}: trigger must have flag`);
+        }
         if (t.type === 'round') assert.ok(typeof t.round === 'number', `${m.id}: round trigger needs round`);
         if (t.type === 'area') assert.ok(Array.isArray(t.hexes), `${m.id}: area trigger needs hexes`);
       }

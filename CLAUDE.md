@@ -1,5 +1,7 @@
 # Brimstone — Claude Context
 
+> **⚠ Visual work MUST be validated with the `verifier-browser` skill** (`.claude/skills/verifier-browser/`): run the real game in headless Chromium, capture screenshots, and read them before pushing. Any change to the 3D renderer, UI overlays/HUD, replay/conversation presentation, `styles.css`, or `index.html` counts as visual work. See Guideline 7.
+
 ## Development Guidelines
 
 These directives apply to all code changes — follow them without exception.
@@ -43,6 +45,10 @@ These directives apply to all code changes — follow them without exception.
 
 ### 6. Database backend parity
 - `server/db/` has intentionally duplicated SQLite and Postgres implementations. **Any change under `server/db/sqlite/` must land with the matching change under `server/db/postgres/` in the same commit** (and vice versa) — see "Database Layer" below.
+
+### 7. Visual changes require browser verification
+- Any change to the 3D renderer, UI overlays/HUD, replay/conversation presentation, `styles.css`, or `index.html` must be verified by **running the game and looking at screenshots** before pushing — unit tests can't see a clipped billboard or a camera-framing bug.
+- Use the **`verifier-browser` skill** (`.claude/skills/verifier-browser/`): it drives the real game in headless Chromium (SwiftShader WebGL) via `scripts/verify/browser-harness.mjs`, captures screenshots + console errors, and documents the menu/replay selectors. Capture before/after screenshots for fixes, and actually read the images.
 
 ---
 

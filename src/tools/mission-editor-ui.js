@@ -46,6 +46,7 @@ import {
 import {
   createMissionEditor, createPreviewController, EditorTool, ENEMY_UNIT_TYPES,
   addStoryTrigger, removeStoryTrigger,
+  addNpc, removeNpc, addConversation, removeConversation,
   addWave, removeWave, populateFromMission, CreationMode,
   valuePanelKind, ToolValueKind, createLayerVisibility, showStructures,
   roadNodeMarkersVisible, stripTileOverlays, mapSizePreset,
@@ -1245,6 +1246,34 @@ function buildTimelinePane(doc, host, editor, setStatus) {
   if (model.offRoundWaves.length) {
     host.append(timelineOffWavesLane(doc, model.offRoundWaves, editor, setStatus));
   }
+  host.append(timelineConversationsLane(doc, meta, editor, setStatus));
+}
+
+// Scripted NPCs + conversations — campaign cutscene content. Conversations are
+// fired from story triggers (pick one in a trigger card's Conversation select);
+// their markdown lives in src/campaign/conversations/<file>.md (hand-authored —
+// the editor only references it by file id).
+function timelineConversationsLane(doc, meta, editor, setStatus) {
+  const sec = section(doc, 'NPCs & Conversations');
+  sec.classList.add('e-tl-lane');
+  sec.append(hint(doc,
+    'Scripted NPCs spawn at mission start; conversations play during replay when a '
+    + 'story trigger fires them. Dialog markdown lives in src/campaign/conversations/.'));
+  (meta.npcs ?? []).forEach((npc, index) => {
+    sec.append(npcCard(doc, npc, index,
+      { remove: () => editor.editMeta(m => removeNpc(m, index)) }));
+  });
+  (meta.conversations ?? []).forEach((c, index) => {
+    sec.append(conversationCard(doc, c, index,
+      { remove: () => editor.editMeta(m => removeConversation(m, index)) }, setStatus));
+  });
+  sec.append(
+    actionBtn(doc, '+ NPC', () => editor.editMeta(m => addNpc(m)),
+      'Add a scripted NPC (spawned at mission start, view-only in game)'),
+    actionBtn(doc, '+ Conversation', () => editor.editMeta(m => addConversation(m)),
+      'Add a conversation (reference its markdown file id, bind roles to hero/npc)'),
+  );
+  return sec;
 }
 
 // One round row: phase rail (left) + that round's event cards & add buttons.
@@ -1268,9 +1297,10 @@ function timelineRoundRow(doc, rd, editor, setStatus) {
   const body = doc.createElement('div');
   body.className = 'e-tl-events';
   if (!rd.story.length && !rd.waves.length) body.append(hint(doc, 'No events this round.'));
+  const convIds = (editor.getMeta().conversations ?? []).map(c => c.id);
   for (const { index, trigger } of rd.story) {
     body.append(storyTriggerCard(doc, trigger, index,
-      { remove: () => editor.editMeta(m => removeStoryTrigger(m, index)) }, setStatus));
+      { remove: () => editor.editMeta(m => removeStoryTrigger(m, index)) }, setStatus, convIds));
   }
   for (const { index, wave } of rd.waves) {
     body.append(waveCard(doc, wave, index,
@@ -1296,9 +1326,10 @@ function timelineAreaLane(doc, areaTriggers, editor, setStatus) {
   const sec = section(doc, 'On-Enter / Area Triggers');
   sec.classList.add('e-tl-lane');
   sec.append(hint(doc, 'Fire when the player enters the listed hexes — not tied to a round.'));
+  const convIds = (editor.getMeta().conversations ?? []).map(c => c.id);
   for (const { index, trigger } of areaTriggers) {
     sec.append(storyTriggerCard(doc, trigger, index,
-      { remove: () => editor.editMeta(m => removeStoryTrigger(m, index)) }, setStatus));
+      { remove: () => editor.editMeta(m => removeStoryTrigger(m, index)) }, setStatus, convIds));
   }
   sec.append(actionBtn(doc, '+ Area Trigger',
     () => editor.editMeta(m => addStoryTrigger(m, { type: 'area', hexes: [] })),
@@ -2440,7 +2471,7 @@ function objectiveEditor(doc, label, current, onChange, setStatus) {
   return card;
 }
 
-function storyTriggerCard(doc, tr, idx, actions, setStatus) {
+function storyTriggerCard(doc, tr, idx, actions, setStatus, convIds = []) {
   const card = doc.createElement('div');
   card.className = 'e-card';
 
@@ -2450,6 +2481,13 @@ function storyTriggerCard(doc, tr, idx, actions, setStatus) {
   } else {
     card.append(numRow(doc, 'Round', tr.round ?? 1, v => { tr.round = v; }));
   }
+  // A trigger fires EITHER a conversation (pick one declared in the
+  // Conversations lane) OR a title/text story modal.
+  if (convIds.length) {
+    card.append(selRow(doc, 'Conversation', ['', ...convIds], tr.conversation ?? '', v => {
+      if (v) tr.conversation = v; else delete tr.conversation;
+    }));
+  }
   card.append(
     textRow(doc, 'Title', tr.title ?? '', v => { tr.title = v; }),
     textArea(doc, 'Text', tr.text ?? '', v => { tr.text = v; }),
@@ -2457,6 +2495,36 @@ function storyTriggerCard(doc, tr, idx, actions, setStatus) {
     selRow(doc, 'Condition', ['', ...conditionKeys()], tr.condition ?? '', v => {
       if (v) tr.condition = v; else delete tr.condition;
     }),
+  );
+  card.append(cardButtons(doc, actions));
+  return card;
+}
+
+// Scripted NPC card — id, roster character, spawn hex.
+function npcCard(doc, npc, idx, actions) {
+  const card = doc.createElement('div');
+  card.className = 'e-card';
+  const names = ['', ...survivorPickerOptions().slice(1).map(o => o.id)];
+  card.append(
+    textRow(doc, 'NPC Id', npc.id ?? '', v => { npc.id = v; }),
+    selRow(doc, 'Character', names, npc.survivorName ?? '', v => { npc.survivorName = v || null; }),
+    textRow(doc, 'Title', npc.displayTitle ?? '', v => { npc.displayTitle = v || undefined; }),
+    numRow(doc, 'Col', npc.col ?? 0, v => { npc.col = v; }),
+    numRow(doc, 'Row', npc.row ?? 0, v => { npc.row = v; }),
+  );
+  card.append(cardButtons(doc, actions));
+  return card;
+}
+
+// Conversation card — markdown file ref, role bindings, on-complete actions.
+function conversationCard(doc, c, idx, actions, setStatus) {
+  const card = doc.createElement('div');
+  card.className = 'e-card';
+  card.append(
+    textRow(doc, 'Conversation Id', c.id ?? '', v => { c.id = v; }),
+    textRow(doc, 'File', c.file ?? '', v => { c.file = v; }),
+    jsonRow(doc, 'Bindings', c.bindings ?? {}, v => { c.bindings = v ?? {}; }, setStatus),
+    jsonRow(doc, 'On Complete', c.onComplete ?? [], v => { c.onComplete = v ?? []; }, setStatus),
   );
   card.append(cardButtons(doc, actions));
   return card;

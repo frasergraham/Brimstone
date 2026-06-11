@@ -1632,6 +1632,8 @@ export class UIController {
       : null;
     const clickedEntities = state.entities.filter(e => {
       if (!e.alive || e.owner !== ownerFilter) return false;
+      // Scripted campaign NPCs are never controllable (view-only below).
+      if (e.isNpc) return false;
       // In online MP, only allow selecting entities owned by the local player.
       if (this.myPlayerId && e.ownerId && e.ownerId !== this.myPlayerId) return false;
       const ghostPos = lastGhostPos?.get(e.id);
@@ -1648,6 +1650,8 @@ export class UIController {
         .filter(e => {
           // Enemy faction → always view-only
           if (e.owner !== ownerFilter) return true;
+          // Scripted campaign NPC → view-only
+          if (e.isNpc) return true;
           // Same faction but a different player → ally, view-only
           if (this.myPlayerId && e.ownerId && e.ownerId !== this.myPlayerId) return true;
           return false;
@@ -1818,7 +1822,7 @@ export class UIController {
     if (!state) return [];
     const ownerFilter = this._planMode ? this._planFaction : state.activePlayer;
     const list = state.entities.filter(e => {
-      if (!e.alive || e.owner !== ownerFilter) return false;
+      if (!e.alive || e.owner !== ownerFilter || e.isNpc) return false;
       if (this.myPlayerId && e.ownerId && e.ownerId !== this.myPlayerId) return false;
       return true;
     });
@@ -2124,7 +2128,7 @@ export class UIController {
     }
 
     const ownerCheck = this._planMode ? this._planFaction : state.activePlayer;
-    if (!entity || entity.owner !== ownerCheck || state.gameOver) {
+    if (!entity || entity.owner !== ownerCheck || entity.isNpc || state.gameOver) {
       hideActionPopup(this);
       return;
     }
@@ -2757,6 +2761,7 @@ export class UIController {
            <span class="usb-stat">ATK <span class="usb-stat-val">${entity.getAttack()}</span></span>
            <span class="usb-stat">DEF <span class="usb-stat-val">${entity.getDefense()}</span></span>
            <span class="usb-stat">RNG <span class="usb-stat-val">${entity.getRange()}</span></span>
+           <span class="usb-stat" title="Agility — higher acts earlier each turn">AGI <span class="usb-stat-val">${entity.getAgility()}</span></span>
            ${abilityHtml}
          </span>`
       : '';
@@ -5111,6 +5116,50 @@ export class UIController {
     this._inlineReplayActive = false;
   }
 
+  // ── Off-screen conversation arrow ────────────────────────────────────────
+  // Fixed-camera mode keeps the camera put during conversations; when the
+  // talking hex is outside the viewport, an edge-clamped arrow points at it.
+
+  /** Show (and keep refreshing) the edge arrow toward hex (col,row). Hidden
+   *  automatically whenever the hex is on screen. Refreshes on an interval so
+   *  manual pans in fixed-camera mode keep the direction honest. */
+  showOffscreenArrow(col, row) {
+    this.hideOffscreenArrow();
+    const el = this._el('offscreen-arrow');
+    const canvas = this._el('game-canvas');
+    if (!el || !canvas || !this.renderer?.hexToCanvasPos) return;
+
+    const update = () => {
+      const p = this.renderer.hexToCanvasPos(col, row);
+      // hexToCanvasPos returns render-buffer pixels; scale to CSS pixels.
+      const sx = canvas.clientWidth  / (canvas.width  || canvas.clientWidth  || 1);
+      const sy = canvas.clientHeight / (canvas.height || canvas.clientHeight || 1);
+      const x = p.x * sx, y = p.y * sy;
+      const W = canvas.clientWidth, H = canvas.clientHeight;
+      const MARGIN = 28;
+      const onScreen = x >= MARGIN && x <= W - MARGIN && y >= MARGIN && y <= H - MARGIN;
+      if (onScreen) { el.hidden = true; return; }
+      el.hidden = false;
+      const cx = Math.max(MARGIN, Math.min(W - MARGIN, x));
+      const cy = Math.max(MARGIN, Math.min(H - MARGIN, y));
+      const angle = Math.atan2(y - cy, x - cx) * 180 / Math.PI;
+      el.style.left = `${cx}px`;
+      el.style.top  = `${cy}px`;
+      el.style.transform = `translate(-50%, -50%) rotate(${angle}deg)`;
+    };
+    update();
+    this._offscreenArrowTimer = setInterval(update, 250);
+  }
+
+  hideOffscreenArrow() {
+    if (this._offscreenArrowTimer) {
+      clearInterval(this._offscreenArrowTimer);
+      this._offscreenArrowTimer = null;
+    }
+    const el = this._el('offscreen-arrow');
+    if (el) el.hidden = true;
+  }
+
   // ── Replay timeline overlay ──────────────────────────────────────────────
   // Transparent left-to-right sequence of resolution-step columns built from
   // buildStepDigest (src/replay-timeline.js). Driven by _animateResolutionSteps.
@@ -5180,6 +5229,20 @@ export class UIController {
    *  dots are revealed by CSS when several actions are active at once. */
   _replayColHtml(col, displayNum) {
     const rows = col.entries.map((e, j) => this._replayRowHtml(e, j)).join('');
+    if (col.kind === 'conversation') {
+      const esc = (s) => String(s ?? '')
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      return `<div class="replay-step-col replay-conv-col" data-step="${col.stepIndex}">`
+           + `<div class="replay-step-header">`
+           +   `<div class="replay-step-label">💬 ${esc(col.title)}</div>`
+           + `</div>`
+           + rows
+           + `<div class="replay-conv-btns">`
+           +   `<button class="replay-conv-btn" type="button">SKIP</button>`
+           +   `<button class="replay-conv-continue" type="button" style="display:none">CONTINUE ▶</button>`
+           + `</div>`
+           + `</div>`;
+    }
     return `<div class="replay-step-col" data-step="${col.stepIndex}">`
          + `<div class="replay-step-header">`
          +   `<div class="replay-step-label">Turn ${displayNum}</div>`
@@ -5188,6 +5251,62 @@ export class UIController {
          + rows
          + `<div class="replay-more" aria-hidden="true">…</div>`
          + `</div>`;
+  }
+
+  /**
+   * Flip a conversation card between its live and finished states and (re)wire
+   * its footer buttons: 'playing' → SKIP (jump dialog to the end); 'done' →
+   * REPLAY (re-run the dialog presentation) plus, when an `onContinue` handler
+   * is supplied (mission-intro/turn-0 conversations), a CONTINUE button that
+   * dismisses the card and lets the game proceed to planning. Mid-replay
+   * conversations pass no onContinue — the round resumes on its own.
+   * Targets the card by conversation stepIndex key (`conv:<id>`).
+   */
+  setConversationCardState(convoStepIndex, cardState, { onSkip, onReplay, onContinue } = {}) {
+    const col = this._replayCol(convoStepIndex);
+    const btn = col?.querySelector?.('.replay-conv-btn');
+    const contBtn = col?.querySelector?.('.replay-conv-continue');
+    if (!btn) return;
+    if (cardState === 'done') {
+      btn.textContent = 'REPLAY';
+      btn.onclick = onReplay ?? null;
+      if (contBtn) {
+        contBtn.style.display = onContinue ? '' : 'none';
+        contBtn.onclick = onContinue ?? null;
+      }
+    } else {
+      btn.textContent = 'SKIP';
+      btn.onclick = onSkip ?? null;
+      if (contBtn) contBtn.style.display = 'none';
+    }
+  }
+
+  /**
+   * Insert a column into the live timeline (mid-replay conversation card).
+   * Splices the stored digest after `afterStepIndex` (or after the currently
+   * active card when no match), re-renders, restores the revealed outcomes of
+   * everything before the insert, and activates the new card.
+   */
+  insertReplayTimelineCol(col, afterStepIndex = null) {
+    const digest = this._replayDigest ?? [];
+    let idx = digest.findIndex(c => String(c.stepIndex) === String(afterStepIndex));
+    if (idx < 0) {
+      // Fall back to the active card's position in the digest.
+      const cols = this._replayCols();
+      const activeStep = cols[this._activeReplayOrd ?? 0]?.getAttribute('data-step');
+      idx = digest.findIndex(c => String(c.stepIndex) === activeStep);
+      if (idx < 0) idx = digest.length - 1;
+    }
+    digest.splice(idx + 1, 0, col);
+    this.showReplayTimeline(digest);
+    // Re-rendering resets the reveal animations — everything that already
+    // played stays revealed.
+    const cols = this._replayCols();
+    const newOrd = cols.findIndex(c => c.getAttribute('data-step') === String(col.stepIndex));
+    cols.slice(0, Math.max(0, newOrd)).forEach(c =>
+      c.querySelectorAll('.replay-step-outcome, .replay-roll, .replay-discovered')
+        .forEach(o => o.classList.add('revealed')));
+    this.setReplayTimelineStep(col.stepIndex);
   }
 
   /**

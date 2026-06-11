@@ -5,7 +5,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildStepDigest, buildRollTip, buildRollRows, buildOutcomeSummary, isEventVisible, OutcomeKind } from '../src/replay-timeline.js';
+import { buildStepDigest, buildConversationDigest, buildRollTip, buildRollRows, buildOutcomeSummary, isEventVisible, OutcomeKind } from '../src/replay-timeline.js';
 import { ResEventType } from '../server/resolver.js';
 import { PlanActionType } from '../src/planner.js';
 
@@ -184,6 +184,23 @@ describe('buildStepDigest — move/explore notes', () => {
     assert.equal(e.target, null);
     assert.equal(e.outcomeKind, null);
     assert.deepEqual(e.note, { text: 'NO TARGET', kind: 'info' });
+  });
+
+  test('fled target (ACTION_SKIP with targetFled) gets a "TARGET FLED" card', () => {
+    const h = snap('h1', 'hero', 'hero', 1, 1);
+    const ev = {
+      type: ResEventType.ACTION_SKIP, faction: 'hero',
+      action: { type: PlanActionType.BATTLE_UNIT, entityId: 'h1', targetId: 'm1' },
+      reason: 'Zombie slipped away — out of reach.',
+      targetFled: true,
+      battleSnaps: { actorSnap: { id: 'h1', type: 'hero', owner: 'hero', col: 1, row: 1 }, ranged: false },
+      whiffTarget: { col: 2, row: 1 },
+    };
+    const d = buildStepDigest([step([ev], [h])], [], DEPS);
+    const e = d[0].entries[0];
+    assert.equal(e.label, 'ATTACK');
+    assert.equal(e.target, null);
+    assert.deepEqual(e.note, { text: 'TARGET FLED', kind: 'info' });
   });
 
   test('explore lists the actual loot icons (not "+N RESOURCE")', () => {
@@ -504,6 +521,21 @@ describe('buildRollRows', () => {
     assert.match(tip, /Attack 9 = die 4 \(rolled 4·2·1, kept best of 3\) \+3 ATK \+2 gang-up/);
   });
 
+  test('weapon contribution is a named term, not folded into the stat sum', () => {
+    const armed = JSON.parse(JSON.stringify(result));
+    armed.breakdown.atkWeaponMod = 2;
+    armed.breakdown.atkWeaponId = 'sword';
+    armed.breakdown.defWeaponMod = 1;
+    armed.breakdown.defWeaponId = 'axe';
+    const rows = buildRollRows(armed, false);
+    assert.deepEqual(rows.atk.terms[1], { label: 'sword', val: 2 });
+    assert.equal(rows.atk.terms[0].val, 3); // base stat stays unfolded
+    assert.deepEqual(rows.def.terms[1], { label: 'axe', val: 1 });
+    // Legacy replays without the weapon id still label the row.
+    delete armed.breakdown.atkWeaponId;
+    assert.deepEqual(buildRollRows(armed, false).atk.terms[1], { label: 'weapon', val: 2 });
+  });
+
   test('returns null without breakdown data', () => {
     assert.equal(buildRollRows({ attackRoll: 5, defenseRoll: 3 }), null);
     assert.equal(buildRollRows(null), null);
@@ -599,5 +631,39 @@ describe('buildOutcomeSummary', () => {
   test('returns null without rolls or outcome', () => {
     assert.equal(buildOutcomeSummary(null), null);
     assert.equal(buildOutcomeSummary({ outcomeKind: 'hit' }), null);
+  });
+});
+
+// ── buildConversationDigest (campaign conversation turn card) ────────────────
+
+describe('buildConversationDigest', () => {
+  const convo = {
+    id: 'intro',
+    title: 'A Voice at the Inn Door',
+    lines: [{ role: 'a', text: 'x' }, { role: 'b', text: 'y' }],
+  };
+  const hero = { id: 'e1', type: 'paladin', title: 'Paladin', color: '#d4a72c' };
+  const npc  = { id: 'e2', type: 'survivor', name: "John O'Connor", title: 'Innkeeper', color: '#8cf' };
+
+  test('builds a single conversation column from a participants Map', () => {
+    const digest = buildConversationDigest(convo, new Map([['a', hero], ['b', npc]]));
+    assert.equal(digest.length, 1);
+    const col = digest[0];
+    assert.equal(col.kind, 'conversation');
+    assert.equal(col.stepIndex, 'conv:intro');
+    assert.equal(col.title, 'A Voice at the Inn Door');
+    assert.equal(col.entries.length, 1);
+    const entry = col.entries[0];
+    assert.equal(entry.actionType, 'conversation');
+    assert.equal(entry.label, 'TALK');
+    assert.equal(entry.lineCount, 2);
+    assert.equal(entry.actor.entityId, 'e1');
+    assert.equal(entry.target.name, "John O'Connor");
+  });
+
+  test('accepts a plain entity array and tolerates a single participant', () => {
+    const digest = buildConversationDigest(convo, [hero]);
+    assert.equal(digest[0].entries[0].actor.entityId, 'e1');
+    assert.equal(digest[0].entries[0].target, null);
   });
 });

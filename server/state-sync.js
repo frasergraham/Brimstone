@@ -85,6 +85,10 @@ export function serializeState(state) {
     // Once-per-round free-equip gate — must survive mid-round resync or a
     // reconnect could let a unit equip twice in one round.
     equippedThisRound: e.equippedThisRound ?? false,
+    // Scripted campaign NPC tag — must survive mid-mission save/resume or the
+    // NPC would become a controllable roster survivor on reload.
+    isNpc:         e.isNpc         ?? false,
+    npcId:         e.npcId         ?? null,
     effects:       Array.isArray(e.effects)
       ? e.effects.map(rec => ({ ...rec }))
       : [],
@@ -285,6 +289,8 @@ export function deserializeState(snap) {
     e.range = ITEMS[e.weapon]?.range ?? 1;
     // Once-per-round equip gate — default false on saves that predate it.
     if (e.equippedThisRound === undefined) e.equippedThisRound = false;
+    // Scripted campaign NPC tag — default off for saves that predate it.
+    if (e.isNpc === undefined) { e.isNpc = false; e.npcId = null; }
     // tags is static per unit type, set by the Entity constructor (which this
     // restore path bypasses). Hydrate from UNIT_TYPES so hasTag() — used by
     // ability targeting and leader-death effects — works on restored entities.

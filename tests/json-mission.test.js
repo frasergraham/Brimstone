@@ -253,6 +253,66 @@ describe('loadMissionJSON — validation', () => {
     parsed.conductor = { scriptKey: 'nope' };
     assert.throws(() => loadMissionJSON(parsed), /unknown conductor\.scriptKey "nope"/);
   });
+
+  // ── npcs[] / conversations[] (campaign conversation system) ───────────────
+
+  function convoFixture() {
+    const parsed = handmadeFixture();
+    parsed.npcs = [{ id: 'innkeeper', survivorName: "John O'Connor", col: 2, row: 3 }];
+    parsed.conversations = [{
+      id: 'intro_talk',
+      file: 'ch1m1-intro',
+      bindings: { hero: 'hero', innkeeper: 'npc:innkeeper' },
+      onComplete: [
+        { action: 'move', npc: 'innkeeper', path: [{ col: 2, row: 2 }] },
+        { action: 'despawn', npc: 'innkeeper' },
+      ],
+    }];
+    parsed.storyTriggers.push({ type: 'round', round: 1, conversation: 'intro_talk' });
+    return parsed;
+  }
+
+  test('accepts well-formed npcs + conversations + conversation trigger', () => {
+    const def = loadMissionJSON(convoFixture());
+    assert.equal(def.npcs.length, 1);
+    assert.equal(def.conversations[0].id, 'intro_talk');
+  });
+
+  test('rejects duplicate / out-of-bounds / id-less npcs', () => {
+    let parsed = convoFixture();
+    parsed.npcs.push({ id: 'innkeeper', col: 1, row: 1 });
+    assert.throws(() => loadMissionJSON(parsed), /duplicate npc id/);
+    parsed = convoFixture();
+    parsed.npcs[0].col = 99;
+    assert.throws(() => loadMissionJSON(parsed), /outside the .* map extent/);
+    parsed = convoFixture();
+    delete parsed.npcs[0].id;
+    assert.throws(() => loadMissionJSON(parsed), /needs a string id/);
+  });
+
+  test('rejects bad conversation defs (binding, npc ref, onComplete)', () => {
+    let parsed = convoFixture();
+    parsed.conversations[0].bindings.innkeeper = 'wizard';
+    assert.throws(() => loadMissionJSON(parsed), /bad binding/);
+    parsed = convoFixture();
+    parsed.conversations[0].bindings.innkeeper = 'npc:nobody';
+    assert.throws(() => loadMissionJSON(parsed), /unknown npc/);
+    parsed = convoFixture();
+    parsed.conversations[0].onComplete[0].action = 'fly';
+    assert.throws(() => loadMissionJSON(parsed), /unknown action/);
+    parsed = convoFixture();
+    parsed.conversations[0].onComplete[0].path = [{ col: 99, row: 0 }];
+    assert.throws(() => loadMissionJSON(parsed), /out of bounds/);
+  });
+
+  test('rejects a trigger referencing an unknown conversation, or with no payload', () => {
+    let parsed = convoFixture();
+    parsed.storyTriggers.at(-1).conversation = 'nope';
+    assert.throws(() => loadMissionJSON(parsed), /unknown conversation "nope"/);
+    parsed = convoFixture();
+    parsed.storyTriggers.push({ type: 'round', round: 2 });
+    assert.throws(() => loadMissionJSON(parsed), /either a "conversation" id or title\/text/);
+  });
 });
 
 // ── conductor-script registry ────────────────────────────────────────────────

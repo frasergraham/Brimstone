@@ -74,9 +74,7 @@
     {
       "type": "round",
       "round": 1,
-      "title": "A Grim Dawn",
-      "text": "The streets of Caleb's Hollow are eerily silent. Through the morning mist, you can make out shambling figures — the dead have risen. The Caleb's Hollow Inn stands behind you, its doors battered but holding. You must clear the village before nightfall.",
-      "flag": "prologue_intro"
+      "conversation": "ch1m1_intro"
     }
   ],
   "survivorStartPositions": [],
@@ -1141,6 +1139,45 @@
       "col": 6,
       "row": 3,
       "overrides": {}
+    }
+  ],
+  "npcs": [
+    {
+      "id": "innkeeper_john",
+      "survivorName": "John O'Connor",
+      "displayTitle": "Innkeeper",
+      "col": 3,
+      "row": 6
+    }
+  ],
+  "conversations": [
+    {
+      "id": "ch1m1_intro",
+      "file": "ch1m1-intro",
+      "bindings": {
+        "hero": "hero",
+        "innkeeper": "npc:innkeeper_john"
+      },
+      "onComplete": [
+        {
+          "action": "move",
+          "npc": "innkeeper_john",
+          "path": [
+            {
+              "col": 2,
+              "row": 5
+            },
+            {
+              "col": 2,
+              "row": 4
+            }
+          ]
+        },
+        {
+          "action": "despawn",
+          "npc": "innkeeper_john"
+        }
+      ]
     }
   ]
 }
