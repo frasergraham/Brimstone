@@ -871,10 +871,8 @@ describe('Power node free spawn (endRound)', () => {
       'Witch on a node should no longer spawn free minions');
   });
 
-  test('hero on a node during NIGHT can spawn a free survivor (33% chance)', () => {
-    // Run multiple trials — with 33% chance, at least one of 20 should spawn
-    let spawned = false;
-    for (let i = 0; i < 20 && !spawned; i++) {
+  test('hero on a node during NIGHT spawns a free survivor when the 33% roll succeeds', () => {
+    const runWithRoll = (roll) => {
       resetRoster();
       const state = new GameState(true, true);
       state.phase = Phase.NIGHT;
@@ -890,17 +888,25 @@ describe('Power node free spawn (endRound)', () => {
         e => e.alive && e.type === EntityType.SURVIVOR
       ).length;
 
-      state.endRound();
+      const orig = Math.random;
+      Math.random = () => roll;
+      try {
+        state.endRound();
+      } finally {
+        Math.random = orig;
+      }
 
       const survivorsAfter = state.entities.filter(
         e => e.alive && e.type === EntityType.SURVIVOR
       ).length;
 
-      if (survivorsAfter > survivorsBefore) spawned = true;
-    }
+      return survivorsAfter - survivorsBefore;
+    };
 
-    assert.ok(spawned,
-      'Hero on a node should be able to spawn a free survivor (33% chance, tested 20 trials)');
+    assert.ok(runWithRoll(0.1) > 0,
+      'Roll below 0.33 should spawn a free survivor at the node');
+    assert.equal(runWithRoll(0.5), 0,
+      'Roll at/above 0.33 should not spawn a survivor');
   });
 });
 

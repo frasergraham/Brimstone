@@ -3739,6 +3739,7 @@ export function pruneAsyncGames() {
 export { _serializeEvents as serializeEventsForTest };
 export { _checkTimeoutTakeovers as checkTimeoutTakeoversForTest };
 export { _recoverFromResolutionError as recoverFromResolutionErrorForTest };
+export { _autoSubmitMissingPlans as autoSubmitMissingPlansForTest };
 
 /** Get async games list for a player (for REST endpoint). */
 export { getAsyncGamesForPlayer };
