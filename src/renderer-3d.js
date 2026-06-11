@@ -1456,35 +1456,71 @@ export function hexToWorld(col, row, radius = HEX_RADIUS_WORLD) {
  *
  * Rules:
  *   - defender re-centres on its hex.
- *   - first `advantageCap` allies per side (in dice / executeBattle order)
- *     move to the shared-edge midpoint.
+ *   - each of the defender hex's 6 edges holds AT MOST ONE participant. The
+ *     attacker (when given) reserves the edge nearest its hex first — its
+ *     lunge freezes there — then the first `advantageCap` allies per side
+ *     (in dice / executeBattle order) each claim the nearest still-free edge.
+ *     An ally adjacent to the defender with no contention therefore lands on
+ *     the classic shared-edge midpoint; contenders spill to neighbouring
+ *     edges instead of stacking on the same spot.
  *   - allies BEYOND the cap stay put: returned with `moves: false` and the
  *     ally's own hex centre as `toX/toZ` (caller can skip them entirely).
+ *     Likewise (degenerate, >6 participants) an ally finding every edge taken
+ *     stays put.
  *
  * Pure helper — takes hex coords, returns world coords. No renderer / scene
  * state touched. Visible for tests.
  *
  * @param {object} opts
  * @param {{id:any, col:number, row:number}} opts.defender
+ * @param {{id:any, col:number, row:number}} [opts.attacker]
  * @param {Array<{id:any, col:number, row:number}>} [opts.attackAllies]
  * @param {Array<{id:any, col:number, row:number}>} [opts.defenseAllies]
  * @param {number} [opts.advantageCap=ADVANTAGE_CAP]
  */
 export function planCombatPositions({
-  defender, attackAllies = [], defenseAllies = [], advantageCap = ADVANTAGE_CAP,
+  defender, attacker = null, attackAllies = [], defenseAllies = [],
+  advantageCap = ADVANTAGE_CAP,
 } = {}) {
   const defCentre = hexToWorld(defender.col, defender.row);
+  // The 6 edge midpoints of the defender's hex — midpoint between the defender
+  // centre and each neighbour centre. fortNeighborOffset (not getNeighbors) so
+  // map-border hexes keep all 6 edges.
+  const edges = [];
+  for (let d = 0; d < 6; d++) {
+    const n = fortNeighborOffset(defender.col, defender.row, d);
+    const c = hexToWorld(n.col, n.row);
+    edges.push({
+      x: (c.x + defCentre.x) * 0.5,
+      z: (c.z + defCentre.z) * 0.5,
+      taken: false,
+    });
+  }
+  const claimNearest = (px, pz) => {
+    let best = null;
+    let bestD = Infinity;
+    for (const e of edges) {
+      if (e.taken) continue;
+      const dist = (e.x - px) ** 2 + (e.z - pz) ** 2;
+      if (dist < bestD) { bestD = dist; best = e; }
+    }
+    if (best) best.taken = true;
+    return best;
+  };
+  if (attacker) {
+    const atkCentre = hexToWorld(attacker.col, attacker.row);
+    claimNearest(atkCentre.x, atkCentre.z);
+  }
   const project = (ally, i) => {
     const allyCentre = hexToWorld(ally.col, ally.row);
     if (i >= advantageCap) {
       return { id: ally.id, toX: allyCentre.x, toZ: allyCentre.z, moves: false };
     }
-    return {
-      id: ally.id,
-      toX: (allyCentre.x + defCentre.x) * 0.5,
-      toZ: (allyCentre.z + defCentre.z) * 0.5,
-      moves: true,
-    };
+    const edge = claimNearest(allyCentre.x, allyCentre.z);
+    if (!edge) {
+      return { id: ally.id, toX: allyCentre.x, toZ: allyCentre.z, moves: false };
+    }
+    return { id: ally.id, toX: edge.x, toZ: edge.z, moves: true };
   };
   return {
     defender: defCentre,
@@ -11212,10 +11248,10 @@ export class Renderer3D {
    *  back to their starting hex. Used by BOTH cinematic and fast/vfast — the
    *  readout/floater presentation differs by speed; the spatial choreography
    *  is identical, with `durMs` compressed in the faster modes. */
-  applyCombatPositioning({ defender, attackAllies = [], defenseAllies = [] } = {}, opts = {}) {
+  applyCombatPositioning({ defender, attacker = null, attackAllies = [], defenseAllies = [] } = {}, opts = {}) {
     if (!this._scene || !this._babylon || !defender) return;
     const durMs = Number.isFinite(opts.durMs) ? opts.durMs : LUNGE_ANIM_MS;
-    const plan = planCombatPositions({ defender, attackAllies, defenseAllies });
+    const plan = planCombatPositions({ defender, attacker, attackAllies, defenseAllies });
     this._animateStandeeTo(defender.id, plan.defender.x, plan.defender.z, durMs);
     for (const a of plan.attackerAllies) {
       if (a.moves) this._animateStandeeTo(a.id, a.toX, a.toZ, durMs);
