@@ -5647,6 +5647,13 @@ img.plan-step-avatar {
   pointer-events: auto;
   cursor: help;
 }
+/* Hovering any action row highlights its involved hexes on the map (blue
+   fill + ghost move arrow). Rows must receive hover despite the timeline
+   ignoring pointers — gated to hover-capable pointers so touch devices keep
+   tapping through the cards to the board. */
+@media (hover: hover) {
+  .replay-step-entry { pointer-events: auto; }
+}
 /* "…" hint shown (collapsed only) when several actions are active at once. */
 .replay-more {
   display: none;
