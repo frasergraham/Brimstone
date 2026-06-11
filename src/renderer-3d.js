@@ -11362,6 +11362,27 @@ export class Renderer3D {
 
   // ─── Conversation speech bubbles ─────────────────────────────────────────
 
+  /** Bubble bottom sits just above the tallest token — shared by
+   *  showSpeechBubble (placement) and speechBubbleFrameExtent (framing). */
+  static _speechBubbleBaseY() {
+    return STANDEE_BASE_Y_OFFSET
+      + STANDEE_BASE_THICKNESS
+      + STANDEE_CONE_HEIGHT * STANDEE_LEADER_HEIGHT_MUL
+      + STANDEE_SPHERE_DIAMETER * STANDEE_LEADER_WIDTH_MUL
+      + 0.3;
+  }
+
+  /** World height a worst-case speech bubble's TOP reaches above a standee's
+   *  anchor — passed as `cardExtent` to frameEntities so conversation framing
+   *  reserves headroom and the dialog never clips off the top of the screen.
+   *  Mirrors combatCardFrameExtent for the dice readout. */
+  speechBubbleFrameExtent() {
+    const maxTexH = SPEECH_BUBBLE_PAD_PX * 2 + SPEECH_BUBBLE_NAME_PX
+      + SPEECH_BUBBLE_MAX_LINES * SPEECH_BUBBLE_LINE_PX + 12;
+    const maxPlaneH = SPEECH_BUBBLE_PLANE_WIDTH * (maxTexH / SPEECH_BUBBLE_TEX_WIDTH);
+    return Renderer3D._speechBubbleBaseY() + maxPlaneH;
+  }
+
   /** Persistent dialog bubble above a speaking entity during a campaign
    *  conversation. Unlike `_spawnFloatingText` it does NOT animate or
    *  auto-fade — it stays until the returned handle's `dispose()` is called
@@ -11416,11 +11437,7 @@ export class Renderer3D {
     plane.material = mat;
 
     // Bubble bottom sits just above the tallest token, same anchor as floaters.
-    const baseY = STANDEE_BASE_Y_OFFSET
-      + STANDEE_BASE_THICKNESS
-      + STANDEE_CONE_HEIGHT * STANDEE_LEADER_HEIGHT_MUL
-      + STANDEE_SPHERE_DIAMETER * STANDEE_LEADER_WIDTH_MUL
-      + 0.3;
+    const baseY = Renderer3D._speechBubbleBaseY();
     plane.position.set(pos.x, baseY + planeH / 2, pos.z);
 
     const handle = {

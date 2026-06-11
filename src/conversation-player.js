@@ -213,7 +213,13 @@ async function _frameOrArrow({ renderer, ui, fixedCam, participantIds, centroid 
   if (!renderer) return;
   if (!fixedCam) {
     if (renderer.frameEntities) {
-      await renderer.frameEntities(participantIds, { padding: 1.3 });
+      // Reserve headroom for the bubbles above the speakers (and a little
+      // extra width — bubbles are ~3 world units wide) so the dialog never
+      // clips off the edge of the screen.
+      await renderer.frameEntities(participantIds, {
+        padding: 1.8,
+        cardExtent: renderer.speechBubbleFrameExtent?.() ?? 0,
+      });
     } else if (renderer.frameHexes && centroid) {
       renderer.frameHexes([centroid], { paddingHexes: 3, maxZoom: 2.0, duration: 400 });
     }
