@@ -29,11 +29,13 @@ export const EFFECTS = Object.freeze({
     id: 'wounded',
     label: 'Wounded',
     icon: '🩸',
-    description: 'Takes extra damage from any source',
-    // Flat surcharge scaled by DAMAGE_SCALE so a wound roughly doubles a
-    // normal hit (≈+7 on an avg-7 strike), as it did pre-scaling (+1 on a 1).
-    damageMods: { takenFlat: DAMAGE_SCALE },
-    defaultDuration: 3,
+    description: 'Takes +1D6 damage from any source this round',
+    // A fresh 1D6 per incoming blow (rolled through the game's deterministic
+    // die stream) — wounds make follow-up damage spikier rather than a flat
+    // guaranteed surcharge, and the window is one round, so the crush
+    // follow-up tax has to be cashed in immediately.
+    damageMods: { takenDice: 1 },
+    defaultDuration: 1,
   },
   poisoned: {
     id: 'poisoned',
@@ -194,6 +196,20 @@ export function effectDamageTakenFlat(entity) {
   return sum;
 }
 
+/** Number of bonus damage DICE (d6) added to any incoming blow — e.g.
+ *  wounded → 1D6 per stack. Summed across effects × stacks; the caller rolls
+ *  them through the deterministic die stream (see Entity.applyIncomingDamage). */
+export function effectDamageTakenDice(entity) {
+  if (!entity || !Array.isArray(entity.effects)) return 0;
+  let dice = 0;
+  for (const rec of entity.effects) {
+    const def = EFFECTS[rec.id];
+    const mod = def?.damageMods?.takenDice;
+    if (typeof mod === 'number') dice += mod * (rec.stacks ?? 1);
+  }
+  return dice;
+}
+
 /** Sum of rangeMod across an entity's effects. */
 export function effectRangeMod(entity) {
   if (!entity || !Array.isArray(entity.effects)) return 0;
@@ -272,7 +288,7 @@ export function tickEffects(state) {
         const stacks = rec.stacks ?? 1;
         // One "tick" = DAMAGE_SCALE HP per stack (proportional to scaled pools).
         // Route through applyIncomingDamage so wounded etc. amplify DOTs.
-        const incoming = e.applyIncomingDamage(stacks * DAMAGE_SCALE);
+        const incoming = e.applyIncomingDamage(stacks * DAMAGE_SCALE, (s) => state.nextDie(s));
         const killed = e.takeDamage(incoming);
         dotEvents.push({
           effectId: rec.id,

@@ -151,12 +151,23 @@ describe('Stat composition through Entity getters', () => {
 
 // ── Damage hooks ───────────────────────────────────────────────────────────
 
-describe('Wounded → +DAMAGE_SCALE incoming damage', () => {
-  test('applyIncomingDamage adds wounded stack', () => {
+describe('Wounded → +1D6 incoming damage', () => {
+  test('applyIncomingDamage rolls one bonus d6 per wounded stack', () => {
     const hero = createHero(0, 0);
-    assert.equal(hero.applyIncomingDamage(1), 1, 'baseline 1 damage');
+    assert.equal(hero.applyIncomingDamage(1, () => 6), 1, 'baseline 1 damage, no roll consumed');
     applyEffect(hero, 'wounded');
-    assert.equal(hero.applyIncomingDamage(1), 8, 'wounded amplifies by DAMAGE_SCALE (1+7)');
+    assert.equal(hero.applyIncomingDamage(1, () => 5), 6, 'wounded adds the rolled die (1+5)');
+    assert.equal(hero.applyIncomingDamage(1, () => 2), 3, 'fresh roll per blow (1+2)');
+  });
+
+  test('without a roller the die falls back to a fixed 4 (no Math.random in shared code)', () => {
+    const hero = createHero(0, 0);
+    applyEffect(hero, 'wounded');
+    assert.equal(hero.applyIncomingDamage(1), 5);
+  });
+
+  test('wounded lasts one round', () => {
+    assert.equal(EFFECTS.wounded.defaultDuration, 1);
   });
 
   test('damage never goes below 1 (no negative-flat-mod underflow)', () => {
@@ -407,7 +418,7 @@ describe('Serialization round-trip', () => {
     assert.equal(rh.killsThisRound, 4);
     // Restored entity supports the helper methods.
     assert.equal(typeof rh.applyIncomingDamage, 'function');
-    assert.equal(rh.applyIncomingDamage(1), 8, 'wounded composes after restore (1+7)');
+    assert.equal(rh.applyIncomingDamage(1, () => 3), 4, 'wounded composes after restore (1+1D6)');
   });
 
   test('deserializing a pre-effects snapshot defaults effects to []', () => {
@@ -431,7 +442,7 @@ describe('Serialization round-trip', () => {
 // ── DOT amplification by wounded (Fix #2) ──────────────────────────────────
 
 describe('Wounded amplifies DOTs and attrition', () => {
-  test('wounded + bleeding deals 14 HP per round (scaled), not 7', () => {
+  test('wounded + bleeding: the tick rolls the wound die through the state stream', () => {
     const hero = createHero(0, 0);
     const startHp = hero.hp;
     applyEffect(hero, 'wounded');
@@ -439,11 +450,12 @@ describe('Wounded amplifies DOTs and attrition', () => {
     const gs = new GameState(false, false);
     gs.entities = [hero];
     gs.hero = hero;
+    gs.setForcedDice(6);
     tickEffects(gs);
-    assert.equal(hero.hp, startHp - 14, 'bleeding (7) + wounded (+7) = 14 HP loss');
+    assert.equal(hero.hp, startHp - 13, 'bleeding (7) + wounded 1D6 (6) = 13 HP loss');
   });
 
-  test('wounded + poisoned deals 14 HP per round (scaled)', () => {
+  test('wounded + poisoned: same — deterministic wound die', () => {
     const z = createZombie(0, 0);
     z.maxHp = 30; z.hp = 30; // survive the scaled tick to assert the exact loss
     const startHp = z.hp;
@@ -451,8 +463,9 @@ describe('Wounded amplifies DOTs and attrition', () => {
     applyEffect(z, 'poisoned', { duration: 2 });
     const gs = new GameState(false, false);
     gs.entities = [z];
+    gs.setForcedDice(2);
     tickEffects(gs);
-    assert.equal(z.hp, startHp - 14);
+    assert.equal(z.hp, startHp - 9, 'poison (7) + wounded 1D6 (2) = 9 HP loss');
   });
 
   test('night attrition routes through applyIncomingDamage', () => {
@@ -473,8 +486,9 @@ describe('Wounded amplifies DOTs and attrition', () => {
       tile.buildingFootprintOf = null; tile.footprintHexes = [];
     }
     const startHp = surv.hp;
+    gs.setForcedDice(4);
     applyPostRoundEffects(gs);
-    assert.equal(surv.hp, startHp - 14, 'attrition (1×7) + wounded (+7) = 14 HP loss');
+    assert.equal(surv.hp, startHp - 11, 'attrition (1×7) + wounded 1D6 (4) = 11 HP loss');
   });
 });
 
