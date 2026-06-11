@@ -115,6 +115,41 @@ describe('playConversation — turn-0 intro flow', () => {
     assert.ok(renderer.bubbles.every(b => b.disposed), 'no leaked bubbles');
   });
 
+  test('onComplete walk-off runs only AFTER CONTINUE — NPC still present during the REPLAY hold', async () => {
+    resetPlayback();
+    setMode(AppMode.MENU);
+    const ui = stubUi();
+    const renderer = stubRenderer();
+    const { convo, participants, state } = fixture();
+    const convDef = {
+      id: 'intro',
+      onComplete: [
+        { action: 'move', npc: 'john', path: [{ col: 2, row: 5 }] },
+        { action: 'despawn', npc: 'john' },
+      ],
+    };
+
+    const done = playConversation({
+      convo, participants, state, renderer, ui, convDef,
+      manageHud: true, runOnComplete: true,
+    });
+
+    await pumpNext(() => ui.cardStates.includes('done'));
+    playback.stepRequested = false;
+
+    // Give a buggy pre-CONTINUE walk-off (move + 200ms despawn hold) time to
+    // land. The NPC must still be on the map while the card offers
+    // REPLAY/CONTINUE — otherwise REPLAY re-runs with the speaker gone.
+    await _sleep(400);
+    assert.ok(state.entities.some(e => e.npcId === 'john'),
+      'NPC still on the map during the REPLAY/CONTINUE hold');
+
+    ui.cardHandlers.onContinue();
+    await done;
+    assert.ok(!state.entities.some(e => e.npcId === 'john'),
+      'walk-off ran after CONTINUE dismissed the card');
+  });
+
   test('SKIP falls straight through to resolution (no CONTINUE hold)', async () => {
     resetPlayback();
     setMode(AppMode.MENU);
