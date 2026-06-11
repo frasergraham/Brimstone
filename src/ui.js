@@ -4734,14 +4734,21 @@ export class UIController {
         // Post-round effects (night attrition, etc.)
         const postEvents = this.state.postRoundEvents || [];
         const myId = this.myPlayerId;
+        // Kills are shown for either side — the player watched that unit
+        // vanish, so the summary must explain it. Damage/shelter stay scoped
+        // to the player's own units.
         const visiblePostEvents = postEvents.filter(ev =>
-          ev.type !== 'safe' && (!myId || !ev.ownerId || ev.ownerId === myId)
+          ev.type !== 'safe'
+          && (ev.type === 'kill' || !myId || !ev.ownerId || ev.ownerId === myId)
         );
         if (visiblePostEvents.length) {
           html += `<div class="summary-hazard-header">🌙 Night Attrition</div>`;
           for (const ev of visiblePostEvents) {
             if (ev.type === 'kill') {
-              html += `<div class="summary-hazard">💀 ${ev.entityName} −${ev.amount} HP (unsheltered at night) — killed</div>`;
+              const cause = ev.text
+                ? String(ev.text).replace(/^💀\s*/, '')
+                : `${ev.entityName} −${ev.amount} HP (unsheltered at night) — killed`;
+              html += `<div class="summary-hazard">💀 ${cause}</div>`;
             } else if (ev.type === 'damage') {
               html += `<div class="summary-hazard">🌙 ${ev.entityName} −${ev.amount} HP (unsheltered at night)</div>`;
             } else if (ev.type === 'shelter') {
@@ -5656,7 +5663,12 @@ export class UIController {
     if (attrition.length) {
       const rows = attrition.map(a => {
         if (a.kind === 'kill') {
-          return `<div class="wrapup-attr-row hurt">💀 ${esc(a.name)} <span class="wrapup-attr-note">consumed by the night</span></div>`;
+          // DOT deaths carry their cause in `text` ("🩸 X succumbs to
+          // bleeding!"); night-attrition kills keep the classic copy.
+          const note = a.text
+            ? esc(String(a.text).replace(/^💀\s*/, ''))
+            : `${esc(a.name)} <span class="wrapup-attr-note">consumed by the night</span>`;
+          return `<div class="wrapup-attr-row hurt">💀 ${note}</div>`;
         }
         if (a.kind === 'damage') {
           return `<div class="wrapup-attr-row hurt">🌙 ${esc(a.name)} <span class="wrapup-attr-dmg">−${a.amount} HP</span> <span class="wrapup-attr-note">exposed</span></div>`;
