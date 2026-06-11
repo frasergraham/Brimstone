@@ -11540,12 +11540,20 @@ export class Renderer3D {
     applyFlatUnitIconMaterial(BABYLON, mat);
     plane.material = mat;
 
+    // Concurrent floaters on the same hex stack vertically — each claims the
+    // lowest free slot and releases it when it expires, so simultaneous
+    // damage/counter/flash labels never paint on top of each other.
+    const slotsByHex = (this._floaterSlotsByHex ??= new Map());
+    const slotKey = hexKey(col, row);
+    const stackSlot = claimFloaterSlot(slotsByHex, slotKey);
+
     // Spawn above the tallest possible token (leader-sized cone + sphere).
     const startY = STANDEE_BASE_Y_OFFSET
       + STANDEE_BASE_THICKNESS
       + STANDEE_CONE_HEIGHT * STANDEE_LEADER_HEIGHT_MUL
       + STANDEE_SPHERE_DIAMETER * STANDEE_LEADER_WIDTH_MUL
-      + 0.4;
+      + 0.4
+      + stackSlot * FLOAT_TEXT_STACK_DY;
     const endY   = startY + 1.2;
     plane.position.set(x, startY, z);
     plane.visibility = 1;
@@ -11577,6 +11585,7 @@ export class Renderer3D {
 
     const promise = new Promise(resolve => {
       this._scene.beginDirectAnimation(plane, [animPos, animFade], 0, FRAMES_FLOAT, false, 1, () => {
+        releaseFloaterSlot(slotsByHex, slotKey, stackSlot);
         plane.dispose();
         mat.dispose();
         tex.dispose();
@@ -17646,6 +17655,35 @@ export const FLOAT_TEXT_TEX_HEIGHT = 192;
  *  above a dying unit to read as a quick, low-chrome flick rather than a
  *  chunky sticker. */
 export const FLOAT_TEXT_DAMAGE_SIZE_MUL = 0.70;
+
+/** Vertical spacing between concurrently-live floaters on the SAME hex. A
+ *  battle wrap-up can fire several floaters at one hex in the same beat
+ *  (damage + counter + "CRUSH 2" flash); without stacking they spawn at the
+ *  identical point and read as one smeared label. One full damage-plane
+ *  height plus a small gap keeps each label clear of its neighbour. */
+export const FLOAT_TEXT_STACK_DY =
+  FLOAT_TEXT_PLANE_HEIGHT * FLOAT_TEXT_DAMAGE_SIZE_MUL + 0.15;
+
+/** Claim the lowest free stack slot for a floater on `key` (a "col,row" hex
+ *  key). `slotsByHex` maps key → Set of in-use slot indices. Pure bookkeeping
+ *  — visible for tests. */
+export function claimFloaterSlot(slotsByHex, key) {
+  let used = slotsByHex.get(key);
+  if (!used) { used = new Set(); slotsByHex.set(key, used); }
+  let slot = 0;
+  while (used.has(slot)) slot++;
+  used.add(slot);
+  return slot;
+}
+
+/** Release a slot claimed by claimFloaterSlot; drops the hex entry when its
+ *  last floater expires so the map never grows unbounded. */
+export function releaseFloaterSlot(slotsByHex, key, slot) {
+  const used = slotsByHex.get(key);
+  if (!used) return;
+  used.delete(slot);
+  if (used.size === 0) slotsByHex.delete(key);
+}
 
 /** Combat readout (G1 redesign — replaces the old dice-card). A single big
  *  number floats above each combatant's head; per-bonus floaters animate up
