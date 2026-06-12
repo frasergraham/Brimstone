@@ -409,6 +409,90 @@ describe('isEventVisible — union of source/target + public actions', () => {
   });
 });
 
+// ── Post-step viewer sight (option a) ──────────────────────────────────────────
+// The fog gate answers "can the viewer see this when the step has RESOLVED?":
+// enemy events are tested against the viewer's POST-step unit positions
+// (`viewEnts`) — the same positions the on-map veil shows at the step-boundary
+// hold — while events involving the viewer's own units always show (you always
+// learn your own units' fates, even if the participant died mid-step and no
+// longer grants sight).
+
+describe('isEventVisible — post-step viewer sight', () => {
+  // Sight = within 4 hexes (Manhattan) of any living hero-owned unit in the
+  // entity list the predicate is handed — so WHICH list is passed decides
+  // visibility.
+  const sight = (col, row, list) => (list ?? []).some(e =>
+    e.alive !== false && e.owner === 'hero'
+    && Math.abs(e.col - col) + Math.abs(e.row - row) <= 4);
+
+  test('enemy move is gated against viewEnts (post-step), not the pre-step snapshot', () => {
+    const scoutPre  = snap('h1', 'survivor', 'hero', 4, 4);  // saw the zombie when the step began
+    const scoutPost = snap('h1', 'survivor', 'hero', 1, 4);  // moved away during the step
+    const z = snap('z1', 'zombie', 'witch', 8, 4);
+    const ev = moveEvent('z1', 'witch', 9, 4);
+    // Legacy call (no viewEnts): pre-step snapshot grants sight → visible.
+    assert.equal(isEventVisible(ev, [scoutPre, z], sight, DEPS), true);
+    // Post-step viewer positions: the whole move is out of sight → hidden.
+    assert.equal(isEventVisible(ev, [scoutPre, z], sight,
+      { ...DEPS, viewerFaction: 'hero', viewEnts: [scoutPost, z] }), false);
+    // And a move INTO sight (viewer approached during the step) is shown.
+    assert.equal(isEventVisible(ev, [scoutPost, z], sight,
+      { ...DEPS, viewerFaction: 'hero', viewEnts: [scoutPre, z] }), true);
+  });
+
+  test('own-faction battle always shows, even when the attacker died mid-step', () => {
+    const mine  = snap('h1', 'survivor', 'hero', 9, 9);
+    const enemy = snap('z1', 'zombie', 'witch', 9, 8);
+    const ev = battleEvent(mine, enemy, { hit: false, counter: true });
+    // Post-step the attacker is dead — nothing grants sight there.
+    const postDead = [{ ...mine, alive: false }, enemy];
+    assert.equal(isEventVisible(ev, [mine, enemy], sight,
+      { ...DEPS, viewerFaction: 'hero', viewEnts: postDead }), true);
+  });
+
+  test('enemy attack on my unit always shows (you learn your own unit\'s fate)', () => {
+    const enemy = snap('z1', 'zombie', 'witch', 9, 9);
+    const mine  = snap('h1', 'survivor', 'hero', 9, 8);
+    const ev = battleEvent(enemy, mine, { hit: true, damage: 2 });
+    const postDead = [enemy, { ...mine, alive: false }];
+    assert.equal(isEventVisible(ev, [enemy, mine], sight,
+      { ...DEPS, viewerFaction: 'hero', viewEnts: postDead }), true);
+  });
+
+  test('enemy-only event stays gated when no viewerFaction is given', () => {
+    const z = snap('z1', 'zombie', 'witch', 9, 9);
+    const ev = moveEvent('z1', 'witch', 9, 8);
+    assert.equal(isEventVisible(ev, [z], sight,
+      { ...DEPS, viewEnts: [z] }), false);
+  });
+});
+
+describe('buildStepDigest — post-step gating across steps', () => {
+  const sight = (col, row, list) => (list ?? []).some(e =>
+    e.alive !== false && e.owner === 'hero'
+    && Math.abs(e.col - col) + Math.abs(e.row - row) <= 4);
+
+  test('step N uses step N+1\'s snapshot as the viewer set; last step uses finalEntities', () => {
+    const scoutPre  = snap('h1', 'survivor', 'hero', 4, 4);
+    const scoutMid  = snap('h1', 'survivor', 'hero', 1, 4);   // after step 1
+    const scoutEnd  = snap('h1', 'survivor', 'hero', 0, 4);   // after step 2 (final)
+    const zPre  = snap('z1', 'zombie', 'witch', 8, 4);
+    const zMid  = snap('z1', 'zombie', 'witch', 9, 4);
+    const steps = [
+      step([moveEvent('h1', 'hero', 1, 4), moveEvent('z1', 'witch', 9, 4)], [scoutPre, zPre]),
+      step([moveEvent('h1', 'hero', 0, 4), moveEvent('z1', 'witch', 10, 4)], [scoutMid, zMid]),
+    ];
+    const final = [scoutEnd, snap('z1', 'zombie', 'witch', 10, 4)];
+    const d = buildStepDigest(steps, final,
+      { ...DEPS, isVisible: sight, viewerFaction: 'hero' });
+    // Step 1: zombie move (8,4)->(9,4) is out of sight from the scout's
+    // post-step position (1,4) → dropped; my own move always shows.
+    assert.deepEqual(d[0].entries.map(e => e.entityId), ['h1']);
+    // Step 2: still out of sight from (0,4) → dropped again.
+    assert.deepEqual(d[1].entries.map(e => e.entityId), ['h1']);
+  });
+});
+
 // ── Online MP format ──────────────────────────────────────────────────────────
 
 describe('buildStepDigest — playerEvents (online) format', () => {

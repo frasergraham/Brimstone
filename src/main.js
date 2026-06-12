@@ -43,7 +43,7 @@ import { applyEffect } from './effects.js';
 import { installKeybindings } from './keybindings.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import * as audio from './audio.js';
-import { playback, resetPlayback, replayFullGame, playbackDelay, swapState, patchAlive } from './playback.js';
+import { playback, resetPlayback, replayFullGame, playbackDelay, swapState, patchAlive, withPinnedPhase } from './playback.js';
 import { ReplayCache } from './replay-cache.js';
 import { makeShowLoadingAndReveal } from './loading-reveal.js';
 import { MAP_SIZES } from './map.js';
@@ -1003,6 +1003,10 @@ async function _runLocalResolution(skipSummary = false) {
 
   // Snapshot score BEFORE endRound so we can detect scoring changes
   const prevScore = { hero: state.nodeScore.hero, witch: state.nodeScore.witch };
+  // The phase this round was FOUGHT in — finalizeRound() advances the day
+  // cycle, and any re-watch from the review must replay under the round's own
+  // phase (lighting + sight ranges) or it won't match the original watch.
+  const roundPhase = state.phase;
 
   // Shared post-resolution finalization (node discovery → control-change log →
   // explored-hex update → endRound). endRound() internally invokes
@@ -1044,13 +1048,16 @@ async function _runLocalResolution(skipSummary = false) {
   // Post-resolution: normal turns end with a wrap-up CARD + review (the timeline
   // stays up; arrows scrub the cards). Game-over keeps its dedicated modal.
   const _reReplay = async () => {
-    state.entities = preReplayEntities;
-    for (const [k, t] of state.tiles) {
-      if (t.explored && !preExploredSet.has(k)) t.explored = false;
-    }
-    redraw();
-    await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
-    for (const [k, v] of postExplored) { const t = state.tiles.get(k); if (t) t.explored = v; }
+    await withPinnedPhase(state, roundPhase, async () => {
+      state.entities = preReplayEntities;
+      for (const [k, t] of state.tiles) {
+        if (t.explored && !preExploredSet.has(k)) t.explored = false;
+      }
+      redraw();
+      await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
+      for (const [k, v] of postExplored) { const t = state.tiles.get(k); if (t) t.explored = v; }
+    });
+    redraw();   // final frame back under the live (post-round) phase
   };
 
   if (!_autoplay && !skipSummary && ui && humanFaction) {
@@ -1191,10 +1198,15 @@ async function _replayLastRoundInlineLocal() {
     _keepTimelineForReview = true;
 
     const playOnce = async () => {
-      state.entities = preEntities;
-      redraw();
-      await _animateResolutionSteps(steps, liveEntities, redraw, humanFaction, null);
-      state.entities = liveEntities;
+      // Replay under the round's OWN phase (the saved pre-state carries it) —
+      // the day cycle has since advanced, and the new phase would change both
+      // the lighting and the sight ranges the fog veil / card gates use.
+      await withPinnedPhase(state, preData?.phase, async () => {
+        state.entities = preEntities;
+        redraw();
+        await _animateResolutionSteps(steps, liveEntities, redraw, humanFaction, null);
+        state.entities = liveEntities;
+      });
       redraw();
     };
 
@@ -1441,14 +1453,18 @@ function _isFogVisible(col, row, humanFaction, entities, phase) {
     perFaction = new Map();
     _losCacheBySnapshot.set(entities, perFaction);
   }
-  let set = perFaction.get(humanFaction);
+  // Keyed by faction AND phase: sight range is phase-dependent, and the same
+  // snapshot array is re-evaluated under a different phase when a round is
+  // re-watched after the day cycle advanced (withPinnedPhase re-watch paths).
+  const cacheKey = `${humanFaction}|${phase}`;
+  let set = perFaction.get(cacheKey);
   if (!set) {
     set = computeLineOfSight(
       { entities, tiles: state.tiles, phase },
       humanFaction,
       entities,
     );
-    perFaction.set(humanFaction, set);
+    perFaction.set(cacheKey, set);
   }
   return set.has(hexKey(col, row));
 }
@@ -1551,11 +1567,18 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
   // Replay timeline overlay — built from the same resolved steps, fog-filtered
   // to the viewing faction so it matches the canvas. Shown for both inline and
   // full PLAYBACK replay (full PLAYBACK runs fog-off, so all steps are visible).
+  // Patch every snapshot to Entity prototypes BEFORE the digest's fog tests run
+  // — _isFogVisible caches the LoS set per snapshot array, so an unpatched
+  // snapshot here would bake a scout-less sight range into the cache that the
+  // (patched) animation gates then reuse. patchAlive is idempotent; the step
+  // loop's per-step patch becomes a no-op.
   let stepDigest = null;
   if (ui && steps.length) {
+    for (const s of steps) patchAlive(s.entitySnapshot ?? []);
+    patchAlive(finalEntities ?? []);
     stepDigest = buildStepDigest(steps, finalEntities, {
       isVisible: (col, row, ents) => _isFogVisible(col, row, humanFaction, ents, state.phase),
-      PlanActionType, ResEventType,
+      PlanActionType, ResEventType, viewerFaction: humanFaction,
     });
     ui.showReplayTimeline?.(stepDigest);
   }
@@ -1564,11 +1587,14 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
   // Shared visibility gate for the on-map animation — identical predicate to the
   // one buildStepDigest used for the cards, so every card has a matching
   // animation (and vice-versa). Union of source/target hex sight + public
-  // actions (the horn). `humanFaction` null (AI-vs-AI / fog off) ⇒ all visible.
-  const _evVisible = (ev, ents) => isEventVisible(
+  // actions (the horn), with sight computed from `viewEnts` — the POST-step
+  // entity list (what the veil shows at the step-boundary hold) — and the
+  // viewer's own units always visible. `humanFaction` null (AI-vs-AI / fog
+  // off) ⇒ all visible.
+  const _evVisible = (ev, ents, viewEnts) => isEventVisible(
     ev, ents,
     (c, r, e) => _isFogVisible(c, r, humanFaction, e, state.phase),
-    { PlanActionType, ResEventType },
+    { PlanActionType, ResEventType, viewerFaction: humanFaction, viewEnts },
   );
 
   // ── Fortification rewind ─────────────────────────────────────────────
@@ -1765,7 +1791,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     // Same visibility predicate Phase 2 applies per battle (lines below) — so we
     // only cluster battles that will actually be presented to this viewer.
     const _battleShown = (ev) =>
-      !!ev.battleSnaps && _evVisible(ev, step.entitySnapshot);
+      !!ev.battleSnaps && _evVisible(ev, step.entitySnapshot, postEntities);
     let _combatFrames = null;        // ordered frames from planCombatFrames
     let _eventFrameIndex = null;     // Map<battleEvent, frameIndex>
     let _heldFrameIndex = -1;        // which cluster the camera currently holds
@@ -1806,7 +1832,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             if (ev.action.type !== PlanActionType.BATTLE_UNIT && ev.action.type !== PlanActionType.BATTLE_HEX) continue;
             if (!ev.battleSnaps) continue;
             const { actorSnap, targetSnap } = ev.battleSnaps;
-            if (_evVisible(ev, step.entitySnapshot) && actorSnap && targetSnap) {
+            if (_evVisible(ev, step.entitySnapshot, postEntities) && actorSnap && targetSnap) {
               firstBattleTargets = [
                 { col: actorSnap.col, row: actorSnap.row },
                 { col: targetSnap.col, row: targetSnap.row },
@@ -1830,7 +1856,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         } else {
           for (const ev of events) {
             const snap = step.entitySnapshot?.find(e => e.id === ev.action?.entityId);
-            if (snap && _evVisible(ev, step.entitySnapshot)) {
+            if (snap && _evVisible(ev, step.entitySnapshot, postEntities)) {
               // For moves, frame the destination; for others, frame the actor's current position
               if (ev.action.type === PlanActionType.MOVE) {
                 frameTargets.push({ col: ev.action.toCol, row: ev.action.toRow });
@@ -1902,7 +1928,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 
       const preSnap = step.entitySnapshot?.find(e => e.id === action.entityId);
       // Moves are visible if origin or destination is within sight range.
-      const visible = preSnap && _evVisible(ev, step.entitySnapshot);
+      const visible = preSnap && _evVisible(ev, step.entitySnapshot, postEntities);
 
       // Use result.path if available (new path-following move); fall back to single hop
       const path = result?.path?.length > 0
@@ -2052,7 +2078,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         if (ev.action?.type !== PlanActionType.MOVE) continue;
         if (!(ev.blockedBy || ev.blockedByFort)) continue;
         const preSnap = step.entitySnapshot?.find(e => e.id === ev.action.entityId);
-        if (!preSnap || !_evVisible(ev, step.entitySnapshot)) continue;
+        if (!preSnap || !_evVisible(ev, step.entitySnapshot, postEntities)) continue;
         const bumpTo = ev.blockedByFort
           ? { col: ev.blockedByFort.col, row: ev.blockedByFort.row }
           : { col: ev.blockedBy.col, row: ev.blockedBy.row };
@@ -2110,7 +2136,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         if (result?.fortAssault) continue;
         // Show the battle if the viewer can see either combatant's hex — same
         // positional rule the timeline card uses (so card ⟷ animation agree).
-        if (battleSnaps && _evVisible(ev, step.entitySnapshot)) {
+        if (battleSnaps && _evVisible(ev, step.entitySnapshot, postEntities)) {
           const { actorSnap, targetSnap } = battleSnaps;
           const isKill = !!result?.killed;
           // Highlight this battle's row on the timeline as it begins.
@@ -2249,7 +2275,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         const actorSnap = step.entitySnapshot?.find(e => e.id === action.entityId);
         // Only animate the conjuring if the summoner's hex is in sight (the unit
         // appears on the summoner's own hex) — matches the SUMMON card's gate.
-        if (actorSnap && _evVisible(ev, step.entitySnapshot)) {
+        if (actorSnap && _evVisible(ev, step.entitySnapshot, postEntities)) {
           renderer.addSpawnAnim(actorSnap.col, actorSnap.row, '#b39ddb');
           audio.play('summon');
           hadBattle = true;
@@ -2323,7 +2349,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       const { col: tCol, row: tRow } = ev.whiffTarget;
 
       // Visibility — actor's hex OR the empty target hex (same as the card).
-      if (!_evVisible(ev, step.entitySnapshot)) continue;
+      if (!_evVisible(ev, step.entitySnapshot, postEntities)) continue;
 
       if (!_autoplay) {
         const speed = ui?.speedMode ?? 'cinematic';
@@ -2370,7 +2396,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       const r = ev.result;
       const tCol = r.targetCol, tRow = r.targetRow;
 
-      if (_evVisible(ev, step.entitySnapshot) && !_autoplay) {
+      if (_evVisible(ev, step.entitySnapshot, postEntities) && !_autoplay) {
         const speed = ui?.speedMode ?? 'cinematic';
         const actorDisplay = state.entities.find(e => e.id === actorSnap.id);
         const lungeFromCol = actorDisplay?.col ?? actorSnap.col;
@@ -2417,7 +2443,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       const { actorSnap, targetSnap } = battleSnaps;
 
       // Positional visibility — actor's or target's hex in sight (same as card).
-      if (!_evVisible(ev, step.entitySnapshot)) continue;
+      if (!_evVisible(ev, step.entitySnapshot, postEntities)) continue;
       // Highlight this guard strike's card as it fires.
       ui?.highlightReplayEntry?.(i, actorSnap.id);
 
@@ -2550,7 +2576,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       if (!result?.log?.length) continue;
       // Loot flash shows to anyone who can see the explorer (matches the card);
       // the discovery modal stays the finder's own (own faction / controlled unit).
-      if (!_evVisible(ev, step.entitySnapshot)) continue;
+      if (!_evVisible(ev, step.entitySnapshot, postEntities)) continue;
       const actor = explorer;
       if (actor) { ui._showLootFlashes(actor, result.lootItems ?? []); hadExplore = true; }
       redrawFn();
@@ -2626,7 +2652,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       if (actorTile) actorTile.fortifyLevel = Math.min(MAX_FORTIFY_LEVEL,
         (actorTile.fortifyLevel || 0) + (result.defGain ?? 1));
       // Surface the +N floater to anyone who can see the fortifying unit.
-      if (!_evVisible(ev, step.entitySnapshot)) continue;
+      if (!_evVisible(ev, step.entitySnapshot, postEntities)) continue;
       const gain = result.defGain ?? 1;
       renderer.addFlash(actor.col, actor.row, `🛡+${gain}`,
         'rgba(100,180,255,0.1)', 1800, 0.72, 'rgba(130,200,255,1)');
@@ -2639,7 +2665,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       if (action.type !== PlanActionType.HEAL || !result?.success) continue;
       const actor = step.entitySnapshot?.find(e => e.id === action.entityId);
       // Match the HEAL card — only animate when the healer's hex is in sight.
-      if (actor && _evVisible(ev, step.entitySnapshot)) {
+      if (actor && _evVisible(ev, step.entitySnapshot, postEntities)) {
         renderer.addNodeRevealAnim([{ col: actor.col, row: actor.row }], '#44cc66', { radiusMultiplier: 1.5, duration: 1000 });
         renderer.addHpChangeFlash(actor.col, actor.row, 2);
       }
@@ -3728,7 +3754,11 @@ function initScenario(def) {
   // the standee re-slot and capacity gate see the trees the renderer draws.
   for (const t of mapData.tiles.values()) t.blockedSlots = deriveBlockedSlots(t);
 
-  state = new GameState(true, true, 'skirmish', null, { ...mapData, noWitch: !def.witch });
+  // `pov: 'hero'` marks the hero side human-controlled so fog-of-war has a
+  // real observer (card gating + the renderer veil both key off the human
+  // faction) — without it both sides are AI and fog is never applied, which
+  // makes fog/replay bugs unreproducible in scenario mode.
+  state = new GameState(true, def.pov !== 'hero', 'skirmish', null, { ...mapData, noWitch: !def.witch });
   state.fogOfWar = def.fog ?? 'none';
 
   // Visual-testing hook for the leaders (scenario `units` are witch-side or
@@ -7704,14 +7734,19 @@ async function _playReconnectReplay(replay) {
   }));
   const prevScore = { hero: state.nodeScore?.hero ?? 0, witch: state.nodeScore?.witch ?? 0 };
 
-  state.entities = preEntities;
-  redraw();
+  // Replay under the round's OWN phase (carried by the saved pre-state): the
+  // live state's day cycle has already advanced past this round, which would
+  // change the lighting and the sight ranges the fog veil / card gates use.
+  await withPinnedPhase(state, preState?.phase, async () => {
+    state.entities = preEntities;
+    redraw();
 
-  // Play the resolution animation
-  await _animateResolutionSteps(steps, currentEntities, redraw, mp?.myFaction, mp?.myPlayerId ?? null);
+    // Play the resolution animation
+    await _animateResolutionSteps(steps, currentEntities, redraw, mp?.myFaction, mp?.myPlayerId ?? null);
 
-  // Restore the current state
-  state.entities = currentEntities;
+    // Restore the current state
+    state.entities = currentEntities;
+  });
 
   // Store in round history for "replay full game"
   // Cache for round-keyed lookup + legacy full-game replay array
@@ -7740,10 +7775,13 @@ async function _playReconnectReplay(replay) {
         gameOver: false,
       });
       if (action === 'replay') {
-        state.entities = preEntities;
+        await withPinnedPhase(state, preState?.phase, async () => {
+          state.entities = preEntities;
+          redraw();
+          await _animateResolutionSteps(steps, currentEntities, redraw, mp.myFaction, mp.myPlayerId ?? null);
+          state.entities = currentEntities;
+        });
         redraw();
-        await _animateResolutionSteps(steps, currentEntities, redraw, mp.myFaction, mp.myPlayerId ?? null);
-        state.entities = currentEntities;
         setMode(AppMode.SUMMARY);
       }
     } while (action === 'replay');

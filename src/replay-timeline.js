@@ -231,20 +231,47 @@ const PUBLIC_ACTION_TYPES = Object.freeze(new Set(['sound-horn']));
  * hex is in sight (so an attack out of an unseen hex still shows because the
  * struck unit is visible), OR the action is inherently public (horn).
  *
+ * Sight is asked "when the step has RESOLVED": pass `viewEnts` (the POST-step
+ * entity snapshot) and the fog test runs against the viewer's post-step unit
+ * positions — the same positions the on-map veil shows while the player is
+ * paused at the step boundary reading the panel. Without it, a viewer unit
+ * that moved AWAY during the step left cards for moves the player can no
+ * longer see anywhere on the map. Events involving the viewer's own units
+ * (`viewerFaction`) always show — you planned the action / it's your unit's
+ * fate — which also covers the participant dying mid-step and therefore
+ * granting no post-step sight.
+ *
  * @param {Object}   ev        — resolved sub-event (ACTION_OK / GUARD_STRIKE / …).
  * @param {Array}    ents      — the step's entitySnapshot (for actor lookups).
  * @param {Function} isVisible — (col,row,ents)=>boolean fog test; falsy ⇒ all visible.
- * @param {Object}   deps      — { PlanActionType, ResEventType } injected enums.
+ * @param {Object}   deps      — { PlanActionType, ResEventType } injected enums,
+ *   plus optional { viewerFaction, viewEnts } (see above). When omitted the
+ *   fog test falls back to the pre-step snapshot (legacy behaviour).
  * @returns {boolean}
  */
-export function isEventVisible(ev, ents, isVisible, { PlanActionType: PA, ResEventType: RE } = {}) {
+export function isEventVisible(ev, ents, isVisible,
+  { PlanActionType: PA, ResEventType: RE, viewerFaction = null, viewEnts = null } = {}) {
   const vis = isVisible || (() => true);
   if (!ev || !PA || !RE) return true;
   const list = ents ?? [];
-  const at = (s) => !!s && vis(s.col, s.row, list);
+  // Entity list the viewer's SIGHT is computed from (post-step when given).
+  // The hexes tested stay the event's own (pre-step actor / battle snaps).
+  const viewList = viewEnts ?? list;
+  const at = (s) => !!s && vis(s.col, s.row, viewList);
 
   // Inherently public actions short-circuit the fog test.
   if (PUBLIC_ACTION_TYPES.has(ev.action?.type)) return true;
+
+  // Own-faction participants short-circuit it too: the viewer always sees
+  // their own units' actions and fates, sighted or not.
+  if (viewerFaction) {
+    const actor = ev.battleSnaps?.actorSnap
+      ?? list.find(e => e.id === ev.action?.entityId);
+    if (actor?.owner === viewerFaction) return true;
+    if (ev.battleSnaps?.targetSnap?.owner === viewerFaction) return true;
+    const blocker = ev.blockedBy;
+    if (blocker?.owner === viewerFaction) return true;
+  }
 
   // Battles & reactive guard strikes — source OR target hex. Fort assaults are
   // BATTLE_HEX strikes with no targetSnap; their besieged hex rides on result.
@@ -254,13 +281,13 @@ export function isEventVisible(ev, ents, isVisible, { PlanActionType: PA, ResEve
   if (isBattleStrike) {
     if (at(ev.battleSnaps?.actorSnap) || at(ev.battleSnaps?.targetSnap)) return true;
     const tc = ev.result?.targetCol, tr = ev.result?.targetRow;
-    return tc != null && vis(tc, tr, list);
+    return tc != null && vis(tc, tr, viewList);
   }
 
   // Whiffed hex attack (no enemy on the target hex) — actor OR the empty hex.
   if (ev.type === RE.ACTION_SKIP && ev.whiffTarget && ev.battleSnaps?.actorSnap) {
     return at(ev.battleSnaps.actorSnap)
-      || vis(ev.whiffTarget.col, ev.whiffTarget.row, list);
+      || vis(ev.whiffTarget.col, ev.whiffTarget.row, viewList);
   }
 
   // Blocked move — actor OR the blocker hex.
@@ -268,7 +295,7 @@ export function isEventVisible(ev, ents, isVisible, { PlanActionType: PA, ResEve
       && (ev.blockedBy || ev.blockedByFort)) {
     const a = list.find(e => e.id === ev.action.entityId);
     const block = ev.blockedByFort || ev.blockedBy;
-    return at(a) || (!!block && vis(block.col, block.row, list));
+    return at(a) || (!!block && vis(block.col, block.row, viewList));
   }
 
   // Remaining cards come from successful actions.
@@ -279,7 +306,7 @@ export function isEventVisible(ev, ents, isVisible, { PlanActionType: PA, ResEve
   // Move shows if origin OR destination is in sight; summon/explore/fortify/
   // heal/… happen on the actor's own hex.
   if (ev.action.type === PA.MOVE) {
-    return at(a) || vis(ev.action.toCol, ev.action.toRow, list);
+    return at(a) || vis(ev.action.toCol, ev.action.toRow, viewList);
   }
   return at(a);
 }
@@ -288,12 +315,17 @@ export function isEventVisible(ev, ents, isVisible, { PlanActionType: PA, ResEve
  * Turn resolved steps into the timeline column model.
  *
  * @param {Array}    steps         — StepRecord[] from resolvePlans/resolvePlansMP.
- * @param {Array}    finalEntities — post-resolution entities (reserved; not yet
- *                                   needed since outcomes come from result).
+ * @param {Array}    finalEntities — post-resolution entities; also the
+ *                                   viewer-sight set for the LAST step (every
+ *                                   other step uses the NEXT step's snapshot).
  * @param {Object}   deps
- * @param {Function} deps.isVisible — (col, row, entities) => boolean. Fog test
- *   against the step's own entitySnapshot, matching the canvas. When omitted,
- *   everything is visible (fog off / AI-vs-AI / full replay with no viewer).
+ * @param {Function} deps.isVisible — (col, row, entities) => boolean. Fog test;
+ *   handed the POST-step entity list so cards match what the veil shows while
+ *   the player is paused at the step boundary (see isEventVisible). When
+ *   omitted, everything is visible (fog off / AI-vs-AI / full replay with no
+ *   viewer).
+ * @param {string}   deps.viewerFaction — the viewing faction; its own units'
+ *   events bypass the fog gate. Omitted ⇒ no bypass (legacy behaviour).
  * @param {Object}   deps.PlanActionType — injected enum.
  * @param {Object}   deps.ResEventType   — injected enum.
  * @returns {Array<{ stepIndex, entries: Array }>} one column per step; a fully
@@ -328,7 +360,7 @@ export function buildConversationDigest(convo, participants) {
   }];
 }
 
-export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionType, ResEventType } = {}) {
+export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionType, ResEventType, viewerFaction = null } = {}) {
   const vis = isVisible || (() => true);
   const PA = PlanActionType;
   const RE = ResEventType;
@@ -336,6 +368,10 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
 
   return steps.map((step, stepIndex) => {
     const ents = step.entitySnapshot ?? [];
+    // Viewer-sight set: where the viewer's units are AFTER this step (= the
+    // next step's snapshot; finalEntities for the last). Matches the veil at
+    // the step-boundary hold — see isEventVisible.
+    const viewEnts = steps[stepIndex + 1]?.entitySnapshot ?? finalEntities ?? ents;
     const allEvents = [
       ...(step.heroEvents  ?? []),
       ...(step.witchEvents ?? []),
@@ -346,7 +382,8 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
     for (const ev of allEvents) {
       // Single visibility gate — shared with the on-map animation so a card and
       // its animation always agree (union of source/target hex + public actions).
-      if (!isEventVisible(ev, ents, vis, { PlanActionType: PA, ResEventType: RE })) continue;
+      if (!isEventVisible(ev, ents, vis,
+        { PlanActionType: PA, ResEventType: RE, viewerFaction, viewEnts })) continue;
 
       const isBattleStrike = ev.type === RE.GUARD_STRIKE
         || (ev.type === RE.ACTION_OK && ev.battleSnaps
@@ -365,7 +402,7 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
         const allyRefs = (ids) => (ids ?? [])
           .filter(id => id !== actorSnap.id && id !== targetSnap?.id)
           .map(id => ents.find(e => e.id === id))
-          .filter(s => s && vis(s.col, s.row, ents))
+          .filter(s => s && (s.owner === viewerFaction || vis(s.col, s.row, viewEnts)))
           .map(unitRef);
         const ranged = !!(ev.result?.ranged ?? ev.battleSnaps?.ranged);
         // `guardReaction` flags the new inline guard attack (a normal BATTLE_UNIT

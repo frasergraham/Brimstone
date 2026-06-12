@@ -61,6 +61,9 @@ and optionally animating a **scripted** turn. Definition shape:
   witchPlan: [ … ],                             // …only used when resolve:true
   resolve: true,                                // animate the scripted turn
   fog: 'none',                                  // default 'none' (see everything)
+  pov: 'hero',                                  // hero side human-controlled — gives fog
+                                                // ('partial') a real observer; required to
+                                                // reproduce fog gating / card visibility
 }
 ```
 

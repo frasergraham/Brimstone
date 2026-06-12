@@ -83,3 +83,44 @@ test('hasAbility works on re-parented snapshots', () => {
   assert.equal(snap[0].hasAbility(SurvivorAbility.SCOUT), true);
   assert.equal(snap[0].hasAbility(SurvivorAbility.HEAL),  false);
 });
+
+// ── withPinnedPhase — re-watch under the round's own day-cycle phase ─────────
+// A re-watch (end-of-round Replay, "Replay Last Turn") happens AFTER
+// finalizeRound() advanced the phase. Replaying under the NEXT phase changes
+// lighting AND sight ranges (the fog veil + the card/animation gates), so the
+// re-watch wouldn't match the original. withPinnedPhase pins state.phase to
+// the round's phase for the duration and restores the live phase after — even
+// when the replay throws.
+
+test('withPinnedPhase pins the phase during fn and restores it after', async () => {
+  const { withPinnedPhase } = await import('../src/playback.js');
+  const state = { phase: 'day' };
+  let during = null;
+  const out = await withPinnedPhase(state, 'dawn', async () => {
+    during = state.phase;
+    return 42;
+  });
+  assert.equal(during, 'dawn', 'phase pinned while the replay runs');
+  assert.equal(state.phase, 'day', 'live phase restored after');
+  assert.equal(out, 42, 'fn result passed through');
+});
+
+test('withPinnedPhase restores the live phase when fn throws', async () => {
+  const { withPinnedPhase } = await import('../src/playback.js');
+  const state = { phase: 'night' };
+  await assert.rejects(
+    () => withPinnedPhase(state, 'dusk', async () => { throw new Error('boom'); }),
+    /boom/,
+  );
+  assert.equal(state.phase, 'night');
+});
+
+test('withPinnedPhase no-ops when the phase is missing or unchanged', async () => {
+  const { withPinnedPhase } = await import('../src/playback.js');
+  const state = { phase: 'day' };
+  let ran = false;
+  await withPinnedPhase(state, null, async () => { ran = true; assert.equal(state.phase, 'day'); });
+  assert.equal(ran, true);
+  await withPinnedPhase(state, 'day', async () => { assert.equal(state.phase, 'day'); });
+  assert.equal(state.phase, 'day');
+});

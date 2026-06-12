@@ -43,7 +43,11 @@ const ALLOWLIST = Object.freeze({
   // `_swapStubLeader` to look up the side-default leader on state.
   // See docs/design/faction-expansion.md.
   'server/lobby.js':             74,
-  'src/main.js':                 45,
+  // src/main.js bumped 45 → 46 (2026-06-11): the scenario dev-loader's
+  // `pov: 'hero'` flag (initScenario) selects which side is human-controlled
+  // so fog-of-war repros have an observer — a loader config check, not a
+  // faction-behavior branch.
+  'src/main.js':                 46,
   'src/ui.js':                   25,
 
   // Pre-existing core modules — generalized in Finding 1, residual checks
