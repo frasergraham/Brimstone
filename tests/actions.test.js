@@ -1074,10 +1074,9 @@ describe('executeBattle — splash damage', () => {
     state.entities.push(bystander);
 
     const r = executeBattle(state, hero, minion);
-    if (r.hit && r.attackRoll >= 2 * r.defenseRoll) {
-      // Should have splashed the bystander
-      assert.ok(bystander.hp < 5, 'bystander should take splash damage on crush');
-    }
+    // attackBonus=100 guarantees a crush regardless of dice
+    assert.ok(r.hit && r.attackRoll >= 2 * r.defenseRoll, 'should crush');
+    assert.ok(bystander.hp < 5, 'bystander should take splash damage on crush');
   });
 
   test('kill triggers splash on bystanders', () => {
@@ -1094,9 +1093,8 @@ describe('executeBattle — splash damage', () => {
     state.entities.push(bystander);
 
     const r = executeBattle(state, hero, minion);
-    if (r.killed) {
-      assert.ok(bystander.hp < 5, 'bystander should take splash damage on kill');
-    }
+    assert.ok(r.killed, 'attackBonus=100 vs 1 HP target should always kill');
+    assert.ok(bystander.hp < 5, 'bystander should take splash damage on kill');
   });
 
   test('attacker is excluded from splash', () => {
@@ -1110,9 +1108,8 @@ describe('executeBattle — splash damage', () => {
     state.entities.push(minion);
 
     const r = executeBattle(state, hero, minion);
-    if (r.killed) {
-      assert.equal(hero.hp, 10, 'attacker should not take splash damage');
-    }
+    assert.ok(r.killed, 'attackBonus=100 vs 1 HP target should always kill');
+    assert.equal(hero.hp, 10, 'attacker should not take splash damage');
   });
 
   test('splash can kill bystanders and remove them', () => {
@@ -1129,11 +1126,10 @@ describe('executeBattle — splash damage', () => {
     state.entities.push(fragile);
 
     const r = executeBattle(state, hero, minion);
-    if (r.killed) {
-      assert.ok(!state.entities.find(e => e.id === fragile.id),
-        'splash-killed bystander should be removed');
-      assert.ok(r.splashKills.length > 0, 'splashKills should contain the killed bystander');
-    }
+    assert.ok(r.killed, 'attackBonus=100 vs 1 HP target should always kill');
+    assert.ok(!state.entities.find(e => e.id === fragile.id),
+      'splash-killed bystander should be removed');
+    assert.ok(r.splashKills.length > 0, 'splashKills should contain the killed bystander');
   });
 
   test('no splash on normal hit (no crush, no kill)', () => {
@@ -1151,15 +1147,14 @@ describe('executeBattle — splash damage', () => {
     bystander.hp = 5; bystander.maxHp = 5;
     state.entities.push(bystander);
 
-    // Run many times — on a normal hit (1 dmg, no crush, no kill), no splash
-    for (let i = 0; i < 20; i++) {
-      minion.hp = 50;
-      bystander.hp = 5;
-      const r = executeBattle(state, hero, minion);
-      if (r.hit && r.attackRoll < 2 * r.defenseRoll && !r.killed) {
-        assert.equal(bystander.hp, 5, 'no splash on normal hit');
-      }
-    }
+    // Force all dice to 4: attackRoll = 4+1 = 5 vs defenseRoll = 4+0 = 4 —
+    // a hit, but not a crush (5 < 8) and not a kill (50 HP target).
+    state.setForcedDice(4, 4, 4, 4, 4, 4, 4, 4);
+    const r = executeBattle(state, hero, minion);
+    assert.ok(r.hit, 'forced dice should produce a hit');
+    assert.ok(r.attackRoll < 2 * r.defenseRoll, 'forced dice should not crush');
+    assert.ok(!r.killed, 'high-HP target should survive');
+    assert.equal(bystander.hp, 5, 'no splash on normal hit');
   });
 
   test('splashKills field is always present', () => {

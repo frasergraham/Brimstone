@@ -57,6 +57,8 @@ import { deleteAsyncGame as _deleteAsyncGame,
          getAsyncGame as _getAsyncGame,
          getAsyncGameByCode }                  from './server/async-game.js';
 import { serializeState } from './server/state-sync.js';
+import { attachHeartbeat, startHeartbeat } from './server/heartbeat.js';
+import { handleJoinRedirect } from './server/join-route.js';
 import { getGameModeConfig, getDevMode } from './server/game-mode-config.js';
 import {
   getPersonalities as getRemoteBattlePersonalities,
@@ -541,14 +543,7 @@ app.get('/invite', (req, res) => {
 });
 
 // Join link: redirect to hash-based deep link for client-side lobby join
-app.get('/join', (req, res) => {
-  const code = (req.query.code || '').trim();
-  if (!code) { res.status(400).send('Missing game code.'); return; }
-  const slot = req.query.slot;
-  let hash = `#join=${encodeURIComponent(code)}`;
-  if (slot != null && slot !== '') hash += `&slot=${encodeURIComponent(slot)}`;
-  res.redirect(`/${hash}`);
-});
+app.get('/join', handleJoinRedirect);
 
 // Get linked identities for the authenticated player
 app.get('/api/identities', (req, res) => {
@@ -1053,8 +1048,7 @@ wss.on('connection', ws => {
     return;
   }
   const cs = clientState(ws);
-  ws._isAlive = true;
-  ws.on('pong', () => { ws._isAlive = true; });
+  attachHeartbeat(ws);
 
   ws.on('message', raw => {
     let msg;
@@ -1082,36 +1076,27 @@ wss.on('connection', ws => {
 });
 
 // ── Heartbeat — detect zombie connections within ~30s ────────────────────────
+// Ping/pong sweep lives in server/heartbeat.js; the callback below additionally
+// sends the state-sync heartbeat to clients in active games.
 
-const HEARTBEAT_INTERVAL_MS = 15_000;
-
-const _heartbeat = setInterval(() => {
-  for (const ws of wss.clients) {
-    if (!ws._isAlive) { ws.terminate(); continue; }
-    ws._isAlive = false;
-    ws.ping();
-
-    // Send state-sync heartbeat to clients in active games
-    const cs = clients.get(ws);
-    if (cs?.roomId) {
-      const room = getRoom(cs.roomId);
-      if (room?.state) {
-        const ready = [];
-        for (const [pid, r] of room.state.playerReady ?? []) { if (r) ready.push(pid); }
-        send(ws, {
-          type: 'heartbeat',
-          roomId: cs.roomId,
-          round: room.state.round,
-          planningPhase: !!room.state.planningPhase,
-          gameOver: !!room.state.gameOver,
-          playersReady: ready,
-        });
-      }
+startHeartbeat(wss, ws => {
+  const cs = clients.get(ws);
+  if (cs?.roomId) {
+    const room = getRoom(cs.roomId);
+    if (room?.state) {
+      const ready = [];
+      for (const [pid, r] of room.state.playerReady ?? []) { if (r) ready.push(pid); }
+      send(ws, {
+        type: 'heartbeat',
+        roomId: cs.roomId,
+        round: room.state.round,
+        planningPhase: !!room.state.planningPhase,
+        gameOver: !!room.state.gameOver,
+        playersReady: ready,
+      });
     }
   }
-}, HEARTBEAT_INTERVAL_MS);
-
-wss.on('close', () => clearInterval(_heartbeat));
+});
 
 function route(ws, cs, msg) {
   switch (msg.type) {

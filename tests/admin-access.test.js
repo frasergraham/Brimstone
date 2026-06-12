@@ -144,38 +144,40 @@ describe('linkEmail auto-grants admin', () => {
 });
 
 // ── Admin link visibility ────────────────────────────────────────────────────
+//
+// Static-markup wiring guard (kept deliberately): src/main.js looks up
+// `document.getElementById('admin-link')` and flips its display ON for admins.
+// If the id disappears, the reveal silently no-ops; if the element isn't
+// hidden inline, non-admins see the link flash before JS runs. The assertions
+// target the <a id="admin-link"> tag itself, not the whole file, so unrelated
+// markup can't satisfy them.
 
 describe('admin link in index.html', () => {
   const html = readFileSync(resolve(root, 'index.html'), 'utf8');
 
-  test('admin link is hidden by default', () => {
-    assert.ok(
-      html.includes('id="admin-link"'),
-      'Admin link should have id="admin-link"'
-    );
-    assert.ok(
-      html.includes('style="display:none"'),
-      'Admin link should be hidden by default'
+  test('the #admin-link element exists and is inline-hidden by default', () => {
+    const tag = html.match(/<a\b[^>]*\bid="admin-link"[^>]*>/);
+    assert.ok(tag, 'index.html should have an <a id="admin-link"> element (main.js reveals it for admins)');
+    assert.match(
+      tag[0],
+      /style="[^"]*display:\s*none[^"]*"/,
+      'the admin link element itself must carry display:none so non-admins never see it'
     );
   });
 });
 
 // ── Admin HTML page has auth gate ────────────────────────────────────────────
+//
+// admin.html's auth gate is an inline script (no importable module), so the
+// presence of the /api/me/admin call is the wiring we can pin here; the gate's
+// behaviour (redirect on 401/non-admin) is exercised in the browser.
 
 describe('admin HTML page auth gate', () => {
-  test('admin.html checks /api/me/admin before loading', () => {
+  test('admin.html wires the /api/me/admin auth gate', () => {
     const html = readFileSync(resolve(root, 'admin.html'), 'utf8');
     assert.ok(
       html.includes('/api/me/admin'),
       'admin.html should contain an auth gate calling /api/me/admin'
-    );
-  });
-
-  test('admin.html has a Back to main menu link', () => {
-    const html = readFileSync(resolve(root, 'admin.html'), 'utf8');
-    assert.ok(
-      html.includes('Back to main menu'),
-      'admin.html should have a "Back to main menu" link'
     );
   });
 

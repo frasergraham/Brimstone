@@ -6,9 +6,6 @@
 
 import { describe, test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
 
 import {
   createLobby, fillAllWithAI, startGame, claimSlot,
@@ -18,8 +15,6 @@ import {
 } from '../server/lobby.js';
 import { serializeState } from '../server/state-sync.js';
 import db from '../server/db.js';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -141,17 +136,34 @@ describe('resolution error recovery', () => {
       'new AI engine must reference the restored state');
   });
 
-  test('_executeResolution catch path invokes the recovery helper', () => {
-    // Source-level wiring check (same convention as timer-reset.test.js):
-    // the resolvePlansMP catch block must attempt rollback before falling
-    // back to an empty step list.
-    const lobbyJs = readFileSync(join(__dirname, '..', 'server', 'lobby.js'), 'utf8');
-    const catchStart = lobbyJs.indexOf('resolvePlansMP error');
-    assert.ok(catchStart !== -1);
-    const catchBlock = lobbyJs.slice(catchStart, catchStart + 500);
-    assert.ok(catchBlock.includes('_recoverFromResolutionError(room, preStateJson)'),
-      'catch block must call _recoverFromResolutionError with the pre-resolution snapshot');
-    assert.ok(catchBlock.includes('return'),
-      'catch block must return after successful rollback');
+  test('a resolver throw during live resolution rolls the room back to planning', () => {
+    // End-to-end catch-path test: make resolvePlansMP throw mid-resolution by
+    // sabotaging state.playerColorFor (only called from the resolver while
+    // executing actions — never during plan submission or serialization), then
+    // trigger resolution for real by submitting the final plan.
+    const { roomId, ws, playerId } = createTestGame();
+    const room = getRoom(roomId);
+    const roundBefore = room.state.round;
+
+    // Submit the AI's plan first so the human's submission completes the round.
+    const aiSeat = room.players.find(s => s.isAI);
+    handlePlanSubmit(aiSeat.playerId, roomId, [], roundBefore);
+
+    room.state.playerColorFor = () => { throw new Error('injected resolver failure'); };
+
+    const unit = room.state.entities.find(e => e.alive && e.ownerId === playerId);
+    handlePlanSubmit(playerId, roomId, [{ type: 'explore', entityId: unit.id }], roundBefore);
+
+    // The throw must have been caught and rolled back — not finalized.
+    assert.equal(room.phase, 'planning', 'room must be back in planning phase');
+    assert.equal(room.state.round, roundBefore, 'round must not advance');
+    assert.equal(room.state.playerReady.get(playerId), false,
+      'submitted plans must be discarded so the player can resubmit');
+    assert.notEqual(typeof room.state.playerColorFor, 'undefined');
+    assert.doesNotThrow(() => room.state.playerColorFor(unit),
+      'restored state must not carry the sabotaged instance method');
+
+    const errMsg = ws.msgsOf('error').find(m => m.message.includes('resolution failed'));
+    assert.ok(errMsg, 'players must be told the round was reset');
   });
 });
