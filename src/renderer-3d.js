@@ -481,6 +481,35 @@ export function stripRootBoneTranslation(animGroup, rootName = 'mixamorig:Hips',
   return stripped;
 }
 
+/** Mean Y of a clip's root (Hips) position track — the clip's authored
+ *  standing baseline, in the clip's own export units. Returns null when the
+ *  clip has no usable hips position track. This is the anchor a rig's clips
+ *  rebase to (see rebaseRootBoneY): the rig's own embedded idle measures the
+ *  stance the unit actually stands in, in the rig's own units. The T-pose
+ *  rest height is the WRONG anchor for that — a rig whose idle is a crouch
+ *  (the zombie shamble: idle hips ~0.93 vs rest ~1.05) gets scaled up to its
+ *  upright height and its feet float off the ground. Pure; exported for
+ *  tests. */
+export function rootBoneTrackAverageY(animGroup, rootName = 'mixamorig:Hips') {
+  if (!animGroup || !Array.isArray(animGroup.targetedAnimations)) return null;
+  const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
+  for (const ta of animGroup.targetedAnimations) {
+    const tName = ta && ta.target && ta.target.name;
+    const prop  = ta && ta.animation && ta.animation.targetProperty;
+    if (!tName || !prop) continue;
+    if (tName !== rootName && stripDup(tName) !== rootName) continue;
+    if (!/position/i.test(prop)) continue;
+    const keys = ta.animation.getKeys ? ta.animation.getKeys() : null;
+    if (!keys || !keys.length) continue;
+    let sum = 0, n = 0;
+    for (const k of keys) {
+      if (k.value && typeof k.value.y === 'number') { sum += k.value.y; n++; }
+    }
+    if (n > 0) return sum / n;
+  }
+  return null;
+}
+
 /** Rebase a clip's root (Hips) translation so its VERTICAL baseline sits at the
  *  rig's own rest height `restY`, while preserving the clip's bob and zeroing
  *  horizontal drift. This is the asset-agnostic alternative to
@@ -488,7 +517,8 @@ export function stripRootBoneTranslation(animGroup, rootName = 'mixamorig:Hips',
  *  an ABSOLUTE hip height in their own export's units, so a rig's own idle, a
  *  shared walk.glb, and a hip-centred export all disagree — keeping (keepY) or
  *  zeroing the absolute value makes one rig float and another sink. Rebasing to
- *  `restY` (the Hips' rest-pose Y, measured per rig at load) anchors every clip
+ *  `restY` (the rig's standing anchor, measured per rig at load from its
+ *  embedded idle's hip baseline — see rootBoneTrackAverageY) anchors every clip
  *  at the same standing height regardless of which export it came from. When
  *  `restY` is null (no rest measurement — test stubs) the Y is left untouched.
  *  Pure; exported for tests. */
@@ -5337,16 +5367,23 @@ export class Renderer3D {
       }
       const { scale, feetOffset, hipCentered } = this._normalisePaladinSource(meshes);
       const transformNodes = Array.isArray(result.transformNodes) ? result.transformNodes.slice() : [];
-      // Measure the Hips' REST-pose Y *before* the idle starts animating — this
-      // is the rig's correct standing hip height, the anchor every clip rebases
-      // to (rebaseRootBoneY). Different exports (this idle, the shared walk.glb,
+      // The rig's standing anchor — the hip height every clip rebases to
+      // (rebaseRootBoneY). Different exports (this idle, the shared walk.glb,
       // a hip-centred paladin) carry different absolute hip heights, so without
-      // this one floats while another sinks.
+      // a per-rig anchor one floats while another sinks. The anchor is the
+      // embedded idle's own authored hip baseline: it's in the rig's units AND
+      // measures the stance the unit actually stands in. The T-pose rest
+      // height (the previous anchor) over-lifts any rig whose idle crouches —
+      // the zombie shamble (idle hips ~0.93, rest ~1.05) was scaled upright
+      // and its feet floated off the ground, skating in idle and in walk.
+      // Rest pose stays as the fallback when the idle has no hips track.
       const hipsTN = transformNodes.find(tn => tn && /(^|:)Hips$/.test(tn.name || ''));
-      const restHipsY = (hipsTN && hipsTN.position && typeof hipsTN.position.y === 'number')
+      const restPoseHipsY = (hipsTN && hipsTN.position && typeof hipsTN.position.y === 'number')
         ? hipsTN.position.y : null;
-      // Rebase the embedded idle to that rest height (preserves the weight-shift
-      // sway + bob, strips horizontal drift) so the rig stands on the ground.
+      const idleBaseHipsY = rootBoneTrackAverageY(idleGroup);
+      const restHipsY = (idleBaseHipsY != null) ? idleBaseHipsY : restPoseHipsY;
+      // Strip the idle's horizontal drift. Y is an identity by construction
+      // (the anchor IS this clip's average), so the authored stance is kept.
       rebaseRootBoneY(idleGroup, restHipsY);
       if (idleGroup && typeof idleGroup.start === 'function') {
         idleGroup.weight = 1.0;

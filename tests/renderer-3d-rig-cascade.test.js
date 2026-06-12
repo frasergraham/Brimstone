@@ -15,6 +15,7 @@ import {
   fallbackRigCandidates,
   stripRootBoneTranslation,
   rebaseRootBoneY,
+  rootBoneTrackAverageY,
   MANNEQUIN_RIG_FILE,
   LAZY_RIG_TYPES,
 } from '../src/renderer-3d.js';
@@ -50,6 +51,43 @@ describe('rebaseRootBoneY', () => {
     assert.equal(g._keys[0].value.y, 90, 'Y unchanged');
     assert.equal(g._keys[0].value.x, 0);
     assert.equal(g._keys[0].value.z, 0);
+  });
+});
+
+describe('rootBoneTrackAverageY — the rig\'s standing anchor', () => {
+  test('returns the mean hips Y of the clip', () => {
+    const g = makeHipsGroup(); // keys y 90 & 92
+    assert.equal(rootBoneTrackAverageY(g), 91);
+  });
+
+  test('returns null when there is no hips position track', () => {
+    assert.equal(rootBoneTrackAverageY(null), null);
+    assert.equal(rootBoneTrackAverageY({ targetedAnimations: [] }), null);
+    const rotOnly = { targetedAnimations: [{ target: { name: 'mixamorig:Hips' },
+      animation: { targetProperty: 'rotationQuaternion', getKeys: () => [{ value: {} }] } }] };
+    assert.equal(rootBoneTrackAverageY(rotOnly), null);
+  });
+
+  test('matches names with the .001 dedup suffix', () => {
+    const keys = [{ value: { x: 0, y: 10, z: 0 } }];
+    const g = { targetedAnimations: [{ target: { name: 'mixamorig:Hips.001' },
+      animation: { targetProperty: 'position', getKeys: () => keys } }] };
+    assert.equal(rootBoneTrackAverageY(g), 10);
+  });
+
+  // The zombie float regression: the zombie's embedded idle is a CROUCHED
+  // shamble (hips ~0.93) while its T-pose rest hip height is ~1.05. Anchoring
+  // the idle to the rest height scaled the whole crouch up ~13% and lifted the
+  // feet off the ground. Anchoring to the idle's own average instead must be
+  // an identity on Y — the authored stance is kept, only XZ drift is stripped.
+  test('rebasing a clip to its own track average keeps the authored stance', () => {
+    const keys = [{ value: { x: 0.05, y: 0.92, z: 0.02 } }, { value: { x: -0.03, y: 0.94, z: -0.01 } }];
+    const g = { targetedAnimations: [{ target: { name: 'mixamorig:Hips' },
+      animation: { targetProperty: 'position', getKeys: () => keys } }], _keys: keys };
+    rebaseRootBoneY(g, rootBoneTrackAverageY(g));
+    assert.ok(Math.abs(g._keys[0].value.y - 0.92) < 1e-9, 'crouch kept, not lifted to rest');
+    assert.ok(Math.abs(g._keys[1].value.y - 0.94) < 1e-9);
+    for (const k of g._keys) { assert.equal(k.value.x, 0); assert.equal(k.value.z, 0); }
   });
 });
 
