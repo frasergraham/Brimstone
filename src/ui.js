@@ -26,6 +26,7 @@ import {
   positionArcPopup, startArcTracking, positionPopup,
   attachPopupListeners, touchDist,
 } from './ui-popup.js';
+import { isVoiceMuted, toggleVoiceMuted, voiceMuteIconHtml } from './voiceover.js';
 
 /** Enum of UI operating modes. */
 export const UIMode = Object.freeze({ LOCAL: 'local', ONLINE: 'online', SPECTATOR: 'spectator' });
@@ -5301,9 +5302,20 @@ export class UIController {
     if (col.kind === 'conversation') {
       const esc = (s) => String(s ?? '')
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      // Voice-only mute lives on the bubble itself (top-right of the header) so
+      // the player can silence narration without leaving the conversation. It
+      // toggles the SHARED voiceover mute (src/voiceover.js) — same state as the
+      // tutorial tooltip's button — and never affects SFX/music. Shown ONLY when
+      // this conversation actually has generated narration (col.hasVoice).
+      let muteBtnHtml = '';
+      if (col.hasVoice) {
+        const muteTitle = isVoiceMuted() ? 'Unmute narration' : 'Mute narration';
+        muteBtnHtml = `<button class="replay-conv-mute" type="button" title="${muteTitle}" aria-label="${muteTitle}">${voiceMuteIconHtml(isVoiceMuted())}</button>`;
+      }
       return `<div class="replay-step-col replay-conv-col" data-step="${col.stepIndex}">`
            + `<div class="replay-step-header">`
            +   `<div class="replay-step-label">💬 ${esc(col.title)}</div>`
+           +   muteBtnHtml
            + `</div>`
            + rows
            + `<div class="replay-conv-btns">`
@@ -5336,6 +5348,7 @@ export class UIController {
     const btn = col?.querySelector?.('.replay-conv-btn');
     const contBtn = col?.querySelector?.('.replay-conv-continue');
     if (!btn) return;
+    this._wireConvMuteBtn(col);
     if (cardState === 'done') {
       btn.textContent = 'REPLAY';
       btn.onclick = onReplay ?? null;
@@ -5348,6 +5361,28 @@ export class UIController {
       btn.onclick = onSkip ?? null;
       if (contBtn) contBtn.style.display = 'none';
     }
+  }
+
+  /**
+   * Wire the conversation card's voice-only mute button (idempotent — the card
+   * state flips several times per conversation). Click toggles the shared
+   * voiceover mute; the glyph syncs immediately. No long-lived subscription:
+   * the card is transient, and each new card paints the current mute state in
+   * its header HTML.
+   */
+  _wireConvMuteBtn(col) {
+    const muteBtn = col?.querySelector?.('.replay-conv-mute');
+    if (!muteBtn || muteBtn.dataset.wired === '1') return;
+    muteBtn.dataset.wired = '1';
+    const sync = () => {
+      const muted = isVoiceMuted();
+      muteBtn.innerHTML = voiceMuteIconHtml(muted);
+      const title = muted ? 'Unmute narration' : 'Mute narration';
+      muteBtn.title = title;
+      muteBtn.setAttribute('aria-label', title);
+    };
+    muteBtn.onclick = (e) => { e.stopPropagation(); toggleVoiceMuted(); sync(); };
+    sync();
   }
 
   /**

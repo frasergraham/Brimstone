@@ -750,6 +750,11 @@ describe('buildConversationDigest', () => {
     assert.equal(digest[0].entries[0].actor.entityId, 'e1');
     assert.equal(digest[0].entries[0].target, null);
   });
+
+  test('hasVoice defaults false and reflects the opt — gates the card mute button', () => {
+    assert.equal(buildConversationDigest(convo, [hero])[0].hasVoice, false);
+    assert.equal(buildConversationDigest(convo, [hero], { hasVoice: true })[0].hasVoice, true);
+  });
 });
 
 // ── Hover coordinates + overlay builder (turn-card hover highlights) ─────────

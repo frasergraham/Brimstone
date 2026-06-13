@@ -342,13 +342,16 @@ export function isEventVisible(ev, ents, isVisible,
  * @param {{ id, title, lines }} convo — parsed conversation (conversation-parser.js).
  * @param {Map<string, object>|object[]} participants — bound role→entity map
  *   (or a plain entity array); the first two become the card's actor/target.
+ * @param {{ hasVoice?: boolean }} [opts] — hasVoice gates the card's voice-mute
+ *   button: shown only when this conversation actually has generated narration.
  */
-export function buildConversationDigest(convo, participants) {
+export function buildConversationDigest(convo, participants, { hasVoice = false } = {}) {
   const ents = participants instanceof Map ? [...participants.values()] : [...(participants ?? [])];
   return [{
     stepIndex: `conv:${convo.id}`,
     kind:      'conversation',
     title:     convo.title ?? convo.id,
+    hasVoice,
     entries: [{
       entityId:   ents[0]?.id ?? null,
       actor:      unitRef(ents[0] ?? null),

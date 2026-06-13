@@ -865,21 +865,22 @@ describe('hint suppression', () => {
 // ── Voiceover manifest stays in sync with step text ──────────────────────────
 
 describe('voiceover manifest', () => {
-  test('manifest hashes match current narration text (regenerate with scripts/generate-voiceover.mjs)', async () => {
+  test('manifest matches the generator clip index (regenerate with scripts/generate-voiceover.mjs)', async () => {
     const { existsSync } = await import('node:fs');
     const manifestUrl = new URL('../assets/voice/manifest.json', import.meta.url);
     if (!existsSync(manifestUrl)) return; // no clips generated yet — nothing to drift
-    const { narrationText, textHash } = await import('../scripts/generate-voiceover.mjs');
+    // buildClipIndex is the single source of truth the generator writes from —
+    // covers tutorial + hint steps AND every campaign conversation line.
+    const { buildClipIndex } = await import('../scripts/generate-voiceover.mjs');
+    const index = buildClipIndex();
     const manifest = JSON.parse(readFileSync(manifestUrl, 'utf8'));
-    const byId = new Map();
-    for (const { key, steps } of ALL_SCRIPTS) {
-      for (const s of steps) byId.set(`${key}/${s.id}`, s);
-    }
-    for (const [id, hash] of Object.entries(manifest)) {
-      const step = byId.get(id);
-      assert.ok(step, `manifest entry "${id}" has no matching step — delete the stale clip`);
-      assert.equal(textHash(narrationText(step)), hash,
+    for (const [id, entry] of Object.entries(manifest)) {
+      const want = index.get(id);
+      assert.ok(want, `manifest entry "${id}" has no matching narration — delete the stale clip`);
+      assert.equal(entry.hash, want.hash,
         `narration for "${id}" is stale — re-run scripts/generate-voiceover.mjs`);
+      assert.equal(entry.voice, want.voiceKey,
+        `voice for "${id}" changed — re-run scripts/generate-voiceover.mjs`);
     }
   });
 });

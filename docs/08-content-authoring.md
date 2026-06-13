@@ -131,7 +131,7 @@ Rules enforced by the step lint in `tests/tutorial.test.js`: bodies ≤230 chars
 
 Hints are suppressed after the mission is completed or the player clicks "Skip hints" (localStorage, `markHintsSeen`/`areHintsSuppressed` in `src/mission-conductor.js`) — replays stay clean.
 
-**Voiceover:** steps are narrated from `assets/voice/<scriptKey>/<stepId>.mp3` when present (config `voiceKey` names the directory). Generate clips with `node scripts/generate-voiceover.mjs` (needs `ELEVENLABS_API_KEY` or `OPENAI_API_KEY`); a manifest hash check in the test suite fails if step text changes without regenerating its clip. Missing clips are silent no-ops, and the tooltip has a mute toggle.
+**Voiceover:** steps are narrated from `assets/voice/<scriptKey>/<stepId>.mp3` when present (config `voiceKey` names the directory), in the `narrator` voice. See "Voiceover (narration audio)" below for the shared generator/registry/mute used by tutorial steps *and* conversation lines.
 
 **Validation:** the editor runs the assembled JSON through `loadMissionJSON` / `validateMissionJSON` before download. The four hardening checks: (1) tiles in-bounds, (2) `objectives.win`/`lose` types in `KNOWN_OBJECTIVE_TYPES` (mirrors the 17-case switch in `buildVictoryDelegate`, `src/campaign/campaign.js`), (3) handmade maps define their starts, (4) `map.roadSeed` carried verbatim for regen determinism. The editor *also* runs the save-time `validateBuildingFootprints` (separate from the runtime checks, kept out of `validateMissionJSON` for backward compat) — it rejects any building with an empty `footprintHexes` or a footprint whose `buildingFootprintOf` doesn't back-point to its entrance (broken pair).
 
@@ -191,5 +191,13 @@ Roles are **slots** — the mission binds them to live entities at trigger time.
 Scripted NPCs (`npcs[]`) spawn at mission init as hero-owned survivors tagged `isNpc` — view-only in game (not plannable, never join the roster, excluded from survivor-count objectives), and the tag survives save/resume via state-sync. Playback orchestration lives in `src/conversation-player.js`.
 
 The Mission Editor's Timeline tab has an **NPCs & Conversations** lane for the JSON side (NPC defs, conversation defs, and a Conversation select on trigger cards); the markdown itself stays hand-authored.
+
+## Voiceover (narration audio)
+
+One generator narrates both tutorial/hint **steps** and conversation **lines**:
+
+- **Voices** live in `src/campaign/voices.js` — each entry pairs a TTS timbre (`openaiVoice` / `elevenVoiceId`) with a **`description` prompt** that shapes delivery (passed to OpenAI as `instructions`). The description is the tracked source of truth: it's folded into each clip's manifest hash, so editing a voice or its prompt regenerates exactly the clips that use it. Conversation lines pick a voice by **role name** (`hero`, `innkeeper`, `witch`, …, else `default`); steps use `narrator`. Give a role its own voice by adding a same-named entry to `VOICES`.
+- **Clips:** steps → `assets/voice/<scriptKey>/<stepId>.mp3`; conversation lines → `assets/voice/conv/<convId>/<lineIndex>.mp3`. Generate with `node scripts/generate-voiceover.mjs` (`--dry-run` lists work; needs `ELEVENLABS_API_KEY` or `OPENAI_API_KEY`). The run is incremental (hash-gated) and prunes orphaned clips. Missing clips are always silent no-ops, so partial generation is safe. A test (`tests/tutorial.test.js` → "voiceover manifest") fails if any clip's text/voice drifts from `manifest.json`.
+- **Playback + mute:** `src/voiceover.js` owns one VO-only mute (localStorage `bs_voice_muted`) shared by the tutorial tooltip's 🔊 button and a matching button on the conversation card header — muting narration never touches SFX/music. The conductor and `conversation-player.js` both play through it.
 
 > **Admin tooling:** `/admin/tools` (`admin-tools.html`) is the unified **Caleb's Hollow Tools** page — **Assets** (Babylon 3D model browser) | **Lighting** (Renderer3D tuner) | **Mission Editor** tabs, each lazy-initialised on first activation.

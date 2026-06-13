@@ -16,10 +16,21 @@ import { playback, playbackDelay } from './playback.js';
 import { AppMode, setMode } from './app-mode.js';
 import { buildConversationDigest } from './replay-timeline.js';
 import { runScriptedActions } from './campaign/scripted-actions.js';
+import { playVoiceClip, stopVoice, loadVoiceManifest, hasVoiceClip, hasConversationVoice } from './voiceover.js';
 
 /** Auto-advance hold for one dialog line — long enough to read, capped. */
 export function conversationReadingMs(text) {
   return Math.max(1600, Math.min(6000, 400 + String(text ?? '').length * 40));
+}
+
+/**
+ * URL of the narration clip for one conversation line. Stable: keyed by the
+ * conversation's id and the line's positional index, namespaced under `conv/`
+ * so it never collides with tutorial/hint clips. Generated (per-speaker voice)
+ * by scripts/generate-voiceover.mjs; a missing file plays silently.
+ */
+export function conversationClipUrl(convId, lineIndex, base = 'assets/voice') {
+  return `${base}/conv/${convId}/${lineIndex}.mp3`;
 }
 
 const _sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -55,16 +66,26 @@ export async function playConversation(opts) {
   let skipped = false;
   const skipFlag = () => skipped || playback.jumpToEnd || playback.aborted || playback.goBack;
 
+  // Learn which clips actually exist before building the card — drives both the
+  // card's voice-mute button (shown only with narration) and per-line playback
+  // (only request clips that were generated, no 404 churn).
+  await loadVoiceManifest();
+  const hasVoice = hasConversationVoice(convo.id);
+
   // Record per-line presentation data up front — the REPLAY re-run must work
   // even after a participant despawned (bubbles fall back to the hex).
-  const lineRecords = convo.lines.map(l => {
+  const lineRecords = convo.lines.map((l, idx) => {
     const e = participants.get(l.role) ?? null;
+    const clipId = `conv/${convo.id}/${idx}`;
     return {
       text: l.text,
       name: speakerName(e),
       entityId: e?.id ?? null,
       col: e?.col ?? null,
       row: e?.row ?? null,
+      // Per-speaker narration clip for this line (voice picked by role at
+      // generation time). Only set when the clip was actually generated.
+      clipUrl: hasVoiceClip(clipId) ? conversationClipUrl(convo.id, idx) : null,
     };
   });
   const participantIds = [...participants.values()].map(e => e.id);
@@ -112,7 +133,7 @@ export async function playConversation(opts) {
   }
 
   // ── Turn card ──────────────────────────────────────────────────────────────
-  const digest = buildConversationDigest(convo, participants);
+  const digest = buildConversationDigest(convo, participants, { hasVoice });
   const cardKey = digest[0].stepIndex;
   if (ui) {
     if (manageHud) ui.showReplayTimeline?.(digest);
@@ -257,6 +278,7 @@ async function _presentLines(lineRecords, { state, renderer, ui, skipFlag, autoO
       if (!renderer?.showSpeechBubble) {
         // 2D / headless fallback: blocking modal per line (renderer.js is
         // editor-only now, so no bespoke 2D bubble work).
+        playVoiceClip(line.clipUrl);
         await ui?.showStoryModal?.(line.name, line.text);
         continue;
       }
@@ -265,6 +287,9 @@ async function _presentLines(lineRecords, { state, renderer, ui, skipFlag, autoO
       await _frameConversationStep(line, { renderer, ui, participantIds, centroid });
       bubble?.dispose();
       bubble = _showLine(line, { state, renderer });
+      // Start this speaker's narration in step with the bubble. playVoiceClip
+      // self-gates on the shared VO mute and stops the previous line's clip.
+      playVoiceClip(line.clipUrl);
       if (autoOnly) {
         await _autoHold(conversationReadingMs(line.text), skipFlag);
         continue;
@@ -285,6 +310,7 @@ async function _presentLines(lineRecords, { state, renderer, ui, skipFlag, autoO
     }
   } finally {
     bubble?.dispose();
+    stopVoice();   // narration never outlives the dialog it belongs to
   }
 }
 

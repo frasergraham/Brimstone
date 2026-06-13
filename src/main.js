@@ -58,6 +58,7 @@ import { processStoryTriggers } from './campaign/missions.js';
 import { loadConversation, bindParticipants } from './campaign/conversation-registry.js';
 import { spawnNpcEntity, runScriptedActions } from './campaign/scripted-actions.js';
 import { playConversation } from './conversation-player.js';
+import { loadVoiceManifest } from './voiceover.js';
 import { buildMissionMap } from './campaign/mission-map.js';
 import { run3DCombatCardHold } from './combat-cinematic.js';
 import { runDiscoveryReadout, discoveryText } from './discovery-cinematic.js';
@@ -4120,8 +4121,10 @@ function _initCampaignMission(missionDef) {
   // Conversation triggers without a `flag` dedupe per attempt via this set —
   // fresh every mission init, so e.g. the intro replays on retry.
   state._firedConversations = new Set();
-  // Prefetch conversation markdown so playback never awaits the network.
+  // Prefetch conversation markdown + the voice manifest so playback never
+  // awaits the network (the manifest also gates the card's voice-mute button).
   if (missionDef.conversations?.length) {
+    loadVoiceManifest().catch(() => {});
     Promise.all(missionDef.conversations.map(c => loadConversation(c.file)))
       .catch(err => console.warn('[conversation] prefetch failed:', err));
   }

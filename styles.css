@@ -5647,6 +5647,24 @@ img.plan-step-avatar {
   animation: offscreen-arrow-pulse 1.2s ease-in-out infinite;
 }
 .replay-conv-continue:hover { color: #000; background: rgba(232, 197, 88, 0.95); }
+/* Voice-only mute, top-right of the conversation card header. Silences spoken
+   narration (shared with the tutorial 🔊/🔇); leaves SFX/music alone. */
+.replay-conv-mute {
+  pointer-events: auto;                /* the timeline itself ignores pointers */
+  flex: 0 0 auto;
+  background: none;
+  border: none;
+  padding: 0 0.15rem;
+  font-size: 0.95rem;                  /* drives the 1em SVG glyph size */
+  line-height: 1;
+  color: #e8c558;                      /* gold — currentColor for the monochrome glyph */
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+.replay-conv-mute:hover { opacity: 1; }
+/* Monochrome speaker glyph (shared: conversation card + tutorial tooltip). */
+.vo-icon { display: block; }
 
 /* Off-screen conversation arrow — edge-clamped glyph pointing at dialog
    happening outside the viewport (fixed-camera mode). Positioned/rotated
@@ -6179,11 +6197,13 @@ body.spectator-mode #game-screen   { display: flex !important; }
   right: 0.5rem;
   background: none;
   border: none;
-  font-size: 0.85rem;
+  font-size: 0.95rem;                  /* drives the 1em SVG glyph size */
+  color: #d4a72c;                      /* gold — currentColor for the monochrome glyph */
   cursor: pointer;
   opacity: 0.7;
   padding: 0.1rem;
 }
+.tut-voice-btn:hover { opacity: 1; }
 .tut-voice-btn:hover { opacity: 1; }
 
 /* Element spotlight: a golden glow outline drawn around a UI element */
