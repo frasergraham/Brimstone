@@ -4,7 +4,7 @@
     "voice": "innkeeper"
   },
   "conv/ch1m1-intro/1": {
-    "hash": "46d7ace38b073afb231e4bc3b9057531ca1c6b5d820d8fed980799444363dc3f",
+    "hash": "e8c68e392dec3d4bba67951eb6045c4800f327391f890ed68d1b8a9ba8ea2e04",
     "voice": "hero"
   },
   "conv/ch1m1-intro/2": {
@@ -12,11 +12,111 @@
     "voice": "innkeeper"
   },
   "conv/ch1m1-intro/3": {
-    "hash": "9a2b80a0180c8f10581ec29ea4c5632a60f45e6802e6beaa350166eddb5ff726",
+    "hash": "3d955a50aa280b1009027870553d62251b335d567c3cca04562f6cabb99cc585",
     "voice": "hero"
   },
   "conv/ch1m1-intro/4": {
     "hash": "bb4ffde333d01e7b3641d13911dd3e03c008a4b6c8ac752c2c8e91b8e70e6625",
     "voice": "innkeeper"
+  },
+  "tutorial/action_budget": {
+    "hash": "8026e730305ead7963263a197d6967f457a5ba8326393e02378c304c7685f358",
+    "voice": "narrator"
+  },
+  "tutorial/combat_formula": {
+    "hash": "1a8a507ead86026b9951c9d43c9abbef39e9dfe681d22833cd340d1497e5ee09",
+    "voice": "narrator"
+  },
+  "tutorial/combat_intro": {
+    "hash": "067cdd17684be5985e1b69f226a33de328c617a953bb3791275729210743ba89",
+    "voice": "narrator"
+  },
+  "tutorial/complete": {
+    "hash": "629fa0a5e670bfdb3f37618fb62212a7fc09cab4c6c7cca28f6713b335e8a1b7",
+    "voice": "narrator"
+  },
+  "tutorial/day_night": {
+    "hash": "6a0fe87c6333260b4bbc58c67bfe2f989ebd5fb14040d84b5e6b61357db1561a",
+    "voice": "narrator"
+  },
+  "tutorial/explore_house": {
+    "hash": "0748f8fbb13b911ee81071c0178f482f9a6d4d3c5958c505e76b2badaa259f9e",
+    "voice": "narrator"
+  },
+  "tutorial/move_to_house": {
+    "hash": "667d5ddae67a317ea9de9552c5d211387093430f8514d5dbdead41fc1259347f",
+    "voice": "narrator"
+  },
+  "tutorial/node_discovered": {
+    "hash": "34f55debbcbcfa42c25f968da6bb6e7560cd4ed9728b47633adbbe2bbe1d9cf7",
+    "voice": "narrator"
+  },
+  "tutorial/planning_intro": {
+    "hash": "3332b385e65ec616f760f62ef250afc5ca45e7f1d8c0577731e0d728cfe5fb3f",
+    "voice": "narrator"
+  },
+  "tutorial/queue_explore": {
+    "hash": "17643447178b9655b1943e23c895bca306c52cb3fc087fb7baac4f75e5a2a9d9",
+    "voice": "narrator"
+  },
+  "tutorial/queue_move": {
+    "hash": "7f31654cc739348b7fece8b9e50d36f98dd9e86f75158cc372f85f4b7c89e879",
+    "voice": "narrator"
+  },
+  "tutorial/select_hero": {
+    "hash": "f77f518ffc6dead343abd288f50ae69c60cc3380bac9222cd950cff03bc3786b",
+    "voice": "narrator"
+  },
+  "tutorial/select_survivor": {
+    "hash": "e68ee9adee48a55dc564ec45475c763788170ccb82fa2686350e867cf84a054e",
+    "voice": "narrator"
+  },
+  "tutorial/smithy_intro": {
+    "hash": "77a0545b56f746c77cc10960cab0e8f463bfad322a70b8c23d2384c62020abb8",
+    "voice": "narrator"
+  },
+  "tutorial/submit_fight": {
+    "hash": "7ef5b31e766913f492e6939cd8682875f0f30e6b94f4ead9c43dc8f7e7db3730",
+    "voice": "narrator"
+  },
+  "tutorial/submit_plan": {
+    "hash": "451e072b74b8728f2bd177f7b5d2f32ad3a7017fda00d5428182c1bfea3eebb5",
+    "voice": "narrator"
+  },
+  "tutorial/submit_r3": {
+    "hash": "70106252e54d9c5ac9b350ccc8a31b9bd829d19279e717edc6dc10e682405352",
+    "voice": "narrator"
+  },
+  "tutorial/submit_r4": {
+    "hash": "c0b970eb31246164b99dd5fcb2e06d5f16695e0d585bbe781bac1e3caec42804",
+    "voice": "narrator"
+  },
+  "tutorial/survivor_move": {
+    "hash": "337df11b53965c7623889fd25fe5bf467a3b09ff2d93e20a8eda6392afee4131",
+    "voice": "narrator"
+  },
+  "tutorial/unit_selection": {
+    "hash": "b06a3f870aad1a524b9bb34e56ef6a8aba768765f17f3349ad78ee15d9125ce9",
+    "voice": "narrator"
+  },
+  "tutorial/watch_r1": {
+    "hash": "3b995cecb2ad545826e6d63052ff7a265a5c4a4f689df404285135b90de03837",
+    "voice": "narrator"
+  },
+  "tutorial/watch_r2": {
+    "hash": "c7fd55a12d1d2f3f9a294ce74d91a3a8cb13e8e09bf1b5cf1ba41d7b473e741b",
+    "voice": "narrator"
+  },
+  "tutorial/watch_r3": {
+    "hash": "e83e4bc767b420363b1ba4d35169bb66e3b342453332a0d13ea45c7616042e02",
+    "voice": "narrator"
+  },
+  "tutorial/watch_r4": {
+    "hash": "bb22f25fbc3e05ee77cfc67991247fa5db3cde6a3295fd245718d82dae339944",
+    "voice": "narrator"
+  },
+  "tutorial/welcome": {
+    "hash": "f6a02f45618a1c03d1967385834459e56f3a93eea43cd7f70f0039797dc97acd",
+    "voice": "narrator"
   }
 }

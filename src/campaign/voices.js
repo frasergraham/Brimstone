@@ -15,17 +15,12 @@
 // Pure data + lookup helpers — no DOM, no fetch. Runs in the browser
 // (conversation playback), node tests, and the headless generator.
 
-// Colonial-era New England → British (English) accents throughout. The account
-// lists 8 British voices, but only 4 (George, Daniel, Alice, Lily) are premade
-// and usable on the free plan — the other 4 are LIBRARY voices that need a paid
-// plan to use via the API (HTTP 402). So the usable British cast is 2 male
-// (George, Daniel) + 2 female (Alice, Lily): the narrator shares Daniel with
-// the hero (never the same scene — narration is tutorial/hint steps, the hero
-// speaks only in conversations), and a conversation's two on-screen speakers
-// stay distinct (innkeeper George ≠ hero Daniel). On a paid plan, swap the hero
-// to a distinct British male (e.g. Jonathan 5k4KYEPhnJgec4DoXV4h "calm,
-// reassuring") and add villain voices (Zane qbkH1EDealYs8PUoNNuB, Edward
-// goT3UYdM9bhm0n2lmKQx) — then regenerate.
+// Colonial-era New England → British (English) accents throughout. On the paid
+// plan all of the account's British voices are usable (library voices 402 on
+// free), so narrator / hero / innkeeper each get a DISTINCT British male:
+// Daniel (narrator), Jonathan (hero), George (innkeeper). Spare British villain
+// voices for future antagonists: Zane (qbkH1EDealYs8PUoNNuB, "evil story
+// narrator"), Edward (goT3UYdM9bhm0n2lmKQx, "dark, seductive, low").
 export const DEFAULT_ELEVEN_VOICE_ID = 'onwK4e9ZLuTAKqWW03F9'; // Daniel (British)
 
 export const VOICES = Object.freeze({
@@ -37,11 +32,10 @@ export const VOICES = Object.freeze({
       'A weary colonial-era storyteller by candlelight, with a British (English) '
       + 'accent. Read slowly and gravely, plain delivery, no theatrics.',
   },
-  // The player's paladin. (Shares Daniel with the narrator — see note above; a
-  // paid plan unlocks a distinct British male.)
+  // The player's paladin.
   hero: {
     openaiVoice: 'echo',
-    elevenVoiceId: 'onwK4e9ZLuTAKqWW03F9', // Daniel — steady, formal British male
+    elevenVoiceId: '5k4KYEPhnJgec4DoXV4h', // Jonathan — thoughtful, calm, reassuring British male
     description:
       'A steadfast colonial paladin, male, with a British (English) accent. Low, '
       + 'resolute and measured, with quiet authority and weariness beneath the '
