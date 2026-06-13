@@ -100,66 +100,6 @@ export function doorStubDirection(entranceTile, footprintHex) {
   return -1;
 }
 
-// ─── Building signpost (P4c — 3D) ───────────────────────────────────────────
-// Each building is marked by a small wooden SIGNPOST at the "door side" of its
-// footprint: a vertical POST (thin cylinder) topped by a billboarded PLANK that
-// shows the building name. The post stays planted; the plank rotates around the
-// vertical axis to face the camera. These dimensions are the operator-dialable
-// knobs — the 3D renderer (`src/renderer-3d.js`) reads them when it builds the
-// post + plank meshes. Tweak here in one place; nothing else hard-codes them.
-
-/** Height (world units) of the signpost POST cylinder. Tall enough that the
- *  plank sits at a comfortable reading height ABOVE it (plank cap-style). */
-export const SIGNPOST_POST_HEIGHT = 0.55;
-/** Diameter (world units) of the signpost POST cylinder — a thin fencepost. */
-export const SIGNPOST_POST_DIAMETER = 0.05;
-/** Width (world units) of the signpost PLANK (the name board). */
-export const SIGNPOST_PLANK_WIDTH = 0.90;
-/** Height (world units) of the signpost PLANK. */
-export const SIGNPOST_PLANK_HEIGHT = 0.32;
-/** Depth (world units) of the signpost PLANK — gives the board real thickness
- *  when seen from any angle, so it reads as carved wood instead of a paper
- *  billboard sticker. */
-export const SIGNPOST_PLANK_DEPTH = 0.06;
-/** How far the signpost is pushed OFF the road centreline, perpendicular to
- *  the entrance→footprint axis. 0 = on the road; positive = side of the road.
- *  The "side" is biased deterministically (sin of the hex position) so a
- *  signpost picks the same side every frame and the row of buildings doesn't
- *  alternate-zigzag visually. */
-export const SIGNPOST_ROAD_OFFSET = 0.38;
-
-/** World-XZ position for a building signpost: the midpoint of the shared edge
- *  between the ENTRANCE hex and the building's FOOTPRINT hex, optionally
- *  pushed perpendicular to the road (entrance→footprint axis) by `offset`
- *  world units. Positive offset = right side of the road (looking from
- *  entrance toward footprint); negative = left. `sideBias` (default 1) flips
- *  the perpendicular direction so the caller can pick a deterministic side.
- *  Both inputs are world `{x, z}` (y is ignored).
- *
- *  Returns null when either world position is missing — an orphan/legacy
- *  building has no footprint and therefore no shared edge, so the caller falls
- *  back to the old centred-above-the-building floating label. */
-export function signpostWorldPos(entranceWorld, footprintWorld, offset = 0, sideBias = 1) {
-  if (!entranceWorld || !footprintWorld) return null;
-  const ax = entranceWorld.x, az = entranceWorld.z;
-  const fx = footprintWorld.x, fz = footprintWorld.z;
-  if (ax == null || az == null || fx == null || fz == null) return null;
-  const mx = (ax + fx) / 2;
-  const mz = (az + fz) / 2;
-  if (!(offset > 0) && !(offset < 0)) return { x: mx, z: mz };
-  // Perpendicular to (footprint - entrance), normalised. Two 90° rotations of
-  // the unit road direction (rx, rz) give (rz, -rx) and (-rz, rx) — sideBias
-  // picks which.
-  const rx = fx - ax;
-  const rz = fz - az;
-  const len = Math.hypot(rx, rz);
-  if (!(len > 1e-9)) return { x: mx, z: mz };
-  const ux = rx / len, uz = rz / len;
-  const px = uz * sideBias;
-  const pz = -ux * sideBias;
-  return { x: mx + px * offset, z: mz + pz * offset };
-}
-
 // ─── Building ground label (name painted on the entrance hex) ───────────────
 // Alongside the signpost, each labeled building paints its NAME flat on the
 // ground of its ENTRANCE hex (the tile you can actually walk into — the model

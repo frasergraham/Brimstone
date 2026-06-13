@@ -159,14 +159,14 @@ describe('_freezeStaticMeshes — locks world matrices of build-time meshes', ()
       'entity standee bases must stay unfrozen — they move with the unit');
   });
 
-  test('does NOT touch _buildingLabelsByKey (billboarded planes — billboard mode requires per-frame world-matrix update)', () => {
+  test('does NOT touch _buildingGroundLabelsByKey (the name rect re-snaps its yaw each frame)', () => {
     const inst = newInst();
     inst._tileMeshes = [];
-    const labelPlane = fakeMesh('bldgLabel');
-    inst._buildingLabelsByKey.set('3,3', { plane: labelPlane, mat: null, tex: null });
+    const labelPlane = fakeMesh('bldgGround');
+    inst._buildingGroundLabelsByKey.set('3,3', { plane: labelPlane, mat: null, tex: null, cx: 0, cz: 0 });
     inst._freezeStaticMeshes();
     assert.equal(labelPlane.isWorldMatrixFrozen, false,
-      'building hover labels are billboarded — freezing locks their rotation');
+      'building ground labels re-snap their rotation — freezing locks it');
   });
 });
 
