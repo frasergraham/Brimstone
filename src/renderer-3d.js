@@ -56,27 +56,21 @@ import {
   doorStubDirection,
   compoundFortifyEdges,
   extendDoorStub,
-  signpostWorldPos,
+  groundLabelPlacement,
   BUILDING_ENTRANCE_NUDGE,
   TARGET_BUILDING_GROUND_SPAN,
-  SIGNPOST_POST_HEIGHT,
-  SIGNPOST_POST_DIAMETER,
-  SIGNPOST_PLANK_WIDTH,
-  SIGNPOST_PLANK_HEIGHT,
-  SIGNPOST_PLANK_DEPTH,
-  SIGNPOST_ROAD_OFFSET,
+  GROUND_LABEL_WIDTH,
+  GROUND_LABEL_HEIGHT,
+  GROUND_LABEL_EDGE_INSET,
 } from './building-render.js';
-// Re-export so 3D-renderer consumers/tests can import the ground-span knob
-// and signpost dimensions from here too (mirrors the tree-count knob
-// re-exports above). The signpost dimensions are the operator-dialable knobs.
+// Re-export so 3D-renderer consumers/tests can import the ground-span knob and
+// the ground-label dimensions from here too (mirrors the tree-count knob
+// re-exports above). These are the operator-dialable knobs.
 export {
   TARGET_BUILDING_GROUND_SPAN,
-  SIGNPOST_POST_HEIGHT,
-  SIGNPOST_POST_DIAMETER,
-  SIGNPOST_PLANK_WIDTH,
-  SIGNPOST_PLANK_HEIGHT,
-  SIGNPOST_PLANK_DEPTH,
-  SIGNPOST_ROAD_OFFSET,
+  GROUND_LABEL_WIDTH,
+  GROUND_LABEL_HEIGHT,
+  GROUND_LABEL_EDGE_INSET,
 };
 import { Renderer } from './renderer.js';
 import { BLOCK_WORD_VARIANTS, pickBlockWord } from './combat-words.js';
@@ -956,29 +950,34 @@ export const STANDEE_BASE_Y_OFFSET    = 0.084;
 // Distance from centre comfortably clears the STANDEE_BASE_DIAMETER=0.75 disc.
 export const BUILDING_OFFSET = Object.freeze({ x: 0.3, z: -0.5196152422706631 });
 
-// ─── Building labels (hover text above each building) ───────────────────────
-// Mirrors the 2D renderer's fade-on-zoom logic from src/renderer.js (~line
-// 1684): labels are fully visible when the camera is close (small radius) and
-// fade out as the camera zooms back (large radius). 2D uses
-//   effectiveHex = hs * zoomLevel  (bigger as you zoom in)
-//   alpha = clamp((effectiveHex - 40) / (60 - 40), 0, 1)
-// We use ArcRotateCamera radius (smaller = closer) instead, so the formula
-// inverts the sign — see `labelAlphaForZoom`.
+// ─── Building ground markers (disc + name painted flat on the entrance hex) ──
+// A faint white "stand here" disc plus a flat textured name rect, both lying on
+// the ground of each labeled building's ENTRANCE hex (the walkable tile — the
+// model occupies the footprint hex). The name is re-aligned every frame by
+// `_pumpBuildingGroundLabels` to the hex edge that is most horizontal on screen
+// (see `groundLabelPlacement` in building-render.js), so it always reads
+// naturally as the camera orbits; the disc is rotationally symmetric and never
+// moves. Rect size/inset live in building-render.js alongside the helper.
 
-/** Camera radius at or below which building labels are fully visible. */
-export const BUILDING_LABEL_FADE_RADIUS_CLOSE = 12;
-/** Camera radius at or above which building labels are fully invisible. */
-export const BUILDING_LABEL_FADE_RADIUS_FAR   = 28;
-/** World-units height above the building roof at which the label plane sits. */
-export const BUILDING_LABEL_Y = 1.55;
-/** Plane size (world units) for the label sprite. */
-export const BUILDING_LABEL_WIDTH  = 1.6;
-export const BUILDING_LABEL_HEIGHT = 0.4;
-/** Texture canvas dimensions (px). Power-of-two friendly. */
-// Plank texture: pow-2 sized for mipmap-friendly TRILINEAR. 512x192 is the
-// next pow-2 step that keeps the plank legible from base zoom out to ~3x.
-export const BUILDING_LABEL_TEX_W = 512;
-export const BUILDING_LABEL_TEX_H = 192;
+/** Y (world units) the ground-label plane sits at — above the road-network
+ *  ribbon apex (~0.09) so the text paints over cobblestones, but below the
+ *  highlight band (HIGHLIGHT_DISC_Y = 0.15) so selection still reads on top. */
+export const GROUND_LABEL_Y = 0.12;
+/** Ground-label texture canvas (px). Pow-2 sized for mipmap-friendly
+ *  TRILINEAR; aspect ≈ GROUND_LABEL_WIDTH / GROUND_LABEL_HEIGHT. */
+export const GROUND_LABEL_TEX_W = 512;
+export const GROUND_LABEL_TEX_H = 128;
+
+/** Opacity of the "stand here" disc — a subtle 30% white wash. */
+export const GROUND_CIRCLE_ALPHA = 0.3;
+/** Radius (world units) of the "stand here" disc — a 0.4-diameter circle.
+ *  Comfortably inside the hex inradius (√3/2 ≈ 0.866) so it reads as a small
+ *  marker on the tile rather than filling it. */
+export const GROUND_CIRCLE_RADIUS = 0.2;
+/** Y (world units) the disc sits at — just under the name text (GROUND_LABEL_Y)
+ *  so the letters always read on top, and above the road ribbon (~0.09) so it
+ *  isn't z-fought by cobblestones. */
+export const GROUND_CIRCLE_Y = 0.105;
 
 // ─── Power-node tint overlay + name label ───────────────────────────────────
 // A faint faction-tinted hex sits over every power-node tile (just above the
@@ -1219,24 +1218,10 @@ export function radiusToZoom(radius, defaultRadius = DEFAULT_ZOOM_RADIUS) {
   return defaultRadius / r;
 }
 
-/** Building-label alpha for a given camera radius. Mirrors the 2D renderer's
- *  fade ramp but operates on ArcRotateCamera `radius` (smaller = closer in).
- *  Returns 1.0 at fadeStart (or closer), 0.0 at fadeEnd (or farther), and a
- *  linear interpolation in between. Pure helper for tests. */
-export function labelAlphaForZoom(
-  radius,
-  fadeStart = BUILDING_LABEL_FADE_RADIUS_CLOSE,
-  fadeEnd   = BUILDING_LABEL_FADE_RADIUS_FAR,
-) {
-  if (fadeEnd <= fadeStart) return radius <= fadeStart ? 1 : 0;
-  const a = (fadeEnd - radius) / (fadeEnd - fadeStart);
-  return Math.max(0, Math.min(1, a));
-}
-
 /** Returns the human-readable label string for a tile, or null if the tile
  *  doesn't get a label (anything other than a BUILDING tile with a building
  *  field, OR a generic HOUSE — houses are the background village fabric and
- *  don't earn a signpost). Pure helper — single source of truth for label
+ *  don't earn a name). Pure helper — single source of truth for label
  *  text + visibility. */
 export function labelTextForTile(tile) {
   if (!tile || !hasBuilding(tile) || !tile.building) return null;
@@ -2352,11 +2337,14 @@ export class Renderer3D {
     // Item 8 — overflow "+N" badges keyed by hexKey; created lazily when a
     // tile has more standees than free slots, disposed when overflow drops to 0.
     this._overflowBadges       = new Map(); // hexKey → { plane, mat, tex, lastN }
-    // Building hover labels: floating planes above each building tile, fade
-    // with camera zoom (alpha pumped each frame in `_onBeforeRender`). Built
-    // alongside the building mesh in `_buildTileMesh`; never rebuilt because
-    // map topology is immutable once the game starts.
-    this._buildingLabelsByKey  = new Map(); // hexKey → { plane, mat, tex }
+    // Building GROUND markers: a faint "stand here" disc + the building name
+    // painted flat on each labeled building's entrance hex. The name re-aligns
+    // each frame to the most-horizontal-on-screen hex edge via
+    // `_pumpBuildingGroundLabels`; cx/cz = entrance hex centre. Built alongside
+    // the building mesh in `_buildTileMesh`; never rebuilt (map topology is
+    // immutable once the game starts).
+    this._buildingGroundLabelsByKey = new Map(); // hexKey → { plane, mat, tex, disc, discMat, cx, cz }
+    this._groundLabelYaw = null;  // last applied snap yaw — re-pump only on change
     this._fogMaterialCache = new Map();  // base hex color → darker StandardMaterial
     this._fogActiveSet     = new Set();  // hexKeys currently rendered as fogged
     // Renderer-level fog DISPLAY override, toggled with the `T` hotkey for
@@ -6658,12 +6646,12 @@ export class Renderer3D {
    *  What is NOT freezed (and must stay walking each frame): entity standees
    *  (cones, sphere heads, owner discs, icon billboards), per-unit hex
    *  outlines, plan ghosts / dashes / attack arrows / movement highlights,
-   *  the selection halo, the overflow "+N" badges, and the building hover
-   *  labels (those use `billboardMode = BILLBOARDMODE_ALL`, which requires a
-   *  per-frame world-matrix update — freezing them would lock their rotation
-   *  away from the camera). Dynamic meshes live in their own registries
-   *  (`_entityStandees`, `_planGhostMeshes`, `_buildingLabelsByKey`, …) which
-   *  this helper deliberately does not touch. */
+   *  the selection halo, the overflow "+N" badges, and the building ground
+   *  labels (their name rect re-snaps its yaw each frame, so freezing the
+   *  world matrix would lock the text's rotation). Dynamic meshes live in their
+   *  own registries (`_entityStandees`, `_planGhostMeshes`,
+   *  `_buildingGroundLabelsByKey`, …) which this helper deliberately does not
+   *  touch. */
   _freezeStaticMeshes() {
     let frozen = 0;
     const freeze = (mesh) => {
@@ -7934,11 +7922,11 @@ export class Renderer3D {
         trackProp(roof);
       }
 
-      // Signpost — a physical post + billboarded name plank at the door-side
-      // edge of the footprint (orphan buildings fall back to a floating label
-      // above the slot). Alpha is driven each frame by `_pumpBuildingLabelFade`
-      // so signs fade out as the camera zooms back.
-      this._buildBuildingSignpost(tile, x, z, parent);
+      // Ground marker — a faint white "you can enter here" disc plus the
+      // building name painted flat on the ENTRANCE hex floor, re-aligned each
+      // frame to the most-horizontal-on-screen hex edge
+      // (`_pumpBuildingGroundLabels`).
+      this._buildBuildingGroundLabel(tile, x, z, parent);
     }
 
     if (props.length > 0) this._tilePropsByKey.set(tkey, props);
@@ -10245,257 +10233,155 @@ export class Renderer3D {
     badge.lastN = overflow;
   }
 
-  /** P4c — Build a building's SIGNPOST: a vertical wooden post topped by a
-   *  billboarded name plank, planted at the door-side edge of the footprint
-   *  (the entrance↔footprint shared-edge midpoint, where the road stub meets
-   *  the model). The post stays vertical; only the plank billboards (Y axis)
-   *  so it always faces the camera while reading as a physical roadside marker.
-   *
-   *  A legacy/orphan building (no footprint, hence no shared edge) falls back
-   *  to the OLD centred floating label via `_buildBuildingLabel`.
-   *
-   *  Both meshes are tracked in `_buildingLabelsByKey` under the entrance hex
-   *  key so the zoom-fade pump (`_pumpBuildingLabelFade`) and the fog veil
-   *  (`_setTilePropsFogged`) treat the post + plank as one unit. */
-  _buildBuildingSignpost(tile, hexX, hexZ, parent) {
+  /** Build a building's GROUND MARKER: a faint white disc that flags the
+   *  ENTRANCE hex as "the tile to stand on" for this building, plus the
+   *  building name painted flat on that same hex floor. The entrance is the
+   *  walkable tile — the model sits on the adjacent footprint hex. Built once
+   *  per labeled building; the name's orientation and edge-hugging offset are
+   *  applied per frame by `_pumpBuildingGroundLabels` so the text stays aligned
+   *  to whichever hex edge is currently the most horizontal on screen (the disc
+   *  is rotationally symmetric, so it never moves). Tracked in
+   *  `_buildingGroundLabelsByKey` (NOT `_tilePropsByKey` — frozen world matrices
+   *  would lock the name's rotation). */
+  _buildBuildingGroundLabel(tile, hexX, hexZ, parent) {
     const BABYLON = this._babylon;
     const scene   = this._scene;
     if (!BABYLON || !scene || typeof document === 'undefined') return;
     const text = labelTextForTile(tile);
     if (!text) return;
 
-    // Door-side edge midpoint pushed OFF the road by SIGNPOST_ROAD_OFFSET so
-    // the post doesn't sit in the road tile. Side is biased deterministically
-    // on the hex position so adjacent buildings don't alternate-zigzag.
-    const renderKey   = buildingRenderHex(tile);
-    const [rc, rr]    = renderKey.split(',').map(Number);
-    const isFootprint = !(rc === tile.col && rr === tile.row);
-    const footprintWorld = isFootprint ? hexToWorld(rc, rr) : null;
-    const sideBias = (((tile.col * 73856093) ^ (tile.row * 19349663)) & 1) ? 1 : -1;
-    const signPos = signpostWorldPos(
-      { x: hexX, z: hexZ },
-      footprintWorld,
-      SIGNPOST_ROAD_OFFSET,
-      sideBias,
-    );
-    if (!signPos) {
-      // Orphan with no footprint → old floating-label behaviour (centred above
-      // the building slot). One extra branch keeps legacy saves rendering.
-      this._buildBuildingLabel(tile, hexX, hexZ, parent);
-      return;
-    }
-
     const tkey = hexKey(tile.col, tile.row);
-    // Tile-top anchor — matches the procedural/GLB building base Y (0.43-0.7/2).
-    const tileTopY = 0.43 - 0.7 / 2;
 
-    // ── Name plank: dark serif text on a parchment board ──────────────────
-    const tex = new BABYLON.DynamicTexture(
-      `bldgSignTex_${tkey}`,
-      { width: BUILDING_LABEL_TEX_W, height: BUILDING_LABEL_TEX_H },
+    // ── "Stand here" disc: a faint white circle centred on the entrance hex ──
+    const discMat = new BABYLON.StandardMaterial(`bldgGroundDiscMat_${tkey}`, scene);
+    discMat.diffuseColor  = new BABYLON.Color3(1, 1, 1);
+    discMat.emissiveColor = new BABYLON.Color3(1, 1, 1); // unlit — reads in any phase
+    discMat.specularColor = new BABYLON.Color3(0, 0, 0);
+    discMat.backFaceCulling = false;
+    discMat.alpha = GROUND_CIRCLE_ALPHA;
+
+    const disc = BABYLON.MeshBuilder.CreateDisc(
+      `bldgGroundDisc_${tkey}`,
+      { radius: GROUND_CIRCLE_RADIUS, tessellation: 48 },
       scene,
-      true, // generateMipMaps — keeps the plank legible when zoomed out
     );
-    tex.hasAlpha = false; // fully-painted parchment; fade is via material alpha
+    disc.parent     = parent;
+    disc.isPickable  = false;
+    disc.material    = discMat;
+    // CreateDisc lies in the XY plane facing +Z; pitch it flat so it lies on
+    // the ground (XZ). Sits just below the name text so the letters read on top.
+    if (BABYLON.Vector3) disc.rotation = new BABYLON.Vector3(Math.PI / 2, 0, 0);
+    disc.position.set(hexX, GROUND_CIRCLE_Y, hexZ);
+    disc.metadata = { respectsFog: false };
+
+    // ── Building name painted flat on the same hex floor ──────────────────
+    const tex = new BABYLON.DynamicTexture(
+      `bldgGroundTex_${tkey}`,
+      { width: GROUND_LABEL_TEX_W, height: GROUND_LABEL_TEX_H },
+      scene,
+      true, // generateMipMaps — keeps the painted name legible when zoomed out
+    );
+    tex.hasAlpha = true; // transparent field — only the lettering paints
     if (typeof tex.updateSamplingMode === 'function' && BABYLON.Texture) {
       tex.updateSamplingMode(BABYLON.Texture.TRILINEAR_SAMPLINGMODE);
     }
-    this._paintSignpostPlank(tex, text);
+    this._paintGroundLabel(tex, text);
 
-    const plankMat = new BABYLON.StandardMaterial(`bldgSignPlankMat_${tkey}`, scene);
-    plankMat.diffuseTexture  = tex;
-    plankMat.emissiveTexture = tex; // unlit so the name reads in any phase light
-    plankMat.specularColor   = new BABYLON.Color3(0, 0, 0);
-    plankMat.backFaceCulling  = false;
-    plankMat.alpha = 1;
-
-    // 3D plank: a box, not a plane. Default Babylon box UVs put the same
-    // texture on all 6 faces, so the parchment + name read from any angle —
-    // and the sides/top/bottom carry the parchment colour because the same
-    // texture is mostly background. Operator wanted "real depth", not a paper
-    // sticker. Still billboards on Y so the front faces the camera.
-    const plank = BABYLON.MeshBuilder.CreateBox(
-      `bldgSignPlank_${tkey}`,
-      { width: SIGNPOST_PLANK_WIDTH, height: SIGNPOST_PLANK_HEIGHT, depth: SIGNPOST_PLANK_DEPTH },
-      scene,
-    );
-    plank.parent        = parent;
-    // BILLBOARDMODE_Y: the box rotates around the vertical axis to face the
-    // camera, but the post below it stays bolt upright (no billboard).
-    plank.billboardMode = BABYLON.Mesh.BILLBOARDMODE_Y;
-    plank.isPickable    = false;
-    plank.material      = plankMat;
-    // Plank sits ABOVE the post — bottom edge of plank rests on the post tip —
-    // so the post never pierces through the text. Plank centre Y = post
-    // height + half-plank-height.
-    plank.position.set(
-      signPos.x,
-      tileTopY + SIGNPOST_POST_HEIGHT + SIGNPOST_PLANK_HEIGHT / 2,
-      signPos.z,
-    );
-
-    // ── Post: a thin dark-wood cylinder rooted at the edge midpoint ───────
-    const postMat = new BABYLON.StandardMaterial(`bldgSignPostMat_${tkey}`, scene);
-    postMat.diffuseColor  = new BABYLON.Color3(0.29, 0.19, 0.11); // weathered wood
-    postMat.specularColor = new BABYLON.Color3(0, 0, 0);
-    postMat.alpha = 1;
-
-    const post = BABYLON.MeshBuilder.CreateCylinder(
-      `bldgSignPost_${tkey}`,
-      { height: SIGNPOST_POST_HEIGHT, diameter: SIGNPOST_POST_DIAMETER, tessellation: 6 },
-      scene,
-    );
-    post.parent     = parent;
-    post.isPickable = false;
-    post.material   = postMat;
-    post.position.set(signPos.x, tileTopY + SIGNPOST_POST_HEIGHT / 2, signPos.z);
-    this._addShadowCaster(post);
-
-    this._buildingLabelsByKey.set(tkey, {
-      meshes: [post, plank],
-      mats:   [postMat, plankMat],
-      tex,
-      fogged: false,
-    });
-  }
-
-  /** Paint a signpost plank DynamicTexture: a parchment/wood board with the
-   *  building name in a clean serif/uncial face, dark-brown ink. Font size
-   *  auto-shrinks for long names so the text always fits within the board
-   *  margin — no clipping on "Graveyard", "Blacksmith", etc. Idempotent. */
-  _paintSignpostPlank(tex, text) {
-    if (!tex || typeof tex.getContext !== 'function') return;
-    const W = BUILDING_LABEL_TEX_W;
-    const H = BUILDING_LABEL_TEX_H;
-    const ctx = tex.getContext();
-    // Parchment field with a thin darker frame so the board reads as carved wood.
-    ctx.clearRect(0, 0, W, H);
-    ctx.fillStyle = '#d4b884';
-    ctx.fillRect(0, 0, W, H);
-    ctx.strokeStyle = '#7a5a2e';
-    ctx.lineWidth = 10;
-    ctx.strokeRect(5, 5, W - 10, H - 10);
-    ctx.textAlign    = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#3a2410';
-    // Auto-fit: start at the preferred size, measure, and step down by a
-    // simple proportional ratio if the text overflows the board's inner
-    // width (leaving a margin equal to the lineWidth + a bit of padding).
-    const MAX_PX  = 96;
-    const MIN_PX  = 40;                  // floor so 1-2 word names don't go tiny
-    const MARGIN  = 32;                  // padding inside the dark frame
-    const INNER_W = W - MARGIN * 2;
-    const fontFor = (px) => `bold ${px}px "Cinzel", "Trajan Pro", Georgia, serif`;
-    let px = MAX_PX;
-    ctx.font = fontFor(px);
-    // Test stubs may not implement measureText — skip auto-fit there. In a
-    // real browser it always exists.
-    if (typeof ctx.measureText === 'function') {
-      const metrics = ctx.measureText(text);
-      if (metrics?.width > INNER_W) {
-        // Scale by ratio (floor to nearest int), clamped to MIN_PX.
-        px = Math.max(MIN_PX, Math.floor(MAX_PX * (INNER_W / metrics.width)));
-        ctx.font = fontFor(px);
-      }
-    }
-    ctx.fillText(text, W / 2, H / 2 + Math.round(px * 0.04));
-    if (typeof tex.update === 'function') tex.update();
-  }
-
-  /** Build the OLD floating hover label above a building tile — the legacy
-   *  fallback for an orphan building that has no footprint (and thus no
-   *  signpost edge). One DynamicTexture per label (~256×64 px), painted once.
-   *  Tracked in `_buildingLabelsByKey` with the same `{ meshes, mats, tex }`
-   *  shape the signpost uses, so the pump + fog veil handle both uniformly. */
-  _buildBuildingLabel(tile, hexX, hexZ, parent) {
-    const BABYLON = this._babylon;
-    const scene   = this._scene;
-    if (!BABYLON || !scene || typeof document === 'undefined') return;
-    const text = labelTextForTile(tile);
-    if (!text) return;
-
-    const tkey = hexKey(tile.col, tile.row);
-    const tex = new BABYLON.DynamicTexture(
-      `bldgLabelTex_${tkey}`,
-      { width: BUILDING_LABEL_TEX_W, height: BUILDING_LABEL_TEX_H },
-      scene,
-      false,
-    );
-    tex.hasAlpha = true;
-    const ctx = tex.getContext();
-    ctx.clearRect(0, 0, BUILDING_LABEL_TEX_W, BUILDING_LABEL_TEX_H);
-    // Mirror the 2D label style: cream serif text with a dark shadow for legibility.
-    ctx.textAlign    = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.font         = 'bold 36px Georgia, serif';
-    const cx = BUILDING_LABEL_TEX_W / 2;
-    const cy = BUILDING_LABEL_TEX_H / 2;
-    ctx.fillStyle = 'rgba(0,0,0,0.85)';
-    ctx.fillText(text, cx + 2, cy + 2);
-    ctx.fillStyle = 'rgba(255,248,230,0.95)';
-    ctx.fillText(text, cx, cy);
-    tex.update();
-
-    const mat = new BABYLON.StandardMaterial(`bldgLabelMat_${tkey}`, scene);
+    const mat = new BABYLON.StandardMaterial(`bldgGroundMat_${tkey}`, scene);
     mat.diffuseTexture = tex;
     mat.opacityTexture = tex;
     mat.useAlphaFromDiffuseTexture = true;
     mat.specularColor  = new BABYLON.Color3(0, 0, 0);
-    mat.emissiveColor  = new BABYLON.Color3(1, 1, 1);
+    mat.emissiveColor  = new BABYLON.Color3(1, 1, 1); // unlit — reads in any phase light
     mat.backFaceCulling = false;
     mat.alpha = 1;
 
     const plane = BABYLON.MeshBuilder.CreatePlane(
-      `bldgLabel_${tkey}`,
-      { width: BUILDING_LABEL_WIDTH, height: BUILDING_LABEL_HEIGHT },
+      `bldgGround_${tkey}`,
+      { width: GROUND_LABEL_WIDTH, height: GROUND_LABEL_HEIGHT },
       scene,
     );
-    plane.parent        = parent;
-    // BILLBOARDMODE_ALL keeps the label fully camera-facing on all axes — at
-    // the steeper-down 35° tilt a Y-only billboard reads as a slanted plane
-    // ("tilted backwards into the map"), while full screen-space text always
-    // looks flat-on regardless of camera angle or zoom.
-    plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
-    plane.isPickable    = false;
-    plane.material      = mat;
-    // R7: render above all world geometry (group 2, same as the floating
-    // unit-icon billboards) so the hover label is never occluded by trees or
-    // taller buildings. Babylon clears depth between rendering groups.
-    plane.renderingGroupId = UNIT_ICON_GROUP;
-    // Sit above the building's NE-slot roof, not over the hex centre, so the
-    // label visually anchors to the building rather than floating off-axis.
-    const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
-    plane.position.set(hexX + slot.x, BUILDING_LABEL_Y, hexZ + slot.z);
+    plane.parent     = parent;
+    plane.isPickable = false;
+    plane.material   = mat;
+    // Pitch flat onto the ground; yaw is owned by the per-frame pump. With
+    // rotation.x = π/2 the plane's front face points UP and its local +X
+    // (text reading direction) maps to world XZ angle −rotation.y — see
+    // `groundLabelPlacement` for the snap math.
+    if (BABYLON.Vector3) plane.rotation = new BABYLON.Vector3(Math.PI / 2, 0, 0);
+    plane.position.set(hexX, GROUND_LABEL_Y, hexZ);
+    // Ground text is permanent terrain info (like the building itself) — it
+    // stays visible under fog of war. See `_setTileFogged`.
+    plane.metadata = { respectsFog: false };
 
-    this._buildingLabelsByKey.set(tkey, {
-      meshes: [plane],
-      mats:   [mat],
-      tex,
-      fogged: false,
+    this._buildingGroundLabelsByKey.set(tkey, {
+      plane, mat, tex, disc, discMat, cx: hexX, cz: hexZ,
     });
+    // Force the pump to re-apply orientation on the next frame so labels
+    // built after the cached yaw was set still get placed.
+    this._groundLabelYaw = null;
   }
 
-  /** Per-frame: walk every building signpost/label and set its material alpha
-   *  from the current camera radius (`labelAlphaForZoom`), multiplied by a fog
-   *  dim factor. Post + plank fade together. Cheap — one Map walk per frame. */
-  _pumpBuildingLabelFade() {
+  /** Paint a ground-label DynamicTexture: the building name in the same
+   *  cream-serif-on-dark-halo style as the floating labels, on a TRANSPARENT
+   *  field so only the lettering paints onto the terrain. Auto-shrinks the
+   *  font for long names. Idempotent. */
+  _paintGroundLabel(tex, text) {
+    if (!tex || typeof tex.getContext !== 'function') return;
+    const W = GROUND_LABEL_TEX_W;
+    const H = GROUND_LABEL_TEX_H;
+    const ctx = tex.getContext();
+    ctx.clearRect(0, 0, W, H);
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    const MAX_PX  = 84;
+    const MIN_PX  = 36;
+    const MARGIN  = 24;
+    const INNER_W = W - MARGIN * 2;
+    const fontFor = (px) => `bold ${px}px "Cinzel", "Trajan Pro", Georgia, serif`;
+    let px = MAX_PX;
+    ctx.font = fontFor(px);
+    // Test stubs may not implement measureText — skip auto-fit there.
+    if (typeof ctx.measureText === 'function') {
+      const metrics = ctx.measureText(text);
+      if (metrics?.width > INNER_W) {
+        px = Math.max(MIN_PX, Math.floor(MAX_PX * (INNER_W / metrics.width)));
+        ctx.font = fontFor(px);
+      }
+    }
+    // Dark halo + cream fill so the name reads on grass and cobblestone alike.
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = 'rgba(20, 14, 8, 0.9)';
+    ctx.lineWidth = Math.max(6, Math.round(px * 0.14));
+    if (typeof ctx.strokeText === 'function') ctx.strokeText(text, W / 2, H / 2);
+    ctx.fillStyle = 'rgba(255, 248, 230, 0.95)';
+    ctx.fillText(text, W / 2, H / 2);
+    if (typeof tex.update === 'function') tex.update();
+  }
+
+  /** Per-frame: snap every building ground label to the hex-edge direction
+   *  that is currently the most horizontal on screen (`groundLabelPlacement`),
+   *  and hug the near-camera edge of its entrance hex. The snap only changes
+   *  when the camera yaw crosses a 60° sector boundary, so the early-out on
+   *  the cached yaw makes the steady-state cost one comparison per frame. */
+  _pumpBuildingGroundLabels() {
     if (!this._camera) return;
-    if (this._buildingLabelsByKey.size === 0) return;
-    const a = labelAlphaForZoom(
-      this._camera.radius,
-      BUILDING_LABEL_FADE_RADIUS_CLOSE,
-      BUILDING_LABEL_FADE_RADIUS_FAR,
+    const map = this._buildingGroundLabelsByKey;
+    if (!map || map.size === 0) return;
+    const cam = this._camera;
+    const target = typeof cam.getTarget === 'function' ? cam.getTarget() : cam.target;
+    if (!target || !cam.position) return;
+    const placement = groundLabelPlacement(
+      target.x - cam.position.x,
+      target.z - cam.position.z,
     );
-    for (const entry of this._buildingLabelsByKey.values()) {
-      // Signposts stay fully opaque under fog — the plank is a 3D BOX (not a
-      // billboard plane), and any alpha<1 lets the parchment's back face show
-      // through with the text reading reversed. Zoom-fade alpha alone drives
-      // the material; fog state is conveyed by the building itself dimming.
-      if (entry.mats) for (const m of entry.mats) { if (m) m.alpha = a; }
-      // Skip the draw call entirely when fully faded — Babylon still uploads
-      // the geometry for alpha=0 alpha-blended meshes, so isVisible is the
-      // cheap path.
-      if (entry.meshes) for (const mesh of entry.meshes) { if (mesh) mesh.isVisible = a > 0; }
+    if (!placement || placement.yaw === this._groundLabelYaw) return;
+    this._groundLabelYaw = placement.yaw;
+    for (const entry of map.values()) {
+      if (!entry.plane) continue;
+      entry.plane.rotation.y = placement.yaw;
+      entry.plane.position.x = entry.cx + placement.offsetX;
+      entry.plane.position.z = entry.cz + placement.offsetZ;
     }
   }
 
@@ -14761,8 +14647,9 @@ export class Renderer3D {
     // Compass rose: rotate the top-left needle to keep pointing at map north
     // as the camera orbits. Skips the DOM write when alpha hasn't moved.
     this._pumpCompassRose();
-    // Building signposts: fade in/out based on camera zoom.
-    this._pumpBuildingLabelFade();
+    // Building ground labels: re-snap to the most-horizontal-on-screen hex
+    // edge when the camera yaw crosses a sector boundary.
+    this._pumpBuildingGroundLabels();
     // Power-node outer-edge identifier outlines breathe between
     // NODE_OUTLINE_PULSE_MIN and NODE_OUTLINE_PULSE_MAX.
     this._pumpNodeOutlinePulse(now);
@@ -15356,14 +15243,10 @@ export class Renderer3D {
       }
       p.isVisible = !fogged;
     }
-    // Building signposts/labels are tracked separately — dim (not hide) under
-    // fog so the operator can still read "this hex has an Inn" even when the
-    // interior is unrevealed. Record the fog state; the per-frame pump
-    // (`_pumpBuildingLabelFade`) folds it into the zoom-fade alpha so the post
-    // + plank dim together. (P4c: floating node name labels were removed, so
-    // there is no node-label fog branch here anymore.)
-    const labelEntry = this._buildingLabelsByKey?.get(hexK);
-    if (labelEntry) labelEntry.fogged = fogged;
+    // Building ground markers (the "stand here" disc + name) live in their own
+    // registry with `respectsFog: false` and stay fully visible under fog —
+    // they're permanent terrain info, like the building itself — so there's no
+    // fog branch for them here.
     if (fogged) this._fogActiveSet.add(hexK);
     else this._fogActiveSet.delete(hexK);
   }
