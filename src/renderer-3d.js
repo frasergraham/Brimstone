@@ -2143,6 +2143,9 @@ export class Renderer3D {
     this._panX              = 0;
     this._panY              = 0;
     this.disambigHiddenIds  = new Set();
+    // Tutorial/hint hex spotlight ({col,row}|null) — set by MissionConductor.
+    // Published as a gold 'fill' overlay by _publishTutorialSpotlightOverlay.
+    this.tutorialSpotlightHex = null;
 
     // ── Babylon state — populated by _initBabylon() on first draw ───────────
     this._babylon       = null; // module namespace once loaded
@@ -12825,6 +12828,7 @@ export class Renderer3D {
     this._publishPlanMoveOverlays();
     this._publishPlanBattleOverlays();
     this._publishObjectiveRingOverlays();
+    this._publishTutorialSpotlightOverlay();
 
     // ── Consumers ──────────────────────────────────────────────────────────
     // Dispatch by (kind, layer) to per-kind builders. Each builder reads ONLY
@@ -13099,6 +13103,50 @@ export class Renderer3D {
         this._highlightMeshes.push(ribbon);
       }
     });
+  }
+
+  /** Producer: publish/remove the tutorial hex spotlight as a gold hex-outline
+   *  ring in the highlight-disc layer. `tutorialSpotlightHex` is written by
+   *  MissionConductor; the fill builder above renders it like any other
+   *  highlight, so spotlights work identically in 2D and 3D. */
+  _publishTutorialSpotlightOverlay() {
+    const hex = this.tutorialSpotlightHex;
+    if (hex) {
+      this.setOverlay('tutorial-spotlight', makeOverlay({
+        id: 'tutorial-spotlight', kind: 'fill', layer: 'highlight-disc',
+        hexes: [{ col: hex.col, row: hex.row }],
+        style: { color: 'rgba(255,215,0,0.9)' },
+      }));
+    } else {
+      this.removeOverlay('tutorial-spotlight');
+    }
+  }
+
+  /**
+   * Project a hex's ground centre to viewport CSS-pixel coordinates — used by
+   * MissionConductor to anchor the tutorial arrow to a map hex across camera
+   * pan/zoom. Returns `{ x, y }` (relative to the viewport, like
+   * getBoundingClientRect) or null before the Babylon scene is ready.
+   */
+  getHexScreenPosition(col, row) {
+    if (!this._scene || !this._camera || !this._engine || !this._babylon) return null;
+    const BABYLON = this._babylon;
+    const { x, z } = hexToWorld(col, row);
+    const rw = this._engine.getRenderWidth();
+    const rh = this._engine.getRenderHeight();
+    if (!rw || !rh) return null;
+    const projected = BABYLON.Vector3.Project(
+      new BABYLON.Vector3(x, 0, z),
+      BABYLON.Matrix.Identity(),
+      this._scene.getTransformMatrix(),
+      this._camera.viewport.toGlobal(rw, rh),
+    );
+    // Engine render pixels → viewport CSS pixels (hardware scaling / DPR).
+    const rect = this.canvas.getBoundingClientRect();
+    return {
+      x: rect.left + projected.x * (rect.width / rw),
+      y: rect.top  + projected.y * (rect.height / rh),
+    };
   }
 
   /**

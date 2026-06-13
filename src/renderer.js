@@ -1169,6 +1169,18 @@ export class Renderer {
     };
   }
 
+  // Hex centre in viewport CSS pixels (like getBoundingClientRect) — used by
+  // MissionConductor to anchor the tutorial arrow to a map hex. Mirrors
+  // Renderer3D.getHexScreenPosition so the conductor is renderer-agnostic.
+  getHexScreenPosition(col, row) {
+    if (!this.canvas) return null;
+    const { x, y } = this.hexToCanvasPos(col, row);
+    const rect = this.canvas.getBoundingClientRect();
+    const sx = this.canvas.width  ? rect.width  / this.canvas.width  : 1;
+    const sy = this.canvas.height ? rect.height / this.canvas.height : 1;
+    return { x: rect.left + x * sx, y: rect.top + y * sy };
+  }
+
   // Zoom toward a focal point (canvas pixel coordinates)
   setZoom(newZoom, focalX, focalY) {
     if (this.viewLocked) return;

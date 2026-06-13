@@ -1478,5 +1478,8 @@
       "text": "The dead of night. The attacks intensify — they come from every side now, scratching at the walls and shutters. Hold the line. Dawn is still hours away.",
       "flag": "witching_hour"
     }
-  ]
+  ],
+  "hints": {
+    "scriptKey": "ch1m3"
+  }
 }

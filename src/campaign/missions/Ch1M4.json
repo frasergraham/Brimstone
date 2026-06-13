@@ -1398,5 +1398,8 @@
       "text": "The bridge is ancient, its timbers groaning under your weight. On the far bank, shadows move between the trees. You grip your weapon tighter and step forward — together.",
       "flag": "at_bridge"
     }
-  ]
+  ],
+  "hints": {
+    "scriptKey": "ch1m4"
+  }
 }

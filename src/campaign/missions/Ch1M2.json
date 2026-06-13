@@ -1410,5 +1410,18 @@
       "row": 7,
       "overrides": {}
     }
-  ]
+  ],
+  "hints": {
+    "scriptKey": "ch1m2"
+  },
+  "lootOverrides": {
+    "buildings": {
+      "barn": [
+        {
+          "type": "axe",
+          "weight": 1
+        }
+      ]
+    }
+  }
 }

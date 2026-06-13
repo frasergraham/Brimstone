@@ -112,9 +112,26 @@ atk4/def1 "Zombie L3". Levels do **not** change weapon damage. Explicit
 top of it. Use levels to ramp difficulty without new unit types; use `overrides`
 for one-off tweaks (e.g. a deliberately *weakened* tutorial enemy).
 
-**Two fields are string keys, not data:**
+**Three fields are string keys, not data:**
 - `storyTriggers[].condition` → a named predicate in `src/campaign/condition-registry.js` (`CONDITIONS`). Add a new condition there (`(state) => boolean`, no mutation) before referencing it.
-- `conductor.scriptKey` → `{ steps, config }` in `src/campaign/conductor-scripts.js` (e.g. `"tutorial"`, whose imperative scripting stays in `src/tutorial/tutorial-config.js` — the registry only aggregates it).
+- `conductor.scriptKey` → `{ steps, config }` in `src/campaign/conductor-scripts.js` (e.g. `"tutorial"`, whose imperative scripting stays in `src/tutorial/tutorial-config.js` — the registry only aggregates it). A conductor *owns* the mission: scripted opponent plans, forced dice, gated progression, completion = victory.
+- `hints.scriptKey` → micro-lesson hints resolved through the same registry (scripts live in `src/campaign/hint-scripts.js`). See "Micro-lesson hints" below.
+
+### Micro-lesson hints (teaching inside a normal mission)
+
+Chapter 1 missions teach one or two mechanics each (fortify, equip, gang-up, node bonus…) via **hint scripts** — `MissionConductor` running in `'hints'` mode. Unlike a conducted mission, the mission stays fully AI-driven (waves, story triggers, saves, objectives all work normally); hints are one-shot tooltips that never block the map or the submit button.
+
+To add hints to a mission:
+1. Define `{ steps, config }` in `src/campaign/hint-scripts.js` and register the key in its `HINT_SCRIPTS` export (aggregated into `CONDUCTOR_SCRIPTS`). `config.mode` must be `'hints'`.
+2. Reference it from the mission JSON: `"hints": { "scriptKey": "ch1m3" }`.
+3. Anchor each step either by round (`config.roundStepMap[round]`, keyed by `state.round`, 1 = first planning round) or by a `when: (state) => boolean` predicate for loot/state-dependent lessons (e.g. "a pack weapon exists" → equip lesson). Each hint fires at most once per mission attempt.
+4. Step shape matches the tutorial (`tutorial-config.js` documents every field). Gated steps (`action_queued` / `entity_selected` triggers, optionally narrowed by `entityType`) dismiss when the action happens or when the plan is submitted; `click` steps show a "Got it" button.
+
+Rules enforced by the step lint in `tests/tutorial.test.js`: bodies ≤230 chars (teach by doing, not reading), blocking `click`/`complete` dialogs centered, every action-gated tutorial step carries a spotlight `arrow` (the direction the arrow *points*; it sits opposite, aimed at the target), element selectors must exist in `index.html`.
+
+Hints are suppressed after the mission is completed or the player clicks "Skip hints" (localStorage, `markHintsSeen`/`areHintsSuppressed` in `src/mission-conductor.js`) — replays stay clean.
+
+**Voiceover:** steps are narrated from `assets/voice/<scriptKey>/<stepId>.mp3` when present (config `voiceKey` names the directory). Generate clips with `node scripts/generate-voiceover.mjs` (needs `ELEVENLABS_API_KEY` or `OPENAI_API_KEY`); a manifest hash check in the test suite fails if step text changes without regenerating its clip. Missing clips are silent no-ops, and the tooltip has a mute toggle.
 
 **Validation:** the editor runs the assembled JSON through `loadMissionJSON` / `validateMissionJSON` before download. The four hardening checks: (1) tiles in-bounds, (2) `objectives.win`/`lose` types in `KNOWN_OBJECTIVE_TYPES` (mirrors the 17-case switch in `buildVictoryDelegate`, `src/campaign/campaign.js`), (3) handmade maps define their starts, (4) `map.roadSeed` carried verbatim for regen determinism. The editor *also* runs the save-time `validateBuildingFootprints` (separate from the runtime checks, kept out of `validateMissionJSON` for backward compat) — it rejects any building with an empty `footprintHexes` or a footprint whose `buildingFootprintOf` doesn't back-point to its entrance (broken pair).
 

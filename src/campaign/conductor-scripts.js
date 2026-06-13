@@ -20,11 +20,14 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { TUTORIAL_STEPS, TUTORIAL_CONDUCTOR_CONFIG } from '../tutorial/tutorial-config.js';
+import { HINT_SCRIPTS } from './hint-scripts.js';
 
 /**
  * Registry of named conductor scripts, keyed by the string used in mission JSON
- * (`conductor.scriptKey`). Each value is `{ steps, config }` — the same pair the
- * runtime assigns to `missionDef.conductorSteps` / `missionDef.conductorConfig`.
+ * (`conductor.scriptKey` for fully scripted missions, `hints.scriptKey` for
+ * micro-lesson hint scripts — see hint-scripts.js). Each value is
+ * `{ steps, config }` — the same pair the runtime assigns to
+ * `missionDef.conductorSteps`/`conductorConfig` (or `hintSteps`/`hintConfig`).
  * @type {Record<string, { steps: object[], config: object }>}
  */
 export const CONDUCTOR_SCRIPTS = Object.freeze({
@@ -32,6 +35,7 @@ export const CONDUCTOR_SCRIPTS = Object.freeze({
     steps: TUTORIAL_STEPS,
     config: TUTORIAL_CONDUCTOR_CONFIG,
   }),
+  ...HINT_SCRIPTS,
 });
 
 /**
