@@ -361,6 +361,25 @@ describe('TUTORIAL_STEPS', () => {
     const step = TUTORIAL_STEPS.find(s => s.id === 'combat_formula');
     assert.ok(!step.body.includes('d6'), 'should not reference d6');
   });
+
+  test('combat steps never mention damage numbers (damage system is tuned separately)', () => {
+    for (const id of ['combat_intro', 'combat_formula', 'submit_fight', 'watch_r2']) {
+      const step = TUTORIAL_STEPS.find(s => s.id === id);
+      assert.ok(!/\d+\s*damage|damage\s*\d+/i.test(step.body),
+        `${id} must describe hit/crush/counter outcomes, not damage numbers`);
+    }
+  });
+
+  test('combat_intro tells the player to select the hero first', () => {
+    const step = TUTORIAL_STEPS.find(s => s.id === 'combat_intro');
+    assert.ok(/select your .*hero/i.test(step.body), 'hero is not auto-selected in tutorial mode');
+  });
+
+  test('combat_formula calls out the ally/gang-up advantage', () => {
+    const step = TUTORIAL_STEPS.find(s => s.id === 'combat_formula');
+    assert.ok(/all(y|ies)/i.test(step.body), 'mentions allies');
+    assert.ok(/outnumbered|gang up/i.test(step.body), 'warns against outnumbered fights');
+  });
 });
 
 // ── TUTORIAL_WAVES ───────────────────────────────────────────────────────────

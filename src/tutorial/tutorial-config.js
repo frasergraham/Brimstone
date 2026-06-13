@@ -284,7 +284,7 @@ export const TUTORIAL_STEPS = [
   {
     id: 'combat_intro',
     title: 'A Minion Blocks the Road!',
-    body: 'A witch\'s minion has emerged from the tree line. Click the enemy to attack it.',
+    body: 'A witch\'s minion has emerged from the tree line. Select your ⚔ Hero, then click the enemy to attack it.',
     trigger: { type: 'action_queued', actionType: PlanActionType.BATTLE_UNIT },
     spotlight: { type: 'hex', col: 3, row: 5, arrow: 'down' },
     tooltipPos: 'bottom-left',
@@ -293,7 +293,7 @@ export const TUTORIAL_STEPS = [
   {
     id: 'combat_formula',
     title: 'How Combat Works',
-    body: 'Both sides roll dice.\n\n• Hit — your roll wins → 1 damage\n• Critical — you roll high enough → 2 damage\n• Counter — they roll strongly → 1 damage back\n\nAdjacent allies boost your roll.',
+    body: 'Both sides roll dice.\n\n• Hit — your roll wins: the enemy is wounded\n• Crush — far higher: a grievous wound\n• Counter — they roll strong: you bleed instead\n\nAllies beside the target join your attack — never fight outnumbered.',
     trigger: 'click',
     spotlight: null,
     tooltipPos: 'center',
@@ -311,7 +311,7 @@ export const TUTORIAL_STEPS = [
   {
     id: 'watch_r2',
     title: 'Combat Resolved',
-    body: 'A critical hit — the minion is slain in one blow!',
+    body: 'A crushing blow — the minion is slain!',
     trigger: 'auto',
     spotlight: null,
     tooltipPos: 'bottom-left',
