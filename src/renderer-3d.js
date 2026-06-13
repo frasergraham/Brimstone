@@ -970,10 +970,10 @@ export const GROUND_LABEL_TEX_H = 128;
 
 /** Opacity of the "stand here" disc — a subtle 30% white wash. */
 export const GROUND_CIRCLE_ALPHA = 0.3;
-/** Radius (world units) of the "stand here" disc. Comfortably inside the hex
- *  inradius (√3/2 ≈ 0.866) so the circle reads as "this tile" without bleeding
- *  into neighbours. */
-export const GROUND_CIRCLE_RADIUS = 0.6;
+/** Radius (world units) of the "stand here" disc — a 0.4-diameter circle.
+ *  Comfortably inside the hex inradius (√3/2 ≈ 0.866) so it reads as a small
+ *  marker on the tile rather than filling it. */
+export const GROUND_CIRCLE_RADIUS = 0.2;
 /** Y (world units) the disc sits at — just under the name text (GROUND_LABEL_Y)
  *  so the letters always read on top, and above the road ribbon (~0.09) so it
  *  isn't z-fought by cobblestones. */
