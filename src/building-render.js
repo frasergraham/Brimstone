@@ -160,6 +160,68 @@ export function signpostWorldPos(entranceWorld, footprintWorld, offset = 0, side
   return { x: mx + px * offset, z: mz + pz * offset };
 }
 
+// ─── Building ground label (name painted on the entrance hex) ───────────────
+// Alongside the signpost, each labeled building paints its NAME flat on the
+// ground of its ENTRANCE hex (the tile you can actually walk into — the model
+// sits on the footprint hex). The label is a flat textured rect that re-aligns
+// itself to whichever hex edge is currently the most horizontal on screen, so
+// the name always reads naturally as the camera orbits.
+
+/** Width (world units) of the ground-label rect. A pointy-top hex is ≈1.73
+ *  world units across its inradius axis, so 1.5 fits with margin. */
+export const GROUND_LABEL_WIDTH = 1.5;
+/** Height (world units) of the ground-label rect. */
+export const GROUND_LABEL_HEIGHT = 0.42;
+/** Distance (world units) from the hex centre toward the chosen edge at which
+ *  the label rect is centred. Must keep the whole rect inside the hex:
+ *  inset + HEIGHT/2 < inradius (√3/2 ≈ 0.866). */
+export const GROUND_LABEL_EDGE_INSET = 0.58;
+
+/** Place a building's ground label for the current camera heading.
+ *
+ *  `fwdX/fwdZ` is the camera's forward direction projected on the ground
+ *  plane (target − camera position, XZ only — magnitude is irrelevant).
+ *
+ *  The hex grid is pointy-top with corners at angle π/6 + j·π/3 (XZ angle,
+ *  atan2(z, x)), so the six edge-parallel READING directions are the same
+ *  angle set π/6 + k·π/3. The camera's ground-right is forward rotated −90°
+ *  ((fz, −fx)); the candidate with the largest dot against it is both the
+ *  most horizontal on screen AND reads left-to-right (its 180° twin scores
+ *  negative). Text-up is then dir+90° ≈ screen-up automatically, and the
+ *  near-camera (screen-bottom) edge's outward normal is −(dir+90°) — the
+ *  label is nudged that way by `edgeInset` so it hugs the chosen edge.
+ *
+ *  Returns `{ dirAngle, yaw, offsetX, offsetZ }`:
+ *   - `dirAngle` — world XZ angle of the text reading direction.
+ *   - `yaw`      — mesh rotation.y for a plane pitched flat with
+ *                  rotation.x = π/2 (Babylon yaw maps local +X to world
+ *                  angle −yaw, so yaw = −dirAngle).
+ *   - `offsetX/offsetZ` — XZ offset from the hex centre to the rect centre.
+ *  Returns null for a degenerate (zero-length) forward vector. Pure. */
+export function groundLabelPlacement(fwdX, fwdZ, edgeInset = GROUND_LABEL_EDGE_INSET) {
+  const len = Math.hypot(fwdX, fwdZ);
+  if (!(len > 1e-9)) return null;
+  // Camera-right on the ground plane = forward rotated −90° in the XZ plane.
+  const rx = fwdZ / len;
+  const rz = -fwdX / len;
+  let dirAngle = Math.PI / 6;
+  let bestDot = -Infinity;
+  for (let k = 0; k < 6; k++) {
+    const a = Math.PI / 6 + k * (Math.PI / 3);
+    const dot = Math.cos(a) * rx + Math.sin(a) * rz;
+    if (dot > bestDot) { bestDot = dot; dirAngle = a; }
+  }
+  // Near-camera edge normal = −(text-up) = −(dir rotated +90°).
+  const nx = -Math.cos(dirAngle + Math.PI / 2);
+  const nz = -Math.sin(dirAngle + Math.PI / 2);
+  return {
+    dirAngle,
+    yaw: -dirAngle,
+    offsetX: nx * edgeInset,
+    offsetZ: nz * edgeInset,
+  };
+}
+
 /** Uniform scale factor to fit a building's XZ footprint into ~1 hex of ground.
  *  `bboxXZ` is the model's natural {x, z} extent (world units, pre-scale); the
  *  larger of the two axes is scaled to `target`. Returns null when the extent

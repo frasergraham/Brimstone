@@ -57,6 +57,7 @@ import {
   compoundFortifyEdges,
   extendDoorStub,
   signpostWorldPos,
+  groundLabelPlacement,
   BUILDING_ENTRANCE_NUDGE,
   TARGET_BUILDING_GROUND_SPAN,
   SIGNPOST_POST_HEIGHT,
@@ -65,6 +66,9 @@ import {
   SIGNPOST_PLANK_HEIGHT,
   SIGNPOST_PLANK_DEPTH,
   SIGNPOST_ROAD_OFFSET,
+  GROUND_LABEL_WIDTH,
+  GROUND_LABEL_HEIGHT,
+  GROUND_LABEL_EDGE_INSET,
 } from './building-render.js';
 // Re-export so 3D-renderer consumers/tests can import the ground-span knob
 // and signpost dimensions from here too (mirrors the tree-count knob
@@ -77,6 +81,9 @@ export {
   SIGNPOST_PLANK_HEIGHT,
   SIGNPOST_PLANK_DEPTH,
   SIGNPOST_ROAD_OFFSET,
+  GROUND_LABEL_WIDTH,
+  GROUND_LABEL_HEIGHT,
+  GROUND_LABEL_EDGE_INSET,
 };
 import { Renderer } from './renderer.js';
 import { BLOCK_WORD_VARIANTS, pickBlockWord } from './combat-words.js';
@@ -979,6 +986,23 @@ export const BUILDING_LABEL_HEIGHT = 0.4;
 // next pow-2 step that keeps the plank legible from base zoom out to ~3x.
 export const BUILDING_LABEL_TEX_W = 512;
 export const BUILDING_LABEL_TEX_H = 192;
+
+// ─── Building ground labels (name painted flat on the entrance hex) ─────────
+// A flat textured rect lying on the ground of each labeled building's ENTRANCE
+// hex (the walkable tile — the model occupies the footprint hex). Re-aligned
+// every frame by `_pumpBuildingGroundLabels` to the hex edge that is most
+// horizontal on screen (see `groundLabelPlacement` in building-render.js), so
+// the painted name always reads naturally as the camera orbits. Sizes/inset
+// live in building-render.js alongside the signpost knobs.
+
+/** Y (world units) the ground-label plane sits at — above the road-network
+ *  ribbon apex (~0.09) so the text paints over cobblestones, but below the
+ *  highlight band (HIGHLIGHT_DISC_Y = 0.15) so selection still reads on top. */
+export const GROUND_LABEL_Y = 0.12;
+/** Ground-label texture canvas (px). Pow-2 sized for mipmap-friendly
+ *  TRILINEAR; aspect ≈ GROUND_LABEL_WIDTH / GROUND_LABEL_HEIGHT. */
+export const GROUND_LABEL_TEX_W = 512;
+export const GROUND_LABEL_TEX_H = 128;
 
 // ─── Power-node tint overlay + name label ───────────────────────────────────
 // A faint faction-tinted hex sits over every power-node tile (just above the
@@ -2354,6 +2378,11 @@ export class Renderer3D {
     // alongside the building mesh in `_buildTileMesh`; never rebuilt because
     // map topology is immutable once the game starts.
     this._buildingLabelsByKey  = new Map(); // hexKey → { plane, mat, tex }
+    // Building GROUND labels: flat name rects on each labeled building's
+    // entrance hex, re-aligned each frame to the most-horizontal-on-screen
+    // hex edge by `_pumpBuildingGroundLabels`. cx/cz = entrance hex centre.
+    this._buildingGroundLabelsByKey = new Map(); // hexKey → { plane, mat, tex, cx, cz }
+    this._groundLabelYaw = null;  // last applied snap yaw — re-pump only on change
     this._fogMaterialCache = new Map();  // base hex color → darker StandardMaterial
     this._fogActiveSet     = new Set();  // hexKeys currently rendered as fogged
     // Renderer-level fog DISPLAY override, toggled with the `T` hotkey for
@@ -7936,6 +7965,11 @@ export class Renderer3D {
       // above the slot). Alpha is driven each frame by `_pumpBuildingLabelFade`
       // so signs fade out as the camera zooms back.
       this._buildBuildingSignpost(tile, x, z, parent);
+
+      // Ground label — the building name painted flat on the ENTRANCE hex
+      // floor, re-aligned each frame to the most-horizontal-on-screen hex
+      // edge (`_pumpBuildingGroundLabels`).
+      this._buildBuildingGroundLabel(tile, x, z, parent);
     }
 
     if (props.length > 0) this._tilePropsByKey.set(tkey, props);
@@ -10397,6 +10431,131 @@ export class Renderer3D {
     }
     ctx.fillText(text, W / 2, H / 2 + Math.round(px * 0.04));
     if (typeof tex.update === 'function') tex.update();
+  }
+
+  /** Build the building-name GROUND label: a flat textured rect lying on the
+   *  floor of the building's ENTRANCE hex (the walkable tile — the model sits
+   *  on the footprint hex). Built once per labeled building; orientation and
+   *  edge-hugging offset are applied per frame by `_pumpBuildingGroundLabels`
+   *  so the text stays aligned to whichever hex edge is currently the most
+   *  horizontal on screen. Tracked in `_buildingGroundLabelsByKey`
+   *  (NOT `_tilePropsByKey` — frozen world matrices would lock the rotation). */
+  _buildBuildingGroundLabel(tile, hexX, hexZ, parent) {
+    const BABYLON = this._babylon;
+    const scene   = this._scene;
+    if (!BABYLON || !scene || typeof document === 'undefined') return;
+    const text = labelTextForTile(tile);
+    if (!text) return;
+
+    const tkey = hexKey(tile.col, tile.row);
+    const tex = new BABYLON.DynamicTexture(
+      `bldgGroundTex_${tkey}`,
+      { width: GROUND_LABEL_TEX_W, height: GROUND_LABEL_TEX_H },
+      scene,
+      true, // generateMipMaps — keeps the painted name legible when zoomed out
+    );
+    tex.hasAlpha = true; // transparent field — only the lettering paints
+    if (typeof tex.updateSamplingMode === 'function' && BABYLON.Texture) {
+      tex.updateSamplingMode(BABYLON.Texture.TRILINEAR_SAMPLINGMODE);
+    }
+    this._paintGroundLabel(tex, text);
+
+    const mat = new BABYLON.StandardMaterial(`bldgGroundMat_${tkey}`, scene);
+    mat.diffuseTexture = tex;
+    mat.opacityTexture = tex;
+    mat.useAlphaFromDiffuseTexture = true;
+    mat.specularColor  = new BABYLON.Color3(0, 0, 0);
+    mat.emissiveColor  = new BABYLON.Color3(1, 1, 1); // unlit — reads in any phase light
+    mat.backFaceCulling = false;
+    mat.alpha = 1;
+
+    const plane = BABYLON.MeshBuilder.CreatePlane(
+      `bldgGround_${tkey}`,
+      { width: GROUND_LABEL_WIDTH, height: GROUND_LABEL_HEIGHT },
+      scene,
+    );
+    plane.parent     = parent;
+    plane.isPickable = false;
+    plane.material   = mat;
+    // Pitch flat onto the ground; yaw is owned by the per-frame pump. With
+    // rotation.x = π/2 the plane's front face points UP and its local +X
+    // (text reading direction) maps to world XZ angle −rotation.y — see
+    // `groundLabelPlacement` for the snap math.
+    if (BABYLON.Vector3) plane.rotation = new BABYLON.Vector3(Math.PI / 2, 0, 0);
+    plane.position.set(hexX, GROUND_LABEL_Y, hexZ);
+    // Ground text is permanent terrain info (like the building itself) — it
+    // stays visible under fog of war. See `_setTileFogged`.
+    plane.metadata = { respectsFog: false };
+
+    this._buildingGroundLabelsByKey.set(tkey, {
+      plane, mat, tex, cx: hexX, cz: hexZ,
+    });
+    // Force the pump to re-apply orientation on the next frame so labels
+    // built after the cached yaw was set still get placed.
+    this._groundLabelYaw = null;
+  }
+
+  /** Paint a ground-label DynamicTexture: the building name in the same
+   *  cream-serif-on-dark-halo style as the floating labels, on a TRANSPARENT
+   *  field so only the lettering paints onto the terrain. Auto-shrinks the
+   *  font for long names. Idempotent. */
+  _paintGroundLabel(tex, text) {
+    if (!tex || typeof tex.getContext !== 'function') return;
+    const W = GROUND_LABEL_TEX_W;
+    const H = GROUND_LABEL_TEX_H;
+    const ctx = tex.getContext();
+    ctx.clearRect(0, 0, W, H);
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    const MAX_PX  = 84;
+    const MIN_PX  = 36;
+    const MARGIN  = 24;
+    const INNER_W = W - MARGIN * 2;
+    const fontFor = (px) => `bold ${px}px "Cinzel", "Trajan Pro", Georgia, serif`;
+    let px = MAX_PX;
+    ctx.font = fontFor(px);
+    // Test stubs may not implement measureText — skip auto-fit there.
+    if (typeof ctx.measureText === 'function') {
+      const metrics = ctx.measureText(text);
+      if (metrics?.width > INNER_W) {
+        px = Math.max(MIN_PX, Math.floor(MAX_PX * (INNER_W / metrics.width)));
+        ctx.font = fontFor(px);
+      }
+    }
+    // Dark halo + cream fill so the name reads on grass and cobblestone alike.
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = 'rgba(20, 14, 8, 0.9)';
+    ctx.lineWidth = Math.max(6, Math.round(px * 0.14));
+    if (typeof ctx.strokeText === 'function') ctx.strokeText(text, W / 2, H / 2);
+    ctx.fillStyle = 'rgba(255, 248, 230, 0.95)';
+    ctx.fillText(text, W / 2, H / 2);
+    if (typeof tex.update === 'function') tex.update();
+  }
+
+  /** Per-frame: snap every building ground label to the hex-edge direction
+   *  that is currently the most horizontal on screen (`groundLabelPlacement`),
+   *  and hug the near-camera edge of its entrance hex. The snap only changes
+   *  when the camera yaw crosses a 60° sector boundary, so the early-out on
+   *  the cached yaw makes the steady-state cost one comparison per frame. */
+  _pumpBuildingGroundLabels() {
+    if (!this._camera) return;
+    const map = this._buildingGroundLabelsByKey;
+    if (!map || map.size === 0) return;
+    const cam = this._camera;
+    const target = typeof cam.getTarget === 'function' ? cam.getTarget() : cam.target;
+    if (!target || !cam.position) return;
+    const placement = groundLabelPlacement(
+      target.x - cam.position.x,
+      target.z - cam.position.z,
+    );
+    if (!placement || placement.yaw === this._groundLabelYaw) return;
+    this._groundLabelYaw = placement.yaw;
+    for (const entry of map.values()) {
+      if (!entry.plane) continue;
+      entry.plane.rotation.y = placement.yaw;
+      entry.plane.position.x = entry.cx + placement.offsetX;
+      entry.plane.position.z = entry.cz + placement.offsetZ;
+    }
   }
 
   /** Build the OLD floating hover label above a building tile — the legacy
@@ -14701,6 +14860,9 @@ export class Renderer3D {
     this._pumpCompassRose();
     // Building signposts: fade in/out based on camera zoom.
     this._pumpBuildingLabelFade();
+    // Building ground labels: re-snap to the most-horizontal-on-screen hex
+    // edge when the camera yaw crosses a sector boundary.
+    this._pumpBuildingGroundLabels();
     // Power-node outer-edge identifier outlines breathe between
     // NODE_OUTLINE_PULSE_MIN and NODE_OUTLINE_PULSE_MAX.
     this._pumpNodeOutlinePulse(now);
