@@ -1,22 +1,22 @@
 {
   "conv/ch1m1-intro/0": {
-    "hash": "74f772b0ecb9c805ae3a328785e8fc55f11bc31b38d7d10341a75a98b981317d",
+    "hash": "a705c9010bed825cd5ec7be86b2c08e5b5214b417772765853814b83ec9b60cf",
     "voice": "innkeeper"
   },
   "conv/ch1m1-intro/1": {
-    "hash": "a2c8fbea3c4beffe001cf058628528c39c67b60a413c9d8469add26a7280265d",
+    "hash": "46d7ace38b073afb231e4bc3b9057531ca1c6b5d820d8fed980799444363dc3f",
     "voice": "hero"
   },
   "conv/ch1m1-intro/2": {
-    "hash": "e7d10f2401c8f355909f26cb6e124b7acb419c03158e63b3d0978ce14332b46e",
+    "hash": "337003604c0910bbdeb5d40b33cc7efce3590d922bd19410763126f8d1c7f617",
     "voice": "innkeeper"
   },
   "conv/ch1m1-intro/3": {
-    "hash": "1ae68170f761386e7c236c26cd4571fc4dffa000f2ded1e325057ced84fae483",
+    "hash": "9a2b80a0180c8f10581ec29ea4c5632a60f45e6802e6beaa350166eddb5ff726",
     "voice": "hero"
   },
   "conv/ch1m1-intro/4": {
-    "hash": "f7b9f6d79d46efea734515761f1445acf51172e423c681a72df557594f86be12",
+    "hash": "bb4ffde333d01e7b3641d13911dd3e03c008a4b6c8ac752c2c8e91b8e70e6625",
     "voice": "innkeeper"
   }
 }

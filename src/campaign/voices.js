@@ -15,48 +15,54 @@
 // Pure data + lookup helpers — no DOM, no fetch. Runs in the browser
 // (conversation playback), node tests, and the headless generator.
 
-export const DEFAULT_ELEVEN_VOICE_ID = 'onwK4e9ZLuTAKqWW03F9'; // Daniel (deep British)
+// Colonial-era New England → British (English) accents throughout. The cast is
+// limited to the account's British voices (2 male, 2 female), so the narrator
+// shares Daniel with the hero — they never speak in the same scene (narration
+// is tutorial/hint steps; the hero speaks only in conversations), and a
+// conversation's two on-screen speakers always stay distinct.
+export const DEFAULT_ELEVEN_VOICE_ID = 'onwK4e9ZLuTAKqWW03F9'; // Daniel (British)
 
 export const VOICES = Object.freeze({
   // Tutorial / hint narration — one consistent storyteller across every step.
   narrator: {
     openaiVoice: 'onyx',
-    elevenVoiceId: 'onwK4e9ZLuTAKqWW03F9', // Daniel — deep British news/narration
+    elevenVoiceId: 'onwK4e9ZLuTAKqWW03F9', // Daniel — steady British broadcaster
     description:
-      'A weary colonial-era storyteller by candlelight. Read slowly and gravely, '
-      + 'plain delivery, no theatrics.',
+      'A weary colonial-era storyteller by candlelight, with a British (English) '
+      + 'accent. Read slowly and gravely, plain delivery, no theatrics.',
   },
   // The player's paladin.
   hero: {
     openaiVoice: 'echo',
-    elevenVoiceId: 'pNInz6obpgDQGcFmaJgB', // Adam — deep, resolute male
+    elevenVoiceId: 'onwK4e9ZLuTAKqWW03F9', // Daniel — steady, formal British male
     description:
-      'A steadfast colonial paladin, male. Low, resolute and measured, with quiet '
-      + 'authority and weariness beneath the resolve. No theatrics.',
+      'A steadfast colonial paladin, male, with a British (English) accent. Low, '
+      + 'resolute and measured, with quiet authority and weariness beneath the '
+      + 'resolve. No theatrics.',
   },
   // John O’Connor, the village innkeeper (npc:innkeeper_john).
   innkeeper: {
     openaiVoice: 'ballad',
-    elevenVoiceId: 'pqHfZKP75CvOlQylNhV4', // Bill — older male, weathered narration
+    elevenVoiceId: 'JBFqnCBsd6RMkjVDRZzb', // George — warm, mature British male
     description:
-      'A frightened middle-aged village innkeeper, male. Hushed and urgent, breath '
-      + 'catching, glancing over his shoulder.',
+      'A frightened middle-aged village innkeeper, male, with a British (English) '
+      + 'accent. Hushed and urgent, breath catching, glancing over his shoulder.',
   },
   // The witch antagonist.
   witch: {
     openaiVoice: 'shimmer',
-    elevenVoiceId: 'z9fAnlkpzviPz146aGWa', // Glinda — witch character voice
+    elevenVoiceId: 'pFZP5JQG7iQjIQuC4Bku', // Lily — velvety British actress
     description:
-      'A cold, sibilant witch, female. Silk over malice — unhurried, amused, '
-      + 'faintly mocking.',
+      'A cold, sibilant witch, female, with a British (English) accent. Silk over '
+      + 'malice — unhurried, amused, faintly mocking.',
   },
   // Fallback for any role without its own cast voice.
   default: {
     openaiVoice: 'sage',
-    elevenVoiceId: 'TX3LPaxmHKxFdv7VOQHJ', // Liam — neutral male
+    elevenVoiceId: 'Xb7hH8MSUJpSbSDYk0k2', // Alice — clear British female
     description:
-      'A plain colonial New England villager. Grounded and natural, neither '
-      + 'dramatic nor flat.',
+      'A plain colonial New England villager with a British (English) accent. '
+      + 'Grounded and natural, neither dramatic nor flat.',
   },
 });
 
