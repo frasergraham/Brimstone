@@ -38,14 +38,13 @@ export const SHORTCUTS = Object.freeze([
   { keys: 'Arrow keys',       label: 'Pan the map' },
   { keys: 'Shift + ←/→', label: 'Rotate the camera' },
   { keys: 'Shift + ↑/↓', label: 'Zoom in / out' },
-  { keys: 'Tab',              label: 'Cycle to the next unit' },
-  { keys: 'Shift + Tab',      label: 'Cycle to the previous unit' },
+  { keys: 'Tab',              label: 'Next unit (planning) · next card (summary review)' },
+  { keys: 'Shift + Tab',      label: 'Previous unit · previous card' },
   { keys: 'F',                label: 'Focus: zoom to selection (or all your units)' },
   { keys: 'M',                label: 'Fit map to view (again: orient north-up)' },
   { keys: 'X',                label: 'Clear the selected unit’s actions' },
-  { keys: 'Space',            label: 'Next step (replay)' },
+  { keys: 'Space / Enter',    label: 'Next action · Continue (replay / summary)' },
   { keys: 'Shift + Enter',    label: 'Submit plan' },
-  { keys: 'Enter',            label: 'Continue (round summary)' },
 ]);
 
 /**
@@ -113,11 +112,14 @@ export function executeConsoleCommand(raw, ctx = {}) {
  * (PLAYBACK) and the inline "replay last turn" (RESOLVING), which is why Space
  * keys off it rather than a single mode.
  *
+ * `reviewActive` mirrors it for the end-of-round wrap-up review (scrub arrows
+ * on screen) — Tab keys off it to scrub cards instead of cycling units.
+ *
  * @param {{key:string, shiftKey?:boolean, ctrlKey?:boolean, metaKey?:boolean, altKey?:boolean}} e
- * @param {{appMode?:string, replayActive?:boolean}} ctx
+ * @param {{appMode?:string, replayActive?:boolean, reviewActive?:boolean}} ctx
  * @returns {null | {id:string, [k:string]:any}}
  */
-export function resolveKeyAction(e, { appMode, replayActive } = {}) {
+export function resolveKeyAction(e, { appMode, replayActive, reviewActive } = {}) {
   // Ctrl/Cmd/Alt combos belong to the browser/OS — never intercept them.
   if (e.ctrlKey || e.metaKey || e.altKey) return null;
 
@@ -150,8 +152,10 @@ export function resolveKeyAction(e, { appMode, replayActive } = {}) {
     return { id: 'pan', dx, dy };
   }
 
-  // Tab cycles units (planning only).
+  // Tab — scrubs the turn cards while the wrap-up review is up (same as the
+  // ◀ ▶ arrows); otherwise cycles units (planning only).
   if (key === 'Tab') {
+    if (reviewActive) return { id: 'review-scrub', dir: shift ? -1 : 1 };
     if (appMode !== 'PLANNING') return null;
     return { id: 'cycle-unit', dir: shift ? -1 : 1 };
   }
@@ -167,16 +171,15 @@ export function resolveKeyAction(e, { appMode, replayActive } = {}) {
     return appMode === 'PLANNING' ? { id: 'clear-unit' } : null;
   }
 
-  // Space — advance the replay one step (whenever a manual step bar is up).
-  if (key === ' ' || key === 'Spacebar') {
-    return replayActive ? { id: 'replay-next' } : null;
-  }
-
-  // Enter — Shift+Enter submits a plan; plain Enter confirms a round summary.
-  if (key === 'Enter') {
-    if (shift && appMode === 'PLANNING') return { id: 'submit-plan' };
-    if (!shift && appMode === 'SUMMARY') return { id: 'summary-continue' };
-    return null;
+  // Space / Enter — one shared "advance" key: the executor clicks whichever
+  // advance affordance is on screen (combat-readout Continue, round-summary
+  // Continue, or replay NEXT). Shift+Enter stays the plan submit; both keys
+  // are inert elsewhere so planning can't be advanced by accident.
+  if (key === ' ' || key === 'Spacebar' || key === 'Enter') {
+    if (key === 'Enter' && shift) {
+      return appMode === 'PLANNING' ? { id: 'submit-plan' } : null;
+    }
+    return (replayActive || appMode === 'SUMMARY') ? { id: 'advance' } : null;
   }
 
   return null;
@@ -259,6 +262,7 @@ class KeybindingManager {
     const action = resolveKeyAction(e, {
       appMode: ui?.appMode,
       replayActive: !!ui?._isReplayActive?.(),
+      reviewActive: !!ui?._replayReviewMode,
     });
     if (!action) return;
 
@@ -381,6 +385,10 @@ class KeybindingManager {
       case 'cycle-unit':
         ui?._cycleSelection?.(action.dir);
         break;
+      case 'review-scrub':
+        // Reuse the review arrows' own handlers so Tab matches ◀ ▶ exactly.
+        document.getElementById(action.dir > 0 ? 'replay-review-next' : 'replay-review-prev')?.click();
+        break;
       case 'focus-unit':
         // Reuse the "Focus" map control: zoom to the selected unit, or frame
         // all of the player's units when nothing is selected.
@@ -395,16 +403,20 @@ class KeybindingManager {
       case 'clear-unit':
         this._clearSelectedUnit();
         break;
-      case 'replay-next': {
-        const btn = document.getElementById('replay-next-btn');
-        if (btn && !btn.disabled) btn.click();
+      case 'advance': {
+        // Click whichever advance affordance is up, most specific first: the
+        // cinematic combat-readout Continue, the round-summary Continue, then
+        // the replay NEXT button.
+        const combat = document.getElementById('combat-continue-btn');
+        if (combat && !combat.hidden && this._isVisible(combat)) { combat.click(); break; }
+        const summary = this._summaryContinueBtn();
+        if (summary) { summary.click(); break; }
+        const next = document.getElementById('replay-next-btn');
+        if (next && !next.disabled && this._isVisible(next)) next.click();
         break;
       }
       case 'submit-plan':
         ui?._doSubmitPlan?.();
-        break;
-      case 'summary-continue':
-        this._summaryContinueBtn()?.click();
         break;
     }
   }

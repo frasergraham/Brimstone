@@ -47,10 +47,10 @@ describe('wrapup-summary — wrapupIconHtml', () => {
 });
 
 describe('wrapup-summary — wrapupUnitCellHtml', () => {
-  test('killed unit shows the skull badge', () => {
+  test('killed unit shows the skull badge with DIED label', () => {
     const html = wrapupUnitCellHtml(unit({ killed: true, hpLost: 3 }), '<i/>');
     assert.ok(html.includes('wrapup-dmg kill'));
-    assert.ok(html.includes('☠'));
+    assert.ok(html.includes('☠ DIED'));
   });
 
   test('hurt unit shows −N', () => {

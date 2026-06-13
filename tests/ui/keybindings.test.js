@@ -71,6 +71,17 @@ describe('resolveKeyAction — unit + plan controls', () => {
     assert.equal(resolveKeyAction(ev('Tab'), { appMode: 'PLAYBACK' }), null);
   });
 
+  test('Tab / Shift+Tab scrub turn cards while the summary review is up', () => {
+    // reviewActive = the wrap-up review (scrub arrows visible). Tab moves
+    // right through the cards, Shift+Tab left — same as clicking ◀ ▶.
+    assert.deepEqual(resolveKeyAction(ev('Tab'), { appMode: 'SUMMARY', reviewActive: true }), { id: 'review-scrub', dir: 1 });
+    assert.deepEqual(resolveKeyAction(ev('Tab', { shiftKey: true }), { appMode: 'SUMMARY', reviewActive: true }), { id: 'review-scrub', dir: -1 });
+    // Review takes precedence over unit cycling regardless of mode.
+    assert.deepEqual(resolveKeyAction(ev('Tab'), { appMode: 'PLAYBACK', reviewActive: true }), { id: 'review-scrub', dir: 1 });
+    // No review up → unchanged behaviour.
+    assert.equal(resolveKeyAction(ev('Tab'), { appMode: 'SUMMARY' }), null);
+  });
+
   test('F focuses and M fits, in any in-game mode', () => {
     assert.deepEqual(resolveKeyAction(ev('f'), { appMode: 'RESOLVING' }), { id: 'focus-unit' });
     assert.deepEqual(resolveKeyAction(ev('M'), { appMode: 'SPECTATING' }), { id: 'fit-map' });
@@ -82,21 +93,24 @@ describe('resolveKeyAction — unit + plan controls', () => {
     assert.equal(resolveKeyAction(ev('x'), { appMode: 'SUMMARY' }), null);
   });
 
-  test('Space advances replay only while a replay step bar is up', () => {
-    // Keys off replayActive, not a single mode — covers full PLAYBACK and the
-    // inline "replay last turn" (which runs in RESOLVING).
-    assert.deepEqual(resolveKeyAction(ev(' '), { appMode: 'PLAYBACK', replayActive: true }), { id: 'replay-next' });
-    assert.deepEqual(resolveKeyAction(ev(' '), { appMode: 'RESOLVING', replayActive: true }), { id: 'replay-next' });
+  test('Space and Enter both advance — replay step bar OR round summary', () => {
+    // One shared 'advance' action: the executor clicks whichever affordance is
+    // on screen (combat Continue, summary Continue, replay NEXT). Keys off
+    // replayActive (covers full PLAYBACK and the inline RESOLVING replay) or
+    // the SUMMARY mode.
+    for (const key of [' ', 'Enter']) {
+      assert.deepEqual(resolveKeyAction(ev(key), { appMode: 'PLAYBACK', replayActive: true }), { id: 'advance' });
+      assert.deepEqual(resolveKeyAction(ev(key), { appMode: 'RESOLVING', replayActive: true }), { id: 'advance' });
+      assert.deepEqual(resolveKeyAction(ev(key), { appMode: 'SUMMARY' }), { id: 'advance' });
+      // Plain Space/Enter while planning does nothing (avoids accidental submits).
+      assert.equal(resolveKeyAction(ev(key), { appMode: 'PLANNING' }), null);
+    }
     assert.equal(resolveKeyAction(ev(' '), { appMode: 'PLAYBACK', replayActive: false }), null);
-    assert.equal(resolveKeyAction(ev(' '), { appMode: 'PLANNING' }), null);
   });
 
-  test('Enter submits (Shift, planning) or continues (plain, summary)', () => {
+  test('Shift+Enter submits the plan, planning only', () => {
     assert.deepEqual(resolveKeyAction(ev('Enter', { shiftKey: true }), { appMode: 'PLANNING' }), { id: 'submit-plan' });
-    assert.deepEqual(resolveKeyAction(ev('Enter'), { appMode: 'SUMMARY' }), { id: 'summary-continue' });
-    // Plain Enter while planning is not a submit (avoids accidental submits).
-    assert.equal(resolveKeyAction(ev('Enter'), { appMode: 'PLANNING' }), null);
-    // Shift+Enter outside planning does nothing.
+    // Shift+Enter outside planning does nothing — not even advance.
     assert.equal(resolveKeyAction(ev('Enter', { shiftKey: true }), { appMode: 'SUMMARY' }), null);
   });
 });

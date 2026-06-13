@@ -57,9 +57,12 @@ and optionally animating a **scripted** turn. Definition shape:
   hero:  { col, row },                          // hero leader start (required)
   witch: { col, row } | null,                   // witch start; null ⇒ no witch
   units: [{ ref?, type, owner:'hero'|'witch', col, row, weapon?, level? }],
-  heroPlan:  [{ ref, move:[c,r] } | { ref, attack:'<ref>' }],   // optional…
+  heroPlan:  [{ ref, move:[c,r] } | { ref, attack:'<ref>' }
+              | { ref, guard:true } | { ref, explore:true }],  // optional…
   witchPlan: [ … ],                             // …only used when resolve:true
   resolve: true,                                // animate the scripted turn
+  summary: true,                                // keep the end-of-round wrap-up card
+                                                // (skipped by default in scenario mode)
   fog: 'none',                                  // default 'none' (see everything)
   pov: 'hero',                                  // hero side human-controlled — gives fog
                                                 // ('partial') a real observer; required to
@@ -68,7 +71,10 @@ and optionally animating a **scripted** turn. Definition shape:
 ```
 
 `ref` labels a placed unit so a plan can target it; the leaders are pre-bound as
-`'hero'` / `'witch'`. Two worked checks:
+`'hero'` / `'witch'`. Hero-side `units` spawn as recruited survivors (they can
+act in `heroPlan`). For a deterministic explore result, pair `{ ref, explore:true }`
+with a tile-level `exploreOverride: { kind:'resource', id:'wood', amount:2 }`.
+Two worked checks:
 
 ```js
 // Slot fix: 3 witch units on one forest hex must sit in distinct slots, no +N badge.

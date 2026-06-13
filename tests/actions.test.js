@@ -1631,31 +1631,47 @@ describe('executeSummon', () => {
 // ── executeHeal ───────────────────────────────────────────────────────────────
 
 describe('executeHeal', () => {
-  test('heals 2 HP, costs 1 action, consumes herbs from shared inventory', () => {
+  test('heals 2D10 HP, costs 1 action, consumes herbs from shared inventory', () => {
     const state = freshState();
     const hero = state.hero;
     state.inventory.hero[ResourceType.HERBS] = 1;
-    hero.takeDamage(20);
+    hero.takeDamage(25);
+    const hpBefore = hero.hp;
+
+    state.forcedDice = [7, 3];   // the two d10s
+    const r = executeHeal(state, hero);
+    assert.equal(r.success, true);
+    assert.equal(r.cost, 1, 'Heal should cost 1 action');
+    assert.equal(hero.hp, hpBefore + 10); // herbs heal 2D10 (7 + 3)
+    assert.equal(r.healed, 10, 'result reports the rolled heal amount for the HP floater');
+    assert.equal(state.inventory.hero[ResourceType.HERBS], 0, 'Herbs should be consumed from shared inventory');
+  });
+
+  test('heal roll stays within the 2..20 envelope without forced dice', () => {
+    const state = freshState();
+    const hero = state.hero;
+    state.inventory.hero[ResourceType.HERBS] = 1;
+    hero.takeDamage(25);
     const hpBefore = hero.hp;
 
     const r = executeHeal(state, hero);
     assert.equal(r.success, true);
-    assert.equal(r.cost, 1, 'Heal should cost 1 action');
-    assert.equal(hero.hp, hpBefore + 14); // herbs heal 2 × DAMAGE_SCALE
-    assert.equal(state.inventory.hero[ResourceType.HERBS], 0, 'Herbs should be consumed from shared inventory');
+    assert.ok(r.healed >= 2 && r.healed <= 20, `2D10 must land in 2..20 (got ${r.healed})`);
+    assert.equal(hero.hp, hpBefore + r.healed);
   });
 
   test('witch can heal too (from witch inventory)', () => {
     const state = freshState();
     const witch = state.witch;
     state.inventory.witch[ResourceType.HERBS] = 1;
-    witch.takeDamage(20);
+    witch.takeDamage(25);
     const hpBefore = witch.hp;
 
+    state.forcedDice = [10, 10];
     const r = executeHeal(state, witch);
     assert.equal(r.success, true);
     assert.equal(r.cost, 1);
-    assert.equal(witch.hp, hpBefore + 14);
+    assert.equal(witch.hp, hpBefore + 20);
     assert.equal(state.inventory.witch[ResourceType.HERBS], 0, 'Herbs consumed from witch inventory');
   });
 
@@ -1679,6 +1695,7 @@ describe('executeHeal', () => {
     const hero = state.hero;
     state.inventory.hero[ResourceType.HERBS] = 1;
     hero.takeDamage(1); // 1 below max
+    state.forcedDice = [10, 10];
     executeHeal(state, hero);
     assert.equal(hero.hp, hero.maxHp);
   });
@@ -1695,7 +1712,8 @@ describe('executeHeal', () => {
     const r = executeHeal(state, survivor);
     assert.equal(r.success, true);
     assert.equal(r.cost, 1);
-    assert.equal(survivor.hp, hpBefore + 14);
+    assert.equal(survivor.hp, hpBefore + r.healed);
+    assert.ok(r.healed >= 2 && r.healed <= 20);
     assert.equal(state.inventory.hero[ResourceType.HERBS], 0, 'Herbs consumed from shared inventory');
   });
 

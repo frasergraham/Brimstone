@@ -1581,9 +1581,10 @@ export function executeHeal(state, actor) {
   if (actor.hp >= actor.maxHp)
     return { success: false, log: [`${actor.displayName} is already at full health.`] };
   inv[ResourceType.HERBS]--;
-  const healed = 2 * DAMAGE_SCALE;
+  // Herbs heal 2D10 — rolled through state.nextDie so tests can force the dice.
+  const healed = state.nextDie(10) + state.nextDie(10);
   actor.heal(healed);
-  return { success: true, log: [`${actor.displayName} uses herbs. (+${healed} HP, now ${actor.hp}/${actor.maxHp})`], cost: 1 };
+  return { success: true, log: [`${actor.displayName} uses herbs. (+${healed} HP, now ${actor.hp}/${actor.maxHp})`], cost: 1, healed };
 }
 
 export function executeUseItem(state, actor, item) {

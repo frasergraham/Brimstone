@@ -497,6 +497,31 @@ describe('buildCycleInfoHtml', () => {
     const plain = buildCycleInfoHtml(baseState);
     assert.ok(!plain.includes('cip-icon'), 'emoji fallback without icons');
   });
+
+  test('disableScoring hides the scoring rule and the score pips', () => {
+    // Campaign missions with disableScoring never award node points — the
+    // panel must not show the rule text or a score readout for them.
+    const html = buildCycleInfoHtml({ ...baseState, disableScoring: true });
+    assert.ok(!html.includes('cip-rule'), 'no scoring rule text');
+    assert.ok(!html.includes('cip-score'), 'no score pips row');
+    assert.ok(!html.includes('score-pip'), 'no pips at all');
+    // Phase cycle info and node holders stay — they're still meaningful.
+    assert.ok(html.includes('Night'));
+    assert.ok(html.includes('Whispering Stone'));
+  });
+
+  test('disableScoring in battle mode hides the numeric score too', () => {
+    const html = buildCycleInfoHtml({ ...baseState, gameMode: 'battle', disableScoring: true });
+    assert.ok(!html.includes('cip-rule'));
+    assert.ok(!html.includes('cip-score'));
+  });
+
+  test('disableScoring strips the scoring mention from dawn/dusk phase blurbs', () => {
+    // Round 8 of the default cycle → DAWN next is... use round 1 (DAWN current).
+    const html = buildCycleInfoHtml({ ...baseState, round: 1, disableScoring: true });
+    assert.ok(!html.toLowerCase().includes('node scoring'), 'no scoring mention in phase descs');
+    assert.ok(html.includes('attrition rises'), 'rest of the dawn blurb kept');
+  });
 });
 
 // ── Effect letter badges + selected-unit panel parity ─────────────────────────

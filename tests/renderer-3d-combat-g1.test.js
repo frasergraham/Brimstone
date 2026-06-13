@@ -716,6 +716,74 @@ describe('G1 — addCombatReadout lifecycle', () => {
       'attacker-side readout never spawns a result label — defender owns the story');
   });
 
+  test('summaryOnly: icon shows the FINAL total at spawn, no step floaters, no ally pulse', async () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInst({ ids: ['e1', 'a1'] });
+    const iconTex = inst._unitIconBadges.get('e1').tex;
+    const pulses = [];
+    inst.pulseAllyIcon = (id) => pulses.push(id);
+    const B = inst._babylon;
+    const planes = [];
+    const OrigMeshBuilder = B.MeshBuilder;
+    B.MeshBuilder = {
+      CreatePlane(name, opts, scene) {
+        const p = OrigMeshBuilder.CreatePlane(name, opts, scene);
+        p.createName = name;
+        planes.push(p);
+        return p;
+      },
+    };
+    const sched = fakeScheduler();
+    // Picked die (6) came from ally a1 (own die 3) AND there are flat bonuses
+    // — in normal mode this stacks 2 step floaters and pulses the ally. With
+    // summaryOnly both are skipped and the icon latches the total (9).
+    const result = {
+      hit: true, attackRoll: 9, defenseRoll: 4,
+      breakdown: {
+        atkPool: [3, 6], atkBaseDie: 6,
+        defPool: [4], defBaseDie: 4,
+        atkGangupFlat: 2, phaseBonus: 1,
+        atkAllyDice: [{ allyId: 'a1', die: 6 }],
+      },
+    };
+    const p = inst.addCombatReadout('e1', 'attacker', result,
+      { setTimeoutFn: sched, summaryOnly: true });
+    assert.ok(iconTex.drawnValues.some(v => v.includes('9')),
+      'icon shows the final total (9) from the very first paint');
+    sched.runAll();
+    await p;
+    assert.equal(planes.filter(pl => /readoutFloater_/.test(pl.createName)).length, 0,
+      'no bonus-step floaters in summaryOnly mode');
+    assert.equal(pulses.length, 0, 'no picked-ally pulse in summaryOnly mode');
+  });
+
+  test('summaryOnly: defender still spawns its result label', async () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInst({ ids: ['e1'] });
+    const B = inst._babylon;
+    const planes = [];
+    const OrigMeshBuilder = B.MeshBuilder;
+    B.MeshBuilder = {
+      CreatePlane(name, opts, scene) {
+        const p = OrigMeshBuilder.CreatePlane(name, opts, scene);
+        p.createName = name;
+        planes.push(p);
+        return p;
+      },
+    };
+    const sched = fakeScheduler();
+    const p = inst.addCombatReadout('e1', 'defender',
+      { hit: true, damage: 1, attackRoll: 7, defenseRoll: 3,
+        breakdown: { atkPool: [6], atkBaseDie: 6, defPool: [3], defBaseDie: 3,
+                     defGangupFlat: 1 } },
+      { setTimeoutFn: sched, summaryOnly: true });
+    sched.runAll();
+    await p;
+    assert.equal(planes.filter(pl => /readoutResult_/.test(pl.createName)).length, 1,
+      'defender result label still tells the story in summaryOnly mode');
+    assert.equal(planes.filter(pl => /readoutFloater_/.test(pl.createName)).length, 0);
+  });
+
   test('result label sits ABOVE all step floaters (topmost slot)', () => {
     if (!('document' in globalThis)) globalThis.document = {};
     const inst = makeInst({ ids: ['e1'] });

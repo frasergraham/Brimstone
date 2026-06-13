@@ -516,12 +516,14 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
       }
 
       // Explore reports the loot gained as the actual resource icons (🌿 🪵 ⚙
-      // …), not a generic "+1 RESOURCE". Empty roll ⇒ "EXPLORED".
+      // …), not a generic "+1 RESOURCE". Empty roll ⇒ "EXPLORED". The extra
+      // `loot` kind bumps the emoji size on the card — at the outcome cell's
+      // text size the icons are too small to read.
       let note = null;
       if (a.type === PA.EXPLORE) {
         const icons = lootIcons(ev.result);
         note = icons.length
-          ? { text: icons.join(' '), kind: 'gain' }
+          ? { text: icons.join(' '), kind: 'gain loot' }
           : { text: 'EXPLORED', kind: 'info' };
       }
 

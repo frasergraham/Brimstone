@@ -211,7 +211,7 @@ describe('buildStepDigest — move/explore notes', () => {
       result: { success: true, lootItems: ['+🪵', 'nothing', '+🌿'] },  // 'nothing' excluded
     };
     const d = buildStepDigest([step([ev], [h])], [], DEPS);
-    assert.deepEqual(d[0].entries[0].note, { text: '+🪵 +🌿', kind: 'gain' });
+    assert.deepEqual(d[0].entries[0].note, { text: '+🪵 +🌿', kind: 'gain loot' });
   });
 
   test('discovery: explore that finds a survivor shows the unit + "FOUND SURVIVOR"', () => {

@@ -2231,8 +2231,8 @@ export class UIController {
             const healPool = entity.owner === 'witch' ? projInv.witch : projInv.hero;
             if ((healPool[ResourceType.HERBS] || 0) < 1) healDis = true;
           }
-          arcItems.push({ group: 'items', label: 'Heal', fullLabel: action.atFullHp ? 'Already at full HP' : 'Herbs (heal 2 HP)',
-            desc: action.atFullHp ? 'Already at full HP.' : 'Spend 1 herb to heal this unit 2 HP. (1 action)',
+          arcItems.push({ group: 'items', label: 'Heal', fullLabel: action.atFullHp ? 'Already at full HP' : 'Herbs (heal 2D10 HP)',
+            desc: action.atFullHp ? 'Already at full HP.' : 'Spend 1 herb to heal this unit 2D10 HP. (1 action)',
             color: '#55cc55', dis: healDis, cost: 1, resCost: '1🌿',
             attrs: 'data-action="heal"' });
           break;
@@ -3349,11 +3349,21 @@ export class UIController {
   static SPEED_ORDER = ['cinematic', 'fast', 'vfast'];
 
   _loadDefaultSpeed() {
+    // The combat-detail controls (#replay-detail-btn + the Options "Default
+    // Game Speed" section) are HIDDEN for now — we're trialling a single
+    // playback presentation. Pin to 'fast' (Summary) and IGNORE the stored
+    // preference: with no UI to change it back, a stale saved 'cinematic' /
+    // 'vfast' would invisibly lock a player into a mode they can't leave.
+    // To restore the feature, un-hide both controls in index.html and revive
+    // the localStorage read below.
+    return 'fast';
+    /* eslint-disable no-unreachable -- kept for easy restoration
     try {
       const saved = localStorage.getItem('brimstone-default-speed');
       if (saved && UIController.SPEED_LABELS[saved]) return saved;
-    } catch (_) { /* localStorage unavailable */ }
-    return 'cinematic';
+    } catch (_) {  }
+    return 'fast';
+    */
   }
 
   _toggleMapOptionsPopup() {

@@ -30,15 +30,15 @@ export function wrapupIconHtml(u, { src = null, cls = 'wrapup-unit-icon' } = {})
 }
 
 /**
- * One unit column: icon above its HP delta — skull on kill, "−N" when hurt,
- * dash when untouched.
+ * One unit column: icon above its HP delta — "☠ DIED" on kill, "−N" when
+ * hurt, dash when untouched.
  *
  * @param {object} u — { hpLost, killed } unit.
  * @param {string} iconHtml — pre-built icon (wrapupIconHtml / caller's own).
  */
 export function wrapupUnitCellHtml(u, iconHtml) {
   const effect = u.killed
-    ? `<div class="wrapup-dmg kill">☠</div>`
+    ? `<div class="wrapup-dmg kill">☠ DIED</div>`
     : (u.hpLost > 0 ? `<div class="wrapup-dmg">−${u.hpLost}</div>` : `<div class="wrapup-dmg none">—</div>`);
   return `<div class="wrapup-unit">${iconHtml}${effect}</div>`;
 }

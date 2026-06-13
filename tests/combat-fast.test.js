@@ -103,6 +103,63 @@ describe('playFastCombatDisplay — hit path skips the miss flash', () => {
   });
 });
 
+describe('playFastCombatDisplay — Summary (fast) final-score readouts', () => {
+  const READOUT_RENDERER = () => {
+    const readouts = [];
+    return {
+      addCombatReadout(id, side, result, opts) { readouts.push({ id, side, result, opts }); },
+      addFlash(...args) { (this.flashes ??= []).push(args); },
+      readouts,
+    };
+  };
+
+  test('fast spawns a summaryOnly readout over attacker AND defender', async () => {
+    const renderer = READOUT_RENDERER();
+    await playFastCombatDisplay({
+      renderer, actorSnap: ACTOR, targetSnap: TARGET,
+      result: { hit: true, damage: 1 },
+      playBattleResultAnims: () => {},
+      speed: 'fast', missText: null,
+      playbackDelay: () => Promise.resolve(),
+    });
+    assert.equal(renderer.readouts.length, 2);
+    assert.deepEqual(renderer.readouts.map(r => [r.id, r.side]),
+      [[ACTOR.id, 'attacker'], [TARGET.id, 'defender']]);
+    for (const r of renderer.readouts) {
+      assert.equal(r.opts.summaryOnly, true, 'readout skips the dice stack-up');
+      assert.equal(r.opts.attackerCol, ACTOR.col);
+      assert.equal(r.opts.targetCol, TARGET.col);
+      assert.equal(typeof r.opts.awaitContinueFn, 'function');
+    }
+  });
+
+  test('fast miss: readouts shown, hex miss-flash suppressed (label covers it)', async () => {
+    const renderer = READOUT_RENDERER();
+    await playFastCombatDisplay({
+      renderer, actorSnap: ACTOR, targetSnap: TARGET,
+      result: { hit: false },
+      playBattleResultAnims: () => {},
+      speed: 'fast', missText: 'BLOCK',
+      playbackDelay: () => Promise.resolve(),
+    });
+    assert.equal(renderer.readouts.length, 2);
+    assert.equal(renderer.flashes ?? undefined, undefined, 'no addFlash when readouts are up');
+  });
+
+  test('vfast (Speedy) stays readout-free and keeps the miss flash', async () => {
+    const renderer = READOUT_RENDERER();
+    await playFastCombatDisplay({
+      renderer, actorSnap: ACTOR, targetSnap: TARGET,
+      result: { hit: false },
+      playBattleResultAnims: () => {},
+      speed: 'vfast', missText: 'BLOCK',
+      playbackDelay: () => Promise.resolve(),
+    });
+    assert.equal(renderer.readouts.length, 0);
+    assert.equal(renderer.flashes.length, 1);
+  });
+});
+
 describe('playFastCombatDisplay — ordering and optional anim callback', () => {
   test('addFlash → playBattleResultAnims → playbackDelay (in that order)', async () => {
     const order = [];

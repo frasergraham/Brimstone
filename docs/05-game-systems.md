@@ -297,7 +297,7 @@ The caller then calls `state.spendAction(result.cost)` to deduct from the budget
 │              │ GUARD — stance with reactive strikes (1 AP)   │
 ├──────────────┼──────────────────────────────────────────────┤
 │ ECONOMY      │ SUMMON — witch creates unit (1 AP)           │
-│              │ HEAL — use herbs (+2 HP) (1 AP)              │
+│              │ HEAL — use herbs (+2D10 HP) (1 AP)           │
 │              │ USE_ITEM — food/silver/scripture (0 AP)       │
 │              │ EQUIP_WEAPON — from pack (0 AP, 1×/round)    │
 │              │ USE_ABILITY — survivor special (0-1 AP)       │
@@ -426,7 +426,7 @@ MVP places **one** footprint per building, but the schema is `string[]` and the 
 
 | Resource | Effect | Shared? |
 |----------|--------|---------|
-| **Herbs** | Heal 2×`DAMAGE_SCALE` HP (1 action, personal) | No |
+| **Herbs** | Heal 2D10 HP (1 action, personal) | No |
 | **Food** | +1 action point | Yes (faction pool) |
 | **Wood** | Fortify +1 DEF, or summon Wood Golem | Yes |
 | **Metal** | Reinforce +2 DEF, or summon Iron Golem | Yes |

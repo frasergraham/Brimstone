@@ -514,8 +514,9 @@
         </div>
       </div>
 
-      <!-- Default game speed -->
-      <div class="acct-section" style="text-align:left">
+      <!-- Default game speed — HIDDEN for now (single playback presentation trial;
+           see the hidden #replay-detail-btn). Remove display:none to restore. -->
+      <div class="acct-section" style="text-align:left; display:none">
         <div class="acct-label">Default Game Speed</div>
         <p style="font-size:0.8rem;color:var(--muted);margin:0.25rem 0 0.5rem">
           Sets the playback speed when entering any game. You can still change it in-game.
@@ -995,7 +996,11 @@
               <button id="replay-camera-btn" class="replay-ctrl-btn replay-camera" data-tip="Camera follows the action — tap to keep it fixed instead">Follow</button>
             </div>
           </div>
-          <div class="replay-block">
+          <!-- Combat-detail section (Full/Summary/Speedy) — HIDDEN for now while we
+               trial a single playback presentation; drop style="display:none" (and
+               the matching hidden Options section + the _loadDefaultSpeed pin in
+               ui.js) to bring it back. -->
+          <div class="replay-block" style="display:none">
             <div class="replay-block-title">Detail</div>
             <div class="replay-block-btns">
               <button id="replay-detail-btn" class="replay-ctrl-btn replay-detail" data-tip="Combat detail level — how much each battle pauses to show">Full</button>

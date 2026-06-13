@@ -3,6 +3,7 @@ import { onInactiveChange, tryGameCenterAuth, isNativeMobile, refreshPushToken, 
 import { AppMode, getMode, setMode, isInGame, isAnimating, shouldBufferMessages, onModeChange } from './app-mode.js';
 import { initServerSelector } from './server-selector.js';
 import { GameState, phaseForRound, getCycleLength } from './game.js';
+import { DAMAGE_SCALE } from './balance.js';
 import { Renderer3D, BLOCK_WORD_VARIANTS } from './renderer-3d.js';
 
 // The in-game renderer is always 3D. The 2D `Renderer` is still exported from
@@ -1343,6 +1344,22 @@ async function _run3DCombatCardHold(actorSnap, targetSnap, result, redrawFn) {
   });
 }
 
+/**
+ * Land an HP delta on the DISPLAY entity in the same beat as its floater.
+ * During resolution animation `state.entities` holds per-step display clones
+ * (the authoritative post-step swap happens later), and the unit icon badge
+ * above each unit repaints from `state.entities` every draw — so nudging the
+ * clone here makes the icon's HP ring update per ACTION instead of jumping
+ * at the end of the TURN. Clamped to [0, maxHp]; overwritten harmlessly by
+ * the post-step snapshot swap.
+ */
+function _applyDisplayHp(entityId, delta) {
+  if (!delta) return;
+  const e = state?.entities?.find(en => en && en.id === entityId);
+  if (!e || e.hp == null) return;
+  e.hp = Math.max(0, Math.min(e.maxHp ?? e.hp, e.hp + delta));
+}
+
 function _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn) {
   // Single audio hook for every combat display path (2D dialog, fast toast,
   // 3D card-hold, autoplay, replay) — all of them funnel through here.
@@ -1362,8 +1379,14 @@ function _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn) {
   // `_pendingDespawn`. _syncEntityStandees skips disposal until the "-N"
   // floater finishes rising/fading, so the number reads as floating off a
   // visible unit rather than orphaned in space.
-  if (result?.damage)      renderer.addHpChangeFlash(tgtCol, tgtRow, -(result.damage),    { entityId: targetSnap.id });
-  if (result?.counterDmg)  renderer.addHpChangeFlash(atkCol, atkRow, -(result.counterDmg), { entityId: actorSnap.id });
+  if (result?.damage) {
+    renderer.addHpChangeFlash(tgtCol, tgtRow, -(result.damage), { entityId: targetSnap.id });
+    _applyDisplayHp(targetSnap.id, -(result.damage));
+  }
+  if (result?.counterDmg) {
+    renderer.addHpChangeFlash(atkCol, atkRow, -(result.counterDmg), { entityId: actorSnap.id });
+    _applyDisplayHp(actorSnap.id, -(result.counterDmg));
+  }
   if (result?.fortDamaged) {
     renderer.addFlash(tgtCol, tgtRow, '🏰-1',
       'rgba(120,120,140,0.15)', 1600, 0.65, 'rgba(180,180,200,1)');
@@ -1387,9 +1410,10 @@ function _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn) {
       { radiusMultiplier: 3, duration: 900 },
     );
   }
-  // Splash damage floaters
+  // Splash damage floaters — splashHits carry the actual (scaled) damage.
   for (const sh of result?.splashHits ?? []) {
-    renderer.addHpChangeFlash(sh.col, sh.row, -1, { entityId: sh.id });
+    renderer.addHpChangeFlash(sh.col, sh.row, -(sh.damage ?? 1), { entityId: sh.id });
+    _applyDisplayHp(sh.id, -(sh.damage ?? 1));
     if (sh.killed) {
       const deadColor = sh.owner === 'hero' ? '#d4a72c' : '#9b59b6';
       renderer.addDeathAnim(sh.col, sh.row, deadColor);
@@ -1665,6 +1689,28 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     await renderer.waitForAnimations();
   };
 
+  // Per-ACTION manual-step gate: in paused mode every presented action holds
+  // for NEXT before the next one plays, so NEXT walks action-by-action rather
+  // than turn-by-turn. The gate sits BEFORE each presentation — it only holds
+  // once something has actually been shown since the last hold — so the
+  // existing step-boundary gate below still owns the pause after a step's
+  // FINAL action (and the round loop the round boundary). The simultaneous
+  // move phase counts as one presentation: moves play together by design.
+  let _presentedSinceGate = false;
+  const _actionGate = async () => {
+    if (_autoplay || !ui || !_presentedSinceGate) return;
+    _presentedSinceGate = false;
+    if (!playback.paused) return;
+    await _settleAnims();
+    ui.setReplayNextReady?.(true);
+    while (playback.paused && !playback.stepRequested && !playback.replayStep
+           && !playback.restart && !playback.aborted && !playback.goBack && !playback.jumpToEnd) {
+      await new Promise(r => setTimeout(r, 50));
+    }
+    ui.setReplayNextReady?.(false);
+    if (!playback.replayStep) playback.stepRequested = false;
+  };
+
   // A discovery (survivor/zombie found via move/explore/horn) is now shown on
   // the timeline card; here we just focus the camera on the new unit (unless the
   // camera is FIXED) and reveal that action's card entry.
@@ -1709,6 +1755,9 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     // During replay: if BACK/STOP/REDO was pressed, abort remaining steps immediately
     if (playback.goBack || playback.aborted || playback.jumpToEnd || playback.restart) break;
     const step = steps[i];
+    // The step-boundary gate (or the round loop) owned the pause that got us
+    // here — the step's first action plays without an extra per-action hold.
+    _presentedSinceGate = false;
     // Advance the timeline overlay: slide this step into the leftmost slot.
     ui?.setReplayTimelineStep?.(i);
     // Keep the camera-suppress flag on the renderer we actually frame with, so
@@ -1946,6 +1995,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 
     if (moveAnims.length > 0) {
       hadMove = true;
+      _presentedSinceGate = true;   // the simultaneous move phase = one ACTION hold
       const _spd = ui?.speedMode ?? 'cinematic';
       const hopDelay = _spd === 'vfast' ? 160 : 320;
 
@@ -2072,7 +2122,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     // (important: the blocked unit is often the same one that then attacks).
     // 3D only — the 2D editor renderer has no addBumpWalkAnim.
     if (!_autoplay && typeof renderer?.addBumpWalkAnim === 'function') {
-      let bumped = false;
+      const bumpedIds = [];
       for (const ev of allStepEvents) {
         if (ev.type !== ResEventType.ACTION_FAIL) continue;
         if (ev.action?.type !== PlanActionType.MOVE) continue;
@@ -2094,14 +2144,18 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             'rgba(170,170,175,0.15)', 900, 0.75, 'rgba(200,200,210,1)');
         }
         hadMove = true;
-        bumped = true;
+        bumpedIds.push(ev.action.entityId);
       }
       // Await the bump-walks (and any still-in-flight real moves) so the move
       // phase fully settles before battles animate.
-      if (bumped) {
+      if (bumpedIds.length) {
+        _presentedSinceGate = true;   // the bump-walk counts as an ACTION hold
         redrawFn();
         await renderer.waitForAnimations();
         redrawFn();
+        // Reveal each blocked move's BLOCKED note now that its bump-walk has
+        // played (per-ACTION, not at the end of the TURN).
+        for (const id of bumpedIds) ui?.revealReplayEntryOutcome?.(i, id);
       }
     }
 
@@ -2139,6 +2193,8 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         if (battleSnaps && _evVisible(ev, step.entitySnapshot, postEntities)) {
           const { actorSnap, targetSnap } = battleSnaps;
           const isKill = !!result?.killed;
+          // Hold for NEXT before this battle if a prior action already played.
+          await _actionGate();
           // Highlight this battle's row on the timeline as it begins.
           ui?.highlightReplayEntry?.(i, actorSnap.id);
 
@@ -2270,15 +2326,18 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
           // settled (per-ACTION, not at the end of the TURN).
           ui?.revealReplayEntryOutcome?.(i, actorSnap.id);
           hadBattle = true;
+          _presentedSinceGate = true;
         }
       } else if (action.type === PlanActionType.SUMMON) {
         const actorSnap = step.entitySnapshot?.find(e => e.id === action.entityId);
         // Only animate the conjuring if the summoner's hex is in sight (the unit
         // appears on the summoner's own hex) — matches the SUMMON card's gate.
         if (actorSnap && _evVisible(ev, step.entitySnapshot, postEntities)) {
+          await _actionGate();
           renderer.addSpawnAnim(actorSnap.col, actorSnap.row, '#b39ddb');
           audio.play('summon');
           hadBattle = true;
+          _presentedSinceGate = true;
         }
       }
     }
@@ -2292,7 +2351,9 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     // pre-move hex); now walk them to their destination. Mirrors the MOVE phase's
     // slide; dead units never produce a move so there's nothing to skip here.
     if (deferredMoveAnims.length > 0) {
+      await _actionGate();
       hadMove = true;
+      _presentedSinceGate = true;
       const _spd = ui?.speedMode ?? 'cinematic';
       const hopDelay = _spd === 'vfast' ? 160 : 320;
       if (renderer?.is3D) {
@@ -2350,6 +2411,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 
       // Visibility — actor's hex OR the empty target hex (same as the card).
       if (!_evVisible(ev, step.entitySnapshot, postEntities)) continue;
+      await _actionGate();
 
       if (!_autoplay) {
         const speed = ui?.speedMode ?? 'cinematic';
@@ -2380,7 +2442,11 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         if (speed === 'cinematic') await renderer.waitForAnimations();
         redrawFn();
       }
+      // Reveal the whiff's NO TARGET / TARGET FLED note at the end of THIS
+      // action, not at the end of the TURN.
+      ui?.revealReplayEntryOutcome?.(i, actorSnap.id);
       hadBattle = true;
+      _presentedSinceGate = true;
     }
 
     // ── Phase 2a'': witch fort assaults (siege an empty fortified hex) ──────
@@ -2397,6 +2463,8 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       const tCol = r.targetCol, tRow = r.targetRow;
 
       if (_evVisible(ev, step.entitySnapshot, postEntities) && !_autoplay) {
+        await _actionGate();
+        _presentedSinceGate = true;
         const speed = ui?.speedMode ?? 'cinematic';
         const actorDisplay = state.entities.find(e => e.id === actorSnap.id);
         const lungeFromCol = actorDisplay?.col ?? actorSnap.col;
@@ -2444,6 +2512,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 
       // Positional visibility — actor's or target's hex in sight (same as card).
       if (!_evVisible(ev, step.entitySnapshot, postEntities)) continue;
+      await _actionGate();
       // Highlight this guard strike's card as it fires.
       ui?.highlightReplayEntry?.(i, actorSnap.id);
 
@@ -2543,6 +2612,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       // Reveal this guard strike's rolls + outcome (per-ACTION).
       ui?.revealReplayEntryOutcome?.(i, actorSnap.id);
       hadBattle = true;
+      _presentedSinceGate = true;
     }
     // Restore inset after all battles (regular + guard strikes) are done.
     if (_battleInsetActive) {
@@ -2577,8 +2647,13 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       // Loot flash shows to anyone who can see the explorer (matches the card);
       // the discovery modal stays the finder's own (own faction / controlled unit).
       if (!_evVisible(ev, step.entitySnapshot, postEntities)) continue;
+      await _actionGate();
       const actor = explorer;
-      if (actor) { ui._showLootFlashes(actor, result.lootItems ?? []); hadExplore = true; }
+      if (actor) {
+        ui._showLootFlashes(actor, result.lootItems ?? []);
+        hadExplore = true;
+        _presentedSinceGate = true;
+      }
       redrawFn();
       const ownFind = (!humanFaction || ev.faction === humanFaction)
         && (!myPlayerId || actor?.ownerId === myPlayerId);
@@ -2601,6 +2676,8 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       if (!result?.success) continue;
       const actor = step.entitySnapshot?.find(e => e.id === action.entityId);
       if (!actor) continue;
+      await _actionGate();
+      _presentedSinceGate = true;
 
       // Frame camera on all hero units — the horn reveals them to the opponent
       if (!_autoplay) {
@@ -2653,9 +2730,11 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         (actorTile.fortifyLevel || 0) + (result.defGain ?? 1));
       // Surface the +N floater to anyone who can see the fortifying unit.
       if (!_evVisible(ev, step.entitySnapshot, postEntities)) continue;
+      await _actionGate();
       const gain = result.defGain ?? 1;
       renderer.addFlash(actor.col, actor.row, `🛡+${gain}`,
         'rgba(100,180,255,0.1)', 1800, 0.72, 'rgba(130,200,255,1)');
+      _presentedSinceGate = true;
     }
 
     // ── Phase 5: heal animation — green glow + HP floater ─────────────
@@ -2666,8 +2745,14 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       const actor = step.entitySnapshot?.find(e => e.id === action.entityId);
       // Match the HEAL card — only animate when the healer's hex is in sight.
       if (actor && _evVisible(ev, step.entitySnapshot, postEntities)) {
+        await _actionGate();
+        // `healed` carries the actual (scaled) amount; the fallback covers
+        // replays recorded before the field existed.
+        const healed = result.healed ?? 2 * DAMAGE_SCALE;
         renderer.addNodeRevealAnim([{ col: actor.col, row: actor.row }], '#44cc66', { radiusMultiplier: 1.5, duration: 1000 });
-        renderer.addHpChangeFlash(actor.col, actor.row, 2);
+        renderer.addHpChangeFlash(actor.col, actor.row, healed);
+        _applyDisplayHp(actor.id, healed);
+        _presentedSinceGate = true;
       }
     }
 
@@ -3102,7 +3187,7 @@ document.getElementById('reconnect-back').addEventListener('click', () => locati
 
   // Highlight the saved (or default) speed on load
   const saved = localStorage.getItem(SPEED_KEY);
-  const active = validSpeeds.includes(saved) ? saved : 'cinematic';
+  const active = validSpeeds.includes(saved) ? saved : 'fast';
   container?.querySelectorAll('.speed-option').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.mode === active);
   });
@@ -3709,12 +3794,19 @@ function _createEnemyEntity(type, col, row, state = null) {
 //     tiles: [{col,row,type:'FOREST'|'ROAD'|…, roadDirs?:['c,r',…]}],  // sparse
 //     hero: {col,row}, witch: {col,row}|null,      // leader starts (witch opt.)
 //     units: [{ref?, type, owner:'hero'|'witch', col, row, weapon?, level?}],
-//     heroPlan/witchPlan: [{ref, move:[c,r]} | {ref, attack:'<ref>'}],
+//     heroPlan/witchPlan: [{ref, move:[c,r]} | {ref, attack:'<ref>'} | {ref, guard:true} | {ref, explore:true}],
 //     resolve: bool,                               // animate the scripted turn
 //     fog: 'none'|'partial',                       // default 'none'
 //   }
 function _createScenarioUnit(type, col, row, owner, state) {
-  if (owner === 'hero') return createSurvivor(col, row, 'hero', state);
+  if (owner === 'hero') {
+    // createSurvivor's third param is the player UUID, not the faction —
+    // recruit explicitly (same as createDiscoveryEntity) or the unit stays
+    // neutral and every planned action fails with "Wrong faction."
+    const s = createSurvivor(col, row, null, state);
+    s.owner = 'hero';
+    return s;
+  }
   return _createEnemyEntity(type, col, row, state);
 }
 
@@ -3730,6 +3822,9 @@ function _scenarioPlan(planDefs, byRef) {
       if (target) out.push({ type: PlanActionType.BATTLE_UNIT, entityId: actor.id, targetId: target.id });
     } else if (p.guard) {
       out.push({ type: PlanActionType.GUARD, entityId: actor.id });
+    } else if (p.explore) {
+      // Pair with a tile-level `exploreOverride` for a deterministic loot roll.
+      out.push({ type: PlanActionType.EXPLORE, entityId: actor.id });
     }
   }
   return out;
@@ -3803,9 +3898,11 @@ function initScenario(def) {
   if (def.resolve) {
     state.heroPlan  = _scenarioPlan(def.heroPlan, byRef);
     state.witchPlan = _scenarioPlan(def.witchPlan, byRef);
-    // Let the reveal settle, then animate the scripted turn.
+    // Let the reveal settle, then animate the scripted turn. `summary: true`
+    // keeps the end-of-round review (wrap-up card) instead of skipping it —
+    // for verifying the wrap-up presentation itself.
     setTimeout(() => {
-      _runLocalResolution(true).catch(e => console.error('scenario resolve error:', e));
+      _runLocalResolution(!def.summary).catch(e => console.error('scenario resolve error:', e));
     }, 900);
   }
 }

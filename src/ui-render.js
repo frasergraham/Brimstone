@@ -671,6 +671,13 @@ export const PHASE_META = Object.freeze({
   night: { sprite: 'cycle_night', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
 });
 
+// Phase blurbs for missions that disable node scoring — same effects minus
+// the scoring mention, so the panel doesn't promise points that never come.
+const PHASE_DESC_NO_SCORING = Object.freeze({
+  dawn: 'Hero +1 action · attrition rises',
+  dusk: 'Seek cover before night',
+});
+
 export function buildCycleInfoHtml(state, icons = {}) {
   const phases   = state.cycleConfig?.phases ?? DEFAULT_CYCLE_PHASES;
   const cycleLen = phases.length;
@@ -678,7 +685,12 @@ export function buildCycleInfoHtml(state, icons = {}) {
   const cycleNum = Math.ceil(state.round / cycleLen);
   const cur      = phases[idx];
   const next     = phases[(idx + 1) % cycleLen];
-  const meta     = (p) => PHASE_META[p] ?? { label: p, desc: '' };
+  const meta     = (p) => {
+    const m = PHASE_META[p] ?? { label: p, desc: '' };
+    return (state.disableScoring && PHASE_DESC_NO_SCORING[p])
+      ? { ...m, desc: PHASE_DESC_NO_SCORING[p] }
+      : m;
+  };
   // The caller passes the game's cycle sprites (renderer data URLs) keyed by
   // phase; the emoji is only the headless/loading fallback.
   const icon = (p) => icons[p]
@@ -697,13 +709,18 @@ export function buildCycleInfoHtml(state, icons = {}) {
   html += `<div class="cip-phase cip-next"><span class="cip-phase-name">Next: ${icon(next)} ${meta(next).label}</span>`
         + `<span class="cip-phase-desc">${meta(next).desc}</span></div>`;
 
-  // Scoring rules + live node status.
+  // Scoring rules + live node status. Campaign missions can turn node scoring
+  // off entirely (state.disableScoring) — suppress the rule text and the score
+  // pips so the panel doesn't promise points the mission will never award.
   const threshold = state.nodeScoreThreshold ?? 4;
-  html += `<hr class="cip-divider">`;
-  if (state.gameMode === 'battle') {
-    html += `<div class="cip-rule">Points score every round. The faction leading when time runs out wins.</div>`;
-  } else {
-    html += `<div class="cip-rule">At every <b>dawn</b> and <b>dusk</b>, the side holding <b>more Power Nodes</b> scores a point — ties score nothing. First to <b>${threshold} points</b> wins.</div>`;
+  const scoringOn = !state.disableScoring;
+  if (scoringOn) {
+    html += `<hr class="cip-divider">`;
+    if (state.gameMode === 'battle') {
+      html += `<div class="cip-rule">Points score every round. The faction leading when time runs out wins.</div>`;
+    } else {
+      html += `<div class="cip-rule">At every <b>dawn</b> and <b>dusk</b>, the side holding <b>more Power Nodes</b> scores a point — ties score nothing. First to <b>${threshold} points</b> wins.</div>`;
+    }
   }
   const CTRL = {
     hero:      { label: 'Hero',       cls: 'hero' },
@@ -716,18 +733,23 @@ export function buildCycleInfoHtml(state, icons = {}) {
     return `<div class="cip-node"><span class="cip-node-name" style="color:${o.color ?? '#c89dff'}">⬡ ${o.label ?? 'Power Node'}</span>`
       + `<span class="cip-node-ctrl ${c.cls}">${c.label}</span></div>`;
   }).join('');
-  if (nodes) html += `<div class="cip-nodes">${nodes}</div>`;
+  if (nodes) {
+    if (!scoringOn) html += `<hr class="cip-divider">`;
+    html += `<div class="cip-nodes">${nodes}</div>`;
+  }
   // Score — the same pips as the bar (battle mode is unbounded → numeric).
-  const score = state.nodeScore ?? { hero: 0, witch: 0 };
-  if (state.gameMode === 'battle') {
-    html += `<div class="cip-score">⚔ ${score.hero} — ${score.witch} ✦</div>`;
-  } else {
-    const pips = (cls, n) => Array.from({ length: threshold }, (_, i) =>
-      `<span class="score-pip ${cls}${i < n ? ' filled' : ''}"></span>`).join('');
-    html += `<div class="cip-score">`
-      + `<span class="cip-score-glyph">⚔</span>${pips('hero', score.hero)}`
-      + `<span class="cip-score-sep">—</span>`
-      + `${pips('witch', score.witch)}<span class="cip-score-glyph">✦</span></div>`;
+  if (scoringOn) {
+    const score = state.nodeScore ?? { hero: 0, witch: 0 };
+    if (state.gameMode === 'battle') {
+      html += `<div class="cip-score">⚔ ${score.hero} — ${score.witch} ✦</div>`;
+    } else {
+      const pips = (cls, n) => Array.from({ length: threshold }, (_, i) =>
+        `<span class="score-pip ${cls}${i < n ? ' filled' : ''}"></span>`).join('');
+      html += `<div class="cip-score">`
+        + `<span class="cip-score-glyph">⚔</span>${pips('hero', score.hero)}`
+        + `<span class="cip-score-sep">—</span>`
+        + `${pips('witch', score.witch)}<span class="cip-score-glyph">✦</span></div>`;
+    }
   }
   return html;
 }

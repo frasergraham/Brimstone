@@ -5388,7 +5388,7 @@ img.plan-step-avatar {
   object-fit: cover;
 }
 .wrapup-dmg { font-size: 0.82rem; font-weight: 700; color: #ff8a8a; }
-.wrapup-dmg.kill { color: #ff5b5b; font-size: 1rem; }
+.wrapup-dmg.kill { color: #ff5b5b; font-size: 1.15rem; letter-spacing: 0.04em; white-space: nowrap; }
 .wrapup-dmg.none { color: var(--text-dim); }
 .wrapup-vs { align-self: center; color: var(--text-dim); font-style: italic; padding-top: 0.5rem; font-size: 0.82rem; }
 /* Condensed casualty list (used when >3 battles) — wrapping row of hurt units. */
@@ -5452,9 +5452,9 @@ img.plan-step-avatar {
   display: inline-flex;
   align-items: center;
   gap: 0.15rem;
-  font-size: 1.1rem;
+  font-size: 1.5rem;
 }
-.wrapup-loot-x { font-size: 0.7rem; color: var(--text-dim); font-weight: 700; }
+.wrapup-loot-x { font-size: 0.8rem; color: var(--text-dim); font-weight: 700; }
 /* Night attrition roll-call — exposed (hurt) vs sheltered (safe) survivors. */
 .wrapup-attr {
   margin-top: 0.2rem;
@@ -5866,6 +5866,9 @@ img.plan-step-avatar {
 .replay-step-outcome.counter { color: #ffc14d; }
 .replay-step-outcome.blocked { color: #ff8a8a; }
 .replay-step-outcome.gain    { color: #8ee0a0; }
+/* Explore loot notes are emoji resource icons — render them larger than the
+   outcome text or they're illegible at card size. */
+.replay-step-outcome.loot    { font-size: 1.15rem; line-height: 1.1; }
 .replay-step-outcome.info    { color: var(--text-dim); }
 
 /* Replay exit confirmation dialog */

@@ -11828,6 +11828,15 @@ export class Renderer3D {
     const BABYLON = this._babylon;
 
     const model = combatReadoutModel(result, side);
+    // summaryOnly (fast/Summary speed): skip the dice stack-up — no bonus-step
+    // floaters, no picked-ally pulse. The icon shows the FINAL total from the
+    // first frame, flips to the outcome colour after baseHold+finalHold, and
+    // the defender still gets its result label.
+    if (opts.summaryOnly) {
+      model.start = model.total;
+      model.steps = [];
+      model.pickedAllyId = null;
+    }
     const speedFactor = Number.isFinite(opts.speedFactor) && opts.speedFactor > 0
       ? opts.speedFactor : 1;
     const baseHoldMs  = (opts.baseHoldMs  ?? COMBAT_READOUT_BASE_HOLD_MS)  * speedFactor;
@@ -11851,15 +11860,20 @@ export class Renderer3D {
     const portraitSource = (entity && this._tilemapImg && this._spriteRects)
       ? resolveUnitIconPortrait(this._tilemapImg, this._spriteRects, this._assetIdFor(entity))
       : { img: null, rect: null, hasPortrait: false };
-    const hp    = entity?.hp ?? 0;
-    const maxHp = entity?.maxHp ?? 1;
-    const basePaint = (ctx) => paintUnitIconBadge(ctx, {
-      size:  UNIT_ICON_TEX_SIZE,
-      width: UNIT_ICON_TEX_SIZE * UNIT_ICON_CARD_WIDTH_MUL,
-      portraitImg:  portraitSource.hasPortrait ? portraitSource.img  : null,
-      portraitRect: portraitSource.hasPortrait ? portraitSource.rect : null,
-      hp, maxHp,
-    });
+    const basePaint = (ctx) => {
+      // Read LIVE hp at paint time, not the spawn-time snapshot — the battle
+      // floaters bump the display entity's hp mid-hold, and the post-combat
+      // restore must show the updated ring rather than the pre-battle one.
+      const live = (this.state?.entities ?? []).find(e => e && e.id === entityId) ?? entity;
+      paintUnitIconBadge(ctx, {
+        size:  UNIT_ICON_TEX_SIZE,
+        width: UNIT_ICON_TEX_SIZE * UNIT_ICON_CARD_WIDTH_MUL,
+        portraitImg:  portraitSource.hasPortrait ? portraitSource.img  : null,
+        portraitRect: portraitSource.hasPortrait ? portraitSource.rect : null,
+        hp:    live?.hp ?? 0,
+        maxHp: live?.maxHp ?? 1,
+      });
+    };
     const repaintIcon = (value, color) => {
       if (!iconEntry) return;
       paintIconCombatReadout(iconEntry.tex.getContext(), {
