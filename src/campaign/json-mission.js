@@ -235,6 +235,16 @@ export function validateMissionJSON(m) {
     }
   }
 
+  // hints.scriptKey — micro-lesson hints riding along a normal AI-driven
+  // mission (MissionConductor in 'hints' mode). Resolved through the same
+  // registry as conductor scripts; an unknown key fails for the same reason.
+  if (m.hints != null) {
+    const key = m.hints.scriptKey;
+    if (resolveConductorScript(key) == null) {
+      _fail(`unknown hints.scriptKey "${key}" (known: ${Object.keys(CONDUCTOR_SCRIPTS).join(', ') || 'none'})`);
+    }
+  }
+
   return m;
 }
 
@@ -297,6 +307,7 @@ export function loadMissionJSON(parsed) {
   const def = { ...parsed };
   delete def.schema;
   delete def.conductor;
+  delete def.hints;
 
   // map → keep the mapDef (main.js distinguishes JSON missions by its presence)
   // and resolve a builder fn so the def is invoked uniformly with JS missions
@@ -320,6 +331,14 @@ export function loadMissionJSON(parsed) {
     const script = resolveConductorScript(parsed.conductor.scriptKey);
     def.conductorSteps = script.steps;
     def.conductorConfig = script.config;
+  }
+
+  // hints.scriptKey → hintSteps / hintConfig (MissionConductor 'hints' mode —
+  // the mission stays fully AI-driven; see main.js _initCampaignMission)
+  if (parsed.hints != null) {
+    const script = resolveConductorScript(parsed.hints.scriptKey);
+    def.hintSteps = script.steps;
+    def.hintConfig = script.config;
   }
 
   return def;

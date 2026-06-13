@@ -168,19 +168,26 @@ export const TUTORIAL_FORCED_DICE = [6, 1];
 // Each step has:
 //   id          — unique string identifier
 //   title       — tooltip heading
-//   body        — tooltip explanation (may contain \n for line breaks)
+//   body        — tooltip explanation (may contain \n for line breaks).
+//                 Keep it SHORT: ≤2 sentences or ≤3 bullets — a concept is
+//                 taught by doing it, not by reading about it (lint-enforced
+//                 in tests/tutorial.test.js).
 //   trigger     — what advances the step:
 //                   'click'        → "Got it →" button
 //                   'auto'         → advances automatically via onPlanningPhaseStart
 //                   'complete'     → final step button (label from buttonLabel field)
 //                   { type: 'entity_selected', entityType }
-//                   { type: 'action_queued',   actionType }
+//                   { type: 'action_queued',   actionType, entityType? }
 //                   { type: 'plan_submitted' }
 //   spotlight   — what to highlight:
 //                   null
-//                   { type: 'hex',     col, row }
-//                   { type: 'element', selector, arrow: 'up'|'down'|'left'|'right' (optional) }
-//   tooltipPos  — 'center' | 'bottom-left' | 'bottom-right'
+//                   { type: 'hex',     col, row, arrow? }
+//                   { type: 'element', selector, arrow? }
+//                 `arrow` ('up'|'down'|'left'|'right') is the direction the
+//                 arrow POINTS — it sits opposite, aimed at the target. Every
+//                 action-gated step must carry one (lint-enforced).
+//   tooltipPos  — 'center' | 'bottom-left' | 'bottom-right'. Blocking dialogs
+//                 ('click'/'complete') are forced to center by the conductor.
 //   buttonLabel — custom button text for 'complete' trigger steps
 //   witchPlan   — scripted witch plan for this round (null = N/A)
 
@@ -190,7 +197,7 @@ export const TUTORIAL_STEPS = [
   {
     id: 'welcome',
     title: 'The Road to Caleb\'s Hollow',
-    body: 'On the road to Caleb\'s Hollow, shadows stir in the forest. Something is not right.\n\nYou play as the ⚔ Hero. Let\'s learn the core mechanics in a few minutes.',
+    body: 'Shadows stir in the forest — something is not right. You play as the ⚔ Hero; let\'s learn by doing.',
     trigger: 'click',
     spotlight: null,
     tooltipPos: 'center',
@@ -199,7 +206,7 @@ export const TUTORIAL_STEPS = [
   {
     id: 'planning_intro',
     title: 'Simultaneous Planning',
-    body: 'Each round you build a plan — an ordered list of actions. Both sides plan secretly, then everything resolves at once.\n\nNobody gets to react to the other\'s plan. Prediction wins battles.',
+    body: 'Each round both sides secretly queue a plan of actions, then everything resolves at once. Nobody reacts — prediction wins battles.',
     trigger: 'click',
     spotlight: null,
     tooltipPos: 'center',
@@ -208,9 +215,9 @@ export const TUTORIAL_STEPS = [
   {
     id: 'unit_selection',
     title: 'Unit Selection',
-    body: 'Click a unit to select it. Click the selected unit again to open the action menu.\n\nA third click, or clicking anywhere else, deselects the unit.\n\nSelected unit information is shown at the top of the screen.',
+    body: 'Click a unit to select it; click it again to open its action menu. Clicking elsewhere deselects.',
     trigger: 'click',
-    spotlight: { type: 'element', selector: '#unit-stats-bar', arrow: 'up' },
+    spotlight: null,
     tooltipPos: 'center',
     witchPlan: null,
   },
@@ -220,52 +227,52 @@ export const TUTORIAL_STEPS = [
   {
     id: 'select_hero',
     title: 'Select Your Hero',
-    body: 'Click your ⚔ Hero on the map to select them and see available actions.',
+    body: 'Click your ⚔ Hero on the map.',
     trigger: { type: 'entity_selected', entityType: EntityType.HERO },
-    spotlight: { type: 'hex', col: 2, row: 7 },
+    spotlight: { type: 'hex', col: 2, row: 7, arrow: 'down' },
     tooltipPos: 'bottom-left',
     witchPlan: null,
   },
   {
     id: 'queue_move',
     title: 'Queue a Move',
-    body: 'Green hexes show where you can move. Click the Church to the north to add a Move to your plan.\n\nNotice the road connecting the Inn to the Church — roads let you move further in a single action.',
+    body: 'Green hexes are in reach — click the Church to the north to queue a Move. The road is why you reach it in one action.',
     trigger: { type: 'action_queued', actionType: PlanActionType.MOVE },
-    spotlight: { type: 'hex', col: 2, row: 5 },
+    spotlight: { type: 'hex', col: 2, row: 5, arrow: 'down' },
     tooltipPos: 'bottom-left',
     witchPlan: null,
   },
   {
-    id: 'ghost_arrow',
-    title: 'Action Plan',
-    body: 'The action plan panel on the right shows your queued actions. You can keep queuing more — actions happen in order when you submit.\n\nThe pips at the top of the screen track your remaining action budget.',
+    id: 'action_budget',
+    title: 'Action Budget',
+    body: 'Every action a unit takes spends one point from your side\'s shared budget — the badge tracks what\'s left this round.',
     trigger: 'click',
-    spotlight: { type: 'element', selector: '#plan-panel', arrow: 'right' },
-    tooltipPos: 'bottom-left',
+    spotlight: { type: 'element', selector: '#plan-budget-badge', arrow: 'right' },
+    tooltipPos: 'center',
     witchPlan: null,
   },
   {
     id: 'queue_explore',
     title: 'Explore a Building',
-    body: 'Your hero\'s ghost is now at the Church. Click the ghost (the Church hex) to open the action menu there.\n\nThe ghost shows where your hero will be after the move — actions are planned from that position. Choose Explore to search the Church for supplies.',
+    body: 'The ghost at the Church is where your hero will be after moving. Click the ghost and choose Explore to search the Church.',
     trigger: { type: 'action_queued', actionType: PlanActionType.EXPLORE },
-    spotlight: { type: 'hex', col: 2, row: 5 },
+    spotlight: { type: 'hex', col: 2, row: 5, arrow: 'down' },
     tooltipPos: 'bottom-left',
     witchPlan: null,
   },
   {
     id: 'submit_plan',
     title: 'Submit Your Plan',
-    body: 'Your plan is ready: Move to Church, then Explore. Click Submit Plan — both sides will act simultaneously.',
+    body: 'Move, then Explore — your plan is ready. Click Submit.',
     trigger: { type: 'plan_submitted' },
-    spotlight: { type: 'element', selector: '#plan-submit-btn' },
+    spotlight: { type: 'element', selector: '#plan-submit-btn', arrow: 'right' },
     tooltipPos: 'bottom-left',
     witchPlan: [], // witch idles in round 1; minion spawns via wave after resolution
   },
   {
     id: 'watch_r1',
     title: 'Resolution',
-    body: 'Watch both sides act at once. Your hero walks to the Church and searches it.',
+    body: 'Watch both sides act at once.',
     trigger: 'auto',
     spotlight: null,
     tooltipPos: 'bottom-left',
@@ -277,16 +284,16 @@ export const TUTORIAL_STEPS = [
   {
     id: 'combat_intro',
     title: 'A Minion Blocks the Road!',
-    body: 'A witch\'s minion has emerged from the tree line ahead, blocking your path.\n\nClick on the enemy to attack it.',
+    body: 'A witch\'s minion has emerged from the tree line. Click the enemy to attack it.',
     trigger: { type: 'action_queued', actionType: PlanActionType.BATTLE_UNIT },
-    spotlight: { type: 'hex', col: 3, row: 5 },
+    spotlight: { type: 'hex', col: 3, row: 5, arrow: 'down' },
     tooltipPos: 'bottom-left',
     witchPlan: null,
   },
   {
     id: 'combat_formula',
     title: 'How Combat Works',
-    body: 'Combat is resolved with a dice roll.\n\n• Hit — attacker\'s roll beats the defender\'s → 1 damage\n• Critical — attacker rolls high enough → 2 damage\n• Counter — defender rolls strongly enough → 1 damage back to the attacker\n\nAllies adjacent to the target provide bonuses to your roll.',
+    body: 'Both sides roll dice.\n\n• Hit — your roll wins → 1 damage\n• Critical — you roll high enough → 2 damage\n• Counter — they roll strongly → 1 damage back\n\nAdjacent allies boost your roll.',
     trigger: 'click',
     spotlight: null,
     tooltipPos: 'center',
@@ -295,16 +302,16 @@ export const TUTORIAL_STEPS = [
   {
     id: 'submit_fight',
     title: 'Submit and Fight!',
-    body: 'Submit your plan. Watch the dice resolve!',
+    body: 'Submit your plan and watch the dice.',
     trigger: { type: 'plan_submitted' },
-    spotlight: { type: 'element', selector: '#plan-submit-btn' },
+    spotlight: { type: 'element', selector: '#plan-submit-btn', arrow: 'right' },
     tooltipPos: 'bottom-left',
     witchPlan: null, // set dynamically by getWitchPlan() for round 2
   },
   {
     id: 'watch_r2',
     title: 'Combat Resolved',
-    body: 'Your hero struck true — the minion is slain! A critical hit dealt 2 damage in one blow.',
+    body: 'A critical hit — the minion is slain in one blow!',
     trigger: 'auto',
     spotlight: null,
     tooltipPos: 'bottom-left',
@@ -313,96 +320,87 @@ export const TUTORIAL_STEPS = [
   {
     id: 'day_night',
     title: 'Day / Night Cycle',
-    body: 'The badge above the score bar shows the current phase of the 8-round cycle: 🌅 Dawn → ☀ Day → 🌇 Dusk → 🌙 Night.\n\nAt night, enemies grow stronger. Dawn and Dusk are scoring checkpoints for Power Nodes.',
+    body: 'The badge shows the 8-round cycle: 🌅 Dawn → ☀ Day → 🌇 Dusk → 🌙 Night. Enemies grow stronger at night; Dawn and Dusk are scoring checkpoints.',
     trigger: 'click',
     spotlight: { type: 'element', selector: '#cycle-bump', arrow: 'down' },
-    tooltipPos: 'bottom-left',
+    tooltipPos: 'center',
     witchPlan: null,
   },
 
   // ── Round 3: Survivor rescue (onPlanningPhaseStart jumps here when _round === 2) ──
 
   {
-    id: 'survivor_intro',
-    title: 'Find Allies',
-    body: 'Survivors will join the Hero\'s cause if you find them.\n\nThere\'s a House to the north. Move your Hero there and explore — someone is hiding inside.',
-    trigger: 'click',
-    spotlight: { type: 'hex', col: 2, row: 3 },
-    tooltipPos: 'bottom-left',
-    witchPlan: null,
-  },
-  {
     id: 'move_to_house',
-    title: 'Move to the House',
-    body: 'Click your Hero (1st click to select), then click the House hex to queue a Move north.',
+    title: 'Find Allies',
+    body: 'Someone is hiding in the House to the north — survivors join your cause when found. Select your Hero and queue a Move there.',
     trigger: { type: 'action_queued', actionType: PlanActionType.MOVE },
-    spotlight: { type: 'hex', col: 2, row: 3 },
+    spotlight: { type: 'hex', col: 2, row: 3, arrow: 'down' },
     tooltipPos: 'bottom-left',
     witchPlan: null,
   },
   {
     id: 'explore_house',
     title: 'Explore the House',
-    body: 'Your hero\'s ghost is now at the House. Click the ghost to open the action menu, then choose Explore to search it.',
+    body: 'Click your hero\'s ghost at the House and choose Explore.',
     trigger: { type: 'action_queued', actionType: PlanActionType.EXPLORE },
-    spotlight: { type: 'hex', col: 2, row: 3 },
+    spotlight: { type: 'hex', col: 2, row: 3, arrow: 'down' },
     tooltipPos: 'bottom-left',
     witchPlan: null,
   },
   {
     id: 'submit_r3',
     title: 'Submit and Explore!',
-    body: 'Submit your plan. Your hero will move to the House and search it.',
+    body: 'Submit your plan.',
     trigger: { type: 'plan_submitted' },
-    spotlight: { type: 'element', selector: '#plan-submit-btn' },
+    spotlight: { type: 'element', selector: '#plan-submit-btn', arrow: 'right' },
     tooltipPos: 'bottom-left',
     witchPlan: [], // witch idles in round 3
   },
   {
     id: 'watch_r3',
     title: 'A Survivor Found!',
-    body: 'A survivor joins your cause. They now share the hex with your Hero.',
+    body: 'A survivor joins your cause, sharing the hex with your Hero.',
     trigger: 'auto',
     spotlight: null,
     tooltipPos: 'bottom-left',
     witchPlan: null,
   },
 
-  // ── Round 4: Blacksmith + Power Node discovery (onPlanningPhaseStart jumps here when _round === 3) ──
+  // ── Round 4: Shared budget + Power Node discovery (onPlanningPhaseStart jumps here when _round === 3) ──
 
   {
-    id: 'night_warning',
-    title: 'Beware the Night',
-    body: 'Survivors who are not inside a building or on a fortified tile will take damage when night falls. Keep your allies sheltered or fortify their position before dusk.',
-    trigger: 'click',
-    spotlight: null,
-    tooltipPos: 'center',
+    id: 'select_survivor',
+    title: 'Multiple Units on a Hex',
+    body: 'Your Hero and the survivor share a tile — click it and pick the Survivor from the list.',
+    trigger: { type: 'entity_selected', entityType: EntityType.SURVIVOR },
+    spotlight: { type: 'hex', col: 2, row: 3, arrow: 'down' },
+    tooltipPos: 'bottom-left',
     witchPlan: null,
   },
   {
-    id: 'multi_select',
-    title: 'Multiple Units on a Hex',
-    body: 'If there are multiple units on one tile, click the tile to choose which unit to select.\n\nRemember: units with a move already planned are considered to be at the position where their last planned move ends.',
-    trigger: 'click',
-    spotlight: { type: 'hex', col: 2, row: 3 },
+    id: 'survivor_move',
+    title: 'One Budget, Many Units',
+    body: 'Queue a Move for the survivor too. All your units spend from the same action budget — watch the badge tick down.',
+    trigger: { type: 'action_queued', actionType: PlanActionType.MOVE, entityType: EntityType.SURVIVOR },
+    spotlight: { type: 'element', selector: '#plan-budget-badge', arrow: 'right' },
     tooltipPos: 'bottom-left',
     witchPlan: null,
   },
   {
     id: 'smithy_intro',
     title: 'Explore Further',
-    body: 'There\'s a Blacksmith to the east. Move your Hero there — you may find supplies, and the road beyond holds something important.',
-    trigger: { type: 'action_queued', actionType: PlanActionType.MOVE },
-    spotlight: { type: 'hex', col: 5, row: 5 },
+    body: 'Now move your Hero east to the Blacksmith — the road beyond holds something important.',
+    trigger: { type: 'action_queued', actionType: PlanActionType.MOVE, entityType: EntityType.HERO },
+    spotlight: { type: 'hex', col: 5, row: 5, arrow: 'down' },
     tooltipPos: 'bottom-left',
     witchPlan: null,
   },
   {
     id: 'submit_r4',
     title: 'Submit Your Plan',
-    body: 'Submit your plan. Your hero will head to the Blacksmith.',
+    body: 'Submit — your party heads east.',
     trigger: { type: 'plan_submitted' },
-    spotlight: { type: 'element', selector: '#plan-submit-btn' },
+    spotlight: { type: 'element', selector: '#plan-submit-btn', arrow: 'right' },
     tooltipPos: 'bottom-left',
     witchPlan: [],
   },
@@ -421,43 +419,16 @@ export const TUTORIAL_STEPS = [
   {
     id: 'node_discovered',
     title: 'Power Node Discovered!',
-    body: 'A Power Node glows nearby. These are key strategic points on the map — controlling them is one way to win.\n\nWhichever side has more units on a node controls it. At Dawn and Dusk scoring checkpoints, the side controlling a majority of nodes scores a point. Four points wins the game.',
+    body: 'Whichever side has more units on a Power Node controls it. The side controlling the most nodes at Dawn and Dusk scores a point — four points wins.',
     trigger: 'click',
-    spotlight: { type: 'hex', col: 7, row: 5 },
-    tooltipPos: 'bottom-left',
-    witchPlan: null,
-  },
-  {
-    id: 'score_tracker',
-    title: 'Score Tracker',
-    body: 'The pips at the bottom of the screen show who controls which nodes.\n\nYou can also win by holding ALL nodes at Dawn or Dusk, or by killing the enemy leader.',
-    trigger: 'click',
-    spotlight: { type: 'element', selector: '#score-bar', arrow: 'down' },
-    tooltipPos: 'center',
-    witchPlan: null,
-  },
-  {
-    id: 'fortify',
-    title: 'Fortification',
-    body: 'When night falls, enemies grow stronger. Fortifications help defend your position.\n\nSpend wood or metal to fortify a tile. Buildings already start with a fortification level of 1.',
-    trigger: 'click',
-    spotlight: null,
-    tooltipPos: 'center',
-    witchPlan: null,
-  },
-  {
-    id: 'guard',
-    title: 'Guard',
-    body: 'Sometimes you don\'t know what\'s coming. The Guard action puts your unit in a ready state until they next move — they\'ll attack anything that comes close.',
-    trigger: 'click',
-    spotlight: null,
+    spotlight: { type: 'hex', col: 7, row: 5, arrow: 'down' },
     tooltipPos: 'center',
     witchPlan: null,
   },
   {
     id: 'complete',
     title: 'You\'re Ready!',
-    body: 'That\'s the core loop: plan actions, submit, watch resolution, repeat.\n\nExplore buildings for weapons and survivors, fortify positions, and control the Power Nodes.\n\nCaleb\'s Hollow awaits.',
+    body: 'That\'s the loop: plan, submit, watch, repeat. Find weapons and allies, beware the night, and take the Power Nodes — Caleb\'s Hollow awaits.',
     trigger: 'complete',
     buttonLabel: 'Continue to Caleb\'s Hollow →',
     spotlight: null,
@@ -497,11 +468,12 @@ function _tutorialWitchPlanProvider(round, state, currentStep) {
 export const TUTORIAL_CONDUCTOR_CONFIG = {
   roundStepMap: {
     1: 'combat_intro',
-    2: 'survivor_intro',
-    3: 'night_warning',
+    2: 'move_to_house',
+    3: 'select_survivor',
     4: 'node_discovered',
   },
   witchPlanProvider: _tutorialWitchPlanProvider,
   forcedDice: [{ round: 1, dice: TUTORIAL_FORCED_DICE }],
   maxPlanningRounds: 4,
+  voiceKey: 'tutorial',
 };

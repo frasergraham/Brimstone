@@ -48,7 +48,7 @@ import { ReplayCache } from './replay-cache.js';
 import { makeShowLoadingAndReveal } from './loading-reveal.js';
 import { MAP_SIZES } from './map.js';
 import { nodeController } from './game.js';
-import { MissionConductor } from './mission-conductor.js';
+import { MissionConductor, areHintsSuppressed, markHintsSeen } from './mission-conductor.js';
 import { Entity, createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, EntityType, ENTITY_COLOR, applyLevel } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
 import { Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves, reconcileRosterAfterMission, applyCarriedHeroLoadout } from './campaign/campaign.js';
@@ -310,7 +310,8 @@ function _setupLocalUI(canvas, localWitchAI, localHeroAI, autoplay) {
 function init(witchIsAI, heroIsAI, autoplay = false, humanFactionId = null) {
   _autoplay = autoplay;
   _gameStartTime = Date.now();
-  _missionConductor = null; // ensure conductor state is cleared for normal games
+  _missionConductor?.destroy(); // clear any lingering tutorial/hint overlays
+  _missionConductor = null;     // ensure conductor state is cleared for normal games
   _roundHistory = [];
   // Assign a fresh save ID for this game (only used for single-player saves)
   _spSaveId = _genSaveId();
@@ -606,7 +607,9 @@ function _startLocalPlanningPhase() {
   }
 
   // Conductor-driven mission: hero always plans; conductor provides scripted opponent plan.
-  if (_missionConductor) {
+  // (Hints-mode conductors don't own the planning loop — they fall through to
+  // the normal flow and fire from _enterLocalPlanningMode.)
+  if (_missionConductor && !_missionConductor.isHints) {
     _missionConductor.onPlanningPhaseStart();
     // After maxPlanningRounds the conductor enters explanation-only mode —
     // no more planning rounds.  We still call onPlanningPhaseStart so the conductor
@@ -703,6 +706,10 @@ function _enterLocalPlanningMode() {
     ui.enterPlanningMode(humanFaction, budget);
     ui.onPlanSubmit = (plan) => _onLocalHumanPlanSubmit(humanFaction, plan);
   }
+
+  // Micro-lesson hints fire once the planning UI is up (their spotlights
+  // target planning-mode elements like the budget badge).
+  if (_missionConductor?.isHints) _missionConductor.onPlanningPhaseStart();
 }
 
 /**
@@ -742,6 +749,8 @@ async function _onLocalHvHHeroPlan(heroPlan) {
 /** Human submitted their plan; generate AI plan then resolve. */
 async function _onLocalHumanPlanSubmit(faction, plan) {
   ui.exitPlanningMode();
+  // Dismiss any open micro-lesson hint — hints never outlive the planning phase.
+  if (_missionConductor?.isHints) _missionConductor.onPlanSubmitted();
 
   let bothReady = state.submitPlan(faction, plan);
   if (!bothReady) {
@@ -1027,8 +1036,10 @@ async function _runLocalResolution(skipSummary = false) {
   // Persist single-player progress to localStorage
   _saveSpGame();
 
-  // Persist campaign mid-mission progress (skip conductor-driven missions like the tutorial)
-  if (_activeCampaign && _activeMissionDef && !state.gameOver && !_missionConductor) {
+  // Persist campaign mid-mission progress (skip conductor-driven missions like
+  // the tutorial; hint-mode conductors ride along normal missions, which save)
+  if (_activeCampaign && _activeMissionDef && !state.gameOver &&
+      (!_missionConductor || _missionConductor.isHints)) {
     _saveCampaignMission();
   }
 
@@ -3406,6 +3417,10 @@ function _resumeCampaignMission(missionId) {
   ui.showMissionInfoBtn(true);
   ui.onMissionInfo = () => _showMissionInfoModal();
 
+  // Re-wire micro-lesson hints (round/`when`-anchored, so a resumed game only
+  // shows hints still relevant to the current round)
+  _setupMissionHints(missionDef);
+
   redraw();
   _enterGameView();
   _startLocalPlanningPhase();
@@ -4085,6 +4100,9 @@ function _initCampaignMission(missionDef) {
   ui.showMissionInfoBtn(true);
   ui.onMissionInfo = () => _showMissionInfoModal();
 
+  // Micro-lesson hints (MissionConductor in 'hints' mode)
+  _setupMissionHints(missionDef);
+
   // Log victory conditions at mission start
   const winDesc = _objectiveDescription(missionDef.objectives?.win);
   const loseDesc = _objectiveDescription(missionDef.objectives?.lose);
@@ -4095,6 +4113,26 @@ function _initCampaignMission(missionDef) {
   redraw();
   _enterGameView();
   _startLocalPlanningPhase();
+}
+
+/**
+ * Wire up a mission's micro-lesson hints (MissionConductor in 'hints' mode).
+ * The mission stays fully AI-driven; hints never block input and are
+ * suppressed once the mission has been completed (or explicitly skipped).
+ */
+function _setupMissionHints(missionDef) {
+  if (!missionDef.hintSteps || areHintsSuppressed(missionDef.id)) return;
+  ui.onPlanActionAdded = (action) => _missionConductor?.onActionQueued(action);
+  ui.onEntitySelected  = (entity) => _missionConductor?.onEntitySelected(entity);
+  _missionConductor = new MissionConductor(
+    state, ui, renderer, redraw,
+    missionDef.hintSteps,
+    {
+      ...missionDef.hintConfig,
+      onSkipHints: () => { markHintsSeen(missionDef.id); _missionConductor = null; },
+    },
+  );
+  _missionConductor.start(); // no-op in hints mode; hints fire at planning start
 }
 
 function _handleCampaignMissionEnd() {
@@ -4108,6 +4146,13 @@ function _handleCampaignMissionEnd() {
 
   const won = state.winner === 'hero';
   const missionDef = _activeMissionDef;
+
+  // Tear down any open micro-lesson hint; a completed mission's hints never
+  // re-show on replay.
+  if (_missionConductor?.isHints) {
+    _missionConductor.destroy();
+    if (won) markHintsSeen(missionDef.id);
+  }
 
   let survivors;
   if (won) {

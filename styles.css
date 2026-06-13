@@ -6158,6 +6158,31 @@ body.spectator-mode #game-screen   { display: flex !important; }
   box-shadow: 0 0 8px rgba(200,140,20,0.4);
 }
 
+/* "Skip hints" escape hatch — shown only for optional micro-lesson hints */
+.tut-skip-link {
+  font-size: 0.72rem;
+  color: #8a7a5c;
+  text-decoration: underline;
+  cursor: pointer;
+  float: left;
+  padding-top: 0.45rem;
+}
+.tut-skip-link:hover { color: #c8b89a; }
+
+/* Narration mute toggle — top-right corner of the tooltip card */
+.tut-voice-btn {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.5rem;
+  background: none;
+  border: none;
+  font-size: 0.85rem;
+  cursor: pointer;
+  opacity: 0.7;
+  padding: 0.1rem;
+}
+.tut-voice-btn:hover { opacity: 1; }
+
 /* Element spotlight: a golden glow outline drawn around a UI element */
 .tutorial-spotlit {
   position: relative;
