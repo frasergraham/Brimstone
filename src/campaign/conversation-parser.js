@@ -29,9 +29,28 @@ const FRONTMATTER_DELIM = /^---\s*$/;
 const KEY_VALUE = /^([A-Za-z_][\w-]*)\s*:\s*(.*)$/;
 
 /**
+ * Strip ElevenLabs-style inline audio-direction tags — `[cheerful]`, `[sighs]`,
+ * `[slowly]`, … — from a line of dialog, leaving the spoken words. The tags
+ * steer the v3 TTS generator (they're fed to it verbatim) but must never reach
+ * the on-screen speech bubble, so the parser keeps the raw line as `ttsText`
+ * and exposes this stripped form as the displayed `text`. Tidies the spacing a
+ * removed tag leaves behind (doubled spaces, a space before punctuation).
+ */
+export function stripAudioTags(s) {
+  return String(s ?? '')
+    .replace(/\[[^\][]*\]/g, '')      // drop [tag] markers
+    .replace(/\s+([,.;:!?])/g, '$1')  // un-orphan punctuation a leading tag left
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+/**
  * Parse a conversation markdown document.
  * @param {string} text — raw .md file contents.
- * @returns {{ id: string, title: string, roles: string[], lines: { role: string, text: string }[] }}
+ * @returns {{ id: string, title: string, roles: string[],
+ *            lines: { role: string, text: string, ttsText?: string }[] }}
+ *   `text` is the on-screen form (audio tags stripped); `ttsText` is present
+ *   only when the line carried `[audio tags]`, holding the raw text for TTS.
  * @throws {ConversationParseError} on structural problems (missing frontmatter,
  *   missing id/roles, dialog line for an undeclared role, empty body).
  */
@@ -86,6 +105,18 @@ export function parseConversationMD(text) {
     }
   }
   if (lines.length === 0) throw new ConversationParseError('conversation has no dialog lines');
+
+  // Split each line's authored text into a displayed form (audio tags removed)
+  // and, when the line actually carried tags, the raw form for the TTS
+  // generator. Lines without tags keep their plain { role, text } shape.
+  for (const line of lines) {
+    const display = stripAudioTags(line.text);
+    if (display !== line.text) {
+      line.ttsText = line.text;   // raw, with [audio tags] — drives v3 generation
+      line.text = display;        // spoken words only — shown on screen
+    }
+  }
+
   const empty = lines.find(l => l.text === '');
   if (empty) throw new ConversationParseError(`empty dialog line for role "${empty.role}"`);
 

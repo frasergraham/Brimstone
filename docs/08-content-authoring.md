@@ -153,12 +153,14 @@ roles: hero, innkeeper
 ---
 
 # comments and blank lines are ignored
-innkeeper: Dialog text. Indented or un-prefixed lines
+hero: [cheerful] Dialog text. Indented or un-prefixed lines
   continue the previous line.
-hero: A reply.
+innkeeper: A reply.
 ```
 
-Roles are **slots** — the mission binds them to live entities at trigger time.
+Roles are **slots** — the mission binds them to live entities at trigger time. The on-screen speaker **name** comes from the bound entity (roster name → title → type), not the role — so naming the hero "Ishmael" or an NPC "Innkeeper" is done on the entity, not in the markdown.
+
+**Emotion & delivery — inline audio tags.** Square-bracket cues like `[cheerful]`, `[sighs]`, `[whispers]`, `[cautious]`, `[sorrowful]`, `[surprised]` are **ElevenLabs v3 audio tags**: they steer the generated narration's tone moment-to-moment (placed anywhere, even mid-line) and are **stripped from the displayed text** by the parser (kept as the line's `ttsText` for the generator only). Most reliable are recognised cues — emotions (`[sad]`, `[angry]`, `[excited]`, `[sarcastic]`, `[curious]`), non-verbals (`[laughs]`, `[sighs]`, `[clears throat]`, `[scoffs]`), and delivery (`[whispers]`, `[shouts]`, `[slowly]`); free-form directions work but less consistently, and a tag only lands if the voice can plausibly do it (a calm voice won't `[shout]`). Punctuation still matters — `…` adds a beat, CAPS adds emphasis. Tags only reach v3-backed clips: **conversation lines** generate on `eleven_v3`, while narrator/hint **steps** stay on `eleven_multilingual_v2` (tags there are stripped, never spoken).
 
 **2. Declare it in the mission JSON** (all validated by `validateMissionJSON`):
 
@@ -198,6 +200,7 @@ One generator narrates both tutorial/hint **steps** and conversation **lines**:
 
 - **Voices** live in `src/campaign/voices.js` — each entry pairs a TTS timbre (`openaiVoice` / `elevenVoiceId`) with a **`description` prompt** that shapes delivery (passed to OpenAI as `instructions`). The description is the tracked source of truth: it's folded into each clip's manifest hash, so editing a voice or its prompt regenerates exactly the clips that use it. Conversation lines pick a voice by **role name** (`hero`, `innkeeper`, `witch`, …, else `default`); steps use `narrator`. Give a role its own voice by adding a same-named entry to `VOICES`.
 - **Clips:** steps → `assets/voice/<scriptKey>/<stepId>.mp3`; conversation lines → `assets/voice/conv/<convId>/<lineIndex>.mp3`. Generate with `node scripts/generate-voiceover.mjs` (`--dry-run` lists work; needs `ELEVENLABS_API_KEY` or `OPENAI_API_KEY`). The run is incremental (hash-gated) and prunes orphaned clips. Missing clips are always silent no-ops, so partial generation is safe. A test (`tests/tutorial.test.js` → "voiceover manifest") fails if any clip's text/voice drifts from `manifest.json`.
+- **Models & audio tags:** conversation lines generate on **`eleven_v3`** (so inline `[audio tags]` add emotion — see Conversations above); tutorial/hint steps stay on **`eleven_multilingual_v2`**. The model is folded into the clip hash, so the two never collide — but **v3 needs a paid ElevenLabs plan** (a free-plan key returns HTTP 402 on v3). After editing a conversation's `.md`, re-run the generator to (re)make its v3 clips; until then those lines play silently. Per-model voice settings live in `scripts/generate-voiceover.mjs` (`ELEVEN_SETTINGS`): v3 uses "Natural" stability (0.5) + a little `style` so it stays responsive to tags without drifting.
 - **Playback + mute:** `src/voiceover.js` owns one VO-only mute (localStorage `bs_voice_muted`) shared by the tutorial tooltip's 🔊 button and a matching button on the conversation card header — muting narration never touches SFX/music. The conductor and `conversation-player.js` both play through it.
 
 > **Admin tooling:** `/admin/tools` (`admin-tools.html`) is the unified **Caleb's Hollow Tools** page — **Assets** (Babylon 3D model browser) | **Lighting** (Renderer3D tuner) | **Mission Editor** tabs, each lazy-initialised on first activation.

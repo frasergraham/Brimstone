@@ -136,12 +136,29 @@ describe('generate-voiceover clip index', () => {
     assert.ok(conv.length >= 1, 'at least one conversation line');
     assert.ok(conv.every(([, e]) => e.kind === 'conversation' && e.role),
       'conversation entries carry kind + role');
-    // ch1m1-intro: innkeeper speaks first, hero second.
-    assert.equal(index.get('conv/ch1m1-intro/0')?.voiceKey, 'innkeeper');
-    assert.equal(index.get('conv/ch1m1-intro/1')?.voiceKey, 'hero');
+    // ch1m1-intro: Ishmael (hero) speaks first, innkeeper second.
+    assert.equal(index.get('conv/ch1m1-intro/0')?.voiceKey, 'hero');
+    assert.equal(index.get('conv/ch1m1-intro/1')?.voiceKey, 'innkeeper');
   });
 
-  test('clipHash folds in the voice (description prompt + timbre), so a voice change invalidates', async () => {
+  test('conversation clips use eleven_v3; steps stay on multilingual_v2', async () => {
+    const { buildClipIndex } = await import('../scripts/generate-voiceover.mjs');
+    const index = buildClipIndex();
+    for (const [k, e] of index) {
+      if (k.startsWith('conv/')) assert.equal(e.model, 'eleven_v3', `${k} should be v3`);
+      else assert.equal(e.model, 'eleven_multilingual_v2', `${k} should be v2`);
+    }
+  });
+
+  test('a tagged dialog line keeps its raw [audio tags] in the generated clip text', async () => {
+    const { buildClipIndex } = await import('../scripts/generate-voiceover.mjs');
+    const e0 = buildClipIndex().get('conv/ch1m1-intro/0');
+    // Index text is the RAW (TTS) form — v3 consumes the tag; the on-screen
+    // text (asserted tag-free in the parser tests) never carries it.
+    assert.match(e0.text, /^\[[^\]]+\]/, 'first line still carries its leading audio tag for v3');
+  });
+
+  test('clipHash folds in the voice (description prompt + timbre) and the model', async () => {
     const { clipHash } = await import('../scripts/generate-voiceover.mjs');
     const text = 'The dead are in the streets.';
     assert.equal(clipHash(text, 'hero'), clipHash(text, 'hero'), 'deterministic');
@@ -149,5 +166,11 @@ describe('generate-voiceover clip index', () => {
       'different voice → different hash');
     assert.notEqual(clipHash(text, 'hero'), clipHash('different line', 'hero'),
       'different text → different hash');
+    // The legacy v2 default must hash identically whether the model is implicit
+    // or named — that's what keeps existing narrator/step clips from regenerating.
+    assert.equal(clipHash(text, 'hero'), clipHash(text, 'hero', 'eleven_multilingual_v2'),
+      'v2 default is the implicit model');
+    assert.notEqual(clipHash(text, 'hero'), clipHash(text, 'hero', 'eleven_v3'),
+      'a model change → different hash');
   });
 });

@@ -28,7 +28,7 @@ describe('loadConversation', () => {
     assert.equal(convo.id, 'ch1m1-intro');
     assert.deepEqual(convo.roles, ['hero', 'innkeeper']);
     assert.ok(convo.lines.length >= 4);
-    assert.equal(convo.lines[0].role, 'innkeeper');
+    assert.equal(convo.lines[0].role, 'hero');   // Ishmael opens the scene
   });
 
   test('caches parses', async () => {

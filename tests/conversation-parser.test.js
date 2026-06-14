@@ -3,7 +3,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { parseConversationMD, ConversationParseError } from '../src/campaign/conversation-parser.js';
+import { parseConversationMD, ConversationParseError, stripAudioTags } from '../src/campaign/conversation-parser.js';
 
 const GOOD = `---
 id: test-convo
@@ -82,5 +82,39 @@ a: hi
       () => parseConversationMD('---\nid: x\nroles: a\n---\njust prose\n'),
       /before any speaker/,
     );
+  });
+
+  test('a tagless line keeps its plain { role, text } shape (no ttsText)', () => {
+    const c = parseConversationMD(GOOD);
+    assert.deepEqual(c.lines[1], { role: 'hero', text: 'How many, John?' });
+  });
+
+  test('inline [audio tags] are stripped from text and preserved as ttsText', () => {
+    const c = parseConversationMD(
+      '---\nid: x\nroles: a\n---\n'
+      + 'a: [cheerful] Good evening, sir — [whispers] keep your voice down.\n',
+    );
+    assert.equal(c.lines[0].text, 'Good evening, sir — keep your voice down.');
+    assert.equal(c.lines[0].ttsText, '[cheerful] Good evening, sir — [whispers] keep your voice down.');
+  });
+
+  test('tags spanning a continuation line are stripped after the join', () => {
+    const c = parseConversationMD(
+      '---\nid: x\nroles: a\n---\n'
+      + 'a: [slowly] Aye. Came through here\n  [sorrowful] a fortnight ago.\n',
+    );
+    assert.equal(c.lines[0].text, 'Aye. Came through here a fortnight ago.');
+    assert.ok(c.lines[0].ttsText.includes('[sorrowful]'));
+  });
+});
+
+describe('stripAudioTags', () => {
+  test('removes bracketed tags and tidies the spacing they leave', () => {
+    assert.equal(stripAudioTags('[cheerful] Hello there.'), 'Hello there.');
+    assert.equal(stripAudioTags('Wait here, [cautious] but stay quiet.'), 'Wait here, but stay quiet.');
+    assert.equal(stripAudioTags('Done [sighs] , at last.'), 'Done, at last.');
+    assert.equal(stripAudioTags('no tags here'), 'no tags here');
+    assert.equal(stripAudioTags(''), '');
+    assert.equal(stripAudioTags(null), '');
   });
 });

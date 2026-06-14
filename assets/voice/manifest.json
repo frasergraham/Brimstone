@@ -1,23 +1,43 @@
 {
   "conv/ch1m1-intro/0": {
-    "hash": "a705c9010bed825cd5ec7be86b2c08e5b5214b417772765853814b83ec9b60cf",
-    "voice": "innkeeper"
+    "hash": "c5791b770e2b1c26b548766e23bceefcb00fc4732c2d18e320d5afe071c8db5e",
+    "voice": "hero"
   },
   "conv/ch1m1-intro/1": {
-    "hash": "e8c68e392dec3d4bba67951eb6045c4800f327391f890ed68d1b8a9ba8ea2e04",
-    "voice": "hero"
+    "hash": "eed1f7327708b20c00d596a3a51cf1d6195fabe7cd26db2abf2663ef61bc6b3a",
+    "voice": "innkeeper"
   },
   "conv/ch1m1-intro/2": {
-    "hash": "337003604c0910bbdeb5d40b33cc7efce3590d922bd19410763126f8d1c7f617",
-    "voice": "innkeeper"
-  },
-  "conv/ch1m1-intro/3": {
-    "hash": "3d955a50aa280b1009027870553d62251b335d567c3cca04562f6cabb99cc585",
+    "hash": "93640b0d89e8ef846ccb1b225f7154295e17c0d4d4e122077a5f4d39e1084463",
     "voice": "hero"
   },
-  "conv/ch1m1-intro/4": {
-    "hash": "bb4ffde333d01e7b3641d13911dd3e03c008a4b6c8ac752c2c8e91b8e70e6625",
+  "conv/ch1m1-intro/3": {
+    "hash": "812d66b0b1f8f9da046adfc91e0d777b4ac07e46a8f53464f6d567954a003e3b",
     "voice": "innkeeper"
+  },
+  "conv/ch1m1-intro/4": {
+    "hash": "47a26a85d9005ba1ef96bdb5393bfb24013213c21e6b08c9dae90b30e27f0f9c",
+    "voice": "hero"
+  },
+  "conv/ch1m1-intro/5": {
+    "hash": "3cf6f9b09b42c223de2b15feaba757986cdd7f2989b98ac2c3ef8f5122306c23",
+    "voice": "innkeeper"
+  },
+  "conv/ch1m1-intro/6": {
+    "hash": "449d612d1a00c3282dbeb6e20fdf41b72734d16e62ec9d93dc02be878e290059",
+    "voice": "hero"
+  },
+  "conv/ch1m1-intro/7": {
+    "hash": "405801c1385275b2073ca3a0830f3fff1ef7e2499eee02dfc7a5f00682c15c81",
+    "voice": "innkeeper"
+  },
+  "conv/ch1m1-intro/8": {
+    "hash": "ece958ed8be51a6d713178cdc19a6fe4b079574f0f698521f8100abcb50531bb",
+    "voice": "innkeeper"
+  },
+  "conv/ch1m1-intro/9": {
+    "hash": "891e91bbdf14f4d11347c93922d8f77e0a882f031b9575595f0af45de0fd8076",
+    "voice": "hero"
   },
   "tutorial/action_budget": {
     "hash": "8026e730305ead7963263a197d6967f457a5ba8326393e02378c304c7685f358",
