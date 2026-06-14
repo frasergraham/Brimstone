@@ -407,3 +407,50 @@ describe('_buildRigClone tint', () => {
     assert.equal(child.material.albedoColor, null, 'no tint applied');
   });
 });
+
+// ── _buildRigClone multi-primitive skeleton binding ─────────────────────────
+// Regression for the "walk and idle blended / zombie idle-slides" bug. The
+// zombie mesh ships as TWO skinned primitives (Ch10_primitive0 + _primitive1).
+// mesh.clone() copies the SOURCE skeleton ref onto each clone; the per-unit
+// skeleton must be reassigned to ALL skinned primitives, not just the primary —
+// otherwise the secondary primitive stays on the source skeleton (which runs the
+// source idle) and that half of the unit idles while the other half walks.
+describe('_buildRigClone — multi-primitive skeleton binding', () => {
+  function makeSkinnedSrcMesh(name, srcSkeleton) {
+    return {
+      name, skeleton: srcSkeleton, parent: null,
+      // Babylon's clone() carries the source skeleton ref onto the clone.
+      clone(n) {
+        return {
+          name: n, skeleton: srcSkeleton, parent: null, isPickable: true,
+          material: makeFakeMaterial(`${n}_mat`), setEnabled() {}, dispose() {},
+        };
+      },
+      setEnabled() {},
+    };
+  }
+
+  test('binds EVERY skinned primitive to the per-unit skeleton, not just the primary', () => {
+    const r = newRenderer();
+    const srcSkeleton  = { name: 'srcSkel',  bones: [] };
+    const unitSkeleton = { name: 'unitSkel', bones: [] };
+    const prim0 = makeSkinnedSrcMesh('Ch10_primitive0', srcSkeleton);
+    const prim1 = makeSkinnedSrcMesh('Ch10_primitive1', srcSkeleton);
+    const src = {
+      mesh: prim0, meshes: [prim0, prim1], skeleton: srcSkeleton, idleGroup: null,
+      transformNodes: [], scale: 1, feetOffset: 0, cloneTag: 'zombie', tintable: false,
+    };
+    r._cloneRigSkeleton    = () => ({ skeleton: unitSkeleton, byName: new Map() });
+    r._cloneAllClipsOntoUnit = () => {}; // skip clip cloning (needs full Babylon)
+
+    const clone = r._buildRigClone({ id: 'z1', type: 'zombie' }, null, src, {});
+    assert.ok(clone, 'clone built');
+    const skinned = clone.childMeshes.filter(m => m.skeleton);
+    assert.equal(skinned.length, 2, 'both primitives are present and skinned');
+    for (const m of skinned) {
+      assert.equal(m.skeleton, unitSkeleton,
+        `${m.name} must bind to the per-unit skeleton (was the source idle skeleton)`);
+      assert.notEqual(m.skeleton, srcSkeleton, `${m.name} must NOT stay on the source skeleton`);
+    }
+  });
+});

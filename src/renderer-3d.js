@@ -4519,7 +4519,17 @@ export class Renderer3D {
       if (unit) {
         unitSkeleton = unit.skeleton;
         tnByName = unit.byName;
-        primarySkinnedClone.skeleton = unitSkeleton;
+        // Bind EVERY skinned primitive to this unit's skeleton — not just the
+        // primary. A multi-primitive character (the zombie ships as
+        // Ch10_primitive0 + Ch10_primitive1) otherwise leaves its secondary
+        // primitive(s) on the SOURCE skeleton, which runs the source idle: half
+        // the unit walks on its own skeleton while the other half keeps idling
+        // — the "walk and idle blended / idle sliding" bug. mesh.clone() copies
+        // the source skeleton ref onto each clone, so only the skinned ones are
+        // reassigned (guard on `c.skeleton`).
+        for (const c of childClones) {
+          if (c.skeleton) c.skeleton = unitSkeleton;
+        }
         groups = {};
       } else if (src.skeleton) {
         // Per-unit clone failed → this standee shares the source skeleton and
@@ -5026,6 +5036,29 @@ export class Renderer3D {
     this._setCloneAnimState(clone, 'idle');
   }
 
+  /** Attach ONE rig clip (`slot`) onto a single unit `clone` on demand, if the
+   *  rig source has that clip loaded and this unit doesn't carry it yet. Closes
+   *  the async-retarget RACE: a unit revealed and moved in the window before its
+   *  walk clip propagated would slide to the next hex in `idle` with frozen legs
+   *  (the "zombie slides, feet don't move" bug). The move toggle calls this so
+   *  the clip is attached the instant it's needed, instead of silently falling
+   *  back to idle. Returns true when the slot is present afterwards. */
+  _ensureUnitClip(clone, slot) {
+    if (!clone || !clone.groups || !clone.tnByName) return false;
+    if (clone.groups[slot]) return true;
+    const src = clone.rigSrc;
+    if (!src) return false;
+    const spec = this._rigClipSlots(src).find(s => s.slot === slot);
+    if (!spec || !spec.group) return false;          // shared clip not loaded yet
+    const id = clone._unitId ?? 'u';
+    const g = this._cloneClipOntoTNs(spec.group, clone.tnByName, `${src.cloneTag}_${id}_${slot}`,
+      { loop: spec.loop, speed: spec.speed, rest: spec.oneShot ? 'stop' : 'pause' });
+    if (!g) return false;
+    clone.groups[slot] = g;
+    if (spec.durKey && Number.isFinite(src[spec.durKey])) clone[`${slot}DurationSec`] = src[spec.durKey];
+    return true;
+  }
+
   /** Propagate a freshly-loaded rig clip onto every existing standee that uses
    *  `src` — so units already on screen pick up walk / run / punch / hit / block
    *  the moment the shared clip lands, each on its own skeleton. `slot` is the
@@ -5267,8 +5300,11 @@ export class Renderer3D {
       if (clone.oneShotPlaying) continue;
       let want = 'idle';
       if (moveIds && moveIds.has(id)) {
-        if (runIds && runIds.has(id) && clone.groups.run) want = 'run';
-        else if (clone.groups.walk) want = 'walk';
+        // Self-heal the async-retarget race: if this unit's walk/run clip hasn't
+        // been propagated yet (it moved the instant it was revealed), attach it
+        // on demand so it walks instead of sliding in idle with frozen legs.
+        if (runIds && runIds.has(id) && (clone.groups.run || this._ensureUnitClip(clone, 'run'))) want = 'run';
+        else if (clone.groups.walk || this._ensureUnitClip(clone, 'walk')) want = 'walk';
       }
       this._setCloneAnimState(clone, want);
     }
