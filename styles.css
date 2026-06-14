@@ -5692,17 +5692,23 @@ img.plan-step-avatar {
 }
 
 /* Battle rows carrying the roll-breakdown tooltip must receive hover even
-   though the timeline itself ignores pointers (board stays interactive). */
-.replay-step-action.battle[data-tip-html] {
+   though the timeline itself ignores pointers (board stays interactive).
+   Gated to the visible card(s) only — the current card in playback, or every
+   card while scrubbing in review — so hidden (opacity:0) cards waiting to slide
+   in don't catch hover through their still-laid-out rows. */
+.replay-step-col.is-current .replay-step-action.battle[data-tip-html],
+#replay-timeline.reviewing .replay-step-action.battle[data-tip-html] {
   pointer-events: auto;
   cursor: help;
 }
 /* Hovering any action row highlights its involved hexes on the map (blue
    fill + ghost move arrow). Rows must receive hover despite the timeline
    ignoring pointers — gated to hover-capable pointers so touch devices keep
-   tapping through the cards to the board. */
+   tapping through the cards to the board, and to visible cards only (see
+   above) so the next, still-hidden card has no live hover areas. */
 @media (hover: hover) {
-  .replay-step-entry { pointer-events: auto; }
+  .replay-step-col.is-current .replay-step-entry,
+  #replay-timeline.reviewing .replay-step-entry { pointer-events: auto; }
   /* The hovered row lights up in the same blue as its on-map hex highlight,
      so the card section and the board read as one. The gold is-acting
      highlight (the action currently playing) still wins. */
