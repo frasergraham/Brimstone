@@ -52,6 +52,7 @@ import { ensureBattleExists, checkBattleLifecycle, endBattleEarly } from './serv
 import {
   getAllPlayers, getAllSaves, getSaveWithState,
   getAllGamesPaginated, getGameDetail, getAllPlayersDetailed, resetStats,
+  listModelFiles,
 } from './server/admin.js';
 import { deleteAsyncGame as _deleteAsyncGame,
          getAsyncGame as _getAsyncGame,
@@ -703,6 +704,14 @@ app.get('/admin/api/stats', (req, res) => {
     activeRooms:  getRooms().length,
     queueSize:    getQueue().length,
   });
+});
+
+// Live recursive listing of every .glb under assets/models/ — lets the asset
+// viewer show ALL models without a hardcoded list. Paths are relative to
+// assets/models (e.g. "buildings/church.glb", "trees/rock/rock-001.glb").
+app.get('/admin/api/models', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
+  res.json({ ok: true, files: listModelFiles(join(__dirname, 'assets', 'models')) });
 });
 
 app.get('/admin/api/rooms', (req, res) => {

@@ -719,7 +719,10 @@
     import { createTabController } from '/src/tools/tab-controller.js';
     // Lighting tab deps. Importing the module is cheap; the heavy Babylon scene
     // is only built when initLighting() runs (first activation of that tab).
-    import { Renderer3D, PHASE_LIGHT_CONFIG } from '/src/renderer-3d.js';
+    import {
+      Renderer3D, PHASE_LIGHT_CONFIG,
+      ANIMATION_BANK, UNIT_RIG_BANK, MANNEQUIN_RIG_FILE,
+    } from '/src/renderer-3d.js';
     import { generateMap } from '/src/map.js';
     import { GameState, Phase } from '/src/game.js';
     import { createHero, createWitch } from '/src/entities.js';
@@ -743,12 +746,79 @@
     function initAssets() {
       'use strict';
 
-      const MODELS = [
-        { file: 'house.glb',         label: 'house.glb' },
-        { file: 'paladin-idle.glb',  label: 'paladin-idle.glb' },
+      // Last-resort list if live discovery (Studio bridge → /admin/api/models)
+      // both fail. The trees/* subtree is browsed separately via its manifest.
+      const FALLBACK_MODELS = [
+        'house.glb', 'paladin-idle.glb', 'mannequin-idle.glb', 'zombie-idle.glb',
+        'tree_pack.glb', 'walking.glb', 'running.glb', 'punch.glb', 'hit.glb', 'block.glb',
+        'buildings/apothecary.glb', 'buildings/barn.glb', 'buildings/blacksmith.glb',
+        'buildings/church.glb', 'buildings/dock.glb', 'buildings/graveyard.glb',
+        'buildings/house.glb', 'buildings/inn.glb', 'buildings/mill.glb',
+        'buildings/stable.glb', 'buildings/storehouse.glb', 'buildings/town_hall.glb',
+        'buildings/watchtower.glb',
       ];
-      const ANIMATION_FILES = ['walking.glb', 'running.glb', 'punch.glb', 'hit.glb', 'block.glb'];
+      // Animation clips — derived from the game's ANIMATION_BANK (single source
+      // of truth) so new clips appear here automatically. The `idle` entry is
+      // the rig mesh itself (paladin-idle.glb), not a standalone clip, so it's
+      // excluded. Every rig shares one Mixamo skeleton, so each clip retargets
+      // onto every character mesh — verified 0-miss across paladin/mannequin/zombie.
+      const ANIMATION_FILES = [...new Set(Object.values(ANIMATION_BANK))]
+        .filter(f => f !== ANIMATION_BANK.idle);
+      // Character rig meshes: every model registered in UNIT_RIG_BANK plus the
+      // shared mannequin. Used to bucket the model list into a Characters group.
+      const RIG_MODEL_FILES = new Set([
+        ...Object.values(UNIT_RIG_BANK).map(r => r.model),
+        MANNEQUIN_RIG_FILE,
+      ]);
       const MODEL_DIR = '/assets/models/';
+
+      // Bucket a discovered model path into a viewer category. Characters (rigs)
+      // and Animations (clips) come from the game's banks; the rest split by
+      // directory. Order controls how groups render (most useful first).
+      const GROUP_ORDER = ['Characters', 'Animations', 'Props', 'Buildings'];
+      function classifyModel(rel) {
+        const base = rel.split('/').pop();
+        if (rel.startsWith('buildings/')) return 'Buildings';
+        if (ANIMATION_FILES.includes(base)) return 'Animations';
+        if (RIG_MODEL_FILES.has(base) || /-idle\.glb$/i.test(base)) return 'Characters';
+        return 'Props';
+      }
+
+      // Discover every .glb model under assets/models/ at runtime so the viewer
+      // shows ALL game models. Order of preference:
+      //   1. Caleb's Studio repo bridge (recursive on-disk listing)
+      //   2. The dev server's /admin/api/models scan endpoint
+      //   3. FALLBACK_MODELS (may be stale, but always renders something)
+      async function studioListGlbs(relDir, prefix) {
+        const result = await window.studioAPI.listDir(relDir);
+        if (!result || !result.ok || !Array.isArray(result.entries)) return [];
+        const out = [];
+        for (const ent of result.entries) {
+          if (ent.name.startsWith('.')) continue;
+          const rel = prefix ? `${prefix}/${ent.name}` : ent.name;
+          if (ent.dir) out.push(...await studioListGlbs(`${relDir}/${ent.name}`, rel));
+          else if (ent.name.toLowerCase().endsWith('.glb')) out.push(rel);
+        }
+        return out;
+      }
+      async function discoverModelFiles() {
+        if (window.studioAPI?.listDir) {
+          try {
+            const files = await studioListGlbs('assets/models', '');
+            if (files.length) return files.sort();
+          } catch (e) { console.warn('[asset-viewer] studio listing failed:', e); }
+        }
+        try {
+          const res = await fetch('/admin/api/models');
+          if (res.ok) {
+            const data = await res.json();
+            if (data && Array.isArray(data.files) && data.files.length) {
+              return data.files.slice().sort();
+            }
+          }
+        } catch (e) { console.warn('[asset-viewer] /admin/api/models failed:', e); }
+        return FALLBACK_MODELS.slice();
+      }
 
       const $ = (id) => document.getElementById('a-' + id);
       const errEl = $('error');
@@ -1025,19 +1095,92 @@
       const listEl = $('model-list');
       let activeItem = null;
       let activeFile = null;
-      for (const m of MODELS) {
-        const el = document.createElement('div');
-        el.className = 'model-item';
-        el.textContent = m.label;
-        el.addEventListener('click', () => {
-          if (activeItem) activeItem.classList.remove('active');
-          el.classList.add('active');
-          activeItem = el;
-          activeFile = m.file;
-          loadModel(m.file).catch(() => { el.classList.add('broken'); });
-        });
-        listEl.appendChild(el);
+
+      // Select + play a retargeted clip by name (e.g. 'walking') on whatever
+      // rig is currently loaded. Keeps the dropdown in sync so the Play/Pause
+      // controls operate on the same group. Returns false if no such clip is
+      // present on the current rig.
+      function playAnimationByName(name) {
+        const idx = currentAnimGroups.findIndex(g => (g.name || '') === name);
+        if (idx < 0) return false;
+        animSelect.value = String(idx);
+        const g = currentAnimGroups[idx];
+        if (activeAnimGroup && activeAnimGroup !== g) { try { activeAnimGroup.stop(); } catch (_) {} }
+        activeAnimGroup = g;
+        g.start($('anim-loop').checked, 1.0, g.from, g.to, false);
+        return true;
       }
+
+      // Clicking an animation clip previews it on a character. Because all rigs
+      // share one skeleton, ANY loaded character works; if none is loaded yet
+      // we drop in the shared mannequin first, then play.
+      async function selectAnimationClip(rel) {
+        errEl.textContent = '';
+        const name = rel.split('/').pop().replace(/\.glb$/i, '');
+        if (!currentSkeletons.length) await loadModel(MANNEQUIN_RIG_FILE);
+        if (!playAnimationByName(name)) {
+          errEl.textContent = `No "${name}" clip retargeted onto the current rig.`;
+        }
+      }
+
+      // Render discovered models as collapsible, categorised folders:
+      // Characters (rigs) and Animations (clips) come from the game's banks;
+      // Props and Buildings split out the rest. trees/* is browsed separately
+      // in the dedicated tree panel below. Returns the item to auto-select —
+      // the first character, so the stage opens on a real figure.
+      function buildModelList(files) {
+        const groups = new Map();
+        for (const rel of files) {
+          if (rel.startsWith('trees/')) continue;
+          const group = classifyModel(rel);
+          if (!groups.has(group)) groups.set(group, []);
+          groups.get(group).push(rel);
+        }
+        const rank = (g) => { const i = GROUP_ORDER.indexOf(g); return i === -1 ? GROUP_ORDER.length : i; };
+        const names = Array.from(groups.keys()).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+        let firstItem = null;
+        let preferredItem = null;
+        for (const group of names) {
+          const entries = groups.get(group).slice().sort();
+          const folder = document.createElement('div');
+          folder.className = 'folder';
+          folder.textContent = `${group} (${entries.length})`;
+          folder.addEventListener('click', () => folder.classList.toggle('collapsed'));
+          listEl.appendChild(folder);
+          const body = document.createElement('div');
+          body.className = 'folder-body';
+          listEl.appendChild(body);
+          for (const rel of entries) {
+            const el = document.createElement('div');
+            el.className = 'model-item';
+            const lbl = document.createElement('span');
+            lbl.className = 'label';
+            lbl.textContent = rel.split('/').pop();
+            el.appendChild(lbl);
+            el.addEventListener('click', () => {
+              if (activeItem) activeItem.classList.remove('active');
+              el.classList.add('active');
+              activeItem = el;
+              activeFile = rel;
+              const action = group === 'Animations' ? selectAnimationClip(rel) : loadModel(rel);
+              action.catch(() => { el.classList.add('broken'); });
+            });
+            body.appendChild(el);
+            if (!firstItem) firstItem = el;
+            if (!preferredItem && group === 'Characters') preferredItem = el;
+          }
+        }
+        return preferredItem || firstItem;
+      }
+
+      discoverModelFiles().then((files) => {
+        const first = buildModelList(files);
+        if (first) first.click();
+      }).catch((e) => {
+        console.warn('[asset-viewer] model discovery failed:', e);
+        const first = buildModelList(FALLBACK_MODELS);
+        if (first) first.click();
+      });
 
       const treeListEl = $('tree-list');
       const checkedRemovals = new Set();
@@ -1137,11 +1280,6 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
           if (m.material) m.material.wireframe = on;
         }
       });
-
-      if (MODELS.length) {
-        const first = listEl.firstChild;
-        if (first) first.click();
-      }
 
       return {
         pause() { engine.stopRenderLoop(); },
