@@ -25,12 +25,9 @@
   "aiPersonality": "balanced",
   "aiBudgetBonus": 1,
   "maxSurvivorsFromRoster": 0,
-  "missionSurvivors": 2,
-  "maxDiscoverableSurvivors": 3,
-  "startingResources": {
-    "food": 1,
-    "herbs": 1
-  },
+  "missionSurvivors": 0,
+  "maxDiscoverableSurvivors": 4,
+  "startingResources": {},
   "rewards": {
     "food": 2,
     "herbs": 1,
@@ -114,22 +111,17 @@
         "id": "n6",
         "type": "storyBeat",
         "params": {
-          "title": "Sanctuary",
-          "text": "The apothecary's door is barricaded from the inside. You call out and hear weeping — then the scrape of wood as the barricade is removed. A survivor emerges, pale but alive."
+          "title": "A barricaded home",
+          "text": "The door is barricaded from the inside. You hear noises from inside the house."
         },
-        "x": 742,
-        "y": 258
+        "x": 793,
+        "y": 249
       },
       {
         "id": "n7",
         "type": "onAreaEnter",
         "params": {
-          "hexes": [
-            {
-              "col": 4,
-              "row": 7
-            }
-          ]
+          "hexes": []
         },
         "x": 40,
         "y": 260
@@ -161,8 +153,8 @@
             }
           ]
         },
-        "x": 280,
-        "y": 370
+        "x": 273,
+        "y": 358
       },
       {
         "id": "n11",
@@ -188,8 +180,8 @@
             }
           ]
         },
-        "x": 280,
-        "y": 480
+        "x": 167.2727272727273,
+        "y": 480.90909090909093
       },
       {
         "id": "n13",
@@ -197,8 +189,8 @@
         "params": {
           "round": 5
         },
-        "x": 40,
-        "y": 480
+        "x": -60.909090909090864,
+        "y": 479.09090909090907
       },
       {
         "id": "n14",
@@ -255,23 +247,31 @@
         "id": "n18",
         "type": "location",
         "params": {
-          "col": 5,
-          "row": 15,
-          "label": "Boogers"
+          "label": "Boogers",
+          "hexes": [
+            {
+              "col": 5,
+              "row": 15
+            }
+          ]
         },
-        "x": 816.8700000000001,
-        "y": 400.57999999999976
+        "x": 493.11400000000015,
+        "y": 537.4659999999998
       },
       {
         "id": "n19",
         "type": "location",
         "params": {
-          "col": 7,
-          "row": 13,
-          "label": "Hex 7,13"
+          "label": "House 1",
+          "hexes": [
+            {
+              "col": 7,
+              "row": 13
+            }
+          ]
         },
-        "x": 578.3500000000005,
-        "y": 406.51999999999975
+        "x": -194.0499999999995,
+        "y": 261.6199999999998
       },
       {
         "id": "n20",
@@ -279,8 +279,93 @@
         "params": {
           "hexes": []
         },
-        "x": 639.7899999999997,
-        "y": 517.98
+        "x": 724.7899999999997,
+        "y": 520.98
+      },
+      {
+        "id": "n21",
+        "type": "storyBeat",
+        "params": {
+          "title": "Too Quiet",
+          "text": "This part of town is quiet, no birdsong, no human activity, eerily calm."
+        },
+        "x": 926.6560765822994,
+        "y": 505.3752111172001
+      },
+      {
+        "id": "n22",
+        "type": "onActor",
+        "params": {},
+        "x": 696.7894105421532,
+        "y": 672.9452368223084
+      },
+      {
+        "id": "n23",
+        "type": "startConversation",
+        "params": {
+          "roleInputs": [],
+          "conversationId": "ch1m2-survivor"
+        },
+        "x": 910.1313827355259,
+        "y": 675.4735425520572
+      },
+      {
+        "id": "n24",
+        "type": "storyBeat",
+        "params": {
+          "title": "dark",
+          "text": "It's getting dark, we must find the rest of the townsfolk before sun sets."
+        },
+        "x": 367.11190909090914,
+        "y": 480.2470909090909
+      },
+      {
+        "id": "n25",
+        "type": "survivor",
+        "params": {
+          "ref": "survivor_7_13",
+          "label": "Survivor 7,13",
+          "col": 7,
+          "row": 13
+        },
+        "x": 476.90593013247997,
+        "y": 680.9982577143094
+      },
+      {
+        "id": "n26",
+        "type": "survivor",
+        "params": {
+          "ref": "survivor_5_10",
+          "label": "Survivor 5,10",
+          "col": 5,
+          "row": 10
+        },
+        "x": 1186.6560765822994,
+        "y": 260
+      },
+      {
+        "id": "n27",
+        "type": "survivor",
+        "params": {
+          "ref": "survivor_9_5",
+          "label": "Survivor 9,5",
+          "col": 9,
+          "row": 5
+        },
+        "x": 1446.6560765822994,
+        "y": 370
+      },
+      {
+        "id": "n28",
+        "type": "survivor",
+        "params": {
+          "ref": "survivor_6_1",
+          "label": "Survivor 6,1",
+          "col": 6,
+          "row": 1
+        },
+        "x": 1706.6560765822994,
+        "y": 480
       }
     ],
     "edges": [
@@ -415,6 +500,72 @@
           "pin": "in"
         },
         "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n20",
+          "pin": "onEnter"
+        },
+        "to": {
+          "node": "n21",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n18",
+          "pin": "hexes"
+        },
+        "to": {
+          "node": "n20",
+          "pin": "area"
+        },
+        "kind": "data"
+      },
+      {
+        "from": {
+          "node": "n19",
+          "pin": "hexes"
+        },
+        "to": {
+          "node": "n7",
+          "pin": "area"
+        },
+        "kind": "data"
+      },
+      {
+        "from": {
+          "node": "n22",
+          "pin": "onSpawn"
+        },
+        "to": {
+          "node": "n23",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n12",
+          "pin": "done"
+        },
+        "to": {
+          "node": "n24",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n25",
+          "pin": "id"
+        },
+        "to": {
+          "node": "n22",
+          "pin": "ref"
+        },
+        "kind": "data"
       }
     ]
   },
@@ -448,7 +599,7 @@
     ],
     "mapSize": "skirmish",
     "survivorCounts": {
-      "buildings": 2,
+      "buildings": 0,
       "terrain": 0
     },
     "tiles": [
@@ -695,7 +846,10 @@
         "resource": null,
         "hiddenSurvivor": true,
         "hiddenSurvivorId": null,
-        "exploreOverride": null,
+        "exploreOverride": {
+          "kind": "weapon",
+          "id": "axe"
+        },
         "roadDirs": [
           "9,4",
           "10,6"
@@ -1172,7 +1326,7 @@
         "building": "HOUSE",
         "fortifyLevel": 0,
         "resource": null,
-        "hiddenSurvivor": true,
+        "hiddenSurvivor": false,
         "hiddenSurvivorId": null,
         "exploreOverride": null,
         "roadDirs": [
@@ -1358,7 +1512,7 @@
       {
         "col": 7,
         "row": 13,
-        "base": "DIRT",
+        "base": "GRASS",
         "structure": "BUILDING",
         "path": "ROAD",
         "building": "STOREHOUSE",
@@ -1858,7 +2012,7 @@
         "building": null,
         "fortifyLevel": 0,
         "resource": null,
-        "hiddenSurvivor": false,
+        "hiddenSurvivor": true,
         "hiddenSurvivorId": null,
         "exploreOverride": null,
         "roadDirs": [],
@@ -2286,7 +2440,7 @@
         "row": 4,
         "base": "FOREST",
         "structure": null,
-        "path": null,
+        "path": "RIVER",
         "building": null,
         "fortifyLevel": 0,
         "resource": null,
@@ -2302,7 +2456,7 @@
         "row": 3,
         "base": "FOREST",
         "structure": null,
-        "path": null,
+        "path": "RIVER",
         "building": null,
         "fortifyLevel": 0,
         "resource": null,
@@ -2334,7 +2488,7 @@
         "row": 1,
         "base": "FOREST",
         "structure": null,
-        "path": null,
+        "path": "RIVER",
         "building": null,
         "fortifyLevel": 0,
         "resource": null,
@@ -2424,8 +2578,103 @@
         "roadDirs": [],
         "footprintHexes": [],
         "buildingFootprintOf": null
+      },
+      {
+        "col": 0,
+        "row": 6,
+        "base": "GRASS",
+        "structure": null,
+        "path": "RIVER",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 0,
+        "row": 5,
+        "base": "GRASS",
+        "structure": null,
+        "path": "RIVER",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 1,
+        "row": 2,
+        "base": "GRASS",
+        "structure": null,
+        "path": "RIVER",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 2,
+        "row": 0,
+        "base": "GRASS",
+        "structure": null,
+        "path": "RIVER",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
       }
     ]
   },
-  "enemyUnits": []
+  "enemyUnits": [
+    {
+      "type": "zombie",
+      "col": 1,
+      "row": 9,
+      "overrides": {}
+    },
+    {
+      "type": "zombie",
+      "col": 2,
+      "row": 4,
+      "overrides": {}
+    },
+    {
+      "type": "zombie",
+      "col": 6,
+      "row": 5,
+      "overrides": {}
+    },
+    {
+      "type": "zombie",
+      "col": 7,
+      "row": 7,
+      "overrides": {}
+    },
+    {
+      "type": "zombie",
+      "col": 9,
+      "row": 1,
+      "overrides": {}
+    }
+  ]
 }

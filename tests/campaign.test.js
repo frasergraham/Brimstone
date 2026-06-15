@@ -1396,11 +1396,11 @@ describe('markRosterUsedByName', () => {
 // ── maxDiscoverableSurvivors config ────────────────────────────────────────
 
 describe('maxDiscoverableSurvivors config', () => {
-  test('mission 1 has no discoverable survivors, mission 2 allows up to 3', () => {
+  test('mission 1 has no discoverable survivors, mission 2 allows up to 4', () => {
     const m1 = hollowDef.missions.find(m => m.id === 'prologue');
     const m2 = hollowDef.missions.find(m => m.id === 'gathering_survivors');
     assert.equal(m1.maxDiscoverableSurvivors, 0);
-    assert.equal(m2.maxDiscoverableSurvivors, 3);
+    assert.equal(m2.maxDiscoverableSurvivors, 4);
   });
 
   test('mission 3 does not offer discoverable survivors (fixed-party siege)', () => {
