@@ -285,10 +285,11 @@ export function initEditor(doc = document, initOpts = {}) {
   // The element is created with the map controls; updateHexInfo() repopulates it.
   let hexInfo = null;
   let _builtCache = null; // memoised built map for hex lookups; cleared on every edit
-  const builtTileAt = (hex) => {
+  const builtMap = () => {
     if (!_builtCache) { try { _builtCache = buildMissionMap(editor.getMapDef()); } catch { _builtCache = null; } }
-    return _builtCache?.tiles.get(hexKey(hex.col, hex.row)) ?? null;
+    return _builtCache;
   };
+  const builtTileAt = (hex) => builtMap()?.tiles.get(hexKey(hex.col, hex.row)) ?? null;
   const friendly = (s) => String(s ?? '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
   const terrainLabel = (tile) => {
     if (!tile) return 'Grass';
@@ -442,6 +443,7 @@ export function initEditor(doc = document, initOpts = {}) {
     drawAreaTriggerMarkers(ctx);
     drawLogicLocations(ctx);   // item 4 — Location / Area nodes from the logic graph
     drawHiddenSurvivorMarkers(ctx);
+    drawResourceMarkers(ctx);        // mark tiles carrying a harvestable resource
     drawExploreOverrideMarkers(ctx);
     drawRoadNodeMarkers(ctx);
     drawBuildingGhost(ctx);
@@ -629,6 +631,41 @@ export function initEditor(doc = document, initOpts = {}) {
       ctx.font = `bold ${Math.max(9, br * 0.85)}px sans-serif`;
       ctx.fillStyle = '#fff7d0';
       ctx.fillText(initial, x + br * 0.7, y - r * 0.18 + br * 0.7);
+    }
+    ctx.restore();
+  }
+
+  // ── Resource markers ───────────────────────────────────────────────────────
+  // Mark every hex carrying a harvestable resource (Set Resource tool) so the
+  // author can see where the map's extra resources are: a faint green hex tint +
+  // a green badge with the resource glyph in the lower-RIGHT (explore-override
+  // badges sit lower-LEFT, so a tile can show both).
+  const _RES_ICON = { wood: '🪵', metal: '⚙', herbs: '🌿', food: '🍞', silver: '⚔', scripture: '📜' };
+  function drawResourceMarkers(ctx) {
+    const built = builtMap();
+    if (!built) return;
+    const r = renderer.hexSize * renderer.zoomLevel;
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const t of built.tiles.values()) {
+      if (!t.resource) continue;
+      const { x, y } = renderer.hexToCanvasPos(t.col, t.row);
+      _hexPath(ctx, x, y, r);
+      ctx.fillStyle = 'rgba(60,170,95,0.16)';
+      ctx.fill();
+      const br = r * 0.36;
+      const bx = x + r * 0.42, by = y + r * 0.36;
+      ctx.beginPath();
+      ctx.arc(bx, by, br, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(30,110,60,0.88)';
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = 'rgba(160,235,180,0.95)';
+      ctx.stroke();
+      ctx.font = `${Math.max(9, br * 1.05)}px serif`;
+      ctx.fillStyle = '#eafff0';
+      ctx.fillText(_RES_ICON[t.resource] || '📦', bx, by);
     }
     ctx.restore();
   }
