@@ -985,7 +985,7 @@ export function initEditor(doc = document, initOpts = {}) {
   // The Map palette reflects the locked mode + live dims; rebuild it whenever
   // those can change (creation, resize, load) and reframe the canvas.
   function rebuildMapPalette() {
-    buildMapPalette(doc, sidebar.panes.map, editor, rerender, openPreview, {
+    buildMapPalette(doc, sidebar.panes.map, editor, rerender, {
       onSizeChange: () => { rebuildMapPalette(); resetViewAndDraw(); },
       setStatus: formStatus,
       // Tool change can flip the road-node-marker auto-show, so redraw overlays.
@@ -1047,9 +1047,20 @@ export function initEditor(doc = document, initOpts = {}) {
   hexInfo.className = 'e-hexinfo e-coord-badge';
   hexInfo.style.visibility = 'hidden';
   pane.append(hexInfo);
-  // The Layers (visibility) pane toggles the editor-side display filters. It now
-  // lives in a top-right map dropdown (item 6) rather than a sidebar tab.
-  buildLayersDropdown(doc, pane, sidebar.panes.layers);
+  // Top-right map toolbar: a "Preview 3D" button beside the Layers dropdown.
+  // (Layers moved out of the sidebar into this dropdown, item 6; Preview moved
+  // off the sidebar to sit next to it.)
+  const mapToolbar = doc.createElement('div');
+  mapToolbar.className = 'e-map-toolbar';
+  const previewBtn = doc.createElement('button');
+  previewBtn.type = 'button';
+  previewBtn.className = 'e-map-toolbtn';
+  previewBtn.textContent = '◳ Preview 3D';
+  previewBtn.title = 'Open a live 3D preview of the current map (Babylon renderer)';
+  previewBtn.addEventListener('click', () => openPreview());
+  mapToolbar.append(previewBtn);
+  pane.append(mapToolbar);
+  buildLayersDropdown(doc, mapToolbar, sidebar.panes.layers);
   function rebuildLayers() {
     buildLayersPanel(doc, sidebar.panes.layers, layers, () => rerender(),
       editor.getMode() === 'procedural');
@@ -1797,7 +1808,7 @@ export function buildMapControls(doc, { onFit = () => {} } = {}) {
 
 // ── Map-tab palette DOM ───────────────────────────────────────────────────────
 
-function buildMapPalette(doc, root, editor, rerender, onPreview3D, hooks = {}) {
+function buildMapPalette(doc, root, editor, rerender, hooks = {}) {
   root.innerHTML = '';
   const onSizeChange = hooks.onSizeChange ?? (() => {});
   const setStatus = hooks.setStatus ?? (() => {});
@@ -1906,14 +1917,9 @@ function buildMapPalette(doc, root, editor, rerender, onPreview3D, hooks = {}) {
   renderPowerNodes();
   (hooks.registerPowerNodeRefresh ?? (() => {}))(renderPowerNodes);
 
-  // View / Reset moved to the in-map fit-map control (item 3). Undo / Redo live
-  // on the top bar (item 5). Only the 3D preview action remains in the sidebar.
-  if (onPreview3D) {
-    const previewSection = section(doc, 'Preview');
-    previewSection.append(actionBtn(doc, 'Preview in 3D', () => onPreview3D(),
-      'Open a live 3D preview of the current map (Babylon renderer)'));
-    root.append(previewSection);
-  }
+  // View / Reset live on the in-map fit-map control (item 3); Undo / Redo on the
+  // top bar (item 5); "Preview 3D" sits in the map's top-right toolbar beside the
+  // Layers menu (see initMissionEditorUI), so nothing action-y remains here.
 }
 
 // ── Context-sensitive VALUE panel (item 7) ──────────────────────────────────

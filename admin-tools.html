@@ -428,7 +428,18 @@
     #editor-panel .e-selection-del:hover { background: #5a2626; }
 
     /* ── Layers dropdown (item 6) ──────────────────────────────────────────── */
-    #editor-panel .e-layers-menu { position: absolute; top: 8px; right: 10px; z-index: 6; }
+    /* Top-right map toolbar: Preview 3D + Layers dropdown sit side by side. */
+    #editor-panel .e-map-toolbar {
+      position: absolute; top: 8px; right: 10px; z-index: 6;
+      display: flex; gap: 6px; align-items: flex-start;
+    }
+    #editor-panel .e-map-toolbtn {
+      padding: 5px 10px; border: 1px solid #c4a04a; border-radius: 6px;
+      background: rgba(26,22,16,0.9); color: #ffd680; font-size: 12px; cursor: pointer;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.5); white-space: nowrap;
+    }
+    #editor-panel .e-map-toolbtn:hover { background: #5a4a30; }
+    #editor-panel .e-layers-menu { position: relative; }
     #editor-panel .e-layers-btn {
       padding: 5px 10px; border: 1px solid #c4a04a; border-radius: 6px;
       background: rgba(26,22,16,0.9); color: #ffd680; font-size: 12px; cursor: pointer;
