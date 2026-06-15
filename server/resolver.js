@@ -620,17 +620,19 @@ export function resolvePlansMP(state, playerEntries) {
   return steps;
 }
 
-// Mission-logic (docs/09): after a TURN's moves apply, fire Area enter/exit for
-// any unit that crossed a trigger boundary THIS turn — so triggers fire on
-// pass-through, not only when a unit happens to stop on the hex at a round
-// boundary. Returns the SHOW (story) events to play at this point in the replay;
-// Sim-side presentation (spawn / flags / NPC choreography) stays queued for the
-// existing post-round handling. Sealed: reads only `state`. No-op without an
-// attached engine, so normal/online games are byte-identical.
+// Mission-logic (docs/09): after a TURN's moves apply, fire the events that a
+// unit's movement/discovery this turn can trigger — Area enter/exit (so triggers
+// fire on pass-through, not only when a unit stops on the hex at a round boundary)
+// and Actor spawn/death (so finding a pinned survivor fires its On Actor node
+// right here). Returns the SHOW (story beat / conversation) events to play at this
+// point in the replay; Sim-side presentation (spawn / flags / NPC choreography)
+// stays queued for the existing post-round handling. Sealed: reads only `state`.
+// No-op without an attached engine, so normal/online games are byte-identical.
 function captureTurnStoryEvents(state) {
   if (!state?.logicEngine || !Array.isArray(state.logicPresentation)) return null;
   const before = state.logicPresentation.length;
   state._dispatchAreaTransitions();
+  state._dispatchActorTransitions();
   if (state.logicPresentation.length === before) return null;
   const captured = [];
   const rest = [];

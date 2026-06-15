@@ -80,6 +80,30 @@ describe('resolvePlans — mission-logic area triggers', () => {
     const steps = resolvePlans(state, [{ type: PlanActionType.MOVE, entityId: hero.id, toCol: reachable[0].col, toRow: reachable[0].row }], []);
     assert.ok(steps.every(s => !('logicEvents' in s)), 'no logicEvents key without an engine');
   });
+
+  test('an Actor present during the turn fires its On Actor (OnSpawn) inline on the step', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const reachable = getReachableHexes(state, hero, 1);
+    if (!reachable.length) return;
+    const PIN = 'NamedActor';
+    const graph = { version: 1, variables: [], nodes: [
+      { id: 'act', type: 'onActor', params: { ref: PIN } },
+      { id: 'beat', type: 'storyBeat', params: { title: 'Found', text: 'A familiar face.' } },
+    ], edges: [{ from: { node: 'act', pin: 'onSpawn' }, to: { node: 'beat', pin: 'in' }, kind: 'exec' }] };
+    const ctx = createGameContext(state, { emit: (e) => state.logicPresentation.push(e), random: Math.random });
+    state.attachLogicEngine(new MissionLogicEngine(graph, ctx));
+    // An entity carrying the watched ref (e.g. a pinned survivor just discovered).
+    const actor = createZombie(hero.col, hero.row, 'witch', state);
+    actor.ref = PIN;
+    state.entities.push(actor);
+
+    const heroPlan = [{ type: PlanActionType.MOVE, entityId: hero.id, toCol: reachable[0].col, toRow: reachable[0].row }];
+    const steps = resolvePlans(state, heroPlan, []);
+    const beats = steps.flatMap((s) => s.logicEvents ?? []).filter((e) => e.kind === 'storyBeat');
+    assert.equal(beats.length, 1, 'Actor OnSpawn fired inline on the step (not deferred to the round boundary)');
+    assert.equal(beats[0].title, 'Found');
+  });
 });
 
 // ── Empty plans ───────────────────────────────────────────────────────────────
