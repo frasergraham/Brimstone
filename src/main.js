@@ -670,14 +670,19 @@ function _drainLogicStoryEvents() {
 // by _animateResolutionSteps at the step the event fired (vs the planning-gate
 // modals of _showStorySequence). `afterStepIndex` anchors the insert position.
 let _beatCardSeq = 0;
+// Returns true if a story beat was presented (its card already gated on NEXT),
+// so the caller can skip the redundant manual-step gate for this step.
 async function _presentStepLogicEvents(events, afterStepIndex) {
+  let gatedBeat = false;
   for (const ev of events ?? []) {
     if (ev.kind === 'conversation') {
       await _playMissionConversation(ev.id, { manageHud: false, runOnComplete: false, nodeId: ev.nodeId });
     } else if (ev.kind === 'storyBeat') {
       await _presentStoryBeatCard(ev, afterStepIndex);
+      gatedBeat = true;
     }
   }
+  return gatedBeat;
 }
 
 /** Insert a story-beat card into the live replay timeline and gate on NEXT (like
@@ -2934,9 +2939,10 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     // here we present each one at the moment in the replay it fired: a story beat
     // as an inserted turn CARD (not a modal), a conversation as its own card.
     // Skipped on abort / skip-to-end.
+    let beatGated = false;
     if (step.logicEvents?.length
         && !playback.aborted && !playback.goBack && !playback.jumpToEnd) {
-      await _presentStepLogicEvents(step.logicEvents, step.stepIndex);
+      beatGated = await _presentStepLogicEvents(step.logicEvents, step.stepIndex);
     }
 
     // Manual-step gate: in paused mode, hold at this step boundary until NEXT
@@ -2947,8 +2953,10 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     // have no card, so they shouldn't cost the player a NEXT click. In full-game
     // replay the round loop owns the boundary after the last visible step, so we
     // don't double-gate it there.
+    // A story-beat card already gated this step on NEXT (its own card), so don't
+    // make the player click NEXT a second time at the manual-step gate below.
     const stepHasCard = stepDigest?.[i]?.entries?.length > 0;
-    if (!_autoplay && ui && stepHasCard) {
+    if (!_autoplay && ui && stepHasCard && !beatGated) {
       const fullMode = !!ui._replayOnControl;
       const laterHasCard = stepDigest.slice(i + 1).some(c => c.entries.length > 0);
       if (!(fullMode && !laterHasCard)) {
