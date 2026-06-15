@@ -63,7 +63,12 @@ export function bindParticipants(convo, bindings, state) {
   for (const role of convo.roles) {
     const spec = bindings?.[role];
     let entity = null;
-    if (spec === BIND_HERO) {
+    if (spec && typeof spec === 'object') {
+      // A live entity wired straight in — a logic-graph participant pin (e.g. the
+      // survivor an On Actor node bound by ref). Honour the same alive check as
+      // the grammar paths so a dead/removed unit skips the conversation.
+      entity = spec.alive !== false ? spec : null;
+    } else if (spec === BIND_HERO) {
       entity = state.hero;
     } else if (typeof spec === 'string' && spec.startsWith(BIND_NPC_PREFIX)) {
       const npcId = spec.slice(BIND_NPC_PREFIX.length);

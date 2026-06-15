@@ -64,6 +64,27 @@ describe('bindParticipants', () => {
       null,
     );
   });
+
+  test('binds a live entity wired straight in (logic-graph participant pin)', () => {
+    const state = fakeState();
+    const survivor = state.entities[2]; // Mary — as if supplied by an On Actor node
+    const map = bindParticipants(
+      { roles: ['hero', 'survivor'] },
+      { hero: 'hero', survivor }, // grammar hero + a wired entity object
+      state,
+    );
+    assert.equal(map.get('hero'), state.hero);
+    assert.equal(map.get('survivor'), survivor);
+  });
+
+  test('a wired entity that is dead skips the conversation (null)', () => {
+    const state = fakeState();
+    const survivor = { id: 'eX', type: 'survivor', name: 'Ghost', alive: false };
+    assert.equal(
+      bindParticipants({ roles: ['hero', 'survivor'] }, { hero: 'hero', survivor }, state),
+      null,
+    );
+  });
 });
 
 describe('validateConversationDef', () => {

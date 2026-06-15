@@ -77,6 +77,41 @@ describe('mission-logic / integration with GameState', () => {
       'On Actor OnSpawn fired the wired beat/conversation on discovery');
   });
 
+  test('Survivor → On Actor → Start Conversation: discovery emits a conversation with the wired participant bound', () => {
+    const state = new GameState(true, true);
+    state.maxDiscoverableSurvivors = null;
+    const PIN = 'Goodwife Hale';
+    // The exact wiring an author builds in the editor: a Survivor source node
+    // feeds On Actor's `ref`; On Actor's OnSpawn drives Start Conversation; its
+    // `entity` output is wired into the conversation's `survivor` role pin.
+    attach(state, {
+      version: 1, variables: [],
+      nodes: [
+        { id: 'surv', type: 'survivor', params: { ref: PIN, col: state.hero.col, row: state.hero.row } },
+        { id: 'act', type: 'onActor', params: {} },
+        { id: 'conv', type: 'startConversation', params: { conversationId: 'ch1m2-survivor', roleInputs: ['survivor'] } },
+      ],
+      edges: [
+        { from: { node: 'surv', pin: 'id' }, to: { node: 'act', pin: 'ref' }, kind: 'data' },
+        { from: { node: 'act', pin: 'onSpawn' }, to: { node: 'conv', pin: 'in' }, kind: 'exec' },
+        { from: { node: 'act', pin: 'entity' }, to: { node: 'conv', pin: 'survivor' }, kind: 'data' },
+      ],
+    });
+    const hero = state.hero;
+    const t = state.tiles.get(hexKey(hero.col, hero.row));
+    t.hiddenSurvivor = true; t.hiddenSurvivorId = PIN;
+    state.pumpMissionLogic('roundStart');
+    triggerSurvivorEncounter(state, hero, hero.col, hero.row);
+    const fired = state.pumpMissionLogic('postResolution');
+    const conv = fired.find((e) => e.kind === 'conversation');
+    assert.ok(conv, 'a conversation event was emitted on discovery');
+    assert.equal(conv.id, 'ch1m2-survivor');
+    const discovered = state.entities.find((e) => e.ref === PIN);
+    assert.ok(discovered, 'the survivor was materialised');
+    assert.equal(conv.roles.survivor, discovered,
+      'the wired `survivor` role carries the live discovered entity (not just a string)');
+  });
+
   test('roundStart spawns a unit through the real entity factory + spawn path', () => {
     const state = new GameState(true, true);
     attach(state, {

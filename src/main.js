@@ -656,7 +656,7 @@ function _logicEventsToStory(events) {
   return (events ?? [])
     .filter(e => e.kind === 'storyBeat' || e.kind === 'conversation')
     .map(e => e.kind === 'conversation'
-      ? { conversation: e.id, nodeId: e.nodeId }
+      ? { conversation: e.id, nodeId: e.nodeId, roles: e.roles }
       : { title: e.title, text: e.text });
 }
 
@@ -676,7 +676,7 @@ async function _presentStepLogicEvents(events, afterStepIndex) {
   let gatedBeat = false;
   for (const ev of events ?? []) {
     if (ev.kind === 'conversation') {
-      await _playMissionConversation(ev.id, { manageHud: false, runOnComplete: false, nodeId: ev.nodeId });
+      await _playMissionConversation(ev.id, { manageHud: false, runOnComplete: false, nodeId: ev.nodeId, roles: ev.roles });
     } else if (ev.kind === 'storyBeat') {
       await _presentStoryBeatCard(ev, afterStepIndex);
       gatedBeat = true;
@@ -706,7 +706,7 @@ async function _presentStoryBeatCard(beat, afterStepIndex) {
 async function _showStorySequence(events) {
   for (const ev of events) {
     if (ev.conversation) {
-      await _playMissionConversation(ev.conversation, { manageHud: true, runOnComplete: true, nodeId: ev.nodeId });
+      await _playMissionConversation(ev.conversation, { manageHud: true, runOnComplete: true, nodeId: ev.nodeId, roles: ev.roles });
     } else {
       await ui.showStoryModal(ev.title, ev.text);
     }
@@ -725,7 +725,7 @@ let _pendingConvActions = [];
  * bindings (e.g. the NPC died) skip the conversation with a warning — the
  * trigger's dedup mark is already consumed, so it won't re-fire.
  */
-async function _playMissionConversation(convId, { manageHud = true, runOnComplete = true, nodeId = null } = {}) {
+async function _playMissionConversation(convId, { manageHud = true, runOnComplete = true, nodeId = null, roles = null } = {}) {
   // A conversation node may reference a markdown file directly by its id — the
   // editor's dropdown lists every *.md in conversations/, so an author can pick a
   // file without declaring a conversations[] entry. Fall back to treating the id
@@ -741,7 +741,12 @@ async function _playMissionConversation(convId, { manageHud = true, runOnComplet
     console.warn(`[conversation] failed to load "${convDef.file}":`, err);
     return;
   }
-  const participants = bindParticipants(convo, convDef.bindings, state);
+  // Participants come from the declared conversations[] bindings, OVERLAID with
+  // any roles wired in the logic graph (a Start Conversation node's role-input
+  // pins — live entities like the survivor an On Actor node bound). Wired roles
+  // win, so an authored mission can pin the hero while the graph supplies the NPC.
+  const bindings = { ...(convDef.bindings ?? {}), ...(roles ?? {}) };
+  const participants = bindParticipants(convo, bindings, state);
   if (!participants) {
     console.warn(`[conversation] "${convId}": could not bind all roles — skipping`);
     return;
