@@ -388,6 +388,14 @@
       margin-top: 2px; padding-top: 2px; border-top: 1px solid #3a3020;
     }
 
+    /* ── Instant tooltip (replaces the slow native title delay) ─────────────── */
+    #instant-tip {
+      position: fixed; z-index: 10000; display: none; pointer-events: none;
+      max-width: 280px; padding: 5px 9px; border: 1px solid #5a4a2a; border-radius: 5px;
+      background: #0b0a08; color: #f0e8d4; font: 11px/1.45 system-ui, sans-serif;
+      box-shadow: 0 4px 16px rgba(0,0,0,.55); white-space: normal;
+    }
+
     /* ── Left-docked vertical tool palette (item 7) ─────────────────────────── */
     #editor-panel .e-tooldock {
       position: absolute; left: 8px; top: 8px; z-index: 5;
@@ -849,6 +857,36 @@
     // E7 — URL-state helpers: keep ?tool / ?mission / ?wip in sync with what's
     // actually selected/loaded so links and reloads round-trip.
     import { parseToolParams, withToolParams, KNOWN_TOOLS } from '/src/tools/url-state.js';
+
+    // ── Instant tooltips ─────────────────────────────────────────────────────
+    // Native `title` tooltips only appear after a ~1s OS delay. Show an immediate
+    // custom tooltip instead: on first hover, move the element's `title` to
+    // `data-tip` (so the OS tooltip never fires) and float a box by the cursor.
+    // The logic-graph editor (.lge-root) has its own instant tooltips — skip it.
+    (function instantTooltips() {
+      const tip = document.createElement('div');
+      tip.id = 'instant-tip';
+      document.body.appendChild(tip);
+      document.addEventListener('mousemove', (e) => {
+        const titled = e.target.closest?.('[title]');
+        if (titled && !titled.closest('.lge-root')) {
+          titled.dataset.tip = titled.getAttribute('title');
+          titled.removeAttribute('title');
+        }
+        const host = e.target.closest?.('[data-tip]');
+        if (!host || host.closest('.lge-root') || !host.getAttribute('data-tip')) {
+          tip.style.display = 'none';
+          return;
+        }
+        tip.textContent = host.getAttribute('data-tip');
+        tip.style.display = 'block';
+        let x = e.clientX + 14, y = e.clientY + 16;
+        if (x + tip.offsetWidth > window.innerWidth) x = e.clientX - tip.offsetWidth - 8;
+        if (y + tip.offsetHeight > window.innerHeight) y = e.clientY - tip.offsetHeight - 8;
+        tip.style.left = `${x}px`; tip.style.top = `${y}px`;
+      });
+      document.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+    })();
 
     // ════════════════════════════════════════════════════════════════════
     //  ASSETS TAB  (ported from admin-assets.html; ids prefixed `a-`)
