@@ -52,7 +52,7 @@ import { ensureBattleExists, checkBattleLifecycle, endBattleEarly } from './serv
 import {
   getAllPlayers, getAllSaves, getSaveWithState,
   getAllGamesPaginated, getGameDetail, getAllPlayersDetailed, resetStats,
-  listModelFiles,
+  listModelFiles, listConversationFiles,
 } from './server/admin.js';
 import { deleteAsyncGame as _deleteAsyncGame,
          getAsyncGame as _getAsyncGame,
@@ -712,6 +712,15 @@ app.get('/admin/api/stats', (req, res) => {
 app.get('/admin/api/models', (req, res) => {
   if (!_requireAdmin(req, res)) return;
   res.json({ ok: true, files: listModelFiles(join(__dirname, 'assets', 'models')) });
+});
+
+// Live listing of campaign conversation file ids (markdown basenames) — lets the
+// Mission Editor's conversation dropdown enumerate every available conversation
+// without a hardcoded list. Mirrors /admin/api/models (the Studio repo bridge is
+// the primary source; this is the dev-server fallback).
+app.get('/admin/api/conversations', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
+  res.json({ ok: true, files: listConversationFiles(join(__dirname, 'src', 'campaign', 'conversations')) });
 });
 
 app.get('/admin/api/rooms', (req, res) => {

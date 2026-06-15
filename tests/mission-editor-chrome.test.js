@@ -20,6 +20,8 @@ import {
   hitTestEdgeButton,
   EDGE_BTN_HEX_SCALE,
   logicRegions,
+  missionConvPrefix,
+  filterMissionConversations,
 } from '../src/tools/mission-editor-ui.js';
 import { mapSizePreset, MAP_EDGES } from '../src/tools/mission-editor.js';
 import { MAP_SIZES } from '../src/map.js';
@@ -248,5 +250,45 @@ describe('mission-editor — logicRegions (Location/Area map highlights)', () =>
   test('no graph → no regions', () => {
     assert.deepEqual(logicRegions(null), []);
     assert.deepEqual(logicRegions({}), []);
+  });
+});
+
+describe('mission-editor — conversation dropdown enumeration', () => {
+  // Stub the id→file map so the test doesn't depend on the live catalog.
+  const fileFor = (id) => ({ prologue: 'Ch1M1.json', gathering_survivors: 'Ch1M2.json' })[id] ?? `${id}.json`;
+
+  test('missionConvPrefix derives the lower-cased file code (id → file)', () => {
+    assert.equal(missionConvPrefix('prologue', fileFor), 'ch1m1');
+    assert.equal(missionConvPrefix('gathering_survivors', fileFor), 'ch1m2');
+  });
+
+  test('missionConvPrefix falls back to the id for an unknown mission', () => {
+    assert.equal(missionConvPrefix('my_new_mission', fileFor), 'my_new_mission');
+  });
+
+  test('filter keeps this mission’s <prefix>-* and shared generic-*, drops others', () => {
+    const all = ['ch1m1-intro', 'ch1m1-stable', 'ch1m2-survivor', 'generic-rescue', 'generic-ambush', 'ch1m3-night'];
+    assert.deepEqual(
+      filterMissionConversations(all, 'ch1m1'),
+      ['ch1m1-intro', 'ch1m1-stable', 'generic-ambush', 'generic-rescue'],
+    );
+  });
+
+  test('a different mission sees only its own prefix + generics', () => {
+    const all = ['ch1m1-intro', 'ch1m2-survivor', 'generic-rescue'];
+    assert.deepEqual(filterMissionConversations(all, 'ch1m2'), ['ch1m2-survivor', 'generic-rescue']);
+  });
+
+  test('matching is case-insensitive and the bare prefix counts', () => {
+    assert.deepEqual(filterMissionConversations(['CH1M1-Intro', 'ch1m1'], 'ch1m1'), ['CH1M1-Intro', 'ch1m1']);
+  });
+
+  test('prefix must be a full code segment — ch1m1 does not match ch1m10/ch1m1x', () => {
+    assert.deepEqual(filterMissionConversations(['ch1m10-foo', 'ch1m1x-bar'], 'ch1m1'), []);
+  });
+
+  test('empty inputs yield an empty list (no throw)', () => {
+    assert.deepEqual(filterMissionConversations(null, 'ch1m1'), []);
+    assert.deepEqual(filterMissionConversations(['ch1m1-a'], ''), []);
   });
 });

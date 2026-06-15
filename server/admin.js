@@ -32,6 +32,22 @@ export function listModelFiles(modelsDir) {
   return out.sort();
 }
 
+/**
+ * List every campaign conversation as its file id (basename without the `.md`
+ * extension), sorted. Powers the Mission Editor's conversation dropdown so a
+ * newly-added markdown file shows up live (no rebuild / hardcoded list).
+ * Dotfiles (e.g. .DS_Store) are skipped; an unreadable directory yields none.
+ */
+export function listConversationFiles(convDir) {
+  let entries;
+  try { entries = readdirSync(convDir, { withFileTypes: true }); }
+  catch { return []; }
+  return entries
+    .filter(ent => ent.isFile() && !ent.name.startsWith('.') && ent.name.toLowerCase().endsWith('.md'))
+    .map(ent => ent.name.replace(/\.md$/i, ''))
+    .sort();
+}
+
 // ── Existing queries ────────────────────────────────────────────────────────
 
 /** All registered players with full stats, newest first. */

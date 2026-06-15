@@ -1103,6 +1103,49 @@ export function initEditor(doc = document, initOpts = {}) {
   // Mounted lazily on first activation; edits write straight back into meta.logic.
   const logicPane = doc.getElementById('e-logic-pane');
   let logicEditor = null;
+  // Live conversation list: the actual *.md files under src/campaign/conversations/,
+  // discovered at runtime (Studio repo bridge first, then the dev server's
+  // /admin/api/conversations route). Cached here and refreshed on load so a
+  // freshly-added file appears in the node's Conversation dropdown without a
+  // rebuild. Filtered per-mission by `getConversations` below.
+  let convFiles = [];
+  async function discoverConversationFiles() {
+    const api = (doc.defaultView ?? globalThis).studioAPI;
+    if (api?.listDir) {
+      try {
+        const res = await api.listDir('src/campaign/conversations');
+        if (res?.ok && Array.isArray(res.entries)) {
+          return res.entries
+            .filter((e) => !e.dir && !e.name.startsWith('.') && /\.md$/i.test(e.name))
+            .map((e) => e.name.replace(/\.md$/i, ''));
+        }
+      } catch (err) { console.warn('[mission-editor] studio conversation listing failed:', err); }
+    }
+    try {
+      const res = await fetch('/admin/api/conversations');
+      if (res.ok) { const data = await res.json(); if (Array.isArray(data?.files)) return data.files.slice(); }
+    } catch (err) { console.warn('[mission-editor] /admin/api/conversations failed:', err); }
+    return [];
+  }
+  async function refreshConversationFiles() {
+    try {
+      const files = await discoverConversationFiles();
+      convFiles = files;
+      // If the Logic pane is live, re-render so the dropdown picks up new files.
+      if (logicEditor && logicPane?.classList.contains('active')) logicEditor.renderInspector?.();
+    } catch (err) { console.warn('[mission-editor] conversation refresh failed:', err); }
+  }
+  // The conversations this mission may use: its declared conversations[] ids,
+  // PLUS on-disk files namespaced to this mission (`<code>-*`) and shared
+  // `generic-*` ones. Declared ids are always kept so legacy missions still list
+  // theirs even if a file doesn't match the prefix convention.
+  function missionConversationOptions() {
+    const meta = editor.getMeta();
+    const declared = (meta.conversations ?? []).map((c) => c.id).filter(Boolean);
+    const prefix = missionConvPrefix(meta.id);
+    const files = filterMissionConversations(convFiles, prefix);
+    return [...new Set([...declared, ...files])].sort();
+  }
   function rebuildLogic() {
     if (!logicPane) return;
     const meta = editor.getMeta();
@@ -1113,11 +1156,12 @@ export function initEditor(doc = document, initOpts = {}) {
     }
     logicEditor = new LogicGraphEditor(logicPane, graph, {
       onChange: (g) => { meta.logic = g; editor.markDirty(); scheduleAutosave(); },
-      getConversations: () => (editor.getMeta().conversations ?? []).map((c) => c.id).filter(Boolean),
+      getConversations: () => missionConversationOptions(),
     });
     logicEditor.mount();
     meta.logic = graph; // persist the (possibly migrated) graph onto the model
   }
+  refreshConversationFiles(); // kick off the initial (async) file discovery
 
   // "Add to Graph" map tool — click a placed unit/NPC → an Actor node bound to it
   // (assigning a stable `ref`); click an empty hex → a Location node. Mutates
@@ -1688,6 +1732,36 @@ export function logicRegions(graph) {
     }
   }
   return regions;
+}
+
+// ── Conversation file enumeration + prefix filter ───────────────────────────────
+// The Mission Editor's conversation dropdown lists the actual *.md files in
+// src/campaign/conversations/ (live — drop in a file and it appears), filtered to
+// the ones relevant to THIS mission. A conversation file's id is namespaced by a
+// mission-code prefix (e.g. `ch1m1-intro`): a mission only shows files whose stem
+// starts with its own code (`ch1m1-…`) PLUS shared `generic-…` ones visible
+// everywhere. Both helpers are pure → unit-testable.
+
+/** The lower-cased mission-code prefix for a mission, derived from its on-disk
+ *  file basename (e.g. id `prologue` → file `Ch1M1` → `ch1m1`). New/unknown
+ *  missions fall back to the id itself. */
+export function missionConvPrefix(missionId, fileNameFor = missionFileName) {
+  const base = String(fileNameFor(missionId) ?? missionId ?? '').replace(/\.json$/i, '');
+  return base.toLowerCase();
+}
+
+/** Filter conversation file stems to those a mission should offer: its own
+ *  `<prefix>-*` (and the bare `<prefix>`) plus shared `generic-*`. Case-insensitive;
+ *  result keeps the original stems, de-duped, sorted. */
+export function filterMissionConversations(stems, prefix) {
+  const p = String(prefix ?? '').toLowerCase();
+  const out = new Set();
+  for (const raw of stems ?? []) {
+    const s = String(raw).toLowerCase();
+    if (s.startsWith('generic-') || s === 'generic') { out.add(raw); continue; }
+    if (p && (s === p || s.startsWith(`${p}-`))) out.add(raw);
+  }
+  return [...out].sort();
 }
 
 // ── Left-docked vertical tool palette (item 7) ──────────────────────────────────

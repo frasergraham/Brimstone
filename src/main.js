@@ -726,8 +726,14 @@ let _pendingConvActions = [];
  * trigger's dedup mark is already consumed, so it won't re-fire.
  */
 async function _playMissionConversation(convId, { manageHud = true, runOnComplete = true, nodeId = null } = {}) {
-  const convDef = _activeMissionDef?.conversations?.find(c => c.id === convId);
-  if (!convDef) { console.warn(`[conversation] unknown conversation "${convId}"`); return; }
+  // A conversation node may reference a markdown file directly by its id — the
+  // editor's dropdown lists every *.md in conversations/, so an author can pick a
+  // file without declaring a conversations[] entry. Fall back to treating the id
+  // AS the file id, binding the universally-resolvable `hero` role by default;
+  // any other role still needs a declared binding (or wired participant) and the
+  // conversation skips gracefully below if a role can't be resolved.
+  const convDef = _activeMissionDef?.conversations?.find(c => c.id === convId)
+    ?? { id: convId, file: convId, bindings: { hero: 'hero' } };
   let convo;
   try {
     convo = await loadConversation(convDef.file);
