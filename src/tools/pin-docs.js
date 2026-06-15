@@ -16,7 +16,7 @@ export const PIN_DOCS = Object.freeze({
   onKillCount: { out: { out: 'Fires once the faction’s cumulative kill count reaches the threshold.', killer: 'The unit that made the kill.' } },
   onAreaEnter: { out: { onEnter: 'Fires when a unit steps onto one of the trigger hexes.', onExit: 'Fires when a unit leaves the trigger hexes.', unit: 'The unit that crossed the boundary.', hex: 'The {col,row} it entered/left.' } },
   factionEvent: { out: { onAllUnitsDead: 'Fires when the faction has zero living units.', onLeaderDead: 'Fires when the faction’s leader is killed.', onUnitCountBelow: 'Fires when living unit count drops below the threshold.' } },
-  onActor: { out: { onSpawn: 'Fires when this specific unit appears on the map.', onDeath: 'Fires when this specific unit dies/leaves.', entity: 'The live unit entity.', hex: 'The unit’s {col,row}.' } },
+  onActor: { in: { ref: 'Wire a Survivor / unit source here to bind by its id (overrides the typed ref).' }, out: { onSpawn: 'Fires when this specific unit appears on the map.', onDeath: 'Fires when this specific unit dies/leaves.', entity: 'The live unit entity.', hex: 'The unit’s {col,row}.' } },
   onConversationEnd: { out: { done: 'Fires when the named conversation is dismissed. (Usually unnecessary — wire Start Conversation’s Done instead.)' } },
 
   // Flow
@@ -34,6 +34,7 @@ export const PIN_DOCS = Object.freeze({
   getEntityProperty: { in: { entity: 'The unit to read from.' }, out: { value: 'The chosen property (hp, faction, alive…).' } },
   conditionNamed: { out: { result: 'The named condition predicate, evaluated now.' } },
   location: { out: { hex: 'A map {col,row} — wire into Spawn Units’ “at”, etc.' } },
+  survivor: { out: { id: 'The survivor’s id — wire into an On Actor node’s “ref” (and a conversation participant).', hex: 'The survivor’s {col,row}.' } },
 
   // Actions (sim)
   spawnUnits: { in: { in: RUN, at: 'Optional hex {col,row} — overrides every unit’s spawn position when wired.' }, out: { done: 'Fires after the units are spawned.', spawned: 'The list of spawned entities.', first: 'The first spawned entity.' } },
@@ -73,6 +74,7 @@ export const NODE_DOCS = Object.freeze({
   getEntityProperty: 'Read a property of a unit (hp, faction, alive…).',
   conditionNamed: 'Evaluate a named condition predicate now.',
   location: 'A map hex as data — wire into Spawn Units’ “at”, etc.',
+  survivor: 'A placed survivor as data (id + hex) — wire id into an On Actor’s ref.',
   spawnUnits: 'Spawn one or more units (type, position, overrides, level).',
   despawnUnit: 'Remove a unit / NPC from the map.',
   moveUnit: 'Walk an NPC along a path (post-conversation choreography).',

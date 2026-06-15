@@ -51,7 +51,8 @@ export const NODE_PARAM_FIELDS = {
   onKillCount: [{ key: 'faction', label: 'Faction', kind: 'select', options: FACTIONS }, { key: 'count', label: 'Kill count', kind: 'number' }],
   onAreaEnter: [{ key: 'hexes', label: 'Trigger hexes (or wire a Location)', kind: 'hexList' }],
   factionEvent: [{ key: 'faction', label: 'Faction', kind: 'select', options: FACTIONS }, { key: 'threshold', label: 'Unit-count threshold', kind: 'number' }],
-  onActor: [{ key: 'ref', label: 'Unit ref', kind: 'text' }],
+  onActor: [{ key: 'ref', label: 'Unit ref (or wire a Survivor)', kind: 'text' }],
+  survivor: [{ key: 'ref', label: 'Survivor id (ref)', kind: 'text' }, { key: 'label', label: 'Name', kind: 'text' }, { key: 'col', label: 'Col', kind: 'number' }, { key: 'row', label: 'Row', kind: 'number' }],
   onConversationEnd: [{ key: 'conversationId', label: 'Conversation', kind: 'select', options: 'conversations', empty: '' }],
   location: [{ key: 'label', label: 'Name', kind: 'text' }, { key: 'hexes', label: 'Hexes', kind: 'hexList' }],
   sequence: [{ key: 'outputs', label: 'Output pins', kind: 'number', min: 1 }],
@@ -85,6 +86,9 @@ const PARAM_OVERRIDDEN_BY = {
   // A Location wired into an Area node's `area` input defines its whole region,
   // so the authored hex list is overridden.
   onAreaEnter: { hexes: 'area' },
+  // A Survivor (or unit) source wired into an Actor node's `ref` input supplies
+  // the bound id, so the typed ref is overridden.
+  onActor: { ref: 'ref' },
 };
 
 export function paramFieldsFor(type) { return NODE_PARAM_FIELDS[type] ?? []; }

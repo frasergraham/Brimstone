@@ -113,6 +113,13 @@ const areaRegion = (node, engine) =>
     ? engine.resolveAreaHexes(node)
     : (node?.params?.hexes ?? []);
 
+// The effective `ref` an Actor node binds to (a wired source node overrides the
+// authored param). `engine` does the static wire resolution; falls back otherwise.
+const actorRef = (node, engine) =>
+  (engine && typeof engine.resolveActorRef === 'function')
+    ? engine.resolveActorRef(node)
+    : node?.params?.ref;
+
 // ════════════════════════════ EVENT nodes ═══════════════════════════════════
 
 registerNodeType({
@@ -203,11 +210,15 @@ registerNodeType({
   type: 'onActor',
   kind: NodeKind.ACTOR,
   exec: { in: false, out: ['onSpawn', 'onDeath'] },
-  data: { out: [{ name: 'entity', type: 'entity' }, { name: 'hex', type: 'hex' }] },
-  // params: { ref }
+  // `ref` (in): wire a Survivor / unit source node here to bind by its id instead
+  // of typing `params.ref` (the field greys out when wired).
+  data: {
+    in: [{ name: 'ref', type: 'string' }],
+    out: [{ name: 'entity', type: 'entity' }, { name: 'hex', type: 'hex' }],
+  },
   eventMatch: {
-    actorSpawn: (node, p) => (p.ref === node.params?.ref) ? 'onSpawn' : null,
-    actorDeath: (node, p) => (p.ref === node.params?.ref) ? 'onDeath' : null,
+    actorSpawn: (node, p, engine) => (p.ref === actorRef(node, engine)) ? 'onSpawn' : null,
+    actorDeath: (node, p, engine) => (p.ref === actorRef(node, engine)) ? 'onDeath' : null,
   },
 });
 
@@ -384,6 +395,21 @@ registerNodeType({
     }
     return { data: { spawned, first: spawned[0] }, fire: ['done'] };
   },
+});
+
+// Survivor — a placed hidden survivor as a pure data SOURCE (created when one is
+// placed on the map). Its `id` binds an On Actor node (wire id → On Actor's ref)
+// so finding THIS survivor fires the node; `hex` feeds location/spawn inputs.
+registerNodeType({
+  type: 'survivor',
+  kind: NodeKind.PURE,
+  // params: { ref, label?, col?, row? } — ref is the survivor's stable id (its
+  // pinned roster name, or an auto-assigned per-hex id for a random survivor).
+  data: { out: [{ name: 'id', type: 'string' }, { name: 'hex', type: 'hex' }] },
+  compute: (api) => ({
+    id: api.param('ref', ''),
+    hex: { col: api.param('col', 0), row: api.param('row', 0) },
+  }),
 });
 
 // Location — a map hex as a pure data source (created from the world editor's

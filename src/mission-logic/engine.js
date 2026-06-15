@@ -109,13 +109,30 @@ export class MissionLogicEngine {
     return wired.length ? wired : own;
   }
 
+  /**
+   * The effective `ref` an Actor node binds to: a source node (e.g. a Survivor
+   * node) wired into its `ref` input overrides the authored `params.ref`. Source
+   * nodes are PURE + param-driven, so this is a static graph resolution — used by
+   * both actorRefs() and the node's eventMatch.
+   */
+  resolveActorRef(node) {
+    const own = node?.params?.ref;
+    const edge = this._dataIn.get(endpointKey(node.id, 'ref'));
+    if (!edge) return own;
+    const src = this._byId.get(edge.from.node);
+    const wired = src?.params?.ref ?? src?.params?.id;
+    return (wired != null && wired !== '') ? wired : own;
+  }
+
   /** The set of unit `ref`s referenced by Actor nodes — lets the game dispatch
    *  per-unit spawn/death events only for units the graph actually watches. */
   actorRefs() {
     if (this._actorRefs) return this._actorRefs;
     const refs = new Set();
     for (const n of this.graph.nodes) {
-      if (n.type === 'onActor' && n.params?.ref != null) refs.add(n.params.ref);
+      if (n.type !== 'onActor') continue;
+      const ref = this.resolveActorRef(n);
+      if (ref != null && ref !== '') refs.add(ref);
     }
     this._actorRefs = refs;
     return refs;

@@ -245,6 +245,26 @@ describe('mission-logic / location node (region as data)', () => {
     eng.dispatch('areaEnter', { unit: { faction: 'hero' }, hex: { col: 2, row: 2 } });
     assert.equal(emitsOfKind(ctx, 'storyBeat').length, 1);
   });
+
+  test('a Survivor source wired into an Actor node binds it by id', () => {
+    const graph = g(
+      [
+        { id: 'surv', type: 'survivor', params: { ref: 'Samuel', label: 'Samuel', col: 3, row: 4 } },
+        { id: 'act', type: 'onActor', params: { ref: '' } }, // ref comes from the wire
+        { id: 'beat', type: 'storyBeat', params: { title: 'Found', text: 'Samuel is safe.' } },
+      ],
+      [data('surv', 'id', 'act', 'ref'), exec('act', 'onSpawn', 'beat')],
+    );
+    const ctx = makeTestContext();
+    const eng = new MissionLogicEngine(graph, ctx);
+    // The watched ref is taken from the wired Survivor node, not the (empty) param.
+    assert.ok(eng.actorRefs().has('Samuel'));
+    eng.dispatch('actorSpawn', { ref: 'Samuel', entity: { id: 'e1' } });
+    assert.equal(emitsOfKind(ctx, 'storyBeat').length, 1);
+    // A different unit appearing doesn't fire it.
+    eng.dispatch('actorSpawn', { ref: 'Someone Else', entity: { id: 'e2' } });
+    assert.equal(emitsOfKind(ctx, 'storyBeat').length, 1);
+  });
 });
 
 describe('mission-logic / flow nodes', () => {
