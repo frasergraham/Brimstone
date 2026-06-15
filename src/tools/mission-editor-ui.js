@@ -2183,6 +2183,28 @@ function buildForms(doc, panes, editor, rerenderCanvas, rebuild, setStatus) {
     }, setStatus));
   });
   panes.units.append(surv);
+
+  // ── Hidden survivors (random placement) ──────────────────────────────────
+  // survivorCounts lives on mapDef; _placeHiddenSurvivors scatters this many
+  // discoverable survivors at game start ON TOP of the ones placed with the
+  // Hidden-Survivor map tool. Both 0 → ONLY the explicitly placed survivors.
+  const mapDef = editor.getMapDef();
+  const setSurvivorCount = (patch) => {
+    const cur = mapDef.survivorCounts ?? { buildings: 0, terrain: 0 };
+    mapDef.survivorCounts = {
+      buildings: Math.max(0, cur.buildings ?? 0),
+      terrain: Math.max(0, cur.terrain ?? 0),
+      ...patch,
+    };
+  };
+  const sc = mapDef.survivorCounts ?? { buildings: 0, terrain: 0 };
+  const hidden = section(doc, 'Hidden Survivors (random)');
+  hidden.append(
+    numRow(doc, 'In buildings', sc.buildings ?? 0, v => setSurvivorCount({ buildings: Math.max(0, Math.round(v)) })),
+    numRow(doc, 'On terrain', sc.terrain ?? 0, v => setSurvivorCount({ terrain: Math.max(0, Math.round(v)) })),
+    hint(doc, 'Random discoverable survivors scattered ON TOP of the ones you place with the Hidden-Survivor map tool. Set both to 0 to use ONLY your placed survivors.'),
+  );
+  panes.units.append(hidden);
 }
 
 // ── Size controls (item 3) ────────────────────────────────────────────────────
