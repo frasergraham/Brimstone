@@ -310,6 +310,8 @@ export function initEditor(doc = document, initOpts = {}) {
     const lines = [];
     const unit = editor.enemyUnitAt(hex);
     if (unit) lines.push(`Enemy: ${friendly(unit.type)}${(unit.level ?? 1) > 1 ? ` L${unit.level}` : ''}`);
+    const npc = (meta.npcs ?? []).find(at);
+    if (npc) lines.push(`NPC: ${npc.id}${npc.survivorName ? ` (${npc.survivorName})` : ''}`);
     if (at(mapDef.heroStart)) lines.push('Hero start');
     if (at(mapDef.witchStart)) lines.push('Witch start');
     if ((meta.survivorStartPositions ?? []).some(at)) lines.push('Survivor start');
@@ -325,6 +327,8 @@ export function initEditor(doc = document, initOpts = {}) {
       else lines.push(`Area trigger${reg.label ? ` ("${reg.label}")` : ''}`);
     }
     if (tile?.exploreOverride) lines.push(`Loot Override (${exploreOverrideLabel(tile.exploreOverride)})`);
+    if ((mapDef.roadNodes ?? []).includes(hexKey(hex.col, hex.row))) lines.push('Road node');
+    if (tile?.buildingFootprintOf) lines.push(`Building footprint (of ${tile.buildingFootprintOf})`);
     lines.push(terrainLabel(tile));
     return lines;
   };
