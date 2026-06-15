@@ -52,7 +52,7 @@ export const NODE_PARAM_FIELDS = {
   onAreaEnter: [{ key: 'hexes', label: 'Trigger hexes (or wire a Location)', kind: 'hexList' }],
   factionEvent: [{ key: 'faction', label: 'Faction', kind: 'select', options: FACTIONS }, { key: 'threshold', label: 'Unit-count threshold', kind: 'number' }],
   onActor: [{ key: 'ref', label: 'Unit ref', kind: 'text' }],
-  onConversationEnd: [{ key: 'conversationId', label: 'Conversation id', kind: 'text' }],
+  onConversationEnd: [{ key: 'conversationId', label: 'Conversation', kind: 'select', options: 'conversations', empty: '' }],
   location: [{ key: 'label', label: 'Name', kind: 'text' }, { key: 'hexes', label: 'Hexes', kind: 'hexList' }],
   sequence: [{ key: 'outputs', label: 'Output pins', kind: 'number', min: 1 }],
   branch: [],
@@ -69,7 +69,7 @@ export const NODE_PARAM_FIELDS = {
   despawnUnit: [{ key: 'npc', label: 'NPC id (choreography)', kind: 'text' }, { key: 'id', label: 'Entity id (direct)', kind: 'text' }],
   moveUnit: [{ key: 'npc', label: 'NPC id', kind: 'text' }, { key: 'path', label: 'Path (hexes)', kind: 'hexList' }],
   setFlag: [{ key: 'key', label: 'Flag key', kind: 'text' }, { key: 'value', label: 'Value', kind: 'text' }],
-  startConversation: [{ key: 'conversationId', label: 'Conversation id', kind: 'text' }, { key: 'roleInputs', label: 'Wired roles', kind: 'stringList' }],
+  startConversation: [{ key: 'conversationId', label: 'Conversation', kind: 'select', options: 'conversations', empty: '' }, { key: 'roleInputs', label: 'Participant roles (wire entities in)', kind: 'stringList' }],
   storyBeat: [{ key: 'title', label: 'Title', kind: 'text' }, { key: 'text', label: 'Text', kind: 'prose' }],
   winMission: [{ key: 'winner', label: 'Winner', kind: 'select', options: FACTIONS }, { key: 'reason', label: 'Reason', kind: 'prose' }],
   loseMission: [{ key: 'winner', label: 'Winner (beats player)', kind: 'select', options: FACTIONS }, { key: 'reason', label: 'Reason', kind: 'prose' }],
@@ -119,7 +119,7 @@ function ensureStyle(doc) {
  * @param {object} opts - { onChange(), doc, conditions:string[] }
  * @returns {HTMLElement}
  */
-export function buildParamForm(node, { onChange = () => {}, doc = document, conditions = [], connectedInputs = new Set() } = {}) {
+export function buildParamForm(node, { onChange = () => {}, doc = document, conditions = [], conversations = [], connectedInputs = new Set() } = {}) {
   ensureStyle(doc);
   node.params = node.params || {};
   // Lazily migrate a legacy single-hex Location ({col,row}) to the list shape so
@@ -134,7 +134,7 @@ export function buildParamForm(node, { onChange = () => {}, doc = document, cond
   const fields = paramFieldsFor(node.type);
   if (!fields.length) { form.append(elc(doc, 'div', 'pf-empty', 'This node has no parameters.')); return form; }
   const overrides = PARAM_OVERRIDDEN_BY[node.type] ?? {};
-  const ctx = { doc, onChange, conditions, connectedInputs };
+  const ctx = { doc, onChange, conditions, conversations, connectedInputs };
   for (const f of fields) {
     const overridingPin = overrides[f.key];
     if (overridingPin && connectedInputs.has(overridingPin)) {
@@ -200,7 +200,17 @@ function numberControl(params, field, ctx) {
 
 function selectControl(params, field, ctx) {
   const el = ctx.doc.createElement('select');
-  const opts = field.options === 'conditions' ? ctx.conditions.map((c) => ({ value: c, label: c })) : field.options;
+  let opts;
+  if (field.options === 'conditions') {
+    opts = ctx.conditions.map((c) => ({ value: c, label: c }));
+  } else if (field.options === 'conversations') {
+    // Enumerate the mission's defined conversations; keep the current value even
+    // if it's not (yet) in the list so an authored id is never silently dropped.
+    const cur = params[field.key];
+    opts = [...new Set([...(ctx.conversations ?? []), ...(cur ? [cur] : [])])].map((c) => ({ value: c, label: c }));
+  } else {
+    opts = field.options;
+  }
   const list = field.empty != null && !opts.some((o) => o.value === '') ? [{ value: '', label: '—' }, ...opts] : opts;
   for (const o of list) { const opt = ctx.doc.createElement('option'); opt.value = o.value; opt.textContent = o.label; el.append(opt); }
   el.value = params[field.key] ?? (field.empty ?? (list[0]?.value ?? ''));

@@ -1108,6 +1108,7 @@ export function initEditor(doc = document, initOpts = {}) {
     }
     logicEditor = new LogicGraphEditor(logicPane, graph, {
       onChange: (g) => { meta.logic = g; editor.markDirty(); scheduleAutosave(); },
+      getConversations: () => (editor.getMeta().conversations ?? []).map((c) => c.id).filter(Boolean),
     });
     logicEditor.mount();
     meta.logic = graph; // persist the (possibly migrated) graph onto the model

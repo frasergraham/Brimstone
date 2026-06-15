@@ -74,10 +74,12 @@ const CSS = `
 `;
 
 export class LogicGraphEditor {
-  constructor(container, graph, { onChange } = {}) {
+  constructor(container, graph, { onChange, getConversations } = {}) {
     this.container = container;
     this.graph = graph;
     this.onChange = onChange ?? (() => {});
+    // Returns the mission's conversation ids for the Conversation dropdown.
+    this.getConversations = getConversations ?? (() => []);
     this.selected = null;
     this._linking = null; // { from:{node,pin}, kind } while dragging a new edge
   }
@@ -346,6 +348,7 @@ export class LogicGraphEditor {
     const form = buildParamForm(node, {
       doc: document,
       conditions: Object.keys(CONDITIONS),
+      conversations: this.getConversations(),
       connectedInputs,
       onChange: () => { this.setStatus('updated', true); this.render(); this._emit(); },
     });
