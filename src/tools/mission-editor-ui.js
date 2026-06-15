@@ -1459,10 +1459,12 @@ function buildSidebar(doc, root) {
   // Objectives tab retired — win/lose are authored in the Logic graph now
   // (winMission / loseMission / objectiveOutcome nodes), so the legacy
   // declarative objective editor is gone.
+  // Units tab retired — enemy units are placed with the map tool and edited by
+  // selecting them on the map (their props show in the context panel); survivor
+  // settings moved to the Mission tab.
   const SIDEBAR_TABS = [
     { id: 'map', label: 'Map', tip: 'Structures, paths, starts, nodes + sizing (tools dock on the left)' },
-    { id: 'mission', label: 'Mission', tip: 'Mission properties, narrative, phase cycle, resources' },
-    { id: 'units', label: 'Units', tip: 'Placed enemy units + survivor start positions' },
+    { id: 'mission', label: 'Mission', tip: 'Properties, narrative, phase cycle, resources, survivors' },
   ];
 
   // Tab buttons.
@@ -1510,12 +1512,11 @@ function buildSidebar(doc, root) {
   layersPane.dataset.spane = 'layers';
 
   return {
-    // `map` (paint/size palette) + Mission/Units authoring panes; `layers` detached.
+    // `map` (paint/size palette) + the Mission authoring pane; `layers` detached.
     panes: {
       map: paneEls.map,
       layers: layersPane,
       mission: paneEls.mission,
-      units: paneEls.units,
     },
   };
 }
@@ -2097,7 +2098,6 @@ function layerToggleRow(doc, label, tip, value, onChange) {
 
 function buildForms(doc, panes, editor, rerenderCanvas, rebuild, setStatus) {
   panes.mission.innerHTML = '';
-  panes.units.innerHTML = '';
   const meta = editor.getMeta();
 
   // ── Mission gameplay properties ──────────────────────────────────────────
@@ -2152,20 +2152,10 @@ function buildForms(doc, panes, editor, rerenderCanvas, rebuild, setStatus) {
   // Logic graph now (winMission / loseMission / objectiveOutcome). Any existing
   // meta.objectives still round-trips untouched via assembleMission's `...meta`.
 
-  // ── Enemy units (placed on map; list-view for delete / override edit) ─────
-  const enemies = section(doc, 'Enemy Units');
-  const units = editor.getEnemyUnits();
-  if (units.length === 0) enemies.append(hint(doc, 'Place via the Enemy Unit map tool.'));
-  units.forEach((u, i) => {
-    enemies.append(placedCard(doc, `${u.type} @ ${u.col},${u.row}`,
-      u.overrides ?? {}, ov => { u.overrides = ov; }, () => {
-        units.splice(i, 1);
-        editor.setEnemyUnits(units);
-        rebuild();
-        rerenderCanvas();
-      }, setStatus));
-  });
-  panes.units.append(enemies);
+  // Enemy units are no longer a sidebar list — place them with the Enemy Unit
+  // map tool and edit/delete them by selecting them on the map (Edit mode → the
+  // context panel's "Selected" properties). Survivor settings live on the Mission
+  // tab below (they're mission setup, not per-map objects).
 
   // ── Survivor start positions (list-view) ─────────────────────────────────
   const surv = section(doc, 'Survivor Starts');
@@ -2177,7 +2167,7 @@ function buildForms(doc, panes, editor, rerenderCanvas, rebuild, setStatus) {
       rebuild();
     }, setStatus));
   });
-  panes.units.append(surv);
+  panes.mission.append(surv);
 
   // ── Hidden survivors (random placement) ──────────────────────────────────
   // survivorCounts lives on mapDef; _placeHiddenSurvivors scatters this many
@@ -2199,7 +2189,7 @@ function buildForms(doc, panes, editor, rerenderCanvas, rebuild, setStatus) {
     numRow(doc, 'On terrain', sc.terrain ?? 0, v => setSurvivorCount({ terrain: Math.max(0, Math.round(v)) })),
     hint(doc, 'Random discoverable survivors scattered ON TOP of the ones you place with the Hidden-Survivor map tool. Set both to 0 to use ONLY your placed survivors.'),
   );
-  panes.units.append(hidden);
+  panes.mission.append(hidden);
 }
 
 // ── Size controls (item 3) ────────────────────────────────────────────────────
