@@ -139,10 +139,11 @@ export class UIController {
     this.onPlanSubmit   = null;    // callback(plan) — set by main.js
 
     // ── AI-assist (debug) ────────────────────────────────────────────────────
-    // When enabled via the `aiAssist()` console command, an "🤖 AI Plan" button
-    // appears during planning. Clicking it asks main.js (onAIAssistRequest) for
-    // an AI-generated plan for the current faction and loads it into the plan
-    // panel so the player can review the AI's choices and then Submit normally.
+    // When enabled via the in-game `/aiassist` console command (backtick), an
+    // "🤖 AI Plan" button appears during planning. Clicking it asks main.js
+    // (onAIAssistRequest) for an AI-generated plan for the current faction and
+    // loads it into the plan panel so the player can review the AI's choices and
+    // then Submit normally.
     this.aiAssistEnabled  = false;
     this.onAIAssistRequest = null; // callback(faction) → flat PlanAction[]
     // Autorun: when true, each planning phase is auto-filled with an AI plan and

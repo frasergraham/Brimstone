@@ -163,36 +163,36 @@ function _generateAssistPlan(faction) {
   return plan;
 }
 
-if (typeof window !== 'undefined') {
-  /**
-   * Console command for the "watch an AI play" debug mode. Three modes:
-   *   aiAssist()        — manual: adds an "🤖 AI Plan" button to the planning
-   *                       panel; click it to fill your plan, then Submit yourself.
-   *   aiAssist('auto')  — autorun: the AI fills AND submits every round (and the
-   *                       wrap-up auto-advances) so the whole mission plays itself.
-   *   aiAssist(false)   — off.
-   * Optional second arg sets the autorun pacing in ms (default 1400).
-   */
-  window.aiAssist = function aiAssist(mode = true, delayMs = null) {
-    _aiAutorun       = (mode === 'auto' || mode === 'autorun');
-    _aiAssistEnabled = _aiAutorun || !!mode;
-    if (ui) {
-      ui.aiAssistEnabled = _aiAssistEnabled;
-      ui.aiAutorun       = _aiAutorun;
-      if (delayMs != null && delayMs > 0) ui.aiAutorunDelay = delayMs;
-      ui._syncAIAssistButton?.();
-      // If enabled mid-planning, kick autorun off for the current phase now.
-      if (_aiAutorun) ui._maybeAutorun?.();
-    }
-    console.log(
-      _aiAutorun
-        ? `[ai-assist] AUTORUN — the AI will plan and submit every round automatically (pacing ${ui?.aiAutorunDelay ?? 1400}ms). Load a mission and watch; call aiAssist(false) to stop.`
-        : _aiAssistEnabled
-          ? '[ai-assist] ENABLED — during planning, click "🤖 AI Plan" to have the AI fill your plan, then Submit to watch it play.'
-          : '[ai-assist] disabled.');
-    return { enabled: _aiAssistEnabled, autorun: _aiAutorun };
-  };
+/**
+ * Toggle the "watch an AI play" debug mode. Driven by the in-game command
+ * console (`/aiassist`, see COMMANDS in keybindings.js) — wired onto `ui` in
+ * _setupLocalUI so the console can reach it without importing main.js. Modes:
+ *   mode = true | 'manual'  — adds an "🤖 AI Plan" button to the planning panel;
+ *                             click it to fill your plan, then Submit yourself.
+ *   mode = 'auto'           — autorun: the AI fills AND submits every round (and
+ *                             the wrap-up auto-advances) so the mission plays
+ *                             itself.
+ *   mode = false            — off.
+ * Persists in module flags so it survives a mission restart (re-applied by
+ * _setupLocalUI). Returns { enabled, autorun }.
+ */
+function applyAIAssistMode(mode = true, delayMs = null) {
+  _aiAutorun       = (mode === 'auto' || mode === 'autorun');
+  _aiAssistEnabled = _aiAutorun || (!!mode && mode !== 'off' && mode !== 'false');
+  if (ui) {
+    ui.aiAssistEnabled = _aiAssistEnabled;
+    ui.aiAutorun       = _aiAutorun;
+    if (delayMs != null && delayMs > 0) ui.aiAutorunDelay = delayMs;
+    ui._syncAIAssistButton?.();
+    // If autorun was switched on mid-planning, kick it off for this phase now.
+    if (_aiAutorun) ui._maybeAutorun?.();
+  }
+  return { enabled: _aiAssistEnabled, autorun: _aiAutorun };
 }
+
+// Also expose on window as a convenience escape hatch for power users; the
+// in-game `/aiassist` console command is the documented interface.
+if (typeof window !== 'undefined') window.aiAssist = applyAIAssistMode;
 
 // ── Round-history for full-game replay ───────────────────────────────────────
 // Accumulated during a session; reset each new/resumed game.
@@ -361,6 +361,9 @@ function _setupLocalUI(canvas, localWitchAI, localHeroAI, autoplay) {
   ui.aiAssistEnabled  = _aiAssistEnabled;
   ui.aiAutorun        = _aiAutorun;
   ui.onAIAssistRequest = (faction) => _generateAssistPlan(faction);
+  // Lets the in-game `/aiassist` console command toggle the mode (the console
+  // reaches main.js only through `ui`, avoiding a circular import).
+  ui.setAIAssistMode  = (mode, delayMs) => applyAIAssistMode(mode, delayMs);
 
   // Show resign option for single-player games (one side is AI)
   const isOneSided = !!(localWitchAI) !== !!(localHeroAI);

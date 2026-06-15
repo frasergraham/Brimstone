@@ -69,6 +69,22 @@ export const COMMANDS = Object.freeze({
     describe: 'Show/hide the on-canvas FPS counter',
     run: (ctx) => ctx.renderer?._toggleFpsCounter?.(),
   },
+  aiassist: {
+    describe: 'Watch an AI play: /aiassist (manual button) · /aiassist auto · /aiassist off',
+    run: (ctx) => {
+      if (!ctx.ui?.setAIAssistMode) {
+        return 'AI-assist unavailable — start a mission first.';
+      }
+      const arg = (ctx.args?.[0] || '').toLowerCase();
+      const mode = (arg === 'off' || arg === 'false' || arg === '0' || arg === 'stop') ? false
+                 : (arg === 'auto' || arg === 'autorun') ? 'auto'
+                 : true;
+      const { enabled, autorun } = ctx.ui.setAIAssistMode(mode);
+      if (autorun) return '🤖 Autorun ON — the AI plans & submits every round. /aiassist off to stop.';
+      if (enabled) return '🤖 AI-assist ON — each round, click the "🤖 AI Plan" button then Submit. (/aiassist auto to autorun.)';
+      return '🤖 AI-assist off.';
+    },
+  },
 });
 
 /**
@@ -473,7 +489,7 @@ class KeybindingManager {
     const raw = this._consoleInput.value;
     if (!raw.trim()) return;
     this._echo(`> ${raw}`, 'cmd');
-    const { ok, message } = executeConsoleCommand(raw, { renderer: this.renderer });
+    const { ok, message } = executeConsoleCommand(raw, { renderer: this.renderer, ui: this.ui });
     if (message) this._echo(message, ok ? 'ok' : 'err');
     this._consoleInput.value = '';
   }
