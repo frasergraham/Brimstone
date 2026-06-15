@@ -26,7 +26,6 @@ import {
   paintBase,
   paintStructure,
   paintPath,
-  setResource,
   toggleHiddenSurvivor,
   setHiddenSurvivor,
   hiddenSurvivorPlacements,
@@ -170,14 +169,6 @@ describe('mission-editor — layered tile painting', () => {
     assert.equal(def.path, 'ROAD');
     assert.equal(def.structure, null);
     assert.equal(def.building, null);
-  });
-
-  test('setResource sets and clears the resource field', () => {
-    const map = createDefaultMapDef();
-    setResource(map, { col: 0, row: 0 }, 'SILVER');
-    assert.equal(map.tiles.find(t => t.col === 0 && t.row === 0).resource, 'SILVER');
-    setResource(map, { col: 0, row: 0 }, null);
-    assert.equal(map.tiles.find(t => t.col === 0 && t.row === 0).resource, null);
   });
 
   test('toggleHiddenSurvivor flips the flag', () => {
@@ -1185,7 +1176,6 @@ describe('mission-editor — valuePanelKind (item 7)', () => {
   test('paint tools expose their own value kind', () => {
     assert.equal(valuePanelKind(EditorTool.PAINT_BASE), ToolValueKind.BASE);
     assert.equal(valuePanelKind(EditorTool.PAINT_STRUCTURE), ToolValueKind.STRUCTURE);
-    assert.equal(valuePanelKind(EditorTool.SET_RESOURCE), ToolValueKind.RESOURCE);
     assert.equal(valuePanelKind(EditorTool.ENEMY_UNIT), ToolValueKind.ENEMY);
     assert.equal(valuePanelKind(EditorTool.HIDDEN_SURVIVOR), ToolValueKind.SURVIVOR);
   });

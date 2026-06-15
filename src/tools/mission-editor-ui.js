@@ -117,7 +117,6 @@ const TOOL_PALETTE = [
   { id: EditorTool.PAINT_STRUCTURE, icon: '🏠', label: 'Paint Structure', tip: 'Place or clear a building on clicked tiles' },
   { id: EditorTool.PAINT_ROAD,      icon: '🛤', label: 'Road',           tip: 'Paint a road over the base + wire it to adjacent roads' },
   { id: EditorTool.PAINT_RIVER,     icon: '🌊', label: 'River',          tip: 'Paint a river — must stay a branching tree (no loops or merges)' },
-  { id: EditorTool.SET_RESOURCE,    icon: '💎', label: 'Set Resource',    tip: 'Set or clear a harvestable resource on clicked tiles' },
   { id: EditorTool.HIDDEN_SURVIVOR, icon: '🙋', label: 'Hidden Survivor', tip: 'Place a hidden survivor to be discovered on a tile — pick a specific roster character or "Any"' },
   { id: EditorTool.EXPLORE_OVERRIDE, icon: '🔍', label: 'Explore Override', tip: 'Pin a FIXED search result on a tile — exploring it yields exactly that loot instead of a random roll' },
   { id: EditorTool.ENEMY_UNIT,      icon: '🧟', label: 'Enemy Unit',      tip: 'Place / remove a pre-placed enemy unit on a tile' },
@@ -447,7 +446,6 @@ export function initEditor(doc = document, initOpts = {}) {
     drawAreaTriggerMarkers(ctx);
     drawLogicLocations(ctx);   // item 4 — Location / Area nodes from the logic graph
     drawHiddenSurvivorMarkers(ctx);
-    drawResourceMarkers(ctx);        // mark tiles carrying a harvestable resource
     drawExploreOverrideMarkers(ctx);
     drawRoadNodeMarkers(ctx);
     drawBuildingGhost(ctx);
@@ -635,41 +633,6 @@ export function initEditor(doc = document, initOpts = {}) {
       ctx.font = `bold ${Math.max(9, br * 0.85)}px sans-serif`;
       ctx.fillStyle = '#fff7d0';
       ctx.fillText(initial, x + br * 0.7, y - r * 0.18 + br * 0.7);
-    }
-    ctx.restore();
-  }
-
-  // ── Resource markers ───────────────────────────────────────────────────────
-  // Mark every hex carrying a harvestable resource (Set Resource tool) so the
-  // author can see where the map's extra resources are: a faint green hex tint +
-  // a green badge with the resource glyph in the lower-RIGHT (explore-override
-  // badges sit lower-LEFT, so a tile can show both).
-  const _RES_ICON = { wood: '🪵', metal: '⚙', herbs: '🌿', food: '🍞', silver: '⚔', scripture: '📜' };
-  function drawResourceMarkers(ctx) {
-    const built = builtMap();
-    if (!built) return;
-    const r = renderer.hexSize * renderer.zoomLevel;
-    ctx.save();
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    for (const t of built.tiles.values()) {
-      if (!t.resource) continue;
-      const { x, y } = renderer.hexToCanvasPos(t.col, t.row);
-      _hexPath(ctx, x, y, r);
-      ctx.fillStyle = 'rgba(60,170,95,0.16)';
-      ctx.fill();
-      const br = r * 0.36;
-      const bx = x + r * 0.42, by = y + r * 0.36;
-      ctx.beginPath();
-      ctx.arc(bx, by, br, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(30,110,60,0.88)';
-      ctx.fill();
-      ctx.lineWidth = 1.5;
-      ctx.strokeStyle = 'rgba(160,235,180,0.95)';
-      ctx.stroke();
-      ctx.font = `${Math.max(9, br * 1.05)}px serif`;
-      ctx.fillStyle = '#eafff0';
-      ctx.fillText(_RES_ICON[t.resource] || '📦', bx, by);
     }
     ctx.restore();
   }
@@ -2002,10 +1965,6 @@ function buildValuePanel(doc, host, kind, editor, rerenderPanel, hooks = {}) {
       host.append(hint(doc, 'Placing a building auto-claims an adjacent footprint hex. Hover to preview; press R (or the button) to rotate it.'));
       break;
     }
-    case ToolValueKind.RESOURCE:
-      host.append(labeledSelect(doc, 'Resource', _entries(ResourceType),
-        editor.getPaintValue('resource'), (v) => editor.setPaintValue('resource', v)));
-      break;
     case ToolValueKind.ENEMY:
       host.append(labeledSelect(doc, 'Enemy', ENEMY_UNIT_TYPES.map(t => ({ key: t, value: t })),
         editor.getPaintValue('enemyType'), (v) => editor.setPaintValue('enemyType', v)));

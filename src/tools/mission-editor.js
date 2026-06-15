@@ -48,7 +48,6 @@ export const EditorTool = Object.freeze({
   // is gone — each tool paints exactly its kind.
   PAINT_ROAD: 'paint-road',           // path overlay: ROAD (wires roadDirs)
   PAINT_RIVER: 'paint-river',         // path overlay: RIVER (tree topology only)
-  SET_RESOURCE: 'set-resource',
   HIDDEN_SURVIVOR: 'hidden-survivor',
   // Exploration override (M4): pin a FIXED loot result on a tile so searching it
   // yields that result instead of the random loot roll. Authoring only — the
@@ -85,7 +84,6 @@ export const PATH_TOOL_OPTIONS = Object.freeze(['ROAD', 'RIVER']);
 export const ToolValueKind = Object.freeze({
   BASE: 'base',         // base-material swatches (grass/forest/dirt)
   STRUCTURE: 'structure', // building swatches + None/clear
-  RESOURCE: 'resource', // resource picker
   ENEMY: 'enemy',       // enemy unit-type picker
   SURVIVOR: 'survivor', // hidden-survivor roster picker (Any / a specific char)
   EXPLORE_OVERRIDE: 'explore-override', // fixed loot-result picker (M4)
@@ -210,7 +208,6 @@ const _TOOL_VALUE_KIND = Object.freeze({
   [EditorTool.PAINT_STRUCTURE]: ToolValueKind.STRUCTURE,
   [EditorTool.PAINT_ROAD]: ToolValueKind.NONE,
   [EditorTool.PAINT_RIVER]: ToolValueKind.NONE,
-  [EditorTool.SET_RESOURCE]: ToolValueKind.RESOURCE,
   [EditorTool.ENEMY_UNIT]: ToolValueKind.ENEMY,
   [EditorTool.HIDDEN_SURVIVOR]: ToolValueKind.SURVIVOR,
   [EditorTool.EXPLORE_OVERRIDE]: ToolValueKind.EXPLORE_OVERRIDE,
@@ -689,13 +686,6 @@ export function deleteTile(mapDef, { col, row }) {
   const def = _getOrCreateTileDef(mapDef, col, row);
   Object.assign(def, _blankTileDef(col, row));
   _unwireRoadConnections(mapDef, col, row);
-  return mapDef;
-}
-
-/** Set (or clear) a resource on a tile. */
-export function setResource(mapDef, { col, row }, resourceKey) {
-  const def = _getOrCreateTileDef(mapDef, col, row);
-  def.resource = resourceKey || null;
   return mapDef;
 }
 
@@ -2015,7 +2005,6 @@ const _TOOL_DISPATCH = {
   // returns { ok:true, warning:'' } for the applyAt contract.
   [EditorTool.PAINT_ROAD]: (m, hex) => paintRoad(m.mapDef, hex),
   [EditorTool.PAINT_RIVER]: (m, hex) => paintRiver(m.mapDef, hex),
-  [EditorTool.SET_RESOURCE]: (m, hex, pv) => setResource(m.mapDef, hex, pv.resource),
   [EditorTool.HIDDEN_SURVIVOR]: (m, hex, pv) => setHiddenSurvivor(m.mapDef, hex, pv.survivor),
   [EditorTool.EXPLORE_OVERRIDE]: (m, hex, pv) => setExploreOverride(m.mapDef, hex, pv.exploreOverride),
   [EditorTool.ENEMY_UNIT]: (m, hex, pv) => placeEnemyUnit(m.enemyUnits, hex, pv.enemyType),
@@ -2052,7 +2041,6 @@ export function createMissionEditor({ render } = {}) {
     // Default building so a fresh PAINT_STRUCTURE click places one; the UI's
     // "None" option clears (null ⇒ paintStructure removes the building).
     structure: _enumKey(BuildingType, BuildingType.HOUSE),
-    resource: _enumKey(ResourceType, ResourceType.HERBS),
     enemyType: ENEMY_UNIT_TYPES[0],
     // Hidden-survivor picker selection (roster `name`; null ⇒ "Any"/random).
     survivor: HIDDEN_SURVIVOR_ANY,

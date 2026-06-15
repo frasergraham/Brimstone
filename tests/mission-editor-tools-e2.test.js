@@ -27,7 +27,6 @@ import {
   paintStructure,
   paintPath,
   toggleHiddenSurvivor,
-  setResource,
   deleteTile,
   togglePowerNode,
   renamePowerNode,
@@ -50,7 +49,9 @@ describe('mission-editor — DELETE tool (item 5)', () => {
     const map = createBlankMapDef();
     paintStructure(map, { col: 2, row: 2 }, 'INN');   // base→DIRT + building
     paintPath(map, { col: 2, row: 2 }, 'ROAD');
-    setResource(map, { col: 2, row: 2 }, 'SILVER');
+    // The Set Resource tool was retired (no gameplay effect); set the legacy
+    // resource FIELD directly so DELETE still proves it clears it.
+    map.tiles.find(t => t.col === 2 && t.row === 2).resource = 'SILVER';
     toggleHiddenSurvivor(map, { col: 2, row: 2 });
     deleteTile(map, { col: 2, row: 2 });
     const def = map.tiles.find(t => t.col === 2 && t.row === 2);
