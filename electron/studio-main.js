@@ -14,7 +14,7 @@ import { app, BrowserWindow, ipcMain, protocol, net, dialog, Menu, shell } from 
 import Store from 'electron-store';
 import { join, extname, resolve, relative, isAbsolute, sep } from 'path';
 import { pathToFileURL } from 'url';
-import { existsSync, promises as fs } from 'fs';
+import { existsSync, promises as fs, watch as fsWatch } from 'fs';
 
 // ── Custom scheme (privileged so ES modules load without file:// CORS pain) ──
 protocol.registerSchemesAsPrivileged([{
@@ -228,6 +228,36 @@ function setupIPC() {
   });
 }
 
+// ── Dev live-reload ──────────────────────────────────────────────────────────
+// Studio serves the tool files off the live repo checkout, so the window always
+// loads the latest code — a plain reload is all it takes to see a JS/CSS/HTML
+// edit. In DEV ONLY (unpackaged `npm run studio:dev`), watch the tool source and
+// auto-reload on save so iteration is hands-free. Disabled in the packaged app
+// (app.isPackaged), and ignores mission-JSON writes + node_modules/.git churn so
+// saving a mission from the editor doesn't reload out from under you.
+function setupDevWatch() {
+  if (app.isPackaged || !repoRoot) return;
+  const watchers = [];
+  let timer = null;
+  const reload = () => { clearTimeout(timer); timer = setTimeout(() => mainWindow?.webContents.reloadIgnoringCache(), 150); };
+  const isCode = (f) => /\.(m?js|css|html)$/i.test(f || '');
+  const skip = (full) => /[\\/](node_modules|\.git|missions)[\\/]/.test(full);
+  const watch = (dir, recursive) => {
+    if (!existsSync(dir)) return;
+    try {
+      watchers.push(fsWatch(dir, { recursive }, (_evt, filename) => {
+        if (filename && (!isCode(filename) || skip(join(dir, filename)))) return;
+        console.log('[studio] dev reload ←', filename ?? dir);
+        reload();
+      }));
+    } catch (err) { console.warn('[studio] watch failed:', dir, err.message); }
+  };
+  watch(join(repoRoot, 'src'), true);   // tools + mission-logic + campaign code
+  watch(repoRoot, false);               // root admin-tools.html / styles.css / index.html
+  app.on('before-quit', () => { for (const w of watchers) { try { w.close(); } catch { /* noop */ } } });
+  console.log('[studio] dev live-reload watching src/ + root (edit a tool file → window reloads)');
+}
+
 // ── Lifecycle ────────────────────────────────────────────────────────────────
 app.whenReady().then(async () => {
   await resolveRepoRoot();
@@ -236,6 +266,7 @@ app.whenReady().then(async () => {
   setupIPC();
   buildMenu();
   createWindow();
+  setupDevWatch();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

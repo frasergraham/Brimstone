@@ -89,6 +89,7 @@ export function serializeState(state) {
     // NPC would become a controllable roster survivor on reload.
     isNpc:         e.isNpc         ?? false,
     npcId:         e.npcId         ?? null,
+    ref:           e.ref           ?? null,   // mission-logic Actor-node binding (docs/09)
     effects:       Array.isArray(e.effects)
       ? e.effects.map(rec => ({ ...rec }))
       : [],
@@ -119,6 +120,11 @@ export function serializeState(state) {
     ),
     winner:               state.winner,
     winReason:            state.winReason,
+    // Mission logic graph runtime state (docs/09 §3.1). Null for normal/online
+    // games. The engine itself is re-attached by the mission loader on resume,
+    // which then calls engine.load(snap.logicState) — deserializeState stashes it
+    // on the rebuilt state as `_restoredLogicState` for the loader to consume.
+    logicState:           state.logicEngine ? state.logicEngine.serialize() : null,
     attritionLevel:       state.attritionLevel,
     attritionChanged:     state.attritionChanged ?? false,
     heroKills:            state.heroKills        ?? 0,
@@ -396,6 +402,10 @@ export function deserializeState(snap) {
   state.season               = snap.season    ?? null;
   state.winner               = snap.winner    ?? null;
   state.winReason            = snap.winReason ?? null;
+  // Mission logic graph runtime state — stashed for the mission loader to feed
+  // into engine.load() once it re-attaches the engine (the engine can't live in
+  // a JSON snapshot). Null for normal games.
+  state._restoredLogicState  = snap.logicState ?? null;
   state.heroKills            = snap.heroKills        ?? 0;
   state.witchKills           = snap.witchKills       ?? 0;
   state.witchSummonCount     = snap.witchSummonCount ?? 0;

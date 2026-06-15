@@ -6,6 +6,7 @@ import { getFaction } from '../factions.js';
 import { hexDistance } from '../hex.js';
 import { EntityType, applyLevel } from '../entities.js';
 import { isRiver, hasBuilding } from '../tiles.js';
+import { evaluateUnlock } from './unlock.js';
 
 // v1: initial campaign save format.
 // v2 (Phase 4 of units/items/abilities refactor): BRAWLER / STURDY
@@ -373,8 +374,10 @@ export function processWaves(state, waves, createEnemyFn) {
 
 /**
  * Resolve a spawn position descriptor to {col, row}.
+ * Exported so the mission-logic GameContext spawns through the same path as
+ * processWaves (docs/09 — parity).
  */
-function resolveSpawnPosition(state, spawnAt) {
+export function resolveSpawnPosition(state, spawnAt) {
   if (typeof spawnAt === 'object' && spawnAt.col !== undefined) {
     return { col: spawnAt.col, row: spawnAt.row };
   }
@@ -556,14 +559,37 @@ export class Campaign {
     return this.campaignDef.mapBuilders[mapBuilderKey] ?? null;
   }
 
+  /**
+   * Build the unlock-evaluation context from current campaign progress (docs/09
+   * §5.5). `level` maps to a progression metric — the hero's level if one ever
+   * exists, else the number of missions cleared — so `{ level: N }` is meaningful
+   * today and auto-upgrades if an XP/level system is added.
+   */
+  buildUnlockContext() {
+    return {
+      isCompleted: (id) => this.completedMissions.has(id),
+      hasItem: (id) => !!(this.heroStats?.items?.[id]) || this.heroStats?.weapon === id,
+      level: this.heroStats?.level ?? this.getCompletedCount(),
+      getFlag: (key) => this.storyFlags?.[key],
+      getResource: (key) => this.resources?.[key] ?? 0,
+    };
+  }
+
+  /** Whether `mission` is currently available: not done, legacy `requires` all
+   *  completed, AND the rich `unlock` criterion (if any) satisfied. */
+  isMissionUnlocked(mission) {
+    if (this.completedMissions.has(mission.id)) return false;
+    if (mission.requires && !mission.requires.every(r => this.completedMissions.has(r))) return false;
+    if (mission.unlock != null && !evaluateUnlock(mission.unlock, this.buildUnlockContext())) return false;
+    return true;
+  }
+
   /** Get the next available (unlocked, not completed) mission. */
   getNextMission() {
     for (const mission of this.campaignDef.missions) {
-      if (this.completedMissions.has(mission.id)) continue;
-      if (mission.requires && !mission.requires.every(r => this.completedMissions.has(r))) continue;
-      return mission.id;
+      if (this.isMissionUnlocked(mission)) return mission.id;
     }
-    return null; // all missions completed
+    return null; // all missions completed / nothing unlocked yet
   }
 
   /**

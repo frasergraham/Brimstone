@@ -55,6 +55,8 @@ import { hexKey as _hexKey } from './hex.js';
 import { Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves, reconcileRosterAfterMission, applyCarriedHeroLoadout } from './campaign/campaign.js';
 import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
 import { processStoryTriggers } from './campaign/missions.js';
+import { MissionLogicEngine } from './mission-logic/engine.js';
+import { createGameContext } from './mission-logic/game-context.js';
 import { loadConversation, bindParticipants } from './campaign/conversation-registry.js';
 import { spawnNpcEntity, runScriptedActions } from './campaign/scripted-actions.js';
 import { playConversation } from './conversation-player.js';
@@ -625,23 +627,45 @@ function _startLocalPlanningPhase() {
     return;
   }
 
-  // Campaign story triggers — show before entering planning mode
+  // Campaign story triggers + mission logic graph — show before planning mode.
+  let storyEvents = [];
   if (_activeMissionDef?.storyTriggers && _activeCampaign) {
-    const events = processStoryTriggers(state, _activeMissionDef.storyTriggers, _activeCampaign.storyFlags);
-    if (events.length > 0) {
-      _showStorySequence(events).then(() => _enterLocalPlanningMode());
-      return;
-    }
+    storyEvents = processStoryTriggers(state, _activeMissionDef.storyTriggers, _activeCampaign.storyFlags);
+  }
+  if (state.logicEngine) {
+    // Fire round/phase/area events, then drain everything queued so far (incl.
+    // any post-resolution beats from the previous round's endRound pump).
+    state.pumpMissionLogic('roundStart');
+    storyEvents = storyEvents.concat(_drainLogicStoryEvents());
+  }
+  if (storyEvents.length > 0) {
+    _showStorySequence(storyEvents).then(() => _enterLocalPlanningMode());
+    return;
   }
 
   _enterLocalPlanningMode();
+}
+
+/**
+ * Drain queued mission-logic presentation events into story-sequence events.
+ * SIM events (spawn/despawn) are already applied to state — the redraw on
+ * entering planning shows them — so only narrative beats are surfaced here.
+ */
+function _drainLogicStoryEvents() {
+  if (!state?.logicPresentation?.length) return [];
+  const events = state.logicPresentation.splice(0);
+  return events
+    .filter(e => e.kind === 'storyBeat' || e.kind === 'conversation')
+    .map(e => e.kind === 'conversation'
+      ? { conversation: e.id, nodeId: e.nodeId }
+      : { title: e.title, text: e.text });
 }
 
 /** Show a sequence of story events — text modals and/or conversations. */
 async function _showStorySequence(events) {
   for (const ev of events) {
     if (ev.conversation) {
-      await _playMissionConversation(ev.conversation, { manageHud: true, runOnComplete: true });
+      await _playMissionConversation(ev.conversation, { manageHud: true, runOnComplete: true, nodeId: ev.nodeId });
     } else {
       await ui.showStoryModal(ev.title, ev.text);
     }
@@ -660,7 +684,7 @@ let _pendingConvActions = [];
  * bindings (e.g. the NPC died) skip the conversation with a warning — the
  * trigger's dedup mark is already consumed, so it won't re-fire.
  */
-async function _playMissionConversation(convId, { manageHud = true, runOnComplete = true } = {}) {
+async function _playMissionConversation(convId, { manageHud = true, runOnComplete = true, nodeId = null } = {}) {
   const convDef = _activeMissionDef?.conversations?.find(c => c.id === convId);
   if (!convDef) { console.warn(`[conversation] unknown conversation "${convId}"`); return; }
   let convo;
@@ -684,6 +708,35 @@ async function _playMissionConversation(convId, { manageHud = true, runOnComplet
   if (!runOnComplete && convDef.onComplete?.length) {
     _pendingConvActions.push({ convDef, skipped: result?.skipped ?? false });
   }
+  // Mission-logic graph: let the graph react to the conversation finishing —
+  // e.g. an NPC walk-off/despawn migrated out of conversations[].onComplete
+  // (docs/09). The graph emits scriptedAction events which we run through the
+  // SAME runScriptedActions choreography (correct ordering, NPC still present).
+  if (runOnComplete && state?.logicEngine) {
+    // Fire the Start Conversation node's Done branch now that the dialogue is
+    // dismissed (latent resume), plus any On Conversation End event nodes, then
+    // run the resulting NPC choreography in order.
+    if (nodeId) state.logicEngine.resumeLatent(nodeId);
+    state.logicEngine.dispatch('conversationEnd', { id: convId });
+    await _runLogicChoreography(result?.skipped);
+  }
+}
+
+/** Drain queued scriptedAction presentation events (from moveUnit/despawnUnit
+ *  graph nodes) and run them through the conversation-choreography executor. */
+async function _runLogicChoreography(instant = false) {
+  if (!state?.logicPresentation?.length) return;
+  const actions = [];
+  state.logicPresentation = state.logicPresentation.filter((ev) => {
+    if (ev.kind === 'scriptedAction' && ev.action) { actions.push(ev.action); return false; }
+    return true;
+  });
+  if (!actions.length) return;
+  await runScriptedActions(actions, {
+    state, renderer, redraw,
+    npcDefs: _activeMissionDef?.npcs ?? [],
+    instant: !!instant || _autoplay,
+  });
 }
 
 /** Enter planning mode after any pre-planning modals (story, phase) are done. */
@@ -3473,11 +3526,14 @@ function _resumeCampaignMission(missionId) {
   _roundHistory = save.roundHistory || [];
 
   // Reconstruct campaign-specific state
-  existingState.victoryDelegate = buildVictoryDelegate(missionDef.objectives);
+  existingState.victoryDelegate = missionDef.objectives ? buildVictoryDelegate(missionDef.objectives) : null;
   if (missionDef.waves) {
     existingState._waveProcessor = () =>
       processWaves(existingState, missionDef.waves, _createEnemyEntity);
   }
+  // Re-attach the mission logic engine on resume — _attachMissionLogic feeds the
+  // restored runtime state (state._restoredLogicState) back into engine.load().
+  if (missionDef.logic) _attachMissionLogic(existingState, missionDef);
   existingState.fogOfWar = existingState.fogOfWar || 'partial';
   if (missionDef.lootOverrides) existingState.lootOverrides = missionDef.lootOverrides;
   if (missionDef.aiBudgetBonus) existingState.campaignAIBudgetBonus = missionDef.aiBudgetBonus;
@@ -3758,10 +3814,11 @@ function _showMissionBriefing(missionId) {
     restartBtn.style.display = 'none';
   }
 
-  // Objectives
+  // Objectives — a fully logic-graph-driven mission (docs/09) has no declarative
+  // objectives; its briefing text carries the goal, so fall back to a generic line.
   const objEl = document.getElementById('campaign-objectives');
-  const winDesc = _objectiveDescription(missionDef.objectives.win);
-  const loseDesc = _objectiveDescription(missionDef.objectives.lose);
+  const winDesc = _objectiveDescription(missionDef.objectives?.win) || 'Complete the mission';
+  const loseDesc = _objectiveDescription(missionDef.objectives?.lose) || 'The hero falls';
   objEl.innerHTML = `
     <div class="campaign-obj"><span class="campaign-obj-icon">☀</span> <strong>Victory:</strong> ${winDesc}</div>
     <div class="campaign-obj"><span class="campaign-obj-icon">💀</span> <strong>Defeat:</strong> ${loseDesc}</div>
@@ -3924,6 +3981,26 @@ function initScenario(def) {
 }
 
 
+/**
+ * Build + attach a MissionLogicEngine for a logic-graph mission (docs/09). The
+ * engine's WorldContext routes SIM mutations through the real game spawn/victory
+ * paths and pushes SHOW/SIM presentation events onto state.logicPresentation,
+ * which _startLocalPlanningPhase drains and shows. Restores runtime state from a
+ * resumed snapshot (state._restoredLogicState) when present.
+ */
+function _attachMissionLogic(state, missionDef) {
+  const ctx = createGameContext(state, {
+    createEnemyFn: _createEnemyEntity,
+    emit: (event) => state.logicPresentation.push(event),
+    setFlag: (key, value) => { if (_activeCampaign) _activeCampaign.storyFlags[key] = value; },
+    getFlag: (key) => _activeCampaign?.storyFlags?.[key],
+    random: () => Math.random(),
+  });
+  const engine = new MissionLogicEngine(missionDef.logic, ctx);
+  if (state._restoredLogicState) engine.load(state._restoredLogicState);
+  state.attachLogicEngine(engine);
+}
+
 function _initCampaignMission(missionDef) {
   _activeMissionDef = missionDef;
   _gameStartTime = Date.now();
@@ -3992,13 +4069,20 @@ function _initCampaignMission(missionDef) {
   }
 
   // Set custom victory delegate
-  state.victoryDelegate = buildVictoryDelegate(missionDef.objectives);
+  state.victoryDelegate = missionDef.objectives ? buildVictoryDelegate(missionDef.objectives) : null;
 
   // Install the mission's wave processor (runs inside endRound before
   // checkVictory so triggered spawns can pre-empt a premature win).
   if (missionDef.waves) {
     state._waveProcessor = () =>
       processWaves(state, missionDef.waves, _createEnemyEntity);
+  }
+
+  // Attach the mission logic graph engine (docs/09), if the mission opts in.
+  // Additive: missions without a `logic` block are unaffected.
+  if (missionDef.logic) {
+    _attachMissionLogic(state, missionDef);
+    state.pumpMissionLogic('missionStart'); // queues intro beats; shown at first planning
   }
 
   // Inject carried-over hero loadout. A null/absent carried weapon keeps the
@@ -4108,6 +4192,7 @@ function _initCampaignMission(missionDef) {
         // Level scaling first (HP/ATK/DEF), so explicit overrides still win.
         if (enemy.level) applyLevel(e, enemy.level);
         if (enemy.overrides) Object.assign(e, enemy.overrides);
+        if (enemy.ref) e.ref = enemy.ref; // bind to an Actor node (OnSpawn/OnDeath)
         state.entities.push(e);
       }
     }

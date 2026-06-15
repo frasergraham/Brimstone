@@ -307,6 +307,17 @@ export class GameState {
     // When set, checked first by checkVictory(). Return { winner, winReason, log? } or null.
     this.victoryDelegate = null;
 
+    // ── Mission logic graph (docs/09) ──────────────────────────────────────
+    // Optional event→action engine driving scripted mission content. Null for
+    // every normal/online game, so the pump points below are byte-identical
+    // no-ops unless a mission opts in via a `logic` block. The engine is
+    // re-attached by the mission loader on resume; its runtime state rides
+    // along in state-sync as `logicState`.
+    this.logicEngine = null;
+    // Presentation events emitted by SHOW/SIM nodes, drained + animated by the
+    // client orchestrator (main.js). Transient — never serialized.
+    this.logicPresentation = [];
+
     // Custom phase cycle (campaign missions). null = use default 8-step cycle.
     // Shape: { phases: string[], loop: boolean }
     this.cycleConfig = null;
@@ -861,7 +872,91 @@ export class GameState {
       if (waveLogs) for (const msg of waveLogs) this.addLog(msg);
     }
 
+    // Mission logic graph — post-resolution events (kill counts, area transitions,
+    // faction deaths). Runs BEFORE checkVictory so graph-driven spawns can pre-empt
+    // a premature win, exactly like the wave processor. Inert without an engine.
+    if (this.logicEngine) this.pumpMissionLogic('postResolution');
+
     this.checkVictory();
+  }
+
+  /** Attach a MissionLogicEngine (docs/09). The engine's WorldContext should
+   *  push presentation events onto this.logicPresentation. */
+  attachLogicEngine(engine) { this.logicEngine = engine; }
+
+  /**
+   * Fire the mission-logic events appropriate to a lifecycle hook and return the
+   * presentation events newly queued (the caller drains + animates them):
+   *   'missionStart'   — once, at mission init.
+   *   'roundStart'     — at each planning-phase start (round/phase/area-enter).
+   *   'postResolution' — after a round resolves (kills, area, faction deaths).
+   * No-op without an attached engine.
+   */
+  pumpMissionLogic(hook) {
+    const eng = this.logicEngine;
+    if (!eng) return [];
+    const start = this.logicPresentation.length;
+    if (hook === 'missionStart') {
+      eng.dispatch('missionStart', {});
+      this._dispatchActorTransitions(); // OnSpawn for pre-placed ref'd units
+    } else if (hook === 'roundStart') {
+      eng.dispatch('roundStart', { round: this.round, phase: this.phase });
+      eng.dispatch('phase', { phase: this.phase });
+      this._dispatchAreaTransitions();
+      this._dispatchActorTransitions();
+    } else if (hook === 'postResolution') {
+      eng.dispatch('killCount', { faction: 'hero', count: this.heroKills });
+      eng.dispatch('killCount', { faction: 'witch', count: this.witchKills });
+      this._dispatchAreaTransitions();
+      this._dispatchActorTransitions(); // OnDeath for ref'd units that died
+      // onAllUnitsDead = zero ALIVE units of the faction (works for missions with
+      // no faction leader, e.g. a zombie-only board); onLeaderDead = leader gone.
+      for (const f of ['hero', 'witch']) {
+        if (this.entities.every(e => !(e.alive && e.owner === f))) eng.dispatch('factionAllDead', { faction: f });
+        if (this.factionEliminated(f)) eng.dispatch('factionLeaderDead', { faction: f });
+      }
+    }
+    return this.logicPresentation.slice(start);
+  }
+
+  /** Dispatch areaEnter/areaExit for units that crossed an Area Trigger boundary
+   *  since the last check (true OnEnter/OnExit, so triggers don't re-fire while a
+   *  unit lingers). Occupancy is tracked lazily (not serialized — a resume may
+   *  re-fire OnEnter once, which the graph's Do Once gates absorb). */
+  _dispatchAreaTransitions() {
+    const eng = this.logicEngine;
+    const hexKeys = eng.areaHexKeys();
+    if (!hexKeys || hexKeys.size === 0) return;
+    if (!this._logicAreaState) this._logicAreaState = new Map();
+    for (const e of this.entities) {
+      if (!e.alive) continue;
+      const inside = hexKeys.has(`${e.col},${e.row}`);
+      const was = this._logicAreaState.get(e.id) ?? false;
+      if (inside && !was) eng.dispatch('areaEnter', { unit: e, hex: { col: e.col, row: e.row } });
+      else if (!inside && was) eng.dispatch('areaExit', { unit: e, hex: { col: e.col, row: e.row } });
+      this._logicAreaState.set(e.id, inside);
+    }
+  }
+
+  /** Dispatch actorSpawn/actorDeath for units watched by Actor nodes (matched by
+   *  entity.ref or entity.npcId). Tracks per-ref alive state so each fires once. */
+  _dispatchActorTransitions() {
+    const eng = this.logicEngine;
+    const refs = eng.actorRefs();
+    if (!refs || refs.size === 0) return;
+    if (!this._logicActorState) this._logicActorState = new Map();
+    const aliveByRef = new Map();
+    for (const e of this.entities) {
+      const ref = e.ref ?? e.npcId;
+      if (ref != null && refs.has(ref) && e.alive) aliveByRef.set(ref, e);
+    }
+    for (const ref of refs) {
+      const e = aliveByRef.get(ref);
+      const was = this._logicActorState.get(ref) ?? false;
+      if (e && !was) eng.dispatch('actorSpawn', { ref, entity: e, hex: { col: e.col, row: e.row } });
+      else if (!e && was) eng.dispatch('actorDeath', { ref });
+      this._logicActorState.set(ref, !!e);
+    }
   }
 
   _announcePhaseChange(from, to) {

@@ -54,199 +54,6 @@
       "row": 4
     }
   ],
-  "waves": [
-    {
-      "round": 1,
-      "units": [
-        {
-          "type": "zombie",
-          "spawnAt": {
-            "col": 1,
-            "row": 4
-          }
-        },
-        {
-          "type": "zombie",
-          "spawnAt": {
-            "col": 4,
-            "row": 9
-          }
-        }
-      ]
-    },
-    {
-      "round": 2,
-      "units": [
-        {
-          "type": "minion",
-          "spawnAt": {
-            "col": 0,
-            "row": 7
-          }
-        },
-        {
-          "type": "zombie",
-          "spawnAt": {
-            "col": 1,
-            "row": 4
-          }
-        },
-        {
-          "type": "zombie",
-          "spawnAt": {
-            "col": 5,
-            "row": 4
-          }
-        },
-        {
-          "type": "zombie",
-          "spawnAt": {
-            "col": 5,
-            "row": 7
-          }
-        }
-      ]
-    },
-    {
-      "round": 3,
-      "units": [
-        {
-          "type": "minion",
-          "spawnAt": {
-            "col": 3,
-            "row": 5
-          }
-        },
-        {
-          "type": "zombie",
-          "spawnAt": {
-            "col": 0,
-            "row": 6
-          }
-        },
-        {
-          "type": "zombie",
-          "spawnAt": {
-            "col": 0,
-            "row": 8
-          }
-        },
-        {
-          "type": "zombie",
-          "spawnAt": {
-            "col": 4,
-            "row": 9
-          }
-        }
-      ]
-    },
-    {
-      "round": 4,
-      "units": [
-        {
-          "type": "minion",
-          "spawnAt": {
-            "col": 5,
-            "row": 6
-          }
-        },
-        {
-          "type": "minion",
-          "spawnAt": {
-            "col": 5,
-            "row": 7
-          }
-        },
-        {
-          "type": "zombie",
-          "spawnAt": {
-            "col": 6,
-            "row": 5
-          }
-        },
-        {
-          "type": "zombie",
-          "spawnAt": {
-            "col": 6,
-            "row": 9
-          }
-        }
-      ]
-    },
-    {
-      "round": 5,
-      "units": [
-        {
-          "type": "minion",
-          "spawnAt": {
-            "col": 5,
-            "row": 4
-          }
-        },
-        {
-          "type": "minion",
-          "spawnAt": {
-            "col": 6,
-            "row": 5
-          }
-        },
-        {
-          "type": "zombie",
-          "spawnAt": {
-            "col": 1,
-            "row": 4
-          }
-        },
-        {
-          "type": "zombie",
-          "spawnAt": {
-            "col": 0,
-            "row": 7
-          }
-        },
-        {
-          "type": "zombie",
-          "spawnAt": {
-            "col": 4,
-            "row": 9
-          }
-        }
-      ]
-    },
-    {
-      "round": 6,
-      "units": [
-        {
-          "type": "minion",
-          "spawnAt": {
-            "col": 4,
-            "row": 8
-          }
-        },
-        {
-          "type": "minion",
-          "spawnAt": {
-            "col": 5,
-            "row": 7
-          }
-        },
-        {
-          "type": "zombie",
-          "spawnAt": {
-            "col": 0,
-            "row": 8
-          }
-        },
-        {
-          "type": "zombie",
-          "spawnAt": {
-            "col": 6,
-            "row": 5
-          }
-        }
-      ]
-    }
-  ],
   "aiPersonality": "aggressive",
   "aiBudgetBonus": 2,
   "maxSurvivorsFromRoster": 2,
@@ -263,25 +70,6 @@
       "row": 6
     }
   ],
-  "objectives": {
-    "win": {
-      "type": "survive_with_party",
-      "phase": "dawn",
-      "survivors": 2,
-      "reason": "You and your companions held out until dawn."
-    },
-    "lose": [
-      {
-        "type": "hero_killed"
-      },
-      {
-        "type": "phase_without_survivors",
-        "phase": "dawn",
-        "survivors": 2,
-        "reason": "Dawn came too late — the village fell with you."
-      }
-    ]
-  },
   "startingResources": {
     "wood": 3,
     "metal": 1
@@ -1463,23 +1251,524 @@
       }
     ]
   },
-  "storyTriggers": [
-    {
-      "type": "round",
-      "round": 1,
-      "title": "Darkness Falls",
-      "text": "The sun dips below the treeline and the temperature drops. From the direction of the old graveyard, you hear the scraping of earth and the crack of coffin wood. They are coming.",
-      "flag": "first_night_start"
-    },
-    {
-      "type": "round",
-      "round": 4,
-      "title": "The Witching Hour",
-      "text": "The dead of night. The attacks intensify — they come from every side now, scratching at the walls and shutters. Hold the line. Dawn is still hours away.",
-      "flag": "witching_hour"
-    }
-  ],
   "hints": {
     "scriptKey": "ch1m3"
+  },
+  "logic": {
+    "version": 1,
+    "variables": [],
+    "nodes": [
+      {
+        "id": "n0",
+        "type": "storyBeat",
+        "params": {
+          "title": "Darkness Falls",
+          "text": "The sun dips below the treeline and the temperature drops. From the direction of the old graveyard, you hear the scraping of earth and the crack of coffin wood. They are coming."
+        },
+        "x": 520,
+        "y": 40
+      },
+      {
+        "id": "n1",
+        "type": "onRoundStart",
+        "params": {
+          "round": 1
+        },
+        "x": 40,
+        "y": 40
+      },
+      {
+        "id": "n2",
+        "type": "doOnce",
+        "params": {},
+        "x": 280,
+        "y": 40
+      },
+      {
+        "id": "n3",
+        "type": "storyBeat",
+        "params": {
+          "title": "The Witching Hour",
+          "text": "The dead of night. The attacks intensify — they come from every side now, scratching at the walls and shutters. Hold the line. Dawn is still hours away."
+        },
+        "x": 520,
+        "y": 150
+      },
+      {
+        "id": "n4",
+        "type": "onRoundStart",
+        "params": {
+          "round": 4
+        },
+        "x": 40,
+        "y": 150
+      },
+      {
+        "id": "n5",
+        "type": "doOnce",
+        "params": {},
+        "x": 280,
+        "y": 150
+      },
+      {
+        "id": "n6",
+        "type": "spawnUnits",
+        "params": {
+          "units": [
+            {
+              "type": "zombie",
+              "spawnAt": {
+                "col": 1,
+                "row": 4
+              }
+            },
+            {
+              "type": "zombie",
+              "spawnAt": {
+                "col": 4,
+                "row": 9
+              }
+            }
+          ]
+        },
+        "x": 280,
+        "y": 260
+      },
+      {
+        "id": "n7",
+        "type": "onRoundStart",
+        "params": {
+          "round": 1
+        },
+        "x": 40,
+        "y": 260
+      },
+      {
+        "id": "n8",
+        "type": "spawnUnits",
+        "params": {
+          "units": [
+            {
+              "type": "minion",
+              "spawnAt": {
+                "col": 0,
+                "row": 7
+              }
+            },
+            {
+              "type": "zombie",
+              "spawnAt": {
+                "col": 1,
+                "row": 4
+              }
+            },
+            {
+              "type": "zombie",
+              "spawnAt": {
+                "col": 5,
+                "row": 4
+              }
+            },
+            {
+              "type": "zombie",
+              "spawnAt": {
+                "col": 5,
+                "row": 7
+              }
+            }
+          ]
+        },
+        "x": 280,
+        "y": 370
+      },
+      {
+        "id": "n9",
+        "type": "onRoundStart",
+        "params": {
+          "round": 2
+        },
+        "x": 40,
+        "y": 370
+      },
+      {
+        "id": "n10",
+        "type": "spawnUnits",
+        "params": {
+          "units": [
+            {
+              "type": "minion",
+              "spawnAt": {
+                "col": 3,
+                "row": 5
+              }
+            },
+            {
+              "type": "zombie",
+              "spawnAt": {
+                "col": 0,
+                "row": 6
+              }
+            },
+            {
+              "type": "zombie",
+              "spawnAt": {
+                "col": 0,
+                "row": 8
+              }
+            },
+            {
+              "type": "zombie",
+              "spawnAt": {
+                "col": 4,
+                "row": 9
+              }
+            }
+          ]
+        },
+        "x": 280,
+        "y": 480
+      },
+      {
+        "id": "n11",
+        "type": "onRoundStart",
+        "params": {
+          "round": 3
+        },
+        "x": 40,
+        "y": 480
+      },
+      {
+        "id": "n12",
+        "type": "spawnUnits",
+        "params": {
+          "units": [
+            {
+              "type": "minion",
+              "spawnAt": {
+                "col": 5,
+                "row": 6
+              }
+            },
+            {
+              "type": "minion",
+              "spawnAt": {
+                "col": 5,
+                "row": 7
+              }
+            },
+            {
+              "type": "zombie",
+              "spawnAt": {
+                "col": 6,
+                "row": 5
+              }
+            },
+            {
+              "type": "zombie",
+              "spawnAt": {
+                "col": 6,
+                "row": 9
+              }
+            }
+          ]
+        },
+        "x": 280,
+        "y": 590
+      },
+      {
+        "id": "n13",
+        "type": "onRoundStart",
+        "params": {
+          "round": 4
+        },
+        "x": 40,
+        "y": 590
+      },
+      {
+        "id": "n14",
+        "type": "spawnUnits",
+        "params": {
+          "units": [
+            {
+              "type": "minion",
+              "spawnAt": {
+                "col": 5,
+                "row": 4
+              }
+            },
+            {
+              "type": "minion",
+              "spawnAt": {
+                "col": 6,
+                "row": 5
+              }
+            },
+            {
+              "type": "zombie",
+              "spawnAt": {
+                "col": 1,
+                "row": 4
+              }
+            },
+            {
+              "type": "zombie",
+              "spawnAt": {
+                "col": 0,
+                "row": 7
+              }
+            },
+            {
+              "type": "zombie",
+              "spawnAt": {
+                "col": 4,
+                "row": 9
+              }
+            }
+          ]
+        },
+        "x": 280,
+        "y": 700
+      },
+      {
+        "id": "n15",
+        "type": "onRoundStart",
+        "params": {
+          "round": 5
+        },
+        "x": 40,
+        "y": 700
+      },
+      {
+        "id": "n16",
+        "type": "spawnUnits",
+        "params": {
+          "units": [
+            {
+              "type": "minion",
+              "spawnAt": {
+                "col": 4,
+                "row": 8
+              }
+            },
+            {
+              "type": "minion",
+              "spawnAt": {
+                "col": 5,
+                "row": 7
+              }
+            },
+            {
+              "type": "zombie",
+              "spawnAt": {
+                "col": 0,
+                "row": 8
+              }
+            },
+            {
+              "type": "zombie",
+              "spawnAt": {
+                "col": 6,
+                "row": 5
+              }
+            }
+          ]
+        },
+        "x": 280,
+        "y": 810
+      },
+      {
+        "id": "n17",
+        "type": "onRoundStart",
+        "params": {
+          "round": 6
+        },
+        "x": 40,
+        "y": 810
+      },
+      {
+        "id": "n18",
+        "type": "onRoundStart",
+        "params": {
+          "round": "any"
+        },
+        "x": 40,
+        "y": 920
+      },
+      {
+        "id": "n19",
+        "type": "objectiveOutcome",
+        "params": {
+          "side": "win",
+          "spec": {
+            "type": "survive_with_party",
+            "phase": "dawn",
+            "survivors": 2,
+            "reason": "You and your companions held out until dawn."
+          },
+          "reason": "You and your companions held out until dawn."
+        },
+        "x": 280,
+        "y": 920
+      },
+      {
+        "id": "n20",
+        "type": "onRoundStart",
+        "params": {
+          "round": "any"
+        },
+        "x": 40,
+        "y": 1030
+      },
+      {
+        "id": "n21",
+        "type": "objectiveOutcome",
+        "params": {
+          "side": "lose",
+          "spec": {
+            "type": "phase_without_survivors",
+            "phase": "dawn",
+            "survivors": 2,
+            "reason": "Dawn came too late — the village fell with you."
+          },
+          "reason": "Dawn came too late — the village fell with you."
+        },
+        "x": 280,
+        "y": 1030
+      }
+    ],
+    "edges": [
+      {
+        "from": {
+          "node": "n1",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n2",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n2",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n0",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n4",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n5",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n5",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n3",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n7",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n6",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n9",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n8",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n11",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n10",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n13",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n12",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n15",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n14",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n17",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n16",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n18",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n19",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n20",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n21",
+          "pin": "in"
+        },
+        "kind": "exec"
+      }
+    ]
   }
 }

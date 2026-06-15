@@ -250,18 +250,19 @@ for (const { id, campaignId } of MISSIONS) {
 // in the original JS builders/missions and must survive the snapshot.
 
 describe('migration spot-checks', () => {
-  test('prologue: 4 zombies (3 attack-1 + 1 full-strength) + 1 hero_kills golem wave, daytime cycle', () => {
+  test('prologue: 3 weakened zombies, fully logic-graph driven', () => {
     const m = readMission('prologue');
-    assert.equal(m.enemyUnits.length, 4);
+    assert.equal(m.enemyUnits.length, 3);
     assert.ok(m.enemyUnits.every((e) => e.type === 'zombie'));
-    // Three zombies are weakened to attack 1; the fourth is deliberately
-    // full-strength (no attack override). Golem triggers after 3 kills, so it
-    // appears while the last zombie still stands.
+    // All three zombies are weakened to attack 1.
     assert.equal(m.enemyUnits.filter((e) => e.overrides?.attack === 1).length, 3);
-    assert.equal(m.enemyUnits.filter((e) => e.overrides?.attack === undefined).length, 1);
-    assert.equal(m.waves.length, 1);
-    assert.equal(m.waves[0].trigger, 'hero_kills');
-    assert.equal(m.waves[0].count, 3);
+    // docs/09: the golem spawn / win / lose / intro live in `logic`, so the
+    // legacy waves/objectives/storyTriggers fields are gone.
+    assert.equal(m.waves, undefined);
+    assert.equal(m.objectives, undefined);
+    assert.equal(m.storyTriggers, undefined);
+    const kc = m.logic.nodes.find((n) => n.type === 'onKillCount');
+    assert.ok(kc && kc.params.faction === 'hero' && kc.params.count === 3, 'graph spawns the golem after 3 hero kills');
     assert.deepEqual(m.phaseCycle.phases, ['dawn', 'day', 'day', 'day']);
   });
 
@@ -282,10 +283,12 @@ describe('migration spot-checks', () => {
     assert.deepEqual(m.map.witchObjectives.map((o) => o.label), ['Ritual Circle', 'Dark Altar']);
   });
 
-  test('long_watch: 3 nodes, two notHoldingAllNodes reminder triggers', () => {
+  test('long_watch: 3 nodes, two notHoldingAllNodes reminder triggers (logic-graph driven)', () => {
     const m = readMission('long_watch');
     assert.equal(m.map.witchObjectives.length, 3);
-    const gated = m.storyTriggers.filter((t) => t.condition === 'notHoldingAllNodes');
+    assert.equal(m.storyTriggers, undefined, 'ported to the logic graph');
+    // The two reminders are now Condition(notHoldingAllNodes) → Branch gates.
+    const gated = m.logic.nodes.filter((n) => n.type === 'conditionNamed' && n.params.name === 'notHoldingAllNodes');
     assert.equal(gated.length, 2);
   });
 

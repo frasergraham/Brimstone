@@ -41,7 +41,7 @@ describe('parseToolParams', () => {
   });
 
   test('KNOWN_TOOLS lists the admin-tools tabs', () => {
-    assert.deepEqual([...KNOWN_TOOLS].sort(), ['assets', 'combat', 'editor', 'lighting']);
+    assert.deepEqual([...KNOWN_TOOLS].sort(), ['assets', 'campaign', 'combat', 'editor', 'lighting']);
   });
 });
 

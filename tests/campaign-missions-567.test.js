@@ -382,7 +382,9 @@ describe('Mission registry — M5/M6/M7 wiring', () => {
     assert.ok(m, 'long_watch mission missing');
     assert.equal(m.aiPersonality, 'evasive');
     assert.deepEqual(m.requires, ['dark_ritual']);
-    assert.equal(m.objectives.win.type, 'hero_holds_all_nodes');
+    // Logic-graph driven (docs/09 #10) — win objective lives in the graph.
+    const win = m.logic.nodes.find(n => n.type === 'objectiveOutcome' && n.params.side === 'win');
+    assert.equal(win.params.spec.type, 'hero_holds_all_nodes');
     // Map builder must exist.
     assert.equal(typeof hollow.mapBuilders.long_watch, 'function');
     // Map should produce 3 nodes.
@@ -396,7 +398,7 @@ describe('Mission registry — M5/M6/M7 wiring', () => {
     assert.equal(m.disableScoring, false);
     assert.deepEqual(m.phaseCycle.extraScoringPhases, ['night']);
     assert.deepEqual(m.phaseCycle.extendOnWitchScore, ['night']);
-    const losses = Array.isArray(m.objectives.lose) ? m.objectives.lose : [m.objectives.lose];
+    const losses = m.logic.nodes.filter(n => n.type === 'objectiveOutcome' && n.params.side === 'lose').map(n => n.params.spec);
     assert.ok(losses.some(c => c.type === 'witch_score_threshold' && c.points === 5));
     // 3-node map for meaningful "majority"
     const map = hollow.mapBuilders.witchs_trail();

@@ -52,39 +52,6 @@
       "row": 5
     }
   ],
-  "waves": [
-    {
-      "round": 4,
-      "units": [
-        {
-          "type": "minion",
-          "spawnAt": "graveyard"
-        }
-      ]
-    },
-    {
-      "round": 6,
-      "units": [
-        {
-          "type": "minion",
-          "spawnAt": "graveyard"
-        }
-      ]
-    },
-    {
-      "round": 8,
-      "units": [
-        {
-          "type": "minion",
-          "spawnAt": "map_edge"
-        },
-        {
-          "type": "minion",
-          "spawnAt": "graveyard"
-        }
-      ]
-    }
-  ],
   "aiPersonality": "evasive",
   "heroPersonality": "node_denier",
   "aiBudgetBonus": 0,
@@ -92,23 +59,6 @@
   "missionSurvivors": 1,
   "minSurvivors": 2,
   "maxSurvivors": 5,
-  "objectives": {
-    "win": {
-      "type": "hero_holds_all_nodes",
-      "phase": "dawn",
-      "reason": "You hold every node at dawn — the watch holds."
-    },
-    "lose": [
-      {
-        "type": "hero_killed"
-      },
-      {
-        "type": "witch_holds_node",
-        "phase": "dawn",
-        "reason": "Dawn — and the nodes are not yours."
-      }
-    ]
-  },
   "startingResources": {
     "wood": 1,
     "food": 2
@@ -1455,32 +1405,411 @@
       }
     ]
   },
-  "storyTriggers": [
-    {
-      "type": "round",
-      "round": 1,
-      "title": "The Long Watch",
-      "text": "Three Power Nodes. One night. Hold them all when the sun returns.",
-      "flag": "long_watch_start"
-    },
-    {
-      "type": "round",
-      "round": 4,
-      "condition": "notHoldingAllNodes",
-      "title": "The Hour Wears On",
-      "text": "A node still pulses without your banner. Seize them all before dawn.",
-      "flag": "long_watch_remind_4"
-    },
-    {
-      "type": "round",
-      "round": 7,
-      "condition": "notHoldingAllNodes",
-      "title": "Dawn Approaches",
-      "text": "Dawn nears, and the watch is incomplete. The nodes must be yours.",
-      "flag": "long_watch_remind_7"
-    }
-  ],
   "hints": {
     "scriptKey": "ch1m6"
+  },
+  "logic": {
+    "version": 1,
+    "variables": [],
+    "nodes": [
+      {
+        "id": "n0",
+        "type": "storyBeat",
+        "params": {
+          "title": "The Long Watch",
+          "text": "Three Power Nodes. One night. Hold them all when the sun returns."
+        },
+        "x": 520,
+        "y": 40
+      },
+      {
+        "id": "n1",
+        "type": "onRoundStart",
+        "params": {
+          "round": 1
+        },
+        "x": 40,
+        "y": 40
+      },
+      {
+        "id": "n2",
+        "type": "doOnce",
+        "params": {},
+        "x": 280,
+        "y": 40
+      },
+      {
+        "id": "n3",
+        "type": "storyBeat",
+        "params": {
+          "title": "The Hour Wears On",
+          "text": "A node still pulses without your banner. Seize them all before dawn."
+        },
+        "x": 760,
+        "y": 40
+      },
+      {
+        "id": "n4",
+        "type": "onRoundStart",
+        "params": {
+          "round": 4
+        },
+        "x": 40,
+        "y": 150
+      },
+      {
+        "id": "n5",
+        "type": "conditionNamed",
+        "params": {
+          "name": "notHoldingAllNodes"
+        },
+        "x": 40,
+        "y": 260
+      },
+      {
+        "id": "n6",
+        "type": "branch",
+        "params": {},
+        "x": 280,
+        "y": 150
+      },
+      {
+        "id": "n7",
+        "type": "doOnce",
+        "params": {},
+        "x": 520,
+        "y": 150
+      },
+      {
+        "id": "n8",
+        "type": "storyBeat",
+        "params": {
+          "title": "Dawn Approaches",
+          "text": "Dawn nears, and the watch is incomplete. The nodes must be yours."
+        },
+        "x": 760,
+        "y": 150
+      },
+      {
+        "id": "n9",
+        "type": "onRoundStart",
+        "params": {
+          "round": 7
+        },
+        "x": 40,
+        "y": 370
+      },
+      {
+        "id": "n10",
+        "type": "conditionNamed",
+        "params": {
+          "name": "notHoldingAllNodes"
+        },
+        "x": 40,
+        "y": 480
+      },
+      {
+        "id": "n11",
+        "type": "branch",
+        "params": {},
+        "x": 280,
+        "y": 260
+      },
+      {
+        "id": "n12",
+        "type": "doOnce",
+        "params": {},
+        "x": 520,
+        "y": 260
+      },
+      {
+        "id": "n13",
+        "type": "spawnUnits",
+        "params": {
+          "units": [
+            {
+              "type": "minion",
+              "spawnAt": "graveyard"
+            }
+          ]
+        },
+        "x": 280,
+        "y": 370
+      },
+      {
+        "id": "n14",
+        "type": "onRoundStart",
+        "params": {
+          "round": 4
+        },
+        "x": 40,
+        "y": 590
+      },
+      {
+        "id": "n15",
+        "type": "spawnUnits",
+        "params": {
+          "units": [
+            {
+              "type": "minion",
+              "spawnAt": "graveyard"
+            }
+          ]
+        },
+        "x": 280,
+        "y": 480
+      },
+      {
+        "id": "n16",
+        "type": "onRoundStart",
+        "params": {
+          "round": 6
+        },
+        "x": 40,
+        "y": 700
+      },
+      {
+        "id": "n17",
+        "type": "spawnUnits",
+        "params": {
+          "units": [
+            {
+              "type": "minion",
+              "spawnAt": "map_edge"
+            },
+            {
+              "type": "minion",
+              "spawnAt": "graveyard"
+            }
+          ]
+        },
+        "x": 280,
+        "y": 590
+      },
+      {
+        "id": "n18",
+        "type": "onRoundStart",
+        "params": {
+          "round": 8
+        },
+        "x": 40,
+        "y": 810
+      },
+      {
+        "id": "n19",
+        "type": "onRoundStart",
+        "params": {
+          "round": "any"
+        },
+        "x": 40,
+        "y": 920
+      },
+      {
+        "id": "n20",
+        "type": "objectiveOutcome",
+        "params": {
+          "side": "win",
+          "spec": {
+            "type": "hero_holds_all_nodes",
+            "phase": "dawn",
+            "reason": "You hold every node at dawn — the watch holds."
+          },
+          "reason": "You hold every node at dawn — the watch holds."
+        },
+        "x": 280,
+        "y": 700
+      },
+      {
+        "id": "n21",
+        "type": "onRoundStart",
+        "params": {
+          "round": "any"
+        },
+        "x": 40,
+        "y": 1030
+      },
+      {
+        "id": "n22",
+        "type": "objectiveOutcome",
+        "params": {
+          "side": "lose",
+          "spec": {
+            "type": "witch_holds_node",
+            "phase": "dawn",
+            "reason": "Dawn — and the nodes are not yours."
+          },
+          "reason": "Dawn — and the nodes are not yours."
+        },
+        "x": 280,
+        "y": 810
+      }
+    ],
+    "edges": [
+      {
+        "from": {
+          "node": "n1",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n2",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n2",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n0",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n4",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n6",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n5",
+          "pin": "result"
+        },
+        "to": {
+          "node": "n6",
+          "pin": "cond"
+        },
+        "kind": "data"
+      },
+      {
+        "from": {
+          "node": "n6",
+          "pin": "true"
+        },
+        "to": {
+          "node": "n7",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n7",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n3",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n9",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n11",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n10",
+          "pin": "result"
+        },
+        "to": {
+          "node": "n11",
+          "pin": "cond"
+        },
+        "kind": "data"
+      },
+      {
+        "from": {
+          "node": "n11",
+          "pin": "true"
+        },
+        "to": {
+          "node": "n12",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n12",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n8",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n14",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n13",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n16",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n15",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n18",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n17",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n19",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n20",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n21",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n22",
+          "pin": "in"
+        },
+        "kind": "exec"
+      }
+    ]
   }
 }

@@ -69,7 +69,7 @@ import {
   roadNodeMarkersVisible,
   stripTileOverlays,
 } from '../src/tools/mission-editor.js';
-import { loadMissionJSON } from '../src/campaign/json-mission.js';
+import { loadMissionJSON, validateBuildingFootprints } from '../src/campaign/json-mission.js';
 import { MAP_SIZES } from '../src/map.js';
 import { buildMissionMap } from '../src/campaign/mission-map.js';
 import { hexKey } from '../src/hex.js';
@@ -469,6 +469,39 @@ describe('mission-editor — enemy units', () => {
   test('enemy types are valid runtime values', () => {
     assert.ok(ENEMY_UNIT_TYPES.includes('zombie'));
     assert.ok(ENEMY_UNIT_TYPES.includes('iron_golem'));
+  });
+
+  test('enemyUnitAt finds a placed unit and editEnemyUnits edits it as one undo step', () => {
+    const ed = createMissionEditor();
+    ed.setEnemyUnits([{ type: 'zombie', col: 4, row: 4, overrides: {} }]);
+    assert.equal(ed.enemyUnitAt({ col: 4, row: 4 })?.type, 'zombie');
+    assert.equal(ed.enemyUnitAt({ col: 0, row: 0 }), undefined);
+
+    // Edit mode: change type + level in place (item 8).
+    ed.editEnemyUnits((units) => { units[0].type = 'minion'; units[0].level = 3; });
+    assert.equal(ed.getEnemyUnits()[0].type, 'minion');
+    assert.equal(ed.getEnemyUnits()[0].level, 3);
+
+    // One undo reverts the whole edit (back to the placed zombie, no level).
+    ed.undo();
+    assert.equal(ed.getEnemyUnits()[0].type, 'zombie');
+    assert.equal(ed.getEnemyUnits()[0].level, undefined);
+  });
+
+  test('editEnemyUnits can splice a unit out (edit-mode delete)', () => {
+    const ed = createMissionEditor();
+    ed.setEnemyUnits([
+      { type: 'zombie', col: 1, row: 1, overrides: {} },
+      { type: 'minion', col: 2, row: 2, overrides: {} },
+    ]);
+    ed.editEnemyUnits((units) => {
+      const i = units.findIndex((u) => u.col === 1 && u.row === 1);
+      units.splice(i, 1);
+    });
+    assert.equal(ed.getEnemyUnits().length, 1);
+    assert.equal(ed.enemyUnitAt({ col: 1, row: 1 }), undefined);
+    ed.undo();
+    assert.equal(ed.getEnemyUnits().length, 2);
   });
 });
 
@@ -911,6 +944,53 @@ describe('mission-editor — edge resize: top/left SHIFT + remap (item 3)', () =
     const back = resizeHandmadeMap(added.model, 'top', -1);
     assert.ok(back.ok);
     assert.deepEqual(back.model, before);
+  });
+
+  // A building's footprintHexes / buildingFootprintOf are STRING keys ("col,row").
+  // A shift-resize (top/left) must remap them too, or the building points at a
+  // stale tile and validateBuildingFootprints rejects the save (item 9 bug).
+  function buildingModel() {
+    return {
+      mapDef: {
+        mode: 'handmade', cols: 6, rows: 6,
+        heroStart: { col: 1, row: 4 }, witchStart: { col: 4, row: 4 },
+        witchObjectives: [], roadNodes: [],
+        tiles: [
+          { col: 2, row: 2, base: 'DIRT', structure: 'BUILDING', path: null, building: 'INN',
+            fortifyLevel: 0, resource: null, hiddenSurvivor: false, roadDirs: [],
+            footprintHexes: [hexKey(3, 2)], buildingFootprintOf: null },
+          { col: 3, row: 2, base: 'GRASS', structure: null, path: null, building: null,
+            fortifyLevel: 0, resource: null, hiddenSurvivor: false, roadDirs: [],
+            footprintHexes: [], buildingFootprintOf: hexKey(2, 2) },
+        ],
+      },
+      enemyUnits: [], meta: {},
+    };
+  }
+  const asMission = (model) => ({ map: { mode: 'handmade', tiles: model.mapDef.tiles } });
+
+  test('LEFT add shifts a building footprint pair (both directions of the link)', () => {
+    const { ok, model } = resizeHandmadeMap(buildingModel(), 'left', 1);
+    assert.ok(ok);
+    const entrance = model.mapDef.tiles.find(t => t.building === 'INN');
+    const footprint = model.mapDef.tiles.find(t => t.buildingFootprintOf != null);
+    assert.ok(entrance, 'entrance exists');
+    assert.equal(entrance.col, 3); // 2 → 3
+    assert.equal(footprint.col, 4); // 3 → 4
+    assert.deepEqual(entrance.footprintHexes, [hexKey(4, 2)], 'entrance footprint key shifted');
+    assert.equal(footprint.buildingFootprintOf, hexKey(3, 2), 'footprint back-pointer shifted');
+    // The whole point: the resized model still saves.
+    assert.doesNotThrow(() => validateBuildingFootprints(asMission(model)));
+  });
+
+  test('TOP add shifts a building footprint pair and still validates', () => {
+    const { ok, model } = resizeHandmadeMap(buildingModel(), 'top', 1);
+    assert.ok(ok);
+    const entrance = model.mapDef.tiles.find(t => t.building === 'INN');
+    const footprint = model.mapDef.tiles.find(t => t.buildingFootprintOf != null);
+    assert.deepEqual(entrance.footprintHexes, [hexKey(3, 3)], 'entrance footprint key shifted +1 row');
+    assert.equal(footprint.buildingFootprintOf, hexKey(2, 3), 'back-pointer shifted +1 row');
+    assert.doesNotThrow(() => validateBuildingFootprints(asMission(model)));
   });
 });
 

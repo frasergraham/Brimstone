@@ -27,6 +27,8 @@ import { resolvePlansMP } from '../server/resolver.js';
 import { getCampaignById } from '../src/campaign/campaign-registry.js';
 import { buildVictoryDelegate, processWaves } from '../src/campaign/campaign.js';
 import { processStoryTriggers } from '../src/campaign/missions.js';
+import { MissionLogicEngine } from '../src/mission-logic/engine.js';
+import { createGameContext } from '../src/mission-logic/game-context.js';
 import {
   EntityType, createSurvivor, createMinion, createZombie,
   createWoodGolem, createIronGolem,
@@ -95,9 +97,25 @@ function buildMissionState(missionDef) {
     Object.assign(state.inventory.hero, missionDef.startingResources);
   }
 
-  state.victoryDelegate = buildVictoryDelegate(missionDef.objectives);
+  state.victoryDelegate = missionDef.objectives ? buildVictoryDelegate(missionDef.objectives) : null;
   if (missionDef.waves) {
     state._waveProcessor = () => processWaves(state, missionDef.waves, createEnemyEntity);
+  }
+
+  // Logic-graph-driven missions (docs/09): attach the engine so endRound's
+  // postResolution pump drives spawns + victory. Presentation events (conversations,
+  // story beats) just queue and are ignored headlessly.
+  if (missionDef.logic) {
+    const flags = {};
+    const ctx = createGameContext(state, {
+      createEnemyFn: createEnemyEntity,
+      emit: (e) => state.logicPresentation.push(e),
+      setFlag: (k, v) => { flags[k] = v; },
+      getFlag: (k) => flags[k],
+      random: () => Math.random(),
+    });
+    state.attachLogicEngine(new MissionLogicEngine(missionDef.logic, ctx));
+    state.pumpMissionLogic('missionStart');
   }
 
   // Deploy survivors from the canonical roster (no campaign carry-over).
@@ -179,6 +197,8 @@ function playMissionGame(missionDef, opts = {}) {
     if (missionDef.storyTriggers) {
       processStoryTriggers(state, missionDef.storyTriggers, storyFlags);
     }
+    state.pumpMissionLogic('roundStart'); // no-op without an engine; drives area/round events
+    state.logicPresentation.length = 0;   // headless ignores presentation events
 
     const heroPlan = heroAI.generatePlan(undefined);
     const witchPlan = witchAI ? witchAI.generatePlan(undefined) : [];

@@ -41,6 +41,11 @@ const TRANSIENT_STATE_FIELDS = new Set([
   '_survivorCounts', '_heroStart', '_witchStart',
   // Offline-mode UI selection state — never meaningful across the wire.
   'selectedEntity', 'pendingAction',
+  // Mission-logic presentation queue (docs/09) — transient per-round scratch,
+  // drained + animated by the client each step. The engine's *runtime* state is
+  // serialized as `logicState` (via state.logicEngine.serialize()); the engine
+  // object itself is re-attached by the mission loader on resume.
+  'logicPresentation',
 ]);
 
 const TRANSIENT_ENTITY_FIELDS = new Set([

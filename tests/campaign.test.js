@@ -15,6 +15,8 @@ import { ObjectiveType, processStoryTriggers } from '../src/campaign/missions.js
 import { CAMPAIGNS, getCampaignById } from '../src/campaign/campaign-registry.js';
 import { roundsUntilScoring } from '../src/ai.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
+import { MissionLogicEngine } from '../src/mission-logic/engine.js';
+import { createGameContext } from '../src/mission-logic/game-context.js';
 
 // ── Helper: localStorage mock for Node ──────────────────────────────────────
 const _store = {};
@@ -28,6 +30,60 @@ globalThis.localStorage = {
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 const hollowDef = getCampaignById('calebs_hollow_prologue');
+
+// Reconstruct the legacy objectives/waves/storyTriggers from a mission's logic
+// graph (the campaign missions are now logic-graph driven — docs/09 #10). Lets
+// the design-regression tests below assert the same facts against the graph.
+// Note: hero-death = loss is inherent (checkVictory), so it's NOT in the graph.
+function graphFacts(mission) {
+  const g = mission.logic;
+  if (!g) return { objectives: mission.objectives ?? { win: null, lose: [] }, waves: mission.waves ?? [], storyTriggers: mission.storyTriggers ?? [] };
+  const byId = new Map(g.nodes.map(n => [n.id, n]));
+  const inExec = new Map();
+  const dataFrom = new Map();
+  for (const e of g.edges) {
+    if (e.kind === 'exec') { if (!inExec.has(e.to.node)) inExec.set(e.to.node, []); inExec.get(e.to.node).push(e.from); }
+    else dataFrom.set(`${e.to.node}:${e.to.pin}`, e.from.node);
+  }
+  const trace = (startId) => {
+    let cur = startId, cond = null, guard = 0;
+    for (;;) {
+      const n = byId.get(cur);
+      if (n?.type === 'branch') { const cn = byId.get(dataFrom.get(`${cur}:cond`)); if (cn?.type === 'conditionNamed') cond = cn.params?.name ?? cond; }
+      const ins = inExec.get(cur);
+      if (!ins || !ins.length || guard++ > 60) return { event: n, cond };
+      cur = ins[0].node;
+    }
+  };
+  const winSpecs = [], loseSpecs = [], waves = [], storyTriggers = [];
+  for (const n of g.nodes) {
+    if (n.type === 'objectiveOutcome') (n.params.side === 'lose' ? loseSpecs : winSpecs).push(n.params.spec);
+    else if (n.type === 'winMission') {
+      const inE = g.edges.find(e => e.kind === 'exec' && e.to.node === n.id);
+      const from = byId.get(inE?.from.node);
+      if (from?.type === 'factionEvent') {
+        if (inE.from.pin === 'onAllUnitsDead') winSpecs.push({ type: 'eliminate_all', targetFaction: from.params.faction });
+        else if (inE.from.pin === 'onLeaderDead') winSpecs.push({ type: 'slay_witch' });
+      }
+    } else if (n.type === 'spawnUnits') {
+      const { event } = trace(n.id);
+      const w = { units: n.params.units ?? [] };
+      if (event?.type === 'onRoundStart') w.round = event.params.round;
+      else if (event?.type === 'onKillCount') { w.trigger = 'hero_kills'; w.count = event.params.count; }
+      else if (event?.type === 'onAreaEnter') { w.trigger = 'area'; w.hexes = event.params.hexes ?? []; }
+      waves.push(w);
+    } else if (n.type === 'storyBeat' || n.type === 'startConversation') {
+      const { event, cond } = trace(n.id);
+      const t = { type: event?.type === 'onAreaEnter' ? 'area' : 'round' };
+      if (n.type === 'storyBeat') { t.title = n.params.title ?? ''; t.text = n.params.text ?? ''; }
+      else t.conversation = n.params.conversationId;
+      if (event?.type === 'onRoundStart') t.round = event.params.round;
+      if (cond) t.condition = cond;
+      storyTriggers.push(t);
+    }
+  }
+  return { objectives: { win: winSpecs[0] ?? null, lose: loseSpecs }, waves, storyTriggers };
+}
 
 function buildMap(builderKey) {
   return hollowDef.mapBuilders[builderKey]();
@@ -74,8 +130,14 @@ describe('Mission definitions', () => {
       assert.ok(m.title, `${m.id} missing title`);
       assert.ok(m.briefing, `${m.id} missing briefing`);
       assert.ok(m.mapBuilder, `${m.id} missing mapBuilder`);
-      assert.ok(m.objectives?.win, `${m.id} missing win objective`);
-      assert.ok(m.objectives?.lose, `${m.id} missing lose objective`);
+      // Victory comes from either legacy objectives OR a logic graph (docs/09 —
+      // a fully graph-driven mission like 'prologue' omits objectives entirely).
+      if (m.logic) {
+        assert.ok(Array.isArray(m.logic.nodes), `${m.id} logic graph missing nodes`);
+      } else {
+        assert.ok(m.objectives?.win, `${m.id} missing win objective`);
+        assert.ok(m.objectives?.lose, `${m.id} missing lose objective`);
+      }
     }
   });
 
@@ -1081,27 +1143,26 @@ describe('Wave spawner', () => {
 describe('Mission 1 (The Awakening) balance', () => {
   const mission1 = hollowDef.missions.find(m => m.id === 'prologue');
 
-  test('has 4 initial zombies (golem triggers after 3 kills, while one still stands)', () => {
-    assert.equal(mission1.enemyUnits.length, 4);
+  test('has 3 initial zombies (golem triggers after 3 kills)', () => {
+    assert.equal(mission1.enemyUnits.length, 3);
     for (const eu of mission1.enemyUnits) {
       assert.equal(eu.type, 'zombie');
     }
   });
 
-  test('three initial zombies are weakened to attack 1, the fourth is full-strength', () => {
-    const weakened     = mission1.enemyUnits.filter(eu => eu.overrides?.attack === 1);
-    const fullStrength = mission1.enemyUnits.filter(eu => eu.overrides?.attack === undefined);
-    assert.equal(weakened.length, 3, 'three zombies weakened to attack 1');
-    assert.equal(fullStrength.length, 1, 'one deliberately full-strength zombie (no attack override)');
+  test('all three initial zombies are weakened to attack 1', () => {
+    const weakened = mission1.enemyUnits.filter(eu => eu.overrides?.attack === 1);
+    assert.equal(weakened.length, 3, 'all three zombies weakened to attack 1');
   });
 
-  test('single kill-triggered wave spawns a weakened wood golem after 3 kills', () => {
-    assert.equal(mission1.waves.length, 1);
-    const wave = mission1.waves[0];
-    assert.equal(wave.trigger, 'hero_kills');
-    assert.equal(wave.count, 3);
-    assert.equal(wave.units.length, 1);
-    const unit = wave.units[0];
+  // Mission 1 is now fully logic-graph driven (docs/09) — the golem spawn,
+  // intro conversation, and win/lose live in `logic`, not waves/objectives.
+  test('a kill-triggered logic spawn adds a weakened wood golem after 3 kills', () => {
+    const g = mission1.logic;
+    const kc = g.nodes.find(n => n.type === 'onKillCount');
+    assert.ok(kc && kc.params.faction === 'hero' && kc.params.count === 3, 'onKillCount(hero, 3)');
+    assert.ok(g.nodes.some(n => n.type === 'doOnce'), 'gated by a Do Once');
+    const unit = g.nodes.find(n => n.type === 'spawnUnits').params.units[0];
     assert.equal(unit.type, 'wood_golem');
     // Weaker than the standard wood golem (maxHp 21, attack 2, defense 3).
     assert.equal(unit.overrides.maxHp, 14);
@@ -1115,34 +1176,39 @@ describe('Mission 1 (The Awakening) balance', () => {
     assert.equal(mission1.phaseCycle.loop, true);
   });
 
-  test('win condition is eliminate_all, lose condition is hero_killed', () => {
-    assert.equal(mission1.objectives.win.type, 'eliminate_all');
-    assert.equal(mission1.objectives.lose.type, 'hero_killed');
+  test('win is graph-driven (witch-all-dead → hero win); hero-death loss is inherent, not in the graph', () => {
+    assert.equal(mission1.objectives, undefined, 'legacy objectives removed — fully graph-driven');
+    const g = mission1.logic;
+    const win = g.nodes.find(n => n.type === 'winMission');
+    assert.equal(win.params.winner, 'hero');
+    const witchEv = g.nodes.find(n => n.type === 'factionEvent' && n.params.faction === 'witch');
+    assert.ok(g.edges.some(e => e.from.node === witchEv.id && e.from.pin === 'onAllUnitsDead' && e.to.node === win.id));
+    // Hero-death = loss is hard-coded in checkVictory, so the graph carries no
+    // loseMission / hero-faction-event (see editor wishlist #4).
+    assert.ok(!g.nodes.some(n => n.type === 'loseMission'), 'no redundant loseMission node');
+    assert.ok(!g.nodes.some(n => n.type === 'factionEvent' && n.params.faction === 'hero'), 'no hero faction-event');
   });
 
   test('aiBudgetBonus is 0', () => {
     assert.equal(mission1.aiBudgetBonus, 0);
   });
 
-  test('killing the last zombie spawns the golem before victory fires', () => {
-    // Regression: the 3rd zombie kill used to trigger eliminate_all because
-    // the wave spawn ran AFTER endRound's checkVictory. The fix moves wave
-    // processing inside endRound so the golem spawns before victory is
-    // evaluated.
+  test('killing the last zombie spawns the golem before victory fires (engine-driven)', () => {
+    // Regression: the golem must spawn (via the logic graph's onKillCount path,
+    // inside endRound's postResolution pump) BEFORE the all-units-dead win check,
+    // so a 3rd kill that empties the board doesn't fire a premature win.
     const mapData = buildMap('prologue');
     mapData.noWitch = true;
     const state = new GameState(true, false, 'skirmish', null, mapData);
 
-    // Install the mission-1 wave processor (same hook main.js uses).
-    state._waveProcessor = () => processWaves(
-      state, mission1.waves,
-      (type, col, row) => createWoodGolem(col, row, 'witch'),
-    );
-    state.victoryDelegate = buildVictoryDelegate(mission1.objectives);
+    const ctx = createGameContext(state, {
+      createEnemyFn: (type, col, row, s) => createWoodGolem(col, row, 'witch', s),
+      emit: (e) => state.logicPresentation.push(e),
+    });
+    state.attachLogicEngine(new MissionLogicEngine(mission1.logic, ctx));
 
-    // Simulate: all 3 initial zombies killed this round, heroKills == 3.
-    // No witch units remain on the board yet; the golem should spawn inside
-    // endRound and prevent eliminate_all from triggering.
+    // All initial zombies killed this round, heroKills == 3, board momentarily
+    // empty of witch units — the golem should spawn before the win is evaluated.
     state.entities = state.entities.filter(e => e.owner !== 'witch');
     state.heroKills = 3;
 
@@ -1151,7 +1217,7 @@ describe('Mission 1 (The Awakening) balance', () => {
     assert.equal(state.winner, null, 'should not have won yet — golem just spawned');
     assert.equal(state.gameOver, false, 'game should still be in progress');
     const golems = state.entities.filter(e => e.type === EntityType.WOOD_GOLEM);
-    assert.equal(golems.length, 1, 'weakened wood golem should have spawned');
+    assert.equal(golems.length, 1, 'weakened wood golem should have spawned via the graph');
   });
 });
 
@@ -1482,15 +1548,14 @@ describe('mission story triggers and loot overrides', () => {
   });
 
   test('river_crossing uses all_party_at_hexes objective', () => {
-    const m = hollowDef.missions.find(m => m.id === 'river_crossing');
-    assert.equal(m.objectives.win.type, 'all_party_at_hexes');
-    assert.ok(Array.isArray(m.objectives.win.hexes) && m.objectives.win.hexes.length >= 3);
+    const win = graphFacts(hollowDef.missions.find(m => m.id === 'river_crossing')).objectives.win;
+    assert.equal(win.type, 'all_party_at_hexes');
+    assert.ok(Array.isArray(win.hexes) && win.hexes.length >= 3);
   });
 
   test('dark_ritual has witch_holds_node lose condition', () => {
-    const m = hollowDef.missions.find(m => m.id === 'dark_ritual');
-    const loseConds = Array.isArray(m.objectives.lose) ? m.objectives.lose : [m.objectives.lose];
-    assert.ok(loseConds.some(l => l.type === 'witch_holds_node'));
+    const lose = graphFacts(hollowDef.missions.find(m => m.id === 'dark_ritual')).objectives.lose;
+    assert.ok(lose.some(l => l.type === 'witch_holds_node'));
   });
 
   test('mission 7-step progression chain is valid', () => {
@@ -2109,44 +2174,43 @@ describe('Custom phase cycles', () => {
 
 describe('Mission 2 (Gathering Survivors) balance', () => {
   const mission2 = hollowDef.missions.find(m => m.id === 'gathering_survivors');
+  const facts2 = graphFacts(mission2);
 
   test('uses gather_and_survive win type with 2 survivors / 4 kills / dusk fallback', () => {
-    assert.equal(mission2.objectives.win.type, 'gather_and_survive');
-    assert.equal(mission2.objectives.win.survivors, 2);
-    assert.equal(mission2.objectives.win.kills, 4);
-    assert.equal(mission2.objectives.win.phaseFallback, 'dusk');
+    assert.equal(facts2.objectives.win.type, 'gather_and_survive');
+    assert.equal(facts2.objectives.win.survivors, 2);
+    assert.equal(facts2.objectives.win.kills, 4);
+    assert.equal(facts2.objectives.win.phaseFallback, 'dusk');
   });
 
-  test('lose conditions include hero_killed and phase_without_survivors at dusk', () => {
-    assert.ok(Array.isArray(mission2.objectives.lose));
-    const types = mission2.objectives.lose.map(l => l.type);
-    assert.ok(types.includes('hero_killed'));
-    const pws = mission2.objectives.lose.find(l => l.type === 'phase_without_survivors');
+  test('lose condition includes phase_without_survivors at dusk (hero death is inherent)', () => {
+    const pws = facts2.objectives.lose.find(l => l.type === 'phase_without_survivors');
     assert.ok(pws);
     assert.equal(pws.phase, 'dusk');
     assert.equal(pws.survivors, 2);
   });
 
   test('story trigger fires on round 6 warning of impending night', () => {
-    const lastDay = mission2.storyTriggers.find(t => t.round === 6);
+    const lastDay = facts2.storyTriggers.find(t => t.round === 6);
     assert.ok(lastDay, 'Mission 2 should have a round-6 warning trigger');
-    assert.ok(/dusk|night|fading|time/i.test(lastDay.text + lastDay.title),
+    assert.ok(/dusk|night|fading|time/i.test((lastDay.text ?? '') + (lastDay.title ?? '')),
       'warning trigger text should mention the coming night');
   });
 
-  test('map places three survivors: one near the hero start, two further away', () => {
+  test('map places four survivors spread across the map (exploration required)', () => {
     const mapData = buildMap('gathering_survivors');
     const survivorTiles = [];
     for (const [, tile] of mapData.tiles) {
       if (tile.hiddenSurvivor) survivorTiles.push({ col: tile.col, row: tile.row });
     }
-    assert.equal(survivorTiles.length, 3, 'should have 3 hidden survivors on the map');
+    assert.equal(survivorTiles.length, 4, 'should have 4 hidden survivors on the map');
 
+    // The survivors are distributed across the board (not clustered by the hero
+    // start) so finding them all means exploring — assert a wide distance spread.
     const distances = survivorTiles.map(t => offsetHexDistance(mapData.heroStart, t));
-    const near = distances.filter(d => d <= 4);
-    const far  = distances.filter(d => d >= 5);
-    assert.ok(near.length >= 1, 'at least one survivor should be within 4 hexes of the hero start');
-    assert.ok(far.length >= 2, 'at least two survivors should be 5+ hexes from the hero start');
+    const far = distances.filter(d => d >= 5);
+    assert.ok(far.length >= 3, 'at least three survivors are 5+ hexes from the hero start');
+    assert.ok(Math.max(...distances) - Math.min(...distances) >= 5, 'survivors span the map, not clustered');
   });
 });
 
@@ -2162,6 +2226,7 @@ function offsetHexDistance(a, b) {
 
 describe('Mission 3 (The First Night) balance', () => {
   const mission3 = hollowDef.missions.find(m => m.id === 'first_night');
+  const facts3 = graphFacts(mission3);
 
   test('phase cycle is one dusk + five nights + one dawn (non-looping)', () => {
     assert.ok(mission3.phaseCycle, 'first_night should have phaseCycle');
@@ -2171,16 +2236,13 @@ describe('Mission 3 (The First Night) balance', () => {
   });
 
   test('uses survive_with_party win at dawn with 2 survivors', () => {
-    assert.equal(mission3.objectives.win.type, 'survive_with_party');
-    assert.equal(mission3.objectives.win.phase, 'dawn');
-    assert.equal(mission3.objectives.win.survivors, 2);
+    assert.equal(facts3.objectives.win.type, 'survive_with_party');
+    assert.equal(facts3.objectives.win.phase, 'dawn');
+    assert.equal(facts3.objectives.win.survivors, 2);
   });
 
-  test('lose conditions include hero_killed and phase_without_survivors at dawn', () => {
-    assert.ok(Array.isArray(mission3.objectives.lose));
-    const types = mission3.objectives.lose.map(l => l.type);
-    assert.ok(types.includes('hero_killed'));
-    const pws = mission3.objectives.lose.find(l => l.type === 'phase_without_survivors');
+  test('lose condition includes phase_without_survivors at dawn (hero death is inherent)', () => {
+    const pws = facts3.objectives.lose.find(l => l.type === 'phase_without_survivors');
     assert.ok(pws);
     assert.equal(pws.phase, 'dawn');
     assert.equal(pws.survivors, 2);
@@ -2217,11 +2279,11 @@ describe('Mission 3 (The First Night) balance', () => {
 
   test('enemy wave count — heavy swarm across dusk + five nights', () => {
     // Round 7 is dawn; no wave needed there. Waves should cover rounds 1-6.
-    const waveRounds = mission3.waves.map(w => w.round);
+    const waveRounds = facts3.waves.map(w => w.round);
     for (const r of [1, 2, 3, 4, 5, 6]) {
       assert.ok(waveRounds.includes(r), `should have a wave in round ${r}`);
     }
-    const total = mission3.waves.reduce((sum, w) => sum + w.units.length, 0);
+    const total = facts3.waves.reduce((sum, w) => sum + w.units.length, 0);
     assert.ok(total >= 12, `expected heavy swarm (>=12 wave spawns), got ${total}`);
   });
 
@@ -2229,7 +2291,7 @@ describe('Mission 3 (The First Night) balance', () => {
     // Round 2 is the first full night (round 1 is dusk). The party should
     // face at least one minion from night 1 onward every round.
     for (const r of [2, 3, 4, 5, 6]) {
-      const wave = mission3.waves.find(w => w.round === r);
+      const wave = facts3.waves.find(w => w.round === r);
       assert.ok(wave, `round ${r} should have a wave`);
       const minionCount = wave.units.filter(u => u.type === 'minion').length;
       assert.ok(minionCount >= 1,
@@ -2265,20 +2327,18 @@ describe('Mission 3 (The First Night) balance', () => {
 
 describe('Mission 4 (The River Crossing) balance', () => {
   const mission4 = hollowDef.missions.find(m => m.id === 'river_crossing');
+  const facts4 = graphFacts(mission4);
 
   test('uses all_party_at_hexes win centred on the far-bank church', () => {
-    assert.equal(mission4.objectives.win.type, 'all_party_at_hexes');
-    const hexes = mission4.objectives.win.hexes;
+    assert.equal(facts4.objectives.win.type, 'all_party_at_hexes');
+    const hexes = facts4.objectives.win.hexes;
     assert.ok(hexes.some(h => h.col === 15 && h.row === 4),
       'target hex set must include the church at (15,4)');
     assert.ok(hexes.length >= 3, 'target hex set should include the church and neighbors');
   });
 
-  test('lose conditions include hero_killed and survivors_below(2)', () => {
-    assert.ok(Array.isArray(mission4.objectives.lose));
-    const types = mission4.objectives.lose.map(l => l.type);
-    assert.ok(types.includes('hero_killed'));
-    const below = mission4.objectives.lose.find(l => l.type === 'survivors_below');
+  test('lose condition includes survivors_below(2) (hero death is inherent)', () => {
+    const below = facts4.objectives.lose.find(l => l.type === 'survivors_below');
     assert.ok(below, 'lose should include survivors_below');
     assert.equal(below.count, 2);
   });
@@ -2304,12 +2364,12 @@ describe('Mission 4 (The River Crossing) balance', () => {
   test('river area is swarming — at least 8 pre-placed enemies plus waves', () => {
     assert.ok(mission4.enemyUnits.length >= 8,
       `expected a swarming river (>=8 initial enemies), got ${mission4.enemyUnits.length}`);
-    const waveTotal = mission4.waves.reduce((sum, w) => sum + w.units.length, 0);
+    const waveTotal = facts4.waves.reduce((sum, w) => sum + w.units.length, 0);
     assert.ok(waveTotal >= 6,
       `expected meaningful reinforcement waves (>=6 total spawns), got ${waveTotal}`);
     const types = new Set([
       ...mission4.enemyUnits.map(u => u.type),
-      ...mission4.waves.flatMap(w => w.units.map(u => u.type)),
+      ...facts4.waves.flatMap(w => w.units.map(u => u.type)),
     ]);
     assert.ok(types.has('zombie'), 'enemy mix should include zombies');
     assert.ok(types.has('minion'), 'enemy mix should include minions');
@@ -2341,6 +2401,7 @@ describe('Mission 4 (The River Crossing) balance', () => {
 
 describe('Mission 5 (Dark Ritual) balance', () => {
   const mission5 = hollowDef.missions.find(m => m.id === 'dark_ritual');
+  const facts5 = graphFacts(mission5);
 
   test('phase cycle is 11 rounds, 3 day → 1 dusk → 6 night → 1 dawn, non-looping', () => {
     assert.ok(mission5.phaseCycle);
@@ -2352,15 +2413,12 @@ describe('Mission 5 (Dark Ritual) balance', () => {
   });
 
   test('uses witch_denied_nodes at dawn as the win condition', () => {
-    assert.equal(mission5.objectives.win.type, 'witch_denied_nodes');
-    assert.equal(mission5.objectives.win.phase, 'dawn');
+    assert.equal(facts5.objectives.win.type, 'witch_denied_nodes');
+    assert.equal(facts5.objectives.win.phase, 'dawn');
   });
 
-  test('lose conditions include hero_killed and witch_holds_node at dawn', () => {
-    assert.ok(Array.isArray(mission5.objectives.lose));
-    const types = mission5.objectives.lose.map(l => l.type);
-    assert.ok(types.includes('hero_killed'));
-    const holds = mission5.objectives.lose.find(l => l.type === 'witch_holds_node');
+  test('lose condition includes witch_holds_node at dawn (hero death is inherent)', () => {
+    const holds = facts5.objectives.lose.find(l => l.type === 'witch_holds_node');
     assert.ok(holds, 'lose should include witch_holds_node');
     assert.equal(holds.phase, 'dawn');
   });
@@ -2381,7 +2439,7 @@ describe('Mission 5 (Dark Ritual) balance', () => {
   });
 
   test('has an area-triggered golem ambush at the second clearing', () => {
-    const ambush = mission5.waves.find(w => w.trigger === 'area');
+    const ambush = facts5.waves.find(w => w.trigger === 'area');
     assert.ok(ambush, 'should have an area-triggered wave');
     assert.ok(ambush.hexes && ambush.hexes.length > 0, 'ambush should have hex list');
     const golems = ambush.units.filter(u => u.type === 'wood_golem');

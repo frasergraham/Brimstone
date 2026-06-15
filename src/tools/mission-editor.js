@@ -60,6 +60,10 @@ export const EditorTool = Object.freeze({
   ROAD_NODE: 'road-node',
   POWER_NODE: 'power-node',
   DELETE: 'delete',                   // clear a tile back to blank/base (item 5)
+  // Click a placed unit → adds an Actor node (OnSpawn/OnDeath) to the logic graph;
+  // click an empty hex → adds a Location node (a hex you can wire into Spawn, etc).
+  // Handled in the UI layer (mission-editor-ui onPaint), not _TOOL_DISPATCH.
+  ADD_TO_GRAPH: 'add-to-graph',
 });
 
 /** Enemy unit types the placement tool can stamp (runtime lowercase values). */
@@ -215,6 +219,7 @@ const _TOOL_VALUE_KIND = Object.freeze({
   [EditorTool.ROAD_NODE]: ToolValueKind.NONE,
   [EditorTool.POWER_NODE]: ToolValueKind.NONE,
   [EditorTool.DELETE]: ToolValueKind.NONE,
+  [EditorTool.ADD_TO_GRAPH]: ToolValueKind.NONE,
 });
 
 /** Which VALUE-panel kind a given tool exposes. Unknown tools → NONE. */
@@ -1345,6 +1350,11 @@ export function resizeHandmadeMap(model, edge, delta) {
       col: t.col + dCol,
       row: t.row + dRow,
       roadDirs: (t.roadDirs ?? []).map(k => _shiftKey(k, dCol, dRow)),
+      // Building footprint links are "col,row" string keys too — shift them in
+      // lockstep with the tile coords, or the entrance/footprint pair points at
+      // stale cells and the save-time validator rejects it (item 9).
+      ...(t.footprintHexes ? { footprintHexes: t.footprintHexes.map(k => _shiftKey(k, dCol, dRow)) } : {}),
+      ...(t.buildingFootprintOf != null ? { buildingFootprintOf: _shiftKey(t.buildingFootprintOf, dCol, dRow) } : {}),
     }))
     .filter(t => keep(t.col, t.row))
     .map(t => ({ ...t, roadDirs: t.roadDirs.filter(k => _keyInBounds(k, newCols, newRows)) }));
@@ -2091,6 +2101,11 @@ export function createMissionEditor({ render } = {}) {
     setMapDef(def) { snapshot(); mapDef = def; emit(); },
     getEnemyUnits: () => enemyUnits,
     setEnemyUnits(list) { snapshot(); enemyUnits = list; emit(); },
+    /** Mutate the enemyUnits array in place as ONE undo step (edit/delete a
+     *  placed unit's type/level, or splice it out — item 8 edit mode). */
+    editEnemyUnits(mutator) { snapshot(); mutator(enemyUnits); emit(); },
+    /** The placed enemy unit at a hex, or undefined. */
+    enemyUnitAt({ col, row }) { return enemyUnits.find(u => u.col === col && u.row === row); },
     getMeta: () => meta,
     setMeta(m) { snapshot(); meta = m; emit(); },
     /**

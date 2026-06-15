@@ -18,6 +18,8 @@
     }
     #menu-bar .brand { font-size: 12px; color: #c4a04a; letter-spacing: 1.5px; text-transform: uppercase; }
     #menu-bar .active-tool-name { font-size: 12px; color: #d4cba0; letter-spacing: 1px; }
+    #menu-bar .open-mission-name { font-size: 12px; color: #ffd680; font-weight: 600; }
+    #menu-bar .open-mission-name::before { content: '— '; color: #6a6048; font-weight: 400; }
     #menu-bar .nav-back { margin-left: auto; font-size: 12px; color: #a08858; }
     #menu-bar .file-status { font-size: 11px; color: #8a8060; min-width: 0; }
     #menu-bar .file-status.err { color: #d77; }
@@ -61,6 +63,8 @@
     #lighting-panel.active,
     #editor-panel.active,
     #combat-panel.active { display: grid; }
+    /* Campaign Progression tab (docs/09 §5.5) — the host fills the panel. */
+    #campaign-panel #campaign-host { position: absolute; inset: 0; }
 
     /* ── Editor sidebar tabs (Map / Mission / Events / Units) ──────────────── */
     #editor-panel .e-tabbar { display: flex; gap: 2px; margin: -12px -14px 10px -14px; padding: 8px 10px 0 10px;
@@ -178,6 +182,9 @@
     /* Timeline pane (EC) — scrollable round track. */
     #editor-panel #e-timeline-pane { flex: 1 1 auto; display: none; overflow-y: auto; padding: 12px 14px; background: #0f0d0a; color: #d4cba0; }
     #editor-panel #e-timeline-pane.active { display: block; }
+    /* Logic graph pane (docs/09) — the node editor manages its own internal layout. */
+    #editor-panel #e-logic-pane { flex: 1 1 auto; display: none; overflow: hidden; background: #0f0d0a; }
+    #editor-panel #e-logic-pane.active { display: block; }
     #editor-panel .e-tl-intro { margin-bottom: 8px; }
     #editor-panel .e-tl-track { display: flex; flex-direction: column; gap: 6px; }
     #editor-panel .e-tl-row { display: grid; grid-template-columns: 104px 1fr; gap: 10px; border: 1px solid #2c2620; background: #1a1610; padding: 8px; align-items: start; }
@@ -357,6 +364,74 @@
       pointer-events: none;
     }
 
+    /* ── Hovered-hex coordinate readout (item 5) ───────────────────────────── */
+    #editor-panel .e-coord-badge {
+      position: absolute; left: 10px; bottom: 36px; z-index: 4;
+      padding: 3px 8px; border: 1px solid #4a3f1f; border-radius: 4px;
+      background: rgba(10,8,5,0.85); color: #ffd680; font-size: 11px;
+      font-variant-numeric: tabular-nums; letter-spacing: 0.5px; pointer-events: none;
+    }
+
+    /* ── Left-docked vertical tool palette (item 7) ─────────────────────────── */
+    #editor-panel .e-tooldock {
+      position: absolute; left: 8px; top: 8px; z-index: 5;
+      display: flex; flex-direction: column; gap: 3px;
+      max-height: calc(100% - 16px); overflow-y: auto;
+      padding: 4px; border: 1px solid #2c2620; border-radius: 8px;
+      background: rgba(14,11,8,0.92); box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+    }
+    #editor-panel .e-tooldock-btn {
+      width: 32px; height: 32px; flex: 0 0 auto; border-radius: 6px;
+      border: 1px solid transparent; background: transparent; color: #e8e2d6;
+      font-size: 17px; line-height: 1; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+    }
+    #editor-panel .e-tooldock-btn:hover { background: #2a231a; }
+    #editor-panel .e-tooldock-btn.active {
+      background: #3a2f18; border-color: #c4a04a; box-shadow: 0 0 0 1px rgba(196,160,74,0.4) inset;
+    }
+    /* Place / Edit mode toggle at the top of the dock (item 8). */
+    #editor-panel .e-tooldock-mode {
+      display: flex; gap: 3px; padding-bottom: 4px; margin-bottom: 4px;
+      border-bottom: 1px solid #2c2620;
+    }
+    #editor-panel .e-tooldock-mode-btn {
+      flex: 1 1 0; height: 26px; border-radius: 5px; border: 1px solid #332c22;
+      background: #1d1812; color: #cdbf9e; font-size: 14px; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+    }
+    #editor-panel .e-tooldock-mode-btn:hover { background: #2a231a; }
+    #editor-panel .e-tooldock-mode-btn.active { background: #c4a04a; color: #1a1610; border-color: #c4a04a; }
+
+    /* ── Selection inspector, pinned to the right panel (item 8) ────────────── */
+    #editor-panel .e-selection {
+      margin-bottom: 8px; padding: 8px; border: 1px solid #7a3b3b; border-radius: 6px;
+      background: #221413;
+    }
+    #editor-panel .e-selection-head {
+      font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+      color: #ff9b9b; margin-bottom: 6px;
+    }
+    #editor-panel .e-selection-del {
+      width: 100%; margin-top: 8px; padding: 6px; border-radius: 5px;
+      border: 1px solid #7a3b3b; background: #3a1c1c; color: #ffd0d0; cursor: pointer; font-size: 12px;
+    }
+    #editor-panel .e-selection-del:hover { background: #5a2626; }
+
+    /* ── Layers dropdown (item 6) ──────────────────────────────────────────── */
+    #editor-panel .e-layers-menu { position: absolute; top: 8px; right: 10px; z-index: 6; }
+    #editor-panel .e-layers-btn {
+      padding: 5px 10px; border: 1px solid #c4a04a; border-radius: 6px;
+      background: rgba(26,22,16,0.9); color: #ffd680; font-size: 12px; cursor: pointer;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+    }
+    #editor-panel .e-layers-btn:hover, #editor-panel .e-layers-btn.active { background: #5a4a30; }
+    #editor-panel .e-layers-popup {
+      position: absolute; top: 36px; right: 0; min-width: 210px;
+      padding: 8px; border: 1px solid #2c2620; border-radius: 8px;
+      background: rgba(14,11,8,0.97); box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+    }
+
     /* ── Full-width layer toggles (item 11) ────────────────────────────────── */
     #editor-panel .e-layer-row {
       display: flex; align-items: center; justify-content: space-between; width: 100%;
@@ -508,21 +583,23 @@
           <button class="menu-item" data-tab="assets" title="Browse 3D models + tree assets">Assets</button>
           <button class="menu-item" data-tab="lighting" title="Tune the per-phase 3D lighting">Lighting</button>
           <button class="menu-item" data-tab="editor" title="Author campaign mission maps">Mission Editor</button>
+          <button class="menu-item" data-tab="campaign" title="Map non-linear campaign progression: mission unlock graph + rewards">Campaign</button>
           <button class="menu-item" data-tab="combat" title="Place units on a clearing map and play real combats">Combat</button>
         </div>
       </div>
       <span class="brand">Caleb's Hollow Tools</span>
       <span class="active-tool-name" id="active-tool-name">Assets</span>
+      <!-- The mission currently open in the Mission Editor (editor tab only). -->
+      <span class="open-mission-name" id="open-mission-name" hidden></span>
 
       <!-- File menu: editor-only Load / Save. Hidden unless the Mission Editor
            tool is active. Drives the editor's loadMissionFile / saveMission. -->
       <div class="menu" id="file-menu" hidden>
         <button class="menu-btn" id="file-menu-btn" aria-haspopup="true" aria-expanded="false" title="File operations — New, Load, Save">File</button>
         <div class="menu-list" id="file-menu-list" hidden>
-          <button class="menu-item" id="file-new" title="Start a new mission map (pick mode + size)">New…</button>
-          <button class="menu-item" id="file-load" title="Load a mission JSON file from disk">Load…</button>
-          <button class="menu-item" id="file-load-existing" title="Load one of the bundled in-repo campaign missions">Load existing mission…</button>
-          <button class="menu-item" id="file-save" title="Validate the mission and download it as JSON">Save / Download</button>
+          <button class="menu-item" id="file-load-existing" title="Open a mission from the repo (src/campaign/missions)">Open mission…</button>
+          <button class="menu-item" id="file-load" title="Import a mission JSON file from elsewhere on disk">Import JSON…</button>
+          <button class="menu-item" id="file-save" title="Validate and save the mission (⌘S)">Save&nbsp;&nbsp;⌘S</button>
         </div>
         <!-- Bundled-mission picker: a flyout listing the in-repo campaign
              missions, populated from MIGRATED_MISSIONS. Opened by the
@@ -676,7 +753,7 @@
         <!-- Main area: a tab bar (Map ⇄ Timeline) over two stacked panes. Only
              one pane is .active at a time; built/toggled by initEditor() (EC). -->
         <div id="e-main">
-          <div id="e-main-tabs"><!-- Map / Timeline tabs built by initEditor() --></div>
+          <div id="e-main-tabs"><!-- Map / Logic tabs built by initEditor() --></div>
           <div id="e-canvas-pane">
             <canvas id="e-render-canvas"></canvas>
             <!-- 3D preview overlay — hidden until "Preview in 3D" is pressed. The
@@ -687,8 +764,10 @@
               <button id="e-preview-close" type="button" title="Close the 3D preview and return to the 2D editor">✕ Close 3D</button>
             </div>
           </div>
-          <!-- Round-by-round timeline tab (EC) — day/night track + event lanes. -->
-          <div id="e-timeline-pane"><!-- built by initEditor() --></div>
+          <!-- Logic graph tab (docs/09) — node-graph event→action editor.
+               (The legacy Timeline tab was retired — all missions are now
+               logic-graph driven; see docs/09 #10.) -->
+          <div id="e-logic-pane"><!-- LogicGraphEditor mounted by initEditor() --></div>
         </div>
         <aside id="e-palette"><!-- tool palette built by initEditor() --></aside>
       </section>
@@ -703,6 +782,11 @@
           <button id="c-continue-btn" type="button" hidden>Continue ▶</button>
         </div>
         <div id="c-controls"><!-- side panel built by initCombat() --></div>
+      </section>
+
+      <!-- ── CAMPAIGN PROGRESSION PANEL (docs/09 §5.5) ─────────────────────── -->
+      <section id="campaign-panel" class="tab-panel">
+        <div id="campaign-host"><!-- CampaignProgressionView mounted by initCampaignProgression() --></div>
       </section>
     </div>
   </div>
@@ -731,6 +815,7 @@
     import { initEditor } from '/src/tools/mission-editor-ui.js';
     // Combat tester tab. DOM-free controller + 3D mount, both lazy-imported.
     import { initCombat } from '/src/tools/combat-tester-ui.js';
+    import { initCampaignProgression } from '/src/tools/campaign-progression-ui.js';
     // Bundled-mission catalog for the File ▸ "Load existing mission…" picker.
     // Dependency-free shared list (also imported by campaign-registry.js).
     import { MIGRATED_MISSIONS } from '/src/campaign/mission-catalog.js';
@@ -1537,7 +1622,7 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
     //  TAB SHELL — lazy-init + pause/resume. Only the active tab's renderer
     //  is left running; the others init on first activation then pause.
     // ════════════════════════════════════════════════════════════════════
-    const TABS = ['assets', 'lighting', 'editor', 'combat'];
+    const TABS = ['assets', 'lighting', 'editor', 'campaign', 'combat'];
     // Per-tab lifecycle handles ({pause, resume}) once a tab has been booted.
     const handles = {};
     // Lighting init is async; track its promise so resume() can await it.
@@ -1548,6 +1633,20 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
         handles.assets = initAssets();
       } else if (id === 'lighting') {
         initPromises.lighting = initLighting().then((h) => { handles.lighting = h; return h; });
+      } else if (id === 'campaign') {
+        // Campaign Progression — loads mission gate/reward fields, builds the DAG.
+        // Async (fetches mission JSON). "Open in Logic editor" jumps to the
+        // Mission Editor tab (the mission load itself is an upcoming enhancement).
+        initPromises.campaign = initCampaignProgression(document, {
+          onOpenMission: async (missionId) => {
+            controller.activate('editor');            // boots the editor if first open
+            const ed = handles.editor;
+            if (ed?.loadMissionById) {
+              const res = await ed.loadMissionById(missionId);
+              if (res?.ok !== false) ed.showMainTab?.('logic'); // land on the Logic graph
+            }
+          },
+        }).then((h) => { handles.campaign = h; return h; });
       } else if (id === 'combat') {
         // Async boot — the 3D mount inside the Combat tester needs the
         // Renderer3D's lazy Babylon import to resolve before resume() can
@@ -1579,8 +1678,18 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
       try { history.replaceState(null, '', url); } catch { /* same-origin guard or sandboxed iframe */ }
     }
 
+    // The mission currently open in the editor — shown in the menu bar (editor
+    // tab only) and the window title (Electron title bar follows document.title).
+    let openMissionTitle = null;
+    function setOpenMissionDisplay(activeTab) {
+      const el = document.getElementById('open-mission-name');
+      const show = activeTab === 'editor' && !!openMissionTitle;
+      if (el) { el.textContent = show ? openMissionTitle : ''; el.hidden = !show; }
+      document.title = show ? `Caleb's Studio — ${openMissionTitle}` : "Caleb's Studio";
+    }
+
     function onMissionChange(info) {
-      // info: { source: 'bundled'|'disk'|'wip'|'new', id?, wipId? }
+      // info: { source: 'bundled'|'disk'|'wip'|'new', id?, wipId?, title? }
       // 'bundled' → ?mission=<id> (catalog id); clear ?wip
       // 'wip'     → ?wip=<id>;   clear ?mission
       // 'disk'    → user loaded a JSON from disk; no shareable id — clear both
@@ -1593,9 +1702,11 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
       } else {
         updateUrlParams({ mission: null, wip: null });
       }
+      openMissionTitle = info.title ?? info.id ?? null;
+      setOpenMissionDisplay(controller.active);
     }
 
-    const TAB_LABELS = { assets: 'Assets', lighting: 'Lighting', editor: 'Mission Editor', combat: 'Combat' };
+    const TAB_LABELS = { assets: 'Assets', lighting: 'Lighting', editor: 'Mission Editor', campaign: 'Campaign', combat: 'Combat' };
 
     function showPanel(id) {
       // E7 — keep ?tool=<id> in sync with the active tab. Switching off the
@@ -1603,6 +1714,10 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
       const patch = { tool: id };
       if (id !== 'editor') { patch.mission = null; patch.wip = null; }
       updateUrlParams(patch);
+      // Remember the active tool across launches. The URL param works in the
+      // browser, but the Electron app always loads the bare admin-tools URL, so
+      // localStorage is what restores the last tab in Caleb's Studio.
+      try { localStorage.setItem('studio:tool', id); } catch { /* private mode */ }
       for (const tab of TABS) {
         const panel = document.getElementById(`${tab}-panel`);
         if (panel) panel.classList.toggle('active', tab === id);
@@ -1613,6 +1728,7 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
       }
       const label = document.getElementById('active-tool-name');
       if (label) label.textContent = TAB_LABELS[id] ?? id;
+      setOpenMissionDisplay(id); // mission name shows on the editor tab only
       // The File menu (Load / Save) + Undo/Redo are only meaningful for the
       // Mission Editor.
       const editorActive = (id === 'editor');
@@ -1691,10 +1807,8 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
       fileStatus.classList.toggle('err', !!res && res.ok === false);
       fileStatus.classList.toggle('ok', !!res && res.ok === true);
     }
-    document.getElementById('file-new')?.addEventListener('click', (e) => {
-      e.stopPropagation(); closeMenus();
-      if (handles.editor?.newMission) setFileStatus(handles.editor.newMission());
-    });
+    // (File ▸ New… removed — new missions are created from the Campaign tab,
+    //  which writes a stub mission JSON + registers it. See campaign-progression.)
     const fileLoadInput = document.getElementById('file-load-input');
     document.getElementById('file-load')?.addEventListener('click', (e) => {
       e.stopPropagation(); closeMenus();
@@ -1715,8 +1829,8 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
     if (window.studioAPI?.writeFile) {
       const saveBtn = document.getElementById('file-save');
       if (saveBtn) {
-        saveBtn.textContent = 'Save to repo';
-        saveBtn.title = 'Validate and write the mission into src/campaign/missions/';
+        saveBtn.innerHTML = 'Save&nbsp;&nbsp;⌘S';
+        saveBtn.title = 'Validate and write the mission into src/campaign/missions/ (⌘S)';
       }
     }
 
@@ -1747,6 +1861,9 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
       } else if (e.key === 'y' || e.key === 'Y') { // Windows-style redo
         e.preventDefault();
         handles.editor.redo?.();
+      } else if (e.key === 's' || e.key === 'S') { // Cmd/Ctrl-S → Save
+        e.preventDefault();
+        if (handles.editor?.saveMission) handles.editor.saveMission().then((r) => setFileStatus?.(r));
       }
     });
 
@@ -1783,7 +1900,12 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
     // otherwise fall back to Assets. The others stay dormant until their tab is
     // first opened.
     const bootParams = parseToolParams(location.search);
-    controller.activate(bootParams.tool && KNOWN_TOOLS.includes(bootParams.tool) ? bootParams.tool : 'assets');
+    let storedTool = null;
+    try { storedTool = localStorage.getItem('studio:tool'); } catch { /* private mode */ }
+    const bootTool = (bootParams.tool && KNOWN_TOOLS.includes(bootParams.tool)) ? bootParams.tool
+                   : (storedTool && KNOWN_TOOLS.includes(storedTool)) ? storedTool
+                   : 'assets';
+    controller.activate(bootTool);
   </script>
 </body>
 </html>

@@ -76,6 +76,21 @@ Use these terms consistently in code comments, UI, and discussion:
 
 ---
 
+## Mission Logic Graph — Core Invariants
+
+The mission event→action system (`src/mission-logic/`, **full design: `docs/09-mission-logic-graph.md`**) is a data-driven, Blueprint-style graph that is replacing every bespoke trigger (story beats, conversations, spawns, area/turn/phase triggers, win/lose). One mission owns one graph. These four invariants are load-bearing — online/offline parity, replay, spectate, and reconnect all depend on them. **Do not violate them.**
+
+1. **Sealed resolution.** A round's resolution is a pure function of `(state, plans, seed)`. Nothing observed *during* a round's replay may mutate game state — replay is reproduction, never authorship. The graph engine runs *inside* this sealed function.
+2. **Graph runs on the authority.** One authority owns the canonical `GameState`: offline (campaign) it is the local client itself, online it is the server. The engine is shared, DOM-free code instantiated wherever `resolvePlans()` runs — "resolver vs client" is a false split offline.
+3. **Sim / Show split.** Every node is either **Sim** (mutates authoritative `GameState`, deterministically, reading **only** `(state, plans, seed)`) or **Show** (pure presentation — conversation/toast/camera/voice — emitted onto the step stream, never touching state). Pause/resume/animation speed/who-dismisses-first are presentation only and can never affect logic.
+4. **Interactivity is a plan action.** Any future player choice is captured at a planning gate and submitted as a **plan action** through the existing channel — it never branches a round's replay. The game waits on a human in exactly one place (plan submission); the graph adds no new wait, so online needs **no new sync primitive**.
+
+**Enforceable engine rule:** during resolution, Sim nodes read only `(state, plans, seed)` and produce `(state mutations, presentation events)` — never live input, wall-clock, animation progress, or client-local state.
+
+**Status:** implemented end-to-end — engine (`src/mission-logic/`) wired into the live loop (GameState `pumpMissionLogic` + `endRound`, `game-context.js`, `state-sync` `logicState`, `main.js` attach/drain/resume), the node-graph **Logic** editor tab, rich **`unlock`** criteria in `campaign.js`, and the **Campaign Progression** tab (admin-tools). The engine is a guarded no-op for non-logic games (byte-identical normal/online play). The old mission fields (`storyTriggers`, `waves`, `conversations[].onComplete`, `objectives.win/lose`) **remain the live runtime** for shipped missions until each is flipped to graph-driven — keep both. A mission opts in via a `logic` block; missions gate on `requires` (legacy) AND `unlock` (rich, AND/OR/NOT over completed-missions / item / level / flag / resource).
+
+---
+
 ## Run Commands
 
 ```bash

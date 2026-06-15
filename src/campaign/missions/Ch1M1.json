@@ -19,40 +19,11 @@
   "mapSize": "skirmish",
   "hasWitch": false,
   "disableScoring": true,
-  "waves": [
-    {
-      "id": "golem-awakens",
-      "trigger": "hero_kills",
-      "count": 3,
-      "units": [
-        {
-          "type": "wood_golem",
-          "spawnAt": "near_hero",
-          "overrides": {
-            "maxHp": 14,
-            "hp": 14,
-            "attack": 1,
-            "defense": 1
-          },
-          "spawnLog": "🗿 A crude wood-and-bone golem lurches out of the alley!"
-        }
-      ]
-    }
-  ],
   "aiPersonality": "balanced",
   "aiBudgetBonus": 0,
   "maxSurvivorsFromRoster": 0,
   "missionSurvivors": 1,
   "maxDiscoverableSurvivors": 0,
-  "objectives": {
-    "win": {
-      "type": "eliminate_all",
-      "reason": "The golem shatters — Caleb's Hollow is silent again."
-    },
-    "lose": {
-      "type": "hero_killed"
-    }
-  },
   "startingResources": {
     "food": 1,
     "herbs": 1,
@@ -70,13 +41,6 @@
     ]
   },
   "requires": null,
-  "storyTriggers": [
-    {
-      "type": "round",
-      "round": 1,
-      "conversation": "ch1m1_intro"
-    }
-  ],
   "survivorStartPositions": [],
   "map": {
     "mode": "handmade",
@@ -1133,12 +1097,6 @@
       "overrides": {
         "attack": 1
       }
-    },
-    {
-      "type": "zombie",
-      "col": 6,
-      "row": 3,
-      "overrides": {}
     }
   ],
   "npcs": [
@@ -1157,10 +1115,93 @@
       "bindings": {
         "hero": "hero",
         "innkeeper": "npc:innkeeper_john"
+      }
+    }
+  ],
+  "hints": {
+    "scriptKey": "ch1m1"
+  },
+  "logic": {
+    "version": 1,
+    "variables": [],
+    "nodes": [
+      {
+        "id": "n0",
+        "type": "onMissionStart",
+        "params": {},
+        "x": 40,
+        "y": 40
       },
-      "onComplete": [
-        {
-          "action": "move",
+      {
+        "id": "n1",
+        "type": "startConversation",
+        "params": {
+          "conversationId": "ch1m1_intro"
+        },
+        "x": 300,
+        "y": 40
+      },
+      {
+        "id": "n2",
+        "type": "onKillCount",
+        "params": {
+          "faction": "hero",
+          "count": 3
+        },
+        "x": 40,
+        "y": 180
+      },
+      {
+        "id": "n3",
+        "type": "doOnce",
+        "params": {},
+        "x": 300,
+        "y": 180
+      },
+      {
+        "id": "n4",
+        "type": "spawnUnits",
+        "params": {
+          "units": [
+            {
+              "type": "wood_golem",
+              "spawnAt": "near_hero",
+              "overrides": {
+                "maxHp": 14,
+                "hp": 14,
+                "attack": 1,
+                "defense": 1
+              },
+              "spawnLog": "🗿 A crude wood-and-bone golem lurches out of the alley!"
+            }
+          ]
+        },
+        "x": 560,
+        "y": 180
+      },
+      {
+        "id": "n5",
+        "type": "factionEvent",
+        "params": {
+          "faction": "witch"
+        },
+        "x": 40,
+        "y": 320
+      },
+      {
+        "id": "n6",
+        "type": "winMission",
+        "params": {
+          "winner": "hero",
+          "reason": "The golem shatters — Caleb's Hollow is silent again."
+        },
+        "x": 300,
+        "y": 320
+      },
+      {
+        "id": "n10",
+        "type": "moveUnit",
+        "params": {
           "npc": "innkeeper_john",
           "path": [
             {
@@ -1173,14 +1214,86 @@
             }
           ]
         },
-        {
-          "action": "despawn",
+        "x": 300,
+        "y": 600
+      },
+      {
+        "id": "n11",
+        "type": "despawnUnit",
+        "params": {
           "npc": "innkeeper_john"
-        }
-      ]
-    }
-  ],
-  "hints": {
-    "scriptKey": "ch1m1"
+        },
+        "x": 560,
+        "y": 600
+      }
+    ],
+    "edges": [
+      {
+        "from": {
+          "node": "n0",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n1",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n2",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n3",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n3",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n4",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n5",
+          "pin": "onAllUnitsDead"
+        },
+        "to": {
+          "node": "n6",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n10",
+          "pin": "done"
+        },
+        "to": {
+          "node": "n11",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n1",
+          "pin": "done"
+        },
+        "to": {
+          "node": "n10",
+          "pin": "in"
+        },
+        "kind": "exec"
+      }
+    ]
   }
 }

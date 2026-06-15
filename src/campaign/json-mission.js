@@ -40,6 +40,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { buildMissionMap } from './mission-map.js';
+import { validateGraph, GraphValidationError } from '../mission-logic/graph.js';
+import { validateUnlock } from './unlock.js';
 import { resolveCondition, CONDITIONS } from './condition-registry.js';
 import { resolveConductorScript, CONDUCTOR_SCRIPTS } from './conductor-scripts.js';
 import { validateConversationDef } from './conversation-registry.js';
@@ -179,9 +181,15 @@ export function validateMissionJSON(m) {
   }
 
   // Hardening #2 — objective types must be ones the victory delegate handles.
-  if (!m.objectives || typeof m.objectives !== 'object') _fail('mission.objectives is required');
-  _validateObjectiveSide(m.objectives.win, 'win');
-  if (m.objectives.lose != null) _validateObjectiveSide(m.objectives.lose, 'lose');
+  // A fully logic-graph-driven mission (docs/09) may omit `objectives` entirely —
+  // the graph's Win/Lose nodes own victory — but if present it must be well-formed.
+  if (m.objectives == null) {
+    if (!m.logic) _fail('mission.objectives is required (unless the mission is logic-graph driven via "logic")');
+  } else {
+    if (typeof m.objectives !== 'object') _fail('mission.objectives must be an object');
+    _validateObjectiveSide(m.objectives.win, 'win');
+    if (m.objectives.lose != null) _validateObjectiveSide(m.objectives.lose, 'lose');
+  }
 
   // Scripted NPCs must have unique ids and sit on the map.
   const npcIds = new Set();
@@ -243,6 +251,25 @@ export function validateMissionJSON(m) {
     if (resolveConductorScript(key) == null) {
       _fail(`unknown hints.scriptKey "${key}" (known: ${Object.keys(CONDUCTOR_SCRIPTS).join(', ') || 'none'})`);
     }
+  }
+
+  // logic — the mission's event→action graph (docs/09). Additive: missions
+  // without it use the legacy storyTriggers/waves/objectives. Structural errors
+  // (unknown node type, dangling pin) surface as a mission validation failure.
+  if (m.logic != null) {
+    try {
+      validateGraph(m.logic);
+    } catch (err) {
+      if (err instanceof GraphValidationError) _fail(`logic graph: ${err.message}`);
+      throw err;
+    }
+  }
+
+  // unlock — rich campaign unlock criteria (docs/09 §5.5). Additive: missions
+  // keep using the legacy `requires` list, which is AND-ed with this.
+  if (m.unlock != null) {
+    try { validateUnlock(m.unlock); }
+    catch (err) { _fail(err.message); }
   }
 
   return m;
