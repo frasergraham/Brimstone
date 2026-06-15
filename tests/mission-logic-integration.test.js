@@ -11,6 +11,8 @@ import { GameState } from '../src/game.js';
 import { createZombie } from '../src/entities.js';
 import { MissionLogicEngine } from '../src/mission-logic/engine.js';
 import { createGameContext } from '../src/mission-logic/game-context.js';
+import { triggerSurvivorEncounter } from '../src/survivor-discovery.js';
+import { hexKey } from '../src/hex.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 
 // A minimal createEnemyFn like main.js's _createEnemyEntity (without the DOM).
@@ -48,6 +50,31 @@ describe('mission-logic / integration with GameState', () => {
     assert.equal(queued.length, 1);
     assert.equal(queued[0].kind, 'storyBeat');
     assert.equal(queued[0].title, 'Awakening');
+  });
+
+  test('discovering a PINNED hidden survivor fires its On Actor (OnSpawn) — e.g. a conversation', () => {
+    const state = new GameState(true, true);
+    state.maxDiscoverableSurvivors = null; // unlimited finds
+    const PIN = 'Pinned One';
+    attach(state, {
+      version: 1, variables: [],
+      nodes: [
+        { id: 'act', type: 'onActor', params: { ref: PIN } },
+        { id: 'beat', type: 'storyBeat', params: { title: 'Reunited', text: 'Found at last.' } },
+      ],
+      edges: [{ from: { node: 'act', pin: 'onSpawn' }, to: { node: 'beat', pin: 'in' }, kind: 'exec' }],
+    });
+    // Pin a hidden survivor onto the hero's tile, then discover it.
+    const hero = state.hero;
+    const t = state.tiles.get(hexKey(hero.col, hero.row));
+    t.hiddenSurvivor = true; t.hiddenSurvivorId = PIN;
+    state.pumpMissionLogic('roundStart'); // baseline the actor-spawn tracking
+    triggerSurvivorEncounter(state, hero, hero.col, hero.row);
+    // The discovered survivor carries its pin as a logic ref so the Actor node binds.
+    assert.ok(state.entities.some((e) => e.ref === PIN), 'pinned survivor got its ref');
+    const fired = state.pumpMissionLogic('postResolution');
+    assert.ok(fired.some((e) => e.kind === 'storyBeat' && e.title === 'Reunited'),
+      'On Actor OnSpawn fired the wired beat/conversation on discovery');
   });
 
   test('roundStart spawns a unit through the real entity factory + spawn path', () => {

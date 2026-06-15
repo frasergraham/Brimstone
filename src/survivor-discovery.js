@@ -34,6 +34,10 @@ export function triggerSurvivorEncounter(state, actor, col, row) {
   st.hiddenSurvivorId = null;
 
   const entity = faction.createDiscoveryEntity(col, row, actor.ownerId, state, forcedSurvivorId);
+  // A pinned survivor carries its pin as a logic `ref` so an On Actor (OnSpawn)
+  // node can fire when THIS survivor is found — e.g. to start a conversation.
+  // Hero discovery only (the witch's "discovery" turns survivors into zombies).
+  if (forcedSurvivorId != null && faction.canDiscoverNPCs()) entity.ref = forcedSurvivorId;
   // Pick a sub-hex slot around whoever is already on this tile (the discovering
   // actor, at least) and the tile's blocked tree/bridge slots.
   const occupied = state.entities
