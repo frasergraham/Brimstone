@@ -13,7 +13,7 @@ import {
 } from './actions.js';
 import * as audio from './audio.js';
 
-import { PlanActionType, actionCosts, computeGhostState, computeProjectedInventory, interleavePlan, validatePlanAction, buildAutoGuardQueue } from './planner.js';
+import { PlanActionType, actionCosts, computeGhostState, computeProjectedInventory, interleavePlan, groupPlanByEntity, validatePlanAction, buildAutoGuardQueue } from './planner.js';
 import { ABILITIES } from './abilities.js';
 import { buildRollRows, buildOutcomeSummary, buildTurnCardHoverOverlays, battleOutcomeWord } from './replay-timeline.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
@@ -137,6 +137,14 @@ export class UIController {
     this._planBudget    = 0;       // total action budget for this round
     this._planSubmitted = false;   // true after plan is locked in
     this.onPlanSubmit   = null;    // callback(plan) — set by main.js
+
+    // ── AI-assist (debug) ────────────────────────────────────────────────────
+    // When enabled via the `aiAssist()` console command, an "🤖 AI Plan" button
+    // appears during planning. Clicking it asks main.js (onAIAssistRequest) for
+    // an AI-generated plan for the current faction and loads it into the plan
+    // panel so the player can review the AI's choices and then Submit normally.
+    this.aiAssistEnabled  = false;
+    this.onAIAssistRequest = null; // callback(faction) → flat PlanAction[]
 
     // ── Multiplayer ──────────────────────────────────────────────────────────
     this.myPlayerId     = null;    // UUID of the local player (null in offline mode)
@@ -599,6 +607,7 @@ export class UIController {
       this.onRedraw();
     });
     _tap(this._el('plan-autoguard-btn'), () => this._autoFillGuard());
+    _tap(this._el('plan-aiassist-btn'),  () => this._fillAIAssistPlan());
     _tap(this._el('plan-toggle-btn'), () => this._togglePlanPanel());
     _tap(this._el('plan-tab'),        () => this._togglePlanPanel());
 
@@ -697,6 +706,8 @@ export class UIController {
     if (menuBtn) menuBtn.style.display = 'none';
     const returnBtn = this._el('plan-return-btn');
     if (returnBtn) returnBtn.style.display = 'none';
+
+    this._syncAIAssistButton();
 
     // Show replay button if there's history to replay
     const replayBtn = this._el('replay-turn-btn');
@@ -1123,6 +1134,48 @@ export class UIController {
     if (this._selectedEntity) this._selectEntity(this._selectedEntity);
     this.onRedraw();
     this._showPlanToast(`🛡 Auto-Guard: ${added} guard action${added === 1 ? '' : 's'} queued.`);
+  }
+
+  /**
+   * Show/hide the AI-assist button. Visible only while AI assist is enabled and
+   * we're actively planning (not yet submitted). Called on planning entry and
+   * whenever the console toggle flips `aiAssistEnabled`.
+   */
+  _syncAIAssistButton() {
+    const btn = this._el('plan-aiassist-btn');
+    if (!btn) return;
+    const show = !!this.aiAssistEnabled && this._planMode && !this._planSubmitted;
+    btn.style.display = show ? '' : 'none';
+  }
+
+  /**
+   * AI-assist: ask main.js for an AI-generated plan for the current faction and
+   * load it into the plan panel for review. Replaces any actions queued so far.
+   * The player still submits manually — this only fills the queue so they can
+   * watch what the AI would do and understand its choices.
+   */
+  _fillAIAssistPlan() {
+    if (this._planSubmitted || !this.onAIAssistRequest) return;
+    let plan;
+    try {
+      plan = this.onAIAssistRequest(this._planFaction);
+    } catch (e) {
+      console.error('[ai-assist] plan generation failed', e);
+      this._showPlanToast('AI plan generation failed — see console.');
+      return;
+    }
+    if (!plan || plan.length === 0) {
+      this._showPlanToast('🤖 AI had no actions to plan this round.');
+      return;
+    }
+    this._unitPlans = groupPlanByEntity(plan);
+    this._refreshPlanOverlay();
+    this._renderPlanPanel();
+    this._refreshUndoButtons();
+    this._startUndoBtnTracking();
+    if (this._selectedEntity) this._selectEntity(this._selectedEntity);
+    this.onRedraw();
+    this._showPlanToast(`🤖 AI queued ${plan.length} action${plan.length === 1 ? '' : 's'} — review, then Submit.`);
   }
 
   /** Recompute ghost overlay from the current plan and push to renderer. */

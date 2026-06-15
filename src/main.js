@@ -132,6 +132,53 @@ let _pendingSubmissions   = [];   // buffered playerSubmitted messages received 
 let _missionConductor = null;     // non-null while a conductor-driven mission is active
 let _gameStartTime = null;        // wall-clock timestamp for game duration tracking
 
+// ── AI-assist (debug) ────────────────────────────────────────────────────────
+// Enabled with the `aiAssist()` console command. Lets a human watch the AI play
+// a (campaign) mission: during planning an "🤖 AI Plan" button appears that asks
+// the AI to fill the player's plan, which the player then reviews and submits.
+let _aiAssistEnabled = false;
+let _assistAI        = null;   // lazily-built engine, rebuilt when state/faction change
+
+// Faction id → leader AI engine, so a human can borrow either side's planner.
+const _ASSIST_ENGINES = { hero: HeroAIEngine, witch: WitchAIEngine };
+
+/** Build (or reuse) an AI engine for a faction against the current state. */
+function _getAssistAI(faction) {
+  if (!_assistAI || _assistAI.faction !== faction || _assistAI.state !== state) {
+    const EngineClass = _ASSIST_ENGINES[faction] ?? HeroAIEngine;
+    _assistAI = new EngineClass(state, redraw);
+  }
+  return _assistAI;
+}
+
+/** Generate an AI plan for the human's current planning faction. */
+function _generateAssistPlan(faction) {
+  if (!state || state.gameOver) return [];
+  const plan = _getAssistAI(faction || 'hero').generatePlan();
+  console.log(`[ai-assist] ${faction} plan — ${plan.length} actions:`,
+    plan.map(a => a.type).join(', '));
+  return plan;
+}
+
+if (typeof window !== 'undefined') {
+  /**
+   * Console command: aiAssist() to enable, aiAssist(false) to disable.
+   * Adds an "🤖 AI Plan" button to the planning panel that fills your plan with
+   * the AI's choices so you can watch an AI play a mission move-by-move.
+   */
+  window.aiAssist = function aiAssist(enable = true) {
+    _aiAssistEnabled = !!enable;
+    if (ui) {
+      ui.aiAssistEnabled = _aiAssistEnabled;
+      ui._syncAIAssistButton?.();
+    }
+    console.log(_aiAssistEnabled
+      ? '[ai-assist] ENABLED — during planning, click "🤖 AI Plan" to have the AI fill your plan, then Submit to watch it play.'
+      : '[ai-assist] disabled.');
+    return _aiAssistEnabled;
+  };
+}
+
 // ── Round-history for full-game replay ───────────────────────────────────────
 // Accumulated during a session; reset each new/resumed game.
 let _roundHistory        = [];  // SP offline:  { roundNum, preState, steps }[]
@@ -293,6 +340,11 @@ function _setupLocalUI(canvas, localWitchAI, localHeroAI, autoplay) {
   ui = new UIController(canvas, state, renderer, localWitchAI, redraw, localHeroAI, autoplay);
   ui.onQuitToMenu = () => location.reload();
   ui.showMissionInfoBtn(false); // hidden by default; campaign init enables it
+
+  // AI-assist (debug): carry the console-toggled flag onto the fresh UI and let
+  // it request AI-generated plans for the human's planning faction.
+  ui.aiAssistEnabled  = _aiAssistEnabled;
+  ui.onAIAssistRequest = (faction) => _generateAssistPlan(faction);
 
   // Show resign option for single-player games (one side is AI)
   const isOneSided = !!(localWitchAI) !== !!(localHeroAI);
