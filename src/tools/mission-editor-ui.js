@@ -67,7 +67,7 @@ import { emptyGraph } from '../mission-logic/graph.js';
 import { locationHexes } from '../mission-logic/node-types.js';
 import { createTabController } from './tab-controller.js';
 import { attachEditorCanvasControls } from './editor-canvas-input.js';
-import { loadMissionJSON, validateBuildingFootprints, KNOWN_OBJECTIVE_TYPES } from '../campaign/json-mission.js';
+import { loadMissionJSON, validateBuildingFootprints } from '../campaign/json-mission.js';
 import { missionJSONUrl, missionFileName } from '../campaign/mission-catalog.js';
 import { CONDITIONS } from '../campaign/condition-registry.js';
 
@@ -1428,10 +1428,12 @@ function buildSidebar(doc, root) {
 
   // Layers moved OUT of the sidebar into a top-right map dropdown (item 6); its
   // pane is built below as a detached element the caller drops into the popup.
+  // Objectives tab retired — win/lose are authored in the Logic graph now
+  // (winMission / loseMission / objectiveOutcome nodes), so the legacy
+  // declarative objective editor is gone.
   const SIDEBAR_TABS = [
     { id: 'map', label: 'Map', tip: 'Structures, paths, starts, nodes + sizing (tools dock on the left)' },
     { id: 'mission', label: 'Mission', tip: 'Mission properties, narrative, phase cycle, resources' },
-    { id: 'events', label: 'Objectives', tip: 'Legacy win / lose objectives (story, spawns & victory now live in the Logic graph)' },
     { id: 'units', label: 'Units', tip: 'Placed enemy units + survivor start positions' },
   ];
 
@@ -1480,12 +1482,11 @@ function buildSidebar(doc, root) {
   layersPane.dataset.spane = 'layers';
 
   return {
-    // `map` (paint/size palette) + the three authoring panes; `layers` is detached.
+    // `map` (paint/size palette) + Mission/Units authoring panes; `layers` detached.
     panes: {
       map: paneEls.map,
       layers: layersPane,
       mission: paneEls.mission,
-      events: paneEls.events,
       units: paneEls.units,
     },
   };
@@ -2087,7 +2088,6 @@ function layerToggleRow(doc, label, tip, value, onChange) {
 
 function buildForms(doc, panes, editor, rerenderCanvas, rebuild, setStatus) {
   panes.mission.innerHTML = '';
-  panes.events.innerHTML = '';
   panes.units.innerHTML = '';
   const meta = editor.getMeta();
 
@@ -2140,22 +2140,9 @@ function buildForms(doc, panes, editor, rerenderCanvas, rebuild, setStatus) {
   );
   panes.mission.append(res);
 
-  // ── Objectives ──────────────────────────────────────────────────────────
-  const obj = section(doc, 'Objectives');
-  obj.append(objectiveEditor(doc, 'Win', meta.objectives?.win, def => {
-    if (!meta.objectives) meta.objectives = {};
-    meta.objectives.win = def;
-  }, setStatus));
-  obj.append(objectiveEditor(doc, 'Lose', meta.objectives?.lose, def => {
-    if (!meta.objectives) meta.objectives = {};
-    meta.objectives.lose = def;
-  }, setStatus));
-  panes.events.append(obj);
-
-  // Story, spawns, and victory are authored in the Logic graph now (docs/09);
-  // this tab only retains legacy declarative objectives. A pointer keeps it clear.
-  panes.events.append(hint(doc,
-    'Story, spawns & win/lose are authored in the Logic tab (top, node graph).'));
+  // Objectives (legacy win/lose declarative editor) retired — authored in the
+  // Logic graph now (winMission / loseMission / objectiveOutcome). Any existing
+  // meta.objectives still round-trips untouched via assembleMission's `...meta`.
 
   // ── Enemy units (placed on map; list-view for delete / override edit) ─────
   const enemies = section(doc, 'Enemy Units');
@@ -2733,39 +2720,6 @@ function lootIdList(doc, label, arr, commit) {
   wrap.append(host);
   render();
   return wrap;
-}
-
-// Objective editor: a type <select> over the known types + a params JSON blob
-// (merged with the chosen type). Arrays (multi-lose) are edited as JSON.
-function objectiveEditor(doc, label, current, onChange, setStatus) {
-  const card = doc.createElement('div');
-  card.className = 'e-card';
-  card.append(labelFor(doc, label));
-
-  if (Array.isArray(current)) {
-    // Multi-objective side — edit as raw JSON array to keep full fidelity.
-    card.append(jsonRow(doc, 'list', current, v => onChange(v), setStatus));
-    return card;
-  }
-
-  const cur = current ?? { type: 'eliminate_all' };
-  const typeSel = select(doc, [...KNOWN_OBJECTIVE_TYPES].map(t => ({ key: t, value: t })), cur.type,
-    v => {
-      const { type, ...params } = cur; // eslint-disable-line no-unused-vars
-      onChange({ type: v, ...params });
-      cur.type = v;
-    });
-  const typeRow = doc.createElement('div');
-  typeRow.className = 'e-row';
-  typeRow.append(labelFor(doc, 'type'), typeSel);
-  card.append(typeRow);
-
-  // Params = everything except `type`.
-  const { type, ...params } = cur; // eslint-disable-line no-unused-vars
-  card.append(jsonRow(doc, 'params', params, p => {
-    onChange({ type: cur.type, ...(p || {}) });
-  }, setStatus));
-  return card;
 }
 
 function storyTriggerCard(doc, tr, idx, actions, setStatus, convIds = []) {
