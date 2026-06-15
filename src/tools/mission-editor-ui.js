@@ -916,27 +916,42 @@ export function initEditor(doc = document, initOpts = {}) {
   // Status now routes to a toast over the map (item 4) instead of a sidebar line.
   const formStatus = (msg, ok) => { if (msg) toast.show(msg, { type: ok ? 'ok' : 'err' }); };
 
-  // ── Selection inspector (item 8) — pinned to the TOP of the right panel; shown
-  // only while a placed unit is selected in Edit mode. Edits go through
-  // editEnemyUnits so each change is one undo step. ────────────────────────────
-  const selectionPanel = doc.createElement('div');
-  selectionPanel.className = 'e-selection';
-  selectionPanel.hidden = true;
-  palette.prepend(selectionPanel);
+  // ── Context panel (lower half of the right rail) ──────────────────────────
+  // A persistent panel below the tabs holding the two things that change with
+  // mode + selection: the ACTIVE TOOL's options (its VALUE picker) and, in Edit
+  // mode, the SELECTED object's properties. renderToolOptions()/renderSelection()
+  // refresh each half independently.
+  const contextPanel = doc.createElement('div');
+  contextPanel.className = 'e-context';
+  const ctxToolHost = doc.createElement('div'); ctxToolHost.className = 'e-context-tool';
+  const ctxSelHost = doc.createElement('div'); ctxSelHost.className = 'e-context-sel';
+  contextPanel.append(ctxToolHost, ctxSelHost);
+  palette.append(contextPanel);
+
+  // The active tool's value options (terrain swatch, structure picker, enemy
+  // type, …). Re-rendered by selectTool when the tool changes.
+  function renderToolOptions() {
+    ctxToolHost.innerHTML = '';
+    const label = TOOL_PALETTE.find((t) => t.id === editor.activeTool)?.label ?? 'Tool';
+    const sec = section(doc, `Tool — ${label}`);
+    const host = doc.createElement('div');
+    sec.append(host);
+    ctxToolHost.append(sec);
+    buildValuePanel(doc, host, valuePanelKind(editor.activeTool), editor, renderToolOptions,
+      { onRotateFootprint: rotateActiveFootprint });
+  }
+
+  // The selected (Edit-mode) enemy unit's editable properties + delete. Edits go
+  // through editEnemyUnits so each change is one undo step.
   renderSelection = () => {
-    selectionPanel.innerHTML = '';
-    if (!selectedUnit) { selectionPanel.hidden = true; return; }
-    selectionPanel.hidden = false;
+    ctxSelHost.innerHTML = '';
+    if (!selectedUnit) return;
     const u = selectedUnit;
-    const head = doc.createElement('div');
-    head.className = 'e-selection-head';
-    head.textContent = `Selected unit @ ${u.col}, ${u.row}`;
-    selectionPanel.append(head);
-    // Unit type.
-    selectionPanel.append(labeledSelect(doc, 'Type',
+    const sec = section(doc, `Selected — ${u.type} @ ${u.col},${u.row}`);
+    sec.classList.add('e-context-selection');
+    sec.append(labeledSelect(doc, 'Type',
       ENEMY_UNIT_TYPES.map((t) => ({ key: t, value: t })), u.type,
       (v) => { editor.editEnemyUnits(() => { u.type = v; }); renderSelection(); }));
-    // Level (≥1; applyLevel scales HP/ATK/DEF on spawn).
     const lvlRow = doc.createElement('div');
     lvlRow.className = 'e-row';
     const lvlInput = doc.createElement('input');
@@ -949,15 +964,16 @@ export function initEditor(doc = document, initOpts = {}) {
       lvlInput.value = String(lvl);
     });
     lvlRow.append(labelFor(doc, 'Level'), lvlInput);
-    selectionPanel.append(lvlRow);
-    // Delete button (also bound to the Delete/Backspace key).
+    sec.append(lvlRow);
     const del = doc.createElement('button');
     del.type = 'button';
     del.className = 'e-selection-del';
     del.textContent = '🗑 Delete unit (Del)';
     del.addEventListener('click', () => deleteSelectedUnit());
-    selectionPanel.append(del);
+    sec.append(del);
+    ctxSelHost.append(sec);
   };
+  renderToolOptions();
 
   // Delete / Backspace removes the selected unit (item 8) — but never while the
   // caret is in a field, and only on the Map view (not the Logic graph).
@@ -1001,11 +1017,12 @@ export function initEditor(doc = document, initOpts = {}) {
   }
 
   // Left-docked vertical tool palette (item 7) — Photoshop-style. Selecting a
-  // tool sets it on the controller and refreshes the sidebar VALUE options.
+  // tool sets it on the controller and refreshes the context panel's tool options.
   function selectTool(id) {
     editor.setActiveTool(id);
-    rebuildMapPalette(); // VALUE section adapts to the new tool; also re-syncs the dock
-    draw();              // road-node markers may auto-show/hide
+    renderToolOptions();  // the context panel's tool options adapt to the new tool
+    toolDock?.syncActive();
+    draw();               // road-node markers may auto-show/hide
   }
   // Place / Edit mode (item 8). Leaving edit mode clears the current selection.
   function setEditMode(mode) {
@@ -1880,23 +1897,9 @@ function buildMapPalette(doc, root, editor, rerender, hooks = {}) {
   }
   root.append(mapSection);
 
-  // Tools moved to a left-docked vertical palette (item 7), built over the canvas
-  // in initMissionEditorUI — not in the sidebar. The VALUE section below still
-  // adapts to the active tool (set from the dock).
-
-  // ── VALUE section (item 7) — context-sensitive to the active tool. The host
-  // div is rebuilt by renderValuePanel() whenever the tool changes. ────────────
-  const valSection = section(doc, 'Value');
-  const valHost = doc.createElement('div');
-  valSection.append(valHost);
-  root.append(valSection);
-
-  function renderValuePanel() {
-    valHost.innerHTML = '';
-    buildValuePanel(doc, valHost, valuePanelKind(editor.activeTool), editor, renderValuePanel,
-      { onRotateFootprint: hooks.onRotateFootprint });
-  }
-  renderValuePanel();
+  // Tools live in the left dock (item 7); the active tool's VALUE options live in
+  // the bottom context panel (renderToolOptions in initMissionEditorUI) — not in
+  // this pane. The Map tab keeps the read-only map properties + Power Nodes.
 
   // ── Power Nodes (item 6) — list each cluster with its colour, editable name,
   // and hex count. Re-rendered on every node toggle/rename via the registered
