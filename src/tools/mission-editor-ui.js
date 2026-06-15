@@ -2091,17 +2091,16 @@ function buildForms(doc, panes, editor, rerenderCanvas, rebuild, setStatus) {
   panes.units.innerHTML = '';
   const meta = editor.getMeta();
 
-  // ── Scalar properties ───────────────────────────────────────────────────
+  // ── Mission gameplay properties ──────────────────────────────────────────
+  // Progression metadata (ID, Title, Chapter, Campaign, Requires/unlock,
+  // Rewards) is edited in the Campaign tool — the single source of truth for how
+  // missions connect + reward — so it's not duplicated here. This tab is the
+  // per-mission GAMEPLAY config. (All those fields still round-trip via `...meta`.)
+  // Map Size is set via the New-map dialog + in-map edge buttons (shown by the
+  // N×N badge); meta.mapSize rides along in the model so the round-trip is lossless.
   const props = section(doc, 'Properties');
   props.append(
-    textRow(doc, 'ID', meta.id, v => { meta.id = v; }),
-    textRow(doc, 'Title', meta.title, v => { meta.title = v; }),
-    numRow(doc, 'Chapter', meta.chapter, v => { meta.chapter = v; }),
-    textRow(doc, 'Campaign', meta.campaignId ?? '', v => { meta.campaignId = v || null; }),
-    textRow(doc, 'Requires', csv(meta.requires), v => { meta.requires = parseCsvOrNull(v); }),
-    // Map Size field removed (item 12) — size is set explicitly via the New-map
-    // dialog + in-map edge buttons, and shown by the in-map N×N badge. meta.mapSize
-    // still rides along in the model (set at creation) so the round-trip is lossless.
+    readonlyRow(doc, 'Mission', meta.title ? `${meta.title} (${meta.id})` : (meta.id ?? '—')),
     boolRow(doc, 'Has Witch', meta.hasWitch, v => { meta.hasWitch = v; }),
     boolRow(doc, 'No Scoring', meta.disableScoring, v => { meta.disableScoring = v; }),
     textRow(doc, 'AI Persona', meta.aiPersonality ?? '', v => { meta.aiPersonality = v || null; }),
@@ -2111,6 +2110,7 @@ function buildForms(doc, panes, editor, rerenderCanvas, rebuild, setStatus) {
     numRow(doc, 'Discoverable', meta.maxDiscoverableSurvivors, v => { meta.maxDiscoverableSurvivors = v; }),
     numRow(doc, 'Heal Bonus', meta.healBonus, v => { meta.healBonus = v; }),
   );
+  props.append(hint(doc, 'ID / Title / Chapter / unlock / rewards are edited in the Campaign tool.'));
   panes.mission.append(props);
 
   // ── Briefing / texts ──────────────────────────────────────────────────────
@@ -2127,15 +2127,14 @@ function buildForms(doc, panes, editor, rerenderCanvas, rebuild, setStatus) {
   phase.append(phaseCycleEditor(doc, meta, rebuild));
   panes.mission.append(phase);
 
-  // ── Resources / rewards / loot — picker UIs (item 8) ────────────────────
-  const res = section(doc, 'Resources & Rewards');
+  // ── Resources / loot — picker UIs (item 8) ──────────────────────────────
+  // Rewards (victory payout) moved to the Campaign tool with the rest of the
+  // progression metadata; starting resources + loot overrides are mission setup.
+  const res = section(doc, 'Resources');
   res.append(
     resourcePicker(doc, 'Starting', meta.startingResources,
       m => { meta.startingResources = m; },
       'Resources the player begins the mission holding.'),
-    resourcePicker(doc, 'Rewards', meta.rewards,
-      m => { meta.rewards = m; },
-      'Resources granted to the player on victory.'),
     lootOverridePicker(doc, meta.lootOverrides, lo => { meta.lootOverrides = lo; }),
   );
   panes.mission.append(res);
@@ -2476,12 +2475,6 @@ function downloadJSON(doc, obj, filename) {
 }
 
 // ── Form-widget helpers ──────────────────────────────────────────────────────
-
-function csv(arr) { return Array.isArray(arr) ? arr.join(',') : ''; }
-function parseCsvOrNull(v) {
-  const out = v.split(',').map(s => s.trim()).filter(Boolean);
-  return out.length ? out : null;
-}
 
 function textRow(doc, label, value, onChange) {
   const row = doc.createElement('div');
