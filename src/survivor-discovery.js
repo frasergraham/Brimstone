@@ -13,6 +13,12 @@ import { hexKey } from './hex.js';
 import { pickUnitSlot } from './hex-slots.js';
 import { getFaction } from './factions.js';
 
+/** The stable logic `ref` a placed hidden survivor binds to: its pinned roster
+ *  name, or a hex-derived id for a random one. MUST match the discovery above. */
+export function survivorRef(hiddenSurvivorId, col, row) {
+  return hiddenSurvivorId || `survivor_${col}_${row}`;
+}
+
 export function triggerSurvivorEncounter(state, actor, col, row) {
   const st = state.tiles.get(hexKey(col, row));
   if (!st?.hiddenSurvivor) return null;
@@ -34,10 +40,12 @@ export function triggerSurvivorEncounter(state, actor, col, row) {
   st.hiddenSurvivorId = null;
 
   const entity = faction.createDiscoveryEntity(col, row, actor.ownerId, state, forcedSurvivorId);
-  // A pinned survivor carries its pin as a logic `ref` so an On Actor (OnSpawn)
-  // node can fire when THIS survivor is found — e.g. to start a conversation.
-  // Hero discovery only (the witch's "discovery" turns survivors into zombies).
-  if (forcedSurvivorId != null && faction.canDiscoverNPCs()) entity.ref = forcedSurvivorId;
+  // The discovered survivor carries a stable logic `ref` so an On Actor (OnSpawn)
+  // node can fire when THIS survivor is found — e.g. to start a conversation. A
+  // pinned survivor uses its pin; a random one uses its hex (matches the editor's
+  // Survivor node — keep `survivorRef` below in sync). Hero discovery only (the
+  // witch's "discovery" turns survivors into zombies).
+  if (faction.canDiscoverNPCs()) entity.ref = forcedSurvivorId ?? `survivor_${col}_${row}`;
   // Pick a sub-hex slot around whoever is already on this tile (the discovering
   // actor, at least) and the tile's blocked tree/bridge slots.
   const occupied = state.entities

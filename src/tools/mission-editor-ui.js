@@ -62,7 +62,8 @@ import {
 import { MAP_SIZES } from '../map.js';
 import { LogicGraphEditor } from './logic-graph-editor.js';
 import { missionToGraph } from '../mission-logic/migrate.js';
-import { autoLayout, addNode } from '../mission-logic/graph-edit.js';
+import { autoLayout, addNode, removeNode } from '../mission-logic/graph-edit.js';
+import { survivorRef } from '../survivor-discovery.js';
 import { emptyGraph } from '../mission-logic/graph.js';
 import { locationHexes } from '../mission-logic/node-types.js';
 import { createTabController } from './tab-controller.js';
@@ -853,6 +854,10 @@ export function initEditor(doc = document, initOpts = {}) {
         // Remember the last building placed so the Rotate button / R key know
         // which footprint to cycle when the cursor isn't over a building.
         lastBuildingHex = { col: hex.col, row: hex.row };
+      } else if (editor.activeTool === EditorTool.HIDDEN_SURVIVOR) {
+        // A placed survivor gets an associated Survivor source node in the graph
+        // (toggled off → its node is removed), so you can wire its id/hex.
+        syncSurvivorNode(hex);
       }
       updateGhost(); // a placed/removed building changes the candidate
     },
@@ -1117,18 +1122,54 @@ export function initEditor(doc = document, initOpts = {}) {
   // "Add to Graph" map tool — click a placed unit/NPC → an Actor node bound to it
   // (assigning a stable `ref`); click an empty hex → a Location node. Mutates
   // meta.logic so it round-trips on Save; refreshes the Logic pane if it's open.
+  // Place a fresh node into a clear column to the right of the existing graph.
+  function _graphDropPos(graph) {
+    const maxX = graph.nodes.reduce((m, n) => Math.max(m, n.x ?? 0), 0);
+    return { x: graph.nodes.length ? maxX + 260 : 40, y: 40 + (graph.nodes.length % 6) * 110 };
+  }
+
+  // Keep a Survivor source node in sync with a placed hidden survivor: add (or
+  // update) one when placed, remove it when the survivor is toggled off. Matched
+  // to the tile by hex; its `ref` mirrors the runtime discovery ref (survivorRef).
+  function syncSurvivorNode(hex) {
+    const meta = editor.getMeta();
+    if (!meta.logic || !Array.isArray(meta.logic.nodes)) meta.logic = emptyGraph();
+    const graph = meta.logic;
+    const tile = (editor.getMapDef().tiles ?? []).find((t) => t.col === hex.col && t.row === hex.row);
+    const existing = graph.nodes.find((n) => n.type === 'survivor' && n.params?.col === hex.col && n.params?.row === hex.row);
+    if (tile?.hiddenSurvivor) {
+      const ref = survivorRef(tile.hiddenSurvivorId, hex.col, hex.row);
+      const label = tile.hiddenSurvivorId || `Survivor ${hex.col},${hex.row}`;
+      if (existing) { existing.params.ref = ref; existing.params.label = label; }
+      else {
+        const { x, y } = _graphDropPos(graph);
+        addNode(graph, 'survivor', x, y).params = { ref, label, col: hex.col, row: hex.row };
+        toast.show(`Survivor node added @ ${hex.col},${hex.row} — wire its id into an On Actor node`, { type: 'ok' });
+      }
+    } else if (existing) {
+      removeNode(graph, existing.id); // toggled off → drop the orphan node
+    }
+    editor.markDirty();
+    scheduleAutosave();
+    if (logicPane?.classList.contains('active')) rebuildLogic();
+  }
+
   function addHexToGraph(hex) {
     const meta = editor.getMeta();
     if (!meta.logic || !Array.isArray(meta.logic.nodes)) meta.logic = emptyGraph();
     const graph = meta.logic;
-    // Drop into a clear column to the RIGHT of existing nodes so it never lands
-    // on top of another (then the user drags it where they want).
-    const maxX = graph.nodes.reduce((m, n) => Math.max(m, n.x ?? 0), 0);
-    const x = graph.nodes.length ? maxX + 260 : 40;
-    const y = 40 + (graph.nodes.length % 6) * 110;
+    const { x, y } = _graphDropPos(graph);
     const unit = editor.getEnemyUnits().find((u) => u.col === hex.col && u.row === hex.row);
     const npc = (meta.npcs ?? []).find((n) => n.col === hex.col && n.row === hex.row);
-    if (npc) {
+    const survTile = (editor.getMapDef().tiles ?? []).find((t) => t.col === hex.col && t.row === hex.row && t.hiddenSurvivor);
+    if (survTile) {
+      addNode(graph, 'survivor', x, y).params = {
+        ref: survivorRef(survTile.hiddenSurvivorId, hex.col, hex.row),
+        label: survTile.hiddenSurvivorId || `Survivor ${hex.col},${hex.row}`,
+        col: hex.col, row: hex.row,
+      };
+      toast.show(`Survivor node added @ ${hex.col},${hex.row} — see the Logic tab`, { type: 'ok' });
+    } else if (npc) {
       addNode(graph, 'onActor', x, y).params = { ref: npc.id };
       toast.show(`Actor node added for NPC “${npc.id}” — see the Logic tab`, { type: 'ok' });
     } else if (unit) {
