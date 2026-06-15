@@ -134,3 +134,54 @@ describe('_fillAIAssistPlan', () => {
     assert.equal(ui._unitPlans.size, 0);
   });
 });
+
+describe('autorun (_maybeAutorun)', () => {
+  const tick = (ms) => new Promise(r => setTimeout(r, ms));
+
+  test('entering planning fills then auto-submits the AI plan', async () => {
+    const { ui, state } = makeUI();
+    ui.aiAutorun = true;
+    ui.aiAutorunDelay = 5;
+    let submitted = null;
+    ui.onPlanSubmit = (plan) => { submitted = plan; };
+    ui.onAIAssistRequest = () => [{ type: PlanActionType.GUARD, entityId: state.hero.id }];
+
+    ui.enterPlanningMode('hero', 5);
+    // Filled synchronously on planning entry.
+    assert.equal(ui._unitPlans.size, 1);
+    assert.equal(submitted, null, 'not submitted yet — waits for the pacing delay');
+
+    await tick(20);
+    assert.ok(submitted, 'auto-submitted after the delay');
+    assert.equal(submitted.length, 1);
+  });
+
+  test('does not autorun in tutorial mode', async () => {
+    const { ui, state } = makeUI();
+    ui.aiAutorun = true;
+    ui.tutorialMode = true;
+    ui.aiAutorunDelay = 5;
+    let submitted = false;
+    ui.onPlanSubmit = () => { submitted = true; };
+    ui.onAIAssistRequest = () => [{ type: PlanActionType.GUARD, entityId: state.hero.id }];
+
+    ui.enterPlanningMode('hero', 5);
+    await tick(20);
+    assert.equal(submitted, false);
+    assert.equal(ui._unitPlans.size, 0);
+  });
+
+  test('exiting planning cancels a pending auto-submit', async () => {
+    const { ui, state } = makeUI();
+    ui.aiAutorun = true;
+    ui.aiAutorunDelay = 30;
+    let submitted = false;
+    ui.onPlanSubmit = () => { submitted = true; };
+    ui.onAIAssistRequest = () => [{ type: PlanActionType.GUARD, entityId: state.hero.id }];
+
+    ui.enterPlanningMode('hero', 5);
+    ui.exitPlanningMode();
+    await tick(50);
+    assert.equal(submitted, false, 'timer cleared on exit');
+  });
+});
