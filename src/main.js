@@ -31,7 +31,7 @@ import { VERSION, BUILD_VERSION } from './version.js';
 import { buildPlayerStatusHtml } from './ui-render.js';
 import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { PlanActionType, groupPlanByEntity } from './planner.js';
-import { buildStepDigest, isEventVisible } from './replay-timeline.js';
+import { buildStepDigest, buildStoryBeatDigest, isEventVisible } from './replay-timeline.js';
 import { hexDistance, getNeighbors, hexKey } from './hex.js';
 import { planCombatFrames } from './combat-presentation.js';
 import { MAX_FORTIFY_LEVEL, FORT_IMPASSABLE_THRESHOLD, deriveBlockedSlots } from './tiles.js';
@@ -663,6 +663,38 @@ function _logicEventsToStory(events) {
 function _drainLogicStoryEvents() {
   if (!state?.logicPresentation?.length) return [];
   return _logicEventsToStory(state.logicPresentation.splice(0));
+}
+
+// Present a TURN's mission-logic Show events DURING the replay, in order: a story
+// beat becomes an inserted turn card; a conversation plays as its own card. Used
+// by _animateResolutionSteps at the step the event fired (vs the planning-gate
+// modals of _showStorySequence). `afterStepIndex` anchors the insert position.
+let _beatCardSeq = 0;
+async function _presentStepLogicEvents(events, afterStepIndex) {
+  for (const ev of events ?? []) {
+    if (ev.kind === 'conversation') {
+      await _playMissionConversation(ev.id, { manageHud: false, runOnComplete: false, nodeId: ev.nodeId });
+    } else if (ev.kind === 'storyBeat') {
+      await _presentStoryBeatCard(ev, afterStepIndex);
+    }
+  }
+}
+
+/** Insert a story-beat card into the live replay timeline and gate on NEXT (like
+ *  a step boundary) so the player reads it; auto-advances on autoplay. */
+async function _presentStoryBeatCard(beat, afterStepIndex) {
+  if (!ui?.insertReplayTimelineCol) return;
+  const col = buildStoryBeatDigest(beat, `${afterStepIndex}:${_beatCardSeq++}`);
+  ui.insertReplayTimelineCol(col, afterStepIndex);
+  ui.setReplayTimelineStep?.(col.stepIndex);
+  if (_autoplay) { await playbackDelay(1100); return; }
+  if (playback.paused) ui.setReplayNextReady?.(true);
+  while (playback.paused && !playback.stepRequested
+         && !playback.restart && !playback.aborted && !playback.goBack && !playback.jumpToEnd) {
+    await new Promise(r => setTimeout(r, 50));
+  }
+  ui.setReplayNextReady?.(false);
+  playback.stepRequested = false;
 }
 
 /** Show a sequence of story events — text modals and/or conversations. */
@@ -2899,12 +2931,12 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 
     // Mission-logic Show events this TURN triggered (docs/09) — e.g. an Area
     // trigger the unit just stepped onto. The Sim already ran inside resolvePlans;
-    // here we play the story beat / conversation as a cutscene at the moment in
-    // the replay it fired. Skipped on abort / skip-to-end / instant playback.
-    if (step.logicEvents?.length && !_autoplay
+    // here we present each one at the moment in the replay it fired: a story beat
+    // as an inserted turn CARD (not a modal), a conversation as its own card.
+    // Skipped on abort / skip-to-end.
+    if (step.logicEvents?.length
         && !playback.aborted && !playback.goBack && !playback.jumpToEnd) {
-      const story = _logicEventsToStory(step.logicEvents);
-      if (story.length) await _showStorySequence(story);
+      await _presentStepLogicEvents(step.logicEvents, step.stepIndex);
     }
 
     // Manual-step gate: in paused mode, hold at this step boundary until NEXT

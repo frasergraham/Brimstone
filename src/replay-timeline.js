@@ -345,6 +345,25 @@ export function isEventVisible(ev, ents, isVisible,
  * @param {{ hasVoice?: boolean }} [opts] — hasVoice gates the card's voice-mute
  *   button: shown only when this conversation actually has generated narration.
  */
+/**
+ * Build a single-column digest for a mission-logic STORY BEAT turn card — a
+ * title + text panel inserted into the replay timeline at the turn it fired
+ * (instead of a blocking modal). `kind: 'storyBeat'` drives its card chrome.
+ * `key` makes the stepIndex unique so a mid-replay insert never collides with a
+ * numeric resolution step (or another beat the same turn).
+ */
+export function buildStoryBeatDigest(beat, key) {
+  return {
+    stepIndex: `beat:${key}`,
+    kind:      'storyBeat',
+    title:     beat?.title ?? '',
+    text:      beat?.text ?? '',
+    // A placeholder entry so showReplayTimeline (which drops empty columns)
+    // renders the card; the storyBeat chrome ignores rows and shows the text.
+    entries: [{ actionType: 'storyBeat', label: 'STORY' }],
+  };
+}
+
 export function buildConversationDigest(convo, participants, { hasVoice = false } = {}) {
   const ents = participants instanceof Map ? [...participants.values()] : [...(participants ?? [])];
   return [{

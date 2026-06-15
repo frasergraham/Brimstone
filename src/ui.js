@@ -5299,6 +5299,18 @@ export class UIController {
    *  dots are revealed by CSS when several actions are active at once. */
   _replayColHtml(col, displayNum) {
     const rows = col.entries.map((e, j) => this._replayRowHtml(e, j)).join('');
+    if (col.kind === 'storyBeat') {
+      const esc = (s) => String(s ?? '')
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      // A title + text panel — no action rows, no SKIP/REPLAY footer. The replay
+      // gate (NEXT) advances past it like any turn card (see _presentStoryBeatCard).
+      return `<div class="replay-step-col replay-beat-col" data-step="${col.stepIndex}">`
+           + `<div class="replay-step-header">`
+           +   `<div class="replay-step-label">✦ ${esc(col.title)}</div>`
+           + `</div>`
+           + `<div class="replay-beat-text">${esc(col.text)}</div>`
+           + `</div>`;
+    }
     if (col.kind === 'conversation') {
       const esc = (s) => String(s ?? '')
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

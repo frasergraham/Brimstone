@@ -5,7 +5,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildStepDigest, buildConversationDigest, buildRollTip, buildRollRows, buildOutcomeSummary, isEventVisible, OutcomeKind, buildTurnCardHoverOverlays, TURN_CARD_HOVER_COLOR, battleOutcomeWord } from '../src/replay-timeline.js';
+import { buildStepDigest, buildConversationDigest, buildStoryBeatDigest, buildRollTip, buildRollRows, buildOutcomeSummary, isEventVisible, OutcomeKind, buildTurnCardHoverOverlays, TURN_CARD_HOVER_COLOR, battleOutcomeWord } from '../src/replay-timeline.js';
 import { ResEventType } from '../server/resolver.js';
 import { PlanActionType } from '../src/planner.js';
 
@@ -917,5 +917,24 @@ describe('splash damage in summaries', () => {
       targetDmg: 2, actorDmg: 0, killed: false,
     });
     assert.ok(!o.lines.some(l => /splash/i.test(l)));
+  });
+});
+
+// ── buildStoryBeatDigest (mission-logic story-beat replay card) ─────────────────
+describe('buildStoryBeatDigest', () => {
+  test('builds a kind:storyBeat column with a unique key, title, text + a placeholder entry', () => {
+    const col = buildStoryBeatDigest({ title: 'Sanctuary', text: 'You feel safe.' }, '3:0');
+    assert.equal(col.kind, 'storyBeat');
+    assert.equal(col.stepIndex, 'beat:3:0');         // non-numeric → never collides with a step index
+    assert.equal(col.title, 'Sanctuary');
+    assert.equal(col.text, 'You feel safe.');
+    assert.ok(col.entries.length > 0, 'a non-empty entries list so showReplayTimeline renders it');
+  });
+
+  test('missing fields default to empty strings (never undefined in the card)', () => {
+    const col = buildStoryBeatDigest({}, 'x');
+    assert.equal(col.title, '');
+    assert.equal(col.text, '');
+    assert.equal(col.stepIndex, 'beat:x');
   });
 });

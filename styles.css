@@ -5618,6 +5618,17 @@ img.plan-step-avatar {
    SKIP/REPLAY footer button (wired by ui.setConversationCardState). */
 .replay-step-col.replay-conv-col { border-color: rgba(201, 162, 39, 0.55); }
 .replay-step-col.replay-conv-col.is-current { border-color: rgba(232, 197, 88, 0.85); }
+
+/* Mission-logic STORY BEAT card (✦ title + text), inserted at the turn it fires. */
+.replay-step-col.replay-beat-col { border-color: rgba(201, 162, 39, 0.45); }
+.replay-step-col.replay-beat-col.is-current { border-color: rgba(232, 197, 88, 0.8); }
+.replay-beat-text {
+  font-size: 0.86rem;
+  line-height: 1.5;
+  color: var(--text-dim, #cfc6b4);
+  margin-top: 0.35rem;
+  white-space: pre-wrap;
+}
 .replay-conv-btns {
   display: flex;
   justify-content: center;
