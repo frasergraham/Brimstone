@@ -895,6 +895,10 @@ export function initEditor(doc = document, initOpts = {}) {
 
   function openPreview() {
     if (previewOverlay) previewOverlay.hidden = false;
+    // Hide the on-map toolbar (Preview 3D + Layers) while the 3D preview covers
+    // the canvas — they belong to the 2D editor view. inline style beats the
+    // .e-map-toolbar { display:flex } rule.
+    if (mapToolbar) mapToolbar.style.display = 'none';
     // Rebuild from the CURRENT editor state every press (author edits in 2D,
     // hits Preview to see 3D). rebuild() disposes any prior engine first.
     preview.rebuild();
@@ -902,6 +906,7 @@ export function initEditor(doc = document, initOpts = {}) {
   function closePreview() {
     preview.teardown();
     if (previewOverlay) previewOverlay.hidden = true;
+    if (mapToolbar) mapToolbar.style.display = '';
   }
   doc.getElementById('e-preview-close')?.addEventListener('click', closePreview);
   // Keep the preview engine sized to its pane while it's live.
