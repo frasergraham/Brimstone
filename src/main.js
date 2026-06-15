@@ -651,14 +651,18 @@ function _startLocalPlanningPhase() {
  * SIM events (spawn/despawn) are already applied to state — the redraw on
  * entering planning shows them — so only narrative beats are surfaced here.
  */
-function _drainLogicStoryEvents() {
-  if (!state?.logicPresentation?.length) return [];
-  const events = state.logicPresentation.splice(0);
-  return events
+// Map raw mission-logic presentation events → _showStorySequence entries.
+function _logicEventsToStory(events) {
+  return (events ?? [])
     .filter(e => e.kind === 'storyBeat' || e.kind === 'conversation')
     .map(e => e.kind === 'conversation'
       ? { conversation: e.id, nodeId: e.nodeId }
       : { title: e.title, text: e.text });
+}
+
+function _drainLogicStoryEvents() {
+  if (!state?.logicPresentation?.length) return [];
+  return _logicEventsToStory(state.logicPresentation.splice(0));
 }
 
 /** Show a sequence of story events — text modals and/or conversations. */
@@ -2891,6 +2895,16 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       for (const ev of convEvents) {
         await _playMissionConversation(ev.conversation, { manageHud: false, runOnComplete: false });
       }
+    }
+
+    // Mission-logic Show events this TURN triggered (docs/09) — e.g. an Area
+    // trigger the unit just stepped onto. The Sim already ran inside resolvePlans;
+    // here we play the story beat / conversation as a cutscene at the moment in
+    // the replay it fired. Skipped on abort / skip-to-end / instant playback.
+    if (step.logicEvents?.length && !_autoplay
+        && !playback.aborted && !playback.goBack && !playback.jumpToEnd) {
+      const story = _logicEventsToStory(step.logicEvents);
+      if (story.length) await _showStorySequence(story);
     }
 
     // Manual-step gate: in paused mode, hold at this step boundary until NEXT

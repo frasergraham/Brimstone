@@ -280,12 +280,65 @@ export function initEditor(doc = document, initOpts = {}) {
   let ghost = null; // { entrance:{col,row}, candidate:{col,row}|null } | null
   let lastBuildingHex = null;
 
-  // Bottom-corner hex coordinate readout (item 5) — created with the map controls.
-  let coordBadge = null;
-  const updateCoordBadge = () => {
-    if (!coordBadge) return;
-    coordBadge.textContent = hoverHex ? `${hoverHex.col}, ${hoverHex.row}` : '';
-    coordBadge.style.visibility = hoverHex ? 'visible' : 'hidden';
+  // Bottom-corner hex info panel — detail lines about the hovered hex (survivor,
+  // named location, loot override, terrain…) with its [col,row] at the bottom.
+  // The element is created with the map controls; updateHexInfo() repopulates it.
+  let hexInfo = null;
+  let _builtCache = null; // memoised built map for hex lookups; cleared on every edit
+  const builtTileAt = (hex) => {
+    if (!_builtCache) { try { _builtCache = buildMissionMap(editor.getMapDef()); } catch { _builtCache = null; } }
+    return _builtCache?.tiles.get(hexKey(hex.col, hex.row)) ?? null;
+  };
+  const friendly = (s) => String(s ?? '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  const terrainLabel = (tile) => {
+    if (!tile) return 'Grass';
+    const parts = [friendly(tile.base ?? 'grass')];
+    if (tile.building) parts.push(friendly(tile.building));
+    else if (tile.structure === 'building') parts.push('Building');
+    if (tile.path) parts.push(friendly(tile.path));
+    if (tile.resource) parts.push(friendly(tile.resource));
+    if ((tile.fortifyLevel ?? 0) > 0) parts.push(`Fortify ${tile.fortifyLevel}`);
+    return parts.join(', ');
+  };
+  // Ordered detail lines for a hex (terrain last; coordinate added separately).
+  const hexInfoLines = (hex) => {
+    const mapDef = editor.getMapDef();
+    const meta = editor.getMeta();
+    const tile = builtTileAt(hex);
+    const at = (p) => p && p.col === hex.col && p.row === hex.row;
+    const lines = [];
+    const unit = editor.enemyUnitAt(hex);
+    if (unit) lines.push(`Enemy: ${friendly(unit.type)}${(unit.level ?? 1) > 1 ? ` L${unit.level}` : ''}`);
+    if (at(mapDef.heroStart)) lines.push('Hero start');
+    if (at(mapDef.witchStart)) lines.push('Witch start');
+    if ((meta.survivorStartPositions ?? []).some(at)) lines.push('Survivor start');
+    const pn = (mapDef.witchObjectives ?? []).find((o) => at(o) || (o.hexes ?? []).some(at));
+    if (pn) lines.push(`Power Node${pn.label ? ` ("${pn.label}")` : ''}`);
+    if (tile?.hiddenSurvivor) lines.push(`Survivor (${tile.hiddenSurvivorId || 'random'})`);
+    // Logic-graph regions over this hex — Location (a named place) / Area trigger
+    // (fires on enter). Uses the same deduped regions the map overlay draws, so a
+    // Location wired into an Area reads as one "Area trigger (name)" line.
+    for (const reg of logicRegions(meta.logic)) {
+      if (!reg.hexes.some(at)) continue;
+      if (reg.color === 'loc') lines.push(`Named Location ("${reg.label || `${hex.col},${hex.row}`}")`);
+      else lines.push(`Area trigger${reg.label ? ` ("${reg.label}")` : ''}`);
+    }
+    if (tile?.exploreOverride) lines.push(`Loot Override (${exploreOverrideLabel(tile.exploreOverride)})`);
+    lines.push(terrainLabel(tile));
+    return lines;
+  };
+  const updateHexInfo = () => {
+    if (!hexInfo) return;
+    if (!hoverHex) { hexInfo.style.visibility = 'hidden'; hexInfo.innerHTML = ''; return; }
+    hexInfo.innerHTML = '';
+    for (const line of hexInfoLines(hoverHex)) {
+      const d = doc.createElement('div'); d.className = 'e-hexinfo-line'; d.textContent = line;
+      hexInfo.append(d);
+    }
+    const coord = doc.createElement('div'); coord.className = 'e-hexinfo-coord';
+    coord.textContent = `[${hoverHex.col}, ${hoverHex.row}]`;
+    hexInfo.append(coord);
+    hexInfo.style.visibility = 'visible';
   };
 
   // Place / Edit interaction mode (item 8). In 'edit' a click selects a placed
@@ -357,6 +410,7 @@ export function initEditor(doc = document, initOpts = {}) {
   function rerender() {
     // Cheap full rebuild — editor maps are small. Reassigning state keeps the
     // Renderer instance, so zoom/pan persist across edits.
+    _builtCache = null; // invalidate the hex-info map lookup after an edit
     renderer.state = buildState(editor, layers);
     renderer.resize();
     draw();
@@ -432,26 +486,7 @@ export function initEditor(doc = document, initOpts = {}) {
   // the mission's logic graph, with the node's name on its first cell — so the
   // map shows where the graph's places actually are. Editor-only post-draw paint.
   function drawLogicLocations(ctx) {
-    const graph = editor.getMeta()?.logic;
-    if (!graph || !Array.isArray(graph.nodes)) return;
-    // Resolve each Area node's region: a wired Location overrides its own hexes.
-    const locById = new Map(graph.nodes.filter((n) => n.type === 'location').map((n) => [n.id, n]));
-    const areaWire = new Map(); // areaNodeId → locationNode (via a `data → area` edge)
-    for (const e of graph.edges ?? []) {
-      if (e.kind === 'data' && e.to?.pin === 'area' && locById.has(e.from?.node)) {
-        areaWire.set(e.to.node, locById.get(e.from.node));
-      }
-    }
-    const regions = []; // { hexes:[{col,row}], label, color }
-    for (const n of graph.nodes) {
-      if (n.type === 'location') {
-        regions.push({ hexes: locationHexes(n), label: n.params?.label ?? '', color: 'loc' });
-      } else if (n.type === 'onAreaEnter') {
-        const wired = areaWire.get(n.id);
-        const hexes = wired ? locationHexes(wired) : (n.params?.hexes ?? []);
-        regions.push({ hexes, label: wired?.params?.label ?? '', color: 'area' });
-      }
-    }
+    const regions = logicRegions(editor.getMeta()?.logic);
     if (!regions.length) return;
     const r = renderer.hexSize * renderer.zoomLevel;
     ctx.save();
@@ -821,7 +856,7 @@ export function initEditor(doc = document, initOpts = {}) {
       const changed = (hex?.col !== hoverHex?.col) || (hex?.row !== hoverHex?.row);
       hoverHex = hex ? { col: hex.col, row: hex.row } : null;
       if (changed) {
-        updateCoordBadge();
+        updateHexInfo();
         // updateGhost() redraws when the footprint ghost is active; otherwise the
         // hover highlight still needs a repaint to follow the cursor.
         if (!updateGhost()) draw();
@@ -1007,11 +1042,11 @@ export function initEditor(doc = document, initOpts = {}) {
   mapArea = buildMapAreaControls(doc, pane, editor, {
     onFit: () => resetViewAndDraw(),
   });
-  // Hovered-hex coordinate readout (item 5), bottom-left above the size badge.
-  coordBadge = doc.createElement('div');
-  coordBadge.className = 'e-coord-badge';
-  coordBadge.style.visibility = 'hidden';
-  pane.append(coordBadge);
+  // Hovered-hex info panel (item 5 + hex details), bottom-left above the size badge.
+  hexInfo = doc.createElement('div');
+  hexInfo.className = 'e-hexinfo e-coord-badge';
+  hexInfo.style.visibility = 'hidden';
+  pane.append(hexInfo);
   // The Layers (visibility) pane toggles the editor-side display filters. It now
   // lives in a top-right map dropdown (item 6) rather than a sidebar tab.
   buildLayersDropdown(doc, pane, sidebar.panes.layers);
@@ -1543,6 +1578,37 @@ export function createToastHost(doc, container) {
 // painted directly on the canvas (see drawEdgeResizeButtons in
 // initMissionEditorUI) so they sit beside the grid and track pan / zoom / resize.
 // refresh() re-reads dims after any structural change to update the badge.
+// ── Logic-graph map regions (item 4) ────────────────────────────────────────────
+// The highlightable regions a logic graph implies on the map: each Location node
+// (a place) and each onAreaEnter node (a trigger zone). A Location WIRED into an
+// Area's `area` input defines that trigger's region, so it's ONE place — emitted
+// once (as the Area, keeping the Location's name) and NOT also as a standalone
+// Location, so the overlay never doubles up. Pure → unit-testable.
+// Returns [{ hexes:[{col,row}], label, color:'loc'|'area' }].
+export function logicRegions(graph) {
+  if (!graph || !Array.isArray(graph.nodes)) return [];
+  const locById = new Map(graph.nodes.filter((n) => n.type === 'location').map((n) => [n.id, n]));
+  const areaWire = new Map(); // areaNodeId → locationNode (via a `data → area` edge)
+  for (const e of graph.edges ?? []) {
+    if (e.kind === 'data' && e.to?.pin === 'area' && locById.has(e.from?.node)) {
+      areaWire.set(e.to.node, locById.get(e.from.node));
+    }
+  }
+  const consumedLocs = new Set([...areaWire.values()].map((loc) => loc.id));
+  const regions = [];
+  for (const n of graph.nodes) {
+    if (n.type === 'location') {
+      if (consumedLocs.has(n.id)) continue; // drawn as its Area's region instead
+      regions.push({ hexes: locationHexes(n), label: n.params?.label ?? '', color: 'loc' });
+    } else if (n.type === 'onAreaEnter') {
+      const wired = areaWire.get(n.id);
+      const hexes = wired ? locationHexes(wired) : (n.params?.hexes ?? []);
+      regions.push({ hexes, label: wired?.params?.label ?? '', color: 'area' });
+    }
+  }
+  return regions;
+}
+
 // ── Left-docked vertical tool palette (item 7) ──────────────────────────────────
 // Photoshop-style: a narrow, tall strip of icon buttons over the left of the map
 // (not in the sidebar). Selecting a tool fires onSelect(id); syncActive() reflects

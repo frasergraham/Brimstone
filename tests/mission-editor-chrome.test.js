@@ -19,6 +19,7 @@ import {
   edgeButtonTargets,
   hitTestEdgeButton,
   EDGE_BTN_HEX_SCALE,
+  logicRegions,
 } from '../src/tools/mission-editor-ui.js';
 import { mapSizePreset, MAP_EDGES } from '../src/tools/mission-editor.js';
 import { MAP_SIZES } from '../src/map.js';
@@ -211,5 +212,41 @@ describe('buildMapControls', () => {
     assert.ok(btn, 'fit button present');
     btn.click();
     assert.equal(fits, 1);
+  });
+});
+
+// ── Logic-graph map regions (item 4) — dedupe a Location wired into an Area ─────
+describe('mission-editor — logicRegions (Location/Area map highlights)', () => {
+  test('a standalone Location and a standalone Area are separate regions', () => {
+    const graph = { version: 1, variables: [], nodes: [
+      { id: 'loc', type: 'location', params: { label: 'Boogers', hexes: [{ col: 5, row: 15 }] } },
+      { id: 'area', type: 'onAreaEnter', params: { hexes: [{ col: 4, row: 7 }] } },
+    ], edges: [] };
+    const r = logicRegions(graph);
+    assert.equal(r.length, 2);
+    assert.ok(r.some(x => x.color === 'loc' && x.label === 'Boogers'));
+    assert.ok(r.some(x => x.color === 'area' && x.hexes[0].col === 4 && x.hexes[0].row === 7));
+  });
+
+  test('a Location wired into an Area collapses to ONE region (no doubled overlay)', () => {
+    const graph = { version: 1, variables: [], nodes: [
+      { id: 'loc', type: 'location', params: { label: 'The Tavern', hexes: [{ col: 2, row: 12 }] } },
+      { id: 'area', type: 'onAreaEnter', params: { hexes: [] } },
+    ], edges: [{ from: { node: 'loc', pin: 'hexes' }, to: { node: 'area', pin: 'area' }, kind: 'data' }] };
+    const r = logicRegions(graph);
+    assert.equal(r.length, 1, 'the wired Location is not also drawn standalone');
+    assert.equal(r[0].color, 'area');
+    assert.equal(r[0].label, 'The Tavern', 'the Area carries the Location’s name');
+    assert.deepEqual(r[0].hexes, [{ col: 2, row: 12 }]);
+  });
+
+  test('legacy single-hex Location ({col,row}) still yields a region', () => {
+    const graph = { nodes: [{ id: 'l', type: 'location', params: { col: 1, row: 1 } }], edges: [] };
+    assert.deepEqual(logicRegions(graph), [{ hexes: [{ col: 1, row: 1 }], label: '', color: 'loc' }]);
+  });
+
+  test('no graph → no regions', () => {
+    assert.deepEqual(logicRegions(null), []);
+    assert.deepEqual(logicRegions({}), []);
   });
 });

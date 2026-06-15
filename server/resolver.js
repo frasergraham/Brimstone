@@ -611,12 +611,36 @@ export function resolvePlansMP(state, playerEntries) {
       if (bucket) stepEvents.push(bucket);
     }
 
-    steps.push({ stepIndex, playerEvents: stepEvents, entitySnapshot });
+    const logicEvents = captureTurnStoryEvents(state);
+    steps.push({ stepIndex, playerEvents: stepEvents, entitySnapshot, ...(logicEvents ? { logicEvents } : {}) });
     stepIndex++;
   }
 
   state._turnEndPositions = null;
   return steps;
+}
+
+// Mission-logic (docs/09): after a TURN's moves apply, fire Area enter/exit for
+// any unit that crossed a trigger boundary THIS turn — so triggers fire on
+// pass-through, not only when a unit happens to stop on the hex at a round
+// boundary. Returns the SHOW (story) events to play at this point in the replay;
+// Sim-side presentation (spawn / flags / NPC choreography) stays queued for the
+// existing post-round handling. Sealed: reads only `state`. No-op without an
+// attached engine, so normal/online games are byte-identical.
+function captureTurnStoryEvents(state) {
+  if (!state?.logicEngine || !Array.isArray(state.logicPresentation)) return null;
+  const before = state.logicPresentation.length;
+  state._dispatchAreaTransitions();
+  if (state.logicPresentation.length === before) return null;
+  const captured = [];
+  const rest = [];
+  for (let k = before; k < state.logicPresentation.length; k++) {
+    const e = state.logicPresentation[k];
+    (e.kind === 'storyBeat' || e.kind === 'conversation' ? captured : rest).push(e);
+  }
+  state.logicPresentation.length = before;
+  state.logicPresentation.push(...rest);
+  return captured.length ? captured : null;
 }
 
 // ── Legacy 2-player entry point ───────────────────────────────────────────────
@@ -666,7 +690,8 @@ export function resolvePlans(state, heroPlan, witchPlan) {
 
     if (heroEvents.length === 0 && witchEvents.length === 0) break;
 
-    steps.push({ stepIndex, heroEvents, witchEvents, entitySnapshot });
+    const logicEvents = captureTurnStoryEvents(state);
+    steps.push({ stepIndex, heroEvents, witchEvents, entitySnapshot, ...(logicEvents ? { logicEvents } : {}) });
     stepIndex++;
   }
 

@@ -13,6 +13,8 @@ import {
 import { TileType, ResourceType, legacyTileType, decomposeTileType, isBuildingFootprint } from '../src/tiles.js';
 import { hexKey, getNeighbors, hexDistance } from '../src/hex.js';
 import { getReachableHexes, executeMove } from '../src/actions.js';
+import { MissionLogicEngine } from '../src/mission-logic/engine.js';
+import { createGameContext } from '../src/mission-logic/game-context.js';
 
 function freshState() {
   return new GameState(true, true);
@@ -35,6 +37,50 @@ function emptyPassableNeighbor(state, entity) {
     return !state.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
   }) ?? null;
 }
+
+// ── Mission-logic Area triggers fire DURING the turn (replay injection) ─────────
+describe('resolvePlans — mission-logic area triggers', () => {
+  function attachAreaBeat(state, hex) {
+    const graph = { version: 1, variables: [], nodes: [
+      { id: 'area', type: 'onAreaEnter', params: { hexes: [{ col: hex.col, row: hex.row }] } },
+      { id: 'once', type: 'doOnce', params: {} },
+      { id: 'beat', type: 'storyBeat', params: { title: 'Sanctuary', text: 'safe' } },
+    ], edges: [
+      { from: { node: 'area', pin: 'onEnter' }, to: { node: 'once', pin: 'in' }, kind: 'exec' },
+      { from: { node: 'once', pin: 'out' }, to: { node: 'beat', pin: 'in' }, kind: 'exec' },
+    ] };
+    const ctx = createGameContext(state, { emit: (e) => state.logicPresentation.push(e), random: Math.random });
+    state.attachLogicEngine(new MissionLogicEngine(graph, ctx));
+  }
+
+  test('a unit moving ONTO a trigger hex fires it, attaching the story beat to that step', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const reachable = getReachableHexes(state, hero, 1);
+    if (!reachable.length) return; // boxed-in random map — skip
+    const target = reachable[0];
+    attachAreaBeat(state, target);
+
+    const heroPlan = [{ type: PlanActionType.MOVE, entityId: hero.id, toCol: target.col, toRow: target.row }];
+    const steps = resolvePlans(state, heroPlan, []);
+
+    const beats = steps.flatMap(s => s.logicEvents ?? []).filter(e => e.kind === 'storyBeat');
+    assert.equal(beats.length, 1, 'the area trigger fired once during the turn (not only at a round boundary)');
+    assert.equal(beats[0].title, 'Sanctuary');
+    // The Sim/Show split: a Show event must NOT linger in the queue (it was moved
+    // onto the step for replay), so it can't double-show at the next planning gate.
+    assert.equal((state.logicPresentation ?? []).filter(e => e.kind === 'storyBeat').length, 0);
+  });
+
+  test('no engine attached → steps carry no logicEvents (normal games byte-identical)', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const reachable = getReachableHexes(state, hero, 1);
+    if (!reachable.length) return;
+    const steps = resolvePlans(state, [{ type: PlanActionType.MOVE, entityId: hero.id, toCol: reachable[0].col, toRow: reachable[0].row }], []);
+    assert.ok(steps.every(s => !('logicEvents' in s)), 'no logicEvents key without an engine');
+  });
+});
 
 // ── Empty plans ───────────────────────────────────────────────────────────────
 

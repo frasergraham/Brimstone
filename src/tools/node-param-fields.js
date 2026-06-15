@@ -138,7 +138,11 @@ export function buildParamForm(node, { onChange = () => {}, doc = document, cond
   for (const f of fields) {
     const overridingPin = overrides[f.key];
     if (overridingPin && connectedInputs.has(overridingPin)) {
-      // The param is supplied by a wired input — show it greyed/disabled.
+      // The param is supplied by a wired input — ZERO the now-redundant authored
+      // value (list fields → empty, others → unset) so it reads as overridden,
+      // then show it greyed/disabled with a note pointing at the input pin.
+      if (Array.isArray(node.params[f.key])) node.params[f.key] = [];
+      else if (node.params[f.key] !== undefined) delete node.params[f.key];
       const wrap = elc(doc, 'div', 'pf-field pf-overridden');
       if (f.label) wrap.append(elc(doc, 'label', null, f.label));
       const note = elc(doc, 'div', 'pf-mini', `↳ provided by the “${overridingPin}” input`);
