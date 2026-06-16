@@ -178,6 +178,34 @@ describe('executeConsoleCommand', () => {
     }
   });
 
+  test('/aiassist parses modes and delegates to ui.setAIAssistMode', () => {
+    const calls = [];
+    const ui = {
+      setAIAssistMode: (mode) => {
+        calls.push(mode);
+        const autorun = mode === 'auto';
+        return { enabled: autorun || (!!mode && mode !== 'off'), autorun };
+      },
+    };
+    // Default → manual on.
+    let res = executeConsoleCommand('/aiassist', { ui });
+    assert.equal(res.ok, true);
+    assert.match(res.message, /AI-assist ON/);
+    // auto → autorun.
+    res = executeConsoleCommand('/aiassist auto', { ui });
+    assert.match(res.message, /Autorun ON/);
+    // off → disabled.
+    res = executeConsoleCommand('/aiassist off', { ui });
+    assert.match(res.message, /off/i);
+    assert.deepEqual(calls, [true, 'auto', false]);
+  });
+
+  test('/aiassist without a loaded game reports unavailable', () => {
+    const res = executeConsoleCommand('/aiassist', { ui: null });
+    assert.equal(res.ok, true);
+    assert.match(res.message, /start a mission first/i);
+  });
+
   test('errors thrown by a command are caught', () => {
     const renderer = { _toggleInspector: () => { throw new Error('boom'); } };
     const res = executeConsoleCommand('/inspector', { renderer });

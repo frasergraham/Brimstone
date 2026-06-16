@@ -13,7 +13,7 @@ import {
 } from './actions.js';
 import * as audio from './audio.js';
 
-import { PlanActionType, actionCosts, computeGhostState, computeProjectedInventory, interleavePlan, validatePlanAction, buildAutoGuardQueue } from './planner.js';
+import { PlanActionType, actionCosts, computeGhostState, computeProjectedInventory, interleavePlan, groupPlanByEntity, validatePlanAction, buildAutoGuardQueue } from './planner.js';
 import { ABILITIES } from './abilities.js';
 import { buildRollRows, buildOutcomeSummary, buildTurnCardHoverOverlays, battleOutcomeWord } from './replay-timeline.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
@@ -138,6 +138,21 @@ export class UIController {
     this._planSubmitted = false;   // true after plan is locked in
     this.onPlanSubmit   = null;    // callback(plan) — set by main.js
 
+    // ── AI-assist (debug) ────────────────────────────────────────────────────
+    // When enabled via the in-game `/aiassist` console command (backtick), an
+    // "🤖 AI Plan" button appears during planning. Clicking it asks main.js
+    // (onAIAssistRequest) for an AI-generated plan for the current faction and
+    // loads it into the plan panel so the player can review the AI's choices and
+    // then Submit normally.
+    this.aiAssistEnabled  = false;
+    this.onAIAssistRequest = null; // callback(faction) → flat PlanAction[]
+    // Autorun: when true, each planning phase is auto-filled with an AI plan and
+    // auto-submitted (and the end-of-round wrap-up auto-advances) so a whole
+    // mission plays itself while you watch. aiAutorunDelay paces it.
+    this.aiAutorun       = false;
+    this.aiAutorunDelay  = 1400;
+    this._autorunTimer   = null;
+
     // ── Multiplayer ──────────────────────────────────────────────────────────
     this.myPlayerId     = null;    // UUID of the local player (null in offline mode)
     this._players       = [];      // full player roster [{playerId,name,faction,isAI}]
@@ -157,6 +172,7 @@ export class UIController {
     this._eventsAC.abort();
     this._stopCountdown();
     this._dismissGraceDialog();
+    if (this._autorunTimer) { clearTimeout(this._autorunTimer); this._autorunTimer = null; }
   }
 
   // ── Element access ───────────────────────────────────────────────────────────
@@ -599,6 +615,7 @@ export class UIController {
       this.onRedraw();
     });
     _tap(this._el('plan-autoguard-btn'), () => this._autoFillGuard());
+    _tap(this._el('plan-aiassist-btn'),  () => this._fillAIAssistPlan());
     _tap(this._el('plan-toggle-btn'), () => this._togglePlanPanel());
     _tap(this._el('plan-tab'),        () => this._togglePlanPanel());
 
@@ -698,6 +715,8 @@ export class UIController {
     const returnBtn = this._el('plan-return-btn');
     if (returnBtn) returnBtn.style.display = 'none';
 
+    this._syncAIAssistButton();
+
     // Show replay button if there's history to replay
     const replayBtn = this._el('replay-turn-btn');
     if (replayBtn) replayBtn.style.display = this._hasReplayHistory ? '' : 'none';
@@ -764,11 +783,14 @@ export class UIController {
     this._nudgedThisRound.clear();
     this._renderPlayerStatus();
     if (timeoutMs > 0) this._startCountdown(timeoutMs);
+
+    this._maybeAutorun();
   }
 
   /** Exit planning mode (called after resolution completes). */
   exitPlanningMode() {
     this._stopUndoBtnTracking();
+    if (this._autorunTimer) { clearTimeout(this._autorunTimer); this._autorunTimer = null; }
     this._planMode      = false;
     this._pushUnitInfoCards();  // plan over — clear odds/attack markers
     // NOTE: _planSubmitted is intentionally NOT reset here. It guards against
@@ -1123,6 +1145,75 @@ export class UIController {
     if (this._selectedEntity) this._selectEntity(this._selectedEntity);
     this.onRedraw();
     this._showPlanToast(`🛡 Auto-Guard: ${added} guard action${added === 1 ? '' : 's'} queued.`);
+  }
+
+  /**
+   * Show/hide the AI-assist button. Visible only while AI assist is enabled and
+   * we're actively planning (not yet submitted). Called on planning entry and
+   * whenever the console toggle flips `aiAssistEnabled`.
+   */
+  _syncAIAssistButton() {
+    const btn = this._el('plan-aiassist-btn');
+    if (!btn) return;
+    const show = !!this.aiAssistEnabled && this._planMode && !this._planSubmitted;
+    btn.style.display = show ? '' : 'none';
+  }
+
+  /**
+   * AI-assist: ask main.js for an AI-generated plan for the current faction and
+   * load it into the plan panel for review. Replaces any actions queued so far.
+   * In manual mode the player still submits — this only fills the queue so they
+   * can watch what the AI would do. Returns the number of actions queued.
+   */
+  _fillAIAssistPlan({ autorun = false } = {}) {
+    if (this._planSubmitted || !this.onAIAssistRequest) return 0;
+    let plan;
+    try {
+      plan = this.onAIAssistRequest(this._planFaction);
+    } catch (e) {
+      console.error('[ai-assist] plan generation failed', e);
+      this._showPlanToast('AI plan generation failed — see console.');
+      return 0;
+    }
+    if (!plan || plan.length === 0) {
+      if (!autorun) this._showPlanToast('🤖 AI had no actions to plan this round.');
+      return 0;
+    }
+    this._unitPlans = groupPlanByEntity(plan);
+    this._refreshPlanOverlay();
+    this._renderPlanPanel();
+    this._refreshUndoButtons();
+    this._startUndoBtnTracking();
+    if (this._selectedEntity) this._selectEntity(this._selectedEntity);
+    this.onRedraw();
+    this._showPlanToast(autorun
+      ? `🤖 Autorun: ${plan.length} action${plan.length === 1 ? '' : 's'} — submitting…`
+      : `🤖 AI queued ${plan.length} action${plan.length === 1 ? '' : 's'} — review, then Submit.`);
+    return plan.length;
+  }
+
+  /**
+   * Autorun step: when enabled, fill this planning phase with an AI plan, then
+   * auto-submit after a visible pause so the round can be watched. Re-armed each
+   * time planning re-enters, so a whole mission plays itself. Skipped in tutorial
+   * mode (the conductor drives those). The wrap-up between rounds auto-advances
+   * via the hook in showReplayWrapUp().
+   */
+  _maybeAutorun() {
+    if (!this.aiAutorun || this.tutorialMode) return;
+    if (!this._planMode || this._planSubmitted) return;
+    if (this._autorunTimer) { clearTimeout(this._autorunTimer); this._autorunTimer = null; }
+    // Auto-play the resolution replay so it runs to the end without manual
+    // stepping (main.js reads this when seeding playback.paused), then the
+    // wrap-up auto-advances via the hook in showReplayWrapUp(). Speed is left at
+    // the player's chosen replay speed — autorun is for watching, not racing.
+    this.replayAutoPlay = true;
+    // Fill immediately so the queued plan is visible, then submit after a pause.
+    this._fillAIAssistPlan({ autorun: true });
+    this._autorunTimer = setTimeout(() => {
+      this._autorunTimer = null;
+      if (this.aiAutorun && this._planMode && !this._planSubmitted) this._doSubmitPlan();
+    }, this.aiAutorunDelay);
   }
 
   /** Recompute ghost overlay from the current plan and push to renderer. */
@@ -3691,6 +3782,8 @@ export class UIController {
     document.addEventListener('keydown', keyDismiss);
     if (this.autoplay) {
       setTimeout(dismiss, 700);
+    } else if (this.aiAutorun) {
+      setTimeout(dismiss, this.aiAutorunDelay);
     } else if (this.speedMode === 'fast') {
       setTimeout(dismiss, 4000);
     }
@@ -3742,6 +3835,8 @@ export class UIController {
     document.addEventListener('keydown', keyDismiss);
     if (this.autoplay) {
       setTimeout(dismiss, 500);
+    } else if (this.aiAutorun) {
+      setTimeout(dismiss, this.aiAutorunDelay);
     } else if (this.speedMode === 'fast') {
       setTimeout(dismiss, 4000);
     }
@@ -5660,7 +5755,9 @@ export class UIController {
     this._setReplayActiveOrd(this._replayCols().length - 1);
 
     return new Promise(resolve => {
+      let autoTimer = null;
       const finish = (action) => {
+        if (autoTimer) { clearTimeout(autoTimer); autoTimer = null; }
         card.querySelectorAll('.replay-wrapup-btn').forEach(b => { b.onclick = null; });
         this._exitReplayReview();
         resolve(action);
@@ -5668,6 +5765,11 @@ export class UIController {
       card.querySelectorAll('.replay-wrapup-btn').forEach(btn => {
         btn.onclick = () => finish(btn.getAttribute('data-act'));
       });
+      // Autorun: auto-advance the wrap-up after a watchable pause so the mission
+      // plays unattended. Manual clicks still work and cancel the timer.
+      if (this.aiAutorun && !this.tutorialMode) {
+        autoTimer = setTimeout(() => finish('next'), this.aiAutorunDelay);
+      }
     });
   }
 
