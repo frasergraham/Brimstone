@@ -47,6 +47,15 @@ describe('campaign-progression / model', () => {
     ]);
     assert.equal(edges.filter((e) => e.from === 'a' && e.to === 'b').length, 1);
   });
+
+  test('anyOf string + nested entries each draw a prerequisite edge', () => {
+    const { edges } = buildProgressionModel([
+      { id: 'mA' }, { id: 'mB' }, { id: 'mC' },
+      { id: 'boss', unlock: { anyOf: { count: 2, of: ['mA', 'mB', { missionDone: 'mC' }] } } },
+    ]);
+    const has = (from) => edges.some((e) => e.from === from && e.to === 'boss');
+    assert.ok(has('mA') && has('mB') && has('mC'), 'all three anyOf entries become edges');
+  });
 });
 
 describe('campaign-progression / summaries', () => {
@@ -54,6 +63,15 @@ describe('campaign-progression / summaries', () => {
     const { nodes } = buildProgressionModel(MISSIONS);
     assert.match(gateSummary(nodes.find((n) => n.id === 'secret')), /done:gather|item:key/);
     assert.equal(gateSummary(nodes.find((n) => n.id === 'tutorial')), 'available from start');
+  });
+
+  test('gateSummary renders anyOf as "any N of (...)"', () => {
+    const { nodes } = buildProgressionModel([
+      { id: 'mA' }, { id: 'mB' }, { id: 'mC' },
+      { id: 'boss', unlock: { anyOf: { count: 2, of: ['mA', 'mB', { level: 3 }] } } },
+    ]);
+    assert.equal(gateSummary(nodes.find((n) => n.id === 'boss')),
+      'any 2 of (done:mA, done:mB, lvl≥3)');
   });
 
   test('rewardSummary lists non-empty rewards', () => {

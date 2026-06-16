@@ -17,7 +17,16 @@
 //   { all: [criterion, …] }                — AND
 //   { any: [criterion, …] }                — OR
 //   { not: criterion }                     — NOT
+//   { anyOf: { count: N, of: [entry, …] } }— ≥ N of the entries are true ("any N of")
 //   [criterion, …]                         — array is AND sugar
+//
+// `anyOf` is the threshold generalisation of `any` (OR is "any 1 of"): the gate
+// opens when at least `count` of the listed `of` entries evaluate true. Each
+// entry is either a bare mission-id string (shorthand for { missionDone: id }) or
+// a full nested criterion, so "complete any 3 of these 5 missions" is just
+// { anyOf: { count: 3, of: ["mA","mB","mC","mD","mE"] } }. Edge cases: count ≤ 0
+// is always true (no entries required); count > of.length is never true
+// (threshold unreachable); count defaults to 1 (≡ OR).
 //
 // Evaluation reads a context (built by Campaign.buildUnlockContext) so the
 // evaluator stays decoupled from campaign internals.
@@ -36,6 +45,21 @@ export function evaluateUnlock(criterion, ctx = {}) {
   if (criterion.all) return criterion.all.every((c) => evaluateUnlock(c, ctx));
   if (criterion.any) return criterion.any.some((c) => evaluateUnlock(c, ctx));
   if (criterion.not !== undefined) return !evaluateUnlock(criterion.not, ctx);
+  if (criterion.anyOf) {
+    // Threshold combinator: satisfied when ≥ count of the listed entries are true.
+    // A string entry is shorthand for { missionDone: <id> }; an object/array entry
+    // is a full sub-criterion (same recursion as all/any). count defaults to 1
+    // (≡ OR). count ≤ 0 ⇒ always true; count > of.length ⇒ never true.
+    const { count = 1, of = [] } = criterion.anyOf;
+    if (count <= 0) return true;
+    if (count > of.length) return false;
+    let satisfied = 0;
+    for (const entry of of) {
+      const sub = typeof entry === 'string' ? { missionDone: entry } : entry;
+      if (evaluateUnlock(sub, ctx) && ++satisfied >= count) return true;
+    }
+    return false;
+  }
 
   if ('missionDone' in criterion) return !!ctx.isCompleted?.(criterion.missionDone);
   if ('hasItem' in criterion) return !!ctx.hasItem?.(criterion.hasItem);
@@ -61,6 +85,12 @@ export function unlockMissionRefs(criterion, acc = new Set()) {
   if (criterion.all) for (const c of criterion.all) unlockMissionRefs(c, acc);
   if (criterion.any) for (const c of criterion.any) unlockMissionRefs(c, acc);
   if (criterion.not !== undefined) unlockMissionRefs(criterion.not, acc);
+  if (criterion.anyOf) {
+    for (const entry of (criterion.anyOf.of ?? [])) {
+      if (typeof entry === 'string') acc.add(entry);           // missionDone shorthand
+      else unlockMissionRefs(entry, acc);                      // nested criterion
+    }
+  }
   if ('missionDone' in criterion) acc.add(criterion.missionDone);
   return acc;
 }
@@ -80,10 +110,21 @@ export function validateUnlock(criterion, path = 'unlock') {
   if (criterion.all) { if (!Array.isArray(criterion.all)) throw new Error(`${path}.all must be an array`); criterion.all.forEach((c, i) => validateUnlock(c, `${path}.all[${i}]`)); combinators++; }
   if (criterion.any) { if (!Array.isArray(criterion.any)) throw new Error(`${path}.any must be an array`); criterion.any.forEach((c, i) => validateUnlock(c, `${path}.any[${i}]`)); combinators++; }
   if (criterion.not !== undefined) { validateUnlock(criterion.not, `${path}.not`); combinators++; }
+  if (criterion.anyOf !== undefined) {
+    const ao = criterion.anyOf;
+    if (ao === null || typeof ao !== 'object' || Array.isArray(ao)) throw new Error(`${path}.anyOf must be an object { count, of: [...] }`);
+    if (!Array.isArray(ao.of)) throw new Error(`${path}.anyOf.of must be an array`);
+    if ('count' in ao && !Number.isFinite(ao.count)) throw new Error(`${path}.anyOf.count must be a number`);
+    ao.of.forEach((entry, i) => {
+      if (typeof entry === 'string') return;                   // mission-id shorthand
+      validateUnlock(entry, `${path}.anyOf.of[${i}]`);         // full sub-criterion
+    });
+    combinators++;
+  }
 
   const leaves = VALID_LEAVES.filter((k) => k in criterion);
   if (combinators === 0 && leaves.length === 0) {
-    throw new Error(`${path}: criterion has no known key (${VALID_LEAVES.join(', ')}, all, any, not)`);
+    throw new Error(`${path}: criterion has no known key (${VALID_LEAVES.join(', ')}, all, any, not, anyOf)`);
   }
   if ('level' in criterion && !(Number.isFinite(criterion.level))) throw new Error(`${path}.level must be a number`);
   if ('resource' in criterion && typeof criterion.resource !== 'string') throw new Error(`${path}.resource must be a string`);

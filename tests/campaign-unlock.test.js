@@ -70,6 +70,96 @@ describe('unlock / combinators', () => {
   });
 });
 
+describe('unlock / anyOf threshold', () => {
+  // ctx where exactly the first `n` of [mA..mE] are completed.
+  const FIVE = ['mA', 'mB', 'mC', 'mD', 'mE'];
+  const ctxWith = (n) => {
+    const done = new Set(FIVE.slice(0, n));
+    return { isCompleted: (id) => done.has(id) };
+  };
+
+  test('count:3 of 5 — locked at 0/1/2, open at 3/4/5 completed', () => {
+    const crit = { anyOf: { count: 3, of: FIVE } };
+    assert.equal(evaluateUnlock(crit, ctxWith(0)), false);
+    assert.equal(evaluateUnlock(crit, ctxWith(1)), false);
+    assert.equal(evaluateUnlock(crit, ctxWith(2)), false);
+    assert.equal(evaluateUnlock(crit, ctxWith(3)), true);
+    assert.equal(evaluateUnlock(crit, ctxWith(4)), true);
+    assert.equal(evaluateUnlock(crit, ctxWith(5)), true);
+  });
+
+  test('string entries are missionDone shorthand', () => {
+    assert.equal(evaluateUnlock({ anyOf: { count: 1, of: ['mA'] } }, ctxWith(1)), true);
+    assert.equal(evaluateUnlock({ anyOf: { count: 1, of: ['mA'] } }, ctxWith(0)), false);
+  });
+
+  test('object entries are full sub-criteria (recursive)', () => {
+    const crit = { anyOf: { count: 2, of: [
+      { missionDone: 'm1' },
+      { hasItem: 'silver_dagger' },
+      { level: 9 },
+    ] } };
+    // module ctx: m1 done + has dagger = 2 true (level 3 < 9) → open.
+    assert.equal(evaluateUnlock(crit, ctx), true);
+    // only dagger true → 1 < 2 → locked.
+    assert.equal(evaluateUnlock(crit, { isCompleted: () => false, hasItem: () => true, level: 0 }), false);
+  });
+
+  test('count defaults to 1 (≡ OR)', () => {
+    assert.equal(evaluateUnlock({ anyOf: { of: FIVE } }, ctxWith(1)), true);
+    assert.equal(evaluateUnlock({ anyOf: { of: FIVE } }, ctxWith(0)), false);
+  });
+
+  test('edge: count ≤ 0 is always true (even with empty of)', () => {
+    assert.equal(evaluateUnlock({ anyOf: { count: 0, of: [] } }, ctxWith(0)), true);
+    assert.equal(evaluateUnlock({ anyOf: { count: 0, of: FIVE } }, ctxWith(0)), true);
+    assert.equal(evaluateUnlock({ anyOf: { count: -2, of: FIVE } }, ctxWith(0)), true);
+  });
+
+  test('edge: count > of.length is never true', () => {
+    assert.equal(evaluateUnlock({ anyOf: { count: 1, of: [] } }, ctxWith(5)), false);
+    assert.equal(evaluateUnlock({ anyOf: { count: 6, of: FIVE } }, ctxWith(5)), false);
+  });
+
+  test('composition: all wrapping anyOf', () => {
+    const crit = { all: [{ missionDone: 'mA' }, { anyOf: { count: 2, of: ['mB', 'mC', 'mD'] } }] };
+    // n=2 → {mA,mB}: mA done but only mB of {mB,mC,mD} → 1<2 → false.
+    assert.equal(evaluateUnlock(crit, ctxWith(2)), false);
+    // n=3 → {mA,mB,mC}: mA done, anyOf has mB+mC → 2≥2 → true.
+    assert.equal(evaluateUnlock(crit, ctxWith(3)), true);
+  });
+
+  test('composition: any (OR) wrapping anyOf', () => {
+    const crit = { any: [{ hasItem: 'never' }, { anyOf: { count: 3, of: FIVE } }] };
+    const noItem = (n) => ({ ...ctxWith(n), hasItem: () => false });
+    assert.equal(evaluateUnlock(crit, noItem(2)), false);
+    assert.equal(evaluateUnlock(crit, noItem(3)), true);
+  });
+
+  test('composition: not wrapping anyOf', () => {
+    const crit = { not: { anyOf: { count: 3, of: FIVE } } };
+    assert.equal(evaluateUnlock(crit, ctxWith(2)), true, '<3 done → anyOf false → NOT true');
+    assert.equal(evaluateUnlock(crit, ctxWith(3)), false);
+  });
+
+  test('refs: collects string + nested missionDone entries', () => {
+    const crit = { anyOf: { count: 2, of: ['mA', { missionDone: 'mB' }, { any: [{ missionDone: 'mC' }] }] } };
+    assert.deepEqual([...unlockMissionRefs(crit)].sort(), ['mA', 'mB', 'mC']);
+  });
+
+  test('validateUnlock accepts a well-formed anyOf', () => {
+    assert.doesNotThrow(() => validateUnlock({ anyOf: { count: 3, of: ['a', 'b', 'c', { level: 2 }] } }));
+    assert.doesNotThrow(() => validateUnlock({ anyOf: { of: ['a'] } })); // count optional
+  });
+
+  test('validateUnlock rejects a malformed anyOf', () => {
+    assert.throws(() => validateUnlock({ anyOf: [] }), /anyOf must be an object/);
+    assert.throws(() => validateUnlock({ anyOf: { count: 2 } }), /anyOf\.of must be an array/);
+    assert.throws(() => validateUnlock({ anyOf: { count: 'three', of: ['a'] } }), /anyOf\.count must be a number/);
+    assert.throws(() => validateUnlock({ anyOf: { of: [{ bogus: 1 }] } }), /no known key/);
+  });
+});
+
 describe('unlock / refs + validation', () => {
   test('unlockMissionRefs collects every missionDone id', () => {
     const c = { all: [{ missionDone: 'a' }, { any: [{ missionDone: 'b' }, { not: { missionDone: 'c' } }] }] };
@@ -137,6 +227,18 @@ describe('unlock / Campaign integration', () => {
     const c = makeCampaign(missions, { completed: ['a', 'b'] });
     assert.equal(c.buildUnlockContext().level, 2);
     assert.equal(c.isMissionUnlocked(missions[2]), true);
+  });
+
+  test('anyOf gates the operator use case: any 3 of 5 optional missions', () => {
+    const FIVE = ['mA', 'mB', 'mC', 'mD', 'mE'];
+    const missions = [
+      ...FIVE.map((id) => ({ id })),
+      { id: 'boss', unlock: { anyOf: { count: 3, of: FIVE } } },
+    ];
+    const boss = missions[missions.length - 1];
+    assert.equal(makeCampaign(missions, { completed: ['mA', 'mB'] }).isMissionUnlocked(boss), false);
+    assert.equal(makeCampaign(missions, { completed: ['mA', 'mB', 'mC'] }).isMissionUnlocked(boss), true);
+    assert.equal(makeCampaign(missions, { completed: FIVE }).isMissionUnlocked(boss), true);
   });
 });
 

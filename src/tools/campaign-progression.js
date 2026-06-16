@@ -78,6 +78,11 @@ function unlockSummary(c) {
   if (c.all) return '(' + c.all.map(unlockSummary).join(' AND ') + ')';
   if (c.any) return '(' + c.any.map(unlockSummary).join(' OR ') + ')';
   if (c.not !== undefined) return 'NOT ' + unlockSummary(c.not);
+  if (c.anyOf) {
+    const { count = 1, of = [] } = c.anyOf;
+    const items = of.map((e) => (typeof e === 'string' ? `done:${e}` : unlockSummary(e)));
+    return `any ${count} of (${items.join(', ')})`;
+  }
   if ('missionDone' in c) return `done:${c.missionDone}`;
   if ('hasItem' in c) return `item:${c.hasItem}`;
   if ('level' in c) return `lvl≥${c.level}`;

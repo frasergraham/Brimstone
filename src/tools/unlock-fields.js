@@ -29,7 +29,10 @@ export function criterionToRows(unlock) {
 
 function leafToRows(c) {
   if (c == null || typeof c !== 'object') return [];
-  if (c.all || c.any || c.not !== undefined) return [{ type: '__advanced', raw: c }];
+  // Nested combinators (all/any/not) and the anyOf threshold form don't fit the
+  // flat leaf-row model — keep them verbatim as an "advanced" row so editing the
+  // flat criteria never drops authored data.
+  if (c.all || c.any || c.not !== undefined || c.anyOf) return [{ type: '__advanced', raw: c }];
   for (const k of LEAF_KEYS) {
     if (k in c) {
       const row = { type: k, value: c[k] };

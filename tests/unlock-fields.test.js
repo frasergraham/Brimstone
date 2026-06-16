@@ -52,6 +52,17 @@ describe('unlock-fields / round-trip', () => {
     assert.deepEqual(rowsToCriterion(combinator, rows), c);
   });
 
+  test('anyOf threshold form is preserved verbatim as an advanced row', () => {
+    const top = { anyOf: { count: 3, of: ['mA', 'mB', 'mC', 'mD', 'mE'] } };
+    const { rows } = criterionToRows(top);
+    assert.ok(rows.some((r) => r.type === '__advanced'), 'top-level anyOf kept as advanced');
+    assert.deepEqual(roundtrip(top), top);
+
+    // anyOf nested inside an all[] also survives the flat editor untouched.
+    const nested = { all: [{ missionDone: 'a' }, { anyOf: { count: 2, of: ['x', 'y'] } }] };
+    assert.deepEqual(roundtrip(nested), nested);
+  });
+
   test('empty-valued rows are dropped', () => {
     const rows = [{ type: 'missionDone', value: '' }, { type: 'hasItem', value: 'key' }];
     assert.deepEqual(rowsToCriterion('all', rows), { hasItem: 'key' });

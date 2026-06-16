@@ -295,12 +295,28 @@ list today — collapse into **one** Area node firing two actions.
 tutorial ─▶ prologue ─▶ gathering_survivors ─▶ first_night ─▶ river_crossing ─┐
                                                                               ├(AND)▶ witchs_trail
                                             …            ─▶ long_watch ───────┘
-   unlock criteria: Mission Completed · Has Item · XP/Level ≥ N · Story Flag  (AND/OR/NOT)
+   unlock criteria: Mission Completed · Has Item · XP/Level ≥ N · Story Flag  (AND/OR/NOT/anyOf)
    reward payload : grant resources · grant/equip item · recruit survivor · heal ·
                     set story flag · mark next-mission-unlocked
 ```
 Missions are nodes; edges are unlock dependencies. Double-click a mission node →
 opens it in the mission logic editor.
+
+**`anyOf` — "any N of" threshold.** Alongside `all` (AND), `any` (OR) and `not`,
+an unlock criterion may be `{ anyOf: { count: N, of: [entry, …] } }`: the gate
+opens when at least `count` of the listed entries evaluate true. It's the
+threshold generalisation of `any` (OR is "any 1 of"). Each entry is either a bare
+mission-id string (shorthand for `{ missionDone: id }`) or a full nested criterion,
+so the canonical "complete any 3 of these 5 optional missions" gate is just:
+
+```jsonc
+"unlock": { "anyOf": { "count": 3, "of": ["mA", "mB", "mC", "mD", "mE"] } }
+```
+
+Edge cases: `count` defaults to 1 (≡ OR); `count ≤ 0` is always satisfied (no
+entries required); `count > of.length` is never satisfied (threshold unreachable).
+Evaluator, ref-collection and validation live in `src/campaign/unlock.js`; the
+Campaign Progression card summarises it as `any N of (…)`.
 
 ---
 
