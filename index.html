@@ -67,26 +67,23 @@
 
     <!-- Campaign: Story Selection -->
     <div id="setup-step-campaign-select" class="setup-card setup-card-wide" style="display:none">
+      <button id="btn-campaign-select-back" class="setup-btn menu-back-btn">&larr; Back</button>
       <h1 class="title" style="font-size:2rem;margin-bottom:0.5rem">SINGLE PLAYER CAMPAIGN</h1>
       <div class="setup-lore"><p>Choose a story to play.</p></div>
       <div id="campaign-select-list" class="campaign-select-list"></div>
-      <div class="setup-buttons" style="margin-top:1rem">
-        <button id="btn-campaign-select-back" class="setup-btn">&larr; Back</button>
-      </div>
     </div>
 
     <!-- Campaign: Save-Slot Picker (opens after a chapter is chosen) -->
     <div id="setup-step-campaign-slot" class="setup-card setup-card-wide" style="display:none">
+      <button id="btn-campaign-slot-back" class="setup-btn menu-back-btn">&larr; Back</button>
       <h1 id="campaign-slot-title" class="title" style="font-size:2rem;margin-bottom:0.5rem">CHOOSE A SAVE SLOT</h1>
       <div class="setup-lore"><p>Each slot holds an independent playthrough.</p></div>
       <div id="campaign-slot-list" class="campaign-slot-list"></div>
-      <div class="setup-buttons" style="margin-top:1rem">
-        <button id="btn-campaign-slot-back" class="setup-btn">&larr; Back</button>
-      </div>
     </div>
 
     <!-- Campaign: Progress (between-mission landing — party + mission list) -->
     <div id="setup-step-campaign-progress" class="setup-card setup-card-wide" style="display:none">
+      <button id="btn-campaign-progress-back" class="setup-btn menu-back-btn">&larr; Back</button>
       <h1 id="campaign-progress-title" class="title" style="font-size:2rem;margin-bottom:0.5rem">CAMPAIGN</h1>
       <div class="campaign-progress-toggle">
         <button id="cprog-toggle-party" class="cprog-toggle-btn active" data-pane="party">&larr; Party</button>
@@ -101,7 +98,6 @@
         <div id="campaign-progress-missions" class="campaign-progress-pane cprog-missions-pane"></div>
       </div>
       <div class="setup-buttons" style="margin-top:1rem">
-        <button id="btn-campaign-progress-back" class="setup-btn">&larr; Back</button>
         <button id="btn-campaign-progress-startover" class="setup-btn" style="color:var(--clr-dim);font-size:0.85rem">Start Over</button>
         <button id="btn-campaign-progress-reset-hints" class="setup-btn" style="color:var(--clr-dim);font-size:0.85rem" title="Show the tutorial micro-lesson hints again on replayed missions">💡 Reset Hints</button>
         <button id="btn-campaign-progress-unlock" class="setup-btn admin-btn">🔓 Unlock All</button>
@@ -122,11 +118,11 @@
           <button id="btn-start-mission" class="setup-btn primary">Begin Mission</button>
           <button id="btn-resume-mission" class="setup-btn primary" style="display:none">Resume Mission</button>
           <button id="btn-restart-mission" class="setup-btn" style="display:none">Restart</button>
-          <button id="btn-briefing-back" class="setup-btn">← Back</button>
+          <button id="btn-briefing-back" class="setup-btn menu-back-btn">← Back</button>
         </div>
       </div>
       <div id="campaign-nav" class="setup-buttons" style="margin-top:1rem">
-        <button id="btn-campaign-back" class="setup-btn">← Back</button>
+        <button id="btn-campaign-back" class="setup-btn menu-back-btn">← Back</button>
         <button id="btn-delete-campaign" class="setup-btn" style="color:var(--clr-dim);font-size:0.85rem">Start Over</button>
         <button id="btn-admin-unlock" class="setup-btn admin-btn">🔓 Unlock All</button>
       </div>
@@ -217,9 +213,7 @@
         </div>
       </details>
 
-      <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
-        <button id="btn-singleplayer-back" class="setup-btn">← Back</button>
-      </div>
+      <button id="btn-singleplayer-back" class="setup-btn menu-back-btn">← Back</button>
     </div>
 
     <!-- ── Battle for Caleb's Hollow ─────────────────────────────── -->
@@ -268,7 +262,7 @@
       <div class="setup-buttons" style="flex-direction:column;align-items:center;gap:0.5rem">
         <button id="btn-battle-join"     class="setup-btn primary" style="width:220px;display:none">Join the Battle</button>
         <button id="btn-battle-spectate" class="setup-btn"         style="width:220px;display:none">Spectate</button>
-        <button id="btn-battle-back"     class="setup-btn"         style="width:220px">← Back</button>
+        <button id="btn-battle-back"     class="setup-btn menu-back-btn">← Back</button>
       </div>
 
       <!-- Past battles (collapsible, default closed) -->
@@ -309,9 +303,7 @@
         <button id="btn-join-game"   class="setup-btn">🚪 Join Game</button>
       </div>
 
-      <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
-        <button id="btn-online-back" class="setup-btn">← Back</button>
-      </div>
+      <button id="btn-online-back" class="setup-btn menu-back-btn">← Back</button>
     </div>
 
     <!-- ── Async Multiplayer ──────────────────────────────────────── -->
@@ -340,18 +332,14 @@
         <button id="btn-join-async"   class="setup-btn">🚪 Join Game</button>
       </div>
 
-      <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
-        <button id="btn-async-back" class="setup-btn">← Back</button>
-      </div>
+      <button id="btn-async-back" class="setup-btn menu-back-btn">← Back</button>
     </div>
 
     <!-- Revision History -->
     <div id="setup-step-changelog" class="setup-card setup-card-wide" style="display:none">
       <h1 class="title" style="font-size:2rem">REVISION HISTORY</h1>
       <div id="changelog-body" class="changelog-body"></div>
-      <div class="setup-buttons" style="margin-top:1.5rem;margin-bottom:0">
-        <button id="btn-changelog-back" class="setup-btn">&larr; Back</button>
-      </div>
+      <button id="btn-changelog-back" class="setup-btn menu-back-btn">&larr; Back</button>
     </div>
 
     <!-- Account -->
@@ -426,9 +414,7 @@
 
       </div>
 
-      <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
-        <button id="btn-account-back" class="setup-btn">&larr; Back</button>
-      </div>
+      <button id="btn-account-back" class="setup-btn menu-back-btn">&larr; Back</button>
     </div>
 
     <!-- ── Auth Dialog (shared sign-in popup) ─────────────────────── -->
@@ -550,7 +536,7 @@
       </div>
     </details>
     <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0">
-      <button id="btn-create-game-back" class="setup-btn">← Back</button>
+      <button id="btn-create-game-back" class="setup-btn menu-back-btn">← Back</button>
       <button id="btn-create-game-confirm" class="setup-btn primary">Create →</button>
     </div>
   </div>
@@ -572,9 +558,7 @@
       <button id="btn-join-private" class="setup-btn primary" style="margin-top:0.4rem">Join →</button>
       <p id="join-game-error" class="setup-error" style="display:none"></p>
     </div>
-    <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0">
-      <button id="btn-join-game-back" class="setup-btn">← Back</button>
-    </div>
+    <button id="btn-join-game-back" class="setup-btn menu-back-btn">← Back</button>
   </div>
 
   <!-- ── Online: Game Lobby (pre-start slot management) ───────── -->
@@ -594,9 +578,7 @@
       <button id="btn-lobby-populate-ai" class="setup-btn">🤖 Populate with AI</button>
       <button id="btn-lobby-start" class="setup-btn primary" disabled>▶ Start Game</button>
     </div>
-    <div class="setup-buttons" style="margin-bottom:0">
-      <button id="btn-lobby-leave" class="setup-btn">✕ Leave</button>
-    </div>
+    <button id="btn-lobby-leave" class="setup-btn menu-back-btn">✕ Leave</button>
   </div>
 
   <!-- ── Async: create game ────────────────────────────────────── -->
@@ -646,7 +628,7 @@
     </div>
 
     <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0">
-      <button id="btn-async-create-back" class="setup-btn">&larr; Back</button>
+      <button id="btn-async-create-back" class="setup-btn menu-back-btn">&larr; Back</button>
       <button id="btn-async-create-go" class="setup-btn primary">Create Game</button>
     </div>
   </div>
@@ -678,7 +660,7 @@
     <p id="async-join-error" class="setup-error" style="display:none"></p>
     <div class="setup-buttons" style="margin-top:0.75rem;margin-bottom:0">
       <button id="btn-async-join-go" class="setup-btn primary">Join</button>
-      <button id="btn-async-join-back" class="setup-btn">&larr; Back</button>
+      <button id="btn-async-join-back" class="setup-btn menu-back-btn">&larr; Back</button>
     </div>
   </div>
 
@@ -690,9 +672,7 @@
       <p id="waiting-message">Searching for a worthy opponent in Caleb's Hollow…</p>
     </div>
     <div class="waiting-spinner">⏳</div>
-    <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0">
-      <button id="btn-cancel-wait" class="setup-btn">✕ Cancel</button>
-    </div>
+    <button id="btn-cancel-wait" class="setup-btn menu-back-btn">✕ Cancel</button>
   </div>
 
   <div id="setup-footer" class="setup-footer">

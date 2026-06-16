@@ -138,6 +138,32 @@ input, textarea, select, [contenteditable], [contenteditable] * {
 .setup-btn.primary     { border-color: var(--day); color: var(--day); }
 .setup-btn.primary:hover { background: #1e1a10; }
 
+/* ── Unified menu back button ────────────────────────────────────────────────
+   Every menu screen places its "Back" control in the SAME top-left corner with
+   the same styling. It is absolutely positioned against its .setup-card so it
+   lands in an identical spot regardless of where it sits in the card's markup
+   (this also lets cards with two mutually-exclusive sub-views — e.g. the
+   campaign mission-list vs. briefing — share the corner: whichever parent is
+   display:none simply hides its button). Offsets respect the iOS safe-area
+   insets so the button never tucks under the notch. Keeps the .setup-btn class
+   for its base theme (background / border / colour / hover). */
+.menu-back-btn {
+  position: absolute;
+  top: max(0.85rem, env(safe-area-inset-top, 0px));
+  left: max(0.95rem, env(safe-area-inset-left, 0px));
+  z-index: 5;
+  margin: 0;
+  padding: 0.4rem 0.95rem;
+  font-size: 0.85rem;
+  width: auto;
+}
+/* Reserve top padding inside any card that carries a back button so the
+   absolutely-positioned button never overlaps the centred title — even when a
+   long title wraps on a narrow phone. */
+.setup-card:has(.menu-back-btn) {
+  padding-top: 3.4rem;
+}
+
 .ng-section-label {
   text-align: center;
   font-size: 0.78rem;
