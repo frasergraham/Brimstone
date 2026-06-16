@@ -494,6 +494,12 @@ export function resolveSpawnPosition(state, spawnAt) {
  */
 export function applyCarriedHeroLoadout(hero, heroStats) {
   if (!hero || !heroStats) return;
+  // Campaign veterancy: restore earned level + accumulated XP first, so the
+  // wounded-fraction HP carry below is taken off the LEVELED max. applyLevel is
+  // idempotent against the freshly-created hero's L1 base and a no-op at L1
+  // (so pre-veterancy saves are unchanged). Mirrors the survivor deploy path.
+  hero.xp = heroStats.xp || 0;
+  if (heroStats.level > 1) applyLevel(hero, heroStats.level);
   if (typeof heroStats.hp === 'number') {
     if (typeof heroStats.maxHp === 'number' && heroStats.maxHp > 0) {
       // Carry the wounded FRACTION, not the absolute HP. This is scale-

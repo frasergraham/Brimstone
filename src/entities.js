@@ -627,7 +627,19 @@ export function applyLevel(entity, level) {
 // Returns { xpGained, leveledUp, newLevel } for Phase C/F (toasts, FX). Phase B
 // never calls this; it's the plumbing a sibling ticket hooks into.
 export function awardXP(entity, amount, state) {
-  if (!state?.isCampaign || !entity || !(amount > 0)) {
+  // Hero-only mechanic. Only player-faction (hero) units carry across missions
+  // (campaign saves heroStats + survivors, never witch units — src/campaign/
+  // campaign.js), so witch-side levelling has zero progression payoff and only
+  // acts as an off-spec within-mission difficulty drift. Gate it out here at the
+  // single chokepoint rather than at all 7 call sites; the hero-owner check is
+  // the canonical faction discriminator (Entity ctor; the established pattern
+  // across src/). entities.js can't import factions.js (factions.js imports it),
+  // so the faction `side` abstraction isn't reachable — see the documented
+  // allowlist bump in tests/faction-string-checks.test.js.
+  // Number.isFinite rejects Infinity (which `amount > 0` would let through and
+  // poison entity.xp, jumping straight to L99) as well as NaN/±Infinity.
+  if (!state?.isCampaign || !entity || entity.owner !== 'hero'
+      || !(amount > 0) || !Number.isFinite(amount)) {
     return { xpGained: 0, leveledUp: false, newLevel: entity?.level ?? 1 };
   }
   const gain = Math.floor(amount);

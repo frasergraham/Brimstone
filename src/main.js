@@ -4767,6 +4767,11 @@ function _handleCampaignMissionEnd() {
       heroStats: state.hero ? {
         hp: state.hero.hp, maxHp: state.hero.maxHp,
         attack: state.hero.attack, defense: state.hero.defense,
+        // Campaign veterancy: carry the hero's earned level + XP forward so
+        // applyMissionResult round-trips them into Campaign.heroStats (Phase B
+        // fields). Without these the hero's veterancy would silently reset each
+        // mission. applyCarriedHeroLoadout re-applies them at the next deploy.
+        level: state.hero.level, xp: state.hero.xp,
         weapon: state.hero.weapon, items: { ...state.hero.items },
       } : _activeCampaign.heroStats,
       flags: {},

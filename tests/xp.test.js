@@ -15,13 +15,26 @@ import {
   ALLY_XP_SHARE,
 } from '../src/balance.js';
 import {
-  createZombie, createSurvivor, applyLevel, awardXP, SURVIVOR_ROSTER,
+  Entity, EntityType, createSurvivor, applyLevel, awardXP, SURVIVOR_ROSTER,
 } from '../src/entities.js';
 import { snapshotSurvivor } from '../src/campaign/campaign.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import { GameState } from '../src/game.js';
 
 const campaign = () => ({ isCampaign: true });
+
+// A hero-owned leveling subject with the fixed 14 HP / 2 ATK / 0 DEF stat line
+// the awardXP / applyLevel mechanics are exercised against below. Phase C gates
+// awardXP to player-faction (hero) units, so the subject must be hero-owned; the
+// stats are pinned via the Entity ctor (a roster survivor's base stats vary,
+// which would break the exact maxHp/ATK/DEF curve assertions).
+function leveler() {
+  const e = new Entity(EntityType.SURVIVOR, 'hero', 0, 0);
+  e.maxHp = 14; e.hp = 14; e.attack = 2; e.defense = 0;
+  e.weapon = null; e.abilities = []; e.effects = [];
+  e.xp = 0; e.level = 1;
+  return e;
+}
 
 describe('XP curve (balance.js)', () => {
   test('xpForLevel: cumulative totals from level 1', () => {
@@ -66,7 +79,7 @@ describe('XP curve (balance.js)', () => {
 
 describe('awardXP — gating no-ops', () => {
   test('no-op when state is not a campaign', () => {
-    const z = createZombie(0, 0);
+    const z = leveler();
     const r = awardXP(z, 500, { isCampaign: false });
     assert.deepEqual(r, { xpGained: 0, leveledUp: false, newLevel: 1 });
     assert.equal(z.xp, 0);
@@ -74,7 +87,7 @@ describe('awardXP — gating no-ops', () => {
   });
 
   test('no-op when state is null/undefined', () => {
-    const z = createZombie(0, 0);
+    const z = leveler();
     assert.deepEqual(awardXP(z, 500, null), { xpGained: 0, leveledUp: false, newLevel: 1 });
     assert.deepEqual(awardXP(z, 500, undefined), { xpGained: 0, leveledUp: false, newLevel: 1 });
     assert.equal(z.xp, 0);
@@ -86,7 +99,7 @@ describe('awardXP — gating no-ops', () => {
   });
 
   test('no-op when amount <= 0', () => {
-    const z = createZombie(0, 0);
+    const z = leveler();
     assert.deepEqual(awardXP(z, 0, campaign()), { xpGained: 0, leveledUp: false, newLevel: 1 });
     assert.deepEqual(awardXP(z, -10, campaign()), { xpGained: 0, leveledUp: false, newLevel: 1 });
     assert.equal(z.xp, 0);
@@ -95,7 +108,7 @@ describe('awardXP — gating no-ops', () => {
 
 describe('awardXP — accumulation + level-up', () => {
   test('accumulates xp without leveling below the threshold', () => {
-    const z = createZombie(0, 0);
+    const z = leveler();
     const r = awardXP(z, 199, campaign()); // one short of L2 (200)
     assert.equal(z.xp, 199);
     assert.equal(z.level, 1);
@@ -103,7 +116,7 @@ describe('awardXP — accumulation + level-up', () => {
   });
 
   test('levels up at the exact xpForLevel threshold', () => {
-    const z = createZombie(0, 0); // base 14hp atk2 def0
+    const z = leveler(); // base 14hp atk2 def0
     awardXP(z, 199, campaign());
     const r = awardXP(z, 1, campaign()); // now 200 → L2
     assert.equal(z.xp, 200);
@@ -117,14 +130,14 @@ describe('awardXP — accumulation + level-up', () => {
   });
 
   test('floors a fractional grant before accumulating', () => {
-    const z = createZombie(0, 0);
+    const z = leveler();
     const r = awardXP(z, 15.9, campaign());
     assert.equal(z.xp, 15);
     assert.equal(r.xpGained, 15);
   });
 
   test('a level-up full-heals (applyLevel sets hp = maxHp)', () => {
-    const z = createZombie(0, 0);
+    const z = leveler();
     z.hp = 3; // wounded
     awardXP(z, 200, campaign());
     assert.equal(z.hp, z.maxHp, 'level-up restores full HP');
@@ -133,7 +146,7 @@ describe('awardXP — accumulation + level-up', () => {
 
 describe('awardXP — multi-level jump applies once with the final level', () => {
   test('a huge grant lands directly on the final level with correct stats', () => {
-    const z = createZombie(0, 0); // base 14hp atk2 def0
+    const z = leveler(); // base 14hp atk2 def0
     const r = awardXP(z, 2000, campaign()); // xpForLevel(5) = 2000 → L5
     assert.equal(z.xp, 2000);
     assert.equal(z.level, 5);
@@ -149,7 +162,7 @@ describe('awardXP — multi-level jump applies once with the final level', () =>
 
 describe('applyLevel regression — ATK/DEF/maxHp per balance.js curves', () => {
   test('boosts intrinsic stats (confirms the static-level path still works)', () => {
-    const z = createZombie(0, 0); // base 14hp atk2 def0
+    const z = leveler(); // base 14hp atk2 def0
     applyLevel(z, 3);
     assert.equal(z.maxHp, hpForLevel(14, 3)); // 28
     assert.equal(z.getAttack(), 4);  // 2 + 2
@@ -161,6 +174,13 @@ describe('snapshotSurvivor → deploy re-application (no double-apply)', () => {
   // Mirrors the campaign deploy path in main.js: spawn the SPECIFIC roster
   // character (forcedName) so applyLevel recomputes maxHp from the true L1 base
   // instead of double-boosting the already-leveled snapshot maxHp.
+  //
+  // NOTE: this intentionally duplicates the survivor deploy logic at
+  // src/main.js:4290-4322 (xp-then-applyLevel-then-clamp-hp). main.js's deploy is
+  // entangled with DOM/roster wiring that can't load under node --test, so the
+  // sequence is re-implemented here. If the deploy ordering changes there, mirror
+  // it here. (Reviewer Xena's Phase B nit #2 — duplication acknowledged, kept on
+  // purpose rather than extracting a shared helper out of the giant main.js.)
   function deployFromSnapshot(snap, state) {
     const s = createSurvivor(0, 0, 'hero', state, snap.name);
     s.name = snap.name;

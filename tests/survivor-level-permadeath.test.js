@@ -340,6 +340,8 @@ describe('level-up persistence through a mission', () => {
   function deployFromSnapshot(snap) {
     resetRoster();
     const s = createSurvivor(0, 0, 'hero', null, snap.name);
+    s.owner = 'hero'; // createSurvivor leaves owner null (3rd arg is ownerId); the
+                      // real main.js deploy sets it — needed so awardXP's hero gate passes
     s.attack = snap.attack;
     s.defense = snap.defense;
     s.xp = snap.xp || 0;
@@ -354,8 +356,10 @@ describe('level-up persistence through a mission', () => {
     const charBase = SURVIVOR_ROSTER[0].maxHp;
     const refL1 = createSurvivor(0, 0, 'hero', null, name); // L1 baseline
 
-    // Deploy at static level 2, 0 xp.
+    // Deploy at static level 2, 0 xp. owner='hero' mirrors the real deploy path
+    // (createSurvivor leaves owner null) so awardXP's hero-only gate applies.
     const s = createSurvivor(0, 0, 'hero', null, name, 2);
+    s.owner = 'hero';
     assert.equal(s.level, 2);
     assert.equal(s.xp, 0);
 

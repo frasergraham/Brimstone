@@ -10,7 +10,12 @@ import {
 import { pickUnitSlot } from './hex-slots.js';
 import { ITEMS, getWeaponDamage } from './items.js';
 import { ABILITIES } from './abilities.js';
-import { DAMAGE_SCALE } from './balance.js';
+import {
+  DAMAGE_SCALE,
+  XP_PER_EXPLORE, XP_PER_FORTIFY_BASE, XP_PER_FORTIFY_LEVEL_BONUS,
+  XP_PER_HIT, XP_PER_CRUSH, XP_PER_KILL, XP_PER_DEFEND, XP_PER_COUNTER,
+  ALLY_XP_SHARE,
+} from './balance.js';
 import { LOOT_TIER_GATE } from './loot.config.js';
 
 // Phase 3: items in an actor's bag are keyed by their ITEMS id (e.g.
@@ -21,7 +26,7 @@ import {
   EntityType, SurvivorAbility, Entity,
   createZombie, createMinion, createSurvivor,
   createWoodGolem, createIronGolem,
-  nextDie, ADVANTAGE_CAP, isLeaderType, abilityStatMod, rollDamage,
+  nextDie, ADVANTAGE_CAP, isLeaderType, abilityStatMod, rollDamage, awardXP,
 } from './entities.js';
 import { Phase } from './game.js';
 import { getFaction, concreteFactionOf, sightRangeForEntity } from './factions.js';
@@ -813,6 +818,9 @@ export function executeExplore(state, actor) {
   }
 
   if (encounterLog.length) log.push(...encounterLog);
+  // Campaign veterancy: XP for a first-time explore (the t.explored guard at the
+  // top makes this fire once per hex). No ally share. No-op outside campaign.
+  awardXP(actor, XP_PER_EXPLORE, state);
   return { success: true, log, cost: 1, lootItems, encounterLog, encounterSurvivor };
 }
 
@@ -1084,6 +1092,18 @@ export function computeCombatOdds(state, actor, target) {
   });
 }
 
+// Campaign veterancy helper: grant `amount` XP to the primary combatant and a
+// floored ALLY_XP_SHARE slice to each gang-up ally. awardXP itself no-ops
+// outside campaign (gated on state.isCampaign), so this is a guarded no-op in
+// normal/online/AI-vs-AI play. Splash kills deliberately bypass this (no ally
+// share — the blast geometry is too murky to attribute).
+function awardWithAllies(primary, allies, amount, state) {
+  awardXP(primary, amount, state);
+  const share = Math.floor(amount * ALLY_XP_SHARE);
+  if (share <= 0) return;
+  for (const ally of (allies || [])) awardXP(ally, share, state);
+}
+
 export function executeBattle(state, actor, target, opts = {}) {
   actor.guarding = 0;  // Attacking breaks guard stance
   const log = [];
@@ -1198,9 +1218,11 @@ export function executeBattle(state, actor, target, opts = {}) {
       log.push(`${target.displayName} is slain!`);
       getFaction(actor.owner).trackKill(state);
       actor.killsThisRound = (actor.killsThisRound ?? 0) + 1;
-      // TODO(veterancy): regular-mode level-up could hook here — award kill XP to
-      // `summoned`-tagged units + survivors (not leaders) and call applyLevel from
-      // a captured L1 base. Out of scope now (campaign sets levels at spawn).
+      // Campaign veterancy: a killing blow grants kill XP to the attacker (+ a
+      // floored share to each gang-up ally). This REPLACES the hit/crush XP for
+      // this swing — the `!killed` guard on the hit/crush grant below ensures the
+      // attacker isn't double-awarded. No-op outside campaign.
+      awardWithAllies(actor, atkAllies, XP_PER_KILL, state);
       dispatchTrigger('damaged-fatal', target, { state, source: actor });
       dispatchTrigger('kill', actor, { state, target });
       state.entities = state.entities.filter(e => e.id !== target.id);
@@ -1248,11 +1270,26 @@ export function executeBattle(state, actor, target, opts = {}) {
           getFaction(actor.owner).trackKill(state);
           actor.killsThisRound = (actor.killsThisRound ?? 0) + 1;
           dispatchTrigger('kill', actor, { state, target: sk });
+          // Campaign veterancy: each splash kill grants the actor kill XP. No
+          // ally share for splash (the blast geometry is too murky to attribute).
+          awardXP(actor, XP_PER_KILL, state);
         }
       }
     }
+
+    // Campaign veterancy: a non-lethal landed blow grants hit- or crush-XP to the
+    // attacker (+ ally share). Skipped on a kill — the kill grant above already
+    // covered this swing (no double-award). No-op outside campaign.
+    if (!killed) {
+      awardWithAllies(actor, atkAllies, isCrush ? XP_PER_CRUSH : XP_PER_HIT, state);
+    }
   } else {
     log.push(`${target.displayName} defends successfully.`);
+
+    // Campaign veterancy: surviving an attack grants defend XP to the defender
+    // (+ ally share). Fires on every miss; a counter (below) grants additional
+    // counter/kill XP on top. No-op outside campaign.
+    awardWithAllies(target, defAllies, XP_PER_DEFEND, state);
 
     // Counter-attack: defender's roll is at least double the attacker's roll.
     // Ranged attacks don't trigger counters — the defender can't reach the
@@ -1275,6 +1312,11 @@ export function executeBattle(state, actor, target, opts = {}) {
         dispatchTrigger('damaged-fatal', actor, { state, source: target });
         dispatchTrigger('kill', target, { state, target: actor });
         state.entities = state.entities.filter(e => e.id !== actor.id);
+        // Campaign veterancy: a counter that kills grants the defender kill XP
+        // (+ ally share). REPLACES the counter XP for this exchange (handled by
+        // the `else` branch below firing only when the counter doesn't kill), so
+        // the defender isn't double-awarded. No-op outside campaign.
+        awardWithAllies(target, defAllies, XP_PER_KILL, state);
 
         // Counter-kill splashes other units on the attacker's tile.
         // The defender's concrete-faction config applies — a brute
@@ -1300,10 +1342,17 @@ export function executeBattle(state, actor, target, opts = {}) {
             getFaction(target.owner).trackKill(state);
             target.killsThisRound = (target.killsThisRound ?? 0) + 1;
             dispatchTrigger('kill', target, { state, target: sk });
+            // Campaign veterancy: counter-splash kill grants the defender kill
+            // XP. No ally share for splash. No-op outside campaign.
+            awardXP(target, XP_PER_KILL, state);
           }
         }
       } else {
         log.push(`${actor.displayName} is at ${actor.hp}/${actor.maxHp} HP.`);
+        // Campaign veterancy: a non-lethal counter grants the defender counter
+        // XP (+ ally share). The lethal branch above grants kill XP instead, so
+        // this never double-awards. No-op outside campaign.
+        awardWithAllies(target, defAllies, XP_PER_COUNTER, state);
       }
     }
   }
@@ -1479,6 +1528,8 @@ export function executeFortify(state, actor) {
     const prev = t.fortifyLevel;
     t.fortifyLevel = Math.min(MAX_FORTIFY_LEVEL, prev + 2);
     const defGain = t.fortifyLevel - prev;
+    // Campaign veterancy: fortify XP scales with the NEW fort level. No ally share.
+    awardXP(actor, XP_PER_FORTIFY_BASE + XP_PER_FORTIFY_LEVEL_BONUS * t.fortifyLevel, state);
     return { success: true, log: [`${actor.displayName} reinforces with metal! (fort level ${t.fortifyLevel})`], cost: 1, defGain };
   } else if (woodCount > 0) {
     shared[ResourceType.WOOD]--;
@@ -1487,6 +1538,8 @@ export function executeFortify(state, actor) {
     t.fortifyLevel = Math.min(MAX_FORTIFY_LEVEL, prev + gain);
     const defGain = t.fortifyLevel - prev;
     const star = hasDoubler ? ' ★' : '';
+    // Campaign veterancy: fortify XP scales with the NEW fort level. No ally share.
+    awardXP(actor, XP_PER_FORTIFY_BASE + XP_PER_FORTIFY_LEVEL_BONUS * t.fortifyLevel, state);
     return { success: true, log: [`${actor.displayName} fortifies with wood!${star} (fort level ${t.fortifyLevel})`], cost: 1, defGain };
   }
 
