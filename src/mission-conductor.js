@@ -39,6 +39,9 @@ function _storageGet(key) {
 function _storageSet(key, value) {
   try { globalThis.localStorage?.setItem(key, value); } catch { /* private mode etc. */ }
 }
+function _storageRemove(key) {
+  try { globalThis.localStorage?.removeItem(key); } catch { /* private mode etc. */ }
+}
 
 /** True when the player has already seen (or skipped) this mission's hints. */
 export function areHintsSuppressed(missionId) {
@@ -48,6 +51,28 @@ export function areHintsSuppressed(missionId) {
 /** Permanently mark a mission's hints as seen — they won't show on replay. */
 export function markHintsSeen(missionId) {
   _storageSet(HINTS_SEEN_PREFIX + missionId, '1');
+}
+
+/**
+ * Clear the seen/skipped flag for one mission so its hints fire again next time.
+ * Inverse of markHintsSeen.
+ */
+export function resetMissionHints(missionId) {
+  _storageRemove(HINTS_SEEN_PREFIX + missionId);
+}
+
+/**
+ * Re-enable hints for every mission in a campaign (undoes Skip Hints and the
+ * auto-mark-seen that happens on mission victory). Returns the number of
+ * missions whose hints were suppressed before the reset.
+ */
+export function resetAllHintsForCampaign(campaignDef) {
+  let cleared = 0;
+  for (const mission of campaignDef?.missions ?? []) {
+    if (areHintsSuppressed(mission.id)) cleared++;
+    resetMissionHints(mission.id);
+  }
+  return cleared;
 }
 
 // ── MissionConductor ─────────────────────────────────────────────────────────
@@ -100,15 +125,23 @@ export class MissionConductor {
     this._hexArrowRAF = null; // rAF handle re-anchoring an arrow to a map hex
     this._voiceAudio  = null; // currently playing narration clip
 
+    // Bind handlers once so destroy() can remove them. The tooltip buttons are
+    // shared DOM singletons reused across every mission, so a listener left
+    // dangling after destroy() would keep this (dead) conductor alive and fire
+    // its onComplete/onSkipHints when a LATER mission's button is clicked.
+    this._onNextClickBound = () => this._onNextClick();
+    this._onSkipLinkBound  = (e) => { e.preventDefault(); this._onSkipHints(); };
+    this._onVoiceBtnBound  = () => this._toggleVoiceMuted();
+
     if (this._nextBtn) {
-      this._nextBtn.addEventListener('click', () => this._onNextClick());
+      this._nextBtn.addEventListener('click', this._onNextClickBound);
     }
     if (this._skipLink) {
-      this._skipLink.addEventListener('click', (e) => { e.preventDefault(); this._onSkipHints(); });
+      this._skipLink.addEventListener('click', this._onSkipLinkBound);
       this._skipLink.style.display = 'none';
     }
     if (this._voiceBtn) {
-      this._voiceBtn.addEventListener('click', () => this._toggleVoiceMuted());
+      this._voiceBtn.addEventListener('click', this._onVoiceBtnBound);
       this._voiceBtn.style.display = this._config.voiceKey ? '' : 'none';
       this._syncVoiceBtn();
     }
@@ -273,6 +306,12 @@ export class MissionConductor {
       this.ui.tutorialClickBlocked = false;
       this.ui.tutorialSubmitBlocked = false;
     }
+    // Detach the shared-button listeners added in the constructor. Without this
+    // a destroyed conductor lingers (held alive by the DOM listener) and re-runs
+    // its onComplete/onSkipHints when a later mission's overlay button is clicked.
+    if (this._nextBtn)  this._nextBtn.removeEventListener('click', this._onNextClickBound);
+    if (this._skipLink) this._skipLink.removeEventListener('click', this._onSkipLinkBound);
+    if (this._voiceBtn) this._voiceBtn.removeEventListener('click', this._onVoiceBtnBound);
   }
 
   // ── Private ─────────────────────────────────────────────────────────────────

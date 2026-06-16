@@ -49,7 +49,7 @@ import { ReplayCache } from './replay-cache.js';
 import { makeShowLoadingAndReveal } from './loading-reveal.js';
 import { MAP_SIZES } from './map.js';
 import { nodeController } from './game.js';
-import { MissionConductor, areHintsSuppressed, markHintsSeen } from './mission-conductor.js';
+import { MissionConductor, areHintsSuppressed, markHintsSeen, resetAllHintsForCampaign } from './mission-conductor.js';
 import { Entity, createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, EntityType, ENTITY_COLOR, applyLevel } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
 import { Campaign, CAMPAIGN_SLOT_COUNT, buildVictoryDelegate, snapshotSurvivor, processWaves, reconcileRosterAfterMission, applyCarriedHeroLoadout } from './campaign/campaign.js';
@@ -3928,6 +3928,21 @@ function _renderCampaignProgressScreen() {
   _wireCampaignProgressHandlers();
 }
 
+/** Brief auto-dismissing confirmation toast on the Campaign Progress card. */
+let _cprogToastTimer = null;
+function _showCampaignProgressToast(text) {
+  const toast = document.getElementById('campaign-progress-toast');
+  if (!toast) return;
+  toast.textContent = text;
+  toast.style.display = '';
+  toast.classList.remove('campaign-progress-toast-out');
+  clearTimeout(_cprogToastTimer);
+  _cprogToastTimer = setTimeout(() => {
+    toast.classList.add('campaign-progress-toast-out');
+    setTimeout(() => { toast.style.display = 'none'; }, 600);
+  }, 2400);
+}
+
 function _wireCampaignProgressHandlers() {
   const maxActive = _progressMaxActive();
   const partyEl = document.getElementById('campaign-progress-party');
@@ -4858,6 +4873,11 @@ document.getElementById('btn-campaign-progress-unlock')?.addEventListener('click
   const btn = document.getElementById('btn-campaign-progress-unlock');
   if (btn) btn.textContent = _campaignUnlocked ? '🔒 Lock' : '🔓 Unlock All';
   _renderCampaignProgressScreen();
+});
+document.getElementById('btn-campaign-progress-reset-hints')?.addEventListener('click', () => {
+  if (!_activeCampaign) return;
+  resetAllHintsForCampaign(_activeCampaign.campaignDef);
+  _showCampaignProgressToast('💡 Tutorial hints re-enabled for this campaign.');
 });
 document.querySelectorAll('.cprog-toggle-btn').forEach(btn => {
   btn.addEventListener('click', () => {
