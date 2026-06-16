@@ -395,14 +395,15 @@ When scoring is ≤2 rounds away and a node has feasibility ≥0.6, the hero AI 
 > Damage-dice overhaul note (2026-06-10): weapons now deal rolled damage (fixed
 > or dice; e.g. unarmed/sword 2D6, musket 2D8) and all HP is ×`DAMAGE_SCALE` (7),
 > chosen so average hits-to-kill matches the pre-dice era. Combat is markedly
-> more lethal — kill-wins rose to ~50% and the aggregate tilts ~6pts toward the
-> witch (1v1 ~57%, still in band). The **balanced-vs-balanced** matchup stays
-> centered at H50%/W50% in `ai-matrix`; the aggregate witch lean comes from the
-> aggressive-witch outlier (~61%) benefiting most from deadlier night crushes
-> (crush now *multiplies* the rolled damage, compounding the witch's night
-> advantage). Recentring levers if a tuning pass is wanted: trim the great-crush
-> multiplier, the witch phase bonus, or nudge a couple of witch-favorable weapon
-> dice down / hero HP up.
+> more lethal — kill-wins rose to ~50%. The dice overhaul itself was **balance-
+> neutral** on 14×14 (post-bisect 2026-06-16: 43.4% → 43.5% Hero on `facb710` vs
+> `faa819c`, 1000 games each); the **balanced-vs-balanced** matchup also stays
+> centered at H50%/W50% in `ai-matrix`. The ~6pt witch tilt that landed in this
+> window came from the **+20% map resize one commit earlier** (`facb710`), not
+> the dice change: 13×13 Hero ~49.6% → 14×14 Hero ~43.4% (longer games → more
+> night/summon time, especially benefiting the aggressive-witch outlier).
+> Recentring lever if a tuning pass is wanted: reduce Standard map area
+> (toward 13×13). Tuning combat constants won't move the win-rate split.
 
 > Weapons-overhaul note: ranged weapons only benefit the hero's roster (summons/zombies/golems can't equip), which skewed NvN toward the hero. The witch's `unitBonusCap` was raised 3→4 so its swarm converts to actions and keeps contesting nodes; Magic Bolt carries +1 ATK so the witch leader keeps the same ~1-ATK duel gap vs the now-sword-armed Paladin.
 
