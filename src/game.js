@@ -294,6 +294,12 @@ export class GameState {
     this.maxDiscoverableSurvivors = mapDataOverride?.maxDiscoverableSurvivors ?? null;
     this.discoveredSurvivorCount  = 0;
 
+    // True only for single-player campaign missions. Gates campaign-only
+    // mechanics (XP/veterancy via awardXP). Set by main.js at mission start and
+    // round-tripped through state-sync so mid-mission resume preserves it.
+    // Left false for normal/online/skirmish games.
+    this.isCampaign = false;
+
     // ── Game mode ──────────────────────────────────────────────────────────
     // 'standard' = normal game; 'battle' = persistent weekly Battle for Caleb's Hollow.
     this.gameMode = mapDataOverride?.gameMode ?? GameMode.STANDARD;

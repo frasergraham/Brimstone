@@ -7,7 +7,7 @@ import {
   effectStatMod, effectRangeMod, effectIncomingAtkAdvantage,
   effectDamageTakenFlat, effectDamageTakenDice, effectsBlockHeal,
 } from './effects.js';
-import { hpForLevel, atkBonusForLevel, defBonusForLevel } from './balance.js';
+import { hpForLevel, atkBonusForLevel, defBonusForLevel, levelForXp } from './balance.js';
 
 let _nextId = 1;
 
@@ -225,6 +225,12 @@ export class Entity {
     // ATK/DEF bonus. Persists across rounds (not reset in resetTurn).
     // Used by campaign authoring to ramp difficulty (Zombie L1/L2/L3…).
     this.level = 1;
+
+    // Accumulated experience (campaign veterancy). Earned only in campaign
+    // missions via awardXP(); crossing an xpForLevel() threshold raises `level`.
+    // Always 0 outside campaign (XP is never awarded there). Persists across
+    // rounds and between missions (snapshotSurvivor / heroStats).
+    this.xp = 0;
 
     // Personal backpack — a flat key→count map. Weapons use their ITEMS
     // id directly (e.g. 'sword'); consumables and mounts use their
@@ -608,6 +614,35 @@ export function applyLevel(entity, level) {
   entity.maxHp = hpForLevel(entity._baseMaxHp, lvl);
   entity.hp    = entity.maxHp;
   return entity;
+}
+
+// Award experience to a unit (campaign veterancy). No-op outside campaign — XP
+// is a campaign-only mechanic, gated on state.isCampaign, so normal/online play
+// is byte-identical. Accumulates `entity.xp`, and if the new total crosses one
+// or more xpForLevel() thresholds, re-levels the unit ONCE to the final level
+// (applyLevel is idempotent against _baseMaxHp, so a multi-level jump applies
+// the same stats as the equivalent single jump). applyLevel sets hp = maxHp, so
+// a level-up fully heals — no extra HP bookkeeping is needed here.
+//
+// Returns { xpGained, leveledUp, newLevel } for Phase C/F (toasts, FX). Phase B
+// never calls this; it's the plumbing a sibling ticket hooks into.
+export function awardXP(entity, amount, state) {
+  if (!state?.isCampaign || !entity || !(amount > 0)) {
+    return { xpGained: 0, leveledUp: false, newLevel: entity?.level ?? 1 };
+  }
+  const gain = Math.floor(amount);
+  if (gain <= 0) {
+    return { xpGained: 0, leveledUp: false, newLevel: entity.level ?? 1 };
+  }
+  entity.xp = (entity.xp ?? 0) + gain;
+  const oldLevel = entity.level ?? 1;
+  const newLevel = levelForXp(entity.xp);
+  let leveledUp = false;
+  if (newLevel > oldLevel) {
+    applyLevel(entity, newLevel); // one call with the FINAL level; full-heals
+    leveledUp = true;
+  }
+  return { xpGained: gain, leveledUp, newLevel: entity.level ?? 1 };
 }
 
 // Innate leader abilities are stamped onto each leader by

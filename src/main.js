@@ -3686,6 +3686,9 @@ function _resumeCampaignMission(missionId) {
   _spSaveId = null;
 
   const existingState = deserializeState(save.state);
+  // Resuming a campaign mission — ensure the XP/veterancy gate is on even for
+  // saves written before isCampaign was serialized.
+  existingState.isCampaign = true;
   _roundHistory = save.roundHistory || [];
 
   // Reconstruct campaign-specific state
@@ -4207,6 +4210,10 @@ function _initCampaignMission(missionDef) {
   const witchIsAI = !missionDef.conductorSteps;
   state = new GameState(witchIsAI, false, missionDef.mapSize, null, mapData);
   state.fogOfWar = missionDef.isTutorial ? 'none' : 'partial';
+  // Campaign missions enable XP/veterancy (awardXP gates on this). Set before
+  // any planning/resolution so plan-1 onward earns XP. Round-tripped by
+  // state-sync so a mid-mission resume keeps the flag.
+  state.isCampaign = true;
 
   // Apply custom phase cycle from mission definition
   if (missionDef.phaseCycle) {
@@ -4283,7 +4290,11 @@ function _initCampaignMission(missionDef) {
       const rosterEntry = _activeCampaign.roster[toDeploy[i]];
       if (!rosterEntry) continue;
       const n = spots[i];
-      const s = createSurvivor(n.col, n.row, 'hero', state);
+      // Spawn the SPECIFIC roster character (forcedName) so the fresh entity
+      // carries that survivor's true level-1 base stats. This is what lets
+      // applyLevel below recompute maxHp from the correct base instead of
+      // double-boosting an already-leveled snapshot maxHp.
+      const s = createSurvivor(n.col, n.row, 'hero', state, rosterEntry.name);
       // Restore stats from roster
       s.name = rosterEntry.name;
       s.title = rosterEntry.title;
@@ -4293,13 +4304,21 @@ function _initCampaignMission(missionDef) {
         : (rosterEntry.ability ? [rosterEntry.ability] : []);
       s.abilityLabel = rosterEntry.abilityLabel;
       s.color = rosterEntry.color;
-      s.hp = rosterEntry.hp;
-      s.maxHp = rosterEntry.maxHp;
+      // attack/defense are BASE values (level bonus composes live in
+      // getAttack/getDefense), so copying them never double-counts the level.
       s.attack = rosterEntry.attack;
       s.defense = rosterEntry.defense;
       s.weapon = rosterEntry.weapon;
       s.items = { ...rosterEntry.items };
       s.owner = 'hero';
+      // Restore veterancy: xp first, then re-level off the fresh base maxHp.
+      // applyLevel sets maxHp (and full hp); we then restore the carried,
+      // possibly-wounded current HP, clamped to the leveled max.
+      s.xp = rosterEntry.xp || 0;
+      applyLevel(s, rosterEntry.level || 1);
+      if (typeof rosterEntry.hp === 'number') {
+        s.hp = Math.min(rosterEntry.hp, s.maxHp);
+      }
       state.entities.push(s);
       // Exclude this character from the hidden-survivor discovery pool
       state.markRosterUsedByName(rosterEntry.name);

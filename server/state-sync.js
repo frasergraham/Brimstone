@@ -61,6 +61,7 @@ export function serializeState(state) {
     attack:        e.attack,
     defense:       e.defense,
     level:         e.level ?? 1,
+    xp:            e.xp ?? 0,   // campaign veterancy — accumulated experience
     agility:       e.agility ?? BASE_AGILITY[e.type] ?? 1,
     // Range is weapon-derived (denormalized cache of ITEMS[weapon].range).
     range:         e.range   ?? 1,
@@ -153,6 +154,8 @@ export function serializeState(state) {
       : null,
     maxDiscoverableSurvivors: state.maxDiscoverableSurvivors ?? null,
     discoveredSurvivorCount:  state.discoveredSurvivorCount ?? 0,
+    // Campaign-only flag — gates XP/veterancy. Must survive mid-mission resume.
+    isCampaign:               !!state.isCampaign,
     log:                  [...state.log],
     witchObjectives:      state.witchObjectives.map(o => ({
       col:        o.col,
@@ -282,6 +285,8 @@ export function deserializeState(snap) {
     // level bonus recomposes from `level` via getAttack/getDefense. Old saves
     // default to 1.
     if (e.level === undefined) e.level = 1;
+    // Campaign veterancy XP — default 0 for saves that predate it.
+    if (e.xp === undefined) e.xp = 0;
     // Hero → Paladin entity-type rename. Pre-PR4 saves carry type='hero';
     // re-key them to 'paladin' so the new BASE_STATS/BASE_AGILITY tables
     // and `e.type === EntityType.PALADIN` checks all line up.
@@ -362,6 +367,7 @@ export function deserializeState(snap) {
   state.noWitchMission       = !!snap.noWitchMission;
   state.maxDiscoverableSurvivors = snap.maxDiscoverableSurvivors ?? null;
   state.discoveredSurvivorCount  = snap.discoveredSurvivorCount  ?? 0;
+  state.isCampaign               = !!snap.isCampaign;
   state.log                  = [...snap.log];
   state.witchObjectives      = snap.witchObjectives.map(o => ({
     col:        o.col,

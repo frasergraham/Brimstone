@@ -35,3 +35,37 @@ export function hpForLevel(baseMaxHp, level) {
 }
 export function atkBonusForLevel(level) { return _lvl(level) - 1; }
 export function defBonusForLevel(level) { return Math.floor((_lvl(level) - 1) / 2); }
+
+// ── Experience & veterancy (campaign-only) ────────────────────────────────────
+// XP is awarded only in campaign missions (gated on state.isCampaign). Earning
+// enough XP raises a unit's `level`, which scales its intrinsic HP/ATK/DEF via
+// the curves above. These award values are deliberately clean round numbers —
+// Phase C tunes them in the headless balance pass.
+export const XP_PER_EXPLORE            = 5;
+export const XP_PER_FORTIFY_BASE       = 10; // flat XP for a fortify action…
+export const XP_PER_FORTIFY_LEVEL_BONUS = 5; // …plus this × the tile's fortifyLevel
+export const XP_PER_HIT                = 15; // landed a 1-damage hit
+export const XP_PER_CRUSH              = 25; // landed a 2-damage crush
+export const XP_PER_KILL               = 50; // dealt the killing blow
+export const XP_PER_DEFEND             = 5;  // survived an attack while defending
+export const XP_PER_COUNTER            = 15; // dealt counter damage to an attacker
+// Fraction of an actor's combat XP also granted to each gang-up ally.
+export const ALLY_XP_SHARE             = 0.25;
+
+// Total cumulative XP required to REACH level L, counting from level 1.
+//   xpForLevel(1) = 0, then (L-1)·(200 + 100·(L-2)) for L ≥ 2
+//   → totals  0, 200, 600, 1200, 2000 …  (per-level cost 200, 400, 600, 800 …)
+export function xpForLevel(L) {
+  const lvl = Math.max(1, Math.floor(L) || 1);
+  if (lvl <= 1) return 0;
+  return (lvl - 1) * (200 + 100 * (lvl - 2));
+}
+
+// Inverse of xpForLevel: the highest level whose cumulative threshold is met by
+// `xp`. Floors at level 1, caps at 99.
+export function levelForXp(xp) {
+  const x = Math.max(0, Math.floor(xp) || 0);
+  let lvl = 1;
+  while (lvl < 99 && xpForLevel(lvl + 1) <= x) lvl++;
+  return lvl;
+}

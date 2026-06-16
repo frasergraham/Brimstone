@@ -47,6 +47,10 @@ export function snapshotSurvivor(entity) {
     maxHp:        entity.maxHp,
     attack:       entity.attack,
     defense:      entity.defense,
+    // Campaign veterancy — carry level + accumulated XP between missions. Before
+    // this, static levels evaporated and survivors reset to L1 each mission.
+    level:        entity.level || 1,
+    xp:           entity.xp || 0,
     weapon:       entity.weapon,
     items:        { ...entity.items },
     effects:      permanentEffects,
@@ -491,7 +495,7 @@ export class Campaign {
     this.completedMissions = new Set();
     this.roster            = []; // Array of snapshotSurvivor() objects
     this.resources         = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0 };
-    this.heroStats         = { hp: 98, maxHp: 98, attack: 2, defense: 2, weapon: 'sword', items: {} };
+    this.heroStats         = { hp: 98, maxHp: 98, attack: 2, defense: 2, level: 1, xp: 0, weapon: 'sword', items: {} };
     this.storyFlags        = {};
     this.updatedAt         = Date.now();
   }
@@ -531,7 +535,10 @@ export class Campaign {
     this.completedMissions = new Set(migrated.completedMissions ?? []);
     this.roster            = migrated.roster ?? [];
     this.resources         = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0, ...migrated.resources };
-    this.heroStats         = migrated.heroStats ?? { hp: 98, maxHp: 98, attack: 2, defense: 2, weapon: 'sword', items: {} };
+    this.heroStats         = migrated.heroStats ?? { hp: 98, maxHp: 98, attack: 2, defense: 2, level: 1, xp: 0, weapon: 'sword', items: {} };
+    // Backfill veterancy fields for saves written before XP existed.
+    if (this.heroStats.level == null) this.heroStats.level = 1;
+    if (this.heroStats.xp == null) this.heroStats.xp = 0;
     this.storyFlags        = migrated.storyFlags ?? {};
     this.updatedAt         = migrated.updatedAt ?? Date.now();
     // Persist the migrated form so we don't re-migrate every load.
@@ -687,6 +694,10 @@ export class Campaign {
         maxHp:   result.heroStats.maxHp,
         attack:  result.heroStats.attack,
         defense: result.heroStats.defense,
+        // Campaign veterancy carries forward; default to current/L1 when the
+        // result predates XP (e.g. conductor missions passing the old heroStats).
+        level:   result.heroStats.level ?? this.heroStats.level ?? 1,
+        xp:      result.heroStats.xp ?? this.heroStats.xp ?? 0,
         weapon:  result.heroStats.weapon,
         items:   { ...result.heroStats.items },
       };
@@ -777,7 +788,10 @@ export class Campaign {
     this.completedMissions = new Set(migrated.completedMissions ?? []);
     this.roster            = migrated.roster ?? [];
     this.resources         = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0, ...migrated.resources };
-    this.heroStats         = migrated.heroStats ?? { hp: 98, maxHp: 98, attack: 2, defense: 2, weapon: 'sword', items: {} };
+    this.heroStats         = migrated.heroStats ?? { hp: 98, maxHp: 98, attack: 2, defense: 2, level: 1, xp: 0, weapon: 'sword', items: {} };
+    // Backfill veterancy fields for saves written before XP existed.
+    if (this.heroStats.level == null) this.heroStats.level = 1;
+    if (this.heroStats.xp == null) this.heroStats.xp = 0;
     this.storyFlags        = migrated.storyFlags ?? {};
     this.updatedAt         = migrated.updatedAt ?? Date.now();
     this.save(); // persist to localStorage
