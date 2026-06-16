@@ -149,6 +149,60 @@ describe('mission-logic / integration with GameState', () => {
     assert.equal(state.winReason, 'The grove is silent.');
   });
 
+  // Mission 2's win/lose are objectiveOutcome nodes wired to onRoundStart, so the
+  // mission is DECIDED during the round-start pump (at planning time), not in
+  // endRound's checkVictory. The offline loop must surface that gameOver instead
+  // of entering planning — see _finishDecidedMissionBeforePlanning in main.js.
+  // (Regression: reaching dusk on M2 soft-locked the player in planning mode.)
+  describe('outcome decided at the round-start pump (Mission 2 phase-gated win/lose)', () => {
+    const M2_CYCLE = { phases: ['dawn', 'day', 'day', 'day', 'day', 'day', 'dusk'], loop: false };
+    function m2State(graphNode) {
+      const state = new GameState(true, true);
+      state.cycleConfig = M2_CYCLE;
+      attach(state, {
+        version: 1, variables: [],
+        nodes: [{ id: 'r', type: 'onRoundStart', params: { round: 'any' } }, graphNode],
+        edges: [exec('r', 'out', graphNode.id)],
+      });
+      state.round = 7; state.phase = 'dusk'; // the cycle's final phase (idx 6)
+      return state;
+    }
+
+    test('dusk WITHOUT enough survivors decides a loss at round start', () => {
+      const state = m2State({
+        id: 'lose', type: 'objectiveOutcome', params: {
+          side: 'lose',
+          spec: { type: 'phase_without_survivors', phase: 'dusk', survivors: 2 },
+          reason: 'Night fell before you found enough survivors.',
+        },
+      });
+      assert.equal(state.gameOver, false, 'not over before the pump');
+      state.pumpMissionLogic('roundStart');
+      assert.equal(state.gameOver, true, 'the loss is decided at the round-start pump');
+      assert.equal(state.winner, 'witch');
+      assert.equal(state.winReason, 'Night fell before you found enough survivors.');
+    });
+
+    test('dusk WITH enough survivors decides a win at round start (phase fallback)', () => {
+      const state = m2State({
+        id: 'win', type: 'objectiveOutcome', params: {
+          side: 'win',
+          spec: { type: 'gather_and_survive', survivors: 2, kills: 4, phaseFallback: 'dusk' },
+          reason: 'The survivors are safe.',
+        },
+      });
+      // Two rescued survivors standing (hero-faction, non-NPC).
+      state.entities.push(
+        { id: 's1', type: 'survivor', owner: 'hero', isNpc: false, hp: 3, alive: true, col: 1, row: 1 },
+        { id: 's2', type: 'survivor', owner: 'hero', isNpc: false, hp: 3, alive: true, col: 2, row: 2 },
+      );
+      state.pumpMissionLogic('roundStart');
+      assert.equal(state.gameOver, true, 'the win is decided at the round-start pump');
+      assert.equal(state.winner, 'hero');
+      assert.equal(state.winReason, 'The survivors are safe.');
+    });
+  });
+
   test('endRound runs the postResolution pump inline (spawn pre-empts checkVictory)', () => {
     const state = new GameState(true, true);
     // A kill-triggered golem-style wave: spawns once the hero has ≥1 kill.

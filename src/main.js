@@ -638,12 +638,39 @@ function _startLocalPlanningPhase() {
     state.pumpMissionLogic('roundStart');
     storyEvents = storyEvents.concat(_drainLogicStoryEvents());
   }
+
+  // The round-start pump can DECIDE the mission — an objectiveOutcome / winMission
+  // / loseMission node wired to onRoundStart or onPhase (e.g. Mission 2's "night
+  // fell before you found enough survivors" loss at dusk) calls setOutcome, which
+  // sets state.winner ⇒ state.gameOver. The prior round's review has already run,
+  // so there are no new steps — surface the debrief instead of entering planning.
+  // Without this guard the mission is decided but never shown and the player is
+  // soft-locked in planning with no way to progress (reported on Mission 2).
+  if (state.gameOver) {
+    const finish = () => _finishDecidedMissionBeforePlanning();
+    if (storyEvents.length > 0) _showStorySequence(storyEvents).then(finish);
+    else finish();
+    return;
+  }
+
   if (storyEvents.length > 0) {
     _showStorySequence(storyEvents).then(() => _enterLocalPlanningMode());
     return;
   }
 
   _enterLocalPlanningMode();
+}
+
+/** Surface a mission outcome a logic graph decided at round start (before any
+ *  planning). The mission-logic engine is campaign-only, so this is the campaign
+ *  debrief; a defensive fallback covers any future non-campaign logic mission. */
+function _finishDecidedMissionBeforePlanning() {
+  if (_activeCampaign && _activeMissionDef) { _handleCampaignMissionEnd(); return; }
+  if (!_activeCampaign) {
+    _recordLocalGameStats();
+    if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
+    _saveCompletedSpGame(state.winner, state.winReason);
+  }
 }
 
 /**
