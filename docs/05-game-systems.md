@@ -493,6 +493,9 @@ Defined in `src/map.js`. Seeded procedural generation.
        │
 4. ROAD NETWORK        MST connecting all buildings (src/road-network.js)
        │                Add bridges where roads cross river
+       │                Bridge audit: every BRIDGE ends with exactly 2 road
+       │                links (normalize >2 to one opposite-bank span, revert
+       │                unreached/one-sided crossings) — assertMapInvariants()
        │
 5. FOREST CLUSTERS     Seed forest patches (proportional to map size)
        │
