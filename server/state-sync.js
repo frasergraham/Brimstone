@@ -16,6 +16,9 @@ export function serializeState(state) {
   for (const [key, tile] of state.tiles) {
     if (tile.col + 1 > mapCols) mapCols = tile.col + 1;
     if (tile.row + 1 > mapRows) mapRows = tile.row + 1;
+    // Hand-written tile allowlist — authored fields here MUST also be restored in
+    // the deserializeState tile loop below. Guarded by
+    // tests/state-sync-schema-guard.test.js ('state-sync tile-field guard').
     tiles.push({
       key,
       col:            tile.col,
@@ -235,6 +238,8 @@ export function deserializeState(snap) {
   //     `decomposeTileType()` produces the correct (base, structure, path) —
   //     the single source of that mapping.
   state.tiles = new Map();
+  // Restore side of the hand-written tile allowlist (see serializeState). Keep in
+  // sync with tests/state-sync-schema-guard.test.js ('state-sync tile-field guard').
   for (const t of snap.tiles) {
     const tile = new Tile(t.col, t.row);
     const hasLayers = t.base !== undefined || t.structure !== undefined || t.path !== undefined;
