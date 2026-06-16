@@ -72,6 +72,7 @@ import {
   campaignCardHTML as _campaignCardHTML, survivorCardHTML as _survivorCardHTML,
   campaignPartyHTML as _campaignPartyHTML, objectiveDescription as _objectiveDescription,
   partyPaneHTML as _partyPaneHTML, missionListPaneHTML as _missionListPaneHTML,
+  progressSquadCap as _progressSquadCap,
   missionRows as _missionRows,
   departureMessage as _departureMessage, arrivalMessage as _arrivalMessage,
 } from './campaign/campaign-ui.js';
@@ -3383,7 +3384,14 @@ let _currentLobby = null;
 // Main-menu mode buttons (flattened from the former New Game submenu — they now
 // live directly on the welcome card between Active Games and Replays).
 document.getElementById('btn-ng-battle')  ?.addEventListener('click', () => _showBattleScreen());
-document.getElementById('btn-ng-campaign')?.addEventListener('click', () => _showCampaignSelectScreen());
+document.getElementById('btn-ng-campaign')?.addEventListener('click', () => {
+  // Skip the chapter picker entirely — only Chapter 1 ships, so route the
+  // "Campaign" choice straight to its save-slot picker. Chapters 2–4 remain in
+  // the registry (disabled) but the chapter-select screen is no longer surfaced.
+  const ch1 = getCampaignById('calebs_hollow_prologue');
+  if (ch1) _showCampaignSlotScreen(ch1);
+  else _showCampaignSelectScreen(); // defensive fallback
+});
 document.getElementById('btn-ng-vsai')    ?.addEventListener('click', () => _showSinglePlayerScreen());
 document.getElementById('btn-ng-online')  ?.addEventListener('click', () => _showOnlineScreen());
 
@@ -3858,17 +3866,14 @@ async function _showCampaignScreen(campaignDef, autoMissionId, slotIndex = 1) {
 // (_renderCampaignScreen) for this purpose; the briefing screen it routes into
 // is unchanged.
 
-/** The next mission the player can actually launch (available + not completed). */
-function _nextPlayableMissionDef() {
-  if (!_activeCampaign) return null;
-  const next = _activeCampaign.getMissionList().find(m => m.available && !m.completed);
-  return next ? _activeCampaign.getMissionDef(next.id) : null;
-}
-
-/** Active-squad cap = next playable mission's roster limit (default 3). */
+/**
+ * Active-squad cap for the Progress screen. The menu is a loadout-management
+ * screen, so the whole roster is pickable here — the per-mission cap
+ * (maxSurvivorsFromRoster) is applied later in the mission start dialog
+ * (_showMissionBriefing / _renderDeployRoster), not on this screen.
+ */
 function _progressMaxActive() {
-  const def = _nextPlayableMissionDef();
-  return def ? (def.maxSurvivorsFromRoster ?? 3) : 3;
+  return _progressSquadCap(_activeCampaign?.roster);
 }
 
 /** Front-fill the active squad to the cap (called on fresh entry, not re-renders). */
@@ -3895,7 +3900,8 @@ function _renderCampaignProgressScreen() {
   if (partyEl) {
     partyEl.innerHTML = _partyPaneHTML(
       _activeCampaign.heroStats, _activeCampaign.roster,
-      _activeRosterIndices, maxActive, { resources: _activeCampaign.resources },
+      _activeRosterIndices, maxActive,
+      { resources: _activeCampaign.resources, weapons: _activeCampaign.weapons },
     );
   }
 
@@ -3965,6 +3971,35 @@ function _wireCampaignProgressHandlers() {
       if (equipped != null) _renderCampaignProgressScreen();
     });
   });
+  // Stow a carried weapon into the shared armory (unit backpack → shared pool).
+  partyEl?.querySelectorAll('.cprog-return-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const raw = btn.dataset.idx;
+      const target = raw === 'leader' ? 'leader' : parseInt(raw, 10);
+      const stowed = _activeCampaign.returnWeaponToInventory(target, btn.dataset.weapon);
+      if (stowed != null) _renderCampaignProgressScreen();
+    });
+  });
+  // Equip a weapon from the shared armory onto a unit (shared pool → unit).
+  partyEl?.querySelectorAll('.cprog-pool-equip-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const raw = btn.dataset.idx;
+      const target = raw === 'leader' ? 'leader' : parseInt(raw, 10);
+      const equipped = _activeCampaign.equipFromInventory(target, btn.dataset.weapon);
+      if (equipped != null) _renderCampaignProgressScreen();
+    });
+  });
+  // Unequip a unit's equipped weapon into the shared armory, with no
+  // replacement (equipped slot → shared pool). Lets the operator rearrange
+  // loadouts between missions.
+  partyEl?.querySelectorAll('.cprog-unequip-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const raw = btn.dataset.idx;
+      const target = raw === 'leader' ? 'leader' : parseInt(raw, 10);
+      const res = _activeCampaign.unequipToInventory(target);
+      if (res?.success) _renderCampaignProgressScreen();
+    });
+  });
   // Admin: add a random survivor (mirrors the old screen's testing affordance).
   partyEl?.querySelector('#btn-admin-add-survivor')?.addEventListener('click', () => {
     _activeCampaign.roster.push(snapshotSurvivor(createSurvivor(0, 0, 'hero')));
@@ -4001,7 +4036,7 @@ function _renderDeployRoster(heroStats, roster, maxActive) {
   // the day-side primary faction; no stub picker in campaign mode.
   html += '<div class="campaign-party">';
   const weaponLabel = heroStats.weapon ? ` (${heroStats.weapon.name || heroStats.weapon})` : '';
-  html += _campaignCardHTML('Ishmael Charger' + weaponLabel, null, 'hero', ENTITY_COLOR[EntityType.PALADIN], heroStats.hp, heroStats.maxHp, heroStats.attack, heroStats.defense, null, true);
+  html += _campaignCardHTML('Ishmael Charger' + weaponLabel, null, 'paladin', ENTITY_COLOR[EntityType.PALADIN], heroStats.hp, heroStats.maxHp, heroStats.attack, heroStats.defense, null, true);
   html += '</div>';
 
   if (roster.length === 0) {
@@ -4634,14 +4669,14 @@ function _initCampaignMission(missionDef) {
           won: true, survivors: [], resources: {},
           heroStats: _activeCampaign.heroStats, flags: {},
         });
-        // Clean up game state and return to chapter select
+        // Clean up game state and return to the campaign Progress landing
         document.getElementById('game-screen').style.display = 'none';
         document.getElementById('setup-screen').style.display = '';
         setMode(AppMode.MENU);
         renderer = null; ui = null; witchAI = null; heroAI = null;
         _missionConductor = null;
         _activeMissionDef = null;
-        _showCampaignSelectScreen();
+        _showCampaignScreen(_activeCampaign.campaignDef, undefined, _activeCampaign.slotIndex);
       },
     };
 
@@ -4789,8 +4824,13 @@ function _handleCampaignMissionEnd() {
 
 // Campaign event listeners
 document.getElementById('btn-campaign-select-back').addEventListener('click', () => showStep('mode'));
-document.getElementById('btn-campaign-slot-back')  ?.addEventListener('click', () => _showCampaignSelectScreen());
-document.getElementById('btn-campaign-back')   .addEventListener('click', () => _showCampaignSelectScreen());
+// The slot picker is now the campaign entry point (the chapter screen is skipped),
+// so backing out of it returns to the main menu.
+document.getElementById('btn-campaign-slot-back')  ?.addEventListener('click', () => showStep('mode'));
+document.getElementById('btn-campaign-back')   .addEventListener('click', () => {
+  if (_activeCampaign) _showCampaignSlotScreen(_activeCampaign.campaignDef);
+  else showStep('mode');
+});
 document.getElementById('btn-briefing-back')   .addEventListener('click', () => {
   // Return to the Progress landing (preserving the squad just chosen) — but if
   // we arrived here via a single-mission campaign there's no landing to show.
@@ -4808,8 +4848,9 @@ document.getElementById('btn-campaign-progress-back')?.addEventListener('click',
 });
 document.getElementById('btn-campaign-progress-startover')?.addEventListener('click', () => {
   if (confirm('Start over? All campaign progress, roster survivors, and resources in this slot will be lost. This cannot be undone.')) {
+    const def = _activeCampaign.campaignDef;
     _activeCampaign.delete();
-    _showCampaignSelectScreen();
+    _showCampaignSlotScreen(def);
   }
 });
 document.getElementById('btn-campaign-progress-unlock')?.addEventListener('click', () => {
@@ -4826,8 +4867,9 @@ document.querySelectorAll('.cprog-toggle-btn').forEach(btn => {
 });
 document.getElementById('btn-delete-campaign')  .addEventListener('click', () => {
   if (confirm('Start over? All campaign progress, roster survivors, and resources will be lost. This cannot be undone.')) {
+    const def = _activeCampaign.campaignDef;
     _activeCampaign.delete();
-    _showCampaignSelectScreen();
+    _showCampaignSlotScreen(def);
   }
 });
 document.getElementById('btn-start-mission')   .addEventListener('click', () => {

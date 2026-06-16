@@ -537,6 +537,11 @@ export class Campaign {
     this.roster            = []; // Array of snapshotSurvivor() objects
     this.resources         = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0 };
     this.heroStats         = { hp: 98, maxHp: 98, attack: 2, defense: 2, level: 1, xp: 0, weapon: 'sword', items: {} };
+    // Shared armory: weapons not bound to any one unit. Units can stow a spare
+    // weapon here (returnWeaponToInventory) and any unit can draw from it
+    // (equipFromInventory) — so a weapon looted by one survivor can be handed to
+    // another between missions. Shape: { weaponId: count }.
+    this.weapons           = {};
     this.storyFlags        = {};
     this.updatedAt         = Date.now();
   }
@@ -551,6 +556,7 @@ export class Campaign {
       completedMissions: [...this.completedMissions],
       roster:            this.roster,
       resources:         { ...this.resources },
+      weapons:           { ...this.weapons },
       heroStats:         JSON.parse(JSON.stringify(this.heroStats)),
       storyFlags:        { ...this.storyFlags },
       updatedAt:         this.updatedAt,
@@ -587,6 +593,7 @@ export class Campaign {
     this.completedMissions = new Set(migrated.completedMissions ?? []);
     this.roster            = migrated.roster ?? [];
     this.resources         = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0, ...migrated.resources };
+    this.weapons           = { ...migrated.weapons }; // pre-armory saves → empty pool
     this.heroStats         = migrated.heroStats ?? { hp: 98, maxHp: 98, attack: 2, defense: 2, level: 1, xp: 0, weapon: 'sword', items: {} };
     // Backfill veterancy fields for saves written before XP existed.
     if (this.heroStats.level == null) this.heroStats.level = 1;
@@ -988,6 +995,89 @@ export class Campaign {
     return weaponId;
   }
 
+  /**
+   * Move a spare weapon out of a unit's backpack and into the shared armory
+   * (`this.weapons`) — the inverse direction of {@link equipFromInventory}, so
+   * weapons can flow back and forth between a unit and the shared pool. Operates
+   * on a *carried* (backpack) weapon, never the equipped one: an equipped weapon
+   * is freed by equipping a different one first (the old one drops to the
+   * backpack), which keeps the equipped slot — and the Paladin's default-weapon
+   * fallback — from being silently emptied.
+   *
+   * @param {number|'leader'} rosterIndex  roster index, or 'leader' for the hero.
+   * @param {string} weaponId  weapon id carried in the unit's backpack (`items`).
+   * @returns {string|null}  the pooled weapon id, or `null` on no-op (unknown
+   *   unit, not a weapon, or not carried by this unit).
+   */
+  returnWeaponToInventory(rosterIndex, weaponId) {
+    const unit = rosterIndex === 'leader' ? this.heroStats : this.roster[rosterIndex];
+    if (!unit) return null;
+    if (ITEMS[weaponId]?.kind !== 'weapon') return null;
+    const items = { ...(unit.items || {}) };
+    if ((items[weaponId] || 0) < 1) return null; // not in this unit's backpack
+    items[weaponId] -= 1;
+    if (items[weaponId] <= 0) delete items[weaponId];
+    unit.items = items;
+    this.weapons = { ...(this.weapons || {}) };
+    this.weapons[weaponId] = (this.weapons[weaponId] || 0) + 1;
+    this.save();
+    return weaponId;
+  }
+
+  /**
+   * Equip a weapon drawn from the shared armory (`this.weapons`) onto a unit —
+   * the inverse direction of {@link returnWeaponToInventory}. Non-destructive:
+   * the unit's previously-equipped weapon (if any) is returned to the shared
+   * pool, so no gear is ever lost in a swap. This is what lets a weapon looted
+   * by one survivor be handed to another between missions.
+   *
+   * @param {number|'leader'} rosterIndex  roster index, or 'leader' for the hero.
+   * @param {string} weaponId  weapon id present in the shared pool.
+   * @returns {string|null}  the newly equipped weapon id, or `null` on no-op
+   *   (unknown unit, not a weapon, already equipped, or not in the pool).
+   */
+  equipFromInventory(rosterIndex, weaponId) {
+    const unit = rosterIndex === 'leader' ? this.heroStats : this.roster[rosterIndex];
+    if (!unit) return null;
+    if (ITEMS[weaponId]?.kind !== 'weapon') return null;
+    if (unit.weapon === weaponId) return null; // already equipped — nothing to do
+    const pool = { ...(this.weapons || {}) };
+    if ((pool[weaponId] || 0) < 1) return null; // not in the shared pool
+    pool[weaponId] -= 1;
+    if (pool[weaponId] <= 0) delete pool[weaponId];
+    // Stow the outgoing weapon back into the shared pool (non-destructive swap).
+    if (ITEMS[unit.weapon]?.kind === 'weapon') pool[unit.weapon] = (pool[unit.weapon] || 0) + 1;
+    this.weapons = pool;
+    unit.weapon = weaponId;
+    this.save();
+    return weaponId;
+  }
+
+  /**
+   * Take a unit's *equipped* weapon off entirely and bank it in the shared
+   * armory (`this.weapons`) without equipping a replacement — the missing
+   * direction alongside {@link equipFromInventory} (pool → equipped) and
+   * {@link returnWeaponToInventory} (backpack → pool). Used to rearrange
+   * loadouts between missions: a leader can drop a weapon into the pool for
+   * another unit to take, leaving themselves unarmed until equipped again.
+   *
+   * @param {number|'leader'} rosterIndex  roster index, or 'leader' for the hero.
+   * @returns {{success:boolean, weaponId?:string}}  `{ success:true, weaponId }`
+   *   on success, or `{ success:false }` when there's nothing equipped to
+   *   remove (or the unit is unknown).
+   */
+  unequipToInventory(rosterIndex) {
+    const unit = rosterIndex === 'leader' ? this.heroStats : this.roster[rosterIndex];
+    if (!unit) return { success: false };
+    const weaponId = unit.weapon;
+    if (!weaponId) return { success: false }; // nothing equipped — no-op
+    this.weapons = { ...(this.weapons || {}) };
+    this.weapons[weaponId] = (this.weapons[weaponId] || 0) + 1;
+    unit.weapon = null;
+    this.save();
+    return { success: true, weaponId };
+  }
+
   // ── Server sync (for verified users) ──────────────────────────────────────
 
   /** Push current state to server. Requires valid token + verified email. */
@@ -1000,6 +1090,7 @@ export class Campaign {
       completedMissions: [...this.completedMissions],
       roster:            this.roster,
       resources:         this.resources,
+      weapons:           this.weapons,
       heroStats:         this.heroStats,
       storyFlags:        this.storyFlags,
       updatedAt:         this.updatedAt,
@@ -1042,6 +1133,7 @@ export class Campaign {
     this.completedMissions = new Set(migrated.completedMissions ?? []);
     this.roster            = migrated.roster ?? [];
     this.resources         = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0, ...migrated.resources };
+    this.weapons           = { ...migrated.weapons }; // pre-armory saves → empty pool
     this.heroStats         = migrated.heroStats ?? { hp: 98, maxHp: 98, attack: 2, defense: 2, level: 1, xp: 0, weapon: 'sword', items: {} };
     // Backfill veterancy fields for saves written before XP existed.
     if (this.heroStats.level == null) this.heroStats.level = 1;

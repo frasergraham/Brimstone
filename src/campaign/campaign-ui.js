@@ -126,7 +126,7 @@ export function campaignPartyHTML(heroStats, roster) {
   // The campaign is always played as the Paladin (Ishmael Charger). No
   // faction choice here — the campaign narrative and mission scripting
   // assume a single fixed day-side leader.
-  html += campaignCardHTML('Ishmael Charger' + weaponLabel, null, 'hero', ENTITY_COLOR[EntityType.PALADIN], heroStats.hp, heroStats.maxHp, heroStats.attack, heroStats.defense, null, true);
+  html += campaignCardHTML('Ishmael Charger' + weaponLabel, null, 'paladin', ENTITY_COLOR[EntityType.PALADIN], heroStats.hp, heroStats.maxHp, heroStats.attack, heroStats.defense, null, true);
   for (const s of roster) {
     html += survivorCardHTML(s);
   }
@@ -194,7 +194,14 @@ export function weaponStatString(id) {
   return parts.join(' · ');
 }
 
-/** One weapon row: glyph, name, stat string, and equipped badge or Equip control. */
+/**
+ * One weapon row: glyph, name, stat string, and controls. The equipped weapon
+ * shows a ✓ badge plus an Unequip control that banks it in the shared armory
+ * (equipped slot → pool, no replacement); a carried (backpack) weapon gets an
+ * Equip control plus a Stow control that returns it to the shared armory (so
+ * another unit can take it). `idx` ('leader' or a roster index) is stamped onto
+ * every control.
+ */
 function weaponRowHTML(id, count, idx, isEquipped) {
   const name = weaponName(id);
   const stats = weaponStatString(id);
@@ -202,13 +209,51 @@ function weaponRowHTML(id, count, idx, isEquipped) {
   const statHtml = stats ? `<span class="cprog-w-stats">${stats}</span>` : '';
   const ctrl = isEquipped
     ? '<span class="cprog-w-eq" title="Equipped">✓ Equipped</span>'
-    : `<button class="cprog-equip-btn" data-idx="${idx}" data-weapon="${id}" title="Equip ${name}">Equip</button>`;
+      + `<button class="cprog-unequip-btn" data-idx="${idx}" data-weapon="${id}" title="Unequip ${name} into the shared armory">⊘ Unequip</button>`
+    : `<button class="cprog-equip-btn" data-idx="${idx}" data-weapon="${id}" title="Equip ${name}">Equip</button>`
+      + `<button class="cprog-return-btn" data-idx="${idx}" data-weapon="${id}" title="Stow ${name} in the shared armory">↩ Stow</button>`;
   return `<div class="cprog-weapon${isEquipped ? ' equipped' : ''}" data-weapon="${id}">
     <span class="cprog-w-glyph">${itemGlyph(id)}</span>
     <span class="cprog-w-name">${name}${n}</span>
     ${statHtml}
     ${ctrl}
   </div>`;
+}
+
+/**
+ * One shared-armory weapon row: glyph, name, stat string, and an Equip control
+ * per candidate unit (the leader + the active squad) — clicking one draws the
+ * weapon out of the shared pool and onto that unit. `targets` is
+ * `[{ idx, label }]` where `idx` is 'leader' or a roster index.
+ */
+function poolWeaponRowHTML(id, count, targets) {
+  const name = weaponName(id);
+  const stats = weaponStatString(id);
+  const n = count > 1 ? ` <span class="cprog-w-n">×${count}</span>` : '';
+  const statHtml = stats ? `<span class="cprog-w-stats">${stats}</span>` : '';
+  const btns = targets.map(t =>
+    `<button class="cprog-pool-equip-btn" data-idx="${t.idx}" data-weapon="${id}" title="Equip ${name} on ${t.label}">▸ ${t.label}</button>`
+  ).join('');
+  return `<div class="cprog-pool-weapon" data-weapon="${id}">
+    <span class="cprog-w-glyph">${itemGlyph(id)}</span>
+    <span class="cprog-w-name">${name}${n}</span>
+    ${statHtml}
+    <div class="cprog-pool-equip">${btns}</div>
+  </div>`;
+}
+
+/**
+ * The shared-armory block for the Shared Inventory section: every pooled weapon
+ * with per-unit Equip controls. '' when the pool is empty.
+ * @param {object} weapons  shared pool, `{ weaponId: count }`
+ * @param {{idx:(number|'leader'), label:string}[]} targets  equip candidates
+ */
+function sharedWeaponsHTML(weapons, targets) {
+  const entries = Object.entries(weapons || {}).filter(([id, c]) => c > 0 && isWeapon(id));
+  if (entries.length === 0) return '';
+  const rows = entries.map(([id, count]) => poolWeaponRowHTML(id, count, targets)).join('');
+  return `<div class="cprog-section-label armory-label">Armory</div>
+    <div class="cprog-pool-weapons">${rows}</div>`;
 }
 
 /**
@@ -296,6 +341,19 @@ export function progressUnitCardHTML(unit, opts = {}) {
 }
 
 /**
+ * Active-squad cap for the between-mission Progress screen. The whole roster is
+ * pickable here — the campaign menu is a loadout-management screen, not a launch
+ * gate, so it must never read a misleading "0/0 — you go alone" just because the
+ * next mission happens to be a solo one. Per-mission caps (the mission def's
+ * `maxSurvivorsFromRoster`) are enforced later, in the mission start dialog.
+ * @param {object[]} roster  Campaign.roster
+ * @returns {number} the cap (= roster size)
+ */
+export function progressSquadCap(roster) {
+  return Array.isArray(roster) ? roster.length : 0;
+}
+
+/**
  * The whole party pane: featured hero card, Active Squad section (capped at
  * `maxActive`), Reserve section, then the shared-inventory row.
  * @param {object} heroStats  Campaign.heroStats
@@ -312,7 +370,7 @@ export function partyPaneHTML(heroStats, roster, activeIndices, maxActive, opts 
   const canAddMore = active.length < maxActive;
 
   const heroUnit = {
-    name: 'Ishmael Charger', title: null, assetId: 'hero',
+    name: 'Ishmael Charger', title: null, assetId: 'paladin',
     color: ENTITY_COLOR[EntityType.PALADIN],
     hp: heroStats.hp, maxHp: heroStats.maxHp,
     attack: heroStats.attack, defense: heroStats.defense,
@@ -366,14 +424,25 @@ export function partyPaneHTML(heroStats, roster, activeIndices, maxActive, opts 
   }
   html += '</div>'; // .cprog-party-scroll
 
-  // Shared inventory.
+  // Shared inventory: raw resources plus the shared armory (weapons any unit can
+  // draw on). Armory weapons each offer an Equip control per candidate unit —
+  // the leader and the current active squad.
   const resEntries = Object.entries(resources).filter(([, v]) => v > 0);
-  html += '<div class="cprog-shared">';
-  html += '<div class="cprog-section-label">Shared Inventory</div>';
-  html += resEntries.length
+  const equipTargets = [{ idx: 'leader', label: 'Ishmael' }];
+  for (const i of active) {
+    equipTargets.push({ idx: i, label: String(roster[i].name || `Unit ${i}`).split(/\s+/)[0] });
+  }
+  const resHtml = resEntries.length
     ? `<div class="cprog-resources">${resEntries.map(([k, v]) =>
         `<span class="cr-item"><span class="cr-icon">${RESOURCE_ICONS[k] || ''}</span><span class="cr-count">${v}</span><span class="cr-label">${k}</span></span>`).join('')}</div>`
-    : '<div class="cprog-empty">Empty.</div>';
+    : '';
+  const armoryHtml = sharedWeaponsHTML(opts.weapons, equipTargets);
+
+  html += '<div class="cprog-shared">';
+  html += '<div class="cprog-section-label">Shared Inventory</div>';
+  html += resHtml;
+  html += armoryHtml;
+  if (!resHtml && !armoryHtml) html += '<div class="cprog-empty">Empty.</div>';
   html += '</div>';
 
   return html;

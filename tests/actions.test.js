@@ -1785,6 +1785,66 @@ describe('executeUseItem — weapon equip', () => {
   });
 });
 
+// ── weapon-swap preservation ─────────────────────────────────────────────────
+// Bug fix: swapping to a new weapon mid-mission used to destroy the outgoing
+// weapon. The previously equipped weapon must be banked back into carried items.
+describe('executeUseItem — weapon swap preserves outgoing weapon', () => {
+  test('round-trip swap banks the old weapon into items', () => {
+    const state = freshState();
+    const hero = state.hero;
+    hero.equipWeapon(WeaponType.SWORD);
+    hero.items = { axe: 1 };
+
+    const r = executeUseItem(state, hero, 'axe');
+    assert.equal(r.success, true);
+    assert.equal(hero.weapon, WeaponType.AXE, 'axe is now equipped');
+    assert.equal(hero.items['axe'], 0, 'axe consumed from items');
+    assert.equal(hero.items['sword'], 1, 'previous sword banked back into items');
+  });
+
+  test('default (non-item) weapon is preserved when swapping', () => {
+    // Operator's actual report: hero wields the faction-default weapon, which
+    // lives in the weapon slot but NOT in items. Swapping must not vaporize it.
+    const state = freshState();
+    const hero = state.hero;
+    hero.equipWeapon(WeaponType.SWORD);
+    hero.items = { axe: 1 };
+    assert.equal((hero.items['sword'] || 0), 0, 'precondition: sword not in items');
+
+    const r = executeUseItem(state, hero, 'axe');
+    assert.equal(r.success, true);
+    assert.equal(hero.weapon, WeaponType.AXE);
+    assert.equal(hero.items['sword'], 1, 'default sword preserved as a carried spare');
+  });
+
+  test('no-op when item unavailable — failure path leaves weapon untouched', () => {
+    const state = freshState();
+    const hero = state.hero;
+    hero.equipWeapon(WeaponType.SWORD);
+    hero.items = { axe: 0 };
+
+    const r = executeUseItem(state, hero, 'axe');
+    assert.equal(r.success, false);
+    assert.equal(hero.weapon, WeaponType.SWORD, 'weapon unchanged on failure');
+    assert.equal(hero.items['axe'], 0, 'items unchanged on failure');
+    assert.equal((hero.items['sword'] || 0), 0, 'no spurious sword written on failure');
+  });
+
+  test('null previous weapon does not write an items[null] key', () => {
+    const state = freshState();
+    const hero = state.hero;
+    hero.equipWeapon(null); // lost weapon mid-fight
+    hero.items = { axe: 1 };
+
+    const r = executeUseItem(state, hero, 'axe');
+    assert.equal(r.success, true);
+    assert.equal(hero.weapon, WeaponType.AXE);
+    assert.equal(hero.items['axe'], 0);
+    assert.ok(!('null' in hero.items), 'no items["null"] key created');
+    assert.ok(!(null in hero.items), 'no null key created');
+  });
+});
+
 // ── auto-equip weapon on loot ─────────────────────────────────────────────────
 
 describe('auto-equip weapon on loot find', () => {

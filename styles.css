@@ -7059,6 +7059,20 @@ body.spectator-mode #game-screen   { display: flex !important; }
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s;
 }
+/* Stow control: send a carried weapon back to the shared armory. Sits just after
+   the Equip control (which carries the auto-margin) on a carried weapon row. */
+.cprog-return-btn {
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.14);
+  color: var(--clr-dim, #9a8f78);
+  border-radius: 4px;
+  padding: 0.12rem 0.4rem;
+  font-size: 0.62rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.cprog-return-btn:hover { background: rgba(255,255,255,0.08); color: var(--text, #d4c9b0); }
 
 .cprog-heal-btn {
   margin-top: 0.4rem;
@@ -7081,6 +7095,43 @@ body.spectator-mode #game-screen   { display: flex !important; }
   gap: 0.35rem;
   margin-top: 0.3rem;
 }
+/* Shared armory: pooled weapons any unit can draw from. */
+.cprog-section-label.armory-label { margin-top: 0.5rem; }
+.cprog-pool-weapons {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin-top: 0.3rem;
+}
+.cprog-pool-weapon {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.72rem;
+  padding: 0.2rem 0.35rem;
+  background: rgba(120,160,212,0.08);
+  border: 1px solid rgba(120,160,212,0.22);
+  border-radius: 4px;
+}
+.cprog-pool-equip {
+  margin-left: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  justify-content: flex-end;
+}
+.cprog-pool-equip-btn {
+  flex-shrink: 0;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.18);
+  color: var(--text, #d4c9b0);
+  border-radius: 4px;
+  padding: 0.12rem 0.4rem;
+  font-size: 0.62rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.cprog-pool-equip-btn:hover { background: rgba(212,167,44,0.18); border-color: rgba(212,167,44,0.5); }
 
 /* Mission list pane. */
 .cprog-chapter-title {

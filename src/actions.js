@@ -1691,7 +1691,12 @@ export function executeUseItem(state, actor, item) {
     }
     const myItems = actor.items || {};
     if ((myItems[item] || 0) < 1) return { success: false, log: ['Item not available.'] };
+    // Preserve the outgoing weapon: swapping should bank the old weapon back
+    // into carried items rather than destroying it. equipWeapon() overwrites
+    // the slot, so the swap-bookkeeping is the caller's concern.
+    const prev = actor.weapon;
     myItems[item]--;
+    if (prev && prev !== item) myItems[prev] = (myItems[prev] || 0) + 1;
     actor.equipWeapon(item);
     actor.equippedThisRound = true;
     const label = WEAPON_LABEL[item] || item;
