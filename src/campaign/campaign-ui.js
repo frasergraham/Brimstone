@@ -3,6 +3,9 @@
 
 import { Renderer } from '../renderer.js';
 import { ENTITY_COLOR, EntityType } from '../entities.js';
+import { xpForLevel } from '../balance.js';
+import { ITEMS } from '../items.js';
+import { WEAPON_LABEL } from '../tiles.js';
 
 // ── Campaign mid-mission save/resume ────────────────────────────────────────
 // Mid-mission saves are slot-aware so a mission-in-progress in one save slot
@@ -126,6 +129,258 @@ export function campaignPartyHTML(heroStats, roster) {
   html += campaignCardHTML('Ishmael Charger' + weaponLabel, null, 'hero', ENTITY_COLOR[EntityType.PALADIN], heroStats.hp, heroStats.maxHp, heroStats.attack, heroStats.defense, null, true);
   for (const s of roster) {
     html += survivorCardHTML(s);
+  }
+  html += '</div>';
+  return html;
+}
+
+// ── Campaign Progress screen (between-mission landing) ──────────────────────
+//
+// A richer party view than campaignPartyHTML: per-unit level/XP, HP, ATK/DEF,
+// a small inventory row, and an optional heal button + promote/demote control.
+// All builders are pure string functions so they can be unit-tested without a
+// DOM (getCampaignPortrait returns null outside the browser → glyph fallback).
+
+/**
+ * XP progress within the unit's current level.
+ * @returns {{level:number, into:number, span:number, pct:number}}
+ *   `into`/`span` are XP earned toward the next level / total needed for it.
+ */
+export function xpProgress(level, xp) {
+  const lvl  = Math.max(1, Math.floor(level) || 1);
+  const base = xpForLevel(lvl);
+  const next = xpForLevel(lvl + 1);
+  const span = Math.max(1, next - base);
+  const into = Math.max(0, Math.min(span, (Math.floor(xp) || 0) - base));
+  return { level: lvl, into, span, pct: Math.round((into / span) * 100) };
+}
+
+/** Emoji glyph for an item/weapon id (the leading token of its label). */
+function itemGlyph(id) {
+  const label = ITEMS[id]?.label || WEAPON_LABEL[id] || '';
+  const first = String(label).trim().split(/\s+/)[0];
+  return first || '🎒';
+}
+
+/** Small badge row for a unit's carried weapon + items. Empty string if none. */
+function itemRowHTML(items, weapon) {
+  const badges = [];
+  if (weapon) {
+    const wId = typeof weapon === 'string' ? weapon : weapon.id;
+    if (wId) badges.push(`<span class="cprog-item" title="${WEAPON_LABEL[wId] || wId}">${itemGlyph(wId)}</span>`);
+  }
+  for (const [id, count] of Object.entries(items || {})) {
+    if (!count) continue;
+    const n = count > 1 ? `<span class="cprog-item-n">×${count}</span>` : '';
+    badges.push(`<span class="cprog-item" title="${ITEMS[id]?.label || id}">${itemGlyph(id)}${n}</span>`);
+  }
+  return badges.length ? `<div class="cprog-inv">${badges.join('')}</div>` : '';
+}
+
+/**
+ * One unit card for the party pane.
+ * @param {object} unit  { name, title?, assetId, color, hp, maxHp, attack,
+ *                         defense, level?, xp?, weapon?, items? }
+ * @param {object} opts  { idx, isHero?, reserve?, canHeal?, control? }
+ *   `control` is `{ cls, label, title }` for the promote/demote button (or null).
+ */
+export function progressUnitCardHTML(unit, opts = {}) {
+  const { idx, isHero = false, reserve = false, canHeal = false, control = null } = opts;
+  const hp = unit.hp, maxHp = unit.maxHp || 1;
+  const hpPct = Math.max(0, Math.min(100, Math.round((hp / maxHp) * 100)));
+  const hpClr = hpColor(hp, maxHp);
+  const { level, into, span, pct: xpPct } = xpProgress(unit.level, unit.xp);
+
+  const cls = ['cprog-card'];
+  if (isHero) cls.push('hero');
+  if (reserve) cls.push('reserve');
+
+  const portrait = getCampaignPortrait(unit.assetId, 56);
+  const iconHtml = portrait
+    ? `<img class="cprog-portrait" src="${portrait}" style="border-color:${unit.color}" alt="">`
+    : `<span class="cprog-glyph" style="background:${unit.color}">${isHero ? '⚔' : '☺'}</span>`;
+
+  const controlHtml = control
+    ? `<button class="cprog-ctrl ${control.cls}" data-idx="${idx}" title="${control.title}">${control.label}</button>`
+    : '';
+  const healHtml = canHeal
+    ? `<button class="cprog-heal-btn" data-idx="${idx}">🌿 Use 1 herb</button>`
+    : '';
+
+  return `<div class="${cls.join(' ')}" data-idx="${idx}">
+    <div class="cprog-card-head">
+      ${iconHtml}
+      <div class="cprog-id">
+        <div class="cprog-name" style="color:${unit.color}">${unit.name}${unit.title ? ` <span class="cprog-title">${unit.title}</span>` : ''}</div>
+        <div class="cprog-level">Lv ${level}</div>
+      </div>
+      ${controlHtml}
+    </div>
+    <div class="cprog-bar-row">
+      <span class="cprog-bar-label">HP</span>
+      <div class="cprog-track"><div class="cprog-fill hp" style="width:${hpPct}%;background:${hpClr}"></div></div>
+      <span class="cprog-bar-num">${hp}/${maxHp}</span>
+    </div>
+    <div class="cprog-bar-row">
+      <span class="cprog-bar-label">XP</span>
+      <div class="cprog-track"><div class="cprog-fill xp" style="width:${xpPct}%"></div></div>
+      <span class="cprog-bar-num">${into}/${span}</span>
+    </div>
+    <div class="cprog-statline"><span class="cprog-stat">⚔ ${unit.attack}</span><span class="cprog-stat">🛡 ${unit.defense}</span></div>
+    ${itemRowHTML(unit.items, unit.weapon)}
+    ${healHtml}
+  </div>`;
+}
+
+/**
+ * The whole party pane: featured hero card, Active Squad section (capped at
+ * `maxActive`), Reserve section, then the shared-inventory row.
+ * @param {object} heroStats  Campaign.heroStats
+ * @param {object[]} roster   Campaign.roster (snapshotSurvivor objects)
+ * @param {number[]} activeIndices  roster indices currently deployed
+ * @param {number} maxActive  active-squad cap (next playable mission's value)
+ * @param {object} opts  { resources?: {herbs,...} }
+ */
+export function partyPaneHTML(heroStats, roster, activeIndices, maxActive, opts = {}) {
+  const resources = opts.resources || {};
+  const herbs = resources.herbs ?? 0;
+  const active = activeIndices.filter(i => roster[i]);
+  const reserve = roster.map((_, i) => i).filter(i => !active.includes(i));
+  const canAddMore = active.length < maxActive;
+
+  const heroUnit = {
+    name: 'Ishmael Charger', title: null, assetId: 'hero',
+    color: ENTITY_COLOR[EntityType.PALADIN],
+    hp: heroStats.hp, maxHp: heroStats.maxHp,
+    attack: heroStats.attack, defense: heroStats.defense,
+    level: heroStats.level, xp: heroStats.xp,
+    weapon: heroStats.weapon, items: heroStats.items,
+  };
+
+  let html = '<div class="cprog-party-scroll">';
+
+  // Featured leader card — always deployed, never counts toward the cap.
+  html += '<div class="cprog-section-label leader-label">Leader</div>';
+  html += progressUnitCardHTML(heroUnit, {
+    idx: 'leader', isHero: true,
+    canHeal: herbs > 0 && heroStats.hp < heroStats.maxHp,
+  });
+
+  // Active squad.
+  html += `<div class="cprog-section-label active-label">Active Squad <span class="cprog-count">${active.length}/${maxActive}</span></div>`;
+  if (maxActive === 0) {
+    html += '<div class="cprog-empty">You go alone on the next mission.</div>';
+  } else if (active.length === 0) {
+    html += '<div class="cprog-empty">No survivors selected — tap a reserve unit to deploy.</div>';
+  } else {
+    html += '<div class="cprog-grid">';
+    for (const i of active) {
+      const s = roster[i];
+      html += progressUnitCardHTML(_survivorUnit(s), {
+        idx: i,
+        canHeal: herbs > 0 && s.hp < s.maxHp,
+        control: { cls: 'cprog-demote', label: '−', title: 'Move to reserve' },
+      });
+    }
+    html += '</div>';
+  }
+
+  // Reserve.
+  html += '<div class="cprog-section-label reserve-label">Reserve</div>';
+  if (reserve.length === 0) {
+    html += '<div class="cprog-empty">No reserve survivors.</div>';
+  } else {
+    html += '<div class="cprog-grid reserve-grid">';
+    for (const i of reserve) {
+      const s = roster[i];
+      html += progressUnitCardHTML(_survivorUnit(s), {
+        idx: i, reserve: true,
+        canHeal: herbs > 0 && s.hp < s.maxHp,
+        control: canAddMore ? { cls: 'cprog-promote', label: '+', title: 'Move to active' } : null,
+      });
+    }
+    html += '</div>';
+  }
+  html += '</div>'; // .cprog-party-scroll
+
+  // Shared inventory.
+  const resEntries = Object.entries(resources).filter(([, v]) => v > 0);
+  html += '<div class="cprog-shared">';
+  html += '<div class="cprog-section-label">Shared Inventory</div>';
+  html += resEntries.length
+    ? `<div class="cprog-resources">${resEntries.map(([k, v]) =>
+        `<span class="cr-item"><span class="cr-icon">${RESOURCE_ICONS[k] || ''}</span><span class="cr-count">${v}</span><span class="cr-label">${k}</span></span>`).join('')}</div>`
+    : '<div class="cprog-empty">Empty.</div>';
+  html += '</div>';
+
+  return html;
+}
+
+/** Map a roster snapshot into the unit shape progressUnitCardHTML expects. */
+function _survivorUnit(s) {
+  return {
+    name: s.name, title: s.title,
+    assetId: Renderer.survivorAssetId(s.title) || 'survivor_innkeeper',
+    color: s.color || ENTITY_COLOR.survivor,
+    hp: s.hp, maxHp: s.maxHp, attack: s.attack, defense: s.defense,
+    level: s.level, xp: s.xp, weapon: s.weapon, items: s.items,
+  };
+}
+
+/**
+ * Build the mission-list row descriptors for a campaign's Progress screen.
+ * Only `visible` missions are shown (Phase E heuristic) unless `unlockAll` (the
+ * admin bypass) is set, in which case every mission is shown and treated as
+ * launchable. Each row carries a status and, for locked rows, a hint naming the
+ * blocking mission.
+ * @returns {{id, title, briefing, status:'completed'|'available'|'locked', lockedHint?}[]}
+ */
+export function missionRows(campaign, unlockAll = false) {
+  return campaign.getMissionList()
+    .filter(m => unlockAll || m.visible)
+    .map(m => {
+      const unlocked = unlockAll || m.available;
+      const status = m.completed ? 'completed' : unlocked ? 'available' : 'locked';
+      const def = campaign.getMissionDef(m.id);
+      let lockedHint;
+      if (status === 'locked') {
+        const blockers = campaign._missionBlockers(def);
+        const prev = blockers && blockers.length ? campaign.getMissionDef(blockers[0]) : null;
+        lockedHint = prev ? `Locked — complete “${prev.title}” to unlock` : 'Locked';
+      }
+      return {
+        id: m.id,
+        title: m.title,
+        briefing: def?.briefing || m.briefing || '',
+        status,
+        lockedHint,
+      };
+    });
+}
+
+/**
+ * The mission-list pane.
+ * @param {string} chapterTitle  campaign.def.title
+ * @param {object[]} rows  [{ id, title, briefing?, status:'completed'|'available'|'locked', lockedHint? }]
+ */
+export function missionListPaneHTML(chapterTitle, rows) {
+  let html = `<div class="cprog-chapter-title">${chapterTitle}</div>`;
+  html += '<div class="cprog-mission-list">';
+  if (rows.length === 0) {
+    html += '<div class="cprog-empty">No missions available.</div>';
+  }
+  for (const r of rows) {
+    const icon = r.status === 'completed' ? '✓' : r.status === 'available' ? '→' : '🔒';
+    const desc = r.status === 'locked'
+      ? (r.lockedHint || 'Locked')
+      : (r.briefing || '');
+    html += `<div class="cprog-mission ${r.status}" data-mission="${r.id}">
+      <span class="cprog-mission-icon">${icon}</span>
+      <div class="cprog-mission-body">
+        <div class="cprog-mission-name">${r.title}</div>
+        ${desc ? `<div class="cprog-mission-desc">${desc}</div>` : ''}
+      </div>
+    </div>`;
   }
   html += '</div>';
   return html;

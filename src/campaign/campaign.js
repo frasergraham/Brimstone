@@ -916,6 +916,32 @@ export class Campaign {
     this.save();
   }
 
+  /**
+   * Heal one party member with a single herb, BETWEEN missions.
+   *
+   * This is the campaign-landing analogue of the mid-mission `executeHeal`
+   * action — but it can't reuse that one (it is sealed-resolution and operates
+   * on a live GameState's faction inventory). Here we decrement the shared
+   * campaign `resources.herbs`, roll 2×1d10 (between-mission ops aren't
+   * deterministic like in-mission resolution, so plain Math.random is fine),
+   * clamp the result to the unit's maxHp, and persist.
+   *
+   * @param {number|'leader'} rosterIndex  Index into `this.roster`, or the
+   *   sentinel `'leader'` to heal the hero/Paladin (`this.heroStats`).
+   * @returns {number|null}  The unit's new hp, or `null` if the heal was a
+   *   no-op (no herbs, unknown unit, or already at full health).
+   */
+  healUnitWithHerb(rosterIndex) {
+    if ((this.resources.herbs ?? 0) < 1) return null;
+    const unit = rosterIndex === 'leader' ? this.heroStats : this.roster[rosterIndex];
+    if (!unit || unit.hp >= unit.maxHp) return null;
+    const roll = (Math.floor(Math.random() * 10) + 1) + (Math.floor(Math.random() * 10) + 1);
+    this.resources.herbs -= 1;
+    unit.hp = Math.min(unit.maxHp, unit.hp + roll);
+    this.save();
+    return unit.hp;
+  }
+
   // ── Server sync (for verified users) ──────────────────────────────────────
 
   /** Push current state to server. Requires valid token + verified email. */

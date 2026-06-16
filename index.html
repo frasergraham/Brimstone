@@ -252,6 +252,28 @@
       </div>
     </div>
 
+    <!-- Campaign: Progress (between-mission landing — party + mission list) -->
+    <div id="setup-step-campaign-progress" class="setup-card setup-card-wide" style="display:none">
+      <h1 id="campaign-progress-title" class="title" style="font-size:2rem;margin-bottom:0.5rem">CAMPAIGN</h1>
+      <div class="campaign-progress-toggle">
+        <button id="cprog-toggle-party" class="cprog-toggle-btn active" data-pane="party">&larr; Party</button>
+        <span class="cprog-dots">
+          <span class="cprog-dot active" data-pane="party"></span>
+          <span class="cprog-dot" data-pane="missions"></span>
+        </span>
+        <button id="cprog-toggle-missions" class="cprog-toggle-btn" data-pane="missions">Missions &rarr;</button>
+      </div>
+      <div id="campaign-progress-body" class="campaign-progress-body show-party">
+        <div id="campaign-progress-party" class="campaign-progress-pane cprog-party-pane"></div>
+        <div id="campaign-progress-missions" class="campaign-progress-pane cprog-missions-pane"></div>
+      </div>
+      <div class="setup-buttons" style="margin-top:1rem">
+        <button id="btn-campaign-progress-back" class="setup-btn">&larr; Back</button>
+        <button id="btn-campaign-progress-startover" class="setup-btn" style="color:var(--clr-dim);font-size:0.85rem">Start Over</button>
+        <button id="btn-campaign-progress-unlock" class="setup-btn admin-btn">🔓 Unlock All</button>
+      </div>
+    </div>
+
     <!-- Campaign: Mission Select & Briefing -->
     <div id="setup-step-campaign" class="setup-card setup-card-wide" style="display:none">
       <h1 id="campaign-title" class="title" style="font-size:2rem;margin-bottom:0.5rem">CAMPAIGN</h1>

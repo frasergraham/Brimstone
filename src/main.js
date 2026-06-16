@@ -71,6 +71,8 @@ import {
   loadCampaignPortraits as _loadCampaignPortraits, getCampaignPortrait as _getCampaignPortrait,
   campaignCardHTML as _campaignCardHTML, survivorCardHTML as _survivorCardHTML,
   campaignPartyHTML as _campaignPartyHTML, objectiveDescription as _objectiveDescription,
+  partyPaneHTML as _partyPaneHTML, missionListPaneHTML as _missionListPaneHTML,
+  missionRows as _missionRows,
   departureMessage as _departureMessage, arrivalMessage as _arrivalMessage,
 } from './campaign/campaign-ui.js';
 import { requestNotificationPermission, notifyRoundReady, notifyWaitingOnYou, notifyDeadlineApproaching, notifyGameOver } from './notifications.js';
@@ -3293,6 +3295,7 @@ const stepMode         = document.getElementById('setup-step-mode');
 const stepSinglePlayer = document.getElementById('setup-step-singleplayer');
 const stepCampaignSelect = document.getElementById('setup-step-campaign-select');
 const stepCampaignSlot = document.getElementById('setup-step-campaign-slot');
+const stepCampaignProgress = document.getElementById('setup-step-campaign-progress');
 const stepCampaign     = document.getElementById('setup-step-campaign');
 const stepDebrief      = document.getElementById('setup-step-debrief');
 const stepBattle       = document.getElementById('setup-step-battle');
@@ -3326,6 +3329,7 @@ function showStep(step) {
   stepSinglePlayer  .style.display = step === 'singleplayer'    ? '' : 'none';
   stepCampaignSelect.style.display = step === 'campaign-select' ? '' : 'none';
   if (stepCampaignSlot) stepCampaignSlot.style.display = step === 'campaign-slot' ? '' : 'none';
+  if (stepCampaignProgress) stepCampaignProgress.style.display = step === 'campaign-progress' ? '' : 'none';
   stepCampaign      .style.display = step === 'campaign'        ? '' : 'none';
   stepDebrief       .style.display = step === 'debrief'         ? '' : 'none';
   if (stepBattle) stepBattle.style.display = step === 'battle' ? '' : 'none';
@@ -3348,7 +3352,8 @@ function showStep(step) {
   // Move the session bar into the active card so it sits at its bottom
   const _stepEl = {
     'mode': stepMode, 'singleplayer': stepSinglePlayer,
-    'campaign-select': stepCampaignSelect, 'campaign-slot': stepCampaignSlot, 'campaign': stepCampaign, 'debrief': stepDebrief,
+    'campaign-select': stepCampaignSelect, 'campaign-slot': stepCampaignSlot,
+    'campaign-progress': stepCampaignProgress, 'campaign': stepCampaign, 'debrief': stepDebrief,
     'online': stepOnline, 'async': stepAsync,
     'howtoplay': stepHowto, 'options': stepOptions,
     'changelog': stepChangelog, 'account': stepAccount, 'waiting': stepWaiting,
@@ -3649,6 +3654,7 @@ let _activeMissionDef = null; // Current mission definition
 let _campaignSelectedMission = null; // Mission ID selected on campaign screen
 let _campaignUnlocked = false; // Admin: bypass mission prerequisites
 let _activeRosterIndices = []; // Indices into _activeCampaign.roster that are "active" (will deploy)
+let _progressPane = 'party';   // Campaign Progress mobile pane toggle: 'party' | 'missions'
 
 // ── Campaign mid-mission save/resume ──────────────────────────────────────────
 
@@ -3869,19 +3875,148 @@ async function _showCampaignScreen(campaignDef, autoMissionId, slotIndex = 1) {
     _activeCampaign.load();
   }
   await _loadCampaignPortraits();
-  _renderCampaignScreen();
-  showStep('campaign');
 
-  // Auto-navigate to a specific mission briefing (e.g. from main menu game list)
+  // Direct-to-briefing paths bypass the Progress landing entirely:
+  //  • autoMissionId — "resume next mission" from the main-menu game list
+  //  • single-mission campaigns — no list to land on
   if (autoMissionId) {
+    showStep('campaign');
     _campaignSelectedMission = autoMissionId;
     _showMissionBriefing(autoMissionId);
-  } else if (_activeCampaign?.campaignDef?.missions?.length === 1) {
-    // Single-mission campaigns skip the mission list and go straight to briefing
+    return;
+  }
+  if (_activeCampaign?.campaignDef?.missions?.length === 1) {
+    showStep('campaign');
     const missionId = _activeCampaign.campaignDef.missions[0].id;
     _campaignSelectedMission = missionId;
     _showMissionBriefing(missionId);
+    return;
   }
+
+  // Default between-mission landing → the Campaign Progress screen.
+  _seedActiveRosterForProgress();
+  _progressPane = 'party';
+  _renderCampaignProgressScreen();
+  showStep('campaign-progress');
+}
+
+// ── Campaign Progress screen ────────────────────────────────────────────────
+// The between-mission landing: party (left) + mission list (right), with a
+// mobile ←/→ pane toggle. Replaces the old per-campaign mission-list view
+// (_renderCampaignScreen) for this purpose; the briefing screen it routes into
+// is unchanged.
+
+/** The next mission the player can actually launch (available + not completed). */
+function _nextPlayableMissionDef() {
+  if (!_activeCampaign) return null;
+  const next = _activeCampaign.getMissionList().find(m => m.available && !m.completed);
+  return next ? _activeCampaign.getMissionDef(next.id) : null;
+}
+
+/** Active-squad cap = next playable mission's roster limit (default 3). */
+function _progressMaxActive() {
+  const def = _nextPlayableMissionDef();
+  return def ? (def.maxSurvivorsFromRoster ?? 3) : 3;
+}
+
+/** Front-fill the active squad to the cap (called on fresh entry, not re-renders). */
+function _seedActiveRosterForProgress() {
+  if (!_activeCampaign) { _activeRosterIndices = []; return; }
+  const maxActive = _progressMaxActive();
+  _activeRosterIndices = _activeCampaign.roster.map((_, i) => i).slice(0, maxActive);
+}
+
+function _renderCampaignProgressScreen() {
+  if (!_activeCampaign) return;
+  const campaignDef = _activeCampaign.campaignDef;
+  const titleEl = document.getElementById('campaign-progress-title');
+  if (titleEl) titleEl.textContent = campaignDef.title;
+
+  const maxActive = _progressMaxActive();
+  // Drop any stale/out-of-range indices, then clamp to the current cap.
+  _activeRosterIndices = _activeRosterIndices
+    .filter(i => i >= 0 && i < _activeCampaign.roster.length)
+    .slice(0, maxActive);
+
+  // Party pane.
+  const partyEl = document.getElementById('campaign-progress-party');
+  if (partyEl) {
+    partyEl.innerHTML = _partyPaneHTML(
+      _activeCampaign.heroStats, _activeCampaign.roster,
+      _activeRosterIndices, maxActive, { resources: _activeCampaign.resources },
+    );
+  }
+
+  // Mission pane.
+  const missionsEl = document.getElementById('campaign-progress-missions');
+  if (missionsEl) {
+    const rows = _missionRows(_activeCampaign, _campaignUnlocked);
+    missionsEl.innerHTML = _missionListPaneHTML(campaignDef.title, rows);
+  }
+
+  // Mobile pane visibility.
+  const bodyEl = document.getElementById('campaign-progress-body');
+  if (bodyEl) {
+    bodyEl.classList.toggle('show-party', _progressPane === 'party');
+    bodyEl.classList.toggle('show-missions', _progressPane === 'missions');
+  }
+  document.querySelectorAll('.cprog-toggle-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.pane === _progressPane);
+  });
+  document.querySelectorAll('.cprog-dot').forEach(dot => {
+    dot.classList.toggle('active', dot.dataset.pane === _progressPane);
+  });
+
+  _wireCampaignProgressHandlers();
+}
+
+function _wireCampaignProgressHandlers() {
+  const maxActive = _progressMaxActive();
+  const partyEl = document.getElementById('campaign-progress-party');
+  const missionsEl = document.getElementById('campaign-progress-missions');
+
+  // Promote reserve → active (respecting the cap).
+  partyEl?.querySelectorAll('.cprog-promote').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset.idx, 10);
+      if (_activeRosterIndices.length < maxActive && !_activeRosterIndices.includes(idx)) {
+        _activeRosterIndices.push(idx);
+        _renderCampaignProgressScreen();
+      }
+    });
+  });
+  // Demote active → reserve.
+  partyEl?.querySelectorAll('.cprog-demote').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset.idx, 10);
+      _activeRosterIndices = _activeRosterIndices.filter(i => i !== idx);
+      _renderCampaignProgressScreen();
+    });
+  });
+  // Heal with a herb (data-idx is a roster index or the 'leader' sentinel).
+  partyEl?.querySelectorAll('.cprog-heal-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const raw = btn.dataset.idx;
+      const target = raw === 'leader' ? 'leader' : parseInt(raw, 10);
+      const newHp = _activeCampaign.healUnitWithHerb(target);
+      if (newHp != null) _renderCampaignProgressScreen();
+    });
+  });
+  // Admin: add a random survivor (mirrors the old screen's testing affordance).
+  partyEl?.querySelector('#btn-admin-add-survivor')?.addEventListener('click', () => {
+    _activeCampaign.roster.push(snapshotSurvivor(createSurvivor(0, 0, 'hero')));
+    _activeCampaign.save();
+    _renderCampaignProgressScreen();
+  });
+
+  // Launch an available mission via the existing briefing path.
+  missionsEl?.querySelectorAll('.cprog-mission.available').forEach(el => {
+    el.addEventListener('click', () => {
+      _campaignSelectedMission = el.dataset.mission;
+      showStep('campaign');
+      _showMissionBriefing(_campaignSelectedMission);
+    });
+  });
 }
 
 
@@ -4039,10 +4174,20 @@ function _showMissionBriefing(missionId) {
   const listEl = document.getElementById('campaign-mission-list');
   const briefEl = document.getElementById('campaign-briefing');
   const navEl = document.getElementById('campaign-nav');
+  const rosterEl = document.getElementById('campaign-roster-summary');
 
   listEl.style.display = 'none';
   navEl.style.display = 'none';
   briefEl.style.display = '';
+  // The briefing's deploy roster is rendered below; ensure its host is visible.
+  // (Reaching the briefing from the Progress screen bypasses _renderCampaignScreen,
+  // which previously un-hid this element.)
+  if (rosterEl) rosterEl.style.display = '';
+
+  // The shared header reads "CAMPAIGN" by default; show the chapter title so the
+  // briefing isn't unlabeled when entered straight from the Progress screen.
+  const titleEl = document.getElementById('campaign-title');
+  if (titleEl && _activeCampaign?.campaignDef) titleEl.textContent = _activeCampaign.campaignDef.title;
 
   document.getElementById('campaign-mission-title').textContent = missionDef.title;
   document.getElementById('campaign-mission-text').textContent = missionDef.briefing;
@@ -4072,12 +4217,17 @@ function _showMissionBriefing(missionId) {
     <div class="campaign-obj"><span class="campaign-obj-icon">💀</span> <strong>Defeat:</strong> ${loseDesc}</div>
   `;
 
-  // Switch roster summary into Active/Reserve deploy mode
+  // Switch roster summary into Active/Reserve deploy mode.
   const maxActive = missionDef.maxSurvivorsFromRoster ?? 0;
-  // Default: fill active slots from the front of the roster
-  _activeRosterIndices = _activeCampaign.roster
-    .map((_, i) => i)
+  // Preserve a squad already chosen on the Progress screen; otherwise default to
+  // front-filling the active slots. Either way clamp to this mission's cap and
+  // drop any indices that fall outside the current roster.
+  _activeRosterIndices = (_activeRosterIndices || [])
+    .filter(i => i >= 0 && i < _activeCampaign.roster.length)
     .slice(0, maxActive);
+  if (_activeRosterIndices.length === 0) {
+    _activeRosterIndices = _activeCampaign.roster.map((_, i) => i).slice(0, maxActive);
+  }
   _renderDeployRoster(_activeCampaign.heroStats, _activeCampaign.roster, maxActive);
 }
 
@@ -4672,7 +4822,39 @@ function _handleCampaignMissionEnd() {
 document.getElementById('btn-campaign-select-back').addEventListener('click', () => showStep('newgame'));
 document.getElementById('btn-campaign-slot-back')  ?.addEventListener('click', () => _showCampaignSelectScreen());
 document.getElementById('btn-campaign-back')   .addEventListener('click', () => _showCampaignSelectScreen());
-document.getElementById('btn-briefing-back')   .addEventListener('click', () => _renderCampaignScreen());
+document.getElementById('btn-briefing-back')   .addEventListener('click', () => {
+  // Return to the Progress landing (preserving the squad just chosen) — but if
+  // we arrived here via a single-mission campaign there's no landing to show.
+  if (_activeCampaign && _activeCampaign.campaignDef.missions.length > 1) {
+    _renderCampaignProgressScreen();
+    showStep('campaign-progress');
+  } else {
+    _renderCampaignScreen();
+  }
+});
+
+// Campaign Progress screen — static nav buttons (wired once).
+document.getElementById('btn-campaign-progress-back')?.addEventListener('click', () => {
+  if (_activeCampaign) _showCampaignSlotScreen(_activeCampaign.campaignDef);
+});
+document.getElementById('btn-campaign-progress-startover')?.addEventListener('click', () => {
+  if (confirm('Start over? All campaign progress, roster survivors, and resources in this slot will be lost. This cannot be undone.')) {
+    _activeCampaign.delete();
+    _showCampaignSelectScreen();
+  }
+});
+document.getElementById('btn-campaign-progress-unlock')?.addEventListener('click', () => {
+  _campaignUnlocked = !_campaignUnlocked;
+  const btn = document.getElementById('btn-campaign-progress-unlock');
+  if (btn) btn.textContent = _campaignUnlocked ? '🔒 Lock' : '🔓 Unlock All';
+  _renderCampaignProgressScreen();
+});
+document.querySelectorAll('.cprog-toggle-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    _progressPane = btn.dataset.pane === 'missions' ? 'missions' : 'party';
+    _renderCampaignProgressScreen();
+  });
+});
 document.getElementById('btn-delete-campaign')  .addEventListener('click', () => {
   if (confirm('Start over? All campaign progress, roster survivors, and resources will be lost. This cannot be undone.')) {
     _activeCampaign.delete();
