@@ -3,7 +3,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mmUrgencyScore, mmSortRows, mmFormatRow } from '../src/main-menu-games.js';
+import { mmUrgencyScore, mmSortRows, mmFormatRow, mmDedupeCampaignRows } from '../src/main-menu-games.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -251,5 +251,82 @@ describe('mmFormatRow', () => {
     });
     assert.ok(view.meta.includes('Campaign'));
     assert.equal(view.meta, 'Campaign');
+  });
+
+  test('local-campaign row surfaces the slot and mission when present', () => {
+    const view = mmFormatRow({
+      kind: 'local-campaign',
+      title: '📖 The First Night',
+      _slotIndex: 2,
+      _missionTitle: 'The First Night',
+    });
+    assert.ok(view.meta.includes('Campaign'));
+    assert.ok(view.meta.includes('Slot 2'));
+    assert.ok(view.meta.includes('The First Night'));
+  });
+
+  test('campaign-next row surfaces the slot when present', () => {
+    const view = mmFormatRow({
+      kind: 'campaign-next',
+      title: '📖 Caleb\'s Hollow Prologue',
+      _slotIndex: 3,
+      _nextMissionTitle: 'The River Crossing',
+    });
+    assert.ok(view.meta.includes('Slot 3'));
+    assert.ok(view.meta.includes('The River Crossing'));
+  });
+});
+
+// ── mmDedupeCampaignRows ──────────────────────────────────────────────────────
+
+describe('mmDedupeCampaignRows', () => {
+  test('keeps one row per campaign — the most-recently-updated slot', () => {
+    const rows = [
+      { kind: 'campaign-next',   _campaignId: 'a', _slotIndex: 1, updated_at: 100 },
+      { kind: 'local-campaign',  _campaignId: 'a', _slotIndex: 2, updated_at: 500 },
+      { kind: 'campaign-next',   _campaignId: 'a', _slotIndex: 3, updated_at: 300 },
+    ];
+    const out = mmDedupeCampaignRows(rows);
+    assert.equal(out.length, 1);
+    assert.equal(out[0]._slotIndex, 2);
+    assert.equal(out[0].kind, 'local-campaign');
+  });
+
+  test('dedupes per campaign independently', () => {
+    const rows = [
+      { kind: 'campaign-next',  _campaignId: 'a', _slotIndex: 1, updated_at: 100 },
+      { kind: 'campaign-next',  _campaignId: 'b', _slotIndex: 1, updated_at: 100 },
+      { kind: 'local-campaign', _campaignId: 'a', _slotIndex: 2, updated_at: 200 },
+    ];
+    const out = mmDedupeCampaignRows(rows);
+    assert.equal(out.length, 2);
+    const a = out.find(r => r._campaignId === 'a');
+    const b = out.find(r => r._campaignId === 'b');
+    assert.equal(a._slotIndex, 2);
+    assert.equal(b._slotIndex, 1);
+  });
+
+  test('passes non-campaign rows through untouched and preserves order', () => {
+    const rows = [
+      { kind: 'game', room_id: 'g1', updated_at: 10 },
+      { kind: 'campaign-next', _campaignId: 'a', _slotIndex: 1, updated_at: 100 },
+      { kind: 'local-sp', room_id: 's1', updated_at: 20 },
+      { kind: 'local-campaign', _campaignId: 'a', _slotIndex: 2, updated_at: 50 },
+    ];
+    const out = mmDedupeCampaignRows(rows);
+    // g1, (campaign a at first-seen position, now the slot-1 row since it's newer), s1
+    assert.deepEqual(out.map(r => r.room_id ?? `campaign-${r._campaignId}`),
+      ['g1', 'campaign-a', 's1']);
+    assert.equal(out[1]._slotIndex, 1); // slot 1 (updated 100) beats slot 2 (updated 50)
+  });
+
+  test('ties keep the first-seen row', () => {
+    const rows = [
+      { kind: 'campaign-next',  _campaignId: 'a', _slotIndex: 1, updated_at: 100 },
+      { kind: 'local-campaign', _campaignId: 'a', _slotIndex: 2, updated_at: 100 },
+    ];
+    const out = mmDedupeCampaignRows(rows);
+    assert.equal(out.length, 1);
+    assert.equal(out[0]._slotIndex, 1);
   });
 });

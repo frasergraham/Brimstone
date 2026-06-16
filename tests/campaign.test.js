@@ -643,14 +643,16 @@ describe('Campaign class', () => {
     assert.equal(c.campaignDef.missions.length, 7);
   });
 
-  test('save slot defaults to campaign-{id}', () => {
+  test('save slot defaults to slot 1', () => {
     const c = new Campaign(hollowDef);
-    assert.equal(c.saveSlot, 'campaign-calebs_hollow_prologue');
+    assert.equal(c.slotIndex, 1);
+    assert.equal(c.saveSlot, 'campaign-calebs_hollow_prologue-slot1');
   });
 
-  test('save slot can be overridden', () => {
-    const c = new Campaign(hollowDef, 'custom-slot');
-    assert.equal(c.saveSlot, 'custom-slot');
+  test('save slot reflects the chosen slot index', () => {
+    const c = new Campaign(hollowDef, 2);
+    assert.equal(c.slotIndex, 2);
+    assert.equal(c.saveSlot, 'campaign-calebs_hollow_prologue-slot2');
   });
 
   test('save and load round-trips', () => {
@@ -670,16 +672,16 @@ describe('Campaign class', () => {
   test('save includes campaignId', () => {
     const c = new Campaign(hollowDef);
     c.save();
-    const raw = JSON.parse(localStorage.getItem(`brimstone-campaign-calebs_hollow_prologue`));
+    const raw = JSON.parse(localStorage.getItem(`brimstone-campaign-calebs_hollow_prologue-slot1`));
     assert.equal(raw.campaignId, 'calebs_hollow_prologue');
   });
 
   test('delete clears save', () => {
-    const c = new Campaign(hollowDef, 'test-del');
+    const c = new Campaign(hollowDef, 2);
     c.save();
-    assert.ok(Campaign.exists('test-del'));
+    assert.ok(Campaign.exists(hollowDef, 2));
     c.delete();
-    assert.ok(!Campaign.exists('test-del'));
+    assert.ok(!Campaign.exists(hollowDef, 2));
   });
 
   test('getMissionList returns correct statuses', () => {

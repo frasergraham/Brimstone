@@ -23,6 +23,34 @@ import { evaluateUnlock } from './unlock.js';
 // `long_watch` into completedMissions for those saves.
 const SAVE_VERSION = 3;
 
+// ── Save slots ────────────────────────────────────────────────────────────────
+// Each campaign supports several independent playthroughs ("slots"). The slot
+// is the only piece of the localStorage key that varies per save — everything
+// else hangs off campaignDef.id. Slot-aware keys look like
+// `campaign-<id>-slot<N>`; the legacy unsuffixed `campaign-<id>` form written by
+// builds before multi-save is adopted into slot 1 on first read (and left in
+// place so older builds keep working).
+
+export const CAMPAIGN_SLOT_COUNT = 3;
+
+/** Coerce an arbitrary slot value into a valid 1..CAMPAIGN_SLOT_COUNT index. */
+export function clampSlotIndex(slotIndex) {
+  const n = Math.floor(Number(slotIndex));
+  if (!Number.isFinite(n) || n < 1) return 1;
+  if (n > CAMPAIGN_SLOT_COUNT) return CAMPAIGN_SLOT_COUNT;
+  return n;
+}
+
+/** localStorage save-slot suffix for a campaign + slot index. */
+export function campaignSlotSaveSlot(campaignId, slotIndex = 1) {
+  return `campaign-${campaignId}-slot${clampSlotIndex(slotIndex)}`;
+}
+
+/** Legacy (pre multi-save) unsuffixed save-slot suffix. */
+export function legacyCampaignSaveSlot(campaignId) {
+  return `campaign-${campaignId}`;
+}
+
 /**
  * Serialize a survivor entity into a plain object for campaign roster storage.
  * Captures all fields needed to reconstruct the entity between missions.
@@ -485,11 +513,12 @@ export class Campaign {
   /**
    * @param {object} campaignDef  Campaign definition from campaign-registry.
    *   Must include { id, title, missions[], mapBuilders, firstMission }.
-   * @param {string} saveSlot     localStorage key suffix (defaults to campaignDef.id).
+   * @param {number} slotIndex    Save slot (1..CAMPAIGN_SLOT_COUNT, default 1).
    */
-  constructor(campaignDef, saveSlot) {
+  constructor(campaignDef, slotIndex = 1) {
     this.campaignDef       = campaignDef;
-    this.saveSlot          = saveSlot ?? `campaign-${campaignDef.id}`;
+    this.slotIndex         = clampSlotIndex(slotIndex);
+    this.saveSlot          = campaignSlotSaveSlot(campaignDef.id, this.slotIndex);
     this.version           = SAVE_VERSION;
     this.currentMission    = campaignDef.firstMission;
     this.completedMissions = new Set();
@@ -519,7 +548,18 @@ export class Campaign {
 
   /** Load from localStorage. Returns true if a save was found and is compatible. */
   load() {
-    const raw = localStorage.getItem(`brimstone-${this.saveSlot}`);
+    let raw = localStorage.getItem(`brimstone-${this.saveSlot}`);
+    // Backwards-compat: a legacy unsuffixed `campaign-<id>` save (written before
+    // multi-save existed) is adopted as slot 1 on first read. One-shot and
+    // idempotent — once copied into the slot-1 key it is never consulted again.
+    // The legacy key is left in place so older builds keep working.
+    if (raw == null && this.slotIndex === 1) {
+      const legacyRaw = localStorage.getItem(`brimstone-${legacyCampaignSaveSlot(this.campaignDef.id)}`);
+      if (legacyRaw != null) {
+        localStorage.setItem(`brimstone-${this.saveSlot}`, legacyRaw);
+        raw = legacyRaw;
+      }
+    }
     if (!raw) return false;
     const data = JSON.parse(raw);
     // Pre-v2 saves (Phase-4 baked-stats era) cannot be migrated and are dropped;
@@ -549,11 +589,22 @@ export class Campaign {
   /** Delete campaign save. */
   delete() {
     localStorage.removeItem(`brimstone-${this.saveSlot}`);
+    // Slot 1 owns the legacy unsuffixed key (adopted on migration); clear it too
+    // so an explicit delete ("Start Over") isn't resurrected from a stale legacy
+    // save on the next load.
+    if (this.slotIndex === 1) {
+      localStorage.removeItem(`brimstone-${legacyCampaignSaveSlot(this.campaignDef.id)}`);
+    }
   }
 
-  /** Check if a save exists without fully loading. */
-  static exists(saveSlot) {
-    return localStorage.getItem(`brimstone-${saveSlot}`) !== null;
+  /** Check if a save exists in the given slot without fully loading. */
+  static exists(campaignDef, slotIndex = 1) {
+    const slot = campaignSlotSaveSlot(campaignDef.id, slotIndex);
+    if (localStorage.getItem(`brimstone-${slot}`) !== null) return true;
+    // Slot 1 also covers a not-yet-migrated legacy save.
+    if (clampSlotIndex(slotIndex) === 1 &&
+        localStorage.getItem(`brimstone-${legacyCampaignSaveSlot(campaignDef.id)}`) !== null) return true;
+    return false;
   }
 
   /** Get mission definition by ID (from this campaign's missions). */
@@ -610,11 +661,15 @@ export class Campaign {
   }
 
   /**
-   * Check if a campaign is completed by loading its save.
-   * Returns true only if a save exists and every mission is completed.
+   * Check if a campaign is completed in ANY save slot (used for chapter
+   * prerequisite unlocking). Returns true if a save exists in some slot with
+   * every mission completed.
    */
   static isCampaignCompleted(campaignDef) {
-    return Campaign.getCampaignProgress(campaignDef).status === 'completed';
+    for (let s = 1; s <= CAMPAIGN_SLOT_COUNT; s++) {
+      if (Campaign.getCampaignProgress(campaignDef, s).status === 'completed') return true;
+    }
+    return false;
   }
 
   /** Count of missions completed so far in this campaign. */
@@ -638,16 +693,63 @@ export class Campaign {
   }
 
   /**
-   * Inspect the saved progress for a campaign without keeping an instance around.
-   * Returns { status, completed, total } where status is 'completed' | 'in-progress' | 'new'.
-   * If no save exists, returns status 'new' with completed=0.
+   * Inspect the saved progress for one slot of a campaign without keeping an
+   * instance around. Returns { status, completed, total } where status is
+   * 'completed' | 'in-progress' | 'new'. If no save exists, returns status 'new'
+   * with completed=0.
    */
-  static getCampaignProgress(campaignDef) {
-    const c = new Campaign(campaignDef);
+  static getCampaignProgress(campaignDef, slotIndex = 1) {
+    const c = new Campaign(campaignDef, slotIndex);
     const loaded = c.load();
     const total = c.getMissionCount();
     if (!loaded) return { status: 'new', completed: 0, total };
     return { status: c.getStatus(), completed: c.getCompletedCount(), total };
+  }
+
+  /**
+   * Aggregate progress across all slots — the furthest-along slot wins. Used to
+   * summarize a campaign on the chapter-select card where individual slots
+   * aren't shown. 'completed' > 'in-progress' > 'new'; ties break on the higher
+   * completed count.
+   */
+  static getAggregateProgress(campaignDef) {
+    const rank = { new: 0, 'in-progress': 1, completed: 2 };
+    let best = { status: 'new', completed: 0, total: 0 };
+    for (let s = 1; s <= CAMPAIGN_SLOT_COUNT; s++) {
+      const p = Campaign.getCampaignProgress(campaignDef, s);
+      best.total = p.total;
+      if (rank[p.status] > rank[best.status] ||
+          (rank[p.status] === rank[best.status] && p.completed > best.completed)) {
+        best = { status: p.status, completed: p.completed, total: p.total };
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Rich per-slot summary for the save-slot picker. A slot is `used` when it has
+   * a progress save (a fresh "New Game" writes one immediately). When used,
+   * reports the mission the player would resume next plus the last-saved time.
+   */
+  static getSlotSummary(campaignDef, slotIndex = 1) {
+    const c = new Campaign(campaignDef, slotIndex);
+    const used = c.load();
+    const total = c.getMissionCount();
+    if (!used) {
+      return { slotIndex: c.slotIndex, used: false, status: 'new', completed: 0, total };
+    }
+    const currentId = c.getNextMission() ?? c.currentMission;
+    const def = c.getMissionDef(currentId);
+    return {
+      slotIndex:           c.slotIndex,
+      used:                true,
+      status:              c.getStatus(),
+      completed:           c.getCompletedCount(),
+      total,
+      currentMission:      currentId,
+      currentMissionTitle: def?.title ?? currentId,
+      updatedAt:           c.updatedAt,
+    };
   }
 
   /** Get list of missions with their status for the mission select screen. */

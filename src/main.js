@@ -52,7 +52,7 @@ import { nodeController } from './game.js';
 import { MissionConductor, areHintsSuppressed, markHintsSeen } from './mission-conductor.js';
 import { Entity, createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, EntityType, ENTITY_COLOR, applyLevel } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
-import { Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves, reconcileRosterAfterMission, applyCarriedHeroLoadout } from './campaign/campaign.js';
+import { Campaign, CAMPAIGN_SLOT_COUNT, buildVictoryDelegate, snapshotSurvivor, processWaves, reconcileRosterAfterMission, applyCarriedHeroLoadout } from './campaign/campaign.js';
 import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
 import { processStoryTriggers } from './campaign/missions.js';
 import { MissionLogicEngine } from './mission-logic/engine.js';
@@ -74,7 +74,7 @@ import {
   departureMessage as _departureMessage, arrivalMessage as _arrivalMessage,
 } from './campaign/campaign-ui.js';
 import { requestNotificationPermission, notifyRoundReady, notifyWaitingOnYou, notifyDeadlineApproaching, notifyGameOver } from './notifications.js';
-import { mmSortRows, mmFormatRow } from './main-menu-games.js';
+import { mmSortRows, mmFormatRow, mmDedupeCampaignRows } from './main-menu-games.js';
 
 // Stamp version into badge
 document.getElementById('version-badge').textContent = `v${BUILD_VERSION}`;
@@ -3292,6 +3292,7 @@ document.addEventListener('change', (e) => {
 const stepMode         = document.getElementById('setup-step-mode');
 const stepSinglePlayer = document.getElementById('setup-step-singleplayer');
 const stepCampaignSelect = document.getElementById('setup-step-campaign-select');
+const stepCampaignSlot = document.getElementById('setup-step-campaign-slot');
 const stepCampaign     = document.getElementById('setup-step-campaign');
 const stepDebrief      = document.getElementById('setup-step-debrief');
 const stepBattle       = document.getElementById('setup-step-battle');
@@ -3324,6 +3325,7 @@ function showStep(step) {
   stepMode          .style.display = step === 'mode'            ? '' : 'none';
   stepSinglePlayer  .style.display = step === 'singleplayer'    ? '' : 'none';
   stepCampaignSelect.style.display = step === 'campaign-select' ? '' : 'none';
+  if (stepCampaignSlot) stepCampaignSlot.style.display = step === 'campaign-slot' ? '' : 'none';
   stepCampaign      .style.display = step === 'campaign'        ? '' : 'none';
   stepDebrief       .style.display = step === 'debrief'         ? '' : 'none';
   if (stepBattle) stepBattle.style.display = step === 'battle' ? '' : 'none';
@@ -3346,7 +3348,7 @@ function showStep(step) {
   // Move the session bar into the active card so it sits at its bottom
   const _stepEl = {
     'mode': stepMode, 'singleplayer': stepSinglePlayer,
-    'campaign-select': stepCampaignSelect, 'campaign': stepCampaign, 'debrief': stepDebrief,
+    'campaign-select': stepCampaignSelect, 'campaign-slot': stepCampaignSlot, 'campaign': stepCampaign, 'debrief': stepDebrief,
     'online': stepOnline, 'async': stepAsync,
     'howtoplay': stepHowto, 'options': stepOptions,
     'changelog': stepChangelog, 'account': stepAccount, 'waiting': stepWaiting,
@@ -3650,10 +3652,11 @@ let _activeRosterIndices = []; // Indices into _activeCampaign.roster that are "
 
 function _saveCampaignMission() {
   if (!_activeCampaign || !_activeMissionDef || !state) return;
-  const key = campaignMissionSaveKey(_activeCampaign.campaignDef.id, _activeMissionDef.id);
+  const key = campaignMissionSaveKey(_activeCampaign.campaignDef.id, _activeMissionDef.id, _activeCampaign.slotIndex);
   const data = {
     campaignId:     _activeCampaign.campaignDef.id,
     saveSlot:       _activeCampaign.saveSlot,
+    slotIndex:      _activeCampaign.slotIndex,
     missionId:      _activeMissionDef.id,
     state:          serializeState(state),
     roundHistory:   _roundHistory,
@@ -3664,7 +3667,8 @@ function _saveCampaignMission() {
 
 
 function _resumeCampaignMission(missionId) {
-  const save = loadCampaignMissionSave(_activeCampaign.campaignDef.id, missionId);
+  const slot = _activeCampaign.slotIndex;
+  const save = loadCampaignMissionSave(_activeCampaign.campaignDef.id, missionId, slot);
   if (!save) return;
 
   const missionDef = _activeCampaign.getMissionDef(missionId);
@@ -3677,7 +3681,7 @@ function _resumeCampaignMission(missionId) {
   const savedNoWitch = !!save.state?.noWitchMission;
   const expectedNoWitch = !missionDef.hasWitch;
   if (savedNoWitch !== expectedNoWitch) {
-    deleteCampaignMissionSave(_activeCampaign.campaignDef.id, missionId);
+    deleteCampaignMissionSave(_activeCampaign.campaignDef.id, missionId, slot);
     return;   // caller's flow will fall through to a fresh _initCampaignMission
   }
 
@@ -3739,7 +3743,7 @@ function _showCampaignSelectScreen() {
   listEl.innerHTML = CAMPAIGNS.map(c => {
     const disabled = c.disabled === true;
     const progress = disabled ? { status: 'new', completed: 0, total: 0 }
-                              : Campaign.getCampaignProgress(c);
+                              : Campaign.getAggregateProgress(c);
     const locked = disabled || (c.prerequisiteCampaign
       ? !Campaign.isCampaignCompleted(getCampaignById(c.prerequisiteCampaign))
       : false);
@@ -3774,16 +3778,91 @@ function _showCampaignSelectScreen() {
   listEl.querySelectorAll('.campaign-select-item:not(.locked):not(.disabled)').forEach(el => {
     el.addEventListener('click', () => {
       const def = getCampaignById(el.dataset.campaign);
-      if (def) _showCampaignScreen(def);
+      if (def) _showCampaignSlotScreen(def);
     });
   });
 
   showStep('campaign-select');
 }
 
-async function _showCampaignScreen(campaignDef, autoMissionId) {
+// ── Save-slot picker ──────────────────────────────────────────────────────────
+// Opens after a chapter is chosen, before the mission list. Lets the player
+// keep several independent playthroughs of the same campaign (e.g. restart
+// Chapter 1 in slot 2 while slot 1 sits mid-campaign).
+let _slotPickerCampaignDef = null;
+
+function _showCampaignSlotScreen(campaignDef) {
+  _slotPickerCampaignDef = campaignDef;
+  const titleEl = document.getElementById('campaign-slot-title');
+  if (titleEl) titleEl.textContent = campaignDef.title;
+  _renderCampaignSlotList();
+  showStep('campaign-slot');
+}
+
+function _renderCampaignSlotList() {
+  const campaignDef = _slotPickerCampaignDef;
+  const listEl = document.getElementById('campaign-slot-list');
+  if (!campaignDef || !listEl) return;
+
+  let html = '';
+  for (let slot = 1; slot <= CAMPAIGN_SLOT_COUNT; slot++) {
+    const info = Campaign.getSlotSummary(campaignDef, slot);
+    if (info.used) {
+      const when = _timeAgo(Math.floor((info.updatedAt ?? Date.now()) / 1000));
+      const progress = info.total > 0 ? ` · ${info.completed}/${info.total} missions` : '';
+      html += `<div class="campaign-slot-item used" data-slot="${slot}">
+        <div class="campaign-slot-info">
+          <div class="campaign-slot-name">Slot ${slot} — ${info.currentMissionTitle}</div>
+          <div class="campaign-slot-meta">Updated ${when}${progress}</div>
+        </div>
+        <div class="campaign-slot-actions">
+          <button class="setup-btn primary campaign-slot-continue" data-slot="${slot}">Continue</button>
+          <button class="setup-btn campaign-slot-delete" data-slot="${slot}" title="Delete this slot">✕</button>
+        </div>
+      </div>`;
+    } else {
+      html += `<div class="campaign-slot-item empty" data-slot="${slot}">
+        <div class="campaign-slot-info">
+          <div class="campaign-slot-name">Slot ${slot}</div>
+          <div class="campaign-slot-meta">Empty</div>
+        </div>
+        <div class="campaign-slot-actions">
+          <button class="setup-btn primary campaign-slot-new" data-slot="${slot}">New Game</button>
+        </div>
+      </div>`;
+    }
+  }
+  listEl.innerHTML = html;
+
+  listEl.querySelectorAll('.campaign-slot-new').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const slot = parseInt(btn.dataset.slot, 10);
+      // Claim the slot with a fresh progress blob so it reads as "in use".
+      new Campaign(campaignDef, slot).save();
+      _showCampaignScreen(campaignDef, undefined, slot);
+    });
+  });
+  listEl.querySelectorAll('.campaign-slot-continue').forEach(btn => {
+    btn.addEventListener('click', () => {
+      _showCampaignScreen(campaignDef, undefined, parseInt(btn.dataset.slot, 10));
+    });
+  });
+  listEl.querySelectorAll('.campaign-slot-delete').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const slot = parseInt(btn.dataset.slot, 10);
+      if (!confirm(`Delete Slot ${slot}? All progress, roster survivors, and resources in this slot will be lost. This cannot be undone.`)) return;
+      new Campaign(campaignDef, slot).delete();
+      for (const m of campaignDef.missions || []) {
+        deleteCampaignMissionSave(campaignDef.id, m.id, slot);
+      }
+      _renderCampaignSlotList();
+    });
+  });
+}
+
+async function _showCampaignScreen(campaignDef, autoMissionId, slotIndex = 1) {
   if (campaignDef) {
-    _activeCampaign = new Campaign(campaignDef);
+    _activeCampaign = new Campaign(campaignDef, slotIndex);
     _activeCampaign.load();
   }
   await _loadCampaignPortraits();
@@ -3928,7 +4007,7 @@ function _renderCampaignScreen() {
     const unlocked = _campaignUnlocked || m.available;
     const cls = m.completed ? 'campaign-mission completed' : unlocked ? 'campaign-mission available' : 'campaign-mission locked';
     const icon = m.completed ? '✓' : unlocked ? '→' : '🔒';
-    const hasSave = loadCampaignMissionSave(campaignId, m.id) !== null;
+    const hasSave = loadCampaignMissionSave(campaignId, m.id, _activeCampaign.slotIndex) !== null;
     const statusLabel = m.completed
       ? '<span class="campaign-mission-status">Complete</span>'
       : hasSave
@@ -3966,7 +4045,7 @@ function _showMissionBriefing(missionId) {
   document.getElementById('campaign-mission-text').textContent = missionDef.briefing;
 
   // Show Resume/Restart buttons if a mid-mission save exists
-  const hasMissionSave = loadCampaignMissionSave(_activeCampaign.campaignDef.id, missionId) !== null;
+  const hasMissionSave = loadCampaignMissionSave(_activeCampaign.campaignDef.id, missionId, _activeCampaign.slotIndex) !== null;
   const startBtn = document.getElementById('btn-start-mission');
   const resumeBtn = document.getElementById('btn-resume-mission');
   const restartBtn = document.getElementById('btn-restart-mission');
@@ -4506,7 +4585,7 @@ function _handleCampaignMissionEnd() {
   if (!_activeCampaign || !_activeMissionDef || !state) return;
 
   // Delete mid-mission save on completion (win or lose)
-  deleteCampaignMissionSave(_activeCampaign.campaignDef.id, _activeMissionDef.id);
+  deleteCampaignMissionSave(_activeCampaign.campaignDef.id, _activeMissionDef.id, _activeCampaign.slotIndex);
 
   // Record campaign-specific stats before cleaning up
   _recordCampaignGameStats();
@@ -4588,6 +4667,7 @@ function _handleCampaignMissionEnd() {
 
 // Campaign event listeners
 document.getElementById('btn-campaign-select-back').addEventListener('click', () => showStep('newgame'));
+document.getElementById('btn-campaign-slot-back')  ?.addEventListener('click', () => _showCampaignSelectScreen());
 document.getElementById('btn-campaign-back')   .addEventListener('click', () => _showCampaignSelectScreen());
 document.getElementById('btn-briefing-back')   .addEventListener('click', () => _renderCampaignScreen());
 document.getElementById('btn-delete-campaign')  .addEventListener('click', () => {
@@ -4607,7 +4687,7 @@ document.getElementById('btn-resume-mission')  .addEventListener('click', () => 
 });
 document.getElementById('btn-restart-mission') .addEventListener('click', () => {
   if (!_campaignSelectedMission) return;
-  deleteCampaignMissionSave(_activeCampaign.campaignDef.id, _campaignSelectedMission);
+  deleteCampaignMissionSave(_activeCampaign.campaignDef.id, _campaignSelectedMission, _activeCampaign.slotIndex);
   const missionDef = _activeCampaign.getMissionDef(_campaignSelectedMission);
   if (missionDef) _initCampaignMission(missionDef);
 });
@@ -5245,10 +5325,10 @@ function _mmDefaultRowClick(row) {
       if (row._spSave) _resumeSpSave(row._spSave);
       return;
     case 'local-campaign':
-      if (row._campaignDef) _showCampaignScreen(row._campaignDef);
+      if (row._campaignDef) _showCampaignScreen(row._campaignDef, undefined, row._slotIndex ?? 1);
       return;
     case 'campaign-next':
-      if (row._campaignDef) _showCampaignScreen(row._campaignDef, row._nextMissionId);
+      if (row._campaignDef) _showCampaignScreen(row._campaignDef, row._nextMissionId, row._slotIndex ?? 1);
       return;
     case 'completed-sp':
       if (row._completedData) _startSpReplay(row._completedData);
@@ -5288,7 +5368,7 @@ function _mmGameListActions(row) {
         onClick: () => {
           if (!confirm('Abandon mission progress? This cannot be undone.')) return;
           if (row._campaignDef && row._missionDef) {
-            deleteCampaignMissionSave(row._campaignDef.id, row._missionDef.id);
+            deleteCampaignMissionSave(row._campaignDef.id, row._missionDef.id, row._slotIndex ?? 1);
           }
           _fetchMainMenuGames();
         },
@@ -5348,10 +5428,15 @@ function _localSpRows() {
 }
 
 /**
- * Load campaign rows for the game list. Includes:
+ * Load campaign rows for the game list. Per campaign, each save slot can
+ * contribute:
  * 1. Mid-mission saves (kind: 'local-campaign') — a mission is in progress
- * 2. Next-mission entries (kind: 'campaign-next') — campaign has progress and
- *    a next mission is available but not yet started
+ * 2. Next-mission entries (kind: 'campaign-next') — slot has progress and a
+ *    next mission is available but not yet started
+ *
+ * The list shows ONE row per campaign — `mmDedupeCampaignRows` keeps the slot
+ * touched most recently — so a player with several playthroughs sees the one
+ * they were last on, not a wall of near-identical rows.
  */
 function _localCampaignRows() {
   const rows = [];
@@ -5359,56 +5444,63 @@ function _localCampaignRows() {
     for (const camp of CAMPAIGNS) {
       if (camp.disabled) continue;
       const missions = camp.missions || [];
-      // Track which missions have mid-mission saves
-      const hasMidMissionSave = new Set();
 
-      // 1. Scan missions for any that have a mid-mission save file
-      for (const m of missions) {
-        const save = loadCampaignMissionSave(camp.id, m.id);
-        if (!save) continue;
-        hasMidMissionSave.add(m.id);
+      for (let slot = 1; slot <= CAMPAIGN_SLOT_COUNT; slot++) {
+        const hasMidMissionSave = new Set();
+
+        // 1. Scan missions for any that have a mid-mission save file in this slot
+        for (const m of missions) {
+          const save = loadCampaignMissionSave(camp.id, m.id, slot);
+          if (!save) continue;
+          hasMidMissionSave.add(m.id);
+          rows.push({
+            kind: 'local-campaign',
+            room_id: `${camp.id}/slot${slot}/${m.id}`,
+            title: `📖 ${m.title || m.id}`,
+            round: null,
+            phase: null,
+            action_needed: false,
+            turn_deadline: null,
+            updated_at: save.updatedAt ? Math.floor(save.updatedAt / 1000) : 0,
+            is_local: true,
+            _campaignId: camp.id,
+            _slotIndex: slot,
+            _missionTitle: m.title || m.id,
+            _campaignDef: camp,
+            _missionDef: m,
+          });
+        }
+
+        // 2. If this slot has progress and a next mission is available (no mid-
+        //    mission save for it), show a "campaign-next" entry so the player
+        //    can jump straight to the party select / briefing screen.
+        const c = new Campaign(camp, slot);
+        if (!c.load()) continue;        // no save → no progress in this slot
+        if (c.isComplete()) continue;    // all missions done
+        const nextId = c.getNextMission();
+        if (!nextId) continue;
+        if (hasMidMissionSave.has(nextId)) continue; // already shown above
+        const mDef = c.getMissionDef(nextId);
+        if (!mDef) continue;
         rows.push({
-          kind: 'local-campaign',
-          room_id: `${camp.id}/${m.id}`,
-          title: `📖 ${m.title || m.id}`,
-          round: null,
-          phase: null,
+          kind: 'campaign-next',
+          room_id: `${camp.id}/slot${slot}/${nextId}`,
+          title: `📖 ${camp.title}`,
           action_needed: false,
           turn_deadline: null,
-          updated_at: save.updatedAt ? Math.floor(save.updatedAt / 1000) : 0,
+          updated_at: c.updatedAt ? Math.floor(c.updatedAt / 1000) : 0,
           is_local: true,
+          _campaignId: camp.id,
+          _slotIndex: slot,
           _campaignDef: camp,
-          _missionDef: m,
+          _missionDef: mDef,
+          _nextMissionId: nextId,
+          _nextMissionTitle: mDef.title || nextId,
         });
       }
-
-      // 2. If campaign has progress and a next mission is available (no mid-
-      //    mission save for it), show a "campaign-next" entry so the player
-      //    can jump straight to the party select / briefing screen.
-      const c = new Campaign(camp);
-      if (!c.load()) continue;        // no save → no progress
-      if (c.isComplete()) continue;    // all missions done
-      const nextId = c.getNextMission();
-      if (!nextId) continue;
-      if (hasMidMissionSave.has(nextId)) continue; // already shown above
-      const mDef = c.getMissionDef(nextId);
-      if (!mDef) continue;
-      rows.push({
-        kind: 'campaign-next',
-        room_id: `${camp.id}/${nextId}`,
-        title: `📖 ${camp.title}`,
-        action_needed: false,
-        turn_deadline: null,
-        updated_at: c.updatedAt ? Math.floor(c.updatedAt / 1000) : 0,
-        is_local: true,
-        _campaignDef: camp,
-        _missionDef: mDef,
-        _nextMissionId: nextId,
-        _nextMissionTitle: mDef.title || nextId,
-      });
     }
   } catch {}
-  return rows;
+  return mmDedupeCampaignRows(rows);
 }
 
 /**

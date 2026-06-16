@@ -6393,6 +6393,69 @@ body.spectator-mode #game-screen   { display: flex !important; }
   font-style: italic;
 }
 
+/* ── Save-slot picker ─────────────────────────────────────────────────────── */
+.campaign-slot-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin: 0.75rem auto;
+  max-width: 440px;
+}
+
+.campaign-slot-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.8rem 1rem;
+  border: 1px solid var(--clr-dim);
+  border-left: 4px solid var(--clr-dim);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+.campaign-slot-item.used {
+  border-left-color: #e8a735;
+  background: rgba(232, 167, 53, 0.05);
+}
+
+.campaign-slot-info {
+  min-width: 0;
+  text-align: left;
+}
+.campaign-slot-name {
+  font-size: 1rem;
+  font-weight: bold;
+  color: var(--clr-gold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.campaign-slot-meta {
+  font-size: 0.8rem;
+  color: var(--clr-dim);
+  margin-top: 0.2rem;
+}
+
+.campaign-slot-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+.campaign-slot-actions .setup-btn {
+  margin: 0;
+}
+.campaign-slot-delete {
+  color: var(--clr-dim);
+  padding-left: 0.6rem;
+  padding-right: 0.6rem;
+}
+.campaign-slot-delete:hover {
+  color: #f44336;
+  border-color: #f44336;
+}
+
 .campaign-mission-list {
   display: flex;
   flex-direction: column;

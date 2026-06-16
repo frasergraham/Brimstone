@@ -5,20 +5,32 @@ import { Renderer } from '../renderer.js';
 import { ENTITY_COLOR, EntityType } from '../entities.js';
 
 // ── Campaign mid-mission save/resume ────────────────────────────────────────
+// Mid-mission saves are slot-aware so a mission-in-progress in one save slot
+// never clobbers another. The legacy unsuffixed key (pre multi-save) is treated
+// as slot 1: read through to it when slot 1 has no save of its own, and cleared
+// alongside slot 1 on delete so a finished/abandoned mission can't resurrect.
 
-export function campaignMissionSaveKey(campaignId, missionId) {
+export function campaignMissionSaveKey(campaignId, missionId, slotIndex = 1) {
+  return `brimstone_campaign_mission_${campaignId}_slot${slotIndex}_${missionId}`;
+}
+
+function legacyCampaignMissionSaveKey(campaignId, missionId) {
   return `brimstone_campaign_mission_${campaignId}_${missionId}`;
 }
 
-export function loadCampaignMissionSave(campaignId, missionId) {
-  const key = campaignMissionSaveKey(campaignId, missionId);
-  const raw = localStorage.getItem(key);
+export function loadCampaignMissionSave(campaignId, missionId, slotIndex = 1) {
+  let raw = localStorage.getItem(campaignMissionSaveKey(campaignId, missionId, slotIndex));
+  if (raw == null && slotIndex === 1) {
+    raw = localStorage.getItem(legacyCampaignMissionSaveKey(campaignId, missionId));
+  }
   return raw ? JSON.parse(raw) : null;
 }
 
-export function deleteCampaignMissionSave(campaignId, missionId) {
-  const key = campaignMissionSaveKey(campaignId, missionId);
-  localStorage.removeItem(key);
+export function deleteCampaignMissionSave(campaignId, missionId, slotIndex = 1) {
+  localStorage.removeItem(campaignMissionSaveKey(campaignId, missionId, slotIndex));
+  if (slotIndex === 1) {
+    localStorage.removeItem(legacyCampaignMissionSaveKey(campaignId, missionId));
+  }
 }
 
 // ── Resource display ────────────────────────────────────────────────────────
