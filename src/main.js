@@ -63,6 +63,7 @@ import { playConversation } from './conversation-player.js';
 import { loadVoiceManifest } from './voiceover.js';
 import { buildMissionMap } from './campaign/mission-map.js';
 import { run3DCombatCardHold } from './combat-cinematic.js';
+import { STORY_BEAT_MIN_DWELL_MS, storyBeatHoldMs } from './story-beat-cinematic.js';
 import { runDiscoveryReadout, discoveryText } from './discovery-cinematic.js';
 import { playFastCombatDisplay } from './combat-fast.js';
 import {
@@ -679,8 +680,9 @@ function _startLocalPlanningPhase() {
   state.startPlanning();
 
   if (_autoplay) {
-    // AI vs AI: generate both plans immediately then resolve
-    setTimeout(() => _runLocalAutoResolution(), 0);
+    // AI vs AI: surface any authored pre-planning story beats first (autoplay
+    // must not skip narrative content), then generate both plans and resolve.
+    setTimeout(() => _runLocalAutoResolutionWithStoryBeats(), 0);
     return;
   }
 
@@ -787,13 +789,25 @@ async function _presentStepLogicEvents(events, afterStepIndex) {
 }
 
 /** Insert a story-beat card into the live replay timeline and gate on NEXT (like
- *  a step boundary) so the player reads it; auto-advances on autoplay. */
+ *  a step boundary) so the player reads it. When resolution is auto-advancing
+ *  (AI-vs-AI autoplay, or the replay "AutoPlay" toggle leaves playback un-paused)
+ *  there's no human to press NEXT, so we hold the beat for a readable dwell
+ *  instead of letting its card flash past — auto-advancing once the dwell
+ *  elapses, or sooner if the operator presses NEXT (playbackDelay collapses on
+ *  stepRequested). A paused/manual replay still gates on NEXT. */
 async function _presentStoryBeatCard(beat, afterStepIndex) {
   if (!ui?.insertReplayTimelineCol) return;
   const col = buildStoryBeatDigest(beat, `${afterStepIndex}:${_beatCardSeq++}`);
   ui.insertReplayTimelineCol(col, afterStepIndex);
   ui.setReplayTimelineStep?.(col.stepIndex);
-  if (_autoplay) { await playbackDelay(1100); return; }
+  const holdMs = storyBeatHoldMs({ autoplay: _autoplay, paused: playback.paused });
+  if (holdMs > 0) {
+    await playbackDelay(holdMs);
+    // A NEXT press during the hold (replay AutoPlay) collapsed the dwell to skip
+    // this beat — consume it so it doesn't leak into the next step's gate.
+    playback.stepRequested = false;
+    return;
+  }
   if (playback.paused) ui.setReplayNextReady?.(true);
   while (playback.paused && !playback.stepRequested
          && !playback.restart && !playback.aborted && !playback.goBack && !playback.jumpToEnd) {
@@ -977,6 +991,52 @@ async function _onLocalHumanPlanSubmit(faction, plan) {
   }
 
   if (bothReady) await _runLocalResolution();
+}
+
+// Autoplay twin of the human pre-planning story flow in _startLocalPlanningPhase:
+// drain the same pre-planning story beats (mission story triggers + the round-
+// start mission-logic pump, including any intro beats queued at missionStart)
+// and present them as auto-dismissing cards so an AI-vs-AI run still pauses long
+// enough to read them — then generate plans and resolve. For a plain (non-
+// campaign) AI-vs-AI game there are no story triggers and no logic engine, so
+// storyEvents stays empty and this is identical to _runLocalAutoResolution().
+async function _runLocalAutoResolutionWithStoryBeats() {
+  if (!state || state.gameOver) return;
+
+  let storyEvents = [];
+  if (_activeMissionDef?.storyTriggers && _activeCampaign) {
+    storyEvents = processStoryTriggers(state, _activeMissionDef.storyTriggers, _activeCampaign.storyFlags);
+  }
+  if (state.logicEngine) {
+    state.pumpMissionLogic('roundStart');
+    storyEvents = storyEvents.concat(_drainLogicStoryEvents());
+  }
+
+  // The round-start pump can DECIDE the mission (mirrors the human path) — show
+  // the beats then surface the debrief instead of resolving an over mission.
+  if (state.gameOver) {
+    if (storyEvents.length > 0) await _showAutoplayStorySequence(storyEvents);
+    _finishDecidedMissionBeforePlanning();
+    return;
+  }
+
+  if (storyEvents.length > 0) await _showAutoplayStorySequence(storyEvents);
+  if (!state || state.gameOver) return;   // a beat could end the mission
+  _runLocalAutoResolution();
+}
+
+// Present pre-planning story beats during autoplay. Story-beat cards show as the
+// story modal, held for STORY_BEAT_MIN_DWELL_MS (auto-dismiss; a watching
+// operator can click Continue sooner). Conversation playback during autoplay is
+// owned by a separate change (its audio path) — skip it here so we don't add a
+// second, conflicting driver; this matches autoplay's prior behaviour (the human
+// pre-planning conversation path was never reached in autoplay).
+async function _showAutoplayStorySequence(events) {
+  if (!ui) return;
+  for (const ev of events) {
+    if (ev.conversation) continue;
+    await ui.showStoryModal(ev.title, ev.text, { autoDismissMs: STORY_BEAT_MIN_DWELL_MS });
+  }
 }
 
 async function _runLocalAutoResolution() {

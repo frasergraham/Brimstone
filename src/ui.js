@@ -28,6 +28,7 @@ import {
 } from './ui-popup.js';
 import { isVoiceMuted, toggleVoiceMuted, voiceMuteIconHtml } from './voiceover.js';
 import { xpProgress } from './campaign/campaign-ui.js';
+import { runStoryBeatGate } from './story-beat-cinematic.js';
 
 /** Enum of UI operating modes. */
 export const UIMode = Object.freeze({ LOCAL: 'local', ONLINE: 'online', SPECTATOR: 'spectator' });
@@ -3690,10 +3691,17 @@ export class UIController {
   }
 
   /**
-   * Show a narrative story modal (campaign triggers).
+   * Show a narrative story modal / beat card (campaign triggers).
    * Returns a Promise that resolves when the player dismisses it.
+   *
+   * @param {object} [opts]
+   * @param {number} [opts.autoDismissMs] Autoplay: auto-advance after this dwell
+   *        (a Continue countdown labels the button and auto-clicks at 0; the
+   *        operator can click sooner). Omit for the human path — gate on click
+   *        forever.
+   * @param {object} [opts.gateOpts] Forwarded to runStoryBeatGate (test timers).
    */
-  showStoryModal(title, text) {
+  showStoryModal(title, text, opts = {}) {
     return new Promise(resolve => {
       const el = this._el('story-modal');
       if (!el) { resolve(); return; }
@@ -3701,6 +3709,11 @@ export class UIController {
       el.querySelector('.story-modal-text').textContent = text;
       el.classList.add('visible');
       const btn = this._el('story-modal-continue');
+      if (opts.autoDismissMs != null) {
+        runStoryBeatGate(btn, { minDwellMs: opts.autoDismissMs, ...(opts.gateOpts ?? {}) })
+          .then(() => { el.classList.remove('visible'); resolve(); });
+        return;
+      }
       const handler = () => {
         btn.removeEventListener('click', handler);
         el.classList.remove('visible');
