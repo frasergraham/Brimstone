@@ -5,6 +5,7 @@ import { countHeldNodes } from '../game.js';
 import { getFaction } from '../factions.js';
 import { hexDistance } from '../hex.js';
 import { EntityType, applyLevel } from '../entities.js';
+import { ITEMS } from '../items.js';
 import { isRiver, hasBuilding } from '../tiles.js';
 import { evaluateUnlock } from './unlock.js';
 
@@ -946,6 +947,45 @@ export class Campaign {
     unit.hp = Math.min(unit.maxHp, unit.hp + roll);
     this.save();
     return unit.hp;
+  }
+
+  /**
+   * Set a roster unit's equipped weapon from its own backpack — the
+   * between-mission counterpart to the in-mission equip action.
+   *
+   * The equip *rule* is unchanged from in-game: "equipped" means
+   * `unit.weapon = <id>`, and the stat deltas compose at call time from
+   * ITEMS[weapon].statMods (Entity.getAttack/getDefense/getRange) — exactly
+   * what Entity.equipWeapon does. We only differ in the consumption model:
+   * in a live mission, equipping is a combat action (executeUseItem) that
+   * consumes the swap, so the previously held weapon is dropped. Loadout
+   * management between missions is non-destructive — we swap, returning the
+   * currently-equipped weapon to the backpack so the player never loses gear
+   * by changing their mind. This mirrors healUnitWithHerb: an in-mission
+   * action re-expressed against the campaign's plain roster snapshots.
+   *
+   * @param {number|'leader'} rosterIndex  roster index, or 'leader' for the hero.
+   * @param {string} weaponId  weapon id to equip; must be a weapon already in
+   *   the unit's backpack (`items`). Equipping the already-equipped weapon is a
+   *   no-op.
+   * @returns {string|null}  the newly equipped weapon id, or `null` on no-op
+   *   (unknown unit, not a weapon, not carried, or already equipped).
+   */
+  equipWeaponForUnit(rosterIndex, weaponId) {
+    const unit = rosterIndex === 'leader' ? this.heroStats : this.roster[rosterIndex];
+    if (!unit) return null;
+    if (ITEMS[weaponId]?.kind !== 'weapon') return null;
+    if (unit.weapon === weaponId) return null; // already equipped — nothing to do
+    const items = { ...(unit.items || {}) };
+    if ((items[weaponId] || 0) < 1) return null; // not in this unit's backpack
+    // Swap: draw the chosen weapon out of the backpack, stow the old one.
+    items[weaponId] -= 1;
+    if (items[weaponId] <= 0) delete items[weaponId];
+    if (unit.weapon) items[unit.weapon] = (items[unit.weapon] || 0) + 1;
+    unit.items = items;
+    unit.weapon = weaponId;
+    this.save();
+    return weaponId;
   }
 
   // ── Server sync (for verified users) ──────────────────────────────────────

@@ -7064,6 +7064,55 @@ body.spectator-mode #game-screen   { display: flex !important; }
 }
 .cprog-item-n { font-size: 0.6rem; color: var(--clr-dim, #999); }
 
+/* Per-unit weapon list — named rows with stats and an Equip control. */
+.cprog-weapons {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin-top: 0.3rem;
+}
+.cprog-weapon {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.72rem;
+  padding: 0.2rem 0.35rem;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 4px;
+}
+.cprog-weapon.equipped {
+  background: rgba(212,167,44,0.12);
+  border-color: rgba(212,167,44,0.45);
+}
+.cprog-w-glyph { font-size: 0.9rem; flex-shrink: 0; }
+.cprog-w-name { color: var(--text, #d4c9b0); font-weight: 600; }
+.cprog-w-n { font-size: 0.6rem; color: var(--clr-dim, #999); font-weight: 400; }
+.cprog-w-stats {
+  color: var(--clr-dim, #9a8f78);
+  font-size: 0.66rem;
+  white-space: nowrap;
+}
+.cprog-w-eq {
+  margin-left: auto;
+  color: var(--clr-gold, #d4a72c);
+  font-size: 0.66rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.cprog-equip-btn {
+  margin-left: auto;
+  flex-shrink: 0;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.18);
+  color: var(--text, #d4c9b0);
+  border-radius: 4px;
+  padding: 0.12rem 0.45rem;
+  font-size: 0.66rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
 .cprog-heal-btn {
   margin-top: 0.4rem;
   width: 100%;
@@ -7149,6 +7198,7 @@ body.spectator-mode #game-screen   { display: flex !important; }
   }
   .cprog-heal-btn:hover { background: rgba(76,175,80,0.22); }
   .cprog-ctrl:hover { background: rgba(255,255,255,0.14); border-color: rgba(255,255,255,0.3); }
+  .cprog-equip-btn:hover { background: rgba(212,167,44,0.18); border-color: rgba(212,167,44,0.5); }
 }
 
 /* Mobile: one pane at a time, toggled. */

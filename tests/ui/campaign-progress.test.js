@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
   xpProgress, progressUnitCardHTML, partyPaneHTML, missionListPaneHTML, missionRows,
+  weaponName, weaponStatString,
 } from '../../src/campaign/campaign-ui.js';
 import { xpForLevel } from '../../src/balance.js';
 import { Campaign } from '../../src/campaign/campaign.js';
@@ -91,11 +92,70 @@ describe('progressUnitCardHTML', () => {
     assert.match(progressUnitCardHTML(u, { idx: 1, control: { cls: 'cprog-promote', label: '+', title: 'go' } }), /cprog-promote/);
   });
 
-  test('renders an inventory row for carried items', () => {
-    const u = { name: 'X', color: '#888', hp: 4, maxHp: 10, attack: 1, defense: 1, level: 1, xp: 0, weapon: 'sword', items: { shield: 2 } };
+  test('renders non-weapon carried items as inventory badges', () => {
+    // horse is not a weapon → stays in the badge row; weapons move to the list.
+    const u = { name: 'X', color: '#888', hp: 4, maxHp: 10, attack: 1, defense: 1, level: 1, xp: 0, weapon: 'sword', items: { horse: 2 } };
     const html = progressUnitCardHTML(u, { idx: 0 });
     assert.match(html, /cprog-inv/);
     assert.match(html, /×2/);
+  });
+});
+
+// ── weapon name / stat string helpers ────────────────────────────────────────
+
+describe('weaponName / weaponStatString', () => {
+  test('weaponName strips the glyph token and the stat parenthetical', () => {
+    assert.equal(weaponName('greatsword'), 'Great Sword');
+    assert.equal(weaponName('sword'), 'Sword');
+    assert.equal(weaponName('staff'), 'Staff');
+  });
+
+  test('weaponStatString reads ATK/DEF/range straight off the definition', () => {
+    assert.equal(weaponStatString('sword'), 'ATK +2');
+    assert.equal(weaponStatString('axe'), 'ATK +1 · DEF +1');
+    assert.equal(weaponStatString('bow'), 'range 3');
+    assert.equal(weaponStatString('shield'), 'DEF +2');
+  });
+});
+
+// ── unit card weapons list ───────────────────────────────────────────────────
+
+describe('progressUnitCardHTML weapons list', () => {
+  const unit = (over = {}) => ({
+    name: 'X', color: '#888', hp: 5, maxHp: 10, attack: 2, defense: 1,
+    level: 1, xp: 0, items: {}, ...over,
+  });
+
+  test('renders one named row per weapon with its stat string + equipped ✓', () => {
+    const html = progressUnitCardHTML(unit({ weapon: 'sword', items: { bow: 1 } }), { idx: 0 });
+    assert.equal(occurrences(html, 'cprog-w-glyph'), 2);   // one glyph per weapon row
+    assert.match(html, /Sword/);
+    assert.match(html, /ATK \+2/);
+    assert.match(html, /Bow/);
+    assert.match(html, /range 3/);
+    assert.match(html, /cprog-weapon equipped/);           // equipped row styled
+    assert.match(html, /✓ Equipped/);                      // equipped indicator
+  });
+
+  test('non-equipped weapon gets an Equip control carrying idx + weapon id', () => {
+    const html = progressUnitCardHTML(unit({ weapon: 'sword', items: { bow: 1 } }), { idx: 3 });
+    assert.match(html, /cprog-equip-btn[^>]*data-idx="3"[^>]*data-weapon="bow"/);
+    // the equipped weapon itself never gets an Equip control
+    assert.equal(occurrences(html, 'cprog-equip-btn'), 1);
+  });
+
+  test('leader sentinel idx flows onto the Equip control', () => {
+    const html = progressUnitCardHTML(unit({ weapon: 'sword', items: { bow: 1 } }), { idx: 'leader' });
+    assert.match(html, /cprog-equip-btn[^>]*data-idx="leader"/);
+  });
+
+  test('single weapon → equipped row only, no Equip control; no weapons → no list', () => {
+    const single = progressUnitCardHTML(unit({ weapon: 'sword', items: {} }), { idx: 0 });
+    assert.match(single, /✓ Equipped/);
+    assert.doesNotMatch(single, /cprog-equip-btn/);
+
+    const none = progressUnitCardHTML(unit({ items: {} }), { idx: 0 });
+    assert.doesNotMatch(none, /cprog-weapons/);
   });
 });
 
@@ -233,6 +293,43 @@ describe('missionListPaneHTML', () => {
   });
 });
 
+// ── Campaign.equipWeaponForUnit (between-mission loadout) ────────────────────
+
+describe('Campaign.equipWeaponForUnit', () => {
+  function equipCampaign() {
+    const c = new Campaign(rowsDef, 1);
+    c.heroStats = { hp: 50, maxHp: 98, attack: 3, defense: 2, level: 1, xp: 0, weapon: 'sword', items: { bow: 1 } };
+    c.roster = [{ name: 'S', title: 'Farmer', color: '#8a8', hp: 6, maxHp: 10, attack: 2, defense: 1, level: 1, xp: 0, weapon: 'dagger', items: { axe: 1 } }];
+    return c;
+  }
+
+  test('leader: swaps equipped weapon and stows the old one in the backpack', () => {
+    const c = equipCampaign();
+    assert.equal(c.equipWeaponForUnit('leader', 'bow'), 'bow');
+    assert.equal(c.heroStats.weapon, 'bow');         // new weapon equipped
+    assert.equal(c.heroStats.items.sword, 1);        // old weapon stowed (not lost)
+    assert.ok(!c.heroStats.items.bow);               // new weapon drawn out of backpack
+  });
+
+  test('roster unit: equips by index and persists through save()', () => {
+    const c = equipCampaign();
+    assert.equal(c.equipWeaponForUnit(0, 'axe'), 'axe');
+    assert.equal(c.roster[0].weapon, 'axe');
+    assert.equal(c.roster[0].items.dagger, 1);
+    const saved = JSON.parse(globalThis.localStorage.getItem(`brimstone-${c.saveSlot}`));
+    assert.equal(saved.roster[0].weapon, 'axe');     // change reached localStorage
+  });
+
+  test('no-op (returns null, no mutation) for bad targets', () => {
+    const c = equipCampaign();
+    assert.equal(c.equipWeaponForUnit('leader', 'sword'), null);  // already equipped
+    assert.equal(c.equipWeaponForUnit('leader', 'horse'), null);  // not a weapon
+    assert.equal(c.equipWeaponForUnit('leader', 'musket'), null); // not carried
+    assert.equal(c.equipWeaponForUnit(99, 'axe'), null);          // unknown unit
+    assert.equal(c.heroStats.weapon, 'sword');                    // unchanged throughout
+  });
+});
+
 // ── main.js wiring (source-level) ────────────────────────────────────────────
 
 describe('main.js Campaign Progress wiring', () => {
@@ -245,6 +342,11 @@ describe('main.js Campaign Progress wiring', () => {
 
   test('heal button handler invokes Campaign.healUnitWithHerb', () => {
     assert.match(src, /healUnitWithHerb\(/);
+  });
+
+  test('equip button handler invokes Campaign.equipWeaponForUnit', () => {
+    assert.match(src, /cprog-equip-btn/);
+    assert.match(src, /equipWeaponForUnit\(/);
   });
 
   test('promote handler respects the active-squad cap', () => {

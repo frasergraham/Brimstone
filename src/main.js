@@ -4002,6 +4002,17 @@ function _wireCampaignProgressHandlers() {
       if (newHp != null) _renderCampaignProgressScreen();
     });
   });
+  // Equip a carried weapon (data-idx is a roster index or the 'leader'
+  // sentinel; data-weapon is the weapon id to equip). Persists via the
+  // Campaign helper's save(), then re-renders so the ✓ moves.
+  partyEl?.querySelectorAll('.cprog-equip-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const raw = btn.dataset.idx;
+      const target = raw === 'leader' ? 'leader' : parseInt(raw, 10);
+      const equipped = _activeCampaign.equipWeaponForUnit(target, btn.dataset.weapon);
+      if (equipped != null) _renderCampaignProgressScreen();
+    });
+  });
   // Admin: add a random survivor (mirrors the old screen's testing affordance).
   partyEl?.querySelector('#btn-admin-add-survivor')?.addEventListener('click', () => {
     _activeCampaign.roster.push(snapshotSurvivor(createSurvivor(0, 0, 'hero')));

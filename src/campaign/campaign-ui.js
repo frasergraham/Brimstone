@@ -162,15 +162,77 @@ function itemGlyph(id) {
   return first || '🎒';
 }
 
-/** Small badge row for a unit's carried weapon + items. Empty string if none. */
-function itemRowHTML(items, weapon) {
+/** True when an id names a weapon in the ITEMS registry. */
+function isWeapon(id) {
+  return ITEMS[id]?.kind === 'weapon';
+}
+
+/**
+ * Clean display name for a weapon, derived from its ITEMS label. Labels are
+ * shaped "<glyph> <Name> (<stats>)" (e.g. "⚔ Great Sword (+3 ATK)"), so we
+ * strip the leading glyph token and the trailing parenthetical.
+ */
+export function weaponName(id) {
+  const label = ITEMS[id]?.label || WEAPON_LABEL[id] || id;
+  return String(label).replace(/^\S+\s+/, '').replace(/\s*\([^)]*\)\s*$/, '').trim() || id;
+}
+
+/**
+ * Human-readable stat string for a weapon, read straight off its definition —
+ * ATK/DEF deltas from `statMods` and `range` when > 1. No fields are invented;
+ * a weapon that grants nothing (none currently) yields ''.
+ */
+export function weaponStatString(id) {
+  const def = ITEMS[id];
+  if (!def) return '';
+  const parts = [];
+  const atk = def.statMods?.attack || 0;
+  const dfn = def.statMods?.defense || 0;
+  if (atk) parts.push(`ATK ${atk > 0 ? '+' : ''}${atk}`);
+  if (dfn) parts.push(`DEF ${dfn > 0 ? '+' : ''}${dfn}`);
+  if (def.range > 1) parts.push(`range ${def.range}`);
+  return parts.join(' · ');
+}
+
+/** One weapon row: glyph, name, stat string, and equipped badge or Equip control. */
+function weaponRowHTML(id, count, idx, isEquipped) {
+  const name = weaponName(id);
+  const stats = weaponStatString(id);
+  const n = count > 1 ? ` <span class="cprog-w-n">×${count}</span>` : '';
+  const statHtml = stats ? `<span class="cprog-w-stats">${stats}</span>` : '';
+  const ctrl = isEquipped
+    ? '<span class="cprog-w-eq" title="Equipped">✓ Equipped</span>'
+    : `<button class="cprog-equip-btn" data-idx="${idx}" data-weapon="${id}" title="Equip ${name}">Equip</button>`;
+  return `<div class="cprog-weapon${isEquipped ? ' equipped' : ''}" data-weapon="${id}">
+    <span class="cprog-w-glyph">${itemGlyph(id)}</span>
+    <span class="cprog-w-name">${name}${n}</span>
+    ${statHtml}
+    ${ctrl}
+  </div>`;
+}
+
+/**
+ * Weapons list for a unit card: the equipped weapon (with a ✓ badge) followed
+ * by every other weapon in the backpack (each with an Equip control). Returns
+ * '' when the unit carries no weapons. `idx` ('leader' or a roster index) is
+ * stamped onto each Equip button for event wiring.
+ */
+function weaponListHTML(unit, idx) {
+  const equipped = isWeapon(unit.weapon) ? unit.weapon : null;
+  const carried = Object.entries(unit.items || {})
+    .filter(([id, count]) => count > 0 && isWeapon(id) && id !== equipped);
+  if (!equipped && carried.length === 0) return '';
+  const rows = [];
+  if (equipped) rows.push(weaponRowHTML(equipped, 1, idx, true));
+  for (const [id, count] of carried) rows.push(weaponRowHTML(id, count, idx, false));
+  return `<div class="cprog-weapons">${rows.join('')}</div>`;
+}
+
+/** Badge row for a unit's carried non-weapon items. Empty string if none. */
+function itemRowHTML(items) {
   const badges = [];
-  if (weapon) {
-    const wId = typeof weapon === 'string' ? weapon : weapon.id;
-    if (wId) badges.push(`<span class="cprog-item" title="${WEAPON_LABEL[wId] || wId}">${itemGlyph(wId)}</span>`);
-  }
   for (const [id, count] of Object.entries(items || {})) {
-    if (!count) continue;
+    if (!count || isWeapon(id)) continue; // weapons render via weaponListHTML
     const n = count > 1 ? `<span class="cprog-item-n">×${count}</span>` : '';
     badges.push(`<span class="cprog-item" title="${ITEMS[id]?.label || id}">${itemGlyph(id)}${n}</span>`);
   }
@@ -227,7 +289,8 @@ export function progressUnitCardHTML(unit, opts = {}) {
       <span class="cprog-bar-num">${into}/${span}</span>
     </div>
     <div class="cprog-statline"><span class="cprog-stat">⚔ ${unit.attack}</span><span class="cprog-stat">🛡 ${unit.defense}</span></div>
-    ${itemRowHTML(unit.items, unit.weapon)}
+    ${weaponListHTML(unit, idx)}
+    ${itemRowHTML(unit.items)}
     ${healHtml}
   </div>`;
 }
