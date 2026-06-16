@@ -282,6 +282,15 @@ async function _presentLines(lineRecords, { state, renderer, ui, skipFlag, autoO
         await ui?.showStoryModal?.(line.name, line.text);
         continue;
       }
+      // Turn the active speaker to face the rest of the group and the listeners
+      // to face the speaker — a short interpolated pivot so the scene reads as
+      // people looking at one another rather than staring past each other. Pure
+      // render side-effect, fire-and-forget so the bubble/camera don't wait on
+      // it. No-ops for a lone participant ("the world" / narration beat), a line
+      // with no bound entity, or a model that hasn't loaded yet.
+      if (line.entityId != null) {
+        renderer.orientConversation?.(line.entityId, participantIds);
+      }
       // Re-assert the camera frame for THIS line before the bubble appears, so a
       // camera drift since the last line can't leave the bubble off-screen.
       await _frameConversationStep(line, { renderer, ui, participantIds, centroid });

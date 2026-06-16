@@ -2510,6 +2510,18 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
               _heldCombatFrame3D = true;
             }
 
+            // ── Step 0.5: Combatants turn to meet each other ─────────────────
+            // Both attacker and defender pivot to face one another before the
+            // strike (today the defender keeps its previous facing). Short
+            // interpolated turn, fire-and-forget so strike timing is unchanged.
+            // The melee attacker's lunge re-asserts the same facing instantly,
+            // so this is effectively a no-op for it and a real turn for the
+            // defender and for a ranged attacker (which doesn't lunge). Works
+            // across the gap for ranged since it faces the entity, not an
+            // adjacent hex. No-ops safely when a model hasn't loaded.
+            renderer.faceEntityTowardEntity?.(actorSnap.id, targetSnap.id);
+            renderer.faceEntityTowardEntity?.(targetSnap.id, actorSnap.id);
+
             _playAttackIntroAnim(
               actorSnap, targetSnap,
               lungeFromCol, lungeFromRow,
@@ -4436,8 +4448,13 @@ function initScenario(def) {
   redraw();
 
   // Dev-loader probe: the browser-verification harness inspects live state
-  // (entities, effects, HP) through this handle. Scenario mode only.
-  if (typeof window !== 'undefined') window.__scenarioState = state;
+  // (entities, effects, HP) through this handle. Scenario mode only. The
+  // renderer is exposed too so verification can read presentation-only details
+  // (e.g. a model's facing yaw) that never touch game state.
+  if (typeof window !== 'undefined') {
+    window.__scenarioState = state;
+    window.__renderer3d = renderer;
+  }
 
   if (def.resolve) {
     state.heroPlan  = _scenarioPlan(def.heroPlan, byRef);

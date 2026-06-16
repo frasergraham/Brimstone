@@ -10600,6 +10600,93 @@ export class Renderer3D {
     return null;
   }
 
+  /** Average world anchor of a set of entity ids (skips ids with no resolvable
+   *  position). Returns null when none resolve. Used to point a speaker at the
+   *  centroid of the rest of a conversation group. */
+  _centroidWorld(ids) {
+    if (!Array.isArray(ids) || ids.length === 0) return null;
+    let sx = 0, sz = 0, n = 0;
+    for (const id of ids) {
+      const p = this._entityWorldPos(id);
+      if (p) { sx += p.x; sz += p.z; n++; }
+    }
+    return n > 0 ? { x: sx / n, z: sz / n } : null;
+  }
+
+  /** Set a model's yaw instantly, cancelling any in-flight facing tween first
+   *  so a move/lunge re-assert wins cleanly over a presentation-time turn.
+   *  Cone-only tokens (no clone) are rotationally symmetric — nothing to do. */
+  _faceModelInstant(standee, yaw) {
+    const mesh = standee?.paladinClone?.mesh;
+    if (!mesh) return;
+    this._scene?.stopAnimation(mesh);
+    mesh.rotation.y = yaw;
+  }
+
+  /** Smoothly yaw an entity's model to face a world-XZ point over a short
+   *  interpolation (FACE_TURN_MS, scaled by playback speed). Render-only — never
+   *  touches game state. Resolves to `false` (no animation played) when:
+   *    • Babylon isn't ready, the entity has no live standee, or its model
+   *      hasn't loaded yet (still summoning / cone-only token) — safe no-op;
+   *    • the target coincides with the model's own position (degenerate dir);
+   *    • the model already faces within FACING_EPSILON of the target.
+   *  Otherwise returns the tracked turn Promise (resolves `true` on settle).
+   *  Cancels any prior facing tween on the same model so successive turns and
+   *  move/lunge instant-yaws don't fight. */
+  faceEntityTowardPoint(entityId, targetX, targetZ, durMs = FACE_TURN_MS) {
+    if (!this._scene || !this._babylon) return Promise.resolve(false);
+    const standee = this._entityStandees?.get(entityId);
+    const mesh = standee?.paladinClone?.mesh;
+    const pos = standee?.plane?.position;
+    if (!mesh || !pos) return Promise.resolve(false);
+    const dx = targetX - pos.x;
+    const dz = targetZ - pos.z;
+    if (Math.abs(dx) < 1e-4 && Math.abs(dz) < 1e-4) return Promise.resolve(false);
+    const desired = Math.atan2(dx, dz);
+    const from = mesh.rotation.y;
+    // Shortest signed turn into (-π, π] so a wrap-around never spins the long way.
+    const delta = Math.atan2(Math.sin(desired - from), Math.cos(desired - from));
+    if (Math.abs(delta) < FACING_EPSILON) return Promise.resolve(false);
+    const BABYLON = this._babylon;
+    this._scene.stopAnimation(mesh);
+    const speedMul = this._playbackSpeedMul ?? 1.0;
+    const FRAMES = Math.max(1, Math.round(durMs * speedMul * 60 / 1000));
+    const ease = new BABYLON.CubicEase();
+    ease.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEINOUT);
+    const anim = new BABYLON.Animation('faceY', 'rotation.y', 60,
+      BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+    anim.setKeys([{ frame: 0, value: from }, { frame: FRAMES, value: from + delta }]);
+    anim.setEasingFunction(ease);
+    const promise = new Promise(resolve => {
+      this._scene.beginDirectAnimation(mesh, [anim], 0, FRAMES, false, 1, () => resolve(true));
+    });
+    return this._trackAnim(promise);
+  }
+
+  /** Smoothly turn `entityId`'s model to face another entity's current anchor.
+   *  No-op (resolved `false`) when the target has no resolvable position. */
+  faceEntityTowardEntity(entityId, targetId, durMs = FACE_TURN_MS) {
+    const t = this._entityWorldPos(targetId);
+    if (!t) return Promise.resolve(false);
+    return this.faceEntityTowardPoint(entityId, t.x, t.z, durMs);
+  }
+
+  /** Conversation choreography: turn the active speaker to face the rest of the
+   *  group and every listener to face the speaker, with short interpolated
+   *  turns. No-op for a lone participant (a "character vs the world" / narration
+   *  beat) or when the speaker can't be resolved. Returns a Promise that settles
+   *  once every turn completes. Render-only. */
+  orientConversation(speakerId, participantIds, durMs = FACE_TURN_MS) {
+    if (speakerId == null || !Array.isArray(participantIds)) return Promise.resolve();
+    const others = participantIds.filter(id => id != null && id !== speakerId);
+    if (others.length === 0) return Promise.resolve();   // single-speaker / "the world" beat
+    const turns = [];
+    const c = this._centroidWorld(others);
+    if (c) turns.push(this.faceEntityTowardPoint(speakerId, c.x, c.z, durMs));
+    for (const id of others) turns.push(this.faceEntityTowardEntity(id, speakerId, durMs));
+    return Promise.all(turns);
+  }
+
   /** Ease the camera to FRAME one or more entities — fit their collective
    *  bounds to the viewport at the HIGHEST allowed zoom-in (closest the camera
    *  is permitted to get, i.e. `lowerRadiusLimit`). A single entity frames at
@@ -10775,6 +10862,9 @@ export class Renderer3D {
     if (this._scene) {
       for (const standee of this._entityStandees.values()) {
         this._scene.stopAnimation(standee.plane);
+        // Also halt any in-flight facing tween (lives on the clone mesh, not the
+        // plane) so a turn-to-face can't bleed into the next planning cycle.
+        if (standee.paladinClone?.mesh) this._scene.stopAnimation(standee.paladinClone.mesh);
       }
     }
     this._activeMoveIds.clear();
@@ -10856,7 +10946,7 @@ export class Renderer3D {
     // sideways/backwards. Witch/zombie cone tokens are rotationally
     // symmetric, so we only yaw the paladin clone (when present).
     if (standee.paladinClone?.mesh && (toX !== fromX || toZ !== fromZ)) {
-      standee.paladinClone.mesh.rotation.y = Math.atan2(toX - fromX, toZ - fromZ);
+      this._faceModelInstant(standee, Math.atan2(toX - fromX, toZ - fromZ));
     }
 
     // Total polyline length in world units — for a 1-hex hop this is
@@ -10996,7 +11086,7 @@ export class Renderer3D {
     // Face the blocker for the WHOLE trip — the model keeps facing the obstacle
     // and retreats backward, instead of spinning around to walk home.
     if (standee.paladinClone?.mesh && (edgeX !== startX || edgeZ !== startZ)) {
-      standee.paladinClone.mesh.rotation.y = Math.atan2(edgeX - startX, edgeZ - startZ);
+      this._faceModelInstant(standee, Math.atan2(edgeX - startX, edgeZ - startZ));
     }
 
     // Match the walk clip's stride to ground speed (mirror addMoveAnim) so feet
@@ -11129,7 +11219,7 @@ export class Renderer3D {
     // Face the lunge direction (same model-yaw logic as MOVE) — yaw toward
     // the actual motion vector (current → lunge end), not the hex centres.
     if (standee.paladinClone?.mesh && (lungeX !== startX || lungeZ !== startZ)) {
-      standee.paladinClone.mesh.rotation.y = Math.atan2(lungeX - startX, lungeZ - startZ);
+      this._faceModelInstant(standee, Math.atan2(lungeX - startX, lungeZ - startZ));
     }
 
     // Throw the punch clip on top of the slide so the strike reads as a strike,
@@ -11203,8 +11293,8 @@ export class Renderer3D {
       ? (standee.moveDest ?? null) : null;
     this._scene.stopAnimation(standee.plane);
     this._activeLungeIds.add(entityId);
-    if (standee.paladinClone?.mesh) {
-      standee.paladinClone.mesh.rotation.y = Math.atan2(toX - startX, toZ - startZ);
+    if (standee.paladinClone?.mesh && (toX !== startX || toZ !== startZ)) {
+      this._faceModelInstant(standee, Math.atan2(toX - startX, toZ - startZ));
     }
     const speedMul = this._playbackSpeedMul ?? 1.0;
     const FRAMES = Math.max(1, Math.round(durMs * speedMul * 60 / 1000));
@@ -17722,6 +17812,17 @@ export const RUN_HEX_MS = 750;
  *  uses an ease-OUT curve (fast launch, decelerating into the strike)
  *  and is kept short so the attack reads as a quick snap, not a glide. */
 export const LUNGE_ANIM_MS = 400;
+
+/** Duration (ms) of a "turn to face" yaw slerp used at presentation gates —
+ *  conversation participants turning to the active speaker, and combatants
+ *  meeting each other before the strike. Short and ease-in-out so it reads as
+ *  a deliberate look, not a movement. Render-only; scaled by playback speed. */
+export const FACE_TURN_MS = 260;
+
+/** "Already facing" threshold (radians, ≈4.6°). A requested turn smaller than
+ *  this is treated as a no-op so we never fire a one-frame animation for a unit
+ *  that is effectively already on-target. */
+export const FACING_EPSILON = 0.08;
 
 /** Real-time the punch clip is compressed to play across (ms) when it
  *  accompanies a lunge. Picked a touch longer than LUNGE_ANIM_MS=400 so the
