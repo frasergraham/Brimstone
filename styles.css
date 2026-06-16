@@ -1277,6 +1277,26 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   transition: width 0.3s, background 0.3s;
 }
 
+/* XP (veterancy) bar — mirrors the HP bar's track/height/border but with a
+   distinct blue fill (matching the Campaign Progress screen's XP convention)
+   so it never reads as a second HP stripe. Campaign-only; hero-side units. */
+.usb-xp-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-shrink: 0;
+}
+
+.usb-xp-fill {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  background:
+    linear-gradient(to bottom, rgba(255,255,255,0.28) 0%, rgba(255,255,255,0) 55%),
+    linear-gradient(90deg, #6a8cc4, #8fb0e0);
+  transition: width 0.3s;
+}
+
 .usb-stat {
   display: flex;
   align-items: center;

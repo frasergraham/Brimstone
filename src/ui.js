@@ -27,6 +27,7 @@ import {
   attachPopupListeners, touchDist,
 } from './ui-popup.js';
 import { isVoiceMuted, toggleVoiceMuted, voiceMuteIconHtml } from './voiceover.js';
+import { xpProgress } from './campaign/campaign-ui.js';
 
 /** Enum of UI operating modes. */
 export const UIMode = Object.freeze({ LOCAL: 'local', ONLINE: 'online', SPECTATOR: 'spectator' });
@@ -2811,6 +2812,26 @@ export class UIController {
       : '👊 Unarmed';
     const effectsHtml = buildEffectsHtml(entity);
 
+    // XP bar — campaign veterancy progress, shown beneath the HP bar. Gated on
+    // the SAME chokepoint awardXP() uses (state.isCampaign && hero ownership),
+    // so non-campaign games and witch / non-levelling units render no bar at
+    // all (not "0/0", not greyed — absent). Reuses the campaign-screen
+    // xpProgress() formatter so the in-mission and between-mission numbers
+    // always agree; distinct blue fill (the established XP colour) keeps it from
+    // reading as a second HP stripe.
+    let xpRowHtml = '';
+    if (this.state.isCampaign && entity.owner === 'hero') {
+      const { level, into, span, pct } = xpProgress(entity.level, entity.xp);
+      xpRowHtml = `
+        <span class="usb-xp-wrap" title="Veterancy — earn XP from exploring, fortifying and combat to level up">
+          <span class="usb-stat">Lv <span class="usb-stat-val">${level}</span></span>
+          <span class="usb-hp-track usb-xp-track">
+            <span class="usb-xp-fill" style="width:${pct}%"></span>
+          </span>
+          <span class="usb-stat-val">${into}/${span} XP</span>
+        </span>`;
+    }
+
     // Portrait image with glyph fallback
     const assetId = _entityPortraitId(entity);
     const src = assetId ? this.renderer.getPortraitDataURL(assetId, 84) : null;
@@ -2880,6 +2901,7 @@ export class UIController {
             ${effectsHtml}
             <button class="usb-info-btn ${expanded ? 'usb-info-btn-active' : ''}" title="${expanded ? 'Hide stats' : 'Show stats & abilities'}">i</button>
           </span>
+          ${xpRowHtml}
           ${expandedBlockHtml}
         </span>
         <button class="usb-deselect-btn" title="Deselect unit">✕</button>
