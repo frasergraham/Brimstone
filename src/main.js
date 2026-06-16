@@ -3396,10 +3396,13 @@ document.getElementById('btn-ng-vsai')    ?.addEventListener('click', () => _sho
 document.getElementById('btn-ng-online')  ?.addEventListener('click', () => _showOnlineScreen());
 document.getElementById('btn-how-to-play')?.addEventListener('click', () => showStep('howtoplay'));
 
-// "Play the Tutorial" button in How to Play navigates to Story Mode → Prologue
+// "Play the Tutorial" button in How to Play jumps straight into the tutorial,
+// which is now Chapter 1's first mission. Open Caleb's Hollow Chapter 1 and
+// auto-navigate to the tutorial briefing (bypassing the mission list) — a
+// "just play it" shortcut.
 document.getElementById('btn-play-tutorial')?.addEventListener('click', () => {
-  const prologue = getCampaignById('prologue');
-  if (prologue) _showCampaignScreen(prologue);
+  const chapter1 = getCampaignById('calebs_hollow_prologue');
+  if (chapter1) _showCampaignScreen(chapter1, 'tutorial');
 });
 document.getElementById('btn-options')      .addEventListener('click', () => showStep('options'));
 document.getElementById('setup-session-name').addEventListener('click', () => { _initAccountPage(); showStep('account'); });

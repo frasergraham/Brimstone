@@ -536,44 +536,49 @@ describe('TUTORIAL_CONDUCTOR_CONFIG', () => {
   });
 });
 
-// ── Prologue campaign definition ─────────────────────────────────────────────
+// ── Tutorial as Chapter 1's first mission ────────────────────────────────────
 
-describe('Prologue campaign', async () => {
+describe('Tutorial folded into Chapter 1', async () => {
   // The tutorial mission def is data-driven (src/campaign/missions/tutorial.json)
-  // and registered into the campaign shell by campaign-registry.js at init, so we
-  // source the populated campaign through the registry rather than the bare shell.
+  // and is now the FIRST mission of Caleb's Hollow Chapter 1 (it used to be its
+  // own one-mission `prologue` campaign). Source the populated chapter through
+  // the registry rather than the bare shell.
   const { getCampaignById } = await import('../src/campaign/campaign-registry.js');
-  const prologue = getCampaignById('prologue');
+  const chapter1 = getCampaignById('calebs_hollow_prologue');
 
-  test('has expected campaign shape', () => {
-    assert.equal(prologue.id, 'prologue');
-    assert.equal(prologue.title, 'Prologue (Tutorial)');
-    assert.equal(prologue.prerequisiteCampaign, null);
-    assert.equal(prologue.firstMission, 'tutorial');
+  test('the standalone prologue campaign is retired', () => {
+    assert.equal(getCampaignById('prologue'), null);
   });
 
-  test('has exactly one mission', () => {
-    assert.equal(prologue.missions.length, 1);
-    assert.equal(prologue.missions[0].id, 'tutorial');
+  test('Chapter 1 opens on the tutorial', () => {
+    assert.equal(chapter1.firstMission, 'tutorial');
+    assert.equal(chapter1.missions[0].id, 'tutorial');
+    assert.equal(chapter1.missions[0].isTutorial, true);
   });
 
-  test('mission has conductorSteps and conductorConfig', () => {
-    const m = prologue.missions[0];
+  test('tutorial mission has conductorSteps and conductorConfig', () => {
+    const m = chapter1.missions[0];
     assert.ok(Array.isArray(m.conductorSteps), 'conductorSteps is an array');
     assert.ok(m.conductorConfig, 'conductorConfig exists');
     assert.ok(m.conductorConfig.roundStepMap, 'conductorConfig has roundStepMap');
   });
 
-  test('mission uses tutorial waves', () => {
-    const m = prologue.missions[0];
+  test('tutorial mission uses tutorial waves', () => {
+    const m = chapter1.missions[0];
     assert.ok(Array.isArray(m.waves), 'waves is an array');
     assert.equal(m.waves.length, 1);
   });
 
-  test('mission has conductor_complete objective', () => {
-    const m = prologue.missions[0];
+  test('tutorial mission has conductor_complete objective', () => {
+    const m = chapter1.missions[0];
     assert.equal(m.objectives.win.type, 'conductor_complete');
     assert.equal(m.objectives.lose, null);
+  });
+
+  test('The Awakening now requires the tutorial', () => {
+    const awakening = chapter1.missions.find(m => m.id === 'prologue');
+    assert.ok(awakening, 'The Awakening (prologue) is part of Chapter 1');
+    assert.deepEqual(awakening.requires, ['tutorial']);
   });
 });
 

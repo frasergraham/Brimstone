@@ -414,7 +414,7 @@ Players can link email and Game Center identities for cross-device access. Magic
 
 ## JSON Mission Format (offline/campaign)
 
-Campaign missions are **on-disk content**, not database rows: each mission is a JSON file under `src/campaign/missions/*.json` (8 migrated missions — the 7 Caleb's Hollow prologue missions + the tutorial). This is **offline/campaign-only** — campaigns run through `src/main.js`; `server/lobby.js` has no campaign path, so the loader has **no online parity concern** and never touches `state-sync.js` or the DB.
+Campaign missions are **on-disk content**, not database rows: each mission is a JSON file under `src/campaign/missions/*.json` (8 missions — the guided `tutorial` first, then the 7 Caleb's Hollow Chapter 1 story missions, all in the `calebs_hollow_prologue` campaign). This is **offline/campaign-only** — campaigns run through `src/main.js`; `server/lobby.js` has no campaign path, so the loader has **no online parity concern** and never touches `state-sync.js` or the DB.
 
 ### `schema: 1` format
 
@@ -450,7 +450,7 @@ A mission JSON mirrors the runtime mission-def shape verbatim for every field *e
 
 ### Registration (`src/campaign/campaign-registry.js`)
 
-The campaign defs (`prologue`, `calebs-hollow-prologue`) are thin shells; their `missions[]` and `mapBuilders` are populated at module init. `campaign-registry.js` declares `MIGRATED_MISSIONS` (mission id → campaign id, in canonical order) and registers each via `registerJSONMissions` → `registerMissionJSON`. Loading is environment-aware: **node** (`window` undefined → tests, headless runner) reads via `fs`; any **webview** (browser, Electron, Capacitor) reads via same-origin `fetch`. Both feed the same parsed object to `loadMissionJSON`. The module uses **top-level `await`**, so any importer (the app, headless scripts, tests) transparently waits for a fully populated registry.
+The campaign def (`calebs-hollow-prologue`) is a thin shell; its `missions[]` and `mapBuilders` are populated at module init. (The standalone `prologue` tutorial campaign was retired — the tutorial is now Chapter 1's first mission.) `campaign-registry.js` declares `MIGRATED_MISSIONS` (mission id → campaign id, in canonical order) and registers each via `registerJSONMissions` → `registerMissionJSON`. Loading is environment-aware: **node** (`window` undefined → tests, headless runner) reads via `fs`; any **webview** (browser, Electron, Capacitor) reads via same-origin `fetch`. Both feed the same parsed object to `loadMissionJSON`. The module uses **top-level `await`**, so any importer (the app, headless scripts, tests) transparently waits for a fully populated registry.
 
 ## Data Flow Summary
 

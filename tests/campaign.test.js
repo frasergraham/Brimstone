@@ -134,6 +134,11 @@ describe('Mission definitions', () => {
       // a fully graph-driven mission like 'prologue' omits objectives entirely).
       if (m.logic) {
         assert.ok(Array.isArray(m.logic.nodes), `${m.id} logic graph missing nodes`);
+      } else if (m.isTutorial) {
+        // The guided tutorial is conductor-driven: it wins on conductor_complete
+        // and has no lose condition (the tutorial can't be failed).
+        assert.equal(m.objectives?.win?.type, 'conductor_complete', `${m.id} tutorial win is conductor_complete`);
+        assert.equal(m.objectives?.lose, null, `${m.id} tutorial has no lose objective`);
       } else {
         assert.ok(m.objectives?.win, `${m.id} missing win objective`);
         assert.ok(m.objectives?.lose, `${m.id} missing lose objective`);
@@ -153,8 +158,13 @@ describe('Mission definitions', () => {
     }
   });
 
-  test('prologue campaign has 7 missions total', () => {
-    assert.equal(hollowDef.missions.length, 7);
+  test('Chapter 1 has 8 missions total (tutorial + 7 story missions)', () => {
+    assert.equal(hollowDef.missions.length, 8);
+  });
+
+  test('the folded-in tutorial is the first mission', () => {
+    assert.equal(hollowDef.missions[0].id, 'tutorial');
+    assert.equal(hollowDef.missions[0].isTutorial, true);
   });
 
   test('mission prerequisites form a valid chain', () => {
@@ -632,7 +642,7 @@ describe('Campaign class', () => {
 
   test('new campaign starts at firstMission with empty roster', () => {
     const c = new Campaign(hollowDef);
-    assert.equal(c.currentMission, 'prologue');
+    assert.equal(c.currentMission, 'tutorial');
     assert.equal(c.roster.length, 0);
     assert.equal(c.completedMissions.size, 0);
   });
@@ -640,7 +650,7 @@ describe('Campaign class', () => {
   test('campaign stores campaignDef reference', () => {
     const c = new Campaign(hollowDef);
     assert.equal(c.campaignDef.id, 'calebs_hollow_prologue');
-    assert.equal(c.campaignDef.missions.length, 7);
+    assert.equal(c.campaignDef.missions.length, 8);
   });
 
   test('save slot defaults to slot 1', () => {
@@ -687,14 +697,35 @@ describe('Campaign class', () => {
   test('getMissionList returns correct statuses', () => {
     const c = new Campaign(hollowDef);
     const list = c.getMissionList();
-    assert.equal(list.length, 7);
-    assert.ok(list[0].available);      // prologue — no prereqs
-    assert.ok(!list[1].available);     // gathering_survivors — needs prologue
-    assert.ok(!list[2].available);     // first_night — needs gathering_survivors
-    assert.ok(!list[3].available);     // river_crossing — needs first_night
-    assert.ok(!list[4].available);     // dark_ritual — needs river_crossing
-    assert.ok(!list[5].available);     // long_watch — needs dark_ritual
-    assert.ok(!list[6].available);     // witchs_trail — needs long_watch
+    assert.equal(list.length, 8);
+    assert.ok(list[0].available);      // tutorial — no prereqs
+    assert.ok(!list[1].available);     // prologue (The Awakening) — needs tutorial
+    assert.ok(!list[2].available);     // gathering_survivors — needs prologue
+    assert.ok(!list[3].available);     // first_night — needs gathering_survivors
+    assert.ok(!list[4].available);     // river_crossing — needs first_night
+    assert.ok(!list[5].available);     // dark_ritual — needs river_crossing
+    assert.ok(!list[6].available);     // long_watch — needs dark_ritual
+    assert.ok(!list[7].available);     // witchs_trail — needs long_watch
+  });
+
+  test('getMissionList visibility shows only completed + playable + immediate-next', () => {
+    const c = new Campaign(hollowDef);
+    const list = c.getMissionList();
+    assert.ok(list[0].visible);        // tutorial — playable now
+    assert.ok(list[1].visible);        // prologue — one step away (tutorial is playable)
+    assert.ok(!list[2].visible);       // gathering_survivors — two steps away, hidden
+    for (let i = 3; i < list.length; i++) {
+      assert.ok(!list[i].visible, `${list[i].id} should be hidden on a fresh save`);
+    }
+
+    // Completing the tutorial promotes The Awakening to playable and reveals the
+    // next mission after it.
+    c.completedMissions.add('tutorial');
+    const list2 = c.getMissionList();
+    assert.ok(list2[0].visible && list2[0].completed); // tutorial — completed, still shown
+    assert.ok(list2[1].available && list2[1].visible); // prologue — now playable
+    assert.ok(list2[2].visible && !list2[2].available);// gathering_survivors — now one step away
+    assert.ok(!list2[3].visible);                      // first_night — still hidden
   });
 
   test('getMissionDef looks up from campaignDef missions', () => {
@@ -714,6 +745,9 @@ describe('Campaign class', () => {
 
   test('applyMissionResult advances campaign on victory', () => {
     const c = new Campaign(hollowDef);
+    // The tutorial (Chapter 1 M1) is already cleared; we're finishing M2.
+    c.completedMissions.add('tutorial');
+    c.currentMission = 'prologue';
     c.applyMissionResult('prologue', {
       won: true,
       survivors: [{ name: 'Martha', hp: 2, maxHp: 3, attack: 1, defense: 1 }],
@@ -740,6 +774,9 @@ describe('Campaign class', () => {
 
   test('applyMissionResult does not advance on defeat', () => {
     const c = new Campaign(hollowDef);
+    // Sitting on The Awakening (M2) with the tutorial already cleared.
+    c.completedMissions.add('tutorial');
+    c.currentMission = 'prologue';
     c.applyMissionResult('prologue', {
       won: false,
       survivors: [],
@@ -1421,6 +1458,9 @@ describe('maxDiscoverableSurvivors config', () => {
 describe('disableScoring on missions', () => {
   test('prologue missions have disableScoring set (true except witchs_trail)', () => {
     for (const m of hollowDef.missions) {
+      // The conductor-driven tutorial teaches scoring live, so its flag is
+      // incidental — skip it here.
+      if (m.isTutorial) continue;
       // witchs_trail uses multiplayer-style scoring as its loss condition,
       // so it's the lone exception that opts INTO scoring.
       const expected = m.id === 'witchs_trail' ? false : true;
@@ -1560,17 +1600,19 @@ describe('mission story triggers and loot overrides', () => {
     assert.ok(lose.some(l => l.type === 'witch_holds_node'));
   });
 
-  test('mission 7-step progression chain is valid', () => {
+  test('mission progression chain is valid (tutorial + 7 story missions)', () => {
     const ids = hollowDef.missions.map(m => m.id);
     assert.deepEqual(ids, [
-      'prologue', 'gathering_survivors', 'first_night',
+      'tutorial', 'prologue', 'gathering_survivors', 'first_night',
       'river_crossing', 'dark_ritual', 'long_watch', 'witchs_trail',
     ]);
   });
 
-  test('all missions have healBonus defined', () => {
+  test('all story missions have a positive healBonus', () => {
     for (const m of hollowDef.missions) {
       assert.ok(typeof m.healBonus === 'number', `${m.id} should have healBonus`);
+      // The tutorial is a brief teaching mission with no between-mission heal.
+      if (m.isTutorial) continue;
       assert.ok(m.healBonus > 0, `${m.id} healBonus should be positive`);
     }
   });
@@ -1706,8 +1748,8 @@ describe('healBonus on mission victory', () => {
     assert.equal(c.roster.length, 2, 'both survivors should be in roster');
     assert.ok(c.roster.some(s => s.name === 'Deployed'), 'deployed survivor preserved');
     assert.ok(c.roster.some(s => s.name === 'StayedBehind'), 'undeployed survivor preserved');
-    // prologue has healBonus: 2, so deployed survivor heals from 2 → 4 (capped at maxHp)
-    const healBonus = hollowDef.missions[0].healBonus ?? 0;
+    // The mission applied is 'prologue' (The Awakening) — heal by ITS healBonus.
+    const healBonus = hollowDef.missions.find(m => m.id === 'prologue').healBonus ?? 0;
     assert.equal(c.roster.find(s => s.name === 'Deployed').hp, Math.min(2 + healBonus, 4), 'deployed survivor HP updated + healed');
     assert.equal(c.roster.find(s => s.name === 'StayedBehind').hp, Math.min(3 + healBonus, 3), 'undeployed survivor also healed');
   });

@@ -139,3 +139,116 @@ describe('unlock / Campaign integration', () => {
     assert.equal(c.isMissionUnlocked(missions[2]), true);
   });
 });
+
+describe('getMissionList — available + visible flags', () => {
+  function makeCampaign(missions, { completed = [], items = {}, resources = {} } = {}) {
+    const c = new Campaign({ id: 'test', missions, mapBuilders: {} });
+    c.completedMissions = new Set(completed);
+    c.storyFlags = {};
+    c.heroStats = { hp: 1, maxHp: 1, attack: 1, defense: 1, weapon: 'sword', items };
+    c.resources = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0, ...resources };
+    return c;
+  }
+
+  test('_canPlayMission is the single predicate behind isMissionUnlocked and .available', () => {
+    const missions = [
+      { id: 'a', title: 'A' },
+      { id: 'b', title: 'B', requires: ['a'] },
+      { id: 'c', title: 'C', unlock: { missionDone: 'a' } },
+    ];
+    const c = makeCampaign(missions, { completed: ['a'] });
+    const list = c.getMissionList();
+    missions.forEach((m, i) => {
+      assert.equal(list[i].available, c.isMissionUnlocked(m), `${m.id}: .available === isMissionUnlocked`);
+      assert.equal(list[i].available, c._canPlayMission(m), `${m.id}: both delegate to _canPlayMission`);
+    });
+    assert.equal(list[0].completed, true);
+    assert.equal(list[0].available, false, 'a completed → not "playable now"');
+    assert.equal(list[1].available, true, 'b unlocked by requires');
+    assert.equal(list[2].available, true, 'c unlocked by rich unlock');
+  });
+
+  test('getMissionList honors rich unlock, not just requires', () => {
+    const missions = [
+      { id: 'a', title: 'A' },
+      { id: 'gate', title: 'Gate', unlock: { missionDone: 'a' } },
+    ];
+    assert.equal(makeCampaign(missions).getMissionList()[1].available, false);
+    assert.equal(makeCampaign(missions, { completed: ['a'] }).getMissionList()[1].available, true);
+  });
+
+  test('a mission gated by an unreachable missionDone is available:false, visible:false', () => {
+    const missions = [
+      { id: 'a', title: 'A' },
+      { id: 'locked', title: 'Locked', unlock: { missionDone: 'never-completes' } },
+    ];
+    const row = makeCampaign(missions, { completed: ['a'] }).getMissionList()[1];
+    assert.equal(row.available, false);
+    assert.equal(row.visible, false, 'blocker references a non-existent / never-played mission');
+  });
+
+  test('unlock:{missionDone:tutorial} + requires:[] becomes available after tutorial completed', () => {
+    const missions = [
+      { id: 'tutorial', title: 'Tutorial' },
+      { id: 'next', title: 'Next', requires: [], unlock: { missionDone: 'tutorial' } },
+    ];
+    assert.equal(makeCampaign(missions).getMissionList()[1].available, false);
+    assert.equal(makeCampaign(missions, { completed: ['tutorial'] }).getMissionList()[1].available, true);
+  });
+
+  test('immediate-next mission is visible; the one after it is hidden (requires chain)', () => {
+    const missions = [
+      { id: 'a', title: 'A' },
+      { id: 'b', title: 'B', requires: ['a'] },
+      { id: 'c', title: 'C', requires: ['b'] },
+    ];
+    const [ra, rb, rc] = makeCampaign(missions).getMissionList();
+    assert.ok(ra.available && ra.visible, 'a — playable now');
+    assert.ok(!rb.available && rb.visible, 'b — one step away (a is playable)');
+    assert.ok(!rc.available && !rc.visible, 'c — two steps away, hidden');
+  });
+
+  test('a missionDone leaf one step away is visible (top-level and inside all:[])', () => {
+    const top = [
+      { id: 'a', title: 'A' },
+      { id: 'b', title: 'B', unlock: { missionDone: 'a' } },
+    ];
+    assert.ok(makeCampaign(top).getMissionList()[1].visible, 'top-level missionDone leaf');
+
+    // {level:0} is satisfied (level == completed count == 0); only the missionDone is missing.
+    const inAll = [
+      { id: 'a', title: 'A' },
+      { id: 'b', title: 'B', unlock: { all: [{ missionDone: 'a' }, { level: 0 }] } },
+    ];
+    const rb = makeCampaign(inAll).getMissionList()[1];
+    assert.ok(!rb.available && rb.visible, 'sole unsatisfied clause is a missionDone leaf');
+  });
+
+  test('completed missions stay visible', () => {
+    const missions = [{ id: 'a', title: 'A' }, { id: 'b', title: 'B', requires: ['a'] }];
+    const list = makeCampaign(missions, { completed: ['a'] }).getMissionList();
+    assert.ok(list[0].completed && list[0].visible);
+  });
+
+  test('a structurally richer unsatisfied unlock is not "one step" → hidden', () => {
+    const missions = [
+      { id: 'a', title: 'A' },
+      { id: 'lvl', title: 'Lvl', unlock: { level: 5 } },                              // non-missionDone leaf
+      { id: 'either', title: 'Either', unlock: { any: [{ missionDone: 'a' }, { missionDone: 'z' }] } }, // any[]
+    ];
+    const list = makeCampaign(missions).getMissionList();
+    assert.ok(!list[1].visible, 'a bare level gate is not a missionDone step');
+    assert.ok(!list[2].visible, 'any[] is richer than a bare missionDone leaf');
+  });
+
+  test('two unsatisfied prerequisites are more than one step → hidden', () => {
+    const missions = [
+      { id: 'a', title: 'A' },
+      { id: 'b', title: 'B' },
+      { id: 'c', title: 'C', requires: ['a'], unlock: { missionDone: 'b' } },
+    ];
+    // a is playable, b is playable, but c needs BOTH → two steps away.
+    const rc = makeCampaign(missions).getMissionList()[2];
+    assert.ok(!rc.available && !rc.visible, 'two distinct blockers → hidden');
+  });
+});

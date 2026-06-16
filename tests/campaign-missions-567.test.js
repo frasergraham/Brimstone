@@ -278,7 +278,7 @@ describe('Save migration — v2 → v3 long_watch backfill', () => {
       roster: [], resources: {}, heroStats: { hp: 14 }, storyFlags: {},
     };
     const v3 = _migrate(v2, 2);
-    assert.equal(v3.version, 3);
+    assert.equal(v3.version, 4); // migrates straight through v3 → v4
     assert.ok(v3.completedMissions.includes('long_watch'),
       'long_watch should be backfilled so witchs_trail prereq is satisfied');
     // Original progress preserved
@@ -293,15 +293,75 @@ describe('Save migration — v2 → v3 long_watch backfill', () => {
       roster: [], resources: {}, heroStats: { hp: 14 }, storyFlags: {},
     };
     const v3 = _migrate(v2, 2);
-    assert.equal(v3.version, 3);
+    assert.equal(v3.version, 4); // migrates straight through v3 → v4
     assert.ok(!v3.completedMissions.includes('long_watch'),
       'long_watch should not be skipped for a player still on dark_ritual');
   });
 
-  test('passes through v3+ saves unchanged version-wise', () => {
-    const v3 = { version: 3, currentMission: 'long_watch', completedMissions: [] };
-    const out = _migrate(v3, 3);
-    assert.equal(out.version, 3);
+  test('passes through current-version saves unchanged version-wise', () => {
+    const v4 = { version: 4, currentMission: 'long_watch', completedMissions: [] };
+    const out = _migrate(v4, 4);
+    assert.equal(out.version, 4);
+  });
+});
+
+// ── Save migration v3 → v4 ────────────────────────────────────────────────
+// The `tutorial` mission is folded into Chapter 1 as its first mission, and
+// "The Awakening" (`prologue`) now requires `tutorial`. A v3 Chapter-1 save
+// predates the fold and never recorded `tutorial` as completed, so The Awakening
+// would lock. _migrate() backfills `tutorial` for the Chapter-1 campaign.
+describe('Save migration — v3 → v4 tutorial backfill', () => {
+  test('backfills tutorial for a Chapter 1 save', () => {
+    const v3 = {
+      version: 3,
+      campaignId: 'calebs_hollow_prologue',
+      currentMission: 'prologue',
+      completedMissions: [],
+      roster: [], resources: {}, heroStats: { hp: 14 }, storyFlags: {},
+    };
+    const v4 = _migrate(v3, 3);
+    assert.equal(v4.version, 4);
+    assert.ok(v4.completedMissions.includes('tutorial'),
+      'tutorial should be backfilled so The Awakening prereq is satisfied');
+  });
+
+  test('does not duplicate tutorial if already present', () => {
+    const v3 = {
+      version: 3,
+      campaignId: 'calebs_hollow_prologue',
+      currentMission: 'gathering_survivors',
+      completedMissions: ['tutorial', 'prologue'],
+      roster: [], resources: {}, heroStats: { hp: 14 }, storyFlags: {},
+    };
+    const v4 = _migrate(v3, 3);
+    assert.equal(v4.completedMissions.filter(m => m === 'tutorial').length, 1);
+  });
+
+  test('does not backfill tutorial for other campaigns', () => {
+    const v3 = {
+      version: 3,
+      campaignId: 'chapter_2',
+      currentMission: 'something',
+      completedMissions: [],
+      roster: [], resources: {}, heroStats: { hp: 14 }, storyFlags: {},
+    };
+    const v4 = _migrate(v3, 3);
+    assert.equal(v4.version, 4);
+    assert.ok(!v4.completedMissions.includes('tutorial'));
+  });
+
+  test('v2 Chapter 1 save migrates straight through to v4 with tutorial backfilled', () => {
+    const v2 = {
+      version: 2,
+      campaignId: 'calebs_hollow_prologue',
+      currentMission: 'first_night',
+      completedMissions: ['prologue', 'gathering_survivors'],
+      roster: [], resources: {}, heroStats: { hp: 14 }, storyFlags: {},
+    };
+    const out = _migrate(v2, 2);
+    assert.equal(out.version, 4);
+    assert.ok(out.completedMissions.includes('tutorial'));
+    assert.ok(out.completedMissions.includes('gathering_survivors'));
   });
 });
 
@@ -311,6 +371,10 @@ describe('Save migration — v2 → v3 long_watch backfill', () => {
 // don't behave naturally for the contest mechanic.
 describe('Power node clusters are triangles', () => {
   for (const [builderKey, builder] of Object.entries(hollow.mapBuilders)) {
+    // The tutorial is a hand-authored teaching map (noWitch, conductor-driven);
+    // its single decorative node cluster predates this invariant and isn't part
+    // of the competitive contest mechanic.
+    if (builderKey === 'tutorial') continue;
     test(`every node cluster on map "${builderKey}" is a triangle`, () => {
       const map = builder();
       for (const obj of map.witchObjectives) {

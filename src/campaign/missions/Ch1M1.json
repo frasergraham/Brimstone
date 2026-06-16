@@ -40,7 +40,9 @@
       "horse"
     ]
   },
-  "requires": null,
+  "requires": [
+    "tutorial"
+  ],
   "survivorStartPositions": [],
   "map": {
     "mode": "handmade",

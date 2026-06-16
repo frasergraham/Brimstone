@@ -40,7 +40,7 @@ const MISSIONS_DIR = path.join(__dirname, '..', 'src', 'campaign', 'missions');
 
 // The 8 migrated missions and the campaign each belongs to.
 const MISSIONS = [
-  { id: 'tutorial', campaignId: 'prologue' },
+  { id: 'tutorial', campaignId: 'calebs_hollow_prologue' },
   { id: 'prologue', campaignId: 'calebs_hollow_prologue' },
   { id: 'gathering_survivors', campaignId: 'calebs_hollow_prologue' },
   { id: 'first_night', campaignId: 'calebs_hollow_prologue' },

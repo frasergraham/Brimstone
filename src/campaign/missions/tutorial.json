@@ -1,9 +1,9 @@
 {
   "schema": 1,
-  "campaignId": "prologue",
+  "campaignId": "calebs_hollow_prologue",
   "id": "tutorial",
   "title": "The Road to Caleb's Hollow",
-  "chapter": 0,
+  "chapter": 1,
   "briefing": "On the road to Caleb's Hollow, the forest grows darker with every step. Shadows twist between the trees, and the air carries the faint stench of decay. Something is very wrong ahead.",
   "victoryText": "The road is clear. Through the trees you can see the rooftops of Caleb's Hollow — battered, but still standing. Whatever waits inside, you're as ready as you'll ever be.",
   "defeatText": null,

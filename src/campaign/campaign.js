@@ -21,7 +21,12 @@ import { evaluateUnlock } from './unlock.js';
 // v2 save mid-campaign at `witchs_trail` would brick (prereq never satisfied,
 // no in-progress mission to launch). Migration shim in `_migrate()` backfills
 // `long_watch` into completedMissions for those saves.
-const SAVE_VERSION = 3;
+// v4: the guided `tutorial` is folded in as Chapter 1's first mission and "The
+// Awakening" (`prologue`) now requires it. A pre-v4 Chapter-1 save predates the
+// fold and never recorded `tutorial` as completed (it lived in a separate
+// one-mission campaign), so The Awakening would lock. `_migrate()` backfills
+// `tutorial` into completedMissions for the Chapter-1 campaign.
+const SAVE_VERSION = 4;
 
 // ── Save slots ────────────────────────────────────────────────────────────────
 // Each campaign supports several independent playthroughs ("slots"). The slot
@@ -633,13 +638,86 @@ export class Campaign {
     };
   }
 
-  /** Whether `mission` is currently available: not done, legacy `requires` all
-   *  completed, AND the rich `unlock` criterion (if any) satisfied. */
-  isMissionUnlocked(mission) {
+  /**
+   * Single source of truth for "can the player launch this mission right now":
+   * not already completed, every legacy `requires` entry completed, AND the rich
+   * `unlock` criterion (if any) satisfied. Both `isMissionUnlocked()` and the
+   * `.available` flag in `getMissionList()` delegate here so the predicate never
+   * drifts between the two.
+   */
+  _canPlayMission(mission) {
     if (this.completedMissions.has(mission.id)) return false;
     if (mission.requires && !mission.requires.every(r => this.completedMissions.has(r))) return false;
     if (mission.unlock != null && !evaluateUnlock(mission.unlock, this.buildUnlockContext())) return false;
     return true;
+  }
+
+  /** Whether `mission` is currently available: not done, legacy `requires` all
+   *  completed, AND the rich `unlock` criterion (if any) satisfied. */
+  isMissionUnlocked(mission) {
+    return this._canPlayMission(mission);
+  }
+
+  /**
+   * The missionDone-style prerequisites still blocking `mission`, or `null` when
+   * a blocker is structurally richer than a bare `missionDone` (an `any`/`not`,
+   * an array, or a non-missionDone leaf like `level`/`flag`). Used by
+   * `_isMissionVisible()` to decide whether a locked mission is "one step away".
+   * Returns blocker mission ids drawn from unsatisfied `requires` entries plus
+   * unsatisfied top-level / inside-`all` `missionDone` leaves of `unlock`.
+   */
+  _missionBlockers(mission) {
+    const ctx = this.buildUnlockContext();
+    const reqMissing = (mission.requires ?? []).filter(r => !this.completedMissions.has(r));
+    const unlockMissing = this._unlockMissionBlockers(mission.unlock, ctx);
+    if (unlockMissing === null) return null;
+    return [...reqMissing, ...unlockMissing];
+  }
+
+  /** @returns {string[]|null} unsatisfied missionDone ids from a simple `unlock`
+   *  (top-level leaf or a single `all:[]` of leaves), or `null` if the unsatisfied
+   *  part is anything richer. An already-satisfied `unlock` yields `[]`. */
+  _unlockMissionBlockers(unlock, ctx) {
+    if (unlock == null) return [];
+    if (evaluateUnlock(unlock, ctx)) return [];
+    const leafId = (c) =>
+      c && typeof c === 'object' && !Array.isArray(c) &&
+      !c.all && !c.any && c.not === undefined && 'missionDone' in c
+        ? c.missionDone : undefined;
+
+    const top = leafId(unlock);
+    if (top !== undefined) return ctx.isCompleted?.(top) ? [] : [top];
+
+    if (Array.isArray(unlock.all) && !unlock.any && unlock.not === undefined) {
+      const missing = [];
+      for (const c of unlock.all) {
+        const id = leafId(c);
+        if (id === undefined) {
+          // A non-leaf clause that's still unsatisfied makes the gate non-simple.
+          if (!evaluateUnlock(c, ctx)) return null;
+          continue;
+        }
+        if (!ctx.isCompleted?.(id)) missing.push(id);
+      }
+      return missing;
+    }
+    return null; // any / not / array-sugar / non-missionDone leaf → not "one step"
+  }
+
+  /**
+   * Whether a mission row should be SHOWN on the mission list (vs hidden until
+   * later). Completed and currently-playable missions are always visible. A
+   * locked mission is visible only when it's "one step from playable": its sole
+   * remaining blocker is a single missionDone-style prerequisite AND that blocker
+   * mission is itself playable right now (the immediate next mission in line).
+   */
+  _isMissionVisible(mission) {
+    if (this.completedMissions.has(mission.id)) return true;
+    if (this._canPlayMission(mission)) return true;
+    const blockers = this._missionBlockers(mission);
+    if (blockers === null || blockers.length !== 1) return false;
+    const dep = this.getMissionDef(blockers[0]);
+    return !!dep && this._canPlayMission(dep);
   }
 
   /** Get the next available (unlocked, not completed) mission. */
@@ -752,22 +830,24 @@ export class Campaign {
     };
   }
 
-  /** Get list of missions with their status for the mission select screen. */
+  /**
+   * Get list of missions with their status for the mission select screen.
+   * `available` (can launch now) flows through the single `_canPlayMission()`
+   * predicate, so it honors rich `unlock` criteria — not just legacy `requires`.
+   * `visible` marks whether the row should be shown at all: completed and
+   * playable missions always show; a locked mission shows only when it's the
+   * immediate next one ("one step from playable", see `_isMissionVisible`).
+   */
   getMissionList() {
-    return this.campaignDef.missions.map(m => {
-      const completed = this.completedMissions.has(m.id);
-      const available = completed || (
-        !m.requires || m.requires.every(r => this.completedMissions.has(r))
-      );
-      return {
-        id: m.id,
-        title: m.title,
-        briefing: m.briefing,
-        completed,
-        available,
-        current: m.id === this.currentMission,
-      };
-    });
+    return this.campaignDef.missions.map(m => ({
+      id: m.id,
+      title: m.title,
+      briefing: m.briefing,
+      completed: this.completedMissions.has(m.id),
+      available: this._canPlayMission(m),
+      visible: this._isMissionVisible(m),
+      current: m.id === this.currentMission,
+    }));
   }
 
   /**
@@ -926,6 +1006,21 @@ export function _migrate(data, fromVersion) {
     }
     out = { ...out, completedMissions: [...completed], version: 3 };
     v = 3;
+  }
+
+  // v3 → v4: the `tutorial` mission is folded into Chapter 1 as its first
+  // mission, and "The Awakening" (`prologue`) now requires `tutorial`. A v3
+  // Chapter-1 save predates the fold and never recorded `tutorial` as completed,
+  // so The Awakening would lock with no way to satisfy the prereq mid-campaign.
+  // Backfill `tutorial` so returning players keep their progress (worst case they
+  // skip a tutorial they almost certainly already played).
+  if (v === 3) {
+    const completed = new Set(out.completedMissions ?? []);
+    if (out.campaignId === 'calebs_hollow_prologue' && !completed.has('tutorial')) {
+      completed.add('tutorial');
+    }
+    out = { ...out, completedMissions: [...completed], version: 4 };
+    v = 4;
   }
 
   return out;
