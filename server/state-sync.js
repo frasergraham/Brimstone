@@ -36,6 +36,14 @@ export function serializeState(state) {
       fortifyLevel:   tile.fortifyLevel   ?? 0,
       explored:       tile.explored       ?? false,
       hiddenSurvivor: tile.hiddenSurvivor ?? false,
+      // Authored hidden-encounter payload. Until the tile is explored this data
+      // lives ONLY on the tile (post-discovery it moves onto the spawned entity),
+      // so an UNDISCOVERED tile loses it across save/resume unless serialized
+      // here. Allowlist-style: only these explicit hidden-encounter fields, not
+      // arbitrary authored content. Optional/additive — no SAVE_VERSION bump.
+      hiddenSurvivorId:    tile.hiddenSurvivorId    ?? null,
+      hiddenSurvivorLevel: tile.hiddenSurvivorLevel ?? null,
+      exploreOverride:     tile.exploreOverride     ?? null,
       roadDirs:       tile.roadDirs ? [...tile.roadDirs] : [],
       // Sub-hex blocked slots (tree/bridge). Authoritative — drives the renderer
       // and (for bridges) the capacity gate. See deriveBlockedSlots in tiles.js.
@@ -243,6 +251,11 @@ export function deserializeState(snap) {
     tile.fortifyLevel   = t.fortifyLevel   ?? 0;
     tile.explored       = t.explored       ?? false;
     tile.hiddenSurvivor = t.hiddenSurvivor ?? false;
+    // Authored hidden-encounter payload (see serialize side). Legacy saves that
+    // predate these fields → null, identical to an unauthored tile.
+    tile.hiddenSurvivorId    = t.hiddenSurvivorId    ?? null;
+    tile.hiddenSurvivorLevel = t.hiddenSurvivorLevel ?? null;
+    tile.exploreOverride     = t.exploreOverride     ?? null;
     tile.roadDirs       = new Set(t.roadDirs || []);
     // Building footprint (P1). Restore as real fields; legacy snapshots lack
     // them → defaults, then the migration pass below populates them.
