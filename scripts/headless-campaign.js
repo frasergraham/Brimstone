@@ -78,6 +78,9 @@ function buildMissionState(missionDef) {
 
   const state = new GameState(true, true, missionDef.mapSize, null, mapData);
   state.fogOfWar = 'none';   // headless — no fog so AI sees everything
+  // Mirror main.js _initCampaignMission: campaign missions enable XP/veterancy.
+  // awardXP gates on this flag, so without it survivor XP reads ~0 in balance runs.
+  state.isCampaign = true;
 
   if (missionDef.phaseCycle) {
     state.cycleConfig = {
@@ -236,6 +239,11 @@ function runMission(missionDef, gameIdx) {
     ).length,
     finalWitchScore: state.nodeScore?.witch ?? 0,
     cyclePhases: state.cycleConfig?.phases?.length ?? null,
+    // Hero-side XP/veterancy — proves awardXP fires (gated on state.isCampaign).
+    heroSideXp: state.entities
+      .filter(e => e.owner === 'hero')
+      .reduce((a, e) => a + (e.xp ?? 0), 0),
+    heroLevel: state.hero?.level ?? 1,
   };
 }
 
@@ -249,6 +257,8 @@ function summarise(missionDef, results) {
   const meanHeroHp = (results.reduce((a, r) => a + r.finalHeroHp, 0) / results.length).toFixed(1);
   const meanSurv   = (results.reduce((a, r) => a + r.finalSurvivors, 0) / results.length).toFixed(1);
   const meanWScore = (results.reduce((a, r) => a + r.finalWitchScore, 0) / results.length).toFixed(2);
+  const meanHeroXp = (results.reduce((a, r) => a + r.heroSideXp, 0) / results.length).toFixed(1);
+  const meanHeroLvl = (results.reduce((a, r) => a + r.heroLevel, 0) / results.length).toFixed(2);
   const meanCycle  = results.some(r => r.cyclePhases !== null)
     ? (results.reduce((a, r) => a + (r.cyclePhases ?? 0), 0) / results.length).toFixed(1)
     : null;
@@ -266,6 +276,7 @@ function summarise(missionDef, results) {
   console.log(`  Mean rounds      : ${meanRounds}`);
   console.log(`  Mean hero HP end : ${meanHeroHp}`);
   console.log(`  Mean survivors   : ${meanSurv}`);
+  console.log(`  Mean hero-side XP : ${meanHeroXp}  (hero L${meanHeroLvl})`);
   if (meanCycle !== null) console.log(`  Mean cycle length: ${meanCycle} phases`);
   if (parseFloat(meanWScore) > 0) console.log(`  Mean witch score : ${meanWScore}`);
   console.log(`  Outcomes:`);
