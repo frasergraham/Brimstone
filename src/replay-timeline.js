@@ -312,6 +312,44 @@ export function isEventVisible(ev, ents, isVisible,
 }
 
 /**
+ * Can the viewer LEARN about a survivor/zombie discovery carried on this event?
+ *
+ * Tighter than isEventVisible: a move card shows when EITHER its origin or its
+ * destination is in sight, but a hidden unit found at a FOGGED destination must
+ * not leak into the round summary just because the viewer watched the actor
+ * leave a sighted origin. The find is shown only when —
+ *   • the discoverer is on the viewer's own faction (own-faction bypass — you
+ *     always learn what your own units turn up, sighted or not), OR
+ *   • the action is inherently public (the horn reveals its finds to everyone),
+ *   • OR the DISCOVERED tile is in the viewer's POST-step sight.
+ *
+ * The discovered tile is the actor's resolved hex: a move ends at its
+ * destination; explore / horn / fortify / … happen on the actor's own hex.
+ *
+ * @param {Object}   ev        — the resolved ACTION_OK sub-event carrying the find.
+ * @param {Object}   actorSnap — the actor's snapshot (for owner + resting hex).
+ * @param {Function} isVisible — (col,row,ents)=>boolean fog test; falsy ⇒ all visible.
+ * @param {Object}   deps      — { PlanActionType, viewerFaction, viewEnts }.
+ *   viewEnts is the POST-step entity list (what the veil shows at the boundary).
+ * @returns {boolean}
+ */
+export function isDiscoveryVisible(ev, actorSnap, isVisible,
+  { PlanActionType: PA, viewerFaction = null, viewEnts = null } = {}) {
+  const vis = isVisible || (() => true);
+  const a = ev?.action;
+  if (!PA || !a) return true;
+  // Own-faction discoverer always learns of the find.
+  if (viewerFaction && actorSnap?.owner === viewerFaction) return true;
+  // Inherently public actions (horn) surface their finds to every faction.
+  if (PUBLIC_ACTION_TYPES.has(a.type)) return true;
+  // Otherwise the discovered tile — the actor's resolved hex — must be in the
+  // viewer's post-step sight.
+  const col = a.type === PA.MOVE ? a.toCol : actorSnap?.col;
+  const row = a.type === PA.MOVE ? a.toRow : actorSnap?.row;
+  return Number.isFinite(col) && Number.isFinite(row) && vis(col, row, viewEnts);
+}
+
+/**
  * Turn resolved steps into the timeline column model.
  *
  * @param {Array}    steps         — StepRecord[] from resolvePlans/resolvePlansMP.
@@ -552,10 +590,14 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
       // Discovered survivor(s)/zombie(s) — a move / explore / horn can surface
       // one OR MORE hidden units. Show all their icons + a "FOUND …" note (these
       // replace the old discovery modal). Horn in particular can find several.
+      // Fog-gated SEPARATELY from the card: the move card may show because its
+      // origin was in sight, but a unit found at a fogged destination must not
+      // leak (own-faction discoveries always show — see isDiscoveryVisible).
       let discovered = null;
       const found = ev.result?.encounterSurvivors
         ?? (ev.result?.encounterSurvivor ? [ev.result.encounterSurvivor] : []);
-      if (found.length) {
+      if (found.length && isDiscoveryVisible(ev, actorSnap, vis,
+        { PlanActionType: PA, viewerFaction, viewEnts })) {
         discovered = found.map(unitRef);
         const kind = found[0].type === 'zombie' ? 'ZOMBIE' : 'SURVIVOR';
         note = {

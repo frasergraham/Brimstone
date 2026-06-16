@@ -5,7 +5,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildStepDigest, buildConversationDigest, buildStoryBeatDigest, buildRollTip, buildRollRows, buildOutcomeSummary, isEventVisible, OutcomeKind, buildTurnCardHoverOverlays, TURN_CARD_HOVER_COLOR, battleOutcomeWord } from '../src/replay-timeline.js';
+import { buildStepDigest, buildConversationDigest, buildStoryBeatDigest, buildRollTip, buildRollRows, buildOutcomeSummary, isEventVisible, isDiscoveryVisible, OutcomeKind, buildTurnCardHoverOverlays, TURN_CARD_HOVER_COLOR, battleOutcomeWord } from '../src/replay-timeline.js';
 import { ResEventType } from '../server/resolver.js';
 import { PlanActionType } from '../src/planner.js';
 
@@ -490,6 +490,124 @@ describe('buildStepDigest — post-step gating across steps', () => {
     assert.deepEqual(d[0].entries.map(e => e.entityId), ['h1']);
     // Step 2: still out of sight from (0,4) → dropped again.
     assert.deepEqual(d[1].entries.map(e => e.entityId), ['h1']);
+  });
+});
+
+// ── Discovery fog gating (survivor/zombie finds) ─────────────────────────────
+// A move card may show because its ORIGIN was in sight, yet the survivor/zombie
+// is found at a FOGGED destination — that find must not leak into the summary.
+// The own-faction bypass still holds: you always learn what your own units find.
+
+function moveDiscoveryEvent(actorId, faction, toCol, toRow, found) {
+  const ev = moveEvent(actorId, faction, toCol, toRow);
+  ev.result = {
+    ...ev.result,
+    ...(Array.isArray(found) ? { encounterSurvivors: found } : { encounterSurvivor: found }),
+  };
+  return ev;
+}
+
+describe('isDiscoveryVisible — discovered-tile fog gate', () => {
+  const sight = (col, row, list) => (list ?? []).some(e =>
+    e.alive !== false && e.owner === 'hero'
+    && Math.abs(e.col - col) + Math.abs(e.row - row) <= 4);
+
+  test('enemy find at a fogged destination is hidden (origin-visible move still leaks today)', () => {
+    const z = snap('z1', 'zombie', 'witch', 3, 4);             // origin near the scout
+    const ev = moveDiscoveryEvent('z1', 'witch', 9, 4, { id: 's9', type: 'survivor' });
+    const scout = snap('h1', 'survivor', 'hero', 4, 4);
+    // dest (9,4) is 5 hexes from the scout → fogged.
+    assert.equal(isDiscoveryVisible(ev, z, sight,
+      { PlanActionType, viewerFaction: 'hero', viewEnts: [scout, z] }), false);
+  });
+
+  test('own-faction find shows even under total fog (bypass)', () => {
+    const h = snap('h1', 'survivor', 'hero', 8, 4);
+    const ev = moveDiscoveryEvent('h1', 'hero', 9, 4, { id: 's9', type: 'survivor' });
+    assert.equal(isDiscoveryVisible(ev, h, () => false,
+      { PlanActionType, viewerFaction: 'hero', viewEnts: [] }), true);
+  });
+
+  test('enemy find at a SEEN destination shows', () => {
+    const z = snap('z1', 'zombie', 'witch', 3, 4);
+    const ev = moveDiscoveryEvent('z1', 'witch', 4, 4, { id: 's9', type: 'survivor' });
+    const scout = snap('h1', 'survivor', 'hero', 5, 4);        // sees (4,4)
+    assert.equal(isDiscoveryVisible(ev, z, sight,
+      { PlanActionType, viewerFaction: 'hero', viewEnts: [scout, z] }), true);
+  });
+
+  test('horn finds are public — shown even when the blower is fogged', () => {
+    const h = snap('h1', 'hero', 'witch', 9, 9);               // not the viewer's faction
+    const ev = {
+      type: ResEventType.ACTION_OK, faction: 'witch',
+      action: { type: PlanActionType.SOUND_HORN, entityId: 'h1' },
+      result: { success: true, encounterSurvivor: { id: 's9', type: 'survivor' } },
+    };
+    assert.equal(isDiscoveryVisible(ev, h, () => false,
+      { PlanActionType, viewerFaction: 'hero', viewEnts: [] }), true);
+  });
+
+  test('explore find gates on the actor hex (own resting hex)', () => {
+    const h = snap('h1', 'survivor', 'witch', 6, 6);
+    const ev = {
+      type: ResEventType.ACTION_OK, faction: 'witch',
+      action: { type: PlanActionType.EXPLORE, entityId: 'h1' },
+      result: { success: true, encounterSurvivor: { id: 'z9', type: 'zombie' } },
+    };
+    const seen = (col, row) => col === 6 && row === 6;
+    assert.equal(isDiscoveryVisible(ev, h, seen,
+      { PlanActionType, viewerFaction: 'hero', viewEnts: [] }), true);
+    const blind = () => false;
+    assert.equal(isDiscoveryVisible(ev, h, blind,
+      { PlanActionType, viewerFaction: 'hero', viewEnts: [] }), false);
+  });
+});
+
+describe('buildStepDigest — discovery fog gating end-to-end', () => {
+  const sight = (col, row, list) => (list ?? []).some(e =>
+    e.alive !== false && e.owner === 'hero'
+    && Math.abs(e.col - col) + Math.abs(e.row - row) <= 4);
+
+  test('enemy move with origin in sight shows the MOVE but NOT the fogged find', () => {
+    const scout = snap('h1', 'survivor', 'hero', 4, 4);
+    const zPre  = snap('z1', 'zombie', 'witch', 3, 4);          // origin near scout (seen)
+    const zPost = snap('z1', 'zombie', 'witch', 9, 4);          // dest far (fogged)
+    const ev = moveDiscoveryEvent('z1', 'witch', 9, 4, { id: 's9', type: 'survivor', name: 'Mara' });
+    const d = buildStepDigest([step([ev], [scout, zPre])], [scout, zPost],
+      { PlanActionType, ResEventType, isVisible: sight, viewerFaction: 'hero' });
+    assert.equal(d[0].entries.length, 1);                       // the move card is still shown
+    const e = d[0].entries[0];
+    assert.equal(e.label, 'MOVE');
+    assert.equal(e.discovered, null);                           // the find is fogged out
+    assert.equal(e.note, null);
+  });
+
+  test('own-faction move discovery is shown even when the tile is unseen (bypass)', () => {
+    // The only hero unit is the discoverer itself, placed far from where the
+    // sight predicate would otherwise grant vision — bypass must carry it.
+    const hPre  = snap('h1', 'survivor', 'hero', 8, 0);
+    const hPost = snap('h1', 'survivor', 'hero', 9, 0);
+    const ev = moveDiscoveryEvent('h1', 'hero', 9, 0, { id: 's9', type: 'survivor', name: 'Mara' });
+    // Fully-fogged predicate (no sight anywhere) isolates the own-faction bypass.
+    const d = buildStepDigest([step([ev], [hPre])], [hPost],
+      { PlanActionType, ResEventType, isVisible: () => false, viewerFaction: 'hero' });
+    assert.equal(d[0].entries.length, 1);
+    const e = d[0].entries[0];
+    assert.equal(e.discovered.length, 1);
+    assert.equal(e.discovered[0].name, 'Mara');
+    assert.deepEqual(e.note, { text: 'FOUND SURVIVOR', kind: 'gain' });
+  });
+
+  test('enemy discovery on a SEEN destination is shown to the other side', () => {
+    const scout = snap('h1', 'survivor', 'hero', 5, 4);         // sees (4,4)
+    const zPre  = snap('z1', 'zombie', 'witch', 3, 4);
+    const zPost = snap('z1', 'zombie', 'witch', 4, 4);
+    const ev = moveDiscoveryEvent('z1', 'witch', 4, 4, { id: 'z9', type: 'zombie' });
+    const d = buildStepDigest([step([ev], [scout, zPre])], [scout, zPost],
+      { PlanActionType, ResEventType, isVisible: sight, viewerFaction: 'hero' });
+    const e = d[0].entries[0];
+    assert.equal(e.discovered.length, 1);
+    assert.equal(e.note.text, 'FOUND ZOMBIE');
   });
 });
 
