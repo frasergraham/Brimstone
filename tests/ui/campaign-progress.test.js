@@ -433,6 +433,39 @@ describe('Campaign shared armory (weapons move both ways)', () => {
     assert.equal(reloaded.load(), true);
     assert.deepEqual(reloaded.weapons, {});
   });
+
+  test('unequipToInventory round-trips with equipFromInventory back to the start', () => {
+    const c = armoryCampaign();
+    // Start unit 0 weaponless, with an axe waiting in the shared pool.
+    c.roster[0].weapon = null;
+    c.weapons = { axe: 1 };
+    assert.equal(c.equipFromInventory(0, 'axe'), 'axe'); // pool → equipped
+    assert.equal(c.roster[0].weapon, 'axe');
+    assert.ok(!c.weapons.axe);                           // pool drained
+    // Take it back off (equipped → pool, no replacement) — exact starting state.
+    assert.deepEqual(c.unequipToInventory(0), { success: true, weaponId: 'axe' });
+    assert.equal(c.roster[0].weapon, null);              // weaponless again
+    assert.equal(c.weapons.axe, 1);                      // pool count restored
+  });
+
+  test('unequipToInventory banks an equipped weapon into the shared pool', () => {
+    const c = armoryCampaign();
+    c.weapons = {};                                      // empty pool
+    assert.deepEqual(c.unequipToInventory('leader'), { success: true, weaponId: 'sword' });
+    assert.equal(c.heroStats.weapon, null);              // equipped slot emptied
+    assert.equal(c.weapons.sword, 1);                    // sword reached the pool
+  });
+
+  test('unequipToInventory no-ops when the unit has no equipped weapon', () => {
+    const c = armoryCampaign();
+    c.heroStats.weapon = null;                           // already unarmed
+    c.weapons = {};
+    assert.deepEqual(c.unequipToInventory('leader'), { success: false });
+    // never pools a null/undefined key
+    assert.deepEqual(c.weapons, {});
+    assert.ok(!('null' in c.weapons));
+    assert.ok(!('undefined' in c.weapons));
+  });
 });
 
 // ── Shared-armory rendering (campaign-ui.js) ─────────────────────────────────
@@ -444,6 +477,15 @@ describe('shared-armory rendering', () => {
     assert.match(html, /cprog-return-btn[^>]*data-idx="2"[^>]*data-weapon="bow"/);
     // the equipped weapon row never gets a Stow control
     assert.equal(occurrences(html, 'cprog-return-btn'), 1);
+  });
+
+  test('the equipped weapon row keeps the ✓ badge and gains an Unequip control', () => {
+    const u = { name: 'X', color: '#888', hp: 5, maxHp: 10, attack: 2, defense: 1, level: 1, xp: 0, weapon: 'sword', items: { bow: 1 } };
+    const html = progressUnitCardHTML(u, { idx: 2 });
+    assert.match(html, /✓ Equipped/);                                          // badge stays
+    assert.match(html, /cprog-unequip-btn[^>]*data-idx="2"[^>]*data-weapon="sword"/);
+    // only the one equipped weapon is unequippable (carried rows don't get it)
+    assert.equal(occurrences(html, 'cprog-unequip-btn'), 1);
   });
 
   test('pooled weapons render in Shared Inventory with a per-unit Equip control', () => {
@@ -485,6 +527,11 @@ describe('main.js Campaign Progress wiring', () => {
     assert.match(src, /returnWeaponToInventory\(/);
     assert.match(src, /cprog-pool-equip-btn/);
     assert.match(src, /equipFromInventory\(/);
+  });
+
+  test('unequip button handler invokes Campaign.unequipToInventory', () => {
+    assert.match(src, /cprog-unequip-btn/);
+    assert.match(src, /unequipToInventory\(/);
   });
 
   test('progress-screen squad cap uses the full roster (not the mission cap)', () => {

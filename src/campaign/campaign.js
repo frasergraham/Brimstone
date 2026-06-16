@@ -1053,6 +1053,31 @@ export class Campaign {
     return weaponId;
   }
 
+  /**
+   * Take a unit's *equipped* weapon off entirely and bank it in the shared
+   * armory (`this.weapons`) without equipping a replacement — the missing
+   * direction alongside {@link equipFromInventory} (pool → equipped) and
+   * {@link returnWeaponToInventory} (backpack → pool). Used to rearrange
+   * loadouts between missions: a leader can drop a weapon into the pool for
+   * another unit to take, leaving themselves unarmed until equipped again.
+   *
+   * @param {number|'leader'} rosterIndex  roster index, or 'leader' for the hero.
+   * @returns {{success:boolean, weaponId?:string}}  `{ success:true, weaponId }`
+   *   on success, or `{ success:false }` when there's nothing equipped to
+   *   remove (or the unit is unknown).
+   */
+  unequipToInventory(rosterIndex) {
+    const unit = rosterIndex === 'leader' ? this.heroStats : this.roster[rosterIndex];
+    if (!unit) return { success: false };
+    const weaponId = unit.weapon;
+    if (!weaponId) return { success: false }; // nothing equipped — no-op
+    this.weapons = { ...(this.weapons || {}) };
+    this.weapons[weaponId] = (this.weapons[weaponId] || 0) + 1;
+    unit.weapon = null;
+    this.save();
+    return { success: true, weaponId };
+  }
+
   // ── Server sync (for verified users) ──────────────────────────────────────
 
   /** Push current state to server. Requires valid token + verified email. */

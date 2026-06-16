@@ -196,9 +196,11 @@ export function weaponStatString(id) {
 
 /**
  * One weapon row: glyph, name, stat string, and controls. The equipped weapon
- * shows a ✓ badge; a carried (backpack) weapon gets an Equip control plus a
- * Stow control that returns it to the shared armory (so another unit can take
- * it). `idx` ('leader' or a roster index) is stamped onto both controls.
+ * shows a ✓ badge plus an Unequip control that banks it in the shared armory
+ * (equipped slot → pool, no replacement); a carried (backpack) weapon gets an
+ * Equip control plus a Stow control that returns it to the shared armory (so
+ * another unit can take it). `idx` ('leader' or a roster index) is stamped onto
+ * every control.
  */
 function weaponRowHTML(id, count, idx, isEquipped) {
   const name = weaponName(id);
@@ -207,6 +209,7 @@ function weaponRowHTML(id, count, idx, isEquipped) {
   const statHtml = stats ? `<span class="cprog-w-stats">${stats}</span>` : '';
   const ctrl = isEquipped
     ? '<span class="cprog-w-eq" title="Equipped">✓ Equipped</span>'
+      + `<button class="cprog-unequip-btn" data-idx="${idx}" data-weapon="${id}" title="Unequip ${name} into the shared armory">⊘ Unequip</button>`
     : `<button class="cprog-equip-btn" data-idx="${idx}" data-weapon="${id}" title="Equip ${name}">Equip</button>`
       + `<button class="cprog-return-btn" data-idx="${idx}" data-weapon="${id}" title="Stow ${name} in the shared armory">↩ Stow</button>`;
   return `<div class="cprog-weapon${isEquipped ? ' equipped' : ''}" data-weapon="${id}">

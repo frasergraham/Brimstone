@@ -3989,6 +3989,17 @@ function _wireCampaignProgressHandlers() {
       if (equipped != null) _renderCampaignProgressScreen();
     });
   });
+  // Unequip a unit's equipped weapon into the shared armory, with no
+  // replacement (equipped slot → shared pool). Lets the operator rearrange
+  // loadouts between missions.
+  partyEl?.querySelectorAll('.cprog-unequip-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const raw = btn.dataset.idx;
+      const target = raw === 'leader' ? 'leader' : parseInt(raw, 10);
+      const res = _activeCampaign.unequipToInventory(target);
+      if (res?.success) _renderCampaignProgressScreen();
+    });
+  });
   // Admin: add a random survivor (mirrors the old screen's testing affordance).
   partyEl?.querySelector('#btn-admin-add-survivor')?.addEventListener('click', () => {
     _activeCampaign.roster.push(snapshotSurvivor(createSurvivor(0, 0, 'hero')));
