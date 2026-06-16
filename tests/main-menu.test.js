@@ -100,7 +100,6 @@ describe('main menu — Electron server settings preserved', () => {
 
 describe('main menu — routing preserved for kept buttons', () => {
   const cases = [
-    ['btn-ng-campaign', '_showCampaignSelectScreen'],
     ['btn-ng-vsai', '_showSinglePlayerScreen'],
     ['btn-ng-battle', '_showBattleScreen'],
     ['btn-ng-online', '_showOnlineScreen'],
@@ -113,6 +112,14 @@ describe('main menu — routing preserved for kept buttons', () => {
       assert.match(mainJs, re);
     });
   }
+
+  test('btn-ng-campaign skips the chapter picker → Chapter 1 slot picker', () => {
+    // The chapter-select screen is no longer surfaced (only Ch1 ships); the
+    // Campaign menu choice goes straight to Chapter 1's save-slot picker.
+    const re = /getElementById\('btn-ng-campaign'\)[\s\S]{0,500}?_showCampaignSlotScreen\(ch1\)/;
+    assert.match(mainJs, re);
+    assert.match(mainJs, /getCampaignById\('calebs_hollow_prologue'\)/);
+  });
 
   test('no listeners reference removed steps', () => {
     for (const step of ['newgame', 'replays', 'howtoplay', 'options']) {

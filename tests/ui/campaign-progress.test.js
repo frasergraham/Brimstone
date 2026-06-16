@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
   xpProgress, progressUnitCardHTML, partyPaneHTML, missionListPaneHTML, missionRows,
-  weaponName, weaponStatString,
+  weaponName, weaponStatString, progressSquadCap,
 } from '../../src/campaign/campaign-ui.js';
 import { xpForLevel } from '../../src/balance.js';
 import { Campaign } from '../../src/campaign/campaign.js';
@@ -227,6 +227,32 @@ describe('partyPaneHTML', () => {
   });
 });
 
+// ── progressSquadCap (Fix #1: the campaign menu's squad picker is uncapped) ───
+
+describe('progressSquadCap', () => {
+  test('cap is the full roster size — the whole party is pickable', () => {
+    assert.equal(progressSquadCap(makeRoster(5)), 5);
+    assert.equal(progressSquadCap(makeRoster(1)), 1);
+  });
+
+  test('empty / missing roster → 0 (nothing to pick, no crash)', () => {
+    assert.equal(progressSquadCap([]), 0);
+    assert.equal(progressSquadCap(undefined), 0);
+    assert.equal(progressSquadCap(null), 0);
+  });
+
+  test('with the roster-size cap the menu never shows "0/0 — go alone"', () => {
+    // Regression for the bug where the next mission's solo cap (0) leaked onto
+    // the management screen. Using the roster size as the cap, a party of 3
+    // reads "N/3" and offers promote/demote controls instead.
+    const roster = makeRoster(3);
+    const cap = progressSquadCap(roster);          // 3
+    const html = partyPaneHTML(HERO, roster, [0, 1, 2], cap, { resources: {} });
+    assert.match(html, /Active Squad <span class="cprog-count">3\/3<\/span>/);
+    assert.doesNotMatch(html, /go alone/i);
+  });
+});
+
 // ── missionRows + missionListPaneHTML ───────────────────────────────────────
 
 const rowsDef = {
@@ -330,6 +356,111 @@ describe('Campaign.equipWeaponForUnit', () => {
   });
 });
 
+// ── Shared armory: returnWeaponToInventory / equipFromInventory (Fix #2) ──────
+
+describe('Campaign shared armory (weapons move both ways)', () => {
+  function armoryCampaign() {
+    const c = new Campaign(rowsDef, 1);
+    c.heroStats = { hp: 50, maxHp: 98, attack: 3, defense: 2, level: 1, xp: 0, weapon: 'sword', items: { bow: 1 } };
+    c.roster = [{ name: 'S', title: 'Farmer', color: '#8a8', hp: 6, maxHp: 10, attack: 2, defense: 1, level: 1, xp: 0, weapon: 'dagger', items: { axe: 1 } }];
+    c.weapons = {};
+    return c;
+  }
+
+  test('returnWeaponToInventory stows a carried weapon into the shared pool', () => {
+    const c = armoryCampaign();
+    assert.equal(c.returnWeaponToInventory('leader', 'bow'), 'bow');
+    assert.equal(c.weapons.bow, 1);                  // weapon reached the pool
+    assert.ok(!c.heroStats.items.bow);               // and left the backpack
+    assert.equal(c.heroStats.weapon, 'sword');       // equipped slot untouched
+  });
+
+  test('equipFromInventory draws a pooled weapon onto a unit, pooling the old one', () => {
+    const c = armoryCampaign();
+    c.weapons = { greatsword: 1 };
+    assert.equal(c.equipFromInventory('leader', 'greatsword'), 'greatsword');
+    assert.equal(c.heroStats.weapon, 'greatsword');  // new weapon equipped
+    assert.ok(!c.weapons.greatsword);                // drawn out of the pool
+    assert.equal(c.weapons.sword, 1);                // old equipped weapon stowed (non-destructive)
+  });
+
+  test('round-trips a weapon from one unit to another via the pool', () => {
+    const c = armoryCampaign();
+    // Survivor stows its spare axe; the leader then equips it from the pool.
+    assert.equal(c.returnWeaponToInventory(0, 'axe'), 'axe');
+    assert.ok(!c.roster[0].items.axe);
+    assert.equal(c.weapons.axe, 1);
+    assert.equal(c.equipFromInventory('leader', 'axe'), 'axe');
+    assert.equal(c.heroStats.weapon, 'axe');
+    assert.ok(!c.weapons.axe);                       // pool drained
+    assert.equal(c.weapons.sword, 1);                // leader's old sword pooled
+  });
+
+  test('returnWeaponToInventory no-ops for non-weapon / not-carried / unknown unit', () => {
+    const c = armoryCampaign();
+    assert.equal(c.returnWeaponToInventory('leader', 'horse'), null);   // not a weapon
+    assert.equal(c.returnWeaponToInventory('leader', 'greatsword'), null); // not carried
+    assert.equal(c.returnWeaponToInventory(99, 'bow'), null);            // unknown unit
+    assert.deepEqual(c.weapons, {});                                     // pool untouched
+  });
+
+  test('equipFromInventory no-ops when the weapon is not in the pool or already equipped', () => {
+    const c = armoryCampaign();
+    c.weapons = { greatsword: 1 };
+    assert.equal(c.equipFromInventory('leader', 'axe'), null);          // not in pool
+    assert.equal(c.equipFromInventory('leader', 'sword'), null);        // already equipped
+    assert.equal(c.equipFromInventory('leader', 'horse'), null);        // not a weapon
+    assert.equal(c.heroStats.weapon, 'sword');
+    assert.equal(c.weapons.greatsword, 1);                              // pool untouched
+  });
+
+  test('armory changes persist to localStorage (survive a reload)', () => {
+    const c = armoryCampaign();
+    c.returnWeaponToInventory('leader', 'bow');
+    const reloaded = new Campaign(rowsDef, 1);
+    assert.equal(reloaded.load(), true);
+    assert.equal(reloaded.weapons.bow, 1);
+  });
+
+  test('pre-armory saves load with an empty pool (no crash)', () => {
+    const c = new Campaign(rowsDef, 1);
+    // Persist a blob lacking the `weapons` field, mimicking an older save.
+    const blob = JSON.parse(globalThis.localStorage.getItem(`brimstone-${c.saveSlot}`) || 'null')
+      || { campaignId: rowsDef.id, version: 4, currentMission: 'm1', completedMissions: [], roster: [], resources: {}, heroStats: c.heroStats, storyFlags: {}, updatedAt: 1 };
+    delete blob.weapons;
+    globalThis.localStorage.setItem(`brimstone-${c.saveSlot}`, JSON.stringify(blob));
+    const reloaded = new Campaign(rowsDef, 1);
+    assert.equal(reloaded.load(), true);
+    assert.deepEqual(reloaded.weapons, {});
+  });
+});
+
+// ── Shared-armory rendering (campaign-ui.js) ─────────────────────────────────
+
+describe('shared-armory rendering', () => {
+  test('carried weapon rows get a Stow control (return to the shared armory)', () => {
+    const u = { name: 'X', color: '#888', hp: 5, maxHp: 10, attack: 2, defense: 1, level: 1, xp: 0, weapon: 'sword', items: { bow: 1 } };
+    const html = progressUnitCardHTML(u, { idx: 2 });
+    assert.match(html, /cprog-return-btn[^>]*data-idx="2"[^>]*data-weapon="bow"/);
+    // the equipped weapon row never gets a Stow control
+    assert.equal(occurrences(html, 'cprog-return-btn'), 1);
+  });
+
+  test('pooled weapons render in Shared Inventory with a per-unit Equip control', () => {
+    const html = partyPaneHTML(HERO, makeRoster(1), [0], 1, { resources: {}, weapons: { greatsword: 1 } });
+    assert.match(html, /Armory/);
+    assert.match(html, /Great Sword/);
+    // an Equip control for the leader and for the one active unit
+    assert.match(html, /cprog-pool-equip-btn[^>]*data-idx="leader"[^>]*data-weapon="greatsword"/);
+    assert.match(html, /cprog-pool-equip-btn[^>]*data-idx="0"[^>]*data-weapon="greatsword"/);
+  });
+
+  test('no Armory section when the shared pool is empty', () => {
+    const html = partyPaneHTML(HERO, makeRoster(1), [0], 1, { resources: { wood: 2 } });
+    assert.doesNotMatch(html, /Armory/);
+  });
+});
+
 // ── main.js wiring (source-level) ────────────────────────────────────────────
 
 describe('main.js Campaign Progress wiring', () => {
@@ -347,6 +478,22 @@ describe('main.js Campaign Progress wiring', () => {
   test('equip button handler invokes Campaign.equipWeaponForUnit', () => {
     assert.match(src, /cprog-equip-btn/);
     assert.match(src, /equipWeaponForUnit\(/);
+  });
+
+  test('shared-armory handlers invoke return/equip-from-inventory', () => {
+    assert.match(src, /cprog-return-btn/);
+    assert.match(src, /returnWeaponToInventory\(/);
+    assert.match(src, /cprog-pool-equip-btn/);
+    assert.match(src, /equipFromInventory\(/);
+  });
+
+  test('progress-screen squad cap uses the full roster (not the mission cap)', () => {
+    assert.match(src, /_progressSquadCap\(_activeCampaign\?\.roster\)/);
+  });
+
+  test('Campaign menu routes straight to the Chapter 1 slot picker', () => {
+    assert.match(src, /getCampaignById\('calebs_hollow_prologue'\)/);
+    assert.match(src, /_showCampaignSlotScreen\(ch1\)/);
   });
 
   test('promote handler respects the active-squad cap', () => {
