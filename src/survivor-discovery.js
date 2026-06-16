@@ -35,11 +35,15 @@ export function triggerSurvivorEncounter(state, actor, col, row) {
 
   // Authored missions may pin a specific roster survivor to this tile.
   const forcedSurvivorId = st.hiddenSurvivorId ?? null;
+  // …and an optional spawn level so future-chapter recruits arrive scaled.
+  // Default 1 (no scaling). Ignored by the witch's zombie discovery.
+  const forcedSurvivorLevel = st.hiddenSurvivorLevel ?? 1;
 
   st.hiddenSurvivor = false;
   st.hiddenSurvivorId = null;
+  st.hiddenSurvivorLevel = null;
 
-  const entity = faction.createDiscoveryEntity(col, row, actor.ownerId, state, forcedSurvivorId);
+  const entity = faction.createDiscoveryEntity(col, row, actor.ownerId, state, forcedSurvivorId, forcedSurvivorLevel);
   // The discovered survivor carries a stable logic `ref` so an On Actor (OnSpawn)
   // node can fire when THIS survivor is found — e.g. to start a conversation. A
   // pinned survivor uses its pin; a random one uses its hex (matches the editor's

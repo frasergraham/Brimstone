@@ -159,9 +159,10 @@ export class Faction {
 
   /**
    * Create the entity discovered when this faction explores a hidden survivor tile.
+   * `level` is the optional authored spawn level (default 1) for campaign tiles.
    * @returns {object} entity
    */
-  createDiscoveryEntity(_col, _row, _ownerId, _state, _forcedSurvivorId) {
+  createDiscoveryEntity(_col, _row, _ownerId, _state, _forcedSurvivorId, _level) {
     throw new Error('Subclass must implement createDiscoveryEntity');
   }
 
@@ -464,7 +465,12 @@ export class HeroFaction extends Faction {
           if (Math.random() < 0.33) {
             const hex = freeHex();
             if (hex) {
-              const s = createSurvivor(hex.col, hex.row, hero.ownerId, state);
+              // Node-spawned survivors are procedural, so the spawn level is 1
+              // today — but the level is plumbed end-to-end (createSurvivor →
+              // descriptor) so a future chapter can scale them up by raising
+              // this single value.
+              const spawnLevel = 1;
+              const s = createSurvivor(hex.col, hex.row, hero.ownerId, state, null, spawnLevel);
               s.owner = 'hero';
               if (Math.random() < 0.5) s.items['horse'] = 1;
               state.entities.push(s);
@@ -477,6 +483,7 @@ export class HeroFaction extends Faction {
                 title: s.title,
                 hp: s.hp, maxHp: s.maxHp,
                 attack: s.getAttack(), defense: s.getDefense(),
+                level: s.level || 1,
                 abilityLabel: s.abilityLabel,
                 color: s.color,
               });
@@ -490,8 +497,8 @@ export class HeroFaction extends Faction {
   }
 
   // Discovery & Loot
-  createDiscoveryEntity(col, row, ownerId, state = null, forcedSurvivorId = null) {
-    const s = createSurvivor(col, row, ownerId, state, forcedSurvivorId);
+  createDiscoveryEntity(col, row, ownerId, state = null, forcedSurvivorId = null, level = 1) {
+    const s = createSurvivor(col, row, ownerId, state, forcedSurvivorId, level || 1);
     s.owner = 'hero';
     return s;
   }
@@ -508,6 +515,7 @@ export class HeroFaction extends Faction {
         name: entity.name, title: entity.title,
         hp: entity.hp, maxHp: entity.maxHp,
         attack: entity.getAttack(), defense: entity.getDefense(),
+        level: entity.level || 1,
         abilityLabel: entity.abilityLabel,
         color: entity.color,
       },

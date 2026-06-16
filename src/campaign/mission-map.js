@@ -62,6 +62,10 @@ function _applyTileDef(tile, def) {
   // Carry the editor-authored specific-survivor pin (roster name) so the
   // discovery spawn can materialise THAT survivor instead of random-picking.
   if (def.hiddenSurvivorId != null) tile.hiddenSurvivorId = def.hiddenSurvivorId;
+  // Optional spawn level for the hidden survivor (default 1 / unset). Lets
+  // future-chapter recruits be discovered already scaled up. Read by
+  // triggerSurvivorEncounter → createDiscoveryEntity → createSurvivor.
+  if (def.hiddenSurvivorLevel != null) tile.hiddenSurvivorLevel = def.hiddenSurvivorLevel;
   // Carry the editor-authored fixed-explore result so executeExplore yields
   // THAT instead of a random loot roll (offline/campaign only).
   if (def.exploreOverride != null) tile.exploreOverride = def.exploreOverride;

@@ -673,6 +673,7 @@
         "resource": null,
         "hiddenSurvivor": true,
         "hiddenSurvivorId": null,
+        "_comment_hiddenSurvivorLevel": "Optional: add \"hiddenSurvivorLevel\": 3 to spawn this hidden survivor at level 3 (scales HP/ATK/DEF via applyLevel). Defaults to 1 when absent.",
         "exploreOverride": null,
         "roadDirs": [
           "6,0",

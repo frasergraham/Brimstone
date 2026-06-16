@@ -735,7 +735,7 @@ export function defaultDisplayName(type) {
   return _DEFAULT_DISPLAY_NAMES[type] ?? type;
 }
 
-export function createSurvivor(col, row, ownerId = null, state = null, forcedName = null) {
+export function createSurvivor(col, row, ownerId = null, state = null, forcedName = null, level = 1) {
   const e = new Entity(EntityType.SURVIVOR, null, col, row, ownerId, state);
 
   // Roster de-dup tracker lives on the GameState when one is provided;
@@ -780,6 +780,15 @@ export function createSurvivor(col, row, ownerId = null, state = null, forcedNam
   e.attack  = char.attack;
   e.defense = char.defense;
   if (typeof char.agility === 'number') e.agility = char.agility;
+
+  // Spawn level (campaign authoring): hidden survivors / node spawns may be
+  // tagged with a higher `level` so future-chapter recruits arrive scaled.
+  // applyLevel snapshots the L1 base (the stats just assigned above) into
+  // `_baseMaxHp`, rescales maxHp via hpForLevel, and sets hp = maxHp — so it
+  // must run AFTER the base-stat assignment and BEFORE the entity is returned
+  // (i.e. before any caller-side HP normalization). Idempotent and a no-op for
+  // level 1, so normal/online survivors are unaffected.
+  applyLevel(e, level || 1);
 
   return e;
 }
