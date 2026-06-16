@@ -2,8 +2,7 @@
 // serializeState  → plain JSON-safe snapshot (network transmission, save storage)
 // deserializeState ← reconstruct a live GameState from a saved snapshot (resume)
 import { VERSION }           from '../src/version.js';
-import { Entity, BASE_AGILITY } from '../src/entities.js';
-import { ITEMS } from '../src/items.js';
+import { Entity, BASE_AGILITY, normalizeItems } from '../src/entities.js';
 import { UNIT_TYPES } from '../src/unit-types.js';
 import { GameState }         from '../src/game.js';
 import { setMapDimensions, hexKey }  from '../src/hex.js';
@@ -74,11 +73,10 @@ export function serializeState(state) {
     level:         e.level ?? 1,
     xp:            e.xp ?? 0,   // campaign veterancy — accumulated experience
     agility:       e.agility ?? BASE_AGILITY[e.type] ?? 1,
-    // Range is weapon-derived (denormalized cache of ITEMS[weapon].range).
-    range:         e.range   ?? 1,
+    // No denormalized `range` or `weapon` slot — the equipped weapon rides
+    // inside `items` (tagged equipped) and range composes via getRange().
     attackBonus:   e.attackBonus,
     defenseBonus:  e.defenseBonus,
-    weapon:        e.weapon        ?? null,
     name:          e.name          ?? null,
     title:         e.title         ?? null,
     bio:           e.bio           ?? null,
@@ -105,7 +103,7 @@ export function serializeState(state) {
     effects:       Array.isArray(e.effects)
       ? e.effects.map(rec => ({ ...rec }))
       : [],
-    items:         { ...e.items },
+    items:         normalizeItems(e.items),
     // alive is omitted — Entity derives it from hp via getter
   }));
 
@@ -290,10 +288,29 @@ export function deserializeState(snap) {
   // ── Entities — restore as real Entity instances so game-logic methods work ─
   state.entities = snap.entities.map(data => {
     const e = Object.create(Entity.prototype);
+    // Inventory migration shim (v6 → v7): the equipped weapon used to live in a
+    // top-level `weapon` string slot; it now rides inside `items` tagged
+    // `{ equipped: true }`. Legacy backpack entries were `{ id: count }`;
+    // normalizeItems folds both shapes into `{ id: { count, equipped? } }`, so a
+    // post-refactor save (already new-shape, no `weapon`) round-trips unchanged.
+    const items = normalizeItems(data.items);
+    if (data.weapon) {
+      // The legacy slot copy was counted separately from the pack, so bump the
+      // count if a spare of the same id already sat in the backpack.
+      if (items[data.weapon]) items[data.weapon].count = (items[data.weapon].count ?? 0) + 1;
+      else items[data.weapon] = { count: 1 };
+      items[data.weapon].equipped = true;
+    }
     Object.assign(e, data, {
-      items:   { ...(data.items   || {}) },
+      items,
       effects: Array.isArray(data.effects) ? data.effects.map(r => ({ ...r })) : [],
     });
+    // Drop legacy denormalized fields — equipped state lives in `items`, and
+    // getRange() composes range from the equipped weapon on demand. The
+    // equipped-weapon memo cache is created lazily (non-enumerable) on first
+    // getEquippedWeaponId(); a fresh entity has none to clear.
+    delete e.weapon;
+    delete e.range;
     // Ensure ownerId is present even on saves from before the multiplayer update
     if (e.ownerId === undefined) e.ownerId = null;
     // Back-compat for pre-effects saves
@@ -311,11 +328,6 @@ export function deserializeState(snap) {
     if (e.type === 'hero') e.type = 'paladin';
     // Back-compat hydrate Agility for pre-002 saves.
     if (e.agility === undefined) e.agility = BASE_AGILITY[e.type] ?? 1;
-    // Range is weapon-derived (no innate unit range). Restore it
-    // authoritatively from the equipped weapon — handles old saves that
-    // predate weapon-ranged attacks (no weapon → range 1) and keeps the
-    // denormalized cache in sync with `weapon`.
-    e.range = ITEMS[e.weapon]?.range ?? 1;
     // Once-per-round equip gate — default false on saves that predate it.
     if (e.equippedThisRound === undefined) e.equippedThisRound = false;
     // Scripted campaign NPC tag — default off for saves that predate it.

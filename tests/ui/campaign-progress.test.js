@@ -17,6 +17,18 @@ import {
 } from '../../src/campaign/campaign-ui.js';
 import { xpForLevel } from '../../src/balance.js';
 import { Campaign } from '../../src/campaign/campaign.js';
+import { getEquippedWeaponIdOf } from '../../src/entities.js';
+
+// Build a backpack dict in the new shape from a compact spec:
+//   eq(['sword', true], ['bow', 1]) → { sword: {count:1,equipped:true}, bow:{count:1} }
+function items(...specs) {
+  const out = {};
+  for (const [id, v] of specs) {
+    if (v === true) out[id] = { count: 1, equipped: true };
+    else out[id] = { count: v };
+  }
+  return out;
+}
 
 const _root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -37,7 +49,7 @@ function makeRoster(n) {
     hp: 6, maxHp: 10, attack: 2, defense: 1, level: 1, xp: 0, items: {},
   }));
 }
-const HERO = { hp: 50, maxHp: 98, attack: 3, defense: 2, level: 1, xp: 0, weapon: 'sword', items: {} };
+const HERO = { hp: 50, maxHp: 98, attack: 3, defense: 2, level: 1, xp: 0, items: items(['sword', true]) };
 
 // ── xpProgress ───────────────────────────────────────────────────────────────
 
@@ -94,7 +106,7 @@ describe('progressUnitCardHTML', () => {
 
   test('renders non-weapon carried items as inventory badges', () => {
     // horse is not a weapon → stays in the badge row; weapons move to the list.
-    const u = { name: 'X', color: '#888', hp: 4, maxHp: 10, attack: 1, defense: 1, level: 1, xp: 0, weapon: 'sword', items: { horse: 2 } };
+    const u = { name: 'X', color: '#888', hp: 4, maxHp: 10, attack: 1, defense: 1, level: 1, xp: 0, items: items(['sword', true], ['horse', 2]) };
     const html = progressUnitCardHTML(u, { idx: 0 });
     assert.match(html, /cprog-inv/);
     assert.match(html, /×2/);
@@ -127,7 +139,7 @@ describe('progressUnitCardHTML weapons list', () => {
   });
 
   test('renders one named row per weapon with its stat string + equipped ✓', () => {
-    const html = progressUnitCardHTML(unit({ weapon: 'sword', items: { bow: 1 } }), { idx: 0 });
+    const html = progressUnitCardHTML(unit({ items: items(['sword', true], ['bow', 1]) }), { idx: 0 });
     assert.equal(occurrences(html, 'cprog-w-glyph'), 2);   // one glyph per weapon row
     assert.match(html, /Sword/);
     assert.match(html, /ATK \+2/);
@@ -138,19 +150,19 @@ describe('progressUnitCardHTML weapons list', () => {
   });
 
   test('non-equipped weapon gets an Equip control carrying idx + weapon id', () => {
-    const html = progressUnitCardHTML(unit({ weapon: 'sword', items: { bow: 1 } }), { idx: 3 });
+    const html = progressUnitCardHTML(unit({ items: items(['sword', true], ['bow', 1]) }), { idx: 3 });
     assert.match(html, /cprog-equip-btn[^>]*data-idx="3"[^>]*data-weapon="bow"/);
     // the equipped weapon itself never gets an Equip control
     assert.equal(occurrences(html, 'cprog-equip-btn'), 1);
   });
 
   test('leader sentinel idx flows onto the Equip control', () => {
-    const html = progressUnitCardHTML(unit({ weapon: 'sword', items: { bow: 1 } }), { idx: 'leader' });
+    const html = progressUnitCardHTML(unit({ items: items(['sword', true], ['bow', 1]) }), { idx: 'leader' });
     assert.match(html, /cprog-equip-btn[^>]*data-idx="leader"/);
   });
 
   test('single weapon → equipped row only, no Equip control; no weapons → no list', () => {
-    const single = progressUnitCardHTML(unit({ weapon: 'sword', items: {} }), { idx: 0 });
+    const single = progressUnitCardHTML(unit({ items: items(['sword', true]) }), { idx: 0 });
     assert.match(single, /✓ Equipped/);
     assert.doesNotMatch(single, /cprog-equip-btn/);
 
@@ -324,26 +336,27 @@ describe('missionListPaneHTML', () => {
 describe('Campaign.equipWeaponForUnit', () => {
   function equipCampaign() {
     const c = new Campaign(rowsDef, 1);
-    c.heroStats = { hp: 50, maxHp: 98, attack: 3, defense: 2, level: 1, xp: 0, weapon: 'sword', items: { bow: 1 } };
-    c.roster = [{ name: 'S', title: 'Farmer', color: '#8a8', hp: 6, maxHp: 10, attack: 2, defense: 1, level: 1, xp: 0, weapon: 'dagger', items: { axe: 1 } }];
+    c.heroStats = { hp: 50, maxHp: 98, attack: 3, defense: 2, level: 1, xp: 0, items: items(['sword', true], ['bow', 1]) };
+    c.roster = [{ name: 'S', title: 'Farmer', color: '#8a8', hp: 6, maxHp: 10, attack: 2, defense: 1, level: 1, xp: 0, items: items(['dagger', true], ['axe', 1]) }];
     return c;
   }
 
-  test('leader: swaps equipped weapon and stows the old one in the backpack', () => {
+  test('leader: swaps equipped weapon, keeping the old one in the backpack', () => {
     const c = equipCampaign();
     assert.equal(c.equipWeaponForUnit('leader', 'bow'), 'bow');
-    assert.equal(c.heroStats.weapon, 'bow');         // new weapon equipped
-    assert.equal(c.heroStats.items.sword, 1);        // old weapon stowed (not lost)
-    assert.ok(!c.heroStats.items.bow);               // new weapon drawn out of backpack
+    assert.equal(getEquippedWeaponIdOf(c.heroStats.items), 'bow');  // new weapon equipped
+    assert.equal(c.heroStats.items.sword.count, 1);                 // old weapon kept (now a spare)
+    assert.ok(!c.heroStats.items.sword.equipped);                   // and no longer equipped
+    assert.equal(c.heroStats.items.bow.count, 1);                   // equipping is a tag flip — count unchanged
   });
 
   test('roster unit: equips by index and persists through save()', () => {
     const c = equipCampaign();
     assert.equal(c.equipWeaponForUnit(0, 'axe'), 'axe');
-    assert.equal(c.roster[0].weapon, 'axe');
-    assert.equal(c.roster[0].items.dagger, 1);
+    assert.equal(getEquippedWeaponIdOf(c.roster[0].items), 'axe');
+    assert.equal(c.roster[0].items.dagger.count, 1);
     const saved = JSON.parse(globalThis.localStorage.getItem(`brimstone-${c.saveSlot}`));
-    assert.equal(saved.roster[0].weapon, 'axe');     // change reached localStorage
+    assert.equal(getEquippedWeaponIdOf(saved.roster[0].items), 'axe');  // change reached localStorage
   });
 
   test('no-op (returns null, no mutation) for bad targets', () => {
@@ -352,7 +365,7 @@ describe('Campaign.equipWeaponForUnit', () => {
     assert.equal(c.equipWeaponForUnit('leader', 'horse'), null);  // not a weapon
     assert.equal(c.equipWeaponForUnit('leader', 'musket'), null); // not carried
     assert.equal(c.equipWeaponForUnit(99, 'axe'), null);          // unknown unit
-    assert.equal(c.heroStats.weapon, 'sword');                    // unchanged throughout
+    assert.equal(getEquippedWeaponIdOf(c.heroStats.items), 'sword');  // unchanged throughout
   });
 });
 
@@ -361,8 +374,8 @@ describe('Campaign.equipWeaponForUnit', () => {
 describe('Campaign shared armory (weapons move both ways)', () => {
   function armoryCampaign() {
     const c = new Campaign(rowsDef, 1);
-    c.heroStats = { hp: 50, maxHp: 98, attack: 3, defense: 2, level: 1, xp: 0, weapon: 'sword', items: { bow: 1 } };
-    c.roster = [{ name: 'S', title: 'Farmer', color: '#8a8', hp: 6, maxHp: 10, attack: 2, defense: 1, level: 1, xp: 0, weapon: 'dagger', items: { axe: 1 } }];
+    c.heroStats = { hp: 50, maxHp: 98, attack: 3, defense: 2, level: 1, xp: 0, items: items(['sword', true], ['bow', 1]) };
+    c.roster = [{ name: 'S', title: 'Farmer', color: '#8a8', hp: 6, maxHp: 10, attack: 2, defense: 1, level: 1, xp: 0, items: items(['dagger', true], ['axe', 1]) }];
     c.weapons = {};
     return c;
   }
@@ -372,16 +385,17 @@ describe('Campaign shared armory (weapons move both ways)', () => {
     assert.equal(c.returnWeaponToInventory('leader', 'bow'), 'bow');
     assert.equal(c.weapons.bow, 1);                  // weapon reached the pool
     assert.ok(!c.heroStats.items.bow);               // and left the backpack
-    assert.equal(c.heroStats.weapon, 'sword');       // equipped slot untouched
+    assert.equal(getEquippedWeaponIdOf(c.heroStats.items), 'sword'); // equipped weapon untouched
   });
 
   test('equipFromInventory draws a pooled weapon onto a unit, pooling the old one', () => {
     const c = armoryCampaign();
     c.weapons = { greatsword: 1 };
     assert.equal(c.equipFromInventory('leader', 'greatsword'), 'greatsword');
-    assert.equal(c.heroStats.weapon, 'greatsword');  // new weapon equipped
+    assert.equal(getEquippedWeaponIdOf(c.heroStats.items), 'greatsword'); // new weapon equipped
     assert.ok(!c.weapons.greatsword);                // drawn out of the pool
     assert.equal(c.weapons.sword, 1);                // old equipped weapon stowed (non-destructive)
+    assert.ok(!c.heroStats.items.sword);             // and left the unit's backpack
   });
 
   test('round-trips a weapon from one unit to another via the pool', () => {
@@ -391,7 +405,7 @@ describe('Campaign shared armory (weapons move both ways)', () => {
     assert.ok(!c.roster[0].items.axe);
     assert.equal(c.weapons.axe, 1);
     assert.equal(c.equipFromInventory('leader', 'axe'), 'axe');
-    assert.equal(c.heroStats.weapon, 'axe');
+    assert.equal(getEquippedWeaponIdOf(c.heroStats.items), 'axe');
     assert.ok(!c.weapons.axe);                       // pool drained
     assert.equal(c.weapons.sword, 1);                // leader's old sword pooled
   });
@@ -410,7 +424,7 @@ describe('Campaign shared armory (weapons move both ways)', () => {
     assert.equal(c.equipFromInventory('leader', 'axe'), null);          // not in pool
     assert.equal(c.equipFromInventory('leader', 'sword'), null);        // already equipped
     assert.equal(c.equipFromInventory('leader', 'horse'), null);        // not a weapon
-    assert.equal(c.heroStats.weapon, 'sword');
+    assert.equal(getEquippedWeaponIdOf(c.heroStats.items), 'sword');
     assert.equal(c.weapons.greatsword, 1);                              // pool untouched
   });
 
@@ -437,14 +451,14 @@ describe('Campaign shared armory (weapons move both ways)', () => {
   test('unequipToInventory round-trips with equipFromInventory back to the start', () => {
     const c = armoryCampaign();
     // Start unit 0 weaponless, with an axe waiting in the shared pool.
-    c.roster[0].weapon = null;
+    c.roster[0].items = {};
     c.weapons = { axe: 1 };
     assert.equal(c.equipFromInventory(0, 'axe'), 'axe'); // pool → equipped
-    assert.equal(c.roster[0].weapon, 'axe');
+    assert.equal(getEquippedWeaponIdOf(c.roster[0].items), 'axe');
     assert.ok(!c.weapons.axe);                           // pool drained
     // Take it back off (equipped → pool, no replacement) — exact starting state.
     assert.deepEqual(c.unequipToInventory(0), { success: true, weaponId: 'axe' });
-    assert.equal(c.roster[0].weapon, null);              // weaponless again
+    assert.equal(getEquippedWeaponIdOf(c.roster[0].items), null);  // weaponless again
     assert.equal(c.weapons.axe, 1);                      // pool count restored
   });
 
@@ -452,13 +466,13 @@ describe('Campaign shared armory (weapons move both ways)', () => {
     const c = armoryCampaign();
     c.weapons = {};                                      // empty pool
     assert.deepEqual(c.unequipToInventory('leader'), { success: true, weaponId: 'sword' });
-    assert.equal(c.heroStats.weapon, null);              // equipped slot emptied
+    assert.equal(getEquippedWeaponIdOf(c.heroStats.items), null); // equipped weapon emptied
     assert.equal(c.weapons.sword, 1);                    // sword reached the pool
   });
 
   test('unequipToInventory no-ops when the unit has no equipped weapon', () => {
     const c = armoryCampaign();
-    c.heroStats.weapon = null;                           // already unarmed
+    c.heroStats.items = {};                              // already unarmed
     c.weapons = {};
     assert.deepEqual(c.unequipToInventory('leader'), { success: false });
     // never pools a null/undefined key
@@ -472,7 +486,7 @@ describe('Campaign shared armory (weapons move both ways)', () => {
 
 describe('shared-armory rendering', () => {
   test('carried weapon rows get a Stow control (return to the shared armory)', () => {
-    const u = { name: 'X', color: '#888', hp: 5, maxHp: 10, attack: 2, defense: 1, level: 1, xp: 0, weapon: 'sword', items: { bow: 1 } };
+    const u = { name: 'X', color: '#888', hp: 5, maxHp: 10, attack: 2, defense: 1, level: 1, xp: 0, items: items(['sword', true], ['bow', 1]) };
     const html = progressUnitCardHTML(u, { idx: 2 });
     assert.match(html, /cprog-return-btn[^>]*data-idx="2"[^>]*data-weapon="bow"/);
     // the equipped weapon row never gets a Stow control
@@ -480,7 +494,7 @@ describe('shared-armory rendering', () => {
   });
 
   test('the equipped weapon row keeps the ✓ badge and gains an Unequip control', () => {
-    const u = { name: 'X', color: '#888', hp: 5, maxHp: 10, attack: 2, defense: 1, level: 1, xp: 0, weapon: 'sword', items: { bow: 1 } };
+    const u = { name: 'X', color: '#888', hp: 5, maxHp: 10, attack: 2, defense: 1, level: 1, xp: 0, items: items(['sword', true], ['bow', 1]) };
     const html = progressUnitCardHTML(u, { idx: 2 });
     assert.match(html, /✓ Equipped/);                                          // badge stays
     assert.match(html, /cprog-unequip-btn[^>]*data-idx="2"[^>]*data-weapon="sword"/);

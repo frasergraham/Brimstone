@@ -517,9 +517,9 @@ export class GameState {
     leader.defense   = fresh.defense;
     leader.agility   = fresh.agility;
     // Adopt the new faction's starting weapon (Paladin sword → Rogue bow,
-    // etc.). equipWeapon keeps the weapon-derived range in sync, so the
-    // leader doesn't keep the old faction's reach.
-    leader.equipWeapon(fresh.weapon);
+    // etc.). The fresh leader already has it equipped in its items; route the
+    // id through equipWeapon so range/stats recompose from the new weapon.
+    leader.equipWeapon(fresh.getEquippedWeaponId());
     leader.factionId = fresh.factionId;
     // Faction.createLeader already stamped innate abilities on `fresh`.
     // Replace the leader's ability list to drop any abilities that the

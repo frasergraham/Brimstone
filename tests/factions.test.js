@@ -523,17 +523,17 @@ describe('Faction helpers', () => {
 
 describe('hasHorse', () => {
   test('Hero with horse returns true', () => {
-    assert.equal(getFaction('hero').hasHorse({ items: { horse: 1 } }), true);
+    assert.equal(getFaction('hero').hasHorse({ items: { horse: { count: 1 } } }), true);
   });
 
   test('Hero without horse returns false', () => {
     assert.equal(getFaction('hero').hasHorse({ items: {} }), false);
-    assert.equal(getFaction('hero').hasHorse({ items: { horse: 0 } }), false);
+    assert.equal(getFaction('hero').hasHorse({ items: { horse: { count: 0 } } }), false);
     assert.equal(getFaction('hero').hasHorse({}), false);
   });
 
   test('Witch always returns false even with horse item', () => {
-    assert.equal(getFaction('witch').hasHorse({ items: { horse: 1 } }), false);
+    assert.equal(getFaction('witch').hasHorse({ items: { horse: { count: 1 } } }), false);
   });
 });
 

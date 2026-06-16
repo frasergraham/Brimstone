@@ -79,7 +79,7 @@ describe('BruteFaction — leader stats', () => {
     assert.equal(b.attack,   4);
     assert.equal(b.defense,  3);
     assert.equal(b.agility,  3);
-    assert.equal(b.range,    1);
+    assert.equal(b.getRange(), 1);
   });
 
   test('brute leader keeps the witch summon ability (innate)', () => {

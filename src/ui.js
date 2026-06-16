@@ -2,7 +2,7 @@
 import { hexKey, hexToPixel, hexDistance, MAP_COLS, MAP_ROWS } from './hex.js';
 import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus, legacyTileType } from './tiles.js';
 import { ITEMS } from './items.js';
-import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, attackOf, defenseOf, rangeOf } from './entities.js';
+import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, attackOf, defenseOf, rangeOf, getEquippedWeaponIdOf } from './entities.js';
 import { DAMAGE_SCALE } from './balance.js';
 import { Phase, PHASE_ICON, phaseForRound, DEFAULT_CYCLE_PHASES, nodeController, countHeldNodes } from './game.js';
 import { PAD_X, PAD_Y, Renderer } from './renderer.js';
@@ -2807,8 +2807,9 @@ export class UIController {
     // Equipped weapon — use the registry label (carries icon + bonus + range,
     // e.g. "🏹 Bow (range 3)"). Range is weapon-derived, so an unarmed unit
     // is melee (range 1).
-    const weaponLabel = entity.weapon
-      ? (WEAPON_LABEL[entity.weapon] || entity.weapon)
+    const equippedWeaponId = getEquippedWeaponIdOf(entity.items);
+    const weaponLabel = equippedWeaponId
+      ? (WEAPON_LABEL[equippedWeaponId] || equippedWeaponId)
       : '👊 Unarmed';
     const effectsHtml = buildEffectsHtml(entity);
 

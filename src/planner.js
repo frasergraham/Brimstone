@@ -2,7 +2,7 @@
 import { hexKey, getNeighbors } from './hex.js';
 import { getReachableHexes, getVisiblePositions } from './actions.js';
 import { ResourceType, isRiver } from './tiles.js';
-import { EntityType } from './entities.js';
+import { EntityType, normalizeItems } from './entities.js';
 import { ITEMS } from './items.js';
 import { effectsBlockActions } from './effects.js';
 
@@ -79,7 +79,10 @@ export function snapEntity(entity) {
     // defenseBonus) are added on top by the dialog.
     attack:      entity.getAttack(),
     defense:     entity.getDefense(),
-    weapon:      entity.weapon,
+    // Equipped weapon now lives inside `items` (tagged equipped). Deep-copy so
+    // consumers (projectile FX, re-parented display clones) read the equipped
+    // id without aliasing the live entity's backpack.
+    items:       normalizeItems(entity.items),
     attackBonus: entity.attackBonus || 0,
     defenseBonus: entity.defenseBonus || 0,
     // Attack range in hexes — used by playback to decide whether to render
@@ -311,7 +314,7 @@ export function validatePlanAction(state, action, projectedPositions = null) {
       if (!t || isRiver(t))
         return { valid: false, reason: 'Cannot move there.' };
       // Range check against projected position — road tiles cost half movement.
-      const hasHorse = entity.owner === 'hero' && (entity.items?.['horse'] || 0) > 0;
+      const hasHorse = entity.owner === 'hero' && (entity.items?.['horse']?.count ?? 0) > 0;
       const visibleHexes = state.fogOfWar !== 'none'
         ? getVisiblePositions(state, entity.owner)
         : null;

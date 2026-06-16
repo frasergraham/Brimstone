@@ -27,6 +27,7 @@ import {
   createZombie, createMinion, createSurvivor,
   createWoodGolem, createIronGolem,
   nextDie, ADVANTAGE_CAP, isLeaderType, abilityStatMod, rollDamage, awardXP,
+  getEquippedWeaponIdOf,
 } from './entities.js';
 import { Phase } from './game.js';
 import { getFaction, concreteFactionOf, sightRangeForEntity } from './factions.js';
@@ -544,10 +545,13 @@ export function getValidActions(state, actor) {
 
     // Equip weapon from actor's personal items. Filter by per-item gate
     // so factions with category restrictions (e.g. rogue: ranged-only)
-    // don't surface a forbidden weapon in the equip menu.
+    // don't surface a forbidden weapon in the equip menu. The currently
+    // equipped weapon is excluded (re-equipping it is a no-op).
     const concrete = concreteFactionOf(actor);
+    const equippedId = getEquippedWeaponIdOf(myItems);
     const weapons = Object.keys(myItems)
-      .filter(k => isWeaponId(k) && (myItems[k] || 0) > 0 && concrete.canEquipWeaponItem(k));
+      .filter(k => isWeaponId(k) && (myItems[k]?.count ?? 0) > 0
+        && k !== equippedId && concrete.canEquipWeaponItem(k));
     if (weapons.length) {
       actions.push({
         type: ActionType.EQUIP_WEAPON,
@@ -857,7 +861,7 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
 
   if (lootType === 'horse') {
     if (faction.canEquipHorse()) {
-      actor.items['horse'] = 1;
+      if (!actor.hasItem('horse')) actor.addItem('horse');
       log.push(`Found a horse! ${actor.displayName}'s movement range increases to 2.`);
       lootItems?.push('+🐴');
     }
@@ -868,12 +872,12 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
     const concrete = concreteFactionOf(actor);
     if (concrete.canEquipWeaponItem(lootType)) {
       const label = WEAPON_LABEL[lootType] || lootType;
-      if (!actor.weapon) {
+      if (!actor.getEquippedWeaponId()) {
         actor.equipWeapon(lootType);
         log.push(`Found a ${label}! ${actor.displayName} equips it immediately.`);
         lootItems?.push('+⚔');
       } else {
-        actor.items[lootType] = (actor.items[lootType] || 0) + 1;
+        actor.addItem(lootType);
         log.push(`Found a ${label}! Added to ${actor.displayName}'s pack.`);
         lootItems?.push('+⚔');
       }
@@ -1226,7 +1230,7 @@ export function executeBattle(state, actor, target, opts = {}) {
 
   if (hit) {
     const tier    = isGreatCrush ? 3 : isCrush ? 2 : 1;
-    dmgRoll       = rollDamage(getWeaponDamage(actor.weapon), s => state.nextDie(s));
+    dmgRoll       = rollDamage(getWeaponDamage(getEquippedWeaponIdOf(actor.items)), s => state.nextDie(s));
     dmgTier       = tier;
     const baseDmg = dmgRoll * tier;
 
@@ -1333,7 +1337,7 @@ export function executeBattle(state, actor, target, opts = {}) {
       // A counter lands as one ordinary (1×) hit with the defender's weapon —
       // matching the pre-dice rule where a counter dealt the same as a hit.
       counterDmg = actor.applyIncomingDamage(
-        rollDamage(getWeaponDamage(target.weapon), s => state.nextDie(s)),
+        rollDamage(getWeaponDamage(getEquippedWeaponIdOf(target.items)), s => state.nextDie(s)),
         (sd) => state.nextDie(sd),
       );
       const counterKilled = actor.takeDamage(counterDmg);
@@ -1397,13 +1401,15 @@ export function executeBattle(state, actor, target, opts = {}) {
   // attackOf(actor) + actor.attackBonus, which is exactly what
   // Entity.resolveCombat folds into attackRoll. Same for defender. Tests
   // assert picked + Σ(all flat breakdown bonuses) ≡ attackRoll/defenseRoll.
+  const atkWeaponId    = getEquippedWeaponIdOf(actor.items);
+  const defWeaponId    = getEquippedWeaponIdOf(target.items);
   const atkBaseStat    = actor.attack || 0;
-  const atkWeaponMod   = actor.weapon ? (ITEMS[actor.weapon]?.statMods?.attack ?? 0) : 0;
+  const atkWeaponMod   = atkWeaponId ? (ITEMS[atkWeaponId]?.statMods?.attack ?? 0) : 0;
   const atkAbilityMod  = abilityStatMod(actor.abilities, 'attack');
   const atkEffectMod   = effectStatMod(actor, 'attack');
   const atkAttackBonus = actor.attackBonus || 0;
   const defBaseStat     = target.defense || 0;
-  const defWeaponMod    = target.weapon ? (ITEMS[target.weapon]?.statMods?.defense ?? 0) : 0;
+  const defWeaponMod    = defWeaponId ? (ITEMS[defWeaponId]?.statMods?.defense ?? 0) : 0;
   const defAbilityMod   = abilityStatMod(target.abilities, 'defense');
   const defEffectMod    = effectStatMod(target, 'defense');
   const defDefenseBonus = target.defenseBonus || 0;
@@ -1423,7 +1429,7 @@ export function executeBattle(state, actor, target, opts = {}) {
       atkStaffBonus,
       // Weapon damage roll → explains the damage in the breakdown popup:
       // final damage = dmgRoll × dmgTier (+ wounded surcharge if any).
-      atkWeapon: actor.weapon ?? null, dmgRoll, dmgTier,
+      atkWeapon: atkWeaponId ?? null, dmgRoll, dmgTier,
       phaseBonus, fortBonus, atkFortAtkBonus, fatiguePenalty,
       atkGangupFlat, defGangupFlat,
       atkAdvantageDice, defAdvantageDice, atkDisadvantageDice,
@@ -1432,8 +1438,8 @@ export function executeBattle(state, actor, target, opts = {}) {
       defBaseStat, defWeaponMod, defAbilityMod, defEffectMod, defDefenseBonus,
       // Weapon ids so the roll-breakdown tooltip can name the weapon behind
       // each side's modifier ("sword +2" rather than an opaque stat sum).
-      atkWeaponId: actor.weapon ?? null,
-      defWeaponId: target.weapon ?? null,
+      atkWeaponId: atkWeaponId ?? null,
+      defWeaponId: defWeaponId ?? null,
       ranged: isRanged, closeRanged: isCloseRanged,
       atkAllyNames: isRanged ? [] : atkAllies.map(e => e.displayName),
       defAllyNames: isRanged ? [] : defAllies.map(e => e.displayName),
@@ -1690,13 +1696,11 @@ export function executeUseItem(state, actor, item) {
       return { success: false, log: [`${actor.displayName} already equipped a weapon this round.`] };
     }
     const myItems = actor.items || {};
-    if ((myItems[item] || 0) < 1) return { success: false, log: ['Item not available.'] };
-    // Preserve the outgoing weapon: swapping should bank the old weapon back
-    // into carried items rather than destroying it. equipWeapon() overwrites
-    // the slot, so the swap-bookkeeping is the caller's concern.
-    const prev = actor.weapon;
-    myItems[item]--;
-    if (prev && prev !== item) myItems[prev] = (myItems[prev] || 0) + 1;
+    if ((myItems[item]?.count ?? 0) < 1) return { success: false, log: ['Item not available.'] };
+    // Equipping is just a tag flip now: the weapon already sits in `items`, so
+    // equipWeapon() flags it and clears the flag from the previously-equipped
+    // entry (which stays in the backpack at its existing count). No swap
+    // bookkeeping — both weapons remain held, only the equipped tag moves.
     actor.equipWeapon(item);
     actor.equippedThisRound = true;
     const label = WEAPON_LABEL[item] || item;

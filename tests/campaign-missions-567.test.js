@@ -278,7 +278,7 @@ describe('Save migration — v2 → v3 long_watch backfill', () => {
       roster: [], resources: {}, heroStats: { hp: 14 }, storyFlags: {},
     };
     const v3 = _migrate(v2, 2);
-    assert.equal(v3.version, 4); // migrates straight through v3 → v4
+    assert.equal(v3.version, 5); // migrates straight through v3 → v4 → v5
     assert.ok(v3.completedMissions.includes('long_watch'),
       'long_watch should be backfilled so witchs_trail prereq is satisfied');
     // Original progress preserved
@@ -293,15 +293,15 @@ describe('Save migration — v2 → v3 long_watch backfill', () => {
       roster: [], resources: {}, heroStats: { hp: 14 }, storyFlags: {},
     };
     const v3 = _migrate(v2, 2);
-    assert.equal(v3.version, 4); // migrates straight through v3 → v4
+    assert.equal(v3.version, 5); // migrates straight through v3 → v4 → v5
     assert.ok(!v3.completedMissions.includes('long_watch'),
       'long_watch should not be skipped for a player still on dark_ritual');
   });
 
   test('passes through current-version saves unchanged version-wise', () => {
-    const v4 = { version: 4, currentMission: 'long_watch', completedMissions: [] };
-    const out = _migrate(v4, 4);
-    assert.equal(out.version, 4);
+    const v5 = { version: 5, currentMission: 'long_watch', completedMissions: [] };
+    const out = _migrate(v5, 5);
+    assert.equal(out.version, 5);
   });
 });
 
@@ -320,7 +320,7 @@ describe('Save migration — v3 → v4 tutorial backfill', () => {
       roster: [], resources: {}, heroStats: { hp: 14 }, storyFlags: {},
     };
     const v4 = _migrate(v3, 3);
-    assert.equal(v4.version, 4);
+    assert.equal(v4.version, 5);
     assert.ok(v4.completedMissions.includes('tutorial'),
       'tutorial should be backfilled so The Awakening prereq is satisfied');
   });
@@ -346,7 +346,7 @@ describe('Save migration — v3 → v4 tutorial backfill', () => {
       roster: [], resources: {}, heroStats: { hp: 14 }, storyFlags: {},
     };
     const v4 = _migrate(v3, 3);
-    assert.equal(v4.version, 4);
+    assert.equal(v4.version, 5);
     assert.ok(!v4.completedMissions.includes('tutorial'));
   });
 
@@ -359,7 +359,7 @@ describe('Save migration — v3 → v4 tutorial backfill', () => {
       roster: [], resources: {}, heroStats: { hp: 14 }, storyFlags: {},
     };
     const out = _migrate(v2, 2);
-    assert.equal(out.version, 4);
+    assert.equal(out.version, 5);
     assert.ok(out.completedMissions.includes('tutorial'));
     assert.ok(out.completedMissions.includes('gathering_survivors'));
   });

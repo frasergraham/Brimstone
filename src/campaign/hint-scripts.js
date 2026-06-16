@@ -28,11 +28,17 @@ import { sideOf } from '../factions.js';
 /** True when the owner faction fights on the player's (day) side. */
 const _isPlayerSide = (owner) => sideOf(owner) === Side.DAY;
 
-/** Any player-side unit carrying an unequipped weapon in its pack. */
+/** Any player-side unit carrying an unequipped (spare) weapon in its pack. The
+ *  equipped weapon now lives in `items` too, so a spare is either a non-equipped
+ *  weapon entry or an equipped one held in multiples. */
 function _heroSideHasPackWeapon(state) {
   return !!state?.entities?.some(e =>
     e.alive && _isPlayerSide(e.owner) &&
-    Object.entries(e.items ?? {}).some(([id, n]) => n > 0 && id !== 'horse' && _isWeapon(id)));
+    Object.entries(e.items ?? {}).some(([id, entry]) => {
+      if (id === 'horse' || !_isWeapon(id)) return false;
+      const count = entry?.count ?? 0;
+      return entry?.equipped ? count > 1 : count > 0;
+    }));
 }
 
 let _weaponIds = null;

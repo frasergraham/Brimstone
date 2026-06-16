@@ -11,7 +11,7 @@ import {
   hasLineOfSight,
 } from '../src/actions.js';
 import { FORT_IMPASSABLE_THRESHOLD } from '../src/tiles.js';
-import { EntityType, isLeaderType } from '../src/entities.js';
+import { EntityType, isLeaderType, normalizeItems, rangeOf } from '../src/entities.js';
 import { hexDistance, hexKey } from '../src/hex.js';
 import { PlanActionType, snapEntity, groupPlanByEntity } from '../src/planner.js';
 import { Phase, countHeldNodes } from '../src/game.js';
@@ -535,12 +535,15 @@ function snapshotEntities(entities) {
     owner:         e.owner,
     ownerId:       e.ownerId ?? null,
     type:          e.type,
-    weapon:        e.weapon,
+    // Equipped weapon rides inside `items` (tagged equipped); deep-copy so the
+    // re-parented display clones (main.js) render the right weapon/mount. Range
+    // is weapon-derived via getRange()/rangeOf().
+    items:         normalizeItems(e.items),
     abilities:     Array.isArray(e.abilities) ? [...e.abilities] : [],
     attack:        e.attack,
     defense:       e.defense,
     agility:       e.agility,
-    range:         e.range ?? 1,
+    range:         rangeOf(e),
     fortification: e.fortification,
     guarding:      e.guarding ?? 0,
     displayName:   e.displayName,

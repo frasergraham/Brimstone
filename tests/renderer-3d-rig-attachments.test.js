@@ -50,23 +50,23 @@ describe('findBoneByName', () => {
 });
 
 describe('entityHasWeapon', () => {
-  test('true for a truthy weapon-id string', () => {
-    assert.equal(entityHasWeapon({ weapon: 'sword' }), true);
+  test('true when an items entry is tagged equipped', () => {
+    assert.equal(entityHasWeapon({ items: { sword: { count: 1, equipped: true } } }), true);
   });
-  test('false for null / empty / missing', () => {
-    assert.equal(entityHasWeapon({ weapon: null }), false);
-    assert.equal(entityHasWeapon({ weapon: '' }), false);
+  test('false for no equipped entry / empty / missing', () => {
+    assert.equal(entityHasWeapon({ items: { sword: { count: 1 } } }), false);
+    assert.equal(entityHasWeapon({ items: {} }), false);
     assert.equal(entityHasWeapon({}), false);
     assert.equal(entityHasWeapon(null), false);
   });
 });
 
 describe('entityIsMounted', () => {
-  test('true when items.horse > 0', () => {
-    assert.equal(entityIsMounted({ items: { [HORSE_ITEM_KEY]: 1 } }), true);
+  test('true when items.horse count > 0', () => {
+    assert.equal(entityIsMounted({ items: { [HORSE_ITEM_KEY]: { count: 1 } } }), true);
   });
   test('false when horse count is 0 / absent', () => {
-    assert.equal(entityIsMounted({ items: { horse: 0 } }), false);
+    assert.equal(entityIsMounted({ items: { horse: { count: 0 } } }), false);
     assert.equal(entityIsMounted({ items: {} }), false);
     assert.equal(entityIsMounted({}), false);
     assert.equal(entityIsMounted(null), false);
@@ -213,7 +213,7 @@ describe('_syncStandeeWeapon (G6)', () => {
   test('attaches a blade to the right-hand bone using the per-standee affector', () => {
     const inst = makeInst();
     const standee = { paladinClone: paladinCloneStub() };
-    inst._syncStandeeWeapon(standee, { id: 7, weapon: 'sword' });
+    inst._syncStandeeWeapon(standee, { id: 7, items: { sword: { count: 1, equipped: true } } });
     assert.ok(standee.weaponMesh, 'weapon mesh created');
     assert.equal(standee.weaponMesh._attachedBone.name, 'mixamorig:RightHand');
     // The affector is THIS standee's clone, not the shared skeleton — that's
@@ -225,8 +225,8 @@ describe('_syncStandeeWeapon (G6)', () => {
     const inst = makeInst();
     const a = { paladinClone: paladinCloneStub() };
     const b = { paladinClone: paladinCloneStub() };
-    inst._syncStandeeWeapon(a, { id: 1, weapon: 'sword' });
-    inst._syncStandeeWeapon(b, { id: 2, weapon: 'sword' });
+    inst._syncStandeeWeapon(a, { id: 1, items: { sword: { count: 1, equipped: true } } });
+    inst._syncStandeeWeapon(b, { id: 2, items: { sword: { count: 1, equipped: true } } });
     assert.notEqual(a.weaponMesh, b.weaponMesh);
     assert.notEqual(a.weaponMesh._affector, b.weaponMesh._affector);
   });
@@ -234,19 +234,19 @@ describe('_syncStandeeWeapon (G6)', () => {
   test('idempotent — a second call with the same weapon does not rebuild', () => {
     const inst = makeInst();
     const standee = { paladinClone: paladinCloneStub() };
-    inst._syncStandeeWeapon(standee, { id: 7, weapon: 'sword' });
+    inst._syncStandeeWeapon(standee, { id: 7, items: { sword: { count: 1, equipped: true } } });
     const first = standee.weaponMesh;
-    inst._syncStandeeWeapon(standee, { id: 7, weapon: 'sword' });
+    inst._syncStandeeWeapon(standee, { id: 7, items: { sword: { count: 1, equipped: true } } });
     assert.equal(standee.weaponMesh, first);
   });
 
   test('dropping the weapon disposes the blade + its material', () => {
     const inst = makeInst();
     const standee = { paladinClone: paladinCloneStub() };
-    inst._syncStandeeWeapon(standee, { id: 7, weapon: 'sword' });
+    inst._syncStandeeWeapon(standee, { id: 7, items: { sword: { count: 1, equipped: true } } });
     const blade = standee.weaponMesh;
     const mat = standee.weaponMat;
-    inst._syncStandeeWeapon(standee, { id: 7, weapon: null });
+    inst._syncStandeeWeapon(standee, { id: 7, items: {} });
     assert.equal(standee.weaponMesh, null);
     assert.equal(blade._disposed, true);
     assert.equal(mat._disposed, true);
@@ -255,7 +255,7 @@ describe('_syncStandeeWeapon (G6)', () => {
   test('no clone yet → no weapon (waits for the GLB)', () => {
     const inst = makeInst();
     const standee = { paladinClone: null };
-    inst._syncStandeeWeapon(standee, { id: 7, weapon: 'sword' });
+    inst._syncStandeeWeapon(standee, { id: 7, items: { sword: { count: 1, equipped: true } } });
     assert.equal(standee.weaponMesh, undefined);
   });
 });
@@ -266,7 +266,7 @@ describe('_syncStandeeHorse (G5)', () => {
     const clone = paladinCloneStub();
     const baseY = clone.mesh.position.y;
     const standee = { paladinClone: clone };
-    inst._syncStandeeHorse(standee, { id: 9, items: { horse: 1 } });
+    inst._syncStandeeHorse(standee, { id: 9, items: { horse: { count: 1 } } });
     assert.ok(standee.horseMesh, 'horse placeholder created');
     assert.ok(Array.isArray(standee.horseMesh._horseParts), 'horse has parts');
     assert.ok(standee.horseMesh._horseParts.length >= 6, 'body + 4 legs + neck/head');
@@ -278,9 +278,9 @@ describe('_syncStandeeHorse (G5)', () => {
     const clone = paladinCloneStub();
     const baseY = clone.mesh.position.y;
     const standee = { paladinClone: clone };
-    inst._syncStandeeHorse(standee, { id: 9, items: { horse: 1 } });
+    inst._syncStandeeHorse(standee, { id: 9, items: { horse: { count: 1 } } });
     const parts = standee.horseMesh._horseParts.slice();
-    inst._syncStandeeHorse(standee, { id: 9, items: { horse: 0 } });
+    inst._syncStandeeHorse(standee, { id: 9, items: { horse: { count: 0 } } });
     assert.equal(standee.horseMesh, null);
     assert.ok(parts.every(p => p._disposed), 'all horse parts disposed');
     assert.equal(clone.mesh.position.y, baseY);
@@ -289,9 +289,9 @@ describe('_syncStandeeHorse (G5)', () => {
   test('idempotent while mounted', () => {
     const inst = makeInst();
     const standee = { paladinClone: paladinCloneStub() };
-    inst._syncStandeeHorse(standee, { id: 9, items: { horse: 1 } });
+    inst._syncStandeeHorse(standee, { id: 9, items: { horse: { count: 1 } } });
     const horse = standee.horseMesh;
-    inst._syncStandeeHorse(standee, { id: 9, items: { horse: 1 } });
+    inst._syncStandeeHorse(standee, { id: 9, items: { horse: { count: 1 } } });
     assert.equal(standee.horseMesh, horse);
   });
 });

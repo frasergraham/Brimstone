@@ -50,7 +50,7 @@ import { makeShowLoadingAndReveal } from './loading-reveal.js';
 import { MAP_SIZES } from './map.js';
 import { nodeController } from './game.js';
 import { MissionConductor, areHintsSuppressed, markHintsSeen, resetAllHintsForCampaign } from './mission-conductor.js';
-import { Entity, createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, EntityType, ENTITY_COLOR, applyLevel } from './entities.js';
+import { Entity, createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, EntityType, ENTITY_COLOR, applyLevel, getEquippedWeaponIdOf, normalizeItems } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
 import { Campaign, CAMPAIGN_SLOT_COUNT, buildVictoryDelegate, snapshotSurvivor, processWaves, reconcileRosterAfterMission, applyCarriedHeroLoadout } from './campaign/campaign.js';
 import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
@@ -1485,7 +1485,7 @@ function _playAttackIntroAnim(actorSnap, targetSnap, fromCol, fromRow, toCol, to
     // weapon names its projectileType (bolt for bows/firearms, sparkle for
     // the Magic Bolt). Fall back to sparkle for any legacy ranged source.
     const projectileType =
-      ITEMS[actorSnap.weapon]?.projectileType ?? 'sparkle';
+      ITEMS[getEquippedWeaponIdOf(actorSnap.items)]?.projectileType ?? 'sparkle';
     renderer.addProjectileAnim(projectileType, fromCol, fromRow, toCol, toRow, {
       owner: actorSnap.owner,
     });
@@ -4554,8 +4554,10 @@ function _initCampaignMission(missionDef) {
       // getAttack/getDefense), so copying them never double-counts the level.
       s.attack = rosterEntry.attack;
       s.defense = rosterEntry.defense;
-      s.weapon = rosterEntry.weapon;
-      s.items = { ...rosterEntry.items };
+      // Equipped weapon rides inside items (tagged equipped) — restore the
+      // whole backpack in canonical shape; the fresh-object ref invalidates the
+      // equipped-weapon cache automatically.
+      s.items = normalizeItems(rosterEntry.items);
       s.owner = 'hero';
       // Restore veterancy: xp first, then re-level off the fresh base maxHp.
       // applyLevel sets maxHp (and full hp); we then restore the carried,
@@ -4786,7 +4788,7 @@ function _handleCampaignMissionEnd() {
         // fields). Without these the hero's veterancy would silently reset each
         // mission. applyCarriedHeroLoadout re-applies them at the next deploy.
         level: state.hero.level, xp: state.hero.xp,
-        weapon: state.hero.weapon, items: { ...state.hero.items },
+        items: normalizeItems(state.hero.items),
       } : _activeCampaign.heroStats,
       flags: {},
     });
@@ -4823,7 +4825,7 @@ function _handleCampaignMissionEnd() {
   const heroSnap = won && state.hero ? {
     hp: state.hero.hp, maxHp: state.hero.maxHp,
     attack: state.hero.attack, defense: state.hero.defense,
-    weapon: state.hero.weapon,
+    items: normalizeItems(state.hero.items),
   } : _activeCampaign.heroStats;
   const rosterHeading = won ? 'Surviving Roster' : 'Party Restored';
   rosterEl.innerHTML = `<h3>${rosterHeading}</h3>` +

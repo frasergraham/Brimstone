@@ -13,7 +13,7 @@ import { PlanSimState, stepToward, stepAwayFrom, roadStepToward, nearestBuilding
 import { EnginePlanSimState, BaseAIEngine, allocateBudget, assemblePlan, clamp01, updateAllyClaimedNodes, personalityName } from './ai-engine.js';
 import { hexDistance, hexKey, getNeighbors } from './hex.js';
 import { Phase, nodeController } from './game.js';
-import { EntityType, ADVANTAGE_CAP, expectedDieValue, isLeaderType, attackOf, defenseOf, SurvivorAbility } from './entities.js';
+import { EntityType, ADVANTAGE_CAP, expectedDieValue, isLeaderType, attackOf, defenseOf, rangeOf, getEquippedWeaponIdOf, SurvivorAbility } from './entities.js';
 import { ResourceType, hasBuilding, isRiver, isBuildingFootprint } from './tiles.js';
 import { ITEMS } from './items.js';
 import { concreteFactionOf } from './factions.js';
@@ -207,10 +207,12 @@ export function assessHeroBoard(sim) {
   // EQUIP_WEAPON that executeUseItem will reject (burns a planning slot
   // and disagrees with the ghost preview).
   const heroFaction = hero ? concreteFactionOf(hero) : null;
+  const heroEquippedId = hero?.items ? getEquippedWeaponIdOf(hero.items) : null;
   const heroWeapons = hero?.items
     ? Object.keys(hero.items).filter(k =>
         ITEMS[k]?.kind === 'weapon' &&
-        hero.items[k] > 0 &&
+        (hero.items[k]?.count ?? 0) > 0 &&
+        k !== heroEquippedId &&
         (!heroFaction || heroFaction.canEquipWeaponItem(k)))
     : [];
 
@@ -376,7 +378,7 @@ export function estimateHeroCombat(attacker, defender, board) {
   // no attacker gang-up, no defender ally-defence. Mirrors the witch's
   // estimateCombat (src/ai-engine.js) and matches executeBattle's actual
   // dice math so the rogue's combat estimate isn't off-by-gang-up.
-  const attackerRange = attacker.range ?? 1;
+  const attackerRange = rangeOf(attacker);
   const isRanged = attackerRange > 1;
 
   const allies = isRanged ? [] : [board.hero, ...board.survivors].filter(e =>
@@ -486,7 +488,7 @@ export function genProtectHero(sim, board, budget, config = null) {
   }
 
   // Free action: equip best unequipped weapon
-  if (board.heroWeapons.length > 0 && !heroEntity.weapon) {
+  if (board.heroWeapons.length > 0 && !getEquippedWeaponIdOf(heroEntity.items)) {
     actions.push({
       type: PlanActionType.EQUIP_WEAPON, entityId: board.hero.id,
       weapon: board.heroWeapons[0], _priority: 0, _goal: HeroGoal.PROTECT_HERO,
@@ -957,7 +959,7 @@ export function genHuntWitch(sim, board, budget) {
     const dist = hexDistance(simUnit.col, simUnit.row, target.entity.col, target.entity.row);
     // Per-unit attack range — ranged hero leaders (rogue, range 3) can
     // strike from further than 1 hex without closing.
-    const unitRange = simUnit.range ?? 1;
+    const unitRange = rangeOf(simUnit);
 
     // In range — attack immediately
     if (dist <= unitRange) {

@@ -4,7 +4,8 @@
 import { countHeldNodes } from '../game.js';
 import { getFaction } from '../factions.js';
 import { hexDistance } from '../hex.js';
-import { EntityType, applyLevel } from '../entities.js';
+import { EntityType, applyLevel, normalizeItems, getEquippedWeaponIdOf,
+         equipWeaponInItems, addItemInItems } from '../entities.js';
 import { ITEMS } from '../items.js';
 import { isRiver, hasBuilding } from '../tiles.js';
 import { evaluateUnlock } from './unlock.js';
@@ -27,7 +28,23 @@ import { evaluateUnlock } from './unlock.js';
 // fold and never recorded `tutorial` as completed (it lived in a separate
 // one-mission campaign), so The Awakening would lock. `_migrate()` backfills
 // `tutorial` into completedMissions for the Chapter-1 campaign.
-const SAVE_VERSION = 4;
+//
+// v5: Phase 1 of the inventory refactor. The equipped weapon moved from a
+// `weapon` string slot on heroStats / each roster unit INTO their `items` dict,
+// tagged `{ equipped: true }`; backpack entries changed from `{ id: count }` to
+// `{ id: { count, equipped? } }`. `_migrate` folds the legacy `weapon` field in
+// and normalizes item counts. The shared armory pool (`weapons`) stays a flat
+// `{ id: count }` map.
+const SAVE_VERSION = 5;
+
+// Fresh-campaign hero loadout. A factory (not a shared literal) so each new
+// campaign gets its own object graph — the equipped sword lives in `items`.
+function _defaultHeroStats() {
+  return {
+    hp: 98, maxHp: 98, attack: 2, defense: 2, level: 1, xp: 0,
+    items: { sword: { count: 1, equipped: true } },
+  };
+}
 
 // ── Save slots ────────────────────────────────────────────────────────────────
 // Each campaign supports several independent playthroughs ("slots"). The slot
@@ -85,8 +102,9 @@ export function snapshotSurvivor(entity) {
     // this, static levels evaporated and survivors reset to L1 each mission.
     level:        entity.level || 1,
     xp:           entity.xp || 0,
-    weapon:       entity.weapon,
-    items:        { ...entity.items },
+    // Equipped weapon rides inside `items` (tagged equipped); deep-copy into the
+    // canonical shape so the roster snapshot never aliases the live entity.
+    items:        normalizeItems(entity.items),
     effects:      permanentEffects,
   };
 }
@@ -483,15 +501,16 @@ export function resolveSpawnPosition(state, spawnAt) {
  * Apply a campaign's carried-over hero loadout onto a freshly created leader.
  *
  * The leader is built via Faction.createLeader (so it already holds its
- * faction starting weapon — the Paladin's sword). We only override the weapon
- * when the campaign actually carries one: a null/absent carried weapon KEEPS
- * the starting weapon rather than disarming the hero. (Pre-overhaul saves and
- * the old default stored weapon:null, which would otherwise strip the new
- * starting sword on every mission load.) Uses equipWeapon so the
- * weapon-derived range stays in sync.
+ * faction starting weapon — the Paladin's sword — equipped inside its items).
+ * We only replace the backpack when the campaign actually carries an equipped
+ * weapon: a carried loadout with NO equipped weapon KEEPS the starting weapon
+ * rather than disarming the hero. (Pre-overhaul saves and the old default
+ * stored weapon:null / an empty pack, which would otherwise strip the new
+ * starting sword on every mission load.)
  *
  * @param {Entity} hero        the freshly created hero leader
- * @param {object} heroStats   { hp, weapon, items } carried by the campaign
+ * @param {object} heroStats   { hp, items } carried by the campaign (items may
+ *   carry the equipped weapon as an `{ equipped: true }` entry)
  */
 export function applyCarriedHeroLoadout(hero, heroStats) {
   if (!hero || !heroStats) return;
@@ -515,8 +534,21 @@ export function applyCarriedHeroLoadout(hero, heroStats) {
       hero.hp = Math.min(heroStats.hp, hero.maxHp);
     }
   }
-  if (heroStats.weapon) hero.equipWeapon(heroStats.weapon);
-  hero.items = { ...(heroStats.items || {}) };
+  const carriedItems = normalizeItems(heroStats.items);
+  const carriedEquippedId = getEquippedWeaponIdOf(carriedItems);
+  if (carriedEquippedId) {
+    // Carried loadout includes an equipped weapon — adopt the whole backpack.
+    hero.items = carriedItems;
+  } else {
+    // No carried equipped weapon (legacy / null) — KEEP the innate starting
+    // weapon (already equipped by createLeader) and fold in any carried pack
+    // items, re-flagging the innate weapon as equipped afterwards.
+    const innateId = hero.getEquippedWeaponId();
+    hero.items = carriedItems;
+    if (innateId) hero.equipWeapon(innateId);
+  }
+  // Wholesale `hero.items = …` reassignment self-invalidates the equipped-weapon
+  // memo cache (it keys on the items-object identity), so no explicit clear here.
 }
 
 // ── Campaign class ──────────────────────────────────────────────────────────
@@ -536,7 +568,7 @@ export class Campaign {
     this.completedMissions = new Set();
     this.roster            = []; // Array of snapshotSurvivor() objects
     this.resources         = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0 };
-    this.heroStats         = { hp: 98, maxHp: 98, attack: 2, defense: 2, level: 1, xp: 0, weapon: 'sword', items: {} };
+    this.heroStats         = _defaultHeroStats();
     // Shared armory: weapons not bound to any one unit. Units can stow a spare
     // weapon here (returnWeaponToInventory) and any unit can draw from it
     // (equipFromInventory) — so a weapon looted by one survivor can be handed to
@@ -594,7 +626,7 @@ export class Campaign {
     this.roster            = migrated.roster ?? [];
     this.resources         = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0, ...migrated.resources };
     this.weapons           = { ...migrated.weapons }; // pre-armory saves → empty pool
-    this.heroStats         = migrated.heroStats ?? { hp: 98, maxHp: 98, attack: 2, defense: 2, level: 1, xp: 0, weapon: 'sword', items: {} };
+    this.heroStats         = migrated.heroStats ?? _defaultHeroStats();
     // Backfill veterancy fields for saves written before XP existed.
     if (this.heroStats.level == null) this.heroStats.level = 1;
     if (this.heroStats.xp == null) this.heroStats.xp = 0;
@@ -645,7 +677,7 @@ export class Campaign {
   buildUnlockContext() {
     return {
       isCompleted: (id) => this.completedMissions.has(id),
-      hasItem: (id) => !!(this.heroStats?.items?.[id]) || this.heroStats?.weapon === id,
+      hasItem: (id) => (this.heroStats?.items?.[id]?.count ?? 0) > 0,
       level: this.heroStats?.level ?? this.getCompletedCount(),
       getFlag: (key) => this.storyFlags?.[key],
       getResource: (key) => this.resources?.[key] ?? 0,
@@ -894,8 +926,9 @@ export class Campaign {
         // result predates XP (e.g. conductor missions passing the old heroStats).
         level:   result.heroStats.level ?? this.heroStats.level ?? 1,
         xp:      result.heroStats.xp ?? this.heroStats.xp ?? 0,
-        weapon:  result.heroStats.weapon,
-        items:   { ...result.heroStats.items },
+        // Equipped weapon rides inside items (tagged equipped); normalize to the
+        // canonical shape (tolerates a legacy result blob mid-upgrade).
+        items:   normalizeItems(result.heroStats.items),
       };
     }
 
@@ -960,16 +993,10 @@ export class Campaign {
    * Set a roster unit's equipped weapon from its own backpack — the
    * between-mission counterpart to the in-mission equip action.
    *
-   * The equip *rule* is unchanged from in-game: "equipped" means
-   * `unit.weapon = <id>`, and the stat deltas compose at call time from
-   * ITEMS[weapon].statMods (Entity.getAttack/getDefense/getRange) — exactly
-   * what Entity.equipWeapon does. We only differ in the consumption model:
-   * in a live mission, equipping is a combat action (executeUseItem) that
-   * consumes the swap, so the previously held weapon is dropped. Loadout
-   * management between missions is non-destructive — we swap, returning the
-   * currently-equipped weapon to the backpack so the player never loses gear
-   * by changing their mind. This mirrors healUnitWithHerb: an in-mission
-   * action re-expressed against the campaign's plain roster snapshots.
+   * Post-inventory-refactor this is a pure tag flip: the equipped weapon lives
+   * inside the unit's `items` dict tagged `{ equipped: true }`, so equipping a
+   * spare just moves the flag — both the old and new weapons stay in the
+   * backpack at their existing counts (nothing is consumed or lost).
    *
    * @param {number|'leader'} rosterIndex  roster index, or 'leader' for the hero.
    * @param {string} weaponId  weapon id to equip; must be a weapon already in
@@ -982,15 +1009,10 @@ export class Campaign {
     const unit = rosterIndex === 'leader' ? this.heroStats : this.roster[rosterIndex];
     if (!unit) return null;
     if (ITEMS[weaponId]?.kind !== 'weapon') return null;
-    if (unit.weapon === weaponId) return null; // already equipped — nothing to do
-    const items = { ...(unit.items || {}) };
-    if ((items[weaponId] || 0) < 1) return null; // not in this unit's backpack
-    // Swap: draw the chosen weapon out of the backpack, stow the old one.
-    items[weaponId] -= 1;
-    if (items[weaponId] <= 0) delete items[weaponId];
-    if (unit.weapon) items[unit.weapon] = (items[unit.weapon] || 0) + 1;
-    unit.items = items;
-    unit.weapon = weaponId;
+    const items = unit.items ?? (unit.items = {});
+    if (getEquippedWeaponIdOf(items) === weaponId) return null; // already equipped
+    if ((items[weaponId]?.count ?? 0) < 1) return null; // not in this unit's backpack
+    equipWeaponInItems(items, weaponId); // flag it, clear the prior equipped entry
     this.save();
     return weaponId;
   }
@@ -1013,11 +1035,15 @@ export class Campaign {
     const unit = rosterIndex === 'leader' ? this.heroStats : this.roster[rosterIndex];
     if (!unit) return null;
     if (ITEMS[weaponId]?.kind !== 'weapon') return null;
-    const items = { ...(unit.items || {}) };
-    if ((items[weaponId] || 0) < 1) return null; // not in this unit's backpack
-    items[weaponId] -= 1;
-    if (items[weaponId] <= 0) delete items[weaponId];
-    unit.items = items;
+    const items = unit.items ?? (unit.items = {});
+    const entry = items[weaponId];
+    const count = entry?.count ?? 0;
+    // Only a *spare* copy may flow to the pool — never the wielded one. A spare
+    // is a non-equipped entry, or the equipped weapon held in multiples.
+    const spareCount = entry?.equipped ? count - 1 : count;
+    if (spareCount < 1) return null;
+    if (entry.equipped || count - 1 > 0) entry.count = count - 1; // keep entry (+ equipped flag) for the remaining copy
+    else delete items[weaponId];
     this.weapons = { ...(this.weapons || {}) };
     this.weapons[weaponId] = (this.weapons[weaponId] || 0) + 1;
     this.save();
@@ -1040,15 +1066,27 @@ export class Campaign {
     const unit = rosterIndex === 'leader' ? this.heroStats : this.roster[rosterIndex];
     if (!unit) return null;
     if (ITEMS[weaponId]?.kind !== 'weapon') return null;
-    if (unit.weapon === weaponId) return null; // already equipped — nothing to do
+    const items = unit.items ?? (unit.items = {});
+    if (getEquippedWeaponIdOf(items) === weaponId) return null; // already equipped
     const pool = { ...(this.weapons || {}) };
     if ((pool[weaponId] || 0) < 1) return null; // not in the shared pool
     pool[weaponId] -= 1;
     if (pool[weaponId] <= 0) delete pool[weaponId];
-    // Stow the outgoing weapon back into the shared pool (non-destructive swap).
-    if (ITEMS[unit.weapon]?.kind === 'weapon') pool[unit.weapon] = (pool[unit.weapon] || 0) + 1;
+    // Return the outgoing equipped weapon (one copy) to the shared pool —
+    // non-destructive. Remove one copy from items; if it was the last copy the
+    // entry disappears, else an (unequipped) spare remains.
+    const prevId = getEquippedWeaponIdOf(items);
+    if (prevId) {
+      const prevEntry = items[prevId];
+      if ((prevEntry.count ?? 0) > 1) prevEntry.count -= 1;
+      else delete items[prevId];
+      pool[prevId] = (pool[prevId] || 0) + 1;
+    }
+    // Bank the drawn weapon into the unit's items and flag it equipped
+    // (equipWeaponInItems also clears any stale equipped flag left above).
+    addItemInItems(items, weaponId, 1);
+    equipWeaponInItems(items, weaponId);
     this.weapons = pool;
-    unit.weapon = weaponId;
     this.save();
     return weaponId;
   }
@@ -1069,11 +1107,16 @@ export class Campaign {
   unequipToInventory(rosterIndex) {
     const unit = rosterIndex === 'leader' ? this.heroStats : this.roster[rosterIndex];
     if (!unit) return { success: false };
-    const weaponId = unit.weapon;
+    const items = unit.items ?? {};
+    const weaponId = getEquippedWeaponIdOf(items);
     if (!weaponId) return { success: false }; // nothing equipped — no-op
+    // Bank the wielded copy in the pool. If the unit held a spare of the same
+    // weapon, leave it behind as an unequipped backpack entry.
+    const entry = items[weaponId];
+    if ((entry.count ?? 0) > 1) { entry.count -= 1; delete entry.equipped; }
+    else delete items[weaponId];
     this.weapons = { ...(this.weapons || {}) };
     this.weapons[weaponId] = (this.weapons[weaponId] || 0) + 1;
-    unit.weapon = null;
     this.save();
     return { success: true, weaponId };
   }
@@ -1134,7 +1177,7 @@ export class Campaign {
     this.roster            = migrated.roster ?? [];
     this.resources         = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0, ...migrated.resources };
     this.weapons           = { ...migrated.weapons }; // pre-armory saves → empty pool
-    this.heroStats         = migrated.heroStats ?? { hp: 98, maxHp: 98, attack: 2, defense: 2, level: 1, xp: 0, weapon: 'sword', items: {} };
+    this.heroStats         = migrated.heroStats ?? _defaultHeroStats();
     // Backfill veterancy fields for saves written before XP existed.
     if (this.heroStats.level == null) this.heroStats.level = 1;
     if (this.heroStats.xp == null) this.heroStats.xp = 0;
@@ -1187,5 +1230,36 @@ export function _migrate(data, fromVersion) {
     v = 4;
   }
 
+  // v4 → v5: the equipped weapon moves from a `weapon` string slot on heroStats
+  // and each roster unit INTO their `items` dict, tagged `{ equipped: true }`;
+  // backpack entries change from `{ id: count }` to `{ id: { count, equipped? } }`.
+  // Fold the legacy `weapon` field in and normalize counts. The shared armory
+  // pool (`weapons`) stays a flat `{ id: count }` map — untouched.
+  if (v === 4) {
+    out = {
+      ...out,
+      heroStats: out.heroStats ? _migrateUnitInventory(out.heroStats) : out.heroStats,
+      roster: Array.isArray(out.roster) ? out.roster.map(_migrateUnitInventory) : out.roster,
+      version: 5,
+    };
+    v = 5;
+  }
+
   return out;
+}
+
+/** Fold a pre-v5 unit's `weapon` slot into its `items` dict (new equipped-tag
+ *  shape) and normalize backpack counts. Returns a new unit object. */
+function _migrateUnitInventory(unit) {
+  if (!unit) return unit;
+  const items = normalizeItems(unit.items);
+  if (unit.weapon) {
+    // The legacy slot copy was counted separately from the pack, so bump the
+    // count if a spare of the same id already sat in the backpack.
+    if (items[unit.weapon]) items[unit.weapon].count = (items[unit.weapon].count ?? 0) + 1;
+    else items[unit.weapon] = { count: 1 };
+    items[unit.weapon].equipped = true;
+  }
+  const { weapon, ...rest } = unit;
+  return { ...rest, items };
 }

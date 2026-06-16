@@ -662,7 +662,7 @@ describe('executeMove — hex-step cap', () => {
     const state = roadChainState(1, 8);
     const hero = state.hero;
     // Give hero a horse (range 2, budget 4 → 4 road tiles cost-reachable)
-    hero.items = { horse: 1 };
+    hero.items = { horse: { count: 1 } };
 
     // Move to 3 tiles away (col 1 → col 4)
     const r3 = executeMove(state, hero, 4, 2);
@@ -674,7 +674,7 @@ describe('executeMove — hex-step cap', () => {
   test('horse unit reaches 4th road tile (full budget)', () => {
     const state = roadChainState(1, 8);
     const hero = state.hero;
-    hero.items = { horse: 1 };
+    hero.items = { horse: { count: 1 } };
 
     // col 5 is 4 road tiles away — cost-reachable with horse (budget 4, each road costs 1)
     const r4 = executeMove(state, hero, 5, 2);
@@ -686,7 +686,7 @@ describe('executeMove — hex-step cap', () => {
   test('horse unit cannot reach 5 road tiles away', () => {
     const state = roadChainState(1, 10);
     const hero = state.hero;
-    hero.items = { horse: 1 };
+    hero.items = { horse: { count: 1 } };
 
     // col 6 is 5 road tiles away — beyond horse budget (4)
     const r5 = executeMove(state, hero, 6, 2);

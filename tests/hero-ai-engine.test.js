@@ -187,7 +187,7 @@ describe('assessHeroBoard', () => {
       entities: [
         makeEntity({
           id: 'hero1', col: 3, row: 3,
-          items: { [ResourceType.HERBS]: 1, 'sword': 1 },
+          items: { [ResourceType.HERBS]: { count: 1 }, sword: { count: 1 } },
         }),
         makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 6, row: 6 }),
       ],
@@ -513,7 +513,7 @@ describe('genProtectHero', () => {
     const sim = makeHeroEngineSim({
       entities: [
         makeEntity({ id: 'hero1', col: 3, row: 3, hp: 5, maxHp: 10,
-          items: { 'sword': 1 } }),
+          items: { sword: { count: 1 } } }),
         makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 6, row: 6 }),
       ],
     });

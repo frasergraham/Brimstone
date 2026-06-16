@@ -11,7 +11,7 @@
 import { PlanSimState, stepToward, stepAwayFrom, roadStepToward, bestWitchObjective, nearestBuilding, roundsUntilScoring, scoreNodeFeasibility, WITCH_PERSONALITIES, adjacentBlockingFortToward } from './ai.js';
 import { hexDistance, hexKey, getNeighbors } from './hex.js';
 import { Phase, nodeController } from './game.js';
-import { EntityType, ADVANTAGE_CAP, expectedDieValue, isLeaderType, attackOf, defenseOf } from './entities.js';
+import { EntityType, ADVANTAGE_CAP, expectedDieValue, isLeaderType, attackOf, defenseOf, rangeOf } from './entities.js';
 import { ResourceType, hasBuilding, isRiver, isBuildingFootprint } from './tiles.js';
 import { PlanActionType, MAX_PLAN_LENGTH } from './planner.js';
 import { DAMAGE_SCALE } from './balance.js';
@@ -436,7 +436,7 @@ export function estimateCombat(attacker, defender, board) {
   // Ranged attackers (range > 1) don't benefit from — or fear — adjacency:
   // no attacker gang-up, no defender ally-defence. Match the rules in
   // executeBattle so the AI estimator lines up with actual dice math.
-  const attackerRange = attacker.range ?? 1;
+  const attackerRange = rangeOf(attacker);
   const isRanged = attackerRange > 1;
 
   const gangUpCount = isRanged ? 0 : board.minions.filter(m =>
@@ -633,7 +633,7 @@ export function genHuntHeroes(sim, board, budget) {
 
       // If in attack range — shoot or swing directly. Ranged units (witch,
       // range 2) skip the close-in step when they can already hit the target.
-      const unitRange = simUnit.range ?? 1;
+      const unitRange = rangeOf(simUnit);
       if (dist <= unitRange) {
         const est = estimateCombat(simUnit, target.entity, board);
         // For hunting, accept unfavorable odds too — attrition wins
@@ -662,7 +662,7 @@ export function genHuntHeroes(sim, board, budget) {
         attackersAssigned++;
 
         let stepsLeft = Math.min(remaining, 3);
-        const unitHuntRange = simUnit.range ?? 1;
+        const unitHuntRange = rangeOf(simUnit);
         while (stepsLeft > 0) {
           const curDist = hexDistance(simUnit.col, simUnit.row, target.entity.col, target.entity.row);
           if (curDist <= unitHuntRange) {
@@ -1000,7 +1000,7 @@ export function genControlNodes(sim, board, budget) {
       if (onNode) {
         // AGGRESSIVE: fight ALL enemies within attack range of the unit
         // (adjacency for melee minions, range 2 for the witch).
-        const onNodeUnitRange = simUnit.range ?? 1;
+        const onNodeUnitRange = rangeOf(simUnit);
         const adjacentEnemies = board.visibleHeroes.filter(h =>
           hexDistance(h.col, h.row, simUnit.col, simUnit.row) <= onNodeUnitRange
         );
@@ -1039,7 +1039,7 @@ export function genControlNodes(sim, board, budget) {
       // Move toward node, attacking enemies encountered en route
       sim.unitCommitments.set(simUnit.id, Goal.CONTROL_NODES);
       let stepsForUnit = Math.min(remaining, maxStepsPerUnit);
-      const enRouteUnitRange = simUnit.range ?? 1;
+      const enRouteUnitRange = rangeOf(simUnit);
       while (stepsForUnit > 0) {
         // Opportunity attack: fight enemies within this unit's attack range
         const adjacentFoes = board.visibleHeroes.filter(h =>

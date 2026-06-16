@@ -195,7 +195,7 @@ export class Faction {
 
   /** Does this entity currently have a horse equipped? */
   hasHorse(entity) {
-    return this.canEquipHorse() && (entity.items?.['horse'] || 0) > 0;
+    return this.canEquipHorse() && (entity.items?.['horse']?.count ?? 0) > 0;
   }
 
   /** Can this entity perform the explore action? */
@@ -472,9 +472,9 @@ export class HeroFaction extends Faction {
               const spawnLevel = 1;
               const s = createSurvivor(hex.col, hex.row, hero.ownerId, state, null, spawnLevel);
               s.owner = 'hero';
-              if (Math.random() < 0.5) s.items['horse'] = 1;
+              if (Math.random() < 0.5) s.addItem('horse');
               state.entities.push(s);
-              const horseNote = s.items['horse'] ? ' (arrives on horseback!)' : '';
+              const horseNote = s.hasItem('horse') ? ' (arrives on horseback!)' : '';
               state.addLog(`✨ The node calls to the living — a survivor emerges!${horseNote}`, 'hero', state.playerColorFor(hero));
               state.nodeSpawnedSurvivors.push({
                 id: s.id,

@@ -515,11 +515,11 @@ describe('executeExplore', () => {
   test('exploreOverride weapon equips the authored weapon', () => {
     const state = freshState();
     const hero = state.hero;
-    hero.weapon = null;
+    hero.unequipWeapon();
     const t = plainTileUnder(state, hero);
     t.exploreOverride = { kind: 'weapon', id: WeaponType.SWORD };
     executeExplore(state, hero);
-    assert.equal(hero.weapon, WeaponType.SWORD);
+    assert.equal(hero.getEquippedWeaponId(), WeaponType.SWORD);
   });
 
   test('exploreOverride horse grants a horse', () => {
@@ -528,7 +528,7 @@ describe('executeExplore', () => {
     const t = plainTileUnder(state, hero);
     t.exploreOverride = { kind: 'horse', id: 'horse' };
     executeExplore(state, hero);
-    assert.equal(hero.items['horse'], 1);
+    assert.equal(hero.getItemCount('horse'), 1);
   });
 
   test('exploreOverride nothing finds nothing (no inventory change)', () => {
@@ -1254,9 +1254,9 @@ describe('loot tier gate', () => {
     const t = state.tiles.get(hexKey(hero.col, hero.row));
     t.structure = null; t.building = BuildingType.BLACKSMITH;
     t.explored = false; t.hiddenSurvivor = false; clearFootprint(t);
-    hero.weapon = null; hero.items = {};      // unarmed → a found weapon equips
+    hero.items = {};      // unarmed → a found weapon equips
     executeExplore(state, hero);
-    return hero.weapon ?? Object.keys(hero.items).find(k => k === 'greatsword' || k === 'warhammer');
+    return hero.getEquippedWeaponId() ?? Object.keys(hero.items).find(k => k === 'greatsword' || k === 'warhammer');
   }
 
   test('premium weapons NEVER drop before their gate round', () => {
@@ -1764,82 +1764,77 @@ describe('executeUseItem — weapon equip', () => {
     const state = freshState();
     const hero = state.hero;
     // The hero starts with a sword equipped; unequip so we measure the equip
-    // from the unarmed base (ATK 2) and can verify the sword's +2 stat applies.
-    hero.weapon = null;
-    hero.items['sword'] = 1;
+    // from the unarmed base (ATK 2). The sword stays in the pack as a spare.
+    hero.unequipWeapon();
     const atkBefore = hero.getAttack();
 
     const r = executeUseItem(state, hero, 'sword');
     assert.equal(r.success, true);
     assert.equal(r.cost, 0, 'Equipping a weapon should be free');
     assert.equal(hero.getAttack(), atkBefore + 2, 'Sword gives +2 effective ATK');
-    assert.equal(hero.weapon, WeaponType.SWORD);
-    assert.equal(hero.items['sword'], 0, 'Weapon consumed from inventory');
+    assert.equal(hero.getEquippedWeaponId(), WeaponType.SWORD);
+    assert.equal(hero.getItemCount('sword'), 1, 'equipping is a tag flip — sword stays in items');
   });
 
   test('equipping weapon fails if not in inventory', () => {
     const state = freshState();
-    state.hero.items['sword'] = 0;
+    state.hero.items = {}; // no sword carried (also clears the starting sword)
     const r = executeUseItem(state, state.hero, 'sword');
     assert.equal(r.success, false);
   });
 });
 
 // ── weapon-swap preservation ─────────────────────────────────────────────────
-// Bug fix: swapping to a new weapon mid-mission used to destroy the outgoing
-// weapon. The previously equipped weapon must be banked back into carried items.
+// Equipping is now a tag flip inside `items`: the outgoing weapon stays in the
+// backpack at its existing count, only the `equipped` flag moves. Nothing is
+// ever consumed or vaporised — the swap-preservation bugs are gone by design.
 describe('executeUseItem — weapon swap preserves outgoing weapon', () => {
-  test('round-trip swap banks the old weapon into items', () => {
+  test('round-trip swap keeps the old weapon in items', () => {
     const state = freshState();
     const hero = state.hero;
-    hero.equipWeapon(WeaponType.SWORD);
-    hero.items = { axe: 1 };
+    hero.items = { sword: { count: 1, equipped: true }, axe: { count: 1 } };
 
     const r = executeUseItem(state, hero, 'axe');
     assert.equal(r.success, true);
-    assert.equal(hero.weapon, WeaponType.AXE, 'axe is now equipped');
-    assert.equal(hero.items['axe'], 0, 'axe consumed from items');
-    assert.equal(hero.items['sword'], 1, 'previous sword banked back into items');
+    assert.equal(hero.getEquippedWeaponId(), WeaponType.AXE, 'axe is now equipped');
+    assert.equal(hero.getItemCount('axe'), 1, 'axe stays at count 1 (tag flip, no consumption)');
+    assert.equal(hero.getItemCount('sword'), 1, 'previous sword remains a carried spare');
   });
 
-  test('default (non-item) weapon is preserved when swapping', () => {
-    // Operator's actual report: hero wields the faction-default weapon, which
-    // lives in the weapon slot but NOT in items. Swapping must not vaporize it.
+  test('default faction weapon is preserved when swapping', () => {
+    // The hero wields its faction-default weapon (the Paladin's sword, equipped
+    // in items). Swapping to a pack weapon must leave the sword behind as a spare.
     const state = freshState();
     const hero = state.hero;
-    hero.equipWeapon(WeaponType.SWORD);
-    hero.items = { axe: 1 };
-    assert.equal((hero.items['sword'] || 0), 0, 'precondition: sword not in items');
+    hero.addItem('axe');
+    assert.equal(hero.getEquippedWeaponId(), WeaponType.SWORD, 'precondition: sword equipped');
 
     const r = executeUseItem(state, hero, 'axe');
     assert.equal(r.success, true);
-    assert.equal(hero.weapon, WeaponType.AXE);
-    assert.equal(hero.items['sword'], 1, 'default sword preserved as a carried spare');
+    assert.equal(hero.getEquippedWeaponId(), WeaponType.AXE);
+    assert.equal(hero.getItemCount('sword'), 1, 'default sword preserved as a carried spare');
   });
 
   test('no-op when item unavailable — failure path leaves weapon untouched', () => {
     const state = freshState();
     const hero = state.hero;
-    hero.equipWeapon(WeaponType.SWORD);
-    hero.items = { axe: 0 };
+    hero.items = { sword: { count: 1, equipped: true } }; // axe not carried
 
     const r = executeUseItem(state, hero, 'axe');
     assert.equal(r.success, false);
-    assert.equal(hero.weapon, WeaponType.SWORD, 'weapon unchanged on failure');
-    assert.equal(hero.items['axe'], 0, 'items unchanged on failure');
-    assert.equal((hero.items['sword'] || 0), 0, 'no spurious sword written on failure');
+    assert.equal(hero.getEquippedWeaponId(), WeaponType.SWORD, 'weapon unchanged on failure');
+    assert.equal(hero.getItemCount('axe'), 0, 'axe still absent on failure');
   });
 
-  test('null previous weapon does not write an items[null] key', () => {
+  test('equipping from an unarmed state flags the weapon without a null key', () => {
     const state = freshState();
     const hero = state.hero;
-    hero.equipWeapon(null); // lost weapon mid-fight
-    hero.items = { axe: 1 };
+    hero.items = { axe: { count: 1 } }; // unarmed, axe is a pack spare
 
     const r = executeUseItem(state, hero, 'axe');
     assert.equal(r.success, true);
-    assert.equal(hero.weapon, WeaponType.AXE);
-    assert.equal(hero.items['axe'], 0);
+    assert.equal(hero.getEquippedWeaponId(), WeaponType.AXE);
+    assert.equal(hero.getItemCount('axe'), 1);
     assert.ok(!('null' in hero.items), 'no items["null"] key created');
     assert.ok(!(null in hero.items), 'no null key created');
   });
@@ -1853,9 +1848,9 @@ describe('auto-equip weapon on loot find', () => {
   function blacksmithState() {
     const state = freshState();
     const hero = state.hero;
-    // Hero now starts with a sword equipped; strip it so these tests exercise
-    // the "hero has no weapon" auto-equip path from a clean unarmed state.
-    hero.weapon = null;
+    // Hero now starts with a sword equipped; strip the whole pack so these tests
+    // exercise the "hero has no weapon" auto-equip path from a clean unarmed state.
+    hero.items = {};
     const t = state.tiles.get(hexKey(hero.col, hero.row));
     decomposeTileType(t, TileType.BUILDING);
     t.building = BuildingType.BLACKSMITH;
@@ -1874,7 +1869,7 @@ describe('auto-equip weapon on loot find', () => {
 
   test('weapon auto-equipped when hero has no weapon', () => {
     const { state, hero } = blacksmithState();
-    assert.equal(hero.weapon, null, 'precondition: no weapon');
+    assert.equal(hero.getEquippedWeaponId(), null, 'precondition: no weapon');
     const origRandom = Math.random;
     Math.random = makeRandom(0, 0.95); // sword on first roll, wood on second
     try {
@@ -1882,11 +1877,11 @@ describe('auto-equip weapon on loot find', () => {
     } finally {
       Math.random = origRandom;
     }
-    assert.equal(hero.weapon, WeaponType.SWORD, 'sword should be auto-equipped');
-    assert.equal((hero.items['sword'] || 0), 0, 'should NOT be in items when auto-equipped');
+    assert.equal(hero.getEquippedWeaponId(), WeaponType.SWORD, 'sword should be auto-equipped');
+    assert.equal(hero.getItemCount('sword'), 1, 'auto-equipped weapon lives in items (tagged equipped)');
   });
 
-  test('weapon goes to items when hero already has a weapon', () => {
+  test('weapon goes to items unequipped when hero already has a weapon', () => {
     const { state, hero } = blacksmithState();
     hero.equipWeapon(WeaponType.AXE); // already armed
     const origRandom = Math.random;
@@ -1896,8 +1891,8 @@ describe('auto-equip weapon on loot find', () => {
     } finally {
       Math.random = origRandom;
     }
-    assert.equal(hero.weapon, WeaponType.AXE, 'existing weapon should remain equipped');
-    assert.ok((hero.items['sword'] || 0) >= 1, 'new weapon should be in items');
+    assert.equal(hero.getEquippedWeaponId(), WeaponType.AXE, 'existing weapon should remain equipped');
+    assert.ok(hero.getItemCount('sword') >= 1, 'new weapon should be in items as a spare');
   });
 
   test('auto-equip log message says equipped immediately', () => {

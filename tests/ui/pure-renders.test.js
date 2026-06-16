@@ -379,7 +379,7 @@ describe('buildNodeBadgeHtml', () => {
 
 describe('buildUnitDetailHtml', () => {
   test('renders HP, equipped weapon, and ATK/DEF/RNG from fallback fields', () => {
-    const e = { hp: 14, maxHp: 14, attack: 4, defense: 2, range: 1, weapon: 'sword', items: {} };
+    const e = { hp: 14, maxHp: 14, attack: 4, defense: 2, range: 1, items: { sword: { count: 1, equipped: true } } };
     const html = buildUnitDetailHtml(e, e.items);
     assert.ok(html.includes('14/14'), 'shows HP');
     assert.ok(html.includes('Sword'), 'shows equipped weapon label');
@@ -390,7 +390,7 @@ describe('buildUnitDetailHtml', () => {
 
   test('prefers getAttack/getDefense/getRange methods when present', () => {
     const e = {
-      hp: 10, maxHp: 10, weapon: null, items: {},
+      hp: 10, maxHp: 10, items: {},
       getAttack: () => 9, getDefense: () => 5, getRange: () => 3,
     };
     const html = buildUnitDetailHtml(e, e.items);
@@ -400,8 +400,8 @@ describe('buildUnitDetailHtml', () => {
   });
 
   test('lists carried pack items with counts (weapons and consumables)', () => {
-    const e = { hp: 10, maxHp: 10, attack: 3, defense: 1, range: 3, weapon: 'bow',
-                items: { dagger: 1, herbs: 2 } };
+    const e = { hp: 10, maxHp: 10, attack: 3, defense: 1, range: 3,
+                items: { bow: { count: 1, equipped: true }, dagger: { count: 1 }, herbs: { count: 2 } } };
     const html = buildUnitDetailHtml(e, e.items);
     assert.ok(html.includes('Dagger'), 'weapon item labelled via WEAPON_LABEL');
     assert.ok(html.includes('Herbs'),  'consumable labelled via RESOURCE_LABEL');
@@ -411,8 +411,8 @@ describe('buildUnitDetailHtml', () => {
   });
 
   test('falls back to entity.items when items arg omitted', () => {
-    const e = { hp: 10, maxHp: 10, attack: 3, defense: 1, range: 1, weapon: null,
-                items: { sword: 1 } };
+    const e = { hp: 10, maxHp: 10, attack: 3, defense: 1, range: 1,
+                items: { sword: { count: 1 } } };
     const html = buildUnitDetailHtml(e);
     assert.ok(html.includes('Sword'), 'reads entity.items');
     assert.ok(html.includes('×1'));
@@ -421,14 +421,14 @@ describe('buildUnitDetailHtml', () => {
   test('shows "No spare items" when the unit carries no spare (unequipped) items', () => {
     // The equipped sword lives in the vitals weapon line, not the pack — the
     // pack lists only spare/unequipped items.
-    const e = { hp: 10, maxHp: 10, attack: 3, defense: 1, range: 1, weapon: 'sword', items: {} };
+    const e = { hp: 10, maxHp: 10, attack: 3, defense: 1, range: 1, items: { sword: { count: 1, equipped: true } } };
     const html = buildUnitDetailHtml(e, {});
     assert.ok(html.includes('No spare items'), 'pack empty state');
     assert.ok(html.includes('Sword'), 'equipped weapon still shown in vitals');
   });
 
   test('shows Unarmed when no weapon is equipped', () => {
-    const e = { hp: 10, maxHp: 10, attack: 1, defense: 1, range: 1, weapon: null, items: {} };
+    const e = { hp: 10, maxHp: 10, attack: 1, defense: 1, range: 1, items: {} };
     assert.ok(buildUnitDetailHtml(e, {}).includes('👊 Unarmed'));
   });
 });

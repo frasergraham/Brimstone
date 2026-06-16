@@ -40,7 +40,14 @@ export const VERSION = '1.7.1';
 //               auto-migrates pre-v6 saves (each building picks one eligible
 //               adjacent hex deterministically), so old saves still hydrate —
 //               the bump is a belt-and-braces signal for bypass consumers.
-export const SAVE_VERSION = 6;
+// v7 (2026-06): Phase 1 of the inventory refactor. The equipped weapon moved
+//               from the top-level `weapon` string slot INTO `items`, tagged
+//               `{ equipped: true }`, and backpack entries changed shape from
+//               `{ id: count }` to `{ id: { count, equipped? } }`. The
+//               denormalized `range` cache is gone (getRange() composes it).
+//               deserialize auto-migrates pre-v7 saves (folds `weapon` into the
+//               items dict, normalizes counts), so old saves still hydrate.
+export const SAVE_VERSION = 7;
 
 // Unique build identifier — appends Railway's commit SHA when deployed.
 // Falls back to plain VERSION in local dev and in-browser (where process is

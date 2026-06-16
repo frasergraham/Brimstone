@@ -757,16 +757,20 @@ export function findBoneByName(skeleton, re) {
   return null;
 }
 
-/** Does this entity have a weapon equipped? Mirrors Entity.weapon (a truthy
- *  item-id string like 'sword'). Pure; exported for tests. */
+/** Does this entity have a weapon equipped? The equipped weapon is the `items`
+ *  entry tagged `{ equipped: true }` (only weapons ever carry that flag, so a
+ *  bare flag scan is sufficient — no ITEMS lookup). Pure; exported for tests. */
 export function entityHasWeapon(entity) {
-  return !!(entity && typeof entity.weapon === 'string' && entity.weapon.length > 0);
+  const items = entity?.items;
+  if (!items) return false;
+  for (const k in items) if (items[k]?.equipped) return true;
+  return false;
 }
 
 /** Is this entity mounted? Mirrors Entity.getMoveRange()'s horse check —
- *  `items['horse'] > 0`. Pure; exported for tests. */
+ *  `items['horse'].count > 0`. Pure; exported for tests. */
 export function entityIsMounted(entity) {
-  return !!(entity && entity.items && (entity.items[HORSE_ITEM_KEY] || 0) > 0);
+  return (entity?.items?.[HORSE_ITEM_KEY]?.count ?? 0) > 0;
 }
 
 /** Local transform for the weapon stand-in relative to its hand bone. A

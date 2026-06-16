@@ -202,7 +202,17 @@ export class PlanSimState {
     // getter on access, matching the pre-refactor sim-clone semantics.
     this.entities = realState.entities
       .filter(e => e.alive)
-      .map(e => Object.setPrototypeOf({ ...e }, Entity.prototype));
+      .map(e => {
+        const clone = Object.setPrototypeOf({ ...e }, Entity.prototype);
+        // Deep-clone `items` so sim projection (equip toggles, item use) never
+        // mutates the real entity's backpack. The equipped weapon now lives
+        // INSIDE items as an `{ equipped: true }` tag, so a shared reference
+        // would corrupt live equipped state. The equipped-weapon memo cache is
+        // non-enumerable, so `{...e}` doesn't copy it — the clone rescans the
+        // fresh dict on first lookup. (Phase 1 inventory refactor.)
+        clone.items = e.items ? structuredClone(e.items) : {};
+        return clone;
+      });
 
     if (playerId) {
       // Multiplayer: scope leader ref and budget to this specific player.

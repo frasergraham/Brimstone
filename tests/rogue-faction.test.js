@@ -119,8 +119,8 @@ describe('RogueFaction — leader stats', () => {
 
   test('rogue has range 3 and projectileType "bolt"', () => {
     const r = getFaction('rogue').createLeader(0, 0, 'p1');
-    assert.equal(r.range, 3);
     assert.equal(r.getRange(), 3);
+    assert.equal(ITEMS[r.getEquippedWeaponId()]?.projectileType, 'bolt');
   });
 });
 
@@ -198,19 +198,20 @@ describe('RogueFaction — weapon restriction', () => {
 
   test('executeUseItem refuses to equip a melee weapon onto the rogue', () => {
     const { state, rogue } = rogueState();
-    rogue.items.sword = 1; // shouldn't normally happen, defensive check
+    rogue.addItem('sword'); // shouldn't normally happen, defensive check
     // The rogue starts with a bow equipped via the faction setup.
-    assert.equal(rogue.weapon, 'bow', 'precondition: rogue starts holding a bow');
+    assert.equal(rogue.getEquippedWeaponId(), 'bow', 'precondition: rogue starts holding a bow');
     const r = executeUseItem(state, rogue, 'sword');
     assert.equal(r.success, false);
     // Refusing the melee weapon must leave the existing bow equipped, unchanged.
-    assert.equal(rogue.weapon, 'bow');
+    assert.equal(rogue.getEquippedWeaponId(), 'bow');
   });
 
   test('EQUIP_WEAPON action does NOT list a melee weapon in the rogue\'s pack', () => {
     const { state, rogue } = rogueState();
-    rogue.items.sword = 1;
-    rogue.items.bow = 1;
+    // Unarmed with both weapons as spares so the equip menu (which excludes the
+    // equipped weapon) surfaces the bow but filters the forbidden melee sword.
+    rogue.items = { sword: { count: 1 }, bow: { count: 1 } };
     const actions = getValidActions(state, rogue);
     const equip = actions.find(a => a.type === ActionType.EQUIP_WEAPON);
     assert.ok(equip, 'rogue with a bow in pack should have EQUIP_WEAPON');

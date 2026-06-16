@@ -123,8 +123,8 @@ describe('state-sync — factionId round-trip (rogue)', () => {
 });
 
 describe('state-sync — SAVE_VERSION', () => {
-  test('SAVE_VERSION is 6 (building-footprint bump)', () => {
-    assert.equal(SAVE_VERSION, 6);
+  test('SAVE_VERSION is 7 (inventory equipped-tag bump)', () => {
+    assert.equal(SAVE_VERSION, 7);
   });
 });
 

@@ -4,7 +4,7 @@
 
 import { PlanActionType } from './planner.js';
 import { ITEMS } from './items.js';
-import { EntityType, ENTITY_COLOR } from './entities.js';
+import { EntityType, ENTITY_COLOR, getEquippedWeaponIdOf } from './entities.js';
 import { ResourceType, WEAPON_LABEL, RESOURCE_LABEL } from './tiles.js';
 import { nodeController, PHASE_ICON, DEFAULT_CYCLE_PHASES } from './game.js';
 import { hexKey } from './hex.js';
@@ -274,8 +274,13 @@ export function buildUnitDetailHtml(entity, items) {
   const def = typeof entity.getDefense === 'function' ? entity.getDefense() : (entity.defense ?? 0);
   const rng = typeof entity.getRange === 'function' ? entity.getRange() : (entity.range ?? 1);
 
-  const weaponLabel = entity.weapon
-    ? (WEAPON_LABEL[entity.weapon] || entity.weapon)
+  // Equipped weapon is the entity's own equipped weapon (shown in the vitals
+  // line), independent of the projected `items` arg used for the pack listing.
+  const equippedId = typeof entity.getEquippedWeaponId === 'function'
+    ? entity.getEquippedWeaponId()
+    : getEquippedWeaponIdOf(entity.items);
+  const weaponLabel = equippedId
+    ? (WEAPON_LABEL[equippedId] || equippedId)
     : '👊 Unarmed';
   const abilityHtml = entity.abilityLabel
     ? `<span class="usb-ability">✦ ${entity.abilityLabel}</span>`
@@ -283,17 +288,17 @@ export function buildUnitDetailHtml(entity, items) {
   const effectsHtml = buildEffectsHtml(entity);
 
   // Pack rows: weapons via WEAPON_LABEL, everything else via RESOURCE_LABEL.
-  // The equipped weapon lives in the vitals line, not the pack (entity.items
-  // already excludes it).
+  // The equipped weapon shows in the vitals line, so it's excluded here so the
+  // pack only lists spare gear.
   const packRows = Object.entries(pack)
-    .filter(([, n]) => (n || 0) > 0)
-    .map(([k, n]) => {
+    .filter(([k, e]) => (e?.count ?? 0) > 0 && k !== equippedId)
+    .map(([k, e]) => {
       const label = ITEMS[k]?.kind === 'weapon'
         ? (WEAPON_LABEL[k] || k)
         : (RESOURCE_LABEL[k] || k);
       return `<div class="inv-resource-row">`
            + `<span class="inv-resource-label">${label}</span>`
-           + `<span class="inv-resource-val">×${n}</span></div>`;
+           + `<span class="inv-resource-val">×${e.count}</span></div>`;
     }).join('');
 
   // Each group on its own line — a long weapon label wrapping next to the
