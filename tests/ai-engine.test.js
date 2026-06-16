@@ -5,7 +5,12 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Phase } from '../src/game.js';
-import { EntityType } from '../src/entities.js';
+import { EntityType, normalizeItems } from '../src/entities.js';
+
+// Phase-2 inventory: normalize each side's flat `{ id: N }` seed to the
+// canonical dict-of-objects shape `{ id: { count: N } }` the runtime uses.
+const normSidesInv = (inv) =>
+  Object.fromEntries(Object.entries(inv ?? {}).map(([s, m]) => [s, normalizeItems(m)]));
 import { TileType, ResourceType, StructureType } from '../src/tiles.js';
 import { hexKey } from '../src/hex.js';
 import { PlanSimState } from '../src/ai.js';
@@ -68,10 +73,10 @@ function makeFakeState(overrides = {}) {
     witchObjectives: overrides.witchObjectives ?? [],
     nodeScore: overrides.nodeScore ?? { hero: 0, witch: 0 },
     fogOfWar: 'none',
-    inventory: overrides.inventory ?? {
+    inventory: normSidesInv(overrides.inventory ?? {
       witch: { [ResourceType.HERBS]: 1, [ResourceType.WOOD]: 2, [ResourceType.METAL]: 0 },
       hero: {},
-    },
+    }),
     entities,
     noWitchMission: overrides.noWitchMission ?? false,
   };
@@ -125,8 +130,8 @@ describe('EnginePlanSimState', () => {
 
   test('resourceLedger is independent copy', () => {
     const sim = makeSim();
-    sim.resourceLedger[ResourceType.WOOD] = 99;
-    assert.equal(sim.inventory.witch[ResourceType.WOOD], 2);
+    sim.resourceLedger[ResourceType.WOOD] = { count: 99 };
+    assert.equal((sim.inventory.witch[ResourceType.WOOD]?.count ?? 0), 2);
   });
 });
 
@@ -677,7 +682,7 @@ describe('genBuildArmy', () => {
     }});
     const board = assessBoard(sim);
     genBuildArmy(sim, board, 3);
-    assert.equal(sim.resourceLedger[ResourceType.METAL], 0, 'should have spent 4 metal on 2 iron golems');
+    assert.equal((sim.resourceLedger[ResourceType.METAL]?.count ?? 0), 0, 'should have spent 4 metal on 2 iron golems');
   });
 });
 

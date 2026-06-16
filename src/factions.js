@@ -7,7 +7,7 @@
 // AI personalities, and unit roster within a side. See `src/sides.js`.
 
 import { Phase } from './game.js';
-import { EntityType, SurvivorAbility, createHero, createWitch, createSurvivor, createZombie, createMinion, createWoodGolem, createIronGolem, createRogue, createCaptain, createNecromancer, createBrute, isLeaderType } from './entities.js';
+import { EntityType, SurvivorAbility, createHero, createWitch, createSurvivor, createZombie, createMinion, createWoodGolem, createIronGolem, createRogue, createCaptain, createNecromancer, createBrute, isLeaderType, getItemCountOf, totalItemCount } from './entities.js';
 import { ResourceType, BuildingType, rollLoot, hasBuilding, isRiver } from './tiles.js';
 import { hexKey, getNeighbors } from './hex.js';
 import { AI_HERO_NAMES, AI_WITCH_NAMES } from './ai-names.js';
@@ -650,9 +650,9 @@ export class WitchFaction extends Faction {
   isBlockedByWalls() { return true; }
 
   getSummonOptions(inventory) {
-    const metal = inventory[ResourceType.METAL] || 0;
-    const wood  = inventory[ResourceType.WOOD]  || 0;
-    const total = Object.values(inventory).reduce((s, v) => s + (v || 0), 0);
+    const metal = getItemCountOf(inventory, ResourceType.METAL);
+    const wood  = getItemCountOf(inventory, ResourceType.WOOD);
+    const total = totalItemCount(inventory);
     if (total < 2) return [];
     return [
       { summonType: EntityType.IRON_GOLEM, affordable: metal >= 2 },
@@ -875,7 +875,7 @@ export class BruteFaction extends WitchFaction {
   getMinionCost() { return 1; }
 
   getSummonOptions(inventory) {
-    const total = Object.values(inventory).reduce((s, v) => s + (v || 0), 0);
+    const total = totalItemCount(inventory);
     if (total < this.getMinionCost()) return [];
     return [{ summonType: EntityType.MINION, affordable: true }];
   }

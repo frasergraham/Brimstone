@@ -4,7 +4,12 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Phase } from '../src/game.js';
-import { EntityType, rangeOf } from '../src/entities.js';
+import { EntityType, rangeOf, normalizeItems } from '../src/entities.js';
+
+// Phase-2 inventory: normalize each side's flat `{ id: N }` seed to the
+// canonical dict-of-objects shape `{ id: { count: N } }` the runtime uses.
+const normSidesInv = (inv) =>
+  Object.fromEntries(Object.entries(inv ?? {}).map(([s, m]) => [s, normalizeItems(m)]));
 import { TileType, ResourceType } from '../src/tiles.js';
 import { hexKey } from '../src/hex.js';
 import { PlanSimState, HERO_PERSONALITIES } from '../src/ai.js';
@@ -79,10 +84,10 @@ function makeFakeState(overrides = {}) {
     ],
     nodeScore: overrides.nodeScore ?? { hero: 0, witch: 0 },
     fogOfWar: 'none',
-    inventory: overrides.inventory ?? {
+    inventory: normSidesInv(overrides.inventory ?? {
       witch: {},
       hero: { [ResourceType.WOOD]: 2, [ResourceType.METAL]: 1, [ResourceType.FOOD]: 2, [ResourceType.HERBS]: 1 },
-    },
+    }),
     entities,
   };
 }
@@ -436,8 +441,8 @@ describe('HERO_PERSONALITY_CONFIGS', () => {
 describe('HeroEnginePlanSimState', () => {
   test('resourceLedger uses shared inventory', () => {
     const sim = makeHeroEngineSim();
-    assert.equal(sim.resourceLedger[ResourceType.WOOD], 2);
-    assert.equal(sim.resourceLedger[ResourceType.METAL], 1);
+    assert.equal((sim.resourceLedger[ResourceType.WOOD]?.count ?? 0), 2);
+    assert.equal((sim.resourceLedger[ResourceType.METAL]?.count ?? 0), 1);
   });
 
   test('has departedHexes and unitCommitments', () => {

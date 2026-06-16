@@ -2,7 +2,7 @@
 import { hexKey, getNeighbors } from './hex.js';
 import { getReachableHexes, getVisiblePositions } from './actions.js';
 import { ResourceType, isRiver } from './tiles.js';
-import { EntityType, normalizeItems } from './entities.js';
+import { EntityType, normalizeItems, getItemCountOf, removeItemInItems } from './entities.js';
 import { ITEMS } from './items.js';
 import { effectsBlockActions } from './effects.js';
 
@@ -159,8 +159,8 @@ export function computeGhostState(state, plan) {
       if (!summonType) {
         const ownerFaction = (state.entities ?? []).find(e => e.id === action.entityId)?.owner ?? 'witch';
         const inv = state.inventory?.[ownerFaction] ?? {};
-        summonType = (inv[ResourceType.METAL] || 0) >= 2 ? EntityType.IRON_GOLEM
-                   : (inv[ResourceType.WOOD]  || 0) >= 2 ? EntityType.WOOD_GOLEM
+        summonType = getItemCountOf(inv, ResourceType.METAL) >= 2 ? EntityType.IRON_GOLEM
+                   : getItemCountOf(inv, ResourceType.WOOD)  >= 2 ? EntityType.WOOD_GOLEM
                    : EntityType.MINION;
       }
       // Summoned unit appears on the witch's current projected position.
@@ -195,8 +195,10 @@ export function computeGhostState(state, plan) {
 // inventory values keyed by faction id).  Does NOT mutate the real state.
 
 export function computeProjectedInventory(state, plan) {
-  const hero   = { ...(state.inventory?.hero  ?? {}) };
-  const witch  = { ...(state.inventory?.witch ?? {}) };
+  // Deep-clone the dict-of-objects resource maps (normalizeItems) so projected
+  // spending never mutates the real state.inventory entries.
+  const hero   = normalizeItems(state.inventory?.hero);
+  const witch  = normalizeItems(state.inventory?.witch);
   // Per-entity personal items (herbs, weapons)
   const entityItems = {};
   for (const e of (state.entities ?? [])) {
@@ -207,15 +209,15 @@ export function computeProjectedInventory(state, plan) {
     switch (action.type) {
       case PlanActionType.SUMMON: {
         // Mirrors pickSummonType + executeSummon spending
-        if ((witch[ResourceType.METAL] || 0) >= 2) {
-          witch[ResourceType.METAL] -= 2;
-        } else if ((witch[ResourceType.WOOD] || 0) >= 2) {
-          witch[ResourceType.WOOD] -= 2;
+        if (getItemCountOf(witch, ResourceType.METAL) >= 2) {
+          removeItemInItems(witch, ResourceType.METAL, 2);
+        } else if (getItemCountOf(witch, ResourceType.WOOD) >= 2) {
+          removeItemInItems(witch, ResourceType.WOOD, 2);
         } else {
           let rem = 2;
-          for (const k of Object.keys(witch).sort((a, b) => witch[b] - witch[a])) {
-            const spend = Math.min(witch[k] || 0, rem);
-            witch[k] = (witch[k] || 0) - spend;
+          for (const k of Object.keys(witch).sort((a, b) => getItemCountOf(witch, b) - getItemCountOf(witch, a))) {
+            const spend = Math.min(getItemCountOf(witch, k), rem);
+            removeItemInItems(witch, k, spend);
             rem -= spend;
             if (rem === 0) break;
           }
@@ -224,23 +226,23 @@ export function computeProjectedInventory(state, plan) {
       }
       case PlanActionType.FORTIFY:
         // Metal preferred, then wood — mirrors executeFortify
-        if ((hero[ResourceType.METAL] || 0) > 0) hero[ResourceType.METAL]--;
-        else if ((hero[ResourceType.WOOD] || 0) > 0) hero[ResourceType.WOOD]--;
+        if (getItemCountOf(hero, ResourceType.METAL) > 0) removeItemInItems(hero, ResourceType.METAL, 1);
+        else if (getItemCountOf(hero, ResourceType.WOOD) > 0) removeItemInItems(hero, ResourceType.WOOD, 1);
         break;
       case PlanActionType.HEAL: {
         const healEntity = (state.entities ?? []).find(e => e.id === action.entityId);
         const pool = healEntity?.owner === 'witch' ? witch : hero;
-        if ((pool[ResourceType.HERBS] || 0) > 0) pool[ResourceType.HERBS]--;
+        if (getItemCountOf(pool, ResourceType.HERBS) > 0) removeItemInItems(pool, ResourceType.HERBS, 1);
         break;
       }
       case PlanActionType.USE_ITEM: {
         const item = action.item;
         if (!item || ITEMS[item]?.kind === 'weapon') break;
-        if ((hero[item] || 0) > 0) hero[item]--;
+        if (getItemCountOf(hero, item) > 0) removeItemInItems(hero, item, 1);
         break;
       }
       case PlanActionType.SOUND_HORN:
-        if ((hero[ResourceType.FOOD] || 0) >= 1) hero[ResourceType.FOOD] -= 1;
+        if (getItemCountOf(hero, ResourceType.FOOD) >= 1) removeItemInItems(hero, ResourceType.FOOD, 1);
         break;
     }
   }

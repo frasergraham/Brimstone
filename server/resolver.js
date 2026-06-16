@@ -11,7 +11,7 @@ import {
   hasLineOfSight,
 } from '../src/actions.js';
 import { FORT_IMPASSABLE_THRESHOLD } from '../src/tiles.js';
-import { EntityType, isLeaderType, normalizeItems, rangeOf } from '../src/entities.js';
+import { EntityType, isLeaderType, normalizeItems, rangeOf, getItemCountOf, removeItemInItems } from '../src/entities.js';
 import { hexDistance, hexKey } from '../src/hex.js';
 import { PlanActionType, snapEntity, groupPlanByEntity } from '../src/planner.js';
 import { Phase, countHeldNodes } from '../src/game.js';
@@ -355,8 +355,8 @@ function drainOneStep(state, queue, budget) {
   // right moment.
   if (budget.remaining <= 0 && queue.length > 0) {
     const heroInv = state.inventory?.hero ?? {};
-    if ((heroInv[ResourceType.FOOD] || 0) > 0) {
-      heroInv[ResourceType.FOOD]--;
+    if (getItemCountOf(heroInv, ResourceType.FOOD) > 0) {
+      removeItemInItems(heroInv, ResourceType.FOOD, 1);
       budget.remaining += 1;
       state.addLog(`🍞 Rations consumed — pressing on beyond the action limit.`, budget.faction);
       subEvents.push({ type: ResEventType.FOOD_CONSUMED, faction: budget.faction });

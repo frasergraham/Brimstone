@@ -4,7 +4,7 @@
 
 import { PlanActionType } from './planner.js';
 import { ITEMS } from './items.js';
-import { EntityType, ENTITY_COLOR, getEquippedWeaponIdOf } from './entities.js';
+import { EntityType, ENTITY_COLOR, getEquippedWeaponIdOf, getItemCountOf, removeItemInItems, normalizeItems } from './entities.js';
 import { ResourceType, WEAPON_LABEL, RESOURCE_LABEL } from './tiles.js';
 import { nodeController, PHASE_ICON, DEFAULT_CYCLE_PHASES } from './game.js';
 import { hexKey } from './hex.js';
@@ -112,13 +112,13 @@ const RES_ICON = {
 function _stepCostLabel(action, projShared, projWitch, projEntityItems) {
   switch (action.type) {
     case PlanActionType.SUMMON: {
-      if ((projWitch[ResourceType.METAL] || 0) >= 2) return `−2${RES_ICON[ResourceType.METAL]}`;
-      if ((projWitch[ResourceType.WOOD]  || 0) >= 2) return `−2${RES_ICON[ResourceType.WOOD]}`;
+      if (getItemCountOf(projWitch, ResourceType.METAL) >= 2) return `−2${RES_ICON[ResourceType.METAL]}`;
+      if (getItemCountOf(projWitch, ResourceType.WOOD)  >= 2) return `−2${RES_ICON[ResourceType.WOOD]}`;
       return '−2 res';
     }
     case PlanActionType.FORTIFY:
-      if ((projShared[ResourceType.METAL] || 0) > 0) return `−1${RES_ICON[ResourceType.METAL]}`;
-      if ((projShared[ResourceType.WOOD]  || 0) > 0) return `−1${RES_ICON[ResourceType.WOOD]}`;
+      if (getItemCountOf(projShared, ResourceType.METAL) > 0) return `−1${RES_ICON[ResourceType.METAL]}`;
+      if (getItemCountOf(projShared, ResourceType.WOOD)  > 0) return `−1${RES_ICON[ResourceType.WOOD]}`;
       return '';
     case PlanActionType.HEAL:
       return `−1${RES_ICON[ResourceType.HERBS]}`;
@@ -157,9 +157,11 @@ export function buildPlanStepsHtml(plan, budget, foodAvailable, submitted, entit
     [EntityType.IRON_GOLEM]: '⚙',
   };
 
-  // Projected inventory — updated as we walk through steps
-  const projShared      = { ...(initialInv?.hero        ?? {}) };
-  const projWitch       = { ...(initialInv?.witch       ?? {}) };
+  // Projected inventory — updated as we walk through steps. Deep-clone the
+  // resource dicts (dict-of-objects shape) so mutating projected counts never
+  // touches the real state.inventory entries.
+  const projShared      = normalizeItems(initialInv?.hero);
+  const projWitch       = normalizeItems(initialInv?.witch);
   const projEntityItems = {};
   if (initialInv?.entityItems) {
     for (const [id, items] of Object.entries(initialInv.entityItems)) {
@@ -205,39 +207,7 @@ export function buildPlanStepsHtml(plan, budget, foodAvailable, submitted, entit
       </div>`;
 
     // Advance projected inventory for subsequent steps
-    switch (a.type) {
-      case PlanActionType.SUMMON:
-        if ((projWitch[ResourceType.METAL] || 0) >= 2) { projWitch[ResourceType.METAL] -= 2; }
-        else if ((projWitch[ResourceType.WOOD] || 0) >= 2) { projWitch[ResourceType.WOOD] -= 2; }
-        else {
-          let rem = 2;
-          for (const k of Object.keys(projWitch).sort((a, b) => projWitch[b] - projWitch[a])) {
-            const spend = Math.min(projWitch[k] || 0, rem); projWitch[k] -= spend; rem -= spend;
-            if (rem === 0) break;
-          }
-        }
-        break;
-      case PlanActionType.FORTIFY:
-        if ((projShared[ResourceType.METAL] || 0) > 0) projShared[ResourceType.METAL]--;
-        else if ((projShared[ResourceType.WOOD] || 0) > 0) projShared[ResourceType.WOOD]--;
-        break;
-      case PlanActionType.HEAL: {
-        const healEnt = entities.find(e => e.id === a.entityId);
-        const healPools = { hero: projShared, witch: projWitch };
-        const healPool = healPools[healEnt?.owner] || projShared;
-        if ((healPool[ResourceType.HERBS] || 0) > 0) healPool[ResourceType.HERBS]--;
-        break;
-      }
-      case PlanActionType.USE_ITEM: {
-        const item = a.item;
-        if (!item || ITEMS[item]?.kind === 'weapon') break;
-        if ((projShared[item] || 0) > 0) { projShared[item]--; }
-        break;
-      }
-      case PlanActionType.SOUND_HORN:
-        if ((projShared[ResourceType.FOOD] || 0) >= 1) projShared[ResourceType.FOOD] -= 1;
-        break;
-    }
+    _advanceProjectedInventory(a, projShared, projWitch, projEntityItems, entities);
   });
 
   return html || `<div class="plan-step"><span class="plan-step-desc" style="color:var(--muted)">No actions queued — click units to add</span></div>`;
@@ -360,8 +330,8 @@ export function buildUnitPlanBlocksHtml(
   const budgetState = new Map();   // key → 'ok' | 'food' | 'over'
   const costLabels  = new Map();   // key → string
 
-  const projShared      = { ...(initialInv?.hero        ?? {}) };
-  const projWitch       = { ...(initialInv?.witch       ?? {}) };
+  const projShared      = normalizeItems(initialInv?.hero);
+  const projWitch       = normalizeItems(initialInv?.witch);
   const projEntityItems = {};
   if (initialInv?.entityItems) {
     for (const [id, items] of Object.entries(initialInv.entityItems)) {
@@ -491,35 +461,35 @@ export function buildUnitPlanBlocksHtml(
 function _advanceProjectedInventory(a, projShared, projWitch, projEntityItems, entities) {
   switch (a.type) {
     case PlanActionType.SUMMON:
-      if ((projWitch[ResourceType.METAL] || 0) >= 2) { projWitch[ResourceType.METAL] -= 2; }
-      else if ((projWitch[ResourceType.WOOD] || 0) >= 2) { projWitch[ResourceType.WOOD] -= 2; }
+      if (getItemCountOf(projWitch, ResourceType.METAL) >= 2) { removeItemInItems(projWitch, ResourceType.METAL, 2); }
+      else if (getItemCountOf(projWitch, ResourceType.WOOD) >= 2) { removeItemInItems(projWitch, ResourceType.WOOD, 2); }
       else {
         let rem = 2;
-        for (const k of Object.keys(projWitch).sort((a, b) => projWitch[b] - projWitch[a])) {
-          const spend = Math.min(projWitch[k] || 0, rem); projWitch[k] -= spend; rem -= spend;
+        for (const k of Object.keys(projWitch).sort((a, b) => getItemCountOf(projWitch, b) - getItemCountOf(projWitch, a))) {
+          const spend = Math.min(getItemCountOf(projWitch, k), rem); removeItemInItems(projWitch, k, spend); rem -= spend;
           if (rem === 0) break;
         }
       }
       break;
     case PlanActionType.FORTIFY:
-      if ((projShared[ResourceType.METAL] || 0) > 0) projShared[ResourceType.METAL]--;
-      else if ((projShared[ResourceType.WOOD] || 0) > 0) projShared[ResourceType.WOOD]--;
+      if (getItemCountOf(projShared, ResourceType.METAL) > 0) removeItemInItems(projShared, ResourceType.METAL, 1);
+      else if (getItemCountOf(projShared, ResourceType.WOOD) > 0) removeItemInItems(projShared, ResourceType.WOOD, 1);
       break;
     case PlanActionType.HEAL: {
       const healEnt = entities?.find(e => e.id === a.entityId);
       const healPools = { hero: projShared, witch: projWitch };
       const healPool = healPools[healEnt?.owner] || projShared;
-      if ((healPool[ResourceType.HERBS] || 0) > 0) healPool[ResourceType.HERBS]--;
+      if (getItemCountOf(healPool, ResourceType.HERBS) > 0) removeItemInItems(healPool, ResourceType.HERBS, 1);
       break;
     }
     case PlanActionType.USE_ITEM: {
       const item = a.item;
       if (!item || ITEMS[item]?.kind === 'weapon') break;
-      if ((projShared[item] || 0) > 0) { projShared[item]--; }
+      if (getItemCountOf(projShared, item) > 0) { removeItemInItems(projShared, item, 1); }
       break;
     }
     case PlanActionType.SOUND_HORN:
-      if ((projShared[ResourceType.FOOD] || 0) >= 1) projShared[ResourceType.FOOD] -= 1;
+      if (getItemCountOf(projShared, ResourceType.FOOD) >= 1) removeItemInItems(projShared, ResourceType.FOOD, 1);
       break;
   }
 }

@@ -2,7 +2,7 @@
 import { hexKey, hexToPixel, hexDistance, MAP_COLS, MAP_ROWS } from './hex.js';
 import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus, legacyTileType } from './tiles.js';
 import { ITEMS } from './items.js';
-import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, attackOf, defenseOf, rangeOf, getEquippedWeaponIdOf } from './entities.js';
+import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, attackOf, defenseOf, rangeOf, getEquippedWeaponIdOf, getItemCountOf, totalItemCount } from './entities.js';
 import { DAMAGE_SCALE } from './balance.js';
 import { Phase, PHASE_ICON, phaseForRound, DEFAULT_CYCLE_PHASES, nodeController, countHeldNodes } from './game.js';
 import { PAD_X, PAD_Y, Renderer } from './renderer.js';
@@ -1070,7 +1070,7 @@ export class UIController {
     if (!isFreeAction) {
       const flatPlan = interleavePlan(this._unitPlans);
       const currentCost = flatPlan.filter(a => actionCosts(a.type)).length;
-      const foodAvailable = (this.state.inventory?.hero?.[ResourceType.FOOD] || 0);
+      const foodAvailable = getItemCountOf(this.state.inventory?.hero, ResourceType.FOOD);
       const cap = Math.ceil((this._planBudget + foodAvailable) * 1.5);
 
       if (currentCost >= cap) {
@@ -1485,7 +1485,7 @@ export class UIController {
     if (budgeEl) budgeEl.textContent = `${Math.max(0, remaining)} left`;
 
     // Food is auto-applied to over-budget actions until exhausted.
-    const foodAvailable = (this.state.inventory?.hero?.[ResourceType.FOOD] || 0);
+    const foodAvailable = getItemCountOf(this.state.inventory?.hero, ResourceType.FOOD);
 
     const initialInv = computeProjectedInventory(this.state, []);
 
@@ -1555,7 +1555,7 @@ export class UIController {
     const tabCount = this._el('plan-tab-count');
     if (tabCount) {
       tabCount.textContent = budgetCost;
-      const foodAvail = this.state?.inventory?.hero?.[ResourceType.FOOD] || 0;
+      const foodAvail = getItemCountOf(this.state?.inventory?.hero, ResourceType.FOOD);
       if (budgetCost > this._planBudget + foodAvail) {
         tabCount.className = 'plan-tab-count plan-tab-over';
       } else if (budgetCost > this._planBudget) {
@@ -2288,8 +2288,8 @@ export class UIController {
         }
         case ActionType.FORTIFY: {
           const fortInv    = projInv ? projInv.hero : state.inventory.hero;
-          const hasMetal   = (fortInv.metal || 0) > 0;
-          const hasWood    = (fortInv.wood  || 0) > 0;
+          const hasMetal   = getItemCountOf(fortInv, ResourceType.METAL) > 0;
+          const hasWood    = getItemCountOf(fortInv, ResourceType.WOOD) > 0;
           const cantAfford = projInv ? (!hasMetal && !hasWood) : !action.affordable;
           const hasDoubler = entity.type === EntityType.SURVIVOR && entity.hasAbility(SurvivorAbility.FORTIFY_DOUBLE);
           const tileData   = state.tiles.get(hexKey(entity.col, entity.row));
@@ -2322,7 +2322,7 @@ export class UIController {
           let healDis = dis || action.atFullHp;
           if (projInv) {
             const healPool = entity.owner === 'witch' ? projInv.witch : projInv.hero;
-            if ((healPool[ResourceType.HERBS] || 0) < 1) healDis = true;
+            if (getItemCountOf(healPool, ResourceType.HERBS) < 1) healDis = true;
           }
           arcItems.push({ group: 'items', label: 'Heal', fullLabel: action.atFullHp ? 'Already at full HP' : 'Herbs (heal 2D10 HP)',
             desc: action.atFullHp ? 'Already at full HP.' : 'Spend 1 herb to heal this unit 2D10 HP. (1 action)',
@@ -2336,7 +2336,7 @@ export class UIController {
             let itemDis = dis;
             if (projInv) {
               if (ITEMS[item.item]?.kind !== 'weapon') {
-                if ((projInv.hero[item.item] || 0) < 1) itemDis = true;
+                if (getItemCountOf(projInv.hero, item.item) < 1) itemDis = true;
               }
             }
             // Strip leading emoji from item labels
@@ -2380,16 +2380,16 @@ export class UIController {
     // the panel doesn't surface summons during off-turn views.
     if (isLeaderType(entity.type) && entity.owner === 'witch' && actions.some(a => a.type === ActionType.SUMMON || a.type === ActionType.GUARD)) {
       const projWitch = projInv ? projInv.witch : state.inventory.witch;
-      const projMetal = projWitch?.[ResourceType.METAL] || 0;
-      const projWood  = projWitch?.[ResourceType.WOOD]  || 0;
-      const projTotal = projWitch ? Object.values(projWitch).reduce((s, v) => s + (v || 0), 0) : 0;
+      const projMetal = getItemCountOf(projWitch, ResourceType.METAL);
+      const projWood  = getItemCountOf(projWitch, ResourceType.WOOD);
+      const projTotal = totalItemCount(projWitch);
       // Probe with a "rich enough" inventory so we get the full allowed-
       // summon set for this faction even when the actual inventory is empty
       // (we still want to show greyed-out unaffordable options, so the
       // player understands what's possible to summon eventually).
       const allowedSummons = new Set(
         concreteFactionOf(entity)
-          .getSummonOptions({ [ResourceType.METAL]: 99, [ResourceType.WOOD]: 99 })
+          .getSummonOptions({ [ResourceType.METAL]: { count: 99 }, [ResourceType.WOOD]: { count: 99 } })
           .map(o => o.summonType)
       );
       const ALL_SUMMONS = [
@@ -2700,9 +2700,9 @@ export class UIController {
     popup.querySelectorAll('.arc-item[data-action="summon"]').forEach(btn => {
       const st = btn.dataset.summonType;
       const projWitch = projInv.witch;
-      const projMetal = projWitch[ResourceType.METAL] || 0;
-      const projWood  = projWitch[ResourceType.WOOD]  || 0;
-      const projTotal = Object.values(projWitch).reduce((s, v) => s + (v || 0), 0);
+      const projMetal = getItemCountOf(projWitch, ResourceType.METAL);
+      const projWood  = getItemCountOf(projWitch, ResourceType.WOOD);
+      const projTotal = totalItemCount(projWitch);
       const affordable = st === EntityType.IRON_GOLEM ? projMetal >= 2
         : st === EntityType.WOOD_GOLEM ? projWood >= 2
         : projTotal >= 2;
@@ -2710,8 +2710,8 @@ export class UIController {
     });
     popup.querySelectorAll('.arc-item[data-action="fortify"]').forEach(btn => {
       const shared = projInv.hero;
-      const hasMetal = (shared.metal || 0) > 0;
-      const hasWood  = (shared.wood  || 0) > 0;
+      const hasMetal = getItemCountOf(shared, ResourceType.METAL) > 0;
+      const hasWood  = getItemCountOf(shared, ResourceType.WOOD) > 0;
       btn.disabled = !hasMetal && !hasWood;
     });
   }
@@ -3633,7 +3633,7 @@ export class UIController {
     const entities = this.state.entities;
     const inventory = this.state.inventory;
     const stash = faction === 'hero' ? inventory?.hero : inventory?.witch;
-    const foodCount = stash?.food ?? 0;
+    const foodCount = getItemCountOf(stash, 'food');
 
     const rows = [];
     if (faction === 'hero') {
@@ -4532,13 +4532,13 @@ export class UIController {
     const stash   = isHero ? inv.hero : inv.witch;
     const label   = isHero ? '⚔ Supplies' : '🕯 Stores';
 
-    const entries = Object.entries(stash).filter(([, v]) => v > 0);
+    const entries = Object.entries(stash).filter(([, v]) => (v?.count ?? 0) > 0);
 
     const rows = entries.length
       ? entries.map(([k, v]) =>
           `<div class="inv-resource-row">
             <span class="inv-resource-label">${RESOURCE_LABEL[k] || k}</span>
-            <span class="inv-resource-val">×${v}</span>
+            <span class="inv-resource-val">×${v.count}</span>
           </div>`
         ).join('')
       : `<div class="inv-empty">Nothing held.</div>`;

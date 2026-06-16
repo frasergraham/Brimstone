@@ -55,7 +55,7 @@ function _isWeapon(id) {
 function _heroSideCanHeal(state) {
   const wounded = state?.entities?.some(e =>
     e.alive && _isPlayerSide(e.owner) && e.hp < e.maxHp);
-  const herbs = (state?.inventory?.hero?.herbs ?? 0) > 0;
+  const herbs = (state?.inventory?.hero?.herbs?.count ?? 0) > 0;
   return !!(wounded && herbs);
 }
 

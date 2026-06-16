@@ -245,13 +245,13 @@ function poolWeaponRowHTML(id, count, targets) {
 /**
  * The shared-armory block for the Shared Inventory section: every pooled weapon
  * with per-unit Equip controls. '' when the pool is empty.
- * @param {object} weapons  shared pool, `{ weaponId: count }`
+ * @param {object} weapons  shared pool, `{ weaponId: { count } }`
  * @param {{idx:(number|'leader'), label:string}[]} targets  equip candidates
  */
 function sharedWeaponsHTML(weapons, targets) {
-  const entries = Object.entries(weapons || {}).filter(([id, c]) => c > 0 && isWeapon(id));
+  const entries = Object.entries(weapons || {}).filter(([id, e]) => (e?.count ?? 0) > 0 && isWeapon(id));
   if (entries.length === 0) return '';
-  const rows = entries.map(([id, count]) => poolWeaponRowHTML(id, count, targets)).join('');
+  const rows = entries.map(([id, e]) => poolWeaponRowHTML(id, e.count, targets)).join('');
   return `<div class="cprog-section-label armory-label">Armory</div>
     <div class="cprog-pool-weapons">${rows}</div>`;
 }

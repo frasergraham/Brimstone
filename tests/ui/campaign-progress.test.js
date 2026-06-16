@@ -383,18 +383,18 @@ describe('Campaign shared armory (weapons move both ways)', () => {
   test('returnWeaponToInventory stows a carried weapon into the shared pool', () => {
     const c = armoryCampaign();
     assert.equal(c.returnWeaponToInventory('leader', 'bow'), 'bow');
-    assert.equal(c.weapons.bow, 1);                  // weapon reached the pool
+    assert.equal(c.weapons.bow?.count, 1);                  // weapon reached the pool
     assert.ok(!c.heroStats.items.bow);               // and left the backpack
     assert.equal(getEquippedWeaponIdOf(c.heroStats.items), 'sword'); // equipped weapon untouched
   });
 
   test('equipFromInventory draws a pooled weapon onto a unit, pooling the old one', () => {
     const c = armoryCampaign();
-    c.weapons = { greatsword: 1 };
+    c.weapons = { greatsword: { count: 1 } };
     assert.equal(c.equipFromInventory('leader', 'greatsword'), 'greatsword');
     assert.equal(getEquippedWeaponIdOf(c.heroStats.items), 'greatsword'); // new weapon equipped
     assert.ok(!c.weapons.greatsword);                // drawn out of the pool
-    assert.equal(c.weapons.sword, 1);                // old equipped weapon stowed (non-destructive)
+    assert.equal(c.weapons.sword?.count, 1);                // old equipped weapon stowed (non-destructive)
     assert.ok(!c.heroStats.items.sword);             // and left the unit's backpack
   });
 
@@ -403,11 +403,11 @@ describe('Campaign shared armory (weapons move both ways)', () => {
     // Survivor stows its spare axe; the leader then equips it from the pool.
     assert.equal(c.returnWeaponToInventory(0, 'axe'), 'axe');
     assert.ok(!c.roster[0].items.axe);
-    assert.equal(c.weapons.axe, 1);
+    assert.equal(c.weapons.axe?.count, 1);
     assert.equal(c.equipFromInventory('leader', 'axe'), 'axe');
     assert.equal(getEquippedWeaponIdOf(c.heroStats.items), 'axe');
     assert.ok(!c.weapons.axe);                       // pool drained
-    assert.equal(c.weapons.sword, 1);                // leader's old sword pooled
+    assert.equal(c.weapons.sword?.count, 1);                // leader's old sword pooled
   });
 
   test('returnWeaponToInventory no-ops for non-weapon / not-carried / unknown unit', () => {
@@ -420,12 +420,12 @@ describe('Campaign shared armory (weapons move both ways)', () => {
 
   test('equipFromInventory no-ops when the weapon is not in the pool or already equipped', () => {
     const c = armoryCampaign();
-    c.weapons = { greatsword: 1 };
+    c.weapons = { greatsword: { count: 1 } };
     assert.equal(c.equipFromInventory('leader', 'axe'), null);          // not in pool
     assert.equal(c.equipFromInventory('leader', 'sword'), null);        // already equipped
     assert.equal(c.equipFromInventory('leader', 'horse'), null);        // not a weapon
     assert.equal(getEquippedWeaponIdOf(c.heroStats.items), 'sword');
-    assert.equal(c.weapons.greatsword, 1);                              // pool untouched
+    assert.equal(c.weapons.greatsword?.count, 1);                              // pool untouched
   });
 
   test('armory changes persist to localStorage (survive a reload)', () => {
@@ -433,7 +433,7 @@ describe('Campaign shared armory (weapons move both ways)', () => {
     c.returnWeaponToInventory('leader', 'bow');
     const reloaded = new Campaign(rowsDef, 1);
     assert.equal(reloaded.load(), true);
-    assert.equal(reloaded.weapons.bow, 1);
+    assert.equal(reloaded.weapons.bow?.count, 1);
   });
 
   test('pre-armory saves load with an empty pool (no crash)', () => {
@@ -452,14 +452,14 @@ describe('Campaign shared armory (weapons move both ways)', () => {
     const c = armoryCampaign();
     // Start unit 0 weaponless, with an axe waiting in the shared pool.
     c.roster[0].items = {};
-    c.weapons = { axe: 1 };
+    c.weapons = { axe: { count: 1 } };
     assert.equal(c.equipFromInventory(0, 'axe'), 'axe'); // pool → equipped
     assert.equal(getEquippedWeaponIdOf(c.roster[0].items), 'axe');
     assert.ok(!c.weapons.axe);                           // pool drained
     // Take it back off (equipped → pool, no replacement) — exact starting state.
     assert.deepEqual(c.unequipToInventory(0), { success: true, weaponId: 'axe' });
     assert.equal(getEquippedWeaponIdOf(c.roster[0].items), null);  // weaponless again
-    assert.equal(c.weapons.axe, 1);                      // pool count restored
+    assert.equal(c.weapons.axe?.count, 1);                      // pool count restored
   });
 
   test('unequipToInventory banks an equipped weapon into the shared pool', () => {
@@ -467,7 +467,7 @@ describe('Campaign shared armory (weapons move both ways)', () => {
     c.weapons = {};                                      // empty pool
     assert.deepEqual(c.unequipToInventory('leader'), { success: true, weaponId: 'sword' });
     assert.equal(getEquippedWeaponIdOf(c.heroStats.items), null); // equipped weapon emptied
-    assert.equal(c.weapons.sword, 1);                    // sword reached the pool
+    assert.equal(c.weapons.sword?.count, 1);                    // sword reached the pool
   });
 
   test('unequipToInventory no-ops when the unit has no equipped weapon', () => {
@@ -503,7 +503,7 @@ describe('shared-armory rendering', () => {
   });
 
   test('pooled weapons render in Shared Inventory with a per-unit Equip control', () => {
-    const html = partyPaneHTML(HERO, makeRoster(1), [0], 1, { resources: {}, weapons: { greatsword: 1 } });
+    const html = partyPaneHTML(HERO, makeRoster(1), [0], 1, { resources: {}, weapons: { greatsword: { count: 1 } } });
     assert.match(html, /Armory/);
     assert.match(html, /Great Sword/);
     // an Equip control for the leader and for the one active unit

@@ -1,6 +1,6 @@
 // Central game state and turn management
 import { generateMap } from './map.js';
-import { createHero, createWitch, createMinion, createSurvivor, resetRoster, survivorRosterIndexByName, bumpEntityId as _bumpModuleEntityId, EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType } from './entities.js';
+import { createHero, createWitch, createMinion, createSurvivor, resetRoster, survivorRosterIndexByName, bumpEntityId as _bumpModuleEntityId, EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, normalizeItems } from './entities.js';
 import { BuildingType, ResourceType, hasBuilding, isRiver } from './tiles.js';
 import { hexKey, hexDistance, getNeighbors, setMapDimensions, MAP_COLS, MAP_ROWS } from './hex.js';
 import { applyPostRoundEffects, attritionForCycle } from './post-round-effects.js';
@@ -226,9 +226,13 @@ export class GameState {
     // mid-mission in some future scenario doesn't silently flip behaviour.
     this.noWitchMission = !!mapDataOverride?.noWitch;
 
+    // Shared faction inventories use the canonical dict-of-objects shape
+    // (`{ id: { count } }`) — the same shape as entity backpacks and the
+    // campaign armory — so the entities.js item helpers operate on all three.
+    // getStartingResources() returns a flat `{ id: count }` seed; normalize it.
     this.inventory = {
-      hero:  { ...getFaction('hero').getStartingResources() },
-      witch: { ...getFaction('witch').getStartingResources() },
+      hero:  normalizeItems(getFaction('hero').getStartingResources()),
+      witch: normalizeItems(getFaction('witch').getStartingResources()),
     };
 
     this.mapSize       = mapData.mapSize;

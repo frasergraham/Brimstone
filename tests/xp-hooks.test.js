@@ -160,8 +160,8 @@ describe('fortify XP hook', () => {
     const state = new GameState(true, true);
     state.isCampaign = isCampaign;
     clearTile(state, 2, 2);
-    state.inventory.hero[ResourceType.WOOD] = wood;
-    state.inventory.hero[ResourceType.METAL] = metal;
+    state.inventory.hero[ResourceType.WOOD] = { count: wood };
+    state.inventory.hero[ResourceType.METAL] = { count: metal };
     const actor = createSurvivor(2, 2, 'hero', state);
     actor.owner = 'hero';
     actor.xp = 0; actor.level = 1; actor.abilities = [];

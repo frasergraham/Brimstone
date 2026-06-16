@@ -42,7 +42,7 @@ Splash damage scales with the attacker's roll margin: `clamp(floor(margin / 3), 
 
 ### Weapons, range & equipping
 
-Weapons live in the **per-unit** backpack (`entity.items`) and one is equipped at a time (`entity.weapon`). **Range is entirely weapon-derived — units have no innate range.** `Entity.getRange()` reads `ITEMS[weapon].range` (default 1 for melee/unarmed), so *any* equip-capable unit that wields a ranged weapon becomes ranged (a looted bow turns a melee survivor into a 3-hex archer). `equipWeapon()` keeps the denormalized `entity.range` cache in sync.
+Weapons live in the **per-unit** backpack (`entity.items`), a dict-of-objects map `{ id: { count, equipped? } }`; the wielded weapon is the entry tagged `{ equipped: true }` (resolved via `getEquippedWeaponId()`, not a separate `entity.weapon` slot). **Range is entirely weapon-derived — units have no innate range.** `Entity.getRange()` reads `ITEMS[equippedWeaponId].range` (default 1 for melee/unarmed), so *any* equip-capable unit that wields a ranged weapon becomes ranged (a looted bow turns a melee survivor into a 3-hex archer). There is no denormalized `entity.range` cache — `getRange()` composes range from the equipped weapon on demand.
 
 Roster (`src/items.js`):
 
@@ -432,6 +432,8 @@ MVP places **one** footprint per building, but the schema is `string[]` and the 
 | **Metal** | Reinforce +2 DEF, or summon Iron Golem | Yes |
 | **Silver** | +1 ATK next battle | Yes |
 | **Scripture** | Ward off witch unit +1 hex | Yes |
+
+Shared faction resources live in `state.inventory.hero` / `state.inventory.witch`, keyed by `ResourceType` id in the **dict-of-objects** shape `{ id: { count } }` — the same shape as entity backpacks (`entity.items`) and the campaign armory (`Campaign.weapons`). Mutate them through the shared free functions in `src/entities.js` (`addItemInItems`, `removeItemInItems`, `getItemCountOf`, `totalItemCount`), never by raw indexing, so all three inventory surfaces stay consistent. (The campaign's between-mission `Campaign.resources` is the one exception — it persists as a flat `{ id: N }` numeric map and is normalized/flattened at the `main.js` boundary when injected into / snapshotted out of the live faction inventory.)
 
 ### Weapons
 

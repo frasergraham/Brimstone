@@ -5,7 +5,7 @@ import { countHeldNodes } from '../game.js';
 import { getFaction } from '../factions.js';
 import { hexDistance } from '../hex.js';
 import { EntityType, applyLevel, normalizeItems, getEquippedWeaponIdOf,
-         equipWeaponInItems, addItemInItems } from '../entities.js';
+         equipWeaponInItems, addItemInItems, removeItemInItems, getItemCountOf } from '../entities.js';
 import { ITEMS } from '../items.js';
 import { isRiver, hasBuilding } from '../tiles.js';
 import { evaluateUnlock } from './unlock.js';
@@ -33,9 +33,15 @@ import { evaluateUnlock } from './unlock.js';
 // `weapon` string slot on heroStats / each roster unit INTO their `items` dict,
 // tagged `{ equipped: true }`; backpack entries changed from `{ id: count }` to
 // `{ id: { count, equipped? } }`. `_migrate` folds the legacy `weapon` field in
-// and normalizes item counts. The shared armory pool (`weapons`) stays a flat
-// `{ id: count }` map.
-const SAVE_VERSION = 5;
+// and normalizes item counts. (The shared armory pool was still flat then.)
+//
+// v6: Phase 2 of the inventory refactor. The shared armory pool (`weapons`)
+// flattens from `{ id: count }` to the SAME dict-of-objects shape as unit
+// backpacks and the live faction inventory (`{ id: { count } }`). `_migrate`
+// runs normalizeItems over `weapons`. The campaign `resources` map deliberately
+// stays a flat `{ id: N }` numeric map (it is not unified — see main.js boundary
+// conversions).
+const SAVE_VERSION = 6;
 
 // Fresh-campaign hero loadout. A factory (not a shared literal) so each new
 // campaign gets its own object graph — the equipped sword lives in `items`.
@@ -572,7 +578,8 @@ export class Campaign {
     // Shared armory: weapons not bound to any one unit. Units can stow a spare
     // weapon here (returnWeaponToInventory) and any unit can draw from it
     // (equipFromInventory) — so a weapon looted by one survivor can be handed to
-    // another between missions. Shape: { weaponId: count }.
+    // another between missions. Shape: { weaponId: { count } } — the same
+    // dict-of-objects shape as unit backpacks and the live faction inventory.
     this.weapons           = {};
     this.storyFlags        = {};
     this.updatedAt         = Date.now();
@@ -1045,7 +1052,7 @@ export class Campaign {
     if (entry.equipped || count - 1 > 0) entry.count = count - 1; // keep entry (+ equipped flag) for the remaining copy
     else delete items[weaponId];
     this.weapons = { ...(this.weapons || {}) };
-    this.weapons[weaponId] = (this.weapons[weaponId] || 0) + 1;
+    addItemInItems(this.weapons, weaponId, 1);
     this.save();
     return weaponId;
   }
@@ -1068,10 +1075,11 @@ export class Campaign {
     if (ITEMS[weaponId]?.kind !== 'weapon') return null;
     const items = unit.items ?? (unit.items = {});
     if (getEquippedWeaponIdOf(items) === weaponId) return null; // already equipped
-    const pool = { ...(this.weapons || {}) };
-    if ((pool[weaponId] || 0) < 1) return null; // not in the shared pool
-    pool[weaponId] -= 1;
-    if (pool[weaponId] <= 0) delete pool[weaponId];
+    // Deep-clone the pool (dict-of-objects) so we mutate a fresh copy, never the
+    // live `this.weapons` nested entries, before reassigning at the end.
+    const pool = normalizeItems(this.weapons);
+    if (getItemCountOf(pool, weaponId) < 1) return null; // not in the shared pool
+    removeItemInItems(pool, weaponId, 1);
     // Return the outgoing equipped weapon (one copy) to the shared pool —
     // non-destructive. Remove one copy from items; if it was the last copy the
     // entry disappears, else an (unequipped) spare remains.
@@ -1080,7 +1088,7 @@ export class Campaign {
       const prevEntry = items[prevId];
       if ((prevEntry.count ?? 0) > 1) prevEntry.count -= 1;
       else delete items[prevId];
-      pool[prevId] = (pool[prevId] || 0) + 1;
+      addItemInItems(pool, prevId, 1);
     }
     // Bank the drawn weapon into the unit's items and flag it equipped
     // (equipWeaponInItems also clears any stale equipped flag left above).
@@ -1116,7 +1124,7 @@ export class Campaign {
     if ((entry.count ?? 0) > 1) { entry.count -= 1; delete entry.equipped; }
     else delete items[weaponId];
     this.weapons = { ...(this.weapons || {}) };
-    this.weapons[weaponId] = (this.weapons[weaponId] || 0) + 1;
+    addItemInItems(this.weapons, weaponId, 1);
     this.save();
     return { success: true, weaponId };
   }
@@ -1243,6 +1251,20 @@ export function _migrate(data, fromVersion) {
       version: 5,
     };
     v = 5;
+  }
+
+  // v5 → v6: the shared armory pool (`weapons`) flattens from `{ id: count }` to
+  // the dict-of-objects shape `{ id: { count } }` used by unit backpacks and the
+  // live faction inventory. normalizeItems folds both forms, so a v5 (numeric)
+  // pool and a v6 (already-object) pool both round-trip. `resources` is left
+  // alone — it deliberately stays a flat numeric map.
+  if (v === 5) {
+    out = {
+      ...out,
+      weapons: normalizeItems(out.weapons),
+      version: 6,
+    };
+    v = 6;
   }
 
   return out;

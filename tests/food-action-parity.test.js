@@ -121,7 +121,7 @@ describe('food-action parity — UI tagging matches server consumption', () => {
     const posB = reachable[0];
     const budget = heroBudget(state);
     const foodCount = 2;
-    state.inventory.hero[ResourceType.FOOD] = foodCount;
+    state.inventory.hero[ResourceType.FOOD] = { count: foodCount };
 
     // budget + 2 food-powered + 1 over-budget (capped)
     const moves = pingPongMoves(hero.id, posA, posB, budget + foodCount + 1);
@@ -168,7 +168,7 @@ describe('food-action parity — UI tagging matches server consumption', () => {
     // Budget includes the survivor as an extra.
     const budget = heroBudget(state);
     const foodCount = 1;
-    state.inventory.hero[ResourceType.FOOD] = foodCount;
+    state.inventory.hero[ResourceType.FOOD] = { count: foodCount };
 
     // Each unit gets slightly more than half the budget worth of moves.
     // Interleave order: hero[0], surv[0], hero[1], surv[1], ...
@@ -226,7 +226,7 @@ describe('food-action parity — UI tagging matches server consumption', () => {
     const posA = { col: hero.col, row: hero.row };
     const posB = reachable[0];
     const budget = heroBudget(state);
-    state.inventory.hero[ResourceType.FOOD] = 0;
+    state.inventory.hero[ResourceType.FOOD] = { count: 0 };
 
     const moves = pingPongMoves(hero.id, posA, posB, budget + 2);
     const unitPlans = groupPlanByEntity(moves);

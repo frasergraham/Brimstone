@@ -97,7 +97,7 @@ describe('RogueFaction — innate abilities', () => {
 
   test('SOUND_HORN action is NOT surfaced for the rogue', () => {
     const { state, rogue } = rogueState();
-    state.inventory.hero.food = 5;
+    state.inventory.hero.food = { count: 5 };
     const actions = getValidActions(state, rogue);
     assert.ok(
       !actions.some(a => a.type === ActionType.SOUND_HORN),

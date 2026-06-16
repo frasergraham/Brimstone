@@ -47,7 +47,14 @@ export const VERSION = '1.7.1';
 //               denormalized `range` cache is gone (getRange() composes it).
 //               deserialize auto-migrates pre-v7 saves (folds `weapon` into the
 //               items dict, normalizes counts), so old saves still hydrate.
-export const SAVE_VERSION = 7;
+// v8 (2026-06): Phase 2 of the inventory refactor. The shared faction
+//               inventories (state.inventory.hero/witch) flattened from a flat
+//               `{ id: N }` numeric map to the SAME dict-of-objects shape as
+//               entity backpacks and the campaign armory (`{ id: { count: N } }`),
+//               so the entities.js item helpers operate on all three. deserialize
+//               auto-migrates pre-v8 saves (normalizeItems folds numeric →
+//               { count }), chaining after the v6→v7 entity migration.
+export const SAVE_VERSION = 8;
 
 // Unique build identifier — appends Railway's commit SHA when deployed.
 // Falls back to plain VERSION in local dev and in-browser (where process is

@@ -381,8 +381,8 @@ export class Entity {
     if (removeItemInItems(this.items, id, count)) this._writeEqCache(null);
   }
 
-  hasItem(id)       { return (this.items?.[id]?.count ?? 0) > 0; }
-  getItemCount(id)  { return this.items?.[id]?.count ?? 0; }
+  hasItem(id)       { return hasItemOf(this.items, id); }
+  getItemCount(id)  { return getItemCountOf(this.items, id); }
 
   resetTurn() {
     this.actedThisTurn = false;
@@ -662,6 +662,42 @@ export function removeItemInItems(items, id, count = 1) {
   if (next > 0) { entry.count = next; return false; }
   delete items[id];
   return true;
+}
+
+/** Count of `id` in an item/resource dict (`{ id: { count, equipped? } }`),
+ *  tolerating a missing entry. 0 when absent. The read primitive shared by the
+ *  Entity.getItemCount method and every plain-dict call site (shared faction
+ *  inventory, campaign armory). */
+export function getItemCountOf(items, id) {
+  return items?.[id]?.count ?? 0;
+}
+
+/** True when the dict holds ≥1 of `id`. */
+export function hasItemOf(items, id) {
+  return (items?.[id]?.count ?? 0) > 0;
+}
+
+/** Sum of every entry's count — the total quantity held across all ids. Used by
+ *  the summon affordability checks (any-2-resources). */
+export function totalItemCount(items) {
+  let n = 0;
+  if (items) for (const k in items) n += items[k]?.count ?? 0;
+  return n;
+}
+
+/** Flatten a `{ id: { count } }` dict back to a plain `{ id: count }` numeric
+ *  map (tolerating an already-flat input). Inverse of {@link normalizeItems} —
+ *  used at the campaign boundary, where `Campaign.resources` persists as a flat
+ *  numeric map even though the live faction inventory is dict-of-objects. */
+export function flattenItemCounts(items) {
+  const out = {};
+  if (!items || typeof items !== 'object') return out;
+  for (const k in items) {
+    const v = items[k];
+    out[k] = (v && typeof v === 'object') ? (v.count ?? 0)
+           : (typeof v === 'number' ? v : 0);
+  }
+  return out;
 }
 
 /** Deep-copy a backpack dict into the canonical `{ id: { count, equipped? } }`

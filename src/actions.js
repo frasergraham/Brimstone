@@ -28,6 +28,7 @@ import {
   createWoodGolem, createIronGolem,
   nextDie, ADVANTAGE_CAP, isLeaderType, abilityStatMod, rollDamage, awardXP,
   getEquippedWeaponIdOf,
+  getItemCountOf, totalItemCount, addItemInItems, removeItemInItems,
 } from './entities.js';
 import { Phase } from './game.js';
 import { getFaction, concreteFactionOf, sightRangeForEntity } from './factions.js';
@@ -488,8 +489,8 @@ export function getValidActions(state, actor) {
   // Always included when contextually valid; affordable=false when no resources.
   if (t && !isRiver(t) && !isBuildingFootprint(t) && t.fortifyLevel < MAX_FORTIFY_LEVEL && faction.canFortify()) {
     const inv        = faction.getInventory(state);
-    const woodCount  = (inv[ResourceType.WOOD]  || 0);
-    const metalCount = (inv[ResourceType.METAL] || 0);
+    const woodCount  = getItemCountOf(inv, ResourceType.WOOD);
+    const metalCount = getItemCountOf(inv, ResourceType.METAL);
     const affordable = woodCount > 0 || metalCount > 0;
     actions.push({ type: ActionType.FORTIFY, targets: [{ col: actor.col, row: actor.row }], affordable });
   }
@@ -514,7 +515,7 @@ export function getValidActions(state, actor) {
   // Sound Horn — Phase 5 gate: any unit whose innate abilities include
   // 'sound_horn'. Pushed onto day-side leaders by Faction.createLeader().
   if (actor.hasAbility('sound_horn')) {
-    const food = (faction.getInventory(state)['food'] || 0);
+    const food = getItemCountOf(faction.getInventory(state), 'food');
     actions.push({ type: ActionType.SOUND_HORN, affordable: food >= 1 });
   }
 
@@ -522,7 +523,7 @@ export function getValidActions(state, actor) {
   // so players know herbs exist; disabled at full HP during execution)
   {
     const healInv = faction.getInventory(state);
-    if ((healInv[ResourceType.HERBS] || 0) > 0) {
+    if (getItemCountOf(healInv, ResourceType.HERBS) > 0) {
       actions.push({ type: ActionType.HEAL, atFullHp: actor.hp >= actor.maxHp });
     }
   }
@@ -534,11 +535,11 @@ export function getValidActions(state, actor) {
     const myItems = actor.items || {};
 
     // Shared resources
-    if ((shared[ResourceType.FOOD] || 0) > 0)
+    if (getItemCountOf(shared, ResourceType.FOOD) > 0)
       usable.push({ item: ResourceType.FOOD, label: '🍞 Food (+1 action)', source: 'shared' });
-    if ((shared[ResourceType.SILVER] || 0) > 0)
+    if (getItemCountOf(shared, ResourceType.SILVER) > 0)
       usable.push({ item: ResourceType.SILVER, label: '🪙 Silver (+1 ATK)', source: 'shared' });
-    if ((shared[ResourceType.SCRIPTURE] || 0) > 0 && battleTargets.length)
+    if (getItemCountOf(shared, ResourceType.SCRIPTURE) > 0 && battleTargets.length)
       usable.push({ item: ResourceType.SCRIPTURE, label: '📜 Scripture (ward)', source: 'shared' });
 
     if (usable.length) actions.push({ type: ActionType.USE_ITEM, usable });
@@ -588,8 +589,8 @@ function _buildAbilityActions(state, actor) {
 }
 
 function pickSummonType(inv) {
-  if ((inv[ResourceType.METAL] || 0) >= 2) return EntityType.IRON_GOLEM;
-  if ((inv[ResourceType.WOOD]  || 0) >= 2) return EntityType.WOOD_GOLEM;
+  if (getItemCountOf(inv, ResourceType.METAL) >= 2) return EntityType.IRON_GOLEM;
+  if (getItemCountOf(inv, ResourceType.WOOD)  >= 2) return EntityType.WOOD_GOLEM;
   return EntityType.MINION;
 }
 
@@ -816,7 +817,7 @@ export function executeExplore(state, actor) {
 
   if (isHerbalist && getFaction(actor.owner).canDiscoverNPCs()) {
     const herbInv = getFaction(actor.owner).getInventory(state);
-    herbInv[ResourceType.HERBS] = (herbInv[ResourceType.HERBS] || 0) + 1;
+    addItemInItems(herbInv, ResourceType.HERBS, 1);
     log.push(`${actor.displayName}'s keen eye also finds Herbs!`);
     lootItems.push('+🌿');
   }
@@ -895,7 +896,7 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
   if (lootType === ResourceType.HERBS) {
     // Herbs go to faction shared inventory — any allied unit can use them
     const inv = faction.getInventory(state);
-    inv[lootType] = (inv[lootType] || 0) + 1;
+    addItemInItems(inv, lootType, 1);
     log.push(`${actor.displayName} found Herbs! Added to supplies.`);
     lootItems?.push('+🌿');
     return;
@@ -906,7 +907,7 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
   const RES_ICON = { wood: '🪵', metal: '⚙', food: '🍞', silver: '🥈', scripture: '📜' };
   const resIcon = RES_ICON[lootType] || `+${resLabel}`;
   const inv = faction.getInventory(state);
-  inv[lootType] = (inv[lootType] || 0) + 1;
+  addItemInItems(inv, lootType, 1);
   log.push(faction.getResourceFoundLog(actor, lootType));
   lootItems?.push(`+${resIcon}`);
 }
@@ -1557,15 +1558,15 @@ export function executeFortify(state, actor) {
   if (!t || isRiver(t) || isBuildingFootprint(t)) return { success: false, log: ['Cannot fortify here.'] };
   if (t.fortifyLevel >= MAX_FORTIFY_LEVEL) return { success: false, log: ['Cannot fortify further.'] };
   const shared     = state.inventory.hero;
-  const metalCount = (shared[ResourceType.METAL] || 0);
-  const woodCount  = (shared[ResourceType.WOOD]  || 0);
+  const metalCount = getItemCountOf(shared, ResourceType.METAL);
+  const woodCount  = getItemCountOf(shared, ResourceType.WOOD);
 
   // FORTIFY_DOUBLE: this survivor's ability makes wood give +2
   const hasDoubler = actor.type === EntityType.SURVIVOR &&
     actor.hasAbility(SurvivorAbility.FORTIFY_DOUBLE);
 
   if (metalCount > 0) {
-    shared[ResourceType.METAL]--;
+    removeItemInItems(shared, ResourceType.METAL, 1);
     const prev = t.fortifyLevel;
     t.fortifyLevel = Math.min(MAX_FORTIFY_LEVEL, prev + 2);
     const defGain = t.fortifyLevel - prev;
@@ -1574,7 +1575,7 @@ export function executeFortify(state, actor) {
     grantXp(xpAwards, actor, XP_PER_FORTIFY_BASE + XP_PER_FORTIFY_LEVEL_BONUS * t.fortifyLevel, state, 'fortify');
     return { success: true, log: [`${actor.displayName} reinforces with metal! (fort level ${t.fortifyLevel})`], cost: 1, defGain, ...(xpAwards.length ? { xpAwards } : {}) };
   } else if (woodCount > 0) {
-    shared[ResourceType.WOOD]--;
+    removeItemInItems(shared, ResourceType.WOOD, 1);
     const gain = hasDoubler ? 2 : 1;
     const prev = t.fortifyLevel;
     t.fortifyLevel = Math.min(MAX_FORTIFY_LEVEL, prev + gain);
@@ -1604,9 +1605,9 @@ export function executeSummon(state, actor, requestedType = null) {
   const ownerId = actor.ownerId;
   let summonedUnit, res, unitName;
 
-  const metal = inv[ResourceType.METAL] || 0;
-  const wood  = inv[ResourceType.WOOD]  || 0;
-  const total = Object.values(inv).reduce((s, v) => s + (v || 0), 0);
+  const metal = getItemCountOf(inv, ResourceType.METAL);
+  const wood  = getItemCountOf(inv, ResourceType.WOOD);
+  const total = totalItemCount(inv);
 
   // Per-faction minion cost — witch pays 2 of any, brute pays 1.
   const minionCost = concreteFaction.getMinionCost();
@@ -1634,20 +1635,22 @@ export function executeSummon(state, actor, requestedType = null) {
   }
 
   if (resolvedType === EntityType.IRON_GOLEM) {
-    res = ResourceType.METAL; inv[res] -= 2;
+    res = ResourceType.METAL; removeItemInItems(inv, res, 2);
     summonedUnit = createIronGolem(actor.col, actor.row, ownerId, state);
     unitName = 'Iron Golem';
   } else if (resolvedType === EntityType.WOOD_GOLEM) {
-    res = ResourceType.WOOD; inv[res] -= 2;
+    res = ResourceType.WOOD; removeItemInItems(inv, res, 2);
     summonedUnit = createWoodGolem(actor.col, actor.row, ownerId, state);
     unitName = 'Wood Golem';
   } else {
     // Minion: spend `minionCost` from any resources, largest stacks first
-    const keys = Object.keys(inv).filter(k => inv[k] > 0).sort((a, b) => inv[b] - inv[a]);
+    const keys = Object.keys(inv).filter(k => getItemCountOf(inv, k) > 0)
+      .sort((a, b) => getItemCountOf(inv, b) - getItemCountOf(inv, a));
     let remaining = minionCost;
     const spentMap = {};
     for (const k of keys) {
-      const spend = Math.min(inv[k], remaining); inv[k] -= spend; remaining -= spend;
+      const spend = Math.min(getItemCountOf(inv, k), remaining);
+      removeItemInItems(inv, k, spend); remaining -= spend;
       spentMap[k] = (spentMap[k] || 0) + spend;
       if (remaining === 0) break;
     }
@@ -1672,11 +1675,11 @@ export function executeSummon(state, actor, requestedType = null) {
 
 export function executeHeal(state, actor) {
   const inv = getFaction(actor.owner).getInventory(state);
-  if ((inv[ResourceType.HERBS] || 0) < 1)
+  if (getItemCountOf(inv, ResourceType.HERBS) < 1)
     return { success: false, log: ['No herbs.'] };
   if (actor.hp >= actor.maxHp)
     return { success: false, log: [`${actor.displayName} is already at full health.`] };
-  inv[ResourceType.HERBS]--;
+  removeItemInItems(inv, ResourceType.HERBS, 1);
   // Herbs heal 2D10 — rolled through state.nextDie so tests can force the dice.
   const healed = state.nextDie(10) + state.nextDie(10);
   actor.heal(healed);
@@ -1709,8 +1712,8 @@ export function executeUseItem(state, actor, item) {
 
   // Shared resources
   const shared = state.inventory.hero;
-  if ((shared[item] || 0) < 1) return { success: false, log: ['Item not available.'] };
-  shared[item]--;
+  if (getItemCountOf(shared, item) < 1) return { success: false, log: ['Item not available.'] };
+  removeItemInItems(shared, item, 1);
   const log = [];
 
   switch (item) {
@@ -1766,13 +1769,13 @@ export function executeSoundHorn(state, actor) {
   }
 
   const inv = getFaction('hero').getInventory(state);
-  const food = inv['food'] || 0;
+  const food = getItemCountOf(inv, 'food');
   if (food < 1) {
     return { success: false, log: ['Not enough food (need 1).'] };
   }
 
   // Deduct 1 food
-  inv['food'] -= 1;
+  removeItemInItems(inv, 'food', 1);
 
   // Reveal hero to all opponents for the rest of this round
   state.heroRevealedByHorn = true;

@@ -50,7 +50,7 @@ import { makeShowLoadingAndReveal } from './loading-reveal.js';
 import { MAP_SIZES } from './map.js';
 import { nodeController } from './game.js';
 import { MissionConductor, areHintsSuppressed, markHintsSeen, resetAllHintsForCampaign } from './mission-conductor.js';
-import { Entity, createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, EntityType, ENTITY_COLOR, applyLevel, getEquippedWeaponIdOf, normalizeItems } from './entities.js';
+import { Entity, createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, EntityType, ENTITY_COLOR, applyLevel, getEquippedWeaponIdOf, normalizeItems, flattenItemCounts } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
 import { Campaign, CAMPAIGN_SLOT_COUNT, buildVictoryDelegate, snapshotSurvivor, processWaves, reconcileRosterAfterMission, applyCarriedHeroLoadout } from './campaign/campaign.js';
 import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
@@ -4508,9 +4508,10 @@ function _initCampaignMission(missionDef) {
     applyCarriedHeroLoadout(state.hero, _activeCampaign.heroStats);
   }
 
-  // Inject carried-over resources (replaces faction defaults for campaign)
+  // Inject carried-over resources (replaces faction defaults for campaign).
+  // Campaign.resources persists as a flat `{ id: N }` numeric map; the live
+  // faction inventory uses the dict-of-objects shape, so normalize on the way in.
   if (_activeCampaign) {
-    state.inventory.hero = {};
     const res = { ...(_activeCampaign.resources || {}) };
     // Add mission starting resources
     if (missionDef.startingResources) {
@@ -4518,7 +4519,7 @@ function _initCampaignMission(missionDef) {
         res[k] = (res[k] || 0) + v;
       }
     }
-    Object.assign(state.inventory.hero, res);
+    state.inventory.hero = normalizeItems(res);
   }
 
   // Deploy carried-over survivors from roster (uses active/reserve selection)
@@ -4779,7 +4780,9 @@ function _handleCampaignMissionEnd() {
     _activeCampaign.applyMissionResult(missionDef.id, {
       won,
       survivors,
-      resources: { ...state.inventory.hero },
+      // Campaign.resources is a flat numeric map; flatten the live
+      // dict-of-objects faction inventory back down on the way out.
+      resources: flattenItemCounts(state.inventory.hero),
       heroStats: state.hero ? {
         hp: state.hero.hp, maxHp: state.hero.maxHp,
         attack: state.hero.attack, defense: state.hero.defense,

@@ -407,9 +407,9 @@ describe('executeExplore', () => {
     const t = state.tiles.get(hexKey(herbalist.col, herbalist.row));
     t.explored = false;
 
-    const herbsBefore = state.inventory.hero[ResourceType.HERBS] ?? 0;
+    const herbsBefore = (state.inventory.hero[ResourceType.HERBS]?.count ?? 0) ?? 0;
     executeExplore(state, herbalist);
-    const herbsAfter = state.inventory.hero[ResourceType.HERBS] ?? 0;
+    const herbsAfter = (state.inventory.hero[ResourceType.HERBS]?.count ?? 0) ?? 0;
 
     assert.ok(herbsAfter >= herbsBefore + 1, 'HERBALIST should add at least 1 herb to shared supplies on explore');
   });
@@ -495,10 +495,10 @@ describe('executeExplore', () => {
     const hero = state.hero;
     const t = plainTileUnder(state, hero);
     t.exploreOverride = { kind: 'resource', id: ResourceType.WOOD, amount: 3 };
-    const before = state.inventory.hero[ResourceType.WOOD] ?? 0;
+    const before = (state.inventory.hero[ResourceType.WOOD]?.count ?? 0) ?? 0;
     const r = executeExplore(state, hero);
     assert.equal(r.success, true);
-    assert.equal((state.inventory.hero[ResourceType.WOOD] ?? 0) - before, 3,
+    assert.equal(((state.inventory.hero[ResourceType.WOOD]?.count ?? 0) ?? 0) - before, 3,
       'should add exactly the authored amount of wood');
   });
 
@@ -507,9 +507,9 @@ describe('executeExplore', () => {
     const hero = state.hero;
     const t = plainTileUnder(state, hero);
     t.exploreOverride = { kind: 'resource', id: ResourceType.METAL };
-    const before = state.inventory.hero[ResourceType.METAL] ?? 0;
+    const before = (state.inventory.hero[ResourceType.METAL]?.count ?? 0) ?? 0;
     executeExplore(state, hero);
-    assert.equal((state.inventory.hero[ResourceType.METAL] ?? 0) - before, 1);
+    assert.equal(((state.inventory.hero[ResourceType.METAL]?.count ?? 0) ?? 0) - before, 1);
   });
 
   test('exploreOverride weapon equips the authored weapon', () => {
@@ -981,7 +981,7 @@ describe('executeBattle', () => {
   test('silver attackBonus is included in combat attack roll', () => {
     const state = freshState();
     const hero = state.hero;
-    state.inventory.hero[ResourceType.SILVER] = 1;
+    state.inventory.hero[ResourceType.SILVER] = { count: 1 };
 
     // Use silver to get +1 attackBonus
     const useResult = executeUseItem(state, hero, ResourceType.SILVER);
@@ -1011,7 +1011,7 @@ describe('executeBattle', () => {
     const state = freshState();
     const hero = state.hero;
     // Silver-coat for an attackBonus contribution (needs inventory stocked).
-    state.inventory.hero[ResourceType.SILVER] = 1;
+    state.inventory.hero[ResourceType.SILVER] = { count: 1 };
     const useResult = executeUseItem(state, hero, ResourceType.SILVER);
     assert.equal(useResult.success, true);
     assert.equal(hero.attackBonus, 1);
@@ -1289,28 +1289,28 @@ describe('executeFortify', () => {
   test('metal gives +2 fortify level', () => {
     const state = freshState();
     const hero = state.hero;
-    state.inventory.hero[ResourceType.METAL] = 1;
+    state.inventory.hero[ResourceType.METAL] = { count: 1 };
     const t = state.tiles.get(hexKey(hero.col, hero.row));
     t.fortifyLevel = 0;
 
     const r = executeFortify(state, hero);
     assert.equal(r.success, true);
     assert.equal(t.fortifyLevel, 2);
-    assert.equal(state.inventory.hero[ResourceType.METAL], 0, 'Metal should be consumed');
+    assert.equal((state.inventory.hero[ResourceType.METAL]?.count ?? 0), 0, 'Metal should be consumed');
   });
 
   test('wood gives +1 fortify level (without FORTIFY_DOUBLE)', () => {
     const state = freshState();
     const hero = state.hero;
-    state.inventory.hero[ResourceType.WOOD] = 1;
-    state.inventory.hero[ResourceType.METAL] = 0; // ensure metal not present
+    state.inventory.hero[ResourceType.WOOD] = { count: 1 };
+    state.inventory.hero[ResourceType.METAL] = { count: 0 }; // ensure metal not present
     const t = state.tiles.get(hexKey(hero.col, hero.row));
     t.fortifyLevel = 0;
 
     const r = executeFortify(state, hero);
     assert.equal(r.success, true);
     assert.equal(t.fortifyLevel, 1);
-    assert.equal(state.inventory.hero[ResourceType.WOOD], 0, 'Wood should be consumed');
+    assert.equal((state.inventory.hero[ResourceType.WOOD]?.count ?? 0), 0, 'Wood should be consumed');
   });
 
   test('FORTIFY_DOUBLE survivor: wood gives +2 fortify level', () => {
@@ -1321,8 +1321,8 @@ describe('executeFortify', () => {
     innkeeper.items = {};
     state.entities.push(innkeeper);
 
-    state.inventory.hero[ResourceType.WOOD] = 1;
-    state.inventory.hero[ResourceType.METAL] = 0;
+    state.inventory.hero[ResourceType.WOOD] = { count: 1 };
+    state.inventory.hero[ResourceType.METAL] = { count: 0 };
     const t = state.tiles.get(hexKey(innkeeper.col, innkeeper.row));
     t.fortifyLevel = 0;
 
@@ -1334,21 +1334,21 @@ describe('executeFortify', () => {
   test('metal is preferred over wood', () => {
     const state = freshState();
     const hero = state.hero;
-    state.inventory.hero[ResourceType.METAL] = 1;
-    state.inventory.hero[ResourceType.WOOD] = 1;
+    state.inventory.hero[ResourceType.METAL] = { count: 1 };
+    state.inventory.hero[ResourceType.WOOD] = { count: 1 };
     const t = state.tiles.get(hexKey(hero.col, hero.row));
     t.fortifyLevel = 0;
 
     executeFortify(state, hero);
-    assert.equal(state.inventory.hero[ResourceType.METAL], 0, 'Metal should be used first');
-    assert.equal(state.inventory.hero[ResourceType.WOOD], 1, 'Wood should be untouched');
+    assert.equal((state.inventory.hero[ResourceType.METAL]?.count ?? 0), 0, 'Metal should be used first');
+    assert.equal((state.inventory.hero[ResourceType.WOOD]?.count ?? 0), 1, 'Wood should be untouched');
     assert.equal(t.fortifyLevel, 2);
   });
 
   test('fails when no wood or metal', () => {
     const state = freshState();
-    state.inventory.hero[ResourceType.METAL] = 0;
-    state.inventory.hero[ResourceType.WOOD] = 0;
+    state.inventory.hero[ResourceType.METAL] = { count: 0 };
+    state.inventory.hero[ResourceType.WOOD] = { count: 0 };
     const r = executeFortify(state, state.hero);
     assert.equal(r.success, false);
   });
@@ -1356,7 +1356,7 @@ describe('executeFortify', () => {
   test('fortify level caps at 6', () => {
     const state = freshState();
     const hero = state.hero;
-    state.inventory.hero[ResourceType.METAL] = 5;
+    state.inventory.hero[ResourceType.METAL] = { count: 5 };
     const t = state.tiles.get(hexKey(hero.col, hero.row));
     t.fortifyLevel = 5; // one more metal (+2) would reach 7, should cap at 6
 
@@ -1368,21 +1368,21 @@ describe('executeFortify', () => {
   test('defGain returns actual gain for metal and wood', () => {
     const state = freshState();
     const hero = state.hero;
-    state.inventory.hero[ResourceType.METAL] = 1;
+    state.inventory.hero[ResourceType.METAL] = { count: 1 };
     const t = state.tiles.get(hexKey(hero.col, hero.row));
     t.fortifyLevel = 0;
 
     const r1 = executeFortify(state, hero);
     assert.equal(r1.defGain, 2, 'Metal should give defGain of 2');
 
-    state.inventory.hero[ResourceType.WOOD] = 1;
+    state.inventory.hero[ResourceType.WOOD] = { count: 1 };
     const r2 = executeFortify(state, hero);
     assert.equal(r2.defGain, 1, 'Wood should give defGain of 1');
   });
 
   test('fails when tile is already at max fortify (level 6)', () => {
     const state = freshState();
-    state.inventory.hero[ResourceType.METAL] = 1;
+    state.inventory.hero[ResourceType.METAL] = { count: 1 };
     const t = state.tiles.get(hexKey(state.hero.col, state.hero.row));
     t.fortifyLevel = 6;
 
@@ -1393,7 +1393,7 @@ describe('executeFortify', () => {
 
   test('costs 1 action', () => {
     const state = freshState();
-    state.inventory.hero[ResourceType.WOOD] = 1;
+    state.inventory.hero[ResourceType.WOOD] = { count: 1 };
     const r = executeFortify(state, state.hero);
     assert.equal(r.cost, 1);
   });
@@ -1538,7 +1538,7 @@ describe('executeSummon', () => {
 
   test('metal → Iron Golem spawns on witch tile (costs 2 metal)', () => {
     const state = witchState();
-    state.inventory.witch[ResourceType.METAL] = 2;
+    state.inventory.witch[ResourceType.METAL] = { count: 2 };
     const { col, row } = state.witch;
 
     const r = executeSummon(state, state.witch);
@@ -1546,34 +1546,34 @@ describe('executeSummon', () => {
     const summoned = state.entities.find(e => e !== state.witch && e.col === col && e.row === row);
     assert.ok(summoned, 'A unit should appear on the witch tile');
     assert.equal(summoned.type, EntityType.IRON_GOLEM, 'Metal should summon Iron Golem');
-    assert.equal(state.inventory.witch[ResourceType.METAL], 0, '2 metal should be consumed');
+    assert.equal((state.inventory.witch[ResourceType.METAL]?.count ?? 0), 0, '2 metal should be consumed');
   });
 
   test('wood → Wood Golem spawns on witch tile (costs 2 wood, when no metal)', () => {
     const state = witchState();
-    state.inventory.witch[ResourceType.METAL] = 0;
-    state.inventory.witch[ResourceType.WOOD] = 2;
+    state.inventory.witch[ResourceType.METAL] = { count: 0 };
+    state.inventory.witch[ResourceType.WOOD] = { count: 2 };
     const { col, row } = state.witch;
 
     const r = executeSummon(state, state.witch);
     assert.equal(r.success, true);
     const summoned = state.entities.find(e => e !== state.witch && e.col === col && e.row === row);
     assert.equal(summoned.type, EntityType.WOOD_GOLEM, 'Wood should summon Wood Golem');
-    assert.equal(state.inventory.witch[ResourceType.WOOD], 0, '2 wood should be consumed');
+    assert.equal((state.inventory.witch[ResourceType.WOOD]?.count ?? 0), 0, '2 wood should be consumed');
   });
 
   test('other resource → Minion spawns on witch tile (costs 2 total)', () => {
     const state = witchState();
-    state.inventory.witch[ResourceType.METAL] = 0;
-    state.inventory.witch[ResourceType.WOOD] = 0;
-    state.inventory.witch[ResourceType.FOOD] = 2;
+    state.inventory.witch[ResourceType.METAL] = { count: 0 };
+    state.inventory.witch[ResourceType.WOOD] = { count: 0 };
+    state.inventory.witch[ResourceType.FOOD] = { count: 2 };
     const { col, row } = state.witch;
 
     const r = executeSummon(state, state.witch);
     assert.equal(r.success, true);
     const summoned = state.entities.find(e => e !== state.witch && e.col === col && e.row === row);
     assert.equal(summoned.type, EntityType.MINION, 'Non-metal/wood resource should summon Minion');
-    assert.equal(state.inventory.witch[ResourceType.FOOD], 0, '2 food should be consumed');
+    assert.equal((state.inventory.witch[ResourceType.FOOD]?.count ?? 0), 0, '2 food should be consumed');
   });
 
   test('fails when fewer than 2 total resources', () => {
@@ -1594,7 +1594,7 @@ describe('executeSummon', () => {
 
   test('allows multiple summons in the same turn (stacking on witch tile)', () => {
     const state = witchState();
-    state.inventory.witch[ResourceType.FOOD] = 6;
+    state.inventory.witch[ResourceType.FOOD] = { count: 6 };
 
     const r1 = executeSummon(state, state.witch);
     assert.equal(r1.success, true, 'First summon should succeed');
@@ -1605,7 +1605,7 @@ describe('executeSummon', () => {
 
   test('costs 1 action', () => {
     const state = witchState();
-    state.inventory.witch[ResourceType.FOOD] = 2;
+    state.inventory.witch[ResourceType.FOOD] = { count: 2 };
     const r = executeSummon(state, state.witch);
     assert.equal(r.cost, 1);
   });
@@ -1613,7 +1613,7 @@ describe('executeSummon', () => {
   test('summon available even when all adjacent hexes are occupied', () => {
     // No adjacent-hex requirement — should still work
     const state = witchState();
-    state.inventory.witch[ResourceType.FOOD] = 2;
+    state.inventory.witch[ResourceType.FOOD] = { count: 2 };
     // Fill all neighbors with entities
     const neighbors = getNeighbors(state.witch.col, state.witch.row);
     for (const n of neighbors) {
@@ -1634,7 +1634,7 @@ describe('executeHeal', () => {
   test('heals 2D10 HP, costs 1 action, consumes herbs from shared inventory', () => {
     const state = freshState();
     const hero = state.hero;
-    state.inventory.hero[ResourceType.HERBS] = 1;
+    state.inventory.hero[ResourceType.HERBS] = { count: 1 };
     hero.takeDamage(25);
     const hpBefore = hero.hp;
 
@@ -1644,13 +1644,13 @@ describe('executeHeal', () => {
     assert.equal(r.cost, 1, 'Heal should cost 1 action');
     assert.equal(hero.hp, hpBefore + 10); // herbs heal 2D10 (7 + 3)
     assert.equal(r.healed, 10, 'result reports the rolled heal amount for the HP floater');
-    assert.equal(state.inventory.hero[ResourceType.HERBS], 0, 'Herbs should be consumed from shared inventory');
+    assert.equal((state.inventory.hero[ResourceType.HERBS]?.count ?? 0), 0, 'Herbs should be consumed from shared inventory');
   });
 
   test('heal roll stays within the 2..20 envelope without forced dice', () => {
     const state = freshState();
     const hero = state.hero;
-    state.inventory.hero[ResourceType.HERBS] = 1;
+    state.inventory.hero[ResourceType.HERBS] = { count: 1 };
     hero.takeDamage(25);
     const hpBefore = hero.hp;
 
@@ -1663,7 +1663,7 @@ describe('executeHeal', () => {
   test('witch can heal too (from witch inventory)', () => {
     const state = freshState();
     const witch = state.witch;
-    state.inventory.witch[ResourceType.HERBS] = 1;
+    state.inventory.witch[ResourceType.HERBS] = { count: 1 };
     witch.takeDamage(25);
     const hpBefore = witch.hp;
 
@@ -1672,12 +1672,12 @@ describe('executeHeal', () => {
     assert.equal(r.success, true);
     assert.equal(r.cost, 1);
     assert.equal(witch.hp, hpBefore + 20);
-    assert.equal(state.inventory.witch[ResourceType.HERBS], 0, 'Herbs consumed from witch inventory');
+    assert.equal((state.inventory.witch[ResourceType.HERBS]?.count ?? 0), 0, 'Herbs consumed from witch inventory');
   });
 
   test('fails when no herbs in faction inventory', () => {
     const state = freshState();
-    state.inventory.hero[ResourceType.HERBS] = 0;
+    state.inventory.hero[ResourceType.HERBS] = { count: 0 };
     state.hero.takeDamage(3);
     const r = executeHeal(state, state.hero);
     assert.equal(r.success, false);
@@ -1685,7 +1685,7 @@ describe('executeHeal', () => {
 
   test('fails when already at full health', () => {
     const state = freshState();
-    state.inventory.hero[ResourceType.HERBS] = 1;
+    state.inventory.hero[ResourceType.HERBS] = { count: 1 };
     const r = executeHeal(state, state.hero);
     assert.equal(r.success, false);
   });
@@ -1693,7 +1693,7 @@ describe('executeHeal', () => {
   test('heal caps at maxHp', () => {
     const state = freshState();
     const hero = state.hero;
-    state.inventory.hero[ResourceType.HERBS] = 1;
+    state.inventory.hero[ResourceType.HERBS] = { count: 1 };
     hero.takeDamage(1); // 1 below max
     state.forcedDice = [10, 10];
     executeHeal(state, hero);
@@ -1705,7 +1705,7 @@ describe('executeHeal', () => {
     const survivor = new Entity(EntityType.SURVIVOR, 'hero', state.hero.col, state.hero.row);
     survivor.items = {};
     state.entities.push(survivor);
-    state.inventory.hero[ResourceType.HERBS] = 1;
+    state.inventory.hero[ResourceType.HERBS] = { count: 1 };
     survivor.takeDamage(20);
     const hpBefore = survivor.hp;
 
@@ -1714,7 +1714,7 @@ describe('executeHeal', () => {
     assert.equal(r.cost, 1);
     assert.equal(survivor.hp, hpBefore + r.healed);
     assert.ok(r.healed >= 2 && r.healed <= 20);
-    assert.equal(state.inventory.hero[ResourceType.HERBS], 0, 'Herbs consumed from shared inventory');
+    assert.equal((state.inventory.hero[ResourceType.HERBS]?.count ?? 0), 0, 'Herbs consumed from shared inventory');
   });
 
   test('hero and survivor share the same herb pool', () => {
@@ -1722,7 +1722,7 @@ describe('executeHeal', () => {
     const survivor = new Entity(EntityType.SURVIVOR, 'hero', state.hero.col, state.hero.row);
     survivor.items = {};
     state.entities.push(survivor);
-    state.inventory.hero[ResourceType.HERBS] = 1;
+    state.inventory.hero[ResourceType.HERBS] = { count: 1 };
 
     state.hero.takeDamage(3);
     survivor.takeDamage(3);
@@ -1730,7 +1730,7 @@ describe('executeHeal', () => {
     // Hero uses the shared herb
     const r1 = executeHeal(state, state.hero);
     assert.equal(r1.success, true);
-    assert.equal(state.inventory.hero[ResourceType.HERBS], 0);
+    assert.equal((state.inventory.hero[ResourceType.HERBS]?.count ?? 0), 0);
 
     // Survivor can't heal — no herbs left
     const r2 = executeHeal(state, survivor);
@@ -1748,14 +1748,14 @@ describe('executeHeal', () => {
 describe('executeUseItem — Silver', () => {
   test('silver gives +1 attackBonus and costs 0', () => {
     const state = freshState();
-    state.inventory.hero[ResourceType.SILVER] = 1;
+    state.inventory.hero[ResourceType.SILVER] = { count: 1 };
     const bonusBefore = state.hero.attackBonus;
 
     const r = executeUseItem(state, state.hero, ResourceType.SILVER);
     assert.equal(r.success, true);
     assert.equal(r.cost, 0, 'Silver should be free');
     assert.equal(state.hero.attackBonus, bonusBefore + 1);
-    assert.equal(state.inventory.hero[ResourceType.SILVER], 0, 'Silver consumed');
+    assert.equal((state.inventory.hero[ResourceType.SILVER]?.count ?? 0), 0, 'Silver consumed');
   });
 });
 
@@ -2004,34 +2004,34 @@ describe('Inventory stash separation', () => {
     state.inventory.witch = {};
 
     // Populate both stashes with different resources
-    state.inventory.hero[ResourceType.WOOD] = 3;
-    state.inventory.hero[ResourceType.FOOD] = 1;
-    state.inventory.witch[ResourceType.METAL] = 2;
+    state.inventory.hero[ResourceType.WOOD] = { count: 3 };
+    state.inventory.hero[ResourceType.FOOD] = { count: 1 };
+    state.inventory.witch[ResourceType.METAL] = { count: 2 };
 
     // Hero stash should contain hero resources only
-    assert.equal(state.inventory.hero[ResourceType.WOOD], 3);
-    assert.equal(state.inventory.hero[ResourceType.FOOD], 1);
-    assert.equal(state.inventory.hero[ResourceType.METAL] || 0, 0,
+    assert.equal((state.inventory.hero[ResourceType.WOOD]?.count ?? 0), 3);
+    assert.equal((state.inventory.hero[ResourceType.FOOD]?.count ?? 0), 1);
+    assert.equal((state.inventory.hero[ResourceType.METAL]?.count ?? 0) || 0, 0,
       'hero stash must not contain witch metal');
 
     // Witch stash should contain witch resources only
-    assert.equal(state.inventory.witch[ResourceType.METAL], 2);
-    assert.equal(state.inventory.witch[ResourceType.WOOD] || 0, 0,
+    assert.equal((state.inventory.witch[ResourceType.METAL]?.count ?? 0), 2);
+    assert.equal((state.inventory.witch[ResourceType.WOOD]?.count ?? 0) || 0, 0,
       'witch stash must not contain hero wood');
-    assert.equal(state.inventory.witch[ResourceType.FOOD] || 0, 0,
+    assert.equal((state.inventory.witch[ResourceType.FOOD]?.count ?? 0) || 0, 0,
       'witch stash must not contain hero food');
   });
 
   test('witch resources do not bleed into hero stash after summon', () => {
     const state = freshState();
-    state.inventory.hero[ResourceType.METAL] = 0;
-    state.inventory.witch[ResourceType.METAL] = 1;
+    state.inventory.hero[ResourceType.METAL] = { count: 0 };
+    state.inventory.witch[ResourceType.METAL] = { count: 1 };
 
     // Consuming witch metal (via summon) should not touch the hero stash
     // (summon fails here because only 1 metal, but the point is shared stash unchanged)
     executeSummon(state, state.witch);
 
-    assert.equal(state.inventory.hero[ResourceType.METAL] || 0, 0,
+    assert.equal((state.inventory.hero[ResourceType.METAL]?.count ?? 0) || 0, 0,
       'hero stash must be unchanged after witch summons');
   });
 
@@ -2055,11 +2055,11 @@ describe('Inventory stash separation', () => {
     const isHero = planFaction === 'hero'; // correct: use planFaction, not activePlayer
     const stash = isHero ? inv.hero : inv.witch;
 
-    state.inventory.witch[ResourceType.METAL] = 5;
-    state.inventory.hero[ResourceType.WOOD]  = 7;
+    state.inventory.witch[ResourceType.METAL] = { count: 5 };
+    state.inventory.hero[ResourceType.WOOD] = { count: 7 };
 
     assert.equal(stash, inv.witch, 'witch player must see inv.witch, not inv.hero');
-    assert.equal(stash[ResourceType.METAL], 5, 'witch player must see witch metal count');
+    assert.equal((stash[ResourceType.METAL]?.count ?? 0), 5, 'witch player must see witch metal count');
 
     // Verify the buggy code would have returned the wrong stash
     const buggyIsHero = state.activePlayer === Player.HERO; // always true by default
@@ -2074,69 +2074,72 @@ import { computeProjectedInventory } from '../src/planner.js';
 import { PlanActionType } from '../src/planner.js';
 
 describe('computeProjectedInventory', () => {
+  // Resource counts are read via the dict-of-objects shape (`{ id: { count } }`).
+  const c = (entry) => entry?.count ?? 0;
+
   function baseState() {
     const s = new GameState(true, true);
-    s.inventory.witch.metal = 4;
-    s.inventory.witch.wood  = 2;
-    s.inventory.hero.wood = 3;
-    s.inventory.hero.metal = 1;
-    s.inventory.hero.food  = 2;
+    s.inventory.witch.metal = { count: 4 };
+    s.inventory.witch.wood  = { count: 2 };
+    s.inventory.hero.wood = { count: 3 };
+    s.inventory.hero.metal = { count: 1 };
+    s.inventory.hero.food  = { count: 2 };
     return s;
   }
 
   test('empty plan returns snapshot equal to current inventory', () => {
     const s = baseState();
     const p = computeProjectedInventory(s, []);
-    assert.equal(p.witch.metal, 4);
-    assert.equal(p.hero.wood,  3);
+    assert.equal(c(p.witch.metal), 4);
+    assert.equal(c(p.hero.wood),  3);
   });
 
   test('SUMMON deducts 2 metal (Iron Golem path)', () => {
     const s = baseState();
     const p = computeProjectedInventory(s, [{ type: PlanActionType.SUMMON }]);
-    assert.equal(p.witch.metal, 2, 'metal reduced by 2');
-    assert.equal(p.witch.wood,  2, 'wood unchanged');
+    assert.equal(c(p.witch.metal), 2, 'metal reduced by 2');
+    assert.equal(c(p.witch.wood),  2, 'wood unchanged');
   });
 
   test('two SUMMONs deduct 4 metal total', () => {
     const s = baseState();
     const plan = [{ type: PlanActionType.SUMMON }, { type: PlanActionType.SUMMON }];
     const p = computeProjectedInventory(s, plan);
-    assert.equal(p.witch.metal, 0);
-    assert.equal(p.witch.wood,  2, 'wood unchanged when metal covers both');
+    assert.equal(c(p.witch.metal), 0);
+    assert.equal(c(p.witch.wood),  2, 'wood unchanged when metal covers both');
   });
 
   test('SUMMON falls to wood when metal < 2', () => {
     const s = baseState();
-    s.inventory.witch.metal = 1;
+    s.inventory.witch.metal = { count: 1 };
     const p = computeProjectedInventory(s, [{ type: PlanActionType.SUMMON }]);
-    assert.equal(p.witch.wood, 0, 'wood reduced by 2 (Wood Golem path)');
+    assert.equal(c(p.witch.wood), 0, 'wood reduced by 2 (Wood Golem path)');
   });
 
   test('FORTIFY deducts 1 metal from shared (metal preferred)', () => {
     const s = baseState();
     const p = computeProjectedInventory(s, [{ type: PlanActionType.FORTIFY }]);
-    assert.equal(p.hero.metal, 0);
-    assert.equal(p.hero.wood,  3, 'wood untouched when metal available');
+    assert.equal(c(p.hero.metal), 0);
+    assert.equal(c(p.hero.wood),  3, 'wood untouched when metal available');
   });
 
   test('FORTIFY deducts 1 wood when no shared metal', () => {
     const s = baseState();
-    s.inventory.hero.metal = 0;
+    s.inventory.hero.metal = { count: 0 };
     const p = computeProjectedInventory(s, [{ type: PlanActionType.FORTIFY }]);
-    assert.equal(p.hero.wood, 2);
+    assert.equal(c(p.hero.wood), 2);
   });
 
   test('USE_ITEM food deducts from shared', () => {
     const s = baseState();
     const p = computeProjectedInventory(s, [{ type: PlanActionType.USE_ITEM, item: 'food', entityId: 'x' }]);
-    assert.equal(p.hero.food, 1);
+    assert.equal(c(p.hero.food), 1);
   });
 
   test('does not mutate original state', () => {
     const s = baseState();
     computeProjectedInventory(s, [{ type: PlanActionType.SUMMON }]);
-    assert.equal(s.inventory.witch.metal, 4, 'original state unchanged');
+    assert.equal(c(s.inventory.witch.metal), 4, 'original state unchanged');
   });
 });
 

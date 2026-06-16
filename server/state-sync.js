@@ -416,10 +416,20 @@ export function deserializeState(snap) {
     : null;
   state.inventory            = JSON.parse(JSON.stringify(snap.inventory));
   // Backward compat: rename 'shared' → 'hero' for saves predating the refactor.
+  // Must run BEFORE the count→object conversion below so a legacy `shared` pool
+  // gets migrated to the new shape too.
   if (state.inventory.shared && !state.inventory.hero) {
     state.inventory.hero = state.inventory.shared;
     delete state.inventory.shared;
   }
+  // Inventory resources migration shim (v7 → v8): shared faction resources used
+  // to be a flat `{ id: N }` numeric map; they now use the same dict-of-objects
+  // shape (`{ id: { count: N } }`) as entity backpacks and the campaign armory.
+  // normalizeItems folds both forms, so a v7 (numeric) and a v8 (already-object)
+  // save both round-trip — the shim is idempotent. Chains after the v6→v7 entity
+  // weapon→items migration handled per-entity in the entity-revival map above.
+  if (state.inventory.hero)  state.inventory.hero  = normalizeItems(state.inventory.hero);
+  if (state.inventory.witch) state.inventory.witch = normalizeItems(state.inventory.witch);
   state.postRoundEvents      = [...(snap.postRoundEvents || [])];
   state.nodeSpawnedSurvivors = [...(snap.nodeSpawnedSurvivors || [])];
   // Backward compat: old saves stored fogOfWar as boolean; the retired 'full'
