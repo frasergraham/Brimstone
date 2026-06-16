@@ -303,7 +303,9 @@
         "id": "n23",
         "type": "startConversation",
         "params": {
-          "roleInputs": [],
+          "roleInputs": [
+            "survivor"
+          ],
           "conversationId": "ch1m2-survivor"
         },
         "x": 910.1313827355259,
@@ -564,6 +566,17 @@
         "to": {
           "node": "n22",
           "pin": "ref"
+        },
+        "kind": "data"
+      },
+      {
+        "from": {
+          "node": "n22",
+          "pin": "entity"
+        },
+        "to": {
+          "node": "n23",
+          "pin": "survivor"
         },
         "kind": "data"
       }
