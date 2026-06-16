@@ -263,3 +263,72 @@ export function collectTurnFinds(steps, humanFaction = null) {
   }
   return { discoveries, loot };
 }
+
+/**
+ * Campaign veterancy: aggregate a turn's XP_AWARDED events into ONE "+N XP" line
+ * per unit. A unit can earn XP from several sub-actions in a turn (damage + kill,
+ * splash kills, gang-up shares, multiple attacks across steps) — the resolver
+ * keeps those un-summed (one event per logical award) so the data isn't lossy;
+ * the summing happens HERE for presentation.
+ *
+ * Unit names are resolved from finalEntities, falling back to per-step
+ * entitySnapshots (covers a unit that earned XP and then died later in the turn,
+ * so it's gone from finalEntities). When a unit crossed a level threshold this
+ * turn, fromLevel/newLevel ride on the leveling event(s); we take the lowest
+ * fromLevel and highest newLevel so a multi-level jump reads "Lv 3 → 5".
+ *
+ * @param {Array}  steps        — StepRecord[] (heroEvents/witchEvents or playerEvents).
+ * @param {Array}  finalEntities— post-resolution entity array (for names).
+ * @param {object} ResEventType — the ResEventType enum (injected to avoid circular deps).
+ * @returns {Array<{ unitId, amount, text, leveledUp, fromLevel, toLevel }>}
+ */
+export function compileTurnXpSummary(steps, finalEntities, ResEventType) {
+  const nameById = new Map();
+  for (const e of (finalEntities ?? [])) {
+    nameById.set(e.id, e.title ?? e.displayName ?? e.name ?? 'Unit');
+  }
+  for (const step of (steps ?? [])) {
+    for (const s of (step.entitySnapshot ?? [])) {
+      if (!nameById.has(s.id)) nameById.set(s.id, s.title ?? s.displayName ?? 'Unit');
+    }
+  }
+
+  // Aggregate per unit, preserving first-seen order for a stable render.
+  const byUnit = new Map();
+  for (const step of (steps ?? [])) {
+    const evs = [
+      ...(step.heroEvents  ?? []),
+      ...(step.witchEvents ?? []),
+      ...(step.playerEvents ?? []).flatMap(pe => pe.events ?? []),
+    ];
+    for (const ev of evs) {
+      if (ev.type !== ResEventType.XP_AWARDED) continue;
+      let agg = byUnit.get(ev.unitId);
+      if (!agg) {
+        agg = { amount: 0, leveledUp: false, fromLevel: null, toLevel: null };
+        byUnit.set(ev.unitId, agg);
+      }
+      agg.amount += ev.amount ?? 0;
+      if (ev.leveledUp) {
+        agg.leveledUp = true;
+        if (agg.fromLevel == null || ev.fromLevel < agg.fromLevel) agg.fromLevel = ev.fromLevel;
+        if (agg.toLevel == null || ev.newLevel > agg.toLevel) agg.toLevel = ev.newLevel;
+      }
+    }
+  }
+
+  const lines = [];
+  for (const [unitId, agg] of byUnit) {
+    if (agg.amount <= 0) continue;
+    const name = nameById.get(unitId) ?? 'Unit';
+    let text = `${name} +${agg.amount} XP`;
+    if (agg.leveledUp && agg.toLevel != null) {
+      text += agg.fromLevel != null
+        ? ` (Lv ${agg.fromLevel} → ${agg.toLevel})`
+        : ` (Lv ${agg.toLevel})`;
+    }
+    lines.push({ unitId, amount: agg.amount, text, leveledUp: agg.leveledUp,
+                 fromLevel: agg.fromLevel, toLevel: agg.toLevel });
+  }
+  return lines;
+}

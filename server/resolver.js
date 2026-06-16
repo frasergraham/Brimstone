@@ -71,7 +71,21 @@ export const ResEventType = Object.freeze({
   BUDGET_CAP:     'budget_cap',     // budget exhausted; remaining plan ignored
   FOOD_CONSUMED:  'food_consumed',  // ration auto-consumed to fund one over-budget action
   GUARD_STRIKE:   'guard_strike',   // reactive attack from a guarding unit
+  XP_AWARDED:     'xp_awarded',     // campaign veterancy — a unit earned XP (one event per logical award)
 });
+
+// Campaign veterancy: fan a result's per-award `xpAwards` (attached by the
+// execute* functions in actions.js) out into discrete XP_AWARDED step events,
+// tagged with the owning faction for fog filtering + bucket routing. Each event
+// is one logical award (kill / combat hit / explore / fortify / gang-up share);
+// the replay aggregates them into a single "+N XP" line per unit per turn. A
+// no-op outside campaign (xpAwards is only attached when awardXP actually
+// granted XP), so normal/online play carries no XP events.
+function _emitXpEvents(result, faction, subEvents) {
+  for (const a of (result?.xpAwards ?? [])) {
+    subEvents.push({ type: ResEventType.XP_AWARDED, faction, ...a });
+  }
+}
 
 // ── Budget calculation ───────────────────────────────────────────────────────
 // Mirrors computeActions / computeActionsForPlayer in game.js without importing
@@ -379,6 +393,9 @@ function drainOneStep(state, queue, budget) {
         result:      out.result,
         battleSnaps: out.battleSnaps ?? null,
       });
+      // Campaign veterancy: surface any XP this action granted as its own
+      // XP_AWARDED step events (right after the action that earned them).
+      _emitXpEvents(out.result, budget.faction, subEvents);
 
       resolvedAction = action;
       resolvedEntity = actingEntity?.alive ? actingEntity : null;
@@ -492,6 +509,9 @@ function _checkGuardStrikes(state, action, actor, faction, subEvents) {
       result:       r,
       battleSnaps:  { actorSnap, targetSnap, ranged: !!r.ranged },
     });
+    // Campaign veterancy: a guard reaction is a real attack — credit any XP it
+    // earned the guardian to the same step stream.
+    _emitXpEvents(r, guardian.owner, subEvents);
 
     if (r.killed) _handleLeaderDeath(state, actor);
     for (const sk of r.splashKills ?? []) _handleLeaderDeath(state, sk);

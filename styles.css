@@ -3313,6 +3313,17 @@ body.renderer-3d.debug-counters #cam-counter { display: block; }
   padding: 2px 0;
 }
 
+/* Campaign veterancy — per-unit "+N XP" lines (and a brighter level-up variant). */
+.round-summary-events .summary-xp {
+  color: var(--day, #d4a72c);
+  padding: 2px 0;
+}
+
+.round-summary-events .summary-xp.leveled {
+  color: var(--gold, #e8c84a);
+  font-weight: 600;
+}
+
 .round-summary-events .summary-hazard-header {
   color: var(--witch, #9b59b6);
   font-weight: bold;

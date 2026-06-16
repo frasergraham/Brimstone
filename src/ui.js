@@ -16,7 +16,7 @@ import * as audio from './audio.js';
 import { PlanActionType, actionCosts, computeGhostState, computeProjectedInventory, interleavePlan, groupPlanByEntity, validatePlanAction, buildAutoGuardQueue } from './planner.js';
 import { ABILITIES } from './abilities.js';
 import { buildRollRows, buildOutcomeSummary, buildTurnCardHoverOverlays, battleOutcomeWord } from './replay-timeline.js';
-import { compileTurnBattleSummary } from './battle-utils.js';
+import { compileTurnBattleSummary, compileTurnXpSummary } from './battle-utils.js';
 import { buildWrapupCombatsHtml, wrapupIconHtml } from './wrapup-summary.js';
 import { ResEventType } from '../server/resolver.js';
 import { collectUIElements } from './ui-elements.js';
@@ -4815,6 +4815,17 @@ export class UIController {
 
         for (const n of kills) {
           html += `<div class="summary-kill">☠ ${n} slain</div>`;
+        }
+
+        // Campaign veterancy: per-unit "+N XP" lines beneath the kills/combat
+        // they came from, summed to one line per unit (aggregation lives in
+        // compileTurnXpSummary). Campaign-only — the XP_AWARDED events never
+        // fire outside campaign, and this gate keeps the lines out belt-and-braces.
+        if (isCampaign) {
+          for (const xp of compileTurnXpSummary(steps ?? [], this.state.entities, ResEventType)) {
+            const cls = xp.leveledUp ? 'summary-xp leveled' : 'summary-xp';
+            html += `<div class="${cls}">✨ ${xp.text}</div>`;
+          }
         }
         for (const s of survivors) {
           if (s.type === 'zombie') {
