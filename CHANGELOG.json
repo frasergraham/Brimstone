@@ -1,5 +1,17 @@
 [
   {
+    "version": "1.7.1",
+    "date": "2026-06-16",
+    "summary": "New features, and bug fixes",
+    "notes": [
+      "Unequip a weapon into the shared armory",
+      "Preserve outgoing weapon on mid-mission weapon swap",
+      "4 campaign-UX fixes — squad cap, weapon armory, leader icon, chapter skip",
+      "Align Ch1M2 day-window test + drop blank tile from JSON",
+      "\"content(campaign): drop dead `requires: [\"tutorial\"]` from Ch1M1\""
+    ]
+  },
+  {
     "version": "1.7.0",
     "date": "2026-06-16",
     "summary": "New features, bug fixes, and improvements",
