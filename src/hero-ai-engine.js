@@ -920,7 +920,7 @@ export function genHuntWitch(sim, board, budget) {
   // For ranged leaders (rogue, range 3) "in range" extends to the unit's
   // actual attack range so we don't drop priority targets the rogue can
   // already shoot.
-  const heroAttackRange = heroEntity.range ?? 1;
+  const heroAttackRange = rangeOf(heroEntity);
   const targets = [];
 
   // Kill in-range minions first — clear gang-up before engaging witch
