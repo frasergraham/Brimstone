@@ -3301,8 +3301,6 @@ const stepDebrief      = document.getElementById('setup-step-debrief');
 const stepBattle       = document.getElementById('setup-step-battle');
 const stepOnline       = document.getElementById('setup-step-online');
 const stepAsync        = document.getElementById('setup-step-async');
-const stepHowto        = document.getElementById('setup-step-howtoplay');
-const stepOptions      = document.getElementById('setup-step-options');
 const stepChangelog    = document.getElementById('setup-step-changelog');
 const stepAccount      = document.getElementById('setup-step-account');
 const stepWaiting      = document.getElementById('setup-step-waiting');
@@ -3312,15 +3310,14 @@ const stepLobby        = document.getElementById('setup-step-lobby');
 const stepAsyncCreate  = document.getElementById('setup-step-async-create');
 const stepAsyncCreated = document.getElementById('setup-step-async-created');
 const stepAsyncJoin    = document.getElementById('setup-step-async-join');
-const stepNewGame      = document.getElementById('setup-step-newgame');
-const stepReplays      = document.getElementById('setup-step-replays');
 
 function showStep(step) {
   // Refresh or tear down the main-menu games list depending on whether we're
   // entering or leaving the mode card.
   if (step === 'mode') {
-    // Fire-and-forget — the function handles its own loading/empty states.
+    // Fire-and-forget — each function handles its own loading/empty states.
     try { _fetchMainMenuGames?.(); } catch {}
+    try { _renderReplaysList?.(); } catch {}
   } else {
     _stopMmCountdown?.();
   }
@@ -3335,8 +3332,6 @@ function showStep(step) {
   if (stepBattle) stepBattle.style.display = step === 'battle' ? '' : 'none';
   stepOnline        .style.display = step === 'online'          ? '' : 'none';
   stepAsync         .style.display = step === 'async'           ? '' : 'none';
-  stepHowto         .style.display = step === 'howtoplay'       ? '' : 'none';
-  stepOptions       .style.display = step === 'options'         ? '' : 'none';
   stepChangelog     .style.display = step === 'changelog'       ? '' : 'none';
   stepAccount       .style.display = step === 'account'         ? '' : 'none';
   stepWaiting       .style.display = step === 'waiting'         ? '' : 'none';
@@ -3346,8 +3341,6 @@ function showStep(step) {
   stepAsyncCreate   .style.display = step === 'async-create'    ? '' : 'none';
   stepAsyncCreated  .style.display = step === 'async-created'   ? '' : 'none';
   stepAsyncJoin     .style.display = step === 'async-join'      ? '' : 'none';
-  if (stepNewGame) stepNewGame.style.display = step === 'newgame' ? '' : 'none';
-  if (stepReplays) stepReplays.style.display = step === 'replays' ? '' : 'none';
 
   // Move the session bar into the active card so it sits at its bottom
   const _stepEl = {
@@ -3355,11 +3348,9 @@ function showStep(step) {
     'campaign-select': stepCampaignSelect, 'campaign-slot': stepCampaignSlot,
     'campaign-progress': stepCampaignProgress, 'campaign': stepCampaign, 'debrief': stepDebrief,
     'online': stepOnline, 'async': stepAsync,
-    'howtoplay': stepHowto, 'options': stepOptions,
     'changelog': stepChangelog, 'account': stepAccount, 'waiting': stepWaiting,
     'create-game': stepCreateGame, 'join-game': stepJoinGame, 'lobby': stepLobby,
     'async-create': stepAsyncCreate, 'async-created': stepAsyncCreated, 'async-join': stepAsyncJoin,
-    'newgame': stepNewGame, 'replays': stepReplays,
   }[step];
   const sessionBar = document.getElementById('setup-session-bar');
   if (_stepEl && sessionBar) _stepEl.appendChild(sessionBar);
@@ -3367,8 +3358,8 @@ function showStep(step) {
 
 // Whether the user is currently on a sub-screen of the live online or async
 // flow. Server errors that arrive on these screens should reset the user back
-// to the top-level online/async menu; on any other menu (mode, options, account,
-// how-to-play, etc.) we leave the user where they are so a silent reconnect
+// to the top-level online/async menu; on any other menu (mode, account,
+// changelog, etc.) we leave the user where they are so a silent reconnect
 // doesn't kick them out of the menu they were browsing.
 function _isOnOnlineFlow() {
   return stepOnline.style.display !== 'none' ||
@@ -3389,56 +3380,17 @@ let _currentLobby = null;
 
 // ── Welcome screen buttons ────────────────────────────────────────────────────
 
-document.getElementById('btn-new-game')     ?.addEventListener('click', () => showStep('newgame'));
-document.getElementById('btn-replays')      ?.addEventListener('click', () => _showReplaysScreen());
-document.getElementById('btn-newgame-back') ?.addEventListener('click', () => showStep('mode'));
-document.getElementById('btn-replays-back') ?.addEventListener('click', () => showStep('mode'));
-
-// New Game submenu buttons
+// Main-menu mode buttons (flattened from the former New Game submenu — they now
+// live directly on the welcome card between Active Games and Replays).
 document.getElementById('btn-ng-battle')  ?.addEventListener('click', () => _showBattleScreen());
 document.getElementById('btn-ng-campaign')?.addEventListener('click', () => _showCampaignSelectScreen());
 document.getElementById('btn-ng-vsai')    ?.addEventListener('click', () => _showSinglePlayerScreen());
 document.getElementById('btn-ng-online')  ?.addEventListener('click', () => _showOnlineScreen());
-document.getElementById('btn-how-to-play')?.addEventListener('click', () => showStep('howtoplay'));
 
-// "Play the Tutorial" button in How to Play jumps straight into the tutorial,
-// which is now Chapter 1's first mission. Open Caleb's Hollow Chapter 1 and
-// auto-navigate to the tutorial briefing (bypassing the mission list) — a
-// "just play it" shortcut.
-document.getElementById('btn-play-tutorial')?.addEventListener('click', () => {
-  const chapter1 = getCampaignById('calebs_hollow_prologue');
-  if (chapter1) _showCampaignScreen(chapter1, 'tutorial');
-});
-document.getElementById('btn-options')      .addEventListener('click', () => showStep('options'));
 document.getElementById('setup-session-name').addEventListener('click', () => { _initAccountPage(); showStep('account'); });
-document.getElementById('btn-howtoplay-back').addEventListener('click', () => showStep('mode'));
-document.getElementById('btn-options-back') .addEventListener('click', () => showStep('mode'));
 document.getElementById('btn-account-back') .addEventListener('click', () => showStep('mode'));
 document.getElementById('btn-changelog-back').addEventListener('click', () => showStep('mode'));
 document.getElementById('reconnect-back').addEventListener('click', () => location.reload());
-
-// ── Default game speed option ─────────────────────────────────────────────────
-{
-  const SPEED_KEY = 'brimstone-default-speed';
-  const validSpeeds = ['cinematic', 'fast', 'vfast'];
-  const container = document.getElementById('options-speed-buttons');
-
-  // Highlight the saved (or default) speed on load
-  const saved = localStorage.getItem(SPEED_KEY);
-  const active = validSpeeds.includes(saved) ? saved : 'fast';
-  container?.querySelectorAll('.speed-option').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.mode === active);
-  });
-
-  container?.addEventListener('click', (e) => {
-    const btn = e.target.closest('.speed-option');
-    if (!btn || !validSpeeds.includes(btn.dataset.mode)) return;
-    localStorage.setItem(SPEED_KEY, btn.dataset.mode);
-    container.querySelectorAll('.speed-option').forEach(b => {
-      b.classList.toggle('active', b.dataset.mode === btn.dataset.mode);
-    });
-  });
-}
 
 // Initialize persistent session bar on page load
 _updateSessionBar();
@@ -3644,7 +3596,7 @@ function _showSinglePlayerScreen() {
 
 document.getElementById('btn-singleplayer-back').addEventListener('click', () => {
   renderer = null; ui = null; state = null;
-  showStep('newgame');
+  showStep('mode');
 });
 
 // ── Campaign / Story Mode ─────────────────────────────────────────────────────
@@ -4835,7 +4787,7 @@ function _handleCampaignMissionEnd() {
 }
 
 // Campaign event listeners
-document.getElementById('btn-campaign-select-back').addEventListener('click', () => showStep('newgame'));
+document.getElementById('btn-campaign-select-back').addEventListener('click', () => showStep('mode'));
 document.getElementById('btn-campaign-slot-back')  ?.addEventListener('click', () => _showCampaignSelectScreen());
 document.getElementById('btn-campaign-back')   .addEventListener('click', () => _showCampaignSelectScreen());
 document.getElementById('btn-briefing-back')   .addEventListener('click', () => {
@@ -5531,9 +5483,14 @@ function _mmDefaultRowClick(row) {
     case 'campaign-next':
       if (row._campaignDef) _showCampaignScreen(row._campaignDef, row._nextMissionId, row._slotIndex ?? 1);
       return;
-    case 'completed-sp':
-      if (row._completedData) _startSpReplay(row._completedData);
+    case 'completed-sp': {
+      // Rows carry only lightweight index metadata; the full round data is
+      // loaded lazily from localStorage on click.
+      const data = row._completedData ?? (row._completedMeta && _loadCompletedSpGame(row._completedMeta.id));
+      if (data?.rounds?.length) _startSpReplay(data);
+      else alert('Replay data not found.');
       return;
+    }
     case 'completed-mp':
       if (row._replayMeta) _mmStartMpReplay(row._replayMeta);
       return;
@@ -5861,11 +5818,13 @@ async function _fetchMainMenuGames() {
 }
 
 /**
- * Show the Replays top-level screen. Merges SP local completed games and MP
- * online completed games into a single mm-style list with pin/delete buttons.
+ * Render the Replays section on the main menu. Merges SP local completed games
+ * and MP online completed games into a single mm-style list with pin/delete
+ * buttons. Lives inline on the welcome card (between the mode buttons and the
+ * admin link); called by showStep('mode'). Fire-and-forget — handles its own
+ * loading/empty states.
  */
-async function _showReplaysScreen() {
-  showStep('replays');
+async function _renderReplaysList() {
   const list = document.getElementById('mm-replays-list');
   if (!list) return;
   list.innerHTML = '<p class="mm-games-empty">Loading…</p>';
@@ -5935,7 +5894,7 @@ async function _showReplaysScreen() {
   }
 
   _renderMmList(list, rows, {
-    emptyHtml: '<p class="mm-games-empty">No completed games yet.</p>',
+    emptyHtml: '<p class="mm-games-empty">No completed games yet — finish a match to see replays here.</p>',
     actionsFor: (row) => {
       if (row.kind === 'completed-sp') {
         const meta = row._completedMeta;
@@ -5943,13 +5902,13 @@ async function _showReplaysScreen() {
           {
             icon: meta.pinned ? '📌' : '📎',
             title: meta.pinned ? 'Unpin' : 'Pin to keep',
-            onClick: () => { _pinCompletedSpGame(meta.id, !meta.pinned); _showReplaysScreen(); },
+            onClick: () => { _pinCompletedSpGame(meta.id, !meta.pinned); _renderReplaysList(); },
           },
           {
             icon: '✕',
             title: 'Delete',
             className: 'mm-action-delete',
-            onClick: () => { _deleteCompletedSpGame(meta.id); _showReplaysScreen(); },
+            onClick: () => { _deleteCompletedSpGame(meta.id); _renderReplaysList(); },
           },
         ];
       }
@@ -5970,7 +5929,7 @@ async function _showReplaysScreen() {
                   body: JSON.stringify({ pinned: !meta.pinned }),
                 }
               );
-              _showReplaysScreen();
+              _renderReplaysList();
             },
           },
           {
@@ -5982,7 +5941,7 @@ async function _showReplaysScreen() {
                 `${base}/api/completed-games/${encodeURIComponent(meta.game_id)}?token=${encodeURIComponent(token)}`,
                 { method: 'DELETE' }
               );
-              _showReplaysScreen();
+              _renderReplaysList();
             },
           },
         ];
@@ -7387,6 +7346,9 @@ window.addEventListener('hashchange', () => {
 // Unified main-menu refresh — fetches games + battle status in parallel
 // and updates the main menu list + multiplayer/battle badges as side effects.
 _fetchMainMenuGames();
+// Populate the inline Replays section on first paint (the welcome card is shown
+// by default at boot without going through showStep('mode')).
+_renderReplaysList();
 
 /** Check if the player needs to submit a battle turn and show badge on main menu. */
 async function _updateBattleBadge() {

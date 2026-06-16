@@ -27,22 +27,7 @@
         <div id="mm-games-list"></div>
       </div>
 
-      <div class="setup-buttons" style="flex-direction:column;align-items:center;gap:0.4rem;margin-top:0.75rem">
-        <button id="btn-new-game"    class="setup-btn primary" style="width:200px">New Game</button>
-        <button id="btn-how-to-play" class="setup-btn" style="width:200px">How to Play</button>
-        <button id="btn-options"     class="setup-btn" style="width:200px">Options</button>
-        <button id="btn-replays"     class="setup-btn" style="width:200px">Replays</button>
-      </div>
-
-      <div style="margin-top:1.25rem;text-align:center">
-        <a href="/admin" class="admin-link" id="admin-link" style="display:none">Admin</a>
-      </div>
-    </div>
-
-    <!-- New Game submenu -->
-    <div id="setup-step-newgame" class="setup-card" style="display:none">
-      <h1 class="title" style="font-size:2rem">NEW GAME</h1>
-
+      <!-- New-game mode buttons (flattened from the former New Game submenu) -->
       <div class="ng-section-label" style="margin-top:0.75rem">Local Single Player</div>
       <div class="setup-buttons" style="flex-direction:column;align-items:center;gap:0.5rem;margin-top:0.4rem;margin-bottom:0">
         <button id="btn-ng-campaign" class="setup-btn" style="width:260px;text-align:center">
@@ -67,168 +52,16 @@
         </button>
       </div>
 
-      <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
-        <button id="btn-newgame-back" class="setup-btn">← Back</button>
-      </div>
-    </div>
-
-    <!-- Replays — top-level screen showing all completed games -->
-    <div id="setup-step-replays" class="setup-card" style="display:none">
-      <h1 class="title" style="font-size:2rem">REPLAYS</h1>
-      <div id="mm-replays-section" style="margin-top:0.5rem">
+      <!-- Replays — completed games available for full playback -->
+      <div id="mm-replays-section" class="mm-games-box" style="margin-top:1.5rem">
+        <div class="mm-games-header">
+          <span class="active-games-label">Replays</span>
+        </div>
         <div id="mm-replays-list"></div>
       </div>
-      <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
-        <button id="btn-replays-back" class="setup-btn">← Back</button>
-      </div>
-    </div>
 
-    <!-- How to Play / Play Reference -->
-    <div id="setup-step-howtoplay" class="setup-card setup-card-wide" style="display:none">
-      <h1 class="title" style="font-size:2rem">HOW TO PLAY</h1>
-      <div style="text-align:center;margin-bottom:0.75rem">
-        <button id="btn-play-tutorial" class="setup-btn" style="width:180px">Play the Tutorial</button>
-      </div>
-      <div class="howtoplay-body">
-
-        <details class="htp-section" open>
-          <summary class="htp-heading">Basic Concepts</summary>
-          <p class="htp-intro">A turn-based hex strategy game set in cursed colonial Caleb's Hollow.</p>
-
-          <p>Two asymmetric factions clash across a procedurally-generated map:</p>
-          <table class="htp-table">
-            <tr><td><span class="hero-col">⚔ Hero</span></td><td>Explores buildings, recruits survivors, and fortifies positions. Survivors grant extra actions each round.</td></tr>
-            <tr><td><span class="witch-col">✦ Witch</span></td><td>Summons undead minions and golems, and seizes Power Nodes. Minions grant extra actions each round.</td></tr>
-          </table>
-
-          <p style="margin-top:0.6rem">The game follows an <b>8-round day/night cycle</b> that shifts the balance between factions — daytime favors the Hero, nighttime favors the Witch.</p>
-
-          <p>Each round uses <b>simultaneous planning</b>: both sides independently queue their actions, then all plans are resolved together. You never wait for a turn — both factions act at once.</p>
-        </details>
-
-        <details class="htp-section">
-          <summary class="htp-heading">Win Conditions</summary>
-          <div class="htp-two-col">
-            <div>
-              <div class="htp-faction hero-col">⚔ Hero wins by:</div>
-              <ul>
-                <li>Slaying the Witch</li>
-                <li>Holding more Power Nodes at 4 scoring checkpoints</li>
-              </ul>
-            </div>
-            <div>
-              <div class="htp-faction witch-col">✦ Witch wins by:</div>
-              <ul>
-                <li>Slaying the Hero</li>
-                <li>Seizing all Power Nodes</li>
-                <li>Accumulating 4 scoring points</li>
-              </ul>
-            </div>
-          </div>
-        </details>
-
-        <details class="htp-section">
-          <summary class="htp-heading">Day / Night Cycle <span class="htp-dim">(8 rounds per cycle)</span></summary>
-          <table class="htp-table">
-            <tr>
-              <td>🌅 Dawn</td>
-              <td><span class="hero-col">Hero +1 bonus action.</span><br>Scoring checkpoint. Attrition damage increases each cycle.</td>
-            </tr>
-            <tr>
-              <td>☀ Day <span class="htp-dim">(×3)</span></td>
-              <td><span class="hero-col">Hero +1 bonus action.</span></td>
-            </tr>
-            <tr>
-              <td>🌇 Dusk</td>
-              <td>Scoring checkpoint.</td>
-            </tr>
-            <tr>
-              <td>🌙 Night <span class="htp-dim">(×3)</span></td>
-              <td><span class="witch-col">Witch +1 bonus action. All witch units +2 ATK.</span><br>Hero survivors caught in the open take attrition damage.</td>
-            </tr>
-          </table>
-
-          <p class="htp-sub-heading">Scoring</p>
-          <p>At each Dawn and Dusk, whichever faction controls more Power Nodes scores <b>+1 point</b>. Ties score nothing. The first faction to reach <b>4 cumulative points</b> wins.</p>
-          <p>If a faction controls <b>every</b> Power Node at a scoring checkpoint, they win instantly — regardless of the point total.</p>
-
-          <p class="htp-sub-heading">Attrition</p>
-          <p>At night, hero survivors caught in the open take attrition damage that rises each cycle. Keep your forces sheltered during the night.</p>
-        </details>
-
-        <details class="htp-section">
-          <summary class="htp-heading">Power Nodes ⛧</summary>
-          <p>Cursed power nodes are scattered across the map. They serve two purposes:</p>
-
-          <table class="htp-table">
-            <tr><td>Scoring</td><td>The faction holding more nodes scores a point at each Dawn and Dusk.</td></tr>
-            <tr><td>Bonus Actions</td><td>Each node your faction controls grants <b>+1 bonus action</b> during planning. Controlling multiple nodes dramatically increases your tempo.</td></tr>
-          </table>
-        </details>
-
-        <details class="htp-section">
-          <summary class="htp-heading">Actions</summary>
-          <table class="htp-table">
-            <tr><td>Move</td><td>Step to an adjacent hex (2 hexes with a horse).</td></tr>
-            <tr><td>Explore</td><td>Uncover loot, weapons, or survivors in buildings.</td></tr>
-            <tr><td>Attack Hex</td><td>Attack any adjacent hex. Works through fog of war — hits a random enemy if multiple occupy the hex, skips if empty.</td></tr>
-            <tr><td>Guard</td><td>Take a defensive stance. Each use adds a charge. When an enemy acts nearby, a charge is consumed for an automatic reactive strike.</td></tr>
-            <tr><td>Fortify</td><td>Hero only. Spend 🪵 Wood (+1 DEF) or ⚙ Metal (+2 DEF) to fortify your hex, up to +4 DEF.</td></tr>
-            <tr><td>Summon</td><td>Witch only. Spend resources to summon a minion or golem.</td></tr>
-            <tr><td>Use Item</td><td>Herbs (+2 HP) · Food (+1 action) · Silver (+1 ATK) · Scripture (ward).</td></tr>
-            <tr><td>Equip</td><td>Free. Equip a found weapon for permanent stat bonuses.</td></tr>
-          </table>
-        </details>
-
-        <details class="htp-section">
-          <summary class="htp-heading">Combat</summary>
-          <p>Both sides roll dice, add their stats and any modifiers, then compare totals:</p>
-
-          <table class="htp-table" style="margin-bottom:0.5rem">
-            <tr><td>Hit</td><td>Attack &gt; Defense → <b>1 damage</b></td></tr>
-            <tr><td>Crush</td><td>Attack ≥ 2× Defense → <b>2 damage</b></td></tr>
-            <tr><td>Counter</td><td>Defense ≥ 2× Attack → <b>1 damage to the attacker</b></td></tr>
-          </table>
-
-          <p class="htp-sub-heading">Modifiers</p>
-          <table class="htp-table">
-            <tr><td>Night Bonus</td><td>All witch units +2 ATK during Night</td></tr>
-            <tr><td>Gang-up</td><td>Each adjacent ally adds a bonus die (max 3)</td></tr>
-            <tr><td>Fortification</td><td>Up to +4 DEF from fortified terrain</td></tr>
-            <tr><td>Fatigue</td><td>-1 DEF per 2 defenses this round (hero-side only)</td></tr>
-            <tr><td>Silver</td><td>+1 ATK (consumable, one use)</td></tr>
-            <tr><td>Inspire</td><td>+1 ATK (survivor ability)</td></tr>
-          </table>
-
-          <p class="htp-sub-heading">Weapons</p>
-          <table class="htp-table">
-            <tr><td>Sword</td><td>+2 ATK</td></tr>
-            <tr><td>Axe</td><td>+1 ATK, +1 DEF</td></tr>
-            <tr><td>Shield</td><td>+2 DEF</td></tr>
-            <tr><td>Bow</td><td>+1 ATK</td></tr>
-            <tr><td>Dagger</td><td>+1 ATK</td></tr>
-            <tr><td>Staff</td><td>+1 ATK, +2 bonus ATK vs undead</td></tr>
-          </table>
-
-          <p style="margin-top:0.5rem" class="htp-dim">Fortification level decreases by 1 when the defender takes damage.</p>
-        </details>
-
-        <details class="htp-section">
-          <summary class="htp-heading">Fog of War</summary>
-          <p>Active when any AI is present. Enemies outside your sight range are hidden.</p>
-
-          <table class="htp-table">
-            <tr><td>Day</td><td>Sight range 3</td></tr>
-            <tr><td>Dawn / Dusk</td><td>Sight range 2</td></tr>
-            <tr><td>Night</td><td>Sight range 1</td></tr>
-          </table>
-
-          <p style="margin-top:0.4rem">SCOUT survivors extend sight by 1.</p>
-        </details>
-
-      </div>
-      <div class="setup-buttons" style="margin-top:1.5rem;margin-bottom:0">
-        <button id="btn-howtoplay-back" class="setup-btn">← Back</button>
+      <div style="margin-top:1.25rem;text-align:center">
+        <a href="/admin" class="admin-link" id="admin-link" style="display:none">Admin</a>
       </div>
     </div>
 
@@ -519,11 +352,13 @@
       </div>
     </div>
 
-    <!-- Options -->
-    <div id="setup-step-options" class="setup-card" style="display:none">
-      <h1 class="title" style="font-size:2rem">OPTIONS</h1>
+    <!-- Account -->
+    <div id="setup-step-account" class="setup-card" style="display:none">
+      <h1 class="title" style="font-size:2rem">ACCOUNT</h1>
 
-      <!-- Server settings — only visible in Electron desktop app -->
+      <!-- Server settings — only visible in the Electron desktop app. Relocated here
+           from the (removed) Options card; shown regardless of sign-in state so the
+           server URL can be configured before signing in. -->
       <div id="electron-server-settings" style="display:none">
         <div class="acct-section">
           <div class="acct-label">Server URL</div>
@@ -545,45 +380,6 @@
           <p id="electron-app-version" style="font-size:0.85rem;color:var(--muted);margin:0.25rem 0 0"></p>
         </div>
       </div>
-
-      <!-- Default game speed — HIDDEN for now (single playback presentation trial;
-           see the hidden #replay-detail-btn). Remove display:none to restore. -->
-      <div class="acct-section" style="text-align:left; display:none">
-        <div class="acct-label">Default Game Speed</div>
-        <p style="font-size:0.8rem;color:var(--muted);margin:0.25rem 0 0.5rem">
-          Sets the playback speed when entering any game. You can still change it in-game.
-        </p>
-        <div id="options-speed-buttons" style="display:flex;flex-direction:column;gap:0.25rem">
-          <button class="speed-option" data-mode="cinematic">
-            <span class="speed-option-icon">🎬</span>
-            <span class="speed-option-label">Full</span>
-            <span class="speed-option-desc">All combat details, dialog for important battles (default)</span>
-          </button>
-          <button class="speed-option" data-mode="fast">
-            <span class="speed-option-icon">⏩</span>
-            <span class="speed-option-label">Summary</span>
-            <span class="speed-option-desc">Cinematic pace, no popups</span>
-          </button>
-          <button class="speed-option" data-mode="vfast">
-            <span class="speed-option-icon">⏭</span>
-            <span class="speed-option-label">Speedy</span>
-            <span class="speed-option-desc">Summary at 1.5× speed</span>
-          </button>
-        </div>
-      </div>
-
-      <div id="options-empty-msg" class="setup-lore" style="display:none">
-        <p>No options are available yet.<br>Check back in a future update.</p>
-      </div>
-
-      <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0">
-        <button id="btn-options-back" class="setup-btn">&larr; Back</button>
-      </div>
-    </div>
-
-    <!-- Account -->
-    <div id="setup-step-account" class="setup-card" style="display:none">
-      <h1 class="title" style="font-size:2rem">ACCOUNT</h1>
 
       <!-- Not signed in -->
       <div id="acct-signed-out">

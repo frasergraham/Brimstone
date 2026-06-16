@@ -91,7 +91,7 @@ export async function startCampaignMission(page, baseUrl, {
 } = {}) {
   await page.goto(baseUrl);
   await page.waitForTimeout(1200);
-  await page.click('#btn-new-game');
+  // Mode buttons live directly on the main menu (the New Game submenu was flattened).
   await page.click('#btn-ng-campaign');
   await page.waitForTimeout(800);
   const select = await page.$('#setup-step-campaign-select');
@@ -108,7 +108,7 @@ export async function startCampaignMission(page, baseUrl, {
 export async function startSkirmish(page, baseUrl) {
   await page.goto(baseUrl);
   await page.waitForTimeout(1200);
-  await page.click('#btn-new-game');
+  // Mode buttons live directly on the main menu (the New Game submenu was flattened).
   await page.click('#btn-ng-vsai');
   await page.waitForTimeout(500);
   await page.click('#btn-start-qp');
