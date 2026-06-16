@@ -214,15 +214,18 @@ describe('getSlotSummary', () => {
   });
 
   test('reports a used slot with the next mission to resume', () => {
+    // Post tutorial-fold (Phase E), `tutorial` is Chapter 1's first mission and
+    // `prologue` (The Awakening) requires it — so "one mission done, resume next"
+    // is: tutorial completed, resume at prologue.
     const c = new Campaign(hollowDef, 1);
-    c.completedMissions.add('prologue');
-    c.currentMission = 'gathering_survivors';
+    c.completedMissions.add('tutorial');
+    c.currentMission = 'prologue';
     c.save();
     const info = Campaign.getSlotSummary(hollowDef, 1);
     assert.equal(info.used, true);
     assert.equal(info.status, 'in-progress');
     assert.equal(info.completed, 1);
-    assert.equal(info.currentMission, 'gathering_survivors');
+    assert.equal(info.currentMission, 'prologue');
     assert.ok(info.currentMissionTitle);
     assert.equal(typeof info.updatedAt, 'number');
   });
