@@ -1320,22 +1320,6 @@
         "buildingFootprintOf": null
       },
       {
-        "col": 3,
-        "row": 11,
-        "base": "GRASS",
-        "structure": null,
-        "path": null,
-        "building": null,
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "hiddenSurvivorId": null,
-        "exploreOverride": null,
-        "roadDirs": [],
-        "footprintHexes": [],
-        "buildingFootprintOf": null
-      },
-      {
         "col": 4,
         "row": 11,
         "base": "DIRT",

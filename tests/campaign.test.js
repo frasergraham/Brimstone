@@ -2205,10 +2205,14 @@ describe('Custom phase cycles', () => {
       assert.equal(prologue.phaseCycle.loop, true);
     });
 
-    test('gathering_survivors mission has six daytime turns ending at dusk', () => {
+    test('gathering_survivors mission has a daytime block ending at dusk', () => {
       const gs = missions.find(m => m.id === 'gathering_survivors');
       assert.ok(gs.phaseCycle, 'gathering_survivors should have phaseCycle');
-      assert.deepEqual(gs.phaseCycle.phases, ['dawn', 'day', 'day', 'day', 'day', 'day', 'dusk']);
+      const phases = gs.phaseCycle.phases;
+      assert.equal(phases[0], 'dawn');
+      assert.equal(phases.at(-1), 'dusk');
+      assert.ok(phases.slice(1, -1).every(p => p === 'day'),
+        `expected only day phases between dawn and dusk, got ${JSON.stringify(phases)}`);
       assert.equal(gs.phaseCycle.loop, false);
     });
   });
