@@ -43,7 +43,11 @@ const ALLOWLIST = Object.freeze({
   // `_swapStubLeader` to look up the side-default leader on state.
   // See docs/design/faction-expansion.md.
   'server/lobby.js':             74,
-  'src/main.js':                 44,
+  // src/main.js bumped 45 → 46 (2026-06-11): the scenario dev-loader's
+  // `pov: 'hero'` flag (initScenario) selects which side is human-controlled
+  // so fog-of-war repros have an observer — a loader config check, not a
+  // faction-behavior branch.
+  'src/main.js':                 46,
   'src/ui.js':                   25,
 
   // Pre-existing core modules — generalized in Finding 1, residual checks
@@ -62,6 +66,15 @@ const ALLOWLIST = Object.freeze({
   //     entity type.
   //   src/ui.js       24 → 25: summon-picker rendering widened to any
   //     night-side leader.
+  // src/entities.js 0 → 1 (2026-06-15, Phase C campaign XP): awardXP() gates
+  //   veterancy to player-faction (hero) units via `owner !== 'hero'`. XP is a
+  //   hero-only mechanic (only hero units persist across missions), so this is a
+  //   real faction-behavior branch. The faction `side` abstraction would be the
+  //   N-faction-correct vocabulary, but entities.js cannot import factions.js
+  //   (factions.js already imports entities.js — circular), so the literal owner
+  //   check matches the established style in actions.js. Ratchet down if the
+  //   import direction is ever inverted.
+  'src/entities.js':              1,
   'src/game.js':                 25,
   'src/ai-engine.js':            18,
   'src/hero-ai-engine.js':       17,

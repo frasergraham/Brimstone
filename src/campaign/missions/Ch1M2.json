@@ -15,6 +15,10 @@
       "day",
       "day",
       "day",
+      "day",
+      "day",
+      "day",
+      "day",
       "dusk"
     ],
     "loop": false
@@ -22,360 +26,860 @@
   "mapSize": "skirmish",
   "hasWitch": false,
   "disableScoring": true,
-  "enemyUnits": [
-    {
-      "type": "zombie",
-      "col": 6,
-      "row": 3
-    },
-    {
-      "type": "zombie",
-      "col": 9,
-      "row": 6
-    }
-  ],
-  "waves": [
-    {
-      "round": 3,
-      "units": [
-        {
-          "type": "zombie",
-          "spawnAt": "map_edge"
-        }
-      ]
-    },
-    {
-      "round": 5,
-      "units": [
-        {
-          "type": "zombie",
-          "spawnAt": "map_edge"
-        },
-        {
-          "type": "zombie",
-          "spawnAt": "map_edge"
-        }
-      ]
-    }
-  ],
   "aiPersonality": "balanced",
   "aiBudgetBonus": 1,
   "maxSurvivorsFromRoster": 0,
-  "missionSurvivors": 2,
-  "maxDiscoverableSurvivors": 3,
-  "objectives": {
-    "win": {
-      "type": "gather_and_survive",
-      "survivors": 2,
-      "kills": 4,
-      "phaseFallback": "dusk",
-      "reason": "The survivors are safe — Caleb's Hollow holds out another night."
-    },
-    "lose": [
-      {
-        "type": "hero_killed"
-      },
-      {
-        "type": "phase_without_survivors",
-        "phase": "dusk",
-        "survivors": 2,
-        "reason": "Night fell before you found enough survivors."
-      }
-    ]
-  },
-  "startingResources": {
-    "food": 1,
-    "herbs": 1
-  },
+  "missionSurvivors": 0,
+  "maxDiscoverableSurvivors": 4,
+  "startingResources": {},
   "rewards": {
     "food": 2,
     "herbs": 1,
     "wood": 2
   },
-  "healBonus": 2,
+  "healBonus": 14,
   "requires": [
     "prologue"
   ],
+  "survivorStartPositions": [],
+  "hints": {
+    "scriptKey": "ch1m2"
+  },
+  "lootOverrides": {
+    "buildings": {
+      "barn": [
+        {
+          "type": "axe",
+          "weight": 1
+        }
+      ]
+    }
+  },
+  "logic": {
+    "version": 1,
+    "variables": [],
+    "nodes": [
+      {
+        "id": "n0",
+        "type": "storyBeat",
+        "params": {
+          "title": "Voices in the Fog",
+          "text": "Through the morning haze you hear voices — desperate, frightened. Others survived the night. Find at least two of them and cut down the dead before dusk."
+        },
+        "x": 520,
+        "y": 40
+      },
+      {
+        "id": "n1",
+        "type": "onRoundStart",
+        "params": {
+          "round": 1
+        },
+        "x": 40,
+        "y": 40
+      },
+      {
+        "id": "n2",
+        "type": "doOnce",
+        "params": {},
+        "x": 280,
+        "y": 40
+      },
+      {
+        "id": "n3",
+        "type": "storyBeat",
+        "params": {
+          "title": "The Light is Fading",
+          "text": "Long shadows stretch across the square. This is the last of the daylight — when dusk falls you will be out of time. Hurry."
+        },
+        "x": 520,
+        "y": 150
+      },
+      {
+        "id": "n4",
+        "type": "onRoundStart",
+        "params": {
+          "round": 6
+        },
+        "x": 40,
+        "y": 150
+      },
+      {
+        "id": "n5",
+        "type": "doOnce",
+        "params": {},
+        "x": 280,
+        "y": 150
+      },
+      {
+        "id": "n6",
+        "type": "storyBeat",
+        "params": {
+          "title": "A barricaded home",
+          "text": "The door is barricaded from the inside. You hear noises from inside the house."
+        },
+        "x": 793,
+        "y": 249
+      },
+      {
+        "id": "n7",
+        "type": "onAreaEnter",
+        "params": {
+          "hexes": []
+        },
+        "x": 40,
+        "y": 260
+      },
+      {
+        "id": "n8",
+        "type": "filterIsFaction",
+        "params": {
+          "faction": "hero"
+        },
+        "x": 280,
+        "y": 260
+      },
+      {
+        "id": "n9",
+        "type": "doOnce",
+        "params": {},
+        "x": 520,
+        "y": 260
+      },
+      {
+        "id": "n10",
+        "type": "spawnUnits",
+        "params": {
+          "units": [
+            {
+              "type": "zombie",
+              "spawnAt": "map_edge"
+            }
+          ]
+        },
+        "x": 273,
+        "y": 358
+      },
+      {
+        "id": "n11",
+        "type": "onRoundStart",
+        "params": {
+          "round": 3
+        },
+        "x": 40,
+        "y": 370
+      },
+      {
+        "id": "n12",
+        "type": "spawnUnits",
+        "params": {
+          "units": [
+            {
+              "type": "zombie",
+              "spawnAt": "map_edge"
+            },
+            {
+              "type": "zombie",
+              "spawnAt": "map_edge"
+            }
+          ]
+        },
+        "x": 167.2727272727273,
+        "y": 480.90909090909093
+      },
+      {
+        "id": "n13",
+        "type": "onRoundStart",
+        "params": {
+          "round": 5
+        },
+        "x": -60.909090909090864,
+        "y": 479.09090909090907
+      },
+      {
+        "id": "n14",
+        "type": "onRoundStart",
+        "params": {
+          "round": "any"
+        },
+        "x": 40,
+        "y": 590
+      },
+      {
+        "id": "n15",
+        "type": "objectiveOutcome",
+        "params": {
+          "side": "win",
+          "spec": {
+            "type": "gather_and_survive",
+            "survivors": 2,
+            "kills": 4,
+            "phaseFallback": "dusk",
+            "reason": "The survivors are safe — Caleb's Hollow holds out another night."
+          },
+          "reason": "The survivors are safe — Caleb's Hollow holds out another night."
+        },
+        "x": 280,
+        "y": 590
+      },
+      {
+        "id": "n16",
+        "type": "onRoundStart",
+        "params": {
+          "round": "any"
+        },
+        "x": 40,
+        "y": 700
+      },
+      {
+        "id": "n17",
+        "type": "objectiveOutcome",
+        "params": {
+          "side": "lose",
+          "spec": {
+            "type": "phase_without_survivors",
+            "phase": "dusk",
+            "survivors": 2,
+            "reason": "Night fell before you found enough survivors."
+          },
+          "reason": "Night fell before you found enough survivors."
+        },
+        "x": 280,
+        "y": 700
+      },
+      {
+        "id": "n18",
+        "type": "location",
+        "params": {
+          "label": "Boogers",
+          "hexes": [
+            {
+              "col": 5,
+              "row": 15
+            }
+          ]
+        },
+        "x": 493.11400000000015,
+        "y": 537.4659999999998
+      },
+      {
+        "id": "n19",
+        "type": "location",
+        "params": {
+          "label": "House 1",
+          "hexes": [
+            {
+              "col": 7,
+              "row": 13
+            }
+          ]
+        },
+        "x": -194.0499999999995,
+        "y": 261.6199999999998
+      },
+      {
+        "id": "n20",
+        "type": "onAreaEnter",
+        "params": {
+          "hexes": []
+        },
+        "x": 724.7899999999997,
+        "y": 520.98
+      },
+      {
+        "id": "n21",
+        "type": "storyBeat",
+        "params": {
+          "title": "Too Quiet",
+          "text": "This part of town is quiet, no birdsong, no human activity, eerily calm."
+        },
+        "x": 926.6560765822994,
+        "y": 505.3752111172001
+      },
+      {
+        "id": "n22",
+        "type": "onActor",
+        "params": {},
+        "x": 696.7894105421532,
+        "y": 672.9452368223084
+      },
+      {
+        "id": "n23",
+        "type": "startConversation",
+        "params": {
+          "roleInputs": [
+            "survivor"
+          ],
+          "conversationId": "ch1m2-survivor"
+        },
+        "x": 910.1313827355259,
+        "y": 675.4735425520572
+      },
+      {
+        "id": "n24",
+        "type": "storyBeat",
+        "params": {
+          "title": "dark",
+          "text": "It's getting dark, we must find the rest of the townsfolk before sun sets."
+        },
+        "x": 367.11190909090914,
+        "y": 480.2470909090909
+      },
+      {
+        "id": "n25",
+        "type": "survivor",
+        "params": {
+          "ref": "survivor_7_13",
+          "label": "Survivor 7,13",
+          "col": 7,
+          "row": 13
+        },
+        "x": 476.90593013247997,
+        "y": 680.9982577143094
+      },
+      {
+        "id": "n26",
+        "type": "survivor",
+        "params": {
+          "ref": "survivor_5_10",
+          "label": "Survivor 5,10",
+          "col": 5,
+          "row": 10
+        },
+        "x": 1186.6560765822994,
+        "y": 260
+      },
+      {
+        "id": "n27",
+        "type": "survivor",
+        "params": {
+          "ref": "survivor_9_5",
+          "label": "Survivor 9,5",
+          "col": 9,
+          "row": 5
+        },
+        "x": 1446.6560765822994,
+        "y": 370
+      },
+      {
+        "id": "n28",
+        "type": "survivor",
+        "params": {
+          "ref": "survivor_6_1",
+          "label": "Survivor 6,1",
+          "col": 6,
+          "row": 1
+        },
+        "x": 1706.6560765822994,
+        "y": 480
+      }
+    ],
+    "edges": [
+      {
+        "from": {
+          "node": "n1",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n2",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n2",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n0",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n4",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n5",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n5",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n3",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n7",
+          "pin": "onEnter"
+        },
+        "to": {
+          "node": "n8",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n7",
+          "pin": "unit"
+        },
+        "to": {
+          "node": "n8",
+          "pin": "entity"
+        },
+        "kind": "data"
+      },
+      {
+        "from": {
+          "node": "n8",
+          "pin": "pass"
+        },
+        "to": {
+          "node": "n9",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n9",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n6",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n11",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n10",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n13",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n12",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n14",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n15",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n16",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n17",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n20",
+          "pin": "onEnter"
+        },
+        "to": {
+          "node": "n21",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n18",
+          "pin": "hexes"
+        },
+        "to": {
+          "node": "n20",
+          "pin": "area"
+        },
+        "kind": "data"
+      },
+      {
+        "from": {
+          "node": "n19",
+          "pin": "hexes"
+        },
+        "to": {
+          "node": "n7",
+          "pin": "area"
+        },
+        "kind": "data"
+      },
+      {
+        "from": {
+          "node": "n22",
+          "pin": "onSpawn"
+        },
+        "to": {
+          "node": "n23",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n12",
+          "pin": "done"
+        },
+        "to": {
+          "node": "n24",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n25",
+          "pin": "id"
+        },
+        "to": {
+          "node": "n22",
+          "pin": "ref"
+        },
+        "kind": "data"
+      },
+      {
+        "from": {
+          "node": "n22",
+          "pin": "entity"
+        },
+        "to": {
+          "node": "n23",
+          "pin": "survivor"
+        },
+        "kind": "data"
+      }
+    ]
+  },
   "map": {
     "mode": "handmade",
     "cols": 11,
-    "rows": 11,
+    "rows": 18,
     "heroStart": {
       "col": 1,
-      "row": 9
+      "row": 16
     },
     "witchStart": {
       "col": 9,
-      "row": 1
+      "row": 8
     },
     "witchObjectives": [],
     "roadNodes": [
-      "1,9",
+      "0,17",
+      "6,14",
+      "3,9",
+      "8,9",
       "3,3",
-      "4,7",
-      "5,5",
-      "7,3",
-      "8,7",
-      "9,2"
+      "8,4",
+      "6,0",
+      "3,6",
+      "10,6",
+      "7,13",
+      "5,12",
+      "7,2",
+      "4,1"
     ],
     "mapSize": "skirmish",
     "survivorCounts": {
-      "buildings": 2,
+      "buildings": 0,
       "terrain": 0
     },
     "tiles": [
       {
-        "col": 1,
+        "col": 5,
         "row": 0,
-        "base": "FOREST",
-        "structure": null,
-        "path": null,
-        "building": null,
+        "base": "DIRT",
+        "structure": "BUILDING",
+        "path": "ROAD",
+        "building": "HOUSE",
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
-        "roadDirs": []
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [
+          "6,0",
+          "4,1"
+        ],
+        "footprintHexes": [
+          "5,1"
+        ],
+        "buildingFootprintOf": null
       },
       {
-        "col": 2,
+        "col": 6,
         "row": 0,
-        "base": "FOREST",
+        "base": "GRASS",
         "structure": null,
-        "path": null,
+        "path": "ROAD",
         "building": null,
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
-        "roadDirs": []
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [
+          "6,1",
+          "5,0"
+        ],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
       },
       {
         "col": 4,
-        "row": 0,
-        "base": "GRASS",
-        "structure": null,
-        "path": "RIVER",
-        "building": null,
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": []
-      },
-      {
-        "col": 10,
-        "row": 0,
-        "base": "FOREST",
-        "structure": null,
-        "path": null,
-        "building": null,
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": []
-      },
-      {
-        "col": 0,
-        "row": 1,
-        "base": "FOREST",
-        "structure": null,
-        "path": null,
-        "building": null,
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": []
-      },
-      {
-        "col": 1,
-        "row": 1,
-        "base": "FOREST",
-        "structure": null,
-        "path": null,
-        "building": null,
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": []
-      },
-      {
-        "col": 3,
         "row": 1,
         "base": "GRASS",
         "structure": null,
-        "path": "RIVER",
+        "path": "ROAD",
         "building": null,
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
-        "roadDirs": []
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [
+          "4,2",
+          "5,0"
+        ],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
       },
       {
-        "col": 9,
+        "col": 6,
         "row": 1,
-        "base": "FOREST",
-        "structure": null,
-        "path": null,
-        "building": null,
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": []
-      },
-      {
-        "col": 10,
-        "row": 1,
-        "base": "FOREST",
-        "structure": null,
-        "path": null,
-        "building": null,
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": []
-      },
-      {
-        "col": 1,
-        "row": 2,
-        "base": "FOREST",
-        "structure": null,
-        "path": null,
-        "building": null,
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": []
-      },
-      {
-        "col": 3,
-        "row": 2,
-        "base": "GRASS",
-        "structure": null,
-        "path": "RIVER",
-        "building": null,
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": []
-      },
-      {
-        "col": 9,
-        "row": 2,
         "base": "DIRT",
         "structure": "BUILDING",
-        "path": null,
-        "building": "STABLE",
+        "path": "ROAD",
+        "building": "BARN",
         "fortifyLevel": 0,
         "resource": null,
-        "hiddenSurvivor": false,
+        "hiddenSurvivor": true,
+        "hiddenSurvivorId": null,
+        "_comment_hiddenSurvivorLevel": "Optional: add \"hiddenSurvivorLevel\": 3 to spawn this hidden survivor at level 3 (scales HP/ATK/DEF via applyLevel). Defaults to 1 when absent.",
+        "exploreOverride": null,
         "roadDirs": [
-          "8,3"
+          "6,0",
+          "7,2"
         ],
         "footprintHexes": [
-          "8,2"
-        ]
+          "7,0"
+        ],
+        "buildingFootprintOf": null
       },
       {
-        "col": 2,
-        "row": 3,
-        "base": "DIRT",
+        "col": 4,
+        "row": 2,
+        "base": "GRASS",
         "structure": null,
-        "path": null,
+        "path": "ROAD",
         "building": null,
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
-        "roadDirs": [],
-        "buildingFootprintOf": "3,3"
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [
+          "3,3",
+          "4,1"
+        ],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 7,
+        "row": 2,
+        "base": "GRASS",
+        "structure": null,
+        "path": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [
+          "7,3",
+          "6,1"
+        ],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
       },
       {
         "col": 3,
         "row": 3,
+        "base": "GRASS",
+        "structure": null,
+        "path": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [
+          "4,2",
+          "4,4"
+        ],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 7,
+        "row": 3,
+        "base": "GRASS",
+        "structure": null,
+        "path": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [
+          "8,4",
+          "7,2"
+        ],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 4,
+        "row": 4,
+        "base": "GRASS",
+        "structure": null,
+        "path": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [
+          "3,3",
+          "3,5"
+        ],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 8,
+        "row": 4,
+        "base": "GRASS",
+        "structure": null,
+        "path": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [
+          "7,3",
+          "9,4"
+        ],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 9,
+        "row": 4,
+        "base": "GRASS",
+        "structure": null,
+        "path": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [
+          "8,4",
+          "9,5"
+        ],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 3,
+        "row": 5,
+        "base": "GRASS",
+        "structure": null,
+        "path": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [
+          "4,4",
+          "3,6"
+        ],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 9,
+        "row": 5,
         "base": "DIRT",
         "structure": "BUILDING",
-        "path": null,
+        "path": "ROAD",
         "building": "HOUSE",
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": true,
+        "hiddenSurvivorId": null,
+        "exploreOverride": {
+          "kind": "weapon",
+          "id": "axe"
+        },
         "roadDirs": [
-          "4,4"
+          "9,4",
+          "10,6"
         ],
         "footprintHexes": [
-          "2,3"
-        ]
-      },
-      {
-        "col": 6,
-        "row": 3,
-        "base": "DIRT",
-        "structure": null,
-        "path": null,
-        "building": null,
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": [],
-        "buildingFootprintOf": "7,3"
-      },
-      {
-        "col": 7,
-        "row": 3,
-        "base": "DIRT",
-        "structure": "BUILDING",
-        "path": null,
-        "building": "HOUSE",
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": [
-          "7,4",
-          "8,3"
+          "8,5"
         ],
-        "footprintHexes": [
-          "6,3"
-        ]
-      },
-      {
-        "col": 8,
-        "row": 3,
-        "base": "GRASS",
-        "structure": null,
-        "path": "ROAD",
-        "building": null,
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": [
-          "7,3",
-          "9,2"
-        ]
-      },
-      {
-        "col": 2,
-        "row": 4,
-        "base": "DIRT",
-        "structure": null,
-        "path": null,
-        "building": null,
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": []
+        "buildingFootprintOf": null
       },
       {
         "col": 3,
-        "row": 4,
-        "base": "GRASS",
-        "structure": null,
-        "path": "RIVER",
-        "building": null,
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": []
-      },
-      {
-        "col": 4,
-        "row": 4,
+        "row": 6,
         "base": "GRASS",
         "structure": null,
         "path": "ROAD",
@@ -383,14 +887,18 @@
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
         "roadDirs": [
-          "3,3",
-          "5,4"
-        ]
+          "3,7",
+          "3,5"
+        ],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
       },
       {
-        "col": 5,
-        "row": 4,
+        "col": 10,
+        "row": 6,
         "base": "GRASS",
         "structure": null,
         "path": "ROAD",
@@ -398,44 +906,18 @@
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
         "roadDirs": [
-          "4,4",
-          "5,5"
-        ]
-      },
-      {
-        "col": 6,
-        "row": 4,
-        "base": "GRASS",
-        "structure": null,
-        "path": "ROAD",
-        "building": null,
-        "fortifyLevel": 0,
-        "resource": "HERBS",
-        "hiddenSurvivor": false,
-        "roadDirs": [
-          "5,5",
-          "7,4"
-        ]
-      },
-      {
-        "col": 7,
-        "row": 4,
-        "base": "GRASS",
-        "structure": null,
-        "path": "ROAD",
-        "building": null,
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": [
-          "6,4",
-          "7,3"
-        ]
+          "9,7",
+          "9,5"
+        ],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
       },
       {
         "col": 0,
-        "row": 5,
+        "row": 7,
         "base": "FOREST",
         "structure": null,
         "path": null,
@@ -443,70 +925,98 @@
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
-        "roadDirs": []
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
       },
       {
         "col": 1,
-        "row": 5,
-        "base": "DIRT",
+        "row": 7,
+        "base": "FOREST",
         "structure": null,
         "path": null,
         "building": null,
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
-        "roadDirs": []
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
       },
       {
         "col": 3,
-        "row": 5,
+        "row": 7,
         "base": "GRASS",
+        "structure": null,
+        "path": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [
+          "4,8",
+          "3,6"
+        ],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 4,
+        "row": 7,
+        "base": "DIRT",
         "structure": null,
         "path": "RIVER",
         "building": null,
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
-        "roadDirs": []
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
       },
       {
         "col": 5,
-        "row": 5,
-        "base": "DIRT",
-        "structure": "BUILDING",
+        "row": 7,
+        "base": "FOREST",
+        "structure": null,
         "path": null,
-        "building": "CHURCH",
+        "building": null,
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
-        "roadDirs": [
-          "5,4",
-          "5,6",
-          "6,4",
-          "6,5"
-        ],
-        "footprintHexes": [
-          "4,5"
-        ]
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
       },
       {
         "col": 6,
-        "row": 5,
-        "base": "GRASS",
+        "row": 7,
+        "base": "FOREST",
         "structure": null,
-        "path": "ROAD",
+        "path": null,
         "building": null,
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
-        "roadDirs": [
-          "5,5",
-          "7,5"
-        ]
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
       },
       {
-        "col": 7,
-        "row": 5,
+        "col": 9,
+        "row": 7,
         "base": "GRASS",
         "structure": null,
         "path": "ROAD",
@@ -514,14 +1024,424 @@
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
         "roadDirs": [
-          "6,5",
-          "8,6"
-        ]
+          "9,8",
+          "10,6"
+        ],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 10,
+        "row": 7,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 0,
+        "row": 8,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 1,
+        "row": 8,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 4,
+        "row": 8,
+        "base": "DIRT",
+        "structure": null,
+        "path": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [
+          "3,9",
+          "3,7"
+        ],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 9,
+        "row": 8,
+        "base": "GRASS",
+        "structure": null,
+        "path": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [
+          "8,9",
+          "9,7"
+        ],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 10,
+        "row": 8,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 0,
+        "row": 9,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 1,
+        "row": 9,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 2,
+        "row": 9,
+        "base": "DIRT",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 3,
+        "row": 9,
+        "base": "DIRT",
+        "structure": null,
+        "path": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [
+          "4,8",
+          "4,10"
+        ],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
       },
       {
         "col": 8,
-        "row": 5,
+        "row": 9,
+        "base": "GRASS",
+        "structure": null,
+        "path": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [
+          "9,8"
+        ],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 9,
+        "row": 9,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 1,
+        "row": 10,
+        "base": "DIRT",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 2,
+        "row": 10,
+        "base": "DIRT",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": "3,3"
+      },
+      {
+        "col": 4,
+        "row": 10,
+        "base": "DIRT",
+        "structure": null,
+        "path": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [
+          "3,9",
+          "4,11"
+        ],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 8,
+        "row": 10,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": "7,3"
+      },
+      {
+        "col": 1,
+        "row": 11,
+        "base": "DIRT",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 3,
+        "row": 11,
+        "base": "GRASS",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 4,
+        "row": 11,
+        "base": "DIRT",
+        "structure": "BUILDING",
+        "path": "ROAD",
+        "building": "HOUSE",
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [
+          "4,10",
+          "5,12"
+        ],
+        "footprintHexes": [
+          "5,10"
+        ],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 6,
+        "row": 11,
+        "base": "GRASS",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": "HERBS",
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 0,
+        "row": 12,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 1,
+        "row": 12,
+        "base": "DIRT",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 4,
+        "row": 12,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 5,
+        "row": 12,
+        "base": "GRASS",
+        "structure": null,
+        "path": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [
+          "5,13",
+          "4,11"
+        ],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 8,
+        "row": 12,
         "base": "GRASS",
         "structure": null,
         "path": null,
@@ -529,11 +1449,31 @@
         "fortifyLevel": 0,
         "resource": "WOOD",
         "hiddenSurvivor": false,
-        "roadDirs": []
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 9,
+        "row": 12,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
       },
       {
         "col": 0,
-        "row": 6,
+        "row": 13,
         "base": "FOREST",
         "structure": null,
         "path": null,
@@ -541,35 +1481,15 @@
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
-        "roadDirs": []
-      },
-      {
-        "col": 1,
-        "row": 6,
-        "base": "FOREST",
-        "structure": null,
-        "path": null,
-        "building": null,
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": []
-      },
-      {
-        "col": 4,
-        "row": 6,
-        "base": "GRASS",
-        "structure": null,
-        "path": "RIVER",
-        "building": null,
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": []
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
       },
       {
         "col": 5,
-        "row": 6,
+        "row": 13,
         "base": "GRASS",
         "structure": null,
         "path": "ROAD",
@@ -577,29 +1497,59 @@
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
         "roadDirs": [
-          "4,7",
-          "5,5"
-        ]
+          "6,14",
+          "5,12"
+        ],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
       },
       {
-        "col": 8,
-        "row": 6,
-        "base": "GRASS",
-        "structure": null,
+        "col": 6,
+        "row": 13,
+        "base": "DIRT",
+        "structure": "BUILDING",
         "path": "ROAD",
-        "building": null,
+        "building": "STABLE",
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
         "roadDirs": [
-          "7,5",
-          "8,7"
-        ]
+          "6,14",
+          "7,13"
+        ],
+        "footprintHexes": [
+          "7,12"
+        ],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 7,
+        "row": 13,
+        "base": "GRASS",
+        "structure": "BUILDING",
+        "path": "ROAD",
+        "building": "STOREHOUSE",
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": true,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [
+          "6,13"
+        ],
+        "footprintHexes": [
+          "8,13"
+        ],
+        "buildingFootprintOf": null
       },
       {
         "col": 0,
-        "row": 7,
+        "row": 14,
         "base": "FOREST",
         "structure": null,
         "path": null,
@@ -607,23 +1557,15 @@
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
-        "roadDirs": []
-      },
-      {
-        "col": 1,
-        "row": 7,
-        "base": "FOREST",
-        "structure": null,
-        "path": null,
-        "building": null,
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": []
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
       },
       {
         "col": 2,
-        "row": 7,
+        "row": 14,
         "base": "GRASS",
         "structure": null,
         "path": null,
@@ -631,201 +1573,31 @@
         "fortifyLevel": 0,
         "resource": "FOOD",
         "hiddenSurvivor": false,
-        "roadDirs": []
-      },
-      {
-        "col": 4,
-        "row": 7,
-        "base": "DIRT",
-        "structure": "BUILDING",
-        "path": null,
-        "building": "APOTHECARY",
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": true,
-        "roadDirs": [
-          "4,8",
-          "5,6"
-        ],
-        "footprintHexes": [
-          "3,7"
-        ]
-      },
-      {
-        "col": 5,
-        "row": 7,
-        "base": "FOREST",
-        "structure": null,
-        "path": null,
-        "building": null,
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": []
-      },
-      {
-        "col": 6,
-        "row": 7,
-        "base": "FOREST",
-        "structure": null,
-        "path": null,
-        "building": null,
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": []
-      },
-      {
-        "col": 8,
-        "row": 7,
-        "base": "DIRT",
-        "structure": "BUILDING",
-        "path": null,
-        "building": "BARN",
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": true,
-        "roadDirs": [
-          "8,6"
-        ],
-        "footprintHexes": [
-          "7,7"
-        ]
-      },
-      {
-        "col": 9,
-        "row": 7,
-        "base": "DIRT",
-        "structure": null,
-        "path": null,
-        "building": null,
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": []
-      },
-      {
-        "col": 1,
-        "row": 8,
-        "base": "DIRT",
-        "structure": null,
-        "path": null,
-        "building": null,
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": []
-      },
-      {
-        "col": 4,
-        "row": 8,
-        "base": "GRASS",
-        "structure": null,
-        "path": "ROAD",
-        "building": null,
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": [
-          "3,9",
-          "4,7"
-        ]
-      },
-      {
-        "col": 5,
-        "row": 8,
-        "base": "GRASS",
-        "structure": null,
-        "path": "RIVER",
-        "building": null,
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": []
-      },
-      {
-        "col": 6,
-        "row": 8,
-        "base": "FOREST",
-        "structure": null,
-        "path": null,
-        "building": null,
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": []
-      },
-      {
-        "col": 8,
-        "row": 8,
-        "base": "DIRT",
-        "structure": null,
-        "path": null,
-        "building": null,
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": []
-      },
-      {
-        "col": 9,
-        "row": 8,
-        "base": "DIRT",
-        "structure": null,
-        "path": null,
-        "building": null,
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": []
-      },
-      {
-        "col": 10,
-        "row": 8,
-        "base": "FOREST",
-        "structure": null,
-        "path": null,
-        "building": null,
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": []
-      },
-      {
-        "col": 1,
-        "row": 9,
-        "base": "DIRT",
-        "structure": "BUILDING",
-        "path": null,
-        "building": "INN",
-        "fortifyLevel": 1,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": [
-          "2,9"
-        ],
-        "footprintHexes": [
-          "0,9"
-        ]
-      },
-      {
-        "col": 2,
-        "row": 9,
-        "base": "GRASS",
-        "structure": null,
-        "path": "ROAD",
-        "building": null,
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": [
-          "1,9",
-          "3,9"
-        ]
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
       },
       {
         "col": 3,
-        "row": 9,
+        "row": 14,
+        "base": "GRASS",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": "4,7"
+      },
+      {
+        "col": 6,
+        "row": 14,
         "base": "GRASS",
         "structure": null,
         "path": "ROAD",
@@ -833,50 +1605,35 @@
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
         "roadDirs": [
-          "2,9",
-          "4,8"
-        ]
-      },
-      {
-        "col": 5,
-        "row": 9,
-        "base": "GRASS",
-        "structure": null,
-        "path": "RIVER",
-        "building": null,
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": []
-      },
-      {
-        "col": 6,
-        "row": 9,
-        "base": "FOREST",
-        "structure": null,
-        "path": null,
-        "building": null,
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": []
+          "6,13",
+          "5,13",
+          "5,15"
+        ],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
       },
       {
         "col": 7,
-        "row": 9,
-        "base": "FOREST",
+        "row": 14,
+        "base": "GRASS",
         "structure": null,
         "path": null,
         "building": null,
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
-        "roadDirs": []
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": "8,7"
       },
       {
-        "col": 8,
-        "row": 9,
+        "col": 9,
+        "row": 14,
         "base": "DIRT",
         "structure": null,
         "path": null,
@@ -884,11 +1641,15 @@
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
-        "roadDirs": []
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
       },
       {
         "col": 10,
-        "row": 9,
+        "row": 14,
         "base": "FOREST",
         "structure": null,
         "path": null,
@@ -896,47 +1657,389 @@
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
-        "roadDirs": []
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 3,
+        "row": 15,
+        "base": "GRASS",
+        "structure": null,
+        "path": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [
+          "3,16",
+          "4,15"
+        ],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 4,
+        "row": 15,
+        "base": "GRASS",
+        "structure": null,
+        "path": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [
+          "3,15",
+          "5,15"
+        ],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 5,
+        "row": 15,
+        "base": "DIRT",
+        "structure": "BUILDING",
+        "path": "ROAD",
+        "building": "HOUSE",
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [
+          "4,15",
+          "6,14"
+        ],
+        "footprintHexes": [
+          "5,14"
+        ],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 9,
+        "row": 15,
+        "base": "DIRT",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 10,
+        "row": 15,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 1,
+        "row": 16,
+        "base": "GRASS",
+        "structure": null,
+        "path": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [
+          "0,17",
+          "2,16"
+        ],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 2,
+        "row": 16,
+        "base": "GRASS",
+        "structure": null,
+        "path": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [
+          "1,16",
+          "3,16"
+        ],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 3,
+        "row": 16,
+        "base": "GRASS",
+        "structure": null,
+        "path": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [
+          "2,16",
+          "3,15"
+        ],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 6,
+        "row": 16,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 7,
+        "row": 16,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 8,
+        "row": 16,
+        "base": "DIRT",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 9,
+        "row": 16,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 10,
+        "row": 16,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 0,
+        "row": 17,
+        "base": "GRASS",
+        "structure": null,
+        "path": "ROAD",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [
+          "1,16"
+        ],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 4,
+        "row": 17,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 5,
+        "row": 17,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 6,
+        "row": 17,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 7,
+        "row": 17,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 9,
+        "row": 17,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 10,
+        "row": 17,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 5,
+        "row": 14,
+        "base": "GRASS",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": "5,15"
       },
       {
         "col": 5,
         "row": 10,
         "base": "GRASS",
         "structure": null,
-        "path": "RIVER",
-        "building": null,
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": []
-      },
-      {
-        "col": 6,
-        "row": 10,
-        "base": "FOREST",
-        "structure": null,
         "path": null,
         "building": null,
         "fortifyLevel": 0,
         "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": []
+        "hiddenSurvivor": true,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": "4,11"
       },
       {
-        "col": 7,
-        "row": 10,
-        "base": "FOREST",
-        "structure": null,
-        "path": null,
-        "building": null,
-        "fortifyLevel": 0,
-        "resource": null,
-        "hiddenSurvivor": false,
-        "roadDirs": []
-      },
-      {
-        "col": 8,
-        "row": 2,
+        "col": 5,
+        "row": 1,
         "base": "GRASS",
         "structure": null,
         "path": null,
@@ -944,11 +2047,14 @@
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
         "roadDirs": [],
-        "buildingFootprintOf": "9,2"
+        "footprintHexes": [],
+        "buildingFootprintOf": "5,0"
       },
       {
-        "col": 4,
+        "col": 8,
         "row": 5,
         "base": "GRASS",
         "structure": null,
@@ -957,12 +2063,15 @@
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
         "roadDirs": [],
-        "buildingFootprintOf": "5,5"
+        "footprintHexes": [],
+        "buildingFootprintOf": "9,5"
       },
       {
-        "col": 3,
-        "row": 7,
+        "col": 7,
+        "row": 0,
         "base": "GRASS",
         "structure": null,
         "path": null,
@@ -970,63 +2079,620 @@
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
         "roadDirs": [],
-        "buildingFootprintOf": "4,7"
+        "footprintHexes": [],
+        "buildingFootprintOf": "6,1"
+      },
+      {
+        "col": 7,
+        "row": 12,
+        "base": "GRASS",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": "6,13"
+      },
+      {
+        "col": 8,
+        "row": 13,
+        "base": "GRASS",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": "7,13"
+      },
+      {
+        "col": 5,
+        "row": 8,
+        "base": "DIRT",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 6,
+        "row": 8,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 7,
+        "row": 8,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
       },
       {
         "col": 7,
         "row": 7,
-        "base": "GRASS",
+        "base": "FOREST",
         "structure": null,
         "path": null,
         "building": null,
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
         "roadDirs": [],
-        "buildingFootprintOf": "8,7"
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 7,
+        "row": 6,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 6,
+        "row": 6,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 5,
+        "row": 6,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 5,
+        "row": 5,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 6,
+        "row": 4,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 6,
+        "row": 5,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 3,
+        "row": 10,
+        "base": "DIRT",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 2,
+        "row": 11,
+        "base": "DIRT",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 4,
+        "row": 9,
+        "base": "DIRT",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 6,
+        "row": 9,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 7,
+        "row": 10,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 8,
+        "row": 11,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 9,
+        "row": 10,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 9,
+        "row": 11,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 10,
+        "row": 11,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 1,
+        "row": 6,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 1,
+        "row": 5,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 1,
+        "row": 4,
+        "base": "FOREST",
+        "structure": null,
+        "path": "RIVER",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 1,
+        "row": 3,
+        "base": "FOREST",
+        "structure": null,
+        "path": "RIVER",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 3,
+        "row": 2,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 1,
+        "row": 1,
+        "base": "FOREST",
+        "structure": null,
+        "path": "RIVER",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 3,
+        "row": 0,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
       },
       {
         "col": 0,
-        "row": 9,
-        "base": "GRASS",
+        "row": 0,
+        "base": "FOREST",
         "structure": null,
         "path": null,
         "building": null,
         "fortifyLevel": 0,
         "resource": null,
         "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
         "roadDirs": [],
-        "buildingFootprintOf": "1,9"
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 10,
+        "row": 0,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 9,
+        "row": 1,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 9,
+        "row": 0,
+        "base": "FOREST",
+        "structure": null,
+        "path": null,
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 0,
+        "row": 6,
+        "base": "GRASS",
+        "structure": null,
+        "path": "RIVER",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 0,
+        "row": 5,
+        "base": "GRASS",
+        "structure": null,
+        "path": "RIVER",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 1,
+        "row": 2,
+        "base": "GRASS",
+        "structure": null,
+        "path": "RIVER",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
+      },
+      {
+        "col": 2,
+        "row": 0,
+        "base": "GRASS",
+        "structure": null,
+        "path": "RIVER",
+        "building": null,
+        "fortifyLevel": 0,
+        "resource": null,
+        "hiddenSurvivor": false,
+        "hiddenSurvivorId": null,
+        "exploreOverride": null,
+        "roadDirs": [],
+        "footprintHexes": [],
+        "buildingFootprintOf": null
       }
     ]
   },
-  "storyTriggers": [
+  "enemyUnits": [
     {
-      "type": "round",
-      "round": 1,
-      "title": "Voices in the Fog",
-      "text": "Through the morning haze you hear voices — desperate, frightened. Others survived the night. Find at least two of them and cut down the dead before dusk.",
-      "flag": "gathering_intro"
+      "type": "zombie",
+      "col": 1,
+      "row": 9,
+      "overrides": {}
     },
     {
-      "type": "round",
-      "round": 6,
-      "title": "The Light is Fading",
-      "text": "Long shadows stretch across the square. This is the last of the daylight — when dusk falls you will be out of time. Hurry.",
-      "flag": "gathering_last_day"
+      "type": "zombie",
+      "col": 2,
+      "row": 4,
+      "overrides": {}
     },
     {
-      "type": "area",
-      "hexes": [
-        {
-          "col": 4,
-          "row": 7
-        }
-      ],
-      "title": "Sanctuary",
-      "text": "The apothecary's door is barricaded from the inside. You call out and hear weeping — then the scrape of wood as the barricade is removed. A survivor emerges, pale but alive.",
-      "flag": "found_apothecary"
+      "type": "zombie",
+      "col": 6,
+      "row": 5,
+      "overrides": {}
+    },
+    {
+      "type": "zombie",
+      "col": 7,
+      "row": 7,
+      "overrides": {}
+    },
+    {
+      "type": "zombie",
+      "col": 9,
+      "row": 1,
+      "overrides": {}
     }
   ]
 }

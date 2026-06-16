@@ -19,6 +19,7 @@ import { ITEMS } from './items.js';
 import { concreteFactionOf } from './factions.js';
 import { computeLineOfSight } from './actions.js';
 import { PlanActionType, MAX_PLAN_LENGTH } from './planner.js';
+import { DAMAGE_SCALE } from './balance.js';
 
 // ── Goal names ───────────────────────────────────────────────────────────────
 
@@ -269,7 +270,8 @@ export function assessHeroBoard(sim) {
     unexploredBuildings, nearestUnexplored,
     heroOnNode, heroInBuilding, heroTileExplored, heroTileFortLevel,
     nearestEnemyDist,
-    totalBudget: sim.actionsLeft,
+    // Difficulty delta floors at 1 so an Easy AI still acts every round.
+    totalBudget: Math.max(1, sim.actionsLeft + (sim.aiDifficultyDelta ?? 0)),
     heroPlayerCount:  (sim.playerCounts && sim.playerCounts.hero)  || 1,
     witchPlayerCount: (sim.playerCounts && sim.playerCounts.witch) || 1,
   };
@@ -397,7 +399,9 @@ export function estimateHeroCombat(attacker, defender, board) {
   const expectedDef = defenseOf(defender) + defBonus + fortBonus + defNightBonus + defGangupFlat + expectedDieValue(defAllyDice);
 
   const favorability = expectedAtk - expectedDef;
-  const expectedDamage = favorability > 0 ? (favorability > 3 ? 2 : 1) : 0;
+  // ×DAMAGE_SCALE: a favorable hit deals ~1 scaled point, an overwhelming one
+  // ~2, matching the scaled HP pools so canKill compares like-for-like.
+  const expectedDamage = (favorability > 0 ? (favorability > 3 ? 2 : 1) : 0) * DAMAGE_SCALE;
   const canKill = expectedDamage >= (defender.hp || 1);
 
   let classification;

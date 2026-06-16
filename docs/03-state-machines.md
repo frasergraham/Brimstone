@@ -15,7 +15,7 @@ Defined in `src/app-mode.js`. Controls what the player sees and what inputs are 
 | `MENU` | Browsing menus, lobby, game list. Game callbacks are no-ops. |
 | `PLANNING` | In a game, building a plan (not yet submitted). |
 | `SUBMITTED` | Plan locked, waiting for opponents. |
-| `RESOLVING` | Watching turn resolution animation (current round). |
+| `RESOLVING` | Watching turn resolution animation (current round). Campaign conversations also play inside RESOLVING — round-boundary ones run pre-planning with their own inline replay HUD; area-triggered ones interleave between resolution steps (the step loop blocks while the conversation owns the NEXT/pause flags). See `src/conversation-player.js`. |
 | `SUMMARY` | Post-resolution summary dialog. |
 | `PLAYBACK` | Full-game replay viewer (completed games only). |
 | `SPECTATING` | Read-only live game view. |

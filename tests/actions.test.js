@@ -19,6 +19,7 @@ import {
 import { TileType, BuildingType, ResourceType, WeaponType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus, FORT_IMPASSABLE_THRESHOLD, legacyTileType, decomposeTileType, isBuildingFootprint } from '../src/tiles.js';
 import { hexKey, getNeighbors, hexDistance } from '../src/hex.js';
 import { applyPostRoundEffects } from '../src/post-round-effects.js';
+import { applyEffect } from '../src/effects.js';
 
 function freshState() {
   return new GameState(true, true);
@@ -583,6 +584,65 @@ describe('executeBattle', () => {
     assert.equal(r.cost, 1);
   });
 
+  // Damage = tier × rolled weapon damage: hit=1×, crush (atk ≥ 2× def)=2×,
+  // great crush (atk ≥ 3× def)=3×. The unarmed attacker rolls 2D6, forced to
+  // 3+4=7 here, so a hit=7, crush=14, great crush=21. Forced-dice order is
+  // [atkDie, defDie] (advantage pools), the two damage dice, then — when the
+  // defender is wounded — the wound's own 1D6 surcharge die. The surcharge is
+  // rolled ONCE per blow (not per point): a crush on a wounded target with a
+  // forced 5 is 14+5=19.
+  function duel(atkDie, defDie, { wounded = false, dmgDice = [3, 4] } = {}) {
+    const state = freshState();
+    // Neutralize the random-map tile so only the forced dice + stats decide the
+    // roll ratio (no stray fort/footprint/forest from procgen).
+    const t = state.tiles.get(hexKey(2, 2));
+    t.base = TileType.GRASS; t.fortifyLevel = 0; clearFootprint(t);
+    const attacker = createMinion(2, 2);
+    attacker.attack = 0; attacker.weapon = null; attacker.abilities = []; attacker.effects = [];
+    const defender = new Entity(EntityType.SURVIVOR, 'hero', 2, 2);
+    defender.defense = 0; defender.weapon = null; defender.abilities = []; defender.effects = [];
+    defender.maxHp = 300; defender.hp = 300;
+    if (wounded) applyEffect(defender, 'wounded');
+    state.entities = [attacker, defender];
+    state.phase = Phase.DAY;            // neutral — no phase bonus for either side
+    state.setForcedDice(atkDie, defDie, ...dmgDice);
+    return executeBattle(state, attacker, defender);
+  }
+
+  test('ordinary hit (atk just above def) deals 1× weapon roll', () => {
+    const r = duel(3, 2); // 3 vs 2 — hit, below the 2× crush line
+    assert.equal(r.hit, true);
+    assert.equal(r.damage, 7); // 1× (3+4)
+  });
+
+  test('crush (atk ≥ 2× def) deals 2× weapon roll', () => {
+    const r = duel(2, 1); // 2 vs 1 — crush, below the 3× great line
+    assert.equal(r.damage, 14); // 2× (3+4)
+  });
+
+  test('great crush (atk ≥ 3× def) deals 3× weapon roll', () => {
+    const r = duel(6, 2); // 6 vs 2 — exactly 3×
+    assert.equal(r.damage, 21); // 3× (3+4)
+  });
+
+  test('crush on a WOUNDED target adds one rolled 1D6 surcharge', () => {
+    // Forced dice: atk 2, def 1, dmg 3+4, wounded d6 = 5.
+    const r = duel(2, 1, { wounded: true, dmgDice: [3, 4, 5] });
+    assert.equal(r.damage, 19); // crush 14 + 1D6(5) once
+  });
+
+  test('great crush on a WOUNDED target adds one rolled 1D6 surcharge', () => {
+    const r = duel(6, 2, { wounded: true, dmgDice: [3, 4, 2] });
+    assert.equal(r.damage, 23); // great crush 21 + 1D6(2)
+  });
+
+  test('wounded surcharge consumes the deterministic die stream (replay-safe)', () => {
+    const a = duel(2, 1, { wounded: true, dmgDice: [3, 4, 6] });
+    const b = duel(2, 1, { wounded: true, dmgDice: [3, 4, 1] });
+    assert.equal(a.damage, 20);
+    assert.equal(b.damage, 15);
+  });
+
   test('result includes attackRoll, defenseRoll, hit, margin', () => {
     const state = freshState();
     const minion = createMinion(state.hero.col, state.hero.row);
@@ -836,6 +896,38 @@ describe('executeBattle', () => {
     assert.ok(typeof r.defenderAllies === 'number');
   });
 
+  test('gang-up counts allies by END-OF-TURN position — a fleeing ally does not flank', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const targetHex = emptyPassableNeighbor(state, hero);
+    if (!targetHex) return;
+    const minion = createMinion(targetHex.col, targetHex.row);
+    minion.maxHp = 50; minion.hp = 50; // survive two probe battles
+    state.entities.push(minion);
+
+    // An ally flanking the target (adjacent to the target, not on the hero's hex).
+    const allyHex = getNeighbors(targetHex.col, targetHex.row).find(n => {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      return t && legacyTileType(t) !== TileType.RIVER && !isBuildingFootprint(t)
+        && !(n.col === hero.col && n.row === hero.row);
+    });
+    if (!allyHex) return;
+    const ally = new Entity(EntityType.SURVIVOR, 'hero', allyHex.col, allyHex.row);
+    ally.items = {};
+    state.entities.push(ally);
+
+    // Baseline — the ally stands adjacent to the target, so it flanks.
+    const before = executeBattle(state, hero, minion);
+    assert.ok(before.attackerAllies >= 1, 'an adjacent ally should flank by default');
+
+    // The resolver projects the ally's END-OF-TURN hex out of range (it moves
+    // away this same turn). It must no longer be counted as a gang-up ally.
+    state._turnEndPositions = new Map([[ally.id, { col: minion.col + 4, row: minion.row }]]);
+    const after = executeBattle(state, hero, minion);
+    assert.equal(after.attackerAllies, before.attackerAllies - 1,
+      'an ally whose end-of-turn position is out of range must not flank');
+  });
+
   test('multiple allies each add a d3 die (up to cap of 3)', () => {
     const state = freshState();
     const hero = state.hero;
@@ -982,10 +1074,9 @@ describe('executeBattle — splash damage', () => {
     state.entities.push(bystander);
 
     const r = executeBattle(state, hero, minion);
-    if (r.hit && r.attackRoll >= 2 * r.defenseRoll) {
-      // Should have splashed the bystander
-      assert.ok(bystander.hp < 5, 'bystander should take splash damage on crush');
-    }
+    // attackBonus=100 guarantees a crush regardless of dice
+    assert.ok(r.hit && r.attackRoll >= 2 * r.defenseRoll, 'should crush');
+    assert.ok(bystander.hp < 5, 'bystander should take splash damage on crush');
   });
 
   test('kill triggers splash on bystanders', () => {
@@ -1002,9 +1093,8 @@ describe('executeBattle — splash damage', () => {
     state.entities.push(bystander);
 
     const r = executeBattle(state, hero, minion);
-    if (r.killed) {
-      assert.ok(bystander.hp < 5, 'bystander should take splash damage on kill');
-    }
+    assert.ok(r.killed, 'attackBonus=100 vs 1 HP target should always kill');
+    assert.ok(bystander.hp < 5, 'bystander should take splash damage on kill');
   });
 
   test('attacker is excluded from splash', () => {
@@ -1018,9 +1108,8 @@ describe('executeBattle — splash damage', () => {
     state.entities.push(minion);
 
     const r = executeBattle(state, hero, minion);
-    if (r.killed) {
-      assert.equal(hero.hp, 10, 'attacker should not take splash damage');
-    }
+    assert.ok(r.killed, 'attackBonus=100 vs 1 HP target should always kill');
+    assert.equal(hero.hp, 10, 'attacker should not take splash damage');
   });
 
   test('splash can kill bystanders and remove them', () => {
@@ -1037,11 +1126,10 @@ describe('executeBattle — splash damage', () => {
     state.entities.push(fragile);
 
     const r = executeBattle(state, hero, minion);
-    if (r.killed) {
-      assert.ok(!state.entities.find(e => e.id === fragile.id),
-        'splash-killed bystander should be removed');
-      assert.ok(r.splashKills.length > 0, 'splashKills should contain the killed bystander');
-    }
+    assert.ok(r.killed, 'attackBonus=100 vs 1 HP target should always kill');
+    assert.ok(!state.entities.find(e => e.id === fragile.id),
+      'splash-killed bystander should be removed');
+    assert.ok(r.splashKills.length > 0, 'splashKills should contain the killed bystander');
   });
 
   test('no splash on normal hit (no crush, no kill)', () => {
@@ -1059,15 +1147,14 @@ describe('executeBattle — splash damage', () => {
     bystander.hp = 5; bystander.maxHp = 5;
     state.entities.push(bystander);
 
-    // Run many times — on a normal hit (1 dmg, no crush, no kill), no splash
-    for (let i = 0; i < 20; i++) {
-      minion.hp = 50;
-      bystander.hp = 5;
-      const r = executeBattle(state, hero, minion);
-      if (r.hit && r.attackRoll < 2 * r.defenseRoll && !r.killed) {
-        assert.equal(bystander.hp, 5, 'no splash on normal hit');
-      }
-    }
+    // Force all dice to 4: attackRoll = 4+1 = 5 vs defenseRoll = 4+0 = 4 —
+    // a hit, but not a crush (5 < 8) and not a kill (50 HP target).
+    state.setForcedDice(4, 4, 4, 4, 4, 4, 4, 4);
+    const r = executeBattle(state, hero, minion);
+    assert.ok(r.hit, 'forced dice should produce a hit');
+    assert.ok(r.attackRoll < 2 * r.defenseRoll, 'forced dice should not crush');
+    assert.ok(!r.killed, 'high-HP target should survive');
+    assert.equal(bystander.hp, 5, 'no splash on normal hit');
   });
 
   test('splashKills field is always present', () => {
@@ -1155,6 +1242,43 @@ describe('executeBattle — splash damage', () => {
         assert.deepStrictEqual(r.splashHits, [], 'splashHits should be empty on normal hit');
       }
     }
+  });
+});
+
+// ── Premium-weapon loot tier gate ─────────────────────────────────────────────
+// greatsword/warhammer are gated to late rounds (LOOT_TIER_GATE). Exercise the
+// real explore→_effectiveLoot→rollLoot path: before the gate they can NEVER drop;
+// past it they can. Uses a blacksmith tile (their loot source).
+describe('loot tier gate', () => {
+  function exploreBlacksmith(state, hero) {
+    const t = state.tiles.get(hexKey(hero.col, hero.row));
+    t.structure = null; t.building = BuildingType.BLACKSMITH;
+    t.explored = false; t.hiddenSurvivor = false; clearFootprint(t);
+    hero.weapon = null; hero.items = {};      // unarmed → a found weapon equips
+    executeExplore(state, hero);
+    return hero.weapon ?? Object.keys(hero.items).find(k => k === 'greatsword' || k === 'warhammer');
+  }
+
+  test('premium weapons NEVER drop before their gate round', () => {
+    const state = freshState();
+    state.round = 1;
+    let premium = 0;
+    for (let i = 0; i < 400; i++) {
+      const got = exploreBlacksmith(state, state.hero);
+      if (got === 'greatsword' || got === 'warhammer') premium++;
+    }
+    assert.equal(premium, 0, 'no greatsword/warhammer before round 8');
+  });
+
+  test('premium weapons CAN drop once past the gate round', () => {
+    const state = freshState();
+    state.round = 12; // past greatsword(8) + warhammer(10) gates
+    let premium = 0;
+    for (let i = 0; i < 600; i++) {
+      const got = exploreBlacksmith(state, state.hero);
+      if (got === 'greatsword' || got === 'warhammer') premium++;
+    }
+    assert.ok(premium > 0, `expected at least one premium drop past the gate, got ${premium}`);
   });
 });
 
@@ -1507,31 +1631,47 @@ describe('executeSummon', () => {
 // ── executeHeal ───────────────────────────────────────────────────────────────
 
 describe('executeHeal', () => {
-  test('heals 2 HP, costs 1 action, consumes herbs from shared inventory', () => {
+  test('heals 2D10 HP, costs 1 action, consumes herbs from shared inventory', () => {
     const state = freshState();
     const hero = state.hero;
     state.inventory.hero[ResourceType.HERBS] = 1;
-    hero.takeDamage(5);
+    hero.takeDamage(25);
+    const hpBefore = hero.hp;
+
+    state.forcedDice = [7, 3];   // the two d10s
+    const r = executeHeal(state, hero);
+    assert.equal(r.success, true);
+    assert.equal(r.cost, 1, 'Heal should cost 1 action');
+    assert.equal(hero.hp, hpBefore + 10); // herbs heal 2D10 (7 + 3)
+    assert.equal(r.healed, 10, 'result reports the rolled heal amount for the HP floater');
+    assert.equal(state.inventory.hero[ResourceType.HERBS], 0, 'Herbs should be consumed from shared inventory');
+  });
+
+  test('heal roll stays within the 2..20 envelope without forced dice', () => {
+    const state = freshState();
+    const hero = state.hero;
+    state.inventory.hero[ResourceType.HERBS] = 1;
+    hero.takeDamage(25);
     const hpBefore = hero.hp;
 
     const r = executeHeal(state, hero);
     assert.equal(r.success, true);
-    assert.equal(r.cost, 1, 'Heal should cost 1 action');
-    assert.equal(hero.hp, hpBefore + 2);
-    assert.equal(state.inventory.hero[ResourceType.HERBS], 0, 'Herbs should be consumed from shared inventory');
+    assert.ok(r.healed >= 2 && r.healed <= 20, `2D10 must land in 2..20 (got ${r.healed})`);
+    assert.equal(hero.hp, hpBefore + r.healed);
   });
 
   test('witch can heal too (from witch inventory)', () => {
     const state = freshState();
     const witch = state.witch;
     state.inventory.witch[ResourceType.HERBS] = 1;
-    witch.takeDamage(3);
+    witch.takeDamage(25);
     const hpBefore = witch.hp;
 
+    state.forcedDice = [10, 10];
     const r = executeHeal(state, witch);
     assert.equal(r.success, true);
     assert.equal(r.cost, 1);
-    assert.equal(witch.hp, hpBefore + 2);
+    assert.equal(witch.hp, hpBefore + 20);
     assert.equal(state.inventory.witch[ResourceType.HERBS], 0, 'Herbs consumed from witch inventory');
   });
 
@@ -1555,6 +1695,7 @@ describe('executeHeal', () => {
     const hero = state.hero;
     state.inventory.hero[ResourceType.HERBS] = 1;
     hero.takeDamage(1); // 1 below max
+    state.forcedDice = [10, 10];
     executeHeal(state, hero);
     assert.equal(hero.hp, hero.maxHp);
   });
@@ -1565,13 +1706,14 @@ describe('executeHeal', () => {
     survivor.items = {};
     state.entities.push(survivor);
     state.inventory.hero[ResourceType.HERBS] = 1;
-    survivor.takeDamage(3);
+    survivor.takeDamage(20);
     const hpBefore = survivor.hp;
 
     const r = executeHeal(state, survivor);
     assert.equal(r.success, true);
     assert.equal(r.cost, 1);
-    assert.equal(survivor.hp, hpBefore + 2);
+    assert.equal(survivor.hp, hpBefore + r.healed);
+    assert.ok(r.healed >= 2 && r.healed <= 20);
     assert.equal(state.inventory.hero[ResourceType.HERBS], 0, 'Herbs consumed from shared inventory');
   });
 
@@ -1621,6 +1763,9 @@ describe('executeUseItem — weapon equip', () => {
   test('equipping a weapon applies its stats and costs 0', () => {
     const state = freshState();
     const hero = state.hero;
+    // The hero starts with a sword equipped; unequip so we measure the equip
+    // from the unarmed base (ATK 2) and can verify the sword's +2 stat applies.
+    hero.weapon = null;
     hero.items['sword'] = 1;
     const atkBefore = hero.getAttack();
 
@@ -1648,6 +1793,9 @@ describe('auto-equip weapon on loot find', () => {
   function blacksmithState() {
     const state = freshState();
     const hero = state.hero;
+    // Hero now starts with a sword equipped; strip it so these tests exercise
+    // the "hero has no weapon" auto-equip path from a clean unarmed state.
+    hero.weapon = null;
     const t = state.tiles.get(hexKey(hero.col, hero.row));
     decomposeTileType(t, TileType.BUILDING);
     t.building = BuildingType.BLACKSMITH;
@@ -1717,13 +1865,13 @@ describe('executeUseAbility — HEAL', () => {
     healer.abilities = [SurvivorAbility.HEAL];
     healer.items = {};
     state.entities.push(healer);
-    hero.takeDamage(5);
+    hero.takeDamage(20);
     const hpBefore = hero.hp;
 
     const r = executeUseAbility(state, healer, SurvivorAbility.HEAL);
     assert.equal(r.success, true);
     assert.equal(r.cost, 1, 'HEAL ability costs 1 action');
-    assert.equal(hero.hp, hpBefore + 1);
+    assert.equal(hero.hp, hpBefore + 7); // HEAL ability heals 1 × DAMAGE_SCALE
   });
 
   test('HEAL fails if hero not on same hex', () => {

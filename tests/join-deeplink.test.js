@@ -1,11 +1,12 @@
-// Tests for the /join deep-link flow: AASA config, server redirect route,
-// and hash-based deep link parsing.
+// Tests for the /join deep-link flow: AASA config and the server redirect
+// route (server/join-route.js, mounted at GET /join in server.js).
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import http from 'http';
+
+import { handleJoinRedirect } from '../server/join-route.js';
 
 // ── AASA file validation ───────────────────────────────────────────────────
 
@@ -31,121 +32,77 @@ describe('apple-app-site-association', () => {
   });
 });
 
-// ── Server /join route ─────────────────────────────────────────────────────
+// ── /join redirect handler (behavioral) ─────────────────────────────────────
 
-describe('/join server route', () => {
-  /** Make a GET request and return { statusCode, headers }. */
-  function get(path) {
-    return new Promise((resolve, reject) => {
-      const port = process.env.PORT || 3000;
-      const req = http.get(`http://localhost:${port}${path}`, (res) => {
-        res.resume(); // drain body
-        resolve({ statusCode: res.statusCode, headers: res.headers });
-      });
-      req.on('error', reject);
-      req.setTimeout(3000, () => { req.destroy(); reject(new Error('timeout')); });
-    });
-  }
+/** Drive the real handler with fake Express req/res objects. */
+function run(query) {
+  const res = {
+    statusCode: 200,
+    redirectedTo: null,
+    body: null,
+    status(code) { this.statusCode = code; return this; },
+    send(body)   { this.body = body; return this; },
+    redirect(loc) { this.statusCode = 302; this.redirectedTo = loc; return this; },
+  };
+  handleJoinRedirect({ query }, res);
+  return res;
+}
 
-  test('redirects /join?code=ABCDEF to /#join=ABCDEF', async () => {
-    let res;
-    try { res = await get('/join?code=ABCDEF'); } catch { return; /* server not running — skip */ }
+describe('/join redirect handler', () => {
+  test('redirects /join?code=ABCDEF to /#join=ABCDEF', () => {
+    const res = run({ code: 'ABCDEF' });
     assert.equal(res.statusCode, 302);
-    assert.ok(res.headers.location, 'should have Location header');
-    assert.ok(res.headers.location.includes('#join=ABCDEF'), `Location should contain #join=ABCDEF, got: ${res.headers.location}`);
+    assert.equal(res.redirectedTo, '/#join=ABCDEF');
   });
 
-  test('redirects /join?code=XYZ&slot=2 to /#join=XYZ&slot=2', async () => {
-    let res;
-    try { res = await get('/join?code=XYZ&slot=2'); } catch { return; }
+  test('redirects /join?code=XYZ&slot=2 to /#join=XYZ&slot=2', () => {
+    const res = run({ code: 'XYZ', slot: '2' });
     assert.equal(res.statusCode, 302);
-    assert.ok(res.headers.location.includes('#join=XYZ'), `should contain #join=XYZ, got: ${res.headers.location}`);
-    assert.ok(res.headers.location.includes('&slot=2'), `should contain &slot=2, got: ${res.headers.location}`);
+    assert.equal(res.redirectedTo, '/#join=XYZ&slot=2');
   });
 
-  test('returns 400 when code is missing', async () => {
-    let res;
-    try { res = await get('/join'); } catch { return; }
+  test('slot=0 is preserved (falsy but valid seat index)', () => {
+    const res = run({ code: 'XYZ', slot: '0' });
+    assert.equal(res.redirectedTo, '/#join=XYZ&slot=0');
+  });
+
+  test('returns 400 when code is missing', () => {
+    const res = run({});
     assert.equal(res.statusCode, 400);
+    assert.equal(res.redirectedTo, null);
   });
 
-  test('returns 400 when code is empty', async () => {
-    let res;
-    try { res = await get('/join?code='); } catch { return; }
-    assert.equal(res.statusCode, 400);
-  });
-});
-
-// ── Hash deep-link regex (mirrors _checkGameDeepLink in main.js) ───────────
-
-describe('#join= hash parsing', () => {
-  // The regex used in _checkGameDeepLink — extracted here for direct testing
-  const JOIN_RE = /^#join=([^&]+)(?:&slot=(\d+))?$/;
-
-  test('matches #join=ABCDEF with code only', () => {
-    const m = '#join=ABCDEF'.match(JOIN_RE);
-    assert.ok(m, 'should match');
-    assert.equal(m[1], 'ABCDEF');
-    assert.equal(m[2], undefined, 'slot should be undefined');
+  test('returns 400 when code is empty or whitespace', () => {
+    assert.equal(run({ code: '' }).statusCode, 400);
+    assert.equal(run({ code: '   ' }).statusCode, 400);
   });
 
-  test('matches #join=CODE&slot=2', () => {
-    const m = '#join=CODE&slot=2'.match(JOIN_RE);
-    assert.ok(m, 'should match');
-    assert.equal(m[1], 'CODE');
-    assert.equal(m[2], '2');
+  test('empty slot is omitted from the hash', () => {
+    const res = run({ code: 'ABC', slot: '' });
+    assert.equal(res.redirectedTo, '/#join=ABC');
   });
 
-  test('matches #join=CODE&slot=0', () => {
-    const m = '#join=CODE&slot=0'.match(JOIN_RE);
-    assert.ok(m, 'should match');
-    assert.equal(m[1], 'CODE');
-    assert.equal(m[2], '0');
+  test('special characters in code are URL-encoded', () => {
+    const res = run({ code: 'A B&C' });
+    assert.equal(res.redirectedTo, '/#join=A%20B%26C');
   });
 
-  test('matches URL-encoded codes', () => {
-    const m = '#join=AB%20CD'.match(JOIN_RE);
-    assert.ok(m, 'should match');
+  test('redirect hash matches the client deep-link contract (#join=CODE[&slot=N])', () => {
+    // The client parses location.hash with /^#join=([^&]+)(?:&slot=(\d+))?$/
+    // (see _checkGameDeepLink in src/main.js) — verify the handler's output
+    // round-trips through that contract, including encoded codes.
+    const CLIENT_JOIN_RE = /^#join=([^&]+)(?:&slot=(\d+))?$/;
+
+    const plain = run({ code: 'ABCDEF' }).redirectedTo.slice(1); // strip leading '/'
+    let m = plain.match(CLIENT_JOIN_RE);
+    assert.ok(m, 'plain code must match the client regex');
+    assert.equal(decodeURIComponent(m[1]), 'ABCDEF');
+    assert.equal(m[2], undefined);
+
+    const withSlot = run({ code: 'AB CD', slot: '2' }).redirectedTo.slice(1);
+    m = withSlot.match(CLIENT_JOIN_RE);
+    assert.ok(m, 'encoded code + slot must match the client regex');
     assert.equal(decodeURIComponent(m[1]), 'AB CD');
-  });
-
-  test('does not match #invite=CODE', () => {
-    const m = '#invite=CODE'.match(JOIN_RE);
-    assert.equal(m, null);
-  });
-
-  test('does not match #game=ROOMID', () => {
-    const m = '#game=ROOMID'.match(JOIN_RE);
-    assert.equal(m, null);
-  });
-
-  test('does not match empty hash', () => {
-    const m = '#'.match(JOIN_RE);
-    assert.equal(m, null);
-  });
-});
-
-// ── Link URL format ────────────────────────────────────────────────────────
-
-describe('join link URL format', () => {
-  test('new URL produces clean path without double slash', () => {
-    // Simulates _linkOrigin() returning a trailing-slash origin (web)
-    const withSlash = new URL('/join?code=ABC', 'https://calebshollow.com/').href;
-    assert.equal(withSlash, 'https://calebshollow.com/join?code=ABC');
-
-    // Simulates _linkOrigin() returning no trailing slash (Capacitor)
-    const noSlash = new URL('/join?code=ABC', 'https://calebshollow.com').href;
-    assert.equal(noSlash, 'https://calebshollow.com/join?code=ABC');
-  });
-
-  test('slot parameter is included correctly', () => {
-    const url = new URL('/join?code=XYZ&slot=1', 'https://calebshollow.com').href;
-    assert.equal(url, 'https://calebshollow.com/join?code=XYZ&slot=1');
-  });
-
-  test('special characters in code are preserved', () => {
-    const code = encodeURIComponent('A B+C');
-    const url = new URL(`/join?code=${code}`, 'https://calebshollow.com').href;
-    assert.ok(url.includes(`code=${code}`), `URL should contain encoded code, got: ${url}`);
+    assert.equal(m[2], '2');
   });
 });

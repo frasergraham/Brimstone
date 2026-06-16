@@ -46,6 +46,7 @@ import {
 import {
   createMissionEditor, createPreviewController, EditorTool, ENEMY_UNIT_TYPES,
   addStoryTrigger, removeStoryTrigger,
+  addNpc, removeNpc, addConversation, removeConversation,
   addWave, removeWave, populateFromMission, CreationMode,
   valuePanelKind, ToolValueKind, createLayerVisibility, showStructures,
   roadNodeMarkersVisible, stripTileOverlays, mapSizePreset,
@@ -54,15 +55,20 @@ import {
   overlayDarkenVisible, overlayEditedKeys,
   areaTriggerLayerVisible, areaTriggerHexKeys,
   PHASE_KINDS, addPhase, removePhaseAt, movePhase, setPhaseLoop,
-  buildTimelineModel,
   resourceMapToRows, rowsToResourceMap,
   lootOverridesToPicker, pickerToLootOverrides,
   saveWip, listWip, loadWip, removeWip,
 } from './mission-editor.js';
 import { MAP_SIZES } from '../map.js';
+import { LogicGraphEditor } from './logic-graph-editor.js';
+import { missionToGraph } from '../mission-logic/migrate.js';
+import { autoLayout, addNode, removeNode } from '../mission-logic/graph-edit.js';
+import { survivorRef } from '../survivor-discovery.js';
+import { emptyGraph } from '../mission-logic/graph.js';
+import { locationHexes } from '../mission-logic/node-types.js';
 import { createTabController } from './tab-controller.js';
 import { attachEditorCanvasControls } from './editor-canvas-input.js';
-import { loadMissionJSON, validateBuildingFootprints, KNOWN_OBJECTIVE_TYPES } from '../campaign/json-mission.js';
+import { loadMissionJSON, validateBuildingFootprints } from '../campaign/json-mission.js';
 import { missionJSONUrl, missionFileName } from '../campaign/mission-catalog.js';
 import { CONDITIONS } from '../campaign/condition-registry.js';
 
@@ -112,7 +118,6 @@ const TOOL_PALETTE = [
   { id: EditorTool.PAINT_STRUCTURE, icon: '🏠', label: 'Paint Structure', tip: 'Place or clear a building on clicked tiles' },
   { id: EditorTool.PAINT_ROAD,      icon: '🛤', label: 'Road',           tip: 'Paint a road over the base + wire it to adjacent roads' },
   { id: EditorTool.PAINT_RIVER,     icon: '🌊', label: 'River',          tip: 'Paint a river — must stay a branching tree (no loops or merges)' },
-  { id: EditorTool.SET_RESOURCE,    icon: '💎', label: 'Set Resource',    tip: 'Set or clear a harvestable resource on clicked tiles' },
   { id: EditorTool.HIDDEN_SURVIVOR, icon: '🙋', label: 'Hidden Survivor', tip: 'Place a hidden survivor to be discovered on a tile — pick a specific roster character or "Any"' },
   { id: EditorTool.EXPLORE_OVERRIDE, icon: '🔍', label: 'Explore Override', tip: 'Pin a FIXED search result on a tile — exploring it yields exactly that loot instead of a random roll' },
   { id: EditorTool.ENEMY_UNIT,      icon: '🧟', label: 'Enemy Unit',      tip: 'Place / remove a pre-placed enemy unit on a tile' },
@@ -121,6 +126,7 @@ const TOOL_PALETTE = [
   { id: EditorTool.ROAD_NODE,       icon: '📍', label: 'Road Node',       tip: 'Toggle a road-network waypoint — roads re-generate automatically' },
   { id: EditorTool.POWER_NODE,      icon: '🔮', label: 'Power Node',      tip: 'Toggle a Power Node hex — contiguous hexes group into one node (max 5)' },
   { id: EditorTool.DELETE,          icon: '🧹', label: 'Delete',          tip: 'Clear a tile back to blank base (terrain, structure, path, resource, survivor, explore override)' },
+  { id: EditorTool.ADD_TO_GRAPH,    icon: '🔗', label: 'Add to Graph',    tip: 'Click a placed unit → Actor node (OnSpawn/OnDeath); click an empty hex → Location node — added to the Logic graph' },
 ];
 
 // Short hints shown in the VALUE panel for the value-less tools.
@@ -250,9 +256,6 @@ export function initEditor(doc = document, initOpts = {}) {
   const { initialLoad = null } = initOpts;
   const canvas = doc.getElementById('e-render-canvas');
   const palette = doc.getElementById('e-palette');
-  // EC: the main-area timeline tab. The canvas pane and this pane are the two
-  // main-area views; #e-main-tabs (built below) toggles between them.
-  const timelinePane = doc.getElementById('e-timeline-pane');
   const mainTabbar = doc.getElementById('e-main-tabs');
   // The map-area frame (#e-canvas-pane) is position:relative — both the toast
   // host (item 4) and the in-map controls (items 1 + 3) are anchored to it so
@@ -277,6 +280,79 @@ export function initEditor(doc = document, initOpts = {}) {
   let ghost = null; // { entrance:{col,row}, candidate:{col,row}|null } | null
   let lastBuildingHex = null;
 
+  // Bottom-corner hex info panel — detail lines about the hovered hex (survivor,
+  // named location, loot override, terrain…) with its [col,row] at the bottom.
+  // The element is created with the map controls; updateHexInfo() repopulates it.
+  let hexInfo = null;
+  let _builtCache = null; // memoised built map for hex lookups; cleared on every edit
+  const builtMap = () => {
+    if (!_builtCache) { try { _builtCache = buildMissionMap(editor.getMapDef()); } catch { _builtCache = null; } }
+    return _builtCache;
+  };
+  const builtTileAt = (hex) => builtMap()?.tiles.get(hexKey(hex.col, hex.row)) ?? null;
+  const friendly = (s) => String(s ?? '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  const terrainLabel = (tile) => {
+    if (!tile) return 'Grass';
+    const parts = [friendly(tile.base ?? 'grass')];
+    if (tile.building) parts.push(friendly(tile.building));
+    else if (tile.structure === 'building') parts.push('Building');
+    if (tile.path) parts.push(friendly(tile.path));
+    if (tile.resource) parts.push(friendly(tile.resource));
+    if ((tile.fortifyLevel ?? 0) > 0) parts.push(`Fortify ${tile.fortifyLevel}`);
+    return parts.join(', ');
+  };
+  // Ordered detail lines for a hex (terrain last; coordinate added separately).
+  const hexInfoLines = (hex) => {
+    const mapDef = editor.getMapDef();
+    const meta = editor.getMeta();
+    const tile = builtTileAt(hex);
+    const at = (p) => p && p.col === hex.col && p.row === hex.row;
+    const lines = [];
+    const unit = editor.enemyUnitAt(hex);
+    if (unit) lines.push(`Enemy: ${friendly(unit.type)}${(unit.level ?? 1) > 1 ? ` L${unit.level}` : ''}`);
+    const npc = (meta.npcs ?? []).find(at);
+    if (npc) lines.push(`NPC: ${npc.id}${npc.survivorName ? ` (${npc.survivorName})` : ''}`);
+    if (at(mapDef.heroStart)) lines.push('Hero start');
+    if (at(mapDef.witchStart)) lines.push('Witch start');
+    if ((meta.survivorStartPositions ?? []).some(at)) lines.push('Survivor start');
+    const pn = (mapDef.witchObjectives ?? []).find((o) => at(o) || (o.hexes ?? []).some(at));
+    if (pn) lines.push(`Power Node${pn.label ? ` ("${pn.label}")` : ''}`);
+    if (tile?.hiddenSurvivor) lines.push(`Survivor (${tile.hiddenSurvivorId || 'random'})`);
+    // Logic-graph regions over this hex — Location (a named place) / Area trigger
+    // (fires on enter). Uses the same deduped regions the map overlay draws, so a
+    // Location wired into an Area reads as one "Area trigger (name)" line.
+    for (const reg of logicRegions(meta.logic)) {
+      if (!reg.hexes.some(at)) continue;
+      if (reg.color === 'loc') lines.push(`Named Location ("${reg.label || `${hex.col},${hex.row}`}")`);
+      else lines.push(`Area trigger${reg.label ? ` ("${reg.label}")` : ''}`);
+    }
+    if (tile?.exploreOverride) lines.push(`Loot Override (${exploreOverrideLabel(tile.exploreOverride)})`);
+    if ((mapDef.roadNodes ?? []).includes(hexKey(hex.col, hex.row))) lines.push('Road node');
+    if (tile?.buildingFootprintOf) lines.push(`Building footprint (of ${tile.buildingFootprintOf})`);
+    lines.push(terrainLabel(tile));
+    return lines;
+  };
+  const updateHexInfo = () => {
+    if (!hexInfo) return;
+    if (!hoverHex) { hexInfo.style.visibility = 'hidden'; hexInfo.innerHTML = ''; return; }
+    hexInfo.innerHTML = '';
+    for (const line of hexInfoLines(hoverHex)) {
+      const d = doc.createElement('div'); d.className = 'e-hexinfo-line'; d.textContent = line;
+      hexInfo.append(d);
+    }
+    const coord = doc.createElement('div'); coord.className = 'e-hexinfo-coord';
+    coord.textContent = `[${hoverHex.col}, ${hoverHex.row}]`;
+    hexInfo.append(coord);
+    hexInfo.style.visibility = 'visible';
+  };
+
+  // Place / Edit interaction mode (item 8). In 'edit' a click selects a placed
+  // enemy unit (selectedUnit) for modify/delete in the right-panel inspector
+  // instead of painting. renderSelection() is wired once the sidebar exists.
+  let editMode = 'place';
+  let selectedUnit = null; // the selected enemy-unit def {type,col,row,level?,overrides}
+  let renderSelection = () => {};
+
   // Notifies the top-bar Undo/Redo buttons after every history change. Wired by
   // the host page via the returned handle's onHistoryChange().
   let historyListener = null;
@@ -291,7 +367,10 @@ export function initEditor(doc = document, initOpts = {}) {
   //   'new'     (createNew via the modal).
   let missionChangeListener = null;
   const notifyMissionChange = (info) => {
-    try { missionChangeListener?.(info); } catch { /* host listener errors must never break the editor */ }
+    // Surface the loaded mission's title/id so the host can show it in the bar.
+    let title = null, id = info?.id ?? null;
+    try { const m = editor.getMeta(); title = m?.title ?? null; id = id ?? m?.id ?? null; } catch { /* meta not ready */ }
+    try { missionChangeListener?.({ title, ...info, id }); } catch { /* host listener errors must never break the editor */ }
   };
 
   // The controller drives the model; `render()` rebuilds + redraws. (Dirty
@@ -336,11 +415,11 @@ export function initEditor(doc = document, initOpts = {}) {
   function rerender() {
     // Cheap full rebuild — editor maps are small. Reassigning state keeps the
     // Renderer instance, so zoom/pan persist across edits.
+    _builtCache = null; // invalidate the hex-info map lookup after an edit
     renderer.state = buildState(editor, layers);
     renderer.resize();
     draw();
     refreshPowerNodes(); // node toggles change the cluster list
-    rebuildTimeline();   // events / phaseCycle may have changed
     notifyHistory();
     scheduleAutosave();  // persist the edit to localStorage (debounced)
   }
@@ -366,11 +445,81 @@ export function initEditor(doc = document, initOpts = {}) {
     if (!ctx) return;
     drawDarkenGeneratedOverlay(ctx);
     drawAreaTriggerMarkers(ctx);
+    drawLogicLocations(ctx);   // item 4 — Location / Area nodes from the logic graph
     drawHiddenSurvivorMarkers(ctx);
     drawExploreOverrideMarkers(ctx);
     drawRoadNodeMarkers(ctx);
     drawBuildingGhost(ctx);
+    drawSelectedUnit(ctx);      // item 8 — ring the selected (edit-mode) unit
+    drawHoverHighlight(ctx);    // item 5 — outline the hex under the cursor
     drawEdgeResizeButtons(ctx);
+  }
+
+  // ── Selected-unit ring (item 8) ─────────────────────────────────────────────
+  function drawSelectedUnit(ctx) {
+    if (!selectedUnit) return;
+    const r = renderer.hexSize * renderer.zoomLevel;
+    const { x, y } = renderer.hexToCanvasPos(selectedUnit.col, selectedUnit.row);
+    ctx.save();
+    _hexPath(ctx, x, y, r * 0.96);
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = '#ff5d5d';
+    ctx.setLineDash([5, 3]);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // ── Hover highlight (item 5) ────────────────────────────────────────────────
+  // Outline the hex under the cursor so the author always knows which cell a
+  // click will hit; the coordinate itself shows in the bottom-corner readout.
+  function drawHoverHighlight(ctx) {
+    if (!hoverHex) return;
+    const r = renderer.hexSize * renderer.zoomLevel;
+    const { x, y } = renderer.hexToCanvasPos(hoverHex.col, hoverHex.row);
+    ctx.save();
+    _hexPath(ctx, x, y, r * 0.98);
+    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = 'rgba(255,228,140,0.95)';
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(255,228,140,0.12)';
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // ── Logic-graph Location / Area highlights (item 4) ─────────────────────────
+  // Tint every hex referenced by a Location node (and an Area node's region) in
+  // the mission's logic graph, with the node's name on its first cell — so the
+  // map shows where the graph's places actually are. Editor-only post-draw paint.
+  function drawLogicLocations(ctx) {
+    const regions = logicRegions(editor.getMeta()?.logic);
+    if (!regions.length) return;
+    const r = renderer.hexSize * renderer.zoomLevel;
+    ctx.save();
+    ctx.lineWidth = 2;
+    ctx.font = `${Math.max(9, r * 0.42)}px system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const reg of regions) {
+      const fill = reg.color === 'loc' ? 'rgba(95,200,210,0.26)' : 'rgba(150,90,230,0.22)';
+      const line = reg.color === 'loc' ? 'rgba(150,230,240,0.9)' : 'rgba(200,150,255,0.8)';
+      for (const h of reg.hexes) {
+        const { x, y } = renderer.hexToCanvasPos(h.col, h.row);
+        _hexPath(ctx, x, y, r);
+        ctx.fillStyle = fill; ctx.fill();
+        ctx.strokeStyle = line; ctx.stroke();
+      }
+      // Label on the first cell (📍 for locations).
+      const first = reg.hexes[0];
+      if (first && reg.label) {
+        const { x, y } = renderer.hexToCanvasPos(first.col, first.row);
+        const txt = (reg.color === 'loc' ? '📍 ' : '') + reg.label;
+        ctx.fillStyle = '#08110f';
+        ctx.fillText(txt, x + 1, y - r * 0.9 + 1);
+        ctx.fillStyle = reg.color === 'loc' ? '#d6fbff' : '#f0e0ff';
+        ctx.fillText(txt, x, y - r * 0.9);
+      }
+    }
+    ctx.restore();
   }
 
   // ── Building-footprint ghost (P6, item 3) ───────────────────────────────────
@@ -379,16 +528,18 @@ export function initEditor(doc = document, initOpts = {}) {
   // red X on the cursor hex when no adjacent hex is eligible. Recomputed only on
   // hover change (updateGhost) so the buildMissionMap eligibility probe isn't run
   // per mousemove event.
+  // Returns true if it issued a redraw (so the hover handler can avoid a second).
   function updateGhost() {
     const active = editor.activeTool === EditorTool.PAINT_STRUCTURE
       && !!editor.getPaintValue('structure') && !!hoverHex;
     if (!active) {
-      if (ghost) { ghost = null; draw(); }
-      return;
+      if (ghost) { ghost = null; draw(); return true; }
+      return false;
     }
     const candidate = editor.footprintCandidateAt(hoverHex);
     ghost = { entrance: { col: hoverHex.col, row: hoverHex.row }, candidate };
     draw();
+    return true;
   }
 
   function _hexPath(ctx, x, y, rad) {
@@ -683,6 +834,17 @@ export function initEditor(doc = document, initOpts = {}) {
     // Intercept clicks landing on an on-canvas resize button before they paint.
     onCanvasClick: (pt) => handleEdgeButtonClick(pt),
     onPaint: (hex) => {
+      // "Add to Graph" tool doesn't paint the map — it creates a logic-graph node.
+      if (editor.activeTool === EditorTool.ADD_TO_GRAPH) { addHexToGraph(hex); return; }
+      // Edit mode (item 8): a click SELECTS the placed enemy unit under it for
+      // modify/delete in the inspector — it never paints.
+      if (editMode === 'edit') { selectUnitAt(hex); return; }
+      // Place mode: laying an enemy unit on a hex that already holds one is a
+      // no-op (use Edit mode to change/remove it) — replaces the old toggle.
+      if (editor.activeTool === EditorTool.ENEMY_UNIT && editor.enemyUnitAt(hex)) {
+        toast.show('A unit is already here — switch to Edit mode (☜) to change or delete it.', { type: 'info' });
+        return;
+      }
       const res = editor.applyAt(hex);
       // A blocked edit (e.g. the Power-Node 5-hex cap, or no eligible footprint
       // hex when placing a building) surfaces its reason.
@@ -692,13 +854,22 @@ export function initEditor(doc = document, initOpts = {}) {
         // Remember the last building placed so the Rotate button / R key know
         // which footprint to cycle when the cursor isn't over a building.
         lastBuildingHex = { col: hex.col, row: hex.row };
+      } else if (editor.activeTool === EditorTool.HIDDEN_SURVIVOR) {
+        // A placed survivor gets an associated Survivor source node in the graph
+        // (toggled off → its node is removed), so you can wire its id/hex.
+        syncSurvivorNode(hex);
       }
       updateGhost(); // a placed/removed building changes the candidate
     },
     onHover: (hex) => {
       const changed = (hex?.col !== hoverHex?.col) || (hex?.row !== hoverHex?.row);
       hoverHex = hex ? { col: hex.col, row: hex.row } : null;
-      if (changed) updateGhost();
+      if (changed) {
+        updateHexInfo();
+        // updateGhost() redraws when the footprint ghost is active; otherwise the
+        // hover highlight still needs a repaint to follow the cursor.
+        if (!updateGhost()) draw();
+      }
     },
     onRedraw: () => draw(),
   });
@@ -733,6 +904,10 @@ export function initEditor(doc = document, initOpts = {}) {
 
   function openPreview() {
     if (previewOverlay) previewOverlay.hidden = false;
+    // Hide the on-map toolbar (Preview 3D + Layers) while the 3D preview covers
+    // the canvas — they belong to the 2D editor view. inline style beats the
+    // .e-map-toolbar { display:flex } rule.
+    if (mapToolbar) mapToolbar.style.display = 'none';
     // Rebuild from the CURRENT editor state every press (author edits in 2D,
     // hits Preview to see 3D). rebuild() disposes any prior engine first.
     preview.rebuild();
@@ -740,6 +915,7 @@ export function initEditor(doc = document, initOpts = {}) {
   function closePreview() {
     preview.teardown();
     if (previewOverlay) previewOverlay.hidden = true;
+    if (mapToolbar) mapToolbar.style.display = '';
   }
   doc.getElementById('e-preview-close')?.addEventListener('click', closePreview);
   // Keep the preview engine sized to its pane while it's live.
@@ -754,21 +930,92 @@ export function initEditor(doc = document, initOpts = {}) {
   // Status now routes to a toast over the map (item 4) instead of a sidebar line.
   const formStatus = (msg, ok) => { if (msg) toast.show(msg, { type: ok ? 'ok' : 'err' }); };
 
+  // ── Context panel (lower half of the right rail) ──────────────────────────
+  // A persistent panel below the tabs holding the two things that change with
+  // mode + selection: the ACTIVE TOOL's options (its VALUE picker) and, in Edit
+  // mode, the SELECTED object's properties. renderToolOptions()/renderSelection()
+  // refresh each half independently.
+  const contextPanel = doc.createElement('div');
+  contextPanel.className = 'e-context';
+  const ctxToolHost = doc.createElement('div'); ctxToolHost.className = 'e-context-tool';
+  const ctxSelHost = doc.createElement('div'); ctxSelHost.className = 'e-context-sel';
+  contextPanel.append(ctxToolHost, ctxSelHost);
+  palette.append(contextPanel);
+
+  // The active tool's value options (terrain swatch, structure picker, enemy
+  // type, …). Re-rendered by selectTool when the tool changes.
+  function renderToolOptions() {
+    ctxToolHost.innerHTML = '';
+    const label = TOOL_PALETTE.find((t) => t.id === editor.activeTool)?.label ?? 'Tool';
+    const sec = section(doc, `Tool — ${label}`);
+    const host = doc.createElement('div');
+    sec.append(host);
+    ctxToolHost.append(sec);
+    buildValuePanel(doc, host, valuePanelKind(editor.activeTool), editor, renderToolOptions,
+      { onRotateFootprint: rotateActiveFootprint });
+  }
+
+  // The selected (Edit-mode) enemy unit's editable properties + delete. Edits go
+  // through editEnemyUnits so each change is one undo step.
+  renderSelection = () => {
+    ctxSelHost.innerHTML = '';
+    if (!selectedUnit) return;
+    const u = selectedUnit;
+    const sec = section(doc, `Selected — ${u.type} @ ${u.col},${u.row}`);
+    sec.classList.add('e-context-selection');
+    sec.append(labeledSelect(doc, 'Type',
+      ENEMY_UNIT_TYPES.map((t) => ({ key: t, value: t })), u.type,
+      (v) => { editor.editEnemyUnits(() => { u.type = v; }); renderSelection(); }));
+    const lvlRow = doc.createElement('div');
+    lvlRow.className = 'e-row';
+    const lvlInput = doc.createElement('input');
+    lvlInput.type = 'number'; lvlInput.min = '1'; lvlInput.step = '1';
+    lvlInput.value = String(u.level ?? 1);
+    lvlInput.title = 'Unit level — scales HP / attack / defence on spawn';
+    lvlInput.addEventListener('change', () => {
+      const lvl = Math.max(1, parseInt(lvlInput.value, 10) || 1);
+      editor.editEnemyUnits(() => { if (lvl > 1) u.level = lvl; else delete u.level; });
+      lvlInput.value = String(lvl);
+    });
+    lvlRow.append(labelFor(doc, 'Level'), lvlInput);
+    sec.append(lvlRow);
+    const del = doc.createElement('button');
+    del.type = 'button';
+    del.className = 'e-selection-del';
+    del.textContent = '🗑 Delete unit (Del)';
+    del.addEventListener('click', () => deleteSelectedUnit());
+    sec.append(del);
+    ctxSelHost.append(sec);
+  };
+  renderToolOptions();
+
+  // Delete / Backspace removes the selected unit (item 8) — but never while the
+  // caret is in a field, and only on the Map view (not the Logic graph).
+  (doc.defaultView ?? globalThis).addEventListener?.('keydown', (e) => {
+    if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+    if (editMode !== 'edit' || !selectedUnit) return;
+    const t = e.target, tag = t?.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t?.isContentEditable) return;
+    if (logicPane?.classList.contains('active')) return;
+    e.preventDefault();
+    deleteSelectedUnit();
+  });
+
   // In-map controls (items 1 + 3): the per-edge circular resize buttons, the
   // fit-map control, and the N×N size badge. Created once over the pane; refresh()
   // re-reads the mode (edge buttons are handmade-only) + live dims after any
   // structural change. mapArea is assigned below; rebuildMapPalette calls
   // mapArea.refresh() so the badge / edge visibility track every rebuild.
   let mapArea = null;
+  let toolDock = null; // left-docked vertical tool palette (item 7), assigned below
 
   function rebuildForms() {
     buildForms(doc, sidebar.panes, editor, rerender, rebuildForms, formStatus);
-    rebuildTimeline(); // phaseCycle edits (sidebar Mission tab) reshape the track
   }
   // The Map palette reflects the locked mode + live dims; rebuild it whenever
   // those can change (creation, resize, load) and reframe the canvas.
   function rebuildMapPalette() {
-    buildMapPalette(doc, sidebar.panes.map, editor, rerender, openPreview, {
+    buildMapPalette(doc, sidebar.panes.map, editor, rerender, {
       onSizeChange: () => { rebuildMapPalette(); resetViewAndDraw(); },
       setStatus: formStatus,
       // Tool change can flip the road-node-marker auto-show, so redraw overlays.
@@ -780,47 +1027,224 @@ export function initEditor(doc = document, initOpts = {}) {
       onRotateFootprint: rotateActiveFootprint,
     });
     mapArea?.refresh();
+    toolDock?.syncActive(); // keep the left dock highlight in sync (item 7)
+  }
+
+  // Left-docked vertical tool palette (item 7) — Photoshop-style. Selecting a
+  // tool sets it on the controller and refreshes the context panel's tool options.
+  function selectTool(id) {
+    editor.setActiveTool(id);
+    renderToolOptions();  // the context panel's tool options adapt to the new tool
+    toolDock?.syncActive();
+    draw();               // road-node markers may auto-show/hide
+  }
+  // Place / Edit mode (item 8). Leaving edit mode clears the current selection.
+  function setEditMode(mode) {
+    if (mode === editMode) return;
+    editMode = mode;
+    if (mode !== 'edit') selectedUnit = null;
+    toolDock?.syncMode();
+    renderSelection();
+    draw();
+  }
+  toolDock = buildToolDock(doc, pane, editor, {
+    onSelect: selectTool,
+    onModeChange: setEditMode,
+    getMode: () => editMode,
+  });
+
+  // Select / delete the placed enemy unit under a hex (item 8 edit mode).
+  function selectUnitAt(hex) {
+    selectedUnit = editor.enemyUnitAt(hex) ?? null;
+    renderSelection();
+    draw();
+  }
+  function deleteSelectedUnit() {
+    if (!selectedUnit) return;
+    const { col, row } = selectedUnit;
+    selectedUnit = null; // clear before the edit so the rerender drops the ring
+    editor.editEnemyUnits((units) => {
+      const i = units.findIndex((u) => u.col === col && u.row === row);
+      if (i >= 0) units.splice(i, 1);
+    });
+    renderSelection();
   }
 
   mapArea = buildMapAreaControls(doc, pane, editor, {
     onFit: () => resetViewAndDraw(),
   });
-  // The Layers (visibility) pane toggles the editor-side display filters.
+  // Hovered-hex info panel (item 5 + hex details), bottom-left above the size badge.
+  hexInfo = doc.createElement('div');
+  hexInfo.className = 'e-hexinfo e-coord-badge';
+  hexInfo.style.visibility = 'hidden';
+  pane.append(hexInfo);
+  // Top-right map toolbar: a "Preview 3D" button beside the Layers dropdown.
+  // (Layers moved out of the sidebar into this dropdown, item 6; Preview moved
+  // off the sidebar to sit next to it.)
+  const mapToolbar = doc.createElement('div');
+  mapToolbar.className = 'e-map-toolbar';
+  const previewBtn = doc.createElement('button');
+  previewBtn.type = 'button';
+  previewBtn.className = 'e-map-toolbtn';
+  previewBtn.textContent = '◳ Preview 3D';
+  previewBtn.title = 'Open a live 3D preview of the current map (Babylon renderer)';
+  previewBtn.addEventListener('click', () => openPreview());
+  mapToolbar.append(previewBtn);
+  pane.append(mapToolbar);
+  buildLayersDropdown(doc, mapToolbar, sidebar.panes.layers);
   function rebuildLayers() {
     buildLayersPanel(doc, sidebar.panes.layers, layers, () => rerender(),
       editor.getMode() === 'procedural');
   }
-  // ── Timeline tab (EC) ─────────────────────────────────────────────────────
-  // Rebuilds the main-area timeline pane from the current meta (phaseCycle +
-  // round events). Authoring routes through editor.editMeta (one undo step each)
-  // → rerender → rebuildTimeline, so the pane reflects every change live.
-  function rebuildTimeline() {
-    if (!timelinePane) return;
-    buildTimelinePane(doc, timelinePane, editor, formStatus);
+  // ── Logic graph tab (docs/09) ─────────────────────────────────────────────
+  // The node-graph editor over the mission's `logic` block. If the mission has
+  // no graph yet, migrate its legacy storyTriggers/waves/objectives into one so
+  // authors start from the equivalent graph (old fields stay until they flip it).
+  // Mounted lazily on first activation; edits write straight back into meta.logic.
+  const logicPane = doc.getElementById('e-logic-pane');
+  let logicEditor = null;
+  // Live conversation list: the actual *.md files under src/campaign/conversations/,
+  // discovered at runtime (Studio repo bridge first, then the dev server's
+  // /admin/api/conversations route). Cached here and refreshed on load so a
+  // freshly-added file appears in the node's Conversation dropdown without a
+  // rebuild. Filtered per-mission by `getConversations` below.
+  let convFiles = [];
+  async function discoverConversationFiles() {
+    const api = (doc.defaultView ?? globalThis).studioAPI;
+    if (api?.listDir) {
+      try {
+        const res = await api.listDir('src/campaign/conversations');
+        if (res?.ok && Array.isArray(res.entries)) {
+          return res.entries
+            .filter((e) => !e.dir && !e.name.startsWith('.') && /\.md$/i.test(e.name))
+            .map((e) => e.name.replace(/\.md$/i, ''));
+        }
+      } catch (err) { console.warn('[mission-editor] studio conversation listing failed:', err); }
+    }
+    try {
+      const res = await fetch('/admin/api/conversations');
+      if (res.ok) { const data = await res.json(); if (Array.isArray(data?.files)) return data.files.slice(); }
+    } catch (err) { console.warn('[mission-editor] /admin/api/conversations failed:', err); }
+    return [];
+  }
+  async function refreshConversationFiles() {
+    try {
+      const files = await discoverConversationFiles();
+      convFiles = files;
+      // If the Logic pane is live, re-render so the dropdown picks up new files.
+      if (logicEditor && logicPane?.classList.contains('active')) logicEditor.renderInspector?.();
+    } catch (err) { console.warn('[mission-editor] conversation refresh failed:', err); }
+  }
+  // The conversations this mission may use: its declared conversations[] ids,
+  // PLUS on-disk files namespaced to this mission (`<code>-*`) and shared
+  // `generic-*` ones. Declared ids are always kept so legacy missions still list
+  // theirs even if a file doesn't match the prefix convention.
+  function missionConversationOptions() {
+    const meta = editor.getMeta();
+    const declared = (meta.conversations ?? []).map((c) => c.id).filter(Boolean);
+    const prefix = missionConvPrefix(meta.id);
+    const files = filterMissionConversations(convFiles, prefix);
+    return [...new Set([...declared, ...files])].sort();
+  }
+  function rebuildLogic() {
+    if (!logicPane) return;
+    const meta = editor.getMeta();
+    let graph = meta.logic;
+    if (!graph || !Array.isArray(graph.nodes) || graph.nodes.length === 0) {
+      try { graph = missionToGraph(meta); autoLayout(graph); }
+      catch { graph = emptyGraph(); }
+    }
+    logicEditor = new LogicGraphEditor(logicPane, graph, {
+      onChange: (g) => { meta.logic = g; editor.markDirty(); scheduleAutosave(); },
+      getConversations: () => missionConversationOptions(),
+    });
+    logicEditor.mount();
+    meta.logic = graph; // persist the (possibly migrated) graph onto the model
+  }
+  refreshConversationFiles(); // kick off the initial (async) file discovery
+
+  // "Add to Graph" map tool — click a placed unit/NPC → an Actor node bound to it
+  // (assigning a stable `ref`); click an empty hex → a Location node. Mutates
+  // meta.logic so it round-trips on Save; refreshes the Logic pane if it's open.
+  // Place a fresh node into a clear column to the right of the existing graph.
+  function _graphDropPos(graph) {
+    const maxX = graph.nodes.reduce((m, n) => Math.max(m, n.x ?? 0), 0);
+    return { x: graph.nodes.length ? maxX + 260 : 40, y: 40 + (graph.nodes.length % 6) * 110 };
   }
 
-  // Main-area tabs (Map ⇄ Timeline). Switching to Map re-fits the canvas (it was
-  // display:none with zero size while Timeline showed); switching to Timeline
-  // rebuilds it from the latest model.
+  // Keep a Survivor source node in sync with a placed hidden survivor: add (or
+  // update) one when placed, remove it when the survivor is toggled off. Matched
+  // to the tile by hex; its `ref` mirrors the runtime discovery ref (survivorRef).
+  function syncSurvivorNode(hex) {
+    const meta = editor.getMeta();
+    if (!meta.logic || !Array.isArray(meta.logic.nodes)) meta.logic = emptyGraph();
+    const graph = meta.logic;
+    const tile = (editor.getMapDef().tiles ?? []).find((t) => t.col === hex.col && t.row === hex.row);
+    const existing = graph.nodes.find((n) => n.type === 'survivor' && n.params?.col === hex.col && n.params?.row === hex.row);
+    if (tile?.hiddenSurvivor) {
+      const ref = survivorRef(tile.hiddenSurvivorId, hex.col, hex.row);
+      const label = tile.hiddenSurvivorId || `Survivor ${hex.col},${hex.row}`;
+      if (existing) { existing.params.ref = ref; existing.params.label = label; }
+      else {
+        const { x, y } = _graphDropPos(graph);
+        addNode(graph, 'survivor', x, y).params = { ref, label, col: hex.col, row: hex.row };
+        toast.show(`Survivor node added @ ${hex.col},${hex.row} — wire its id into an On Actor node`, { type: 'ok' });
+      }
+    } else if (existing) {
+      removeNode(graph, existing.id); // toggled off → drop the orphan node
+    }
+    editor.markDirty();
+    scheduleAutosave();
+    if (logicPane?.classList.contains('active')) rebuildLogic();
+  }
+
+  function addHexToGraph(hex) {
+    const meta = editor.getMeta();
+    if (!meta.logic || !Array.isArray(meta.logic.nodes)) meta.logic = emptyGraph();
+    const graph = meta.logic;
+    const { x, y } = _graphDropPos(graph);
+    const unit = editor.getEnemyUnits().find((u) => u.col === hex.col && u.row === hex.row);
+    const npc = (meta.npcs ?? []).find((n) => n.col === hex.col && n.row === hex.row);
+    const survTile = (editor.getMapDef().tiles ?? []).find((t) => t.col === hex.col && t.row === hex.row && t.hiddenSurvivor);
+    if (survTile) {
+      addNode(graph, 'survivor', x, y).params = {
+        ref: survivorRef(survTile.hiddenSurvivorId, hex.col, hex.row),
+        label: survTile.hiddenSurvivorId || `Survivor ${hex.col},${hex.row}`,
+        col: hex.col, row: hex.row,
+      };
+      toast.show(`Survivor node added @ ${hex.col},${hex.row} — see the Logic tab`, { type: 'ok' });
+    } else if (npc) {
+      addNode(graph, 'onActor', x, y).params = { ref: npc.id };
+      toast.show(`Actor node added for NPC “${npc.id}” — see the Logic tab`, { type: 'ok' });
+    } else if (unit) {
+      if (!unit.ref) unit.ref = `${unit.type}-${hex.col}-${hex.row}`;
+      editor.setEnemyUnits(editor.getEnemyUnits()); // persist the ref on the unit def
+      addNode(graph, 'onActor', x, y).params = { ref: unit.ref };
+      toast.show(`Actor node added for ${unit.type} @ ${hex.col},${hex.row} — see the Logic tab`, { type: 'ok' });
+    } else {
+      addNode(graph, 'location', x, y).params = { label: `Hex ${hex.col},${hex.row}`, hexes: [{ col: hex.col, row: hex.row }] };
+      toast.show(`Location node added @ ${hex.col},${hex.row} — see the Logic tab`, { type: 'ok' });
+    }
+    editor.markDirty();
+    scheduleAutosave();
+    if (logicPane?.classList.contains('active')) rebuildLogic();
+  }
+
+  // Main-area tabs (Map ⇄ Logic). Switching to Map re-fits the canvas (it was
+  // display:none with zero size); Logic rebuilds the graph from the model.
   const mainTabs = buildMainTabs(doc, mainTabbar, {
     onMap: () => {
-      if (timelinePane) timelinePane.classList.remove('active');
+      if (logicPane) logicPane.classList.remove('active');
       if (pane) pane.classList.add('active');
       resetViewAndDraw();
     },
-    onTimeline: () => {
+    onLogic: () => {
       if (pane) pane.classList.remove('active');
-      if (timelinePane) timelinePane.classList.add('active');
-      rebuildTimeline();
+      if (logicPane) logicPane.classList.add('active');
+      rebuildLogic();
     },
   });
   mainTabs?.activate('map');
-
-  // In-place field edits inside timeline event cards (title / round / type / …)
-  // fire bubbling `change`; a full rerender relocates a re-rounded card and
-  // refreshes the canvas area-trigger overlay. Add/remove go through editMeta
-  // (their own undo step). Attached once — rebuildTimeline only clears children.
-  timelinePane?.addEventListener('change', () => { editor.markDirty(); rerender(); });
 
   // Sidebar form fields (Mission / Objectives / Units) edit getMeta()'s object
   // in place — bypassing the controller's emit — so they don't trip rerender or
@@ -832,7 +1256,6 @@ export function initEditor(doc = document, initOpts = {}) {
   rebuildMapPalette();
   rebuildForms();
   rebuildLayers();
-  rebuildTimeline();
 
   // ── Load / Save — relocated to the top File menu; flow is unchanged. ──────
   // Validate-before-populate on load; validate + block-download on save.
@@ -918,21 +1341,22 @@ export function initEditor(doc = document, initOpts = {}) {
     }
   }
 
-  function saveMission() {
+  async function saveMission() {
     const json = editor.assemble();
     try {
-      loadMissionJSON(json); // block the download on any validation error
+      loadMissionJSON(json); // block the save on any validation error
       validateBuildingFootprints(json); // P6 — every building must have a footprint pair
     } catch (err) {
       return { ok: false, message: `Cannot save: ${err.message}` };
     }
-    // Name the download after the bundled on-disk file (ChXMY.json for catalog
-    // missions, <id>.json otherwise) so an export drops straight into
-    // src/campaign/missions/ as a replacement.
+    // Name the file after the bundled on-disk mission (ChXMY.json for catalog
+    // missions, <id>.json otherwise) so it lands in src/campaign/missions/ as a
+    // drop-in replacement.
     const fname = missionFileName(json.id || 'mission');
-    downloadJSON(doc, json, fname);
-    editor.markClean();
-    return { ok: true, message: `Validated — downloaded ${fname}` };
+    const api = (doc.defaultView ?? globalThis).studioAPI;
+    const res = await persistMission(json, fname, { studioAPI: api, doc });
+    if (res.ok) editor.markClean();
+    return res;
   }
 
   // ── New… — the creation flow (item 4 + E1). Pick a LOCKED mode + size,
@@ -1051,9 +1475,11 @@ export function initEditor(doc = document, initOpts = {}) {
       toast.show(res.message, { type: 'err' });
       openModalWithSecondaryActions((opts) => onCreateFromModal(opts));
     }
-  } else {
-    openModalWithSecondaryActions((opts) => onCreateFromModal(opts));
   }
+  // No initial load + no URL param → leave the editor empty (the default blank
+  // map) until the user opens a mission via File ▸ Load / the bundled picker, or
+  // creates one via File ▸ New…. No auto-prompt — the Campaign tab also opens a
+  // mission here via loadMissionById(). (Per the editor wishlist.)
 
   // Shared "Create" handler for the unified modal — mirrors newMission()'s
   // post-create refresh, but without the "discard unsaved?" prompt (the modal
@@ -1078,6 +1504,8 @@ export function initEditor(doc = document, initOpts = {}) {
     loadMissionById,
     resumeWipById,
     saveMission,
+    /** Switch the editor's main area to a specific tab ('map' | 'timeline' | 'logic'). */
+    showMainTab: (id) => mainTabs?.activate(id),
     /** Re-open the WIP launch picker (also shown automatically on init). */
     openLaunchPicker,
     // Undo / redo wiring for the top-bar buttons + keyboard shortcuts.
@@ -1121,12 +1549,17 @@ function authoredRoadNodeKeys(mapDef) {
 function buildSidebar(doc, root) {
   root.innerHTML = '';
 
+  // Layers moved OUT of the sidebar into a top-right map dropdown (item 6); its
+  // pane is built below as a detached element the caller drops into the popup.
+  // Objectives tab retired — win/lose are authored in the Logic graph now
+  // (winMission / loseMission / objectiveOutcome nodes), so the legacy
+  // declarative objective editor is gone.
+  // Units tab retired — enemy units are placed with the map tool and edited by
+  // selecting them on the map (their props show in the context panel); survivor
+  // settings moved to the Mission tab.
   const SIDEBAR_TABS = [
-    { id: 'map', label: 'Map', tip: 'Terrain, structures, paths, starts, nodes + sizing tools' },
-    { id: 'layers', label: 'Layers', tip: 'Toggle which map layers are drawn in the editor view' },
-    { id: 'mission', label: 'Mission', tip: 'Mission properties, narrative, phase cycle, resources' },
-    { id: 'events', label: 'Objectives', tip: 'Win / lose objectives (story triggers & waves live in the Timeline tab)' },
-    { id: 'units', label: 'Units', tip: 'Placed enemy units + survivor start positions' },
+    { id: 'map', label: 'Map', tip: 'Structures, paths, starts, nodes + sizing (tools dock on the left)' },
+    { id: 'mission', label: 'Mission', tip: 'Properties, narrative, phase cycle, resources, survivors' },
   ];
 
   // Tab buttons.
@@ -1167,14 +1600,18 @@ function buildSidebar(doc, root) {
 
   stabs.activate('map');
 
+  // Layers visibility pane — detached (the caller mounts it in the top-right
+  // map dropdown, item 6), not a sidebar tab.
+  const layersPane = doc.createElement('div');
+  layersPane.className = 'e-spane active';
+  layersPane.dataset.spane = 'layers';
+
   return {
-    // `map` (paint/size palette) + `layers` (visibility) + the three authoring panes.
+    // `map` (paint/size palette) + the Mission authoring pane; `layers` detached.
     panes: {
       map: paneEls.map,
-      layers: paneEls.layers,
+      layers: layersPane,
       mission: paneEls.mission,
-      events: paneEls.events,
-      units: paneEls.units,
     },
   };
 }
@@ -1183,12 +1620,14 @@ function buildSidebar(doc, root) {
 // The Map (canvas) and Timeline views are the two main-area panes; this bar
 // toggles between them via the shared (unit-tested) tab controller. Returns the
 // controller so the caller can `activate('map')` on boot.
-function buildMainTabs(doc, container, { onMap, onTimeline } = {}) {
+function buildMainTabs(doc, container, { onMap, onLogic } = {}) {
   if (!container) return null;
   container.innerHTML = '';
+  // The legacy Timeline tab was retired once all missions moved to the logic
+  // graph (docs/09 #10) — Map authors the board, Logic the event→action graph.
   const DEFS = [
     { id: 'map', label: 'Map', tip: 'Paint terrain, structures, paths, starts, nodes + place units' },
-    { id: 'timeline', label: 'Timeline', tip: 'Round-by-round day/night cycle with story triggers & enemy waves' },
+    { id: 'logic', label: 'Logic', tip: 'Node-graph event→action editor (docs/09) — story, spawns, win/lose' },
   ];
   const btns = {};
   for (const d of DEFS) {
@@ -1204,118 +1643,11 @@ function buildMainTabs(doc, container, { onMap, onTimeline } = {}) {
   const tabs = createTabController(DEFS.map(d => d.id), {
     onActivate: (id) => {
       for (const d of DEFS) btns[d.id].classList.toggle('active', d.id === id);
-      if (id === 'timeline') onTimeline?.(); else onMap?.();
+      if (id === 'logic') onLogic?.();
+      else onMap?.();
     },
   });
   return tabs;
-}
-
-// ── Timeline pane (EC) ──────────────────────────────────────────────────────
-// The main-area Timeline tab: a vertical round track whose left rail shows each
-// round's phase (the day/night cycle, derived from phaseCycle), and whose body
-// carries that round's story triggers + enemy waves. Below the track, separate
-// lanes hold area / on-enter triggers and non-round (kill / area) waves — these
-// aren't tied to a round so they're never forced onto one.
-//
-// Authoring REUSES the storyTrigger/wave model + cards: add/remove route through
-// editor.editMeta (one undo step each) → rerender → rebuild; in-place field
-// edits fire `change`, refreshed by the pane-level listener in initEditor.
-function buildTimelinePane(doc, host, editor, setStatus) {
-  host.innerHTML = '';
-  const meta = editor.getMeta();
-  const model = buildTimelineModel(meta);
-
-  const head = doc.createElement('div');
-  head.className = 'e-tl-intro e-section';
-  const h = doc.createElement('h3');
-  h.textContent = 'Mission Timeline';
-  head.append(h);
-  const looping = meta.phaseCycle?.loop ?? true;
-  head.append(hint(doc,
-    `Phases come from the Mission tab's Phase Cycle${looping ? ' (looping past its end)' : ' (last phase holds past its end)'}. ` +
-    'Click a round’s + to add a story trigger or wave there.'));
-  host.append(head);
-
-  const track = doc.createElement('div');
-  track.className = 'e-tl-track';
-  for (const rd of model.rounds) track.append(timelineRoundRow(doc, rd, editor, setStatus));
-  host.append(track);
-
-  host.append(timelineAreaLane(doc, model.areaTriggers, editor, setStatus));
-  if (model.offRoundWaves.length) {
-    host.append(timelineOffWavesLane(doc, model.offRoundWaves, editor, setStatus));
-  }
-}
-
-// One round row: phase rail (left) + that round's event cards & add buttons.
-function timelineRoundRow(doc, rd, editor, setStatus) {
-  const row = doc.createElement('div');
-  row.className = 'e-tl-row';
-
-  const rail = doc.createElement('div');
-  rail.className = `e-tl-rail e-tl-phase-${rd.phase ?? 'none'}`;
-  const num = doc.createElement('div');
-  num.className = 'e-tl-round';
-  num.textContent = `R${rd.round}`;
-  const meta = PHASE_META[rd.phase] ?? { icon: '·', label: rd.phase ?? '—', tip: 'No phase mapped for this round.' };
-  const badge = doc.createElement('div');
-  badge.className = 'e-tl-phase';
-  badge.textContent = `${meta.icon} ${meta.label}`;
-  badge.title = meta.tip;
-  rail.append(num, badge);
-  row.append(rail);
-
-  const body = doc.createElement('div');
-  body.className = 'e-tl-events';
-  if (!rd.story.length && !rd.waves.length) body.append(hint(doc, 'No events this round.'));
-  for (const { index, trigger } of rd.story) {
-    body.append(storyTriggerCard(doc, trigger, index,
-      { remove: () => editor.editMeta(m => removeStoryTrigger(m, index)) }, setStatus));
-  }
-  for (const { index, wave } of rd.waves) {
-    body.append(waveCard(doc, wave, index,
-      { remove: () => editor.editMeta(m => removeWave(m, index)) }, setStatus));
-  }
-  const adds = doc.createElement('div');
-  adds.className = 'e-tl-adds';
-  adds.append(
-    actionBtn(doc, '+ Trigger',
-      () => editor.editMeta(m => addStoryTrigger(m, { type: 'round', round: rd.round })),
-      `Add a story trigger that fires on round ${rd.round}`),
-    actionBtn(doc, '+ Wave',
-      () => editor.editMeta(m => addWave(m, { trigger: 'round', round: rd.round })),
-      `Add an enemy wave that spawns on round ${rd.round}`),
-  );
-  body.append(adds);
-  row.append(body);
-  return row;
-}
-
-// Area / on-enter triggers — fire on hex entry, not a round (their own lane).
-function timelineAreaLane(doc, areaTriggers, editor, setStatus) {
-  const sec = section(doc, 'On-Enter / Area Triggers');
-  sec.classList.add('e-tl-lane');
-  sec.append(hint(doc, 'Fire when the player enters the listed hexes — not tied to a round.'));
-  for (const { index, trigger } of areaTriggers) {
-    sec.append(storyTriggerCard(doc, trigger, index,
-      { remove: () => editor.editMeta(m => removeStoryTrigger(m, index)) }, setStatus));
-  }
-  sec.append(actionBtn(doc, '+ Area Trigger',
-    () => editor.editMeta(m => addStoryTrigger(m, { type: 'area', hexes: [] })),
-    'Add an area trigger (fires when the player enters its hexes)'));
-  return sec;
-}
-
-// Non-round waves (hero_kills / area triggered) — also off the round track.
-function timelineOffWavesLane(doc, offWaves, editor, setStatus) {
-  const sec = section(doc, 'Other Waves (kill / area triggered)');
-  sec.classList.add('e-tl-lane');
-  sec.append(hint(doc, 'Spawn on a kill-count or area trigger rather than a fixed round.'));
-  for (const { index, wave } of offWaves) {
-    sec.append(waveCard(doc, wave, index,
-      { remove: () => editor.editMeta(m => removeWave(m, index)) }, setStatus));
-  }
-  return sec;
 }
 
 // ── Toast host (item 4) ─────────────────────────────────────────────────────────
@@ -1371,6 +1703,146 @@ export function createToastHost(doc, container) {
 // painted directly on the canvas (see drawEdgeResizeButtons in
 // initMissionEditorUI) so they sit beside the grid and track pan / zoom / resize.
 // refresh() re-reads dims after any structural change to update the badge.
+// ── Logic-graph map regions (item 4) ────────────────────────────────────────────
+// The highlightable regions a logic graph implies on the map: each Location node
+// (a place) and each onAreaEnter node (a trigger zone). A Location WIRED into an
+// Area's `area` input defines that trigger's region, so it's ONE place — emitted
+// once (as the Area, keeping the Location's name) and NOT also as a standalone
+// Location, so the overlay never doubles up. Pure → unit-testable.
+// Returns [{ hexes:[{col,row}], label, color:'loc'|'area' }].
+export function logicRegions(graph) {
+  if (!graph || !Array.isArray(graph.nodes)) return [];
+  const locById = new Map(graph.nodes.filter((n) => n.type === 'location').map((n) => [n.id, n]));
+  const areaWire = new Map(); // areaNodeId → locationNode (via a `data → area` edge)
+  for (const e of graph.edges ?? []) {
+    if (e.kind === 'data' && e.to?.pin === 'area' && locById.has(e.from?.node)) {
+      areaWire.set(e.to.node, locById.get(e.from.node));
+    }
+  }
+  const consumedLocs = new Set([...areaWire.values()].map((loc) => loc.id));
+  const regions = [];
+  for (const n of graph.nodes) {
+    if (n.type === 'location') {
+      if (consumedLocs.has(n.id)) continue; // drawn as its Area's region instead
+      regions.push({ hexes: locationHexes(n), label: n.params?.label ?? '', color: 'loc' });
+    } else if (n.type === 'onAreaEnter') {
+      const wired = areaWire.get(n.id);
+      const hexes = wired ? locationHexes(wired) : (n.params?.hexes ?? []);
+      regions.push({ hexes, label: wired?.params?.label ?? '', color: 'area' });
+    }
+  }
+  return regions;
+}
+
+// ── Conversation file enumeration + prefix filter ───────────────────────────────
+// The Mission Editor's conversation dropdown lists the actual *.md files in
+// src/campaign/conversations/ (live — drop in a file and it appears), filtered to
+// the ones relevant to THIS mission. A conversation file's id is namespaced by a
+// mission-code prefix (e.g. `ch1m1-intro`): a mission only shows files whose stem
+// starts with its own code (`ch1m1-…`) PLUS shared `generic-…` ones visible
+// everywhere. Both helpers are pure → unit-testable.
+
+/** The lower-cased mission-code prefix for a mission, derived from its on-disk
+ *  file basename (e.g. id `prologue` → file `Ch1M1` → `ch1m1`). New/unknown
+ *  missions fall back to the id itself. */
+export function missionConvPrefix(missionId, fileNameFor = missionFileName) {
+  const base = String(fileNameFor(missionId) ?? missionId ?? '').replace(/\.json$/i, '');
+  return base.toLowerCase();
+}
+
+/** Filter conversation file stems to those a mission should offer: its own
+ *  `<prefix>-*` (and the bare `<prefix>`) plus shared `generic-*`. Case-insensitive;
+ *  result keeps the original stems, de-duped, sorted. */
+export function filterMissionConversations(stems, prefix) {
+  const p = String(prefix ?? '').toLowerCase();
+  const out = new Set();
+  for (const raw of stems ?? []) {
+    const s = String(raw).toLowerCase();
+    if (s.startsWith('generic-') || s === 'generic') { out.add(raw); continue; }
+    if (p && (s === p || s.startsWith(`${p}-`))) out.add(raw);
+  }
+  return [...out].sort();
+}
+
+// ── Left-docked vertical tool palette (item 7) ──────────────────────────────────
+// Photoshop-style: a narrow, tall strip of icon buttons over the left of the map
+// (not in the sidebar). Selecting a tool fires onSelect(id); syncActive() reflects
+// the controller's current tool (e.g. after a load).
+function buildToolDock(doc, pane, editor, { onSelect, onModeChange, getMode }) {
+  const dock = doc.createElement('div');
+  dock.className = 'e-tooldock';
+
+  // Place / Edit mode toggle (item 8) at the top of the dock. Place lays objects
+  // down; Edit selects a placed object to modify or delete (no more click-to-toggle).
+  const modeRow = doc.createElement('div');
+  modeRow.className = 'e-tooldock-mode';
+  const modeBtns = {};
+  for (const m of [{ id: 'place', glyph: '✛', tip: 'Place mode — click to lay down objects' },
+                   { id: 'edit', glyph: '☜', tip: 'Edit mode — click a placed object to select / modify / delete' }]) {
+    const b = doc.createElement('button');
+    b.type = 'button';
+    b.className = 'e-tooldock-mode-btn';
+    b.textContent = m.glyph;
+    b.title = m.tip;
+    b.setAttribute('aria-label', `${m.id} mode`);
+    b.dataset.mode = m.id;
+    b.addEventListener('click', () => onModeChange?.(m.id));
+    modeBtns[m.id] = b;
+    modeRow.append(b);
+  }
+  dock.append(modeRow);
+  const syncMode = () => {
+    const cur = getMode?.() ?? 'place';
+    for (const [id, b] of Object.entries(modeBtns)) b.classList.toggle('active', id === cur);
+  };
+  syncMode();
+
+  const btns = {};
+  for (const t of TOOL_PALETTE) {
+    const b = doc.createElement('button');
+    b.type = 'button';
+    b.className = 'e-tooldock-btn';
+    b.textContent = t.icon;
+    b.title = t.tip ?? t.label;
+    b.setAttribute('aria-label', t.label);
+    b.dataset.tool = t.id;
+    b.addEventListener('click', () => onSelect(t.id));
+    btns[t.id] = b;
+    dock.append(b);
+  }
+  pane.append(dock);
+  const syncActive = () => {
+    for (const [id, b] of Object.entries(btns)) b.classList.toggle('active', id === editor.activeTool);
+  };
+  syncActive();
+  return { syncActive, syncMode, el: dock };
+}
+
+// ── Layers visibility dropdown (item 6) ─────────────────────────────────────────
+// A "Layers ▾" button top-right of the map; its popup hosts the (detached) layer-
+// toggle pane. Click-away closes it. The pane content is (re)built by rebuildLayers.
+function buildLayersDropdown(doc, pane, layersPane) {
+  const wrap = doc.createElement('div');
+  wrap.className = 'e-layers-menu';
+  const btn = doc.createElement('button');
+  btn.type = 'button';
+  btn.className = 'e-layers-btn';
+  btn.textContent = 'Layers ▾';
+  btn.title = 'Toggle which map layers are drawn in the editor view';
+  const popup = doc.createElement('div');
+  popup.className = 'e-layers-popup';
+  popup.hidden = true;
+  popup.append(layersPane);
+  let open = false;
+  const setOpen = (v) => { open = v; popup.hidden = !v; btn.classList.toggle('active', v); };
+  btn.addEventListener('click', (e) => { e.stopPropagation(); setOpen(!open); });
+  popup.addEventListener('click', (e) => e.stopPropagation());
+  (doc.defaultView ?? globalThis).addEventListener?.('click', () => { if (open) setOpen(false); });
+  wrap.append(btn, popup);
+  pane.append(wrap);
+  return { el: wrap, setOpen };
+}
+
 function buildMapAreaControls(doc, pane, editor, { onFit }) {
   const controls = buildMapControls(doc, { onFit });
   const badge = doc.createElement('div');
@@ -1479,7 +1951,7 @@ export function buildMapControls(doc, { onFit = () => {} } = {}) {
 
 // ── Map-tab palette DOM ───────────────────────────────────────────────────────
 
-function buildMapPalette(doc, root, editor, rerender, onPreview3D, hooks = {}) {
+function buildMapPalette(doc, root, editor, rerender, hooks = {}) {
   root.innerHTML = '';
   const onSizeChange = hooks.onSizeChange ?? (() => {});
   const setStatus = hooks.setStatus ?? (() => {});
@@ -1551,50 +2023,9 @@ function buildMapPalette(doc, root, editor, rerender, onPreview3D, hooks = {}) {
   }
   root.append(mapSection);
 
-  const onToolChange = hooks.onToolChange ?? (() => {});
-
-  // ── Tools (item 7) — a compact icon palette. Each button carries an emoji
-  // glyph + a tooltip; the active tool is highlighted. The Road Node entry pairs
-  // with a "Regenerate Roads" action surfaced in the Map section above. ─────────
-  const toolSection = section(doc, 'Tools');
-  const toolGrid = doc.createElement('div');
-  toolGrid.className = 'e-toolgrid';
-  const toolBtns = {};
-  for (const t of TOOL_PALETTE) {
-    const btn = doc.createElement('button');
-    btn.className = 'e-toolbtn';
-    btn.textContent = t.icon;
-    btn.title = t.tip ?? t.label; // item 2 — descriptive tooltip, not just the label
-    btn.setAttribute('aria-label', t.label);
-    btn.dataset.tool = t.id;
-    btn.addEventListener('click', () => {
-      editor.setActiveTool(t.id);
-      for (const b of Object.values(toolBtns)) b.classList.remove('active');
-      btn.classList.add('active');
-      renderValuePanel();   // VALUE section adapts to the new tool (item 7)
-      onToolChange();       // road-node markers may auto-show/hide
-    });
-    toolBtns[t.id] = btn;
-    toolGrid.append(btn);
-  }
-  toolSection.append(toolGrid);
-  // Highlight the controller's current tool (persists across palette rebuilds).
-  (toolBtns[editor.activeTool] ?? toolBtns[EditorTool.PAINT_BASE]).classList.add('active');
-  root.append(toolSection);
-
-  // ── VALUE section (item 7) — context-sensitive to the active tool. The host
-  // div is rebuilt by renderValuePanel() whenever the tool changes. ────────────
-  const valSection = section(doc, 'Value');
-  const valHost = doc.createElement('div');
-  valSection.append(valHost);
-  root.append(valSection);
-
-  function renderValuePanel() {
-    valHost.innerHTML = '';
-    buildValuePanel(doc, valHost, valuePanelKind(editor.activeTool), editor, renderValuePanel,
-      { onRotateFootprint: hooks.onRotateFootprint });
-  }
-  renderValuePanel();
+  // Tools live in the left dock (item 7); the active tool's VALUE options live in
+  // the bottom context panel (renderToolOptions in initMissionEditorUI) — not in
+  // this pane. The Map tab keeps the read-only map properties + Power Nodes.
 
   // ── Power Nodes (item 6) — list each cluster with its colour, editable name,
   // and hex count. Re-rendered on every node toggle/rename via the registered
@@ -1615,14 +2046,9 @@ function buildMapPalette(doc, root, editor, rerender, onPreview3D, hooks = {}) {
   renderPowerNodes();
   (hooks.registerPowerNodeRefresh ?? (() => {}))(renderPowerNodes);
 
-  // View / Reset moved to the in-map fit-map control (item 3). Undo / Redo live
-  // on the top bar (item 5). Only the 3D preview action remains in the sidebar.
-  if (onPreview3D) {
-    const previewSection = section(doc, 'Preview');
-    previewSection.append(actionBtn(doc, 'Preview in 3D', () => onPreview3D(),
-      'Open a live 3D preview of the current map (Babylon renderer)'));
-    root.append(previewSection);
-  }
+  // View / Reset live on the in-map fit-map control (item 3); Undo / Redo on the
+  // top bar (item 5); "Preview 3D" sits in the map's top-right toolbar beside the
+  // Layers menu (see initMissionEditorUI), so nothing action-y remains here.
 }
 
 // ── Context-sensitive VALUE panel (item 7) ──────────────────────────────────
@@ -1655,10 +2081,6 @@ function buildValuePanel(doc, host, kind, editor, rerenderPanel, hooks = {}) {
       host.append(hint(doc, 'Placing a building auto-claims an adjacent footprint hex. Hover to preview; press R (or the button) to rotate it.'));
       break;
     }
-    case ToolValueKind.RESOURCE:
-      host.append(labeledSelect(doc, 'Resource', _entries(ResourceType),
-        editor.getPaintValue('resource'), (v) => editor.setPaintValue('resource', v)));
-      break;
     case ToolValueKind.ENEMY:
       host.append(labeledSelect(doc, 'Enemy', ENEMY_UNIT_TYPES.map(t => ({ key: t, value: t })),
         editor.getPaintValue('enemyType'), (v) => editor.setPaintValue('enemyType', v)));
@@ -1797,21 +2219,18 @@ function layerToggleRow(doc, label, tip, value, onChange) {
 
 function buildForms(doc, panes, editor, rerenderCanvas, rebuild, setStatus) {
   panes.mission.innerHTML = '';
-  panes.events.innerHTML = '';
-  panes.units.innerHTML = '';
   const meta = editor.getMeta();
 
-  // ── Scalar properties ───────────────────────────────────────────────────
+  // ── Mission gameplay properties ──────────────────────────────────────────
+  // Progression metadata (ID, Title, Chapter, Campaign, Requires/unlock,
+  // Rewards) is edited in the Campaign tool — the single source of truth for how
+  // missions connect + reward — so it's not duplicated here. This tab is the
+  // per-mission GAMEPLAY config. (All those fields still round-trip via `...meta`.)
+  // Map Size is set via the New-map dialog + in-map edge buttons (shown by the
+  // N×N badge); meta.mapSize rides along in the model so the round-trip is lossless.
   const props = section(doc, 'Properties');
   props.append(
-    textRow(doc, 'ID', meta.id, v => { meta.id = v; }),
-    textRow(doc, 'Title', meta.title, v => { meta.title = v; }),
-    numRow(doc, 'Chapter', meta.chapter, v => { meta.chapter = v; }),
-    textRow(doc, 'Campaign', meta.campaignId ?? '', v => { meta.campaignId = v || null; }),
-    textRow(doc, 'Requires', csv(meta.requires), v => { meta.requires = parseCsvOrNull(v); }),
-    // Map Size field removed (item 12) — size is set explicitly via the New-map
-    // dialog + in-map edge buttons, and shown by the in-map N×N badge. meta.mapSize
-    // still rides along in the model (set at creation) so the round-trip is lossless.
+    readonlyRow(doc, 'Mission', meta.title ? `${meta.title} (${meta.id})` : (meta.id ?? '—')),
     boolRow(doc, 'Has Witch', meta.hasWitch, v => { meta.hasWitch = v; }),
     boolRow(doc, 'No Scoring', meta.disableScoring, v => { meta.disableScoring = v; }),
     textRow(doc, 'AI Persona', meta.aiPersonality ?? '', v => { meta.aiPersonality = v || null; }),
@@ -1821,6 +2240,7 @@ function buildForms(doc, panes, editor, rerenderCanvas, rebuild, setStatus) {
     numRow(doc, 'Discoverable', meta.maxDiscoverableSurvivors, v => { meta.maxDiscoverableSurvivors = v; }),
     numRow(doc, 'Heal Bonus', meta.healBonus, v => { meta.healBonus = v; }),
   );
+  props.append(hint(doc, 'ID / Title / Chapter / unlock / rewards are edited in the Campaign tool.'));
   panes.mission.append(props);
 
   // ── Briefing / texts ──────────────────────────────────────────────────────
@@ -1837,52 +2257,26 @@ function buildForms(doc, panes, editor, rerenderCanvas, rebuild, setStatus) {
   phase.append(phaseCycleEditor(doc, meta, rebuild));
   panes.mission.append(phase);
 
-  // ── Resources / rewards / loot — picker UIs (item 8) ────────────────────
-  const res = section(doc, 'Resources & Rewards');
+  // ── Resources / loot — picker UIs (item 8) ──────────────────────────────
+  // Rewards (victory payout) moved to the Campaign tool with the rest of the
+  // progression metadata; starting resources + loot overrides are mission setup.
+  const res = section(doc, 'Resources');
   res.append(
     resourcePicker(doc, 'Starting', meta.startingResources,
       m => { meta.startingResources = m; },
       'Resources the player begins the mission holding.'),
-    resourcePicker(doc, 'Rewards', meta.rewards,
-      m => { meta.rewards = m; },
-      'Resources granted to the player on victory.'),
     lootOverridePicker(doc, meta.lootOverrides, lo => { meta.lootOverrides = lo; }),
   );
   panes.mission.append(res);
 
-  // ── Objectives ──────────────────────────────────────────────────────────
-  const obj = section(doc, 'Objectives');
-  obj.append(objectiveEditor(doc, 'Win', meta.objectives?.win, def => {
-    if (!meta.objectives) meta.objectives = {};
-    meta.objectives.win = def;
-  }, setStatus));
-  obj.append(objectiveEditor(doc, 'Lose', meta.objectives?.lose, def => {
-    if (!meta.objectives) meta.objectives = {};
-    meta.objectives.lose = def;
-  }, setStatus));
-  panes.events.append(obj);
+  // Objectives (legacy win/lose declarative editor) retired — authored in the
+  // Logic graph now (winMission / loseMission / objectiveOutcome). Any existing
+  // meta.objectives still round-trips untouched via assembleMission's `...meta`.
 
-  // Story triggers + waves moved OUT of this cramped sidebar tab and into the
-  // main-area Timeline tab (EC) — round events live on the round track, area /
-  // on-enter triggers + non-round waves in the Timeline's side lanes. A pointer
-  // keeps the relocation discoverable.
-  panes.events.append(hint(doc,
-    'Story triggers & enemy waves are authored in the Timeline tab (top-left).'));
-
-  // ── Enemy units (placed on map; list-view for delete / override edit) ─────
-  const enemies = section(doc, 'Enemy Units');
-  const units = editor.getEnemyUnits();
-  if (units.length === 0) enemies.append(hint(doc, 'Place via the Enemy Unit map tool.'));
-  units.forEach((u, i) => {
-    enemies.append(placedCard(doc, `${u.type} @ ${u.col},${u.row}`,
-      u.overrides ?? {}, ov => { u.overrides = ov; }, () => {
-        units.splice(i, 1);
-        editor.setEnemyUnits(units);
-        rebuild();
-        rerenderCanvas();
-      }, setStatus));
-  });
-  panes.units.append(enemies);
+  // Enemy units are no longer a sidebar list — place them with the Enemy Unit
+  // map tool and edit/delete them by selecting them on the map (Edit mode → the
+  // context panel's "Selected" properties). Survivor settings live on the Mission
+  // tab below (they're mission setup, not per-map objects).
 
   // ── Survivor start positions (list-view) ─────────────────────────────────
   const surv = section(doc, 'Survivor Starts');
@@ -1894,7 +2288,29 @@ function buildForms(doc, panes, editor, rerenderCanvas, rebuild, setStatus) {
       rebuild();
     }, setStatus));
   });
-  panes.units.append(surv);
+  panes.mission.append(surv);
+
+  // ── Hidden survivors (random placement) ──────────────────────────────────
+  // survivorCounts lives on mapDef; _placeHiddenSurvivors scatters this many
+  // discoverable survivors at game start ON TOP of the ones placed with the
+  // Hidden-Survivor map tool. Both 0 → ONLY the explicitly placed survivors.
+  const mapDef = editor.getMapDef();
+  const setSurvivorCount = (patch) => {
+    const cur = mapDef.survivorCounts ?? { buildings: 0, terrain: 0 };
+    mapDef.survivorCounts = {
+      buildings: Math.max(0, cur.buildings ?? 0),
+      terrain: Math.max(0, cur.terrain ?? 0),
+      ...patch,
+    };
+  };
+  const sc = mapDef.survivorCounts ?? { buildings: 0, terrain: 0 };
+  const hidden = section(doc, 'Hidden Survivors (random)');
+  hidden.append(
+    numRow(doc, 'In buildings', sc.buildings ?? 0, v => setSurvivorCount({ buildings: Math.max(0, Math.round(v)) })),
+    numRow(doc, 'On terrain', sc.terrain ?? 0, v => setSurvivorCount({ terrain: Math.max(0, Math.round(v)) })),
+    hint(doc, 'Random discoverable survivors scattered ON TOP of the ones you place with the Hidden-Survivor map tool. Set both to 0 to use ONLY your placed survivors.'),
+  );
+  panes.mission.append(hidden);
 }
 
 // ── Size controls (item 3) ────────────────────────────────────────────────────
@@ -2146,6 +2562,24 @@ function twoCol(doc, label, input) {
   return row;
 }
 
+// ── Mission persistence — Studio bridge (disk) vs browser download ──────────
+// Caleb's Studio (Electron) injects a repo-confined filesystem bridge as
+// `window.studioAPI`. When present we write the validated mission JSON STRAIGHT
+// into the repo's src/campaign/missions/ folder; otherwise we fall back to a
+// browser download for manual drop-in. The serialised bytes are identical on
+// both paths (JSON.stringify(obj, null, 2)), so editing a bundled mission in
+// Studio is a faithful in-place round-trip. Exported for unit tests.
+export async function persistMission(json, fname, { studioAPI, doc } = {}) {
+  if (studioAPI?.writeFile) {
+    const rel = `src/campaign/missions/${fname}`;
+    const res = await studioAPI.writeFile(rel, JSON.stringify(json, null, 2));
+    if (!res?.ok) return { ok: false, message: `Save failed: ${res?.error || 'unknown error'}` };
+    return { ok: true, message: `Saved → ${res.path || rel}`, rel };
+  }
+  downloadJSON(doc, json, fname);
+  return { ok: true, message: `Validated — downloaded ${fname}` };
+}
+
 // ── Browser file download (Blob + transient anchor) ─────────────────────────
 
 function downloadJSON(doc, obj, filename) {
@@ -2161,12 +2595,6 @@ function downloadJSON(doc, obj, filename) {
 }
 
 // ── Form-widget helpers ──────────────────────────────────────────────────────
-
-function csv(arr) { return Array.isArray(arr) ? arr.join(',') : ''; }
-function parseCsvOrNull(v) {
-  const out = v.split(',').map(s => s.trim()).filter(Boolean);
-  return out.length ? out : null;
-}
 
 function textRow(doc, label, value, onChange) {
   const row = doc.createElement('div');
@@ -2407,40 +2835,7 @@ function lootIdList(doc, label, arr, commit) {
   return wrap;
 }
 
-// Objective editor: a type <select> over the known types + a params JSON blob
-// (merged with the chosen type). Arrays (multi-lose) are edited as JSON.
-function objectiveEditor(doc, label, current, onChange, setStatus) {
-  const card = doc.createElement('div');
-  card.className = 'e-card';
-  card.append(labelFor(doc, label));
-
-  if (Array.isArray(current)) {
-    // Multi-objective side — edit as raw JSON array to keep full fidelity.
-    card.append(jsonRow(doc, 'list', current, v => onChange(v), setStatus));
-    return card;
-  }
-
-  const cur = current ?? { type: 'eliminate_all' };
-  const typeSel = select(doc, [...KNOWN_OBJECTIVE_TYPES].map(t => ({ key: t, value: t })), cur.type,
-    v => {
-      const { type, ...params } = cur; // eslint-disable-line no-unused-vars
-      onChange({ type: v, ...params });
-      cur.type = v;
-    });
-  const typeRow = doc.createElement('div');
-  typeRow.className = 'e-row';
-  typeRow.append(labelFor(doc, 'type'), typeSel);
-  card.append(typeRow);
-
-  // Params = everything except `type`.
-  const { type, ...params } = cur; // eslint-disable-line no-unused-vars
-  card.append(jsonRow(doc, 'params', params, p => {
-    onChange({ type: cur.type, ...(p || {}) });
-  }, setStatus));
-  return card;
-}
-
-function storyTriggerCard(doc, tr, idx, actions, setStatus) {
+function storyTriggerCard(doc, tr, idx, actions, setStatus, convIds = []) {
   const card = doc.createElement('div');
   card.className = 'e-card';
 
@@ -2450,6 +2845,13 @@ function storyTriggerCard(doc, tr, idx, actions, setStatus) {
   } else {
     card.append(numRow(doc, 'Round', tr.round ?? 1, v => { tr.round = v; }));
   }
+  // A trigger fires EITHER a conversation (pick one declared in the
+  // Conversations lane) OR a title/text story modal.
+  if (convIds.length) {
+    card.append(selRow(doc, 'Conversation', ['', ...convIds], tr.conversation ?? '', v => {
+      if (v) tr.conversation = v; else delete tr.conversation;
+    }));
+  }
   card.append(
     textRow(doc, 'Title', tr.title ?? '', v => { tr.title = v; }),
     textArea(doc, 'Text', tr.text ?? '', v => { tr.text = v; }),
@@ -2457,6 +2859,36 @@ function storyTriggerCard(doc, tr, idx, actions, setStatus) {
     selRow(doc, 'Condition', ['', ...conditionKeys()], tr.condition ?? '', v => {
       if (v) tr.condition = v; else delete tr.condition;
     }),
+  );
+  card.append(cardButtons(doc, actions));
+  return card;
+}
+
+// Scripted NPC card — id, roster character, spawn hex.
+function npcCard(doc, npc, idx, actions) {
+  const card = doc.createElement('div');
+  card.className = 'e-card';
+  const names = ['', ...survivorPickerOptions().slice(1).map(o => o.id)];
+  card.append(
+    textRow(doc, 'NPC Id', npc.id ?? '', v => { npc.id = v; }),
+    selRow(doc, 'Character', names, npc.survivorName ?? '', v => { npc.survivorName = v || null; }),
+    textRow(doc, 'Title', npc.displayTitle ?? '', v => { npc.displayTitle = v || undefined; }),
+    numRow(doc, 'Col', npc.col ?? 0, v => { npc.col = v; }),
+    numRow(doc, 'Row', npc.row ?? 0, v => { npc.row = v; }),
+  );
+  card.append(cardButtons(doc, actions));
+  return card;
+}
+
+// Conversation card — markdown file ref, role bindings, on-complete actions.
+function conversationCard(doc, c, idx, actions, setStatus) {
+  const card = doc.createElement('div');
+  card.className = 'e-card';
+  card.append(
+    textRow(doc, 'Conversation Id', c.id ?? '', v => { c.id = v; }),
+    textRow(doc, 'File', c.file ?? '', v => { c.file = v; }),
+    jsonRow(doc, 'Bindings', c.bindings ?? {}, v => { c.bindings = v ?? {}; }, setStatus),
+    jsonRow(doc, 'On Complete', c.onComplete ?? [], v => { c.onComplete = v ?? []; }, setStatus),
   );
   card.append(cardButtons(doc, actions));
   return card;

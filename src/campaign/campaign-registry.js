@@ -1,18 +1,21 @@
 // Campaign registry — import all campaign definition files and export them
 // as a discoverable list. To add a new campaign, import it and add to the array.
 //
-// The Caleb's Hollow prologue (7 missions) and the tutorial (1 mission) are
-// data-driven: their definitions live as JSON under ./missions/ and are loaded
-// + registered at module init (P3 migration). The campaign files here are thin
-// shells (id/title/description/firstMission); their missions[] and mapBuilders
-// are populated by `registerJSONMissions` below. Loading is environment-aware:
+// The Caleb's Hollow prologue is data-driven: its mission definitions (the
+// guided `tutorial` first, then the seven story missions) live as JSON under
+// ./missions/ and are loaded + registered at module init (P3 migration). The
+// campaign file here is a thin shell (id/title/description/firstMission); its
+// missions[] and mapBuilders are populated by `registerJSONMissions` below.
+// Loading is environment-aware:
 //   • browser  — same-origin `fetch` of each ./missions/*.json
 //   • node     — synchronous `fs` read (tests, headless-campaign runner)
 // Both paths feed the same already-parsed object to `loadMissionJSON`, so the
 // loader is identical. The module uses top-level `await`, so any importer (the
 // app, headless scripts, tests) transparently waits for registration.
+//
+// The standalone `prologue` (tutorial-only) campaign was retired: the tutorial
+// is now Chapter 1's first mission, so it no longer registers as its own campaign.
 
-import prologue from './campaigns/prologue.js';
 import calebsHollowPrologue from './campaigns/calebs-hollow-prologue.js';
 import { registerMissionJSON } from './json-mission.js';
 import { MIGRATED_MISSIONS, missionFileName } from './mission-catalog.js';
@@ -23,7 +26,6 @@ import { MIGRATED_MISSIONS, missionFileName } from './mission-catalog.js';
  *   Optional: disabled (boolean), prerequisiteCampaign (string)
  */
 export const CAMPAIGNS = [
-  prologue,
   calebsHollowPrologue,
   {
     id:          'chapter_2',

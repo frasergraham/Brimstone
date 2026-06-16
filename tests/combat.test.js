@@ -145,8 +145,10 @@ describe('gang-up flat bonus (+1 per ally, cap ADVANTAGE_CAP)', () => {
     const r = executeBattle(state, hero, minion);
     assert.equal(r.breakdown.atkAdvantageDice, 1, 'one ally → +1 advantage die');
     assert.equal(r.breakdown.atkGangupFlat, 1, 'one ally → +1 flat');
-    // attack = picked-die + ATK + attackBonus + phaseBonus + fortAtk + flat
-    const expected = r.breakdown.atkBaseDie + hero.attack + (hero.attackBonus || 0)
+    // attack = picked-die + effective ATK + attackBonus + phaseBonus + fortAtk + flat
+    // Use getAttack() (effective, includes the equipped weapon) to match what
+    // resolveCombat folds into attackRoll — the hero now starts with a sword.
+    const expected = r.breakdown.atkBaseDie + hero.getAttack() + (hero.attackBonus || 0)
       + (r.breakdown.phaseBonus || 0) + (r.breakdown.atkFortAtkBonus || 0)
       + r.breakdown.atkGangupFlat;
     assert.equal(r.attackRoll, expected);

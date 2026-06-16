@@ -4,6 +4,12 @@
 // _showOnlineScreen()/_showAsyncScreen(). Errors now display in the auth
 // dialog (#auth-error), so the ordering concern is simpler, but we still
 // verify that the handler calls the screen-show function before _onlineError.
+//
+// NOTE: these are deliberately source-level checks. src/main.js is the 8.6k-line
+// client entry script with top-level DOM side effects — it cannot be imported
+// under node:test without a full browser environment, so the call-ordering
+// invariant (which guards a real regression: _initMpStep() wiping the error
+// display right after it was shown) is asserted against the handler's source.
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';

@@ -1,10 +1,52 @@
 // Admin API helpers — query functions for the admin panel.
 // All SQL delegated to server/db/*.
 import db from './db.js';
-import { writeFileSync } from 'fs';
+import { writeFileSync, readdirSync } from 'fs';
 import { dirname, join } from 'path';
 import { getRooms, getRoom, getRoomChronicle } from './lobby.js';
 import { getSave, getSaveRounds, getCompletedGame, getCompletedGameRounds } from './saves.js';
+
+// ── Asset listing (for the admin asset viewer) ───────────────────────────────
+
+/**
+ * Recursively list every .glb model file under `modelsDir`, returned as
+ * sorted paths relative to that dir using POSIX ('/') separators. Powers the
+ * asset viewer's live model list so it shows ALL models in the game, not the
+ * old hardcoded handful. Dotfiles (e.g. .DS_Store) are skipped; an unreadable
+ * directory yields no entries rather than throwing.
+ */
+export function listModelFiles(modelsDir) {
+  const out = [];
+  const walk = (dir, prefix) => {
+    let entries;
+    try { entries = readdirSync(dir, { withFileTypes: true }); }
+    catch { return; }
+    for (const ent of entries) {
+      if (ent.name.startsWith('.')) continue;
+      const rel = prefix ? `${prefix}/${ent.name}` : ent.name;
+      if (ent.isDirectory()) walk(join(dir, ent.name), rel);
+      else if (ent.name.toLowerCase().endsWith('.glb')) out.push(rel);
+    }
+  };
+  walk(modelsDir, '');
+  return out.sort();
+}
+
+/**
+ * List every campaign conversation as its file id (basename without the `.md`
+ * extension), sorted. Powers the Mission Editor's conversation dropdown so a
+ * newly-added markdown file shows up live (no rebuild / hardcoded list).
+ * Dotfiles (e.g. .DS_Store) are skipped; an unreadable directory yields none.
+ */
+export function listConversationFiles(convDir) {
+  let entries;
+  try { entries = readdirSync(convDir, { withFileTypes: true }); }
+  catch { return []; }
+  return entries
+    .filter(ent => ent.isFile() && !ent.name.startsWith('.') && ent.name.toLowerCase().endsWith('.md'))
+    .map(ent => ent.name.replace(/\.md$/i, ''))
+    .sort();
+}
 
 // ── Existing queries ────────────────────────────────────────────────────────
 

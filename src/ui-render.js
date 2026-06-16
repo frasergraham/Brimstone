@@ -5,10 +5,51 @@
 import { PlanActionType } from './planner.js';
 import { ITEMS } from './items.js';
 import { EntityType, ENTITY_COLOR } from './entities.js';
-import { ResourceType } from './tiles.js';
-import { nodeController } from './game.js';
+import { ResourceType, WEAPON_LABEL, RESOURCE_LABEL } from './tiles.js';
+import { nodeController, PHASE_ICON, DEFAULT_CYCLE_PHASES } from './game.js';
 import { hexKey } from './hex.js';
 import { getFactionTheme } from './theme.js';
+import { EFFECTS } from './effects.js';
+import { buildOutcomeSummary } from './replay-timeline.js';
+
+// Effects whose mods make a unit weaker (red pip), vs. those that strengthen
+// it (green pip). Anything not listed renders neutral.
+const _BAD_EFFECTS  = new Set(['wounded', 'poisoned', 'bleeding', 'stunned', 'slowed', 'marked', 'cursed']);
+const _GOOD_EFFECTS = new Set(['frenzied', 'inspired', 'fortified', 'eagle_eyed']);
+
+/**
+ * Render the active effects pip strip for an entity. Each pip shows the
+ * effect's icon and (for finite durations) a small remaining-rounds badge.
+ * The full label/description is exposed via the title attribute for
+ * desktop hover and mobile long-press. Pure — shared by the Unit Stats Bar
+ * (ui.js) and the plan-panel unit detail.
+ */
+export function buildEffectsHtml(entity) {
+  if (!entity || !Array.isArray(entity.effects) || entity.effects.length === 0) {
+    return '';
+  }
+  const pips = entity.effects.map(rec => {
+    const def = EFFECTS[rec.id];
+    if (!def) return '';
+    const kind = _BAD_EFFECTS.has(rec.id) ? 'bad'
+               : _GOOD_EFFECTS.has(rec.id) ? 'good'
+               : '';
+    const durLabel = typeof rec.duration === 'number'
+      ? `${rec.duration}`
+      : (rec.duration === 'mission' ? '∞' : '');
+    const stacksLabel = (rec.stacks ?? 1) > 1 ? `×${rec.stacks}` : '';
+    const tooltipBits = [def.label, def.description];
+    if (typeof rec.duration === 'number') tooltipBits.push(`${rec.duration} round${rec.duration === 1 ? '' : 's'} remaining`);
+    else if (rec.duration === 'mission') tooltipBits.push('Lasts the mission');
+    else if (rec.duration === 'permanent') tooltipBits.push('Permanent');
+    const tooltip = tooltipBits.join(' — ').replace(/"/g, '&quot;');
+    return `<span class="usb-effect-pip" data-kind="${kind}" title="${tooltip}">`
+         + `<span class="usb-effect-letter">${def.badge ?? '●'}</span>${stacksLabel}`
+         + (durLabel ? `<span class="usb-effect-pip-dur">${durLabel}</span>` : '')
+         + `</span>`;
+  }).join('');
+  return `<span class="usb-effects">${pips}</span>`;
+}
 
 // ── Plan action description ───────────────────────────────────────────────────
 
@@ -215,6 +256,75 @@ const UNIT_GLYPH = {
 };
 
 /**
+ * Read-only unit detail shown inside the selected unit's plan block — mirrors
+ * the Unit Stats Bar (ui.js _renderUnitStatsBar): HP, equipped weapon, ATK/DEF/
+ * RNG, ability + effects, plus the unit's personal pack. Pure (no DOM/`this`).
+ *
+ * @param {object} entity  Live Entity (getAttack/getDefense/getRange available).
+ * @param {object} [items] key→count pack map (projected); falls back to entity.items.
+ * @returns {string} HTML for the `.plan-unit-detail` block.
+ */
+export function buildUnitDetailHtml(entity, items) {
+  if (!entity) return '';
+  const pack = items ?? entity.items ?? {};
+
+  const hpPct   = Math.max(0, Math.min(100, (entity.hp / entity.maxHp) * 100));
+  const hpColor = hpPct > 60 ? '#4caf7d' : hpPct > 30 ? '#f5c842' : '#c0392b';
+  const atk = typeof entity.getAttack === 'function' ? entity.getAttack() : (entity.attack ?? 0);
+  const def = typeof entity.getDefense === 'function' ? entity.getDefense() : (entity.defense ?? 0);
+  const rng = typeof entity.getRange === 'function' ? entity.getRange() : (entity.range ?? 1);
+
+  const weaponLabel = entity.weapon
+    ? (WEAPON_LABEL[entity.weapon] || entity.weapon)
+    : '👊 Unarmed';
+  const abilityHtml = entity.abilityLabel
+    ? `<span class="usb-ability">✦ ${entity.abilityLabel}</span>`
+    : '';
+  const effectsHtml = buildEffectsHtml(entity);
+
+  // Pack rows: weapons via WEAPON_LABEL, everything else via RESOURCE_LABEL.
+  // The equipped weapon lives in the vitals line, not the pack (entity.items
+  // already excludes it).
+  const packRows = Object.entries(pack)
+    .filter(([, n]) => (n || 0) > 0)
+    .map(([k, n]) => {
+      const label = ITEMS[k]?.kind === 'weapon'
+        ? (WEAPON_LABEL[k] || k)
+        : (RESOURCE_LABEL[k] || k);
+      return `<div class="inv-resource-row">`
+           + `<span class="inv-resource-label">${label}</span>`
+           + `<span class="inv-resource-val">×${n}</span></div>`;
+    }).join('');
+
+  // Each group on its own line — a long weapon label wrapping next to the
+  // stats looks bad in the narrow side panel.
+  const hpHtml = `<span class="usb-hp-wrap"><span class="usb-stat">HP</span>`
+    + `<span class="usb-hp-track"><span class="usb-hp-fill" style="width:${hpPct}%;background:linear-gradient(to bottom,rgba(255,255,255,0.28) 0%,rgba(255,255,255,0) 55%),${hpColor}"></span></span>`
+    + `<span class="usb-stat-val">${entity.hp}/${entity.maxHp}</span></span>`;
+  const agi = typeof entity.getAgility === 'function' ? entity.getAgility() : (entity.agility ?? 0);
+  const statsHtml = `<span class="usb-stat">ATK <span class="usb-stat-val">${atk}</span></span>`
+    + `<span class="usb-stat">DEF <span class="usb-stat-val">${def}</span></span>`
+    + `<span class="usb-stat">RNG <span class="usb-stat-val">${rng}</span></span>`
+    + `<span class="usb-stat" title="Agility — higher acts earlier each turn">AGI <span class="usb-stat-val">${agi}</span></span>`;
+  const extraLine = (abilityHtml || effectsHtml)
+    ? `<div class="plan-unit-vline">${abilityHtml}${effectsHtml}</div>`
+    : '';
+
+  return `<div class="plan-unit-detail">`
+    + `<div class="plan-unit-vitals">`
+    +   `<div class="plan-unit-vline">${hpHtml}</div>`
+    +   `<div class="plan-unit-vline"><span class="usb-weapon">${weaponLabel}</span></div>`
+    +   `<div class="plan-unit-vline">${statsHtml}</div>`
+    +   extraLine
+    + `</div>`
+    + `<div class="plan-unit-pack">`
+    +   `<div class="plan-unit-pack-title">Pack (spare)</div>`
+    +   (packRows || `<div class="inv-empty">No spare items</div>`)
+    + `</div>`
+    + `</div>`;
+}
+
+/**
  * Build plan panel HTML with visually distinct blocks per unit.
  *
  * Renders a row for every controllable unit (even units with zero queued
@@ -228,9 +338,10 @@ const UNIT_GLYPH = {
  * @param {Array}   entities                   Live entity array (for name lookups).
  * @param {object}  [initialInv]               Starting inventory snapshot.
  * @param {Array}   [controllableUnits]        Every unit the local player controls, in display order.
- * @param {string}  [selectedEntityId]         Deprecated/unused — the selection highlight is now
- *                                             applied post-render by UIController._syncPlanSelectionClass.
- *                                             Kept as a positional slot so `portraitMap` stays aligned.
+ * @param {string}  [selectedEntityId]         The selected unit — its block renders an expanded
+ *                                             read-only detail (HP/weapon/stats + pack) and a ▾ chevron.
+ *                                             (The .plan-unit-selected highlight is still applied
+ *                                             post-render by UIController._syncPlanSelectionClass.)
  * @param {Map<string,string>} [portraitMap]   entityId → portrait data URL (optional; falls back to glyph).
  * @returns {string}  HTML string safe to assign to stepsEl.innerHTML.
  */
@@ -322,8 +433,11 @@ export function buildUnitPlanBlocksHtml(
     // The `.plan-unit-selected` highlight is applied post-render by
     // UIController._syncPlanSelectionClass (single subscriber to the renderer's
     // onSelectionChange hook), not baked into this HTML.
+    const isSelected = !!selectedEntityId && entityId === selectedEntityId;
+    const chevron = isSelected ? '▾' : '▸';
     html += `<div class="plan-unit-block" data-entity-id="${entityId}">`;
     html += `<div class="plan-unit-header">`;
+    html += `<span class="plan-unit-chevron">${chevron}</span>`;
     html += avatarHtml;
     html += `<span class="plan-unit-name">${name}</span>`;
     html += `<span class="plan-unit-count">${count} action${count !== 1 ? 's' : ''}</span>`;
@@ -353,7 +467,16 @@ export function buildUnitPlanBlocksHtml(
       });
     }
 
-    html += `</div></div>`;
+    html += `</div>`; // close .plan-unit-steps
+
+    // Read-only detail for the selected unit (HP/weapon/stats + pack). Uses the
+    // projected per-unit items so queued equips/uses are reflected.
+    if (isSelected && entity) {
+      const items = projEntityItems[entityId] ?? entity.items ?? {};
+      html += buildUnitDetailHtml(entity, items);
+    }
+
+    html += `</div>`; // close .plan-unit-block
   }
 
   return html;
@@ -463,30 +586,31 @@ export function buildPlayerStatusHtml(players, nudgeCtx) {
  */
 export function buildObjectivesHtml(witchObjectives, entities, nodeScore, gameMode = 'standard') {
   let nodeDots  = '';
-  let witchCount = 0, heroCount = 0;
 
   for (const obj of witchObjectives) {
     const ctrl = nodeController(obj, entities);
     let cls;
-    if      (ctrl === 'witch')     { cls = 'witch';     witchCount++; }
-    else if (ctrl === 'hero')      { cls = 'hero';       heroCount++;  }
+    if      (ctrl === 'witch')     { cls = 'witch';     }
+    else if (ctrl === 'hero')      { cls = 'hero';      }
     else if (ctrl === 'contested') { cls = 'contested'; }
     else                           { cls = 'neutral';   }
     const nodeColor = obj.color ?? '#888';
-    nodeDots += `<span class="node-dot ${cls}" title="${obj.label ?? ''}" style="border-color:${nodeColor}"></span>`;
+    nodeDots += `<span class="node-dot ${cls}" style="border-color:${nodeColor}"></span>`;
   }
 
   const score = nodeScore ?? { hero: 0, witch: 0 };
   let html;
 
+  // No native title tooltips here — tapping the bar opens the game-styled
+  // cycle & scoring info panel (buildCycleInfoHtml) instead.
   if (gameMode === 'battle') {
     // Battle mode: numeric score display (unbounded)
     html =
-      `<span class="score-track hero-track battle-score" title="Hero score: ${score.hero}">` +
+      `<span class="score-track hero-track battle-score">` +
         `<span class="score-num hero">${score.hero}</span>` +
       `</span>` +
       `<span class="node-dots-group">${nodeDots}</span>` +
-      `<span class="score-track witch-track battle-score" title="Witch score: ${score.witch}">` +
+      `<span class="score-track witch-track battle-score">` +
         `<span class="score-num witch">${score.witch}</span>` +
       `</span>`;
   } else {
@@ -497,16 +621,12 @@ export function buildObjectivesHtml(witchObjectives, entities, nodeScore, gameMo
     const witchPips = Array.from({ length: scoreMax }, (_, i) =>
       `<span class="score-pip witch${i < score.witch ? ' filled' : ''}"></span>`).join('');
     html =
-      `<span class="score-track hero-track" title="Hero score: ${score.hero}/4">${heroPips}</span>` +
+      `<span class="score-track hero-track">${heroPips}</span>` +
       `<span class="node-dots-group">${nodeDots}</span>` +
-      `<span class="score-track witch-track" title="Witch score: ${score.witch}/4">${witchPips}</span>`;
+      `<span class="score-track witch-track">${witchPips}</span>`;
   }
 
-  const title = witchCount === witchObjectives.length ? '⚠ Witch holds all nodes'
-              : heroCount  === witchObjectives.length ? '★ Hero holds all nodes'
-              : 'Power Nodes';
-
-  return { html, title };
+  return { html };
 }
 
 /**
@@ -534,4 +654,215 @@ export function buildNodeBadgeHtml(witchObjectives, entities, col, row) {
   const name = node.label ?? 'Power Node';
   return `<span class="usb-terrain-node" style="color:${nodeColor}">⬡ ${name}</span>` +
     ` · <span style="color:${disp.color}">${disp.label}</span>`;
+}
+
+// ── Cycle & scoring info panel ────────────────────────────────────────────────
+//
+// Content for the panel that opens when the player taps the bottom score bar
+// or the day-cycle pill. Replaces the native title tooltips with a
+// game-styled, touch-friendly explanation of the phase cycle and the node
+// scoring rules. Pure HTML string — no DOM.
+
+/** Per-phase display metadata — shared by the turn-info pill and this panel. */
+export const PHASE_META = Object.freeze({
+  dawn:  { sprite: 'cycle_dawn',  label: 'Dawn',  desc: 'Hero +1 action · node scoring · attrition rises' },
+  day:   { sprite: 'cycle_day',   label: 'Day',   desc: 'Witch undead in the open suffer' },
+  dusk:  { sprite: 'cycle_dusk',  label: 'Dusk',  desc: 'Node scoring · seek cover before night' },
+  night: { sprite: 'cycle_night', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
+});
+
+// Phase blurbs for missions that disable node scoring — same effects minus
+// the scoring mention, so the panel doesn't promise points that never come.
+const PHASE_DESC_NO_SCORING = Object.freeze({
+  dawn: 'Hero +1 action · attrition rises',
+  dusk: 'Seek cover before night',
+});
+
+export function buildCycleInfoHtml(state, icons = {}) {
+  const phases   = state.cycleConfig?.phases ?? DEFAULT_CYCLE_PHASES;
+  const cycleLen = phases.length;
+  const idx      = (state.round - 1) % cycleLen;
+  const cycleNum = Math.ceil(state.round / cycleLen);
+  const cur      = phases[idx];
+  const next     = phases[(idx + 1) % cycleLen];
+  const meta     = (p) => {
+    const m = PHASE_META[p] ?? { label: p, desc: '' };
+    return (state.disableScoring && PHASE_DESC_NO_SCORING[p])
+      ? { ...m, desc: PHASE_DESC_NO_SCORING[p] }
+      : m;
+  };
+  // The caller passes the game's cycle sprites (renderer data URLs) keyed by
+  // phase; the emoji is only the headless/loading fallback.
+  const icon = (p) => icons[p]
+    ? `<img class="cip-icon" src="${icons[p]}" alt="${meta(p).label}">`
+    : `${PHASE_ICON[p] ?? ''}`;
+
+  // Cycle strip — one chip per round in the cycle, current highlighted.
+  const strip = phases.map((p, i) =>
+    `<span class="cip-chip phase-${p}${i === idx ? ' current' : ''}">${icon(p)}</span>`
+  ).join('');
+
+  let html = `<div class="cip-title">Day ${cycleNum} · Round ${state.round}</div>`;
+  html += `<div class="cip-strip">${strip}</div>`;
+  html += `<div class="cip-phase"><span class="cip-phase-name">${icon(cur)} ${meta(cur).label}</span>`
+        + `<span class="cip-phase-desc">${meta(cur).desc}</span></div>`;
+  html += `<div class="cip-phase cip-next"><span class="cip-phase-name">Next: ${icon(next)} ${meta(next).label}</span>`
+        + `<span class="cip-phase-desc">${meta(next).desc}</span></div>`;
+
+  // Scoring rules + live node status. Campaign missions can turn node scoring
+  // off entirely (state.disableScoring) — suppress the rule text and the score
+  // pips so the panel doesn't promise points the mission will never award.
+  const threshold = state.nodeScoreThreshold ?? 4;
+  const scoringOn = !state.disableScoring;
+  if (scoringOn) {
+    html += `<hr class="cip-divider">`;
+    if (state.gameMode === 'battle') {
+      html += `<div class="cip-rule">Points score every round. The faction leading when time runs out wins.</div>`;
+    } else {
+      html += `<div class="cip-rule">At every <b>dawn</b> and <b>dusk</b>, the side holding <b>more Power Nodes</b> scores a point — ties score nothing. First to <b>${threshold} points</b> wins.</div>`;
+    }
+  }
+  const CTRL = {
+    hero:      { label: 'Hero',       cls: 'hero' },
+    witch:     { label: 'Witch',      cls: 'witch' },
+    contested: { label: 'Contested',  cls: 'contested' },
+    neutral:   { label: 'Unclaimed',  cls: 'neutral' },
+  };
+  const nodes = (state.witchObjectives ?? []).map(o => {
+    const c = CTRL[nodeController(o, state.entities ?? [])] ?? CTRL.neutral;
+    return `<div class="cip-node"><span class="cip-node-name" style="color:${o.color ?? '#c89dff'}">⬡ ${o.label ?? 'Power Node'}</span>`
+      + `<span class="cip-node-ctrl ${c.cls}">${c.label}</span></div>`;
+  }).join('');
+  if (nodes) {
+    if (!scoringOn) html += `<hr class="cip-divider">`;
+    html += `<div class="cip-nodes">${nodes}</div>`;
+  }
+  // Score — the same pips as the bar (battle mode is unbounded → numeric).
+  if (scoringOn) {
+    const score = state.nodeScore ?? { hero: 0, witch: 0 };
+    if (state.gameMode === 'battle') {
+      html += `<div class="cip-score">⚔ ${score.hero} — ${score.witch} ✦</div>`;
+    } else {
+      const pips = (cls, n) => Array.from({ length: threshold }, (_, i) =>
+        `<span class="score-pip ${cls}${i < n ? ' filled' : ''}"></span>`).join('');
+      html += `<div class="cip-score">`
+        + `<span class="cip-score-glyph">⚔</span>${pips('hero', score.hero)}`
+        + `<span class="cip-score-sep">—</span>`
+        + `${pips('witch', score.witch)}<span class="cip-score-glyph">✦</span></div>`;
+    }
+  }
+  return html;
+}
+
+// ── Turn-card roll breakdown popup (game-styled hover tooltip content) ───────
+//
+// Renders buildRollRows() as the old 2D battle dialog did: attack and
+// defense COLUMNS side by side — each headed by its combatant's icon + name —
+// building line by line: dice pool (picked die highlighted against the
+// discards), one row per modifier (positive green / negative red), divider,
+// Total — followed by the outcome (what happened, why, and who took how much
+// damage) and the rules notes. Pure HTML string — no DOM.
+//
+// `opts.portraitFor(unitRef)` returns a portrait data-URL (or null) for the
+// combatant header icons; without it (or on a miss) the header falls back to
+// the unit's coloured glyph chip.
+export function buildRollRowsTipHtml(rows, entry = {}, { portraitFor = null } = {}) {
+  if (!rows) return '';
+  const esc = (s) => String(s ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  const combatantHead = (u) => {
+    if (!u) return '';
+    const src = portraitFor ? portraitFor(u) : null;
+    const icon = src
+      ? `<img class="gtt-combatant-icon" src="${src}" style="border-color:${u.color}" alt="">`
+      : `<span class="gtt-combatant-icon" style="background:${u.color}">${esc(u.glyph ?? '')}</span>`;
+    return `<div class="gtt-combatant">${icon}`
+      + `<span class="gtt-combatant-name">${esc(u.name)}</span></div>`;
+  };
+
+  const diceRow = ({ pool, picked, advantage }) => {
+    let usedPick = false;
+    const discards = [];
+    let pickedHtml = '';
+    for (const v of (Array.isArray(pool) ? pool : [picked])) {
+      const isPick = !usedPick && v === picked;
+      if (isPick) { usedPick = true; pickedHtml = `<span class="gtt-die gtt-die-picked">${v}</span>`; }
+      else discards.push(`<span class="gtt-die gtt-die-discard">${v}</span>`);
+    }
+    const note = advantage > 0 ? `adv ${advantage}` : advantage < 0 ? `disadv ${-advantage}` : 'die';
+    return `<div class="gtt-row gtt-dice-row">`
+      + `<span class="gtt-label">${note}${discards.length ? ` ${discards.join('')}` : ''}</span>`
+      + `<span class="gtt-val">${pickedHtml}</span></div>`;
+  };
+
+  const column = (name, cls, side, padTo, headHtml) => {
+    let html = `<div class="gtt-col ${cls}">`;
+    html += `<div class="gtt-col-head">${name}</div>`;
+    html += headHtml;
+    html += diceRow(side.dice);
+    for (const t of side.terms) {
+      const sign = t.val > 0 ? 'positive' : 'negative';
+      const v = t.val > 0 ? `+${t.val}` : `−${Math.abs(t.val)}`;
+      html += `<div class="gtt-row" data-sign="${sign}">`
+        + `<span class="gtt-label">${esc(t.label)}</span>`
+        + `<span class="gtt-val">${v}</span></div>`;
+    }
+    // Spacer rows so both Totals sit on the same baseline (old dialog padTo).
+    for (let i = side.terms.length; i < padTo; i++) {
+      html += `<div class="gtt-row gtt-row-spacer">&nbsp;</div>`;
+    }
+    html += `<div class="gtt-row gtt-total-row"><span class="gtt-label">Total</span>`
+      + `<span class="gtt-val">${side.roll}</span></div>`;
+    return html + `</div>`;
+  };
+
+  const padTo = Math.max(rows.atk.terms.length, rows.def.terms.length);
+  let html = `<div class="gtt-bkd">`;
+  html += `<div class="gtt-cols">`
+    + column('⚔ ATTACK', 'gtt-atk', rows.atk, padTo, combatantHead(entry.actor))
+    + column('🛡 DEFENSE', 'gtt-def', rows.def, padTo, combatantHead(entry.target))
+    + `</div>`;
+
+  // Outcome: what happened, why, and the damage dealt.
+  const outcome = buildOutcomeSummary(entry);
+  if (outcome) {
+    html += `<div class="gtt-outcome" data-kind="${outcome.kind}">`
+      + `<div class="gtt-outcome-word">${esc(outcome.headline)}</div>`
+      + `<div class="gtt-outcome-reason">${esc(outcome.reason)}</div>`
+      + outcome.lines.map(l => `<div class="gtt-outcome-line">${esc(l)}</div>`).join('')
+      + `</div>`;
+  }
+
+  for (const n of rows.notes) html += `<div class="gtt-note">${esc(n)}</div>`;
+  html += `<div class="gtt-rule">${esc(rows.rule)}</div>`;
+  html += `</div>`;
+  return html;
+}
+
+// ── Game-tooltip placement ────────────────────────────────────────────────────
+//
+// Pure geometry for initGameTooltips. Default placement: above the hovered
+// target, clamped to the viewport, flipping below when there's no headroom.
+// When the target lives inside a replay turn card (`cardRect` given), the
+// popup must never cover the card the player is reading: it goes BELOW the
+// whole card, or docks BESIDE it when there's no room below.
+export function computeGameTooltipPos({
+  targetRect: r, cardRect = null, tipW, tipH, viewportW, viewportH,
+}) {
+  let x = r.left + r.width / 2 - tipW / 2;
+  x = Math.max(6, Math.min(x, viewportW - tipW - 6));
+  if (cardRect) {
+    let y = cardRect.bottom + 10;
+    if (y + tipH > viewportH - 6) {
+      // No room below the card — dock beside it (right, else left).
+      x = cardRect.right + 10;
+      if (x + tipW > viewportW - 6) x = Math.max(6, cardRect.left - tipW - 10);
+      y = Math.max(6, Math.min(cardRect.top, viewportH - tipH - 6));
+    }
+    return { x, y };
+  }
+  let y = r.top - tipH - 10;
+  if (y < 6) y = r.bottom + 10;
+  return { x, y };
 }

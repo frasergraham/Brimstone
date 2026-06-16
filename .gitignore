@@ -27,6 +27,9 @@ build/*
 # Regenerate via: npm install --no-save fbx2gltf && node scripts/convert-character-fbx.js
 assets/source/characters/*.fbx
 assets/source/characters/*.fbm/
+# Exception: keep the Paladin's 40k source FBX tracked so its smooth .glb is
+# reproducible via scripts/fbx-to-glb-blender.py (weld → smooth → decimate).
+!assets/source/characters/Paladin-Idle.fbx
 
 # Capacitor build artifacts
 www/
@@ -57,3 +60,6 @@ assets/textures/*
 # Editable source-art working files (e.g. Pixelmator .pxd) — kept locally. Only
 # the exported runtime texture (e.g. assets/road-cobblestone.png) is tracked.
 *.pxd
+
+# Caleb's Studio build output (npm run studio:build:mac → bin/calebs-studio/)
+bin/

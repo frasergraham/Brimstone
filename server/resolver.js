@@ -7,7 +7,7 @@
 import {
   executeMove, executeExplore, executeBattle,
   executeFortify, executeSummon, executeHeal, executeUseItem, executeUseAbility,
-  executeGuard, executeGuardStrike, executeSoundHorn, executeFortAssault,
+  executeGuard, executeSoundHorn, executeFortAssault,
   hasLineOfSight,
 } from '../src/actions.js';
 import { FORT_IMPASSABLE_THRESHOLD } from '../src/tiles.js';
@@ -44,6 +44,24 @@ function _sortCandidates(state, candidates) {
   return candidates;
 }
 
+// Project each acting unit's END-OF-TURN hex for this step: a unit whose next
+// action is a MOVE will stand on its destination; everyone else stays put.
+// executeBattle reads this (via `state._turnEndPositions`) so gang-up allies are
+// counted by where they end the TURN, not where they start it — moves are
+// simultaneous with battles, so an ally moving out of range this same turn no
+// longer flanks (and one moving into range does).
+function computeTurnEndPositions(candidates) {
+  const map = new Map();
+  for (const c of candidates) {
+    const front = c.queue[0];
+    if (front && front.type === PlanActionType.MOVE &&
+        Number.isInteger(front.toCol) && Number.isInteger(front.toRow)) {
+      map.set(c.entityId, { col: front.toCol, row: front.toRow });
+    }
+  }
+  return map;
+}
+
 // ── Event types ──────────────────────────────────────────────────────────────
 
 export const ResEventType = Object.freeze({
@@ -53,7 +71,21 @@ export const ResEventType = Object.freeze({
   BUDGET_CAP:     'budget_cap',     // budget exhausted; remaining plan ignored
   FOOD_CONSUMED:  'food_consumed',  // ration auto-consumed to fund one over-budget action
   GUARD_STRIKE:   'guard_strike',   // reactive attack from a guarding unit
+  XP_AWARDED:     'xp_awarded',     // campaign veterancy — a unit earned XP (one event per logical award)
 });
+
+// Campaign veterancy: fan a result's per-award `xpAwards` (attached by the
+// execute* functions in actions.js) out into discrete XP_AWARDED step events,
+// tagged with the owning faction for fog filtering + bucket routing. Each event
+// is one logical award (kill / combat hit / explore / fortify / gang-up share);
+// the replay aggregates them into a single "+N XP" line per unit per turn. A
+// no-op outside campaign (xpAwards is only attached when awardXP actually
+// granted XP), so normal/online play carries no XP events.
+function _emitXpEvents(result, faction, subEvents) {
+  for (const a of (result?.xpAwards ?? [])) {
+    subEvents.push({ type: ResEventType.XP_AWARDED, faction, ...a });
+  }
+}
 
 // ── Budget calculation ───────────────────────────────────────────────────────
 // Mirrors computeActions / computeActionsForPlayer in game.js without importing
@@ -147,9 +179,10 @@ function runAction(state, action, faction, playerId = null) {
       const attackerRange = typeof entity.getRange === 'function' ? entity.getRange() : (entity.range ?? 1);
       let target = state.entities.find(e => e.id === action.targetId && e.alive);
 
+      let fledTarget = null; // alive but out of reach — distinct from dead/gone
       if (target) {
         const dist = hexDistance(entity.col, entity.row, target.col, target.row);
-        if (dist > attackerRange) target = null; // target moved out of range
+        if (dist > attackerRange) { fledTarget = target; target = null; }
       }
 
       // Fallback: original target gone/moved — attack another enemy on the planned hex
@@ -166,7 +199,24 @@ function runAction(state, action, faction, playerId = null) {
         }
       }
 
-      if (!target) return { kind: 'skip', reason: 'Target is dead or gone.' };
+      if (!target) {
+        // Target is alive but moved out of reach this turn — surface a
+        // distinct "fled" skip so the replay/animation layer can show the
+        // attacker swinging at the planned hex instead of a generic skip.
+        if (fledTarget) {
+          const name = fledTarget.displayName ?? fledTarget.name ?? 'Target';
+          const inReach = Number.isInteger(action.targetCol) && Number.isInteger(action.targetRow) &&
+            hexDistance(entity.col, entity.row, action.targetCol, action.targetRow) <= attackerRange;
+          return {
+            kind: 'skip',
+            reason: `${name} slipped away — out of reach.`,
+            targetFled: true,
+            battleSnaps: inReach ? { actorSnap: snapEntity(entity), ranged: attackerRange > 1 } : null,
+            whiffTarget: inReach ? { col: action.targetCol, row: action.targetRow } : null,
+          };
+        }
+        return { kind: 'skip', reason: 'Target is dead or gone.' };
+      }
 
       const actorSnap  = snapEntity(entity);
       const targetSnap = snapEntity(target);
@@ -343,6 +393,9 @@ function drainOneStep(state, queue, budget) {
         result:      out.result,
         battleSnaps: out.battleSnaps ?? null,
       });
+      // Campaign veterancy: surface any XP this action granted as its own
+      // XP_AWARDED step events (right after the action that earned them).
+      _emitXpEvents(out.result, budget.faction, subEvents);
 
       resolvedAction = action;
       resolvedEntity = actingEntity?.alive ? actingEntity : null;
@@ -355,6 +408,7 @@ function drainOneStep(state, queue, budget) {
         faction:     budget.faction,
         action,
         reason:      out.reason,
+        targetFled:  out.targetFled ?? false,
         battleSnaps: out.battleSnaps ?? null,
         whiffTarget: out.whiffTarget ?? null,
       });
@@ -422,11 +476,25 @@ function _checkGuardStrikes(state, action, actor, faction, subEvents) {
     if (!actor.alive) break;  // stop if target was killed by a prior guard strike
     if (guardian.guarding <= 0) continue;  // charges exhausted by prior strike this step
 
-    guardian.guarding--;  // consume one guard charge
-
-    const guardSnap  = snapEntity(guardian);
+    // A guard reaction is just a regular attack the resolver inserts inline —
+    // NOT a special-cased "guard strike". It runs through executeBattle and is
+    // emitted as a normal ACTION_OK BATTLE_UNIT event, so it serializes, replays,
+    // and animates identically to a planned attack. Guard reactions take NO
+    // counter, NEVER crush, and get NO gang-up (noCounter/noCrush/noAlly) —
+    // matching the pre-refactor guard strike so balance stays neutral (a
+    // full-attack guard counter-killed the hero leader, and gang-up let the
+    // swarm stack reactions, both spiking witch win rate). `guardReaction` is a
+    // cosmetic label marker.
+    const chargesBefore = guardian.guarding;
+    const actorSnap  = snapEntity(guardian);
     const targetSnap = snapEntity(actor);
-    const r = executeGuardStrike(state, guardian, actor);
+    const r = executeBattle(state, guardian, actor, { noCounter: true, noCrush: true, noAlly: true });
+    if (!r.success) continue;
+
+    // executeBattle zeroes the attacker's guard stance (attacking breaks guard);
+    // restore the guardian's REMAINING charges (minus this one) so a multi-charge
+    // guard can still react to other movers this round.
+    guardian.guarding = Math.max(0, chargesBefore - 1);
 
     const gColor = (typeof state.playerColorFor === 'function')
       ? state.playerColorFor(guardian)
@@ -434,13 +502,16 @@ function _checkGuardStrikes(state, action, actor, faction, subEvents) {
     for (const msg of r.log ?? []) state.addLog(msg, guardian.owner, gColor);
 
     subEvents.push({
-      type:        ResEventType.GUARD_STRIKE,
-      faction:     guardian.owner,
-      guardianId:  guardian.id,
-      targetId:    actor.id,
-      result:      r,
-      battleSnaps: { actorSnap: guardSnap, targetSnap, ranged: !!r.ranged },
+      type:         ResEventType.ACTION_OK,
+      faction:      guardian.owner,
+      guardReaction: true,
+      action:       { type: PlanActionType.BATTLE_UNIT, entityId: guardian.id, targetId: actor.id },
+      result:       r,
+      battleSnaps:  { actorSnap, targetSnap, ranged: !!r.ranged },
     });
+    // Campaign veterancy: a guard reaction is a real attack — credit any XP it
+    // earned the guardian to the same step stream.
+    _emitXpEvents(r, guardian.owner, subEvents);
 
     if (r.killed) _handleLeaderDeath(state, actor);
     for (const sk of r.splashKills ?? []) _handleLeaderDeath(state, sk);
@@ -457,6 +528,7 @@ function snapshotEntities(entities) {
     id:            e.id,
     col:           e.col,
     row:           e.row,
+    slot:          e.slot ?? 0,
     hp:            e.hp,
     maxHp:         e.maxHp,
     alive:         e.alive,
@@ -533,6 +605,7 @@ export function resolvePlansMP(state, playerEntries) {
       }
     }
     _sortCandidates(state, candidates);
+    state._turnEndPositions = computeTurnEndPositions(candidates);
 
     const eventsByPlayer = new Map();
     let anyAction = false;
@@ -558,11 +631,38 @@ export function resolvePlansMP(state, playerEntries) {
       if (bucket) stepEvents.push(bucket);
     }
 
-    steps.push({ stepIndex, playerEvents: stepEvents, entitySnapshot });
+    const logicEvents = captureTurnStoryEvents(state);
+    steps.push({ stepIndex, playerEvents: stepEvents, entitySnapshot, ...(logicEvents ? { logicEvents } : {}) });
     stepIndex++;
   }
 
+  state._turnEndPositions = null;
   return steps;
+}
+
+// Mission-logic (docs/09): after a TURN's moves apply, fire the events that a
+// unit's movement/discovery this turn can trigger — Area enter/exit (so triggers
+// fire on pass-through, not only when a unit stops on the hex at a round boundary)
+// and Actor spawn/death (so finding a pinned survivor fires its On Actor node
+// right here). Returns the SHOW (story beat / conversation) events to play at this
+// point in the replay; Sim-side presentation (spawn / flags / NPC choreography)
+// stays queued for the existing post-round handling. Sealed: reads only `state`.
+// No-op without an attached engine, so normal/online games are byte-identical.
+function captureTurnStoryEvents(state) {
+  if (!state?.logicEngine || !Array.isArray(state.logicPresentation)) return null;
+  const before = state.logicPresentation.length;
+  state._dispatchAreaTransitions();
+  state._dispatchActorTransitions();
+  if (state.logicPresentation.length === before) return null;
+  const captured = [];
+  const rest = [];
+  for (let k = before; k < state.logicPresentation.length; k++) {
+    const e = state.logicPresentation[k];
+    (e.kind === 'storyBeat' || e.kind === 'conversation' ? captured : rest).push(e);
+  }
+  state.logicPresentation.length = before;
+  state.logicPresentation.push(...rest);
+  return captured.length ? captured : null;
 }
 
 // ── Legacy 2-player entry point ───────────────────────────────────────────────
@@ -603,6 +703,7 @@ export function resolvePlans(state, heroPlan, witchPlan) {
       candidates.push({ budget: witchBudget, sink: witchEvents, entityId, queue });
     }
     _sortCandidates(state, candidates);
+    state._turnEndPositions = computeTurnEndPositions(candidates);
 
     for (const c of candidates) {
       const events = drainOneStep(state, c.queue, c.budget);
@@ -611,9 +712,11 @@ export function resolvePlans(state, heroPlan, witchPlan) {
 
     if (heroEvents.length === 0 && witchEvents.length === 0) break;
 
-    steps.push({ stepIndex, heroEvents, witchEvents, entitySnapshot });
+    const logicEvents = captureTurnStoryEvents(state);
+    steps.push({ stepIndex, heroEvents, witchEvents, entitySnapshot, ...(logicEvents ? { logicEvents } : {}) });
     stepIndex++;
   }
 
+  state._turnEndPositions = null;
   return steps;
 }

@@ -11,9 +11,9 @@
  *      renderer.
  *
  * The debug hotkeys that used to be bound globally in renderer-3d.js (D/F/T)
- * are gone — those toggles now live behind the `Escape` command console
- * (`/inspector`, `/forest`, `/fog`), freeing the rest of the keyboard for
- * gameplay controls.
+ * are gone — those toggles now live behind the backtick (`` ` ``) command
+ * console (`/inspector`, `/forest`, `/fog`, `/fps`), freeing the rest of the
+ * keyboard for gameplay controls. Escape deselects the current unit.
  */
 
 // AppModes during which the camera / unit controls are meaningful. MENU is
@@ -32,19 +32,19 @@ const ZOOM_RATE = 1.02;    // zoom multiplier per frame
  * the help stays in sync with what `resolveKeyAction` actually does.
  */
 export const SHORTCUTS = Object.freeze([
-  { keys: 'Esc',              label: 'Open the command console' },
+  { keys: '`',                label: 'Open the command console' },
+  { keys: 'Esc',              label: 'Deselect the current unit' },
   { keys: 'H (hold)',         label: 'Show this shortcuts overlay' },
   { keys: 'Arrow keys',       label: 'Pan the map' },
   { keys: 'Shift + ←/→', label: 'Rotate the camera' },
   { keys: 'Shift + ↑/↓', label: 'Zoom in / out' },
-  { keys: 'Tab',              label: 'Cycle to the next unit' },
-  { keys: 'Shift + Tab',      label: 'Cycle to the previous unit' },
+  { keys: 'Tab',              label: 'Next unit (planning) · next card (summary review)' },
+  { keys: 'Shift + Tab',      label: 'Previous unit · previous card' },
   { keys: 'F',                label: 'Focus: zoom to selection (or all your units)' },
   { keys: 'M',                label: 'Fit map to view (again: orient north-up)' },
   { keys: 'X',                label: 'Clear the selected unit’s actions' },
-  { keys: 'Space',            label: 'Next step (replay)' },
+  { keys: 'Space / Enter',    label: 'Next action · Continue (replay / summary)' },
   { keys: 'Shift + Enter',    label: 'Submit plan' },
-  { keys: 'Enter',            label: 'Continue (round summary)' },
 ]);
 
 /**
@@ -64,6 +64,26 @@ export const COMMANDS = Object.freeze({
   fog: {
     describe: 'Cycle the fog debug display mode',
     run: (ctx) => ctx.renderer?._cycleFogDebugMode?.(),
+  },
+  fps: {
+    describe: 'Show/hide the on-canvas FPS counter',
+    run: (ctx) => ctx.renderer?._toggleFpsCounter?.(),
+  },
+  aiassist: {
+    describe: 'Watch an AI play: /aiassist (manual button) · /aiassist auto · /aiassist off',
+    run: (ctx) => {
+      if (!ctx.ui?.setAIAssistMode) {
+        return 'AI-assist unavailable — start a mission first.';
+      }
+      const arg = (ctx.args?.[0] || '').toLowerCase();
+      const mode = (arg === 'off' || arg === 'false' || arg === '0' || arg === 'stop') ? false
+                 : (arg === 'auto' || arg === 'autorun') ? 'auto'
+                 : true;
+      const { enabled, autorun } = ctx.ui.setAIAssistMode(mode);
+      if (autorun) return '🤖 Autorun ON — the AI plans & submits every round. /aiassist off to stop.';
+      if (enabled) return '🤖 AI-assist ON — each round, click the "🤖 AI Plan" button then Submit. (/aiassist auto to autorun.)';
+      return '🤖 AI-assist off.';
+    },
   },
 });
 
@@ -108,11 +128,14 @@ export function executeConsoleCommand(raw, ctx = {}) {
  * (PLAYBACK) and the inline "replay last turn" (RESOLVING), which is why Space
  * keys off it rather than a single mode.
  *
+ * `reviewActive` mirrors it for the end-of-round wrap-up review (scrub arrows
+ * on screen) — Tab keys off it to scrub cards instead of cycling units.
+ *
  * @param {{key:string, shiftKey?:boolean, ctrlKey?:boolean, metaKey?:boolean, altKey?:boolean}} e
- * @param {{appMode?:string, replayActive?:boolean}} ctx
+ * @param {{appMode?:string, replayActive?:boolean, reviewActive?:boolean}} ctx
  * @returns {null | {id:string, [k:string]:any}}
  */
-export function resolveKeyAction(e, { appMode, replayActive } = {}) {
+export function resolveKeyAction(e, { appMode, replayActive, reviewActive } = {}) {
   // Ctrl/Cmd/Alt combos belong to the browser/OS — never intercept them.
   if (e.ctrlKey || e.metaKey || e.altKey) return null;
 
@@ -120,8 +143,11 @@ export function resolveKeyAction(e, { appMode, replayActive } = {}) {
   const key = e.key;
   const inGame = IN_GAME.has(appMode);
 
-  // Escape toggles the command console from anywhere.
-  if (key === 'Escape') return { id: 'console-toggle' };
+  // Backtick toggles the command console from anywhere.
+  if (key === '`') return { id: 'console-toggle' };
+
+  // Escape deselects the current unit (in-game only).
+  if (key === 'Escape') return inGame ? { id: 'deselect' } : null;
 
   // H (hold) shows the shortcuts overlay.
   if (!shift && (key === 'h' || key === 'H')) {
@@ -142,8 +168,10 @@ export function resolveKeyAction(e, { appMode, replayActive } = {}) {
     return { id: 'pan', dx, dy };
   }
 
-  // Tab cycles units (planning only).
+  // Tab — scrubs the turn cards while the wrap-up review is up (same as the
+  // ◀ ▶ arrows); otherwise cycles units (planning only).
   if (key === 'Tab') {
+    if (reviewActive) return { id: 'review-scrub', dir: shift ? -1 : 1 };
     if (appMode !== 'PLANNING') return null;
     return { id: 'cycle-unit', dir: shift ? -1 : 1 };
   }
@@ -159,16 +187,15 @@ export function resolveKeyAction(e, { appMode, replayActive } = {}) {
     return appMode === 'PLANNING' ? { id: 'clear-unit' } : null;
   }
 
-  // Space — advance the replay one step (whenever a manual step bar is up).
-  if (key === ' ' || key === 'Spacebar') {
-    return replayActive ? { id: 'replay-next' } : null;
-  }
-
-  // Enter — Shift+Enter submits a plan; plain Enter confirms a round summary.
-  if (key === 'Enter') {
-    if (shift && appMode === 'PLANNING') return { id: 'submit-plan' };
-    if (!shift && appMode === 'SUMMARY') return { id: 'summary-continue' };
-    return null;
+  // Space / Enter — one shared "advance" key: the executor clicks whichever
+  // advance affordance is on screen (combat-readout Continue, round-summary
+  // Continue, or replay NEXT). Shift+Enter stays the plan submit; both keys
+  // are inert elsewhere so planning can't be advanced by accident.
+  if (key === ' ' || key === 'Spacebar' || key === 'Enter') {
+    if (key === 'Enter' && shift) {
+      return appMode === 'PLANNING' ? { id: 'submit-plan' } : null;
+    }
+    return (replayActive || appMode === 'SUMMARY') ? { id: 'advance' } : null;
   }
 
   return null;
@@ -251,6 +278,7 @@ class KeybindingManager {
     const action = resolveKeyAction(e, {
       appMode: ui?.appMode,
       replayActive: !!ui?._isReplayActive?.(),
+      reviewActive: !!ui?._replayReviewMode,
     });
     if (!action) return;
 
@@ -261,6 +289,14 @@ class KeybindingManager {
       if (this._blockingDialogOpen()) return;
       e.preventDefault();
       this._toggleConsole();
+      return;
+    }
+
+    if (action.id === 'deselect') {
+      // A blocking dialog owns the keyboard — don't deselect behind it.
+      if (this._blockingDialogOpen()) return;
+      e.preventDefault();
+      this.ui?._clearSelection?.();
       return;
     }
 
@@ -365,6 +401,10 @@ class KeybindingManager {
       case 'cycle-unit':
         ui?._cycleSelection?.(action.dir);
         break;
+      case 'review-scrub':
+        // Reuse the review arrows' own handlers so Tab matches ◀ ▶ exactly.
+        document.getElementById(action.dir > 0 ? 'replay-review-next' : 'replay-review-prev')?.click();
+        break;
       case 'focus-unit':
         // Reuse the "Focus" map control: zoom to the selected unit, or frame
         // all of the player's units when nothing is selected.
@@ -379,16 +419,20 @@ class KeybindingManager {
       case 'clear-unit':
         this._clearSelectedUnit();
         break;
-      case 'replay-next': {
-        const btn = document.getElementById('replay-next-btn');
-        if (btn && !btn.disabled) btn.click();
+      case 'advance': {
+        // Click whichever advance affordance is up, most specific first: the
+        // cinematic combat-readout Continue, the round-summary Continue, then
+        // the replay NEXT button.
+        const combat = document.getElementById('combat-continue-btn');
+        if (combat && !combat.hidden && this._isVisible(combat)) { combat.click(); break; }
+        const summary = this._summaryContinueBtn();
+        if (summary) { summary.click(); break; }
+        const next = document.getElementById('replay-next-btn');
+        if (next && !next.disabled && this._isVisible(next)) next.click();
         break;
       }
       case 'submit-plan':
         ui?._doSubmitPlan?.();
-        break;
-      case 'summary-continue':
-        this._summaryContinueBtn()?.click();
         break;
     }
   }
@@ -433,7 +477,7 @@ class KeybindingManager {
 
     this._consoleInput.addEventListener('keydown', (e) => {
       e.stopPropagation();
-      if (e.key === 'Escape') { e.preventDefault(); this._toggleConsole(); }
+      if (e.key === 'Escape' || e.key === '`') { e.preventDefault(); this._toggleConsole(); }
       else if (e.key === 'Enter') { e.preventDefault(); this._runConsoleLine(); }
     });
     el.addEventListener('mousedown', (e) => {
@@ -445,7 +489,7 @@ class KeybindingManager {
     const raw = this._consoleInput.value;
     if (!raw.trim()) return;
     this._echo(`> ${raw}`, 'cmd');
-    const { ok, message } = executeConsoleCommand(raw, { renderer: this.renderer });
+    const { ok, message } = executeConsoleCommand(raw, { renderer: this.renderer, ui: this.ui });
     if (message) this._echo(message, ok ? 'ok' : 'err');
     this._consoleInput.value = '';
   }

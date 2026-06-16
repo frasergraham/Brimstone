@@ -22,6 +22,13 @@ const MISS_FLASH_DUR  = 1000;
 const MISS_FLASH_ZOOM = 0.65;
 const MISS_FLASH_FG   = '#888';
 
+// Summary (fast) readout pacing — the final-total readout holds this long
+// after the outcome flash before fading. Speedy (vfast) skips readouts.
+const FAST_READOUT_HOLD_MS  = 800;
+const FAST_READOUT_BASE_MS  = 200; // total in side colour before the outcome flash
+const FAST_READOUT_FINAL_MS = 150;
+const FAST_READOUT_FADE_MS  = 300;
+
 /**
  * @param {object} opts
  * @param {object} opts.renderer        Live Renderer3D instance
@@ -63,16 +70,46 @@ export async function playFastCombatDisplay({
       const ally = state?.entities?.find(e => e.id === id && e.alive);
       return ally ? { id, col: ally.col, row: ally.row } : null;
     };
+    // Centre on the defender's LIVE hex (mid-turn moves landed), not its
+    // pre-move battle snapshot — otherwise a unit that moved this turn warps
+    // back to its turn-start hex for the readout, then slides back.
+    const liveDef = state?.entities?.find(e => e.id === targetSnap.id && e.alive);
+    // The attacker's live hex reserves its edge of the defender's hex so no
+    // ally is assigned the spot the attacker's lunge freezes on.
+    const liveAtk = state?.entities?.find(e => e.id === actorSnap.id && e.alive);
     renderer.applyCombatPositioning(
       {
-        defender: { id: targetSnap.id, col: targetSnap.col, row: targetSnap.row },
+        defender: { id: targetSnap.id, col: liveDef?.col ?? targetSnap.col, row: liveDef?.row ?? targetSnap.row },
+        attacker: { id: actorSnap.id, col: liveAtk?.col ?? actorSnap.col, row: liveAtk?.row ?? actorSnap.row },
         attackAllies:  atkAllyIds.map(lookupAlly).filter(Boolean),
         defenseAllies: defAllyIds.map(lookupAlly).filter(Boolean),
       },
       { durMs: speed === 'vfast' ? 200 : 400 },
     );
   }
-  if (!result?.hit && missText) {
+  // Summary (fast) keeps the cinematic mode's final-score readout over each
+  // combatant's icon — but with summaryOnly set, so the icon flips straight
+  // to the side's final total (no dice stack-up, no Continue gate) and the
+  // defender shows its HIT/BLOCKED/… result label. The readout promises
+  // register with the renderer's anim tracker, so the caller's
+  // waitForAnimations() paces the hold. Speedy (vfast) stays readout-free.
+  const showReadouts = speed === 'fast'
+    && typeof renderer.addCombatReadout === 'function';
+  if (showReadouts) {
+    const readoutOpts = {
+      summaryOnly: true,
+      attackerCol: actorSnap.col,  attackerRow: actorSnap.row,
+      targetCol:   targetSnap.col, targetRow:   targetSnap.row,
+      baseHoldMs: FAST_READOUT_BASE_MS, stepMs: 0,
+      finalHoldMs: FAST_READOUT_FINAL_MS, fadeMs: FAST_READOUT_FADE_MS,
+      awaitContinueFn: () => new Promise(r => setTimeout(r, FAST_READOUT_HOLD_MS)),
+    };
+    renderer.addCombatReadout(actorSnap.id,  'attacker', result, readoutOpts);
+    renderer.addCombatReadout(targetSnap.id, 'defender', result, readoutOpts);
+  }
+  // The defender readout's result label already says BLOCKED/dodged/…, so the
+  // hex flash only fires when no readout is shown (vfast, or a 2D renderer).
+  if (!result?.hit && missText && !showReadouts) {
     renderer.addFlash(
       targetSnap.col, targetSnap.row,
       missText,

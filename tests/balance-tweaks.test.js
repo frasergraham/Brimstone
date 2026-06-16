@@ -165,11 +165,11 @@ describe('Witch vision distance', () => {
 // ── Change 4: Iron Golem defense nerf ───────────────────────────────────────
 
 describe('Iron Golem stats', () => {
-  test('Iron Golem has attack 3, defense 2, HP 5', () => {
+  test('Iron Golem has attack 3, defense 2, HP 35', () => {
     const golem = createIronGolem(0, 0);
     assert.equal(golem.attack, 3);
     assert.equal(golem.defense, 2);
-    assert.equal(golem.maxHp, 5);
+    assert.equal(golem.maxHp, 35);
   });
 });
 

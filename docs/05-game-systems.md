@@ -11,7 +11,7 @@ Brimstone has two opposing **Sides** — Day and Night — and multiple **Factio
 | Side  | Faction      | Leader entity type | Leader display name | Status |
 |-------|--------------|--------------------|---------------------|--------|
 | day   | hero (Paladin) | `PALADIN`        | Ishmael Charger     | primary |
-| day   | rogue        | `ROGUE`            | Mercy Sloane        | distinct (ranged crossbow, +1 sight, no melee weapons, no Sound Horn) |
+| day   | rogue        | `ROGUE`            | Mercy Sloane        | distinct (starts with a bow → range 3, +1 sight, no melee weapons, no Sound Horn) |
 | day   | captain      | `CAPTAIN`          | Captain Eli Ward    | stub (inherits Paladin behaviour) |
 | night | witch        | `WITCH`            | The Witch           | primary |
 | night | necromancer  | `NECROMANCER`      | The Necromancer     | stub (inherits Witch behaviour) |
@@ -21,12 +21,12 @@ Stub factions are registered with their own `EntityType`, base stats, and defaul
 
 The Rogue is no longer a stub — `RogueFaction` overrides:
 - `getSightRange` — paladin formula + 1 in every phase
-- `canEquipWeaponItem` — only `category === 'ranged'` items (bow, crossbow)
+- `canEquipWeaponItem` — only `category === 'ranged'` items (bow, crossbow, musket, pistol, sling)
 - `innateLeaderAbilities` — empty (no Sound Horn)
 - `modifyLootRoll` — re-rolls `'nothing'` so exploration always finds something
 - `onAfterMoveStep` — auto-detects survivors in adjacent building tiles
 
-Plus `UNIT_TYPES.rogue.range = 3` and `projectileType: 'bolt'` give her the 3-hex crossbow attack via the existing ranged combat path.
+Her 3-hex ranged attack now comes from her **starting bow** (range is weapon-derived; `projectileType` lives on the weapon), not an innate unit-type range.
 
 The Brute is also no longer a stub — `BruteFaction` overrides:
 - `getSummonOptions` / `getMinionCost` — minions only (no golems), and at a 1-resource discount (witch pays 2)
@@ -36,13 +36,35 @@ The Brute is also no longer a stub — `BruteFaction` overrides:
 - `splashSparesAllies` — `true`; witch-side units on splash hexes take no damage (and no knockback)
 - `splashKnockback` — `true`; surviving splashed bystanders are pushed one hex outward from the target when the destination is open
 
-Splash damage scales with the attacker's roll margin: `clamp(floor(margin / 3), 1, 3)`. Crushing blows additionally apply the **wounded** effect to surviving targets — that's a universal rule (any attacker), not a brute-only one.
+Splash damage scales with the attacker's roll margin: `clamp(floor(margin / 3), 1, 3) × DAMAGE_SCALE`. Crushing blows additionally apply the **wounded** effect to surviving targets — that's a universal rule (any attacker), not a brute-only one.
 
 `Faction` exposes the hooks (`canEquipWeaponItem`, `modifyLootRoll`, `applyExploreLootBonus`, `onAfterMoveStep`, `getSightRange`, `crushSplashRadius`, `splashesOnEveryHit`, `splashSparesAllies`, `splashKnockback`, `getMinionCost`) on the base class; future factions plug in by overriding only what they need.
 
-### Weapon categories
+### Weapons, range & equipping
 
-`ITEMS.<weapon>.category = 'melee' | 'ranged'`. Used by `Faction.canEquipWeaponItem(itemId)` to gate per-faction equip rules. Sword / axe / shield / staff / dagger are melee; bow and crossbow are ranged. Crossbow drops in `blacksmith` (8/100 weight) and `watchtower` (12/100 weight).
+Weapons live in the **per-unit** backpack (`entity.items`) and one is equipped at a time (`entity.weapon`). **Range is entirely weapon-derived — units have no innate range.** `Entity.getRange()` reads `ITEMS[weapon].range` (default 1 for melee/unarmed), so *any* equip-capable unit that wields a ranged weapon becomes ranged (a looted bow turns a melee survivor into a 3-hex archer). `equipWeapon()` keeps the denormalized `entity.range` cache in sync.
+
+Roster (`src/items.js`):
+
+| Weapon | Category | Stats | Range |
+|--------|----------|-------|-------|
+| Sword | melee | +2 ATK | 1 |
+| Axe | melee | +1 ATK / +1 DEF | 1 |
+| Shield | melee | +2 DEF | 1 |
+| Staff | melee | +1 ATK (+adv vs undead) | 1 |
+| Dagger | melee | +1 ATK | 1 |
+| Bow | ranged | — | 3 |
+| Crossbow | ranged | +1 ATK | 2 |
+| Musket | ranged | +2 ATK | 2 |
+| Flintlock pistol | ranged | +1 ATK | 2 |
+| Sling | ranged | — | 2 |
+| Magic Bolt | ranged | +1 ATK | 2 |
+
+`category` (`'melee' | 'ranged'`) + `wielderFactions` gate equipping via `Faction.canEquipWeaponItem(itemId)`: the Rogue refuses melee weapons; **Magic Bolt** is `wielderFactions: ['witch','necromancer']` only and is flagged `noLoot` (issued as starting gear, never dropped). Firearms drop in armory-type buildings (blacksmith/watchtower for muskets, house/town_hall for pistols/slings).
+
+**Starting weapons** are issued at leader creation via `Faction.innateLeaderWeapon` (Paladin → sword, Rogue → bow, Witch/Necromancer → Magic Bolt; Captain/Brute unarmed). `swapLeaderToFaction` transfers the new faction's starting weapon.
+
+**Equipping** is a **free action (0 AP), capped at once per round per unit** (`entity.equippedThisRound`, reset in `resetTurn()`; enforced in `executeUseItem` and surfaced/disabled in the action popup).
 
 See `src/sides.js` for the Side enum and `src/factions.js` for the Faction registry.
 
@@ -79,10 +101,41 @@ See `src/sides.js` for the Side enum and `src/factions.js` for the Faction regis
 | Necromancer (stub) | 10 | 1 | 2 | night | Game start (when picked) |
 | Brute        | 18 | 4 | 3 | night | Game start (when picked) |
 | Survivor | 4 | 1 | 1 | day (after recruit) | Exploration / Sound Horn |
-| Zombie | 2 | 2 | 0 | night (after raise) | Exploration (graveyard) |
+| Zombie | 2 | 2 | 0 | night (after raise) | Exploration / graveyard passive spawn |
 | Minion | 2 | 1 | 0 | night | Summon (no resource cost) |
 | Wood Golem | 3 | 2 | 3 | night | Summon (2 wood) |
 | Iron Golem | 5 | 3 | 2 | night | Summon (2 metal) |
+
+**HP note:** the HP values above are the *logical* base; actual `maxHp` in code
+is each value **× `DAMAGE_SCALE` (7)** (paladin 98, zombie 14…) — see the combat
+section. ATK/DEF are unscaled.
+
+**Graveyard passive spawns** (standard games only): at the end of every full
+day-cycle (8 rounds), each graveyard raises one free witch-owned zombie,
+capped at 2 concurrent witch zombies. Implemented in
+`WitchFaction.applyEndOfRoundEffects` (`src/factions.js`); battle mode and
+campaign missions are exempt. Mirrors hero survivor income to soften the
+recruitment snowball.
+
+### Unit Levels
+
+Every entity has a `level` (≥1, default 1) that scales its **intrinsic stats —
+HP, ATK, DEF — not its weapon damage** (damage stays weapon-driven; a higher
+level lands more/bigger crushes, which multiply the rolled weapon damage). Used
+by campaign authoring to ramp difficulty without new unit types (Zombie L1/L2/L3).
+"Standard" curve (constants in `src/balance.js`):
+
+| | formula | L1 | L2 | L3 |
+|---|---|---|---|---|
+| HP | `× (1 + 0.5·(L−1))` | ×1 | ×1.5 | ×2.0 |
+| ATK | `+ (L−1)` | +0 | +1 | +2 |
+| DEF | `+ floor((L−1)/2)` | +0 | +0 | +1 |
+
+`applyLevel(entity, level)` (`src/entities.js`) sets `level` and rescales `maxHp`
+(idempotent — snapshots the L1 base); the ATK/DEF bonus composes live in
+`getAttack()`/`getDefense()`. `level` serializes via `server/state-sync.js` and
+shows in the unit's `displayName` ("Zombie L2"). Authored on mission unit specs —
+see `docs/08`. (Regular-mode XP/veterancy is not wired yet; the API is ready for it.)
 
 ### Survivor Abilities
 
@@ -129,21 +182,41 @@ Defined in `Entity.resolveCombat()` in `src/entities.js`.
                                   │
                             compare totals
                                   │
-                    ┌─────────────┼──────────────┐
-                    │             │              │
-              ATK ≥ 2×DEF    ATK > DEF     DEF ≥ 2×ATK
-                    │             │              │
-              CRUSH (2 dmg)  HIT (1 dmg)   COUNTER (1 dmg
-              + splash       to defender    to attacker
-              to hex                        + splash)
+          ┌──────────┬────────┼────────┬──────────────┐
+          │          │        │        │              │
+    ATK ≥ 3×DEF  ATK ≥ 2×DEF  │   ATK > DEF      DEF ≥ 2×ATK
+          │          │        │        │              │
+   GREAT CRUSH    CRUSH       │      HIT          COUNTER
+    (3× roll)    (2× roll)    │   (1× roll)     (1× roll to
+   + splash      + splash     │   to defender    attacker
+   to hex        to hex                          + splash)
 ```
+
+**Weapon damage rolls.** A landed hit deals **crush tier × the attacker's
+weapon damage roll**. Each weapon carries a `damage` spec in `src/items.js` —
+either a fixed number or a dice roll `{ count, sides, flat }` (e.g. sword 2D6,
+musket 2D8, dagger 1D10); unarmed falls back to `DEFAULT_ATTACK_DAMAGE` (2D6).
+`rollDamage()` (`src/entities.js`) rolls it through `state.nextDie` so it's
+deterministic under forced dice / replay / online. Crush multiplies the rolled
+amount (hit 1×, crush 2×, great crush 3×); ranged attacks never crush (always
+1×). A counter is one 1× roll of the defender's weapon.
+
+**HP / damage scale.** All HP totals and every flat HP delta (heals, DOTs,
+night attrition) are multiplied by `DAMAGE_SCALE` (=7, `src/balance.js`). 7 is
+the mean of the 2D6 baseline attack, so the average hits-to-kill is unchanged
+from the pre-dice era while combat gains roll variance. Damage is applied as a
+**single blow**, so a defender's `wounded` (+1D6 damage taken, rolled through
+the deterministic die stream) lifts the whole strike *once*. Splash damage is
+`clamp(floor(margin/3), 1, 3) × DAMAGE_SCALE`. Both crush tiers apply `wounded`
+to a surviving target — it lasts **one round**, so the follow-up tax must be
+cashed in immediately.
 
 ### Modifiers
 
 | Modifier | Source | Effect |
 |----------|--------|--------|
 | **Phase bonus** | Night phase | Witch units +1 ATK |
-| **Gang-up** | Multiple attackers on same hex | +1d3 per additional ally |
+| **Gang-up** | Allies adjacent to the target | +1d3 per additional ally (capped at 3). Counted by each ally's **end-of-turn** position — an ally moving out of range this same turn no longer flanks; one moving into range does (`combatHexKey` + the resolver's `_turnEndPositions`) |
 | **Fortification** | Building fortified 1-4 | +1 DEF per level |
 | **Staff weapon** | Equipped staff | +2 ATK vs undead entities |
 | **Guard stance** | GUARD action | Free reactive strike when an enemy acts in reach (ranged units shoot, see below) |
@@ -224,9 +297,9 @@ The caller then calls `state.spendAction(result.cost)` to deduct from the budget
 │              │ GUARD — stance with reactive strikes (1 AP)   │
 ├──────────────┼──────────────────────────────────────────────┤
 │ ECONOMY      │ SUMMON — witch creates unit (1 AP)           │
-│              │ HEAL — use herbs (+2 HP) (1 AP)              │
+│              │ HEAL — use herbs (+2D10 HP) (1 AP)           │
 │              │ USE_ITEM — food/silver/scripture (0 AP)       │
-│              │ EQUIP_WEAPON — sword/axe/bow/etc (0 AP)      │
+│              │ EQUIP_WEAPON — from pack (0 AP, 1×/round)    │
 │              │ USE_ABILITY — survivor special (0-1 AP)       │
 └──────────────┴──────────────────────────────────────────────┘
 ```
@@ -246,6 +319,17 @@ The caller then calls `state.spendAction(result.cost)` to deduct from the budget
 A building occupies two hexes: a passable **entrance** (cost 2, like grass) and an impassable **footprint** (`tileTotalCapacity()` returns 0). See [Building Footprints](#building-footprints).
 
 A horse doubles movement range (2 hexes instead of 1).
+
+### Sub-hex slots & capacity
+
+Every hex has **7 placement slots** — `0` = centre, `1..6` = the spot adjacent to each of the 6 faces (aligned to `getNeighbors` direction order; mapping in `src/hex-slots.js`). Slots serve two purposes:
+
+- **Placement (rendering).** Each entity carries an authoritative `entity.slot` (game state, serialized). It is assigned at every placement seam — `executeMove`, `executeSummon`, survivor discovery — by `assignSlotOnTile()`, which calls `pickUnitSlot()` to take the lowest free, non-blocked slot (centre preferred). Both renderers read `entity.slot` for intra-hex placement, and move animations slide from the source slot to the destination slot (`executeMove` returns the new `slot`) instead of snapping through the hex centre.
+- **Capacity (gameplay).** A tile's `blockedSlots` (ids `1..6`) mark spots made unusable by static features. They are derived once at map-gen by `deriveBlockedSlots()`:
+  - **Forest** — `treeCountForTile` trees on outer slots, kept **off the road entry/exit faces** (and off the building slot on a building-on-forest tile). Forest capacity is unchanged from before (still sourced from `treeCountForTile`).
+  - **Bridge** — **all** non-road outer slots are blocked (only the centre + the road-axis faces stay usable), so a 2-road bridge caps at 3 units instead of 7.
+
+`tileCapacityRemaining()` subtracts building (3), trees, **and** bridge blocked-slots from `TILE_CAPACITY` (7); a tile with no remaining capacity blocks movement in and through it (`isTileFullForMove`).
 
 ### Visibility & Fog of War
 
@@ -342,7 +426,7 @@ MVP places **one** footprint per building, but the schema is `string[]` and the 
 
 | Resource | Effect | Shared? |
 |----------|--------|---------|
-| **Herbs** | Heal 2 HP (1 action, personal) | No |
+| **Herbs** | Heal 2D10 HP (1 action, personal) | No |
 | **Food** | +1 action point | Yes (faction pool) |
 | **Wood** | Fortify +1 DEF, or summon Wood Golem | Yes |
 | **Metal** | Reinforce +2 DEF, or summon Iron Golem | Yes |
@@ -351,14 +435,32 @@ MVP places **one** footprint per building, but the schema is `string[]` and the 
 
 ### Weapons
 
-| Weapon | ATK | DEF | Special |
-|--------|-----|-----|---------|
-| Sword | +2 | — | — |
-| Axe | +1 | +1 | — |
-| Bow | +1 | — | — |
-| Shield | — | +2 | — |
-| Staff | +1 | — | +2 vs undead |
-| Dagger | +1 | — | — |
+Each weapon carries a `damage` spec (fixed or dice) rolled per hit — see the
+Combat section. ATK/DEF are `statMods`. Full table in `src/items.js`.
+
+| Weapon | ATK | DEF | Damage | Special |
+|--------|-----|-----|--------|---------|
+| Sword | +2 | — | 2D6 | — |
+| Axe | +1 | +1 | 1D12+1 | swingy |
+| Dagger | +1 | — | 1D10 | fast |
+| Staff | +1 | — | 2D6 | +adv vs undead |
+| Shield | — | +2 | 2D6 | — |
+| Bow / Sling | +0/+0 | — | 2D4 | ranged (no crush) |
+| Crossbow / Pistol | +1 | — | 1D10 | ranged |
+| Musket | +2 | — | 2D8 | ranged, prize drop |
+
+**Premium tier** (rarer, gated to later rounds via `LOOT_TIER_GATE` in
+`src/loot.config.js`, enforced in `_effectiveLoot`, `src/actions.js`):
+
+| Weapon | ATK | DEF | Damage | Gate round |
+|--------|-----|-----|--------|-----------|
+| Great Sword | +3 | — | 3D6 (~10.5) | 8 |
+| Long Rifle | +3 | — | 2D8+2 (~11), range 3 | 9 |
+| War Hammer | +2 | +1 | 1D12+4 (~10.5) | 10 |
+
+Premiums sit on the blacksmith / watchtower tables at low weight; before their
+gate round `_effectiveLoot` filters them out so they can't roll. A mission can
+force one in earlier via a full-table `lootOverrides` entry (author opt-in).
 
 ---
 
@@ -370,10 +472,11 @@ Defined in `src/map.js`. Seeded procedural generation.
 
 | Size | Dimensions | Use case |
 |------|-----------|----------|
-| Skirmish | 9×7 | Quick games |
-| Standard | 13×11 | Default |
-| Regional | 17×15 | Large games |
-| Campaign | 21×19 | Epic games |
+| Skirmish | 10×10 | Quick games |
+| Standard | 14×14 | Default |
+| Regional | 19×19 | Large games |
+| Campaign | 23×23 | Epic games |
+| Battle | 42×42 | The Battle for Caleb's Hollow (also selectable) |
 
 ### Generation Pipeline
 

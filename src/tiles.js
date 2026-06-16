@@ -51,6 +51,7 @@ export const WeaponType = Object.freeze({
 // New code should read ITEMS[id] directly; these exports remain for
 // existing call sites during the phased units/items/abilities refactor.
 import { ITEMS as _ITEMS } from './items.js';
+import { roadFaceSlots, OUTER_SLOTS, BUILDING_SLOT_INDEX } from './hex-slots.js';
 
 export const WEAPON_STATS = Object.freeze(
   Object.fromEntries(
@@ -239,6 +240,11 @@ export class Tile {
     //                        entrance. null on every other tile.
     this.footprintHexes = [];        // string[] of "col,row" keys
     this.buildingFootprintOf = null; // "col,row" key or null
+    // Sub-hex slots (ids 1..6) made unusable by static features on this tile —
+    // forest trees (kept off the road faces) and bridge non-road slots. Drives
+    // both the renderer's placement and (for bridges) the capacity gate. Set at
+    // map-gen via deriveBlockedSlots(); [] until derived. Never includes 0.
+    this.blockedSlots = [];          // number[] of slot ids 1..6
   }
 }
 
@@ -499,13 +505,44 @@ export function tileTotalCapacity(tile) {
   return TILE_CAPACITY;
 }
 
-// Slots consumed by static structures on this tile (building + trees).
+// The blocked sub-hex slots (ids 1..6) for a tile, derived from its static
+// features. Forest tiles place `treeCountForTile` trees on outer slots, kept
+// OFF the road entry/exit faces (and off the building slot on a building-on-
+// forest tile). Bridge tiles block ALL non-road outer slots. Everything else
+// returns []. Pure + deterministic — the single source of truth shared by
+// map-gen (which writes tile.blockedSlots) and the legacy-save migration.
+export function deriveBlockedSlots(tile) {
+  if (!tile || isBuildingFootprint(tile)) return [];
+  const roadFaces = roadFaceSlots(tile);
+  if (baseOf(tile) === TileType.FOREST) {
+    const n = treeCountForTile(tile);
+    const exclude = new Set(roadFaces);
+    if (hasBuilding(tile)) exclude.add(BUILDING_SLOT_INDEX);
+    const out = [];
+    for (const s of OUTER_SLOTS) {
+      if (out.length >= n) break;
+      if (!exclude.has(s)) out.push(s);
+    }
+    return out;
+  }
+  if (isBridge(tile)) {
+    return OUTER_SLOTS.filter(s => !roadFaces.has(s));
+  }
+  return [];
+}
+
+// Slots consumed by static structures on this tile (building + trees + bridge).
 // Units are NOT counted here — callers add them via tileCapacityRemaining.
+// The forest tree term stays sourced from `treeCountForTile` (unchanged — so
+// forest capacity is identical to before). Bridges are the new capacity cost:
+// their blocked non-road slots come from the derived `blockedSlots`.
 export function tileOccupancyCount(tile) {
   if (!tile) return 0;
   const building = hasBuilding(tile) ? BUILDING_SLOT_COST : 0;
   const trees    = treeCountForTile(tile) * TREE_SLOT_COST;
-  return building + trees;
+  const bridge   = (isBridge(tile) && Array.isArray(tile.blockedSlots))
+    ? tile.blockedSlots.length * UNIT_SLOT_COST : 0;
+  return building + trees + bridge;
 }
 
 // Capacity remaining on this tile given a list (or count) of occupying

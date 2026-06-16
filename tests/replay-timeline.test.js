@@ -5,7 +5,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildStepDigest, isEventVisible, OutcomeKind } from '../src/replay-timeline.js';
+import { buildStepDigest, buildConversationDigest, buildStoryBeatDigest, buildRollTip, buildRollRows, buildOutcomeSummary, isEventVisible, OutcomeKind, buildTurnCardHoverOverlays, TURN_CARD_HOVER_COLOR, battleOutcomeWord } from '../src/replay-timeline.js';
 import { ResEventType } from '../server/resolver.js';
 import { PlanActionType } from '../src/planner.js';
 
@@ -186,6 +186,23 @@ describe('buildStepDigest — move/explore notes', () => {
     assert.deepEqual(e.note, { text: 'NO TARGET', kind: 'info' });
   });
 
+  test('fled target (ACTION_SKIP with targetFled) gets a "TARGET FLED" card', () => {
+    const h = snap('h1', 'hero', 'hero', 1, 1);
+    const ev = {
+      type: ResEventType.ACTION_SKIP, faction: 'hero',
+      action: { type: PlanActionType.BATTLE_UNIT, entityId: 'h1', targetId: 'm1' },
+      reason: 'Zombie slipped away — out of reach.',
+      targetFled: true,
+      battleSnaps: { actorSnap: { id: 'h1', type: 'hero', owner: 'hero', col: 1, row: 1 }, ranged: false },
+      whiffTarget: { col: 2, row: 1 },
+    };
+    const d = buildStepDigest([step([ev], [h])], [], DEPS);
+    const e = d[0].entries[0];
+    assert.equal(e.label, 'ATTACK');
+    assert.equal(e.target, null);
+    assert.deepEqual(e.note, { text: 'TARGET FLED', kind: 'info' });
+  });
+
   test('explore lists the actual loot icons (not "+N RESOURCE")', () => {
     const h = snap('h1', 'hero', 'hero', 1, 1);
     const ev = {
@@ -194,7 +211,7 @@ describe('buildStepDigest — move/explore notes', () => {
       result: { success: true, lootItems: ['+🪵', 'nothing', '+🌿'] },  // 'nothing' excluded
     };
     const d = buildStepDigest([step([ev], [h])], [], DEPS);
-    assert.deepEqual(d[0].entries[0].note, { text: '+🪵 +🌿', kind: 'gain' });
+    assert.deepEqual(d[0].entries[0].note, { text: '+🪵 +🌿', kind: 'gain loot' });
   });
 
   test('discovery: explore that finds a survivor shows the unit + "FOUND SURVIVOR"', () => {
@@ -392,6 +409,90 @@ describe('isEventVisible — union of source/target + public actions', () => {
   });
 });
 
+// ── Post-step viewer sight (option a) ──────────────────────────────────────────
+// The fog gate answers "can the viewer see this when the step has RESOLVED?":
+// enemy events are tested against the viewer's POST-step unit positions
+// (`viewEnts`) — the same positions the on-map veil shows at the step-boundary
+// hold — while events involving the viewer's own units always show (you always
+// learn your own units' fates, even if the participant died mid-step and no
+// longer grants sight).
+
+describe('isEventVisible — post-step viewer sight', () => {
+  // Sight = within 4 hexes (Manhattan) of any living hero-owned unit in the
+  // entity list the predicate is handed — so WHICH list is passed decides
+  // visibility.
+  const sight = (col, row, list) => (list ?? []).some(e =>
+    e.alive !== false && e.owner === 'hero'
+    && Math.abs(e.col - col) + Math.abs(e.row - row) <= 4);
+
+  test('enemy move is gated against viewEnts (post-step), not the pre-step snapshot', () => {
+    const scoutPre  = snap('h1', 'survivor', 'hero', 4, 4);  // saw the zombie when the step began
+    const scoutPost = snap('h1', 'survivor', 'hero', 1, 4);  // moved away during the step
+    const z = snap('z1', 'zombie', 'witch', 8, 4);
+    const ev = moveEvent('z1', 'witch', 9, 4);
+    // Legacy call (no viewEnts): pre-step snapshot grants sight → visible.
+    assert.equal(isEventVisible(ev, [scoutPre, z], sight, DEPS), true);
+    // Post-step viewer positions: the whole move is out of sight → hidden.
+    assert.equal(isEventVisible(ev, [scoutPre, z], sight,
+      { ...DEPS, viewerFaction: 'hero', viewEnts: [scoutPost, z] }), false);
+    // And a move INTO sight (viewer approached during the step) is shown.
+    assert.equal(isEventVisible(ev, [scoutPost, z], sight,
+      { ...DEPS, viewerFaction: 'hero', viewEnts: [scoutPre, z] }), true);
+  });
+
+  test('own-faction battle always shows, even when the attacker died mid-step', () => {
+    const mine  = snap('h1', 'survivor', 'hero', 9, 9);
+    const enemy = snap('z1', 'zombie', 'witch', 9, 8);
+    const ev = battleEvent(mine, enemy, { hit: false, counter: true });
+    // Post-step the attacker is dead — nothing grants sight there.
+    const postDead = [{ ...mine, alive: false }, enemy];
+    assert.equal(isEventVisible(ev, [mine, enemy], sight,
+      { ...DEPS, viewerFaction: 'hero', viewEnts: postDead }), true);
+  });
+
+  test('enemy attack on my unit always shows (you learn your own unit\'s fate)', () => {
+    const enemy = snap('z1', 'zombie', 'witch', 9, 9);
+    const mine  = snap('h1', 'survivor', 'hero', 9, 8);
+    const ev = battleEvent(enemy, mine, { hit: true, damage: 2 });
+    const postDead = [enemy, { ...mine, alive: false }];
+    assert.equal(isEventVisible(ev, [enemy, mine], sight,
+      { ...DEPS, viewerFaction: 'hero', viewEnts: postDead }), true);
+  });
+
+  test('enemy-only event stays gated when no viewerFaction is given', () => {
+    const z = snap('z1', 'zombie', 'witch', 9, 9);
+    const ev = moveEvent('z1', 'witch', 9, 8);
+    assert.equal(isEventVisible(ev, [z], sight,
+      { ...DEPS, viewEnts: [z] }), false);
+  });
+});
+
+describe('buildStepDigest — post-step gating across steps', () => {
+  const sight = (col, row, list) => (list ?? []).some(e =>
+    e.alive !== false && e.owner === 'hero'
+    && Math.abs(e.col - col) + Math.abs(e.row - row) <= 4);
+
+  test('step N uses step N+1\'s snapshot as the viewer set; last step uses finalEntities', () => {
+    const scoutPre  = snap('h1', 'survivor', 'hero', 4, 4);
+    const scoutMid  = snap('h1', 'survivor', 'hero', 1, 4);   // after step 1
+    const scoutEnd  = snap('h1', 'survivor', 'hero', 0, 4);   // after step 2 (final)
+    const zPre  = snap('z1', 'zombie', 'witch', 8, 4);
+    const zMid  = snap('z1', 'zombie', 'witch', 9, 4);
+    const steps = [
+      step([moveEvent('h1', 'hero', 1, 4), moveEvent('z1', 'witch', 9, 4)], [scoutPre, zPre]),
+      step([moveEvent('h1', 'hero', 0, 4), moveEvent('z1', 'witch', 10, 4)], [scoutMid, zMid]),
+    ];
+    const final = [scoutEnd, snap('z1', 'zombie', 'witch', 10, 4)];
+    const d = buildStepDigest(steps, final,
+      { ...DEPS, isVisible: sight, viewerFaction: 'hero' });
+    // Step 1: zombie move (8,4)->(9,4) is out of sight from the scout's
+    // post-step position (1,4) → dropped; my own move always shows.
+    assert.deepEqual(d[0].entries.map(e => e.entityId), ['h1']);
+    // Step 2: still out of sight from (0,4) → dropped again.
+    assert.deepEqual(d[1].entries.map(e => e.entityId), ['h1']);
+  });
+});
+
 // ── Online MP format ──────────────────────────────────────────────────────────
 
 describe('buildStepDigest — playerEvents (online) format', () => {
@@ -408,5 +509,432 @@ describe('buildStepDigest — playerEvents (online) format', () => {
     const d = buildStepDigest([s], [], DEPS);
     assert.equal(d[0].entries.length, 1);
     assert.equal(d[0].entries[0].targetDmg, 2);
+  });
+});
+
+// ── buildRollTip — the turn card's roll-breakdown tooltip ────────────────────
+
+describe('buildRollTip', () => {
+  const fullResult = {
+    attackRoll: 9, defenseRoll: 5, hit: true,
+    breakdown: {
+      atkPool: [4, 2, 1], atkBaseDie: 4, defPool: [3], defBaseDie: 3,
+      atkAdvantageDice: 2, atkDisadvantageDice: 0, defAdvantageDice: 0,
+      atkGangupFlat: 2, defGangupFlat: 0,
+      phaseBonus: 0, fortBonus: 1, atkFortAtkBonus: 0,
+      fatiguePenalty: 1, forestCoverBonus: 0, rangeDistancePenalty: 0,
+      atkStaffBonus: 0,
+      atkBaseStat: 3, atkWeaponMod: 0, atkAbilityMod: 0, atkEffectMod: 0, atkAttackBonus: 0,
+      defBaseStat: 2, defWeaponMod: 0, defAbilityMod: 0, defEffectMod: 0, defDefenseBonus: 0,
+    },
+  };
+
+  test('reconstructs both rolls with their modifiers', () => {
+    const tip = buildRollTip(fullResult, false);
+    assert.match(tip, /Attack 9 = die 4 \(rolled 4·2·1, kept best of 3\)/);
+    assert.match(tip, /\+3 ATK/);
+    assert.match(tip, /\+2 gang-up/);
+    assert.match(tip, /Defense 5 = die 3/);
+    assert.match(tip, /\+1 fort/);
+    assert.match(tip, /−1 fatigue/);
+  });
+
+  test('explains gang-up only when it applied; rules line always present', () => {
+    const tip = buildRollTip(fullResult, false);
+    assert.match(tip, /Gang-up: each ally beside the target adds \+1 advantage die and \+1 flat/);
+    assert.match(tip, /×2 on a crush/);
+
+    const solo = JSON.parse(JSON.stringify(fullResult));
+    solo.breakdown.atkGangupFlat = 0;
+    solo.breakdown.atkAdvantageDice = 0;
+    solo.breakdown.atkPool = [4];
+    assert.doesNotMatch(buildRollTip(solo, false), /Gang-up:/);
+  });
+
+  test('ranged rules line replaces crush/counter text', () => {
+    const tip = buildRollTip(fullResult, true);
+    assert.match(tip, /never crush and are never countered/);
+    assert.doesNotMatch(tip, /counter when defense/);
+  });
+
+  test('returns empty string without breakdown data (legacy replays)', () => {
+    assert.equal(buildRollTip({ attackRoll: 5, defenseRoll: 3 }), '');
+    assert.equal(buildRollTip(null), '');
+  });
+
+  test('battle entries from buildStepDigest carry the tooltip', () => {
+    const a = snap('h1', 'hero', 'hero', 1, 1);
+    const t = snap('m1', 'minion', 'witch', 1, 2);
+    const ev = battleEvent(a, t, fullResult);
+    const cols = buildStepDigest([step([ev], [a, t])], [], DEPS);
+    const entry = cols[0].entries[0];
+    assert.match(entry.rollTip, /Attack 9/);
+  });
+});
+
+// ── buildRollRows — structured model behind the turn-card breakdown panel ───
+
+describe('buildRollRows', () => {
+  const result = {
+    attackRoll: 9, defenseRoll: 5, hit: true,
+    breakdown: {
+      atkPool: [4, 2, 1], atkBaseDie: 4, defPool: [3], defBaseDie: 3,
+      atkAdvantageDice: 2, atkDisadvantageDice: 0, defAdvantageDice: 0,
+      atkGangupFlat: 2, defGangupFlat: 0,
+      phaseBonus: 0, fortBonus: 1, atkFortAtkBonus: 0,
+      fatiguePenalty: 1, forestCoverBonus: 0, rangeDistancePenalty: 0,
+      atkStaffBonus: 0,
+      atkBaseStat: 3, atkWeaponMod: 0, atkAbilityMod: 0, atkEffectMod: 0, atkAttackBonus: 0,
+      defBaseStat: 2, defWeaponMod: 0, defAbilityMod: 0, defEffectMod: 0, defDefenseBonus: 0,
+    },
+  };
+
+  test('structures both sides with dice and signed terms', () => {
+    const rows = buildRollRows(result, false);
+    assert.equal(rows.atk.roll, 9);
+    assert.deepEqual(rows.atk.dice, { pool: [4, 2, 1], picked: 4, advantage: 2 });
+    assert.deepEqual(rows.atk.terms, [{ label: 'ATK', val: 3 }, { label: 'gang-up', val: 2 }]);
+    assert.equal(rows.def.roll, 5);
+    assert.deepEqual(rows.def.terms, [{ label: 'DEF', val: 2 }, { label: 'fort', val: 1 }, { label: 'fatigue', val: -1 }]);
+    assert.equal(rows.notes.length, 1);
+    assert.match(rows.rule, /crush/);
+  });
+
+  test('matches the plain-text tip (both derive from the same model)', () => {
+    const tip = buildRollTip(result, false);
+    assert.match(tip, /Attack 9 = die 4 \(rolled 4·2·1, kept best of 3\) \+3 ATK \+2 gang-up/);
+  });
+
+  test('weapon contribution is a named term, not folded into the stat sum', () => {
+    const armed = JSON.parse(JSON.stringify(result));
+    armed.breakdown.atkWeaponMod = 2;
+    armed.breakdown.atkWeaponId = 'sword';
+    armed.breakdown.defWeaponMod = 1;
+    armed.breakdown.defWeaponId = 'axe';
+    const rows = buildRollRows(armed, false);
+    assert.deepEqual(rows.atk.terms[1], { label: 'sword', val: 2 });
+    assert.equal(rows.atk.terms[0].val, 3); // base stat stays unfolded
+    assert.deepEqual(rows.def.terms[1], { label: 'axe', val: 1 });
+    // Legacy replays without the weapon id still label the row.
+    delete armed.breakdown.atkWeaponId;
+    assert.deepEqual(buildRollRows(armed, false).atk.terms[1], { label: 'weapon', val: 2 });
+  });
+
+  test('returns null without breakdown data', () => {
+    assert.equal(buildRollRows({ attackRoll: 5, defenseRoll: 3 }), null);
+    assert.equal(buildRollRows(null), null);
+  });
+
+  test('entries from buildStepDigest carry the model', () => {
+    const a = snap('h1', 'hero', 'hero', 1, 1);
+    const t = snap('m1', 'minion', 'witch', 1, 2);
+    const cols = buildStepDigest([step([battleEvent(a, t, result)], [a, t])], [], DEPS);
+    assert.equal(cols[0].entries[0].rollRows.atk.roll, 9);
+  });
+});
+
+// ── buildOutcomeSummary — what happened, why, and the damage dealt ───────────
+
+describe('buildOutcomeSummary', () => {
+  const base = {
+    actor: { name: 'Ishmael' }, target: { name: 'Zombie' },
+    ranged: false, missWord: 'blocked',
+  };
+
+  test('hit: states the roll comparison and the damage', () => {
+    const o = buildOutcomeSummary({ ...base, outcomeKind: 'hit', atkRoll: 7, defRoll: 5, targetDmg: 1, actorDmg: 0, killed: false });
+    assert.equal(o.kind, 'hit');
+    assert.equal(o.headline, 'HIT — 1 damage');
+    assert.match(o.reason, /Attack 7 beats defense 5/);
+    assert.deepEqual(o.lines, ['Zombie takes 1.']);
+  });
+
+  test('crush: explains the double-defense threshold', () => {
+    const o = buildOutcomeSummary({ ...base, outcomeKind: 'crush', atkRoll: 10, defRoll: 4, targetDmg: 2, actorDmg: 0, killed: false });
+    assert.equal(o.kind, 'crush');
+    assert.match(o.reason, /≥ 2× defense 4/);
+    assert.match(o.headline, /CRUSH — 2 damage/);
+  });
+
+  test('great crush (≥3×) is called out and multiplies ×3', () => {
+    const o = buildOutcomeSummary({
+      ...base, outcomeKind: 'crush', atkRoll: 12, defRoll: 4,
+      atkWeapon: 'sword', dmgRoll: 6, dmgTier: 3, targetDmg: 18, actorDmg: 0, killed: false,
+    });
+    assert.match(o.headline, /GREAT CRUSH — 18 damage/);
+    assert.match(o.reason, /great crush/);
+    assert.match(o.reason, /Sword 2D6 rolled 6 ×3 = 18/);
+  });
+
+  test('kill re-derives the strike type from the rolls', () => {
+    const crushKill = buildOutcomeSummary({ ...base, outcomeKind: 'kill', atkRoll: 10, defRoll: 4, targetDmg: 2, actorDmg: 0, killed: true });
+    assert.equal(crushKill.kind, 'kill');
+    assert.equal(crushKill.headline, 'CRUSH — SLAIN');
+    assert.match(crushKill.lines[0], /slain!/);
+
+    const plainKill = buildOutcomeSummary({ ...base, outcomeKind: 'kill', atkRoll: 7, defRoll: 5, targetDmg: 1, actorDmg: 0, killed: true });
+    assert.equal(plainKill.headline, 'HIT — SLAIN');
+  });
+
+  test('counter: defender strikes back with attacker damage line', () => {
+    const o = buildOutcomeSummary({ ...base, outcomeKind: 'miss', atkRoll: 3, defRoll: 8, targetDmg: 0, actorDmg: 1, killed: false });
+    assert.equal(o.kind, 'counter');
+    assert.match(o.reason, /≥ 2× attack 3/);
+    assert.deepEqual(o.lines, ['Ishmael takes 1 from the counter.']);
+  });
+
+  test('plain miss uses the flavour word and explains no damage', () => {
+    const o = buildOutcomeSummary({ ...base, outcomeKind: 'miss', atkRoll: 4, defRoll: 5, targetDmg: 0, actorDmg: 0, killed: false });
+    assert.equal(o.kind, 'miss');
+    assert.equal(o.headline, 'BLOCKED');
+    assert.match(o.reason, /fails to beat defense 5/);
+  });
+
+  test('ranged kills never read as crush', () => {
+    const rangedKill = buildOutcomeSummary({ ...base, ranged: true, outcomeKind: 'kill', atkRoll: 10, defRoll: 4, dmgTier: 1, targetDmg: 1, actorDmg: 0, killed: true });
+    assert.equal(rangedKill.headline, 'HIT — SLAIN');
+  });
+
+  test('explains the weapon damage roll, and surfaces a wounded surcharge', () => {
+    // Plain hit with a known weapon roll → reason names the weapon, dice and roll.
+    const o = buildOutcomeSummary({
+      ...base, outcomeKind: 'hit', atkRoll: 7, defRoll: 5,
+      atkWeapon: 'greatsword', dmgRoll: 9, dmgTier: 1, targetDmg: 9, actorDmg: 0, killed: false,
+    });
+    assert.match(o.reason, /Great Sword 3D6 rolled 9 = 9/);
+    assert.deepEqual(o.lines, ['Zombie takes 9.']);
+
+    // Final damage above roll×tier is reported as the wounded surcharge.
+    const w = buildOutcomeSummary({
+      ...base, outcomeKind: 'hit', atkRoll: 7, defRoll: 5,
+      atkWeapon: 'sword', dmgRoll: 5, dmgTier: 1, targetDmg: 12, actorDmg: 0, killed: false,
+    });
+    assert.match(w.lines[0], /\(incl\. \+7 wounded\)/);
+  });
+
+  test('returns null without rolls or outcome', () => {
+    assert.equal(buildOutcomeSummary(null), null);
+    assert.equal(buildOutcomeSummary({ outcomeKind: 'hit' }), null);
+  });
+});
+
+// ── buildConversationDigest (campaign conversation turn card) ────────────────
+
+describe('buildConversationDigest', () => {
+  const convo = {
+    id: 'intro',
+    title: 'A Voice at the Inn Door',
+    lines: [{ role: 'a', text: 'x' }, { role: 'b', text: 'y' }],
+  };
+  const hero = { id: 'e1', type: 'paladin', title: 'Paladin', color: '#d4a72c' };
+  const npc  = { id: 'e2', type: 'survivor', name: "John O'Connor", title: 'Innkeeper', color: '#8cf' };
+
+  test('builds a single conversation column from a participants Map', () => {
+    const digest = buildConversationDigest(convo, new Map([['a', hero], ['b', npc]]));
+    assert.equal(digest.length, 1);
+    const col = digest[0];
+    assert.equal(col.kind, 'conversation');
+    assert.equal(col.stepIndex, 'conv:intro');
+    assert.equal(col.title, 'A Voice at the Inn Door');
+    assert.equal(col.entries.length, 1);
+    const entry = col.entries[0];
+    assert.equal(entry.actionType, 'conversation');
+    assert.equal(entry.label, 'TALK');
+    assert.equal(entry.lineCount, 2);
+    assert.equal(entry.actor.entityId, 'e1');
+    assert.equal(entry.target.name, "John O'Connor");
+  });
+
+  test('accepts a plain entity array and tolerates a single participant', () => {
+    const digest = buildConversationDigest(convo, [hero]);
+    assert.equal(digest[0].entries[0].actor.entityId, 'e1');
+    assert.equal(digest[0].entries[0].target, null);
+  });
+
+  test('hasVoice defaults false and reflects the opt — gates the card mute button', () => {
+    assert.equal(buildConversationDigest(convo, [hero])[0].hasVoice, false);
+    assert.equal(buildConversationDigest(convo, [hero], { hasVoice: true })[0].hasVoice, true);
+  });
+});
+
+// ── Hover coordinates + overlay builder (turn-card hover highlights) ─────────
+
+describe('buildStepDigest — hover coordinates', () => {
+  test('successful move carries hexes + movePath (origin → waypoints)', () => {
+    const h = snap('h1', 'hero', 'hero', 1, 1);
+    const ev = moveEvent('h1', 'hero', 3, 1);
+    ev.result.path = [{ col: 2, row: 1 }, { col: 3, row: 1 }];
+    const e = buildStepDigest([step([ev], [h])], [], DEPS)[0].entries[0];
+    assert.deepEqual(e.movePath, [{ col: 1, row: 1 }, { col: 2, row: 1 }, { col: 3, row: 1 }]);
+    assert.deepEqual(e.hexes, [{ col: 1, row: 1 }, { col: 2, row: 1 }, { col: 3, row: 1 }]);
+  });
+
+  test('move without result.path falls back to the action target hex', () => {
+    const h = snap('h1', 'hero', 'hero', 1, 1);
+    const e = buildStepDigest([step([moveEvent('h1', 'hero', 2, 1)], [h])], [], DEPS)[0].entries[0];
+    assert.deepEqual(e.movePath, [{ col: 1, row: 1 }, { col: 2, row: 1 }]);
+  });
+
+  test('battle carries both combatant hexes and no movePath', () => {
+    const atk = snap('h1', 'hero', 'hero', 1, 1);
+    const def = snap('z1', 'zombie', 'witch', 2, 1);
+    const d = buildStepDigest([step([battleEvent(atk, def, { hit: true, damage: 1 })], [atk, def])], [], DEPS);
+    const e = d[0].entries[0];
+    assert.deepEqual(e.hexes, [{ col: 1, row: 1 }, { col: 2, row: 1 }]);
+    assert.equal(e.movePath, null);
+  });
+
+  test('blocked move highlights actor + blocker hexes, no movePath', () => {
+    const h = snap('h1', 'hero', 'hero', 1, 1);
+    const ev = {
+      type: ResEventType.ACTION_FAIL,
+      faction: 'hero',
+      action: { type: PlanActionType.MOVE, entityId: 'h1', toCol: 2, toRow: 1 },
+      blockedBy: { col: 2, row: 1 },
+    };
+    const e = buildStepDigest([step([ev], [h])], [], DEPS)[0].entries[0];
+    assert.deepEqual(e.hexes, [{ col: 1, row: 1 }, { col: 2, row: 1 }]);
+    assert.equal(e.movePath, null);
+  });
+
+  test('non-move action highlights the actor hex', () => {
+    const h = snap('h1', 'hero', 'hero', 4, 5);
+    const ev = {
+      type: ResEventType.ACTION_OK,
+      faction: 'hero',
+      action: { type: PlanActionType.FORTIFY, entityId: 'h1' },
+      result: { success: true },
+    };
+    const e = buildStepDigest([step([ev], [h])], [], DEPS)[0].entries[0];
+    assert.deepEqual(e.hexes, [{ col: 4, row: 5 }]);
+    assert.equal(e.movePath, null);
+  });
+});
+
+describe('buildTurnCardHoverOverlays', () => {
+  test('fill overlay: 15% blue flat fill over the involved hexes', () => {
+    const { fill } = buildTurnCardHoverOverlays({
+      hexes: [{ col: 1, row: 1 }, { col: 2, row: 1 }], movePath: null,
+    });
+    assert.equal(fill.kind, 'fill');
+    assert.equal(fill.layer, 'fill');
+    assert.equal(fill.style.alpha, 0.15);
+    assert.equal(fill.style.color, TURN_CARD_HOVER_COLOR);
+    assert.deepEqual(Array.from(fill.hexes).sort(), ['1,1', '2,1']);
+  });
+
+  test('successful move adds ghost arrow segments along the path', () => {
+    const { arrows } = buildTurnCardHoverOverlays({
+      hexes: [], movePath: [{ col: 1, row: 1 }, { col: 2, row: 1 }, { col: 3, row: 1 }],
+    });
+    assert.equal(arrows.length, 2);
+    assert.deepEqual(arrows[0].path, ['1,1', '2,1']);
+    assert.deepEqual(arrows[1].path, ['2,1', '3,1']);
+    for (const [i, a] of arrows.entries()) {
+      assert.equal(a.kind, 'plan-arrow');
+      assert.equal(a.meta.variant, 'ghost');
+      assert.equal(a.meta.stepIndex, i);
+      assert.equal(a.meta.entityId, '__turn-card-hover__');
+      assert.ok(a.style.alpha < 1, 'ghost arrows are translucent');
+    }
+  });
+
+  test('battle entry (no movePath) yields fill only; empty entry yields nothing', () => {
+    const battle = buildTurnCardHoverOverlays({ hexes: [{ col: 1, row: 1 }], movePath: null });
+    assert.ok(battle.fill);
+    assert.deepEqual(battle.arrows, []);
+    const none = buildTurnCardHoverOverlays(null);
+    assert.equal(none.fill, null);
+    assert.deepEqual(none.arrows, []);
+  });
+});
+
+// ── Crush tiers on the action card + splash in summaries ─────────────────────
+
+describe('buildStepDigest — crush tier drives the card outcome', () => {
+  const atk = () => snap('h1', 'hero', 'hero', 1, 1);
+  const def = () => snap('z1', 'zombie', 'witch', 2, 1);
+
+  test('dmgTier 2 → outcomeKind crush (results no longer carry a top-level crush flag)', () => {
+    const a = atk(), d = def();
+    const dig = buildStepDigest(
+      [step([battleEvent(a, d, { hit: true, damage: 4, breakdown: { dmgTier: 2, dmgRoll: 2 } })], [a, d])],
+      [], DEPS);
+    assert.equal(dig[0].entries[0].outcomeKind, OutcomeKind.CRUSH);
+  });
+
+  test('legacy result.crush (old saves) still maps to crush', () => {
+    const a = atk(), d = def();
+    const dig = buildStepDigest(
+      [step([battleEvent(a, d, { hit: true, crush: true, damage: 2 })], [a, d])], [], DEPS);
+    assert.equal(dig[0].entries[0].outcomeKind, OutcomeKind.CRUSH);
+  });
+
+  test('battleOutcomeWord: KILL > GREAT CRUSH > CRUSH > HIT > miss word', () => {
+    assert.equal(battleOutcomeWord({ killed: true, outcomeKind: 'crush', dmgTier: 3 }), 'KILL');
+    assert.equal(battleOutcomeWord({ outcomeKind: 'crush', dmgTier: 3 }), 'GREAT CRUSH');
+    assert.equal(battleOutcomeWord({ outcomeKind: 'crush', dmgTier: 2 }), 'CRUSH');
+    assert.equal(battleOutcomeWord({ outcomeKind: 'crush' }), 'CRUSH');
+    assert.equal(battleOutcomeWord({ outcomeKind: 'hit', dmgTier: 1 }), 'HIT');
+    assert.equal(battleOutcomeWord({ outcomeKind: 'miss', missWord: 'Parried' }), 'Parried');
+    assert.equal(battleOutcomeWord({ outcomeKind: 'miss' }), 'MISS');
+  });
+});
+
+describe('splash damage in summaries', () => {
+  const atk = () => snap('h1', 'hero', 'hero', 1, 1);
+  const def = () => snap('z1', 'zombie', 'witch', 2, 1);
+  const splash = [
+    { id: 'z2', name: 'Zombie', type: 'zombie', owner: 'witch', damage: 1, killed: false },
+    { id: 'm1', name: 'Minion', type: 'minion', owner: 'witch', damage: 1, killed: true },
+  ];
+
+  test('battle entry carries splashHits', () => {
+    const a = atk(), d = def();
+    const dig = buildStepDigest(
+      [step([battleEvent(a, d, { hit: true, damage: 2, splashHits: splash })], [a, d])], [], DEPS);
+    assert.equal(dig[0].entries[0].splashHits.length, 2);
+    assert.equal(dig[0].entries[0].splashHits[1].killed, true);
+  });
+
+  test('buildOutcomeSummary calls out each splash victim', () => {
+    const o = buildOutcomeSummary({
+      outcomeKind: 'hit', atkRoll: 8, defRoll: 3,
+      actor: { name: 'Brute' }, target: { name: 'Mary Reed' },
+      targetDmg: 2, actorDmg: 0, killed: false,
+      splashHits: splash,
+    });
+    const joined = o.lines.join(' | ');
+    assert.match(joined, /Zombie .*1 splash/);
+    assert.match(joined, /Minion/);
+    assert.match(joined, /slain/i);
+  });
+
+  test('no splash → no splash lines', () => {
+    const o = buildOutcomeSummary({
+      outcomeKind: 'hit', atkRoll: 8, defRoll: 3,
+      actor: { name: 'Brute' }, target: { name: 'Mary Reed' },
+      targetDmg: 2, actorDmg: 0, killed: false,
+    });
+    assert.ok(!o.lines.some(l => /splash/i.test(l)));
+  });
+});
+
+// ── buildStoryBeatDigest (mission-logic story-beat replay card) ─────────────────
+describe('buildStoryBeatDigest', () => {
+  test('builds a kind:storyBeat column with a unique key, title, text + a placeholder entry', () => {
+    const col = buildStoryBeatDigest({ title: 'Sanctuary', text: 'You feel safe.' }, '3:0');
+    assert.equal(col.kind, 'storyBeat');
+    assert.equal(col.stepIndex, 'beat:3:0');         // non-numeric → never collides with a step index
+    assert.equal(col.title, 'Sanctuary');
+    assert.equal(col.text, 'You feel safe.');
+    assert.ok(col.entries.length > 0, 'a non-empty entries list so showReplayTimeline renders it');
+  });
+
+  test('missing fields default to empty strings (never undefined in the card)', () => {
+    const col = buildStoryBeatDigest({}, 'x');
+    assert.equal(col.title, '');
+    assert.equal(col.text, '');
+    assert.equal(col.stepIndex, 'beat:x');
   });
 });

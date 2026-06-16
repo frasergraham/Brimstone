@@ -1,26 +1,33 @@
 // UI controller: handles canvas clicks, sidepanel updates, action buttons
-import { hexKey, hexToPixel, MAP_COLS, MAP_ROWS } from './hex.js';
+import { hexKey, hexToPixel, hexDistance, MAP_COLS, MAP_ROWS } from './hex.js';
 import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus, legacyTileType } from './tiles.js';
 import { ITEMS } from './items.js';
-import { EFFECTS } from './effects.js';
-import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, attackOf, defenseOf } from './entities.js';
+import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, attackOf, defenseOf, rangeOf } from './entities.js';
+import { DAMAGE_SCALE } from './balance.js';
 import { Phase, PHASE_ICON, phaseForRound, DEFAULT_CYCLE_PHASES, nodeController, countHeldNodes } from './game.js';
 import { PAD_X, PAD_Y, Renderer } from './renderer.js';
 import { makeOverlay } from './overlays.js';
 import { concreteFactionOf } from './factions.js';
 import {
-  ActionType, getValidActions, getVisiblePositions,
+  ActionType, getValidActions, getVisiblePositions, computeCombatOdds,
 } from './actions.js';
-import { PlanActionType, actionCosts, computeGhostState, computeProjectedInventory, interleavePlan } from './planner.js';
-import { compileTurnBattleSummary } from './battle-utils.js';
+import * as audio from './audio.js';
+
+import { PlanActionType, actionCosts, computeGhostState, computeProjectedInventory, interleavePlan, groupPlanByEntity, validatePlanAction, buildAutoGuardQueue } from './planner.js';
+import { ABILITIES } from './abilities.js';
+import { buildRollRows, buildOutcomeSummary, buildTurnCardHoverOverlays, battleOutcomeWord } from './replay-timeline.js';
+import { compileTurnBattleSummary, compileTurnXpSummary } from './battle-utils.js';
+import { buildWrapupCombatsHtml, wrapupIconHtml } from './wrapup-summary.js';
 import { ResEventType } from '../server/resolver.js';
 import { collectUIElements } from './ui-elements.js';
-import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml, buildNodeBadgeHtml } from './ui-render.js';
+import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml, buildNodeBadgeHtml, buildEffectsHtml, buildCycleInfoHtml, PHASE_META, buildRollRowsTipHtml, computeGameTooltipPos } from './ui-render.js';
 import {
   hideActionPopup, getEntityScreenPos, computeArcPositions,
   positionArcPopup, startArcTracking, positionPopup,
   attachPopupListeners, touchDist,
 } from './ui-popup.js';
+import { isVoiceMuted, toggleVoiceMuted, voiceMuteIconHtml } from './voiceover.js';
+import { xpProgress } from './campaign/campaign-ui.js';
 
 /** Enum of UI operating modes. */
 export const UIMode = Object.freeze({ LOCAL: 'local', ONLINE: 'online', SPECTATOR: 'spectator' });
@@ -69,6 +76,14 @@ export class UIController {
     // Injected element bag — tests supply fake elements keyed by DOM ID.
     // Falls back to document.getElementById at each call site when missing.
     this._els = els ?? {};
+
+    // Arm the one-shot user-gesture unlock for synthesized SFX (no-op in
+    // tests/node — see src/audio.js).
+    audio.init();
+    // Game-styled hover tooltips ([data-tip] / [data-tip-html]) — module-level
+    // singleton, hover-capable devices only.
+    initGameTooltips();
+    this._lastPhaseSoundKey = null;  // dedupe phase stings across summaries
 
     this._selectedEntity  = null;
     this._validActions    = [];
@@ -124,6 +139,21 @@ export class UIController {
     this._planSubmitted = false;   // true after plan is locked in
     this.onPlanSubmit   = null;    // callback(plan) — set by main.js
 
+    // ── AI-assist (debug) ────────────────────────────────────────────────────
+    // When enabled via the in-game `/aiassist` console command (backtick), an
+    // "🤖 AI Plan" button appears during planning. Clicking it asks main.js
+    // (onAIAssistRequest) for an AI-generated plan for the current faction and
+    // loads it into the plan panel so the player can review the AI's choices and
+    // then Submit normally.
+    this.aiAssistEnabled  = false;
+    this.onAIAssistRequest = null; // callback(faction) → flat PlanAction[]
+    // Autorun: when true, each planning phase is auto-filled with an AI plan and
+    // auto-submitted (and the end-of-round wrap-up auto-advances) so a whole
+    // mission plays itself while you watch. aiAutorunDelay paces it.
+    this.aiAutorun       = false;
+    this.aiAutorunDelay  = 1400;
+    this._autorunTimer   = null;
+
     // ── Multiplayer ──────────────────────────────────────────────────────────
     this.myPlayerId     = null;    // UUID of the local player (null in offline mode)
     this._players       = [];      // full player roster [{playerId,name,faction,isAI}]
@@ -143,6 +173,7 @@ export class UIController {
     this._eventsAC.abort();
     this._stopCountdown();
     this._dismissGraceDialog();
+    if (this._autorunTimer) { clearTimeout(this._autorunTimer); this._autorunTimer = null; }
   }
 
   // ── Element access ───────────────────────────────────────────────────────────
@@ -428,6 +459,26 @@ export class UIController {
       if (isDebugToggleClick(e)) document.body.classList.toggle('debug-counters');
     }, sig);
     this._el('menu-close-btn')?.addEventListener('click', closeMenu, sig);
+    // Bottom score bar / day-cycle pill → cycle & scoring info panel.
+    // The pill is a child of the bar, but bind it explicitly too (with the
+    // bubble stopped) so the protruding pill always toggles the panel even if
+    // the bar's hit area changes.
+    this._el('score-bar')?.addEventListener('click', () => this._showCycleInfoPopup(), sig);
+    this._el('cycle-bump')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._showCycleInfoPopup();
+    }, sig);
+    // Sound toggle — label reflects persisted mute state on first open.
+    const soundBtn = this._el('menu-sound-btn');
+    const _syncSoundLabel = () => {
+      if (soundBtn) soundBtn.textContent = audio.isMuted() ? '🔇 Sound: Off' : '🔊 Sound: On';
+    };
+    _syncSoundLabel();
+    soundBtn?.addEventListener('click', () => {
+      audio.toggleMuted();
+      _syncSoundLabel();
+      if (!audio.isMuted()) audio.play('score');  // audible confirmation
+    }, sig);
     this._el('menu-replay-turn-btn')?.addEventListener('click', () => {
       closeMenu();
       this.onReplayLastTurn?.();
@@ -564,6 +615,8 @@ export class UIController {
       if (this._selectedEntity) this._selectEntity(this._selectedEntity);
       this.onRedraw();
     });
+    _tap(this._el('plan-autoguard-btn'), () => this._autoFillGuard());
+    _tap(this._el('plan-aiassist-btn'),  () => this._fillAIAssistPlan());
     _tap(this._el('plan-toggle-btn'), () => this._togglePlanPanel());
     _tap(this._el('plan-tab'),        () => this._togglePlanPanel());
 
@@ -663,6 +716,8 @@ export class UIController {
     const returnBtn = this._el('plan-return-btn');
     if (returnBtn) returnBtn.style.display = 'none';
 
+    this._syncAIAssistButton();
+
     // Show replay button if there's history to replay
     const replayBtn = this._el('replay-turn-btn');
     if (replayBtn) replayBtn.style.display = this._hasReplayHistory ? '' : 'none';
@@ -729,12 +784,16 @@ export class UIController {
     this._nudgedThisRound.clear();
     this._renderPlayerStatus();
     if (timeoutMs > 0) this._startCountdown(timeoutMs);
+
+    this._maybeAutorun();
   }
 
   /** Exit planning mode (called after resolution completes). */
   exitPlanningMode() {
     this._stopUndoBtnTracking();
+    if (this._autorunTimer) { clearTimeout(this._autorunTimer); this._autorunTimer = null; }
     this._planMode      = false;
+    this._pushUnitInfoCards();  // plan over — clear odds/attack markers
     // NOTE: _planSubmitted is intentionally NOT reset here. It guards against
     // a double-fire of the submit button (touchend + click on mobile, or a
     // fast double-click) — the offline/campaign plan-submit handler calls
@@ -1045,6 +1104,119 @@ export class UIController {
     this._startUndoBtnTracking();
   }
 
+  /**
+   * Auto-Guard: fill the remaining action budget with GUARD actions, the leader
+   * first then down the unit list in order, until the budget is used up. Never
+   * spends food — it stops at the true action budget. Guard charges stack, so a
+   * round-robin reinforces stances rather than wasting leftover budget.
+   */
+  _autoFillGuard() {
+    if (this._planSubmitted) return;
+
+    const used = interleavePlan(this._unitPlans).filter(a => actionCosts(a.type)).length;
+    let remaining = this._planBudget - used;
+    if (remaining <= 0) {
+      this._showPlanToast('No action budget left for Auto-Guard.');
+      return;
+    }
+
+    // Eligible units (skip stunned/blocked); the pure builder orders leader(s)
+    // first then round-robins to fill the budget.
+    const eligible = this._getControllableUnits()
+      .filter(u => validatePlanAction(this.state, { type: PlanActionType.GUARD, entityId: u.id }).valid)
+      .map(u => ({ id: u.id, isLeader: isLeaderType(u.type) }));
+    if (eligible.length === 0) {
+      this._showPlanToast('No units can guard right now.');
+      return;
+    }
+
+    const queue = buildAutoGuardQueue(eligible, remaining);
+    for (const id of queue) {
+      const action = { type: PlanActionType.GUARD, entityId: id };
+      if (!this._unitPlans.has(id)) this._unitPlans.set(id, []);
+      this._unitPlans.get(id).push(action);
+      this.onPlanActionAdded?.(action);
+    }
+    const added = queue.length;
+
+    this._refreshPlanOverlay();
+    this._renderPlanPanel();
+    this._refreshUndoButtons();
+    this._startUndoBtnTracking();
+    if (this._selectedEntity) this._selectEntity(this._selectedEntity);
+    this.onRedraw();
+    this._showPlanToast(`🛡 Auto-Guard: ${added} guard action${added === 1 ? '' : 's'} queued.`);
+  }
+
+  /**
+   * Show/hide the AI-assist button. Visible only while AI assist is enabled and
+   * we're actively planning (not yet submitted). Called on planning entry and
+   * whenever the console toggle flips `aiAssistEnabled`.
+   */
+  _syncAIAssistButton() {
+    const btn = this._el('plan-aiassist-btn');
+    if (!btn) return;
+    const show = !!this.aiAssistEnabled && this._planMode && !this._planSubmitted;
+    btn.style.display = show ? '' : 'none';
+  }
+
+  /**
+   * AI-assist: ask main.js for an AI-generated plan for the current faction and
+   * load it into the plan panel for review. Replaces any actions queued so far.
+   * In manual mode the player still submits — this only fills the queue so they
+   * can watch what the AI would do. Returns the number of actions queued.
+   */
+  _fillAIAssistPlan({ autorun = false } = {}) {
+    if (this._planSubmitted || !this.onAIAssistRequest) return 0;
+    let plan;
+    try {
+      plan = this.onAIAssistRequest(this._planFaction);
+    } catch (e) {
+      console.error('[ai-assist] plan generation failed', e);
+      this._showPlanToast('AI plan generation failed — see console.');
+      return 0;
+    }
+    if (!plan || plan.length === 0) {
+      if (!autorun) this._showPlanToast('🤖 AI had no actions to plan this round.');
+      return 0;
+    }
+    this._unitPlans = groupPlanByEntity(plan);
+    this._refreshPlanOverlay();
+    this._renderPlanPanel();
+    this._refreshUndoButtons();
+    this._startUndoBtnTracking();
+    if (this._selectedEntity) this._selectEntity(this._selectedEntity);
+    this.onRedraw();
+    this._showPlanToast(autorun
+      ? `🤖 Autorun: ${plan.length} action${plan.length === 1 ? '' : 's'} — submitting…`
+      : `🤖 AI queued ${plan.length} action${plan.length === 1 ? '' : 's'} — review, then Submit.`);
+    return plan.length;
+  }
+
+  /**
+   * Autorun step: when enabled, fill this planning phase with an AI plan, then
+   * auto-submit after a visible pause so the round can be watched. Re-armed each
+   * time planning re-enters, so a whole mission plays itself. Skipped in tutorial
+   * mode (the conductor drives those). The wrap-up between rounds auto-advances
+   * via the hook in showReplayWrapUp().
+   */
+  _maybeAutorun() {
+    if (!this.aiAutorun || this.tutorialMode) return;
+    if (!this._planMode || this._planSubmitted) return;
+    if (this._autorunTimer) { clearTimeout(this._autorunTimer); this._autorunTimer = null; }
+    // Auto-play the resolution replay so it runs to the end without manual
+    // stepping (main.js reads this when seeding playback.paused), then the
+    // wrap-up auto-advances via the hook in showReplayWrapUp(). Speed is left at
+    // the player's chosen replay speed — autorun is for watching, not racing.
+    this.replayAutoPlay = true;
+    // Fill immediately so the queued plan is visible, then submit after a pause.
+    this._fillAIAssistPlan({ autorun: true });
+    this._autorunTimer = setTimeout(() => {
+      this._autorunTimer = null;
+      if (this.aiAutorun && this._planMode && !this._planSubmitted) this._doSubmitPlan();
+    }, this.aiAutorunDelay);
+  }
+
   /** Recompute ghost overlay from the current plan and push to renderer. */
   _refreshPlanOverlay() {
     if (!this.renderer) return;
@@ -1059,6 +1231,9 @@ export class UIController {
       step.overBudget = !isFree && runningCost > this._planBudget;
     }
     this.renderer.planGhostSteps = steps;
+    // Keep the unit info cards (planned-attack counts) in lockstep with the
+    // plan — the renderer's hex-badge fallback reads both in the same draw.
+    this._pushUnitInfoCards();
   }
 
   /**
@@ -1275,6 +1450,7 @@ export class UIController {
     if (this._planSubmitted) return;
     this._planSubmitted = true;
     this._stopUndoBtnTracking();
+    this._pushUnitInfoCards();  // clears the odds/attack markers (guard in compute)
     this._clearSelection();
 
     const panel = this._el('plan-panel');
@@ -1550,6 +1726,8 @@ export class UIController {
       : null;
     const clickedEntities = state.entities.filter(e => {
       if (!e.alive || e.owner !== ownerFilter) return false;
+      // Scripted campaign NPCs are never controllable (view-only below).
+      if (e.isNpc) return false;
       // In online MP, only allow selecting entities owned by the local player.
       if (this.myPlayerId && e.ownerId && e.ownerId !== this.myPlayerId) return false;
       const ghostPos = lastGhostPos?.get(e.id);
@@ -1566,6 +1744,8 @@ export class UIController {
         .filter(e => {
           // Enemy faction → always view-only
           if (e.owner !== ownerFilter) return true;
+          // Scripted campaign NPC → view-only
+          if (e.isNpc) return true;
           // Same faction but a different player → ally, view-only
           if (this.myPlayerId && e.ownerId && e.ownerId !== this.myPlayerId) return true;
           return false;
@@ -1736,7 +1916,7 @@ export class UIController {
     if (!state) return [];
     const ownerFilter = this._planMode ? this._planFaction : state.activePlayer;
     const list = state.entities.filter(e => {
-      if (!e.alive || e.owner !== ownerFilter) return false;
+      if (!e.alive || e.owner !== ownerFilter || e.isNpc) return false;
       if (this.myPlayerId && e.ownerId && e.ownerId !== this.myPlayerId) return false;
       return true;
     });
@@ -1790,6 +1970,9 @@ export class UIController {
     this._unitStatsExpanded    = false;
     this.renderer.setSelection({ entityId: null, hex: null });
     this.renderer.clearOverlaysByLayer('highlight-disc');
+    // Republish the unit info cards — with no selection the odds vanish
+    // (planned-attack markers stay; they track the plan, not the selection).
+    this._pushUnitInfoCards();
     hideActionPopup(this);
     this._hideTileDetail();
     // Refresh plan panel so selection highlight clears from the unit rows.
@@ -1817,8 +2000,78 @@ export class UIController {
     this.renderer.clearOverlaysByLayer('highlight-disc');
   }
 
+  // ── Unit info cards (hit/crush % + planned-attack marker) ────────────────
+  //
+  // Per-unit planning info rendered by the 3D renderer INTO the unit icon
+  // billboard (now a 2:1 card — see paintUnitIconBadge): attack odds in the
+  // left margin, the planned-attack ⚔/×N marker in the right margin. Drawn
+  // as part of the billboard so it anchors and scales with the unit instead
+  // of swimming like a DOM overlay.
+
+  /**
+   * Desired per-entity card info:
+   *   - hit/crush odds for every enemy the SELECTED unit could attack
+   *     (the red-highlighted targets), per entity — defenders sharing a hex
+   *     each get their own numbers.
+   *   - planned-attack counts for every enemy targeted by a queued
+   *     BATTLE_UNIT anywhere in the plan (independent of selection).
+   * @returns {Map<entityId, {hitPct:number|null, crushPct:number|null, attackCount:number}>}
+   */
+  _computeUnitInfoCards() {
+    const cards = new Map();
+    if (!this._planMode || this._planSubmitted) return cards;
+
+    const actor = this._selectedEntity;
+    const { actionType } = this._awaitingTarget || {};
+    const oddsMode = !actionType || actionType === ActionType.MOVE || actionType === ActionType.BATTLE;
+    if (actor && !this._isEnemySelection && oddsMode) {
+      const b = this._validActions.find(a => a.type === ActionType.BATTLE);
+      let targets = b?.targets ?? [];
+      if (targets.length && this.state.fogOfWar !== 'none') {
+        const visHexes = getVisiblePositions(this.state, actor.owner);
+        targets = targets.filter(t => visHexes.has(hexKey(t.col, t.row)));
+      }
+      // Odds show only for enemies the unit could attack from where its plan
+      // LEAVES it — a queued move out of range hides the percentages (and a
+      // deselect clears them: no actor → this branch never runs).
+      const projPos = this._getProjectedPos(actor.id) ?? { col: actor.col, row: actor.row };
+      const range = rangeOf(actor);
+      targets = targets.filter(t =>
+        hexDistance(projPos.col, projPos.row, t.col, t.row) <= range);
+      for (const t of targets) {
+        const odds = this._attackOdds(actor, t);
+        if (!odds) continue;
+        cards.set(t.id, {
+          hitPct:   Math.round(odds.hit * 100),
+          crushPct: Math.round(odds.crush * 100),
+          attackCount: 0,
+        });
+      }
+    }
+
+    // Planned-attack counts across the whole plan (BATTLE_UNIT only —
+    // BATTLE_HEX has no unit to pin the marker on and keeps the renderer's
+    // per-hex fallback badge).
+    for (const [, queue] of this._unitPlans) {
+      for (const a of queue) {
+        if (a.type !== PlanActionType.BATTLE_UNIT || !a.targetId) continue;
+        let card = cards.get(a.targetId);
+        if (!card) { card = { hitPct: null, crushPct: null, attackCount: 0 }; cards.set(a.targetId, card); }
+        card.attackCount++;
+      }
+    }
+    return cards;
+  }
+
+  /** Publish the card info to the renderer (call on selection/plan changes). */
+  _pushUnitInfoCards() {
+    if (!this.renderer) return;
+    this.renderer.unitInfoCards = this._computeUnitInfoCards();
+  }
+
   _updateHighlights() {
     this._clearTargetOverlays();
+    this._pushUnitInfoCards();
     if (!this._selectedEntity) return;
 
     const { actionType } = this._awaitingTarget || {};
@@ -1914,7 +2167,7 @@ export class UIController {
 
       // If multiple defenders on the hex, show a picker dialog
       if (targetsAtHex.length > 1) {
-        this._showDefenderPickerDialog(targetsAtHex, executeFight);
+        this._showDefenderPickerDialog(targetsAtHex, executeFight, actor);
       } else {
         executeFight(targetsAtHex[0]);
       }
@@ -1969,7 +2222,7 @@ export class UIController {
     }
 
     const ownerCheck = this._planMode ? this._planFaction : state.activePlayer;
-    if (!entity || entity.owner !== ownerCheck || state.gameOver) {
+    if (!entity || entity.owner !== ownerCheck || entity.isNpc || state.gameOver) {
       hideActionPopup(this);
       return;
     }
@@ -1995,6 +2248,15 @@ export class UIController {
     // In planning mode, always show actions (budget tracked separately)
     const hasAct  = this._planMode || state.actionsAvailable > 0;
 
+    // Equipping a weapon is free but capped at once per round per unit.
+    // Block it when the unit has already equipped this round or already has
+    // a weapon-equip queued in its plan (queued as USE_ITEM of a weapon, or
+    // an EQUIP_WEAPON action).
+    const queuedEquip = (this._unitPlans.get(entity.id) || []).some(a =>
+      a.type === PlanActionType.EQUIP_WEAPON ||
+      (a.type === PlanActionType.USE_ITEM && ITEMS[a.item]?.kind === 'weapon'));
+    const equipBlocked = entity.equippedThisRound || queuedEquip;
+
     // Build a flat list of arc action descriptors, grouped by category
     // Groups: scout, defense, summon, combat, items
     const arcItems = [];
@@ -2006,17 +2268,21 @@ export class UIController {
         case ActionType.BATTLE:
           break; // handled via hex clicks
         case ActionType.EXPLORE:
-          arcItems.push({ group: 'scout', label: 'Explore', fullLabel: 'Explore tile',
+          arcItems.push({ group: 'scout', label: 'Explore', fullLabel: 'Explore tile — search for resources, loot, or hidden survivors (1 action)',
+            desc: 'Search this tile for resources, loot, or hidden survivors.',
             color: '#7eccd6', dis, cost: 1, attrs: 'data-action="explore"' });
           break;
         case ActionType.SOUND_HORN:
-          arcItems.push({ group: 'scout', label: 'Sound Horn', fullLabel: 'Sound Horn (1 food)',
+          arcItems.push({ group: 'scout', label: 'Sound Horn', fullLabel: 'Sound Horn — call hidden survivors within 4 hexes, but reveal your position this round (1 action, 1 food)',
+            desc: 'Calls hidden survivors within 4 hexes, but reveals your position this round.',
             color: '#7eccd6', dis: !action.affordable || dis, cost: 1, resCost: '1🍞', attrs: 'data-action="sound_horn"' });
           break;
         case ActionType.GUARD: {
           const charges = action.currentCharges || 0;
           const lbl = charges > 0 ? `Guard +${charges + 1}` : 'Guard';
-          arcItems.push({ group: 'defense', label: lbl, fullLabel: lbl,
+          arcItems.push({ group: 'defense', label: lbl,
+            fullLabel: `${lbl} — strike the first enemy that comes into reach this round (1 action)`,
+            desc: 'Hold position and strike the first enemy that comes into reach this round.',
             color: '#8888cc', dis, cost: 1, attrs: 'data-action="guard"' });
           break;
         }
@@ -2045,6 +2311,7 @@ export class UIController {
         case ActionType.BATTLE_HEX:
           if (this._planMode) {
             arcItems.push({ group: 'combat', label: 'Attack Hex', fullLabel: 'Attack Hex',
+              desc: 'Hits whatever enemy holds the hex when it resolves — works into fog, skips if empty.',
               color: '#c0392b', dis, cost: 1, attrs: 'data-action="attack_hex"' });
           }
           break;
@@ -2057,7 +2324,8 @@ export class UIController {
             const healPool = entity.owner === 'witch' ? projInv.witch : projInv.hero;
             if ((healPool[ResourceType.HERBS] || 0) < 1) healDis = true;
           }
-          arcItems.push({ group: 'items', label: 'Heal', fullLabel: action.atFullHp ? 'Already at full HP' : 'Herbs (heal 2 HP)',
+          arcItems.push({ group: 'items', label: 'Heal', fullLabel: action.atFullHp ? 'Already at full HP' : 'Herbs (heal 2D10 HP)',
+            desc: action.atFullHp ? 'Already at full HP.' : 'Spend 1 herb to heal this unit 2D10 HP. (1 action)',
             color: '#55cc55', dis: healDis, cost: 1, resCost: '1🌿',
             attrs: 'data-action="heal"' });
           break;
@@ -2080,8 +2348,10 @@ export class UIController {
           break;
         case ActionType.EQUIP_WEAPON:
           for (const w of action.weapons) {
-            arcItems.push({ group: 'items', label: w.label, fullLabel: `Equip ${w.label}`,
-              color: '#b0b0b0', dis, free: true, cost: 0,
+            arcItems.push({ group: 'items', label: w.label,
+              fullLabel: equipBlocked ? 'Already equipped this round' : `Equip ${w.label}`,
+              desc: equipBlocked ? 'Already equipped a weapon this round.' : `Equip ${w.label}. Free, once per round.`,
+              color: '#b0b0b0', dis: dis || equipBlocked, free: true, cost: 0,
               attrs: `data-action="use_item" data-item="${w.key}"` });
           }
           break;
@@ -2096,6 +2366,7 @@ export class UIController {
           arcItems.push({ group: 'items',
             label: abilityLabels[action.ability] || 'Ability',
             fullLabel: fullLabels[action.ability] || 'Use Ability',
+            desc: ABILITIES[action.ability]?.description ?? '',
             color: '#88eeff', dis: !isFree && dis, free: isFree, cost: isFree ? 0 : 1,
             attrs: `data-action="use_ability" data-ability="${action.ability}"` });
           break;
@@ -2167,9 +2438,15 @@ export class UIController {
       const costTag = item.free ? '<span class="arc-cost arc-cost-free">FREE</span>'
         : item.cost === 1 ? '<span class="arc-cost">◆</span>'
         : '';
-      html += `<button class="arc-item${freeCls}" title="${item.fullLabel}"
+      // Hover expansion: the description renders below the action name when
+      // the box is hovered (CSS .arc-item:hover .arc-item-desc). Falls back
+      // to the fullLabel when it says more than the label itself.
+      const desc = item.desc
+        ?? (item.fullLabel && item.fullLabel !== item.label ? item.fullLabel : '');
+      const descTag = desc ? `<span class="arc-item-desc">${desc}</span>` : '';
+      html += `<button class="arc-item${freeCls}"
         style="--arc-x:0px;--arc-y:0px;--arc-delay:${delay}ms;--arc-color:${item.color};--arc-hover:${item.color};--arc-glow:${item.color}33"
-        ${disAttr} ${item.attrs}>${item.label}${resTag}${costTag}</button>`;
+        ${disAttr} ${item.attrs}><span class="arc-item-main">${item.label}${resTag}${costTag}</span>${descTag}</button>`;
     }
 
     popup.innerHTML = html;
@@ -2204,6 +2481,7 @@ export class UIController {
     }
 
     attachPopupListeners(popup, this);
+    this._bindArcHoverExpansion(popup);
 
     // Trigger open animation on next frame — positions are already set, just animate
     requestAnimationFrame(() => {
@@ -2258,6 +2536,9 @@ export class UIController {
       }
     }
 
+    // Defender picker: per-target odds preview under each portrait.
+    const oddsActor = actionTag === 'pick_defender' ? this._pendingDefenderPick?.actor : null;
+
     for (const u of units) {
       const col        = ENTITY_COLOR[u.type] || '#888';
       const portraitId  = u.type === 'survivor' ? Renderer.survivorAssetId(u.title) : u.type;
@@ -2274,10 +2555,17 @@ export class UIController {
         ? `<span class="arc-portrait-badge">\u00d7${atkCount}</span>`
         : '';
 
+      const odds = oddsActor ? this._attackOdds(oddsActor, u) : null;
+      const oddsHtml = odds
+        ? `<span class="arc-portrait-odds">${Math.round(odds.hit * 100)}%</span>`
+        : '';
+
       arcItems.push({
         group: 'disambig',
-        label: `<div class="arc-portrait-img-wrap">${imgHtml}${badgeHtml}</div><div class="arc-portrait-hp"><div class="arc-portrait-hp-fill" style="width:${(pct * 100).toFixed(0)}%;background:${hpColor};"></div></div><span class="arc-portrait-name">${u.displayName}</span>`,
-        fullLabel: `${u.displayName} — HP ${u.hp}/${u.maxHp}`,
+        label: `<div class="arc-portrait-img-wrap">${imgHtml}${badgeHtml}</div><div class="arc-portrait-hp"><div class="arc-portrait-hp-fill" style="width:${(pct * 100).toFixed(0)}%;background:${hpColor};"></div></div><span class="arc-portrait-name">${u.displayName}</span>${oddsHtml}`,
+        fullLabel: odds
+          ? `${u.displayName} — HP ${u.hp}/${u.maxHp} — ${this._formatOddsText(odds)}`
+          : `${u.displayName} — HP ${u.hp}/${u.maxHp}`,
         color: col,
         dis: false,
         free: false,
@@ -2360,7 +2648,7 @@ export class UIController {
       const startScale = isCanvas ? ((item._startR * 2) / portraitSize).toFixed(3) : '0.3';
       const startX = isCanvas ? item._startX.toFixed(1) : '0';
       const startY = isCanvas ? item._startY.toFixed(1) : '0';
-      html += `<button class="arc-item${portraitCls}${canvasCls}" title="${item.fullLabel}"
+      html += `<button class="arc-item${portraitCls}${canvasCls}"
         style="--arc-x:0px;--arc-y:0px;--arc-delay:${delay}ms;--arc-color:${item.color};--arc-hover:${item.color};--arc-glow:${item.color}33;--start-x:${startX}px;--start-y:${startY}px;--start-scale:${startScale};--portrait-size:${portraitSize}px"
         ${item.attrs}>${item.label}</button>`;
     }
@@ -2516,10 +2804,33 @@ export class UIController {
     const color = entity.color ?? COLORS[entity.type] ?? '#d4c9b0';
     const hpPct = Math.max(0, Math.min(100, (entity.hp / entity.maxHp) * 100));
     const hpColor = hpPct > 60 ? '#4caf7d' : hpPct > 30 ? '#f5c842' : '#c0392b';
+    // Equipped weapon — use the registry label (carries icon + bonus + range,
+    // e.g. "🏹 Bow (range 3)"). Range is weapon-derived, so an unarmed unit
+    // is melee (range 1).
     const weaponLabel = entity.weapon
-      ? entity.weapon.charAt(0).toUpperCase() + entity.weapon.slice(1)
-      : null;
-    const effectsHtml = _buildEffectsHtml(entity);
+      ? (WEAPON_LABEL[entity.weapon] || entity.weapon)
+      : '👊 Unarmed';
+    const effectsHtml = buildEffectsHtml(entity);
+
+    // XP bar — campaign veterancy progress, shown beneath the HP bar. Gated on
+    // the SAME chokepoint awardXP() uses (state.isCampaign && hero ownership),
+    // so non-campaign games and witch / non-levelling units render no bar at
+    // all (not "0/0", not greyed — absent). Reuses the campaign-screen
+    // xpProgress() formatter so the in-mission and between-mission numbers
+    // always agree; distinct blue fill (the established XP colour) keeps it from
+    // reading as a second HP stripe.
+    let xpRowHtml = '';
+    if (this.state.isCampaign && entity.owner === 'hero') {
+      const { level, into, span, pct } = xpProgress(entity.level, entity.xp);
+      xpRowHtml = `
+        <span class="usb-xp-wrap" title="Veterancy — earn XP from exploring, fortifying and combat to level up">
+          <span class="usb-stat">Lv <span class="usb-stat-val">${level}</span></span>
+          <span class="usb-hp-track usb-xp-track">
+            <span class="usb-xp-fill" style="width:${pct}%"></span>
+          </span>
+          <span class="usb-stat-val">${into}/${span} XP</span>
+        </span>`;
+    }
 
     // Portrait image with glyph fallback
     const assetId = _entityPortraitId(entity);
@@ -2563,6 +2874,8 @@ export class UIController {
       ? `<span class="usb-extra">
            <span class="usb-stat">ATK <span class="usb-stat-val">${entity.getAttack()}</span></span>
            <span class="usb-stat">DEF <span class="usb-stat-val">${entity.getDefense()}</span></span>
+           <span class="usb-stat">RNG <span class="usb-stat-val">${entity.getRange()}</span></span>
+           <span class="usb-stat" title="Agility — higher acts earlier each turn">AGI <span class="usb-stat-val">${entity.getAgility()}</span></span>
            ${abilityHtml}
          </span>`
       : '';
@@ -2584,10 +2897,11 @@ export class UIController {
               </span>
               <span class="usb-stat-val">${entity.hp}/${entity.maxHp}</span>
             </span>
-            ${weaponLabel ? `<span class="usb-weapon">⚔ ${weaponLabel}</span>` : ''}
+            <span class="usb-weapon">${weaponLabel}</span>
             ${effectsHtml}
             <button class="usb-info-btn ${expanded ? 'usb-info-btn-active' : ''}" title="${expanded ? 'Hide stats' : 'Show stats & abilities'}">i</button>
           </span>
+          ${xpRowHtml}
           ${expandedBlockHtml}
         </span>
         <button class="usb-deselect-btn" title="Deselect unit">✕</button>
@@ -2613,12 +2927,6 @@ export class UIController {
     if (!el) return;
 
     // Derive cycle steps from custom cycleConfig or use the default 8-step cycle
-    const PHASE_META = {
-      dawn:  { sprite: 'cycle_dawn',  label: 'Dawn',  desc: 'Hero +1 action · node scoring · attrition rises' },
-      day:   { sprite: 'cycle_day',   label: 'Day',   desc: 'Witch undead in the open suffer' },
-      dusk:  { sprite: 'cycle_dusk',  label: 'Dusk',  desc: 'Node scoring · seek cover before night' },
-      night: { sprite: 'cycle_night', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
-    };
     const cyclePhases = state.cycleConfig?.phases ?? DEFAULT_CYCLE_PHASES;
     const CYCLE_STEPS = cyclePhases.map(p => ({ phase: p, ...PHASE_META[p] }));
 
@@ -2636,7 +2944,6 @@ export class UIController {
     const labelEl  = this._el('cycle-bump-label');
     if (bumpEl && activeStep) {
       bumpEl.className = `phase-${activeStep.phase}`;
-      bumpEl.title = activeStep.desc;
     }
     if (iconEl && activeStep) {
       const imgSrc = this.renderer?.getPortraitDataURL?.(activeStep.sprite, 64);
@@ -2750,18 +3057,59 @@ export class UIController {
       bar.style.display = '';
       bar.classList.toggle('cycle-only', !!state.disableScoring);
       if (state.disableScoring) {
-        bar.title = '';
         return;
       }
     }
 
     const el = this._el('score-bar-content');
     if (!el) return;
-    const { html, title } = buildObjectivesHtml(
+    const { html } = buildObjectivesHtml(
       state.witchObjectives, state.entities, state.nodeScore, state.gameMode,
     );
     el.innerHTML = html;
-    if (bar) bar.title = title;
+  }
+
+  // ── Cycle & scoring info panel ──────────────────────────────────────────
+  // Game-styled popup opened by tapping the bottom score bar / day-cycle
+  // pill (replaces the native title tooltips there). Toggles; dismisses on
+  // any outside tap.
+
+  _showCycleInfoPopup() {
+    if (typeof document === 'undefined') return;
+    if (document.getElementById('cycle-info-popup')) { this._dismissCycleInfoPopup(); return; }
+    if (!this.state) return;
+    const el = document.createElement('div');
+    el.id = 'cycle-info-popup';
+    // Use the game's cycle sprites for the phase icons (emoji is only the
+    // fallback while the tilemap is still loading).
+    const icons = {};
+    for (const [phase, meta] of Object.entries(PHASE_META)) {
+      const src = this.renderer?.getPortraitDataURL?.(meta.sprite, 64);
+      if (src) icons[phase] = src;
+    }
+    el.innerHTML = buildCycleInfoHtml(this.state, icons);
+    document.body.appendChild(el);
+    this._cycleInfoDismiss = (e) => {
+      if (el.contains(e.target)) return;
+      // Clicks on the bar/pill toggle via their own handlers — the capture-
+      // phase dismisser must not race them (it fired first and re-opened).
+      if (this._el('score-bar')?.contains?.(e.target)) return;
+      this._dismissCycleInfoPopup();
+    };
+    setTimeout(() => {
+      if (document.getElementById('cycle-info-popup')) {
+        document.addEventListener('click', this._cycleInfoDismiss, true);
+      }
+    }, 0);
+  }
+
+  _dismissCycleInfoPopup() {
+    if (typeof document === 'undefined') return;
+    document.getElementById('cycle-info-popup')?.remove();
+    if (this._cycleInfoDismiss) {
+      document.removeEventListener('click', this._cycleInfoDismiss, true);
+      this._cycleInfoDismiss = null;
+    }
   }
 
   /**
@@ -2857,7 +3205,7 @@ export class UIController {
       btn.disabled = state.gameOver;
       btn.classList.toggle('urgent', !state.gameOver);
       btn.classList.add('planning-active');
-      btn.title = 'Submit Plan';
+      btn.dataset.tip = 'Lock in your plan — it resolves alongside your opponent’s';
       if (!this._countdownTimer && !this._graceActive) {
         btn.textContent = '✓ Submit';
       }
@@ -3040,7 +3388,19 @@ export class UIController {
       }
 
       case 'use_item': {
-        this._addToPlan({ type: PlanActionType.USE_ITEM, entityId: entity.id, item: button.dataset.item });
+        const item = button.dataset.item;
+        // Weapon equip is once-per-round per unit. Guard the click in case a
+        // disabled button is reached, and explain why.
+        if (ITEMS[item]?.kind === 'weapon') {
+          const alreadyQueued = (this._unitPlans.get(entity.id) || []).some(a =>
+            a.type === PlanActionType.EQUIP_WEAPON ||
+            (a.type === PlanActionType.USE_ITEM && ITEMS[a.item]?.kind === 'weapon'));
+          if (entity.equippedThisRound || alreadyQueued) {
+            this._showPlanToast(`${entity.displayName} can only equip a weapon once per round.`);
+            break;
+          }
+        }
+        this._addToPlan({ type: PlanActionType.USE_ITEM, entityId: entity.id, item });
         delayedHide();
         if (entity.alive) this._selectEntity(entity);
         else this._clearSelection();
@@ -3103,11 +3463,21 @@ export class UIController {
   static SPEED_ORDER = ['cinematic', 'fast', 'vfast'];
 
   _loadDefaultSpeed() {
+    // The combat-detail controls (#replay-detail-btn + the Options "Default
+    // Game Speed" section) are HIDDEN for now — we're trialling a single
+    // playback presentation. Pin to 'fast' (Summary) and IGNORE the stored
+    // preference: with no UI to change it back, a stale saved 'cinematic' /
+    // 'vfast' would invisibly lock a player into a mode they can't leave.
+    // To restore the feature, un-hide both controls in index.html and revive
+    // the localStorage read below.
+    return 'fast';
+    /* eslint-disable no-unreachable -- kept for easy restoration
     try {
       const saved = localStorage.getItem('brimstone-default-speed');
       if (saved && UIController.SPEED_LABELS[saved]) return saved;
-    } catch (_) { /* localStorage unavailable */ }
-    return 'cinematic';
+    } catch (_) {  }
+    return 'fast';
+    */
   }
 
   _toggleMapOptionsPopup() {
@@ -3142,7 +3512,7 @@ export class UIController {
     if (!btn) return;
     const label = UIController.SPEED_LABELS[this.speedMode] ?? 'Full';
     btn.textContent = label;
-    btn.title = `Combat detail: ${label}`;
+    btn.dataset.tip = `Combat detail: ${label} — how much each battle pauses to show`;
     btn.className = `replay-ctrl-btn replay-detail detail-${this.speedMode}`;
   }
 
@@ -3434,6 +3804,8 @@ export class UIController {
     document.addEventListener('keydown', keyDismiss);
     if (this.autoplay) {
       setTimeout(dismiss, 700);
+    } else if (this.aiAutorun) {
+      setTimeout(dismiss, this.aiAutorunDelay);
     } else if (this.speedMode === 'fast') {
       setTimeout(dismiss, 4000);
     }
@@ -3485,18 +3857,147 @@ export class UIController {
     document.addEventListener('keydown', keyDismiss);
     if (this.autoplay) {
       setTimeout(dismiss, 500);
+    } else if (this.aiAutorun) {
+      setTimeout(dismiss, this.aiAutorunDelay);
     } else if (this.speedMode === 'fast') {
       setTimeout(dismiss, 4000);
     }
   }
 
-  _showDefenderPickerDialog(defenders, onPick) {
-    this._pendingDefenderPick = { defenders, onPick };
+  // ── Action-arc hover expansion ────────────────────────────────────────────
+  // Hovering an action expands its box in place (description under the name)
+  // with the box's TOP-LEFT anchored where it was, and shifts the entries
+  // below it down by the height delta so nothing overlaps. JS-driven because
+  // sibling re-layout can't be done in CSS: the buttons are individually
+  // positioned via --arc-x/--arc-y (centre-anchored transforms).
+
+  _bindArcHoverExpansion(popup) {
+    if (typeof window !== 'undefined' && window.matchMedia
+        && !window.matchMedia('(hover: hover)').matches) return;
+    const btns = [...popup.querySelectorAll('.arc-item:not(.arc-portrait)')];
+    // Provide a collapse hook so layout recomputes (zoom) start from a clean
+    // un-expanded state instead of clobbering the hover offsets.
+    this._collapseArcExpansion = () => {
+      for (const b of btns) this._collapseArcItem(b, btns);
+    };
+    for (const btn of btns) {
+      if (!btn.querySelector?.('.arc-item-desc')) continue; // nothing to show
+      btn.addEventListener('mouseenter', () => this._expandArcItem(btn, btns));
+      btn.addEventListener('mouseleave', () => this._collapseArcItem(btn, btns));
+    }
+  }
+
+  _expandArcItem(btn, btns) {
+    if (btn.classList.contains('arc-expanded')) return;
+    // Pre-expansion layout box (offsetWidth/Height ignore the centre transform).
+    const w0 = btn.offsetWidth, h0 = btn.offsetHeight;
+    const x0 = parseFloat(btn.style.getPropertyValue('--arc-x')) || 0;
+    const y0 = parseFloat(btn.style.getPropertyValue('--arc-y')) || 0;
+    btn._arcOrig = { x: x0, y: y0 };
+    // The size change is instant but the centre-transform would TRANSITION to
+    // its compensated position — reading as a jump to an origin point that
+    // glides back. Disable the transition so the class change and the centre
+    // offset land in the same frame: the top-left never moves, only the
+    // bottom and right edges grow.
+    btn.style.transition = 'none';
+    // When the whole arc menu opened to the LEFT of the unit (near the right
+    // screen edge), grow the item box leftward too — otherwise it expands off
+    // the right edge / over the unit. `arc-expand-left` right-anchors its
+    // content to match. Default to rightward when the side is unknown.
+    const openLeft = this._arcOpenRight === false;
+    btn.classList.toggle('arc-expand-left', openLeft);
+    btn.classList.add('arc-expanded');
+    const w1 = btn.offsetWidth, h1 = btn.offsetHeight;
+    // Pin one top corner and grow from it: top-left when opening right (centre
+    // moves +half the width growth), top-right when opening left (−half).
+    const dx = (w1 - w0) / 2;
+    btn.style.setProperty('--arc-x', `${(x0 + (openLeft ? -dx : dx)).toFixed(1)}px`);
+    btn.style.setProperty('--arc-y', `${(y0 + (h1 - h0) / 2).toFixed(1)}px`);
+    btn.offsetHeight; // commit class + vars together before re-enabling
+    btn.style.transition = '';
+    btn.style.transitionDelay = '0ms';
+    // Re-layout the entries below: shift down by the height delta.
+    const dh = h1 - h0;
+    const idx = btns.indexOf(btn);
+    for (let j = idx + 1; j < btns.length; j++) {
+      const b = btns[j];
+      if (b._arcShift == null) {
+        b._arcShift = parseFloat(b.style.getPropertyValue('--arc-y')) || 0;
+      }
+      b.style.transitionDelay = '0ms';
+      b.style.setProperty('--arc-y', `${(b._arcShift + dh).toFixed(1)}px`);
+    }
+  }
+
+  _collapseArcItem(btn, btns) {
+    if (!btn.classList.contains('arc-expanded')) return;
+    // Same frame-atomic treatment in reverse — shrink and restore the centre
+    // together so the top-left stays pinned on the way back too.
+    btn.style.transition = 'none';
+    btn.classList.remove('arc-expanded', 'arc-expand-left');
+    if (btn._arcOrig) {
+      btn.style.setProperty('--arc-x', `${btn._arcOrig.x.toFixed(1)}px`);
+      btn.style.setProperty('--arc-y', `${btn._arcOrig.y.toFixed(1)}px`);
+      btn._arcOrig = null;
+    }
+    btn.offsetHeight;
+    btn.style.transition = '';
+    const idx = btns.indexOf(btn);
+    for (let j = idx + 1; j < btns.length; j++) {
+      const b = btns[j];
+      if (b._arcShift != null) {
+        b.style.setProperty('--arc-y', `${b._arcShift.toFixed(1)}px`);
+        b._arcShift = null;
+      }
+    }
+  }
+
+  _showDefenderPickerDialog(defenders, onPick, actor = null) {
+    this._pendingDefenderPick = { defenders, onPick, actor };
     this._popupVisible = true;
     this._showActionPopup(null);
   }
 
+  /**
+   * Exact hit/crush/counter odds for `actor` attacking `target` from the
+   * actor's projected planning position. Best-effort: returns null when odds
+   * can't be computed (e.g. partial mirror data online) — the preview is
+   * advisory, never load-bearing.
+   */
+  _attackOdds(actor, target) {
+    try {
+      let effActor = actor;
+      if (this._planMode) {
+        const proj = this._getProjectedPos(actor.id);
+        if (proj && (proj.col !== actor.col || proj.row !== actor.row)) {
+          // Re-parent so getRange()/getAttack() still resolve on the clone.
+          effActor = Object.setPrototypeOf(
+            { ...actor, col: proj.col, row: proj.row },
+            Object.getPrototypeOf(actor)
+          );
+        }
+      }
+      return computeCombatOdds(this.state, effActor, target);
+    } catch (err) {
+      console.warn('[ui] odds preview unavailable:', err);
+      return null;
+    }
+  }
+
+  /** "72% hit (18% crush) · 9% counter risk" — omits zero-probability parts. */
+  _formatOddsText(odds) {
+    if (!odds) return null;
+    const pct = p => `${Math.round(p * 100)}%`;
+    let s = `${pct(odds.hit)} hit`;
+    if (odds.crush > 0.005) s += ` (${pct(odds.crush)} crush)`;
+    if (odds.counter > 0.005) s += ` · ${pct(odds.counter)} counter risk`;
+    return s;
+  }
+
   _showBattleDialog(actorSnap, targetSnap, result, onDismiss, onRematch = null) {
+    // Combat audio fires from _playBattleResultAnims (main.js) — the one
+    // point every display path (2D dialog, toast, 3D card-hold) funnels
+    // through — so no sound here.
     // Cancel any in-flight dice animation or auto-dismiss from a previous battle dialog
     if (this._battleInterval)  { clearInterval(this._battleInterval);  this._battleInterval  = null; }
     if (this._autoDismissTimer) { clearTimeout(this._autoDismissTimer); this._autoDismissTimer = null; }
@@ -3624,15 +4125,17 @@ export class UIController {
         outcome.className   = 'battle-outcome kill';
       } else if (result.hit) {
         const fortNote = result.fortDamaged ? ` (-${result.fortDamaged} fortifications)` : '';
-        if (result.damage >= 2) {
-          outcome.textContent = `💥💥 Crushing hit! ${targetSnap.name} takes ${result.damage} damage!${fortNote}`;
+        const tier = result.breakdown?.dmgTier ?? 1;
+        if (tier >= 2) {
+          const word = tier >= 3 ? 'Great crushing hit!' : 'Crushing hit!';
+          outcome.textContent = `💥💥 ${word} ${targetSnap.name} takes ${result.damage} damage!${fortNote}`;
           outcome.className   = 'battle-outcome kill';
         } else {
-          outcome.textContent = `💥 Hit! ${targetSnap.name} takes 1 damage${fortNote}`;
+          outcome.textContent = `💥 Hit! ${targetSnap.name} takes ${result.damage} damage${fortNote}`;
           outcome.className   = 'battle-outcome hit';
         }
       } else if (result.counterDmg > 0) {
-        outcome.textContent = `⚔ Counter! ${actorSnap.name} takes 1 damage!`;
+        outcome.textContent = `⚔ Counter! ${actorSnap.name} takes ${result.counterDmg} damage!`;
         outcome.className   = 'battle-outcome kill';
       } else {
         outcome.textContent = `🛡 ${targetSnap.name} defends!`;
@@ -3645,7 +4148,7 @@ export class UIController {
         const splashEl = document.createElement('div');
         splashEl.className = 'battle-splash';
         const lines = result.splashHits.map(h =>
-          h.killed ? `💢 ${h.name} is slain by splash!` : `💢 ${h.name} takes −1 splash damage`
+          h.killed ? `💢 ${h.name} is slain by splash!` : `💢 ${h.name} takes −${h.damage ?? 1} splash damage`
         );
         splashEl.textContent = lines.join('  ·  ');
         outcome.insertAdjacentElement('afterend', splashEl);
@@ -4101,6 +4604,24 @@ export class UIController {
 
       const { prevScore, prevNodes, humanFaction, fogOfWar, gameOver, winner, winReason, hasFullReplay, isCampaign } = opts;
 
+      // One sting per summary, highest-priority event wins:
+      // game over > node scoring > phase change.
+      {
+        const score = this.state?.nodeScore;
+        const scored = prevScore && score &&
+          (score.hero !== prevScore.hero || score.witch !== prevScore.witch);
+        const phaseKey = this.state?.phase ?? null;
+        if (gameOver) {
+          audio.play(!humanFaction || winner === humanFaction ? 'victory' : 'defeat');
+        } else if (scored) {
+          audio.play('score');
+        } else if (phaseKey && this._lastPhaseSoundKey !== null && this._lastPhaseSoundKey !== phaseKey) {
+          // Sting only when the phase actually flips (not every round).
+          audio.play(phaseKey === 'night' || phaseKey === 'dusk' ? 'nightfall' : 'phase');
+        }
+        this._lastPhaseSoundKey = phaseKey;
+      }
+
       // Collect kills, survivors found, summons, and resource flows from steps.
       // Fog-of-war filtering: skip opponent-only events the player can't see.
       const kills      = [];
@@ -4295,6 +4816,17 @@ export class UIController {
         for (const n of kills) {
           html += `<div class="summary-kill">☠ ${n} slain</div>`;
         }
+
+        // Campaign veterancy: per-unit "+N XP" lines beneath the kills/combat
+        // they came from, summed to one line per unit (aggregation lives in
+        // compileTurnXpSummary). Campaign-only — the XP_AWARDED events never
+        // fire outside campaign, and this gate keeps the lines out belt-and-braces.
+        if (isCampaign) {
+          for (const xp of compileTurnXpSummary(steps ?? [], this.state.entities, ResEventType)) {
+            const cls = xp.leveledUp ? 'summary-xp leveled' : 'summary-xp';
+            html += `<div class="${cls}">✨ ${xp.text}</div>`;
+          }
+        }
         for (const s of survivors) {
           if (s.type === 'zombie') {
             html += `<div class="summary-summon">† Zombie raised</div>`;
@@ -4341,14 +4873,21 @@ export class UIController {
         // Post-round effects (night attrition, etc.)
         const postEvents = this.state.postRoundEvents || [];
         const myId = this.myPlayerId;
+        // Kills are shown for either side — the player watched that unit
+        // vanish, so the summary must explain it. Damage/shelter stay scoped
+        // to the player's own units.
         const visiblePostEvents = postEvents.filter(ev =>
-          ev.type !== 'safe' && (!myId || !ev.ownerId || ev.ownerId === myId)
+          ev.type !== 'safe'
+          && (ev.type === 'kill' || !myId || !ev.ownerId || ev.ownerId === myId)
         );
         if (visiblePostEvents.length) {
           html += `<div class="summary-hazard-header">🌙 Night Attrition</div>`;
           for (const ev of visiblePostEvents) {
             if (ev.type === 'kill') {
-              html += `<div class="summary-hazard">💀 ${ev.entityName} −${ev.amount} HP (unsheltered at night) — killed</div>`;
+              const cause = ev.text
+                ? String(ev.text).replace(/^💀\s*/, '')
+                : `${ev.entityName} −${ev.amount} HP (unsheltered at night) — killed`;
+              html += `<div class="summary-hazard">💀 ${cause}</div>`;
             } else if (ev.type === 'damage') {
               html += `<div class="summary-hazard">🌙 ${ev.entityName} −${ev.amount} HP (unsheltered at night)</div>`;
             } else if (ev.type === 'shelter') {
@@ -4638,9 +5177,9 @@ export class UIController {
     const camBtn = document.getElementById('replay-camera-btn');
     if (camBtn) {
       camBtn.textContent = fixed ? 'Fixed' : 'Follow';
-      camBtn.title = fixed
-        ? 'Camera: Fixed - stays where you put it'
-        : 'Camera: Follow the action';
+      camBtn.dataset.tip = fixed
+        ? 'Camera fixed — stays where you put it; tap to follow the action'
+        : 'Camera follows the action — tap to keep it fixed instead';
       camBtn.classList.toggle('fixed', fixed);
     }
   }
@@ -4653,7 +5192,7 @@ export class UIController {
     // AutoPlay is a toggle: highlighted (active) while auto-running.
     const pp = document.getElementById('replay-playpause-btn');
     if (pp) {
-      pp.title = paused ? 'Auto-play (run every step)' : 'Pause (step manually)';
+      pp.dataset.tip = paused ? 'Auto-play — run every step without stopping' : 'Pause — step through manually with Next';
       pp.classList.toggle('active', !paused);
     }
     // NEXT only works while paused; grey it out during auto-play.
@@ -4725,11 +5264,55 @@ export class UIController {
     if (endBtn) {
       // Restore the original glyph (defaults to ⇥ if we never saw one)
       endBtn.textContent = this._replayEndBtnOriginalText ?? '\u21E5';
-      endBtn.title = 'Jump to end';
+      endBtn.dataset.tip = 'Jump to the end of the replay';
       endBtn.onclick = null;
     }
     this._replayEndBtnOriginalText = undefined;
     this._inlineReplayActive = false;
+  }
+
+  // ── Off-screen conversation arrow ────────────────────────────────────────
+  // Fixed-camera mode keeps the camera put during conversations; when the
+  // talking hex is outside the viewport, an edge-clamped arrow points at it.
+
+  /** Show (and keep refreshing) the edge arrow toward hex (col,row). Hidden
+   *  automatically whenever the hex is on screen. Refreshes on an interval so
+   *  manual pans in fixed-camera mode keep the direction honest. */
+  showOffscreenArrow(col, row) {
+    this.hideOffscreenArrow();
+    const el = this._el('offscreen-arrow');
+    const canvas = this._el('game-canvas');
+    if (!el || !canvas || !this.renderer?.hexToCanvasPos) return;
+
+    const update = () => {
+      const p = this.renderer.hexToCanvasPos(col, row);
+      // hexToCanvasPos returns render-buffer pixels; scale to CSS pixels.
+      const sx = canvas.clientWidth  / (canvas.width  || canvas.clientWidth  || 1);
+      const sy = canvas.clientHeight / (canvas.height || canvas.clientHeight || 1);
+      const x = p.x * sx, y = p.y * sy;
+      const W = canvas.clientWidth, H = canvas.clientHeight;
+      const MARGIN = 28;
+      const onScreen = x >= MARGIN && x <= W - MARGIN && y >= MARGIN && y <= H - MARGIN;
+      if (onScreen) { el.hidden = true; return; }
+      el.hidden = false;
+      const cx = Math.max(MARGIN, Math.min(W - MARGIN, x));
+      const cy = Math.max(MARGIN, Math.min(H - MARGIN, y));
+      const angle = Math.atan2(y - cy, x - cx) * 180 / Math.PI;
+      el.style.left = `${cx}px`;
+      el.style.top  = `${cy}px`;
+      el.style.transform = `translate(-50%, -50%) rotate(${angle}deg)`;
+    };
+    update();
+    this._offscreenArrowTimer = setInterval(update, 250);
+  }
+
+  hideOffscreenArrow() {
+    if (this._offscreenArrowTimer) {
+      clearInterval(this._offscreenArrowTimer);
+      this._offscreenArrowTimer = null;
+    }
+    const el = this._el('offscreen-arrow');
+    if (el) el.hidden = true;
   }
 
   // ── Replay timeline overlay ──────────────────────────────────────────────
@@ -4760,6 +5343,7 @@ export class UIController {
     // lifts the cards up (see styles.css mobile block).
     if (this._replayCollapsed === undefined) this._replayCollapsed = this._isMobileViewport();
     this._bindReplayCollapse();
+    this._bindReplayHoverHighlights();
     this._applyReplayCollapse(this._replayCollapsed);
     if (typeof document !== 'undefined') document.body?.classList?.add('replay-timeline-up');
     this._el('replay-progress')?.classList.add('visible');
@@ -4777,6 +5361,48 @@ export class UIController {
       this._applyReplayCollapse(!this._replayCollapsed);
     });
     this._replayCollapseBound = true;
+  }
+
+  /** Hovering an action entry on a turn card highlights its involved hexes on
+   *  the map (15%-alpha blue fill) and, for a successful move, a translucent
+   *  ghost arrow tracing the path. Delegated on the persistent timeline
+   *  container (cards re-render every round); hover-capable pointers only. */
+  _bindReplayHoverHighlights() {
+    if (this._replayHoverBound) return;
+    const wrap = this._el('replay-timeline');
+    if (!wrap || typeof wrap.addEventListener !== 'function') return;
+    if (typeof window !== 'undefined' && window.matchMedia
+        && !window.matchMedia('(hover: hover)').matches) return;
+    wrap.addEventListener('mouseover', (e) => {
+      const row = e.target?.closest?.('.replay-step-entry');
+      if (!row) { this._clearReplayHoverHighlight(); return; }
+      const stepAttr = row.closest('.replay-step-col')?.getAttribute?.('data-step');
+      const col = (this._replayDigest ?? []).find(c => String(c.stepIndex) === String(stepAttr));
+      const entry = col?.entries?.[Number(row.getAttribute('data-entry'))] ?? null;
+      this._applyReplayHoverHighlight(entry);
+    });
+    wrap.addEventListener('mouseleave', () => this._clearReplayHoverHighlight());
+    this._replayHoverBound = true;
+  }
+
+  _applyReplayHoverHighlight(entry) {
+    if (typeof this.renderer?.setOverlay !== 'function') return;
+    const { fill, arrows } = buildTurnCardHoverOverlays(entry);
+    if (!fill && !arrows.length) { this._clearReplayHoverHighlight(); return; }
+    this._clearReplayHoverHighlight();
+    const ids = [];
+    if (fill) { this.renderer.setOverlay(fill.id, fill); ids.push(fill.id); }
+    for (const a of arrows) { this.renderer.setOverlay(a.id, a); ids.push(a.id); }
+    this._turnCardHoverIds = ids;
+    this.renderer.draw?.();
+  }
+
+  _clearReplayHoverHighlight() {
+    const ids = this._turnCardHoverIds;
+    if (!ids?.length || typeof this.renderer?.removeOverlay !== 'function') return;
+    for (const id of ids) this.renderer.removeOverlay(id);
+    this._turnCardHoverIds = [];
+    this.renderer.draw?.();
   }
 
   /** Collapse or expand every turn card. Collapsed cards show only the action
@@ -4801,6 +5427,43 @@ export class UIController {
    *  dots are revealed by CSS when several actions are active at once. */
   _replayColHtml(col, displayNum) {
     const rows = col.entries.map((e, j) => this._replayRowHtml(e, j)).join('');
+    if (col.kind === 'storyBeat') {
+      const esc = (s) => String(s ?? '')
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      // A title + text panel — no action rows, no SKIP/REPLAY footer. The replay
+      // gate (NEXT) advances past it like any turn card (see _presentStoryBeatCard).
+      return `<div class="replay-step-col replay-beat-col" data-step="${col.stepIndex}">`
+           + `<div class="replay-step-header">`
+           +   `<div class="replay-step-label">✦ ${esc(col.title)}</div>`
+           + `</div>`
+           + `<div class="replay-beat-text">${esc(col.text)}</div>`
+           + `</div>`;
+    }
+    if (col.kind === 'conversation') {
+      const esc = (s) => String(s ?? '')
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      // Voice-only mute lives on the bubble itself (top-right of the header) so
+      // the player can silence narration without leaving the conversation. It
+      // toggles the SHARED voiceover mute (src/voiceover.js) — same state as the
+      // tutorial tooltip's button — and never affects SFX/music. Shown ONLY when
+      // this conversation actually has generated narration (col.hasVoice).
+      let muteBtnHtml = '';
+      if (col.hasVoice) {
+        const muteTitle = isVoiceMuted() ? 'Unmute narration' : 'Mute narration';
+        muteBtnHtml = `<button class="replay-conv-mute" type="button" title="${muteTitle}" aria-label="${muteTitle}">${voiceMuteIconHtml(isVoiceMuted())}</button>`;
+      }
+      return `<div class="replay-step-col replay-conv-col" data-step="${col.stepIndex}">`
+           + `<div class="replay-step-header">`
+           +   `<div class="replay-step-label">💬 ${esc(col.title)}</div>`
+           +   muteBtnHtml
+           + `</div>`
+           + rows
+           + `<div class="replay-conv-btns">`
+           +   `<button class="replay-conv-btn" type="button">SKIP</button>`
+           +   `<button class="replay-conv-continue" type="button" style="display:none">CONTINUE ▶</button>`
+           + `</div>`
+           + `</div>`;
+    }
     return `<div class="replay-step-col" data-step="${col.stepIndex}">`
          + `<div class="replay-step-header">`
          +   `<div class="replay-step-label">Turn ${displayNum}</div>`
@@ -4809,6 +5472,85 @@ export class UIController {
          + rows
          + `<div class="replay-more" aria-hidden="true">…</div>`
          + `</div>`;
+  }
+
+  /**
+   * Flip a conversation card between its live and finished states and (re)wire
+   * its footer buttons: 'playing' → SKIP (jump dialog to the end); 'done' →
+   * REPLAY (re-run the dialog presentation) plus, when an `onContinue` handler
+   * is supplied (mission-intro/turn-0 conversations), a CONTINUE button that
+   * dismisses the card and lets the game proceed to planning. Mid-replay
+   * conversations pass no onContinue — the round resumes on its own.
+   * Targets the card by conversation stepIndex key (`conv:<id>`).
+   */
+  setConversationCardState(convoStepIndex, cardState, { onSkip, onReplay, onContinue } = {}) {
+    const col = this._replayCol(convoStepIndex);
+    const btn = col?.querySelector?.('.replay-conv-btn');
+    const contBtn = col?.querySelector?.('.replay-conv-continue');
+    if (!btn) return;
+    this._wireConvMuteBtn(col);
+    if (cardState === 'done') {
+      btn.textContent = 'REPLAY';
+      btn.onclick = onReplay ?? null;
+      if (contBtn) {
+        contBtn.style.display = onContinue ? '' : 'none';
+        contBtn.onclick = onContinue ?? null;
+      }
+    } else {
+      btn.textContent = 'SKIP';
+      btn.onclick = onSkip ?? null;
+      if (contBtn) contBtn.style.display = 'none';
+    }
+  }
+
+  /**
+   * Wire the conversation card's voice-only mute button (idempotent — the card
+   * state flips several times per conversation). Click toggles the shared
+   * voiceover mute; the glyph syncs immediately. No long-lived subscription:
+   * the card is transient, and each new card paints the current mute state in
+   * its header HTML.
+   */
+  _wireConvMuteBtn(col) {
+    const muteBtn = col?.querySelector?.('.replay-conv-mute');
+    if (!muteBtn || muteBtn.dataset.wired === '1') return;
+    muteBtn.dataset.wired = '1';
+    const sync = () => {
+      const muted = isVoiceMuted();
+      muteBtn.innerHTML = voiceMuteIconHtml(muted);
+      const title = muted ? 'Unmute narration' : 'Mute narration';
+      muteBtn.title = title;
+      muteBtn.setAttribute('aria-label', title);
+    };
+    muteBtn.onclick = (e) => { e.stopPropagation(); toggleVoiceMuted(); sync(); };
+    sync();
+  }
+
+  /**
+   * Insert a column into the live timeline (mid-replay conversation card).
+   * Splices the stored digest after `afterStepIndex` (or after the currently
+   * active card when no match), re-renders, restores the revealed outcomes of
+   * everything before the insert, and activates the new card.
+   */
+  insertReplayTimelineCol(col, afterStepIndex = null) {
+    const digest = this._replayDigest ?? [];
+    let idx = digest.findIndex(c => String(c.stepIndex) === String(afterStepIndex));
+    if (idx < 0) {
+      // Fall back to the active card's position in the digest.
+      const cols = this._replayCols();
+      const activeStep = cols[this._activeReplayOrd ?? 0]?.getAttribute('data-step');
+      idx = digest.findIndex(c => String(c.stepIndex) === activeStep);
+      if (idx < 0) idx = digest.length - 1;
+    }
+    digest.splice(idx + 1, 0, col);
+    this.showReplayTimeline(digest);
+    // Re-rendering resets the reveal animations — everything that already
+    // played stays revealed.
+    const cols = this._replayCols();
+    const newOrd = cols.findIndex(c => c.getAttribute('data-step') === String(col.stepIndex));
+    cols.slice(0, Math.max(0, newOrd)).forEach(c =>
+      c.querySelectorAll('.replay-step-outcome, .replay-roll, .replay-discovered')
+        .forEach(o => o.classList.add('revealed')));
+    this.setReplayTimelineStep(col.stepIndex);
   }
 
   /**
@@ -4858,10 +5600,7 @@ export class UIController {
     let actorOut, centerOut, targetOut;
     if (entry.outcomeKind) {
       // Battle: outcome word centred, HP changes under each combatant.
-      const word = entry.killed ? 'KILL'
-        : entry.outcomeKind === 'crush' ? 'CRUSH'
-        : entry.outcomeKind === 'hit'   ? 'HIT'
-        : (entry.missWord ?? 'MISS');
+      const word = battleOutcomeWord(entry);
       const kind = entry.killed ? 'kill' : entry.outcomeKind;
       actorOut  = out(entry.actorDmg > 0 ? `COUNTER −${entry.actorDmg}` : '', 'counter');
       centerOut = out(word, kind);
@@ -4874,13 +5613,25 @@ export class UIController {
     }
 
     // Battles flank the (two-line) action word with each side's final roll,
-    // the winner's roll highlighted.
+    // the winner's roll highlighted. The roll-breakdown tooltip is the
+    // in-game explanation of advantage/gang-up (battle dialog is retired).
+    // Rendered as a game-styled hover panel ([data-tip-html]) rather than a
+    // native title tooltip.
     let actionHtml;
     if (entry.outcomeKind && entry.atkRoll != null && entry.defRoll != null) {
       const word = esc(entry.label).replace(' ', '<br>');
       const atkCls = entry.attackerWon ? 'winner' : 'loser';
       const defCls = entry.attackerWon ? 'loser' : 'winner';
-      actionHtml = `<div class="replay-step-action battle">`
+      const bkdHtml = buildRollRowsTipHtml(entry.rollRows, entry, {
+        portraitFor: (u) => {
+          const assetId = _entityPortraitId({ type: u.type, title: u.title });
+          return (this.renderer && assetId) ? this.renderer.getPortraitDataURL(assetId, 36) : null;
+        },
+      });
+      const tip = bkdHtml
+        ? ` data-tip-html="${encodeURIComponent(bkdHtml)}"`
+        : '';
+      actionHtml = `<div class="replay-step-action battle"${tip}>`
         + `<span class="replay-roll ${atkCls}">${entry.atkRoll}</span>`
         + `<span class="replay-action-word">${word}</span>`
         + `<span class="replay-roll ${defCls}">${entry.defRoll}</span>`
@@ -5037,7 +5788,9 @@ export class UIController {
     this._setReplayActiveOrd(this._replayCols().length - 1);
 
     return new Promise(resolve => {
+      let autoTimer = null;
       const finish = (action) => {
+        if (autoTimer) { clearTimeout(autoTimer); autoTimer = null; }
         card.querySelectorAll('.replay-wrapup-btn').forEach(b => { b.onclick = null; });
         this._exitReplayReview();
         resolve(action);
@@ -5045,6 +5798,11 @@ export class UIController {
       card.querySelectorAll('.replay-wrapup-btn').forEach(btn => {
         btn.onclick = () => finish(btn.getAttribute('data-act'));
       });
+      // Autorun: auto-advance the wrap-up after a watchable pause so the mission
+      // plays unattended. Manual clicks still work and cancel the timer.
+      if (this.aiAutorun && !this.tutorialMode) {
+        autoTimer = setTimeout(() => finish('next'), this.aiAutorunDelay);
+      }
     });
   }
 
@@ -5054,44 +5812,13 @@ export class UIController {
    * score bar.
    */
   _buildWrapUpBody(combats, attritionLevel = 0, discoveries = [], loot = [], attrition = []) {
-    const GLYPHS = { hero: '⚔', witch: '✦', survivor: '☺', soldier: '♟', zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙' };
     const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const iconFor = (u, size, cls) => {
-      const color = u.color || ENTITY_COLOR[u.type] || '#888';
       const assetId = _entityPortraitId({ type: u.type, title: u.title });
       const src = (this.renderer && assetId) ? this.renderer.getPortraitDataURL(assetId, size) : null;
-      return src
-        ? `<img class="${cls}" src="${src}" style="border-color:${color}" alt="">`
-        : `<span class="${cls}" style="background:${color}">${GLYPHS[u.type] ?? '?'}</span>`;
+      return wrapupIconHtml(u, { src, cls });
     };
-    const unitCell = (u) => {
-      const icon = iconFor(u, 56, 'wrapup-unit-icon');
-      const effect = u.killed
-        ? `<div class="wrapup-dmg kill">☠</div>`
-        : (u.hpLost > 0 ? `<div class="wrapup-dmg">−${u.hpLost}</div>` : `<div class="wrapup-dmg none">—</div>`);
-      return `<div class="wrapup-unit">${icon}${effect}</div>`;
-    };
-    let combatHtml = '';
-    if (combats.length > 3) {
-      // Many fights ⇒ pairwise would be too tall. Condense to just the units
-      // that actually took damage (aggregated across all their fights).
-      const hurt = new Map();
-      for (const { a, b } of combats) {
-        for (const u of [a, b]) {
-          if (!(u.hpLost > 0 || u.killed)) continue;
-          const prev = hurt.get(u.id);
-          if (prev) { prev.hpLost += u.hpLost; prev.killed = prev.killed || u.killed; }
-          else hurt.set(u.id, { ...u });
-        }
-      }
-      combatHtml = hurt.size
-        ? `<div class="wrapup-casualties">${[...hurt.values()].map(unitCell).join('')}</div>`
-        : `<div class="wrapup-line muted">${combats.length} skirmishes — no casualties.</div>`;
-    } else {
-      for (const { a, b } of combats) {
-        combatHtml += `<div class="wrapup-combat">${unitCell(a)}<span class="wrapup-vs">vs</span>${unitCell(b)}</div>`;
-      }
-    }
+    let combatHtml = buildWrapupCombatsHtml(combats, (u, size) => iconFor(u, size, 'wrapup-unit-icon'));
     if (!combatHtml) combatHtml = `<div class="wrapup-line muted">A quiet turn.</div>`;
 
     // Survivors/zombies discovered this round — icon + name, reusing the old
@@ -5128,7 +5855,12 @@ export class UIController {
     if (attrition.length) {
       const rows = attrition.map(a => {
         if (a.kind === 'kill') {
-          return `<div class="wrapup-attr-row hurt">💀 ${esc(a.name)} <span class="wrapup-attr-note">consumed by the night</span></div>`;
+          // DOT deaths carry their cause in `text` ("🩸 X succumbs to
+          // bleeding!"); night-attrition kills keep the classic copy.
+          const note = a.text
+            ? esc(String(a.text).replace(/^💀\s*/, ''))
+            : `${esc(a.name)} <span class="wrapup-attr-note">consumed by the night</span>`;
+          return `<div class="wrapup-attr-row hurt">💀 ${note}</div>`;
         }
         if (a.kind === 'damage') {
           return `<div class="wrapup-attr-row hurt">🌙 ${esc(a.name)} <span class="wrapup-attr-dmg">−${a.amount} HP</span> <span class="wrapup-attr-note">exposed</span></div>`;
@@ -5201,6 +5933,7 @@ export class UIController {
 
   /** Hide and clear the timeline overlay. */
   hideReplayTimeline() {
+    this._clearReplayHoverHighlight();
     const wrap  = this._el('replay-timeline');
     const track = this._el('replay-timeline-track');
     if (wrap) wrap.classList.remove('visible', 'reviewing');
@@ -5310,44 +6043,6 @@ function _visibleUnitsAt(state, col, row) {
   });
 }
 
-// Effects whose mods make a unit weaker (red pip), vs. those that strengthen
-// it (green pip). Anything not listed renders neutral.
-const _BAD_EFFECTS  = new Set(['wounded', 'poisoned', 'bleeding', 'stunned', 'slowed', 'marked', 'cursed']);
-const _GOOD_EFFECTS = new Set(['frenzied', 'inspired', 'fortified', 'eagle_eyed']);
-
-/**
- * Render the active effects pip strip for an entity. Each pip shows the
- * effect's icon and (for finite durations) a small remaining-rounds badge.
- * The full label/description is exposed via the title attribute for
- * desktop hover and mobile long-press.
- */
-function _buildEffectsHtml(entity) {
-  if (!entity || !Array.isArray(entity.effects) || entity.effects.length === 0) {
-    return '';
-  }
-  const pips = entity.effects.map(rec => {
-    const def = EFFECTS[rec.id];
-    if (!def) return '';
-    const kind = _BAD_EFFECTS.has(rec.id) ? 'bad'
-               : _GOOD_EFFECTS.has(rec.id) ? 'good'
-               : '';
-    const durLabel = typeof rec.duration === 'number'
-      ? `${rec.duration}`
-      : (rec.duration === 'mission' ? '∞' : '');
-    const stacksLabel = (rec.stacks ?? 1) > 1 ? `×${rec.stacks}` : '';
-    const tooltipBits = [def.label, def.description];
-    if (typeof rec.duration === 'number') tooltipBits.push(`${rec.duration} round${rec.duration === 1 ? '' : 's'} remaining`);
-    else if (rec.duration === 'mission') tooltipBits.push('Lasts the mission');
-    else if (rec.duration === 'permanent') tooltipBits.push('Permanent');
-    const tooltip = tooltipBits.join(' — ').replace(/"/g, '&quot;');
-    return `<span class="usb-effect-pip" data-kind="${kind}" title="${tooltip}">`
-         + `${def.icon ?? '●'}${stacksLabel}`
-         + (durLabel ? `<span class="usb-effect-pip-dur">${durLabel}</span>` : '')
-         + `</span>`;
-  }).join('');
-  return `<span class="usb-effects">${pips}</span>`;
-}
-
 // ── Tilemap sprite helpers ────────────────────────────────────────────────────
 
 /** Return the tilemap asset id for any entity snap (uses title for survivors). */
@@ -5381,8 +6076,13 @@ function _unitCardHTML(entity, { renderer = null, selectable = false, showStats 
     ? `<img class="tile-unit-card-portrait" src="${src}" style="width:${portraitSize}px;height:${portraitSize}px;border-color:${color};" alt="">`
     : `<span class="tile-unit-card-icon" style="color:${color}">${glyph}</span>`;
 
-  // Stats line
-  const hearts = '♥'.repeat(entity.hp ?? 0) + '♡'.repeat(Math.max(0, (entity.maxHp ?? entity.hp ?? 0) - (entity.hp ?? 0)));
+  // Stats line — one heart per DAMAGE_SCALE HP chunk so scaled pools (e.g. a
+  // 98/70 HP hero) render at the same ~14/10 hearts they did pre-scaling.
+  const hpNow  = entity.hp ?? 0;
+  const hpMax  = entity.maxHp ?? entity.hp ?? 0;
+  const fullHearts  = Math.round(hpNow / DAMAGE_SCALE);
+  const totalHearts = Math.max(fullHearts, Math.round(hpMax / DAMAGE_SCALE));
+  const hearts = '♥'.repeat(fullHearts) + '♡'.repeat(Math.max(0, totalHearts - fullHearts));
   let statsHtml = hearts;
   if (showStats && entity.attack !== undefined) {
     const atk = attackOf(entity);
@@ -5433,35 +6133,49 @@ function _breakdownData(snap, bd, side, total) {
     ? (bd.atkAdvantageDice ?? 0)
     : (bd.defAdvantageDice ?? 0);
 
+  const GANGUP_TIP = 'Gang-up: each ally adjacent to the target adds +1 advantage die and +1 flat (max 3).';
   const rows = [];
-  const add = (label, val, sign) => rows.push({ label, val, sign });
+  const add = (label, val, sign, tip = null) => rows.push({ label, val, sign, tip });
   if (side === 'atk') {
-    add(`${snap.name} ATK`, snap.attack, 'base');
-    if (snap.attackBonus)    add('🪙 Silver',          snap.attackBonus,    'pos');
-    if (bd.phaseBonus)       add('🌙 Night',           bd.phaseBonus,       'pos');
-    if (bd.atkStaffBonus)    add('⚕ Staff (undead)',   bd.atkStaffBonus,    'pos');
-    if (bd.atkFortAtkBonus)  add('🏰 Fort ATT',        bd.atkFortAtkBonus,  'pos');
+    add(`${snap.name} ATK`, snap.attack, 'base', 'Base attack stat (including equipped weapon).');
+    if (snap.attackBonus)    add('🪙 Silver',          snap.attackBonus,    'pos', 'Silver weapon bonus.');
+    if (bd.phaseBonus)       add('🌙 Night',           bd.phaseBonus,       'pos', 'Phase bonus — the night favors the witch’s forces.');
+    if (bd.atkStaffBonus)    add('⚕ Staff (undead)',   bd.atkStaffBonus,    'pos', 'Weapon trigger — the staff is potent against undead defenders.');
+    if (bd.atkFortAtkBonus)  add('🏰 Fort ATT',        bd.atkFortAtkBonus,  'pos', 'Attacking from a fortified tile.');
     const atkAllyNames = bd.atkAllyNames ?? [];
     const atkAllyContrib = Math.min(atkAllyNames.length, bd.atkGangupFlat || 0);
     if (atkAllyContrib > 0) {
-      for (let i = 0; i < atkAllyContrib; i++) add(`👥 ${atkAllyNames[i]}`, 1, 'pos');
+      for (let i = 0; i < atkAllyContrib; i++) add(`👥 ${atkAllyNames[i]}`, 1, 'pos', GANGUP_TIP);
     } else if (bd.atkGangupFlat) {
-      add('👥 Gang-up flat', bd.atkGangupFlat, 'pos');
+      add('👥 Gang-up flat', bd.atkGangupFlat, 'pos', GANGUP_TIP);
     }
   } else {
-    add(`${snap.name} DEF`, snap.defense, 'base');
-    if (snap.defenseBonus)  add('🛡 Bonus DEF',   snap.defenseBonus,  'pos');
-    if (bd.fortBonus)       add('🏰 Fort DEF',    bd.fortBonus,       'pos');
-    if (bd.fatiguePenalty)  add('😓 Fatigue',     -bd.fatiguePenalty, 'neg');
+    add(`${snap.name} DEF`, snap.defense, 'base', 'Base defense stat (including equipped weapon).');
+    if (snap.defenseBonus)  add('🛡 Bonus DEF',   snap.defenseBonus,  'pos', 'Temporary defense bonus.');
+    if (bd.fortBonus)       add('🏰 Fort DEF',    bd.fortBonus,       'pos', 'Fortification — each fort level on the defender’s tile adds defense.');
+    if (bd.fatiguePenalty)  add('😓 Fatigue',     -bd.fatiguePenalty, 'neg', 'Fatigue — defending repeatedly in one round wears the defender down.');
     const defAllyNames = bd.defAllyNames ?? [];
     const defAllyContrib = Math.min(defAllyNames.length, bd.defGangupFlat || 0);
     if (defAllyContrib > 0) {
-      for (let i = 0; i < defAllyContrib; i++) add(`👥 ${defAllyNames[i]}`, 1, 'pos');
+      for (let i = 0; i < defAllyContrib; i++) add(`👥 ${defAllyNames[i]}`, 1, 'pos', GANGUP_TIP);
     } else if (bd.defGangupFlat) {
-      add('👥 Allies flat', bd.defGangupFlat, 'pos');
+      add('👥 Allies flat', bd.defGangupFlat, 'pos', GANGUP_TIP);
     }
   }
   return { pool, picked, advantage, rows, total };
+}
+
+// Tooltip for the dice-pool row — explains the advantage mechanic in place.
+function _poolTip(advantage) {
+  if (advantage > 0) {
+    return `Advantage ${advantage}: rolls ${1 + advantage} dice and keeps the BEST. ` +
+      'Gang-up allies adjacent to the target grant +1 die each (max 3); some weapons and effects add more.';
+  }
+  if (advantage < 0) {
+    return `Disadvantage ${-advantage}: rolls ${1 - advantage} dice and keeps the WORST ` +
+      '(e.g. a ranged unit firing point-blank).';
+  }
+  return 'A single d6 — no advantage on this roll.';
 }
 
 function _poolSign(advantage) {
@@ -5504,7 +6218,7 @@ function _buildBreakdownHTML(snap, bd, side, total, padTo = 0) {
     }
     const poolSign = _poolSign(d.advantage);
     parts.push(
-      `<div class="bkd-row bkd-pool-row"${_signAttr(poolSign)}>` +
+      `<div class="bkd-row bkd-pool-row"${_signAttr(poolSign)} title="${_poolTip(d.advantage)}">` +
         `<span class="bkd-label">${_poolLabel(d.advantage)}</span>` +
         `<span class="bkd-pool-discards">${discards.join('')}</span>` +
         `<span class="bkd-pool-picked-slot">${pickedHTML}</span>` +
@@ -5513,8 +6227,9 @@ function _buildBreakdownHTML(snap, bd, side, total, padTo = 0) {
   }
   for (const r of d.rows) {
     const v = r.val >= 0 ? '+' + r.val : r.val;
+    const tip = r.tip ? ` title="${r.tip}"` : '';
     parts.push(
-      `<div class="bkd-row"${_signAttr(r.sign)}><span class="bkd-label">${r.label}</span><span class="bkd-val">${v}</span></div>`
+      `<div class="bkd-row"${_signAttr(r.sign)}${tip}><span class="bkd-label">${r.label}</span><span class="bkd-val">${v}</span></div>`
     );
   }
   const spacerCount = Math.max(0, padTo - d.rows.length);
@@ -5585,6 +6300,7 @@ function _animateBreakdownSide(colEl, snap, bd, side, total, factor, anim, padTo
   // before the picked die is selected. The glow-in at settle still fires.
   const poolRow = document.createElement('div');
   poolRow.className = 'bkd-row bkd-pool-row';
+  poolRow.title = _poolTip(d.advantage);
   if (poolSign !== 'base') poolRow.setAttribute('data-sign', poolSign === 'pos' ? 'positive' : 'negative');
   poolRow.innerHTML =
     `<span class="bkd-label">${_poolLabel(d.advantage)}</span>` +
@@ -5609,6 +6325,7 @@ function _animateBreakdownSide(colEl, snap, bd, side, total, factor, anim, padTo
   const rowEls = d.rows.map(r => {
     const row = document.createElement('div');
     row.className = 'bkd-row bkd-row-muted';
+    if (r.tip) row.title = r.tip;
     if (r.sign !== 'base') row.setAttribute('data-sign', r.sign === 'pos' ? 'positive' : 'negative');
     const v = r.val >= 0 ? '+' + r.val : r.val;
     row.innerHTML =
@@ -5764,5 +6481,64 @@ function _makeAnimBag() {
     },
   };
   return bag;
+}
+
+
+// ── Game-styled tooltip (replaces native title tooltips) ────────────────────
+//
+// One shared floating element, shown on hover over any node carrying
+// `data-tip` (plain text) or `data-tip-html` (encodeURIComponent'd HTML —
+// used by the turn cards' roll breakdown). Hover-only: touch devices skip
+// the whole subsystem (they have their own tap affordances, e.g. the
+// cycle/score info panel). Module-level singleton so repeated UIController
+// constructions never stack document listeners.
+
+let _gttBound = false;
+let _gttEl = null;
+
+export function initGameTooltips() {
+  if (_gttBound || typeof document === 'undefined') return;
+  if (typeof window !== 'undefined' && window.matchMedia
+      && !window.matchMedia('(hover: hover)').matches) return;
+  _gttBound = true;
+
+  const hide = () => { _gttEl?.classList.remove('visible'); };
+  const show = (target) => {
+    const html = target.dataset.tipHtml;
+    const text = target.dataset.tip;
+    if (!html && !text) { hide(); return; }
+    if (!_gttEl) {
+      _gttEl = document.createElement('div');
+      _gttEl.id = 'game-tooltip';
+      document.body.appendChild(_gttEl);
+    }
+    if (html) _gttEl.innerHTML = decodeURIComponent(html);
+    else      _gttEl.textContent = text;
+    _gttEl.classList.add('visible');
+    // Position above the target, clamped to the viewport; flip below when
+    // there's no headroom. Inside a replay turn card, the popup goes below
+    // (or beside) the WHOLE card so the card it explains stays readable.
+    const card = target.closest?.('.replay-step-col');
+    const { x, y } = computeGameTooltipPos({
+      targetRect: target.getBoundingClientRect(),
+      cardRect:   card ? card.getBoundingClientRect() : null,
+      tipW: _gttEl.offsetWidth,
+      tipH: _gttEl.offsetHeight,
+      viewportW: window.innerWidth,
+      viewportH: window.innerHeight,
+    });
+    _gttEl.style.left = `${x}px`;
+    _gttEl.style.top  = `${y}px`;
+  };
+
+  document.addEventListener('mouseover', (e) => {
+    const t = e.target?.closest?.('[data-tip], [data-tip-html]');
+    if (t) show(t);
+    else hide();
+  }, { passive: true });
+  // Any press or scroll dismisses — the tooltip must never sit over a tap.
+  document.addEventListener('mousedown', hide, { passive: true, capture: true });
+  window.addEventListener('scroll', hide, { passive: true, capture: true });
+  document.addEventListener('mouseleave', hide, { passive: true });
 }
 

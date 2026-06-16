@@ -63,6 +63,19 @@ describe('replay card markup', () => {
     assert.match(html, /replay-more/);
     assert.match(html, /Turn 1/);
   });
+
+  test('a storyBeat column renders as a ✦ title + text card (no action rows / SKIP)', () => {
+    const { ui } = makeUI();
+    const col = { stepIndex: 'beat:3:0', kind: 'storyBeat', title: 'Sanctuary',
+                  text: 'You feel <safe> & sound', entries: [{ actionType: 'storyBeat', label: 'STORY' }] };
+    const html = ui._replayColHtml(col, 1);
+    assert.match(html, /replay-beat-col/);
+    assert.match(html, /✦ Sanctuary/);
+    assert.match(html, /replay-beat-text/);
+    assert.match(html, /You feel &lt;safe&gt; &amp; sound/);  // HTML-escaped
+    assert.doesNotMatch(html, /replay-collapse-btn/);          // not a normal step card
+    assert.doesNotMatch(html, /replay-conv-btn/);              // not a conversation card
+  });
 });
 
 describe('_applyReplayCollapse', () => {

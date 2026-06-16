@@ -1,267 +1,275 @@
-// Tests for WebSocket reconnect with exponential backoff.
+// Behavioral tests for WebSocket reconnect with exponential backoff
+// (MultiplayerClient in src/multiplayer.js).
 //
-// Verifies the MultiplayerClient retry logic: backoff delays, max retries,
-// reset on successful open, cleanup on intentional disconnect, and
-// reconnection stuck-state prevention.
+// Uses a fake global WebSocket and node:test mock timers — no network, no
+// real waits. Verifies: backoff delays actually double, max retries are
+// enforced, a successful open resets the attempt counter, intentional
+// disconnect cancels the pending retry, and the reconnect overlay only
+// hides on the server's `reconnected` message (not on raw socket open).
 
-import { describe, test, before } from 'node:test';
+import { describe, test, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
+
+// multiplayer.js → platform.js guards all browser globals, but provide a
+// localStorage + window stub so authOk routing is side-effect-free in Node.
+const _store = {};
+globalThis.localStorage = {
+  getItem: (k) => _store[k] ?? null,
+  setItem: (k, v) => { _store[k] = String(v); },
+  removeItem: (k) => { delete _store[k]; },
+};
+globalThis.window ??= { addEventListener() {}, removeEventListener() {} };
+globalThis.document ??= { addEventListener() {}, removeEventListener() {}, hidden: false };
+
+// Dynamic import — static imports are hoisted above the global stubs, and
+// platform.js (imported by multiplayer.js) touches `window` at module init.
+const { MultiplayerClient } = await import('../src/multiplayer.js');
+
+// Backoff constants under test (mirrored from src/multiplayer.js).
+const BASE_MS   = 3000;
+const MAX_TRIES = 3;
+
+// ── Fake WebSocket ───────────────────────────────────────────────────────────
+
+class FakeWebSocket {
+  static instances = [];
+  constructor(url) {
+    this.url = url;
+    this.readyState = 0; // CONNECTING
+    this.sent = [];
+    this._listeners = new Map();
+    FakeWebSocket.instances.push(this);
+  }
+  addEventListener(event, fn) {
+    const arr = this._listeners.get(event) ?? [];
+    arr.push(fn);
+    this._listeners.set(event, arr);
+  }
+  removeEventListener(event, fn) {
+    const arr = this._listeners.get(event) ?? [];
+    const i = arr.indexOf(fn);
+    if (i !== -1) arr.splice(i, 1);
+  }
+  send(data) { this.sent.push(data); }
+  // Real close events arrive asynchronously — tests fire them explicitly.
+  close() { this.readyState = 3; }
+  _fire(event, arg) { for (const fn of [...(this._listeners.get(event) ?? [])]) fn(arg); }
+  open() { this.readyState = 1; this._fire('open'); }
+  static get last() { return FakeWebSocket.instances.at(-1); }
+}
+
+function makeClient(extraOpts = {}) {
+  const calls = { disconnected: 0, fatal: [], reconnected: 0, errors: [] };
+  const client = new MultiplayerClient({
+    onDisconnected()     { calls.disconnected++; },
+    onDisconnectFatal(m) { calls.fatal.push(m); },
+    onReconnected()      { calls.reconnected++; },
+    onError(m)           { calls.errors.push(m); },
+    ...extraOpts,
+  });
+  return { client, calls };
+}
+
+/** Connect, open the socket, authenticate, and join a game room. */
+function connectInGame(client) {
+  client.connect('ws://game.test');
+  const ws = FakeWebSocket.last;
+  ws.open();
+  client._route({ type: 'authOk', player: { id: 'p1', username: 'u', token: 'tok' } });
+  client._route({ type: 'matchFound', faction: 'hero', roomId: 'r1', myPlayerId: 'p1' });
+  return ws;
+}
+
+beforeEach(() => {
+  FakeWebSocket.instances = [];
+  globalThis.WebSocket = FakeWebSocket;
+  mock.timers.enable({ apis: ['setTimeout'] });
+});
+
+afterEach(() => {
+  mock.timers.reset();
+});
+
+// ── Backoff & retry behavior ─────────────────────────────────────────────────
+
+describe('reconnect backoff — MultiplayerClient', () => {
+  test('in-game disconnect schedules reconnects with doubling delays', () => {
+    const { client, calls } = makeClient();
+    const ws1 = connectInGame(client);
+    assert.equal(FakeWebSocket.instances.length, 1);
+
+    ws1._fire('close');
+    assert.equal(calls.disconnected, 1, 'overlay callback fires on disconnect');
+
+    // Attempt 1: base delay (3000ms) — not a tick earlier
+    mock.timers.tick(BASE_MS - 1);
+    assert.equal(FakeWebSocket.instances.length, 1, 'no reconnect before base delay');
+    mock.timers.tick(1);
+    assert.equal(FakeWebSocket.instances.length, 2, 'reconnect after base delay');
+    assert.equal(FakeWebSocket.last.url, 'ws://game.test', 'reconnects to same URL');
+
+    // Attempt 2: delay doubles to 6000ms
+    FakeWebSocket.last._fire('close');
+    mock.timers.tick(2 * BASE_MS - 1);
+    assert.equal(FakeWebSocket.instances.length, 2, 'second delay must be doubled');
+    mock.timers.tick(1);
+    assert.equal(FakeWebSocket.instances.length, 3);
+
+    // Attempt 3: delay doubles again to 12000ms
+    FakeWebSocket.last._fire('close');
+    mock.timers.tick(4 * BASE_MS - 1);
+    assert.equal(FakeWebSocket.instances.length, 3, 'third delay must be doubled again');
+    mock.timers.tick(1);
+    assert.equal(FakeWebSocket.instances.length, 4);
+    assert.equal(calls.fatal.length, 0, 'no give-up while retries remain');
+  });
+
+  test('gives up with a fatal error after max retries — no further attempts', () => {
+    const { client, calls } = makeClient();
+    connectInGame(client)._fire('close');
+
+    for (let i = 0; i < MAX_TRIES; i++) {
+      mock.timers.tick(BASE_MS * 2 ** i);     // let attempt i+1 fire
+      FakeWebSocket.last._fire('close');      // ...and fail
+    }
+
+    assert.equal(calls.fatal.length, 1, 'fatal callback fires once when retries are exhausted');
+    assert.match(calls.fatal[0], /Unable to reconnect/);
+
+    const count = FakeWebSocket.instances.length;
+    mock.timers.tick(10 * 60 * 1000);
+    assert.equal(FakeWebSocket.instances.length, count,
+      'no further connection attempts after giving up');
+  });
+
+  test('successful reconnect re-authenticates and resets the attempt counter', () => {
+    const { client } = makeClient();
+    connectInGame(client)._fire('close');
+
+    mock.timers.tick(BASE_MS);
+    const ws2 = FakeWebSocket.last;
+    ws2.open();
+
+    // The queued re-auth must flush on open, carrying token + room for rejoin
+    const auth = ws2.sent.map(s => JSON.parse(s)).find(m => m.type === 'auth');
+    assert.ok(auth, 'reconnect must send auth');
+    assert.equal(auth.token, 'tok');
+    assert.equal(auth.roomId, 'r1');
+
+    // Counter reset: the next disconnect starts back at the base delay
+    // (without the reset, the next attempt would wait 6000ms, not 3000ms).
+    ws2._fire('close');
+    mock.timers.tick(BASE_MS);
+    assert.equal(FakeWebSocket.instances.length, 3,
+      'attempt counter must reset after a successful open');
+  });
+
+  test('disconnect() cancels a pending reconnect timer', () => {
+    const { client, calls } = makeClient();
+    connectInGame(client)._fire('close');
+
+    client.disconnect();                        // intentional close
+    mock.timers.tick(10 * 60 * 1000);
+    assert.equal(FakeWebSocket.instances.length, 1, 'no reconnect after intentional disconnect');
+    assert.equal(calls.fatal.length, 0);
+  });
+
+  test('menu-level disconnect (authenticated, not in game) reconnects silently', () => {
+    const { client, calls } = makeClient();
+    client.connect('ws://game.test');
+    FakeWebSocket.last.open();
+    client._route({ type: 'authOk', player: { id: 'p1', username: 'u', token: 'tok' } });
+
+    FakeWebSocket.last._fire('close');
+    assert.equal(FakeWebSocket.instances.length, 2,
+      'silent reconnect happens immediately for menu-level drops');
+    assert.equal(calls.disconnected, 0, 'no reconnect overlay for menu-level drops');
+  });
+
+  test('reconnectNow() without a player or URL fails fatally instead of silently', () => {
+    const { client, calls } = makeClient();
+    client.reconnectNow();
+    assert.equal(calls.fatal.length, 1, '_reconnect must surface the failure');
+    assert.match(calls.fatal[0], /Unable to reconnect/);
+  });
+});
+
+// ── Overlay lifecycle: open vs server confirmation ───────────────────────────
+
+describe('reconnect overlay lifecycle', () => {
+  test('_onOpen does NOT fire onReconnected on first connect', () => {
+    const { client, calls } = makeClient();
+    client.connect('ws://game.test');
+    FakeWebSocket.last.open();
+    assert.equal(calls.reconnected, 0,
+      'overlay must stay until the server confirms with a reconnected message');
+  });
+
+  test('server reconnected message fires onReconnected and restores game state', () => {
+    const { client, calls } = makeClient();
+    client.connect('ws://game.test');
+    FakeWebSocket.last.open();
+
+    client._route({ type: 'reconnected', faction: 'witch', roomId: 'r9', myPlayerId: 'p1' });
+    assert.equal(calls.reconnected, 1);
+    assert.equal(client.active, true);
+    assert.equal(client.roomId, 'r9');
+    assert.equal(client.myFaction, 'witch');
+  });
+
+  test('authError while in a game is fatal (session expired mid-reconnect)', () => {
+    const { client, calls } = makeClient();
+    connectInGame(client);
+
+    client._route({ type: 'authError', message: 'bad token' });
+    assert.equal(calls.fatal.length, 1);
+    assert.match(calls.fatal[0], /sign in/i);
+    assert.equal(client.active, false);
+  });
+
+  test('authError outside a game routes to onError, not the fatal path', () => {
+    const { client, calls } = makeClient();
+    client._route({ type: 'authError', message: 'bad credentials' });
+    assert.deepEqual(calls.errors, ['bad credentials']);
+    assert.equal(calls.fatal.length, 0);
+  });
+});
+
+// ── main.js wiring (source-level) ────────────────────────────────────────────
+//
+// src/main.js is an 8.6k-line entry script with top-level DOM side effects —
+// it cannot be imported under node:test without a full browser environment,
+// so the handler-wiring invariants below (each guarding a past regression:
+// users stuck on the reconnect overlay, or yanked out of unrelated menus by a
+// stray error during silent reconnect) are kept as minimal source checks.
+
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const root      = join(__dirname, '..');
+const __dirname  = dirname(fileURLToPath(import.meta.url));
+const mainSource = readFileSync(join(__dirname, '..', 'src', 'main.js'), 'utf8');
 
-const mpSource   = readFileSync(join(root, 'src', 'multiplayer.js'), 'utf8');
-const mainSource = readFileSync(join(root, 'src', 'main.js'), 'utf8');
-
-// ── Source-level checks ──────────────────────────────────────────────────────
-
-describe('reconnect backoff — source inspection', () => {
-  test('RECONNECT_MAX_TRIES is defined', () => {
-    assert.ok(
-      mpSource.includes('RECONNECT_MAX_TRIES'),
-      'multiplayer.js must define RECONNECT_MAX_TRIES',
-    );
-  });
-
-  test('RECONNECT_BASE_MS is defined', () => {
-    assert.ok(
-      mpSource.includes('RECONNECT_BASE_MS'),
-      'multiplayer.js must define RECONNECT_BASE_MS',
-    );
-  });
-
-  test('_scheduleReconnect method exists', () => {
-    assert.ok(
-      mpSource.includes('_scheduleReconnect'),
-      'multiplayer.js must define _scheduleReconnect',
-    );
-  });
-
-  test('exponential backoff formula is used', () => {
-    assert.ok(
-      mpSource.includes('2 ** this._reconnectAttempt') ||
-      mpSource.includes('Math.pow(2, this._reconnectAttempt)'),
-      '_scheduleReconnect must use exponential backoff',
-    );
-  });
-
-  test('_onClose delegates to _scheduleReconnect', () => {
-    // Find the _onClose method definition (not the arrow reference in the constructor)
-    const idx = mpSource.indexOf('_onClose() {');
-    assert.ok(idx !== -1, '_onClose method must exist');
-    const body = mpSource.slice(idx, idx + 200);
-    assert.ok(
-      body.includes('_scheduleReconnect'),
-      '_onClose should call _scheduleReconnect',
-    );
-  });
-
-  test('_onOpen resets reconnect state', () => {
-    const idx = mpSource.indexOf('_onOpen() {');
-    assert.ok(idx !== -1, '_onOpen method must exist');
-    const body = mpSource.slice(idx, idx + 300);
-    assert.ok(
-      body.includes('_reconnectAttempt = 0'),
-      '_onOpen should reset _reconnectAttempt to 0',
-    );
-  });
-
-  test('disconnect() clears reconnect timer', () => {
-    const idx = mpSource.indexOf('disconnect()');
-    assert.ok(idx !== -1, 'disconnect must exist');
-    const body = mpSource.slice(idx, idx + 300);
-    assert.ok(
-      body.includes('clearTimeout(this._reconnectTimer)'),
-      'disconnect should clear the reconnect timer',
-    );
-  });
-
-  test('connect() detaches old close listener to prevent recursive _onClose', () => {
-    const idx = mpSource.indexOf('connect(serverUrl)');
-    assert.ok(idx !== -1, 'connect must exist');
-    const body = mpSource.slice(idx, idx + 500);
-    assert.ok(
-      body.includes('removeEventListener'),
-      'connect should remove the old close listener before closing the previous WebSocket',
-    );
-  });
-
-  test('max retries produces a give-up error', () => {
-    assert.ok(
-      mpSource.includes('Unable to reconnect') || mpSource.includes('Please refresh'),
-      '_scheduleReconnect should show a final error when retries are exhausted',
-    );
-  });
-
-  // ── Fix 1: overlay hiding moved to server confirmation ─────────────────────
-
-  test('_onOpen does NOT call onReconnected (overlay stays until server confirms)', () => {
-    const idx = mpSource.indexOf('_onOpen() {');
-    assert.ok(idx !== -1, '_onOpen method must exist');
-    const body = mpSource.slice(idx, idx + 400);
-    assert.ok(
-      !body.includes('onReconnected'),
-      '_onOpen must NOT call onReconnected — overlay should stay visible until server sends reconnected message',
-    );
-  });
-
-  test('reconnected message handler calls onReconnected', () => {
-    const idx = mpSource.indexOf("case 'reconnected':");
-    assert.ok(idx !== -1, 'reconnected case must exist in _route');
-    const body = mpSource.slice(idx, idx + 500);
-    assert.ok(
-      body.includes('onReconnected'),
-      'reconnected message handler must call onReconnected to hide the overlay',
-    );
-  });
-
-  // ── Fix 3: auth failure during reconnect ───────────────────────────────────
-
-  test('authError while active triggers onDisconnectFatal', () => {
-    const idx = mpSource.indexOf("case 'authError':");
-    assert.ok(idx !== -1, 'authError case must exist');
-    const body = mpSource.slice(idx, idx + 400);
-    assert.ok(
-      body.includes('this.active') && body.includes('onDisconnectFatal'),
-      'authError must check this.active and call onDisconnectFatal for in-game auth failures',
-    );
-  });
-
-  // ── Fix 4: silent _reconnect() failures ────────────────────────────────────
-
-  test('_reconnect fires onDisconnectFatal when player or URL is missing', () => {
-    const idx = mpSource.indexOf('_reconnect() {');
-    assert.ok(idx !== -1, '_reconnect method must exist');
-    const body = mpSource.slice(idx, idx + 400);
-    assert.ok(
-      body.includes('onDisconnectFatal'),
-      '_reconnect must call onDisconnectFatal when it cannot proceed (no player or URL)',
-    );
-  });
-
-  // ── Fix 5: hard timeout safety net ─────────────────────────────────────────
-
-  test('RECONNECT_HARD_TIMEOUT is defined', () => {
-    assert.ok(
-      mpSource.includes('RECONNECT_HARD_TIMEOUT'),
-      'multiplayer.js must define RECONNECT_HARD_TIMEOUT',
-    );
-  });
-
-  test('_reconnectDeadline is initialized in constructor', () => {
-    const idx = mpSource.indexOf('constructor(');
-    assert.ok(idx !== -1, 'constructor must exist');
-    const body = mpSource.slice(idx, idx + 800);
-    assert.ok(
-      body.includes('_reconnectDeadline'),
-      'constructor must initialize _reconnectDeadline',
-    );
-  });
-
-  test('_scheduleReconnect checks hard deadline', () => {
-    const idx = mpSource.indexOf('_scheduleReconnect() {');
-    assert.ok(idx !== -1, '_scheduleReconnect must exist');
-    const body = mpSource.slice(idx, idx + 600);
-    assert.ok(
-      body.includes('_reconnectDeadline'),
-      '_scheduleReconnect must check the hard timeout deadline',
-    );
-  });
-
-  test('reconnected message clears _reconnectDeadline', () => {
-    const idx = mpSource.indexOf("case 'reconnected':");
-    assert.ok(idx !== -1);
-    const body = mpSource.slice(idx, idx + 500);
-    assert.ok(
-      body.includes('_reconnectDeadline = 0'),
-      'reconnected handler must clear _reconnectDeadline',
-    );
-  });
-
-  // ── Fix 6: menu-level silent reconnection ──────────────────────────────────
-
-  test('_onClose attempts silent reconnect when not active but authenticated', () => {
-    const idx = mpSource.indexOf('_onClose() {');
-    assert.ok(idx !== -1, '_onClose method must exist');
-    const body = mpSource.slice(idx, idx + 400);
-    assert.ok(
-      body.includes('this._player') && body.includes('_reconnect'),
-      '_onClose should attempt silent reconnect for menu-level disconnects when player exists',
-    );
-  });
-});
-
-// ── Fix 2: in-game error escape hatch (main.js) ─────────────────────────────
-
-describe('reconnect stuck-state prevention — main.js', () => {
-  test('onError checks reconnect overlay visibility for in-game errors', () => {
+describe('reconnect stuck-state prevention — main.js wiring (source-level)', () => {
+  test('onError detects in-game reconnection failure and escapes to the online screen', () => {
     const idx = mainSource.search(/onError\(msg(?:,\s*raw)?\)\s*\{/);
     assert.ok(idx !== -1, 'onError handler must exist');
     const body = mainSource.slice(idx, idx + 1500);
-    assert.ok(
-      body.includes('reconnect-overlay'),
-      'onError must check reconnect overlay visibility to detect reconnection failures',
-    );
+    assert.ok(body.includes('reconnect-overlay'),
+      'onError must check reconnect overlay visibility to detect reconnection failures');
+    assert.ok(body.includes('_showOnlineScreen'),
+      'onError must offer an escape hatch back to the online screen');
+    assert.ok(body.includes('_isOnOnlineFlow'),
+      'navigation must be gated so silent-reconnect errors do not eject the user from unrelated menus');
   });
 
-  test('onError calls _showOnlineScreen when reconnection fails in-game', () => {
-    const idx = mainSource.search(/onError\(msg(?:,\s*raw)?\)\s*\{/);
-    assert.ok(idx !== -1);
-    const body = mainSource.slice(idx, idx + 1500);
-    assert.ok(
-      body.includes('_showOnlineScreen'),
-      'onError must call _showOnlineScreen to wipe state and return to menu on reconnection failure',
-    );
-  });
-});
-
-// ── Fix 7: silent reconnect must not navigate away from unrelated menus ─────
-
-describe('menu-state preservation on silent reconnect — main.js', () => {
-  test('_isOnOnlineFlow helper exists', () => {
-    assert.ok(
-      mainSource.includes('function _isOnOnlineFlow'),
-      'main.js must define _isOnOnlineFlow to gate online-flow navigation',
-    );
-  });
-
-  test('_isOnAsyncFlow helper exists', () => {
-    assert.ok(
-      mainSource.includes('function _isOnAsyncFlow'),
-      'main.js must define _isOnAsyncFlow to gate async-flow navigation',
-    );
-  });
-
-  test('onError gates _showOnlineScreen behind _isOnOnlineFlow', () => {
-    const idx = mainSource.search(/onError\(msg(?:,\s*raw)?\)\s*\{/);
-    assert.ok(idx !== -1, 'onError handler must exist');
-    const body = mainSource.slice(idx, idx + 1500);
-    assert.ok(
-      body.includes('_isOnOnlineFlow'),
-      'onError must call _isOnOnlineFlow before navigating to the online screen — otherwise a stray error during silent reconnect would yank the user out of unrelated menus',
-    );
-  });
-
-  test('authError patched _route gates navigation behind _isOnOnlineFlow / _isOnAsyncFlow', () => {
+  test('authError handler gates navigation and still refreshes the session bar', () => {
     const idx = mainSource.indexOf("if (msg.type === 'authError')");
     assert.ok(idx !== -1, 'authError handler must exist in patched _route');
     const body = mainSource.slice(idx, idx + 800);
-    assert.ok(
-      body.includes('_isOnOnlineFlow') && body.includes('_isOnAsyncFlow'),
-      'authError handler must check _isOnOnlineFlow / _isOnAsyncFlow before navigating, so a silent reconnect that fails auth does not eject the user from non-network menus',
-    );
-  });
-
-  test('authError patched _route still updates the session bar when not navigating', () => {
-    const idx = mainSource.indexOf("if (msg.type === 'authError')");
-    assert.ok(idx !== -1);
-    const body = mainSource.slice(idx, idx + 800);
-    assert.ok(
-      body.includes('_updateSessionBar'),
-      'authError handler must call _updateSessionBar so the user can see the signed-out state on whichever menu they are on',
-    );
+    assert.ok(body.includes('_isOnOnlineFlow') && body.includes('_isOnAsyncFlow'),
+      'authError must check the current menu flow before navigating');
+    assert.ok(body.includes('_updateSessionBar'),
+      'authError must update the session bar when not navigating');
   });
 });

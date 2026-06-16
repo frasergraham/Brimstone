@@ -40,8 +40,11 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { buildMissionMap } from './mission-map.js';
+import { validateGraph, GraphValidationError } from '../mission-logic/graph.js';
+import { validateUnlock } from './unlock.js';
 import { resolveCondition, CONDITIONS } from './condition-registry.js';
 import { resolveConductorScript, CONDUCTOR_SCRIPTS } from './conductor-scripts.js';
+import { validateConversationDef } from './conversation-registry.js';
 import { ObjectiveType } from './missions.js';
 import { MAP_SIZES } from '../map.js';
 
@@ -159,6 +162,17 @@ export function validateMissionJSON(m) {
     if (!_inBounds(u, ext)) {
       _fail(`enemyUnit at (${u.col},${u.row}) is outside the ${ext.cols}×${ext.rows} map extent`);
     }
+    if (u.level != null && !(_isInt(u.level) && u.level >= 1)) {
+      _fail(`enemyUnit at (${u.col},${u.row}) has invalid "level" — must be an integer ≥ 1`);
+    }
+  }
+  // Optional per-unit level on wave specs (scales HP/ATK/DEF — see applyLevel).
+  for (const w of m.waves ?? []) {
+    for (const u of w.units ?? []) {
+      if (u.level != null && !(_isInt(u.level) && u.level >= 1)) {
+        _fail(`wave "${w.id ?? '?'}" unit has invalid "level" — must be an integer ≥ 1`);
+      }
+    }
   }
   for (const s of m.survivorStartPositions ?? []) {
     if (!_inBounds(s, ext)) {
@@ -167,12 +181,52 @@ export function validateMissionJSON(m) {
   }
 
   // Hardening #2 — objective types must be ones the victory delegate handles.
-  if (!m.objectives || typeof m.objectives !== 'object') _fail('mission.objectives is required');
-  _validateObjectiveSide(m.objectives.win, 'win');
-  if (m.objectives.lose != null) _validateObjectiveSide(m.objectives.lose, 'lose');
+  // A fully logic-graph-driven mission (docs/09) may omit `objectives` entirely —
+  // the graph's Win/Lose nodes own victory — but if present it must be well-formed.
+  if (m.objectives == null) {
+    if (!m.logic) _fail('mission.objectives is required (unless the mission is logic-graph driven via "logic")');
+  } else {
+    if (typeof m.objectives !== 'object') _fail('mission.objectives must be an object');
+    _validateObjectiveSide(m.objectives.win, 'win');
+    if (m.objectives.lose != null) _validateObjectiveSide(m.objectives.lose, 'lose');
+  }
+
+  // Scripted NPCs must have unique ids and sit on the map.
+  const npcIds = new Set();
+  for (const npc of m.npcs ?? []) {
+    if (typeof npc.id !== 'string' || !npc.id.trim()) _fail('npcs[] entry needs a string id');
+    if (npcIds.has(npc.id)) _fail(`duplicate npc id "${npc.id}"`);
+    npcIds.add(npc.id);
+    if (!_inBounds(npc, ext)) {
+      _fail(`npc "${npc.id}" at (${npc.col},${npc.row}) is outside the ${ext.cols}×${ext.rows} map extent`);
+    }
+    if (npc.survivorName != null && typeof npc.survivorName !== 'string') {
+      _fail(`npc "${npc.id}": survivorName must be a string`);
+    }
+  }
+
+  // Conversations: shape + binding/onComplete refs (the markdown file itself is
+  // a runtime concern — see conversation-registry.js).
+  const convIds = new Set();
+  for (const c of m.conversations ?? []) {
+    try {
+      validateConversationDef(c, { ext, npcIds });
+    } catch (err) {
+      _fail(err.message);
+    }
+    if (convIds.has(c.id)) _fail(`duplicate conversation id "${c.id}"`);
+    convIds.add(c.id);
+  }
 
   // Story-trigger conditions are STRING keys into the condition registry.
   for (const tr of m.storyTriggers ?? []) {
+    if (tr.conversation != null) {
+      if (!convIds.has(tr.conversation)) {
+        _fail(`storyTrigger references unknown conversation "${tr.conversation}"`);
+      }
+    } else if (tr.title == null && tr.text == null) {
+      _fail('storyTrigger needs either a "conversation" id or title/text');
+    }
     if (tr.condition == null) continue;
     if (typeof tr.condition !== 'string') _fail('storyTrigger.condition must be a string key');
     if (resolveCondition(tr.condition) == null) {
@@ -187,6 +241,35 @@ export function validateMissionJSON(m) {
     if (resolveConductorScript(key) == null) {
       _fail(`unknown conductor.scriptKey "${key}" (known: ${Object.keys(CONDUCTOR_SCRIPTS).join(', ') || 'none'})`);
     }
+  }
+
+  // hints.scriptKey — micro-lesson hints riding along a normal AI-driven
+  // mission (MissionConductor in 'hints' mode). Resolved through the same
+  // registry as conductor scripts; an unknown key fails for the same reason.
+  if (m.hints != null) {
+    const key = m.hints.scriptKey;
+    if (resolveConductorScript(key) == null) {
+      _fail(`unknown hints.scriptKey "${key}" (known: ${Object.keys(CONDUCTOR_SCRIPTS).join(', ') || 'none'})`);
+    }
+  }
+
+  // logic — the mission's event→action graph (docs/09). Additive: missions
+  // without it use the legacy storyTriggers/waves/objectives. Structural errors
+  // (unknown node type, dangling pin) surface as a mission validation failure.
+  if (m.logic != null) {
+    try {
+      validateGraph(m.logic);
+    } catch (err) {
+      if (err instanceof GraphValidationError) _fail(`logic graph: ${err.message}`);
+      throw err;
+    }
+  }
+
+  // unlock — rich campaign unlock criteria (docs/09 §5.5). Additive: missions
+  // keep using the legacy `requires` list, which is AND-ed with this.
+  if (m.unlock != null) {
+    try { validateUnlock(m.unlock); }
+    catch (err) { _fail(err.message); }
   }
 
   return m;
@@ -251,6 +334,7 @@ export function loadMissionJSON(parsed) {
   const def = { ...parsed };
   delete def.schema;
   delete def.conductor;
+  delete def.hints;
 
   // map → keep the mapDef (main.js distinguishes JSON missions by its presence)
   // and resolve a builder fn so the def is invoked uniformly with JS missions
@@ -274,6 +358,14 @@ export function loadMissionJSON(parsed) {
     const script = resolveConductorScript(parsed.conductor.scriptKey);
     def.conductorSteps = script.steps;
     def.conductorConfig = script.config;
+  }
+
+  // hints.scriptKey → hintSteps / hintConfig (MissionConductor 'hints' mode —
+  // the mission stays fully AI-driven; see main.js _initCampaignMission)
+  if (parsed.hints != null) {
+    const script = resolveConductorScript(parsed.hints.scriptKey);
+    def.hintSteps = script.steps;
+    def.hintConfig = script.config;
   }
 
   return def;

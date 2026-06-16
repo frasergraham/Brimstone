@@ -79,6 +79,68 @@ describe('G2 — planCombatPositions geometry', () => {
     assert.ok(Math.abs(plan.attackerAllies[3].toZ - a4Centre.z) < 1e-9);
   });
 
+  test('every moving ally gets its OWN edge spot — no two allies share a target', () => {
+    // Worst case the operator hit in play: allies whose live positions project
+    // to overlapping spots. Each in-cap ally must claim a distinct edge of the
+    // defender's hex.
+    const plan = planCombatPositions({
+      defender: { id: 'd', col: 5, row: 5 },
+      attackAllies: [
+        { id: 'a1', col: 4, row: 5 },
+        { id: 'a2', col: 3, row: 5 }, // not adjacent — projects toward the same west edge as a1
+      ],
+      defenseAllies: [
+        { id: 'b1', col: 6, row: 5 },
+      ],
+    });
+    const movers = [...plan.attackerAllies, ...plan.defenderAllies].filter(a => a.moves);
+    assert.equal(movers.length, 3);
+    const spots = movers.map(a => `${a.toX.toFixed(6)},${a.toZ.toFixed(6)}`);
+    assert.equal(new Set(spots).size, spots.length, 'all edge spots distinct');
+    // Every mover stands ON an edge of the defender's hex (midpoint between the
+    // defender centre and one of its 6 neighbours) — not on some interior point.
+    const def = hexToWorld(5, 5);
+    const edgeSpots = [
+      [4, 5], [5, 4], [6, 4], [6, 5], [6, 6], [5, 6], // odd-row neighbours of (5,5)
+    ].map(([c, r]) => {
+      const n = hexToWorld(c, r);
+      return { x: (def.x + n.x) * 0.5, z: (def.z + n.z) * 0.5 };
+    });
+    for (const m of movers) {
+      const onEdge = edgeSpots.some(e => Math.hypot(e.x - m.toX, e.z - m.toZ) < 1e-6);
+      assert.ok(onEdge, `ally ${m.id} stands on a defender hex edge`);
+    }
+  });
+
+  test('attacker hex reserves its edge — allies never stand on the attacker’s lunge spot', () => {
+    const plan = planCombatPositions({
+      defender: { id: 'd', col: 5, row: 5 },
+      attacker: { id: 'atk', col: 4, row: 5 },
+      // Ally directly behind the attacker would naturally claim the same west
+      // edge — it must be pushed to the next-nearest free edge instead.
+      attackAllies: [{ id: 'a1', col: 3, row: 5 }],
+    });
+    const def = hexToWorld(5, 5);
+    const atk = hexToWorld(4, 5);
+    const attackerEdge = { x: (def.x + atk.x) * 0.5, z: (def.z + atk.z) * 0.5 };
+    const out = plan.attackerAllies[0];
+    assert.equal(out.moves, true);
+    const dist = Math.hypot(out.toX - attackerEdge.x, out.toZ - attackerEdge.z);
+    assert.ok(dist > 1e-6, 'ally does not land on the attacker’s reserved edge');
+  });
+
+  test('adjacent ally still lands on the shared-edge midpoint when no contention', () => {
+    const plan = planCombatPositions({
+      defender:     { id: 'd', col: 5, row: 5 },
+      attackAllies: [{ id: 'a1', col: 4, row: 5 }],
+    });
+    const def = hexToWorld(5, 5);
+    const ally = hexToWorld(4, 5);
+    const out = plan.attackerAllies[0];
+    assert.ok(Math.abs(out.toX - (def.x + ally.x) * 0.5) < 1e-9);
+    assert.ok(Math.abs(out.toZ - (def.z + ally.z) * 0.5) < 1e-9);
+  });
+
   test('advantageCap is respected per side independently (3 atk + 3 def all move; 4th of either stays)', () => {
     const plan = planCombatPositions({
       defender: { id: 'd', col: 5, row: 5 },
@@ -131,6 +193,8 @@ function makeInst({ ids = ['d', 'a1', 'a2', 'a3', 'a4'] } = {}) {
     },
   };
   inst._activeLungeIds = new Set();
+  inst._activeMoveIds = new Set();
+  inst._activeRunMoveIds = new Set();
   inst._tracked = [];
   inst._trackAnim = (p) => { inst._tracked.push(p); };
   inst._playbackSpeedMul = 1.0;
@@ -305,6 +369,108 @@ describe('G2 — Renderer3D.applyCombatPositioning lifecycle', () => {
     const xAnim = cap.anims.find(a => a.prop === 'position.x');
     const expected = Math.round(LUNGE_ANIM_MS * 60 / 1000);
     assert.equal(xAnim.keys[1].frame, expected);
+  });
+});
+
+// ─── Combat slide interrupting an in-flight MOVE ─────────────────────────────
+// A guard reaction fires while the defender's move animation is still running.
+// The combat slide stops the move mid-path; its "home" must be the move's
+// LANDING point (where the entity logically is), not the transient mid-move
+// position — otherwise returnAllLungeAnims slides the defender back toward its
+// origin hex for a few frames before the next sync snaps it forward again.
+
+function makeInflightInst({ ids = ['d'] } = {}) {
+  const inst = Object.create(Renderer3D.prototype);
+  inst._babylon = makeFakeBabylon();
+  const captured = [];
+  inst._capturedAnims = captured;
+  inst._scene = {
+    stopAnimation() {},
+    // In-flight variant: capture the animation but do NOT auto-complete it.
+    beginDirectAnimation(target, anims, _f, _to, _loop, _spd, onEnd) {
+      captured.push({ target, anims, onEnd });
+    },
+  };
+  inst._activeLungeIds = new Set();
+  inst._activeMoveIds = new Set();
+  inst._activeRunMoveIds = new Set();
+  inst._tracked = [];
+  inst._trackAnim = (p) => { inst._tracked.push(p); };
+  inst._playbackSpeedMul = 1.0;
+  inst._entityStandees = new Map();
+  for (const id of ids) {
+    inst._entityStandees.set(id, {
+      plane: {
+        position: { x: 0, y: 0, z: 0, set(x, y, z) { this.x = x; this.y = y; this.z = z; } },
+        scaling: { x: 1, y: 1, z: 1, set(x, y, z) { this.x = x; this.y = y; this.z = z; } },
+      },
+    });
+  }
+  return inst;
+}
+
+describe('G2 — combat slide interrupting an in-flight MOVE', () => {
+  test('addMoveAnim stashes the landing point on the standee', () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInflightInst();
+    inst.addMoveAnim('d', 4, 5, 5, 5, 'zombie', 'witch', null, null, 0, 0);
+    const dest = hexToWorld(5, 5);
+    assert.ok(inst._entityStandees.get('d').moveDest, 'moveDest stashed');
+    assert.ok(Math.abs(inst._entityStandees.get('d').moveDest.x - dest.x) < 1e-9);
+    assert.ok(Math.abs(inst._entityStandees.get('d').moveDest.z - dest.z) < 1e-9);
+    assert.ok(inst._activeMoveIds.has('d'));
+  });
+
+  test('_animateStandeeTo mid-move: lungeHome is the move landing, not the mid-move spot', () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInflightInst();
+    const standee = inst._entityStandees.get('d');
+    const from = hexToWorld(4, 5);
+    const dest = hexToWorld(5, 5);
+    // Move in flight: standee is halfway along the path.
+    inst._activeMoveIds.add('d');
+    standee.moveDest = { x: dest.x, z: dest.z };
+    standee.plane.position.x = (from.x + dest.x) * 0.5;
+    standee.plane.position.z = (from.z + dest.z) * 0.5;
+
+    inst._animateStandeeTo('d', dest.x + 1.0, dest.z); // slide to some cluster spot
+    const home = standee.lungeHome;
+    assert.ok(home, 'lungeHome stashed');
+    assert.ok(Math.abs(home.homeX - dest.x) < 1e-9, 'home X = move landing');
+    assert.ok(Math.abs(home.homeZ - dest.z) < 1e-9, 'home Z = move landing');
+  });
+
+  test('addLungeAnim mid-move: lungeHome is the move landing, not the mid-move spot', () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInflightInst();
+    const standee = inst._entityStandees.get('d');
+    const from = hexToWorld(4, 5);
+    const dest = hexToWorld(5, 5);
+    inst._activeMoveIds.add('d');
+    standee.moveDest = { x: dest.x, z: dest.z };
+    standee.plane.position.x = (from.x + dest.x) * 0.5;
+    standee.plane.position.z = (from.z + dest.z) * 0.5;
+
+    inst.addLungeAnim('d', 5, 5, 6, 5, 'zombie', 'witch', null, 0, false);
+    const home = standee.lungeHome;
+    assert.ok(home, 'lungeHome stashed');
+    assert.ok(Math.abs(home.homeX - dest.x) < 1e-9, 'home X = move landing');
+    assert.ok(Math.abs(home.homeZ - dest.z) < 1e-9, 'home Z = move landing');
+  });
+
+  test('no active move: lungeHome stays the standee\'s current position', () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInflightInst();
+    const standee = inst._entityStandees.get('d');
+    const dest = hexToWorld(5, 5);
+    // Stale moveDest from a FINISHED move must not hijack the home.
+    standee.moveDest = { x: dest.x + 9, z: dest.z + 9 };
+    standee.plane.position.x = dest.x;
+    standee.plane.position.z = dest.z;
+    inst._animateStandeeTo('d', dest.x + 1.0, dest.z);
+    const home = standee.lungeHome;
+    assert.ok(Math.abs(home.homeX - dest.x) < 1e-9);
+    assert.ok(Math.abs(home.homeZ - dest.z) < 1e-9);
   });
 });
 

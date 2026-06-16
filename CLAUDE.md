@@ -1,5 +1,7 @@
 # Brimstone — Claude Context
 
+> **⚠ Visual work MUST be validated with the `verifier-browser` skill** (`.claude/skills/verifier-browser/`): run the real game in headless Chromium, capture screenshots, and read them before pushing. Any change to the 3D renderer, UI overlays/HUD, replay/conversation presentation, `styles.css`, or `index.html` counts as visual work. See Guideline 7.
+
 ## Development Guidelines
 
 These directives apply to all code changes — follow them without exception.
@@ -44,6 +46,10 @@ These directives apply to all code changes — follow them without exception.
 ### 6. Database backend parity
 - `server/db/` has intentionally duplicated SQLite and Postgres implementations. **Any change under `server/db/sqlite/` must land with the matching change under `server/db/postgres/` in the same commit** (and vice versa) — see "Database Layer" below.
 
+### 7. Visual changes require browser verification
+- Any change to the 3D renderer, UI overlays/HUD, replay/conversation presentation, `styles.css`, or `index.html` must be verified by **running the game and looking at screenshots** before pushing — unit tests can't see a clipped billboard or a camera-framing bug.
+- Use the **`verifier-browser` skill** (`.claude/skills/verifier-browser/`): it drives the real game in headless Chromium (SwiftShader WebGL) via `scripts/verify/browser-harness.mjs`, captures screenshots + console errors, and documents the menu/replay selectors. Capture before/after screenshots for fixes, and actually read the images.
+
 ---
 
 ## Project Overview
@@ -67,6 +73,21 @@ Use these terms consistently in code comments, UI, and discussion:
 - **ACTION** — a single unit's action within a TURN (move, attack, summon, explore, fortify, heal, …). ⇒ in code today this is a **`PlanAction`** (`PlanActionType`) when queued, resolving to a sub-event (`ResEventType`).
 
 ⚠️ The code's internal names predate this glossary and **collide** with it: the resolver/UI call a TURN a "step." When touching that code, prefer the canonical words above (or note the mapping); don't silently rename existing identifiers like `stepIndex` without a deliberate refactor.
+
+---
+
+## Mission Logic Graph — Core Invariants
+
+The mission event→action system (`src/mission-logic/`, **full design: `docs/09-mission-logic-graph.md`**) is a data-driven, Blueprint-style graph that is replacing every bespoke trigger (story beats, conversations, spawns, area/turn/phase triggers, win/lose). One mission owns one graph. These four invariants are load-bearing — online/offline parity, replay, spectate, and reconnect all depend on them. **Do not violate them.**
+
+1. **Sealed resolution.** A round's resolution is a pure function of `(state, plans, seed)`. Nothing observed *during* a round's replay may mutate game state — replay is reproduction, never authorship. The graph engine runs *inside* this sealed function.
+2. **Graph runs on the authority.** One authority owns the canonical `GameState`: offline (campaign) it is the local client itself, online it is the server. The engine is shared, DOM-free code instantiated wherever `resolvePlans()` runs — "resolver vs client" is a false split offline.
+3. **Sim / Show split.** Every node is either **Sim** (mutates authoritative `GameState`, deterministically, reading **only** `(state, plans, seed)`) or **Show** (pure presentation — conversation/toast/camera/voice — emitted onto the step stream, never touching state). Pause/resume/animation speed/who-dismisses-first are presentation only and can never affect logic.
+4. **Interactivity is a plan action.** Any future player choice is captured at a planning gate and submitted as a **plan action** through the existing channel — it never branches a round's replay. The game waits on a human in exactly one place (plan submission); the graph adds no new wait, so online needs **no new sync primitive**.
+
+**Enforceable engine rule:** during resolution, Sim nodes read only `(state, plans, seed)` and produce `(state mutations, presentation events)` — never live input, wall-clock, animation progress, or client-local state.
+
+**Status:** implemented end-to-end — engine (`src/mission-logic/`) wired into the live loop (GameState `pumpMissionLogic` + `endRound`, `game-context.js`, `state-sync` `logicState`, `main.js` attach/drain/resume), the node-graph **Logic** editor tab, rich **`unlock`** criteria in `campaign.js`, and the **Campaign Progression** tab (admin-tools). The engine is a guarded no-op for non-logic games (byte-identical normal/online play). The old mission fields (`storyTriggers`, `waves`, `conversations[].onComplete`, `objectives.win/lose`) **remain the live runtime** for shipped missions until each is flipped to graph-driven — keep both. A mission opts in via a `logic` block; missions gate on `requires` (legacy) AND `unlock` (rich, AND/OR/NOT over completed-missions / item / level / flag / resource).
 
 ---
 
@@ -120,6 +141,14 @@ xcrun devicectl device process launch --device <DEVICE_UDID> com.calebshollow.ga
 
 `npm run electron:dev` / `electron:dev:prod` to run; `electron:package:mac|win` to package; `electron:build:mac|win` for distributables (output in `/tmp/brimstone-electron-dist`).
 
+### Caleb's Studio (standalone admin-tools app)
+
+A **separate** macOS-only binary that wraps `admin-tools.html` (Assets | Lighting | Mission Editor | Combat) for fast local iteration. Unlike the game client it points at a working copy of this repo and serves its files straight off disk via the `calebshollow://` protocol, exposing a repo-confined filesystem bridge (`window.studioAPI`, see `electron/studio-preload.cjs`) so the tools READ assets and WRITE files directly into the repo — no Node server, no browser-download dance. The Mission Editor's **Save to repo** writes round-trip-faithful JSON straight into `src/campaign/missions/`.
+
+- Entry: `electron/studio-main.js` + `electron/studio-preload.cjs`; build config `electron-builder.studio.yml` (appId `com.calebshollow.studio`, Developer ID **signed but NOT notarized**, mac-only). Packaged app bundles only the Electron entry — it always edits the live checkout, never a stale snapshot.
+- Run/build: `npm run studio:dev` (defaults to the cwd repo) / `npm run studio:build:mac` (DMG → `/tmp/calebs-studio-dist`). On a packaged launch, **File ▸ Choose Repository…** picks/persists the checkout to operate on.
+- ⚠ The Lighting tab's Export is still a *lossy summary* (drops `day`/`night` `dirStart`/`dirEnd` and the authored comments), so Studio does **not** write `PHASE_LIGHT_CONFIG` back to `renderer-3d.js` — making that export faithful is the prerequisite for a future "Save lighting to repo".
+
 ---
 
 ## Directory Structure
@@ -141,7 +170,7 @@ src/
   actions.js         # All action validation + execution — single source of truth for rules
   planner.js         # PlanActionType enum, computeGhostState(), validatePlanAction()
   map.js, hex.js     # Procedural map generator; pure hex math + MAP_SIZES
-  renderer.js        # Canvas 2D renderer
+  renderer.js        # Canvas 2D renderer — editor-only now; the 3D renderer is the game default, so 2D can be rough around the edges
   renderer-3d.js     # Babylon.js WebGL renderer (Babylon lazily imported on first draw)
   ui.js, ui-*.js     # UIController — the only DOM-touching layer
   ai.js              # WitchAI/HeroAI, personality registries, shared helpers, PlanSimState
@@ -175,6 +204,7 @@ tests/               # node --test suites: tests/*.test.js, tests/ui/*.test.js
 
 **Strict separation of concerns:**
 - `game.js` owns state — no rendering or DOM. `renderer.js`/`renderer-3d.js` read state, draw — zero mutations. `ui.js` is the sole DOM-touching layer.
+- **`renderer-3d.js` (Babylon) is the renderer the game ships with.** `renderer.js` (Canvas 2D) is now used **only by the editor/admin tools**, so it can be rough around the edges — prioritise the 3D renderer for gameplay polish, and don't block work on achieving 2D parity for player-facing visuals.
 - `actions.js` holds all game-logic mutations as pure functions `(state, actor, ...)` returning `{ success, log, cost }` — UI and AI call the same functions.
 - `server/resolver.js` is imported by both `server/lobby.js` (online) and `src/main.js` (local) — no DOM dependency. Headless scripts import `src/` directly; all game logic is DOM/Canvas-free.
 
@@ -264,4 +294,4 @@ Both factions use a 5-stage pipeline — **EVALUATE → SCORE → ALLOCATE → G
 | Mean rounds | 15–35 |
 | Round cap hits | <5% |
 
-Baseline (2026-04-24): Hero 49.2% / Witch 50.8% at ~22 mean rounds (500 1v1 games, Standard); NvN modes within the ±12% band. Full baseline tables, NvN scaling notes, and the step-by-step tuning methodology live in `docs/06-ai-architecture.md` → "Balance Baseline & Tuning Methodology" — **update that baseline after any tuning pass**. NvN scaling is gated on `playerCount > 1`; don't remove it without re-running `node scripts/headless.js 500 standard --players N` for N ∈ {2, 3, 4}.
+Baseline (2026-06-10, post map-resize): Hero ~43% / Witch ~57% at ~22 mean rounds (5000 1v1 games pooled, Standard 14×14); within the 38–62% band. Map sizes were enlarged ~20% **by area** (Skirmish 10×10, Standard 14×14, Regional 19×19, Campaign 23×23; `battle` 42×42 now also player-selectable). All sizes lean witch (Skirmish ~59%, Standard ~57%, Regional ~64%) — an inherent map-size effect (longer games → more night/summon time); the +20% resize itself accounted for the full ~7pp Hero drop from the prior 13×13 baseline. To re-center Standard at ~50/50, reduce its map area (toward 13×13) rather than tuning combat constants. Prior baseline (2026-06-09, post weapons-overhaul, Standard 13×13): Hero 51.6% / Witch 48.4%; NvN 2v2 ~58%, 3v3 ~53%, 4v4 ~59%. Full baseline tables, NvN scaling notes, and the step-by-step tuning methodology live in `docs/06-ai-architecture.md` → "Balance Baseline & Tuning Methodology" — **update that baseline after any tuning pass**. NvN scaling is gated on `playerCount > 1`; don't remove it without re-running `node scripts/headless.js 500 standard --players N` for N ∈ {2, 3, 4}.

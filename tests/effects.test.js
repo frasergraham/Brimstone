@@ -16,7 +16,7 @@ import {
 } from '../src/entities.js';
 import { GameState, Phase } from '../src/game.js';
 import { hexKey } from '../src/hex.js';
-import { applyPostRoundEffects } from '../src/post-round-effects.js';
+import { applyPostRoundEffects, collectWrapUpAttrition } from '../src/post-round-effects.js';
 import { executeBattle } from '../src/actions.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import { snapshotSurvivor } from '../src/campaign/campaign.js';
@@ -151,12 +151,23 @@ describe('Stat composition through Entity getters', () => {
 
 // ── Damage hooks ───────────────────────────────────────────────────────────
 
-describe('Wounded → +1 incoming damage', () => {
-  test('applyIncomingDamage adds wounded stack', () => {
+describe('Wounded → +1D6 incoming damage', () => {
+  test('applyIncomingDamage rolls one bonus d6 per wounded stack', () => {
     const hero = createHero(0, 0);
-    assert.equal(hero.applyIncomingDamage(1), 1, 'baseline 1 damage');
+    assert.equal(hero.applyIncomingDamage(1, () => 6), 1, 'baseline 1 damage, no roll consumed');
     applyEffect(hero, 'wounded');
-    assert.equal(hero.applyIncomingDamage(1), 2, 'wounded amplifies to 2');
+    assert.equal(hero.applyIncomingDamage(1, () => 5), 6, 'wounded adds the rolled die (1+5)');
+    assert.equal(hero.applyIncomingDamage(1, () => 2), 3, 'fresh roll per blow (1+2)');
+  });
+
+  test('without a roller the die falls back to a fixed 4 (no Math.random in shared code)', () => {
+    const hero = createHero(0, 0);
+    applyEffect(hero, 'wounded');
+    assert.equal(hero.applyIncomingDamage(1), 5);
+  });
+
+  test('wounded lasts one round', () => {
+    assert.equal(EFFECTS.wounded.defaultDuration, 1);
   });
 
   test('damage never goes below 1 (no negative-flat-mod underflow)', () => {
@@ -247,9 +258,9 @@ describe('Round lifecycle — tickEffects', () => {
     applyEffect(hero, 'poisoned', { duration: 2 });
     const gs = _stateWith(hero);
     const result = tickEffects(gs);
-    assert.equal(hero.hp, startHp - 1);
+    assert.equal(hero.hp, startHp - 7); // 1 stack × DAMAGE_SCALE
     assert.equal(result.dotEvents.length, 1);
-    assert.equal(result.dotEvents[0].amount, 1);
+    assert.equal(result.dotEvents[0].amount, 7);
   });
 
   test('DOT can kill and removes the entity from state.entities', () => {
@@ -353,7 +364,10 @@ describe('combat integration', () => {
     gs.entities.push(hero, m1, m2);
     gs.hero = hero;
 
-    gs.setForcedDice(6, 1, 6, 1);
+    // Per battle the dice queue is consumed as [atk die, def die, then the
+    // attacker's 2D6 weapon-damage roll]. 6 vs 1 crushes; the 1-HP minion dies
+    // on any damage, so the two damage dice can be anything.
+    gs.setForcedDice(6, 1, 3, 3, /* battle 2 */ 6, 1, 3, 3);
     executeBattle(gs, hero, m1);
     assert.equal(hasEffect(hero, 'frenzied'), false, 'no frenzy after first kill');
     hero.col = 8; hero.row = 8;
@@ -389,11 +403,13 @@ describe('Serialization round-trip', () => {
     applyEffect(hero, 'wounded', { duration: 2 });
     applyEffect(hero, 'frenzied', { duration: 'mission' });
     hero.killsThisRound = 4;
+    hero.level = 3; // unit level should round-trip too
 
     const snap = serializeState(gs);
     const restored = deserializeState(snap);
     const rh = restored.entities.find(e => e.id === hero.id);
     assert.ok(rh);
+    assert.equal(rh.level, 3, 'level survives serialize/deserialize');
     assert.equal(rh.effects.length, 2);
     const wounded = rh.effects.find(e => e.id === 'wounded');
     const frenzied = rh.effects.find(e => e.id === 'frenzied');
@@ -402,7 +418,7 @@ describe('Serialization round-trip', () => {
     assert.equal(rh.killsThisRound, 4);
     // Restored entity supports the helper methods.
     assert.equal(typeof rh.applyIncomingDamage, 'function');
-    assert.equal(rh.applyIncomingDamage(1), 2, 'wounded composes after restore');
+    assert.equal(rh.applyIncomingDamage(1, () => 3), 4, 'wounded composes after restore (1+1D6)');
   });
 
   test('deserializing a pre-effects snapshot defaults effects to []', () => {
@@ -412,11 +428,13 @@ describe('Serialization round-trip', () => {
     for (const e of snap.entities) {
       delete e.effects;
       delete e.killsThisRound;
+      delete e.level;
     }
     const restored = deserializeState(snap);
     for (const e of restored.entities) {
       assert.deepEqual(e.effects, []);
       assert.equal(e.killsThisRound, 0);
+      assert.equal(e.level, 1, 'pre-level saves default to level 1');
     }
   });
 });
@@ -424,7 +442,7 @@ describe('Serialization round-trip', () => {
 // ── DOT amplification by wounded (Fix #2) ──────────────────────────────────
 
 describe('Wounded amplifies DOTs and attrition', () => {
-  test('wounded + bleeding deals 2 HP per round, not 1', () => {
+  test('wounded + bleeding: the tick rolls the wound die through the state stream', () => {
     const hero = createHero(0, 0);
     const startHp = hero.hp;
     applyEffect(hero, 'wounded');
@@ -432,19 +450,22 @@ describe('Wounded amplifies DOTs and attrition', () => {
     const gs = new GameState(false, false);
     gs.entities = [hero];
     gs.hero = hero;
+    gs.setForcedDice(6);
     tickEffects(gs);
-    assert.equal(hero.hp, startHp - 2, 'bleeding (1) + wounded (+1) = 2 HP loss');
+    assert.equal(hero.hp, startHp - 13, 'bleeding (7) + wounded 1D6 (6) = 13 HP loss');
   });
 
-  test('wounded + poisoned still deals 2 HP per round', () => {
+  test('wounded + poisoned: same — deterministic wound die', () => {
     const z = createZombie(0, 0);
+    z.maxHp = 30; z.hp = 30; // survive the scaled tick to assert the exact loss
     const startHp = z.hp;
     applyEffect(z, 'wounded');
     applyEffect(z, 'poisoned', { duration: 2 });
     const gs = new GameState(false, false);
     gs.entities = [z];
+    gs.setForcedDice(2);
     tickEffects(gs);
-    assert.equal(z.hp, startHp - 2);
+    assert.equal(z.hp, startHp - 9, 'poison (7) + wounded 1D6 (2) = 9 HP loss');
   });
 
   test('night attrition routes through applyIncomingDamage', () => {
@@ -465,8 +486,9 @@ describe('Wounded amplifies DOTs and attrition', () => {
       tile.buildingFootprintOf = null; tile.footprintHexes = [];
     }
     const startHp = surv.hp;
+    gs.setForcedDice(4);
     applyPostRoundEffects(gs);
-    assert.equal(surv.hp, startHp - 2, 'attrition (1) + wounded (+1) = 2 HP loss');
+    assert.equal(surv.hp, startHp - 11, 'attrition (1×7) + wounded 1D6 (4) = 11 HP loss');
   });
 });
 
@@ -623,5 +645,53 @@ describe('Campaign snapshotSurvivor', () => {
     applyEffect(e, 'eagle_eyed', { duration: 'permanent' });
     const snap = snapshotSurvivor(e);
     assert.deepEqual(snap.effects.map(x => x.id), ['eagle_eyed']);
+  });
+});
+
+// ── Post-round death visibility ─────────────────────────────────────────────
+// A unit that dies outside battle (DOT tick) must not silently vanish: the
+// KILL event needs an on-map flash, and the wrap-up summary must list the
+// death — for EITHER side — with its cause.
+
+describe('post-round death visibility', () => {
+  test('a lethal DOT emits a KILL event WITH an on-map flash', () => {
+    const z = createZombie(0, 0);
+    z.hp = 1;
+    applyEffect(z, 'bleeding', { duration: 5 });
+    const gs = new GameState(false, false);
+    gs.entities = [z];
+
+    const events = applyPostRoundEffects(gs);
+    const kill = events.find(e => e.type === 'kill');
+    assert.ok(kill, 'lethal DOT produces a kill event');
+    assert.ok(kill.flash, 'kill carries a flash so the vanish is explained on the map');
+    assert.match(kill.flash.label, /💀/);
+    assert.match(kill.text, /bleeding/i);
+  });
+
+  test('collectWrapUpAttrition: kills are listed for EITHER side, with cause text', () => {
+    const rows = collectWrapUpAttrition([
+      { type: 'kill',    ownerId: 'enemy', entityName: 'Zombie', amount: 1,
+        text: '🩸 Zombie succumbs to bleeding!' },
+      { type: 'damage',  ownerId: 'enemy', entityName: 'Minion', amount: 1, text: 'x' },
+      { type: 'damage',  ownerId: 'me',    entityName: 'Mary',   amount: 2, text: 'y' },
+      { type: 'shelter', ownerId: 'me',    entityName: 'Sam',    amount: 0, text: '🏠 Sam is sheltered.' },
+      { type: 'safe',    ownerId: null },
+    ], 'me');
+
+    const kill = rows.find(r => r.kind === 'kill');
+    assert.ok(kill, "enemy death is listed — the player watched the unit vanish");
+    assert.match(kill.text, /bleeding/);
+    assert.ok(!rows.some(r => r.kind === 'damage' && r.name === 'Minion'),
+      'enemy DAMAGE ticks stay private (noise)');
+    assert.ok(rows.some(r => r.kind === 'damage' && r.name === 'Mary'));
+    assert.equal(rows.find(r => r.kind === 'shelter')?.shelter, 'building');
+  });
+
+  test('collectWrapUpAttrition with no player id (offline) keeps everything', () => {
+    const rows = collectWrapUpAttrition([
+      { type: 'damage', ownerId: 'a', entityName: 'X', amount: 1, text: 't' },
+    ], null);
+    assert.equal(rows.length, 1);
   });
 });

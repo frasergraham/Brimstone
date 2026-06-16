@@ -29,6 +29,15 @@ function stubBabylon() {
   };
 }
 
+// Range is weapon-derived (Entity.getRange()): reach comes from the equipped
+// weapon plus ability range mods, not a writable `.range` field. makeRanged
+// equips a bow (reach 3) and stacks eagle_eye (+1 range each) to hit a target
+// attack range, so the guard zone renders as ranged.
+function makeRanged(entity, range) {
+  entity.equipWeapon('bow');
+  for (let i = 3; i < range; i++) entity.abilities.push('eagle_eye');
+}
+
 function makeRenderer() {
   const fakeCanvas = { parentElement: null, width: 800, height: 600, addEventListener() {} };
   const r = new Renderer3D(fakeCanvas, {});
@@ -66,7 +75,7 @@ describe('Renderer3D._syncGuardZone — perimeter outline build', () => {
     const r = makeRenderer();
     const state = new GameState(true, true);
     const guard = state.hero;
-    guard.range = 3; guard.guarding = 1; guard.col = 5; guard.row = 5;
+    makeRanged(guard, 3); guard.guarding = 1; guard.col = 5; guard.row = 5;
     clearBand(state);
     state.planningPhase = false;
     r.state = state;
@@ -79,7 +88,7 @@ describe('Renderer3D._syncGuardZone — perimeter outline build', () => {
     const r = makeRenderer();
     const state = new GameState(true, true);
     const guard = state.hero;
-    guard.range = 3; guard.guarding = 0; guard.col = 5; guard.row = 5;
+    makeRanged(guard, 3); guard.guarding = 0; guard.col = 5; guard.row = 5;
     clearBand(state);
     state.planningPhase = true;
     r.state = state;
@@ -110,7 +119,7 @@ describe('Renderer3D._syncGuardZone — perimeter outline build', () => {
     const r = makeRenderer();
     const state = new GameState(true, true);
     const guard = state.hero;
-    guard.range = 3; guard.guarding = 1; guard.col = 5; guard.row = 5;
+    makeRanged(guard, 3); guard.guarding = 1; guard.col = 5; guard.row = 5;
     clearBand(state);
     state.planningPhase = false;
     r.state = state;
@@ -126,7 +135,7 @@ describe('Renderer3D._syncGuardZone — perimeter outline build', () => {
     const big = makeRenderer();
     const sNight = new GameState(true, true);
     sNight.phase = Phase.NIGHT;
-    const g1 = sNight.hero; g1.range = 5; g1.guarding = 1; g1.col = 7; g1.row = 7;
+    const g1 = sNight.hero; makeRanged(g1, 5); g1.guarding = 1; g1.col = 7; g1.row = 7;
     sNight.planningPhase = false;
     big.state = sNight;
     big._syncGuardZone();
@@ -135,7 +144,7 @@ describe('Renderer3D._syncGuardZone — perimeter outline build', () => {
     const day = makeRenderer();
     const sDay = new GameState(true, true);
     sDay.phase = Phase.DAY;            // hero sight 6 ≥ range 5 → uncapped
-    const g2 = sDay.hero; g2.range = 5; g2.guarding = 1; g2.col = 7; g2.row = 7;
+    const g2 = sDay.hero; makeRanged(g2, 5); g2.guarding = 1; g2.col = 7; g2.row = 7;
     sDay.planningPhase = false;
     day.state = sDay;
     day._syncGuardZone();

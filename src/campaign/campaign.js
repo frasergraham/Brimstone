@@ -4,8 +4,10 @@
 import { countHeldNodes } from '../game.js';
 import { getFaction } from '../factions.js';
 import { hexDistance } from '../hex.js';
-import { EntityType } from '../entities.js';
+import { EntityType, applyLevel } from '../entities.js';
+import { ITEMS } from '../items.js';
 import { isRiver, hasBuilding } from '../tiles.js';
+import { evaluateUnlock } from './unlock.js';
 
 // v1: initial campaign save format.
 // v2 (Phase 4 of units/items/abilities refactor): BRAWLER / STURDY
@@ -20,7 +22,40 @@ import { isRiver, hasBuilding } from '../tiles.js';
 // v2 save mid-campaign at `witchs_trail` would brick (prereq never satisfied,
 // no in-progress mission to launch). Migration shim in `_migrate()` backfills
 // `long_watch` into completedMissions for those saves.
-const SAVE_VERSION = 3;
+// v4: the guided `tutorial` is folded in as Chapter 1's first mission and "The
+// Awakening" (`prologue`) now requires it. A pre-v4 Chapter-1 save predates the
+// fold and never recorded `tutorial` as completed (it lived in a separate
+// one-mission campaign), so The Awakening would lock. `_migrate()` backfills
+// `tutorial` into completedMissions for the Chapter-1 campaign.
+const SAVE_VERSION = 4;
+
+// ── Save slots ────────────────────────────────────────────────────────────────
+// Each campaign supports several independent playthroughs ("slots"). The slot
+// is the only piece of the localStorage key that varies per save — everything
+// else hangs off campaignDef.id. Slot-aware keys look like
+// `campaign-<id>-slot<N>`; the legacy unsuffixed `campaign-<id>` form written by
+// builds before multi-save is adopted into slot 1 on first read (and left in
+// place so older builds keep working).
+
+export const CAMPAIGN_SLOT_COUNT = 3;
+
+/** Coerce an arbitrary slot value into a valid 1..CAMPAIGN_SLOT_COUNT index. */
+export function clampSlotIndex(slotIndex) {
+  const n = Math.floor(Number(slotIndex));
+  if (!Number.isFinite(n) || n < 1) return 1;
+  if (n > CAMPAIGN_SLOT_COUNT) return CAMPAIGN_SLOT_COUNT;
+  return n;
+}
+
+/** localStorage save-slot suffix for a campaign + slot index. */
+export function campaignSlotSaveSlot(campaignId, slotIndex = 1) {
+  return `campaign-${campaignId}-slot${clampSlotIndex(slotIndex)}`;
+}
+
+/** Legacy (pre multi-save) unsuffixed save-slot suffix. */
+export function legacyCampaignSaveSlot(campaignId) {
+  return `campaign-${campaignId}`;
+}
 
 /**
  * Serialize a survivor entity into a plain object for campaign roster storage.
@@ -46,6 +81,10 @@ export function snapshotSurvivor(entity) {
     maxHp:        entity.maxHp,
     attack:       entity.attack,
     defense:      entity.defense,
+    // Campaign veterancy — carry level + accumulated XP between missions. Before
+    // this, static levels evaporated and survivors reset to L1 each mission.
+    level:        entity.level || 1,
+    xp:           entity.xp || 0,
     weapon:       entity.weapon,
     items:        { ...entity.items },
     effects:      permanentEffects,
@@ -73,6 +112,7 @@ export function reconcileRosterAfterMission(preMissionRoster, entities) {
   const deployedSurvivors = [];
   for (const e of entities) {
     if (e.type !== 'survivor') continue;
+    if (e.isNpc) continue; // scripted conversation NPCs never join the roster
     const f = e.owner ? getFaction(e.owner) : null;
     if (!f?.canDiscoverNPCs()) continue;
     deployedNames.add(e.name);
@@ -121,6 +161,7 @@ const DEFERRED = Symbol('victory-deferred');
 function _heroSurvivorCount(state) {
   return state.entities.filter(e => {
     if (!e.alive || e.type !== 'survivor' || !e.owner) return false;
+    if (e.isNpc) return false; // scripted NPCs don't count toward objectives
     return getFaction(e.owner).canDiscoverNPCs();
   }).length;
 }
@@ -266,7 +307,7 @@ function _checkWinCondition(cond, state) {
       // on one of the listed target hexes.
       const partyFaction = cond.faction || 'hero';
       const party = state.entities.filter(e =>
-        e.alive && e.owner === partyFaction &&
+        e.alive && e.owner === partyFaction && !e.isNpc &&
         (e.type === EntityType.PALADIN || e.type === EntityType.SURVIVOR)
       );
       if (party.length === 0) return null;
@@ -358,6 +399,8 @@ export function processWaves(state, waves, createEnemyFn) {
       if (!pos) continue;
       const entity = createEnemyFn(unit.type, pos.col, pos.row, state);
       if (entity) {
+        // Level scaling first (HP/ATK/DEF), so explicit overrides still win.
+        if (unit.level) applyLevel(entity, unit.level);
         if (unit.overrides) Object.assign(entity, unit.overrides);
         state.entities.push(entity);
         logs.push(unit.spawnLog ?? `🌑 ${entity.displayName} emerges from the shadows!`);
@@ -369,8 +412,10 @@ export function processWaves(state, waves, createEnemyFn) {
 
 /**
  * Resolve a spawn position descriptor to {col, row}.
+ * Exported so the mission-logic GameContext spawns through the same path as
+ * processWaves (docs/09 — parity).
  */
-function resolveSpawnPosition(state, spawnAt) {
+export function resolveSpawnPosition(state, spawnAt) {
   if (typeof spawnAt === 'object' && spawnAt.col !== undefined) {
     return { col: spawnAt.col, row: spawnAt.row };
   }
@@ -432,23 +477,66 @@ function resolveSpawnPosition(state, spawnAt) {
   return null;
 }
 
+// ── Carried hero loadout ─────────────────────────────────────────────────────
+
+/**
+ * Apply a campaign's carried-over hero loadout onto a freshly created leader.
+ *
+ * The leader is built via Faction.createLeader (so it already holds its
+ * faction starting weapon — the Paladin's sword). We only override the weapon
+ * when the campaign actually carries one: a null/absent carried weapon KEEPS
+ * the starting weapon rather than disarming the hero. (Pre-overhaul saves and
+ * the old default stored weapon:null, which would otherwise strip the new
+ * starting sword on every mission load.) Uses equipWeapon so the
+ * weapon-derived range stays in sync.
+ *
+ * @param {Entity} hero        the freshly created hero leader
+ * @param {object} heroStats   { hp, weapon, items } carried by the campaign
+ */
+export function applyCarriedHeroLoadout(hero, heroStats) {
+  if (!hero || !heroStats) return;
+  // Campaign veterancy: restore earned level + accumulated XP first, so the
+  // wounded-fraction HP carry below is taken off the LEVELED max. applyLevel is
+  // idempotent against the freshly-created hero's L1 base and a no-op at L1
+  // (so pre-veterancy saves are unchanged). Mirrors the survivor deploy path.
+  hero.xp = heroStats.xp || 0;
+  if (heroStats.level > 1) applyLevel(hero, heroStats.level);
+  if (typeof heroStats.hp === 'number') {
+    if (typeof heroStats.maxHp === 'number' && heroStats.maxHp > 0) {
+      // Carry the wounded FRACTION, not the absolute HP. This is scale-
+      // invariant: a hero saved at half HP returns at half of the leader's
+      // (possibly rescaled) max, so a save written before the HP×DAMAGE_SCALE
+      // change resolves to the right amount instead of clamping a 98-HP Paladin
+      // down to a stale "14".
+      const frac = Math.max(0, Math.min(1, heroStats.hp / heroStats.maxHp));
+      hero.hp = Math.max(1, Math.round(hero.maxHp * frac));
+    } else {
+      // No carried maxHp (older/partial loadout) — treat hp as an absolute.
+      hero.hp = Math.min(heroStats.hp, hero.maxHp);
+    }
+  }
+  if (heroStats.weapon) hero.equipWeapon(heroStats.weapon);
+  hero.items = { ...(heroStats.items || {}) };
+}
+
 // ── Campaign class ──────────────────────────────────────────────────────────
 
 export class Campaign {
   /**
    * @param {object} campaignDef  Campaign definition from campaign-registry.
    *   Must include { id, title, missions[], mapBuilders, firstMission }.
-   * @param {string} saveSlot     localStorage key suffix (defaults to campaignDef.id).
+   * @param {number} slotIndex    Save slot (1..CAMPAIGN_SLOT_COUNT, default 1).
    */
-  constructor(campaignDef, saveSlot) {
+  constructor(campaignDef, slotIndex = 1) {
     this.campaignDef       = campaignDef;
-    this.saveSlot          = saveSlot ?? `campaign-${campaignDef.id}`;
+    this.slotIndex         = clampSlotIndex(slotIndex);
+    this.saveSlot          = campaignSlotSaveSlot(campaignDef.id, this.slotIndex);
     this.version           = SAVE_VERSION;
     this.currentMission    = campaignDef.firstMission;
     this.completedMissions = new Set();
     this.roster            = []; // Array of snapshotSurvivor() objects
     this.resources         = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0 };
-    this.heroStats         = { hp: 14, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {} };
+    this.heroStats         = { hp: 98, maxHp: 98, attack: 2, defense: 2, level: 1, xp: 0, weapon: 'sword', items: {} };
     this.storyFlags        = {};
     this.updatedAt         = Date.now();
   }
@@ -472,7 +560,18 @@ export class Campaign {
 
   /** Load from localStorage. Returns true if a save was found and is compatible. */
   load() {
-    const raw = localStorage.getItem(`brimstone-${this.saveSlot}`);
+    let raw = localStorage.getItem(`brimstone-${this.saveSlot}`);
+    // Backwards-compat: a legacy unsuffixed `campaign-<id>` save (written before
+    // multi-save existed) is adopted as slot 1 on first read. One-shot and
+    // idempotent — once copied into the slot-1 key it is never consulted again.
+    // The legacy key is left in place so older builds keep working.
+    if (raw == null && this.slotIndex === 1) {
+      const legacyRaw = localStorage.getItem(`brimstone-${legacyCampaignSaveSlot(this.campaignDef.id)}`);
+      if (legacyRaw != null) {
+        localStorage.setItem(`brimstone-${this.saveSlot}`, legacyRaw);
+        raw = legacyRaw;
+      }
+    }
     if (!raw) return false;
     const data = JSON.parse(raw);
     // Pre-v2 saves (Phase-4 baked-stats era) cannot be migrated and are dropped;
@@ -488,7 +587,10 @@ export class Campaign {
     this.completedMissions = new Set(migrated.completedMissions ?? []);
     this.roster            = migrated.roster ?? [];
     this.resources         = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0, ...migrated.resources };
-    this.heroStats         = migrated.heroStats ?? { hp: 14, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {} };
+    this.heroStats         = migrated.heroStats ?? { hp: 98, maxHp: 98, attack: 2, defense: 2, level: 1, xp: 0, weapon: 'sword', items: {} };
+    // Backfill veterancy fields for saves written before XP existed.
+    if (this.heroStats.level == null) this.heroStats.level = 1;
+    if (this.heroStats.xp == null) this.heroStats.xp = 0;
     this.storyFlags        = migrated.storyFlags ?? {};
     this.updatedAt         = migrated.updatedAt ?? Date.now();
     // Persist the migrated form so we don't re-migrate every load.
@@ -499,11 +601,22 @@ export class Campaign {
   /** Delete campaign save. */
   delete() {
     localStorage.removeItem(`brimstone-${this.saveSlot}`);
+    // Slot 1 owns the legacy unsuffixed key (adopted on migration); clear it too
+    // so an explicit delete ("Start Over") isn't resurrected from a stale legacy
+    // save on the next load.
+    if (this.slotIndex === 1) {
+      localStorage.removeItem(`brimstone-${legacyCampaignSaveSlot(this.campaignDef.id)}`);
+    }
   }
 
-  /** Check if a save exists without fully loading. */
-  static exists(saveSlot) {
-    return localStorage.getItem(`brimstone-${saveSlot}`) !== null;
+  /** Check if a save exists in the given slot without fully loading. */
+  static exists(campaignDef, slotIndex = 1) {
+    const slot = campaignSlotSaveSlot(campaignDef.id, slotIndex);
+    if (localStorage.getItem(`brimstone-${slot}`) !== null) return true;
+    // Slot 1 also covers a not-yet-migrated legacy save.
+    if (clampSlotIndex(slotIndex) === 1 &&
+        localStorage.getItem(`brimstone-${legacyCampaignSaveSlot(campaignDef.id)}`) !== null) return true;
+    return false;
   }
 
   /** Get mission definition by ID (from this campaign's missions). */
@@ -516,14 +629,110 @@ export class Campaign {
     return this.campaignDef.mapBuilders[mapBuilderKey] ?? null;
   }
 
+  /**
+   * Build the unlock-evaluation context from current campaign progress (docs/09
+   * §5.5). `level` maps to a progression metric — the hero's level if one ever
+   * exists, else the number of missions cleared — so `{ level: N }` is meaningful
+   * today and auto-upgrades if an XP/level system is added.
+   */
+  buildUnlockContext() {
+    return {
+      isCompleted: (id) => this.completedMissions.has(id),
+      hasItem: (id) => !!(this.heroStats?.items?.[id]) || this.heroStats?.weapon === id,
+      level: this.heroStats?.level ?? this.getCompletedCount(),
+      getFlag: (key) => this.storyFlags?.[key],
+      getResource: (key) => this.resources?.[key] ?? 0,
+    };
+  }
+
+  /**
+   * Single source of truth for "can the player launch this mission right now":
+   * not already completed, every legacy `requires` entry completed, AND the rich
+   * `unlock` criterion (if any) satisfied. Both `isMissionUnlocked()` and the
+   * `.available` flag in `getMissionList()` delegate here so the predicate never
+   * drifts between the two.
+   */
+  _canPlayMission(mission) {
+    if (this.completedMissions.has(mission.id)) return false;
+    if (mission.requires && !mission.requires.every(r => this.completedMissions.has(r))) return false;
+    if (mission.unlock != null && !evaluateUnlock(mission.unlock, this.buildUnlockContext())) return false;
+    return true;
+  }
+
+  /** Whether `mission` is currently available: not done, legacy `requires` all
+   *  completed, AND the rich `unlock` criterion (if any) satisfied. */
+  isMissionUnlocked(mission) {
+    return this._canPlayMission(mission);
+  }
+
+  /**
+   * The missionDone-style prerequisites still blocking `mission`, or `null` when
+   * a blocker is structurally richer than a bare `missionDone` (an `any`/`not`,
+   * an array, or a non-missionDone leaf like `level`/`flag`). Used by
+   * `_isMissionVisible()` to decide whether a locked mission is "one step away".
+   * Returns blocker mission ids drawn from unsatisfied `requires` entries plus
+   * unsatisfied top-level / inside-`all` `missionDone` leaves of `unlock`.
+   */
+  _missionBlockers(mission) {
+    const ctx = this.buildUnlockContext();
+    const reqMissing = (mission.requires ?? []).filter(r => !this.completedMissions.has(r));
+    const unlockMissing = this._unlockMissionBlockers(mission.unlock, ctx);
+    if (unlockMissing === null) return null;
+    return [...reqMissing, ...unlockMissing];
+  }
+
+  /** @returns {string[]|null} unsatisfied missionDone ids from a simple `unlock`
+   *  (top-level leaf or a single `all:[]` of leaves), or `null` if the unsatisfied
+   *  part is anything richer. An already-satisfied `unlock` yields `[]`. */
+  _unlockMissionBlockers(unlock, ctx) {
+    if (unlock == null) return [];
+    if (evaluateUnlock(unlock, ctx)) return [];
+    const leafId = (c) =>
+      c && typeof c === 'object' && !Array.isArray(c) &&
+      !c.all && !c.any && c.not === undefined && 'missionDone' in c
+        ? c.missionDone : undefined;
+
+    const top = leafId(unlock);
+    if (top !== undefined) return ctx.isCompleted?.(top) ? [] : [top];
+
+    if (Array.isArray(unlock.all) && !unlock.any && unlock.not === undefined) {
+      const missing = [];
+      for (const c of unlock.all) {
+        const id = leafId(c);
+        if (id === undefined) {
+          // A non-leaf clause that's still unsatisfied makes the gate non-simple.
+          if (!evaluateUnlock(c, ctx)) return null;
+          continue;
+        }
+        if (!ctx.isCompleted?.(id)) missing.push(id);
+      }
+      return missing;
+    }
+    return null; // any / not / array-sugar / non-missionDone leaf → not "one step"
+  }
+
+  /**
+   * Whether a mission row should be SHOWN on the mission list (vs hidden until
+   * later). Completed and currently-playable missions are always visible. A
+   * locked mission is visible only when it's "one step from playable": its sole
+   * remaining blocker is a single missionDone-style prerequisite AND that blocker
+   * mission is itself playable right now (the immediate next mission in line).
+   */
+  _isMissionVisible(mission) {
+    if (this.completedMissions.has(mission.id)) return true;
+    if (this._canPlayMission(mission)) return true;
+    const blockers = this._missionBlockers(mission);
+    if (blockers === null || blockers.length !== 1) return false;
+    const dep = this.getMissionDef(blockers[0]);
+    return !!dep && this._canPlayMission(dep);
+  }
+
   /** Get the next available (unlocked, not completed) mission. */
   getNextMission() {
     for (const mission of this.campaignDef.missions) {
-      if (this.completedMissions.has(mission.id)) continue;
-      if (mission.requires && !mission.requires.every(r => this.completedMissions.has(r))) continue;
-      return mission.id;
+      if (this.isMissionUnlocked(mission)) return mission.id;
     }
-    return null; // all missions completed
+    return null; // all missions completed / nothing unlocked yet
   }
 
   /**
@@ -537,11 +746,15 @@ export class Campaign {
   }
 
   /**
-   * Check if a campaign is completed by loading its save.
-   * Returns true only if a save exists and every mission is completed.
+   * Check if a campaign is completed in ANY save slot (used for chapter
+   * prerequisite unlocking). Returns true if a save exists in some slot with
+   * every mission completed.
    */
   static isCampaignCompleted(campaignDef) {
-    return Campaign.getCampaignProgress(campaignDef).status === 'completed';
+    for (let s = 1; s <= CAMPAIGN_SLOT_COUNT; s++) {
+      if (Campaign.getCampaignProgress(campaignDef, s).status === 'completed') return true;
+    }
+    return false;
   }
 
   /** Count of missions completed so far in this campaign. */
@@ -565,34 +778,83 @@ export class Campaign {
   }
 
   /**
-   * Inspect the saved progress for a campaign without keeping an instance around.
-   * Returns { status, completed, total } where status is 'completed' | 'in-progress' | 'new'.
-   * If no save exists, returns status 'new' with completed=0.
+   * Inspect the saved progress for one slot of a campaign without keeping an
+   * instance around. Returns { status, completed, total } where status is
+   * 'completed' | 'in-progress' | 'new'. If no save exists, returns status 'new'
+   * with completed=0.
    */
-  static getCampaignProgress(campaignDef) {
-    const c = new Campaign(campaignDef);
+  static getCampaignProgress(campaignDef, slotIndex = 1) {
+    const c = new Campaign(campaignDef, slotIndex);
     const loaded = c.load();
     const total = c.getMissionCount();
     if (!loaded) return { status: 'new', completed: 0, total };
     return { status: c.getStatus(), completed: c.getCompletedCount(), total };
   }
 
-  /** Get list of missions with their status for the mission select screen. */
+  /**
+   * Aggregate progress across all slots — the furthest-along slot wins. Used to
+   * summarize a campaign on the chapter-select card where individual slots
+   * aren't shown. 'completed' > 'in-progress' > 'new'; ties break on the higher
+   * completed count.
+   */
+  static getAggregateProgress(campaignDef) {
+    const rank = { new: 0, 'in-progress': 1, completed: 2 };
+    let best = { status: 'new', completed: 0, total: 0 };
+    for (let s = 1; s <= CAMPAIGN_SLOT_COUNT; s++) {
+      const p = Campaign.getCampaignProgress(campaignDef, s);
+      best.total = p.total;
+      if (rank[p.status] > rank[best.status] ||
+          (rank[p.status] === rank[best.status] && p.completed > best.completed)) {
+        best = { status: p.status, completed: p.completed, total: p.total };
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Rich per-slot summary for the save-slot picker. A slot is `used` when it has
+   * a progress save (a fresh "New Game" writes one immediately). When used,
+   * reports the mission the player would resume next plus the last-saved time.
+   */
+  static getSlotSummary(campaignDef, slotIndex = 1) {
+    const c = new Campaign(campaignDef, slotIndex);
+    const used = c.load();
+    const total = c.getMissionCount();
+    if (!used) {
+      return { slotIndex: c.slotIndex, used: false, status: 'new', completed: 0, total };
+    }
+    const currentId = c.getNextMission() ?? c.currentMission;
+    const def = c.getMissionDef(currentId);
+    return {
+      slotIndex:           c.slotIndex,
+      used:                true,
+      status:              c.getStatus(),
+      completed:           c.getCompletedCount(),
+      total,
+      currentMission:      currentId,
+      currentMissionTitle: def?.title ?? currentId,
+      updatedAt:           c.updatedAt,
+    };
+  }
+
+  /**
+   * Get list of missions with their status for the mission select screen.
+   * `available` (can launch now) flows through the single `_canPlayMission()`
+   * predicate, so it honors rich `unlock` criteria — not just legacy `requires`.
+   * `visible` marks whether the row should be shown at all: completed and
+   * playable missions always show; a locked mission shows only when it's the
+   * immediate next one ("one step from playable", see `_isMissionVisible`).
+   */
   getMissionList() {
-    return this.campaignDef.missions.map(m => {
-      const completed = this.completedMissions.has(m.id);
-      const available = completed || (
-        !m.requires || m.requires.every(r => this.completedMissions.has(r))
-      );
-      return {
-        id: m.id,
-        title: m.title,
-        briefing: m.briefing,
-        completed,
-        available,
-        current: m.id === this.currentMission,
-      };
-    });
+    return this.campaignDef.missions.map(m => ({
+      id: m.id,
+      title: m.title,
+      briefing: m.briefing,
+      completed: this.completedMissions.has(m.id),
+      available: this._canPlayMission(m),
+      visible: this._isMissionVisible(m),
+      current: m.id === this.currentMission,
+    }));
   }
 
   /**
@@ -621,6 +883,10 @@ export class Campaign {
         maxHp:   result.heroStats.maxHp,
         attack:  result.heroStats.attack,
         defense: result.heroStats.defense,
+        // Campaign veterancy carries forward; default to current/L1 when the
+        // result predates XP (e.g. conductor missions passing the old heroStats).
+        level:   result.heroStats.level ?? this.heroStats.level ?? 1,
+        xp:      result.heroStats.xp ?? this.heroStats.xp ?? 0,
         weapon:  result.heroStats.weapon,
         items:   { ...result.heroStats.items },
       };
@@ -655,6 +921,71 @@ export class Campaign {
     }
 
     this.save();
+  }
+
+  /**
+   * Heal one party member with a single herb, BETWEEN missions.
+   *
+   * This is the campaign-landing analogue of the mid-mission `executeHeal`
+   * action — but it can't reuse that one (it is sealed-resolution and operates
+   * on a live GameState's faction inventory). Here we decrement the shared
+   * campaign `resources.herbs`, roll 2×1d10 (between-mission ops aren't
+   * deterministic like in-mission resolution, so plain Math.random is fine),
+   * clamp the result to the unit's maxHp, and persist.
+   *
+   * @param {number|'leader'} rosterIndex  Index into `this.roster`, or the
+   *   sentinel `'leader'` to heal the hero/Paladin (`this.heroStats`).
+   * @returns {number|null}  The unit's new hp, or `null` if the heal was a
+   *   no-op (no herbs, unknown unit, or already at full health).
+   */
+  healUnitWithHerb(rosterIndex) {
+    if ((this.resources.herbs ?? 0) < 1) return null;
+    const unit = rosterIndex === 'leader' ? this.heroStats : this.roster[rosterIndex];
+    if (!unit || unit.hp >= unit.maxHp) return null;
+    const roll = (Math.floor(Math.random() * 10) + 1) + (Math.floor(Math.random() * 10) + 1);
+    this.resources.herbs -= 1;
+    unit.hp = Math.min(unit.maxHp, unit.hp + roll);
+    this.save();
+    return unit.hp;
+  }
+
+  /**
+   * Set a roster unit's equipped weapon from its own backpack — the
+   * between-mission counterpart to the in-mission equip action.
+   *
+   * The equip *rule* is unchanged from in-game: "equipped" means
+   * `unit.weapon = <id>`, and the stat deltas compose at call time from
+   * ITEMS[weapon].statMods (Entity.getAttack/getDefense/getRange) — exactly
+   * what Entity.equipWeapon does. We only differ in the consumption model:
+   * in a live mission, equipping is a combat action (executeUseItem) that
+   * consumes the swap, so the previously held weapon is dropped. Loadout
+   * management between missions is non-destructive — we swap, returning the
+   * currently-equipped weapon to the backpack so the player never loses gear
+   * by changing their mind. This mirrors healUnitWithHerb: an in-mission
+   * action re-expressed against the campaign's plain roster snapshots.
+   *
+   * @param {number|'leader'} rosterIndex  roster index, or 'leader' for the hero.
+   * @param {string} weaponId  weapon id to equip; must be a weapon already in
+   *   the unit's backpack (`items`). Equipping the already-equipped weapon is a
+   *   no-op.
+   * @returns {string|null}  the newly equipped weapon id, or `null` on no-op
+   *   (unknown unit, not a weapon, not carried, or already equipped).
+   */
+  equipWeaponForUnit(rosterIndex, weaponId) {
+    const unit = rosterIndex === 'leader' ? this.heroStats : this.roster[rosterIndex];
+    if (!unit) return null;
+    if (ITEMS[weaponId]?.kind !== 'weapon') return null;
+    if (unit.weapon === weaponId) return null; // already equipped — nothing to do
+    const items = { ...(unit.items || {}) };
+    if ((items[weaponId] || 0) < 1) return null; // not in this unit's backpack
+    // Swap: draw the chosen weapon out of the backpack, stow the old one.
+    items[weaponId] -= 1;
+    if (items[weaponId] <= 0) delete items[weaponId];
+    if (unit.weapon) items[unit.weapon] = (items[unit.weapon] || 0) + 1;
+    unit.items = items;
+    unit.weapon = weaponId;
+    this.save();
+    return weaponId;
   }
 
   // ── Server sync (for verified users) ──────────────────────────────────────
@@ -711,7 +1042,10 @@ export class Campaign {
     this.completedMissions = new Set(migrated.completedMissions ?? []);
     this.roster            = migrated.roster ?? [];
     this.resources         = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0, ...migrated.resources };
-    this.heroStats         = migrated.heroStats ?? { hp: 14, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {} };
+    this.heroStats         = migrated.heroStats ?? { hp: 98, maxHp: 98, attack: 2, defense: 2, level: 1, xp: 0, weapon: 'sword', items: {} };
+    // Backfill veterancy fields for saves written before XP existed.
+    if (this.heroStats.level == null) this.heroStats.level = 1;
+    if (this.heroStats.xp == null) this.heroStats.xp = 0;
     this.storyFlags        = migrated.storyFlags ?? {};
     this.updatedAt         = migrated.updatedAt ?? Date.now();
     this.save(); // persist to localStorage
@@ -744,6 +1078,21 @@ export function _migrate(data, fromVersion) {
     }
     out = { ...out, completedMissions: [...completed], version: 3 };
     v = 3;
+  }
+
+  // v3 → v4: the `tutorial` mission is folded into Chapter 1 as its first
+  // mission, and "The Awakening" (`prologue`) now requires `tutorial`. A v3
+  // Chapter-1 save predates the fold and never recorded `tutorial` as completed,
+  // so The Awakening would lock with no way to satisfy the prereq mid-campaign.
+  // Backfill `tutorial` so returning players keep their progress (worst case they
+  // skip a tutorial they almost certainly already played).
+  if (v === 3) {
+    const completed = new Set(out.completedMissions ?? []);
+    if (out.campaignId === 'calebs_hollow_prologue' && !completed.has('tutorial')) {
+      completed.add('tutorial');
+    }
+    out = { ...out, completedMissions: [...completed], version: 4 };
+    v = 4;
   }
 
   return out;

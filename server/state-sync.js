@@ -2,10 +2,12 @@
 // serializeState  → plain JSON-safe snapshot (network transmission, save storage)
 // deserializeState ← reconstruct a live GameState from a saved snapshot (resume)
 import { VERSION }           from '../src/version.js';
-import { Entity, BASE_AGILITY, BASE_RANGE } from '../src/entities.js';
+import { Entity, BASE_AGILITY } from '../src/entities.js';
+import { ITEMS } from '../src/items.js';
+import { UNIT_TYPES } from '../src/unit-types.js';
 import { GameState }         from '../src/game.js';
 import { setMapDimensions, hexKey }  from '../src/hex.js';
-import { Tile, TileType, legacyTileType, decomposeTileType } from '../src/tiles.js';
+import { Tile, TileType, legacyTileType, decomposeTileType, deriveBlockedSlots } from '../src/tiles.js';
 import { pickFootprintNeighbor } from '../src/building-footprint.js';
 
 export function serializeState(state) {
@@ -14,6 +16,9 @@ export function serializeState(state) {
   for (const [key, tile] of state.tiles) {
     if (tile.col + 1 > mapCols) mapCols = tile.col + 1;
     if (tile.row + 1 > mapRows) mapRows = tile.row + 1;
+    // Hand-written tile allowlist — authored fields here MUST also be restored in
+    // the deserializeState tile loop below. Guarded by
+    // tests/state-sync-schema-guard.test.js ('state-sync tile-field guard').
     tiles.push({
       key,
       col:            tile.col,
@@ -34,7 +39,18 @@ export function serializeState(state) {
       fortifyLevel:   tile.fortifyLevel   ?? 0,
       explored:       tile.explored       ?? false,
       hiddenSurvivor: tile.hiddenSurvivor ?? false,
+      // Authored hidden-encounter payload. Until the tile is explored this data
+      // lives ONLY on the tile (post-discovery it moves onto the spawned entity),
+      // so an UNDISCOVERED tile loses it across save/resume unless serialized
+      // here. Allowlist-style: only these explicit hidden-encounter fields, not
+      // arbitrary authored content. Optional/additive — no SAVE_VERSION bump.
+      hiddenSurvivorId:    tile.hiddenSurvivorId    ?? null,
+      hiddenSurvivorLevel: tile.hiddenSurvivorLevel ?? null,
+      exploreOverride:     tile.exploreOverride     ?? null,
       roadDirs:       tile.roadDirs ? [...tile.roadDirs] : [],
+      // Sub-hex blocked slots (tree/bridge). Authoritative — drives the renderer
+      // and (for bridges) the capacity gate. See deriveBlockedSlots in tiles.js.
+      blockedSlots:   Array.isArray(tile.blockedSlots) ? [...tile.blockedSlots] : [],
       // Building footprint (P1). Entrances carry footprintHexes; footprint hexes
       // carry the buildingFootprintOf back-pointer. Both default to []/null.
       footprintHexes:      Array.isArray(tile.footprintHexes) ? [...tile.footprintHexes] : [],
@@ -50,12 +66,16 @@ export function serializeState(state) {
     color:         e.color         ?? null,   // per-player color override
     col:           e.col,
     row:           e.row,
+    slot:          e.slot ?? 0,   // sub-hex placement slot (0=centre, 1..6)
     hp:            e.hp,
     maxHp:         e.maxHp,
     attack:        e.attack,
     defense:       e.defense,
+    level:         e.level ?? 1,
+    xp:            e.xp ?? 0,   // campaign veterancy — accumulated experience
     agility:       e.agility ?? BASE_AGILITY[e.type] ?? 1,
-    range:         e.range   ?? BASE_RANGE[e.type]   ?? 1,
+    // Range is weapon-derived (denormalized cache of ITEMS[weapon].range).
+    range:         e.range   ?? 1,
     attackBonus:   e.attackBonus,
     defenseBonus:  e.defenseBonus,
     weapon:        e.weapon        ?? null,
@@ -74,6 +94,14 @@ export function serializeState(state) {
     defendCount:   e.defendCount   ?? 0,
     guarding:      e.guarding      ?? 0,
     killsThisRound: e.killsThisRound ?? 0,
+    // Once-per-round free-equip gate — must survive mid-round resync or a
+    // reconnect could let a unit equip twice in one round.
+    equippedThisRound: e.equippedThisRound ?? false,
+    // Scripted campaign NPC tag — must survive mid-mission save/resume or the
+    // NPC would become a controllable roster survivor on reload.
+    isNpc:         e.isNpc         ?? false,
+    npcId:         e.npcId         ?? null,
+    ref:           e.ref           ?? null,   // mission-logic Actor-node binding (docs/09)
     effects:       Array.isArray(e.effects)
       ? e.effects.map(rec => ({ ...rec }))
       : [],
@@ -104,6 +132,11 @@ export function serializeState(state) {
     ),
     winner:               state.winner,
     winReason:            state.winReason,
+    // Mission logic graph runtime state (docs/09 §3.1). Null for normal/online
+    // games. The engine itself is re-attached by the mission loader on resume,
+    // which then calls engine.load(snap.logicState) — deserializeState stashes it
+    // on the rebuilt state as `_restoredLogicState` for the loader to consume.
+    logicState:           state.logicEngine ? state.logicEngine.serialize() : null,
     attritionLevel:       state.attritionLevel,
     attritionChanged:     state.attritionChanged ?? false,
     heroKills:            state.heroKills        ?? 0,
@@ -132,6 +165,8 @@ export function serializeState(state) {
       : null,
     maxDiscoverableSurvivors: state.maxDiscoverableSurvivors ?? null,
     discoveredSurvivorCount:  state.discoveredSurvivorCount ?? 0,
+    // Campaign-only flag — gates XP/veterancy. Must survive mid-mission resume.
+    isCampaign:               !!state.isCampaign,
     log:                  [...state.log],
     witchObjectives:      state.witchObjectives.map(o => ({
       col:        o.col,
@@ -158,6 +193,7 @@ export function serializeState(state) {
     mapSize:              state.mapSize ?? 'standard',
     season:               state.season ?? null,
     campaignAIBudgetBonus: state.campaignAIBudgetBonus ?? 0,
+    aiDifficulty:         state.aiDifficulty ?? 'normal',
     // Per-state entity/roster counters. Persisting `usedRosterIndices` prevents
     // duplicate survivor names when a mid-game save is resumed and new
     // survivors spawn from unexplored buildings. nextEntityId is informational;
@@ -202,6 +238,8 @@ export function deserializeState(snap) {
   //     `decomposeTileType()` produces the correct (base, structure, path) —
   //     the single source of that mapping.
   state.tiles = new Map();
+  // Restore side of the hand-written tile allowlist (see serializeState). Keep in
+  // sync with tests/state-sync-schema-guard.test.js ('state-sync tile-field guard').
   for (const t of snap.tiles) {
     const tile = new Tile(t.col, t.row);
     const hasLayers = t.base !== undefined || t.structure !== undefined || t.path !== undefined;
@@ -218,11 +256,19 @@ export function deserializeState(snap) {
     tile.fortifyLevel   = t.fortifyLevel   ?? 0;
     tile.explored       = t.explored       ?? false;
     tile.hiddenSurvivor = t.hiddenSurvivor ?? false;
+    // Authored hidden-encounter payload (see serialize side). Legacy saves that
+    // predate these fields → null, identical to an unauthored tile.
+    tile.hiddenSurvivorId    = t.hiddenSurvivorId    ?? null;
+    tile.hiddenSurvivorLevel = t.hiddenSurvivorLevel ?? null;
+    tile.exploreOverride     = t.exploreOverride     ?? null;
     tile.roadDirs       = new Set(t.roadDirs || []);
     // Building footprint (P1). Restore as real fields; legacy snapshots lack
     // them → defaults, then the migration pass below populates them.
     tile.footprintHexes      = Array.isArray(t.footprintHexes) ? [...t.footprintHexes] : [];
     tile.buildingFootprintOf = t.buildingFootprintOf ?? null;
+    // Sub-hex blocked slots. Present on post-feature saves; legacy saves get []
+    // here and are populated by the migration pass below.
+    tile.blockedSlots        = Array.isArray(t.blockedSlots) ? [...t.blockedSlots] : null;
     state.tiles.set(t.key, tile);
   }
 
@@ -231,6 +277,15 @@ export function deserializeState(snap) {
   // `building` but an empty `footprintHexes`. Assign each unmigrated entrance
   // one eligible adjacent footprint hex, deterministically.
   migrateBuildingFootprints(state.tiles, snap);
+
+  // ── Sub-hex blocked-slot migration ───────────────────────────────────────
+  // Pre-feature saves carry no `blockedSlots`. Derive them now (after footprint
+  // migration, so footprint hexes are classified) using the same pure helper
+  // map-gen uses, so a resumed legacy game gates capacity identically to a
+  // freshly generated map (bridges in particular regain their reduced cap).
+  for (const tile of state.tiles.values()) {
+    if (tile.blockedSlots == null) tile.blockedSlots = deriveBlockedSlots(tile);
+  }
 
   // ── Entities — restore as real Entity instances so game-logic methods work ─
   state.entities = snap.entities.map(data => {
@@ -244,21 +299,38 @@ export function deserializeState(snap) {
     // Back-compat for pre-effects saves
     if (!Array.isArray(e.effects)) e.effects = [];
     if (e.killsThisRound === undefined) e.killsThisRound = 0;
+    // Unit level (campaign scaling). maxHp is stored directly; the ATK/DEF
+    // level bonus recomposes from `level` via getAttack/getDefense. Old saves
+    // default to 1.
+    if (e.level === undefined) e.level = 1;
+    // Campaign veterancy XP — default 0 for saves that predate it.
+    if (e.xp === undefined) e.xp = 0;
     // Hero → Paladin entity-type rename. Pre-PR4 saves carry type='hero';
     // re-key them to 'paladin' so the new BASE_STATS/BASE_AGILITY tables
     // and `e.type === EntityType.PALADIN` checks all line up.
     if (e.type === 'hero') e.type = 'paladin';
     // Back-compat hydrate Agility for pre-002 saves.
     if (e.agility === undefined) e.agility = BASE_AGILITY[e.type] ?? 1;
-    // Back-compat hydrate Range for pre-ranged-attacks saves. New games
-    // set `range` in the Entity constructor; old snapshots default to the
-    // unit-type's registry value (1 for every existing unit except witch).
-    if (e.range === undefined) e.range = BASE_RANGE[e.type] ?? 1;
+    // Range is weapon-derived (no innate unit range). Restore it
+    // authoritatively from the equipped weapon — handles old saves that
+    // predate weapon-ranged attacks (no weapon → range 1) and keeps the
+    // denormalized cache in sync with `weapon`.
+    e.range = ITEMS[e.weapon]?.range ?? 1;
+    // Once-per-round equip gate — default false on saves that predate it.
+    if (e.equippedThisRound === undefined) e.equippedThisRound = false;
+    // Scripted campaign NPC tag — default off for saves that predate it.
+    if (e.isNpc === undefined) { e.isNpc = false; e.npcId = null; }
+    // tags is static per unit type, set by the Entity constructor (which this
+    // restore path bypasses). Hydrate from UNIT_TYPES so hasTag() — used by
+    // ability targeting and leader-death effects — works on restored entities.
+    if (!Array.isArray(e.tags)) e.tags = UNIT_TYPES[e.type]?.tags ?? [];
     // Back-compat: pre-PR factionId. Saves from before the rogue PR
     // don't carry factionId; fall back to null so factionOf(actor) →
     // getFaction(owner) — i.e. the side default. Saves that DO carry
     // factionId restore the concrete faction.
     if (e.factionId === undefined) e.factionId = null;
+    // Back-compat: pre-slot saves default to the centre slot.
+    if (e.slot === undefined) e.slot = 0;
     return e;
   });
 
@@ -313,6 +385,7 @@ export function deserializeState(snap) {
   state.noWitchMission       = !!snap.noWitchMission;
   state.maxDiscoverableSurvivors = snap.maxDiscoverableSurvivors ?? null;
   state.discoveredSurvivorCount  = snap.discoveredSurvivorCount  ?? 0;
+  state.isCampaign               = !!snap.isCampaign;
   state.log                  = [...snap.log];
   state.witchObjectives      = snap.witchObjectives.map(o => ({
     col:        o.col,
@@ -353,11 +426,16 @@ export function deserializeState(snap) {
   state.season               = snap.season    ?? null;
   state.winner               = snap.winner    ?? null;
   state.winReason            = snap.winReason ?? null;
+  // Mission logic graph runtime state — stashed for the mission loader to feed
+  // into engine.load() once it re-attaches the engine (the engine can't live in
+  // a JSON snapshot). Null for normal games.
+  state._restoredLogicState  = snap.logicState ?? null;
   state.heroKills            = snap.heroKills        ?? 0;
   state.witchKills           = snap.witchKills       ?? 0;
   state.witchSummonCount     = snap.witchSummonCount ?? 0;
   state.heroRevealedByHorn   = snap.heroRevealedByHorn ?? false;
   state.campaignAIBudgetBonus = snap.campaignAIBudgetBonus ?? 0;
+  state.aiDifficulty          = snap.aiDifficulty ?? 'normal';
   state.gameMode             = snap.gameMode ?? 'standard';
   state.battleConfig         = snap.battleConfig ? { ...snap.battleConfig } : null;
   state.cycleConfig          = snap.cycleConfig

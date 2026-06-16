@@ -109,9 +109,9 @@ describe('RogueFaction — innate abilities', () => {
 // ── Stats — fragile + fast ──────────────────────────────────────────────────
 
 describe('RogueFaction — leader stats', () => {
-  test('rogue is fragile (HP 10, DEF 1) and fast (agility 8)', () => {
+  test('rogue is fragile (HP 70, DEF 1) and fast (agility 8)', () => {
     const r = getFaction('rogue').createLeader(0, 0, 'p1');
-    assert.equal(r.maxHp,   10);
+    assert.equal(r.maxHp,   70);
     assert.equal(r.attack,   3);
     assert.equal(r.defense,  1);
     assert.equal(r.agility,  8);
@@ -187,6 +187,10 @@ describe('RogueFaction — weapon restriction', () => {
     const p = getFaction('hero');
     for (const id of Object.keys(ITEMS)) {
       if (ITEMS[id].kind !== 'weapon') continue;
+      // Weapons restricted by wielderFactions (e.g. magic_bolt → witch/necromancer)
+      // are NOT equippable by the paladin; skip them.
+      const wf = ITEMS[id].wielderFactions;
+      if (wf && !wf.includes('hero')) continue;
       assert.equal(p.canEquipWeaponItem(id), true,
         `paladin should equip ${id}`);
     }
@@ -195,9 +199,12 @@ describe('RogueFaction — weapon restriction', () => {
   test('executeUseItem refuses to equip a melee weapon onto the rogue', () => {
     const { state, rogue } = rogueState();
     rogue.items.sword = 1; // shouldn't normally happen, defensive check
+    // The rogue starts with a bow equipped via the faction setup.
+    assert.equal(rogue.weapon, 'bow', 'precondition: rogue starts holding a bow');
     const r = executeUseItem(state, rogue, 'sword');
     assert.equal(r.success, false);
-    assert.equal(rogue.weapon, null);
+    // Refusing the melee weapon must leave the existing bow equipped, unchanged.
+    assert.equal(rogue.weapon, 'bow');
   });
 
   test('EQUIP_WEAPON action does NOT list a melee weapon in the rogue\'s pack', () => {

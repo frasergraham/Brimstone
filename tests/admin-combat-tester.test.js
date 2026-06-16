@@ -17,6 +17,8 @@ import {
   ATK_SIDE_ID, DEF_SIDE_ID, UNIT_FACTORIES, MAX_ALLIES_PER_SIDE, SPEED_MODES,
   ATTACK_MODES, RANGED_DEFENDER_OFFSET, RANGED_ATTACK_RANGE,
 } from '../src/tools/combat-tester.js';
+import { playBattleResultAnims, playCombatDisplay } from '../src/tools/combat-tester-ui.js';
+import { BLOCK_WORD_VARIANTS } from '../src/renderer-3d.js';
 import { ADVANTAGE_CAP } from '../src/entities.js';
 import { hexKey, hexDistance } from '../src/hex.js';
 import { KNOWN_TOOLS } from '../src/tools/url-state.js';
@@ -669,70 +671,131 @@ describe('admin-tools.html — Combat tab wiring', () => {
 // callback disposes the standee once the "-N" finishes. Without entityId,
 // the dying standee vanishes mid-rise and the floater orphans in air.
 //
-// Source-level pin: the tester's _playBattleResultAnims MUST pass entityId
-// for both the damage and counter-damage floaters.
+// Behavioural: drive the tester's exported playBattleResultAnims against a
+// spy renderer and assert the entityId rides along on both floaters.
 
 describe('combat-tester — damage floater protects the dying standee', () => {
-  const TESTER_UI_SRC = readFileSync(
-    resolve(__dirname, '..', 'src', 'tools', 'combat-tester-ui.js'), 'utf8',
-  );
+  function makeSpyRenderer() {
+    const calls = { attack: [], hpFlash: [], death: [], fadeOut: [] };
+    return {
+      calls,
+      addAttackAnim(...a)    { calls.attack.push(a); },
+      addHpChangeFlash(...a) { calls.hpFlash.push(a); },
+      addDeathAnim(...a)     { calls.death.push(a); },
+      addFadeOutAnim(...a)   { calls.fadeOut.push(a); },
+    };
+  }
+  const actorSnap  = { id: 'atk-1', col: 4, row: 4, owner: 'hero' };
+  const targetSnap = { id: 'def-1', col: 5, row: 4, owner: 'witch' };
 
-  test('addHpChangeFlash(target) is called with { entityId: targetSnap.id }', () => {
-    // The damage floater for the defender must protect the defender's standee
-    // so it survives until the "-N" finishes rising/fading.
-    assert.match(
-      TESTER_UI_SRC,
-      /addHpChangeFlash\(\s*targetSnap\.col,\s*targetSnap\.row,\s*-\(result\.damage\),\s*\{\s*entityId:\s*targetSnap\.id\s*\}\s*\)/,
-      'damage floater on the defender must pass { entityId: targetSnap.id }',
-    );
+  test('damage floater on the defender carries { entityId: targetSnap.id }', () => {
+    const r = makeSpyRenderer();
+    playBattleResultAnims(r, actorSnap, targetSnap, { damage: 2 }, null);
+    assert.equal(r.calls.hpFlash.length, 1);
+    const [col, row, delta, opts] = r.calls.hpFlash[0];
+    assert.equal(col, targetSnap.col);
+    assert.equal(row, targetSnap.row);
+    assert.equal(delta, -2);
+    assert.equal(opts.entityId, targetSnap.id,
+      'defender floater must protect the defender standee until the "-N" finishes');
   });
 
-  test('addHpChangeFlash(actor) for counter-damage is called with { entityId: actorSnap.id }', () => {
-    // Counter-damage floaters live above the attacker — if the attacker
-    // died to a counter, its standee must also stay through the floater.
-    assert.match(
-      TESTER_UI_SRC,
-      /addHpChangeFlash\(\s*actorSnap\.col,\s*actorSnap\.row,\s*-\(result\.counterDmg\),\s*\{\s*entityId:\s*actorSnap\.id\s*\}\s*\)/,
-      'counter-damage floater on the attacker must pass { entityId: actorSnap.id }',
-    );
+  test('counter-damage floater on the attacker carries { entityId: actorSnap.id }', () => {
+    const r = makeSpyRenderer();
+    playBattleResultAnims(r, actorSnap, targetSnap, { damage: 0, counterDmg: 1 }, null);
+    assert.equal(r.calls.hpFlash.length, 1);
+    const [col, row, delta, opts] = r.calls.hpFlash[0];
+    assert.equal(col, actorSnap.col);
+    assert.equal(row, actorSnap.row);
+    assert.equal(delta, -1);
+    assert.equal(opts.entityId, actorSnap.id,
+      'an attacker dying to a counter must also keep its standee through the floater');
+  });
+
+  test('kill plays death burst + fade-out for the target, and redrawFn fires last', () => {
+    const r = makeSpyRenderer();
+    let redrawn = 0;
+    playBattleResultAnims(r, actorSnap, targetSnap,
+      { damage: 3, killed: true }, () => { redrawn += 1; });
+    assert.equal(r.calls.death.length, 1);
+    assert.deepEqual(r.calls.death[0].slice(0, 2), [targetSnap.col, targetSnap.row]);
+    assert.equal(r.calls.fadeOut.length, 1);
+    assert.equal(r.calls.fadeOut[0][0], targetSnap.id);
+    assert.equal(redrawn, 1, 'redrawFn invoked so the next sync sees the new state');
+  });
+
+  test('no damage → no floaters; attack intro line still fires', () => {
+    const r = makeSpyRenderer();
+    playBattleResultAnims(r, actorSnap, targetSnap, { damage: 0 }, null);
+    assert.equal(r.calls.hpFlash.length, 0);
+    assert.equal(r.calls.attack.length, 1);
   });
 });
 
 // ─── Run Battle branches on speed ─────────────────────────────────────────
 //
-// The UI's runBattle() picks playFastCombatDisplay for fast / vfast and
-// run3DCombatCardHold for cinematic. Both paths share the live game's
-// extracted helpers — pin the imports and the branch shape at the source
-// level so a refactor that loses either path is caught here.
+// The UI's runBattle() routes through the exported playCombatDisplay, which
+// picks playFastCombatDisplay for fast / vfast and run3DCombatCardHold for
+// cinematic. Drive it with injected display fns and assert the branch + the
+// payload each helper receives.
 
-describe('combat-tester-ui — runBattle branches on tester.speedMode', () => {
-  const TESTER_UI_SRC = readFileSync(
-    resolve(__dirname, '..', 'src', 'tools', 'combat-tester-ui.js'), 'utf8',
-  );
+describe('combat-tester-ui — playCombatDisplay branches on speed', () => {
+  function makeDeps(speed, result) {
+    const fastCalls = [];
+    const cineCalls = [];
+    return {
+      fastCalls, cineCalls,
+      opts: {
+        speed,
+        renderer: { tag: 'renderer' },
+        state: { tag: 'state' },
+        actorSnap: { id: 'a' }, targetSnap: { id: 't' }, result,
+        redrawFn: () => {},
+        getContinueButton: () => 'the-btn',
+        playAnims: () => {},
+        fastFn: (payload) => { fastCalls.push(payload); },
+        cinematicFn: (payload) => { cineCalls.push(payload); },
+        randomFn: () => 0,             // deterministic miss word
+        delayFn: () => Promise.resolve(), // no real timers
+      },
+    };
+  }
 
-  test('imports the shared fast helper from src/combat-fast.js', () => {
-    assert.match(
-      TESTER_UI_SRC,
-      /import\s*\{\s*playFastCombatDisplay\s*\}\s*from\s*['"]\.\.\/combat-fast\.js['"]/,
-      'fast helper must come from the shared module the live game uses',
-    );
+  test('fast and vfast route to the shared fast helper, never the cinematic', async () => {
+    for (const speed of ['fast', 'vfast']) {
+      const d = makeDeps(speed, { hit: true });
+      await playCombatDisplay(d.opts);
+      assert.equal(d.fastCalls.length, 1, `${speed} uses playFastCombatDisplay`);
+      assert.equal(d.cineCalls.length, 0, `${speed} skips the cinematic readout`);
+      assert.equal(d.fastCalls[0].speed, speed, 'speed forwarded to the fast helper');
+      assert.equal(typeof d.fastCalls[0].playBattleResultAnims, 'function');
+      assert.equal(typeof d.fastCalls[0].playbackDelay, 'function');
+    }
   });
 
-  test('imports BLOCK_WORD_VARIANTS so the tester picks the same miss word set', () => {
-    assert.match(
-      TESTER_UI_SRC,
-      /BLOCK_WORD_VARIANTS/,
-      'tester needs the shared miss-word list to match the live game',
-    );
+  test('cinematic (default) routes to run3DCombatCardHold with the Continue gate', async () => {
+    const d = makeDeps('cinematic', { hit: true });
+    await playCombatDisplay(d.opts);
+    assert.equal(d.cineCalls.length, 1);
+    assert.equal(d.fastCalls.length, 0);
+    const payload = d.cineCalls[0];
+    assert.equal(payload.getContinueButton(), 'the-btn',
+      'cinematic path owns the Continue button gate');
+    assert.equal(typeof payload.redrawFn, 'function');
+    assert.equal(typeof payload.playBattleResultAnims, 'function');
   });
 
-  test('branches on speedMode === fast | vfast vs cinematic', () => {
-    // Single-pin regex: the runBattle function reads tester.speedMode and
-    // branches into the fast helper for fast/vfast and the cinematic
-    // helper otherwise. A refactor that loses either branch breaks here.
-    assert.match(TESTER_UI_SRC, /tester\.speedMode/);
-    assert.match(TESTER_UI_SRC, /speed\s*===\s*['"]fast['"]\s*\|\|\s*speed\s*===\s*['"]vfast['"]/);
-    assert.match(TESTER_UI_SRC, /playFastCombatDisplay\s*\(/);
-    assert.match(TESTER_UI_SRC, /run3DCombatCardHold\s*\(/);
+  test('fast-path miss picks a word from the shared BLOCK_WORD_VARIANTS list', async () => {
+    const d = makeDeps('fast', { hit: false });
+    await playCombatDisplay(d.opts);
+    // randomFn() === 0 → deterministic first variant; the point is the word
+    // comes from the SAME list the live game uses.
+    assert.equal(d.fastCalls[0].missText, BLOCK_WORD_VARIANTS[0]);
+  });
+
+  test('fast-path hit carries no miss word', async () => {
+    const d = makeDeps('vfast', { hit: true });
+    await playCombatDisplay(d.opts);
+    assert.equal(d.fastCalls[0].missText, null);
   });
 });

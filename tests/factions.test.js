@@ -134,7 +134,7 @@ describe('Stub factions (PR 5)', () => {
   test('stub createLeader returns an entity with the stub-specific type and stats', () => {
     const r = getFaction('rogue').createLeader(0, 0, 'p1');
     assert.equal(r.type,    'rogue');
-    assert.equal(r.maxHp,   10);
+    assert.equal(r.maxHp,   70);
     assert.equal(r.attack,  3);
     assert.equal(r.defense, 1);
     assert.equal(r.agility, 8);
@@ -196,8 +196,8 @@ describe('Action budget', () => {
     assert.equal(getFaction('hero').unitBonusCap, 5);
   });
 
-  test('Witch unit bonus cap is 3', () => {
-    assert.equal(getFaction('witch').unitBonusCap, 3);
+  test('Witch unit bonus cap is 4', () => {
+    assert.equal(getFaction('witch').unitBonusCap, 4);
   });
 
   test('Hero favorable phases are DAY and DAWN', () => {

@@ -13,6 +13,8 @@ import {
 import { TileType, ResourceType, legacyTileType, decomposeTileType, isBuildingFootprint } from '../src/tiles.js';
 import { hexKey, getNeighbors, hexDistance } from '../src/hex.js';
 import { getReachableHexes, executeMove } from '../src/actions.js';
+import { MissionLogicEngine } from '../src/mission-logic/engine.js';
+import { createGameContext } from '../src/mission-logic/game-context.js';
 
 function freshState() {
   return new GameState(true, true);
@@ -35,6 +37,74 @@ function emptyPassableNeighbor(state, entity) {
     return !state.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
   }) ?? null;
 }
+
+// ── Mission-logic Area triggers fire DURING the turn (replay injection) ─────────
+describe('resolvePlans — mission-logic area triggers', () => {
+  function attachAreaBeat(state, hex) {
+    const graph = { version: 1, variables: [], nodes: [
+      { id: 'area', type: 'onAreaEnter', params: { hexes: [{ col: hex.col, row: hex.row }] } },
+      { id: 'once', type: 'doOnce', params: {} },
+      { id: 'beat', type: 'storyBeat', params: { title: 'Sanctuary', text: 'safe' } },
+    ], edges: [
+      { from: { node: 'area', pin: 'onEnter' }, to: { node: 'once', pin: 'in' }, kind: 'exec' },
+      { from: { node: 'once', pin: 'out' }, to: { node: 'beat', pin: 'in' }, kind: 'exec' },
+    ] };
+    const ctx = createGameContext(state, { emit: (e) => state.logicPresentation.push(e), random: Math.random });
+    state.attachLogicEngine(new MissionLogicEngine(graph, ctx));
+  }
+
+  test('a unit moving ONTO a trigger hex fires it, attaching the story beat to that step', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const reachable = getReachableHexes(state, hero, 1);
+    if (!reachable.length) return; // boxed-in random map — skip
+    const target = reachable[0];
+    attachAreaBeat(state, target);
+
+    const heroPlan = [{ type: PlanActionType.MOVE, entityId: hero.id, toCol: target.col, toRow: target.row }];
+    const steps = resolvePlans(state, heroPlan, []);
+
+    const beats = steps.flatMap(s => s.logicEvents ?? []).filter(e => e.kind === 'storyBeat');
+    assert.equal(beats.length, 1, 'the area trigger fired once during the turn (not only at a round boundary)');
+    assert.equal(beats[0].title, 'Sanctuary');
+    // The Sim/Show split: a Show event must NOT linger in the queue (it was moved
+    // onto the step for replay), so it can't double-show at the next planning gate.
+    assert.equal((state.logicPresentation ?? []).filter(e => e.kind === 'storyBeat').length, 0);
+  });
+
+  test('no engine attached → steps carry no logicEvents (normal games byte-identical)', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const reachable = getReachableHexes(state, hero, 1);
+    if (!reachable.length) return;
+    const steps = resolvePlans(state, [{ type: PlanActionType.MOVE, entityId: hero.id, toCol: reachable[0].col, toRow: reachable[0].row }], []);
+    assert.ok(steps.every(s => !('logicEvents' in s)), 'no logicEvents key without an engine');
+  });
+
+  test('an Actor present during the turn fires its On Actor (OnSpawn) inline on the step', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const reachable = getReachableHexes(state, hero, 1);
+    if (!reachable.length) return;
+    const PIN = 'NamedActor';
+    const graph = { version: 1, variables: [], nodes: [
+      { id: 'act', type: 'onActor', params: { ref: PIN } },
+      { id: 'beat', type: 'storyBeat', params: { title: 'Found', text: 'A familiar face.' } },
+    ], edges: [{ from: { node: 'act', pin: 'onSpawn' }, to: { node: 'beat', pin: 'in' }, kind: 'exec' }] };
+    const ctx = createGameContext(state, { emit: (e) => state.logicPresentation.push(e), random: Math.random });
+    state.attachLogicEngine(new MissionLogicEngine(graph, ctx));
+    // An entity carrying the watched ref (e.g. a pinned survivor just discovered).
+    const actor = createZombie(hero.col, hero.row, 'witch', state);
+    actor.ref = PIN;
+    state.entities.push(actor);
+
+    const heroPlan = [{ type: PlanActionType.MOVE, entityId: hero.id, toCol: reachable[0].col, toRow: reachable[0].row }];
+    const steps = resolvePlans(state, heroPlan, []);
+    const beats = steps.flatMap((s) => s.logicEvents ?? []).filter((e) => e.kind === 'storyBeat');
+    assert.equal(beats.length, 1, 'Actor OnSpawn fired inline on the step (not deferred to the round boundary)');
+    assert.equal(beats[0].title, 'Found');
+  });
+});
 
 // ── Empty plans ───────────────────────────────────────────────────────────────
 
@@ -382,6 +452,7 @@ describe('resolvePlans — state integrity', () => {
     if (heroTile) heroTile.fortifyLevel = 0;
 
     const minion = createMinion(hero.col, hero.row);
+    minion.hp = 1; minion.maxHp = 1; // fragile so any landed hit is lethal
     state.entities.push(minion);
 
     const heroPlan = [{
@@ -393,7 +464,7 @@ describe('resolvePlans — state integrity', () => {
     resolvePlans(state, heroPlan, []);
 
     const minionStillAlive = state.entities.find(e => e.id === minion.id && e.alive);
-    // Minion had 2 HP, hero with +100 attackBonus should always kill
+    // 1 HP minion vs hero with +100 attackBonus should always die
     assert.ok(!minionStillAlive, 'Killed minion should be removed from entities');
   });
 
@@ -705,6 +776,58 @@ describe('resolvePlans — BATTLE_UNIT target fallback', () => {
     const allEvents = steps.flatMap(s => s.heroEvents);
     const ok = allEvents.find(e => e.type === ResEventType.ACTION_OK);
     assert.ok(ok, 'Fallback should attack substitute when original moved away');
+  });
+
+  test('target alive but fled out of range, no fallback — skip flagged targetFled with whiff', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const target = createMinion(hero.col, hero.row);
+    state.entities.push(target);
+
+    // Target moved far away this turn — still alive, just out of reach
+    target.col = hero.col + 5;
+    target.row = hero.row + 5;
+
+    const heroPlan = [{
+      type: PlanActionType.BATTLE_UNIT,
+      entityId: hero.id,
+      targetId: target.id,
+      targetCol: hero.col,
+      targetRow: hero.row,
+    }];
+
+    const steps = resolvePlans(state, heroPlan, []);
+    const allEvents = steps.flatMap(s => s.heroEvents);
+    const skip = allEvents.find(e => e.type === ResEventType.ACTION_SKIP);
+    assert.ok(skip, 'Should produce ACTION_SKIP when the target fled');
+    assert.equal(skip.targetFled, true, 'Skip must be flagged targetFled');
+    assert.match(skip.reason, /slipped away/i);
+    // Whiff payload lets the animation layer swing at the planned hex
+    assert.deepEqual(skip.whiffTarget, { col: hero.col, row: hero.row });
+    assert.ok(skip.battleSnaps?.actorSnap, 'Whiff needs the actor snapshot');
+  });
+
+  test('target dead — skip keeps the dead-or-gone reason, NOT targetFled', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const target = createMinion(hero.col, hero.row);
+    state.entities.push(target);
+    target.hp = 0;
+
+    const heroPlan = [{
+      type: PlanActionType.BATTLE_UNIT,
+      entityId: hero.id,
+      targetId: target.id,
+      targetCol: hero.col,
+      targetRow: hero.row,
+    }];
+
+    const steps = resolvePlans(state, heroPlan, []);
+    const allEvents = steps.flatMap(s => s.heroEvents);
+    const skip = allEvents.find(e => e.type === ResEventType.ACTION_SKIP);
+    assert.ok(skip, 'Should produce ACTION_SKIP when the target is dead');
+    assert.ok(!skip.targetFled, 'Dead target is not a fled target');
+    assert.equal(skip.reason, 'Target is dead or gone.');
   });
 
   test('original target gone, no enemy on hex — skip', () => {

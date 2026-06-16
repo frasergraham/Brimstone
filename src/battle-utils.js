@@ -20,6 +20,58 @@ export function isBattleSignificant(actorSnap, targetSnap, result, humanFaction)
 }
 
 /**
+ * Within one resolution step, actions drain highest-Agility first
+ * (resolver._sortCandidates). When an attacker out-speeds a FLEEING target, the
+ * strike resolves while the target is still on its start hex, THEN the target
+ * moves — so that battle's snapshot of the unit sits on its PRE-move hex. The
+ * step animator otherwise plays all moves before all battles, which would warp
+ * such a unit back to its start hex for the strike and then zip it forward.
+ *
+ * Returns the set of entity ids whose MOVE this step must be deferred until
+ * after the battle pass: a unit that both MOVES and is snapped by a battle on
+ * its pre-move (entitySnapshot) hex. Pure — exported for tests.
+ *
+ * @param {Array}  events          — this step's ACTION_OK events (move + battle)
+ * @param {Array}  entitySnapshot  — pre-step entity snapshot (positions)
+ * @param {object} PlanActionType  — enum (injected to avoid a circular import)
+ * @returns {Set<number|string>}
+ */
+export function deferredMoveEntityIds(events, entitySnapshot, PlanActionType) {
+  const out = new Set();
+  if (!events?.length) return out;
+  // The position a battle this step captured for `id` (as target or attacker),
+  // or null if the unit didn't fight.
+  const battleSnapPosOf = (id) => {
+    for (const ev of events) {
+      const t = ev.action?.type;
+      if (t !== PlanActionType.BATTLE_UNIT && t !== PlanActionType.BATTLE_HEX) continue;
+      const bs = ev.battleSnaps;
+      if (!bs) continue;
+      if (bs.targetSnap?.id === id) return bs.targetSnap;
+      if (bs.actorSnap?.id  === id) return bs.actorSnap;
+    }
+    return null;
+  };
+  for (const ev of events) {
+    if (ev.action?.type !== PlanActionType.MOVE) continue;
+    const id = ev.action.entityId;
+    const pre = entitySnapshot?.find(e => e.id === id);
+    if (!pre) continue;
+    const path = ev.result?.path?.length > 0
+      ? ev.result.path
+      : [{ col: ev.action.toCol, row: ev.action.toRow }];
+    const dest = path[path.length - 1];
+    // Only a real relocation can warp; a no-op / blocked-to-start move is fine.
+    if (dest.col === pre.col && dest.row === pre.row) continue;
+    const bpos = battleSnapPosOf(id);
+    // Battle captured the unit on its start hex ⇒ the strike resolved before the
+    // move ⇒ defer the move until after the battle.
+    if (bpos && bpos.col === pre.col && bpos.row === pre.row) out.add(id);
+  }
+  return out;
+}
+
+/**
  * Aggregate all battle events across a resolved turn into per-pair damage reports.
  *
  * steps         — StepRecord[] from resolvePlans / resolvePlansMP
@@ -64,7 +116,14 @@ function _aggregateBattlePairs(steps, ResEventType, PlanActionType) {
       const [snapA, snapB] = actorSnap.id === idA
         ? [actorSnap, targetSnap]
         : [targetSnap, actorSnap];
-      pairMap.set(key, { snapA, snapB, hpLostByA: 0, hpLostByB: 0 });
+      // killedIds: entity ids this pair's battle(s) actually KILLED (from
+      // result.killed, which flags the target). Lets compileTurnBattlePairs
+      // credit a death to the one fight that caused it, so a unit that fought
+      // several opponents isn't shown dead in every pair (carry: double skull).
+      pairMap.set(key, {
+        key, snapA, snapB, hpLostByA: 0, hpLostByB: 0, killedIds: new Set(),
+        splashById: new Map(),
+      });
     }
     const pair = pairMap.get(key);
     if (actorSnap.id === idA) {
@@ -73,6 +132,21 @@ function _aggregateBattlePairs(steps, ResEventType, PlanActionType) {
     } else {
       pair.hpLostByA += result.damage     ?? 0;
       pair.hpLostByB += result.counterDmg ?? 0;
+    }
+    if (result.killed) pair.killedIds.add(targetSnap.id);
+    // Splash victims (brute blast) ride on the pair whose battle blasted them.
+    for (const sh of result.splashHits ?? []) {
+      const prev = pair.splashById.get(sh.id);
+      if (prev) {
+        prev.hpLost += sh.damage ?? 1;
+        prev.diedInSplash = prev.diedInSplash || !!sh.killed;
+      } else {
+        pair.splashById.set(sh.id, {
+          id: sh.id, type: sh.type, title: null,
+          name: sh.name ?? sh.type ?? 'Unit', color: null,
+          hpLost: sh.damage ?? 1, diedInSplash: !!sh.killed,
+        });
+      }
     }
   }
   return [...pairMap.values()];
@@ -105,17 +179,51 @@ export function compileTurnBattleSummary(steps, finalEntities, ResEventType, Pla
  * card renders "—" under a unit that took no damage.
  */
 export function compileTurnBattlePairs(steps, finalEntities, ResEventType, PlanActionType) {
-  const unit = (snap, hpLost) => ({
+  const pairs = _aggregateBattlePairs(steps, ResEventType, PlanActionType);
+
+  // A unit that died this round must show its skull EXACTLY ONCE, even if it
+  // fought several opponents — otherwise the wrap-up double-reports the death
+  // (the bug). Credit the kill to the battle whose result.killed flagged it;
+  // when no single result owns the death (counter-kill of an attacker, splash),
+  // fall back to the first pair the unit appears in. `killPair` maps a dead
+  // entity id → the pair that gets its skull.
+  const killPair = new Map();
+  for (const p of pairs) {
+    for (const id of p.killedIds) {
+      if (!killPair.has(id)) killPair.set(id, p);
+    }
+  }
+  const shown = new Set(); // dead ids already given a skull
+
+  const unit = (snap, hpLost, killed) => ({
     id: snap.id, type: snap.type, title: snap.title ?? null,
     name: snap.title ?? snap.displayName ?? 'Unit',
     color: snap.color ?? null,
     hpLost,
-    killed: _wasKilled(snap, finalEntities),
+    killed,
   });
-  return _aggregateBattlePairs(steps, ResEventType, PlanActionType)
-    .map(({ snapA, snapB, hpLostByA, hpLostByB }) => ({
-      a: unit(snapA, hpLostByA), b: unit(snapB, hpLostByB),
-    }));
+
+  const killedHere = (snap, pair) => {
+    if (shown.has(snap.id) || !_wasKilled(snap, finalEntities)) return false;
+    // Credited pair = the explicit kill pair, or (no explicit kill anywhere)
+    // the first pair we meet the unit in.
+    const credit = killPair.get(snap.id);
+    if (credit ? credit === pair : true) { shown.add(snap.id); return true; }
+    return false;
+  };
+
+  return pairs.map((p) => ({
+    a: unit(p.snapA, p.hpLostByA, killedHere(p.snapA, p)),
+    b: unit(p.snapB, p.hpLostByB, killedHere(p.snapB, p)),
+    // Splash victims under the pair that blasted them. Skull dedup shares the
+    // pair members' `shown` set — a victim that died in (and was credited to)
+    // its own fight isn't double-skulled here.
+    splash: [...p.splashById.values()].map(({ diedInSplash, ...u }) => {
+      const killed = diedInSplash && !shown.has(u.id);
+      if (killed) shown.add(u.id);
+      return { ...u, killed };
+    }),
+  }));
 }
 
 /**
@@ -154,4 +262,73 @@ export function collectTurnFinds(steps, humanFaction = null) {
     }
   }
   return { discoveries, loot };
+}
+
+/**
+ * Campaign veterancy: aggregate a turn's XP_AWARDED events into ONE "+N XP" line
+ * per unit. A unit can earn XP from several sub-actions in a turn (damage + kill,
+ * splash kills, gang-up shares, multiple attacks across steps) — the resolver
+ * keeps those un-summed (one event per logical award) so the data isn't lossy;
+ * the summing happens HERE for presentation.
+ *
+ * Unit names are resolved from finalEntities, falling back to per-step
+ * entitySnapshots (covers a unit that earned XP and then died later in the turn,
+ * so it's gone from finalEntities). When a unit crossed a level threshold this
+ * turn, fromLevel/newLevel ride on the leveling event(s); we take the lowest
+ * fromLevel and highest newLevel so a multi-level jump reads "Lv 3 → 5".
+ *
+ * @param {Array}  steps        — StepRecord[] (heroEvents/witchEvents or playerEvents).
+ * @param {Array}  finalEntities— post-resolution entity array (for names).
+ * @param {object} ResEventType — the ResEventType enum (injected to avoid circular deps).
+ * @returns {Array<{ unitId, amount, text, leveledUp, fromLevel, toLevel }>}
+ */
+export function compileTurnXpSummary(steps, finalEntities, ResEventType) {
+  const nameById = new Map();
+  for (const e of (finalEntities ?? [])) {
+    nameById.set(e.id, e.title ?? e.displayName ?? e.name ?? 'Unit');
+  }
+  for (const step of (steps ?? [])) {
+    for (const s of (step.entitySnapshot ?? [])) {
+      if (!nameById.has(s.id)) nameById.set(s.id, s.title ?? s.displayName ?? 'Unit');
+    }
+  }
+
+  // Aggregate per unit, preserving first-seen order for a stable render.
+  const byUnit = new Map();
+  for (const step of (steps ?? [])) {
+    const evs = [
+      ...(step.heroEvents  ?? []),
+      ...(step.witchEvents ?? []),
+      ...(step.playerEvents ?? []).flatMap(pe => pe.events ?? []),
+    ];
+    for (const ev of evs) {
+      if (ev.type !== ResEventType.XP_AWARDED) continue;
+      let agg = byUnit.get(ev.unitId);
+      if (!agg) {
+        agg = { amount: 0, leveledUp: false, fromLevel: null, toLevel: null };
+        byUnit.set(ev.unitId, agg);
+      }
+      agg.amount += ev.amount ?? 0;
+      if (ev.leveledUp) {
+        agg.leveledUp = true;
+        if (agg.fromLevel == null || ev.fromLevel < agg.fromLevel) agg.fromLevel = ev.fromLevel;
+        if (agg.toLevel == null || ev.newLevel > agg.toLevel) agg.toLevel = ev.newLevel;
+      }
+    }
+  }
+
+  const lines = [];
+  for (const [unitId, agg] of byUnit) {
+    if (agg.amount <= 0) continue;
+    const name = nameById.get(unitId) ?? 'Unit';
+    let text = `${name} +${agg.amount} XP`;
+    if (agg.leveledUp && agg.toLevel != null) {
+      text += agg.fromLevel != null
+        ? ` (Lv ${agg.fromLevel} → ${agg.toLevel})`
+        : ` (Lv ${agg.toLevel})`;
+    }
+    lines.push({ unitId, amount: agg.amount, text, leveledUp: agg.leveledUp,
+                 fromLevel: agg.fromLevel, toLevel: agg.toLevel });
+  }
+  return lines;
 }

@@ -1,6 +1,6 @@
 // Procedural map generator for the Caleb's Hollow hex map
 import { MAP_COLS, MAP_ROWS, setMapDimensions, getNeighbors, hexKey, hexDistance } from './hex.js';
-import { Tile, TileType, BuildingType, PathType, StructureType, legacyTileType, isRiver, isBridge, hasBuilding, isBuildingFootprint, pathOf } from './tiles.js';
+import { Tile, TileType, BuildingType, PathType, StructureType, legacyTileType, isRiver, isBridge, hasBuilding, isBuildingFootprint, pathOf, deriveBlockedSlots } from './tiles.js';
 import { buildMST, placeRoadPath } from './road-network.js';
 import { pickFootprintNeighbor } from './building-footprint.js';
 
@@ -57,14 +57,14 @@ const VILLAGE_TEMPLATES = {
 
 export const MAP_SIZES = {
   skirmish: {
-    label: 'Skirmish (9×9)',
-    cols: 9, rows: 9,
+    label: 'Skirmish (10×10)',
+    cols: 10, rows: 10,
     villages: ['market', 'parish'],
-    minVillageDist: 5,
+    minVillageDist: 6,
     forestSeeds: [
-      {col:0,row:0},{col:1,row:1},{col:7,row:1},{col:8,row:0},
-      {col:8,row:3},{col:0,row:4},{col:1,row:7},{col:8,row:6},
-      {col:4,row:2},{col:5,row:6},
+      {col:0,row:0},{col:1,row:1},{col:8,row:1},{col:9,row:0},
+      {col:9,row:3},{col:0,row:4},{col:1,row:8},{col:9,row:7},
+      {col:4,row:2},{col:6,row:7},
     ],
     nodeCount: 1, nodeCountMin: 1, nodeCountMax: 3,
     survivorCounts: { buildings: 4, terrain: 1 },
@@ -72,15 +72,15 @@ export const MAP_SIZES = {
     minBridges: 1,
   },
   standard: {
-    label: 'Standard (13×13)',
-    cols: 13, rows: 13,
+    label: 'Standard (14×14)',
+    cols: 14, rows: 14,
     villages: ['market', 'parish', 'harbor'],
     minVillageDist: 6,
     forestSeeds: [
-      {col:0,row:0},{col:1,row:1},{col:11,row:1},{col:12,row:0},
-      {col:12,row:4},{col:0,row:6},{col:1,row:9},{col:12,row:8},
-      {col:7,row:3},{col:8,row:8},{col:0,row:4},{col:6,row:9},
-      {col:3,row:11},{col:10,row:12},{col:6,row:12},
+      {col:0,row:0},{col:1,row:1},{col:12,row:1},{col:13,row:0},
+      {col:13,row:4},{col:0,row:6},{col:1,row:10},{col:13,row:9},
+      {col:8,row:3},{col:9,row:9},{col:0,row:4},{col:6,row:10},
+      {col:3,row:12},{col:11,row:13},{col:6,row:13},
     ],
     nodeCount: 3, nodeCountMin: 2, nodeCountMax: 5,
     survivorCounts: { buildings: 7, terrain: 1 },
@@ -88,16 +88,17 @@ export const MAP_SIZES = {
     minBridges: 1,
   },
   regional: {
-    label: 'Regional (17×17)',
-    cols: 17, rows: 17,
+    label: 'Regional (19×19)',
+    cols: 19, rows: 19,
     villages: ['market', 'parish', 'harbor', 'garrison'],
-    minVillageDist: 6,
+    minVillageDist: 7,
     forestSeeds: [
-      {col:0,row:0},{col:1,row:1},{col:15,row:1},{col:16,row:0},
-      {col:16,row:4},{col:0,row:7},{col:1,row:11},{col:16,row:9},
-      {col:9,row:3},{col:10,row:9},{col:0,row:4},{col:7,row:11},
-      {col:5,row:1},{col:12,row:6},{col:3,row:6},{col:14,row:11},
-      {col:2,row:13},{col:14,row:14},{col:8,row:15},{col:1,row:16},{col:15,row:16},
+      {col:0,row:0},{col:1,row:1},{col:17,row:1},{col:18,row:0},
+      {col:18,row:4},{col:0,row:8},{col:1,row:12},{col:18,row:10},
+      {col:10,row:3},{col:11,row:10},{col:0,row:4},{col:8,row:12},
+      {col:6,row:1},{col:13,row:7},{col:3,row:7},{col:16,row:12},
+      {col:2,row:15},{col:16,row:16},{col:9,row:17},{col:1,row:18},
+      {col:17,row:18},
     ],
     nodeCount: 3, nodeCountMin: 2, nodeCountMax: 6,
     survivorCounts: { buildings: 10, terrain: 2 },
@@ -105,18 +106,18 @@ export const MAP_SIZES = {
     minBridges: 1,
   },
   campaign: {
-    label: 'Campaign (21×21)',
-    cols: 21, rows: 21,
+    label: 'Campaign (23×23)',
+    cols: 23, rows: 23,
     villages: ['market', 'parish', 'harbor', 'garrison', 'farmstead'],
-    minVillageDist: 7,
+    minVillageDist: 8,
     forestSeeds: [
-      {col:0,row:0},{col:1,row:1},{col:19,row:1},{col:20,row:0},
-      {col:20,row:5},{col:0,row:8},{col:1,row:13},{col:20,row:11},
-      {col:11,row:3},{col:12,row:11},{col:0,row:5},{col:8,row:13},
-      {col:5,row:1},{col:15,row:7},{col:3,row:7},{col:17,row:13},
-      {col:8,row:0},{col:14,row:0},{col:0,row:10},{col:20,row:7},
-      {col:3,row:15},{col:17,row:16},{col:10,row:17},{col:5,row:18},
-      {col:14,row:19},{col:0,row:20},{col:20,row:20},{col:10,row:20},
+      {col:0,row:0},{col:1,row:1},{col:21,row:1},{col:22,row:0},
+      {col:22,row:5},{col:0,row:9},{col:1,row:14},{col:22,row:12},
+      {col:12,row:3},{col:13,row:12},{col:0,row:5},{col:9,row:14},
+      {col:5,row:1},{col:16,row:8},{col:3,row:8},{col:19,row:14},
+      {col:9,row:0},{col:15,row:0},{col:0,row:11},{col:22,row:8},
+      {col:3,row:16},{col:19,row:18},{col:11,row:19},{col:5,row:20},
+      {col:15,row:21},{col:0,row:22},{col:22,row:22},{col:11,row:22},
     ],
     nodeCount: 3, nodeCountMin: 2, nodeCountMax: 7,
     survivorCounts: { buildings: 13, terrain: 3 },
@@ -1088,6 +1089,14 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
       for (const nk of stubStarts) tiles.get(nk)?.roadDirs.delete(hexKey(c.col, c.row));
       changed = true;
     }
+  }
+
+  // 5b. Derive sub-hex blocked slots now that forests, bridges, and the road
+  //     network are final. Forest trees avoid the road faces; bridges block all
+  //     non-road slots. Runs before node/survivor placement so any capacity
+  //     check downstream sees the reduced bridge capacity.
+  for (const t of tiles.values()) {
+    t.blockedSlots = deriveBlockedSlots(t);
   }
 
   // 6. Place witch objectives — well-spread, guaranteed across both sides of the river,

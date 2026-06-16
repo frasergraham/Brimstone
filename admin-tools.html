@@ -18,6 +18,8 @@
     }
     #menu-bar .brand { font-size: 12px; color: #c4a04a; letter-spacing: 1.5px; text-transform: uppercase; }
     #menu-bar .active-tool-name { font-size: 12px; color: #d4cba0; letter-spacing: 1px; }
+    #menu-bar .open-mission-name { font-size: 12px; color: #ffd680; font-weight: 600; }
+    #menu-bar .open-mission-name::before { content: '— '; color: #6a6048; font-weight: 400; }
     #menu-bar .nav-back { margin-left: auto; font-size: 12px; color: #a08858; }
     #menu-bar .file-status { font-size: 11px; color: #8a8060; min-width: 0; }
     #menu-bar .file-status.err { color: #d77; }
@@ -61,6 +63,8 @@
     #lighting-panel.active,
     #editor-panel.active,
     #combat-panel.active { display: grid; }
+    /* Campaign Progression tab (docs/09 §5.5) — the host fills the panel. */
+    #campaign-panel #campaign-host { position: absolute; inset: 0; }
 
     /* ── Editor sidebar tabs (Map / Mission / Events / Units) ──────────────── */
     #editor-panel .e-tabbar { display: flex; gap: 2px; margin: -12px -14px 10px -14px; padding: 8px 10px 0 10px;
@@ -73,7 +77,14 @@
     #editor-panel .e-stab:hover { background: #2a241c; }
     #editor-panel .e-stab.active { background: #5a4a30; border-color: #c4a04a; color: #ffd680; }
     #editor-panel .e-spane { display: none; }
-    #editor-panel .e-spane.active { display: block; }
+    #editor-panel .e-spane.active { display: block; flex: 1 1 auto; overflow-y: auto; min-height: 0; }
+    /* Context panel (lower half): active tool options + selected-object props. */
+    #editor-panel .e-context {
+      flex: 0 0 auto; max-height: 46%; overflow-y: auto;
+      margin: 10px -14px 0 -14px; padding: 8px 14px 2px 14px; border-top: 2px solid #3a3328;
+    }
+    #editor-panel .e-context-selection { border: 1px solid #7a3b3b; border-radius: 6px; padding: 8px; background: #221413; }
+    #editor-panel .e-context-selection h3 { color: #ff9b9b; }
 
     /* ════════════════════════════════════════════════════════════════════
        ASSETS TAB — scoped from admin-assets.html. All selectors scoped under
@@ -178,6 +189,9 @@
     /* Timeline pane (EC) — scrollable round track. */
     #editor-panel #e-timeline-pane { flex: 1 1 auto; display: none; overflow-y: auto; padding: 12px 14px; background: #0f0d0a; color: #d4cba0; }
     #editor-panel #e-timeline-pane.active { display: block; }
+    /* Logic graph pane (docs/09) — the node editor manages its own internal layout. */
+    #editor-panel #e-logic-pane { flex: 1 1 auto; display: none; overflow: hidden; background: #0f0d0a; }
+    #editor-panel #e-logic-pane.active { display: block; }
     #editor-panel .e-tl-intro { margin-bottom: 8px; }
     #editor-panel .e-tl-track { display: flex; flex-direction: column; gap: 6px; }
     #editor-panel .e-tl-row { display: grid; grid-template-columns: 104px 1fr; gap: 10px; border: 1px solid #2c2620; background: #1a1610; padding: 8px; align-items: start; }
@@ -204,7 +218,7 @@
       background: #5a4a30; border: 1px solid #c4a04a; color: #ffd680; border-radius: 4px;
     }
     #editor-panel #e-preview-close:hover { background: #6a5a3a; }
-    #editor-panel #e-palette { padding: 12px 14px; overflow-y: auto; border-left: 1px solid #2c2620; background: #14110d; }
+    #editor-panel #e-palette { padding: 12px 14px; overflow: hidden; border-left: 1px solid #2c2620; background: #14110d; display: flex; flex-direction: column; }
     #editor-panel .e-section { margin: 10px 0; padding: 10px 12px; border: 1px solid #2c2620; background: #1a1610; }
     #editor-panel .e-section h3 { margin: 0 0 8px 0; font-size: 11px; color: #c4a04a; letter-spacing: 1.5px; text-transform: uppercase; }
     #editor-panel .e-row { display: grid; grid-template-columns: 70px 1fr; gap: 8px; align-items: center; margin: 5px 0; font-size: 12px; }
@@ -357,6 +371,102 @@
       pointer-events: none;
     }
 
+    /* ── Hovered-hex info panel (item 5 + hex details) ─────────────────────── */
+    #editor-panel .e-coord-badge {
+      position: absolute; left: 10px; bottom: 36px; z-index: 4;
+      padding: 4px 8px; border: 1px solid #4a3f1f; border-radius: 5px;
+      background: rgba(10,8,5,0.88); color: #ffd680; font-size: 11px;
+      font-variant-numeric: tabular-nums; letter-spacing: 0.5px; pointer-events: none;
+      max-width: 240px;
+    }
+    #editor-panel .e-hexinfo-line {
+      color: #e6dcc0; font-size: 11px; line-height: 1.45;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    #editor-panel .e-hexinfo-coord {
+      color: #ffd680; font-weight: 600; font-variant-numeric: tabular-nums;
+      margin-top: 2px; padding-top: 2px; border-top: 1px solid #3a3020;
+    }
+
+    /* ── Instant tooltip (replaces the slow native title delay) ─────────────── */
+    #instant-tip {
+      position: fixed; z-index: 10000; display: none; pointer-events: none;
+      max-width: 280px; padding: 5px 9px; border: 1px solid #5a4a2a; border-radius: 5px;
+      background: #0b0a08; color: #f0e8d4; font: 11px/1.45 system-ui, sans-serif;
+      box-shadow: 0 4px 16px rgba(0,0,0,.55); white-space: normal;
+    }
+
+    /* ── Left-docked vertical tool palette (item 7) ─────────────────────────── */
+    #editor-panel .e-tooldock {
+      position: absolute; left: 8px; top: 8px; z-index: 5;
+      display: flex; flex-direction: column; gap: 3px;
+      max-height: calc(100% - 16px); overflow-y: auto;
+      padding: 4px; border: 1px solid #2c2620; border-radius: 8px;
+      background: rgba(14,11,8,0.92); box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+    }
+    #editor-panel .e-tooldock-btn {
+      width: 32px; height: 32px; flex: 0 0 auto; border-radius: 6px;
+      border: 1px solid transparent; background: transparent; color: #e8e2d6;
+      font-size: 17px; line-height: 1; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+    }
+    #editor-panel .e-tooldock-btn:hover { background: #2a231a; }
+    #editor-panel .e-tooldock-btn.active {
+      background: #3a2f18; border-color: #c4a04a; box-shadow: 0 0 0 1px rgba(196,160,74,0.4) inset;
+    }
+    /* Place / Edit mode toggle at the top of the dock (item 8). */
+    #editor-panel .e-tooldock-mode {
+      display: flex; gap: 3px; padding-bottom: 4px; margin-bottom: 4px;
+      border-bottom: 1px solid #2c2620;
+    }
+    #editor-panel .e-tooldock-mode-btn {
+      flex: 1 1 0; height: 26px; border-radius: 5px; border: 1px solid #332c22;
+      background: #1d1812; color: #cdbf9e; font-size: 14px; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+    }
+    #editor-panel .e-tooldock-mode-btn:hover { background: #2a231a; }
+    #editor-panel .e-tooldock-mode-btn.active { background: #c4a04a; color: #1a1610; border-color: #c4a04a; }
+
+    /* ── Selection inspector, pinned to the right panel (item 8) ────────────── */
+    #editor-panel .e-selection {
+      margin-bottom: 8px; padding: 8px; border: 1px solid #7a3b3b; border-radius: 6px;
+      background: #221413;
+    }
+    #editor-panel .e-selection-head {
+      font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+      color: #ff9b9b; margin-bottom: 6px;
+    }
+    #editor-panel .e-selection-del {
+      width: 100%; margin-top: 8px; padding: 6px; border-radius: 5px;
+      border: 1px solid #7a3b3b; background: #3a1c1c; color: #ffd0d0; cursor: pointer; font-size: 12px;
+    }
+    #editor-panel .e-selection-del:hover { background: #5a2626; }
+
+    /* ── Layers dropdown (item 6) ──────────────────────────────────────────── */
+    /* Top-right map toolbar: Preview 3D + Layers dropdown sit side by side. */
+    #editor-panel .e-map-toolbar {
+      position: absolute; top: 8px; right: 10px; z-index: 6;
+      display: flex; gap: 6px; align-items: flex-start;
+    }
+    #editor-panel .e-map-toolbtn {
+      padding: 5px 10px; border: 1px solid #c4a04a; border-radius: 6px;
+      background: rgba(26,22,16,0.9); color: #ffd680; font-size: 12px; cursor: pointer;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.5); white-space: nowrap;
+    }
+    #editor-panel .e-map-toolbtn:hover { background: #5a4a30; }
+    #editor-panel .e-layers-menu { position: relative; }
+    #editor-panel .e-layers-btn {
+      padding: 5px 10px; border: 1px solid #c4a04a; border-radius: 6px;
+      background: rgba(26,22,16,0.9); color: #ffd680; font-size: 12px; cursor: pointer;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+    }
+    #editor-panel .e-layers-btn:hover, #editor-panel .e-layers-btn.active { background: #5a4a30; }
+    #editor-panel .e-layers-popup {
+      position: absolute; top: 36px; right: 0; min-width: 210px;
+      padding: 8px; border: 1px solid #2c2620; border-radius: 8px;
+      background: rgba(14,11,8,0.97); box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+    }
+
     /* ── Full-width layer toggles (item 11) ────────────────────────────────── */
     #editor-panel .e-layer-row {
       display: flex; align-items: center; justify-content: space-between; width: 100%;
@@ -476,6 +586,14 @@
     #combat-panel #c-log .c-log-entry { padding: 3px 0; border-bottom: 1px dashed #1a1a1a; }
     #combat-panel #c-log .c-log-entry:last-child { border-bottom: none; }
     #combat-panel #c-log .c-log-head { color: #c4a04a; font-weight: bold; }
+    /* Wrap-up battle summary row (shared .wrapup-* classes from styles.css)
+       atop each log entry — pin the proportional font back on so the glyph
+       fallback and damage numbers aren't sized by the log's monospace 11px. */
+    #combat-panel #c-log .c-log-summary {
+      font-family: var(--font-ui, system-ui), sans-serif;
+      display: flex; flex-direction: column; gap: 4px;
+      margin: 2px 0 4px; white-space: normal;
+    }
     #combat-panel .c-add-row { display: grid; grid-template-columns: 1fr auto; gap: 4px; margin-top: 4px; }
     #combat-panel .c-add-row button { padding: 5px 10px; }
     #combat-panel .c-side-label { font-size: 11px; color: #c4a04a; letter-spacing: 1px; text-transform: uppercase; margin-top: 6px; }
@@ -500,21 +618,23 @@
           <button class="menu-item" data-tab="assets" title="Browse 3D models + tree assets">Assets</button>
           <button class="menu-item" data-tab="lighting" title="Tune the per-phase 3D lighting">Lighting</button>
           <button class="menu-item" data-tab="editor" title="Author campaign mission maps">Mission Editor</button>
+          <button class="menu-item" data-tab="campaign" title="Map non-linear campaign progression: mission unlock graph + rewards">Campaign</button>
           <button class="menu-item" data-tab="combat" title="Place units on a clearing map and play real combats">Combat</button>
         </div>
       </div>
       <span class="brand">Caleb's Hollow Tools</span>
       <span class="active-tool-name" id="active-tool-name">Assets</span>
+      <!-- The mission currently open in the Mission Editor (editor tab only). -->
+      <span class="open-mission-name" id="open-mission-name" hidden></span>
 
       <!-- File menu: editor-only Load / Save. Hidden unless the Mission Editor
            tool is active. Drives the editor's loadMissionFile / saveMission. -->
       <div class="menu" id="file-menu" hidden>
         <button class="menu-btn" id="file-menu-btn" aria-haspopup="true" aria-expanded="false" title="File operations — New, Load, Save">File</button>
         <div class="menu-list" id="file-menu-list" hidden>
-          <button class="menu-item" id="file-new" title="Start a new mission map (pick mode + size)">New…</button>
-          <button class="menu-item" id="file-load" title="Load a mission JSON file from disk">Load…</button>
-          <button class="menu-item" id="file-load-existing" title="Load one of the bundled in-repo campaign missions">Load existing mission…</button>
-          <button class="menu-item" id="file-save" title="Validate the mission and download it as JSON">Save / Download</button>
+          <button class="menu-item" id="file-load-existing" title="Open a mission from the repo (src/campaign/missions)">Open mission…</button>
+          <button class="menu-item" id="file-load" title="Import a mission JSON file from elsewhere on disk">Import JSON…</button>
+          <button class="menu-item" id="file-save" title="Validate and save the mission (⌘S)">Save&nbsp;&nbsp;⌘S</button>
         </div>
         <!-- Bundled-mission picker: a flyout listing the in-repo campaign
              missions, populated from MIGRATED_MISSIONS. Opened by the
@@ -668,7 +788,7 @@
         <!-- Main area: a tab bar (Map ⇄ Timeline) over two stacked panes. Only
              one pane is .active at a time; built/toggled by initEditor() (EC). -->
         <div id="e-main">
-          <div id="e-main-tabs"><!-- Map / Timeline tabs built by initEditor() --></div>
+          <div id="e-main-tabs"><!-- Map / Logic tabs built by initEditor() --></div>
           <div id="e-canvas-pane">
             <canvas id="e-render-canvas"></canvas>
             <!-- 3D preview overlay — hidden until "Preview in 3D" is pressed. The
@@ -679,8 +799,10 @@
               <button id="e-preview-close" type="button" title="Close the 3D preview and return to the 2D editor">✕ Close 3D</button>
             </div>
           </div>
-          <!-- Round-by-round timeline tab (EC) — day/night track + event lanes. -->
-          <div id="e-timeline-pane"><!-- built by initEditor() --></div>
+          <!-- Logic graph tab (docs/09) — node-graph event→action editor.
+               (The legacy Timeline tab was retired — all missions are now
+               logic-graph driven; see docs/09 #10.) -->
+          <div id="e-logic-pane"><!-- LogicGraphEditor mounted by initEditor() --></div>
         </div>
         <aside id="e-palette"><!-- tool palette built by initEditor() --></aside>
       </section>
@@ -695,6 +817,11 @@
           <button id="c-continue-btn" type="button" hidden>Continue ▶</button>
         </div>
         <div id="c-controls"><!-- side panel built by initCombat() --></div>
+      </section>
+
+      <!-- ── CAMPAIGN PROGRESSION PANEL (docs/09 §5.5) ─────────────────────── -->
+      <section id="campaign-panel" class="tab-panel">
+        <div id="campaign-host"><!-- CampaignProgressionView mounted by initCampaignProgression() --></div>
       </section>
     </div>
   </div>
@@ -711,7 +838,10 @@
     import { createTabController } from '/src/tools/tab-controller.js';
     // Lighting tab deps. Importing the module is cheap; the heavy Babylon scene
     // is only built when initLighting() runs (first activation of that tab).
-    import { Renderer3D, PHASE_LIGHT_CONFIG } from '/src/renderer-3d.js';
+    import {
+      Renderer3D, PHASE_LIGHT_CONFIG,
+      ANIMATION_BANK, UNIT_RIG_BANK, MANNEQUIN_RIG_FILE,
+    } from '/src/renderer-3d.js';
     import { generateMap } from '/src/map.js';
     import { GameState, Phase } from '/src/game.js';
     import { createHero, createWitch } from '/src/entities.js';
@@ -720,12 +850,43 @@
     import { initEditor } from '/src/tools/mission-editor-ui.js';
     // Combat tester tab. DOM-free controller + 3D mount, both lazy-imported.
     import { initCombat } from '/src/tools/combat-tester-ui.js';
+    import { initCampaignProgression } from '/src/tools/campaign-progression-ui.js';
     // Bundled-mission catalog for the File ▸ "Load existing mission…" picker.
     // Dependency-free shared list (also imported by campaign-registry.js).
     import { MIGRATED_MISSIONS } from '/src/campaign/mission-catalog.js';
     // E7 — URL-state helpers: keep ?tool / ?mission / ?wip in sync with what's
     // actually selected/loaded so links and reloads round-trip.
     import { parseToolParams, withToolParams, KNOWN_TOOLS } from '/src/tools/url-state.js';
+
+    // ── Instant tooltips ─────────────────────────────────────────────────────
+    // Native `title` tooltips only appear after a ~1s OS delay. Show an immediate
+    // custom tooltip instead: on first hover, move the element's `title` to
+    // `data-tip` (so the OS tooltip never fires) and float a box by the cursor.
+    // The logic-graph editor (.lge-root) has its own instant tooltips — skip it.
+    (function instantTooltips() {
+      const tip = document.createElement('div');
+      tip.id = 'instant-tip';
+      document.body.appendChild(tip);
+      document.addEventListener('mousemove', (e) => {
+        const titled = e.target.closest?.('[title]');
+        if (titled && !titled.closest('.lge-root')) {
+          titled.dataset.tip = titled.getAttribute('title');
+          titled.removeAttribute('title');
+        }
+        const host = e.target.closest?.('[data-tip]');
+        if (!host || host.closest('.lge-root') || !host.getAttribute('data-tip')) {
+          tip.style.display = 'none';
+          return;
+        }
+        tip.textContent = host.getAttribute('data-tip');
+        tip.style.display = 'block';
+        let x = e.clientX + 14, y = e.clientY + 16;
+        if (x + tip.offsetWidth > window.innerWidth) x = e.clientX - tip.offsetWidth - 8;
+        if (y + tip.offsetHeight > window.innerHeight) y = e.clientY - tip.offsetHeight - 8;
+        tip.style.left = `${x}px`; tip.style.top = `${y}px`;
+      });
+      document.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+    })();
 
     // ════════════════════════════════════════════════════════════════════
     //  ASSETS TAB  (ported from admin-assets.html; ids prefixed `a-`)
@@ -735,12 +896,79 @@
     function initAssets() {
       'use strict';
 
-      const MODELS = [
-        { file: 'house.glb',         label: 'house.glb' },
-        { file: 'paladin-idle.glb',  label: 'paladin-idle.glb' },
+      // Last-resort list if live discovery (Studio bridge → /admin/api/models)
+      // both fail. The trees/* subtree is browsed separately via its manifest.
+      const FALLBACK_MODELS = [
+        'house.glb', 'paladin-idle.glb', 'mannequin-idle.glb', 'zombie-idle.glb',
+        'tree_pack.glb', 'walking.glb', 'running.glb', 'punch.glb', 'hit.glb', 'block.glb',
+        'buildings/apothecary.glb', 'buildings/barn.glb', 'buildings/blacksmith.glb',
+        'buildings/church.glb', 'buildings/dock.glb', 'buildings/graveyard.glb',
+        'buildings/house.glb', 'buildings/inn.glb', 'buildings/mill.glb',
+        'buildings/stable.glb', 'buildings/storehouse.glb', 'buildings/town_hall.glb',
+        'buildings/watchtower.glb',
       ];
-      const ANIMATION_FILES = ['walking.glb', 'running.glb', 'punch.glb', 'hit.glb', 'block.glb'];
+      // Animation clips — derived from the game's ANIMATION_BANK (single source
+      // of truth) so new clips appear here automatically. The `idle` entry is
+      // the rig mesh itself (paladin-idle.glb), not a standalone clip, so it's
+      // excluded. Every rig shares one Mixamo skeleton, so each clip retargets
+      // onto every character mesh — verified 0-miss across paladin/mannequin/zombie.
+      const ANIMATION_FILES = [...new Set(Object.values(ANIMATION_BANK))]
+        .filter(f => f !== ANIMATION_BANK.idle);
+      // Character rig meshes: every model registered in UNIT_RIG_BANK plus the
+      // shared mannequin. Used to bucket the model list into a Characters group.
+      const RIG_MODEL_FILES = new Set([
+        ...Object.values(UNIT_RIG_BANK).map(r => r.model),
+        MANNEQUIN_RIG_FILE,
+      ]);
       const MODEL_DIR = '/assets/models/';
+
+      // Bucket a discovered model path into a viewer category. Characters (rigs)
+      // and Animations (clips) come from the game's banks; the rest split by
+      // directory. Order controls how groups render (most useful first).
+      const GROUP_ORDER = ['Characters', 'Animations', 'Props', 'Buildings'];
+      function classifyModel(rel) {
+        const base = rel.split('/').pop();
+        if (rel.startsWith('buildings/')) return 'Buildings';
+        if (ANIMATION_FILES.includes(base)) return 'Animations';
+        if (RIG_MODEL_FILES.has(base) || /-idle\.glb$/i.test(base)) return 'Characters';
+        return 'Props';
+      }
+
+      // Discover every .glb model under assets/models/ at runtime so the viewer
+      // shows ALL game models. Order of preference:
+      //   1. Caleb's Studio repo bridge (recursive on-disk listing)
+      //   2. The dev server's /admin/api/models scan endpoint
+      //   3. FALLBACK_MODELS (may be stale, but always renders something)
+      async function studioListGlbs(relDir, prefix) {
+        const result = await window.studioAPI.listDir(relDir);
+        if (!result || !result.ok || !Array.isArray(result.entries)) return [];
+        const out = [];
+        for (const ent of result.entries) {
+          if (ent.name.startsWith('.')) continue;
+          const rel = prefix ? `${prefix}/${ent.name}` : ent.name;
+          if (ent.dir) out.push(...await studioListGlbs(`${relDir}/${ent.name}`, rel));
+          else if (ent.name.toLowerCase().endsWith('.glb')) out.push(rel);
+        }
+        return out;
+      }
+      async function discoverModelFiles() {
+        if (window.studioAPI?.listDir) {
+          try {
+            const files = await studioListGlbs('assets/models', '');
+            if (files.length) return files.sort();
+          } catch (e) { console.warn('[asset-viewer] studio listing failed:', e); }
+        }
+        try {
+          const res = await fetch('/admin/api/models');
+          if (res.ok) {
+            const data = await res.json();
+            if (data && Array.isArray(data.files) && data.files.length) {
+              return data.files.slice().sort();
+            }
+          }
+        } catch (e) { console.warn('[asset-viewer] /admin/api/models failed:', e); }
+        return FALLBACK_MODELS.slice();
+      }
 
       const $ = (id) => document.getElementById('a-' + id);
       const errEl = $('error');
@@ -1017,19 +1245,92 @@
       const listEl = $('model-list');
       let activeItem = null;
       let activeFile = null;
-      for (const m of MODELS) {
-        const el = document.createElement('div');
-        el.className = 'model-item';
-        el.textContent = m.label;
-        el.addEventListener('click', () => {
-          if (activeItem) activeItem.classList.remove('active');
-          el.classList.add('active');
-          activeItem = el;
-          activeFile = m.file;
-          loadModel(m.file).catch(() => { el.classList.add('broken'); });
-        });
-        listEl.appendChild(el);
+
+      // Select + play a retargeted clip by name (e.g. 'walking') on whatever
+      // rig is currently loaded. Keeps the dropdown in sync so the Play/Pause
+      // controls operate on the same group. Returns false if no such clip is
+      // present on the current rig.
+      function playAnimationByName(name) {
+        const idx = currentAnimGroups.findIndex(g => (g.name || '') === name);
+        if (idx < 0) return false;
+        animSelect.value = String(idx);
+        const g = currentAnimGroups[idx];
+        if (activeAnimGroup && activeAnimGroup !== g) { try { activeAnimGroup.stop(); } catch (_) {} }
+        activeAnimGroup = g;
+        g.start($('anim-loop').checked, 1.0, g.from, g.to, false);
+        return true;
       }
+
+      // Clicking an animation clip previews it on a character. Because all rigs
+      // share one skeleton, ANY loaded character works; if none is loaded yet
+      // we drop in the shared mannequin first, then play.
+      async function selectAnimationClip(rel) {
+        errEl.textContent = '';
+        const name = rel.split('/').pop().replace(/\.glb$/i, '');
+        if (!currentSkeletons.length) await loadModel(MANNEQUIN_RIG_FILE);
+        if (!playAnimationByName(name)) {
+          errEl.textContent = `No "${name}" clip retargeted onto the current rig.`;
+        }
+      }
+
+      // Render discovered models as collapsible, categorised folders:
+      // Characters (rigs) and Animations (clips) come from the game's banks;
+      // Props and Buildings split out the rest. trees/* is browsed separately
+      // in the dedicated tree panel below. Returns the item to auto-select —
+      // the first character, so the stage opens on a real figure.
+      function buildModelList(files) {
+        const groups = new Map();
+        for (const rel of files) {
+          if (rel.startsWith('trees/')) continue;
+          const group = classifyModel(rel);
+          if (!groups.has(group)) groups.set(group, []);
+          groups.get(group).push(rel);
+        }
+        const rank = (g) => { const i = GROUP_ORDER.indexOf(g); return i === -1 ? GROUP_ORDER.length : i; };
+        const names = Array.from(groups.keys()).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+        let firstItem = null;
+        let preferredItem = null;
+        for (const group of names) {
+          const entries = groups.get(group).slice().sort();
+          const folder = document.createElement('div');
+          folder.className = 'folder';
+          folder.textContent = `${group} (${entries.length})`;
+          folder.addEventListener('click', () => folder.classList.toggle('collapsed'));
+          listEl.appendChild(folder);
+          const body = document.createElement('div');
+          body.className = 'folder-body';
+          listEl.appendChild(body);
+          for (const rel of entries) {
+            const el = document.createElement('div');
+            el.className = 'model-item';
+            const lbl = document.createElement('span');
+            lbl.className = 'label';
+            lbl.textContent = rel.split('/').pop();
+            el.appendChild(lbl);
+            el.addEventListener('click', () => {
+              if (activeItem) activeItem.classList.remove('active');
+              el.classList.add('active');
+              activeItem = el;
+              activeFile = rel;
+              const action = group === 'Animations' ? selectAnimationClip(rel) : loadModel(rel);
+              action.catch(() => { el.classList.add('broken'); });
+            });
+            body.appendChild(el);
+            if (!firstItem) firstItem = el;
+            if (!preferredItem && group === 'Characters') preferredItem = el;
+          }
+        }
+        return preferredItem || firstItem;
+      }
+
+      discoverModelFiles().then((files) => {
+        const first = buildModelList(files);
+        if (first) first.click();
+      }).catch((e) => {
+        console.warn('[asset-viewer] model discovery failed:', e);
+        const first = buildModelList(FALLBACK_MODELS);
+        if (first) first.click();
+      });
 
       const treeListEl = $('tree-list');
       const checkedRemovals = new Set();
@@ -1129,11 +1430,6 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
           if (m.material) m.material.wireframe = on;
         }
       });
-
-      if (MODELS.length) {
-        const first = listEl.firstChild;
-        if (first) first.click();
-      }
 
       return {
         pause() { engine.stopRenderLoop(); },
@@ -1391,7 +1687,7 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
     //  TAB SHELL — lazy-init + pause/resume. Only the active tab's renderer
     //  is left running; the others init on first activation then pause.
     // ════════════════════════════════════════════════════════════════════
-    const TABS = ['assets', 'lighting', 'editor', 'combat'];
+    const TABS = ['assets', 'lighting', 'editor', 'campaign', 'combat'];
     // Per-tab lifecycle handles ({pause, resume}) once a tab has been booted.
     const handles = {};
     // Lighting init is async; track its promise so resume() can await it.
@@ -1402,6 +1698,20 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
         handles.assets = initAssets();
       } else if (id === 'lighting') {
         initPromises.lighting = initLighting().then((h) => { handles.lighting = h; return h; });
+      } else if (id === 'campaign') {
+        // Campaign Progression — loads mission gate/reward fields, builds the DAG.
+        // Async (fetches mission JSON). "Open in Logic editor" jumps to the
+        // Mission Editor tab (the mission load itself is an upcoming enhancement).
+        initPromises.campaign = initCampaignProgression(document, {
+          onOpenMission: async (missionId) => {
+            controller.activate('editor');            // boots the editor if first open
+            const ed = handles.editor;
+            if (ed?.loadMissionById) {
+              const res = await ed.loadMissionById(missionId);
+              if (res?.ok !== false) ed.showMainTab?.('logic'); // land on the Logic graph
+            }
+          },
+        }).then((h) => { handles.campaign = h; return h; });
       } else if (id === 'combat') {
         // Async boot — the 3D mount inside the Combat tester needs the
         // Renderer3D's lazy Babylon import to resolve before resume() can
@@ -1433,8 +1743,18 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
       try { history.replaceState(null, '', url); } catch { /* same-origin guard or sandboxed iframe */ }
     }
 
+    // The mission currently open in the editor — shown in the menu bar (editor
+    // tab only) and the window title (Electron title bar follows document.title).
+    let openMissionTitle = null;
+    function setOpenMissionDisplay(activeTab) {
+      const el = document.getElementById('open-mission-name');
+      const show = activeTab === 'editor' && !!openMissionTitle;
+      if (el) { el.textContent = show ? openMissionTitle : ''; el.hidden = !show; }
+      document.title = show ? `Caleb's Studio — ${openMissionTitle}` : "Caleb's Studio";
+    }
+
     function onMissionChange(info) {
-      // info: { source: 'bundled'|'disk'|'wip'|'new', id?, wipId? }
+      // info: { source: 'bundled'|'disk'|'wip'|'new', id?, wipId?, title? }
       // 'bundled' → ?mission=<id> (catalog id); clear ?wip
       // 'wip'     → ?wip=<id>;   clear ?mission
       // 'disk'    → user loaded a JSON from disk; no shareable id — clear both
@@ -1447,9 +1767,11 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
       } else {
         updateUrlParams({ mission: null, wip: null });
       }
+      openMissionTitle = info.title ?? info.id ?? null;
+      setOpenMissionDisplay(controller.active);
     }
 
-    const TAB_LABELS = { assets: 'Assets', lighting: 'Lighting', editor: 'Mission Editor', combat: 'Combat' };
+    const TAB_LABELS = { assets: 'Assets', lighting: 'Lighting', editor: 'Mission Editor', campaign: 'Campaign', combat: 'Combat' };
 
     function showPanel(id) {
       // E7 — keep ?tool=<id> in sync with the active tab. Switching off the
@@ -1457,6 +1779,10 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
       const patch = { tool: id };
       if (id !== 'editor') { patch.mission = null; patch.wip = null; }
       updateUrlParams(patch);
+      // Remember the active tool across launches. The URL param works in the
+      // browser, but the Electron app always loads the bare admin-tools URL, so
+      // localStorage is what restores the last tab in Caleb's Studio.
+      try { localStorage.setItem('studio:tool', id); } catch { /* private mode */ }
       for (const tab of TABS) {
         const panel = document.getElementById(`${tab}-panel`);
         if (panel) panel.classList.toggle('active', tab === id);
@@ -1467,6 +1793,7 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
       }
       const label = document.getElementById('active-tool-name');
       if (label) label.textContent = TAB_LABELS[id] ?? id;
+      setOpenMissionDisplay(id); // mission name shows on the editor tab only
       // The File menu (Load / Save) + Undo/Redo are only meaningful for the
       // Mission Editor.
       const editorActive = (id === 'editor');
@@ -1545,10 +1872,8 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
       fileStatus.classList.toggle('err', !!res && res.ok === false);
       fileStatus.classList.toggle('ok', !!res && res.ok === true);
     }
-    document.getElementById('file-new')?.addEventListener('click', (e) => {
-      e.stopPropagation(); closeMenus();
-      if (handles.editor?.newMission) setFileStatus(handles.editor.newMission());
-    });
+    // (File ▸ New… removed — new missions are created from the Campaign tab,
+    //  which writes a stub mission JSON + registers it. See campaign-progression.)
     const fileLoadInput = document.getElementById('file-load-input');
     document.getElementById('file-load')?.addEventListener('click', (e) => {
       e.stopPropagation(); closeMenus();
@@ -1560,10 +1885,19 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
       if (!file || !handles.editor?.loadMissionFile) return;
       setFileStatus(await handles.editor.loadMissionFile(file));
     });
-    document.getElementById('file-save')?.addEventListener('click', (e) => {
+    document.getElementById('file-save')?.addEventListener('click', async (e) => {
       e.stopPropagation(); closeMenus();
-      if (handles.editor?.saveMission) setFileStatus(handles.editor.saveMission());
+      if (handles.editor?.saveMission) setFileStatus(await handles.editor.saveMission());
     });
+    // In Caleb's Studio (Electron) the bridge writes straight to the repo, so
+    // relabel the Save menu item to match what it actually does.
+    if (window.studioAPI?.writeFile) {
+      const saveBtn = document.getElementById('file-save');
+      if (saveBtn) {
+        saveBtn.innerHTML = 'Save&nbsp;&nbsp;⌘S';
+        saveBtn.title = 'Validate and write the mission into src/campaign/missions/ (⌘S)';
+      }
+    }
 
     // ── Undo / Redo (item 5) — top-bar buttons + keyboard shortcuts ─────────
     const tbUndoBtn = document.getElementById('tb-undo');
@@ -1592,6 +1926,9 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
       } else if (e.key === 'y' || e.key === 'Y') { // Windows-style redo
         e.preventDefault();
         handles.editor.redo?.();
+      } else if (e.key === 's' || e.key === 'S') { // Cmd/Ctrl-S → Save
+        e.preventDefault();
+        if (handles.editor?.saveMission) handles.editor.saveMission().then((r) => setFileStatus?.(r));
       }
     });
 
@@ -1628,7 +1965,12 @@ node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('assets/model
     // otherwise fall back to Assets. The others stay dormant until their tab is
     // first opened.
     const bootParams = parseToolParams(location.search);
-    controller.activate(bootParams.tool && KNOWN_TOOLS.includes(bootParams.tool) ? bootParams.tool : 'assets');
+    let storedTool = null;
+    try { storedTool = localStorage.getItem('studio:tool'); } catch { /* private mode */ }
+    const bootTool = (bootParams.tool && KNOWN_TOOLS.includes(bootParams.tool)) ? bootParams.tool
+                   : (storedTool && KNOWN_TOOLS.includes(storedTool)) ? storedTool
+                   : 'assets';
+    controller.activate(bootTool);
   </script>
 </body>
 </html>

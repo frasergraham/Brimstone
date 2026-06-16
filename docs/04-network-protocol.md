@@ -391,6 +391,7 @@ Player A (Hero)                Server                    Player B (Witch)
 | GET | `/api/async-games` | Token | Player's async games |
 | GET | `/api/environments` | No | Railway environment discovery |
 | GET | `/admin/api/game-stats/*` | Admin | Aggregate game analytics |
+| GET | `/admin/api/models` | Admin | Recursive `.glb` listing for the asset viewer |
 
 ## CORS Policy
 

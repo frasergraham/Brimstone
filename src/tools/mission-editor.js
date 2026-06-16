@@ -48,7 +48,6 @@ export const EditorTool = Object.freeze({
   // is gone — each tool paints exactly its kind.
   PAINT_ROAD: 'paint-road',           // path overlay: ROAD (wires roadDirs)
   PAINT_RIVER: 'paint-river',         // path overlay: RIVER (tree topology only)
-  SET_RESOURCE: 'set-resource',
   HIDDEN_SURVIVOR: 'hidden-survivor',
   // Exploration override (M4): pin a FIXED loot result on a tile so searching it
   // yields that result instead of the random loot roll. Authoring only — the
@@ -60,6 +59,10 @@ export const EditorTool = Object.freeze({
   ROAD_NODE: 'road-node',
   POWER_NODE: 'power-node',
   DELETE: 'delete',                   // clear a tile back to blank/base (item 5)
+  // Click a placed unit → adds an Actor node (OnSpawn/OnDeath) to the logic graph;
+  // click an empty hex → adds a Location node (a hex you can wire into Spawn, etc).
+  // Handled in the UI layer (mission-editor-ui onPaint), not _TOOL_DISPATCH.
+  ADD_TO_GRAPH: 'add-to-graph',
 });
 
 /** Enemy unit types the placement tool can stamp (runtime lowercase values). */
@@ -81,7 +84,6 @@ export const PATH_TOOL_OPTIONS = Object.freeze(['ROAD', 'RIVER']);
 export const ToolValueKind = Object.freeze({
   BASE: 'base',         // base-material swatches (grass/forest/dirt)
   STRUCTURE: 'structure', // building swatches + None/clear
-  RESOURCE: 'resource', // resource picker
   ENEMY: 'enemy',       // enemy unit-type picker
   SURVIVOR: 'survivor', // hidden-survivor roster picker (Any / a specific char)
   EXPLORE_OVERRIDE: 'explore-override', // fixed loot-result picker (M4)
@@ -206,7 +208,6 @@ const _TOOL_VALUE_KIND = Object.freeze({
   [EditorTool.PAINT_STRUCTURE]: ToolValueKind.STRUCTURE,
   [EditorTool.PAINT_ROAD]: ToolValueKind.NONE,
   [EditorTool.PAINT_RIVER]: ToolValueKind.NONE,
-  [EditorTool.SET_RESOURCE]: ToolValueKind.RESOURCE,
   [EditorTool.ENEMY_UNIT]: ToolValueKind.ENEMY,
   [EditorTool.HIDDEN_SURVIVOR]: ToolValueKind.SURVIVOR,
   [EditorTool.EXPLORE_OVERRIDE]: ToolValueKind.EXPLORE_OVERRIDE,
@@ -215,6 +216,7 @@ const _TOOL_VALUE_KIND = Object.freeze({
   [EditorTool.ROAD_NODE]: ToolValueKind.NONE,
   [EditorTool.POWER_NODE]: ToolValueKind.NONE,
   [EditorTool.DELETE]: ToolValueKind.NONE,
+  [EditorTool.ADD_TO_GRAPH]: ToolValueKind.NONE,
 });
 
 /** Which VALUE-panel kind a given tool exposes. Unknown tools → NONE. */
@@ -684,13 +686,6 @@ export function deleteTile(mapDef, { col, row }) {
   const def = _getOrCreateTileDef(mapDef, col, row);
   Object.assign(def, _blankTileDef(col, row));
   _unwireRoadConnections(mapDef, col, row);
-  return mapDef;
-}
-
-/** Set (or clear) a resource on a tile. */
-export function setResource(mapDef, { col, row }, resourceKey) {
-  const def = _getOrCreateTileDef(mapDef, col, row);
-  def.resource = resourceKey || null;
   return mapDef;
 }
 
@@ -1345,6 +1340,11 @@ export function resizeHandmadeMap(model, edge, delta) {
       col: t.col + dCol,
       row: t.row + dRow,
       roadDirs: (t.roadDirs ?? []).map(k => _shiftKey(k, dCol, dRow)),
+      // Building footprint links are "col,row" string keys too — shift them in
+      // lockstep with the tile coords, or the entrance/footprint pair points at
+      // stale cells and the save-time validator rejects it (item 9).
+      ...(t.footprintHexes ? { footprintHexes: t.footprintHexes.map(k => _shiftKey(k, dCol, dRow)) } : {}),
+      ...(t.buildingFootprintOf != null ? { buildingFootprintOf: _shiftKey(t.buildingFootprintOf, dCol, dRow) } : {}),
     }))
     .filter(t => keep(t.col, t.row))
     .map(t => ({ ...t, roadDirs: t.roadDirs.filter(k => _keyInBounds(k, newCols, newRows)) }));
@@ -1579,6 +1579,47 @@ export function moveStoryTrigger(meta, idx, dir) {
   const j = idx + dir;
   if (idx < 0 || idx >= list.length || j < 0 || j >= list.length) return meta;
   [list[idx], list[j]] = [list[j], list[idx]];
+  return meta;
+}
+
+// ── npcs / conversations list ops (campaign conversation system) ─────────────
+// Scripted NPCs and conversations ride in `meta` (populateFromMission keeps
+// every non-map field there), so these are plain list ops like the
+// storyTrigger ones above. The conversation markdown files themselves are
+// hand-authored under src/campaign/conversations/ — the editor only
+// references them by file id.
+
+/** Append a scripted NPC def. `entry` overrides fields. */
+export function addNpc(meta, entry = {}) {
+  if (!Array.isArray(meta.npcs)) meta.npcs = [];
+  meta.npcs.push({ id: `npc_${meta.npcs.length + 1}`, survivorName: null, col: 0, row: 0, ...entry });
+  return meta;
+}
+
+export function removeNpc(meta, idx) {
+  if (Array.isArray(meta.npcs) && idx >= 0 && idx < meta.npcs.length) {
+    meta.npcs.splice(idx, 1);
+  }
+  return meta;
+}
+
+/** Append a conversation def. `entry` overrides fields. */
+export function addConversation(meta, entry = {}) {
+  if (!Array.isArray(meta.conversations)) meta.conversations = [];
+  meta.conversations.push({
+    id: `conversation_${meta.conversations.length + 1}`,
+    file: '',
+    bindings: {},
+    onComplete: [],
+    ...entry,
+  });
+  return meta;
+}
+
+export function removeConversation(meta, idx) {
+  if (Array.isArray(meta.conversations) && idx >= 0 && idx < meta.conversations.length) {
+    meta.conversations.splice(idx, 1);
+  }
   return meta;
 }
 
@@ -1964,7 +2005,6 @@ const _TOOL_DISPATCH = {
   // returns { ok:true, warning:'' } for the applyAt contract.
   [EditorTool.PAINT_ROAD]: (m, hex) => paintRoad(m.mapDef, hex),
   [EditorTool.PAINT_RIVER]: (m, hex) => paintRiver(m.mapDef, hex),
-  [EditorTool.SET_RESOURCE]: (m, hex, pv) => setResource(m.mapDef, hex, pv.resource),
   [EditorTool.HIDDEN_SURVIVOR]: (m, hex, pv) => setHiddenSurvivor(m.mapDef, hex, pv.survivor),
   [EditorTool.EXPLORE_OVERRIDE]: (m, hex, pv) => setExploreOverride(m.mapDef, hex, pv.exploreOverride),
   [EditorTool.ENEMY_UNIT]: (m, hex, pv) => placeEnemyUnit(m.enemyUnits, hex, pv.enemyType),
@@ -2001,7 +2041,6 @@ export function createMissionEditor({ render } = {}) {
     // Default building so a fresh PAINT_STRUCTURE click places one; the UI's
     // "None" option clears (null ⇒ paintStructure removes the building).
     structure: _enumKey(BuildingType, BuildingType.HOUSE),
-    resource: _enumKey(ResourceType, ResourceType.HERBS),
     enemyType: ENEMY_UNIT_TYPES[0],
     // Hidden-survivor picker selection (roster `name`; null ⇒ "Any"/random).
     survivor: HIDDEN_SURVIVOR_ANY,
@@ -2050,6 +2089,11 @@ export function createMissionEditor({ render } = {}) {
     setMapDef(def) { snapshot(); mapDef = def; emit(); },
     getEnemyUnits: () => enemyUnits,
     setEnemyUnits(list) { snapshot(); enemyUnits = list; emit(); },
+    /** Mutate the enemyUnits array in place as ONE undo step (edit/delete a
+     *  placed unit's type/level, or splice it out — item 8 edit mode). */
+    editEnemyUnits(mutator) { snapshot(); mutator(enemyUnits); emit(); },
+    /** The placed enemy unit at a hex, or undefined. */
+    enemyUnitAt({ col, row }) { return enemyUnits.find(u => u.col === col && u.row === row); },
     getMeta: () => meta,
     setMeta(m) { snapshot(); meta = m; emit(); },
     /**

@@ -226,7 +226,7 @@ function migrate() {
   // [campaignDef, missionId, campaignId] tuples, in canonical campaign order.
   const targets = [];
   for (const m of tutorialCampaign.missions) {
-    targets.push([tutorialCampaign, m, 'prologue']);
+    targets.push([tutorialCampaign, m, 'calebs_hollow_prologue']);
   }
   for (const m of calebsHollowPrologue.missions) {
     targets.push([calebsHollowPrologue, m, 'calebs_hollow_prologue']);

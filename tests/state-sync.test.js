@@ -271,3 +271,60 @@ describe('state-sync — layered tile model round-trip (P1)', () => {
     }
   });
 });
+
+describe('state-sync — undiscovered-tile authored hidden-encounter fields round-trip', () => {
+  // An UNDISCOVERED tile carries the authored hidden-encounter payload directly
+  // (hiddenSurvivorId / hiddenSurvivorLevel / exploreOverride). Until the tile is
+  // explored, that data lives ONLY on the tile — so it MUST survive a mid-mission
+  // save/resume. Once discovered, triggerSurvivorEncounter clears the tile and the
+  // spawned entity carries the data instead (entity.ref/level already round-trip).
+  test('all three fields survive on an undiscovered tile; control tile stays clean', () => {
+    const state = freshState();
+
+    // Undiscovered hidden-survivor tile with every authored field set.
+    const hidden = new Tile(0, 0, TileType.GRASS);
+    hidden.hiddenSurvivor = true;
+    hidden.hiddenSurvivorId = 'martha';
+    hidden.hiddenSurvivorLevel = 3;
+    hidden.exploreOverride = { kind: 'resource', id: 'wood', amount: 2 };
+
+    // Control tile: a plain grass tile with none of the hidden-encounter fields.
+    const control = new Tile(1, 0, TileType.GRASS);
+
+    withTiles(state, [hidden, control]);
+
+    const restored = deserializeState(serializeState(state));
+    const rt = restored.tiles.get('0,0');
+    const ctl = restored.tiles.get('1,0');
+
+    // Undiscovered tile: every authored field survives identically.
+    assert.equal(rt.hiddenSurvivor,      true,     'hiddenSurvivor flag must survive');
+    assert.equal(rt.hiddenSurvivorId,    'martha', 'hiddenSurvivorId must round-trip');
+    assert.equal(rt.hiddenSurvivorLevel, 3,        'hiddenSurvivorLevel must round-trip');
+    assert.deepEqual(rt.exploreOverride, { kind: 'resource', id: 'wood', amount: 2 },
+      'exploreOverride must round-trip');
+
+    // Control tile: no spurious hidden-encounter data after round-trip.
+    assert.ok(!ctl.hiddenSurvivor,      'control tile must not gain hiddenSurvivor');
+    assert.ok(!ctl.hiddenSurvivorId,    'control tile must not gain hiddenSurvivorId');
+    assert.ok(!ctl.hiddenSurvivorLevel, 'control tile must not gain hiddenSurvivorLevel');
+    assert.ok(!ctl.exploreOverride,     'control tile must not gain exploreOverride');
+  });
+
+  test('discovered path unchanged — the spawned entity still carries ref + level', () => {
+    // After discovery the data has moved off the tile onto the entity. Confirm
+    // that entity-carried path (the part that already worked) does not regress.
+    const state = freshState();
+    const surv = createSurvivor(2, 2);
+    surv.owner = 'hero';
+    surv.ref = 'survivor_2_2';
+    surv.level = 4;
+    state.entities.push(surv);
+
+    const restored = deserializeState(serializeState(state));
+    const rt = restored.entities.find(e => e.id === surv.id);
+    assert.ok(rt, 'discovered survivor entity must survive round-trip');
+    assert.equal(rt.ref,   'survivor_2_2', 'entity ref must round-trip (discovered path)');
+    assert.equal(rt.level, 4,             'entity level must round-trip (discovered path)');
+  });
+});

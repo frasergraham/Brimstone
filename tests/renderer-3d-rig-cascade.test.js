@@ -15,8 +15,11 @@ import {
   fallbackRigCandidates,
   stripRootBoneTranslation,
   rebaseRootBoneY,
+  rootBoneTrackAverageY,
   MANNEQUIN_RIG_FILE,
+  LAZY_RIG_TYPES,
 } from '../src/renderer-3d.js';
+import { EntityType } from '../src/entities.js';
 
 function makeHipsGroup() {
   const keys = [{ value: { x: 5, y: 90, z: 3 } }, { value: { x: 7, y: 92, z: 1 } }];
@@ -48,6 +51,43 @@ describe('rebaseRootBoneY', () => {
     assert.equal(g._keys[0].value.y, 90, 'Y unchanged');
     assert.equal(g._keys[0].value.x, 0);
     assert.equal(g._keys[0].value.z, 0);
+  });
+});
+
+describe('rootBoneTrackAverageY — the rig\'s standing anchor', () => {
+  test('returns the mean hips Y of the clip', () => {
+    const g = makeHipsGroup(); // keys y 90 & 92
+    assert.equal(rootBoneTrackAverageY(g), 91);
+  });
+
+  test('returns null when there is no hips position track', () => {
+    assert.equal(rootBoneTrackAverageY(null), null);
+    assert.equal(rootBoneTrackAverageY({ targetedAnimations: [] }), null);
+    const rotOnly = { targetedAnimations: [{ target: { name: 'mixamorig:Hips' },
+      animation: { targetProperty: 'rotationQuaternion', getKeys: () => [{ value: {} }] } }] };
+    assert.equal(rootBoneTrackAverageY(rotOnly), null);
+  });
+
+  test('matches names with the .001 dedup suffix', () => {
+    const keys = [{ value: { x: 0, y: 10, z: 0 } }];
+    const g = { targetedAnimations: [{ target: { name: 'mixamorig:Hips.001' },
+      animation: { targetProperty: 'position', getKeys: () => keys } }] };
+    assert.equal(rootBoneTrackAverageY(g), 10);
+  });
+
+  // The zombie float regression: the zombie's embedded idle is a CROUCHED
+  // shamble (hips ~0.93) while its T-pose rest hip height is ~1.05. Anchoring
+  // the idle to the rest height scaled the whole crouch up ~13% and lifted the
+  // feet off the ground. Anchoring to the idle's own average instead must be
+  // an identity on Y — the authored stance is kept, only XZ drift is stripped.
+  test('rebasing a clip to its own track average keeps the authored stance', () => {
+    const keys = [{ value: { x: 0.05, y: 0.92, z: 0.02 } }, { value: { x: -0.03, y: 0.94, z: -0.01 } }];
+    const g = { targetedAnimations: [{ target: { name: 'mixamorig:Hips' },
+      animation: { targetProperty: 'position', getKeys: () => keys } }], _keys: keys };
+    rebaseRootBoneY(g, rootBoneTrackAverageY(g));
+    assert.ok(Math.abs(g._keys[0].value.y - 0.92) < 1e-9, 'crouch kept, not lifted to rest');
+    assert.ok(Math.abs(g._keys[1].value.y - 0.94) < 1e-9);
+    for (const k of g._keys) { assert.equal(k.value.x, 0); assert.equal(k.value.z, 0); }
   });
 });
 
@@ -169,6 +209,43 @@ describe('_ensureFallbackRig cascade', () => {
     r._ensureFallbackRig({ type: 'zombie' });
     assert.deepEqual(calls, ['zombie-idle.glb']);
   });
+
+  test('still kicks the type-specific rig when the mannequin is ALREADY loaded', () => {
+    // Regression: a zombie in a game where the mannequin loaded first (survivors
+    // before the witch's summons) must still load its own rig — not glom onto
+    // the mannequin. Previously _ensureFallbackRig bailed because
+    // _loadedFallbackRigFor returned the already-loaded mannequin.
+    const r = newRenderer();
+    r._rigSources.set(MANNEQUIN_RIG_FILE, makeRigSource('mannequin', { tintable: true }));
+    const calls = [];
+    r._loadFallbackRig = (file) => { calls.push(file); return Promise.resolve(null); };
+    r._ensureFallbackRig({ type: 'zombie' });
+    assert.deepEqual(calls, ['zombie-idle.glb']);
+  });
+});
+
+describe('_loadedFallbackRigFor — cascade preference', () => {
+  test('returns the type-specific rig once it is loaded', () => {
+    const r = newRenderer();
+    const zsrc = makeRigSource('zombie', { tintable: false });
+    r._rigSources.set('zombie-idle.glb', zsrc);
+    assert.equal(r._loadedFallbackRigFor({ type: 'zombie' }), zsrc);
+  });
+
+  test('returns null (waits) when the preferred rig is still loading, even if the mannequin is loaded', () => {
+    const r = newRenderer();
+    r._rigSources.set(MANNEQUIN_RIG_FILE, makeRigSource('mannequin', { tintable: true }));
+    // zombie-idle.glb not loaded and not missing → still loadable → wait.
+    assert.equal(r._loadedFallbackRigFor({ type: 'zombie' }), null);
+  });
+
+  test('falls through to the mannequin only after the preferred rig is confirmed missing', () => {
+    const r = newRenderer();
+    const msrc = makeRigSource('mannequin', { tintable: true });
+    r._rigSources.set(MANNEQUIN_RIG_FILE, msrc);
+    r._rigFileMissing.add('zombie-idle.glb');
+    assert.equal(r._loadedFallbackRigFor({ type: 'zombie' }), msrc);
+  });
 });
 
 function makeAnimGroup() {
@@ -180,61 +257,128 @@ function makeAnimGroup() {
   };
 }
 
-describe('_maybeToggleFallbackRigAnimation', () => {
-  test('plays the walk group while a unit using the rig is moving', () => {
+// Per-INSTANCE animation: each standee owns its own clip groups
+// (idle/walk/run/punch/…) and plays them on its own skeleton — the toggle
+// drives each clone's own groups, never a shared skeleton, so a moving unit
+// walks while idle siblings keep idling.
+function makeCloneStandee(keys = ['idle', 'walk', 'run']) {
+  const groups = {};
+  for (const k of keys) groups[k] = makeAnimGroup();
+  return { paladinClone: { groups, activeGroup: null, oneShotPlaying: false } };
+}
+const played = (g) => g.calls.some(c => c[0] === 'play' || c[0] === 'start');
+const stopped = (g) => g.calls.some(c => c[0] === 'stop');
+
+describe('_maybeToggleFallbackRigAnimation — per-instance clip groups', () => {
+  function setup(moveIds = []) {
     const r = newRenderer();
-    const idle = makeAnimGroup(), walk = makeAnimGroup();
-    const src = { cloneTag: 'zombie', idleGroup: idle, walkGroup: walk,
-      walkSpeedRatio: 2, activeGroup: 'idle' };
-    r._rigSources.set('zombie-idle.glb', src);
-    r._activeMoveIds = new Set(['z1']);
+    r._activeMoveIds = new Set(moveIds);
     r._activeLungeIds = new Set();
-    r.state = { entities: [{ id: 'z1', type: 'zombie' }] };
+    r._activeRunMoveIds = new Set();
+    return r;
+  }
+
+  test('only the MOVING unit walks; idle siblings keep idling', () => {
+    const r = setup(['z1']);
+    const mover = makeCloneStandee();
+    const sitter = makeCloneStandee();
+    r._entityStandees = new Map([['z1', mover], ['z2', sitter]]);
     r._maybeToggleFallbackRigAnimation();
-    assert.equal(src.activeGroup, 'walk');
-    assert.ok(walk.calls.some(c => c[0] === 'play' || c[0] === 'start'), 'walk started');
-    assert.ok(idle.calls.some(c => c[0] === 'stop'), 'idle stopped');
+    assert.equal(mover.paladinClone.activeGroup, 'walk', 'mover plays walk');
+    assert.ok(played(mover.paladinClone.groups.walk), 'mover walk started');
+    assert.equal(sitter.paladinClone.activeGroup, 'idle', 'sitter plays idle');
+    assert.ok(played(sitter.paladinClone.groups.idle), 'sitter idle started');
+    assert.ok(!played(sitter.paladinClone.groups.walk), 'sitter never walks');
   });
 
-  test('does NOT walk for a lunging unit — combat is a strike, not a walk', () => {
-    const r = newRenderer();
-    const idle = makeAnimGroup(), walk = makeAnimGroup();
-    const src = { cloneTag: 'zombie', idleGroup: idle, walkGroup: walk, activeGroup: 'idle' };
-    r._rigSources.set('zombie-idle.glb', src);
-    r._activeMoveIds = new Set();           // no real move
-    r._activeLungeIds = new Set(['z1']);    // mid-lunge (combat)
-    r.state = { entities: [{ id: 'z1', type: 'zombie' }] };
+  test('a moving unit reverts to idle when it stops', () => {
+    const r = setup([]); // nothing moving
+    const standee = makeCloneStandee();
+    standee.paladinClone.activeGroup = 'walk'; // was walking
+    r._entityStandees = new Map([['z1', standee]]);
     r._maybeToggleFallbackRigAnimation();
-    assert.equal(src.activeGroup, 'idle', 'stayed idle, did not walk');
-    assert.ok(!walk.calls.some(c => c[0] === 'play' || c[0] === 'start'), 'walk never started');
+    assert.equal(standee.paladinClone.activeGroup, 'idle');
+    assert.ok(played(standee.paladinClone.groups.idle), 'idle restarted');
+    assert.ok(stopped(standee.paladinClone.groups.walk), 'walk stopped');
   });
 
-  test('yields the rig while a punch is playing', () => {
-    const r = newRenderer();
-    const idle = makeAnimGroup(), walk = makeAnimGroup();
-    const src = { cloneTag: 'zombie', idleGroup: idle, walkGroup: walk,
-      activeGroup: 'punch', punchPlaying: true };
-    r._rigSources.set('zombie-idle.glb', src);
-    r._activeMoveIds = new Set(['z1']);
-    r._activeLungeIds = new Set();
-    r.state = { entities: [{ id: 'z1', type: 'zombie' }] };
+  test('a lunging (combat) unit does NOT walk — lunge is not a move', () => {
+    const r = setup([]); // not in _activeMoveIds
+    r._activeLungeIds = new Set(['z1']);
+    const standee = makeCloneStandee();
+    r._entityStandees = new Map([['z1', standee]]);
     r._maybeToggleFallbackRigAnimation();
-    assert.equal(src.activeGroup, 'punch', 'punch left untouched');
-    assert.ok(!walk.calls.length && !idle.calls.length, 'no group swapped mid-strike');
+    assert.equal(standee.paladinClone.activeGroup, 'idle', 'idles, does not walk');
   });
 
-  test('returns to idle when nothing is moving', () => {
-    const r = newRenderer();
-    const idle = makeAnimGroup(), walk = makeAnimGroup();
-    const src = { cloneTag: 'mannequin', idleGroup: idle, walkGroup: walk,
-      activeGroup: 'walk' };
-    r._rigSources.set('mannequin-idle.glb', src);
-    r._activeMoveIds = new Set();
-    r._activeLungeIds = new Set();
-    r.state = { entities: [{ id: 's1', type: 'survivor' }] };
+  test('a one-shot (punch/reaction) in flight locks the unit out of locomotion', () => {
+    const r = setup(['z1']); // would otherwise walk
+    const standee = makeCloneStandee();
+    standee.paladinClone.oneShotPlaying = true;
+    standee.paladinClone.activeGroup = 'punch';
+    r._entityStandees = new Map([['z1', standee]]);
     r._maybeToggleFallbackRigAnimation();
-    assert.equal(src.activeGroup, 'idle');
-    assert.ok(walk.calls.some(c => c[0] === 'stop'), 'walk stopped');
+    assert.equal(standee.paladinClone.activeGroup, 'punch', 'punch keeps the skeleton');
+    assert.ok(!played(standee.paladinClone.groups.walk), 'walk did not start');
+  });
+});
+
+describe('_startClonePunch — per-instance strike', () => {
+  test('plays the clone\'s own punch and silences its locomotion', () => {
+    const r = newRenderer();
+    const punch = makeAnimGroup();
+    const clone = { groups: { idle: makeAnimGroup(), walk: makeAnimGroup(), run: makeAnimGroup(), punch },
+      activeGroup: 'idle', oneShotPlaying: false, punchDurationSec: 1 };
+    const ok = r._startClonePunch(clone);
+    assert.equal(ok, true);
+    assert.equal(clone.oneShotPlaying, true);
+    assert.equal(clone.activeGroup, 'punch');
+    assert.ok(played(punch), 'punch started');
+    assert.ok(stopped(clone.groups.idle), 'idle stopped');
+    assert.ok(stopped(clone.groups.walk), 'walk stopped');
+  });
+
+  test('no-ops when the clone has no punch clip cloned in yet', () => {
+    const r = newRenderer();
+    const clone = { groups: { idle: makeAnimGroup() }, activeGroup: 'idle', oneShotPlaying: false };
+    assert.equal(r._startClonePunch(clone), false);
+    assert.equal(clone.oneShotPlaying, false);
+  });
+});
+
+describe('preload scope — survivors are lazy', () => {
+  test('LAZY_RIG_TYPES contains the survivor type', () => {
+    assert.ok(LAZY_RIG_TYPES.has(EntityType.SURVIVOR));
+  });
+
+  test('_preloadCharacterRigs loads the mannequin + leaders/summons but NOT survivors', async () => {
+    const r = newRenderer();
+    const calls = [];
+    r._loadFallbackRig      = (file) => { calls.push(file); return Promise.resolve(null); };
+    r._loadWalkingAnimation = () => Promise.resolve(null);
+    r._retargetWalkOntoRig  = () => null;
+    await r._preloadCharacterRigs('assets');
+    assert.ok(calls.includes(MANNEQUIN_RIG_FILE), 'mannequin preloaded');
+    assert.ok(calls.includes('zombie-idle.glb'),  'summon (zombie) preloaded');
+    assert.ok(!calls.includes('survivor-idle.glb'), 'survivor NOT preloaded up front');
+  });
+
+  test('preloadEntityRig loads a survivor rig on demand', async () => {
+    const r = newRenderer();
+    const calls = [];
+    r._loadFallbackRig      = (file) => { calls.push(file); return Promise.resolve(null); };
+    r._loadWalkingAnimation = () => Promise.resolve(null);
+    r._retargetWalkOntoRig  = () => null;
+    await r.preloadEntityRig({ type: 'survivor' });
+    assert.deepEqual(calls, ['survivor-idle.glb']);
+  });
+
+  test('preloadEntityRig is a no-op for mannequin-backed types', async () => {
+    const r = newRenderer();
+    const calls = [];
+    r._loadFallbackRig = (file) => { calls.push(file); return Promise.resolve(null); };
+    await r.preloadEntityRig({ type: 'mannequin' });
+    assert.deepEqual(calls, []);
   });
 });
 
@@ -261,5 +405,52 @@ describe('_buildRigClone tint', () => {
     assert.ok(clone, 'clone built');
     const child = clone.childMeshes[0];
     assert.equal(child.material.albedoColor, null, 'no tint applied');
+  });
+});
+
+// ── _buildRigClone multi-primitive skeleton binding ─────────────────────────
+// Regression for the "walk and idle blended / zombie idle-slides" bug. The
+// zombie mesh ships as TWO skinned primitives (Ch10_primitive0 + _primitive1).
+// mesh.clone() copies the SOURCE skeleton ref onto each clone; the per-unit
+// skeleton must be reassigned to ALL skinned primitives, not just the primary —
+// otherwise the secondary primitive stays on the source skeleton (which runs the
+// source idle) and that half of the unit idles while the other half walks.
+describe('_buildRigClone — multi-primitive skeleton binding', () => {
+  function makeSkinnedSrcMesh(name, srcSkeleton) {
+    return {
+      name, skeleton: srcSkeleton, parent: null,
+      // Babylon's clone() carries the source skeleton ref onto the clone.
+      clone(n) {
+        return {
+          name: n, skeleton: srcSkeleton, parent: null, isPickable: true,
+          material: makeFakeMaterial(`${n}_mat`), setEnabled() {}, dispose() {},
+        };
+      },
+      setEnabled() {},
+    };
+  }
+
+  test('binds EVERY skinned primitive to the per-unit skeleton, not just the primary', () => {
+    const r = newRenderer();
+    const srcSkeleton  = { name: 'srcSkel',  bones: [] };
+    const unitSkeleton = { name: 'unitSkel', bones: [] };
+    const prim0 = makeSkinnedSrcMesh('Ch10_primitive0', srcSkeleton);
+    const prim1 = makeSkinnedSrcMesh('Ch10_primitive1', srcSkeleton);
+    const src = {
+      mesh: prim0, meshes: [prim0, prim1], skeleton: srcSkeleton, idleGroup: null,
+      transformNodes: [], scale: 1, feetOffset: 0, cloneTag: 'zombie', tintable: false,
+    };
+    r._cloneRigSkeleton    = () => ({ skeleton: unitSkeleton, byName: new Map() });
+    r._cloneAllClipsOntoUnit = () => {}; // skip clip cloning (needs full Babylon)
+
+    const clone = r._buildRigClone({ id: 'z1', type: 'zombie' }, null, src, {});
+    assert.ok(clone, 'clone built');
+    const skinned = clone.childMeshes.filter(m => m.skeleton);
+    assert.equal(skinned.length, 2, 'both primitives are present and skinned');
+    for (const m of skinned) {
+      assert.equal(m.skeleton, unitSkeleton,
+        `${m.name} must bind to the per-unit skeleton (was the source idle skeleton)`);
+      assert.notEqual(m.skeleton, srcSkeleton, `${m.name} must NOT stay on the source skeleton`);
+    }
   });
 });

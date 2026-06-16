@@ -27,22 +27,7 @@
         <div id="mm-games-list"></div>
       </div>
 
-      <div class="setup-buttons" style="flex-direction:column;align-items:center;gap:0.4rem;margin-top:0.75rem">
-        <button id="btn-new-game"    class="setup-btn primary" style="width:200px">New Game</button>
-        <button id="btn-how-to-play" class="setup-btn" style="width:200px">How to Play</button>
-        <button id="btn-options"     class="setup-btn" style="width:200px">Options</button>
-        <button id="btn-replays"     class="setup-btn" style="width:200px">Replays</button>
-      </div>
-
-      <div style="margin-top:1.25rem;text-align:center">
-        <a href="/admin" class="admin-link" id="admin-link" style="display:none">Admin</a>
-      </div>
-    </div>
-
-    <!-- New Game submenu -->
-    <div id="setup-step-newgame" class="setup-card" style="display:none">
-      <h1 class="title" style="font-size:2rem">NEW GAME</h1>
-
+      <!-- New-game mode buttons (flattened from the former New Game submenu) -->
       <div class="ng-section-label" style="margin-top:0.75rem">Local Single Player</div>
       <div class="setup-buttons" style="flex-direction:column;align-items:center;gap:0.5rem;margin-top:0.4rem;margin-bottom:0">
         <button id="btn-ng-campaign" class="setup-btn" style="width:260px;text-align:center">
@@ -67,168 +52,16 @@
         </button>
       </div>
 
-      <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
-        <button id="btn-newgame-back" class="setup-btn">← Back</button>
-      </div>
-    </div>
-
-    <!-- Replays — top-level screen showing all completed games -->
-    <div id="setup-step-replays" class="setup-card" style="display:none">
-      <h1 class="title" style="font-size:2rem">REPLAYS</h1>
-      <div id="mm-replays-section" style="margin-top:0.5rem">
+      <!-- Replays — completed games available for full playback -->
+      <div id="mm-replays-section" class="mm-games-box" style="margin-top:1.5rem">
+        <div class="mm-games-header">
+          <span class="active-games-label">Replays</span>
+        </div>
         <div id="mm-replays-list"></div>
       </div>
-      <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
-        <button id="btn-replays-back" class="setup-btn">← Back</button>
-      </div>
-    </div>
 
-    <!-- How to Play / Play Reference -->
-    <div id="setup-step-howtoplay" class="setup-card setup-card-wide" style="display:none">
-      <h1 class="title" style="font-size:2rem">HOW TO PLAY</h1>
-      <div style="text-align:center;margin-bottom:0.75rem">
-        <button id="btn-play-tutorial" class="setup-btn" style="width:180px">Play the Tutorial</button>
-      </div>
-      <div class="howtoplay-body">
-
-        <details class="htp-section" open>
-          <summary class="htp-heading">Basic Concepts</summary>
-          <p class="htp-intro">A turn-based hex strategy game set in cursed colonial Caleb's Hollow.</p>
-
-          <p>Two asymmetric factions clash across a procedurally-generated map:</p>
-          <table class="htp-table">
-            <tr><td><span class="hero-col">⚔ Hero</span></td><td>Explores buildings, recruits survivors, and fortifies positions. Survivors grant extra actions each round.</td></tr>
-            <tr><td><span class="witch-col">✦ Witch</span></td><td>Summons undead minions and golems, and seizes Power Nodes. Minions grant extra actions each round.</td></tr>
-          </table>
-
-          <p style="margin-top:0.6rem">The game follows an <b>8-round day/night cycle</b> that shifts the balance between factions — daytime favors the Hero, nighttime favors the Witch.</p>
-
-          <p>Each round uses <b>simultaneous planning</b>: both sides independently queue their actions, then all plans are resolved together. You never wait for a turn — both factions act at once.</p>
-        </details>
-
-        <details class="htp-section">
-          <summary class="htp-heading">Win Conditions</summary>
-          <div class="htp-two-col">
-            <div>
-              <div class="htp-faction hero-col">⚔ Hero wins by:</div>
-              <ul>
-                <li>Slaying the Witch</li>
-                <li>Holding more Power Nodes at 4 scoring checkpoints</li>
-              </ul>
-            </div>
-            <div>
-              <div class="htp-faction witch-col">✦ Witch wins by:</div>
-              <ul>
-                <li>Slaying the Hero</li>
-                <li>Seizing all Power Nodes</li>
-                <li>Accumulating 4 scoring points</li>
-              </ul>
-            </div>
-          </div>
-        </details>
-
-        <details class="htp-section">
-          <summary class="htp-heading">Day / Night Cycle <span class="htp-dim">(8 rounds per cycle)</span></summary>
-          <table class="htp-table">
-            <tr>
-              <td>🌅 Dawn</td>
-              <td><span class="hero-col">Hero +1 bonus action.</span><br>Scoring checkpoint. Attrition damage increases each cycle.</td>
-            </tr>
-            <tr>
-              <td>☀ Day <span class="htp-dim">(×3)</span></td>
-              <td><span class="hero-col">Hero +1 bonus action.</span></td>
-            </tr>
-            <tr>
-              <td>🌇 Dusk</td>
-              <td>Scoring checkpoint.</td>
-            </tr>
-            <tr>
-              <td>🌙 Night <span class="htp-dim">(×3)</span></td>
-              <td><span class="witch-col">Witch +1 bonus action. All witch units +2 ATK.</span><br>Hero survivors caught in the open take attrition damage.</td>
-            </tr>
-          </table>
-
-          <p class="htp-sub-heading">Scoring</p>
-          <p>At each Dawn and Dusk, whichever faction controls more Power Nodes scores <b>+1 point</b>. Ties score nothing. The first faction to reach <b>4 cumulative points</b> wins.</p>
-          <p>If a faction controls <b>every</b> Power Node at a scoring checkpoint, they win instantly — regardless of the point total.</p>
-
-          <p class="htp-sub-heading">Attrition</p>
-          <p>At night, hero survivors caught in the open take attrition damage that rises each cycle. Keep your forces sheltered during the night.</p>
-        </details>
-
-        <details class="htp-section">
-          <summary class="htp-heading">Power Nodes ⛧</summary>
-          <p>Cursed power nodes are scattered across the map. They serve two purposes:</p>
-
-          <table class="htp-table">
-            <tr><td>Scoring</td><td>The faction holding more nodes scores a point at each Dawn and Dusk.</td></tr>
-            <tr><td>Bonus Actions</td><td>Each node your faction controls grants <b>+1 bonus action</b> during planning. Controlling multiple nodes dramatically increases your tempo.</td></tr>
-          </table>
-        </details>
-
-        <details class="htp-section">
-          <summary class="htp-heading">Actions</summary>
-          <table class="htp-table">
-            <tr><td>Move</td><td>Step to an adjacent hex (2 hexes with a horse).</td></tr>
-            <tr><td>Explore</td><td>Uncover loot, weapons, or survivors in buildings.</td></tr>
-            <tr><td>Attack Hex</td><td>Attack any adjacent hex. Works through fog of war — hits a random enemy if multiple occupy the hex, skips if empty.</td></tr>
-            <tr><td>Guard</td><td>Take a defensive stance. Each use adds a charge. When an enemy acts nearby, a charge is consumed for an automatic reactive strike.</td></tr>
-            <tr><td>Fortify</td><td>Hero only. Spend 🪵 Wood (+1 DEF) or ⚙ Metal (+2 DEF) to fortify your hex, up to +4 DEF.</td></tr>
-            <tr><td>Summon</td><td>Witch only. Spend resources to summon a minion or golem.</td></tr>
-            <tr><td>Use Item</td><td>Herbs (+2 HP) · Food (+1 action) · Silver (+1 ATK) · Scripture (ward).</td></tr>
-            <tr><td>Equip</td><td>Free. Equip a found weapon for permanent stat bonuses.</td></tr>
-          </table>
-        </details>
-
-        <details class="htp-section">
-          <summary class="htp-heading">Combat</summary>
-          <p>Both sides roll dice, add their stats and any modifiers, then compare totals:</p>
-
-          <table class="htp-table" style="margin-bottom:0.5rem">
-            <tr><td>Hit</td><td>Attack &gt; Defense → <b>1 damage</b></td></tr>
-            <tr><td>Crush</td><td>Attack ≥ 2× Defense → <b>2 damage</b></td></tr>
-            <tr><td>Counter</td><td>Defense ≥ 2× Attack → <b>1 damage to the attacker</b></td></tr>
-          </table>
-
-          <p class="htp-sub-heading">Modifiers</p>
-          <table class="htp-table">
-            <tr><td>Night Bonus</td><td>All witch units +2 ATK during Night</td></tr>
-            <tr><td>Gang-up</td><td>Each adjacent ally adds a bonus die (max 3)</td></tr>
-            <tr><td>Fortification</td><td>Up to +4 DEF from fortified terrain</td></tr>
-            <tr><td>Fatigue</td><td>-1 DEF per 2 defenses this round (hero-side only)</td></tr>
-            <tr><td>Silver</td><td>+1 ATK (consumable, one use)</td></tr>
-            <tr><td>Inspire</td><td>+1 ATK (survivor ability)</td></tr>
-          </table>
-
-          <p class="htp-sub-heading">Weapons</p>
-          <table class="htp-table">
-            <tr><td>Sword</td><td>+2 ATK</td></tr>
-            <tr><td>Axe</td><td>+1 ATK, +1 DEF</td></tr>
-            <tr><td>Shield</td><td>+2 DEF</td></tr>
-            <tr><td>Bow</td><td>+1 ATK</td></tr>
-            <tr><td>Dagger</td><td>+1 ATK</td></tr>
-            <tr><td>Staff</td><td>+1 ATK, +2 bonus ATK vs undead</td></tr>
-          </table>
-
-          <p style="margin-top:0.5rem" class="htp-dim">Fortification level decreases by 1 when the defender takes damage.</p>
-        </details>
-
-        <details class="htp-section">
-          <summary class="htp-heading">Fog of War</summary>
-          <p>Active when any AI is present. Enemies outside your sight range are hidden.</p>
-
-          <table class="htp-table">
-            <tr><td>Day</td><td>Sight range 3</td></tr>
-            <tr><td>Dawn / Dusk</td><td>Sight range 2</td></tr>
-            <tr><td>Night</td><td>Sight range 1</td></tr>
-          </table>
-
-          <p style="margin-top:0.4rem">SCOUT survivors extend sight by 1.</p>
-        </details>
-
-      </div>
-      <div class="setup-buttons" style="margin-top:1.5rem;margin-bottom:0">
-        <button id="btn-howtoplay-back" class="setup-btn">← Back</button>
+      <div style="margin-top:1.25rem;text-align:center">
+        <a href="/admin" class="admin-link" id="admin-link" style="display:none">Admin</a>
       </div>
     </div>
 
@@ -239,6 +72,38 @@
       <div id="campaign-select-list" class="campaign-select-list"></div>
       <div class="setup-buttons" style="margin-top:1rem">
         <button id="btn-campaign-select-back" class="setup-btn">&larr; Back</button>
+      </div>
+    </div>
+
+    <!-- Campaign: Save-Slot Picker (opens after a chapter is chosen) -->
+    <div id="setup-step-campaign-slot" class="setup-card setup-card-wide" style="display:none">
+      <h1 id="campaign-slot-title" class="title" style="font-size:2rem;margin-bottom:0.5rem">CHOOSE A SAVE SLOT</h1>
+      <div class="setup-lore"><p>Each slot holds an independent playthrough.</p></div>
+      <div id="campaign-slot-list" class="campaign-slot-list"></div>
+      <div class="setup-buttons" style="margin-top:1rem">
+        <button id="btn-campaign-slot-back" class="setup-btn">&larr; Back</button>
+      </div>
+    </div>
+
+    <!-- Campaign: Progress (between-mission landing — party + mission list) -->
+    <div id="setup-step-campaign-progress" class="setup-card setup-card-wide" style="display:none">
+      <h1 id="campaign-progress-title" class="title" style="font-size:2rem;margin-bottom:0.5rem">CAMPAIGN</h1>
+      <div class="campaign-progress-toggle">
+        <button id="cprog-toggle-party" class="cprog-toggle-btn active" data-pane="party">&larr; Party</button>
+        <span class="cprog-dots">
+          <span class="cprog-dot active" data-pane="party"></span>
+          <span class="cprog-dot" data-pane="missions"></span>
+        </span>
+        <button id="cprog-toggle-missions" class="cprog-toggle-btn" data-pane="missions">Missions &rarr;</button>
+      </div>
+      <div id="campaign-progress-body" class="campaign-progress-body show-party">
+        <div id="campaign-progress-party" class="campaign-progress-pane cprog-party-pane"></div>
+        <div id="campaign-progress-missions" class="campaign-progress-pane cprog-missions-pane"></div>
+      </div>
+      <div class="setup-buttons" style="margin-top:1rem">
+        <button id="btn-campaign-progress-back" class="setup-btn">&larr; Back</button>
+        <button id="btn-campaign-progress-startover" class="setup-btn" style="color:var(--clr-dim);font-size:0.85rem">Start Over</button>
+        <button id="btn-campaign-progress-unlock" class="setup-btn admin-btn">🔓 Unlock All</button>
       </div>
     </div>
 
@@ -320,6 +185,7 @@
               <option value="standard" selected>Standard</option>
               <option value="regional">Regional</option>
               <option value="campaign">Campaign</option>
+              <option value="battle">Battle</option>
             </select>
           </div>
           <div class="qp-option-row">
@@ -329,6 +195,14 @@
               <option value="3" selected>3</option>
               <option value="4">4</option>
               <option value="5">5</option>
+            </select>
+          </div>
+          <div class="qp-option-row">
+            <span class="qp-option-label">AI Difficulty</span>
+            <select id="select-ai-difficulty" class="setup-select">
+              <option value="easy">Easy</option>
+              <option value="normal" selected>Normal</option>
+              <option value="hard">Hard</option>
             </select>
           </div>
           <div class="qp-option-row" id="ai-debug-option">
@@ -478,11 +352,13 @@
       </div>
     </div>
 
-    <!-- Options -->
-    <div id="setup-step-options" class="setup-card" style="display:none">
-      <h1 class="title" style="font-size:2rem">OPTIONS</h1>
+    <!-- Account -->
+    <div id="setup-step-account" class="setup-card" style="display:none">
+      <h1 class="title" style="font-size:2rem">ACCOUNT</h1>
 
-      <!-- Server settings — only visible in Electron desktop app -->
+      <!-- Server settings — only visible in the Electron desktop app. Relocated here
+           from the (removed) Options card; shown regardless of sign-in state so the
+           server URL can be configured before signing in. -->
       <div id="electron-server-settings" style="display:none">
         <div class="acct-section">
           <div class="acct-label">Server URL</div>
@@ -504,44 +380,6 @@
           <p id="electron-app-version" style="font-size:0.85rem;color:var(--muted);margin:0.25rem 0 0"></p>
         </div>
       </div>
-
-      <!-- Default game speed -->
-      <div class="acct-section" style="text-align:left">
-        <div class="acct-label">Default Game Speed</div>
-        <p style="font-size:0.8rem;color:var(--muted);margin:0.25rem 0 0.5rem">
-          Sets the playback speed when entering any game. You can still change it in-game.
-        </p>
-        <div id="options-speed-buttons" style="display:flex;flex-direction:column;gap:0.25rem">
-          <button class="speed-option" data-mode="cinematic">
-            <span class="speed-option-icon">🎬</span>
-            <span class="speed-option-label">Full</span>
-            <span class="speed-option-desc">All combat details, dialog for important battles (default)</span>
-          </button>
-          <button class="speed-option" data-mode="fast">
-            <span class="speed-option-icon">⏩</span>
-            <span class="speed-option-label">Summary</span>
-            <span class="speed-option-desc">Cinematic pace, no popups</span>
-          </button>
-          <button class="speed-option" data-mode="vfast">
-            <span class="speed-option-icon">⏭</span>
-            <span class="speed-option-label">Speedy</span>
-            <span class="speed-option-desc">Summary at 1.5× speed</span>
-          </button>
-        </div>
-      </div>
-
-      <div id="options-empty-msg" class="setup-lore" style="display:none">
-        <p>No options are available yet.<br>Check back in a future update.</p>
-      </div>
-
-      <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0">
-        <button id="btn-options-back" class="setup-btn">&larr; Back</button>
-      </div>
-    </div>
-
-    <!-- Account -->
-    <div id="setup-step-account" class="setup-card" style="display:none">
-      <h1 class="title" style="font-size:2rem">ACCOUNT</h1>
 
       <!-- Not signed in -->
       <div id="acct-signed-out">
@@ -660,10 +498,11 @@
         <div class="cg-option-row">
           <span class="cg-option-label">Map size</span>
           <select id="cg-map-size" class="setup-select">
-            <option value="skirmish">Skirmish (9×9)</option>
-            <option value="standard" selected>Standard (13×11)</option>
-            <option value="regional">Regional (17×13)</option>
-            <option value="campaign">Campaign (21×15)</option>
+            <option value="skirmish">Skirmish (10×10)</option>
+            <option value="standard" selected>Standard (14×14)</option>
+            <option value="regional">Regional (19×19)</option>
+            <option value="campaign">Campaign (23×23)</option>
+            <option value="battle">Battle (42×42)</option>
           </select>
         </div>
         <div class="cg-option-row">
@@ -680,6 +519,14 @@
           <select id="cg-fog" class="setup-select">
             <option value="none">None</option>
             <option value="partial" selected>Partial</option>
+          </select>
+        </div>
+        <div class="cg-option-row">
+          <span class="cg-option-label">AI difficulty</span>
+          <select id="cg-ai-difficulty" class="setup-select">
+            <option value="easy">Easy</option>
+            <option value="normal" selected>Normal</option>
+            <option value="hard">Hard</option>
           </select>
         </div>
         <div class="cg-option-row">
@@ -766,9 +613,9 @@
       <div class="cg-option-row">
         <span class="cg-option-label">Map size</span>
         <select id="async-map-size" class="setup-select">
-          <option value="skirmish">Skirmish (9×9)</option>
-          <option value="standard" selected>Standard (13×11)</option>
-          <option value="regional">Regional (17×13)</option>
+          <option value="skirmish">Skirmish (10×10)</option>
+          <option value="standard" selected>Standard (14×14)</option>
+          <option value="regional">Regional (19×19)</option>
         </select>
       </div>
       <div class="cg-option-row">
@@ -881,8 +728,8 @@
       <div id="turn-info"></div>
       <div class="header-buttons">
         <button id="mission-info-btn" class="header-icon-btn" title="Mission Info" style="display:none">📜</button>
-        <button id="replay-turn-btn" class="header-icon-btn" title="Replay last turn" style="display:none">▶</button>
-        <button id="end-turn-btn" class="header-icon-btn end-turn-header" title="Submit Plan">↩</button>
+        <button id="replay-turn-btn" class="header-icon-btn replay-last-btn" title="Replay last turn" style="display:none">↺<span class="rt-label">Last Turn</span></button>
+        <button id="end-turn-btn" class="header-icon-btn end-turn-header" data-tip="Lock in your plan — it resolves alongside your opponent’s">↩</button>
         <button id="plan-return-btn" class="header-icon-btn end-turn-header" title="Return to menu" style="display:none">← Menu</button>
       </div>
     </header>
@@ -890,6 +737,7 @@
     <div id="game-menu-backdrop" class="game-menu-backdrop" style="display:none">
       <div id="game-menu-modal" class="game-menu-modal">
         <h2 class="game-menu-title">Menu</h2>
+        <button id="menu-sound-btn" class="game-menu-btn">🔊 Sound: On</button>
         <button id="menu-replay-turn-btn" class="game-menu-btn" style="display:none">Replay Last Turn</button>
         <button id="menu-quit-btn" class="game-menu-btn">Return to Main Menu</button>
         <button id="menu-resign-btn" class="game-menu-btn menu-resign" style="display:none">Resign from Game</button>
@@ -940,6 +788,10 @@
         <div id="fps-counter">--</div>
         <div id="poly-counter">--</div>
         <div id="cam-counter">--</div>
+        <!-- Off-screen conversation indicator: edge-clamped arrow pointing at
+             a conversation happening outside the viewport (fixed-camera mode
+             only). Positioned/rotated by ui.showOffscreenArrow(). -->
+        <div id="offscreen-arrow" hidden aria-hidden="true">➤</div>
         <!-- Replay timeline overlay: transparent step-by-step sequence of the
              round being replayed. Slides left as steps advance. -->
         <div id="replay-timeline">
@@ -948,9 +800,9 @@
         <!-- Replay progress: one dot per card (active filled). The < > scrub
              arrows flank the dots, appearing only in end-of-turn review. -->
         <div id="replay-progress">
-          <button id="replay-review-prev" class="replay-arrow" title="Previous card">◀</button>
+          <button id="replay-review-prev" class="replay-arrow" data-tip="Previous turn card">◀</button>
           <div id="replay-dots"></div>
-          <button id="replay-review-next" class="replay-arrow" title="Next card">▶</button>
+          <button id="replay-review-next" class="replay-arrow" data-tip="Next turn card">▶</button>
         </div>
         <!-- Unified replay control bar (bottom-center): used for both the
              post-turn resolution replay and full-game replay. Back/Stop are
@@ -959,23 +811,27 @@
           <div class="replay-block">
             <div class="replay-block-title">Controls</div>
             <div class="replay-block-btns">
-              <button id="replay-back-btn"      class="replay-ctrl-btn" title="Previous round">Back</button>
-              <button id="replay-redo-btn"      class="replay-ctrl-btn" title="Replay this turn">↺</button>
-              <button id="replay-next-btn"      class="replay-ctrl-btn" title="Next step">Next</button>
-              <button id="replay-playpause-btn" class="replay-ctrl-btn" title="Auto-play (run every step)">AutoPlay</button>
-              <button id="replay-stop-btn"      class="replay-ctrl-btn replay-stop" title="Stop">Stop</button>
+              <button id="replay-back-btn"      class="replay-ctrl-btn" data-tip="Rewind to the previous round's replay">Back</button>
+              <button id="replay-redo-btn"      class="replay-ctrl-btn" data-tip="Replay this turn from the start">↺</button>
+              <button id="replay-next-btn"      class="replay-ctrl-btn" data-tip="Advance one step">Next</button>
+              <button id="replay-playpause-btn" class="replay-ctrl-btn" data-tip="Auto-play — run every step without stopping">AutoPlay</button>
+              <button id="replay-stop-btn"      class="replay-ctrl-btn replay-stop" data-tip="Skip to the end of the replay">Stop</button>
             </div>
           </div>
           <div class="replay-block">
             <div class="replay-block-title">Camera</div>
             <div class="replay-block-btns">
-              <button id="replay-camera-btn" class="replay-ctrl-btn replay-camera" title="Camera: Follow the action">Follow</button>
+              <button id="replay-camera-btn" class="replay-ctrl-btn replay-camera" data-tip="Camera follows the action — tap to keep it fixed instead">Follow</button>
             </div>
           </div>
-          <div class="replay-block">
+          <!-- Combat-detail section (Full/Summary/Speedy) — HIDDEN for now while we
+               trial a single playback presentation; drop style="display:none" (and
+               the matching hidden Options section + the _loadDefaultSpeed pin in
+               ui.js) to bring it back. -->
+          <div class="replay-block" style="display:none">
             <div class="replay-block-title">Detail</div>
             <div class="replay-block-btns">
-              <button id="replay-detail-btn" class="replay-ctrl-btn replay-detail" title="Combat detail: Full">Full</button>
+              <button id="replay-detail-btn" class="replay-ctrl-btn replay-detail" data-tip="Combat detail level — how much each battle pauses to show">Full</button>
             </div>
           </div>
         </div>
@@ -1047,8 +903,10 @@
         <div id="plan-steps" class="plan-steps"></div>
         <div id="plan-food-row" class="plan-food-row"></div>
         <div class="plan-panel-footer">
-          <button id="plan-clear-btn" class="plan-btn secondary">✕ Clear</button>
-          <button id="plan-submit-btn" class="plan-btn primary">✓ Submit</button>
+          <button id="plan-clear-btn" class="plan-btn secondary" data-tip="Discard every queued action and plan this round again">✕ Clear</button>
+          <button id="plan-autoguard-btn" class="plan-btn secondary" data-tip="Fill the remaining action budget with Guard, leader first">🛡 Auto-Guard</button>
+          <button id="plan-aiassist-btn" class="plan-btn secondary" style="display:none" data-tip="Let the AI generate this round's plan for you to review, then Submit">🤖 AI Plan</button>
+          <button id="plan-submit-btn" class="plan-btn primary" data-tip="Lock in your plan — it resolves alongside your opponent's">✓ Submit</button>
           <button id="plan-menu-btn" class="plan-btn secondary" style="display:none">← Return to Menu</button>
         </div>
         <div id="plan-players" class="plan-players" style="display:none"></div>
@@ -1242,8 +1100,11 @@
 
   <!-- Floating tooltip card shown during tutorial steps -->
   <div id="tutorial-tooltip" class="tutorial-tooltip tutorial-tooltip--center" style="display:none">
+    <!-- Glyph filled in by MissionConductor._syncVoiceBtn (monochrome speaker SVG). -->
+    <button class="tut-voice-btn" title="Mute narration" style="display:none"></button>
     <div class="tut-title"></div>
     <div class="tut-body"></div>
+    <a href="#" class="tut-skip-link" style="display:none">Skip hints</a>
     <button class="tut-next-btn">Got it →</button>
   </div>
 

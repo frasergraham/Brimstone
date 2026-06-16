@@ -716,6 +716,74 @@ describe('G1 — addCombatReadout lifecycle', () => {
       'attacker-side readout never spawns a result label — defender owns the story');
   });
 
+  test('summaryOnly: icon shows the FINAL total at spawn, no step floaters, no ally pulse', async () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInst({ ids: ['e1', 'a1'] });
+    const iconTex = inst._unitIconBadges.get('e1').tex;
+    const pulses = [];
+    inst.pulseAllyIcon = (id) => pulses.push(id);
+    const B = inst._babylon;
+    const planes = [];
+    const OrigMeshBuilder = B.MeshBuilder;
+    B.MeshBuilder = {
+      CreatePlane(name, opts, scene) {
+        const p = OrigMeshBuilder.CreatePlane(name, opts, scene);
+        p.createName = name;
+        planes.push(p);
+        return p;
+      },
+    };
+    const sched = fakeScheduler();
+    // Picked die (6) came from ally a1 (own die 3) AND there are flat bonuses
+    // — in normal mode this stacks 2 step floaters and pulses the ally. With
+    // summaryOnly both are skipped and the icon latches the total (9).
+    const result = {
+      hit: true, attackRoll: 9, defenseRoll: 4,
+      breakdown: {
+        atkPool: [3, 6], atkBaseDie: 6,
+        defPool: [4], defBaseDie: 4,
+        atkGangupFlat: 2, phaseBonus: 1,
+        atkAllyDice: [{ allyId: 'a1', die: 6 }],
+      },
+    };
+    const p = inst.addCombatReadout('e1', 'attacker', result,
+      { setTimeoutFn: sched, summaryOnly: true });
+    assert.ok(iconTex.drawnValues.some(v => v.includes('9')),
+      'icon shows the final total (9) from the very first paint');
+    sched.runAll();
+    await p;
+    assert.equal(planes.filter(pl => /readoutFloater_/.test(pl.createName)).length, 0,
+      'no bonus-step floaters in summaryOnly mode');
+    assert.equal(pulses.length, 0, 'no picked-ally pulse in summaryOnly mode');
+  });
+
+  test('summaryOnly: defender still spawns its result label', async () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInst({ ids: ['e1'] });
+    const B = inst._babylon;
+    const planes = [];
+    const OrigMeshBuilder = B.MeshBuilder;
+    B.MeshBuilder = {
+      CreatePlane(name, opts, scene) {
+        const p = OrigMeshBuilder.CreatePlane(name, opts, scene);
+        p.createName = name;
+        planes.push(p);
+        return p;
+      },
+    };
+    const sched = fakeScheduler();
+    const p = inst.addCombatReadout('e1', 'defender',
+      { hit: true, damage: 1, attackRoll: 7, defenseRoll: 3,
+        breakdown: { atkPool: [6], atkBaseDie: 6, defPool: [3], defBaseDie: 3,
+                     defGangupFlat: 1 } },
+      { setTimeoutFn: sched, summaryOnly: true });
+    sched.runAll();
+    await p;
+    assert.equal(planes.filter(pl => /readoutResult_/.test(pl.createName)).length, 1,
+      'defender result label still tells the story in summaryOnly mode');
+    assert.equal(planes.filter(pl => /readoutFloater_/.test(pl.createName)).length, 0);
+  });
+
   test('result label sits ABOVE all step floaters (topmost slot)', () => {
     if (!('document' in globalThis)) globalThis.document = {};
     const inst = makeInst({ ids: ['e1'] });
@@ -1227,10 +1295,20 @@ describe('G1 — modifier floater labels have NO emoji glyphs', () => {
 // ─── G1 v2 — resultLabel pure helper ────────────────────────────────────────
 
 describe('G1 v2 — resultLabel', () => {
-  test('attacker side: damage>=2 → CRUSH, hit+damage<2 → HIT', () => {
-    assert.equal(resultLabel({ hit: true, damage: 2 }, 'attacker'), 'CRUSH');
-    assert.equal(resultLabel({ hit: true, damage: 1 }, 'attacker'), 'HIT');
-    assert.equal(resultLabel({ hit: true }, 'attacker'), 'HIT'); // damage falls back to 1
+  test('attacker side: crush is a ROLL outcome (dmgTier/ratio), not "≥2 damage"', () => {
+    // dmgTier is authoritative: tier ≥ 2 → CRUSH regardless of damage amount.
+    assert.equal(resultLabel({ hit: true, breakdown: { dmgTier: 2 } }, 'attacker'), 'CRUSH');
+    assert.equal(resultLabel({ hit: true, breakdown: { dmgTier: 3 } }, 'attacker'), 'CRUSH');
+    // A plain hit (tier 1) that rolled 2+ damage is still just a HIT — this was
+    // the bug: "≥2 damage" mislabelled ordinary hits as CRUSH.
+    assert.equal(resultLabel({ hit: true, damage: 2, breakdown: { dmgTier: 1 } }, 'attacker'), 'HIT');
+    assert.equal(resultLabel({ hit: true, breakdown: { dmgTier: 1 } }, 'attacker'), 'HIT');
+    // No breakdown → fall back to the roll ratio (attackRoll ≥ 2× defenseRoll).
+    assert.equal(resultLabel({ hit: true, attackRoll: 6, defenseRoll: 3 }, 'attacker'), 'CRUSH');
+    assert.equal(resultLabel({ hit: true, attackRoll: 5, defenseRoll: 3 }, 'attacker'), 'HIT');
+    assert.equal(resultLabel({ hit: true }, 'attacker'), 'HIT'); // no rolls → HIT
+    // Ranged hits never crush, even at a 2× roll ratio.
+    assert.equal(resultLabel({ hit: true, ranged: true, attackRoll: 8, defenseRoll: 3 }, 'attacker'), 'HIT');
   });
 
   test('attacker side: lost + counterDmg>0 → COUNTERED; lost no counter → a block-word variant', () => {
@@ -1255,9 +1333,13 @@ describe('G1 v2 — resultLabel', () => {
     assert.equal(a, b, 'same rolls → same word');
   });
 
-  test('defender side: lost (took hit) + damage>=2 → CRUSHED; lost damage<2 → HIT', () => {
-    assert.equal(resultLabel({ hit: true, damage: 2 }, 'defender'), 'CRUSHED');
-    assert.equal(resultLabel({ hit: true, damage: 1 }, 'defender'), 'HIT');
+  test('defender side: crush tier → CRUSHED; ordinary hit (even 2+ dmg) → HIT', () => {
+    assert.equal(resultLabel({ hit: true, breakdown: { dmgTier: 2 } }, 'defender'), 'CRUSHED');
+    assert.equal(resultLabel({ hit: true, damage: 2, breakdown: { dmgTier: 1 } }, 'defender'), 'HIT');
+    assert.equal(resultLabel({ hit: true, breakdown: { dmgTier: 1 } }, 'defender'), 'HIT');
+    // Roll-ratio fallback when no breakdown.
+    assert.equal(resultLabel({ hit: true, attackRoll: 6, defenseRoll: 3 }, 'defender'), 'CRUSHED');
+    assert.equal(resultLabel({ hit: true, attackRoll: 5, defenseRoll: 3 }, 'defender'), 'HIT');
   });
 
   test('atk/attacker alias accepted', () => {

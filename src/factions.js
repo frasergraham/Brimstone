@@ -13,6 +13,7 @@ import { hexKey, getNeighbors } from './hex.js';
 import { AI_HERO_NAMES, AI_WITCH_NAMES } from './ai-names.js';
 import { Side, getOpposingSide as _opposingSide } from './sides.js';
 import { ITEMS } from './items.js';
+import { DAMAGE_SCALE } from './balance.js';
 import { triggerSurvivorEncounter } from './survivor-discovery.js';
 
 // ── Base Class ──────────────────────────────────────────────────────────────
@@ -158,9 +159,10 @@ export class Faction {
 
   /**
    * Create the entity discovered when this faction explores a hidden survivor tile.
+   * `level` is the optional authored spawn level (default 1) for campaign tiles.
    * @returns {object} entity
    */
-  createDiscoveryEntity(_col, _row, _ownerId, _state, _forcedSurvivorId) {
+  createDiscoveryEntity(_col, _row, _ownerId, _state, _forcedSurvivorId, _level) {
     throw new Error('Subclass must implement createDiscoveryEntity');
   }
 
@@ -180,10 +182,16 @@ export class Faction {
   /**
    * Per-item equip gate. Defaults to the blanket canEquipWeapon() check;
    * subclasses can refine by item category (e.g. rogue: ranged-only).
-   * Pass an unknown id and you get false.
+   * Weapons that name `wielderFactions` (e.g. Magic Bolt) are restricted to
+   * those factions regardless of the blanket check. Pass an unknown id and
+   * you get false.
    * @param {string} itemId — ITEMS registry id
    */
-  canEquipWeaponItem(_itemId) { return this.canEquipWeapon(); }
+  canEquipWeaponItem(itemId) {
+    const item = ITEMS[itemId];
+    if (item?.wielderFactions && !item.wielderFactions.includes(this.id)) return false;
+    return this.canEquipWeapon();
+  }
 
   /** Does this entity currently have a horse equipped? */
   hasHorse(entity) {
@@ -318,16 +326,26 @@ export class Faction {
   get innateLeaderAbilities() { return []; }
 
   /**
+   * Weapon every leader of this faction starts with equipped (ITEMS id),
+   * or null for an unarmed/melee leader. Range is weapon-derived, so this
+   * is also how a leader gets its innate reach (Rogue → bow = range 3,
+   * Witch/Necromancer → magic_bolt = range 2). Applied by createLeader();
+   * deserialize bypasses it and restores the saved weapon instead.
+   */
+  get innateLeaderWeapon() { return null; }
+
+  /**
    * Create the faction leader entity. Subclasses override `_buildLeader`
    * to pick the correct EntityType factory; the base class handles the
-   * faction-innate ability push so every leader gets the right abilities
-   * regardless of which concrete factory runs.
+   * faction-innate ability push and starting-weapon equip so every leader
+   * is born correctly regardless of which concrete factory runs.
    */
   createLeader(col, row, ownerId, state) {
     const e = this._buildLeader(col, row, ownerId, state);
     for (const id of this.innateLeaderAbilities) {
       if (!e.abilities.includes(id)) e.abilities.push(id);
     }
+    if (this.innateLeaderWeapon) e.equipWeapon(this.innateLeaderWeapon);
     return e;
   }
 
@@ -389,14 +407,17 @@ export class HeroFaction extends Faction {
       if (hasBuilding(heroTile) && hero.hp < hero.maxHp) {
         const b = heroTile.building;
         if (b === BuildingType.INN) {
-          hero.heal(3);
-          state.addLog(`🏨 ${hero.displayName} rests at the inn. (+3 HP, now ${hero.hp}/${hero.maxHp})`, 'hero', state.playerColorFor(hero));
+          const amt = 3 * DAMAGE_SCALE;
+          hero.heal(amt);
+          state.addLog(`🏨 ${hero.displayName} rests at the inn. (+${amt} HP, now ${hero.hp}/${hero.maxHp})`, 'hero', state.playerColorFor(hero));
         } else if (b === BuildingType.CHURCH) {
-          hero.heal(3);
-          state.addLog(`⛪ ${hero.displayName} prays at the chapel. (+3 HP, now ${hero.hp}/${hero.maxHp})`, 'hero', state.playerColorFor(hero));
+          const amt = 3 * DAMAGE_SCALE;
+          hero.heal(amt);
+          state.addLog(`⛪ ${hero.displayName} prays at the chapel. (+${amt} HP, now ${hero.hp}/${hero.maxHp})`, 'hero', state.playerColorFor(hero));
         } else {
-          hero.heal(1);
-          state.addLog(`🏠 ${hero.displayName} rests in shelter. (+1 HP, now ${hero.hp}/${hero.maxHp})`, 'hero', state.playerColorFor(hero));
+          const amt = 1 * DAMAGE_SCALE;
+          hero.heal(amt);
+          state.addLog(`🏠 ${hero.displayName} rests in shelter. (+${amt} HP, now ${hero.hp}/${hero.maxHp})`, 'hero', state.playerColorFor(hero));
         }
       }
     }
@@ -412,8 +433,9 @@ export class HeroFaction extends Faction {
           obj => obj.hexes.some(h => h.col === hero.col && h.row === hero.row)
         );
         if (onNode) {
-          hero.heal(1);
-          state.addLog(`✨ ${hero.displayName} draws power from the node. (+1 HP, now ${hero.hp}/${hero.maxHp})`, 'hero', state.playerColorFor(hero));
+          const amt = 1 * DAMAGE_SCALE;
+          hero.heal(amt);
+          state.addLog(`✨ ${hero.displayName} draws power from the node. (+${amt} HP, now ${hero.hp}/${hero.maxHp})`, 'hero', state.playerColorFor(hero));
         }
       }
     }
@@ -443,7 +465,12 @@ export class HeroFaction extends Faction {
           if (Math.random() < 0.33) {
             const hex = freeHex();
             if (hex) {
-              const s = createSurvivor(hex.col, hex.row, hero.ownerId, state);
+              // Node-spawned survivors are procedural, so the spawn level is 1
+              // today — but the level is plumbed end-to-end (createSurvivor →
+              // descriptor) so a future chapter can scale them up by raising
+              // this single value.
+              const spawnLevel = 1;
+              const s = createSurvivor(hex.col, hex.row, hero.ownerId, state, null, spawnLevel);
               s.owner = 'hero';
               if (Math.random() < 0.5) s.items['horse'] = 1;
               state.entities.push(s);
@@ -456,6 +483,7 @@ export class HeroFaction extends Faction {
                 title: s.title,
                 hp: s.hp, maxHp: s.maxHp,
                 attack: s.getAttack(), defense: s.getDefense(),
+                level: s.level || 1,
                 abilityLabel: s.abilityLabel,
                 color: s.color,
               });
@@ -469,8 +497,8 @@ export class HeroFaction extends Faction {
   }
 
   // Discovery & Loot
-  createDiscoveryEntity(col, row, ownerId, state = null, forcedSurvivorId = null) {
-    const s = createSurvivor(col, row, ownerId, state, forcedSurvivorId);
+  createDiscoveryEntity(col, row, ownerId, state = null, forcedSurvivorId = null, level = 1) {
+    const s = createSurvivor(col, row, ownerId, state, forcedSurvivorId, level || 1);
     s.owner = 'hero';
     return s;
   }
@@ -487,6 +515,7 @@ export class HeroFaction extends Faction {
         name: entity.name, title: entity.title,
         hp: entity.hp, maxHp: entity.maxHp,
         attack: entity.getAttack(), defense: entity.getDefense(),
+        level: entity.level || 1,
         abilityLabel: entity.abilityLabel,
         color: entity.color,
       },
@@ -524,11 +553,24 @@ export class HeroFaction extends Faction {
   // reads actor.hasAbility('sound_horn').
   get innateLeaderAbilities() { return ['sound_horn']; }
 
+  // The Paladin starts with a sword (melee, +2 ATK over base 2).
+  get innateLeaderWeapon() { return 'sword'; }
+
   // AI Names
   getAINamePool() { return AI_HERO_NAMES; }
 }
 
 // ── Witch Faction ───────────────────────────────────────────────────────────
+
+// ── Graveyard passive spawns (June 2026 design pass) ─────────────────────────
+// The hero's income (survivor recruitment) compounds while every witch unit
+// costs an action to summon. Graveyards mirror that income: a free zombie
+// rises at the end of every full day-cycle, capped so the swarm stays small.
+// Standard games only — battle mode and campaign missions keep their own
+// tuned economies. Values validated by `node scripts/headless.js 500 standard`
+// (see the introducing commit for the balance delta).
+export const GRAVEYARD_SPAWN_INTERVAL = 8;  // rounds — one full dawn→night cycle
+export const GRAVEYARD_ZOMBIE_CAP     = 2;  // max concurrent witch zombies
 
 export class WitchFaction extends Faction {
   get id()         { return 'witch'; }
@@ -536,9 +578,67 @@ export class WitchFaction extends Faction {
   get leaderType() { return EntityType.WITCH; }
   get side()       { return Side.NIGHT; }
 
+  applyEndOfRoundEffects(state) {
+    this._applyGraveyardSpawns(state);
+  }
+
+  _applyGraveyardSpawns(state) {
+    // endRound() fires effects BEFORE the round counter advances, so
+    // state.round is the round that just completed.
+    if (state.round <= 0 || state.round % GRAVEYARD_SPAWN_INTERVAL !== 0) return;
+    // Standard games only (battle/campaign economies are tuned separately).
+    if (state.gameMode !== 'standard' || state.victoryDelegate || state.noWitchMission) return;
+
+    // The rising dead serve the night side's leader.
+    const leaders = state.entities.filter(
+      e => e.alive && e.owner === this.id && isLeaderType(e.type)
+    );
+    if (leaders.length === 0) return;
+
+    for (const [, t] of state.tiles) {
+      if (t.building !== BuildingType.GRAVEYARD) continue;
+
+      const zombies = state.entities.filter(
+        e => e.alive && e.owner === this.id && e.type === EntityType.ZOMBIE
+      );
+      if (zombies.length >= GRAVEYARD_ZOMBIE_CAP) return;
+
+      const spawn = this._graveyardSpawnHex(state, t);
+      if (!spawn) continue;
+
+      // Nearest leader claims the zombie (matters for NvN budgets/colors).
+      const leader = leaders.reduce((best, l) => {
+        const d  = Math.abs(l.col - t.col) + Math.abs(l.row - t.row);
+        const bd = Math.abs(best.col - t.col) + Math.abs(best.row - t.row);
+        return d < bd ? l : best;
+      });
+      const zombie = createZombie(spawn.col, spawn.row, leader.ownerId, state);
+      state.entities.push(zombie);
+      state.addLog('🪦 The graveyard stirs — a zombie claws free of the earth!', 'witch');
+    }
+  }
+
+  /** Graveyard entrance if no enemy stands on it; else a free neighbour. */
+  _graveyardSpawnHex(state, tile) {
+    const enemyAt = (col, row) => state.entities.some(
+      e => e.alive && e.owner !== this.id && e.col === col && e.row === row
+    );
+    if (!enemyAt(tile.col, tile.row)) return { col: tile.col, row: tile.row };
+    for (const n of getNeighbors(tile.col, tile.row)) {
+      const nt = state.tiles.get(hexKey(n.col, n.row));
+      if (!nt || isRiver(nt) || nt.buildingFootprintOf || hasBuilding(nt)) continue;
+      if (!enemyAt(n.col, n.row)) return { col: n.col, row: n.row };
+    }
+    return null;
+  }
+
   // Action Budget
   get actionCap()    { return 8; }
-  get unitBonusCap() { return 3; }
+  // Raised 3 → 4 in the weapons overhaul: ranged weapons only benefit the
+  // hero's roster (summons/zombies/golems can't equip), so the witch needs
+  // to convert more of its swarm into actions to keep contesting nodes —
+  // the lever scales with unit count, recentring NvN without skewing 1v1.
+  get unitBonusCap() { return 4; }
 
   isFavorablePhase(phase) {
     return phase === Phase.NIGHT;
@@ -613,6 +713,16 @@ export class WitchFaction extends Faction {
   // reads actor.hasAbility('summon').
   get innateLeaderAbilities() { return ['summon']; }
 
+  // The Witch wields the Magic Bolt (her innate ranged attack, range 2).
+  get innateLeaderWeapon() { return 'magic_bolt'; }
+
+  // The Witch can equip only her faction-restricted weapon (Magic Bolt) —
+  // never looted swords/bows. canEquipWeapon() stays false so the generic
+  // equip flow doesn't surface mundane arms.
+  canEquipWeaponItem(itemId) {
+    return ITEMS[itemId]?.wielderFactions?.includes(this.id) === true;
+  }
+
   // AI Names
   getAINamePool() { return AI_WITCH_NAMES; }
 }
@@ -643,6 +753,9 @@ export class RogueFaction extends HeroFaction {
   // so returning [] actually strips the inherited ability.
   get innateLeaderAbilities() { return []; }
 
+  // The Rogue starts with a bow (range 3) instead of the Paladin's sword.
+  get innateLeaderWeapon() { return 'bow'; }
+
   // Sight: +1 hex over paladin in every phase, with the same scout bonus.
   // Calls super so future tweaks to HeroFaction's day/dawn/night base
   // values flow through automatically.
@@ -650,10 +763,13 @@ export class RogueFaction extends HeroFaction {
     return super.getSightRange(phase, hasScout) + 1;
   }
 
-  // Cannot wield melee weapons. Bow / crossbow are fine.
+  // Cannot wield melee weapons. Bow / crossbow / firearms are fine, but
+  // faction-restricted weapons (e.g. Magic Bolt) are still off-limits.
   canEquipWeaponItem(itemId) {
     if (!this.canEquipWeapon()) return false;
-    return ITEMS[itemId]?.category === 'ranged';
+    const item = ITEMS[itemId];
+    if (item?.wielderFactions && !item.wielderFactions.includes(this.id)) return false;
+    return item?.category === 'ranged';
   }
 
   // Exploration never turns up empty. On a 'nothing' roll, re-roll once;
@@ -703,6 +819,8 @@ export class CaptainFaction extends HeroFaction {
   get name()       { return 'Captain'; }
   get leaderType() { return EntityType.CAPTAIN; }
   isStub()         { return true; }
+  // Stub melee leader — no starting weapon (keeps base stats unchanged).
+  get innateLeaderWeapon() { return null; }
   _buildLeader(col, row, ownerId, state = null) {
     return createCaptain(col, row, ownerId, state);
   }
@@ -726,6 +844,9 @@ export class BruteFaction extends WitchFaction {
   // minion-only summons, building survivor auto-zombify, and a meaty
   // splash blast that fires on every melee hit (knocks enemies back,
   // skips friendlies).
+
+  // Melee bruiser — no Magic Bolt (overrides the WitchFaction default).
+  get innateLeaderWeapon() { return null; }
 
   _buildLeader(col, row, ownerId, state = null) {
     return createBrute(col, row, ownerId, state);

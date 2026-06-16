@@ -15,9 +15,6 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
 
 import {
   Renderer3D,
@@ -27,9 +24,6 @@ import {
   RUNNING_MODEL_FILE,
   computeRootStrideLength,
 } from '../src/renderer-3d.js';
-
-const _here = dirname(fileURLToPath(import.meta.url));
-const _renderer3dSrc = readFileSync(join(_here, '..', 'src', 'renderer-3d.js'), 'utf8');
 
 // ── selectMoveAnimKind (pure switch) ────────────────────────────────────────
 
@@ -183,6 +177,4 @@ describe('computeRootStrideLength — running clip stride', () => {
     assert.equal(computeRootStrideLength(null), 0);
   });
 });
-
-// ── source-level guards (the Babylon-touching wiring we can't run headless) ──
 

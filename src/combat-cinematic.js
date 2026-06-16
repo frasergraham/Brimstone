@@ -134,9 +134,18 @@ export async function run3DCombatCardHold({
     return ally ? { id, col: ally.col, row: ally.row } : null;
   };
   if (typeof renderer.applyCombatPositioning === 'function') {
+    // Centre the defender cluster on the defender's LIVE hex, not its pre-move
+    // battle snapshot — a unit that moved this turn before being attacked would
+    // otherwise warp back to its turn-start hex for the readout then slide back.
+    // The attacker lunge already tracks the live hex; this keeps them together.
+    const liveDef = state?.entities?.find(e => e.id === targetSnap.id && e.alive);
+    // The attacker's live hex reserves its edge of the defender's hex so no
+    // ally is assigned the spot the attacker's lunge freezes on.
+    const liveAtk = state?.entities?.find(e => e.id === actorSnap.id && e.alive);
     renderer.applyCombatPositioning(
       {
-        defender: { id: targetSnap.id, col: targetSnap.col, row: targetSnap.row },
+        defender: { id: targetSnap.id, col: liveDef?.col ?? targetSnap.col, row: liveDef?.row ?? targetSnap.row },
+        attacker: { id: actorSnap.id, col: liveAtk?.col ?? actorSnap.col, row: liveAtk?.row ?? actorSnap.row },
         attackAllies:  atkAllyIds.map(lookupAlly).filter(Boolean),
         defenseAllies: defAllyIds.map(lookupAlly).filter(Boolean),
       },

@@ -66,6 +66,36 @@ export function mmSortRows(rows, nowMs = Date.now()) {
   return rows.slice().sort((a, b) => mmUrgencyScore(a, nowMs) - mmUrgencyScore(b, nowMs));
 }
 
+/**
+ * Collapse campaign rows so the games list shows ONE row per campaign — the
+ * slot touched most recently. A campaign can produce several rows (a
+ * mid-mission save per slot, plus a 'campaign-next' per slot); keeping them all
+ * would clutter the list and bury the row the player actually wants. Rows are
+ * keyed by `_campaignId`; the one with the largest `updated_at` wins (ties keep
+ * the first seen). Non-campaign rows pass through untouched, and order is
+ * preserved at each campaign's first appearance. Returns a new array.
+ */
+export function mmDedupeCampaignRows(rows) {
+  const CAMPAIGN_KINDS = new Set(['local-campaign', 'campaign-next']);
+  const bestByCampaign = new Map(); // campaignId → chosen row
+  const out = [];
+  for (const r of rows) {
+    if (!CAMPAIGN_KINDS.has(r.kind) || r._campaignId == null) {
+      out.push(r);
+      continue;
+    }
+    const prev = bestByCampaign.get(r._campaignId);
+    if (!prev) {
+      bestByCampaign.set(r._campaignId, r);
+      out.push(r);
+    } else if ((r.updated_at ?? 0) > (prev.updated_at ?? 0)) {
+      out[out.indexOf(prev)] = r;
+      bestByCampaign.set(r._campaignId, r);
+    }
+  }
+  return out;
+}
+
 const PHASE_LABELS = {
   dawn:  '🌅 Dawn',
   day:   '☀ Day',
@@ -114,11 +144,14 @@ export function mmFormatRow(row) {
   } else if (row.kind === 'local-campaign') {
     // Campaign mission-in-progress
     parts.push('Campaign');
+    if (row._slotIndex != null) parts.push(`Slot ${row._slotIndex}`);
+    if (row._missionTitle) parts.push(row._missionTitle);
     if (row.round != null) parts.push(`Round ${row.round}`);
     if (row.phase) parts.push(PHASE_LABELS[row.phase] ?? row.phase);
   } else if (row.kind === 'campaign-next') {
     // Campaign with a next mission ready to play
     parts.push('Campaign');
+    if (row._slotIndex != null) parts.push(`Slot ${row._slotIndex}`);
     if (row._nextMissionTitle) parts.push(row._nextMissionTitle);
   } else if (row.kind === 'completed-sp') {
     // Completed local game (for the Replays page)

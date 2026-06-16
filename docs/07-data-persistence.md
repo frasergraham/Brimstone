@@ -234,11 +234,12 @@ state.tiles (Map)           →       tiles: [{ key, col, row, type,
                                       building, road, explored,
                                       resource, fortifyLevel,
                                       roadDirs: [...],
+                                      blockedSlots: [...],
                                       footprintHexes: [...],
                                       buildingFootprintOf }, ...]
 
 state.entities (Entity[])   →       entities: [{ id, type, owner,
-                                      ownerId, col, row, hp, maxHp,
+                                      ownerId, col, row, slot, hp, maxHp,
                                       attack, defense, weapon,
                                       items, name, title, ... }, ...]
 
@@ -255,6 +256,7 @@ Reconstructs a full `GameState` with proper prototypes. The current `SAVE_VERSIO
 
 - **pre-`SAVE_VERSION=2`** — rewrites entity types of `'hero'` to `'paladin'` (the entity-type rename in the faction-expansion work; see `docs/design/faction-expansion.md`).
 - **pre-`SAVE_VERSION=6` building footprints** — any tile that carries a `building` but has an empty/missing `footprintHexes` is auto-migrated to the two-hex compound (see [05-game-systems.md → Building Footprints](05-game-systems.md#building-footprints)). Buildings are processed in **sorted-key order** (row, then col) and each picks an eligible adjacent footprint via `pickFootprintNeighbor()` with **no `rand`** — i.e. the first eligible neighbour in odd-r direction order `0..5`. This is fully deterministic, so every client/server reconstructs the same footprints from the same legacy save. **Orphans** (a building with no eligible adjacent hex — wedged against river/edge/other buildings) are warned once and left as a valid 1-hex building (`footprintHexes: []`).
+- **pre-sub-hex-slots** — saves with no `blockedSlots` on tiles have it derived after the footprint migration via the same `deriveBlockedSlots()` helper map-gen uses, so a resumed legacy game gates capacity identically to a fresh map (bridges in particular regain their reduced cap). Entities with no `slot` default to the centre (`0`). Both are deterministic — no `rand`.
 
 ```
 1. Create throwaway GameState (for prototype chain)
@@ -412,7 +414,7 @@ Players can link email and Game Center identities for cross-device access. Magic
 
 ## JSON Mission Format (offline/campaign)
 
-Campaign missions are **on-disk content**, not database rows: each mission is a JSON file under `src/campaign/missions/*.json` (8 migrated missions — the 7 Caleb's Hollow prologue missions + the tutorial). This is **offline/campaign-only** — campaigns run through `src/main.js`; `server/lobby.js` has no campaign path, so the loader has **no online parity concern** and never touches `state-sync.js` or the DB.
+Campaign missions are **on-disk content**, not database rows: each mission is a JSON file under `src/campaign/missions/*.json` (8 missions — the guided `tutorial` first, then the 7 Caleb's Hollow Chapter 1 story missions, all in the `calebs_hollow_prologue` campaign). This is **offline/campaign-only** — campaigns run through `src/main.js`; `server/lobby.js` has no campaign path, so the loader has **no online parity concern** and never touches `state-sync.js` or the DB.
 
 ### `schema: 1` format
 
@@ -448,7 +450,7 @@ A mission JSON mirrors the runtime mission-def shape verbatim for every field *e
 
 ### Registration (`src/campaign/campaign-registry.js`)
 
-The campaign defs (`prologue`, `calebs-hollow-prologue`) are thin shells; their `missions[]` and `mapBuilders` are populated at module init. `campaign-registry.js` declares `MIGRATED_MISSIONS` (mission id → campaign id, in canonical order) and registers each via `registerJSONMissions` → `registerMissionJSON`. Loading is environment-aware: **node** (`window` undefined → tests, headless runner) reads via `fs`; any **webview** (browser, Electron, Capacitor) reads via same-origin `fetch`. Both feed the same parsed object to `loadMissionJSON`. The module uses **top-level `await`**, so any importer (the app, headless scripts, tests) transparently waits for a fully populated registry.
+The campaign def (`calebs-hollow-prologue`) is a thin shell; its `missions[]` and `mapBuilders` are populated at module init. (The standalone `prologue` tutorial campaign was retired — the tutorial is now Chapter 1's first mission.) `campaign-registry.js` declares `MIGRATED_MISSIONS` (mission id → campaign id, in canonical order) and registers each via `registerJSONMissions` → `registerMissionJSON`. Loading is environment-aware: **node** (`window` undefined → tests, headless runner) reads via `fs`; any **webview** (browser, Electron, Capacitor) reads via same-origin `fetch`. Both feed the same parsed object to `loadMissionJSON`. The module uses **top-level `await`**, so any importer (the app, headless scripts, tests) transparently waits for a fully populated registry.
 
 ## Data Flow Summary
 

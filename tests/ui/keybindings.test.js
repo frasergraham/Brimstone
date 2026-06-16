@@ -19,9 +19,14 @@ function ev(key, mods = {}) {
 }
 
 describe('resolveKeyAction — console + help', () => {
-  test('Escape toggles the console from any mode', () => {
-    assert.deepEqual(resolveKeyAction(ev('Escape'), { appMode: 'MENU' }), { id: 'console-toggle' });
-    assert.deepEqual(resolveKeyAction(ev('Escape'), { appMode: 'PLANNING' }), { id: 'console-toggle' });
+  test('Backtick toggles the console from any mode', () => {
+    assert.deepEqual(resolveKeyAction(ev('`'), { appMode: 'MENU' }), { id: 'console-toggle' });
+    assert.deepEqual(resolveKeyAction(ev('`'), { appMode: 'PLANNING' }), { id: 'console-toggle' });
+  });
+
+  test('Escape deselects in-game, no-ops in the menu', () => {
+    assert.deepEqual(resolveKeyAction(ev('Escape'), { appMode: 'PLANNING' }), { id: 'deselect' });
+    assert.equal(resolveKeyAction(ev('Escape'), { appMode: 'MENU' }), null);
   });
 
   test('H shows help only while in a game', () => {
@@ -66,6 +71,17 @@ describe('resolveKeyAction — unit + plan controls', () => {
     assert.equal(resolveKeyAction(ev('Tab'), { appMode: 'PLAYBACK' }), null);
   });
 
+  test('Tab / Shift+Tab scrub turn cards while the summary review is up', () => {
+    // reviewActive = the wrap-up review (scrub arrows visible). Tab moves
+    // right through the cards, Shift+Tab left — same as clicking ◀ ▶.
+    assert.deepEqual(resolveKeyAction(ev('Tab'), { appMode: 'SUMMARY', reviewActive: true }), { id: 'review-scrub', dir: 1 });
+    assert.deepEqual(resolveKeyAction(ev('Tab', { shiftKey: true }), { appMode: 'SUMMARY', reviewActive: true }), { id: 'review-scrub', dir: -1 });
+    // Review takes precedence over unit cycling regardless of mode.
+    assert.deepEqual(resolveKeyAction(ev('Tab'), { appMode: 'PLAYBACK', reviewActive: true }), { id: 'review-scrub', dir: 1 });
+    // No review up → unchanged behaviour.
+    assert.equal(resolveKeyAction(ev('Tab'), { appMode: 'SUMMARY' }), null);
+  });
+
   test('F focuses and M fits, in any in-game mode', () => {
     assert.deepEqual(resolveKeyAction(ev('f'), { appMode: 'RESOLVING' }), { id: 'focus-unit' });
     assert.deepEqual(resolveKeyAction(ev('M'), { appMode: 'SPECTATING' }), { id: 'fit-map' });
@@ -77,21 +93,24 @@ describe('resolveKeyAction — unit + plan controls', () => {
     assert.equal(resolveKeyAction(ev('x'), { appMode: 'SUMMARY' }), null);
   });
 
-  test('Space advances replay only while a replay step bar is up', () => {
-    // Keys off replayActive, not a single mode — covers full PLAYBACK and the
-    // inline "replay last turn" (which runs in RESOLVING).
-    assert.deepEqual(resolveKeyAction(ev(' '), { appMode: 'PLAYBACK', replayActive: true }), { id: 'replay-next' });
-    assert.deepEqual(resolveKeyAction(ev(' '), { appMode: 'RESOLVING', replayActive: true }), { id: 'replay-next' });
+  test('Space and Enter both advance — replay step bar OR round summary', () => {
+    // One shared 'advance' action: the executor clicks whichever affordance is
+    // on screen (combat Continue, summary Continue, replay NEXT). Keys off
+    // replayActive (covers full PLAYBACK and the inline RESOLVING replay) or
+    // the SUMMARY mode.
+    for (const key of [' ', 'Enter']) {
+      assert.deepEqual(resolveKeyAction(ev(key), { appMode: 'PLAYBACK', replayActive: true }), { id: 'advance' });
+      assert.deepEqual(resolveKeyAction(ev(key), { appMode: 'RESOLVING', replayActive: true }), { id: 'advance' });
+      assert.deepEqual(resolveKeyAction(ev(key), { appMode: 'SUMMARY' }), { id: 'advance' });
+      // Plain Space/Enter while planning does nothing (avoids accidental submits).
+      assert.equal(resolveKeyAction(ev(key), { appMode: 'PLANNING' }), null);
+    }
     assert.equal(resolveKeyAction(ev(' '), { appMode: 'PLAYBACK', replayActive: false }), null);
-    assert.equal(resolveKeyAction(ev(' '), { appMode: 'PLANNING' }), null);
   });
 
-  test('Enter submits (Shift, planning) or continues (plain, summary)', () => {
+  test('Shift+Enter submits the plan, planning only', () => {
     assert.deepEqual(resolveKeyAction(ev('Enter', { shiftKey: true }), { appMode: 'PLANNING' }), { id: 'submit-plan' });
-    assert.deepEqual(resolveKeyAction(ev('Enter'), { appMode: 'SUMMARY' }), { id: 'summary-continue' });
-    // Plain Enter while planning is not a submit (avoids accidental submits).
-    assert.equal(resolveKeyAction(ev('Enter'), { appMode: 'PLANNING' }), null);
-    // Shift+Enter outside planning does nothing.
+    // Shift+Enter outside planning does nothing — not even advance.
     assert.equal(resolveKeyAction(ev('Enter', { shiftKey: true }), { appMode: 'SUMMARY' }), null);
   });
 });
@@ -103,6 +122,7 @@ describe('executeConsoleCommand', () => {
       _toggleInspector:    () => calls.push('inspector'),
       _toggleBorderForest: () => calls.push('forest'),
       _cycleFogDebugMode:  () => calls.push('fog'),
+      _toggleFpsCounter:   () => { calls.push('fps'); return 'FPS counter shown'; },
     };
     return { renderer, calls };
   }
@@ -113,6 +133,20 @@ describe('executeConsoleCommand', () => {
     assert.equal(executeConsoleCommand('/forest', { renderer }).ok, true);
     assert.equal(executeConsoleCommand('/fog', { renderer }).ok, true);
     assert.deepEqual(calls, ['inspector', 'forest', 'fog']);
+  });
+
+  test('/fps toggles the FPS counter and echoes the renderer status', () => {
+    const { renderer, calls } = makeCtx();
+    const res = executeConsoleCommand('/fps', { renderer });
+    assert.equal(res.ok, true);
+    assert.equal(res.message, 'FPS counter shown');
+    assert.deepEqual(calls, ['fps']);
+  });
+
+  test('/help lists the fps command', () => {
+    const res = executeConsoleCommand('/help', {});
+    assert.equal(res.ok, true);
+    assert.match(res.message, /\/fps/);
   });
 
   test('leading slash is optional and names are case-insensitive', () => {
@@ -142,6 +176,34 @@ describe('executeConsoleCommand', () => {
     for (const name of Object.keys(COMMANDS)) {
       assert.match(res.message, new RegExp(`/${name}`));
     }
+  });
+
+  test('/aiassist parses modes and delegates to ui.setAIAssistMode', () => {
+    const calls = [];
+    const ui = {
+      setAIAssistMode: (mode) => {
+        calls.push(mode);
+        const autorun = mode === 'auto';
+        return { enabled: autorun || (!!mode && mode !== 'off'), autorun };
+      },
+    };
+    // Default → manual on.
+    let res = executeConsoleCommand('/aiassist', { ui });
+    assert.equal(res.ok, true);
+    assert.match(res.message, /AI-assist ON/);
+    // auto → autorun.
+    res = executeConsoleCommand('/aiassist auto', { ui });
+    assert.match(res.message, /Autorun ON/);
+    // off → disabled.
+    res = executeConsoleCommand('/aiassist off', { ui });
+    assert.match(res.message, /off/i);
+    assert.deepEqual(calls, [true, 'auto', false]);
+  });
+
+  test('/aiassist without a loaded game reports unavailable', () => {
+    const res = executeConsoleCommand('/aiassist', { ui: null });
+    assert.equal(res.ok, true);
+    assert.match(res.message, /start a mission first/i);
   });
 
   test('errors thrown by a command are caught', () => {

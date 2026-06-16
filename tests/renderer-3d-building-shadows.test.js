@@ -183,7 +183,7 @@ describe('_buildTileMesh — procedural box + roof receive shadows', () => {
     r._buildFlatHexMesh   = (name) => ({ name, material: null, metadata: null });
     r._tileMaterialFor    = () => null;
     r._materialFor        = () => null;
-    r._buildBuildingLabel = () => {};
+    r._buildBuildingGroundLabel = () => {};
     // _shadowGenerator stays null → `_addShadowCaster` is a safe no-op.
 
     const tile = buildingTile();
@@ -207,7 +207,7 @@ describe('_buildTileMesh — procedural box + roof receive shadows', () => {
     r._buildFlatHexMesh   = (name) => ({ name, material: null, metadata: null });
     r._tileMaterialFor    = () => null;
     r._materialFor        = () => null;
-    r._buildBuildingLabel = () => {};
+    r._buildBuildingGroundLabel = () => {};
 
     // Spy on the box builder to capture the options passed.
     const created = [];

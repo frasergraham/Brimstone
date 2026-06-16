@@ -5,9 +5,11 @@
 //  Valid type strings:
 //    Resources : 'wood' | 'metal' | 'herbs' | 'food' | 'silver' | 'scripture'
 //    Weapons   : 'sword' | 'axe' | 'shield' | 'bow' | 'crossbow'
-//                | 'staff' | 'dagger'
+//                | 'musket' | 'pistol' | 'sling' | 'staff' | 'dagger'
 //                (weapon-vs-resource is determined via ITEMS[id].kind,
 //                 not a 'weapon:' prefix — see src/items.js)
+//                'magic_bolt' is the Witch/Necromancer's innate weapon —
+//                issued as starting gear (noLoot) and never rolled here.
 //    Special   : 'nothing'   — empty result
 //
 //  NOTE: 'horse' is intentionally NOT rolled as procedural loot — horses are
@@ -34,12 +36,15 @@ export const LOOT_CONFIG = {
   buildings: {
 
     blacksmith: [
-      { type: 'sword',    weight: 20 },
-      { type: 'axe',      weight: 20 },
-      { type: 'shield',   weight: 16 },
-      { type: 'crossbow', weight:  8 },  // ranged-only — usable by Rogue
-      { type: 'metal',    weight: 26 },
-      { type: 'wood',     weight: 10 },
+      { type: 'sword',      weight: 18 },
+      { type: 'axe',        weight: 18 },
+      { type: 'shield',     weight: 14 },
+      { type: 'crossbow',   weight:  8 },  // ranged — usable by Rogue
+      { type: 'musket',     weight:  6 },  // ranged, +2 ATK — the prize drop
+      { type: 'greatsword', weight:  3 },  // premium — gated to late game (LOOT_TIER_GATE)
+      { type: 'warhammer',  weight:  2 },  // premium — gated to late game
+      { type: 'metal',      weight: 26 },
+      { type: 'wood',       weight: 10 },
     ],
 
     inn: [
@@ -77,9 +82,11 @@ export const LOOT_CONFIG = {
     ],
 
     watchtower: [
-      { type: 'bow',      weight: 35 },
+      { type: 'bow',      weight: 30 },
       { type: 'crossbow', weight: 12 },
-      { type: 'silver',   weight: 38 },
+      { type: 'musket',   weight:  8 },
+      { type: 'longrifle', weight: 3 },  // premium ranged — gated to late game (LOOT_TIER_GATE)
+      { type: 'silver',   weight: 35 },
       { type: 'nothing',  weight: 15 },
     ],
 
@@ -105,10 +112,12 @@ export const LOOT_CONFIG = {
     ],
 
     house: [
-      { type: 'food',          weight: 27 },
-      { type: 'wood',          weight: 24 },
-      { type: 'dagger', weight: 17 },
-      { type: 'metal',         weight: 13 },
+      { type: 'food',          weight: 25 },
+      { type: 'wood',          weight: 22 },
+      { type: 'dagger',        weight: 15 },
+      { type: 'pistol',        weight: 10 },  // ranged sidearm
+      { type: 'sling',         weight:  8 },  // cheap ranged
+      { type: 'metal',         weight: 12 },
       { type: 'herbs',         weight:  8 },
     ],
 
@@ -121,9 +130,10 @@ export const LOOT_CONFIG = {
     ],
 
     town_hall: [
-      { type: 'silver',        weight: 28 },
-      { type: 'wood',          weight: 34 },
-      { type: 'food',          weight: 33 },
+      { type: 'silver',        weight: 26 },
+      { type: 'pistol',        weight: 10 },  // a magistrate's flintlock
+      { type: 'wood',          weight: 32 },
+      { type: 'food',          weight: 32 },
       { type: 'nothing',       weight:  5 },
     ],
 
@@ -162,3 +172,14 @@ export const LOOT_CONFIG = {
   },
 
 };
+
+// Premium-weapon progression gate: weaponId → earliest ROUND it may drop.
+// Enforced in _effectiveLoot() (src/actions.js), which filters gated entries out
+// of the weighted table when state.round is below the threshold — so these
+// weapons simply can't roll early. Tunable. Mission lootOverrides still compose
+// (a boss mission can override a table to force-include a premium sooner).
+export const LOOT_TIER_GATE = Object.freeze({
+  greatsword: 8,
+  longrifle:  9,
+  warhammer: 10,
+});

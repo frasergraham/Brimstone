@@ -166,6 +166,25 @@ CONTROL_NODES score:
 
 ---
 
+## Difficulty Tiers
+
+Human-vs-AI games carry `state.aiDifficulty` (`'easy' | 'normal' | 'hard'`,
+default `normal`; persisted via state-sync). The tier shifts how many actions
+the AI *plans* each round — the same lever campaign missions use via
+`campaignAIBudgetBonus`: easy −1, normal 0, hard +1, floored at 1
+(`AI_DIFFICULTY_BUDGET_DELTA` in `src/ai.js`, applied to `totalBudget` in both
+engines' assess stage via `PlanSimState.aiDifficultyDelta`). `normal` is the
+tuned balance baseline — AI-vs-AI balance runs never set the field, so all
+headless numbers in this doc are at normal.
+
+Online AI fill-in picks a random personality from the matrix-validated pool
+(`RANDOM_PERSONALITY_POOL` in `server/lobby.js`): hero
+balanced/aggressive/defensive/explorer, witch balanced/aggressive/swarm.
+`node_denier`, `witch_hunter`, and `evasive` are excluded from random rotation
+until they get an ai-matrix pass of their own.
+
+---
+
 ## Personality System
 
 Each side primary (Hero / Witch) has 3 personality variants that adjust goal weights and engagement thresholds. Stub factions (Rogue / Captain on day; Necromancer / Brute on night) inherit their parent side's personality registry for now — `Faction.getPersonalities()` returns the parent registry until a stub gets its own implementation. See `docs/design/faction-expansion.md`.
@@ -360,16 +379,33 @@ When scoring is ≤2 rounds away and a node has feasibility ≥0.6, the hero AI 
 
 ## Balance Baseline & Tuning Methodology
 
-**Last updated:** 2026-04-24 (NvN balance pass — per-witch AI thresholds + hidden-survivor scaling)
+**Last updated:** 2026-06-10 (damage-dice overhaul — weapons roll damage, HP ×7; see note below)
 
-### Baseline Metrics (500 1v1 games, Standard 13×13)
+### Baseline Metrics (500 1v1 games, Standard 14×14)
 
 | Metric | Value | Target |
 |--------|-------|--------|
-| Hero win rate | 49.2% | 38–62% (±12%) |
-| Witch win rate | 50.8% | 38–62% (±12%) |
-| Draws | 0.0% | — |
+| Hero win rate | ~43% | 38–62% (±12%) |
+| Witch win rate | ~57% | 38–62% (±12%) |
+| Kill wins | ~50% | ≥20% |
+| Tiebreaks | 0.2% | <10% |
+| Round-cap hits | 0.2% | <5% |
 | Mean rounds | ~22 | 15–35 |
+
+> Damage-dice overhaul note (2026-06-10): weapons now deal rolled damage (fixed
+> or dice; e.g. unarmed/sword 2D6, musket 2D8) and all HP is ×`DAMAGE_SCALE` (7),
+> chosen so average hits-to-kill matches the pre-dice era. Combat is markedly
+> more lethal — kill-wins rose to ~50%. The dice overhaul itself was **balance-
+> neutral** on 14×14 (post-bisect 2026-06-16: 43.4% → 43.5% Hero on `facb710` vs
+> `faa819c`, 1000 games each); the **balanced-vs-balanced** matchup also stays
+> centered at H50%/W50% in `ai-matrix`. The ~6pt witch tilt that landed in this
+> window came from the **+20% map resize one commit earlier** (`facb710`), not
+> the dice change: 13×13 Hero ~49.6% → 14×14 Hero ~43.4% (longer games → more
+> night/summon time, especially benefiting the aggressive-witch outlier).
+> Recentring lever if a tuning pass is wanted: reduce Standard map area
+> (toward 13×13). Tuning combat constants won't move the win-rate split.
+
+> Weapons-overhaul note: ranged weapons only benefit the hero's roster (summons/zombies/golems can't equip), which skewed NvN toward the hero. The witch's `unitBonusCap` was raised 3→4 so its swarm converts to actions and keeps contesting nodes; Magic Bolt carries +1 ATK so the witch leader keeps the same ~1-ATK duel gap vs the now-sword-armed Paladin.
 
 ### Combat & Economy Baseline
 
@@ -414,9 +450,9 @@ When scoring is ≤2 rounds away and a node has feasibility ≥0.6, the hero AI 
 
 | Mode | Hero win rate | Witch win rate | Peak hero force | Peak witch force |
 |------|---------------|----------------|------------------|-------------------|
-| 2v2  | 57.8% | 42.0% | ~6 units (1.3× 1v1) | ~13 units (1.75× 1v1) |
-| 3v3  | 57.0% | 42.6% | ~8 units (1.7× 1v1) | ~20 units (2.7× 1v1) |
-| 4v4  | 60.0% | 39.8% | ~9 units (1.9× 1v1) | ~25 units (3.5× 1v1) |
+| 2v2  | 58.3% (400g) | 41.8% | ~6 units (1.3× 1v1) | ~13 units (1.75× 1v1) |
+| 3v3  | 53.0% (100g) | 47.0% | ~8 units (1.7× 1v1) | ~20 units (2.7× 1v1) |
+| 4v4  | 59.0% (100g) | 41.0% | ~9 units (1.9× 1v1) | ~25 units (3.5× 1v1) |
 
 NvN scales up unit density on both sides (so 4v4 doesn't feel sparse on the
 13×13 map) while keeping balance in the ±12% target band. All NvN scaling is

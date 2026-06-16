@@ -19,6 +19,9 @@ import {
   edgeButtonTargets,
   hitTestEdgeButton,
   EDGE_BTN_HEX_SCALE,
+  logicRegions,
+  missionConvPrefix,
+  filterMissionConversations,
 } from '../src/tools/mission-editor-ui.js';
 import { mapSizePreset, MAP_EDGES } from '../src/tools/mission-editor.js';
 import { MAP_SIZES } from '../src/map.js';
@@ -112,8 +115,8 @@ describe('mapSizePreset', () => {
       assert.deepEqual(mapSizePreset(name), { cols: cfg.cols, rows: cfg.rows });
     }
   });
-  test('standard → 13×13', () => {
-    assert.deepEqual(mapSizePreset('standard'), { cols: 13, rows: 13 });
+  test('standard → 14×14', () => {
+    assert.deepEqual(mapSizePreset('standard'), { cols: 14, rows: 14 });
   });
   test('unknown / Custom → null (caller keeps manual X/Y)', () => {
     assert.equal(mapSizePreset('Custom'), null);
@@ -211,5 +214,81 @@ describe('buildMapControls', () => {
     assert.ok(btn, 'fit button present');
     btn.click();
     assert.equal(fits, 1);
+  });
+});
+
+// ── Logic-graph map regions (item 4) — dedupe a Location wired into an Area ─────
+describe('mission-editor — logicRegions (Location/Area map highlights)', () => {
+  test('a standalone Location and a standalone Area are separate regions', () => {
+    const graph = { version: 1, variables: [], nodes: [
+      { id: 'loc', type: 'location', params: { label: 'Boogers', hexes: [{ col: 5, row: 15 }] } },
+      { id: 'area', type: 'onAreaEnter', params: { hexes: [{ col: 4, row: 7 }] } },
+    ], edges: [] };
+    const r = logicRegions(graph);
+    assert.equal(r.length, 2);
+    assert.ok(r.some(x => x.color === 'loc' && x.label === 'Boogers'));
+    assert.ok(r.some(x => x.color === 'area' && x.hexes[0].col === 4 && x.hexes[0].row === 7));
+  });
+
+  test('a Location wired into an Area collapses to ONE region (no doubled overlay)', () => {
+    const graph = { version: 1, variables: [], nodes: [
+      { id: 'loc', type: 'location', params: { label: 'The Tavern', hexes: [{ col: 2, row: 12 }] } },
+      { id: 'area', type: 'onAreaEnter', params: { hexes: [] } },
+    ], edges: [{ from: { node: 'loc', pin: 'hexes' }, to: { node: 'area', pin: 'area' }, kind: 'data' }] };
+    const r = logicRegions(graph);
+    assert.equal(r.length, 1, 'the wired Location is not also drawn standalone');
+    assert.equal(r[0].color, 'area');
+    assert.equal(r[0].label, 'The Tavern', 'the Area carries the Location’s name');
+    assert.deepEqual(r[0].hexes, [{ col: 2, row: 12 }]);
+  });
+
+  test('legacy single-hex Location ({col,row}) still yields a region', () => {
+    const graph = { nodes: [{ id: 'l', type: 'location', params: { col: 1, row: 1 } }], edges: [] };
+    assert.deepEqual(logicRegions(graph), [{ hexes: [{ col: 1, row: 1 }], label: '', color: 'loc' }]);
+  });
+
+  test('no graph → no regions', () => {
+    assert.deepEqual(logicRegions(null), []);
+    assert.deepEqual(logicRegions({}), []);
+  });
+});
+
+describe('mission-editor — conversation dropdown enumeration', () => {
+  // Stub the id→file map so the test doesn't depend on the live catalog.
+  const fileFor = (id) => ({ prologue: 'Ch1M1.json', gathering_survivors: 'Ch1M2.json' })[id] ?? `${id}.json`;
+
+  test('missionConvPrefix derives the lower-cased file code (id → file)', () => {
+    assert.equal(missionConvPrefix('prologue', fileFor), 'ch1m1');
+    assert.equal(missionConvPrefix('gathering_survivors', fileFor), 'ch1m2');
+  });
+
+  test('missionConvPrefix falls back to the id for an unknown mission', () => {
+    assert.equal(missionConvPrefix('my_new_mission', fileFor), 'my_new_mission');
+  });
+
+  test('filter keeps this mission’s <prefix>-* and shared generic-*, drops others', () => {
+    const all = ['ch1m1-intro', 'ch1m1-stable', 'ch1m2-survivor', 'generic-rescue', 'generic-ambush', 'ch1m3-night'];
+    assert.deepEqual(
+      filterMissionConversations(all, 'ch1m1'),
+      ['ch1m1-intro', 'ch1m1-stable', 'generic-ambush', 'generic-rescue'],
+    );
+  });
+
+  test('a different mission sees only its own prefix + generics', () => {
+    const all = ['ch1m1-intro', 'ch1m2-survivor', 'generic-rescue'];
+    assert.deepEqual(filterMissionConversations(all, 'ch1m2'), ['ch1m2-survivor', 'generic-rescue']);
+  });
+
+  test('matching is case-insensitive and the bare prefix counts', () => {
+    assert.deepEqual(filterMissionConversations(['CH1M1-Intro', 'ch1m1'], 'ch1m1'), ['CH1M1-Intro', 'ch1m1']);
+  });
+
+  test('prefix must be a full code segment — ch1m1 does not match ch1m10/ch1m1x', () => {
+    assert.deepEqual(filterMissionConversations(['ch1m10-foo', 'ch1m1x-bar'], 'ch1m1'), []);
+  });
+
+  test('empty inputs yield an empty list (no throw)', () => {
+    assert.deepEqual(filterMissionConversations(null, 'ch1m1'), []);
+    assert.deepEqual(filterMissionConversations(['ch1m1-a'], ''), []);
   });
 });

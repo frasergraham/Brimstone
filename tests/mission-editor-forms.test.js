@@ -16,6 +16,10 @@ import {
   moveStoryTrigger,
   addWave,
   removeWave,
+  addNpc,
+  removeNpc,
+  addConversation,
+  removeConversation,
   setObjective,
   assembleMission,
   populateFromMission,
@@ -142,6 +146,39 @@ describe('mission-editor forms — round-trip (populate → assemble)', () => {
   });
 });
 
+// ── npcs / conversations round-trip + ops ─────────────────────────────────────
+
+describe('mission-editor forms — npcs & conversations', () => {
+  test('npcs + conversations survive the populate → assemble round-trip', () => {
+    const original = fixtureMission();
+    original.npcs = [{ id: 'john', survivorName: "John O'Connor", col: 3, row: 6 }];
+    original.conversations = [{
+      id: 'intro', file: 'ch1m1-intro',
+      bindings: { hero: 'hero', innkeeper: 'npc:john' },
+      onComplete: [{ action: 'despawn', npc: 'john' }],
+    }];
+    original.storyTriggers.push({ type: 'round', round: 1, conversation: 'intro' });
+    const rebuilt = assembleMission(populateFromMission(original));
+    assert.deepEqual(rebuilt, original);
+  });
+
+  test('addNpc / removeNpc and addConversation / removeConversation list ops', () => {
+    const meta = createDefaultMeta();
+    addNpc(meta, { id: 'john', col: 3, row: 6 });
+    addNpc(meta);
+    assert.equal(meta.npcs.length, 2);
+    assert.equal(meta.npcs[0].id, 'john');
+    removeNpc(meta, 1);
+    assert.equal(meta.npcs.length, 1);
+
+    addConversation(meta, { id: 'intro', file: 'ch1m1-intro' });
+    assert.equal(meta.conversations.length, 1);
+    assert.deepEqual(meta.conversations[0].bindings, {});
+    removeConversation(meta, 0);
+    assert.equal(meta.conversations.length, 0);
+  });
+});
+
 // ── Form-model operations ─────────────────────────────────────────────────────
 
 describe('mission-editor forms — storyTrigger ops', () => {
@@ -256,6 +293,29 @@ describe('json-mission — validateMissionJSON happy path', () => {
   });
 });
 
+describe('json-mission — unit level field', () => {
+  test('accepts an integer level ≥ 1 on enemyUnits and wave units', () => {
+    const m = fixtureMission();
+    m.enemyUnits[0].level = 2;
+    m.waves[0].units[0].level = 3;
+    assert.doesNotThrow(() => validateMissionJSON(m));
+  });
+
+  test('rejects a non-positive / non-integer level on an enemyUnit', () => {
+    const m = fixtureMission();
+    m.enemyUnits[0].level = 0;
+    assert.throws(() => validateMissionJSON(m), /invalid "level"/);
+    m.enemyUnits[0].level = 1.5;
+    assert.throws(() => validateMissionJSON(m), /invalid "level"/);
+  });
+
+  test('rejects an invalid level on a wave unit', () => {
+    const m = fixtureMission();
+    m.waves[0].units[0].level = -2;
+    assert.throws(() => validateMissionJSON(m), /invalid "level"/);
+  });
+});
+
 describe('json-mission — validation hardening', () => {
   test('#1 rejects a tile outside the handmade extent', () => {
     const m = fixtureMission();
@@ -270,7 +330,7 @@ describe('json-mission — validation hardening', () => {
       mode: 'procedural', seed: 1, mapSize: 'skirmish', nodeCount: 1,
       overlay: { tiles: [{ col: 50, row: 0, type: 'GRASS' }] },
     };
-    assert.throws(() => validateMissionJSON(m), /outside the 9×9 map extent/);
+    assert.throws(() => validateMissionJSON(m), /outside the 10×10 map extent/);
   });
 
   test('#2 rejects an unknown win objective type', () => {

@@ -56,27 +56,21 @@ import {
   doorStubDirection,
   compoundFortifyEdges,
   extendDoorStub,
-  signpostWorldPos,
+  groundLabelPlacement,
   BUILDING_ENTRANCE_NUDGE,
   TARGET_BUILDING_GROUND_SPAN,
-  SIGNPOST_POST_HEIGHT,
-  SIGNPOST_POST_DIAMETER,
-  SIGNPOST_PLANK_WIDTH,
-  SIGNPOST_PLANK_HEIGHT,
-  SIGNPOST_PLANK_DEPTH,
-  SIGNPOST_ROAD_OFFSET,
+  GROUND_LABEL_WIDTH,
+  GROUND_LABEL_HEIGHT,
+  GROUND_LABEL_EDGE_INSET,
 } from './building-render.js';
-// Re-export so 3D-renderer consumers/tests can import the ground-span knob
-// and signpost dimensions from here too (mirrors the tree-count knob
-// re-exports above). The signpost dimensions are the operator-dialable knobs.
+// Re-export so 3D-renderer consumers/tests can import the ground-span knob and
+// the ground-label dimensions from here too (mirrors the tree-count knob
+// re-exports above). These are the operator-dialable knobs.
 export {
   TARGET_BUILDING_GROUND_SPAN,
-  SIGNPOST_POST_HEIGHT,
-  SIGNPOST_POST_DIAMETER,
-  SIGNPOST_PLANK_WIDTH,
-  SIGNPOST_PLANK_HEIGHT,
-  SIGNPOST_PLANK_DEPTH,
-  SIGNPOST_ROAD_OFFSET,
+  GROUND_LABEL_WIDTH,
+  GROUND_LABEL_HEIGHT,
+  GROUND_LABEL_EDGE_INSET,
 };
 import { Renderer } from './renderer.js';
 import { BLOCK_WORD_VARIANTS, pickBlockWord } from './combat-words.js';
@@ -327,16 +321,17 @@ export const RUNNING_MODEL_FILE = 'running.glb';
 // idle clip embedded, so the loader picks it up at model-load time and
 // _loadIdleAnimation skips (avoids a duplicate import).
 export const IDLE_MODEL_FILE    = 'paladin-idle.glb';
-// Combat strike clip — animation-only Mixamo export (~47k). Retargeted onto
-// the shared paladin skeleton exactly like walking/idle and played during a
-// lunge. Loaded lazily (off the beginLoad critical path) — see
-// `_ensurePunchAnimation`.
+// Combat strike clip — animation-only Mixamo export (~47k). Retargeted onto a
+// rig's skeleton like walking/idle, then cloned per-standee and played during a
+// lunge on the attacker's own clone. Loaded lazily (off the beginLoad critical
+// path) — see `_ensureRigPunch`.
 export const PUNCH_MODEL_FILE   = 'punch.glb';
 // G1 reaction clips — animation-only Mixamo exports loaded the same way as
 // punch.glb. `hit.glb` plays on the loser when damage lands; `block.glb`
-// plays on the defender when the attack whiffs. Same shared-skeleton tradeoff
-// as punch: only one clip plays at a time on the paladin rig, so the strike
-// must have resolved (punch follow-through complete) before a reaction fires.
+// plays on the defender when the attack whiffs. Per-instance like punch: each
+// clip is cloned onto a standee and only one one-shot plays on that unit at a
+// time, so its strike must resolve (punch follow-through complete) before its
+// reaction fires.
 export const HIT_MODEL_FILE     = 'hit.glb';
 export const BLOCK_MODEL_FILE   = 'block.glb';
 
@@ -480,6 +475,35 @@ export function stripRootBoneTranslation(animGroup, rootName = 'mixamorig:Hips',
   return stripped;
 }
 
+/** Mean Y of a clip's root (Hips) position track — the clip's authored
+ *  standing baseline, in the clip's own export units. Returns null when the
+ *  clip has no usable hips position track. This is the anchor a rig's clips
+ *  rebase to (see rebaseRootBoneY): the rig's own embedded idle measures the
+ *  stance the unit actually stands in, in the rig's own units. The T-pose
+ *  rest height is the WRONG anchor for that — a rig whose idle is a crouch
+ *  (the zombie shamble: idle hips ~0.93 vs rest ~1.05) gets scaled up to its
+ *  upright height and its feet float off the ground. Pure; exported for
+ *  tests. */
+export function rootBoneTrackAverageY(animGroup, rootName = 'mixamorig:Hips') {
+  if (!animGroup || !Array.isArray(animGroup.targetedAnimations)) return null;
+  const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
+  for (const ta of animGroup.targetedAnimations) {
+    const tName = ta && ta.target && ta.target.name;
+    const prop  = ta && ta.animation && ta.animation.targetProperty;
+    if (!tName || !prop) continue;
+    if (tName !== rootName && stripDup(tName) !== rootName) continue;
+    if (!/position/i.test(prop)) continue;
+    const keys = ta.animation.getKeys ? ta.animation.getKeys() : null;
+    if (!keys || !keys.length) continue;
+    let sum = 0, n = 0;
+    for (const k of keys) {
+      if (k.value && typeof k.value.y === 'number') { sum += k.value.y; n++; }
+    }
+    if (n > 0) return sum / n;
+  }
+  return null;
+}
+
 /** Rebase a clip's root (Hips) translation so its VERTICAL baseline sits at the
  *  rig's own rest height `restY`, while preserving the clip's bob and zeroing
  *  horizontal drift. This is the asset-agnostic alternative to
@@ -487,7 +511,8 @@ export function stripRootBoneTranslation(animGroup, rootName = 'mixamorig:Hips',
  *  an ABSOLUTE hip height in their own export's units, so a rig's own idle, a
  *  shared walk.glb, and a hip-centred export all disagree — keeping (keepY) or
  *  zeroing the absolute value makes one rig float and another sink. Rebasing to
- *  `restY` (the Hips' rest-pose Y, measured per rig at load) anchors every clip
+ *  `restY` (the rig's standing anchor, measured per rig at load from its
+ *  embedded idle's hip baseline — see rootBoneTrackAverageY) anchors every clip
  *  at the same standing height regardless of which export it came from. When
  *  `restY` is null (no rest measurement — test stubs) the Y is left untouched.
  *  Pure; exported for tests. */
@@ -655,11 +680,18 @@ export function entityTypeRigFile(entity) {
   return slug ? `${slug}-idle.glb` : null;
 }
 
+/** Entity types whose rig is loaded JUST-IN-TIME (during the round replay that
+ *  reveals them) rather than preloaded up front. The survivor roster is large
+ *  and most members never appear in a given game, so preloading every one would
+ *  bloat the loading screen — they're loaded via `preloadEntityRig()` when the
+ *  replay tells us one is about to be found. Leaders and summons stay in the
+ *  up-front preload (`_preloadCharacterRigs`). */
+export const LAZY_RIG_TYPES = Object.freeze(new Set([EntityType.SURVIVOR]));
+
 /** Ordered rig-file cascade for a non-paladin unit: its own `<type>-idle.glb`
  *  first, then the shared mannequin. The caller tries each in turn and uses the
- *  first that loads; if none do, the cone+sphere pawn stands in. Paladin-typed
- *  units never reach here — they keep the dedicated _paladinSource path. Pure;
- *  exported for tests. */
+ *  first that loads. Paladin-typed units never reach here — they keep the
+ *  dedicated _paladinSource path. Pure; exported for tests. */
 export function fallbackRigCandidates(entity) {
   const out = [];
   const typeFile = entityTypeRigFile(entity);
@@ -860,7 +892,18 @@ export const XRAY_SWEEP_EVERY_N           = 4;
 // turns the fill into an edge (operator artifact "A"). HighlightLayer (drew
 // behind, read as a filled glow) and renderOutline + group-promotion (exploded
 // the skinned paladin and dragged its textured body forward) were both rejected.
-export const XRAY_GHOST_GROUP             = 0;
+// ─── Babylon rendering groups (z-order policy) ──────────────────────────────
+// Babylon renders higher `renderingGroupId`s unconditionally ON TOP of lower
+// ones, bypassing the depth buffer. Policy (task t-4d82b52e):
+//   • ALL world geometry (terrain, buildings, standees, hex outlines, ribbons)
+//     shares WORLD_GROUP 0 so the depth buffer owns unit-vs-building occlusion.
+//   • UI stickers that must never hide behind scenery (unit-icon billboards,
+//     floating combat text, speech bubbles) ride in UNIT_ICON_GROUP.
+//   • Planning-mode attack overlays sit above even those, in
+//     ATTACK_OVERLAY_GROUP (defined further below, near its painter helpers).
+export const WORLD_GROUP                  = 0;
+export const UNIT_ICON_GROUP              = 2;
+export const XRAY_GHOST_GROUP             = WORLD_GROUP;
 // WebGL `GREATER` depth comparison (=== BABYLON.Constants.GREATER). A ring
 // fragment passes only where its depth is GREATER (farther) than the stored
 // scene depth — i.e. behind the already-drawn occluder.
@@ -905,31 +948,36 @@ export const STANDEE_BASE_Y_OFFSET    = 0.084;
 // "NE" outer slot) so building/tree/standee co-tenancy on the same hex shares
 // the unified slot layout. Frozen so callers can't mutate it accidentally.
 // Distance from centre comfortably clears the STANDEE_BASE_DIAMETER=0.75 disc.
-export const BUILDING_OFFSET = Object.freeze({ x: 0.42, z: -0.42 });
+export const BUILDING_OFFSET = Object.freeze({ x: 0.3, z: -0.5196152422706631 });
 
-// ─── Building labels (hover text above each building) ───────────────────────
-// Mirrors the 2D renderer's fade-on-zoom logic from src/renderer.js (~line
-// 1684): labels are fully visible when the camera is close (small radius) and
-// fade out as the camera zooms back (large radius). 2D uses
-//   effectiveHex = hs * zoomLevel  (bigger as you zoom in)
-//   alpha = clamp((effectiveHex - 40) / (60 - 40), 0, 1)
-// We use ArcRotateCamera radius (smaller = closer) instead, so the formula
-// inverts the sign — see `labelAlphaForZoom`.
+// ─── Building ground markers (disc + name painted flat on the entrance hex) ──
+// A faint white "stand here" disc plus a flat textured name rect, both lying on
+// the ground of each labeled building's ENTRANCE hex (the walkable tile — the
+// model occupies the footprint hex). The name is re-aligned every frame by
+// `_pumpBuildingGroundLabels` to the hex edge that is most horizontal on screen
+// (see `groundLabelPlacement` in building-render.js), so it always reads
+// naturally as the camera orbits; the disc is rotationally symmetric and never
+// moves. Rect size/inset live in building-render.js alongside the helper.
 
-/** Camera radius at or below which building labels are fully visible. */
-export const BUILDING_LABEL_FADE_RADIUS_CLOSE = 12;
-/** Camera radius at or above which building labels are fully invisible. */
-export const BUILDING_LABEL_FADE_RADIUS_FAR   = 28;
-/** World-units height above the building roof at which the label plane sits. */
-export const BUILDING_LABEL_Y = 1.55;
-/** Plane size (world units) for the label sprite. */
-export const BUILDING_LABEL_WIDTH  = 1.6;
-export const BUILDING_LABEL_HEIGHT = 0.4;
-/** Texture canvas dimensions (px). Power-of-two friendly. */
-// Plank texture: pow-2 sized for mipmap-friendly TRILINEAR. 512x192 is the
-// next pow-2 step that keeps the plank legible from base zoom out to ~3x.
-export const BUILDING_LABEL_TEX_W = 512;
-export const BUILDING_LABEL_TEX_H = 192;
+/** Y (world units) the ground-label plane sits at — above the road-network
+ *  ribbon apex (~0.09) so the text paints over cobblestones, but below the
+ *  highlight band (HIGHLIGHT_DISC_Y = 0.15) so selection still reads on top. */
+export const GROUND_LABEL_Y = 0.12;
+/** Ground-label texture canvas (px). Pow-2 sized for mipmap-friendly
+ *  TRILINEAR; aspect ≈ GROUND_LABEL_WIDTH / GROUND_LABEL_HEIGHT. */
+export const GROUND_LABEL_TEX_W = 512;
+export const GROUND_LABEL_TEX_H = 128;
+
+/** Opacity of the "stand here" disc — a subtle 30% white wash. */
+export const GROUND_CIRCLE_ALPHA = 0.3;
+/** Radius (world units) of the "stand here" disc — a 0.4-diameter circle.
+ *  Comfortably inside the hex inradius (√3/2 ≈ 0.866) so it reads as a small
+ *  marker on the tile rather than filling it. */
+export const GROUND_CIRCLE_RADIUS = 0.2;
+/** Y (world units) the disc sits at — just under the name text (GROUND_LABEL_Y)
+ *  so the letters always read on top, and above the road ribbon (~0.09) so it
+ *  isn't z-fought by cobblestones. */
+export const GROUND_CIRCLE_Y = 0.105;
 
 // ─── Power-node tint overlay + name label ───────────────────────────────────
 // A faint faction-tinted hex sits over every power-node tile (just above the
@@ -1170,24 +1218,10 @@ export function radiusToZoom(radius, defaultRadius = DEFAULT_ZOOM_RADIUS) {
   return defaultRadius / r;
 }
 
-/** Building-label alpha for a given camera radius. Mirrors the 2D renderer's
- *  fade ramp but operates on ArcRotateCamera `radius` (smaller = closer in).
- *  Returns 1.0 at fadeStart (or closer), 0.0 at fadeEnd (or farther), and a
- *  linear interpolation in between. Pure helper for tests. */
-export function labelAlphaForZoom(
-  radius,
-  fadeStart = BUILDING_LABEL_FADE_RADIUS_CLOSE,
-  fadeEnd   = BUILDING_LABEL_FADE_RADIUS_FAR,
-) {
-  if (fadeEnd <= fadeStart) return radius <= fadeStart ? 1 : 0;
-  const a = (fadeEnd - radius) / (fadeEnd - fadeStart);
-  return Math.max(0, Math.min(1, a));
-}
-
 /** Returns the human-readable label string for a tile, or null if the tile
  *  doesn't get a label (anything other than a BUILDING tile with a building
  *  field, OR a generic HOUSE — houses are the background village fabric and
- *  don't earn a signpost). Pure helper — single source of truth for label
+ *  don't earn a name). Pure helper — single source of truth for label
  *  text + visibility. */
 export function labelTextForTile(tile) {
   if (!tile || !hasBuilding(tile) || !tile.building) return null;
@@ -1448,35 +1482,71 @@ export function hexToWorld(col, row, radius = HEX_RADIUS_WORLD) {
  *
  * Rules:
  *   - defender re-centres on its hex.
- *   - first `advantageCap` allies per side (in dice / executeBattle order)
- *     move to the shared-edge midpoint.
+ *   - each of the defender hex's 6 edges holds AT MOST ONE participant. The
+ *     attacker (when given) reserves the edge nearest its hex first — its
+ *     lunge freezes there — then the first `advantageCap` allies per side
+ *     (in dice / executeBattle order) each claim the nearest still-free edge.
+ *     An ally adjacent to the defender with no contention therefore lands on
+ *     the classic shared-edge midpoint; contenders spill to neighbouring
+ *     edges instead of stacking on the same spot.
  *   - allies BEYOND the cap stay put: returned with `moves: false` and the
  *     ally's own hex centre as `toX/toZ` (caller can skip them entirely).
+ *     Likewise (degenerate, >6 participants) an ally finding every edge taken
+ *     stays put.
  *
  * Pure helper — takes hex coords, returns world coords. No renderer / scene
  * state touched. Visible for tests.
  *
  * @param {object} opts
  * @param {{id:any, col:number, row:number}} opts.defender
+ * @param {{id:any, col:number, row:number}} [opts.attacker]
  * @param {Array<{id:any, col:number, row:number}>} [opts.attackAllies]
  * @param {Array<{id:any, col:number, row:number}>} [opts.defenseAllies]
  * @param {number} [opts.advantageCap=ADVANTAGE_CAP]
  */
 export function planCombatPositions({
-  defender, attackAllies = [], defenseAllies = [], advantageCap = ADVANTAGE_CAP,
+  defender, attacker = null, attackAllies = [], defenseAllies = [],
+  advantageCap = ADVANTAGE_CAP,
 } = {}) {
   const defCentre = hexToWorld(defender.col, defender.row);
+  // The 6 edge midpoints of the defender's hex — midpoint between the defender
+  // centre and each neighbour centre. fortNeighborOffset (not getNeighbors) so
+  // map-border hexes keep all 6 edges.
+  const edges = [];
+  for (let d = 0; d < 6; d++) {
+    const n = fortNeighborOffset(defender.col, defender.row, d);
+    const c = hexToWorld(n.col, n.row);
+    edges.push({
+      x: (c.x + defCentre.x) * 0.5,
+      z: (c.z + defCentre.z) * 0.5,
+      taken: false,
+    });
+  }
+  const claimNearest = (px, pz) => {
+    let best = null;
+    let bestD = Infinity;
+    for (const e of edges) {
+      if (e.taken) continue;
+      const dist = (e.x - px) ** 2 + (e.z - pz) ** 2;
+      if (dist < bestD) { bestD = dist; best = e; }
+    }
+    if (best) best.taken = true;
+    return best;
+  };
+  if (attacker) {
+    const atkCentre = hexToWorld(attacker.col, attacker.row);
+    claimNearest(atkCentre.x, atkCentre.z);
+  }
   const project = (ally, i) => {
     const allyCentre = hexToWorld(ally.col, ally.row);
     if (i >= advantageCap) {
       return { id: ally.id, toX: allyCentre.x, toZ: allyCentre.z, moves: false };
     }
-    return {
-      id: ally.id,
-      toX: (allyCentre.x + defCentre.x) * 0.5,
-      toZ: (allyCentre.z + defCentre.z) * 0.5,
-      moves: true,
-    };
+    const edge = claimNearest(allyCentre.x, allyCentre.z);
+    if (!edge) {
+      return { id: ally.id, toX: allyCentre.x, toZ: allyCentre.z, moves: false };
+    }
+    return { id: ally.id, toX: edge.x, toZ: edge.z, moves: true };
   };
   return {
     defender: defCentre,
@@ -1881,13 +1951,24 @@ export function shouldAnimateFocus(curTarget, curRadius, newTarget, newRadius, e
  *
  *  Note this starts from `current`, not the attacker's hex centre — so a
  *  unit that's mid-slide (or off-centre) lunges from where it actually is,
- *  with no pre-snap "pop" to the hex centre. */
-export function computeLungeTarget(current, target, fraction = LUNGE_FRACTION) {
+ *  with no pre-snap "pop" to the hex centre.
+ *
+ *  The slide is capped at `maxDist` (default LUNGE_MAX_WORLD — what an
+ *  adjacent-hex strike travels) so a lunge at a distant hex (stale whiff
+ *  target, fled quarry) leans in the right direction instead of sliding the
+ *  attacker across multiple hexes the rules never moved it through. */
+export function computeLungeTarget(current, target, fraction = LUNGE_FRACTION, maxDist = LUNGE_MAX_WORLD) {
   const f = Number.isFinite(fraction) ? fraction : LUNGE_FRACTION;
-  return {
-    x: current.x + f * (target.x - current.x),
-    z: current.z + f * (target.z - current.z),
-  };
+  let dx = f * (target.x - current.x);
+  let dz = f * (target.z - current.z);
+  const cap = Number.isFinite(maxDist) ? maxDist : Infinity;
+  const d = Math.hypot(dx, dz);
+  if (d > cap) {
+    const s = cap / d;
+    dx *= s;
+    dz *= s;
+  }
+  return { x: current.x + dx, z: current.z + dz };
 }
 
 /** Set `receiveShadows = true` on every (non-null) mesh in the iterable.
@@ -2036,6 +2117,9 @@ export class Renderer3D {
     // flips this via `setCameraDragMode`. Pinch / wheel always zooms.
     this.cameraDragMode     = 'pan';
     this.planGhostSteps     = null;
+    // Per-unit planning info painted into the unit info card margins
+    // (odds + planned-attack count) — published by ui.js.
+    this.unitInfoCards      = new Map();
     this.viewLocked         = false;
     this.zoomLevel          = 1.0;
     this.hexSize            = 30;
@@ -2044,6 +2128,9 @@ export class Renderer3D {
     this._panX              = 0;
     this._panY              = 0;
     this.disambigHiddenIds  = new Set();
+    // Tutorial/hint hex spotlight ({col,row}|null) — set by MissionConductor.
+    // Published as a gold 'fill' overlay by _publishTutorialSpotlightOverlay.
+    this.tutorialSpotlightHex = null;
 
     // ── Babylon state — populated by _initBabylon() on first draw ───────────
     this._babylon       = null; // module namespace once loaded
@@ -2124,10 +2211,11 @@ export class Renderer3D {
     this._rigSources      = new Map(); // model file → source
     this._rigLoadPromises = new Map(); // model file → in-flight load (resolves src|null)
     this._rigFileMissing  = new Set(); // files that 404'd — don't re-attempt
-    // The rig source whose punch is currently mid-strike (set by addLungeAnim,
-    // read by hold/resume so the cinematic freezes the ATTACKER's rig, not just
-    // the paladin). Falls back to _paladinSource when unset.
-    this._activePunchSrc  = null;
+    // The per-standee clones whose punch is currently mid-strike (set by
+    // addLungeAnim, read by hold/resume so the cinematic freezes the ATTACKER's
+    // own clone — every standee has its own skeleton + clip groups now). A set
+    // because gang-up combat can have several attackers strike at once.
+    this._activePunchClones = new Set();
     this._engine        = null;
     this._scene         = null;
     this._camera        = null;
@@ -2249,11 +2337,14 @@ export class Renderer3D {
     // Item 8 — overflow "+N" badges keyed by hexKey; created lazily when a
     // tile has more standees than free slots, disposed when overflow drops to 0.
     this._overflowBadges       = new Map(); // hexKey → { plane, mat, tex, lastN }
-    // Building hover labels: floating planes above each building tile, fade
-    // with camera zoom (alpha pumped each frame in `_onBeforeRender`). Built
-    // alongside the building mesh in `_buildTileMesh`; never rebuilt because
-    // map topology is immutable once the game starts.
-    this._buildingLabelsByKey  = new Map(); // hexKey → { plane, mat, tex }
+    // Building GROUND markers: a faint "stand here" disc + the building name
+    // painted flat on each labeled building's entrance hex. The name re-aligns
+    // each frame to the most-horizontal-on-screen hex edge via
+    // `_pumpBuildingGroundLabels`; cx/cz = entrance hex centre. Built alongside
+    // the building mesh in `_buildTileMesh`; never rebuilt (map topology is
+    // immutable once the game starts).
+    this._buildingGroundLabelsByKey = new Map(); // hexKey → { plane, mat, tex, disc, discMat, cx, cz }
+    this._groundLabelYaw = null;  // last applied snap yaw — re-pump only on change
     this._fogMaterialCache = new Map();  // base hex color → darker StandardMaterial
     this._fogActiveSet     = new Set();  // hexKeys currently rendered as fogged
     // Renderer-level fog DISPLAY override, toggled with the `T` hotkey for
@@ -2514,14 +2605,19 @@ export class Renderer3D {
     // loading screen drops. Loading them inside the bundle takes the cost
     // before whenReady() resolves so gameplay starts smooth.
     const terrainP   = afterInit(() => this._preloadTerrainDetailTextures());
+    // Every character mesh (mannequin + each type rig) is preloaded here so the
+    // scene never has to fall back to a pawn at runtime — the loading overlay
+    // stays up until they're all in hand.
+    const charactersP = afterInit(() => this._preloadCharacterRigs(basePath));
 
     this._assetBundle = [
-      { id: 'engine',    label: 'engine',    promise: babylonP,   progress: 0 },
-      { id: 'sprites',   label: 'sprites',   promise: atlasP,     progress: 0 },
-      { id: 'buildings', label: 'buildings', promise: buildingsP, progress: 0 },
-      { id: 'paladin',   label: 'paladin',   promise: paladinP,   progress: 0 },
-      { id: 'forest',    label: 'forest',    promise: treesP,     progress: 0 },
-      { id: 'terrain',   label: 'terrain',   promise: terrainP,   progress: 0 },
+      { id: 'engine',     label: 'engine',     promise: babylonP,    progress: 0 },
+      { id: 'sprites',    label: 'sprites',    promise: atlasP,      progress: 0 },
+      { id: 'buildings',  label: 'buildings',  promise: buildingsP,  progress: 0 },
+      { id: 'paladin',    label: 'paladin',    promise: paladinP,    progress: 0 },
+      { id: 'characters', label: 'characters', promise: charactersP, progress: 0 },
+      { id: 'forest',     label: 'forest',     promise: treesP,      progress: 0 },
+      { id: 'terrain',    label: 'terrain',    promise: terrainP,    progress: 0 },
     ];
 
     for (const item of this._assetBundle) {
@@ -2536,6 +2632,67 @@ export class Renderer3D {
         });
     }
   }
+
+  /** Preload the character meshes the game is sure (or likely) to show — the
+   *  mannequin plus every leader/summon rig — so the common case never falls
+   *  back to a placeholder. Run as a load-bundle item (see beginLoad) so the
+   *  loading overlay + progress bar stay up until they're in hand. There is no
+   *  cone/sphere pawn fallback any more.
+   *
+   *  Survivors are deliberately EXCLUDED (see LAZY_RIG_TYPES): the roster is
+   *  large and most members never appear, so each survivor's mesh is loaded
+   *  on demand via preloadEntityRig() at the start of the replay that reveals
+   *  it. Until then a survivor renders on the (preloaded) mannequin.
+   *
+   *  - The mannequin is the universal fallback and MUST load; a failure here
+   *    means some units would have no mesh at all, so we log a loud error.
+   *  - A leader/summon type with no rig file 404s and uses the mannequin —
+   *    expected, NOT an error.
+   *  - The shared walk clip is loaded and retargeted onto every rig so units
+   *    walk from their first move instead of sliding in their idle pose. */
+  async _preloadCharacterRigs(basePath = this._assetsBasePath || 'assets') {
+    const mannequin = await Promise.resolve(
+      this._loadFallbackRig(MANNEQUIN_RIG_FILE, basePath)).catch(() => null);
+    if (!mannequin) {
+      console.error(`[Renderer3D] Could not load the fallback character mesh "${MANNEQUIN_RIG_FILE}" — units without their own rig cannot render.`);
+    }
+    // Leaders + summons (every type except the lazily-loaded ones). Paladin is
+    // already a bundle item; _loadFallbackRig dedupes via _rigLoadPromises.
+    const files = new Set();
+    for (const type of Object.values(EntityType)) {
+      if (LAZY_RIG_TYPES.has(type)) continue;
+      const f = entityTypeRigFile({ type });
+      if (f && f !== MANNEQUIN_RIG_FILE) files.add(f);
+    }
+    const srcs = await Promise.all([...files].map(f =>
+      Promise.resolve(this._loadFallbackRig(f, basePath)).catch(() => null)));
+    // Walk clip: load the shared source, then retarget onto every loaded rig so
+    // the walk groups exist before the first move plays.
+    await Promise.resolve(this._loadWalkingAnimation(basePath)).catch(() => null);
+    for (const src of [mannequin, ...srcs]) {
+      if (src) { try { this._retargetWalkOntoRig(src); } catch { /* non-fatal */ } }
+    }
+  }
+
+  /** Just-in-time load of ONE entity's rig (used for survivors, which aren't in
+   *  the up-front preload). Resolves once the rig settles — a 404 resolves too,
+   *  in which case the unit uses the preloaded mannequin. Call this at the start
+   *  of a round replay that will reveal the entity, then await it before the
+   *  discovery standee is built so the unit shows its own mesh, not a stand-in.
+   *  No-op for paladin/mannequin types (already preloaded). */
+  async preloadEntityRig(entity, basePath = this._assetsBasePath || 'assets') {
+    const file = entityTypeRigFile(entity);
+    if (!file || file === MANNEQUIN_RIG_FILE) return;
+    await Promise.resolve(this._loadFallbackRig(file, basePath)).catch(() => null);
+    // Retarget the shared walk clip onto the freshly-loaded rig so it walks
+    // immediately (the up-front rigs get this in _preloadCharacterRigs).
+    const src = this._rigSources.get(file);
+    if (src) {
+      await Promise.resolve(this._loadWalkingAnimation(basePath)).catch(() => null);
+      try { this._retargetWalkOntoRig(src); } catch { /* non-fatal */ }
+    }
+  }
+
 
   /** Advance one bundle item's byte-level progress and re-emit the aggregate.
    *  Monotonic — a regressing or already-settled fraction is ignored, so a
@@ -2912,7 +3069,7 @@ export class Renderer3D {
       source.isPickable = false;
       // World-geometry render group so depth-tests against units/buildings
       // behave like the other terrain props (see PR #361).
-      if (typeof source.renderingGroupId !== 'undefined') source.renderingGroupId = 0;
+      if (typeof source.renderingGroupId !== 'undefined') source.renderingGroupId = WORLD_GROUP;
       // Receive shadows from neighbouring buildings / trees / standees as well
       // as cast them. InstancedMesh inherits receiveShadows from its source
       // template, so setting it here means every building instance inherits it
@@ -3056,7 +3213,7 @@ export class Renderer3D {
     this._addShadowCaster(inst);
     // World-geometry render group, same as the procedural box+roof + tile
     // cylinders — keeps the depth buffer consistent for unit/building overlap.
-    if (typeof inst.renderingGroupId !== 'undefined') inst.renderingGroupId = 0;
+    if (typeof inst.renderingGroupId !== 'undefined') inst.renderingGroupId = WORLD_GROUP;
     return inst;
   }
 
@@ -3313,7 +3470,7 @@ export class Renderer3D {
         // Hide template — instances render geometry on its behalf.
         if (typeof source.setEnabled === 'function') source.setEnabled(false);
         source.isPickable = false;
-        if (typeof source.renderingGroupId !== 'undefined') source.renderingGroupId = 0;
+        if (typeof source.renderingGroupId !== 'undefined') source.renderingGroupId = WORLD_GROUP;
         // Receive shadows. Set on the source mesh AND every child mesh
         // (glTF imports usually put geometry on a child node). Force
         // shader compilation with `useInstances: true` immediately after
@@ -3336,15 +3493,7 @@ export class Renderer3D {
             // Pre-compile with instances + the current scene's shadow
             // generator set on the mesh so the shader includes both
             // INSTANCES and SHADOWS{N} defines from the start.
-            if (typeof m.material.forceCompilation === 'function') {
-              try {
-                // Babylon signature: forceCompilation(mesh, onCompiled?, options?, onError?).
-                // Passing the options object as the 2nd arg makes Babylon try to
-                // call it as a function once compile finishes — TypeError per
-                // material, repeating through every PBR fallback pass.
-                m.material.forceCompilation(m, undefined, { useInstances: true });
-              } catch (_err) { /* compilation may fail in headless tests */ }
-            }
+            forceCompileMaterial(m.material, m);
           }
         }
         // Stash a bbox-derived per-template uniform scale so callers don't
@@ -3479,10 +3628,7 @@ export class Renderer3D {
             if (fogged) tintMaterial(fsub);
             // Re-bake INSTANCES (+ SHADOWS) defines on the faded submaterial so
             // its hardware instances compile the alpha path (see below).
-            if (typeof fsub.forceCompilation === 'function') {
-              // 2nd arg is onCompiled — pass undefined; options go in 3rd.
-              try { fsub.forceCompilation(m, undefined, { useInstances: true }); } catch (_e) { /* headless */ }
-            }
+            forceCompileMaterial(fsub, m);
             return fsub;
           });
         }
@@ -3490,10 +3636,7 @@ export class Renderer3D {
         // Re-bake the INSTANCES (+ SHADOWS) shader defines on the faded
         // material so its hardware instances render with shadow sampling,
         // matching the opaque template's pre-compile (see `_loadTreePackManifest`).
-        if (typeof fm.forceCompilation === 'function') {
-          // 2nd arg is onCompiled — pass undefined; options go in 3rd.
-          try { fm.forceCompilation(m, undefined, { useInstances: true }); } catch (_e) { /* headless */ }
-        }
+        forceCompileMaterial(fm, m);
       }
     }
     if (typeof clone.setEnabled === 'function') clone.setEnabled(false);
@@ -3550,7 +3693,7 @@ export class Renderer3D {
       inst.position.z = (opts.cz ?? 0) + tree.z;
     }
     inst.isPickable = false;
-    if (typeof inst.renderingGroupId !== 'undefined') inst.renderingGroupId = 0;
+    if (typeof inst.renderingGroupId !== 'undefined') inst.renderingGroupId = WORLD_GROUP;
     // Receive shadows from neighbouring trees / buildings / standees as
     // well as cast them. InstancedMesh inherits receiveShadows from its
     // source mesh, so set it on the template too (idempotent — Babylon
@@ -3900,6 +4043,9 @@ export class Renderer3D {
     if (clone) {
       src[`${slot}DurationSec`] = animDurationSeconds(native);
       src[slot] = clone;
+      // slot is 'hitGroup' / 'blockGroup' → the per-clone group key is 'hit' /
+      // 'block'. Propagate onto every standee using this rig.
+      this._propagateClipToUnits(src, slot === 'hitGroup' ? 'hit' : 'block');
     }
     this._disposeWalkingImport(result);
     return src[slot];
@@ -3919,39 +4065,37 @@ export class Renderer3D {
    *  time the damage floater with the impact pose. */
   playReactionAnim(kind, entityId = null) {
     if (kind !== 'hit' && kind !== 'block') return Promise.resolve();
-    const slot = kind === 'hit' ? 'hitGroup' : 'blockGroup';
+    const cloneSlot = kind;                                    // clone.groups key
+    const srcSlot = kind === 'hit' ? 'hitGroup' : 'blockGroup'; // src cache key
     const file = kind === 'hit' ? HIT_MODEL_FILE : BLOCK_MODEL_FILE;
-    // Play on the DEFENDER's own rig (paladin or fallback); default to the
-    // paladin source when no defender id is supplied (back-compat).
+    // Play on the DEFENDER's OWN clone (its own skeleton + clip), so only the
+    // unit that was struck flinches — siblings keep idling.
+    const standee = entityId != null ? this._entityStandees?.get(entityId) : null;
+    const clone = standee && standee.paladinClone;
     const ent = entityId != null && this.state?.entities
       ? this.state.entities.find(e => e && e.id === entityId) : null;
-    const src = (ent && !unitUsesPaladinModel(ent))
-      ? this._loadedFallbackRigFor(ent)
-      : this._paladinSource;
-    if (!src || !src[slot]) {
-      // Lazy load (idempotent) so the next reaction has the clip ready.
-      this._ensureReactionAnimation(slot, file, this._assetsBasePath || 'assets', src);
+    const src = ent ? this._loadedFallbackRigFor(ent) : null;
+    const group = clone && clone.groups && clone.groups[cloneSlot];
+    if (!clone || !group) {
+      // Clip not cloned onto this unit yet — kick the (idempotent) src load so
+      // it propagates for next time, and skip the reaction this once.
+      if (src) this._ensureReactionAnimation(srcSlot, file, this._assetsBasePath || 'assets', src);
       return Promise.resolve();
     }
-    const group = src[slot];
-    // Stop punch/idle/walk/run so the reaction owns the skeleton.
-    if (src.idleGroup && typeof src.idleGroup.stop === 'function') src.idleGroup.stop();
-    if (src.walkGroup && typeof src.walkGroup.stop === 'function') src.walkGroup.stop();
-    if (src.runGroup && typeof src.runGroup.stop === 'function') src.runGroup.stop();
-    if (src.punchGroup && typeof src.punchGroup.stop === 'function') src.punchGroup.stop();
-    src.punchPlaying = false;
-    src.reactionPlaying = true;
-    src.activeGroup = kind;
+    // Stop this unit's punch/idle/walk/run so the reaction owns its skeleton.
+    for (const k of ['idle', 'walk', 'run', 'punch']) clone.groups[k]?.stop?.();
+    clone.oneShotPlaying = true;
+    clone.activeGroup = kind;
     const speedMul = this._playbackSpeedMul ?? 1.0;
     // Compress to ~500ms regardless of source clip length so the reaction
     // doesn't overstay its welcome in the ~6s sequence budget.
-    const dur = Number.isFinite(src[`${slot}DurationSec`]) ? src[`${slot}DurationSec`] : 1.0;
+    const dur = Number.isFinite(clone[`${cloneSlot}DurationSec`]) ? clone[`${cloneSlot}DurationSec`] : 1.0;
     const ratio = (dur * 1000) / (500 * speedMul);
     if (typeof group.stop === 'function') group.stop();
     return new Promise(resolve => {
       const done = () => {
-        src.reactionPlaying = false;
-        src.activeGroup = null;
+        clone.oneShotPlaying = false;
+        clone.activeGroup = null;
         resolve();
       };
       const obs = group.onAnimationGroupEndObservable;
@@ -3973,23 +4117,21 @@ export class Renderer3D {
    *  idle/walk toggle. Used when a lunge is hard-cleared (round snap) so the
    *  rig doesn't freeze mid-strike. Safe when no punch is playing. */
   _stopPaladinPunch() {
-    const src = this._activePunchSrc || this._paladinSource;
-    this._activePunchSrc = null;
-    if (!src) return;
-    if (src.punchGroup && typeof src.punchGroup.stop === 'function') {
-      try { src.punchGroup.stop(); } catch { /* ignore */ }
-    }
-    if (src.punchPlaying) {
-      src.punchPlaying = false;
-      src.activeGroup = null;
+    const clones = this._activePunchClones ? [...this._activePunchClones] : [];
+    if (this._activePunchClones) this._activePunchClones.clear();
+    for (const clone of clones) {
+      const punch = clone?.groups?.punch;
+      if (punch && typeof punch.stop === 'function') {
+        try { punch.stop(); } catch { /* ignore */ }
+      }
+      if (clone) { clone.oneShotPlaying = false; clone.activeGroup = null; }
     }
   }
 
-  /** Frame range [from, to] of a rig's retargeted punch clip, or null when the
-   *  clip hasn't loaded / has a degenerate range. Defaults to the active punch
-   *  rig (the attacker) so the cinematic freezes the right strike. */
-  _punchFrameRange(src = this._activePunchSrc || this._paladinSource) {
-    const punch = src?.punchGroup;
+  /** Frame range [from, to] of a standee clone's punch clip, or null when the
+   *  clip hasn't been cloned in / has a degenerate range. */
+  _clonePunchFrameRange(clone) {
+    const punch = clone?.groups?.punch;
     if (!punch) return null;
     const from = Number.isFinite(punch.from) ? punch.from : 0;
     const to   = Number.isFinite(punch.to)   ? punch.to   : 0;
@@ -3997,47 +4139,52 @@ export class Renderer3D {
     return { from, to };
   }
 
-  /** Freeze an IN-FLIGHT punch on its mid/impact frame and hold it there.
+  /** Freeze EVERY in-flight punch on its mid/impact frame and hold it there.
    *
-   *  Used by the 3D cinematic battle arm: the attacker lunges in and the punch
-   *  starts (via `addLungeAnim` → `_startPaladinPunch`), then this pauses the
-   *  strike at the impact pose while the dice cards read out, after which
-   *  `resumePunch()` carries it through to completion. `punchPlaying` stays set
-   *  so the idle/walk toggle won't grab the shared skeleton mid-freeze.
+   *  Used by the 3D cinematic battle arm: the attacker(s) lunge in and start
+   *  their own punch clip (via `addLungeAnim` → `_startClonePunch`), then this
+   *  pauses each strike at the impact pose while the dice cards read out, after
+   *  which `resumePunch()` carries them through to completion. `oneShotPlaying`
+   *  stays set on each so the locomotion toggle won't grab a unit mid-freeze.
    *
-   *  No-op (returns false) unless a punch is actually playing — so a ranged or
-   *  cone-token attacker (which never started the shared punch) doesn't freeze
-   *  every idle paladin in the scene. The frozen frame is stashed for resume. */
+   *  No-op (returns false) unless at least one punch is actually playing — so a
+   *  ranged or cone-token attacker (which never started a punch) doesn't freeze
+   *  anyone. The frozen frame is stashed for resume. */
   holdPunchAtImpact() {
-    const src = this._activePunchSrc || this._paladinSource;
-    const punch = src?.punchGroup;
-    if (!src || !punch || !src.punchPlaying) return false;
-    const range = this._punchFrameRange(src);
-    if (!range) return false;
-    const impact = range.from + (range.to - range.from) * PUNCH_IMPACT_FRAC;
-    this._frozenPunchImpactFrame = impact;
-    if (typeof punch.goToFrame === 'function') punch.goToFrame(impact);
-    if (typeof punch.pause === 'function') punch.pause();
-    return true;
+    const clones = this._activePunchClones ? [...this._activePunchClones] : [];
+    let held = false;
+    for (const clone of clones) {
+      const punch = clone?.groups?.punch;
+      if (!punch || !clone.oneShotPlaying) continue;
+      const range = this._clonePunchFrameRange(clone);
+      if (!range) continue;
+      const impact = range.from + (range.to - range.from) * PUNCH_IMPACT_FRAC;
+      this._frozenPunchImpactFrame = impact;
+      if (typeof punch.goToFrame === 'function') punch.goToFrame(impact);
+      if (typeof punch.pause === 'function') punch.pause();
+      held = true;
+    }
+    return held;
   }
 
-  /** Resume a punch frozen by `holdPunchAtImpact()` from its impact frame
-   *  through to the end of the clip. Returns a promise that resolves when the
-   *  strike completes (so the cinematic arm can await it before the lunge
-   *  return). Clears `punchPlaying` on completion so idle/walk resume. No-op
-   *  resolve when nothing is frozen. */
+  /** Resume every punch frozen by `holdPunchAtImpact()` from its impact frame
+   *  through to the end of the clip. Returns a promise that resolves when ALL
+   *  the strikes complete (so the cinematic arm can await before the lunge
+   *  return). Clears `oneShotPlaying` per clone on completion so idle/walk
+   *  resume. No-op resolve when nothing is frozen. */
   resumePunch() {
-    const src = this._activePunchSrc || this._paladinSource;
-    const punch = src?.punchGroup;
-    if (!src || !punch || this._frozenPunchImpactFrame == null) return Promise.resolve();
+    const clones = this._activePunchClones
+      ? [...this._activePunchClones].filter(c => c?.groups?.punch && c.oneShotPlaying) : [];
+    if (clones.length === 0 || this._frozenPunchImpactFrame == null) return Promise.resolve();
     this._frozenPunchImpactFrame = null;
-    return new Promise(resolve => {
+    return Promise.all(clones.map(clone => new Promise(resolve => {
+      const punch = clone.groups.punch;
       let settled = false;
       const done = () => {
         if (settled) return;
         settled = true;
-        src.punchPlaying = false;
-        src.activeGroup = null;
+        clone.oneShotPlaying = false;
+        clone.activeGroup = null;
         resolve();
       };
       const obs = punch.onAnimationGroupEndObservable;
@@ -4051,7 +4198,7 @@ export class Renderer3D {
         if (typeof punch.play === 'function') punch.play(false);
         done();
       }
-    });
+    }))).then(() => {});
   }
 
   /** Clone the paladin source skeleton and re-link each cloned bone's
@@ -4215,7 +4362,7 @@ export class Renderer3D {
       if (!childClone) continue;
       if (typeof childClone.setEnabled === 'function') childClone.setEnabled(true);
       childClone.isPickable = false;
-      if (typeof childClone.renderingGroupId !== 'undefined') childClone.renderingGroupId = 0;
+      if (typeof childClone.renderingGroupId !== 'undefined') childClone.renderingGroupId = WORLD_GROUP;
       childClone.alwaysSelectAsActiveMesh = true;
       childClones.push(childClone);
       if (srcMesh === src.mesh) primarySkinnedClone = childClone;
@@ -4329,7 +4476,7 @@ export class Renderer3D {
       }
       if (typeof childClone.setEnabled === 'function') childClone.setEnabled(true);
       childClone.isPickable = false;
-      if (typeof childClone.renderingGroupId !== 'undefined') childClone.renderingGroupId = 0;
+      if (typeof childClone.renderingGroupId !== 'undefined') childClone.renderingGroupId = WORLD_GROUP;
       // Defeat bbox-based culling on EVERY child. Babylon caches each
       // submesh's natural bbox; even with the root scaled correctly,
       // skinning can move verts outside that bbox (Mixamo bone-scale
@@ -4357,19 +4504,44 @@ export class Renderer3D {
       cloneRoot = primarySkinnedClone;
     }
 
-    // Share the source skeleton across every clone. Babylon's glTF loader
-    // makes the imported AnimationGroup target TransformNodes, and bones link
-    // to those TransformNodes via _linkedTransformNode. Cloning the skeleton
-    // per-standee leaves the cloned bones still pointing at source nodes —
-    // the bone-name AnimationGroup retarget converter (which looks for Bones,
-    // not TransformNodes) ends up with no matches, falls back to the source
-    // target, and every clone stays in T-pose. Sharing the source skeleton
-    // sidesteps the problem: the source idleGroup (started in _loadPaladinModel)
-    // animates the source skeleton's bones, and every clone that references
-    // that skeleton skins from the same bone matrices. All paladins idle in
-    // unison — fine for a board-game token, far better than T-pose.
-    if (src.skeleton && primarySkinnedClone) {
-      primarySkinnedClone.skeleton = src.skeleton;
+    // Per-INSTANCE skeleton. Each standee gets its own skeleton clone whose
+    // bones relink to its own cloned TransformNodes, plus its own clone of every
+    // animation clip (idle/walk/run/punch/hit/block) targeting those nodes — so
+    // each unit idles, walks, and strikes on its own timeline, never in unison.
+    // (Naively cloning a skeleton leaves the cloned bones pointing at the SOURCE
+    // nodes → every clone mirrors the source in T-pose; the relink in
+    // _cloneRigSkeleton is what makes it independent.) When the rig has no real
+    // skeleton — test stubs, or a TransformNode-less environment — fall back to
+    // sharing the source skeleton so the cone/mesh still renders.
+    let unitSkeleton = null, tnByName = null, groups = null;
+    if (primarySkinnedClone) {
+      const unit = this._cloneRigSkeleton(src, `${tag}_${id}`);
+      if (unit) {
+        unitSkeleton = unit.skeleton;
+        tnByName = unit.byName;
+        // Bind EVERY skinned primitive to this unit's skeleton — not just the
+        // primary. A multi-primitive character (the zombie ships as
+        // Ch10_primitive0 + Ch10_primitive1) otherwise leaves its secondary
+        // primitive(s) on the SOURCE skeleton, which runs the source idle: half
+        // the unit walks on its own skeleton while the other half keeps idling
+        // — the "walk and idle blended / idle sliding" bug. mesh.clone() copies
+        // the source skeleton ref onto each clone, so only the skinned ones are
+        // reassigned (guard on `c.skeleton`).
+        for (const c of childClones) {
+          if (c.skeleton) c.skeleton = unitSkeleton;
+        }
+        groups = {};
+      } else if (src.skeleton) {
+        // Per-unit clone failed → this standee shares the source skeleton and
+        // gets NO per-unit clip groups (no walk/run/punch). Several such units
+        // can't animate independently — the "all zombies, no walk" symptom.
+        this._rigSharedSkelWarned ??= new Set();
+        if (!this._rigSharedSkelWarned.has(src.cloneTag)) {
+          this._rigSharedSkelWarned.add(src.cloneTag);
+          console.warn(`[Renderer3D][rigdiag] "${src.cloneTag}" standee fell back to the SHARED source skeleton — no per-unit walk clip. (entity type ${entity?.type})`);
+        }
+        primarySkinnedClone.skeleton = src.skeleton;
+      }
     }
 
     // Scale + rotate + position on the root. Children inherit transforms.
@@ -4399,24 +4571,60 @@ export class Renderer3D {
     }
     if (parent && 'parent' in cloneRoot) cloneRoot.parent = parent;
 
-    return {
+    const clone = {
       mesh: cloneRoot,
       skinnedMesh: primarySkinnedClone,
       childMeshes: childClones,
       ownsRootNode,
-      skeleton: null,
+      skeleton: unitSkeleton,
       animationGroup: null,
+      // Per-instance animation state. `groups` holds this standee's own clip
+      // clones (idle/walk/run/punch/hit/block); `activeGroup` is the current
+      // locomotion state; `oneShotPlaying` locks the toggle out while a punch /
+      // reaction owns the skeleton. `rigSrc` is the rig these were cloned from —
+      // async clip loads propagate onto `tnByName` keyed off it.
+      rigSrc: src,
+      unitSkeleton,
+      tnByName,
+      groups,
+      activeGroup: null,
+      oneShotPlaying: false,
+      _unitId: id,
     };
+    // Clone whatever clips the rig has loaded so far onto this standee and start
+    // its idle. Only when it got its own skeleton (real Babylon path).
+    if (unitSkeleton && tnByName) this._cloneAllClipsOntoUnit(src, clone);
+    return clone;
   }
 
-  /** Dispose a previously-built paladin clone — every child mesh first
-   *  (cascades materials), then the root transform node if we own it.
-   *  Skeleton + animation group are owned by `_paladinSource` (shared
-   *  across all clones) and live for the renderer's lifetime; no per-
-   *  clone teardown of either. Safe to call when no clone is attached. */
+  /** Dispose a previously-built rig clone — its per-instance animation groups,
+   *  skeleton, and bone TransformNodes (all owned by THIS standee now), every
+   *  child mesh (cascades materials), then the root transform node if we own it.
+   *  Safe to call when no clone is attached. */
   _disposePaladinClone(standee) {
     if (!standee || !standee.paladinClone) return;
     const c = standee.paladinClone;
+    // A mid-strike clone must leave the active-punch set or hold/resume would
+    // dereference a disposed group.
+    if (this._activePunchClones) this._activePunchClones.delete(c);
+    // Per-instance animation teardown: stop + dispose this standee's own clip
+    // clones, its skeleton, and the bone TransformNodes those bones link to.
+    if (c.groups) {
+      for (const g of Object.values(c.groups)) {
+        if (!g) continue;
+        try { g.stop?.(); g.dispose?.(); } catch { /* ignore */ }
+      }
+      c.groups = null;
+    }
+    if (c.unitSkeleton && typeof c.unitSkeleton.dispose === 'function') {
+      try { c.unitSkeleton.dispose(); } catch { /* ignore */ }
+    }
+    if (c.tnByName) {
+      for (const tn of c.tnByName.values()) {
+        if (tn && typeof tn.dispose === 'function') { try { tn.dispose(); } catch { /* ignore */ } }
+      }
+      c.tnByName = null;
+    }
     if (Array.isArray(c.childMeshes)) {
       for (const m of c.childMeshes) {
         if (m && typeof m.dispose === 'function') m.dispose();
@@ -4478,7 +4686,7 @@ export class Renderer3D {
       );
     } catch { return; }
     blade.isPickable = false;
-    if (typeof blade.renderingGroupId !== 'undefined') blade.renderingGroupId = 0;
+    if (typeof blade.renderingGroupId !== 'undefined') blade.renderingGroupId = WORLD_GROUP;
     blade.alwaysSelectAsActiveMesh = true;
     // Steel-grey stand-in material (freshly created — never a shared material).
     if (BABYLON.StandardMaterial) {
@@ -4582,7 +4790,7 @@ export class Renderer3D {
     const place = (mesh, x, y, z, rotZ = 0, rotX = 0) => {
       if (!mesh) return;
       mesh.isPickable = false;
-      if (typeof mesh.renderingGroupId !== 'undefined') mesh.renderingGroupId = 0;
+      if (typeof mesh.renderingGroupId !== 'undefined') mesh.renderingGroupId = WORLD_GROUP;
       mesh.alwaysSelectAsActiveMesh = true;
       if (sharedMat) mesh.material = sharedMat;
       if (BABYLON.Vector3) {
@@ -4687,8 +4895,211 @@ export class Renderer3D {
     if (!clone) return null;
     src.walkGroup = clone;
     src.walkSpeedRatio = ratio;
-    src.activeGroup = src.activeGroup || 'idle';
+    // Propagate the walk clip onto every standee already using this rig so each
+    // gets its OWN paused walk clone; the per-unit toggle starts it when that
+    // unit moves (idle siblings keep idling).
+    this._propagateClipToUnits(src, 'walk');
     return clone;
+  }
+
+  /** Clone a rig's bone TransformNode hierarchy so a second skeleton can be
+   *  driven independently of the idle one. Returns a name → cloned-node Map.
+   *  (The bones link to these nodes; the clip targets them.) */
+  _cloneTransformNodeSet(srcTNs, tag) {
+    const BABYLON = this._babylon;
+    if (!BABYLON || typeof BABYLON.TransformNode !== 'function') return null;
+    const map = new Map();     // srcTN → cloneTN
+    const byName = new Map();
+    for (const tn of srcTNs || []) {
+      if (!tn || typeof tn.name !== 'string') continue;
+      let n;
+      try { n = new BABYLON.TransformNode(`${tag}_${tn.name}`, this._scene || null); } catch { continue; }
+      if (tn.position && n.position && n.position.copyFrom) n.position.copyFrom(tn.position);
+      if (tn.rotationQuaternion && tn.rotationQuaternion.clone) n.rotationQuaternion = tn.rotationQuaternion.clone();
+      else if (tn.rotation && n.rotation && n.rotation.copyFrom) n.rotation.copyFrom(tn.rotation);
+      if (tn.scaling && n.scaling && n.scaling.copyFrom) n.scaling.copyFrom(tn.scaling);
+      map.set(tn, n);
+      byName.set(tn.name, n);
+    }
+    // Reparent to mirror the source hierarchy.
+    for (const tn of srcTNs || []) {
+      const n = map.get(tn);
+      if (n && tn.parent && map.has(tn.parent) && 'parent' in n) n.parent = map.get(tn.parent);
+    }
+    return byName;
+  }
+
+  /** Clone a rig `src`'s skeleton + bone TransformNode hierarchy for ONE
+   *  standee, so that standee animates independently of every other unit of the
+   *  same rig. Returns `{ skeleton, byName }` (byName = name → cloned-TN Map) or
+   *  null when the rig has no real skeleton (test stubs). Each cloned bone is
+   *  relinked to the standee's OWN TransformNode — the technique proven by
+   *  `_buildGhostSkeletonFromWalkingTNs`. The clip groups the standee plays are
+   *  then cloned onto these same nodes via `_cloneClipOntoTNs`. */
+  _cloneRigSkeleton(src, tag) {
+    // Diagnostic: log once per rig (cloneTag) so a per-unit clone FAILURE — the
+    // path that drops a rig back to the shared source skeleton with no per-unit
+    // walk clip — is visible without per-frame spam.
+    const _ct = src?.cloneTag || 'rig';
+    this._rigSkelDiag ??= new Set();
+    const _diag = (msg) => {
+      const key = _ct + '|' + msg;
+      if (this._rigSkelDiag.has(key)) return;
+      this._rigSkelDiag.add(key);
+      console.info(`[Renderer3D][rigdiag] cloneRigSkeleton(${_ct}): ${msg}`);
+    };
+    const BABYLON = this._babylon;
+    if (!src || !src.skeleton || typeof src.skeleton.clone !== 'function') { _diag('NULL — src has no cloneable skeleton'); return null; }
+    if (!BABYLON || typeof BABYLON.TransformNode !== 'function') { _diag('NULL — no BABYLON.TransformNode'); return null; }
+    const byName = this._cloneTransformNodeSet(src.transformNodes, tag);
+    if (!byName || byName.size === 0) { _diag(`NULL — cloned 0 transformNodes (src.transformNodes=${src.transformNodes?.length ?? 0})`); return null; }
+    const skel = src.skeleton.clone(`${tag}_skel`);
+    if (!skel || !Array.isArray(skel.bones)) { _diag('NULL — skeleton.clone() returned no bones'); return null; }
+    const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
+    let relinked = 0;
+    for (const bone of skel.bones) {
+      if (!bone || !bone.name) continue;
+      const tn = byName.get(bone.name) || byName.get(stripDup(bone.name));
+      if (!tn) continue;
+      if (typeof bone.linkTransformNode === 'function') bone.linkTransformNode(tn);
+      else bone._linkedTransformNode = tn;
+      relinked++;
+    }
+    if (relinked === 0) {
+      // Sample a few names from each side so a naming mismatch is obvious.
+      const boneNames = skel.bones.slice(0, 4).map(b => b?.name).join(', ');
+      const tnNames = [...byName.keys()].slice(0, 4).join(', ');
+      _diag(`NULL — relinked 0/${skel.bones.length} bones. bone names: [${boneNames}] vs cloned TN names: [${tnNames}]`);
+      return null;
+    }
+    _diag(`OK — relinked ${relinked}/${skel.bones.length} bones, ${byName.size} TNs`);
+    return { skeleton: skel, byName };
+  }
+
+  /** Clone an already-retargeted+rebased rig clip (`srcGroup`) onto one
+   *  standee's cloned TransformNodes (`byName`), so the standee plays that clip
+   *  on its own skeleton without disturbing any sibling. The source group's
+   *  keyframes are copied verbatim (already at the rig's rest height); only the
+   *  target nodes are remapped by bone name. Returns the clone (started then
+   *  rested per `rest`) or null when nothing remapped. */
+  _cloneClipOntoTNs(srcGroup, byName, name, { loop = true, speed = 1.0, rest = 'pause' } = {}) {
+    if (!srcGroup || typeof srcGroup.clone !== 'function' || !byName) return null;
+    const stripDup = n => n ? String(n).replace(/\.\d{3}$/, '') : n;
+    let remapped = 0;
+    const clone = srcGroup.clone(name, (old) => {
+      if (!old || !old.name) return old;
+      const m = byName.get(old.name) || byName.get(stripDup(old.name));
+      if (m) { remapped++; return m; }
+      return old;
+    });
+    if (!clone || remapped === 0) { try { clone?.dispose?.(); } catch { /* ignore */ } return null; }
+    clone._speedRatio = speed;
+    if (typeof clone.start === 'function') clone.start(loop, speed);
+    if (rest === 'stop') clone.stop?.();
+    else if (rest === 'pause') clone.pause?.();
+    // rest === 'play' leaves it running (used for the standee's idle).
+    return clone;
+  }
+
+  /** Slot map: which clone group key each rig-source clip feeds, plus its loop /
+   *  one-shot nature. The single source of truth for both build-time cloning
+   *  (`_cloneAllClipsOntoUnit`) and async propagation (`_propagateClipToUnits`). */
+  _rigClipSlots(src) {
+    return [
+      { slot: 'idle',  group: src.idleGroup,  loop: true,  speed: 1.0,                        oneShot: false },
+      { slot: 'walk',  group: src.walkGroup,  loop: true,  speed: src.walkSpeedRatio || 1.0,  oneShot: false },
+      { slot: 'run',   group: src.runGroup,   loop: true,  speed: src.runSpeedRatio  || 1.0,  oneShot: false },
+      { slot: 'punch', group: src.punchGroup, loop: false, speed: 1.0,                        oneShot: true, durKey: 'punchDurationSec' },
+      { slot: 'hit',   group: src.hitGroup,   loop: false, speed: 1.0,                        oneShot: true, durKey: 'hitGroupDurationSec' },
+      { slot: 'block', group: src.blockGroup, loop: false, speed: 1.0,                        oneShot: true, durKey: 'blockGroupDurationSec' },
+    ];
+  }
+
+  /** Clone every clip the rig `src` has loaded so far onto one standee `clone`'s
+   *  own TransformNodes, populating `clone.groups`. Locomotion clips rest paused;
+   *  one-shots rest stopped. Leaves the standee in its idle state. Clips that
+   *  haven't loaded yet are filled in later by `_propagateClipToUnits`. */
+  _cloneAllClipsOntoUnit(src, clone) {
+    if (!src || !clone || !clone.tnByName) return;
+    clone.groups = clone.groups || {};
+    const id = clone._unitId ?? 'u';
+    for (const { slot, group, loop, speed, oneShot, durKey } of this._rigClipSlots(src)) {
+      if (!group || clone.groups[slot]) continue;
+      const g = this._cloneClipOntoTNs(group, clone.tnByName, `${src.cloneTag}_${id}_${slot}`,
+        { loop, speed, rest: oneShot ? 'stop' : 'pause' });
+      if (!g) continue;
+      clone.groups[slot] = g;
+      if (durKey && Number.isFinite(src[durKey])) clone[`${slot}DurationSec`] = src[durKey];
+    }
+    // Settle into idle (starts the idle clip, stops walk/run).
+    clone.activeGroup = null;
+    this._setCloneAnimState(clone, 'idle');
+  }
+
+  /** Attach ONE rig clip (`slot`) onto a single unit `clone` on demand, if the
+   *  rig source has that clip loaded and this unit doesn't carry it yet. Closes
+   *  the async-retarget RACE: a unit revealed and moved in the window before its
+   *  walk clip propagated would slide to the next hex in `idle` with frozen legs
+   *  (the "zombie slides, feet don't move" bug). The move toggle calls this so
+   *  the clip is attached the instant it's needed, instead of silently falling
+   *  back to idle. Returns true when the slot is present afterwards. */
+  _ensureUnitClip(clone, slot) {
+    if (!clone || !clone.groups || !clone.tnByName) return false;
+    if (clone.groups[slot]) return true;
+    const src = clone.rigSrc;
+    if (!src) return false;
+    const spec = this._rigClipSlots(src).find(s => s.slot === slot);
+    if (!spec || !spec.group) return false;          // shared clip not loaded yet
+    const id = clone._unitId ?? 'u';
+    const g = this._cloneClipOntoTNs(spec.group, clone.tnByName, `${src.cloneTag}_${id}_${slot}`,
+      { loop: spec.loop, speed: spec.speed, rest: spec.oneShot ? 'stop' : 'pause' });
+    if (!g) return false;
+    clone.groups[slot] = g;
+    if (spec.durKey && Number.isFinite(src[spec.durKey])) clone[`${slot}DurationSec`] = src[spec.durKey];
+    return true;
+  }
+
+  /** Propagate a freshly-loaded rig clip onto every existing standee that uses
+   *  `src` — so units already on screen pick up walk / run / punch / hit / block
+   *  the moment the shared clip lands, each on its own skeleton. `slot` is the
+   *  clone-group key; the clip is read from `src` via `_rigClipSlots`. */
+  _propagateClipToUnits(src, slot) {
+    if (!src || !this._entityStandees) return;
+    const spec = this._rigClipSlots(src).find(s => s.slot === slot);
+    if (!spec || !spec.group) return;
+    for (const [id, standee] of this._entityStandees) {
+      const clone = standee.paladinClone;
+      if (!clone || clone.rigSrc !== src || !clone.tnByName || !clone.groups) continue;
+      if (clone.groups[slot]) continue;
+      const g = this._cloneClipOntoTNs(spec.group, clone.tnByName, `${src.cloneTag}_${id}_${slot}`,
+        { loop: spec.loop, speed: spec.speed, rest: spec.oneShot ? 'stop' : 'pause' });
+      if (!g) continue;
+      clone.groups[slot] = g;
+      if (spec.durKey && Number.isFinite(src[spec.durKey])) clone[`${slot}DurationSec`] = src[spec.durKey];
+    }
+  }
+
+  /** Drive one standee `clone` into a looping locomotion state ('idle' | 'walk'
+   *  | 'run') on its OWN groups: stop the other locomotion clips, (re)start the
+   *  target at its stored speed. No-op when already in that state or the target
+   *  clip hasn't loaded (falls back to idle). One-shots (punch/hit/block) are
+   *  driven separately and set `clone.oneShotPlaying` to lock this out. */
+  _setCloneAnimState(clone, want) {
+    if (!clone || !clone.groups) return;
+    const groups = clone.groups;
+    let target = want;
+    if (!groups[target]) target = 'idle';
+    if (clone.activeGroup === target) return;
+    for (const key of ['idle', 'walk', 'run']) {
+      if (key !== target && groups[key] && typeof groups[key].stop === 'function') groups[key].stop();
+    }
+    const g = groups[target];
+    if (g) {
+      const ratio = g._speedRatio ?? 1.0;
+      if (typeof g.play === 'function') g.play(true);
+      else if (typeof g.start === 'function') g.start(true, ratio);
+    }
+    clone.activeGroup = target;
   }
 
   /** Build the bone-name → target-node lookup for retargeting a clip onto a
@@ -4796,6 +5207,7 @@ export class Renderer3D {
     if (!clone) return null;
     src.runGroup = clone;
     src.runSpeedRatio = ratio;
+    this._propagateClipToUnits(src, 'run');
     return clone;
   }
 
@@ -4835,105 +5247,85 @@ export class Renderer3D {
     if (clone) {
       src.punchDurationSec = animDurationSeconds(native);
       src.punchGroup = clone;
+      this._propagateClipToUnits(src, 'punch');
     }
     this._disposeWalkingImport(result);
     return src.punchGroup;
   }
 
-  /** Play the (already-loaded) punch clip on rig `src` for one strike: silence
-   *  idle/walk/run so none fight the shared skeleton, mark `punchPlaying` so the
-   *  locomotion toggle yields, and resume idle/walk when the one-shot ends.
-   *  No-op (returns false) until the rig's punch clip has loaded. */
-  _startRigPunch(src) {
-    if (!src || !src.punchGroup) return false;
-    const punch = src.punchGroup;
+  /** Play one standee `clone`'s OWN punch clip for a single strike: silence its
+   *  idle/walk/run so none fight its skeleton, mark `oneShotPlaying` so the
+   *  locomotion toggle yields, and re-resolve idle/walk when the one-shot ends.
+   *  No-op (returns false) until this clone's punch clip has been cloned in. */
+  _startClonePunch(clone) {
+    const punch = clone && clone.groups && clone.groups.punch;
+    if (!punch) return false;
     const speedMul = this._playbackSpeedMul ?? 1.0;
-    const ratio = computePunchSpeedRatio(src.punchDurationSec, PUNCH_TARGET_MS * speedMul);
-    // Hand the skeleton to punch: silence idle + walk + run so none fight it.
-    if (src.idleGroup && typeof src.idleGroup.stop === 'function') src.idleGroup.stop();
-    if (src.walkGroup && typeof src.walkGroup.stop === 'function') src.walkGroup.stop();
-    if (src.runGroup && typeof src.runGroup.stop === 'function') src.runGroup.stop();
-    src.punchPlaying = true;
-    src.activeGroup = 'punch';
+    const dur = Number.isFinite(clone.punchDurationSec) ? clone.punchDurationSec : undefined;
+    const ratio = computePunchSpeedRatio(dur, PUNCH_TARGET_MS * speedMul);
+    // Hand the skeleton to punch: silence this unit's idle + walk + run.
+    for (const k of ['idle', 'walk', 'run']) clone.groups[k]?.stop?.();
+    clone.oneShotPlaying = true;
+    clone.activeGroup = 'punch';
 
-    // Resume the idle/walk toggle once the strike completes. Babylon fires
-    // onAnimationGroupEndObservable for a non-looping group; guard for stubs.
+    // Re-resolve idle/walk once the strike completes (non-looping → fires
+    // onAnimationGroupEndObservable). Guard for stubs.
     const onEnd = () => {
-      src.punchPlaying = false;
-      // Force the next toggle tick to re-resolve idle/walk from scratch.
-      src.activeGroup = null;
+      clone.oneShotPlaying = false;
+      clone.activeGroup = null;
     };
-    if (punch.onAnimationGroupEndObservable
-      && typeof punch.onAnimationGroupEndObservable.addOnce === 'function') {
-      punch.onAnimationGroupEndObservable.addOnce(onEnd);
-    } else if (punch.onAnimationGroupEndObservable
-      && typeof punch.onAnimationGroupEndObservable.add === 'function') {
-      punch.onAnimationGroupEndObservable.add(onEnd);
-    }
+    const obs = punch.onAnimationGroupEndObservable;
+    if (obs && typeof obs.addOnce === 'function') obs.addOnce(onEnd);
+    else if (obs && typeof obs.add === 'function') obs.add(onEnd);
 
     if (typeof punch.stop === 'function') punch.stop();
     if (typeof punch.start === 'function') punch.start(false, ratio);
     return true;
   }
 
-  /** Per-frame walk↔idle swap for the cascade fallback rigs — mirrors
-   *  _maybeTogglePaladinAnimation but keyed per rig source: a rig walks while
-   *  any unit using it is mid-move/lunge, else idles. Shared-skeleton-per-rig,
-   *  so all units of a rig animate together. */
+  /** Per-frame locomotion tick for the cascade rigs — fully per-UNIT now. Each
+   *  standee plays its OWN idle/walk/run clip on its OWN skeleton: a moving unit
+   *  walks while its idle siblings keep idling, and one-shots (punch/reactions)
+   *  lock the unit out via `oneShotPlaying` until they finish. No shared rig
+   *  skeleton, so nothing animates in unison. */
   _maybeToggleFallbackRigAnimation() {
-    if (!this._rigSources || this._rigSources.size === 0) return;
-    // Walk is driven by real MOVES only — NOT lunges. A lunge is a combat
-    // strike: the punch clip owns the rig during it (see addLungeAnim), so a
-    // lunging unit must not also walk.
-    const movingRigs = new Set();   // rig has a unit mid-MOVE → walk (or run)
-    const runningRigs = new Set();   // rig has a unit mid multi-hop dash → run
+    if (!this._entityStandees || !this._entityStandees.size) return;
     const moveIds = this._activeMoveIds;
-    if (moveIds && moveIds.size && this.state?.entities) {
-      const byId = new Map();
-      for (const e of this.state.entities) if (e && e.id) byId.set(e.id, e);
-      const runIds = (RUNNING_ANIM_ENABLED && this._activeRunMoveIds instanceof Set)
-        ? this._activeRunMoveIds : null;
-      for (const id of moveIds) {
-        const e = byId.get(id);
-        if (!e || unitUsesPaladinModel(e)) continue;
-        const src = this._loadedFallbackRigFor(e);
-        if (!src) continue;
-        movingRigs.add(src);
-        if (runIds && runIds.has(id)) runningRigs.add(src);
+    const runIds = (RUNNING_ANIM_ENABLED && this._activeRunMoveIds instanceof Set)
+      ? this._activeRunMoveIds : null;
+    for (const [id, standee] of this._entityStandees) {
+      const clone = standee.paladinClone;
+      if (!clone || !clone.groups) continue;
+      // A punch / hit / block owns this unit's skeleton — leave it be.
+      if (clone.oneShotPlaying) continue;
+      let want = 'idle';
+      if (moveIds && moveIds.has(id)) {
+        // Self-heal the async-retarget race: if this unit's walk/run clip hasn't
+        // been propagated yet (it moved the instant it was revealed), attach it
+        // on demand so it walks instead of sliding in idle with frozen legs.
+        if (runIds && runIds.has(id) && (clone.groups.run || this._ensureUnitClip(clone, 'run'))) want = 'run';
+        else if (clone.groups.walk || this._ensureUnitClip(clone, 'walk')) want = 'walk';
       }
-    }
-    const playGroup = (g, loop, speed) => {
-      if (!g) return;
-      if (typeof g.play === 'function') g.play(loop);
-      else if (typeof g.start === 'function') g.start(loop, speed);
-    };
-    for (const src of this._rigSources.values()) {
-      // A one-shot punch or hit/block reaction owns the rig while it plays —
-      // yield so we don't yank it back to idle/walk mid-clip.
-      if (src.punchPlaying || src.reactionPlaying) continue;
-      let desired = 'idle';
-      if (movingRigs.has(src)) {
-        desired = (runningRigs.has(src) && src.runGroup) ? 'run'
-          : src.walkGroup ? 'walk' : 'idle';
-      }
-      if (src.activeGroup === desired) continue;
-      const { idleGroup: idle, walkGroup: walk, runGroup: run } = src;
-      // Silence the three locomotion groups, then play the desired one.
-      for (const g of [idle, walk, run]) if (g && g !== src[`${desired}Group`] && typeof g.stop === 'function') g.stop();
-      if (desired === 'run')  playGroup(run,  true, src.runSpeedRatio  || 1.0);
-      else if (desired === 'walk') playGroup(walk, true, src.walkSpeedRatio || 1.0);
-      else playGroup(idle, true, 1.0);
-      src.activeGroup = desired;
+      this._setCloneAnimState(clone, want);
     }
   }
 
-  /** First loaded fallback-rig source for an entity (the earliest cascade
-   *  candidate already in _rigSources), or null. Synchronous — does NOT trigger
-   *  loads (that's _ensureFallbackRig). */
+  /** Best-available fallback-rig source for an entity, honouring cascade
+   *  PREFERENCE: the unit's own `<type>-idle.glb` wins, and we only fall through
+   *  to a later candidate (the shared mannequin) once an earlier one is
+   *  confirmed MISSING (404'd). While the preferred rig is still loading we
+   *  return null (render the cone placeholder and wait) rather than locking the
+   *  unit onto an already-loaded mannequin forever — that downgrade was why a
+   *  zombie in a game where the mannequin loaded first (e.g. survivors appear
+   *  before the witch summons) rendered as a mannequin and never upgraded.
+   *  Synchronous — does NOT trigger loads (that's _ensureFallbackRig). */
   _loadedFallbackRigFor(entity) {
     for (const file of fallbackRigCandidates(entity)) {
       const src = this._rigSources.get(file);
       if (src) return src;
+      // This candidate isn't loaded yet. If it's still loadable (not 404'd),
+      // wait for it instead of downgrading to a less-preferred rig.
+      if (!this._rigFileMissing.has(file)) return null;
     }
     return null;
   }
@@ -4954,6 +5346,7 @@ export class Renderer3D {
       if (this._rigFileMissing.has(file)) continue;  // 404'd — next candidate
       if (this._rigSources.has(file)) return;        // loaded — done
       if (this._rigLoadPromises.has(file)) return;   // in flight — wait
+      console.info(`[Renderer3D][rigdiag] cascade: loading "${file}" for ${entity?.type} (candidates: ${fallbackRigCandidates(entity).join(' → ')})`);
       this._loadFallbackRig(file, basePath);
       return;
     }
@@ -4998,16 +5391,23 @@ export class Renderer3D {
       }
       const { scale, feetOffset, hipCentered } = this._normalisePaladinSource(meshes);
       const transformNodes = Array.isArray(result.transformNodes) ? result.transformNodes.slice() : [];
-      // Measure the Hips' REST-pose Y *before* the idle starts animating — this
-      // is the rig's correct standing hip height, the anchor every clip rebases
-      // to (rebaseRootBoneY). Different exports (this idle, the shared walk.glb,
+      // The rig's standing anchor — the hip height every clip rebases to
+      // (rebaseRootBoneY). Different exports (this idle, the shared walk.glb,
       // a hip-centred paladin) carry different absolute hip heights, so without
-      // this one floats while another sinks.
+      // a per-rig anchor one floats while another sinks. The anchor is the
+      // embedded idle's own authored hip baseline: it's in the rig's units AND
+      // measures the stance the unit actually stands in. The T-pose rest
+      // height (the previous anchor) over-lifts any rig whose idle crouches —
+      // the zombie shamble (idle hips ~0.93, rest ~1.05) was scaled upright
+      // and its feet floated off the ground, skating in idle and in walk.
+      // Rest pose stays as the fallback when the idle has no hips track.
       const hipsTN = transformNodes.find(tn => tn && /(^|:)Hips$/.test(tn.name || ''));
-      const restHipsY = (hipsTN && hipsTN.position && typeof hipsTN.position.y === 'number')
+      const restPoseHipsY = (hipsTN && hipsTN.position && typeof hipsTN.position.y === 'number')
         ? hipsTN.position.y : null;
-      // Rebase the embedded idle to that rest height (preserves the weight-shift
-      // sway + bob, strips horizontal drift) so the rig stands on the ground.
+      const idleBaseHipsY = rootBoneTrackAverageY(idleGroup);
+      const restHipsY = (idleBaseHipsY != null) ? idleBaseHipsY : restPoseHipsY;
+      // Strip the idle's horizontal drift. Y is an identity by construction
+      // (the anchor IS this clip's average), so the authored stance is kept.
       rebaseRootBoneY(idleGroup, restHipsY);
       if (idleGroup && typeof idleGroup.start === 'function') {
         idleGroup.weight = 1.0;
@@ -5020,6 +5420,7 @@ export class Renderer3D {
         tintable: file === MANNEQUIN_RIG_FILE,
       };
       this._rigSources.set(file, src);
+      console.info(`[Renderer3D][rigdiag] rig "${file}" LOADED — bones=${skeleton?.bones?.length ?? 0}, transformNodes=${transformNodes.length}, animGroups=${groups.length}, idleGroup=${idleGroup?.name ?? 'none'}, cloneTag=${src.cloneTag}`);
       // Retrofit standees that were waiting on this rig.
       this._upgradeStandeesToFallbackRig();
       // Wire walking onto this rig: ensure walking.glb's native group is loaded
@@ -5653,22 +6054,12 @@ export class Renderer3D {
       new BABYLON.Vector3(0.35, -0.85, 0.4),
       scene,
     );
-    // Lift the light's position so the shadow camera frustum sees the whole
-    // map from above even when autoUpdateExtends nudges it.
+    // Placeholder position — `_applySunShadowFit` (below, and again with the
+    // real map bounds in `_buildMap`) owns position + ortho bounds from here
+    // on, sizing the shadow frustum to the actual map instead of either a
+    // hard-coded footprint or Babylon's autoUpdateExtends caster re-fit.
     sunLight.position = new BABYLON.Vector3(0, 30, 0);
     sunLight.intensity = 1.0;
-    // Auto-compute the shadow camera's near/far so the frustum hugs the
-    // casters, then enlarge the orthographic shadow camera to cover a whole
-    // Campaign-size map plus the visual border ring. Without these, Babylon's
-    // default ortho size is ~10 world units — far smaller than our maps —
-    // and shadows just don't render outside that footprint.
-    sunLight.autoCalcShadowZBounds = true;
-    const SHADOW_HALF = 40;
-    sunLight.shadowOrthoScale = 0; // disable padding; rely on explicit ortho bounds
-    sunLight.orthoLeft   = -SHADOW_HALF;
-    sunLight.orthoRight  =  SHADOW_HALF;
-    sunLight.orthoTop    =  SHADOW_HALF;
-    sunLight.orthoBottom = -SHADOW_HALF;
 
     const shadowGenerator = new BABYLON.ShadowGenerator(SUN_SHADOW_MAP_SIZE, sunLight);
     shadowGenerator.usePercentageCloserFiltering = SUN_SHADOW_USE_PCF;
@@ -5685,6 +6076,9 @@ export class Renderer3D {
     this._light             = light;
     this._sunLight          = sunLight;
     this._shadowGenerator   = shadowGenerator;
+    // Default (pre-map) shadow fit — replaced with the real map bounds at the
+    // end of `_buildMap`.
+    this._applySunShadowFit(null);
 
     // X-ray occlusion: handled in `_pumpXrayOcclusion` via a stencil-masked
     // faction-colour OUTLINE (a hollow ring) over each occluded unit (see
@@ -5769,7 +6163,7 @@ export class Renderer3D {
     // from the browser console to inspect the runtime material/light state of
     // the road and river ribbons. `inspector()` toggles the Babylon Inspector.
     // The inspector / border-forest / fog-debug toggles are also reachable
-    // in-game through the command console (Escape → /inspector, /forest, /fog);
+    // in-game through the command console (backtick → /inspector, /forest, /fog);
     // see src/keybindings.js. No-op when `window` is undefined (tests).
     if (typeof window !== 'undefined') {
       window.__brimstone3dDebug = {
@@ -5799,6 +6193,15 @@ export class Renderer3D {
     this._borderForestHidden = !this._borderForestHidden;
     this._syncBorderForestVisibility();
     console.log(`[Renderer3D] border forest ${this._borderForestHidden ? 'hidden' : 'visible'}`);
+  }
+
+  /** Show/hide the on-canvas FPS counter. Pure CSS toggle — the render loop
+   *  pumps the readout every frame regardless; `body.show-fps` just unhides it.
+   *  Driven by the `/fps` console command. Returns a status string to echo. */
+  _toggleFpsCounter() {
+    if (typeof document === 'undefined') return 'FPS counter unavailable (no DOM).';
+    const on = document.body.classList.toggle('show-fps');
+    return `FPS counter ${on ? 'shown' : 'hidden'}`;
   }
 
   /** Toggle the renderer-level fog DISPLAY override (normal ↔ off) and re-apply
@@ -6252,6 +6655,10 @@ export class Renderer3D {
     // at every zoom/tilt, instead of letting it slide out into the border
     // forest band. See `panBoundsForPlayableExtent` for the rationale.
     this._panClampBounds = panBoundsForPlayableExtent(this._mapPanBounds);
+    // Fit the sun's shadow frustum to this map's actual extent — small maps
+    // get a tighter frustum (sharper shadows from the same 2048² map), and
+    // battle-size maps are fully covered instead of clipping at the old ±40.
+    this._applySunShadowFit(this._mapPanBounds);
     this._mapBuilt = true;
     // Static meshes built above never move again — freeze their world matrices
     // so Babylon stops recomputing them every frame, and skip bounding-info
@@ -6275,12 +6682,12 @@ export class Renderer3D {
    *  What is NOT freezed (and must stay walking each frame): entity standees
    *  (cones, sphere heads, owner discs, icon billboards), per-unit hex
    *  outlines, plan ghosts / dashes / attack arrows / movement highlights,
-   *  the selection halo, the overflow "+N" badges, and the building hover
-   *  labels (those use `billboardMode = BILLBOARDMODE_ALL`, which requires a
-   *  per-frame world-matrix update — freezing them would lock their rotation
-   *  away from the camera). Dynamic meshes live in their own registries
-   *  (`_entityStandees`, `_planGhostMeshes`, `_buildingLabelsByKey`, …) which
-   *  this helper deliberately does not touch. */
+   *  the selection halo, the overflow "+N" badges, and the building ground
+   *  labels (their name rect re-snaps its yaw each frame, so freezing the
+   *  world matrix would lock the text's rotation). Dynamic meshes live in their
+   *  own registries (`_entityStandees`, `_planGhostMeshes`,
+   *  `_buildingGroundLabelsByKey`, …) which this helper deliberately does not
+   *  touch. */
   _freezeStaticMeshes() {
     let frozen = 0;
     const freeze = (mesh) => {
@@ -7412,6 +7819,82 @@ export class Renderer3D {
       trackProp(plank);
     }
 
+    // ── Bridge structure: a solid deck slab UNDER the road + side railings ──
+    // The road ribbon already crosses the bridge hex; on its own it reads as a
+    // road floating over the river channel. So drop a solid brown rectangular
+    // slab just beneath the road (filling the gap down to the water) and run a
+    // wooden railing along each side of the road, built with the same
+    // post+rail vocabulary as the fortification fences. `bridgeRotationY` gives
+    // the road axis yaw; (ax,az) is along the road, (px,pz) is across it.
+    if (isBridge(tile)) {
+      const yaw = bridgeRotationY(tile, this.state.tiles);
+      const ax = Math.cos(yaw), az = Math.sin(yaw);     // along-road unit vector
+      const px = -Math.sin(yaw), pz = Math.cos(yaw);    // across-road (perp) unit
+      const alongYaw = Math.atan2(ax, az);              // aligns a box's local +Z to the road
+      const span = HEX_RADIUS_WORLD * SQRT3 * 1.06;     // edge-to-edge across the hex
+      const deckW = ROAD_RIBBON_WIDTH * 1.3;            // road width + shoulders
+
+      // Solid brown under-deck: top just below the road ribbon (so the road
+      // still shows on top), bottom just above the water bed.
+      const deckTopY    = ROAD_RIBBON_Y - 0.004;
+      const deckBottomY = RIVER_BED_Y + 0.02;
+      const deckH       = Math.max(0.08, deckTopY - deckBottomY);
+      const deck = BABYLON.MeshBuilder.CreateBox(
+        `bridgedeck_${tile.col}_${tile.row}`,
+        { width: deckW, height: deckH, depth: span }, scene,
+      );
+      deck.rotation.y = alongYaw;
+      deck.parent     = parent;
+      deck.material   = this._materialFor('#6b4a2b'); // solid timber brown
+      deck.isPickable = false;
+      deck.position.x = x; deck.position.y = deckBottomY + deckH / 2; deck.position.z = z;
+      this._addShadowCaster(deck);
+      this._setShadowReceiver(deck);
+      trackProp(deck);
+
+      // A railing down each side of the road: a top rail spanning the deck plus
+      // evenly-spaced posts (fence-style), sitting on the deck just outside the
+      // road shoulders.
+      const railMatHex  = '#7a5526';
+      const railLen     = span * 0.94;
+      const railThick   = 0.05;
+      const railTopY    = ROAD_RIBBON_Y + 0.17;          // rail height above the road
+      const postBaseY   = ROAD_RIBBON_Y;                 // posts rise from the deck/road
+      const postH       = railTopY - postBaseY;
+      const sideOffset  = deckW / 2 - railThick;         // just inside the deck edge
+      const NPOSTS      = 5;
+      for (const sgn of [-1, 1]) {
+        const cx = x + px * sgn * sideOffset;
+        const cz = z + pz * sgn * sideOffset;
+        const rail = BABYLON.MeshBuilder.CreateBox(
+          `bridgerail_${tile.col}_${tile.row}_${sgn < 0 ? 'a' : 'b'}`,
+          { width: railThick, height: railThick, depth: railLen }, scene,
+        );
+        rail.rotation.y = alongYaw;
+        rail.parent     = parent;
+        rail.material   = this._materialFor(railMatHex);
+        rail.isPickable = false;
+        rail.position.x = cx; rail.position.y = railTopY; rail.position.z = cz;
+        this._addShadowCaster(rail);
+        trackProp(rail);
+        for (let i = 0; i < NPOSTS; i++) {
+          const t = (i / (NPOSTS - 1) - 0.5) * railLen; // -railLen/2 .. +railLen/2 along road
+          const post = BABYLON.MeshBuilder.CreateBox(
+            `bridgepost_${tile.col}_${tile.row}_${sgn < 0 ? 'a' : 'b'}_${i}`,
+            { width: railThick, height: postH, depth: railThick }, scene,
+          );
+          post.parent     = parent;
+          post.material   = this._materialFor(railMatHex);
+          post.isPickable = false;
+          post.position.x = cx + ax * t;
+          post.position.y = postBaseY + postH / 2;
+          post.position.z = cz + az * t;
+          this._addShadowCaster(post);
+          trackProp(post);
+        }
+      }
+    }
+
     // ── Building: either a glTF model instance (if the tile's variant template
     // has loaded by now) or the procedural box + roof fallback. Both paths now
     // place the building on its FOOTPRINT hex (centred, facing the entrance) —
@@ -7475,11 +7958,11 @@ export class Renderer3D {
         trackProp(roof);
       }
 
-      // Signpost — a physical post + billboarded name plank at the door-side
-      // edge of the footprint (orphan buildings fall back to a floating label
-      // above the slot). Alpha is driven each frame by `_pumpBuildingLabelFade`
-      // so signs fade out as the camera zooms back.
-      this._buildBuildingSignpost(tile, x, z, parent);
+      // Ground marker — a faint white "you can enter here" disc plus the
+      // building name painted flat on the ENTRANCE hex floor, re-aligned each
+      // frame to the most-horizontal-on-screen hex edge
+      // (`_pumpBuildingGroundLabels`).
+      this._buildBuildingGroundLabel(tile, x, z, parent);
     }
 
     if (props.length > 0) this._tilePropsByKey.set(tkey, props);
@@ -7502,7 +7985,12 @@ export class Renderer3D {
       const trees = forestTreesForHex(tile.col, tile.row, this._season, {
         blockedSlots: this._roadBlockedSlotsByKey.get(tkey),
       });
-      for (const t of trees) staticOcc.push({ id: t.id, kind: 'tree' });
+      // Carry the slot each tree was actually baked into. The standee re-slot
+      // reserves exactly these so a unit never stands on a rendered tree — the
+      // render-side road exclusion (geometric deck) and the game-side
+      // blockedSlots (road FACES) diverge on a forest+road hex, so reserving
+      // the game's blockedSlots alone is not enough.
+      for (const t of trees) staticOcc.push({ id: t.id, kind: 'tree', slot: t.slotIdx });
     }
     if (staticOcc.length > 0) this._staticOccupantsByKey.set(tkey, staticOcc);
   }
@@ -9340,34 +9828,39 @@ export class Renderer3D {
     // unit-vs-building occlusion. Babylon renders higher groups unconditionally
     // on top, which previously made standees draw over buildings regardless of
     // camera angle.
-    cone.renderingGroupId   = 0;
-    sphere.renderingGroupId = 0;
+    cone.renderingGroupId   = WORLD_GROUP;
+    sphere.renderingGroupId = WORLD_GROUP;
     // Sun throws a token-shaped shadow onto the terrain. Both meshes cast.
     this._addShadowCaster(cone);
     this._addShadowCaster(sphere);
 
     const standee = { plane: cone, sphere, leader, paladinClone: null };
 
-    // Every unit cascades to a rig: <type>-idle.glb → mannequin → cone+sphere.
-    // Kick the async load; clone synchronously if a rig is already in hand,
-    // otherwise _upgradeStandeesToFallbackRig retrofits when it lands. The
-    // cone+sphere stay in-scene (visibility 0) as anchor + picking target.
+    // Character meshes are preloaded behind the loading overlay
+    // (_preloadCharacterRigs), so a rig is in hand by the time any standee is
+    // built: the unit's own `<type>-idle.glb`, else the universal mannequin.
+    // The cone+sphere are NO LONGER a visible fallback — there is no pawn — they
+    // remain only as an invisible position anchor + picking target. If even the
+    // mannequin is unavailable we render nothing and log loudly.
     this._ensureFallbackRig(entity);
-    const rig = this._loadedFallbackRigFor(entity);
-    if (rig) {
-      const clone = this._buildRigClone(entity, cone, rig,
-        rig.tintable ? { tintColor: ownerColor } : {});
-      if (clone) {
-        cone.visibility   = 0;
-        sphere.visibility = 0;
-        // Strip the cone+sphere from the shadow casters so the floor shadow
-        // reflects the rig silhouette, not the pawn shape.
-        this._removeShadowCaster(cone);
-        this._removeShadowCaster(sphere);
-        for (const m of clone.childMeshes || []) this._addShadowCaster(m);
-        standee.paladinClone = clone;
-      }
+    const rig = this._loadedFallbackRigFor(entity)
+      || this._rigSources.get(MANNEQUIN_RIG_FILE)   // universal fallback (preloaded)
+      || null;
+    const clone = rig
+      ? this._buildRigClone(entity, cone, rig, rig.tintable ? { tintColor: ownerColor } : {})
+      : null;
+    if (clone) {
+      for (const m of clone.childMeshes || []) this._addShadowCaster(m);
+      standee.paladinClone = clone;
+    } else {
+      console.error(`[Renderer3D] No character mesh for ${entity.type} (${entity.id}) — fallback rig "${MANNEQUIN_RIG_FILE}" did not load; unit will be invisible.`);
     }
+    // Cone+sphere are an invisible anchor only — never the visible pawn. Hide
+    // them and drop them as shadow casters in every case (the rig casts).
+    cone.visibility   = 0;
+    sphere.visibility = 0;
+    this._removeShadowCaster(cone);
+    this._removeShadowCaster(sphere);
 
     this._positionStandee(standee, entity);
     return standee;
@@ -9486,37 +9979,64 @@ export class Renderer3D {
   _resyncTileSlotsForStandees() {
     if (!this._scene || !this._babylon || !this.state?.entities) return;
 
-    // Group live standees by hex. Skip entities whose standee is currently
-    // being driven by a move/lunge animation (their position is owned by the
-    // animation; let it land first, the next draw re-slots them).
-    const byHex = new Map(); // hexKey → [{id, kind:'standee', entity, ...}]
+    // Group live standees by hex. Entities whose standee is currently driven
+    // by a move/lunge animation still COUNT as occupants (so their hex-mates
+    // keep stable multi-occupant slot assignments — dropping them packed the
+    // first ally to land as the hex's sole occupant, snapping it to the bare
+    // centre until the mate's animation finished), but they are never
+    // repositioned here: the animation owns their transform until it lands.
+    const byHex = new Map(); // hexKey → [{id, kind:'standee', entity, animating, ...}]
     const hexCenter = new Map(); // hexKey → {col, row}
     for (const e of this.state.entities) {
       if (!e?.alive) continue;
       if (typeof e.col !== 'number' || typeof e.row !== 'number') continue;
-      if (this._activeMoveIds.has(e.id) || this._activeLungeIds.has(e.id)) continue;
       if (!this._entityStandees.has(e.id)) continue;
+      const animating = this._activeMoveIds.has(e.id) || this._activeLungeIds.has(e.id);
       const k = hexKey(e.col, e.row);
       if (!byHex.has(k)) { byHex.set(k, []); hexCenter.set(k, { col: e.col, row: e.row }); }
-      byHex.get(k).push({ id: `standee_${e.id}`, kind: 'standee', entity: e });
+      byHex.get(k).push({ id: `standee_${e.id}`, kind: 'standee', entity: e, slot: e.slot ?? 0, animating });
     }
 
     const seenHexes = new Set();
     for (const [k, standeeOccs] of byHex) {
       seenHexes.add(k);
-      const staticOcc = this._staticOccupantsByKey.get(k) ?? [];
-      // Single standee on an empty hex → nothing to re-slot, the standee
-      // already sits at hex centre from _positionStandee's default path.
-      if (standeeOccs.length === 1 && staticOcc.length === 0) {
+      // Reserve the slots the trees were ACTUALLY baked into (forestTreesForHex
+      // → slotIdx, carried on the static tree occupants), NOT the game's
+      // blockedSlots: the two diverge on a forest+road hex (render reserves the
+      // geometric road deck; the game reserves the road FACES), so reserving
+      // blockedSlots could leave a standee standing on a rendered tree. Trees
+      // are NOT passed as occupants — their slots ARE the reservation; passing
+      // them too double-reserved the forest (tree occupants landed in the
+      // complement of the reservation), consuming every outer slot and forcing
+      // a second standee to overflow onto the centre (two units on slot 0 +
+      // a phantom +1 badge). Buildings still go through the packer to claim
+      // BUILDING_SLOT_INDEX.
+      const treeSlots = [];
+      const staticOcc = [];
+      for (const o of (this._staticOccupantsByKey.get(k) ?? [])) {
+        if (o.kind === 'tree') { if (typeof o.slot === 'number') treeSlots.push(o.slot); }
+        else staticOcc.push(o);
+      }
+      // Single IDLE standee on an otherwise-empty hex → it already sits at the
+      // hex centre from _positionStandee's default path; nothing to re-slot.
+      if (standeeOccs.length === 1 && !standeeOccs[0].animating
+          && staticOcc.length === 0 && treeSlots.length === 0) {
         this._syncOverflowBadge(k, 0);
         continue;
       }
       const { col, row } = hexCenter.get(k);
+      // Reserve the rendered tree slots. Tiles not tracked in
+      // _staticOccupantsByKey (e.g. bridge decks, or tiles not yet built) fall
+      // back to the tile's authoritative blocked slots / geometric road cache.
+      const reservedSlots = treeSlots.length
+        ? treeSlots
+        : (this.state.tiles.get(k)?.blockedSlots ?? this._roadBlockedSlotsByKey.get(k));
       const { positionByOccupantId, overflow } = tileSlotWorldPositions(
         col, row, [...staticOcc, ...standeeOccs], HEX_RADIUS_WORLD,
-        { reservedSlots: this._roadBlockedSlotsByKey.get(k) },
+        { reservedSlots },
       );
       for (const occ of standeeOccs) {
+        if (occ.animating) continue; // the animation owns this standee's transform
         const pos = positionByOccupantId.get(occ.id);
         const standee = this._entityStandees.get(occ.entity.id);
         if (!pos || !standee) continue;
@@ -9622,7 +10142,7 @@ export class Renderer3D {
     // World geometry group (0): the outline's Y placement sits above the road/
     // river ribbons but below buildings, so the depth buffer draws it in the
     // correct order without a group bump.
-    thin.renderingGroupId = 0;
+    thin.renderingGroupId = WORLD_GROUP;
     thin.isVisible        = !!isLocal;
 
     const thick = BABYLON.MeshBuilder.CreateTube(`unitOutlineThick_${entity.id}`, {
@@ -9633,7 +10153,7 @@ export class Renderer3D {
     }, scene);
     thick.material         = this._thickOutlineMaterialFor(ownerKey);
     thick.isPickable       = false;
-    thick.renderingGroupId = 0;
+    thick.renderingGroupId = WORLD_GROUP;
     thick.isVisible        = false; // _applySelectionAndFocus drives visibility
 
     const { x, z } = hexToWorld(entity.col, entity.row);
@@ -9749,257 +10269,155 @@ export class Renderer3D {
     badge.lastN = overflow;
   }
 
-  /** P4c — Build a building's SIGNPOST: a vertical wooden post topped by a
-   *  billboarded name plank, planted at the door-side edge of the footprint
-   *  (the entrance↔footprint shared-edge midpoint, where the road stub meets
-   *  the model). The post stays vertical; only the plank billboards (Y axis)
-   *  so it always faces the camera while reading as a physical roadside marker.
-   *
-   *  A legacy/orphan building (no footprint, hence no shared edge) falls back
-   *  to the OLD centred floating label via `_buildBuildingLabel`.
-   *
-   *  Both meshes are tracked in `_buildingLabelsByKey` under the entrance hex
-   *  key so the zoom-fade pump (`_pumpBuildingLabelFade`) and the fog veil
-   *  (`_setTilePropsFogged`) treat the post + plank as one unit. */
-  _buildBuildingSignpost(tile, hexX, hexZ, parent) {
+  /** Build a building's GROUND MARKER: a faint white disc that flags the
+   *  ENTRANCE hex as "the tile to stand on" for this building, plus the
+   *  building name painted flat on that same hex floor. The entrance is the
+   *  walkable tile — the model sits on the adjacent footprint hex. Built once
+   *  per labeled building; the name's orientation and edge-hugging offset are
+   *  applied per frame by `_pumpBuildingGroundLabels` so the text stays aligned
+   *  to whichever hex edge is currently the most horizontal on screen (the disc
+   *  is rotationally symmetric, so it never moves). Tracked in
+   *  `_buildingGroundLabelsByKey` (NOT `_tilePropsByKey` — frozen world matrices
+   *  would lock the name's rotation). */
+  _buildBuildingGroundLabel(tile, hexX, hexZ, parent) {
     const BABYLON = this._babylon;
     const scene   = this._scene;
     if (!BABYLON || !scene || typeof document === 'undefined') return;
     const text = labelTextForTile(tile);
     if (!text) return;
 
-    // Door-side edge midpoint pushed OFF the road by SIGNPOST_ROAD_OFFSET so
-    // the post doesn't sit in the road tile. Side is biased deterministically
-    // on the hex position so adjacent buildings don't alternate-zigzag.
-    const renderKey   = buildingRenderHex(tile);
-    const [rc, rr]    = renderKey.split(',').map(Number);
-    const isFootprint = !(rc === tile.col && rr === tile.row);
-    const footprintWorld = isFootprint ? hexToWorld(rc, rr) : null;
-    const sideBias = (((tile.col * 73856093) ^ (tile.row * 19349663)) & 1) ? 1 : -1;
-    const signPos = signpostWorldPos(
-      { x: hexX, z: hexZ },
-      footprintWorld,
-      SIGNPOST_ROAD_OFFSET,
-      sideBias,
-    );
-    if (!signPos) {
-      // Orphan with no footprint → old floating-label behaviour (centred above
-      // the building slot). One extra branch keeps legacy saves rendering.
-      this._buildBuildingLabel(tile, hexX, hexZ, parent);
-      return;
-    }
-
     const tkey = hexKey(tile.col, tile.row);
-    // Tile-top anchor — matches the procedural/GLB building base Y (0.43-0.7/2).
-    const tileTopY = 0.43 - 0.7 / 2;
 
-    // ── Name plank: dark serif text on a parchment board ──────────────────
-    const tex = new BABYLON.DynamicTexture(
-      `bldgSignTex_${tkey}`,
-      { width: BUILDING_LABEL_TEX_W, height: BUILDING_LABEL_TEX_H },
+    // ── "Stand here" disc: a faint white circle centred on the entrance hex ──
+    const discMat = new BABYLON.StandardMaterial(`bldgGroundDiscMat_${tkey}`, scene);
+    discMat.diffuseColor  = new BABYLON.Color3(1, 1, 1);
+    discMat.emissiveColor = new BABYLON.Color3(1, 1, 1); // unlit — reads in any phase
+    discMat.specularColor = new BABYLON.Color3(0, 0, 0);
+    discMat.backFaceCulling = false;
+    discMat.alpha = GROUND_CIRCLE_ALPHA;
+
+    const disc = BABYLON.MeshBuilder.CreateDisc(
+      `bldgGroundDisc_${tkey}`,
+      { radius: GROUND_CIRCLE_RADIUS, tessellation: 48 },
       scene,
-      true, // generateMipMaps — keeps the plank legible when zoomed out
     );
-    tex.hasAlpha = false; // fully-painted parchment; fade is via material alpha
+    disc.parent     = parent;
+    disc.isPickable  = false;
+    disc.material    = discMat;
+    // CreateDisc lies in the XY plane facing +Z; pitch it flat so it lies on
+    // the ground (XZ). Sits just below the name text so the letters read on top.
+    if (BABYLON.Vector3) disc.rotation = new BABYLON.Vector3(Math.PI / 2, 0, 0);
+    disc.position.set(hexX, GROUND_CIRCLE_Y, hexZ);
+    disc.metadata = { respectsFog: false };
+
+    // ── Building name painted flat on the same hex floor ──────────────────
+    const tex = new BABYLON.DynamicTexture(
+      `bldgGroundTex_${tkey}`,
+      { width: GROUND_LABEL_TEX_W, height: GROUND_LABEL_TEX_H },
+      scene,
+      true, // generateMipMaps — keeps the painted name legible when zoomed out
+    );
+    tex.hasAlpha = true; // transparent field — only the lettering paints
     if (typeof tex.updateSamplingMode === 'function' && BABYLON.Texture) {
       tex.updateSamplingMode(BABYLON.Texture.TRILINEAR_SAMPLINGMODE);
     }
-    this._paintSignpostPlank(tex, text);
+    this._paintGroundLabel(tex, text);
 
-    const plankMat = new BABYLON.StandardMaterial(`bldgSignPlankMat_${tkey}`, scene);
-    plankMat.diffuseTexture  = tex;
-    plankMat.emissiveTexture = tex; // unlit so the name reads in any phase light
-    plankMat.specularColor   = new BABYLON.Color3(0, 0, 0);
-    plankMat.backFaceCulling  = false;
-    plankMat.alpha = 1;
-
-    // 3D plank: a box, not a plane. Default Babylon box UVs put the same
-    // texture on all 6 faces, so the parchment + name read from any angle —
-    // and the sides/top/bottom carry the parchment colour because the same
-    // texture is mostly background. Operator wanted "real depth", not a paper
-    // sticker. Still billboards on Y so the front faces the camera.
-    const plank = BABYLON.MeshBuilder.CreateBox(
-      `bldgSignPlank_${tkey}`,
-      { width: SIGNPOST_PLANK_WIDTH, height: SIGNPOST_PLANK_HEIGHT, depth: SIGNPOST_PLANK_DEPTH },
-      scene,
-    );
-    plank.parent        = parent;
-    // BILLBOARDMODE_Y: the box rotates around the vertical axis to face the
-    // camera, but the post below it stays bolt upright (no billboard).
-    plank.billboardMode = BABYLON.Mesh.BILLBOARDMODE_Y;
-    plank.isPickable    = false;
-    plank.material      = plankMat;
-    // Plank sits ABOVE the post — bottom edge of plank rests on the post tip —
-    // so the post never pierces through the text. Plank centre Y = post
-    // height + half-plank-height.
-    plank.position.set(
-      signPos.x,
-      tileTopY + SIGNPOST_POST_HEIGHT + SIGNPOST_PLANK_HEIGHT / 2,
-      signPos.z,
-    );
-
-    // ── Post: a thin dark-wood cylinder rooted at the edge midpoint ───────
-    const postMat = new BABYLON.StandardMaterial(`bldgSignPostMat_${tkey}`, scene);
-    postMat.diffuseColor  = new BABYLON.Color3(0.29, 0.19, 0.11); // weathered wood
-    postMat.specularColor = new BABYLON.Color3(0, 0, 0);
-    postMat.alpha = 1;
-
-    const post = BABYLON.MeshBuilder.CreateCylinder(
-      `bldgSignPost_${tkey}`,
-      { height: SIGNPOST_POST_HEIGHT, diameter: SIGNPOST_POST_DIAMETER, tessellation: 6 },
-      scene,
-    );
-    post.parent     = parent;
-    post.isPickable = false;
-    post.material   = postMat;
-    post.position.set(signPos.x, tileTopY + SIGNPOST_POST_HEIGHT / 2, signPos.z);
-    this._addShadowCaster(post);
-
-    this._buildingLabelsByKey.set(tkey, {
-      meshes: [post, plank],
-      mats:   [postMat, plankMat],
-      tex,
-      fogged: false,
-    });
-  }
-
-  /** Paint a signpost plank DynamicTexture: a parchment/wood board with the
-   *  building name in a clean serif/uncial face, dark-brown ink. Font size
-   *  auto-shrinks for long names so the text always fits within the board
-   *  margin — no clipping on "Graveyard", "Blacksmith", etc. Idempotent. */
-  _paintSignpostPlank(tex, text) {
-    if (!tex || typeof tex.getContext !== 'function') return;
-    const W = BUILDING_LABEL_TEX_W;
-    const H = BUILDING_LABEL_TEX_H;
-    const ctx = tex.getContext();
-    // Parchment field with a thin darker frame so the board reads as carved wood.
-    ctx.clearRect(0, 0, W, H);
-    ctx.fillStyle = '#d4b884';
-    ctx.fillRect(0, 0, W, H);
-    ctx.strokeStyle = '#7a5a2e';
-    ctx.lineWidth = 10;
-    ctx.strokeRect(5, 5, W - 10, H - 10);
-    ctx.textAlign    = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#3a2410';
-    // Auto-fit: start at the preferred size, measure, and step down by a
-    // simple proportional ratio if the text overflows the board's inner
-    // width (leaving a margin equal to the lineWidth + a bit of padding).
-    const MAX_PX  = 96;
-    const MIN_PX  = 40;                  // floor so 1-2 word names don't go tiny
-    const MARGIN  = 32;                  // padding inside the dark frame
-    const INNER_W = W - MARGIN * 2;
-    const fontFor = (px) => `bold ${px}px "Cinzel", "Trajan Pro", Georgia, serif`;
-    let px = MAX_PX;
-    ctx.font = fontFor(px);
-    // Test stubs may not implement measureText — skip auto-fit there. In a
-    // real browser it always exists.
-    if (typeof ctx.measureText === 'function') {
-      const metrics = ctx.measureText(text);
-      if (metrics?.width > INNER_W) {
-        // Scale by ratio (floor to nearest int), clamped to MIN_PX.
-        px = Math.max(MIN_PX, Math.floor(MAX_PX * (INNER_W / metrics.width)));
-        ctx.font = fontFor(px);
-      }
-    }
-    ctx.fillText(text, W / 2, H / 2 + Math.round(px * 0.04));
-    if (typeof tex.update === 'function') tex.update();
-  }
-
-  /** Build the OLD floating hover label above a building tile — the legacy
-   *  fallback for an orphan building that has no footprint (and thus no
-   *  signpost edge). One DynamicTexture per label (~256×64 px), painted once.
-   *  Tracked in `_buildingLabelsByKey` with the same `{ meshes, mats, tex }`
-   *  shape the signpost uses, so the pump + fog veil handle both uniformly. */
-  _buildBuildingLabel(tile, hexX, hexZ, parent) {
-    const BABYLON = this._babylon;
-    const scene   = this._scene;
-    if (!BABYLON || !scene || typeof document === 'undefined') return;
-    const text = labelTextForTile(tile);
-    if (!text) return;
-
-    const tkey = hexKey(tile.col, tile.row);
-    const tex = new BABYLON.DynamicTexture(
-      `bldgLabelTex_${tkey}`,
-      { width: BUILDING_LABEL_TEX_W, height: BUILDING_LABEL_TEX_H },
-      scene,
-      false,
-    );
-    tex.hasAlpha = true;
-    const ctx = tex.getContext();
-    ctx.clearRect(0, 0, BUILDING_LABEL_TEX_W, BUILDING_LABEL_TEX_H);
-    // Mirror the 2D label style: cream serif text with a dark shadow for legibility.
-    ctx.textAlign    = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.font         = 'bold 36px Georgia, serif';
-    const cx = BUILDING_LABEL_TEX_W / 2;
-    const cy = BUILDING_LABEL_TEX_H / 2;
-    ctx.fillStyle = 'rgba(0,0,0,0.85)';
-    ctx.fillText(text, cx + 2, cy + 2);
-    ctx.fillStyle = 'rgba(255,248,230,0.95)';
-    ctx.fillText(text, cx, cy);
-    tex.update();
-
-    const mat = new BABYLON.StandardMaterial(`bldgLabelMat_${tkey}`, scene);
+    const mat = new BABYLON.StandardMaterial(`bldgGroundMat_${tkey}`, scene);
     mat.diffuseTexture = tex;
     mat.opacityTexture = tex;
     mat.useAlphaFromDiffuseTexture = true;
     mat.specularColor  = new BABYLON.Color3(0, 0, 0);
-    mat.emissiveColor  = new BABYLON.Color3(1, 1, 1);
+    mat.emissiveColor  = new BABYLON.Color3(1, 1, 1); // unlit — reads in any phase light
     mat.backFaceCulling = false;
     mat.alpha = 1;
 
     const plane = BABYLON.MeshBuilder.CreatePlane(
-      `bldgLabel_${tkey}`,
-      { width: BUILDING_LABEL_WIDTH, height: BUILDING_LABEL_HEIGHT },
+      `bldgGround_${tkey}`,
+      { width: GROUND_LABEL_WIDTH, height: GROUND_LABEL_HEIGHT },
       scene,
     );
-    plane.parent        = parent;
-    // BILLBOARDMODE_ALL keeps the label fully camera-facing on all axes — at
-    // the steeper-down 35° tilt a Y-only billboard reads as a slanted plane
-    // ("tilted backwards into the map"), while full screen-space text always
-    // looks flat-on regardless of camera angle or zoom.
-    plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
-    plane.isPickable    = false;
-    plane.material      = mat;
-    // R7: render above all world geometry (group 2, same as the floating
-    // unit-icon billboards) so the hover label is never occluded by trees or
-    // taller buildings. Babylon clears depth between rendering groups.
-    plane.renderingGroupId = 2;
-    // Sit above the building's NE-slot roof, not over the hex centre, so the
-    // label visually anchors to the building rather than floating off-axis.
-    const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
-    plane.position.set(hexX + slot.x, BUILDING_LABEL_Y, hexZ + slot.z);
+    plane.parent     = parent;
+    plane.isPickable = false;
+    plane.material   = mat;
+    // Pitch flat onto the ground; yaw is owned by the per-frame pump. With
+    // rotation.x = π/2 the plane's front face points UP and its local +X
+    // (text reading direction) maps to world XZ angle −rotation.y — see
+    // `groundLabelPlacement` for the snap math.
+    if (BABYLON.Vector3) plane.rotation = new BABYLON.Vector3(Math.PI / 2, 0, 0);
+    plane.position.set(hexX, GROUND_LABEL_Y, hexZ);
+    // Ground text is permanent terrain info (like the building itself) — it
+    // stays visible under fog of war. See `_setTileFogged`.
+    plane.metadata = { respectsFog: false };
 
-    this._buildingLabelsByKey.set(tkey, {
-      meshes: [plane],
-      mats:   [mat],
-      tex,
-      fogged: false,
+    this._buildingGroundLabelsByKey.set(tkey, {
+      plane, mat, tex, disc, discMat, cx: hexX, cz: hexZ,
     });
+    // Force the pump to re-apply orientation on the next frame so labels
+    // built after the cached yaw was set still get placed.
+    this._groundLabelYaw = null;
   }
 
-  /** Per-frame: walk every building signpost/label and set its material alpha
-   *  from the current camera radius (`labelAlphaForZoom`), multiplied by a fog
-   *  dim factor. Post + plank fade together. Cheap — one Map walk per frame. */
-  _pumpBuildingLabelFade() {
+  /** Paint a ground-label DynamicTexture: the building name in the same
+   *  cream-serif-on-dark-halo style as the floating labels, on a TRANSPARENT
+   *  field so only the lettering paints onto the terrain. Auto-shrinks the
+   *  font for long names. Idempotent. */
+  _paintGroundLabel(tex, text) {
+    if (!tex || typeof tex.getContext !== 'function') return;
+    const W = GROUND_LABEL_TEX_W;
+    const H = GROUND_LABEL_TEX_H;
+    const ctx = tex.getContext();
+    ctx.clearRect(0, 0, W, H);
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    const MAX_PX  = 84;
+    const MIN_PX  = 36;
+    const MARGIN  = 24;
+    const INNER_W = W - MARGIN * 2;
+    const fontFor = (px) => `bold ${px}px "Cinzel", "Trajan Pro", Georgia, serif`;
+    let px = MAX_PX;
+    ctx.font = fontFor(px);
+    // Test stubs may not implement measureText — skip auto-fit there.
+    if (typeof ctx.measureText === 'function') {
+      const metrics = ctx.measureText(text);
+      if (metrics?.width > INNER_W) {
+        px = Math.max(MIN_PX, Math.floor(MAX_PX * (INNER_W / metrics.width)));
+        ctx.font = fontFor(px);
+      }
+    }
+    // Dark halo + cream fill so the name reads on grass and cobblestone alike.
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = 'rgba(20, 14, 8, 0.9)';
+    ctx.lineWidth = Math.max(6, Math.round(px * 0.14));
+    if (typeof ctx.strokeText === 'function') ctx.strokeText(text, W / 2, H / 2);
+    ctx.fillStyle = 'rgba(255, 248, 230, 0.95)';
+    ctx.fillText(text, W / 2, H / 2);
+    if (typeof tex.update === 'function') tex.update();
+  }
+
+  /** Per-frame: snap every building ground label to the hex-edge direction
+   *  that is currently the most horizontal on screen (`groundLabelPlacement`),
+   *  and hug the near-camera edge of its entrance hex. The snap only changes
+   *  when the camera yaw crosses a 60° sector boundary, so the early-out on
+   *  the cached yaw makes the steady-state cost one comparison per frame. */
+  _pumpBuildingGroundLabels() {
     if (!this._camera) return;
-    if (this._buildingLabelsByKey.size === 0) return;
-    const a = labelAlphaForZoom(
-      this._camera.radius,
-      BUILDING_LABEL_FADE_RADIUS_CLOSE,
-      BUILDING_LABEL_FADE_RADIUS_FAR,
+    const map = this._buildingGroundLabelsByKey;
+    if (!map || map.size === 0) return;
+    const cam = this._camera;
+    const target = typeof cam.getTarget === 'function' ? cam.getTarget() : cam.target;
+    if (!target || !cam.position) return;
+    const placement = groundLabelPlacement(
+      target.x - cam.position.x,
+      target.z - cam.position.z,
     );
-    for (const entry of this._buildingLabelsByKey.values()) {
-      // Signposts stay fully opaque under fog — the plank is a 3D BOX (not a
-      // billboard plane), and any alpha<1 lets the parchment's back face show
-      // through with the text reading reversed. Zoom-fade alpha alone drives
-      // the material; fog state is conveyed by the building itself dimming.
-      if (entry.mats) for (const m of entry.mats) { if (m) m.alpha = a; }
-      // Skip the draw call entirely when fully faded — Babylon still uploads
-      // the geometry for alpha=0 alpha-blended meshes, so isVisible is the
-      // cheap path.
-      if (entry.meshes) for (const mesh of entry.meshes) { if (mesh) mesh.isVisible = a > 0; }
+    if (!placement || placement.yaw === this._groundLabelYaw) return;
+    this._groundLabelYaw = placement.yaw;
+    for (const entry of map.values()) {
+      if (!entry.plane) continue;
+      entry.plane.rotation.y = placement.yaw;
+      entry.plane.position.x = entry.cx + placement.offsetX;
+      entry.plane.position.z = entry.cz + placement.offsetZ;
     }
   }
 
@@ -10349,6 +10767,7 @@ export class Renderer3D {
     this.clearAllLungeAnims(true);
     this.clearAllProjectileAnims();
     this.clearFlashes();
+    this.clearSpeechBubbles();
     if (this._scene) {
       for (const standee of this._entityStandees.values()) {
         this._scene.stopAnimation(standee.plane);
@@ -10367,7 +10786,7 @@ export class Renderer3D {
    *  standee — the next draw() will snap the entity to its destination
    *  position anyway via `_positionStandee`, so resolution can't get stuck
    *  on a missing animation. */
-  addMoveAnim(entityId, fromCol, fromRow, toCol, toRow, _type, _owner, _title, path = null) {
+  addMoveAnim(entityId, fromCol, fromRow, toCol, toRow, _type, _owner, _title, path = null, fromSlot = 0, toSlot = 0) {
     if (!this._scene || !this._babylon) return;
     const standee = this._entityStandees.get(entityId);
     if (!standee) return;
@@ -10387,6 +10806,15 @@ export class Renderer3D {
       waypoints.push({ col: toCol, row: toRow });
     }
     const worldPts = waypoints.map(p => hexToWorld(p.col, p.row));
+    // Anchor the polyline's first/last points on the unit's actual sub-hex slot
+    // so the cone slides slot→slot instead of popping to the hex centre at the
+    // ends. Intermediate waypoints stay centred (the unit passes through the
+    // middle of the hexes it transits).
+    const fOff = TILE_SLOTS[fromSlot] ?? TILE_SLOTS[CENTRE_SLOT_INDEX];
+    const tOff = TILE_SLOTS[toSlot]   ?? TILE_SLOTS[CENTRE_SLOT_INDEX];
+    worldPts[0] = { x: worldPts[0].x + fOff.x, z: worldPts[0].z + fOff.z };
+    const _li = worldPts.length - 1;
+    worldPts[_li] = { x: worldPts[_li].x + tOff.x, z: worldPts[_li].z + tOff.z };
     const { x: fromX, z: fromZ } = worldPts[0];
     const { x: toX,   z: toZ   } = worldPts[worldPts.length - 1];
     // Playback-speed multiplier (cinematic/fast/vfast). Applied below to both
@@ -10400,6 +10828,10 @@ export class Renderer3D {
     // don't queue up and play simultaneously.
     this._scene.stopAnimation(standee.plane);
     this._activeMoveIds.add(entityId);
+    // Stash where this move LANDS (slot-anchored). A combat slide that
+    // interrupts the move mid-path uses this as the entity's true home —
+    // see addLungeAnim / _animateStandeeTo.
+    standee.moveDest = { x: toX, z: toZ };
 
     // Pick walking vs running by hop count: a move crossing 2+ destination
     // hexes in one plan step (waypoints includes the origin, so length ≥ 3)
@@ -10515,6 +10947,91 @@ export class Renderer3D {
     this._trackAnim(promise);
   }
 
+  // ─── Blocked-move walk-and-return ────────────────────────────────────────
+
+  /** Fake/blocked-move feedback: the unit WALKS forward to the shared hex edge
+   *  toward the blocker, then WALKS BACKWARD to its starting slot — selling a
+   *  thwarted advance ("I tried to go there, couldn't, stepped back"). Unlike
+   *  the instant lunge slide, this drives the real walk clip by joining
+   *  `_activeMoveIds` (see `_maybeToggleFallbackRigAnimation`), and keeps the
+   *  model FACING the blocker for the whole trip so the return reads as a
+   *  backward retreat rather than a turn-and-leave. Self-contained round trip —
+   *  resolves once the unit is home; no `returnAllLungeAnims` needed.
+   *  Cone-token units (no walk clip) simply slide out and back. */
+  addBumpWalkAnim(entityId, fromCol, fromRow, toCol, toRow, _type, _owner, _title, _fromSlot = 0) {
+    if (!this._scene || !this._babylon) return Promise.resolve();
+    const standee = this._entityStandees.get(entityId);
+    if (!standee) return Promise.resolve();
+    const BABYLON = this._babylon;
+
+    const { x: fromX, z: fromZ } = hexToWorld(fromCol, fromRow);
+    const { x: toX,   z: toZ   } = hexToWorld(toCol,   toRow);
+    // Start from the standee's CURRENT world position (its sub-hex slot).
+    const startX = standee.plane.position.x;
+    const startZ = standee.plane.position.z;
+    // Edge = midpoint of the two hex centres (the shared face) — the unit walks
+    // up to the boundary without crossing into the blocked hex.
+    const edgeX = (fromX + toX) * 0.5;
+    const edgeZ = (fromZ + toZ) * 0.5;
+
+    const shouldFrame = this._activeMoveIds.size === 0 && !this._suppressLungeFraming;
+
+    this._scene.stopAnimation(standee.plane);
+    this._activeMoveIds.add(entityId);        // drives the walk clip (legs move)
+    this._activeRunMoveIds.delete(entityId);  // walk pace, never a run
+
+    if (shouldFrame && this._camera) {
+      const midTarget = new BABYLON.Vector3((startX + edgeX) * 0.5, 0, (startZ + edgeZ) * 0.5);
+      const combatRadius = Math.min(
+        this._camera.radius,
+        Math.max(this._camera.lowerRadiusLimit ?? 4, COMBAT_FOCUS_RADIUS),
+      );
+      this._focusCamera(midTarget, combatRadius);
+    }
+
+    // Face the blocker for the WHOLE trip — the model keeps facing the obstacle
+    // and retreats backward, instead of spinning around to walk home.
+    if (standee.paladinClone?.mesh && (edgeX !== startX || edgeZ !== startZ)) {
+      standee.paladinClone.mesh.rotation.y = Math.atan2(edgeX - startX, edgeZ - startZ);
+    }
+
+    // Match the walk clip's stride to ground speed (mirror addMoveAnim) so feet
+    // plant across the short bump. distMul is the one-way distance in hexes.
+    const speedMul  = this._playbackSpeedMul ?? 1.0;
+    const oneWayLen = Math.hypot(edgeX - startX, edgeZ - startZ);
+    const hexStepWU = HEX_RADIUS_WORLD * Math.sqrt(3);
+    const distMul   = (oneWayLen > 0 && hexStepWU > 0) ? (oneWayLen / hexStepWU) : 0.5;
+    const wg = this._paladinSource?.walkGroup;
+    const baseRatio = this._walkingSource?.speedRatio ?? 1.0;
+    if (wg && 'speedRatio' in wg) {
+      wg.speedRatio = (baseRatio * Math.max(0.25, distMul)) / Math.max(0.05, speedMul);
+    }
+
+    // One-way duration scales with the half-hex step; out-and-back = 2× frames.
+    const oneWayMs = MOVE_ANIM_MS * Math.max(0.4, distMul) * speedMul;
+    const F = Math.max(1, Math.round(oneWayMs * 60 / 1000));
+
+    const animX = new BABYLON.Animation('bumpX', 'position.x', 60,
+      BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+    animX.setKeys([{ frame: 0, value: startX }, { frame: F, value: edgeX }, { frame: 2 * F, value: startX }]);
+    const animZ = new BABYLON.Animation('bumpZ', 'position.z', 60,
+      BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+    animZ.setKeys([{ frame: 0, value: startZ }, { frame: F, value: edgeZ }, { frame: 2 * F, value: startZ }]);
+
+    standee.plane.position.x = startX; standee.plane.position.z = startZ;
+
+    const promise = new Promise(resolve => {
+      this._scene.beginDirectAnimation(standee.plane, [animX, animZ], 0, 2 * F, false, 1, () => {
+        this._activeMoveIds.delete(entityId);
+        // Snap exactly home so the next re-slot pass finds it where it started.
+        standee.plane.position.x = startX; standee.plane.position.z = startZ;
+        resolve();
+      });
+    });
+    this._trackAnim(promise);
+    return promise;
+  }
+
   // ─── Lunge animation ─────────────────────────────────────────────────────
 
   /** Set the playback-speed multiplier the move/lunge animations use to
@@ -10549,7 +11066,7 @@ export class Renderer3D {
    *  strike). The slide is ALSO the standalone fallback for cone-token units
    *  (no `paladinClone`) and for the window before punch.glb has lazily
    *  loaded — in both cases the pure slide plays with no clip and no crash. */
-  addLungeAnim(entityId, fromCol, fromRow, toCol, toRow, _type, _owner, _title) {
+  addLungeAnim(entityId, fromCol, fromRow, toCol, toRow, _type, _owner, _title, _fromSlot = 0, stopAtBoundary = false) {
     if (!this._scene || !this._babylon) return;
     const standee = this._entityStandees.get(entityId);
     if (!standee) return;
@@ -10572,6 +11089,14 @@ export class Renderer3D {
     const lungeSpeedMul = this._playbackSpeedMul ?? 1.0;
     const FRAMES_LUNGE = Math.max(1, Math.round(LUNGE_ANIM_MS * lungeSpeedMul * 60 / 1000));
 
+    // Capture BEFORE stopAnimation — stopping the move fires its onEnd, which
+    // clears the in-flight bookkeeping. If this lunge interrupts a MOVE still
+    // animating, "home" is the move's landing point, not the transient
+    // mid-move position (a guard-reaction defender would otherwise be slid
+    // back toward its origin hex by returnAllLungeAnims, then snapped forward
+    // by the next sync — a visible flicker).
+    const interruptedMoveDest = this._activeMoveIds?.has(entityId)
+      ? (standee.moveDest ?? null) : null;
     this._scene.stopAnimation(standee.plane);
     this._activeLungeIds.add(entityId);
 
@@ -10585,13 +11110,17 @@ export class Renderer3D {
     }
 
     // Start from the standee's CURRENT position — no pre-snap to the hex
-    // centre (that snap was the "pop" bug). Slide LUNGE_FRACTION toward the
-    // target hex world position so we close the gap without overlapping it.
+    // centre (that snap was the "pop" bug). The current position is already the
+    // unit's sub-hex slot, so `_fromSlot` is informational only here.
     const startX = standee.plane.position.x;
     const startZ = standee.plane.position.z;
-    const { x: lungeX, z: lungeZ } = computeLungeTarget(
-      { x: startX, z: startZ }, { x: toX, z: toZ },
-    );
+    // Combat lunge slides LUNGE_FRACTION toward the target hex to close the gap
+    // for the strike. A BUMP (blocked move) instead stops at the shared edge —
+    // the midpoint of the two hex centres — so the unit nudges the obstacle
+    // without crossing into its hex, which reads as far less jarring.
+    const { x: lungeX, z: lungeZ } = stopAtBoundary
+      ? { x: (fromX + toX) * 0.5, z: (fromZ + toZ) * 0.5 }
+      : computeLungeTarget({ x: startX, z: startZ }, { x: toX, z: toZ });
 
     // Face the lunge direction (same model-yaw logic as MOVE) — yaw toward
     // the actual motion vector (current → lunge end), not the hex centres.
@@ -10600,17 +11129,21 @@ export class Renderer3D {
     }
 
     // Throw the punch clip on top of the slide so the strike reads as a strike,
-    // on the ATTACKER's own rig. Remember it so the cinematic's
-    // holdPunchAtImpact()/resumePunch() freeze the right one. Lazily kick the
-    // punch.glb load (idempotent) — already-resolved → plays now; first-ever
-    // combat may still be downloading, so that lunge is slide-only and the next
-    // punches. Cone-token attackers (no clone) just slide.
+    // on THIS attacker's own clone. Remember the clone so the cinematic's
+    // holdPunchAtImpact()/resumePunch() freeze the right strike. Lazily kick the
+    // punch.glb load (idempotent) — already-loaded+propagated → plays now;
+    // first-ever combat may still be downloading, so that lunge is slide-only
+    // and the next punches. Cone-token attackers (no clone) just slide.
     if (standee.paladinClone) {
-      const ent = this.state?.entities?.find(e => e && e.id === entityId) || null;
-      const rigSrc = ent ? this._loadedFallbackRigFor(ent) : null;
-      this._activePunchSrc = rigSrc;
-      if (rigSrc?.punchGroup) this._startRigPunch(rigSrc);
-      else if (rigSrc) this._ensureRigPunch(rigSrc);
+      const clone = standee.paladinClone;
+      if (clone.groups && clone.groups.punch) {
+        this._startClonePunch(clone);
+        this._activePunchClones.add(clone);
+      } else {
+        const ent = this.state?.entities?.find(e => e && e.id === entityId) || null;
+        const rigSrc = ent ? this._loadedFallbackRigFor(ent) : null;
+        if (rigSrc) this._ensureRigPunch(rigSrc);
+      }
     }
 
     // Ease-OUT: the lunge launches fast and decelerates into the strike
@@ -10631,7 +11164,11 @@ export class Renderer3D {
     // Stash the true pre-lunge position as "home" so returnAllLungeAnims()
     // slides back to where the standee actually started — not a recomputed
     // hex centre (which may be stale if the entity also moved this step).
-    standee.lungeHome = { homeX: startX, homeZ: startZ };
+    // Exception: if this lunge interrupted an in-flight MOVE, home is that
+    // move's landing point (the standee's transient mid-move spot is nowhere).
+    standee.lungeHome = interruptedMoveDest
+      ? { homeX: interruptedMoveDest.x, homeZ: interruptedMoveDest.z }
+      : { homeX: startX, homeZ: startZ };
 
     const promise = new Promise(resolve => {
       this._scene.beginDirectAnimation(standee.plane, [animX, animZ], 0, FRAMES_LUNGE, false, 1, resolve);
@@ -10653,6 +11190,13 @@ export class Renderer3D {
     const startZ = standee.plane.position.z;
     if (Math.abs(toX - startX) < 1e-4 && Math.abs(toZ - startZ) < 1e-4) return;
     const BABYLON = this._babylon;
+    // Capture BEFORE stopAnimation (stopping the move fires its onEnd, which
+    // clears the bookkeeping): a combat slide interrupting an in-flight MOVE
+    // must treat the move's landing point as home — not the transient
+    // mid-move position — or the return slide flicks the unit back toward
+    // its origin hex. See addLungeAnim for the same guard.
+    const interruptedMoveDest = this._activeMoveIds?.has(entityId)
+      ? (standee.moveDest ?? null) : null;
     this._scene.stopAnimation(standee.plane);
     this._activeLungeIds.add(entityId);
     if (standee.paladinClone?.mesh) {
@@ -10670,7 +11214,9 @@ export class Renderer3D {
       BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
     animZ.setKeys([{ frame: 0, value: startZ }, { frame: FRAMES, value: toZ }]);
     animZ.setEasingFunction(ease);
-    standee.lungeHome = { homeX: startX, homeZ: startZ };
+    standee.lungeHome = interruptedMoveDest
+      ? { homeX: interruptedMoveDest.x, homeZ: interruptedMoveDest.z }
+      : { homeX: startX, homeZ: startZ };
     const promise = new Promise(resolve => {
       this._scene.beginDirectAnimation(standee.plane, [animX, animZ], 0, FRAMES, false, 1, resolve);
     });
@@ -10691,10 +11237,10 @@ export class Renderer3D {
    *  back to their starting hex. Used by BOTH cinematic and fast/vfast — the
    *  readout/floater presentation differs by speed; the spatial choreography
    *  is identical, with `durMs` compressed in the faster modes. */
-  applyCombatPositioning({ defender, attackAllies = [], defenseAllies = [] } = {}, opts = {}) {
+  applyCombatPositioning({ defender, attacker = null, attackAllies = [], defenseAllies = [] } = {}, opts = {}) {
     if (!this._scene || !this._babylon || !defender) return;
     const durMs = Number.isFinite(opts.durMs) ? opts.durMs : LUNGE_ANIM_MS;
-    const plan = planCombatPositions({ defender, attackAllies, defenseAllies });
+    const plan = planCombatPositions({ defender, attacker, attackAllies, defenseAllies });
     this._animateStandeeTo(defender.id, plan.defender.x, plan.defender.z, durMs);
     for (const a of plan.attackerAllies) {
       if (a.moves) this._animateStandeeTo(a.id, a.toX, a.toZ, durMs);
@@ -10756,8 +11302,8 @@ export class Renderer3D {
   /** Immediately snap all lunging entities back home and clear lunge state.
    *  Used between rounds when we don't want the return animation to play. */
   clearAllLungeAnims(skipResolve = false) {
-    // Release the shared skeleton if a strike was mid-swing — otherwise the
-    // idle/walk toggle stays parked behind punchPlaying and the rig freezes.
+    // Release any clones mid-strike — otherwise their locomotion toggle stays
+    // parked behind oneShotPlaying and those units freeze mid-punch.
     this._stopPaladinPunch();
     if (!this._scene) {
       this._activeLungeIds.clear();
@@ -10974,7 +11520,7 @@ export class Renderer3D {
     plane.isPickable    = false;
     // Render above all world geometry so floaters never hide behind terrain
     // or standees — matches the unit-icon badge group (2).
-    plane.renderingGroupId = 2;
+    plane.renderingGroupId = UNIT_ICON_GROUP;
     const mat = new BABYLON.StandardMaterial(`floatMat_${plane.uniqueId}`, this._scene);
     mat.diffuseTexture = tex;
     mat.opacityTexture = tex;
@@ -10983,12 +11529,20 @@ export class Renderer3D {
     applyFlatUnitIconMaterial(BABYLON, mat);
     plane.material = mat;
 
+    // Concurrent floaters on the same hex stack vertically — each claims the
+    // lowest free slot and releases it when it expires, so simultaneous
+    // damage/counter/flash labels never paint on top of each other.
+    const slotsByHex = (this._floaterSlotsByHex ??= new Map());
+    const slotKey = hexKey(col, row);
+    const stackSlot = claimFloaterSlot(slotsByHex, slotKey);
+
     // Spawn above the tallest possible token (leader-sized cone + sphere).
     const startY = STANDEE_BASE_Y_OFFSET
       + STANDEE_BASE_THICKNESS
       + STANDEE_CONE_HEIGHT * STANDEE_LEADER_HEIGHT_MUL
       + STANDEE_SPHERE_DIAMETER * STANDEE_LEADER_WIDTH_MUL
-      + 0.4;
+      + 0.4
+      + stackSlot * FLOAT_TEXT_STACK_DY;
     const endY   = startY + 1.2;
     plane.position.set(x, startY, z);
     plane.visibility = 1;
@@ -11020,6 +11574,7 @@ export class Renderer3D {
 
     const promise = new Promise(resolve => {
       this._scene.beginDirectAnimation(plane, [animPos, animFade], 0, FRAMES_FLOAT, false, 1, () => {
+        releaseFloaterSlot(slotsByHex, slotKey, stackSlot);
         plane.dispose();
         mat.dispose();
         tex.dispose();
@@ -11040,6 +11595,107 @@ export class Renderer3D {
       });
     });
     return this._trackAnim(promise);
+  }
+
+  // ─── Conversation speech bubbles ─────────────────────────────────────────
+
+  /** Bubble bottom sits just above the tallest token — shared by
+   *  showSpeechBubble (placement) and speechBubbleFrameExtent (framing). */
+  static _speechBubbleBaseY() {
+    return STANDEE_BASE_Y_OFFSET
+      + STANDEE_BASE_THICKNESS
+      + STANDEE_CONE_HEIGHT * STANDEE_LEADER_HEIGHT_MUL
+      + STANDEE_SPHERE_DIAMETER * STANDEE_LEADER_WIDTH_MUL
+      + 0.3;
+  }
+
+  /** World height a worst-case speech bubble's TOP reaches above a standee's
+   *  anchor — passed as `cardExtent` to frameEntities so conversation framing
+   *  reserves headroom and the dialog never clips off the top of the screen.
+   *  Mirrors combatCardFrameExtent for the dice readout. */
+  speechBubbleFrameExtent() {
+    const maxTexH = SPEECH_BUBBLE_PAD_PX * 2 + SPEECH_BUBBLE_NAME_PX
+      + SPEECH_BUBBLE_MAX_LINES * SPEECH_BUBBLE_LINE_PX + 12;
+    const maxPlaneH = SPEECH_BUBBLE_PLANE_WIDTH * (maxTexH / SPEECH_BUBBLE_TEX_WIDTH);
+    return Renderer3D._speechBubbleBaseY() + maxPlaneH;
+  }
+
+  /** Persistent dialog bubble above a speaking entity during a campaign
+   *  conversation. Unlike `_spawnFloatingText` it does NOT animate or
+   *  auto-fade — it stays until the returned handle's `dispose()` is called
+   *  (the conversation player disposes it when the line advances). Accepts an
+   *  entity id or a `{col,row}` hex (REPLAY after the speaker despawned).
+   *  Returns `{ dispose() }`; a no-op handle when Babylon isn't ready. */
+  showSpeechBubble(entityIdOrHex, speakerName, text) {
+    if (!this._scene || !this._babylon || typeof document === 'undefined') {
+      return { dispose() {} };
+    }
+    const BABYLON = this._babylon;
+
+    let pos = null;
+    if (entityIdOrHex && typeof entityIdOrHex === 'object') {
+      pos = hexToWorld(entityIdOrHex.col, entityIdOrHex.row);
+    } else {
+      pos = this._entityWorldPos(entityIdOrHex);
+    }
+    if (!pos) return { dispose() {} };
+
+    const lines = wrapSpeechText(String(text ?? ''), SPEECH_BUBBLE_WRAP_CHARS)
+      .slice(0, SPEECH_BUBBLE_MAX_LINES);
+    const texH = SPEECH_BUBBLE_PAD_PX * 2 + SPEECH_BUBBLE_NAME_PX
+      + lines.length * SPEECH_BUBBLE_LINE_PX + 12;
+    const tex = new BABYLON.DynamicTexture(
+      `speechTex_${Date.now()}`,
+      { width: SPEECH_BUBBLE_TEX_WIDTH, height: texH },
+      this._scene,
+      false,
+    );
+    tex.hasAlpha = true;
+    paintSpeechBubble(tex.getContext(), {
+      width: SPEECH_BUBBLE_TEX_WIDTH,
+      height: texH,
+      name: speakerName,
+      lines,
+    });
+    tex.update();
+
+    const planeW = SPEECH_BUBBLE_PLANE_WIDTH;
+    const planeH = planeW * (texH / SPEECH_BUBBLE_TEX_WIDTH);
+    const plane = BABYLON.MeshBuilder.CreatePlane(
+      `speech_${Date.now()}`, { width: planeW, height: planeH }, this._scene);
+    plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+    plane.isPickable = false;
+    // Same group as floaters/unit badges — never hidden by terrain/standees.
+    plane.renderingGroupId = UNIT_ICON_GROUP;
+    const mat = new BABYLON.StandardMaterial(`speechMat_${plane.uniqueId}`, this._scene);
+    mat.diffuseTexture = tex;
+    mat.opacityTexture = tex;
+    applyFlatUnitIconMaterial(BABYLON, mat);
+    plane.material = mat;
+
+    // Bubble bottom sits just above the tallest token, same anchor as floaters.
+    const baseY = Renderer3D._speechBubbleBaseY();
+    plane.position.set(pos.x, baseY + planeH / 2, pos.z);
+
+    const handle = {
+      dispose: () => {
+        this._speechBubbles?.delete(handle);
+        plane.dispose();
+        mat.dispose();
+        tex.dispose();
+      },
+    };
+    (this._speechBubbles ??= new Set()).add(handle);
+    return handle;
+  }
+
+  /** Defensive sweep — dispose every live speech bubble (conversation player
+   *  calls this in its finally block; clearAnimations() also sweeps so an
+   *  aborted round never leaks a bubble). */
+  clearSpeechBubbles() {
+    if (!this._speechBubbles) return;
+    for (const h of [...this._speechBubbles]) h.dispose();
+    this._speechBubbles.clear();
   }
 
   /** G1 redesign — spawn a single big-number "combat readout" above a
@@ -11097,6 +11753,15 @@ export class Renderer3D {
     const BABYLON = this._babylon;
 
     const model = combatReadoutModel(result, side);
+    // summaryOnly (fast/Summary speed): skip the dice stack-up — no bonus-step
+    // floaters, no picked-ally pulse. The icon shows the FINAL total from the
+    // first frame, flips to the outcome colour after baseHold+finalHold, and
+    // the defender still gets its result label.
+    if (opts.summaryOnly) {
+      model.start = model.total;
+      model.steps = [];
+      model.pickedAllyId = null;
+    }
     const speedFactor = Number.isFinite(opts.speedFactor) && opts.speedFactor > 0
       ? opts.speedFactor : 1;
     const baseHoldMs  = (opts.baseHoldMs  ?? COMBAT_READOUT_BASE_HOLD_MS)  * speedFactor;
@@ -11120,18 +11785,25 @@ export class Renderer3D {
     const portraitSource = (entity && this._tilemapImg && this._spriteRects)
       ? resolveUnitIconPortrait(this._tilemapImg, this._spriteRects, this._assetIdFor(entity))
       : { img: null, rect: null, hasPortrait: false };
-    const hp    = entity?.hp ?? 0;
-    const maxHp = entity?.maxHp ?? 1;
-    const basePaint = (ctx) => paintUnitIconBadge(ctx, {
-      size: UNIT_ICON_TEX_SIZE,
-      portraitImg:  portraitSource.hasPortrait ? portraitSource.img  : null,
-      portraitRect: portraitSource.hasPortrait ? portraitSource.rect : null,
-      hp, maxHp,
-    });
+    const basePaint = (ctx) => {
+      // Read LIVE hp at paint time, not the spawn-time snapshot — the battle
+      // floaters bump the display entity's hp mid-hold, and the post-combat
+      // restore must show the updated ring rather than the pre-battle one.
+      const live = (this.state?.entities ?? []).find(e => e && e.id === entityId) ?? entity;
+      paintUnitIconBadge(ctx, {
+        size:  UNIT_ICON_TEX_SIZE,
+        width: UNIT_ICON_TEX_SIZE * UNIT_ICON_CARD_WIDTH_MUL,
+        portraitImg:  portraitSource.hasPortrait ? portraitSource.img  : null,
+        portraitRect: portraitSource.hasPortrait ? portraitSource.rect : null,
+        hp:    live?.hp ?? 0,
+        maxHp: live?.maxHp ?? 1,
+      });
+    };
     const repaintIcon = (value, color) => {
       if (!iconEntry) return;
       paintIconCombatReadout(iconEntry.tex.getContext(), {
-        size: UNIT_ICON_TEX_SIZE,
+        size:  UNIT_ICON_TEX_SIZE,
+        width: UNIT_ICON_TEX_SIZE * UNIT_ICON_CARD_WIDTH_MUL,
         basePaint,
         value,
         color,
@@ -11350,13 +12022,15 @@ export class Renderer3D {
     const hp    = entity?.hp ?? 0;
     const maxHp = entity?.maxHp ?? 1;
     const basePaint = (ctx) => paintUnitIconBadge(ctx, {
-      size: UNIT_ICON_TEX_SIZE,
+      size:  UNIT_ICON_TEX_SIZE,
+      width: UNIT_ICON_TEX_SIZE * UNIT_ICON_CARD_WIDTH_MUL,
       portraitImg:  portraitSource.hasPortrait ? portraitSource.img  : null,
       portraitRect: portraitSource.hasPortrait ? portraitSource.rect : null,
       hp, maxHp,
     });
     paintIconCombatReadout(iconEntry.tex.getContext(), {
-      size: UNIT_ICON_TEX_SIZE,
+      size:  UNIT_ICON_TEX_SIZE,
+      width: UNIT_ICON_TEX_SIZE * UNIT_ICON_CARD_WIDTH_MUL,
       basePaint,
       value: die,
       color: sideColor,
@@ -11473,7 +12147,7 @@ export class Renderer3D {
     );
     plane.billboardMode    = BABYLON.Mesh.BILLBOARDMODE_ALL;
     plane.isPickable       = false;
-    plane.renderingGroupId = 2;
+    plane.renderingGroupId = UNIT_ICON_GROUP;
 
     const mat = new BABYLON.StandardMaterial(`discoveryCardMat_${plane.uniqueId}`, this._scene);
     mat.diffuseTexture = tex;
@@ -11611,7 +12285,7 @@ export class Renderer3D {
     );
     plane.billboardMode    = BABYLON.Mesh.BILLBOARDMODE_ALL;
     plane.isPickable       = false;
-    plane.renderingGroupId = 2;
+    plane.renderingGroupId = UNIT_ICON_GROUP;
 
     const mat = new BABYLON.StandardMaterial(`readoutFloaterMat_${plane.uniqueId}`, this._scene);
     mat.diffuseTexture = tex;
@@ -11658,7 +12332,7 @@ export class Renderer3D {
     );
     plane.billboardMode    = BABYLON.Mesh.BILLBOARDMODE_ALL;
     plane.isPickable       = false;
-    plane.renderingGroupId = 2;
+    plane.renderingGroupId = UNIT_ICON_GROUP;
 
     const mat = new BABYLON.StandardMaterial(`readoutResultMat_${plane.uniqueId}`, this._scene);
     mat.diffuseTexture = tex;
@@ -11918,17 +12592,25 @@ export class Renderer3D {
       const portraitSource = resolveUnitIconPortrait(
         this._tilemapImg, this._spriteRects, assetId,
       );
+      // Per-unit planning info (odds + planned-attack count) painted into the
+      // card margins — published by ui.js as `renderer.unitInfoCards`.
+      const info = this.unitInfoCards?.get(e.id) ?? null;
+      const infoSig = info
+        ? `${info.hitPct ?? ''}|${info.crushPct ?? ''}|${info.attackCount ?? 0}`
+        : '';
       if (entry.lastHp === e.hp
           && entry.lastMax === e.maxHp
           && entry.lastAssetId === assetId
-          && entry.lastHadPortrait === portraitSource.hasPortrait) {
+          && entry.lastHadPortrait === portraitSource.hasPortrait
+          && entry.lastInfoSig === infoSig) {
         continue;
       }
-      this._repaintUnitIconBadge(entry, e, portraitSource);
+      this._repaintUnitIconBadge(entry, e, portraitSource, info);
       entry.lastHp           = e.hp;
       entry.lastMax          = e.maxHp;
       entry.lastAssetId      = assetId;
       entry.lastHadPortrait  = portraitSource.hasPortrait;
+      entry.lastInfoSig      = infoSig;
     }
     // Dispose badges for entities that no longer exist or just died.
     // G1 v2: skip entities mid-combat-readout — the readout drives the icon
@@ -11950,7 +12632,9 @@ export class Renderer3D {
     // (256²) so the mipmap chain is clean.
     const tex = new BABYLON.DynamicTexture(
       `unitIconTex_${entity.id}`,
-      { width: UNIT_ICON_TEX_SIZE, height: UNIT_ICON_TEX_SIZE },
+      // 2:1 unit info card (512×256 — both power-of-two, clean mipmaps).
+      // The portrait disc stays centred; margins carry planning info.
+      { width: UNIT_ICON_TEX_SIZE * UNIT_ICON_CARD_WIDTH_MUL, height: UNIT_ICON_TEX_SIZE },
       scene,
       /* generateMipMaps */ true,
       BABYLON.Texture.TRILINEAR_SAMPLINGMODE,
@@ -11970,7 +12654,9 @@ export class Renderer3D {
 
     const plane = BABYLON.MeshBuilder.CreatePlane(
       `unitIcon_${entity.id}`,
-      { width: UNIT_ICON_PLANE_SIZE, height: UNIT_ICON_PLANE_SIZE },
+      // Width matches the 2:1 card texture; the disc remains centred above
+      // the unit so positioning/scaling rules are unchanged.
+      { width: UNIT_ICON_PLANE_SIZE * UNIT_ICON_CARD_WIDTH_MUL, height: UNIT_ICON_PLANE_SIZE },
       scene,
     );
     plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
@@ -11983,7 +12669,7 @@ export class Renderer3D {
     plane.parent        = standee.plane;
     // Render above all world geometry (terrain, ribbons, buildings, standees,
     // hex outlines — all now in group 0). UI badge must never be occluded.
-    plane.renderingGroupId = 2;
+    plane.renderingGroupId = UNIT_ICON_GROUP;
     plane.position.set(0, iconBillboardYRelativeToCone(standee.leader), 0);
     // 80% alpha — lets the paladin model behind show through when camera
     // angles bring them close on screen. Plane scale stays at the natural
@@ -11995,7 +12681,7 @@ export class Renderer3D {
     const entry = {
       plane, mat, tex,
       leader: !!standee.leader,
-      lastHp: -1, lastMax: -1, lastAssetId: '__pending__',
+      lastHp: -1, lastMax: -1, lastAssetId: '__pending__', lastInfoSig: '__pending__',
       // Track whether the last paint actually drew the portrait sprite. The
       // race we're guarding against: badge created before `loadImages()`
       // resolves → first paint goes out with `hasPortrait=false` (gray
@@ -12009,14 +12695,16 @@ export class Renderer3D {
     return entry;
   }
 
-  _repaintUnitIconBadge(entry, entity, portraitSource) {
+  _repaintUnitIconBadge(entry, entity, portraitSource, info = null) {
     const ctx = entry.tex.getContext();
     paintUnitIconBadge(ctx, {
-      size: UNIT_ICON_TEX_SIZE,
+      size:  UNIT_ICON_TEX_SIZE,
+      width: UNIT_ICON_TEX_SIZE * UNIT_ICON_CARD_WIDTH_MUL,
       portraitImg:  portraitSource.hasPortrait ? portraitSource.img  : null,
       portraitRect: portraitSource.hasPortrait ? portraitSource.rect : null,
       hp: entity.hp,
       maxHp: entity.maxHp,
+      info,
     });
     entry.tex.update();
   }
@@ -12062,12 +12750,14 @@ export class Renderer3D {
     this._publishPlanMoveOverlays();
     this._publishPlanBattleOverlays();
     this._publishObjectiveRingOverlays();
+    this._publishTutorialSpotlightOverlay();
 
     // ── Consumers ──────────────────────────────────────────────────────────
     // Dispatch by (kind, layer) to per-kind builders. Each builder reads ONLY
     // the published overlay descriptors — never game state — so the overlay
     // map is the single source of truth for what gets drawn.
     this._syncSelectionOverlays();   // kind:'outline'    layer:'selection'
+    this._buildFlatFillOverlays();   // kind:'fill'       layer:'fill' (flat tint)
     this._buildFillOverlays();       // kind:'fill'       layer:'highlight-disc'
     this._buildObjectiveRings();     // kind:'ring-pulse' layer:'objective-ring'
     this._buildPlanArrows();         // kind:'plan-arrow' layer:'plan-arrow' (move)
@@ -12217,6 +12907,65 @@ export class Renderer3D {
   }
 
   /**
+   * Build flat per-hex tint discs from `kind:'fill'` overlays in the `fill`
+   * layer — a true translucent fill over the tagged hexes (vs the
+   * highlight-disc layer's outline rings). Used by the turn-card hover
+   * highlight (15%-alpha blue over an action's involved hexes). Hex-aligned
+   * cylinder discs like the power-node tints; `style.alpha` is honoured.
+   * Signature-diffed each draw like the other consumers.
+   */
+  _buildFlatFillOverlays() {
+    if (!this._scene || !this._babylon) return;
+
+    const ids = [];
+    for (const [id, ov] of this._overlays) {
+      if (ov.kind === 'fill' && ov.layer === 'fill') ids.push(id);
+    }
+    ids.sort();
+
+    let sig = '';
+    ids.forEach((id, i) => { sig += `${id}@${i}:${overlaySignature(this._overlays.get(id))}|`; });
+    if (sig === this._flatFillSig) return;
+    this._flatFillSig = sig;
+
+    for (const m of (this._flatFillMeshes ?? [])) { m.mesh.dispose(); m.mat.dispose(); }
+    this._flatFillMeshes = [];
+    if (ids.length === 0) return;
+
+    const BABYLON = this._babylon;
+    ids.forEach((id, nestedIndex) => {
+      const ov = this._overlays.get(id);
+      const [r, g, b] = cssHexToRgb01(ov.style?.color || '#4d9fff');
+      const alpha = Number.isFinite(ov.style?.alpha) ? ov.style.alpha : 0.15;
+      const y = yForLayer('fill', nestedIndex);
+      const mat = new BABYLON.StandardMaterial(`flatFillMat_${id}`, this._scene);
+      mat.diffuseColor  = new BABYLON.Color3(r, g, b);
+      mat.emissiveColor = new BABYLON.Color3(r * 0.6, g * 0.6, b * 0.6);
+      mat.specularColor = new BABYLON.Color3(0, 0, 0);
+      mat.alpha = alpha;
+      mat.backFaceCulling = false;
+      for (const key of Array.from(ov.hexes).sort()) {
+        const [col, row] = key.split(',').map(Number);
+        if (!Number.isFinite(col) || !Number.isFinite(row)) continue;
+        const disc = BABYLON.MeshBuilder.CreateCylinder(
+          `flatFill_${id}_${col}_${row}`,
+          { diameter: HEX_RADIUS_WORLD * 2, height: 0.001, tessellation: 6 },
+          this._scene,
+        );
+        const { x, z } = hexToWorld(col, row);
+        disc.parent = this._mapRoot;
+        disc.position.set(x, y, z);
+        // Pointy-top alignment, matching the terrain discs / node tints.
+        disc.rotation.y = Math.PI / 6;
+        disc.isPickable = false;
+        disc.material = mat;
+        disc.alphaIndex = OVERLAY_FLAT_FILL_ALPHA_INDEX + nestedIndex;
+        this._flatFillMeshes.push({ mesh: disc, mat });
+      }
+    });
+  }
+
+  /**
    * Build the movement / battle / battle-hex target rings. Walks every
    * `kind:'fill'` overlay in the `highlight-disc` layer, alphabetical by id so
    * the nested Y for each is stable across frames, and lays a thin hex-outline
@@ -12276,6 +13025,50 @@ export class Renderer3D {
         this._highlightMeshes.push(ribbon);
       }
     });
+  }
+
+  /** Producer: publish/remove the tutorial hex spotlight as a gold hex-outline
+   *  ring in the highlight-disc layer. `tutorialSpotlightHex` is written by
+   *  MissionConductor; the fill builder above renders it like any other
+   *  highlight, so spotlights work identically in 2D and 3D. */
+  _publishTutorialSpotlightOverlay() {
+    const hex = this.tutorialSpotlightHex;
+    if (hex) {
+      this.setOverlay('tutorial-spotlight', makeOverlay({
+        id: 'tutorial-spotlight', kind: 'fill', layer: 'highlight-disc',
+        hexes: [{ col: hex.col, row: hex.row }],
+        style: { color: 'rgba(255,215,0,0.9)' },
+      }));
+    } else {
+      this.removeOverlay('tutorial-spotlight');
+    }
+  }
+
+  /**
+   * Project a hex's ground centre to viewport CSS-pixel coordinates — used by
+   * MissionConductor to anchor the tutorial arrow to a map hex across camera
+   * pan/zoom. Returns `{ x, y }` (relative to the viewport, like
+   * getBoundingClientRect) or null before the Babylon scene is ready.
+   */
+  getHexScreenPosition(col, row) {
+    if (!this._scene || !this._camera || !this._engine || !this._babylon) return null;
+    const BABYLON = this._babylon;
+    const { x, z } = hexToWorld(col, row);
+    const rw = this._engine.getRenderWidth();
+    const rh = this._engine.getRenderHeight();
+    if (!rw || !rh) return null;
+    const projected = BABYLON.Vector3.Project(
+      new BABYLON.Vector3(x, 0, z),
+      BABYLON.Matrix.Identity(),
+      this._scene.getTransformMatrix(),
+      this._camera.viewport.toGlobal(rw, rh),
+    );
+    // Engine render pixels → viewport CSS pixels (hardware scaling / DPR).
+    const rect = this.canvas.getBoundingClientRect();
+    return {
+      x: rect.left + projected.x * (rect.width / rw),
+      y: rect.top  + projected.y * (rect.height / rh),
+    };
   }
 
   /**
@@ -12357,7 +13150,7 @@ export class Renderer3D {
         ring.parent         = this._mapRoot;
         ring.material       = material;
         ring.isPickable     = false;
-        ring.renderingGroupId = 0;
+        ring.renderingGroupId = WORLD_GROUP;
         // Pin a stable transparent-sort index ONLY for the transparent rings
         // (the hover ring at alpha < 1). The selected-unit ring is opaque
         // (alpha 1) so the opaque pass ignores alphaIndex — leave it default.
@@ -12475,7 +13268,17 @@ export class Renderer3D {
     // it changes iff the published descriptors change — yet the geometry below
     // is built entirely from the overlay map. During plan editing draw() fires
     // on every hover / selection event, so this early-out saves GC + GPU churn.
-    const sig = planArrowsSignature(this.planGhostSteps, this.state?.entities);
+    // Hover ghost arrows (turn-card hover) are published outside
+    // planGhostSteps, so fold their signatures in — otherwise adding/removing
+    // a ghost overlay wouldn't trigger a rebuild.
+    let ghostSig = '';
+    for (const [id, ov] of this._overlays) {
+      if (ov.kind === 'plan-arrow' && ov.meta?.variant === 'ghost') {
+        ghostSig += `${id}:${overlaySignature(ov)}|`;
+      }
+    }
+    const sig = planArrowsSignature(this.planGhostSteps, this.state?.entities)
+      + (ghostSig ? `#${ghostSig}` : '');
     if (sig === this._planArrowSig) return;
     this._planArrowSig = sig;
 
@@ -12539,6 +13342,12 @@ export class Renderer3D {
       dashMat.diffuseColor  = new BABYLON.Color3(r, g, b);
       dashMat.emissiveColor = new BABYLON.Color3(r * 0.6, g * 0.6, b * 0.6);
       dashMat.specularColor = new BABYLON.Color3(0, 0, 0);
+      // Ghost (hover) arrows render translucent; pin the alpha sort like the
+      // waypoint pucks so they don't pop against the highlight fills.
+      const dashAlpha = e.steps[0]?.style?.alpha;
+      if (Number.isFinite(dashAlpha) && dashAlpha < 1) {
+        dashMat.alpha = dashAlpha;
+      }
 
       const dashes = [];
       for (let i = 0; i < path.length - 1; i++) {
@@ -12566,14 +13375,17 @@ export class Renderer3D {
           tube.parent = this._mapRoot;
           tube.isPickable = false;
           tube.material = dashMat;
+          if (dashMat.alpha < 1) tube.alphaIndex = OVERLAY_PLAN_ARROW_ALPHA_INDEX;
           dashes.push(tube);
         }
       }
       this._planArrowMeshes.push({ dashes, dashMat });
     }
 
-    // Waypoint puck + numbered badge per move step.
+    // Waypoint puck + numbered badge per move step. Ghost (hover) arrows are
+    // path-only — no puck, no badge.
     for (const ov of moveOvs) {
+      if (ov.meta?.variant === 'ghost') continue;
       const entityId   = ov.meta?.entityId;
       const stepNumber = ov.meta?.stepIndex ?? 0;
       const badgeLabel = ov.meta?.badge ?? String(stepNumber);
@@ -12804,16 +13616,30 @@ export class Renderer3D {
 
     // One ×N badge per unique target hex (⚔ glyph for single attacks). The
     // per-target count rides in each overlay's `meta.count`.
+    //
+    // Skip hexes whose occupant already carries the count on its unit info
+    // card (published by ui.js as `unitInfoCards`) — the floating hex badge
+    // is now only the fallback for targets with no card to host it (e.g. a
+    // BATTLE_HEX queued against an empty or fogged hex).
     if (typeof document === 'undefined') return;
+    const cardCarriesCount = (col, row) => {
+      const cards = this.unitInfoCards;
+      if (!cards || cards.size === 0) return false;
+      for (const e of this.state?.entities ?? []) {
+        if (e?.alive && e.col === col && e.row === row
+            && (cards.get(e.id)?.attackCount ?? 0) > 0) return true;
+      }
+      return false;
+    };
     const drawnTargets = new Set();
     for (const ov of battleOvs) {
       const key = ov.meta.toHex;
       if (drawnTargets.has(key)) continue;
       drawnTargets.add(key);
       const { col: toCol, row: toRow } = parseHex(key);
+      if (cardCarriesCount(toCol, toRow)) continue;
 
       const count = ov.meta.count ?? 1;
-      const label = attackBadgeLabel(count);
 
       const badgeTex = new BABYLON.DynamicTexture(
         `planAttackBadgeTex_${key}`,
@@ -12823,16 +13649,7 @@ export class Renderer3D {
       badgeTex.hasAlpha = true;
       const ctx = badgeTex.getContext();
       ctx.clearRect(0, 0, 96, 96);
-      ctx.fillStyle = 'rgba(180,30,30,0.92)';
-      ctx.beginPath(); ctx.arc(48, 48, 40, 0, Math.PI * 2); ctx.fill();
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 4;
-      ctx.beginPath(); ctx.arc(48, 48, 40, 0, Math.PI * 2); ctx.stroke();
-      ctx.fillStyle = '#ffffff';
-      ctx.font = `bold ${count > 1 ? 48 : 56}px sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(label, 48, 52);
+      paintAttackCountMarker(ctx, 48, 48, 40, count);
       badgeTex.update();
 
       const badgeMat = new BABYLON.StandardMaterial(`planAttackBadgeMat_${key}`, this._scene);
@@ -12947,8 +13764,8 @@ export class Renderer3D {
       cone.isPickable = false;
       // Plan ghosts are standees too — share renderingGroupId 0 so they
       // depth-test against buildings the same as live units.
-      cone.renderingGroupId   = 0;
-      sphere.renderingGroupId = 0;
+      cone.renderingGroupId   = WORLD_GROUP;
+      sphere.renderingGroupId = WORLD_GROUP;
 
       // For hero entities with the walking GLB loaded, build the ghost
       // silhouette from the WALKING source (not paladin). Walking's native
@@ -13557,6 +14374,46 @@ export class Renderer3D {
     };
   }
 
+  /** Size the sun's shadow camera to the given map bounds (or the pre-map
+   *  default when null) and pin it there: Babylon's autoUpdateExtends /
+   *  autoCalcShadowZBounds are switched OFF so the frustum stops re-fitting
+   *  to every caster each frame (which both wasted CPU walking caster bounds
+   *  and inflated the frustum to the border-forest band, blurring shadows on
+   *  big maps). Called once per `_buildMap`; cheap and idempotent. */
+  _applySunShadowFit(bounds) {
+    const sun = this._sunLight;
+    if (!sun) return;
+    const fit = computeSunShadowFit(bounds ?? DEFAULT_SUN_SHADOW_BOUNDS);
+    this._sunShadowFit = fit;
+    sun.autoUpdateExtends = false;
+    sun.autoCalcShadowZBounds = false;
+    sun.shadowOrthoScale = 0; // no padding; the fit radius is already padded
+    sun.orthoLeft   = -fit.radius;
+    sun.orthoRight  =  fit.radius;
+    sun.orthoTop    =  fit.radius;
+    sun.orthoBottom = -fit.radius;
+    sun.shadowMinZ = fit.minZ;
+    sun.shadowMaxZ = fit.maxZ;
+    this._updateSunShadowPosition();
+  }
+
+  /** Re-position the sun light from its CURRENT direction so the map center
+   *  stays exactly on the shadow camera's axis — the alignment the
+   *  bounding-sphere ortho extents in `_applySunShadowFit` rely on. Must run
+   *  whenever the sun direction changes (per-phase configs and the per-round
+   *  sweep in `_onBeforeRender`); a few flops, safe per-frame. */
+  _updateSunShadowPosition() {
+    const sun = this._sunLight;
+    const fit = this._sunShadowFit;
+    if (!sun || !fit) return;
+    const p = sunShadowLightPosition(fit, sun.direction);
+    if (sun.position) {
+      sun.position.x = p.x;
+      sun.position.y = p.y;
+      sun.position.z = p.z;
+    }
+  }
+
   /** Slam the light + clear colour to a target config with no animation.
    *
    *  `groundColor` (the under-side colour of the hemispheric light, defaults
@@ -13611,6 +14468,7 @@ export class Renderer3D {
       const dir = sunDirectionForRound(round, this.state?.cycleConfig);
       this._sunLight.direction = new BABYLON.Vector3(dir.x, dir.y, dir.z);
       this._sunLight.intensity = cfg.sun.intensity;
+      this._updateSunShadowPosition();
       snapshotDir = dir;
     }
     // Mirror into _lightState so transition snapshots see the new anchor.
@@ -13794,6 +14652,9 @@ export class Renderer3D {
         this._sunLight.direction.y = target.y;
         this._sunLight.direction.z = target.z;
       }
+      // Keep the map center on the shadow camera's axis as the sun glides —
+      // the fit's ortho bounds only cover the map under that alignment.
+      this._updateSunShadowPosition();
     }
     // Selection signal is the thick per-unit hex outline + its glow-layer
     // bloom (driven by `_applySelectionAndFocus`); no per-frame standee-
@@ -13822,8 +14683,9 @@ export class Renderer3D {
     // Compass rose: rotate the top-left needle to keep pointing at map north
     // as the camera orbits. Skips the DOM write when alpha hasn't moved.
     this._pumpCompassRose();
-    // Building signposts: fade in/out based on camera zoom.
-    this._pumpBuildingLabelFade();
+    // Building ground labels: re-snap to the most-horizontal-on-screen hex
+    // edge when the camera yaw crosses a sector boundary.
+    this._pumpBuildingGroundLabels();
     // Power-node outer-edge identifier outlines breathe between
     // NODE_OUTLINE_PULSE_MIN and NODE_OUTLINE_PULSE_MAX.
     this._pumpNodeOutlinePulse(now);
@@ -14417,14 +15279,10 @@ export class Renderer3D {
       }
       p.isVisible = !fogged;
     }
-    // Building signposts/labels are tracked separately — dim (not hide) under
-    // fog so the operator can still read "this hex has an Inn" even when the
-    // interior is unrevealed. Record the fog state; the per-frame pump
-    // (`_pumpBuildingLabelFade`) folds it into the zoom-fade alpha so the post
-    // + plank dim together. (P4c: floating node name labels were removed, so
-    // there is no node-label fog branch here anymore.)
-    const labelEntry = this._buildingLabelsByKey?.get(hexK);
-    if (labelEntry) labelEntry.fogged = fogged;
+    // Building ground markers (the "stand here" disc + name) live in their own
+    // registry with `respectsFog: false` and stay fully visible under fog —
+    // they're permanent terrain info, like the building itself — so there's no
+    // fog branch for them here.
     if (fogged) this._fogActiveSet.add(hexK);
     else this._fogActiveSet.delete(hexK);
   }
@@ -14823,19 +15681,23 @@ export function tombstoneTokenColor(hex) {
 //   slot 0 — centre. Reserved for standees (the common case: one unit per hex).
 //   slot 1 — building anchor. Aligns with BUILDING_OFFSET for visual stability;
 //            a building always occupies this slot when present.
-//   slots 2–6 — outer ring at ~0.6 world units, used by trees and overflow
+//   slots 2–6 — outer ring at 0.6 world units, used by trees and overflow
 //            standees in deterministic id order.
 //
-// Outer-slot distance sits within [FOREST_INNER_RADIUS, FOREST_OUTER_RADIUS]
-// so existing forest invariants (trees stay out of the centre) still hold.
+// Outer slots sit on the TRUE hex FACE NORMALS (not the 45° corners) at radius
+// 0.6, so slot id i aligns to a face direction via hex-slots.js (slotToDir):
+// 1=NE, 2=NW, 3=W, 4=SW, 5=SE, 6=E. This lets the map keep trees off road
+// faces and (later) anchor unit movement to a face. Radius 0.6 stays within
+// [FOREST_INNER_RADIUS, FOREST_OUTER_RADIUS] so trees stay out of the centre.
+// 0.5196152422706631 = (√3/2) · 0.6.
 export const TILE_SLOTS = Object.freeze([
-  Object.freeze({ x:  0.00, z:  0.00 }), // 0 — centre
-  Object.freeze({ x:  0.42, z: -0.42 }), // 1 — NE (building anchor, BUILDING_OFFSET)
-  Object.freeze({ x: -0.42, z: -0.42 }), // 2 — NW
-  Object.freeze({ x: -0.60, z:  0.00 }), // 3 — W
-  Object.freeze({ x: -0.42, z:  0.42 }), // 4 — SW
-  Object.freeze({ x:  0.42, z:  0.42 }), // 5 — SE
-  Object.freeze({ x:  0.60, z:  0.00 }), // 6 — E
+  Object.freeze({ x:  0.00, z:  0.00 }),                 // 0 — centre
+  Object.freeze({ x:  0.30, z: -0.5196152422706631 }),   // 1 — NE (building anchor, BUILDING_OFFSET)
+  Object.freeze({ x: -0.30, z: -0.5196152422706631 }),   // 2 — NW
+  Object.freeze({ x: -0.60, z:  0.00 }),                 // 3 — W
+  Object.freeze({ x: -0.30, z:  0.5196152422706631 }),   // 4 — SW
+  Object.freeze({ x:  0.30, z:  0.5196152422706631 }),   // 5 — SE
+  Object.freeze({ x:  0.60, z:  0.00 }),                 // 6 — E
 ]);
 
 /** Index of the centre slot (always preferred for the first standee). */
@@ -14958,16 +15820,32 @@ export function assignTileSlotIndices(occupants, opts = {}) {
     out.set(trees[i].id, outerForTrees[i]);
     used.add(outerForTrees[i]);
   }
-  // Standees → centre first, then any remaining free slot, then overflow at centre.
+  // Standees first honor their authoritative `slot` (e.slot from game state)
+  // when that slot is free and not reserved — this is the consistent intra-hex
+  // position the slot system exists to preserve. Standees without a usable
+  // preference fall back to: centre first, then any remaining free slot, then
+  // overflow at centre. A missing/blocked `slot` simply routes to the fallback,
+  // so callers that don't pass `slot` (and the legacy all-centre case) behave
+  // exactly as before.
+  const pending = [];
+  for (const s of standees) {
+    const pref = s.slot;
+    if (typeof pref === 'number' && pref >= 0 && pref < TILE_SLOTS.length && !used.has(pref)) {
+      out.set(s.id, pref);
+      used.add(pref);
+    } else {
+      pending.push(s);
+    }
+  }
   const standeeSlots = [];
   if (!used.has(CENTRE_SLOT_INDEX)) standeeSlots.push(CENTRE_SLOT_INDEX);
   for (let i = 1; i < TILE_SLOTS.length; i++) {
     if (!used.has(i)) standeeSlots.push(i);
   }
   let overflow = 0;
-  for (let i = 0; i < standees.length; i++) {
-    if (i < standeeSlots.length) out.set(standees[i].id, standeeSlots[i]);
-    else { out.set(standees[i].id, CENTRE_SLOT_INDEX); overflow++; }
+  for (let i = 0; i < pending.length; i++) {
+    if (i < standeeSlots.length) out.set(pending[i].id, standeeSlots[i]);
+    else { out.set(pending[i].id, CENTRE_SLOT_INDEX); overflow++; }
   }
   return { slotByOccupantId: out, overflow };
 }
@@ -15268,6 +16146,7 @@ export const BORDER_TREE_ALPHA_INDEX   = 90;
  *  the gap to the plan-arrow index leaves room for that. Opaque overlays (the
  *  selected-unit ring at alpha 1, the opaque plan dashes/arrow shafts) are left
  *  at the default — the opaque pass ignores `alphaIndex`. */
+export const OVERLAY_FLAT_FILL_ALPHA_INDEX     = 290;
 export const OVERLAY_SELECTION_ALPHA_INDEX     = 300;
 export const OVERLAY_HIGHLIGHT_DISC_ALPHA_INDEX = 310;
 export const OVERLAY_PLAN_ARROW_ALPHA_INDEX    = 320;
@@ -16384,6 +17263,78 @@ export const SUN_SHADOW_BIAS = 0.005;
  *  oppressive shadow — terrain underneath still reads. */
 export const SUN_SHADOW_DARKNESS = 0;
 
+// ── Shadow frustum fit-to-map ────────────────────────────────────────────────
+// The sun's orthographic shadow frustum is sized to the ACTUAL map at build
+// time instead of Babylon's autoUpdateExtends (which re-fits to every shadow
+// caster each frame — including the whole border-forest band — so the fixed
+// 2048² shadow map got spread thinner the bigger the map, and shadow quality
+// visibly degraded with map size). A skirmish map now gets ~4× the texel
+// density of a campaign map, and battle-size maps are fully covered.
+
+/** Pad (in hexes) added around the playable extent when fitting the shadow
+ *  frustum, so the first couple of border-forest rows still cast onto the
+ *  playable edge. Deeper border trees only ever shadow other border trees,
+ *  so excluding them costs nothing visible and keeps the frustum tight. */
+export const SUN_SHADOW_FIT_PAD_HEXES = 2;
+/** Height (world units) of the tallest shadow casters the frustum must
+ *  enclose — trees/buildings top out well under this. */
+export const SUN_SHADOW_CASTER_HEIGHT = 6;
+/** How far up-sun of the map center the light sits, as a multiple of the fit
+ *  radius. >1 keeps the near plane (minZ = distance − radius) positive. */
+export const SUN_SHADOW_LIGHT_DISTANCE_SCALE = 1.5;
+/** Pre-map fallback bounds — matches the legacy hard-coded ±40 footprint so
+ *  the light is usable before the first `_buildMap`. */
+const DEFAULT_SUN_SHADOW_BOUNDS = Object.freeze({ centerX: 0, centerZ: 0, width: 80, depth: 80 });
+
+/**
+ * Fit the sun's shadow camera to a map's world bounds (`computeMapBounds`
+ * output). Returns the bounding SPHERE of the padded map slab (ground level
+ * up to `casterHeight`): because a sphere is rotation-invariant, ortho bounds
+ * of ±radius cover the whole map for ANY sun direction in the day cycle —
+ * provided the light is positioned via `sunShadowLightPosition` so the sphere
+ * center sits exactly on the shadow camera's axis.
+ *
+ * Returns `{ center, radius, distance, minZ, maxZ }` or null for no bounds.
+ * `minZ`/`maxZ` bracket the sphere along the view axis so depth precision is
+ * spent only on the slab that actually contains casters.
+ */
+export function computeSunShadowFit(bounds, {
+  padWorld = SUN_SHADOW_FIT_PAD_HEXES * HEX_RADIUS_WORLD * SQRT3,
+  casterHeight = SUN_SHADOW_CASTER_HEIGHT,
+} = {}) {
+  if (!bounds) return null;
+  const halfW = bounds.width / 2 + padWorld;
+  const halfD = bounds.depth / 2 + padWorld;
+  const halfH = casterHeight / 2;
+  const radius = Math.hypot(halfW, halfD, halfH);
+  const distance = radius * SUN_SHADOW_LIGHT_DISTANCE_SCALE;
+  return {
+    center: { x: bounds.centerX, y: halfH, z: bounds.centerZ },
+    radius,
+    distance,
+    minZ: distance - radius,
+    maxZ: distance + radius,
+  };
+}
+
+/**
+ * World position for the sun light given a shadow fit and the current sun
+ * direction: `distance` up-sun of the fit center, so the map center projects
+ * to the shadow camera's view-space origin (the alignment the bounding-sphere
+ * ortho extents rely on). Degenerate/missing directions fall back to a
+ * straight-down sun. Pure.
+ */
+export function sunShadowLightPosition(fit, dir) {
+  let x = dir?.x ?? 0, y = dir?.y ?? 0, z = dir?.z ?? 0;
+  const len = Math.hypot(x, y, z);
+  if (len < 1e-9) { x = 0; y = -1; z = 0; } else { x /= len; y /= len; z /= len; }
+  return {
+    x: fit.center.x - x * fit.distance,
+    y: fit.center.y - y * fit.distance,
+    z: fit.center.z - z * fit.distance,
+  };
+}
+
 /** Easing duration for the directional-sun direction change when state.round
  *  advances. Keeps the sun gliding visibly across the sky as turns resolve
  *  rather than snapping to the new angle. Held to the same general envelope
@@ -16787,6 +17738,13 @@ export const PUNCH_IMPACT_FRAC = 0.55;
  *  for an "attack" pose without overlapping the target token. */
 export const LUNGE_FRACTION = 0.75;
 
+/** Hard cap (world units) on how far a lunge slides — LUNGE_FRACTION of one
+ *  hex of separation (adjacent centres are SQRT3 * HEX_RADIUS_WORLD apart).
+ *  Combat is resolved at the attacker's range, so the standee should never
+ *  visually travel further than an adjacent-hex strike, even when the lunge
+ *  aims at a distant hex (fled target / stale whiff hex). */
+export const LUNGE_MAX_WORLD = LUNGE_FRACTION * Math.sqrt(3) * HEX_RADIUS_WORLD;
+
 /** Per-speed-mode multipliers applied to MOVE_ANIM_MS and friends.
  *  setPlaybackSpeed('cinematic'|'fast'|'vfast') reads from here. Fast
  *  modes compress the cone-slide AND scale walkGroup.speedRatio in
@@ -16822,6 +17780,35 @@ export const FLOAT_TEXT_TEX_HEIGHT = 192;
  *  above a dying unit to read as a quick, low-chrome flick rather than a
  *  chunky sticker. */
 export const FLOAT_TEXT_DAMAGE_SIZE_MUL = 0.70;
+
+/** Vertical spacing between concurrently-live floaters on the SAME hex. A
+ *  battle wrap-up can fire several floaters at one hex in the same beat
+ *  (damage + counter + "CRUSH 2" flash); without stacking they spawn at the
+ *  identical point and read as one smeared label. One full damage-plane
+ *  height plus a small gap keeps each label clear of its neighbour. */
+export const FLOAT_TEXT_STACK_DY =
+  FLOAT_TEXT_PLANE_HEIGHT * FLOAT_TEXT_DAMAGE_SIZE_MUL + 0.15;
+
+/** Claim the lowest free stack slot for a floater on `key` (a "col,row" hex
+ *  key). `slotsByHex` maps key → Set of in-use slot indices. Pure bookkeeping
+ *  — visible for tests. */
+export function claimFloaterSlot(slotsByHex, key) {
+  let used = slotsByHex.get(key);
+  if (!used) { used = new Set(); slotsByHex.set(key, used); }
+  let slot = 0;
+  while (used.has(slot)) slot++;
+  used.add(slot);
+  return slot;
+}
+
+/** Release a slot claimed by claimFloaterSlot; drops the hex entry when its
+ *  last floater expires so the map never grows unbounded. */
+export function releaseFloaterSlot(slotsByHex, key, slot) {
+  const used = slotsByHex.get(key);
+  if (!used) return;
+  used.delete(slot);
+  if (used.size === 0) slotsByHex.delete(key);
+}
 
 /** Combat readout (G1 redesign — replaces the old dice-card). A single big
  *  number floats above each combatant's head; per-bonus floaters animate up
@@ -16984,6 +17971,13 @@ export const HP_BAR_Y_ABOVE_BASE = 0.2;
  *  badge grows upward and still clears the cone+sphere head with the same
  *  ~0.13wu margin that the 0.88 size had. */
 export const UNIT_ICON_PLANE_SIZE = 1.144;
+/** The icon billboard is a 2:1 "unit info card": the portrait disc stays
+ *  centred above the unit (exactly where the old square icon sat) and the
+ *  side margins carry per-unit planning info — hit/crush odds right-justified
+ *  to the LEFT of the disc, and the planned-attack ⚔/×N marker to the RIGHT.
+ *  Margins are transparent when there's no info, so the card is visually
+ *  identical to the old square icon outside planning. */
+export const UNIT_ICON_CARD_WIDTH_MUL = 2;
 /** Proximity-aware icon scaling. The badge sits at scale=1 (full size) for
  *  radius ≥ UNIT_ICON_SCALE_FAR; shrinks linearly to UNIT_ICON_MIN_SCALE
  *  by radius = UNIT_ICON_SCALE_NEAR. At max zoom-in the badge reads as
@@ -17688,6 +18682,70 @@ export function paintFloaterText(ctx, opts) {
   ctx.fillText(text, cx, cy);
 }
 
+// ─── Speech-bubble paint (conversation dialog billboards) ────────────────────
+
+export const SPEECH_BUBBLE_TEX_WIDTH   = 512;
+export const SPEECH_BUBBLE_WRAP_CHARS  = 30;
+export const SPEECH_BUBBLE_MAX_LINES   = 6;
+export const SPEECH_BUBBLE_NAME_PX     = 38;
+export const SPEECH_BUBBLE_LINE_PX     = 34;
+export const SPEECH_BUBBLE_PAD_PX      = 22;
+export const SPEECH_BUBBLE_PLANE_WIDTH = 3.2;
+
+/** Pure greedy word wrap by character budget (canvas-free so the conversation
+ *  player and tests can size bubbles without a DOM). Words longer than the
+ *  budget land on their own line rather than being split. */
+export function wrapSpeechText(text, maxChars = SPEECH_BUBBLE_WRAP_CHARS) {
+  const words = String(text ?? '').split(/\s+/).filter(Boolean);
+  const lines = [];
+  let cur = '';
+  for (const w of words) {
+    if (cur === '') cur = w;
+    else if (cur.length + 1 + w.length <= maxChars) cur += ` ${w}`;
+    else { lines.push(cur); cur = w; }
+  }
+  if (cur !== '') lines.push(cur);
+  return lines;
+}
+
+/** Paint a dialog bubble: rounded dark panel, gold border, accent speaker
+ *  name, pre-wrapped body lines. Exported for tests (canvas ctx injectable). */
+export function paintSpeechBubble(ctx, opts) {
+  const { width, height, name = '', lines = [] } = opts;
+  ctx.clearRect(0, 0, width, height);
+
+  const r = 18;
+  const x = 3, y = 3, w = width - 6, h = height - 6;
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(16, 12, 10, 0.88)';
+  ctx.fill();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = '#c9a227';
+  ctx.stroke();
+
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  let ty = SPEECH_BUBBLE_PAD_PX;
+  if (name) {
+    ctx.font = `700 ${SPEECH_BUBBLE_NAME_PX - 8}px Georgia, serif`;
+    ctx.fillStyle = '#e8c558';
+    ctx.fillText(name, SPEECH_BUBBLE_PAD_PX, ty);
+    ty += SPEECH_BUBBLE_NAME_PX;
+  }
+  ctx.font = `400 ${SPEECH_BUBBLE_LINE_PX - 8}px Georgia, serif`;
+  ctx.fillStyle = '#f2e8d8';
+  for (const line of lines) {
+    ctx.fillText(line, SPEECH_BUBBLE_PAD_PX, ty);
+    ty += SPEECH_BUBBLE_LINE_PX;
+  }
+}
+
 /**
  * Pure: derive a combat-readout view-model for one side of a battle `result`.
  *
@@ -17887,6 +18945,7 @@ export function paintReadoutFloater(ctx, opts) {
 export function paintIconCombatReadout(ctx, opts) {
   const {
     size,
+    width = size,  // card width; the readout number stays centred on the disc
     basePaint,
     value,
     color,
@@ -17902,7 +18961,7 @@ export function paintIconCombatReadout(ctx, opts) {
   // ring at the edges absorbs the same dim, which is fine — the overlay
   // is the focal point during combat.
   ctx.fillStyle = `rgba(0,0,0,${dimAlpha})`;
-  ctx.fillRect(0, 0, size, size);
+  ctx.fillRect(0, 0, width, size);
 
   // Big bold number, outlined for contrast. The side-icon prefix is
   // intentionally dropped — the readout overlays the unit's own icon, which
@@ -17924,9 +18983,9 @@ export function paintIconCombatReadout(ctx, opts) {
   ctx.miterLimit = 2;
   ctx.lineWidth = Math.max(4, Math.round(fontPx * 0.20));
   ctx.strokeStyle = '#000';
-  ctx.strokeText(text, size / 2, size / 2);
+  ctx.strokeText(text, width / 2, size / 2);
   ctx.fillStyle = color;
-  ctx.fillText(text, size / 2, size / 2);
+  ctx.fillText(text, width / 2, size / 2);
 }
 
 /**
@@ -17977,15 +19036,25 @@ export function resultLabel(result, side) {
   const r = result || {};
   const isAtk = side === 'attacker' || side === 'atk';
   const won = isAtk ? !!r.hit : !r.hit;
-  const dmg = Number.isFinite(r.damage) ? r.damage : (r.hit ? 1 : 0);
   const counter = Number.isFinite(r.counterDmg) ? r.counterDmg : 0;
+  // A crush is a ROLL outcome (attackRoll ≥ 2× defenseRoll), not "≥2 damage" —
+  // a plain hit can roll 2+ damage off the weapon die, and ranged hits never
+  // crush. The authoritative signal is breakdown.dmgTier (1 hit / 2 crush /
+  // 3 great crush); fall back to the roll ratio when the breakdown is absent
+  // (e.g. tests passing a partial result).
+  const tier = Number.isFinite(r.breakdown?.dmgTier) ? r.breakdown.dmgTier : null;
+  const isCrush = tier != null
+    ? tier >= 2
+    : (!r.ranged && !!r.hit
+       && Number.isFinite(r.attackRoll) && Number.isFinite(r.defenseRoll)
+       && r.attackRoll >= 2 * r.defenseRoll);
   if (isAtk) {
-    if (won) return dmg >= 2 ? 'CRUSH' : 'HIT';
+    if (won) return isCrush ? 'CRUSH' : 'HIT';
     return counter > 0 ? 'COUNTERED' : pickBlockWordUpper(r);
   }
   // Defender side.
   if (won) return counter > 0 ? 'COUNTER' : pickBlockWordUpper(r);
-  return dmg >= 2 ? 'CRUSHED' : 'HIT';
+  return isCrush ? 'CRUSHED' : 'HIT';
 }
 
 /**
@@ -18005,19 +19074,26 @@ export function resultLabel(result, side) {
 export function paintUnitIconBadge(ctx, opts) {
   const {
     size,
+    width = size,        // card width; defaults to square for legacy callers
     portraitImg = null,
     portraitRect = null, // { x, y, size } when drawing from a tilemap
     hp,
     maxHp,
+    // Per-unit planning info (unit info card). All optional:
+    //   hitPct / crushPct — attack-odds percentages (0–100) drawn
+    //     right-justified in the left margin; crush omitted when 0/null.
+    //   attackCount — planned attacks targeting this unit; draws the ⚔/×N
+    //     marker in the right margin.
+    info = null,
   } = opts;
-  const W = size;
+  const W = width;
   const H = size;
   const cx = W / 2;
   const cy = H / 2;
-  const ringThickness = Math.max(2, Math.round(W * UNIT_ICON_RING_THICKNESS_FRAC));
+  const ringThickness = Math.max(2, Math.round(size * UNIT_ICON_RING_THICKNESS_FRAC));
   // Outer ring radius is just inside the plane edge; inner radius is the
   // icon disc radius. The icon image is clipped to the inner disc.
-  const outerR = (W / 2) - 2;
+  const outerR = (size / 2) - 2;
   const innerR = outerR - ringThickness;
 
   ctx.clearRect(0, 0, W, H);
@@ -18063,6 +19139,93 @@ export function paintUnitIconBadge(ctx, opts) {
     ctx.drawImage(portraitImg, cx - innerR, cy - innerR, innerR * 2, innerR * 2);
   }
   ctx.restore();
+
+  // ── Unit info card margins ─────────────────────────────────────────────
+  if (!info || W <= H) return;
+  const marginW = cx - outerR;  // pixels available either side of the disc
+
+  // Left margin: hit / crush odds, right-justified against the disc edge.
+  if (Number.isFinite(info.hitPct)) {
+    const rightX = cx - outerR - Math.round(size * 0.03);
+    const hasCrush = Number.isFinite(info.crushPct) && info.crushPct > 0;
+    ctx.textBaseline = 'middle';
+    ctx.lineJoin = 'round';
+
+    // Big number + small "%" suffix — the suffix at full size ate a third of
+    // the margin's width budget, which is what kept the digits small. Each
+    // glyph gets a solid black outline, then the colour fill, so the odds
+    // read against any terrain or portrait behind them.
+    const drawOddsLine = (pct, fontPx, color, y) => {
+      const numText = String(pct);
+      let f = fontPx;
+      const widthOf = (fpx) => {
+        if (!ctx.measureText) return 0;
+        ctx.font = `900 ${fpx}px sans-serif`;
+        const numW = ctx.measureText(numText).width;
+        ctx.font = `900 ${Math.round(fpx * UNIT_INFO_PCT_SUFFIX_FRAC)}px sans-serif`;
+        return numW + ctx.measureText('%').width;
+      };
+      const total = widthOf(f);
+      if (total > marginW - 4 && total > 0) {
+        f = Math.max(1, Math.floor(f * ((marginW - 4) / total)));
+      }
+      const suffixF = Math.round(f * UNIT_INFO_PCT_SUFFIX_FRAC);
+      ctx.font = `900 ${suffixF}px sans-serif`;
+      const suffixW = ctx.measureText ? ctx.measureText('%').width : 0;
+
+      const paintGlyph = (text, fpx, x) => {
+        ctx.font = `900 ${fpx}px sans-serif`;
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = Math.max(4, Math.round(fpx * 0.18));
+        ctx.strokeText(text, x, y);
+        ctx.fillStyle = color;
+        ctx.fillText(text, x, y);
+      };
+      ctx.textAlign = 'right';
+      paintGlyph('%', suffixF, rightX);
+      paintGlyph(numText, f, rightX - suffixW);
+    };
+
+    const hitFont   = Math.round(size * 0.34);
+    const crushFont = Math.round(size * 0.23);
+    if (hasCrush) {
+      drawOddsLine(info.hitPct,   hitFont,   UNIT_INFO_HIT_COLOR,   cy - size * 0.16);
+      drawOddsLine(info.crushPct, crushFont, UNIT_INFO_CRUSH_COLOR, cy + size * 0.185);
+    } else {
+      drawOddsLine(info.hitPct, hitFont, UNIT_INFO_HIT_COLOR, cy);
+    }
+  }
+
+  // Right margin: planned-attack marker (the per-hex ⚔/×N badge relocated
+  // onto the target's own card).
+  if ((info.attackCount ?? 0) > 0) {
+    const r = Math.min(marginW / 2 - 4, size * 0.2);
+    paintAttackCountMarker(ctx, cx + outerR + marginW / 2, cy, r, info.attackCount);
+  }
+}
+
+/** Odds text colours on the unit info card — red hit %, deep-red crush %. */
+export const UNIT_INFO_HIT_COLOR   = '#ff5346';
+export const UNIT_INFO_CRUSH_COLOR = '#c81f1f';
+/** The "%" suffix renders at this fraction of the number's font size. */
+export const UNIT_INFO_PCT_SUFFIX_FRAC = 0.5;
+
+/**
+ * Red ⚔/×N disc marking a unit (or hex) targeted by planned attacks.
+ * Shared by the unit info card and the per-hex fallback badge so the two
+ * read identically. Pure canvas.
+ */
+export function paintAttackCountMarker(ctx, cx, cy, r, count) {
+  ctx.fillStyle = 'rgba(180,30,30,0.92)';
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = Math.max(2, Math.round(r * 0.1));
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+  ctx.fillStyle = '#ffffff';
+  ctx.font = `bold ${Math.round(r * (count > 1 ? 1.0 : 1.16))}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(attackBadgeLabel(count), cx, cy + r * 0.08);
 }
 
 // ─── Discovery readout helpers (exported for tests) ──────────────────────────
@@ -18404,6 +19567,22 @@ export function planBattleOverlaySignature(steps) {
     out += `${fromCol},${fromRow}>${toCol},${toRow}|`;
   }
   return out;
+}
+
+/** Pre-compile a material's shader effects, swallowing headless failures.
+ *  Babylon's signature is `forceCompilation(mesh, onCompiled?, options?, onError?)`
+ *  — the 2nd slot MUST be the onCompiled callback (or undefined). Passing the
+ *  options object there makes Babylon invoke it as a function when compilation
+ *  finishes → `TypeError: t is not a function` per PBR effect fallback, which
+ *  cascades into dozens of console errors and "BJS — Unable to compile effect".
+ *  Every renderer call site routes through this helper so the argument shape
+ *  can't regress. Returns true when a compile was requested. */
+export function forceCompileMaterial(material, mesh, options = { useInstances: true }) {
+  if (!material || typeof material.forceCompilation !== 'function') return false;
+  try {
+    material.forceCompilation(mesh, undefined, options);
+  } catch (_err) { /* compilation may fail in headless tests */ }
+  return true;
 }
 
 /**

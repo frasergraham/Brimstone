@@ -59,6 +59,28 @@ export function patchAlive(entities) {
 }
 
 /**
+ * Run an async replay `fn` with `state.phase` pinned to the round's own phase,
+ * restoring the live phase after (also on throw).
+ *
+ * A re-watch (the end-of-round Replay button, "Replay Last Turn") happens
+ * AFTER finalizeRound() advanced the day cycle. The phase drives lighting AND
+ * sight ranges — the fog veil and the card/animation visibility gates — so a
+ * replay run under the NEXT round's phase doesn't look like (or fog like) the
+ * round as it was originally fought. No-op when `roundPhase` is falsy or
+ * already current.
+ */
+export async function withPinnedPhase(state, roundPhase, fn) {
+  if (!state || !roundPhase || state.phase === roundPhase) return fn();
+  const livePhase = state.phase;
+  state.phase = roundPhase;
+  try {
+    return await fn();
+  } finally {
+    state.phase = livePhase;
+  }
+}
+
+/**
  * Replace the module-level state and update all references (renderer, UI).
  * Caller passes the mutable refs object so this module doesn't hold globals.
  */

@@ -21,22 +21,32 @@
 // edits are needed unless the effect introduces a brand-new mechanic class.
 
 import { ABILITIES } from './abilities.js';
+import { DAMAGE_SCALE } from './balance.js';
 
+// Every effect declares a one-letter `badge` (unique across the registry) —
+// rendered as a letter-in-a-circle status pip in the Unit Stats Bar and the
+// plan panel's selected-unit detail (see buildEffectsHtml in ui-render.js).
 export const EFFECTS = Object.freeze({
   // ── Negative ─────────────────────────────────────────────────────────────
   wounded: {
     id: 'wounded',
     label: 'Wounded',
     icon: '🩸',
-    description: 'Takes +1 damage from any source',
-    damageMods: { takenFlat: 1 },
-    defaultDuration: 3,
+    badge: 'W',
+    description: 'Takes +1D6 damage from any source this round',
+    // A fresh 1D6 per incoming blow (rolled through the game's deterministic
+    // die stream) — wounds make follow-up damage spikier rather than a flat
+    // guaranteed surcharge, and the window is one round, so the crush
+    // follow-up tax has to be cashed in immediately.
+    damageMods: { takenDice: 1 },
+    defaultDuration: 1,
   },
   poisoned: {
     id: 'poisoned',
     label: 'Poisoned',
     icon: '☠',
-    description: '−1 DEF; takes 1 damage at end of round',
+    badge: 'P',
+    description: '−1 DEF; takes damage at end of round',
     statMods: { defense: -1 },
     onRoundEnd: 'damageOne',
     defaultDuration: 3,
@@ -45,7 +55,8 @@ export const EFFECTS = Object.freeze({
     id: 'bleeding',
     label: 'Bleeding',
     icon: '💧',
-    description: 'Takes 1 damage at end of round',
+    badge: 'B',
+    description: 'Takes damage at end of round',
     onRoundEnd: 'damageOne',
     defaultDuration: 2,
   },
@@ -53,6 +64,7 @@ export const EFFECTS = Object.freeze({
     id: 'stunned',
     label: 'Stunned',
     icon: '💫',
+    badge: 'Z',
     description: 'Cannot act this round',
     blocksActions: true,
     defaultDuration: 1,
@@ -61,6 +73,7 @@ export const EFFECTS = Object.freeze({
     id: 'slowed',
     label: 'Slowed',
     icon: '🐌',
+    badge: 'S',
     description: '−1 agility (resolves later in the lockstep order)',
     statMods: { agility: -1 },
     defaultDuration: 1,
@@ -69,6 +82,7 @@ export const EFFECTS = Object.freeze({
     id: 'marked',
     label: 'Marked',
     icon: '🎯',
+    badge: 'M',
     description: 'Attackers gain +1 advantage die against this target',
     combatMods: { incomingAtkAdvantage: 1 },
     defaultDuration: 2,
@@ -77,6 +91,7 @@ export const EFFECTS = Object.freeze({
     id: 'cursed',
     label: 'Cursed',
     icon: '🕯',
+    badge: 'C',
     description: 'Cannot heal or be healed',
     blocksHeal: true,
     defaultDuration: 'mission',
@@ -87,6 +102,7 @@ export const EFFECTS = Object.freeze({
     id: 'frenzied',
     label: 'Frenzied',
     icon: '🔥',
+    badge: 'F',
     description: '+1 ATK, −1 DEF',
     statMods: { attack: 1, defense: -1 },
     defaultDuration: 1,
@@ -95,6 +111,7 @@ export const EFFECTS = Object.freeze({
     id: 'inspired',
     label: 'Inspired',
     icon: '✨',
+    badge: 'I',
     description: '+1 ATK',
     statMods: { attack: 1 },
     defaultDuration: 1,
@@ -103,6 +120,7 @@ export const EFFECTS = Object.freeze({
     id: 'fortified',
     label: 'Fortified',
     icon: '🛡',
+    badge: 'D',
     description: '+1 DEF',
     statMods: { defense: 1 },
     defaultDuration: 2,
@@ -111,6 +129,7 @@ export const EFFECTS = Object.freeze({
     id: 'eagle_eyed',
     label: 'Eagle-Eyed',
     icon: '👁',
+    badge: 'E',
     description: '+1 attack range',
     rangeMod: 1,
     defaultDuration: 'mission',
@@ -191,6 +210,20 @@ export function effectDamageTakenFlat(entity) {
   return sum;
 }
 
+/** Number of bonus damage DICE (d6) added to any incoming blow — e.g.
+ *  wounded → 1D6 per stack. Summed across effects × stacks; the caller rolls
+ *  them through the deterministic die stream (see Entity.applyIncomingDamage). */
+export function effectDamageTakenDice(entity) {
+  if (!entity || !Array.isArray(entity.effects)) return 0;
+  let dice = 0;
+  for (const rec of entity.effects) {
+    const def = EFFECTS[rec.id];
+    const mod = def?.damageMods?.takenDice;
+    if (typeof mod === 'number') dice += mod * (rec.stacks ?? 1);
+  }
+  return dice;
+}
+
 /** Sum of rangeMod across an entity's effects. */
 export function effectRangeMod(entity) {
   if (!entity || !Array.isArray(entity.effects)) return 0;
@@ -267,8 +300,9 @@ export function tickEffects(state) {
       if (!def?.onRoundEnd) continue;
       if (def.onRoundEnd === 'damageOne') {
         const stacks = rec.stacks ?? 1;
+        // One "tick" = DAMAGE_SCALE HP per stack (proportional to scaled pools).
         // Route through applyIncomingDamage so wounded etc. amplify DOTs.
-        const incoming = e.applyIncomingDamage(stacks);
+        const incoming = e.applyIncomingDamage(stacks * DAMAGE_SCALE, (s) => state.nextDie(s));
         const killed = e.takeDamage(incoming);
         dotEvents.push({
           effectId: rec.id,

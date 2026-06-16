@@ -1,7 +1,7 @@
 // Lobby: room lifecycle, server-side AI, action dispatch
 import { randomUUID } from 'crypto';
 import { GameState, Player, GameMode, computeActionsForPlayer, countHeldNodes } from '../src/game.js';
-import { HERO_PERSONALITIES, WITCH_PERSONALITIES } from '../src/ai.js';
+import { HERO_PERSONALITIES, WITCH_PERSONALITIES, AI_DIFFICULTIES } from '../src/ai.js';
 import { WitchAIEngine } from '../src/ai-engine.js';
 import { HeroAIEngine } from '../src/hero-ai-engine.js';
 import { serializeState, deserializeState } from './state-sync.js';
@@ -9,7 +9,7 @@ import { recordResult }                    from './leaderboard.js';
 import { recordGameStats }                 from './game-stats.js';
 import { resolvePlansMP, ResEventType }    from './resolver.js';
 import { compileTurnBattleSummary }        from '../src/battle-utils.js';
-import { PlanActionType }                  from '../src/planner.js';
+import { PlanActionType, validatePlan }    from '../src/planner.js';
 import { upsertSave, deleteSave, getSave,
          createCompletedGame, appendSaveRound,
          getSaveRounds, getLastSaveRound, getSaveRound,
@@ -140,9 +140,20 @@ const PERSONALITY_LABELS = {
   swarm:      'Swarm',
 };
 
-function _randomPersonality(_faction) {
-  // Non-balanced personalities are temporarily disabled pending tuning.
-  return 'balanced';
+// Personality pools for random AI fill-in. Restricted to the combinations
+// validated by `node scripts/ai-matrix.js` (2026-06-10 run: every pairing
+// within 40–60% win rate, personality averages 45–52%). node_denier,
+// witch_hunter, and evasive stay out of random rotation until they get a
+// matrix pass of their own — they remain available where a personality is
+// chosen explicitly (admin tools, campaign missions).
+const RANDOM_PERSONALITY_POOL = Object.freeze({
+  hero:  ['balanced', 'aggressive', 'defensive', 'explorer'],
+  witch: ['balanced', 'aggressive', 'swarm'],
+});
+
+function _randomPersonality(faction) {
+  const pool = RANDOM_PERSONALITY_POOL[faction] ?? ['balanced'];
+  return pool[Math.floor(Math.random() * pool.length)];
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -493,6 +504,7 @@ function createRoom(config = {}) {
       turnIntervalMs:   Math.max(Math.min(TURN_TIMEOUT_MS, 30_000), Math.min(259_200_000, Number(config.turnIntervalMs) || TURN_TIMEOUT_MS)),
       isAsync:          !!config.isAsync,
       isBattle:         !!config.isBattle,
+      aiDifficulty:     AI_DIFFICULTIES.includes(config.aiDifficulty) ? config.aiDifficulty : 'normal',
     },
     consecutiveTimeouts: {},  // playerId → consecutive empty-plan timeout count
     slots:            [],
@@ -1026,6 +1038,45 @@ function _submitPlayerPlan(room, playerId, plan, isTimeout = false) {
   }
 }
 
+/**
+ * Roll a room back to its pre-resolution snapshot after resolvePlansMP threw.
+ * Restores the state, rebinds AI engines to the new state object, clears the
+ * round's submitted plans, and restarts the planning phase so players can
+ * resubmit. Returns true on success, false if the rollback itself failed.
+ */
+function _recoverFromResolutionError(room, preStateJson) {
+  let restored;
+  try {
+    restored = deserializeState(JSON.parse(preStateJson));
+  } catch (err) {
+    console.error(`[room ${room.id}] resolution rollback failed:`, err);
+    return false;
+  }
+
+  room.state = restored;
+  // AI engines hold a reference to the replaced state object — recreate them.
+  for (const seat of room.players) {
+    if (seat.isAI && seat.ai) {
+      seat.ai = _makeAI(room, seat.faction, seat.playerId, seat.personality ?? null);
+    }
+  }
+
+  // Drop the round's persisted plans — one of them caused the throw, and
+  // _startPlanningPhase re-inserts fresh empty status rows.
+  try { clearPlanStatus(room.id, room.state.round); } catch (err) {
+    console.error(`[room ${room.id}] clearPlanStatus during rollback error:`, err);
+  }
+
+  broadcast(room, {
+    type: 'error',
+    message: 'Round resolution failed on the server. The round has been reset — please resubmit your plan.',
+  });
+  console.warn(`[room ${room.id}] rolled back to pre-resolution state (round ${room.state.round}) after resolver error`);
+
+  _startPlanningPhase(room);
+  return true;
+}
+
 /** Run the N-player resolver, advance state, and broadcast the result. */
 function _executeResolution(room) {
   _clearTurnTimer(room);
@@ -1059,7 +1110,11 @@ function _executeResolution(room) {
     steps = resolvePlansMP(state, playerEntries);
   } catch (err) {
     console.error(`[room ${room.id}] resolvePlansMP error:`, err);
-    steps = [];
+    // The resolver may have half-mutated the state before throwing — roll
+    // back to the pre-resolution snapshot and replan instead of finalizing
+    // a corrupt round (which previously left the room hung).
+    if (_recoverFromResolutionError(room, preStateJson)) return;
+    steps = [];  // rollback itself failed — fall through with an empty round
   }
 
   if (room.config.isBattle) {
@@ -1588,6 +1643,7 @@ export function createLobby(playerId, playerName, ws, config = {}) {
     turnIntervalMs: config.turnIntervalMs,
     isAsync:        config.isAsync ?? false,
     isBattle,
+    aiDifficulty:   config.aiDifficulty,
   });
   room.isPrivate    = config.isPrivate ?? false;
   room.hostPlayerId = playerId;
@@ -1869,6 +1925,9 @@ export function startGame(playerId, roomId) {
   const state      = new GameState(anyWitchAI, anyHeroAI, room.config.mapSize, room.config.nodeCount);
   // Legacy 'full' fog (retired) degrades to 'partial'.
   state.fogOfWar   = room.config.fog === 'full' ? 'partial' : room.config.fog;
+  // AI difficulty (validated in createRoom) — persisted via state-sync so
+  // resumed games keep their tier.
+  state.aiDifficulty = room.config.aiDifficulty ?? 'normal';
   room.state       = state;
   room.status      = 'playing';
   room.phase       = RoomPhase.PLANNING;  // game starts in planning
@@ -2324,6 +2383,18 @@ export function handlePlanSubmit(playerId, roomId, plan, round) {
     return;
   }
 
+  if (!Array.isArray(plan)) { send(seat.ws, { type: 'error', message: 'Invalid plan format.' }); return; }
+
+  // Server-authoritative validation: shape, length cap, ownership, legality.
+  // The resolver re-validates at execution time; this rejects bad plans early
+  // instead of persisting them and discovering the problem mid-resolution.
+  const check = validatePlan(state, playerId, plan);
+  if (!check.valid) {
+    console.warn(`[room ${roomId}] Rejected invalid plan from ${playerId} (action ${check.index}): ${check.reason}`);
+    send(seat.ws, { type: 'error', message: `Plan rejected: ${check.reason}` });
+    return;
+  }
+
   // Allow overwriting a previously submitted empty plan with a populated one
   if (state.playerReady.get(playerId)) {
     const existingPlan = state.playerPlans.get(playerId);
@@ -2336,8 +2407,6 @@ export function handlePlanSubmit(playerId, roomId, plan, round) {
     send(seat.ws, { type: 'error', message: 'Plan already submitted.' });
     return;
   }
-
-  if (!Array.isArray(plan)) { send(seat.ws, { type: 'error', message: 'Invalid plan format.' }); return; }
 
   _submitPlayerPlan(room, playerId, plan);
 }
@@ -3669,6 +3738,8 @@ export function pruneAsyncGames() {
 /** Exported for testing only. */
 export { _serializeEvents as serializeEventsForTest };
 export { _checkTimeoutTakeovers as checkTimeoutTakeoversForTest };
+export { _recoverFromResolutionError as recoverFromResolutionErrorForTest };
+export { _autoSubmitMissingPlans as autoSubmitMissingPlansForTest };
 
 /** Get async games list for a player (for REST endpoint). */
 export { getAsyncGamesForPlayer };
@@ -3986,6 +4057,13 @@ export function submitRemoteAIPlan(roomId, playerId, plan) {
   const seat = room.players.find(s => s.playerId === playerId);
   if (!seat) return { ok: false, error: 'Player not found.' };
   if (!seat.adminControlled) return { ok: false, error: 'Player is not admin-controlled.' };
+
+  // Externally-generated plans (LLM/admin) get the same authoritative
+  // validation as client submissions.
+  const check = validatePlan(room.state, playerId, plan);
+  if (!check.valid) {
+    return { ok: false, error: `Plan rejected (action ${check.index}): ${check.reason}` };
+  }
 
   _submitPlayerPlan(room, playerId, plan);
   return { ok: true };

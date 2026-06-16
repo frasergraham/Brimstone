@@ -66,64 +66,6 @@
       "row": 3
     }
   ],
-  "waves": [
-    {
-      "round": 2,
-      "units": [
-        {
-          "type": "zombie",
-          "spawnAt": "graveyard"
-        },
-        {
-          "type": "zombie",
-          "spawnAt": "map_edge"
-        }
-      ]
-    },
-    {
-      "round": 4,
-      "units": [
-        {
-          "type": "zombie",
-          "spawnAt": "graveyard"
-        },
-        {
-          "type": "minion",
-          "spawnAt": "map_edge"
-        },
-        {
-          "type": "zombie",
-          "spawnAt": "map_edge"
-        }
-      ]
-    },
-    {
-      "round": 6,
-      "units": [
-        {
-          "type": "minion",
-          "spawnAt": "graveyard"
-        },
-        {
-          "type": "zombie",
-          "spawnAt": "map_edge"
-        }
-      ]
-    },
-    {
-      "round": 8,
-      "units": [
-        {
-          "type": "zombie",
-          "spawnAt": "map_edge"
-        },
-        {
-          "type": "minion",
-          "spawnAt": "map_edge"
-        }
-      ]
-    }
-  ],
   "aiPersonality": "aggressive",
   "aiBudgetBonus": 2,
   "maxSurvivorsFromRoster": 2,
@@ -140,49 +82,6 @@
       "row": 5
     }
   ],
-  "objectives": {
-    "win": {
-      "type": "all_party_at_hexes",
-      "hexes": [
-        {
-          "col": 15,
-          "row": 4
-        },
-        {
-          "col": 14,
-          "row": 4
-        },
-        {
-          "col": 16,
-          "row": 4
-        },
-        {
-          "col": 15,
-          "row": 3
-        },
-        {
-          "col": 15,
-          "row": 5
-        }
-      ],
-      "reason": "You and your companions reached the river church together."
-    },
-    "lose": [
-      {
-        "type": "hero_killed"
-      },
-      {
-        "type": "survivors_below",
-        "count": 2,
-        "reason": "A companion fell — the party is broken."
-      },
-      {
-        "type": "rounds_exceeded",
-        "rounds": 15,
-        "reason": "Reinforcements arrived. The crossing is lost."
-      }
-    ]
-  },
   "startingResources": {
     "food": 2,
     "wood": 1
@@ -192,7 +91,7 @@
     "wood": 1,
     "herbs": 1
   },
-  "healBonus": 3,
+  "healBonus": 21,
   "lootOverrides": {
     "remove": [
       "horse"
@@ -1366,37 +1265,441 @@
       }
     ]
   },
-  "storyTriggers": [
-    {
-      "type": "round",
-      "round": 1,
-      "title": "The Long Road",
-      "text": "A narrow trail leads east through dense forest. The river glints in the distance — your only way forward. The dead have been here, and there are many of them. Stay close — no one is left behind on this road.",
-      "flag": "river_start"
-    },
-    {
-      "type": "area",
-      "hexes": [
-        {
-          "col": 10,
-          "row": 3
+  "hints": {
+    "scriptKey": "ch1m4"
+  },
+  "logic": {
+    "version": 1,
+    "variables": [],
+    "nodes": [
+      {
+        "id": "n0",
+        "type": "storyBeat",
+        "params": {
+          "title": "The Long Road",
+          "text": "A narrow trail leads east through dense forest. The river glints in the distance — your only way forward. The dead have been here, and there are many of them. Stay close — no one is left behind on this road."
         },
-        {
-          "col": 10,
-          "row": 4
+        "x": 520,
+        "y": 40
+      },
+      {
+        "id": "n1",
+        "type": "onRoundStart",
+        "params": {
+          "round": 1
         },
-        {
-          "col": 10,
-          "row": 5
+        "x": 40,
+        "y": 40
+      },
+      {
+        "id": "n2",
+        "type": "doOnce",
+        "params": {},
+        "x": 280,
+        "y": 40
+      },
+      {
+        "id": "n3",
+        "type": "storyBeat",
+        "params": {
+          "title": "The Crossing",
+          "text": "The bridge is ancient, its timbers groaning under your weight. On the far bank, shadows move between the trees. You grip your weapon tighter and step forward — together."
         },
-        {
-          "col": 11,
-          "row": 4
-        }
-      ],
-      "title": "The Crossing",
-      "text": "The bridge is ancient, its timbers groaning under your weight. On the far bank, shadows move between the trees. You grip your weapon tighter and step forward — together.",
-      "flag": "at_bridge"
-    }
-  ]
+        "x": 760,
+        "y": 40
+      },
+      {
+        "id": "n4",
+        "type": "onAreaEnter",
+        "params": {
+          "hexes": [
+            {
+              "col": 10,
+              "row": 3
+            },
+            {
+              "col": 10,
+              "row": 4
+            },
+            {
+              "col": 10,
+              "row": 5
+            },
+            {
+              "col": 11,
+              "row": 4
+            }
+          ]
+        },
+        "x": 40,
+        "y": 150
+      },
+      {
+        "id": "n5",
+        "type": "filterIsFaction",
+        "params": {
+          "faction": "hero"
+        },
+        "x": 280,
+        "y": 150
+      },
+      {
+        "id": "n6",
+        "type": "doOnce",
+        "params": {},
+        "x": 520,
+        "y": 150
+      },
+      {
+        "id": "n7",
+        "type": "spawnUnits",
+        "params": {
+          "units": [
+            {
+              "type": "zombie",
+              "spawnAt": "graveyard"
+            },
+            {
+              "type": "zombie",
+              "spawnAt": "map_edge"
+            }
+          ]
+        },
+        "x": 280,
+        "y": 260
+      },
+      {
+        "id": "n8",
+        "type": "onRoundStart",
+        "params": {
+          "round": 2
+        },
+        "x": 40,
+        "y": 260
+      },
+      {
+        "id": "n9",
+        "type": "spawnUnits",
+        "params": {
+          "units": [
+            {
+              "type": "zombie",
+              "spawnAt": "graveyard"
+            },
+            {
+              "type": "minion",
+              "spawnAt": "map_edge"
+            },
+            {
+              "type": "zombie",
+              "spawnAt": "map_edge"
+            }
+          ]
+        },
+        "x": 280,
+        "y": 370
+      },
+      {
+        "id": "n10",
+        "type": "onRoundStart",
+        "params": {
+          "round": 4
+        },
+        "x": 40,
+        "y": 370
+      },
+      {
+        "id": "n11",
+        "type": "spawnUnits",
+        "params": {
+          "units": [
+            {
+              "type": "minion",
+              "spawnAt": "graveyard"
+            },
+            {
+              "type": "zombie",
+              "spawnAt": "map_edge"
+            }
+          ]
+        },
+        "x": 280,
+        "y": 480
+      },
+      {
+        "id": "n12",
+        "type": "onRoundStart",
+        "params": {
+          "round": 6
+        },
+        "x": 40,
+        "y": 480
+      },
+      {
+        "id": "n13",
+        "type": "spawnUnits",
+        "params": {
+          "units": [
+            {
+              "type": "zombie",
+              "spawnAt": "map_edge"
+            },
+            {
+              "type": "minion",
+              "spawnAt": "map_edge"
+            }
+          ]
+        },
+        "x": 280,
+        "y": 590
+      },
+      {
+        "id": "n14",
+        "type": "onRoundStart",
+        "params": {
+          "round": 8
+        },
+        "x": 40,
+        "y": 590
+      },
+      {
+        "id": "n15",
+        "type": "onRoundStart",
+        "params": {
+          "round": "any"
+        },
+        "x": 40,
+        "y": 700
+      },
+      {
+        "id": "n16",
+        "type": "objectiveOutcome",
+        "params": {
+          "side": "win",
+          "spec": {
+            "type": "all_party_at_hexes",
+            "hexes": [
+              {
+                "col": 15,
+                "row": 4
+              },
+              {
+                "col": 14,
+                "row": 4
+              },
+              {
+                "col": 16,
+                "row": 4
+              },
+              {
+                "col": 15,
+                "row": 3
+              },
+              {
+                "col": 15,
+                "row": 5
+              }
+            ],
+            "reason": "You and your companions reached the river church together."
+          },
+          "reason": "You and your companions reached the river church together."
+        },
+        "x": 280,
+        "y": 700
+      },
+      {
+        "id": "n17",
+        "type": "onRoundStart",
+        "params": {
+          "round": "any"
+        },
+        "x": 40,
+        "y": 810
+      },
+      {
+        "id": "n18",
+        "type": "objectiveOutcome",
+        "params": {
+          "side": "lose",
+          "spec": {
+            "type": "survivors_below",
+            "count": 2,
+            "reason": "A companion fell — the party is broken."
+          },
+          "reason": "A companion fell — the party is broken."
+        },
+        "x": 280,
+        "y": 810
+      },
+      {
+        "id": "n19",
+        "type": "onRoundStart",
+        "params": {
+          "round": "any"
+        },
+        "x": 40,
+        "y": 920
+      },
+      {
+        "id": "n20",
+        "type": "objectiveOutcome",
+        "params": {
+          "side": "lose",
+          "spec": {
+            "type": "rounds_exceeded",
+            "rounds": 15,
+            "reason": "Reinforcements arrived. The crossing is lost."
+          },
+          "reason": "Reinforcements arrived. The crossing is lost."
+        },
+        "x": 280,
+        "y": 920
+      }
+    ],
+    "edges": [
+      {
+        "from": {
+          "node": "n1",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n2",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n2",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n0",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n4",
+          "pin": "onEnter"
+        },
+        "to": {
+          "node": "n5",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n4",
+          "pin": "unit"
+        },
+        "to": {
+          "node": "n5",
+          "pin": "entity"
+        },
+        "kind": "data"
+      },
+      {
+        "from": {
+          "node": "n5",
+          "pin": "pass"
+        },
+        "to": {
+          "node": "n6",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n6",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n3",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n8",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n7",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n10",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n9",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n12",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n11",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n14",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n13",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n15",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n16",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n17",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n18",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n19",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n20",
+          "pin": "in"
+        },
+        "kind": "exec"
+      }
+    ]
+  }
 }

@@ -58,86 +58,6 @@
       "row": 6
     }
   ],
-  "waves": [
-    {
-      "round": 4,
-      "units": [
-        {
-          "type": "minion",
-          "spawnAt": "map_edge"
-        },
-        {
-          "type": "minion",
-          "spawnAt": "map_edge"
-        }
-      ]
-    },
-    {
-      "round": 7,
-      "units": [
-        {
-          "type": "minion",
-          "spawnAt": "map_edge"
-        }
-      ]
-    },
-    {
-      "id": "witch-flees",
-      "trigger": "area",
-      "hexes": [
-        {
-          "col": 9,
-          "row": 6
-        },
-        {
-          "col": 10,
-          "row": 6
-        },
-        {
-          "col": 9,
-          "row": 5
-        },
-        {
-          "col": 8,
-          "row": 6
-        },
-        {
-          "col": 9,
-          "row": 7
-        },
-        {
-          "col": 10,
-          "row": 5
-        }
-      ],
-      "units": [
-        {
-          "type": "wood_golem",
-          "spawnAt": {
-            "col": 11,
-            "row": 6
-          },
-          "spawnLog": "🗿 A wood golem crashes out of the thicket to cover her escape!"
-        },
-        {
-          "type": "wood_golem",
-          "spawnAt": {
-            "col": 9,
-            "row": 8
-          },
-          "spawnLog": "🗿 Another golem lurches between you and the altar!"
-        },
-        {
-          "type": "wood_golem",
-          "spawnAt": {
-            "col": 10,
-            "row": 4
-          },
-          "spawnLog": "🗿 A third golem blocks the path she took into the shadows!"
-        }
-      ]
-    }
-  ],
   "aiPersonality": "evasive",
   "heroPersonality": "node_denier",
   "aiBudgetBonus": 1,
@@ -145,23 +65,6 @@
   "missionSurvivors": 0,
   "minSurvivors": 1,
   "maxDiscoverableSurvivors": 0,
-  "objectives": {
-    "win": {
-      "type": "witch_denied_nodes",
-      "phase": "dawn",
-      "reason": "Dawn breaks — the nodes are free of her grasp."
-    },
-    "lose": [
-      {
-        "type": "hero_killed"
-      },
-      {
-        "type": "witch_holds_node",
-        "phase": "dawn",
-        "reason": "Dawn breaks — the witch still holds a node. The ritual completes."
-      }
-    ]
-  },
   "startingResources": {
     "metal": 1,
     "food": 2
@@ -171,7 +74,7 @@
     "scripture": 1,
     "metal": 1
   },
-  "healBonus": 4,
+  "healBonus": 28,
   "lootOverrides": {
     "remove": [
       "horse"
@@ -1924,45 +1827,437 @@
       }
     ]
   },
-  "storyTriggers": [
-    {
-      "type": "round",
-      "round": 1,
-      "title": "Into the Grove",
-      "text": "Two clearings ahead pulse with purple light. Her garrison is thick around both. Dawn is all that stands between the ritual and its climax — you must drive her forces off both nodes before the sun returns.",
-      "flag": "dark_ritual_start"
-    },
-    {
-      "type": "area",
-      "hexes": [
-        {
-          "col": 9,
-          "row": 6
+  "hints": {
+    "scriptKey": "ch1m5"
+  },
+  "logic": {
+    "version": 1,
+    "variables": [],
+    "nodes": [
+      {
+        "id": "n0",
+        "type": "storyBeat",
+        "params": {
+          "title": "Into the Grove",
+          "text": "Two clearings ahead pulse with purple light. Her garrison is thick around both. Dawn is all that stands between the ritual and its climax — you must drive her forces off both nodes before the sun returns."
         },
-        {
-          "col": 10,
-          "row": 6
+        "x": 520,
+        "y": 40
+      },
+      {
+        "id": "n1",
+        "type": "onRoundStart",
+        "params": {
+          "round": 1
         },
-        {
-          "col": 9,
-          "row": 5
+        "x": 40,
+        "y": 40
+      },
+      {
+        "id": "n2",
+        "type": "doOnce",
+        "params": {},
+        "x": 280,
+        "y": 40
+      },
+      {
+        "id": "n3",
+        "type": "storyBeat",
+        "params": {
+          "title": "The Witch Flees",
+          "text": "At the second clearing you meet her eyes across the altar. For a heartbeat she stares — then she melts into the dark, leaving her golems to choke your path. Finish them. Finish the ritual."
         },
-        {
-          "col": 8,
-          "row": 6
+        "x": 760,
+        "y": 40
+      },
+      {
+        "id": "n4",
+        "type": "onAreaEnter",
+        "params": {
+          "hexes": [
+            {
+              "col": 9,
+              "row": 6
+            },
+            {
+              "col": 10,
+              "row": 6
+            },
+            {
+              "col": 9,
+              "row": 5
+            },
+            {
+              "col": 8,
+              "row": 6
+            },
+            {
+              "col": 9,
+              "row": 7
+            },
+            {
+              "col": 10,
+              "row": 5
+            }
+          ]
         },
-        {
-          "col": 9,
-          "row": 7
+        "x": 40,
+        "y": 150
+      },
+      {
+        "id": "n5",
+        "type": "filterIsFaction",
+        "params": {
+          "faction": "hero"
         },
-        {
-          "col": 10,
-          "row": 5
-        }
-      ],
-      "title": "The Witch Flees",
-      "text": "At the second clearing you meet her eyes across the altar. For a heartbeat she stares — then she melts into the dark, leaving her golems to choke your path. Finish them. Finish the ritual.",
-      "flag": "witch_flees"
-    }
-  ]
+        "x": 280,
+        "y": 150
+      },
+      {
+        "id": "n6",
+        "type": "doOnce",
+        "params": {},
+        "x": 520,
+        "y": 150
+      },
+      {
+        "id": "n7",
+        "type": "spawnUnits",
+        "params": {
+          "units": [
+            {
+              "type": "minion",
+              "spawnAt": "map_edge"
+            },
+            {
+              "type": "minion",
+              "spawnAt": "map_edge"
+            }
+          ]
+        },
+        "x": 280,
+        "y": 260
+      },
+      {
+        "id": "n8",
+        "type": "onRoundStart",
+        "params": {
+          "round": 4
+        },
+        "x": 40,
+        "y": 260
+      },
+      {
+        "id": "n9",
+        "type": "spawnUnits",
+        "params": {
+          "units": [
+            {
+              "type": "minion",
+              "spawnAt": "map_edge"
+            }
+          ]
+        },
+        "x": 280,
+        "y": 370
+      },
+      {
+        "id": "n10",
+        "type": "onRoundStart",
+        "params": {
+          "round": 7
+        },
+        "x": 40,
+        "y": 370
+      },
+      {
+        "id": "n11",
+        "type": "spawnUnits",
+        "params": {
+          "units": [
+            {
+              "type": "wood_golem",
+              "spawnAt": {
+                "col": 11,
+                "row": 6
+              },
+              "spawnLog": "🗿 A wood golem crashes out of the thicket to cover her escape!"
+            },
+            {
+              "type": "wood_golem",
+              "spawnAt": {
+                "col": 9,
+                "row": 8
+              },
+              "spawnLog": "🗿 Another golem lurches between you and the altar!"
+            },
+            {
+              "type": "wood_golem",
+              "spawnAt": {
+                "col": 10,
+                "row": 4
+              },
+              "spawnLog": "🗿 A third golem blocks the path she took into the shadows!"
+            }
+          ]
+        },
+        "x": 760,
+        "y": 150
+      },
+      {
+        "id": "n12",
+        "type": "onAreaEnter",
+        "params": {
+          "hexes": [
+            {
+              "col": 9,
+              "row": 6
+            },
+            {
+              "col": 10,
+              "row": 6
+            },
+            {
+              "col": 9,
+              "row": 5
+            },
+            {
+              "col": 8,
+              "row": 6
+            },
+            {
+              "col": 9,
+              "row": 7
+            },
+            {
+              "col": 10,
+              "row": 5
+            }
+          ]
+        },
+        "x": 40,
+        "y": 480
+      },
+      {
+        "id": "n13",
+        "type": "filterIsFaction",
+        "params": {
+          "faction": "hero"
+        },
+        "x": 280,
+        "y": 480
+      },
+      {
+        "id": "n14",
+        "type": "doOnce",
+        "params": {},
+        "x": 520,
+        "y": 260
+      },
+      {
+        "id": "n15",
+        "type": "onRoundStart",
+        "params": {
+          "round": "any"
+        },
+        "x": 40,
+        "y": 590
+      },
+      {
+        "id": "n16",
+        "type": "objectiveOutcome",
+        "params": {
+          "side": "win",
+          "spec": {
+            "type": "witch_denied_nodes",
+            "phase": "dawn",
+            "reason": "Dawn breaks — the nodes are free of her grasp."
+          },
+          "reason": "Dawn breaks — the nodes are free of her grasp."
+        },
+        "x": 280,
+        "y": 590
+      },
+      {
+        "id": "n17",
+        "type": "onRoundStart",
+        "params": {
+          "round": "any"
+        },
+        "x": 40,
+        "y": 700
+      },
+      {
+        "id": "n18",
+        "type": "objectiveOutcome",
+        "params": {
+          "side": "lose",
+          "spec": {
+            "type": "witch_holds_node",
+            "phase": "dawn",
+            "reason": "Dawn breaks — the witch still holds a node. The ritual completes."
+          },
+          "reason": "Dawn breaks — the witch still holds a node. The ritual completes."
+        },
+        "x": 280,
+        "y": 700
+      }
+    ],
+    "edges": [
+      {
+        "from": {
+          "node": "n1",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n2",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n2",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n0",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n4",
+          "pin": "onEnter"
+        },
+        "to": {
+          "node": "n5",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n4",
+          "pin": "unit"
+        },
+        "to": {
+          "node": "n5",
+          "pin": "entity"
+        },
+        "kind": "data"
+      },
+      {
+        "from": {
+          "node": "n5",
+          "pin": "pass"
+        },
+        "to": {
+          "node": "n6",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n6",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n3",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n8",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n7",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n10",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n9",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n12",
+          "pin": "onEnter"
+        },
+        "to": {
+          "node": "n13",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n12",
+          "pin": "unit"
+        },
+        "to": {
+          "node": "n13",
+          "pin": "entity"
+        },
+        "kind": "data"
+      },
+      {
+        "from": {
+          "node": "n13",
+          "pin": "pass"
+        },
+        "to": {
+          "node": "n14",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n14",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n11",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n15",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n16",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n17",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n18",
+          "pin": "in"
+        },
+        "kind": "exec"
+      }
+    ]
+  }
 }

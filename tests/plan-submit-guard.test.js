@@ -126,7 +126,8 @@ describe('handlePlanSubmit empty plan overwrite', () => {
     assert.equal(room.state.playerPlans.get(playerId).length, 0, 'plan should be empty');
 
     // Second submit: populated plan (player managed to submit in time)
-    const plan = [{ type: 'move', entityId: 'e1', col: 1, row: 1 }];
+    const unit = room.state.entities.find(e => e.alive && e.ownerId === playerId);
+    const plan = [{ type: 'explore', entityId: unit.id }];
     handlePlanSubmit(playerId, roomId, plan, currentRound);
 
     const errors = ws.errorMsgs();
@@ -141,12 +142,13 @@ describe('handlePlanSubmit empty plan overwrite', () => {
     const currentRound = room.state.round;
 
     // First submit: populated plan
-    const plan1 = [{ type: 'move', entityId: 'e1', col: 1, row: 1 }];
+    const unit = room.state.entities.find(e => e.alive && e.ownerId === playerId);
+    const plan1 = [{ type: 'explore', entityId: unit.id }];
     handlePlanSubmit(playerId, roomId, plan1, currentRound);
     assert.equal(room.state.playerPlans.get(playerId).length, 1);
 
     // Second submit: different plan — should be rejected
-    const plan2 = [{ type: 'move', entityId: 'e1', col: 2, row: 2 }];
+    const plan2 = [{ type: 'guard', entityId: unit.id }];
     handlePlanSubmit(playerId, roomId, plan2, currentRound);
 
     const errors = ws.errorMsgs();

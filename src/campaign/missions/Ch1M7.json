@@ -59,39 +59,6 @@
       "row": 5
     }
   ],
-  "waves": [
-    {
-      "round": 3,
-      "units": [
-        {
-          "type": "minion",
-          "spawnAt": "graveyard"
-        }
-      ]
-    },
-    {
-      "round": 5,
-      "units": [
-        {
-          "type": "minion",
-          "spawnAt": "graveyard"
-        },
-        {
-          "type": "wood_golem",
-          "spawnAt": "graveyard"
-        }
-      ]
-    },
-    {
-      "round": 7,
-      "units": [
-        {
-          "type": "minion",
-          "spawnAt": "map_edge"
-        }
-      ]
-    }
-  ],
   "aiPersonality": "aggressive",
   "heroPersonality": "witch_hunter",
   "aiBudgetBonus": 1,
@@ -99,22 +66,6 @@
   "missionSurvivors": 1,
   "minSurvivors": 2,
   "maxSurvivors": 5,
-  "objectives": {
-    "win": {
-      "type": "slay_witch",
-      "reason": "The witch dies before the ritual completes."
-    },
-    "lose": [
-      {
-        "type": "hero_killed"
-      },
-      {
-        "type": "witch_score_threshold",
-        "points": 5,
-        "reason": "The ritual is complete — the night will never end."
-      }
-    ]
-  },
   "startingResources": {
     "silver": 1
   },
@@ -123,7 +74,7 @@
     "silver": 1,
     "scripture": 1
   },
-  "healBonus": 4,
+  "healBonus": 28,
   "requires": [
     "long_watch"
   ],
@@ -1466,20 +1417,279 @@
       }
     ]
   },
-  "storyTriggers": [
-    {
-      "type": "round",
-      "round": 1,
-      "title": "No Dawn Until It's Done",
-      "text": "She is here, and her ritual feeds on the night. Each time she holds the majority of nodes, the night grows longer. Strike her down before the sun forgets to rise.",
-      "flag": "witchs_trail_intro"
-    },
-    {
-      "type": "round",
-      "round": 4,
-      "title": "The Night Deepens",
-      "text": "Shadows thicken. The dawn you were counting on is no longer coming on its own.",
-      "flag": "witchs_trail_remind"
-    }
-  ]
+  "logic": {
+    "version": 1,
+    "variables": [],
+    "nodes": [
+      {
+        "id": "n0",
+        "type": "storyBeat",
+        "params": {
+          "title": "No Dawn Until It's Done",
+          "text": "She is here, and her ritual feeds on the night. Each time she holds the majority of nodes, the night grows longer. Strike her down before the sun forgets to rise."
+        },
+        "x": 520,
+        "y": 40
+      },
+      {
+        "id": "n1",
+        "type": "onRoundStart",
+        "params": {
+          "round": 1
+        },
+        "x": 40,
+        "y": 40
+      },
+      {
+        "id": "n2",
+        "type": "doOnce",
+        "params": {},
+        "x": 280,
+        "y": 40
+      },
+      {
+        "id": "n3",
+        "type": "storyBeat",
+        "params": {
+          "title": "The Night Deepens",
+          "text": "Shadows thicken. The dawn you were counting on is no longer coming on its own."
+        },
+        "x": 520,
+        "y": 150
+      },
+      {
+        "id": "n4",
+        "type": "onRoundStart",
+        "params": {
+          "round": 4
+        },
+        "x": 40,
+        "y": 150
+      },
+      {
+        "id": "n5",
+        "type": "doOnce",
+        "params": {},
+        "x": 280,
+        "y": 150
+      },
+      {
+        "id": "n6",
+        "type": "spawnUnits",
+        "params": {
+          "units": [
+            {
+              "type": "minion",
+              "spawnAt": "graveyard"
+            }
+          ]
+        },
+        "x": 280,
+        "y": 260
+      },
+      {
+        "id": "n7",
+        "type": "onRoundStart",
+        "params": {
+          "round": 3
+        },
+        "x": 40,
+        "y": 260
+      },
+      {
+        "id": "n8",
+        "type": "spawnUnits",
+        "params": {
+          "units": [
+            {
+              "type": "minion",
+              "spawnAt": "graveyard"
+            },
+            {
+              "type": "wood_golem",
+              "spawnAt": "graveyard"
+            }
+          ]
+        },
+        "x": 280,
+        "y": 370
+      },
+      {
+        "id": "n9",
+        "type": "onRoundStart",
+        "params": {
+          "round": 5
+        },
+        "x": 40,
+        "y": 370
+      },
+      {
+        "id": "n10",
+        "type": "spawnUnits",
+        "params": {
+          "units": [
+            {
+              "type": "minion",
+              "spawnAt": "map_edge"
+            }
+          ]
+        },
+        "x": 280,
+        "y": 480
+      },
+      {
+        "id": "n11",
+        "type": "onRoundStart",
+        "params": {
+          "round": 7
+        },
+        "x": 40,
+        "y": 480
+      },
+      {
+        "id": "n12",
+        "type": "factionEvent",
+        "params": {
+          "faction": "witch"
+        },
+        "x": 40,
+        "y": 590
+      },
+      {
+        "id": "n13",
+        "type": "winMission",
+        "params": {
+          "winner": "hero",
+          "reason": "The witch dies before the ritual completes."
+        },
+        "x": 280,
+        "y": 590
+      },
+      {
+        "id": "n14",
+        "type": "onRoundStart",
+        "params": {
+          "round": "any"
+        },
+        "x": 40,
+        "y": 700
+      },
+      {
+        "id": "n15",
+        "type": "objectiveOutcome",
+        "params": {
+          "side": "lose",
+          "spec": {
+            "type": "witch_score_threshold",
+            "points": 5,
+            "reason": "The ritual is complete — the night will never end."
+          },
+          "reason": "The ritual is complete — the night will never end."
+        },
+        "x": 280,
+        "y": 700
+      }
+    ],
+    "edges": [
+      {
+        "from": {
+          "node": "n1",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n2",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n2",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n0",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n4",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n5",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n5",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n3",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n7",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n6",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n9",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n8",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n11",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n10",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n12",
+          "pin": "onLeaderDead"
+        },
+        "to": {
+          "node": "n13",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n14",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n15",
+          "pin": "in"
+        },
+        "kind": "exec"
+      }
+    ]
+  }
 }

@@ -7,8 +7,16 @@ import {
   isRiver, isPathRoadLike, hasBuilding, isForestCover, baseOf,
   tileCapacityRemaining, isBuildingFootprint, blocksLineOfSight,
 } from './tiles.js';
-import { ITEMS } from './items.js';
+import { pickUnitSlot } from './hex-slots.js';
+import { ITEMS, getWeaponDamage } from './items.js';
 import { ABILITIES } from './abilities.js';
+import {
+  DAMAGE_SCALE,
+  XP_PER_EXPLORE, XP_PER_FORTIFY_BASE, XP_PER_FORTIFY_LEVEL_BONUS,
+  XP_PER_HIT, XP_PER_CRUSH, XP_PER_KILL, XP_PER_DEFEND, XP_PER_COUNTER,
+  ALLY_XP_SHARE,
+} from './balance.js';
+import { LOOT_TIER_GATE } from './loot.config.js';
 
 // Phase 3: items in an actor's bag are keyed by their ITEMS id (e.g.
 // 'sword') instead of the legacy 'weapon:sword' prefix. Weapon-vs-
@@ -18,7 +26,7 @@ import {
   EntityType, SurvivorAbility, Entity,
   createZombie, createMinion, createSurvivor,
   createWoodGolem, createIronGolem,
-  nextDie, ADVANTAGE_CAP, isLeaderType, abilityStatMod,
+  nextDie, ADVANTAGE_CAP, isLeaderType, abilityStatMod, rollDamage, awardXP,
 } from './entities.js';
 import { Phase } from './game.js';
 import { getFaction, concreteFactionOf, sightRangeForEntity } from './factions.js';
@@ -44,6 +52,16 @@ export const ActionType = Object.freeze({
 
 function tile(state, col, row) {
   return state.tiles.get(hexKey(col, row));
+}
+
+// Resolve the hex an entity occupies for COMBAT ADJACENCY (gang-up) purposes.
+// Within a TURN moves are simultaneous with battles, so the resolver publishes
+// each acting unit's end-of-turn position in `state._turnEndPositions`; an ally
+// that moves out of range this same turn must not flank. Falls back to the live
+// position outside the resolver (AI expected-value sims, raw tests).
+function combatHexKey(state, entity) {
+  const p = state?._turnEndPositions?.get?.(entity.id);
+  return p ? hexKey(p.col, p.row) : hexKey(entity.col, entity.row);
 }
 
 function hasEnemy(state, actor, col, row) {
@@ -185,6 +203,19 @@ export function findShortestPath(state, actor, toCol, toRow, posOverride = null)
 
 function entitiesAt(state, col, row) {
   return state.entities.filter(e => e.alive && e.col === col && e.row === row);
+}
+
+// Assign `entity` a sub-hex slot on its current tile: the lowest free,
+// non-blocked slot (centre preferred). Other alive units already on the tile
+// hold their slots; the arriving unit picks around them and around the tile's
+// blocked (tree/bridge) slots. Called at every placement seam — move, summon,
+// survivor spawn — so online (resolver) and offline (main) stay in parity.
+export function assignSlotOnTile(state, entity) {
+  const t = state.tiles.get(hexKey(entity.col, entity.row));
+  const occupied = state.entities
+    .filter(e => e.alive && e.id !== entity.id && e.col === entity.col && e.row === entity.row)
+    .map(e => e.slot ?? 0);
+  entity.slot = pickUnitSlot(t?.blockedSlots ?? [], occupied);
 }
 
 function adjacentEnemies(state, entity) {
@@ -690,7 +721,13 @@ export function executeMove(state, actor, targetCol, targetRow) {
   }
   if (encounterLog.length) log.push(...encounterLog);
 
-  return { success: true, log, cost: 1, path: walkedPath, blockedBy, blockedByFort, encounterLog, encounterSurvivor };
+  // The actor arrived on a new tile — pick its sub-hex slot around the units and
+  // blocked slots already there. (walkedPath is non-empty here.) `slot` is
+  // surfaced on the result so the renderer can animate from the source slot to
+  // this destination slot instead of snapping through the hex centre.
+  assignSlotOnTile(state, actor);
+
+  return { success: true, log, cost: 1, path: walkedPath, slot: actor.slot, blockedBy, blockedByFort, encounterLog, encounterSurvivor };
 }
 
 export function executeExplore(state, actor) {
@@ -781,18 +818,33 @@ export function executeExplore(state, actor) {
   }
 
   if (encounterLog.length) log.push(...encounterLog);
-  return { success: true, log, cost: 1, lootItems, encounterLog, encounterSurvivor };
+  // Campaign veterancy: XP for a first-time explore (the t.explored guard at the
+  // top makes this fire once per hex). No ally share. No-op outside campaign.
+  const xpAwards = [];
+  grantXp(xpAwards, actor, XP_PER_EXPLORE, state, 'explore');
+  return {
+    success: true, log, cost: 1, lootItems, encounterLog, encounterSurvivor,
+    ...(xpAwards.length ? { xpAwards } : {}),
+  };
 }
 
 /** Resolve the effective loot table, applying per-mission overrides if present. */
 function _effectiveLoot(state, category, key, defaultTable) {
   const ov = state.lootOverrides;
-  if (!ov) return defaultTable;
-  // Full table override for this specific building/terrain type
-  if (ov[category]?.[key]) return ov[category][key];
+  // Full table override for this specific building/terrain type — used verbatim,
+  // so a mission can deliberately force a premium weapon in early (author opt-in,
+  // bypasses the tier gate below).
+  if (ov?.[category]?.[key]) return ov[category][key];
+  let table = defaultTable;
   // Item removal filter
-  if (ov.remove) return defaultTable.filter(e => !ov.remove.includes(e.type));
-  return defaultTable;
+  if (ov?.remove) table = table.filter(e => !ov.remove.includes(e.type));
+  // Premium-weapon progression gate: drop entries whose unlock round is in the
+  // future so they simply can't roll yet (see LOOT_TIER_GATE in loot.config.js).
+  const round = state.round ?? 1;
+  if (table.some(e => LOOT_TIER_GATE[e.type] != null)) {
+    table = table.filter(e => (LOOT_TIER_GATE[e.type] ?? 0) <= round);
+  }
+  return table;
 }
 
 function _applyLoot(state, actor, lootType, log, lootItems) {
@@ -894,7 +946,7 @@ function _applySplashDamage(state, col, row, excludeIds, log, opts = {}) {
   const splashHits  = [];
   for (const b of bystanders) {
     const fromCol = b.col, fromRow = b.row;
-    const dmg = b.applyIncomingDamage(damage);
+    const dmg = b.applyIncomingDamage(damage, (sd) => state.nextDie(sd));
     const wasKilled = b.takeDamage(dmg);
     log.push(`💢 ${b.displayName} caught in the blast — takes ${dmg} splash damage! (${b.hp}/${b.maxHp} HP)`);
     let pushedTo = null;
@@ -908,7 +960,7 @@ function _applySplashDamage(state, col, row, excludeIds, log, opts = {}) {
     }
     splashHits.push({
       id: b.id, name: b.displayName, owner: b.owner, type: b.type,
-      ownerId: b.ownerId, killed: !!wasKilled,
+      ownerId: b.ownerId, killed: !!wasKilled, damage: dmg,
       col: b.col, row: b.row,
       fromCol, fromRow,
       knockedBack: !!pushedTo,
@@ -939,20 +991,23 @@ function _knockbackDestination(state, entity, centerCol, centerRow) {
   return push;
 }
 
-export function executeBattle(state, actor, target) {
-  actor.guarding = 0;  // Attacking breaks guard stance
-  const log = [];
-
-  // Ranged attacks have a different rule set than melee:
-  //   - No gang-up advantage on either side (the attacker is firing from
-  //     afar, and allies don't flank a shot).
-  //   - No crushing blows; damage is always 1 per hit.
-  //   - No splash on kill (clean single-target).
-  //   - No counter-attack (defender can't reach the ranged attacker to
-  //     strike back — see the `!isRanged` guard on the counter branch).
-  //   - Defender in forest gets +1 DEF (cover).
-  //   - Attacker at close range (dist == 1) fires at disadvantage (1 die).
-  // Phase bonus, fortification, and weapon triggers still apply.
+/**
+ * Situational combat context shared by executeBattle and computeCombatOdds —
+ * everything about an attack that is known BEFORE the dice are rolled.
+ * Pure: touches no entity or tile fields.
+ *
+ * Ranged attacks have a different rule set than melee:
+ *   - No gang-up advantage on either side (the attacker is firing from
+ *     afar, and allies don't flank a shot).
+ *   - No crushing blows; damage is always 1 per hit.
+ *   - No splash on kill (clean single-target).
+ *   - No counter-attack (defender can't reach the ranged attacker to
+ *     strike back — see the `!isRanged` guard on the counter branch).
+ *   - Defender in forest gets +1 DEF (cover).
+ *   - Attacker at close range (dist == 1) fires at disadvantage (1 die).
+ * Phase bonus, fortification, and weapon triggers still apply.
+ */
+export function computeBattleContext(state, actor, target) {
   const atkRange = (typeof actor.getRange === 'function' ? actor.getRange() : (actor.range ?? 1));
   const distToTarget = hexDistance(actor.col, actor.row, target.col, target.row);
   const isRanged = atkRange > 1;
@@ -973,10 +1028,10 @@ export function executeBattle(state, actor, target) {
   for (const n of getNeighbors(target.col, target.row)) targetHexes.add(hexKey(n.col, n.row));
 
   const atkAllies = state.entities.filter(e =>
-    e.alive && e.owner === actor.owner && e.id !== actor.id && targetHexes.has(hexKey(e.col, e.row))
+    e.alive && e.owner === actor.owner && e.id !== actor.id && targetHexes.has(combatHexKey(state, e))
   );
   const defAllies = state.entities.filter(e =>
-    e.alive && e.owner === target.owner && e.id !== target.id && targetHexes.has(hexKey(e.col, e.row))
+    e.alive && e.owner === target.owner && e.id !== target.id && targetHexes.has(combatHexKey(state, e))
   );
   const attackerAllies = atkAllies.length;
   const defenderAllies = defAllies.length;
@@ -1007,20 +1062,121 @@ export function executeBattle(state, actor, target) {
   const defenderFaction = getFaction(target.owner);
   const fatiguePenalty = defenderFaction.getDefenseFatigue(target.defendCount || 0);
 
-  const { attackRoll, defenseRoll, hit, margin,
-          atkBaseDie, defBaseDie, atkExtraDice, defExtraDice,
-          atkPool, defPool, atkStaffBonus } =
-    Entity.resolveCombat(actor, target, {
-      // Phase stays flat here — converting to advantage turned out too steep a
-      // nerf to witch's night window; see CLAUDE.md §Tuning for the sweep.
+  return {
+    isRanged, isCloseRanged, rangeDistancePenalty, phaseBonus,
+    atkAllies, defAllies, attackerAllies, defenderAllies,
+    atkTile, defTile, atkFortAtkBonus, fortBonus, forestCoverBonus,
+    atkAdvantageDice, defAdvantageDice, atkGangupFlat, defGangupFlat,
+    atkDisadvantageDice, fatiguePenalty,
+    // Assembled resolveCombat options — the single source of truth for both
+    // the live roll (executeBattle) and the odds preview (computeCombatOdds).
+    // Phase stays flat here — converting to advantage turned out too steep a
+    // nerf to witch's night window; see CLAUDE.md §Tuning for the sweep.
+    combatOptions: {
       extraAtkBonus: atkFortAtkBonus + phaseBonus + atkGangupFlat - rangeDistancePenalty,
       atkAdvantageDice,
       atkDisadvantageDice,
       defAdvantageDice,
       extraDefBonus: fortBonus + defGangupFlat + forestCoverBonus,
       fatiguePenalty,
-      state,
+    },
+  };
+}
+
+/**
+ * Exact hit/crush/counter probabilities for attacking `target` from the
+ * actor's CURRENT position — the planning-time odds preview shown in the UI.
+ * Pure (no state mutation, no dice). Returns { hit, crush, counter, miss }.
+ */
+export function computeCombatOdds(state, actor, target) {
+  const ctx = computeBattleContext(state, actor, target);
+  return Entity.computeCombatOdds(actor, target, {
+    ...ctx.combatOptions,
+    ranged: ctx.isRanged,
+  });
+}
+
+// Campaign veterancy event capture: run a single XP grant and, when it actually
+// lands (awardXP gates on campaign + hero-owner + positive amount), record a
+// renderable award onto `sink`. `sink` is the per-execution `xpAwards` array
+// each execute* function attaches to its result; the resolver expands it into
+// discrete XP_AWARDED step events, which the replay sums into one "+N XP" line
+// per unit per turn. fromLevel is snapshotted PRE-grant so the replay can render
+// "Lv from → to" correctly even across a multi-level jump. Outside campaign
+// awardXP no-ops (xpGained 0) so nothing is pushed — non-campaign play is
+// byte-identical. Returns awardXP's result for callers that need it.
+function grantXp(sink, entity, amount, state, reason) {
+  if (!entity) return { xpGained: 0, leveledUp: false, newLevel: 1 };
+  const fromLevel = entity.level ?? 1;
+  const r = awardXP(entity, amount, state);
+  if (sink && r.xpGained > 0) {
+    sink.push({
+      unitId: entity.id,
+      amount: r.xpGained,
+      reason,
+      ...(r.leveledUp ? { leveledUp: true, fromLevel, newLevel: r.newLevel } : {}),
     });
+  }
+  return r;
+}
+
+// Campaign veterancy helper: grant `amount` XP to the primary combatant and a
+// floored ALLY_XP_SHARE slice to each gang-up ally, recording each as one
+// logical award on `sink` (the primary keeps the action's `reason`; ally shares
+// are tagged 'gangup'). awardXP itself no-ops outside campaign (gated on
+// state.isCampaign), so this is a guarded no-op in normal/online/AI-vs-AI play.
+// Splash kills deliberately bypass this (no ally share — the blast geometry is
+// too murky to attribute).
+function awardWithAllies(primary, allies, amount, state, reason, sink = null) {
+  grantXp(sink, primary, amount, state, reason);
+  const share = Math.floor(amount * ALLY_XP_SHARE);
+  if (share <= 0) return;
+  for (const ally of (allies || [])) grantXp(sink, ally, share, state, 'gangup');
+}
+
+export function executeBattle(state, actor, target, opts = {}) {
+  actor.guarding = 0;  // Attacking breaks guard stance
+  const log = [];
+  // Campaign veterancy: per-award XP records for this swing (kill/hit/crush/
+  // counter/defend + gang-up shares). Stays empty outside campaign. Attached to
+  // the result below; the resolver fans it out into XP_AWARDED step events.
+  const xpAwards = [];
+  // Guard reactions (resolver inserts these inline) are normal attacks EXCEPT for
+  // these opt-out flags: no counter-attack, no crush, and no gang-up (neither
+  // side). They DO keep silver/phase/fort/weapon bonuses. This matches the
+  // pre-refactor guard strike so balance stays neutral; planned attacks pass none
+  // of these flags.
+  const noCounter = !!opts.noCounter;
+  const noCrush   = !!opts.noCrush;
+  const noAlly    = !!opts.noAlly;
+
+  const ctx = computeBattleContext(state, actor, target);
+  if (noAlly) {
+    // Guard reactions get NO gang-up (either side): the numerically-superior
+    // swarm shouldn't be able to stack a reactive attack. Strip both sides' ally
+    // advantage dice + flat so the reaction matches the pre-refactor guard strike
+    // and keeps overall balance neutral.
+    ctx.combatOptions.extraAtkBonus -= ctx.atkGangupFlat;
+    ctx.combatOptions.extraDefBonus -= ctx.defGangupFlat;
+    ctx.combatOptions.atkAdvantageDice = 0;
+    ctx.combatOptions.defAdvantageDice = 0;
+    ctx.atkAdvantageDice = 0; ctx.defAdvantageDice = 0;
+    ctx.atkGangupFlat = 0;    ctx.defGangupFlat = 0;
+    ctx.attackerAllies = 0;   ctx.defenderAllies = 0;
+    ctx.atkAllies = [];       ctx.defAllies = [];
+  }
+  const {
+    isRanged, isCloseRanged, rangeDistancePenalty, phaseBonus,
+    atkAllies, defAllies, attackerAllies, defenderAllies, defTile,
+    atkFortAtkBonus, fortBonus, forestCoverBonus,
+    atkAdvantageDice, defAdvantageDice, atkGangupFlat, defGangupFlat,
+    atkDisadvantageDice, fatiguePenalty, combatOptions,
+  } = ctx;
+
+  const { attackRoll, defenseRoll, hit, margin,
+          atkBaseDie, defBaseDie, atkExtraDice, defExtraDice,
+          atkPool, defPool, atkStaffBonus } =
+    Entity.resolveCombat(actor, target, { ...combatOptions, state });
 
   // Increment the defender's defend count for fatigue tracking
   if (target.defendCount === undefined) target.defendCount = 0;
@@ -1044,6 +1200,8 @@ export function executeBattle(state, actor, target) {
 
   let killed     = false;
   let damage     = 0;          // damage dealt to target
+  let dmgRoll    = 0;          // pre-tier weapon damage roll (for the breakdown popup)
+  let dmgTier    = 0;          // crush multiplier applied (1 hit / 2 crush / 3 great crush)
   let counterDmg = 0;          // damage dealt to attacker (counter)
   let fortDamaged = 0;         // fort levels lost this combat (1 if defender took any damage)
   let splashKills = [];         // entities killed by splash damage
@@ -1058,20 +1216,29 @@ export function executeBattle(state, actor, target) {
   const splashSpareSide  = attackerConcrete.splashSparesAllies() ? actor.owner : null;
   const splashKnockback  = attackerConcrete.splashKnockback();
   // Ranged attacks cannot crush — the rule set explicitly forbids it.
-  const isCrush  = !isRanged && hit && attackRoll >= 2 * defenseRoll;
+  // Damage tiers by roll ratio multiply the rolled weapon damage: great crush
+  // (≥3× defense roll) = 3×, crush (≥2×) = 2×, ordinary hit = 1×. isGreatCrush
+  // implies isCrush. The weapon's damage spec is rolled through state.nextDie
+  // (after resolveCombat's advantage pools) so it stays deterministic under
+  // forced dice / replay; unarmed falls back to 2D6 (see getWeaponDamage).
+  const isCrush      = !noCrush && !isRanged && hit && attackRoll >= 2 * defenseRoll;
+  const isGreatCrush = !noCrush && !isRanged && hit && attackRoll >= 3 * defenseRoll;
 
   if (hit) {
-    // Crushing blow: attacker's roll is at least double the defender's roll
-    const totalDmg = isCrush ? 2 : 1;
+    const tier    = isGreatCrush ? 3 : isCrush ? 2 : 1;
+    dmgRoll       = rollDamage(getWeaponDamage(actor.weapon), s => state.nextDie(s));
+    dmgTier       = tier;
+    const baseDmg = dmgRoll * tier;
 
-    // All damage goes directly to the defender. Effects on the defender
-    // (e.g. wounded → +1 damage taken) amplify each hit.
-    for (let d = 0; d < totalDmg; d++) {
-      const inc = target.applyIncomingDamage(1);
+    // Applied as a single blow so a defender's wounded (+DAMAGE_SCALE damage
+    // taken) lifts the whole strike once — not once per point — keeping the
+    // wounded surcharge proportional to the scaled HP pools.
+    {
+      const inc = target.applyIncomingDamage(baseDmg, (sd) => state.nextDie(sd));
       damage += inc;
       const wasKilled = target.takeDamage(inc);
       dispatchTrigger('damaged', target, { state, amount: inc, source: actor });
-      if (wasKilled) { killed = true; break; }
+      if (wasKilled) killed = true;
     }
 
     // Fort takes -1 if the defender took any damage
@@ -1085,14 +1252,20 @@ export function executeBattle(state, actor, target) {
       log.push(`${target.displayName} is slain!`);
       getFaction(actor.owner).trackKill(state);
       actor.killsThisRound = (actor.killsThisRound ?? 0) + 1;
+      // Campaign veterancy: a killing blow grants kill XP to the attacker (+ a
+      // floored share to each gang-up ally). This REPLACES the hit/crush XP for
+      // this swing — the `!killed` guard on the hit/crush grant below ensures the
+      // attacker isn't double-awarded. No-op outside campaign.
+      awardWithAllies(actor, atkAllies, XP_PER_KILL, state, 'kill', xpAwards);
       dispatchTrigger('damaged-fatal', target, { state, source: actor });
       dispatchTrigger('kill', actor, { state, target });
       state.entities = state.entities.filter(e => e.id !== target.id);
     } else if (damage > 0) {
-      const label = damage >= 2 ? `${damage} damage (crushing blow!)` : `${damage} damage`;
+      const label = isCrush ? `${damage} damage (crushing blow!)` : `${damage} damage`;
       log.push(`${target.displayName} takes ${label}. (${target.hp}/${target.maxHp} HP)`);
     }
-    if (isCrush) log.push(`💥 Crushing blow! (${attackRoll} vs ${defenseRoll})`);
+    if (isGreatCrush) log.push(`💥💥 Great crushing blow! (${attackRoll} vs ${defenseRoll})`);
+    else if (isCrush) log.push(`💥 Crushing blow! (${attackRoll} vs ${defenseRoll})`);
 
     // Crushing blows leave a wound on the target — +1 damage taken from
     // any source for the next 3 rounds. Universal (applies to all
@@ -1111,7 +1284,9 @@ export function executeBattle(state, actor, target) {
     // and friendly units may be spared, both per concrete faction.
     // Ranged attacks never splash (no crush, no AOE).
     if (!isRanged && (isCrush || killed || splashEveryHit)) {
-      const splashBaseDamage = Math.max(1, Math.min(3, Math.floor(margin / 3)));
+      // Splash level (1–3) scales with the roll margin, then ×DAMAGE_SCALE so a
+      // blast stays proportional to a normal hit against the scaled HP pools.
+      const splashBaseDamage = Math.max(1, Math.min(3, Math.floor(margin / 3))) * DAMAGE_SCALE;
       const splash = _applySplashDamage(
         state, target.col, target.row, [actor.id, target.id], log,
         {
@@ -1129,18 +1304,38 @@ export function executeBattle(state, actor, target) {
           getFaction(actor.owner).trackKill(state);
           actor.killsThisRound = (actor.killsThisRound ?? 0) + 1;
           dispatchTrigger('kill', actor, { state, target: sk });
+          // Campaign veterancy: each splash kill grants the actor kill XP. No
+          // ally share for splash (the blast geometry is too murky to attribute).
+          grantXp(xpAwards, actor, XP_PER_KILL, state, 'kill');
         }
       }
     }
+
+    // Campaign veterancy: a non-lethal landed blow grants hit- or crush-XP to the
+    // attacker (+ ally share). Skipped on a kill — the kill grant above already
+    // covered this swing (no double-award). No-op outside campaign.
+    if (!killed) {
+      awardWithAllies(actor, atkAllies, isCrush ? XP_PER_CRUSH : XP_PER_HIT, state, 'combat', xpAwards);
+    }
   } else {
     log.push(`${target.displayName} defends successfully.`);
+
+    // Campaign veterancy: surviving an attack grants defend XP to the defender
+    // (+ ally share). Fires on every miss; a counter (below) grants additional
+    // counter/kill XP on top. No-op outside campaign.
+    awardWithAllies(target, defAllies, XP_PER_DEFEND, state, 'combat', xpAwards);
 
     // Counter-attack: defender's roll is at least double the attacker's roll.
     // Ranged attacks don't trigger counters — the defender can't reach the
     // attacker to strike back (narratively nonsensical, and the operator
     // explicitly removed this rule).
-    if (defenseRoll >= 2 * attackRoll && actor.alive && !isRanged) {
-      counterDmg = actor.applyIncomingDamage(1);
+    if (defenseRoll >= 2 * attackRoll && actor.alive && !isRanged && !noCounter) {
+      // A counter lands as one ordinary (1×) hit with the defender's weapon —
+      // matching the pre-dice rule where a counter dealt the same as a hit.
+      counterDmg = actor.applyIncomingDamage(
+        rollDamage(getWeaponDamage(target.weapon), s => state.nextDie(s)),
+        (sd) => state.nextDie(sd),
+      );
       const counterKilled = actor.takeDamage(counterDmg);
       log.push(`⚔ ${target.displayName} counter-attacks! ${actor.displayName} takes ${counterDmg} damage.`);
       dispatchTrigger('damaged', actor, { state, amount: counterDmg, source: target });
@@ -1151,6 +1346,11 @@ export function executeBattle(state, actor, target) {
         dispatchTrigger('damaged-fatal', actor, { state, source: target });
         dispatchTrigger('kill', target, { state, target: actor });
         state.entities = state.entities.filter(e => e.id !== actor.id);
+        // Campaign veterancy: a counter that kills grants the defender kill XP
+        // (+ ally share). REPLACES the counter XP for this exchange (handled by
+        // the `else` branch below firing only when the counter doesn't kill), so
+        // the defender isn't double-awarded. No-op outside campaign.
+        awardWithAllies(target, defAllies, XP_PER_KILL, state, 'kill', xpAwards);
 
         // Counter-kill splashes other units on the attacker's tile.
         // The defender's concrete-faction config applies — a brute
@@ -1161,7 +1361,7 @@ export function executeBattle(state, actor, target) {
           state, actor.col, actor.row, [target.id, actor.id], log,
           {
             extraRadius: defenderConcrete.crushSplashRadius(),
-            damage:      1, // counter-splash always 1 (no margin to scale on)
+            damage:      DAMAGE_SCALE, // counter-splash = one scaled point (no margin to scale on)
             sparesOwner: defenderConcrete.splashSparesAllies() ? target.owner : null,
             knockback:   defenderConcrete.splashKnockback(),
           }
@@ -1176,10 +1376,17 @@ export function executeBattle(state, actor, target) {
             getFaction(target.owner).trackKill(state);
             target.killsThisRound = (target.killsThisRound ?? 0) + 1;
             dispatchTrigger('kill', target, { state, target: sk });
+            // Campaign veterancy: counter-splash kill grants the defender kill
+            // XP. No ally share for splash. No-op outside campaign.
+            grantXp(xpAwards, target, XP_PER_KILL, state, 'kill');
           }
         }
       } else {
         log.push(`${actor.displayName} is at ${actor.hp}/${actor.maxHp} HP.`);
+        // Campaign veterancy: a non-lethal counter grants the defender counter
+        // XP (+ ally share). The lethal branch above grants kill XP instead, so
+        // this never double-awards. No-op outside campaign.
+        awardWithAllies(target, defAllies, XP_PER_COUNTER, state, 'combat', xpAwards);
       }
     }
   }
@@ -1208,17 +1415,25 @@ export function executeBattle(state, actor, target) {
     attackerAllies, defenderAllies, splashKills, splashHits,
     splashHexes, splashRadius,
     ranged: isRanged, closeRanged: isCloseRanged,
+    ...(xpAwards.length ? { xpAwards } : {}),
     breakdown: {
       atkBaseDie, defBaseDie,
       atkExtraDice, defExtraDice,
       atkPool, defPool,
       atkStaffBonus,
+      // Weapon damage roll → explains the damage in the breakdown popup:
+      // final damage = dmgRoll × dmgTier (+ wounded surcharge if any).
+      atkWeapon: actor.weapon ?? null, dmgRoll, dmgTier,
       phaseBonus, fortBonus, atkFortAtkBonus, fatiguePenalty,
       atkGangupFlat, defGangupFlat,
       atkAdvantageDice, defAdvantageDice, atkDisadvantageDice,
       forestCoverBonus, rangeDistancePenalty,
       atkBaseStat, atkWeaponMod, atkAbilityMod, atkEffectMod, atkAttackBonus,
       defBaseStat, defWeaponMod, defAbilityMod, defEffectMod, defDefenseBonus,
+      // Weapon ids so the roll-breakdown tooltip can name the weapon behind
+      // each side's modifier ("sword +2" rather than an opaque stat sum).
+      atkWeaponId: actor.weapon ?? null,
+      defWeaponId: target.weapon ?? null,
       ranged: isRanged, closeRanged: isCloseRanged,
       atkAllyNames: isRanged ? [] : atkAllies.map(e => e.displayName),
       defAllyNames: isRanged ? [] : defAllies.map(e => e.displayName),
@@ -1271,7 +1486,7 @@ export function executeFortAssault(state, actor, targetCol, targetRow) {
   const targetHexes = new Set([hexKey(targetCol, targetRow)]);
   for (const n of getNeighbors(targetCol, targetRow)) targetHexes.add(hexKey(n.col, n.row));
   const atkAllies = state.entities.filter(e =>
-    e.alive && e.owner === actor.owner && e.id !== actor.id && targetHexes.has(hexKey(e.col, e.row))
+    e.alive && e.owner === actor.owner && e.id !== actor.id && targetHexes.has(combatHexKey(state, e))
   );
   const atkAdvantage = Math.min(atkAllies.length, ADVANTAGE_CAP);
 
@@ -1348,7 +1563,10 @@ export function executeFortify(state, actor) {
     const prev = t.fortifyLevel;
     t.fortifyLevel = Math.min(MAX_FORTIFY_LEVEL, prev + 2);
     const defGain = t.fortifyLevel - prev;
-    return { success: true, log: [`${actor.displayName} reinforces with metal! (fort level ${t.fortifyLevel})`], cost: 1, defGain };
+    // Campaign veterancy: fortify XP scales with the NEW fort level. No ally share.
+    const xpAwards = [];
+    grantXp(xpAwards, actor, XP_PER_FORTIFY_BASE + XP_PER_FORTIFY_LEVEL_BONUS * t.fortifyLevel, state, 'fortify');
+    return { success: true, log: [`${actor.displayName} reinforces with metal! (fort level ${t.fortifyLevel})`], cost: 1, defGain, ...(xpAwards.length ? { xpAwards } : {}) };
   } else if (woodCount > 0) {
     shared[ResourceType.WOOD]--;
     const gain = hasDoubler ? 2 : 1;
@@ -1356,7 +1574,10 @@ export function executeFortify(state, actor) {
     t.fortifyLevel = Math.min(MAX_FORTIFY_LEVEL, prev + gain);
     const defGain = t.fortifyLevel - prev;
     const star = hasDoubler ? ' ★' : '';
-    return { success: true, log: [`${actor.displayName} fortifies with wood!${star} (fort level ${t.fortifyLevel})`], cost: 1, defGain };
+    // Campaign veterancy: fortify XP scales with the NEW fort level. No ally share.
+    const xpAwards = [];
+    grantXp(xpAwards, actor, XP_PER_FORTIFY_BASE + XP_PER_FORTIFY_LEVEL_BONUS * t.fortifyLevel, state, 'fortify');
+    return { success: true, log: [`${actor.displayName} fortifies with wood!${star} (fort level ${t.fortifyLevel})`], cost: 1, defGain, ...(xpAwards.length ? { xpAwards } : {}) };
   }
 
   return { success: false, log: ['No wood or metal in shared supplies.'] };
@@ -1427,6 +1648,7 @@ export function executeSummon(state, actor, requestedType = null) {
     summonedUnit = createMinion(actor.col, actor.row, ownerId, state);
     unitName = 'Minion';
     state.entities.push(summonedUnit);
+    assignSlotOnTile(state, summonedUnit);
     faction.trackSummon(state);
     return {
       success: true,
@@ -1437,6 +1659,7 @@ export function executeSummon(state, actor, requestedType = null) {
   }
 
   state.entities.push(summonedUnit);
+  assignSlotOnTile(state, summonedUnit);
   faction.trackSummon(state);
   return { success: true, log: [`The witch raises a ${unitName}!`], cost: 1, spent: [{ type: res, amount: 2 }] };
 }
@@ -1448,8 +1671,10 @@ export function executeHeal(state, actor) {
   if (actor.hp >= actor.maxHp)
     return { success: false, log: [`${actor.displayName} is already at full health.`] };
   inv[ResourceType.HERBS]--;
-  actor.heal(2);
-  return { success: true, log: [`${actor.displayName} uses herbs. (+2 HP, now ${actor.hp}/${actor.maxHp})`], cost: 1 };
+  // Herbs heal 2D10 — rolled through state.nextDie so tests can force the dice.
+  const healed = state.nextDie(10) + state.nextDie(10);
+  actor.heal(healed);
+  return { success: true, log: [`${actor.displayName} uses herbs. (+${healed} HP, now ${actor.hp}/${actor.maxHp})`], cost: 1, healed };
 }
 
 export function executeUseItem(state, actor, item) {
@@ -1459,10 +1684,16 @@ export function executeUseItem(state, actor, item) {
       const label = WEAPON_LABEL[item] || item;
       return { success: false, log: [`${actor.displayName} cannot wield ${label}.`] };
     }
+    // Free action, but only once per round per unit. A second equip queued
+    // in the same plan no-ops here (authoritative guard).
+    if (actor.equippedThisRound) {
+      return { success: false, log: [`${actor.displayName} already equipped a weapon this round.`] };
+    }
     const myItems = actor.items || {};
     if ((myItems[item] || 0) < 1) return { success: false, log: ['Item not available.'] };
     myItems[item]--;
     actor.equipWeapon(item);
+    actor.equippedThisRound = true;
     const label = WEAPON_LABEL[item] || item;
     return { success: true, log: [`${actor.displayName} equips ${label}!`], cost: 0 };
   }
@@ -1585,145 +1816,4 @@ export function executeSoundHorn(state, actor) {
   // Return first survivor for backward compat, plus full list
   const encounterSurvivor = encounterSurvivors[0] || null;
   return { success: true, log, cost: 1, encounterLog, encounterSurvivor, encounterSurvivors };
-}
-
-// Weakened reactive attack from a guarding unit.
-// No ally bonus (extraAtkDice=0), no silver (attackBonus stripped),
-// no counter-attack. All other bonuses (phase, weapon/staff, fort) apply.
-export function executeGuardStrike(state, guardian, target) {
-  const log = [];
-
-  // Phase bonus applies normally
-  const phaseBonus = getFaction(guardian.owner).getPhaseCombatBonus(state.phase);
-
-  // Strip silver: temporarily zero attackBonus, restore after
-  const savedAtkBonus = guardian.attackBonus;
-  guardian.attackBonus = 0;
-
-  // Fortification bonuses — witch units never benefit.
-  const atkTile = tile(state, guardian.col, guardian.row);
-  const defTile = tile(state, target.col, target.row);
-  const atkFortRaw = getFortifyCombatBonus(atkTile?.fortifyLevel || 0);
-  const defFortRaw = getFortifyCombatBonus(defTile?.fortifyLevel || 0);
-  const atkFortAtkBonus = guardian.owner === 'witch' ? 0 : atkFortRaw.attack;
-  const fortBonus       = target.owner === 'witch'   ? 0 : defFortRaw.defense;
-
-  // Ranged guard strike (opportunity shot) obeys the same rules as a ranged
-  // attack: no crush, no splash, no counter, forest cover for the target,
-  // distance falloff, and point-blank disadvantage. Melee guard strikes are
-  // unaffected (gRange == 1 → all the ranged flags are 0/false).
-  const gRange = (typeof guardian.getRange === 'function' ? guardian.getRange() : (guardian.range ?? 1));
-  const dist = hexDistance(guardian.col, guardian.row, target.col, target.row);
-  const isRanged = gRange > 1;
-  const isCloseRanged = isRanged && dist <= 1;
-  const rangeDistancePenalty = isRanged ? Math.floor((dist - 1) / 2) : 0;
-  const forestCoverBonus = (isRanged && isForestCover(defTile)) ? 1 : 0;
-  const atkDisadvantageDice = isCloseRanged ? 1 : 0;
-
-  // No ally dice, no fatigue penalty; attacker fort ATT bonus still applies.
-  const { attackRoll, defenseRoll, hit, margin,
-          atkBaseDie, defBaseDie, atkStaffBonus } =
-    Entity.resolveCombat(guardian, target, {
-      extraAtkBonus: atkFortAtkBonus + phaseBonus - rangeDistancePenalty,
-      extraDefBonus: fortBonus + forestCoverBonus,
-      atkDisadvantageDice,
-      state,
-    });
-
-  // Restore attackBonus
-  guardian.attackBonus = savedAtkBonus;
-
-  const rangeFalloffNote = rangeDistancePenalty > 0 ? ` (−${rangeDistancePenalty} range)` : '';
-  const strikeVerb = isRanged
-    ? (isCloseRanged ? `🏹 ${guardian.displayName} looses a point-blank shot from cover!`
-                     : `🏹 ${guardian.displayName} looses an opportunity shot!${rangeFalloffNote}`)
-    : `🛡 ${guardian.displayName} strikes from guard!`;
-  log.push(`${strikeVerb} [${attackRoll} vs ${defenseRoll}]`);
-
-  let killed = false;
-  let damage = 0;
-  let splashKills = [];
-  let splashHits  = [];
-  // Ranged guard strikes never crush (mirrors ranged attacks).
-  const isCrush = !isRanged && hit && attackRoll >= 2 * defenseRoll;
-
-  if (hit) {
-    const totalDmg = isCrush ? 2 : 1;
-
-    for (let d = 0; d < totalDmg; d++) {
-      const inc = target.applyIncomingDamage(1);
-      damage += inc;
-      const wasKilled = target.takeDamage(inc);
-      dispatchTrigger('damaged', target, { state, amount: inc, source: guardian });
-      if (wasKilled) { killed = true; break; }
-    }
-
-    // Fort degradation on damage
-    if (damage > 0 && defTile && defTile.fortifyLevel > 0) {
-      defTile.fortifyLevel -= 1;
-      log.push(`🏰 The fortifications are damaged! (now +${defTile.fortifyLevel} DEF)`);
-    }
-
-    if (killed) {
-      log.push(`${target.displayName} is slain by the guard strike!`);
-      getFaction(guardian.owner).trackKill(state);
-      guardian.killsThisRound = (guardian.killsThisRound ?? 0) + 1;
-      dispatchTrigger('damaged-fatal', target, { state, source: guardian });
-      dispatchTrigger('kill', guardian, { state, target });
-      state.entities = state.entities.filter(e => e.id !== target.id);
-    } else {
-      const label = damage >= 2 ? `${damage} damage (crushing blow!)` : `${damage} damage`;
-      log.push(`${target.displayName} takes ${label}. (${target.hp}/${target.maxHp} HP)`);
-    }
-    if (isCrush) log.push(`💥 Crushing blow from guard!`);
-
-    // Splash damage on crush or kill — melee only. Ranged shots never splash.
-    if (!isRanged && (isCrush || killed)) {
-      const splash = _applySplashDamage(state, target.col, target.row, [guardian.id, target.id], log);
-      splashKills = splash.splashKills;
-      splashHits  = splash.splashHits;
-      for (const sk of splashKills) {
-        if (sk.owner !== guardian.owner) {
-          getFaction(guardian.owner).trackKill(state);
-          guardian.killsThisRound = (guardian.killsThisRound ?? 0) + 1;
-          dispatchTrigger('kill', guardian, { state, target: sk });
-        }
-      }
-    }
-  } else {
-    log.push(`${target.displayName} evades the guard strike.`);
-    // No counter-attack on guard strikes
-  }
-
-  // Decomposed unit stats — silver is stripped on guard strike (attackBonus
-  // saved/restored above) so atkAttackBonus is always 0 here.
-  const atkBaseStat    = guardian.attack || 0;
-  const atkWeaponMod   = guardian.weapon ? (ITEMS[guardian.weapon]?.statMods?.attack ?? 0) : 0;
-  const atkAbilityMod  = abilityStatMod(guardian.abilities, 'attack');
-  const atkEffectMod   = effectStatMod(guardian, 'attack');
-  const defBaseStat     = target.defense || 0;
-  const defWeaponMod    = target.weapon ? (ITEMS[target.weapon]?.statMods?.defense ?? 0) : 0;
-  const defAbilityMod   = abilityStatMod(target.abilities, 'defense');
-  const defEffectMod    = effectStatMod(target, 'defense');
-  const defDefenseBonus = target.defenseBonus || 0;
-
-  return {
-    success: true, log, cost: 0, guardStrike: true,
-    attackRoll, defenseRoll, hit, killed, margin, damage, splashKills, splashHits,
-    ranged: isRanged, closeRanged: isCloseRanged,
-    breakdown: {
-      atkBaseDie, defBaseDie,
-      atkExtraDice: [], defExtraDice: [],
-      atkPool: [atkBaseDie], defPool: [defBaseDie],
-      atkAllyNames: [], defAllyNames: [],
-      atkGangupFlat: 0, defGangupFlat: 0,
-      atkAdvantageDice: 0, defAdvantageDice: 0, atkDisadvantageDice,
-      atkStaffBonus, phaseBonus, fortBonus, atkFortAtkBonus,
-      forestCoverBonus, rangeDistancePenalty,
-      fatiguePenalty: 0,
-      ranged: isRanged, closeRanged: isCloseRanged,
-      atkBaseStat, atkWeaponMod, atkAbilityMod, atkEffectMod, atkAttackBonus: 0,
-      defBaseStat, defWeaponMod, defAbilityMod, defEffectMod, defDefenseBonus,
-    },
-  };
 }

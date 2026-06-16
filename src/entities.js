@@ -5,8 +5,9 @@ import { ITEMS } from './items.js';
 import { SurvivorAbility, ABILITIES } from './abilities.js';
 import {
   effectStatMod, effectRangeMod, effectIncomingAtkAdvantage,
-  effectDamageTakenFlat, effectsBlockHeal,
+  effectDamageTakenFlat, effectDamageTakenDice, effectsBlockHeal,
 } from './effects.js';
+import { hpForLevel, atkBonusForLevel, defBonusForLevel, levelForXp } from './balance.js';
 
 let _nextId = 1;
 
@@ -40,6 +41,29 @@ export function nextDie(sides) {
   return Math.ceil(Math.random() * sides);
 }
 const _nextDie = nextDie;
+
+// ── Weapon damage rolls ──────────────────────────────────────────────────────
+// A damage spec is either a plain number (fixed damage) or an object
+// { count, sides, flat }: roll `count` dice of `sides` faces and add `flat`
+// (e.g. { count: 2, sides: 6 } is 2D6; { count: 1, sides: 12, flat: 1 } is
+// 1D12+1; the number 5 is a flat 5). normalizeDamage coerces either form into
+// the object shape; rollDamage routes every die through the supplied `roll`
+// fn — normally `s => state.nextDie(s)` — so damage is deterministic under
+// forced dice / replay / online resolution, exactly like the advantage pools.
+export function normalizeDamage(spec) {
+  if (typeof spec === 'number') return { count: 0, sides: 0, flat: spec };
+  return {
+    count: spec?.count ?? 0,
+    sides: spec?.sides ?? 0,
+    flat:  spec?.flat  ?? 0,
+  };
+}
+export function rollDamage(spec, roll) {
+  const s = normalizeDamage(spec);
+  let total = s.flat;
+  for (let i = 0; i < s.count; i++) total += roll(s.sides);
+  return Math.max(1, total);
+}
 
 // Entity type ids. Values are the wire/save format — be cautious renaming.
 //
@@ -98,12 +122,8 @@ export const BASE_AGILITY = Object.freeze(
   Object.fromEntries(Object.entries(UNIT_TYPES).map(([k, v]) => [k, v.agility]))
 );
 
-// Attack range per entity type. 1 = melee only; >1 = ranged. Mirrors the
-// pattern of BASE_AGILITY / ENTITY_COLOR — derived from the UNIT_TYPES
-// registry so adding a ranged unit is a one-file change.
-export const BASE_RANGE = Object.freeze(
-  Object.fromEntries(Object.entries(UNIT_TYPES).map(([k, v]) => [k, v.range ?? 1]))
-);
+// (Removed BASE_RANGE — units no longer have an innate range. Range is
+// weapon-derived; see Entity.getRange()/equipWeapon().)
 
 export const ENTITY_COLOR = Object.freeze(
   Object.fromEntries(Object.entries(UNIT_TYPES).map(([k, v]) => [k, v.color]))
@@ -145,6 +165,11 @@ export class Entity {
 
     this.col = col;
     this.row = row;
+    // Sub-hex slot (0 = centre, 1..6 = adjacent to each face). Authoritative
+    // intra-hex position the renderer reads for placement. Assigned at
+    // placement time (spawn/move) via assignSlotOnTile() in actions.js — the
+    // constructor default is the centre.
+    this.slot = 0;
 
     const stats = BASE_STATS[type];
     this.maxHp   = stats.maxHp;
@@ -152,7 +177,9 @@ export class Entity {
     this.attack  = stats.attack;
     this.defense = stats.defense;
     this.agility = BASE_AGILITY[type] ?? 1;
-    this.range   = BASE_RANGE[type]   ?? 1;
+    // No innate unit range — range comes from the equipped weapon (set by
+    // equipWeapon). Default melee 1 until a weapon is equipped.
+    this.range   = 1;
 
     // Tag metadata from UNIT_TYPES (e.g. 'undead', 'construct', 'minion',
     // 'living', 'leader', 'day-leader'). Used by item combat triggers —
@@ -181,6 +208,8 @@ export class Entity {
     this.actedThisTurn = false;
     this.defendCount   = 0;
     this.guarding      = 0;
+    // Once-per-round free weapon equip gate; reset in resetTurn().
+    this.equippedThisRound = false;
 
     // Per-round counters consulted by ability/effect triggers (e.g. berserker
     // fires frenzy when killsThisRound >= 2). Reset in resetTurn().
@@ -190,6 +219,18 @@ export class Entity {
     //   { id, duration, stacks, source? }
     // Stat composition runs in getAttack/getDefense/getRange/getAgility.
     this.effects = [];
+
+    // Unit level (≥1). Scales intrinsic HP/ATK/DEF, not weapon damage —
+    // applyLevel() (below) sets maxHp; getAttack/getDefense compose the
+    // ATK/DEF bonus. Persists across rounds (not reset in resetTurn).
+    // Used by campaign authoring to ramp difficulty (Zombie L1/L2/L3…).
+    this.level = 1;
+
+    // Accumulated experience (campaign veterancy). Earned only in campaign
+    // missions via awardXP(); crossing an xpForLevel() threshold raises `level`.
+    // Always 0 outside campaign (XP is never awarded there). Persists across
+    // rounds and between missions (snapshotSurvivor / heroStats).
+    this.xp = 0;
 
     // Personal backpack — a flat key→count map. Weapons use their ITEMS
     // id directly (e.g. 'sword'); consumables and mounts use their
@@ -201,7 +242,8 @@ export class Entity {
   get alive() { return this.hp > 0; }
 
   get displayName() {
-    return this.name ?? defaultDisplayName(this.type);
+    const base = this.name ?? defaultDisplayName(this.type);
+    return (this.level ?? 1) > 1 ? `${base} L${this.level}` : base;
   }
 
   // ── Stat accessors (Phase 2 of the units/items/abilities refactor) ──
@@ -219,12 +261,14 @@ export class Entity {
 
   getAttack()  {
     return this.attack
+      + atkBonusForLevel(this.level)
       + (ITEMS[this.weapon]?.statMods?.attack ?? 0)
       + _abilityStatMod(this.abilities, 'attack')
       + effectStatMod(this, 'attack');
   }
   getDefense() {
     return this.defense
+      + defBonusForLevel(this.level)
       + (ITEMS[this.weapon]?.statMods?.defense ?? 0)
       + _abilityStatMod(this.abilities, 'defense')
       + effectStatMod(this, 'defense');
@@ -234,11 +278,15 @@ export class Entity {
       + _abilityStatMod(this.abilities, 'agility')
       + effectStatMod(this, 'agility');
   }
-  // Attack range in hexes. 1 = melee only; >1 = ranged. Effects like
-  // eagle_eyed extend range via rangeMod; permanent abilities (eagle_eye)
+  // Attack range in hexes. 1 = melee only; >1 = ranged. Range is entirely
+  // weapon-derived — there is no innate unit range. The equipped weapon's
+  // `range` (default 1 for melee/unarmed) is the base; effects like
+  // eagle_eyed extend it via rangeMod and permanent abilities (eagle_eye)
   // compose via ABILITIES[id].statMods.range, mirroring attack/defense.
+  // `this.range` is a denormalized cache of the weapon range (kept in sync
+  // by equipWeapon) so AI sim copies that read `simUnit.range` stay correct.
   getRange() {
-    return (this.range ?? 1)
+    return (ITEMS[this.weapon]?.range ?? 1)
       + _abilityStatMod(this.abilities, 'range')
       + effectRangeMod(this);
   }
@@ -270,6 +318,10 @@ export class Entity {
     // stat stable across weapon swaps and makes equipped weapons a
     // true runtime-composed modifier.
     this.weapon = weaponType || null;
+    // Range is weapon-derived (no innate unit range). Keep the
+    // denormalized this.range cache in sync for AI sim copies that read
+    // `simUnit.range ?? 1` without going through getRange().
+    this.range = ITEMS[this.weapon]?.range ?? 1;
   }
 
   resetTurn() {
@@ -279,6 +331,7 @@ export class Entity {
     this.defendCount   = 0;
     this.guarding      = 0;
     this.killsThisRound = 0;
+    this.equippedThisRound = false;
   }
 
   takeDamage(amount) {
@@ -288,13 +341,19 @@ export class Entity {
 
   /**
    * Compute the effective incoming damage for a base hit, after applying
-   * effect mods (e.g. wounded → +1). Currently only flat additions; the
-   * shape leaves room for resistances later. Damage never goes below 1
-   * once a hit lands — effects can amplify pain, not cancel it outright.
+   * effect mods: flat additions plus bonus damage DICE (wounded → +1D6 per
+   * stack). `rollDie(sides)` should be the game's deterministic die stream
+   * (`s => state.nextDie(s)`) so forced dice / replays stay byte-identical;
+   * without a roller each die falls back to a fixed 4 (average, rounded up)
+   * rather than reaching for Math.random. Damage never goes below 1 once a
+   * hit lands — effects can amplify pain, not cancel it outright.
    */
-  applyIncomingDamage(baseAmount) {
+  applyIncomingDamage(baseAmount, rollDie = null) {
     const flat = effectDamageTakenFlat(this);
-    return Math.max(1, baseAmount + flat);
+    let rolled = 0;
+    const dice = effectDamageTakenDice(this);
+    for (let i = 0; i < dice; i++) rolled += rollDie ? rollDie(6) : 4;
+    return Math.max(1, baseAmount + flat + rolled);
   }
 
   heal(amount) {
@@ -317,7 +376,12 @@ export class Entity {
   //   extraDefBonus        — flat defense bonus (defender-side fortification)
   //   fatiguePenalty       — flat defender penalty from repeated defending
   //   state                — GameState for per-game forced-dice queue
-  static resolveCombat(attacker, defender, options = {}) {
+  /**
+   * Shared pre-roll computation for resolveCombat and computeCombatOdds:
+   * net advantage dice per side (including weapon triggers and marked
+   * effects) and the flat roll modifiers added to each side's die.
+   */
+  static _combatNets(attacker, defender, options = {}) {
     const {
       phaseAdvantage = 0,
       atkAdvantageDice = 0,
@@ -327,10 +391,7 @@ export class Entity {
       extraAtkBonus = 0,
       extraDefBonus = 0,
       fatiguePenalty = 0,
-      state = null,
     } = options;
-
-    const roll = state ? (s) => state.nextDie(s) : _nextDie;
 
     // Item combat triggers (e.g. staff vs undead defenders →
     // +1 attacker advantage die). Data-driven via ITEMS[weapon].combatTriggers
@@ -359,13 +420,27 @@ export class Entity {
     );
     const defNet = clampAdvantage(defAdvantageDice - defDisadvantageDice);
 
+    const atkFlat = attackOf(attacker)  + (attacker.attackBonus  || 0) + extraAtkBonus;
+    const defFlat = defenseOf(defender) + (defender.defenseBonus || 0) + extraDefBonus - fatiguePenalty;
+
+    return { atkNet, defNet, atkFlat, defFlat, atkStaffAdvantage };
+  }
+
+  static resolveCombat(attacker, defender, options = {}) {
+    const { state = null, fatiguePenalty = 0 } = options;
+
+    const roll = state ? (s) => state.nextDie(s) : _nextDie;
+
+    const { atkNet, defNet, atkFlat, defFlat, atkStaffAdvantage } =
+      Entity._combatNets(attacker, defender, options);
+
     const atkPool = _rollPool(roll, atkNet);
     const defPool = _rollPool(roll, defNet);
     const atkBaseDie = _pickFromPool(atkPool, atkNet);
     const defBaseDie = _pickFromPool(defPool, defNet);
 
-    const attackRoll  = atkBaseDie + attackOf(attacker)  + (attacker.attackBonus  || 0) + extraAtkBonus;
-    const defenseRoll = defBaseDie + defenseOf(defender) + (defender.defenseBonus || 0) + extraDefBonus - fatiguePenalty;
+    const attackRoll  = atkBaseDie + atkFlat;
+    const defenseRoll = defBaseDie + defFlat;
     const margin = attackRoll - defenseRoll;
 
     const atkExtraDice = atkPool.slice(1);
@@ -382,6 +457,50 @@ export class Entity {
       fatiguePenalty,
     };
   }
+
+  /**
+   * Exact outcome probabilities for a resolveCombat() roll — no sampling.
+   *
+   * Takes the SAME options object as resolveCombat plus a `ranged` flag
+   * (ranged attacks can neither crush nor be countered — mirrors
+   * executeBattle). Enumerates the 36 (chosen-die × chosen-die) outcomes
+   * using the exact best/worst-of-K die distribution.
+   *
+   * Returns { hit, crush, counter, miss } — `crush` is the subset of `hit`
+   * where attackRoll ≥ 2×defenseRoll; `counter` is the subset of `miss`
+   * where defenseRoll ≥ 2×attackRoll; hit + miss = 1.
+   */
+  static computeCombatOdds(attacker, defender, options = {}) {
+    const { ranged = false } = options;
+    const { atkNet, defNet, atkFlat, defFlat } =
+      Entity._combatNets(attacker, defender, options);
+
+    let hit = 0, crush = 0, counter = 0;
+    for (let v = 1; v <= 6; v++) {
+      const pa = _chosenDieProb(v, atkNet);
+      const attackRoll = v + atkFlat;
+      for (let w = 1; w <= 6; w++) {
+        const p = pa * _chosenDieProb(w, defNet);
+        const defenseRoll = w + defFlat;
+        if (attackRoll > defenseRoll) {
+          hit += p;
+          if (!ranged && attackRoll >= 2 * defenseRoll) crush += p;
+        } else if (!ranged && defenseRoll >= 2 * attackRoll) {
+          counter += p;
+        }
+      }
+    }
+    return { hit, crush, counter, miss: 1 - hit };
+  }
+}
+
+// P(chosen die = v) for net advantage `net`: best-of-(1+net) when positive,
+// worst-of-(1+|net|) when negative, a plain d6 at 0.
+function _chosenDieProb(v, net) {
+  const k = 1 + Math.abs(net);
+  if (net > 0) return Math.pow(v / 6, k) - Math.pow((v - 1) / 6, k);
+  if (net < 0) return Math.pow((7 - v) / 6, k) - Math.pow((6 - v) / 6, k);
+  return 1 / 6;
 }
 
 // Stat accessors that tolerate plain-object entity fixtures (used by unit
@@ -397,25 +516,28 @@ export class Entity {
 export function attackOf(e) {
   if (typeof e?.getAttack === 'function') return e.getAttack();
   const base        = e?.attack ?? 0;
+  const levelMod    = atkBonusForLevel(e?.level);
   const weaponMod   = e?.weapon ? (ITEMS[e.weapon]?.statMods?.attack ?? 0) : 0;
   const abilityMod  = _abilityStatMod(e?.abilities, 'attack');
   const effectMod   = effectStatMod(e, 'attack');
-  return base + weaponMod + abilityMod + effectMod;
+  return base + levelMod + weaponMod + abilityMod + effectMod;
 }
 export function defenseOf(e) {
   if (typeof e?.getDefense === 'function') return e.getDefense();
   const base        = e?.defense ?? 0;
+  const levelMod    = defBonusForLevel(e?.level);
   const weaponMod   = e?.weapon ? (ITEMS[e.weapon]?.statMods?.defense ?? 0) : 0;
   const abilityMod  = _abilityStatMod(e?.abilities, 'defense');
   const effectMod   = effectStatMod(e, 'defense');
-  return base + weaponMod + abilityMod + effectMod;
+  return base + levelMod + weaponMod + abilityMod + effectMod;
 }
-// Attack range in hexes — tolerates plain-object fixtures. Falls back to
-// UNIT_TYPES[type].range so tests that skip the Entity constructor still
-// see the correct range for a given entity type.
+// Attack range in hexes — tolerates plain-object fixtures. Range is
+// weapon-derived: prefer the denormalized `range` cache, else read it from
+// the equipped weapon (default 1 for melee/unarmed). Units have no innate
+// per-type range.
 export function rangeOf(e) {
   if (typeof e?.getRange === 'function') return e.getRange();
-  const base       = e?.range ?? UNIT_TYPES[e?.type]?.range ?? 1;
+  const base       = e?.range ?? ITEMS[e?.weapon]?.range ?? 1;
   const abilityMod = _abilityStatMod(e?.abilities, 'range');
   const effectMod  = effectRangeMod(e);
   return base + abilityMod + effectMod;
@@ -478,6 +600,61 @@ export function expectedDieValue(net) {
   const n = clampAdvantage(net);
   if (n >= 0) return BEST_OF_K_EV[n];
   return WORST_OF_K_EV[-n];
+}
+
+// Set a unit's level and rescale its HP. ATK/DEF level bonuses compose live in
+// getAttack()/getDefense(), so this only needs to handle maxHp (a stored field,
+// not a getter). Idempotent: the level-1 base maxHp is snapshotted on the first
+// call, so a future re-level (e.g. regular-mode veterancy) won't compound the
+// scaling. Spawn units at full HP. Called once at spawn by campaign authoring.
+export function applyLevel(entity, level) {
+  const lvl = Math.max(1, Math.floor(level || 1));
+  if (entity._baseMaxHp == null) entity._baseMaxHp = entity.maxHp;
+  entity.level = lvl;
+  entity.maxHp = hpForLevel(entity._baseMaxHp, lvl);
+  entity.hp    = entity.maxHp;
+  return entity;
+}
+
+// Award experience to a unit (campaign veterancy). No-op outside campaign — XP
+// is a campaign-only mechanic, gated on state.isCampaign, so normal/online play
+// is byte-identical. Accumulates `entity.xp`, and if the new total crosses one
+// or more xpForLevel() thresholds, re-levels the unit ONCE to the final level
+// (applyLevel is idempotent against _baseMaxHp, so a multi-level jump applies
+// the same stats as the equivalent single jump). applyLevel sets hp = maxHp, so
+// a level-up fully heals — no extra HP bookkeeping is needed here.
+//
+// Returns { xpGained, leveledUp, newLevel } for Phase C/F (toasts, FX). Phase B
+// never calls this; it's the plumbing a sibling ticket hooks into.
+export function awardXP(entity, amount, state) {
+  // Hero-only mechanic. Only player-faction (hero) units carry across missions
+  // (campaign saves heroStats + survivors, never witch units — src/campaign/
+  // campaign.js), so witch-side levelling has zero progression payoff and only
+  // acts as an off-spec within-mission difficulty drift. Gate it out here at the
+  // single chokepoint rather than at all 7 call sites; the hero-owner check is
+  // the canonical faction discriminator (Entity ctor; the established pattern
+  // across src/). entities.js can't import factions.js (factions.js imports it),
+  // so the faction `side` abstraction isn't reachable — see the documented
+  // allowlist bump in tests/faction-string-checks.test.js.
+  // Number.isFinite rejects Infinity (which `amount > 0` would let through and
+  // poison entity.xp, jumping straight to L99) as well as NaN/±Infinity.
+  if (!state?.isCampaign || !entity || entity.owner !== 'hero'
+      || !(amount > 0) || !Number.isFinite(amount)) {
+    return { xpGained: 0, leveledUp: false, newLevel: entity?.level ?? 1 };
+  }
+  const gain = Math.floor(amount);
+  if (gain <= 0) {
+    return { xpGained: 0, leveledUp: false, newLevel: entity.level ?? 1 };
+  }
+  entity.xp = (entity.xp ?? 0) + gain;
+  const oldLevel = entity.level ?? 1;
+  const newLevel = levelForXp(entity.xp);
+  let leveledUp = false;
+  if (newLevel > oldLevel) {
+    applyLevel(entity, newLevel); // one call with the FINAL level; full-heals
+    leveledUp = true;
+  }
+  return { xpGained: gain, leveledUp, newLevel: entity.level ?? 1 };
 }
 
 // Innate leader abilities are stamped onto each leader by
@@ -570,7 +747,7 @@ export function defaultDisplayName(type) {
   return _DEFAULT_DISPLAY_NAMES[type] ?? type;
 }
 
-export function createSurvivor(col, row, ownerId = null, state = null, forcedName = null) {
+export function createSurvivor(col, row, ownerId = null, state = null, forcedName = null, level = 1) {
   const e = new Entity(EntityType.SURVIVOR, null, col, row, ownerId, state);
 
   // Roster de-dup tracker lives on the GameState when one is provided;
@@ -615,6 +792,15 @@ export function createSurvivor(col, row, ownerId = null, state = null, forcedNam
   e.attack  = char.attack;
   e.defense = char.defense;
   if (typeof char.agility === 'number') e.agility = char.agility;
+
+  // Spawn level (campaign authoring): hidden survivors / node spawns may be
+  // tagged with a higher `level` so future-chapter recruits arrive scaled.
+  // applyLevel snapshots the L1 base (the stats just assigned above) into
+  // `_baseMaxHp`, rescales maxHp via hpForLevel, and sets hp = maxHp — so it
+  // must run AFTER the base-stat assignment and BEFORE the entity is returned
+  // (i.e. before any caller-side HP normalization). Idempotent and a no-op for
+  // level 1, so normal/online survivors are unaffected.
+  applyLevel(e, level || 1);
 
   return e;
 }

@@ -1,4 +1,11 @@
-// Tests for the default game speed option (localStorage persistence).
+// Tests for the default game speed option.
+//
+// The combat-detail controls (#replay-detail-btn + the Options "Default Game
+// Speed" section) are HIDDEN for now — playback is pinned to 'fast' (Summary)
+// and the stored preference is IGNORED, so a stale saved mode can't invisibly
+// lock a player into a presentation they have no UI to leave. These tests
+// mirror UIController._loadDefaultSpeed; if the controls come back, restore
+// the localStorage-honouring variants from git history.
 
 import { describe, test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,45 +23,31 @@ beforeEach(() => {
   for (const k of Object.keys(_store)) delete _store[k];
 });
 
-// Mirror the logic from UIController._loadDefaultSpeed
-const VALID_SPEEDS = { cinematic: true, fast: true, vfast: true };
+// Mirror the logic from UIController._loadDefaultSpeed (pinned while the
+// detail controls are hidden).
 function loadDefaultSpeed() {
-  try {
-    const saved = localStorage.getItem('brimstone-default-speed');
-    if (saved && VALID_SPEEDS[saved]) return saved;
-  } catch (_) { /* localStorage unavailable */ }
-  return 'cinematic';
+  return 'fast';
 }
 
-describe('default game speed', () => {
-  test('returns cinematic when nothing is stored', () => {
-    assert.equal(loadDefaultSpeed(), 'cinematic');
-  });
-
-  test('returns stored speed when valid', () => {
-    localStorage.setItem('brimstone-default-speed', 'fast');
+describe('default game speed (pinned while detail controls are hidden)', () => {
+  test('returns fast (Summary) when nothing is stored', () => {
     assert.equal(loadDefaultSpeed(), 'fast');
   });
 
-  test('returns stored vfast speed', () => {
+  test('ignores a stored cinematic preference', () => {
+    localStorage.setItem('brimstone-default-speed', 'cinematic');
+    assert.equal(loadDefaultSpeed(), 'fast');
+  });
+
+  test('ignores a stored vfast preference', () => {
     localStorage.setItem('brimstone-default-speed', 'vfast');
-    assert.equal(loadDefaultSpeed(), 'vfast');
+    assert.equal(loadDefaultSpeed(), 'fast');
   });
 
-  test('legacy step preference falls back to cinematic', () => {
-    // Users who had "step" mode selected before it was removed should now
-    // get cinematic. We don't scrub the stored value — fallback happens at read time.
+  test('ignores legacy/invalid stored values', () => {
     localStorage.setItem('brimstone-default-speed', 'step');
-    assert.equal(loadDefaultSpeed(), 'cinematic');
-  });
-
-  test('falls back to cinematic for invalid value', () => {
+    assert.equal(loadDefaultSpeed(), 'fast');
     localStorage.setItem('brimstone-default-speed', 'turbo');
-    assert.equal(loadDefaultSpeed(), 'cinematic');
-  });
-
-  test('falls back to cinematic for empty string', () => {
-    localStorage.setItem('brimstone-default-speed', '');
-    assert.equal(loadDefaultSpeed(), 'cinematic');
+    assert.equal(loadDefaultSpeed(), 'fast');
   });
 });

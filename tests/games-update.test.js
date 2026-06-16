@@ -1,163 +1,159 @@
-// Tests for the gamesUpdate WebSocket notification flow — ensures the server
-// sends gamesUpdate to affected players when plans are submitted or rounds
-// resolve, and the client routes the message correctly.
+// Tests for the gamesUpdate WebSocket notification flow — the server pushes
+// gamesUpdate to affected human players when plans are submitted or rounds
+// resolve, and the client routes the message to onGamesUpdate.
 
-import { describe, test } from 'node:test';
+import { describe, test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import {
+  createLobby, fillAllWithAI, startGame, claimSlot,
+  handlePlanSubmit, setSendToPlayer,
+  getRooms, getRoom,
+} from '../server/lobby.js';
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root      = join(__dirname, '..');
 
-const serverSource = readFileSync(join(root, 'server.js'), 'utf8');
-const lobbySource  = readFileSync(join(root, 'server', 'lobby.js'), 'utf8');
-const asyncRoomsSource = readFileSync(join(root, 'server', 'async-game-rooms.js'), 'utf8');
-const mpSource     = readFileSync(join(root, 'src', 'multiplayer.js'), 'utf8');
-const mainSource   = readFileSync(join(root, 'src', 'main.js'), 'utf8');
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
-// ── server.js: playerWsMap infrastructure ───────────────────────────────────
+function mockWs() {
+  const ws = {
+    readyState: 1,
+    messages: [],
+    send(data) { ws.messages.push(JSON.parse(data)); },
+    findMsg(type) { return ws.messages.find(m => m.type === type); },
+    msgsOf(type) { return ws.messages.filter(m => m.type === type); },
+  };
+  return ws;
+}
 
-describe('server.js — playerWsMap', () => {
-  test('declares playerWsMap for player→WebSocket tracking', () => {
-    assert.ok(
-      serverSource.includes('playerWsMap'),
-      'server.js should declare playerWsMap',
-    );
+function createTestGame(playerId = 'games-update-p1') {
+  const ws = mockWs();
+  createLobby(playerId, 'TestHero', ws, {
+    playersPerSide: 1, mapSize: 'skirmish', fog: 'none',
   });
+  const roomId = ws.findMsg('lobbyJoined').lobby.id;
+  claimSlot(playerId, roomId, 0);
+  fillAllWithAI(playerId, roomId);
+  startGame(playerId, roomId);
+  return { roomId: ws.findMsg('matchFound').roomId, ws, playerId };
+}
 
-  test('exports sendToPlayer function', () => {
-    assert.ok(
-      serverSource.includes('function sendToPlayer'),
-      'server.js should define a sendToPlayer function',
-    );
-  });
+function cleanUpRooms() {
+  for (const r of getRooms()) {
+    const room = getRoom(r.id);
+    if (room) {
+      if (room.state) room.state.winner = 'hero';
+      if (room.turnTimer) clearTimeout(room.turnTimer);
+      if (room.allHumansGoneTimer) clearTimeout(room.allHumansGoneTimer);
+      for (const t of room.disconnectTimers?.values() ?? []) clearTimeout(t);
+      for (const t of room.takeoverTimers?.values() ?? []) clearTimeout(t);
+    }
+  }
+}
 
-  test('registers player WebSocket on auth', () => {
-    // Both auth cases should call _registerPlayerWs
-    const matches = serverSource.match(/_registerPlayerWs/g);
-    assert.ok(
-      matches && matches.length >= 2,
-      'server.js should register player WebSocket in both auth handlers',
-    );
-  });
-
-  test('unregisters player WebSocket on close', () => {
-    assert.ok(
-      serverSource.includes('_unregisterPlayerWs'),
-      'server.js should unregister player WebSocket on connection close',
-    );
-  });
-
-  test('calls setSendToPlayer to inject callback into lobby.js', () => {
-    assert.ok(
-      serverSource.includes('setSendToPlayer(sendToPlayer)'),
-      'server.js should inject sendToPlayer into lobby.js via setSendToPlayer',
-    );
-  });
-});
-
-// ── server/lobby.js: _notifyGamesUpdate calls ──────────────────────────────
+// ── server/lobby.js — gamesUpdate notifications (behavioral) ─────────────────
 
 describe('server/lobby.js — gamesUpdate notifications', () => {
-  test('defines _notifyGamesUpdate helper', () => {
-    assert.ok(
-      lobbySource.includes('function _notifyGamesUpdate'),
-      'lobby.js should define _notifyGamesUpdate',
-    );
+  let sent; // [playerId, msg] pairs captured from the injected sendToPlayer
+
+  beforeEach(() => {
+    cleanUpRooms();
+    sent = [];
+    setSendToPlayer((playerId, msg) => sent.push([playerId, msg]));
+  });
+  afterEach(() => {
+    setSendToPlayer(null);
+    cleanUpRooms();
   });
 
-  test('exports setSendToPlayer for callback injection', () => {
-    assert.ok(
-      lobbySource.includes('export function setSendToPlayer'),
-      'lobby.js should export setSendToPlayer',
-    );
+  const gamesUpdatesFor = (playerId) =>
+    sent.filter(([pid, msg]) => pid === playerId && msg.type === 'gamesUpdate');
+
+  test('plan submission pushes gamesUpdate to human players (not AI)', () => {
+    const { roomId, playerId } = createTestGame();
+    const room = getRoom(roomId);
+    sent.length = 0;
+
+    const unit = room.state.entities.find(e => e.alive && e.ownerId === playerId);
+    handlePlanSubmit(playerId, roomId, [{ type: 'explore', entityId: unit.id }], room.state.round);
+
+    assert.ok(gamesUpdatesFor(playerId).length >= 1,
+      'human player must receive gamesUpdate after a plan submission');
+    const aiSeat = room.players.find(s => s.isAI);
+    assert.equal(gamesUpdatesFor(aiSeat.playerId).length, 0,
+      'AI seats must not be notified');
   });
 
-  test('sends gamesUpdate after sync plan submission', () => {
-    // _notifyGamesUpdate should appear in the handlePlanSubmit area
-    // (near broadcastExcept for playerSubmitted)
-    const planSubmitArea = lobbySource.indexOf('broadcastExcept(room, playerId, submittedMsg)');
-    const nextNotify = lobbySource.indexOf('_notifyGamesUpdate', planSubmitArea);
-    assert.ok(
-      planSubmitArea > -1 && nextNotify > -1 && nextNotify - planSubmitArea < 300,
-      'lobby.js should call _notifyGamesUpdate near sync plan submission broadcast',
-    );
-  });
+  test('round resolution pushes gamesUpdate to human players', () => {
+    const { roomId, ws, playerId } = createTestGame();
+    const room = getRoom(roomId);
+    const round = room.state.round;
 
-  test('sends gamesUpdate after sync round resolution', () => {
-    // Should appear near the resolutionComplete broadcast
-    const resArea = lobbySource.indexOf("type: 'resolutionComplete'");
-    const nextNotify = lobbySource.indexOf('_notifyGamesUpdate', resArea);
-    assert.ok(
-      resArea > -1 && nextNotify > -1 && nextNotify - resArea < 400,
-      'lobby.js should call _notifyGamesUpdate near sync resolution broadcast',
-    );
-  });
+    // Human submits first, then the AI's submission completes the round and
+    // triggers resolution synchronously.
+    const unit = room.state.entities.find(e => e.alive && e.ownerId === playerId);
+    handlePlanSubmit(playerId, roomId, [{ type: 'explore', entityId: unit.id }], round);
+    sent.length = 0;
 
-  test('sends gamesUpdate after async plan submission', () => {
-    const asyncPlanArea = asyncRoomsSource.indexOf("type: 'asyncPlanAccepted'");
-    const nextNotify = asyncRoomsSource.indexOf('_notifyGamesUpdate', asyncPlanArea);
-    assert.ok(
-      asyncPlanArea > -1 && nextNotify > -1 && nextNotify - asyncPlanArea < 300,
-      'async-game-rooms.js should call _notifyGamesUpdate near async plan acceptance',
-    );
-  });
+    const aiSeat = room.players.find(s => s.isAI);
+    handlePlanSubmit(aiSeat.playerId, roomId, [], round);
 
-  test('sends gamesUpdate after async round resolution', () => {
-    const asyncResArea = asyncRoomsSource.indexOf('_asyncBroadcast(roomId, resolutionMsg)');
-    const nextNotify = asyncRoomsSource.indexOf('_notifyGamesUpdate', asyncResArea);
-    assert.ok(
-      asyncResArea > -1 && nextNotify > -1 && nextNotify - asyncResArea < 200,
-      'async-game-rooms.js should call _notifyGamesUpdate near async resolution broadcast',
-    );
+    assert.ok(ws.findMsg('resolutionComplete'), 'round must have resolved');
+    assert.ok(room.state.round > round, 'round must advance');
+    assert.ok(gamesUpdatesFor(playerId).length >= 1,
+      'human player must receive gamesUpdate after resolution');
   });
 });
 
-// ── src/multiplayer.js: gamesUpdate routing ─────────────────────────────────
+// ── src/multiplayer.js — gamesUpdate routing (behavioral) ────────────────────
 
 describe('multiplayer.js — gamesUpdate routing', () => {
-  test('routes gamesUpdate message to onGamesUpdate callback', () => {
-    assert.ok(
-      mpSource.includes("case 'gamesUpdate'"),
-      'multiplayer.js _route should handle gamesUpdate message type',
-    );
-    assert.ok(
-      mpSource.includes('onGamesUpdate'),
-      'multiplayer.js should call onGamesUpdate callback',
-    );
+  test('routes gamesUpdate message to onGamesUpdate callback', async () => {
+    // platform.js (imported by multiplayer.js) touches browser globals at init.
+    globalThis.window ??= { addEventListener() {}, removeEventListener() {} };
+    globalThis.document ??= { addEventListener() {}, removeEventListener() {}, hidden: false };
+    const { MultiplayerClient } = await import('../src/multiplayer.js');
+
+    let calls = 0;
+    const client = new MultiplayerClient({ onGamesUpdate() { calls++; } });
+    client._route({ type: 'gamesUpdate' });
+    assert.equal(calls, 1, 'onGamesUpdate must be invoked');
   });
 });
 
-// ── src/main.js: badge refresh on navigation ────────────────────────────────
+// ── Wiring checks (source-level) ─────────────────────────────────────────────
+//
+// server.js is the process entry point (binds HTTP/WS servers on import) and
+// src/main.js is the client entry script with top-level DOM side effects —
+// neither can be imported under node:test, and async-game rooms need heavy DB
+// fixtures. The remaining wiring is asserted minimally against the source.
 
-describe('main.js — badge refresh on navigation', () => {
-  test('refreshes badge when showing online screen', () => {
-    // _showOnlineScreen should call _updateMultiplayerBadge
-    const fnStart = mainSource.indexOf('function _showOnlineScreen()');
-    const fnEnd = mainSource.indexOf('\nfunction', fnStart + 1);
-    const fnBody = mainSource.slice(fnStart, fnEnd);
-    assert.ok(
-      fnBody.includes('_updateMultiplayerBadge()'),
-      '_showOnlineScreen should call _updateMultiplayerBadge',
-    );
+describe('gamesUpdate wiring (source-level)', () => {
+  test('server.js tracks player sockets and injects sendToPlayer into lobby.js', () => {
+    const serverSource = readFileSync(join(root, 'server.js'), 'utf8');
+    assert.ok(serverSource.includes('playerWsMap'),
+      'server.js should track player→WebSocket mapping');
+    assert.ok(serverSource.includes('setSendToPlayer(sendToPlayer)'),
+      'server.js should inject sendToPlayer into lobby.js');
+    assert.ok(serverSource.includes('_unregisterPlayerWs'),
+      'server.js should unregister sockets on close');
   });
 
-  test('refreshes badge when showing async screen', () => {
-    const fnStart = mainSource.indexOf('function _showAsyncScreen()');
-    const fnEnd = mainSource.indexOf('\nfunction', fnStart + 1);
-    const fnBody = mainSource.slice(fnStart, fnEnd);
-    assert.ok(
-      fnBody.includes('_updateMultiplayerBadge()'),
-      '_showAsyncScreen should call _updateMultiplayerBadge',
-    );
+  test('async rounds also push gamesUpdate (async rooms need heavy DB fixtures)', () => {
+    const asyncRoomsSource = readFileSync(join(root, 'server', 'async-game-rooms.js'), 'utf8');
+    assert.ok(asyncRoomsSource.includes('_notifyGamesUpdate'),
+      'async-game-rooms.js should notify on async plan submission/resolution');
   });
 
-  test('wires onGamesUpdate handler in MP client options', () => {
-    assert.ok(
-      mainSource.includes('onGamesUpdate'),
-      'main.js should wire onGamesUpdate in MultiplayerClient options',
-    );
+  test('main.js wires onGamesUpdate and refreshes the badge on navigation', () => {
+    const mainSource = readFileSync(join(root, 'src', 'main.js'), 'utf8');
+    assert.ok(mainSource.includes('onGamesUpdate'),
+      'main.js should wire onGamesUpdate in MultiplayerClient options');
+    assert.ok(mainSource.includes('_updateMultiplayerBadge()'),
+      'main.js should refresh the multiplayer badge');
   });
 });

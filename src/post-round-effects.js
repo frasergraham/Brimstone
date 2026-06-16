@@ -10,6 +10,7 @@ import { hasBuilding } from './tiles.js';
 import { hexKey } from './hex.js';
 import { tickEffects, EFFECTS, dispatchTrigger } from './effects.js';
 import { getFaction } from './factions.js';
+import { DAMAGE_SCALE } from './balance.js';
 
 // ── Event types ─────────────────────────────────────────────────────────────
 
@@ -66,7 +67,9 @@ export function applyPostRoundEffects(state) {
 function nightAttritionEffect(state) {
   if (state.phase !== Phase.NIGHT) return [];
 
-  const dmg = state.attritionLevel;
+  // attritionLevel is a 1–3 tier (see attritionForCycle); actual HP damage is
+  // that tier × DAMAGE_SCALE so attrition stays proportional to scaled HP.
+  const dmg = state.attritionLevel * DAMAGE_SCALE;
   const events = [];
 
   // All living survivors, split by shelter status.
@@ -124,7 +127,7 @@ function nightAttritionEffect(state) {
 
       // Route through applyIncomingDamage so wounded etc. amplify attrition
       // the same way they amplify combat / DOTs.
-      const incoming = e.applyIncomingDamage(dmg);
+      const incoming = e.applyIncomingDamage(dmg, (sd) => state.nextDie(sd));
       const killed = e.takeDamage(incoming);
       const text = killed
         ? `💀 ${e.displayName} is consumed by the night!`
@@ -223,12 +226,17 @@ function statusEffectsTick(state) {
       amount:     ev.amount,
       killed:     ev.killed,
       text:       ev.text,
-      flash: ev.killed ? null : {
+      // Kills flash too — without one the unit silently vanishes from the
+      // map with nothing to explain why (operator report: "both of them
+      // vanished, I don't know why").
+      flash: {
         color:     'rgba(160,40,80,0.5)',
         textColor: 'rgba(255,180,200,1)',
-        label:     `-${ev.amount} ${def?.icon ?? ''}`.trim(),
-        duration:  1800,
-        fontScale: 1.2,
+        label:     ev.killed
+          ? `-${ev.amount} ${def?.icon ?? ''} 💀`.replace(/\s+/g, ' ').trim()
+          : `-${ev.amount} ${def?.icon ?? ''}`.trim(),
+        duration:  ev.killed ? 2200 : 1800,
+        fontScale: ev.killed ? 1.4 : 1.2,
       },
     });
   }
@@ -250,3 +258,31 @@ function statusEffectsTick(state) {
 }
 
 registerPostRoundEffect('status-effects', statusEffectsTick);
+
+/**
+ * Wrap-up card rows from a round's post-round events. KILL events are listed
+ * for EITHER side — the player just watched that unit vanish from the map, so
+ * the summary must explain it (cause rides in `text`, e.g. "🩸 Zombie succumbs
+ * to bleeding!"). DAMAGE/SHELTER stay scoped to the viewing player's units
+ * (`myId`; null ⇒ offline, keep everything). Pure — shared by the offline and
+ * online wrap-up builders.
+ */
+export function collectWrapUpAttrition(postRoundEvents, myId = null) {
+  const rows = [];
+  for (const ev of postRoundEvents ?? []) {
+    if (ev.type === PostRoundEventType.KILL) {
+      rows.push({ kind: 'kill', name: ev.entityName, amount: ev.amount, text: ev.text ?? null });
+      continue;
+    }
+    if (myId && ev.ownerId && ev.ownerId !== myId) continue;
+    if (ev.type === PostRoundEventType.DAMAGE) {
+      rows.push({ kind: 'damage', name: ev.entityName, amount: ev.amount, text: ev.text ?? null });
+    } else if (ev.type === PostRoundEventType.SHELTER) {
+      rows.push({
+        kind: 'shelter', name: ev.entityName,
+        shelter: ev.text?.startsWith('🏠') ? 'building' : 'fort',
+      });
+    }
+  }
+  return rows;
+}

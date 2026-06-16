@@ -174,12 +174,14 @@ function _layoutCombatants(state, slots, size, attackMode = 'melee') {
 
   if (slots.attacker) {
     attackerEntity = _placeUnit(state, slots.attacker, centre.col, centre.row, ATK_SIDE_ID);
-    // In ranged mode, force the attacker's range so executeBattle treats the
-    // strike as ranged regardless of the picked unit type. Melee units
-    // (paladin etc.) gain no projectileType, so the renderer falls back to
-    // 'sparkle' — fine for the tester's "see what a ranged attack looks
-    // like" purpose.
-    if (attackMode === 'ranged') attackerEntity.range = RANGED_ATTACK_RANGE;
+    // In ranged mode, equip a bow so the attacker becomes ranged regardless
+    // of the picked unit type. Units have no innate range now — range is
+    // weapon-derived (Entity.getRange() reads ITEMS[weapon].range), and
+    // executeBattle routes through getRange(), so simply setting `.range`
+    // would be ignored. equipWeapon('bow') sets both this.weapon (range 3 =
+    // RANGED_ATTACK_RANGE, projectileType 'bolt') and the denormalized
+    // this.range cache — making the strike a true ranged attack.
+    if (attackMode === 'ranged') attackerEntity.equipWeapon('bow');
   }
   if (slots.defender) {
     defenderEntity = _placeUnit(state, slots.defender, adjacent.col, adjacent.row, DEF_SIDE_ID);
@@ -435,6 +437,9 @@ export function createCombatTester(opts = {}) {
       result,
       attackerSnap: _snap(layout.attackerEntity),
       defenderSnap: _snap(layout.defenderEntity),
+      // result.killed only covers the defender; a counter-kill flips the
+      // attacker's alive flag (and drops it from state.entities) instead.
+      attackerKilled: !layout.attackerEntity.alive,
     };
   }
   function onChange(listener) {
@@ -460,6 +465,28 @@ export function createCombatTester(opts = {}) {
     onChange,
   };
   return api;
+}
+
+/**
+ * Shape one tester battle as a wrap-up combat pair — the { a, b } unit shape
+ * compileTurnBattlePairs produces — so the UI can render the game's wrap-up
+ * battle summary row for it. Attacker is `a`, defender `b`: the attacker's
+ * HP loss is the counter damage, the defender's the strike damage.
+ *
+ * @param {object} out — runBattle() output ({ result, attackerSnap,
+ *   defenderSnap, attackerKilled }).
+ * @returns {{a: object, b: object}}
+ */
+export function battleWrapupPair(out) {
+  const unit = (snap, hpLost, killed) => ({
+    id: snap.id, type: snap.type, title: snap.title ?? null,
+    name: snap.title ?? snap.type, color: null,
+    hpLost, killed,
+  });
+  return {
+    a: unit(out.attackerSnap, out.result.counterDmg ?? 0, !!out.attackerKilled),
+    b: unit(out.defenderSnap, out.result.damage ?? 0, !!out.result.killed),
+  };
 }
 
 // Snapshot the fields combat-cinematic needs to run. Kept tiny — the

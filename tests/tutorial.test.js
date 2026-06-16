@@ -204,8 +204,8 @@ describe('setForcedDice', () => {
 // ── TUTORIAL_STEPS definitions ────────────────────────────────────────────────
 
 describe('TUTORIAL_STEPS', () => {
-  test('has 29 steps', () => {
-    assert.equal(TUTORIAL_STEPS.length, 29);
+  test('has 25 steps', () => {
+    assert.equal(TUTORIAL_STEPS.length, 25);
   });
 
   test('first step id is "welcome"', () => {
@@ -279,12 +279,42 @@ describe('TUTORIAL_STEPS', () => {
   });
 
   test('survivor and smithy steps exist in correct order', () => {
-    const ids = ['watch_r2', 'day_night', 'survivor_intro', 'move_to_house', 'explore_house',
-      'submit_r3', 'watch_r3', 'night_warning', 'multi_select', 'smithy_intro', 'submit_r4', 'watch_r4'];
+    const ids = ['watch_r2', 'day_night', 'move_to_house', 'explore_house',
+      'submit_r3', 'watch_r3', 'select_survivor', 'survivor_move', 'smithy_intro',
+      'submit_r4', 'watch_r4'];
     const indices = ids.map(id => TUTORIAL_STEPS.findIndex(s => s.id === id));
     for (let i = 1; i < indices.length; i++) {
       assert.ok(indices[i] > indices[i - 1], `${ids[i]} comes after ${ids[i - 1]}`);
     }
+  });
+
+  test('select_survivor is gated on selecting the SURVIVOR (was a passive card)', () => {
+    const step = TUTORIAL_STEPS.find(s => s.id === 'select_survivor');
+    assert.ok(step, 'select_survivor step exists');
+    assert.equal(step.trigger?.type, 'entity_selected');
+    assert.equal(step.trigger?.entityType, EntityType.SURVIVOR);
+  });
+
+  test('action_budget step spotlights the budget badge', () => {
+    const step = TUTORIAL_STEPS.find(s => s.id === 'action_budget');
+    assert.ok(step, 'action_budget step exists');
+    assert.equal(step.spotlight?.type, 'element');
+    assert.ok(step.spotlight.selector.includes('plan-budget-badge'), 'spotlights #plan-budget-badge');
+    assert.ok(step.body.toLowerCase().includes('budget'), 'body explains the budget');
+  });
+
+  test('survivor_move gates on the SURVIVOR queuing a MOVE (shared-budget lesson)', () => {
+    const step = TUTORIAL_STEPS.find(s => s.id === 'survivor_move');
+    assert.ok(step, 'survivor_move step exists');
+    assert.equal(step.trigger?.type, 'action_queued');
+    assert.equal(step.trigger?.actionType, PlanActionType.MOVE);
+    assert.equal(step.trigger?.entityType, EntityType.SURVIVOR);
+    assert.ok(step.spotlight.selector.includes('plan-budget-badge'), 'spotlights the budget badge');
+  });
+
+  test('smithy_intro gates on the HERO queuing a MOVE', () => {
+    const step = TUTORIAL_STEPS.find(s => s.id === 'smithy_intro');
+    assert.equal(step.trigger?.entityType, EntityType.HERO);
   });
 
   test('move_to_house spotlights HOUSE at (2,3)', () => {
@@ -303,34 +333,17 @@ describe('TUTORIAL_STEPS', () => {
     assert.equal(step.trigger?.actionType, PlanActionType.EXPLORE);
   });
 
-  test('explanation steps exist after watch_r4 including guard', () => {
+  test('node_discovered then complete close out the tutorial (fortify/guard/score moved to Ch1 hints)', () => {
     const r4  = TUTORIAL_STEPS.findIndex(s => s.id === 'watch_r4');
     const nd  = TUTORIAL_STEPS.findIndex(s => s.id === 'node_discovered');
-    const st  = TUTORIAL_STEPS.findIndex(s => s.id === 'score_tracker');
-    const ft  = TUTORIAL_STEPS.findIndex(s => s.id === 'fortify');
-    const gd  = TUTORIAL_STEPS.findIndex(s => s.id === 'guard');
-    assert.ok(nd > r4,  'node_discovered after watch_r4');
-    assert.ok(st > nd,  'score_tracker after node_discovered');
-    assert.ok(ft > st,  'fortify after score_tracker');
-    assert.ok(gd > ft,  'guard after fortify');
+    const cp  = TUTORIAL_STEPS.findIndex(s => s.id === 'complete');
+    assert.ok(nd > r4, 'node_discovered after watch_r4');
+    assert.equal(cp, TUTORIAL_STEPS.length - 1, 'complete is last');
     assert.equal(TUTORIAL_STEPS[nd].trigger, 'click');
-    assert.equal(TUTORIAL_STEPS[st].trigger, 'click');
-    assert.equal(TUTORIAL_STEPS[ft].trigger, 'click');
-    assert.equal(TUTORIAL_STEPS[gd].trigger, 'click');
-  });
-
-  test('guard step exists', () => {
-    const step = TUTORIAL_STEPS.find(s => s.id === 'guard');
-    assert.ok(step, 'guard step exists');
-    assert.equal(step.trigger, 'click');
-    assert.ok(step.body.toLowerCase().includes('guard'), 'body mentions guard');
-  });
-
-  test('score_tracker spotlights #score-bar element', () => {
-    const step = TUTORIAL_STEPS.find(s => s.id === 'score_tracker');
-    assert.ok(step, 'score_tracker step exists');
-    assert.equal(step.spotlight?.type, 'element');
-    assert.ok(step.spotlight?.selector?.includes('score-bar'), 'spotlights score-bar');
+    // The passive ending cards were redistributed into Chapter 1 micro-lessons.
+    for (const moved of ['score_tracker', 'fortify', 'guard', 'night_warning', 'multi_select', 'survivor_intro', 'ghost_arrow']) {
+      assert.equal(TUTORIAL_STEPS.findIndex(s => s.id === moved), -1, `${moved} removed from prologue`);
+    }
   });
 
   test('auto-trigger steps are watch_r1, watch_r2, watch_r3, watch_r4 only', () => {
@@ -347,6 +360,25 @@ describe('TUTORIAL_STEPS', () => {
   test('combat_formula does not say "d6"', () => {
     const step = TUTORIAL_STEPS.find(s => s.id === 'combat_formula');
     assert.ok(!step.body.includes('d6'), 'should not reference d6');
+  });
+
+  test('combat steps never mention damage numbers (damage system is tuned separately)', () => {
+    for (const id of ['combat_intro', 'combat_formula', 'submit_fight', 'watch_r2']) {
+      const step = TUTORIAL_STEPS.find(s => s.id === id);
+      assert.ok(!/\d+\s*damage|damage\s*\d+/i.test(step.body),
+        `${id} must describe hit/crush/counter outcomes, not damage numbers`);
+    }
+  });
+
+  test('combat_intro tells the player to select the hero first', () => {
+    const step = TUTORIAL_STEPS.find(s => s.id === 'combat_intro');
+    assert.ok(/select your .*hero/i.test(step.body), 'hero is not auto-selected in tutorial mode');
+  });
+
+  test('combat_formula calls out the ally/gang-up advantage', () => {
+    const step = TUTORIAL_STEPS.find(s => s.id === 'combat_formula');
+    assert.ok(/all(y|ies)/i.test(step.body), 'mentions allies');
+    assert.ok(/outnumbered|gang up/i.test(step.body), 'warns against outnumbered fights');
   });
 });
 
@@ -370,16 +402,16 @@ describe('MissionConductor logic (no DOM)', () => {
     const combatIdx  = TUTORIAL_STEPS.findIndex(s => s.id === 'combat_intro');
     const r2Idx      = TUTORIAL_STEPS.findIndex(s => s.id === 'watch_r2');
     const dayNight   = TUTORIAL_STEPS.findIndex(s => s.id === 'day_night');
-    const survivorIn = TUTORIAL_STEPS.findIndex(s => s.id === 'survivor_intro');
+    const moveHouse  = TUTORIAL_STEPS.findIndex(s => s.id === 'move_to_house');
     const r3Idx      = TUTORIAL_STEPS.findIndex(s => s.id === 'watch_r3');
-    const multiSel   = TUTORIAL_STEPS.findIndex(s => s.id === 'multi_select');
+    const selSurv    = TUTORIAL_STEPS.findIndex(s => s.id === 'select_survivor');
     assert.ok(r1Idx      >= 0, 'watch_r1 step found');
     assert.ok(combatIdx  > r1Idx,      'combat_intro comes after watch_r1');
     assert.ok(r2Idx      > combatIdx,  'watch_r2 comes after combat_intro');
     assert.ok(dayNight   > r2Idx,      'day_night comes after watch_r2');
-    assert.ok(survivorIn > dayNight,   'survivor_intro comes after day_night');
-    assert.ok(r3Idx      > survivorIn, 'watch_r3 comes after survivor_intro');
-    assert.ok(multiSel   > r3Idx,      'multi_select comes after watch_r3');
+    assert.ok(moveHouse  > dayNight,   'move_to_house comes after day_night');
+    assert.ok(r3Idx      > moveHouse,  'watch_r3 comes after move_to_house');
+    assert.ok(selSurv    > r3Idx,      'select_survivor comes after watch_r3');
   });
 
   test('getWitchPlan returns [] when round 0 and submit_plan step has witchPlan:[]', () => {
@@ -472,9 +504,12 @@ describe('TUTORIAL_CONDUCTOR_CONFIG', () => {
   test('roundStepMap maps rounds 1-4 to known step IDs', () => {
     const map = TUTORIAL_CONDUCTOR_CONFIG.roundStepMap;
     assert.equal(map[1], 'combat_intro');
-    assert.equal(map[2], 'survivor_intro');
-    assert.equal(map[3], 'night_warning');
+    assert.equal(map[2], 'move_to_house');
+    assert.equal(map[3], 'select_survivor');
     assert.equal(map[4], 'node_discovered');
+    for (const id of Object.values(map)) {
+      assert.ok(TUTORIAL_STEPS.some(s => s.id === id), `step "${id}" exists`);
+    }
   });
 
   test('forcedDice entry for round 1 matches TUTORIAL_FORCED_DICE', () => {
@@ -501,44 +536,49 @@ describe('TUTORIAL_CONDUCTOR_CONFIG', () => {
   });
 });
 
-// ── Prologue campaign definition ─────────────────────────────────────────────
+// ── Tutorial as Chapter 1's first mission ────────────────────────────────────
 
-describe('Prologue campaign', async () => {
+describe('Tutorial folded into Chapter 1', async () => {
   // The tutorial mission def is data-driven (src/campaign/missions/tutorial.json)
-  // and registered into the campaign shell by campaign-registry.js at init, so we
-  // source the populated campaign through the registry rather than the bare shell.
+  // and is now the FIRST mission of Caleb's Hollow Chapter 1 (it used to be its
+  // own one-mission `prologue` campaign). Source the populated chapter through
+  // the registry rather than the bare shell.
   const { getCampaignById } = await import('../src/campaign/campaign-registry.js');
-  const prologue = getCampaignById('prologue');
+  const chapter1 = getCampaignById('calebs_hollow_prologue');
 
-  test('has expected campaign shape', () => {
-    assert.equal(prologue.id, 'prologue');
-    assert.equal(prologue.title, 'Prologue (Tutorial)');
-    assert.equal(prologue.prerequisiteCampaign, null);
-    assert.equal(prologue.firstMission, 'tutorial');
+  test('the standalone prologue campaign is retired', () => {
+    assert.equal(getCampaignById('prologue'), null);
   });
 
-  test('has exactly one mission', () => {
-    assert.equal(prologue.missions.length, 1);
-    assert.equal(prologue.missions[0].id, 'tutorial');
+  test('Chapter 1 opens on the tutorial', () => {
+    assert.equal(chapter1.firstMission, 'tutorial');
+    assert.equal(chapter1.missions[0].id, 'tutorial');
+    assert.equal(chapter1.missions[0].isTutorial, true);
   });
 
-  test('mission has conductorSteps and conductorConfig', () => {
-    const m = prologue.missions[0];
+  test('tutorial mission has conductorSteps and conductorConfig', () => {
+    const m = chapter1.missions[0];
     assert.ok(Array.isArray(m.conductorSteps), 'conductorSteps is an array');
     assert.ok(m.conductorConfig, 'conductorConfig exists');
     assert.ok(m.conductorConfig.roundStepMap, 'conductorConfig has roundStepMap');
   });
 
-  test('mission uses tutorial waves', () => {
-    const m = prologue.missions[0];
+  test('tutorial mission uses tutorial waves', () => {
+    const m = chapter1.missions[0];
     assert.ok(Array.isArray(m.waves), 'waves is an array');
     assert.equal(m.waves.length, 1);
   });
 
-  test('mission has conductor_complete objective', () => {
-    const m = prologue.missions[0];
+  test('tutorial mission has conductor_complete objective', () => {
+    const m = chapter1.missions[0];
     assert.equal(m.objectives.win.type, 'conductor_complete');
     assert.equal(m.objectives.lose, null);
+  });
+
+  test('The Awakening now requires the tutorial', () => {
+    const awakening = chapter1.missions.find(m => m.id === 'prologue');
+    assert.ok(awakening, 'The Awakening (prologue) is part of Chapter 1');
+    assert.deepEqual(awakening.requires, ['tutorial']);
   });
 });
 
@@ -563,5 +603,289 @@ describe('GameState.gameOver is computed from winner', () => {
     const mapData = buildTutorialMap();
     const state = new GameState(false, false, 'tutorial', null, mapData);
     assert.throws(() => { state.gameOver = true; }, TypeError);
+  });
+});
+
+// ── Step lint: terse, centered, arrowed (applies to tutorial + all hint scripts) ──
+//
+// Design rules from the tutorial rework:
+//   • bodies stay SHORT — concepts are taught by doing, not reading
+//   • blocking dialogs ('click'/'complete') are centered — corner dialogs
+//     don't get read (the conductor also force-centers them at runtime)
+//   • every action-gated step carries an arrow pointing at its target
+//   • element spotlight selectors must exist in index.html
+
+import { readFileSync } from 'node:fs';
+import { HINT_SCRIPTS } from '../src/campaign/hint-scripts.js';
+import { CONDUCTOR_SCRIPTS, resolveConductorScript } from '../src/campaign/conductor-scripts.js';
+import { areHintsSuppressed, markHintsSeen } from '../src/mission-conductor.js';
+
+const ALL_SCRIPTS = Object.entries(CONDUCTOR_SCRIPTS).map(([key, s]) => ({ key, ...s }));
+const MAX_BODY_CHARS = 230;
+
+describe('step lint (tutorial + hint scripts)', () => {
+  test('step ids are unique within each script', () => {
+    for (const { key, steps } of ALL_SCRIPTS) {
+      const ids = steps.map(s => s.id);
+      assert.equal(new Set(ids).size, ids.length, `${key}: duplicate step ids`);
+    }
+  });
+
+  test(`bodies are terse (≤ ${MAX_BODY_CHARS} chars)`, () => {
+    for (const { key, steps } of ALL_SCRIPTS) {
+      for (const s of steps) {
+        assert.ok(s.body.length <= MAX_BODY_CHARS,
+          `${key}/${s.id}: body is ${s.body.length} chars (max ${MAX_BODY_CHARS}) — teach by doing, not reading`);
+      }
+    }
+  });
+
+  test('blocking dialogs are centered', () => {
+    for (const { key, steps } of ALL_SCRIPTS) {
+      for (const s of steps) {
+        if (s.trigger === 'click' || s.trigger === 'complete') {
+          assert.equal(s.tooltipPos ?? 'center', 'center',
+            `${key}/${s.id}: blocking dialog must use tooltipPos 'center'`);
+        }
+      }
+    }
+  });
+
+  test('every action-gated step has an arrow pointing at its target', () => {
+    for (const { key, steps } of ALL_SCRIPTS) {
+      for (const s of steps) {
+        if (typeof s.trigger !== 'object' || !s.trigger?.type) continue;
+        // Hint-mode gated steps may be spotlight-free nudges; tutorial gated
+        // steps always direct the player somewhere specific.
+        if (!s.spotlight) {
+          assert.ok(key !== 'tutorial', `tutorial/${s.id}: gated step needs a spotlight`);
+          continue;
+        }
+        assert.ok(['up', 'down', 'left', 'right'].includes(s.spotlight.arrow),
+          `${key}/${s.id}: action-gated step needs a spotlight arrow`);
+      }
+    }
+  });
+
+  test('element spotlight selectors exist in index.html', () => {
+    const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+    for (const { key, steps } of ALL_SCRIPTS) {
+      for (const s of steps) {
+        if (s.spotlight?.type !== 'element') continue;
+        const sel = s.spotlight.selector;
+        if (sel.startsWith('#')) {
+          assert.ok(html.includes(`id="${sel.slice(1)}"`),
+            `${key}/${s.id}: selector ${sel} not found in index.html`);
+        }
+      }
+    }
+  });
+});
+
+// ── Hint scripts registry ─────────────────────────────────────────────────────
+
+describe('HINT_SCRIPTS', () => {
+  test('covers Ch1 missions 1–6', () => {
+    assert.deepEqual(Object.keys(HINT_SCRIPTS).sort(),
+      ['ch1m1', 'ch1m2', 'ch1m3', 'ch1m4', 'ch1m5', 'ch1m6']);
+  });
+
+  test('all hint configs use hints mode', () => {
+    for (const [key, { config }] of Object.entries(HINT_SCRIPTS)) {
+      assert.equal(config.mode, 'hints', `${key} must be a hints-mode script`);
+    }
+  });
+
+  test('hint scripts resolve through the conductor-script registry', () => {
+    for (const key of Object.keys(HINT_SCRIPTS)) {
+      assert.ok(resolveConductorScript(key), `${key} resolves`);
+    }
+  });
+
+  test('roundStepMap entries point at real steps', () => {
+    for (const [key, { steps, config }] of Object.entries(HINT_SCRIPTS)) {
+      for (const id of Object.values(config.roundStepMap ?? {})) {
+        assert.ok(steps.some(s => s.id === id), `${key}: roundStepMap step "${id}" exists`);
+      }
+    }
+  });
+
+  test('steps not in a roundStepMap have a when() predicate (or are unreachable)', () => {
+    for (const [key, { steps, config }] of Object.entries(HINT_SCRIPTS)) {
+      const anchored = new Set(Object.values(config.roundStepMap ?? {}));
+      for (const s of steps) {
+        assert.ok(anchored.has(s.id) || typeof s.when === 'function',
+          `${key}/${s.id}: needs a roundStepMap anchor or a when() predicate`);
+      }
+    }
+  });
+});
+
+// ── MissionConductor hints mode (DOM stubbed) ────────────────────────────────
+
+function _makeConductor(steps, config, stateOverrides = {}) {
+  const prevDoc = globalThis.document;
+  globalThis.document = { getElementById: () => null, querySelector: () => null };
+  const ui = { tutorialClickBlocked: false, tutorialSubmitBlocked: false };
+  const state = { round: 1, entities: [], ...stateOverrides };
+  let conductor;
+  try {
+    conductor = new MissionConductor(state, ui, {}, null, steps, config);
+  } finally {
+    globalThis.document = prevDoc;
+  }
+  return { conductor, ui, state };
+}
+
+describe('MissionConductor hints mode', () => {
+  const STEPS = [
+    { id: 'h1', title: 'A', body: 'a', trigger: 'click', spotlight: null, tooltipPos: 'center' },
+    { id: 'h2', title: 'B', body: 'b', trigger: { type: 'action_queued', actionType: PlanActionType.GUARD }, spotlight: null, tooltipPos: 'bottom-left' },
+    { id: 'h3', title: 'C', body: 'c', trigger: 'click', spotlight: null, tooltipPos: 'center',
+      when: (s) => s.flag === true },
+  ];
+  const CONFIG = { mode: 'hints', roundStepMap: { 1: 'h1', 2: 'h2' } };
+
+  test('never blocks submission or map clicks', () => {
+    const { conductor, ui } = _makeConductor(STEPS, CONFIG);
+    conductor.onPlanningPhaseStart();
+    assert.equal(conductor.currentStepId, 'h1');
+    assert.equal(conductor.canSubmitPlan(), true);
+    assert.equal(ui.tutorialClickBlocked, false);
+    assert.equal(ui.tutorialSubmitBlocked, false);
+  });
+
+  test('shouldPlan is always true (conductor never owns the planning loop)', () => {
+    const { conductor } = _makeConductor(STEPS, { ...CONFIG, maxPlanningRounds: 1 });
+    conductor.onResolutionComplete();
+    conductor.onResolutionComplete();
+    assert.equal(conductor.shouldPlan(), true);
+  });
+
+  test('round-anchored hint shows once and never re-shows', () => {
+    const { conductor, state } = _makeConductor(STEPS, CONFIG);
+    conductor.onPlanningPhaseStart();
+    assert.equal(conductor.currentStepId, 'h1');
+    conductor.onPlanSubmitted();                 // dismissed without advancing
+    assert.equal(conductor.currentStepId, null);
+    conductor.onPlanningPhaseStart();            // still round 1 — already shown
+    assert.equal(conductor.currentStepId, null);
+    state.round = 2;
+    conductor.onPlanningPhaseStart();
+    assert.equal(conductor.currentStepId, 'h2');
+  });
+
+  test('gated hint dismisses when the action is queued (not advance)', () => {
+    const { conductor, state } = _makeConductor(STEPS, CONFIG);
+    state.round = 2;
+    conductor.onPlanningPhaseStart();
+    assert.equal(conductor.currentStepId, 'h2');
+    conductor.onActionQueued({ type: PlanActionType.GUARD });
+    assert.equal(conductor.currentStepId, null, 'dismissed, not advanced to h3');
+  });
+
+  test('when() predicate hint fires once its condition is true', () => {
+    const { conductor, state } = _makeConductor(STEPS, CONFIG);
+    state.round = 99;                            // no round anchor
+    conductor.onPlanningPhaseStart();
+    assert.equal(conductor.currentStepId, null);
+    state.flag = true;
+    conductor.onPlanningPhaseStart();
+    assert.equal(conductor.currentStepId, 'h3');
+  });
+
+  test('a throwing when() predicate never breaks planning', () => {
+    const steps = [{ id: 'boom', title: 'X', body: 'x', trigger: 'click', when: () => { throw new Error('boom'); } }];
+    const { conductor } = _makeConductor(steps, { mode: 'hints' });
+    assert.doesNotThrow(() => conductor.onPlanningPhaseStart());
+    assert.equal(conductor.currentStepId, null);
+  });
+
+  test('start() is a no-op in hints mode (hints wait for planning)', () => {
+    const { conductor } = _makeConductor(STEPS, CONFIG);
+    conductor.start();
+    assert.equal(conductor.currentStepId, null);
+  });
+});
+
+describe('MissionConductor scripted mode — optional steps and entityType gating', () => {
+  test('non-optional gated step blocks submission; optional does not', () => {
+    const steps = [
+      { id: 'a', title: 'A', body: 'a', trigger: { type: 'action_queued', actionType: PlanActionType.MOVE } },
+      { id: 'b', title: 'B', body: 'b', trigger: { type: 'action_queued', actionType: PlanActionType.MOVE }, optional: true },
+    ];
+    const { conductor, ui } = _makeConductor(steps, {});
+    conductor.start();
+    assert.equal(conductor.canSubmitPlan(), false);
+    assert.equal(ui.tutorialSubmitBlocked, true);
+    conductor.onActionQueued({ type: PlanActionType.MOVE });
+    assert.equal(conductor.currentStepId, 'b');
+    assert.equal(conductor.canSubmitPlan(), true, 'optional step never gates submit');
+    assert.equal(ui.tutorialSubmitBlocked, false);
+  });
+
+  test('action_queued entityType filter only matches the right unit type', () => {
+    const steps = [
+      { id: 'a', title: 'A', body: 'a',
+        trigger: { type: 'action_queued', actionType: PlanActionType.MOVE, entityType: EntityType.SURVIVOR } },
+      { id: 'b', title: 'B', body: 'b', trigger: 'click' },
+    ];
+    const entities = [
+      { id: 1, type: EntityType.HERO },
+      { id: 2, type: EntityType.SURVIVOR },
+    ];
+    const { conductor } = _makeConductor(steps, {}, { entities });
+    conductor.start();
+    conductor.onActionQueued({ type: PlanActionType.MOVE, entityId: 1 });
+    assert.equal(conductor.currentStepId, 'a', 'hero move does not advance');
+    conductor.onActionQueued({ type: PlanActionType.MOVE, entityId: 2 });
+    assert.equal(conductor.currentStepId, 'b', 'survivor move advances');
+  });
+});
+
+// ── Hint suppression (localStorage) ──────────────────────────────────────────
+
+describe('hint suppression', () => {
+  test('markHintsSeen → areHintsSuppressed round-trip (and missing storage is safe)', () => {
+    const prev = globalThis.localStorage;
+    const store = new Map();
+    globalThis.localStorage = {
+      getItem: (k) => store.get(k) ?? null,
+      setItem: (k, v) => store.set(k, String(v)),
+    };
+    try {
+      assert.equal(areHintsSuppressed('gathering_survivors'), false);
+      markHintsSeen('gathering_survivors');
+      assert.equal(areHintsSuppressed('gathering_survivors'), true);
+      assert.equal(areHintsSuppressed('first_night'), false, 'per-mission key');
+    } finally {
+      if (prev === undefined) delete globalThis.localStorage;
+      else globalThis.localStorage = prev;
+    }
+    // Without localStorage at all, both helpers are silent no-ops.
+    assert.doesNotThrow(() => { markHintsSeen('x'); areHintsSuppressed('x'); });
+  });
+});
+
+// ── Voiceover manifest stays in sync with step text ──────────────────────────
+
+describe('voiceover manifest', () => {
+  test('manifest matches the generator clip index (regenerate with scripts/generate-voiceover.mjs)', async () => {
+    const { existsSync } = await import('node:fs');
+    const manifestUrl = new URL('../assets/voice/manifest.json', import.meta.url);
+    if (!existsSync(manifestUrl)) return; // no clips generated yet — nothing to drift
+    // buildClipIndex is the single source of truth the generator writes from —
+    // covers tutorial + hint steps AND every campaign conversation line.
+    const { buildClipIndex } = await import('../scripts/generate-voiceover.mjs');
+    const index = buildClipIndex();
+    const manifest = JSON.parse(readFileSync(manifestUrl, 'utf8'));
+    for (const [id, entry] of Object.entries(manifest)) {
+      const want = index.get(id);
+      assert.ok(want, `manifest entry "${id}" has no matching narration — delete the stale clip`);
+      assert.equal(entry.hash, want.hash,
+        `narration for "${id}" is stale — re-run scripts/generate-voiceover.mjs`);
+      assert.equal(entry.voice, want.voiceKey,
+        `voice for "${id}" changed — re-run scripts/generate-voiceover.mjs`);
+    }
   });
 });
