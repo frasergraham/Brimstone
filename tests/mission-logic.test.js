@@ -419,6 +419,142 @@ describe('mission-logic / determinism + serialization', () => {
   });
 });
 
+describe('mission-logic / completion count node', () => {
+  // A graph that pulls completionCount.count into a Compare(>= threshold) → Branch,
+  // and spawns a SCALED wave on the True path and a base wave on False. This is the
+  // "downstream Sim node consumes the count" smoke test: the count gates how big
+  // the spawn is — exactly the "scale the final mission by sidequests done" use case.
+  function scaledSpawnGraph(threshold, listMissions) {
+    return g(
+      [
+        { id: 'start', type: 'onMissionStart' },
+        { id: 'cc', type: 'completionCount', params: { missions: listMissions } },
+        { id: 'thr', type: 'getGameState', params: { field: 'threshold' } },
+        { id: 'cmp', type: 'compare', params: { op: '>=' } },
+        { id: 'br', type: 'branch', params: {} },
+        { id: 'big', type: 'spawnUnits', params: { units: [{ type: 'zombie' }, { type: 'zombie' }, { type: 'zombie' }] } },
+        { id: 'small', type: 'spawnUnits', params: { units: [{ type: 'zombie' }] } },
+      ],
+      [
+        exec('start', 'out', 'br'),
+        data('cc', 'count', 'cmp', 'a'),
+        data('thr', 'value', 'cmp', 'b'),
+        data('cmp', 'result', 'br', 'cond'),
+        exec('br', 'true', 'big'),
+        exec('br', 'false', 'small'),
+      ],
+    );
+  }
+  // count missions completed among a listed set; wired into a Branch's True path.
+  function countToWinGraph(listMissions, threshold) {
+    return g(
+      [
+        { id: 'start', type: 'onMissionStart' },
+        { id: 'cc', type: 'completionCount', params: { missions: listMissions } },
+        { id: 'thr', type: 'getGameState', params: { field: 'threshold' } },
+        { id: 'cmp', type: 'compare', params: { op: '>=' } },
+        { id: 'br', type: 'branch', params: {} },
+        { id: 'win', type: 'winMission', params: { winner: 'hero', reason: 'enough done' } },
+      ],
+      [
+        exec('start', 'out', 'br'),
+        data('cc', 'count', 'cmp', 'a'),
+        data('thr', 'value', 'cmp', 'b'),
+        data('cmp', 'result', 'br', 'cond'),
+        exec('br', 'true', 'win'),
+      ],
+    );
+  }
+
+  const LIST = ['side_a', 'side_b', 'side_c'];
+
+  test('0 of the listed missions completed → count 0', () => {
+    const ctx = makeTestContext({ completedMissions: [], state: { threshold: 1 } });
+    new MissionLogicEngine(countToWinGraph(LIST, 1), ctx).dispatch('missionStart');
+    assert.equal(emitsOfKind(ctx, 'win').length, 0, 'count 0 < 1 → no win');
+  });
+
+  test('partial completion → count is the size of the intersection', () => {
+    // 2 of the 3 listed are done; threshold 2 → fires; threshold 3 → does not.
+    const done = ['side_a', 'side_c', 'unrelated_main_mission'];
+    const ctxMet = makeTestContext({ completedMissions: done, state: { threshold: 2 } });
+    new MissionLogicEngine(countToWinGraph(LIST, 2), ctxMet).dispatch('missionStart');
+    assert.equal(emitsOfKind(ctxMet, 'win').length, 1, 'count 2 >= 2 → win');
+
+    const ctxUnmet = makeTestContext({ completedMissions: done, state: { threshold: 3 } });
+    new MissionLogicEngine(countToWinGraph(LIST, 3), ctxUnmet).dispatch('missionStart');
+    assert.equal(emitsOfKind(ctxUnmet, 'win').length, 0, 'count 2 < 3 → no win');
+  });
+
+  test('all listed missions completed → count equals the list size', () => {
+    const ctx = makeTestContext({ completedMissions: [...LIST], state: { threshold: 3 } });
+    new MissionLogicEngine(countToWinGraph(LIST, 3), ctx).dispatch('missionStart');
+    assert.equal(emitsOfKind(ctx, 'win').length, 1, 'count 3 >= 3 → win');
+  });
+
+  test('a listed mission id not in the campaign contributes 0 (ignored)', () => {
+    // The list references a typo'd / non-existent id; only the real one is done.
+    const ctx = makeTestContext({ completedMissions: ['side_a'], state: { threshold: 2 } });
+    const graph = countToWinGraph(['side_a', 'does_not_exist'], 2);
+    new MissionLogicEngine(graph, ctx).dispatch('missionStart');
+    assert.equal(emitsOfKind(ctx, 'win').length, 0, 'only side_a counts → 1 < 2 → no win');
+
+    // Drop the threshold to 1 and the single real completion is enough.
+    const ctx1 = makeTestContext({ completedMissions: ['side_a'], state: { threshold: 1 } });
+    new MissionLogicEngine(countToWinGraph(['side_a', 'does_not_exist'], 1), ctx1).dispatch('missionStart');
+    assert.equal(emitsOfKind(ctx1, 'win').length, 1);
+  });
+
+  test('duplicate ids in the list are counted once (deduped)', () => {
+    // ['side_a','side_a'] with side_a done must read as count 1, not 2.
+    const ctx = makeTestContext({ completedMissions: ['side_a'], state: { threshold: 2 } });
+    new MissionLogicEngine(countToWinGraph(['side_a', 'side_a'], 2), ctx).dispatch('missionStart');
+    assert.equal(emitsOfKind(ctx, 'win').length, 0, 'deduped count 1 < 2 → no win');
+  });
+
+  test('empty/missing list counts ALL completed missions', () => {
+    const done = ['m1', 'm2', 'm3', 'm4'];
+    const ctxEmpty = makeTestContext({ completedMissions: done, state: { threshold: 4 } });
+    new MissionLogicEngine(countToWinGraph([], 4), ctxEmpty).dispatch('missionStart');
+    assert.equal(emitsOfKind(ctxEmpty, 'win').length, 1, 'count-all = 4 >= 4 → win');
+
+    // Same with the `missions` param entirely absent.
+    const graph = countToWinGraph(undefined, 5);
+    const ctxAbsent = makeTestContext({ completedMissions: done, state: { threshold: 5 } });
+    new MissionLogicEngine(graph, ctxAbsent).dispatch('missionStart');
+    assert.equal(emitsOfKind(ctxAbsent, 'win').length, 0, 'count-all = 4 < 5 → no win');
+  });
+
+  test('downstream Spawn Units scales with the completion count', () => {
+    // Threshold 2: with 2 sidequests done the BIG wave (×3) spawns; with 1 done the
+    // base wave (×1) spawns. Genuine downstream consumption through the real engine.
+    const ctxBig = makeTestContext({ completedMissions: ['side_a', 'side_b'], state: { threshold: 2 } });
+    new MissionLogicEngine(scaledSpawnGraph(2, LIST), ctxBig).dispatch('missionStart');
+    assert.equal(emitsOfKind(ctxBig, 'spawn').length, 3, '2 done → scaled-up wave of 3');
+
+    const ctxSmall = makeTestContext({ completedMissions: ['side_a'], state: { threshold: 2 } });
+    new MissionLogicEngine(scaledSpawnGraph(2, LIST), ctxSmall).dispatch('missionStart');
+    assert.equal(emitsOfKind(ctxSmall, 'spawn').length, 1, '1 done → base wave of 1');
+  });
+
+  test('count is deterministic — identical inputs → identical stream', () => {
+    const run = () => {
+      const ctx = makeTestContext({ completedMissions: ['side_a', 'side_b'], state: { threshold: 2 } });
+      new MissionLogicEngine(scaledSpawnGraph(2, LIST), ctx).dispatch('missionStart');
+      return ctx._emitted;
+    };
+    assert.deepEqual(run(), run());
+  });
+
+  test('a context without getCompletedMissions reads as 0 (safe default)', () => {
+    // Simulate a non-campaign context: strip the getter and confirm count 0.
+    const ctx = makeTestContext({ state: { threshold: 1 } });
+    delete ctx.getCompletedMissions;
+    new MissionLogicEngine(countToWinGraph(LIST, 1), ctx).dispatch('missionStart');
+    assert.equal(emitsOfKind(ctx, 'win').length, 0);
+  });
+});
+
 describe('mission-logic / node registry sanity', () => {
   test('every registered node declares a known kind', () => {
     const kinds = new Set(Object.values(NodeKind));

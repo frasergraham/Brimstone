@@ -66,6 +66,7 @@ export const NODE_PARAM_FIELDS = {
   getGameState: [{ key: 'field', label: 'State field', kind: 'select', options: STATE_FIELDS }],
   getEntityProperty: [{ key: 'prop', label: 'Property', kind: 'select', options: ENTITY_PROPS }],
   conditionNamed: [{ key: 'name', label: 'Condition', kind: 'select', options: 'conditions' }],
+  completionCount: [{ key: 'missions', label: 'Missions to count (empty = all completed)', kind: 'stringList', addLabel: 'mission' }],
   spawnUnits: [{ key: 'units', label: 'Units to spawn', kind: 'unitList' }],
   despawnUnit: [{ key: 'npc', label: 'NPC id (choreography)', kind: 'text' }, { key: 'id', label: 'Entity id (direct)', kind: 'text' }],
   moveUnit: [{ key: 'npc', label: 'NPC id', kind: 'text' }, { key: 'path', label: 'Path (hexes)', kind: 'hexList' }],
@@ -344,7 +345,7 @@ function stringListControl(params, field, ctx) {
       row.append(inp, xButton(doc, () => { list.splice(i, 1); rebuild(); ctx.onChange(); }));
       box.append(row);
     });
-    const add = elc(doc, 'button', 'pf-add', '+ role'); add.type = 'button';
+    const add = elc(doc, 'button', 'pf-add', `+ ${field.addLabel ?? 'role'}`); add.type = 'button';
     add.addEventListener('click', () => { list.push(''); rebuild(); ctx.onChange(); });
     box.append(add);
   };

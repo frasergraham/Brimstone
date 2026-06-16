@@ -23,9 +23,10 @@ import { applyLevel } from '../entities.js';
  * @param {(event:object)=>void} opts.emit - presentation sink.
  * @param {(key:string,value:any)=>void} [opts.setFlag] - campaign/story flag write.
  * @param {(key:string)=>any} [opts.getFlag] - campaign/story flag read.
+ * @param {()=>string[]} [opts.getCompletedMissions] - campaign mission ids done.
  * @param {()=>number} [opts.random] - seeded RNG in [0,1).
  */
-export function createGameContext(state, { createEnemyFn, emit, setFlag, getFlag, random } = {}) {
+export function createGameContext(state, { createEnemyFn, emit, setFlag, getFlag, getCompletedMissions, random } = {}) {
   // Memoize single-spec victory delegates so repeated polling is cheap.
   const delegateCache = new Map();
   const delegateFor = (spec, side) => {
@@ -42,6 +43,10 @@ export function createGameContext(state, { createEnemyFn, emit, setFlag, getFlag
     entitiesAt: (col, row) => state.entities.filter((e) => e.alive && e.col === col && e.row === row),
     getHero: () => state.hero,
     getFlag: (key) => (getFlag ? getFlag(key) : undefined),
+    // Read-only view of campaign progress for the Completion Count node. The
+    // completed-missions set lives on the Campaign (not GameState), so the
+    // orchestrator passes a getter — the engine never reaches into globals.
+    getCompletedMissions: () => (getCompletedMissions ? getCompletedMissions() : []),
     random: () => (random ? random() : Math.random()),
 
     // ── sim mutations (through the real game spawn path) ───────────────────────

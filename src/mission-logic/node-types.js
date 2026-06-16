@@ -373,6 +373,40 @@ registerNodeType({
   },
 });
 
+// Completion Count — read how many campaign missions are completed, as data.
+// PURE (no exec, no mutation): a deterministic read of the authority's campaign
+// progress through ctx.getCompletedMissions(), pulled when a downstream consumer
+// reads it. Use case: scale the final mission's enemy strength by how many
+// optional sidequests the player finished — wire `count` into a Compare/Branch
+// that gates a bigger Spawn Units wave (see docs/09 §3 Sim/Show split — this is on
+// the logic side, like Get Game State / Condition).
+registerNodeType({
+  type: 'completionCount',
+  kind: NodeKind.PURE,
+  // `count`: how many of the listed missions are completed.
+  // `total`: how many distinct missions were considered (the denominator for
+  //          percent-style scaling downstream).
+  data: { out: [{ name: 'count', type: 'int' }, { name: 'total', type: 'int' }] },
+  // params.missions: string[] of campaign mission ids to count over. A non-empty
+  // list counts how many of THOSE are completed (ids not in the campaign simply
+  // aren't completed → they contribute 0). An empty/missing list counts ALL
+  // completed missions (count === total in that mode).
+  compute: (api) => {
+    const completed = api.ctx.getCompletedMissions?.() ?? [];
+    const completedSet = completed instanceof Set ? completed : new Set(completed);
+    // Dedupe + drop blank entries so duplicates can't inflate count/total.
+    const listed = new Set(
+      (api.param('missions', []) ?? []).filter((id) => typeof id === 'string' && id !== ''));
+    if (listed.size > 0) {
+      let count = 0;
+      for (const id of listed) if (completedSet.has(id)) count++;
+      return { count, total: listed.size };
+    }
+    // No explicit list → count every completed mission.
+    return { count: completedSet.size, total: completedSet.size };
+  },
+});
+
 // ════════════════════════════ SIM nodes ═════════════════════════════════════
 
 registerNodeType({

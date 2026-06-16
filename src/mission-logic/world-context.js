@@ -14,6 +14,7 @@
 //   getEntity(id)               → entity | undefined
 //   entitiesAt(col, row)        → entity[]
 //   getHero()                   → the hero leader entity | undefined
+//   getCompletedMissions()      → string[] (campaign mission ids completed so far)
 //   spawnUnit(spec)             → entity  (SIM — resolves spawnAt, applies level)
 //   despawnUnit(id)             → void    (SIM)
 //   setOutcome(winner, reason)  → void    (SIM — declares win/lose)
@@ -36,6 +37,7 @@
  * @param {object} [seed.state]      - snapshot returned by getState()
  * @param {object[]} [seed.entities] - initial entities ({ id, faction|owner, type, col, row, … })
  * @param {object} [seed.flags]      - initial flags
+ * @param {string[]} [seed.completedMissions] - campaign mission ids marked done
  * @param {(spec:object)=>boolean} [seed.objectives] - evaluateObjective impl
  * @param {()=>number} [seed.rng]    - deterministic RNG (defaults to a fixed LCG)
  */
@@ -43,6 +45,7 @@ export function makeTestContext(seed = {}) {
   const state = { round: 1, phase: 'dawn', heroKills: 0, witchKills: 0, ...(seed.state ?? {}) };
   const entities = new Map((seed.entities ?? []).map((e) => [e.id, e]));
   const flags = { ...(seed.flags ?? {}) };
+  const completedMissions = [...(seed.completedMissions ?? [])];
   const emitted = [];
   const mutations = [];
   let spawnSeq = 0;
@@ -62,6 +65,7 @@ export function makeTestContext(seed = {}) {
     // context uses GameState.hero) — avoids a faction string-literal in the stub.
     getHero: () => [...entities.values()].find((e) => e.isHeroLeader),
     getFlag: (key) => flags[key],
+    getCompletedMissions: () => [...completedMissions],
     random: () => rng(),
 
     // sim mutations

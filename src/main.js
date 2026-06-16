@@ -4355,6 +4355,7 @@ function _attachMissionLogic(state, missionDef) {
     emit: (event) => state.logicPresentation.push(event),
     setFlag: (key, value) => { if (_activeCampaign) _activeCampaign.storyFlags[key] = value; },
     getFlag: (key) => _activeCampaign?.storyFlags?.[key],
+    getCompletedMissions: () => (_activeCampaign ? [..._activeCampaign.completedMissions] : []),
     random: () => Math.random(),
   });
   const engine = new MissionLogicEngine(missionDef.logic, ctx);

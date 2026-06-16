@@ -33,6 +33,7 @@ export const PIN_DOCS = Object.freeze({
   getGameState: { out: { value: 'The chosen game-state field (round, phase, kills…).' } },
   getEntityProperty: { in: { entity: 'The unit to read from.' }, out: { value: 'The chosen property (hp, faction, alive…).' } },
   conditionNamed: { out: { result: 'The named condition predicate, evaluated now.' } },
+  completionCount: { out: { count: 'How many of the listed missions are completed (empty list = all completed missions).', total: 'How many distinct missions were considered — the denominator for percent scaling.' } },
   location: { out: { hex: 'A map {col,row} — wire into Spawn Units’ “at”, etc.' } },
   survivor: { out: { id: 'The survivor’s id — wire into an On Actor node’s “ref” (and a conversation participant).', hex: 'The survivor’s {col,row}.' } },
 
@@ -73,6 +74,7 @@ export const NODE_DOCS = Object.freeze({
   getGameState: 'Read a game-state field (round, phase, kills…).',
   getEntityProperty: 'Read a property of a unit (hp, faction, alive…).',
   conditionNamed: 'Evaluate a named condition predicate now.',
+  completionCount: 'Count completed campaign missions (e.g. scale a final wave by sidequests done).',
   location: 'A map hex as data — wire into Spawn Units’ “at”, etc.',
   survivor: 'A placed survivor as data (id + hex) — wire id into an On Actor’s ref.',
   spawnUnits: 'Spawn one or more units (type, position, overrides, level).',
