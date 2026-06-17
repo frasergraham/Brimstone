@@ -353,3 +353,266 @@ describe('resolver — SENT_TO routing & parity', () => {
     assert.ok(fail, 'expected ACTION_FAIL for an impossible SENT_TO');
   });
 });
+
+// ── SURVIVOR_RECEIVED — paired counterpart of SENT_TO ACTION_OK ─────────────
+
+describe('resolver — SURVIVOR_RECEIVED on recipient bucket', () => {
+  test('resolvePlansMP pushes a SURVIVOR_RECEIVED event into the destination owner\'s bucket', () => {
+    const { state, h1, h2 } = twoVTwoState();
+    const s = placeOwnedSurvivor(state, h1);
+    const plan = [{
+      type: PlanActionType.SENT_TO,
+      entityId: h1.id,
+      targetId: s.id,
+      destOwnerId: h2.ownerId,
+    }];
+    const steps = resolvePlansMP(state, [
+      { playerId: h1.ownerId, faction: 'hero',  plan },
+      { playerId: h2.ownerId, faction: 'hero',  plan: [] },
+      { playerId: state.witch.ownerId, faction: 'witch', plan: [] },
+    ]);
+
+    // There must be exactly one SURVIVOR_RECEIVED event, on h2's bucket.
+    const recvEntries = steps.flatMap(st =>
+      (st.playerEvents ?? []).flatMap(pe => pe.events.map(e => ({ ...e, _pe: pe }))),
+    ).filter(e => e.type === ResEventType.SURVIVOR_RECEIVED);
+    assert.equal(recvEntries.length, 1, 'expected exactly one SURVIVOR_RECEIVED event');
+    assert.equal(recvEntries[0]._pe.playerId, h2.ownerId,
+      'SURVIVOR_RECEIVED must land on the RECIPIENT bucket, not the sender');
+    assert.notEqual(recvEntries[0]._pe.playerId, h1.ownerId,
+      'SURVIVOR_RECEIVED must NOT land on the sender bucket');
+  });
+
+  test('SURVIVOR_RECEIVED carries the four claimed payload fields (plus destOwnerId)', () => {
+    const { state, h1, h2 } = twoVTwoState();
+    const s = placeOwnedSurvivor(state, h1);
+    const plan = [{
+      type: PlanActionType.SENT_TO,
+      entityId: h1.id,
+      targetId: s.id,
+      destOwnerId: h2.ownerId,
+    }];
+    const steps = resolvePlansMP(state, [
+      { playerId: h1.ownerId, faction: 'hero',  plan },
+      { playerId: h2.ownerId, faction: 'hero',  plan: [] },
+      { playerId: state.witch.ownerId, faction: 'witch', plan: [] },
+    ]);
+    const recv = steps.flatMap(st => (st.playerEvents ?? []).flatMap(pe => pe.events))
+      .find(e => e.type === ResEventType.SURVIVOR_RECEIVED);
+    assert.ok(recv, 'expected a SURVIVOR_RECEIVED event');
+    // The 4 claimed fields
+    assert.equal(recv.survivorId,    s.id);
+    assert.equal(recv.survivorName,  s.displayName);
+    assert.equal(recv.fromOwnerId,   h1.ownerId);
+    assert.equal(recv.fromOwnerName, h1.displayName);
+    // Plus destOwnerId so the digest builder can locate the recipient leader
+    // from the pre-step snapshot without consulting the post-step state.
+    assert.equal(recv.destOwnerId,   h2.ownerId);
+  });
+
+  test('SURVIVOR_RECEIVED creates a fresh bucket if the recipient had no actions', () => {
+    const { state, h1, h2 } = twoVTwoState();
+    const s = placeOwnedSurvivor(state, h1);
+    // h2 has an empty plan — so absent SENT_TO, h2 would have NO bucket in
+    // any step. The fan-out must synthesise one for the received card.
+    const plan = [{
+      type: PlanActionType.SENT_TO,
+      entityId: h1.id,
+      targetId: s.id,
+      destOwnerId: h2.ownerId,
+    }];
+    const steps = resolvePlansMP(state, [
+      { playerId: h1.ownerId, faction: 'hero',  plan },
+      { playerId: h2.ownerId, faction: 'hero',  plan: [] },
+      { playerId: state.witch.ownerId, faction: 'witch', plan: [] },
+    ]);
+    const h2Buckets = steps.flatMap(st => (st.playerEvents ?? [])).filter(
+      pe => pe.playerId === h2.ownerId
+    );
+    assert.ok(h2Buckets.length >= 1, 'h2 should have at least one bucket after SENT_TO');
+    const allH2Events = h2Buckets.flatMap(b => b.events);
+    const recv = allH2Events.find(e => e.type === ResEventType.SURVIVOR_RECEIVED);
+    assert.ok(recv, 'h2 bucket must carry the SURVIVOR_RECEIVED event');
+  });
+
+  test('multi-transfer in one step emits one SURVIVOR_RECEIVED per SENT_TO', () => {
+    const { state, h1, h2 } = twoVTwoState();
+    const sA = placeOwnedSurvivor(state, h1, 1, 0);
+    const sB = placeOwnedSurvivor(state, h1, -1, 0);
+    const plan = [
+      { type: PlanActionType.SENT_TO, entityId: h1.id, targetId: sA.id, destOwnerId: h2.ownerId },
+      { type: PlanActionType.SENT_TO, entityId: h1.id, targetId: sB.id, destOwnerId: h2.ownerId },
+    ];
+    const steps = resolvePlansMP(state, [
+      { playerId: h1.ownerId, faction: 'hero',  plan },
+      { playerId: h2.ownerId, faction: 'hero',  plan: [] },
+      { playerId: state.witch.ownerId, faction: 'witch', plan: [] },
+    ]);
+    const recvs = steps.flatMap(st => (st.playerEvents ?? []).flatMap(pe => pe.events))
+      .filter(e => e.type === ResEventType.SURVIVOR_RECEIVED);
+    assert.equal(recvs.length, 2);
+    assert.deepEqual(recvs.map(r => r.survivorId).sort(), [sA.id, sB.id].sort());
+  });
+
+  test('failed SENT_TO does NOT emit a SURVIVOR_RECEIVED', () => {
+    const { state, h1 } = twoVTwoState();
+    const s = placeOwnedSurvivor(state, h1);
+    // Send to self → fails
+    const plan = [{
+      type: PlanActionType.SENT_TO,
+      entityId: h1.id,
+      targetId: s.id,
+      destOwnerId: h1.ownerId,
+    }];
+    const steps = resolvePlansMP(state, [
+      { playerId: h1.ownerId, faction: 'hero',  plan },
+      { playerId: state.witch.ownerId, faction: 'witch', plan: [] },
+    ]);
+    const recvs = steps.flatMap(st => (st.playerEvents ?? []).flatMap(pe => pe.events))
+      .filter(e => e.type === ResEventType.SURVIVOR_RECEIVED);
+    assert.equal(recvs.length, 0, 'no recv event when SENT_TO fails');
+  });
+
+  test('legacy resolvePlans path emits SURVIVOR_RECEIVED on same-faction bucket', () => {
+    // Construct an offline-but-multi-leader scenario by adding a second hero
+    // and calling resolvePlans (legacy). SENT_TO will succeed on the legacy
+    // faction-bucket path; the received event must land alongside the sender's.
+    const { state, h1, h2 } = twoVTwoState();
+    const s = placeOwnedSurvivor(state, h1);
+    const heroPlan = [{
+      type: PlanActionType.SENT_TO,
+      entityId: h1.id,
+      targetId: s.id,
+      destOwnerId: h2.ownerId,
+    }];
+    const steps = resolvePlans(state, heroPlan, []);
+    const heroEvents = steps.flatMap(st => st.heroEvents ?? []);
+    const ok   = heroEvents.find(e => e.type === ResEventType.ACTION_OK
+      && e.action?.type === PlanActionType.SENT_TO);
+    const recv = heroEvents.find(e => e.type === ResEventType.SURVIVOR_RECEIVED);
+    assert.ok(ok,   'expected ACTION_OK for the SENT_TO');
+    assert.ok(recv, 'expected SURVIVOR_RECEIVED on the hero bucket');
+    assert.equal(recv.survivorId,    s.id);
+    assert.equal(recv.fromOwnerId,   h1.ownerId);
+    assert.equal(recv.fromOwnerName, h1.displayName);
+  });
+});
+
+// ── _serializeEvents allowlist parity (online wire) ─────────────────────────
+
+describe('_serializeEvents — SENT_TO + SURVIVOR_RECEIVED parity', () => {
+  test('SURVIVOR_RECEIVED preserves all payload fields on the wire', async () => {
+    const { serializeEventsForTest } = await import('../server/lobby.js');
+    const recv = {
+      type:          ResEventType.SURVIVOR_RECEIVED,
+      faction:       'hero',
+      survivorId:    'e42',
+      survivorName:  'Old Tom',
+      fromOwnerId:   'h1-uuid',
+      fromOwnerName: 'Anya',
+      destOwnerId:   'h2-uuid',
+    };
+    const [out] = serializeEventsForTest([recv]);
+    assert.equal(out.type,          ResEventType.SURVIVOR_RECEIVED);
+    assert.equal(out.faction,       'hero');
+    assert.equal(out.survivorId,    'e42');
+    assert.equal(out.survivorName,  'Old Tom');
+    assert.equal(out.fromOwnerId,   'h1-uuid');
+    assert.equal(out.fromOwnerName, 'Anya');
+    assert.equal(out.destOwnerId,   'h2-uuid');
+  });
+
+  test('SENT_TO ACTION_OK preserves the new result fields the sender card needs', async () => {
+    const { serializeEventsForTest } = await import('../server/lobby.js');
+    const ev = {
+      type:    ResEventType.ACTION_OK,
+      faction: 'hero',
+      action:  { type: PlanActionType.SENT_TO, entityId: 'e1', targetId: 'e42', destOwnerId: 'h2-uuid' },
+      result:  {
+        success:       true,
+        log:           ['Anya sends Old Tom to Bea.'],
+        cost:          0,
+        survivorId:    'e42',
+        survivorName:  'Old Tom',
+        fromOwnerId:   'h1-uuid',
+        fromOwnerName: 'Anya',
+        destOwnerId:   'h2-uuid',
+        destOwnerName: 'Bea',
+      },
+    };
+    const [out] = serializeEventsForTest([ev]);
+    assert.equal(out.result.cost,          0);
+    assert.equal(out.result.survivorId,    'e42');
+    assert.equal(out.result.survivorName,  'Old Tom');
+    assert.equal(out.result.fromOwnerId,   'h1-uuid');
+    assert.equal(out.result.fromOwnerName, 'Anya');
+    assert.equal(out.result.destOwnerId,   'h2-uuid');
+    assert.equal(out.result.destOwnerName, 'Bea');
+  });
+});
+
+// ── Replay timeline integration ─────────────────────────────────────────────
+
+describe('replay-timeline — SENT_TO sender + SURVIVOR_RECEIVED recipient cards', () => {
+  test('buildStepDigest emits a recipient entry with the receive note', async () => {
+    const { buildStepDigest } = await import('../src/replay-timeline.js');
+    const { state, h1, h2 } = twoVTwoState();
+    const s = placeOwnedSurvivor(state, h1);
+    const plan = [{
+      type: PlanActionType.SENT_TO,
+      entityId: h1.id,
+      targetId: s.id,
+      destOwnerId: h2.ownerId,
+    }];
+    const steps = resolvePlansMP(state, [
+      { playerId: h1.ownerId, faction: 'hero',  plan },
+      { playerId: h2.ownerId, faction: 'hero',  plan: [] },
+      { playerId: state.witch.ownerId, faction: 'witch', plan: [] },
+    ]);
+    const digest = buildStepDigest(steps, state.entities, {
+      isVisible: () => true,
+      PlanActionType, ResEventType,
+      viewerFaction: 'hero',
+    });
+    const allEntries = digest.flatMap(d => d.entries);
+    const recvEntry = allEntries.find(e => e.actionType === 'survivor-received');
+    assert.ok(recvEntry, 'expected a survivor-received digest entry');
+    assert.match(recvEntry.note?.text ?? '', /📥/);
+    assert.match(recvEntry.note?.text ?? '', new RegExp(h1.displayName));
+
+    const sendEntry = allEntries.find(e => e.actionType === PlanActionType.SENT_TO);
+    assert.ok(sendEntry, 'expected a sent-to (sender) digest entry');
+    assert.match(sendEntry.note?.text ?? '', /📤/);
+    assert.equal(sendEntry.label, 'SEND', 'sender label should read SEND, not generic SENT-TO');
+  });
+
+  test('compactUneventfulTurns — a recipient column with only SURVIVOR_RECEIVED never collapses', async () => {
+    const { buildStepDigest, compactUneventfulTurns } = await import('../src/replay-timeline.js');
+    const { state, h1, h2 } = twoVTwoState();
+    const s = placeOwnedSurvivor(state, h1);
+    const plan = [{
+      type: PlanActionType.SENT_TO,
+      entityId: h1.id,
+      targetId: s.id,
+      destOwnerId: h2.ownerId,
+    }];
+    const steps = resolvePlansMP(state, [
+      { playerId: h1.ownerId, faction: 'hero',  plan },
+      { playerId: h2.ownerId, faction: 'hero',  plan: [] },
+      { playerId: state.witch.ownerId, faction: 'witch', plan: [] },
+    ]);
+    const digest = buildStepDigest(steps, state.entities, {
+      isVisible: () => true,
+      PlanActionType, ResEventType,
+      viewerFaction: 'hero',
+    });
+    // Even with adjacent uneventful frames padded around it, the column
+    // carrying the receive entry must survive compaction. We can verify the
+    // recipient entry still appears in the compacted output.
+    const compacted = compactUneventfulTurns(digest);
+    const survives = compacted.some(col =>
+      (col.entries ?? []).some(e => e.actionType === 'survivor-received')
+    );
+    assert.ok(survives, 'SURVIVOR_RECEIVED entry must survive timeline compaction');
+  });
+});

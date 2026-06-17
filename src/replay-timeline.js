@@ -7,7 +7,7 @@
 // enums are injected (not imported) to keep this module free of the resolver's
 // dependency graph, so it stays trivially unit-testable.
 
-import { ENTITY_COLOR, normalizeDamage } from './entities.js';
+import { ENTITY_COLOR, normalizeDamage, isLeaderType } from './entities.js';
 import { makeOverlay } from './overlays.js';
 import { ITEMS, getWeaponDamage } from './items.js';
 import { pickBlockWord } from './combat-words.js';
@@ -153,7 +153,14 @@ const ACTION_LABEL = Object.freeze({
   'explore': 'EXPLORE', 'fortify': 'FORTIFY', 'summon': 'SUMMON',
   'heal': 'HEAL', 'use-item': 'ITEM', 'equip-weapon': 'EQUIP',
   'use-ability': 'ABILITY', 'guard': 'GUARD', 'sound-horn': 'HORN',
+  'sent-to': 'SEND',
 });
+
+// Pseudo actionType for the recipient's SURVIVOR_RECEIVED card. Not a real
+// PlanActionType — only buildStepDigest emits this on entries it synthesises
+// from a SURVIVOR_RECEIVED event. Marked here so the compactor (which gates
+// "uneventful" on the actionType allowlist) and the entry sorter recognise it.
+const RECV_ACTION_TYPE = 'survivor-received';
 
 /**
  * Rank entries by the order the animation actually plays them, so the card list
@@ -165,6 +172,10 @@ const PHASE_RANK = Object.freeze({
   'move': 1,
   'battle-unit': 2, 'battle-hex': 2, 'summon': 2,
   'explore': 3, 'sound-horn': 4, 'fortify': 5, 'heal': 6,
+  // Free actions (no budget cost) — list near the top so the transfer reads
+  // before any of the recipient's downstream actions.
+  'sent-to': 0,
+  'survivor-received': 0,
 });
 const phaseRank = (t) => PHASE_RANK[t] ?? 7;
 
@@ -265,6 +276,11 @@ export function isEventVisible(ev, ents, isVisible,
 
   // Inherently public actions short-circuit the fog test.
   if (PUBLIC_ACTION_TYPES.has(ev.action?.type)) return true;
+
+  // SURVIVOR_RECEIVED is a same-faction message pushed into the recipient's
+  // own bucket — never fog-gated. The transfer happens behind the scenes;
+  // there is no map hex to occlude. Always show.
+  if (ev.type === RE.SURVIVOR_RECEIVED) return true;
 
   // Own-faction participants short-circuit it too: the viewer always sees
   // their own units' actions and fates, sighted or not.
@@ -567,11 +583,76 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
         continue;
       }
 
+      // ── Survivor received (paired with the sender's SENT_TO ACTION_OK) ───
+      // Resolver pushes this into the RECIPIENT's bucket so the recipient sees
+      // their own "📥 sent from <leader>" card. Synthesise an entry with the
+      // recipient leader as actor and the transferred survivor as target.
+      //
+      // Use the PRE-STEP snapshot (`ents`) for both lookups: it carries
+      // consistent `displayName` / `title` fields for the sender card too, and
+      // it includes the recipient leader at its current position. The
+      // survivor's ownerId in `ents` is still the SENDER's (SENT_TO has not
+      // mutated the snapshot — only the live entity), so don't look the
+      // recipient up by survivor ownership; use the event's destOwnerId.
+      if (ev.type === RE.SURVIVOR_RECEIVED) {
+        const survivorSnap = ents.find(e => e.id === ev.survivorId)
+          ?? viewEnts.find(e => e.id === ev.survivorId);
+        if (!survivorSnap) continue;
+        // Faction-leader entity-types differ per faction (paladin / witch /
+        // rogue / captain / necromancer / brute) — use isLeaderType, not a
+        // hard-coded class.
+        const recipientLeader = ev.destOwnerId
+          ? ents.find(e => e.ownerId === ev.destOwnerId && isLeaderType(e.type))
+          : null;
+        const fromName = ev.fromOwnerName ?? 'a leader';
+        entries.push({
+          entityId:    recipientLeader?.id ?? survivorSnap.id,
+          actor:       recipientLeader ? unitRef(recipientLeader) : unitRef(survivorSnap),
+          target:      unitRef(survivorSnap),
+          actionType:  RECV_ACTION_TYPE,
+          label:       'RECEIVE',
+          outcomeKind: null,
+          targetDmg:   0, actorDmg: 0, killed: false,
+          note:        { text: `📥 from ${fromName}`, kind: 'gain' },
+          hexes:       [
+            ...(recipientLeader ? [{ col: recipientLeader.col, row: recipientLeader.row }] : []),
+            { col: survivorSnap.col, row: survivorSnap.row },
+          ],
+          movePath:    null,
+        });
+        continue;
+      }
+
       // ── Non-battle successful actions ─────────────────────────────────────
       if (ev.type !== RE.ACTION_OK || !ev.action) continue;
       const a = ev.action;
       const actorSnap = ents.find(e => e.id === a.entityId);
       if (!actorSnap) continue;
+
+      // ── SENT_TO sender card ────────────────────────────────────────────────
+      // The base "non-battle ACTION_OK" path below renders a generic SEND row
+      // with no target. Customise it here so the survivor portrait sits in the
+      // target cell and the centre cell calls out the destination leader.
+      if (a.type === PA.SENT_TO) {
+        const survivorSnap = ents.find(e => e.id === (ev.result?.survivorId ?? a.targetId));
+        const destName = ev.result?.destOwnerName ?? 'another leader';
+        entries.push({
+          entityId:    a.entityId,
+          actor:       unitRef(actorSnap),
+          target:      survivorSnap ? unitRef(survivorSnap) : null,
+          actionType:  PA.SENT_TO,
+          label:       ACTION_LABEL[PA.SENT_TO] ?? 'SEND',
+          outcomeKind: null,
+          targetDmg:   0, actorDmg: 0, killed: false,
+          note:        { text: `📤 to ${destName}`, kind: 'gain' },
+          hexes:       [
+            { col: actorSnap.col, row: actorSnap.row },
+            ...(survivorSnap ? [{ col: survivorSnap.col, row: survivorSnap.row }] : []),
+          ],
+          movePath:    null,
+        });
+        continue;
+      }
 
       // Summon shows the conjured unit as the "target" chip.
       let target = null;

@@ -1864,16 +1864,25 @@ export function executeSentTo(state, actor, targetId, destOwnerId) {
 
   const fromName = actor.displayName;
   const toName   = destPlayer.name ?? destLeader.displayName;
+  const fromOwnerId = actor.ownerId;
   target.ownerId = destOwnerId;
 
   return {
     success: true,
     log: [`${fromName} sends ${target.displayName} to ${toName}.`],
     cost: 0,
-    // Surface fields the replay/UI may want to consume. The online event
-    // serializer's `result` allowlist drops anything not explicitly listed;
-    // `log` already carries the human-readable string for replays, and
-    // `ownerIdFrom` / `ownerIdTo` ride on the action payload so they survive.
+    // Surface fields the replay/UI may want to consume on BOTH sender and
+    // recipient sides. The online event serializer's `result` allowlist must
+    // list each field that crosses the wire — see _serializeEvents in
+    // server/lobby.js (which keys off ev.type for the SENT_TO / SURVIVOR_RECEIVED
+    // additions). The resolver also reads these to fan out a paired
+    // SURVIVOR_RECEIVED event into the destination owner's bucket.
+    survivorId:    target.id,
+    survivorName:  target.displayName,
+    fromOwnerId,
+    fromOwnerName: fromName,
+    destOwnerId,
+    destOwnerName: toName,
   };
 }
 
