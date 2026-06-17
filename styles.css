@@ -3324,6 +3324,17 @@ body.renderer-3d.debug-counters #cam-counter { display: block; }
   padding: 2px 0;
 }
 
+.round-summary-events .summary-quiet {
+  color: var(--text-dim);
+  padding: 2px 0;
+  opacity: 0.85;
+}
+
+.round-summary-events .summary-quiet .summary-quiet-count {
+  color: var(--text);
+  font-weight: 600;
+}
+
 .round-summary-events .summary-survivor {
   color: var(--green, #4caf7d);
   padding: 2px 0;

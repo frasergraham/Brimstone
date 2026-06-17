@@ -20,7 +20,7 @@ import { compileTurnBattleSummary, compileTurnXpSummary } from './battle-utils.j
 import { buildWrapupCombatsHtml, wrapupIconHtml } from './wrapup-summary.js';
 import { ResEventType } from '../server/resolver.js';
 import { collectUIElements } from './ui-elements.js';
-import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml, buildNodeBadgeHtml, buildEffectsHtml, buildCycleInfoHtml, PHASE_META, buildRollRowsTipHtml, computeGameTooltipPos } from './ui-render.js';
+import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml, buildNodeBadgeHtml, buildEffectsHtml, buildCycleInfoHtml, PHASE_META, buildRollRowsTipHtml, computeGameTooltipPos, buildTurnCards, compactTurnRun } from './ui-render.js';
 import {
   hideActionPopup, getEntityScreenPos, computeArcPositions,
   positionArcPopup, startArcTracking, positionPopup,
@@ -4882,6 +4882,23 @@ export class UIController {
           } else {
             html += `<div class="summary-node">◇ ${nc.label} is no longer controlled</div>`;
           }
+        }
+
+        // Quiet activity — collapse runs of uneventful guard/move actions into a
+        // single "guard ×N" / "move ×N" card.  Purely a render-pass compaction of
+        // the resolver's step records (which are left untouched); single quiet
+        // actions stay hidden, only genuine runs (≥2) surface, so the summary
+        // gains a held-position line without becoming a wall of cards.
+        const compacted = compactTurnRun(
+          buildTurnCards(steps ?? [], { ResEventType, humanFaction, fogOfWar }),
+        );
+        const QUIET_ICON = { guard: '🛡', move: '🥾' };
+        const QUIET_WHO  = { hero: 'Hero', witch: 'Witch' };
+        for (const c of compacted) {
+          if (!c?.collapsed || (c.count ?? 1) < 2) continue;
+          const icon = QUIET_ICON[c.verb] ?? '•';
+          const who  = QUIET_WHO[c.faction] ?? 'Units';
+          html += `<div class="summary-quiet">${icon} ${who} · <span class="summary-quiet-count">${c.label}</span></div>`;
         }
 
         // Post-round effects (night attrition, etc.)
