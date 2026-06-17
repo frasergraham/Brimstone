@@ -2392,9 +2392,9 @@ describe('Mission 4 (The River Crossing) balance', () => {
     assert.equal(below.count, 2);
   });
 
-  test('phase cycle is daytime-only (dawn + day)', () => {
+  test('phase cycle is daytime-only (day-looping)', () => {
     assert.ok(mission4.phaseCycle);
-    assert.deepEqual(mission4.phaseCycle.phases, ['dawn', 'day', 'day', 'day']);
+    assert.deepEqual(mission4.phaseCycle.phases, ['day']);
     assert.equal(mission4.phaseCycle.loop, true);
   });
 
