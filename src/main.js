@@ -3675,6 +3675,7 @@ function _showSinglePlayerScreen() {
 }
 
 document.getElementById('btn-singleplayer-back').addEventListener('click', () => {
+  if (ui) ui.destroy();
   renderer = null; ui = null; state = null;
   showStep('mode');
 });
@@ -4770,6 +4771,11 @@ function _initCampaignMission(missionDef) {
         document.getElementById('game-screen').style.display = 'none';
         document.getElementById('setup-screen').style.display = '';
         setMode(AppMode.MENU);
+        // Destroy the UIController before discarding it — otherwise its event
+        // listeners stay bound to the shared canvas/buttons and the next game's
+        // UIController double-fires every click (action panel toggle gets stuck).
+        // The conductor already self-destroyed before firing this onComplete.
+        if (ui) ui.destroy();
         renderer = null; ui = null; witchAI = null; heroAI = null;
         _missionConductor = null;
         _activeMissionDef = null;
@@ -4913,7 +4919,10 @@ function _handleCampaignMissionEnd() {
   rosterEl.innerHTML = `<h3>${rosterHeading}</h3>` +
     _campaignPartyHTML(heroSnap, survivors);
 
-  // Clean up game state
+  // Clean up game state — destroy the UIController and conductor first so their
+  // event listeners don't leak onto the shared DOM and double-fire in the next game.
+  if (ui) ui.destroy();
+  if (_missionConductor) _missionConductor.destroy();
   renderer = null; ui = null; witchAI = null; heroAI = null;
   _missionConductor = null;
   _activeMissionDef = null;
@@ -6710,6 +6719,7 @@ async function _startSpReplay(data) {
     // After replay finishes, return to setup
     document.getElementById('setup-screen').style.display = '';
     document.getElementById('game-screen').style.display  = 'none';
+    if (ui) ui.destroy();
     state = null; renderer = null; ui = null;
     showStep('singleplayer');
     _renderSpSaves();
@@ -6883,6 +6893,7 @@ async function _startMpReplay(rounds, gameMeta) {
     // Return to online screen after replay
     document.getElementById('setup-screen').style.display = '';
     document.getElementById('game-screen').style.display  = 'none';
+    if (ui) ui.destroy();
     state = null; renderer = null; ui = null;
     _showOnlineScreen();
   });
@@ -7144,6 +7155,7 @@ document.getElementById('btn-battle-spectate')?.addEventListener('click', functi
 
 document.getElementById('btn-online-back').addEventListener('click', () => {
   if (mp) { mp.disconnect(); mp = null; }
+  if (ui) ui.destroy();
   renderer = null; ui = null; state = null;
   showStep('mode');
   _updateMultiplayerBadge();
@@ -8273,6 +8285,7 @@ document.getElementById('btn-mp-signin').addEventListener('click', () => {
 function _signOut() {
   clearSession();
   if (mp) { mp.disconnect(); mp = null; }
+  if (ui) ui.destroy();
   renderer = null; ui = null; state = null;
 }
 
