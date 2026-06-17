@@ -1138,18 +1138,11 @@ function _executeResolution(room) {
   for (const line of summaryLines) state.log.push(line);
 
   // Shared post-resolution finalization (see GameState.finalizeRound) — keeps
-  // the online path in lockstep with offline (src/main.js).
+  // the online path in lockstep with offline (src/main.js). finalizeRound()
+  // calls checkVictory(), which sets state.winner / state.gameOver.
   state.finalizeRound();
-  checkAndHandleGameOver(room);
 
   const finalState = serializeState(state);
-
-  // Clear plan status for the resolved round
-  try {
-    clearPlanStatus(room.id, state.round - 1);  // endRound() already incremented
-  } catch (err) {
-    console.error(`[room ${room.id}] clearPlanStatus error:`, err);
-  }
 
   // Serialize steps for the wire — playerEvents instead of heroEvents/witchEvents
   const serializedSteps = steps.map(step => ({
@@ -1162,7 +1155,11 @@ function _executeResolution(room) {
     entitySnapshot: step.entitySnapshot ?? [],
   }));
 
-  // Store round data for full-game replay (roundNum is pre-endRound value)
+  // Store round data for full-game replay (roundNum is pre-endRound value).
+  // This MUST happen BEFORE checkAndHandleGameOver(), which persists the
+  // completed game from room.replayRounds — otherwise the game-ending round is
+  // missing from the saved replay and the full-game replay stops one round
+  // short of the finale.
   const roundEntry = {
     roundNum:    state.round - 1,  // endRound() already incremented state.round
     preStateJson,
@@ -1182,6 +1179,17 @@ function _executeResolution(room) {
     } catch (err) {
       console.error(`[room ${room.id}] appendSaveRound error:`, err);
     }
+  }
+
+  // Now that the final round is in room.replayRounds, finalize the game (this
+  // persists the completed-game replay on game over — see above).
+  checkAndHandleGameOver(room);
+
+  // Clear plan status for the resolved round
+  try {
+    clearPlanStatus(room.id, state.round - 1);  // endRound() already incremented
+  } catch (err) {
+    console.error(`[room ${room.id}] clearPlanStatus error:`, err);
   }
 
   // Store serialized steps for the unified roundResolved message (sent after planning starts)
