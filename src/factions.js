@@ -8,7 +8,7 @@
 
 import { Phase } from './game.js';
 import { EntityType, SurvivorAbility, createHero, createWitch, createSurvivor, createZombie, createMinion, createWoodGolem, createIronGolem, createRogue, createCaptain, createNecromancer, createBrute, isLeaderType, getItemCountOf, totalItemCount } from './entities.js';
-import { ResourceType, BuildingType, rollLoot, hasBuilding, isRiver } from './tiles.js';
+import { ResourceType, BuildingType, rollLoot, hasBuilding, isRiver, isBuildingTile, isFortWall, tileCapacityRemaining } from './tiles.js';
 import { hexKey, getNeighbors } from './hex.js';
 import { AI_HERO_NAMES, AI_WITCH_NAMES } from './ai-names.js';
 import { Side, getOpposingSide as _opposingSide } from './sides.js';
@@ -451,11 +451,13 @@ export class HeroFaction extends Faction {
     for (const obj of state.witchObjectives) {
       const freeHex = () => {
         for (const clusterHex of obj.hexes) {
-          const n = getNeighbors(clusterHex.col, clusterHex.row).find(nb => {
-            const t = state.tiles.get(hexKey(nb.col, nb.row));
-            return t && !isRiver(t) &&
-              !state.entities.some(e => e.alive && e.col === nb.col && e.row === nb.row);
-          });
+          // A node-spawned survivor must land on passable terrain (never a
+          // building wall, river, or fort) that is also completely empty so
+          // the survivor doesn't crowd onto an existing unit.
+          const n = getNeighbors(clusterHex.col, clusterHex.row).find(nb =>
+            isPlaceableTile(state, nb.col, nb.row, 'hero') &&
+            !state.entities.some(e => e.alive && e.col === nb.col && e.row === nb.row)
+          );
           if (n) return n;
         }
         return null;
@@ -487,6 +489,10 @@ export class HeroFaction extends Faction {
                 abilityLabel: s.abilityLabel,
                 color: s.color,
               });
+            } else {
+              // No passable, unoccupied hex around the node — fail loudly
+              // rather than place a survivor on impassable terrain.
+              state.addLog(`✨ The node calls to the living… but there is no safe ground for one to emerge.`, 'hero', state.playerColorFor(hero));
             }
           } else {
             state.addLog(`✨ The node pulses faintly… no one answers the call tonight.`, 'hero');
@@ -623,10 +629,11 @@ export class WitchFaction extends Faction {
     const enemyAt = (col, row) => state.entities.some(
       e => e.alive && e.owner !== this.id && e.col === col && e.row === row
     );
+    // The graveyard ENTRANCE itself is the intended exit — a zombie climbs out
+    // of it — so it is allowed even though it is a building tile.
     if (!enemyAt(tile.col, tile.row)) return { col: tile.col, row: tile.row };
     for (const n of getNeighbors(tile.col, tile.row)) {
-      const nt = state.tiles.get(hexKey(n.col, n.row));
-      if (!nt || isRiver(nt) || nt.buildingFootprintOf || hasBuilding(nt)) continue;
+      if (!isPlaceableTile(state, n.col, n.row, this.id)) continue;
       if (!enemyAt(n.col, n.row)) return { col: n.col, row: n.row };
     }
     return null;
@@ -952,6 +959,35 @@ export function getFaction(id) {
  */
 export function findFaction(id) {
   return FACTIONS[id] ?? null;
+}
+
+// ── Unit placement validity ─────────────────────────────────────────────────
+// Single source of truth for "can a freshly-spawned unit stand on this hex?".
+// Every spawn seam that picks a NEW hex for a unit — node-survivor spawning,
+// graveyard zombies, battle-mode respawn fallback — routes through this so a
+// unit can never materialise on impassable terrain or a hex with no free slot.
+//
+// Rejects: off-map, river (a bridge is passable — `isRiver` is false for it),
+// any building tile (its impassable footprint AND its passable entrance — a
+// body on a building threshold reads as "inside", which the graveyard spawner
+// already avoided), a fort wall the owner's faction can't cross, and a tile
+// with no remaining capacity.
+//
+// Stricter than the movement-destination rules (which let a unit step onto a
+// building entrance) — fresh spawns keep clear of buildings entirely. `owner`
+// is the spawning unit's faction id; it only gates the fort-wall check
+// (witch-side factions are blocked by level-2+ walls, hero-side are not).
+export function isPlaceableTile(state, col, row, owner = null) {
+  const t = state.tiles.get(hexKey(col, row));
+  if (!t) return false;                                   // off-map
+  if (isRiver(t)) return false;                           // impassable water
+  if (isBuildingTile(t)) return false;                    // entrance or footprint
+  if (isFortWall(t) && findFaction(owner)?.isBlockedByWalls()) return false;
+  const units = state.entities.filter(
+    e => e.alive && e.col === col && e.row === row
+  ).length;
+  if (tileCapacityRemaining(t, units) <= 0) return false; // no free slot
+  return true;
 }
 
 /** Return all registered factions. */

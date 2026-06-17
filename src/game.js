@@ -5,7 +5,7 @@ import { BuildingType, ResourceType, hasBuilding, isRiver } from './tiles.js';
 import { hexKey, hexDistance, getNeighbors, setMapDimensions, MAP_COLS, MAP_ROWS } from './hex.js';
 import { applyPostRoundEffects, attritionForCycle } from './post-round-effects.js';
 import { sightRange, computeLineOfSight, hasLineOfSight } from './actions.js';
-import { getFaction, allFactions, getFactionsForSide, sightRangeForEntity } from './factions.js';
+import { getFaction, allFactions, getFactionsForSide, sightRangeForEntity, isPlaceableTile } from './factions.js';
 import { allSides } from './sides.js';
 
 /**
@@ -702,7 +702,7 @@ export class GameState {
       const cols = faction === 'hero' ? [0, 1, 2] : [MAP_COLS - 3, MAP_COLS - 2, MAP_COLS - 1];
       const candidates = [];
       for (const [, t] of this.tiles) {
-        if (!cols.includes(t.col) || isRiver(t)) continue;
+        if (!cols.includes(t.col) || !isPlaceableTile(this, t.col, t.row, faction)) continue;
         const occupied = this.entities.some(e => e.alive && e.col === t.col && e.row === t.row);
         if (!occupied) candidates.push({ col: t.col, row: t.row });
       }
@@ -721,11 +721,11 @@ export class GameState {
       if (!occupied) return b;
     }
 
-    // All buildings occupied — pick an unoccupied neighbor of any building
+    // All buildings occupied — pick an unoccupied, passable neighbor of any
+    // building (never a river, fort wall, or the building's own footprint).
     for (const b of buildings) {
       for (const n of getNeighbors(b.col, b.row)) {
-        const t = this.tiles.get(hexKey(n.col, n.row));
-        if (!t || isRiver(t)) continue;
+        if (!isPlaceableTile(this, n.col, n.row, faction)) continue;
         const occupied = this.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
         if (!occupied) return { col: n.col, row: n.row };
       }
