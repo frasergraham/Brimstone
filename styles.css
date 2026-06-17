@@ -5420,12 +5420,25 @@ img.plan-step-avatar {
   overflow-y: auto;
   scroll-behavior: smooth;
   scroll-padding-top: 0.5rem;
-  /* Subtle top fade: as content scrolls up out of view it dissolves rather than
-     hard-clipping at the card border — matches the "slides behind the menu
-     bar" reading even when geometry can't truly overlap the header. */
+  /* Mask gradient is CONDITIONAL on overflow — see .has-fade-top / .has-fade-bottom
+     rules below. Cards that fit on screen get no mask (no dimmed readable text);
+     a fade appears only on the side where content is actually clipped. */
+  pointer-events: auto;                          /* re-enable inside #replay-timeline (parent disables it) */
+}
+/* Conditional fade: ui.js sets `.has-fade-top` / `.has-fade-bottom` on each card
+   when content is clipped above / below the viewport. The four combinations
+   produce: no mask (fits on screen), top-only, bottom-only, or both. */
+.replay-step-col.has-fade-top.has-fade-bottom {
   -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
           mask-image: linear-gradient(to bottom, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
-  pointer-events: auto;                          /* re-enable inside #replay-timeline (parent disables it) */
+}
+.replay-step-col.has-fade-top:not(.has-fade-bottom) {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 18px, #000 100%);
+          mask-image: linear-gradient(to bottom, transparent 0, #000 18px, #000 100%);
+}
+.replay-step-col:not(.has-fade-top).has-fade-bottom {
+  -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 18px), transparent 100%);
+          mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 18px), transparent 100%);
 }
 /* Active row sits in the upper portion of the card after auto-scroll: the
    `scroll-margin-top` is the gap reserved above it inside the scroll viewport

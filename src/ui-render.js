@@ -166,6 +166,32 @@ export function shouldAutoScrollToActive({ suspended = false, collapsed = false,
   return !!hasActive;            // only scroll when there's an active action to follow
 }
 
+/**
+ * Compute whether a scroll viewport should show a top/bottom fade gradient.
+ * A fade is only warranted when there's content hidden in that direction —
+ * a card whose content fits entirely within `clientHeight` gets neither fade
+ * (so we don't dim readable text for no reason).
+ *
+ * Pure + DOM-free: callers feed in measured numbers; the function returns
+ * the two boolean flags. UI wiring then toggles the corresponding classes
+ * on the scroll viewport.
+ *
+ * @param {object} [opts]
+ * @param {number} [opts.scrollTop]      Current scroll offset (px).
+ * @param {number} [opts.clientHeight]   Viewport visible height (px).
+ * @param {number} [opts.scrollHeight]   Full content height (px).
+ * @returns {{ top: boolean, bottom: boolean }}
+ */
+export function computeFadeFlags({ scrollTop = 0, clientHeight = 0, scrollHeight = 0 } = {}) {
+  // Fits entirely → no overflow either direction.
+  if (scrollHeight <= clientHeight) return { top: false, bottom: false };
+  // 1px tolerance absorbs sub-pixel rounding (mid-smooth-scroll fractional offsets,
+  // device-pixel ratios) so the fade doesn't flicker right at the edges.
+  const atTop    = scrollTop <= 0;
+  const atBottom = scrollTop + clientHeight >= scrollHeight - 1;
+  return { top: !atTop, bottom: !atBottom };
+}
+
 // ── Plan steps list HTML ──────────────────────────────────────────────────────
 
 const RES_ICON = {

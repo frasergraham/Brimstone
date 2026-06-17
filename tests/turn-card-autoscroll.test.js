@@ -14,6 +14,7 @@ import {
   TurnCardAutoScroll,
   TURN_CARD_AUTOSCROLL_SUSPEND_MS,
   shouldAutoScrollToActive,
+  computeFadeFlags,
 } from '../src/ui-render.js';
 
 describe('TurnCardAutoScroll', () => {
@@ -104,5 +105,59 @@ describe('shouldAutoScrollToActive', () => {
     assert.equal(shouldAutoScrollToActive({ suspended: true, collapsed: false, hasActive: true }), false);
     // Collapsed + active still false (collapsed shows just the active row).
     assert.equal(shouldAutoScrollToActive({ suspended: false, collapsed: true, hasActive: true }), false);
+  });
+});
+
+// ── computeFadeFlags ─────────────────────────────────────────────────────────
+//
+// The fade mask on turn cards should appear only when content is actually
+// clipped above or below the visible viewport. A card that fits entirely on
+// screen MUST get no fade — otherwise readable text dims for no reason
+// (operator-reported regression, 2026-06-17).
+
+describe('computeFadeFlags', () => {
+  test('card content fits entirely → no fade either edge', () => {
+    assert.deepEqual(
+      computeFadeFlags({ scrollTop: 0, clientHeight: 400, scrollHeight: 300 }),
+      { top: false, bottom: false },
+    );
+    assert.deepEqual(
+      computeFadeFlags({ scrollTop: 0, clientHeight: 400, scrollHeight: 400 }),
+      { top: false, bottom: false },
+    );
+  });
+
+  test('content overflows, scrolled to top → bottom fade only', () => {
+    assert.deepEqual(
+      computeFadeFlags({ scrollTop: 0, clientHeight: 400, scrollHeight: 800 }),
+      { top: false, bottom: true },
+    );
+  });
+
+  test('mid-scroll → both fades', () => {
+    assert.deepEqual(
+      computeFadeFlags({ scrollTop: 200, clientHeight: 400, scrollHeight: 800 }),
+      { top: true, bottom: true },
+    );
+  });
+
+  test('content overflows, scrolled to bottom → top fade only', () => {
+    assert.deepEqual(
+      computeFadeFlags({ scrollTop: 400, clientHeight: 400, scrollHeight: 800 }),
+      { top: true, bottom: false },
+    );
+  });
+
+  test('1px tolerance absorbs sub-pixel offsets at the bottom edge', () => {
+    // Smooth scroll lands at 399.7 against scrollHeight 800; treat as bottom.
+    assert.deepEqual(
+      computeFadeFlags({ scrollTop: 399.7, clientHeight: 400, scrollHeight: 800 }),
+      { top: true, bottom: false },
+    );
+  });
+
+  test('defaults — empty input behaves as a non-overflowing empty card', () => {
+    assert.deepEqual(computeFadeFlags(), { top: false, bottom: false });
+    assert.deepEqual(computeFadeFlags({}), { top: false, bottom: false });
   });
 });

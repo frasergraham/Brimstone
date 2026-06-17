@@ -20,7 +20,7 @@ import { compileTurnBattleSummary, compileTurnXpSummary } from './battle-utils.j
 import { buildWrapupCombatsHtml, wrapupIconHtml } from './wrapup-summary.js';
 import { ResEventType } from '../server/resolver.js';
 import { collectUIElements } from './ui-elements.js';
-import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml, buildNodeBadgeHtml, buildEffectsHtml, buildCycleInfoHtml, PHASE_META, buildRollRowsTipHtml, computeGameTooltipPos, TurnCardAutoScroll, shouldAutoScrollToActive } from './ui-render.js';
+import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml, buildNodeBadgeHtml, buildEffectsHtml, buildCycleInfoHtml, PHASE_META, buildRollRowsTipHtml, computeGameTooltipPos, TurnCardAutoScroll, shouldAutoScrollToActive, computeFadeFlags } from './ui-render.js';
 import {
   hideActionPopup, getEntityScreenPos, computeArcPositions,
   positionArcPopup, startArcTracking, positionPopup,
@@ -5466,6 +5466,10 @@ export class UIController {
     if (typeof document !== 'undefined') document.body?.classList?.add('replay-timeline-up');
     this._el('replay-progress')?.classList.add('visible');
     this.setReplayTimelineStep(visible[0].stepIndex);
+    // Cards are fresh in the DOM — no scroll events have fired yet, so set the
+    // initial fade-flag state (cards that fit on screen get NO mask gradient,
+    // cards that overflow get a bottom fade only since scrollTop starts at 0).
+    this._updateAllColFades();
   }
 
   /** Wire manual-scroll detection on the (persistent) timeline container once.
@@ -5487,7 +5491,41 @@ export class UIController {
     const opts = { passive: true, signal: this._eventsAC.signal };
     wrap.addEventListener('wheel',     onUserScroll, opts);
     wrap.addEventListener('touchmove', onUserScroll, opts);
+    // `scroll` doesn't bubble, so capture-phase on the wrapper sees scrolls on
+    // every descendant `.replay-step-col` (fired by both user and programmatic
+    // scrollIntoView). Each fires _updateColFade so the top/bottom mask gradient
+    // only appears when content is actually clipped above/below the viewport.
+    wrap.addEventListener('scroll', (e) => {
+      const col = e.target;
+      if (col && col.classList && col.classList.contains('replay-step-col')) {
+        this._updateColFade(col);
+      }
+    }, { capture: true, passive: true, signal: this._eventsAC.signal });
     this._turnCardScrollBound = true;
+  }
+
+  /** Toggle `.has-fade-top` / `.has-fade-bottom` on a turn card based on whether
+   *  content is currently hidden above or below the visible viewport. Cards that
+   *  fit entirely get neither class (no mask gradient → no dimmed readable text).
+   *  The mask CSS is keyed off these classes (styles.css). */
+  _updateColFade(col) {
+    if (!col || !col.classList) return;
+    const { top, bottom } = computeFadeFlags({
+      scrollTop:    col.scrollTop    ?? 0,
+      clientHeight: col.clientHeight ?? 0,
+      scrollHeight: col.scrollHeight ?? 0,
+    });
+    col.classList.toggle('has-fade-top',    top);
+    col.classList.toggle('has-fade-bottom', bottom);
+  }
+
+  /** Walk every rendered turn card and refresh its fade state — used after a
+   *  fresh render where no scroll events have fired yet, or after a layout
+   *  change that may have flipped overflow on/off. */
+  _updateAllColFades() {
+    const wrap = this._el('replay-timeline');
+    if (!wrap || typeof wrap.querySelectorAll !== 'function') return;
+    wrap.querySelectorAll('.replay-step-col').forEach(col => this._updateColFade(col));
   }
 
   /** Keep the action currently resolving inside the visible upper portion of a
