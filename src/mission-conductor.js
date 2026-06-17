@@ -51,8 +51,20 @@ export class MissionConductor {
     this._arrowEl  = document.getElementById('tutorial-arrow');
     this._spotlitEl = null;
 
+    // AbortController so destroy() can remove the _nextBtn listener. Without it,
+    // every conductor-driven mission leaked a click handler onto the *shared*
+    // `.tut-next-btn` element (never cleaned up). Stale handlers from torn-down
+    // conductors then re-fired _onNextClick() — and spurious onComplete()
+    // callbacks — on later missions, nulling the live UIController and freezing
+    // the action panel / UI. See tests/ui/action-panel-stuck.test.js.
+    this._eventsAC = new AbortController();
+
     if (this._nextBtn) {
-      this._nextBtn.addEventListener('click', () => this._onNextClick());
+      this._nextBtn.addEventListener(
+        'click',
+        () => this._onNextClick(),
+        { signal: this._eventsAC.signal },
+      );
     }
   }
 
@@ -174,6 +186,8 @@ export class MissionConductor {
 
   /** Clean up all overlays. Called when conductor ends or player quits. */
   destroy() {
+    // Remove the _nextBtn click listener (and any other AC-bound listeners).
+    this._eventsAC.abort();
     if (this._pendingAdvance !== null) {
       clearTimeout(this._pendingAdvance);
       this._pendingAdvance = null;
