@@ -626,9 +626,9 @@ export function applyProjectedEquip(entity, weaponId) {
   }
   if (weaponId) equipWeaponInItems(items, weaponId);
   const clone = Object.setPrototypeOf({ ...entity, items }, Object.getPrototypeOf(entity));
-  // The equipped-weapon memo (a hidden own-prop on Entity) would otherwise be
-  // copied by the spread and key on the OLD items identity — clear it so
-  // getEquippedWeaponId() rescans the projected backpack.
+  // The equipped-weapon memo is a non-enumerable own-prop, so `{...entity}` does
+  // NOT copy it — the clone shares no memo. Force a (re)scan of the projected
+  // backpack so getEquippedWeaponId() reflects the equipped weapon, not stale state.
   if (typeof clone._writeEqCache === 'function') clone._writeEqCache(null);
   return clone;
 }

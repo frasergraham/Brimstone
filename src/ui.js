@@ -1864,8 +1864,9 @@ export class UIController {
     const hasMoveAction = this._validActions.some(a => a.type === ActionType.MOVE);
     const actionsOk = this._planMode || this.state.actionsAvailable > 0;
     if (hasMoveAction && actionsOk) {
-      // Store the real entity in actor so that actor.alive (a prototype getter) works correctly.
-      // effectiveEntity is a plain spread-copy used only for position; it loses prototype methods.
+      // Store the real entity in actor: effectiveEntity is a prototype-preserving
+      // projection clone (position + projected weapon) used for highlight range,
+      // but the live entity is what the rest of the planning flow expects.
       this._awaitingTarget = { actionType: ActionType.MOVE, actor: entity, isDefault: true };
     } else {
       this._awaitingTarget = null;
@@ -4166,13 +4167,20 @@ export class UIController {
     try {
       let effActor = actor;
       if (this._planMode) {
-        const proj = this._getProjectedPos(actor.id);
-        if (proj && (proj.col !== actor.col || proj.row !== actor.row)) {
-          // Re-parent so getRange()/getAttack() still resolve on the clone.
-          effActor = Object.setPrototypeOf(
-            { ...actor, col: proj.col, row: proj.row },
-            Object.getPrototypeOf(actor)
-          );
+        const proj       = this._getProjectedPos(actor.id);
+        const projWeapon = this._getProjectedWeaponId(actor.id);
+        const posChanged    = proj && (proj.col !== actor.col || proj.row !== actor.row);
+        const weaponChanged = projWeapon && projWeapon !== actor.getEquippedWeaponId();
+        // Both the attack modifier AND isRanged are read from the attacker's
+        // equipped weapon inside computeBattleContext, so a queued EQUIP_WEAPON
+        // must reach the odds source too — not just the range filter in
+        // _computeUnitInfoCards. applyProjectedEquip re-parents to Entity.prototype
+        // (so getRange/getAttack resolve) and equips the projected weapon on a
+        // deep-copied backpack without touching the live entity; the projected
+        // position is then re-applied onto that local clone.
+        if (posChanged || weaponChanged) {
+          effActor = applyProjectedEquip(actor, weaponChanged ? projWeapon : null);
+          if (posChanged) { effActor.col = proj.col; effActor.row = proj.row; }
         }
       }
       return computeCombatOdds(this.state, effActor, target);

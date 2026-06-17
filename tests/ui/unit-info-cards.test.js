@@ -24,7 +24,8 @@ import {
 const { fakeCanvas } = installGlobalMocks();
 
 let UIController, GameState, ActionType, PlanActionType,
-  computeCombatOdds, createHero, createMinion, createIronGolem;
+  computeCombatOdds, createHero, createMinion, createIronGolem,
+  applyProjectedEquip;
 
 before(async () => {
   const [uiMod, gameMod, actionsMod, plannerMod, entMod] = await Promise.all([
@@ -42,6 +43,7 @@ before(async () => {
   createHero        = entMod.createHero;
   createMinion      = entMod.createMinion;
   createIronGolem   = entMod.createIronGolem;
+  applyProjectedEquip = entMod.applyProjectedEquip;
 });
 
 function makeUI() {
@@ -283,5 +285,48 @@ describe('_computeUnitInfoCards — projected range gating', () => {
     }];
     assert.equal(ui._computeUnitInfoCards().size, 1,
       'after a queued switch to a bow the distance-3 target gains an odds card');
+  });
+
+  // Load-bearing for the _attackOdds weapon-projection fix: the range FILTER
+  // and the odds VALUE must both read the projected weapon. Before the fix
+  // _attackOdds re-projected only position, so a queued bow→sword switch
+  // surfaced the adjacent target (range fix) but still printed the BOW's
+  // 0-attack ranged odds instead of the SWORD's melee odds.
+  test('a queued ranged→melee equip changes the card odds VALUE to the projected weapon', () => {
+    const { ui, state, renderer } = makeUI();
+    const hero   = createHero(3, 3, 'p1', state);
+    hero.equipWeapon('bow');                          // live: ranged, +0 ATK, no crush
+    const minion = createMinion(3, 4, 'p2', state);   // distance 1 — both weapons reach
+    state.entities.push(hero, minion);
+    arm(ui, hero, [minion]);
+
+    // Same hex for both reads → identical terrain/phase, so any odds delta is
+    // purely the weapon swap (deterministic regardless of procedural terrain).
+    renderer.planGhostSteps = [{
+      positions: new Map([[hero.id, { col: 3, row: 3 }]]),
+      weapons:   new Map([[hero.id, 'sword']]),       // queued melee switch
+      action: {},
+    }];
+
+    const card = ui._computeUnitInfoCards().get(minion.id);
+    assert.ok(card, 'an adjacent target keeps its card under either weapon');
+
+    // What the SWORD (projected) and BOW (live) would each show, on this state.
+    const swordOdds = computeCombatOdds(state, applyProjectedEquip(hero, 'sword'), minion);
+    const liveBowOdds = computeCombatOdds(state, hero, minion);
+
+    // The card must reflect the PROJECTED sword, not the live bow.
+    assert.equal(card.hitPct,   Math.round(swordOdds.hit * 100),
+      'card hit% must match the projected sword, not the live bow');
+    assert.equal(card.crushPct, Math.round(swordOdds.crush * 100),
+      'card crush% must match the projected sword, not the live bow');
+
+    // And the two weapons genuinely differ — proving the value is load-bearing.
+    // Bow is ranged (no crush, +0 ATK); sword is melee (+2 ATK, crush possible).
+    assert.ok(
+      Math.round(swordOdds.hit * 100) !== Math.round(liveBowOdds.hit * 100) ||
+      Math.round(swordOdds.crush * 100) !== Math.round(liveBowOdds.crush * 100),
+      'sword and bow odds must differ so the assertion can catch the live-weapon bug',
+    );
   });
 });
