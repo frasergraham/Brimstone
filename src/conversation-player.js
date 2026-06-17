@@ -12,7 +12,7 @@
 // flags, so NEXT naturally advances dialog lines while the step loop is
 // blocked awaiting us).
 
-import { playback, playbackDelay } from './playback.js';
+import { playback } from './playback.js';
 import { AppMode, setMode } from './app-mode.js';
 import { buildConversationDigest } from './replay-timeline.js';
 import { runScriptedActions } from './campaign/scripted-actions.js';
@@ -21,6 +21,58 @@ import { playVoiceClip, stopVoice, loadVoiceManifest, hasVoiceClip, hasConversat
 /** Auto-advance hold for one dialog line — long enough to read, capped. */
 export function conversationReadingMs(text) {
   return Math.max(1600, Math.min(6000, 400 + String(text ?? '').length * 40));
+}
+
+/**
+ * Safety ceiling for a single line's voice-aware auto-advance. Even a clip that
+ * never reports `ended` (stalled download, autoplay-blocked before the first
+ * gesture) can't hold the conversation open longer than this. Lines are short,
+ * so real narration finishes well under it; operator-tunable.
+ */
+export const CONVERSATION_HOLD_CEILING_MS = 30000;
+
+/**
+ * Auto-advance hold for ONE conversation line that respects spoken narration.
+ *
+ * Advances at max(reading-time floor, clip end): a long clip is never cut off
+ * mid-sentence, while a fast / short / missing / failed / muted clip still falls
+ * back to the reading floor (so a quick clip can't beat the reader). Bounded by
+ * a ceiling so a clip that never reports `ended` can't hang the auto-advance.
+ * The skip flag (card SKIP / replay NEXT / jump-to-end) collapses it at once.
+ *
+ * @param {HTMLAudioElement|null} audio  clip handle from playVoiceClip (null when muted/headless/no clip)
+ * @param {string} text                  the line text (drives the reading floor)
+ * @param {object} [o]
+ *   o.shouldStop — () => boolean : collapse the hold now (default: never)
+ *   o.sleep      — async (ms)    : poll tick (test seam; default real timer)
+ *   o.floorMs    — number        : reading-floor override (test seam / speed-scaled floor)
+ *   o.ceilingMs  — number        : safety-ceiling override (test seam)
+ * @returns {Promise<void>}
+ */
+export async function awaitConversationLineEnd(audio, text, o = {}) {
+  const shouldStop = o.shouldStop ?? (() => false);
+  const sleep      = o.sleep ?? _sleep;
+  const floorMs    = o.floorMs ?? conversationReadingMs(text);
+  const ceilingMs  = o.ceilingMs ?? CONVERSATION_HOLD_CEILING_MS;
+
+  // With no audio (muted / headless / clip absent) the reading floor alone
+  // governs. A clip's `ended` is the natural gate; its `error` (missing/broken
+  // file) means "no narration to wait for" — also fall back to the floor.
+  let clipDone = !audio;
+  if (audio) {
+    if (audio.ended) clipDone = true;
+    audio.addEventListener?.('ended', () => { clipDone = true; });
+    audio.addEventListener?.('error', () => { clipDone = true; });
+  }
+
+  // Advance only once BOTH the reading floor has elapsed AND the clip has
+  // finished — i.e. max(floor, clip length) — bounded by the ceiling.
+  let waited = 0;
+  while (!shouldStop()) {
+    if ((waited >= floorMs && clipDone) || waited >= ceilingMs) break;
+    await sleep(50);
+    waited += 50;
+  }
 }
 
 /**
@@ -298,9 +350,13 @@ async function _presentLines(lineRecords, { state, renderer, ui, skipFlag, autoO
       bubble = _showLine(line, { state, renderer });
       // Start this speaker's narration in step with the bubble. playVoiceClip
       // self-gates on the shared VO mute and stops the previous line's clip.
-      playVoiceClip(line.clipUrl);
+      // The handle drives the voice-aware auto-advance below (null when muted /
+      // headless / no clip).
+      const clip = playVoiceClip(line.clipUrl);
       if (autoOnly) {
-        await _autoHold(conversationReadingMs(line.text), skipFlag);
+        // REPLAY re-run: timed hold that waits out the narration, not just the
+        // reading estimate, so a long clip isn't cut off mid-sentence.
+        await awaitConversationLineEnd(clip, line.text, { shouldStop: skipFlag });
         continue;
       }
       if (playback.paused) {
@@ -312,8 +368,16 @@ async function _presentLines(lineRecords, { state, renderer, ui, skipFlag, autoO
         ui?.setReplayNextReady?.(false);
         playback.stepRequested = false;
       } else {
-        // Auto-play: hold long enough to read; NEXT collapses the hold.
-        await playbackDelay(conversationReadingMs(line.text));
+        // Auto-play: hold for max(reading time, narration length) so a long clip
+        // is never cut off; NEXT / SKIP / jump collapse the hold. The reading
+        // floor honors the replay speed multiplier (audio can't be sped up, so
+        // the clip's end stays a hard gate).
+        const floorMs = conversationReadingMs(line.text);
+        await awaitConversationLineEnd(clip, line.text, {
+          floorMs: playback.speedMult > 0 ? floorMs / playback.speedMult : floorMs,
+          shouldStop: () => skipFlag() || playback.stepRequested
+                            || playback.restart || playback.replayStep,
+        });
         playback.stepRequested = false;
       }
     }
@@ -330,13 +394,4 @@ function _showLine(line, { state, renderer }) {
   const anchor = live ? line.entityId : { col: line.col, row: line.row };
   if (!live && line.col == null) return null;
   return renderer.showSpeechBubble(anchor, line.name, line.text);
-}
-
-/** Plain timed hold that still honors the skip flag (REPLAY re-runs). */
-async function _autoHold(ms, skipFlag) {
-  let remaining = ms;
-  while (remaining > 0 && !skipFlag()) {
-    await _sleep(Math.min(50, remaining));
-    remaining -= 50;
-  }
 }
