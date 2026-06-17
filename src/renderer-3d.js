@@ -1975,6 +1975,23 @@ export function computeLungeTarget(current, target, fraction = LUNGE_FRACTION, m
   return { x: current.x + dx, z: current.z + dz };
 }
 
+/** Pure math: the yaw (radians, Babylon Y-axis) a unit at hex (fromCol,fromRow)
+ *  must adopt to face the centre of hex (toCol,toRow). Matches the project's
+ *  convention used by `_faceModelInstant` and the lunge slide:
+ *  `yaw = atan2(toX - fromX, toZ - fromZ)`.
+ *
+ *  Render-only — game state is never touched. Returns NaN if the two hexes
+ *  resolve to the same world point (caller should treat that as "no turn").
+ *  Visible for tests. */
+export function computeFacingYaw(fromCol, fromRow, toCol, toRow) {
+  const from = hexToWorld(fromCol, fromRow);
+  const to   = hexToWorld(toCol,   toRow);
+  const dx = to.x - from.x;
+  const dz = to.z - from.z;
+  if (dx === 0 && dz === 0) return NaN;
+  return Math.atan2(dx, dz);
+}
+
 /** Set `receiveShadows = true` on every (non-null) mesh in the iterable.
  *
  *  Babylon's `ShadowGenerator` casts onto any scene mesh whose `receiveShadows`
@@ -11330,7 +11347,15 @@ export class Renderer3D {
    *  All standee homes are stashed so `returnAllLungeAnims()` slides everyone
    *  back to their starting hex. Used by BOTH cinematic and fast/vfast — the
    *  readout/floater presentation differs by speed; the spatial choreography
-   *  is identical, with `durMs` compressed in the faster modes. */
+   *  is identical, with `durMs` compressed in the faster modes.
+   *
+   *  G2 facing — after positioning kicks off, every combatant pivots to face
+   *  the battle: defender→attacker, attack-side allies→defender, defense-side
+   *  allies→attacker. The `_animateStandeeTo` slide INSTANT-yaws each ally
+   *  toward its slide destination (edge midpoint), so without this follow-up
+   *  the allies would freeze facing the edge they walk to rather than the
+   *  combatant they're ganging up on. The tween is fire-and-forget and
+   *  cancels the instant-yaw cleanly via `_faceModelTween`'s stopAnimation. */
   applyCombatPositioning({ defender, attacker = null, attackAllies = [], defenseAllies = [] } = {}, opts = {}) {
     if (!this._scene || !this._babylon || !defender) return;
     const durMs = Number.isFinite(opts.durMs) ? opts.durMs : LUNGE_ANIM_MS;
@@ -11341,6 +11366,26 @@ export class Renderer3D {
     }
     for (const a of plan.defenderAllies) {
       if (a.moves) this._animateStandeeTo(a.id, a.toX, a.toZ, durMs);
+    }
+    // Facing pass — render-only, never touches game state. Skipped silently
+    // when the helper isn't available (mocked / partial test instance).
+    if (typeof this.faceEntityTowardEntity !== 'function') return;
+    if (attacker?.id != null) {
+      // Defender faces the attacker so the strike reads as eye-contact, not
+      // a stab in the back. `_animateStandeeTo` skips the slide+instant-yaw
+      // when the defender is already at its hex centre, so this tween is the
+      // ONLY source of facing for the common "defender already centred" path.
+      this.faceEntityTowardEntity(defender.id, attacker.id);
+    }
+    for (const a of plan.attackerAllies) {
+      if (!a.moves) continue;
+      this.faceEntityTowardEntity(a.id, defender.id);
+    }
+    if (attacker?.id != null) {
+      for (const a of plan.defenderAllies) {
+        if (!a.moves) continue;
+        this.faceEntityTowardEntity(a.id, attacker.id);
+      }
     }
   }
 
