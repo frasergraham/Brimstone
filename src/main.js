@@ -4437,16 +4437,19 @@ function _scenarioPlan(planDefs, byRef) {
       // Pair with a tile-level `exploreOverride` for a deterministic loot roll.
       out.push({ type: PlanActionType.EXPLORE, entityId: actor.id });
     } else if (p.sentTo) {
-      // Free action: leader (p.ref) transfers a survivor (p.sentTo) to another
-      // leader (p.dest). p.dest is the destination leader's ref (the recipient
-      // leader must own a player slot — see extraLeaders in scenario def).
-      const target = byRef.get(p.sentTo);
-      const dest   = byRef.get(p.dest);
-      if (target && dest) {
+      // Free action: a SURVIVOR is sent to another leader. The action now
+      // lives on the survivor (the survivor is the actor). `p.sentTo`
+      // names the survivor; `p.dest` names the destination leader (which
+      // must own a player slot — see extraLeaders in scenario def). The
+      // outer `p.ref` (typically the current owning leader) is ignored
+      // by SENT_TO — the sender leader is re-derived live at resolution
+      // from survivor.ownerId.
+      const survivor = byRef.get(p.sentTo);
+      const dest     = byRef.get(p.dest);
+      if (survivor && dest) {
         out.push({
           type:        PlanActionType.SENT_TO,
-          entityId:    actor.id,
-          targetId:    target.id,
+          entityId:    survivor.id,
           destOwnerId: dest.ownerId,
         });
       }
