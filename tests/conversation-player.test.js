@@ -235,9 +235,23 @@ describe('playConversation — per-line camera framing', () => {
 });
 
 describe('conversationReadingMs', () => {
-  test('clamps between 1.6s and 6s', () => {
-    assert.equal(conversationReadingMs(''), 1600);
+  // The floor was 1600ms — that produced a ~1s "dead air" gap after short
+  // narration clips (e.g. "Run!") and made autoplay feel sluggish between
+  // dialog lines. Tighten the floor toward 300–500ms so short beats step
+  // briskly while long lines still get the per-character read time.
+  test('floor for a very short line is snappy (<= 500ms), not a ~1s wait', () => {
+    const floor = conversationReadingMs('');
+    assert.ok(floor <= 500, `floor too long: ${floor}ms`);
+    assert.ok(floor >= 250, `floor too short to read at all: ${floor}ms`);
+  });
+  test('ceiling stays at 6s for long lines', () => {
     assert.equal(conversationReadingMs('x'.repeat(500)), 6000);
+  });
+  test('long lines still get per-character reading time', () => {
+    // A roughly 30-char line should give the reader at least 1s.
+    assert.ok(conversationReadingMs('x'.repeat(30)) >= 1000);
+    // A ~80-char line should give the reader well over 2s.
+    assert.ok(conversationReadingMs('x'.repeat(80)) >= 2000);
   });
 });
 

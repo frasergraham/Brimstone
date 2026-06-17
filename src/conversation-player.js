@@ -18,9 +18,18 @@ import { buildConversationDigest } from './replay-timeline.js';
 import { runScriptedActions } from './campaign/scripted-actions.js';
 import { playVoiceClip, stopVoice, loadVoiceManifest, hasVoiceClip, hasConversationVoice } from './voiceover.js';
 
-/** Auto-advance hold for one dialog line — long enough to read, capped. */
+/**
+ * Auto-advance hold for one dialog line — long enough to read, capped.
+ *
+ * Per-char read time governs long lines (~40ms/char ≈ 25 chars/s ≈ a brisk
+ * skim), with a small base intercept for "settle the bubble". The 400ms floor
+ * keeps very short beats ("Run!", "Hi.") snappy under autoplay — the previous
+ * 1600ms floor produced ~1s of dead air after the narration clip ended.
+ * Spoken narration is still played out in full: `awaitConversationLineEnd`
+ * holds for max(this floor, clip end), so longer voice clips are never cut.
+ */
 export function conversationReadingMs(text) {
-  return Math.max(1600, Math.min(6000, 400 + String(text ?? '').length * 40));
+  return Math.max(400, Math.min(6000, 200 + String(text ?? '').length * 40));
 }
 
 /**
