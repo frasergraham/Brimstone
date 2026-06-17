@@ -51,6 +51,148 @@ export function describePlanAction(action, entities, index = 0) {
   }
 }
 
+// ── Turn-card compaction (replay summary) ─────────────────────────────────────
+//
+// Purely a UX-layer compaction of the *replay rendering*.  It reads the same
+// resolution step records the resolver already produced — it NEVER mutates them
+// and never touches the resolver.  Its job is to turn a long wall of identical
+// uneventful actions ("X guards", "Y guards", "Z guards", …) into a single
+// "guard ×N" card.
+
+/** Display verb for the two compactable action types. */
+const _COMPACT_VERB = {
+  [PlanActionType.GUARD]: 'guard',
+  [PlanActionType.MOVE]:  'move',
+};
+
+/**
+ * Decide whether a single ACTION_OK move event is "uneventful" — a plain
+ * repositioning with no combat, no block, no encounter, no loot.  Anything with
+ * a state-changing side effect is eventful and must never be collapsed.
+ */
+function _moveIsUneventful(result) {
+  if (!result) return false;
+  return !(
+    result.killed ||
+    result.blockedBy || result.blockedByFort ||
+    result.encounterSurvivors?.length || result.encounterSurvivor ||
+    result.lootItems?.length
+  );
+}
+
+/**
+ * Convert resolution steps into an ordered list of "turn cards" — one card per
+ * resolved action, in resolution order, tagged by faction.  Guard and plain
+ * moves become `compactable` cards; everything else (battles, summons,
+ * discoveries, guard strikes, blocked/encounter moves) becomes an eventful
+ * boundary card so adjacent quiet runs can never merge across them.
+ *
+ * Pure: no DOM, no mutation.  `ResEventType` is injected (rather than imported
+ * from server/) to keep this module free of a src→server dependency, mirroring
+ * compileTurnBattleSummary.
+ *
+ * @param {Array} steps  Resolution step records (StepRecord[]).
+ * @param {object} opts
+ * @param {object} opts.ResEventType   The ResEventType enum from the resolver.
+ * @param {string|null} [opts.humanFaction]  Viewer's faction (for fog filtering).
+ * @param {string} [opts.fogOfWar='none']    Fog mode; 'none' shows both sides.
+ * @returns {Array<{type,verb,faction,actorId,compactable,eventful,count}>}
+ */
+export function buildTurnCards(steps, { ResEventType, humanFaction = null, fogOfWar = 'none' } = {}) {
+  const OK           = ResEventType?.ACTION_OK    ?? 'action_ok';
+  const GUARD_STRIKE = ResEventType?.GUARD_STRIKE ?? 'guard_strike';
+  const cards = [];
+
+  for (const step of steps ?? []) {
+    const tagged = [
+      ...(step.heroEvents  ?? []).map(ev => ({ ev, faction: 'hero'  })),
+      ...(step.witchEvents ?? []).map(ev => ({ ev, faction: 'witch' })),
+      ...(step.playerEvents ?? []).flatMap(pe =>
+        (pe.events ?? []).map(ev => ({ ev, faction: pe.faction }))),
+    ];
+
+    for (const { ev, faction } of tagged) {
+      // Fog: a human under fog never sees opponent activity.
+      if (fogOfWar && fogOfWar !== 'none' && humanFaction && faction !== humanFaction) continue;
+
+      // A reactive guard strike is always an eventful boundary.
+      if (ev.type === GUARD_STRIKE) {
+        cards.push({ type: 'guard-strike', verb: 'guard-strike', faction, actorId: ev.guardianId ?? null, compactable: false, eventful: true, count: 1 });
+        continue;
+      }
+      // Only resolved actions become cards; skips/fails/budget/food are ignored.
+      if (ev.type !== OK || !ev.action) continue;
+
+      const aType = ev.action.type;
+      const verb  = _COMPACT_VERB[aType];
+      const uneventful =
+        aType === PlanActionType.GUARD ||
+        (aType === PlanActionType.MOVE && _moveIsUneventful(ev.result));
+
+      cards.push({
+        type:        aType,
+        verb:        verb ?? aType,
+        faction,
+        actorId:     ev.action.entityId ?? null,
+        compactable: !!verb && uneventful,
+        eventful:    !(verb && uneventful),
+        count:       1,
+      });
+    }
+  }
+  return cards;
+}
+
+/** Two cards belong to the same compactable run iff same verb + same faction. */
+function _sameRun(a, b) {
+  return !!b && b.compactable && b.type === a.type && b.faction === a.faction;
+}
+
+/** Collapse a run of ≥2 compactable cards into a single "verb ×N" card. */
+function _collapseRun(run) {
+  const first = run[0];
+  const count = run.reduce((n, c) => n + (c.count ?? 1), 0);
+  return {
+    ...first,
+    count,
+    collapsed: true,
+    actorIds:  run.flatMap(c => c.actorIds ?? (c.actorId != null ? [c.actorId] : [])),
+    label:     `${first.verb} ×${count}`,
+  };
+}
+
+/**
+ * Collapse adjacent runs of identical uneventful turn cards into one card each.
+ *
+ * Scans `turnCards` left-to-right; any maximal run of ≥2 adjacent cards that
+ * share the same action type AND faction AND are flagged `compactable` becomes a
+ * single card carrying `count` and a `"guard ×N"` / `"move ×N"` label.  Eventful
+ * cards (battles, deaths, summons, discoveries, guard strikes) pass through
+ * untouched and act as hard run boundaries — they are never collapsed and never
+ * collapse across faction boundaries.
+ *
+ * Pure: returns a new array; never mutates the input or its elements.
+ *
+ * @param {Array} turnCards  Output of buildTurnCards (or hand-built cards).
+ * @returns {Array} New card list with eligible runs collapsed.
+ */
+export function compactTurnRun(turnCards) {
+  const cards = Array.isArray(turnCards) ? turnCards : [];
+  const out = [];
+  let i = 0;
+  while (i < cards.length) {
+    const head = cards[i];
+    if (!head || !head.compactable) { out.push(head); i++; continue; }
+
+    let j = i + 1;
+    while (j < cards.length && _sameRun(head, cards[j])) j++;
+
+    out.push(j - i >= 2 ? _collapseRun(cards.slice(i, j)) : head);
+    i = j;
+  }
+  return out;
+}
+
 // ── Plan steps list HTML ──────────────────────────────────────────────────────
 
 const RES_ICON = {
