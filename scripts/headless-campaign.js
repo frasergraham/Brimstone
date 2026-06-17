@@ -126,9 +126,12 @@ function buildMissionState(missionDef) {
   // Deploy survivors from the canonical roster (no campaign carry-over).
   // Filter spawn spots to valid, unoccupied land — otherwise survivors land
   // on river/buildings/off-map and the engine treats them as broken.
+  // START-only party cap (mirrors src/main.js PARTY_CAP): no mission starts the
+  // player with more than 3 survivors (hero + ≤3 = ≤4 total units).
+  const PARTY_CAP = 3;
   const wantSurvivors = missionDef.maxSurvivorsFromRoster ?? 0;
   const minSurvivors  = missionDef.minSurvivors ?? 0;
-  const deployN = Math.max(wantSurvivors, minSurvivors);
+  const deployN = Math.min(Math.max(wantSurvivors, minSurvivors), PARTY_CAP);
   const heroStart = mapData.heroStart;
   const candidateSpots = missionDef.survivorStartPositions
     ? [...missionDef.survivorStartPositions]

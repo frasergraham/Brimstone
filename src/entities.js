@@ -605,6 +605,34 @@ export function rangeOf(e) {
   return base + abilityMod + effectMod;
 }
 
+/**
+ * Return a shallow, prototype-preserving CLONE of `entity` whose backpack has
+ * `weaponId` equipped — without mutating the original. Used by plan mode to
+ * project the weapon a unit will be wielding after a queued EQUIP_WEAPON, so
+ * range-driven highlights (attack targets, guard zone) reflect the post-equip
+ * weapon rather than the live one. A falsy/unchanged `weaponId` returns an
+ * equivalent clone (range unchanged), so callers can pass the projection result
+ * unconditionally. The `items` dict is deep-copied so equipping on the clone
+ * never aliases the live entity's backpack; methods (getRange/getAttack/…)
+ * still resolve via the preserved prototype.
+ */
+export function applyProjectedEquip(entity, weaponId) {
+  if (!entity) return entity;
+  // Deep-copy the per-entry objects so flipping `equipped` is local to the clone.
+  const items = {};
+  for (const k in (entity.items || {})) {
+    const v = entity.items[k];
+    items[k] = (v && typeof v === 'object') ? { ...v } : v;
+  }
+  if (weaponId) equipWeaponInItems(items, weaponId);
+  const clone = Object.setPrototypeOf({ ...entity, items }, Object.getPrototypeOf(entity));
+  // The equipped-weapon memo is a non-enumerable own-prop, so `{...entity}` does
+  // NOT copy it — the clone shares no memo. Force a (re)scan of the projected
+  // backpack so getEquippedWeaponId() reflects the equipped weapon, not stale state.
+  if (typeof clone._writeEqCache === 'function') clone._writeEqCache(null);
+  return clone;
+}
+
 // ── Backpack item dict helpers (free functions) ──────────────────────────────
 //
 // Operate on a plain `items` dict (`{ id: { count, equipped? } }`) so both the
@@ -963,6 +991,21 @@ export function defaultDisplayName(type) {
   return _DEFAULT_DISPLAY_NAMES[type] ?? type;
 }
 
+/**
+ * Pick a random SURVIVOR_ROSTER character not in the fallen-name set — the
+ * drained-pool fallback for createSurvivor. Excludes permadead survivors even
+ * when every roster index is already used. If somehow everyone has fallen
+ * (degenerate), falls back to a fully-random pick so spawning never crashes.
+ */
+function _pickNonFallenFallback(fallenNames) {
+  if (!fallenNames || fallenNames.size === 0) {
+    return SURVIVOR_ROSTER[Math.floor(Math.random() * SURVIVOR_ROSTER.length)];
+  }
+  const alive = SURVIVOR_ROSTER.filter(c => !fallenNames.has(c.name));
+  const pool = alive.length > 0 ? alive : SURVIVOR_ROSTER;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
 export function createSurvivor(col, row, ownerId = null, state = null, forcedName = null, level = 1) {
   const e = new Entity(EntityType.SURVIVOR, null, col, row, ownerId, state);
 
@@ -970,24 +1013,34 @@ export function createSurvivor(col, row, ownerId = null, state = null, forcedNam
   // otherwise fall back to the module-level set (editor previews / raw tests).
   const usedIndices = state ? state.usedRosterIndices : _usedRosterIndices;
 
+  // Campaign permadeath: survivors who fell on a completed mission are excluded
+  // from the discoverable pool forever. The set is mirrored onto the mission
+  // GameState at start (state.fallenSurvivorNames); empty/absent for normal play.
+  const fallenNames = state?.fallenSurvivorNames instanceof Set
+    ? state.fallenSurvivorNames
+    : null;
+
   // Forced pick: when an authored mission tile names a specific survivor,
   // spawn THAT roster character. Unknown / null names fall through to the
-  // existing random pick (back-compat).
+  // existing random pick (back-compat). A fallen survivor is never force-spawned
+  // — they're permadead — so a pin on one falls through to a random pick too.
   let pick = null;
-  if (forcedName != null) {
+  if (forcedName != null && !(fallenNames && fallenNames.has(forcedName))) {
     const fi = SURVIVOR_ROSTER.findIndex(c => c.name === forcedName);
     if (fi >= 0) pick = { c: SURVIVOR_ROSTER[fi], i: fi };
   }
 
   if (!pick) {
-    // Pick a random unused character from the roster
+    // Pick a random unused, non-fallen character from the roster
     const available = SURVIVOR_ROSTER
       .map((c, i) => ({ c, i }))
-      .filter(({ i }) => !usedIndices.has(i));
+      .filter(({ c, i }) => !usedIndices.has(i) && !(fallenNames && fallenNames.has(c.name)));
 
     pick = available.length > 0
       ? available[Math.floor(Math.random() * available.length)]
-      : { c: SURVIVOR_ROSTER[Math.floor(Math.random() * SURVIVOR_ROSTER.length)], i: -1 };
+      // Exhausted the unused pool — fall back to any non-fallen character so a
+      // permadead survivor still never returns even when the roster is drained.
+      : { c: _pickNonFallenFallback(fallenNames), i: -1 };
   }
 
   if (pick.i >= 0) usedIndices.add(pick.i);

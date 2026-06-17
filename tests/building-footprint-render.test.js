@@ -589,7 +589,7 @@ describe('Renderer3D._buildBuildingGroundLabel — disc + ground-painted name', 
     assert.ok(r._buildingGroundLabelsByKey.get('3,4'), 'orphan marker tracked');
   });
 
-  test('a HOUSE (background village fabric) gets no ground marker', () => {
+  test('a HOUSE gets its own ground marker (disc + "House" name) like any building', () => {
     globalThis.document = globalThis.document || {};
     const r = newRenderer();
     const created = [];
@@ -600,8 +600,9 @@ describe('Renderer3D._buildBuildingGroundLabel — disc + ground-painted name', 
     const hw = hexToWorld(2, 2);
     r._buildBuildingGroundLabel(house, hw.x, hw.z, { name: 'mapRoot' });
 
-    assert.equal(created.length, 0, 'no marker for a generic house');
-    assert.equal(r._buildingGroundLabelsByKey.size, 0);
+    assert.ok(created.some(m => m.name === 'bldgGroundDisc_2,2'), 'house disc built');
+    assert.ok(created.some(m => m.name === 'bldgGround_2,2'), 'house name built');
+    assert.ok(r._buildingGroundLabelsByKey.get('2,2'), 'house marker tracked');
   });
 
   test('no DOM (headless) → no-op (matches the document guard)', () => {

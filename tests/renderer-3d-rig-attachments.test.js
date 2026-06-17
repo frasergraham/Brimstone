@@ -162,8 +162,11 @@ function makeFakeMesh(name) {
     _disposed: false,
     _attachedBone: null,
     _affector: null,
+    _enabled: true,
     attachToBone(bone, affector) { this._attachedBone = bone; this._affector = affector; },
     detachFromBone() { this._attachedBone = null; },
+    setEnabled(v) { this._enabled = !!v; },
+    isEnabled() { return this._enabled; },
     dispose() { this._disposed = true; },
   };
 }
@@ -257,6 +260,29 @@ describe('_syncStandeeWeapon (G6)', () => {
     const standee = { paladinClone: null };
     inst._syncStandeeWeapon(standee, { id: 7, items: { sword: { count: 1, equipped: true } } });
     assert.equal(standee.weaponMesh, undefined);
+  });
+
+  test('weapon equipped onto a fog-hidden standee starts disabled (no floating sword)', () => {
+    // Regression: the blade is a scene-root mesh driven by attachToBone, so it
+    // does NOT inherit the standee plane's setEnabled(false). Equipping a
+    // weapon while the unit is fogged must not flash a floating sword over the
+    // hidden hex — the blade must inherit the hidden state at creation.
+    const inst = makeInst();
+    const hiddenPlane = makeFakeMesh('cone');
+    hiddenPlane.setEnabled(false);
+    const standee = { paladinClone: paladinCloneStub(), plane: hiddenPlane };
+    inst._syncStandeeWeapon(standee, { id: 7, items: { sword: { count: 1, equipped: true } } });
+    assert.ok(standee.weaponMesh, 'weapon mesh created');
+    assert.equal(standee.weaponMesh.isEnabled(), false,
+      'blade inherits the fog-hidden standee plane state');
+  });
+
+  test('weapon equipped onto a visible standee starts enabled', () => {
+    const inst = makeInst();
+    const visiblePlane = makeFakeMesh('cone'); // _enabled defaults true
+    const standee = { paladinClone: paladinCloneStub(), plane: visiblePlane };
+    inst._syncStandeeWeapon(standee, { id: 7, items: { sword: { count: 1, equipped: true } } });
+    assert.equal(standee.weaponMesh.isEnabled(), true);
   });
 });
 

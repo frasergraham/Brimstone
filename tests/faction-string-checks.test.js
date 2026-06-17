@@ -47,7 +47,13 @@ const ALLOWLIST = Object.freeze({
   // `pov: 'hero'` flag (initScenario) selects which side is human-controlled
   // so fog-of-war repros have an observer — a loader config check, not a
   // faction-behavior branch.
-  'src/main.js':                 46,
+  // src/main.js bumped 46 → 47 (2026-06-17, campaign start party-cap): the
+  // final START-cap guard counts hero-faction survivors at mission start via
+  // `e.owner === 'hero'` to trim any over-cap party down to ≤3. This mirrors the
+  // adjacent min/max balancing filter's established `owner === 'hero' && type
+  // === SURVIVOR` style (campaign is hero-only single-player, so it's a genuine
+  // player-faction count). Ratchet down if a Faction.side helper is adopted here.
+  'src/main.js':                 47,
   'src/ui.js':                   25,
 
   // Pre-existing core modules — generalized in Finding 1, residual checks

@@ -278,7 +278,7 @@ describe('Save migration — v2 → v3 long_watch backfill', () => {
       roster: [], resources: {}, heroStats: { hp: 14 }, storyFlags: {},
     };
     const v3 = _migrate(v2, 2);
-    assert.equal(v3.version, 6); // migrates straight through v3 → v4 → v5 → v6
+    assert.equal(v3.version, 7); // migrates straight through v3 → v4 → v5 → v6 → v7
     assert.ok(v3.completedMissions.includes('long_watch'),
       'long_watch should be backfilled so witchs_trail prereq is satisfied');
     // Original progress preserved
@@ -293,15 +293,15 @@ describe('Save migration — v2 → v3 long_watch backfill', () => {
       roster: [], resources: {}, heroStats: { hp: 14 }, storyFlags: {},
     };
     const v3 = _migrate(v2, 2);
-    assert.equal(v3.version, 6); // migrates straight through v3 → v4 → v5 → v6
+    assert.equal(v3.version, 7); // migrates straight through v3 → v4 → v5 → v6 → v7
     assert.ok(!v3.completedMissions.includes('long_watch'),
       'long_watch should not be skipped for a player still on dark_ritual');
   });
 
   test('passes through current-version saves unchanged version-wise', () => {
-    const v6 = { version: 6, currentMission: 'long_watch', completedMissions: [] };
-    const out = _migrate(v6, 6);
-    assert.equal(out.version, 6);
+    const v7 = { version: 7, currentMission: 'long_watch', completedMissions: [], fallen: [] };
+    const out = _migrate(v7, 7);
+    assert.equal(out.version, 7);
   });
 });
 
@@ -320,7 +320,7 @@ describe('Save migration — v3 → v4 tutorial backfill', () => {
       roster: [], resources: {}, heroStats: { hp: 14 }, storyFlags: {},
     };
     const v4 = _migrate(v3, 3);
-    assert.equal(v4.version, 6);
+    assert.equal(v4.version, 7);
     assert.ok(v4.completedMissions.includes('tutorial'),
       'tutorial should be backfilled so The Awakening prereq is satisfied');
   });
@@ -346,7 +346,7 @@ describe('Save migration — v3 → v4 tutorial backfill', () => {
       roster: [], resources: {}, heroStats: { hp: 14 }, storyFlags: {},
     };
     const v4 = _migrate(v3, 3);
-    assert.equal(v4.version, 6);
+    assert.equal(v4.version, 7);
     assert.ok(!v4.completedMissions.includes('tutorial'));
   });
 
@@ -359,7 +359,7 @@ describe('Save migration — v3 → v4 tutorial backfill', () => {
       roster: [], resources: {}, heroStats: { hp: 14 }, storyFlags: {},
     };
     const out = _migrate(v2, 2);
-    assert.equal(out.version, 6);
+    assert.equal(out.version, 7);
     assert.ok(out.completedMissions.includes('tutorial'));
     assert.ok(out.completedMissions.includes('gathering_survivors'));
   });
@@ -374,8 +374,9 @@ describe('Save migration — v5 → v6 armory dict-of-objects', () => {
     const v5 = { version: 5, currentMission: 'm1', completedMissions: [],
       roster: [], resources: { wood: 3 }, weapons: { sword: 2, bow: 1 }, heroStats: { hp: 14 } };
     const out = _migrate(v5, 5);
-    assert.equal(out.version, 6);
+    assert.equal(out.version, 7); // v5 → v6 (armory) → v7 (fallen backfill)
     assert.deepEqual(out.weapons, { sword: { count: 2 }, bow: { count: 1 } });
+    assert.deepEqual(out.fallen, [], 'v6 → v7 backfills the fallen memorial');
     // resources stay a flat numeric map — deliberately not unified.
     assert.deepEqual(out.resources, { wood: 3 });
   });
@@ -384,8 +385,9 @@ describe('Save migration — v5 → v6 armory dict-of-objects', () => {
     const v6 = { version: 6, currentMission: 'm1', completedMissions: [],
       roster: [], weapons: { sword: { count: 2 } }, heroStats: { hp: 14 } };
     const out = _migrate(v6, 6);
-    assert.equal(out.version, 6);
+    assert.equal(out.version, 7); // v6 → v7 (fallen backfill) is the only step
     assert.deepEqual(out.weapons, { sword: { count: 2 } });
+    assert.deepEqual(out.fallen, []);
   });
 
   test('cascades v4 → v6: folds the equipped weapon AND flattens the armory pool', () => {
@@ -398,7 +400,7 @@ describe('Save migration — v5 → v6 armory dict-of-objects', () => {
       heroStats: { hp: 14, weapon: 'sword', items: { sword: 1 } },
     };
     const out = _migrate(v4, 4);
-    assert.equal(out.version, 6);
+    assert.equal(out.version, 7);
     // v4 → v5: the heroStats `weapon` slot folds into items, tagged equipped.
     assert.equal(out.heroStats.weapon, undefined);
     assert.equal(getEquippedWeaponIdOf(out.heroStats.items), 'sword');

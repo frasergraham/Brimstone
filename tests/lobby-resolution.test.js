@@ -75,6 +75,13 @@ function cleanUp() {
   try {
     db.prepare("DELETE FROM game_plan_status WHERE 1=1").run();
     db.prepare("DELETE FROM game_saves WHERE players_json LIKE '%test-resolution-%'").run();
+    // Completed games persisted by a game-over resolution carry the test player
+    // ids in players_json. Remove the metadata rows and their replay rounds.
+    const ids = db.prepare("SELECT game_id FROM completed_games WHERE players_json LIKE '%test-resolution-%'").all();
+    for (const { game_id } of ids) {
+      db.prepare("DELETE FROM game_replay_rounds WHERE game_id = ?").run(game_id);
+    }
+    db.prepare("DELETE FROM completed_games WHERE players_json LIKE '%test-resolution-%'").run();
   } catch {}
 }
 
@@ -139,6 +146,58 @@ describe('online resolution loop — _executeResolution', () => {
       assert.ok(entry.preStateJson, 'replay round should snapshot pre-state');
       assert.ok(entry.stepsJson,    'replay round should record steps');
     }
+  });
+
+  test('the game-ending round is persisted in the completed-game replay', () => {
+    const { room } = createTwoHumanGame();
+
+    // Resolve one ordinary round so the replay has prior history.
+    handlePlanSubmit(P1, room.id, []);
+    handlePlanSubmit(P2, room.id, []);
+    assert.equal(room.state.round, 2, 'first round should resolve normally');
+    const finalRoundNum = room.state.round; // the round we are about to make game-ending
+
+    // Make the next resolution game-ending: eliminate every witch leader so
+    // checkVictory() declares a hero win when this round finalizes.
+    for (const e of room.state.entities) {
+      if (isLeaderType(e.type) && e.owner === 'witch') {
+        e.hp = 0; // `alive` is a getter derived from hp > 0
+      }
+    }
+
+    handlePlanSubmit(P1, room.id, []);
+    handlePlanSubmit(P2, room.id, []);
+
+    assert.ok(room.state.gameOver, 'the round should have ended the game');
+    assert.equal(room.state.winner, 'hero', 'eliminating the witch should win it for the hero');
+
+    // In-memory replay must include the final round (with finalEntities).
+    assert.ok(
+      room.replayRounds.some(r => r.roundNum === finalRoundNum),
+      'in-memory replayRounds should include the game-ending round',
+    );
+
+    // The completed-game replay persisted on game-over — the data the
+    // full-game replay reads back — MUST include the final round. The bug was
+    // that createCompletedGame ran before the final round was appended.
+    const game = db.prepare(
+      'SELECT game_id FROM completed_games WHERE room_id = ?'
+    ).get(room.id);
+    assert.ok(game, 'a completed-game row should be persisted on game over');
+    const persistedRounds = db.prepare(
+      'SELECT round_num, final_entities_json FROM game_replay_rounds WHERE game_id = ? ORDER BY round_num'
+    ).all(game.game_id);
+    const persistedNums = persistedRounds.map(r => r.round_num);
+    assert.ok(
+      persistedNums.includes(finalRoundNum),
+      `persisted completed-game replay should include the final round ${finalRoundNum}, got [${persistedNums}]`,
+    );
+    // The game-ending round should carry final entity state for the outcome view.
+    const lastPersisted = persistedRounds.find(r => r.round_num === finalRoundNum);
+    assert.ok(
+      lastPersisted?.final_entities_json,
+      'the game-ending round should persist finalEntitiesJson',
+    );
   });
 });
 

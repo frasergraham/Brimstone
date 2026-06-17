@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
   xpProgress, progressUnitCardHTML, partyPaneHTML, missionListPaneHTML, missionRows,
-  weaponName, weaponStatString, progressSquadCap,
+  weaponName, weaponStatString, progressSquadCap, fallenSectionHTML,
 } from '../../src/campaign/campaign-ui.js';
 import { xpForLevel } from '../../src/balance.js';
 import { Campaign } from '../../src/campaign/campaign.js';
@@ -168,6 +168,16 @@ describe('progressUnitCardHTML weapons list', () => {
 
     const none = progressUnitCardHTML(unit({ items: {} }), { idx: 0 });
     assert.doesNotMatch(none, /cprog-weapons/);
+  });
+
+  test('equipped weapon held in multiples shows its true count (×2), not a single undifferentiated row', () => {
+    // Two swords, one equipped — the spare copy must still be visible. Before the
+    // fix the equipped row hardcoded ×1 and the carried filter dropped the
+    // same-id spare, so the second sword vanished entirely.
+    const html = progressUnitCardHTML(
+      unit({ items: { sword: { count: 2, equipped: true } } }), { idx: 0 });
+    assert.match(html, /✓ Equipped/);                 // still clearly the equipped weapon
+    assert.match(html, /×2/, 'the quantity of the stacked weapon must be surfaced');
   });
 });
 
@@ -569,5 +579,59 @@ describe('main.js Campaign Progress wiring', () => {
   test('briefing preserves a squad already chosen on the Progress screen', () => {
     // _showMissionBriefing must NOT unconditionally reset _activeRosterIndices.
     assert.match(src, /Preserve a squad already chosen on the Progress screen/);
+  });
+});
+
+// ── ⚰ Fallen memorial (fallenSectionHTML) ──────────────────────────────────
+
+describe('fallenSectionHTML', () => {
+  const resolver = (id) => ({ first_night: 'The First Night', dark_ritual: 'The Dark Ritual' }[id] || id);
+
+  test('empty / non-array fallen → no section at all', () => {
+    assert.equal(fallenSectionHTML([]), '');
+    assert.equal(fallenSectionHTML(null), '');
+    assert.equal(fallenSectionHTML(undefined), '');
+  });
+
+  test('renders the ⚰ Fallen heading and a tombstone card per fallen survivor', () => {
+    const html = fallenSectionHTML([
+      { name: 'Abigail', title: 'Scout', level: 3, diedInMission: 'first_night' },
+      { name: 'Bartholomew', title: 'Guard', level: 1, diedInMission: 'dark_ritual' },
+    ], resolver);
+    assert.match(html, /⚰ Fallen/);                 // heading
+    assert.equal(occurrences(html, 'fallen-card'), 2);
+    assert.equal(occurrences(html, 'fallen-glyph'), 2);
+  });
+
+  test('each card shows the name + "fell in <mission title>" + level', () => {
+    const html = fallenSectionHTML(
+      [{ name: 'Abigail', title: 'Scout', level: 4, diedInMission: 'first_night' }],
+      resolver,
+    );
+    assert.match(html, /Abigail/);
+    assert.match(html, /Scout/);                     // title
+    assert.match(html, /fell in The First Night/);   // resolved mission title
+    assert.match(html, /Lv 4/);                       // level
+  });
+
+  test('falls back to the raw mission id when no resolver is given', () => {
+    const html = fallenSectionHTML([{ name: 'Caleb', diedInMission: 'witchs_trail' }]);
+    assert.match(html, /fell in witchs_trail/);
+  });
+
+  test('tombstone markup uses the strike-through Fallen card classes', () => {
+    const html = fallenSectionHTML([{ name: 'Dorcas', diedInMission: 'first_night' }], resolver);
+    assert.match(html, /class="fallen-section"/);
+    assert.match(html, /class="fallen-name"/);
+    assert.match(html, /class="fallen-where"/);
+  });
+
+  test('escapes HTML in a (defensively untrusted) mission title', () => {
+    const html = fallenSectionHTML(
+      [{ name: 'Eve', diedInMission: 'x' }],
+      () => '<script>boom</script>',
+    );
+    assert.doesNotMatch(html, /<script>boom<\/script>/);
+    assert.match(html, /&lt;script&gt;/);
   });
 });

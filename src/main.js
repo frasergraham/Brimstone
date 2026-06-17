@@ -34,7 +34,7 @@ import { PlanActionType, groupPlanByEntity } from './planner.js';
 import { buildStepDigest, buildStoryBeatDigest, isEventVisible, compactUneventfulTurns } from './replay-timeline.js';
 import { hexDistance, getNeighbors, hexKey } from './hex.js';
 import { planCombatFrames } from './combat-presentation.js';
-import { MAX_FORTIFY_LEVEL, FORT_IMPASSABLE_THRESHOLD, deriveBlockedSlots } from './tiles.js';
+import { MAX_FORTIFY_LEVEL, MAX_FORTIFY_HP, FORTIFY_HP_PER_LEVEL, FORT_IMPASSABLE_THRESHOLD, deriveBlockedSlots } from './tiles.js';
 import { sightRange, computeLineOfSight, hasLineOfSight, assignSlotOnTile } from './actions.js';
 import { ITEMS } from './items.js';
 import { getFaction, findFaction, allFactions, getFactionsForSide, sightRangeForEntity } from './factions.js';
@@ -52,7 +52,7 @@ import { nodeController } from './game.js';
 import { MissionConductor, areHintsSuppressed, markHintsSeen, resetAllHintsForCampaign } from './mission-conductor.js';
 import { Entity, createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, EntityType, ENTITY_COLOR, applyLevel, getEquippedWeaponIdOf, normalizeItems, flattenItemCounts } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
-import { Campaign, CAMPAIGN_SLOT_COUNT, buildVictoryDelegate, snapshotSurvivor, processWaves, reconcileRosterAfterMission, applyCarriedHeroLoadout } from './campaign/campaign.js';
+import { Campaign, CAMPAIGN_SLOT_COUNT, buildVictoryDelegate, snapshotSurvivor, processWaves, reconcileRosterAfterMission, collectFallenAfterMission, applyCarriedHeroLoadout } from './campaign/campaign.js';
 import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
 import { processStoryTriggers } from './campaign/missions.js';
 import { MissionLogicEngine } from './mission-logic/engine.js';
@@ -73,7 +73,7 @@ import {
   campaignCardHTML as _campaignCardHTML, survivorCardHTML as _survivorCardHTML,
   campaignPartyHTML as _campaignPartyHTML, objectiveDescription as _objectiveDescription,
   partyPaneHTML as _partyPaneHTML, missionListPaneHTML as _missionListPaneHTML,
-  progressSquadCap as _progressSquadCap,
+  progressSquadCap as _progressSquadCap, fallenSectionHTML as _fallenSectionHTML,
   missionRows as _missionRows,
   departureMessage as _departureMessage, arrivalMessage as _arrivalMessage,
 } from './campaign/campaign-ui.js';
@@ -1686,14 +1686,18 @@ function _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn) {
     renderer.addHpChangeFlash(atkCol, atkRow, -(result.counterDmg), { entityId: actorSnap.id });
     _applyDisplayHp(actorSnap.id, -(result.counterDmg));
   }
-  if (result?.fortDamaged) {
-    renderer.addFlash(tgtCol, tgtRow, '🏰-1',
+  if (result?.fortHpDamage) {
+    // Floater shows HP chipped; if the hit also dropped a level, note that.
+    const lvlNote = result.fortDamaged ? ` (-${result.fortDamaged} lvl)` : '';
+    renderer.addFlash(tgtCol, tgtRow, `🏰-${result.fortHpDamage}${lvlNote}`,
       'rgba(120,120,140,0.15)', 1600, 0.65, 'rgba(180,180,200,1)');
-    // Apply the fort-level delta now so the hex ring visibly thins out in
-    // sync with the floater (fortifyLevel was rewound at the start of
-    // _animateResolutionSteps so this step's damage hasn't landed yet).
+    // Apply the fort-HP delta now so the hex ring visibly thins out in sync with
+    // the floater (fortifyHP was rewound at the start of _animateResolutionSteps
+    // so this step's damage hasn't landed yet). The derived level follows.
     const dTile = state.tiles.get(hexKey(tgtCol, tgtRow));
-    if (dTile && dTile.fortifyLevel > 0) dTile.fortifyLevel -= 1;
+    if (dTile && (dTile.fortifyHP | 0) > 0) {
+      dTile.fortifyHP = Math.max(0, (dTile.fortifyHP | 0) - result.fortHpDamage);
+    }
   }
   if (result?.killed) {
     const deadColor = targetSnap.owner === 'hero' ? '#d4a72c' : '#9b59b6';
@@ -1941,15 +1945,16 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
   );
 
   // ── Fortification rewind ─────────────────────────────────────────────
-  // state.tiles already carries the post-resolution fortifyLevel by the
-  // time we animate.  Snapshot those values so we can restore them at the
-  // end, then walk every event to compute the deltas each tile received
-  // and subtract them so the ring animation starts at the pre-resolution
-  // thickness.  Each fort-mutating event will re-apply its delta live as
-  // we animate that step below.
-  const postFortMap = new Map();
-  const fortDeltasByTile = new Map(); // hexKey → total delta applied during resolution
-  for (const [k, t] of state.tiles) postFortMap.set(k, t.fortifyLevel || 0);
+  // state.tiles already carries the post-resolution fortifyHP by the time we
+  // animate. Snapshot those values so we can restore them at the end, then walk
+  // every event to compute the HP delta each tile received and subtract it so
+  // the ring animation starts at the pre-resolution thickness. Each fort-mutating
+  // event re-applies its HP delta live as we animate that step below. Forts are
+  // an HP pool now (Tile.fortifyHP, with fortifyLevel a derived getter), so the
+  // rewind tracks HP — a single hit can shave HP without dropping a level.
+  const postFortMap = new Map();      // hexKey → post-resolution fortifyHP
+  const fortDeltasByTile = new Map(); // hexKey → total HP delta applied during resolution
+  for (const [k, t] of state.tiles) postFortMap.set(k, t.fortifyHP || 0);
   const _bumpDelta = (col, row, delta) => {
     if (!delta) return;
     const k = hexKey(col, row);
@@ -1964,26 +1969,26 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     for (const ev of evs) {
       const r = ev.result;
       if (!r) continue;
-      // FORTIFY: +defGain on actor's tile
+      // FORTIFY: +defHpGain HP on actor's tile
       if (ev.action?.type === PlanActionType.FORTIFY && r.success) {
         const actorSnap = step.entitySnapshot?.find(e => e.id === ev.action.entityId);
-        if (actorSnap) _bumpDelta(actorSnap.col, actorSnap.row, +(r.defGain ?? 1));
+        if (actorSnap) _bumpDelta(actorSnap.col, actorSnap.row, +(r.defHpGain ?? 0));
       }
-      // Battle / guard strike degrading defender's fort: -1
-      if (r.fortDamaged && !r.fortAssault) {
+      // Battle / guard strike eroding defender's fort: −fortHpDamage HP
+      if (r.fortHpDamage && !r.fortAssault) {
         const tSnap = ev.battleSnaps?.targetSnap;
-        if (tSnap) _bumpDelta(tSnap.col, tSnap.row, -1);
+        if (tSnap) _bumpDelta(tSnap.col, tSnap.row, -(r.fortHpDamage ?? 0));
       }
-      // Fort assault: fortLevelAfter - fortLevelBefore (negative delta)
+      // Fort assault: fortHpAfter − fortHpBefore (negative HP delta)
       if (r.fortAssault && r.success) {
-        _bumpDelta(r.targetCol, r.targetRow, (r.fortLevelAfter ?? 0) - (r.fortLevelBefore ?? 0));
+        _bumpDelta(r.targetCol, r.targetRow, (r.fortHpAfter ?? 0) - (r.fortHpBefore ?? 0));
       }
     }
   }
-  // Rewind tiles to pre-resolution fort levels.
+  // Rewind tiles to pre-resolution fort HP (the derived level follows).
   for (const [k, delta] of fortDeltasByTile) {
     const t = state.tiles.get(k);
-    if (t) t.fortifyLevel = Math.max(0, (postFortMap.get(k) ?? 0) - delta);
+    if (t) t.fortifyHP = Math.max(0, (postFortMap.get(k) ?? 0) - delta);
   }
 
   // 3D combat-presentation (Phase 1): when a step's combat frame is held by
@@ -2823,10 +2828,15 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         if (speed === 'cinematic') await renderer.waitForAnimations();
       }
 
-      // Apply the fort-level delta now (visible even to non-viewer so the
-      // authoritative state stays in sync across all observers).
+      // Apply the fort-HP delta now (visible even to non-viewer so the
+      // authoritative state stays in sync across all observers). The derived
+      // level follows the HP pool. Legacy events without fortHpAfter fall back
+      // to the level field.
       const tile = state.tiles.get(hexKey(tCol, tRow));
-      if (tile) tile.fortifyLevel = r.fortLevelAfter ?? tile.fortifyLevel;
+      if (tile) {
+        if (r.fortHpAfter != null) tile.fortifyHP = r.fortHpAfter | 0;
+        else if (r.fortLevelAfter != null) tile.fortifyLevel = r.fortLevelAfter;
+      }
       redrawFn();
       hadBattle = true;
     }
@@ -3041,8 +3051,12 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             await _showDiscoveryOnCard(s, i, action.entityId);
           }
         } else if (result.log?.length) {
-          // No survivor — show the "nothing found" result dialog
-          await new Promise(resolve => ui._showResultDialog(result.log, resolve));
+          // No survivor answered — surface the "NO RESPONSE" outcome inline on
+          // the action card (built by buildStepDigest) instead of popping a
+          // result dialog. Matches EXPLORE's silent-on-the-card convention.
+          ui?.revealReplayEntryOutcome?.(i, action.entityId);
+          redrawFn();
+          await playbackDelay(700);
         }
       }
     }
@@ -3056,9 +3070,13 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       if (!actor) continue;
       // Apply the fort delta live so the ring thickens exactly now — even
       // for opponents / other players (state is authoritative for everyone).
+      // Fort is an HP pool; add defHpGain (falls back to the level-derived gain
+      // for legacy events that predate defHpGain).
       const actorTile = state.tiles.get(hexKey(actor.col, actor.row));
-      if (actorTile) actorTile.fortifyLevel = Math.min(MAX_FORTIFY_LEVEL,
-        (actorTile.fortifyLevel || 0) + (result.defGain ?? 1));
+      if (actorTile) {
+        const hpGain = result.defHpGain ?? ((result.defGain ?? 1) * FORTIFY_HP_PER_LEVEL);
+        actorTile.fortifyHP = Math.min(MAX_FORTIFY_HP, (actorTile.fortifyHP || 0) + hpGain);
+      }
       // Surface the +N floater to anyone who can see the fortifying unit.
       if (!_evVisible(ev, step.entitySnapshot, postEntities)) continue;
       await _actionGate();
@@ -3243,12 +3261,13 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 
   // Restore the authoritative final state.
   state.entities = finalEntities;
-  // Restore post-resolution fortifyLevel values on every tile that was
-  // rewound at the start of the animation (covers skipped/aborted playbacks
-  // where some step deltas may not have been re-applied live).
+  // Restore post-resolution fortifyHP values on every tile that was rewound at
+  // the start of the animation (covers skipped/aborted playbacks where some step
+  // deltas may not have been re-applied live). postFortMap holds HP; the derived
+  // level follows.
   for (const [k, v] of postFortMap) {
     const t = state.tiles.get(k);
-    if (t && t.fortifyLevel !== v) t.fortifyLevel = v;
+    if (t && (t.fortifyHP || 0) !== v) t.fortifyHP = v;
   }
   // Deferred mid-replay conversation actions — now that the authoritative
   // entities are back, the scripted moves/despawns stick. These mutate real
@@ -3743,6 +3762,28 @@ let _campaignUnlocked = false; // Admin: bypass mission prerequisites
 let _activeRosterIndices = []; // Indices into _activeCampaign.roster that are "active" (will deploy)
 let _progressPane = 'party';   // Campaign Progress mobile pane toggle: 'party' | 'missions'
 
+// START-only party cap: a mission may deploy at most PARTY_CAP survivors from
+// the roster (+ the hero = ≤4 total starting units). The roster/bench may hold
+// MORE — the rest stay benched. This clamps the STARTING party only; mid-mission
+// survivor discovery is NOT capped by it (the field count may exceed 3).
+const PARTY_CAP = 3;
+
+/** A mission's effective START survivor cap: its authored value clamped to
+ *  PARTY_CAP. Console-warns once per mission when the authored value is clamped
+ *  so over-cap mission JSON surfaces in dev. */
+function _effectivePartyCap(value, missionId, field) {
+  const authored = value ?? PARTY_CAP;
+  if (authored > PARTY_CAP) {
+    if (!_partyCapWarned.has(`${missionId}:${field}`)) {
+      _partyCapWarned.add(`${missionId}:${field}`);
+      console.warn(`[campaign] ${missionId}: ${field}=${authored} exceeds the start party cap of ${PARTY_CAP} — clamping to ${PARTY_CAP}.`);
+    }
+    return PARTY_CAP;
+  }
+  return authored;
+}
+const _partyCapWarned = new Set();
+
 // ── Campaign mid-mission save/resume ──────────────────────────────────────────
 
 
@@ -4022,14 +4063,15 @@ function _renderCampaignProgressScreen() {
     .filter(i => i >= 0 && i < _activeCampaign.roster.length)
     .slice(0, maxActive);
 
-  // Party pane.
+  // Party pane — surviving roster, then the ⚰ Fallen memorial (whole campaign).
   const partyEl = document.getElementById('campaign-progress-party');
   if (partyEl) {
+    const missionTitleResolver = (id) => _activeCampaign.getMissionDef(id)?.title ?? id;
     partyEl.innerHTML = _partyPaneHTML(
       _activeCampaign.heroStats, _activeCampaign.roster,
       _activeRosterIndices, maxActive,
       { resources: _activeCampaign.resources, weapons: _activeCampaign.weapons },
-    );
+    ) + _fallenSectionHTML(_activeCampaign.fallen, missionTitleResolver);
   }
 
   // Mission pane.
@@ -4357,8 +4399,10 @@ function _showMissionBriefing(missionId) {
     <div class="campaign-obj"><span class="campaign-obj-icon">💀</span> <strong>Defeat:</strong> ${loseDesc}</div>
   `;
 
-  // Switch roster summary into Active/Reserve deploy mode.
-  const maxActive = missionDef.maxSurvivorsFromRoster ?? 0;
+  // Switch roster summary into Active/Reserve deploy mode. The deploy cap is the
+  // mission's authored value clamped to the START-only PARTY_CAP (≤3 survivors),
+  // so the picker can never select more than 3 — the rest stay benched.
+  const maxActive = Math.min(missionDef.maxSurvivorsFromRoster ?? 0, PARTY_CAP);
   // Preserve a squad already chosen on the Progress screen; otherwise default to
   // front-filling the active slots. Either way clamp to this mission's cap and
   // drop any indices that fall outside the current roster.
@@ -4436,6 +4480,11 @@ function _scenarioPlan(planDefs, byRef) {
     } else if (p.explore) {
       // Pair with a tile-level `exploreOverride` for a deterministic loot roll.
       out.push({ type: PlanActionType.EXPLORE, entityId: actor.id });
+    } else if (p.soundHorn) {
+      // Sound Horn — the actor needs the `horn` item (granted via the
+      // `heroHorn: true` scenario flag in initScenario). With no hidden
+      // survivors in range the result is the "no response" inline card.
+      out.push({ type: PlanActionType.SOUND_HORN, entityId: actor.id });
     } else if (p.sentTo) {
       // Free action: a SURVIVOR is sent to another leader. The action now
       // lives on the survivor (the survivor is the actor). `p.sentTo`
@@ -4491,6 +4540,9 @@ function initScenario(def) {
     if (typeof ef === 'string') applyEffect(state.hero, ef);
     else if (ef?.id) applyEffect(state.hero, ef.id, ef);
   }
+  // Grant the hero leader the Horn key item so a `{ ref:'hero', soundHorn:true }`
+  // heroPlan step is valid (the Sound Horn action gates on hasItem('horn')).
+  if (def.heroHorn && state.hero && !state.hero.hasItem('horn')) state.hero.addItem('horn');
   for (const ef of def.witchEffects ?? []) {
     if (!state.witch) break;
     if (typeof ef === 'string') applyEffect(state.witch, ef);
@@ -4620,6 +4672,12 @@ function _initCampaignMission(missionDef) {
   if (missionDef.maxDiscoverableSurvivors != null) {
     mapData.maxDiscoverableSurvivors = missionDef.maxDiscoverableSurvivors;
   }
+  // Campaign permadeath: exclude fallen survivors from this mission's discovery
+  // pool so a permadead survivor can never be re-found. (This is the ONLY
+  // discovery change — discovery counts/flow are otherwise untouched.)
+  if (_activeCampaign?.fallen?.length) {
+    mapData.fallenSurvivorNames = _activeCampaign.fallen.map(f => f.name);
+  }
 
   // Hide setup, show game
   document.getElementById('setup-screen').style.display = 'none';
@@ -4697,9 +4755,12 @@ function _initCampaignMission(missionDef) {
     state.inventory.hero = normalizeItems(res);
   }
 
-  // Deploy carried-over survivors from roster (uses active/reserve selection)
-  if (_activeCampaign && missionDef.maxSurvivorsFromRoster > 0) {
-    const toDeploy = _activeRosterIndices.slice(0, missionDef.maxSurvivorsFromRoster);
+  // Deploy carried-over survivors from roster (uses active/reserve selection).
+  // The deploy count is the mission's authored cap clamped to the START-only
+  // PARTY_CAP (≤3), so no mission can START with more than 3 roster survivors.
+  const _maxFromRoster = _effectivePartyCap(missionDef.maxSurvivorsFromRoster, missionDef.id, 'maxSurvivorsFromRoster');
+  if (_activeCampaign && _maxFromRoster > 0) {
+    const toDeploy = _activeRosterIndices.slice(0, _maxFromRoster);
     // Place survivors at explicit start positions if the mission specifies
     // them; otherwise fall back to neighbors of the hero's start tile.
     const heroStart = mapData.heroStart;
@@ -4750,12 +4811,15 @@ function _initCampaignMission(missionDef) {
   }
 
   // ── Roster balancing: enforce min/max survivor count ──────────────────────
+  // Both bounds are clamped to the START-only PARTY_CAP (≤3): a mission can
+  // neither require nor allow more than 3 starting survivors, so the mission can
+  // never START with >4 total player units (hero + 3).
   if (missionDef.minSurvivors != null || missionDef.maxSurvivors != null) {
     const heroSurvivors = state.entities.filter(
       e => e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR
     );
-    const min = missionDef.minSurvivors ?? 0;
-    const max = missionDef.maxSurvivors ?? Infinity;
+    const min = Math.min(missionDef.minSurvivors ?? 0, PARTY_CAP);
+    const max = _effectivePartyCap(missionDef.maxSurvivors, missionDef.id, 'maxSurvivors');
 
     // Too many — some leave with a narrative reason
     if (heroSurvivors.length > max) {
@@ -4787,6 +4851,23 @@ function _initCampaignMission(missionDef) {
         state.entities.push(s);
         state.addLog(_arrivalMessage(s.name));
       }
+    }
+  }
+
+  // ── Final START-cap guard ─────────────────────────────────────────────────
+  // Belt-and-suspenders: regardless of which path placed them (roster deploy,
+  // min/max balancing, or any future scripted start spawn), no mission may START
+  // with more than PARTY_CAP survivors. Trim any excess so the starting party is
+  // always ≤4 total units (hero + ≤3). Mid-mission discovery is unaffected — this
+  // runs once at start and the on-field count may grow past 3 via discovery.
+  const _startingSurvivors = state.entities.filter(
+    e => e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR && !e.isNpc
+  );
+  if (_startingSurvivors.length > PARTY_CAP) {
+    console.warn(`[campaign] ${missionDef.id}: ${_startingSurvivors.length} starting survivors exceeds the cap of ${PARTY_CAP} — trimming to ${PARTY_CAP}.`);
+    for (const s of _startingSurvivors.slice(PARTY_CAP)) {
+      state.entities.splice(state.entities.indexOf(s), 1);
+      state.addLog(_departureMessage(s.name));
     }
   }
 
@@ -4951,15 +5032,24 @@ function _handleCampaignMissionEnd() {
   }
 
   let survivors;
+  // Survivors who fell THIS mission, added to the memorial only on a WIN.
+  // Computed before the debrief render so the Fallen card can list this run's
+  // casualties even before they exist in Campaign.fallen.
+  let newlyFallen = [];
   if (won) {
     // Gather surviving survivors for roster (permadeath: dead ones are lost).
     // Roster members who were deployed and died are dropped; undeployed
     // members are preserved; alive deployed members are snapshotted.
     survivors = reconcileRosterAfterMission(_activeCampaign.roster, state.entities);
+    // Permadeath: a deployed survivor who died on this COMPLETED mission is
+    // mourned forever — recorded into Campaign.fallen and removed from the
+    // discovery pool. Only on a WIN; a loss restores the party (else-branch).
+    newlyFallen = collectFallenAfterMission(state.entities, missionDef.id);
 
     _activeCampaign.applyMissionResult(missionDef.id, {
       won,
       survivors,
+      fallen: newlyFallen,
       // Campaign.resources is a flat numeric map; flatten the live
       // dict-of-objects faction inventory back down on the way out.
       resources: flattenItemCounts(state.inventory.hero),
@@ -5011,8 +5101,13 @@ function _handleCampaignMissionEnd() {
     items: normalizeItems(state.hero.items),
   } : _activeCampaign.heroStats;
   const rosterHeading = won ? 'Surviving Roster' : 'Party Restored';
+  // ⚰ Fallen memorial — this run's casualties on a win. The whole campaign's
+  // fallen are shown on the Progress screen; the debrief focuses on who was lost
+  // THIS mission so the loss lands. Empty → no section.
+  const missionTitleResolver = (id) => _activeCampaign.getMissionDef(id)?.title ?? id;
   rosterEl.innerHTML = `<h3>${rosterHeading}</h3>` +
-    _campaignPartyHTML(heroSnap, survivors);
+    _campaignPartyHTML(heroSnap, survivors) +
+    _fallenSectionHTML(newlyFallen, missionTitleResolver);
 
   // Clean up game state — destroy the UIController and conductor first so their
   // event listeners don't leak onto the shared DOM and double-fire in the next game.

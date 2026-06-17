@@ -686,6 +686,72 @@ describe('Campaign class', () => {
     assert.equal(raw.campaignId, 'calebs_hollow_prologue');
   });
 
+  test('new campaign starts with an empty fallen memorial', () => {
+    const c = new Campaign(hollowDef);
+    assert.deepEqual(c.fallen, []);
+    assert.equal(c.version, 7); // SAVE_VERSION bumped 6 → 7
+  });
+
+  test('fallen round-trips through save/load (v7)', () => {
+    const c = new Campaign(hollowDef);
+    c.recordFallen([{ name: 'Abigail', title: 'Scout', level: 3, diedInMission: 'first_night' }]);
+    c.save();
+    const raw = JSON.parse(localStorage.getItem(`brimstone-campaign-calebs_hollow_prologue-slot1`));
+    assert.equal(raw.version, 7);
+    assert.equal(raw.fallen.length, 1);
+
+    const c2 = new Campaign(hollowDef);
+    assert.ok(c2.load());
+    assert.equal(c2.fallen.length, 1);
+    assert.equal(c2.fallen[0].name, 'Abigail');
+    assert.equal(c2.fallen[0].diedInMission, 'first_night');
+    assert.equal(c2.fallen[0].level, 3);
+  });
+
+  test('a v6 save migrates to v7 with fallen backfilled to []', () => {
+    // Hand-write a v6 blob (no `fallen` field) into the slot key, then load it.
+    const v6 = {
+      campaignId: 'calebs_hollow_prologue', version: 6,
+      currentMission: 'prologue', completedMissions: ['tutorial'],
+      roster: [{ name: 'Bob', hp: 4, maxHp: 4, items: {} }],
+      resources: { herbs: 2 }, weapons: {},
+      heroStats: { hp: 50, maxHp: 98, attack: 2, defense: 2, level: 1, xp: 0, items: {} },
+      storyFlags: {}, updatedAt: Date.now(),
+    };
+    localStorage.setItem('brimstone-campaign-calebs_hollow_prologue-slot1', JSON.stringify(v6));
+
+    const c = new Campaign(hollowDef);
+    assert.ok(c.load());
+    assert.equal(c.version, 7, 'migrated to v7');
+    assert.deepEqual(c.fallen, [], 'fallen backfilled to empty');
+    assert.equal(c.roster.length, 1, 'roster preserved through migration');
+    assert.equal(c.roster[0].name, 'Bob');
+    assert.equal(c.resources.herbs, 2, 'resources preserved');
+    // The migrated form is persisted back so we don't re-migrate next load.
+    const persisted = JSON.parse(localStorage.getItem('brimstone-campaign-calebs_hollow_prologue-slot1'));
+    assert.equal(persisted.version, 7);
+    assert.ok(Array.isArray(persisted.fallen));
+  });
+
+  test('fallen rides through the server sync blob (restoreFromServerData)', () => {
+    // syncToServer/syncFromServer ship the whole data object as a JSON blob;
+    // restoreFromServerData rebuilds it. Verify fallen survives that path.
+    const src = new Campaign(hollowDef);
+    src.recordFallen([{ name: 'Caleb', title: 'Hunter', level: 2, diedInMission: 'dark_ritual' }]);
+    const blob = {
+      campaignId: 'calebs_hollow_prologue', version: 7,
+      currentMission: src.currentMission, completedMissions: [],
+      roster: [], fallen: src.fallen,
+      resources: {}, weapons: {}, heroStats: src.heroStats, storyFlags: {},
+      updatedAt: Date.now(),
+    };
+    const dst = new Campaign(hollowDef);
+    assert.ok(dst.restoreFromServerData(JSON.parse(JSON.stringify(blob))));
+    assert.equal(dst.fallen.length, 1);
+    assert.equal(dst.fallen[0].name, 'Caleb');
+    assert.equal(dst.fallen[0].diedInMission, 'dark_ritual');
+  });
+
   test('delete clears save', () => {
     const c = new Campaign(hollowDef, 2);
     c.save();
@@ -963,7 +1029,7 @@ describe('Wave spawner', () => {
     const z = state.entities.find(e => e.owner === 'witch');
     assert.ok(z, 'leveled zombie spawned');
     assert.equal(z.level, 3);
-    assert.equal(z.maxHp, 28);          // zombie base 14 → L3 ×2.0
+    assert.equal(z.maxHp, 21);          // zombie base 14 → L3 ×1.5
     assert.equal(z.getAttack(), 4);     // base 2 + (3−1)
     assert.equal(z.getDefense(), 1);    // base 0 + floor((3−1)/2)
   });
@@ -1306,7 +1372,31 @@ describe('Roster balancing config', () => {
   test('witchs_trail mission has minSurvivors and maxSurvivors', () => {
     const m = hollowDef.missions.find(m => m.id === 'witchs_trail');
     assert.equal(m.minSurvivors, 2);
-    assert.equal(m.maxSurvivors, 5);
+    // START-only party cap: witchs_trail was authored at 5 but is clamped to the
+    // ≤3 cap (in both JSON and code) — no mission may start with >3 survivors.
+    assert.equal(m.maxSurvivors, 3);
+  });
+
+  test('no mission START params exceed the ≤3 party cap', () => {
+    // The START-only cap (PARTY_CAP=3 / ≤4 total units) is enforced in code
+    // (main.js clamps + a final guard), but the mission JSON should also reflect
+    // the intent so no authored value silently relies on the clamp. Asserts the
+    // two start drivers — deploy-from-roster and the max-balancing bound — are
+    // each ≤3 across every campaign mission.
+    for (const m of hollowDef.missions) {
+      if (m.maxSurvivorsFromRoster != null) {
+        assert.ok(m.maxSurvivorsFromRoster <= 3,
+          `${m.id}: maxSurvivorsFromRoster (${m.maxSurvivorsFromRoster}) exceeds the start cap of 3`);
+      }
+      if (m.maxSurvivors != null) {
+        assert.ok(m.maxSurvivors <= 3,
+          `${m.id}: maxSurvivors (${m.maxSurvivors}) exceeds the start cap of 3`);
+      }
+      if (m.minSurvivors != null) {
+        assert.ok(m.minSurvivors <= 3,
+          `${m.id}: minSurvivors (${m.minSurvivors}) exceeds the start cap of 3`);
+      }
+    }
   });
 
   test('minSurvivors <= maxSurvivors when both set', () => {
@@ -2392,9 +2482,9 @@ describe('Mission 4 (The River Crossing) balance', () => {
     assert.equal(below.count, 2);
   });
 
-  test('phase cycle is daytime-only (dawn + day)', () => {
+  test('phase cycle is daytime-only (day-looping)', () => {
     assert.ok(mission4.phaseCycle);
-    assert.deepEqual(mission4.phaseCycle.phases, ['dawn', 'day', 'day', 'day']);
+    assert.deepEqual(mission4.phaseCycle.phases, ['day']);
     assert.equal(mission4.phaseCycle.loop, true);
   });
 

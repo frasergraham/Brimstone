@@ -41,7 +41,15 @@ import { evaluateUnlock } from './unlock.js';
 // runs normalizeItems over `weapons`. The campaign `resources` map deliberately
 // stays a flat `{ id: N }` numeric map (it is not unified — see main.js boundary
 // conversions).
-const SAVE_VERSION = 6;
+//
+// v7: Survivor permadeath memorial. A new `fallen[]` list records survivors who
+// died on a COMPLETED (won) mission — they are removed from the roster forever,
+// can never be re-found in the discovery pool, and surface in the ⚰ Fallen
+// memorial UI. Entries are `{ name, title, level, diedInMission }` (mission id;
+// the UI resolves the mission title). Deaths on a LOST/retried mission do NOT
+// permakill — the party is restored (existing behaviour). `_migrate` backfills
+// `fallen: []` onto pre-v7 saves so no progress is lost.
+const SAVE_VERSION = 7;
 
 // Fresh-campaign hero loadout. A factory (not a shared literal) so each new
 // campaign gets its own object graph — the equipped sword lives in `items`.
@@ -144,6 +152,42 @@ export function reconcileRosterAfterMission(preMissionRoster, entities) {
   }
   const undeployed = preMissionRoster.filter(s => !deployedNames.has(s.name));
   return [...deployedSurvivors, ...undeployed];
+}
+
+/**
+ * Collect the survivors who DIED during a (now-completed) mission, as Fallen
+ * memorial entries. Permadeath is recorded ONLY on a WON mission — the caller
+ * gates on victory; a lost/retried mission must NOT call this (the party is
+ * restored instead).
+ *
+ * Mirrors the "deployed" detection in {@link reconcileRosterAfterMission}: a
+ * dead hero-faction, non-NPC survivor that a discovering faction would track is
+ * a permadeath. Each entry is `{ name, title, level, diedInMission }` — the UI
+ * resolves the mission title from the id.
+ *
+ * @param {object[]} entities    state.entities after the mission ended.
+ * @param {string}   missionId   the completed mission's id.
+ * @returns {{name:string, title:string, level:number, diedInMission:string}[]}
+ */
+export function collectFallenAfterMission(entities, missionId) {
+  const fallen = [];
+  const seen = new Set();
+  for (const e of entities) {
+    if (e.type !== 'survivor') continue;
+    if (e.isNpc) continue;            // scripted conversation NPCs never join the roster
+    if (e.alive) continue;            // only the dead are mourned
+    const f = e.owner ? getFaction(e.owner) : null;
+    if (!f?.canDiscoverNPCs()) continue;
+    if (seen.has(e.name)) continue;   // dedup by name within this mission
+    seen.add(e.name);
+    fallen.push({
+      name:          e.name,
+      title:         e.title ?? null,
+      level:         e.level || 1,
+      diedInMission: missionId,
+    });
+  }
+  return fallen;
 }
 
 /**
@@ -573,6 +617,10 @@ export class Campaign {
     this.currentMission    = campaignDef.firstMission;
     this.completedMissions = new Set();
     this.roster            = []; // Array of snapshotSurvivor() objects
+    // Permadeath memorial: survivors who died on a COMPLETED (won) mission.
+    // Entries are { name, title, level, diedInMission }. A fallen survivor is
+    // removed from the roster forever and excluded from the discovery pool.
+    this.fallen            = [];
     this.resources         = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0 };
     this.heroStats         = _defaultHeroStats();
     // Shared armory: weapons not bound to any one unit. Units can stow a spare
@@ -594,6 +642,7 @@ export class Campaign {
       currentMission:    this.currentMission,
       completedMissions: [...this.completedMissions],
       roster:            this.roster,
+      fallen:            this.fallen.map(f => ({ ...f })),
       resources:         { ...this.resources },
       weapons:           { ...this.weapons },
       heroStats:         JSON.parse(JSON.stringify(this.heroStats)),
@@ -631,6 +680,7 @@ export class Campaign {
     this.currentMission    = migrated.currentMission ?? this.campaignDef.firstMission;
     this.completedMissions = new Set(migrated.completedMissions ?? []);
     this.roster            = migrated.roster ?? [];
+    this.fallen            = Array.isArray(migrated.fallen) ? migrated.fallen : [];
     this.resources         = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0, ...migrated.resources };
     this.weapons           = { ...migrated.weapons }; // pre-armory saves → empty pool
     this.heroStats         = migrated.heroStats ?? _defaultHeroStats();
@@ -922,6 +972,15 @@ export class Campaign {
       this.roster = result.survivors.map(s => snapshotSurvivor(s));
     }
 
+    // Permadeath memorial: a survivor who died on this COMPLETED mission is
+    // mourned forever — added to `fallen`, excluded from the roster (above),
+    // and never re-found in the discovery pool. Only reached on a WIN (this
+    // method early-returns on a loss), so a death on a failed/retried mission
+    // never permakills. Dedup by name (a fallen survivor can never re-fall).
+    if (Array.isArray(result.fallen) && result.fallen.length) {
+      this.recordFallen(result.fallen);
+    }
+
     // Carry forward hero stats
     if (result.heroStats) {
       this.heroStats = {
@@ -968,6 +1027,40 @@ export class Campaign {
     }
 
     this.save();
+  }
+
+  /**
+   * Append survivors to the Fallen memorial, deduped by name. A survivor only
+   * ever falls once — if their name is already in `fallen` (or, defensively, if
+   * they somehow still sit in the roster) the new entry is ignored. Does NOT
+   * persist on its own; callers (applyMissionResult) save after.
+   *
+   * @param {{name:string, title?:string, level?:number, diedInMission:string}[]} entries
+   */
+  recordFallen(entries) {
+    if (!Array.isArray(entries)) return;
+    const known = new Set(this.fallen.map(f => f.name));
+    for (const e of entries) {
+      if (!e || !e.name || known.has(e.name)) continue;
+      known.add(e.name);
+      this.fallen.push({
+        name:          e.name,
+        title:         e.title ?? null,
+        level:         e.level || 1,
+        diedInMission: e.diedInMission ?? null,
+      });
+    }
+  }
+
+  /**
+   * The set of fallen survivor names — used to exclude them from the
+   * hidden-survivor discovery pool so a permadead survivor can never be
+   * re-found. Mirrored onto the mission GameState at start (and via state-sync
+   * so a mid-mission resume keeps the exclusion).
+   * @returns {Set<string>}
+   */
+  fallenSurvivorNameSet() {
+    return new Set(this.fallen.map(f => f.name));
   }
 
   /**
@@ -1140,6 +1233,7 @@ export class Campaign {
       currentMission:    this.currentMission,
       completedMissions: [...this.completedMissions],
       roster:            this.roster,
+      fallen:            this.fallen,
       resources:         this.resources,
       weapons:           this.weapons,
       heroStats:         this.heroStats,
@@ -1183,6 +1277,7 @@ export class Campaign {
     this.currentMission    = migrated.currentMission ?? this.campaignDef.firstMission;
     this.completedMissions = new Set(migrated.completedMissions ?? []);
     this.roster            = migrated.roster ?? [];
+    this.fallen            = Array.isArray(migrated.fallen) ? migrated.fallen : [];
     this.resources         = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0, ...migrated.resources };
     this.weapons           = { ...migrated.weapons }; // pre-armory saves → empty pool
     this.heroStats         = migrated.heroStats ?? _defaultHeroStats();
@@ -1265,6 +1360,18 @@ export function _migrate(data, fromVersion) {
       version: 6,
     };
     v = 6;
+  }
+
+  // v6 → v7: survivor permadeath memorial. Backfill an empty `fallen[]` list —
+  // pre-v7 saves predate permadeath tracking, so no one has fallen yet. All
+  // other fields are preserved untouched.
+  if (v === 6) {
+    out = {
+      ...out,
+      fallen: Array.isArray(out.fallen) ? out.fallen : [],
+      version: 7,
+    };
+    v = 7;
   }
 
   return out;

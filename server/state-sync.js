@@ -35,6 +35,11 @@ export function serializeState(state) {
       type:           legacyTileType(tile),
       building:       tile.building       ?? null,
       resource:       tile.resource       ?? null,
+      // Fortification HP pool is the source of truth; fortifyLevel is DERIVED
+      // (a getter). We emit BOTH: fortifyHP round-trips losslessly, fortifyLevel
+      // stays for legacy readers / the schema-guard allowlist and as a fallback
+      // when restoring a pre-HP-model save (deserialize rebuilds HP from level).
+      fortifyHP:      tile.fortifyHP      ?? 0,
       fortifyLevel:   tile.fortifyLevel   ?? 0,
       explored:       tile.explored       ?? false,
       hiddenSurvivor: tile.hiddenSurvivor ?? false,
@@ -163,6 +168,9 @@ export function serializeState(state) {
       : null,
     maxDiscoverableSurvivors: state.maxDiscoverableSurvivors ?? null,
     discoveredSurvivorCount:  state.discoveredSurvivorCount ?? 0,
+    // Campaign permadeath — names excluded from the discovery pool. Must survive
+    // mid-mission resume so a fallen survivor stays unfindable after a reload.
+    fallenSurvivorNames:      [...(state.fallenSurvivorNames ?? [])],
     // Campaign-only flag — gates XP/veterancy. Must survive mid-mission resume.
     isCampaign:               !!state.isCampaign,
     log:                  [...state.log],
@@ -189,6 +197,7 @@ export function serializeState(state) {
     mapCols,
     mapRows,
     mapSize:              state.mapSize ?? 'standard',
+    mapSeed:              state.mapSeed ?? null,
     season:               state.season ?? null,
     campaignAIBudgetBonus: state.campaignAIBudgetBonus ?? 0,
     aiDifficulty:         state.aiDifficulty ?? 'normal',
@@ -251,7 +260,15 @@ export function deserializeState(snap) {
     }
     tile.building       = t.building       ?? null;
     tile.resource       = t.resource       ?? null;
-    tile.fortifyLevel   = t.fortifyLevel   ?? 0;
+    // Restore the fort HP pool (source of truth; fortifyLevel is a derived
+    // getter on Tile). New saves carry fortifyHP directly. Legacy saves predate
+    // the HP model and carry only fortifyLevel — assigning to the `fortifyLevel`
+    // setter converts it to the equivalent full-level HP pool (N × per-level).
+    if (t.fortifyHP != null) {
+      tile.fortifyHP = t.fortifyHP | 0;
+    } else {
+      tile.fortifyLevel = t.fortifyLevel ?? 0;
+    }
     tile.explored       = t.explored       ?? false;
     tile.hiddenSurvivor = t.hiddenSurvivor ?? false;
     // Authored hidden-encounter payload (see serialize side). Legacy saves that
@@ -397,6 +414,7 @@ export function deserializeState(snap) {
   state.noWitchMission       = !!snap.noWitchMission;
   state.maxDiscoverableSurvivors = snap.maxDiscoverableSurvivors ?? null;
   state.discoveredSurvivorCount  = snap.discoveredSurvivorCount  ?? 0;
+  state.fallenSurvivorNames      = new Set(snap.fallenSurvivorNames ?? []);
   state.isCampaign               = !!snap.isCampaign;
   state.log                  = [...snap.log];
   state.witchObjectives      = snap.witchObjectives.map(o => ({
@@ -445,6 +463,7 @@ export function deserializeState(snap) {
     }
   }
   state.mapSize              = snap.mapSize   ?? 'standard';
+  state.mapSeed              = snap.mapSeed   ?? null;
   state.season               = snap.season    ?? null;
   state.winner               = snap.winner    ?? null;
   state.winReason            = snap.winReason ?? null;

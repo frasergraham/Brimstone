@@ -134,6 +134,48 @@ export function campaignPartyHTML(heroStats, roster) {
   return html;
 }
 
+// Minimal HTML-escape for mission-title strings rendered into the memorial.
+// Survivor names come from a fixed roster today, but the resolver may surface
+// arbitrary authored mission titles — escape defensively.
+function _esc(s) {
+  return String(s ?? '').replace(/[&<>"]/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+/**
+ * The ⚰ Fallen memorial: a desaturated tombstone card per survivor who fell on
+ * a completed mission, naming where they died (+ level). Rendered after the
+ * surviving roster on both the debrief and the campaign Progress screen. An
+ * empty list yields '' (no heading) so the section vanishes when no one has
+ * fallen.
+ *
+ * @param {{name:string, title?:string, level?:number, diedInMission:string}[]} fallen
+ * @param {(missionId:string)=>string} [missionTitleResolver]  maps a mission id
+ *   to its display title; defaults to the raw id.
+ * @returns {string} memorial HTML, or '' when `fallen` is empty.
+ */
+export function fallenSectionHTML(fallen, missionTitleResolver = (id) => id) {
+  if (!Array.isArray(fallen) || fallen.length === 0) return '';
+  const cards = fallen.map(f => {
+    const name = _esc(f.name);
+    const title = f.title ? ` <span class="fallen-title">${_esc(f.title)}</span>` : '';
+    const level = f.level ? `<span class="fallen-level">Lv ${f.level}</span>` : '';
+    const where = _esc(missionTitleResolver(f.diedInMission));
+    return `<div class="fallen-card" data-name="${name}">
+      <span class="fallen-glyph">⚰</span>
+      <div class="fallen-info">
+        <div class="fallen-name">${name}${title}</div>
+        <div class="fallen-where">fell in ${where}</div>
+      </div>
+      ${level}
+    </div>`;
+  }).join('');
+  return `<div class="fallen-section">
+    <h3 class="fallen-heading">⚰ Fallen</h3>
+    <div class="fallen-list">${cards}</div>
+  </div>`;
+}
+
 // ── Campaign Progress screen (between-mission landing) ──────────────────────
 //
 // A richer party view than campaignPartyHTML: per-unit level/XP, HP, ATK/DEF,
@@ -269,7 +311,10 @@ function weaponListHTML(unit, idx) {
     .filter(([id, e]) => (e?.count ?? 0) > 0 && isWeapon(id) && id !== equipped);
   if (!equipped && carried.length === 0) return '';
   const rows = [];
-  if (equipped) rows.push(weaponRowHTML(equipped, 1, idx, true));
+  // The equipped row carries the weapon's full stack count, so a duplicate of an
+  // equipped weapon (e.g. two swords, one wielded) surfaces as "Sword ×2" rather
+  // than silently dropping the spare — the carried filter excludes the same id.
+  if (equipped) rows.push(weaponRowHTML(equipped, items[equipped]?.count ?? 1, idx, true));
   for (const [id, e] of carried) rows.push(weaponRowHTML(id, e.count, idx, false));
   return `<div class="cprog-weapons">${rows.join('')}</div>`;
 }

@@ -17,6 +17,8 @@
 //   3. Wait — 200 ms in vfast, 400 ms in fast — so floaters from different
 //      battles don't pile up on the same hex.
 
+import { isAllyLungeEnabled } from './debug-flags.js';
+
 const MISS_FLASH_BG   = 'rgba(100,100,100,0.1)';
 const MISS_FLASH_DUR  = 1000;
 const MISS_FLASH_ZOOM = 0.65;
@@ -63,8 +65,12 @@ export async function playFastCombatDisplay({
   // where the breakdown has no ally arrays (executeBattle empties them).
   if (typeof renderer.applyCombatPositioning === 'function') {
     const bd = result?.breakdown || {};
-    const atkAllyIds = Array.isArray(bd.atkAllyIds) ? bd.atkAllyIds : [];
-    const defAllyIds = Array.isArray(bd.defAllyIds) ? bd.defAllyIds : [];
+    // Show-side debug toggle (see combat-cinematic.js): disabling the ally lunge
+    // empties the ally arrays so gang-up allies don't slide; the defender still
+    // re-centres. Pure presentation — resolution is untouched.
+    const allyLunge = isAllyLungeEnabled();
+    const atkAllyIds = allyLunge && Array.isArray(bd.atkAllyIds) ? bd.atkAllyIds : [];
+    const defAllyIds = allyLunge && Array.isArray(bd.defAllyIds) ? bd.defAllyIds : [];
     const lookupAlly = (id) => {
       if (id === actorSnap.id || id === targetSnap.id) return null;
       const ally = state?.entities?.find(e => e.id === id && e.alive);
