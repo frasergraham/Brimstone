@@ -630,15 +630,25 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
       if (!actorSnap) continue;
 
       // ── SENT_TO sender card ────────────────────────────────────────────────
-      // The base "non-battle ACTION_OK" path below renders a generic SEND row
-      // with no target. Customise it here so the survivor portrait sits in the
-      // target cell and the centre cell calls out the destination leader.
+      // The plan action lives on the SURVIVOR (a.entityId === survivor's id),
+      // but the sender card belongs in the SENDER LEADER's column so the
+      // recipient's column can carry the paired SURVIVOR_RECEIVED card. We
+      // promote the sender leader to actor and keep the survivor in the
+      // target cell. fromOwnerId is set on ev.result by executeSentTo.
       if (a.type === PA.SENT_TO) {
-        const survivorSnap = ents.find(e => e.id === (ev.result?.survivorId ?? a.targetId));
+        const survivorSnap = ents.find(e => e.id === (ev.result?.survivorId ?? a.entityId));
+        const fromOwnerId = ev.result?.fromOwnerId ?? null;
+        const senderLeader = fromOwnerId
+          ? ents.find(e => e.ownerId === fromOwnerId && isLeaderType(e.type))
+          : null;
+        // Fall back to the raw actor (the survivor) if we can't find the
+        // sender leader — keeps the card non-empty in offline tests where
+        // ents may be the survivor-only snapshot.
+        const cardActorSnap = senderLeader ?? actorSnap;
         const destName = ev.result?.destOwnerName ?? 'another leader';
         entries.push({
-          entityId:    a.entityId,
-          actor:       unitRef(actorSnap),
+          entityId:    cardActorSnap.id,
+          actor:       unitRef(cardActorSnap),
           target:      survivorSnap ? unitRef(survivorSnap) : null,
           actionType:  PA.SENT_TO,
           label:       ACTION_LABEL[PA.SENT_TO] ?? 'SEND',
@@ -646,7 +656,7 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
           targetDmg:   0, actorDmg: 0, killed: false,
           note:        { text: `📤 to ${destName}`, kind: 'gain' },
           hexes:       [
-            { col: actorSnap.col, row: actorSnap.row },
+            { col: cardActorSnap.col, row: cardActorSnap.row },
             ...(survivorSnap ? [{ col: survivorSnap.col, row: survivorSnap.row }] : []),
           ],
           movePath:    null,

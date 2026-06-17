@@ -27,9 +27,11 @@ export const PlanActionType = Object.freeze({
   USE_ABILITY:  'use-ability',
   GUARD:        'guard',
   SOUND_HORN:   'sound-horn',
-  // Multiplayer-only free action: a leader transfers control of one of their
-  // own survivors to another leader on the same faction. Cost: 0.
-  // Plan-action shape: { type, entityId: leaderId, targetId: survivorId, destOwnerId: newLeaderOwnerId }
+  // Multiplayer-only free action: a SURVIVOR is sent from its current
+  // owning leader to another leader on the same faction. Cost: 0.
+  // Plan-action shape: { type, entityId: survivorId, destOwnerId: newLeaderOwnerId }
+  // The sender leader is derived live at resolution time from the
+  // survivor's current ownerId — no separate sender field on the wire.
   SENT_TO:      'sent-to',
 });
 
@@ -371,19 +373,17 @@ export function validatePlanAction(state, action, projectedPositions = null) {
     }
 
     case PlanActionType.SENT_TO: {
-      // Free action: transfer control of a survivor to another leader on the
-      // same faction. Authoritative checks (faction has >1 leader, target owned
-      // by actor, destination is a live leader on the same faction) live in
-      // executeSentTo — this client-side gate catches obvious shape errors.
-      if (!action.targetId) return { valid: false, reason: 'No survivor specified.' };
+      // Free action: send a SURVIVOR (the actor) to another leader on the
+      // same faction. Authoritative checks (live owning leader, faction has
+      // >1 leader, destination is a live leader on the same faction) live
+      // in executeSentTo — this client-side gate catches obvious shape errors.
       if (!action.destOwnerId) return { valid: false, reason: 'No destination leader specified.' };
+      if (entity.type !== EntityType.SURVIVOR) {
+        return { valid: false, reason: 'Only a survivor can be sent.' };
+      }
+      // No self-send: destination must differ from the survivor's current owner.
       if (action.destOwnerId === entity.ownerId) {
         return { valid: false, reason: 'Cannot send a survivor to yourself.' };
-      }
-      const target = state.entities.find(e => e.id === action.targetId && e.alive);
-      if (!target) return { valid: false, reason: 'Survivor not found.' };
-      if (target.ownerId !== entity.ownerId) {
-        return { valid: false, reason: 'You do not control that survivor.' };
       }
       return { valid: true };
     }

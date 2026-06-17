@@ -4,7 +4,7 @@
 
 import { PlanActionType } from './planner.js';
 import { ITEMS } from './items.js';
-import { EntityType, ENTITY_COLOR, getEquippedWeaponIdOf, getItemCountOf, removeItemInItems, normalizeItems } from './entities.js';
+import { EntityType, ENTITY_COLOR, getEquippedWeaponIdOf, getItemCountOf, removeItemInItems, normalizeItems, isLeaderType } from './entities.js';
 import { ResourceType, WEAPON_LABEL, RESOURCE_LABEL } from './tiles.js';
 import { nodeController, PHASE_ICON, DEFAULT_CYCLE_PHASES } from './game.js';
 import { hexKey } from './hex.js';
@@ -89,6 +89,17 @@ export function describePlanAction(action, entities, index = 0) {
       return `${who} uses ability`;
     case PlanActionType.SOUND_HORN:
       return `${who} sounds the horn`;
+    case PlanActionType.SENT_TO: {
+      // The actor IS the survivor (entityId === survivorId). The destination
+      // leader is keyed by ownerId — find a live leader on that ownerId in
+      // the snapshot so the label reads names, not UUIDs.
+      const survivorName = entity?.displayName ?? 'Survivor';
+      const destLeader = action.destOwnerId
+        ? entities.find(e => e.ownerId === action.destOwnerId && isLeaderType(e.type))
+        : null;
+      const destName = destLeader?.displayName ?? 'another leader';
+      return `📤 Send ${survivorName} to ${destName}`;
+    }
     default:
       return `Step ${index + 1}`;
   }

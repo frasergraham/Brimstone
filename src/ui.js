@@ -2369,12 +2369,13 @@ export class UIController {
           break;
         }
         case ActionType.SENT_TO:
-          // Multiplayer free action — only added by getValidActions when the
-          // faction has >1 live leader AND this leader owns ≥1 survivor.
-          // Clicking opens a list-mode picker (Survivor → Leader). The free
-          // tag mirrors USE_ITEM / EQUIP_WEAPON styling.
-          arcItems.push({ group: 'items', label: 'Sent To…', fullLabel: 'Sent To… — transfer a survivor to another leader',
-            desc: 'Hand a survivor over to another leader on your faction. Free.',
+          // Multiplayer free action on the SURVIVOR — getValidActions only
+          // surfaces this when the survivor has a live owning leader AND
+          // there's at least one OTHER live leader on the same faction.
+          // Clicking opens a radial destination picker (one item per other
+          // leader). Free, mirrors USE_ITEM / EQUIP_WEAPON styling.
+          arcItems.push({ group: 'items', label: 'Send To…', fullLabel: 'Send To… — hand off to another leader on your faction',
+            desc: 'Hand this survivor over to another leader on your faction. Free.',
             color: '#b0b0b0', dis: false, free: true, cost: 0,
             attrs: 'data-action="sent_to"' });
           break;
@@ -3425,22 +3426,22 @@ export class UIController {
       }
 
       case 'sent_to': {
-        // Open the Sent To picker (survivor × destination-leader). This
-        // replaces the arc menu with a list-mode popup of "Survivor → Leader"
-        // rows; clicking one queues a free SENT_TO action on the leader.
+        // Open the Send To destination picker — a radial action arc with
+        // one item per OTHER leader on this survivor's faction. Clicking
+        // an item queues a free SENT_TO action on the survivor.
         this._openSentToPicker(entity);
         break;
       }
 
       case 'sent_to_pick': {
-        // Picker row was clicked — payload carries the survivor + destination.
-        const targetId    = button.dataset.targetId;
+        // Radial destination item was clicked — payload carries the
+        // destination leader's ownerId. The actor (entityId) is the
+        // SURVIVOR; the sender leader is re-derived live at resolution.
         const destOwnerId = button.dataset.destOwnerId;
-        if (targetId && destOwnerId) {
+        if (destOwnerId) {
           this._addToPlan({
             type: PlanActionType.SENT_TO,
             entityId: entity.id,
-            targetId,
             destOwnerId,
           });
         }
@@ -3452,43 +3453,138 @@ export class UIController {
     }
   }
 
-  // ── Sent To picker ──────────────────────────────────────────────────────────
-  // Renders a list-mode popup showing each (owned survivor × other leader)
-  // pair as a single row. Clicking a row queues a SENT_TO action. Uses the
-  // existing popup-list-mode CSS class so styling is shared with other
-  // list-mode popups (encounter dialog, no-actions message).
+  // ── Send To destination picker ─────────────────────────────────────────────
+  // Renders a RADIAL action arc (same component the unit action menu uses)
+  // with one item per destination leader on the actor's faction. Items are
+  // colour-coded with the destination LEADER's player color via
+  // GameState.playerColorFor — same source the renderer and chronicle use.
   _openSentToPicker(actor) {
     const popup = this._el('action-popup');
     if (this._arcCloseTimer) { clearTimeout(this._arcCloseTimer); this._arcCloseTimer = null; }
-    popup.classList.remove('arc-open', 'arc-closing');
-    popup.classList.add('popup-list-mode');
+    // Stay in arc mode — drop list-mode styling and any prior arc-open class
+    // so the open animation re-triggers cleanly.
+    popup.classList.remove('arc-open', 'arc-closing', 'popup-list-mode');
     this._popupVisible = true;
 
-    const validActions = getValidActions(this.state, actor);
+    const state = this.state;
+    const validActions = getValidActions(state, actor);
     const sentTo = validActions.find(a => a.type === ActionType.SENT_TO);
-    if (!sentTo || sentTo.targets.length === 0 || sentTo.destinations.length === 0) {
-      popup.innerHTML = `<div class="popup-unit-name">No survivors to send</div>`;
+    if (!sentTo || (sentTo.destinations?.length ?? 0) === 0) {
+      // No eligible destinations — surface a "nothing to do" list popup
+      // rather than an empty arc. Defensive: getValidActions should already
+      // have hidden the parent action, but this keeps the UI honest.
+      popup.classList.add('popup-list-mode');
+      popup.innerHTML = `<div class="popup-unit-name">No destination leader</div>`;
       positionPopup(popup, this);
       popup.style.display = 'block';
       return;
     }
 
-    let html = `<div class="popup-unit-name">Sent To…</div>`;
-    for (const target of sentTo.targets) {
-      for (const dest of sentTo.destinations) {
-        const survivorName = target.displayName ?? target.name ?? 'Survivor';
-        const destName     = dest.name ?? dest.leader.displayName ?? 'Leader';
-        html += `<button class="plan-btn"
-          data-action="sent_to_pick"
-          data-target-id="${target.id}"
-          data-dest-owner-id="${dest.ownerId}">${survivorName} → ${destName}</button>`;
+    // Build one radial item per destination leader, coloured with the
+    // destination leader's player color (so the picker mirrors the colour
+    // the recipient is rendered with on the map).
+    const arcItems = sentTo.destinations.map((dest, i) => {
+      const color = state.playerColorFor(dest.leader) ?? '#b0b0b0';
+      const destName = dest.name ?? dest.leader.displayName ?? 'Leader';
+      return {
+        group: 'sent_to_dest',
+        label: destName,
+        fullLabel: `Send to ${destName}`,
+        desc: `Hand off to ${destName}. Free, no action cost.`,
+        color,
+        dis: false,
+        free: true,
+        cost: 0,
+        attrs: `data-action="sent_to_pick" data-dest-owner-id="${dest.ownerId}"`,
+        _idx: i,
+      };
+    });
+
+    // Position the arc relative to the survivor (or its planned/ghost
+    // position) so it visually radiates from the actor — matches the way
+    // the standard unit-action arc opens.
+    let arcOriginEntity = actor;
+    if (this._planMode) {
+      const proj = this._getProjectedPos(actor.id);
+      if (proj && (proj.col !== actor.col || proj.row !== actor.row)) {
+        arcOriginEntity = Object.setPrototypeOf(
+          { ...actor, col: proj.col, row: proj.row },
+          Object.getPrototypeOf(actor)
+        );
       }
     }
+    const screenPos = getEntityScreenPos(this, arcOriginEntity);
+    if (!screenPos) {
+      // Fallback to a positioned list popup if we can't compute a screen
+      // position (e.g. off-canvas) — keeps the action reachable.
+      popup.classList.add('popup-list-mode');
+      let html = `<div class="popup-unit-name">Send To…</div>`;
+      for (const dest of sentTo.destinations) {
+        const color = state.playerColorFor(dest.leader) ?? '#b0b0b0';
+        const destName = dest.name ?? dest.leader.displayName ?? 'Leader';
+        html += `<button class="plan-btn" style="border-left:3px solid ${color};"
+          data-action="sent_to_pick"
+          data-dest-owner-id="${dest.ownerId}">${destName}</button>`;
+      }
+      popup.innerHTML = html;
+      positionPopup(popup, this);
+      popup.style.display = 'block';
+      attachPopupListeners(popup, this);
+      return;
+    }
 
+    const openRight = screenPos.x < window.innerWidth / 2;
+    const canvasRect = this.canvas.getBoundingClientRect();
+    const canvasScale = canvasRect.width / this.canvas.width;
+    const hexScreenPx = this.renderer.hexSize * canvasScale * this.renderer.zoomLevel;
+
+    // Generate arc item HTML — same template as _showActionPopup.
+    let html = '';
+    for (const item of arcItems) {
+      const delay = item._idx * 30;
+      const freeCls = ' arc-free';
+      const costTag = '<span class="arc-cost arc-cost-free">FREE</span>';
+      const descTag = item.desc ? `<span class="arc-item-desc">${item.desc}</span>` : '';
+      html += `<button class="arc-item${freeCls}"
+        style="--arc-x:0px;--arc-y:0px;--arc-delay:${delay}ms;--arc-color:${item.color};--arc-hover:${item.color};--arc-glow:${item.color}33"
+        ${item.attrs}><span class="arc-item-main">${item.label}${costTag}</span>${descTag}</button>`;
+    }
     popup.innerHTML = html;
-    positionPopup(popup, this);
+
+    // Track arc state so pan/zoom keep the popup anchored.
+    this._arcEntityCol = arcOriginEntity.col;
+    this._arcEntityRow = arcOriginEntity.row;
+    this._arcItems = arcItems;
+    this._arcOpenRight = openRight;
+
+    positionArcPopup(popup, this);
     popup.style.display = 'block';
+
+    const btns = popup.querySelectorAll('.arc-item');
+    for (const btn of btns) {
+      btn.style.transition = 'none';
+      btn.style.transform = 'translate(-50%, -50%) scale(1)';
+      btn.style.opacity = '0';
+    }
+    popup.offsetHeight; // force layout
+
+    computeArcPositions(popup, this, hexScreenPx);
+
+    for (const btn of btns) {
+      btn.style.transform = '';
+      btn.style.opacity = '';
+      btn.style.transition = '';
+    }
+
     attachPopupListeners(popup, this);
+    this._bindArcHoverExpansion(popup);
+
+    requestAnimationFrame(() => {
+      popup.classList.add('arc-open');
+      this.onRedraw();
+    });
+
+    startArcTracking(this);
   }
 
   // ── Hazard flash animations ───────────────────────────────────────────────

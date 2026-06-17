@@ -577,15 +577,14 @@ export function getValidActions(state, actor) {
     }
   }
 
-  // Sent To — multiplayer free action: this leader can hand off one of their
-  // survivors to another leader on the same faction. Surfaced only when the
-  // faction has more than one live leader AND this leader owns at least one
-  // survivor (canUseSentTo). `destinations` and `targets` arrive pre-resolved
-  // so the UI doesn't have to recompute them.
+  // Send To — multiplayer free action: this survivor can be handed off to
+  // another leader on the same faction. Surfaced only on SURVIVOR units
+  // whose owning leader has at least one OTHER live leader on the faction
+  // (canUseSentTo). `destinations` is pre-resolved so the UI doesn't have
+  // to recompute it when rendering the radial destination picker.
   if (canUseSentTo(state, actor)) {
     const destinations = getSentToDestinations(state, actor);
-    const targets      = getOwnedSurvivors(state, actor);
-    actions.push({ type: ActionType.SENT_TO, destinations, targets });
+    actions.push({ type: ActionType.SENT_TO, destinations });
   }
 
   return actions;
@@ -1777,29 +1776,49 @@ export function executeUseItem(state, actor, item) {
 //  - The target must be a SURVIVOR currently owned by the actor.
 
 /**
- * List the survivors the actor currently controls — eligible "Sent To" targets.
+ * List the survivors a LEADER currently controls. Kept for callers that
+ * still want to enumerate a leader's roster (the live action now lives on
+ * the survivor side, so this is no longer used by getValidActions).
  * @returns {Entity[]}
  */
-export function getOwnedSurvivors(state, actor) {
-  if (!actor?.ownerId) return [];
+export function getOwnedSurvivors(state, leader) {
+  if (!leader?.ownerId) return [];
   return state.entities.filter(e =>
     e.alive &&
     e.type === EntityType.SURVIVOR &&
-    e.ownerId === actor.ownerId
+    e.ownerId === leader.ownerId
   );
 }
 
 /**
- * List other live leaders on the same faction as `actor` (potential
- * "Sent To" destinations). Excludes the actor.
+ * Find the live leader entity that currently owns `survivor` — the
+ * SURVIVOR_RECEIVED fan-out source, and the destination-picker exclusion.
+ * @returns {Entity|null}
+ */
+export function getOwningLeader(state, survivor) {
+  if (!survivor?.ownerId) return null;
+  return state.entities.find(e =>
+    e.alive && isLeaderType(e.type) && e.ownerId === survivor.ownerId
+  ) ?? null;
+}
+
+/**
+ * List other live leaders on the same faction as `survivor` (potential
+ * "Send To" destinations). Excludes the survivor's current owning leader.
+ * Faction is derived from the owning leader (survivor.owner may be null
+ * until a leader claims them, so we don't trust it here).
  * Returns array of { ownerId, leader: Entity, name: string }.
  */
-export function getSentToDestinations(state, actor) {
-  if (!actor || !state.players) return [];
+export function getSentToDestinations(state, survivor) {
+  if (!survivor || !state.players) return [];
+  const owningLeader = getOwningLeader(state, survivor);
+  if (!owningLeader) return [];
+  const faction = owningLeader.owner;
   const out = [];
   for (const p of state.players) {
-    if (p.faction !== actor.owner) continue;
-    if (p.id === actor.ownerId) continue;
+    if (p.faction !== faction) continue;
+    // Exclude the survivor's current owner (no self-send).
+    if (p.id === survivor.ownerId) continue;
     const leader = state.entities.find(e => e.id === p.leaderId && e.alive);
     if (!leader) continue;
     out.push({ ownerId: p.id, leader, name: p.name ?? leader.displayName });
@@ -1808,48 +1827,52 @@ export function getSentToDestinations(state, actor) {
 }
 
 /**
- * True iff the actor is eligible to use SENT_TO at all (faction has >1 live
- * leader and the actor is one of them and owns at least one survivor).
+ * True iff `survivor` may be Sent To another leader (it IS a survivor, has
+ * a live owning leader on its faction, and that faction has at least one
+ * OTHER live leader).
  */
-export function canUseSentTo(state, actor) {
-  if (!actor || !actor.ownerId) return false;
-  if (!isLeaderType(actor.type)) return false;
-  if (getSentToDestinations(state, actor).length === 0) return false;
-  if (getOwnedSurvivors(state, actor).length === 0) return false;
+export function canUseSentTo(state, survivor) {
+  if (!survivor || !survivor.ownerId) return false;
+  if (survivor.type !== EntityType.SURVIVOR) return false;
+  if (!getOwningLeader(state, survivor)) return false;
+  if (getSentToDestinations(state, survivor).length === 0) return false;
   return true;
 }
 
 /**
- * Transfer control of a survivor from `actor` (its current owner-leader) to
- * the leader identified by `destOwnerId`.
+ * Transfer control of `survivor` from its current owner-leader to the
+ * leader identified by `destOwnerId`. The action lives on the SURVIVOR;
+ * the sender leader is derived live from `survivor.ownerId` so the rule
+ * still holds if other plan steps mutated the world before this one.
  *
  * @param {object} state
- * @param {Entity} actor       The leader issuing the order. Must own the survivor.
- * @param {string} targetId    Entity id of the survivor being transferred.
+ * @param {Entity} survivor    The survivor being transferred.
  * @param {string} destOwnerId Owner id (playerId) of the destination leader.
  * @returns {{success, log, cost}}
  */
-export function executeSentTo(state, actor, targetId, destOwnerId) {
-  if (!isLeaderType(actor.type)) {
-    return { success: false, log: [`${actor.displayName} cannot transfer survivors.`] };
+export function executeSentTo(state, survivor, destOwnerId) {
+  if (!survivor || survivor.type !== EntityType.SURVIVOR) {
+    return { success: false, log: ['Only survivors can be transferred.'] };
+  }
+  if (!survivor.alive) {
+    return { success: false, log: ['Survivor not found.'] };
   }
   if (!destOwnerId) {
     return { success: false, log: ['No destination leader specified.'] };
   }
-  if (destOwnerId === actor.ownerId) {
+  // Re-derive the sender leader from the survivor's current owner — the
+  // action lives on the survivor and may resolve after other plan steps
+  // have changed the live state.
+  const fromLeader = getOwningLeader(state, survivor);
+  if (!fromLeader) {
+    return { success: false, log: ['No leader currently controls that survivor.'] };
+  }
+  if (destOwnerId === fromLeader.ownerId) {
     return { success: false, log: ['Cannot send a survivor to yourself.'] };
-  }
-  const target = state.entities.find(e => e.id === targetId && e.alive);
-  if (!target) return { success: false, log: ['Survivor not found.'] };
-  if (target.type !== EntityType.SURVIVOR) {
-    return { success: false, log: ['Only survivors can be transferred.'] };
-  }
-  if (target.ownerId !== actor.ownerId) {
-    return { success: false, log: ['You do not control that survivor.'] };
   }
   // Destination must be another live leader on the same faction.
   const destPlayer = (state.players || []).find(p => p.id === destOwnerId);
-  if (!destPlayer || destPlayer.faction !== actor.owner) {
+  if (!destPlayer || destPlayer.faction !== fromLeader.owner) {
     return { success: false, log: ['Destination leader is not on your faction.'] };
   }
   const destLeader = state.entities.find(e => e.id === destPlayer.leaderId && e.alive);
@@ -1857,19 +1880,14 @@ export function executeSentTo(state, actor, targetId, destOwnerId) {
     return { success: false, log: ['Destination leader is no longer alive.'] };
   }
 
-  // Authoritative gate: faction must have >1 leader. Implicit from the
-  // destination check above (we found another live leader on this faction),
-  // but state-asserting it here makes the rule explicit for code-search.
-  // No additional check needed — destLeader IS a second leader.
-
-  const fromName = actor.displayName;
+  const fromName = fromLeader.displayName;
   const toName   = destPlayer.name ?? destLeader.displayName;
-  const fromOwnerId = actor.ownerId;
-  target.ownerId = destOwnerId;
+  const fromOwnerId = fromLeader.ownerId;
+  survivor.ownerId = destOwnerId;
 
   return {
     success: true,
-    log: [`${fromName} sends ${target.displayName} to ${toName}.`],
+    log: [`${fromName} sends ${survivor.displayName} to ${toName}.`],
     cost: 0,
     // Surface fields the replay/UI may want to consume on BOTH sender and
     // recipient sides. The online event serializer's `result` allowlist must
@@ -1877,8 +1895,8 @@ export function executeSentTo(state, actor, targetId, destOwnerId) {
     // server/lobby.js (which keys off ev.type for the SENT_TO / SURVIVOR_RECEIVED
     // additions). The resolver also reads these to fan out a paired
     // SURVIVOR_RECEIVED event into the destination owner's bucket.
-    survivorId:    target.id,
-    survivorName:  target.displayName,
+    survivorId:    survivor.id,
+    survivorName:  survivor.displayName,
     fromOwnerId,
     fromOwnerName: fromName,
     destOwnerId,

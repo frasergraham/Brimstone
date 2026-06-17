@@ -339,10 +339,10 @@ function runAction(state, action, faction, playerId = null) {
     }
 
     case PlanActionType.SENT_TO: {
-      // Free action — transfer control of a survivor to another leader on
-      // the same faction. Authoritative checks live in executeSentTo so the
-      // same gate runs offline and online.
-      const r = executeSentTo(state, entity, action.targetId, action.destOwnerId);
+      // Free action — the SURVIVOR is the actor; executeSentTo derives the
+      // sender leader live from `survivor.ownerId`. Authoritative checks
+      // live in executeSentTo so the same gate runs offline and online.
+      const r = executeSentTo(state, entity, action.destOwnerId);
       if (!r.success) return { kind: 'fail', reason: r.log[0] };
       return { kind: 'ok', result: r };
     }
@@ -375,9 +375,14 @@ function _buildSurvivorReceivedEvent(ev, faction) {
   return {
     type:          ResEventType.SURVIVOR_RECEIVED,
     faction,
-    survivorId:    r.survivorId    ?? ev.action?.targetId    ?? null,
+    // The survivor IS the actor (action.entityId). Result fields take
+    // precedence so we get the authoritative name+id even if anything in
+    // the chain renames the action shape later.
+    survivorId:    r.survivorId    ?? ev.action?.entityId    ?? null,
     survivorName:  r.survivorName  ?? null,
-    fromOwnerId:   r.fromOwnerId   ?? ev.action?.entityId    ?? null,
+    // fromOwnerId can only come from the result — it's the survivor's
+    // pre-mutation ownerId, which isn't carried on the action payload.
+    fromOwnerId:   r.fromOwnerId   ?? null,
     fromOwnerName: r.fromOwnerName ?? null,
     // destOwnerId carried so the replay digest can look the recipient leader
     // up directly from the pre-step entitySnapshot (the leader's ownerId
