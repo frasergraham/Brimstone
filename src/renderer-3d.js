@@ -4737,6 +4737,13 @@ export class Renderer3D {
     blade.attachToBone(handBone, affector);
     this._addShadowCaster(blade);
     standee.weaponMesh = blade;
+    // Inherit the unit's CURRENT fog/enabled state at creation. The blade is a
+    // scene-root mesh (attachToBone drives only its world transform, not
+    // scene-graph parentage), so it does not auto-inherit the standee plane's
+    // setEnabled state. Without this, equipping a weapon onto a fog-hidden unit
+    // would flash a floating sword over an empty fogged hex until the next
+    // `_applyFogVeil` pass. (That pass also keeps it in sync thereafter.)
+    if (standee.plane?.isEnabled?.() === false) blade.setEnabled(false);
   }
 
   _disposeStandeeWeapon(standee) {
@@ -15405,6 +15412,14 @@ export class Renderer3D {
         // itself, not its parented children — switching to setEnabled
         // propagates the fog-hide through the cone → sphere tree.
         if (standee.plane.isEnabled?.() !== visible) standee.plane.setEnabled(visible);
+        // The equipped-weapon stand-in is a SCENE-ROOT mesh whose world
+        // transform is driven by `attachToBone` (G6) — it is NOT a child of
+        // `standee.plane`, so the cone's setEnabled does NOT cascade to it.
+        // Mirror the fog-hide explicitly or the sword floats over an empty
+        // fogged hex and betrays the hidden unit's position.
+        if (standee.weaponMesh && standee.weaponMesh.isEnabled?.() !== visible) {
+          standee.weaponMesh.setEnabled(visible);
+        }
         const icon = this._unitIconBadges.get(id);
         if (icon && icon.plane.isVisible !== visible) icon.plane.isVisible = visible;
         // Mirror onto the per-unit hex outlines so the ground ring vanishes
@@ -15421,6 +15436,11 @@ export class Renderer3D {
       // No fog → make sure everything is visible (covers fog-toggling mid-game).
       for (const [id, standee] of this._entityStandees) {
         if (!standee.plane.isEnabled?.()) standee.plane.setEnabled(true);
+        // Re-show the bone-attached weapon stand-in (scene-root mesh — see the
+        // fogged branch above for why setEnabled doesn't cascade to it).
+        if (standee.weaponMesh && !standee.weaponMesh.isEnabled?.()) {
+          standee.weaponMesh.setEnabled(true);
+        }
         const icon = this._unitIconBadges.get(id);
         if (icon && !icon.plane.isVisible) icon.plane.isVisible = true;
         const outline = this._entityHexOutlines.get(id);
