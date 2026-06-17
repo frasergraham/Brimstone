@@ -605,6 +605,34 @@ export function rangeOf(e) {
   return base + abilityMod + effectMod;
 }
 
+/**
+ * Return a shallow, prototype-preserving CLONE of `entity` whose backpack has
+ * `weaponId` equipped — without mutating the original. Used by plan mode to
+ * project the weapon a unit will be wielding after a queued EQUIP_WEAPON, so
+ * range-driven highlights (attack targets, guard zone) reflect the post-equip
+ * weapon rather than the live one. A falsy/unchanged `weaponId` returns an
+ * equivalent clone (range unchanged), so callers can pass the projection result
+ * unconditionally. The `items` dict is deep-copied so equipping on the clone
+ * never aliases the live entity's backpack; methods (getRange/getAttack/…)
+ * still resolve via the preserved prototype.
+ */
+export function applyProjectedEquip(entity, weaponId) {
+  if (!entity) return entity;
+  // Deep-copy the per-entry objects so flipping `equipped` is local to the clone.
+  const items = {};
+  for (const k in (entity.items || {})) {
+    const v = entity.items[k];
+    items[k] = (v && typeof v === 'object') ? { ...v } : v;
+  }
+  if (weaponId) equipWeaponInItems(items, weaponId);
+  const clone = Object.setPrototypeOf({ ...entity, items }, Object.getPrototypeOf(entity));
+  // The equipped-weapon memo (a hidden own-prop on Entity) would otherwise be
+  // copied by the spread and key on the OLD items identity — clear it so
+  // getEquippedWeaponId() rescans the projected backpack.
+  if (typeof clone._writeEqCache === 'function') clone._writeEqCache(null);
+  return clone;
+}
+
 // ── Backpack item dict helpers (free functions) ──────────────────────────────
 //
 // Operate on a plain `items` dict (`{ id: { count, equipped? } }`) so both the

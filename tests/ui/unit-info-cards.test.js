@@ -238,4 +238,50 @@ describe('_computeUnitInfoCards — projected range gating', () => {
     assert.equal(ui._computeUnitInfoCards().size, 1,
       'distance 3 is in range for a bow');
   });
+
+  test('a queued ranged→melee equip removes the now-out-of-range odds card', () => {
+    const { ui, state, renderer } = makeUI();
+    const hero   = createHero(3, 1, 'p1', state);
+    hero.equipWeapon('bow');                 // live weapon: range 3
+    const minion = createMinion(3, 4, 'p2', state); // distance 3 — in bow range
+    state.entities.push(hero, minion);
+    arm(ui, hero, [minion]);
+
+    // No equip queued → bow range covers the distance-3 target.
+    renderer.planGhostSteps = [{
+      positions: new Map([[hero.id, { col: 3, row: 1 }]]),
+      weapons:   new Map([[hero.id, 'bow']]),
+      action: {},
+    }];
+    assert.equal(ui._computeUnitInfoCards().size, 1,
+      'with a bow the distance-3 target keeps its odds');
+
+    // Queue a melee switch → projected range is 1, so the distance-3 target
+    // drops out of range and its odds card must disappear.
+    renderer.planGhostSteps = [{
+      positions: new Map([[hero.id, { col: 3, row: 1 }]]),
+      weapons:   new Map([[hero.id, 'sword']]),
+      action: {},
+    }];
+    assert.equal(ui._computeUnitInfoCards().size, 0,
+      'after a queued switch to a melee sword the distance-3 odds must vanish');
+  });
+
+  test('a queued melee→ranged equip surfaces an odds card the live weapon could not reach', () => {
+    const { ui, state, renderer } = makeUI();
+    const hero   = createHero(3, 1, 'p1', state);
+    hero.equipWeapon('sword');               // live weapon: range 1
+    const minion = createMinion(3, 4, 'p2', state); // distance 3
+    state.entities.push(hero, minion);
+    arm(ui, hero, [minion]);
+
+    // Queue a bow switch → projected range 3 reaches the distance-3 target.
+    renderer.planGhostSteps = [{
+      positions: new Map([[hero.id, { col: 3, row: 1 }]]),
+      weapons:   new Map([[hero.id, 'bow']]),
+      action: {},
+    }];
+    assert.equal(ui._computeUnitInfoCards().size, 1,
+      'after a queued switch to a bow the distance-3 target gains an odds card');
+  });
 });

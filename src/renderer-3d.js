@@ -49,7 +49,7 @@ export const FOREST_DENSITY_SCALE = _FOREST_DENSITY_SCALE;
 export const scaledForestTreeCount = _scaledForestTreeCount;
 import {
   EntityType, isLeaderType, ADVANTAGE_CAP,
-  factionHasMultipleLeaders, leaderColorFor,
+  factionHasMultipleLeaders, leaderColorFor, applyProjectedEquip,
 } from './entities.js';
 import {
   buildingRenderHex,
@@ -13050,7 +13050,12 @@ export class Renderer3D {
           const e = state.entities.find(x => x.id === step.action.entityId);
           if (!e?.alive) continue;
           const pos = step.positions?.get?.(e.id) ?? { col: e.col, row: e.row };
-          sources.push({ col: pos.col, row: pos.row, gRange: reachFor(e) });
+          // Use the weapon this unit will be WIELDING after its queued steps —
+          // a ranged→melee (or melee→ranged) switch queued in the plan changes
+          // the guard reach, so project the equipped weapon, not the live one.
+          const projWeapon = step.weapons?.get?.(e.id) ?? null;
+          const reach = projWeapon ? applyProjectedEquip(e, projWeapon) : e;
+          sources.push({ col: pos.col, row: pos.row, gRange: reachFor(reach) });
         }
       }
     }
