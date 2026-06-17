@@ -431,6 +431,19 @@ describe('buildUnitDetailHtml', () => {
     const e = { hp: 10, maxHp: 10, attack: 1, defense: 1, range: 1, items: {} };
     assert.ok(buildUnitDetailHtml(e, {}).includes('👊 Unarmed'));
   });
+
+  test('a spare copy of the EQUIPPED weapon still shows in the pack with its count', () => {
+    // Two swords, one equipped. The equipped sword shows in the vitals line, but
+    // the second (spare) copy must remain visible in the pack. Before the fix the
+    // pack filter dropped the whole entry on `k === equippedId`, so the spare
+    // vanished and the panel read "No spare items".
+    const e = { hp: 10, maxHp: 10, attack: 3, defense: 1, range: 1,
+                items: { sword: { count: 2, equipped: true } } };
+    const html = buildUnitDetailHtml(e, e.items);
+    assert.ok(!html.includes('No spare items'), 'the spare sword must surface, not read empty');
+    assert.ok(html.includes('Sword'), 'spare weapon labelled');
+    assert.ok(html.includes('×1'), 'one spare copy beyond the equipped one');
+  });
 });
 
 // ── buildCycleInfoHtml (cycle & scoring info panel) ───────────────────────────

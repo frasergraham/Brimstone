@@ -269,7 +269,10 @@ function weaponListHTML(unit, idx) {
     .filter(([id, e]) => (e?.count ?? 0) > 0 && isWeapon(id) && id !== equipped);
   if (!equipped && carried.length === 0) return '';
   const rows = [];
-  if (equipped) rows.push(weaponRowHTML(equipped, 1, idx, true));
+  // The equipped row carries the weapon's full stack count, so a duplicate of an
+  // equipped weapon (e.g. two swords, one wielded) surfaces as "Sword ×2" rather
+  // than silently dropping the spare — the carried filter excludes the same id.
+  if (equipped) rows.push(weaponRowHTML(equipped, items[equipped]?.count ?? 1, idx, true));
   for (const [id, e] of carried) rows.push(weaponRowHTML(id, e.count, idx, false));
   return `<div class="cprog-weapons">${rows.join('')}</div>`;
 }
