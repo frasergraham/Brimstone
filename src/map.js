@@ -1,5 +1,5 @@
 // Procedural map generator for the Caleb's Hollow hex map
-import { MAP_COLS, MAP_ROWS, setMapDimensions, getNeighbors, hexKey, hexDistance } from './hex.js';
+import { MAP_COLS, MAP_ROWS, setMapDimensions, getNeighbors, hexKey, hexDistance, neighborDirIndex } from './hex.js';
 import { Tile, TileType, BuildingType, PathType, StructureType, legacyTileType, isRiver, isBridge, hasBuilding, isBuildingFootprint, pathOf, deriveBlockedSlots } from './tiles.js';
 import { buildMST, placeRoadPath } from './road-network.js';
 import { pickFootprintNeighbor } from './building-footprint.js';
@@ -529,15 +529,35 @@ function _pickRiverCrossings(rand, tiles, riverPath, riverMap, riverEW, keyPoint
     leftNbrs.sort((a, b) => bankRank(a) - bankRank(b));
     rightNbrs.sort((a, b) => bankRank(a) - bankRank(b));
 
-    // Try to find a left/right bank pair that are NOT hex-adjacent to each other.
-    // Adjacent banks indicate the river doesn't truly separate them at this tile
-    // (tight bend or pocket) so the bridge wouldn't actually span anything.
-    let leftBank = null, rightBank = null;
-    outer: for (const l of leftNbrs) {
+    // Prefer a left/right bank pair on OPPOSITE hex edges of the crossing tile
+    // so the bridge spans straight across (entry edge `d`, exit edge `(d+3)%6`).
+    // Both banks are neighbours of (col,row), so an opposite-edge pair is also
+    // hex-distance 2 apart — the strictly stronger condition. We keep the banks
+    // ranked best-first (already sorted above), so the first opposite pair found
+    // is the highest-quality straight crossing. `straight` records whether this
+    // tile yields an opposite-edge span; selection prefers straight crossings.
+    let leftBank = null, rightBank = null, straight = false;
+    oppEdge: for (const l of leftNbrs) {
       for (const r of rightNbrs) {
-        if (hexDistance(l.col, l.row, r.col, r.row) >= 2) {
-          leftBank = l; rightBank = r;
-          break outer;
+        if (edgesAreOpposite(col, row, l.col, l.row, r.col, r.row)) {
+          leftBank = l; rightBank = r; straight = true;
+          break oppEdge;
+        }
+      }
+    }
+    if (!leftBank || !rightBank) {
+      // Fallback: any non-adjacent bank pair (the original behaviour). Adjacent
+      // banks indicate the river doesn't truly separate them at this tile (tight
+      // bend or pocket) so the bridge wouldn't actually span anything. A bent
+      // crossing is kept as a candidate only so a river with no straight tile
+      // anywhere can still reach `minBridges`; the post-gen cleanup straightens
+      // it where possible or reverts it.
+      outer: for (const l of leftNbrs) {
+        for (const r of rightNbrs) {
+          if (hexDistance(l.col, l.row, r.col, r.row) >= 2) {
+            leftBank = l; rightBank = r;
+            break outer;
+          }
         }
       }
     }
@@ -546,12 +566,17 @@ function _pickRiverCrossings(rand, tiles, riverPath, riverMap, riverEW, keyPoint
     const minKeyDist = keyPoints.length > 0
       ? Math.min(...keyPoints.map(kp => hexDistance(kp.col, kp.row, col, row)))
       : 0;
-    candidates.push({ col, row, idx, score: minKeyDist, leftBank, rightBank });
+    candidates.push({ col, row, idx, score: minKeyDist, leftBank, rightBank, straight });
   }
 
-  // Sort by proximity to key points (closest first), random tiebreak
+  // Sort by proximity to key points (closest first), preferring straight
+  // (opposite-edge) crossings as the tiebreak among similarly-placed tiles, with
+  // a seeded shuffle as the final stable random tiebreak. Keeping `score`
+  // primary preserves the original well-spaced selection (so bridge counts stay
+  // close to baseline); the straight tiebreak just nudges toward opposite-edge
+  // crossings so the post-gen audit rarely has to revert a bent span.
   shuffle(candidates, rand);
-  candidates.sort((a, b) => a.score - b.score);
+  candidates.sort((a, b) => (a.score - b.score) || (b.straight - a.straight));
 
   // Greedily pick well-spaced crossings along the river path
   const minSpacing = Math.max(3, Math.floor(riverPath.length / (maxCount + 1)));
@@ -562,7 +587,8 @@ function _pickRiverCrossings(rand, tiles, riverPath, riverMap, riverEW, keyPoint
     picked.push(c);
   }
 
-  // Relax spacing to reach minCount if needed
+  // Relax spacing to reach minCount if needed. Candidates are already ordered
+  // straight-first, so this still prefers straight crossings when relaxing.
   if (picked.length < minCount) {
     for (const c of candidates) {
       if (picked.length >= minCount) break;
@@ -788,14 +814,32 @@ export function generateRiverEW(rand) {
   return path;
 }
 
+// ── Opposite-edge helper ─────────────────────────────────────────────────────
+//
+// Pointy-top odd-r hex has 6 edge directions (0..5, see `neighborDirIndex` in
+// hex.js). The edge directly opposite direction `d` is `(d + 3) % 6` (W↔E,
+// NW↔SE, NE↔SW). A bridge spans straight across a hex exactly when its two
+// road links sit on opposite edges; an adjacent-edge pair produces a "bent"
+// crossing whose 3D plank skews instead of spanning. Returns true when the two
+// neighbours of `(col,row)` lie on opposite hex edges. Pure.
+function edgesAreOpposite(col, row, ac, ar, bc, br) {
+  const da = neighborDirIndex(col, row, ac, ar);
+  const db = neighborDirIndex(col, row, bc, br);
+  if (da < 0 || db < 0) return false;
+  return (da + 3) % 6 === db;
+}
+
 // ── Bridge invariant ─────────────────────────────────────────────────────────
 //
 // Hard post-gen invariant: every BRIDGE tile connects EXACTLY two road
-// entry/exit faces (neighbours linked via `roadDirs`). The 3D bridge model
+// entry/exit faces (neighbours linked via `roadDirs`), AND those two faces are
+// on OPPOSITE hex edges so the span is straight. The 3D bridge model
 // (`bridgeRotationY` in renderer-3d.js) orients its plank from `roadDirs` and
-// renders a broken/floating span for any other count, so 1, 3 or 4 links is a
-// hard failure. Returns an array of `{ col, row, reason }` violations (empty
-// when the map is clean). Pure — usable from both runtime and tests.
+// renders a broken/floating span for any other count, and a bent/skewed plank
+// for a non-opposite (adjacent-edge) pair. So anything other than two
+// opposite-edge links is a hard failure. Returns an array of
+// `{ col, row, reason }` violations (empty when the map is clean). Pure —
+// usable from both runtime and tests.
 export function findBridgeInvariantViolations(tiles) {
   const out = [];
   for (const t of tiles.values()) {
@@ -806,15 +850,26 @@ export function findBridgeInvariantViolations(tiles) {
       continue;
     }
     const bridgeKey = hexKey(t.col, t.row);
+    let neighbourly = true;
     for (const nk of links) {
       const [nc, nr] = nk.split(',').map(Number);
       if (hexDistance(t.col, t.row, nc, nr) !== 1) {
         out.push({ col: t.col, row: t.row, reason: `road link ${nk} is not a neighbour` });
+        neighbourly = false;
         continue;
       }
       const nt = tiles.get(nk);
       if (!nt || !nt.roadDirs.has(bridgeKey)) {
         out.push({ col: t.col, row: t.row, reason: `road link ${nk} is not reciprocated` });
+      }
+    }
+    // Opposite-edge span: only meaningful when both links are genuine
+    // neighbours (otherwise the not-a-neighbour reason above already fired).
+    if (neighbourly) {
+      const [ac, ar] = links[0].split(',').map(Number);
+      const [bc, br] = links[1].split(',').map(Number);
+      if (!edgesAreOpposite(t.col, t.row, ac, ar, bc, br)) {
+        out.push({ col: t.col, row: t.row, reason: `road links ${links[0]} and ${links[1]} are not on opposite edges (bent span)` });
       }
     }
   }
@@ -1121,15 +1176,23 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
       changed = true;
     }
 
-    // Normalise over-connected bridges to a single opposite-bank span. When a
-    // bridge has >2 road links we keep exactly one per bank — preferring the
-    // crossing's originally-designated banks — and drop the rest. Deterministic
-    // (sorted tiebreak) so same-seed maps stay reproducible. Dropped approaches
-    // become stubs and prune on the next pass.
+    // Normalise each bridge to a single STRAIGHT opposite-edge span. A bridge
+    // must enter and exit on opposite hex edges (entry edge `d`, exit edge
+    // `(d+3)%6`) so the 3D plank spans straight rather than skewing across the
+    // hex. Among the bridge's current road links, find the opposite-edge pair
+    // that also straddles both river banks; keep exactly that pair and drop the
+    // rest. We prefer the crossing's originally-designated banks, then a
+    // deterministic sorted tiebreak, so same-seed maps stay reproducible.
+    // Dropped approaches become stubs and prune on the next pass. A bridge with
+    // no opposite-edge cross-bank pair is left for step (c) to revert to river.
     for (const c of crossings) {
       const t = tiles.get(hexKey(c.col, c.row));
-      if (!t || !isBridge(t) || t.roadDirs.size <= 2) continue;
+      if (!t || !isBridge(t) || t.roadDirs.size < 2) continue;
       const bridgeKey = hexKey(c.col, c.row);
+      const desiredLeft  = hexKey(c.leftBank.col, c.leftBank.row);
+      const desiredRight = hexKey(c.rightBank.col, c.rightBank.row);
+
+      // Bucket links by river side, sorted for determinism.
       const leftLinks = [], rightLinks = [];
       for (const nk of t.roadDirs) {
         const [nc, nr] = nk.split(',').map(Number);
@@ -1137,11 +1200,26 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
       }
       leftLinks.sort();
       rightLinks.sort();
-      const desiredLeft  = hexKey(c.leftBank.col, c.leftBank.row);
-      const desiredRight = hexKey(c.rightBank.col, c.rightBank.row);
-      const keepLeft  = leftLinks.includes(desiredLeft)   ? desiredLeft  : leftLinks[0];
-      const keepRight = rightLinks.includes(desiredRight) ? desiredRight : rightLinks[0];
-      // No genuine opposite-bank pair to keep — leave it for step (c) to revert.
+      // Designated bank first (when present), so a clean crossing keeps its
+      // intended span; otherwise the sorted order gives a stable tiebreak.
+      const orderBank = (links, desired) =>
+        links.includes(desired) ? [desired, ...links.filter(k => k !== desired)] : links;
+      const lefts  = orderBank(leftLinks, desiredLeft);
+      const rights = orderBank(rightLinks, desiredRight);
+
+      // Find the first left/right pair on opposite hex edges (straight span).
+      let keepLeft, keepRight;
+      pick: for (const lk of lefts) {
+        const [lc, lr] = lk.split(',').map(Number);
+        for (const rk of rights) {
+          const [rc2, rr2] = rk.split(',').map(Number);
+          if (edgesAreOpposite(c.col, c.row, lc, lr, rc2, rr2)) {
+            keepLeft = lk; keepRight = rk; break pick;
+          }
+        }
+      }
+      // No straight cross-bank pair — leave it for the straightening pass
+      // below (and, failing that, step (c)'s revert).
       if (keepLeft === undefined || keepRight === undefined) continue;
       const keep = new Set([keepLeft, keepRight]);
       for (const nk of [...t.roadDirs]) {
@@ -1152,7 +1230,110 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
       }
     }
 
-    // Revert one-sided or unreached bridges back to river.
+    // Straighten bent two-sided bridges by re-routing one approach. A bridge can
+    // be connected to BOTH river banks yet have no opposite-edge pair among its
+    // current links (the straight bank tile pruned away as a stub, leaving a
+    // skewed approach). Rather than discard the whole crossing — which can
+    // starve the map below `minBridges` — re-route the connected side onto the
+    // STRAIGHT exit edge so the span becomes opposite-edge while staying linked
+    // to the existing road network.
+    //
+    // For an anchor link on edge `d`, the straight exit is the neighbour on edge
+    // `(d+3)%6`. We splice that straight tile into the road grid iff it is
+    // passable land already wired to the network on its own bank (it is, or is
+    // adjacent to, an existing road tile on its river side). All choices are
+    // deterministic (sorted candidates) so same-seed maps stay reproducible.
+    for (const c of crossings) {
+      const t = tiles.get(hexKey(c.col, c.row));
+      if (!t || !isBridge(t) || t.roadDirs.size < 2) continue;
+      const bridgeKey = hexKey(c.col, c.row);
+
+      // Already straight? Skip.
+      const links = [...t.roadDirs];
+      const hasStraight = links.some((ka, i) => links.some((kb, j) => {
+        if (i >= j) return false;
+        const [ac, ar] = ka.split(',').map(Number);
+        const [bc, br] = kb.split(',').map(Number);
+        return edgesAreOpposite(c.col, c.row, ac, ar, bc, br);
+      }));
+      if (hasStraight) continue;
+
+      // Must already touch both river sides — we only re-shape a genuinely
+      // two-sided crossing, never fabricate a bridge that doesn't span.
+      const sideOf = (k) => { const [nc, nr] = k.split(',').map(Number); return riverSide(nc, nr, riverMap, riverEW); };
+      if (!links.some(k => sideOf(k) === 'left') || !links.some(k => sideOf(k) === 'right')) continue;
+
+      // A candidate straight tile is wired-in iff it is itself road, or borders
+      // an existing road tile on its own river side (so adding it doesn't create
+      // a fresh stub that prunes next pass).
+      const wiredIn = (col, row, side) => {
+        const k = hexKey(col, row);
+        if (roadTiles.has(k)) return true;
+        for (const n of getNeighbors(col, row)) {
+          const nk = hexKey(n.col, n.row);
+          if (nk === bridgeKey) continue;
+          if (!roadTiles.has(nk)) continue;
+          if (riverSide(n.col, n.row, riverMap, riverEW) !== side) continue;
+          return true;
+        }
+        return false;
+      };
+
+      // Try each existing anchor link; route its straight opposite edge.
+      let straightened = false;
+      for (const anchor of [...links].sort()) {
+        const [anc, anr] = anchor.split(',').map(Number);
+        const d = neighborDirIndex(c.col, c.row, anc, anr);
+        if (d < 0) continue;
+        const opp = (d + 3) % 6;
+        // Resolve the neighbour on the opposite edge.
+        const sNbr = getNeighbors(c.col, c.row).find(n => neighborDirIndex(c.col, c.row, n.col, n.row) === opp);
+        if (!sNbr) continue;
+        const sTile = tiles.get(hexKey(sNbr.col, sNbr.row));
+        if (!sTile || isRiver(sTile) || isBuildingFootprint(sTile)) continue;
+        const anchorSide = sideOf(anchor);
+        const sSide = riverSide(sNbr.col, sNbr.row, riverMap, riverEW);
+        if (sSide === anchorSide) continue; // straight exit must reach the far bank
+        if (!wiredIn(sNbr.col, sNbr.row, sSide)) continue;
+
+        // Commit: lay road on the straight tile (preserving base material), wire
+        // it to its existing same-side road, then re-link the bridge to just
+        // {anchor, straightTile}. Bent links drop and prune next pass.
+        const sKey = hexKey(sNbr.col, sNbr.row);
+        if (pathOf(sTile) === null && !hasBuilding(sTile)) sTile.path = PathType.ROAD;
+        roadTiles.add(sKey);
+        // Connect the straight tile onward to a same-side road neighbour.
+        for (const n of getNeighbors(sNbr.col, sNbr.row)) {
+          const nk = hexKey(n.col, n.row);
+          if (nk === bridgeKey || nk === sKey) continue;
+          if (!roadTiles.has(nk)) continue;
+          if (riverSide(n.col, n.row, riverMap, riverEW) !== sSide) continue;
+          sTile.roadDirs.add(nk);
+          tiles.get(nk)?.roadDirs.add(sKey);
+          break;
+        }
+        // Re-link the bridge to exactly {anchor, straightTile}.
+        for (const nk of [...t.roadDirs]) {
+          if (nk === anchor) continue;
+          t.roadDirs.delete(nk);
+          tiles.get(nk)?.roadDirs.delete(bridgeKey);
+        }
+        t.roadDirs.add(sKey);
+        sTile.roadDirs.add(bridgeKey);
+        changed = true;
+        straightened = true;
+        break;
+      }
+      // If we couldn't straighten, step (c) reverts it to river.
+      void straightened;
+    }
+
+    // Revert bridges that are NOT a straight, two-link, both-banks span. This
+    // covers one-sided/unreached bridges (degree 0/1, single river side) AND
+    // any bent span step (b) couldn't straighten — both render as a broken plank
+    // and must become plain river. minBridges is protected by candidate
+    // sourcing (opposite-edge crossings are preferred) plus the relax pass in
+    // `_pickRiverCrossings`; the seed-sweep tests assert the floor still holds.
     for (const c of crossings) {
       const t = tiles.get(hexKey(c.col, c.row));
       if (!t || !isBridge(t)) continue;
@@ -1162,7 +1343,15 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
         if (riverSide(nc, nr, riverMap, riverEW) === 'left') leftSide = true;
         else rightSide = true;
       }
-      if (leftSide && rightSide) continue;
+      // Straight iff exactly two links AND they sit on opposite hex edges.
+      let straight = false;
+      if (t.roadDirs.size === 2 && leftSide && rightSide) {
+        const [ka, kb] = [...t.roadDirs];
+        const [ac, ar] = ka.split(',').map(Number);
+        const [bc, br] = kb.split(',').map(Number);
+        straight = edgesAreOpposite(c.col, c.row, ac, ar, bc, br);
+      }
+      if (straight) continue;
       const stubStarts = [...t.roadDirs];
       // Revert the bridge back to plain river — path overlay only, base intact.
       t.path = PathType.RIVER;
@@ -1171,6 +1360,35 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
       for (const nk of stubStarts) tiles.get(nk)?.roadDirs.delete(hexKey(c.col, c.row));
       changed = true;
     }
+  }
+
+  // Building reconnect repair. Straightening a bridge can drop a bent road link
+  // that was a building's ONLY connection to the road grid (the building hung off
+  // the bridge's now-removed approach). The 3D renderer requires every building
+  // to carry ≥1 roadDirs entry to draw its road ribbon, so re-wire any building
+  // left with zero links to an adjacent PLAIN-ROAD tile (or an already-wired
+  // neighbouring building). Deterministic: pick the lowest-sorted eligible
+  // neighbour. We deliberately never re-link to a BRIDGE tile — that would add a
+  // third road face and break the just-straightened opposite-edge span — and we
+  // only fire when the building still borders the network, never fabricating a
+  // connection across a gap.
+  for (const t of tiles.values()) {
+    if (!hasBuilding(t) || t.roadDirs.size > 0) continue;
+    const bKey = hexKey(t.col, t.row);
+    const cands = getNeighbors(t.col, t.row)
+      .map(n => ({ key: hexKey(n.col, n.row) }))
+      .filter(({ key }) => {
+        const nt = tiles.get(key);
+        if (!nt || isBridge(nt)) return false;
+        // Re-attach to a plain road tile, or to a building already on the grid.
+        return (roadTiles.has(key) && pathOf(nt) === PathType.ROAD)
+            || (hasBuilding(nt) && nt.roadDirs.size > 0);
+      })
+      .sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
+    if (cands.length === 0) continue;
+    const { key } = cands[0];
+    t.roadDirs.add(key);
+    tiles.get(key)?.roadDirs.add(bKey);
   }
 
   // Hard post-gen invariant: every surviving bridge now has exactly two
