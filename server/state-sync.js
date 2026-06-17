@@ -168,6 +168,9 @@ export function serializeState(state) {
       : null,
     maxDiscoverableSurvivors: state.maxDiscoverableSurvivors ?? null,
     discoveredSurvivorCount:  state.discoveredSurvivorCount ?? 0,
+    // Campaign permadeath — names excluded from the discovery pool. Must survive
+    // mid-mission resume so a fallen survivor stays unfindable after a reload.
+    fallenSurvivorNames:      [...(state.fallenSurvivorNames ?? [])],
     // Campaign-only flag — gates XP/veterancy. Must survive mid-mission resume.
     isCampaign:               !!state.isCampaign,
     log:                  [...state.log],
@@ -411,6 +414,7 @@ export function deserializeState(snap) {
   state.noWitchMission       = !!snap.noWitchMission;
   state.maxDiscoverableSurvivors = snap.maxDiscoverableSurvivors ?? null;
   state.discoveredSurvivorCount  = snap.discoveredSurvivorCount  ?? 0;
+  state.fallenSurvivorNames      = new Set(snap.fallenSurvivorNames ?? []);
   state.isCampaign               = !!snap.isCampaign;
   state.log                  = [...snap.log];
   state.witchObjectives      = snap.witchObjectives.map(o => ({

@@ -134,6 +134,48 @@ export function campaignPartyHTML(heroStats, roster) {
   return html;
 }
 
+// Minimal HTML-escape for mission-title strings rendered into the memorial.
+// Survivor names come from a fixed roster today, but the resolver may surface
+// arbitrary authored mission titles — escape defensively.
+function _esc(s) {
+  return String(s ?? '').replace(/[&<>"]/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+/**
+ * The ⚰ Fallen memorial: a desaturated tombstone card per survivor who fell on
+ * a completed mission, naming where they died (+ level). Rendered after the
+ * surviving roster on both the debrief and the campaign Progress screen. An
+ * empty list yields '' (no heading) so the section vanishes when no one has
+ * fallen.
+ *
+ * @param {{name:string, title?:string, level?:number, diedInMission:string}[]} fallen
+ * @param {(missionId:string)=>string} [missionTitleResolver]  maps a mission id
+ *   to its display title; defaults to the raw id.
+ * @returns {string} memorial HTML, or '' when `fallen` is empty.
+ */
+export function fallenSectionHTML(fallen, missionTitleResolver = (id) => id) {
+  if (!Array.isArray(fallen) || fallen.length === 0) return '';
+  const cards = fallen.map(f => {
+    const name = _esc(f.name);
+    const title = f.title ? ` <span class="fallen-title">${_esc(f.title)}</span>` : '';
+    const level = f.level ? `<span class="fallen-level">Lv ${f.level}</span>` : '';
+    const where = _esc(missionTitleResolver(f.diedInMission));
+    return `<div class="fallen-card" data-name="${name}">
+      <span class="fallen-glyph">⚰</span>
+      <div class="fallen-info">
+        <div class="fallen-name">${name}${title}</div>
+        <div class="fallen-where">fell in ${where}</div>
+      </div>
+      ${level}
+    </div>`;
+  }).join('');
+  return `<div class="fallen-section">
+    <h3 class="fallen-heading">⚰ Fallen</h3>
+    <div class="fallen-list">${cards}</div>
+  </div>`;
+}
+
 // ── Campaign Progress screen (between-mission landing) ──────────────────────
 //
 // A richer party view than campaignPartyHTML: per-unit level/XP, HP, ATK/DEF,

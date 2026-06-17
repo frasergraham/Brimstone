@@ -298,8 +298,18 @@ export class GameState {
     this.disableScoreWin = !!mapDataOverride?.disableScoreWin;
 
     // Max survivors discoverable from hidden-survivor tiles (null = unlimited).
+    // NOTE: this START-only party-cap feature does NOT touch this cap —
+    // mid-mission discovery stays uncapped by party size (the field count may
+    // exceed 3 as a result of discoveries; that is intended).
     this.maxDiscoverableSurvivors = mapDataOverride?.maxDiscoverableSurvivors ?? null;
     this.discoveredSurvivorCount  = 0;
+
+    // Campaign permadeath: names of survivors who fell on a completed mission.
+    // createSurvivor() excludes these from the discoverable pool so a permadead
+    // survivor can never be re-found. Empty for normal/online/skirmish play;
+    // populated from Campaign.fallen at mission start (main.js) and round-tripped
+    // by state-sync so a mid-mission resume keeps the exclusion.
+    this.fallenSurvivorNames = new Set(mapDataOverride?.fallenSurvivorNames ?? []);
 
     // True only for single-player campaign missions. Gates campaign-only
     // mechanics (XP/veterancy via awardXP). Set by main.js at mission start and

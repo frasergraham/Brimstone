@@ -20,7 +20,7 @@ import {
 } from '../src/entities.js';
 import { hpForLevel, atkBonusForLevel, defBonusForLevel } from '../src/balance.js';
 import {
-  snapshotSurvivor, reconcileRosterAfterMission, Campaign,
+  snapshotSurvivor, reconcileRosterAfterMission, collectFallenAfterMission, Campaign,
 } from '../src/campaign/campaign.js';
 import { getFaction } from '../src/factions.js';
 import { triggerSurvivorEncounter } from '../src/survivor-discovery.js';
@@ -29,8 +29,10 @@ import { hexKey, getNeighbors } from '../src/hex.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 
 // ── localStorage mock (Campaign.save() touches it) ──────────────────────────
+// Installed unconditionally so a partial stub left by another module can't shadow
+// a missing setItem — applyMissionResult on a WON mission calls save().
 const _store = {};
-globalThis.localStorage = globalThis.localStorage ?? {
+globalThis.localStorage = {
   getItem: (k) => _store[k] ?? null,
   setItem: (k, v) => { _store[k] = String(v); },
   removeItem: (k) => { delete _store[k]; },
@@ -381,5 +383,207 @@ describe('level-up persistence through a mission', () => {
     assert.equal(redeployed.maxHp, hpForLevel(charBase, 3), 'maxHp from the true base');
     assert.equal(redeployed._baseMaxHp, charBase);
     assert.equal(redeployed.getAttack(), refL1.getAttack() + atkBonusForLevel(3));
+  });
+});
+
+// ── Permadeath memorial: fallen recorded on WON missions only ────────────────
+
+describe('collectFallenAfterMission — who is mourned', () => {
+  function liveSurvivor(name, level = 1) {
+    resetRoster();
+    const s = createSurvivor(0, 0, 'hero', null, name, level);
+    s.owner = 'hero';
+    return s;
+  }
+
+  test('a dead deployed survivor is collected with name/title/level/mission', () => {
+    const dead = liveSurvivor(SURVIVOR_ROSTER[0].name, 3);
+    dead.hp = 0;
+    assert.equal(dead.alive, false);
+    const fallen = collectFallenAfterMission([dead], 'first_night');
+    assert.equal(fallen.length, 1);
+    assert.equal(fallen[0].name, SURVIVOR_ROSTER[0].name);
+    assert.equal(fallen[0].level, 3);
+    assert.equal(fallen[0].diedInMission, 'first_night');
+  });
+
+  test('a live survivor is NOT mourned', () => {
+    const alive = liveSurvivor(SURVIVOR_ROSTER[0].name);
+    assert.equal(collectFallenAfterMission([alive], 'm').length, 0);
+  });
+
+  test('scripted NPCs are never mourned', () => {
+    const npc = liveSurvivor(SURVIVOR_ROSTER[0].name);
+    npc.hp = 0; npc.isNpc = true;
+    assert.equal(collectFallenAfterMission([npc], 'm').length, 0);
+  });
+
+  test('dead survivors are deduped by name', () => {
+    const a = liveSurvivor(SURVIVOR_ROSTER[0].name); a.hp = 0;
+    const b = liveSurvivor(SURVIVOR_ROSTER[1].name); b.name = a.name; b.hp = 0;
+    const fallen = collectFallenAfterMission([a, b], 'm');
+    assert.equal(fallen.length, 1, 'same name collected once');
+  });
+});
+
+// ── Campaign.fallen integration — WON vs LOST gating ─────────────────────────
+
+describe('Campaign permadeath — applyMissionResult gating', () => {
+  function deadSnap(name, level = 1) {
+    resetRoster();
+    const s = createSurvivor(0, 0, 'hero', null, name, level);
+    s.owner = 'hero'; s.hp = 0;
+    return s;
+  }
+
+  test('a survivor dead on a WON mission lands in fallen and leaves the roster', () => {
+    const c = new Campaign(hollowDef);
+    const name = SURVIVOR_ROSTER[0].name;
+    c.roster = [snapshotSurvivor(deadSnap(name, 2))]; // the dead one was on the roster
+    const dead = deadSnap(name, 2);
+
+    const survivors = reconcileRosterAfterMission(c.roster, [dead]);
+    const fallen = collectFallenAfterMission([dead], 'first_night');
+    c.applyMissionResult('prologue', {
+      won: true, survivors, fallen,
+      resources: {}, heroStats: { hp: 1, maxHp: 98, attack: 2, defense: 2, level: 1, xp: 0, items: {} },
+    });
+
+    assert.equal(c.roster.length, 0, 'dead survivor dropped from roster');
+    assert.equal(c.fallen.length, 1, 'recorded in the memorial');
+    assert.equal(c.fallen[0].name, name);
+    assert.equal(c.fallen[0].diedInMission, 'first_night');
+  });
+
+  test('a survivor dead on a LOST mission is NOT permakilled (party restored)', () => {
+    const c = new Campaign(hollowDef);
+    const name = SURVIVOR_ROSTER[0].name;
+    c.roster = [snapshotSurvivor(deadSnap(name, 2))];
+    const before = JSON.parse(JSON.stringify(c.roster));
+    const dead = deadSnap(name, 2);
+
+    // A loss must never reach the fallen-recording path — applyMissionResult
+    // early-returns on !won, so even passing a fallen list is a no-op.
+    c.applyMissionResult('prologue', {
+      won: false,
+      survivors: reconcileRosterAfterMission(c.roster, [dead]),
+      fallen: collectFallenAfterMission([dead], 'first_night'),
+      resources: {}, heroStats: { hp: 0, maxHp: 98, attack: 2, defense: 2, level: 1, xp: 0, items: {} },
+    });
+
+    assert.equal(c.fallen.length, 0, 'no permadeath on a loss');
+    assert.deepEqual(c.roster, before, 'roster untouched (party restored)');
+  });
+
+  test('recordFallen dedups across missions — a survivor never falls twice', () => {
+    const c = new Campaign(hollowDef);
+    c.recordFallen([{ name: 'Abigail', title: 'Scout', level: 2, diedInMission: 'm1' }]);
+    c.recordFallen([{ name: 'Abigail', title: 'Scout', level: 9, diedInMission: 'm2' }]);
+    assert.equal(c.fallen.length, 1);
+    assert.equal(c.fallen[0].diedInMission, 'm1', 'first death wins');
+  });
+});
+
+// ── Fallen excluded from the discovery pool ──────────────────────────────────
+
+describe('createSurvivor / discovery excludes fallen names', () => {
+  test('createSurvivor never returns a fallen name (random pick)', () => {
+    const state = new GameState(true, false);
+    // Mark ALL but one roster character fallen — the only spawnable name is the
+    // single survivor — so a single createSurvivor must return that one name.
+    const survivorName = SURVIVOR_ROSTER[0].name;
+    state.fallenSurvivorNames = new Set(SURVIVOR_ROSTER.slice(1).map(c => c.name));
+    for (let i = 0; i < 30; i++) {
+      const s = createSurvivor(0, 0, 'hero', state); // random pick each time
+      state.usedRosterIndices.clear(); // reset dedup so the pool stays full each loop
+      assert.equal(s.name, survivorName, 'only the non-fallen survivor is ever picked');
+    }
+  });
+
+  test('a fallen survivor is never force-spawned (pin falls through)', () => {
+    const state = new GameState(true, false);
+    const fallenName = SURVIVOR_ROSTER[0].name;
+    state.fallenSurvivorNames = new Set([fallenName]);
+    const s = createSurvivor(0, 0, 'hero', state, fallenName); // pinned to a fallen one
+    assert.notEqual(s.name, fallenName, 'pinned fallen name is refused; a different survivor spawns');
+  });
+
+  test('hidden-survivor discovery never reveals a fallen survivor', () => {
+    const state = new GameState(true, false);
+    const hero = state.hero;
+    const tile = state.tiles.get(hexKey(hero.col, hero.row));
+    const fallenName = SURVIVOR_ROSTER[0].name;
+    state.fallenSurvivorNames = new Set([fallenName]);
+
+    tile.hiddenSurvivor = true;
+    tile.hiddenSurvivorId = fallenName; // pinned to the fallen survivor
+    const enc = triggerSurvivorEncounter(state, hero, hero.col, hero.row);
+    assert.ok(enc, 'a survivor was still discovered (discovery is not blocked)');
+    const surv = state.entities.find(e => e.type === EntityType.SURVIVOR);
+    assert.notEqual(surv.name, fallenName, 'the fallen survivor is never the one found');
+  });
+});
+
+// ── Mid-mission discovery is NOT capped by party size ────────────────────────
+
+describe('mid-mission discovery stays uncapped by party size', () => {
+  test('a 4th survivor still spawns even with 3 already on the field', () => {
+    const state = new GameState(true, false);
+    const hero = state.hero;
+    // Put 3 survivors already on the field (simulating a full starting party).
+    for (let i = 0; i < 3; i++) {
+      const s = createSurvivor(0, 0, 'hero', state, SURVIVOR_ROSTER[i].name);
+      s.owner = 'hero';
+      state.entities.push(s);
+    }
+    const onFieldBefore = state.entities.filter(
+      e => e.type === EntityType.SURVIVOR && e.owner === 'hero').length;
+    assert.equal(onFieldBefore, 3);
+
+    // Discover a 4th on the hero's tile — maxDiscoverableSurvivors is null
+    // (unlimited), and there is NO party-size gate, so it must spawn.
+    const tile = state.tiles.get(hexKey(hero.col, hero.row));
+    tile.hiddenSurvivor = true;
+    tile.hiddenSurvivorId = SURVIVOR_ROSTER[5].name;
+    const enc = triggerSurvivorEncounter(state, hero, hero.col, hero.row);
+    assert.ok(enc, 'discovery succeeds despite 3 survivors already on the field');
+    const onFieldAfter = state.entities.filter(
+      e => e.type === EntityType.SURVIVOR && e.owner === 'hero').length;
+    assert.equal(onFieldAfter, 4, 'the on-field survivor count exceeds 3 via discovery');
+  });
+
+  test('discovery still excludes a fallen name while remaining uncapped', () => {
+    const state = new GameState(true, false);
+    const hero = state.hero;
+    for (let i = 0; i < 3; i++) {
+      const s = createSurvivor(0, 0, 'hero', state, SURVIVOR_ROSTER[i].name);
+      s.owner = 'hero';
+      state.entities.push(s);
+    }
+    const fallenName = SURVIVOR_ROSTER[6].name;
+    state.fallenSurvivorNames = new Set([fallenName]);
+    const tile = state.tiles.get(hexKey(hero.col, hero.row));
+    tile.hiddenSurvivor = true;
+    tile.hiddenSurvivorId = fallenName; // pinned to a fallen survivor
+    const enc = triggerSurvivorEncounter(state, hero, hero.col, hero.row);
+    assert.ok(enc, 'discovery still fires (uncapped)');
+    const found = state.entities.filter(
+      e => e.type === EntityType.SURVIVOR && e.owner === 'hero');
+    assert.equal(found.length, 4, 'a 4th survivor was found (uncapped)');
+    assert.ok(!found.some(s => s.name === fallenName), 'but never the fallen one');
+  });
+});
+
+// ── fallenSurvivorNames round-trips through state-sync ───────────────────────
+
+describe('state-sync — fallenSurvivorNames', () => {
+  test('survives the serialize/deserialize round-trip as a Set', () => {
+    const state = new GameState(true, false);
+    state.fallenSurvivorNames = new Set(['Abigail', 'Bartholomew']);
+    const restored = deserializeState(serializeState(state));
+    assert.ok(restored.fallenSurvivorNames instanceof Set);
+    assert.equal(restored.fallenSurvivorNames.size, 2);
+    assert.ok(restored.fallenSurvivorNames.has('Abigail'));
+    assert.ok(restored.fallenSurvivorNames.has('Bartholomew'));
   });
 });

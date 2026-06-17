@@ -55,10 +55,10 @@
   "aiPersonality": "evasive",
   "heroPersonality": "node_denier",
   "aiBudgetBonus": 0,
-  "maxSurvivorsFromRoster": 5,
+  "maxSurvivorsFromRoster": 3,
   "missionSurvivors": 1,
   "minSurvivors": 2,
-  "maxSurvivors": 5,
+  "maxSurvivors": 3,
   "startingResources": {
     "wood": 1,
     "food": 2
