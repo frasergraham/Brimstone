@@ -263,10 +263,9 @@ describe('formatSeedLine + /seed command', () => {
 });
 
 describe('ally-lunge debug flag + /lunge command', () => {
-  test('the flag defaults to ON (lunge enabled)', () => {
-    // Reset to the documented default first (other tests toggle it).
-    setAllyLungeEnabled(true);
-    assert.equal(isAllyLungeEnabled(), true);
+  test('the flag defaults to OFF (lunge disabled)', () => {
+    // First lunge test in the file — the flag is still at its module default.
+    assert.equal(isAllyLungeEnabled(), false);
   });
 
   test('setAllyLungeEnabled / toggleAllyLunge return the new state', () => {
@@ -277,7 +276,7 @@ describe('ally-lunge debug flag + /lunge command', () => {
     assert.equal(toggleAllyLunge(), false);
     assert.equal(isAllyLungeEnabled(), false);
     // Restore the default so test order can't leak into other suites.
-    setAllyLungeEnabled(true);
+    setAllyLungeEnabled(false);
   });
 
   test('/lunge flips the flag and reports the new state', () => {

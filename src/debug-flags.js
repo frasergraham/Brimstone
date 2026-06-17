@@ -10,10 +10,11 @@
 // DOM-free and import-light so the no-import combat helpers can depend on it.
 
 // Ally "gang-up" lunge — during a battle replay, the first ADVANTAGE_CAP allied
-// units per side slide to the defender's shared edge. Some operators find this
-// noisy; disabling it leaves the primary attacker's lunge and the defender
-// re-centring untouched (allies just stay on their own hexes). Default ON.
-let _allyLungeEnabled = true;
+// units per side slide to the defender's shared edge. Found too noisy, so it is
+// disabled by default; the primary attacker's lunge and the defender re-centring
+// are untouched (allies just stay on their own hexes). Re-enable with `/lunge`.
+// Default OFF.
+let _allyLungeEnabled = false;
 
 /** @returns {boolean} whether ally gang-up lunge animations play. */
 export function isAllyLungeEnabled() {
