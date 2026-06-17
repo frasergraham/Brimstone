@@ -5427,9 +5427,10 @@ img.plan-step-avatar {
           mask-image: linear-gradient(to bottom, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
   pointer-events: auto;                          /* re-enable inside #replay-timeline (parent disables it) */
 }
-/* Active row sits in the upper third of the card after auto-scroll: the
+/* Active row sits in the upper portion of the card after auto-scroll: the
    `scroll-margin-top` is the gap reserved above it inside the scroll viewport
-   when `scrollIntoView({block: 'start'})` lands it. ≈ a third of a tall card. */
+   when `scrollIntoView({block: 'start'})` lands it — keeps the active row off
+   the very top edge while staying well above the screen middle. */
 .replay-step-entry { scroll-margin-top: 1.2rem; }
 .replay-step-col::-webkit-scrollbar { width: 6px; }
 .replay-step-col::-webkit-scrollbar-thumb { background: rgba(170, 130, 255, 0.35); border-radius: 3px; }

@@ -5369,10 +5369,13 @@ export class UIController {
   }
 
   /** Wire manual-scroll detection on the (persistent) timeline container once.
-   *  A wheel / touch / key scroll inside a turn card flags the auto-scroll
-   *  controller so it suspends itself for a few seconds — we never yank the card
-   *  away while the player is reading. Programmatic scrollIntoView fires no
-   *  wheel/touch event, so it never trips this. */
+   *  A wheel or touch scroll inside a turn card flags the auto-scroll controller
+   *  so it suspends itself for a few seconds — we never yank the card away while
+   *  the player is reading. Programmatic scrollIntoView fires no wheel/touch
+   *  event, so it never trips this. Listeners share the UIController-wide
+   *  AbortController (`_eventsAC`) so `destroy()` removes them — otherwise an
+   *  orphaned UIController would keep firing on shared replay DOM in the next
+   *  game (see tests/ui/action-panel-stuck.test.js for the pattern). */
   _bindTurnCardScrollDetection() {
     if (this._turnCardScrollBound) return;
     const wrap = this._el('replay-timeline');
@@ -5381,9 +5384,9 @@ export class UIController {
       const now = (typeof Date !== 'undefined' && Date.now) ? Date.now() : 0;
       (this._turnCardAutoScroll ??= new TurnCardAutoScroll()).notifyUserScroll(now);
     };
-    wrap.addEventListener('wheel',     onUserScroll, { passive: true });
-    wrap.addEventListener('touchmove', onUserScroll, { passive: true });
-    wrap.addEventListener('keydown',   onUserScroll, { passive: true });
+    const opts = { passive: true, signal: this._eventsAC.signal };
+    wrap.addEventListener('wheel',     onUserScroll, opts);
+    wrap.addEventListener('touchmove', onUserScroll, opts);
     this._turnCardScrollBound = true;
   }
 
@@ -5469,15 +5472,11 @@ export class UIController {
     this._replayCollapsed = !!collapsed;
     const wrap = this._el('replay-timeline');
     if (!wrap) return;
-    // Collapsing hides every non-active row (the card shrinks to one row, so its
-    // scrollTop clamps to 0); expanding restores them. Snapshot the active card's
-    // scroll offset and restore it after the toggle so flipping +/- never jumps
-    // the player's reading position. Auto-scroll is deliberately NOT triggered
-    // here — only resolution advancing moves the card.
-    const current = wrap.querySelector?.('.replay-step-col.is-current');
-    const savedTop = current ? current.scrollTop : 0;
+    // Auto-scroll is deliberately NOT triggered here — only resolution advancing
+    // moves the card. (Preserving scrollTop across the toggle is a no-op: the
+    // collapsed state clamps scrollTop to 0, so by the time we read it for the
+    // re-expand it's already lost.)
     wrap.classList.toggle('collapsed', this._replayCollapsed);
-    if (current && !this._replayCollapsed && savedTop) current.scrollTop = savedTop;
     const glyph = this._replayCollapsed ? '+' : '−';
     const label = this._replayCollapsed ? 'Expand turn card' : 'Collapse turn card';
     wrap.querySelectorAll?.('.replay-collapse-btn').forEach(b => {
