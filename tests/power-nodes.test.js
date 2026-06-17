@@ -627,12 +627,15 @@ describe('nodeSpawnedSurvivors', () => {
     const state = new GameState();
     generateMap(state, 'skirmish');
     state.nodeSpawnedSurvivors = [
-      { type: 'survivor', name: 'TestSurvivor', title: 'Scout', hp: 3, maxHp: 3, attack: 1, defense: 1, abilityLabel: null, color: '#aaa' },
+      { type: 'survivor', name: 'TestSurvivor', title: 'Scout', hp: 3, maxHp: 3, attack: 1, defense: 1, abilityLabel: null, color: '#aaa', faction: 'hero' },
     ];
     const snap = serializeState(state);
     const restored = deserializeState(snap);
     assert.equal(restored.nodeSpawnedSurvivors.length, 1);
     assert.equal(restored.nodeSpawnedSurvivors[0].name, 'TestSurvivor');
+    // Faction tag survives the wire — the wrap-up uses this to fog-filter
+    // node spawns by viewer side, so dropping it would re-introduce the leak.
+    assert.equal(restored.nodeSpawnedSurvivors[0].faction, 'hero');
   });
 
   test('defaults to empty array when missing from snapshot', () => {

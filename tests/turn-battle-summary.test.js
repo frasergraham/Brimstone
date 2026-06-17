@@ -243,4 +243,27 @@ describe('collectTurnFinds', () => {
     ])];
     assert.equal(collectTurnFinds(steps, null).discoveries.length, 2);
   });
+
+  // Fog-of-war regression: node-spawned survivors are always hero-faction
+  // (power-node night procs). When the viewer is the witch (online MP or
+  // local two-player), surfacing them in the wrap-up leaks hero-side info.
+  test('filters hero-tagged node-spawned survivors from a witch viewer', () => {
+    const spawned = [{ id: 's7', type: 'survivor', name: 'Hannah', faction: 'hero' }];
+    const { discoveries } = collectTurnFinds([], 'witch', spawned);
+    assert.equal(discoveries.length, 0,
+      'witch viewer must not see hero-side node-spawned survivors');
+  });
+
+  test('includes hero-tagged node-spawned survivors for the hero viewer', () => {
+    const spawned = [{ id: 's7', type: 'survivor', name: 'Hannah', faction: 'hero' }];
+    const { discoveries } = collectTurnFinds([], 'hero', spawned);
+    assert.equal(discoveries.length, 1);
+    assert.equal(discoveries[0].name, 'Hannah');
+  });
+
+  test('includes all node-spawned survivors when no humanFaction (AI vs AI / spectator)', () => {
+    const spawned = [{ id: 's7', type: 'survivor', name: 'Hannah', faction: 'hero' }];
+    const { discoveries } = collectTurnFinds([], null, spawned);
+    assert.equal(discoveries.length, 1);
+  });
 });

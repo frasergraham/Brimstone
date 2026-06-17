@@ -1058,16 +1058,23 @@ async function _runLocalAutoResolution() {
 // Build the end-of-turn wrap-up card data: the upcoming phase/round title and
 // the structured combat pairs (icon-vs-icon with HP loss / kills). The UI layer
 // renders the icons + score dots from this.
-function _buildWrapUpContent(steps, roundNum) {
+//
+// `humanFaction` is the viewer's side — both explore discoveries and
+// `state.nodeSpawnedSurvivors` are fog-of-war filtered against it. Callers in
+// online MP and local PvP both have a single viewer faction even though
+// `state.heroIsAI`/`witchIsAI` are both false, so we accept it from the caller
+// instead of deriving it locally (deriving here returned `null` and surfaced
+// the opponent's discoveries on the wrap-up). null ⇒ count all (AI-vs-AI).
+function _buildWrapUpContent(steps, roundNum, humanFaction = null) {
   const combats = compileTurnBattlePairs(steps, state.entities, ResEventType, PlanActionType);
   // Survivors/zombies found this round — move/explore/horn encounters plus any
   // spawned at power nodes during endRound (matches the old summary modal).
   // Also collect explored-loot icons so the card lists the actual resources.
   // Loot is the PLAYER's only — see collectTurnFinds (AI loot goes to its own
   // inventory, so counting it would double-show shared resource icons).
-  const humanFaction = !state.heroIsAI ? 'hero' : !state.witchIsAI ? 'witch' : null;
-  const { discoveries, loot } = collectTurnFinds(steps, humanFaction);
-  for (const s of (state.nodeSpawnedSurvivors ?? [])) discoveries.push(s);
+  const { discoveries, loot } = collectTurnFinds(
+    steps, humanFaction, state.nodeSpawnedSurvivors ?? []
+  );
 
   // Night attrition roll-call — who suffered in the open and who was sheltered
   // by a building or fortification this round (from the post-round effects).
@@ -1117,7 +1124,7 @@ async function _runEndOfRoundReview({
     if (attritionLevel) state.attritionChanged = false;
     let action;
     do {
-      const wrap = _buildWrapUpContent(steps, roundNum);
+      const wrap = _buildWrapUpContent(steps, roundNum, humanFaction);
       action = await ui.showReplayWrapUp({
         titleHtml: wrap.title, combats: wrap.combats, discoveries: wrap.discoveries,
         loot: wrap.loot, attrition: wrap.attrition, attritionLevel,
@@ -1501,7 +1508,7 @@ async function _replayLastRoundInlineLocal() {
     // planning. Skipped entirely if the player hit jump-to-end mid-animation.
     if (!skipped) {
       setMode(AppMode.SUMMARY);
-      const wrap = _buildWrapUpContent(steps, entry.roundNum);
+      const wrap = _buildWrapUpContent(steps, entry.roundNum, humanFaction);
       let action;
       do {
         action = await ui.showReplayWrapUp({
