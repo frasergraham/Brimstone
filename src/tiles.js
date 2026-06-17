@@ -229,7 +229,14 @@ export class Tile {
     decomposeTileType(this, type);
     this.explored = false;
     this.resource = null;   // ResourceType or null (on open tiles)
-    this.fortifyLevel = 0;  // 0=none, 1..6=fortified (see getFortifyCombatBonus)
+    // Fortification HP pool. `fortifyLevel` is a DERIVED getter/setter (below):
+    //   level = clamp(ceil(fortifyHP / FORTIFY_HP_PER_LEVEL), 0, MAX_FORTIFY_LEVEL)
+    // so 20 HP = L1, 40 = L2, 60 = L3 … and the level auto-downgrades the moment
+    // HP drops past a threshold (e.g. 60→L3, ≤40→L2, ≤20→L1, 0→none). The HP pool
+    // is the single source of truth; every legacy `tile.fortifyLevel = N` write
+    // routes through the setter (→ fortifyHP = N × per-level) so all existing
+    // readers/writers keep working without a sprawling rename.
+    this.fortifyHP = 0;     // 0=none; HP per level = FORTIFY_HP_PER_LEVEL
     this.roadDirs = new Set(); // hexKeys of road-connected neighbours (set at map gen time)
     // Building footprint (P0 of the building-footprint rework). A building is a
     // compound object: its canonical "building tile" stays passable and is the
@@ -246,6 +253,19 @@ export class Tile {
     // both the renderer's placement and (for bridges) the capacity gate. Set at
     // map-gen via deriveBlockedSlots(); [] until derived. Never includes 0.
     this.blockedSlots = [];          // number[] of slot ids 1..6
+  }
+
+  // Fortification level DERIVED from the HP pool. Reading returns the clamped
+  // ceil(fortifyHP / per-level). Writing `tile.fortifyLevel = N` is sugar that
+  // sets the HP pool to exactly N full levels (N × per-level), preserving the
+  // pre-HP-model semantics for every legacy assignment site (map-gen, missions,
+  // tutorial, AI sim, tests). All HP-aware code reads/writes `fortifyHP`.
+  get fortifyLevel() {
+    return fortifyLevelFromHP(this.fortifyHP);
+  }
+  set fortifyLevel(level) {
+    const lvl = Math.max(0, Math.min(MAX_FORTIFY_LEVEL, level | 0));
+    this.fortifyHP = lvl * FORTIFY_HP_PER_LEVEL;
   }
 }
 
@@ -404,6 +424,46 @@ export function blocksLineOfSight(tile) {
 
 // Hard cap on fortification level.
 export const MAX_FORTIFY_LEVEL = 6;
+
+// Hit points granted per fortification level. A fort hex stores an HP pool
+// (`Tile.fortifyHP`) and its `fortifyLevel` is DERIVED from it. Every attack on
+// a unit standing on a fort hex now chips the pool (a hit drains the damage
+// dealt; a miss drains a closeness-scaled fraction — see src/actions.js), so a
+// fortification erodes over a fight instead of only dropping on a clean hit.
+//   HP = level × FORTIFY_HP_PER_LEVEL   (L1=20, L2=40, L3=60 …)
+//   level = clamp(ceil(HP / FORTIFY_HP_PER_LEVEL), 0, MAX_FORTIFY_LEVEL)
+// so a L3 wall (60 HP) stays L3 from 41–60 HP and downgrades to L2 the instant
+// it drops to 40 or below — matching the operator's "<41 → L2" rule, generalised
+// to whatever MAX_FORTIFY_LEVEL is. 20 is sized so an average hit (~DAMAGE_SCALE
+// = 7 damage) takes roughly three solid hits to peel a level.
+export const FORTIFY_HP_PER_LEVEL = 20;
+
+// Maximum fort HP a tile can hold (a full MAX_FORTIFY_LEVEL wall).
+export const MAX_FORTIFY_HP = MAX_FORTIFY_LEVEL * FORTIFY_HP_PER_LEVEL;
+
+// Derive the fortification level from an HP pool. ceil() so any positive HP is
+// at least L1, then clamp to [0, MAX_FORTIFY_LEVEL]. Pure + deterministic — the
+// single source of the HP→level mapping shared by the Tile getter, the renderer,
+// serialization and tests.
+export function fortifyLevelFromHP(fortifyHP) {
+  const hp = Math.max(0, fortifyHP | 0);
+  return Math.min(MAX_FORTIFY_LEVEL, Math.ceil(hp / FORTIFY_HP_PER_LEVEL));
+}
+
+// Apply `amount` HP of damage to a tile's fortification pool (clamped to ≥0) and
+// report the before/after HP + derived level. Mutating helper shared by combat
+// (every-attack chip) and the witch siege/assault, so the HP→level downgrade is
+// computed in exactly one place. `amount` may be fractional (a near-miss chip)
+// but is floored to whole HP so the pool stays integer + deterministic.
+export function damageFortHP(tile, amount) {
+  const hpBefore  = Math.max(0, tile.fortifyHP | 0);
+  const lvlBefore = fortifyLevelFromHP(hpBefore);
+  const dealt     = Math.max(0, Math.min(hpBefore, Math.floor(amount)));
+  const hpAfter   = hpBefore - dealt;
+  tile.fortifyHP  = hpAfter;
+  const lvlAfter  = fortifyLevelFromHP(hpAfter);
+  return { hpBefore, hpAfter, hpDealt: dealt, lvlBefore, lvlAfter, levelsLost: lvlBefore - lvlAfter };
+}
 
 // Level at (and above) which a fortification becomes an impassable wall.
 // Level 1 is passable; level 2+ is a wall for factions that are blocked by walls

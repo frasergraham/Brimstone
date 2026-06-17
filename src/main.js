@@ -34,7 +34,7 @@ import { PlanActionType, groupPlanByEntity } from './planner.js';
 import { buildStepDigest, buildStoryBeatDigest, isEventVisible, compactUneventfulTurns } from './replay-timeline.js';
 import { hexDistance, getNeighbors, hexKey } from './hex.js';
 import { planCombatFrames } from './combat-presentation.js';
-import { MAX_FORTIFY_LEVEL, FORT_IMPASSABLE_THRESHOLD, deriveBlockedSlots } from './tiles.js';
+import { MAX_FORTIFY_LEVEL, MAX_FORTIFY_HP, FORTIFY_HP_PER_LEVEL, FORT_IMPASSABLE_THRESHOLD, deriveBlockedSlots } from './tiles.js';
 import { sightRange, computeLineOfSight, hasLineOfSight, assignSlotOnTile } from './actions.js';
 import { ITEMS } from './items.js';
 import { getFaction, findFaction, allFactions, getFactionsForSide, sightRangeForEntity } from './factions.js';
@@ -1686,14 +1686,18 @@ function _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn) {
     renderer.addHpChangeFlash(atkCol, atkRow, -(result.counterDmg), { entityId: actorSnap.id });
     _applyDisplayHp(actorSnap.id, -(result.counterDmg));
   }
-  if (result?.fortDamaged) {
-    renderer.addFlash(tgtCol, tgtRow, '🏰-1',
+  if (result?.fortHpDamage) {
+    // Floater shows HP chipped; if the hit also dropped a level, note that.
+    const lvlNote = result.fortDamaged ? ` (-${result.fortDamaged} lvl)` : '';
+    renderer.addFlash(tgtCol, tgtRow, `🏰-${result.fortHpDamage}${lvlNote}`,
       'rgba(120,120,140,0.15)', 1600, 0.65, 'rgba(180,180,200,1)');
-    // Apply the fort-level delta now so the hex ring visibly thins out in
-    // sync with the floater (fortifyLevel was rewound at the start of
-    // _animateResolutionSteps so this step's damage hasn't landed yet).
+    // Apply the fort-HP delta now so the hex ring visibly thins out in sync with
+    // the floater (fortifyHP was rewound at the start of _animateResolutionSteps
+    // so this step's damage hasn't landed yet). The derived level follows.
     const dTile = state.tiles.get(hexKey(tgtCol, tgtRow));
-    if (dTile && dTile.fortifyLevel > 0) dTile.fortifyLevel -= 1;
+    if (dTile && (dTile.fortifyHP | 0) > 0) {
+      dTile.fortifyHP = Math.max(0, (dTile.fortifyHP | 0) - result.fortHpDamage);
+    }
   }
   if (result?.killed) {
     const deadColor = targetSnap.owner === 'hero' ? '#d4a72c' : '#9b59b6';
@@ -1941,15 +1945,16 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
   );
 
   // ── Fortification rewind ─────────────────────────────────────────────
-  // state.tiles already carries the post-resolution fortifyLevel by the
-  // time we animate.  Snapshot those values so we can restore them at the
-  // end, then walk every event to compute the deltas each tile received
-  // and subtract them so the ring animation starts at the pre-resolution
-  // thickness.  Each fort-mutating event will re-apply its delta live as
-  // we animate that step below.
-  const postFortMap = new Map();
-  const fortDeltasByTile = new Map(); // hexKey → total delta applied during resolution
-  for (const [k, t] of state.tiles) postFortMap.set(k, t.fortifyLevel || 0);
+  // state.tiles already carries the post-resolution fortifyHP by the time we
+  // animate. Snapshot those values so we can restore them at the end, then walk
+  // every event to compute the HP delta each tile received and subtract it so
+  // the ring animation starts at the pre-resolution thickness. Each fort-mutating
+  // event re-applies its HP delta live as we animate that step below. Forts are
+  // an HP pool now (Tile.fortifyHP, with fortifyLevel a derived getter), so the
+  // rewind tracks HP — a single hit can shave HP without dropping a level.
+  const postFortMap = new Map();      // hexKey → post-resolution fortifyHP
+  const fortDeltasByTile = new Map(); // hexKey → total HP delta applied during resolution
+  for (const [k, t] of state.tiles) postFortMap.set(k, t.fortifyHP || 0);
   const _bumpDelta = (col, row, delta) => {
     if (!delta) return;
     const k = hexKey(col, row);
@@ -1964,26 +1969,26 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     for (const ev of evs) {
       const r = ev.result;
       if (!r) continue;
-      // FORTIFY: +defGain on actor's tile
+      // FORTIFY: +defHpGain HP on actor's tile
       if (ev.action?.type === PlanActionType.FORTIFY && r.success) {
         const actorSnap = step.entitySnapshot?.find(e => e.id === ev.action.entityId);
-        if (actorSnap) _bumpDelta(actorSnap.col, actorSnap.row, +(r.defGain ?? 1));
+        if (actorSnap) _bumpDelta(actorSnap.col, actorSnap.row, +(r.defHpGain ?? 0));
       }
-      // Battle / guard strike degrading defender's fort: -1
-      if (r.fortDamaged && !r.fortAssault) {
+      // Battle / guard strike eroding defender's fort: −fortHpDamage HP
+      if (r.fortHpDamage && !r.fortAssault) {
         const tSnap = ev.battleSnaps?.targetSnap;
-        if (tSnap) _bumpDelta(tSnap.col, tSnap.row, -1);
+        if (tSnap) _bumpDelta(tSnap.col, tSnap.row, -(r.fortHpDamage ?? 0));
       }
-      // Fort assault: fortLevelAfter - fortLevelBefore (negative delta)
+      // Fort assault: fortHpAfter − fortHpBefore (negative HP delta)
       if (r.fortAssault && r.success) {
-        _bumpDelta(r.targetCol, r.targetRow, (r.fortLevelAfter ?? 0) - (r.fortLevelBefore ?? 0));
+        _bumpDelta(r.targetCol, r.targetRow, (r.fortHpAfter ?? 0) - (r.fortHpBefore ?? 0));
       }
     }
   }
-  // Rewind tiles to pre-resolution fort levels.
+  // Rewind tiles to pre-resolution fort HP (the derived level follows).
   for (const [k, delta] of fortDeltasByTile) {
     const t = state.tiles.get(k);
-    if (t) t.fortifyLevel = Math.max(0, (postFortMap.get(k) ?? 0) - delta);
+    if (t) t.fortifyHP = Math.max(0, (postFortMap.get(k) ?? 0) - delta);
   }
 
   // 3D combat-presentation (Phase 1): when a step's combat frame is held by
@@ -2823,10 +2828,15 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         if (speed === 'cinematic') await renderer.waitForAnimations();
       }
 
-      // Apply the fort-level delta now (visible even to non-viewer so the
-      // authoritative state stays in sync across all observers).
+      // Apply the fort-HP delta now (visible even to non-viewer so the
+      // authoritative state stays in sync across all observers). The derived
+      // level follows the HP pool. Legacy events without fortHpAfter fall back
+      // to the level field.
       const tile = state.tiles.get(hexKey(tCol, tRow));
-      if (tile) tile.fortifyLevel = r.fortLevelAfter ?? tile.fortifyLevel;
+      if (tile) {
+        if (r.fortHpAfter != null) tile.fortifyHP = r.fortHpAfter | 0;
+        else if (r.fortLevelAfter != null) tile.fortifyLevel = r.fortLevelAfter;
+      }
       redrawFn();
       hadBattle = true;
     }
@@ -3060,9 +3070,13 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       if (!actor) continue;
       // Apply the fort delta live so the ring thickens exactly now — even
       // for opponents / other players (state is authoritative for everyone).
+      // Fort is an HP pool; add defHpGain (falls back to the level-derived gain
+      // for legacy events that predate defHpGain).
       const actorTile = state.tiles.get(hexKey(actor.col, actor.row));
-      if (actorTile) actorTile.fortifyLevel = Math.min(MAX_FORTIFY_LEVEL,
-        (actorTile.fortifyLevel || 0) + (result.defGain ?? 1));
+      if (actorTile) {
+        const hpGain = result.defHpGain ?? ((result.defGain ?? 1) * FORTIFY_HP_PER_LEVEL);
+        actorTile.fortifyHP = Math.min(MAX_FORTIFY_HP, (actorTile.fortifyHP || 0) + hpGain);
+      }
       // Surface the +N floater to anyone who can see the fortifying unit.
       if (!_evVisible(ev, step.entitySnapshot, postEntities)) continue;
       await _actionGate();
@@ -3247,12 +3261,13 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 
   // Restore the authoritative final state.
   state.entities = finalEntities;
-  // Restore post-resolution fortifyLevel values on every tile that was
-  // rewound at the start of the animation (covers skipped/aborted playbacks
-  // where some step deltas may not have been re-applied live).
+  // Restore post-resolution fortifyHP values on every tile that was rewound at
+  // the start of the animation (covers skipped/aborted playbacks where some step
+  // deltas may not have been re-applied live). postFortMap holds HP; the derived
+  // level follows.
   for (const [k, v] of postFortMap) {
     const t = state.tiles.get(k);
-    if (t && t.fortifyLevel !== v) t.fortifyLevel = v;
+    if (t && (t.fortifyHP || 0) !== v) t.fortifyHP = v;
   }
   // Deferred mid-replay conversation actions — now that the authoritative
   // entities are back, the scripted moves/despawns stick. These mutate real

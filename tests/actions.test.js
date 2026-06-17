@@ -16,7 +16,7 @@ import {
   createHero, createWitch, createMinion, createZombie, createSurvivor,
   createIronGolem, resetRoster, setForcedDice,
 } from '../src/entities.js';
-import { TileType, BuildingType, ResourceType, WeaponType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus, FORT_IMPASSABLE_THRESHOLD, legacyTileType, decomposeTileType, isBuildingFootprint } from '../src/tiles.js';
+import { TileType, BuildingType, ResourceType, WeaponType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus, FORT_IMPASSABLE_THRESHOLD, FORTIFY_HP_PER_LEVEL, MAX_FORTIFY_HP, fortifyLevelFromHP, damageFortHP, Tile, legacyTileType, decomposeTileType, isBuildingFootprint } from '../src/tiles.js';
 import { hexKey, getNeighbors, hexDistance } from '../src/hex.js';
 import { applyPostRoundEffects } from '../src/post-round-effects.js';
 import { applyEffect } from '../src/effects.js';
@@ -779,67 +779,102 @@ describe('executeBattle', () => {
     assert.equal(state.hero.defendCount, 0, 'defendCount should reset');
   });
 
-  test('fortification damaged when defender takes damage, defender still takes HP damage', () => {
+  test('a hit drains the fort HP pool by the damage dealt (HP model)', () => {
     const state = freshState();
     const minion = createMinion(state.hero.col, state.hero.row);
     state.entities.push(minion);
-    // Fortify the minion's tile
+    // Fortify the minion's tile — L2 = 40 HP pool.
     const minionTile = state.tiles.get(hexKey(minion.col, minion.row));
     minionTile.fortifyLevel = 2;
     state.hero.attackBonus = 50; // guarantee hit
 
-    const fortBefore = minionTile.fortifyLevel;
-    const hpBefore = minion.hp;
+    const hpBefore = minionTile.fortifyHP;
+    assert.equal(hpBefore, 40, 'L2 fort starts at 40 HP');
     const r = executeBattle(state, state.hero, minion);
 
     assert.ok(r.hit, 'Should be a hit with attackBonus=50');
-    // Defender takes real HP damage (fort no longer absorbs)
+    // Defender takes real HP damage too (fort does not absorb it).
     assert.ok(r.damage > 0, 'Defender should take damage directly');
-    // Fort also loses 1 level
-    assert.equal(r.fortDamaged, 1, 'fortDamaged should be 1');
-    assert.equal(minionTile.fortifyLevel, fortBefore - 1, 'Fort level should drop by 1');
+    // Fort takes the SAME HP the defender took.
+    assert.equal(r.fortHpDamage, r.damage, 'fort HP damage equals the combat damage on a hit');
+    assert.equal(minionTile.fortifyHP, hpBefore - r.damage, 'fort HP pool drops by the damage dealt');
   });
 
-  test('fortification does NOT degrade when attacker misses', () => {
+  test('a hit big enough to cross a threshold downgrades the level', () => {
     const state = freshState();
     const minion = createMinion(state.hero.col, state.hero.row);
     state.entities.push(minion);
     const minionTile = state.tiles.get(hexKey(minion.col, minion.row));
-    minionTile.fortifyLevel = 2;
-    // Give minion huge defense so hero always misses
-    minion.defenseBonus = 50;
+    // Park HP at 45 (L3, just above the L2 threshold of 40). Any landed hit
+    // (≥ 5 damage) takes it across the threshold to L2 (or lower on a big crush).
+    minionTile.fortifyHP = 45;
+    assert.equal(minionTile.fortifyLevel, 3, '45 HP is L3');
+    state.hero.attackBonus = 50; // guarantee a hit
 
-    const fortBefore = minionTile.fortifyLevel;
+    const r = executeBattle(state, state.hero, minion);
+    assert.ok(r.hit && r.damage >= 5, 'hit deals at least 5 damage');
+    assert.equal(minionTile.fortifyHP, 45 - r.damage, 'HP drained by exactly the damage dealt');
+    assert.ok(minionTile.fortifyLevel < 3, 'level downgraded below L3');
+    assert.ok(r.fortDamaged >= 1, 'fortDamaged reports at least one level lost');
+  });
+
+  // The deterministic miss-chip formula (see src/actions.js):
+  //   gap   = max(0, defenseRoll - attackRoll)
+  //   chip  = round((FORTIFY_HP_PER_LEVEL / 4) / (1 + gap))
+  const expectedMissChip = (attackRoll, defenseRoll) => {
+    const gap = Math.max(0, defenseRoll - attackRoll);
+    return Math.round((FORTIFY_HP_PER_LEVEL / 4) / (1 + gap));
+  };
+
+  test('a miss STILL chips the fort, scaled by closeness to hitting', () => {
+    // New rule: every attack erodes the fort. A miss drains a closeness-scaled
+    // chip. Force a near-miss by giving the minion a modest defense edge.
+    const state = freshState();
+    const minion = createMinion(state.hero.col, state.hero.row);
+    state.entities.push(minion);
+    const minionTile = state.tiles.get(hexKey(minion.col, minion.row));
+    minionTile.fortifyLevel = 2; // 40 HP
+    minion.defenseBonus = 8;     // small edge → a CLOSE miss, not a wild one
+    const hpBefore = minionTile.fortifyHP;
     const r = executeBattle(state, state.hero, minion);
 
-    assert.ok(!r.hit, 'Should be a miss with defender defenseBonus=50');
-    assert.equal(r.fortDamaged, 0, 'fortDamaged should be 0 on miss');
-    assert.equal(minionTile.fortifyLevel, fortBefore, 'Fort level should not change on miss');
+    assert.ok(!r.hit, 'should be a miss');
+    const want = expectedMissChip(r.attackRoll, r.defenseRoll);
+    assert.ok(want > 0, 'a close miss chips a positive amount');
+    assert.equal(r.fortHpDamage, want, 'miss chip matches the closeness formula');
+    assert.equal(minionTile.fortifyHP, hpBefore - want, 'fort HP drained by the miss chip');
   });
 
-  test('fortification does NOT degrade on tie (margin === 0)', () => {
+  test('a near miss chips the fort MORE than a wild miss (closeness scaling)', () => {
+    // Closest possible miss = a tie (gap 0) → chip = round(5/1) = 5.
+    // Widest miss (gap ≥ 5) → chip rounds toward ≤ 1. Verify monotonicity of the
+    // pure formula and that both stay in the documented quarter-level cap.
+    const chipTie  = expectedMissChip(10, 10);  // gap 0
+    const chipNear = expectedMissChip(10, 11);  // gap 1
+    const chipWild = expectedMissChip(2, 12);   // gap 10
+    assert.equal(chipTie, 5, 'closest miss chips a quarter-level (5 HP)');
+    assert.ok(chipNear < chipTie, 'a wider miss chips less');
+    assert.ok(chipWild < chipNear, 'a wild miss chips the least');
+    assert.ok(chipWild >= 0, 'never negative');
+    assert.ok(chipTie <= FORTIFY_HP_PER_LEVEL / 4, 'capped at a quarter-level');
+  });
+
+  test('a wild miss chips the fort by far less than a near miss (live combat)', () => {
     const state = freshState();
     const minion = createMinion(state.hero.col, state.hero.row);
     state.entities.push(minion);
     const minionTile = state.tiles.get(hexKey(minion.col, minion.row));
-    minionTile.fortifyLevel = 2;
-    const fortBefore = minionTile.fortifyLevel;
+    minionTile.fortifyLevel = 3; // 60 HP, plenty of headroom
+    minion.defenseBonus = 50;    // attacker badly outclassed → big gap miss
+    const hpBefore = minionTile.fortifyHP;
+    const r = executeBattle(state, state.hero, minion);
 
-    // Run many battles and check any tie case doesn't damage the fort
-    for (let i = 0; i < 50; i++) {
-      const s2 = freshState();
-      const m2 = createMinion(s2.hero.col, s2.hero.row);
-      s2.entities.push(m2);
-      const t2 = s2.tiles.get(hexKey(m2.col, m2.row));
-      t2.fortifyLevel = 2;
-      const r = executeBattle(s2, s2.hero, m2);
-      if (r.margin === 0) {
-        // Tie: fort should not degrade
-        assert.equal(r.fortDamaged, 0, 'fortDamaged should be 0 on tie');
-        assert.equal(t2.fortifyLevel, 2, 'Fort level should not change on tie');
-        break;
-      }
-    }
+    assert.ok(!r.hit, 'badly outclassed attacker misses');
+    assert.equal(r.fortHpDamage, expectedMissChip(r.attackRoll, r.defenseRoll),
+      'wild-miss chip matches the formula');
+    assert.ok(r.fortHpDamage < 5, `wild miss chips < 5 HP (got ${r.fortHpDamage})`);
+    assert.ok(r.fortHpDamage >= 0, 'never negative');
+    assert.equal(minionTile.fortifyHP, hpBefore - r.fortHpDamage, 'HP drained by the chip');
   });
 
   test('night hazard does NOT degrade fortifications', () => {
@@ -1417,6 +1452,97 @@ describe('executeFortify', () => {
     state.inventory.hero[ResourceType.WOOD] = { count: 1 };
     const r = executeFortify(state, state.hero);
     assert.equal(r.cost, 1);
+  });
+});
+
+// ── Fortification HP model ────────────────────────────────────────────────────
+// Forts store an HP pool (Tile.fortifyHP); the level is DERIVED:
+//   HP = level × 20 ; level = clamp(ceil(HP/20), 0, MAX_FORTIFY_LEVEL)
+// Downgrade is automatic: 60 HP → L3, drops to L2 the instant HP ≤ 40, etc.
+
+describe('fortification HP pool', () => {
+  test('a fresh tile has 0 fort HP and level 0', () => {
+    const t = new Tile(0, 0);
+    assert.equal(t.fortifyHP, 0);
+    assert.equal(t.fortifyLevel, 0);
+  });
+
+  test('HP per level is 20 (level × 20)', () => {
+    assert.equal(FORTIFY_HP_PER_LEVEL, 20);
+    const t = new Tile(0, 0);
+    t.fortifyLevel = 3;
+    assert.equal(t.fortifyHP, 60, 'setting level 3 stores 60 HP');
+  });
+
+  test('level is ceil(HP/20) with the exact downgrade thresholds', () => {
+    assert.equal(fortifyLevelFromHP(60), 3, '60 HP → L3');
+    assert.equal(fortifyLevelFromHP(41), 3, '41 HP → still L3 (just above 40)');
+    assert.equal(fortifyLevelFromHP(40), 2, '40 HP → L2 (drops below 41)');
+    assert.equal(fortifyLevelFromHP(21), 2, '21 HP → L2');
+    assert.equal(fortifyLevelFromHP(20), 1, '20 HP → L1');
+    assert.equal(fortifyLevelFromHP(1),  1, '1 HP → L1 (any positive HP is at least L1)');
+    assert.equal(fortifyLevelFromHP(0),  0, '0 HP → none');
+  });
+
+  test('level clamps to MAX_FORTIFY_LEVEL', () => {
+    assert.equal(fortifyLevelFromHP(1000), MAX_FORTIFY_LEVEL);
+    assert.equal(MAX_FORTIFY_HP, MAX_FORTIFY_LEVEL * FORTIFY_HP_PER_LEVEL);
+  });
+
+  test('damageFortHP drains the pool and reports the derived downgrade', () => {
+    const t = new Tile(0, 0);
+    t.fortifyLevel = 3; // 60 HP
+    const d = damageFortHP(t, 25);
+    assert.equal(d.hpBefore, 60);
+    assert.equal(d.hpDealt, 25);
+    assert.equal(d.hpAfter, 35);
+    assert.equal(d.lvlBefore, 3);
+    assert.equal(d.lvlAfter, 2, '35 HP → L2');
+    assert.equal(d.levelsLost, 1);
+    assert.equal(t.fortifyHP, 35);
+    assert.equal(t.fortifyLevel, 2);
+  });
+
+  test('damageFortHP clamps at 0 (cannot go negative)', () => {
+    const t = new Tile(0, 0);
+    t.fortifyLevel = 1; // 20 HP
+    const d = damageFortHP(t, 999);
+    assert.equal(d.hpDealt, 20, 'only drains what was there');
+    assert.equal(t.fortifyHP, 0);
+    assert.equal(t.fortifyLevel, 0);
+  });
+});
+
+describe('executeFortify HP model', () => {
+  test('metal adds 40 HP (2 levels of pool), wood adds 20 HP (1 level)', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const t = state.tiles.get(hexKey(hero.col, hero.row));
+    t.fortifyHP = 0;
+
+    state.inventory.hero[ResourceType.METAL] = { count: 1 };
+    const r1 = executeFortify(state, hero);
+    assert.equal(r1.defHpGain, 40, 'metal adds 40 HP');
+    assert.equal(t.fortifyHP, 40);
+    assert.equal(t.fortifyLevel, 2);
+
+    state.inventory.hero[ResourceType.WOOD] = { count: 1 };
+    const r2 = executeFortify(state, hero);
+    assert.equal(r2.defHpGain, 20, 'wood adds 20 HP');
+    assert.equal(t.fortifyHP, 60);
+    assert.equal(t.fortifyLevel, 3);
+  });
+
+  test('fortify HP caps at MAX_FORTIFY_HP', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const t = state.tiles.get(hexKey(hero.col, hero.row));
+    t.fortifyHP = MAX_FORTIFY_HP - 10; // 110 HP, would overflow on +40
+    state.inventory.hero[ResourceType.METAL] = { count: 1 };
+    const r = executeFortify(state, hero);
+    assert.equal(t.fortifyHP, MAX_FORTIFY_HP, 'capped at MAX_FORTIFY_HP');
+    assert.equal(r.defHpGain, 10, 'only the headroom is gained');
+    assert.equal(t.fortifyLevel, MAX_FORTIFY_LEVEL);
   });
 });
 
@@ -2593,21 +2719,26 @@ describe('executeFortAssault', () => {
     return { state, unit, fortTile, fortPos };
   }
 
-  test('witch minion hits a fort-3 wall and knocks it down to 2', () => {
+  test('witch minion hits a fort-3 wall and chips half a level of HP', () => {
+    // HP model: a siege HIT drains FORTIFY_HP_PER_LEVEL/2 = 10 HP. fort-3 = 60 HP
+    // → 50 HP, which is still L3 (one hit no longer peels a whole level).
     const { state, unit, fortTile, fortPos } = setupAssaultScene({ fortLevel: 3, attacker: 'minion' });
     // Minion attack=1, fort defense = 3+1 = 4. Force d6=4 → roll = 4+1 = 5 > 4 → hit, not crush (5 < 8).
     setForcedDice(4);
+    assert.equal(fortTile.fortifyHP, 60, 'fort-3 starts at 60 HP');
     const r = executeFortAssault(state, unit, fortPos.col, fortPos.row);
     assert.equal(r.success, true);
     assert.equal(r.hit, true);
     assert.equal(r.crush, false);
-    assert.equal(r.damage, 1);
+    assert.equal(r.fortHpDamage, 10, 'a non-crush siege hit drains 10 HP');
     assert.equal(r.fortLevelBefore, 3);
-    assert.equal(r.fortLevelAfter, 2);
-    assert.equal(fortTile.fortifyLevel, 2);
+    assert.equal(fortTile.fortifyHP, 50, 'fort HP 60 → 50');
+    assert.equal(fortTile.fortifyLevel, 3, 'still L3 (50 HP > 40 threshold)');
+    assert.equal(r.fortLevelAfter, 3);
+    assert.equal(r.damage, 0, 'no level lost this hit');
   });
 
-  test('crush on a fort-3 wall knocks it down by 2 levels', () => {
+  test('crush on a fort-3 wall drains a full level of HP and drops it to L2', () => {
     const { state, unit, fortTile, fortPos } = setupAssaultScene({
       fortLevel: 3, attacker: 'iron_golem',
     });
@@ -2616,9 +2747,11 @@ describe('executeFortAssault', () => {
     const r = executeFortAssault(state, unit, fortPos.col, fortPos.row);
     assert.equal(r.hit, true);
     assert.equal(r.crush, true);
-    assert.equal(r.damage, 2);
-    assert.equal(r.fortLevelAfter, 1);
-    assert.equal(fortTile.fortifyLevel, 1);
+    assert.equal(r.fortHpDamage, 20, 'a crush drains a full level of HP (20)');
+    assert.equal(fortTile.fortifyHP, 40, 'fort HP 60 → 40');
+    assert.equal(r.fortLevelAfter, 2, '40 HP → L2');
+    assert.equal(fortTile.fortifyLevel, 2);
+    assert.equal(r.damage, 1, 'one level lost');
   });
 
   test('missed assault leaves fort unchanged', () => {
@@ -2628,6 +2761,8 @@ describe('executeFortAssault', () => {
     const r = executeFortAssault(state, unit, fortPos.col, fortPos.row);
     assert.equal(r.hit, false);
     assert.equal(r.damage, 0);
+    assert.equal(r.fortHpDamage, 0, 'a missed assault drains no HP');
+    assert.equal(fortTile.fortifyHP, 80, 'fort-4 stays at 80 HP');
     assert.equal(fortTile.fortifyLevel, 4);
   });
 
@@ -2664,8 +2799,10 @@ describe('executeFortAssault', () => {
   });
 
   test('after wall is demolished to 1, a witch unit can walk through it', () => {
+    // fort-2 = 40 HP. A crush drains a full level (20 HP) → 20 HP = L1, below the
+    // impassable threshold, so the breached hex becomes walkable.
     const { state, unit, fortTile, fortPos } = setupAssaultScene({
-      fortLevel: 3, attacker: 'iron_golem',
+      fortLevel: 2, attacker: 'iron_golem',
     });
     setForcedDice(6);
     const r1 = executeFortAssault(state, unit, fortPos.col, fortPos.row);

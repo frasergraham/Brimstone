@@ -1370,7 +1370,23 @@ export function _serializeEvents(events) {
         defenseRoll:       ev.result.defenseRoll      ?? 0,
         hit:               ev.result.hit              ?? false,
         margin:            ev.result.margin           ?? 0,
-        fortAbsorbed:      ev.result.fortAbsorbed     ?? 0,
+        // Fortification erosion (HP model). fortDamaged = LEVELS lost (floater
+        // text); fortHpDamage/Before/After drive the client playback HP rewind
+        // (src/main.js _animateResolutionSteps). defGain/defHpGain carry a
+        // fortify's level/HP gain. fortAssault + fortLevel/HpBefore/After + crush
+        // carry a witch siege. All MUST be allowlisted here or online MP drops
+        // them and the fort ring desyncs from the authoritative state.
+        fortDamaged:       ev.result.fortDamaged      ?? 0,
+        fortHpDamage:      ev.result.fortHpDamage     ?? 0,
+        fortHpBefore:      ev.result.fortHpBefore     ?? 0,
+        fortHpAfter:       ev.result.fortHpAfter      ?? 0,
+        defGain:           ev.result.defGain          ?? 0,
+        defHpGain:         ev.result.defHpGain        ?? 0,
+        fortAssault:       ev.result.fortAssault      ?? false,
+        targetCol:         ev.result.targetCol        ?? null,
+        targetRow:         ev.result.targetRow        ?? null,
+        fortLevelBefore:   ev.result.fortLevelBefore  ?? 0,
+        fortLevelAfter:    ev.result.fortLevelAfter   ?? 0,
         breakdown:         ev.result.breakdown        ?? null,
         path:              ev.result.path             ?? [],
         lootItems:         ev.result.lootItems        ?? [],

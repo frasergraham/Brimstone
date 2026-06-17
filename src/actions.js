@@ -3,7 +3,8 @@ import { getNeighbors, hexKey, hexDistance, hexRange, hexLine, offsetToAxial, ax
 import {
   ResourceType, WEAPON_LABEL, BUILDING_LOOT, TERRAIN_LOOT, rollLoot,
   MAX_FORTIFY_LEVEL, getFortifyCombatBonus, isFortWall,
-  FORT_IMPASSABLE_THRESHOLD,
+  FORT_IMPASSABLE_THRESHOLD, FORTIFY_HP_PER_LEVEL, MAX_FORTIFY_HP,
+  damageFortHP,
   isRiver, isPathRoadLike, hasBuilding, isForestCover, baseOf,
   tileCapacityRemaining, isBuildingFootprint, blocksLineOfSight,
 } from './tiles.js';
@@ -488,9 +489,10 @@ export function getValidActions(state, actor) {
     actions.push({ type: ActionType.BATTLE_HEX, targets: battleHexTargets });
   }
 
-  // Fortify — faction-gated; cap at MAX_FORTIFY_LEVEL, uses shared inventory.
+  // Fortify — faction-gated; cap at MAX_FORTIFY_HP (the HP pool), uses shared
+  // inventory. Gate on HP so a chipped max-level wall can still be topped off.
   // Always included when contextually valid; affordable=false when no resources.
-  if (t && !isRiver(t) && !isBuildingFootprint(t) && t.fortifyLevel < MAX_FORTIFY_LEVEL && faction.canFortify()) {
+  if (t && !isRiver(t) && !isBuildingFootprint(t) && (t.fortifyHP | 0) < MAX_FORTIFY_HP && faction.canFortify()) {
     const inv        = faction.getInventory(state);
     const woodCount  = getItemCountOf(inv, ResourceType.WOOD);
     const metalCount = getItemCountOf(inv, ResourceType.METAL);
@@ -1233,7 +1235,10 @@ export function executeBattle(state, actor, target, opts = {}) {
   let dmgRoll    = 0;          // pre-tier weapon damage roll (for the breakdown popup)
   let dmgTier    = 0;          // crush multiplier applied (1 hit / 2 crush / 3 great crush)
   let counterDmg = 0;          // damage dealt to attacker (counter)
-  let fortDamaged = 0;         // fort levels lost this combat (1 if defender took any damage)
+  let fortDamaged   = 0;       // fort LEVELS lost this combat (for the floater text)
+  let fortHpDamage  = 0;       // fort HP drained this combat (drives playback rewind)
+  let fortHpBefore  = (defTile && defTile.fortifyHP) || 0;
+  let fortHpAfter   = fortHpBefore;
   let splashKills = [];         // entities killed by splash damage
   let splashHits  = [];         // all entities that took splash damage (killed or not)
   let splashHexes = [];         // hexes covered by the splash blast (for VFX)
@@ -1269,13 +1274,6 @@ export function executeBattle(state, actor, target, opts = {}) {
       const wasKilled = target.takeDamage(inc);
       dispatchTrigger('damaged', target, { state, amount: inc, source: actor });
       if (wasKilled) killed = true;
-    }
-
-    // Fort takes -1 if the defender took any damage
-    if (damage > 0 && defTile && defTile.fortifyLevel > 0) {
-      defTile.fortifyLevel -= 1;
-      fortDamaged = 1;
-      log.push(`🏰 The fortifications are damaged! (now +${defTile.fortifyLevel} DEF)`);
     }
 
     if (killed) {
@@ -1421,6 +1419,50 @@ export function executeBattle(state, actor, target, opts = {}) {
     }
   }
 
+  // ── Fortification erosion (every attack) ──────────────────────────────────
+  // A fortified hex now soaks damage on EVERY swing, not just a clean hit.
+  //   • Hit / crush → the fort takes the same HP dealt to the defender
+  //     (`damage`), so a big crush peels the wall fast.
+  //   • Miss → the fort still cracks, but only by a closeness-scaled chip:
+  //       gap       = defenseRoll − attackRoll   (≥ 0 on a miss; 0 = a tie, the
+  //                   nearest possible miss)
+  //       closeness = 1 / (1 + gap)              ∈ (0, 1]
+  //       chip      = round(FORT_MISS_CHIP_MAX × closeness)
+  //     so a near-miss chips FORT_MISS_CHIP_MAX (a quarter-level) and a wild
+  //     miss barely a point. FORT_MISS_CHIP_MAX = FORTIFY_HP_PER_LEVEL / 4 keeps
+  //     a miss strictly weaker than an average hit (~DAMAGE_SCALE = 7 HP).
+  // Deterministic: derived purely from the sealed combat roll (attackRoll,
+  // defenseRoll, damage) — no wall-clock, no extra RNG. Ranged attacks erode
+  // forts the same way (consistent with the every-attack rule). Witch-side
+  // attackers chipping their OWN fort can't happen (forts are hero-side terrain
+  // and the defender stands on them), so no friendly-fire guard is needed.
+  // ⚠ DESIGN CHOICE flagged for operator: the miss closeness measure + the
+  // FORTIFY_HP_PER_LEVEL/4 cap are the author's pick — see commit message.
+  const FORT_MISS_CHIP_MAX = FORTIFY_HP_PER_LEVEL / 4;
+  if (defTile && (defTile.fortifyHP | 0) > 0) {
+    let fortHit;
+    if (hit) {
+      fortHit = damage;
+    } else {
+      const gap       = Math.max(0, defenseRoll - attackRoll);
+      const closeness = 1 / (1 + gap);
+      fortHit = Math.round(FORT_MISS_CHIP_MAX * closeness);
+    }
+    if (fortHit > 0) {
+      const fd = damageFortHP(defTile, fortHit);
+      fortHpDamage = fd.hpDealt;
+      fortHpBefore = fd.hpBefore;
+      fortHpAfter  = fd.hpAfter;
+      fortDamaged  = fd.levelsLost;
+      if (fd.hpDealt > 0) {
+        const lvlNote = fd.levelsLost > 0
+          ? ` — the wall weakens to +${getFortifyCombatBonus(fd.lvlAfter).defense} DEF`
+          : '';
+        log.push(`🏰 The fortifications take ${fd.hpDealt} damage. (${fd.hpAfter}/${fd.lvlBefore * FORTIFY_HP_PER_LEVEL} HP)${lvlNote}`);
+      }
+    }
+  }
+
   // Decomposed intrinsic stat contributions — surfaced as discrete floaters
   // in the 3D combat readout (so the player sees their weapon / silver /
   // ability bonuses, not just one opaque sum). The sum below MUST equal
@@ -1443,7 +1485,10 @@ export function executeBattle(state, actor, target, opts = {}) {
   return {
     success: true, log, cost: 1,
     attackRoll, defenseRoll, hit, killed,
-    margin, damage, counterDmg, fortDamaged,
+    margin, damage, counterDmg,
+    // fortDamaged = LEVELS lost (≥0) — kept for the existing floater text.
+    // fortHpDamage / fortHpBefore / fortHpAfter drive the playback HP rewind.
+    fortDamaged, fortHpDamage, fortHpBefore, fortHpAfter,
     attackerAllies, defenderAllies, splashKills, splashHits,
     splashHexes, splashRadius,
     ranged: isRanged, closeRanged: isCloseRanged,
@@ -1535,6 +1580,7 @@ export function executeFortAssault(state, actor, targetCol, targetRow) {
   const defenseRoll = t.fortifyLevel + 1;
 
   const fortLevelBefore = t.fortifyLevel;
+  const fortHpBefore    = t.fortifyHP | 0;
   const hit   = attackRoll > defenseRoll;
   const crush = hit && attackRoll >= 2 * defenseRoll;
 
@@ -1545,14 +1591,22 @@ export function executeFortAssault(state, actor, targetCol, targetRow) {
     `[${attackRoll}${gangNote} vs ${defenseRoll}]${phaseNote}`
   );
 
+  // HP model: a siege hit chips half a level of HP, a crush a full level. Old
+  // behaviour drained 1 level (hit) / 2 levels (crush) outright — under the HP
+  // pool that would over-shoot, so we scale the drain to HP and let the derived
+  // level downgrade follow naturally. `damage` is reported in LEVELS lost (for
+  // back-compat with the breakdown popup); `fortHpDamage` carries the HP drain.
   let damage = 0;
+  let fortHpDamage = 0;
   if (hit) {
-    damage = crush ? 2 : 1;
-    t.fortifyLevel = Math.max(0, t.fortifyLevel - damage);
+    const drain = crush ? FORTIFY_HP_PER_LEVEL : Math.floor(FORTIFY_HP_PER_LEVEL / 2);
+    const fd = damageFortHP(t, drain);
+    fortHpDamage = fd.hpDealt;
+    damage = fd.levelsLost;
     if (crush) {
-      log.push(`💥 The wall buckles under a crushing blow! (fort level ${fortLevelBefore} → ${t.fortifyLevel})`);
+      log.push(`💥 The wall buckles under a crushing blow! (${fd.hpAfter}/${fortLevelBefore * FORTIFY_HP_PER_LEVEL} HP, fort level ${fortLevelBefore} → ${t.fortifyLevel})`);
     } else {
-      log.push(`🏰 The fortifications crack under the assault. (fort level ${fortLevelBefore} → ${t.fortifyLevel})`);
+      log.push(`🏰 The fortifications crack under the assault. (${fd.hpAfter}/${fortLevelBefore * FORTIFY_HP_PER_LEVEL} HP, fort level ${fortLevelBefore} → ${t.fortifyLevel})`);
     }
     if (t.fortifyLevel === 0) {
       log.push(`The fortifications crumble away.`);
@@ -1568,7 +1622,8 @@ export function executeFortAssault(state, actor, targetCol, targetRow) {
     fortAssault: true,
     targetCol, targetRow,
     attackRoll, defenseRoll,
-    hit, crush, damage,
+    hit, crush, damage, fortHpDamage,
+    fortHpBefore, fortHpAfter: t.fortifyHP | 0,
     fortLevelBefore, fortLevelAfter: t.fortifyLevel,
     breakdown: {
       atkBaseDie, atkExtraDice, atkPool, phaseBonus,
@@ -1581,7 +1636,10 @@ export function executeFortAssault(state, actor, targetCol, targetRow) {
 export function executeFortify(state, actor) {
   const t = tile(state, actor.col, actor.row);
   if (!t || isRiver(t) || isBuildingFootprint(t)) return { success: false, log: ['Cannot fortify here.'] };
-  if (t.fortifyLevel >= MAX_FORTIFY_LEVEL) return { success: false, log: ['Cannot fortify further.'] };
+  // Gate on the HP cap, not the level: a tile already at max LEVEL can still have
+  // HP headroom within that band (e.g. a chipped L6 wall), and fortifying tops it
+  // back up. Only a full pool (MAX_FORTIFY_HP) blocks further fortification.
+  if ((t.fortifyHP | 0) >= MAX_FORTIFY_HP) return { success: false, log: ['Cannot fortify further.'] };
   const shared     = state.inventory.hero;
   const metalCount = getItemCountOf(shared, ResourceType.METAL);
   const woodCount  = getItemCountOf(shared, ResourceType.WOOD);
@@ -1590,26 +1648,34 @@ export function executeFortify(state, actor) {
   const hasDoubler = actor.type === EntityType.SURVIVOR &&
     actor.hasAbility(SurvivorAbility.FORTIFY_DOUBLE);
 
+  // Fortify adds an HP pool (preserving the old +2-levels-metal / +1-level-wood
+  // progression feel = +40 / +20 HP), capped at MAX_FORTIFY_HP. `defGain` stays
+  // the LEVEL delta so the playback ring + tests keep their existing meaning;
+  // `defHpGain` carries the HP added for the HP-aware playback rewind.
   if (metalCount > 0) {
     removeItemInItems(shared, ResourceType.METAL, 1);
-    const prev = t.fortifyLevel;
-    t.fortifyLevel = Math.min(MAX_FORTIFY_LEVEL, prev + 2);
-    const defGain = t.fortifyLevel - prev;
+    const prevLevel = t.fortifyLevel;
+    const prevHp    = t.fortifyHP | 0;
+    t.fortifyHP = Math.min(MAX_FORTIFY_HP, prevHp + 2 * FORTIFY_HP_PER_LEVEL);
+    const defGain   = t.fortifyLevel - prevLevel;
+    const defHpGain = t.fortifyHP - prevHp;
     // Campaign veterancy: fortify XP scales with the NEW fort level. No ally share.
     const xpAwards = [];
     grantXp(xpAwards, actor, XP_PER_FORTIFY_BASE + XP_PER_FORTIFY_LEVEL_BONUS * t.fortifyLevel, state, 'fortify');
-    return { success: true, log: [`${actor.displayName} reinforces with metal! (fort level ${t.fortifyLevel})`], cost: 1, defGain, ...(xpAwards.length ? { xpAwards } : {}) };
+    return { success: true, log: [`${actor.displayName} reinforces with metal! (fort level ${t.fortifyLevel}, ${t.fortifyHP} HP)`], cost: 1, defGain, defHpGain, ...(xpAwards.length ? { xpAwards } : {}) };
   } else if (woodCount > 0) {
     removeItemInItems(shared, ResourceType.WOOD, 1);
-    const gain = hasDoubler ? 2 : 1;
-    const prev = t.fortifyLevel;
-    t.fortifyLevel = Math.min(MAX_FORTIFY_LEVEL, prev + gain);
-    const defGain = t.fortifyLevel - prev;
+    const gainLevels = hasDoubler ? 2 : 1;
+    const prevLevel  = t.fortifyLevel;
+    const prevHp     = t.fortifyHP | 0;
+    t.fortifyHP = Math.min(MAX_FORTIFY_HP, prevHp + gainLevels * FORTIFY_HP_PER_LEVEL);
+    const defGain    = t.fortifyLevel - prevLevel;
+    const defHpGain  = t.fortifyHP - prevHp;
     const star = hasDoubler ? ' ★' : '';
     // Campaign veterancy: fortify XP scales with the NEW fort level. No ally share.
     const xpAwards = [];
     grantXp(xpAwards, actor, XP_PER_FORTIFY_BASE + XP_PER_FORTIFY_LEVEL_BONUS * t.fortifyLevel, state, 'fortify');
-    return { success: true, log: [`${actor.displayName} fortifies with wood!${star} (fort level ${t.fortifyLevel})`], cost: 1, defGain, ...(xpAwards.length ? { xpAwards } : {}) };
+    return { success: true, log: [`${actor.displayName} fortifies with wood!${star} (fort level ${t.fortifyLevel}, ${t.fortifyHP} HP)`], cost: 1, defGain, defHpGain, ...(xpAwards.length ? { xpAwards } : {}) };
   }
 
   return { success: false, log: ['No wood or metal in shared supplies.'] };
