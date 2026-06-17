@@ -169,6 +169,16 @@ describe('progressUnitCardHTML weapons list', () => {
     const none = progressUnitCardHTML(unit({ items: {} }), { idx: 0 });
     assert.doesNotMatch(none, /cprog-weapons/);
   });
+
+  test('equipped weapon held in multiples shows its true count (×2), not a single undifferentiated row', () => {
+    // Two swords, one equipped — the spare copy must still be visible. Before the
+    // fix the equipped row hardcoded ×1 and the carried filter dropped the
+    // same-id spare, so the second sword vanished entirely.
+    const html = progressUnitCardHTML(
+      unit({ items: { sword: { count: 2, equipped: true } } }), { idx: 0 });
+    assert.match(html, /✓ Equipped/);                 // still clearly the equipped weapon
+    assert.match(html, /×2/, 'the quantity of the stacked weapon must be surfaced');
+  });
 });
 
 // ── partyPaneHTML ────────────────────────────────────────────────────────────

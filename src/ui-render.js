@@ -367,17 +367,23 @@ export function buildUnitDetailHtml(entity, items) {
   const effectsHtml = buildEffectsHtml(entity);
 
   // Pack rows: weapons via WEAPON_LABEL, everything else via RESOURCE_LABEL.
-  // The equipped weapon shows in the vitals line, so it's excluded here so the
-  // pack only lists spare gear.
+  // The equipped weapon shows in the vitals line, so its *wielded* copy is
+  // excluded here — but any spare copies of that same weapon (count > 1) still
+  // belong in the pack, otherwise a duplicate equipped weapon would vanish.
   const packRows = Object.entries(pack)
-    .filter(([k, e]) => (e?.count ?? 0) > 0 && k !== equippedId)
     .map(([k, e]) => {
+      // Hide the single wielded copy; surface the rest as spares.
+      const spare = (e?.count ?? 0) - (k === equippedId ? 1 : 0);
+      return [k, spare];
+    })
+    .filter(([, spare]) => spare > 0)
+    .map(([k, spare]) => {
       const label = ITEMS[k]?.kind === 'weapon'
         ? (WEAPON_LABEL[k] || k)
         : (RESOURCE_LABEL[k] || k);
       return `<div class="inv-resource-row">`
            + `<span class="inv-resource-label">${label}</span>`
-           + `<span class="inv-resource-val">×${e.count}</span></div>`;
+           + `<span class="inv-resource-val">×${spare}</span></div>`;
     }).join('');
 
   // Each group on its own line — a long weapon label wrapping next to the
