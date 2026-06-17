@@ -75,6 +75,48 @@ describe('buildStepDigest — column shape', () => {
   });
 });
 
+// ── Explore loot scoping ─────────────────────────────────────────────────────
+
+function exploreEvent(actorId, faction, lootItems) {
+  return {
+    type: ResEventType.ACTION_OK,
+    faction,
+    action: { type: PlanActionType.EXPLORE, entityId: actorId },
+    result: { success: true, lootItems, log: ['explored'] },
+  };
+}
+
+describe('buildStepDigest — explore card loot is per-action (t-4e9b1bf0)', () => {
+  test('each explore card shows only its own loot, never the cumulative round total', () => {
+    const a = snap('h1', 'survivor', 'hero', 1, 1, { name: 'Alice' });
+    const b = snap('h2', 'survivor', 'hero', 2, 1, { name: 'Bob' });
+    // Two survivors explore in the same step — distinct loot per action.
+    const steps = [step([
+      exploreEvent('h1', 'hero', ['+🪵']),
+      exploreEvent('h2', 'hero', ['+⚙']),
+    ], [a, b])];
+    const digest = buildStepDigest(steps, [], DEPS);
+    const byId = Object.fromEntries(digest[0].entries.map(e => [e.entityId, e]));
+    // Alice's card lists only wood; Bob's only metal — neither stacks the other's.
+    assert.equal(byId['h1'].note.text, '+🪵');
+    assert.equal(byId['h2'].note.text, '+⚙');
+    assert.ok(!byId['h2'].note.text.includes('🪵'), 'second explore must not carry the first explore loot');
+  });
+
+  test('empty explore roll reads EXPLORED, not the prior card loot', () => {
+    const a = snap('h1', 'survivor', 'hero', 1, 1, { name: 'Alice' });
+    const b = snap('h2', 'survivor', 'hero', 2, 1, { name: 'Bob' });
+    const steps = [step([
+      exploreEvent('h1', 'hero', ['+🥈']),
+      exploreEvent('h2', 'hero', []),   // found nothing
+    ], [a, b])];
+    const digest = buildStepDigest(steps, [], DEPS);
+    const byId = Object.fromEntries(digest[0].entries.map(e => [e.entityId, e]));
+    assert.equal(byId['h1'].note.text, '+🥈');
+    assert.equal(byId['h2'].note.text, 'EXPLORED');
+  });
+});
+
 // ── Outcome mapping ──────────────────────────────────────────────────────────
 
 describe('buildStepDigest — battle outcome kinds', () => {

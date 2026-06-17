@@ -11567,15 +11567,28 @@ export class Renderer3D {
   addFlash(col, row, text, _color, durationMs = 900, fontScale = 0.85, textColor = null) {
     if (!this._scene || !this._babylon) return;
     if (!text) return; // 2D used empty-text flashes for hex tints; tint goes through addAttackAnim now
-    this._spawnFloatingText(col, row, String(text), textColor ?? '#ffe0a0', durationMs, fontScale);
+    // `register: true` makes this floater clearable by clearFlashes() — loot,
+    // fortify, and ability flashes are wiped before each explore step so
+    // successive explores in a round don't pile their loot labels on screen.
+    // (The 2D renderer cleared `this._flashes`; the 3D path tracks live ones.)
+    this._spawnFloatingText(col, row, String(text), textColor ?? '#ffe0a0', durationMs, fontScale, { register: true });
   }
 
   clearFlashes() {
-    if (!this._scene) return;
-    // Floating-text meshes manage their own lifecycle through Babylon
-    // animations; if anyone wants to brute-force clear them mid-round, they
-    // can iterate the scene's transient floater group. For now, no-op — the
-    // floaters expire on their own ~700ms after spawn and they're cosmetic.
+    // Dispose every live "flash" floater (loot / fortify / ability — anything
+    // spawned via addFlash) immediately. Combat HP-delta and death floaters
+    // (addHpChangeFlash, variant 'damage') and node-discovery labels are NOT
+    // registered, so they ride out their own rise/fade untouched.
+    //
+    // Called before each explore step (main.js) so successive explores in a
+    // round don't stack their loot labels — and between rounds via
+    // clearAnimations(). This used to be a no-op here, which is why the
+    // 2D-only duplicate-floater fix (commit fca7c0f) never took effect in the
+    // shipping 3D renderer (t-4e9b1bf0).
+    if (!this._flashFloaters || this._flashFloaters.size === 0) return;
+    // Snapshot — each cleanup() deletes itself from the set as it runs.
+    for (const cleanup of [...this._flashFloaters]) cleanup(true);
+    this._flashFloaters.clear();
   }
 
   _spawnFloatingText(col, row, text, hexColor = '#ffe0a0', durationMs = 700, fontScale = 1, opts = {}) {
@@ -11666,28 +11679,41 @@ export class Renderer3D {
       if (protectedStandee) protectedStandee._pendingDespawn = true;
     }
 
-    const promise = new Promise(resolve => {
-      this._scene.beginDirectAnimation(plane, [animPos, animFade], 0, FRAMES_FLOAT, false, 1, () => {
-        releaseFloaterSlot(slotsByHex, slotKey, stackSlot);
-        plane.dispose();
-        mat.dispose();
-        tex.dispose();
-        if (protectedStandee) {
-          protectedStandee._pendingDespawn = false;
-          // If the entity is no longer alive (or no longer in state), dispose
-          // the standee now — _syncEntityStandees deferred its cleanup while
-          // the floater rose. Mirrors the dispose path in _syncEntityStandees.
-          const stillAlive = this.state?.entities?.some(e => e.id === protectEntityId && e.alive);
-          if (!stillAlive && this._entityStandees.get(protectEntityId) === protectedStandee) {
-            this._clearXrayGhostFor?.(protectEntityId, protectedStandee);
-            this._disposePaladinClone?.(protectedStandee);
-            protectedStandee.plane?.dispose?.();
-            this._entityStandees.delete(protectEntityId);
-          }
+    // Dispose this floater's resources exactly once — fired either by the rise
+    // animation finishing naturally (`cleanup(false)`) or by clearFlashes()
+    // yanking a registered flash early (`cleanup(true)` stops the still-running
+    // animation first so a disposed plane is never animated). The `_disposed`
+    // guard makes the two paths idempotent if both happen to fire.
+    const register = opts.register === true;
+    let _disposed = false;
+    let _resolve;
+    const promise = new Promise(r => { _resolve = r; });
+    const cleanup = (early) => {
+      if (_disposed) return;
+      _disposed = true;
+      if (register) this._flashFloaters?.delete(cleanup);
+      if (early) this._scene?.stopAnimation?.(plane);
+      releaseFloaterSlot(slotsByHex, slotKey, stackSlot);
+      plane.dispose();
+      mat.dispose();
+      tex.dispose();
+      if (protectedStandee) {
+        protectedStandee._pendingDespawn = false;
+        // If the entity is no longer alive (or no longer in state), dispose
+        // the standee now — _syncEntityStandees deferred its cleanup while
+        // the floater rose. Mirrors the dispose path in _syncEntityStandees.
+        const stillAlive = this.state?.entities?.some(e => e.id === protectEntityId && e.alive);
+        if (!stillAlive && this._entityStandees.get(protectEntityId) === protectedStandee) {
+          this._clearXrayGhostFor?.(protectEntityId, protectedStandee);
+          this._disposePaladinClone?.(protectedStandee);
+          protectedStandee.plane?.dispose?.();
+          this._entityStandees.delete(protectEntityId);
         }
-        resolve();
-      });
-    });
+      }
+      _resolve();
+    };
+    if (register) (this._flashFloaters ??= new Set()).add(cleanup);
+    this._scene.beginDirectAnimation(plane, [animPos, animFade], 0, FRAMES_FLOAT, false, 1, () => cleanup(false));
     return this._trackAnim(promise);
   }
 
