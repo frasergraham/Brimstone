@@ -1333,6 +1333,21 @@ function _checkTimeoutTakeovers(room) {
 
 export function _serializeEvents(events) {
   return events.map(ev => {
+    // SURVIVOR_RECEIVED is a paired-counterpart of SENT_TO that the resolver
+    // pushes into the recipient's bucket so the recipient sees an "📥 sent
+    // from <leader>" turn card. It carries no `result` / `battleSnaps` /
+    // `action` — just the four payload fields needed to render the card.
+    if (ev.type === 'survivor_received') {
+      return {
+        type:          ev.type,
+        faction:       ev.faction,
+        survivorId:    ev.survivorId    ?? null,
+        survivorName:  ev.survivorName  ?? null,
+        fromOwnerId:   ev.fromOwnerId   ?? null,
+        fromOwnerName: ev.fromOwnerName ?? null,
+        destOwnerId:   ev.destOwnerId   ?? null,
+      };
+    }
     const out = {
       type:    ev.type,
       faction: ev.faction,
@@ -1360,6 +1375,17 @@ export function _serializeEvents(events) {
         path:              ev.result.path             ?? [],
         lootItems:         ev.result.lootItems        ?? [],
       };
+      // SENT_TO surfaces extra fields on its result so BOTH cards
+      // (sender + recipient) can render with proper names. Keep purely
+      // additive — the SENT_TO ACTION_OK base shape above stays unchanged.
+      if (ev.action?.type === 'sent-to') {
+        out.result.survivorId    = ev.result.survivorId    ?? null;
+        out.result.survivorName  = ev.result.survivorName  ?? null;
+        out.result.fromOwnerId   = ev.result.fromOwnerId   ?? null;
+        out.result.fromOwnerName = ev.result.fromOwnerName ?? null;
+        out.result.destOwnerId   = ev.result.destOwnerId   ?? null;
+        out.result.destOwnerName = ev.result.destOwnerName ?? null;
+      }
     }
     if (ev.battleSnaps) {
       out.battleSnaps = ev.battleSnaps;

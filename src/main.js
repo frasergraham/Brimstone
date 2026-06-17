@@ -4436,6 +4436,20 @@ function _scenarioPlan(planDefs, byRef) {
     } else if (p.explore) {
       // Pair with a tile-level `exploreOverride` for a deterministic loot roll.
       out.push({ type: PlanActionType.EXPLORE, entityId: actor.id });
+    } else if (p.sentTo) {
+      // Free action: leader (p.ref) transfers a survivor (p.sentTo) to another
+      // leader (p.dest). p.dest is the destination leader's ref (the recipient
+      // leader must own a player slot — see extraLeaders in scenario def).
+      const target = byRef.get(p.sentTo);
+      const dest   = byRef.get(p.dest);
+      if (target && dest) {
+        out.push({
+          type:        PlanActionType.SENT_TO,
+          entityId:    actor.id,
+          targetId:    target.id,
+          destOwnerId: dest.ownerId,
+        });
+      }
     }
   }
   return out;
@@ -4483,6 +4497,18 @@ function initScenario(def) {
   // ref → entity map for plan targeting (leaders are pre-registered).
   const byRef = new Map([['hero', state.hero]]);
   if (state.witch) byRef.set('witch', state.witch);
+
+  // Extra leaders — additional player seats for MP-shape scenarios (SENT_TO
+  // verification needs ≥2 leaders on one faction). Each entry creates a
+  // playerId + leader entity via state.addPlayer.
+  //   extraLeaders: [{ ref, faction:'hero', col, row, name? }]
+  for (const xl of def.extraLeaders ?? []) {
+    const pid    = xl.playerId ?? `${xl.faction ?? 'hero'}-${xl.ref}`;
+    const name   = xl.name ?? (xl.ref ?? pid);
+    const leader = state.addPlayer(pid, name, xl.faction ?? 'hero', xl.col, xl.row, false);
+    if (xl.ref) byRef.set(xl.ref, leader);
+  }
+
   for (const u of def.units ?? []) {
     const e = _createScenarioUnit(u.type, u.col, u.row, u.owner ?? 'witch', state);
     if (!e) continue;
@@ -4493,6 +4519,12 @@ function initScenario(def) {
     for (const ef of u.effects ?? []) {
       if (typeof ef === 'string') applyEffect(e, ef);
       else if (ef?.id) applyEffect(e, ef.id, ef);
+    }
+    // Scenario survivors default to the primary leader's ownerId; an explicit
+    // `ownerRef` overrides (e.g. assign a survivor to the second hero seat).
+    if (u.ownerRef) {
+      const ownerEnt = byRef.get(u.ownerRef);
+      if (ownerEnt) e.ownerId = ownerEnt.ownerId;
     }
     state.entities.push(e);
     assignSlotOnTile(state, e);

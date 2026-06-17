@@ -66,13 +66,18 @@ function computeTurnEndPositions(candidates) {
 // ── Event types ──────────────────────────────────────────────────────────────
 
 export const ResEventType = Object.freeze({
-  ACTION_OK:      'action_ok',      // executed successfully; result payload attached
-  ACTION_SKIP:    'action_skip',    // battle target gone/dead — free skip, later steps run
-  ACTION_FAIL:    'action_fail',    // hard failure — plan halts for this faction
-  BUDGET_CAP:     'budget_cap',     // budget exhausted; remaining plan ignored
-  FOOD_CONSUMED:  'food_consumed',  // ration auto-consumed to fund one over-budget action
-  GUARD_STRIKE:   'guard_strike',   // reactive attack from a guarding unit
-  XP_AWARDED:     'xp_awarded',     // campaign veterancy — a unit earned XP (one event per logical award)
+  ACTION_OK:         'action_ok',         // executed successfully; result payload attached
+  ACTION_SKIP:       'action_skip',       // battle target gone/dead — free skip, later steps run
+  ACTION_FAIL:       'action_fail',       // hard failure — plan halts for this faction
+  BUDGET_CAP:        'budget_cap',        // budget exhausted; remaining plan ignored
+  FOOD_CONSUMED:     'food_consumed',     // ration auto-consumed to fund one over-budget action
+  GUARD_STRIKE:      'guard_strike',      // reactive attack from a guarding unit
+  XP_AWARDED:        'xp_awarded',        // campaign veterancy — a unit earned XP (one event per logical award)
+  // Paired counterpart of a SENT_TO ACTION_OK: lands on the RECIPIENT player's
+  // bucket so the recipient sees an "📥 sent from <leader>" turn card. The
+  // sender already has the ACTION_OK in their own bucket. Payload:
+  //   { survivorId, survivorName, fromOwnerId, fromOwnerName }
+  SURVIVOR_RECEIVED: 'survivor_received',
 });
 
 // Campaign veterancy: fan a result's per-award `xpAwards` (attached by the
@@ -344,6 +349,85 @@ function runAction(state, action, faction, playerId = null) {
 
     default:
       return { kind: 'fail', reason: `Unknown plan action type: ${action.type}` };
+  }
+}
+
+// ── SENT_TO recipient fan-out ───────────────────────────────────────────────
+//
+// SENT_TO emits one ACTION_OK on the sender's bucket. The recipient sees
+// nothing in their own timeline — control of the survivor silently flips next
+// round, no card. This helper scans each step's events for SENT_TO ACTION_OKs
+// and pushes a paired SURVIVOR_RECEIVED event into the destination owner's
+// bucket so the recipient gets a "📥 <survivor> sent from <leader>" card.
+// The sender's ACTION_OK is untouched (backwards-compatible payload).
+//
+// Resolution-time only (Sealed Resolution, docs/mission-logic): pure on the
+// events already emitted; no game-state mutation, no presentation hooks.
+
+function _isSentToOk(ev) {
+  return ev?.type === ResEventType.ACTION_OK
+    && ev?.action?.type === PlanActionType.SENT_TO
+    && !!ev?.result?.success;
+}
+
+function _buildSurvivorReceivedEvent(ev, faction) {
+  const r = ev.result ?? {};
+  return {
+    type:          ResEventType.SURVIVOR_RECEIVED,
+    faction,
+    survivorId:    r.survivorId    ?? ev.action?.targetId    ?? null,
+    survivorName:  r.survivorName  ?? null,
+    fromOwnerId:   r.fromOwnerId   ?? ev.action?.entityId    ?? null,
+    fromOwnerName: r.fromOwnerName ?? null,
+    // destOwnerId carried so the replay digest can look the recipient leader
+    // up directly from the pre-step entitySnapshot (the leader's ownerId
+    // doesn't change), avoiding having to consult the post-step snapshot.
+    destOwnerId:   r.destOwnerId   ?? ev.action?.destOwnerId ?? null,
+  };
+}
+
+/** Multiplayer (per-player bucket) fan-out. */
+function _emitSurvivorReceivedEventsMP(players, eventsByPlayer) {
+  // Collect (destOwnerId, recvEvent) pairs first so we don't mutate buckets
+  // while iterating their events. Iterate sender buckets in player-order.
+  const toAppend = [];
+  for (const player of players) {
+    const bucket = eventsByPlayer.get(player.playerId);
+    if (!bucket) continue;
+    for (const ev of bucket.events) {
+      if (!_isSentToOk(ev)) continue;
+      const destOwnerId = ev.result?.destOwnerId ?? ev.action?.destOwnerId;
+      if (!destOwnerId) continue;
+      toAppend.push({ destOwnerId, recv: _buildSurvivorReceivedEvent(ev, player.faction) });
+    }
+  }
+  for (const { destOwnerId, recv } of toAppend) {
+    let dest = eventsByPlayer.get(destOwnerId);
+    if (!dest) {
+      // Recipient had no actions this step — create a fresh bucket so their
+      // turn column still renders the received card.
+      const destPlayer = players.find(p => p.playerId === destOwnerId);
+      if (!destPlayer) continue;
+      dest = { playerId: destOwnerId, faction: destPlayer.faction, events: [] };
+      eventsByPlayer.set(destOwnerId, dest);
+    }
+    dest.events.push(recv);
+  }
+}
+
+/** Legacy 2-player (faction-bucket) fan-out. SENT_TO is rare here because the
+ *  1v1 case has only one leader per faction, but campaign offline runs can
+ *  carry multiple leaders on one faction — keep parity. Both sender and
+ *  recipient live on the same faction, so the received event lands on the
+ *  same bucket the ACTION_OK was emitted into. */
+function _emitSurvivorReceivedEventsLegacy(heroEvents, witchEvents) {
+  for (const [bucket, faction] of [[heroEvents, 'hero'], [witchEvents, 'witch']]) {
+    // Copy then iterate the snapshot so newly-pushed events don't get re-scanned.
+    const snapshot = bucket.slice();
+    for (const ev of snapshot) {
+      if (!_isSentToOk(ev)) continue;
+      bucket.push(_buildSurvivorReceivedEvent(ev, faction));
+    }
   }
 }
 
@@ -637,6 +721,12 @@ export function resolvePlansMP(state, playerEntries) {
 
     if (!anyAction) break;
 
+    // Fan SENT_TO sender events into a paired SURVIVOR_RECEIVED event on the
+    // RECIPIENT player's bucket so the recipient sees a "📥 sent from …" card
+    // in their own turn timeline. Done after drain so we observe every
+    // SENT_TO ACTION_OK emitted this step, including chained transfers.
+    _emitSurvivorReceivedEventsMP(players, eventsByPlayer);
+
     // Preserve original player ordering in the output step record.
     const stepEvents = [];
     for (const player of players) {
@@ -724,6 +814,12 @@ export function resolvePlans(state, heroPlan, witchPlan) {
     }
 
     if (heroEvents.length === 0 && witchEvents.length === 0) break;
+
+    // Legacy faction-bucket fan-out — same-faction recipient (SENT_TO is gated
+    // to one's own faction), so the SURVIVOR_RECEIVED event sits on the same
+    // bucket as the sender's ACTION_OK. The replay timeline routes by
+    // event.type, not by bucket origin, so this is correct.
+    _emitSurvivorReceivedEventsLegacy(heroEvents, witchEvents);
 
     const logicEvents = captureTurnStoryEvents(state);
     steps.push({ stepIndex, heroEvents, witchEvents, entitySnapshot, ...(logicEvents ? { logicEvents } : {}) });
