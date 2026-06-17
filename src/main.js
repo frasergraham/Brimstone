@@ -31,7 +31,7 @@ import { VERSION, BUILD_VERSION } from './version.js';
 import { buildPlayerStatusHtml } from './ui-render.js';
 import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { PlanActionType, groupPlanByEntity } from './planner.js';
-import { buildStepDigest, buildStoryBeatDigest, isEventVisible } from './replay-timeline.js';
+import { buildStepDigest, buildStoryBeatDigest, isEventVisible, compactUneventfulTurns } from './replay-timeline.js';
 import { hexDistance, getNeighbors, hexKey } from './hex.js';
 import { planCombatFrames } from './combat-presentation.js';
 import { MAX_FORTIFY_LEVEL, FORT_IMPASSABLE_THRESHOLD, deriveBlockedSlots } from './tiles.js';
@@ -1875,6 +1875,15 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
   // (patched) animation gates then reuse. patchAlive is idempotent; the step
   // loop's per-step patch becomes a no-op.
   let stepDigest = null;
+  // Follower-step lookup: step indices that are non-leader members of a
+  // timeline-compacted run. The manual-step gate below suppresses the per-
+  // step NEXT hold for these (the leader's card already holds for NEXT;
+  // followers' state changes are folded into it, so making the player click
+  // NEXT once per folded step defeats the whole point). Derived from the
+  // SAME compactor the UI runs in showReplayTimeline, so its boundary rule
+  // (anything eventful / faction change / min-run) stays the single source
+  // of truth.
+  let _compactFollowerSteps = null;
   if (ui && steps.length) {
     for (const s of steps) patchAlive(s.entitySnapshot ?? []);
     patchAlive(finalEntities ?? []);
@@ -1882,6 +1891,17 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       isVisible: (col, row, ents) => _isFogVisible(col, row, humanFaction, ents, state.phase),
       PlanActionType, ResEventType, viewerFaction: humanFaction,
     });
+    const compacted = compactUneventfulTurns(stepDigest);
+    _compactFollowerSteps = new Set();
+    for (const col of compacted) {
+      if (col.kind === 'compacted' && Array.isArray(col.memberStepIndices)) {
+        // First member is the leader (its card holds for NEXT); the rest are
+        // followers and should not gate.
+        for (let m = 1; m < col.memberStepIndices.length; m++) {
+          _compactFollowerSteps.add(col.memberStepIndices[m]);
+        }
+      }
+    }
     ui.showReplayTimeline?.(stepDigest);
   }
   setMode(AppMode.RESOLVING);
@@ -3140,9 +3160,15 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     // A story-beat card already gated this step on NEXT (its own card), so don't
     // make the player click NEXT a second time at the manual-step gate below.
     const stepHasCard = stepDigest?.[i]?.entries?.length > 0;
-    if (!_autoplay && ui && stepHasCard && !beatGated) {
+    // A non-leader follower of a compacted quiet run shares its leader's card.
+    // NEXT advances past the whole folded block in one click — don't make the
+    // player click NEXT once per folded step.
+    const isCompactFollower = _compactFollowerSteps?.has(i) === true;
+    if (!_autoplay && ui && stepHasCard && !beatGated && !isCompactFollower) {
       const fullMode = !!ui._replayOnControl;
-      const laterHasCard = stepDigest.slice(i + 1).some(c => c.entries.length > 0);
+      // Followers don't gate so they don't count as "later cards" either.
+      const laterHasCard = stepDigest.slice(i + 1)
+        .some((c, j) => c.entries.length > 0 && !_compactFollowerSteps?.has(i + 1 + j));
       if (!(fullMode && !laterHasCard)) {
         // Step finished animating — prompt the player to press NEXT.
         if (playback.paused) ui.setReplayNextReady?.(true);

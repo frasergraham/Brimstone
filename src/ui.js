@@ -15,7 +15,7 @@ import * as audio from './audio.js';
 
 import { PlanActionType, actionCosts, computeGhostState, computeProjectedInventory, interleavePlan, groupPlanByEntity, validatePlanAction, buildAutoGuardQueue } from './planner.js';
 import { ABILITIES } from './abilities.js';
-import { buildRollRows, buildOutcomeSummary, buildTurnCardHoverOverlays, battleOutcomeWord } from './replay-timeline.js';
+import { buildRollRows, buildOutcomeSummary, buildTurnCardHoverOverlays, battleOutcomeWord, compactUneventfulTurns } from './replay-timeline.js';
 import { compileTurnBattleSummary, compileTurnXpSummary } from './battle-utils.js';
 import { buildWrapupCombatsHtml, wrapupIconHtml } from './wrapup-summary.js';
 import { ResEventType } from '../server/resolver.js';
@@ -5338,7 +5338,24 @@ export class UIController {
     const wrap  = this._el('replay-timeline');
     const track = this._el('replay-timeline-track');
     if (!wrap || !track || !Array.isArray(digest)) return;
-    this._replayDigest = digest;
+    // Compact long runs of quiet move/guard turns into a single timeline card
+    // before render. Purely a UX-layer fold over buildStepDigest output — the
+    // resolver / step records / round history are untouched. The compactor
+    // returns the original digest unchanged when there's nothing to collapse.
+    // We store BOTH the rendered (compacted) digest — used by hover lookups
+    // that key off the column's `data-step` — and a follower→leader stepIndex
+    // map so highlightReplayEntry / revealReplayEntryOutcome / advance calls
+    // for a follower step resolve to the compacted leader's column.
+    const compacted = compactUneventfulTurns(digest);
+    this._replayDigest = compacted;
+    this._replayStepLeader = new Map();
+    for (const col of compacted) {
+      if (col.kind === 'compacted' && Array.isArray(col.memberStepIndices)) {
+        for (const m of col.memberStepIndices) {
+          this._replayStepLeader.set(String(m), col.stepIndex);
+        }
+      }
+    }
     this._replayTrackX = 0;
     this._activeReplayOrd = 0;
     track.style.transform = 'translateX(0)';
@@ -5346,9 +5363,17 @@ export class UIController {
     // entirely). data-step keeps the ORIGINAL step index so highlight/centre
     // calls (keyed on the animation step) still match; the "Step N" label is
     // numbered sequentially among the visible cards.
-    const visible = digest.filter(col => col.entries.length > 0);
-    let n = 0;
-    track.innerHTML = visible.map(col => this._replayColHtml(col, ++n)).join('');
+    const visible = compacted.filter(col => col.entries.length > 0);
+    // Bump the displayed turn number by (count - 1) for each compacted card so
+    // a "Turns 5–8" block doesn't make the next solo card read as "Turn 6".
+    let displayNum = 0;
+    track.innerHTML = visible.map(col => {
+      const startNum = displayNum + 1;
+      const span = (col.kind === 'compacted' && col.count > 1) ? col.count : 1;
+      const endNum = startNum + span - 1;
+      displayNum = endNum;
+      return this._replayColHtml(col, startNum, endNum);
+    }).join('');
     if (!visible.length) { wrap.classList.remove('visible'); return; }
     wrap.classList.add('visible');
     // Mobile defaults to collapsed cards (they otherwise cover the board);
@@ -5438,8 +5463,11 @@ export class UIController {
   /** Build one visible step column's HTML (icons, names, hidden outcomes).
    *  A +/- toggle in the header collapses the card down to just the action
    *  currently playing (see `_applyReplayCollapse`); the trailing `.replay-more`
-   *  dots are revealed by CSS when several actions are active at once. */
-  _replayColHtml(col, displayNum) {
+   *  dots are revealed by CSS when several actions are active at once.
+   *  `endNum` is the LAST turn number in the card — equals `displayNum` for a
+   *  regular column, and the inclusive end of the run for a compacted card
+   *  (e.g. `Turns 5–8`). */
+  _replayColHtml(col, displayNum, endNum = displayNum) {
     const rows = col.entries.map((e, j) => this._replayRowHtml(e, j)).join('');
     if (col.kind === 'storyBeat') {
       const esc = (s) => String(s ?? '')
@@ -5476,6 +5504,27 @@ export class UIController {
            +   `<button class="replay-conv-btn" type="button">SKIP</button>`
            +   `<button class="replay-conv-continue" type="button" style="display:none">CONTINUE ▶</button>`
            + `</div>`
+           + `</div>`;
+    }
+    // Compacted (consecutive uneventful turns folded into one card).
+    // Header reads "Turns N–M" with a small count badge; the body shows every
+    // constituent action so the player can still see what happened, but NEXT
+    // walks past the whole block in one click (see main.js's manual-step gate
+    // and _replayStepLeader in showReplayTimeline).
+    if (col.kind === 'compacted') {
+      const span = (endNum > displayNum)
+        ? `Turns ${displayNum}–${endNum}`
+        : `Turn ${displayNum}`;
+      const countBadge = (col.count ?? 1) > 1
+        ? `<span class="replay-compact-badge" title="${col.count} quiet turns collapsed">×${col.count}</span>`
+        : '';
+      return `<div class="replay-step-col replay-compact-col" data-step="${col.stepIndex}">`
+           + `<div class="replay-step-header">`
+           +   `<div class="replay-step-label">${span}${countBadge}</div>`
+           +   `<button class="replay-collapse-btn" type="button" aria-label="Collapse turn card">−</button>`
+           + `</div>`
+           + rows
+           + `<div class="replay-more" aria-hidden="true">…</div>`
            + `</div>`;
     }
     return `<div class="replay-step-col" data-step="${col.stepIndex}">`
@@ -5547,7 +5596,12 @@ export class UIController {
    */
   insertReplayTimelineCol(col, afterStepIndex = null) {
     const digest = this._replayDigest ?? [];
-    let idx = digest.findIndex(c => String(c.stepIndex) === String(afterStepIndex));
+    // When `afterStepIndex` is a follower of a compacted card, route it to the
+    // leader's stepIndex so the conversation lands AFTER the whole folded
+    // block (not the unfindable middle of it).
+    const leader = this._replayStepLeader?.get?.(String(afterStepIndex));
+    const key = leader != null ? leader : afterStepIndex;
+    let idx = digest.findIndex(c => String(c.stepIndex) === String(key));
     if (idx < 0) {
       // Fall back to the active card's position in the digest.
       const cols = this._replayCols();
@@ -5697,10 +5751,16 @@ export class UIController {
       entry.querySelectorAll('.replay-step-outcome, .replay-roll, .replay-discovered').forEach(o => o.classList.add('revealed')));
   }
 
-  /** Look up a step column element by index. */
+  /** Look up a step column element by index. When `stepIndex` is a follower of
+   *  a compacted card (one of the quiet turns folded into a leader column), the
+   *  leader's column is returned — so highlightReplayEntry / revealOutcome /
+   *  advance calls keyed on a follower step still land on its merged card. */
   _replayCol(stepIndex) {
     const track = this._el('replay-timeline-track');
-    return track ? track.querySelector(`.replay-step-col[data-step="${stepIndex}"]`) : null;
+    if (!track) return null;
+    const leaderKey = this._replayStepLeader?.get?.(String(stepIndex));
+    const key = leaderKey != null ? leaderKey : stepIndex;
+    return track.querySelector(`.replay-step-col[data-step="${key}"]`);
   }
 
   /**
@@ -5714,7 +5774,13 @@ export class UIController {
   setReplayTimelineStep(stepIndex) {
     const cols = this._replayCols();
     if (!cols.length) return;
-    let ord = cols.findIndex(c => c.getAttribute('data-step') === String(stepIndex));
+    // Resolve a follower step to its compacted-card leader so an advance call
+    // on a folded turn lands on (i.e. holds) the same merged card. Without
+    // this, _animateResolutionSteps' per-step setReplayTimelineStep(i) would
+    // silently miss for follower steps and the card would never highlight.
+    const leaderKey = this._replayStepLeader?.get?.(String(stepIndex));
+    const key = leaderKey != null ? String(leaderKey) : String(stepIndex);
+    let ord = cols.findIndex(c => c.getAttribute('data-step') === key);
     if (ord < 0) ord = this._activeReplayOrd ?? 0;
     this._setReplayActiveOrd(ord);
   }
@@ -5928,9 +5994,9 @@ export class UIController {
 
   /** Reveal the outcome lines for a step once it has played out. */
   revealReplayOutcome(stepIndex) {
-    const track = this._el('replay-timeline-track');
-    if (!track) return;
-    const col = track.querySelector(`.replay-step-col[data-step="${stepIndex}"]`);
+    // Route follower steps in a compacted run to the leader's column so its
+    // shared outcome reveals together — see _replayCol.
+    const col = this._replayCol(stepIndex);
     if (!col) return;
     // Reveal the dice rolls, outcome badges, and discovered units together.
     col.querySelectorAll('.replay-step-outcome, .replay-roll, .replay-discovered').forEach(o => o.classList.add('revealed'));
@@ -5938,9 +6004,7 @@ export class UIController {
 
   /** Re-hide a step's rolls/outcomes (used when a step is replayed). */
   hideReplayOutcome(stepIndex) {
-    const track = this._el('replay-timeline-track');
-    if (!track) return;
-    const col = track.querySelector(`.replay-step-col[data-step="${stepIndex}"]`);
+    const col = this._replayCol(stepIndex);
     if (!col) return;
     col.querySelectorAll('.replay-step-outcome, .replay-roll, .replay-discovered').forEach(o => o.classList.remove('revealed'));
   }
@@ -5958,6 +6022,7 @@ export class UIController {
     if (dots) dots.innerHTML = '';
     this._replayReviewMode = false;
     this._replayDigest = null;
+    this._replayStepLeader = null;
   }
 
   /**

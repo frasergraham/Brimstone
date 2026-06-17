@@ -5718,6 +5718,23 @@ img.plan-step-avatar {
 .replay-step-col.replay-conv-col { border-color: rgba(201, 162, 39, 0.55); }
 .replay-step-col.replay-conv-col.is-current { border-color: rgba(232, 197, 88, 0.85); }
 
+/* Compacted turn card: N consecutive quiet move/guard turns folded into one
+   timeline card. Header reads "Turns N–M" with an ×N badge — visually marked
+   as a slightly muted edge so the player parses it as a synopsis card. */
+.replay-step-col.replay-compact-col { border-color: rgba(160, 160, 180, 0.35); }
+.replay-step-col.replay-compact-col.is-current { border-color: rgba(200, 200, 220, 0.7); }
+.replay-compact-badge {
+  display: inline-block;
+  margin-left: 0.45rem;
+  padding: 0.05rem 0.4rem;
+  border: 1px solid rgba(160, 160, 180, 0.45);
+  border-radius: 0.6rem;
+  font-size: 0.7rem;
+  line-height: 1;
+  color: var(--text-dim, #cfc6b4);
+  vertical-align: middle;
+}
+
 /* Mission-logic STORY BEAT card (✦ title + text), inserted at the turn it fires. */
 .replay-step-col.replay-beat-col { border-color: rgba(201, 162, 39, 0.45); }
 .replay-step-col.replay-beat-col.is-current { border-color: rgba(232, 197, 88, 0.8); }
