@@ -1,5 +1,26 @@
 [
   {
+    "version": "1.7.3",
+    "date": "2026-06-17",
+    "summary": "New features, and bug fixes",
+    "notes": [
+      "Survivor permadeath memorial + START-only 3/4 party cap",
+      "Default the ally gang-up lunge OFF in battle replays",
+      "Fortifications use an HP-pool model — every attack erodes the wall",
+      "Halve per-level HP growth so the hero no longer becomes an unstoppable tank",
+      "Add /seed and /lunge debug commands",
+      "Show ground location label for House buildings",
+      "Bridges must span opposite hex edges (straight, not bent)",
+      "Include the game-ending round in MP full-game replay",
+      "Hide equipped-weapon mesh under fog with its unit",
+      "Surface duplicate same-type weapons in inventory displays",
+      "Project equipped weapon range + odds through a queued weapon swap in plan mode",
+      "Show \"no response\" inline on the action card, not a popup dialog",
+      "Ch1M3 first_night — graph-driven night spawns",
+      "Ch1M4 river_crossing — day-looping phase cycle"
+    ]
+  },
+  {
     "version": "1.7.2",
     "date": "2026-06-17",
     "summary": "New features, bug fixes, improvements, and visual updates",
