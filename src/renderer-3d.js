@@ -1232,12 +1232,13 @@ export function radiusToZoom(radius, defaultRadius = DEFAULT_ZOOM_RADIUS) {
 
 /** Returns the human-readable label string for a tile, or null if the tile
  *  doesn't get a label (anything other than a BUILDING tile with a building
- *  field, OR a generic HOUSE — houses are the background village fabric and
- *  don't earn a name). Pure helper — single source of truth for label
- *  text + visibility. */
+ *  field). Every named building — Houses included — earns a ground label; the
+ *  building's entrance hex is the only tile that carries `tile.building`, so
+ *  this fires exactly once per building footprint (footprint hexes carry only
+ *  `buildingFootprintOf`, never `building`). Pure helper — single source of
+ *  truth for label text + visibility. */
 export function labelTextForTile(tile) {
   if (!tile || !hasBuilding(tile) || !tile.building) return null;
-  if (tile.building === 'house') return null;
   return BUILDING_LABEL[tile.building] || tile.building;
 }
 

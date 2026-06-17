@@ -12,21 +12,17 @@ import { labelTextForTile } from '../src/renderer-3d.js';
 import { TileType, BuildingType, BUILDING_LABEL } from '../src/tiles.js';
 
 describe('labelTextForTile — only buildings get labels', () => {
-  test('returns the BUILDING_LABEL entry for each building type (except HOUSE)', () => {
+  test('returns the BUILDING_LABEL entry for each building type (HOUSE included)', () => {
     for (const key of Object.keys(BUILDING_LABEL)) {
       const tile = { type: TileType.BUILDING, building: key, col: 0, row: 0 };
-      if (key === 'house') {
-        // Houses are background village fabric — no name.
-        assert.equal(labelTextForTile(tile), null, 'house gets no label');
-      } else {
-        assert.equal(labelTextForTile(tile), BUILDING_LABEL[key]);
-      }
+      assert.equal(labelTextForTile(tile), BUILDING_LABEL[key]);
     }
   });
 
-  test('house buildings get no label (drop generic background names)', () => {
+  test('house buildings get the "House" ground label', () => {
     const tile = { type: TileType.BUILDING, building: 'house', col: 0, row: 0 };
-    assert.equal(labelTextForTile(tile), null);
+    assert.equal(labelTextForTile(tile), 'House');
+    assert.equal(labelTextForTile(tile), BUILDING_LABEL[BuildingType.HOUSE]);
   });
 
   test('falls back to the raw building id if BUILDING_LABEL has no entry', () => {
