@@ -2649,6 +2649,22 @@ describe('Campaign — hero starting loadout', () => {
     assert.equal(hero.getRange(), 1);
   });
 
+  test('a freshly created Paladin is issued a Horn innately', () => {
+    const hero = getFaction('hero').createLeader(0, 0, 'hero');
+    assert.ok(hero.hasItem('horn'), 'the horn-trained Paladin carries a horn');
+  });
+
+  test('campaign deploy strips the innate horn — the hero re-finds it in Ch1 M4', () => {
+    // The carried backpack (default = sword only) replaces the innate pack on
+    // mission load, so a fresh campaign hero arrives WITHOUT a horn and must
+    // discover one at the river church (Ch1M4 exploreOverride).
+    const hero = getFaction('hero').createLeader(0, 0, 'hero');
+    assert.ok(hero.hasItem('horn'), 'precondition: innate horn present pre-deploy');
+    applyCarriedHeroLoadout(hero, { hp: 98, maxHp: 98, items: { sword: { count: 1, equipped: true } } });
+    assert.ok(!hero.hasItem('horn'), 'carried loadout must not retain the innate horn');
+    assert.equal(hero.getEquippedWeaponId(), 'sword');
+  });
+
   test('applyCarriedHeroLoadout adopts a carried weapon and syncs range', () => {
     const hero = getFaction('hero').createLeader(0, 0, 'hero');
     applyCarriedHeroLoadout(hero, {

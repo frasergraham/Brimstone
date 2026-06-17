@@ -512,9 +512,12 @@ export function getValidActions(state, actor) {
   // Guard — any unit can take a guard stance (stacks: each use adds 1 charge)
   actions.push({ type: ActionType.GUARD, currentCharges: actor.guarding || 0 });
 
-  // Sound Horn — Phase 5 gate: any unit whose innate abilities include
-  // 'sound_horn'. Pushed onto day-side leaders by Faction.createLeader().
-  if (actor.hasAbility('sound_horn')) {
+  // Sound Horn — gated on holding the Horn key item (reusable; never
+  // consumed). Horn-trained leaders are issued one at creation; campaign
+  // heroes find theirs at the Ch1 M4 church. The old 'sound_horn' ability
+  // marks who's trained to wield a horn and so who gets issued one, but the
+  // action itself surfaces strictly on possession of the item.
+  if (actor.hasItem('horn')) {
     const food = getItemCountOf(faction.getInventory(state), 'food');
     actions.push({ type: ActionType.SOUND_HORN, affordable: food >= 1 });
   }
@@ -866,6 +869,15 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
       log.push(`Found a horse! ${actor.displayName}'s movement range increases to 2.`);
       lootItems?.push('+🐴');
     }
+    return;
+  }
+
+  if (lootType === 'horn') {
+    // Reusable key item — lives in the finder's personal pack and unlocks the
+    // Sound Horn action. Idempotent: re-exploring the same tile won't stack it.
+    if (!actor.hasItem('horn')) actor.addItem('horn');
+    log.push(`Found a horn! ${actor.displayName} can sound it to call out across the land.`);
+    lootItems?.push('+📯');
     return;
   }
 
@@ -1764,8 +1776,9 @@ export function executeGuard(state, actor) {
 
 export function executeSoundHorn(state, actor) {
   const log = [];
-  if (!actor.hasAbility('sound_horn')) {
-    return { success: false, log: ['Only a day-side leader can sound the horn.'] };
+  // Gated on the Horn key item (reusable — never consumed below).
+  if (!actor.hasItem('horn')) {
+    return { success: false, log: ['You need a horn to sound the call.'] };
   }
 
   const inv = getFaction('hero').getInventory(state);
